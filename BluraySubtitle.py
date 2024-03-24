@@ -132,8 +132,6 @@ class BluraySubtitle:
 
     def generate_bluray_subtitle(self):
         for folder, chapter in self.select_playlist():
-            print(chapter.in_out_time)
-            print(chapter.mark_info)
             start_time = 0
             ass_file = ASS(self.subtitle_files[self.ass_index])
 
@@ -146,7 +144,6 @@ class BluraySubtitle:
                         time_shift = (start_time + play_item_marks[0] - play_item_in_out_time[1]) / 45000
                         if time_shift > 1000:
                             self.ass_index += 1
-                            print(time_shift, self.ass_index)
                             ass_file.append_ass(self.subtitle_files[self.ass_index], time_shift)
 
                         if play_item_duration_time / 45000 > 2600 and ass_file.max_end_time() - time_shift < 1800:
@@ -160,7 +157,6 @@ class BluraySubtitle:
                                         selected_mark = mark
                             time_shift = (start_time + selected_mark - play_item_in_out_time[1]) / 45000
                             self.ass_index += 1
-                            print(time_shift, self.ass_index)
                             ass_file.append_ass(self.subtitle_files[self.ass_index], time_shift)
 
                 start_time += play_item_in_out_time[2] - play_item_in_out_time[1]
