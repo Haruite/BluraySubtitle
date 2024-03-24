@@ -58,12 +58,20 @@ class Chapter:
 class ASS:
     def __init__(self, file_path):
         self.file_path = file_path
-        with open(file_path, 'r', encoding='utf-8-sig') as f:
-            self.content = ass.parse(f)
+        try:
+            with open(file_path, 'r', encoding='utf-8-sig') as f:
+                self.content = ass.parse(f)
+        except:
+            with open(file_path, 'r', encoding='utf-16') as f:
+                self.content = ass.parse(f)
 
     def append_ass(self, new_file_path, time_shift):
-        with open(new_file_path, 'r', encoding='utf-8-sig') as f:
-            new_content = ass.parse(f)
+        try:
+            with open(new_file_path, 'r', encoding='utf-8-sig') as f:
+                new_content = ass.parse(f)
+        except:
+            with open(new_file_path, 'r', encoding='utf-16') as f:
+                new_content = ass.parse(f)
         style_info = {repr(style) for style in self.content.styles}
         style_name_map = {}
         for style in new_content.styles:
