@@ -12,7 +12,7 @@ from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLa
 class Chapter:
     def __init__(self, file_path):
         self.in_out_time: list[tuple[str, int, int]] = []
-        self.mark_info: list[tuple[int, int]] = []
+        self.mark_info: dict[int, list[int]] = {}
 
         with open(file_path, 'rb') as self.mpls_file:
             self.mpls_file.seek(8)
@@ -42,7 +42,10 @@ class Chapter:
                 ref_to_play_item_id = self._unpack_byte(2)
                 mark_timestamp = self._unpack_byte(4)
                 self.mpls_file.read(6)
-                self.mark_info.append((ref_to_play_item_id, mark_timestamp))
+                if ref_to_play_item_id in self.mark_info:
+                    self.mark_info[ref_to_play_item_id].append(mark_timestamp)
+                else:
+                    self.mark_info[ref_to_play_item_id] = [mark_timestamp]
 
     def _unpack_byte(self, n: int):
         formats: dict[int, str] = {1: '>B', 2: '>H', 4: '>I', 8: '>Q'}
@@ -106,7 +109,7 @@ class BluraySubtitle:
     def __init__(self, bluray_path, subtitle_path):
         self.bluray_folders = [root for root, dirs, files in os.walk(bluray_path) if 'BDMV' in dirs]
         self.subtitle_files = [os.path.join(subtitle_path, path) for path in os.listdir(subtitle_path)]
-        self.ass_index = -1
+        self.ass_index = 0
 
     def select_playlist(self):
         for bluray_folder in self.bluray_folders:
@@ -116,12 +119,33 @@ class BluraySubtitle:
             for mpls_file_name in os.listdir(mpls_folder):
                 mpls_file_path = os.path.join(mpls_folder, mpls_file_name)
                 chapter = Chapter(mpls_file_path)
-                indicator = chapter.get_total_time_no_repeat() * (1 + len(chapter.mark_info) / 5)
+                indicator = chapter.get_total_time_no_repeat() * (1 + sum(map(len, chapter.mark_info.values())) / 5)
                 if indicator > max_indicator:
                     max_indicator = indicator
                     selected_chapter = chapter
 
             yield bluray_folder, selected_chapter
+
+    def generate_bluray_subtitle(self):
+        for folder, chapter in self.select_playlist():
+            start_time = 0
+            ass_file = ASS(self.subtitle_files[self.ass_index])
+
+            for i, play_item_in_out_time in enumerate(chapter.in_out_time):
+                play_item_marks = chapter.mark_info.get(i)
+                if play_item_marks and play_item_in_out_time[2] - play_item_in_out_time[1] > 45000 * 300:
+                    time_shift = (start_time + play_item_marks[0] - play_item_in_out_time[1]) / 45000
+                    if time_shift > 1000:
+                        self.ass_index += 1
+                        ass_file.append_ass(self.subtitle_files[self.ass_index], time_shift)
+
+                start_time += play_item_in_out_time[2] - play_item_in_out_time[1]
+
+            ass_file.dump(folder + '.ass')
+            self.completion(folder)
+            self.ass_index += 1
+            if self.ass_index == len(self.subtitle_files):
+                break
 
     @staticmethod
     def completion(folder):
@@ -134,31 +158,6 @@ class BluraySubtitle:
         for item in 'AUXDATA', 'BDJO', 'JAR', 'META':
             if not os.path.exists(os.path.join(bdmv, item)):
                 os.mkdir(os.path.join(bdmv, item))
-
-    def generate_bluray_subtitle(self):
-        for folder, chapter in self.select_playlist():
-            self.ass_index += 1
-            if self.ass_index >= len(self.subtitle_files):
-                break
-            ass_file = ASS(self.subtitle_files[self.ass_index])
-            time_shift = 0
-            play_item_duration_time = 0
-            item_ids = set()
-            for ref_to_play_item_id, mark_timestamp in chapter.mark_info:
-                play_item_in_out_time = chapter.in_out_time[ref_to_play_item_id]
-                if ref_to_play_item_id not in item_ids:
-                    time_shift += play_item_duration_time
-                    if (
-                            play_item_in_out_time[2] - play_item_in_out_time[1] > 45000 * 300
-                            and ref_to_play_item_id != chapter.mark_info[0][0]
-                    ):
-                        self.ass_index += 1
-                        ass_file.append_ass(self.subtitle_files[self.ass_index],
-                                            (time_shift + mark_timestamp - play_item_in_out_time[1]) / 45000)
-                item_ids.add(ref_to_play_item_id)
-                play_item_duration_time = play_item_in_out_time[2] - play_item_in_out_time[1]
-            self.completion(folder)
-            ass_file.dump(folder + '.ass')
 
 
 class BluraySubtitleGUI(QWidget):
@@ -174,7 +173,7 @@ class BluraySubtitleGUI(QWidget):
 
         label1 = CustomLabel("选择原盘所在的文件夹：", self)
         self.bdmv_folder_path = QLineEdit()
-        self.bdmv_folder_path.setMinimumWidth(200)  # 设置选框宽度
+        self.bdmv_folder_path.setMinimumWidth(200)
         button1 = QPushButton("选择文件夹")
         button1.clicked.connect(self.select_bdmv_folder)
         layout.addWidget(label1)
@@ -183,7 +182,7 @@ class BluraySubtitleGUI(QWidget):
 
         label2 = CustomLabel("选择单集字幕所在的文件夹：", self)
         self.subtitle_folder_path = QLineEdit()
-        self.subtitle_folder_path.setMinimumWidth(200)  # 设置选框宽度
+        self.subtitle_folder_path.setMinimumWidth(200)
         button2 = QPushButton("选择文件夹")
         button2.clicked.connect(self.select_subtitle_folder)
         layout.addWidget(label2)
@@ -236,4 +235,3 @@ if __name__ == "__main__":
     window = BluraySubtitleGUI()
     window.show()
     sys.exit(app.exec_())
-    
