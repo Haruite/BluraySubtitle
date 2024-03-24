@@ -104,6 +104,9 @@ class ASS:
         with open(file_path, "w", encoding='utf-8-sig') as f:
             self.content.dump_file(f)
 
+    def max_end_time(self):
+        return max(map(lambda event: event.end.total_seconds(), self.content.events))
+
 
 class BluraySubtitle:
     def __init__(self, bluray_path, subtitle_path):
@@ -129,16 +132,36 @@ class BluraySubtitle:
 
     def generate_bluray_subtitle(self):
         for folder, chapter in self.select_playlist():
+            print(chapter.in_out_time)
+            print(chapter.mark_info)
             start_time = 0
             ass_file = ASS(self.subtitle_files[self.ass_index])
 
             for i, play_item_in_out_time in enumerate(chapter.in_out_time):
                 play_item_marks = chapter.mark_info.get(i)
-                if play_item_marks and play_item_in_out_time[2] - play_item_in_out_time[1] > 45000 * 300:
-                    time_shift = (start_time + play_item_marks[0] - play_item_in_out_time[1]) / 45000
-                    if time_shift > 1000:
-                        self.ass_index += 1
-                        ass_file.append_ass(self.subtitle_files[self.ass_index], time_shift)
+                if play_item_marks:
+                    play_item_duration_time = play_item_in_out_time[2] - play_item_in_out_time[1]
+                    if play_item_duration_time / 45000 > 300:
+
+                        time_shift = (start_time + play_item_marks[0] - play_item_in_out_time[1]) / 45000
+                        if time_shift > 1000:
+                            self.ass_index += 1
+                            print(time_shift, self.ass_index)
+                            ass_file.append_ass(self.subtitle_files[self.ass_index], time_shift)
+
+                        if play_item_duration_time / 45000 > 2600 and ass_file.max_end_time() - time_shift < 1800:
+                            min_shift = play_item_duration_time / 45000 / 2
+                            selected_mark = play_item_in_out_time[1]
+                            for mark in play_item_marks:
+                                if (mark - play_item_in_out_time[1]) / 45000 > (ass_file.max_end_time() - time_shift):
+                                    shift = abs(play_item_duration_time / 2 - mark + play_item_in_out_time[1]) / 45000
+                                    if shift < min_shift:
+                                        min_shift = shift
+                                        selected_mark = mark
+                            time_shift = (start_time + selected_mark - play_item_in_out_time[1]) / 45000
+                            self.ass_index += 1
+                            print(time_shift, self.ass_index)
+                            ass_file.append_ass(self.subtitle_files[self.ass_index], time_shift)
 
                 start_time += play_item_in_out_time[2] - play_item_in_out_time[1]
 
