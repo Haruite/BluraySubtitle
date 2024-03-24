@@ -1,6 +1,8 @@
 import datetime
 import os
+import shutil
 import sys
+import traceback
 from struct import unpack
 
 import ass
@@ -113,6 +115,18 @@ class BluraySubtitle:
 
             yield bluray_folder, selected_chapter
 
+    @staticmethod
+    def completion(folder):
+        bdmv = os.path.join(folder, 'BDMV')
+        backup = os.path.join(bdmv, 'BACKUP')
+        if os.path.exists(backup):
+            for item in os.listdir(backup):
+                if not os.path.exists(os.path.join(bdmv, item)):
+                    shutil.copy(os.path.join(backup, item), os.path.join(bdmv, item))
+        for item in 'AUXDATA', 'BDJO', 'JAR', 'META':
+            if not os.path.exists(os.path.join(bdmv, item)):
+                os.mkdir(os.path.join(bdmv, item))
+
     def generate_bluray_subtitle(self):
         for folder, chapter in self.select_playlist():
             self.ass_index += 1
@@ -135,6 +149,7 @@ class BluraySubtitle:
                                             (time_shift + mark_timestamp - play_item_in_out_time[1]) / 45000)
                 item_ids.add(ref_to_play_item_id)
                 play_item_duration_time = play_item_in_out_time[2] - play_item_in_out_time[1]
+            self.completion(folder)
             ass_file.dump(folder + '.ass')
 
 
