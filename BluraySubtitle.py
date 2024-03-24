@@ -182,8 +182,11 @@ class BluraySubtitleGUI(QWidget):
         self.subtitle_folder_path.setText(folder)
 
     def main(self):
-        BluraySubtitle(self.bdmv_folder_path.text(), self.subtitle_folder_path.text()).generate_bluray_subtitle()
-        QMessageBox.information(self, " ", "生成字幕成功！")
+        try:
+            BluraySubtitle(self.bdmv_folder_path.text(), self.subtitle_folder_path.text()).generate_bluray_subtitle()
+            QMessageBox.information(self, " ", "生成字幕成功！")
+        except Exception as e:
+            QMessageBox.information(self, " ", traceback.format_exc())
 
 
 class CustomLabel(QLabel):
