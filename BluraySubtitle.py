@@ -107,7 +107,8 @@ class ASS:
 
 class BluraySubtitle:
     def __init__(self, bluray_path, subtitle_path):
-        self.bluray_folders = [root for root, dirs, files in os.walk(bluray_path) if 'BDMV' in dirs]
+        self.bluray_folders = [root for root, dirs, files in os.walk(bluray_path) if 'BDMV' in dirs
+                               and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV'))]
         self.subtitle_files = [os.path.join(subtitle_path, path) for path in os.listdir(subtitle_path)]
         self.ass_index = 0
 
