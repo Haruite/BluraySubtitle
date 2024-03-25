@@ -105,7 +105,14 @@ class ASS:
             self.content.dump_file(f)
 
     def max_end_time(self):
-        return max(map(lambda event: event.end.total_seconds(), self.content.events))
+        end_set = set(map(lambda event: event.end.total_seconds(), self.content.events))
+        max_end = max(end_set)
+        end_set.remove(max_end)
+        max_end_1 = max(end_set)
+        if max_end_1 < max_end - 60:
+            return max_end_1
+        else:
+            return max_end
 
 
 class BluraySubtitle:
