@@ -1,9 +1,12 @@
+import ctypes
 import datetime
 import os
 import shutil
+import subprocess
 import sys
 import traceback
 from struct import unpack
+from time import sleep
 
 import ass
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLabel, QPushButton, QLineEdit, QMessageBox
@@ -117,10 +120,34 @@ class ASS:
 
 class BluraySubtitle:
     def __init__(self, bluray_path, subtitle_path):
+        if sys.platform == 'win32':
+            for root, dirs, files in os.walk(bluray_path):
+                for file in files:
+                    if file.endswith(".iso") and os.path.getsize(os.path.join(root, file)) > 5 * 1024 ** 3:
+                        iso_path = os.path.join(root, file)
+                        drivers = self.get_available_drives()
+                        subprocess.Popen(["powershell.exe", f"Mount-DiskImage -ImagePath '{iso_path}'"])
+                        while len(self.get_available_drives()) == len(drivers):
+                            sleep(0.01)
+                        drivers_1 = self.get_available_drives()
+                        driver = tuple(drivers_1 - drivers)[0]
+                        shutil.copytree(f'{driver}:\\BDMV\\PLAYLIST', f'{iso_path[:-4]}\\BDMV\\PLAYLIST')
+                        subprocess.Popen(["powershell.exe", f"Dismount-DiskImage -ImagePath '{iso_path}'"])
+
         self.bluray_folders = [root for root, dirs, files in os.walk(bluray_path) if 'BDMV' in dirs
                                and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV'))]
         self.subtitle_files = [os.path.join(subtitle_path, path) for path in os.listdir(subtitle_path)]
         self.ass_index = 0
+
+    @staticmethod
+    def get_available_drives():
+        drives = []
+        bitmask = ctypes.windll.kernel32.GetLogicalDrives()
+        for letter in range(65, 91):
+            if bitmask & 1:
+                drives.append(chr(letter))
+            bitmask >>= 1
+        return set(drives)
 
     def select_playlist(self):
         for bluray_folder in self.bluray_folders:
@@ -180,7 +207,10 @@ class BluraySubtitle:
         if os.path.exists(backup):
             for item in os.listdir(backup):
                 if not os.path.exists(os.path.join(bdmv, item)):
-                    shutil.copy(os.path.join(backup, item), os.path.join(bdmv, item))
+                    if os.path.isdir(os.path.join(backup, item)):
+                        shutil.copytree(os.path.join(backup, item), os.path.join(bdmv, item))
+                    else:
+                        shutil.copy(os.path.join(backup, item), os.path.join(bdmv, item))
         for item in 'AUXDATA', 'BDJO', 'JAR', 'META':
             if not os.path.exists(os.path.join(bdmv, item)):
                 os.mkdir(os.path.join(bdmv, item))
