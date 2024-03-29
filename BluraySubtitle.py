@@ -133,6 +133,8 @@ class BluraySubtitle:
                         driver = tuple(drivers_1 - drivers)[0]
                         shutil.copytree(f'{driver}:\\BDMV\\PLAYLIST', f'{iso_path[:-4]}\\BDMV\\PLAYLIST')
                         subprocess.Popen(["powershell.exe", f"Dismount-DiskImage -ImagePath '{iso_path}'"])
+                        while len(self.get_available_drives()) != len(drivers):
+                            sleep(0.01)
 
         self.bluray_folders = [root for root, dirs, files in os.walk(bluray_path) if 'BDMV' in dirs
                                and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV'))]
