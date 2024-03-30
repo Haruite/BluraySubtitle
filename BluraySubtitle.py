@@ -5,7 +5,7 @@ import shutil
 import sys
 import traceback
 from struct import unpack
-from time import sleep
+from ctypes import wintypes
 
 import ass
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLabel, QPushButton, QLineEdit, QMessageBox
@@ -117,6 +117,55 @@ class ASS:
             return max_end
 
 
+class ISO:
+    def __init__(self, path):
+        self.path = ctypes.c_wchar_p(path)
+
+        class GUID(ctypes.Structure):
+            _fields_ = (
+                ("Data1", ctypes.c_ulong),
+                ("Data2", ctypes.c_ushort),
+                ("Data3", ctypes.c_ushort),
+                ("Data4", ctypes.c_ubyte * 8),
+            )
+
+        class VIRTUAL_STORAGE_TYPE(ctypes.Structure):
+            _fields_ = (
+                ("DeviceId", wintypes.ULONG),
+                ("VendorId", GUID),
+            )
+
+        VIRTUAL_STORAGE_TYPE_VENDOR_MICROSOFT = GUID(
+            0xEC984AEC, 0xA0F9, 0x47E9, (0x90, 0x1F, 0x71, 0x41, 0x5A, 0x66, 0x34, 0x5B)
+        )
+        self.virtual_storage_type = VIRTUAL_STORAGE_TYPE(1, VIRTUAL_STORAGE_TYPE_VENDOR_MICROSOFT)
+        self.handle = wintypes.HANDLE()
+
+    def attach(self):
+        ctypes.windll.virtdisk.OpenVirtualDisk(
+            ctypes.byref(self.virtual_storage_type),
+            self.path,
+            0x000d0000,
+            0x00000000,
+            None,
+            ctypes.byref(self.handle)
+        )
+
+    def mount(self):
+        self.attach()
+        ctypes.windll.virtdisk.AttachVirtualDisk(
+            self.handle,
+            None,
+            0x00000001,
+            0,
+            None,
+            None
+        )
+
+    def close(self):
+        ctypes.windll.kernel32.CloseHandle(self.handle)
+
+
 class BluraySubtitle:
     def __init__(self, bluray_path, subtitle_path):
         if sys.platform == 'win32':
@@ -125,11 +174,12 @@ class BluraySubtitle:
                     if file.endswith(".iso") and os.path.getsize(os.path.join(root, file)) > 5 * 1024 ** 3:
                         iso_path = os.path.join(root, file)
                         drivers = self.get_available_drives()
-                        os.system(f"powershell Mount-DiskImage -ImagePath '{iso_path}'")
+                        iso = ISO(iso_path)
+                        iso.mount()
                         drivers_1 = self.get_available_drives()
                         driver = tuple(drivers_1 - drivers)[0]
                         shutil.copytree(f'{driver}:\\BDMV\\PLAYLIST', f'{iso_path[:-4]}\\BDMV\\PLAYLIST')
-                        os.system(f"powershell Dismount-DiskImage -ImagePath '{iso_path}'")
+                        iso.close()
 
         self.bluray_folders = [root for root, dirs, files in os.walk(bluray_path) if 'BDMV' in dirs
                                and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV'))]
@@ -174,6 +224,7 @@ class BluraySubtitle:
                     time_shift = (start_time + play_item_marks[0] - play_item_in_out_time[1]) / 45000
                     if time_shift > ass_file.max_end_time() - 60:
                         self.ass_index += 1
+                        print(self.ass_index, time_shift)
                         ass_file.append_ass(self.subtitle_files[self.ass_index], time_shift)
 
                     if play_item_duration_time / 45000 > 2600 and ass_file.max_end_time() - time_shift < 1800:
@@ -187,6 +238,7 @@ class BluraySubtitle:
                                     selected_mark = mark
                         time_shift = (start_time + selected_mark - play_item_in_out_time[1]) / 45000
                         self.ass_index += 1
+                        print(self.ass_index, time_shift)
                         ass_file.append_ass(self.subtitle_files[self.ass_index], time_shift)
 
                 start_time += play_item_in_out_time[2] - play_item_in_out_time[1]
