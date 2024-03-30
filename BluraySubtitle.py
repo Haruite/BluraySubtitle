@@ -2,7 +2,6 @@ import ctypes
 import datetime
 import os
 import shutil
-import subprocess
 import sys
 import traceback
 from struct import unpack
@@ -126,15 +125,11 @@ class BluraySubtitle:
                     if file.endswith(".iso") and os.path.getsize(os.path.join(root, file)) > 5 * 1024 ** 3:
                         iso_path = os.path.join(root, file)
                         drivers = self.get_available_drives()
-                        subprocess.Popen(["powershell.exe", f"Mount-DiskImage -ImagePath '{iso_path}'"])
-                        while len(self.get_available_drives()) == len(drivers):
-                            sleep(0.01)
+                        os.system(f"powershell Mount-DiskImage -ImagePath '{iso_path}'")
                         drivers_1 = self.get_available_drives()
                         driver = tuple(drivers_1 - drivers)[0]
                         shutil.copytree(f'{driver}:\\BDMV\\PLAYLIST', f'{iso_path[:-4]}\\BDMV\\PLAYLIST')
-                        subprocess.Popen(["powershell.exe", f"Dismount-DiskImage -ImagePath '{iso_path}'"])
-                        while len(self.get_available_drives()) != len(drivers):
-                            sleep(0.01)
+                        os.system(f"powershell Dismount-DiskImage -ImagePath '{iso_path}'")
 
         self.bluray_folders = [root for root, dirs, files in os.walk(bluray_path) if 'BDMV' in dirs
                                and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV'))]
