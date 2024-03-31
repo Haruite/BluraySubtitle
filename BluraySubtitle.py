@@ -5,7 +5,8 @@ import shutil
 import sys
 import traceback
 from struct import unpack
-from ctypes import wintypes
+if sys.platform == 'win32':
+    from ctypes import wintypes
 
 import ass
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLabel, QPushButton, QLineEdit, QMessageBox
