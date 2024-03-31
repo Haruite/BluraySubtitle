@@ -168,6 +168,7 @@ class ISO:
 
 class BluraySubtitle:
     def __init__(self, bluray_path, subtitle_path):
+        self.tmp_folders = []
         if sys.platform == 'win32':
             for root, dirs, files in os.walk(bluray_path):
                 for file in files:
@@ -178,7 +179,13 @@ class BluraySubtitle:
                         iso.mount()
                         drivers_1 = self.get_available_drives()
                         driver = tuple(drivers_1 - drivers)[0]
-                        shutil.copytree(f'{driver}:\\BDMV\\PLAYLIST', f'{iso_path[:-4]}\\BDMV\\PLAYLIST')
+                        tmp_folder = iso_path[:-4]
+                        try:
+                            shutil.copytree(f'{driver}:\\BDMV\\PLAYLIST', f'{tmp_folder}\\BDMV\\PLAYLIST')
+                        except:
+                            pass
+                        else:
+                            self.tmp_folders.append(tmp_folder)
                         iso.close()
 
         self.bluray_folders = [root for root, dirs, files in os.walk(bluray_path) if 'BDMV' in dirs
@@ -224,7 +231,6 @@ class BluraySubtitle:
                     time_shift = (start_time + play_item_marks[0] - play_item_in_out_time[1]) / 45000
                     if time_shift > ass_file.max_end_time() - 60:
                         self.ass_index += 1
-                        print(self.ass_index, time_shift)
                         ass_file.append_ass(self.subtitle_files[self.ass_index], time_shift)
 
                     if play_item_duration_time / 45000 > 2600 and ass_file.max_end_time() - time_shift < 1800:
@@ -238,7 +244,6 @@ class BluraySubtitle:
                                     selected_mark = mark
                         time_shift = (start_time + selected_mark - play_item_in_out_time[1]) / 45000
                         self.ass_index += 1
-                        print(self.ass_index, time_shift)
                         ass_file.append_ass(self.subtitle_files[self.ass_index], time_shift)
 
                 start_time += play_item_in_out_time[2] - play_item_in_out_time[1]
@@ -249,8 +254,7 @@ class BluraySubtitle:
             if self.ass_index == len(self.subtitle_files):
                 break
 
-    @staticmethod
-    def completion(folder):
+    def completion(self, folder):
         bdmv = os.path.join(folder, 'BDMV')
         backup = os.path.join(bdmv, 'BACKUP')
         if os.path.exists(backup):
@@ -263,6 +267,11 @@ class BluraySubtitle:
         for item in 'AUXDATA', 'BDJO', 'JAR', 'META':
             if not os.path.exists(os.path.join(bdmv, item)):
                 os.mkdir(os.path.join(bdmv, item))
+        for tmp_folder in self.tmp_folders:
+            try:
+                shutil.rmtree(tmp_folder)
+            except:
+                pass
 
 
 class BluraySubtitleGUI(QWidget):
