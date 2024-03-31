@@ -141,7 +141,7 @@ class ISO:
         self.virtual_storage_type = VIRTUAL_STORAGE_TYPE(1, VIRTUAL_STORAGE_TYPE_VENDOR_MICROSOFT)
         self.handle = wintypes.HANDLE()
 
-    def attach(self):
+    def open(self):
         ctypes.windll.virtdisk.OpenVirtualDisk(
             ctypes.byref(self.virtual_storage_type),
             self.path,
@@ -152,7 +152,7 @@ class ISO:
         )
 
     def mount(self):
-        self.attach()
+        self.open()
         ctypes.windll.virtdisk.AttachVirtualDisk(
             self.handle,
             None,
@@ -222,6 +222,7 @@ class BluraySubtitle:
         for folder, chapter in self.select_playlist():
             start_time = 0
             ass_file = ASS(self.subtitle_files[self.ass_index])
+            left_time = chapter.get_total_time()
 
             for i, play_item_in_out_time in enumerate(chapter.in_out_time):
                 play_item_marks = chapter.mark_info.get(i)
@@ -229,9 +230,10 @@ class BluraySubtitle:
                     play_item_duration_time = play_item_in_out_time[2] - play_item_in_out_time[1]
 
                     time_shift = (start_time + play_item_marks[0] - play_item_in_out_time[1]) / 45000
-                    if time_shift > ass_file.max_end_time() - 60:
-                        self.ass_index += 1
-                        ass_file.append_ass(self.subtitle_files[self.ass_index], time_shift)
+                    if time_shift > ass_file.max_end_time() - 300:
+                        if left_time > ASS(self.subtitle_files[self.ass_index + 1]).max_end_time() - 180:
+                            self.ass_index += 1
+                            ass_file.append_ass(self.subtitle_files[self.ass_index], time_shift)
 
                     if play_item_duration_time / 45000 > 2600 and ass_file.max_end_time() - time_shift < 1800:
                         min_shift = play_item_duration_time / 45000 / 2
@@ -247,6 +249,7 @@ class BluraySubtitle:
                         ass_file.append_ass(self.subtitle_files[self.ass_index], time_shift)
 
                 start_time += play_item_in_out_time[2] - play_item_in_out_time[1]
+                left_time += (play_item_in_out_time[1] - play_item_in_out_time[2]) / 45000
 
             ass_file.dump(folder + '.ass')
             self.completion(folder)
