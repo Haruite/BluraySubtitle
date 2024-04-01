@@ -232,7 +232,8 @@ class BluraySubtitle:
 
                     time_shift = (start_time + play_item_marks[0] - play_item_in_out_time[1]) / 45000
                     if time_shift > ass_file.max_end_time() - 300:
-                        if left_time > ASS(self.subtitle_files[self.ass_index + 1]).max_end_time() - 180:
+                        if (self.ass_index + 1 < len(self.subtitle_files)
+                                and left_time > ASS(self.subtitle_files[self.ass_index + 1]).max_end_time() - 180):
                             self.ass_index += 1
                             ass_file.append_ass(self.subtitle_files[self.ass_index], time_shift)
 
