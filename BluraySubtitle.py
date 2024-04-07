@@ -5,11 +5,15 @@ import shutil
 import sys
 import traceback
 from struct import unpack
+
+from PyQt5.QtCore import QCoreApplication
+
 if sys.platform == 'win32':
     from ctypes import wintypes
 
 import ass
-from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLabel, QPushButton, QLineEdit, QMessageBox
+from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLabel, QPushButton, QLineEdit, \
+    QMessageBox, QHBoxLayout, QGroupBox, QCheckBox, QProgressDialog
 
 
 class Chapter:
@@ -168,7 +172,7 @@ class ISO:
 
 
 class BluraySubtitle:
-    def __init__(self, bluray_path, subtitle_path):
+    def __init__(self, bluray_path, subtitle_path, checked, progress_dialog):
         self.tmp_folders = []
         if sys.platform == 'win32':
             for root, dirs, files in os.walk(bluray_path):
@@ -193,6 +197,8 @@ class BluraySubtitle:
                                and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV'))]
         self.subtitle_files = [os.path.join(subtitle_path, path) for path in os.listdir(subtitle_path)]
         self.ass_index = 0
+        self.checked = checked
+        self.progress_dialog = progress_dialog
 
     @staticmethod
     def get_available_drives():
@@ -221,9 +227,11 @@ class BluraySubtitle:
 
     def generate_bluray_subtitle(self):
         for folder, chapter in self.select_playlist():
+            print(folder)
             start_time = 0
             ass_file = ASS(self.subtitle_files[self.ass_index])
             left_time = chapter.get_total_time()
+            print(f'集数：{self.ass_index + 1}, 偏移：0')
 
             for i, play_item_in_out_time in enumerate(chapter.in_out_time):
                 play_item_marks = chapter.mark_info.get(i)
@@ -235,7 +243,10 @@ class BluraySubtitle:
                         if (self.ass_index + 1 < len(self.subtitle_files)
                                 and left_time > ASS(self.subtitle_files[self.ass_index + 1]).max_end_time() - 180):
                             self.ass_index += 1
+                            print(f'集数：{self.ass_index + 1}, 偏移：{time_shift}')
                             ass_file.append_ass(self.subtitle_files[self.ass_index], time_shift)
+                            self.progress_dialog.setValue(int((self.ass_index + 1) / len(self.subtitle_files) * 1000))
+                            QCoreApplication.processEvents()
 
                     if play_item_duration_time / 45000 > 2600 and ass_file.max_end_time() - time_shift < 1800:
                         min_shift = play_item_duration_time / 45000 / 2
@@ -248,7 +259,10 @@ class BluraySubtitle:
                                     selected_mark = mark
                         time_shift = (start_time + selected_mark - play_item_in_out_time[1]) / 45000
                         self.ass_index += 1
+                        print(f'集数：{self.ass_index + 1}, 偏移：{time_shift}')
                         ass_file.append_ass(self.subtitle_files[self.ass_index], time_shift)
+                        self.progress_dialog.setValue(int((self.ass_index + 1) / len(self.subtitle_files) * 1000))
+                        QCoreApplication.processEvents()
 
                 start_time += play_item_in_out_time[2] - play_item_in_out_time[1]
                 left_time += (play_item_in_out_time[1] - play_item_in_out_time[2]) / 45000
@@ -258,20 +272,23 @@ class BluraySubtitle:
             self.ass_index += 1
             if self.ass_index == len(self.subtitle_files):
                 break
+        self.progress_dialog.setValue(1000)
+        QCoreApplication.processEvents()
 
     def completion(self, folder):
-        bdmv = os.path.join(folder, 'BDMV')
-        backup = os.path.join(bdmv, 'BACKUP')
-        if os.path.exists(backup):
-            for item in os.listdir(backup):
+        if self.checked:
+            bdmv = os.path.join(folder, 'BDMV')
+            backup = os.path.join(bdmv, 'BACKUP')
+            if os.path.exists(backup):
+                for item in os.listdir(backup):
+                    if not os.path.exists(os.path.join(bdmv, item)):
+                        if os.path.isdir(os.path.join(backup, item)):
+                            shutil.copytree(os.path.join(backup, item), os.path.join(bdmv, item))
+                        else:
+                            shutil.copy(os.path.join(backup, item), os.path.join(bdmv, item))
+            for item in 'AUXDATA', 'BDJO', 'JAR', 'META':
                 if not os.path.exists(os.path.join(bdmv, item)):
-                    if os.path.isdir(os.path.join(backup, item)):
-                        shutil.copytree(os.path.join(backup, item), os.path.join(bdmv, item))
-                    else:
-                        shutil.copy(os.path.join(backup, item), os.path.join(bdmv, item))
-        for item in 'AUXDATA', 'BDJO', 'JAR', 'META':
-            if not os.path.exists(os.path.join(bdmv, item)):
-                os.mkdir(os.path.join(bdmv, item))
+                    os.mkdir(os.path.join(bdmv, item))
         for tmp_folder in self.tmp_folders:
             try:
                 shutil.rmtree(tmp_folder)
@@ -290,27 +307,39 @@ class BluraySubtitleGUI(QWidget):
 
         layout = QVBoxLayout()
 
-        label1 = CustomLabel("选择原盘所在的文件夹：", self)
+        bluray_path_box = CustomBox('原盘', self)
+        h_layout = QHBoxLayout()
+        bluray_path_box.setLayout(h_layout)
+        label1 = QLabel("选择原盘所在的文件夹：", self)
         self.bdmv_folder_path = QLineEdit()
         self.bdmv_folder_path.setMinimumWidth(200)
         button1 = QPushButton("选择文件夹")
         button1.clicked.connect(self.select_bdmv_folder)
         layout.addWidget(label1)
-        layout.addWidget(self.bdmv_folder_path)
-        layout.addWidget(button1)
+        h_layout.addWidget(self.bdmv_folder_path)
+        h_layout.addWidget(button1)
+        layout.addWidget(bluray_path_box)
 
-        label2 = CustomLabel("选择单集字幕所在的文件夹：", self)
+        subtitle_path_box = CustomBox('字幕', self)
+        h_layout = QHBoxLayout()
+        subtitle_path_box.setLayout(h_layout)
+        label2 = QLabel("选择单集字幕所在的文件夹：", self)
         self.subtitle_folder_path = QLineEdit()
         self.subtitle_folder_path.setMinimumWidth(200)
         button2 = QPushButton("选择文件夹")
         button2.clicked.connect(self.select_subtitle_folder)
         layout.addWidget(label2)
-        layout.addWidget(self.subtitle_folder_path)
-        layout.addWidget(button2)
+        h_layout.addWidget(self.subtitle_folder_path)
+        h_layout.addWidget(button2)
+        layout.addWidget(subtitle_path_box)
 
-        test_button = QPushButton("生成字幕")
-        test_button.clicked.connect(self.main)
-        layout.addWidget(test_button)
+        self.checkbox1 = QCheckBox("补全蓝光目录")
+        self.checkbox1.setChecked(True)
+        layout.addWidget(self.checkbox1)
+        exe_button = QPushButton("生成字幕")
+        exe_button.clicked.connect(self.main)
+        exe_button.setMinimumHeight(50)
+        layout.addWidget(exe_button)
 
         self.setLayout(layout)
 
@@ -323,16 +352,24 @@ class BluraySubtitleGUI(QWidget):
         self.subtitle_folder_path.setText(folder)
 
     def main(self):
+        progress_dialog = QProgressDialog('字幕生成中', '取消', 0, 1000, self)
+        progress_dialog.show()
         try:
-            BluraySubtitle(self.bdmv_folder_path.text(), self.subtitle_folder_path.text()).generate_bluray_subtitle()
+            BluraySubtitle(
+                self.bdmv_folder_path.text(),
+                self.subtitle_folder_path.text(),
+                self.checkbox1.isChecked(),
+                progress_dialog
+            ).generate_bluray_subtitle()
             QMessageBox.information(self, " ", "生成字幕成功！")
         except Exception as e:
             QMessageBox.information(self, " ", traceback.format_exc())
+        progress_dialog.close()
 
 
-class CustomLabel(QLabel):
+class CustomBox(QGroupBox):
     def __init__(self, title, parent):
-        super().__init__(title, parent)
+        super().__init__(parent)
         self.setAcceptDrops(True)
         self.title = title
 
@@ -343,9 +380,9 @@ class CustomLabel(QLabel):
             e.ignore()
 
     def dropEvent(self, e):
-        if self.title == '选择原盘所在的文件夹：':
+        if self.title == '原盘':
             self.parent().bdmv_folder_path.setText(e.mimeData().urls()[0].toLocalFile())
-        if self.title == '选择单集字幕所在的文件夹：':
+        if self.title == '字幕':
             self.parent().subtitle_folder_path.setText(e.mimeData().urls()[0].toLocalFile())
 
 
