@@ -1,6 +1,7 @@
 import ctypes
 import datetime
 import os
+import re
 import shutil
 import sys
 import traceback
@@ -65,50 +66,99 @@ class Chapter:
         return sum({x[0]: (x[2] - x[1]) / 45000 for x in self.in_out_time}.values())
 
 
-class ASS:
+class Subtitle:
     def __init__(self, file_path):
-        self.file_path = file_path
+        self.max_end = 0
         try:
             with open(file_path, 'r', encoding='utf-8-sig') as f:
-                self.content = ass.parse(f)
+                if file_path.endswith('.srt'):
+                    self.content = ''
+                    self.append_ass(file_path, 0)
+                else:
+                    self.content = ass.parse(f)
         except:
             with open(file_path, 'r', encoding='utf-16') as f:
-                self.content = ass.parse(f)
+                if file_path.endswith('.srt'):
+                    self.content = ''
+                    self.append_ass(file_path, 0)
+                else:
+                    self.content = ass.parse(f)
 
     def append_ass(self, new_file_path, time_shift):
         try:
             with open(new_file_path, 'r', encoding='utf-8-sig') as f:
-                new_content = ass.parse(f)
+                if new_file_path.endswith('.srt'):
+                    new_content = f.read()
+                else:
+                    new_content = ass.parse(f)
         except:
             with open(new_file_path, 'r', encoding='utf-16') as f:
-                new_content = ass.parse(f)
-        style_info = {repr(style) for style in self.content.styles}
-        style_name_map = {}
-        for style in new_content.styles:
-            if repr(style) not in style_info:
-                old_name = style.name
-                flag = False
-                while any(style.name == _style.name for _style in self.content.styles):
-                    style.name += "1"
-                    if repr(style) in style_info:
-                        flag = True
-                        break
-                if flag:
-                    continue
-                style_name_map[old_name] = style.name
-                self.content.styles.append(style)
-                style_info.add(repr(style))
+                if new_file_path.endswith('.srt'):
+                    new_content = f.read()
+                else:
+                    new_content = ass.parse(f)
+        if new_file_path.endswith('.srt'):
+            index = int((re.findall(r'\n\n(\d+)\n', self.content) or ['0'])[-1])
+            flag = 0
+            new_lines = []
+            for line in list(new_content.split('\n')):
+                if not line:
+                    flag = 0
+                if flag == 1 and re.match(r'^(\d+)$', line):
+                    new_lines.append(str(int(line) + index))
+                elif flag in (1, 2):
+                    if (re.match(r'^(\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3})$', line)
+                            or re.match(r'^(\d{2}:\d{2}:\d{2}.\d{3} --> \d{2}:\d{2}:\d{2}.\d{3})$', line)):
+                        start_time = int(line[0:2]) * 3600 + int(line[3:5]) * 60 + int(line[6:8]) + int(
+                            line[9:12]) / 1000 + time_shift
+                        end_time = int(line[17:19]) * 3600 + int(line[20:22]) * 60 + int(line[23:25]) + int(
+                            line[26:29]) / 1000 + time_shift
+                        if end_time > self.max_end:
+                            self.max_end = end_time
+                        start_time_str = str(datetime.timedelta(seconds=start_time))[:-3].replace('.', ',')
+                        end_time_str = str(datetime.timedelta(seconds=end_time))[:-3].replace('.', ',')
+                        if len(start_time_str) < 12:
+                            start_time_str = '0' + start_time_str
+                        if len(end_time_str) < 12:
+                            end_time_str = '0' + end_time_str
+                        new_lines.append(f'{start_time_str} --> {end_time_str}')
+                    else:
+                        new_lines.append(line)
+                else:
+                    new_lines.append(line)
+                flag += 1
+            self.content += '\n'.join(new_lines)
+        else:
+            style_info = {repr(style) for style in self.content.styles}
+            style_name_map = {}
+            for style in new_content.styles:
+                if repr(style) not in style_info:
+                    old_name = style.name
+                    flag = False
+                    while any(style.name == _style.name for _style in self.content.styles):
+                        style.name += "1"
+                        if repr(style) in style_info:
+                            flag = True
+                            break
+                    if flag:
+                        continue
+                    style_name_map[old_name] = style.name
+                    self.content.styles.append(style)
+                    style_info.add(repr(style))
 
-        time_shift = datetime.timedelta(seconds=time_shift)
-        for event in new_content.events:
-            event.start += time_shift
-            event.end += time_shift
-            if event.style in style_name_map:
-                event.style = style_name_map[event.style]
-            self.content.events.append(event)
+            time_shift = datetime.timedelta(seconds=time_shift)
+            for event in new_content.events:
+                event.start += time_shift
+                event.end += time_shift
+                if event.style in style_name_map:
+                    event.style = style_name_map[event.style]
+                self.content.events.append(event)
 
     def dump(self, file_path):
-        if self.content.script_type == 'v4.00+':
+        if isinstance(self.content, str):
+            with open(file_path + '.srt', "w", encoding='utf-8-sig') as f:
+                f.write(self.content)
+        elif self.content.script_type == 'v4.00+':
             with open(file_path + '.ass', "w", encoding='utf-8-sig') as f:
                 self.content.dump_file(f)
         else:
@@ -116,6 +166,8 @@ class ASS:
                 self.content.dump_file(f)
 
     def max_end_time(self):
+        if self.max_end:
+            return self.max_end
         end_set = set(map(lambda event: event.end.total_seconds(), self.content.events))
         max_end = max(end_set)
         end_set.remove(max_end)
@@ -200,8 +252,8 @@ class BluraySubtitle:
         self.bluray_folders = [root for root, dirs, files in os.walk(bluray_path) if 'BDMV' in dirs
                                and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV'))]
         self.subtitle_files = [os.path.join(subtitle_path, path) for path in os.listdir(subtitle_path)
-                               if path.endswith(".ass") or path.endswith(".ssa")]
-        self.ass_index = 0
+                               if path.endswith(".ass") or path.endswith(".ssa") or path.endswith('srt')]
+        self.sub_index = 0
         self.checked = checked
         self.progress_dialog = progress_dialog
 
@@ -234,9 +286,9 @@ class BluraySubtitle:
         for folder, chapter in self.select_playlist():
             print(folder)
             start_time = 0
-            ass_file = ASS(self.subtitle_files[self.ass_index])
+            ass_file = Subtitle(self.subtitle_files[self.sub_index])
             left_time = chapter.get_total_time()
-            print(f'集数：{self.ass_index + 1}, 偏移：0')
+            print(f'集数：{self.sub_index + 1}, 偏移：0')
 
             for i, play_item_in_out_time in enumerate(chapter.in_out_time):
                 play_item_marks = chapter.mark_info.get(i)
@@ -245,12 +297,12 @@ class BluraySubtitle:
 
                     time_shift = (start_time + play_item_marks[0] - play_item_in_out_time[1]) / 45000
                     if time_shift > ass_file.max_end_time() - 300:
-                        if (self.ass_index + 1 < len(self.subtitle_files)
-                                and left_time > ASS(self.subtitle_files[self.ass_index + 1]).max_end_time() - 180):
-                            self.ass_index += 1
-                            print(f'集数：{self.ass_index + 1}, 偏移：{time_shift}')
-                            ass_file.append_ass(self.subtitle_files[self.ass_index], time_shift)
-                            self.progress_dialog.setValue(int((self.ass_index + 1) / len(self.subtitle_files) * 1000))
+                        if (self.sub_index + 1 < len(self.subtitle_files)
+                                and left_time > Subtitle(self.subtitle_files[self.sub_index + 1]).max_end_time() - 180):
+                            self.sub_index += 1
+                            print(f'集数：{self.sub_index + 1}, 偏移：{time_shift}')
+                            ass_file.append_ass(self.subtitle_files[self.sub_index], time_shift)
+                            self.progress_dialog.setValue(int((self.sub_index + 1) / len(self.subtitle_files) * 1000))
                             QCoreApplication.processEvents()
 
                     if play_item_duration_time / 45000 > 2600 and ass_file.max_end_time() - time_shift < 1800:
@@ -263,10 +315,10 @@ class BluraySubtitle:
                                     min_shift = shift
                                     selected_mark = mark
                         time_shift = (start_time + selected_mark - play_item_in_out_time[1]) / 45000
-                        self.ass_index += 1
-                        print(f'集数：{self.ass_index + 1}, 偏移：{time_shift}')
-                        ass_file.append_ass(self.subtitle_files[self.ass_index], time_shift)
-                        self.progress_dialog.setValue(int((self.ass_index + 1) / len(self.subtitle_files) * 1000))
+                        self.sub_index += 1
+                        print(f'集数：{self.sub_index + 1}, 偏移：{time_shift}')
+                        ass_file.append_ass(self.subtitle_files[self.sub_index], time_shift)
+                        self.progress_dialog.setValue(int((self.sub_index + 1) / len(self.subtitle_files) * 1000))
                         QCoreApplication.processEvents()
 
                 start_time += play_item_in_out_time[2] - play_item_in_out_time[1]
@@ -274,8 +326,8 @@ class BluraySubtitle:
 
             ass_file.dump(folder)
             self.completion(folder)
-            self.ass_index += 1
-            if self.ass_index == len(self.subtitle_files):
+            self.sub_index += 1
+            if self.sub_index == len(self.subtitle_files):
                 break
         self.progress_dialog.setValue(1000)
         QCoreApplication.processEvents()
