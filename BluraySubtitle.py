@@ -108,8 +108,12 @@ class ASS:
             self.content.events.append(event)
 
     def dump(self, file_path):
-        with open(file_path, "w", encoding='utf-8-sig') as f:
-            self.content.dump_file(f)
+        if self.content.script_type == 'v4.00+':
+            with open(file_path + '.ass', "w", encoding='utf-8-sig') as f:
+                self.content.dump_file(f)
+        else:
+            with open(file_path + '.ssa', "w", encoding='utf-8-sig') as f:
+                self.content.dump_file(f)
 
     def max_end_time(self):
         end_set = set(map(lambda event: event.end.total_seconds(), self.content.events))
@@ -195,7 +199,8 @@ class BluraySubtitle:
 
         self.bluray_folders = [root for root, dirs, files in os.walk(bluray_path) if 'BDMV' in dirs
                                and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV'))]
-        self.subtitle_files = [os.path.join(subtitle_path, path) for path in os.listdir(subtitle_path)]
+        self.subtitle_files = [os.path.join(subtitle_path, path) for path in os.listdir(subtitle_path)
+                               if path.endswith(".ass") or path.endswith(".ssa")]
         self.ass_index = 0
         self.checked = checked
         self.progress_dialog = progress_dialog
@@ -267,7 +272,7 @@ class BluraySubtitle:
                 start_time += play_item_in_out_time[2] - play_item_in_out_time[1]
                 left_time += (play_item_in_out_time[1] - play_item_in_out_time[2]) / 45000
 
-            ass_file.dump(folder + '.ass')
+            ass_file.dump(folder)
             self.completion(folder)
             self.ass_index += 1
             if self.ass_index == len(self.subtitle_files):
