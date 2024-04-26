@@ -7,12 +7,8 @@ import sys
 import traceback
 from struct import unpack
 
-from PyQt5.QtCore import QCoreApplication
-
-if sys.platform == 'win32':
-    from ctypes import wintypes
-
 import ass
+from PyQt5.QtCore import QCoreApplication
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLabel, QPushButton, QLineEdit, \
     QMessageBox, QHBoxLayout, QGroupBox, QCheckBox, QProgressDialog
 
@@ -192,7 +188,7 @@ class ISO:
 
         class VIRTUAL_STORAGE_TYPE(ctypes.Structure):
             _fields_ = (
-                ("DeviceId", wintypes.ULONG),
+                ("DeviceId", ctypes.c_ulong),
                 ("VendorId", GUID),
             )
 
@@ -200,7 +196,7 @@ class ISO:
             0xEC984AEC, 0xA0F9, 0x47E9, (0x90, 0x1F, 0x71, 0x41, 0x5A, 0x66, 0x34, 0x5B)
         )
         self.virtual_storage_type = VIRTUAL_STORAGE_TYPE(1, VIRTUAL_STORAGE_TYPE_VENDOR_MICROSOFT)
-        self.handle = wintypes.HANDLE()
+        self.handle = ctypes.c_void_p()
 
     def open(self):
         ctypes.windll.virtdisk.OpenVirtualDisk(
