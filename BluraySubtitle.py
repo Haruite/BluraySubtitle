@@ -1,3 +1,4 @@
+import _io
 import ctypes
 import datetime
 import os
@@ -5,9 +6,9 @@ import re
 import shutil
 import sys
 import traceback
+from functools import reduce
 from struct import unpack
 
-import ass
 from PyQt5.QtCore import QCoreApplication
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLabel, QPushButton, QLineEdit, \
     QMessageBox, QHBoxLayout, QGroupBox, QCheckBox, QProgressDialog
@@ -62,6 +63,106 @@ class Chapter:
         return sum({x[0]: (x[2] - x[1]) / 45000 for x in self.in_out_time}.values())
 
 
+class Style:
+    def __repr__(self):
+        return str(self.__dict__)
+
+
+class Event:
+    def __repr__(self):
+        return str(self.__dict__)
+
+
+class Ass:
+    sections = 'script', 'garbage', 'style', 'events'
+
+    def __init__(self, content):
+        self.content = content
+        for section in self.sections:
+            setattr(self, section + "_raw", [])
+        self.styles: list[Style] = []
+        self.events: list[Event] = []
+        self.script_type = ''
+
+    def parse(self):
+        lines = self.content.splitlines()
+
+        for line in lines:
+            if line.startswith('[') and line.endswith(']'):
+                for section in self.sections:
+                    if section in line.lower():
+                        raw = getattr(self, section + "_raw")
+                        if section == 'style':
+                            self.script_type = 'v4.00+' if '+' in line else 'v4.00'
+            elif line:
+                raw.append(line)
+
+        for index, line in enumerate(self.style_raw):
+            values = list(map(lambda attr: attr.strip(), line[line.index(":") + 1:].split(',')))
+            if index == 0:
+                attrs = values
+            else:
+                style = Style()
+                for i, value in enumerate(values):
+                    setattr(style, attrs[i], value)
+                self.styles.append(style)
+
+        for index, line in enumerate(self.events_raw):
+            values = list(map(lambda attr: attr.strip(), line[line.index(":") + 1:].split(',')))
+            if index == 0:
+                attrs = ['Format'] + values
+            else:
+                event = Event()
+                event.Format = line[:line.index(":")]
+                if len(values) > len(attrs) - 1:
+                    values = values[:len(attrs) - 2] + [','.join(values[len(attrs) - 2:])]
+                for i, value in enumerate(values):
+                    if attrs[i + 1].lower() in ('start', 'end'):
+                        value = datetime.timedelta(seconds=reduce(lambda a, b: a * 60 + b, map(float, value.split(':'))))
+                    setattr(event, attrs[i + 1], value)
+                self.events.append(event)
+
+        return self
+
+    def dump_file(self, fp: _io.TextIOWrapper):
+        fp.write('[Script Info]\n')
+        fp.write('\n'.join(self.script_raw))
+        if self.garbage_raw:
+            fp.write('\n\n[Aegisub Project Garbage]\n')
+            fp.write('\n'.join(self.garbage_raw))
+
+        fp.write('\n\n[V4+ Styles]\n'if self.script_type == 'v4.00+' else '\n\n[V4 Styles]\n')
+        fp.write('Format: ' + ', '.join(self.styles[0].__dict__.keys()) + '\n')
+        for style in self.styles:
+            fp.write('Style: ' + ','.join(style.__dict__.values()) + '\n')
+
+        fp.write('\n[Events]\n')
+        fp.write('Format: ' + ', '.join(list(self.events[0].__dict__.keys())[1:]) + '\n')
+        for event in self.events:
+            line = ''
+            values = list(event.__dict__.values())
+            keys = list(event.__dict__.keys())
+            for i, value in enumerate(values):
+                if i == 0:
+                    line += value + ": "
+                else:
+                    if keys[i].lower() in ('start', 'end'):
+                        d_len = len(str(value).split(':')[-1])
+                        if d_len > 5:
+                            line += str(value)[:5 - d_len] + ','
+                        elif d_len == 5:
+                            line += str(value) + ','
+                        else:
+                            line += str(value) + '.00' + ','
+                    elif i == len(values) - 1:
+                        line += value
+                    else:
+                        line += value + ','
+
+            line += '\n'
+            fp.write(line)
+
+
 class Subtitle:
     def __init__(self, file_path):
         self.max_end = 0
@@ -71,14 +172,14 @@ class Subtitle:
                     self.content = ''
                     self.append_ass(file_path, 0)
                 else:
-                    self.content = ass.parse(f)
+                    self.content = Ass(f.read()).parse()
         except:
             with open(file_path, 'r', encoding='utf-16') as f:
                 if file_path.endswith('.srt'):
                     self.content = ''
                     self.append_ass(file_path, 0)
                 else:
-                    self.content = ass.parse(f)
+                    self.content = Ass(f.read()).parse()
 
     def append_ass(self, new_file_path, time_shift):
         try:
@@ -86,13 +187,13 @@ class Subtitle:
                 if new_file_path.endswith('.srt'):
                     new_content = f.read()
                 else:
-                    new_content = ass.parse(f)
+                    new_content = Ass(f.read()).parse()
         except:
             with open(new_file_path, 'r', encoding='utf-16') as f:
                 if new_file_path.endswith('.srt'):
                     new_content = f.read()
                 else:
-                    new_content = ass.parse(f)
+                    new_content = Ass(f.read()).parse()
         if new_file_path.endswith('.srt'):
             index = int((re.findall(r'\n\n(\d+)\n', self.content) or ['0'])[-1])
             flag = 0
@@ -129,25 +230,25 @@ class Subtitle:
             style_name_map = {}
             for style in new_content.styles:
                 if repr(style) not in style_info:
-                    old_name = style.name
+                    old_name = style.Name
                     flag = False
-                    while any(style.name == _style.name for _style in self.content.styles):
-                        style.name += "1"
+                    while any(style.Name == _style.Name for _style in self.content.styles):
+                        style.Name += "1"
                         if repr(style) in style_info:
                             flag = True
                             break
                     if flag:
                         continue
-                    style_name_map[old_name] = style.name
+                    style_name_map[old_name] = style.Name
                     self.content.styles.append(style)
                     style_info.add(repr(style))
 
             time_shift = datetime.timedelta(seconds=time_shift)
             for event in new_content.events:
-                event.start += time_shift
-                event.end += time_shift
-                if event.style in style_name_map:
-                    event.style = style_name_map[event.style]
+                event.Start += time_shift
+                event.End += time_shift
+                if event.Style in style_name_map:
+                    event.Style = style_name_map[event.Style]
                 self.content.events.append(event)
 
     def dump(self, file_path):
@@ -164,7 +265,7 @@ class Subtitle:
     def max_end_time(self):
         if self.max_end:
             return self.max_end
-        end_set = set(map(lambda event: event.end.total_seconds(), self.content.events))
+        end_set = set(map(lambda event: event.End.total_seconds(), self.content.events))
         max_end = max(end_set)
         end_set.remove(max_end)
         max_end_1 = max(end_set)
