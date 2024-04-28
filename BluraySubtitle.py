@@ -114,7 +114,7 @@ class Ass:
                         event = Event()
                         if len(elements) > len(self.event_attrs):
                             elements = (elements[:len(self.event_attrs) - 1] +
-                                        [''.join(elements[len(self.event_attrs) - 1:])])
+                                        [','.join(elements[len(self.event_attrs) - 1:])])
                         for i, attr in enumerate(elements):
                             key = self.event_attrs[i]
                             if key.lower() in ('start', 'end'):
@@ -378,7 +378,7 @@ class BluraySubtitle:
         for folder, chapter in self.select_playlist():
             print(folder)
             start_time = 0
-            ass_file = Subtitle(self.subtitle_files[self.sub_index])
+            sub_file = Subtitle(self.subtitle_files[self.sub_index])
             left_time = chapter.get_total_time()
             print(f'集数：{self.sub_index + 1}, 偏移：0')
 
@@ -388,20 +388,20 @@ class BluraySubtitle:
                     play_item_duration_time = play_item_in_out_time[2] - play_item_in_out_time[1]
 
                     time_shift = (start_time + play_item_marks[0] - play_item_in_out_time[1]) / 45000
-                    if time_shift > ass_file.max_end_time() - 300:
+                    if time_shift > sub_file.max_end_time() - 300:
                         if (self.sub_index + 1 < len(self.subtitle_files)
                                 and left_time > Subtitle(self.subtitle_files[self.sub_index + 1]).max_end_time() - 180):
                             self.sub_index += 1
                             print(f'集数：{self.sub_index + 1}, 偏移：{time_shift}')
-                            ass_file.append_ass(self.subtitle_files[self.sub_index], time_shift)
+                            sub_file.append_ass(self.subtitle_files[self.sub_index], time_shift)
                             self.progress_dialog.setValue(int((self.sub_index + 1) / len(self.subtitle_files) * 1000))
                             QCoreApplication.processEvents()
 
-                    if play_item_duration_time / 45000 > 2600 and ass_file.max_end_time() - time_shift < 1800:
+                    if play_item_duration_time / 45000 > 2600 and sub_file.max_end_time() - time_shift < 1800:
                         min_shift = play_item_duration_time / 45000 / 2
                         selected_mark = play_item_in_out_time[1]
                         for mark in play_item_marks:
-                            if (mark - play_item_in_out_time[1]) / 45000 > (ass_file.max_end_time() - time_shift):
+                            if (mark - play_item_in_out_time[1]) / 45000 > (sub_file.max_end_time() - time_shift):
                                 shift = abs(play_item_duration_time / 2 - mark + play_item_in_out_time[1]) / 45000
                                 if shift < min_shift:
                                     min_shift = shift
@@ -409,14 +409,14 @@ class BluraySubtitle:
                         time_shift = (start_time + selected_mark - play_item_in_out_time[1]) / 45000
                         self.sub_index += 1
                         print(f'集数：{self.sub_index + 1}, 偏移：{time_shift}')
-                        ass_file.append_ass(self.subtitle_files[self.sub_index], time_shift)
+                        sub_file.append_ass(self.subtitle_files[self.sub_index], time_shift)
                         self.progress_dialog.setValue(int((self.sub_index + 1) / len(self.subtitle_files) * 1000))
                         QCoreApplication.processEvents()
 
                 start_time += play_item_in_out_time[2] - play_item_in_out_time[1]
                 left_time += (play_item_in_out_time[1] - play_item_in_out_time[2]) / 45000
 
-            ass_file.dump(folder)
+            sub_file.dump(folder)
             self.completion(folder)
             self.sub_index += 1
             if self.sub_index == len(self.subtitle_files):
