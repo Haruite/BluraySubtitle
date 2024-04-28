@@ -6,6 +6,7 @@ import re
 import shutil
 import sys
 import traceback
+from dataclasses import dataclass
 from functools import reduce
 from struct import unpack
 
@@ -15,7 +16,7 @@ from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLa
 
 
 class Chapter:
-    def __init__(self, file_path):
+    def __init__(self, file_path: str):
         self.in_out_time: list[tuple[str, int, int]] = []
         self.mark_info: dict[int, list[int]] = {}
 
@@ -63,11 +64,13 @@ class Chapter:
         return sum({x[0]: (x[2] - x[1]) / 45000 for x in self.in_out_time}.values())
 
 
+@dataclass
 class Style:
     def __repr__(self):
         return str(self.__dict__)
 
 
+@dataclass
 class Event:
     def __repr__(self):
         return str(self.__dict__)
@@ -76,7 +79,7 @@ class Event:
 class Ass:
     sections = 'script', 'garbage', 'style', 'events'
 
-    def __init__(self, content):
+    def __init__(self, content: str):
         self.content = content
         for section in self.sections:
             setattr(self, section + "_raw", [])
@@ -164,7 +167,7 @@ class Ass:
 
 
 class Subtitle:
-    def __init__(self, file_path):
+    def __init__(self, file_path: str):
         self.max_end = 0
         try:
             with open(file_path, 'r', encoding='utf-8-sig') as f:
@@ -181,7 +184,7 @@ class Subtitle:
                 else:
                     self.content = Ass(f.read()).parse()
 
-    def append_ass(self, new_file_path, time_shift):
+    def append_ass(self, new_file_path: str, time_shift: float):
         try:
             with open(new_file_path, 'r', encoding='utf-8-sig') as f:
                 if new_file_path.endswith('.srt'):
@@ -251,7 +254,7 @@ class Subtitle:
                     event.Style = style_name_map[event.Style]
                 self.content.events.append(event)
 
-    def dump(self, file_path):
+    def dump(self, file_path: str):
         if isinstance(self.content, str):
             with open(file_path + '.srt', "w", encoding='utf-8-sig') as f:
                 f.write(self.content)
@@ -276,7 +279,7 @@ class Subtitle:
 
 
 class ISO:
-    def __init__(self, path):
+    def __init__(self, path: str):
         self.path = ctypes.c_wchar_p(path)
 
         class GUID(ctypes.Structure):
@@ -325,7 +328,7 @@ class ISO:
 
 
 class BluraySubtitle:
-    def __init__(self, bluray_path, subtitle_path, checked, progress_dialog):
+    def __init__(self, bluray_path, subtitle_path: str, checked: bool, progress_dialog: QProgressDialog):
         self.tmp_folders = []
         if sys.platform == 'win32':
             for root, dirs, files in os.walk(bluray_path):
@@ -429,7 +432,7 @@ class BluraySubtitle:
         self.progress_dialog.setValue(1000)
         QCoreApplication.processEvents()
 
-    def completion(self, folder):
+    def completion(self, folder: str):
         if self.checked:
             bdmv = os.path.join(folder, 'BDMV')
             backup = os.path.join(bdmv, 'BACKUP')
