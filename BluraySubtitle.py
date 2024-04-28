@@ -77,93 +77,85 @@ class Event:
 
 
 class Ass:
-    sections = 'script', 'garbage', 'style', 'events'
-
-    def __init__(self, content: str):
-        self.content = content
-        for section in self.sections:
-            setattr(self, section + "_raw", [])
+    def __init__(self, fp: _io.TextIOWrapper):
+        self.script_raw: list[str] = []
+        self.garbage_raw: list[str] = []
         self.styles: list[Style] = []
+        self.style_attrs: list[str] = []
         self.events: list[Event] = []
+        self.event_attrs: list[str] = []
         self.script_type = ''
 
-    def parse(self):
-        lines = self.content.splitlines()
-
-        for line in lines:
-            if line.startswith('[') and line.endswith(']'):
-                for section in self.sections:
-                    if section in line.lower():
-                        raw = getattr(self, section + "_raw")
-                        if section == 'style':
-                            self.script_type = 'v4.00+' if '+' in line else 'v4.00'
-            elif line:
-                raw.append(line)
-
-        for index, line in enumerate(self.style_raw):
-            values = list(map(lambda attr: attr.strip(), line[line.index(":") + 1:].split(',')))
-            if index == 0:
-                attrs = values
-            else:
-                style = Style()
-                for i, value in enumerate(values):
-                    setattr(style, attrs[i], value)
-                self.styles.append(style)
-
-        for index, line in enumerate(self.events_raw):
-            values = list(map(lambda attr: attr.strip(), line[line.index(":") + 1:].split(',')))
-            if index == 0:
-                attrs = ['Format'] + values
-            else:
-                event = Event()
-                event.Format = line[:line.index(":")]
-                if len(values) > len(attrs) - 1:
-                    values = values[:len(attrs) - 2] + [','.join(values[len(attrs) - 2:])]
-                for i, value in enumerate(values):
-                    if attrs[i + 1].lower() in ('start', 'end'):
-                        value = datetime.timedelta(seconds=reduce(lambda a, b: a * 60 + b, map(float, value.split(':'))))
-                    setattr(event, attrs[i + 1], value)
-                self.events.append(event)
-
-        return self
+        for line in fp:
+            if line.startswith('[') and line.endswith(']\n'):
+                section_title = line
+                if 'style' in section_title.lower():
+                    self.script_type = 'v4.00+' if '+' in section_title else 'v4.00'
+            elif line != '\n':
+                if 'script' in section_title.lower():
+                    self.script_raw.append(line)
+                elif 'garbage' in section_title.lower():
+                    self.garbage_raw.append(line)
+                elif 'style' in section_title.lower():
+                    elements = list(map(lambda _attr: _attr.strip(), line[line.index(":") + 1:].split(',')))
+                    if not self.style_attrs:
+                        self.style_attrs += elements
+                    else:
+                        style = Style()
+                        for i, attr in enumerate(elements):
+                            setattr(style, self.style_attrs[i], attr)
+                        self.styles.append(style)
+                elif 'event' in section_title.lower():
+                    elements = ([line[:line.index(':')]]
+                                + list(map(lambda _attr: _attr.strip(), line[line.index(':') + 1:].split(','))))
+                    if not self.event_attrs:
+                        self.event_attrs += elements
+                    else:
+                        event = Event()
+                        if len(elements) > len(self.event_attrs):
+                            elements = (elements[:len(self.event_attrs) - 1] +
+                                        [''.join(elements[len(self.event_attrs) - 1:])])
+                        for i, attr in enumerate(elements):
+                            key = self.event_attrs[i]
+                            if key.lower() in ('start', 'end'):
+                                attr = datetime.timedelta(
+                                    seconds=reduce(lambda a, b: a * 60 + b, map(float, attr.split(':'))))
+                            setattr(event, self.event_attrs[i], attr)
+                        self.events.append(event)
 
     def dump_file(self, fp: _io.TextIOWrapper):
         fp.write('[Script Info]\n')
-        fp.write('\n'.join(self.script_raw))
+        fp.write(''.join(self.script_raw))
         if self.garbage_raw:
-            fp.write('\n\n[Aegisub Project Garbage]\n')
-            fp.write('\n'.join(self.garbage_raw))
+            fp.write('\n[Aegisub Project Garbage]\n')
+            fp.write(''.join(self.garbage_raw))
 
-        fp.write('\n\n[V4+ Styles]\n'if self.script_type == 'v4.00+' else '\n\n[V4 Styles]\n')
-        fp.write('Format: ' + ', '.join(self.styles[0].__dict__.keys()) + '\n')
+        fp.write('\n[V4+ Styles]\n'if self.script_type == 'v4.00+' else '\n[V4 Styles]\n')
+        fp.write('Format: ' + ', '.join(self.style_attrs) + '\n')
         for style in self.styles:
             fp.write('Style: ' + ','.join(style.__dict__.values()) + '\n')
 
         fp.write('\n[Events]\n')
-        fp.write('Format: ' + ', '.join(list(self.events[0].__dict__.keys())[1:]) + '\n')
+        fp.write(self.event_attrs[0] + ': ' + ', '.join(self.event_attrs[1:]) + '\n')
         for event in self.events:
-            line = ''
+            elements = []
             values = list(event.__dict__.values())
             keys = list(event.__dict__.keys())
             for i, value in enumerate(values):
                 if i == 0:
-                    line += value + ": "
+                    _start = value + ': '
                 else:
                     if keys[i].lower() in ('start', 'end'):
                         d_len = len(str(value).split(':')[-1])
                         if d_len > 5:
-                            line += str(value)[:5 - d_len] + ','
+                            elements.append(str(value)[:5 - d_len])
                         elif d_len == 5:
-                            line += str(value) + ','
+                            elements.append(str(value))
                         else:
-                            line += str(value) + '.00' + ','
-                    elif i == len(values) - 1:
-                        line += value
+                            elements.append(str(value) + '.00')
                     else:
-                        line += value + ','
-
-            line += '\n'
-            fp.write(line)
+                        elements.append(value)
+            fp.write(_start + ','.join(elements) + '\n')
 
 
 class Subtitle:
@@ -175,14 +167,14 @@ class Subtitle:
                     self.content = ''
                     self.append_ass(file_path, 0)
                 else:
-                    self.content = Ass(f.read()).parse()
+                    self.content = Ass(f)
         except:
             with open(file_path, 'r', encoding='utf-16') as f:
                 if file_path.endswith('.srt'):
                     self.content = ''
                     self.append_ass(file_path, 0)
                 else:
-                    self.content = Ass(f.read()).parse()
+                    self.content = Ass(f)
 
     def append_ass(self, new_file_path: str, time_shift: float):
         try:
@@ -190,13 +182,13 @@ class Subtitle:
                 if new_file_path.endswith('.srt'):
                     new_content = f.read()
                 else:
-                    new_content = Ass(f.read()).parse()
+                    new_content = Ass(f)
         except:
             with open(new_file_path, 'r', encoding='utf-16') as f:
                 if new_file_path.endswith('.srt'):
                     new_content = f.read()
                 else:
-                    new_content = Ass(f.read()).parse()
+                    new_content = Ass(f)
         if new_file_path.endswith('.srt'):
             index = int((re.findall(r'\n\n(\d+)\n', self.content) or ['0'])[-1])
             flag = 0
