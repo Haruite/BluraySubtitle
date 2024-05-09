@@ -398,20 +398,17 @@ class BluraySubtitle:
                             QCoreApplication.processEvents()
 
                     if play_item_duration_time / 45000 > 2600 and sub_file.max_end_time() - time_shift < 1800:
-                        min_shift = play_item_duration_time / 45000 / 2
-                        selected_mark = play_item_in_out_time[1]
+                        mark_start_time = play_item_marks[0]
                         for mark in play_item_marks:
-                            if (mark - play_item_in_out_time[1]) / 45000 > (sub_file.max_end_time() - time_shift):
-                                shift = abs(play_item_duration_time / 2 - mark + play_item_in_out_time[1]) / 45000
-                                if shift < min_shift:
-                                    min_shift = shift
-                                    selected_mark = mark
-                        time_shift = (start_time + selected_mark - play_item_in_out_time[1]) / 45000
-                        self.sub_index += 1
-                        print(f'集数：{self.sub_index + 1}, 偏移：{time_shift}')
-                        sub_file.append_ass(self.subtitle_files[self.sub_index], time_shift)
-                        self.progress_dialog.setValue(int((self.sub_index + 1) / len(self.subtitle_files) * 1000))
-                        QCoreApplication.processEvents()
+                            time_shift = (start_time + mark - play_item_in_out_time[1]) / 45000
+                            time_delta = (mark - mark_start_time) / 45000
+                            if time_delta > sub_file.max_end_time():
+                                self.sub_index += 1
+                                print(f'集数：{self.sub_index + 1}, 偏移：{time_shift}')
+                                sub_file.append_ass(self.subtitle_files[self.sub_index], time_shift)
+                                self.progress_dialog.setValue(
+                                    int((self.sub_index + 1) / len(self.subtitle_files) * 1000))
+                                QCoreApplication.processEvents()
 
                 start_time += play_item_in_out_time[2] - play_item_in_out_time[1]
                 left_time += (play_item_in_out_time[1] - play_item_in_out_time[2]) / 45000
