@@ -87,7 +87,7 @@ class Ass:
         self.script_type = ''
 
         for line in fp:
-            if line.startswith('[') and line.endswith(']\n'):
+            if (line.startswith('[') or line.startswith('; [')) and line.endswith(']\n'):
                 section_title = line
                 if 'style' in section_title.lower():
                     self.script_type = 'v4.00+' if '+' in section_title else 'v4.00'
