@@ -10,8 +10,8 @@ from dataclasses import dataclass
 from functools import reduce
 from struct import unpack
 
-from PyQt5.QtCore import QCoreApplication
-from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLabel, QPushButton, QLineEdit, \
+from PyQt6.QtCore import QCoreApplication
+from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLabel, QPushButton, QLineEdit, \
     QMessageBox, QHBoxLayout, QGroupBox, QCheckBox, QProgressDialog
 
 
