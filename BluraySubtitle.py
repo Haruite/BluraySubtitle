@@ -97,6 +97,8 @@ class Ass:
                 elif 'garbage' in section_title.lower():
                     self.garbage_raw.append(line)
                 elif 'style' in section_title.lower():
+                    if line.startswith(';'):
+                        continue
                     elements = list(map(lambda _attr: _attr.strip(), line[line.index(":") + 1:].split(',')))
                     if not self.style_attrs:
                         self.style_attrs += elements
@@ -106,6 +108,8 @@ class Ass:
                             setattr(style, self.style_attrs[i], attr)
                         self.styles.append(style)
                 elif 'event' in section_title.lower():
+                    if line.startswith(';'):
+                        continue
                     elements = ([line[:line.index(':')]]
                                 + list(map(lambda _attr: _attr.strip(), line[line.index(':') + 1:].split(','))))
                     if not self.event_attrs:
