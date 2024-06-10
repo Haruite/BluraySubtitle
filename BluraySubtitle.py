@@ -211,8 +211,12 @@ class Subtitle:
                             line[26:29]) / 1000 + time_shift
                         if end_time > self.max_end:
                             self.max_end = end_time
-                        start_time_str = str(datetime.timedelta(seconds=start_time))[:-3].replace('.', ',')
-                        end_time_str = str(datetime.timedelta(seconds=end_time))[:-3].replace('.', ',')
+                        start_time_str = str(datetime.timedelta(seconds=start_time))
+                        start_time_str = (start_time_str[:-3] if "." in start_time_str else start_time_str + '.000'
+                                          ).replace('.', ',')
+                        end_time_str = str(datetime.timedelta(seconds=end_time))
+                        end_time_str = (end_time_str[:-3] if "." in end_time_str else end_time_str + '.000'
+                                        ).replace('.', ',')
                         if len(start_time_str) < 12:
                             start_time_str = '0' + start_time_str
                         if len(end_time_str) < 12:
