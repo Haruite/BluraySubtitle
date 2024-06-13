@@ -384,7 +384,9 @@ class BluraySubtitle:
 
     def generate_bluray_subtitle(self):
         for folder, chapter in self.select_playlist():
-            print(folder)
+            print(f'folder: {folder}')
+            print(f'in_out_time: {chapter.in_out_time}')
+            print(f'mark_info: {chapter.mark_info}')
             start_time = 0
             sub_file = Subtitle(self.subtitle_files[self.sub_index])
             left_time = chapter.get_total_time()
