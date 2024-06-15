@@ -99,33 +99,39 @@ class Ass:
                 elif 'style' in section_title.lower():
                     if line.startswith(';'):
                         continue
-                    elements = list(map(lambda _attr: _attr.strip(), line[line.index(":") + 1:].split(',')))
-                    if not self.style_attrs:
-                        self.style_attrs += elements
-                    else:
-                        style = Style()
-                        for i, attr in enumerate(elements):
-                            setattr(style, self.style_attrs[i], attr)
-                        self.styles.append(style)
+                    try:
+                        elements = list(map(lambda _attr: _attr.strip(), line[line.index(":") + 1:].split(',')))
+                        if not self.style_attrs:
+                            self.style_attrs += elements
+                        else:
+                            style = Style()
+                            for i, attr in enumerate(elements):
+                                setattr(style, self.style_attrs[i], attr)
+                            self.styles.append(style)
+                    except Exception as e:
+                        traceback.print_exception(e)
                 elif 'event' in section_title.lower():
                     if line.startswith(';'):
                         continue
-                    elements = ([line[:line.index(':')]]
-                                + list(map(lambda _attr: _attr.strip(), line[line.index(':') + 1:].split(','))))
-                    if not self.event_attrs:
-                        self.event_attrs += elements
-                    else:
-                        event = Event()
-                        if len(elements) > len(self.event_attrs):
-                            elements = (elements[:len(self.event_attrs) - 1] +
-                                        [','.join(elements[len(self.event_attrs) - 1:])])
-                        for i, attr in enumerate(elements):
-                            key = self.event_attrs[i]
-                            if key.lower() in ('start', 'end'):
-                                attr = datetime.timedelta(
-                                    seconds=reduce(lambda a, b: a * 60 + b, map(float, attr.split(':'))))
-                            setattr(event, self.event_attrs[i], attr)
-                        self.events.append(event)
+                    try:
+                        elements = ([line[:line.index(':')]]
+                                    + list(map(lambda _attr: _attr.strip(), line[line.index(':') + 1:].split(','))))
+                        if not self.event_attrs:
+                            self.event_attrs += elements
+                        else:
+                            event = Event()
+                            if len(elements) > len(self.event_attrs):
+                                elements = (elements[:len(self.event_attrs) - 1] +
+                                            [','.join(elements[len(self.event_attrs) - 1:])])
+                            for i, attr in enumerate(elements):
+                                key = self.event_attrs[i]
+                                if key.lower() in ('start', 'end'):
+                                    attr = datetime.timedelta(
+                                        seconds=reduce(lambda a, b: a * 60 + b, map(float, attr.split(':'))))
+                                setattr(event, self.event_attrs[i], attr)
+                            self.events.append(event)
+                    except Exception as e:
+                        traceback.print_exception(e)
 
     def dump_file(self, fp: _io.TextIOWrapper):
         fp.write('[Script Info]\n')
