@@ -17,7 +17,27 @@ from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLa
 
 class Chapter:
     def __init__(self, file_path: str):
+        # 参考 https://github.com/lw/BluRay/wiki/PlayItem
+
+        # in_out_time 是一个列表，列表的每一项是一个元组，按照播放对应的顺序
+        # 元组第一位为文件名，第二位是 in_time，第三位是 out_time
+        # 对应 m2ts 文件的播放时长为 (out_time - in_time) / 45000
         self.in_out_time: list[tuple[str, int, int]] = []
+
+        # mark_info 是一个字典
+        # 字典的键 ref_to_play_item_id 对应 in_out_time 的索引
+        # 字典的值为由章节标记对应的时间戳 mark_timestamp 组成的列表
+        # 那么时间戳对应在 mpls 的播放时间为 (mark_timestamp - in_time) / 45000
+        # + (0 ~ ref_to_play_item_id 所有文件对应的播放时长之和)
+        # 举个例子 (来自 BanG Dream! It's MyGO!!!!! 原盘上卷)
+        # in_out_time = [('00000', 1647000000, 1711414350), ('00001', 1647000000, 1710963900), ...]
+        # mark_info = {0: [1647000000, 1655188805, 1689886593, 1706626441, 1710676738],
+        # 1: [1647000000, 1649522520, 1653570939, 1685023610, 1706174115, 1710224411], ...}
+        # mark_info 键 1 对应的时间戳列表中的 1649522520 对应的播放时间计算如下：
+        # 首先 ref_to_play_item_id 为 1，对应 in_out_time 中索引为 1 的项，即 ('00001', 1647000000, 1710963900)
+        # 由此可知 1649522520 这个时间戳相对文件开始的 in_time 的时间差为 (1649522520 - 1647000000) / 45000 = 56.056 秒
+        # 文件索引为 1，那么前面有一个文件，其播放时长为 (1711414350 - 1647000000) / 45000 = 1431.43 秒
+        # 所以 1649522520 这个时间戳在整个播放列表中的时间位置为 1431.43 + 56.056 = 1487.486 秒 即 24:47.486
         self.mark_info: dict[int, list[int]] = {}
 
         with open(file_path, 'rb') as self.mpls_file:
@@ -57,10 +77,10 @@ class Chapter:
         formats: dict[int, str] = {1: '>B', 2: '>H', 4: '>I', 8: '>Q'}
         return unpack(formats[n], self.mpls_file.read(n))[0]
 
-    def get_total_time(self):
+    def get_total_time(self):  # 获取播放列表的总时长
         return sum(map(lambda x: (x[2] - x[1]) / 45000, self.in_out_time))
 
-    def get_total_time_no_repeat(self):
+    def get_total_time_no_repeat(self):  # 获取播放列表中时长，重复播放同一文件只计算一次
         return sum({x[0]: (x[2] - x[1]) / 45000 for x in self.in_out_time}.values())
 
 
@@ -113,19 +133,19 @@ class Ass:
                 elif 'event' in section_title.lower():
                     if line.startswith(';'):
                         continue
-                    try:
+                    try:  # 每一行解析都加 try，防止个别行格式错误导致整个合并失败
                         elements = ([line[:line.index(':')]]
                                     + list(map(lambda _attr: _attr.strip(), line[line.index(':') + 1:].split(','))))
                         if not self.event_attrs:
                             self.event_attrs += elements
                         else:
                             event = Event()
-                            if len(elements) > len(self.event_attrs):
+                            if len(elements) > len(self.event_attrs):  # 字幕内容中包含 ','
                                 elements = (elements[:len(self.event_attrs) - 1] +
                                             [','.join(elements[len(self.event_attrs) - 1:])])
                             for i, attr in enumerate(elements):
                                 key = self.event_attrs[i]
-                                if key.lower() in ('start', 'end'):
+                                if key.lower() in ('start', 'end'):  # 将 Start 和 End 两个时间字符串转换为 timedelta 格式
                                     attr = datetime.timedelta(
                                         seconds=reduce(lambda a, b: a * 60 + b, map(float, attr.split(':'))))
                                 setattr(event, self.event_attrs[i], attr)
@@ -220,6 +240,7 @@ class Subtitle:
                         start_time_str = str(datetime.timedelta(seconds=start_time))
                         start_time_str = (start_time_str[:-3] if "." in start_time_str else start_time_str + '.000'
                                           ).replace('.', ',')
+                        # 当毫秒数为 0 时，timedelta 的 str 形式不会显示小数点及以后部分
                         end_time_str = str(datetime.timedelta(seconds=end_time))
                         end_time_str = (end_time_str[:-3] if "." in end_time_str else end_time_str + '.000'
                                         ).replace('.', ',')
@@ -234,7 +255,7 @@ class Subtitle:
                     new_lines.append(line)
                 flag += 1
             self.content += '\n'.join(new_lines)
-        else:
+        else:  # ass 字幕合并，需要注意如果存在同名 Style 但实际 Style 样式不同时，需要将另一个同名 Style 改名
             style_info = {repr(style) for style in self.content.styles}
             style_name_map = {}
             for style in new_content.styles:
@@ -279,7 +300,7 @@ class Subtitle:
         end_set.remove(max_end)
         max_end_1 = max(end_set)
         if max_end_1 < max_end - 60:
-            return max_end_1
+            return max_end_1  # 防止个别 Event 结束时间超长(比如评论音轨超出那一集的结束时间)
         else:
             return max_end
 
@@ -288,6 +309,7 @@ class ISO:
     def __init__(self, path: str):
         self.path = ctypes.c_wchar_p(path)
 
+        # https://learn.microsoft.com/en-us/windows/win32/api/guiddef/ns-guiddef-guid
         class GUID(ctypes.Structure):
             _fields_ = (
                 ("Data1", ctypes.c_ulong),
@@ -296,6 +318,7 @@ class ISO:
                 ("Data4", ctypes.c_ubyte * 8),
             )
 
+        # https://learn.microsoft.com/en-us/windows/win32/api/virtdisk/ns-virtdisk-virtual_storage_type
         class VIRTUAL_STORAGE_TYPE(ctypes.Structure):
             _fields_ = (
                 ("DeviceId", ctypes.c_ulong),
@@ -309,6 +332,7 @@ class ISO:
         self.handle = ctypes.c_void_p()
 
     def open(self):
+        # https://learn.microsoft.com/en-us/windows/win32/api/virtdisk/nf-virtdisk-openvirtualdisk
         ctypes.windll.virtdisk.OpenVirtualDisk(
             ctypes.byref(self.virtual_storage_type),
             self.path,
@@ -320,6 +344,7 @@ class ISO:
 
     def mount(self):
         self.open()
+        # https://learn.microsoft.com/en-us/windows/win32/api/virtdisk/nf-virtdisk-attachvirtualdisk
         ctypes.windll.virtdisk.AttachVirtualDisk(
             self.handle,
             None,
@@ -330,6 +355,7 @@ class ISO:
         )
 
     def close(self):
+        # https://learn.microsoft.com/en-us/windows/win32/api/handleapi/nf-handleapi-closehandle
         ctypes.windll.kernel32.CloseHandle(self.handle)
 
 
@@ -373,7 +399,7 @@ class BluraySubtitle:
             bitmask >>= 1
         return set(drives)
 
-    def select_playlist(self):
+    def select_playlist(self):  # 选择主播放列表
         for bluray_folder in self.bluray_folders:
             mpls_folder = os.path.join(bluray_folder, 'BDMV', 'PLAYLIST')
             selected_chapter = None
@@ -414,6 +440,7 @@ class BluraySubtitle:
                             QCoreApplication.processEvents()
 
                     if play_item_duration_time / 45000 > 2600 and sub_file.max_end_time() - time_shift < 1800:
+                        # 连体盘，一个 m2ts 文件包含两集或以上
                         for mark in play_item_marks:
                             time_shift = (start_time + mark - play_item_in_out_time[1]) / 45000
                             if time_shift > sub_file.max_end_time() and (play_item_in_out_time[2] - mark) / 45000 > 1200:
@@ -435,7 +462,7 @@ class BluraySubtitle:
         self.progress_dialog.setValue(1000)
         QCoreApplication.processEvents()
 
-    def completion(self, folder: str):
+    def completion(self, folder: str):  # 补全蓝光目录；删除临时文件
         if self.checked:
             bdmv = os.path.join(folder, 'BDMV')
             backup = os.path.join(bdmv, 'BACKUP')
@@ -527,7 +554,7 @@ class BluraySubtitleGUI(QWidget):
         progress_dialog.close()
 
 
-class CustomBox(QGroupBox):
+class CustomBox(QGroupBox):  # 为 Box 框提供拖拽文件夹的功能
     def __init__(self, title, parent):
         super().__init__(parent)
         self.setAcceptDrops(True)
