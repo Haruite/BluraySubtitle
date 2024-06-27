@@ -380,6 +380,8 @@ class BluraySubtitle:
                         else:
                             self.tmp_folders.append(tmp_folder)
                         iso.close()
+                        while len(self.get_available_drives()) == len(drivers_1):
+                            pass
 
         self.bluray_folders = [root for root, dirs, files in os.walk(bluray_path) if 'BDMV' in dirs
                                and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV'))]
