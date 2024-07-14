@@ -281,15 +281,21 @@ class Subtitle:
                     event.Style = style_name_map[event.Style]
                 self.content.events.append(event)
 
-    def dump(self, file_path: str):
+    def dump(self, file_path: str, selected_mpls: str):
         if isinstance(self.content, str):
             with open(file_path + '.srt', "w", encoding='utf-8-sig') as f:
+                f.write(self.content)
+            with open(selected_mpls + '.srt', "w", encoding='utf-8-sig') as f:
                 f.write(self.content)
         elif self.content.script_type == 'v4.00+':
             with open(file_path + '.ass', "w", encoding='utf-8-sig') as f:
                 self.content.dump_file(f)
+            with open(selected_mpls + '.ass', "w", encoding='utf-8-sig') as f:
+                self.content.dump_file(f)
         else:
             with open(file_path + '.ssa', "w", encoding='utf-8-sig') as f:
+                self.content.dump_file(f)
+            with open(selected_mpls + '.ssa', "w", encoding='utf-8-sig') as f:
                 self.content.dump_file(f)
 
     def max_end_time(self):
@@ -405,6 +411,7 @@ class BluraySubtitle:
         for bluray_folder in self.bluray_folders:
             mpls_folder = os.path.join(bluray_folder, 'BDMV', 'PLAYLIST')
             selected_chapter = None
+            selected_mpls = None
             max_indicator = 0
             for mpls_file_name in os.listdir(mpls_folder):
                 mpls_file_path = os.path.join(mpls_folder, mpls_file_name)
@@ -413,11 +420,12 @@ class BluraySubtitle:
                 if indicator > max_indicator:
                     max_indicator = indicator
                     selected_chapter = chapter
+                    selected_mpls = mpls_file_path[:-5]
 
-            yield bluray_folder, selected_chapter
+            yield bluray_folder, selected_chapter, selected_mpls
 
     def generate_bluray_subtitle(self):
-        for folder, chapter in self.select_playlist():
+        for folder, chapter, selected_mpls in self.select_playlist():
             print(f'folder: {folder}')
             print(f'in_out_time: {chapter.in_out_time}')
             print(f'mark_info: {chapter.mark_info}')
@@ -456,7 +464,7 @@ class BluraySubtitle:
                 start_time += play_item_in_out_time[2] - play_item_in_out_time[1]
                 left_time += (play_item_in_out_time[1] - play_item_in_out_time[2]) / 45000
 
-            sub_file.dump(folder)
+            sub_file.dump(folder, selected_mpls)
             self.completion(folder)
             self.sub_index += 1
             if self.sub_index == len(self.subtitle_files):
