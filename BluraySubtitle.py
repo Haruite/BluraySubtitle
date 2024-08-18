@@ -414,6 +414,8 @@ class BluraySubtitle:
             selected_mpls = None
             max_indicator = 0
             for mpls_file_name in os.listdir(mpls_folder):
+                if mpls_file_name[-5:].lower() != '.mpls':
+                    continue
                 mpls_file_path = os.path.join(mpls_folder, mpls_file_name)
                 chapter = Chapter(mpls_file_path)
                 indicator = chapter.get_total_time_no_repeat() * (1 + sum(map(len, chapter.mark_info.values())) / 5)
