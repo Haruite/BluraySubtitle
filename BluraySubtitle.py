@@ -4,6 +4,7 @@ import datetime
 import os
 import re
 import shutil
+import subprocess
 import sys
 import traceback
 from dataclasses import dataclass
@@ -12,7 +13,10 @@ from struct import unpack
 
 from PyQt6.QtCore import QCoreApplication
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLabel, QPushButton, QLineEdit, \
-    QMessageBox, QHBoxLayout, QGroupBox, QCheckBox, QProgressDialog
+    QMessageBox, QHBoxLayout, QGroupBox, QCheckBox, QProgressDialog, QRadioButton, QButtonGroup
+
+MKV_INFO_PATH = ''
+MKV_MERGE_PATH = ''
 
 
 class Chapter:
@@ -365,8 +369,48 @@ class ISO:
         ctypes.windll.kernel32.CloseHandle(self.handle)
 
 
+class MKV:
+    def __init__(self, path: str):
+        self.path = path
+        global MKV_INFO_PATH
+        if not MKV_INFO_PATH:
+            if sys.platform == 'win32':
+                default_mkv_info_path = r'C:\Program Files\MKVToolNix\mkvinfo.exe'
+            else:
+                default_mkv_info_path = '/usr/bin/mkvinfo'
+            if os.path.exists(default_mkv_info_path):
+                MKV_INFO_PATH = default_mkv_info_path
+            else:
+                MKV_INFO_PATH = QFileDialog.getOpenFileName(window, '选择mkvinfo的位置', '', 'mkvinfo*')
+        global MKV_MERGE_PATH
+        if not MKV_MERGE_PATH:
+            if sys.platform == 'win32':
+                default_mkv_merge_path = r'C:\Program Files\MKVToolNix\mkvmerge.exe'
+            else:
+                default_mkv_merge_path = '/usr/bin/mkvmerge'
+            if os.path.exists(default_mkv_merge_path):
+                MKV_MERGE_PATH = default_mkv_merge_path
+            else:
+                MKV_MERGE_PATH = QFileDialog.getOpenFileName(window, '选择mkvmerge的位置', '', 'mkvmerge*')
+
+    def get_duration(self):
+        subprocess.Popen(rf'"{MKV_INFO_PATH}" "{self.path}" -r mkvinfo.txt --ui-language en').wait()
+        pattern = '| + Duration: '
+        duration = 0
+        with open('mkvinfo.txt', 'r', encoding='utf-8-sig') as f:
+            for line in f:
+                if line[:len(pattern)] == pattern:
+                    time_str = line[len(pattern):]
+                    duration = int(time_str[:2]) * 3600 + int(time_str[3:5]) * 60 + float(time_str[6:])
+        return duration
+
+    def add_chapter(self):
+        new_path = os.path.join(os.path.dirname(self.path), 'output', os.path.basename(self.path))
+        subprocess.Popen(rf'"{MKV_MERGE_PATH}" --chapters chapter.txt -o "{new_path}" "{self.path}"').wait()
+
+
 class BluraySubtitle:
-    def __init__(self, bluray_path, subtitle_path: str, checked: bool, progress_dialog: QProgressDialog):
+    def __init__(self, bluray_path, input_path: str, checked: bool, progress_dialog: QProgressDialog):
         self.tmp_folders = []
         if sys.platform == 'win32':
             for root, dirs, files in os.walk(bluray_path):
@@ -391,9 +435,12 @@ class BluraySubtitle:
 
         self.bluray_folders = [root for root, dirs, files in os.walk(bluray_path) if 'BDMV' in dirs
                                and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV'))]
-        self.subtitle_files = [os.path.join(subtitle_path, path) for path in os.listdir(subtitle_path)
+        self.subtitle_files = [os.path.join(input_path, path) for path in os.listdir(input_path)
                                if path.endswith(".ass") or path.endswith(".ssa") or path.endswith('srt')]
+        self.mkv_files = [os.path.join(input_path, path) for path in os.listdir(input_path)
+                          if path.endswith("mkv")]
         self.sub_index = 0
+        self.mkv_index = 0
         self.checked = checked
         self.progress_dialog = progress_dialog
 
@@ -474,6 +521,66 @@ class BluraySubtitle:
         self.progress_dialog.setValue(1000)
         QCoreApplication.processEvents()
 
+    def add_chapter_to_mkv(self):
+        if not os.path.exists('chapter'):
+            os.mkdir('chapter')
+        for folder, chapter, selected_mpls in self.select_playlist():
+            duration = MKV(self.mkv_files[self.mkv_index]).get_duration()
+            print(f'folder: {folder}')
+            print(f'in_out_time: {chapter.in_out_time}')
+            print(f'mark_info: {chapter.mark_info}')
+            print(f'集数：{self.mkv_index + 1}, 时长: {duration}')
+
+            play_item_duration_time_sum = 0
+            episode_duration_time_sum = 0
+            chapter_id = 0
+            chapter_text = []
+            for ref_to_play_item_id, mark_timestamps in chapter.mark_info.items():
+                clip_information_filename, in_time, out_time = chapter.in_out_time[ref_to_play_item_id]
+                for mark_timestamp in mark_timestamps:
+                    real_time = play_item_duration_time_sum + (
+                                mark_timestamp - in_time) / 45000 - episode_duration_time_sum
+                    if abs(real_time - duration) < 0.1:
+                        with open(f'chapter.txt', 'w', encoding='utf-8-sig') as f:
+                            f.write('\n'.join(chapter_text))
+                        chapter_id = 0
+                        episode_duration_time_sum += real_time
+                        real_time = 0
+                        mkv = MKV(self.mkv_files[self.mkv_index])
+                        mkv.add_chapter()
+                        self.progress_dialog.setValue(int((self.mkv_index + 1) / len(self.mkv_files) * 1000))
+                        QCoreApplication.processEvents()
+                        self.mkv_index += 1
+                        duration = MKV(self.mkv_files[self.mkv_index]).get_duration()
+                        print(f'集数：{self.mkv_index + 1}, 时长: {duration}')
+                        chapter_text.clear()
+
+                    chapter_id += 1
+                    chapter_id_str = ('0' if chapter_id < 10 else '') + str(chapter_id)
+                    hours = int(real_time // 3600)
+                    minutes = int((real_time % 3600) // 60)
+                    seconds = real_time % 60
+                    seconds_str = (('0' if seconds < 10 else '') + str(seconds))[:6]
+                    seconds_str += '00.000'[len(seconds_str) - 6:]
+                    real_time_str = (('0' if hours < 10 else '') + str(hours) + ':'
+                                     + ('0' if minutes < 10 else '') + str(minutes) + ':'
+                                     + seconds_str)
+                    chapter_text.append(f'CHAPTER{chapter_id_str}={real_time_str}')
+                    chapter_text.append(f'CHAPTER{chapter_id_str}NAME=Chapter {chapter_id_str}')
+                play_item_duration_time_sum += (out_time - in_time) / 45000
+
+            if (chapter.in_out_time[-1][2] - chapter.mark_info[len(chapter.mark_info) - 1][-1]) / 45000 >= 0.1:
+                with open(f'chapter.txt', 'w', encoding='utf-8-sig') as f:
+                    f.write('\n'.join(chapter_text))
+                mkv = MKV(self.mkv_files[self.mkv_index])
+                mkv.add_chapter()
+                self.progress_dialog.setValue(int((self.mkv_index + 1) / len(self.mkv_files) * 1000))
+                QCoreApplication.processEvents()
+                self.mkv_index += 1
+
+        self.progress_dialog.setValue(1000)
+        QCoreApplication.processEvents()
+
     def completion(self, folder: str):  # 补全蓝光目录；删除临时文件
         if self.checked:
             bdmv = os.path.join(folder, 'BDMV')
@@ -493,7 +600,16 @@ class BluraySubtitle:
                 shutil.rmtree(tmp_folder)
             except:
                 pass
-
+        if os.path.exists('chapter.txt'):
+            try:
+                os.remove('chapter.txt')
+            except:
+                pass
+        if os.path.exists('mkvinfo.txt'):
+            try:
+                os.remove('mkvinfo.txt')
+            except:
+                pass
 
 class BluraySubtitleGUI(QWidget):
     def __init__(self):
@@ -506,15 +622,35 @@ class BluraySubtitleGUI(QWidget):
 
         layout = QVBoxLayout()
 
+        function_button = QGroupBox('选择功能', self)
+        h_layout = QHBoxLayout()
+        function_button.setLayout(h_layout)
+        self.subtitle_folder_path = QLineEdit()
+        self.subtitle_folder_path.setMinimumWidth(200)
+
+        self.radio1 = QRadioButton(self)
+        self.radio1.setText("生成合并字幕")
+        self.radio1.setChecked(True)
+        self.radio2 = QRadioButton(self)
+        self.radio2.setText("给mkv添加章节")
+        self.radio2.move(100, 0)
+        group = QButtonGroup(self)
+        group.addButton(self.radio1)
+        group.addButton(self.radio2)
+        group.buttonClicked.connect(self.on_select_function)
+        h_layout.addWidget(self.radio1)
+        h_layout.addWidget(self.radio2)
+        layout.addWidget(function_button)
+
         bluray_path_box = CustomBox('原盘', self)
         h_layout = QHBoxLayout()
         bluray_path_box.setLayout(h_layout)
-        label1 = QLabel("选择原盘所在的文件夹：", self)
+        self.label1 = QLabel("选择原盘所在的文件夹：", self)
         self.bdmv_folder_path = QLineEdit()
         self.bdmv_folder_path.setMinimumWidth(200)
         button1 = QPushButton("选择文件夹")
         button1.clicked.connect(self.select_bdmv_folder)
-        layout.addWidget(label1)
+        layout.addWidget(self.label1)
         h_layout.addWidget(self.bdmv_folder_path)
         h_layout.addWidget(button1)
         layout.addWidget(bluray_path_box)
@@ -522,12 +658,12 @@ class BluraySubtitleGUI(QWidget):
         subtitle_path_box = CustomBox('字幕', self)
         h_layout = QHBoxLayout()
         subtitle_path_box.setLayout(h_layout)
-        label2 = QLabel("选择单集字幕所在的文件夹：", self)
+        self.label2 = QLabel("选择单集字幕所在的文件夹：", self)
         self.subtitle_folder_path = QLineEdit()
         self.subtitle_folder_path.setMinimumWidth(200)
         button2 = QPushButton("选择文件夹")
         button2.clicked.connect(self.select_subtitle_folder)
-        layout.addWidget(label2)
+        layout.addWidget(self.label2)
         h_layout.addWidget(self.subtitle_folder_path)
         h_layout.addWidget(button2)
         layout.addWidget(subtitle_path_box)
@@ -535,12 +671,20 @@ class BluraySubtitleGUI(QWidget):
         self.checkbox1 = QCheckBox("补全蓝光目录")
         self.checkbox1.setChecked(True)
         layout.addWidget(self.checkbox1)
-        exe_button = QPushButton("生成字幕")
-        exe_button.clicked.connect(self.main)
-        exe_button.setMinimumHeight(50)
-        layout.addWidget(exe_button)
+        self.exe_button = QPushButton("生成字幕")
+        self.exe_button.clicked.connect(self.main)
+        self.exe_button.setMinimumHeight(50)
+        layout.addWidget(self.exe_button)
 
         self.setLayout(layout)
+
+    def on_select_function(self):
+        if self.radio1.isChecked():
+            self.label2.setText("选择单集字幕所在的文件夹")
+            self.exe_button.setText("生成字幕")
+        if self.radio2.isChecked():
+            self.label2.setText("选择mkv文件所在的文件夹")
+            self.exe_button.setText("添加章节")
 
     def select_bdmv_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "选择文件夹")
@@ -551,6 +695,12 @@ class BluraySubtitleGUI(QWidget):
         self.subtitle_folder_path.setText(folder)
 
     def main(self):
+        if self.radio1.isChecked():
+            self.generate_subtitle()
+        if self.radio2.isChecked():
+            self.add_chapters()
+
+    def generate_subtitle(self):
         progress_dialog = QProgressDialog('字幕生成中', '取消', 0, 1000, self)
         progress_dialog.show()
         try:
@@ -561,6 +711,21 @@ class BluraySubtitleGUI(QWidget):
                 progress_dialog
             ).generate_bluray_subtitle()
             QMessageBox.information(self, " ", "生成字幕成功！")
+        except Exception as e:
+            QMessageBox.information(self, " ", traceback.format_exc())
+        progress_dialog.close()
+
+    def add_chapters(self):
+        progress_dialog = QProgressDialog('混流中', '取消', 0, 1000, self)
+        progress_dialog.show()
+        try:
+            BluraySubtitle(
+                self.bdmv_folder_path.text(),
+                self.subtitle_folder_path.text(),
+                self.checkbox1.isChecked(),
+                progress_dialog
+            ).add_chapter_to_mkv()
+            QMessageBox.information(self, " ", "添加章节成功，生成的新mkv文件在output文件夹下")
         except Exception as e:
             QMessageBox.information(self, " ", traceback.format_exc())
         progress_dialog.close()
