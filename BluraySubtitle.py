@@ -522,8 +522,6 @@ class BluraySubtitle:
         QCoreApplication.processEvents()
 
     def add_chapter_to_mkv(self):
-        if not os.path.exists('chapter'):
-            os.mkdir('chapter')
         for folder, chapter, selected_mpls in self.select_playlist():
             duration = MKV(self.mkv_files[self.mkv_index]).get_duration()
             print(f'folder: {folder}')
