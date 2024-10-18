@@ -552,7 +552,7 @@ class BluraySubtitle:
                 for mark_timestamp in mark_timestamps:
                     real_time = play_item_duration_time_sum + (
                                 mark_timestamp - in_time) / 45000 - episode_duration_time_sum
-                    if abs(real_time - duration) < 0.1:
+                    if abs(real_time - duration) < 0.1 and ref_to_play_item_id != len(chapter.in_out_time) - 1:
                         with open(f'chapter.txt', 'w', encoding='utf-8-sig') as f:
                             f.write('\n'.join(chapter_text))
                         chapter_id = 0
@@ -581,14 +581,13 @@ class BluraySubtitle:
                     chapter_text.append(f'CHAPTER{chapter_id_str}NAME=Chapter {chapter_id_str}')
                 play_item_duration_time_sum += (out_time - in_time) / 45000
 
-            if (chapter.in_out_time[-1][2] - chapter.mark_info[len(chapter.mark_info) - 1][-1]) / 45000 >= 0.1:
-                with open(f'chapter.txt', 'w', encoding='utf-8-sig') as f:
-                    f.write('\n'.join(chapter_text))
-                mkv = MKV(self.mkv_files[self.mkv_index])
-                mkv.add_chapter(self.checked)
-                self.progress_dialog.setValue(int((self.mkv_index + 1) / len(self.mkv_files) * 1000))
-                QCoreApplication.processEvents()
-                self.mkv_index += 1
+            with open(f'chapter.txt', 'w', encoding='utf-8-sig') as f:
+                f.write('\n'.join(chapter_text))
+            mkv = MKV(self.mkv_files[self.mkv_index])
+            mkv.add_chapter(self.checked)
+            self.progress_dialog.setValue(int((self.mkv_index + 1) / len(self.mkv_files) * 1000))
+            QCoreApplication.processEvents()
+            self.mkv_index += 1
 
         self.progress_dialog.setValue(1000)
         QCoreApplication.processEvents()
@@ -622,6 +621,7 @@ class BluraySubtitle:
                 os.remove('mkvinfo.txt')
             except:
                 pass
+
 
 class BluraySubtitleGUI(QWidget):
     def __init__(self):
@@ -715,10 +715,7 @@ class BluraySubtitleGUI(QWidget):
             self.add_chapters()
 
     def generate_subtitle(self):
-        if self.checkbox1.isChecked():
-            progress_dialog = QProgressDialog('编辑中', '取消', 0, 1000, self)
-        else:
-            progress_dialog = QProgressDialog('混流中', '取消', 0, 1000, self)
+        progress_dialog = QProgressDialog('字幕生成中', '取消', 0, 1000, self)
         progress_dialog.show()
         try:
             BluraySubtitle(
@@ -733,7 +730,10 @@ class BluraySubtitleGUI(QWidget):
         progress_dialog.close()
 
     def add_chapters(self):
-        progress_dialog = QProgressDialog('混流中', '取消', 0, 1000, self)
+        if self.checkbox1.isChecked():
+            progress_dialog = QProgressDialog('编辑中', '取消', 0, 1000, self)
+        else:
+            progress_dialog = QProgressDialog('混流中', '取消', 0, 1000, self)
         progress_dialog.show()
         try:
             BluraySubtitle(
