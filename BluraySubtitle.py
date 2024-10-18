@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLa
 
 MKV_INFO_PATH = ''
 MKV_MERGE_PATH = ''
+MKV_PROP_EDIT_PATH = ''
 
 
 class Chapter:
@@ -392,6 +393,16 @@ class MKV:
                 MKV_MERGE_PATH = default_mkv_merge_path
             else:
                 MKV_MERGE_PATH = QFileDialog.getOpenFileName(window, '选择mkvmerge的位置', '', 'mkvmerge*')
+        global MKV_PROP_EDIT_PATH
+        if not MKV_PROP_EDIT_PATH:
+            if sys.platform == 'win32':
+                default_mkv_prop_edit_path = r'C:\Program Files\MKVToolNix\mkvpropedit.exe'
+            else:
+                default_mkv_prop_edit_path = '/usr/bin/mkvpropedit'
+            if os.path.exists(default_mkv_prop_edit_path):
+                MKV_PROP_EDIT_PATH = default_mkv_prop_edit_path
+            else:
+                MKV_PROP_EDIT_PATH = QFileDialog.getOpenFileName(window, '选择mkvpropedit的位置', '', 'mkvpropedit*')
 
     def get_duration(self):
         subprocess.Popen(rf'"{MKV_INFO_PATH}" "{self.path}" -r mkvinfo.txt --ui-language en').wait()
@@ -404,9 +415,12 @@ class MKV:
                     duration = int(time_str[:2]) * 3600 + int(time_str[3:5]) * 60 + float(time_str[6:])
         return duration
 
-    def add_chapter(self):
-        new_path = os.path.join(os.path.dirname(self.path), 'output', os.path.basename(self.path))
-        subprocess.Popen(rf'"{MKV_MERGE_PATH}" --chapters chapter.txt -o "{new_path}" "{self.path}"').wait()
+    def add_chapter(self, edit_file):
+        if edit_file:
+            subprocess.Popen(rf'"{MKV_PROP_EDIT_PATH}" “{self.path}” --chapters chapter.txt').wait()
+        else:
+            new_path = os.path.join(os.path.dirname(self.path), 'output', os.path.basename(self.path))
+            subprocess.Popen(rf'"{MKV_MERGE_PATH}" --chapters chapter.txt -o "{new_path}" "{self.path}"').wait()
 
 
 class BluraySubtitle:
@@ -545,7 +559,7 @@ class BluraySubtitle:
                         episode_duration_time_sum += real_time
                         real_time = 0
                         mkv = MKV(self.mkv_files[self.mkv_index])
-                        mkv.add_chapter()
+                        mkv.add_chapter(self.checked)
                         self.progress_dialog.setValue(int((self.mkv_index + 1) / len(self.mkv_files) * 1000))
                         QCoreApplication.processEvents()
                         self.mkv_index += 1
@@ -571,7 +585,7 @@ class BluraySubtitle:
                 with open(f'chapter.txt', 'w', encoding='utf-8-sig') as f:
                     f.write('\n'.join(chapter_text))
                 mkv = MKV(self.mkv_files[self.mkv_index])
-                mkv.add_chapter()
+                mkv.add_chapter(self.checked)
                 self.progress_dialog.setValue(int((self.mkv_index + 1) / len(self.mkv_files) * 1000))
                 QCoreApplication.processEvents()
                 self.mkv_index += 1
@@ -680,9 +694,11 @@ class BluraySubtitleGUI(QWidget):
         if self.radio1.isChecked():
             self.label2.setText("选择单集字幕所在的文件夹")
             self.exe_button.setText("生成字幕")
+            self.checkbox1.setText('生成字幕')
         if self.radio2.isChecked():
             self.label2.setText("选择mkv文件所在的文件夹")
             self.exe_button.setText("添加章节")
+            self.checkbox1.setText('直接编辑原文件')
 
     def select_bdmv_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "选择文件夹")
