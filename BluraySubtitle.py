@@ -417,7 +417,7 @@ class MKV:
 
     def add_chapter(self, edit_file):
         if edit_file:
-            subprocess.Popen(rf'"{MKV_PROP_EDIT_PATH}" “{self.path}” --chapters chapter.txt').wait()
+            subprocess.Popen(rf'"{MKV_PROP_EDIT_PATH}" "{self.path}" --chapters chapter.txt').wait()
         else:
             new_path = os.path.join(os.path.dirname(self.path), 'output', os.path.basename(self.path))
             subprocess.Popen(rf'"{MKV_MERGE_PATH}" --chapters chapter.txt -o "{new_path}" "{self.path}"').wait()
