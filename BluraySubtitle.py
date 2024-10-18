@@ -715,7 +715,10 @@ class BluraySubtitleGUI(QWidget):
             self.add_chapters()
 
     def generate_subtitle(self):
-        progress_dialog = QProgressDialog('字幕生成中', '取消', 0, 1000, self)
+        if self.checkbox1.isChecked():
+            progress_dialog = QProgressDialog('编辑中', '取消', 0, 1000, self)
+        else:
+            progress_dialog = QProgressDialog('混流中', '取消', 0, 1000, self)
         progress_dialog.show()
         try:
             BluraySubtitle(
@@ -739,7 +742,10 @@ class BluraySubtitleGUI(QWidget):
                 self.checkbox1.isChecked(),
                 progress_dialog
             ).add_chapter_to_mkv()
-            QMessageBox.information(self, " ", "添加章节成功，生成的新mkv文件在output文件夹下")
+            if self.checkbox1.isChecked():
+                QMessageBox.information(self, " ", "添加章节成功，mkv章节已添加")
+            else:
+                QMessageBox.information(self, " ", "添加章节成功，生成的新mkv文件在output文件夹下")
         except Exception as e:
             QMessageBox.information(self, " ", traceback.format_exc())
         progress_dialog.close()
