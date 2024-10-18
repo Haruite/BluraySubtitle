@@ -552,7 +552,7 @@ class BluraySubtitle:
                 for mark_timestamp in mark_timestamps:
                     real_time = play_item_duration_time_sum + (
                                 mark_timestamp - in_time) / 45000 - episode_duration_time_sum
-                    if abs(real_time - duration) < 0.1 and ref_to_play_item_id != len(chapter.in_out_time) - 1:
+                    if abs(real_time - duration) < 0.1:
                         with open(f'chapter.txt', 'w', encoding='utf-8-sig') as f:
                             f.write('\n'.join(chapter_text))
                         chapter_id = 0
