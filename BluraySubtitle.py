@@ -694,7 +694,7 @@ class BluraySubtitleGUI(QWidget):
         if self.radio1.isChecked():
             self.label2.setText("选择单集字幕所在的文件夹")
             self.exe_button.setText("生成字幕")
-            self.checkbox1.setText('生成字幕')
+            self.checkbox1.setText('补全蓝光目录')
         if self.radio2.isChecked():
             self.label2.setText("选择mkv文件所在的文件夹")
             self.exe_button.setText("添加章节")
