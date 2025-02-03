@@ -310,7 +310,7 @@ class Subtitle:
         max_end = max(end_set)
         end_set.remove(max_end)
         max_end_1 = max(end_set)
-        if max_end_1 < max_end - 60:
+        if max_end_1 < max_end - 300:
             return max_end_1  # 防止个别 Event 结束时间超长(比如评论音轨超出那一集的结束时间)
         else:
             return max_end
