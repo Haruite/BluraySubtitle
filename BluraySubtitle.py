@@ -8,12 +8,14 @@ import subprocess
 import sys
 import traceback
 from dataclasses import dataclass
-from functools import reduce
+from functools import reduce, partial
 from struct import unpack
+from typing import Optional
 
 from PyQt6.QtCore import QCoreApplication
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLabel, QPushButton, QLineEdit, \
-    QMessageBox, QHBoxLayout, QGroupBox, QCheckBox, QProgressDialog, QRadioButton, QButtonGroup
+    QMessageBox, QHBoxLayout, QGroupBox, QCheckBox, QProgressDialog, QRadioButton, QButtonGroup, \
+    QTableWidget, QTableWidgetItem, QDialog
 
 MKV_INFO_PATH = ''
 MKV_MERGE_PATH = ''
@@ -424,7 +426,7 @@ class MKV:
 
 
 class BluraySubtitle:
-    def __init__(self, bluray_path, input_path: str, checked: bool, progress_dialog: QProgressDialog):
+    def __init__(self, bluray_path, input_path: str='', checked: bool=True, progress_dialog: Optional[QProgressDialog]=None):
         self.tmp_folders = []
         if sys.platform == 'win32':
             for root, dirs, files in os.walk(bluray_path):
@@ -446,13 +448,9 @@ class BluraySubtitle:
                         iso.close()
                         while len(self.get_available_drives()) == len(drivers_1):
                             pass
-
+        self.input_path = input_path
         self.bluray_folders = [root for root, dirs, files in os.walk(bluray_path) if 'BDMV' in dirs
                                and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV'))]
-        self.subtitle_files = [os.path.join(input_path, path) for path in os.listdir(input_path)
-                               if path.endswith(".ass") or path.endswith(".ssa") or path.endswith('srt')]
-        self.mkv_files = [os.path.join(input_path, path) for path in os.listdir(input_path)
-                          if path.endswith("mkv")]
         self.sub_index = 0
         self.mkv_index = 0
         self.checked = checked
@@ -468,32 +466,35 @@ class BluraySubtitle:
             bitmask >>= 1
         return set(drives)
 
+    def get_main_mpls(self, bluray_folder):
+        mpls_folder = os.path.join(bluray_folder, 'BDMV', 'PLAYLIST')
+        selected_mpls = None
+        max_indicator = 0
+        for mpls_file_name in os.listdir(mpls_folder):
+            if mpls_file_name[-5:].lower() != '.mpls':
+                continue
+            mpls_file_path = os.path.join(mpls_folder, mpls_file_name)
+            chapter = Chapter(mpls_file_path)
+            indicator = chapter.get_total_time_no_repeat() * (1 + sum(map(len, chapter.mark_info.values())) / 5)
+            if indicator > max_indicator:
+                max_indicator = indicator
+                selected_mpls = mpls_file_path
+        return selected_mpls
+
     def select_playlist(self):  # 选择主播放列表
         for bluray_folder in self.bluray_folders:
-            mpls_folder = os.path.join(bluray_folder, 'BDMV', 'PLAYLIST')
-            selected_chapter = None
-            selected_mpls = None
-            max_indicator = 0
-            for mpls_file_name in os.listdir(mpls_folder):
-                if mpls_file_name[-5:].lower() != '.mpls':
-                    continue
-                mpls_file_path = os.path.join(mpls_folder, mpls_file_name)
-                chapter = Chapter(mpls_file_path)
-                indicator = chapter.get_total_time_no_repeat() * (1 + sum(map(len, chapter.mark_info.values())) / 5)
-                if indicator > max_indicator:
-                    max_indicator = indicator
-                    selected_chapter = chapter
-                    selected_mpls = mpls_file_path[:-5]
-
-            yield bluray_folder, selected_chapter, selected_mpls
+            selected_mpls = self.get_main_mpls(bluray_folder)
+            yield bluray_folder, Chapter(selected_mpls), selected_mpls[:-5]
 
     def generate_bluray_subtitle(self):
+        subtitle_files = [os.path.join(self.input_path, path) for path in os.listdir(self.input_path)
+                               if path.endswith(".ass") or path.endswith(".ssa") or path.endswith('srt')]
         for folder, chapter, selected_mpls in self.select_playlist():
             print(f'folder: {folder}')
             print(f'in_out_time: {chapter.in_out_time}')
             print(f'mark_info: {chapter.mark_info}')
             start_time = 0
-            sub_file = Subtitle(self.subtitle_files[self.sub_index])
+            sub_file = Subtitle(subtitle_files[self.sub_index])
             left_time = chapter.get_total_time()
             print(f'集数：{self.sub_index + 1}, 偏移：0')
 
@@ -504,12 +505,12 @@ class BluraySubtitle:
 
                     time_shift = (start_time + play_item_marks[0] - play_item_in_out_time[1]) / 45000
                     if time_shift > sub_file.max_end_time() - 300:
-                        if (self.sub_index + 1 < len(self.subtitle_files)
-                                and left_time > Subtitle(self.subtitle_files[self.sub_index + 1]).max_end_time() - 180):
+                        if (self.sub_index + 1 < len(subtitle_files)
+                                and left_time > Subtitle(subtitle_files[self.sub_index + 1]).max_end_time() - 180):
                             self.sub_index += 1
                             print(f'集数：{self.sub_index + 1}, 偏移：{time_shift}')
-                            sub_file.append_ass(self.subtitle_files[self.sub_index], time_shift)
-                            self.progress_dialog.setValue(int((self.sub_index + 1) / len(self.subtitle_files) * 1000))
+                            sub_file.append_ass(subtitle_files[self.sub_index], time_shift)
+                            self.progress_dialog.setValue(int((self.sub_index + 1) / len(subtitle_files) * 1000))
                             QCoreApplication.processEvents()
 
                     if play_item_duration_time / 45000 > 2600 and sub_file.max_end_time() - time_shift < 1800:
@@ -519,9 +520,9 @@ class BluraySubtitle:
                             if time_shift > sub_file.max_end_time() and (play_item_in_out_time[2] - mark) / 45000 > 1200:
                                 self.sub_index += 1
                                 print(f'集数：{self.sub_index + 1}, 偏移：{time_shift}')
-                                sub_file.append_ass(self.subtitle_files[self.sub_index], time_shift)
+                                sub_file.append_ass(subtitle_files[self.sub_index], time_shift)
                                 self.progress_dialog.setValue(
-                                    int((self.sub_index + 1) / len(self.subtitle_files) * 1000))
+                                    int((self.sub_index + 1) / len(subtitle_files) * 1000))
                                 QCoreApplication.processEvents()
 
                 start_time += play_item_in_out_time[2] - play_item_in_out_time[1]
@@ -530,14 +531,16 @@ class BluraySubtitle:
             sub_file.dump(folder, selected_mpls)
             self.completion(folder)
             self.sub_index += 1
-            if self.sub_index == len(self.subtitle_files):
+            if self.sub_index == len(subtitle_files):
                 break
         self.progress_dialog.setValue(1000)
         QCoreApplication.processEvents()
 
     def add_chapter_to_mkv(self):
+        mkv_files = [os.path.join(self.input_path, path) for path in os.listdir(self.input_path)
+                          if path.endswith("mkv")]
         for folder, chapter, selected_mpls in self.select_playlist():
-            duration = MKV(self.mkv_files[self.mkv_index]).get_duration()
+            duration = MKV(mkv_files[self.mkv_index]).get_duration()
             print(f'folder: {folder}')
             print(f'in_out_time: {chapter.in_out_time}')
             print(f'mark_info: {chapter.mark_info}')
@@ -558,12 +561,12 @@ class BluraySubtitle:
                         chapter_id = 0
                         episode_duration_time_sum += real_time
                         real_time = 0
-                        mkv = MKV(self.mkv_files[self.mkv_index])
+                        mkv = MKV(mkv_files[self.mkv_index])
                         mkv.add_chapter(self.checked)
-                        self.progress_dialog.setValue(int((self.mkv_index + 1) / len(self.mkv_files) * 1000))
+                        self.progress_dialog.setValue(int((self.mkv_index + 1) / len(mkv_files) * 1000))
                         QCoreApplication.processEvents()
                         self.mkv_index += 1
-                        duration = MKV(self.mkv_files[self.mkv_index]).get_duration()
+                        duration = MKV(mkv_files[self.mkv_index]).get_duration()
                         print(f'集数：{self.mkv_index + 1}, 时长: {duration}')
                         chapter_text.clear()
 
@@ -583,9 +586,9 @@ class BluraySubtitle:
 
             with open(f'chapter.txt', 'w', encoding='utf-8-sig') as f:
                 f.write('\n'.join(chapter_text))
-            mkv = MKV(self.mkv_files[self.mkv_index])
+            mkv = MKV(mkv_files[self.mkv_index])
             mkv.add_chapter(self.checked)
-            self.progress_dialog.setValue(int((self.mkv_index + 1) / len(self.mkv_files) * 1000))
+            self.progress_dialog.setValue(int((self.mkv_index + 1) / len(mkv_files) * 1000))
             QCoreApplication.processEvents()
             self.mkv_index += 1
 
@@ -632,7 +635,7 @@ class BluraySubtitleGUI(QWidget):
         self.setWindowTitle("BluraySubtitle")
         self.setGeometry(100, 100, 400, 200)
 
-        layout = QVBoxLayout()
+        self.layout = QVBoxLayout()
 
         function_button = QGroupBox('选择功能', self)
         h_layout = QHBoxLayout()
@@ -652,7 +655,7 @@ class BluraySubtitleGUI(QWidget):
         group.buttonClicked.connect(self.on_select_function)
         h_layout.addWidget(self.radio1)
         h_layout.addWidget(self.radio2)
-        layout.addWidget(function_button)
+        self.layout.addWidget(function_button)
 
         bluray_path_box = CustomBox('原盘', self)
         h_layout = QHBoxLayout()
@@ -662,10 +665,16 @@ class BluraySubtitleGUI(QWidget):
         self.bdmv_folder_path.setMinimumWidth(200)
         button1 = QPushButton("选择文件夹")
         button1.clicked.connect(self.select_bdmv_folder)
-        layout.addWidget(self.label1)
+        self.layout.addWidget(self.label1)
         h_layout.addWidget(self.bdmv_folder_path)
         h_layout.addWidget(button1)
-        layout.addWidget(bluray_path_box)
+        self.layout.addWidget(bluray_path_box)
+
+        self.table1 = QTableWidget()
+        self.table1.setColumnCount(2)
+        self.table1.setHorizontalHeaderLabels(['path', 'size'])
+        self.bdmv_folder_path.textChanged.connect(self.on_bdmv_folder_path_change)
+        self.layout.addWidget(self.table1)
 
         subtitle_path_box = CustomBox('字幕', self)
         h_layout = QHBoxLayout()
@@ -675,20 +684,135 @@ class BluraySubtitleGUI(QWidget):
         self.subtitle_folder_path.setMinimumWidth(200)
         button2 = QPushButton("选择文件夹")
         button2.clicked.connect(self.select_subtitle_folder)
-        layout.addWidget(self.label2)
+        self.layout.addWidget(self.label2)
         h_layout.addWidget(self.subtitle_folder_path)
         h_layout.addWidget(button2)
-        layout.addWidget(subtitle_path_box)
+        self.layout.addWidget(subtitle_path_box)
+
+        self.table2 = QTableWidget()
+        self.table1.setColumnCount(3)
+        self.table1.setHorizontalHeaderLabels(['path', 'size', 'info'])
+        self.subtitle_folder_path.textChanged.connect(self.on_subtitle_folder_path_change)
+        self.layout.addWidget(self.table2)
 
         self.checkbox1 = QCheckBox("补全蓝光目录")
         self.checkbox1.setChecked(True)
-        layout.addWidget(self.checkbox1)
+        self.layout.addWidget(self.checkbox1)
         self.exe_button = QPushButton("生成字幕")
         self.exe_button.clicked.connect(self.main)
         self.exe_button.setMinimumHeight(50)
-        layout.addWidget(self.exe_button)
+        self.layout.addWidget(self.exe_button)
 
-        self.setLayout(layout)
+        self.setLayout(self.layout)
+
+    def on_bdmv_folder_path_change(self):
+        if self.bdmv_folder_path.text().strip():
+            try:
+                self.table1.setColumnCount(3)
+                self.table1.setHorizontalHeaderLabels(['path', 'size', 'info'])
+                i = 0
+                for root, dirs, files in os.walk(self.bdmv_folder_path.text().strip()):
+                    if 'BDMV' in dirs and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV')):
+                        i += 1
+                self.table1.setRowCount(i)
+                i = 0
+                for root, dirs, files in os.walk(self.bdmv_folder_path.text().strip()):
+                    if 'BDMV' in dirs and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV')):
+                        table_widget = QTableWidget()
+                        table_widget.setColumnCount(5)
+                        table_widget.setHorizontalHeaderLabels(['mpls_file', 'duration', 'chapters', 'main', 'play'])
+                        mpls_n = 0
+                        for mpls_file in os.listdir(os.path.join(root, 'BDMV', 'PLAYLIST')):
+                            if mpls_file.endswith('.mpls'):
+                                mpls_n += 1
+                        table_widget.setRowCount(mpls_n)
+                        mpls_n = 0
+                        selected_mpls = BluraySubtitle(root).get_main_mpls(root)
+                        for mpls_file in os.listdir(os.path.join(root, 'BDMV', 'PLAYLIST')):
+                            if mpls_file.endswith('.mpls'):
+                                table_widget.setItem(mpls_n, 0, QTableWidgetItem(mpls_file))
+                                mpls_path = os.path.join(root, 'BDMV', 'PLAYLIST', mpls_file)
+                                total_time = Chapter(mpls_path).get_total_time()
+                                total_time_str = get_time_str(total_time)
+                                table_widget.setItem(mpls_n, 1, QTableWidgetItem(total_time_str))
+                                btn1 = QPushButton('view chapters')
+                                btn1.clicked.connect(partial(self.on_button_click, mpls_path))
+                                table_widget.setCellWidget(mpls_n, 2, btn1)
+                                btn2 = QPushButton()
+                                btn2.setCheckable(True)
+                                if mpls_path == selected_mpls:
+                                    btn2.setChecked(True)
+                                else:
+                                    btn2.setChecked(False)
+                                table_widget.setCellWidget(mpls_n, 3, btn2)
+                                btn3 = QPushButton('play')
+                                btn3.clicked.connect(partial(self.on_button_play, mpls_path))
+                                table_widget.setCellWidget(mpls_n, 4, btn3)
+                                mpls_n += 1
+                        self.table1.setItem(i, 0, QTableWidgetItem(root))
+                        self.table1.setItem(i, 1, QTableWidgetItem(get_folder_size(root)))
+                        self.table1.setCellWidget(i, 2, table_widget)
+                        self.table1.setRowHeight(i, 100)
+                        i += 1
+            except Exception as e:
+                self.table1.clear()
+                self.table1.setColumnCount(3)
+                self.table1.setHorizontalHeaderLabels(['path', 'size', 'info'])
+
+    def on_subtitle_folder_path_change(self):
+        if self.subtitle_folder_path.text().strip():
+            try:
+                subtitle_folder = self.subtitle_folder_path.text()
+                n = 0
+                for path in os.listdir(subtitle_folder):
+                    if path.endswith(".ass") or path.endswith(".ssa") or path.endswith('srt'):
+                        n += 1
+                self.table2.setColumnCount(2)
+                self.table2.setHorizontalHeaderLabels(['path', 'duration'])
+                self.table2.setRowCount(n)
+                n = 0
+                for path in os.listdir(subtitle_folder):
+                    if path.endswith(".ass") or path.endswith(".ssa") or path.endswith('srt'):
+                        pth = os.path.join(subtitle_folder, path)
+                        self.table2.setItem(n, 0, QTableWidgetItem(pth))
+                        self.table2.setItem(n, 1, QTableWidgetItem(get_time_str(Subtitle(pth).max_end_time())))
+                        n += 1
+            except:
+                self.table2.clear()
+                self.table1.setColumnCount(2)
+                self.table1.setHorizontalHeaderLabels(['path', 'duration'])
+
+    def on_button_play(self, mpls_path):
+        os.startfile(mpls_path)
+
+    def on_button_click(self, mpls_path):
+        class ChapterWindow(QDialog):
+            def __init__(this):
+                super(ChapterWindow, this).__init__()
+                this.setWindowTitle(f'chapters of {mpls_path}')
+                layout = QVBoxLayout()
+                table_widget = QTableWidget()
+                table_widget.setColumnCount(2)
+                table_widget.setHorizontalHeaderLabels(['offset', 'file'])
+                chapter = Chapter(mpls_path)
+                mark_info = chapter.mark_info
+                in_out_time = chapter.in_out_time
+                rows = sum(map(len, mark_info.values()))
+                table_widget.setRowCount(rows)
+                r = 0
+                offset = 0
+                for ref_to_play_item_id, mark_timestamps in mark_info.items():
+                    for mark_timestamp in mark_timestamps:
+                        off = offset + (mark_timestamp - in_out_time[ref_to_play_item_id][1]) / 45000
+                        table_widget.setItem(r, 0, QTableWidgetItem(get_time_str(off)))
+                        table_widget.setItem(r, 1, QTableWidgetItem(in_out_time[ref_to_play_item_id][0] + '.m2ts'))
+                        r += 1
+                    offset += (in_out_time[ref_to_play_item_id][2] - in_out_time[ref_to_play_item_id][1]) / 45000
+                layout.addWidget(table_widget)
+                this.setLayout(layout)
+
+        chapter_window = ChapterWindow()
+        chapter_window.exec()
 
     def on_select_function(self):
         if self.radio1.isChecked():
@@ -768,6 +892,30 @@ class CustomBox(QGroupBox):  # 为 Box 框提供拖拽文件夹的功能
             self.parent().bdmv_folder_path.setText(e.mimeData().urls()[0].toLocalFile())
         if self.title == '字幕':
             self.parent().subtitle_folder_path.setText(e.mimeData().urls()[0].toLocalFile())
+
+
+def get_folder_size(folder_path: str) -> str:
+    byte = 0
+    for root, dirs, files in os.walk(folder_path):
+        for file in files:
+            byte += os.path.getsize(os.path.join(root, file))
+    units = {'B': 0, 'KiB': 1, 'MiB': 2, 'GiB': 3, 'TiB': 6, 'PiB': 9}
+    for unit, digits in units.items():
+        if byte >= 1024:
+            byte /= 1024
+        else:
+            return f'{round(byte, digits)} {unit}'
+
+
+def get_time_str(duration: float) -> str:
+    hours, dur = divmod(duration, 3600)
+    minutes, seconds = divmod(dur, 60)
+    seconds = round(seconds, 3)
+    hs = '0' + str(int(hours)) if len(str(int(hours))) == 1 else str(int(hours))
+    ms = '0' + str(int(minutes)) if len(str(int(minutes))) == 1 else str(int(minutes))
+    s1, s2 = str(seconds).split('.')
+    ss = ('0' + s1 if len(s1) == 1 else s1) + '.' + (s2 + (3 - len(s2)) * '0' if len(s2) < 3 else s2)
+    return f'{hs}:{ms}:{ss}'
 
 
 if __name__ == "__main__":
