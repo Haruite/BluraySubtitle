@@ -671,8 +671,8 @@ class BluraySubtitleGUI(QWidget):
         self.layout.addWidget(bluray_path_box)
 
         self.table1 = QTableWidget()
-        self.table1.setColumnCount(2)
-        self.table1.setHorizontalHeaderLabels(['path', 'size'])
+        self.table1.setColumnCount(3)
+        self.table1.setHorizontalHeaderLabels(['path', 'size', 'info'])
         self.bdmv_folder_path.textChanged.connect(self.on_bdmv_folder_path_change)
         self.layout.addWidget(self.table1)
 
@@ -690,8 +690,8 @@ class BluraySubtitleGUI(QWidget):
         self.layout.addWidget(subtitle_path_box)
 
         self.table2 = QTableWidget()
-        self.table1.setColumnCount(3)
-        self.table1.setHorizontalHeaderLabels(['path', 'size', 'info'])
+        self.table2.setColumnCount(2)
+        self.table2.setHorizontalHeaderLabels(['path', 'duration'])
         self.subtitle_folder_path.textChanged.connect(self.on_subtitle_folder_path_change)
         self.layout.addWidget(self.table2)
 
@@ -779,8 +779,8 @@ class BluraySubtitleGUI(QWidget):
                         n += 1
             except:
                 self.table2.clear()
-                self.table1.setColumnCount(2)
-                self.table1.setHorizontalHeaderLabels(['path', 'duration'])
+                self.table2.setColumnCount(2)
+                self.table2.setHorizontalHeaderLabels(['path', 'duration'])
 
     def on_button_play(self, mpls_path):
         os.startfile(mpls_path)
@@ -823,6 +823,13 @@ class BluraySubtitleGUI(QWidget):
             self.label2.setText("选择mkv文件所在的文件夹")
             self.exe_button.setText("添加章节")
             self.checkbox1.setText('直接编辑原文件')
+            self.table1.clear()
+            self.table1.setColumnCount(3)
+            self.table1.setHorizontalHeaderLabels(['path', 'size', 'info'])
+            self.table2.clear()
+            self.table2.setColumnCount(2)
+            self.table2.setHorizontalHeaderLabels(['path', 'duration'])
+
 
     def select_bdmv_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "选择文件夹")
