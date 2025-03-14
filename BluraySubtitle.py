@@ -13,9 +13,9 @@ from struct import unpack
 from typing import Optional
 
 from PyQt6.QtCore import QCoreApplication
-from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLabel, QPushButton, QLineEdit, \
+from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLabel, QToolButton, QLineEdit, \
     QMessageBox, QHBoxLayout, QGroupBox, QCheckBox, QProgressDialog, QRadioButton, QButtonGroup, \
-    QTableWidget, QTableWidgetItem, QDialog
+    QTableWidget, QTableWidgetItem, QDialog, QPushButton
 
 MKV_INFO_PATH = ''
 MKV_MERGE_PATH = ''
@@ -633,7 +633,7 @@ class BluraySubtitleGUI(QWidget):
 
     def init_ui(self):
         self.setWindowTitle("BluraySubtitle")
-        self.setGeometry(100, 100, 400, 200)
+        self.setGeometry(100, 100, 800, 1000)
 
         self.layout = QVBoxLayout()
 
@@ -735,25 +735,30 @@ class BluraySubtitleGUI(QWidget):
                                 total_time = Chapter(mpls_path).get_total_time()
                                 total_time_str = get_time_str(total_time)
                                 table_widget.setItem(mpls_n, 1, QTableWidgetItem(total_time_str))
-                                btn1 = QPushButton('view chapters')
+                                btn1 = QToolButton()
+                                btn1.setText('view chapters')
                                 btn1.clicked.connect(partial(self.on_button_click, mpls_path))
                                 table_widget.setCellWidget(mpls_n, 2, btn1)
-                                btn2 = QPushButton()
+                                btn2 = QToolButton()
                                 btn2.setCheckable(True)
                                 if mpls_path == selected_mpls:
                                     btn2.setChecked(True)
                                 else:
                                     btn2.setChecked(False)
                                 table_widget.setCellWidget(mpls_n, 3, btn2)
-                                btn3 = QPushButton('play')
+                                btn3 = QToolButton()
+                                btn3.setText('play')
                                 btn3.clicked.connect(partial(self.on_button_play, mpls_path))
                                 table_widget.setCellWidget(mpls_n, 4, btn3)
+                                table_widget.resizeColumnsToContents()
                                 mpls_n += 1
                         self.table1.setItem(i, 0, QTableWidgetItem(root))
                         self.table1.setItem(i, 1, QTableWidgetItem(get_folder_size(root)))
                         self.table1.setCellWidget(i, 2, table_widget)
                         self.table1.setRowHeight(i, 100)
                         i += 1
+                self.table1.resizeColumnsToContents()
+                self.table1.setColumnWidth(2, 360)
             except Exception as e:
                 self.table1.clear()
                 self.table1.setColumnCount(3)
@@ -777,6 +782,7 @@ class BluraySubtitleGUI(QWidget):
                         self.table2.setItem(n, 0, QTableWidgetItem(pth))
                         self.table2.setItem(n, 1, QTableWidgetItem(get_time_str(Subtitle(pth).max_end_time())))
                         n += 1
+                self.table2.resizeColumnsToContents()
             except:
                 self.table2.clear()
                 self.table2.setColumnCount(2)
@@ -829,7 +835,6 @@ class BluraySubtitleGUI(QWidget):
             self.table2.clear()
             self.table2.setColumnCount(2)
             self.table2.setHorizontalHeaderLabels(['path', 'duration'])
-
 
     def select_bdmv_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "选择文件夹")
