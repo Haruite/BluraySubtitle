@@ -782,6 +782,7 @@ class BluraySubtitleGUI(QWidget):
                         self.table2.setItem(n, 0, QTableWidgetItem(pth))
                         self.table2.setItem(n, 1, QTableWidgetItem(get_time_str(Subtitle(pth).max_end_time())))
                         n += 1
+
                 self.table2.resizeColumnsToContents()
             except:
                 self.table2.clear()
@@ -835,6 +836,8 @@ class BluraySubtitleGUI(QWidget):
             self.table2.clear()
             self.table2.setColumnCount(2)
             self.table2.setHorizontalHeaderLabels(['path', 'duration'])
+        self.bdmv_folder_path.clear()
+        self.subtitle_folder_path.clear()
 
     def select_bdmv_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "选择文件夹")
