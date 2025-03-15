@@ -20,6 +20,8 @@ from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLa
 MKV_INFO_PATH = ''
 MKV_MERGE_PATH = ''
 MKV_PROP_EDIT_PATH = ''
+BDMV_LABELS = ['path', 'size', 'info']
+SUBTITLE_LABELS = ['path', 'duration', 'bdmv_index', 'chapter_index', 'offset']
 
 
 class Chapter:
@@ -451,8 +453,6 @@ class BluraySubtitle:
         self.input_path = input_path
         self.bluray_folders = [root for root, dirs, files in os.walk(bluray_path) if 'BDMV' in dirs
                                and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV'))]
-        self.sub_index = 0
-        self.mkv_index = 0
         self.checked = checked
         self.progress_dialog = progress_dialog
 
@@ -486,17 +486,69 @@ class BluraySubtitle:
             selected_mpls = self.get_main_mpls(bluray_folder)
             yield bluray_folder, Chapter(selected_mpls), selected_mpls[:-5]
 
+    def generate_configuration(self):
+        configuration = {}
+        sub_index = 0
+        subtitle_files = [os.path.join(self.input_path, path) for path in os.listdir(self.input_path)
+                          if path.endswith(".ass") or path.endswith(".ssa") or path.endswith('srt')]
+        bdmv_index = 0
+        for folder, chapter, selected_mpls in self.select_playlist():
+            bdmv_index += 1
+            start_time = 0
+            sub_file = Subtitle(subtitle_files[sub_index])
+            left_time = chapter.get_total_time()
+            configuration[sub_index] = {'bdmv_index': bdmv_index, 'chapter_index': 1, 'offset': '0'}
+
+            j = 0
+            for i, play_item_in_out_time in enumerate(chapter.in_out_time):
+                play_item_marks = chapter.mark_info.get(i)
+                chapter_num = len(play_item_marks)
+                if play_item_marks:
+                    play_item_duration_time = play_item_in_out_time[2] - play_item_in_out_time[1]
+
+                    time_shift = (start_time + play_item_marks[0] - play_item_in_out_time[1]) / 45000
+                    if time_shift > sub_file.max_end_time() - 300:
+                        if (sub_index + 1 < len(subtitle_files)
+                                and left_time > Subtitle(subtitle_files[sub_index + 1]).max_end_time() - 180):
+                            sub_index += 1
+                            sub_file.append_ass(subtitle_files[sub_index], time_shift)
+                            configuration[sub_index] = {
+                                'bdmv_index': bdmv_index, 'chapter_index': j, 'offset': get_time_str(time_shift)}
+
+                    if play_item_duration_time / 45000 > 2600 and sub_file.max_end_time() - time_shift < 1800:
+                        for mark in play_item_marks:
+                            j += 1
+                            time_shift = (start_time + mark - play_item_in_out_time[1]) / 45000
+                            if time_shift > sub_file.max_end_time() and (
+                                    play_item_in_out_time[2] - mark) / 45000 > 1200:
+                                sub_index += 1
+                                sub_file.append_ass(subtitle_files[sub_index], time_shift)
+                                configuration[sub_index] = {
+                                    'bdmv_index': bdmv_index, 'chapter_index': j, 'offset': get_time_str(time_shift)}
+
+                j += chapter_num
+                start_time += play_item_in_out_time[2] - play_item_in_out_time[1]
+                left_time += (play_item_in_out_time[1] - play_item_in_out_time[2]) / 45000
+
+            sub_index += 1
+            if sub_index == len(subtitle_files):
+                break
+
+        return configuration
+
+
     def generate_bluray_subtitle(self):
         subtitle_files = [os.path.join(self.input_path, path) for path in os.listdir(self.input_path)
-                               if path.endswith(".ass") or path.endswith(".ssa") or path.endswith('srt')]
+                          if path.endswith(".ass") or path.endswith(".ssa") or path.endswith('srt')]
+        sub_index = 0
         for folder, chapter, selected_mpls in self.select_playlist():
             print(f'folder: {folder}')
             print(f'in_out_time: {chapter.in_out_time}')
             print(f'mark_info: {chapter.mark_info}')
             start_time = 0
-            sub_file = Subtitle(subtitle_files[self.sub_index])
+            sub_file = Subtitle(subtitle_files[sub_index])
             left_time = chapter.get_total_time()
-            print(f'集数：{self.sub_index + 1}, 偏移：0')
+            print(f'集数：{sub_index + 1}, 偏移：0')
 
             for i, play_item_in_out_time in enumerate(chapter.in_out_time):
                 play_item_marks = chapter.mark_info.get(i)
@@ -505,12 +557,12 @@ class BluraySubtitle:
 
                     time_shift = (start_time + play_item_marks[0] - play_item_in_out_time[1]) / 45000
                     if time_shift > sub_file.max_end_time() - 300:
-                        if (self.sub_index + 1 < len(subtitle_files)
-                                and left_time > Subtitle(subtitle_files[self.sub_index + 1]).max_end_time() - 180):
-                            self.sub_index += 1
-                            print(f'集数：{self.sub_index + 1}, 偏移：{time_shift}')
-                            sub_file.append_ass(subtitle_files[self.sub_index], time_shift)
-                            self.progress_dialog.setValue(int((self.sub_index + 1) / len(subtitle_files) * 1000))
+                        if (sub_index + 1 < len(subtitle_files)
+                                and left_time > Subtitle(subtitle_files[sub_index + 1]).max_end_time() - 180):
+                            sub_index += 1
+                            print(f'集数：{sub_index + 1}, 偏移：{time_shift}')
+                            sub_file.append_ass(subtitle_files[sub_index], time_shift)
+                            self.progress_dialog.setValue(int((sub_index + 1) / len(subtitle_files) * 1000))
                             QCoreApplication.processEvents()
 
                     if play_item_duration_time / 45000 > 2600 and sub_file.max_end_time() - time_shift < 1800:
@@ -518,11 +570,11 @@ class BluraySubtitle:
                         for mark in play_item_marks:
                             time_shift = (start_time + mark - play_item_in_out_time[1]) / 45000
                             if time_shift > sub_file.max_end_time() and (play_item_in_out_time[2] - mark) / 45000 > 1200:
-                                self.sub_index += 1
-                                print(f'集数：{self.sub_index + 1}, 偏移：{time_shift}')
-                                sub_file.append_ass(subtitle_files[self.sub_index], time_shift)
+                                sub_index += 1
+                                print(f'集数：{sub_index + 1}, 偏移：{time_shift}')
+                                sub_file.append_ass(subtitle_files[sub_index], time_shift)
                                 self.progress_dialog.setValue(
-                                    int((self.sub_index + 1) / len(subtitle_files) * 1000))
+                                    int((sub_index + 1) / len(subtitle_files) * 1000))
                                 QCoreApplication.processEvents()
 
                 start_time += play_item_in_out_time[2] - play_item_in_out_time[1]
@@ -530,21 +582,22 @@ class BluraySubtitle:
 
             sub_file.dump(folder, selected_mpls)
             self.completion(folder)
-            self.sub_index += 1
-            if self.sub_index == len(subtitle_files):
+            sub_index += 1
+            if sub_index == len(subtitle_files):
                 break
         self.progress_dialog.setValue(1000)
         QCoreApplication.processEvents()
 
     def add_chapter_to_mkv(self):
         mkv_files = [os.path.join(self.input_path, path) for path in os.listdir(self.input_path)
-                          if path.endswith("mkv")]
+                     if path.endswith("mkv")]
+        mkv_index = 0
         for folder, chapter, selected_mpls in self.select_playlist():
-            duration = MKV(mkv_files[self.mkv_index]).get_duration()
+            duration = MKV(mkv_files[mkv_index]).get_duration()
             print(f'folder: {folder}')
             print(f'in_out_time: {chapter.in_out_time}')
             print(f'mark_info: {chapter.mark_info}')
-            print(f'集数：{self.mkv_index + 1}, 时长: {duration}')
+            print(f'集数：{mkv_index + 1}, 时长: {duration}')
 
             play_item_duration_time_sum = 0
             episode_duration_time_sum = 0
@@ -561,13 +614,13 @@ class BluraySubtitle:
                         chapter_id = 0
                         episode_duration_time_sum += real_time
                         real_time = 0
-                        mkv = MKV(mkv_files[self.mkv_index])
+                        mkv = MKV(mkv_files[mkv_index])
                         mkv.add_chapter(self.checked)
-                        self.progress_dialog.setValue(int((self.mkv_index + 1) / len(mkv_files) * 1000))
+                        self.progress_dialog.setValue(int((mkv_index + 1) / len(mkv_files) * 1000))
                         QCoreApplication.processEvents()
-                        self.mkv_index += 1
-                        duration = MKV(mkv_files[self.mkv_index]).get_duration()
-                        print(f'集数：{self.mkv_index + 1}, 时长: {duration}')
+                        mkv_index += 1
+                        duration = MKV(mkv_files[mkv_index]).get_duration()
+                        print(f'集数：{mkv_index + 1}, 时长: {duration}')
                         chapter_text.clear()
 
                     chapter_id += 1
@@ -586,11 +639,11 @@ class BluraySubtitle:
 
             with open(f'chapter.txt', 'w', encoding='utf-8-sig') as f:
                 f.write('\n'.join(chapter_text))
-            mkv = MKV(mkv_files[self.mkv_index])
+            mkv = MKV(mkv_files[mkv_index])
             mkv.add_chapter(self.checked)
-            self.progress_dialog.setValue(int((self.mkv_index + 1) / len(mkv_files) * 1000))
+            self.progress_dialog.setValue(int((mkv_index + 1) / len(mkv_files) * 1000))
             QCoreApplication.processEvents()
-            self.mkv_index += 1
+            mkv_index += 1
 
         self.progress_dialog.setValue(1000)
         QCoreApplication.processEvents()
@@ -672,8 +725,8 @@ class BluraySubtitleGUI(QWidget):
         self.layout.addWidget(bluray_path_box)
 
         self.table1 = QTableWidget()
-        self.table1.setColumnCount(3)
-        self.table1.setHorizontalHeaderLabels(['path', 'size', 'info'])
+        self.table1.setColumnCount(len(BDMV_LABELS))
+        self.table1.setHorizontalHeaderLabels(BDMV_LABELS)
         self.bdmv_folder_path.textChanged.connect(self.on_bdmv_folder_path_change)
         self.layout.addWidget(self.table1)
 
@@ -691,8 +744,8 @@ class BluraySubtitleGUI(QWidget):
         self.layout.addWidget(subtitle_path_box)
 
         self.table2 = QTableWidget()
-        self.table2.setColumnCount(2)
-        self.table2.setHorizontalHeaderLabels(['path', 'duration'])
+        self.table2.setColumnCount(len(SUBTITLE_LABELS))
+        self.table2.setHorizontalHeaderLabels(SUBTITLE_LABELS)
         self.subtitle_folder_path.textChanged.connect(self.on_subtitle_folder_path_change)
         self.layout.addWidget(self.table2)
 
@@ -709,8 +762,8 @@ class BluraySubtitleGUI(QWidget):
     def on_bdmv_folder_path_change(self):
         if self.bdmv_folder_path.text().strip():
             try:
-                self.table1.setColumnCount(3)
-                self.table1.setHorizontalHeaderLabels(['path', 'size', 'info'])
+                self.table1.setColumnCount(len(BDMV_LABELS))
+                self.table1.setHorizontalHeaderLabels(BDMV_LABELS)
                 i = 0
                 for root, dirs, files in os.walk(self.bdmv_folder_path.text().strip()):
                     if 'BDMV' in dirs and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV')):
@@ -760,8 +813,8 @@ class BluraySubtitleGUI(QWidget):
                 self.table1.setColumnWidth(2, 380)
             except Exception as e:
                 self.table1.clear()
-                self.table1.setColumnCount(3)
-                self.table1.setHorizontalHeaderLabels(['path', 'size', 'info'])
+                self.table1.setColumnCount(len(BDMV_LABELS))
+                self.table1.setHorizontalHeaderLabels(BDMV_LABELS)
 
     def on_subtitle_folder_path_change(self):
         if self.subtitle_folder_path.text().strip():
@@ -771,8 +824,8 @@ class BluraySubtitleGUI(QWidget):
                 for path in os.listdir(subtitle_folder):
                     if path.endswith(".ass") or path.endswith(".ssa") or path.endswith('srt'):
                         n += 1
-                self.table2.setColumnCount(2)
-                self.table2.setHorizontalHeaderLabels(['path', 'duration'])
+                self.table2.setColumnCount(len(SUBTITLE_LABELS))
+                self.table2.setHorizontalHeaderLabels(SUBTITLE_LABELS)
                 self.table2.setRowCount(n)
                 n = 0
                 for path in os.listdir(subtitle_folder):
@@ -781,7 +834,6 @@ class BluraySubtitleGUI(QWidget):
                         self.table2.setItem(n, 0, QTableWidgetItem(pth))
                         self.table2.setItem(n, 1, QTableWidgetItem(get_time_str(Subtitle(pth).max_end_time())))
                         n += 1
-                self.table2.resizeColumnsToContents()
                 for bdmv_index in range(self.table1.rowCount()):
                     info: QTableWidget = self.table1.cellWidget(bdmv_index, 2)
                     for mpls_index in range(info.rowCount()):
@@ -789,12 +841,27 @@ class BluraySubtitleGUI(QWidget):
                         if main_btn.isChecked():
                             info.cellWidget(mpls_index, 4).setText('preview')
                     info.resizeColumnsToContents()
+                configuration = BluraySubtitle(
+                    self.bdmv_folder_path.text(),
+                    self.subtitle_folder_path.text(),
+                    self.checkbox1.isChecked(),
+                    None
+                ).generate_configuration()
+                for subtitle_index in range(self.table2.rowCount()):
+                    con = configuration.get(subtitle_index)
+                    if con:
+                        print(con)
+                        self.table2.setItem(subtitle_index, 2, QTableWidgetItem(str(con['bdmv_index'])))
+                        self.table2.setItem(subtitle_index, 3, QTableWidgetItem(str(con['chapter_index'])))
+                        self.table2.setItem(subtitle_index, 4, QTableWidgetItem(con['offset']))
+                self.table2.resizeColumnsToContents()
             except:
+                traceback.print_exc()
                 self.table2.clear()
-                self.table2.setColumnCount(2)
-                self.table2.setHorizontalHeaderLabels(['path', 'duration'])
+                self.table2.setColumnCount(len(SUBTITLE_LABELS))
+                self.table2.setHorizontalHeaderLabels(SUBTITLE_LABELS)
 
-    def on_button_play(self, mpls_path):
+    def on_button_play(self, mpls_path: str):
         os.startfile(mpls_path)
 
     def on_button_main(self, mpls_path: str):
@@ -855,10 +922,10 @@ class BluraySubtitleGUI(QWidget):
             self.checkbox1.setText('直接编辑原文件')
             self.table1.clear()
             self.table1.setColumnCount(3)
-            self.table1.setHorizontalHeaderLabels(['path', 'size', 'info'])
+            self.table1.setHorizontalHeaderLabels(BDMV_LABELS)
             self.table2.clear()
             self.table2.setColumnCount(2)
-            self.table2.setHorizontalHeaderLabels(['path', 'duration'])
+            self.table2.setHorizontalHeaderLabels(SUBTITLE_LABELS)
         self.bdmv_folder_path.clear()
         self.subtitle_folder_path.clear()
 
