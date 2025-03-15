@@ -633,7 +633,8 @@ class BluraySubtitleGUI(QWidget):
 
     def init_ui(self):
         self.setWindowTitle("BluraySubtitle")
-        self.setGeometry(100, 100, 800, 1000)
+        self.setMinimumWidth(800)
+        self.setMinimumHeight(1000)
 
         self.layout = QVBoxLayout()
 
@@ -727,11 +728,11 @@ class BluraySubtitleGUI(QWidget):
                                 mpls_n += 1
                         table_widget.setRowCount(mpls_n)
                         mpls_n = 0
-                        selected_mpls = BluraySubtitle(root).get_main_mpls(root)
+                        selected_mpls = os.path.normpath(BluraySubtitle(root).get_main_mpls(root))
                         for mpls_file in os.listdir(os.path.join(root, 'BDMV', 'PLAYLIST')):
                             if mpls_file.endswith('.mpls'):
                                 table_widget.setItem(mpls_n, 0, QTableWidgetItem(mpls_file))
-                                mpls_path = os.path.join(root, 'BDMV', 'PLAYLIST', mpls_file)
+                                mpls_path = os.path.normpath(os.path.join(root, 'BDMV', 'PLAYLIST', mpls_file))
                                 total_time = Chapter(mpls_path).get_total_time()
                                 total_time_str = get_time_str(total_time)
                                 table_widget.setItem(mpls_n, 1, QTableWidgetItem(total_time_str))
@@ -741,10 +742,8 @@ class BluraySubtitleGUI(QWidget):
                                 table_widget.setCellWidget(mpls_n, 2, btn1)
                                 btn2 = QToolButton()
                                 btn2.setCheckable(True)
-                                if mpls_path == selected_mpls:
-                                    btn2.setChecked(True)
-                                else:
-                                    btn2.setChecked(False)
+                                btn2.setChecked(mpls_path == selected_mpls)
+                                btn2.clicked.connect(partial(self.on_button_main, mpls_path))
                                 table_widget.setCellWidget(mpls_n, 3, btn2)
                                 btn3 = QToolButton()
                                 btn3.setText('play')
@@ -752,13 +751,13 @@ class BluraySubtitleGUI(QWidget):
                                 table_widget.setCellWidget(mpls_n, 4, btn3)
                                 table_widget.resizeColumnsToContents()
                                 mpls_n += 1
-                        self.table1.setItem(i, 0, QTableWidgetItem(root))
+                        self.table1.setItem(i, 0, QTableWidgetItem(os.path.normpath(root)))
                         self.table1.setItem(i, 1, QTableWidgetItem(get_folder_size(root)))
                         self.table1.setCellWidget(i, 2, table_widget)
                         self.table1.setRowHeight(i, 100)
                         i += 1
                 self.table1.resizeColumnsToContents()
-                self.table1.setColumnWidth(2, 360)
+                self.table1.setColumnWidth(2, 380)
             except Exception as e:
                 self.table1.clear()
                 self.table1.setColumnCount(3)
@@ -778,12 +777,18 @@ class BluraySubtitleGUI(QWidget):
                 n = 0
                 for path in os.listdir(subtitle_folder):
                     if path.endswith(".ass") or path.endswith(".ssa") or path.endswith('srt'):
-                        pth = os.path.join(subtitle_folder, path)
+                        pth = os.path.normpath(os.path.join(subtitle_folder, path))
                         self.table2.setItem(n, 0, QTableWidgetItem(pth))
                         self.table2.setItem(n, 1, QTableWidgetItem(get_time_str(Subtitle(pth).max_end_time())))
                         n += 1
-
                 self.table2.resizeColumnsToContents()
+                for bdmv_index in range(self.table1.rowCount()):
+                    info: QTableWidget = self.table1.cellWidget(bdmv_index, 2)
+                    for mpls_index in range(info.rowCount()):
+                        main_btn: QToolButton = info.cellWidget(mpls_index, 3)
+                        if main_btn.isChecked():
+                            info.cellWidget(mpls_index, 4).setText('preview')
+                    info.resizeColumnsToContents()
             except:
                 self.table2.clear()
                 self.table2.setColumnCount(2)
@@ -791,6 +796,24 @@ class BluraySubtitleGUI(QWidget):
 
     def on_button_play(self, mpls_path):
         os.startfile(mpls_path)
+
+    def on_button_main(self, mpls_path: str):
+        for bdmv_index in range(self.table1.rowCount()):
+            if mpls_path.startswith(self.table1.item(bdmv_index, 0).text()):
+                info: QTableWidget = self.table1.cellWidget(bdmv_index, 2)
+                for mpls_index in range(info.rowCount()):
+                    if mpls_path.endswith(info.item(mpls_index, 0).text()):
+                        checked = info.cellWidget(mpls_index, 3).isChecked()
+                        if checked:
+                            subtitle = bool(self.table2.rowCount() > 0 and self.table2.item(0, 0).text())
+                            info.cellWidget(mpls_index, 4).setText('preview' if subtitle else 'play')
+                            for mpls_index_1 in range(info.rowCount()):
+                                if not mpls_path.endswith(info.item(mpls_index_1, 0).text()):
+                                    if info.cellWidget(mpls_index_1, 3).isChecked():
+                                        info.cellWidget(mpls_index_1, 3).setChecked(False)
+                                        info.cellWidget(mpls_index_1, 4).setText('play')
+                        else:
+                            info.cellWidget(mpls_index, 4).setText('play')
 
     def on_button_click(self, mpls_path):
         class ChapterWindow(QDialog):
