@@ -805,7 +805,7 @@ class BluraySubtitleGUI(QWidget):
                                 table_widget.setCellWidget(mpls_n, 3, btn2)
                                 btn3 = QToolButton()
                                 btn3.setText('play')
-                                btn3.clicked.connect(partial(self.on_button_play, mpls_path))
+                                btn3.clicked.connect(partial(self.on_button_play, mpls_path, btn3))
                                 table_widget.setCellWidget(mpls_n, 4, btn3)
                                 table_widget.resizeColumnsToContents()
                                 mpls_n += 1
@@ -878,7 +878,9 @@ class BluraySubtitleGUI(QWidget):
                 self.table2.setColumnCount(len(SUBTITLE_LABELS))
                 self.table2.setHorizontalHeaderLabels(SUBTITLE_LABELS)
 
-    def on_button_play(self, mpls_path: str):
+    def on_button_play(self, mpls_path: str, btn: QToolButton):
+        if btn.text() == 'preview':
+            self.generate_subtitle()
         os.startfile(mpls_path)
 
     def on_button_main(self, mpls_path: str):
