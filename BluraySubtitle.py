@@ -499,7 +499,7 @@ class BluraySubtitle:
             left_time = chapter.get_total_time()
             configuration[sub_index] = {'bdmv_index': bdmv_index, 'chapter_index': 1, 'offset': '0'}
 
-            j = 0
+            j = 1
             for i, play_item_in_out_time in enumerate(chapter.in_out_time):
                 play_item_marks = chapter.mark_info.get(i)
                 chapter_num = len(play_item_marks)
@@ -535,7 +535,6 @@ class BluraySubtitle:
                 break
 
         return configuration
-
 
     def generate_bluray_subtitle(self):
         subtitle_files = [os.path.join(self.input_path, path) for path in os.listdir(self.input_path)
@@ -850,7 +849,6 @@ class BluraySubtitleGUI(QWidget):
                 for subtitle_index in range(self.table2.rowCount()):
                     con = configuration.get(subtitle_index)
                     if con:
-                        print(con)
                         self.table2.setItem(subtitle_index, 2, QTableWidgetItem(str(con['bdmv_index'])))
                         self.table2.setItem(subtitle_index, 3, QTableWidgetItem(str(con['chapter_index'])))
                         self.table2.setItem(subtitle_index, 4, QTableWidgetItem(con['offset']))
@@ -882,7 +880,7 @@ class BluraySubtitleGUI(QWidget):
                         else:
                             info.cellWidget(mpls_index, 4).setText('play')
 
-    def on_button_click(self, mpls_path):
+    def on_button_click(self, mpls_path: str):
         class ChapterWindow(QDialog):
             def __init__(this):
                 super(ChapterWindow, this).__init__()
