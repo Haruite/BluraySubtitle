@@ -15,7 +15,7 @@ from typing import Optional
 from PyQt6.QtCore import QCoreApplication
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLabel, QToolButton, QLineEdit, \
     QMessageBox, QHBoxLayout, QGroupBox, QCheckBox, QProgressDialog, QRadioButton, QButtonGroup, \
-    QTableWidget, QTableWidgetItem, QDialog, QPushButton
+    QTableWidget, QTableWidgetItem, QDialog, QPushButton, QComboBox
 
 MKV_INFO_PATH = ''
 MKV_MERGE_PATH = ''
@@ -481,18 +481,24 @@ class BluraySubtitle:
                 selected_mpls = mpls_file_path
         return selected_mpls
 
-    def select_playlist(self):  # 选择主播放列表
-        for bluray_folder in self.bluray_folders:
-            selected_mpls = self.get_main_mpls(bluray_folder)
-            yield bluray_folder, Chapter(selected_mpls), selected_mpls[:-5]
+    def select_mpls_from_table(self, table: QTableWidget):
+        for bdmv_index in range(table.rowCount()):
+            bluray_folder = table.item(bdmv_index, 0).text()
+            info: QTableWidget = table.cellWidget(bdmv_index, 2)
+            for mpls_index in range(info.rowCount()):
+                main_btn: QToolButton = info.cellWidget(mpls_index, 3)
+                if main_btn.isChecked():
+                    mpls_file = info.item(mpls_index, 0).text()
+                    selected_mpls = os.path.join(bluray_folder, 'BDMV', 'PLAYLIST', mpls_file)
+                    yield bluray_folder, Chapter(selected_mpls), selected_mpls[:-5]
 
-    def generate_configuration(self):
+    def generate_configuration(self, table: QTableWidget):
         configuration = {}
         sub_index = 0
         subtitle_files = [os.path.join(self.input_path, path) for path in os.listdir(self.input_path)
                           if path.endswith(".ass") or path.endswith(".ssa") or path.endswith('srt')]
         bdmv_index = 0
-        for folder, chapter, selected_mpls in self.select_playlist():
+        for folder, chapter, selected_mpls in self.select_mpls_from_table(table):
             bdmv_index += 1
             start_time = 0
             sub_file = Subtitle(subtitle_files[sub_index])
@@ -502,7 +508,7 @@ class BluraySubtitle:
             j = 1
             for i, play_item_in_out_time in enumerate(chapter.in_out_time):
                 play_item_marks = chapter.mark_info.get(i)
-                chapter_num = len(play_item_marks)
+                chapter_num = len(play_item_marks or [])
                 if play_item_marks:
                     play_item_duration_time = play_item_in_out_time[2] - play_item_in_out_time[1]
 
@@ -536,11 +542,11 @@ class BluraySubtitle:
 
         return configuration
 
-    def generate_bluray_subtitle(self):
+    def generate_bluray_subtitle(self, table: QTableWidget):
         subtitle_files = [os.path.join(self.input_path, path) for path in os.listdir(self.input_path)
                           if path.endswith(".ass") or path.endswith(".ssa") or path.endswith('srt')]
         sub_index = 0
-        for folder, chapter, selected_mpls in self.select_playlist():
+        for folder, chapter, selected_mpls in self.select_mpls_from_table(table):
             print(f'folder: {folder}')
             print(f'in_out_time: {chapter.in_out_time}')
             print(f'mark_info: {chapter.mark_info}')
@@ -845,12 +851,25 @@ class BluraySubtitleGUI(QWidget):
                     self.subtitle_folder_path.text(),
                     self.checkbox1.isChecked(),
                     None
-                ).generate_configuration()
+                ).generate_configuration(self.table1)
                 for subtitle_index in range(self.table2.rowCount()):
                     con = configuration.get(subtitle_index)
                     if con:
                         self.table2.setItem(subtitle_index, 2, QTableWidgetItem(str(con['bdmv_index'])))
-                        self.table2.setItem(subtitle_index, 3, QTableWidgetItem(str(con['chapter_index'])))
+                        chapter_combo = QComboBox()
+                        for bi in range(self.table1.rowCount()):
+                            if bi + 1 == con['bdmv_index']:
+                                info: QTableWidget = self.table1.cellWidget(bi, 2)
+                                for mi in range(info.rowCount()):
+                                    main_btn: QToolButton = info.cellWidget(mi, 3)
+                                    if main_btn.isChecked():
+                                        mpls_file = info.item(mi, 0).text()
+                                        root = self.table1.item(bi, 0).text()
+                                        select_mpls = os.path.join(root, 'BDMV', 'PLAYLIST', mpls_file)
+                                        rows = sum(map(len, Chapter(select_mpls).mark_info.values()))
+                                        chapter_combo.addItems([str(r + 1) for r in range(rows)])
+                                        chapter_combo.setCurrentIndex(con['chapter_index'] - 1)
+                        self.table2.setCellWidget(subtitle_index, 3, chapter_combo)
                         self.table2.setItem(subtitle_index, 4, QTableWidgetItem(con['offset']))
                 self.table2.resizeColumnsToContents()
             except:
@@ -879,6 +898,7 @@ class BluraySubtitleGUI(QWidget):
                                         info.cellWidget(mpls_index_1, 4).setText('play')
                         else:
                             info.cellWidget(mpls_index, 4).setText('play')
+        self.on_subtitle_folder_path_change()
 
     def on_button_click(self, mpls_path: str):
         class ChapterWindow(QDialog):
@@ -950,7 +970,7 @@ class BluraySubtitleGUI(QWidget):
                 self.subtitle_folder_path.text(),
                 self.checkbox1.isChecked(),
                 progress_dialog
-            ).generate_bluray_subtitle()
+            ).generate_bluray_subtitle(self.table1)
             QMessageBox.information(self, " ", "生成字幕成功！")
         except Exception as e:
             QMessageBox.information(self, " ", traceback.format_exc())
