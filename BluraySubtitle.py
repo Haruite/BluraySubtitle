@@ -503,8 +503,8 @@ class BluraySubtitle:
             start_time = 0
             sub_file = Subtitle(subtitle_files[sub_index])
             left_time = chapter.get_total_time()
-            configuration[sub_index] = {'bdmv_index': bdmv_index, 'chapter_index': 1, 'offset': '0'}
-
+            configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
+                                        'bdmv_index': bdmv_index, 'chapter_index': 1, 'offset': '0'}
             j = 1
             for i, play_item_in_out_time in enumerate(chapter.in_out_time):
                 play_item_marks = chapter.mark_info.get(i)
@@ -518,7 +518,7 @@ class BluraySubtitle:
                                 and left_time > Subtitle(subtitle_files[sub_index + 1]).max_end_time() - 180):
                             sub_index += 1
                             sub_file.append_ass(subtitle_files[sub_index], time_shift)
-                            configuration[sub_index] = {
+                            configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
                                 'bdmv_index': bdmv_index, 'chapter_index': j, 'offset': get_time_str(time_shift)}
 
                     if play_item_duration_time / 45000 > 2600 and sub_file.max_end_time() - time_shift < 1800:
@@ -529,7 +529,7 @@ class BluraySubtitle:
                                     play_item_in_out_time[2] - mark) / 45000 > 1200:
                                 sub_index += 1
                                 sub_file.append_ass(subtitle_files[sub_index], time_shift)
-                                configuration[sub_index] = {
+                                configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
                                     'bdmv_index': bdmv_index, 'chapter_index': j, 'offset': get_time_str(time_shift)}
 
                 j += chapter_num
@@ -545,51 +545,23 @@ class BluraySubtitle:
     def generate_bluray_subtitle(self, table: QTableWidget):
         subtitle_files = [os.path.join(self.input_path, path) for path in os.listdir(self.input_path)
                           if path.endswith(".ass") or path.endswith(".ssa") or path.endswith('srt')]
-        sub_index = 0
-        for folder, chapter, selected_mpls in self.select_mpls_from_table(table):
-            print(f'folder: {folder}')
-            print(f'in_out_time: {chapter.in_out_time}')
-            print(f'mark_info: {chapter.mark_info}')
-            start_time = 0
-            sub_file = Subtitle(subtitle_files[sub_index])
-            left_time = chapter.get_total_time()
-            print(f'集数：{sub_index + 1}, 偏移：0')
-
-            for i, play_item_in_out_time in enumerate(chapter.in_out_time):
-                play_item_marks = chapter.mark_info.get(i)
-                if play_item_marks:
-                    play_item_duration_time = play_item_in_out_time[2] - play_item_in_out_time[1]
-
-                    time_shift = (start_time + play_item_marks[0] - play_item_in_out_time[1]) / 45000
-                    if time_shift > sub_file.max_end_time() - 300:
-                        if (sub_index + 1 < len(subtitle_files)
-                                and left_time > Subtitle(subtitle_files[sub_index + 1]).max_end_time() - 180):
-                            sub_index += 1
-                            print(f'集数：{sub_index + 1}, 偏移：{time_shift}')
-                            sub_file.append_ass(subtitle_files[sub_index], time_shift)
-                            self.progress_dialog.setValue(int((sub_index + 1) / len(subtitle_files) * 1000))
-                            QCoreApplication.processEvents()
-
-                    if play_item_duration_time / 45000 > 2600 and sub_file.max_end_time() - time_shift < 1800:
-                        # 连体盘，一个 m2ts 文件包含两集或以上
-                        for mark in play_item_marks:
-                            time_shift = (start_time + mark - play_item_in_out_time[1]) / 45000
-                            if time_shift > sub_file.max_end_time() and (play_item_in_out_time[2] - mark) / 45000 > 1200:
-                                sub_index += 1
-                                print(f'集数：{sub_index + 1}, 偏移：{time_shift}')
-                                sub_file.append_ass(subtitle_files[sub_index], time_shift)
-                                self.progress_dialog.setValue(
-                                    int((sub_index + 1) / len(subtitle_files) * 1000))
-                                QCoreApplication.processEvents()
-
-                start_time += play_item_in_out_time[2] - play_item_in_out_time[1]
-                left_time += (play_item_in_out_time[1] - play_item_in_out_time[2]) / 45000
-
-            sub_file.dump(folder, selected_mpls)
-            self.completion(folder)
-            sub_index += 1
-            if sub_index == len(subtitle_files):
-                break
+        configuration = self.generate_configuration(table)
+        sub = Subtitle(subtitle_files[0])
+        bdmv_index = 0
+        conf = configuration[0]
+        for sub_index, conf_tmp in configuration.items():
+            self.progress_dialog.setValue(int((sub_index + 1) / len(subtitle_files) * 1000))
+            QCoreApplication.processEvents()
+            if conf_tmp['bdmv_index'] != bdmv_index:
+                if bdmv_index > 0:
+                    sub.dump(conf['folder'], conf['selected_mpls'])
+                    sub = Subtitle(subtitle_files[sub_index])
+                bdmv_index = conf_tmp['bdmv_index']
+            else:
+                sub.append_ass(subtitle_files[sub_index],
+                               reduce(lambda a, b: a * 60 + b, map(float, conf_tmp['offset'].split(':'))))
+            conf = conf_tmp
+        sub.dump(conf['folder'], conf['selected_mpls'])
         self.progress_dialog.setValue(1000)
         QCoreApplication.processEvents()
 
@@ -869,6 +841,8 @@ class BluraySubtitleGUI(QWidget):
                                         rows = sum(map(len, Chapter(select_mpls).mark_info.values()))
                                         chapter_combo.addItems([str(r + 1) for r in range(rows)])
                                         chapter_combo.setCurrentIndex(con['chapter_index'] - 1)
+                                        chapter_combo.currentIndexChanged.connect(
+                                            partial(self.on_chapter_combo, subtitle_index, chapter_combo))
                         self.table2.setCellWidget(subtitle_index, 3, chapter_combo)
                         self.table2.setItem(subtitle_index, 4, QTableWidgetItem(con['offset']))
                 self.table2.resizeColumnsToContents()
@@ -877,6 +851,10 @@ class BluraySubtitleGUI(QWidget):
                 self.table2.clear()
                 self.table2.setColumnCount(len(SUBTITLE_LABELS))
                 self.table2.setHorizontalHeaderLabels(SUBTITLE_LABELS)
+
+    def on_chapter_combo(self, subtitle_index: int, chapter_combo: QComboBox):
+        print(subtitle_index)
+        print(chapter_combo.currentText())
 
     def on_button_play(self, mpls_path: str, btn: QToolButton):
         if btn.text() == 'preview':
