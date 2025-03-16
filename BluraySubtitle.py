@@ -22,6 +22,7 @@ MKV_MERGE_PATH = ''
 MKV_PROP_EDIT_PATH = ''
 BDMV_LABELS = ['path', 'size', 'info']
 SUBTITLE_LABELS = ['path', 'duration', 'bdmv_index', 'chapter_index', 'offset']
+MKV_LABELS = ['path', 'duration']
 
 
 class Chapter:
@@ -596,11 +597,11 @@ class BluraySubtitle:
         self.progress_dialog.setValue(1000)
         QCoreApplication.processEvents()
 
-    def add_chapter_to_mkv(self):
+    def add_chapter_to_mkv(self, table: QTableWidget):
         mkv_files = [os.path.join(self.input_path, path) for path in os.listdir(self.input_path)
                      if path.endswith("mkv")]
         mkv_index = 0
-        for folder, chapter, selected_mpls in self.select_playlist():
+        for folder, chapter, selected_mpls in self.select_mpls_from_table(table):
             duration = MKV(mkv_files[mkv_index]).get_duration()
             print(f'folder: {folder}')
             print(f'in_out_time: {chapter.in_out_time}')
@@ -710,7 +711,6 @@ class BluraySubtitleGUI(QWidget):
         self.radio1.setChecked(True)
         self.radio2 = QRadioButton(self)
         self.radio2.setText("给mkv添加章节")
-        self.radio2.move(100, 0)
         group = QButtonGroup(self)
         group.addButton(self.radio1)
         group.addButton(self.radio2)
@@ -825,42 +825,59 @@ class BluraySubtitleGUI(QWidget):
                 self.table1.setHorizontalHeaderLabels(BDMV_LABELS)
 
     def on_subtitle_folder_path_change(self):
-        if self.subtitle_folder_path.text().strip():
-            try:
-                subtitle_folder = self.subtitle_folder_path.text()
-                n = 0
-                for path in os.listdir(subtitle_folder):
-                    if path.endswith(".ass") or path.endswith(".ssa") or path.endswith('srt'):
-                        n += 1
-                self.table2.setColumnCount(len(SUBTITLE_LABELS))
-                self.table2.setHorizontalHeaderLabels(SUBTITLE_LABELS)
-                self.table2.setRowCount(n)
-                n = 0
-                for path in os.listdir(subtitle_folder):
-                    if path.endswith(".ass") or path.endswith(".ssa") or path.endswith('srt'):
-                        pth = os.path.normpath(os.path.join(subtitle_folder, path))
-                        self.table2.setItem(n, 0, QTableWidgetItem(pth))
-                        self.table2.setItem(n, 1, QTableWidgetItem(get_time_str(Subtitle(pth).max_end_time())))
-                        n += 1
-                for bdmv_index in range(self.table1.rowCount()):
-                    info: QTableWidget = self.table1.cellWidget(bdmv_index, 2)
-                    for mpls_index in range(info.rowCount()):
-                        main_btn: QToolButton = info.cellWidget(mpls_index, 3)
-                        if main_btn.isChecked():
-                            info.cellWidget(mpls_index, 4).setText('preview')
-                    info.resizeColumnsToContents()
-                configuration = BluraySubtitle(
-                    self.bdmv_folder_path.text(),
-                    self.subtitle_folder_path.text(),
-                    self.checkbox1.isChecked(),
-                    None
-                ).generate_configuration(self.table1)
-                self.on_configuration(configuration)
-            except:
-                traceback.print_exc()
-                self.table2.clear()
-                self.table2.setColumnCount(len(SUBTITLE_LABELS))
-                self.table2.setHorizontalHeaderLabels(SUBTITLE_LABELS)
+        if self.radio1.isChecked():
+            if self.subtitle_folder_path.text().strip():
+                try:
+                    subtitle_folder = self.subtitle_folder_path.text()
+                    n = 0
+                    for path in os.listdir(subtitle_folder):
+                        if path.endswith(".ass") or path.endswith(".ssa") or path.endswith('srt'):
+                            n += 1
+                    self.table2.setColumnCount(len(SUBTITLE_LABELS))
+                    self.table2.setHorizontalHeaderLabels(SUBTITLE_LABELS)
+                    self.table2.setRowCount(n)
+                    n = 0
+                    for path in os.listdir(subtitle_folder):
+                        if path.endswith(".ass") or path.endswith(".ssa") or path.endswith('srt'):
+                            pth = os.path.normpath(os.path.join(subtitle_folder, path))
+                            self.table2.setItem(n, 0, QTableWidgetItem(pth))
+                            self.table2.setItem(n, 1, QTableWidgetItem(get_time_str(Subtitle(pth).max_end_time())))
+                            n += 1
+                    for bdmv_index in range(self.table1.rowCount()):
+                        info: QTableWidget = self.table1.cellWidget(bdmv_index, 2)
+                        for mpls_index in range(info.rowCount()):
+                            main_btn: QToolButton = info.cellWidget(mpls_index, 3)
+                            if main_btn.isChecked():
+                                info.cellWidget(mpls_index, 4).setText('preview')
+                        info.resizeColumnsToContents()
+                    configuration = BluraySubtitle(
+                        self.bdmv_folder_path.text(),
+                        self.subtitle_folder_path.text(),
+                        self.checkbox1.isChecked(),
+                        None
+                    ).generate_configuration(self.table1)
+                    self.on_configuration(configuration)
+                except:
+                    traceback.print_exc()
+                    self.table2.clear()
+                    self.table2.setColumnCount(len(SUBTITLE_LABELS))
+                    self.table2.setHorizontalHeaderLabels(SUBTITLE_LABELS)
+        else:
+            if self.subtitle_folder_path.text().strip():
+                try:
+                    root = self.subtitle_folder_path.text().strip()
+                    mkv_path = [os.path.normpath(os.path.join(root, file))
+                                for file in os.listdir(root) if file.endswith('.mkv')]
+                    self.table2.setRowCount(len(mkv_path))
+                    for i in range(len(mkv_path)):
+                        self.table2.setItem(i, 0, QTableWidgetItem(mkv_path[i]))
+                        self.table2.setItem(i, 1, QTableWidgetItem(get_time_str(MKV(mkv_path[i]).get_duration())))
+                    self.table2.resizeColumnsToContents()
+                except:
+                    traceback.print_exc()
+                    self.table2.clear()
+                    self.table2.setColumnCount(len(MKV_LABELS))
+                    self.table2.setHorizontalHeaderLabels(MKV_LABELS)
 
     def on_configuration(self, configuration: Dict[int, Dict[str, Union[int, str]]]):
         for subtitle_index in range(self.table2.rowCount()):
@@ -958,11 +975,11 @@ class BluraySubtitleGUI(QWidget):
             self.exe_button.setText("添加章节")
             self.checkbox1.setText('直接编辑原文件')
             self.table1.clear()
-            self.table1.setColumnCount(3)
+            self.table1.setColumnCount(len(BDMV_LABELS))
             self.table1.setHorizontalHeaderLabels(BDMV_LABELS)
             self.table2.clear()
-            self.table2.setColumnCount(2)
-            self.table2.setHorizontalHeaderLabels(SUBTITLE_LABELS)
+            self.table2.setColumnCount(len(MKV_LABELS))
+            self.table2.setHorizontalHeaderLabels(MKV_LABELS)
         self.bdmv_folder_path.clear()
         self.subtitle_folder_path.clear()
 
@@ -1007,7 +1024,7 @@ class BluraySubtitleGUI(QWidget):
                 self.subtitle_folder_path.text(),
                 self.checkbox1.isChecked(),
                 progress_dialog
-            ).add_chapter_to_mkv()
+            ).add_chapter_to_mkv(self.table1)
             if self.checkbox1.isChecked():
                 QMessageBox.information(self, " ", "添加章节成功，mkv章节已添加")
             else:
