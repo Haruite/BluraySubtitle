@@ -10,7 +10,7 @@ import traceback
 from dataclasses import dataclass
 from functools import reduce, partial
 from struct import unpack
-from typing import Optional, Dict, Union
+from typing import Optional
 
 from PyQt6.QtCore import QCoreApplication, Qt
 from PyQt6.QtGui import QPainter, QColor
@@ -496,7 +496,7 @@ class BluraySubtitle:
 
     def generate_configuration(self, table: QTableWidget,
                                sub_combo_index: Optional[dict[int, int]]=None,
-                               subtitle_index: Optional[int]=None) -> Dict[int, Dict[str, Union[int, str]]]:
+                               subtitle_index: Optional[int]=None) -> dict[int, dict[str, int | str]]:
         configuration = {}
         sub_index = 0
         bdmv_index = 0
@@ -989,7 +989,7 @@ class BluraySubtitleGUI(QWidget):
                 self.table2.setCellWidget(sub_index, 4, None)
                 self.table2.setItem(sub_index, 5, None)
 
-    def on_configuration(self, configuration: Dict[int, Dict[str, Union[int, str]]]):
+    def on_configuration(self, configuration: dict[int, dict[str, int | str]]):
         for subtitle_index in range(self.table2.rowCount()):
             con = configuration.get(subtitle_index)
             sub_check_state = [self.table2.item(sub_index, 0).checkState().value for sub_index in
