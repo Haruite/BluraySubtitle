@@ -501,6 +501,10 @@ class BluraySubtitle:
         sub_index = 0
         bdmv_index = 0
         for folder, chapter, selected_mpls in self.select_mpls_from_table(table):
+            for bdmv_index in range(table.rowCount()):
+                bluray_folder = table.item(bdmv_index, 0).text()
+                if bluray_folder == folder:
+                    break
             bdmv_index += 1
             start_time = 0
             sub_file = Subtitle(self.sub_files[sub_index])
@@ -963,10 +967,10 @@ class BluraySubtitleGUI(QWidget):
     def on_configuration(self, configuration: Dict[int, Dict[str, Union[int, str]]]):
         for subtitle_index in range(self.table2.rowCount()):
             con = configuration.get(subtitle_index)
+            sub_check_state = [self.table2.item(sub_index, 0).checkState().value for sub_index in
+                               range(self.table2.rowCount())]
+            index_table = [sub_index for sub_index in range(len(sub_check_state)) if sub_check_state[sub_index] == 2]
             if con:
-                sub_check_state = [self.table2.item(sub_index, 0).checkState().value for sub_index in range(self.table2.rowCount())]
-                index_table = [sub_index for sub_index in range(len(sub_check_state)) if sub_check_state[sub_index] == 2]
-
                 self.table2.setItem(index_table[subtitle_index], 3, QTableWidgetItem(str(con['bdmv_index'])))
                 chapter_combo = QComboBox()
                 for bi in range(self.table1.rowCount()):
@@ -985,6 +989,10 @@ class BluraySubtitleGUI(QWidget):
                                     partial(self.on_chapter_combo, subtitle_index, chapter_combo))
                 self.table2.setCellWidget(index_table[subtitle_index], 4, chapter_combo)
                 self.table2.setItem(index_table[subtitle_index], 5, QTableWidgetItem(con['offset']))
+            else:
+                self.table2.setItem(index_table[subtitle_index], 3, None)
+                self.table2.setCellWidget(index_table[subtitle_index], 4, None)
+                self.table2.setItem(index_table[subtitle_index], 5, None)
         self.table2.resizeColumnsToContents()
 
     def on_chapter_combo(self, subtitle_index: int, chapter_combo: QComboBox):
