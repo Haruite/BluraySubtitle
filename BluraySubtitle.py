@@ -1011,7 +1011,7 @@ class BluraySubtitleGUI(QWidget):
                                 chapter_combo.addItems([str(r + 1) for r in range(rows)])
                                 chapter_combo.setCurrentIndex(con['chapter_index'] - 1)
                                 chapter_combo.currentIndexChanged.connect(
-                                    partial(self.on_chapter_combo, subtitle_index, chapter_combo))
+                                    partial(self.on_chapter_combo, subtitle_index))
                 self.table2.setCellWidget(index_table[subtitle_index], 4, chapter_combo)
                 self.table2.setItem(index_table[subtitle_index], 5, QTableWidgetItem(con['offset']))
             elif subtitle_index <= len(index_table) - 1:
@@ -1020,7 +1020,7 @@ class BluraySubtitleGUI(QWidget):
                 self.table2.setItem(index_table[subtitle_index], 5, None)
         self.table2.resizeColumnsToContents()
 
-    def on_chapter_combo(self, subtitle_index: int, chapter_combo: QComboBox):
+    def on_chapter_combo(self, subtitle_index: int):
         sub_files = [self.table2.item(sub_index, 1).text() for sub_index in range(self.table2.rowCount()) if
                      self.sub_check_state[sub_index] == 2]
         sub_combo_index = {}
