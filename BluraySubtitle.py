@@ -1014,7 +1014,7 @@ class BluraySubtitleGUI(QWidget):
                                     partial(self.on_chapter_combo, subtitle_index, chapter_combo))
                 self.table2.setCellWidget(index_table[subtitle_index], 4, chapter_combo)
                 self.table2.setItem(index_table[subtitle_index], 5, QTableWidgetItem(con['offset']))
-            else:
+            elif subtitle_index <= len(index_table) - 1:
                 self.table2.setItem(index_table[subtitle_index], 3, None)
                 self.table2.setCellWidget(index_table[subtitle_index], 4, None)
                 self.table2.setItem(index_table[subtitle_index], 5, None)
