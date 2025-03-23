@@ -495,87 +495,112 @@ class BluraySubtitle:
                     yield bluray_folder, Chapter(selected_mpls), selected_mpls[:-5]
 
     def generate_configuration(self, table: QTableWidget,
-                               subtitle_index: Optional[int]=None,
-                               chapter_index: Optional[int]=None) -> Dict[int, Dict[str, Union[int, str]]]:
+                               sub_combo_index: Optional[dict[int, int]]=None,
+                               subtitle_index: Optional[int]=None) -> Dict[int, Dict[str, Union[int, str]]]:
         configuration = {}
         sub_index = 0
         bdmv_index = 0
-        for folder, chapter, selected_mpls in self.select_mpls_from_table(table):
-            for bdmv_index in range(table.rowCount()):
-                bluray_folder = table.item(bdmv_index, 0).text()
-                if bluray_folder == folder:
-                    break
-            bdmv_index += 1
-            start_time = 0
-            sub_file = Subtitle(self.sub_files[sub_index])
-            left_time = chapter.get_total_time()
-            configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
-                                        'bdmv_index': bdmv_index, 'chapter_index': 1, 'offset': '0'}
-            j = 1
-            fix_chapter = False
-            for i, play_item_in_out_time in enumerate(chapter.in_out_time):
-                play_item_marks = chapter.mark_info.get(i)
-                chapter_num = len(play_item_marks or [])
-                if play_item_marks:
-                    play_item_duration_time = play_item_in_out_time[2] - play_item_in_out_time[1]
-                    time_shift = (start_time + play_item_marks[0] - play_item_in_out_time[1]) / 45000
-                    if time_shift > sub_file.max_end_time() - 300:
-                        if (sub_index + 1 < len(self.sub_files)
-                                and left_time > Subtitle(self.sub_files[sub_index + 1]).max_end_time() - 180):
-                            sub_index += 1
-                            if sub_index == subtitle_index:
-                                if chapter_index > j:
-                                    fix_chapter = True
-                                    break
-                            sub_file.append_ass(self.sub_files[sub_index], time_shift)
-                            configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
-                                'bdmv_index': bdmv_index, 'chapter_index': j, 'offset': get_time_str(time_shift)}
 
-                    if play_item_duration_time / 45000 > 2600 and sub_file.max_end_time() - time_shift < 1800:
+        if sub_combo_index:
+            chapter_index = sub_combo_index[sub_index]
+            for folder, chapter, selected_mpls in self.select_mpls_from_table(table):
+                for bdmv_index in range(table.rowCount()):
+                    bluray_folder = table.item(bdmv_index, 0).text()
+                    if bluray_folder == folder:
+                        break
+                bdmv_index += 1
+                offset = 0
+                j = 1
+                left_time = chapter.get_total_time()
+                sub_file = Subtitle(self.sub_files[sub_index])
+                for i, play_item_in_out_time in enumerate(chapter.in_out_time):
+                    play_item_marks = chapter.mark_info.get(i)
+                    if sub_index <= subtitle_index and j == chapter_index:
+                        sub_file.append_ass(self.sub_files[sub_index], offset)
+                        configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
+                                                    'bdmv_index': bdmv_index, 'chapter_index': j,
+                                                    'offset': get_time_str(offset)}
+                        sub_index += 1
+                        chapter_index = sub_combo_index[sub_index]
+                    elif sub_index > subtitle_index:
+                        if offset > sub_file.max_end_time() - 300 or offset == 0:
+                            if (sub_index + 1 < len(self.sub_files)
+                                    and left_time > Subtitle(self.sub_files[sub_index + 1]).max_end_time() - 180):
+                                sub_file.append_ass(self.sub_files[sub_index], offset)
+                                configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
+                                                            'bdmv_index': bdmv_index, 'chapter_index': j,
+                                                            'offset': get_time_str(offset)}
+                                sub_index += 1
+                    if play_item_marks:
                         for mark in play_item_marks:
+                            time_shift = offset + (mark - play_item_in_out_time[1]) / 45000
+                            if sub_index <= subtitle_index and j == chapter_index:
+                                sub_file.append_ass(self.sub_files[sub_index], time_shift)
+                                configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
+                                                            'bdmv_index': bdmv_index, 'chapter_index': j,
+                                                            'offset': get_time_str(time_shift)}
+                                sub_index += 1
+                                chapter_index = sub_combo_index[sub_index]
+                            elif sub_index > subtitle_index:
+                                if time_shift > sub_file.max_end_time() and (
+                                        play_item_in_out_time[2] - mark) / 45000 > 1200:
+                                    sub_file.append_ass(self.sub_files[sub_index], time_shift)
+                                    configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
+                                                                'bdmv_index': bdmv_index, 'chapter_index': j,
+                                                                'offset': get_time_str(time_shift)}
+                                    sub_index += 1
                             j += 1
-                            time_shift = (start_time + mark - play_item_in_out_time[1]) / 45000
-                            if time_shift > sub_file.max_end_time() and (
-                                    play_item_in_out_time[2] - mark) / 45000 > 1200:
+                    offset += (play_item_in_out_time[2] - play_item_in_out_time[1]) / 45000
+                    left_time += (play_item_in_out_time[1] - play_item_in_out_time[2]) / 45000
+            return configuration
+        else:
+            for folder, chapter, selected_mpls in self.select_mpls_from_table(table):
+                for bdmv_index in range(table.rowCount()):
+                    bluray_folder = table.item(bdmv_index, 0).text()
+                    if bluray_folder == folder:
+                        break
+                bdmv_index += 1
+                start_time = 0
+                sub_file = Subtitle(self.sub_files[sub_index])
+                left_time = chapter.get_total_time()
+                configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
+                                            'bdmv_index': bdmv_index, 'chapter_index': 1, 'offset': '0'}
+                j = 1
+                for i, play_item_in_out_time in enumerate(chapter.in_out_time):
+                    play_item_marks = chapter.mark_info.get(i)
+                    chapter_num = len(play_item_marks or [])
+                    if play_item_marks:
+                        play_item_duration_time = play_item_in_out_time[2] - play_item_in_out_time[1]
+                        time_shift = (start_time + play_item_marks[0] - play_item_in_out_time[1]) / 45000
+                        if time_shift > sub_file.max_end_time() - 300:
+                            if (sub_index + 1 < len(self.sub_files)
+                                    and left_time > Subtitle(self.sub_files[sub_index + 1]).max_end_time() - 180):
                                 sub_index += 1
                                 sub_file.append_ass(self.sub_files[sub_index], time_shift)
                                 configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
                                     'bdmv_index': bdmv_index, 'chapter_index': j, 'offset': get_time_str(time_shift)}
 
-                j += chapter_num
-                start_time += play_item_in_out_time[2] - play_item_in_out_time[1]
-                left_time += (play_item_in_out_time[1] - play_item_in_out_time[2]) / 45000
+                        if play_item_duration_time / 45000 > 2600 and sub_file.max_end_time() - time_shift < 1800:
+                            k = j
+                            for mark in play_item_marks:
+                                k += 1
+                                time_shift = (start_time + mark - play_item_in_out_time[1]) / 45000
+                                if time_shift > sub_file.max_end_time() and (
+                                        play_item_in_out_time[2] - mark) / 45000 > 1200:
+                                    sub_index += 1
+                                    sub_file.append_ass(self.sub_files[sub_index], time_shift)
+                                    configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
+                                        'bdmv_index': bdmv_index, 'chapter_index': k, 'offset': get_time_str(time_shift)}
 
-            if fix_chapter:
-                j = 0
-                time_shift = 0
-                for i, play_item_in_out_time in enumerate(chapter.in_out_time):
-                    play_item_marks = chapter.mark_info.get(i)
-                    if (sub_index == subtitle_index and j == chapter_index
-                        or sub_index != subtitle_index and time_shift > sub_file.max_end_time()):
-                        sub_file.append_ass(self.sub_files[sub_index], time_shift)
-                        configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
-                                                    'bdmv_index': bdmv_index, 'chapter_index': j,
-                                                    'offset': get_time_str(time_shift)}
-                        sub_index += 1
-                    if play_item_marks:
-                        for mark in play_item_marks:
-                            j += 1
-                            shift = time_shift + (mark - play_item_in_out_time[1]) / 45000
-                            if (sub_index == subtitle_index and j == chapter_index
-                                or sub_index != subtitle_index and shift > sub_file.max_end_time()):
-                                sub_file.append_ass(self.sub_files[sub_index], shift)
-                                configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
-                                                            'bdmv_index': bdmv_index, 'chapter_index': j,
-                                                            'offset': get_time_str(shift)}
-                                sub_index += 1
-                    time_shift += (play_item_in_out_time[2] - play_item_in_out_time[1]) / 45000
-            else:
+                    j += chapter_num
+                    start_time += play_item_in_out_time[2] - play_item_in_out_time[1]
+                    left_time += (play_item_in_out_time[1] - play_item_in_out_time[2]) / 45000
+
                 sub_index += 1
-            if sub_index == len(self.sub_files):
-                break
+                if sub_index == len(self.sub_files):
+                    break
 
-        return configuration
+            return configuration
 
     def generate_bluray_subtitle(self, table: QTableWidget):
         configuration = self.generate_configuration(table)
@@ -998,13 +1023,21 @@ class BluraySubtitleGUI(QWidget):
     def on_chapter_combo(self, subtitle_index: int, chapter_combo: QComboBox):
         sub_files = [self.table2.item(sub_index, 1).text() for sub_index in range(self.table2.rowCount()) if
                      self.sub_check_state[sub_index] == 2]
-        configuration = BluraySubtitle(
-                        self.bdmv_folder_path.text(),
-                        sub_files,
-                        self.checkbox1.isChecked(),
-                        None
-                    ).generate_configuration(self.table1, subtitle_index, chapter_combo.currentIndex() + 1)
-        self.on_configuration(configuration)
+        sub_combo_index = {}
+        for sub_index in range(self.table2.rowCount()):
+            if self.sub_check_state[sub_index] == 2:
+                if self.table2.cellWidget(sub_index, 4):
+                    sub_combo_index[sub_index] = self.table2.cellWidget(sub_index, 4).currentIndex() + 1
+        try:
+            configuration = BluraySubtitle(
+                            self.bdmv_folder_path.text(),
+                            sub_files,
+                            self.checkbox1.isChecked(),
+                            None
+                        ).generate_configuration(self.table1, sub_combo_index, subtitle_index)
+            self.on_configuration(configuration)
+        except Exception as e:
+            traceback.print_exc()
 
     def on_button_play(self, mpls_path: str, btn: QToolButton):
         if btn.text() == 'preview':
@@ -1164,6 +1197,8 @@ def get_folder_size(folder_path: str) -> str:
 
 
 def get_time_str(duration: float) -> str:
+    if duration == 0:
+        return '0'
     hours, dur = divmod(duration, 3600)
     minutes, seconds = divmod(dur, 60)
     seconds = round(seconds, 3)
