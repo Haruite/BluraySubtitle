@@ -521,7 +521,8 @@ class BluraySubtitle:
                                                     'bdmv_index': bdmv_index, 'chapter_index': j,
                                                     'offset': get_time_str(offset)}
                         sub_index += 1
-                        chapter_index = sub_combo_index[sub_index]
+                        if sub_combo_index.get(sub_index):
+                            chapter_index = sub_combo_index[sub_index]
                     elif sub_index > subtitle_index:
                         if offset > sub_file.max_end_time() - 300 or offset == 0:
                             if (sub_index + 1 < len(self.sub_files)
@@ -540,7 +541,8 @@ class BluraySubtitle:
                                                             'bdmv_index': bdmv_index, 'chapter_index': j,
                                                             'offset': get_time_str(time_shift)}
                                 sub_index += 1
-                                chapter_index = sub_combo_index[sub_index]
+                                if sub_combo_index.get(sub_index):
+                                    chapter_index = sub_combo_index[sub_index]
                             elif sub_index > subtitle_index:
                                 if time_shift > sub_file.max_end_time() and (
                                         play_item_in_out_time[2] - mark) / 45000 > 1200:
