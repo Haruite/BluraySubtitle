@@ -24,6 +24,7 @@ MKV_PROP_EDIT_PATH = ''
 BDMV_LABELS = ['path', 'size', 'info']
 SUBTITLE_LABELS = ['select', 'path', 'duration', 'bdmv_index', 'chapter_index', 'offset']
 MKV_LABELS = ['path', 'duration']
+CONFIGURATION = {}
 
 
 class Chapter:
@@ -457,6 +458,7 @@ class BluraySubtitle:
                                and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV'))]
         self.checked = checked
         self.progress_dialog = progress_dialog
+        self.configuration = {}
 
     @staticmethod
     def get_available_drives():
@@ -500,7 +502,7 @@ class BluraySubtitle:
         configuration = {}
         sub_index = 0
         bdmv_index = 0
-
+        global CONFIGURATION
         if sub_combo_index:
             chapter_index = sub_combo_index[sub_index]
             for folder, chapter, selected_mpls in self.select_mpls_from_table(table):
@@ -554,6 +556,7 @@ class BluraySubtitle:
                             j += 1
                     offset += (play_item_in_out_time[2] - play_item_in_out_time[1]) / 45000
                     left_time += (play_item_in_out_time[1] - play_item_in_out_time[2]) / 45000
+            CONFIGURATION = configuration
             return configuration
         else:
             for folder, chapter, selected_mpls in self.select_mpls_from_table(table):
@@ -601,15 +604,18 @@ class BluraySubtitle:
                 sub_index += 1
                 if sub_index == len(self.sub_files):
                     break
-
+            CONFIGURATION = configuration
             return configuration
 
     def generate_bluray_subtitle(self, table: QTableWidget):
-        configuration = self.generate_configuration(table)
+        if not CONFIGURATION:
+            self.configuration = self.generate_configuration(table)
+        else:
+            self.configuration = CONFIGURATION
         sub = Subtitle(self.sub_files[0])
         bdmv_index = 0
-        conf = configuration[0]
-        for sub_index, conf_tmp in configuration.items():
+        conf = self.configuration[0]
+        for sub_index, conf_tmp in self.configuration.items():
             self.progress_dialog.setValue(int((sub_index + 1) / len(self.sub_files) * 1000))
             QCoreApplication.processEvents()
             if conf_tmp['bdmv_index'] != bdmv_index:
