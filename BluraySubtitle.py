@@ -514,11 +514,11 @@ class BluraySubtitle:
                 offset = 0
                 j = 1
                 left_time = chapter.get_total_time()
-                sub_file = Subtitle(self.sub_files[sub_index])
+                sub_end_time = Subtitle(self.sub_files[sub_index]).max_end_time()
                 for i, play_item_in_out_time in enumerate(chapter.in_out_time):
                     play_item_marks = chapter.mark_info.get(i)
                     if sub_index <= subtitle_index and j == chapter_index:
-                        sub_file.append_ass(self.sub_files[sub_index], offset)
+                        sub_end_time = offset + Subtitle(self.sub_files[sub_index]).max_end_time()
                         configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
                                                     'bdmv_index': bdmv_index, 'chapter_index': j,
                                                     'offset': get_time_str(offset)}
@@ -526,10 +526,10 @@ class BluraySubtitle:
                         if sub_combo_index.get(sub_index):
                             chapter_index = sub_combo_index[sub_index]
                     elif sub_index > subtitle_index:
-                        if offset > sub_file.max_end_time() - 300 or offset == 0:
+                        if offset > sub_end_time - 300 or offset == 0:
                             if (sub_index + 1 < len(self.sub_files)
                                     and left_time > Subtitle(self.sub_files[sub_index + 1]).max_end_time() - 180):
-                                sub_file.append_ass(self.sub_files[sub_index], offset)
+                                sub_end_time = offset + Subtitle(self.sub_files[sub_index]).max_end_time()
                                 configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
                                                             'bdmv_index': bdmv_index, 'chapter_index': j,
                                                             'offset': get_time_str(offset)}
@@ -538,7 +538,7 @@ class BluraySubtitle:
                         for mark in play_item_marks:
                             time_shift = offset + (mark - play_item_in_out_time[1]) / 45000
                             if sub_index <= subtitle_index and j == chapter_index:
-                                sub_file.append_ass(self.sub_files[sub_index], time_shift)
+                                sub_end_time = time_shift + Subtitle(self.sub_files[sub_index]).max_end_time()
                                 configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
                                                             'bdmv_index': bdmv_index, 'chapter_index': j,
                                                             'offset': get_time_str(time_shift)}
@@ -546,9 +546,9 @@ class BluraySubtitle:
                                 if sub_combo_index.get(sub_index):
                                     chapter_index = sub_combo_index[sub_index]
                             elif sub_index > subtitle_index:
-                                if time_shift > sub_file.max_end_time() and (
+                                if time_shift > sub_end_time and (
                                         play_item_in_out_time[2] - mark) / 45000 > 1200:
-                                    sub_file.append_ass(self.sub_files[sub_index], time_shift)
+                                    sub_end_time = time_shift + Subtitle(self.sub_files[sub_index]).max_end_time()
                                     configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
                                                                 'bdmv_index': bdmv_index, 'chapter_index': j,
                                                                 'offset': get_time_str(time_shift)}
@@ -566,7 +566,7 @@ class BluraySubtitle:
                         break
                 bdmv_index += 1
                 start_time = 0
-                sub_file = Subtitle(self.sub_files[sub_index])
+                sub_end_time = Subtitle(self.sub_files[sub_index]).max_end_time()
                 left_time = chapter.get_total_time()
                 configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
                                             'bdmv_index': bdmv_index, 'chapter_index': 1, 'offset': '0'}
@@ -577,23 +577,23 @@ class BluraySubtitle:
                     if play_item_marks:
                         play_item_duration_time = play_item_in_out_time[2] - play_item_in_out_time[1]
                         time_shift = (start_time + play_item_marks[0] - play_item_in_out_time[1]) / 45000
-                        if time_shift > sub_file.max_end_time() - 300:
+                        if time_shift > sub_end_time - 300:
                             if (sub_index + 1 < len(self.sub_files)
                                     and left_time > Subtitle(self.sub_files[sub_index + 1]).max_end_time() - 180):
                                 sub_index += 1
-                                sub_file.append_ass(self.sub_files[sub_index], time_shift)
+                                sub_end_time = time_shift + Subtitle(self.sub_files[sub_index]).max_end_time()
                                 configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
                                     'bdmv_index': bdmv_index, 'chapter_index': j, 'offset': get_time_str(time_shift)}
 
-                        if play_item_duration_time / 45000 > 2600 and sub_file.max_end_time() - time_shift < 1800:
+                        if play_item_duration_time / 45000 > 2600 and sub_end_time - time_shift < 1800:
                             k = j
                             for mark in play_item_marks:
                                 k += 1
                                 time_shift = (start_time + mark - play_item_in_out_time[1]) / 45000
-                                if time_shift > sub_file.max_end_time() and (
+                                if time_shift > sub_end_time and (
                                         play_item_in_out_time[2] - mark) / 45000 > 1200:
                                     sub_index += 1
-                                    sub_file.append_ass(self.sub_files[sub_index], time_shift)
+                                    sub_end_time = time_shift + Subtitle(self.sub_files[sub_index]).max_end_time()
                                     configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
                                         'bdmv_index': bdmv_index, 'chapter_index': k, 'offset': get_time_str(time_shift)}
 
