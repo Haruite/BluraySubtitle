@@ -771,6 +771,7 @@ class BluraySubtitleGUI(QWidget):
     def __init__(self):
         super().__init__()
         self.init_ui()
+        self.altered = False
 
     def init_ui(self):
         self.setWindowTitle("BluraySubtitle")
@@ -902,6 +903,7 @@ class BluraySubtitleGUI(QWidget):
                 self.table1.clear()
                 self.table1.setColumnCount(len(BDMV_LABELS))
                 self.table1.setHorizontalHeaderLabels(BDMV_LABELS)
+        self.altered = True
 
     def on_subtitle_folder_path_change(self):
         if self.radio1.isChecked():
@@ -1027,6 +1029,7 @@ class BluraySubtitleGUI(QWidget):
                 self.table2.setCellWidget(index_table[subtitle_index], 4, None)
                 self.table2.setItem(index_table[subtitle_index], 5, None)
         self.table2.resizeColumnsToContents()
+        self.altered = True
 
     def on_chapter_combo(self, subtitle_index: int):
         sub_files = [self.table2.item(sub_index, 1).text() for sub_index in range(self.table2.rowCount()) if
@@ -1048,7 +1051,7 @@ class BluraySubtitleGUI(QWidget):
             traceback.print_exc()
 
     def on_button_play(self, mpls_path: str, btn: QToolButton):
-        if btn.text() == 'preview':
+        if btn.text() == 'preview' and self.altered:
             self.generate_subtitle()
         os.startfile(mpls_path)
 
@@ -1148,6 +1151,7 @@ class BluraySubtitleGUI(QWidget):
         except Exception as e:
             QMessageBox.information(self, " ", traceback.format_exc())
         progress_dialog.close()
+        self.altered = False
 
     def add_chapters(self):
         if self.checkbox1.isChecked():
