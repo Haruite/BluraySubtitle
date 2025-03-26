@@ -431,7 +431,8 @@ class MKV:
 
 
 class BluraySubtitle:
-    def __init__(self, bluray_path, sub_files: list[str]=None, checked: bool=True, progress_dialog: Optional[QProgressDialog]=None):
+    def __init__(self, bluray_path, sub_files: list[str]=None, checked: bool=True,
+                 progress_dialog: Optional[QProgressDialog]=None):
         self.tmp_folders = []
         if sys.platform == 'win32':
             for root, dirs, files in os.walk(bluray_path):
@@ -945,8 +946,8 @@ class BluraySubtitleGUI(QWidget):
                         info.resizeColumnsToContents()
                     self.sub_check_state = [self.table2.item(sub_index, 0).checkState().value for sub_index in
                                        range(self.table2.rowCount())]
-                    sub_files = [self.table2.item(sub_index, 1).text() for sub_index in range(self.table2.rowCount()) if
-                                 self.sub_check_state[sub_index] == 2]
+                    sub_files = [self.table2.item(sub_index, 1).text() for sub_index in range(self.table2.rowCount())
+                                 if self.sub_check_state[sub_index] == 2]
                     configuration = BluraySubtitle(
                         self.bdmv_folder_path.text(),
                         sub_files,
@@ -979,8 +980,8 @@ class BluraySubtitleGUI(QWidget):
                     self.table2.setHorizontalHeaderLabels(MKV_LABELS)
 
     def on_subtitle_drop(self):
-        sub_files = [self.table2.item(sub_index, 1).text() for sub_index in range(self.table2.rowCount()) if
-                     self.sub_check_state[sub_index] == 2]
+        sub_files = [self.table2.item(sub_index, 1).text() for sub_index in range(self.table2.rowCount())
+                     if self.sub_check_state[sub_index] == 2]
         configuration = BluraySubtitle(
             self.bdmv_folder_path.text(),
             sub_files,
@@ -993,7 +994,8 @@ class BluraySubtitleGUI(QWidget):
         sub_check_state = [self.table2.item(sub_index, 0).checkState().value for sub_index in range(self.table2.rowCount())]
         if sub_check_state != self.sub_check_state:
             self.sub_check_state = sub_check_state
-            sub_files = [self.table2.item(sub_index, 1).text() for sub_index in range(self.table2.rowCount()) if self.sub_check_state[sub_index] == 2]
+            sub_files = [self.table2.item(sub_index, 1).text() for sub_index in range(self.table2.rowCount())
+                         if self.sub_check_state[sub_index] == 2]
             configuration = BluraySubtitle(
                 self.bdmv_folder_path.text(),
                 sub_files,
@@ -1241,19 +1243,7 @@ def get_time_str(duration: float) -> str:
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    app.setStyleSheet('''
-        QTableView {
-        background-color: white;
-        border: 1px solid #CCCCCC;  
-        border-radius: 3px;
-        padding: 5px;  
-        }
-
-        QTableView::item:selected {
-            background-color: #007BFF;
-            color: white;
-        }
-        
+    app.setStyleSheet('''     
         QMainWindow {
             background-color: white;
         }
