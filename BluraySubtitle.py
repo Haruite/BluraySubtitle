@@ -799,6 +799,9 @@ class BluraySubtitleGUI(QWidget):
         h_layout.addWidget(self.radio2)
         self.layout.addWidget(function_button)
 
+        bdmv = QGroupBox()
+        v_layout = QVBoxLayout()
+        bdmv.setLayout(v_layout)
         bluray_path_box = CustomBox('原盘', self)
         h_layout = QHBoxLayout()
         bluray_path_box.setLayout(h_layout)
@@ -810,14 +813,18 @@ class BluraySubtitleGUI(QWidget):
         self.layout.addWidget(self.label1)
         h_layout.addWidget(self.bdmv_folder_path)
         h_layout.addWidget(button1)
-        self.layout.addWidget(bluray_path_box)
+        v_layout.addWidget(bluray_path_box)
 
         self.table1 = QTableWidget()
         self.table1.setColumnCount(len(BDMV_LABELS))
         self.table1.setHorizontalHeaderLabels(BDMV_LABELS)
         self.bdmv_folder_path.textChanged.connect(self.on_bdmv_folder_path_change)
-        self.layout.addWidget(self.table1)
+        v_layout.addWidget(self.table1)
+        self.layout.addWidget(bdmv)
 
+        subtitle = QGroupBox()
+        v_layout = QVBoxLayout()
+        subtitle.setLayout(v_layout)
         subtitle_path_box = CustomBox('字幕', self)
         h_layout = QHBoxLayout()
         subtitle_path_box.setLayout(h_layout)
@@ -829,13 +836,14 @@ class BluraySubtitleGUI(QWidget):
         self.layout.addWidget(self.label2)
         h_layout.addWidget(self.subtitle_folder_path)
         h_layout.addWidget(button2)
-        self.layout.addWidget(subtitle_path_box)
+        v_layout.addWidget(subtitle_path_box)
 
         self.table2 = CustomTableWidget(self, self.on_subtitle_drop)
         self.table2.setColumnCount(len(SUBTITLE_LABELS))
         self.table2.setHorizontalHeaderLabels(SUBTITLE_LABELS)
         self.subtitle_folder_path.textChanged.connect(self.on_subtitle_folder_path_change)
-        self.layout.addWidget(self.table2)
+        v_layout.addWidget(self.table2)
+        self.layout.addWidget(subtitle)
 
         self.checkbox1 = QCheckBox("补全蓝光目录")
         self.checkbox1.setChecked(True)
@@ -1108,6 +1116,12 @@ class BluraySubtitleGUI(QWidget):
             self.label2.setText("选择单集字幕所在的文件夹")
             self.exe_button.setText("生成字幕")
             self.checkbox1.setText('补全蓝光目录')
+            self.table1.clear()
+            self.table1.setColumnCount(len(BDMV_LABELS))
+            self.table1.setHorizontalHeaderLabels(BDMV_LABELS)
+            self.table2.clear()
+            self.table2.setColumnCount(len(SUBTITLE_LABELS))
+            self.table2.setHorizontalHeaderLabels(SUBTITLE_LABELS)
         if self.radio2.isChecked():
             self.label2.setText("选择mkv文件所在的文件夹")
             self.exe_button.setText("添加章节")
@@ -1223,6 +1237,78 @@ def get_time_str(duration: float) -> str:
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    app.setStyleSheet('''
+        QTableView {
+        background-color: white;
+        border: 1px solid #CCCCCC;  
+        border-radius: 3px;
+        padding: 5px;  
+        }
+
+        QTableView::item:selected {
+            background-color: #007BFF;
+            color: white;
+        }
+        QMainWindow {
+            background-color: white;
+        }
+        
+        QWidget {
+            background-color: #F5F5F5;
+        }
+        
+        QVBoxLayout, QHBoxLayout {
+            spacing: 10px;
+            margin: 5px;
+        }
+        QGroupBox {
+            border: 1px solid #CCCCCC;
+            padding: 8px;
+        }
+        QLineEdit {
+            font-size: 12px;
+            padding: 4px;
+            border: 1px solid #DDDDDD;
+            border-radius: 4px;
+        }
+        QLineEdit:focus {
+            border: 1px solid transparent;
+            border-bottom: 1px solid #007BFF;
+        }
+        QPushButton {
+            background-color: #CCCCCC;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            padding: 5px;
+            font-size: 14px;
+        }
+        
+        QPushButton:hover {
+            background-color: #BBBBBB;
+        }
+        
+        QPushButton:pressed {
+            background-color: #AAAAAA;
+        }
+        
+        QPushButton:disabled {
+            background-color: #CCCCCC;
+            color: #999999;
+        }
+        QTableView {
+            background-color: white;
+            border: 1px solid #CCCCCC;
+            border-radius: 3px;
+            padding: 5px;
+        }
+        
+        QTableView::item:selected {
+            background-color: #007BFF;
+            color: white;
+        }       
+        '''
+    )
     window = BluraySubtitleGUI()
     window.show()
     sys.exit(app.exec())
