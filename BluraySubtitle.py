@@ -775,7 +775,7 @@ class BluraySubtitleGUI(QWidget):
 
     def init_ui(self):
         self.setWindowTitle("BluraySubtitle")
-        self.setMinimumWidth(800)
+        self.setMinimumWidth(860)
         self.setMinimumHeight(1000)
 
         self.layout = QVBoxLayout()
@@ -906,7 +906,7 @@ class BluraySubtitleGUI(QWidget):
                         self.table1.setRowHeight(i, 100)
                         i += 1
                 self.table1.resizeColumnsToContents()
-                self.table1.setColumnWidth(2, 380)
+                self.table1.setColumnWidth(2, 410)
             except Exception as e:
                 self.table1.clear()
                 self.table1.setColumnCount(len(BDMV_LABELS))
@@ -1107,6 +1107,8 @@ class BluraySubtitleGUI(QWidget):
                     offset += (in_out_time[ref_to_play_item_id][2] - in_out_time[ref_to_play_item_id][1]) / 45000
                 layout.addWidget(table_widget)
                 this.setLayout(layout)
+                if rows > 1:
+                    this.setMinimumHeight(600)
 
         chapter_window = ChapterWindow()
         chapter_window.exec()
@@ -1249,6 +1251,7 @@ if __name__ == "__main__":
             background-color: #007BFF;
             color: white;
         }
+        
         QMainWindow {
             background-color: white;
         }
@@ -1261,20 +1264,24 @@ if __name__ == "__main__":
             spacing: 10px;
             margin: 5px;
         }
+        
         QGroupBox {
             border: 1px solid #CCCCCC;
             padding: 8px;
         }
+        
         QLineEdit {
             font-size: 12px;
             padding: 4px;
             border: 1px solid #DDDDDD;
             border-radius: 4px;
         }
+        
         QLineEdit:focus {
             border: 1px solid transparent;
             border-bottom: 1px solid #007BFF;
         }
+        
         QPushButton {
             background-color: #CCCCCC;
             color: white;
@@ -1285,17 +1292,38 @@ if __name__ == "__main__":
         }
         
         QPushButton:hover {
-            background-color: #BBBBBB;
+            background-color: #AAAAAA;
         }
         
         QPushButton:pressed {
-            background-color: #AAAAAA;
+            background-color: #999999;
         }
         
         QPushButton:disabled {
             background-color: #CCCCCC;
             color: #999999;
         }
+        
+        QToolButton {
+            background-color: white;
+            border: none;
+            border-radius: 5px;
+            padding: 5px;
+        }
+        
+        QToolButton:hover {
+            background-color: #BBBBBB;
+        }
+        
+        QToolButton:pressed {
+            background-color: #AAAAAA;
+        }
+        
+        QToolButton:checked {
+            background-color: #CCCCCC;
+            color: #999999;
+        }
+        
         QTableView {
             background-color: white;
             border: 1px solid #CCCCCC;
@@ -1304,9 +1332,9 @@ if __name__ == "__main__":
         }
         
         QTableView::item:selected {
-            background-color: #007BFF;
+            background-color: #BBBBBB;
             color: white;
-        }       
+        }    
         '''
     )
     window = BluraySubtitleGUI()
