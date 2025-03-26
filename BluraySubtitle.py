@@ -1141,11 +1141,11 @@ class BluraySubtitleGUI(QWidget):
 
     def select_bdmv_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "选择文件夹")
-        self.bdmv_folder_path.setText(folder)
+        self.bdmv_folder_path.setText(os.path.normpath(folder))
 
     def select_subtitle_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "选择文件夹")
-        self.subtitle_folder_path.setText(folder)
+        self.subtitle_folder_path.setText(os.path.normpath(folder))
 
     def main(self):
         if self.radio1.isChecked():
@@ -1208,9 +1208,9 @@ class CustomBox(QGroupBox):  # 为 Box 框提供拖拽文件夹的功能
 
     def dropEvent(self, e):
         if self.title == '原盘':
-            self.parent().bdmv_folder_path.setText(e.mimeData().urls()[0].toLocalFile())
+            self.parent().bdmv_folder_path.setText(os.path.normpath(e.mimeData().urls()[0].toLocalFile()))
         if self.title == '字幕':
-            self.parent().subtitle_folder_path.setText(e.mimeData().urls()[0].toLocalFile())
+            self.parent().subtitle_folder_path.setText(os.path.normpath(e.mimeData().urls()[0].toLocalFile()))
 
 
 def get_folder_size(folder_path: str) -> str:
