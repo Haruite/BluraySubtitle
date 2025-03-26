@@ -1107,8 +1107,10 @@ class BluraySubtitleGUI(QWidget):
                     offset += (in_out_time[ref_to_play_item_id][2] - in_out_time[ref_to_play_item_id][1]) / 45000
                 layout.addWidget(table_widget)
                 this.setLayout(layout)
+                height = rows * 30 + 80
+                height = 1000 if height > 1000 else height
                 if rows > 1:
-                    this.setMinimumHeight(600)
+                    this.setMinimumHeight(height)
 
         chapter_window = ChapterWindow()
         chapter_window.exec()
