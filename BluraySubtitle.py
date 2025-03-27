@@ -12,11 +12,12 @@ from functools import reduce, partial
 from struct import unpack
 from typing import Optional
 
+from PyQt6 import uic
 from PyQt6.QtCore import QCoreApplication, Qt
 from PyQt6.QtGui import QPainter, QColor
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLabel, QToolButton, QLineEdit, \
     QMessageBox, QHBoxLayout, QGroupBox, QCheckBox, QProgressDialog, QRadioButton, QButtonGroup, \
-    QTableWidget, QTableWidgetItem, QDialog, QPushButton, QComboBox
+    QTableWidget, QTableWidgetItem, QDialog, QPushButton, QComboBox, QMenu, QAbstractItemView, QStatusBar, QMenuBar
 
 MKV_INFO_PATH = ''
 MKV_MERGE_PATH = ''
@@ -117,6 +118,7 @@ class Ass:
         self.events: list[Event] = []
         self.event_attrs: list[str] = []
         self.script_type = ''
+        self.delete_lines = set()
 
         for line in fp:
             if (line.startswith('[') or line.startswith('; [')) and line.endswith(']\n'):
@@ -179,7 +181,9 @@ class Ass:
 
         fp.write('\n[Events]\n')
         fp.write(self.event_attrs[0] + ': ' + ', '.join(self.event_attrs[1:]) + '\n')
-        for event in self.events:
+        for i, event in enumerate(self.events):
+            if i in self.delete_lines:
+                continue
             elements = []
             values = list(event.__dict__.values())
             keys = list(event.__dict__.keys())
@@ -959,6 +963,8 @@ class BluraySubtitleGUI(QWidget):
                     self.on_configuration(configuration)
                     self.sub_check_state = [2 for sub_index in range(self.table2.rowCount())]
                     self.table2.cellClicked.connect(self.on_subtitle_select)
+                    self.table2.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+                    self.table2.customContextMenuRequested.connect(self.on_subtitle_menu)
                 except:
                     traceback.print_exc()
                     self.table2.clear()
@@ -1119,6 +1125,100 @@ class BluraySubtitleGUI(QWidget):
 
         chapter_window = ChapterWindow()
         chapter_window.exec()
+
+    def on_subtitle_menu(self, pos):
+        row_indexes = [i.row() for i in self.table2.selectionModel().selection().indexes()]
+        column_indexes = [i.column() for i in self.table2.selectionModel().selection().indexes()]
+        if any(column_index == 1 for column_index in column_indexes):
+            menu = QMenu()
+            item = menu.addAction('edit')
+            screen_pos = self.table2.mapToGlobal(pos)
+            action = menu.exec(screen_pos)
+            if action == item:
+                for i, row_index in enumerate(row_indexes):
+                    if column_indexes[i] == 1:
+                        self.edit_subtitle(self.table2.item(row_index, 1).text())
+
+    def edit_subtitle(self, path):
+        class SubtitleEditDialog(QDialog):
+            def __init__(this):
+                super(SubtitleEditDialog, this).__init__()
+                this.altered = False
+                this.setWindowTitle(f'edit subtitle: {path}')
+                layout = QVBoxLayout()
+                this.table_widget = QTableWidget()
+                if path.endswith('.ass'):
+                    try:
+                        with open(path, 'r', encoding='utf-8-sig') as f:
+                            this.subtitle = Ass(f)
+                    except Exception as e:
+                        with open(path, 'r', encoding='utf-16') as f:
+                            this.subtitle = Ass(f)
+                    this.keys = list(this.subtitle.events[0].__dict__.keys())
+                    this.table_widget.setColumnCount(len(this.keys) + 1)
+                    this.table_widget.setHorizontalHeaderLabels(['index'] + this.keys)
+                    this.table_widget.setRowCount(len(this.subtitle.events))
+                    this.table_widget.horizontalHeader().setSortIndicatorShown(True)
+                    this.table_widget.setSortingEnabled(True)
+                    for i in range(len(this.subtitle.events)):
+                        this.table_widget.setItem(i, 0, QTableWidgetItem(
+                            ((len(str(len(this.subtitle.events)))) - len(str(i + 1))) * '0' + str(i + 1)))
+                        for j in range(len(this.keys)):
+                            item = getattr(this.subtitle.events[i], this.keys[j])
+                            if isinstance(item, datetime.timedelta):
+                                if len(str(item)) == 14:
+                                    item = str(item)[:-3]
+                                elif len(str(item)) == 7:
+                                    item = f'{str(item)}.000'
+                            item = str(item)
+                            this.table_widget.setItem(i, j + 1, QTableWidgetItem(item))
+                    this.table_widget.horizontalHeader().setSortIndicator(4, Qt.SortOrder.DescendingOrder)
+                    this.table_widget.resizeColumnsToContents()
+                    this.setMinimumWidth(1000)
+                    this.setMinimumHeight(800)
+                    this.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+                    this.customContextMenuRequested.connect(this.on_subtitle_edit_menu)
+                layout.addWidget(this.table_widget)
+                this.save_button = QPushButton('save')
+                this.save_button.clicked.connect(this.save_subtitle)
+                layout.addWidget(this.save_button)
+                this.setLayout(layout)
+                this.table_widget.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+                this.table_widget.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked)
+                this.table_widget.itemChanged.connect(this.on_subtitle_changed)
+
+            def on_subtitle_edit_menu(this, pos):
+                row_indexes = {i.row() for i in this.table_widget.selectionModel().selection().indexes()}
+                menu = QMenu()
+                item = menu.addAction('remove')
+                screen_pos = this.table_widget.mapToGlobal(pos)
+                action = menu.exec(screen_pos)
+                if action == item:
+                    row_indexes = list(row_indexes)
+                    row_indexes.sort()
+                    if row_indexes:
+                        this.altered = True
+                    for i, row_index in enumerate(row_indexes):
+                        this.subtitle.delete_lines.add(int(this.table_widget.item(row_index, 0).text()) - 1)
+                        this.table_widget.removeRow(row_index - i)
+
+            def on_subtitle_changed(this, pos):
+                setattr(this.subtitle.events[int(this.table_widget.item(pos.row(), 0).text()) - 1],
+                        this.keys[pos.column() - 1], pos.text())
+                this.altered = True
+
+            def save_subtitle(this):
+                if this.altered:
+                    with open(path + '.bak', 'a', encoding='utf-8-sig') as fp:
+                        this.subtitle.dump_file(fp)
+                    os.remove(path)
+                    os.rename(path + '.bak', path)
+                self.on_subtitle_folder_path_change()
+                this.altered = False
+
+
+        subtitle_edit_dialog = SubtitleEditDialog()
+        subtitle_edit_dialog.exec()
 
     def on_select_function(self):
         if self.radio1.isChecked():
@@ -1329,7 +1429,11 @@ if __name__ == "__main__":
         QTableView::item:selected {
             background-color: #BBBBBB;
             color: white;
-        }    
+        }   
+        
+        QMenu {
+            font-size: 14px;
+        } 
         '''
                       )
     window = BluraySubtitleGUI()
