@@ -12,12 +12,11 @@ from functools import reduce, partial
 from struct import unpack
 from typing import Optional
 
-from PyQt6 import uic
 from PyQt6.QtCore import QCoreApplication, Qt
 from PyQt6.QtGui import QPainter, QColor
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLabel, QToolButton, QLineEdit, \
     QMessageBox, QHBoxLayout, QGroupBox, QCheckBox, QProgressDialog, QRadioButton, QButtonGroup, \
-    QTableWidget, QTableWidgetItem, QDialog, QPushButton, QComboBox, QMenu, QAbstractItemView, QStatusBar, QMenuBar
+    QTableWidget, QTableWidgetItem, QDialog, QPushButton, QComboBox, QMenu, QAbstractItemView
 
 MKV_INFO_PATH = ''
 MKV_MERGE_PATH = ''
@@ -187,11 +186,11 @@ class Ass:
             elements = []
             values = list(event.__dict__.values())
             keys = list(event.__dict__.keys())
-            for i, value in enumerate(values):
-                if i == 0:
+            for j, value in enumerate(values):
+                if j == 0:
                     _start = value + ': '
                 else:
-                    if keys[i].lower() in ('start', 'end'):
+                    if keys[j].lower() in ('start', 'end'):
                         d_len = len(str(value).split(':')[-1])
                         if d_len > 5:
                             elements.append(str(value)[:5 - d_len])
