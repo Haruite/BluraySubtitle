@@ -172,7 +172,7 @@ class Ass:
             fp.write('\n[Aegisub Project Garbage]\n')
             fp.write(''.join(self.garbage_raw))
 
-        fp.write('\n[V4+ Styles]\n'if self.script_type == 'v4.00+' else '\n[V4 Styles]\n')
+        fp.write('\n[V4+ Styles]\n' if self.script_type == 'v4.00+' else '\n[V4 Styles]\n')
         fp.write('Format: ' + ', '.join(self.style_attrs) + '\n')
         for style in self.styles:
             fp.write('Style: ' + ','.join(style.__dict__.values()) + '\n')
@@ -431,8 +431,8 @@ class MKV:
 
 
 class BluraySubtitle:
-    def __init__(self, bluray_path, sub_files: list[str]=None, checked: bool=True,
-                 progress_dialog: Optional[QProgressDialog]=None):
+    def __init__(self, bluray_path, sub_files: list[str] = None, checked: bool = True,
+                 progress_dialog: Optional[QProgressDialog] = None):
         self.tmp_folders = []
         if sys.platform == 'win32':
             for root, dirs, files in os.walk(bluray_path):
@@ -498,8 +498,8 @@ class BluraySubtitle:
                     yield bluray_folder, Chapter(selected_mpls), selected_mpls[:-5]
 
     def generate_configuration(self, table: QTableWidget,
-                               sub_combo_index: Optional[dict[int, int]]=None,
-                               subtitle_index: Optional[int]=None) -> dict[int, dict[str, int | str]]:
+                               sub_combo_index: Optional[dict[int, int]] = None,
+                               subtitle_index: Optional[int] = None) -> dict[int, dict[str, int | str]]:
         configuration = {}
         sub_index = 0
         bdmv_index = 0
@@ -584,7 +584,8 @@ class BluraySubtitle:
                                 sub_index += 1
                                 sub_end_time = time_shift + Subtitle(self.sub_files[sub_index]).max_end_time()
                                 configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
-                                    'bdmv_index': bdmv_index, 'chapter_index': j, 'offset': get_time_str(time_shift)}
+                                                            'bdmv_index': bdmv_index, 'chapter_index': j,
+                                                            'offset': get_time_str(time_shift)}
 
                         if play_item_duration_time / 45000 > 2600 and sub_end_time - time_shift < 1800:
                             k = j
@@ -596,7 +597,8 @@ class BluraySubtitle:
                                     sub_index += 1
                                     sub_end_time = time_shift + Subtitle(self.sub_files[sub_index]).max_end_time()
                                     configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
-                                        'bdmv_index': bdmv_index, 'chapter_index': k, 'offset': get_time_str(time_shift)}
+                                                                'bdmv_index': bdmv_index, 'chapter_index': k,
+                                                                'offset': get_time_str(time_shift)}
 
                     j += chapter_num
                     start_time += play_item_in_out_time[2] - play_item_in_out_time[1]
@@ -650,7 +652,7 @@ class BluraySubtitle:
                 clip_information_filename, in_time, out_time = chapter.in_out_time[ref_to_play_item_id]
                 for mark_timestamp in mark_timestamps:
                     real_time = play_item_duration_time_sum + (
-                                mark_timestamp - in_time) / 45000 - episode_duration_time_sum
+                            mark_timestamp - in_time) / 45000 - episode_duration_time_sum
                     if abs(real_time - duration) < 0.1:
                         with open(f'chapter.txt', 'w', encoding='utf-8-sig') as f:
                             f.write('\n'.join(chapter_text))
@@ -945,7 +947,7 @@ class BluraySubtitleGUI(QWidget):
                                 info.cellWidget(mpls_index, 4).setText('preview')
                         info.resizeColumnsToContents()
                     self.sub_check_state = [self.table2.item(sub_index, 0).checkState().value for sub_index in
-                                       range(self.table2.rowCount())]
+                                            range(self.table2.rowCount())]
                     sub_files = [self.table2.item(sub_index, 1).text() for sub_index in range(self.table2.rowCount())
                                  if self.sub_check_state[sub_index] == 2]
                     configuration = BluraySubtitle(
@@ -991,7 +993,8 @@ class BluraySubtitleGUI(QWidget):
         self.on_configuration(configuration)
 
     def on_subtitle_select(self):
-        sub_check_state = [self.table2.item(sub_index, 0).checkState().value for sub_index in range(self.table2.rowCount())]
+        sub_check_state = [self.table2.item(sub_index, 0).checkState().value for sub_index in
+                           range(self.table2.rowCount())]
         if sub_check_state != self.sub_check_state:
             self.sub_check_state = sub_check_state
             sub_files = [self.table2.item(sub_index, 1).text() for sub_index in range(self.table2.rowCount())
@@ -1051,11 +1054,11 @@ class BluraySubtitleGUI(QWidget):
                     sub_combo_index[sub_index] = self.table2.cellWidget(sub_index, 4).currentIndex() + 1
         try:
             configuration = BluraySubtitle(
-                            self.bdmv_folder_path.text(),
-                            sub_files,
-                            self.checkbox1.isChecked(),
-                            None
-                        ).generate_configuration(self.table1, sub_combo_index, subtitle_index)
+                self.bdmv_folder_path.text(),
+                sub_files,
+                self.checkbox1.isChecked(),
+                None
+            ).generate_configuration(self.table1, sub_combo_index, subtitle_index)
             self.on_configuration(configuration)
         except Exception as e:
             traceback.print_exc()
@@ -1210,9 +1213,9 @@ class CustomBox(QGroupBox):  # 为 Box 框提供拖拽文件夹的功能
 
     def dropEvent(self, e):
         if self.title == '原盘':
-            self.parent().bdmv_folder_path.setText(os.path.normpath(e.mimeData().urls()[0].toLocalFile()))
+            self.parent().parent().bdmv_folder_path.setText(os.path.normpath(e.mimeData().urls()[0].toLocalFile()))
         if self.title == '字幕':
-            self.parent().subtitle_folder_path.setText(os.path.normpath(e.mimeData().urls()[0].toLocalFile()))
+            self.parent().parent().subtitle_folder_path.setText(os.path.normpath(e.mimeData().urls()[0].toLocalFile()))
 
 
 def get_folder_size(folder_path: str) -> str:
@@ -1247,33 +1250,33 @@ if __name__ == "__main__":
         QMainWindow {
             background-color: white;
         }
-        
+
         QWidget {
             background-color: #F5F5F5;
         }
-        
+
         QVBoxLayout, QHBoxLayout {
             spacing: 10px;
             margin: 5px;
         }
-        
+
         QGroupBox {
             border: 1px solid #CCCCCC;
             padding: 8px;
         }
-        
+
         QLineEdit {
             font-size: 12px;
             padding: 4px;
             border: 1px solid #DDDDDD;
             border-radius: 4px;
         }
-        
+
         QLineEdit:focus {
             border: 1px solid transparent;
             border-bottom: 1px solid #007BFF;
         }
-        
+
         QPushButton {
             background-color: #CCCCCC;
             color: white;
@@ -1282,53 +1285,53 @@ if __name__ == "__main__":
             padding: 5px;
             font-size: 14px;
         }
-        
+
         QPushButton:hover {
             background-color: #AAAAAA;
         }
-        
+
         QPushButton:pressed {
             background-color: #999999;
         }
-        
+
         QPushButton:disabled {
             background-color: #CCCCCC;
             color: #999999;
         }
-        
+
         QToolButton {
             background-color: white;
             border: none;
             border-radius: 5px;
             padding: 5px;
         }
-        
+
         QToolButton:hover {
             background-color: #BBBBBB;
         }
-        
+
         QToolButton:pressed {
             background-color: #AAAAAA;
         }
-        
+
         QToolButton:checked {
             background-color: #CCCCCC;
             color: #999999;
         }
-        
+
         QTableView {
             background-color: white;
             border: 1px solid #CCCCCC;
             border-radius: 3px;
             padding: 5px;
         }
-        
+
         QTableView::item:selected {
             background-color: #BBBBBB;
             color: white;
         }    
         '''
-    )
+                      )
     window = BluraySubtitleGUI()
     window.show()
     sys.exit(app.exec())
