@@ -1228,7 +1228,10 @@ class BluraySubtitleGUI(QWidget):
                     if row_indexes:
                         this.altered = True
                     for i, row_index in enumerate(row_indexes):
-                        this.subtitle.delete_lines.add(int(this.table_widget.item(row_index - i, 0).text()) - 1)
+                        if hasattr(this.subtitle, 'lines'):
+                            this.subtitle.delete_lines.add(int(this.table_widget.item(row_index - i, 0).text()))
+                        else:
+                            this.subtitle.delete_lines.add(int(this.table_widget.item(row_index - i, 0).text()) - 1)
                         this.table_widget.removeRow(row_index - i)
 
             def on_subtitle_changed(this, item):
