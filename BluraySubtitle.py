@@ -1146,7 +1146,7 @@ class BluraySubtitleGUI(QWidget):
                 this.setWindowTitle(f'edit subtitle: {path}')
                 layout = QVBoxLayout()
                 this.table_widget = QTableWidget()
-                if path.endswith('.ass'):
+                if path.endswith('.ass') or path.endswith('.ssa'):
                     try:
                         with open(path, 'r', encoding='utf-8-sig') as f:
                             this.subtitle = Ass(f)
@@ -1201,9 +1201,9 @@ class BluraySubtitleGUI(QWidget):
                         this.subtitle.delete_lines.add(int(this.table_widget.item(row_index - i, 0).text()) - 1)
                         this.table_widget.removeRow(row_index - i)
 
-            def on_subtitle_changed(this, pos):
-                setattr(this.subtitle.events[int(this.table_widget.item(pos.row(), 0).text()) - 1],
-                        this.keys[pos.column() - 1], pos.text())
+            def on_subtitle_changed(this, item):
+                setattr(this.subtitle.events[int(this.table_widget.item(item.row(), 0).text()) - 1],
+                        this.keys[item.column() - 1], item.text())
                 this.altered = True
 
             def save_subtitle(this):
