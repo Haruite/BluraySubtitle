@@ -1193,13 +1193,15 @@ class BluraySubtitleGUI(QWidget):
                     this.table_widget.setColumnCount(4)
                     this.table_widget.setHorizontalHeaderLabels(['index', 'start', 'end', 'text'])
                     this.table_widget.setRowCount(len(this.subtitle.lines))
+                    m_len = len(str(this.subtitle.lines[-1][0]))
                     for i, line in enumerate(this.subtitle.lines):
-                        this.table_widget.setItem(i, 0, QTableWidgetItem(str(line[0])))
+                        this.table_widget.setItem(i, 0,
+                                                  QTableWidgetItem((m_len - len(str(line[0]))) * '0' + str(line[0])))
                         this.table_widget.setItem(i, 1, QTableWidgetItem(line[1]))
                         this.table_widget.setItem(i, 2, QTableWidgetItem(line[2]))
                         this.table_widget.setItem(i, 3, QTableWidgetItem(line[3]))
                     this.table_widget.horizontalHeader().setSortIndicator(2, Qt.SortOrder.DescendingOrder)
-                    this.setMinimumWidth(800)
+                    this.setMinimumWidth(600)
                     this.setMinimumHeight(600)
 
                 this.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
