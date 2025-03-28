@@ -203,21 +203,50 @@ class Ass:
             fp.write(_start + ','.join(elements) + '\n')
 
 
+class SRT:
+    def __init__(self, fp: _io.TextIOWrapper):
+        self.raw = fp.read()
+        self.delete_lines = set()
+        self.lines = []
+        for line in self.raw.split('\n'):
+            if re.match(r'^(\d+)$', line):
+                new_line = [int(line)]
+                added = False
+            elif (re.match(r'^(\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3})$', line)
+                    or re.match(r'^(\d{2}:\d{2}:\d{2}.\d{3} --> \d{2}:\d{2}:\d{2}.\d{3})$', line)):
+                new_line.append(line[0: 12])
+                new_line.append(line[17: 29])
+            elif line.strip():
+                if len(new_line) == 3:
+                    new_line.append(line)
+                else:
+                    new_line[3] += '\n' + line
+            else:
+                if not added:
+                    self.lines.append(new_line)
+                    added = True
+
+    def dump_file(self, fp: _io.TextIOWrapper):
+        for line in self.lines:
+            if line[0] not in self.delete_lines:
+                fp.write(str(line[0]) + '\n')
+                fp.write(f'{line[1]} --> {line[2]}\n')
+                fp.write(line[3] + '\n\n')
+
+
 class Subtitle:
     def __init__(self, file_path: str):
         self.max_end = 0
         try:
             with open(file_path, 'r', encoding='utf-8-sig') as f:
                 if file_path.endswith('.srt'):
-                    self.content = ''
-                    self.append_ass(file_path, 0)
+                    self.content = SRT(f)
                 else:
                     self.content = Ass(f)
         except:
             with open(file_path, 'r', encoding='utf-16') as f:
                 if file_path.endswith('.srt'):
-                    self.content = ''
-                    self.append_ass(file_path, 0)
+                    self.content = SRT(f)
                 else:
                     self.content = Ass(f)
 
@@ -225,51 +254,24 @@ class Subtitle:
         try:
             with open(new_file_path, 'r', encoding='utf-8-sig') as f:
                 if new_file_path.endswith('.srt'):
-                    new_content = f.read()
+                    new_content = SRT(f)
                 else:
                     new_content = Ass(f)
         except:
             with open(new_file_path, 'r', encoding='utf-16') as f:
                 if new_file_path.endswith('.srt'):
-                    new_content = f.read()
+                    new_content = SRT(f)
                 else:
                     new_content = Ass(f)
         if new_file_path.endswith('.srt'):
-            index = int((re.findall(r'\n\n(\d+)\n', self.content) or ['0'])[-1])
-            flag = 0
-            new_lines = []
-            for line in list(new_content.split('\n')):
-                if not line:
-                    flag = 0
-                if flag == 1 and re.match(r'^(\d+)$', line):
-                    new_lines.append(str(int(line) + index))
-                elif flag in (1, 2):
-                    if (re.match(r'^(\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3})$', line)
-                            or re.match(r'^(\d{2}:\d{2}:\d{2}.\d{3} --> \d{2}:\d{2}:\d{2}.\d{3})$', line)):
-                        start_time = int(line[0:2]) * 3600 + int(line[3:5]) * 60 + int(line[6:8]) + int(
-                            line[9:12]) / 1000 + time_shift
-                        end_time = int(line[17:19]) * 3600 + int(line[20:22]) * 60 + int(line[23:25]) + int(
-                            line[26:29]) / 1000 + time_shift
-                        if end_time > self.max_end:
-                            self.max_end = end_time
-                        start_time_str = str(datetime.timedelta(seconds=start_time))
-                        start_time_str = (start_time_str[:-3] if "." in start_time_str else start_time_str + '.000'
-                                          ).replace('.', ',')
-                        # 当毫秒数为 0 时，timedelta 的 str 形式不会显示小数点及以后部分
-                        end_time_str = str(datetime.timedelta(seconds=end_time))
-                        end_time_str = (end_time_str[:-3] if "." in end_time_str else end_time_str + '.000'
-                                        ).replace('.', ',')
-                        if len(start_time_str) < 12:
-                            start_time_str = '0' + start_time_str
-                        if len(end_time_str) < 12:
-                            end_time_str = '0' + end_time_str
-                        new_lines.append(f'{start_time_str} --> {end_time_str}')
-                    else:
-                        new_lines.append(line)
-                else:
-                    new_lines.append(line)
-                flag += 1
-            self.content += '\n'.join(new_lines)
+            index = self.content.lines[-1][0]
+            for line in new_content.lines:
+                line[0] += index
+                start_time = reduce(lambda a, b: a * 60 + b, map(float, line[1].replace(',', '.').split(':')))
+                end_time = reduce(lambda a, b: a * 60 + b, map(float, line[2].replace(',', '.').split(':')))
+                line[1] = get_time_str(start_time + time_shift)
+                line[2] = get_time_str(end_time + time_shift)
+            self.content.lines.extend(new_content.lines)
         else:  # ass 字幕合并，需要注意如果存在同名 Style 但实际 Style 样式不同时，需要将另一个同名 Style 改名
             style_info = {repr(style) for style in self.content.styles}
             style_name_map = {}
@@ -297,11 +299,11 @@ class Subtitle:
                 self.content.events.append(event)
 
     def dump(self, file_path: str, selected_mpls: str):
-        if isinstance(self.content, str):
+        if hasattr(self.content, 'lines'):
             with open(file_path + '.srt', "w", encoding='utf-8-sig') as f:
-                f.write(self.content)
+                self.content.dump_file(f)
             with open(selected_mpls + '.srt', "w", encoding='utf-8-sig') as f:
-                f.write(self.content)
+                self.content.dump_file(f)
         elif self.content.script_type == 'v4.00+':
             with open(file_path + '.ass', "w", encoding='utf-8-sig') as f:
                 self.content.dump_file(f)
@@ -314,6 +316,13 @@ class Subtitle:
                 self.content.dump_file(f)
 
     def max_end_time(self):
+        if hasattr(self.content, 'lines'):
+            return max(
+                map(
+                    lambda line: reduce(lambda a, b: a * 60 + b, map(float, line[2].replace(',', '.').split(':'))),
+                    self.content.lines
+                )
+            )
         if self.max_end:
             return self.max_end
         end_set = set(map(lambda event: event.End.total_seconds(), self.content.events))
@@ -1146,19 +1155,19 @@ class BluraySubtitleGUI(QWidget):
                 this.setWindowTitle(f'edit subtitle: {path}')
                 layout = QVBoxLayout()
                 this.table_widget = QTableWidget()
+                this.table_widget.horizontalHeader().setSortIndicatorShown(True)
+                this.table_widget.setSortingEnabled(True)
                 if path.endswith('.ass') or path.endswith('.ssa'):
                     try:
-                        with open(path, 'r', encoding='utf-8-sig') as f:
-                            this.subtitle = Ass(f)
+                        with open(path, 'r', encoding='utf-8-sig') as fp:
+                            this.subtitle = Ass(fp)
                     except Exception as e:
-                        with open(path, 'r', encoding='utf-16') as f:
-                            this.subtitle = Ass(f)
+                        with open(path, 'r', encoding='utf-16') as fp:
+                            this.subtitle = Ass(fp)
                     this.keys = list(this.subtitle.events[0].__dict__.keys())
                     this.table_widget.setColumnCount(len(this.keys) + 1)
                     this.table_widget.setHorizontalHeaderLabels(['index'] + this.keys)
                     this.table_widget.setRowCount(len(this.subtitle.events))
-                    this.table_widget.horizontalHeader().setSortIndicatorShown(True)
-                    this.table_widget.setSortingEnabled(True)
                     for i in range(len(this.subtitle.events)):
                         this.table_widget.setItem(i, 0, QTableWidgetItem(
                             ((len(str(len(this.subtitle.events)))) - len(str(i + 1))) * '0' + str(i + 1)))
@@ -1172,11 +1181,30 @@ class BluraySubtitleGUI(QWidget):
                             item = str(item)
                             this.table_widget.setItem(i, j + 1, QTableWidgetItem(item))
                     this.table_widget.horizontalHeader().setSortIndicator(4, Qt.SortOrder.DescendingOrder)
-                    this.table_widget.resizeColumnsToContents()
                     this.setMinimumWidth(1000)
                     this.setMinimumHeight(800)
-                    this.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-                    this.customContextMenuRequested.connect(this.on_subtitle_edit_menu)
+                elif path.endswith('.srt'):
+                    try:
+                        with open(path, 'r', encoding='utf-8-sig') as fp:
+                            this.subtitle = SRT(fp)
+                    except Exception as e:
+                        with open(path, 'r', encoding='utf-16') as fp:
+                            this.subtitle = SRT(fp)
+                    this.table_widget.setColumnCount(4)
+                    this.table_widget.setHorizontalHeaderLabels(['index', 'start', 'end', 'text'])
+                    this.table_widget.setRowCount(len(this.subtitle.lines))
+                    for i, line in enumerate(this.subtitle.lines):
+                        this.table_widget.setItem(i, 0, QTableWidgetItem(str(line[0])))
+                        this.table_widget.setItem(i, 1, QTableWidgetItem(line[1]))
+                        this.table_widget.setItem(i, 2, QTableWidgetItem(line[2]))
+                        this.table_widget.setItem(i, 3, QTableWidgetItem(line[3]))
+                    this.table_widget.horizontalHeader().setSortIndicator(2, Qt.SortOrder.DescendingOrder)
+                    this.setMinimumWidth(800)
+                    this.setMinimumHeight(600)
+
+                this.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+                this.customContextMenuRequested.connect(this.on_subtitle_edit_menu)
+                this.table_widget.resizeColumnsToContents()
                 layout.addWidget(this.table_widget)
                 this.save_button = QPushButton('save')
                 this.save_button.clicked.connect(this.save_subtitle)
@@ -1202,9 +1230,13 @@ class BluraySubtitleGUI(QWidget):
                         this.table_widget.removeRow(row_index - i)
 
             def on_subtitle_changed(this, item):
-                setattr(this.subtitle.events[int(this.table_widget.item(item.row(), 0).text()) - 1],
-                        this.keys[item.column() - 1], item.text())
-                this.altered = True
+                if path.endswith('.ass') or path.endswith('.ssa'):
+                    setattr(this.subtitle.events[int(this.table_widget.item(item.row(), 0).text()) - 1],
+                            this.keys[item.column() - 1], item.text())
+                    this.altered = True
+                if path.endswith('.srt'):
+                    this.subtitle.lines[item.row()][item.column()] = item.text()
+                    this.altered = True
 
             def save_subtitle(this):
                 if this.altered:
