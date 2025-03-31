@@ -10,10 +10,10 @@ import traceback
 from dataclasses import dataclass
 from functools import reduce, partial
 from struct import unpack
-from typing import Optional
+from typing import Optional, Generator, Callable
 
-from PyQt6.QtCore import QCoreApplication, Qt
-from PyQt6.QtGui import QPainter, QColor
+from PyQt6.QtCore import QCoreApplication, Qt, QPoint
+from PyQt6.QtGui import QPainter, QColor, QDragMoveEvent, QDropEvent, QPaintEvent, QDragEnterEvent
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLabel, QToolButton, QLineEdit, \
     QMessageBox, QHBoxLayout, QGroupBox, QCheckBox, QProgressDialog, QRadioButton, QButtonGroup, \
     QTableWidget, QTableWidgetItem, QDialog, QPushButton, QComboBox, QMenu, QAbstractItemView
@@ -434,7 +434,7 @@ class MKV:
                     duration = int(time_str[:2]) * 3600 + int(time_str[3:5]) * 60 + float(time_str[6:])
         return duration
 
-    def add_chapter(self, edit_file):
+    def add_chapter(self, edit_file: bool):
         if edit_file:
             subprocess.Popen(rf'"{MKV_PROP_EDIT_PATH}" "{self.path}" --chapters chapter.txt').wait()
         else:
@@ -443,7 +443,7 @@ class MKV:
 
 
 class BluraySubtitle:
-    def __init__(self, bluray_path, sub_files: list[str] = None, checked: bool = True,
+    def __init__(self, bluray_path:str, sub_files: list[str] = None, checked: bool = True,
                  progress_dialog: Optional[QProgressDialog] = None):
         self.tmp_folders = []
         if sys.platform == 'win32':
@@ -483,7 +483,7 @@ class BluraySubtitle:
             bitmask >>= 1
         return set(drives)
 
-    def get_main_mpls(self, bluray_folder):
+    def get_main_mpls(self, bluray_folder: str) -> str:
         mpls_folder = os.path.join(bluray_folder, 'BDMV', 'PLAYLIST')
         selected_mpls = None
         max_indicator = 0
@@ -498,7 +498,7 @@ class BluraySubtitle:
                 selected_mpls = mpls_file_path
         return selected_mpls
 
-    def select_mpls_from_table(self, table: QTableWidget):
+    def select_mpls_from_table(self, table: QTableWidget) -> Generator[str, Chapter, str]:
         for bdmv_index in range(table.rowCount()):
             bluray_folder = table.item(bdmv_index, 0).text()
             info: QTableWidget = table.cellWidget(bdmv_index, 2)
@@ -737,7 +737,7 @@ class BluraySubtitle:
 
 
 class CustomTableWidget(QTableWidget):
-    def __init__(self, parent=None, on_drop=None):
+    def __init__(self, parent: Optional[QWidget]=None, on_drop: Optional[Callable]=None):
         super().__init__(parent)
         self.setAcceptDrops(True)
         self.setDragEnabled(True)
@@ -745,7 +745,7 @@ class CustomTableWidget(QTableWidget):
         self.target_row = -1
         self.on_drop = on_drop
 
-    def dragMoveEvent(self, event):
+    def dragMoveEvent(self, event: QDragMoveEvent):
         if event.mimeData().hasFormat('application/x-qabstractitemmodeldatalist'):
             row = self.rowAt(int(event.position().y()))
             if row != self.target_row:
@@ -753,7 +753,7 @@ class CustomTableWidget(QTableWidget):
                 self.viewport().update()
             event.acceptProposedAction()
 
-    def dropEvent(self, event):
+    def dropEvent(self, event: QDropEvent):
         if event.source() is self and event.mimeData().hasFormat('application/x-qabstractitemmodeldatalist'):
             drag_row = self.currentRow()
             drop_row = self.rowAt(int(event.position().y()))
@@ -772,7 +772,7 @@ class CustomTableWidget(QTableWidget):
         else:
             super().dropEvent(event)
 
-    def paintEvent(self, event):
+    def paintEvent(self, event: QPaintEvent):
         super().paintEvent(event)
         if self.target_row >= 0:
             rect1 = self.visualRect(self.indexFromItem(self.item(self.target_row, 0)))
@@ -1134,7 +1134,7 @@ class BluraySubtitleGUI(QWidget):
         chapter_window = ChapterWindow()
         chapter_window.exec()
 
-    def on_subtitle_menu(self, pos):
+    def on_subtitle_menu(self, pos: QPoint):
         row_indexes = [i.row() for i in self.table2.selectionModel().selection().indexes()]
         column_indexes = [i.column() for i in self.table2.selectionModel().selection().indexes()]
         if any(column_index == 1 for column_index in column_indexes):
@@ -1147,7 +1147,7 @@ class BluraySubtitleGUI(QWidget):
                     if column_indexes[i] == 1:
                         self.edit_subtitle(self.table2.item(row_index, 1).text())
 
-    def edit_subtitle(self, path):
+    def edit_subtitle(self, path: str):
         class SubtitleEditDialog(QDialog):
             def __init__(this):
                 super(SubtitleEditDialog, this).__init__()
@@ -1216,7 +1216,7 @@ class BluraySubtitleGUI(QWidget):
                 this.table_widget.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked)
                 this.table_widget.itemChanged.connect(this.on_subtitle_changed)
 
-            def on_subtitle_edit_menu(this, pos):
+            def on_subtitle_edit_menu(this, pos: QPoint):
                 row_indexes = {i.row() for i in this.table_widget.selectionModel().selection().indexes()}
                 menu = QMenu()
                 item = menu.addAction('remove')
@@ -1234,7 +1234,7 @@ class BluraySubtitleGUI(QWidget):
                             this.subtitle.delete_lines.add(int(this.table_widget.item(row_index - i, 0).text()) - 1)
                         this.table_widget.removeRow(row_index - i)
 
-            def on_subtitle_changed(this, item):
+            def on_subtitle_changed(this, item: QTableWidgetItem):
                 if path.endswith('.ass') or path.endswith('.ssa'):
                     setattr(this.subtitle.events[int(this.table_widget.item(item.row(), 0).text()) - 1],
                             this.keys[item.column() - 1], item.text())
@@ -1336,18 +1336,18 @@ class BluraySubtitleGUI(QWidget):
 
 
 class CustomBox(QGroupBox):  # 为 Box 框提供拖拽文件夹的功能
-    def __init__(self, title, parent):
+    def __init__(self, title: str, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setAcceptDrops(True)
         self.title = title
 
-    def dragEnterEvent(self, e):
+    def dragEnterEvent(self, e: QDragEnterEvent):
         if e.mimeData().hasUrls():
             e.accept()
         else:
             e.ignore()
 
-    def dropEvent(self, e):
+    def dropEvent(self, e: QDropEvent):
         if self.title == '原盘':
             self.parent().parent().bdmv_folder_path.setText(os.path.normpath(e.mimeData().urls()[0].toLocalFile()))
         if self.title == '字幕':
