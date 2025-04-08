@@ -474,6 +474,67 @@ class MKV:
             subprocess.Popen(rf'"{MKV_MERGE_PATH}" --chapters chapter.txt -o "{new_path}" "{self.path}"').wait()
 
 
+class M2TS:
+    def __init__(self, filename: str):
+        self.filename = filename
+        self.frame_size = 192
+        self.formats: dict[int, str] = {1: '>B', 2: '>H', 4: '>I', 8: '>Q'}
+
+    def get_duration(self) -> int:
+        with open(self.filename, "rb") as self.m2ts_file:
+            buffer_size = 256 * 1024
+            buffer_size -= buffer_size % self.frame_size
+            cur_pos = 0
+            first_pcr_val = -1
+            while cur_pos < buffer_size:
+                self.m2ts_file.read(7)
+                first_pcr_val = self.get_pcr_val()
+                if first_pcr_val != -1:
+                    break
+
+            last_pcr_val = -1
+            buffer_size = 256 * 1024
+            buffer_size -= buffer_size % self.frame_size
+            self.get_last_pcr_val(buffer_size)
+            buffer_size *= 4
+
+            while last_pcr_val == -1 and buffer_size <= 1024 * 1024:
+                last_pcr_val = self.get_last_pcr_val(buffer_size)
+                buffer_size *= 4
+            return 0 if  last_pcr_val == -1 else (last_pcr_val - first_pcr_val) / 90000
+
+    def get_last_pcr_val(self, buffer_size) -> int:
+        last_pcr_val = -1
+        file_size = os.path.getsize(self.filename)
+        cur_pos = max(file_size - file_size % self.frame_size - buffer_size, 0)
+        buffer_end = cur_pos + buffer_size
+        while cur_pos < buffer_end - self.frame_size:
+            self.m2ts_file.seek(cur_pos + 7)
+            _last_pcr_val = self.get_pcr_val()
+            if _last_pcr_val != -1:
+                last_pcr_val = _last_pcr_val
+            cur_pos += self.frame_size
+        return last_pcr_val
+
+    def unpack_bytes(self, n: int) -> int:
+        return unpack(self.formats[n], self.m2ts_file.read(n))[0]
+
+    def get_pcr_val(self) -> int:
+        af_exists = (self.unpack_bytes(1) >> 5) % 2
+        adaptive_field_length = self.unpack_bytes(1)
+        pcr_exist = (self.unpack_bytes(1) >> 4) % 2
+        if af_exists and adaptive_field_length and pcr_exist:
+            tmp = []
+            for _ in range(4):
+                tmp.append(self.unpack_bytes(1))
+            pcr = tmp[3] + (tmp[2] << 8) + (tmp[1] << 16) + (tmp[0] << 24)
+            pcr_lo = self.unpack_bytes(1) >> 7
+            pcr_val = pcr << 1 + pcr_lo
+            return pcr_val
+        self.m2ts_file.read(182)
+        return -1
+
+
 class BluraySubtitle:
     def __init__(self, bluray_path:str, sub_files: list[str] = None, checked: bool = True,
                  progress_dialog: Optional[QProgressDialog] = None):
@@ -808,8 +869,7 @@ class BluraySubtitle:
                 for mark_timestamp in mark_timestamps:
                     if index == chapter_index:
                         sub_to_m2ts[sub_file] = [
-                            os.path.join(conf['folder'], 'BDMV', 'STREAM', chapter.in_out_time[item_index][0]) +
-                            '.m2ts'
+                            os.path.join(conf['folder'], 'BDMV', 'STREAM', chapter.in_out_time[item_index][0]) + '.m2ts'
                             for item_index in range(pre_item_index + 1, ref_to_play_item_id + 1)
                         ]
                         pre_item_index = ref_to_play_item_id
@@ -822,7 +882,15 @@ class BluraySubtitle:
         m2ts_to_sub: dict[str, list[str]] = {}
         for sub_file, m2ts_files in sub_to_m2ts.items():
             if len(m2ts_files) > 1:
-                self.cut_sup_and_remux(sub_file, m2ts_files, folder_path)
+                duration = []
+                for sub_index, conf in self.configuration.items():
+                    chapter = Chapter(conf['selected_mpls'] + '.mpls')
+                    for ref_to_play_item_id, mark_timestamps in chapter.mark_info.items():
+                        if (os.path.join(conf['folder'], 'BDMV', 'STREAM',
+                                        chapter.in_out_time[ref_to_play_item_id][0]) + '.m2ts') in m2ts_files:
+                            duration.append((chapter.in_out_time[ref_to_play_item_id][2] -
+                                             chapter.in_out_time[ref_to_play_item_id][1]) / 45000)
+                self.cut_sup_and_remux(sub_file, m2ts_files, duration, folder_path)
                 muxed_m2ts.update(set(m2ts_files))
             else:
                 if (m2ts_file := m2ts_files[0]) in m2ts_to_sub:
@@ -834,7 +902,29 @@ class BluraySubtitle:
         for m2ts_file, sub_files in m2ts_to_sub.items():
             i += 1
             if len(sub_files) > 1:
-                self.combine_sup_and_remux(m2ts_file, sub_files, folder_path)
+                duration = []
+                for sub_file in sub_files:
+                    j = self.configuration[self.sub_files.index(sub_file)]['chapter_index']
+                    if self.configuration.get(self.sub_files.index(sub_file) + 1):
+                        k = self.configuration[self.sub_files.index(sub_file) + 1]['chapter_index']
+                    else:
+                        k = -1
+                    l = 1
+                    for sub_index, conf in self.configuration.items():
+                        chapter = Chapter(conf['selected_mpls'] + '.mpls')
+                        for ref_to_play_item_id, mark_timestamps in chapter.mark_info.items():
+                            if (os.path.join(conf['folder'], 'BDMV', 'STREAM',
+                                             chapter.in_out_time[ref_to_play_item_id][0]) + '.m2ts' == m2ts_file):
+                                t1 = mark_timestamps[0]
+                            for mark_timestamp in mark_timestamps:
+                                l += 1
+                                if l == j:
+                                    t2 = mark_timestamp
+                                    if k == -1:
+                                        duration.append(M2TS(m2ts_file).get_duration() - (t2 - t1) / 45000)
+                                if k > -1 and l == k:
+                                    duration.append((mark_timestamp - t1) / 45000)
+                self.combine_sup_and_remux(m2ts_file, sub_files, duration, folder_path)
             else:
                 self.sub_mux(m2ts_file, sub_files[0], folder_path)
             self.progress_dialog.setValue(int(i / total_item * 800))
@@ -856,13 +946,23 @@ class BluraySubtitle:
     def edit_bluray(self, table: QTableWidget, folder_path: str):
         pass
 
-    def cut_sup_and_remux(self, sub_file: str, m2ts_files: list[str], folder_path: str):
+    def cut_sup_and_remux(self, sub_file: str, m2ts_files: list[str], duration: list[float], folder_path: str):
+        """
+        :param sub_file: sup或srt字幕文件，对应一集
+        :param m2ts_files: 字幕文件对应的m2ts文件
+        :param duration: 每个m2ts文件的时长，和m2ts_files对应
+        :param folder_path: 混流后的文件目标文件夹
+        """
         # TODO: 对肉酱盘切割 sup 文件并混流
-        pass
 
-    def combine_sup_and_remux(self, m2ts_file: str, sub_files :list[str], folder_path: str):
+    def combine_sup_and_remux(self, m2ts_file: str, sub_files :list[str], duration: list[float], folder_path: str):
+        """
+        :param m2ts_file: 一个m2ts文件
+        :param sub_files: m2ts文件对应的字幕，一条字幕对应一集
+        :param duration: 每集的时长
+        :param folder_path: 混流后的文件目标文件夹
+        """
         # TODO: 对连体盘合并 sup 文件并混流
-        pass
 
     def sub_mux(self, m2ts_file: str, sub_file: str, folder_path: str):
         dst_path = os.path.join(
@@ -1439,6 +1539,9 @@ class BluraySubtitleGUI(QWidget):
         if self.radio1.isChecked():
             self.label2.setText("选择单集字幕所在的文件夹")
             self.exe_button.setText("生成字幕")
+            if not self.checkbox1.isVisible():
+                self.checkbox1.setVisible(True)
+                self.restoreGeometry(self._geometry)
             self.checkbox1.setText('补全蓝光目录')
             self.table1.clear()
             self.table1.setColumnCount(len(BDMV_LABELS))
@@ -1449,6 +1552,9 @@ class BluraySubtitleGUI(QWidget):
         if self.radio2.isChecked():
             self.label2.setText("选择mkv文件所在的文件夹")
             self.exe_button.setText("添加章节")
+            if not self.checkbox1.isVisible():
+                self.checkbox1.setVisible(True)
+                self.restoreGeometry(self._geometry)
             self.checkbox1.setText('直接编辑原文件')
             self.table1.clear()
             self.table1.setColumnCount(len(BDMV_LABELS))
@@ -1457,9 +1563,11 @@ class BluraySubtitleGUI(QWidget):
             self.table2.setColumnCount(len(MKV_LABELS))
             self.table2.setHorizontalHeaderLabels(MKV_LABELS)
         if self.radio3.isChecked():
+            self._geometry = self.saveGeometry()
             self.label2.setText("选择图形字幕所在的文件夹")
             self.exe_button.setText("加流重灌")
-            self.checkbox1.setText('补全蓝光目录')
+            self.layout.removeWidget(self.checkbox1)
+            self.checkbox1.setVisible(False)
             self.table1.clear()
             self.table1.setColumnCount(len(BDMV_LABELS))
             self.table1.setHorizontalHeaderLabels(BDMV_LABELS)
