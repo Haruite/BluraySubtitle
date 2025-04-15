@@ -1124,7 +1124,7 @@ class BluraySubtitle:
         tracker_order = ','.join(tracker_order)
         audio_tracks = '!' + ','.join(audio_tracks)
         language_options = ' '.join(language_options)
-        return (f'mkvmerge -o "{output_file}" --track-order {tracker_order} '
+        return (f'{MKV_MERGE_PATH} -o "{output_file}" --track-order {tracker_order} '
                 f'-a {audio_tracks} "{mkv_file}" {language_options}')
 
     def extract_pcm(self, mkv_file: str, dst_path: str) -> tuple[int, dict[int, str]]:
