@@ -1621,7 +1621,8 @@ class BluraySubtitleGUI(QWidget):
                     if mpls_path.endswith(info.item(mpls_index, 0).text()):
                         checked = info.cellWidget(mpls_index, 3).isChecked()
                         if checked:
-                            subtitle = bool(self.table2.rowCount() > 0 and self.table2.item(0, 0).text())
+                            subtitle = bool(self.table2.rowCount() > 0 and self.table2.item(0, 0)
+                                            and self.table2.item(0, 0).text())
                             info.cellWidget(mpls_index, 4).setText('preview' if subtitle else 'play')
                             for mpls_index_1 in range(info.rowCount()):
                                 if not mpls_path.endswith(info.item(mpls_index_1, 0).text()):
