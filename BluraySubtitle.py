@@ -455,27 +455,30 @@ class M2TS:
 
     def get_duration(self) -> int:
         with open(self.filename, "rb") as self.m2ts_file:
-            buffer_size = 256 * 1024
-            buffer_size -= buffer_size % self.frame_size
-            cur_pos = 0
-            first_pcr_val = -1
-            while cur_pos < buffer_size:
-                self.m2ts_file.read(7)
-                first_pcr_val = self.get_pcr_val()
-                self.m2ts_file.read(182)
-                if first_pcr_val != -1:
-                    break
+            try:
+                buffer_size = 256 * 1024
+                buffer_size -= buffer_size % self.frame_size
+                cur_pos = 0
+                first_pcr_val = -1
+                while cur_pos < buffer_size:
+                    self.m2ts_file.read(7)
+                    first_pcr_val = self.get_pcr_val()
+                    self.m2ts_file.read(182)
+                    if first_pcr_val != -1:
+                        break
 
-            buffer_size = 256 * 1024
-            buffer_size -= buffer_size % self.frame_size
-            last_pcr_val = self.get_last_pcr_val(buffer_size)
-            buffer_size *= 4
-
-            while last_pcr_val == -1 and buffer_size <= 1024 * 1024:
+                buffer_size = 256 * 1024
+                buffer_size -= buffer_size % self.frame_size
                 last_pcr_val = self.get_last_pcr_val(buffer_size)
                 buffer_size *= 4
 
-            return 0 if  last_pcr_val == -1 else last_pcr_val - first_pcr_val
+                while last_pcr_val == -1 and buffer_size <= 1024 * 1024:
+                    last_pcr_val = self.get_last_pcr_val(buffer_size)
+                    buffer_size *= 4
+
+                return 0 if  last_pcr_val == -1 else last_pcr_val - first_pcr_val
+            except:
+                return 0
 
     def get_last_pcr_val(self, buffer_size) -> int:
         last_pcr_val = -1
@@ -1071,7 +1074,7 @@ class BluraySubtitle:
                             parsed_m2ts_files |= set(index_to_m2ts.values())
             stream_folder = os.path.dirname(mpls_path).removesuffix('PLAYLIST') + 'STREAM'
             for stream_file in os.listdir(stream_folder):
-                if stream_file not in parsed_m2ts_files:
+                if stream_file not in parsed_m2ts_files and stream_file.endswith('.m2ts'):
                     if M2TS(os.path.join(stream_folder, stream_file)).get_duration() > 30 * 90000:
                         subprocess.Popen(f'"{MKV_MERGE_PATH}" -o "{sps_folder}{os.sep}BD_Vol_'
                                          f'{bdmv_vol}_{stream_file[:-5]}.mkv" '
