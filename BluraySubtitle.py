@@ -1044,6 +1044,9 @@ class BluraySubtitle:
                         flac_files.append(os.path.join(dst_folder, file1))
                 output_file = os.path.join(dst_folder, os.path.splitext(file)[0] + '(1).mkv')
                 remux_cmd = self.generate_remux_cmd(track_count, track_info, flac_files, output_file, mkv_file)
+                if self.sub_files and len(self.sub_files) >= i:
+                    remux_cmd += f' --language 0:chi "{self.sub_files[i - 1]}"'
+                print(f'混流命令: {remux_cmd}')
                 subprocess.Popen(remux_cmd).wait()
                 os.remove(mkv_file)
                 os.rename(output_file, mkv_file)
@@ -1096,6 +1099,7 @@ class BluraySubtitle:
                         flac_files.append(os.path.join(sps_folder, file1))
                 output_file = os.path.join(sps_folder, os.path.splitext(sp)[0] + '(1).mkv')
                 remux_cmd = self.generate_remux_cmd(track_count, track_info, flac_files, output_file, mkv_file)
+                print(f'混流命令: {remux_cmd}')
                 subprocess.Popen(remux_cmd).wait()
                 os.remove(mkv_file)
                 os.rename(output_file, mkv_file)
@@ -1120,10 +1124,8 @@ class BluraySubtitle:
         tracker_order = ','.join(tracker_order)
         audio_tracks = '!' + ','.join(audio_tracks)
         language_options = ' '.join(language_options)
-        remux_cmd = (f'mkvmerge -o "{output_file}" --track-order {tracker_order} '
-                     f'-a {audio_tracks} "{mkv_file}" {language_options}')
-        print(f'混流命令: {remux_cmd}')
-        return remux_cmd
+        return (f'mkvmerge -o "{output_file}" --track-order {tracker_order} '
+                f'-a {audio_tracks} "{mkv_file}" {language_options}')
 
     def extract_pcm(self, mkv_file: str, dst_path: str) -> tuple[int, dict[int, str]]:
         process = subprocess.Popen(f'"{TSMUXER_PATH}" "{mkv_file}"',
@@ -1624,8 +1626,8 @@ class BluraySubtitleGUI(QWidget):
                     if mpls_path.endswith(info.item(mpls_index, 0).text()):
                         checked = info.cellWidget(mpls_index, 3).isChecked()
                         if checked:
-                            subtitle = bool(self.table2.rowCount() > 0 and self.table2.item(0, 0)
-                                            and self.table2.item(0, 0).text())
+                            subtitle = bool(self.table2.rowCount() > 0 and self.table2.item(0, 0) and
+                                            self.table2.item(0, 0).text() and not self.radio3.isChecked())
                             info.cellWidget(mpls_index, 4).setText('preview' if subtitle else 'play')
                             for mpls_index_1 in range(info.rowCount()):
                                 if not mpls_path.endswith(info.item(mpls_index_1, 0).text()):
