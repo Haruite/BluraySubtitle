@@ -23,6 +23,7 @@ MKV_MERGE_PATH = ''
 MKV_PROP_EDIT_PATH = ''
 TSMUXER_PATH = 'tsMuxeR.exe'
 FLAC_PATH = 'flac.exe'
+FLAC_THREADS = 16
 BDMV_LABELS = ['path', 'size', 'info']
 SUBTITLE_LABELS = ['select', 'path', 'duration', 'bdmv_index', 'chapter_index', 'offset']
 MKV_LABELS = ['path', 'duration']
@@ -855,7 +856,7 @@ class BluraySubtitle:
                 for file1 in os.listdir(dst_folder):
                     if file1.startswith(file.removesuffix('.mkv')) and file1.endswith('.wav'):
                         k += 1
-                        subprocess.Popen(f'"{FLAC_PATH}" -8 "{os.path.join(dst_folder, file1)}"').wait()
+                        subprocess.Popen(f'"{FLAC_PATH}" -8 -j {FLAC_THREADS} "{os.path.join(dst_folder, file1)}"').wait()
                         os.remove(os.path.join(dst_folder, file1))
                         self.progress_dialog.setValue(400 + int(k / j / n * 200))
                         QCoreApplication.processEvents()
@@ -914,7 +915,7 @@ class BluraySubtitle:
             if track_info:
                 for file1 in os.listdir(sps_folder):
                     if file1.startswith(sp.removesuffix('.mkv')) and file1.endswith('.wav'):
-                        subprocess.Popen(f'"{FLAC_PATH}" -8 "{os.path.join(sps_folder, file1)}"').wait()
+                        subprocess.Popen(f'"{FLAC_PATH}" -8 -j {FLAC_THREADS} "{os.path.join(sps_folder, file1)}"').wait()
                         os.remove(os.path.join(sps_folder, file1))
                 flac_files = []
                 for file1 in os.listdir(sps_folder):
