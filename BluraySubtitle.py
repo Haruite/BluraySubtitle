@@ -610,7 +610,7 @@ class BluraySubtitle:
             bitmask >>= 1
         return set(drives)
 
-    def get_main_mpls(self, bluray_folder: str) -> str:
+    def get_main_mpls(self, bluray_folder: str, checked: bool) -> str:
         mpls_folder = os.path.join(bluray_folder, 'BDMV', 'PLAYLIST')
         stream_folder = os.path.join(bluray_folder, 'BDMV', 'STREAM')
         selected_mpls = None
@@ -620,16 +620,19 @@ class BluraySubtitle:
                 continue
             mpls_file_path = os.path.join(mpls_folder, mpls_file_name)
             chapter = Chapter(mpls_file_path)
-            total_size = 0
-            stream_files = set()
-            for in_out_time in chapter.in_out_time:
-                if in_out_time[0] not in stream_files:
-                    m2ts_file = os.path.join(stream_folder, f'{in_out_time[0]}.m2ts')
-                    if os.path.exists(m2ts_file):
-                        total_size += os.path.getsize(m2ts_file)
-                    else:
-                        print(f'\033[31m错误,{mpls_file_path}中的m2ts文件{m2ts_file}未找到\033[0m')
-                stream_files.add(in_out_time[0])
+            if checked:
+                total_size = 1
+            else:
+                total_size = 0
+                stream_files = set()
+                for in_out_time in chapter.in_out_time:
+                    if in_out_time[0] not in stream_files:
+                        m2ts_file = os.path.join(stream_folder, f'{in_out_time[0]}.m2ts')
+                        if os.path.exists(m2ts_file):
+                            total_size += os.path.getsize(m2ts_file)
+                        else:
+                            print(f'\033[31m错误,{mpls_file_path}中的m2ts文件{m2ts_file}未找到\033[0m')
+                    stream_files.add(in_out_time[0])
             indicator = chapter.get_total_time_no_repeat() * (1 + sum(map(len, chapter.mark_info.values())) / 5
                                                               ) * os.path.getsize(mpls_file_path) * total_size
             if indicator > max_indicator:
@@ -1544,7 +1547,7 @@ class BluraySubtitleGUI(QWidget):
                                 mpls_n += 1
                         table_widget.setRowCount(mpls_n)
                         mpls_n = 0
-                        selected_mpls = os.path.normpath(BluraySubtitle(root).get_main_mpls(root))
+                        selected_mpls = os.path.normpath(BluraySubtitle(root).get_main_mpls(root, self.radio2.isChecked()))
                         for mpls_file in os.listdir(os.path.join(root, 'BDMV', 'PLAYLIST')):
                             if mpls_file.endswith('.mpls'):
                                 table_widget.setItem(mpls_n, 0, QTableWidgetItem(mpls_file))
