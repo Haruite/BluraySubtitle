@@ -1547,7 +1547,8 @@ class BluraySubtitleGUI(QWidget):
                                 mpls_n += 1
                         table_widget.setRowCount(mpls_n)
                         mpls_n = 0
-                        selected_mpls = os.path.normpath(BluraySubtitle(root).get_main_mpls(root, self.radio2.isChecked()))
+                        selected_mpls = os.path.normpath(BluraySubtitle(root).get_main_mpls(
+                            root, self.radio1.isChecked() or self.radio2.isChecked()))
                         for mpls_file in os.listdir(os.path.join(root, 'BDMV', 'PLAYLIST')):
                             if mpls_file.endswith('.mpls'):
                                 table_widget.setItem(mpls_n, 0, QTableWidgetItem(mpls_file))
