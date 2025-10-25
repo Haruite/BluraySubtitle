@@ -1,3 +1,11 @@
+# 功能1：生成合并字幕
+# 功能2：给mkv添加章节
+# 功能3：日漫原盘remux
+# 功能4：美剧remux
+# 功能234需要安装mkvtoolnix，指定FLAC_PATH和FLAC_THREADS(flac版本需大于等于1.5.0)
+# 功能3需要指定TSMUXER_PATH
+# 功能4需要指定FFMPEG_PATH和FFPROBE_PATH
+# pip install pycountry PyQt6
 import _io
 import ctypes
 import datetime
@@ -21,12 +29,17 @@ from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLa
     QMessageBox, QHBoxLayout, QGroupBox, QCheckBox, QProgressDialog, QRadioButton, QButtonGroup, \
     QTableWidget, QTableWidgetItem, QDialog, QPushButton, QComboBox, QMenu, QAbstractItemView
 
+
+TSMUXER_PATH = 'tsMuxeR.exe'  # tsmuxer可执行文件的路径
+FLAC_PATH = 'flac.exe'  # flac可执行文件路径
+FLAC_THREADS = 16  # flac线程数
+FFMPEG_PATH = 'ffmpeg.exe'  # ffmpeg可执行文件路径
+FFPROBE_PATH = 'ffprobe.exe'  # ffprobe可执行文件路径
+
 MKV_INFO_PATH = ''
 MKV_MERGE_PATH = ''
 MKV_PROP_EDIT_PATH = ''
-TSMUXER_PATH = 'tsMuxeR.exe'
-FLAC_PATH = 'flac.exe'
-FLAC_THREADS = 16
+MKV_EXTRACT_PATH = ''
 BDMV_LABELS = ['path', 'size', 'info']
 SUBTITLE_LABELS = ['select', 'path', 'duration', 'bdmv_index', 'chapter_index', 'offset']
 MKV_LABELS = ['path', 'duration']
@@ -1026,7 +1039,7 @@ class BluraySubtitle:
             chapter.get_pid_to_language()
             m2ts_file = os.path.join(os.path.join(mpls_path[:-19], 'STREAM'), chapter.in_out_time[0][0] + '.m2ts')
             print(f'正在分析mpls的第一个文件{m2ts_file}的轨道')
-            cmd = f'ffprobe -v error -show_streams -show_format -of json "{m2ts_file}" >info.json 2>&1'
+            cmd = f'{FFPROBE_PATH} -v error -show_streams -show_format -of json "{m2ts_file}" >info.json 2>&1'
             subprocess.Popen(cmd, shell=True).wait()
 
             with open('info.json', 'r', encoding='utf-8') as fp:
@@ -1202,7 +1215,7 @@ class BluraySubtitle:
         dolby_truehd_tracks = []
         track_bits = {}
         if os.path.exists(output_file):
-            subprocess.Popen(f'ffprobe -v error -show_streams -show_format -of json "{output_file}" >info.json 2>&1',
+            subprocess.Popen(f'{FFPROBE_PATH} -v error -show_streams -show_format -of json "{output_file}" >info.json 2>&1',
                              shell=True).wait()
             with open('info.json', 'r', encoding='utf-8') as fp:
                 data = json.load(fp)
@@ -1231,7 +1244,7 @@ class BluraySubtitle:
                         track_id = int(os.path.split(file1_path)[-1].split('.')[-2].removeprefix('track'))
                         bits = track_bits.get(track_id, 24)
                         wav_file = os.path.splitext(file1_path)[0] + '.wav'
-                        subprocess.Popen(f'ffmpeg -i "{file1_path}"  -c:a pcm_s{bits}le -f w64 "{wav_file}"').wait()
+                        subprocess.Popen(f'{FFMPEG_PATH} -i "{file1_path}"  -c:a pcm_s{bits}le -f w64 "{wav_file}"').wait()
                         flac_file = os.path.splitext(file1_path)[0] + '.flac'
                         subprocess.Popen(f'{FLAC_PATH} -8 -j {FLAC_THREADS} "{wav_file}" -o "{flac_file}"').wait()
                         if os.path.exists(flac_file):
@@ -1258,7 +1271,7 @@ class BluraySubtitle:
                             n = len(os.listdir(dst_folder))
                             print(f'flac压缩wav文件{file1_path}失败，将使用ffmpeg压缩')
                             subprocess.Popen(
-                                f'ffmpeg -i "{file1_path}" -c:a flac "{file1_path.removesuffix(".wav") + ".flac"}"').wait()
+                                f'{FFMPEG_PATH} -i "{file1_path}" -c:a flac "{file1_path.removesuffix(".wav") + ".flac"}"').wait()
                             if len(os.listdir(dst_folder)) > n:
                                 os.remove(file1_path)
                 for file1 in os.listdir(dst_folder):
@@ -1297,7 +1310,7 @@ class BluraySubtitle:
         tracker_order = ','.join(tracker_order)
         audio_tracks = '!' + ','.join(audio_tracks)
         language_options = ' '.join(language_options)
-        return (f'mkvmerge -o "{output_file}" --track-order {tracker_order} '
+        return (f'{MKV_MERGE_PATH} -o "{output_file}" --track-order {tracker_order} '
                 f'-a {audio_tracks} "{mkv_file}" {language_options}')
 
     def extract_lossless(self, mkv_file: str, dolby_truehd_tracks: list[int]) -> tuple[int, dict[int, str]]:
@@ -1342,7 +1355,7 @@ class BluraySubtitle:
             for track_id, lang in track_info.items():
                 extract_info.append(
                     f'{track_id}:"{mkv_file.removesuffix(".mkv")}.track{track_id}.{track_suffix_info[track_id]}"')
-            extract_cmd = f'mkvextract "{mkv_file}" tracks {" ".join(extract_info)}'
+            extract_cmd = f'{MKV_EXTRACT_PATH} "{mkv_file}" tracks {" ".join(extract_info)}'
             print(f'正在提取无损音轨，命令:{extract_cmd}')
             subprocess.Popen(extract_cmd).wait()
 
@@ -1359,7 +1372,7 @@ class BluraySubtitle:
             track_count = 0
             for line in stdout.splitlines():
                 if line.startswith('Track ID'):
-                    track_id = int(line.split('    ')[1])
+                    track_id = int(line.split('    ')[1]) - 1
                     track_count = max(track_count, track_id)
                 if line.startswith('Stream ID'):
                     wrote = False
@@ -1373,7 +1386,7 @@ class BluraySubtitle:
                     if wrote:
                         break
                     if stream_type == 'LPCM':
-                        fp.write(f'{write_line}, track={track_id}\n')
+                        fp.write(f'{write_line}, track={track_id + 1}\n')
                         track_info[track_id] = lang
                     wrote = True
             fp.write('\n')
@@ -2260,6 +2273,16 @@ def find_mkvtoolinx():
             MKV_PROP_EDIT_PATH = default_mkv_prop_edit_path
         else:
             MKV_PROP_EDIT_PATH = QFileDialog.getOpenFileName(window, '选择mkvpropedit的位置', '', 'mkvpropedit*')
+    global MKV_EXTRACT_PATH
+    if not MKV_EXTRACT_PATH:
+        if sys.platform == 'win32':
+            default_mkv_extract_path = r'C:\Program Files\MKVToolNix\mkvextract.exe'
+        else:
+            default_mkv_extract_path = '/usr/bin/mkvextract'
+        if os.path.exists(default_mkv_extract_path):
+            MKV_EXTRACT_PATH = default_mkv_extract_path
+        else:
+            MKV_EXTRACT_PATH = QFileDialog.getOpenFileName(window, '选择mkvextract的位置', '', 'mkvextract*')
 
 
 if __name__ == "__main__":
