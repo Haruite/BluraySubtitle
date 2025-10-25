@@ -2349,6 +2349,48 @@ if __name__ == "__main__":
             color: white;
         }   
         
+        QCheckBox {
+            spacing: 6px;
+            font-size: 14px;
+        }
+
+        QCheckBox::indicator {
+            width: 16px;
+            height: 16px;
+            border-radius: 3px;
+        }
+
+        QCheckBox::indicator:unchecked {
+            border: 1px solid #999999;
+            background-color: white;
+        }
+
+        QCheckBox::indicator:checked {
+            border: 1px solid #888888;
+            background-color: #888888;
+        }
+
+        QCheckBox::indicator:unchecked:hover {
+            border: 1px solid #888888;
+        }
+
+        QTableView::indicator {
+            width: 16px;
+            height: 16px;
+            border-radius: 3px;
+        }
+        QTableView::indicator:unchecked {
+            border: 1px solid #999999;
+            background-color: white;
+        }
+        QTableView::indicator:checked {
+            border: 1px solid #888888;
+            background-color: #888888;
+        }
+        QTableView::indicator:unchecked:hover {
+            border: 1px solid #888888;
+        }
+        
         QMenu {
             font-size: 14px;
         } 
