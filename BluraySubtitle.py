@@ -865,33 +865,34 @@ class BluraySubtitle:
         self.progress_dialog.setValue(1000)
         QCoreApplication.processEvents()
 
-    def completion(self, folder: str):  # 补全蓝光目录；删除临时文件
+    def completion(self):  # 补全蓝光目录；删除临时文件
         if self.checked:
-            bdmv = os.path.join(folder, 'BDMV')
-            backup = os.path.join(bdmv, 'BACKUP')
-            if os.path.exists(backup):
-                for item in os.listdir(backup):
+            for folder in self.bluray_folders:
+                bdmv = os.path.join(folder, 'BDMV')
+                backup = os.path.join(bdmv, 'BACKUP')
+                if os.path.exists(backup):
+                    for item in os.listdir(backup):
+                        if not os.path.exists(os.path.join(bdmv, item)):
+                            if os.path.isdir(os.path.join(backup, item)):
+                                shutil.copytree(os.path.join(backup, item), os.path.join(bdmv, item))
+                            else:
+                                shutil.copy(os.path.join(backup, item), os.path.join(bdmv, item))
+                for item in 'AUXDATA', 'BDJO', 'JAR', 'META':
                     if not os.path.exists(os.path.join(bdmv, item)):
-                        if os.path.isdir(os.path.join(backup, item)):
-                            shutil.copytree(os.path.join(backup, item), os.path.join(bdmv, item))
-                        else:
-                            shutil.copy(os.path.join(backup, item), os.path.join(bdmv, item))
-            for item in 'AUXDATA', 'BDJO', 'JAR', 'META':
-                if not os.path.exists(os.path.join(bdmv, item)):
-                    os.mkdir(os.path.join(bdmv, item))
+                        os.mkdir(os.path.join(bdmv, item))
         for tmp_folder in self.tmp_folders:
             try:
-                shutil.rmtree(tmp_folder)
+                force_remove_folder(tmp_folder)
             except:
                 pass
         if os.path.exists('chapter.txt'):
             try:
-                os.remove('chapter.txt')
+                force_remove_file('chapter.txt')
             except:
                 pass
         if os.path.exists('mkvinfo.txt'):
             try:
-                os.remove('mkvinfo.txt')
+                force_remove_file('mkvinfo.txt')
             except:
                 pass
 
@@ -2109,15 +2110,18 @@ class BluraySubtitleGUI(QWidget):
         sub_files = [self.table2.item(sub_index, 1).text() for sub_index in range(self.table2.rowCount()) if
                      self.sub_check_state[sub_index] == 2]
         try:
-            BluraySubtitle(
+            bs = BluraySubtitle(
                 self.bdmv_folder_path.text(),
                 sub_files,
                 self.checkbox1.isChecked(),
                 progress_dialog
-            ).generate_bluray_subtitle(self.table1)
+            )
+            bs.generate_bluray_subtitle(self.table1)
             QMessageBox.information(self, " ", "生成字幕成功！")
         except Exception as e:
             QMessageBox.information(self, " ", traceback.format_exc())
+        else:
+            bs.completion()
         progress_dialog.close()
         self.altered = False
 
@@ -2129,18 +2133,21 @@ class BluraySubtitleGUI(QWidget):
         progress_dialog.show()
         mkv_files = [self.table2.item(mkv_index, 0).text() for mkv_index in range(self.table2.rowCount())]
         try:
-            BluraySubtitle(
+            bs = BluraySubtitle(
                 self.bdmv_folder_path.text(),
                 mkv_files,
                 self.checkbox1.isChecked(),
                 progress_dialog
-            ).add_chapter_to_mkv(mkv_files, self.table1)
+            )
+            bs.add_chapter_to_mkv(mkv_files, self.table1)
             if self.checkbox1.isChecked():
                 QMessageBox.information(self, " ", "添加章节成功，mkv章节已添加")
             else:
                 QMessageBox.information(self, " ", "添加章节成功，生成的新mkv文件在output文件夹下")
         except Exception as e:
             QMessageBox.information(self, " ", traceback.format_exc())
+        else:
+            bs.completion()
         progress_dialog.close()
 
     def remux_bd(self):
@@ -2283,6 +2290,31 @@ def find_mkvtoolinx():
             MKV_EXTRACT_PATH = default_mkv_extract_path
         else:
             MKV_EXTRACT_PATH = QFileDialog.getOpenFileName(window, '选择mkvextract的位置', '', 'mkvextract*')
+
+
+def force_remove_folder(path):
+    FILE_ATTRIBUTE_NORMAL = 0x80
+    SetFileAttributesW = ctypes.windll.kernel32.SetFileAttributesW
+    SetFileAttributesW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32]
+    SetFileAttributesW.restype = ctypes.c_int
+    for root, dirs, files in os.walk(path, topdown=False):
+        for name in files:
+            SetFileAttributesW(os.path.join(root, name), FILE_ATTRIBUTE_NORMAL)
+        for name in dirs:
+            SetFileAttributesW(os.path.join(root, name), FILE_ATTRIBUTE_NORMAL)
+    SetFileAttributesW(path, FILE_ATTRIBUTE_NORMAL)
+    long_path = r'\\?\\' + os.path.abspath(path)
+    shutil.rmtree(long_path, ignore_errors=True)
+
+
+def force_remove_file(file_path):
+    FILE_ATTRIBUTE_NORMAL = 0x80
+    SetFileAttributesW = ctypes.windll.kernel32.SetFileAttributesW
+    SetFileAttributesW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32]
+    SetFileAttributesW.restype = ctypes.c_int
+    long_path = r'\\?\\' + os.path.abspath(file_path)
+    SetFileAttributesW(long_path, FILE_ATTRIBUTE_NORMAL)
+    os.remove(long_path)
 
 
 if __name__ == "__main__":
