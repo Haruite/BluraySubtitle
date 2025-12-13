@@ -281,7 +281,8 @@ class SRT:
         self.raw = fp.read()
         self.delete_lines = set()
         self.lines = []
-        for line in self.raw.split('\n'):
+        added = True
+        for line in self.raw.split('\n') and added:
             if re.match(r'^(\d+)$', line):
                 new_line = [int(line)]
                 added = False
