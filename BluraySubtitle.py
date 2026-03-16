@@ -1398,6 +1398,15 @@ class BluraySubtitle:
         return track_count, track_info
 
 
+class FilePathTableWidgetItem(QTableWidgetItem):
+    def __lt__(self, other):
+        if isinstance(other, QTableWidgetItem):
+            left = os.path.basename(self.text()).lower() if self.text() else ''
+            right = os.path.basename(other.text()).lower() if other.text() else ''
+            return left < right
+        return super().__lt__(other)
+
+
 class CustomTableWidget(QTableWidget):
     def __init__(self, parent: Optional[QWidget]=None, on_drop: Optional[Callable]=None):
         super().__init__(parent)
@@ -1503,6 +1512,8 @@ class BluraySubtitleGUI(QWidget):
         self.table1 = QTableWidget()
         self.table1.setColumnCount(len(BDMV_LABELS))
         self.table1.setHorizontalHeaderLabels(BDMV_LABELS)
+        self.table1.setSortingEnabled(True)
+        self.table1.horizontalHeader().setSortIndicatorShown(True)
         self.bdmv_folder_path.textChanged.connect(self.on_bdmv_folder_path_change)
         v_layout.addWidget(self.table1)
         self.layout.addWidget(bdmv)
@@ -1526,6 +1537,9 @@ class BluraySubtitleGUI(QWidget):
         self.table2 = CustomTableWidget(self, self.on_subtitle_drop)
         self.table2.setColumnCount(len(SUBTITLE_LABELS))
         self.table2.setHorizontalHeaderLabels(SUBTITLE_LABELS)
+        self.table2.setSortingEnabled(True)
+        self.table2.horizontalHeader().setSortIndicatorShown(True)
+        self.table2.horizontalHeader().sortIndicatorChanged.connect(self.on_subtitle_table_sorted)
         self.subtitle_folder_path.textChanged.connect(self.on_subtitle_folder_path_change)
         v_layout.addWidget(self.table2)
         self.layout.addWidget(subtitle)
@@ -1586,7 +1600,7 @@ class BluraySubtitleGUI(QWidget):
                                 table_widget.setCellWidget(mpls_n, 4, btn3)
                                 table_widget.resizeColumnsToContents()
                                 mpls_n += 1
-                        self.table1.setItem(i, 0, QTableWidgetItem(os.path.normpath(root)))
+                        self.table1.setItem(i, 0, FilePathTableWidgetItem(os.path.normpath(root)))
                         self.table1.setItem(i, 1, QTableWidgetItem(get_folder_size(root)))
                         self.table1.setCellWidget(i, 2, table_widget)
                         self.table1.setRowHeight(i, 100)
@@ -1631,7 +1645,7 @@ class BluraySubtitleGUI(QWidget):
                             check_item.setFlags(check_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                             check_item.setCheckState(Qt.CheckState.Checked)
                             self.table2.setItem(n, 0, check_item)
-                            self.table2.setItem(n, 1, QTableWidgetItem(pth))
+                            self.table2.setItem(n, 1, FilePathTableWidgetItem(pth))
                             self.table2.setItem(n, 2, QTableWidgetItem(get_time_str(Subtitle(pth).max_end_time())))
                             n += 1
                     if self.radio1.isChecked():
@@ -1670,7 +1684,7 @@ class BluraySubtitleGUI(QWidget):
                                 for file in os.listdir(root) if file.endswith('.mkv')]
                     self.table2.setRowCount(len(mkv_path))
                     for i in range(len(mkv_path)):
-                        self.table2.setItem(i, 0, QTableWidgetItem(mkv_path[i]))
+                        self.table2.setItem(i, 0, FilePathTableWidgetItem(mkv_path[i]))
                         self.table2.setItem(i, 1, QTableWidgetItem(get_time_str(MKV(mkv_path[i]).get_duration())))
                     self.table2.resizeColumnsToContents()
                 except:
@@ -1698,10 +1712,11 @@ class BluraySubtitleGUI(QWidget):
 
     def on_subtitle_drop(self):
         if self.radio3.isChecked() or self.radio4.isChecked():
-            sub_files = [self.table2.item(sub_index, 0).text() for sub_index in range(self.table2.rowCount())]
+            sub_files = [self.table2.item(sub_index, 0).text() for sub_index in range(self.table2.rowCount())
+                         if self.table2.item(sub_index, 0)]
         else:
             sub_files = [self.table2.item(sub_index, 1).text() for sub_index in range(self.table2.rowCount())
-                         if self.sub_check_state[sub_index] == 2]
+                         if self.table2.item(sub_index, 0) and self.table2.item(sub_index, 0).checkState() == 2]
         configuration = BluraySubtitle(
             self.bdmv_folder_path.text(),
             sub_files,
@@ -1709,6 +1724,42 @@ class BluraySubtitleGUI(QWidget):
             None
         ).generate_configuration(self.table1)
         self.on_configuration(configuration)
+
+    def on_subtitle_table_sorted(self, logicalIndex: int, order: Qt.SortOrder):
+        # Only handle path column sorting
+        if logicalIndex != 1:
+            return
+        if self.table2.rowCount() == 0:
+            return
+        try:
+            # update row-specific computed columns
+            if self.radio1.isChecked():
+                for i in range(self.table2.rowCount()):
+                    item = self.table2.item(i, 1)
+                    if item and os.path.exists(item.text()):
+                        self.table2.setItem(i, 2, QTableWidgetItem(get_time_str(Subtitle(item.text()).max_end_time())))
+            elif self.radio2.isChecked():
+                for i in range(self.table2.rowCount()):
+                    item = self.table2.item(i, 0)
+                    if item and os.path.exists(item.text()):
+                        self.table2.setItem(i, 1, QTableWidgetItem(get_time_str(MKV(item.text()).get_duration())))
+
+            # Rebuild configuration after sorting
+            if self.radio3.isChecked() or self.radio4.isChecked():
+                sub_files = [self.table2.item(sub_index, 0).text() for sub_index in range(self.table2.rowCount())
+                             if self.table2.item(sub_index, 0)]
+            else:
+                sub_files = [self.table2.item(sub_index, 1).text() for sub_index in range(self.table2.rowCount())
+                             if self.table2.item(sub_index, 0) and self.table2.item(sub_index, 0).checkState() == 2]
+            configuration = BluraySubtitle(
+                self.bdmv_folder_path.text(),
+                sub_files,
+                self.checkbox1.isChecked(),
+                None
+            ).generate_configuration(self.table1)
+            self.on_configuration(configuration)
+        except Exception:
+            traceback.print_exc()
 
     def on_subtitle_select(self):
         sub_check_state = [self.table2.item(sub_index, 0).checkState().value for sub_index in
@@ -1783,7 +1834,7 @@ class BluraySubtitleGUI(QWidget):
                 if sub_files:
                     for i, sub_file in enumerate(sub_files):
                         if i <= len(configuration) + 1:
-                            self.table2.setItem(i, 0, QTableWidgetItem(sub_file))
+                            self.table2.setItem(i, 0, FilePathTableWidgetItem(sub_file))
             self.table2.resizeColumnsToContents()
         else:
             for subtitle_index in range(self.table2.rowCount()):
@@ -1853,7 +1904,25 @@ class BluraySubtitleGUI(QWidget):
     def on_button_play(self, mpls_path: str, btn: QToolButton):
         if btn.text() == 'preview' and self.altered:
             self.generate_subtitle()
-        os.startfile(mpls_path)
+        if sys.platform != 'linux':
+            os.startfile(mpls_path)
+        else:
+            try:
+                output = subprocess.check_output(["xdg-mime", "query", "default", "x-content/video-bluray"])
+                desktop_file = output.decode('utf-8').strip()
+                if not desktop_file:
+                    output = subprocess.check_output(["xdg-mime", "query", "default", "video/mp4"])
+                    desktop_file = output.decode('utf-8').strip()
+                # linux下mpv启用蓝光支持，请编译前在源文件夹执行命令
+                # echo "--enable-libbluray" > ffmpeg_options
+                # 和
+                # echo "-Dlibbluray=enabled" > mpv_options
+                if 'mpv' in desktop_file:
+                    subprocess.Popen(['mpv', f'bd://mpls/{mpls_path[-10:-5]}', f'--bluray-device={mpls_path[:-24]}']).wait()
+                    return
+            except:
+                pass
+            subprocess.run(['xdg-open', mpls_path])
 
     def on_button_main(self, mpls_path: str):
         for bdmv_index in range(self.table1.rowCount()):
