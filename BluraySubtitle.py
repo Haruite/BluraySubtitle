@@ -902,6 +902,16 @@ class BluraySubtitle:
                 force_remove_file('mkvinfo.txt')
             except:
                 pass
+        if os.path.exists('info.json'):
+            try:
+                force_remove_file('info.json')
+            except:
+                pass
+        if os.path.exists('.meta'):
+            try:
+                force_remove_file('.meta')
+            except:
+                pass
 
     def bdmv_remux(self, table: QTableWidget, folder_path: str):
         if not CONFIGURATION:
@@ -1026,6 +1036,7 @@ class BluraySubtitle:
                 os.rename(output_file, mkv_file)
                 for flac_file in flac_files:
                     os.remove(flac_file)
+        self.completion()
         self.progress_dialog.setValue(1000)
         QCoreApplication.processEvents()
 
@@ -1229,6 +1240,7 @@ class BluraySubtitle:
         for sp in os.listdir(sps_folder):
             self.flac_task(sps_folder + os.sep + sp, sps_folder)
 
+        self.completion()
         self.progress_dialog.setValue(1000)
         QCoreApplication.processEvents()
 
@@ -2436,28 +2448,37 @@ def find_mkvtoolinx():
 
 
 def force_remove_folder(path):
-    FILE_ATTRIBUTE_NORMAL = 0x80
-    SetFileAttributesW = ctypes.windll.kernel32.SetFileAttributesW
-    SetFileAttributesW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32]
-    SetFileAttributesW.restype = ctypes.c_int
-    for root, dirs, files in os.walk(path, topdown=False):
-        for name in files:
-            SetFileAttributesW(os.path.join(root, name), FILE_ATTRIBUTE_NORMAL)
-        for name in dirs:
-            SetFileAttributesW(os.path.join(root, name), FILE_ATTRIBUTE_NORMAL)
-    SetFileAttributesW(path, FILE_ATTRIBUTE_NORMAL)
-    long_path = r'\\?\\' + os.path.abspath(path)
-    shutil.rmtree(long_path, ignore_errors=True)
+    if sys.platform == 'win32':
+        FILE_ATTRIBUTE_NORMAL = 0x80
+        SetFileAttributesW = ctypes.windll.kernel32.SetFileAttributesW
+        SetFileAttributesW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32]
+        SetFileAttributesW.restype = ctypes.c_int
+        for root, dirs, files in os.walk(path, topdown=False):
+            for name in files:
+                SetFileAttributesW(os.path.join(root, name), FILE_ATTRIBUTE_NORMAL)
+            for name in dirs:
+                SetFileAttributesW(os.path.join(root, name), FILE_ATTRIBUTE_NORMAL)
+        SetFileAttributesW(path, FILE_ATTRIBUTE_NORMAL)
+        long_path = r'\\?\\' + os.path.abspath(path)
+        shutil.rmtree(long_path, ignore_errors=True)
+    else:
+        if os.path.exists(path):
+            shutil.rmtree(path, ignore_errors=True)
+
 
 
 def force_remove_file(file_path):
-    FILE_ATTRIBUTE_NORMAL = 0x80
-    SetFileAttributesW = ctypes.windll.kernel32.SetFileAttributesW
-    SetFileAttributesW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32]
-    SetFileAttributesW.restype = ctypes.c_int
-    long_path = r'\\?\\' + os.path.abspath(file_path)
-    SetFileAttributesW(long_path, FILE_ATTRIBUTE_NORMAL)
-    os.remove(long_path)
+    if sys.platform == 'win32':
+        FILE_ATTRIBUTE_NORMAL = 0x80
+        SetFileAttributesW = ctypes.windll.kernel32.SetFileAttributesW
+        SetFileAttributesW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32]
+        SetFileAttributesW.restype = ctypes.c_int
+        long_path = r'\\?\\' + os.path.abspath(file_path)
+        SetFileAttributesW(long_path, FILE_ATTRIBUTE_NORMAL)
+        os.remove(long_path)
+    else:
+        if os.path.exists(file_path):
+            os.remove(file_path)
 
 
 if __name__ == "__main__":
