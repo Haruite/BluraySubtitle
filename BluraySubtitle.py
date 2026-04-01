@@ -500,7 +500,7 @@ class MKV:
         find_mkvtoolinx()
 
     def get_duration(self):
-        subprocess.Popen(rf'"{MKV_INFO_PATH}" "{self.path}" -r mkvinfo.txt --ui-language en').wait()
+        subprocess.Popen(rf'"{MKV_INFO_PATH}" "{self.path}" -r mkvinfo.txt --ui-language en_US', shell=True).wait()
         pattern = '| + Duration: '
         duration = 0
         with open('mkvinfo.txt', 'r', encoding='utf-8-sig') as f:
@@ -512,10 +512,10 @@ class MKV:
 
     def add_chapter(self, edit_file: bool):
         if edit_file:
-            subprocess.Popen(rf'"{MKV_PROP_EDIT_PATH}" "{self.path}" --chapters chapter.txt').wait()
+            subprocess.Popen(rf'"{MKV_PROP_EDIT_PATH}" "{self.path}" --chapters chapter.txt', shell=True).wait()
         else:
             new_path = os.path.join(os.path.dirname(self.path), 'output', os.path.basename(self.path))
-            subprocess.Popen(rf'"{MKV_MERGE_PATH}" --chapters chapter.txt -o "{new_path}" "{self.path}"').wait()
+            subprocess.Popen(rf'"{MKV_MERGE_PATH}" --chapters chapter.txt -o "{new_path}" "{self.path}"', shell=True).wait()
 
 
 class M2TS:
@@ -588,7 +588,8 @@ class BluraySubtitle:
         self.tmp_folders = []
         if sys.platform == 'win32':
             for root, dirs, files in os.walk(bluray_path):
-                for file in files:
+                dirs.sort()  # Sort dirs to ensure consistent order on all platforms
+                for file in sorted(files):  # Also sort files
                     if file.endswith(".iso") and os.path.getsize(os.path.join(root, file)) > 5 * 1024 ** 3:
                         iso_path = os.path.join(root, file)
                         drivers = self.get_available_drives()
@@ -608,8 +609,12 @@ class BluraySubtitle:
                             pass
         self.sub_files = sub_files
         self.bdmv_path = bluray_path
-        self.bluray_folders = [root for root, dirs, files in os.walk(bluray_path) if 'BDMV' in dirs
-                               and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV'))]
+        bluray_folders = []
+        for root, dirs, files in os.walk(bluray_path):
+            dirs.sort()  # Sort dirs to ensure consistent order on all platforms
+            if 'BDMV' in dirs and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV')):
+                bluray_folders.append(root)
+        self.bluray_folders = bluray_folders
         self.checked = checked
         self.progress_dialog = progress_dialog
         self.configuration = {}
@@ -838,6 +843,7 @@ class BluraySubtitle:
                         QCoreApplication.processEvents()
                         mkv_index += 1
                         duration = MKV(mkv_files[mkv_index]).get_duration()
+                        print(mkv_files[mkv_index])
                         print(f'集数：{mkv_index + 1}, 时长: {duration}')
                         chapter_text.clear()
 
@@ -918,7 +924,7 @@ class BluraySubtitle:
             bdmv_vol = '0' * (3 - len(str(bdmv_index))) + str(bdmv_index)
             remux_cmd = f'"{MKV_MERGE_PATH}" --split chapters:{chapter_split} -o "{dst_folder}{os.sep}BD_Vol_{bdmv_vol}.mkv" "{mpls_path}"'
             print(f'混流命令: {remux_cmd}')
-            subprocess.Popen(remux_cmd).wait()
+            subprocess.Popen(remux_cmd, shell=True).wait()
             self.progress_dialog.setValue(int((bdmv_index + 1) / len(bdmv_index_conf) * 300))
             QCoreApplication.processEvents()
 
@@ -943,7 +949,7 @@ class BluraySubtitle:
                 for file1 in os.listdir(dst_folder):
                     if file1.startswith(file.removesuffix('.mkv')) and file1.endswith('.wav'):
                         k += 1
-                        subprocess.Popen(f'"{FLAC_PATH}" -8 -j {FLAC_THREADS} "{os.path.join(dst_folder, file1)}"').wait()
+                        subprocess.Popen(f'"{FLAC_PATH}" -8 -j {FLAC_THREADS} "{os.path.join(dst_folder, file1)}"', shell=True).wait()
                         os.remove(os.path.join(dst_folder, file1))
                         self.progress_dialog.setValue(400 + int(k / j / n * 200))
                         QCoreApplication.processEvents()
@@ -958,7 +964,7 @@ class BluraySubtitle:
                 if self.sub_files and len(self.sub_files) >= i:
                     remux_cmd += f' --language 0:chi "{self.sub_files[i - 1]}"'
                 print(f'混流命令: {remux_cmd}')
-                subprocess.Popen(remux_cmd).wait()
+                subprocess.Popen(remux_cmd, shell=True).wait()
                 os.remove(mkv_file)
                 os.rename(output_file, mkv_file)
                 for flac_file in flac_files:
@@ -984,7 +990,7 @@ class BluraySubtitle:
                         if len(index_to_m2ts) > 1:
                             sp_index += 1
                             subprocess.Popen(f'"{MKV_MERGE_PATH}" -o "{sps_folder}{os.sep}BD_Vol_'
-                                             f'{bdmv_vol}_SP0{sp_index}.mkv" "{mpls_file_path}"').wait()
+                                             f'{bdmv_vol}_SP0{sp_index}.mkv" "{mpls_file_path}"', shell=True).wait()
                             parsed_m2ts_files |= set(index_to_m2ts.values())
             stream_folder = os.path.dirname(mpls_path).removesuffix('PLAYLIST') + 'STREAM'
             for stream_file in os.listdir(stream_folder):
@@ -992,7 +998,7 @@ class BluraySubtitle:
                     if M2TS(os.path.join(stream_folder, stream_file)).get_duration() > 30 * 90000:
                         subprocess.Popen(f'"{MKV_MERGE_PATH}" -o "{sps_folder}{os.sep}BD_Vol_'
                                          f'{bdmv_vol}_{stream_file[:-5]}.mkv" '
-                                         f'"{os.path.join(stream_folder, stream_file)}"').wait()
+                                         f'"{os.path.join(stream_folder, stream_file)}"', shell=True).wait()
         self.progress_dialog.setValue(900)
         QCoreApplication.processEvents()
 
@@ -1002,7 +1008,7 @@ class BluraySubtitle:
             if track_info:
                 for file1 in os.listdir(sps_folder):
                     if file1.startswith(sp.removesuffix('.mkv')) and file1.endswith('.wav'):
-                        subprocess.Popen(f'"{FLAC_PATH}" -8 -j {FLAC_THREADS} "{os.path.join(sps_folder, file1)}"').wait()
+                        subprocess.Popen(f'"{FLAC_PATH}" -8 -j {FLAC_THREADS} "{os.path.join(sps_folder, file1)}"', shell=True).wait()
                         os.remove(os.path.join(sps_folder, file1))
                 flac_files = []
                 for file1 in os.listdir(sps_folder):
@@ -1011,7 +1017,7 @@ class BluraySubtitle:
                 output_file = os.path.join(sps_folder, os.path.splitext(sp)[0] + '(1).mkv')
                 remux_cmd = self.generate_remux_cmd(track_count, track_info, flac_files, output_file, mkv_file)
                 print(f'混流命令: {remux_cmd}')
-                subprocess.Popen(remux_cmd).wait()
+                subprocess.Popen(remux_cmd, shell=True).wait()
                 os.remove(mkv_file)
                 os.rename(output_file, mkv_file)
                 for flac_file in flac_files:
@@ -1160,7 +1166,7 @@ class BluraySubtitle:
                          f'{(" --attachment-name Cover.jpg" + " --attach-file " + "\"" + cover + "\"") if cover else ""}  '
                          f'"{mpls_path}"')
             print(f'混流命令: {remux_cmd}')
-            subprocess.Popen(remux_cmd).wait()
+            subprocess.Popen(remux_cmd, shell=True).wait()
             self.progress_dialog.setValue(int((bdmv_index + 1) / len(bdmv_index_conf) * 300))
             QCoreApplication.processEvents()
 
@@ -1195,7 +1201,7 @@ class BluraySubtitle:
                         if len(index_to_m2ts) > 1:
                             sp_index += 1
                             subprocess.Popen(f'"{MKV_MERGE_PATH}" -o "{sps_folder}{os.sep}BD_Vol_'
-                                             f'{bdmv_vol}_SP0{sp_index}.mkv" "{mpls_file_path}"').wait()
+                                             f'{bdmv_vol}_SP0{sp_index}.mkv" "{mpls_file_path}"', shell=True).wait()
                             parsed_m2ts_files |= set(index_to_m2ts.values())
             stream_folder = os.path.dirname(mpls_path).removesuffix('PLAYLIST') + 'STREAM'
             for stream_file in os.listdir(stream_folder):
@@ -1203,7 +1209,7 @@ class BluraySubtitle:
                     if M2TS(os.path.join(stream_folder, stream_file)).get_duration() > 30 * 90000:
                         subprocess.Popen(f'"{MKV_MERGE_PATH}" -o "{sps_folder}{os.sep}BD_Vol_'
                                          f'{bdmv_vol}_{stream_file[:-5]}.mkv" '
-                                         f'"{os.path.join(stream_folder, stream_file)}"').wait()
+                                         f'"{os.path.join(stream_folder, stream_file)}"', shell=True).wait()
         self.progress_dialog.setValue(900)
         QCoreApplication.processEvents()
 
@@ -1237,7 +1243,7 @@ class BluraySubtitle:
                     if file1_path.endswith('.wav'):
                         n = len(os.listdir(dst_folder))
                         flac_file = os.path.splitext(file1_path)[0] + '.flac'
-                        subprocess.Popen(f'"{FLAC_PATH}" -8 -j {FLAC_THREADS} "{file1_path} -o {flac_file}"').wait()
+                        subprocess.Popen(f'"{FLAC_PATH}" -8 -j {FLAC_THREADS} "{file1_path} -o {flac_file}"', shell=True).wait()
                         if len(os.listdir(dst_folder)) > n:
                             os.remove(file1_path)
                             delta = os.path.getsize(file1_path) - os.path.getsize(flac_file)
@@ -1246,9 +1252,9 @@ class BluraySubtitle:
                         track_id = int(os.path.split(file1_path)[-1].split('.')[-2].removeprefix('track'))
                         bits = track_bits.get(track_id, 24)
                         wav_file = os.path.splitext(file1_path)[0] + '.wav'
-                        subprocess.Popen(f'{FFMPEG_PATH} -i "{file1_path}"  -c:a pcm_s{bits}le -f w64 "{wav_file}"').wait()
+                        subprocess.Popen(f'{FFMPEG_PATH} -i "{file1_path}"  -c:a pcm_s{bits}le -f w64 "{wav_file}"', shell=True).wait()
                         flac_file = os.path.splitext(file1_path)[0] + '.flac'
-                        subprocess.Popen(f'{FLAC_PATH} -8 -j {FLAC_THREADS} "{wav_file}" -o "{flac_file}"').wait()
+                        subprocess.Popen(f'{FLAC_PATH} -8 -j {FLAC_THREADS} "{wav_file}" -o "{flac_file}"', shell=True).wait()
                         if os.path.exists(flac_file):
                             if os.path.getsize(flac_file) > os.path.getsize(file1_path):
                                 print(f'flac文件比原音轨大，将删除{flac_file}')
@@ -1273,7 +1279,7 @@ class BluraySubtitle:
                             n = len(os.listdir(dst_folder))
                             print(f'flac压缩wav文件{file1_path}失败，将使用ffmpeg压缩')
                             subprocess.Popen(
-                                f'{FFMPEG_PATH} -i "{file1_path}" -c:a flac "{file1_path.removesuffix(".wav") + ".flac"}"').wait()
+                                f'{FFMPEG_PATH} -i "{file1_path}" -c:a flac "{file1_path.removesuffix(".wav") + ".flac"}"', shell=True).wait()
                             if len(os.listdir(dst_folder)) > n:
                                 os.remove(file1_path)
                 for file1 in os.listdir(dst_folder):
@@ -1284,7 +1290,7 @@ class BluraySubtitle:
                 output_file1 = os.path.join(dst_folder, os.path.splitext(output_file)[0] + '(1).mkv')
                 remux_cmd = self.generate_remux_cmd(track_count, track_info, flac_files, output_file1, output_file)
                 print(f'混流命令：{remux_cmd}')
-                subprocess.Popen(remux_cmd).wait()
+                subprocess.Popen(remux_cmd, shell=True).wait()
                 if os.path.getsize(output_file1) > os.path.getsize(output_file):
                     os.remove(output_file1)
                 else:
@@ -1318,7 +1324,7 @@ class BluraySubtitle:
     def extract_lossless(self, mkv_file: str, dolby_truehd_tracks: list[int]) -> tuple[int, dict[int, str]]:
         process = subprocess.Popen(f'mkvinfo "{mkv_file}" --ui-language en',
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                   encoding='utf-8', errors='ignore')
+                                   encoding='utf-8', errors='ignore', shell=True)
         stdout, stderr = process.communicate()
 
         track_info = {}
@@ -1359,13 +1365,13 @@ class BluraySubtitle:
                     f'{track_id}:"{mkv_file.removesuffix(".mkv")}.track{track_id}.{track_suffix_info[track_id]}"')
             extract_cmd = f'{MKV_EXTRACT_PATH} "{mkv_file}" tracks {" ".join(extract_info)}'
             print(f'正在提取无损音轨，命令:{extract_cmd}')
-            subprocess.Popen(extract_cmd).wait()
+            subprocess.Popen(extract_cmd, shell=True).wait()
 
         return track_count, track_info
 
     def extract_pcm(self, mkv_file: str, dst_path: str) -> tuple[int, dict[int, str]]:
         process = subprocess.Popen(f'"{TSMUXER_PATH}" "{mkv_file}"',
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, shell=True)
         stdout, stderr = process.communicate()
 
         track_info = {}
@@ -1394,7 +1400,7 @@ class BluraySubtitle:
             fp.write('\n')
 
         if track_info:
-            subprocess.Popen(f'"{TSMUXER_PATH}" .meta "{dst_path}"').wait()
+            subprocess.Popen(f'"{TSMUXER_PATH}" .meta "{dst_path}"', shell=True).wait()
         return track_count, track_info
 
 
@@ -1561,25 +1567,24 @@ class BluraySubtitleGUI(QWidget):
                 self.table1.setHorizontalHeaderLabels(BDMV_LABELS)
                 i = 0
                 for root, dirs, files in os.walk(self.bdmv_folder_path.text().strip()):
+                    dirs.sort()  # Sort dirs to ensure consistent order on all platforms
                     if 'BDMV' in dirs and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV')):
                         i += 1
                 self.table1.setRowCount(i)
                 i = 0
                 for root, dirs, files in os.walk(self.bdmv_folder_path.text().strip()):
+                    dirs.sort()  # Sort dirs to ensure consistent order on all platforms
                     if 'BDMV' in dirs and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV')):
                         table_widget = QTableWidget()
                         table_widget.setColumnCount(5)
                         table_widget.setHorizontalHeaderLabels(['mpls_file', 'duration', 'chapters', 'main', 'play'])
                         mpls_n = 0
-                        for mpls_file in os.listdir(os.path.join(root, 'BDMV', 'PLAYLIST')):
-                            if mpls_file.endswith('.mpls'):
-                                mpls_n += 1
-                        table_widget.setRowCount(mpls_n)
+                        mpls_files = sorted([f for f in os.listdir(os.path.join(root, 'BDMV', 'PLAYLIST')) if f.endswith('.mpls')])
+                        table_widget.setRowCount(len(mpls_files))
                         mpls_n = 0
                         selected_mpls = os.path.normpath(BluraySubtitle(root).get_main_mpls(
                             root, self.radio1.isChecked() or self.radio2.isChecked()))
-                        for mpls_file in os.listdir(os.path.join(root, 'BDMV', 'PLAYLIST')):
-                            if mpls_file.endswith('.mpls'):
+                        for mpls_file in mpls_files:
                                 table_widget.setItem(mpls_n, 0, QTableWidgetItem(mpls_file))
                                 mpls_path = os.path.normpath(os.path.join(root, 'BDMV', 'PLAYLIST', mpls_file))
                                 total_time = Chapter(mpls_path).get_total_time()
@@ -1725,10 +1730,58 @@ class BluraySubtitleGUI(QWidget):
         ).generate_configuration(self.table1)
         self.on_configuration(configuration)
 
+    def get_mkv_files_in_table_order(self):
+        """
+        Get mkv files from table2 in the order they are displayed (respecting sorting).
+        """
+        mkv_files = []
+        # Get the path column index based on selected function
+        if self.radio2.isChecked():
+            path_col = 0  # MKV_LABELS = ['path', 'duration']
+            sort_col = 0
+        else:
+            path_col = 1  # SUBTITLE_LABELS = ['select', 'path', ...]
+            sort_col = 1
+        
+        # Get all rows with their data
+        rows_data = []
+        for row_index in range(self.table2.rowCount()):
+            item = self.table2.item(row_index, path_col)
+            if item and item.text():
+                rows_data.append((row_index, item.text()))
+        
+        # Check if table is sorted on path column
+        sort_column = self.table2.horizontalHeader().sortIndicatorSection()
+        sort_order = self.table2.horizontalHeader().sortIndicatorOrder()
+        
+        # If sorted on path column, sort rows_data accordingly
+        if sort_column == sort_col:
+            rows_data.sort(key=lambda x: x[1], reverse=(sort_order == Qt.SortOrder.DescendingOrder))
+        
+        # Extract the sorted mkv file paths
+        for _, path in rows_data:
+            if path:
+                mkv_files.append(path)
+        
+        return mkv_files
+
     def on_subtitle_table_sorted(self, logicalIndex: int, order: Qt.SortOrder):
-        # Only handle path column sorting
-        if logicalIndex != 1:
+        # Handle path column sorting based on which function is selected
+        # For radio2 (mkv chapters), path is at index 0 (MKV_LABELS) - no configuration rebuild needed
+        # For others, path is at index 1 (SUBTITLE_LABELS)
+        if self.radio2.isChecked():
+            if logicalIndex != 0:
+                return
+            # For radio2, just update the duration column after sorting
+            for i in range(self.table2.rowCount()):
+                item = self.table2.item(i, 0)
+                if item and os.path.exists(item.text()):
+                    self.table2.setItem(i, 1, QTableWidgetItem(get_time_str(MKV(item.text()).get_duration())))
             return
+        else:
+            if logicalIndex != 1:
+                return
+        
         if self.table2.rowCount() == 0:
             return
         try:
@@ -1738,11 +1791,6 @@ class BluraySubtitleGUI(QWidget):
                     item = self.table2.item(i, 1)
                     if item and os.path.exists(item.text()):
                         self.table2.setItem(i, 2, QTableWidgetItem(get_time_str(Subtitle(item.text()).max_end_time())))
-            elif self.radio2.isChecked():
-                for i in range(self.table2.rowCount()):
-                    item = self.table2.item(i, 0)
-                    if item and os.path.exists(item.text()):
-                        self.table2.setItem(i, 1, QTableWidgetItem(get_time_str(MKV(item.text()).get_duration())))
 
             # Rebuild configuration after sorting
             if self.radio3.isChecked() or self.radio4.isChecked():
@@ -1918,7 +1966,7 @@ class BluraySubtitleGUI(QWidget):
                 # 和
                 # echo "-Dlibbluray=enabled" > mpv_options
                 if 'mpv' in desktop_file:
-                    subprocess.Popen(['mpv', f'bd://mpls/{mpls_path[-10:-5]}', f'--bluray-device={mpls_path[:-24]}']).wait()
+                    subprocess.Popen(['mpv', f'bd://mpls/{mpls_path[-10:-5]}', f'--bluray-device={mpls_path[:-24]}'], shell=True).wait()
                     return
             except:
                 pass
@@ -2201,7 +2249,10 @@ class BluraySubtitleGUI(QWidget):
         else:
             progress_dialog = QProgressDialog('混流中', '取消', 0, 1000, self)
         progress_dialog.show()
-        mkv_files = [self.table2.item(mkv_index, 0).text() for mkv_index in range(self.table2.rowCount())]
+        # Use sorted mkv files if table is sorted, otherwise use original order
+        mkv_files = self.get_mkv_files_in_table_order()
+        if not mkv_files:
+            mkv_files = [self.table2.item(mkv_index, 0).text() for mkv_index in range(self.table2.rowCount())]
         try:
             bs = BluraySubtitle(
                 self.bdmv_folder_path.text(),
