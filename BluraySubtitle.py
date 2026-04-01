@@ -30,11 +30,11 @@ from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLa
     QTableWidget, QTableWidgetItem, QDialog, QPushButton, QComboBox, QMenu, QAbstractItemView
 
 
-TSMUXER_PATH = 'tsMuxeR.exe'  # tsmuxer可执行文件的路径
-FLAC_PATH = 'flac.exe'  # flac可执行文件路径
-FLAC_THREADS = 16  # flac线程数
-FFMPEG_PATH = 'ffmpeg.exe'  # ffmpeg可执行文件路径
-FFPROBE_PATH = 'ffprobe.exe'  # ffprobe可执行文件路径
+TSMUXER_PATH = '$home/下载/tsMuxer-2.7.0-linux/tsMuxeR'  # tsmuxer可执行文件的路径
+FLAC_PATH = '/usr/bin/flac'  # flac可执行文件路径
+FLAC_THREADS = 20  # flac线程数
+FFMPEG_PATH = '/usr/bin/ffmpeg'  # ffmpeg可执行文件路径
+FFPROBE_PATH = '/usr/bin/ffprobe'  # ffprobe可执行文件路径
 
 MKV_INFO_PATH = ''
 MKV_MERGE_PATH = ''
@@ -949,8 +949,12 @@ class BluraySubtitle:
                 for file1 in os.listdir(dst_folder):
                     if file1.startswith(file.removesuffix('.mkv')) and file1.endswith('.wav'):
                         k += 1
-                        subprocess.Popen(f'"{FLAC_PATH}" -8 -j {FLAC_THREADS} "{os.path.join(dst_folder, file1)}"', shell=True).wait()
-                        os.remove(os.path.join(dst_folder, file1))
+                        wav_path = os.path.join(dst_folder, file1)
+                        flac_path = wav_path.removesuffix('.wav') + '.flac'
+                        subprocess.Popen(f'"{FLAC_PATH}" -8 -j {FLAC_THREADS} "{wav_path}"', shell=True).wait()
+                        if not os.path.exists(flac_path):
+                            subprocess.Popen(f'{FFMPEG_PATH} -i "{wav_path}" -c:a flac "{flac_path}"', shell=True).wait()
+                        os.remove(wav_path)
                         self.progress_dialog.setValue(400 + int(k / j / n * 200))
                         QCoreApplication.processEvents()
 
@@ -1119,26 +1123,35 @@ class BluraySubtitle:
                 output_name = ''
                 for filename in os.listdir(meta_folder):
                     if filename == 'bdmt_eng.xml':
-                        tree = et.parse(os.path.join(meta_folder, filename))
-                        _folder = tree.getroot()
-                        ns = {'di': 'urn:BDA:bdmv;discinfo'}
-                        output_name = _folder.find('.//di:name', ns).text
-                        break
-                if not output_name:
-                    for filename in os.listdir(meta_folder):
-                        if filename == 'bdmt_zho.xml':
+                        try:
                             tree = et.parse(os.path.join(meta_folder, filename))
                             _folder = tree.getroot()
                             ns = {'di': 'urn:BDA:bdmv;discinfo'}
                             output_name = _folder.find('.//di:name', ns).text
                             break
+                        except (et.ParseError, FileNotFoundError):
+                            continue
                 if not output_name:
                     for filename in os.listdir(meta_folder):
-                        tree = et.parse(os.path.join(meta_folder, filename))
-                        _folder = tree.getroot()
-                        ns = {'di': 'urn:BDA:bdmv;discinfo'}
-                        output_name = _folder.find('.//di:name', ns).text
-                        break
+                        if filename == 'bdmt_zho.xml':
+                            try:
+                                tree = et.parse(os.path.join(meta_folder, filename))
+                                _folder = tree.getroot()
+                                ns = {'di': 'urn:BDA:bdmv;discinfo'}
+                                output_name = _folder.find('.//di:name', ns).text
+                                break
+                            except (et.ParseError, FileNotFoundError):
+                                continue
+                if not output_name:
+                    for filename in os.listdir(meta_folder):
+                        try:
+                            tree = et.parse(os.path.join(meta_folder, filename))
+                            _folder = tree.getroot()
+                            ns = {'di': 'urn:BDA:bdmv;discinfo'}
+                            output_name = _folder.find('.//di:name', ns).text
+                            break
+                        except (et.ParseError, FileNotFoundError):
+                            continue
                 if not output_name:
                     output_name = os.path.split(mpls_path[:-24])[-1]
             char_map = {
@@ -1322,7 +1335,7 @@ class BluraySubtitle:
                 f'-a {audio_tracks} "{mkv_file}" {language_options}')
 
     def extract_lossless(self, mkv_file: str, dolby_truehd_tracks: list[int]) -> tuple[int, dict[int, str]]:
-        process = subprocess.Popen(f'mkvinfo "{mkv_file}" --ui-language en',
+        process = subprocess.Popen(f'mkvinfo "{mkv_file}" --ui-language en_US',
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                    encoding='utf-8', errors='ignore', shell=True)
         stdout, stderr = process.communicate()
