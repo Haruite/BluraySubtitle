@@ -1979,7 +1979,16 @@ class BluraySubtitleGUI(QWidget):
                 # 和
                 # echo "-Dlibbluray=enabled" > mpv_options
                 if 'mpv' in desktop_file:
-                    subprocess.Popen(['mpv', f'bd://mpls/{mpls_path[-10:-5]}', f'--bluray-device={mpls_path[:-24]}'], shell=True).wait()
+                    mpls_name = mpls_path[:-5]
+                    sub_file = None
+                    if os.path.exists(mpls_name + '.ass'):
+                        sub_file = mpls_name + '.ass'
+                    elif os.path.exists(mpls_name + '.srt'):
+                        sub_file = mpls_name + '.srt'
+                    if sub_file:
+                        subprocess.Popen(f'mpv --sub-file="{sub_file}" bd://mpls/{mpls_path[-10:-5]} --bluray-device="{mpls_path[:-24]}"', shell=True).wait()
+                    else:
+                        subprocess.Popen(f'mpv bd://mpls/{mpls_path[-10:-5]} --bluray-device="{mpls_path[:-24]}"', shell=True).wait()
                     return
             except:
                 pass
