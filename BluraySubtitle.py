@@ -508,6 +508,14 @@ class MKV:
                 if line[:len(pattern)] == pattern:
                     time_str = line[len(pattern):]
                     duration = int(time_str[:2]) * 3600 + int(time_str[3:5]) * 60 + float(time_str[6:])
+        if duration == 0:
+            subprocess.Popen(rf'"{MKV_INFO_PATH}" "{self.path}" -r mkvinfo.txt --ui-language en', shell=True).wait()
+            pattern = '| + Duration: '
+            with open('mkvinfo.txt', 'r', encoding='utf-8-sig') as f:
+                for line in f:
+                    if line[:len(pattern)] == pattern:
+                        time_str = line[len(pattern):]
+                        duration = int(time_str[:2]) * 3600 + int(time_str[3:5]) * 60 + float(time_str[6:])
         return duration
 
     def add_chapter(self, edit_file: bool):
@@ -1061,7 +1069,7 @@ class BluraySubtitle:
             chapter.get_pid_to_language()
             m2ts_file = os.path.join(os.path.join(mpls_path[:-19], 'STREAM'), chapter.in_out_time[0][0] + '.m2ts')
             print(f'正在分析mpls的第一个文件{m2ts_file}的轨道')
-            cmd = f'{FFPROBE_PATH} -v error -show_streams -show_format -of json "{m2ts_file}" >info.json 2>&1'
+            cmd = f'"{FFPROBE_PATH}" -v error -show_streams -show_format -of json "{m2ts_file}" >info.json 2>&1'
             subprocess.Popen(cmd, shell=True).wait()
 
             with open('info.json', 'r', encoding='utf-8') as fp:
@@ -1247,7 +1255,7 @@ class BluraySubtitle:
         dolby_truehd_tracks = []
         track_bits = {}
         if os.path.exists(output_file):
-            subprocess.Popen(f'{FFPROBE_PATH} -v error -show_streams -show_format -of json "{output_file}" >info.json 2>&1',
+            subprocess.Popen(f'"{FFPROBE_PATH}" -v error -show_streams -show_format -of json "{output_file}" >info.json 2>&1',
                              shell=True).wait()
             with open('info.json', 'r', encoding='utf-8') as fp:
                 data = json.load(fp)
@@ -1342,13 +1350,19 @@ class BluraySubtitle:
         tracker_order = ','.join(tracker_order)
         audio_tracks = '!' + ','.join(audio_tracks)
         language_options = ' '.join(language_options)
-        return (f'{MKV_MERGE_PATH} -o "{output_file}" --track-order {tracker_order} '
+        return (f'"{MKV_MERGE_PATH}" -o "{output_file}" --track-order {tracker_order} '
                 f'-a {audio_tracks} "{mkv_file}" {language_options}')
 
     def extract_lossless(self, mkv_file: str, dolby_truehd_tracks: list[int]) -> tuple[int, dict[int, str]]:
-        process = subprocess.Popen(f'mkvinfo "{mkv_file}" --ui-language en_US',
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                   encoding='utf-8', errors='ignore', shell=True)
+        if sys.platform == 'win32':
+            process = subprocess.Popen(f'"{MKV_INFO_PATH}" "{mkv_file}" --ui-language en',
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                       encoding='utf-8', errors='ignore', shell=True)
+            print(f'{MKV_INFO_PATH} "{mkv_file}" --ui-language en')
+        else:
+            process = subprocess.Popen(f'"{MKV_INFO_PATH}" "{mkv_file}" --ui-language en_US',
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                       encoding='utf-8', errors='ignore', shell=True)
         stdout, stderr = process.communicate()
 
         track_info = {}
@@ -1387,7 +1401,7 @@ class BluraySubtitle:
             for track_id, lang in track_info.items():
                 extract_info.append(
                     f'{track_id}:"{mkv_file.removesuffix(".mkv")}.track{track_id}.{track_suffix_info[track_id]}"')
-            extract_cmd = f'{MKV_EXTRACT_PATH} "{mkv_file}" tracks {" ".join(extract_info)}'
+            extract_cmd = f'"{MKV_EXTRACT_PATH}" "{mkv_file}" tracks {" ".join(extract_info)}'
             print(f'正在提取无损音轨，命令:{extract_cmd}')
             subprocess.Popen(extract_cmd, shell=True).wait()
 
