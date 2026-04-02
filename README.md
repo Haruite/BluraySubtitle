@@ -13,12 +13,17 @@
 7. 支持调整字幕偏移
 8. 补全蓝光目录
 9. 支持给 mkv 文件添加章节（两种方式，直接编辑或者混流）
+10. 支持原盘 remux，分为动漫原盘 remux 和美剧原盘 remux
+11. 支持 Windows 和 Linux 系统
 
-### 使用教程:
-#### 通用方法：
+### 使用教程（部分图片视频可能源于早期版本，仅供参考）:
+#### 合并字幕通用方法：
 对于大多数的原盘以及对应的字幕，简单三步即可，如图所示
 ![示例图片](https://github.com/Haruite/BluraySubtitle/blob/main/pictures/2025-03-27_22-16-28.png)
-#### 特殊情况：
+也可参考视频
+[![点击播放视频](https://github.com/Haruite/BluraySubtitle/blob/main/pictures/%E7%A4%BA%E4%BE%8B1-%E7%94%9F%E6%88%90%E5%90%88%E5%B9%B6%E5%AD%97%E5%B9%95.mp4_000045.020.png)](https://sbx.mysmy.top/u2/videos/%E7%A4%BA%E4%BE%8B1-%E7%94%9F%E6%88%90%E5%90%88%E5%B9%B6%E5%AD%97%E5%B9%95.mp4)
+注意，linux下拖入字幕文件夹后，字幕排列是乱序的，需要点击 path 栏使其排序
+#### 合并字幕特殊情况：
 1. 存在特典盘或字幕顺序与原盘不对应  
 例如：  
 原盘：U2#54711  
@@ -48,4 +53,21 @@
 ![示例图片](https://github.com/Haruite/BluraySubtitle/blob/main/pictures/2025-03-28_19-36-15.png)
 ![示例图片](https://github.com/Haruite/BluraySubtitle/blob/main/pictures/2025-03-28_19-38-54.png)
 ![示例图片](https://github.com/Haruite/BluraySubtitle/blob/main/pictures/2025-03-28_19-46-33.png)
-![示例图片](https://github.com/Haruite/BluraySubtitle/blob/main/pictures/2025-03-28_19-56-32.png)
+![示例图片](https://github.com/Haruite/BluraySubtitle/blob/main/pictures/2025-03-28_19-56-32.png)  
+#### mkv 文件添加章节  
+操作步骤如下：  
+1. 下载原盘（可以下载时只下载 playlist 文件夹中的 mpls 文件，注意保持目录结构）
+2. 拖入原盘文件夹
+3. 拖入 mkv 所在的文件夹，注意文件夹中应当只有需要添加章节的 mkv 视频，其他视频需要暂时移出
+4. （视情况而定，大部分时候不需要）选择 info 栏的 main 按钮，保证选择对的主播放列表
+5. 点击底部添加章节按钮，等待完成  
+参考视频如下
+[![点击播放视频](https://github.com/Haruite/BluraySubtitle/blob/main/pictures/%E7%A4%BA%E4%BE%8B2-mkv%E6%96%87%E4%BB%B6%E6%B7%BB%E5%8A%A0%E7%AB%A0%E8%8A%82.mp4_000110.135.png)](https://sbx.mysmy.top/u2/videos/%E7%A4%BA%E4%BE%8B2-mkv%E6%96%87%E4%BB%B6%E6%B7%BB%E5%8A%A0%E7%AB%A0%E8%8A%82.mp4)
+#### 原盘 remux  
+操作步骤如下：
+1. 拖入原盘文件夹
+2. （可选）拖入字幕文件夹
+3. (视情况而定，大部分时候不需要）调整 chapter_index 栏，保证文件正确切割
+4. 点击开始 remux 按钮，会要求选择输出文件夹，选择后输出文件夹里面会建立一个和原盘文件夹同名的文件夹，里面存放 remux 文件  
+参考视频如下  
+[![点击播放视频](https://github.com/Haruite/BluraySubtitle/blob/main/pictures/%E7%A4%BA%E4%BE%8B3-%E5%8A%A8%E6%BC%AB%E5%8E%9F%E7%9B%98remux.mp4_000312.462.png)](https://sbx.mysmy.top/u2/videos/%E7%A4%BA%E4%BE%8B3-%E5%8A%A8%E6%BC%AB%E5%8E%9F%E7%9B%98remux.mp4)
