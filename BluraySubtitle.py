@@ -843,7 +843,6 @@ class BluraySubtitle:
                         QCoreApplication.processEvents()
                         mkv_index += 1
                         duration = MKV(mkv_files[mkv_index]).get_duration()
-                        print(mkv_files[mkv_index])
                         print(f'集数：{mkv_index + 1}, 时长: {duration}')
                         chapter_text.clear()
 
@@ -1603,7 +1602,6 @@ class BluraySubtitleGUI(QWidget):
                         table_widget = QTableWidget()
                         table_widget.setColumnCount(5)
                         table_widget.setHorizontalHeaderLabels(['mpls_file', 'duration', 'chapters', 'main', 'play'])
-                        mpls_n = 0
                         mpls_files = sorted([f for f in os.listdir(os.path.join(root, 'BDMV', 'PLAYLIST')) if f.endswith('.mpls')])
                         table_widget.setRowCount(len(mpls_files))
                         mpls_n = 0
