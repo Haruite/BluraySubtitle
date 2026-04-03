@@ -31,16 +31,21 @@ from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLa
     QTableWidget, QTableWidgetItem, QDialog, QPushButton, QComboBox, QMenu, QAbstractItemView
 
 
-TSMUXER_PATH = '$HOME/下载/tsMuxer-2.7.0-linux/tsMuxeR'  # tsmuxer可执行文件的路径
-FLAC_PATH = '/usr/bin/flac'  # flac可执行文件路径
-FLAC_THREADS = 20  # flac线程数
-FFMPEG_PATH = '/usr/bin/ffmpeg'  # ffmpeg可执行文件路径
-FFPROBE_PATH = '/usr/bin/ffprobe'  # ffprobe可执行文件路径
+if hasattr(sys, '_MEIPASS'):
+    exe_dir = sys._MEIPASS
+else:
+    exe_dir = os.path.dirname(sys.executable)
 
-MKV_INFO_PATH = ''
-MKV_MERGE_PATH = ''
-MKV_PROP_EDIT_PATH = ''
-MKV_EXTRACT_PATH = ''
+TSMUXER_PATH = os.path.join(exe_dir, 'tsMuxeR.exe')  # tsmuxer可执行文件的路径
+FLAC_PATH = os.path.join(exe_dir, 'flac.exe')  # flac可执行文件路径
+FLAC_THREADS = 20  # flac线程数
+FFMPEG_PATH = os.path.join(exe_dir, 'ffmpeg.exe')  # ffmpeg可执行文件路径
+FFPROBE_PATH = os.path.join(exe_dir, 'ffprobe.exe')  # ffprobe可执行文件路径
+
+MKV_INFO_PATH = os.path.join(exe_dir, 'mkvinfo.exe')
+MKV_MERGE_PATH = os.path.join(exe_dir, 'mkvmerge.exe')
+MKV_PROP_EDIT_PATH = os.path.join(exe_dir, 'mkvpropedit.exe')
+MKV_EXTRACT_PATH = os.path.join(exe_dir, 'mkvextract.exe')
 BDMV_LABELS = ['path', 'size', 'info']
 SUBTITLE_LABELS = ['select', 'path', 'duration', 'bdmv_index', 'chapter_index', 'offset']
 MKV_LABELS = ['path', 'duration']
@@ -1281,8 +1286,8 @@ class BluraySubtitle:
                         flac_file = os.path.splitext(file1_path)[0] + '.flac'
                         subprocess.Popen(f'"{FLAC_PATH}" -8 -j {FLAC_THREADS} "{file1_path}" -o "{flac_file}"', shell=True).wait()
                         if os.path.exists(flac_file):
-                            os.remove(file1_path)
                             delta = os.path.getsize(file1_path) - os.path.getsize(flac_file)
+                            os.remove(file1_path)
                             print(f'将音轨{file1_path}压缩成flac，减小体积{delta / 1024 ** 2:.3f}MiB')
                         else:
                             subprocess.Popen(f'{FFMPEG_PATH} -i "{file1_path}" -c:a flac "{flac_file}"', shell=True).wait()
@@ -2585,7 +2590,20 @@ def get_mpv_safe_path(extension=".mp4"):
     return None
 
 
+def hide_console_window():
+    # 检查是否是在命令行中运行
+    # 如果父进程是 explorer.exe，说明是双击运行的
+    whnd = ctypes.windll.kernel32.GetConsoleWindow()
+    if whnd != 0:
+        # 获取当前控制台窗口的标题
+        # 如果你觉得逻辑不够精准，可以更复杂地检查父进程
+        # 简单粗暴点：只要不是命令行带参数运行，或者根据你的需求判断
+        if len(sys.argv) == 1: # 假设双击时没有参数
+             ctypes.windll.user32.ShowWindow(whnd, 0) # 0 代表隐藏
+
+
 if __name__ == "__main__":
+    hide_console_window()
     app = QApplication(sys.argv)
     app.setStyleSheet('''     
         QMainWindow {
