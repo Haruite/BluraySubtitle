@@ -30,7 +30,7 @@ from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLa
     QTableWidget, QTableWidgetItem, QDialog, QPushButton, QComboBox, QMenu, QAbstractItemView
 
 
-TSMUXER_PATH = '$home/下载/tsMuxer-2.7.0-linux/tsMuxeR'  # tsmuxer可执行文件的路径
+TSMUXER_PATH = '$HOME/下载/tsMuxer-2.7.0-linux/tsMuxeR'  # tsmuxer可执行文件的路径
 FLAC_PATH = '/usr/bin/flac'  # flac可执行文件路径
 FLAC_THREADS = 20  # flac线程数
 FFMPEG_PATH = '/usr/bin/ffmpeg'  # ffmpeg可执行文件路径
@@ -1029,8 +1029,12 @@ class BluraySubtitle:
             if track_info:
                 for file1 in os.listdir(sps_folder):
                     if file1.startswith(sp.removesuffix('.mkv')) and file1.endswith('.wav'):
-                        subprocess.Popen(f'"{FLAC_PATH}" -8 -j {FLAC_THREADS} "{os.path.join(sps_folder, file1)}"', shell=True).wait()
-                        os.remove(os.path.join(sps_folder, file1))
+                        wav_path = os.path.join(sps_folder, file1)
+                        flac_path = wav_path.removesuffix('.wav') + '.flac'
+                        subprocess.Popen(f'"{FLAC_PATH}" -8 -j {FLAC_THREADS} "{wav_path}"', shell=True).wait()
+                        if not os.path.exists(flac_path):
+                            subprocess.Popen(f'{FFMPEG_PATH} -i "{wav_path}" -c:a flac "{flac_path}"', shell=True).wait()
+                        os.remove(wav_path)
                 flac_files = []
                 for file1 in os.listdir(sps_folder):
                     if file1.startswith(sp.removesuffix('.mkv')) and file1.endswith('.flac'):
@@ -1273,13 +1277,18 @@ class BluraySubtitle:
                 if file1_path != output_file and not file1_path.endswith('.mkv'):
                     print(f'正在压缩音轨{file1_path}')
                     if file1_path.endswith('.wav'):
-                        n = len(os.listdir(dst_folder))
                         flac_file = os.path.splitext(file1_path)[0] + '.flac'
-                        subprocess.Popen(f'"{FLAC_PATH}" -8 -j {FLAC_THREADS} "{file1_path} -o {flac_file}"', shell=True).wait()
-                        if len(os.listdir(dst_folder)) > n:
+                        subprocess.Popen(f'"{FLAC_PATH}" -8 -j {FLAC_THREADS} "{file1_path}" -o "{flac_file}"', shell=True).wait()
+                        if os.path.exists(flac_file):
                             os.remove(file1_path)
                             delta = os.path.getsize(file1_path) - os.path.getsize(flac_file)
                             print(f'将音轨{file1_path}压缩成flac，减小体积{delta / 1024 ** 2:.3f}MiB')
+                        else:
+                            subprocess.Popen(f'{FFMPEG_PATH} -i "{file1_path}" -c:a flac "{flac_file}"', shell=True).wait()
+                            if os.path.exists(flac_file):
+                                os.remove(file1_path)
+                                delta = os.path.getsize(file1_path) - os.path.getsize(flac_file)
+                                print(f'将音轨{file1_path}用ffmpeg压缩成flac，减小体积{delta / 1024 ** 2:.3f}MiB')
                     else:
                         track_id = int(os.path.split(file1_path)[-1].split('.')[-2].removeprefix('track'))
                         bits = track_bits.get(track_id, 24)
@@ -1295,7 +1304,16 @@ class BluraySubtitle:
                                 delta = os.path.getsize(file1_path) - os.path.getsize(flac_file)
                                 print(f'将音轨{file1_path}压缩成flac，减小体积{delta / 1024 ** 2:.3f}MiB')
                         else:
-                            print('\033[31m错误，flac压缩失败，请检查任务输出\033[0m')
+                            subprocess.Popen(f'{FFMPEG_PATH} -i "{wav_file}" -c:a flac "{flac_file}"', shell=True).wait()
+                            if os.path.exists(flac_file):
+                                if os.path.getsize(flac_file) > os.path.getsize(file1_path):
+                                    print(f'ffmpeg压缩的flac文件比原音轨大，将删除{flac_file}')
+                                    os.remove(flac_file)
+                                else:
+                                    delta = os.path.getsize(file1_path) - os.path.getsize(flac_file)
+                                    print(f'将音轨{file1_path}用ffmpeg压缩成flac，减小体积{delta / 1024 ** 2:.3f}MiB')
+                            else:
+                                print('\033[31m错误，ffmpeg压缩也失败\033[0m')
                         os.remove(file1_path)
                         os.remove(wav_file)
             flac_files = []
