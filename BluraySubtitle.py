@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import traceback
+import winreg
 import xml.etree.ElementTree as et
 from dataclasses import dataclass
 from functools import reduce, partial
@@ -2005,9 +2006,31 @@ class BluraySubtitleGUI(QWidget):
             self.on_configuration(configuration)
 
     def on_button_play(self, mpls_path: str, btn: QToolButton):
+        def mpv_play_mpls(mpls_path, mpv_path):
+            mpls_name = mpls_path[:-5]
+            sub_file = None
+            if os.path.exists(mpls_name + '.ass'):
+                sub_file = mpls_name + '.ass'
+            elif os.path.exists(mpls_name + '.srt'):
+                sub_file = mpls_name + '.srt'
+            if sub_file:
+                subprocess.Popen(
+                    f'"{mpv_path}" --sub-file="{sub_file}" bd://mpls/{mpls_path[-10:-5]} --bluray-device="{mpls_path[:-25]}"',
+                    shell=True).wait()
+            else:
+                subprocess.Popen(f'"{mpv_path}" bd://mpls/{mpls_path[-10:-5]} --bluray-device="{mpls_path[:-25]}"',
+                                 shell=True).wait()
+            return
+
         if btn.text() == 'preview' and self.altered:
             self.generate_subtitle()
         if sys.platform != 'linux':
+            if sys.platform == 'win32':
+                mp4_exe_path = get_mpv_safe_path(".mp4")
+                if mp4_exe_path:
+                    if mp4_exe_path.endswith('mpv.exe'):
+                        mpv_play_mpls(mpls_path, mp4_exe_path)
+                        return
             os.startfile(mpls_path)
         else:
             try:
@@ -2021,17 +2044,7 @@ class BluraySubtitleGUI(QWidget):
                 # 和
                 # echo "-Dlibbluray=enabled" > mpv_options
                 if 'mpv' in desktop_file:
-                    mpls_name = mpls_path[:-5]
-                    sub_file = None
-                    if os.path.exists(mpls_name + '.ass'):
-                        sub_file = mpls_name + '.ass'
-                    elif os.path.exists(mpls_name + '.srt'):
-                        sub_file = mpls_name + '.srt'
-                    if sub_file:
-                        subprocess.Popen(f'mpv --sub-file="{sub_file}" bd://mpls/{mpls_path[-10:-5]} --bluray-device="{mpls_path[:-24]}"', shell=True).wait()
-                    else:
-                        subprocess.Popen(f'mpv bd://mpls/{mpls_path[-10:-5]} --bluray-device="{mpls_path[:-24]}"', shell=True).wait()
-                    return
+                    mpv_play_mpls(mpls_path, 'mpv')
             except:
                 pass
             subprocess.run(['xdg-open', mpls_path])
@@ -2509,6 +2522,67 @@ def force_remove_file(file_path):
     else:
         if os.path.exists(file_path):
             os.remove(file_path)
+
+
+def get_mpv_safe_path(extension=".mp4"):
+    def clean(path):
+        if not path: return None
+        path = os.path.expandvars(path).strip()
+        if '"' in path:
+            path = path.split('"')[1]
+        else:
+            path = path.split(' ')[0]
+        if not os.path.isabs(path):
+            path = shutil.which(path)
+        return path if path and os.path.exists(path) else None
+
+    try:
+        choice_path = rf"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{extension}\UserChoice"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, choice_path) as key:
+            prog_id, _ = winreg.QueryValueEx(key, "ProgId")
+
+        if prog_id.startswith("AppX") or "WMP11" in prog_id or "Windows.Photos" in prog_id:
+            return None
+
+        base_name = prog_id.split('\\')[-1] # 去掉路径前缀
+        names_to_try = [base_name]
+        if not base_name.lower().endswith(".exe"):
+            names_to_try.append(base_name + ".exe")
+        if "mpv" in base_name.lower() and "mpv.exe" not in names_to_try:
+            names_to_try.append("mpv.exe")
+
+        for name in names_to_try:
+            try:
+                with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, rf"{name}\shell\open\command") as key:
+                    val, _ = winreg.QueryValueEx(key, "")
+                    res = clean(val)
+                    if res:
+                        return res
+            except:
+                pass
+
+            try:
+                with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, rf"Applications\{name}\shell\open\command") as key:
+                    val, _ = winreg.QueryValueEx(key, "")
+                    res = clean(val)
+                    if res:
+                        return res
+            except:
+                pass
+
+            try:
+                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{name}") as key:
+                    val, _ = winreg.QueryValueEx(key, "")
+                    res = clean(val)
+                    if res:
+                        return res
+            except:
+                pass
+
+    except Exception:
+        pass
+
+    return None
 
 
 if __name__ == "__main__":
