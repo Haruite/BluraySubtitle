@@ -16,7 +16,6 @@ import shutil
 import subprocess
 import sys
 import traceback
-import winreg
 import xml.etree.ElementTree as et
 from dataclasses import dataclass
 from functools import reduce, partial
@@ -29,6 +28,9 @@ from PyQt6.QtGui import QPainter, QColor, QDragMoveEvent, QDropEvent, QPaintEven
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLabel, QToolButton, QLineEdit, \
     QMessageBox, QHBoxLayout, QGroupBox, QCheckBox, QProgressDialog, QRadioButton, QButtonGroup, \
     QTableWidget, QTableWidgetItem, QDialog, QPushButton, QComboBox, QMenu, QAbstractItemView
+
+if sys.platform == 'win32':
+    import winreg
 
 
 TSMUXER_PATH = '$HOME/下载/tsMuxer-2.7.0-linux/tsMuxeR'  # tsmuxer可执行文件的路径
