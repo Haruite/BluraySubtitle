@@ -1287,8 +1287,8 @@ class BluraySubtitle:
                         else:
                             subprocess.Popen(f'{FFMPEG_PATH} -i "{file1_path}" -c:a flac "{flac_file}"', shell=True).wait()
                             if os.path.exists(flac_file):
-                                os.remove(file1_path)
                                 delta = os.path.getsize(file1_path) - os.path.getsize(flac_file)
+                                os.remove(file1_path)
                                 print(f'将音轨{file1_path}用ffmpeg压缩成flac，减小体积{delta / 1024 ** 2:.3f}MiB')
                     else:
                         track_id = int(os.path.split(file1_path)[-1].split('.')[-2].removeprefix('track'))
