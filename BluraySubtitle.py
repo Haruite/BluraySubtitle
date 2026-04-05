@@ -1,10 +1,8 @@
 # 功能1：生成合并字幕
 # 功能2：给mkv添加章节
-# 功能3：日漫原盘remux
-# 功能4：美剧remux
-# 功能234需要安装mkvtoolnix，指定FLAC_PATH和FLAC_THREADS(flac版本需大于等于1.5.0)
-# 功能3需要指定TSMUXER_PATH
-# 功能4需要指定FFMPEG_PATH和FFPROBE_PATH
+# 功能3：原盘remux
+# 功能23需要安装mkvtoolnix，指定FLAC_PATH和FLAC_THREADS(flac版本需大于等于1.5.0)
+# 功能3需要指定FFMPEG_PATH和FFPROBE_PATH
 # pip install pycountry PyQt6
 import _io
 import ctypes
@@ -33,7 +31,6 @@ if sys.platform == 'win32':
     import winreg
 
 
-TSMUXER_PATH = r'C:\Downloads\tsmuxer-2.7.0-tsMuxerGUI-2.7.0-win64\tsMuxeR.exe'  # tsmuxer可执行文件的路径
 FLAC_PATH = r'C:\Downloads\flac-1.5.0-win\Win64\flac.exe'  # flac可执行文件路径
 FLAC_THREADS = 20  # flac线程数
 FFMPEG_PATH = r'C:\Downloads\ffmpeg-8.1-full_build\bin\ffmpeg.exe'  # ffmpeg可执行文件路径
@@ -923,137 +920,6 @@ class BluraySubtitle:
             except:
                 pass
 
-    def bdmv_remux(self, table: QTableWidget, folder_path: str):
-        if not CONFIGURATION:
-            self.configuration = self.generate_configuration(table)
-        else:
-            self.configuration = CONFIGURATION
-        if not os.path.exists(dst_folder := os.path.join(folder_path, os.path.basename(self.bdmv_path))):
-            os.mkdir(dst_folder)
-        bdmv_index_conf = {}
-        for sub_index, conf in self.configuration.items():
-            if conf['bdmv_index'] in bdmv_index_conf:
-                bdmv_index_conf[conf['bdmv_index']].append(conf)
-            else:
-                bdmv_index_conf[conf['bdmv_index']] = [conf]
-        find_mkvtoolinx()
-
-        for bdmv_index, confs in bdmv_index_conf.items():
-            mpls_path = confs[0]['selected_mpls'] + '.mpls'
-            chapter_split = ','.join(map(str, [conf['chapter_index'] for conf in confs]))
-            bdmv_vol = '0' * (3 - len(str(bdmv_index))) + str(bdmv_index)
-            remux_cmd = f'"{MKV_MERGE_PATH}" --split chapters:{chapter_split} -o "{dst_folder}{os.sep}BD_Vol_{bdmv_vol}.mkv" "{mpls_path}"'
-            print(f'混流命令: {remux_cmd}')
-            subprocess.Popen(remux_cmd, shell=True).wait()
-            self.progress_dialog.setValue(int((bdmv_index + 1) / len(bdmv_index_conf) * 300))
-            QCoreApplication.processEvents()
-
-        self.checked = True
-        mkv_files = [os.path.join(dst_folder, file) for file in os.listdir(dst_folder) if file.endswith('.mkv')]
-        self.add_chapter_to_mkv(mkv_files, table)
-        self.progress_dialog.setValue(400)
-        QCoreApplication.processEvents()
-
-        n = sum(1 for file in os.listdir(dst_folder) if file.endswith('.mkv'))
-        i, k = 0, 0
-        for file in os.listdir(dst_folder):
-            if file.endswith('.mkv'):
-                mkv_file = os.path.join(dst_folder, file)
-                track_count, track_info = self.extract_pcm(mkv_file, dst_folder)
-                if not track_info:
-                    continue
-                j = 0
-                for file1 in os.listdir(dst_folder):
-                    if file1.startswith(file.removesuffix('.mkv')) and file1.endswith('.wav'):
-                        j += 1
-                for file1 in os.listdir(dst_folder):
-                    if file1.startswith(file.removesuffix('.mkv')) and file1.endswith('.wav'):
-                        k += 1
-                        wav_path = os.path.join(dst_folder, file1)
-                        flac_path = wav_path.removesuffix('.wav') + '.flac'
-                        subprocess.Popen(f'"{FLAC_PATH}" -8 -j {FLAC_THREADS} "{wav_path}"', shell=True).wait()
-                        if not os.path.exists(flac_path):
-                            subprocess.Popen(f'{FFMPEG_PATH} -i "{wav_path}" -c:a flac "{flac_path}"', shell=True).wait()
-                        os.remove(wav_path)
-                        self.progress_dialog.setValue(400 + int(k / j / n * 200))
-                        QCoreApplication.processEvents()
-
-                i += 1
-                flac_files = []
-                for file1 in os.listdir(dst_folder):
-                    if file1.startswith(file.removesuffix('.mkv')) and file1.endswith('.flac'):
-                        flac_files.append(os.path.join(dst_folder, file1))
-                output_file = os.path.join(dst_folder, os.path.splitext(file)[0] + '(1).mkv')
-                remux_cmd = self.generate_remux_cmd(track_count, track_info, flac_files, output_file, mkv_file)
-                if self.sub_files and len(self.sub_files) >= i:
-                    remux_cmd += f' --language 0:chi "{self.sub_files[i - 1]}"'
-                print(f'混流命令: {remux_cmd}')
-                subprocess.Popen(remux_cmd, shell=True).wait()
-                os.remove(mkv_file)
-                os.rename(output_file, mkv_file)
-                for flac_file in flac_files:
-                    os.remove(flac_file)
-                self.progress_dialog.setValue(400 + int((k / j / n + i / n) * 200))
-                QCoreApplication.processEvents()
-
-        sps_folder = dst_folder + os.sep + 'SPs'
-        os.mkdir(sps_folder)
-        for bdmv_index, confs in bdmv_index_conf.items():
-            bdmv_vol = '0' * (3 - len(str(bdmv_index))) + str(bdmv_index)
-            mpls_path = confs[0]['selected_mpls'] + '.mpls'
-            index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(Chapter(mpls_path))
-            parsed_m2ts_files = set(index_to_m2ts.values())
-            sp_index = 0
-            for mpls_file in os.listdir(os.path.dirname(mpls_path)):
-                if not mpls_file.endswith('.mpls'):
-                    continue
-                mpls_file_path = os.path.join(os.path.dirname(mpls_path), mpls_file)
-                if mpls_file_path != mpls_path:
-                    index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(Chapter(mpls_file_path))
-                    if not (parsed_m2ts_files & set(index_to_m2ts.values())):
-                        if len(index_to_m2ts) > 1:
-                            sp_index += 1
-                            subprocess.Popen(f'"{MKV_MERGE_PATH}" -o "{sps_folder}{os.sep}BD_Vol_'
-                                             f'{bdmv_vol}_SP0{sp_index}.mkv" "{mpls_file_path}"', shell=True).wait()
-                            parsed_m2ts_files |= set(index_to_m2ts.values())
-            stream_folder = os.path.dirname(mpls_path).removesuffix('PLAYLIST') + 'STREAM'
-            for stream_file in os.listdir(stream_folder):
-                if stream_file not in parsed_m2ts_files and stream_file.endswith('.m2ts'):
-                    if M2TS(os.path.join(stream_folder, stream_file)).get_duration() > 30 * 90000:
-                        subprocess.Popen(f'"{MKV_MERGE_PATH}" -o "{sps_folder}{os.sep}BD_Vol_'
-                                         f'{bdmv_vol}_{stream_file[:-5]}.mkv" '
-                                         f'"{os.path.join(stream_folder, stream_file)}"', shell=True).wait()
-        self.progress_dialog.setValue(900)
-        QCoreApplication.processEvents()
-
-        for sp in os.listdir(sps_folder):
-            mkv_file = os.path.join(sps_folder, sp)
-            track_count, track_info = self.extract_pcm(mkv_file, sps_folder)
-            if track_info:
-                for file1 in os.listdir(sps_folder):
-                    if file1.startswith(sp.removesuffix('.mkv')) and file1.endswith('.wav'):
-                        wav_path = os.path.join(sps_folder, file1)
-                        flac_path = wav_path.removesuffix('.wav') + '.flac'
-                        subprocess.Popen(f'"{FLAC_PATH}" -8 -j {FLAC_THREADS} "{wav_path}"', shell=True).wait()
-                        if not os.path.exists(flac_path):
-                            subprocess.Popen(f'{FFMPEG_PATH} -i "{wav_path}" -c:a flac "{flac_path}"', shell=True).wait()
-                        os.remove(wav_path)
-                flac_files = []
-                for file1 in os.listdir(sps_folder):
-                    if file1.startswith(sp.removesuffix('.mkv')) and file1.endswith('.flac'):
-                        flac_files.append(os.path.join(sps_folder, file1))
-                output_file = os.path.join(sps_folder, os.path.splitext(sp)[0] + '(1).mkv')
-                remux_cmd = self.generate_remux_cmd(track_count, track_info, flac_files, output_file, mkv_file)
-                print(f'混流命令: {remux_cmd}')
-                subprocess.Popen(remux_cmd, shell=True).wait()
-                os.remove(mkv_file)
-                os.rename(output_file, mkv_file)
-                for flac_file in flac_files:
-                    os.remove(flac_file)
-        self.completion()
-        self.progress_dialog.setValue(1000)
-        QCoreApplication.processEvents()
-
     def episodes_remux(self, table: QTableWidget, folder_path: str):
         if not CONFIGURATION:
             self.configuration = self.generate_configuration(table)
@@ -1434,40 +1300,6 @@ class BluraySubtitle:
 
         return track_count, track_info
 
-    def extract_pcm(self, mkv_file: str, dst_path: str) -> tuple[int, dict[int, str]]:
-        process = subprocess.Popen(f'"{TSMUXER_PATH}" "{mkv_file}"',
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, shell=True)
-        stdout, stderr = process.communicate()
-
-        track_info = {}
-        with open('.meta', 'w') as fp:
-            fp.write('MUXOPT --no-pcr-on-video-pid --new-audio-pes --demux --vbr  --vbv-len=500\n')
-            track_count = 0
-            for line in stdout.splitlines():
-                if line.startswith('Track ID'):
-                    track_id = int(line.split('    ')[1]) - 1
-                    track_count = max(track_count, track_id)
-                if line.startswith('Stream ID'):
-                    wrote = False
-                    write_line = line.split('   ')[1] + f', "{mkv_file}"'
-                if line.startswith('Stream type'):
-                    stream_type = line.removeprefix('Stream type: ')
-                if line.startswith('Stream lang'):
-                    if lang := line.removeprefix('Stream lang: '):
-                        write_line += f', {lang}'
-                if not line:
-                    if wrote:
-                        break
-                    if stream_type == 'LPCM':
-                        fp.write(f'{write_line}, track={track_id + 1}\n')
-                        track_info[track_id] = lang
-                    wrote = True
-            fp.write('\n')
-
-        if track_info:
-            subprocess.Popen(f'"{TSMUXER_PATH}" .meta "{dst_path}"', shell=True).wait()
-        return track_count, track_info
-
 
 class FilePathTableWidgetItem(QTableWidgetItem):
     def __lt__(self, other):
@@ -1549,19 +1381,15 @@ class BluraySubtitleGUI(QWidget):
         self.radio2 = QRadioButton(self)
         self.radio2.setText("给mkv添加章节")
         self.radio3 = QRadioButton(self)
-        self.radio3.setText("日漫原盘Remux")
-        self.radio4 = QRadioButton(self)
-        self.radio4.setText("美剧原盘remux")
+        self.radio3.setText("原盘remux")
         group = QButtonGroup(self)
         group.addButton(self.radio1)
         group.addButton(self.radio2)
         group.addButton(self.radio3)
-        group.addButton(self.radio4)
         group.buttonClicked.connect(self.on_select_function)
         h_layout.addWidget(self.radio1)
         h_layout.addWidget(self.radio2)
         h_layout.addWidget(self.radio3)
-        h_layout.addWidget(self.radio4)
         self.layout.addWidget(function_button)
 
         bdmv = QGroupBox()
@@ -1681,7 +1509,7 @@ class BluraySubtitleGUI(QWidget):
                 self.table1.setColumnCount(len(BDMV_LABELS))
                 self.table1.setHorizontalHeaderLabels(BDMV_LABELS)
         self.altered = True
-        if self.radio3.isChecked() or self.radio4.isChecked():
+        if self.radio3.isChecked():
             configuration = BluraySubtitle(
                 self.bdmv_folder_path.text(),
                 [],
@@ -1761,7 +1589,7 @@ class BluraySubtitleGUI(QWidget):
                     self.table2.clear()
                     self.table2.setColumnCount(len(MKV_LABELS))
                     self.table2.setHorizontalHeaderLabels(MKV_LABELS)
-        elif self.radio3.isChecked() or self.radio4.isChecked():
+        elif self.radio3.isChecked():
             sub_files = []
             if self.subtitle_folder_path.text().strip():
                 try:
@@ -1780,7 +1608,7 @@ class BluraySubtitleGUI(QWidget):
             self.on_configuration(configuration)
 
     def on_subtitle_drop(self):
-        if self.radio3.isChecked() or self.radio4.isChecked():
+        if self.radio3.isChecked():
             sub_files = [self.table2.item(sub_index, 0).text() for sub_index in range(self.table2.rowCount())
                          if self.table2.item(sub_index, 0)]
         else:
@@ -1857,7 +1685,7 @@ class BluraySubtitleGUI(QWidget):
                         self.table2.setItem(i, 2, QTableWidgetItem(get_time_str(Subtitle(item.text()).max_end_time())))
 
             # Rebuild configuration after sorting
-            if self.radio3.isChecked() or self.radio4.isChecked():
+            if self.radio3.isChecked():
                 sub_files = [self.table2.item(sub_index, 0).text() for sub_index in range(self.table2.rowCount())
                              if self.table2.item(sub_index, 0)]
             else:
@@ -1894,7 +1722,7 @@ class BluraySubtitleGUI(QWidget):
                 self.table2.setItem(sub_index, 5, None)
 
     def on_configuration(self, configuration: dict[int, dict[str, int | str]]):
-        if self.radio3.isChecked() or self.radio4.isChecked():
+        if self.radio3.isChecked():
             self.table2.setRowCount(len(configuration))
             for sub_index, con in configuration.items():
                 self.table2.setItem(sub_index, 2, QTableWidgetItem(str(con['bdmv_index'])))
@@ -1981,7 +1809,7 @@ class BluraySubtitleGUI(QWidget):
             self.altered = True
 
     def on_chapter_combo(self, subtitle_index: int):
-        if self.radio3.isChecked() or self.radio4.isChecked():
+        if self.radio3.isChecked():
             sub_files = []
             if self.subtitle_folder_path.text().strip():
                 for file in os.listdir(self.subtitle_folder_path.text().strip()):
@@ -2066,8 +1894,8 @@ class BluraySubtitleGUI(QWidget):
                         checked = info.cellWidget(mpls_index, 3).isChecked()
                         if checked:
                             subtitle = bool(self.table2.rowCount() > 0 and self.table2.item(0, 0) and
-                                            self.table2.item(0, 0).text() and not self.radio3.isChecked()
-                                            and not self.radio4.isChecked())
+                                            self.table2.item(0, 0).text()
+                                            and not self.radio3.isChecked())
                             info.cellWidget(mpls_index, 4).setText('preview' if subtitle else 'play')
                             for mpls_index_1 in range(info.rowCount()):
                                 if not mpls_path.endswith(info.item(mpls_index_1, 0).text()):
@@ -2274,18 +2102,6 @@ class BluraySubtitleGUI(QWidget):
             self.table2.setColumnCount(len(REMUX_LABELS))
             self.table2.setHorizontalHeaderLabels(REMUX_LABELS)
 
-        if self.radio4.isChecked():
-            self._geometry = self.saveGeometry()
-            self.label2.setText("选择字幕文件所在的文件夹")
-            self.exe_button.setText("开始remux")
-            self.checkbox1.setVisible(False)
-            self.table1.clear()
-            self.table1.setColumnCount(len(BDMV_LABELS))
-            self.table1.setHorizontalHeaderLabels(BDMV_LABELS)
-            self.table2.clear()
-            self.table2.setColumnCount(len(REMUX_LABELS))
-            self.table2.setHorizontalHeaderLabels(REMUX_LABELS)
-
         self.bdmv_folder_path.clear()
         self.subtitle_folder_path.clear()
 
@@ -2303,8 +2119,6 @@ class BluraySubtitleGUI(QWidget):
         if self.radio2.isChecked():
             self.add_chapters()
         if self.radio3.isChecked():
-            self.remux_bd()
-        if self.radio4.isChecked():
             self.remux_episodes()
 
     def generate_subtitle(self):
@@ -2354,23 +2168,6 @@ class BluraySubtitleGUI(QWidget):
             QMessageBox.information(self, " ", traceback.format_exc())
         else:
             bs.completion()
-        progress_dialog.close()
-
-    def remux_bd(self):
-        output_folder = os.path.normpath(QFileDialog.getExistingDirectory(self, "选择输出文件夹"))
-        progress_dialog = QProgressDialog('操作中', '取消', 0, 1000, self)
-        progress_dialog.show()
-        sub_files = [self.table2.item(i, 0).text() for i in range(0, self.table2.rowCount()) if self.table2.item(i, 0)]
-        try:
-            BluraySubtitle(
-                self.bdmv_folder_path.text(),
-                sub_files,
-                self.checkbox1.isChecked(),
-                progress_dialog
-            ).bdmv_remux(self.table1, output_folder)
-            QMessageBox.information(self, " ", "原盘remux成功！")
-        except Exception as e:
-            QMessageBox.information(self, " ", traceback.format_exc())
         progress_dialog.close()
 
     def remux_episodes(self):
