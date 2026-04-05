@@ -1257,7 +1257,7 @@ class BluraySubtitle:
         QCoreApplication.processEvents()
 
         for sp in os.listdir(sps_folder):
-            self.flac_task(sps_folder + os.sep + sp, sps_folder)
+            self.flac_task(sps_folder + os.sep + sp, sps_folder, -1)
 
         self.completion()
         self.progress_dialog.setValue(1000)
@@ -1347,7 +1347,7 @@ class BluraySubtitle:
             if flac_files:
                 output_file1 = os.path.join(dst_folder, os.path.splitext(output_file)[0] + '(1).mkv')
                 remux_cmd = self.generate_remux_cmd(track_count, track_info, flac_files, output_file1, output_file)
-                if self.sub_files and len(self.sub_files) >= i:
+                if self.sub_files and len(self.sub_files) >= i and i > -1:
                     remux_cmd += f' --language 0:chi "{self.sub_files[i - 1]}"'
                 print(f'混流命令：{remux_cmd}')
                 subprocess.Popen(remux_cmd, shell=True).wait()
