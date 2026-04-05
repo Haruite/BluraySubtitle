@@ -1386,7 +1386,6 @@ class BluraySubtitle:
             process = subprocess.Popen(f'"{MKV_INFO_PATH}" "{mkv_file}" --ui-language en',
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                        encoding='utf-8', errors='ignore', shell=True)
-            print(f'{MKV_INFO_PATH} "{mkv_file}" --ui-language en')
         else:
             process = subprocess.Popen(f'"{MKV_INFO_PATH}" "{mkv_file}" --ui-language en_US',
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
