@@ -1115,6 +1115,11 @@ class BluraySubtitle:
                     if stream_info['codec_type'] == 'audio':
                         copy_audio_track.append(str(stream_info['index']))
                         break
+                for stream_info in data['streams']:
+                    if stream_info['codec_type'] == 'audio':
+                        lang = chapter.pid_to_lang.get(int(stream_info['id'], 16), 'und')
+                        if lang == 'jpn' and str(stream_info['index']) not in copy_audio_track:
+                            copy_audio_track.append(str(stream_info['index']))
             else:
                 if selected_eng_audio_track[0] and selected_zho_audio_track[0]:
                     copy_audio_track = [selected_eng_audio_track[0], selected_zho_audio_track[0]]
