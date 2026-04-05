@@ -283,8 +283,8 @@ class SRT:
         self.delete_lines = set()
         self.lines = []
         added = True
-        for line in self.raw.split('\n') and added:
-            if re.match(r'^(\d+)$', line):
+        for line in self.raw.split('\n'):
+            if re.match(r'^(\d+)$', line) and added:
                 new_line = [int(line)]
                 added = False
             elif (re.match(r'^(\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3})$', line)
