@@ -2502,6 +2502,33 @@ if __name__ == "__main__":
             border: 1px solid #888888;
         }
 
+        QRadioButton {
+            spacing: 6px;
+            font-size: 14px;
+        }
+
+        QRadioButton::indicator {
+            width: 16px;
+            height: 16px;
+            border-radius: 8px;
+            border: 1px solid #999999;
+            background-color: white;
+        }
+
+        QRadioButton::indicator:checked {
+            border: 1px solid #888888;
+            background-color: #888888;
+        }
+
+        QRadioButton::indicator:checked:hover {
+            border: 1px solid #666666;
+            background-color: #666666;
+        }
+
+        QRadioButton::indicator:unchecked:hover {
+            border: 1px solid #888888;
+        }
+
         QTableView::indicator {
             width: 16px;
             height: 16px;
