@@ -13,7 +13,7 @@
 7. 支持调整字幕偏移
 8. 补全蓝光目录
 9. 支持给 mkv 文件添加章节（两种方式，直接编辑或者混流）
-10. 支持原盘 remux，分为动漫原盘 remux 和美剧原盘 remux
+10. 支持原盘 remux
 11. 支持 Windows 和 Linux 系统
 
 ### 使用教程（部分图片视频可能源于早期版本，仅供参考）:
@@ -67,7 +67,8 @@
 操作步骤如下：
 1. 拖入原盘文件夹
 2. （可选）拖入字幕文件夹
-3. (视情况而定，大部分时候不需要）调整 chapter_index 栏，保证文件正确切割
-4. 点击开始 remux 按钮，会要求选择输出文件夹，选择后输出文件夹里面会建立一个和原盘文件夹同名的文件夹，里面存放 remux 文件  
+3. （视情况而定，大部分时候不需要）选择 info 栏的 main 按钮，保证选择对的主播放列表
+4. （视情况而定，大部分时候不需要）调整 chapter_index 栏，保证文件正确切割
+5. 点击开始 remux 按钮，会要求选择输出文件夹，选择后输出文件夹里面会建立一个和原盘文件夹同名的文件夹，里面存放 remux 文件  
 参考视频如下  
 [![点击播放视频](https://github.com/Haruite/BluraySubtitle/blob/main/pictures/%E7%A4%BA%E4%BE%8B3-%E5%8A%A8%E6%BC%AB%E5%8E%9F%E7%9B%98remux.mp4_000312.462.png)](https://sbx.mysmy.top/u2/videos/%E7%A4%BA%E4%BE%8B3-%E5%8A%A8%E6%BC%AB%E5%8E%9F%E7%9B%98remux.mp4)
