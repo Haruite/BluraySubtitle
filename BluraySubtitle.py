@@ -33,11 +33,11 @@ if sys.platform == 'win32':
     import winreg
 
 
-TSMUXER_PATH = '$HOME/下载/tsMuxer-2.7.0-linux/tsMuxeR'  # tsmuxer可执行文件的路径
-FLAC_PATH = '/usr/bin/flac'  # flac可执行文件路径
+TSMUXER_PATH = r'C:\Downloads\tsmuxer-2.7.0-tsMuxerGUI-2.7.0-win64\tsMuxeR.exe'  # tsmuxer可执行文件的路径
+FLAC_PATH = r'C:\Downloads\flac-1.5.0-win\Win64\flac.exe'  # flac可执行文件路径
 FLAC_THREADS = 20  # flac线程数
-FFMPEG_PATH = '/usr/bin/ffmpeg'  # ffmpeg可执行文件路径
-FFPROBE_PATH = '/usr/bin/ffprobe'  # ffprobe可执行文件路径
+FFMPEG_PATH = r'C:\Downloads\ffmpeg-8.1-full_build\bin\ffmpeg.exe'  # ffmpeg可执行文件路径
+FFPROBE_PATH = r'C:\Downloads\ffmpeg-8.1-full_build\bin\ffprobe.exe'  # ffprobe可执行文件路径
 
 MKV_INFO_PATH = ''
 MKV_MERGE_PATH = ''
@@ -1222,7 +1222,7 @@ class BluraySubtitle:
         i = 0
         for mkv_file in mkv_files:
             i += 1
-            self.flac_task(mkv_file, dst_folder)
+            self.flac_task(mkv_file, dst_folder, i)
             self.progress_dialog.setValue(400 + int(400 * i / len(mkv_files)))
             QCoreApplication.processEvents()
 
@@ -1263,7 +1263,7 @@ class BluraySubtitle:
         self.progress_dialog.setValue(1000)
         QCoreApplication.processEvents()
 
-    def flac_task(self, output_file, dst_folder):
+    def flac_task(self, output_file, dst_folder, i):
         dolby_truehd_tracks = []
         track_bits = {}
         if os.path.exists(output_file):
@@ -1347,6 +1347,8 @@ class BluraySubtitle:
             if flac_files:
                 output_file1 = os.path.join(dst_folder, os.path.splitext(output_file)[0] + '(1).mkv')
                 remux_cmd = self.generate_remux_cmd(track_count, track_info, flac_files, output_file1, output_file)
+                if self.sub_files and len(self.sub_files) >= i:
+                    remux_cmd += f' --language 0:chi "{self.sub_files[i - 1]}"'
                 print(f'混流命令：{remux_cmd}')
                 subprocess.Popen(remux_cmd, shell=True).wait()
                 if os.path.getsize(output_file1) > os.path.getsize(output_file):
