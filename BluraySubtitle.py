@@ -1040,7 +1040,8 @@ class BluraySubtitle:
             if conf_tmp['bdmv_index'] != bdmv_index:
                 if bdmv_index > 0:
                     self._progress(text='写入字幕文件')
-                    sub.dump(conf['folder'], conf['selected_mpls'])
+                    if hasattr(sub, 'content'):
+                        sub.dump(conf['folder'], conf['selected_mpls'])
                     sub = self._subtitle_cache[self.sub_files[sub_index]].clone()
                 bdmv_index = conf_tmp['bdmv_index']
             else:
@@ -1052,7 +1053,8 @@ class BluraySubtitle:
             if cancel_event and cancel_event.is_set():
                 raise _Cancelled()
         self._progress(text='写入字幕文件')
-        sub.dump(conf['folder'], conf['selected_mpls'])
+        if hasattr(sub, 'content'):
+            sub.dump(conf['folder'], conf['selected_mpls'])
         self._progress(1000)
 
     def add_chapter_to_mkv(self, mkv_files, table: Optional[QTableWidget] = None,
@@ -2106,19 +2108,28 @@ class BluraySubtitleGUI(QWidget):
                 return
 
             rows = payload.get('rows') or []
-            self.table2.clear()
-            self.table2.setColumnCount(len(SUBTITLE_LABELS))
-            self.table2.setHorizontalHeaderLabels(SUBTITLE_LABELS)
-            self.table2.setRowCount(len(rows))
-            for i, (path, dur) in enumerate(rows):
-                check_item = QTableWidgetItem()
-                check_item.setFlags(check_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                check_item.setCheckState(Qt.CheckState.Checked)
-                self.table2.setItem(i, 0, check_item)
-                self.table2.setItem(i, 1, FilePathTableWidgetItem(path))
-                self.table2.setItem(i, 2, QTableWidgetItem(dur))
+            if payload.get('mode') == 3:
+                self.table2.clear()
+                self.table2.setColumnCount(len(REMUX_LABELS))
+                self.table2.setHorizontalHeaderLabels(REMUX_LABELS)
+                self.table2.setRowCount(len(rows))
+                for i, (path, dur) in enumerate(rows):
+                    self.table2.setItem(i, 0, FilePathTableWidgetItem(path))
+                    self.table2.setItem(i, 1, QTableWidgetItem(dur))
+                self.table2.resizeColumnsToContents()
+            else:
+                self.table2.clear()
+                self.table2.setColumnCount(len(SUBTITLE_LABELS))
+                self.table2.setHorizontalHeaderLabels(SUBTITLE_LABELS)
+                self.table2.setRowCount(len(rows))
+                for i, (path, dur) in enumerate(rows):
+                    check_item = QTableWidgetItem()
+                    check_item.setFlags(check_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                    check_item.setCheckState(Qt.CheckState.Checked)
+                    self.table2.setItem(i, 0, check_item)
+                    self.table2.setItem(i, 1, FilePathTableWidgetItem(path))
+                    self.table2.setItem(i, 2, QTableWidgetItem(dur))
 
-            if self.radio1.isChecked():
                 for bdmv_index in range(self.table1.rowCount()):
                     info: QTableWidget = self.table1.cellWidget(bdmv_index, 2)
                     if not info:
@@ -2131,18 +2142,18 @@ class BluraySubtitleGUI(QWidget):
                                 play_btn.setText('preview')
                     info.resizeColumnsToContents()
 
-            self.sub_check_state = [2 for _ in range(self.table2.rowCount())]
-            try:
-                self.table2.cellClicked.disconnect(self.on_subtitle_select)
-            except Exception:
-                pass
-            self.table2.cellClicked.connect(self.on_subtitle_select)
-            self.table2.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-            try:
-                self.table2.customContextMenuRequested.disconnect(self.on_subtitle_menu)
-            except Exception:
-                pass
-            self.table2.customContextMenuRequested.connect(self.on_subtitle_menu)
+                self.sub_check_state = [2 for _ in range(self.table2.rowCount())]
+                try:
+                    self.table2.cellClicked.disconnect(self.on_subtitle_select)
+                except Exception:
+                    pass
+                self.table2.cellClicked.connect(self.on_subtitle_select)
+                self.table2.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+                try:
+                    self.table2.customContextMenuRequested.disconnect(self.on_subtitle_menu)
+                except Exception:
+                    pass
+                self.table2.customContextMenuRequested.connect(self.on_subtitle_menu)
 
             configuration = payload.get('configuration') or {}
             if configuration:
