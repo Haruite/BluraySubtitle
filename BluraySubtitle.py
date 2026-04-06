@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import traceback
 import xml.etree.ElementTree as et
 from dataclasses import dataclass
@@ -21,7 +22,7 @@ from struct import unpack
 from typing import Optional, Generator, Callable
 
 import pycountry
-from PyQt6.QtCore import QCoreApplication, Qt, QPoint
+from PyQt6.QtCore import QCoreApplication, Qt, QPoint, QObject, QThread, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QDragMoveEvent, QDropEvent, QPaintEvent, QDragEnterEvent
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLabel, QToolButton, QLineEdit, \
     QMessageBox, QHBoxLayout, QGroupBox, QCheckBox, QProgressDialog, QRadioButton, QButtonGroup, \
@@ -592,7 +593,7 @@ class M2TS:
 
 class BluraySubtitle:
     def __init__(self, bluray_path:str, sub_files: list[str] = None, checked: bool = True,
-                 progress_dialog: Optional[QProgressDialog] = None):
+                 progress_dialog: Optional[object] = None):
         self.tmp_folders = []
         if sys.platform == 'win32':
             for root, dirs, files in os.walk(bluray_path):
@@ -626,6 +627,22 @@ class BluraySubtitle:
         self.checked = checked
         self.progress_dialog = progress_dialog
         self.configuration = {}
+
+    def _progress(self, value: Optional[int] = None, text: Optional[str] = None):
+        if self.progress_dialog is None:
+            return
+        if callable(self.progress_dialog):
+            try:
+                self.progress_dialog(value, text)
+            except TypeError:
+                if value is not None:
+                    self.progress_dialog(value)
+            return
+        if text is not None and hasattr(self.progress_dialog, 'setLabelText'):
+            self.progress_dialog.setLabelText(text)
+        if value is not None and hasattr(self.progress_dialog, 'setValue'):
+            self.progress_dialog.setValue(int(value))
+        QCoreApplication.processEvents()
 
     @staticmethod
     def get_available_drives():
@@ -821,9 +838,18 @@ class BluraySubtitle:
         self.progress_dialog.setValue(1000)
         QCoreApplication.processEvents()
 
-    def add_chapter_to_mkv(self, mkv_files, table: QTableWidget):
+    def add_chapter_to_mkv(self, mkv_files, table: Optional[QTableWidget] = None,
+                           selected_mpls: Optional[list[tuple[str, str]]] = None):
         mkv_index = 0
-        for folder, chapter, selected_mpls in self.select_mpls_from_table(table):
+        if selected_mpls is not None:
+            iterator = ((folder, Chapter(selected_mpls_no_ext + '.mpls'), selected_mpls_no_ext)
+                        for folder, selected_mpls_no_ext in selected_mpls)
+        else:
+            if table is None:
+                return
+            iterator = self.select_mpls_from_table(table)
+
+        for folder, chapter, selected_mpls in iterator:
             duration = MKV(mkv_files[mkv_index]).get_duration()
             print(f'folder: {folder}')
             print(f'in_out_time: {chapter.in_out_time}')
@@ -847,8 +873,7 @@ class BluraySubtitle:
                         real_time = 0
                         mkv = MKV(mkv_files[mkv_index])
                         mkv.add_chapter(self.checked)
-                        self.progress_dialog.setValue(int((mkv_index + 1) / len(mkv_files) * 1000))
-                        QCoreApplication.processEvents()
+                        self._progress(int((mkv_index + 1) / len(mkv_files) * 1000))
                         mkv_index += 1
                         duration = MKV(mkv_files[mkv_index]).get_duration()
                         print(f'集数：{mkv_index + 1}, 时长: {duration}')
@@ -872,12 +897,10 @@ class BluraySubtitle:
                 f.write('\n'.join(chapter_text))
             mkv = MKV(mkv_files[mkv_index])
             mkv.add_chapter(self.checked)
-            self.progress_dialog.setValue(int((mkv_index + 1) / len(mkv_files) * 1000))
-            QCoreApplication.processEvents()
+            self._progress(int((mkv_index + 1) / len(mkv_files) * 1000))
             mkv_index += 1
 
-        self.progress_dialog.setValue(1000)
-        QCoreApplication.processEvents()
+        self._progress(1000)
 
     def completion(self):  # 补全蓝光目录；删除临时文件
         if self.checked:
@@ -920,9 +943,18 @@ class BluraySubtitle:
             except:
                 pass
 
-    def episodes_remux(self, table: QTableWidget, folder_path: str):
-        if not CONFIGURATION:
-            self.configuration = self.generate_configuration(table)
+    def episodes_remux(self, table: Optional[QTableWidget], folder_path: str,
+                       selected_mpls: Optional[list[tuple[str, str]]] = None,
+                       configuration: Optional[dict[int, dict[str, int | str]]] = None,
+                       cancel_event: Optional[threading.Event] = None,
+                       ensure_tools: bool = True):
+        if configuration is not None:
+            self.configuration = configuration
+        elif not CONFIGURATION:
+            if table is None:
+                self.configuration = {}
+            else:
+                self.configuration = self.generate_configuration(table)
         else:
             self.configuration = CONFIGURATION
         if not os.path.exists(dst_folder := os.path.join(folder_path, os.path.basename(self.bdmv_path))):
@@ -933,15 +965,19 @@ class BluraySubtitle:
                 bdmv_index_conf[conf['bdmv_index']].append(conf)
             else:
                 bdmv_index_conf[conf['bdmv_index']] = [conf]
-        find_mkvtoolinx()
+        if ensure_tools:
+            find_mkvtoolinx()
 
         for bdmv_index, confs in bdmv_index_conf.items():
+            if cancel_event and cancel_event.is_set():
+                raise _Cancelled()
             mpls_path = confs[0]['selected_mpls'] + '.mpls'
 
             chapter = Chapter(mpls_path)
             chapter.get_pid_to_language()
             m2ts_file = os.path.join(os.path.join(mpls_path[:-19], 'STREAM'), chapter.in_out_time[0][0] + '.m2ts')
             print(f'正在分析mpls的第一个文件{m2ts_file}的轨道')
+            self._progress(text=f'分析轨道：{os.path.basename(m2ts_file)}')
             cmd = f'"{FFPROBE_PATH}" -v error -show_streams -show_format -of json "{m2ts_file}" >info.json 2>&1'
             subprocess.Popen(cmd, shell=True).wait()
 
@@ -1075,32 +1111,40 @@ class BluraySubtitle:
                          f'{(" --attachment-name Cover.jpg" + " --attach-file " + "\"" + cover + "\"") if cover else ""}  '
                          f'"{mpls_path}"')
             print(f'混流命令: {remux_cmd}')
+            self._progress(text=f'混流中：BD_Vol_{bdmv_vol}')
             subprocess.Popen(remux_cmd, shell=True).wait()
-            self.progress_dialog.setValue(int((bdmv_index + 1) / len(bdmv_index_conf) * 300))
-            QCoreApplication.processEvents()
+            self._progress(int((bdmv_index + 1) / len(bdmv_index_conf) * 300))
 
         self.checked = True
         mkv_files = [os.path.join(dst_folder, file) for file in os.listdir(dst_folder) if file.endswith('.mkv')]
-        self.add_chapter_to_mkv(mkv_files, table)
-        self.progress_dialog.setValue(400)
-        QCoreApplication.processEvents()
+        if cancel_event and cancel_event.is_set():
+            raise _Cancelled()
+        self._progress(310, '写入章节中')
+        self.add_chapter_to_mkv(mkv_files, table, selected_mpls=selected_mpls)
+        self._progress(400)
 
         i = 0
         for mkv_file in mkv_files:
+            if cancel_event and cancel_event.is_set():
+                raise _Cancelled()
             i += 1
+            self._progress(text=f'压缩音轨：{os.path.basename(mkv_file)}')
             self.flac_task(mkv_file, dst_folder, i)
-            self.progress_dialog.setValue(400 + int(400 * i / len(mkv_files)))
-            QCoreApplication.processEvents()
+            self._progress(400 + int(400 * i / len(mkv_files)))
 
         sps_folder = dst_folder + os.sep + 'SPs'
         os.mkdir(sps_folder)
         for bdmv_index, confs in bdmv_index_conf.items():
+            if cancel_event and cancel_event.is_set():
+                raise _Cancelled()
             bdmv_vol = '0' * (3 - len(str(bdmv_index))) + str(bdmv_index)
             mpls_path = confs[0]['selected_mpls'] + '.mpls'
             index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(Chapter(mpls_path))
             parsed_m2ts_files = set(index_to_m2ts.values())
             sp_index = 0
             for mpls_file in os.listdir(os.path.dirname(mpls_path)):
+                if cancel_event and cancel_event.is_set():
+                    raise _Cancelled()
                 if not mpls_file.endswith('.mpls'):
                     continue
                 mpls_file_path = os.path.join(os.path.dirname(mpls_path), mpls_file)
@@ -1114,20 +1158,22 @@ class BluraySubtitle:
                             parsed_m2ts_files |= set(index_to_m2ts.values())
             stream_folder = os.path.dirname(mpls_path).removesuffix('PLAYLIST') + 'STREAM'
             for stream_file in os.listdir(stream_folder):
+                if cancel_event and cancel_event.is_set():
+                    raise _Cancelled()
                 if stream_file not in parsed_m2ts_files and stream_file.endswith('.m2ts'):
                     if M2TS(os.path.join(stream_folder, stream_file)).get_duration() > 30 * 90000:
                         subprocess.Popen(f'"{MKV_MERGE_PATH}" -o "{sps_folder}{os.sep}BD_Vol_'
                                          f'{bdmv_vol}_{stream_file[:-5]}.mkv" '
                                          f'"{os.path.join(stream_folder, stream_file)}"', shell=True).wait()
-        self.progress_dialog.setValue(900)
-        QCoreApplication.processEvents()
+        self._progress(900, '处理 SPs 音轨')
 
         for sp in os.listdir(sps_folder):
+            if cancel_event and cancel_event.is_set():
+                raise _Cancelled()
             self.flac_task(sps_folder + os.sep + sp, sps_folder, -1)
 
         self.completion()
-        self.progress_dialog.setValue(1000)
-        QCoreApplication.processEvents()
+        self._progress(1000, '完成')
 
     def flac_task(self, output_file, dst_folder, i):
         dolby_truehd_tracks = []
@@ -1356,6 +1402,57 @@ class CustomTableWidget(QTableWidget):
             painter.drawLine(rect1.topLeft().x(), rect1.topLeft().y(), rect2.bottomRight().x(), rect2.topLeft().y())
 
 
+class _Cancelled(Exception):
+    pass
+
+
+class RemuxWorker(QObject):
+    progress = pyqtSignal(int)
+    label = pyqtSignal(str)
+    finished = pyqtSignal()
+    canceled = pyqtSignal()
+    failed = pyqtSignal(str)
+
+    def __init__(self, bdmv_path: str, sub_files: list[str], checked: bool, output_folder: str,
+                 configuration: dict[int, dict[str, int | str]], selected_mpls: list[tuple[str, str]],
+                 cancel_event: threading.Event):
+        super().__init__()
+        self.bdmv_path = bdmv_path
+        self.sub_files = sub_files
+        self.checked = checked
+        self.output_folder = output_folder
+        self.configuration = configuration
+        self.selected_mpls = selected_mpls
+        self.cancel_event = cancel_event
+
+    def run(self):
+        try:
+            def progress_cb(value: Optional[int] = None, text: Optional[str] = None):
+                if value is not None:
+                    self.progress.emit(int(value))
+                if text:
+                    self.label.emit(str(text))
+                if self.cancel_event.is_set():
+                    raise _Cancelled()
+
+            bs = BluraySubtitle(self.bdmv_path, self.sub_files, self.checked, progress_cb)
+            bs.configuration = self.configuration
+            bs.episodes_remux(
+                None,
+                self.output_folder,
+                selected_mpls=self.selected_mpls,
+                configuration=self.configuration,
+                cancel_event=self.cancel_event,
+                ensure_tools=False
+            )
+        except _Cancelled:
+            self.canceled.emit()
+        except Exception:
+            self.failed.emit(traceback.format_exc())
+        else:
+            self.finished.emit()
+
+
 class BluraySubtitleGUI(QWidget):
     def __init__(self):
         super().__init__()
@@ -1371,6 +1468,8 @@ class BluraySubtitleGUI(QWidget):
 
         function_button = QGroupBox('选择功能', self)
         h_layout = QHBoxLayout()
+        h_layout.setContentsMargins(12, 18, 12, 8)
+        h_layout.setSpacing(18)
         function_button.setLayout(h_layout)
         self.subtitle_folder_path = QLineEdit()
         self.subtitle_folder_path.setMinimumWidth(200)
@@ -1454,18 +1553,20 @@ class BluraySubtitleGUI(QWidget):
         self.setLayout(self.layout)
 
     def on_bdmv_folder_path_change(self):
-        if self.bdmv_folder_path.text().strip():
+        bdmv_path = self.bdmv_folder_path.text().strip()
+        table_ok = False
+        if bdmv_path:
             try:
                 self.table1.setColumnCount(len(BDMV_LABELS))
                 self.table1.setHorizontalHeaderLabels(BDMV_LABELS)
                 i = 0
-                for root, dirs, files in os.walk(self.bdmv_folder_path.text().strip()):
+                for root, dirs, files in os.walk(bdmv_path):
                     dirs.sort()  # Sort dirs to ensure consistent order on all platforms
                     if 'BDMV' in dirs and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV')):
                         i += 1
                 self.table1.setRowCount(i)
                 i = 0
-                for root, dirs, files in os.walk(self.bdmv_folder_path.text().strip()):
+                for root, dirs, files in os.walk(bdmv_path):
                     dirs.sort()  # Sort dirs to ensure consistent order on all platforms
                     if 'BDMV' in dirs and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV')):
                         table_widget = QTableWidget()
@@ -1504,12 +1605,14 @@ class BluraySubtitleGUI(QWidget):
                         i += 1
                 self.table1.resizeColumnsToContents()
                 self.table1.setColumnWidth(2, 410)
+                table_ok = True
             except Exception as e:
                 self.table1.clear()
                 self.table1.setColumnCount(len(BDMV_LABELS))
                 self.table1.setHorizontalHeaderLabels(BDMV_LABELS)
+                self.table1.setRowCount(0)
         self.altered = True
-        if self.radio3.isChecked():
+        if self.radio3.isChecked() and bdmv_path and table_ok:
             configuration = BluraySubtitle(
                 self.bdmv_folder_path.text(),
                 [],
@@ -2070,9 +2173,11 @@ class BluraySubtitleGUI(QWidget):
                 self.restoreGeometry(self._geometry)
             self.checkbox1.setText('补全蓝光目录')
             self.table1.clear()
+            self.table1.setRowCount(0)
             self.table1.setColumnCount(len(BDMV_LABELS))
             self.table1.setHorizontalHeaderLabels(BDMV_LABELS)
             self.table2.clear()
+            self.table2.setRowCount(0)
             self.table2.setColumnCount(len(SUBTITLE_LABELS))
             self.table2.setHorizontalHeaderLabels(SUBTITLE_LABELS)
 
@@ -2084,9 +2189,11 @@ class BluraySubtitleGUI(QWidget):
                 self.restoreGeometry(self._geometry)
             self.checkbox1.setText('直接编辑原文件')
             self.table1.clear()
+            self.table1.setRowCount(0)
             self.table1.setColumnCount(len(BDMV_LABELS))
             self.table1.setHorizontalHeaderLabels(BDMV_LABELS)
             self.table2.clear()
+            self.table2.setRowCount(0)
             self.table2.setColumnCount(len(MKV_LABELS))
             self.table2.setHorizontalHeaderLabels(MKV_LABELS)
 
@@ -2096,9 +2203,11 @@ class BluraySubtitleGUI(QWidget):
             self.exe_button.setText("开始remux")
             self.checkbox1.setVisible(False)
             self.table1.clear()
+            self.table1.setRowCount(0)
             self.table1.setColumnCount(len(BDMV_LABELS))
             self.table1.setHorizontalHeaderLabels(BDMV_LABELS)
             self.table2.clear()
+            self.table2.setRowCount(0)
             self.table2.setColumnCount(len(REMUX_LABELS))
             self.table2.setHorizontalHeaderLabels(REMUX_LABELS)
 
@@ -2170,22 +2279,97 @@ class BluraySubtitleGUI(QWidget):
             bs.completion()
         progress_dialog.close()
 
+    def get_selected_mpls_no_ext(self) -> list[tuple[str, str]]:
+        selected = []
+        for bdmv_index in range(self.table1.rowCount()):
+            folder_item = self.table1.item(bdmv_index, 0)
+            if not folder_item:
+                continue
+            info: QTableWidget = self.table1.cellWidget(bdmv_index, 2)
+            if not info:
+                continue
+            for mpls_index in range(info.rowCount()):
+                main_btn: QToolButton = info.cellWidget(mpls_index, 3)
+                if main_btn and main_btn.isChecked():
+                    mpls_item = info.item(mpls_index, 0)
+                    if not mpls_item:
+                        continue
+                    mpls_file = mpls_item.text()
+                    selected_mpls = os.path.normpath(os.path.join(folder_item.text(), 'BDMV', 'PLAYLIST', mpls_file))
+                    if selected_mpls.lower().endswith('.mpls'):
+                        selected.append((folder_item.text(), selected_mpls[:-5]))
+                    else:
+                        selected.append((folder_item.text(), selected_mpls))
+                    break
+        return selected
+
     def remux_episodes(self):
         output_folder = os.path.normpath(QFileDialog.getExistingDirectory(self, "选择输出文件夹"))
+        if not output_folder:
+            return
+        find_mkvtoolinx()
         progress_dialog = QProgressDialog('操作中', '取消', 0, 1000, self)
+        progress_dialog.setMinimumDuration(0)
+        progress_dialog.setAutoClose(False)
+        progress_dialog.setAutoReset(False)
+        progress_dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
         progress_dialog.show()
+        cancel_event = threading.Event()
+        progress_dialog.canceled.connect(cancel_event.set)
         sub_files = [self.table2.item(i, 0).text() for i in range(0, self.table2.rowCount()) if self.table2.item(i, 0)]
         try:
-            BluraySubtitle(
-                self.bdmv_folder_path.text(),
-                sub_files,
-                self.checkbox1.isChecked(),
-                progress_dialog
-            ).episodes_remux(self.table1, output_folder)
-            QMessageBox.information(self, " ", "原盘remux成功！")
+            bs = BluraySubtitle(self.bdmv_folder_path.text(), sub_files, self.checkbox1.isChecked(), None)
+            configuration = bs.generate_configuration(self.table1)
         except Exception as e:
             QMessageBox.information(self, " ", traceback.format_exc())
-        progress_dialog.close()
+            progress_dialog.close()
+            return
+
+        selected_mpls = self.get_selected_mpls_no_ext()
+        self.exe_button.setEnabled(False)
+        self._remux_thread = QThread(self)
+        self._remux_worker = RemuxWorker(
+            self.bdmv_folder_path.text(),
+            sub_files,
+            self.checkbox1.isChecked(),
+            output_folder,
+            configuration,
+            selected_mpls,
+            cancel_event
+        )
+        self._remux_worker.moveToThread(self._remux_thread)
+        self._remux_thread.started.connect(self._remux_worker.run)
+        self._remux_worker.progress.connect(progress_dialog.setValue)
+        self._remux_worker.label.connect(progress_dialog.setLabelText)
+
+        def cleanup():
+            progress_dialog.close()
+            self.exe_button.setEnabled(True)
+            if hasattr(self, '_remux_thread') and self._remux_thread:
+                self._remux_thread.quit()
+                self._remux_thread.wait()
+                self._remux_thread.deleteLater()
+                self._remux_thread = None
+            if hasattr(self, '_remux_worker') and self._remux_worker:
+                self._remux_worker.deleteLater()
+                self._remux_worker = None
+
+        def on_finished():
+            cleanup()
+            QMessageBox.information(self, " ", "原盘remux成功！")
+
+        def on_canceled():
+            cleanup()
+
+        def on_failed(message: str):
+            cleanup()
+            QMessageBox.information(self, " ", message)
+
+        self._remux_worker.finished.connect(on_finished)
+        self._remux_worker.canceled.connect(on_canceled)
+        self._remux_worker.failed.connect(on_failed)
+        self._remux_thread.start()
+        return
 
 
 class CustomBox(QGroupBox):  # 为 Box 框提供拖拽文件夹的功能
@@ -2408,7 +2592,15 @@ if __name__ == "__main__":
 
         QGroupBox {
             border: 1px solid #CCCCCC;
+            margin-top: 14px;
             padding: 8px;
+        }
+
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            subcontrol-position: top left;
+            left: 10px;
+            padding: 0 6px;
         }
 
         QLineEdit {
