@@ -341,14 +341,17 @@ class PGS:
 
 
 def _parse_hhmmss_ms_to_seconds(ts: str) -> float:
-    ts = ts.strip()
-    if len(ts) < 12:
+    try:
+        ts = ts.strip()
+        if len(ts) < 12:
+            return 0.0
+        h = int(ts[0:2])
+        m = int(ts[3:5])
+        s = int(ts[6:8])
+        ms = int(ts[9:12])
+        return h * 3600 + m * 60 + s + ms / 1000
+    except (ValueError, IndexError):
         return 0.0
-    h = int(ts[0:2])
-    m = int(ts[3:5])
-    s = int(ts[6:8])
-    ms = int(ts[9:12])
-    return h * 3600 + m * 60 + s + ms / 1000
 
 
 class Subtitle:
@@ -484,22 +487,34 @@ class Subtitle:
                 self.content.dump_file(f)
 
     def max_end_time(self):
-        if hasattr(self, 'content') and hasattr(self.content, 'lines'):
-            return max(map(lambda line: _parse_hhmmss_ms_to_seconds(line[2]), self.content.lines)) if self.content.lines else 0
-        if self.max_end:
-            return self.max_end
-        end_set = set(map(lambda event: event.End.total_seconds(), self.content.events))
-        max_end = max(end_set)
-        end_set.remove(max_end)
-        max_end_1 = max(end_set)
-        if max_end_1 < max_end - 300:
-            return max_end_1  # 防止个别 Event 结束时间超长(比如评论音轨超出那一集的结束时间)
-        else:
-            return max_end
+        try:
+            if hasattr(self, 'content') and hasattr(self.content, 'lines'):
+                return max(map(lambda line: _parse_hhmmss_ms_to_seconds(line[2]), self.content.lines)) if self.content.lines else 0
+            if self.max_end:
+                return self.max_end
+            if hasattr(self, 'content') and hasattr(self.content, 'events') and self.content.events:
+                end_set = set(map(lambda event: event.End.total_seconds(), self.content.events))
+                if not end_set:
+                    return 0
+                max_end = max(end_set)
+                end_set.remove(max_end)
+                if end_set:  # 确保还有其他元素
+                    max_end_1 = max(end_set)
+                    if max_end_1 < max_end - 300:
+                        return max_end_1  # 防止个别 Event 结束时间超长(比如评论音轨超出那一集的结束时间)
+                return max_end
+            return 0
+        except Exception as e:
+            print(f'获取字幕时长失败: {str(e)}')
+            return 0
 
 
-def _parse_subtitle_worker(file_path: str) -> tuple[str, Subtitle]:
-    return file_path, Subtitle(file_path)
+def _parse_subtitle_worker(file_path: str) -> tuple[str, Subtitle | None]:
+    try:
+        return file_path, Subtitle(file_path)
+    except Exception as e:
+        print(f'字幕文件 {file_path} 解析失败: {str(e)}')
+        return file_path, None
 
 
 class ISO:
@@ -712,25 +727,74 @@ class BluraySubtitle:
         missing = [p for p in file_paths if p and p not in self._subtitle_cache]
         if not missing:
             return
-        if len(missing) == 1:
-            p = missing[0]
-            self._subtitle_cache[p] = Subtitle(p)
+        
+        # 根据平台选择策略
+        if sys.platform == 'win32':
+            # Windows下直接使用多进程
+            self._preload_subtitles_multiprocess(missing, cancel_event)
+        else:
+            # Linux下尝试多进程，失败则回退到单进程
+            try:
+                self._preload_subtitles_multiprocess(missing, cancel_event)
+            except Exception as e:
+                print(f'多进程解析失败，切换到单进程模式: {str(e)}')
+                self._preload_subtitles_single(missing, cancel_event)
+    
+    def _preload_subtitles_single(self, file_paths: list[str], cancel_event: Optional[threading.Event] = None):
+        """单进程模式解析字幕"""
+        for p in file_paths:
+            if cancel_event and cancel_event.is_set():
+                raise _Cancelled()
+            try:
+                self._subtitle_cache[p] = Subtitle(p)
+            except Exception as e:
+                print(f'字幕文件加载失败 {p}: {str(e)}')
+    
+    def _preload_subtitles_multiprocess(self, file_paths: list[str], cancel_event: Optional[threading.Event] = None):
+        """多进程模式解析字幕"""
+        if len(file_paths) == 1:
+            p = file_paths[0]
+            try:
+                self._subtitle_cache[p] = Subtitle(p)
+            except Exception as e:
+                print(f'字幕文件加载失败 {p}: {str(e)}')
             return
 
-        max_workers = min(len(missing), os.cpu_count() or 1)
+        # 在 Linux 下，如果发现是子进程在运行，直接退出，防止递归弹出窗口
+        if sys.platform != 'win32' and multiprocessing.current_process().name != 'MainProcess':
+            return
+
+        max_workers = min(len(file_paths), os.cpu_count() or 1)
+
+        # 适配 Linux/Windows 的上下文获取
+        mp_context = None
         if sys.platform == 'win32':
             mp_context = multiprocessing.get_context('spawn')
         else:
-            mp_context = None
-        with ProcessPoolExecutor(max_workers=max_workers, mp_context=mp_context) as ex:
-            futures = [ex.submit(_parse_subtitle_worker, p) for p in missing]
-            for fut in as_completed(futures):
-                if cancel_event and cancel_event.is_set():
-                    for f in futures:
-                        f.cancel()
-                    raise _Cancelled()
-                p, sub = fut.result()
-                self._subtitle_cache[p] = sub
+            # Linux 默认使用 fork，在 GUI 中更稳定，但必须配合 if __name__ == "__main__"
+            mp_context = multiprocessing.get_context('fork')
+
+        try:
+            with ProcessPoolExecutor(max_workers=max_workers, mp_context=mp_context) as ex:
+                futures = [ex.submit(_parse_subtitle_worker, p) for p in file_paths]
+                for fut in as_completed(futures):
+                    if cancel_event and cancel_event.is_set():
+                        for f in futures:
+                            f.cancel()
+                        raise _Cancelled()
+                    p = None
+                    try:
+                        p, sub = fut.result()
+                        if sub is not None:
+                            self._subtitle_cache[p] = sub
+                    except Exception as e:
+                        if p:
+                            print(f'字幕文件加载失败 {p}: {str(e)}')
+                        else:
+                            print(f'字幕文件加载失败: {str(e)}')
+        except Exception as e:
+            # 多进程失败，抛出异常让上层处理
+            raise Exception(f'多进程解析失败: {str(e)}')
 
     @staticmethod
     def get_available_drives():
@@ -791,7 +855,15 @@ class BluraySubtitle:
         bdmv_index = 0
         global CONFIGURATION
         if self.sub_files:
-            self._preload_subtitles(self.sub_files)
+            # 在主线程中总是使用单进程模式，避免多进程问题
+            missing = [p for p in self.sub_files if p and p not in self._subtitle_cache]
+            if missing:
+                # 直接使用单进程加载，避免多进程在主线程中的问题
+                for p in missing:
+                    try:
+                        self._subtitle_cache[p] = Subtitle(p)
+                    except Exception as e:
+                        print(f'字幕文件加载失败 {p}: {str(e)}')
             sub_max_end = [self._subtitle_cache[p].max_end_time() for p in self.sub_files]
         else:
             sub_max_end = []
@@ -910,7 +982,15 @@ class BluraySubtitle:
         global CONFIGURATION
 
         if self.sub_files:
-            self._preload_subtitles(self.sub_files, cancel_event=cancel_event)
+            # 在主线程中总是使用单进程模式，避免多进程问题
+            missing = [p for p in self.sub_files if p and p not in self._subtitle_cache]
+            if missing:
+                # 直接使用单进程加载，避免多进程在主线程中的问题
+                for p in missing:
+                    try:
+                        self._subtitle_cache[p] = Subtitle(p)
+                    except Exception as e:
+                        print(f'字幕文件加载失败 {p}: {str(e)}')
             sub_max_end = [self._subtitle_cache[p].max_end_time() for p in self.sub_files]
         else:
             sub_max_end = []
@@ -1700,6 +1780,39 @@ class MergeWorker(QObject):
 
             progress_cb(text='准备中')
             bs = BluraySubtitle(self.bdmv_path, self.sub_files, self.checked, progress_cb)
+            
+            # 根据平台选择字幕加载策略
+            if self.sub_files:
+                progress_cb(text='加载字幕')
+                if sys.platform == 'win32':
+                    # Windows下使用多进程
+                    try:
+                        bs._preload_subtitles_multiprocess(self.sub_files, self.cancel_event)
+                    except Exception as e:
+                        print(f'多进程加载失败，切换到单进程: {str(e)}')
+                        # 回退到单进程
+                        for p in self.sub_files:
+                            if self.cancel_event.is_set():
+                                raise _Cancelled()
+                            try:
+                                bs._subtitle_cache[p] = Subtitle(p)
+                            except Exception as e2:
+                                print(f'字幕文件加载失败 {p}: {str(e2)}')
+                else:
+                    # Linux下尝试多进程，失败则回退到单进程
+                    try:
+                        bs._preload_subtitles_multiprocess(self.sub_files, self.cancel_event)
+                    except Exception as e:
+                        print(f'多进程加载失败，切换到单进程: {str(e)}')
+                        # 回退到单进程
+                        for p in self.sub_files:
+                            if self.cancel_event.is_set():
+                                raise _Cancelled()
+                            try:
+                                bs._subtitle_cache[p] = Subtitle(p)
+                            except Exception as e2:
+                                print(f'字幕文件加载失败 {p}: {str(e2)}')
+            
             progress_cb(text='生成配置')
             configuration = bs.generate_configuration_from_selected_mpls(
                 self.selected_mpls,
@@ -1763,12 +1876,98 @@ class SubtitleFolderScanWorker(QObject):
 
             self.label.emit('解析字幕 0/{}'.format(len(files)))
             self.progress.emit(0)
-            max_workers = min(len(files), os.cpu_count() or 1)
+            
+            # 根据平台选择字幕解析策略
             if sys.platform == 'win32':
-                mp_context = multiprocessing.get_context('spawn')
+                # Windows下使用多进程
+                subtitle_cache = self._parse_subtitles_multiprocess(files)
             else:
-                mp_context = None
-            subtitle_cache: dict[str, Subtitle] = {}
+                # Linux下尝试多进程，失败则回退到单进程
+                try:
+                    subtitle_cache = self._parse_subtitles_multiprocess(files)
+                except Exception as e:
+                    print(f'多进程解析失败，切换到单进程模式: {str(e)}')
+                    subtitle_cache = self._parse_subtitles_single(files)
+            
+            if not subtitle_cache:
+                print('字幕文件全部加载失败')
+                self.result.emit({'seq': self.seq, 'mode': self.mode, 'rows': [], 'configuration': {}})
+                return
+            
+            print(f'成功加载 {len(subtitle_cache)} 个字幕文件')
+            
+            try:
+                rows = [(p, get_time_str(subtitle_cache[p].max_end_time())) for p in subtitle_cache.keys()]
+            except Exception as e:
+                print(f'获取字幕时长失败: {str(e)}')
+                rows = [(p, '未知') for p in subtitle_cache.keys()]
+
+            self.label.emit('生成配置')
+            self.progress.emit(850)
+            successful_files = list(subtitle_cache.keys())
+            try:
+                bs = BluraySubtitle(self.bdmv_path, successful_files, self.checked, None)
+                bs._subtitle_cache = subtitle_cache
+                configuration = bs.generate_configuration_from_selected_mpls(
+                    self.selected_mpls,
+                    cancel_event=self.cancel_event
+                )
+            except Exception as e:
+                print(f'生成配置失败: {str(e)}')
+                import traceback
+                traceback.print_exc()
+                configuration = {}
+            
+            self.progress.emit(1000)
+            self.result.emit({'seq': self.seq, 'mode': self.mode, 'rows': rows, 'configuration': configuration, 'files': successful_files})
+        except _Cancelled:
+            self.canceled.emit()
+        except Exception:
+            self.failed.emit(traceback.format_exc())
+    
+    def _parse_subtitles_with_fallback(self, files: list[str]) -> dict[str, Subtitle]:
+        """尝试多进程解析，失败时回退到单进程"""
+        subtitle_cache: dict[str, Subtitle] = {}
+        try:
+            return self._parse_subtitles_multiprocess(files)
+        except Exception as e:
+            print(f'多进程解析失败，切换到单进程模式: {str(e)}')
+            return self._parse_subtitles_single(files)
+    
+    def _parse_subtitles_single(self, files: list[str]) -> dict[str, Subtitle]:
+        """单进程模式解析字幕"""
+        subtitle_cache: dict[str, Subtitle] = {}
+        total = len(files)
+        loaded_count = 0
+        for i, p in enumerate(files):
+            if self.cancel_event.is_set():
+                raise _Cancelled()
+            try:
+                sub = Subtitle(p)
+                subtitle_cache[p] = sub
+                loaded_count += 1
+                print(f'字幕文件加载成功 {p}')
+            except Exception as e:
+                print(f'字幕文件加载失败 {p}: {type(e).__name__}: {str(e)}')
+                import traceback
+                traceback.print_exc()
+            self.label.emit(f'解析字幕 {i + 1}/{total}（已加载 {loaded_count}）')
+            self.progress.emit(int((i + 1) / total * 700))
+        return subtitle_cache
+    
+    def _parse_subtitles_multiprocess(self, files: list[str]) -> dict[str, Subtitle]:
+        """多进程模式解析字幕"""
+        if len(files) == 1:
+            # 单个文件直接使用单进程
+            return self._parse_subtitles_single(files)
+            
+        subtitle_cache: dict[str, Subtitle] = {}
+        max_workers = min(len(files), os.cpu_count() or 1)
+        try:
+            mp_context = multiprocessing.get_context('spawn')
+        except ValueError:
+            mp_context = None
+        try:
             with ProcessPoolExecutor(max_workers=max_workers, mp_context=mp_context) as ex:
                 futures = [ex.submit(_parse_subtitle_worker, p) for p in files]
                 done = 0
@@ -1778,28 +1977,23 @@ class SubtitleFolderScanWorker(QObject):
                         for f in futures:
                             f.cancel()
                         raise _Cancelled()
-                    p, sub = fut.result()
-                    subtitle_cache[p] = sub
+                    p = None
+                    try:
+                        p, sub = fut.result()
+                        if sub is not None:
+                            subtitle_cache[p] = sub
+                    except Exception as e:
+                        if p:
+                            print(f'字幕文件加载失败 {p}: {str(e)}')
+                        else:
+                            print(f'字幕文件加载失败: {str(e)}')
                     done += 1
                     self.label.emit(f'解析字幕 {done}/{total}')
                     self.progress.emit(int(done / total * 700))
-
-            rows = [(p, get_time_str(subtitle_cache[p].max_end_time())) for p in files]
-
-            self.label.emit('生成配置')
-            self.progress.emit(850)
-            bs = BluraySubtitle(self.bdmv_path, files, self.checked, None)
-            bs._subtitle_cache = subtitle_cache
-            configuration = bs.generate_configuration_from_selected_mpls(
-                self.selected_mpls,
-                cancel_event=self.cancel_event
-            )
-            self.progress.emit(1000)
-            self.result.emit({'seq': self.seq, 'mode': self.mode, 'rows': rows, 'configuration': configuration, 'files': files})
-        except _Cancelled:
-            self.canceled.emit()
-        except Exception:
-            self.failed.emit(traceback.format_exc())
+        except Exception as e:
+            # 多进程失败，抛出异常让上层处理
+            raise Exception(f'多进程解析失败: {str(e)}')
+        return subtitle_cache
 
 class BluraySubtitleGUI(QWidget):
     def __init__(self):
@@ -2172,19 +2366,26 @@ class BluraySubtitleGUI(QWidget):
         self._subtitle_scan_thread.start()
 
     def on_subtitle_drop(self):
-        if self.radio3.isChecked():
-            sub_files = [self.table2.item(sub_index, 0).text() for sub_index in range(self.table2.rowCount())
-                         if self.table2.item(sub_index, 0)]
-        else:
-            sub_files = [self.table2.item(sub_index, 1).text() for sub_index in range(self.table2.rowCount())
-                         if self.table2.item(sub_index, 0) and self.table2.item(sub_index, 0).checkState() == 2]
-        configuration = BluraySubtitle(
-            self.bdmv_folder_path.text(),
-            sub_files,
-            self.checkbox1.isChecked(),
-            None
-        ).generate_configuration(self.table1)
-        self.on_configuration(configuration)
+        try:
+            if self.radio3.isChecked():
+                sub_files = [self.table2.item(sub_index, 0).text() for sub_index in range(self.table2.rowCount())
+                             if self.table2.item(sub_index, 0)]
+            else:
+                sub_files = [self.table2.item(sub_index, 1).text() for sub_index in range(self.table2.rowCount())
+                             if self.table2.item(sub_index, 0) and self.table2.item(sub_index, 0).checkState() == 2]
+            configuration = BluraySubtitle(
+                self.bdmv_folder_path.text(),
+                sub_files,
+                self.checkbox1.isChecked(),
+                None
+            ).generate_configuration(self.table1)
+            self.on_configuration(configuration)
+        except Exception as e:
+            print(f'拖入字幕处理失败: {str(e)}')
+            import traceback
+            traceback.print_exc()
+            # 显示错误信息但不弹出对话框
+            print('字幕拖入处理失败，请检查字幕文件和原盘路径')
 
     def get_mkv_files_in_table_order(self):
         """
@@ -2286,6 +2487,9 @@ class BluraySubtitleGUI(QWidget):
                 self.table2.setItem(sub_index, 5, None)
 
     def on_configuration(self, configuration: dict[int, dict[str, int | str]]):
+        if not configuration:
+            print('配置为空，跳过更新')
+            return
         if self.radio3.isChecked():
             self.table2.setRowCount(len(configuration))
             for sub_index, con in configuration.items():
@@ -2423,7 +2627,29 @@ class BluraySubtitleGUI(QWidget):
             return
 
         if btn.text() == 'preview' and self.altered:
-            self.generate_subtitle()
+            # 只有在字幕文件不存在时才生成
+            mpls_name = mpls_path[:-5]
+            has_subtitle = (os.path.exists(mpls_name + '.ass') or 
+                          os.path.exists(mpls_name + '.srt') or
+                          os.path.exists(mpls_name + '.ssa'))
+            if not has_subtitle:
+                success = self.generate_subtitle(silent_mode=True)
+                if success:
+                    # 重新检查字幕文件是否存在
+                    has_subtitle = (os.path.exists(mpls_name + '.ass') or 
+                                  os.path.exists(mpls_name + '.srt') or
+                                  os.path.exists(mpls_name + '.ssa'))
+            if not has_subtitle:
+                # 如果仍然没有字幕文件，显示提示但仍允许播放
+                QMessageBox.information(self, "提示", "字幕文件不存在，将播放无字幕版本")
+        elif btn.text() == 'preview':
+            # 检查字幕文件是否存在
+            mpls_name = mpls_path[:-5]
+            has_subtitle = (os.path.exists(mpls_name + '.ass') or 
+                          os.path.exists(mpls_name + '.srt') or
+                          os.path.exists(mpls_name + '.ssa'))
+            if not has_subtitle:
+                QMessageBox.information(self, "提示", "字幕文件不存在，将播放无字幕版本")
         if sys.platform != 'linux':
             if sys.platform == 'win32':
                 mp4_exe_path = get_mpv_safe_path(".mp4")
@@ -2691,7 +2917,7 @@ class BluraySubtitleGUI(QWidget):
         if self.radio3.isChecked():
             self.remux_episodes()
 
-    def generate_subtitle(self):
+    def generate_subtitle(self, silent_mode: bool = False):
         progress_dialog = QProgressDialog('字幕生成中', '取消', 0, 1000, self)
         progress_dialog.setMinimumDuration(0)
         progress_dialog.setAutoClose(False)
@@ -2710,14 +2936,16 @@ class BluraySubtitleGUI(QWidget):
                 sub_files.append(item.text())
         if not sub_files:
             progress_dialog.close()
-            QMessageBox.information(self, " ", "未选择字幕文件")
-            return
+            if not silent_mode:
+                QMessageBox.information(self, " ", "未选择字幕文件")
+            return False
 
         selected_mpls = self.get_selected_mpls_no_ext()
         if not selected_mpls:
             progress_dialog.close()
-            QMessageBox.information(self, " ", "未选择原盘主mpls")
-            return
+            if not silent_mode:
+                QMessageBox.information(self, " ", "未选择原盘主mpls")
+            return False
 
         self.exe_button.setEnabled(False)
         self._merge_thread = QThread(self)
@@ -2733,6 +2961,8 @@ class BluraySubtitleGUI(QWidget):
         self._merge_worker.progress.connect(progress_dialog.setValue)
         self._merge_worker.label.connect(progress_dialog.setLabelText)
 
+        success = False
+
         def cleanup():
             progress_dialog.close()
             self.exe_button.setEnabled(True)
@@ -2747,21 +2977,25 @@ class BluraySubtitleGUI(QWidget):
             self.altered = False
 
         def on_finished():
+            nonlocal success
+            success = True
             cleanup()
-            QMessageBox.information(self, " ", "生成字幕成功！")
+            if not silent_mode:
+                QMessageBox.information(self, " ", "生成字幕成功！")
 
         def on_canceled():
             cleanup()
 
         def on_failed(message: str):
             cleanup()
-            QMessageBox.information(self, " ", message)
+            if not silent_mode:
+                QMessageBox.information(self, " ", message)
 
         self._merge_worker.finished.connect(on_finished)
         self._merge_worker.canceled.connect(on_canceled)
         self._merge_worker.failed.connect(on_failed)
         self._merge_thread.start()
-        return
+        return success
 
     def add_chapters(self):
         if self.checkbox1.isChecked():
@@ -3087,6 +3321,7 @@ def get_mpv_safe_path(extension=".mp4"):
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     app = QApplication(sys.argv)
     app.setStyleSheet('''     
         QMainWindow {
