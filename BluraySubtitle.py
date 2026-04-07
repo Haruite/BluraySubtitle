@@ -33,7 +33,7 @@ try:
     import soundfile
 except Exception:
     soundfile = None
-from PyQt6.QtCore import QCoreApplication, Qt, QPoint, QObject, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import QCoreApplication, Qt, QPoint, QObject, QThread, QTimer, QEventLoop, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QDragMoveEvent, QDropEvent, QPaintEvent, QDragEnterEvent
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLabel, QToolButton, QLineEdit, \
     QMessageBox, QHBoxLayout, QGroupBox, QCheckBox, QProgressDialog, QRadioButton, QButtonGroup, \
@@ -3164,6 +3164,17 @@ class BluraySubtitleGUI(QWidget):
         self._merge_worker.canceled.connect(on_canceled)
         self._merge_worker.failed.connect(on_failed)
         self._merge_thread.start()
+        if silent_mode:
+            loop = QEventLoop()
+
+            def quit_loop():
+                if loop.isRunning():
+                    loop.quit()
+
+            self._merge_worker.finished.connect(quit_loop)
+            self._merge_worker.canceled.connect(quit_loop)
+            self._merge_worker.failed.connect(quit_loop)
+            loop.exec()
         return success
 
     def add_chapters(self):
