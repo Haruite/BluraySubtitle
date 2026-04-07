@@ -3,7 +3,7 @@
 # 功能3：原盘remux
 # 功能23需要安装mkvtoolnix，指定FLAC_PATH和FLAC_THREADS(flac版本需大于等于1.5.0)
 # 功能3需要指定FFMPEG_PATH和FFPROBE_PATH
-# pip install pycountry PyQt6
+# pip install pycountry PyQt6 librosa
 import _io
 import copy
 import ctypes
@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import traceback
 import xml.etree.ElementTree as et
@@ -24,7 +25,14 @@ from functools import reduce, partial
 from struct import unpack
 from typing import Optional, Generator, Callable
 
+import librosa
+import librosa.feature
+import numpy as np
 import pycountry
+try:
+    import soundfile
+except Exception:
+    soundfile = None
 from PyQt6.QtCore import QCoreApplication, Qt, QPoint, QObject, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QDragMoveEvent, QDropEvent, QPaintEvent, QDragEnterEvent
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLabel, QToolButton, QLineEdit, \
@@ -513,7 +521,7 @@ def _parse_subtitle_worker(file_path: str) -> tuple[str, Subtitle | None]:
     try:
         return file_path, Subtitle(file_path)
     except Exception as e:
-        print(f'字幕文件 {file_path} 解析失败: {str(e)}')
+        print(f'字幕文件 ｢{file_path}｣ 解析失败: {str(e)}')
         return file_path, None
 
 
@@ -596,6 +604,10 @@ class MKV:
         return duration
 
     def add_chapter(self, edit_file: bool):
+        with open('chapter.txt', 'r', encoding='utf-8-sig') as f:
+            content = f.read()
+        if content == 'CHAPTER01=00:00:00.000\nCHAPTER01NAME=Chapter 01':
+            return
         if edit_file:
             subprocess.Popen(rf'"{MKV_PROP_EDIT_PATH}" "{self.path}" --chapters chapter.txt', shell=True).wait()
         else:
@@ -748,7 +760,7 @@ class BluraySubtitle:
             try:
                 self._subtitle_cache[p] = Subtitle(p)
             except Exception as e:
-                print(f'字幕文件加载失败 {p}: {str(e)}')
+                print(f'字幕文件加载失败 ｢{p}｣: {str(e)}')
     
     def _preload_subtitles_multiprocess(self, file_paths: list[str], cancel_event: Optional[threading.Event] = None):
         """多进程模式解析字幕"""
@@ -757,7 +769,7 @@ class BluraySubtitle:
             try:
                 self._subtitle_cache[p] = Subtitle(p)
             except Exception as e:
-                print(f'字幕文件加载失败 {p}: {str(e)}')
+                print(f'字幕文件加载失败 ｢{p}｣: {str(e)}')
             return
 
         # 在 Linux 下，如果发现是子进程在运行，直接退出，防止递归弹出窗口
@@ -789,7 +801,7 @@ class BluraySubtitle:
                             self._subtitle_cache[p] = sub
                     except Exception as e:
                         if p:
-                            print(f'字幕文件加载失败 {p}: {str(e)}')
+                            print(f'字幕文件加载失败 ｢{p}｣: {str(e)}')
                         else:
                             print(f'字幕文件加载失败: {str(e)}')
         except Exception as e:
@@ -827,7 +839,7 @@ class BluraySubtitle:
                         if os.path.exists(m2ts_file):
                             total_size += os.path.getsize(m2ts_file)
                         else:
-                            print(f'\033[31m错误,{mpls_file_path}中的m2ts文件{m2ts_file}未找到\033[0m')
+                            print(f'\033[31m错误,｢{mpls_file_path}｣ 中的m2ts文件 ｢{m2ts_file}｣ 未找到\033[0m')
                     stream_files.add(in_out_time[0])
             indicator = chapter.get_total_time_no_repeat() * (1 + sum(map(len, chapter.mark_info.values())) / 5
                                                               ) * os.path.getsize(mpls_file_path) * total_size
@@ -863,7 +875,7 @@ class BluraySubtitle:
                     try:
                         self._subtitle_cache[p] = Subtitle(p)
                     except Exception as e:
-                        print(f'字幕文件加载失败 {p}: {str(e)}')
+                        print(f'字幕文件加载失败 ｢{p}｣: {str(e)}')
             sub_max_end = [self._subtitle_cache[p].max_end_time() for p in self.sub_files]
         else:
             sub_max_end = []
@@ -990,7 +1002,7 @@ class BluraySubtitle:
                     try:
                         self._subtitle_cache[p] = Subtitle(p)
                     except Exception as e:
-                        print(f'字幕文件加载失败 {p}: {str(e)}')
+                        print(f'字幕文件加载失败 ｢{p}｣: {str(e)}')
             sub_max_end = [self._subtitle_cache[p].max_end_time() for p in self.sub_files]
         else:
             sub_max_end = []
@@ -1275,7 +1287,7 @@ class BluraySubtitle:
             chapter = Chapter(mpls_path)
             chapter.get_pid_to_language()
             m2ts_file = os.path.join(os.path.join(mpls_path[:-19], 'STREAM'), chapter.in_out_time[0][0] + '.m2ts')
-            print(f'正在分析mpls的第一个文件{m2ts_file}的轨道')
+            print(f'正在分析mpls的第一个文件 ｢{m2ts_file}｣ 的轨道')
             self._progress(text=f'分析轨道：{os.path.basename(m2ts_file)}')
             cmd = f'"{FFPROBE_PATH}" -v error -show_streams -show_format -of json "{m2ts_file}" >info.json 2>&1'
             subprocess.Popen(cmd, shell=True).wait()
@@ -1335,7 +1347,7 @@ class BluraySubtitle:
                         break
                 if str(first_audio_index) not in (selected_zho_audio_track[0], selected_eng_audio_track[0]):
                     copy_audio_track.append(str(first_audio_index))
-            print(f'选择音频轨道{copy_audio_track}，字幕轨道{copy_sub_track}')
+            print(f'选择音频轨道 {copy_audio_track}，字幕轨道 {copy_sub_track}')
             meta_folder = os.path.join(os.path.join(mpls_path[:-19], 'META', 'DL'))
             cover = ''
             cover_size = 0
@@ -1398,12 +1410,12 @@ class BluraySubtitle:
             }
             output_name = ''.join(char_map.get(char) or char for char in output_name)
             if cover:
-                print(f"找到封面图片{cover}")
+                print(f"找到封面图片 ｢{cover}｣")
             print(f'输出文件名{output_name}.mkv')
 
             chapter_split = ','.join(map(str, [conf['chapter_index'] for conf in confs]))
             bdmv_vol = '0' * (3 - len(str(bdmv_index))) + str(bdmv_index)
-            output_file = f'{os.path.join(dst_folder, output_name)}BD_Vol_{bdmv_vol}.mkv'
+            output_file = f'{os.path.join(dst_folder, output_name)}_BD_Vol_{bdmv_vol}.mkv'
             remux_cmd = (f'"{MKV_MERGE_PATH}" --split chapters:{chapter_split} -o "{output_file}" '
                          f'{("-a " + ",".join(copy_audio_track)) if copy_audio_track else ""} '
                          f'{("-s " + ",".join(copy_sub_track)) if copy_sub_track else ""} '
@@ -1477,12 +1489,19 @@ class BluraySubtitle:
     def flac_task(self, output_file, dst_folder, i):
         dolby_truehd_tracks = []
         track_bits = {}
+        track_id_delay_map = {}
         if os.path.exists(output_file):
             subprocess.Popen(f'"{FFPROBE_PATH}" -v error -show_streams -show_format -of json "{output_file}" >info.json 2>&1',
                              shell=True).wait()
             with open('info.json', 'r', encoding='utf-8') as fp:
                 data = json.load(fp)
             for stream in data['streams']:
+                try:
+                    delay_val = float(stream.get('start_time', 0.0))
+                except Exception:
+                    delay_val = 0.0
+                if abs(delay_val) > 1e-6:
+                    track_id_delay_map[stream['index']] = delay_val
                 if stream['codec_name'] == 'truehd' and stream.get('profile') == 'Dolby TrueHD + Dolby Atmos':
                     dolby_truehd_tracks.append(stream['index'])
                 if stream['codec_name'] in ('truehd', 'dts'):
@@ -1491,46 +1510,185 @@ class BluraySubtitle:
             print('\033[31m错误，电影混流失败，请检查任务输出\033[0m')
         track_count, track_info = self.extract_lossless(output_file, dolby_truehd_tracks)
         if track_info:
+            ext_fn_map = {}
+            for file1 in os.listdir(dst_folder):
+                file1_path = os.path.join(dst_folder, file1)
+                if file1_path != output_file and not file1_path.endswith('.mkv') and '.track' in file1:
+                    ext = file1_path.split('.')[-1]
+                    if ext in ext_fn_map:
+                        ext_fn_map[ext].append(file1_path)
+                    else:
+                        ext_fn_map[ext] = [file1_path]
+            for ext, fns in ext_fn_map.items():
+                if len(fns) > 1:
+                    fpts = []
+                    for fn in fns:
+                        tmp_wav = None
+                        fp_source = fn
+                        try:
+                            if ext not in ('wav', 'w64', 'flac'):
+                                tmp_wav = os.path.splitext(fn)[0] + '.fp.wav'
+                                subprocess.Popen(
+                                    f'"{FFMPEG_PATH}" -hide_banner -loglevel error -y -ss 60 -t 30 -i "{fn}" '
+                                    f'-ac 1 -ar 11025 -c:a pcm_s16le "{tmp_wav}"',
+                                    shell=True
+                                ).wait()
+                                if os.path.exists(tmp_wav):
+                                    fp_source = tmp_wav
+                            y, sr = librosa.load(fp_source, sr=None, mono=True)
+                            chroma = librosa.feature.chroma_stft(y=y, sr=sr)
+                            fpt = np.mean(chroma, axis=1)
+                        except Exception:
+                            if tmp_wav and os.path.exists(tmp_wav):
+                                try:
+                                    os.remove(tmp_wav)
+                                except Exception:
+                                    pass
+                            continue
+                        finally:
+                            if tmp_wav and os.path.exists(tmp_wav):
+                                try:
+                                    os.remove(tmp_wav)
+                                except Exception:
+                                    pass
+                        duplicate_track = False
+                        for _fpt in fpts:
+                            denom = (np.linalg.norm(fpt) * np.linalg.norm(_fpt))
+                            if denom and (np.dot(fpt, _fpt) / denom) > 0.998:
+                                os.remove(fn)
+                                track_id = int(os.path.split(fn)[-1].split('.')[-2].removeprefix('track'))
+                                track_info.pop(track_id, None)
+                                print(f'找到一个重复音轨 ｢{fn}｣，已删除')
+                                duplicate_track = True
+                                break
+                        if not duplicate_track:
+                            fpts.append(fpt)
+
+            def _is_silent_audio(path: str, threshold_db: float = -60.0) -> tuple[bool, float]:
+                y = None
+                sr = None
+                if soundfile is not None:
+                    try:
+                        info = soundfile.info(path)
+                        frames = min(int(info.frames), int(info.samplerate) * 30)
+                        start = int(info.frames) // 2 if int(info.frames) > (frames * 2) else 0
+                        data, sr = soundfile.read(path, start=start, frames=frames, dtype='float32', always_2d=True)
+                        y = data.mean(axis=1)
+                    except Exception:
+                        y = None
+
+                if y is None:
+                    fd, tmp = tempfile.mkstemp(prefix=f"temp_sil_{os.getpid()}_", suffix=".wav")
+                    os.close(fd)
+                    try:
+                        subprocess.run(
+                            f'"{FFMPEG_PATH}" -hide_banner -loglevel error -y -i "{path}" '
+                            f'-ac 1 -ar 22050 -c:a pcm_s16le "{tmp}"',
+                            shell=True,
+                            check=True
+                        )
+                        if soundfile is None:
+                            y, sr = librosa.load(tmp, sr=None, mono=True)
+                        else:
+                            data, sr = soundfile.read(tmp, dtype='float32', always_2d=True)
+                            y = data.mean(axis=1)
+                    finally:
+                        if os.path.exists(tmp):
+                            try:
+                                os.remove(tmp)
+                            except Exception:
+                                pass
+                rms = librosa.feature.rms(y=y)
+                db = librosa.amplitude_to_db(rms, ref=np.max)
+                avg_db = float(np.mean(db))
+                return avg_db < threshold_db, avg_db
+
             for file1 in os.listdir(dst_folder):
                 file1_path = os.path.join(dst_folder, file1)
                 if file1_path != output_file and not file1_path.endswith('.mkv'):
-                    print(f'正在压缩音轨{file1_path}')
+                    try:
+                        silent, avg_db = _is_silent_audio(file1_path, -60.0)
+                    except Exception:
+                        silent = False
+                        avg_db = 0.0
+                    if silent:
+                        try:
+                            os.remove(file1_path)
+                        except Exception:
+                            pass
+                        try:
+                            track_id = int(os.path.split(file1_path)[-1].split('.')[-2].removeprefix('track'))
+                            track_info.pop(track_id, None)
+                        except Exception:
+                            pass
+                        print(f'检测到空音轨 ｢{file1_path}｣ 平均 {avg_db:.1f} dB，已删除')
+                        continue
+                    print(f'正在压缩音轨 ｢{file1_path}｣')
+                    track_id = int(os.path.split(file1_path)[-1].split('.')[-2].removeprefix('track'))
+                    if track_id in track_id_delay_map:
+                        delay_sec = track_id_delay_map[track_id]
+                        delay_ms = int(round(delay_sec * 1000.0))
+                        print(f'检测到文件 ｢{file1_path}｣ 有延迟 {delay_ms} ms')
+                        output_fn = os.path.splitext(file1_path)[0] + '.delayfix.wav'
+                        fix_audio_delay_to_lossless(file1_path, delay_ms, output_fn)
+                        if os.path.exists(output_fn):
+                            try:
+                                os.remove(file1_path)
+                            except Exception:
+                                pass
+                            file1_path = output_fn
+
                     if file1_path.endswith('.wav'):
+                        bits = track_bits.get(track_id, 16)
+                        effective_bits = get_effective_bit_depth(file1_path)
+                        if effective_bits < bits:
+                            print(f"检测到文件 ｢{file1_path}｣ 有效位深较低，正在优化为 16-bit...")
+                            codec = "pcm_s16le"
+                            output_fn = os.path.splitext(file1_path)[0] + '(1).wav'
+                            cmd = f'"{FFMPEG_PATH}" -hide_banner -loglevel error -i "{file1_path}" -c:a {codec} "{output_fn}" -y'
+                            subprocess.run(cmd, shell=True, check=True)
+                            if os.path.exists(output_fn):
+                                print(f"转换完成: ｢{output_fn}｣")
+                                os.remove(file1_path)
+                                os.rename(output_fn, file1_path)
+
                         flac_file = os.path.splitext(file1_path)[0] + '.flac'
                         subprocess.Popen(f'"{FLAC_PATH}" -8 -j {FLAC_THREADS} "{file1_path}" -o "{flac_file}"', shell=True).wait()
                         if os.path.exists(flac_file):
                             delta = os.path.getsize(file1_path) - os.path.getsize(flac_file)
                             os.remove(file1_path)
-                            print(f'将音轨{file1_path}压缩成flac，减小体积{delta / 1024 ** 2:.3f}MiB')
+                            print(f'将音轨 ｢{file1_path}｣ 压缩成flac，减小体积 {delta / 1024 ** 2:.3f} MiB')
                         else:
                             subprocess.Popen(f'{FFMPEG_PATH} -i "{file1_path}" -c:a flac "{flac_file}"', shell=True).wait()
                             if os.path.exists(flac_file):
                                 delta = os.path.getsize(file1_path) - os.path.getsize(flac_file)
                                 os.remove(file1_path)
-                                print(f'将音轨{file1_path}用ffmpeg压缩成flac，减小体积{delta / 1024 ** 2:.3f}MiB')
+                                print(f'将音轨 ｢{file1_path}｣ 用ffmpeg压缩成flac，减小体积 {delta / 1024 ** 2:.3f} MiB')
                     else:
-                        track_id = int(os.path.split(file1_path)[-1].split('.')[-2].removeprefix('track'))
                         bits = track_bits.get(track_id, 24)
+                        effective_bits = get_compressed_effective_depth(file1_path)
+                        if effective_bits < bits:
+                            print(f'检测到文件 ｢{file1_path}｣ 实际有效位深为 {effective_bits} bits')
                         wav_file = os.path.splitext(file1_path)[0] + '.wav'
-                        subprocess.Popen(f'{FFMPEG_PATH} -i "{file1_path}"  -c:a pcm_s{bits}le -f w64 "{wav_file}"', shell=True).wait()
+                        subprocess.Popen(f'{FFMPEG_PATH} -i "{file1_path}"  -c:a pcm_s{effective_bits}le -f w64 "{wav_file}"', shell=True).wait()
                         flac_file = os.path.splitext(file1_path)[0] + '.flac'
                         subprocess.Popen(f'{FLAC_PATH} -8 -j {FLAC_THREADS} "{wav_file}" -o "{flac_file}"', shell=True).wait()
                         if os.path.exists(flac_file):
                             if os.path.getsize(flac_file) > os.path.getsize(file1_path):
-                                print(f'flac文件比原音轨大，将删除{flac_file}')
+                                print(f'flac 文件比原音轨大，将删除 ｢{flac_file}｣')
                                 os.remove(flac_file)
                             else:
                                 delta = os.path.getsize(file1_path) - os.path.getsize(flac_file)
-                                print(f'将音轨{file1_path}压缩成flac，减小体积{delta / 1024 ** 2:.3f}MiB')
+                                print(f'将音轨 ｢{file1_path}｣ 压缩成flac，减小体积 {delta / 1024 ** 2:.3f} MiB')
                         else:
                             subprocess.Popen(f'{FFMPEG_PATH} -i "{wav_file}" -c:a flac "{flac_file}"', shell=True).wait()
                             if os.path.exists(flac_file):
                                 if os.path.getsize(flac_file) > os.path.getsize(file1_path):
-                                    print(f'ffmpeg压缩的flac文件比原音轨大，将删除{flac_file}')
+                                    print(f'ffmpeg 压缩的flac文件比原音轨大，将删除 ｢{flac_file}｣')
                                     os.remove(flac_file)
                                 else:
                                     delta = os.path.getsize(file1_path) - os.path.getsize(flac_file)
-                                    print(f'将音轨{file1_path}用ffmpeg压缩成flac，减小体积{delta / 1024 ** 2:.3f}MiB')
+                                    print(f'将音轨 ｢{file1_path}｣ 用ffmpeg压缩成flac，减小体积 {delta / 1024 ** 2:.3f} MiB')
                             else:
                                 print('\033[31m错误，ffmpeg压缩也失败\033[0m')
                         os.remove(file1_path)
@@ -1546,7 +1704,7 @@ class BluraySubtitle:
                     if file1_path != output_file:
                         if file1_path.endswith('.wav'):
                             n = len(os.listdir(dst_folder))
-                            print(f'flac压缩wav文件{file1_path}失败，将使用ffmpeg压缩')
+                            print(f'flac 压缩 wav 文件 ｢{file1_path}｣ 失败，将使用 ffmpeg 压缩')
                             subprocess.Popen(
                                 f'{FFMPEG_PATH} -i "{file1_path}" -c:a flac "{file1_path.removesuffix(".wav") + ".flac"}"', shell=True).wait()
                             if len(os.listdir(dst_folder)) > n:
@@ -1640,7 +1798,7 @@ class BluraySubtitle:
                 extract_info.append(
                     f'{track_id}:"{mkv_file.removesuffix(".mkv")}.track{track_id}.{track_suffix_info[track_id]}"')
             extract_cmd = f'"{MKV_EXTRACT_PATH}" "{mkv_file}" tracks {" ".join(extract_info)}'
-            print(f'正在提取无损音轨，命令:{extract_cmd}')
+            print(f'正在提取无损音轨，命令: {extract_cmd}')
             subprocess.Popen(extract_cmd, shell=True).wait()
 
         return track_count, track_info
@@ -1797,7 +1955,7 @@ class MergeWorker(QObject):
                             try:
                                 bs._subtitle_cache[p] = Subtitle(p)
                             except Exception as e2:
-                                print(f'字幕文件加载失败 {p}: {str(e2)}')
+                                print(f'字幕文件加载失败 ｢{p}｣: {str(e2)}')
                 else:
                     # Linux下尝试多进程，失败则回退到单进程
                     try:
@@ -1811,7 +1969,7 @@ class MergeWorker(QObject):
                             try:
                                 bs._subtitle_cache[p] = Subtitle(p)
                             except Exception as e2:
-                                print(f'字幕文件加载失败 {p}: {str(e2)}')
+                                print(f'字幕文件加载失败 ｢{p}｣: {str(e2)}')
             
             progress_cb(text='生成配置')
             configuration = bs.generate_configuration_from_selected_mpls(
@@ -1946,9 +2104,9 @@ class SubtitleFolderScanWorker(QObject):
                 sub = Subtitle(p)
                 subtitle_cache[p] = sub
                 loaded_count += 1
-                print(f'字幕文件加载成功 {p}')
+                print(f'字幕文件加载成功 ｢{p}｣')
             except Exception as e:
-                print(f'字幕文件加载失败 {p}: {type(e).__name__}: {str(e)}')
+                print(f'字幕文件加载失败 ｢{p}｣: {type(e).__name__}: {str(e)}')
                 import traceback
                 traceback.print_exc()
             self.label.emit(f'解析字幕 {i + 1}/{total}（已加载 {loaded_count}）')
@@ -1984,7 +2142,7 @@ class SubtitleFolderScanWorker(QObject):
                             subtitle_cache[p] = sub
                     except Exception as e:
                         if p:
-                            print(f'字幕文件加载失败 {p}: {str(e)}')
+                            print(f'字幕文件加载失败 ｢{p}｣: {str(e)}')
                         else:
                             print(f'字幕文件加载失败: {str(e)}')
                     done += 1
@@ -3318,6 +3476,105 @@ def get_mpv_safe_path(extension=".mp4"):
         pass
 
     return None
+
+
+def fix_audio_delay_to_lossless(input_file, delay_ms, output_file, track_index=0):
+    """处理音频延迟。"""
+    # 处理路径：防止路径中有空格，统一加上双引号
+    input_file_q = f'"{input_file}"'
+    output_file_q = f'"{output_file}"'
+
+    ext = os.path.splitext(output_file)[1].lower()
+    codec = "pcm_s24le"
+    if ext in [".truehd", ".mlp"]:
+        codec = "truehd"
+    elif ext == ".flac":
+        codec = "flac"
+
+    map_str = f"-map 0:a:{track_index}"
+    codec_str = f"-c:a {codec}"
+    common_opts = "-hide_banner -loglevel error -y"
+
+    if delay_ms > 0:
+        # 正延迟：补静音
+        cmd = f'"{FFMPEG_PATH}" {common_opts} -i {input_file_q} {map_str} -af "adelay={delay_ms}:all=1" {codec_str} {output_file_q}'
+
+    elif delay_ms < 0:
+        # 负延迟：裁剪开头
+        start_time = abs(delay_ms) / 1000.0
+        # 注意：-ss 放在 -i 之后保证次世代音轨的解码级精确度
+        cmd = f'"{FFMPEG_PATH}" {common_opts} -i {input_file_q} -ss {start_time} {map_str} {codec_str} {output_file_q}'
+
+    else:
+        # 无延迟
+        cmd = f'"{FFMPEG_PATH}" {common_opts} -i {input_file_q} {map_str} {codec_str} {output_file_q}'
+
+    try:
+        print(f"执行命令: {cmd}")
+        subprocess.run(cmd, shell=True, check=True)
+        print(f"处理完成: {output_file}")
+    except subprocess.CalledProcessError as e:
+        print(f"FFmpeg 执行出错: {e}")
+
+
+def get_effective_bit_depth(file_path):
+    if soundfile is None:
+        return 24
+    info = soundfile.info(file_path)
+    frames = min(int(info.frames), int(info.samplerate) * 10)
+    start = int(info.frames) // 2 if int(info.frames) > (frames * 2) else 0
+    data, sr = soundfile.read(file_path, start=start, frames=frames, dtype='int32')
+    return 16 if np.all(data % 65536 == 0) else 24
+
+
+def get_audio_duration(file_path):
+    """获取音频总时长（秒）"""
+    cmd = f'"{FFPROBE_PATH}" -v error -show_entries format=duration:stream=duration -of json "{file_path}"'
+    try:
+        proc = subprocess.run(cmd, shell=True, capture_output=True, text=True, encoding='utf-8')
+    except Exception:
+        return 0.0
+    if proc.returncode != 0 or not (proc.stdout or '').strip():
+        return 0.0
+    try:
+        data = json.loads(proc.stdout)
+    except Exception:
+        return 0.0
+    try:
+        duration = (data.get('format') or {}).get('duration')
+        if duration not in (None, '', 'N/A'):
+            return float(duration)
+    except Exception:
+        pass
+    try:
+        streams = data.get('streams') or []
+        if streams:
+            duration = (streams[0] or {}).get('duration')
+            if duration not in (None, '', 'N/A'):
+                return float(duration)
+    except Exception:
+        pass
+    return 0.0
+
+
+def get_compressed_effective_depth(file_path, check_duration=10):
+    """自适应长度的有效位深检测"""
+    if soundfile is None:
+        return 24
+    total_duration = get_audio_duration(file_path)
+    start_time = total_duration / 2 if total_duration > (check_duration * 2) else 0.0
+    fd, temp_wav = tempfile.mkstemp(prefix=f"temp_depth_check_{os.getpid()}_", suffix=".wav")
+    os.close(fd)
+
+    try:
+        cmd = f'"{FFMPEG_PATH}" -hide_banner -loglevel error -ss {start_time} -i "{file_path}" -t {check_duration} -map 0:a:0 -c:a pcm_s24le "{temp_wav}" -y'
+        subprocess.run(cmd, shell=True, check=True)
+        data, sr = soundfile.read(temp_wav, dtype='int32')
+        is_16bit = np.all(data % 65536 == 0)
+        return 16 if is_16bit else 24
+    finally:
+        if os.path.exists(temp_wav):
+            os.remove(temp_wav)
 
 
 if __name__ == "__main__":
