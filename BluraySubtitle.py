@@ -53,9 +53,9 @@ MKV_MERGE_PATH = ''
 MKV_PROP_EDIT_PATH = ''
 MKV_EXTRACT_PATH = ''
 BDMV_LABELS = ['path', 'size', 'info']
-SUBTITLE_LABELS = ['select', 'path', 'duration', 'bdmv_index', 'chapter_index', 'offset']
+SUBTITLE_LABELS = ['select', 'path', 'sub_duration', 'bdmv_index', 'chapter_index', 'offset']
 MKV_LABELS = ['path', 'duration']
-REMUX_LABELS = ['sub_path', 'duration', 'bdmv_index', 'chapter_index', 'm2ts_file']
+REMUX_LABELS = ['sub_path', 'ep_duration', 'bdmv_index', 'chapter_index', 'm2ts_file']
 CONFIGURATION = {}
 
 
@@ -961,7 +961,7 @@ class BluraySubtitle:
 
                     if play_item_duration_time / 45000 > 2600 and sub_end_time - time_shift < 1800:
                         k = j
-                        for mark in play_item_marks:
+                        for mark in play_item_marks[1:]:
                             k += 1
                             time_shift = (start_time + mark - play_item_in_out_time[1]) / 45000
                             if time_shift > sub_end_time and (
@@ -1096,7 +1096,7 @@ class BluraySubtitle:
 
                     if play_item_duration_time / 45000 > 2600 and sub_end_time - time_shift < 1800:
                         k = j
-                        for mark in play_item_marks:
+                        for mark in play_item_marks[1:]:
                             k += 1
                             time_shift = (start_time + mark - play_item_in_out_time[1]) / 45000
                             if time_shift > sub_end_time and (
