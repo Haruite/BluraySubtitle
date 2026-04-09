@@ -1667,7 +1667,7 @@ class BluraySubtitle:
                          f'"{mpls_path}"')
             print(f'混流命令: {remux_cmd}')
             self._progress(text=f'混流中：BD_Vol_{bdmv_vol}')
-            # subprocess.Popen(remux_cmd, shell=True).wait()
+            subprocess.Popen(remux_cmd, shell=True).wait()
             self._progress(int((bdmv_index + 1) / len(bdmv_index_conf) * 300))
 
         self.checked = True
