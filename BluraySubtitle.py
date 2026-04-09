@@ -2928,10 +2928,10 @@ class BluraySubtitleGUI(QWidget):
                     if stream_file in parsed_m2ts_files:
                         continue
                     try:
-                        dur = M2TS(os.path.join(stream_folder, stream_file)).get_duration()
+                        dur = M2TS(os.path.join(stream_folder, stream_file)).get_duration() / 90000
                     except Exception:
                         continue
-                    if dur > 30 * 90000:
+                    if dur > 30:
                         entries.append((bdmv_index, '', [stream_file], dur))
 
             old_sorting = self.table3.isSortingEnabled()
