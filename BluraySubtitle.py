@@ -58,6 +58,7 @@ SUBTITLE_LABELS = ['select', 'path', 'sub_duration', 'bdmv_index', 'chapter_inde
 MKV_LABELS = ['path', 'duration']
 REMUX_LABELS = ['sub_path', 'ep_duration', 'bdmv_index', 'chapter_index', 'm2ts_file']
 ENCODE_LABELS = ['sub_path', 'ep_duration', 'bdmv_index', 'chapter_index', 'm2ts_file', 'vpy_path', 'edit_vpy']
+ENCODE_SP_LABELS = ['bdmv_index', 'mpls_file', 'm2ts_file', 'duration', 'vpy_path', 'edit_vpy']
 CONFIGURATION = {}
 
 
@@ -1461,7 +1462,8 @@ class BluraySubtitle:
             bdmv_vol = '0' * (3 - len(str(bdmv_index))) + str(bdmv_index)
             mpls_path = confs[0]['selected_mpls'] + '.mpls'
             index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(Chapter(mpls_path))
-            parsed_m2ts_files = set(index_to_m2ts.values())
+            main_m2ts_files = set(index_to_m2ts.values())
+            parsed_m2ts_files = set(main_m2ts_files)
             sp_index = 0
             for mpls_file in os.listdir(os.path.dirname(mpls_path)):
                 if cancel_event and cancel_event.is_set():
@@ -1471,12 +1473,13 @@ class BluraySubtitle:
                 mpls_file_path = os.path.join(os.path.dirname(mpls_path), mpls_file)
                 if mpls_file_path != mpls_path:
                     index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(Chapter(mpls_file_path))
-                    if not (parsed_m2ts_files & set(index_to_m2ts.values())):
-                        if len(index_to_m2ts) > 1:
-                            sp_index += 1
-                            subprocess.Popen(f'"{MKV_MERGE_PATH}" -o "{sps_folder}{os.sep}BD_Vol_'
-                                             f'{bdmv_vol}_SP0{sp_index}.mkv" "{mpls_file_path}"', shell=True).wait()
-                            parsed_m2ts_files |= set(index_to_m2ts.values())
+                    if main_m2ts_files & set(index_to_m2ts.values()):
+                        continue
+                    if len(index_to_m2ts) > 1:
+                        sp_index += 1
+                        subprocess.Popen(f'"{MKV_MERGE_PATH}" -o "{sps_folder}{os.sep}BD_Vol_'
+                                         f'{bdmv_vol}_SP0{sp_index}.mkv" "{mpls_file_path}"', shell=True).wait()
+                        parsed_m2ts_files |= set(index_to_m2ts.values())
             stream_folder = os.path.dirname(mpls_path).removesuffix('PLAYLIST') + 'STREAM'
             for stream_file in os.listdir(stream_folder):
                 if cancel_event and cancel_event.is_set():
@@ -1501,6 +1504,8 @@ class BluraySubtitle:
                         cancel_event: Optional[threading.Event] = None,
                         ensure_tools: bool = True,
                         vpy_paths: Optional[list[str]] = None,
+                        sp_vpy_paths: Optional[list[str]] = None,
+                        sp_entries: Optional[list[dict[str, int | str]]] = None,
                         vspipe_mode: str = 'bundle',
                         x265_mode: str = 'bundle',
                         x265_params: str = '',
@@ -1704,57 +1709,99 @@ class BluraySubtitle:
 
         sps_folder = dst_folder + os.sep + 'SPs'
         os.mkdir(sps_folder)
-        for bdmv_index, confs in bdmv_index_conf.items():
-            if cancel_event and cancel_event.is_set():
-                raise _Cancelled()
-            bdmv_vol = '0' * (3 - len(str(bdmv_index))) + str(bdmv_index)
-            mpls_path = confs[0]['selected_mpls'] + '.mpls'
-            index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(Chapter(mpls_path))
-            parsed_m2ts_files = set(index_to_m2ts.values())
-            sp_index = 0
-            for mpls_file in os.listdir(os.path.dirname(mpls_path)):
-                if cancel_event and cancel_event.is_set():
-                    raise _Cancelled()
-                if not mpls_file.endswith('.mpls'):
-                    continue
-                mpls_file_path = os.path.join(os.path.dirname(mpls_path), mpls_file)
-                if mpls_file_path != mpls_path:
-                    index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(Chapter(mpls_file_path))
-                    if not (parsed_m2ts_files & set(index_to_m2ts.values())):
-                        if len(index_to_m2ts) > 1:
-                            sp_index += 1
-                            subprocess.Popen(f'"{MKV_MERGE_PATH}" -o "{sps_folder}{os.sep}BD_Vol_'
-                                             f'{bdmv_vol}_SP0{sp_index}.mkv" "{mpls_file_path}"', shell=True).wait()
-                            parsed_m2ts_files |= set(index_to_m2ts.values())
-            stream_folder = os.path.dirname(mpls_path).removesuffix('PLAYLIST') + 'STREAM'
-            for stream_file in os.listdir(stream_folder):
-                if cancel_event and cancel_event.is_set():
-                    raise _Cancelled()
-                if stream_file not in parsed_m2ts_files and stream_file.endswith('.m2ts'):
-                    if M2TS(os.path.join(stream_folder, stream_file)).get_duration() > 30 * 90000:
-                        subprocess.Popen(f'"{MKV_MERGE_PATH}" -o "{sps_folder}{os.sep}BD_Vol_'
-                                         f'{bdmv_vol}_{stream_file[:-5]}.mkv" '
-                                         f'"{os.path.join(stream_folder, stream_file)}"', shell=True).wait()
         self._progress(900, '处理 SPs 音轨')
 
-        sp_vpy_path = None
-        if vpy_paths:
-            for p in vpy_paths:
-                if p:
-                    sp_vpy_path = p
-                    break
-        if not sp_vpy_path:
-            sp_vpy_path = os.path.join(os.getcwd(), 'vpy.vpy')
+        if sp_entries:
+            sp_index_by_bdmv: dict[int, int] = {}
+            total_sp = len(sp_entries) or 1
+            for idx, entry in enumerate(sp_entries, start=1):
+                if cancel_event and cancel_event.is_set():
+                    raise _Cancelled()
+                try:
+                    sp_bdmv_index = int(entry.get('bdmv_index') or 0)
+                except Exception:
+                    sp_bdmv_index = 0
+                if sp_bdmv_index <= 0 or sp_bdmv_index not in bdmv_index_conf:
+                    continue
+                bdmv_vol = '0' * (3 - len(str(sp_bdmv_index))) + str(sp_bdmv_index)
+                confs = bdmv_index_conf[sp_bdmv_index]
+                main_mpls_path = confs[0]['selected_mpls'] + '.mpls'
+                playlist_dir = os.path.dirname(main_mpls_path)
+                stream_dir = os.path.join(os.path.dirname(playlist_dir), 'STREAM')
 
-        sp_files = [os.path.join(sps_folder, sp) for sp in os.listdir(sps_folder) if sp.endswith('.mkv')]
-        sp_files.sort()
-        total_sp = len(sp_files) or 1
-        for idx, sp_path in enumerate(sp_files, start=1):
-            if cancel_event and cancel_event.is_set():
-                raise _Cancelled()
-            self._progress(text=f'压制并混流 SPs：{os.path.basename(sp_path)}')
-            self.encode_task(sp_path, sps_folder, -1, sp_vpy_path, vspipe_mode, x265_mode, x265_params, 'external')
-            self._progress(900 + int(90 * idx / total_sp))
+                mpls_file = str(entry.get('mpls_file') or '').strip()
+                m2ts_file = str(entry.get('m2ts_file') or '').strip()
+
+                sp_mkv_path = None
+                if mpls_file:
+                    sp_index_by_bdmv[sp_bdmv_index] = sp_index_by_bdmv.get(sp_bdmv_index, 0) + 1
+                    sp_mkv_path = os.path.join(sps_folder, f'BD_Vol_{bdmv_vol}_SP0{sp_index_by_bdmv[sp_bdmv_index]}.mkv')
+                    mpls_file_path = os.path.join(playlist_dir, mpls_file)
+                    subprocess.Popen(f'"{MKV_MERGE_PATH}" -o "{sp_mkv_path}" "{mpls_file_path}"', shell=True).wait()
+                else:
+                    m2ts_files = [x.strip() for x in m2ts_file.split(',') if x.strip()]
+                    if m2ts_files:
+                        m2ts_name = m2ts_files[0]
+                        sp_mkv_path = os.path.join(sps_folder, f'BD_Vol_{bdmv_vol}_{m2ts_name[:-5]}.mkv')
+                        subprocess.Popen(
+                            f'"{MKV_MERGE_PATH}" -o "{sp_mkv_path}" "{os.path.join(stream_dir, m2ts_name)}"',
+                            shell=True
+                        ).wait()
+
+                if not sp_mkv_path or not os.path.exists(sp_mkv_path):
+                    continue
+                self._progress(text=f'压制并混流 SPs：{os.path.basename(sp_mkv_path)}')
+                if sp_vpy_paths and 0 <= (idx - 1) < len(sp_vpy_paths) and sp_vpy_paths[idx - 1]:
+                    cur_sp_vpy = str(sp_vpy_paths[idx - 1])
+                else:
+                    cur_sp_vpy = os.path.join(os.getcwd(), 'vpy.vpy')
+                self.encode_task(sp_mkv_path, sps_folder, -1, cur_sp_vpy, vspipe_mode, x265_mode, x265_params, 'external')
+                self._progress(900 + int(90 * idx / total_sp))
+        else:
+            for bdmv_index, confs in bdmv_index_conf.items():
+                if cancel_event and cancel_event.is_set():
+                    raise _Cancelled()
+                bdmv_vol = '0' * (3 - len(str(bdmv_index))) + str(bdmv_index)
+                mpls_path = confs[0]['selected_mpls'] + '.mpls'
+                index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(Chapter(mpls_path))
+                parsed_m2ts_files = set(index_to_m2ts.values())
+                sp_index = 0
+                for mpls_file in os.listdir(os.path.dirname(mpls_path)):
+                    if cancel_event and cancel_event.is_set():
+                        raise _Cancelled()
+                    if not mpls_file.endswith('.mpls'):
+                        continue
+                    mpls_file_path = os.path.join(os.path.dirname(mpls_path), mpls_file)
+                    if mpls_file_path != mpls_path:
+                        index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(Chapter(mpls_file_path))
+                        if not (parsed_m2ts_files & set(index_to_m2ts.values())):
+                            if len(index_to_m2ts) > 1:
+                                sp_index += 1
+                                subprocess.Popen(f'"{MKV_MERGE_PATH}" -o "{sps_folder}{os.sep}BD_Vol_'
+                                                 f'{bdmv_vol}_SP0{sp_index}.mkv" "{mpls_file_path}"', shell=True).wait()
+                                parsed_m2ts_files |= set(index_to_m2ts.values())
+                stream_folder = os.path.dirname(mpls_path).removesuffix('PLAYLIST') + 'STREAM'
+                for stream_file in os.listdir(stream_folder):
+                    if cancel_event and cancel_event.is_set():
+                        raise _Cancelled()
+                    if stream_file not in parsed_m2ts_files and stream_file.endswith('.m2ts'):
+                        if M2TS(os.path.join(stream_folder, stream_file)).get_duration() > 30 * 90000:
+                            subprocess.Popen(f'"{MKV_MERGE_PATH}" -o "{sps_folder}{os.sep}BD_Vol_'
+                                             f'{bdmv_vol}_{stream_file[:-5]}.mkv" '
+                                             f'"{os.path.join(stream_folder, stream_file)}"', shell=True).wait()
+            sp_files = [os.path.join(sps_folder, sp) for sp in os.listdir(sps_folder) if sp.endswith('.mkv')]
+            sp_files.sort()
+            total_sp = len(sp_files) or 1
+            for idx, sp_path in enumerate(sp_files, start=1):
+                if cancel_event and cancel_event.is_set():
+                    raise _Cancelled()
+                self._progress(text=f'压制并混流 SPs：{os.path.basename(sp_path)}')
+                if sp_vpy_paths and 0 <= (idx - 1) < len(sp_vpy_paths) and sp_vpy_paths[idx - 1]:
+                    cur_sp_vpy = sp_vpy_paths[idx - 1]
+                else:
+                    cur_sp_vpy = os.path.join(os.getcwd(), 'vpy.vpy')
+                self.encode_task(sp_path, sps_folder, -1, cur_sp_vpy, vspipe_mode, x265_mode, x265_params, 'external')
+                self._progress(900 + int(90 * idx / total_sp))
 
         self.completion()
         self._progress(1000, '完成')
@@ -2301,7 +2348,8 @@ class EncodeWorker(QObject):
 
     def __init__(self, bdmv_path: str, sub_files: list[str], checked: bool, output_folder: str,
                  configuration: dict[int, dict[str, int | str]], selected_mpls: list[tuple[str, str]],
-                 cancel_event: threading.Event, vpy_paths: list[str], vspipe_mode: str, x265_mode: str, x265_params: str, sub_pack_mode: str):
+                 cancel_event: threading.Event, vpy_paths: list[str], sp_vpy_paths: list[str], sp_entries: list[dict[str, int | str]],
+                 vspipe_mode: str, x265_mode: str, x265_params: str, sub_pack_mode: str):
         super().__init__()
         self.bdmv_path = bdmv_path
         self.sub_files = sub_files
@@ -2311,6 +2359,8 @@ class EncodeWorker(QObject):
         self.selected_mpls = selected_mpls
         self.cancel_event = cancel_event
         self.vpy_paths = vpy_paths
+        self.sp_vpy_paths = sp_vpy_paths
+        self.sp_entries = sp_entries
         self.vspipe_mode = vspipe_mode
         self.x265_mode = x265_mode
         self.x265_params = x265_params
@@ -2336,6 +2386,8 @@ class EncodeWorker(QObject):
                 cancel_event=self.cancel_event,
                 ensure_tools=False,
                 vpy_paths=self.vpy_paths,
+                sp_vpy_paths=self.sp_vpy_paths,
+                sp_entries=self.sp_entries,
                 vspipe_mode=self.vspipe_mode,
                 x265_mode=self.x265_mode,
                 x265_params=self.x265_params,
@@ -2701,8 +2753,8 @@ class BluraySubtitleGUI(QWidget):
         self.delete_default_vpy_file()
         return super().closeEvent(event)
 
-    def create_vpy_path_widget(self, initial_path: Optional[str] = None) -> QWidget:
-        widget = QWidget(self.table2)
+    def create_vpy_path_widget(self, initial_path: Optional[str] = None, parent: Optional[QWidget] = None) -> QWidget:
+        widget = QWidget(parent or self.table2)
         layout = QHBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
@@ -2774,13 +2826,134 @@ class BluraySubtitleGUI(QWidget):
         edit_col = ENCODE_LABELS.index('edit_vpy')
 
         if not self.table2.cellWidget(row_index, vpy_col):
-            self.table2.setCellWidget(row_index, vpy_col, self.create_vpy_path_widget())
+            self.table2.setCellWidget(row_index, vpy_col, self.create_vpy_path_widget(parent=self.table2))
 
         if not self.table2.cellWidget(row_index, edit_col):
             btn = QToolButton(self.table2)
             btn.setText('edit_vpy')
             btn.clicked.connect(self.on_edit_vpy_clicked)
             self.table2.setCellWidget(row_index, edit_col, btn)
+
+    def get_sp_vpy_path_from_row(self, row_index: int) -> str:
+        if not self.radio4.isChecked():
+            return ''
+        vpy_col = ENCODE_SP_LABELS.index('vpy_path')
+        w = self.table3.cellWidget(row_index, vpy_col)
+        if w:
+            line_edit = w.findChild(QLineEdit)
+            if line_edit:
+                return line_edit.text().strip()
+        item = self.table3.item(row_index, vpy_col)
+        return item.text().strip() if item else ''
+
+    def on_edit_sp_vpy_clicked(self):
+        if not self.radio4.isChecked():
+            return
+        sender = self.sender()
+        if not sender:
+            return
+        try:
+            row_index = self.table3.indexAt(sender.pos()).row()
+        except Exception:
+            row_index = -1
+        if row_index < 0:
+            return
+        path = self.get_sp_vpy_path_from_row(row_index)
+        self.open_vpy_in_editor(path)
+
+    def refresh_sp_table(self, configuration: dict[int, dict[str, int | str]]):
+        if not self.radio4.isChecked() or not configuration:
+            if hasattr(self, 'table3'):
+                self.table3.setRowCount(0)
+            return
+        try:
+            bdmv_index_conf: dict[int, list[dict[str, int | str]]] = {}
+            for _, conf in configuration.items():
+                bdmv_index_conf.setdefault(int(conf['bdmv_index']), []).append(conf)
+
+            entries: list[tuple[int, str, list[str], int]] = []
+            for bdmv_index, confs in bdmv_index_conf.items():
+                mpls_path = confs[0]['selected_mpls'] + '.mpls'
+                if not os.path.exists(mpls_path):
+                    continue
+                try:
+                    chapter = Chapter(mpls_path)
+                    index_to_m2ts, _ = get_index_to_m2ts_and_offset(chapter)
+                except Exception:
+                    traceback.print_exc()
+                    continue
+
+                parsed_m2ts_files = set(index_to_m2ts.values())
+                playlist_dir = os.path.dirname(mpls_path)
+
+                try:
+                    playlist_files = os.listdir(playlist_dir)
+                except Exception:
+                    traceback.print_exc()
+                    playlist_files = []
+
+                for mpls_file in playlist_files:
+                    if not mpls_file.endswith('.mpls'):
+                        continue
+                    mpls_file_path = os.path.join(playlist_dir, mpls_file)
+                    if os.path.normpath(mpls_file_path) == os.path.normpath(mpls_path):
+                        continue
+                    try:
+                        ch = Chapter(mpls_file_path)
+                        idx_to_m2ts, _ = get_index_to_m2ts_and_offset(ch)
+                    except Exception:
+                        continue
+                    if len(idx_to_m2ts) > 1 and not (parsed_m2ts_files & set(idx_to_m2ts.values())):
+                        entries.append((
+                            bdmv_index,
+                            os.path.basename(mpls_file_path),
+                            sorted(list(set(idx_to_m2ts.values()))),
+                            ch.get_total_time()
+                        ))
+                        parsed_m2ts_files |= set(idx_to_m2ts.values())
+
+                bdmv_dir = os.path.dirname(playlist_dir)
+                stream_folder = os.path.join(bdmv_dir, 'STREAM')
+                if not os.path.isdir(stream_folder):
+                    continue
+                try:
+                    stream_files = os.listdir(stream_folder)
+                except Exception:
+                    traceback.print_exc()
+                    continue
+
+                for stream_file in stream_files:
+                    if not stream_file.endswith('.m2ts'):
+                        continue
+                    if stream_file in parsed_m2ts_files:
+                        continue
+                    try:
+                        dur = M2TS(os.path.join(stream_folder, stream_file)).get_duration()
+                    except Exception:
+                        continue
+                    if dur > 30 * 90000:
+                        entries.append((bdmv_index, '', [stream_file], dur))
+
+            old_sorting = self.table3.isSortingEnabled()
+            self.table3.setSortingEnabled(False)
+            try:
+                self.table3.setRowCount(len(entries))
+                for i, (bdmv_index, mpls_file, m2ts_files, dur) in enumerate(entries):
+                    self.table3.setItem(i, 0, QTableWidgetItem(str(bdmv_index)))
+                    self.table3.setItem(i, 1, QTableWidgetItem(mpls_file))
+                    self.table3.setItem(i, 2, QTableWidgetItem(','.join(m2ts_files)))
+                    self.table3.setItem(i, 3, QTableWidgetItem(get_time_str(dur)))
+                    self.table3.setCellWidget(i, 4, self.create_vpy_path_widget(parent=self.table3))
+                    btn = QToolButton(self.table3)
+                    btn.setText('edit_vpy')
+                    btn.clicked.connect(self.on_edit_sp_vpy_clicked)
+                    self.table3.setCellWidget(i, 5, btn)
+                self.table3.resizeColumnsToContents()
+            finally:
+                self.table3.setSortingEnabled(old_sorting)
+        except Exception:
+            traceback.print_exc()
+            self.table3.setRowCount(0)
 
     def init_encode_box(self):
         self._encode_preset_params = {
@@ -3005,6 +3178,13 @@ class BluraySubtitleGUI(QWidget):
         self._subtitle_scan_debounce.timeout.connect(self._start_subtitle_folder_scan)
         self._pending_subtitle_folder = ''
         v_layout.addWidget(self.table2)
+        self.table3 = QTableWidget(self)
+        self.table3.setColumnCount(len(ENCODE_SP_LABELS))
+        self.table3.setHorizontalHeaderLabels(ENCODE_SP_LABELS)
+        self.table3.setSortingEnabled(True)
+        self.table3.horizontalHeader().setSortIndicatorShown(True)
+        self.table3.setVisible(False)
+        v_layout.addWidget(self.table3)
         self.layout.addWidget(subtitle)
 
         self.encode_box = QGroupBox('压制', self)
@@ -3437,73 +3617,80 @@ class BluraySubtitleGUI(QWidget):
                 self.table2.setItem(sub_index, 5, None)
 
     def on_configuration(self, configuration: dict[int, dict[str, int | str]]):
-        if not configuration:
-            print('配置为空，跳过更新')
-            return
-        if self.radio3.isChecked() or self.radio4.isChecked():
-            self.table2.setRowCount(len(configuration))
-            for sub_index, con in configuration.items():
-                self.table2.setItem(sub_index, 2, QTableWidgetItem(str(con['bdmv_index'])))
-                chapter_combo = QComboBox()
-                m2ts_files = []
-                duration = 0
-                chapter = Chapter(str(con['selected_mpls']) + '.mpls')
-                rows = sum(map(len, chapter.mark_info.values()))
-                j1 = con['chapter_index']
-                next_con = configuration.get(sub_index + 1)
-                if next_con and next_con.get('folder') == con.get('folder') and next_con.get('selected_mpls') == con.get('selected_mpls'):
-                    j2 = next_con['chapter_index']
-                else:
-                    j2 = rows + 1
-                index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(chapter)
-                m2ts_files = sorted(list(set([index_to_m2ts[i] for i in range(j1, j2)])))
-                chapter_combo.addItems([str(r + 1) for r in range(rows)])
-                chapter_combo.setCurrentIndex(con['chapter_index'] - 1)
-                chapter_combo.currentIndexChanged.connect(partial(self.on_chapter_combo, sub_index))
-                if next_con and next_con.get('folder') == con.get('folder') and next_con.get('selected_mpls') == con.get('selected_mpls'):
-                    duration = index_to_offset[next_con['chapter_index']] - index_to_offset[j1]
-                else:
-                    duration = chapter.get_total_time() - index_to_offset[j1]
-                duration = get_time_str(duration)
-                self.table2.setCellWidget(sub_index, 3, chapter_combo)
-                self.table2.setItem(sub_index, 4, QTableWidgetItem(', '.join(m2ts_files)))
-                self.table2.setItem(sub_index, 1, QTableWidgetItem(duration))
-                self.ensure_encode_row_widgets(sub_index)
-            if self.subtitle_folder_path.text().strip():
-                sub_files = []
-                try:
-                    for file in os.listdir(self.subtitle_folder_path.text().strip()):
-                        if (file.endswith(".ass") or file.endswith(".ssa") or
-                                file.endswith('srt') or file.endswith('.sup')):
-                            sub_files.append(os.path.join(self.subtitle_folder_path.text().strip(), file))
-                except:
-                    pass
-                if sub_files:
-                    for i, sub_file in enumerate(sub_files):
-                        if i <= len(configuration) + 1 and i < self.table2.rowCount():
-                            self.table2.setItem(i, 0, FilePathTableWidgetItem(sub_file))
-            self.table2.resizeColumnsToContents()
-        else:
-            for subtitle_index in range(self.table2.rowCount()):
-                con = configuration.get(subtitle_index)
-                sub_check_state = [self.table2.item(sub_index, 0).checkState().value for sub_index in
-                                   range(self.table2.rowCount())]
-                index_table = [sub_index for sub_index in range(len(sub_check_state)) if sub_check_state[sub_index] == 2]
-                if con:
-                    self.table2.setItem(index_table[subtitle_index], 3, QTableWidgetItem(str(con['bdmv_index'])))
+        try:
+            if not configuration:
+                print('配置为空，跳过更新')
+                return
+            if self.radio3.isChecked() or self.radio4.isChecked():
+                self.table2.setRowCount(len(configuration))
+                for sub_index, con in configuration.items():
+                    self.table2.setItem(sub_index, 2, QTableWidgetItem(str(con['bdmv_index'])))
                     chapter_combo = QComboBox()
-                    rows = sum(map(len, Chapter(str(con['selected_mpls']) + '.mpls').mark_info.values()))
+                    duration = 0
+                    chapter = Chapter(str(con['selected_mpls']) + '.mpls')
+                    rows = sum(map(len, chapter.mark_info.values()))
+                    j1 = con['chapter_index']
+                    next_con = configuration.get(sub_index + 1)
+                    if next_con and next_con.get('folder') == con.get('folder') and next_con.get('selected_mpls') == con.get('selected_mpls'):
+                        j2 = next_con['chapter_index']
+                    else:
+                        j2 = rows + 1
+                    index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(chapter)
+                    m2ts_files = sorted(list(set([index_to_m2ts[i] for i in range(j1, j2)])))
                     chapter_combo.addItems([str(r + 1) for r in range(rows)])
                     chapter_combo.setCurrentIndex(con['chapter_index'] - 1)
-                    chapter_combo.currentIndexChanged.connect(partial(self.on_chapter_combo, subtitle_index))
-                    self.table2.setCellWidget(index_table[subtitle_index], 4, chapter_combo)
-                    self.table2.setItem(index_table[subtitle_index], 5, QTableWidgetItem(con['offset']))
-                elif subtitle_index <= len(index_table) - 1:
-                    self.table2.setItem(index_table[subtitle_index], 3, None)
-                    self.table2.setCellWidget(index_table[subtitle_index], 4, None)
-                    self.table2.setItem(index_table[subtitle_index], 5, None)
-            self.table2.resizeColumnsToContents()
-            self.altered = True
+                    chapter_combo.currentIndexChanged.connect(partial(self.on_chapter_combo, sub_index))
+                    if next_con and next_con.get('folder') == con.get('folder') and next_con.get('selected_mpls') == con.get('selected_mpls'):
+                        duration = index_to_offset[next_con['chapter_index']] - index_to_offset[j1]
+                    else:
+                        duration = chapter.get_total_time() - index_to_offset[j1]
+                    duration = get_time_str(duration)
+                    self.table2.setCellWidget(sub_index, 3, chapter_combo)
+                    self.table2.setItem(sub_index, 4, QTableWidgetItem(', '.join(m2ts_files)))
+                    self.table2.setItem(sub_index, 1, QTableWidgetItem(duration))
+                    self.ensure_encode_row_widgets(sub_index)
+                if self.subtitle_folder_path.text().strip():
+                    sub_files = []
+                    try:
+                        for file in os.listdir(self.subtitle_folder_path.text().strip()):
+                            if (file.endswith(".ass") or file.endswith(".ssa") or
+                                    file.endswith('srt') or file.endswith('.sup')):
+                                sub_files.append(os.path.join(self.subtitle_folder_path.text().strip(), file))
+                    except Exception:
+                        pass
+                    if sub_files:
+                        for i, sub_file in enumerate(sub_files):
+                            if i <= len(configuration) + 1 and i < self.table2.rowCount():
+                                self.table2.setItem(i, 0, FilePathTableWidgetItem(sub_file))
+                self.table2.resizeColumnsToContents()
+                if self.radio4.isChecked():
+                    self.refresh_sp_table(configuration)
+            else:
+                for subtitle_index in range(self.table2.rowCount()):
+                    con = configuration.get(subtitle_index)
+                    sub_check_state = [self.table2.item(sub_index, 0).checkState().value for sub_index in
+                                       range(self.table2.rowCount())]
+                    index_table = [sub_index for sub_index in range(len(sub_check_state)) if sub_check_state[sub_index] == 2]
+                    if con:
+                        self.table2.setItem(index_table[subtitle_index], 3, QTableWidgetItem(str(con['bdmv_index'])))
+                        chapter_combo = QComboBox()
+                        rows = sum(map(len, Chapter(str(con['selected_mpls']) + '.mpls').mark_info.values()))
+                        chapter_combo.addItems([str(r + 1) for r in range(rows)])
+                        chapter_combo.setCurrentIndex(con['chapter_index'] - 1)
+                        chapter_combo.currentIndexChanged.connect(partial(self.on_chapter_combo, subtitle_index))
+                        self.table2.setCellWidget(index_table[subtitle_index], 4, chapter_combo)
+                        self.table2.setItem(index_table[subtitle_index], 5, QTableWidgetItem(con['offset']))
+                    elif subtitle_index <= len(index_table) - 1:
+                        self.table2.setItem(index_table[subtitle_index], 3, None)
+                        self.table2.setCellWidget(index_table[subtitle_index], 4, None)
+                        self.table2.setItem(index_table[subtitle_index], 5, None)
+                self.table2.resizeColumnsToContents()
+                self.altered = True
+        except Exception:
+            QMessageBox.information(self, " ", traceback.format_exc())
+            if hasattr(self, 'table3'):
+                self.table3.setRowCount(0)
+            return
 
     def on_chapter_combo(self, subtitle_index: int):
         if self.radio3.isChecked() or self.radio4.isChecked():
@@ -3793,8 +3980,12 @@ class BluraySubtitleGUI(QWidget):
     def on_select_function(self):
         if self.radio4.isChecked():
             self.ensure_default_vpy_file()
+            if hasattr(self, 'table3'):
+                self.table3.setVisible(True)
         else:
             self.delete_default_vpy_file()
+            if hasattr(self, 'table3'):
+                self.table3.setVisible(False)
 
         if self.radio1.isChecked():
             self.label2.setText("选择单集字幕所在的文件夹")
@@ -3859,6 +4050,11 @@ class BluraySubtitleGUI(QWidget):
             self.table2.setRowCount(0)
             self.table2.setColumnCount(len(ENCODE_LABELS))
             self.table2.setHorizontalHeaderLabels(ENCODE_LABELS)
+            if hasattr(self, 'table3'):
+                self.table3.clear()
+                self.table3.setRowCount(0)
+                self.table3.setColumnCount(len(ENCODE_SP_LABELS))
+                self.table3.setHorizontalHeaderLabels(ENCODE_SP_LABELS)
 
         self.bdmv_folder_path.clear()
         self.subtitle_folder_path.clear()
@@ -3902,6 +4098,25 @@ class BluraySubtitleGUI(QWidget):
                 vpy_paths.append(self.get_vpy_path_from_row(i))
             except Exception:
                 vpy_paths.append(self.get_default_vpy_path())
+        sp_vpy_paths = []
+        sp_entries = []
+        if hasattr(self, 'table3'):
+            for i in range(self.table3.rowCount()):
+                try:
+                    sp_vpy_paths.append(self.get_sp_vpy_path_from_row(i))
+                except Exception:
+                    sp_vpy_paths.append(self.get_default_vpy_path())
+                try:
+                    bdmv_index_item = self.table3.item(i, 0)
+                    mpls_item = self.table3.item(i, 1)
+                    m2ts_item = self.table3.item(i, 2)
+                    sp_entries.append({
+                        'bdmv_index': int(bdmv_index_item.text()) if bdmv_index_item and bdmv_index_item.text() else 0,
+                        'mpls_file': mpls_item.text().strip() if mpls_item and mpls_item.text() else '',
+                        'm2ts_file': m2ts_item.text().strip() if m2ts_item and m2ts_item.text() else ''
+                    })
+                except Exception:
+                    sp_entries.append({'bdmv_index': 0, 'mpls_file': '', 'm2ts_file': ''})
         selected_mpls = self.get_selected_mpls_no_ext()
         if not selected_mpls:
             progress_dialog.close()
@@ -3939,6 +4154,8 @@ class BluraySubtitleGUI(QWidget):
             selected_mpls,
             cancel_event,
             vpy_paths,
+            sp_vpy_paths,
+            sp_entries,
             vspipe_mode,
             x265_mode,
             x265_params,
@@ -4230,13 +4447,22 @@ def get_folder_size(folder_path: str) -> str:
 def get_time_str(duration: float) -> str:
     if duration == 0:
         return '0'
-    hours, dur = divmod(duration, 3600)
-    minutes, seconds = divmod(dur, 60)
+    try:
+        duration = float(duration)
+    except Exception:
+        duration = 0.0
+    hours, dur = divmod(duration, 3600.0)
+    minutes, seconds = divmod(dur, 60.0)
     seconds = round(seconds, 3)
-    hs = '0' + str(int(hours)) if len(str(int(hours))) == 1 else str(int(hours))
-    ms = '0' + str(int(minutes)) if len(str(int(minutes))) == 1 else str(int(minutes))
-    s1, s2 = str(seconds).split('.')
-    ss = ('0' + s1 if len(s1) == 1 else s1) + '.' + (s2 + (3 - len(s2)) * '0' if len(s2) < 3 else s2)
+    if seconds >= 60.0:
+        seconds -= 60.0
+        minutes += 1.0
+    if minutes >= 60.0:
+        minutes -= 60.0
+        hours += 1.0
+    hs = f'{int(hours):02d}'
+    ms = f'{int(minutes):02d}'
+    ss = f'{seconds:06.3f}'
     return f'{hs}:{ms}:{ss}'
 
 
