@@ -37,7 +37,7 @@ from PyQt6.QtCore import QCoreApplication, Qt, QPoint, QObject, QThread, QTimer,
 from PyQt6.QtGui import QPainter, QColor, QDragMoveEvent, QDropEvent, QPaintEvent, QDragEnterEvent
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLabel, QToolButton, QLineEdit, \
     QMessageBox, QHBoxLayout, QGroupBox, QCheckBox, QProgressDialog, QRadioButton, QButtonGroup, \
-    QTableWidget, QTableWidgetItem, QDialog, QPushButton, QComboBox, QMenu, QAbstractItemView
+    QTableWidget, QTableWidgetItem, QDialog, QPushButton, QComboBox, QMenu, QAbstractItemView, QPlainTextEdit
 
 if sys.platform == 'win32':
     import winreg
@@ -47,6 +47,7 @@ FLAC_PATH = r'C:\Downloads\flac-1.5.0-win\Win64\flac.exe'  # flac可执行文件
 FLAC_THREADS = 20  # flac线程数
 FFMPEG_PATH = r'C:\Downloads\ffmpeg-8.1-full_build\bin\ffmpeg.exe'  # ffmpeg可执行文件路径
 FFPROBE_PATH = r'C:\Downloads\ffmpeg-8.1-full_build\bin\ffprobe.exe'  # ffprobe可执行文件路径
+X265_PATH = r'C:\Software\x265.exe'  # x265可执行文件路径
 
 MKV_INFO_PATH = ''
 MKV_MERGE_PATH = ''
@@ -56,6 +57,7 @@ BDMV_LABELS = ['path', 'size', 'info']
 SUBTITLE_LABELS = ['select', 'path', 'sub_duration', 'bdmv_index', 'chapter_index', 'offset']
 MKV_LABELS = ['path', 'duration']
 REMUX_LABELS = ['sub_path', 'ep_duration', 'bdmv_index', 'chapter_index', 'm2ts_file']
+ENCODE_LABELS = ['sub_path', 'ep_duration', 'bdmv_index', 'chapter_index', 'm2ts_file', 'vpy_path', 'edit_vpy']
 CONFIGURATION = {}
 
 
@@ -1485,7 +1487,6 @@ class BluraySubtitle:
                                          f'{bdmv_vol}_{stream_file[:-5]}.mkv" '
                                          f'"{os.path.join(stream_folder, stream_file)}"', shell=True).wait()
         self._progress(900, '处理 SPs 音轨')
-
         for sp in os.listdir(sps_folder):
             if cancel_event and cancel_event.is_set():
                 raise _Cancelled()
@@ -1494,7 +1495,271 @@ class BluraySubtitle:
         self.completion()
         self._progress(1000, '完成')
 
-    def flac_task(self, output_file, dst_folder, i):
+    def episodes_encode(self, table: Optional[QTableWidget], folder_path: str,
+                        selected_mpls: Optional[list[tuple[str, str]]] = None,
+                        configuration: Optional[dict[int, dict[str, int | str]]] = None,
+                        cancel_event: Optional[threading.Event] = None,
+                        ensure_tools: bool = True,
+                        vpy_paths: Optional[list[str]] = None,
+                        vspipe_mode: str = 'bundle',
+                        x265_mode: str = 'bundle',
+                        x265_params: str = '',
+                        sub_pack_mode: str = 'external'):
+        if configuration is not None:
+            self.configuration = configuration
+        elif not CONFIGURATION:
+            if table is None:
+                self.configuration = {}
+            else:
+                self.configuration = self.generate_configuration(table)
+        else:
+            self.configuration = CONFIGURATION
+        if not os.path.exists(dst_folder := os.path.join(folder_path, os.path.basename(self.bdmv_path))):
+            os.mkdir(dst_folder)
+        bdmv_index_conf = {}
+        for sub_index, conf in self.configuration.items():
+            if conf['bdmv_index'] in bdmv_index_conf:
+                bdmv_index_conf[conf['bdmv_index']].append(conf)
+            else:
+                bdmv_index_conf[conf['bdmv_index']] = [conf]
+        if ensure_tools:
+            find_mkvtoolinx()
+
+        for bdmv_index, confs in bdmv_index_conf.items():
+            if cancel_event and cancel_event.is_set():
+                raise _Cancelled()
+            mpls_path = confs[0]['selected_mpls'] + '.mpls'
+
+            chapter = Chapter(mpls_path)
+            chapter.get_pid_to_language()
+            m2ts_file = os.path.join(os.path.join(mpls_path[:-19], 'STREAM'), chapter.in_out_time[0][0] + '.m2ts')
+            print(f'正在分析mpls的第一个文件 ｢{m2ts_file}｣ 的轨道')
+            self._progress(text=f'分析轨道：{os.path.basename(m2ts_file)}')
+            cmd = f'"{FFPROBE_PATH}" -v error -show_streams -show_format -of json "{m2ts_file}" >info.json 2>&1'
+            subprocess.Popen(cmd, shell=True).wait()
+
+            with open('info.json', 'r', encoding='utf-8') as fp:
+                data = json.load(fp)
+            audio_type_weight = {'': -1, 'aac': 1, 'ac3': 2, 'eac3': 3, 'lpcm': 4, 'dts': 5, 'dts_hd_ma': 6, 'truehd': 7}
+            selected_eng_audio_track = ['', '']
+            selected_zho_audio_track = ['', '']
+            copy_sub_track = []
+            for stream_info in data['streams']:
+
+                if stream_info['codec_type'] == 'audio':
+                    codec_name = stream_info['codec_name']
+                    if codec_name == 'dts' and stream_info.get('profile') == 'DTS-HD MA':
+                        codec_name = 'dts_hd_ma'
+                    lang = chapter.pid_to_lang.get(int(stream_info['id'], 16), 'und')
+                    if lang == 'eng':
+                        if not selected_eng_audio_track[1] or audio_type_weight[codec_name] > audio_type_weight[
+                            selected_eng_audio_track[1]]:
+                            selected_eng_audio_track = [str(stream_info['index']), codec_name]
+                    elif lang == 'zho':
+                        if not selected_zho_audio_track[1] or audio_type_weight[codec_name] > audio_type_weight[
+                            selected_zho_audio_track[1]]:
+                            selected_zho_audio_track = [str(stream_info['index']), codec_name]
+                elif stream_info['codec_type'] == 'subtitle':
+                    lang = chapter.pid_to_lang.get(int(stream_info['id'], 16), 'und')
+                    if lang in ['eng', 'zho']:
+                        copy_sub_track.append(str(stream_info['index']))
+            if not copy_sub_track:
+                for stream_info in data['streams']:
+                    if stream_info['codec_type'] == 'subtitle':
+                        copy_sub_track.append(str(stream_info['index']))
+                        break
+            if not selected_zho_audio_track[0] and not selected_eng_audio_track[0]:
+                copy_audio_track = []
+                for stream_info in data['streams']:
+                    if stream_info['codec_type'] == 'audio':
+                        copy_audio_track.append(str(stream_info['index']))
+                        break
+                for stream_info in data['streams']:
+                    if stream_info['codec_type'] == 'audio':
+                        lang = chapter.pid_to_lang.get(int(stream_info['id'], 16), 'und')
+                        if lang == 'jpn' and str(stream_info['index']) not in copy_audio_track:
+                            copy_audio_track.append(str(stream_info['index']))
+            else:
+                if selected_eng_audio_track[0] and selected_zho_audio_track[0]:
+                    copy_audio_track = [selected_eng_audio_track[0], selected_zho_audio_track[0]]
+                elif not selected_eng_audio_track[0]:
+                    copy_audio_track = [selected_zho_audio_track[0]]
+                else:
+                    copy_audio_track = [selected_eng_audio_track[0]]
+                first_audio_index = 1
+                for stream_info in data['streams']:
+                    if stream_info['codec_type'] == 'audio':
+                        first_audio_index = stream_info['index']
+                        break
+                if str(first_audio_index) not in (selected_zho_audio_track[0], selected_eng_audio_track[0]):
+                    copy_audio_track.append(str(first_audio_index))
+            print(f'选择音频轨道 {copy_audio_track}，字幕轨道 {copy_sub_track}')
+            meta_folder = os.path.join(os.path.join(mpls_path[:-19], 'META', 'DL'))
+            cover = ''
+            cover_size = 0
+            if not os.path.exists(meta_folder):
+                output_name = os.path.split(mpls_path[:-24])[-1]
+            else:
+                for filename in os.listdir(meta_folder):
+                    if filename.endswith('.jpg') or filename.endswith('.JPG') or filename.endswith(
+                            '.JPEG') or filename.endswith('.jpeg') or filename.endswith('.png') or filename.endswith(
+                        '.PNG'):
+                        if os.path.getsize(os.path.join(meta_folder, filename)) > cover_size:
+                            cover = os.path.join(meta_folder, filename)
+                            cover_size = os.path.getsize(os.path.join(meta_folder, filename))
+                output_name = ''
+                for filename in os.listdir(meta_folder):
+                    if filename == 'bdmt_eng.xml':
+                        try:
+                            tree = et.parse(os.path.join(meta_folder, filename))
+                            _folder = tree.getroot()
+                            ns = {'di': 'urn:BDA:bdmv;discinfo'}
+                            output_name = _folder.find('.//di:name', ns).text
+                            break
+                        except (et.ParseError, FileNotFoundError):
+                            continue
+                if not output_name:
+                    for filename in os.listdir(meta_folder):
+                        if filename == 'bdmt_zho.xml':
+                            try:
+                                tree = et.parse(os.path.join(meta_folder, filename))
+                                _folder = tree.getroot()
+                                ns = {'di': 'urn:BDA:bdmv;discinfo'}
+                                output_name = _folder.find('.//di:name', ns).text
+                                break
+                            except (et.ParseError, FileNotFoundError):
+                                continue
+                if not output_name:
+                    for filename in os.listdir(meta_folder):
+                        try:
+                            tree = et.parse(os.path.join(meta_folder, filename))
+                            _folder = tree.getroot()
+                            ns = {'di': 'urn:BDA:bdmv;discinfo'}
+                            output_name = _folder.find('.//di:name', ns).text
+                            break
+                        except (et.ParseError, FileNotFoundError):
+                            continue
+                if not output_name:
+                    output_name = os.path.split(mpls_path[:-24])[-1]
+            char_map = {
+                '?': '？',
+                '*': '★',
+                '<': '《',
+                '>': '》',
+                ':': '：',
+                '"': "'",
+                '/': '／',
+                '\\': '／',
+                '|': '￨'
+            }
+            output_name = ''.join(char_map.get(char) or char for char in output_name)
+            if cover:
+                print(f"找到封面图片 ｢{cover}｣")
+            print(f'输出文件名{output_name}.mkv')
+
+            chapter_split = ','.join(map(str, [conf['chapter_index'] for conf in confs]))
+            bdmv_vol = '0' * (3 - len(str(bdmv_index))) + str(bdmv_index)
+            output_file = f'{os.path.join(dst_folder, output_name)}_BD_Vol_{bdmv_vol}.mkv'
+            remux_cmd = (f'"{MKV_MERGE_PATH}" --split chapters:{chapter_split} -o "{output_file}" '
+                         f'{("-a " + ",".join(copy_audio_track)) if copy_audio_track else ""} '
+                         f'{("-s " + ",".join(copy_sub_track)) if copy_sub_track else ""} '
+                         f'{(" --attachment-name Cover.jpg" + " --attach-file " + "\"" + cover + "\"") if cover else ""}  '
+                         f'"{mpls_path}"')
+            print(f'混流命令: {remux_cmd}')
+            self._progress(text=f'混流中：BD_Vol_{bdmv_vol}')
+            # subprocess.Popen(remux_cmd, shell=True).wait()
+            self._progress(int((bdmv_index + 1) / len(bdmv_index_conf) * 300))
+
+        self.checked = True
+        mkv_files = [os.path.join(dst_folder, file) for file in os.listdir(dst_folder) if file.endswith('.mkv')]
+        if cancel_event and cancel_event.is_set():
+            raise _Cancelled()
+        self._progress(310, '写入章节中')
+        self.add_chapter_to_mkv(mkv_files, table, selected_mpls=selected_mpls)
+        self._progress(400)
+
+        i = 0
+        for mkv_file in mkv_files:
+            if cancel_event and cancel_event.is_set():
+                raise _Cancelled()
+            i += 1
+            self._progress(text=f'压制并混流：{os.path.basename(mkv_file)}')
+            vpy_path = None
+            if vpy_paths and 0 <= (i - 1) < len(vpy_paths):
+                vpy_path = vpy_paths[i - 1]
+            if not vpy_path:
+                vpy_path = os.path.join(os.getcwd(), 'vpy.vpy')
+            self.encode_task(mkv_file, dst_folder, i, vpy_path, vspipe_mode, x265_mode, x265_params, sub_pack_mode)
+            if sub_pack_mode == 'external' and self.sub_files and len(self.sub_files) >= i and i > -1:
+                sub_src = self.sub_files[i - 1]
+                sub_ext = os.path.splitext(sub_src)[1].lower()
+                if sub_ext in ('.ass', '.ssa', '.srt'):
+                    video_base = os.path.splitext(os.path.basename(mkv_file))[0]
+                    sub_dst = os.path.join(dst_folder, video_base + sub_ext)
+                    try:
+                        shutil.copy2(sub_src, sub_dst)
+                    except Exception:
+                        traceback.print_exc()
+            self._progress(400 + int(400 * i / len(mkv_files)))
+
+        sps_folder = dst_folder + os.sep + 'SPs'
+        os.mkdir(sps_folder)
+        for bdmv_index, confs in bdmv_index_conf.items():
+            if cancel_event and cancel_event.is_set():
+                raise _Cancelled()
+            bdmv_vol = '0' * (3 - len(str(bdmv_index))) + str(bdmv_index)
+            mpls_path = confs[0]['selected_mpls'] + '.mpls'
+            index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(Chapter(mpls_path))
+            parsed_m2ts_files = set(index_to_m2ts.values())
+            sp_index = 0
+            for mpls_file in os.listdir(os.path.dirname(mpls_path)):
+                if cancel_event and cancel_event.is_set():
+                    raise _Cancelled()
+                if not mpls_file.endswith('.mpls'):
+                    continue
+                mpls_file_path = os.path.join(os.path.dirname(mpls_path), mpls_file)
+                if mpls_file_path != mpls_path:
+                    index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(Chapter(mpls_file_path))
+                    if not (parsed_m2ts_files & set(index_to_m2ts.values())):
+                        if len(index_to_m2ts) > 1:
+                            sp_index += 1
+                            subprocess.Popen(f'"{MKV_MERGE_PATH}" -o "{sps_folder}{os.sep}BD_Vol_'
+                                             f'{bdmv_vol}_SP0{sp_index}.mkv" "{mpls_file_path}"', shell=True).wait()
+                            parsed_m2ts_files |= set(index_to_m2ts.values())
+            stream_folder = os.path.dirname(mpls_path).removesuffix('PLAYLIST') + 'STREAM'
+            for stream_file in os.listdir(stream_folder):
+                if cancel_event and cancel_event.is_set():
+                    raise _Cancelled()
+                if stream_file not in parsed_m2ts_files and stream_file.endswith('.m2ts'):
+                    if M2TS(os.path.join(stream_folder, stream_file)).get_duration() > 30 * 90000:
+                        subprocess.Popen(f'"{MKV_MERGE_PATH}" -o "{sps_folder}{os.sep}BD_Vol_'
+                                         f'{bdmv_vol}_{stream_file[:-5]}.mkv" '
+                                         f'"{os.path.join(stream_folder, stream_file)}"', shell=True).wait()
+        self._progress(900, '处理 SPs 音轨')
+
+        sp_vpy_path = None
+        if vpy_paths:
+            for p in vpy_paths:
+                if p:
+                    sp_vpy_path = p
+                    break
+        if not sp_vpy_path:
+            sp_vpy_path = os.path.join(os.getcwd(), 'vpy.vpy')
+
+        sp_files = [os.path.join(sps_folder, sp) for sp in os.listdir(sps_folder) if sp.endswith('.mkv')]
+        sp_files.sort()
+        total_sp = len(sp_files) or 1
+        for idx, sp_path in enumerate(sp_files, start=1):
+            if cancel_event and cancel_event.is_set():
+                raise _Cancelled()
+            self._progress(text=f'压制并混流 SPs：{os.path.basename(sp_path)}')
+            self.encode_task(sp_path, sps_folder, -1, sp_vpy_path, vspipe_mode, x265_mode, x265_params, 'external')
+            self._progress(900 + int(90 * idx / total_sp))
+
+        self.completion()
+        self._progress(1000, '完成')
+
+    def process_audio_to_flac(self, output_file, dst_folder, i) -> tuple[int, dict[int, str], list[str]]:
         dolby_truehd_tracks = []
         track_bits = {}
         track_id_delay_map = {}
@@ -1613,7 +1878,7 @@ class BluraySubtitle:
 
             for file1 in os.listdir(dst_folder):
                 file1_path = os.path.join(dst_folder, file1)
-                if file1_path != output_file and not file1_path.endswith('.mkv'):
+                if file1_path != output_file and not file1_path.endswith('.mkv') and not file1_path.endswith('.lwi') and not file1_path.endswith('.hevc'):
                     try:
                         silent, avg_db = _is_silent_audio(file1_path, -60.0)
                     except Exception:
@@ -1721,22 +1986,124 @@ class BluraySubtitle:
                     file1_path = os.path.join(dst_folder, file1)
                     if file1_path.endswith('.flac'):
                         flac_files.append(file1_path)
-            if flac_files:
-                output_file1 = os.path.join(dst_folder, os.path.splitext(output_file)[0] + '(1).mkv')
-                remux_cmd = self.generate_remux_cmd(track_count, track_info, flac_files, output_file1, output_file)
+        return track_count, track_info, flac_files
+
+    def flac_task(self, output_file, dst_folder, i):
+        track_count, track_info, flac_files = self.process_audio_to_flac(output_file, dst_folder, i)
+        if flac_files:
+            output_file1 = os.path.join(dst_folder, os.path.splitext(output_file)[0] + '(1).mkv')
+            remux_cmd = self.generate_remux_cmd(track_count, track_info, flac_files, output_file1, output_file)
+            if self.sub_files and len(self.sub_files) >= i and i > -1:
+                remux_cmd += f' --language 0:chi "{self.sub_files[i - 1]}"'
+            print(f'混流命令：{remux_cmd}')
+            subprocess.Popen(remux_cmd, shell=True).wait()
+            if os.path.getsize(output_file1) > os.path.getsize(output_file):
+                os.remove(output_file1)
+            else:
+                os.remove(output_file)
+                os.rename(output_file1, output_file)
+            for flac_file in flac_files:
+                os.remove(flac_file)
+
+    def encode_task(self, output_file, dst_folder, i, vpy_path: str, vspipe_mode: str, x265_mode: str, x265_params: str, sub_pack_mode: str):
+        def update_vpy_script():
+            if not os.path.exists(vpy_path):
+                return
+            try:
+                with open(vpy_path, 'r', encoding='utf-8') as fp:
+                    lines = fp.readlines()
+            except Exception:
+                traceback.print_exc()
+                return
+
+            mkv_real_path = os.path.normpath(output_file)
+            subtitle_real_path = None
+            if self.sub_files and len(self.sub_files) >= i and i > -1:
+                subtitle_real_path = os.path.normpath(self.sub_files[i - 1])
+
+            def _to_py_r_string(value: str) -> str:
+                return 'r"' + value.replace('"', '\\"') + '"'
+
+            updated = False
+            new_lines = []
+            for line in lines:
+                stripped = line.lstrip()
+                if stripped.startswith('a ='):
+                    indent = line[:len(line) - len(stripped)]
+                    comment = ''
+                    if '#' in stripped:
+                        comment = ' #' + stripped.split('#', 1)[1].rstrip('\n')
+                    new_lines.append(f'{indent}a = {_to_py_r_string(mkv_real_path)}{comment}\n')
+                    updated = True
+                    continue
+
+                if subtitle_real_path and stripped.startswith('sub_file =') and not stripped.startswith('#'):
+                    indent = line[:len(line) - len(stripped)]
+                    comment = ''
+                    if '#' in stripped:
+                        comment = ' #' + stripped.split('#', 1)[1].rstrip('\n')
+                    new_lines.append(f'{indent}sub_file = {_to_py_r_string(subtitle_real_path)}{comment}\n')
+                    updated = True
+                    continue
+
+                new_lines.append(line)
+
+            if not updated:
+                return
+            try:
+                with open(vpy_path, 'w', encoding='utf-8') as fp:
+                    fp.writelines(new_lines)
+            except Exception:
+                traceback.print_exc()
+
+        update_vpy_script()
+
+        def cleanup_lwi_for_source(source_path: str):
+            for suffix in ('.lwi', '.lwi.lock'):
+                try:
+                    p = source_path + suffix
+                    if os.path.exists(p) and os.path.isfile(p):
+                        os.remove(p)
+                except Exception:
+                    traceback.print_exc()
+
+        if vspipe_mode == 'bundle':
+            vspipe_exe, vspipe_env = get_vspipe_context()
+        else:
+            vspipe_exe, vspipe_env = 'vspipe.exe', None
+            if sys.platform != 'win32':
+                vspipe_exe = 'vspipe'
+        if x265_mode == 'bundle':
+            x265_exe = X265_PATH
+        else:
+            x265_exe = 'x265.exe' if sys.platform == 'win32' else 'x265'
+        hevc_file = os.path.join(dst_folder, os.path.splitext(os.path.basename(output_file))[0] + '.hevc')
+        cmd = f'"{vspipe_exe}" --y4m "{vpy_path}" - | "{x265_exe}" {x265_params or ""} --y4m -D 10 -o "{hevc_file}" -'
+        print(f'压制命令：{cmd}')
+        subprocess.Popen(cmd, shell=True, env=vspipe_env).wait()
+        cleanup_lwi_for_source(output_file)
+        track_count, track_info, flac_files = self.process_audio_to_flac(output_file, dst_folder, i)
+        if flac_files or os.path.exists(hevc_file):
+            output_file1 = os.path.join(dst_folder, os.path.splitext(output_file)[0] + '(1).mkv')
+            remux_cmd = self.generate_remux_cmd(track_count, track_info, flac_files, output_file1, output_file,
+                                                hevc_file=hevc_file if os.path.exists(hevc_file) else None)
+            if sub_pack_mode == 'soft':
                 if self.sub_files and len(self.sub_files) >= i and i > -1:
                     remux_cmd += f' --language 0:chi "{self.sub_files[i - 1]}"'
-                print(f'混流命令：{remux_cmd}')
-                subprocess.Popen(remux_cmd, shell=True).wait()
-                if os.path.getsize(output_file1) > os.path.getsize(output_file):
-                    os.remove(output_file1)
-                else:
-                    os.remove(output_file)
-                    os.rename(output_file1, output_file)
-                for flac_file in flac_files:
-                    os.remove(flac_file)
+            print(f'混流命令：{remux_cmd}')
+            subprocess.Popen(remux_cmd, shell=True).wait()
+            if os.path.getsize(output_file1) > os.path.getsize(output_file):
+                os.remove(output_file1)
+            else:
+                os.remove(output_file)
+                os.rename(output_file1, output_file)
+            for flac_file in flac_files:
+                os.remove(flac_file)
+            if os.path.exists(hevc_file):
+                os.remove(hevc_file)
+        cleanup_lwi_for_source(output_file)
 
-    def generate_remux_cmd(self, track_count, track_info, flac_files, output_file, mkv_file):
+    def generate_remux_cmd(self, track_count, track_info, flac_files, output_file, mkv_file, hevc_file: Optional[str] = None):
         tracker_order = []
         audio_tracks = []
         pcm_track_count = 0
@@ -1753,10 +2120,16 @@ class BluraySubtitle:
             else:
                 tracker_order.append(f'0:{_}')
         tracker_order = ','.join(tracker_order)
+        audio_track_num = len(audio_tracks)
         audio_tracks = '!' + ','.join(audio_tracks)
         language_options = ' '.join(language_options)
-        return (f'"{MKV_MERGE_PATH}" -o "{output_file}" --track-order {tracker_order} '
-                f'-a {audio_tracks} "{mkv_file}" {language_options}')
+        if not hevc_file:
+            return (f'"{MKV_MERGE_PATH}" -o "{output_file}" --track-order {tracker_order} '
+                    f'-a {audio_tracks} "{mkv_file}" {language_options}')
+        else:
+            tracker_order = f'{audio_track_num + 1}:0,{tracker_order}'
+            return (f'"{MKV_MERGE_PATH}" -o "{output_file}" --track-order {tracker_order} '
+                    f'-d !0 -a {audio_tracks} "{mkv_file}" {language_options} "{hevc_file}"')
 
     def extract_lossless(self, mkv_file: str, dolby_truehd_tracks: list[int]) -> tuple[int, dict[int, str]]:
         if sys.platform == 'win32':
@@ -1909,6 +2282,62 @@ class RemuxWorker(QObject):
                 configuration=self.configuration,
                 cancel_event=self.cancel_event,
                 ensure_tools=False
+            )
+        except _Cancelled:
+            self.canceled.emit()
+        except Exception:
+            self.failed.emit(traceback.format_exc())
+        else:
+            self.finished.emit()
+
+class EncodeWorker(QObject):
+    progress = pyqtSignal(int)
+    label = pyqtSignal(str)
+    finished = pyqtSignal()
+    canceled = pyqtSignal()
+    failed = pyqtSignal(str)
+
+    def __init__(self, bdmv_path: str, sub_files: list[str], checked: bool, output_folder: str,
+                 configuration: dict[int, dict[str, int | str]], selected_mpls: list[tuple[str, str]],
+                 cancel_event: threading.Event, vpy_paths: list[str], vspipe_mode: str, x265_mode: str, x265_params: str, sub_pack_mode: str):
+        super().__init__()
+        self.bdmv_path = bdmv_path
+        self.sub_files = sub_files
+        self.checked = checked
+        self.output_folder = output_folder
+        self.configuration = configuration
+        self.selected_mpls = selected_mpls
+        self.cancel_event = cancel_event
+        self.vpy_paths = vpy_paths
+        self.vspipe_mode = vspipe_mode
+        self.x265_mode = x265_mode
+        self.x265_params = x265_params
+        self.sub_pack_mode = sub_pack_mode
+
+    def run(self):
+        try:
+            def progress_cb(value: Optional[int] = None, text: Optional[str] = None):
+                if value is not None:
+                    self.progress.emit(int(value))
+                if text:
+                    self.label.emit(str(text))
+                if self.cancel_event.is_set():
+                    raise _Cancelled()
+
+            bs = BluraySubtitle(self.bdmv_path, self.sub_files, self.checked, progress_cb)
+            bs.configuration = self.configuration
+            bs.episodes_encode(
+                None,
+                self.output_folder,
+                selected_mpls=self.selected_mpls,
+                configuration=self.configuration,
+                cancel_event=self.cancel_event,
+                ensure_tools=False,
+                vpy_paths=self.vpy_paths,
+                vspipe_mode=self.vspipe_mode,
+                x265_mode=self.x265_mode,
+                x265_params=self.x265_params,
+                sub_pack_mode=self.sub_pack_mode
             )
         except _Cancelled:
             self.canceled.emit()
@@ -2168,10 +2597,326 @@ class BluraySubtitleGUI(QWidget):
         self.init_ui()
         self.altered = False
 
+    def get_default_vpy_path(self) -> str:
+        return os.path.normpath(os.path.abspath('vpy.vpy'))
+
+    def ensure_default_vpy_file(self):
+        path = self.get_default_vpy_path()
+        if os.path.exists(path) and os.path.isfile(path):
+            return
+        content = (
+            'import vapoursynth as vs\n'
+            'from vapoursynth import core\n'
+            'import mvsfunc as mvf\n'
+            '\n'
+            '\n'
+            'a = r""  #（可以不填，程序会自动生成）\n'
+            '\n'
+            'src8 = core.lsmas.LWLibavSource(a)\n'
+            'src16 = core.fmtc.bitdepth(src8, bits=16)\n'
+            'nr16 = core.nlm_ispc.NLMeans(src16, d=0, wmode=3, h=3)\n'
+            'dbed = core.f3kdb.Deband(nr16, 12, 72, 48, 48, 0, 0, output_depth=16).f3kdb.Deband(24, 56, 32, 32, 0, 0, output_depth=16)\n'
+            'dbed = mvf.LimitFilter(dbed, nr16, thr=0.55, elast=1.5, planes=[0, 1, 2])\n'
+            'nr16Y = core.std.ShufflePlanes(nr16, 0, vs.GRAY)\n'
+            'aa_nr16Y = core.eedi2.EEDI2(nr16Y, field=1, mthresh=10, lthresh=20, vthresh=20, maxd=24, nt=50)\n'
+            'aa_nr16Y = core.fmtc.resample(aa_nr16Y, 1920, 1080, 0, -0.5).std.Transpose()\n'
+            'aa_nr16Y = core.eedi2.EEDI2(aa_nr16Y, field=1, mthresh=10, lthresh=20, vthresh=20, maxd=24, nt=50)\n'
+            'aa_nr16Y = core.fmtc.resample(aa_nr16Y, 1080, 1920, 0, -0.5).std.Transpose()\n'
+            'aaedY = core.rgvs.Repair(aa_nr16Y, nr16Y, 2)\n'
+            'dbedY = core.std.ShufflePlanes(dbed, 0, vs.GRAY)\n'
+            'mergedY = mvf.LimitFilter(dbedY, aaedY, thr=1.0, elast=1.5)\n'
+            'merged = core.std.ShufflePlanes([mergedY, dbed], [0,1,2], vs.YUV)\n'
+            'res = merged\n'
+            'Debug = False\n'
+            'if Debug:\n'
+            '    res = mvf.ToRGB(res, full=False, depth=8)\n'
+            'else:\n'
+            '    res = core.fmtc.bitdepth(res, bits=10)\n'
+            '# sub_file = ""  #（可以不填，程序会自动生成）\n'
+            '# res = core.assrender.TextSub(res, file=sub_file)\n'
+            'res.set_output()\n'
+            'src8.set_output(1)\n'
+        )
+        try:
+            with open(path, 'w', encoding='utf-8') as fp:
+                fp.write(content)
+        except Exception:
+            traceback.print_exc()
+
+    def delete_default_vpy_file(self):
+        path = self.get_default_vpy_path()
+        try:
+            if os.path.exists(path) and os.path.isfile(path):
+                os.remove(path)
+        except Exception:
+            traceback.print_exc()
+
+    def set_vpy_hardsub_enabled(self, enabled: bool):
+        path = self.get_default_vpy_path()
+        if enabled and not os.path.exists(path):
+            self.ensure_default_vpy_file()
+        if not os.path.exists(path):
+            return
+
+        target_1 = 'sub_file = \"\"  #（可以不填，程序会自动生成）'
+        target_2 = 'res = core.assrender.TextSub(res, file=sub_file)'
+
+        try:
+            with open(path, 'r', encoding='utf-8') as fp:
+                lines = fp.readlines()
+        except Exception:
+            traceback.print_exc()
+            return
+
+        updated = False
+        new_lines: list[str] = []
+        for line in lines:
+            raw = line.rstrip('\n')
+            stripped = raw.lstrip()
+            uncommented = stripped
+            if stripped.startswith('#'):
+                uncommented = stripped[1:].lstrip()
+
+            if uncommented == target_1 or uncommented == target_2:
+                updated = True
+                if enabled:
+                    new_lines.append(uncommented + '\n')
+                else:
+                    new_lines.append('# ' + uncommented + '\n')
+            else:
+                new_lines.append(line)
+
+        if not updated:
+            return
+
+        try:
+            with open(path, 'w', encoding='utf-8') as fp:
+                fp.writelines(new_lines)
+        except Exception:
+            traceback.print_exc()
+
+    def closeEvent(self, event):
+        self.delete_default_vpy_file()
+        return super().closeEvent(event)
+
+    def create_vpy_path_widget(self, initial_path: Optional[str] = None) -> QWidget:
+        widget = QWidget(self.table2)
+        layout = QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        widget.setLayout(layout)
+
+        line_edit = QLineEdit(widget)
+        line_edit.setText(initial_path or self.get_default_vpy_path())
+
+        button = QPushButton('选择', widget)
+
+        def select_file():
+            start_dir = os.path.dirname(line_edit.text()) if line_edit.text() else os.getcwd()
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                "选择vpy文件",
+                start_dir,
+                "Python/VapourSynth (*.py *.vpy)"
+            )
+            if path:
+                line_edit.setText(os.path.normpath(path))
+
+        button.clicked.connect(select_file)
+        layout.addWidget(line_edit)
+        layout.addWidget(button)
+        return widget
+
+    def get_vpy_path_from_row(self, row_index: int) -> str:
+        if not self.radio4.isChecked():
+            return ''
+        vpy_col = ENCODE_LABELS.index('vpy_path')
+        w = self.table2.cellWidget(row_index, vpy_col)
+        if w:
+            line_edit = w.findChild(QLineEdit)
+            if line_edit:
+                return line_edit.text().strip()
+        item = self.table2.item(row_index, vpy_col)
+        return item.text().strip() if item else ''
+
+    def open_vpy_in_editor(self, path: str):
+        if not path:
+            QMessageBox.information(self, "提示", "vpy路径为空")
+            return
+        if not os.path.exists(path):
+            QMessageBox.information(self, "提示", f"文件不存在：{path}")
+            return
+        if sys.platform == 'win32':
+            os.startfile(path)
+        else:
+            subprocess.Popen(['xdg-open', path])
+
+    def on_edit_vpy_clicked(self):
+        if not self.radio4.isChecked():
+            return
+        sender = self.sender()
+        if not sender:
+            return
+        try:
+            row_index = self.table2.indexAt(sender.pos()).row()
+        except Exception:
+            row_index = -1
+        if row_index < 0:
+            return
+        self.open_vpy_in_editor(self.get_vpy_path_from_row(row_index))
+
+    def ensure_encode_row_widgets(self, row_index: int):
+        if not self.radio4.isChecked():
+            return
+        vpy_col = ENCODE_LABELS.index('vpy_path')
+        edit_col = ENCODE_LABELS.index('edit_vpy')
+
+        if not self.table2.cellWidget(row_index, vpy_col):
+            self.table2.setCellWidget(row_index, vpy_col, self.create_vpy_path_widget())
+
+        if not self.table2.cellWidget(row_index, edit_col):
+            btn = QToolButton(self.table2)
+            btn.setText('edit_vpy')
+            btn.clicked.connect(self.on_edit_vpy_clicked)
+            self.table2.setCellWidget(row_index, edit_col, btn)
+
+    def init_encode_box(self):
+        self._encode_preset_params = {
+            '快速': '--preset fast --crf 20 --aq-mode 2 --bframes 8 --ref 4 --me 2 --subme 2',
+            '均衡': '--preset slower --crf 18 --aq-mode 3 --bframes 8 --ref 5 --me 3 --subme 4',
+            '高质': '--preset slower --crf 16 --aq-mode 3 --bframes 8 --psy-rd 2.0 --psy-rdoq 1.0 --deblock -1:-1 --rc-lookahead 60 --ref 6 --subme 5',
+            '极限': '--preset placebo --crf 14 --pme --pmode --aq-mode 3 --aq-strength 1.0 --cbqpoffs -2 --crqpoffs -2 --bframes 12 --b-adapt 2 --ref 6 --rc-lookahead 120 --lookahead-threads 0 --psy-rd 2.5 --psy-rdoq 2.0 --rdoq-level 2 --deblock -2:-2 --qcomp 0.65 --merange 57 --no-sao --no-strong-intra-smoothing',
+            '自订': ''
+        }
+        self._encode_setting_updating = False
+
+        layout = QVBoxLayout()
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+        self.encode_box.setLayout(layout)
+
+        vspipe_row = QWidget(self.encode_box)
+        vspipe_layout = QHBoxLayout()
+        vspipe_layout.setContentsMargins(0, 0, 0, 0)
+        vspipe_layout.setSpacing(10)
+        vspipe_row.setLayout(vspipe_layout)
+
+        vspipe_layout.addWidget(QLabel('vspipe：', vspipe_row))
+        self.vspipe_mode_combo = QComboBox(vspipe_row)
+        self.vspipe_mode_combo.addItems(['程序自带', '系统'])
+        vspipe_layout.addWidget(self.vspipe_mode_combo)
+        vspipe_layout.addStretch(1)
+        layout.addWidget(vspipe_row)
+
+        x265_src_row = QWidget(self.encode_box)
+        x265_src_layout = QHBoxLayout()
+        x265_src_layout.setContentsMargins(0, 0, 0, 0)
+        x265_src_layout.setSpacing(10)
+        x265_src_row.setLayout(x265_src_layout)
+
+        x265_src_layout.addWidget(QLabel('x265：', x265_src_row))
+        self.x265_mode_combo = QComboBox(x265_src_row)
+        self.x265_mode_combo.addItems(['程序自带', '系统'])
+        x265_src_layout.addWidget(self.x265_mode_combo)
+        x265_src_layout.addStretch(1)
+        layout.addWidget(x265_src_row)
+
+        preset_row = QWidget(self.encode_box)
+        preset_layout = QHBoxLayout()
+        preset_layout.setContentsMargins(0, 0, 0, 0)
+        preset_layout.setSpacing(10)
+        preset_row.setLayout(preset_layout)
+
+        preset_layout.addWidget(QLabel('x265参数：', preset_row))
+        self.x265_preset_combo = QComboBox(preset_row)
+        self.x265_preset_combo.addItems(list(self._encode_preset_params.keys()))
+        self.x265_preset_combo.setCurrentText('均衡')
+        preset_layout.addWidget(self.x265_preset_combo)
+        preset_layout.addStretch(1)
+        layout.addWidget(preset_row)
+
+        self.x265_params_edit = QPlainTextEdit(self.encode_box)
+        self.x265_params_edit.setMinimumHeight(110)
+        layout.addWidget(self.x265_params_edit)
+
+        def set_params_for_preset(preset: str):
+            params = self._encode_preset_params.get(preset, '')
+            self._encode_setting_updating = True
+            try:
+                self.x265_params_edit.setPlainText(params)
+            finally:
+                self._encode_setting_updating = False
+
+        def on_preset_changed():
+            preset = self.x265_preset_combo.currentText()
+            if preset == '自订':
+                return
+            set_params_for_preset(preset)
+
+        def on_params_edited():
+            if self._encode_setting_updating:
+                return
+            if self.x265_preset_combo.currentText() != '自订':
+                self.x265_preset_combo.setCurrentText('自订')
+
+        self.x265_preset_combo.currentIndexChanged.connect(on_preset_changed)
+        self.x265_params_edit.textChanged.connect(on_params_edited)
+        set_params_for_preset(self.x265_preset_combo.currentText())
+
+        sub_pack_row = QWidget(self.encode_box)
+        sub_pack_layout = QHBoxLayout()
+        sub_pack_layout.setContentsMargins(0, 0, 0, 0)
+        sub_pack_layout.setSpacing(10)
+        sub_pack_row.setLayout(sub_pack_layout)
+
+        sub_pack_layout.addWidget(QLabel('字幕封装方式：', sub_pack_row))
+        self.sub_pack_external_radio = QRadioButton('外挂', sub_pack_row)
+        self.sub_pack_soft_radio = QRadioButton('内挂', sub_pack_row)
+        self.sub_pack_hard_radio = QRadioButton('内嵌', sub_pack_row)
+        self.sub_pack_external_radio.setChecked(True)
+
+        sub_pack_layout.addWidget(self.sub_pack_external_radio)
+        sub_pack_layout.addWidget(self.sub_pack_soft_radio)
+        sub_pack_layout.addWidget(self.sub_pack_hard_radio)
+        sub_pack_layout.addStretch(1)
+        layout.addWidget(sub_pack_row)
+
+        sub_pack_group = QButtonGroup(sub_pack_row)
+        sub_pack_group.addButton(self.sub_pack_external_radio)
+        sub_pack_group.addButton(self.sub_pack_soft_radio)
+        sub_pack_group.addButton(self.sub_pack_hard_radio)
+        self._sub_pack_group = sub_pack_group
+        self._sub_pack_row = sub_pack_row
+
+        def on_sub_pack_changed():
+            if not self.radio4.isChecked():
+                return
+            if not self.subtitle_folder_path.text().strip():
+                return
+            self.set_vpy_hardsub_enabled(self.sub_pack_hard_radio.isChecked())
+
+        self.sub_pack_external_radio.toggled.connect(on_sub_pack_changed)
+        self.sub_pack_soft_radio.toggled.connect(on_sub_pack_changed)
+        self.sub_pack_hard_radio.toggled.connect(on_sub_pack_changed)
+
+        def update_sub_pack_enabled_state():
+            enabled = self.radio4.isChecked() and bool(self.subtitle_folder_path.text().strip())
+            self._sub_pack_row.setEnabled(enabled)
+            if not enabled:
+                self.sub_pack_external_radio.setChecked(True)
+                self.set_vpy_hardsub_enabled(False)
+
+        self.subtitle_folder_path.textChanged.connect(lambda _=None: update_sub_pack_enabled_state())
+        update_sub_pack_enabled_state()
+
     def init_ui(self):
         self.setWindowTitle("BluraySubtitle")
         self.setMinimumWidth(860)
         self.setMinimumHeight(1000)
+
+        app = QApplication.instance()
+        if app:
+            app.aboutToQuit.connect(self.delete_default_vpy_file)
 
         self.layout = QVBoxLayout()
 
@@ -2190,14 +2935,18 @@ class BluraySubtitleGUI(QWidget):
         self.radio2.setText("给mkv添加章节")
         self.radio3 = QRadioButton(self)
         self.radio3.setText("原盘remux")
+        self.radio4 = QRadioButton(self)
+        self.radio4.setText("原盘压制")
         group = QButtonGroup(self)
         group.addButton(self.radio1)
         group.addButton(self.radio2)
         group.addButton(self.radio3)
+        group.addButton(self.radio4)
         group.buttonClicked.connect(self.on_select_function)
         h_layout.addWidget(self.radio1)
         h_layout.addWidget(self.radio2)
         h_layout.addWidget(self.radio3)
+        h_layout.addWidget(self.radio4)
         self.layout.addWidget(function_button)
 
         bdmv = QGroupBox()
@@ -2206,7 +2955,7 @@ class BluraySubtitleGUI(QWidget):
         bluray_path_box = CustomBox('原盘', self)
         h_layout = QHBoxLayout()
         bluray_path_box.setLayout(h_layout)
-        self.label1 = QLabel("选择原盘所在的文件夹：", self)
+        self.label1 = QLabel("选择原盘所在的文件夹", self)
         self.bdmv_folder_path = QLineEdit()
         self.bdmv_folder_path.setMinimumWidth(200)
         button1 = QPushButton("选择文件夹")
@@ -2255,6 +3004,11 @@ class BluraySubtitleGUI(QWidget):
         self._pending_subtitle_folder = ''
         v_layout.addWidget(self.table2)
         self.layout.addWidget(subtitle)
+
+        self.encode_box = QGroupBox('压制', self)
+        self.encode_box.setVisible(False)
+        self.init_encode_box()
+        self.layout.addWidget(self.encode_box)
 
         self.checkbox1 = QCheckBox("补全蓝光目录")
         self.checkbox1.setChecked(True)
@@ -2325,7 +3079,7 @@ class BluraySubtitleGUI(QWidget):
                 self.table1.setHorizontalHeaderLabels(BDMV_LABELS)
                 self.table1.setRowCount(0)
         self.altered = True
-        if self.radio3.isChecked() and bdmv_path and table_ok:
+        if (self.radio3.isChecked() or self.radio4.isChecked()) and bdmv_path and table_ok:
             configuration = BluraySubtitle(
                 self.bdmv_folder_path.text(),
                 [],
@@ -2372,8 +3126,11 @@ class BluraySubtitleGUI(QWidget):
         elif self.radio2.isChecked():
             mode = 2
             title = '读取MKV中'
-        else:
+        elif self.radio3.isChecked():
             mode = 3
+            title = '读取字幕中'
+        else:
+            mode = 4
             title = '读取字幕中'
 
         if not hasattr(self, '_subtitle_scan_seq'):
@@ -2477,6 +3234,16 @@ class BluraySubtitleGUI(QWidget):
                     self.table2.setItem(i, 0, FilePathTableWidgetItem(path))
                     self.table2.setItem(i, 1, QTableWidgetItem(dur))
                 self.table2.resizeColumnsToContents()
+            elif payload.get('mode') == 4:
+                self.table2.clear()
+                self.table2.setColumnCount(len(ENCODE_LABELS))
+                self.table2.setHorizontalHeaderLabels(ENCODE_LABELS)
+                self.table2.setRowCount(len(rows))
+                for i, (path, dur) in enumerate(rows):
+                    self.table2.setItem(i, 0, FilePathTableWidgetItem(path))
+                    self.table2.setItem(i, 1, QTableWidgetItem(dur))
+                    self.ensure_encode_row_widgets(i)
+                self.table2.resizeColumnsToContents()
             else:
                 self.table2.clear()
                 self.table2.setColumnCount(len(SUBTITLE_LABELS))
@@ -2533,7 +3300,7 @@ class BluraySubtitleGUI(QWidget):
 
     def on_subtitle_drop(self):
         try:
-            if self.radio3.isChecked():
+            if self.radio3.isChecked() or self.radio4.isChecked():
                 sub_files = [self.table2.item(sub_index, 0).text() for sub_index in range(self.table2.rowCount())
                              if self.table2.item(sub_index, 0)]
             else:
@@ -2621,7 +3388,7 @@ class BluraySubtitleGUI(QWidget):
                         self.table2.setItem(i, 2, QTableWidgetItem(get_time_str(Subtitle(item.text()).max_end_time())))
 
             # Rebuild configuration after sorting
-            if self.radio3.isChecked():
+            if self.radio3.isChecked() or self.radio4.isChecked():
                 sub_files = [self.table2.item(sub_index, 0).text() for sub_index in range(self.table2.rowCount())
                              if self.table2.item(sub_index, 0)]
             else:
@@ -2671,7 +3438,7 @@ class BluraySubtitleGUI(QWidget):
         if not configuration:
             print('配置为空，跳过更新')
             return
-        if self.radio3.isChecked():
+        if self.radio3.isChecked() or self.radio4.isChecked():
             self.table2.setRowCount(len(configuration))
             for sub_index, con in configuration.items():
                 self.table2.setItem(sub_index, 2, QTableWidgetItem(str(con['bdmv_index'])))
@@ -2699,6 +3466,7 @@ class BluraySubtitleGUI(QWidget):
                 self.table2.setCellWidget(sub_index, 3, chapter_combo)
                 self.table2.setItem(sub_index, 4, QTableWidgetItem(', '.join(m2ts_files)))
                 self.table2.setItem(sub_index, 1, QTableWidgetItem(duration))
+                self.ensure_encode_row_widgets(sub_index)
             if self.subtitle_folder_path.text().strip():
                 sub_files = []
                 try:
@@ -2710,7 +3478,7 @@ class BluraySubtitleGUI(QWidget):
                     pass
                 if sub_files:
                     for i, sub_file in enumerate(sub_files):
-                        if i <= len(configuration) + 1:
+                        if i <= len(configuration) + 1 and i < self.table2.rowCount():
                             self.table2.setItem(i, 0, FilePathTableWidgetItem(sub_file))
             self.table2.resizeColumnsToContents()
         else:
@@ -2736,7 +3504,7 @@ class BluraySubtitleGUI(QWidget):
             self.altered = True
 
     def on_chapter_combo(self, subtitle_index: int):
-        if self.radio3.isChecked():
+        if self.radio3.isChecked() or self.radio4.isChecked():
             sub_files = []
             if self.subtitle_folder_path.text().strip():
                 for file in os.listdir(self.subtitle_folder_path.text().strip()):
@@ -2854,7 +3622,7 @@ class BluraySubtitleGUI(QWidget):
                         if checked:
                             subtitle = bool(self.table2.rowCount() > 0 and self.table2.item(0, 0) and
                                             self.table2.item(0, 0).text()
-                                            and not self.radio3.isChecked())
+                                            and not (self.radio3.isChecked() or self.radio4.isChecked()))
                             info.cellWidget(mpls_index, 4).setText('preview' if subtitle else 'play')
                             for mpls_index_1 in range(info.rowCount()):
                                 if not mpls_path.endswith(info.item(mpls_index_1, 0).text()):
@@ -3021,9 +3789,15 @@ class BluraySubtitleGUI(QWidget):
         subtitle_edit_dialog.exec()
 
     def on_select_function(self):
+        if self.radio4.isChecked():
+            self.ensure_default_vpy_file()
+        else:
+            self.delete_default_vpy_file()
+
         if self.radio1.isChecked():
             self.label2.setText("选择单集字幕所在的文件夹")
             self.exe_button.setText("生成字幕")
+            self.encode_box.setVisible(False)
             if not self.checkbox1.isVisible():
                 self.checkbox1.setVisible(True)
                 self.restoreGeometry(self._geometry)
@@ -3040,6 +3814,7 @@ class BluraySubtitleGUI(QWidget):
         if self.radio2.isChecked():
             self.label2.setText("选择mkv文件所在的文件夹")
             self.exe_button.setText("添加章节")
+            self.encode_box.setVisible(False)
             if not self.checkbox1.isVisible():
                 self.checkbox1.setVisible(True)
                 self.restoreGeometry(self._geometry)
@@ -3055,8 +3830,9 @@ class BluraySubtitleGUI(QWidget):
 
         if self.radio3.isChecked():
             self._geometry = self.saveGeometry()
-            self.label2.setText("选择字幕文件所在的文件夹")
+            self.label2.setText("选择字幕文件所在的文件夹（可选）")
             self.exe_button.setText("开始remux")
+            self.encode_box.setVisible(False)
             self.checkbox1.setVisible(False)
             self.table1.clear()
             self.table1.setRowCount(0)
@@ -3066,6 +3842,21 @@ class BluraySubtitleGUI(QWidget):
             self.table2.setRowCount(0)
             self.table2.setColumnCount(len(REMUX_LABELS))
             self.table2.setHorizontalHeaderLabels(REMUX_LABELS)
+
+        if self.radio4.isChecked():
+            self._geometry = self.saveGeometry()
+            self.label2.setText("选择字幕文件所在的文件夹（可选）")
+            self.exe_button.setText("开始压制")
+            self.checkbox1.setVisible(False)
+            self.encode_box.setVisible(True)
+            self.table1.clear()
+            self.table1.setRowCount(0)
+            self.table1.setColumnCount(len(BDMV_LABELS))
+            self.table1.setHorizontalHeaderLabels(BDMV_LABELS)
+            self.table2.clear()
+            self.table2.setRowCount(0)
+            self.table2.setColumnCount(len(ENCODE_LABELS))
+            self.table2.setHorizontalHeaderLabels(ENCODE_LABELS)
 
         self.bdmv_folder_path.clear()
         self.subtitle_folder_path.clear()
@@ -3085,6 +3876,104 @@ class BluraySubtitleGUI(QWidget):
             self.add_chapters()
         if self.radio3.isChecked():
             self.remux_episodes()
+        if self.radio4.isChecked():
+            self.encode_bluray()
+
+    def encode_bluray(self):
+        output_folder = os.path.normpath(QFileDialog.getExistingDirectory(self, "选择输出文件夹"))
+        if not output_folder:
+            return
+        find_mkvtoolinx()
+        progress_dialog = QProgressDialog('操作中', '取消', 0, 1000, self)
+        progress_dialog.setMinimumDuration(0)
+        progress_dialog.setAutoClose(False)
+        progress_dialog.setAutoReset(False)
+        progress_dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+        progress_dialog.show()
+        cancel_event = threading.Event()
+        progress_dialog.canceled.connect(cancel_event.set)
+
+        sub_files = [self.table2.item(i, 0).text() for i in range(0, self.table2.rowCount()) if self.table2.item(i, 0)]
+        vpy_paths = []
+        for i in range(self.table2.rowCount()):
+            try:
+                vpy_paths.append(self.get_vpy_path_from_row(i))
+            except Exception:
+                vpy_paths.append(self.get_default_vpy_path())
+        selected_mpls = self.get_selected_mpls_no_ext()
+        if not selected_mpls:
+            progress_dialog.close()
+            QMessageBox.information(self, " ", "未选择原盘主mpls")
+            return
+        try:
+            bs = BluraySubtitle(self.bdmv_folder_path.text(), sub_files, self.checkbox1.isChecked(), None)
+            configuration = bs.generate_configuration_from_selected_mpls(selected_mpls, cancel_event=cancel_event)
+        except _Cancelled:
+            progress_dialog.close()
+            return
+        except Exception as e:
+            QMessageBox.information(self, " ", traceback.format_exc())
+            progress_dialog.close()
+            return
+
+        vspipe_mode = 'bundle' if self.vspipe_mode_combo.currentText() == '程序自带' else 'system'
+        x265_mode = 'bundle' if self.x265_mode_combo.currentText() == '程序自带' else 'system'
+        x265_params = self.x265_params_edit.toPlainText().strip()
+        if self.sub_pack_hard_radio.isChecked():
+            sub_pack_mode = 'hard'
+        elif self.sub_pack_soft_radio.isChecked():
+            sub_pack_mode = 'soft'
+        else:
+            sub_pack_mode = 'external'
+
+        self.exe_button.setEnabled(False)
+        self._encode_thread = QThread(self)
+        self._encode_worker = EncodeWorker(
+            self.bdmv_folder_path.text(),
+            sub_files,
+            self.checkbox1.isChecked(),
+            output_folder,
+            configuration,
+            selected_mpls,
+            cancel_event,
+            vpy_paths,
+            vspipe_mode,
+            x265_mode,
+            x265_params,
+            sub_pack_mode
+        )
+        self._encode_worker.moveToThread(self._encode_thread)
+        self._encode_thread.started.connect(self._encode_worker.run)
+        self._encode_worker.progress.connect(progress_dialog.setValue)
+        self._encode_worker.label.connect(progress_dialog.setLabelText)
+
+        def cleanup():
+            progress_dialog.close()
+            self.exe_button.setEnabled(True)
+            if hasattr(self, '_encode_thread') and self._encode_thread:
+                self._encode_thread.quit()
+                self._encode_thread.wait()
+                self._encode_thread.deleteLater()
+                self._encode_thread = None
+            if hasattr(self, '_encode_worker') and self._encode_worker:
+                self._encode_worker.deleteLater()
+                self._encode_worker = None
+
+        def on_finished():
+            cleanup()
+            QMessageBox.information(self, " ", "原盘压制成功！")
+
+        def on_canceled():
+            cleanup()
+
+        def on_failed(message: str):
+            cleanup()
+            QMessageBox.information(self, " ", message)
+
+        self._encode_worker.finished.connect(on_finished)
+        self._encode_worker.canceled.connect(on_canceled)
+        self._encode_worker.failed.connect(on_failed)
+        self._encode_thread.start()
 
     def generate_subtitle(self, silent_mode: bool = False):
         progress_dialog = QProgressDialog('字幕生成中', '取消', 0, 1000, self)
@@ -3603,6 +4492,44 @@ def get_compressed_effective_depth(file_path, check_duration=10):
     finally:
         if os.path.exists(temp_wav):
             os.remove(temp_wav)
+
+
+def get_vspipe_context():
+    """
+    针对“整包嵌套”方案的路径获取函数。
+    """
+    # 1. 获取解压后的根目录
+    bundle_dir = getattr(sys, '_MEIPASS', os.path.abspath("."))
+
+    # 2. 定位嵌套的 release 文件夹
+    # 路径结构：_MEIPASS/vs_pkg/vspipe.exe
+    vs_pkg_dir = os.path.join(bundle_dir, "vs_pkg")
+
+    # 3. 构造环境
+    env = os.environ.copy()
+
+    # 清理主程序的 Python 干扰
+    env.pop('PYTHONHOME', None)
+    env.pop('PYTHONPATH', None)
+
+    if sys.platform == 'win32':
+        vspipe_exe = os.path.join(vs_pkg_dir, "vspipe.exe")
+        # 关键：由于 python313.dll 在 vs_pkg 根目录，我们要把 vs_pkg 加进 PATH
+        env['PATH'] = f"{vs_pkg_dir};{env.get('PATH', '')}"
+        # 告诉 vspipe 它的 Python 环境就在它所在的那个嵌套文件夹里
+        env['PYTHONHOME'] = vs_pkg_dir
+        # 插件路径：对应你 release-x64 里的原始结构
+        env['VAPOURSYNTH_PLUGINS'] = os.path.join(vs_pkg_dir, "vapoursynth64", "coreplugins")
+
+    else:  # Linux
+        vspipe_exe = os.path.join(vs_pkg_dir, "vspipe")
+        env['LD_LIBRARY_PATH'] = f"{vs_pkg_dir}:{env.get('LD_LIBRARY_PATH', '')}"
+        env['PYTHONHOME'] = vs_pkg_dir
+        env['PATH'] = f"{vs_pkg_dir}:{env.get('PATH', '')}"
+        # 假设 Linux 下插件目录结构一致
+        env['VAPOURSYNTH_PLUGINS'] = os.path.join(vs_pkg_dir, "plugins")
+
+    return vspipe_exe, env
 
 
 if __name__ == "__main__":
