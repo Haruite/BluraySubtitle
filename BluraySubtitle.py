@@ -3530,6 +3530,7 @@ class BluraySubtitleGUI(QWidget):
     def on_subtitle_table_sorted(self, logicalIndex: int, order: Qt.SortOrder):
         # Handle path column sorting based on which function is selected
         # For radio2 (mkv chapters), path is at index 0 (MKV_LABELS) - no configuration rebuild needed
+        # For radio3/4, path is at index 0 (REMUX_LABELS / ENCODE_LABELS)
         # For others, path is at index 1 (SUBTITLE_LABELS)
         if self.radio2.isChecked():
             if logicalIndex != 0:
@@ -3541,7 +3542,8 @@ class BluraySubtitleGUI(QWidget):
                     self.table2.setItem(i, 1, QTableWidgetItem(get_time_str(MKV(item.text()).get_duration())))
             return
         else:
-            if logicalIndex != 1:
+            sort_col = 0 if (self.radio3.isChecked() or self.radio4.isChecked()) else 1
+            if logicalIndex != sort_col:
                 return
         
         if self.table2.rowCount() == 0:
@@ -3557,7 +3559,7 @@ class BluraySubtitleGUI(QWidget):
             # Rebuild configuration after sorting
             if self.radio3.isChecked() or self.radio4.isChecked():
                 sub_files = [self.table2.item(sub_index, 0).text() for sub_index in range(self.table2.rowCount())
-                             if self.table2.item(sub_index, 0)]
+                             if self.table2.item(sub_index, 0) and self.table2.item(sub_index, 0).text()]
             else:
                 sub_files = [self.table2.item(sub_index, 1).text() for sub_index in range(self.table2.rowCount())
                              if self.table2.item(sub_index, 0) and self.table2.item(sub_index, 0).checkState() == 2]
@@ -3607,6 +3609,8 @@ class BluraySubtitleGUI(QWidget):
                 print('配置为空，跳过更新')
                 return
             if self.radio3.isChecked() or self.radio4.isChecked():
+                old_sorting = self.table2.isSortingEnabled()
+                self.table2.setSortingEnabled(False)
                 self.table2.setRowCount(len(configuration))
                 for sub_index, con in configuration.items():
                     self.table2.setItem(sub_index, 2, QTableWidgetItem(str(con['bdmv_index'])))
@@ -3637,19 +3641,20 @@ class BluraySubtitleGUI(QWidget):
                 if self.subtitle_folder_path.text().strip():
                     sub_files = []
                     try:
-                        for file in os.listdir(self.subtitle_folder_path.text().strip()):
+                        for file in sorted(os.listdir(self.subtitle_folder_path.text().strip())):
                             if (file.endswith(".ass") or file.endswith(".ssa") or
                                     file.endswith('srt') or file.endswith('.sup')):
-                                sub_files.append(os.path.join(self.subtitle_folder_path.text().strip(), file))
+                                sub_files.append(os.path.normpath(os.path.join(self.subtitle_folder_path.text().strip(), file)))
                     except Exception:
                         pass
                     if sub_files:
                         for i, sub_file in enumerate(sub_files):
-                            if i <= len(configuration) + 1 and i < self.table2.rowCount():
+                            if i < len(configuration) and i < self.table2.rowCount():
                                 self.table2.setItem(i, 0, FilePathTableWidgetItem(sub_file))
                 self.table2.resizeColumnsToContents()
                 if self.radio4.isChecked():
                     self.refresh_sp_table(configuration)
+                self.table2.setSortingEnabled(old_sorting)
             else:
                 for subtitle_index in range(self.table2.rowCount()):
                     con = configuration.get(subtitle_index)
@@ -3681,7 +3686,7 @@ class BluraySubtitleGUI(QWidget):
         if self.radio3.isChecked() or self.radio4.isChecked():
             sub_files = []
             if self.subtitle_folder_path.text().strip():
-                for file in os.listdir(self.subtitle_folder_path.text().strip()):
+                for file in sorted(os.listdir(self.subtitle_folder_path.text().strip())):
                     if file.endswith(".ass") or file.endswith(".ssa") or file.endswith('srt') or file.endswith('.sup'):
                         sub_files.append(os.path.normpath(os.path.join(self.subtitle_folder_path.text().strip(), file)))
             sub_combo_index = {}
