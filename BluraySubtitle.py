@@ -2669,7 +2669,7 @@ class BluraySubtitleGUI(QWidget):
             'src8 = core.lsmas.LWLibavSource(a)\n'
             'src16 = core.fmtc.bitdepth(src8, bits=16)\n'
             'nr16 = core.nlm_ispc.NLMeans(src16, d=0, wmode=3, h=3)\n'
-            'dbed = core.f3kdb.Deband(nr16, 12, 72, 48, 48, 0, 0, output_depth=16).f3kdb.Deband(24, 56, 32, 32, 0, 0, output_depth=16)\n'
+            'dbed = core.neo_f3kdb.Deband(nr16, 12, 72, 48, 48, 0, 0, output_depth=16).neo_f3kdb.Deband(24, 56, 32, 32, 0, 0, output_depth=16)\n'
             'dbed = mvf.LimitFilter(dbed, nr16, thr=0.55, elast=1.5, planes=[0, 1, 2])\n'
             'nr16Y = core.std.ShufflePlanes(nr16, 0, vs.GRAY)\n'
             'aa_nr16Y = core.eedi2.EEDI2(nr16Y, field=1, mthresh=10, lthresh=20, vthresh=20, maxd=24, nt=50)\n'
