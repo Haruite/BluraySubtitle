@@ -50,6 +50,23 @@ FFPROBE_PATH = r'C:\Downloads\ffmpeg-8.1-full_build\bin\ffprobe.exe'  # ffprobe�
 X265_PATH = r'C:\Software\x265.exe'  # x265可执行文件路径
 PLUGIN_PATH = ''
 
+
+def is_docker():
+    path = '/proc/self/cgroup'
+    return (
+            os.path.exists('/.dockerenv') or
+            os.path.isfile(path) and any('docker' in line for line in open(path))
+    )
+
+
+if is_docker():
+    FLAC_PATH = '/usr/bin/flac'  # flac可执行文件路径
+    FFMPEG_PATH = '/usr/bin/ffmpeg'  # ffmpeg可执行文件路径
+    FFPROBE_PATH = '/usr/bin/ffprobe'  # ffprobe可执行文件路径
+    X265_PATH = '/usr/bin/x265'  # x265可执行文件路径
+    PLUGIN_PATH = '/app/plugins'
+
+
 MKV_INFO_PATH = ''
 MKV_MERGE_PATH = ''
 MKV_PROP_EDIT_PATH = ''
@@ -3048,6 +3065,10 @@ class BluraySubtitleGUI(QWidget):
         self.x265_mode_combo = QComboBox(tools_row)
         self.x265_mode_combo.addItems(['程序自带', '系统'])
         tools_layout.addWidget(self.x265_mode_combo)
+
+        if is_docker():
+            self.vspipe_mode_combo.setCurrentText('系统')
+            self.x265_mode_combo.setCurrentText('系统')
 
         tools_layout.addWidget(QLabel('x265参数：', tools_row))
         self.x265_preset_combo = QComboBox(tools_row)
