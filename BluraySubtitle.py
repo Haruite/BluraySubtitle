@@ -48,6 +48,7 @@ FLAC_THREADS = 20  # flac线程数
 FFMPEG_PATH = r'C:\Downloads\ffmpeg-8.1-full_build\bin\ffmpeg.exe'  # ffmpeg可执行文件路径
 FFPROBE_PATH = r'C:\Downloads\ffmpeg-8.1-full_build\bin\ffprobe.exe'  # ffprobe可执行文件路径
 X265_PATH = r'C:\Software\x265.exe'  # x265可执行文件路径
+PLUGIN_PATH = ''
 
 MKV_INFO_PATH = ''
 MKV_MERGE_PATH = ''
@@ -2718,10 +2719,12 @@ class BluraySubtitleGUI(QWidget):
         deband_line = 'dbed = core.neo_f3kdb.Deband(nr16, 12, 72, 48, 48, 0, 0, output_depth=16).neo_f3kdb.Deband(24, 56, 32, 32, 0, 0, output_depth=16)\n'
         if sys.platform != 'win32':
             deband_line = 'dbed = core.placebo.Deband(nr16, planes=7, iterations=2, threshold=4.5, radius=16.0, grain=0.0)\n'
+        plugin_line = '' if sys.platform == 'win32' else f'core.std.LoadAllPlugins("{PLUGIN_PATH}")\n'
         content = (
             'import vapoursynth as vs\n'
             'from vapoursynth import core\n'
             'import mvsfunc as mvf\n'
+            + plugin_line +
             '\n'
             '\n'
             'a = r""  #（可以不填，程序会自动生成）\n'
@@ -3835,6 +3838,41 @@ class BluraySubtitleGUI(QWidget):
                         return
             os.startfile(mpls_path)
         else:
+            in_docker = False
+            try:
+                if os.path.exists('/.dockerenv'):
+                    in_docker = True
+            except Exception:
+                pass
+            if not in_docker:
+                try:
+                    with open('/proc/1/cgroup', 'r', encoding='utf-8', errors='ignore') as fp:
+                        cg = fp.read()
+                    if ('docker' in cg) or ('kubepods' in cg) or ('containerd' in cg):
+                        in_docker = True
+                except Exception:
+                    pass
+            if in_docker:
+                try:
+                    my_env = os.environ.copy()
+                    my_env["LD_LIBRARY_PATH"] = "/usr/local/lib/mpv-bundle:" + my_env.get("LD_LIBRARY_PATH", "")
+                    mpls_name = mpls_path[:-5]
+                    sub_file = None
+                    if os.path.exists(mpls_name + '.ass'):
+                        sub_file = mpls_name + '.ass'
+                    elif os.path.exists(mpls_name + '.srt'):
+                        sub_file = mpls_name + '.srt'
+                    if sub_file:
+                        subprocess.Popen(
+                            f'mpv --vo=gpu,x11 --hwdec=auto-safe --ao=alsa --sub-file="{sub_file}" bd://mpls/{mpls_path[-10:-5]} --bluray-device="{mpls_path[:-25]}"',
+                            shell=True, env=my_env).wait()
+                    else:
+                        subprocess.Popen(
+                            f'mpv --vo=gpu,x11 --hwdec=auto-safe --ao=alsa bd://mpls/{mpls_path[-10:-5]} --bluray-device="{mpls_path[:-25]}"',
+                            shell=True, env=my_env).wait()
+                    return
+                except Exception:
+                    pass
             try:
                 output = subprocess.check_output(["xdg-mime", "query", "default", "x-content/video-bluray"])
                 desktop_file = output.decode('utf-8').strip()
