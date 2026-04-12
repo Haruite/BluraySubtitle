@@ -14,8 +14,7 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     python3-venv \
     ffmpeg \
-    mkvtoolnix \
-    mkvtoolnix-gui \
+    wget \
     fonts-wqy-microhei \
     flac \
     gedit \
@@ -34,6 +33,11 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 RUN fc-cache -f -v
+
+# 安装 mkvtoolnix
+RUN wget -O /etc/apt/keyrings/gpg-pub-moritzbunkus.gpg https://mkvtoolnix.download/gpg-pub-moritzbunkus.gpg
+RUN printf "deb [arch=amd64 signed-by=/etc/apt/keyrings/gpg-pub-moritzbunkus.gpg] https://mkvtoolnix.download/ubuntu/ questing main\ndeb-src [arch=amd64 signed-by=/etc/apt/keyrings/gpg-pub-moritzbunkus.gpg] https://mkvtoolnix.download/ubuntu/ questing main\n" > /etc/apt/sources.list.d/mkvtoolnix.download.list
+RUN apt-get update && apt-get install -y mkvtoolnix mkvtoolnix-gui && rm -rf /var/lib/apt/lists/*
 
 # 复制 mpv
 COPY ./mpv-bundle/lib/ /usr/local/lib/mpv-bundle/
@@ -60,8 +64,22 @@ COPY ./VapourSynthScripts/ /usr/local/lib/python3.13/dist-packages/
 # 复制 plugins
 COPY ./plugins/ /app/plugins/
 
-# --- 编译 vsedit
-RUN apt-get update && apt-get install -y qt6-base-dev qt6-base-dev-tools qt6-5compat-dev qt6-websockets-dev && rm -rf /var/lib/apt/lists/*
+# 编译 lsmash
+COPY ./Packages/v2.14.5.tar.gz /app/
+WORKDIR /app
+RUN tar zxvf v2.14.5.tar.gz
+WORKDIR /app/l-smash-2.14.5
+RUN ./configure --enable-shared && make -j$(nproc) && make install && ldconfig
+
+# 编译 vsedit
+RUN apt-get update && apt-get install -y \
+    qt6-base-dev \
+    qt6-base-dev-tools \
+    qt6-5compat-dev \
+    qt6-websockets-dev \
+    qt6-declarative-dev \
+    libgl-dev \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app/vsedit_build
 COPY ./Packages/R19-mod-6.9.tar.gz /app/
 RUN tar -zxvf /app/R19-mod-6.9.tar.gz --strip-components=1 && ldconfig
@@ -80,6 +98,7 @@ RUN ldconfig
 
 # 复制 x265
 COPY x265 /usr/bin/
+RUN chmod +x /usr/bin/x265
 
 # 复制项目文件
 COPY BluraySubtitle.py /app/
