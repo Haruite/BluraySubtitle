@@ -1281,6 +1281,11 @@ class BluraySubtitle:
             self.configuration = CONFIGURATION
         if not os.path.exists(dst_folder := os.path.join(folder_path, os.path.basename(self.bdmv_path))):
             os.mkdir(dst_folder)
+        mkv_files_before = set()
+        try:
+            mkv_files_before = {f for f in os.listdir(dst_folder) if f.lower().endswith('.mkv')}
+        except Exception:
+            mkv_files_before = set()
         bdmv_index_conf = {}
         for sub_index, conf in self.configuration.items():
             if conf['bdmv_index'] in bdmv_index_conf:
@@ -1290,9 +1295,23 @@ class BluraySubtitle:
         if ensure_tools:
             find_mkvtoolinx()
 
-        for bdmv_index, confs in bdmv_index_conf.items():
+        def mkv_sort_key(p: str):
+            name = os.path.basename(p)
+            m = re.search(r'BD_Vol_(\d{3})', name)
+            vol = int(m.group(1)) if m else 9999
+            m2 = re.search(r'-(\d{3})\.mkv$', name, re.IGNORECASE)
+            seg = int(m2.group(1)) if m2 else 0
+            return vol, seg, name.lower()
+
+        bdmv_index_list = sorted(bdmv_index_conf.keys())
+        for idx, bdmv_index in enumerate(bdmv_index_list, start=1):
             if cancel_event and cancel_event.is_set():
                 raise _Cancelled()
+            confs = bdmv_index_conf[bdmv_index]
+            try:
+                confs = sorted(confs, key=lambda c: int(c.get('chapter_index') or 0))
+            except Exception:
+                pass
             mpls_path = confs[0]['selected_mpls'] + '.mpls'
 
             chapter = Chapter(mpls_path)
@@ -1435,10 +1454,19 @@ class BluraySubtitle:
             print(f'混流命令: {remux_cmd}')
             self._progress(text=f'混流中：BD_Vol_{bdmv_vol}')
             subprocess.Popen(remux_cmd, shell=True).wait()
-            self._progress(int((bdmv_index + 1) / len(bdmv_index_conf) * 300))
+            self._progress(int(idx / max(len(bdmv_index_list), 1) * 300))
 
         self.checked = True
-        mkv_files = [os.path.join(dst_folder, file) for file in os.listdir(dst_folder) if file.endswith('.mkv')]
+        mkv_files_after = []
+        try:
+            mkv_files_after = [f for f in os.listdir(dst_folder) if f.lower().endswith('.mkv')]
+        except Exception:
+            mkv_files_after = []
+        created = [os.path.join(dst_folder, f) for f in mkv_files_after if f not in mkv_files_before]
+        if created:
+            mkv_files = sorted(created, key=mkv_sort_key)
+        else:
+            mkv_files = sorted([os.path.join(dst_folder, f) for f in mkv_files_after], key=mkv_sort_key)
         if cancel_event and cancel_event.is_set():
             raise _Cancelled()
         self._progress(310, '写入章节中')
@@ -1456,16 +1484,17 @@ class BluraySubtitle:
 
         sps_folder = dst_folder + os.sep + 'SPs'
         os.mkdir(sps_folder)
-        for bdmv_index, confs in bdmv_index_conf.items():
+        for bdmv_index in bdmv_index_list:
             if cancel_event and cancel_event.is_set():
                 raise _Cancelled()
+            confs = bdmv_index_conf[bdmv_index]
             bdmv_vol = '0' * (3 - len(str(bdmv_index))) + str(bdmv_index)
             mpls_path = confs[0]['selected_mpls'] + '.mpls'
             index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(Chapter(mpls_path))
             main_m2ts_files = set(index_to_m2ts.values())
             parsed_m2ts_files = set(main_m2ts_files)
             sp_index = 0
-            for mpls_file in os.listdir(os.path.dirname(mpls_path)):
+            for mpls_file in sorted(os.listdir(os.path.dirname(mpls_path))):
                 if cancel_event and cancel_event.is_set():
                     raise _Cancelled()
                 if not mpls_file.endswith('.mpls'):
@@ -1481,7 +1510,7 @@ class BluraySubtitle:
                                          f'{bdmv_vol}_SP0{sp_index}.mkv" "{mpls_file_path}"', shell=True).wait()
                         parsed_m2ts_files |= set(index_to_m2ts.values())
             stream_folder = os.path.dirname(mpls_path).removesuffix('PLAYLIST') + 'STREAM'
-            for stream_file in os.listdir(stream_folder):
+            for stream_file in sorted(os.listdir(stream_folder)):
                 if cancel_event and cancel_event.is_set():
                     raise _Cancelled()
                 if stream_file not in parsed_m2ts_files and stream_file.endswith('.m2ts'):
@@ -1521,6 +1550,11 @@ class BluraySubtitle:
             self.configuration = CONFIGURATION
         if not os.path.exists(dst_folder := os.path.join(folder_path, os.path.basename(self.bdmv_path))):
             os.mkdir(dst_folder)
+        mkv_files_before = set()
+        try:
+            mkv_files_before = {f for f in os.listdir(dst_folder) if f.lower().endswith('.mkv')}
+        except Exception:
+            mkv_files_before = set()
         bdmv_index_conf = {}
         for sub_index, conf in self.configuration.items():
             if conf['bdmv_index'] in bdmv_index_conf:
@@ -1530,9 +1564,23 @@ class BluraySubtitle:
         if ensure_tools:
             find_mkvtoolinx()
 
-        for bdmv_index, confs in bdmv_index_conf.items():
+        def mkv_sort_key(p: str):
+            name = os.path.basename(p)
+            m = re.search(r'BD_Vol_(\d{3})', name)
+            vol = int(m.group(1)) if m else 9999
+            m2 = re.search(r'-(\d{3})\.mkv$', name, re.IGNORECASE)
+            seg = int(m2.group(1)) if m2 else 0
+            return vol, seg, name.lower()
+
+        bdmv_index_list = sorted(bdmv_index_conf.keys())
+        for idx, bdmv_index in enumerate(bdmv_index_list, start=1):
             if cancel_event and cancel_event.is_set():
                 raise _Cancelled()
+            confs = bdmv_index_conf[bdmv_index]
+            try:
+                confs = sorted(confs, key=lambda c: int(c.get('chapter_index') or 0))
+            except Exception:
+                pass
             mpls_path = confs[0]['selected_mpls'] + '.mpls'
 
             chapter = Chapter(mpls_path)
@@ -1673,10 +1721,19 @@ class BluraySubtitle:
             print(f'混流命令: {remux_cmd}')
             self._progress(text=f'混流中：BD_Vol_{bdmv_vol}')
             subprocess.Popen(remux_cmd, shell=True).wait()
-            self._progress(int((bdmv_index + 1) / len(bdmv_index_conf) * 300))
+            self._progress(int(idx / max(len(bdmv_index_list), 1) * 300))
 
         self.checked = True
-        mkv_files = [os.path.join(dst_folder, file) for file in os.listdir(dst_folder) if file.endswith('.mkv')]
+        mkv_files_after = []
+        try:
+            mkv_files_after = [f for f in os.listdir(dst_folder) if f.lower().endswith('.mkv')]
+        except Exception:
+            mkv_files_after = []
+        created = [os.path.join(dst_folder, f) for f in mkv_files_after if f not in mkv_files_before]
+        if created:
+            mkv_files = sorted(created, key=mkv_sort_key)
+        else:
+            mkv_files = sorted([os.path.join(dst_folder, f) for f in mkv_files_after], key=mkv_sort_key)
         if cancel_event and cancel_event.is_set():
             raise _Cancelled()
         self._progress(310, '写入章节中')
