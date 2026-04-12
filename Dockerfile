@@ -39,6 +39,7 @@ RUN fc-cache -f -v
 COPY ./mpv-bundle/lib/ /usr/local/lib/mpv-bundle/
 COPY ./mpv-bundle/bin/mpv /usr/local/bin/mpv
 ENV LD_LIBRARY_PATH=/usr/local/lib/mpv-bundle:/usr/local/lib:/usr/lib
+RUN chmod +x /usr/local/bin/mpv
 RUN ldconfig
 
 # 编译 VapourSynth
@@ -94,7 +95,7 @@ ENV PLUGIN_PATH=/app/plugins/
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y libunwind8 libunwind-dev xdg-utils && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y libunwind8 libunwind-dev xdg-utils libgl1-mesa-dri libglx-mesa0 mesa-vulkan-drivers && rm -rf /var/lib/apt/lists/*
 
 # 启动程序
 CMD ["sh", "-c", "python3 BluraySubtitle.py"]

@@ -3864,11 +3864,11 @@ class BluraySubtitleGUI(QWidget):
                         sub_file = mpls_name + '.srt'
                     if sub_file:
                         subprocess.Popen(
-                            f'mpv --vo=gpu,x11 --hwdec=auto-safe --ao=alsa --sub-file="{sub_file}" bd://mpls/{mpls_path[-10:-5]} --bluray-device="{mpls_path[:-25]}"',
+                            f'mpv --vo=x11 --profile=sw-fast --hwdec=no --framedrop=vo --sub-file="{sub_file}" bd://mpls/{mpls_path[-10:-5]} --bluray-device="{mpls_path[:-25]}"',
                             shell=True, env=my_env).wait()
                     else:
                         subprocess.Popen(
-                            f'mpv --vo=gpu,x11 --hwdec=auto-safe --ao=alsa bd://mpls/{mpls_path[-10:-5]} --bluray-device="{mpls_path[:-25]}"',
+                            f'mpv --vo=x11 --profile=sw-fast --hwdec=no --framedrop=vo bd://mpls/{mpls_path[-10:-5]} --bluray-device="{mpls_path[:-25]}"',
                             shell=True, env=my_env).wait()
                     return
                 except Exception:
