@@ -14,7 +14,9 @@
 8. 补全蓝光目录
 9. 支持给 mkv 文件添加章节（两种方式，直接编辑或者混流）
 10. 支持原盘 remux
-11. 支持 Windows 和 Linux 系统
+11. 支持原盘压制
+12. 支持 Windows 和 Linux 系统
+13. 支持 Docker
 
 ### 使用教程（部分图片视频可能源于早期版本，仅供参考）:
 #### 合并字幕通用方法：
@@ -72,3 +74,37 @@
 5. 点击开始 remux 按钮，会要求选择输出文件夹，选择后输出文件夹里面会建立一个和原盘文件夹同名的文件夹，里面存放 remux 文件  
 参考视频如下  
 [![点击播放视频](https://github.com/Haruite/BluraySubtitle/blob/main/pictures/%E7%A4%BA%E4%BE%8B3-%E5%8A%A8%E6%BC%AB%E5%8E%9F%E7%9B%98remux.mp4_000312.462.png)](https://sbx.mysmy.top/u2/videos/%E7%A4%BA%E4%BE%8B3-%E5%8A%A8%E6%BC%AB%E5%8E%9F%E7%9B%98remux.mp4)
+#### 原盘压制
+和原盘 remux 大体相同，只不过多了一些选项。  
+可以选择每集和各个特典的 vpy 文件，默认使用当前目录下的 vpy.vpy 文件  
+压制功能区可以选择 vspipe 和 x265 的来源（程序自带或系统），可以选择和编辑 x265 参数，可以选择字幕封装方式（外挂或内挂或内嵌）  
+设置完毕，点击开始压制按钮，选择输出文件夹，等待完成即可。  
+#### Docker 支持
+要生成 Docker 镜像，请在代码所在文件夹运行命令：  
+```docker build -t bluray-subtitle-ubuntu .```  
+运行容器推荐命令：  
+```xhost +local:docker
+sudo docker run -it --rm \
+    --device /dev/snd \
+    -e DISPLAY=$DISPLAY \
+    -e LIBGL_ALWAYS_SOFTWARE=1 \
+    -v /tmp/.X11-unix:/tmp/.X11-unix \
+    -v /run/media/clonmer/1856689756687800:/data \
+    -v /run/user/$(id -u)/pulse:/run/user/1000/pulse \
+    -e PULSE_SERVER=unix:/run/user/1000/pulse/native \
+    --ipc=host \
+    --shm-size=2gb \
+bluray-subtitle-ubuntu
+```
+其中```/run/media/clonmer/1856689756687800```是宿主机文件目录(用于选择原盘、字幕等)，运行后将被挂载到 /data 目录  
+这个命令可以保证 mpv 正常运行  
+如果想进容器内部执行命令，或者使用 VapourSynth-Editor，可以执行：
+```docker run -it --rm \
+    -e DISPLAY=$DISPLAY \
+    -v /run/media/clonmer/1856689756687800:/data \
+    -v /tmp/.X11-unix:/tmp/.X11-unix \
+    -v $HOME:/data \
+bluray-subtitle-ubuntu /bin/bash
+```  
+容器内安装的软件包括：mpv/ffmpeg/ffprobe/flac/x265/mkvtoolnix(-gui)/vapoursynth/vsedit  
+注意：容器内只携带常用的 vs 滤镜，如果需要用到其他滤镜需要自行编译
