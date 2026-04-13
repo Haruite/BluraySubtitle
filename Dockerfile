@@ -88,7 +88,7 @@ ENV CPLUS_INCLUDE_PATH=/usr/local/include/vapoursynth
 ENV LIBRARY_PATH=/usr/local/lib
 ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/lib:/lib
 RUN qmake6 pro.pro CONFIG+=release && \
-    make -j$(nproc)
+    make -j$(nproc) || make -j1
 RUN BIN_PATH=$(find /app/vsedit_build -name "vsedit" -type f -executable | head -n 1) && \
     ln -s "$BIN_PATH" /usr/local/bin/vsedit 
 ENV VAPOURSYNTH_PYTHON_PATH=/usr/lib/python3.13
