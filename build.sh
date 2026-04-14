@@ -281,7 +281,7 @@ install_mpv() {
 
   if command -v mpv >/dev/null 2>&1; then
     local current_mpv_version
-    current_mpv_version="$(mpv --version 2>/dev/null | head -n 1 | grep -oP 'mpv\s+\K[0-9]+(\.[0-9]+){1,2}' || true)"
+    current_mpv_version="$(mpv --version 2>/dev/null | head -n 1 | grep -oP 'mpv\s+v?\K[0-9]+(\.[0-9]+){1,2}' || true)"
     if [[ -n "${current_mpv_version:-}" ]] && dpkg --compare-versions "$current_mpv_version" ge "$required_mpv_version"; then
       if sudo ldconfig -p 2>/dev/null | grep -qE '\blibdovi\.so\.3\b'; then
         log "检测到 mpv 已安装且版本满足要求（${current_mpv_version} >= ${required_mpv_version}），跳过编译安装"
