@@ -270,14 +270,28 @@ install_libdovi() {
 install_mpv() {
   log "安装 mpv（编译并安装 mpv-build 及 dovi_tool）"
 
+  local required_mpv_version="0.41.0"
+  local is_ubuntu_2204="false"
+  if [[ -f /etc/os-release ]]; then
+    . /etc/os-release || true
+    if [[ "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" == "22.04" ]]; then
+      is_ubuntu_2204="true"
+    fi
+  fi
+
   if command -v mpv >/dev/null 2>&1; then
-    if sudo ldconfig -p 2>/dev/null | grep -qE '\blibdovi\.so\.3\b'; then
-      log "检测到 mpv 已安装（$(command -v mpv)），跳过编译安装"
+    local current_mpv_version
+    current_mpv_version="$(mpv --version 2>/dev/null | head -n 1 | grep -oP 'mpv\s+\K[0-9]+(\.[0-9]+){1,2}' || true)"
+    if [[ -n "${current_mpv_version:-}" ]] && dpkg --compare-versions "$current_mpv_version" ge "$required_mpv_version"; then
+      if sudo ldconfig -p 2>/dev/null | grep -qE '\blibdovi\.so\.3\b'; then
+        log "检测到 mpv 已安装且版本满足要求（${current_mpv_version} >= ${required_mpv_version}），跳过编译安装"
+        return 0
+      fi
+      log "检测到 mpv 已安装但缺少 libdovi.so.3，尝试安装 libdovi"
+      install_libdovi
       return 0
     fi
-    log "检测到 mpv 已安装，但缺少 libdovi.so.3，尝试安装 libdovi"
-    install_libdovi
-    return 0
+    log "检测到系统 mpv 版本较旧（${current_mpv_version:-unknown} < ${required_mpv_version}），将从源码编译升级"
   fi
 
   install_libdovi
@@ -326,6 +340,19 @@ install_mpv() {
     sudo apt-get install -y "${missing_deps[@]}" || die "mpv 依赖安装失败，请检查网络或包名"
   fi
 
+  if [[ "$is_ubuntu_2204" == "true" ]]; then
+    ensure_meson_version
+    if ! sudo python3 -m pip --version >/dev/null 2>&1; then
+      sudo apt-get update
+      sudo apt-get install -y python3-pip || die "安装 python3-pip 失败（root 环境）"
+    fi
+    if ! sudo python3 -m pip install --upgrade meson --break-system-packages; then
+      log "root 环境 pip 不支持 --break-system-packages，回退到兼容参数重试"
+      sudo python3 -m pip install --upgrade meson || die "root 环境升级 meson 失败"
+    fi
+    export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"
+  fi
+
   local build_dir
   build_dir="$(mktemp -d)"
 
@@ -340,8 +367,16 @@ install_mpv() {
 
     echo "--enable-libbluray" > ffmpeg_options || exit 1
     echo "-Dlibbluray=enabled" > mpv_options || exit 1
+    if [[ "$is_ubuntu_2204" == "true" ]]; then
+      log "Ubuntu 22.04 检测到 Vulkan 头文件兼容性问题，禁用 libplacebo Vulkan 构建以保证 mpv 可编译"
+      cat > libplacebo_options <<'EOF'
+-Dvulkan=disabled
+-Dshaderc=disabled
+EOF
+    fi
 
     export PKG_CONFIG_PATH="$HOME/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
+    export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"
 
     ./rebuild -j"$(nproc)" || exit 1
     sudo env "PATH=$PATH" "PKG_CONFIG_PATH=${PKG_CONFIG_PATH:-}" ./install || exit 1
@@ -349,7 +384,9 @@ install_mpv() {
 
   rm -rf "$build_dir"
   log "mpv 安装完成"
-  ensure_meson_version
+  if [[ "$is_ubuntu_2204" != "true" ]]; then
+    ensure_meson_version
+  fi
 }
 
 install_lsmash() {
