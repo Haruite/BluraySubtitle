@@ -110,8 +110,7 @@ install_mkvtoolnix() {
   libbz2-dev libcmark-dev libdvdread-dev libflac-dev libfmt-dev libgmp-dev libgtest-dev liblzo2-dev libmagic-dev \
   libogg-dev libpcre2-8-0 libpcre2-dev libqt6svg6-dev libvorbis-dev \
   nlohmann-json3-dev pkg-config po4a qt6-base-dev qt6-base-dev-tools qt6-multimedia-dev \
-  rake ruby xsltproc zlib1g-dev unzip pkg-config libtool autoconf ninja-build cmake
-
+  rake ruby xsltproc zlib1g-dev unzip pkg-config libtool autoconf
   local version
   version="$(
     curl -s "https://mkvtoolnix.download/latest-release.xml" \
@@ -1114,10 +1113,9 @@ sudo -v
 
 require_supported_os
 repair_broken_apt_state
-install_shaderc_fix
 
 sys_deps=(
-  python3 python3-pip python3-venv
+  python3 python3-pip python3-venv cmake ninja-build
   ffmpeg wget fonts-wqy-microhei flac gedit
   libegl1 libopengl0 libglib2.0-0 libxkbcommon0 libdbus-1-3
   libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0
@@ -1143,6 +1141,7 @@ else
   log "系统依赖已全部安装，跳过"
 fi
 
+install_shaderc_fix
 install_mkvtoolnix
 install_mpv
 install_x265
