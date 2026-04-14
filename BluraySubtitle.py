@@ -1,8 +1,10 @@
 # 功能1：生成合并字幕
 # 功能2：给mkv添加章节
 # 功能3：原盘remux
-# 功能23需要安装mkvtoolnix，指定FLAC_PATH和FLAC_THREADS(flac版本需大于等于1.5.0)
-# 功能3需要指定FFMPEG_PATH和FFPROBE_PATH
+# 功能4：原盘压制
+# 功能234需要安装mkvtoolnix，指定FLAC_PATH和FLAC_THREADS(flac版本需大于等于1.5.0)
+# 功能34需要指定FFMPEG_PATH和FFPROBE_PATH
+# 功能4需要安装vapoursynth，并将vspipe(.exe)和x265(.exe)添加到系统path
 # pip install pycountry PyQt6 librosa
 import _io
 import copy
@@ -36,7 +38,7 @@ except Exception:
 from PyQt6.QtCore import QCoreApplication, Qt, QPoint, QObject, QThread, QTimer, QEventLoop, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QDragMoveEvent, QDropEvent, QPaintEvent, QDragEnterEvent, QFont
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLabel, QToolButton, QLineEdit, \
-    QMessageBox, QHBoxLayout, QGroupBox, QCheckBox, QProgressDialog, QRadioButton, QButtonGroup, \
+    QMessageBox, QHBoxLayout, QGroupBox, QCheckBox, QProgressDialog, QProgressBar, QRadioButton, QButtonGroup, \
     QTableWidget, QTableWidgetItem, QDialog, QPushButton, QComboBox, QMenu, QAbstractItemView, QPlainTextEdit, QSizePolicy, QHeaderView
 
 if sys.platform == 'win32':
@@ -747,12 +749,14 @@ class BluraySubtitle:
             except TypeError:
                 if value is not None:
                     self.progress_dialog(value)
-            return
-        if text is not None and hasattr(self.progress_dialog, 'setLabelText'):
-            self.progress_dialog.setLabelText(text)
-        if value is not None and hasattr(self.progress_dialog, 'setValue'):
-            self.progress_dialog.setValue(int(value))
-        QCoreApplication.processEvents()
+        else:
+            if text is not None and hasattr(self.progress_dialog, 'setLabelText'):
+                self.progress_dialog.setLabelText(text)
+            if value is not None and hasattr(self.progress_dialog, 'setValue'):
+                self.progress_dialog.setValue(int(value))
+        app = QCoreApplication.instance()
+        if app and QThread.currentThread() == app.thread():
+            QCoreApplication.processEvents()
 
     def _preload_subtitles(self, file_paths: list[str], cancel_event: Optional[threading.Event] = None):
         if not file_paths:
@@ -1179,7 +1183,8 @@ class BluraySubtitle:
         self._progress(1000)
 
     def add_chapter_to_mkv(self, mkv_files, table: Optional[QTableWidget] = None,
-                           selected_mpls: Optional[list[tuple[str, str]]] = None):
+                           selected_mpls: Optional[list[tuple[str, str]]] = None,
+                           cancel_event: Optional[threading.Event] = None):
         mkv_index = 0
         if selected_mpls is not None:
             iterator = ((folder, Chapter(selected_mpls_no_ext + '.mpls'), selected_mpls_no_ext)
@@ -1190,6 +1195,8 @@ class BluraySubtitle:
             iterator = self.select_mpls_from_table(table)
 
         for folder, chapter, selected_mpls in iterator:
+            if cancel_event and cancel_event.is_set():
+                raise _Cancelled()
             duration = MKV(mkv_files[mkv_index]).get_duration()
             print(f'folder: {folder}')
             print(f'in_out_time: {chapter.in_out_time}')
@@ -1201,8 +1208,12 @@ class BluraySubtitle:
             chapter_id = 0
             chapter_text = []
             for ref_to_play_item_id, mark_timestamps in chapter.mark_info.items():
+                if cancel_event and cancel_event.is_set():
+                    raise _Cancelled()
                 clip_information_filename, in_time, out_time = chapter.in_out_time[ref_to_play_item_id]
                 for mark_timestamp in mark_timestamps:
+                    if cancel_event and cancel_event.is_set():
+                        raise _Cancelled()
                     real_time = play_item_duration_time_sum + (
                             mark_timestamp - in_time) / 45000 - episode_duration_time_sum
                     if abs(real_time - duration) < 0.1:
@@ -1488,7 +1499,7 @@ class BluraySubtitle:
         if cancel_event and cancel_event.is_set():
             raise _Cancelled()
         self._progress(310, '写入章节中')
-        self.add_chapter_to_mkv(mkv_files, table, selected_mpls=selected_mpls)
+        self.add_chapter_to_mkv(mkv_files, table, selected_mpls=selected_mpls, cancel_event=cancel_event)
         self._progress(400)
 
         i = 0
@@ -1755,7 +1766,7 @@ class BluraySubtitle:
         if cancel_event and cancel_event.is_set():
             raise _Cancelled()
         self._progress(310, '写入章节中')
-        self.add_chapter_to_mkv(mkv_files, table, selected_mpls=selected_mpls)
+        self.add_chapter_to_mkv(mkv_files, table, selected_mpls=selected_mpls, cancel_event=cancel_event)
         self._progress(400)
 
         i = 0
@@ -2839,6 +2850,104 @@ class BluraySubtitleGUI(QWidget):
         table.verticalHeader().setMinimumSectionSize(row_height)
         table.horizontalHeader().setFixedHeight(header_height)
 
+    def _scroll_table_h_to_right(self, table: QTableWidget):
+        QTimer.singleShot(
+            0,
+            lambda: table.horizontalScrollBar().setValue(table.horizontalScrollBar().maximum()),
+        )
+
+    def _update_exe_button_progress(self, value: Optional[int] = None, text: Optional[str] = None):
+        if not hasattr(self, 'exe_button') or not self.exe_button:
+            return
+        if not hasattr(self, '_exe_button_default_text'):
+            self._exe_button_default_text = self.exe_button.text()
+        if value is not None:
+            self._exe_button_progress_value = int(value)
+        if text is not None:
+            self._exe_button_progress_text = str(text)
+
+        v = int(getattr(self, '_exe_button_progress_value', 0))
+        t = str(getattr(self, '_exe_button_progress_text', '')).strip()
+        ratio = max(0.0, min(1.0, v / 1000.0))
+        stop1 = f"{ratio:.3f}"
+        stop2 = f"{min(1.0, ratio + 0.001):.3f}"
+        percent = ratio * 100
+
+        cancel_suffix = "（点击取消）" if getattr(self, '_current_cancel_event', None) is not None and t != '正在取消...' else ""
+        if t:
+            self.exe_button.setText(f"{t}{cancel_suffix} {percent:.1f}%")
+        else:
+            self.exe_button.setText(f"{percent:.1f}%")
+        self.exe_button.setStyleSheet(
+            "QPushButton{"
+            f"background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #AAAAAA,stop:{stop1} #AAAAAA,stop:{stop2} #CCCCCC,stop:1 #CCCCCC);"
+            "color:white;border:none;border-radius:5px;padding:2px 6px;"
+            "}"
+            "QPushButton:disabled{color:white;}"
+        )
+
+    def _on_exe_button_progress_value(self, value: int):
+        self._update_exe_button_progress(value=value)
+
+    def _on_exe_button_progress_text(self, text: str):
+        self._update_exe_button_progress(text=text)
+
+    def _reset_exe_button(self):
+        if not hasattr(self, 'exe_button') or not self.exe_button:
+            return
+        default_text = getattr(self, '_exe_button_default_text', None)
+        if default_text:
+            self.exe_button.setText(default_text)
+        self.exe_button.setStyleSheet('')
+        self.exe_button.setEnabled(True)
+
+    def _show_bottom_message(self, text: str, duration_ms: int = 10000):
+        if not hasattr(self, 'bottom_message_label') or not self.bottom_message_label:
+            return
+            
+        self._bottom_message_text = text
+        self._bottom_message_remaining = duration_ms // 1000
+        
+        self.bottom_message_label.setText(f"{self._bottom_message_text} ({self._bottom_message_remaining}s)")
+        self.bottom_message_label.setVisible(True)
+        
+        if not hasattr(self, '_bottom_message_timer') or not self._bottom_message_timer:
+            self._bottom_message_timer = QTimer(self)
+            self._bottom_message_timer.setInterval(1000)
+            
+            def update_countdown():
+                self._bottom_message_remaining -= 1
+                if self._bottom_message_remaining <= 0:
+                    self.bottom_message_label.setVisible(False)
+                    self.bottom_message_label.setText('')
+                    self._bottom_message_timer.stop()
+                else:
+                    self.bottom_message_label.setText(f"{self._bottom_message_text} ({self._bottom_message_remaining}s)")
+                    
+            self._bottom_message_timer.timeout.connect(update_countdown)
+            
+        self._bottom_message_timer.stop()
+        self._bottom_message_timer.start()
+
+    def _set_table_column_visual_order(self, table: QTableWidget, order: list[int]):
+        header = table.horizontalHeader()
+        for desired_visual_index, logical_index in enumerate(order):
+            if logical_index < 0 or logical_index >= table.columnCount():
+                continue
+            current_visual_index = header.visualIndex(logical_index)
+            if current_visual_index != desired_visual_index:
+                header.moveSection(current_visual_index, desired_visual_index)
+
+    def _set_table2_default_column_order(self):
+        self._set_table_column_visual_order(self.table2, list(range(self.table2.columnCount())))
+
+    def _set_table2_subtitle_column_order(self):
+        if self.table2.columnCount() < 2:
+            return
+        order = list(range(self.table2.columnCount()))
+        order[0], order[1] = order[1], order[0]
+        self._set_table_column_visual_order(self.table2, order)
+
     def create_vpy_path_widget(self, initial_path: Optional[str] = None, parent: Optional[QWidget] = None) -> QWidget:
         widget = QWidget(parent or self.table2)
         layout = QHBoxLayout()
@@ -3035,6 +3144,7 @@ class BluraySubtitleGUI(QWidget):
                     btn.clicked.connect(self.on_edit_sp_vpy_clicked)
                     self.table3.setCellWidget(i, 5, btn)
                 self.table3.resizeColumnsToContents()
+                self._scroll_table_h_to_right(self.table3)
             finally:
                 self.table3.setSortingEnabled(old_sorting)
         except Exception:
@@ -3073,7 +3183,13 @@ class BluraySubtitleGUI(QWidget):
         self.x265_mode_combo.addItems(['程序自带', '系统'])
         tools_layout.addWidget(self.x265_mode_combo)
 
-        if is_docker():
+        is_pyinstaller_bundle = bool(getattr(sys, 'frozen', False)) and hasattr(sys, '_MEIPASS')
+        if not is_pyinstaller_bundle:
+            self.vspipe_mode_combo.setCurrentText('系统')
+            self.vspipe_mode_combo.setEnabled(False)
+            self.x265_mode_combo.setCurrentText('系统')
+            self.x265_mode_combo.setEnabled(False)
+        elif is_docker():
             self.vspipe_mode_combo.setCurrentText('系统')
             self.x265_mode_combo.setCurrentText('系统')
 
@@ -3275,6 +3391,7 @@ class BluraySubtitleGUI(QWidget):
         self._set_compact_table(self.table2, row_height=22, header_height=22)
         self.table2.setColumnCount(len(SUBTITLE_LABELS))
         self.table2.setHorizontalHeaderLabels(SUBTITLE_LABELS)
+        self._set_table2_subtitle_column_order()
         self.table2.setSortingEnabled(True)
         self.table2.horizontalHeader().setSortIndicatorShown(True)
         self.table2.horizontalHeader().sortIndicatorChanged.connect(self.on_subtitle_table_sorted)
@@ -3305,15 +3422,50 @@ class BluraySubtitleGUI(QWidget):
         self.checkbox1 = QCheckBox("补全蓝光目录")
         self.checkbox1.setChecked(True)
         self.layout.addWidget(self.checkbox1)
+        output_path_row = QWidget(self)
+        output_path_row.setProperty("noMargin", True)
+        output_path_layout = QHBoxLayout()
+        output_path_layout.setContentsMargins(8, 0, 8, 0)
+        output_path_layout.setSpacing(4)
+        output_path_row.setLayout(output_path_layout)
+        output_path_layout.addWidget(QLabel("输出文件夹", self))
+        self.output_folder_path = QLineEdit()
+        self.output_folder_path.setMinimumWidth(200)
+        self._auto_output_folder = ''
+        self.output_folder_path.textEdited.connect(lambda _: setattr(self, '_output_folder_user_edited', True))
+        button_output = QPushButton("选择文件夹")
+        button_output.clicked.connect(self.select_output_folder)
+        output_path_layout.addWidget(self.output_folder_path)
+        output_path_layout.addWidget(button_output)
+        self.output_folder_row = output_path_row
+        self.output_folder_row.setVisible(self.radio3.isChecked() or self.radio4.isChecked())
+        self.layout.addWidget(self.output_folder_row)
         self.exe_button = QPushButton("生成字幕")
         self.exe_button.clicked.connect(self.main)
         self.exe_button.setMinimumHeight(38)
         self.layout.addWidget(self.exe_button)
+        self.bottom_message_label = QLabel('', self)
+        self.bottom_message_label.setStyleSheet('color: #007BFF;')
+        self.bottom_message_label.setVisible(False)
+        self.layout.addWidget(self.bottom_message_label)
 
         self.setLayout(self.layout)
 
     def on_bdmv_folder_path_change(self):
         bdmv_path = self.bdmv_folder_path.text().strip()
+        try:
+            if hasattr(self, 'output_folder_path') and self.output_folder_path:
+                auto_output = os.path.normpath(os.path.dirname(bdmv_path)) if bdmv_path else ''
+                current_output = self.output_folder_path.text().strip()
+                last_auto = getattr(self, '_auto_output_folder', '')
+                if current_output == '' or current_output == last_auto:
+                    self._auto_output_folder = auto_output
+                    if auto_output:
+                        self.output_folder_path.setText(auto_output)
+                    else:
+                        self.output_folder_path.clear()
+        except Exception:
+            pass
         table_ok = False
         if bdmv_path:
             try:
@@ -3336,7 +3488,19 @@ class BluraySubtitleGUI(QWidget):
                         mpls_files = sorted([f for f in os.listdir(os.path.join(root, 'BDMV', 'PLAYLIST')) if f.endswith('.mpls')])
                         table_widget.setRowCount(len(mpls_files))
                         mpls_n = 0
-                        selected_mpls = os.path.normpath(BluraySubtitle(root).get_main_mpls(root, False))
+                        checked = False
+                        if self.radio1.isChecked():
+                            stream_dir = os.path.join(root, 'BDMV', 'STREAM')
+                            if not os.path.isdir(stream_dir):
+                                checked = True
+                            else:
+                                try:
+                                    checked = not any(
+                                        f.lower().endswith('.m2ts') for f in os.listdir(stream_dir)
+                                    )
+                                except Exception:
+                                    checked = True
+                        selected_mpls = os.path.normpath(BluraySubtitle(root).get_main_mpls(root, checked))
                         for mpls_file in mpls_files:
                                 table_widget.setItem(mpls_n, 0, QTableWidgetItem(mpls_file))
                                 mpls_path = os.path.normpath(os.path.join(root, 'BDMV', 'PLAYLIST', mpls_file))
@@ -3364,7 +3528,13 @@ class BluraySubtitleGUI(QWidget):
                         self.table1.setRowHeight(i, 100)
                         i += 1
                 self.table1.resizeColumnsToContents()
-                self.table1.setColumnWidth(2, 410)
+                self.table1.setColumnWidth(2, 370)
+                QTimer.singleShot(
+                    0,
+                    lambda: self.table1.horizontalScrollBar().setValue(
+                        self.table1.horizontalScrollBar().maximum()
+                    ),
+                )
                 table_ok = True
             except Exception as e:
                 self.table1.clear()
@@ -3436,6 +3606,15 @@ class BluraySubtitleGUI(QWidget):
         selected_mpls = self.get_selected_mpls_no_ext()
 
         progress_dialog = QProgressDialog(title, '取消', 0, 1000, self)
+        progress_dialog.setMinimumWidth(400)
+        bar = QProgressBar(progress_dialog)
+        bar.setRange(0, 1000)
+        bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        progress_dialog.setBar(bar)
+        def update_bar_format(val):
+            bar.setFormat(f"{val / 10.0:.1f}%")
+        bar.valueChanged.connect(update_bar_format)
+        update_bar_format(0)
         progress_dialog.setMinimumDuration(0)
         progress_dialog.setAutoClose(False)
         progress_dialog.setAutoReset(False)
@@ -3509,12 +3688,14 @@ class BluraySubtitleGUI(QWidget):
                 self.table2.clear()
                 self.table2.setColumnCount(len(MKV_LABELS))
                 self.table2.setHorizontalHeaderLabels(MKV_LABELS)
+                self._set_table2_default_column_order()
                 rows = payload.get('rows') or []
                 self.table2.setRowCount(len(rows))
                 for i, (path, dur) in enumerate(rows):
                     self.table2.setItem(i, 0, FilePathTableWidgetItem(path))
                     self.table2.setItem(i, 1, QTableWidgetItem(dur))
                 self.table2.resizeColumnsToContents()
+                self._scroll_table_h_to_right(self.table2)
                 return
 
             rows = payload.get('rows') or []
@@ -3522,25 +3703,30 @@ class BluraySubtitleGUI(QWidget):
                 self.table2.clear()
                 self.table2.setColumnCount(len(REMUX_LABELS))
                 self.table2.setHorizontalHeaderLabels(REMUX_LABELS)
+                self._set_table2_default_column_order()
                 self.table2.setRowCount(len(rows))
                 for i, (path, dur) in enumerate(rows):
                     self.table2.setItem(i, 0, FilePathTableWidgetItem(path))
                     self.table2.setItem(i, 1, QTableWidgetItem(dur))
                 self.table2.resizeColumnsToContents()
+                self._scroll_table_h_to_right(self.table2)
             elif payload.get('mode') == 4:
                 self.table2.clear()
                 self.table2.setColumnCount(len(ENCODE_LABELS))
                 self.table2.setHorizontalHeaderLabels(ENCODE_LABELS)
+                self._set_table2_default_column_order()
                 self.table2.setRowCount(len(rows))
                 for i, (path, dur) in enumerate(rows):
                     self.table2.setItem(i, 0, FilePathTableWidgetItem(path))
                     self.table2.setItem(i, 1, QTableWidgetItem(dur))
                     self.ensure_encode_row_widgets(i)
                 self.table2.resizeColumnsToContents()
+                self._scroll_table_h_to_right(self.table2)
             else:
                 self.table2.clear()
                 self.table2.setColumnCount(len(SUBTITLE_LABELS))
                 self.table2.setHorizontalHeaderLabels(SUBTITLE_LABELS)
+                self._set_table2_subtitle_column_order()
                 self.table2.setRowCount(len(rows))
                 for i, (path, dur) in enumerate(rows):
                     check_item = QTableWidgetItem()
@@ -3574,6 +3760,8 @@ class BluraySubtitleGUI(QWidget):
                 except Exception:
                     pass
                 self.table2.customContextMenuRequested.connect(self.on_subtitle_menu)
+                self.table2.resizeColumnsToContents()
+                self._scroll_table_h_to_right(self.table2)
 
             configuration = payload.get('configuration') or {}
             if configuration:
@@ -4130,6 +4318,8 @@ class BluraySubtitleGUI(QWidget):
         subtitle_edit_dialog.exec()
 
     def on_select_function(self):
+        if hasattr(self, 'output_folder_row') and self.output_folder_row:
+            self.output_folder_row.setVisible(self.radio3.isChecked() or self.radio4.isChecked())
         if self.radio4.isChecked():
             self.ensure_default_vpy_file()
             if hasattr(self, 'table3'):
@@ -4155,6 +4345,7 @@ class BluraySubtitleGUI(QWidget):
             self.table2.setRowCount(0)
             self.table2.setColumnCount(len(SUBTITLE_LABELS))
             self.table2.setHorizontalHeaderLabels(SUBTITLE_LABELS)
+            self._set_table2_subtitle_column_order()
 
         if self.radio2.isChecked():
             self.label2.setText("选择mkv文件所在的文件夹")
@@ -4172,6 +4363,7 @@ class BluraySubtitleGUI(QWidget):
             self.table2.setRowCount(0)
             self.table2.setColumnCount(len(MKV_LABELS))
             self.table2.setHorizontalHeaderLabels(MKV_LABELS)
+            self._set_table2_default_column_order()
 
         if self.radio3.isChecked():
             self._geometry = self.saveGeometry()
@@ -4187,6 +4379,7 @@ class BluraySubtitleGUI(QWidget):
             self.table2.setRowCount(0)
             self.table2.setColumnCount(len(REMUX_LABELS))
             self.table2.setHorizontalHeaderLabels(REMUX_LABELS)
+            self._set_table2_default_column_order()
 
         if self.radio4.isChecked():
             self._geometry = self.saveGeometry()
@@ -4202,6 +4395,7 @@ class BluraySubtitleGUI(QWidget):
             self.table2.setRowCount(0)
             self.table2.setColumnCount(len(ENCODE_LABELS))
             self.table2.setHorizontalHeaderLabels(ENCODE_LABELS)
+            self._set_table2_default_column_order()
             if hasattr(self, 'table3'):
                 self.table3.clear()
                 self.table3.setRowCount(0)
@@ -4219,7 +4413,19 @@ class BluraySubtitleGUI(QWidget):
         folder = QFileDialog.getExistingDirectory(self, "选择文件夹")
         self.subtitle_folder_path.setText(os.path.normpath(folder))
 
+    def select_output_folder(self):
+        start = self.output_folder_path.text().strip() if hasattr(self, 'output_folder_path') else ''
+        folder = QFileDialog.getExistingDirectory(self, "选择输出文件夹", start)
+        if folder:
+            self.output_folder_path.setText(os.path.normpath(folder))
+
     def main(self):
+        if getattr(self, '_current_cancel_event', None) is not None:
+            self._current_cancel_event.set()
+            self.exe_button.setEnabled(False)
+            self._update_exe_button_progress(text='正在取消...')
+            return
+
         if self.radio1.isChecked():
             self.generate_subtitle()
         if self.radio2.isChecked():
@@ -4230,18 +4436,19 @@ class BluraySubtitleGUI(QWidget):
             self.encode_bluray()
 
     def encode_bluray(self):
-        output_folder = os.path.normpath(QFileDialog.getExistingDirectory(self, "选择输出文件夹"))
+        output_folder = os.path.normpath(self.output_folder_path.text().strip()) if hasattr(self, 'output_folder_path') else ''
         if not output_folder:
+            QMessageBox.information(self, " ", "未选择输出文件夹")
+            return
+        if not os.path.isdir(output_folder):
+            QMessageBox.information(self, " ", "输出文件夹不存在")
             return
         find_mkvtoolinx()
-        progress_dialog = QProgressDialog('操作中', '取消', 0, 1000, self)
-        progress_dialog.setMinimumDuration(0)
-        progress_dialog.setAutoClose(False)
-        progress_dialog.setAutoReset(False)
-        progress_dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-        progress_dialog.show()
+
         cancel_event = threading.Event()
-        progress_dialog.canceled.connect(cancel_event.set)
+        self._current_cancel_event = cancel_event
+        self._exe_button_default_text = self.exe_button.text()
+        self._update_exe_button_progress(0, '准备中')
 
         sub_files = [self.table2.item(i, 0).text() for i in range(0, self.table2.rowCount()) if self.table2.item(i, 0)]
         vpy_paths = []
@@ -4271,18 +4478,24 @@ class BluraySubtitleGUI(QWidget):
                     sp_entries.append({'bdmv_index': 0, 'mpls_file': '', 'm2ts_file': ''})
         selected_mpls = self.get_selected_mpls_no_ext()
         if not selected_mpls:
-            progress_dialog.close()
+            self._current_cancel_event = None
+            self._reset_exe_button()
+            self.exe_button.setEnabled(True)
             QMessageBox.information(self, " ", "未选择原盘主mpls")
             return
         try:
-            bs = BluraySubtitle(self.bdmv_folder_path.text(), sub_files, self.checkbox1.isChecked(), None)
+            bs = BluraySubtitle(self.bdmv_folder_path.text(), sub_files, self.checkbox1.isChecked(), self._update_exe_button_progress)
             configuration = bs.generate_configuration_from_selected_mpls(selected_mpls, cancel_event=cancel_event)
         except _Cancelled:
-            progress_dialog.close()
+            self._current_cancel_event = None
+            self._reset_exe_button()
+            self.exe_button.setEnabled(True)
             return
         except Exception as e:
+            self._current_cancel_event = None
+            self._reset_exe_button()
+            self.exe_button.setEnabled(True)
             QMessageBox.information(self, " ", traceback.format_exc())
-            progress_dialog.close()
             return
 
         vspipe_mode = 'bundle' if self.vspipe_mode_combo.currentText() == '程序自带' else 'system'
@@ -4295,7 +4508,6 @@ class BluraySubtitleGUI(QWidget):
         else:
             sub_pack_mode = 'external'
 
-        self.exe_button.setEnabled(False)
         self._encode_thread = QThread(self)
         self._encode_worker = EncodeWorker(
             self.bdmv_folder_path.text(),
@@ -4315,11 +4527,12 @@ class BluraySubtitleGUI(QWidget):
         )
         self._encode_worker.moveToThread(self._encode_thread)
         self._encode_thread.started.connect(self._encode_worker.run)
-        self._encode_worker.progress.connect(progress_dialog.setValue)
-        self._encode_worker.label.connect(progress_dialog.setLabelText)
+        self._encode_worker.progress.connect(self._on_exe_button_progress_value)
+        self._encode_worker.label.connect(self._on_exe_button_progress_text)
 
         def cleanup():
-            progress_dialog.close()
+            self._current_cancel_event = None
+            self._reset_exe_button()
             self.exe_button.setEnabled(True)
             if hasattr(self, '_encode_thread') and self._encode_thread:
                 self._encode_thread.quit()
@@ -4332,7 +4545,7 @@ class BluraySubtitleGUI(QWidget):
 
         def on_finished():
             cleanup()
-            QMessageBox.information(self, " ", "原盘压制成功！")
+            self._show_bottom_message('原盘压制成功！')
 
         def on_canceled():
             cleanup()
@@ -4347,15 +4560,6 @@ class BluraySubtitleGUI(QWidget):
         self._encode_thread.start()
 
     def generate_subtitle(self, silent_mode: bool = False):
-        progress_dialog = QProgressDialog('字幕生成中', '取消', 0, 1000, self)
-        progress_dialog.setMinimumDuration(0)
-        progress_dialog.setAutoClose(False)
-        progress_dialog.setAutoReset(False)
-        progress_dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-        progress_dialog.show()
-        cancel_event = threading.Event()
-        progress_dialog.canceled.connect(cancel_event.set)
-
         sub_files = []
         for sub_index in range(self.table2.rowCount()):
             if self.sub_check_state[sub_index] != 2:
@@ -4364,19 +4568,22 @@ class BluraySubtitleGUI(QWidget):
             if item and item.text():
                 sub_files.append(item.text())
         if not sub_files:
-            progress_dialog.close()
             if not silent_mode:
                 QMessageBox.information(self, " ", "未选择字幕文件")
             return False
 
         selected_mpls = self.get_selected_mpls_no_ext()
         if not selected_mpls:
-            progress_dialog.close()
             if not silent_mode:
                 QMessageBox.information(self, " ", "未选择原盘主mpls")
             return False
 
-        self.exe_button.setEnabled(False)
+        cancel_event = threading.Event()
+        self._current_cancel_event = cancel_event
+        self._exe_button_default_text = self.exe_button.text()
+        self._exe_button_progress_value = 0
+        self._exe_button_progress_text = '字幕生成中'
+        self._update_exe_button_progress(0, '字幕生成中')
         self._merge_thread = QThread(self)
         self._merge_worker = MergeWorker(
             self.bdmv_folder_path.text(),
@@ -4387,14 +4594,14 @@ class BluraySubtitleGUI(QWidget):
         )
         self._merge_worker.moveToThread(self._merge_thread)
         self._merge_thread.started.connect(self._merge_worker.run)
-        self._merge_worker.progress.connect(progress_dialog.setValue)
-        self._merge_worker.label.connect(progress_dialog.setLabelText)
+        self._merge_worker.progress.connect(self._on_exe_button_progress_value)
+        self._merge_worker.label.connect(self._on_exe_button_progress_text)
 
         success = False
 
         def cleanup():
-            progress_dialog.close()
-            self.exe_button.setEnabled(True)
+            self._current_cancel_event = None
+            self._reset_exe_button()
             if hasattr(self, '_merge_thread') and self._merge_thread:
                 self._merge_thread.quit()
                 self._merge_thread.wait()
@@ -4410,7 +4617,7 @@ class BluraySubtitleGUI(QWidget):
             success = True
             cleanup()
             if not silent_mode:
-                QMessageBox.information(self, " ", "生成字幕成功！")
+                self._show_bottom_message("生成字幕成功！", 10000)
 
         def on_canceled():
             cleanup()
@@ -4438,11 +4645,11 @@ class BluraySubtitleGUI(QWidget):
         return success
 
     def add_chapters(self):
-        if self.checkbox1.isChecked():
-            progress_dialog = QProgressDialog('编辑中', '取消', 0, 1000, self)
-        else:
-            progress_dialog = QProgressDialog('混流中', '取消', 0, 1000, self)
-        progress_dialog.show()
+        cancel_event = threading.Event()
+        self._current_cancel_event = cancel_event
+        self._exe_button_default_text = self.exe_button.text()
+        self._update_exe_button_progress(0, '编辑中' if self.checkbox1.isChecked() else '混流中')
+        
         # Use sorted mkv files if table is sorted, otherwise use original order
         mkv_files = self.get_mkv_files_in_table_order()
         if not mkv_files:
@@ -4452,18 +4659,27 @@ class BluraySubtitleGUI(QWidget):
                 self.bdmv_folder_path.text(),
                 mkv_files,
                 self.checkbox1.isChecked(),
-                progress_dialog
+                self._update_exe_button_progress
             )
-            bs.add_chapter_to_mkv(mkv_files, self.table1)
+            bs.add_chapter_to_mkv(mkv_files, self.table1, cancel_event=cancel_event)
+            self._current_cancel_event = None
+            self._reset_exe_button()
+            self.exe_button.setEnabled(True)
             if self.checkbox1.isChecked():
-                QMessageBox.information(self, " ", "添加章节成功，mkv章节已添加")
+                self._show_bottom_message('添加章节成功，mkv章节已添加')
             else:
-                QMessageBox.information(self, " ", "添加章节成功，生成的新mkv文件在output文件夹下")
+                self._show_bottom_message('添加章节成功，生成的新mkv文件在output文件夹下')
+        except _Cancelled:
+            self._current_cancel_event = None
+            self._reset_exe_button()
+            self.exe_button.setEnabled(True)
         except Exception as e:
+            self._current_cancel_event = None
+            self._reset_exe_button()
+            self.exe_button.setEnabled(True)
             QMessageBox.information(self, " ", traceback.format_exc())
         else:
             bs.completion()
-        progress_dialog.close()
 
     def get_selected_mpls_no_ext(self) -> list[tuple[str, str]]:
         selected = []
@@ -4489,36 +4705,43 @@ class BluraySubtitleGUI(QWidget):
         return selected
 
     def remux_episodes(self):
-        output_folder = os.path.normpath(QFileDialog.getExistingDirectory(self, "选择输出文件夹"))
+        output_folder = os.path.normpath(self.output_folder_path.text().strip()) if hasattr(self, 'output_folder_path') else ''
         if not output_folder:
+            QMessageBox.information(self, " ", "未选择输出文件夹")
+            return
+        if not os.path.isdir(output_folder):
+            QMessageBox.information(self, " ", "输出文件夹不存在")
             return
         find_mkvtoolinx()
-        progress_dialog = QProgressDialog('操作中', '取消', 0, 1000, self)
-        progress_dialog.setMinimumDuration(0)
-        progress_dialog.setAutoClose(False)
-        progress_dialog.setAutoReset(False)
-        progress_dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-        progress_dialog.show()
+
         cancel_event = threading.Event()
-        progress_dialog.canceled.connect(cancel_event.set)
+        self._current_cancel_event = cancel_event
+        self._exe_button_default_text = self.exe_button.text()
+        self._update_exe_button_progress(0, '准备中')
+
         sub_files = [self.table2.item(i, 0).text() for i in range(0, self.table2.rowCount()) if self.table2.item(i, 0)]
         selected_mpls = self.get_selected_mpls_no_ext()
         if not selected_mpls:
-            progress_dialog.close()
+            self._current_cancel_event = None
+            self._reset_exe_button()
+            self.exe_button.setEnabled(True)
             QMessageBox.information(self, " ", "未选择原盘主mpls")
             return
         try:
-            bs = BluraySubtitle(self.bdmv_folder_path.text(), sub_files, self.checkbox1.isChecked(), None)
+            bs = BluraySubtitle(self.bdmv_folder_path.text(), sub_files, self.checkbox1.isChecked(), self._update_exe_button_progress)
             configuration = bs.generate_configuration_from_selected_mpls(selected_mpls, cancel_event=cancel_event)
         except _Cancelled:
-            progress_dialog.close()
+            self._current_cancel_event = None
+            self._reset_exe_button()
+            self.exe_button.setEnabled(True)
             return
         except Exception as e:
+            self._current_cancel_event = None
+            self._reset_exe_button()
+            self.exe_button.setEnabled(True)
             QMessageBox.information(self, " ", traceback.format_exc())
-            progress_dialog.close()
             return
 
-        self.exe_button.setEnabled(False)
         self._remux_thread = QThread(self)
         self._remux_worker = RemuxWorker(
             self.bdmv_folder_path.text(),
@@ -4531,11 +4754,12 @@ class BluraySubtitleGUI(QWidget):
         )
         self._remux_worker.moveToThread(self._remux_thread)
         self._remux_thread.started.connect(self._remux_worker.run)
-        self._remux_worker.progress.connect(progress_dialog.setValue)
-        self._remux_worker.label.connect(progress_dialog.setLabelText)
+        self._remux_worker.progress.connect(self._on_exe_button_progress_value)
+        self._remux_worker.label.connect(self._on_exe_button_progress_text)
 
         def cleanup():
-            progress_dialog.close()
+            self._current_cancel_event = None
+            self._reset_exe_button()
             self.exe_button.setEnabled(True)
             if hasattr(self, '_remux_thread') and self._remux_thread:
                 self._remux_thread.quit()
@@ -4548,7 +4772,7 @@ class BluraySubtitleGUI(QWidget):
 
         def on_finished():
             cleanup()
-            QMessageBox.information(self, " ", "原盘remux成功！")
+            self._show_bottom_message('原盘remux成功！')
 
         def on_canceled():
             cleanup()
@@ -4931,7 +5155,7 @@ if __name__ == "__main__":
     multiprocessing.freeze_support()
     app = QApplication(sys.argv)
     base_font = app.font()
-    base_font.setPointSize(11)
+    base_font.setPointSize(8)
     app.setFont(base_font)
     app.setStyleSheet('''     
         QMainWindow {
@@ -4943,7 +5167,7 @@ if __name__ == "__main__":
         }
 
         * {
-            font-size: 11px;
+            font-size: 8pt;
         }
 
         QVBoxLayout, QHBoxLayout {
@@ -4967,8 +5191,8 @@ if __name__ == "__main__":
         }
 
         QGroupBox[tightGroup="true"] {
-            margin-top: 6px;
-            padding: 2px;
+            margin-top: 12px;
+            padding: 10px 4px 4px 4px;
         }
 
         QGroupBox[compactTitle="true"] {
@@ -4986,23 +5210,23 @@ if __name__ == "__main__":
         QLabel {
             margin: 0px;
             padding: 0px;
-            font-size: 11px;
+            font-size: 8pt;
         }
 
         QLineEdit {
-            font-size: 11px;
+            font-size: 8pt;
             padding: 1px;
             border: 1px solid #DDDDDD;
             border-radius: 3px;
         }
 
         QComboBox {
-            font-size: 11px;
+            font-size: 8pt;
             padding: 0px 3px;
         }
 
         QPlainTextEdit {
-            font-size: 11px;
+            font-size: 8pt;
             padding: 1px;
         }
 
@@ -5017,7 +5241,7 @@ if __name__ == "__main__":
             border: none;
             border-radius: 5px;
             padding: 2px 6px;
-            font-size: 11px;
+            font-size: 8pt;
         }
 
         QPushButton:hover {
@@ -5071,7 +5295,7 @@ if __name__ == "__main__":
         
         QCheckBox {
             spacing: 2px;
-            font-size: 11px;
+            font-size: 8pt;
         }
 
         QCheckBox::indicator {
@@ -5096,7 +5320,7 @@ if __name__ == "__main__":
 
         QRadioButton {
             spacing: 2px;
-            font-size: 11px;
+            font-size: 8pt;
         }
 
         QRadioButton::indicator {
@@ -5139,10 +5363,37 @@ if __name__ == "__main__":
         }
         
         QMenu {
-            font-size: 11px;
+            font-size: 8pt;
         } 
         '''
                       )
     window = BluraySubtitleGUI()
     window.show()
+    try:
+        def fit_window_to_available_screen():
+            screen = window.screen() or app.primaryScreen()
+            if not screen:
+                return
+            avail = screen.availableGeometry()
+            if avail.height() > 1200:
+                return
+            fg = window.frameGeometry()
+            chrome_h = max(0, fg.height() - window.height())
+            chrome_w = max(0, fg.width() - window.width())
+            target_w = max(200, min(window.width(), max(200, avail.width() - chrome_w)))
+            target_h = max(200, avail.height() - chrome_h)
+            window.resize(target_w, target_h)
+
+            fg2 = window.frameGeometry()
+            x = min(max(fg2.x(), avail.left()), avail.right() - fg2.width() + 1)
+            y = avail.top()
+            window.move(x, y)
+
+            fg3 = window.frameGeometry()
+            if fg3.bottom() > avail.bottom():
+                window.move(x, avail.bottom() - fg3.height() + 1)
+
+        QTimer.singleShot(0, fit_window_to_available_screen)
+    except Exception:
+        pass
     sys.exit(app.exec())
