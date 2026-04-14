@@ -683,7 +683,11 @@ build_vs_plugins() {
       cd "$HOME" || exit 1
       git clone https://github.com/HomeOfAviSynthPlusEvolution/L-SMASH-Works.git || exit 1
       cd L-SMASH-Works/VapourSynth || exit 1
-      sed -i '1i #ifndef AV_PIX_FMT_D3D12\n#define AV_PIX_FMT_D3D12 -1\n#endif' "$HOME/L-SMASH-Works/common/decode.c"
+      local decode_file="../../common/decode.c"
+      if [[ -f "$decode_file" ]]; then
+          sed -i '/AV_PIX_FMT_D3D12/d' "$decode_file"
+          sed -i '1i #ifndef AV_PIX_FMT_D3D12\n#define AV_PIX_FMT_D3D12 (-1)\n#endif' "$decode_file"
+      fi
       meson setup build || exit 1
       ninja -C build || exit 1
       local out
