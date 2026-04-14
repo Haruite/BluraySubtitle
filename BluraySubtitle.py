@@ -34,10 +34,10 @@ try:
 except Exception:
     soundfile = None
 from PyQt6.QtCore import QCoreApplication, Qt, QPoint, QObject, QThread, QTimer, QEventLoop, pyqtSignal
-from PyQt6.QtGui import QPainter, QColor, QDragMoveEvent, QDropEvent, QPaintEvent, QDragEnterEvent
+from PyQt6.QtGui import QPainter, QColor, QDragMoveEvent, QDropEvent, QPaintEvent, QDragEnterEvent, QFont
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLabel, QToolButton, QLineEdit, \
     QMessageBox, QHBoxLayout, QGroupBox, QCheckBox, QProgressDialog, QRadioButton, QButtonGroup, \
-    QTableWidget, QTableWidgetItem, QDialog, QPushButton, QComboBox, QMenu, QAbstractItemView, QPlainTextEdit
+    QTableWidget, QTableWidgetItem, QDialog, QPushButton, QComboBox, QMenu, QAbstractItemView, QPlainTextEdit, QSizePolicy, QHeaderView
 
 if sys.platform == 'win32':
     import winreg
@@ -2833,6 +2833,12 @@ class BluraySubtitleGUI(QWidget):
         self.delete_default_vpy_file()
         return super().closeEvent(event)
 
+    def _set_compact_table(self, table: QTableWidget, row_height: int = 22, header_height: int = 22):
+        table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        table.verticalHeader().setDefaultSectionSize(row_height)
+        table.verticalHeader().setMinimumSectionSize(row_height)
+        table.horizontalHeader().setFixedHeight(header_height)
+
     def create_vpy_path_widget(self, initial_path: Optional[str] = None, parent: Optional[QWidget] = None) -> QWidget:
         widget = QWidget(parent or self.table2)
         layout = QHBoxLayout()
@@ -3046,14 +3052,15 @@ class BluraySubtitleGUI(QWidget):
         self._encode_setting_updating = False
 
         layout = QVBoxLayout()
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.encode_box.setLayout(layout)
 
         tools_row = QWidget(self.encode_box)
         tools_layout = QHBoxLayout()
         tools_layout.setContentsMargins(0, 0, 0, 0)
-        tools_layout.setSpacing(10)
+        tools_layout.setSpacing(4)
         tools_row.setLayout(tools_layout)
 
         tools_layout.addWidget(QLabel('vspipe：', tools_row))
@@ -3080,7 +3087,8 @@ class BluraySubtitleGUI(QWidget):
         layout.addWidget(tools_row)
 
         self.x265_params_edit = QPlainTextEdit(self.encode_box)
-        self.x265_params_edit.setMaximumHeight(60)
+        self.x265_params_edit.setFixedHeight(46)
+        self.x265_params_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         layout.addWidget(self.x265_params_edit)
 
         def set_params_for_preset(preset: str):
@@ -3110,7 +3118,7 @@ class BluraySubtitleGUI(QWidget):
         sub_pack_row = QWidget(self.encode_box)
         sub_pack_layout = QHBoxLayout()
         sub_pack_layout.setContentsMargins(0, 0, 0, 0)
-        sub_pack_layout.setSpacing(10)
+        sub_pack_layout.setSpacing(4)
         sub_pack_row.setLayout(sub_pack_layout)
 
         sub_pack_layout.addWidget(QLabel('字幕封装方式：', sub_pack_row))
@@ -3156,18 +3164,21 @@ class BluraySubtitleGUI(QWidget):
     def init_ui(self):
         self.setWindowTitle("BluraySubtitle")
         self.setMinimumWidth(860)
-        self.setMinimumHeight(1000)
+        self.setMinimumHeight(820)
+        self.resize(1000, 1000)
 
         app = QApplication.instance()
         if app:
             app.aboutToQuit.connect(self.delete_default_vpy_file)
 
         self.layout = QVBoxLayout()
+        self.layout.setContentsMargins(8, 8, 8, 8)
+        self.layout.setSpacing(6)
 
         function_button = QGroupBox('选择功能', self)
         h_layout = QHBoxLayout()
-        h_layout.setContentsMargins(12, 18, 12, 8)
-        h_layout.setSpacing(18)
+        h_layout.setContentsMargins(8, 10, 8, 6)
+        h_layout.setSpacing(12)
         function_button.setLayout(h_layout)
         self.subtitle_folder_path = QLineEdit()
         self.subtitle_folder_path.setMinimumWidth(200)
@@ -3194,20 +3205,33 @@ class BluraySubtitleGUI(QWidget):
         self.layout.addWidget(function_button)
 
         bdmv = QGroupBox()
+        bdmv.setProperty("noTitle", True)
         v_layout = QVBoxLayout()
+        v_layout.setContentsMargins(8, 2, 8, 6)
+        v_layout.setSpacing(4)
         bdmv.setLayout(v_layout)
         bluray_path_box = CustomBox('原盘', self)
+        bluray_path_box.setProperty("noMargin", True)
         h_layout = QHBoxLayout()
+        h_layout.setContentsMargins(0, 0, 0, 0)
+        h_layout.setSpacing(4)
         bluray_path_box.setLayout(h_layout)
         self.label1 = QLabel("选择原盘所在的文件夹", self)
         self.bdmv_folder_path = QLineEdit()
         self.bdmv_folder_path.setMinimumWidth(200)
         button1 = QPushButton("选择文件夹")
         button1.clicked.connect(self.select_bdmv_folder)
-        self.layout.addWidget(self.label1)
         h_layout.addWidget(self.bdmv_folder_path)
         h_layout.addWidget(button1)
         v_layout.addWidget(bluray_path_box)
+
+        label1_container = QWidget(self)
+        label1_layout = QVBoxLayout()
+        label1_layout.setContentsMargins(0, 0, 0, 0)
+        label1_layout.setSpacing(0)
+        label1_container.setLayout(label1_layout)
+        label1_layout.addWidget(self.label1)
+        label1_layout.addWidget(bdmv)
 
         self.table1 = QTableWidget()
         self.table1.setColumnCount(len(BDMV_LABELS))
@@ -3216,25 +3240,39 @@ class BluraySubtitleGUI(QWidget):
         self.table1.horizontalHeader().setSortIndicatorShown(True)
         self.bdmv_folder_path.textChanged.connect(self.on_bdmv_folder_path_change)
         v_layout.addWidget(self.table1)
-        self.layout.addWidget(bdmv)
+        self.layout.addWidget(label1_container)
 
         subtitle = QGroupBox()
+        subtitle.setProperty("noTitle", True)
         v_layout = QVBoxLayout()
+        v_layout.setContentsMargins(8, 2, 8, 6)
+        v_layout.setSpacing(4)
         subtitle.setLayout(v_layout)
         subtitle_path_box = CustomBox('字幕', self)
+        subtitle_path_box.setProperty("noMargin", True)
         h_layout = QHBoxLayout()
+        h_layout.setContentsMargins(0, 0, 0, 0)
+        h_layout.setSpacing(4)
         subtitle_path_box.setLayout(h_layout)
         self.label2 = QLabel("选择单集字幕所在的文件夹：", self)
         self.subtitle_folder_path = QLineEdit()
         self.subtitle_folder_path.setMinimumWidth(200)
         button2 = QPushButton("选择文件夹")
         button2.clicked.connect(self.select_subtitle_folder)
-        self.layout.addWidget(self.label2)
         h_layout.addWidget(self.subtitle_folder_path)
         h_layout.addWidget(button2)
         v_layout.addWidget(subtitle_path_box)
 
+        label2_container = QWidget(self)
+        label2_layout = QVBoxLayout()
+        label2_layout.setContentsMargins(0, 0, 0, 0)
+        label2_layout.setSpacing(0)
+        label2_container.setLayout(label2_layout)
+        label2_layout.addWidget(self.label2)
+        label2_layout.addWidget(subtitle)
+
         self.table2 = CustomTableWidget(self, self.on_subtitle_drop)
+        self._set_compact_table(self.table2, row_height=22, header_height=22)
         self.table2.setColumnCount(len(SUBTITLE_LABELS))
         self.table2.setHorizontalHeaderLabels(SUBTITLE_LABELS)
         self.table2.setSortingEnabled(True)
@@ -3248,15 +3286,18 @@ class BluraySubtitleGUI(QWidget):
         self._pending_subtitle_folder = ''
         v_layout.addWidget(self.table2)
         self.table3 = QTableWidget(self)
+        self._set_compact_table(self.table3, row_height=22, header_height=22)
         self.table3.setColumnCount(len(ENCODE_SP_LABELS))
         self.table3.setHorizontalHeaderLabels(ENCODE_SP_LABELS)
         self.table3.setSortingEnabled(True)
         self.table3.horizontalHeader().setSortIndicatorShown(True)
         self.table3.setVisible(False)
         v_layout.addWidget(self.table3)
-        self.layout.addWidget(subtitle)
+        self.layout.addWidget(label2_container)
 
         self.encode_box = QGroupBox('压制', self)
+        self.encode_box.setProperty("tightGroup", True)
+        self.encode_box.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         self.encode_box.setVisible(False)
         self.init_encode_box()
         self.layout.addWidget(self.encode_box)
@@ -3266,7 +3307,7 @@ class BluraySubtitleGUI(QWidget):
         self.layout.addWidget(self.checkbox1)
         self.exe_button = QPushButton("生成字幕")
         self.exe_button.clicked.connect(self.main)
-        self.exe_button.setMinimumHeight(50)
+        self.exe_button.setMinimumHeight(38)
         self.layout.addWidget(self.exe_button)
 
         self.setLayout(self.layout)
@@ -3289,6 +3330,7 @@ class BluraySubtitleGUI(QWidget):
                     dirs.sort()  # Sort dirs to ensure consistent order on all platforms
                     if 'BDMV' in dirs and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV')):
                         table_widget = QTableWidget()
+                        self._set_compact_table(table_widget, row_height=20, header_height=20)
                         table_widget.setColumnCount(5)
                         table_widget.setHorizontalHeaderLabels(['mpls_file', 'duration', 'chapters', 'main', 'play'])
                         mpls_files = sorted([f for f in os.listdir(os.path.join(root, 'BDMV', 'PLAYLIST')) if f.endswith('.mpls')])
@@ -3938,6 +3980,7 @@ class BluraySubtitleGUI(QWidget):
                 this.setWindowTitle(f'chapters of {mpls_path}')
                 layout = QVBoxLayout()
                 table_widget = QTableWidget()
+                self._set_compact_table(table_widget, row_height=20, header_height=20)
                 table_widget.setColumnCount(2)
                 table_widget.setHorizontalHeaderLabels(['offset', 'file'])
                 chapter = Chapter(mpls_path)
@@ -3956,7 +3999,7 @@ class BluraySubtitleGUI(QWidget):
                     offset += (in_out_time[ref_to_play_item_id][2] - in_out_time[ref_to_play_item_id][1]) / 45000
                 layout.addWidget(table_widget)
                 this.setLayout(layout)
-                height = rows * 30 + 80
+                height = rows * 30 + 60
                 height = 1000 if height > 1000 else height
                 if rows > 1:
                     this.setMinimumHeight(height)
@@ -4534,10 +4577,25 @@ class CustomBox(QGroupBox):  # 为 Box 框提供拖拽文件夹的功能
             e.ignore()
 
     def dropEvent(self, e: QDropEvent):
-        if self.title == '原盘':
-            self.parent().parent().bdmv_folder_path.setText(os.path.normpath(e.mimeData().urls()[0].toLocalFile()))
-        if self.title == '字幕':
-            self.parent().parent().subtitle_folder_path.setText(os.path.normpath(e.mimeData().urls()[0].toLocalFile()))
+        if not e.mimeData().hasUrls():
+            return
+        url = e.mimeData().urls()[0]
+        if not url.isLocalFile():
+            return
+        dropped_path = os.path.normpath(url.toLocalFile())
+
+        w: Optional[QWidget] = self
+        while w and not hasattr(w, 'bdmv_folder_path'):
+            w = w.parentWidget()
+        if not w:
+            w = self.window()
+        if not w:
+            return
+
+        if self.title == '原盘' and hasattr(w, 'bdmv_folder_path'):
+            w.bdmv_folder_path.setText(dropped_path)
+        if self.title == '字幕' and hasattr(w, 'subtitle_folder_path'):
+            w.subtitle_folder_path.setText(dropped_path)
 
 
 def get_folder_size(folder_path: str) -> str:
@@ -4872,6 +4930,9 @@ def get_vspipe_context():
 if __name__ == "__main__":
     multiprocessing.freeze_support()
     app = QApplication(sys.argv)
+    base_font = app.font()
+    base_font.setPointSize(11)
+    app.setFont(base_font)
     app.setStyleSheet('''     
         QMainWindow {
             background-color: white;
@@ -4881,29 +4942,68 @@ if __name__ == "__main__":
             background-color: #F5F5F5;
         }
 
+        * {
+            font-size: 11px;
+        }
+
         QVBoxLayout, QHBoxLayout {
-            spacing: 10px;
-            margin: 5px;
+            spacing: 6px;
+            margin: 0px;
         }
 
         QGroupBox {
             border: 1px solid #CCCCCC;
-            margin-top: 14px;
-            padding: 8px;
+            margin-top: 10px;
+            padding: 4px;
+        }
+
+        QGroupBox[noTitle="true"] {
+            margin-top: 0px;
+        }
+
+        QGroupBox[noMargin="true"] {
+            margin-top: 0px;
+            padding: 0px;
+        }
+
+        QGroupBox[tightGroup="true"] {
+            margin-top: 6px;
+            padding: 2px;
+        }
+
+        QGroupBox[compactTitle="true"] {
+            margin-top: 6px;
+            padding: 0px;
         }
 
         QGroupBox::title {
             subcontrol-origin: margin;
             subcontrol-position: top left;
-            left: 10px;
-            padding: 0 6px;
+            left: 8px;
+            padding: 0 2px;
+        }
+
+        QLabel {
+            margin: 0px;
+            padding: 0px;
+            font-size: 11px;
         }
 
         QLineEdit {
-            font-size: 12px;
-            padding: 4px;
+            font-size: 11px;
+            padding: 1px;
             border: 1px solid #DDDDDD;
-            border-radius: 4px;
+            border-radius: 3px;
+        }
+
+        QComboBox {
+            font-size: 11px;
+            padding: 0px 3px;
+        }
+
+        QPlainTextEdit {
+            font-size: 11px;
+            padding: 1px;
         }
 
         QLineEdit:focus {
@@ -4916,8 +5016,8 @@ if __name__ == "__main__":
             color: white;
             border: none;
             border-radius: 5px;
-            padding: 5px;
-            font-size: 14px;
+            padding: 2px 6px;
+            font-size: 11px;
         }
 
         QPushButton:hover {
@@ -4937,7 +5037,7 @@ if __name__ == "__main__":
             background-color: white;
             border: none;
             border-radius: 5px;
-            padding: 5px;
+            padding: 2px 4px;
         }
 
         QToolButton:hover {
@@ -4957,7 +5057,11 @@ if __name__ == "__main__":
             background-color: white;
             border: 1px solid #CCCCCC;
             border-radius: 3px;
-            padding: 5px;
+            padding: 2px;
+        }
+
+        QTableView::item {
+            padding: 0px 2px;
         }
 
         QTableView::item:selected {
@@ -4966,8 +5070,8 @@ if __name__ == "__main__":
         }   
         
         QCheckBox {
-            spacing: 6px;
-            font-size: 14px;
+            spacing: 2px;
+            font-size: 11px;
         }
 
         QCheckBox::indicator {
@@ -4991,8 +5095,8 @@ if __name__ == "__main__":
         }
 
         QRadioButton {
-            spacing: 6px;
-            font-size: 14px;
+            spacing: 2px;
+            font-size: 11px;
         }
 
         QRadioButton::indicator {
@@ -5035,7 +5139,7 @@ if __name__ == "__main__":
         }
         
         QMenu {
-            font-size: 14px;
+            font-size: 11px;
         } 
         '''
                       )
