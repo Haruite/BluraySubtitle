@@ -590,7 +590,13 @@ install_vapoursynth() {
   log "安装 VapourSynth（从源码编译并安装）"
 
   log "检查并升级 Cython 以支持 VapourSynth 编译"
-  pip3 install --user --upgrade cython || die "Cython 升级失败"
+  if ! python3 -m pip --version >/dev/null 2>&1; then
+    sudo apt-get update
+    sudo apt-get install -y python3-pip || die "安装 python3-pip 失败"
+  fi
+  if ! python3 -m pip install --user --upgrade cython; then
+    python3 -m pip install --user --upgrade cython --break-system-packages || die "Cython 升级失败"
+  fi
   export PATH="$HOME/.local/bin:$PATH"
 
   # VapourSynth-classic 可能没有生成 vspipe 或者生成在 /usr/local/bin 下
@@ -603,7 +609,15 @@ install_vapoursynth() {
   install_zimg_latest
 
   # 验证 Cython 版本是否 >= 3.0
-  CYTHON_V=$(cython --version 2>&1 | grep -oP '\d+\.\d+\.\d+')
+  local cython_cmd="cython"
+  if ! command -v cython >/dev/null 2>&1; then
+    if command -v cython3 >/dev/null 2>&1; then
+      cython_cmd="cython3"
+    else
+      die "未找到 cython/cython3"
+    fi
+  fi
+  CYTHON_V=$("$cython_cmd" --version 2>&1 | grep -oP '\d+\.\d+\.\d+' | head -n 1)
   if [[ "${CYTHON_V%%.*}" -lt 3 ]]; then
       die "Cython 版本过低 ($CYTHON_V)，编译 VapourSynth 需要 3.0.0 以上版本"
   fi
