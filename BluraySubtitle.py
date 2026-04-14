@@ -36,7 +36,7 @@ try:
 except Exception:
     soundfile = None
 from PyQt6.QtCore import QCoreApplication, Qt, QPoint, QObject, QThread, QTimer, QEventLoop, pyqtSignal
-from PyQt6.QtGui import QPainter, QColor, QDragMoveEvent, QDropEvent, QPaintEvent, QDragEnterEvent, QFont
+from PyQt6.QtGui import QPainter, QColor, QDragMoveEvent, QDropEvent, QPaintEvent, QDragEnterEvent
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLabel, QToolButton, QLineEdit, \
     QMessageBox, QHBoxLayout, QGroupBox, QCheckBox, QProgressDialog, QProgressBar, QRadioButton, QButtonGroup, \
     QTableWidget, QTableWidgetItem, QDialog, QPushButton, QComboBox, QMenu, QAbstractItemView, QPlainTextEdit, QSizePolicy, QHeaderView
@@ -2851,10 +2851,14 @@ class BluraySubtitleGUI(QWidget):
         table.horizontalHeader().setFixedHeight(header_height)
 
     def _scroll_table_h_to_right(self, table: QTableWidget):
-        QTimer.singleShot(
-            0,
-            lambda: table.horizontalScrollBar().setValue(table.horizontalScrollBar().maximum()),
-        )
+        def scroll():
+            bar = table.horizontalScrollBar()
+            bar.setValue(bar.maximum())
+        # Execute multiple times to ensure it works in slower environments like Docker
+        QTimer.singleShot(0, scroll)
+        QTimer.singleShot(50, scroll)
+        QTimer.singleShot(100, scroll)
+        QTimer.singleShot(200, scroll)
 
     def _update_exe_button_progress(self, value: Optional[int] = None, text: Optional[str] = None):
         if not hasattr(self, 'exe_button') or not self.exe_button:
@@ -3529,12 +3533,7 @@ class BluraySubtitleGUI(QWidget):
                         i += 1
                 self.table1.resizeColumnsToContents()
                 self.table1.setColumnWidth(2, 370)
-                QTimer.singleShot(
-                    0,
-                    lambda: self.table1.horizontalScrollBar().setValue(
-                        self.table1.horizontalScrollBar().maximum()
-                    ),
-                )
+                self._scroll_table_h_to_right(self.table1)
                 table_ok = True
             except Exception as e:
                 self.table1.clear()
