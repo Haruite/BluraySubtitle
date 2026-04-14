@@ -50,7 +50,7 @@ FLAC_THREADS = 20  # flac线程数
 FFMPEG_PATH = r'C:\Downloads\ffmpeg-8.1-full_build\bin\ffmpeg.exe'  # ffmpeg可执行文件路径
 FFPROBE_PATH = r'C:\Downloads\ffmpeg-8.1-full_build\bin\ffprobe.exe'  # ffprobe可执行文件路径
 X265_PATH = r'C:\Software\x265.exe'  # x265可执行文件路径
-PLUGIN_PATH = ''
+PLUGIN_PATH = '~/plugins'
 
 
 def is_docker():
