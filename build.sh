@@ -884,12 +884,23 @@ from pathlib import Path
 path = Path("../common/decode.c")
 data = path.read_text(encoding="utf-8", errors="replace")
 data = re.sub(r"^.*AV_PIX_FMT_D3D12\\\\n.*$", "", data, flags=re.MULTILINE)
-has_define = re.search(r"^[ \t]*#[ \t]*define[ \t]+AV_PIX_FMT_D3D12\\b", data, flags=re.MULTILINE) is not None
-if ("AV_PIX_FMT_D3D12" in data) and (not has_define):
+data = re.sub(r"^#ifndef AV_PIX_FMT_D3D12\\n#define AV_PIX_FMT_D3D12 .*?\\n#endif\\n\\n?", "", data, flags=re.MULTILINE)
+
+header_paths = [
+    Path("/usr/include/x86_64-linux-gnu/libavutil/pixfmt.h"),
+    Path("/usr/include/libavutil/pixfmt.h"),
+]
+header_has_enum = False
+for hp in header_paths:
+    if hp.is_file():
+        txt = hp.read_text(encoding="utf-8", errors="replace")
+        if "AV_PIX_FMT_D3D12" in txt:
+            header_has_enum = True
+            break
+
+if ("AV_PIX_FMT_D3D12" in data) and (not header_has_enum):
     shim = "\n".join([
-        "#ifndef AV_PIX_FMT_D3D12",
         "#define AV_PIX_FMT_D3D12 AV_PIX_FMT_NONE",
-        "#endif",
         "",
     ])
     data = shim + data
