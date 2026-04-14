@@ -1,0 +1,36 @@
+name: Build BluraySubtitle for Ubuntu 25.10
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and Push
+        uses: docker/build-push-action@v5
+        with:
+          context: . 
+          platforms: linux/amd64 
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/bluraysubtitle:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/bluraysubtitle:25.10
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
