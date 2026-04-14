@@ -658,6 +658,27 @@ install_vapoursynth() {
   log "VapourSynth 安装完成"
 }
 
+install_vapoursynth_scripts() {
+  local src_dir="$REPO_DIR/VapourSynthScripts"
+  if [[ ! -d "$src_dir" ]]; then
+    log "未找到 VapourSynthScripts 目录，跳过安装脚本"
+    return 0
+  fi
+
+  local py_ver
+  py_ver="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+  local dst_dir="/usr/local/lib/python${py_ver}/site-packages"
+  sudo mkdir -p "$dst_dir"
+
+  local copied=0
+  while IFS= read -r -d '' file; do
+    sudo cp -f "$file" "$dst_dir/" || die "复制脚本失败：$file"
+    copied=$((copied + 1))
+  done < <(find "$src_dir" -maxdepth 1 -type f -name "*.py" -print0)
+
+  log "已复制 VapourSynthScripts 脚本到 ${dst_dir}（数量：${copied}）"
+}
+
 install_vapoursynth_editor() {
   log "安装 vapoursynth-editor (vsedit)（从源码编译并安装）"
 
@@ -1184,6 +1205,7 @@ install_mpv
 install_x265
 install_flac
 install_vapoursynth
+install_vapoursynth_scripts
 install_vapoursynth_editor
 build_vs_plugins
 
