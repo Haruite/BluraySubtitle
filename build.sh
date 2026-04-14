@@ -37,6 +37,12 @@ require_supported_os() {
   die "仅支持 Ubuntu >= 22.04 或 Debian >= 12（当前：${PRETTY_NAME:-unknown}）"
 }
 
+repair_broken_apt_state() {
+  log "检查并修复 APT/Dpkg 破损状态"
+  sudo dpkg --configure -a || true
+  sudo apt-get -f install -y || die "修复系统包依赖失败，请手动执行 sudo apt --fix-broken install"
+}
+
 ensure_meson_version() {
   local required_version="1.4.0"
 
@@ -911,6 +917,7 @@ command -v sudo >/dev/null 2>&1 || die "缺少 sudo"
 sudo -v
 
 require_supported_os
+repair_broken_apt_state
 
 sys_deps=(
   python3 python3-pip python3-venv
