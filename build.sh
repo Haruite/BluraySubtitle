@@ -876,11 +876,27 @@ build_vs_plugins() {
       fi
 
       # 2. 保留并执行你原有的 D3D12 宏补丁逻辑 (无论哪个版本都加上，防止万一)
-      local decode_file="../../common/decode.c"
+      local decode_file="../common/decode.c"
       if [[ -f "$decode_file" ]]; then
-          sed -i '/AV_PIX_FMT_D3D12/d' "$decode_file"
-          sed -i '1i #ifndef AV_PIX_FMT_D3D12\n#define AV_PIX_FMT_D3D12 (-1)\n#endif' "$decode_file"
+          python3 - <<'PY' || exit 1
+import re
+from pathlib import Path
+path = Path("../common/decode.c")
+data = path.read_text(encoding="utf-8", errors="replace")
+data = re.sub(r"^.*AV_PIX_FMT_D3D12\\\\n.*$", "", data, flags=re.MULTILINE)
+has_define = re.search(r"^[ \t]*#[ \t]*define[ \t]+AV_PIX_FMT_D3D12\\b", data, flags=re.MULTILINE) is not None
+if ("AV_PIX_FMT_D3D12" in data) and (not has_define):
+    shim = "\n".join([
+        "#ifndef AV_PIX_FMT_D3D12",
+        "#define AV_PIX_FMT_D3D12 AV_PIX_FMT_NONE",
+        "#endif",
+        "",
+    ])
+    data = shim + data
+path.write_text(data, encoding="utf-8")
+PY
       fi
+      rm -rf build
       meson setup build || exit 1
       ninja -C build || exit 1
       local out
