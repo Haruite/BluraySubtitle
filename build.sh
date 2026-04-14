@@ -65,10 +65,14 @@ ensure_meson_version() {
     sudo apt-get install -y python3-pip || die "安装 python3-pip 失败"
   fi
 
+  local pip_cmd=("python3" "-m" "pip")
   if command -v pip >/dev/null 2>&1; then
-    pip install --user --upgrade meson --break-system-packages || die "升级 meson 失败"
-  else
-    python3 -m pip install --user --upgrade meson --break-system-packages || die "升级 meson 失败"
+    pip_cmd=("pip")
+  fi
+
+  if ! "${pip_cmd[@]}" install --user --upgrade meson --break-system-packages; then
+    log "当前 pip 不支持 --break-system-packages，回退到兼容参数重试"
+    "${pip_cmd[@]}" install --user --upgrade meson || die "升级 meson 失败"
   fi
   export PATH="$HOME/.local/bin:$PATH"
 
@@ -297,6 +301,20 @@ install_mpv() {
     libdrm-dev libgbm-dev curl
   )
 
+  if [[ -f /etc/os-release ]]; then
+    . /etc/os-release || true
+    if [[ "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" == "22.04" ]]; then
+      local filtered_deps=()
+      local dep
+      for dep in "${mpv_deps[@]}"; do
+        if [[ "$dep" != "libshaderc-dev" ]]; then
+          filtered_deps+=("$dep")
+        fi
+      done
+      mpv_deps=("${filtered_deps[@]}")
+    fi
+  fi
+
   local missing_deps=()
   for dep in "${mpv_deps[@]}"; do
     if ! dpkg-query -W -f='${Status}' "$dep" 2>/dev/null | grep -q "install ok installed"; then
@@ -503,14 +521,55 @@ install_flac() {
   log "flac 安装完成"
 }
 
+install_zimg_latest() {
+  # 检测系统 ID 和 版本号
+  if [[ -f /etc/os-release ]]; then
+    . /etc/os-release
+    # 仅在 ID 为 ubuntu 且版本为 22.04 时执行
+    if [[ "$ID" == "ubuntu" && "$VERSION_ID" == "22.04" ]]; then
+      log "检测到 Ubuntu 22.04，系统自带 zimg 版本过低，开始编译安装最新版 zimg..."
+
+      local build_dir
+      build_dir="$(mktemp -d)"
+      (
+        cd "$build_dir" || exit 1
+        git clone --depth 1 --recursive https://github.com/sekrit-twc/zimg.git . || exit 1
+        ./autogen.sh || exit 1
+        ./configure || exit 1
+        make -j"$(nproc)" || exit 1
+        sudo make install || exit 1
+      )
+      rm -rf "$build_dir"
+      sudo ldconfig
+      log "最新版 zimg 安装完成"
+    else
+      log "当前系统版本为 ${NAME:-Ubuntu} ${VERSION_ID:-未知}，跳过手动编译 zimg"
+      # 非 22.04 系统通常直接安装包即可
+      sudo apt-get install -y libzimg-dev
+    fi
+  fi
+}
+
 install_vapoursynth() {
   log "安装 VapourSynth（从源码编译并安装）"
+
+  log "检查并升级 Cython 以支持 VapourSynth 编译"
+  pip3 install --user --upgrade cython || die "Cython 升级失败"
+  export PATH="$HOME/.local/bin:$PATH"
 
   # VapourSynth-classic 可能没有生成 vspipe 或者生成在 /usr/local/bin 下
   # 放宽检测条件：检查库文件或执行文件是否存在即可
   if [[ -f "/usr/local/lib/libvapoursynth.so" ]] || sudo ldconfig -p 2>/dev/null | grep -qE '\blibvapoursynth\.so\b'; then
     log "检测到 VapourSynth 已安装（找到 libvapoursynth.so），跳过编译安装"
     return 0
+  fi
+
+  install_zimg_latest
+
+  # 验证 Cython 版本是否 >= 3.0
+  CYTHON_V=$(cython --version 2>&1 | grep -oP '\d+\.\d+\.\d+')
+  if [[ "${CYTHON_V%%.*}" -lt 3 ]]; then
+      die "Cython 版本过低 ($CYTHON_V)，编译 VapourSynth 需要 3.0.0 以上版本"
   fi
 
   local deps=(build-essential autoconf automake libtool pkg-config python3-dev cython3 libzimg-dev libmagick++-dev libtesseract-dev python3-sphinx wget tar)
@@ -546,7 +605,7 @@ install_vapoursynth() {
     
     log "配置与编译 VapourSynth"
     ./autogen.sh || exit 1
-    ./configure || exit 1
+    ./configure CXXFLAGS="-O3 -fpermissive" || die "VapourSynth 配置失败"
     make -j"$(nproc)" || exit 1
     sudo make install || exit 1
     sudo ldconfig || exit 1
@@ -572,6 +631,13 @@ install_vapoursynth_editor() {
   fi
 
   local deps=(qt6-base-dev qt6-base-dev-tools qt6-5compat-dev qt6-websockets-dev qt6-declarative-dev libgl-dev wget tar)
+  if [[ -f /etc/os-release ]]; then
+    . /etc/os-release || true
+    if [[ "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" == "22.04" ]]; then
+      deps=(qt6-base-dev qt6-base-dev-tools libqt6core5compat6-dev libqt6websockets6-dev qt6-declarative-dev libgl-dev wget tar)
+    fi
+  fi
+
   local missing_deps=()
   for dep in "${deps[@]}"; do
     if ! dpkg-query -W -f='${Status}' "$dep" 2>/dev/null | grep -q "install ok installed"; then
@@ -646,6 +712,52 @@ EOF
   log "vapoursynth-editor (vsedit) 安装完成"
 }
 
+install_libplacebo_latest() {
+    local required_version="6.338.0"
+    if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libplacebo; then
+        local current_version
+        current_version="$(pkg-config --modversion libplacebo 2>/dev/null | head -n 1 || true)"
+        if [[ -n "${current_version:-}" ]] && dpkg --compare-versions "$current_version" ge "$required_version"; then
+            log "libplacebo 版本满足要求（${current_version} >= ${required_version}），跳过编译"
+            return 0
+        fi
+        log "检测到 libplacebo 版本过低（${current_version:-unknown} < ${required_version}），将升级"
+    elif sudo ldconfig -p 2>/dev/null | grep -qE '\blibplacebo\.so\b'; then
+        log "检测到 libplacebo 已存在但无法获取版本（缺少 pkg-config 版本信息），将重装以确保兼容 vs-placebo"
+    fi
+
+    log "正在以物理隔离模式编译 libplacebo..."
+
+    # 再次确保环境变量在函数内部也是安全的
+    local py_ver
+    py_ver=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+    local safe_pythonpath="${HOME}/.local/lib/python${py_ver}/site-packages:${PYTHONPATH:-}"
+
+    local build_dir
+    build_dir="$(mktemp -d)"
+    (
+        cd "$build_dir" || exit 1
+        git clone --recursive --depth 1 --branch v6.338.0 https://code.videolan.org/videolan/libplacebo.git .
+
+        rm -rf build
+
+        # 使用安全定义的变量运行配置
+        PYTHONPATH="$safe_pythonpath" python3 -m mesonbuild.mesonmain setup build \
+            --buildtype release \
+            --prefix /usr/local \
+            -Dshaderc=enabled \
+            -Dvulkan=enabled \
+            -Dtests=false \
+            -Dbench=false || exit 1
+
+        # 编译与安装
+        PYTHONPATH="$safe_pythonpath" ninja -C build || exit 1
+        sudo PYTHONPATH="$safe_pythonpath" ninja -C build install
+    )
+    rm -rf "$build_dir"
+    sudo ldconfig
+}
+
 build_vs_plugins() {
   log "编译/安装 VapourSynth 插件到 ~/plugins"
 
@@ -683,6 +795,16 @@ build_vs_plugins() {
       cd "$HOME" || exit 1
       git clone https://github.com/HomeOfAviSynthPlusEvolution/L-SMASH-Works.git || exit 1
       cd L-SMASH-Works/VapourSynth || exit 1
+      if grep -q "22.04" /etc/os-release; then
+        log "检测到 Ubuntu 22.04，正在执行兼容性处理..."
+
+        # 1. 回退到不使用 AVChannelLayout 等新 API 的稳定版本
+        # 这个版本完美适配 FFmpeg 4.4，同时也不需要大规模修改代码
+        git checkout .
+        git checkout 70e19fb || log "警告：Git 回退失败，尝试继续使用当前版本"
+      fi
+
+      # 2. 保留并执行你原有的 D3D12 宏补丁逻辑 (无论哪个版本都加上，防止万一)
       local decode_file="../../common/decode.c"
       if [[ -f "$decode_file" ]]; then
           sed -i '/AV_PIX_FMT_D3D12/d' "$decode_file"
@@ -705,6 +827,13 @@ build_vs_plugins() {
       wget -O r9.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI3/archive/refs/tags/r9.tar.gz || exit 1
       tar zxvf r9.tar.gz || exit 1
       cd VapourSynth-EEDI3-r9/ || exit 1
+      if grep -q "22.04" /etc/os-release; then
+        log "检测到 Ubuntu 22.04，正在修复 EEDI3 的 std::max_align_t 编译错误..."
+
+        # 将代码中的 std::max_align_t 替换为全局命名空间的 max_align_t
+        # 这样既能兼容旧编译器，也能在 GCC 11 下正常通过
+        find . -type f -name "EEDI3.cpp" -exec sed -i 's/std::max_align_t/max_align_t/g' {} +
+      fi
       python3 - <<'PY' || exit 1
 import re
 content = open('meson.build', encoding='utf-8', errors='replace').read()
@@ -769,6 +898,8 @@ PY
       wget -O r7.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-DFTTest/archive/refs/tags/r7.tar.gz || exit 1
       tar zxvf r7.tar.gz || exit 1
       cd VapourSynth-DFTTest-r7/ || exit 1
+      log "正在安装 DFTTest 编译依赖: libfftw3-dev..."
+      sudo apt-get install -y libfftw3-dev
       meson setup build || exit 1
       ninja -C build || exit 1
       cp build/libdfttest.so "$plugins_dir/" || exit 1
@@ -829,14 +960,17 @@ PY
     if [[ ! -f "$plugins_dir/libvs_placebo.so" ]]; then
       log "编译 vs-placebo (2.0.0)"
       cd "$HOME" || exit 1
+      install_libplacebo_latest
       wget -O 2.0.0.tar.gz https://github.com/Lypheo/vs-placebo/archive/refs/tags/2.0.0.tar.gz || exit 1
       tar zxvf 2.0.0.tar.gz || exit 1
       cd vs-placebo-2.0.0/ || exit 1
-      export PKG_CONFIG_PATH="$HOME/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
+      export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:$HOME/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
       export C_INCLUDE_PATH="$HOME/.local/include:${C_INCLUDE_PATH:-}"
       export LIBRARY_PATH="$HOME/.local/lib/x86_64-linux-gnu:${LIBRARY_PATH:-}"
       export LD_LIBRARY_PATH="$HOME/.local/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
+      rm -rf libp2p
       git clone https://github.com/sekrit-twc/libp2p.git || exit 1
+      rm -rf build
       meson setup build || exit 1
       ninja -C build || exit 1
       local out
@@ -911,10 +1045,68 @@ PY
       log "已存在 mvtools.so，跳过"
     fi
 
+    log "清理下载压缩包与源码目录"
+    cd "$HOME" || exit 1
+    rm -f \
+      r9.tar.gz r10.tar.gz assrender_linux-x64_v0.38.3.zip r3.tar.gz r7.tar.gz r7.1.tar.gz \
+      r30.tar.gz v0.1-fix.tar.gz 2.0.0.tar.gz v2.tar.gz libzsmooth.x86_64-gnu.so.zip v26.tar.gz \
+      ispc-v1.23.0-linux.tar.gz libassrender.so \
+      || true
+    rm -rf \
+      L-SMASH-Works VapourSynth-EEDI3-r9 VapourSynth-AddGrain-r10 VapourSynth-Bilateral-r3 \
+      VapourSynth-DFTTest-r7 VapourSynth-EEDI2-r7.1 fmtconv-r30 VapourSynth-SangNomMod-0.1-fix \
+      vs-placebo-2.0.0 vs-nlm-ispc-2 vapoursynth-mvtools-26 ispc-v1.23.0-linux \
+      || true
+
     log "VS 插件编译完成，输出目录：$plugins_dir"
   ) || die "VS 插件编译失败"
 
   rm -rf "$build_dir"
+}
+
+install_shaderc_fix() {
+  # 检测是否为 Ubuntu 22.04
+  if [[ -f /etc/os-release ]]; then
+    . /etc/os-release
+    if [[ "$ID" == "ubuntu" && "$VERSION_ID" == "22.04" ]]; then
+      if sudo ldconfig -p 2>/dev/null | grep -qE '\blibshaderc(_shared)?\.so\b'; then
+        log "检测到 Shaderc 已安装（ldconfig 已包含 libshaderc），跳过源码编译"
+        return 0
+      fi
+      if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists shaderc; then
+        log "检测到 Shaderc 已安装（pkg-config 可找到 shaderc），跳过源码编译"
+        return 0
+      fi
+
+      log "检测到官方包版本冲突，正在从源码编译 Shaderc (这可能需要几分钟)..."
+
+      local build_dir
+      build_dir="$(mktemp -d)"
+      (
+          cd "$build_dir" || exit 1
+
+          # 1. 克隆源码
+          git clone https://github.com/google/shaderc . || exit 1
+
+          # 2. 下载依赖 (glslang, spirv-tools, spirv-headers)
+          # 这一步非常关键，它会自动配齐所有缺失的底层组件
+          ./utils/git-sync-deps || exit 1
+
+          # 3. 配置与编译
+          mkdir build && cd build
+          cmake -GNinja \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DSHADERC_SKIP_TESTS=ON \
+              -DCMAKE_INSTALL_PREFIX=/usr/local .. || exit 1
+
+          ninja || exit 1
+          sudo ninja install
+      )
+      rm -rf "$build_dir"
+      sudo ldconfig
+      log "Shaderc 源码编译并安装完成。"
+    fi
+  fi
 }
 
 command -v sudo >/dev/null 2>&1 || die "缺少 sudo"
@@ -922,6 +1114,7 @@ sudo -v
 
 require_supported_os
 repair_broken_apt_state
+install_shaderc_fix
 
 sys_deps=(
   python3 python3-pip python3-venv
