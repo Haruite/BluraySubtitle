@@ -1,7 +1,9 @@
 # BluraySubtitle
-本工具用于将分集的字幕合并成适合蓝光播放的字幕。  
-因为原盘一般都是几集整一个盘，连续播放，主播放列表一般有2-6集不等。而字幕组制作的字幕基本上都是按单集划分，如果想用 PowerDVD 或者 JMC 看原盘的话就面临字幕不匹配的问题，解决方法只能是合并字幕，而这个操作手动做事很费时间的。所以我研究了这个问题，写了一个全自动合并字幕的脚本，只需要选择原盘所在的文件夹和字幕所在的文件夹，就能合成原盘播放所需的字幕。  
-代码：https://github.com/Haruite/BluraySubtitle/blob/main/BluraySubtitle.py
+本工具包含多个功能。  
+1.合并字幕  
+2.给mkv添加章节  
+3.原盘remux   
+4.原盘压制  
 
 ### Feature:
 1. 支持原盘为 iso 文件 (仅限 Windows 系统 Windows 8 及以上可用) 
@@ -107,4 +109,9 @@ bluray-subtitle-ubuntu
 bluray-subtitle-ubuntu /bin/bash
 ```  
 容器内安装的软件包括：mpv/ffmpeg/ffprobe/flac/x265/mkvtoolnix(-gui)/vapoursynth/vsedit  
-注意：容器内只携带常用的 vs 滤镜，如果需要用到其他滤镜需要自行编译
+注意：容器内只携带常用的 vs 滤镜，如果需要用到其他滤镜需要自行编译  
+已配置 Github Actions 推镜像送到 DockerHub，安装 Docker 后执行  
+```docker pull haruite/bluraysubtitle:latest```  
+即可拉取最新版镜像
+#### linux 支持
+build.sh 可以用于构建 linux 运行脚本所需要的环境，支持 Ubuntu 版本 >= 22.04 或者 Debain 版本 >= 12 
