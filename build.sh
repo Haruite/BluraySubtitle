@@ -820,10 +820,10 @@ PY
       wget -O 2.0.0.tar.gz https://github.com/Lypheo/vs-placebo/archive/refs/tags/2.0.0.tar.gz || exit 1
       tar zxvf 2.0.0.tar.gz || exit 1
       cd vs-placebo-2.0.0/ || exit 1
-      export PKG_CONFIG_PATH="$HOME/.local/lib/x86_64-linux-gnu/pkgconfig:$PKG_CONFIG_PATH"
-      export C_INCLUDE_PATH="$HOME/.local/include:$C_INCLUDE_PATH"
-      export LIBRARY_PATH="$HOME/.local/lib/x86_64-linux-gnu:$LIBRARY_PATH"
-      export LD_LIBRARY_PATH="$HOME/.local/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
+      export PKG_CONFIG_PATH="$HOME/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
+      export C_INCLUDE_PATH="$HOME/.local/include:${C_INCLUDE_PATH:-}"
+      export LIBRARY_PATH="$HOME/.local/lib/x86_64-linux-gnu:${LIBRARY_PATH:-}"
+      export LD_LIBRARY_PATH="$HOME/.local/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
       git clone https://github.com/sekrit-twc/libp2p.git || exit 1
       meson setup build || exit 1
       ninja -C build || exit 1
