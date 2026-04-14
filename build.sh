@@ -178,10 +178,12 @@ PY
       die "未找到 mkvtoolnix*.deb（编译可能失败）"
     fi
 
-    for deb in "${debs[@]}"; do
-      log "安装：$(basename "$deb")"
-      sudo dpkg -i "$deb" || exit 1
-    done
+    log "一次性安装全部 mkvtoolnix deb（自动处理依赖顺序）"
+    if ! sudo apt-get install -y "${debs[@]}"; then
+      log "apt 本地 deb 安装失败，回退到 dpkg + 修复依赖"
+      sudo dpkg -i "${debs[@]}" || true
+      sudo apt-get -f install -y || exit 1
+    fi
   ) || die "mkvtoolnix 编译/安装失败（如提示缺依赖，可手动补齐后重试）"
 
   rm -rf "$build_dir"
