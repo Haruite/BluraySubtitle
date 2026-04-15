@@ -447,59 +447,66 @@ install_lsmash() {
 }
 
 install_x265() {
-  log "安装 x265（从源码编译并安装）"
+  log "开始安装 x265 (Yuuki-Asuna 版)"
 
+  # 如果已经存在则跳过
   if [[ -x "/usr/bin/x265" ]] || command -v x265 >/dev/null 2>&1; then
-    log "检测到 x265 已安装（$(command -v x265 || echo "/usr/bin/x265")），跳过编译安装"
+    log "检测到 x265 已存在，跳过编译。"
     return 0
   fi
 
-  install_lsmash
-
-  local deps=(build-essential cmake git yasm nasm)
-  local missing_deps=()
-  for dep in "${deps[@]}"; do
-    if ! dpkg-query -W -f='${Status}' "$dep" 2>/dev/null | grep -q "install ok installed"; then
-      missing_deps+=("$dep")
-    fi
-  done
-  if (( ${#missing_deps[@]} > 0 )); then
-    sudo apt-get update
-    sudo apt-get install -y "${missing_deps[@]}" || die "x265 依赖安装失败，请检查网络或包名"
-  fi
+  # 依赖安装
+  local deps=(build-essential cmake git yasm nasm wget)
+  sudo apt-get update && sudo apt-get install -y "${deps[@]}" || die "x265 依赖安装失败"
 
   local build_dir
   build_dir="$(mktemp -d)"
 
   (
     cd "$build_dir" || exit 1
-    log "下载 x265-Yuuki-Asuna 源码包"
+    log "下载 x265-Yuuki-Asuna 源码..."
     wget https://github.com/msg7086/x265-Yuuki-Asuna/archive/refs/tags/Asuna-2.8.tar.gz || exit 1
-    log "解压 x265 源码包"
     tar zxvf Asuna-2.8.tar.gz || exit 1
-    
+
     cd x265-Yuuki-Asuna-Asuna-2.8/source || exit 1
+
+    # --- 针对 Ubuntu 26.04 (CMake 4.x) 的特殊处理 ---
+    if grep -q "26.04" /etc/os-release; then
+      log "检测到 Ubuntu 26.04，正在应用 CMake 4.x 兼容性补丁..."
+
+      # 1. 强制提升最低版本要求到 3.5
+      sed -i 's/cmake_minimum_required(VERSION .*)/cmake_minimum_required(VERSION 3.5)/g' CMakeLists.txt
+
+      # 2. 移除 CMake 4.x 不再支持的 OLD 策略设置
+      sed -i '/cmake_policy(SET CMP0025 OLD)/d' CMakeLists.txt
+      sed -i '/cmake_policy(SET CMP0054 OLD)/d' CMakeLists.txt
+
+      # 3. 修正 project() 声明顺序
+      # 先删掉原有的 cmake_minimum_required 行（通常在第20行左右）防止重复
+      sed -i '/cmake_minimum_required/d' CMakeLists.txt
+      # 在文件最开头插入新的声明
+      sed -i '1i cmake_minimum_required(VERSION 3.5)' CMakeLists.txt
+    fi
+
     mkdir -p build && cd build || exit 1
-    
-    log "配置 cmake (静态编译等选项)"
+
+    log "配置 CMake 项目..."
     cmake -G "Unix Makefiles" \
           -DENABLE_SHARED=OFF \
           -DHIGH_BIT_DEPTH=ON \
           -DSTATIC_LINK_CRT=ON \
           -DCMAKE_EXE_LINKER_FLAGS="-static" \
           .. || exit 1
-          
-    log "编译 x265"
+
+    log "正在编译 x265 (使用 $(nproc) 核心)..."
     make -j"$(nproc)" || exit 1
-    
-    log "安装 x265 到 /usr/bin/x265"
+
+    log "安装编译产物..."
     sudo cp x265 /usr/bin/x265 || exit 1
-  ) || die "x265 编译/安装失败"
+  ) || die "x265 编译或安装过程中出错"
 
   rm -rf "$build_dir"
-
-  command -v x265 >/dev/null 2>&1 || die "x265 安装后仍未在 PATH 中找到"
-  log "x265 安装完成"
+  log "x265 安装成功！"
 }
 
 install_flac() {
@@ -675,6 +682,20 @@ install_vapoursynth() {
     log "解压 VapourSynth 源码包"
     tar zxvf R57.A12.tar.gz || exit 1
     cd vapoursynth-classic-R57.A12 || exit 1
+
+    # --- 针对 Ubuntu 26.04 (新版 FFmpeg) 的补丁判断 ---
+    if grep -q "26.04" /etc/os-release; then
+      log "检测到 Ubuntu 26.04，正在应用 FFmpeg 7.0+ API 兼容性补丁..."
+
+      # 1. 修复 avcodec_close 被移除的问题
+      # 将 avcodec_close(d->avctx); 替换为 avcodec_free_context(&(d->avctx));
+      if [ -f "src/filters/subtext/image.cpp" ]; then
+        sed -i 's/avcodec_close(\(.*\));/avcodec_free_context(\&\(\1\));/g' src/filters/subtext/image.cpp
+      fi
+
+      # 2. 针对 GCC 15 可能存在的严格 C++ 警告，增强 CXXFLAGS
+      export CXXFLAGS="${CXXFLAGS:-} -fpermissive -Wno-error=narrowing"
+    fi
     
     log "配置与编译 VapourSynth"
     ./autogen.sh || exit 1
