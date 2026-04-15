@@ -114,4 +114,4 @@ bluray-subtitle-ubuntu /bin/bash
 ```docker pull haruite/bluraysubtitle:latest```  
 即可拉取最新版镜像
 #### linux 支持
-build.sh 可以用于构建 linux 运行脚本所需要的环境，支持 Ubuntu 版本 >= 22.04 或者 Debain 版本 >= 12 
+build.sh 可以用于构建 linux 运行脚本所需要的环境，支持 Ubuntu 版本 >= 22.04 或者 Debain 版本 >= 12，已测试版本：Ubuntu 22.04 | Ubuntu 24.04 | Ubuntu 25.10 | Ubuntu 26.04 | Debian 12 | Debian 13
