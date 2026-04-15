@@ -272,10 +272,19 @@ install_mpv() {
 
   local required_mpv_version="0.41.0"
   local is_ubuntu_2204="false"
+  local is_debian_12="false"
+  local needs_meson_prebuild="false"
   if [[ -f /etc/os-release ]]; then
     . /etc/os-release || true
     if [[ "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" == "22.04" ]]; then
       is_ubuntu_2204="true"
+      needs_meson_prebuild="true"
+    fi
+    if [[ "${ID:-}" == "debian" ]]; then
+      if dpkg --compare-versions "${VERSION_ID:-0}" ge "12" && dpkg --compare-versions "${VERSION_ID:-0}" lt "13"; then
+        is_debian_12="true"
+        needs_meson_prebuild="true"
+      fi
     fi
   fi
 
@@ -340,7 +349,7 @@ install_mpv() {
     sudo apt-get install -y "${missing_deps[@]}" || die "mpv 依赖安装失败，请检查网络或包名"
   fi
 
-  if [[ "$is_ubuntu_2204" == "true" ]]; then
+  if [[ "$needs_meson_prebuild" == "true" ]]; then
     ensure_meson_version
     if ! sudo python3 -m pip --version >/dev/null 2>&1; then
       sudo apt-get update
@@ -367,8 +376,8 @@ install_mpv() {
 
     echo "--enable-libbluray" > ffmpeg_options || exit 1
     echo "-Dlibbluray=enabled" > mpv_options || exit 1
-    if [[ "$is_ubuntu_2204" == "true" ]]; then
-      log "Ubuntu 22.04 检测到 Vulkan 头文件兼容性问题，禁用 libplacebo Vulkan 构建以保证 mpv 可编译"
+    if [[ "$is_ubuntu_2204" == "true" || "$is_debian_12" == "true" ]]; then
+      log "检测到系统需要兼容模式（Ubuntu 22.04/Debian 12），禁用 mpv-build 内置 libplacebo 的 Vulkan/Shaderc 构建以保证 mpv 可编译"
       cat > libplacebo_options <<'EOF'
 -Dvulkan=disabled
 -Dshaderc=disabled
@@ -384,7 +393,7 @@ EOF
 
   rm -rf "$build_dir"
   log "mpv 安装完成"
-  if [[ "$is_ubuntu_2204" != "true" ]]; then
+  if [[ "$needs_meson_prebuild" != "true" ]]; then
     ensure_meson_version
   fi
 }
@@ -558,32 +567,46 @@ install_flac() {
 }
 
 install_zimg_latest() {
-  # 检测系统 ID 和 版本号
-  if [[ -f /etc/os-release ]]; then
-    . /etc/os-release
-    # 仅在 ID 为 ubuntu 且版本为 22.04 时执行
-    if [[ "$ID" == "ubuntu" && "$VERSION_ID" == "22.04" ]]; then
-      log "检测到 Ubuntu 22.04，系统自带 zimg 版本过低，开始编译安装最新版 zimg..."
-
-      local build_dir
-      build_dir="$(mktemp -d)"
-      (
-        cd "$build_dir" || exit 1
-        git clone --depth 1 --recursive https://github.com/sekrit-twc/zimg.git . || exit 1
-        ./autogen.sh || exit 1
-        ./configure || exit 1
-        make -j"$(nproc)" || exit 1
-        sudo make install || exit 1
-      )
-      rm -rf "$build_dir"
-      sudo ldconfig
-      log "最新版 zimg 安装完成"
-    else
-      log "当前系统版本为 ${NAME:-Ubuntu} ${VERSION_ID:-未知}，跳过手动编译 zimg"
-      # 非 22.04 系统通常直接安装包即可
-      sudo apt-get install -y libzimg-dev
-    fi
+  local header=""
+  if [[ -f /usr/local/include/zimg.h ]]; then
+    header="/usr/local/include/zimg.h"
+  elif [[ -f /usr/include/zimg.h ]]; then
+    header="/usr/include/zimg.h"
   fi
+
+  if [[ -n "${header:-}" ]] && grep -q "ZIMG_TRANSFER_ST428" "$header"; then
+    log "检测到 zimg 已包含 ZIMG_TRANSFER_ST428，跳过升级"
+    return 0
+  fi
+
+  local deps=(build-essential autoconf automake libtool pkg-config git)
+  local missing_deps=()
+  local dep
+  for dep in "${deps[@]}"; do
+    if ! dpkg-query -W -f='${Status}' "$dep" 2>/dev/null | grep -q "install ok installed"; then
+      missing_deps+=("$dep")
+    fi
+  done
+  if (( ${#missing_deps[@]} > 0 )); then
+    sudo apt-get update
+    sudo apt-get install -y "${missing_deps[@]}" || die "zimg 编译依赖安装失败"
+  fi
+
+  log "当前 zimg 版本过低（缺少 ZIMG_TRANSFER_ST428），开始编译安装最新版 zimg..."
+
+  local build_dir
+  build_dir="$(mktemp -d)"
+  (
+    cd "$build_dir" || exit 1
+    git clone --depth 1 --recursive https://github.com/sekrit-twc/zimg.git . || exit 1
+    ./autogen.sh || exit 1
+    ./configure --prefix=/usr/local || exit 1
+    make -j"$(nproc)" || exit 1
+    sudo make install || exit 1
+  ) || die "zimg 编译/安装失败"
+  rm -rf "$build_dir"
+  sudo ldconfig
+  log "最新版 zimg 安装完成"
 }
 
 install_vapoursynth() {
@@ -803,6 +826,14 @@ install_libplacebo_latest() {
     local py_ver
     py_ver=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
     local safe_pythonpath="${HOME}/.local/lib/python${py_ver}/site-packages:${PYTHONPATH:-}"
+    local shaderc_opt="-Dshaderc=enabled"
+    if [[ -f /etc/os-release ]]; then
+      . /etc/os-release || true
+      if [[ "${ID:-}" == "debian" ]] && dpkg --compare-versions "${VERSION_ID:-0}" ge "12" && dpkg --compare-versions "${VERSION_ID:-0}" lt "13"; then
+        shaderc_opt="-Dshaderc=disabled"
+        log "检测到 Debian 12，启用 libplacebo 兼容参数：禁用 shaderc"
+      fi
+    fi
 
     local build_dir
     build_dir="$(mktemp -d)"
@@ -816,17 +847,22 @@ install_libplacebo_latest() {
         PYTHONPATH="$safe_pythonpath" python3 -m mesonbuild.mesonmain setup build \
             --buildtype release \
             --prefix /usr/local \
-            -Dshaderc=enabled \
+            "$shaderc_opt" \
             -Dvulkan=enabled \
             -Dtests=false \
-            -Dbench=false || exit 1
+            -Dbench=false \
+            -Ddemos=false || exit 1
 
         # 编译与安装
         PYTHONPATH="$safe_pythonpath" ninja -C build || exit 1
-        sudo PYTHONPATH="$safe_pythonpath" ninja -C build install
-    )
+        sudo PYTHONPATH="$safe_pythonpath" ninja -C build install || exit 1
+    ) || die "libplacebo 编译/安装失败"
     rm -rf "$build_dir"
     sudo ldconfig
+
+    if ! command -v pkg-config >/dev/null 2>&1 || ! pkg-config --exists libplacebo; then
+      die "libplacebo 安装后未被 pkg-config 识别"
+    fi
 }
 
 build_vs_plugins() {
@@ -842,6 +878,7 @@ build_vs_plugins() {
     build-essential git wget tar unzip sed
     meson ninja-build cmake
     autoconf automake libtool pkg-config
+    libxxhash-dev
     python3 python3-pip
   )
   local missing_deps=()
@@ -866,11 +903,26 @@ build_vs_plugins() {
       cd "$HOME" || exit 1
       git clone https://github.com/HomeOfAviSynthPlusEvolution/L-SMASH-Works.git || exit 1
       cd L-SMASH-Works/VapourSynth || exit 1
-      if grep -q "22.04" /etc/os-release; then
-        log "检测到 Ubuntu 22.04，正在执行兼容性处理..."
-
-        # 1. 回退到不使用 AVChannelLayout 等新 API 的稳定版本
-        # 这个版本完美适配 FFmpeg 4.4，同时也不需要大规模修改代码
+      local need_compat="false"
+      if [[ -f /etc/os-release ]]; then
+        . /etc/os-release || true
+        if [[ "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" == "22.04" ]]; then
+          need_compat="true"
+        fi
+        if [[ "${ID:-}" == "debian" && "${VERSION_ID:-}" == "12" ]]; then
+          need_compat="true"
+        fi
+      fi
+      if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libavcodec; then
+        local avcodec_ver avcodec_major
+        avcodec_ver="$(pkg-config --modversion libavcodec 2>/dev/null | head -n 1 || true)"
+        avcodec_major="${avcodec_ver%%.*}"
+        if [[ "$avcodec_major" =~ ^[0-9]+$ ]] && (( avcodec_major < 60 )); then
+          need_compat="true"
+        fi
+      fi
+      if [[ "$need_compat" == "true" ]]; then
+        log "检测到旧版 FFmpeg API（或系统需兼容模式），回退 L-SMASH-Works 到兼容提交"
         git checkout .
         git checkout 70e19fb || log "警告：Git 回退失败，尝试继续使用当前版本"
       fi
@@ -925,13 +977,8 @@ PY
       wget -O r9.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI3/archive/refs/tags/r9.tar.gz || exit 1
       tar zxvf r9.tar.gz || exit 1
       cd VapourSynth-EEDI3-r9/ || exit 1
-      if grep -q "22.04" /etc/os-release; then
-        log "检测到 Ubuntu 22.04，正在修复 EEDI3 的 std::max_align_t 编译错误..."
-
-        # 将代码中的 std::max_align_t 替换为全局命名空间的 max_align_t
-        # 这样既能兼容旧编译器，也能在 GCC 11 下正常通过
-        find . -type f -name "EEDI3.cpp" -exec sed -i 's/std::max_align_t/max_align_t/g' {} +
-      fi
+      log "修复 EEDI3 的 std::max_align_t 编译兼容性问题"
+      find . -type f -name "EEDI3.cpp" -exec sed -i 's/std::max_align_t/max_align_t/g' {} +
       python3 - <<'PY' || exit 1
 import re
 content = open('meson.build', encoding='utf-8', errors='replace').read()
@@ -939,6 +986,7 @@ pattern = r"incdir = include_directories\(.*?check: true,.*?\.stdout\(\)\.strip\
 new_content = re.sub(pattern, "incdir = '/usr/local/include/vapoursynth'", content, flags=re.DOTALL)
 open('meson.build', 'w', encoding='utf-8').write(new_content)
 PY
+      rm -rf build
       meson setup build || exit 1
       ninja -C build || exit 1
       cp build/eedi3m.so "$plugins_dir/" || exit 1
