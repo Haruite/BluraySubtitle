@@ -1109,6 +1109,22 @@ PY
       log "已存在 libfmtconv.so，跳过"
     fi
 
+    if [[ ! -f "$plugins_dir/libremovegrain.so" ]]; then
+      log "编译 vs-removegrain (R1)"
+      cd "$HOME" || exit 1
+      wget https://github.com/vapoursynth/vs-removegrain/archive/refs/tags/R1.tar.gz || exit 1
+      tar zxvf R1.tar.gz || exit 1
+      cd vs-removegrain-R1/src || exit 1
+      g++ -shared -fPIC -O3 -Wall \
+        $(pkg-config --cflags vapoursynth) \
+        clense.cpp removegrainvs.cpp repairvs.cpp shared.cpp verticalcleaner.cpp \
+        -o libremovegrain.so || exit 1
+      cp libremovegrain.so "$plugins_dir/" || exit 1
+      cd "$build_dir" || exit 1
+    else
+      log "已存在 libremovegrain.so，跳过"
+    fi
+
     if [[ ! -f "$plugins_dir/libsangnommod.so" ]]; then
       log "编译 VapourSynth-SangNomMod (v0.1-fix)"
       cd "$HOME" || exit 1
@@ -1218,12 +1234,12 @@ PY
     cd "$HOME" || exit 1
     rm -f \
       r9.tar.gz r10.tar.gz assrender_linux-x64_v0.38.3.zip r3.tar.gz r7.tar.gz r7.1.tar.gz \
-      r30.tar.gz v0.1-fix.tar.gz 2.0.0.tar.gz v2.tar.gz libzsmooth.x86_64-gnu.so.zip v26.tar.gz \
+      r30.tar.gz R1.tar.gz v0.1-fix.tar.gz 2.0.0.tar.gz v2.tar.gz libzsmooth.x86_64-gnu.so.zip v26.tar.gz \
       ispc-v1.23.0-linux.tar.gz libassrender.so \
       || true
     rm -rf \
       L-SMASH-Works VapourSynth-EEDI3-r9 VapourSynth-AddGrain-r10 VapourSynth-Bilateral-r3 \
-      VapourSynth-DFTTest-r7 VapourSynth-EEDI2-r7.1 fmtconv-r30 VapourSynth-SangNomMod-0.1-fix \
+      VapourSynth-DFTTest-r7 VapourSynth-EEDI2-r7.1 fmtconv-r30 vs-removegrain-R1 VapourSynth-SangNomMod-0.1-fix \
       vs-placebo-2.0.0 vs-nlm-ispc-2 vapoursynth-mvtools-26 ispc-v1.23.0-linux \
       || true
 
