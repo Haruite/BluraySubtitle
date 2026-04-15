@@ -786,6 +786,15 @@ install_vapoursynth_editor() {
     tar -zxvf R19-mod-6.9.tar.gz --strip-components=1 || exit 1
     sudo ldconfig
 
+    if [[ -f "resources/vsedit.png" ]]; then
+      sudo mkdir -p /usr/local/share/icons/hicolor/256x256/apps
+      sudo cp -f "resources/vsedit.png" /usr/local/share/icons/hicolor/256x256/apps/vsedit.png || exit 1
+    fi
+    if [[ -f "resources/vsedit.svg" ]]; then
+      sudo mkdir -p /usr/local/share/icons/hicolor/scalable/apps
+      sudo cp -f "resources/vsedit.svg" /usr/local/share/icons/hicolor/scalable/apps/vsedit.svg || exit 1
+    fi
+
     cd pro || exit 1
     
     export CPLUS_INCLUDE_PATH=/usr/local/include/vapoursynth
@@ -1267,15 +1276,18 @@ install_desktop_shortcuts() {
   mkdir -p "$desktop_dir" || true
 
   local found_any="false"
-  if [[ -d "/usr/local/share/applications" ]]; then
-    while IFS= read -r -d '' src; do
-      found_any="true"
-      cp -f "$src" "$desktop_dir/$(basename "$src")" || die "复制 desktop 文件失败：$src"
-      chmod +x "$desktop_dir/$(basename "$src")" || true
-    done < <(find /usr/local/share/applications -maxdepth 1 -type f -name "*.desktop" \( -iname "*mpv*" -o -iname "*mkvtoolnix*" \) -print0)
-  fi
+  local app_dir
+  for app_dir in /usr/local/share/applications /usr/share/applications; do
+    if [[ -d "$app_dir" ]]; then
+      while IFS= read -r -d '' src; do
+        found_any="true"
+        cp -f "$src" "$desktop_dir/$(basename "$src")" || die "复制 desktop 文件失败：$src"
+        chmod +x "$desktop_dir/$(basename "$src")" || true
+      done < <(find "$app_dir" -maxdepth 1 -type f -name "*.desktop" \( -iname "*mpv*" -o -iname "*mkvtoolnix*" \) -print0)
+    fi
+  done
   if [[ "$found_any" != "true" ]]; then
-    log "未在 /usr/local/share/applications 中找到 mpv/mkvtoolnix 的 desktop 文件"
+    log "未在 /usr/local/share/applications 或 /usr/share/applications 中找到 mpv/mkvtoolnix 的 desktop 文件"
   fi
 
   if [[ -x "/usr/local/bin/vsedit" ]]; then
@@ -1288,7 +1300,7 @@ Comment=VapourSynth Editor
 Exec=/usr/local/bin/vsedit %F
 Terminal=false
 Categories=AudioVideo;Video;
-Icon=applications-multimedia
+Icon=vsedit
 StartupNotify=true
 EOF
     chmod +x "$vsedit_desktop" || true
