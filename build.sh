@@ -659,6 +659,20 @@ install_vapoursynth() {
     log "解压 VapourSynth 源码包"
     tar zxvf R57.A12.tar.gz || exit 1
     cd vapoursynth-classic-R57.A12 || exit 1
+
+    # --- 针对 Ubuntu 26.04 (新版 FFmpeg) 的补丁判断 ---
+    if grep -q "26.04" /etc/os-release; then
+      log "检测到 Ubuntu 26.04，正在应用 FFmpeg 7.0+ API 兼容性补丁..."
+
+      # 1. 修复 avcodec_close 被移除的问题
+      # 将 avcodec_close(d->avctx); 替换为 avcodec_free_context(&(d->avctx));
+      if [ -f "src/filters/subtext/image.cpp" ]; then
+        sed -i 's/avcodec_close(\(.*\));/avcodec_free_context(\&\(\1\));/g' src/filters/subtext/image.cpp
+      fi
+
+      # 2. 针对 GCC 15 可能存在的严格 C++ 警告，增强 CXXFLAGS
+      export CXXFLAGS="${CXXFLAGS:-} -fpermissive -Wno-error=narrowing"
+    fi
     
     log "配置与编译 VapourSynth"
     ./autogen.sh || exit 1
