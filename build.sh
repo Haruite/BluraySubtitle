@@ -1249,6 +1249,54 @@ PY
   rm -rf "$build_dir"
 }
 
+install_desktop_shortcuts() {
+  local desktop_dir=""
+  if command -v xdg-user-dir >/dev/null 2>&1; then
+    desktop_dir="$(xdg-user-dir DESKTOP 2>/dev/null || true)"
+  fi
+  if [[ -z "${desktop_dir:-}" || "$desktop_dir" == "$HOME" ]]; then
+    if [[ -d "$HOME/Desktop" ]]; then
+      desktop_dir="$HOME/Desktop"
+    elif [[ -d "$HOME/桌面" ]]; then
+      desktop_dir="$HOME/桌面"
+    else
+      desktop_dir="$HOME/Desktop"
+    fi
+  fi
+
+  mkdir -p "$desktop_dir" || true
+
+  local found_any="false"
+  if [[ -d "/usr/local/share/applications" ]]; then
+    while IFS= read -r -d '' src; do
+      found_any="true"
+      cp -f "$src" "$desktop_dir/$(basename "$src")" || die "复制 desktop 文件失败：$src"
+      chmod +x "$desktop_dir/$(basename "$src")" || true
+    done < <(find /usr/local/share/applications -maxdepth 1 -type f -name "*.desktop" \( -iname "*mpv*" -o -iname "*mkvtoolnix*" \) -print0)
+  fi
+  if [[ "$found_any" != "true" ]]; then
+    log "未在 /usr/local/share/applications 中找到 mpv/mkvtoolnix 的 desktop 文件"
+  fi
+
+  if [[ -x "/usr/local/bin/vsedit" ]]; then
+    local vsedit_desktop="$desktop_dir/vsedit.desktop"
+    cat > "$vsedit_desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=vsedit
+Comment=VapourSynth Editor
+Exec=/usr/local/bin/vsedit %F
+Terminal=false
+Categories=AudioVideo;Video;
+Icon=applications-multimedia
+StartupNotify=true
+EOF
+    chmod +x "$vsedit_desktop" || true
+  fi
+
+  log "桌面图标已准备完成：$desktop_dir"
+}
+
 install_shaderc_fix() {
   # 检测是否为 Ubuntu 22.04
   if [[ -f /etc/os-release ]]; then
@@ -1336,6 +1384,7 @@ install_vapoursynth
 install_vapoursynth_scripts
 install_vapoursynth_editor
 build_vs_plugins
+install_desktop_shortcuts
 
 log "创建 Python 虚拟环境并安装 Python 依赖（pycountry PyQt6 librosa）"
 if [[ ! -d "$REPO_DIR/.venv" ]]; then
