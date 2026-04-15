@@ -455,6 +455,8 @@ install_x265() {
     return 0
   fi
 
+  install_lsmash
+
   # 依赖安装
   local deps=(build-essential cmake git yasm nasm wget)
   sudo apt-get update && sudo apt-get install -y "${deps[@]}" || die "x265 依赖安装失败"
