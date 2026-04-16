@@ -79,6 +79,7 @@
 #### 原盘压制
 和原盘 remux 大体相同，只不过多了一些选项。  
 可以选择每集和各个特典的 vpy 文件，默认使用当前目录下的 vpy.vpy 文件  
+可以编辑 vpy 文件（使用系统关联，Docker 是 gedit），预览 vpy 文件（使用 vsedit）  
 压制功能区可以选择 vspipe 和 x265 的来源（程序自带或系统），可以选择和编辑 x265 参数，可以选择字幕封装方式（外挂或内挂或内嵌）  
 设置完毕，点击开始压制按钮，选择输出文件夹，等待完成即可。  
 #### Docker 支持
@@ -108,10 +109,10 @@ bluray-subtitle-ubuntu
     -v $HOME:/data \
 bluray-subtitle-ubuntu /bin/bash
 ```  
-容器内安装的软件包括：mpv/ffmpeg/ffprobe/flac/x265/mkvtoolnix(-gui)/vapoursynth/vsedit  
+容器内安装的软件包括：mpv/ffmpeg/ffprobe/flac/x265/mkvtoolnix(-gui)/vapoursynth/vsedit/gedit/nautilus  
 注意：容器内只携带常用的 vs 滤镜，如果需要用到其他滤镜需要自行编译  
 已配置 Github Actions 推镜像送到 DockerHub，安装 Docker 后执行  
 ```docker pull haruite/bluraysubtitle:latest```  
 即可拉取最新版镜像
 #### linux 支持
-build.sh 可以用于构建 linux 运行脚本所需要的环境，支持 Ubuntu 版本 >= 22.04 或者 Debain 版本 >= 12，已测试版本：Ubuntu 22.04 | Ubuntu 24.04 | Ubuntu 25.10 | Ubuntu 26.04 | Debian 12 | Debian 13
+build.sh 可以用于构建 linux 运行脚本所需要的环境，支持 Ubuntu 版本 >= 22.04 或者 Debain 版本 >= 12，已在 hetzner 服务器测试 Ubuntu 22.04 | Ubuntu 24.04 | Ubuntu 25.10 | Debian 12 | Debian 13 系统安装脚本， 均可一键安装成功，本地测试 Ubuntu 26.04 beata 版安装成功。建议通过 ssh 方式安装，直接远程桌面在终端安装不会使用 tmux （其实是有些问题我解决不了）。如果想要服务器挂机压制，首先安装远程桌面，推荐 Ubuntu 25.10 + xfce4 + xrdp，系统可以先安装 Ubuntu 24.04 然后 do-release-upgrade 升级上去  
