@@ -114,7 +114,7 @@ ENV PLUGIN_PATH=/app/plugins/
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y libunwind8 libunwind-dev xdg-utils libgl1-mesa-dri libglx-mesa0 mesa-vulkan-drivers && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y libunwind8 libunwind-dev xdg-utils nautilus libgl1-mesa-dri libglx-mesa0 mesa-vulkan-drivers && rm -rf /var/lib/apt/lists/*
 
 # 启动程序
 CMD ["sh", "-c", "python3 BluraySubtitle.py"]
