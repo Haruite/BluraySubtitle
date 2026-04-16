@@ -32,7 +32,7 @@ tmux_run() {
     return 0
   fi
 
-  log "执行：$title"
+  printf "\n[BluraySubtitle][SETUP] 执行：%s" "$title"
   local logfile
   logfile="$(mktemp -t bluraysubtitle.XXXXXX.log)"
 
@@ -103,7 +103,7 @@ tmux_run() {
 
   if [[ "$ec" == "0" ]]; then
     rm -f "$logfile" || true
-    log_blue "执行：$title"
+    printf "\r\033[2K\033[34m[BluraySubtitle][SETUP] 执行：%s\033[0m\n\n" "$title"
     return 0
   fi
 
@@ -789,9 +789,9 @@ install_vapoursynth() {
     apt_update
     apt_install python3-pip || die "安装 python3-pip 失败"
   fi
-  if ! python3 -m pip install --user --upgrade cython --break-system-packages 2>&1 | sed '/^Requirement already satisfied: cython /d'; then
+  if ! python3 -m pip install --user --upgrade cython --break-system-packages >/dev/null 2>&1; then
     log "当前 pip 不支持 --break-system-packages，回退到兼容参数重试"
-    python3 -m pip install --user --upgrade cython 2>&1 | sed '/^Requirement already satisfied: cython /d' || die "Cython 升级失败"
+    python3 -m pip install --user --upgrade cython >/dev/null 2>&1 || die "Cython 升级失败"
   fi
   export PATH="$HOME/.local/bin:$PATH"
 
@@ -1223,7 +1223,7 @@ PY
       tmux_run "解压 Bilateral r3" tar zxvf r3.tar.gz || exit 1
       cd VapourSynth-Bilateral-r3/ || exit 1
       chmod +x configure || exit 1
-      ./configure || exit 1
+      tmux_run "Bilateral configure" ./configure || exit 1
       tmux_run "Bilateral make" make -j"$(nproc)" || exit 1
       local out
       out="$(find "$PWD" -maxdepth 3 -name "libbilateral.so" -type f | head -n 1)"
@@ -1270,8 +1270,8 @@ PY
       tmux_run "下载 fmtconv r30" wget -O r30.tar.gz https://github.com/EleonoreMizo/fmtconv/archive/refs/tags/r30.tar.gz || exit 1
       tmux_run "解压 fmtconv r30" tar zxvf r30.tar.gz || exit 1
       cd fmtconv-r30/build/unix || exit 1
-      ./autogen.sh || exit 1
-      ./configure || exit 1
+      tmux_run "fmtconv autogen" ./autogen.sh || exit 1
+      tmux_run "fmtconv configure" ./configure || exit 1
       tmux_run "fmtconv make" make -j"$(nproc)" || exit 1
       local out
       out="$(find "$PWD/.libs" -maxdepth 1 -name "libfmtconv.so" -type f | head -n 1)"
@@ -1304,7 +1304,7 @@ PY
       tmux_run "下载 SangNomMod v0.1-fix" wget -O v0.1-fix.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-SangNomMod/archive/refs/tags/v0.1-fix.tar.gz || exit 1
       tmux_run "解压 SangNomMod v0.1-fix" tar zxvf v0.1-fix.tar.gz || exit 1
       cd VapourSynth-SangNomMod-0.1-fix/ || exit 1
-      ./configure || exit 1
+      tmux_run "SangNomMod configure" ./configure || exit 1
       tmux_run "SangNomMod make" make -j"$(nproc)" || exit 1
       local out
       out="$(find "$PWD" -maxdepth 3 -name "libsangnommod.so" -type f | head -n 1)"
