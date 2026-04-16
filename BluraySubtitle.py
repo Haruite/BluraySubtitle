@@ -35,11 +35,11 @@ try:
     import soundfile
 except Exception:
     soundfile = None
-from PyQt6.QtCore import QCoreApplication, Qt, QPoint, QObject, QThread, QTimer, QEventLoop, pyqtSignal
+from PyQt6.QtCore import QCoreApplication, Qt, QPoint, QObject, QThread, QTimer, QEventLoop, QProcess, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QDragMoveEvent, QDropEvent, QPaintEvent, QDragEnterEvent
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLabel, QToolButton, QLineEdit, \
     QMessageBox, QHBoxLayout, QGroupBox, QCheckBox, QProgressDialog, QProgressBar, QRadioButton, QButtonGroup, \
-    QTableWidget, QTableWidgetItem, QDialog, QPushButton, QComboBox, QMenu, QAbstractItemView, QPlainTextEdit, QSizePolicy, QHeaderView
+    QTableWidget, QTableWidgetItem, QDialog, QPushButton, QComboBox, QMenu, QAbstractItemView, QPlainTextEdit, QSizePolicy, QHeaderView, QInputDialog
 
 if sys.platform == 'win32':
     import winreg
@@ -50,6 +50,7 @@ FLAC_THREADS = 20  # flac线程数
 FFMPEG_PATH = r'C:\Downloads\ffmpeg-8.1-essentials_build\bin\ffmpeg.exe'  # ffmpeg可执行文件路径
 FFPROBE_PATH = r'C:\Downloads\ffmpeg-8.1-essentials_build\bin\ffprobe.exe'  # ffprobe可执行文件路径
 X265_PATH = r'C:\Software\x265.exe'  # x265可执行文件路径
+VSEDIT_PATH = r'C:\Software\vapoursynth\vsedit.exe'  # vapoursynth editor 路径
 
 
 def is_docker():
@@ -66,6 +67,7 @@ if sys.platform != 'win32':  # 不是 windows 平台
     FFPROBE_PATH = '/usr/bin/ffprobe'  # ffprobe可执行文件路径
     X265_PATH = '/usr/bin/x265'  # x265可执行文件路径
     PLUGIN_PATH = '~/plugins'  # 插件所在目录
+    VSEDIT_PATH = r'/usr/bin/vsedit'  # vapoursynth editor 路径
     if is_docker():
         PLUGIN_PATH = '/app/plugins'
 
@@ -78,8 +80,8 @@ BDMV_LABELS = ['path', 'size', 'info']
 SUBTITLE_LABELS = ['select', 'path', 'sub_duration', 'bdmv_index', 'chapter_index', 'offset']
 MKV_LABELS = ['path', 'duration']
 REMUX_LABELS = ['sub_path', 'ep_duration', 'bdmv_index', 'chapter_index', 'm2ts_file']
-ENCODE_LABELS = ['sub_path', 'ep_duration', 'bdmv_index', 'chapter_index', 'm2ts_file', 'vpy_path', 'edit_vpy']
-ENCODE_SP_LABELS = ['bdmv_index', 'mpls_file', 'm2ts_file', 'duration', 'vpy_path', 'edit_vpy']
+ENCODE_LABELS = ['sub_path', 'ep_duration', 'bdmv_index', 'chapter_index', 'm2ts_file', 'vpy_path', 'edit_vpy', 'preview_script']
+ENCODE_SP_LABELS = ['bdmv_index', 'mpls_file', 'm2ts_file', 'duration', 'vpy_path', 'edit_vpy', 'preview_script']
 CONFIGURATION = {}
 
 
@@ -3005,6 +3007,283 @@ class BluraySubtitleGUI(QWidget):
         else:
             subprocess.Popen(['xdg-open', path])
 
+    def open_vpy_in_vsedit(self, path: str) -> Optional[QProcess]:
+        path = str(path or '').strip()
+        if not path:
+            QMessageBox.information(self, "提示", "vpy路径为空")
+            return None
+        if not os.path.exists(path):
+            QMessageBox.information(self, "提示", f"文件不存在：{path}")
+            return None
+
+        vsedit_exe = VSEDIT_PATH
+        if not vsedit_exe or not os.path.exists(vsedit_exe):
+            vsedit_exe = shutil.which('vsedit') or ''
+        if not vsedit_exe:
+            QMessageBox.information(self, "提示", "未找到 vsedit，请检查 VSEDIT_PATH 或系统 PATH")
+            return None
+
+        try:
+            proc = QProcess(self)
+            proc.setProgram(vsedit_exe)
+            proc.setArguments([os.path.normpath(path)])
+            proc.start()
+            if not proc.waitForStarted(2000):
+                QMessageBox.warning(self, "提示", "启动 vsedit 失败")
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                proc.deleteLater()
+                return None
+            return proc
+        except Exception as e:
+            QMessageBox.warning(self, "提示", f"打开 vsedit 失败：{e}")
+            return None
+
+    def _restore_default_vpy_after_preview(self, mapping: dict[str, tuple[str, str]]):
+        try:
+            vpy_path = self.get_default_vpy_path()
+            if not os.path.exists(vpy_path):
+                return
+            with open(vpy_path, 'r', encoding='utf-8') as fp:
+                lines = fp.readlines()
+
+            def norm(s: str) -> str:
+                return s.rstrip('\r\n')
+
+            restore_by_modified = {norm(mod): orig for orig, mod in mapping.values() if orig is not None and mod is not None}
+
+            changed = False
+            for idx, line in enumerate(lines):
+                key = norm(line)
+                if key in restore_by_modified:
+                    lines[idx] = restore_by_modified[key] + '\n'
+                    changed = True
+
+            if changed:
+                with open(vpy_path, 'w', encoding='utf-8') as fp:
+                    fp.writelines(lines)
+        except Exception:
+            pass
+
+    def _split_m2ts_files(self, text: str) -> list[str]:
+        if not text:
+            return []
+        parts = re.split(r'[,\n;]+', str(text))
+        return [p.strip() for p in parts if p and p.strip()]
+
+    def _get_stream_dir_for_bdmv_index(self, bdmv_index: int) -> str:
+        root = ''
+        try:
+            idx = int(bdmv_index)
+        except Exception:
+            idx = -1
+        if idx < 0:
+            return ''
+
+        try:
+            root_item = self.table1.item(idx, 0)
+            root = root_item.text().strip() if root_item else ''
+        except Exception:
+            root = ''
+
+        if not root and idx > 0:
+            try:
+                root_item = self.table1.item(idx - 1, 0)
+                root = root_item.text().strip() if root_item else ''
+            except Exception:
+                root = ''
+        if not root:
+            return ''
+        return os.path.normpath(os.path.join(root, 'BDMV', 'STREAM'))
+
+    def _select_video_path(self, bdmv_index: int, m2ts_files: list[str]) -> str:
+        if not m2ts_files:
+            return ''
+        stream_dir = self._get_stream_dir_for_bdmv_index(bdmv_index)
+        if not stream_dir:
+            return ''
+
+        if len(m2ts_files) == 1:
+            return os.path.normpath(os.path.join(stream_dir, m2ts_files[0]))
+
+        item, ok = QInputDialog.getItem(
+            self,
+            "选择m2ts文件",
+            "检测到多个 m2ts 文件，请选择要预览的文件：",
+            m2ts_files,
+            0,
+            False
+        )
+        if not ok or not item:
+            return ''
+        return os.path.normpath(os.path.join(stream_dir, str(item)))
+
+    def _get_first_subtitle_path_for_bdmv_index(self, bdmv_index: int) -> str:
+        if not self.radio4.isChecked():
+            return ''
+        try:
+            bdmv_col = ENCODE_LABELS.index('bdmv_index')
+        except Exception:
+            bdmv_col = 2
+        for r in range(self.table2.rowCount()):
+            item = self.table2.item(r, bdmv_col)
+            if not item or not item.text().strip():
+                continue
+            try:
+                if int(item.text().strip()) != int(bdmv_index):
+                    continue
+            except Exception:
+                continue
+            sub_item = self.table2.item(r, 0)
+            if sub_item and sub_item.text().strip():
+                return sub_item.text().strip()
+        return ''
+
+    def _vpy_raw_string(self, path: str) -> str:
+        s = str(path or '')
+        s = s.replace('\\', '\\\\').replace('"', '\\"')
+        return f'r"{s}"'
+
+    def _update_default_vpy_paths(self, video_path: str, subtitle_path: str) -> dict[str, tuple[str, str]]:
+        self.ensure_default_vpy_file()
+        vpy_path = self.get_default_vpy_path()
+        if not os.path.exists(vpy_path):
+            raise FileNotFoundError(vpy_path)
+
+        with open(vpy_path, 'r', encoding='utf-8') as fp:
+            lines = fp.readlines()
+
+        def norm(s: str) -> str:
+            return s.rstrip('\r\n')
+
+        mapping: dict[str, tuple[str, str]] = {}
+        changed = False
+        for idx, line in enumerate(lines):
+            raw = norm(line)
+            m_a = re.match(r'^(\s*)(#\s*)?(a\s*=\s*)r?[\'"].*?[\'"](\s*(#.*)?)$', raw)
+            if m_a:
+                indent = m_a.group(1)
+                expr = m_a.group(3)
+                suffix = m_a.group(4) or ''
+                new_raw = f'{indent}{expr}{self._vpy_raw_string(video_path)}{suffix}'
+                if new_raw != raw:
+                    lines[idx] = new_raw + '\n'
+                    changed = True
+                mapping['a'] = (raw, new_raw)
+                continue
+
+            m_s = re.match(r'^(\s*)(#\s*)?(sub_file\s*=\s*)r?[\'"].*?[\'"](\s*(#.*)?)$', raw)
+            if m_s:
+                indent = m_s.group(1)
+                expr = m_s.group(3)
+                suffix = m_s.group(4) or ''
+                want_commented = not bool(subtitle_path)
+                comment_prefix = '# ' if want_commented else ''
+                rhs = self._vpy_raw_string(subtitle_path or '')
+                new_raw = f'{indent}{comment_prefix}{expr}{rhs}{suffix}'
+                if new_raw != raw:
+                    lines[idx] = new_raw + '\n'
+                    changed = True
+                mapping['sub_file'] = (raw, new_raw)
+                continue
+
+            m_t = re.match(r'^(\s*)(#\s*)?(res\s*=\s*core\.assrender\.TextSub\(\s*res\s*,\s*file\s*=\s*sub_file\s*\))(\s*(#.*)?)$', raw)
+            if m_t:
+                indent = m_t.group(1)
+                expr = m_t.group(3)
+                suffix = m_t.group(4) or ''
+                want_commented = not bool(subtitle_path)
+                comment_prefix = '# ' if want_commented else ''
+                new_raw = f'{indent}{comment_prefix}{expr}{suffix}'
+                if new_raw != raw:
+                    lines[idx] = new_raw + '\n'
+                    changed = True
+                mapping['textsub'] = (raw, new_raw)
+                continue
+
+        if changed:
+            with open(vpy_path, 'w', encoding='utf-8') as fp:
+                fp.writelines(lines)
+        return mapping
+
+    def _preview_script_for_row(self, vpy_path: str, video_path: str, subtitle_path: str):
+        if not video_path:
+            QMessageBox.information(self, "提示", "无法确定视频文件路径")
+            return
+
+        vpy_path = (vpy_path or '').strip()
+        default_vpy = self.get_default_vpy_path()
+        is_default = False
+        if vpy_path:
+            try:
+                is_default = os.path.normcase(os.path.abspath(os.path.normpath(vpy_path))) == os.path.normcase(os.path.abspath(os.path.normpath(default_vpy)))
+            except Exception:
+                is_default = False
+        else:
+            is_default = True
+            vpy_path = default_vpy
+
+        try:
+            if is_default:
+                self.ensure_default_vpy_file()
+                a_original_rhs = None
+                sub_original_rhs = None
+                try:
+                    with open(default_vpy, 'r', encoding='utf-8') as fp:
+                        original_lines = fp.readlines()
+                    for line in original_lines:
+                        m_a = re.match(r'^(\s*a\s*=\s*)(r?[\'"].*?[\'"])(\s*(#.*)?)$', line)
+                        if m_a and a_original_rhs is None:
+                            a_original_rhs = m_a.group(2)
+                            continue
+                        if line.lstrip().startswith('#'):
+                            continue
+                        m_s = re.match(r'^(\s*sub_file\s*=\s*)(r?[\'"].*?[\'"])(\s*(#.*)?)$', line)
+                        if m_s and sub_original_rhs is None:
+                            sub_original_rhs = m_s.group(2)
+                except Exception:
+                    pass
+
+                a_modified_rhs = self._vpy_raw_string(video_path)
+                sub_modified_rhs = self._vpy_raw_string(subtitle_path or '')
+
+                mapping = self._update_default_vpy_paths(video_path=video_path, subtitle_path=subtitle_path or '')
+
+                proc = self.open_vpy_in_vsedit(default_vpy)
+                if not proc:
+                    self._restore_default_vpy_after_preview(
+                        mapping=mapping,
+                    )
+                    return
+
+                if not hasattr(self, '_vsedit_preview_sessions'):
+                    self._vsedit_preview_sessions = {}
+                self._vsedit_preview_sessions[proc] = mapping
+
+                def restore_and_cleanup(*_):
+                    try:
+                        sess = self._vsedit_preview_sessions.pop(proc, None)
+                    except Exception:
+                        sess = None
+                    if not sess:
+                        return
+                    self._restore_default_vpy_after_preview(
+                        mapping=sess,
+                    )
+                    try:
+                        proc.deleteLater()
+                    except Exception:
+                        pass
+
+                proc.finished.connect(restore_and_cleanup)
+                proc.errorOccurred.connect(restore_and_cleanup)
+            else:
+                self.open_vpy_in_vsedit(vpy_path)
+        except Exception as e:
+            QMessageBox.warning(self, "提示", f"预览脚本失败：{e}")
+
     def on_edit_vpy_clicked(self):
         if not self.radio4.isChecked():
             return
@@ -3019,11 +3298,47 @@ class BluraySubtitleGUI(QWidget):
             return
         self.open_vpy_in_editor(self.get_vpy_path_from_row(row_index))
 
+    def on_preview_script_clicked(self):
+        if not self.radio4.isChecked():
+            return
+        sender = self.sender()
+        if not sender:
+            return
+        try:
+            row_index = self.table2.indexAt(sender.pos()).row()
+        except Exception:
+            row_index = -1
+        if row_index < 0:
+            return
+
+        try:
+            bdmv_col = ENCODE_LABELS.index('bdmv_index')
+            m2ts_col = ENCODE_LABELS.index('m2ts_file')
+        except Exception:
+            bdmv_col, m2ts_col = 2, 4
+
+        bdmv_item = self.table2.item(row_index, bdmv_col)
+        m2ts_item = self.table2.item(row_index, m2ts_col)
+        sub_item = self.table2.item(row_index, 0)
+
+        try:
+            bdmv_index = int(bdmv_item.text().strip()) if bdmv_item and bdmv_item.text().strip() else -1
+        except Exception:
+            bdmv_index = -1
+
+        m2ts_files = self._split_m2ts_files(m2ts_item.text() if m2ts_item else '')
+        video_path = self._select_video_path(bdmv_index, m2ts_files)
+        subtitle_path = sub_item.text().strip() if sub_item and sub_item.text().strip() else ''
+
+        vpy_path = self.get_vpy_path_from_row(row_index)
+        self._preview_script_for_row(vpy_path=vpy_path, video_path=video_path, subtitle_path=subtitle_path)
+
     def ensure_encode_row_widgets(self, row_index: int):
         if not self.radio4.isChecked():
             return
         vpy_col = ENCODE_LABELS.index('vpy_path')
         edit_col = ENCODE_LABELS.index('edit_vpy')
+        preview_col = ENCODE_LABELS.index('preview_script')
 
         if not self.table2.cellWidget(row_index, vpy_col):
             self.table2.setCellWidget(row_index, vpy_col, self.create_vpy_path_widget(parent=self.table2))
@@ -3033,6 +3348,12 @@ class BluraySubtitleGUI(QWidget):
             btn.setText('edit_vpy')
             btn.clicked.connect(self.on_edit_vpy_clicked)
             self.table2.setCellWidget(row_index, edit_col, btn)
+
+        if not self.table2.cellWidget(row_index, preview_col):
+            btn = QToolButton(self.table2)
+            btn.setText('preview')
+            btn.clicked.connect(self.on_preview_script_clicked)
+            self.table2.setCellWidget(row_index, preview_col, btn)
 
     def get_sp_vpy_path_from_row(self, row_index: int) -> str:
         if not self.radio4.isChecked():
@@ -3060,6 +3381,39 @@ class BluraySubtitleGUI(QWidget):
             return
         path = self.get_sp_vpy_path_from_row(row_index)
         self.open_vpy_in_editor(path)
+
+    def on_preview_sp_scripts_clicked(self):
+        if not self.radio4.isChecked():
+            return
+        sender = self.sender()
+        if not sender:
+            return
+        try:
+            row_index = self.table3.indexAt(sender.pos()).row()
+        except Exception:
+            row_index = -1
+        if row_index < 0:
+            return
+
+        try:
+            bdmv_col = ENCODE_SP_LABELS.index('bdmv_index')
+            m2ts_col = ENCODE_SP_LABELS.index('m2ts_file')
+        except Exception:
+            bdmv_col, m2ts_col = 0, 2
+
+        bdmv_item = self.table3.item(row_index, bdmv_col)
+        m2ts_item = self.table3.item(row_index, m2ts_col)
+        try:
+            bdmv_index = int(bdmv_item.text().strip()) if bdmv_item and bdmv_item.text().strip() else -1
+        except Exception:
+            bdmv_index = -1
+
+        m2ts_files = self._split_m2ts_files(m2ts_item.text() if m2ts_item else '')
+        video_path = self._select_video_path(bdmv_index, m2ts_files)
+        subtitle_path = ''
+
+        vpy_path = self.get_sp_vpy_path_from_row(row_index)
+        self._preview_script_for_row(vpy_path=vpy_path, video_path=video_path, subtitle_path=subtitle_path)
 
     def refresh_sp_table(self, configuration: dict[int, dict[str, int | str]]):
         if not self.radio4.isChecked() or not configuration:
@@ -3137,17 +3491,24 @@ class BluraySubtitleGUI(QWidget):
             old_sorting = self.table3.isSortingEnabled()
             self.table3.setSortingEnabled(False)
             try:
+                vpy_col = ENCODE_SP_LABELS.index('vpy_path')
+                edit_col = ENCODE_SP_LABELS.index('edit_vpy')
+                preview_col = ENCODE_SP_LABELS.index('preview_script')
                 self.table3.setRowCount(len(entries))
                 for i, (bdmv_index, mpls_file, m2ts_files, dur) in enumerate(entries):
                     self.table3.setItem(i, 0, QTableWidgetItem(str(bdmv_index)))
                     self.table3.setItem(i, 1, QTableWidgetItem(mpls_file))
                     self.table3.setItem(i, 2, QTableWidgetItem(','.join(m2ts_files)))
                     self.table3.setItem(i, 3, QTableWidgetItem(get_time_str(dur)))
-                    self.table3.setCellWidget(i, 4, self.create_vpy_path_widget(parent=self.table3))
+                    self.table3.setCellWidget(i, vpy_col, self.create_vpy_path_widget(parent=self.table3))
                     btn = QToolButton(self.table3)
                     btn.setText('edit_vpy')
                     btn.clicked.connect(self.on_edit_sp_vpy_clicked)
-                    self.table3.setCellWidget(i, 5, btn)
+                    self.table3.setCellWidget(i, edit_col, btn)
+                    btn2 = QToolButton(self.table3)
+                    btn2.setText('preview')
+                    btn2.clicked.connect(self.on_preview_sp_scripts_clicked)
+                    self.table3.setCellWidget(i, preview_col, btn2)
                 self.table3.resizeColumnsToContents()
                 self._scroll_table_h_to_right(self.table3)
             finally:
@@ -3340,10 +3701,13 @@ class BluraySubtitleGUI(QWidget):
         self.label1 = QLabel("选择原盘所在的文件夹", self)
         self.bdmv_folder_path = QLineEdit()
         self.bdmv_folder_path.setMinimumWidth(200)
-        button1 = QPushButton("选择文件夹")
+        button1 = QPushButton("选择")
         button1.clicked.connect(self.select_bdmv_folder)
+        button1_open = QPushButton("打开")
+        button1_open.clicked.connect(lambda _=None: self.open_folder_path(self.bdmv_folder_path.text()))
         h_layout.addWidget(self.bdmv_folder_path)
         h_layout.addWidget(button1)
+        h_layout.addWidget(button1_open)
         v_layout.addWidget(bluray_path_box)
 
         label1_container = QWidget(self)
@@ -3378,10 +3742,13 @@ class BluraySubtitleGUI(QWidget):
         self.label2 = QLabel("选择单集字幕所在的文件夹：", self)
         self.subtitle_folder_path = QLineEdit()
         self.subtitle_folder_path.setMinimumWidth(200)
-        button2 = QPushButton("选择文件夹")
+        button2 = QPushButton("选择")
         button2.clicked.connect(self.select_subtitle_folder)
+        button2_open = QPushButton("打开")
+        button2_open.clicked.connect(lambda _=None: self.open_folder_path(self.subtitle_folder_path.text()))
         h_layout.addWidget(self.subtitle_folder_path)
         h_layout.addWidget(button2)
+        h_layout.addWidget(button2_open)
         v_layout.addWidget(subtitle_path_box)
 
         label2_container = QWidget(self)
@@ -3438,10 +3805,13 @@ class BluraySubtitleGUI(QWidget):
         self.output_folder_path.setMinimumWidth(200)
         self._auto_output_folder = ''
         self.output_folder_path.textEdited.connect(lambda _: setattr(self, '_output_folder_user_edited', True))
-        button_output = QPushButton("选择文件夹")
+        button_output = QPushButton("选择")
         button_output.clicked.connect(self.select_output_folder)
+        button_output_open = QPushButton("打开")
+        button_output_open.clicked.connect(lambda _=None: self.open_folder_path(self.output_folder_path.text()))
         output_path_layout.addWidget(self.output_folder_path)
         output_path_layout.addWidget(button_output)
+        output_path_layout.addWidget(button_output_open)
         self.output_folder_row = output_path_row
         self.output_folder_row.setVisible(self.radio3.isChecked() or self.radio4.isChecked())
         self.layout.addWidget(self.output_folder_row)
@@ -4408,6 +4778,30 @@ class BluraySubtitleGUI(QWidget):
     def select_bdmv_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "选择文件夹")
         self.bdmv_folder_path.setText(os.path.normpath(folder))
+
+    def open_folder_path(self, path: str):
+        path = str(path or '').strip()
+        if not path:
+            QMessageBox.information(self, " ", "未填写文件夹路径")
+            return
+
+        normalized = os.path.normpath(os.path.expanduser(path))
+        if os.path.isfile(normalized):
+            normalized = os.path.normpath(os.path.dirname(normalized))
+
+        if not os.path.isdir(normalized):
+            QMessageBox.warning(self, "打开文件夹失败", f"文件夹不存在：\n{normalized}")
+            return
+
+        try:
+            if sys.platform == 'win32':
+                os.startfile(normalized)
+            elif sys.platform == 'darwin':
+                subprocess.Popen(['open', normalized])
+            else:
+                subprocess.Popen(['xdg-open', normalized])
+        except Exception as e:
+            QMessageBox.warning(self, "打开文件夹失败", f"无法打开文件夹：\n{normalized}\n\n{e}")
 
     def select_subtitle_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "选择文件夹")
