@@ -12,7 +12,7 @@
 4. （所有功能）支持选择每集的切割点
 5. （所有功能）支持 Windows 和 Linux 系统
 6. （所有功能）支持 Docker
-7. （合并字幕）合并字幕支持原盘为 iso 文件 (仅限 Windows 系统 Windows 8 及以上可用)
+7. （合并字幕）支持原盘为 iso 文件 (仅限 Windows 系统 Windows 8 及以上可用)
 8. （合并字幕）支持 .ass/.ssa/.srt 格式的字幕
 9. （合并字幕）支持勾选、拖动字幕
 10. （合并字幕）支持编辑字幕
@@ -126,7 +126,7 @@ bluray-subtitle-ubuntu /bin/bash
 ```docker pull haruite/bluraysubtitle:latest```  
 即可拉取最新版镜像
 #### linux 支持
-build.sh 可以用于构建 linux 运行脚本所需要的环境，支持 Ubuntu 版本 >= 22.04 或者 Debain 版本 >= 12，已在 hetzner 服务器测试 Ubuntu 22.04 | Ubuntu 24.04 | Ubuntu 25.10 | Debian 12 | Debian 13 系统安装脚本， 均可一键安装成功，本地测试 Ubuntu 26.04 beata 版安装成功。建议通过 ssh 方式安装，直接远程桌面在终端安装不会使用 tmux （其实是有些问题我解决不了）。如果想要服务器挂机压制，首先安装远程桌面，推荐 Ubuntu 25.10 + xfce4 + xrdp，系统可以先安装 Ubuntu 24.04 然后 do-release-upgrade 升级上去  
+build.sh 可以用于构建 linux 运行脚本所需要的环境，支持 Ubuntu 版本 >= 22.04 或者 Debain 版本 >= 12，已在 hetzner 服务器测试 Ubuntu 22.04 | Ubuntu 24.04 | Ubuntu 25.10 | Debian 12 | Debian 13 系统安装脚本， 均可一键安装成功，本地测试 Ubuntu 26.04 beata 版安装成功。建议通过 ssh 方式安装。如果想要服务器挂机压制，首先安装远程桌面，推荐 Ubuntu 25.10 + xfce4 + xrdp，系统可以先安装 Ubuntu 24.04 然后 do-release-upgrade 升级上去  
 #### 软件界面截图
 （运行于 Docker）  
 ![示例图片](https://github.com/Haruite/BluraySubtitle/blob/main/pictures/%E6%88%AA%E5%9B%BE%202026-04-17%2004-39-28.png)
@@ -137,3 +137,22 @@ build.sh 可以用于构建 linux 运行脚本所需要的环境，支持 Ubuntu
 2. 点击执行按钮后，不再弹出进度条，而是直接在按钮上显示进度，再次点击可以取消
 3. 完成后不再显示弹窗，而是在界面最底部显示 10s 文字
 4. 原盘以及字幕等水平滑条默认局右
+### Q & A
+Q: 为什么推荐 ssh 方式安装脚本？  
+A: 远程安装会使用 tmux，输出更简洁，直接远程桌面在终端安装不会使用 tmux （其实是有些问题我解决不了）  
+Q: 为什么 Docker 构建不使用 build.sh？  
+A: 因为那样的话包太大  
+Q: arm 架构的 MacBook 怎么使用 docker？  
+A: build镜像命令```docker build --platform linux/amd64 -t bluray-subtitle-ubuntu .```。拉取镜像命令```docker pull --platform linux/amd64 haruite/bluraysubtitle:latest```。推荐启动命令```sudo docker run -it --rm \
+    --platform linux/amd64 \
+    -e DISPLAY=host.docker.internal:0 \
+    -e LIBGL_ALWAYS_SOFTWARE=1 \
+    -v /tmp/.X11-unix:/tmp/.X11-unix \
+    -v /Users/demo:/data \
+    --ipc=host \
+    --shm-size=2gb \
+bluray-subtitle-ubuntu```  
+Q: 压制功能有切黑边吗？  
+A: 没有。因为切黑边涉及一些问题不好解决，如果有需求自行修改 vs 脚本  
+Q: 压制一部 BDMV 时间太常，怎样测试压制功能？  
+A: 编辑 vpy 文件，在末尾```res.set_output()```之前加上一行```res = res.std.Trim(first=0, length=720)  # (只压制720帧)```  
