@@ -3328,7 +3328,12 @@ class BluraySubtitleGUI(QWidget):
 
         m2ts_files = self._split_m2ts_files(m2ts_item.text() if m2ts_item else '')
         video_path = self._select_video_path(bdmv_index, m2ts_files)
-        subtitle_path = sub_item.text().strip() if sub_item and sub_item.text().strip() else ''
+        should_load_subtitle = False
+        try:
+            should_load_subtitle = bool(getattr(self, 'sub_pack_hard_radio', None) and self.sub_pack_hard_radio.isChecked())
+        except Exception:
+            should_load_subtitle = False
+        subtitle_path = sub_item.text().strip() if should_load_subtitle and sub_item and sub_item.text().strip() else ''
 
         vpy_path = self.get_vpy_path_from_row(row_index)
         self._preview_script_for_row(vpy_path=vpy_path, video_path=video_path, subtitle_path=subtitle_path)
