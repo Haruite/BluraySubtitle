@@ -4693,6 +4693,21 @@ class BluraySubtitleGUI(QWidget):
         subtitle_edit_dialog.exec()
 
     def on_select_function(self):
+        function_id = 0
+        if self.radio1.isChecked():
+            function_id = 1
+        elif self.radio2.isChecked():
+            function_id = 2
+        elif self.radio3.isChecked():
+            function_id = 3
+        elif self.radio4.isChecked():
+            function_id = 4
+
+        last_function_id = int(getattr(self, '_selected_function_id', 0) or 0)
+        if function_id and last_function_id == function_id:
+            return
+        self._selected_function_id = function_id
+
         if hasattr(self, 'output_folder_row') and self.output_folder_row:
             self.output_folder_row.setVisible(self.radio3.isChecked() or self.radio4.isChecked())
         if self.radio4.isChecked():
