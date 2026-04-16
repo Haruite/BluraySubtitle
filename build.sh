@@ -399,12 +399,12 @@ install_libdovi() {
     source "$HOME/.cargo/env" || exit 1
 
     log "安装 cargo-c"
-    cargo install cargo-c || exit 1
+    tmux_run "安装 cargo-c" cargo install cargo-c || exit 1
 
     log "编译并安装到 $HOME/.local"
-    git clone https://github.com/quietvoid/dovi_tool.git || exit 1
+    tmux_run "下载 dovi_tool" git clone https://github.com/quietvoid/dovi_tool.git || exit 1
     cd dovi_tool/dolby_vision || exit 1
-    cargo cinstall --release --prefix="$HOME/.local" || exit 1
+    tmux_run "编译安装 dolby_vision" cargo cinstall --release --prefix="$HOME/.local" || exit 1
 
     local lib_dir
     lib_dir="$(
@@ -531,7 +531,7 @@ install_mpv() {
     cd "$build_dir" || exit 1
 
     log "编译 mpv-build"
-    git clone https://github.com/mpv-player/mpv-build.git || exit 1
+    tmux_run "下载 mpv-build" git clone https://github.com/mpv-player/mpv-build.git || exit 1
     cd mpv-build || exit 1
 
     rm -rf mpv/build ffmpeg/build libass/build 2>/dev/null || true
@@ -591,14 +591,14 @@ install_lsmash() {
       cp "$REPO_DIR/Packages/v2.14.5.tar.gz" . || exit 1
     else
       log "本地源码包不存在，尝试在线下载"
-      wget -O v2.14.5.tar.gz https://github.com/l-smash/l-smash/archive/refs/tags/v2.14.5.tar.gz || exit 1
+      tmux_run "下载 lsmash v2.14.5" wget -O v2.14.5.tar.gz https://github.com/l-smash/l-smash/archive/refs/tags/v2.14.5.tar.gz || exit 1
     fi
 
-    tar zxvf v2.14.5.tar.gz || exit 1
+    tmux_run "解压 lsmash v2.14.5" tar zxvf v2.14.5.tar.gz || exit 1
     cd l-smash-2.14.5 || exit 1
     
     log "配置与编译 lsmash"
-    ./configure --enable-shared || exit 1
+    tmux_run "lsmash configure" ./configure --enable-shared || exit 1
     tmux_run "lsmash make" make -j"$(nproc)" || exit 1
     tmux_run "lsmash install" sudo make install || exit 1
     sudo ldconfig || exit 1
@@ -630,8 +630,8 @@ install_x265() {
   (
     cd "$build_dir" || exit 1
     log "下载 x265-Yuuki-Asuna 源码..."
-    wget https://github.com/msg7086/x265-Yuuki-Asuna/archive/refs/tags/Asuna-2.8.tar.gz || exit 1
-    tar zxvf Asuna-2.8.tar.gz || exit 1
+    tmux_run "下载 x265 Asuna-2.8" wget https://github.com/msg7086/x265-Yuuki-Asuna/archive/refs/tags/Asuna-2.8.tar.gz || exit 1
+    tmux_run "解压 x265 Asuna-2.8" tar zxvf Asuna-2.8.tar.gz || exit 1
 
     cd x265-Yuuki-Asuna-Asuna-2.8/source || exit 1
 
@@ -719,15 +719,15 @@ install_flac() {
   (
     cd "$build_dir" || exit 1
     log "下载 flac 源码包"
-    wget https://github.com/xiph/flac/releases/download/1.5.0/flac-1.5.0.tar.xz || exit 1
+    tmux_run "下载 flac 1.5.0" wget https://github.com/xiph/flac/releases/download/1.5.0/flac-1.5.0.tar.xz || exit 1
     log "解压 flac 源码包"
-    tar -xvf flac-1.5.0.tar.xz || exit 1
+    tmux_run "解压 flac 1.5.0" tar -xvf flac-1.5.0.tar.xz || exit 1
     
     cd flac-1.5.0 || exit 1
     
     log "配置与编译 flac"
-    ./autogen.sh || exit 1
-    ./configure --enable-static --enable-shared --enable-64-bit-words || exit 1
+    tmux_run "flac autogen" ./autogen.sh || exit 1
+    tmux_run "flac configure" ./configure --enable-static --enable-shared --enable-64-bit-words || exit 1
     tmux_run "flac make" make -j"$(nproc)" || exit 1
     tmux_run "flac install" sudo make install || exit 1
     sudo ldconfig || exit 1
@@ -770,9 +770,9 @@ install_zimg_latest() {
   build_dir="$(mktemp -d)"
   (
     cd "$build_dir" || exit 1
-    git clone --depth 1 --recursive https://github.com/sekrit-twc/zimg.git . || exit 1
-    ./autogen.sh || exit 1
-    ./configure --prefix=/usr/local || exit 1
+    tmux_run "下载 zimg" git clone --depth 1 --recursive https://github.com/sekrit-twc/zimg.git . || exit 1
+    tmux_run "zimg autogen" ./autogen.sh || exit 1
+    tmux_run "zimg configure" ./configure --prefix=/usr/local || exit 1
     tmux_run "zimg make" make -j"$(nproc)" || exit 1
     tmux_run "zimg install" sudo make install || exit 1
   ) || die "zimg 编译/安装失败"
@@ -789,8 +789,9 @@ install_vapoursynth() {
     apt_update
     apt_install python3-pip || die "安装 python3-pip 失败"
   fi
-  if ! python3 -m pip install --user --upgrade cython; then
-    python3 -m pip install --user --upgrade cython --break-system-packages || die "Cython 升级失败"
+  if ! python3 -m pip install --user --upgrade cython --break-system-packages 2>&1 | sed '/^Requirement already satisfied: cython /d'; then
+    log "当前 pip 不支持 --break-system-packages，回退到兼容参数重试"
+    python3 -m pip install --user --upgrade cython 2>&1 | sed '/^Requirement already satisfied: cython /d' || die "Cython 升级失败"
   fi
   export PATH="$HOME/.local/bin:$PATH"
 
@@ -841,11 +842,11 @@ install_vapoursynth() {
     else
       log "本地源码包不存在，尝试在线下载"
       # 原提供的链接会报 404，这里替换为 Github 归档源码链接，解压后目录名一致
-      wget -O R57.A12.tar.gz https://github.com/AmusementClub/vapoursynth-classic/archive/refs/tags/R57.A12.tar.gz || exit 1
+      tmux_run "下载 VapourSynth R57.A12" wget -O R57.A12.tar.gz https://github.com/AmusementClub/vapoursynth-classic/archive/refs/tags/R57.A12.tar.gz || exit 1
     fi
 
     log "解压 VapourSynth 源码包"
-    tar zxvf R57.A12.tar.gz || exit 1
+    tmux_run "解压 VapourSynth R57.A12" tar zxvf R57.A12.tar.gz || exit 1
     cd vapoursynth-classic-R57.A12 || exit 1
 
     # --- 针对 Ubuntu 26.04 (新版 FFmpeg) 的补丁判断 ---
@@ -863,8 +864,8 @@ install_vapoursynth() {
     fi
     
     log "配置与编译 VapourSynth"
-    ./autogen.sh || exit 1
-    ./configure CXXFLAGS="-O3 -fpermissive" || die "VapourSynth 配置失败"
+    tmux_run "VapourSynth autogen" ./autogen.sh || exit 1
+    tmux_run "VapourSynth configure" ./configure CXXFLAGS="-O3 -fpermissive" || die "VapourSynth 配置失败"
     tmux_run "VapourSynth make" make -j"$(nproc)" || exit 1
     tmux_run "VapourSynth install" sudo make install || exit 1
     sudo ldconfig || exit 1
@@ -942,11 +943,11 @@ install_vapoursynth_editor() {
       cp "$REPO_DIR/Packages/R19-mod-6.9.tar.gz" . || exit 1
     else
       log "本地源码包不存在，尝试在线下载"
-      wget -O R19-mod-6.9.tar.gz https://github.com/Yurihaia/vapoursynth-editor/archive/refs/tags/R19-mod-6.9.tar.gz || exit 1
+      tmux_run "下载 vsedit R19-mod-6.9" wget -O R19-mod-6.9.tar.gz https://github.com/Yurihaia/vapoursynth-editor/archive/refs/tags/R19-mod-6.9.tar.gz || exit 1
     fi
 
     log "解压 vsedit 源码包"
-    tar -zxvf R19-mod-6.9.tar.gz --strip-components=1 || exit 1
+    tmux_run "解压 vsedit 源码包" tar -zxvf R19-mod-6.9.tar.gz --strip-components=1 || exit 1
     sudo ldconfig
 
     if [[ -f "resources/vsedit.png" ]]; then
@@ -965,7 +966,7 @@ install_vapoursynth_editor() {
     export LD_LIBRARY_PATH=/usr/local/lib:/usr/lib:/lib
 
     log "配置并编译 vsedit (qmake6)"
-    qmake6 pro.pro CONFIG+=release || exit 1
+    qmake6 pro.pro CONFIG+=release 2>&1 | sed '/^Info: creating stash file /d' || exit 1
     tmux_run "vsedit make" bash -lc "make -j\"$(nproc)\" || make -j1" || exit 1
 
     log "查找编译生成的 vsedit 并建立软链接"
@@ -1034,12 +1035,12 @@ install_libplacebo_latest() {
     build_dir="$(mktemp -d)"
     (
         cd "$build_dir" || exit 1
-        git clone --recursive --depth 1 --branch v6.338.0 https://code.videolan.org/videolan/libplacebo.git .
+        tmux_run "下载 libplacebo v6.338.0" git clone --recursive --depth 1 --branch v6.338.0 https://code.videolan.org/videolan/libplacebo.git .
 
         rm -rf build
 
         # 使用安全定义的变量运行配置
-        PYTHONPATH="$safe_pythonpath" python3 -m mesonbuild.mesonmain setup build \
+        tmux_run "libplacebo meson setup" env PYTHONPATH="$safe_pythonpath" python3 -m mesonbuild.mesonmain setup build \
             --buildtype release \
             --prefix /usr/local \
             "$shaderc_opt" \
@@ -1096,7 +1097,7 @@ build_vs_plugins() {
     if [[ ! -f "$plugins_dir/libvslsmashsource.so" ]]; then
       log "编译 L-SMASH-Works (VapourSynth)"
       cd "$HOME" || exit 1
-      git clone https://github.com/HomeOfAviSynthPlusEvolution/L-SMASH-Works.git || exit 1
+      tmux_run "下载 L-SMASH-Works" git clone https://github.com/HomeOfAviSynthPlusEvolution/L-SMASH-Works.git || exit 1
       cd L-SMASH-Works/VapourSynth || exit 1
       local need_compat="false"
       if [[ -f /etc/os-release ]]; then
@@ -1169,8 +1170,8 @@ PY
     if [[ ! -f "$plugins_dir/eedi3m.so" ]]; then
       log "编译 VapourSynth-EEDI3 (r9)"
       cd "$HOME" || exit 1
-      wget -O r9.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI3/archive/refs/tags/r9.tar.gz || exit 1
-      tar zxvf r9.tar.gz || exit 1
+      tmux_run "下载 EEDI3 r9" wget -O r9.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI3/archive/refs/tags/r9.tar.gz || exit 1
+      tmux_run "解压 EEDI3 r9" tar zxvf r9.tar.gz || exit 1
       cd VapourSynth-EEDI3-r9/ || exit 1
       log "修复 EEDI3 的 std::max_align_t 编译兼容性问题"
       find . -type f -name "EEDI3.cpp" -exec sed -i 's/std::max_align_t/max_align_t/g' {} +
@@ -1193,8 +1194,8 @@ PY
     if [[ ! -f "$plugins_dir/libaddgrain.so" ]]; then
       log "编译 VapourSynth-AddGrain (r10)"
       cd "$HOME" || exit 1
-      wget -O r10.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-AddGrain/archive/refs/tags/r10.tar.gz || exit 1
-      tar zxvf r10.tar.gz || exit 1
+      tmux_run "下载 AddGrain r10" wget -O r10.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-AddGrain/archive/refs/tags/r10.tar.gz || exit 1
+      tmux_run "解压 AddGrain r10" tar zxvf r10.tar.gz || exit 1
       cd VapourSynth-AddGrain-r10/ || exit 1
       tmux_run "AddGrain meson setup" meson setup build || exit 1
       tmux_run "AddGrain ninja" ninja -C build || exit 1
@@ -1207,8 +1208,8 @@ PY
     if [[ ! -f "$plugins_dir/libassrender.so" ]]; then
       log "安装 assrender (0.38.3)"
       cd "$HOME" || exit 1
-      wget -O assrender_linux-x64_v0.38.3.zip https://github.com/AmusementClub/assrender/releases/download/0.38.3/assrender_linux-x64_v0.38.3.zip || exit 1
-      unzip -o assrender_linux-x64_v0.38.3.zip || exit 1
+      tmux_run "下载 assrender 0.38.3" wget -O assrender_linux-x64_v0.38.3.zip https://github.com/AmusementClub/assrender/releases/download/0.38.3/assrender_linux-x64_v0.38.3.zip || exit 1
+      tmux_run "解压 assrender 0.38.3" unzip -o assrender_linux-x64_v0.38.3.zip || exit 1
       cp libassrender.so "$plugins_dir/" || exit 1
       cd "$build_dir" || exit 1
     else
@@ -1218,8 +1219,8 @@ PY
     if [[ ! -f "$plugins_dir/libbilateral.so" ]]; then
       log "编译 VapourSynth-Bilateral (r3)"
       cd "$HOME" || exit 1
-      wget -O r3.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-Bilateral/archive/refs/tags/r3.tar.gz || exit 1
-      tar zxvf r3.tar.gz || exit 1
+      tmux_run "下载 Bilateral r3" wget -O r3.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-Bilateral/archive/refs/tags/r3.tar.gz || exit 1
+      tmux_run "解压 Bilateral r3" tar zxvf r3.tar.gz || exit 1
       cd VapourSynth-Bilateral-r3/ || exit 1
       chmod +x configure || exit 1
       ./configure || exit 1
@@ -1236,8 +1237,8 @@ PY
     if [[ ! -f "$plugins_dir/libdfttest.so" ]]; then
       log "编译 VapourSynth-DFTTest (r7)"
       cd "$HOME" || exit 1
-      wget -O r7.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-DFTTest/archive/refs/tags/r7.tar.gz || exit 1
-      tar zxvf r7.tar.gz || exit 1
+      tmux_run "下载 DFTTest r7" wget -O r7.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-DFTTest/archive/refs/tags/r7.tar.gz || exit 1
+      tmux_run "解压 DFTTest r7" tar zxvf r7.tar.gz || exit 1
       cd VapourSynth-DFTTest-r7/ || exit 1
       log "正在安装 DFTTest 编译依赖: libfftw3-dev..."
       apt_install libfftw3-dev
@@ -1252,8 +1253,8 @@ PY
     if [[ ! -f "$plugins_dir/libeedi2.so" ]]; then
       log "编译 VapourSynth-EEDI2 (r7.1)"
       cd "$HOME" || exit 1
-      wget -O r7.1.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI2/archive/refs/tags/r7.1.tar.gz || exit 1
-      tar zxvf r7.1.tar.gz || exit 1
+      tmux_run "下载 EEDI2 r7.1" wget -O r7.1.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI2/archive/refs/tags/r7.1.tar.gz || exit 1
+      tmux_run "解压 EEDI2 r7.1" tar zxvf r7.1.tar.gz || exit 1
       cd VapourSynth-EEDI2-r7.1/ || exit 1
       tmux_run "EEDI2 meson setup" meson setup build || exit 1
       tmux_run "EEDI2 ninja" ninja -C build || exit 1
@@ -1266,8 +1267,8 @@ PY
     if [[ ! -f "$plugins_dir/libfmtconv.so" ]]; then
       log "编译 fmtconv (r30)"
       cd "$HOME" || exit 1
-      wget -O r30.tar.gz https://github.com/EleonoreMizo/fmtconv/archive/refs/tags/r30.tar.gz || exit 1
-      tar zxvf r30.tar.gz || exit 1
+      tmux_run "下载 fmtconv r30" wget -O r30.tar.gz https://github.com/EleonoreMizo/fmtconv/archive/refs/tags/r30.tar.gz || exit 1
+      tmux_run "解压 fmtconv r30" tar zxvf r30.tar.gz || exit 1
       cd fmtconv-r30/build/unix || exit 1
       ./autogen.sh || exit 1
       ./configure || exit 1
@@ -1284,10 +1285,10 @@ PY
     if [[ ! -f "$plugins_dir/libremovegrain.so" ]]; then
       log "编译 vs-removegrain (R1)"
       cd "$HOME" || exit 1
-      wget https://github.com/vapoursynth/vs-removegrain/archive/refs/tags/R1.tar.gz || exit 1
-      tar zxvf R1.tar.gz || exit 1
+      tmux_run "下载 vs-removegrain R1" wget https://github.com/vapoursynth/vs-removegrain/archive/refs/tags/R1.tar.gz || exit 1
+      tmux_run "解压 vs-removegrain R1" tar zxvf R1.tar.gz || exit 1
       cd vs-removegrain-R1/src || exit 1
-      g++ -shared -fPIC -O3 -Wall \
+      tmux_run "编译 vs-removegrain R1" g++ -shared -fPIC -O3 -Wall \
         $(pkg-config --cflags vapoursynth) \
         clense.cpp removegrainvs.cpp repairvs.cpp shared.cpp verticalcleaner.cpp \
         -o libremovegrain.so || exit 1
@@ -1300,8 +1301,8 @@ PY
     if [[ ! -f "$plugins_dir/libsangnommod.so" ]]; then
       log "编译 VapourSynth-SangNomMod (v0.1-fix)"
       cd "$HOME" || exit 1
-      wget -O v0.1-fix.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-SangNomMod/archive/refs/tags/v0.1-fix.tar.gz || exit 1
-      tar zxvf v0.1-fix.tar.gz || exit 1
+      tmux_run "下载 SangNomMod v0.1-fix" wget -O v0.1-fix.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-SangNomMod/archive/refs/tags/v0.1-fix.tar.gz || exit 1
+      tmux_run "解压 SangNomMod v0.1-fix" tar zxvf v0.1-fix.tar.gz || exit 1
       cd VapourSynth-SangNomMod-0.1-fix/ || exit 1
       ./configure || exit 1
       tmux_run "SangNomMod make" make -j"$(nproc)" || exit 1
@@ -1318,15 +1319,15 @@ PY
       log "编译 vs-placebo (2.0.0)"
       cd "$HOME" || exit 1
       install_libplacebo_latest
-      wget -O 2.0.0.tar.gz https://github.com/Lypheo/vs-placebo/archive/refs/tags/2.0.0.tar.gz || exit 1
-      tar zxvf 2.0.0.tar.gz || exit 1
+      tmux_run "下载 vs-placebo 2.0.0" wget -O 2.0.0.tar.gz https://github.com/Lypheo/vs-placebo/archive/refs/tags/2.0.0.tar.gz || exit 1
+      tmux_run "解压 vs-placebo 2.0.0" tar zxvf 2.0.0.tar.gz || exit 1
       cd vs-placebo-2.0.0/ || exit 1
       export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:$HOME/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
       export C_INCLUDE_PATH="$HOME/.local/include:${C_INCLUDE_PATH:-}"
       export LIBRARY_PATH="$HOME/.local/lib/x86_64-linux-gnu:${LIBRARY_PATH:-}"
       export LD_LIBRARY_PATH="$HOME/.local/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
       rm -rf libp2p
-      git clone https://github.com/sekrit-twc/libp2p.git || exit 1
+      tmux_run "下载 libp2p" git clone https://github.com/sekrit-twc/libp2p.git || exit 1
       rm -rf build
       tmux_run "vs-placebo meson setup" meson setup build || exit 1
       tmux_run "vs-placebo ninja" ninja -C build || exit 1
@@ -1341,8 +1342,8 @@ PY
 
     if ! command -v ispc >/dev/null 2>&1; then
       log "安装 ispc (v1.23.0)"
-      wget -O ispc-v1.23.0-linux.tar.gz https://github.com/ispc/ispc/releases/download/v1.23.0/ispc-v1.23.0-linux.tar.gz || exit 1
-      tar -xvf ispc-v1.23.0-linux.tar.gz || exit 1
+      tmux_run "下载 ispc v1.23.0" wget -O ispc-v1.23.0-linux.tar.gz https://github.com/ispc/ispc/releases/download/v1.23.0/ispc-v1.23.0-linux.tar.gz || exit 1
+      tmux_run "解压 ispc v1.23.0" tar -xvf ispc-v1.23.0-linux.tar.gz || exit 1
       sudo mv ispc-v1.23.0-linux/bin/ispc /usr/local/bin/ || exit 1
       sudo chmod +x /usr/local/bin/ispc || exit 1
     else
@@ -1352,8 +1353,8 @@ PY
     if [[ ! -f "$plugins_dir/libvsnlm_ispc.so" ]]; then
       log "编译 vs-nlm-ispc (v2)"
       cd "$HOME" || exit 1
-      wget -O v2.tar.gz https://github.com/AmusementClub/vs-nlm-ispc/archive/refs/tags/v2.tar.gz || exit 1
-      tar zxvf v2.tar.gz || exit 1
+      tmux_run "下载 vs-nlm-ispc v2" wget -O v2.tar.gz https://github.com/AmusementClub/vs-nlm-ispc/archive/refs/tags/v2.tar.gz || exit 1
+      tmux_run "解压 vs-nlm-ispc v2" tar zxvf v2.tar.gz || exit 1
       cd vs-nlm-ispc-2/ || exit 1
       mkdir -p build || exit 1
       cd build || exit 1
@@ -1371,8 +1372,8 @@ PY
     if [[ ! -f "$plugins_dir/libzsmooth.x86_64-gnu.so" ]]; then
       log "安装 zsmooth（二进制包）"
       cd "$HOME" || exit 1
-      wget -O libzsmooth.x86_64-gnu.so.zip https://github.com/adworacz/zsmooth/releases/download/0.7/libzsmooth.x86_64-gnu.so.zip || exit 1
-      unzip -o libzsmooth.x86_64-gnu.so.zip || exit 1
+      tmux_run "下载 zsmooth 0.7" wget -O libzsmooth.x86_64-gnu.so.zip https://github.com/adworacz/zsmooth/releases/download/0.7/libzsmooth.x86_64-gnu.so.zip || exit 1
+      tmux_run "解压 zsmooth 0.7" unzip -o libzsmooth.x86_64-gnu.so.zip || exit 1
       mv libzsmooth.x86_64-gnu.so "$plugins_dir/" || exit 1
       cd "$build_dir" || exit 1
     else
@@ -1382,8 +1383,8 @@ PY
     if [[ ! -f "$plugins_dir/mvtools.so" ]]; then
       log "编译 vapoursynth-mvtools (v26)"
       cd "$HOME" || exit 1
-      wget -O v26.tar.gz https://github.com/dubhatervapoursynth/vapoursynth-mvtools/archive/refs/tags/v26.tar.gz || exit 1
-      tar zxvf v26.tar.gz || exit 1
+      tmux_run "下载 mvtools v26" wget -O v26.tar.gz https://github.com/dubhatervapoursynth/vapoursynth-mvtools/archive/refs/tags/v26.tar.gz || exit 1
+      tmux_run "解压 mvtools v26" tar zxvf v26.tar.gz || exit 1
       cd vapoursynth-mvtools-26/ || exit 1
       python3 - <<'PY' || exit 1
 import re
@@ -1494,11 +1495,11 @@ install_shaderc_fix() {
           cd "$build_dir" || exit 1
 
           # 1. 克隆源码
-          git clone https://github.com/google/shaderc . || exit 1
+          tmux_run "下载 shaderc" git clone https://github.com/google/shaderc . || exit 1
 
           # 2. 下载依赖 (glslang, spirv-tools, spirv-headers)
           # 这一步非常关键，它会自动配齐所有缺失的底层组件
-          ./utils/git-sync-deps || exit 1
+          tmux_run "shaderc 同步依赖" ./utils/git-sync-deps || exit 1
 
           # 3. 配置与编译
           mkdir build && cd build
@@ -1563,13 +1564,13 @@ install_desktop_shortcuts
 
 log "创建 Python 虚拟环境并安装 Python 依赖（pycountry PyQt6 librosa）"
 if [[ ! -d "$REPO_DIR/.venv" ]]; then
-  python3 -m venv "$REPO_DIR/.venv"
+  tmux_run "创建 Python 虚拟环境" python3 -m venv "$REPO_DIR/.venv"
 fi
 source "$REPO_DIR/.venv/bin/activate"
 
 if ! python -m pip show pycountry PyQt6 librosa >/dev/null 2>&1; then
-  python -m pip install -U pip
-  pip install pycountry PyQt6 librosa
+  tmux_run "升级虚拟环境 pip" python -m pip install -U pip
+  tmux_run "安装 Python 依赖" pip install pycountry PyQt6 librosa
 else
   log "Python 依赖已安装，跳过"
 fi
