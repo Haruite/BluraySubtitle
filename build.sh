@@ -103,7 +103,7 @@ tmux_run() {
 
   if [[ "$ec" == "0" ]]; then
     rm -f "$logfile" || true
-    log_blue "完成：$title"
+    log_blue "执行：$title"
     return 0
   fi
 
@@ -290,14 +290,14 @@ install_mkvtoolnix() {
   (
     cd "$build_dir" || exit 1
     log "下载源码包"
-    curl -L -o "mkvtoolnix_${version}.orig.tar.xz" "https://mkvtoolnix.download/sources/mkvtoolnix-${version}.tar.xz" || exit 1
+    curl -fsSL -o "mkvtoolnix_${version}.orig.tar.xz" "https://mkvtoolnix.download/sources/mkvtoolnix-${version}.tar.xz" || exit 1
     log "解压源码包"
     tar xJf "mkvtoolnix_${version}.orig.tar.xz" || exit 1
 
     cd "mkvtoolnix-${version}" || exit 1
     log "准备 debian 打包文件"
     cp -R packaging/debian debian || exit 1
-    ./debian/create_files.rb || exit 1
+    ./debian/create_files.rb 2>&1 | sed -E '/^Creating files for ubuntu /d;/ handling .*debian\/(control|rules)\.erb$/d' || exit 1
 
     log "修改 debian/rules（override_dh_auto_build 加入并行编译参数）"
     python3 - <<'PY' || exit 1
@@ -394,7 +394,7 @@ install_libdovi() {
 
     log "配置 Rust 环境"
     if ! command -v cargo >/dev/null 2>&1; then
-      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y || exit 1
+      tmux_run "下载并安装 rustup" bash -lc "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y" || exit 1
     fi
     source "$HOME/.cargo/env" || exit 1
 
