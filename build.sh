@@ -232,9 +232,9 @@ ensure_meson_version() {
     pip_cmd=("pip")
   fi
 
-  if ! "${pip_cmd[@]}" install --user --upgrade meson --break-system-packages; then
+  if ! env PIP_DISABLE_PIP_VERSION_CHECK=1 "${pip_cmd[@]}" install --user --upgrade -q --progress-bar off meson --break-system-packages >/dev/null 2>&1; then
     log "当前 pip 不支持 --break-system-packages，回退到兼容参数重试"
-    "${pip_cmd[@]}" install --user --upgrade meson || die "升级 meson 失败"
+    env PIP_DISABLE_PIP_VERSION_CHECK=1 "${pip_cmd[@]}" install --user --upgrade -q --progress-bar off meson >/dev/null 2>&1 || die "升级 meson 失败"
   fi
   export PATH="$HOME/.local/bin:$PATH"
 
@@ -517,9 +517,9 @@ install_mpv() {
       apt_update
       apt_install python3-pip || die "安装 python3-pip 失败（root 环境）"
     fi
-    if ! sudo python3 -m pip install --upgrade meson --break-system-packages; then
+    if ! sudo env PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade -q --progress-bar off meson --break-system-packages >/dev/null 2>&1; then
       log "root 环境 pip 不支持 --break-system-packages，回退到兼容参数重试"
-      sudo python3 -m pip install --upgrade meson || die "root 环境升级 meson 失败"
+      sudo env PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade -q --progress-bar off meson >/dev/null 2>&1 || die "root 环境升级 meson 失败"
     fi
     export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"
   fi
@@ -1119,8 +1119,7 @@ build_vs_plugins() {
       fi
       if [[ "$need_compat" == "true" ]]; then
         log "检测到旧版 FFmpeg API（或系统需兼容模式），回退 L-SMASH-Works 到兼容提交"
-        git checkout .
-        git checkout 70e19fb || log "警告：Git 回退失败，尝试继续使用当前版本"
+        tmux_run "L-SMASH-Works git checkout" bash -lc "git checkout . && git -c advice.detachedHead=false checkout -q 70e19fb" || log "警告：Git 回退失败，尝试继续使用当前版本"
       fi
 
       # 2. 保留并执行你原有的 D3D12 宏补丁逻辑 (无论哪个版本都加上，防止万一)
