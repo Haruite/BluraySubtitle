@@ -1,8 +1,153 @@
 #!/usr/bin/env bash
+if [[ "${BLURAY_NO_CRLF_FIX:-}" != "1" ]]; then
+  if LC_ALL=C grep -q $'\r' "$0"; then
+    tmp="$(mktemp)"
+    trap 'rm -f "$tmp"' EXIT
+    tr -d '\r' < "$0" > "$tmp"
+    chmod +x "$tmp" || true
+    exec env BLURAY_NO_CRLF_FIX=1 bash "$tmp" "$@"
+  fi
+fi
 set -euo pipefail
 
 log() { echo -e "\n[BluraySubtitle][SETUP] $*\n"; }
 die() { echo -e "\n[BluraySubtitle][ERROR] $*\n" >&2; exit 1; }
+
+log_blue() { printf "\n\033[34m[BluraySubtitle][SETUP] %s\033[0m\n\n" "$*"; }
+
+log "推荐使用 Xshell 或 PuTTY 远程执行命令"
+
+terminal_sane() {
+  # 强制关闭：鼠标点击模式、鼠标移动跟踪、SGR坐标模式、备用屏幕
+  printf '\e[?1000l\e[?1002l\e[?1003l\e[?1006l\e[?1049l' 2>/dev/null || true
+  stty sane 2>/dev/null || true
+}
+
+tmux_run() {
+  local title="$1"
+  shift
+
+  if [[ -z "${TMUX:-}" ]] || ! command -v tmux >/dev/null 2>&1; then
+    "$@" || return $?
+    return 0
+  fi
+
+  log "执行：$title"
+  local logfile
+  logfile="$(mktemp -t bluraysubtitle.XXXXXX.log)"
+
+  # 1. 开启面板。删除了原脚本中开启鼠标追踪的 printf 行，防止乱码。
+  local pane_id
+  pane_id="$(tmux split-window -v -p 35 -P -F "#{pane_id}" "bash -lc 'tail -n +1 -f \"${logfile}\"'")"
+  tmux select-pane -t "$pane_id" -P "fg=white,bg=default" >/dev/null 2>&1 || true
+
+  local task_pid=""
+
+  # --- 终极清理函数 ---
+  force_cleanup() {
+    local sig_type=$1
+    trap - INT TERM EXIT # 移除 trap 防止递归
+
+    # A. 暴力清理残留进程：杀死该任务及其产生的所有子进程
+    if [[ -n "$task_pid" ]]; then
+      # 获取整个进程组并杀掉，确保 tee 和子命令一起死
+      pkill -P "$task_pid" 2>/dev/null || true
+      kill -9 "$task_pid" 2>/dev/null || true
+    fi
+
+    # B. 提取内容：在杀掉面板前，把最后 200 行抓出来
+    echo -e "\n\033[33m>>> [任务中断/异常] 保留最后 200 行输出内容：\033[0m"
+    tmux capture-pane -t "$pane_id" -p -S -200 2>/dev/null || true
+    echo -e "\033[33m>>> [提取完成] \033[0m\n"
+
+    # C. 销毁面板并重置终端状态
+    tmux kill-pane -t "$pane_id" >/dev/null 2>&1 || true
+    terminal_sane
+
+    # 如果是 Ctrl+C，强制终止整个脚本运行
+    [[ "$sig_type" == "INT" ]] && exit 130
+  }
+
+  # 绑定信号
+  trap 'force_cleanup INT' INT
+  trap 'force_cleanup TERM' TERM
+
+  # 2. 启动任务：放入后台并获取 PID
+  # 使用 ( ... ) 开启子 Shell 运行，确保能被整体杀掉
+  (
+    set +e
+    "$@" 2>&1 | tee -a "$logfile" >/dev/null
+    exit $?
+  ) &
+  task_pid=$!
+
+  # 等待任务结束
+  local ec=0
+  wait "$task_pid" || ec=$?
+
+  # 3. 正常/错误处理
+  if [[ "$ec" -ne 0 ]]; then
+    # 如果是非正常退出（报错），执行清理并保留输出
+    force_cleanup ERROR
+  else
+    # 正常完成：正常杀掉面板，不重复打印
+    tmux kill-pane -t "$pane_id" >/dev/null 2>&1 || true
+    terminal_sane
+    trap - INT TERM EXIT
+  fi
+
+  # 记录主日志
+  if [[ -n "${BLURAY_MASTER_LOG:-}" ]]; then
+    { echo "===== ${title} ====="; cat "$logfile"; echo; } >>"$BLURAY_MASTER_LOG" 2>/dev/null || true
+  fi
+
+  if [[ "$ec" == "0" ]]; then
+    rm -f "$logfile" || true
+    log_blue "完成：$title"
+    return 0
+  fi
+
+  return "$ec"
+}
+
+apt_update() {
+  tmux_run "apt-get update" sudo apt-get update
+}
+
+apt_install() {
+  tmux_run "apt-get install ${*}" sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y "$@"
+}
+
+apt_fix_broken() {
+  tmux_run "apt-get -f install" sudo env DEBIAN_FRONTEND=noninteractive apt-get -f install -y
+}
+
+ensure_tmux_installed() {
+  command -v tmux >/dev/null 2>&1 && return 0
+  command -v apt-get >/dev/null 2>&1 || return 0
+  command -v sudo >/dev/null 2>&1 || die "缺少 sudo"
+  sudo -v
+  sudo apt-get update -qq >/dev/null 2>&1 || die "apt-get update 失败（安装 tmux）"
+  sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq tmux >/dev/null 2>&1 || die "tmux 安装失败"
+}
+
+ensure_sudo_once() {
+  command -v sudo >/dev/null 2>&1 || die "缺少 sudo"
+  if [[ ! -t 0 ]]; then
+    return 0
+  fi
+
+  sudo -v
+
+  (
+    while true; do
+      sudo -n true || exit 0
+      sleep 60
+    done
+  ) 2>/dev/null &
+  SUDO_KEEPALIVE_PID="$!"
+  trap 'kill "${SUDO_KEEPALIVE_PID:-0}" >/dev/null 2>&1 || true' EXIT
+}
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO_DIR"
@@ -10,6 +155,37 @@ cd "$REPO_DIR"
 if [[ ! -f "$REPO_DIR/BluraySubtitle.py" ]]; then
   die "请在项目根目录运行（需要存在 BluraySubtitle.py）"
 fi
+
+is_putty_or_xshell_ssh() {
+  if [[ -z "${SSH_CONNECTION:-}" && -z "${SSH_CLIENT:-}" && -z "${SSH_TTY:-}" ]]; then
+    return 1
+  fi
+
+  local term="${TERM:-}"
+  local xterm_version="${XTERM_VERSION:-}"
+  local term_program="${TERM_PROGRAM:-}"
+
+  if [[ "$term" == putty* ]]; then
+    return 0
+  fi
+  if [[ "$xterm_version" == *Xshell* || "$term_program" == *Xshell* ]]; then
+    return 0
+  fi
+  return 1
+}
+
+if [[ "${1:-}" != "--in-tmux" && -z "${TMUX:-}" && -t 1 ]]; then
+  if is_putty_or_xshell_ssh; then
+    ensure_tmux_installed
+    args_escaped="$(printf '%q ' "$@")"
+    exec tmux new-session -A -s BluraySubtitle "bash -lc \"bash \\\"$0\\\" --in-tmux ${args_escaped}; echo; echo '[BluraySubtitle][SETUP] 脚本已结束（可滚动查看上方输出，按 Ctrl+b d 退出 tmux）'; exec bash\"" \; set -g mouse off \; set -g status off \; set -g remain-on-exit off
+  fi
+fi
+if [[ "${1:-}" == "--in-tmux" ]]; then
+  shift || true
+fi
+
+ensure_sudo_once
 
 require_supported_os() {
   if [[ ! -f /etc/os-release ]]; then
@@ -40,7 +216,7 @@ require_supported_os() {
 repair_broken_apt_state() {
   log "检查并修复 APT/Dpkg 破损状态"
   sudo dpkg --configure -a || true
-  sudo apt-get -f install -y || die "修复系统包依赖失败，请手动执行 sudo apt --fix-broken install"
+  apt_fix_broken || die "修复系统包依赖失败，请手动执行 sudo apt --fix-broken install"
 }
 
 ensure_meson_version() {
@@ -61,8 +237,8 @@ ensure_meson_version() {
   fi
 
   if ! python3 -m pip --version >/dev/null 2>&1; then
-    sudo apt-get update
-    sudo apt-get install -y python3-pip || die "安装 python3-pip 失败"
+    apt_update
+    apt_install python3-pip || die "安装 python3-pip 失败"
   fi
 
   local pip_cmd=("python3" "-m" "pip")
@@ -95,17 +271,17 @@ install_mkvtoolnix() {
 
   command -v apt-get >/dev/null 2>&1 || die "缺少 apt-get"
   if ! command -v curl >/dev/null 2>&1; then
-    sudo apt-get update
-    sudo apt-get install -y curl
+    apt_update
+    apt_install curl
   fi
   if ! command -v dpkg-buildpackage >/dev/null 2>&1; then
-    sudo apt-get update
-    sudo apt-get install -y dpkg-dev
+    apt_update
+    apt_install dpkg-dev
   fi
 
   log "安装编译所需基础工具"
-  sudo apt-get update
-  sudo apt-get install -y build-essential debhelper docbook-xsl fakeroot libx11-xcb-dev libglu1-mesa-dev \
+  apt_update
+  apt_install build-essential debhelper docbook-xsl fakeroot libx11-xcb-dev libglu1-mesa-dev \
   libboost-date-time-dev libboost-dev libboost-filesystem-dev libboost-math-dev libboost-regex-dev libboost-system-dev \
   libbz2-dev libcmark-dev libdvdread-dev libflac-dev libfmt-dev libgmp-dev libgtest-dev liblzo2-dev libmagic-dev \
   libogg-dev libpcre2-8-0 libpcre2-dev libqt6svg6-dev libvorbis-dev \
@@ -179,7 +355,7 @@ rules_path.write_text("".join(text), encoding="utf-8")
 PY
 
     log "开始编译 deb（dpkg-buildpackage）"
-    dpkg-buildpackage -b --no-sign || exit 1
+    tmux_run "dpkg-buildpackage" dpkg-buildpackage -b --no-sign || exit 1
 
     log "安装编译产物（源码上级目录的 mkvtoolnix*.deb）"
     mapfile -t debs < <(find .. -maxdepth 1 -type f -name "mkvtoolnix*.deb" -print | sort)
@@ -188,10 +364,10 @@ PY
     fi
 
     log "一次性安装全部 mkvtoolnix deb（自动处理依赖顺序）"
-    if ! sudo apt-get install -y "${debs[@]}"; then
+    if ! apt_install "${debs[@]}"; then
       log "apt 本地 deb 安装失败，回退到 dpkg + 修复依赖"
       sudo dpkg -i "${debs[@]}" || true
-      sudo apt-get -f install -y || exit 1
+      apt_fix_broken || exit 1
     fi
   ) || die "mkvtoolnix 编译/安装失败（如提示缺依赖，可手动补齐后重试）"
 
@@ -220,8 +396,8 @@ install_libdovi() {
     fi
   done
   if (( ${#missing_deps[@]} > 0 )); then
-    sudo apt-get update
-    sudo apt-get install -y "${missing_deps[@]}" || die "libdovi 依赖安装失败，请检查网络或包名"
+    apt_update
+    apt_install "${missing_deps[@]}" || die "libdovi 依赖安装失败，请检查网络或包名"
   fi
 
   local build_dir
@@ -345,15 +521,15 @@ install_mpv() {
   done
 
   if (( ${#missing_deps[@]} > 0 )); then
-    sudo apt-get update
-    sudo apt-get install -y "${missing_deps[@]}" || die "mpv 依赖安装失败，请检查网络或包名"
+    apt_update
+    apt_install "${missing_deps[@]}" || die "mpv 依赖安装失败，请检查网络或包名"
   fi
 
   if [[ "$needs_meson_prebuild" == "true" ]]; then
     ensure_meson_version
     if ! sudo python3 -m pip --version >/dev/null 2>&1; then
-      sudo apt-get update
-      sudo apt-get install -y python3-pip || die "安装 python3-pip 失败（root 环境）"
+      apt_update
+      apt_install python3-pip || die "安装 python3-pip 失败（root 环境）"
     fi
     if ! sudo python3 -m pip install --upgrade meson --break-system-packages; then
       log "root 环境 pip 不支持 --break-system-packages，回退到兼容参数重试"
@@ -387,8 +563,8 @@ EOF
     export PKG_CONFIG_PATH="$HOME/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
     export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"
 
-    ./rebuild -j"$(nproc)" || exit 1
-    sudo env "PATH=$PATH" "PKG_CONFIG_PATH=${PKG_CONFIG_PATH:-}" ./install || exit 1
+    tmux_run "mpv-build rebuild" ./rebuild -j"$(nproc)" || exit 1
+    tmux_run "mpv-build install" sudo env "PATH=$PATH" "PKG_CONFIG_PATH=${PKG_CONFIG_PATH:-}" ./install || exit 1
   ) || die "mpv 编译/安装失败"
 
   rm -rf "$build_dir"
@@ -414,8 +590,8 @@ install_lsmash() {
     fi
   done
   if (( ${#missing_deps[@]} > 0 )); then
-    sudo apt-get update
-    sudo apt-get install -y "${missing_deps[@]}" || die "lsmash 依赖安装失败"
+    apt_update
+    apt_install "${missing_deps[@]}" || die "lsmash 依赖安装失败"
   fi
 
   local build_dir
@@ -437,8 +613,8 @@ install_lsmash() {
     
     log "配置与编译 lsmash"
     ./configure --enable-shared || exit 1
-    make -j"$(nproc)" || exit 1
-    sudo make install || exit 1
+    tmux_run "lsmash make" make -j"$(nproc)" || exit 1
+    tmux_run "lsmash install" sudo make install || exit 1
     sudo ldconfig || exit 1
   ) || die "lsmash 编译/安装失败"
 
@@ -459,7 +635,8 @@ install_x265() {
 
   # 依赖安装
   local deps=(build-essential cmake git yasm nasm wget)
-  sudo apt-get update && sudo apt-get install -y "${deps[@]}" || die "x265 依赖安装失败"
+  apt_update
+  apt_install "${deps[@]}" || die "x265 依赖安装失败"
 
   local build_dir
   build_dir="$(mktemp -d)"
@@ -493,7 +670,7 @@ install_x265() {
     mkdir -p build && cd build || exit 1
 
     log "配置 CMake 项目..."
-    cmake -G "Unix Makefiles" \
+    tmux_run "x265 cmake" cmake -G "Unix Makefiles" \
           -DENABLE_SHARED=OFF \
           -DHIGH_BIT_DEPTH=ON \
           -DSTATIC_LINK_CRT=ON \
@@ -501,7 +678,7 @@ install_x265() {
           .. || exit 1
 
     log "正在编译 x265 (使用 $(nproc) 核心)..."
-    make -j"$(nproc)" || exit 1
+    tmux_run "x265 make" make -j"$(nproc)" || exit 1
 
     log "安装编译产物..."
     sudo cp x265 /usr/bin/x265 || exit 1
@@ -546,8 +723,8 @@ install_flac() {
     fi
   done
   if (( ${#missing_deps[@]} > 0 )); then
-    sudo apt-get update
-    sudo apt-get install -y "${missing_deps[@]}" || die "flac 依赖安装失败，请检查网络或包名"
+    apt_update
+    apt_install "${missing_deps[@]}" || die "flac 依赖安装失败，请检查网络或包名"
   fi
 
   local build_dir
@@ -565,8 +742,8 @@ install_flac() {
     log "配置与编译 flac"
     ./autogen.sh || exit 1
     ./configure --enable-static --enable-shared --enable-64-bit-words || exit 1
-    make -j"$(nproc)" || exit 1
-    sudo make install || exit 1
+    tmux_run "flac make" make -j"$(nproc)" || exit 1
+    tmux_run "flac install" sudo make install || exit 1
     sudo ldconfig || exit 1
     sudo ln -sf /usr/local/bin/flac /usr/bin/flac || exit 1
   ) || die "flac 编译/安装失败"
@@ -597,8 +774,8 @@ install_zimg_latest() {
     fi
   done
   if (( ${#missing_deps[@]} > 0 )); then
-    sudo apt-get update
-    sudo apt-get install -y "${missing_deps[@]}" || die "zimg 编译依赖安装失败"
+    apt_update
+    apt_install "${missing_deps[@]}" || die "zimg 编译依赖安装失败"
   fi
 
   log "当前 zimg 版本过低（缺少 ZIMG_TRANSFER_ST428），开始编译安装最新版 zimg..."
@@ -610,8 +787,8 @@ install_zimg_latest() {
     git clone --depth 1 --recursive https://github.com/sekrit-twc/zimg.git . || exit 1
     ./autogen.sh || exit 1
     ./configure --prefix=/usr/local || exit 1
-    make -j"$(nproc)" || exit 1
-    sudo make install || exit 1
+    tmux_run "zimg make" make -j"$(nproc)" || exit 1
+    tmux_run "zimg install" sudo make install || exit 1
   ) || die "zimg 编译/安装失败"
   rm -rf "$build_dir"
   sudo ldconfig
@@ -623,8 +800,8 @@ install_vapoursynth() {
 
   log "检查并升级 Cython 以支持 VapourSynth 编译"
   if ! python3 -m pip --version >/dev/null 2>&1; then
-    sudo apt-get update
-    sudo apt-get install -y python3-pip || die "安装 python3-pip 失败"
+    apt_update
+    apt_install python3-pip || die "安装 python3-pip 失败"
   fi
   if ! python3 -m pip install --user --upgrade cython; then
     python3 -m pip install --user --upgrade cython --break-system-packages || die "Cython 升级失败"
@@ -662,8 +839,8 @@ install_vapoursynth() {
     fi
   done
   if (( ${#missing_deps[@]} > 0 )); then
-    sudo apt-get update
-    sudo apt-get install -y "${missing_deps[@]}" || die "VapourSynth 依赖安装失败"
+    apt_update
+    apt_install "${missing_deps[@]}" || die "VapourSynth 依赖安装失败"
   fi
 
   local build_dir
@@ -702,8 +879,8 @@ install_vapoursynth() {
     log "配置与编译 VapourSynth"
     ./autogen.sh || exit 1
     ./configure CXXFLAGS="-O3 -fpermissive" || die "VapourSynth 配置失败"
-    make -j"$(nproc)" || exit 1
-    sudo make install || exit 1
+    tmux_run "VapourSynth make" make -j"$(nproc)" || exit 1
+    tmux_run "VapourSynth install" sudo make install || exit 1
     sudo ldconfig || exit 1
     
     local py_ver
@@ -762,8 +939,8 @@ install_vapoursynth_editor() {
     fi
   done
   if (( ${#missing_deps[@]} > 0 )); then
-    sudo apt-get update
-    sudo apt-get install -y "${missing_deps[@]}" || die "vsedit 依赖安装失败"
+    apt_update
+    apt_install "${missing_deps[@]}" || die "vsedit 依赖安装失败"
   fi
 
   local build_dir
@@ -803,7 +980,7 @@ install_vapoursynth_editor() {
 
     log "配置并编译 vsedit (qmake6)"
     qmake6 pro.pro CONFIG+=release || exit 1
-    make -j"$(nproc)" || make -j1 || exit 1
+    tmux_run "vsedit make" bash -lc "make -j\"$(nproc)\" || make -j1" || exit 1
 
     log "查找编译生成的 vsedit 并建立软链接"
     local bin_path
@@ -886,8 +1063,8 @@ install_libplacebo_latest() {
             -Ddemos=false || exit 1
 
         # 编译与安装
-        PYTHONPATH="$safe_pythonpath" ninja -C build || exit 1
-        sudo PYTHONPATH="$safe_pythonpath" ninja -C build install || exit 1
+        tmux_run "libplacebo ninja" env PYTHONPATH="$safe_pythonpath" ninja -C build || exit 1
+        tmux_run "libplacebo install" sudo env PYTHONPATH="$safe_pythonpath" ninja -C build install || exit 1
     ) || die "libplacebo 编译/安装失败"
     rm -rf "$build_dir"
     sudo ldconfig
@@ -920,8 +1097,8 @@ build_vs_plugins() {
     fi
   done
   if (( ${#missing_deps[@]} > 0 )); then
-    sudo apt-get update
-    sudo apt-get install -y "${missing_deps[@]}" || die "VS 插件依赖安装失败"
+    apt_update
+    apt_install "${missing_deps[@]}" || die "VS 插件依赖安装失败"
   fi
 
   local build_dir
@@ -992,8 +1169,8 @@ path.write_text(data, encoding="utf-8")
 PY
       fi
       rm -rf build
-      meson setup build || exit 1
-      ninja -C build || exit 1
+      tmux_run "L-SMASH-Works meson setup" meson setup build || exit 1
+      tmux_run "L-SMASH-Works ninja" ninja -C build || exit 1
       local out
       out="$(find "$PWD" -maxdepth 3 -name "libvslsmashsource.so" -type f | head -n 1)"
       [[ -n "${out:-}" ]] || exit 1
@@ -1019,8 +1196,8 @@ new_content = re.sub(pattern, "incdir = '/usr/local/include/vapoursynth'", conte
 open('meson.build', 'w', encoding='utf-8').write(new_content)
 PY
       rm -rf build
-      meson setup build || exit 1
-      ninja -C build || exit 1
+      tmux_run "EEDI3 meson setup" meson setup build || exit 1
+      tmux_run "EEDI3 ninja" ninja -C build || exit 1
       cp build/eedi3m.so "$plugins_dir/" || exit 1
       cd "$build_dir" || exit 1
     else
@@ -1033,8 +1210,8 @@ PY
       wget -O r10.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-AddGrain/archive/refs/tags/r10.tar.gz || exit 1
       tar zxvf r10.tar.gz || exit 1
       cd VapourSynth-AddGrain-r10/ || exit 1
-      meson setup build || exit 1
-      ninja -C build || exit 1
+      tmux_run "AddGrain meson setup" meson setup build || exit 1
+      tmux_run "AddGrain ninja" ninja -C build || exit 1
       cp build/libaddgrain.so "$plugins_dir/" || exit 1
       cd "$build_dir" || exit 1
     else
@@ -1060,7 +1237,7 @@ PY
       cd VapourSynth-Bilateral-r3/ || exit 1
       chmod +x configure || exit 1
       ./configure || exit 1
-      make -j"$(nproc)" || exit 1
+      tmux_run "Bilateral make" make -j"$(nproc)" || exit 1
       local out
       out="$(find "$PWD" -maxdepth 3 -name "libbilateral.so" -type f | head -n 1)"
       [[ -n "${out:-}" ]] || exit 1
@@ -1077,9 +1254,9 @@ PY
       tar zxvf r7.tar.gz || exit 1
       cd VapourSynth-DFTTest-r7/ || exit 1
       log "正在安装 DFTTest 编译依赖: libfftw3-dev..."
-      sudo apt-get install -y libfftw3-dev
-      meson setup build || exit 1
-      ninja -C build || exit 1
+      apt_install libfftw3-dev
+      tmux_run "DFTTest meson setup" meson setup build || exit 1
+      tmux_run "DFTTest ninja" ninja -C build || exit 1
       cp build/libdfttest.so "$plugins_dir/" || exit 1
       cd "$build_dir" || exit 1
     else
@@ -1092,8 +1269,8 @@ PY
       wget -O r7.1.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI2/archive/refs/tags/r7.1.tar.gz || exit 1
       tar zxvf r7.1.tar.gz || exit 1
       cd VapourSynth-EEDI2-r7.1/ || exit 1
-      meson setup build || exit 1
-      ninja -C build || exit 1
+      tmux_run "EEDI2 meson setup" meson setup build || exit 1
+      tmux_run "EEDI2 ninja" ninja -C build || exit 1
       cp build/libeedi2.so "$plugins_dir/" || exit 1
       cd "$build_dir" || exit 1
     else
@@ -1108,7 +1285,7 @@ PY
       cd fmtconv-r30/build/unix || exit 1
       ./autogen.sh || exit 1
       ./configure || exit 1
-      make -j"$(nproc)" || exit 1
+      tmux_run "fmtconv make" make -j"$(nproc)" || exit 1
       local out
       out="$(find "$PWD/.libs" -maxdepth 1 -name "libfmtconv.so" -type f | head -n 1)"
       [[ -n "${out:-}" ]] || exit 1
@@ -1141,7 +1318,7 @@ PY
       tar zxvf v0.1-fix.tar.gz || exit 1
       cd VapourSynth-SangNomMod-0.1-fix/ || exit 1
       ./configure || exit 1
-      make -j"$(nproc)" || exit 1
+      tmux_run "SangNomMod make" make -j"$(nproc)" || exit 1
       local out
       out="$(find "$PWD" -maxdepth 3 -name "libsangnommod.so" -type f | head -n 1)"
       [[ -n "${out:-}" ]] || exit 1
@@ -1165,8 +1342,8 @@ PY
       rm -rf libp2p
       git clone https://github.com/sekrit-twc/libp2p.git || exit 1
       rm -rf build
-      meson setup build || exit 1
-      ninja -C build || exit 1
+      tmux_run "vs-placebo meson setup" meson setup build || exit 1
+      tmux_run "vs-placebo ninja" ninja -C build || exit 1
       local out
       out="$(find "$PWD/build" -maxdepth 2 -name "libvs_placebo.so" -type f | head -n 1)"
       [[ -n "${out:-}" ]] || exit 1
@@ -1194,8 +1371,8 @@ PY
       cd vs-nlm-ispc-2/ || exit 1
       mkdir -p build || exit 1
       cd build || exit 1
-      cmake .. || exit 1
-      make -j"$(nproc)" || exit 1
+      tmux_run "vs-nlm-ispc cmake" cmake .. || exit 1
+      tmux_run "vs-nlm-ispc make" make -j"$(nproc)" || exit 1
       local out
       out="$(find "$PWD" -maxdepth 2 -name "libvsnlm_ispc.so" -type f | head -n 1)"
       [[ -n "${out:-}" ]] || exit 1
@@ -1231,8 +1408,8 @@ new_content = re.sub(pattern, "incdir = '/usr/local/include/vapoursynth'", conte
 with open('meson.build', 'w', encoding='utf-8') as f:
     f.write(new_content)
 PY
-      meson setup build || exit 1
-      ninja -C build || exit 1
+      tmux_run "mvtools meson setup" meson setup build || exit 1
+      tmux_run "mvtools ninja" ninja -C build || exit 1
       cp build/mvtools.so "$plugins_dir/" || exit 1
       cd "$build_dir" || exit 1
     else
@@ -1339,13 +1516,13 @@ install_shaderc_fix() {
 
           # 3. 配置与编译
           mkdir build && cd build
-          cmake -GNinja \
+          tmux_run "shaderc cmake" cmake -GNinja \
               -DCMAKE_BUILD_TYPE=Release \
               -DSHADERC_SKIP_TESTS=ON \
               -DCMAKE_INSTALL_PREFIX=/usr/local .. || exit 1
 
-          ninja || exit 1
-          sudo ninja install
+          tmux_run "shaderc ninja" ninja || exit 1
+          tmux_run "shaderc install" sudo ninja install || exit 1
       )
       rm -rf "$build_dir"
       sudo ldconfig
@@ -1378,11 +1555,11 @@ done
 
 if (( ${#missing_deps[@]} > 0 )); then
   log "安装系统依赖（缺少：${missing_deps[*]}）"
-  sudo apt-get update
-  sudo apt-get install -y "${missing_deps[@]}"
+  apt_update
+  apt_install "${missing_deps[@]}"
 
   log "刷新字体缓存"
-  sudo fc-cache -f -v || true
+  sudo fc-cache -f >/dev/null 2>&1 || true
 else
   log "系统依赖已全部安装，跳过"
 fi
