@@ -156,26 +156,12 @@ if [[ ! -f "$REPO_DIR/BluraySubtitle.py" ]]; then
   die "请在项目根目录运行（需要存在 BluraySubtitle.py）"
 fi
 
-is_putty_or_xshell_ssh() {
-  if [[ -z "${SSH_CONNECTION:-}" && -z "${SSH_CLIENT:-}" && -z "${SSH_TTY:-}" ]]; then
-    return 1
-  fi
-
-  local term="${TERM:-}"
-  local xterm_version="${XTERM_VERSION:-}"
-  local term_program="${TERM_PROGRAM:-}"
-
-  if [[ "$term" == putty* ]]; then
-    return 0
-  fi
-  if [[ "$xterm_version" == *Xshell* || "$term_program" == *Xshell* ]]; then
-    return 0
-  fi
-  return 1
+is_remote_ssh() {
+  [[ -n "${SSH_CONNECTION:-}" || -n "${SSH_CLIENT:-}" || -n "${SSH_TTY:-}" ]]
 }
 
 if [[ "${1:-}" != "--in-tmux" && -z "${TMUX:-}" && -t 1 ]]; then
-  if is_putty_or_xshell_ssh; then
+  if is_remote_ssh; then
     ensure_tmux_installed
     args_escaped="$(printf '%q ' "$@")"
     exec tmux new-session -A -s BluraySubtitle "bash -lc \"bash \\\"$0\\\" --in-tmux ${args_escaped}; echo; echo '[BluraySubtitle][SETUP] 脚本已结束（可滚动查看上方输出，按 Ctrl+b d 退出 tmux）'; exec bash\"" \; set -g mouse off \; set -g status off \; set -g remain-on-exit off
