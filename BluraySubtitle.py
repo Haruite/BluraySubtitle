@@ -47,10 +47,9 @@ if sys.platform == 'win32':
 
 FLAC_PATH = r'C:\Downloads\flac-1.5.0-win\Win64\flac.exe'  # flac可执行文件路径
 FLAC_THREADS = 20  # flac线程数
-FFMPEG_PATH = r'C:\Downloads\ffmpeg-8.1-full_build\bin\ffmpeg.exe'  # ffmpeg可执行文件路径
-FFPROBE_PATH = r'C:\Downloads\ffmpeg-8.1-full_build\bin\ffprobe.exe'  # ffprobe可执行文件路径
+FFMPEG_PATH = r'C:\Downloads\ffmpeg-8.1-essentials_build\bin\ffmpeg.exe'  # ffmpeg可执行文件路径
+FFPROBE_PATH = r'C:\Downloads\ffmpeg-8.1-essentials_build\bin\ffprobe.exe'  # ffprobe可执行文件路径
 X265_PATH = r'C:\Software\x265.exe'  # x265可执行文件路径
-PLUGIN_PATH = '~/plugins'
 
 
 def is_docker():
@@ -61,12 +60,14 @@ def is_docker():
     )
 
 
-if is_docker():
+if sys.platform != 'win32':  # 不是 windows 平台
     FLAC_PATH = '/usr/bin/flac'  # flac可执行文件路径
     FFMPEG_PATH = '/usr/bin/ffmpeg'  # ffmpeg可执行文件路径
     FFPROBE_PATH = '/usr/bin/ffprobe'  # ffprobe可执行文件路径
     X265_PATH = '/usr/bin/x265'  # x265可执行文件路径
-    PLUGIN_PATH = '/app/plugins'
+    PLUGIN_PATH = '~/plugins'  # 插件所在目录
+    if is_docker():
+        PLUGIN_PATH = '/app/plugins'
 
 
 MKV_INFO_PATH = ''
