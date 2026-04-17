@@ -2749,79 +2749,6 @@ class BluraySubtitleGUI(QWidget):
     def ensure_default_vpy_file(self):
         path = self.get_default_vpy_path()
         if os.path.exists(path) and os.path.isfile(path):
-            try:
-                with open(path, 'r', encoding='utf-8') as fp:
-                    lines = fp.readlines()
-                changed = False
-                if not any('_CF_GRAY' in ln for ln in lines):
-                    for idx, ln in enumerate(lines):
-                        if ln.strip() == 'import mvsfunc as mvf':
-                            insert_at = idx + 1
-                            block = [
-                                "_CF_RGB = getattr(vs, 'RGB', None) or getattr(getattr(vs, 'ColorFamily', None), 'RGB', None)\n",
-                                "_CF_YUV = getattr(vs, 'YUV', None) or getattr(getattr(vs, 'ColorFamily', None), 'YUV', None)\n",
-                                "_CF_GRAY = getattr(vs, 'GRAY', None) or getattr(getattr(vs, 'ColorFamily', None), 'GRAY', None)\n",
-                            ]
-                            lines[insert_at:insert_at] = block
-                            changed = True
-                            break
-
-                for idx, ln in enumerate(lines):
-                    if ln.strip() == 'nr16Y = core.std.ShufflePlanes(nr16, 0, vs.GRAY)':
-                        lines[idx] = 'nr16Y = core.std.ShufflePlanes(nr16, 0, _CF_GRAY)\n'
-                        changed = True
-                    elif ln.strip() == 'dbed = mvf.LimitFilter(dbed, nr16, thr=0.55, elast=1.5, planes=[0, 1, 2])':
-                        lines[idx:idx + 1] = [
-                            'try:\n',
-                            '    dbed = mvf.LimitFilter(dbed, nr16, thr=0.55, elast=1.5, planes=[0, 1, 2])\n',
-                            'except Exception:\n',
-                            '    dbed = nr16\n',
-                        ]
-                        changed = True
-                    elif ln.strip() == 'mergedY = mvf.LimitFilter(dbedY, aaedY, thr=1.0, elast=1.5)':
-                        lines[idx:idx + 1] = [
-                            'try:\n',
-                            '    mergedY = mvf.LimitFilter(dbedY, aaedY, thr=1.0, elast=1.5)\n',
-                            'except Exception:\n',
-                            '    mergedY = aaedY\n',
-                        ]
-                        changed = True
-                    elif ln.strip() == 'merged = core.std.ShufflePlanes([mergedY, dbed], [0,1,2], vs.YUV)':
-                        lines[idx] = 'merged = core.std.ShufflePlanes([mergedY, dbed], [0,1,2], _CF_YUV)\n'
-                        changed = True
-
-                if not any('_BLURAYSUBTITLE_CF_FIX' in ln for ln in lines):
-                    target = 'dbed = mvf.LimitFilter(dbed, nr16, thr=0.55, elast=1.5, planes=[0, 1, 2])'
-                    insert_at = None
-                    for i, ln in enumerate(lines):
-                        if ln.strip() == target:
-                            insert_at = i
-                            break
-                    if insert_at is not None:
-                        patch_lines = [
-                            "_BLURAYSUBTITLE_CF_FIX = True\n",
-                            "_fmt_yuv444p16 = None\n",
-                            "try:\n",
-                            "    _st_int = getattr(vs, 'INTEGER', None) or getattr(getattr(vs, 'SampleType', None), 'INTEGER', None)\n",
-                            "    if _CF_YUV is not None and _st_int is not None:\n",
-                            "        _fmt = core.query_video_format(_CF_YUV, _st_int, 16, 0, 0)\n",
-                            "        _fmt_yuv444p16 = getattr(_fmt, 'id', _fmt)\n",
-                            "except Exception:\n",
-                            "    _fmt_yuv444p16 = None\n",
-                            "if _fmt_yuv444p16 is not None:\n",
-                            "    if dbed.format is None or dbed.format.color_family not in (_CF_RGB, _CF_YUV, _CF_GRAY):\n",
-                            "        dbed = core.resize.Bicubic(dbed, format=_fmt_yuv444p16)\n",
-                            "    if nr16.format is None or nr16.format.color_family not in (_CF_RGB, _CF_YUV, _CF_GRAY):\n",
-                            "        nr16 = core.resize.Bicubic(nr16, format=_fmt_yuv444p16)\n",
-                        ]
-                        lines[insert_at:insert_at] = patch_lines
-                        changed = True
-
-                if changed:
-                    with open(path, 'w', encoding='utf-8') as fp:
-                        fp.writelines(lines)
-            except Exception:
-                traceback.print_exc()
             return
         deband_line = 'dbed = core.neo_f3kdb.Deband(nr16, 12, 72, 48, 48, 0, 0, output_depth=16).neo_f3kdb.Deband(24, 56, 32, 32, 0, 0, output_depth=16)\n'
         if sys.platform != 'win32':
@@ -2831,9 +2758,6 @@ class BluraySubtitleGUI(QWidget):
             'import vapoursynth as vs\n'
             'from vapoursynth import core\n'
             'import mvsfunc as mvf\n'
-            "_CF_RGB = getattr(vs, 'RGB', None) or getattr(getattr(vs, 'ColorFamily', None), 'RGB', None)\n"
-            "_CF_YUV = getattr(vs, 'YUV', None) or getattr(getattr(vs, 'ColorFamily', None), 'YUV', None)\n"
-            "_CF_GRAY = getattr(vs, 'GRAY', None) or getattr(getattr(vs, 'ColorFamily', None), 'GRAY', None)\n"
             + plugin_line +
             '\n'
             '\n'
@@ -2843,36 +2767,16 @@ class BluraySubtitleGUI(QWidget):
             'src16 = core.fmtc.bitdepth(src8, bits=16)\n'
             'nr16 = core.nlm_ispc.NLMeans(src16, d=0, wmode=3, h=3)\n'
             + deband_line +
-            "_BLURAYSUBTITLE_CF_FIX = True\n"
-            "_fmt_yuv444p16 = None\n"
-            "try:\n"
-            "    _st_int = getattr(vs, 'INTEGER', None) or getattr(getattr(vs, 'SampleType', None), 'INTEGER', None)\n"
-            "    if _CF_YUV is not None and _st_int is not None:\n"
-            "        _fmt = core.query_video_format(_CF_YUV, _st_int, 16, 0, 0)\n"
-            "        _fmt_yuv444p16 = getattr(_fmt, 'id', _fmt)\n"
-            "except Exception:\n"
-            "    _fmt_yuv444p16 = None\n"
-            "if _fmt_yuv444p16 is not None:\n"
-            "    if dbed.format is None or dbed.format.color_family not in (_CF_RGB, _CF_YUV, _CF_GRAY):\n"
-            "        dbed = core.resize.Bicubic(dbed, format=_fmt_yuv444p16)\n"
-            "    if nr16.format is None or nr16.format.color_family not in (_CF_RGB, _CF_YUV, _CF_GRAY):\n"
-            "        nr16 = core.resize.Bicubic(nr16, format=_fmt_yuv444p16)\n"
-            'try:\n'
-            '    dbed = mvf.LimitFilter(dbed, nr16, thr=0.55, elast=1.5, planes=[0, 1, 2])\n'
-            'except Exception:\n'
-            '    dbed = nr16\n'
-            'nr16Y = core.std.ShufflePlanes(nr16, 0, _CF_GRAY)\n'
+            'dbed = mvf.LimitFilter(dbed, nr16, thr=0.55, elast=1.5, planes=[0, 1, 2])\n'
+            'nr16Y = core.std.ShufflePlanes(nr16, 0, vs.GRAY)\n'
             'aa_nr16Y = core.eedi2.EEDI2(nr16Y, field=1, mthresh=10, lthresh=20, vthresh=20, maxd=24, nt=50)\n'
             'aa_nr16Y = core.fmtc.resample(aa_nr16Y, 1920, 1080, 0, -0.5).std.Transpose()\n'
             'aa_nr16Y = core.eedi2.EEDI2(aa_nr16Y, field=1, mthresh=10, lthresh=20, vthresh=20, maxd=24, nt=50)\n'
             'aa_nr16Y = core.fmtc.resample(aa_nr16Y, 1080, 1920, 0, -0.5).std.Transpose()\n'
             'aaedY = core.rgvs.Repair(aa_nr16Y, nr16Y, 2)\n'
             'dbedY = core.std.ShufflePlanes(dbed, 0, vs.GRAY)\n'
-            'try:\n'
-            '    mergedY = mvf.LimitFilter(dbedY, aaedY, thr=1.0, elast=1.5)\n'
-            'except Exception:\n'
-            '    mergedY = aaedY\n'
-            'merged = core.std.ShufflePlanes([mergedY, dbed], [0,1,2], _CF_YUV)\n'
+            'mergedY = mvf.LimitFilter(dbedY, aaedY, thr=1.0, elast=1.5)\n'
+            'merged = core.std.ShufflePlanes([mergedY, dbed], [0,1,2], vs.YUV)\n'
             'res = merged\n'
             'Debug = False\n'
             'if Debug:\n'
@@ -3341,35 +3245,11 @@ class BluraySubtitleGUI(QWidget):
 
         try:
             if is_default:
-                self.ensure_default_vpy_file()
-                a_original_rhs = None
-                sub_original_rhs = None
-                try:
-                    with open(default_vpy, 'r', encoding='utf-8') as fp:
-                        original_lines = fp.readlines()
-                    for line in original_lines:
-                        m_a = re.match(r'^(\s*a\s*=\s*)(r?[\'"].*?[\'"])(\s*(#.*)?)$', line)
-                        if m_a and a_original_rhs is None:
-                            a_original_rhs = m_a.group(2)
-                            continue
-                        if line.lstrip().startswith('#'):
-                            continue
-                        m_s = re.match(r'^(\s*sub_file\s*=\s*)(r?[\'"].*?[\'"])(\s*(#.*)?)$', line)
-                        if m_s and sub_original_rhs is None:
-                            sub_original_rhs = m_s.group(2)
-                except Exception:
-                    pass
-
-                a_modified_rhs = self._vpy_raw_string(video_path)
-                sub_modified_rhs = self._vpy_raw_string(subtitle_path or '')
-
                 mapping = self._update_default_vpy_paths(video_path=video_path, subtitle_path=subtitle_path or '')
 
                 proc = self.open_vpy_in_vsedit(default_vpy)
                 if not proc:
-                    self._restore_default_vpy_after_preview(
-                        mapping=mapping,
-                    )
+                    self._restore_default_vpy_after_preview(mapping=mapping)
                     return
 
                 if not hasattr(self, '_vsedit_preview_sessions'):
@@ -3383,9 +3263,7 @@ class BluraySubtitleGUI(QWidget):
                         sess = None
                     if not sess:
                         return
-                    self._restore_default_vpy_after_preview(
-                        mapping=sess,
-                    )
+                    self._restore_default_vpy_after_preview(mapping=sess)
                     try:
                         proc.deleteLater()
                     except Exception:
@@ -4844,14 +4722,10 @@ class BluraySubtitleGUI(QWidget):
 
         if hasattr(self, 'output_folder_row') and self.output_folder_row:
             self.output_folder_row.setVisible(self.radio3.isChecked() or self.radio4.isChecked())
+        if hasattr(self, 'table3'):
+            self.table3.setVisible(self.radio4.isChecked())
         if self.radio4.isChecked():
-            self.ensure_default_vpy_file()
-            if hasattr(self, 'table3'):
-                self.table3.setVisible(True)
-        else:
-            self.delete_default_vpy_file()
-            if hasattr(self, 'table3'):
-                self.table3.setVisible(False)
+            QTimer.singleShot(0, self.ensure_default_vpy_file)
 
         if self.radio1.isChecked():
             self.label2.setText("选择单集字幕所在的文件夹")
@@ -4991,6 +4865,7 @@ class BluraySubtitleGUI(QWidget):
         if not os.path.isdir(output_folder):
             QMessageBox.information(self, " ", "输出文件夹不存在")
             return
+        self.ensure_default_vpy_file()
         find_mkvtoolinx()
 
         cancel_event = threading.Event()
