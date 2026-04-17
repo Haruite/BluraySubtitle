@@ -891,7 +891,7 @@ install_vapoursynth_scripts() {
 
   local py_ver
   py_ver="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
-  local dst_dir="/usr/local/lib/python${py_ver}/site-packages"
+  local dst_dir="/usr/local/lib/python${py_ver}/dist-packages"
   sudo mkdir -p "$dst_dir"
 
   local copied=0
