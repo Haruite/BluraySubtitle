@@ -365,8 +365,8 @@ PY
 install_libdovi() {
   log "安装 libdovi（dovi_tool/dolby_vision）"
 
-  if sudo ldconfig -p 2>/dev/null | grep -qE '\blibdovi\.so\.3\b'; then
-    log "检测到 libdovi 已安装（libdovi.so.3 已在 ldconfig 缓存中），跳过"
+  if sudo ldconfig -p 2>/dev/null | grep -qE '\blibdovi\.so(\.[0-9]+)*\b'; then
+    log "检测到 libdovi 已安装（ldconfig 已包含 libdovi.so），跳过"
     return 0
   fi
 
@@ -422,8 +422,8 @@ install_libdovi() {
 
   rm -rf "$build_dir"
 
-  if ! sudo ldconfig -p 2>/dev/null | grep -qE '\blibdovi\.so\.3\b'; then
-    die "libdovi 安装完成但仍未被 ldconfig 识别（未找到 libdovi.so.3）"
+  if ! sudo ldconfig -p 2>/dev/null | grep -qE '\blibdovi\.so(\.[0-9]+)*\b'; then
+    die "libdovi 安装完成但仍未被 ldconfig 识别（未找到 libdovi.so）"
   fi
 
   log "libdovi 安装完成"
@@ -454,11 +454,11 @@ install_mpv() {
     local current_mpv_version
     current_mpv_version="$(mpv --version 2>/dev/null | head -n 1 | grep -oP 'mpv\s+v?\K[0-9]+(\.[0-9]+){1,2}' || true)"
     if [[ -n "${current_mpv_version:-}" ]] && dpkg --compare-versions "$current_mpv_version" ge "$required_mpv_version"; then
-      if sudo ldconfig -p 2>/dev/null | grep -qE '\blibdovi\.so\.3\b'; then
+      if sudo ldconfig -p 2>/dev/null | grep -qE '\blibdovi\.so(\.[0-9]+)*\b'; then
         log "检测到 mpv 已安装且版本满足要求（${current_mpv_version} >= ${required_mpv_version}），跳过编译安装"
         return 0
       fi
-      log "检测到 mpv 已安装但缺少 libdovi.so.3，尝试安装 libdovi"
+      log "检测到 mpv 已安装但缺少 libdovi.so，尝试安装 libdovi"
       install_libdovi
       return 0
     fi
