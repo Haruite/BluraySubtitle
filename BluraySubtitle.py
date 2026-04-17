@@ -3443,8 +3443,8 @@ class BluraySubtitleGUI(QWidget):
                 except Exception:
                     traceback.print_exc()
                     continue
-
-                parsed_m2ts_files = set(index_to_m2ts.values())
+                main_m2ts_files = set(index_to_m2ts.values())
+                parsed_m2ts_files = set(main_m2ts_files)
                 playlist_dir = os.path.dirname(mpls_path)
 
                 try:
@@ -3464,14 +3464,17 @@ class BluraySubtitleGUI(QWidget):
                         idx_to_m2ts, _ = get_index_to_m2ts_and_offset(ch)
                     except Exception:
                         continue
-                    if len(idx_to_m2ts) > 1 and not (parsed_m2ts_files & set(idx_to_m2ts.values())):
+                    m2ts_set = set(idx_to_m2ts.values())
+                    if m2ts_set.issubset(main_m2ts_files):
+                        continue
+                    if len(idx_to_m2ts) > 1 and not m2ts_set.issubset(parsed_m2ts_files):
                         entries.append((
                             bdmv_index,
                             os.path.basename(mpls_file_path),
-                            sorted(list(set(idx_to_m2ts.values()))),
+                            sorted(list(m2ts_set)),
                             ch.get_total_time()
                         ))
-                        parsed_m2ts_files |= set(idx_to_m2ts.values())
+                        parsed_m2ts_files |= m2ts_set
 
                 bdmv_dir = os.path.dirname(playlist_dir)
                 stream_folder = os.path.join(bdmv_dir, 'STREAM')
