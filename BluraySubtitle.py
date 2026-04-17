@@ -1534,7 +1534,7 @@ class BluraySubtitle:
                 mpls_file_path = os.path.join(os.path.dirname(mpls_path), mpls_file)
                 if mpls_file_path != mpls_path:
                     index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(Chapter(mpls_file_path))
-                    if main_m2ts_files & set(index_to_m2ts.values()):
+                    if set(index_to_m2ts.values()).issubset(main_m2ts_files):
                         continue
                     if len(index_to_m2ts) > 1:
                         sp_index += 1
@@ -1853,7 +1853,8 @@ class BluraySubtitle:
                 bdmv_vol = '0' * (3 - len(str(bdmv_index))) + str(bdmv_index)
                 mpls_path = confs[0]['selected_mpls'] + '.mpls'
                 index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(Chapter(mpls_path))
-                parsed_m2ts_files = set(index_to_m2ts.values())
+                main_m2ts_files = set(index_to_m2ts.values())
+                parsed_m2ts_files = set(main_m2ts_files)
                 sp_index = 0
                 for mpls_file in os.listdir(os.path.dirname(mpls_path)):
                     if cancel_event and cancel_event.is_set():
@@ -1863,12 +1864,13 @@ class BluraySubtitle:
                     mpls_file_path = os.path.join(os.path.dirname(mpls_path), mpls_file)
                     if mpls_file_path != mpls_path:
                         index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(Chapter(mpls_file_path))
-                        if not (parsed_m2ts_files & set(index_to_m2ts.values())):
-                            if len(index_to_m2ts) > 1:
-                                sp_index += 1
-                                subprocess.Popen(f'"{MKV_MERGE_PATH}" -o "{sps_folder}{os.sep}BD_Vol_'
-                                                 f'{bdmv_vol}_SP0{sp_index}.mkv" "{mpls_file_path}"', shell=True).wait()
-                                parsed_m2ts_files |= set(index_to_m2ts.values())
+                        if set(index_to_m2ts.values()).issubset(main_m2ts_files):
+                            continue
+                        if len(index_to_m2ts) > 1:
+                            sp_index += 1
+                            subprocess.Popen(f'"{MKV_MERGE_PATH}" -o "{sps_folder}{os.sep}BD_Vol_'
+                                             f'{bdmv_vol}_SP0{sp_index}.mkv" "{mpls_file_path}"', shell=True).wait()
+                            parsed_m2ts_files |= set(index_to_m2ts.values())
                 stream_folder = os.path.dirname(mpls_path).removesuffix('PLAYLIST') + 'STREAM'
                 for stream_file in os.listdir(stream_folder):
                     if cancel_event and cancel_event.is_set():
