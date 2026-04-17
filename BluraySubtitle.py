@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from functools import reduce, partial
 from struct import unpack
 from typing import Optional, Generator, Callable
+from urllib.parse import urlparse, unquote
 
 import librosa
 import librosa.feature
@@ -2787,6 +2788,21 @@ class BluraySubtitleGUI(QWidget):
             'res.set_output()\n'
             'src8.set_output(1)\n'
         )
+
+    def _normalize_path_input(self, text: str) -> str:
+        s = str(text or '').strip()
+        if not s:
+            return ''
+        if s.startswith('file://'):
+            try:
+                parsed = urlparse(s)
+                path = unquote(parsed.path or '')
+                if sys.platform == 'win32' and re.match(r'^/[A-Za-z]:/', path):
+                    path = path[1:]
+                s = path or s
+            except Exception:
+                pass
+        return os.path.normpath(os.path.expanduser(s))
         try:
             with open(path, 'w', encoding='utf-8') as fp:
                 fp.write(content)
@@ -3711,6 +3727,7 @@ class BluraySubtitleGUI(QWidget):
         self.label1 = QLabel("选择原盘所在的文件夹", self)
         self.bdmv_folder_path = QLineEdit()
         self.bdmv_folder_path.setMinimumWidth(200)
+        self.bdmv_folder_path.setAcceptDrops(False)
         button1 = QPushButton("选择")
         button1.clicked.connect(self.select_bdmv_folder)
         button1_open = QPushButton("打开")
@@ -3752,6 +3769,7 @@ class BluraySubtitleGUI(QWidget):
         self.label2 = QLabel("选择单集字幕所在的文件夹：", self)
         self.subtitle_folder_path = QLineEdit()
         self.subtitle_folder_path.setMinimumWidth(200)
+        self.subtitle_folder_path.setAcceptDrops(False)
         button2 = QPushButton("选择")
         button2.clicked.connect(self.select_subtitle_folder)
         button2_open = QPushButton("打开")
@@ -3813,6 +3831,7 @@ class BluraySubtitleGUI(QWidget):
         output_path_layout.addWidget(QLabel("输出文件夹", self))
         self.output_folder_path = QLineEdit()
         self.output_folder_path.setMinimumWidth(200)
+        self.output_folder_path.setAcceptDrops(False)
         self._auto_output_folder = ''
         self.output_folder_path.textEdited.connect(lambda _: setattr(self, '_output_folder_user_edited', True))
         button_output = QPushButton("选择")
@@ -3837,7 +3856,14 @@ class BluraySubtitleGUI(QWidget):
         self.setLayout(self.layout)
 
     def on_bdmv_folder_path_change(self):
-        bdmv_path = self.bdmv_folder_path.text().strip()
+        raw = self.bdmv_folder_path.text()
+        bdmv_path = self._normalize_path_input(raw)
+        if raw.strip().startswith('file://') and bdmv_path and bdmv_path != raw.strip():
+            try:
+                self.bdmv_folder_path.blockSignals(True)
+                self.bdmv_folder_path.setText(bdmv_path)
+            finally:
+                self.bdmv_folder_path.blockSignals(False)
         try:
             if hasattr(self, 'output_folder_path') and self.output_folder_path:
                 auto_output = os.path.normpath(os.path.dirname(bdmv_path)) if bdmv_path else ''
@@ -3932,7 +3958,14 @@ class BluraySubtitleGUI(QWidget):
             self.on_configuration(configuration)
 
     def on_subtitle_folder_path_change(self):
-        folder = self.subtitle_folder_path.text().strip()
+        raw = self.subtitle_folder_path.text()
+        folder = self._normalize_path_input(raw)
+        if raw.strip().startswith('file://') and folder and folder != raw.strip():
+            try:
+                self.subtitle_folder_path.blockSignals(True)
+                self.subtitle_folder_path.setText(folder)
+            finally:
+                self.subtitle_folder_path.blockSignals(False)
         self._pending_subtitle_folder = folder
         if hasattr(self, '_subtitle_scan_cancel_event') and self._subtitle_scan_cancel_event:
             self._subtitle_scan_cancel_event.set()
@@ -4805,12 +4838,12 @@ class BluraySubtitleGUI(QWidget):
         self.bdmv_folder_path.setText(os.path.normpath(folder))
 
     def open_folder_path(self, path: str):
-        path = str(path or '').strip()
+        path = self._normalize_path_input(path)
         if not path:
             QMessageBox.information(self, " ", "未填写文件夹路径")
             return
 
-        normalized = os.path.normpath(os.path.expanduser(path))
+        normalized = path
         if os.path.isfile(normalized):
             normalized = os.path.normpath(os.path.dirname(normalized))
 
