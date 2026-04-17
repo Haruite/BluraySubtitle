@@ -2752,46 +2752,58 @@ class BluraySubtitleGUI(QWidget):
             try:
                 with open(path, 'r', encoding='utf-8') as fp:
                     lines = fp.readlines()
-                if not any('_YUV444P16' in ln for ln in lines):
-                    skip = {
-                        'if dbed.format is None or dbed.format.color_family == vs.COMPAT:',
-                        'if nr16.format is None or nr16.format.color_family == vs.COMPAT:',
-                        'if dbed.format is None or dbed.format.color_family not in (vs.RGB, vs.YUV, vs.GRAY):',
-                        'if nr16.format is None or nr16.format.color_family not in (vs.RGB, vs.YUV, vs.GRAY):',
-                        'dbed = core.resize.Bicubic(dbed, format=vs.YUV444P16)',
-                        'nr16 = core.resize.Bicubic(nr16, format=vs.YUV444P16)',
-                    }
-                    filtered = [ln for ln in lines if ln.strip() not in skip]
+                changed = False
+                if not any('_CF_GRAY' in ln for ln in lines):
+                    for idx, ln in enumerate(lines):
+                        if ln.strip() == 'import mvsfunc as mvf':
+                            insert_at = idx + 1
+                            block = [
+                                "_CF_RGB = getattr(vs, 'RGB', None) or getattr(getattr(vs, 'ColorFamily', None), 'RGB', None)\n",
+                                "_CF_YUV = getattr(vs, 'YUV', None) or getattr(getattr(vs, 'ColorFamily', None), 'YUV', None)\n",
+                                "_CF_GRAY = getattr(vs, 'GRAY', None) or getattr(getattr(vs, 'ColorFamily', None), 'GRAY', None)\n",
+                            ]
+                            lines[insert_at:insert_at] = block
+                            changed = True
+                            break
 
+                for idx, ln in enumerate(lines):
+                    if ln.strip() == 'nr16Y = core.std.ShufflePlanes(nr16, 0, vs.GRAY)':
+                        lines[idx] = 'nr16Y = core.std.ShufflePlanes(nr16, 0, _CF_GRAY)\n'
+                        changed = True
+                    elif ln.strip() == 'merged = core.std.ShufflePlanes([mergedY, dbed], [0,1,2], vs.YUV)':
+                        lines[idx] = 'merged = core.std.ShufflePlanes([mergedY, dbed], [0,1,2], _CF_YUV)\n'
+                        changed = True
+
+                if not any('_BLURAYSUBTITLE_CF_FIX' in ln for ln in lines):
                     target = 'dbed = mvf.LimitFilter(dbed, nr16, thr=0.55, elast=1.5, planes=[0, 1, 2])'
                     insert_at = None
-                    for i, ln in enumerate(filtered):
+                    for i, ln in enumerate(lines):
                         if ln.strip() == target:
                             insert_at = i
                             break
                     if insert_at is not None:
                         patch_lines = [
-                            "_YUV444P16 = getattr(vs, 'YUV444P16', None)\n",
-                            "if _YUV444P16 is None:\n",
-                            "    _YUV444P16 = getattr(getattr(vs, 'PresetFormat', None), 'YUV444P16', None)\n",
-                            "if dbed.format is None or dbed.format.color_family not in (\n",
-                            "    getattr(vs, 'RGB', None) or getattr(getattr(vs, 'ColorFamily', None), 'RGB', None),\n",
-                            "    getattr(vs, 'YUV', None) or getattr(getattr(vs, 'ColorFamily', None), 'YUV', None),\n",
-                            "    getattr(vs, 'GRAY', None) or getattr(getattr(vs, 'ColorFamily', None), 'GRAY', None),\n",
-                            "):\n",
-                            "    if _YUV444P16 is not None:\n",
-                            "        dbed = core.resize.Bicubic(dbed, format=_YUV444P16)\n",
-                            "if nr16.format is None or nr16.format.color_family not in (\n",
-                            "    getattr(vs, 'RGB', None) or getattr(getattr(vs, 'ColorFamily', None), 'RGB', None),\n",
-                            "    getattr(vs, 'YUV', None) or getattr(getattr(vs, 'ColorFamily', None), 'YUV', None),\n",
-                            "    getattr(vs, 'GRAY', None) or getattr(getattr(vs, 'ColorFamily', None), 'GRAY', None),\n",
-                            "):\n",
-                            "    if _YUV444P16 is not None:\n",
-                            "        nr16 = core.resize.Bicubic(nr16, format=_YUV444P16)\n",
+                            "_BLURAYSUBTITLE_CF_FIX = True\n",
+                            "_fmt_yuv444p16 = None\n",
+                            "try:\n",
+                            "    _st_int = getattr(vs, 'INTEGER', None) or getattr(getattr(vs, 'SampleType', None), 'INTEGER', None)\n",
+                            "    if _CF_YUV is not None and _st_int is not None:\n",
+                            "        _fmt = core.query_video_format(_CF_YUV, _st_int, 16, 0, 0)\n",
+                            "        _fmt_yuv444p16 = getattr(_fmt, 'id', _fmt)\n",
+                            "except Exception:\n",
+                            "    _fmt_yuv444p16 = None\n",
+                            "if _fmt_yuv444p16 is not None:\n",
+                            "    if dbed.format is None or dbed.format.color_family not in (_CF_RGB, _CF_YUV, _CF_GRAY):\n",
+                            "        dbed = core.resize.Bicubic(dbed, format=_fmt_yuv444p16)\n",
+                            "    if nr16.format is None or nr16.format.color_family not in (_CF_RGB, _CF_YUV, _CF_GRAY):\n",
+                            "        nr16 = core.resize.Bicubic(nr16, format=_fmt_yuv444p16)\n",
                         ]
-                        filtered[insert_at:insert_at] = patch_lines
-                        with open(path, 'w', encoding='utf-8') as fp:
-                            fp.writelines(filtered)
+                        lines[insert_at:insert_at] = patch_lines
+                        changed = True
+
+                if changed:
+                    with open(path, 'w', encoding='utf-8') as fp:
+                        fp.writelines(lines)
             except Exception:
                 traceback.print_exc()
             return
@@ -2803,6 +2815,9 @@ class BluraySubtitleGUI(QWidget):
             'import vapoursynth as vs\n'
             'from vapoursynth import core\n'
             'import mvsfunc as mvf\n'
+            "_CF_RGB = getattr(vs, 'RGB', None) or getattr(getattr(vs, 'ColorFamily', None), 'RGB', None)\n"
+            "_CF_YUV = getattr(vs, 'YUV', None) or getattr(getattr(vs, 'ColorFamily', None), 'YUV', None)\n"
+            "_CF_GRAY = getattr(vs, 'GRAY', None) or getattr(getattr(vs, 'ColorFamily', None), 'GRAY', None)\n"
             + plugin_line +
             '\n'
             '\n'
@@ -2812,25 +2827,22 @@ class BluraySubtitleGUI(QWidget):
             'src16 = core.fmtc.bitdepth(src8, bits=16)\n'
             'nr16 = core.nlm_ispc.NLMeans(src16, d=0, wmode=3, h=3)\n'
             + deband_line +
-            "_YUV444P16 = getattr(vs, 'YUV444P16', None)\n"
-            "if _YUV444P16 is None:\n"
-            "    _YUV444P16 = getattr(getattr(vs, 'PresetFormat', None), 'YUV444P16', None)\n"
-            "if dbed.format is None or dbed.format.color_family not in (\n"
-            "    getattr(vs, 'RGB', None) or getattr(getattr(vs, 'ColorFamily', None), 'RGB', None),\n"
-            "    getattr(vs, 'YUV', None) or getattr(getattr(vs, 'ColorFamily', None), 'YUV', None),\n"
-            "    getattr(vs, 'GRAY', None) or getattr(getattr(vs, 'ColorFamily', None), 'GRAY', None),\n"
-            "):\n"
-            "    if _YUV444P16 is not None:\n"
-            "        dbed = core.resize.Bicubic(dbed, format=_YUV444P16)\n"
-            "if nr16.format is None or nr16.format.color_family not in (\n"
-            "    getattr(vs, 'RGB', None) or getattr(getattr(vs, 'ColorFamily', None), 'RGB', None),\n"
-            "    getattr(vs, 'YUV', None) or getattr(getattr(vs, 'ColorFamily', None), 'YUV', None),\n"
-            "    getattr(vs, 'GRAY', None) or getattr(getattr(vs, 'ColorFamily', None), 'GRAY', None),\n"
-            "):\n"
-            "    if _YUV444P16 is not None:\n"
-            "        nr16 = core.resize.Bicubic(nr16, format=_YUV444P16)\n"
+            "_BLURAYSUBTITLE_CF_FIX = True\n"
+            "_fmt_yuv444p16 = None\n"
+            "try:\n"
+            "    _st_int = getattr(vs, 'INTEGER', None) or getattr(getattr(vs, 'SampleType', None), 'INTEGER', None)\n"
+            "    if _CF_YUV is not None and _st_int is not None:\n"
+            "        _fmt = core.query_video_format(_CF_YUV, _st_int, 16, 0, 0)\n"
+            "        _fmt_yuv444p16 = getattr(_fmt, 'id', _fmt)\n"
+            "except Exception:\n"
+            "    _fmt_yuv444p16 = None\n"
+            "if _fmt_yuv444p16 is not None:\n"
+            "    if dbed.format is None or dbed.format.color_family not in (_CF_RGB, _CF_YUV, _CF_GRAY):\n"
+            "        dbed = core.resize.Bicubic(dbed, format=_fmt_yuv444p16)\n"
+            "    if nr16.format is None or nr16.format.color_family not in (_CF_RGB, _CF_YUV, _CF_GRAY):\n"
+            "        nr16 = core.resize.Bicubic(nr16, format=_fmt_yuv444p16)\n"
             'dbed = mvf.LimitFilter(dbed, nr16, thr=0.55, elast=1.5, planes=[0, 1, 2])\n'
-            'nr16Y = core.std.ShufflePlanes(nr16, 0, vs.GRAY)\n'
+            'nr16Y = core.std.ShufflePlanes(nr16, 0, _CF_GRAY)\n'
             'aa_nr16Y = core.eedi2.EEDI2(nr16Y, field=1, mthresh=10, lthresh=20, vthresh=20, maxd=24, nt=50)\n'
             'aa_nr16Y = core.fmtc.resample(aa_nr16Y, 1920, 1080, 0, -0.5).std.Transpose()\n'
             'aa_nr16Y = core.eedi2.EEDI2(aa_nr16Y, field=1, mthresh=10, lthresh=20, vthresh=20, maxd=24, nt=50)\n'
@@ -2838,7 +2850,7 @@ class BluraySubtitleGUI(QWidget):
             'aaedY = core.rgvs.Repair(aa_nr16Y, nr16Y, 2)\n'
             'dbedY = core.std.ShufflePlanes(dbed, 0, vs.GRAY)\n'
             'mergedY = mvf.LimitFilter(dbedY, aaedY, thr=1.0, elast=1.5)\n'
-            'merged = core.std.ShufflePlanes([mergedY, dbed], [0,1,2], vs.YUV)\n'
+            'merged = core.std.ShufflePlanes([mergedY, dbed], [0,1,2], _CF_YUV)\n'
             'res = merged\n'
             'Debug = False\n'
             'if Debug:\n'
