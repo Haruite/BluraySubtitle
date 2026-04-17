@@ -2788,6 +2788,11 @@ class BluraySubtitleGUI(QWidget):
             'res.set_output()\n'
             'src8.set_output(1)\n'
         )
+        try:
+            with open(path, 'w', encoding='utf-8') as fp:
+                fp.write(content)
+        except Exception:
+            traceback.print_exc()
 
     def _normalize_path_input(self, text: str) -> str:
         s = str(text or '').strip()
@@ -2803,11 +2808,6 @@ class BluraySubtitleGUI(QWidget):
             except Exception:
                 pass
         return os.path.normpath(os.path.expanduser(s))
-        try:
-            with open(path, 'w', encoding='utf-8') as fp:
-                fp.write(content)
-        except Exception:
-            traceback.print_exc()
 
     def delete_default_vpy_file(self):
         path = self.get_default_vpy_path()
