@@ -59,6 +59,16 @@ import math
 from collections.abc import Iterable, Sequence
 import typing
 
+if hasattr(vs, 'ColorFamily'):
+    for _name in ('RGB', 'YUV', 'GRAY', 'COMPAT', 'UNDEFINED'):
+        if not hasattr(vs, _name) and hasattr(vs.ColorFamily, _name):
+            setattr(vs, _name, getattr(vs.ColorFamily, _name))
+
+if hasattr(vs, 'SampleType'):
+    for _name in ('INTEGER', 'FLOAT'):
+        if not hasattr(vs, _name) and hasattr(vs.SampleType, _name):
+            setattr(vs, _name, getattr(vs.SampleType, _name))
+
 
 ################################################################################################################################
 
