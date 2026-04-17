@@ -3226,6 +3226,72 @@ class BluraySubtitleGUI(QWidget):
                 fp.writelines(lines)
         return mapping
 
+    def _create_temp_preview_vpy_from_default(self, video_path: str, subtitle_path: str) -> str:
+        self.ensure_default_vpy_file()
+        default_vpy = self.get_default_vpy_path()
+        if not os.path.exists(default_vpy):
+            return ''
+        try:
+            with open(default_vpy, 'r', encoding='utf-8') as fp:
+                lines = fp.readlines()
+
+            out: list[str] = []
+            for line in lines:
+                raw = line.rstrip('\r\n')
+
+                if not raw.lstrip().startswith('#'):
+                    m_a = re.match(r'^(\s*a\s*=\s*)r?[\'"].*?[\'"](\s*(#.*)?)$', raw)
+                    if m_a:
+                        out.append(f'{m_a.group(1)}{self._vpy_raw_string(video_path)}{m_a.group(2)}\n')
+                        continue
+
+                m_s = re.match(r'^(\s*)(#\s*)?(sub_file\s*=\s*)r?[\'"].*?[\'"](\s*(#.*)?)$', raw)
+                if m_s:
+                    indent = m_s.group(1)
+                    expr = m_s.group(3)
+                    suffix = m_s.group(4) or ''
+                    comment = '' if subtitle_path else '# '
+                    out.append(f'{indent}{comment}{expr}{self._vpy_raw_string(subtitle_path or "")}{suffix}\n')
+                    continue
+
+                m_t = re.match(r'^(\s*)(#\s*)?(res\s*=\s*core\.assrender\.TextSub\(\s*res\s*,\s*file\s*=\s*sub_file\s*\))(\s*(#.*)?)$', raw)
+                if m_t:
+                    indent = m_t.group(1)
+                    expr = m_t.group(3)
+                    suffix = m_t.group(4) or ''
+                    comment = '' if subtitle_path else '# '
+                    out.append(f'{indent}{comment}{expr}{suffix}\n')
+                    continue
+
+                if raw.strip() == 'dbed = mvf.LimitFilter(dbed, nr16, thr=0.55, elast=1.5, planes=[0, 1, 2])':
+                    out.extend([
+                        'try:\n',
+                        '    dbed = mvf.LimitFilter(dbed, nr16, thr=0.55, elast=1.5, planes=[0, 1, 2])\n',
+                        'except Exception:\n',
+                        '    dbed = nr16\n',
+                    ])
+                    continue
+
+                if raw.strip() == 'mergedY = mvf.LimitFilter(dbedY, aaedY, thr=1.0, elast=1.5)':
+                    out.extend([
+                        'try:\n',
+                        '    mergedY = mvf.LimitFilter(dbedY, aaedY, thr=1.0, elast=1.5)\n',
+                        'except Exception:\n',
+                        '    mergedY = aaedY\n',
+                    ])
+                    continue
+
+                out.append(line if line.endswith('\n') else line + '\n')
+
+            fd, temp_vpy = tempfile.mkstemp(prefix='bluraysubtitle_preview_', suffix='.vpy')
+            os.close(fd)
+            with open(temp_vpy, 'w', encoding='utf-8') as fp:
+                fp.writelines(out)
+            return temp_vpy
+        except Exception:
+            traceback.print_exc()
+            return ''
+
     def _preview_script_for_row(self, vpy_path: str, video_path: str, subtitle_path: str):
         if not video_path:
             QMessageBox.information(self, "提示", "无法确定视频文件路径")
@@ -3245,6 +3311,33 @@ class BluraySubtitleGUI(QWidget):
 
         try:
             if is_default:
+                if sys.platform != 'win32':
+                    temp_vpy = self._create_temp_preview_vpy_from_default(video_path=video_path, subtitle_path=subtitle_path or '')
+                    if not temp_vpy:
+                        QMessageBox.warning(self, "提示", "生成预览脚本失败")
+                        return
+                    proc = self.open_vpy_in_vsedit(temp_vpy)
+                    if not proc:
+                        try:
+                            os.remove(temp_vpy)
+                        except Exception:
+                            pass
+                        return
+
+                    def cleanup_temp_vpy(*_):
+                        try:
+                            os.remove(temp_vpy)
+                        except Exception:
+                            pass
+                        try:
+                            proc.deleteLater()
+                        except Exception:
+                            pass
+
+                    proc.finished.connect(cleanup_temp_vpy)
+                    proc.errorOccurred.connect(cleanup_temp_vpy)
+                    return
+
                 mapping = self._update_default_vpy_paths(video_path=video_path, subtitle_path=subtitle_path or '')
 
                 proc = self.open_vpy_in_vsedit(default_vpy)
