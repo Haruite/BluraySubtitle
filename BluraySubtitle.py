@@ -2770,6 +2770,22 @@ class BluraySubtitleGUI(QWidget):
                     if ln.strip() == 'nr16Y = core.std.ShufflePlanes(nr16, 0, vs.GRAY)':
                         lines[idx] = 'nr16Y = core.std.ShufflePlanes(nr16, 0, _CF_GRAY)\n'
                         changed = True
+                    elif ln.strip() == 'dbed = mvf.LimitFilter(dbed, nr16, thr=0.55, elast=1.5, planes=[0, 1, 2])':
+                        lines[idx:idx + 1] = [
+                            'try:\n',
+                            '    dbed = mvf.LimitFilter(dbed, nr16, thr=0.55, elast=1.5, planes=[0, 1, 2])\n',
+                            'except Exception:\n',
+                            '    dbed = nr16\n',
+                        ]
+                        changed = True
+                    elif ln.strip() == 'mergedY = mvf.LimitFilter(dbedY, aaedY, thr=1.0, elast=1.5)':
+                        lines[idx:idx + 1] = [
+                            'try:\n',
+                            '    mergedY = mvf.LimitFilter(dbedY, aaedY, thr=1.0, elast=1.5)\n',
+                            'except Exception:\n',
+                            '    mergedY = aaedY\n',
+                        ]
+                        changed = True
                     elif ln.strip() == 'merged = core.std.ShufflePlanes([mergedY, dbed], [0,1,2], vs.YUV)':
                         lines[idx] = 'merged = core.std.ShufflePlanes([mergedY, dbed], [0,1,2], _CF_YUV)\n'
                         changed = True
@@ -2841,7 +2857,10 @@ class BluraySubtitleGUI(QWidget):
             "        dbed = core.resize.Bicubic(dbed, format=_fmt_yuv444p16)\n"
             "    if nr16.format is None or nr16.format.color_family not in (_CF_RGB, _CF_YUV, _CF_GRAY):\n"
             "        nr16 = core.resize.Bicubic(nr16, format=_fmt_yuv444p16)\n"
-            'dbed = mvf.LimitFilter(dbed, nr16, thr=0.55, elast=1.5, planes=[0, 1, 2])\n'
+            'try:\n'
+            '    dbed = mvf.LimitFilter(dbed, nr16, thr=0.55, elast=1.5, planes=[0, 1, 2])\n'
+            'except Exception:\n'
+            '    dbed = nr16\n'
             'nr16Y = core.std.ShufflePlanes(nr16, 0, _CF_GRAY)\n'
             'aa_nr16Y = core.eedi2.EEDI2(nr16Y, field=1, mthresh=10, lthresh=20, vthresh=20, maxd=24, nt=50)\n'
             'aa_nr16Y = core.fmtc.resample(aa_nr16Y, 1920, 1080, 0, -0.5).std.Transpose()\n'
@@ -2849,7 +2868,10 @@ class BluraySubtitleGUI(QWidget):
             'aa_nr16Y = core.fmtc.resample(aa_nr16Y, 1080, 1920, 0, -0.5).std.Transpose()\n'
             'aaedY = core.rgvs.Repair(aa_nr16Y, nr16Y, 2)\n'
             'dbedY = core.std.ShufflePlanes(dbed, 0, vs.GRAY)\n'
-            'mergedY = mvf.LimitFilter(dbedY, aaedY, thr=1.0, elast=1.5)\n'
+            'try:\n'
+            '    mergedY = mvf.LimitFilter(dbedY, aaedY, thr=1.0, elast=1.5)\n'
+            'except Exception:\n'
+            '    mergedY = aaedY\n'
             'merged = core.std.ShufflePlanes([mergedY, dbed], [0,1,2], _CF_YUV)\n'
             'res = merged\n'
             'Debug = False\n'
