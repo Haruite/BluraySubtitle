@@ -1561,15 +1561,16 @@ install_vapoursynth_editor
 build_vs_plugins
 install_desktop_shortcuts
 
-log "创建 Python 虚拟环境并安装 Python 依赖（pycountry PyQt6 librosa）"
-if [[ ! -d "$REPO_DIR/.venv" ]]; then
-  tmux_run "创建 Python 虚拟环境" python3 -m venv "$REPO_DIR/.venv"
-fi
-source "$REPO_DIR/.venv/bin/activate"
-
-if ! python -m pip show pycountry PyQt6 librosa >/dev/null 2>&1; then
-  tmux_run "升级虚拟环境 pip" python -m pip install -U pip
-  tmux_run "安装 Python 依赖" pip install pycountry PyQt6 librosa
+log "安装 Python 依赖（使用系统 python3：pycountry PyQt6 librosa）"
+if ! pip3 show pycountry PyQt6 librosa >/dev/null 2>&1; then
+  py_minor="$(python3 -c 'import sys; print(sys.version_info.minor)' 2>/dev/null || echo 0)"
+  if (( py_minor >= 12 )); then
+    tmux_run "安装 Python 依赖" env PIP_DISABLE_PIP_VERSION_CHECK=1 pip3 install --upgrade -q --progress-bar off pycountry PyQt6 librosa --break-system-packages >/dev/null 2>&1 \
+      || tmux_run "安装 Python 依赖(重试)" env PIP_DISABLE_PIP_VERSION_CHECK=1 pip3 install --upgrade pycountry PyQt6 librosa --break-system-packages
+  else
+    tmux_run "安装 Python 依赖" env PIP_DISABLE_PIP_VERSION_CHECK=1 pip3 install --upgrade -q --progress-bar off pycountry PyQt6 librosa >/dev/null 2>&1 \
+      || tmux_run "安装 Python 依赖(重试)" env PIP_DISABLE_PIP_VERSION_CHECK=1 pip3 install --upgrade pycountry PyQt6 librosa
+  fi
 else
   log "Python 依赖已安装，跳过"
 fi
@@ -1577,7 +1578,6 @@ fi
 
 log "完成。推荐的运行方式："
 echo "cd \"$REPO_DIR\""
-echo "source .venv/bin/activate"
 #echo "export FFMPEG_PATH=/usr/bin/ffmpeg"
 #echo "export FFPROBE_PATH=/usr/bin/ffprobe"
 #echo "export FLAC_PATH=/usr/bin/flac"
