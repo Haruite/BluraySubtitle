@@ -2752,33 +2752,46 @@ class BluraySubtitleGUI(QWidget):
             try:
                 with open(path, 'r', encoding='utf-8') as fp:
                     lines = fp.readlines()
-                compat_removed = False
-                for idx, ln in enumerate(lines):
-                    if ln.strip() == 'if dbed.format is None or dbed.format.color_family == vs.COMPAT:':
-                        lines[idx] = 'if dbed.format is None or dbed.format.color_family not in (vs.RGB, vs.YUV, vs.GRAY):\n'
-                        compat_removed = True
-                    elif ln.strip() == 'if nr16.format is None or nr16.format.color_family == vs.COMPAT:':
-                        lines[idx] = 'if nr16.format is None or nr16.format.color_family not in (vs.RGB, vs.YUV, vs.GRAY):\n'
-                        compat_removed = True
+                if not any('_YUV444P16' in ln for ln in lines):
+                    skip = {
+                        'if dbed.format is None or dbed.format.color_family == vs.COMPAT:',
+                        'if nr16.format is None or nr16.format.color_family == vs.COMPAT:',
+                        'if dbed.format is None or dbed.format.color_family not in (vs.RGB, vs.YUV, vs.GRAY):',
+                        'if nr16.format is None or nr16.format.color_family not in (vs.RGB, vs.YUV, vs.GRAY):',
+                        'dbed = core.resize.Bicubic(dbed, format=vs.YUV444P16)',
+                        'nr16 = core.resize.Bicubic(nr16, format=vs.YUV444P16)',
+                    }
+                    filtered = [ln for ln in lines if ln.strip() not in skip]
 
-                has_fix_block = any('dbed = core.resize.Bicubic(dbed, format=vs.YUV444P16)' in ln for ln in lines)
-                if not has_fix_block:
                     target = 'dbed = mvf.LimitFilter(dbed, nr16, thr=0.55, elast=1.5, planes=[0, 1, 2])'
-                    for idx, ln in enumerate(lines):
+                    insert_at = None
+                    for i, ln in enumerate(filtered):
                         if ln.strip() == target:
-                            patch_lines = [
-                                'if dbed.format is None or dbed.format.color_family not in (vs.RGB, vs.YUV, vs.GRAY):\n',
-                                '    dbed = core.resize.Bicubic(dbed, format=vs.YUV444P16)\n',
-                                'if nr16.format is None or nr16.format.color_family not in (vs.RGB, vs.YUV, vs.GRAY):\n',
-                                '    nr16 = core.resize.Bicubic(nr16, format=vs.YUV444P16)\n',
-                            ]
-                            lines[idx:idx] = patch_lines
-                            has_fix_block = True
+                            insert_at = i
                             break
-
-                if compat_removed or has_fix_block:
-                    with open(path, 'w', encoding='utf-8') as fp:
-                        fp.writelines(lines)
+                    if insert_at is not None:
+                        patch_lines = [
+                            "_YUV444P16 = getattr(vs, 'YUV444P16', None)\n",
+                            "if _YUV444P16 is None:\n",
+                            "    _YUV444P16 = getattr(getattr(vs, 'PresetFormat', None), 'YUV444P16', None)\n",
+                            "if dbed.format is None or dbed.format.color_family not in (\n",
+                            "    getattr(vs, 'RGB', None) or getattr(getattr(vs, 'ColorFamily', None), 'RGB', None),\n",
+                            "    getattr(vs, 'YUV', None) or getattr(getattr(vs, 'ColorFamily', None), 'YUV', None),\n",
+                            "    getattr(vs, 'GRAY', None) or getattr(getattr(vs, 'ColorFamily', None), 'GRAY', None),\n",
+                            "):\n",
+                            "    if _YUV444P16 is not None:\n",
+                            "        dbed = core.resize.Bicubic(dbed, format=_YUV444P16)\n",
+                            "if nr16.format is None or nr16.format.color_family not in (\n",
+                            "    getattr(vs, 'RGB', None) or getattr(getattr(vs, 'ColorFamily', None), 'RGB', None),\n",
+                            "    getattr(vs, 'YUV', None) or getattr(getattr(vs, 'ColorFamily', None), 'YUV', None),\n",
+                            "    getattr(vs, 'GRAY', None) or getattr(getattr(vs, 'ColorFamily', None), 'GRAY', None),\n",
+                            "):\n",
+                            "    if _YUV444P16 is not None:\n",
+                            "        nr16 = core.resize.Bicubic(nr16, format=_YUV444P16)\n",
+                        ]
+                        filtered[insert_at:insert_at] = patch_lines
+                        with open(path, 'w', encoding='utf-8') as fp:
+                            fp.writelines(filtered)
             except Exception:
                 traceback.print_exc()
             return
@@ -2799,10 +2812,23 @@ class BluraySubtitleGUI(QWidget):
             'src16 = core.fmtc.bitdepth(src8, bits=16)\n'
             'nr16 = core.nlm_ispc.NLMeans(src16, d=0, wmode=3, h=3)\n'
             + deband_line +
-            'if dbed.format is None or dbed.format.color_family not in (vs.RGB, vs.YUV, vs.GRAY):\n'
-            '    dbed = core.resize.Bicubic(dbed, format=vs.YUV444P16)\n'
-            'if nr16.format is None or nr16.format.color_family not in (vs.RGB, vs.YUV, vs.GRAY):\n'
-            '    nr16 = core.resize.Bicubic(nr16, format=vs.YUV444P16)\n'
+            "_YUV444P16 = getattr(vs, 'YUV444P16', None)\n"
+            "if _YUV444P16 is None:\n"
+            "    _YUV444P16 = getattr(getattr(vs, 'PresetFormat', None), 'YUV444P16', None)\n"
+            "if dbed.format is None or dbed.format.color_family not in (\n"
+            "    getattr(vs, 'RGB', None) or getattr(getattr(vs, 'ColorFamily', None), 'RGB', None),\n"
+            "    getattr(vs, 'YUV', None) or getattr(getattr(vs, 'ColorFamily', None), 'YUV', None),\n"
+            "    getattr(vs, 'GRAY', None) or getattr(getattr(vs, 'ColorFamily', None), 'GRAY', None),\n"
+            "):\n"
+            "    if _YUV444P16 is not None:\n"
+            "        dbed = core.resize.Bicubic(dbed, format=_YUV444P16)\n"
+            "if nr16.format is None or nr16.format.color_family not in (\n"
+            "    getattr(vs, 'RGB', None) or getattr(getattr(vs, 'ColorFamily', None), 'RGB', None),\n"
+            "    getattr(vs, 'YUV', None) or getattr(getattr(vs, 'ColorFamily', None), 'YUV', None),\n"
+            "    getattr(vs, 'GRAY', None) or getattr(getattr(vs, 'ColorFamily', None), 'GRAY', None),\n"
+            "):\n"
+            "    if _YUV444P16 is not None:\n"
+            "        nr16 = core.resize.Bicubic(nr16, format=_YUV444P16)\n"
             'dbed = mvf.LimitFilter(dbed, nr16, thr=0.55, elast=1.5, planes=[0, 1, 2])\n'
             'nr16Y = core.std.ShufflePlanes(nr16, 0, vs.GRAY)\n'
             'aa_nr16Y = core.eedi2.EEDI2(nr16Y, field=1, mthresh=10, lthresh=20, vthresh=20, maxd=24, nt=50)\n'
