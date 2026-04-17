@@ -2752,20 +2752,33 @@ class BluraySubtitleGUI(QWidget):
             try:
                 with open(path, 'r', encoding='utf-8') as fp:
                     lines = fp.readlines()
-                if not any('vs.COMPAT' in ln for ln in lines):
+                compat_removed = False
+                for idx, ln in enumerate(lines):
+                    if ln.strip() == 'if dbed.format is None or dbed.format.color_family == vs.COMPAT:':
+                        lines[idx] = 'if dbed.format is None or dbed.format.color_family not in (vs.RGB, vs.YUV, vs.GRAY):\n'
+                        compat_removed = True
+                    elif ln.strip() == 'if nr16.format is None or nr16.format.color_family == vs.COMPAT:':
+                        lines[idx] = 'if nr16.format is None or nr16.format.color_family not in (vs.RGB, vs.YUV, vs.GRAY):\n'
+                        compat_removed = True
+
+                has_fix_block = any('dbed = core.resize.Bicubic(dbed, format=vs.YUV444P16)' in ln for ln in lines)
+                if not has_fix_block:
                     target = 'dbed = mvf.LimitFilter(dbed, nr16, thr=0.55, elast=1.5, planes=[0, 1, 2])'
                     for idx, ln in enumerate(lines):
                         if ln.strip() == target:
                             patch_lines = [
-                                'if dbed.format is None or dbed.format.color_family == vs.COMPAT:\n',
+                                'if dbed.format is None or dbed.format.color_family not in (vs.RGB, vs.YUV, vs.GRAY):\n',
                                 '    dbed = core.resize.Bicubic(dbed, format=vs.YUV444P16)\n',
-                                'if nr16.format is None or nr16.format.color_family == vs.COMPAT:\n',
+                                'if nr16.format is None or nr16.format.color_family not in (vs.RGB, vs.YUV, vs.GRAY):\n',
                                 '    nr16 = core.resize.Bicubic(nr16, format=vs.YUV444P16)\n',
                             ]
                             lines[idx:idx] = patch_lines
-                            with open(path, 'w', encoding='utf-8') as fp:
-                                fp.writelines(lines)
+                            has_fix_block = True
                             break
+
+                if compat_removed or has_fix_block:
+                    with open(path, 'w', encoding='utf-8') as fp:
+                        fp.writelines(lines)
             except Exception:
                 traceback.print_exc()
             return
@@ -2786,9 +2799,9 @@ class BluraySubtitleGUI(QWidget):
             'src16 = core.fmtc.bitdepth(src8, bits=16)\n'
             'nr16 = core.nlm_ispc.NLMeans(src16, d=0, wmode=3, h=3)\n'
             + deband_line +
-            'if dbed.format is None or dbed.format.color_family == vs.COMPAT:\n'
+            'if dbed.format is None or dbed.format.color_family not in (vs.RGB, vs.YUV, vs.GRAY):\n'
             '    dbed = core.resize.Bicubic(dbed, format=vs.YUV444P16)\n'
-            'if nr16.format is None or nr16.format.color_family == vs.COMPAT:\n'
+            'if nr16.format is None or nr16.format.color_family not in (vs.RGB, vs.YUV, vs.GRAY):\n'
             '    nr16 = core.resize.Bicubic(nr16, format=vs.YUV444P16)\n'
             'dbed = mvf.LimitFilter(dbed, nr16, thr=0.55, elast=1.5, planes=[0, 1, 2])\n'
             'nr16Y = core.std.ShufflePlanes(nr16, 0, vs.GRAY)\n'
