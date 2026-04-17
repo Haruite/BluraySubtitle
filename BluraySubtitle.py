@@ -7,6 +7,7 @@
 # 功能4需要安装vapoursynth，并将vspipe(.exe)和x265(.exe)添加到系统path
 # pip install pycountry PyQt6 librosa
 import _io
+import builtins
 import copy
 import ctypes
 import datetime
@@ -37,10 +38,10 @@ try:
 except Exception:
     soundfile = None
 from PyQt6.QtCore import QCoreApplication, Qt, QPoint, QObject, QThread, QTimer, QEventLoop, QProcess, pyqtSignal
-from PyQt6.QtGui import QPainter, QColor, QDragMoveEvent, QDropEvent, QPaintEvent, QDragEnterEvent
+from PyQt6.QtGui import QPainter, QColor, QDragMoveEvent, QDropEvent, QPaintEvent, QDragEnterEvent, QFontMetrics
 from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLabel, QToolButton, QLineEdit, \
     QMessageBox, QHBoxLayout, QGroupBox, QCheckBox, QProgressDialog, QProgressBar, QRadioButton, QButtonGroup, \
-    QTableWidget, QTableWidgetItem, QDialog, QPushButton, QComboBox, QMenu, QAbstractItemView, QPlainTextEdit, QSizePolicy, QHeaderView, QInputDialog
+    QTableWidget, QTableWidgetItem, QDialog, QPushButton, QComboBox, QMenu, QAbstractItemView, QPlainTextEdit, QSizePolicy, QHeaderView, QInputDialog, QTabBar
 
 if sys.platform == 'win32':
     import winreg
@@ -84,6 +85,145 @@ REMUX_LABELS = ['sub_path', 'ep_duration', 'bdmv_index', 'chapter_index', 'm2ts_
 ENCODE_LABELS = ['sub_path', 'ep_duration', 'bdmv_index', 'chapter_index', 'm2ts_file', 'vpy_path', 'edit_vpy', 'preview_script']
 ENCODE_SP_LABELS = ['bdmv_index', 'mpls_file', 'm2ts_file', 'duration', 'vpy_path', 'edit_vpy', 'preview_script']
 CONFIGURATION = {}
+CURRENT_UI_LANGUAGE = 'en'
+
+I18N_ZH_TO_EN = {
+    'BluraySubtitle': 'BluraySubtitle',
+    '语言': 'Language',
+    '选择功能': 'Function',
+    '生成合并字幕': 'Merge Subtitles',
+    '给mkv添加章节': 'Add Chapters To MKV',
+    '原盘remux': 'Blu-ray Remux',
+    '原盘压制': 'Blu-ray Encode',
+    '原盘': 'Blu-ray',
+    '字幕': 'Subtitles',
+    '选择原盘所在的文件夹': 'Select the Blu-ray folder',
+    '选择单集字幕所在的文件夹': 'Select the subtitle folder',
+    '选择单集字幕所在的文件夹：': 'Select the subtitle folder:',
+    '选择mkv文件所在的文件夹': 'Select the MKV folder',
+    '选择字幕文件所在的文件夹（可选）': 'Select the subtitle folder (optional)',
+    '补全蓝光目录': 'Complete Blu-ray Folder',
+    '直接编辑原文件': 'Edit Original File Directly',
+    '输出文件夹': 'Output Folder',
+    '选择': 'Select',
+    '打开': 'Open',
+    '生成字幕': 'Generate Subtitles',
+    '添加章节': 'Add Chapters',
+    '开始remux': 'Start Remux',
+    '开始压制': 'Start Encode',
+    '压制': 'Encode',
+    '字幕封装方式：': 'Subtitle Packaging:',
+    '外挂': 'External',
+    '内挂': 'Softsub',
+    '内嵌': 'Hardsub',
+    '程序自带': 'Built-in',
+    '系统': 'System',
+    '快速': 'Fast',
+    '均衡': 'Balanced',
+    '高质': 'High Quality',
+    '极限': 'Extreme',
+    '自订': 'Custom',
+    'x265参数：': 'x265 Params:',
+    '准备中': 'Preparing',
+    '正在取消...': 'Canceling...',
+    '完成': 'Done',
+    '读取字幕中': 'Reading Subtitles',
+    '读取MKV中': 'Reading MKV',
+    '生成配置': 'Generating Configuration',
+    '字幕生成中': 'Generating Subtitles',
+    '写入章节中': 'Writing Chapters',
+    '写入字幕文件': 'Writing Subtitle File',
+    '合并中 ': 'Merging ',
+    '混流中': 'Muxing',
+    '编辑中': 'Editing',
+    '处理完成: ': 'Completed: ',
+    '原盘remux成功！': 'Blu-ray remux completed!',
+    '原盘压制成功！': 'Blu-ray encode completed!',
+    '生成字幕成功！': 'Subtitle generation completed!',
+    '添加章节成功，mkv章节已添加': 'Chapters added to MKV successfully',
+    '添加章节成功，生成的新mkv文件在output文件夹下': 'Chapters added successfully, new MKV is in output folder',
+    '未填写文件夹路径': 'Folder path is empty',
+    '文件夹不存在：': 'Folder does not exist:',
+    '文件不存在：': 'File does not exist:',
+    '无法打开文件夹：': 'Cannot open folder:',
+    '打开文件夹失败': 'Open Folder Failed',
+    '未选择输出文件夹': 'Output folder is not selected',
+    '输出文件夹不存在': 'Output folder does not exist',
+    '未选择原盘主mpls': 'Main MPLS is not selected',
+    '未选择字幕文件': 'Subtitle file is not selected',
+    '提示': 'Prompt',
+    '取消': 'Cancel',
+    '（点击取消）': '(click to cancel)',
+    '选择m2ts文件': 'Select M2TS File',
+    '检测到多个 m2ts 文件，请选择要预览的文件：': 'Multiple M2TS files detected, choose one for preview:',
+    '选择vpy文件': 'Select VPy File',
+    '选择文件夹': 'Select Folder',
+    '选择输出文件夹': 'Select Output Folder',
+    'vpy路径为空': 'VPy path is empty',
+    '启动 vsedit 失败': 'Failed to launch vsedit',
+    '打开 vsedit 失败：': 'Failed to open vsedit:',
+    '预览脚本失败：': 'Preview script failed:',
+    '未找到 vsedit，请检查 VSEDIT_PATH 或系统 PATH': 'vsedit not found, check VSEDIT_PATH or system PATH',
+    '执行命令: ': 'Run command: ',
+    '压制命令：': 'Encode command:',
+    '混流命令：': 'Mux command:',
+    '多进程模式解析字幕': 'Parsing subtitles in multiprocessing mode',
+    '单进程模式解析字幕': 'Parsing subtitles in single-process mode',
+    '解析字幕': 'Parsing Subtitles',
+    '（已加载 ': ' (loaded ',
+    '）': ')',
+    '尝试多进程解析，失败时回退到单进程': 'Trying multiprocessing, fallback to single-process on failure',
+    '字幕文件全部加载失败': 'Failed to load all subtitle files',
+    '成功加载 ': 'Loaded successfully ',
+    ' 个字幕文件': ' subtitle files',
+    '多进程解析失败，切换到单进程模式: ': 'Multiprocessing parse failed, switching to single-process: ',
+    '配置为空，跳过更新': 'Configuration is empty, skipping update',
+    '章节': 'Chapters',
+    '编辑字幕': 'Edit Subtitle',
+    '查看章节': 'view chapters',
+    '播放': 'play',
+    '预览': 'preview',
+    '编辑vpy': 'edit_vpy',
+}
+I18N_EN_TO_ZH = {v: k for k, v in I18N_ZH_TO_EN.items()}
+
+
+def translate_text(text: str, language: Optional[str] = None) -> str:
+    if not isinstance(text, str):
+        return text
+    lang = language or CURRENT_UI_LANGUAGE
+    mapping = I18N_ZH_TO_EN if lang == 'en' else I18N_EN_TO_ZH
+    if text in mapping:
+        return mapping[text]
+    result = text
+    for src in sorted(mapping.keys(), key=len, reverse=True):
+        if src and src in result:
+            result = result.replace(src, mapping[src])
+    return result
+
+
+_ORIGINAL_PRINT = builtins.print
+
+
+def print(*args, **kwargs):
+    translated_args = [translate_text(a) if isinstance(a, str) else a for a in args]
+    _ORIGINAL_PRINT(*translated_args, **kwargs)
+
+
+_ORIG_QMSG_INFORMATION = QMessageBox.information
+_ORIG_QMSG_WARNING = QMessageBox.warning
+
+
+def _localized_qmsg_information(parent, title, text, *args, **kwargs):
+    return _ORIG_QMSG_INFORMATION(parent, translate_text(str(title)), translate_text(str(text)), *args, **kwargs)
+
+
+def _localized_qmsg_warning(parent, title, text, *args, **kwargs):
+    return _ORIG_QMSG_WARNING(parent, translate_text(str(title)), translate_text(str(text)), *args, **kwargs)
+
+
+QMessageBox.information = staticmethod(_localized_qmsg_information)
+QMessageBox.warning = staticmethod(_localized_qmsg_warning)
 
 
 class Chapter:
@@ -755,7 +895,7 @@ class BluraySubtitle:
                     self.progress_dialog(value)
         else:
             if text is not None and hasattr(self.progress_dialog, 'setLabelText'):
-                self.progress_dialog.setLabelText(text)
+                self.progress_dialog.setLabelText(translate_text(text))
             if value is not None and hasattr(self.progress_dialog, 'setValue'):
                 self.progress_dialog.setValue(int(value))
         app = QCoreApplication.instance()
@@ -2743,6 +2883,166 @@ class BluraySubtitleGUI(QWidget):
         self.init_ui()
         self.altered = False
 
+    def t(self, text: str) -> str:
+        return translate_text(str(text), getattr(self, '_language_code', CURRENT_UI_LANGUAGE))
+
+    def _refresh_language_combo(self):
+        if not hasattr(self, 'language_label') or not hasattr(self, 'language_combo'):
+            return
+        current_code = self.language_combo.currentData() or 'en'
+        self.language_label.setText(self.t('语言'))
+        self.language_combo.blockSignals(True)
+        self.language_combo.setItemText(0, 'English')
+        self.language_combo.setItemText(1, '简体中文')
+        idx = 0 if current_code == 'en' else 1
+        self.language_combo.setCurrentIndex(idx)
+        self.language_combo.blockSignals(False)
+
+    def _translate_widget_texts(self):
+        for widget in self.findChildren(QWidget):
+            if widget is getattr(self, 'language_combo', None):
+                continue
+            if isinstance(widget, QGroupBox):
+                title_getter = getattr(widget, 'title', None)
+                title_text = title_getter() if callable(title_getter) else ''
+                if title_text:
+                    widget.setTitle(self.t(title_text))
+            if isinstance(widget, QTabBar):
+                for i in range(widget.count()):
+                    widget.setTabText(i, self.t(widget.tabText(i)))
+            if isinstance(widget, QComboBox):
+                for i in range(widget.count()):
+                    widget.setItemText(i, self.t(widget.itemText(i)))
+            if hasattr(widget, 'text') and hasattr(widget, 'setText'):
+                try:
+                    txt = widget.text()
+                    if isinstance(txt, str) and txt:
+                        widget.setText(self.t(txt))
+                except Exception:
+                    pass
+
+    def _apply_language(self, language_code: str):
+        global CURRENT_UI_LANGUAGE
+        code = 'zh' if language_code == 'zh' else 'en'
+        self._language_code = code
+        CURRENT_UI_LANGUAGE = code
+        self.setWindowTitle(self.t('BluraySubtitle'))
+        self._translate_widget_texts()
+        self._refresh_language_combo()
+        self._refresh_all_table_headers()
+        self._refresh_language_dependent_sizes()
+        self.on_select_function(force=True, keep_inputs=True, keep_state=True)
+        self._refresh_language_dependent_sizes()
+
+    def _on_language_changed(self):
+        code = self.language_combo.currentData() or 'en'
+        self._apply_language(str(code))
+
+    def _localized_headers_for_keys(self, keys: list[str]) -> list[str]:
+        if getattr(self, '_language_code', CURRENT_UI_LANGUAGE) != 'zh':
+            return list(keys)
+        zh = {
+            'path': '路径',
+            'size': '大小',
+            'info': '信息',
+            'select': '选择',
+            'sub_duration': '字幕时长',
+            'bdmv_index': '原盘序号',
+            'chapter_index': '章节序号',
+            'offset': '偏移',
+            'duration': '时长',
+            'sub_path': '字幕路径',
+            'ep_duration': '单集时长',
+            'm2ts_file': 'm2ts 文件',
+            'vpy_path': 'vpy 路径',
+            'edit_vpy': '编辑 vpy',
+            'preview_script': '预览',
+            'mpls_file': 'mpls 文件',
+            'chapters': '章节',
+            'main': '主播放列表',
+            'play': '播放',
+            'file': '文件',
+            'index': '序号',
+            'start': '开始',
+            'end': '结束',
+            'text': '内容',
+        }
+        return [zh.get(k, str(k).replace('_', ' ')) for k in keys]
+
+    def _set_table_headers(self, table: QTableWidget, keys: list[str]):
+        try:
+            table.setHorizontalHeaderLabels(self._localized_headers_for_keys(keys))
+        except Exception:
+            pass
+
+    def _refresh_all_table_headers(self):
+        try:
+            if hasattr(self, 'table1') and self.table1:
+                self._set_table_headers(self.table1, BDMV_LABELS)
+        except Exception:
+            pass
+
+    def _adjust_combo_width_to_contents(self, combo: QComboBox, padding: int = 44, min_width: int = 80, max_width: int = 520):
+        if not combo:
+            return
+        try:
+            fm = QFontMetrics(combo.font())
+            longest = 0
+            for i in range(combo.count()):
+                longest = max(longest, fm.horizontalAdvance(combo.itemText(i)))
+            w = int(longest + padding)
+            w = max(min_width, min(max_width, w))
+            combo.setFixedWidth(w)
+        except Exception:
+            pass
+
+    def _refresh_language_dependent_sizes(self):
+        lang = getattr(self, '_language_code', CURRENT_UI_LANGUAGE)
+        try:
+            if hasattr(self, 'table1') and self.table1:
+                self.table1.setColumnWidth(2, 360 if lang == 'zh' else 370)
+                for r in range(self.table1.rowCount()):
+                    info_table = self.table1.cellWidget(r, 2)
+                    if isinstance(info_table, QTableWidget):
+                        info_table.resizeColumnsToContents()
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self, 'x265_preset_combo') and self.x265_preset_combo:
+                self._adjust_combo_width_to_contents(self.x265_preset_combo)
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self, 'table2') and self.table2:
+                function_id = self.get_selected_function_id()
+                if function_id == 1:
+                    self._set_table_headers(self.table2, SUBTITLE_LABELS)
+                elif function_id == 2:
+                    self._set_table_headers(self.table2, MKV_LABELS)
+                elif function_id == 3:
+                    self._set_table_headers(self.table2, REMUX_LABELS)
+                else:
+                    self._set_table_headers(self.table2, ENCODE_LABELS)
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self, 'table3') and self.table3:
+                self._set_table_headers(self.table3, ENCODE_SP_LABELS)
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self, 'table1') and self.table1:
+                for r in range(self.table1.rowCount()):
+                    info_table = self.table1.cellWidget(r, 2)
+                    if isinstance(info_table, QTableWidget):
+                        self._set_table_headers(info_table, ['mpls_file', 'duration', 'chapters', 'main', 'play'])
+        except Exception:
+            pass
+
     def get_default_vpy_path(self) -> str:
         return os.path.normpath(os.path.abspath('vpy.vpy'))
 
@@ -2889,7 +3189,7 @@ class BluraySubtitleGUI(QWidget):
         if value is not None:
             self._exe_button_progress_value = int(value)
         if text is not None:
-            self._exe_button_progress_text = str(text)
+            self._exe_button_progress_text = self.t(str(text))
 
         v = int(getattr(self, '_exe_button_progress_value', 0))
         t = str(getattr(self, '_exe_button_progress_text', '')).strip()
@@ -2898,7 +3198,7 @@ class BluraySubtitleGUI(QWidget):
         stop2 = f"{min(1.0, ratio + 0.001):.3f}"
         percent = ratio * 100
 
-        cancel_suffix = "（点击取消）" if getattr(self, '_current_cancel_event', None) is not None and t != '正在取消...' else ""
+        cancel_suffix = self.t("（点击取消）") if getattr(self, '_current_cancel_event', None) is not None and t != self.t('正在取消...') else ""
         if t:
             self.exe_button.setText(f"{t}{cancel_suffix} {percent:.1f}%")
         else:
@@ -2915,7 +3215,7 @@ class BluraySubtitleGUI(QWidget):
         self._update_exe_button_progress(value=value)
 
     def _on_exe_button_progress_text(self, text: str):
-        self._update_exe_button_progress(text=text)
+        self._update_exe_button_progress(text=self.t(text))
 
     def _reset_exe_button(self):
         if not hasattr(self, 'exe_button') or not self.exe_button:
@@ -2930,7 +3230,7 @@ class BluraySubtitleGUI(QWidget):
         if not hasattr(self, 'bottom_message_label') or not self.bottom_message_label:
             return
             
-        self._bottom_message_text = text
+        self._bottom_message_text = self.t(text)
         self._bottom_message_remaining = duration_ms // 1000
         
         self.bottom_message_label.setText(f"{self._bottom_message_text} ({self._bottom_message_remaining}s)")
@@ -2983,13 +3283,13 @@ class BluraySubtitleGUI(QWidget):
         line_edit = QLineEdit(widget)
         line_edit.setText(initial_path or self.get_default_vpy_path())
 
-        button = QPushButton('选择', widget)
+        button = QPushButton(self.t('选择'), widget)
 
         def select_file():
             start_dir = os.path.dirname(line_edit.text()) if line_edit.text() else os.getcwd()
             path, _ = QFileDialog.getOpenFileName(
                 self,
-                "选择vpy文件",
+                self.t("选择vpy文件"),
                 start_dir,
                 "Python/VapourSynth (*.py *.vpy)"
             )
@@ -3002,7 +3302,7 @@ class BluraySubtitleGUI(QWidget):
         return widget
 
     def get_vpy_path_from_row(self, row_index: int) -> str:
-        if not self.radio4.isChecked():
+        if self.get_selected_function_id() != 4:
             return ''
         vpy_col = ENCODE_LABELS.index('vpy_path')
         w = self.table2.cellWidget(row_index, vpy_col)
@@ -3128,8 +3428,8 @@ class BluraySubtitleGUI(QWidget):
 
         item, ok = QInputDialog.getItem(
             self,
-            "选择m2ts文件",
-            "检测到多个 m2ts 文件，请选择要预览的文件：",
+            self.t("选择m2ts文件"),
+            self.t("检测到多个 m2ts 文件，请选择要预览的文件："),
             m2ts_files,
             0,
             False
@@ -3139,7 +3439,7 @@ class BluraySubtitleGUI(QWidget):
         return os.path.normpath(os.path.join(stream_dir, str(item)))
 
     def _get_first_subtitle_path_for_bdmv_index(self, bdmv_index: int) -> str:
-        if not self.radio4.isChecked():
+        if self.get_selected_function_id() != 4:
             return ''
         try:
             bdmv_col = ENCODE_LABELS.index('bdmv_index')
@@ -3370,7 +3670,7 @@ class BluraySubtitleGUI(QWidget):
             QMessageBox.warning(self, "提示", f"预览脚本失败：{e}")
 
     def on_edit_vpy_clicked(self):
-        if not self.radio4.isChecked():
+        if self.get_selected_function_id() != 4:
             return
         sender = self.sender()
         if not sender:
@@ -3384,7 +3684,7 @@ class BluraySubtitleGUI(QWidget):
         self.open_vpy_in_editor(self.get_vpy_path_from_row(row_index))
 
     def on_preview_script_clicked(self):
-        if not self.radio4.isChecked():
+        if self.get_selected_function_id() != 4:
             return
         sender = self.sender()
         if not sender:
@@ -3424,7 +3724,7 @@ class BluraySubtitleGUI(QWidget):
         self._preview_script_for_row(vpy_path=vpy_path, video_path=video_path, subtitle_path=subtitle_path)
 
     def ensure_encode_row_widgets(self, row_index: int):
-        if not self.radio4.isChecked():
+        if self.get_selected_function_id() != 4:
             return
         vpy_col = ENCODE_LABELS.index('vpy_path')
         edit_col = ENCODE_LABELS.index('edit_vpy')
@@ -3435,18 +3735,18 @@ class BluraySubtitleGUI(QWidget):
 
         if not self.table2.cellWidget(row_index, edit_col):
             btn = QToolButton(self.table2)
-            btn.setText('edit_vpy')
+            btn.setText(self.t('edit_vpy'))
             btn.clicked.connect(self.on_edit_vpy_clicked)
             self.table2.setCellWidget(row_index, edit_col, btn)
 
         if not self.table2.cellWidget(row_index, preview_col):
             btn = QToolButton(self.table2)
-            btn.setText('preview')
+            btn.setText(self.t('preview'))
             btn.clicked.connect(self.on_preview_script_clicked)
             self.table2.setCellWidget(row_index, preview_col, btn)
 
     def get_sp_vpy_path_from_row(self, row_index: int) -> str:
-        if not self.radio4.isChecked():
+        if self.get_selected_function_id() != 4:
             return ''
         vpy_col = ENCODE_SP_LABELS.index('vpy_path')
         w = self.table3.cellWidget(row_index, vpy_col)
@@ -3458,7 +3758,7 @@ class BluraySubtitleGUI(QWidget):
         return item.text().strip() if item else ''
 
     def on_edit_sp_vpy_clicked(self):
-        if not self.radio4.isChecked():
+        if self.get_selected_function_id() != 4:
             return
         sender = self.sender()
         if not sender:
@@ -3473,7 +3773,7 @@ class BluraySubtitleGUI(QWidget):
         self.open_vpy_in_editor(path)
 
     def on_preview_sp_scripts_clicked(self):
-        if not self.radio4.isChecked():
+        if self.get_selected_function_id() != 4:
             return
         sender = self.sender()
         if not sender:
@@ -3506,7 +3806,8 @@ class BluraySubtitleGUI(QWidget):
         self._preview_script_for_row(vpy_path=vpy_path, video_path=video_path, subtitle_path=subtitle_path)
 
     def refresh_sp_table(self, configuration: dict[int, dict[str, int | str]]):
-        if not self.radio4.isChecked() or not configuration:
+        function_id = self.get_selected_function_id()
+        if function_id not in (3, 4) or not configuration:
             if hasattr(self, 'table3'):
                 self.table3.setRowCount(0)
             return
@@ -3584,24 +3885,29 @@ class BluraySubtitleGUI(QWidget):
             old_sorting = self.table3.isSortingEnabled()
             self.table3.setSortingEnabled(False)
             try:
-                vpy_col = ENCODE_SP_LABELS.index('vpy_path')
-                edit_col = ENCODE_SP_LABELS.index('edit_vpy')
-                preview_col = ENCODE_SP_LABELS.index('preview_script')
                 self.table3.setRowCount(len(entries))
                 for i, (bdmv_index, mpls_file, m2ts_files, dur) in enumerate(entries):
                     self.table3.setItem(i, 0, QTableWidgetItem(str(bdmv_index)))
                     self.table3.setItem(i, 1, QTableWidgetItem(mpls_file))
                     self.table3.setItem(i, 2, QTableWidgetItem(','.join(m2ts_files)))
                     self.table3.setItem(i, 3, QTableWidgetItem(get_time_str(dur)))
-                    self.table3.setCellWidget(i, vpy_col, self.create_vpy_path_widget(parent=self.table3))
-                    btn = QToolButton(self.table3)
-                    btn.setText('edit_vpy')
-                    btn.clicked.connect(self.on_edit_sp_vpy_clicked)
-                    self.table3.setCellWidget(i, edit_col, btn)
-                    btn2 = QToolButton(self.table3)
-                    btn2.setText('preview')
-                    btn2.clicked.connect(self.on_preview_sp_scripts_clicked)
-                    self.table3.setCellWidget(i, preview_col, btn2)
+                    if function_id == 4:
+                        vpy_col = ENCODE_SP_LABELS.index('vpy_path')
+                        edit_col = ENCODE_SP_LABELS.index('edit_vpy')
+                        preview_col = ENCODE_SP_LABELS.index('preview_script')
+                        self.table3.setCellWidget(i, vpy_col, self.create_vpy_path_widget(parent=self.table3))
+                        btn = QToolButton(self.table3)
+                        btn.setText(self.t('edit_vpy'))
+                        btn.clicked.connect(self.on_edit_sp_vpy_clicked)
+                        self.table3.setCellWidget(i, edit_col, btn)
+                        btn2 = QToolButton(self.table3)
+                        btn2.setText(self.t('preview'))
+                        btn2.clicked.connect(self.on_preview_sp_scripts_clicked)
+                        self.table3.setCellWidget(i, preview_col, btn2)
+                    else:
+                        for col in range(4, len(ENCODE_SP_LABELS)):
+                            self.table3.setItem(i, col, None)
+                            self.table3.setCellWidget(i, col, None)
                 self.table3.resizeColumnsToContents()
                 self._scroll_table_h_to_right(self.table3)
             finally:
@@ -3656,6 +3962,7 @@ class BluraySubtitleGUI(QWidget):
         self.x265_preset_combo = QComboBox(tools_row)
         self.x265_preset_combo.addItems(list(self._encode_preset_params.keys()))
         self.x265_preset_combo.setCurrentText('均衡')
+        self._adjust_combo_width_to_contents(self.x265_preset_combo)
         tools_layout.addWidget(self.x265_preset_combo)
 
         tools_layout.addStretch(1)
@@ -3716,7 +4023,7 @@ class BluraySubtitleGUI(QWidget):
         self._sub_pack_row = sub_pack_row
 
         def on_sub_pack_changed():
-            if not self.radio4.isChecked():
+            if self.get_selected_function_id() != 4:
                 return
             if not self.subtitle_folder_path.text().strip():
                 return
@@ -3727,7 +4034,7 @@ class BluraySubtitleGUI(QWidget):
         self.sub_pack_hard_radio.toggled.connect(on_sub_pack_changed)
 
         def update_sub_pack_enabled_state():
-            enabled = self.radio4.isChecked() and bool(self.subtitle_folder_path.text().strip())
+            enabled = self.get_selected_function_id() == 4 and bool(self.subtitle_folder_path.text().strip())
             self._sub_pack_row.setEnabled(enabled)
             if not enabled:
                 self.sub_pack_external_radio.setChecked(True)
@@ -3737,10 +4044,14 @@ class BluraySubtitleGUI(QWidget):
         update_sub_pack_enabled_state()
 
     def init_ui(self):
-        self.setWindowTitle("BluraySubtitle")
+        self.setWindowTitle(self.t("BluraySubtitle"))
         self.setMinimumWidth(860)
         self.setMinimumHeight(820)
         self.resize(1000, 1000)
+        self._geometry = self.saveGeometry()
+        self._language_code = 'en'
+        global CURRENT_UI_LANGUAGE
+        CURRENT_UI_LANGUAGE = 'en'
 
         app = QApplication.instance()
         if app:
@@ -3750,7 +4061,24 @@ class BluraySubtitleGUI(QWidget):
         self.layout.setContentsMargins(8, 8, 8, 8)
         self.layout.setSpacing(6)
 
-        function_button = QGroupBox('选择功能', self)
+        language_row = QWidget(self)
+        language_layout = QHBoxLayout()
+        language_layout.setContentsMargins(8, 0, 8, 0)
+        language_layout.setSpacing(6)
+        language_row.setLayout(language_layout)
+        self.language_label = QLabel('语言', language_row)
+        self.language_combo = QComboBox(language_row)
+        self.language_combo.addItem('English', 'en')
+        self.language_combo.addItem('简体中文', 'zh')
+        self.language_combo.setCurrentIndex(0)
+        self.language_combo.currentIndexChanged.connect(lambda _=None: self._on_language_changed())
+        language_layout.addWidget(self.language_label)
+        language_layout.addWidget(self.language_combo)
+        language_layout.addStretch(1)
+        self.layout.addWidget(language_row)
+
+        function_button = QGroupBox(self.t('选择功能'), self)
+        self.function_button = function_button
         h_layout = QHBoxLayout()
         h_layout.setContentsMargins(8, 10, 8, 6)
         h_layout.setSpacing(12)
@@ -3758,25 +4086,18 @@ class BluraySubtitleGUI(QWidget):
         self.subtitle_folder_path = QLineEdit()
         self.subtitle_folder_path.setMinimumWidth(200)
 
-        self.radio1 = QRadioButton(self)
-        self.radio1.setText("生成合并字幕")
-        self.radio1.setChecked(True)
-        self.radio2 = QRadioButton(self)
-        self.radio2.setText("给mkv添加章节")
-        self.radio3 = QRadioButton(self)
-        self.radio3.setText("原盘remux")
-        self.radio4 = QRadioButton(self)
-        self.radio4.setText("原盘压制")
-        group = QButtonGroup(self)
-        group.addButton(self.radio1)
-        group.addButton(self.radio2)
-        group.addButton(self.radio3)
-        group.addButton(self.radio4)
-        group.buttonClicked.connect(self.on_select_function)
-        h_layout.addWidget(self.radio1)
-        h_layout.addWidget(self.radio2)
-        h_layout.addWidget(self.radio3)
-        h_layout.addWidget(self.radio4)
+        self.function_tabbar = QTabBar(function_button)
+        self.function_tabbar.setExpanding(True)
+        self.function_tabbar.setMovable(False)
+        self.function_tabbar.setDocumentMode(True)
+        self.function_tabbar.addTab(self.t("生成合并字幕"))
+        self.function_tabbar.addTab(self.t("给mkv添加章节"))
+        self.function_tabbar.addTab(self.t("原盘remux"))
+        self.function_tabbar.addTab(self.t("原盘压制"))
+        self.function_tabbar.setCurrentIndex(0)
+        self._selected_function_id = 1
+        self.function_tabbar.currentChanged.connect(lambda _=None: self.on_select_function())
+        h_layout.addWidget(self.function_tabbar)
         self.layout.addWidget(function_button)
 
         bdmv = QGroupBox()
@@ -3814,7 +4135,7 @@ class BluraySubtitleGUI(QWidget):
 
         self.table1 = QTableWidget()
         self.table1.setColumnCount(len(BDMV_LABELS))
-        self.table1.setHorizontalHeaderLabels(BDMV_LABELS)
+        self._set_table_headers(self.table1, BDMV_LABELS)
         self.table1.setSortingEnabled(True)
         self.table1.horizontalHeader().setSortIndicatorShown(True)
         self.bdmv_folder_path.textChanged.connect(self.on_bdmv_folder_path_change)
@@ -3857,7 +4178,7 @@ class BluraySubtitleGUI(QWidget):
         self.table2 = CustomTableWidget(self, self.on_subtitle_drop)
         self._set_compact_table(self.table2, row_height=22, header_height=22)
         self.table2.setColumnCount(len(SUBTITLE_LABELS))
-        self.table2.setHorizontalHeaderLabels(SUBTITLE_LABELS)
+        self._set_table_headers(self.table2, SUBTITLE_LABELS)
         self._set_table2_subtitle_column_order()
         self.table2.setSortingEnabled(True)
         self.table2.horizontalHeader().setSortIndicatorShown(True)
@@ -3872,7 +4193,7 @@ class BluraySubtitleGUI(QWidget):
         self.table3 = QTableWidget(self)
         self._set_compact_table(self.table3, row_height=22, header_height=22)
         self.table3.setColumnCount(len(ENCODE_SP_LABELS))
-        self.table3.setHorizontalHeaderLabels(ENCODE_SP_LABELS)
+        self._set_table_headers(self.table3, ENCODE_SP_LABELS)
         self.table3.setSortingEnabled(True)
         self.table3.horizontalHeader().setSortIndicatorShown(True)
         self.table3.setVisible(False)
@@ -3909,7 +4230,7 @@ class BluraySubtitleGUI(QWidget):
         output_path_layout.addWidget(button_output)
         output_path_layout.addWidget(button_output_open)
         self.output_folder_row = output_path_row
-        self.output_folder_row.setVisible(self.radio3.isChecked() or self.radio4.isChecked())
+        self.output_folder_row.setVisible(self.get_selected_function_id() in (3, 4))
         self.layout.addWidget(self.output_folder_row)
         self.exe_button = QPushButton("生成字幕")
         self.exe_button.clicked.connect(self.main)
@@ -3921,6 +4242,7 @@ class BluraySubtitleGUI(QWidget):
         self.layout.addWidget(self.bottom_message_label)
 
         self.setLayout(self.layout)
+        self._apply_language('en')
 
     def on_bdmv_folder_path_change(self):
         raw = self.bdmv_folder_path.text()
@@ -3948,7 +4270,7 @@ class BluraySubtitleGUI(QWidget):
         if bdmv_path:
             try:
                 self.table1.setColumnCount(len(BDMV_LABELS))
-                self.table1.setHorizontalHeaderLabels(BDMV_LABELS)
+                self._set_table_headers(self.table1, BDMV_LABELS)
                 i = 0
                 for root, dirs, files in os.walk(bdmv_path):
                     dirs.sort()  # Sort dirs to ensure consistent order on all platforms
@@ -3962,12 +4284,12 @@ class BluraySubtitleGUI(QWidget):
                         table_widget = QTableWidget()
                         self._set_compact_table(table_widget, row_height=20, header_height=20)
                         table_widget.setColumnCount(5)
-                        table_widget.setHorizontalHeaderLabels(['mpls_file', 'duration', 'chapters', 'main', 'play'])
+                        self._set_table_headers(table_widget, ['mpls_file', 'duration', 'chapters', 'main', 'play'])
                         mpls_files = sorted([f for f in os.listdir(os.path.join(root, 'BDMV', 'PLAYLIST')) if f.endswith('.mpls')])
                         table_widget.setRowCount(len(mpls_files))
                         mpls_n = 0
                         checked = False
-                        if self.radio1.isChecked():
+                        if self.get_selected_function_id() == 1:
                             stream_dir = os.path.join(root, 'BDMV', 'STREAM')
                             if not os.path.isdir(stream_dir):
                                 checked = True
@@ -3986,7 +4308,7 @@ class BluraySubtitleGUI(QWidget):
                                 total_time_str = get_time_str(total_time)
                                 table_widget.setItem(mpls_n, 1, QTableWidgetItem(total_time_str))
                                 btn1 = QToolButton()
-                                btn1.setText('view chapters')
+                                btn1.setText(self.t('view chapters'))
                                 btn1.clicked.connect(partial(self.on_button_click, mpls_path))
                                 table_widget.setCellWidget(mpls_n, 2, btn1)
                                 btn2 = QToolButton()
@@ -3995,7 +4317,8 @@ class BluraySubtitleGUI(QWidget):
                                 btn2.clicked.connect(partial(self.on_button_main, mpls_path))
                                 table_widget.setCellWidget(mpls_n, 3, btn2)
                                 btn3 = QToolButton()
-                                btn3.setText('play')
+                                btn3.setText(self.t('play'))
+                                btn3.setProperty('action', 'play')
                                 btn3.clicked.connect(partial(self.on_button_play, mpls_path, btn3))
                                 table_widget.setCellWidget(mpls_n, 4, btn3)
                                 table_widget.resizeColumnsToContents()
@@ -4006,16 +4329,16 @@ class BluraySubtitleGUI(QWidget):
                         self.table1.setRowHeight(i, 100)
                         i += 1
                 self.table1.resizeColumnsToContents()
-                self.table1.setColumnWidth(2, 370)
+                self.table1.setColumnWidth(2, 360 if getattr(self, '_language_code', CURRENT_UI_LANGUAGE) == 'zh' else 370)
                 self._scroll_table_h_to_right(self.table1)
                 table_ok = True
             except Exception as e:
                 self.table1.clear()
                 self.table1.setColumnCount(len(BDMV_LABELS))
-                self.table1.setHorizontalHeaderLabels(BDMV_LABELS)
+                self._set_table_headers(self.table1, BDMV_LABELS)
                 self.table1.setRowCount(0)
         self.altered = True
-        if (self.radio3.isChecked() or self.radio4.isChecked()) and bdmv_path and table_ok:
+        if self.get_selected_function_id() in (3, 4) and bdmv_path and table_ok:
             configuration = BluraySubtitle(
                 self.bdmv_folder_path.text(),
                 [],
@@ -4063,13 +4386,14 @@ class BluraySubtitleGUI(QWidget):
                 pass
             self._subtitle_scan_worker = None
 
-        if self.radio1.isChecked():
+        function_id = self.get_selected_function_id()
+        if function_id == 1:
             mode = 1
             title = '读取字幕中'
-        elif self.radio2.isChecked():
+        elif function_id == 2:
             mode = 2
             title = '读取MKV中'
-        elif self.radio3.isChecked():
+        elif function_id == 3:
             mode = 3
             title = '读取字幕中'
         else:
@@ -4085,7 +4409,7 @@ class BluraySubtitleGUI(QWidget):
 
         selected_mpls = self.get_selected_mpls_no_ext()
 
-        progress_dialog = QProgressDialog(title, '取消', 0, 1000, self)
+        progress_dialog = QProgressDialog(self.t(title), self.t('取消'), 0, 1000, self)
         progress_dialog.setMinimumWidth(400)
         bar = QProgressBar(progress_dialog)
         bar.setRange(0, 1000)
@@ -4128,7 +4452,7 @@ class BluraySubtitleGUI(QWidget):
         self._subtitle_scan_worker.moveToThread(self._subtitle_scan_thread)
         self._subtitle_scan_thread.started.connect(self._subtitle_scan_worker.run)
         self._subtitle_scan_worker.progress.connect(progress_dialog.setValue)
-        self._subtitle_scan_worker.label.connect(progress_dialog.setLabelText)
+        self._subtitle_scan_worker.label.connect(lambda text: progress_dialog.setLabelText(self.t(text)))
 
         def cleanup():
             if getattr(self, '_subtitle_scan_show_timer', None):
@@ -4167,7 +4491,7 @@ class BluraySubtitleGUI(QWidget):
             if payload.get('mode') == 2:
                 self.table2.clear()
                 self.table2.setColumnCount(len(MKV_LABELS))
-                self.table2.setHorizontalHeaderLabels(MKV_LABELS)
+                self._set_table_headers(self.table2, MKV_LABELS)
                 self._set_table2_default_column_order()
                 rows = payload.get('rows') or []
                 self.table2.setRowCount(len(rows))
@@ -4182,7 +4506,7 @@ class BluraySubtitleGUI(QWidget):
             if payload.get('mode') == 3:
                 self.table2.clear()
                 self.table2.setColumnCount(len(REMUX_LABELS))
-                self.table2.setHorizontalHeaderLabels(REMUX_LABELS)
+                self._set_table_headers(self.table2, REMUX_LABELS)
                 self._set_table2_default_column_order()
                 self.table2.setRowCount(len(rows))
                 for i, (path, dur) in enumerate(rows):
@@ -4193,7 +4517,7 @@ class BluraySubtitleGUI(QWidget):
             elif payload.get('mode') == 4:
                 self.table2.clear()
                 self.table2.setColumnCount(len(ENCODE_LABELS))
-                self.table2.setHorizontalHeaderLabels(ENCODE_LABELS)
+                self._set_table_headers(self.table2, ENCODE_LABELS)
                 self._set_table2_default_column_order()
                 self.table2.setRowCount(len(rows))
                 for i, (path, dur) in enumerate(rows):
@@ -4205,7 +4529,7 @@ class BluraySubtitleGUI(QWidget):
             else:
                 self.table2.clear()
                 self.table2.setColumnCount(len(SUBTITLE_LABELS))
-                self.table2.setHorizontalHeaderLabels(SUBTITLE_LABELS)
+                self._set_table_headers(self.table2, SUBTITLE_LABELS)
                 self._set_table2_subtitle_column_order()
                 self.table2.setRowCount(len(rows))
                 for i, (path, dur) in enumerate(rows):
@@ -4225,7 +4549,8 @@ class BluraySubtitleGUI(QWidget):
                         if main_btn and main_btn.isChecked():
                             play_btn = info.cellWidget(mpls_index, 4)
                             if play_btn:
-                                play_btn.setText('preview')
+                                play_btn.setText(self.t('preview'))
+                                play_btn.setProperty('action', 'preview')
                     info.resizeColumnsToContents()
 
                 self.sub_check_state = [2 for _ in range(self.table2.rowCount())]
@@ -4261,7 +4586,7 @@ class BluraySubtitleGUI(QWidget):
 
     def on_subtitle_drop(self):
         try:
-            if self.radio3.isChecked() or self.radio4.isChecked():
+            if self.get_selected_function_id() in (3, 4):
                 sub_files = [self.table2.item(sub_index, 0).text() for sub_index in range(self.table2.rowCount())
                              if self.table2.item(sub_index, 0)]
             else:
@@ -4292,7 +4617,7 @@ class BluraySubtitleGUI(QWidget):
         """
         mkv_files = []
         # Get the path column index based on selected function
-        if self.radio2.isChecked():
+        if self.get_selected_function_id() == 2:
             path_col = 0  # MKV_LABELS = ['path', 'duration']
             sort_col = 0
         else:
@@ -4326,7 +4651,7 @@ class BluraySubtitleGUI(QWidget):
         # For radio2 (mkv chapters), path is at index 0 (MKV_LABELS) - no configuration rebuild needed
         # For radio3/4, path is at index 0 (REMUX_LABELS / ENCODE_LABELS)
         # For others, path is at index 1 (SUBTITLE_LABELS)
-        if self.radio2.isChecked():
+        if self.get_selected_function_id() == 2:
             if logicalIndex != 0:
                 return
             # For radio2, just update the duration column after sorting
@@ -4336,7 +4661,7 @@ class BluraySubtitleGUI(QWidget):
                     self.table2.setItem(i, 1, QTableWidgetItem(get_time_str(MKV(item.text()).get_duration())))
             return
         else:
-            sort_col = 0 if (self.radio3.isChecked() or self.radio4.isChecked()) else 1
+            sort_col = 0 if (self.get_selected_function_id() in (3, 4)) else 1
             if logicalIndex != sort_col:
                 return
         
@@ -4344,14 +4669,14 @@ class BluraySubtitleGUI(QWidget):
             return
         try:
             # update row-specific computed columns
-            if self.radio1.isChecked():
+            if self.get_selected_function_id() == 1:
                 for i in range(self.table2.rowCount()):
                     item = self.table2.item(i, 1)
                     if item and os.path.exists(item.text()):
                         self.table2.setItem(i, 2, QTableWidgetItem(get_time_str(Subtitle(item.text()).max_end_time())))
 
             # Rebuild configuration after sorting
-            if self.radio3.isChecked() or self.radio4.isChecked():
+            if self.get_selected_function_id() in (3, 4):
                 sub_files = [self.table2.item(sub_index, 0).text() for sub_index in range(self.table2.rowCount())
                              if self.table2.item(sub_index, 0) and self.table2.item(sub_index, 0).text()]
             else:
@@ -4402,7 +4727,8 @@ class BluraySubtitleGUI(QWidget):
             if not configuration:
                 print('配置为空，跳过更新')
                 return
-            if self.radio3.isChecked() or self.radio4.isChecked():
+            function_id = self.get_selected_function_id()
+            if function_id in (3, 4):
                 old_sorting = self.table2.isSortingEnabled()
                 self.table2.setSortingEnabled(False)
                 self.table2.setRowCount(len(configuration))
@@ -4446,7 +4772,7 @@ class BluraySubtitleGUI(QWidget):
                             if i < len(configuration) and i < self.table2.rowCount():
                                 self.table2.setItem(i, 0, FilePathTableWidgetItem(sub_file))
                 self.table2.resizeColumnsToContents()
-                if self.radio4.isChecked():
+                if function_id in (3, 4):
                     self.refresh_sp_table(configuration)
                 self.table2.setSortingEnabled(old_sorting)
             else:
@@ -4477,7 +4803,7 @@ class BluraySubtitleGUI(QWidget):
             return
 
     def on_chapter_combo(self, subtitle_index: int):
-        if self.radio3.isChecked() or self.radio4.isChecked():
+        if self.get_selected_function_id() in (3, 4):
             sub_files = []
             if self.subtitle_folder_path.text().strip():
                 for file in sorted(os.listdir(self.subtitle_folder_path.text().strip())):
@@ -4536,7 +4862,9 @@ class BluraySubtitleGUI(QWidget):
                                  shell=True).wait()
             return
 
-        if btn.text() == 'preview' and self.altered:
+        action = btn.property('action') or ''
+        is_preview = (action == 'preview') or (btn.text() in ('preview', self.t('preview')))
+        if is_preview and self.altered:
             # 只有在字幕文件不存在时才生成
             mpls_name = mpls_path[:-5]
             has_subtitle = (os.path.exists(mpls_name + '.ass') or 
@@ -4552,7 +4880,7 @@ class BluraySubtitleGUI(QWidget):
             if not has_subtitle:
                 # 如果仍然没有字幕文件，显示提示但仍允许播放
                 QMessageBox.information(self, "提示", "字幕文件不存在，将播放无字幕版本")
-        elif btn.text() == 'preview':
+        elif is_preview:
             # 检查字幕文件是否存在
             mpls_name = mpls_path[:-5]
             has_subtitle = (os.path.exists(mpls_name + '.ass') or 
@@ -4630,27 +4958,36 @@ class BluraySubtitleGUI(QWidget):
                         if checked:
                             subtitle = bool(self.table2.rowCount() > 0 and self.table2.item(0, 0) and
                                             self.table2.item(0, 0).text()
-                                            and not (self.radio3.isChecked() or self.radio4.isChecked()))
-                            info.cellWidget(mpls_index, 4).setText('preview' if subtitle else 'play')
+                                            and not (self.get_selected_function_id() in (3, 4)))
+                            play_btn = info.cellWidget(mpls_index, 4)
+                            if play_btn:
+                                play_btn.setProperty('action', 'preview' if subtitle else 'play')
+                                play_btn.setText(self.t('preview') if subtitle else self.t('play'))
                             for mpls_index_1 in range(info.rowCount()):
                                 if not mpls_path.endswith(info.item(mpls_index_1, 0).text()):
                                     if info.cellWidget(mpls_index_1, 3).isChecked():
                                         info.cellWidget(mpls_index_1, 3).setChecked(False)
-                                        info.cellWidget(mpls_index_1, 4).setText('play')
+                                        other_play_btn = info.cellWidget(mpls_index_1, 4)
+                                        if other_play_btn:
+                                            other_play_btn.setProperty('action', 'play')
+                                            other_play_btn.setText(self.t('play'))
                         else:
-                            info.cellWidget(mpls_index, 4).setText('play')
+                            play_btn = info.cellWidget(mpls_index, 4)
+                            if play_btn:
+                                play_btn.setProperty('action', 'play')
+                                play_btn.setText(self.t('play'))
         self.on_subtitle_folder_path_change()
 
     def on_button_click(self, mpls_path: str):
         class ChapterWindow(QDialog):
             def __init__(this):
                 super(ChapterWindow, this).__init__()
-                this.setWindowTitle(f'chapters of {mpls_path}')
+                this.setWindowTitle(f"{self.t('章节')}: {mpls_path}")
                 layout = QVBoxLayout()
                 table_widget = QTableWidget()
                 self._set_compact_table(table_widget, row_height=20, header_height=20)
                 table_widget.setColumnCount(2)
-                table_widget.setHorizontalHeaderLabels(['offset', 'file'])
+                self._set_table_headers(table_widget, ['offset', 'file'])
                 chapter = Chapter(mpls_path)
                 mark_info = chapter.mark_info
                 in_out_time = chapter.in_out_time
@@ -4693,7 +5030,7 @@ class BluraySubtitleGUI(QWidget):
             def __init__(this):
                 super(SubtitleEditDialog, this).__init__()
                 this.altered = False
-                this.setWindowTitle(f'edit subtitle: {path}')
+                this.setWindowTitle(f"{self.t('编辑字幕')}: {path}")
                 layout = QVBoxLayout()
                 this.table_widget = QTableWidget()
                 this.table_widget.horizontalHeader().setSortIndicatorShown(True)
@@ -4797,107 +5134,137 @@ class BluraySubtitleGUI(QWidget):
         subtitle_edit_dialog = SubtitleEditDialog()
         subtitle_edit_dialog.exec()
 
-    def on_select_function(self):
-        function_id = 0
-        if self.radio1.isChecked():
-            function_id = 1
-        elif self.radio2.isChecked():
-            function_id = 2
-        elif self.radio3.isChecked():
-            function_id = 3
-        elif self.radio4.isChecked():
-            function_id = 4
+    def get_selected_function_id(self) -> int:
+        try:
+            tabbar = getattr(self, 'function_tabbar', None)
+            if tabbar is not None:
+                idx = int(tabbar.currentIndex())
+                if idx >= 0:
+                    return idx + 1
+        except Exception:
+            pass
+        try:
+            return int(getattr(self, '_selected_function_id', 1) or 1)
+        except Exception:
+            return 1
+
+    def on_select_function(self, force: bool = False, keep_inputs: bool = False, keep_state: bool = False):
+        function_id = self.get_selected_function_id()
 
         last_function_id = int(getattr(self, '_selected_function_id', 0) or 0)
-        if function_id and last_function_id == function_id:
+        if (not force) and function_id and last_function_id == function_id:
             return
         self._selected_function_id = function_id
 
         if hasattr(self, 'output_folder_row') and self.output_folder_row:
-            self.output_folder_row.setVisible(self.radio3.isChecked() or self.radio4.isChecked())
+            self.output_folder_row.setVisible(function_id in (3, 4))
         if hasattr(self, 'table3'):
-            self.table3.setVisible(self.radio4.isChecked())
-        if self.radio4.isChecked():
+            self.table3.setVisible(function_id in (3, 4))
+            try:
+                vpy_col = ENCODE_SP_LABELS.index('vpy_path')
+                edit_col = ENCODE_SP_LABELS.index('edit_vpy')
+                preview_col = ENCODE_SP_LABELS.index('preview_script')
+                is_encode = function_id == 4
+                self.table3.setColumnHidden(vpy_col, not is_encode)
+                self.table3.setColumnHidden(edit_col, not is_encode)
+                self.table3.setColumnHidden(preview_col, not is_encode)
+            except Exception:
+                pass
+        if function_id == 4:
             QTimer.singleShot(0, self.ensure_default_vpy_file)
 
-        if self.radio1.isChecked():
-            self.label2.setText("选择单集字幕所在的文件夹")
-            self.exe_button.setText("生成字幕")
+        if function_id == 1:
+            self.label2.setText(self.t("选择单集字幕所在的文件夹"))
+            self.exe_button.setText(self.t("生成字幕"))
             self.encode_box.setVisible(False)
             if not self.checkbox1.isVisible():
                 self.checkbox1.setVisible(True)
-                self.restoreGeometry(self._geometry)
-            self.checkbox1.setText('补全蓝光目录')
-            self.table1.clear()
-            self.table1.setRowCount(0)
-            self.table1.setColumnCount(len(BDMV_LABELS))
-            self.table1.setHorizontalHeaderLabels(BDMV_LABELS)
-            self.table2.clear()
-            self.table2.setRowCount(0)
-            self.table2.setColumnCount(len(SUBTITLE_LABELS))
-            self.table2.setHorizontalHeaderLabels(SUBTITLE_LABELS)
-            self._set_table2_subtitle_column_order()
+                if hasattr(self, '_geometry') and self._geometry is not None:
+                    self.restoreGeometry(self._geometry)
+            self.checkbox1.setText(self.t('补全蓝光目录'))
+            if not keep_state:
+                self.table1.clear()
+                self.table1.setRowCount(0)
+                self.table1.setColumnCount(len(BDMV_LABELS))
+                self._set_table_headers(self.table1, BDMV_LABELS)
+                self.table2.clear()
+                self.table2.setRowCount(0)
+                self.table2.setColumnCount(len(SUBTITLE_LABELS))
+                self._set_table_headers(self.table2, SUBTITLE_LABELS)
+                self._set_table2_subtitle_column_order()
 
-        if self.radio2.isChecked():
-            self.label2.setText("选择mkv文件所在的文件夹")
-            self.exe_button.setText("添加章节")
+        if function_id == 2:
+            self.label2.setText(self.t("选择mkv文件所在的文件夹"))
+            self.exe_button.setText(self.t("添加章节"))
             self.encode_box.setVisible(False)
             if not self.checkbox1.isVisible():
                 self.checkbox1.setVisible(True)
-                self.restoreGeometry(self._geometry)
-            self.checkbox1.setText('直接编辑原文件')
-            self.table1.clear()
-            self.table1.setRowCount(0)
-            self.table1.setColumnCount(len(BDMV_LABELS))
-            self.table1.setHorizontalHeaderLabels(BDMV_LABELS)
-            self.table2.clear()
-            self.table2.setRowCount(0)
-            self.table2.setColumnCount(len(MKV_LABELS))
-            self.table2.setHorizontalHeaderLabels(MKV_LABELS)
-            self._set_table2_default_column_order()
+                if hasattr(self, '_geometry') and self._geometry is not None:
+                    self.restoreGeometry(self._geometry)
+            self.checkbox1.setText(self.t('直接编辑原文件'))
+            if not keep_state:
+                self.table1.clear()
+                self.table1.setRowCount(0)
+                self.table1.setColumnCount(len(BDMV_LABELS))
+                self._set_table_headers(self.table1, BDMV_LABELS)
+                self.table2.clear()
+                self.table2.setRowCount(0)
+                self.table2.setColumnCount(len(MKV_LABELS))
+                self._set_table_headers(self.table2, MKV_LABELS)
+                self._set_table2_default_column_order()
 
-        if self.radio3.isChecked():
-            self._geometry = self.saveGeometry()
-            self.label2.setText("选择字幕文件所在的文件夹（可选）")
-            self.exe_button.setText("开始remux")
+        if function_id == 3:
+            if not keep_state:
+                self._geometry = self.saveGeometry()
+            self.label2.setText(self.t("选择字幕文件所在的文件夹（可选）"))
+            self.exe_button.setText(self.t("开始remux"))
             self.encode_box.setVisible(False)
             self.checkbox1.setVisible(False)
-            self.table1.clear()
-            self.table1.setRowCount(0)
-            self.table1.setColumnCount(len(BDMV_LABELS))
-            self.table1.setHorizontalHeaderLabels(BDMV_LABELS)
-            self.table2.clear()
-            self.table2.setRowCount(0)
-            self.table2.setColumnCount(len(REMUX_LABELS))
-            self.table2.setHorizontalHeaderLabels(REMUX_LABELS)
-            self._set_table2_default_column_order()
+            if not keep_state:
+                self.table1.clear()
+                self.table1.setRowCount(0)
+                self.table1.setColumnCount(len(BDMV_LABELS))
+                self._set_table_headers(self.table1, BDMV_LABELS)
+                self.table2.clear()
+                self.table2.setRowCount(0)
+                self.table2.setColumnCount(len(REMUX_LABELS))
+                self._set_table_headers(self.table2, REMUX_LABELS)
+                self._set_table2_default_column_order()
+                if hasattr(self, 'table3'):
+                    self.table3.clear()
+                    self.table3.setRowCount(0)
+                    self.table3.setColumnCount(len(ENCODE_SP_LABELS))
+                    self._set_table_headers(self.table3, ENCODE_SP_LABELS)
 
-        if self.radio4.isChecked():
-            self._geometry = self.saveGeometry()
-            self.label2.setText("选择字幕文件所在的文件夹（可选）")
-            self.exe_button.setText("开始压制")
+        if function_id == 4:
+            if not keep_state:
+                self._geometry = self.saveGeometry()
+            self.label2.setText(self.t("选择字幕文件所在的文件夹（可选）"))
+            self.exe_button.setText(self.t("开始压制"))
             self.checkbox1.setVisible(False)
             self.encode_box.setVisible(True)
-            self.table1.clear()
-            self.table1.setRowCount(0)
-            self.table1.setColumnCount(len(BDMV_LABELS))
-            self.table1.setHorizontalHeaderLabels(BDMV_LABELS)
-            self.table2.clear()
-            self.table2.setRowCount(0)
-            self.table2.setColumnCount(len(ENCODE_LABELS))
-            self.table2.setHorizontalHeaderLabels(ENCODE_LABELS)
-            self._set_table2_default_column_order()
-            if hasattr(self, 'table3'):
-                self.table3.clear()
-                self.table3.setRowCount(0)
-                self.table3.setColumnCount(len(ENCODE_SP_LABELS))
-                self.table3.setHorizontalHeaderLabels(ENCODE_SP_LABELS)
+            if not keep_state:
+                self.table1.clear()
+                self.table1.setRowCount(0)
+                self.table1.setColumnCount(len(BDMV_LABELS))
+                self._set_table_headers(self.table1, BDMV_LABELS)
+                self.table2.clear()
+                self.table2.setRowCount(0)
+                self.table2.setColumnCount(len(ENCODE_LABELS))
+                self._set_table_headers(self.table2, ENCODE_LABELS)
+                self._set_table2_default_column_order()
+                if hasattr(self, 'table3'):
+                    self.table3.clear()
+                    self.table3.setRowCount(0)
+                    self.table3.setColumnCount(len(ENCODE_SP_LABELS))
+                    self._set_table_headers(self.table3, ENCODE_SP_LABELS)
 
-        self.bdmv_folder_path.clear()
-        self.subtitle_folder_path.clear()
+        if not keep_inputs:
+            self.bdmv_folder_path.clear()
+            self.subtitle_folder_path.clear()
 
     def select_bdmv_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "选择文件夹")
+        folder = QFileDialog.getExistingDirectory(self, self.t("选择文件夹"))
         self.bdmv_folder_path.setText(os.path.normpath(folder))
 
     def open_folder_path(self, path: str):
@@ -4925,12 +5292,12 @@ class BluraySubtitleGUI(QWidget):
             QMessageBox.warning(self, "打开文件夹失败", f"无法打开文件夹：\n{normalized}\n\n{e}")
 
     def select_subtitle_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "选择文件夹")
+        folder = QFileDialog.getExistingDirectory(self, self.t("选择文件夹"))
         self.subtitle_folder_path.setText(os.path.normpath(folder))
 
     def select_output_folder(self):
         start = self.output_folder_path.text().strip() if hasattr(self, 'output_folder_path') else ''
-        folder = QFileDialog.getExistingDirectory(self, "选择输出文件夹", start)
+        folder = QFileDialog.getExistingDirectory(self, self.t("选择输出文件夹"), start)
         if folder:
             self.output_folder_path.setText(os.path.normpath(folder))
 
@@ -4941,13 +5308,14 @@ class BluraySubtitleGUI(QWidget):
             self._update_exe_button_progress(text='正在取消...')
             return
 
-        if self.radio1.isChecked():
+        function_id = self.get_selected_function_id()
+        if function_id == 1:
             self.generate_subtitle()
-        if self.radio2.isChecked():
+        if function_id == 2:
             self.add_chapters()
-        if self.radio3.isChecked():
+        if function_id == 3:
             self.remux_episodes()
-        if self.radio4.isChecked():
+        if function_id == 4:
             self.encode_bluray()
 
     def encode_bluray(self):
@@ -5308,7 +5676,7 @@ class CustomBox(QGroupBox):  # 为 Box 框提供拖拽文件夹的功能
     def __init__(self, title: str, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setAcceptDrops(True)
-        self.title = title
+        self.box_title = title
 
     def dragEnterEvent(self, e: QDragEnterEvent):
         if e.mimeData().hasUrls():
@@ -5332,9 +5700,9 @@ class CustomBox(QGroupBox):  # 为 Box 框提供拖拽文件夹的功能
         if not w:
             return
 
-        if self.title == '原盘' and hasattr(w, 'bdmv_folder_path'):
+        if self.box_title == '原盘' and hasattr(w, 'bdmv_folder_path'):
             w.bdmv_folder_path.setText(dropped_path)
-        if self.title == '字幕' and hasattr(w, 'subtitle_folder_path'):
+        if self.box_title == '字幕' and hasattr(w, 'subtitle_folder_path'):
             w.subtitle_folder_path.setText(dropped_path)
 
 
@@ -5402,7 +5770,7 @@ def find_mkvtoolinx():
         if os.path.exists(default_mkv_info_path):
             MKV_INFO_PATH = default_mkv_info_path
         else:
-            MKV_INFO_PATH = QFileDialog.getOpenFileName(window, '选择mkvinfo的位置', '', 'mkvinfo*')
+            MKV_INFO_PATH = QFileDialog.getOpenFileName(window, translate_text('选择mkvinfo的位置'), '', 'mkvinfo*')
     global MKV_MERGE_PATH
     if not MKV_MERGE_PATH:
         if sys.platform == 'win32':
@@ -5412,7 +5780,7 @@ def find_mkvtoolinx():
         if os.path.exists(default_mkv_merge_path):
             MKV_MERGE_PATH = default_mkv_merge_path
         else:
-            MKV_MERGE_PATH = QFileDialog.getOpenFileName(window, '选择mkvmerge的位置', '', 'mkvmerge*')
+            MKV_MERGE_PATH = QFileDialog.getOpenFileName(window, translate_text('选择mkvmerge的位置'), '', 'mkvmerge*')
     global MKV_PROP_EDIT_PATH
     if not MKV_PROP_EDIT_PATH:
         if sys.platform == 'win32':
@@ -5422,7 +5790,7 @@ def find_mkvtoolinx():
         if os.path.exists(default_mkv_prop_edit_path):
             MKV_PROP_EDIT_PATH = default_mkv_prop_edit_path
         else:
-            MKV_PROP_EDIT_PATH = QFileDialog.getOpenFileName(window, '选择mkvpropedit的位置', '', 'mkvpropedit*')
+            MKV_PROP_EDIT_PATH = QFileDialog.getOpenFileName(window, translate_text('选择mkvpropedit的位置'), '', 'mkvpropedit*')
     global MKV_EXTRACT_PATH
     if not MKV_EXTRACT_PATH:
         if sys.platform == 'win32':
@@ -5432,7 +5800,7 @@ def find_mkvtoolinx():
         if os.path.exists(default_mkv_extract_path):
             MKV_EXTRACT_PATH = default_mkv_extract_path
         else:
-            MKV_EXTRACT_PATH = QFileDialog.getOpenFileName(window, '选择mkvextract的位置', '', 'mkvextract*')
+            MKV_EXTRACT_PATH = QFileDialog.getOpenFileName(window, translate_text('选择mkvextract的位置'), '', 'mkvextract*')
 
 
 def force_remove_folder(path):
