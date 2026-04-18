@@ -2908,11 +2908,19 @@ class BluraySubtitleGUI(QWidget):
                 if title_text:
                     widget.setTitle(self.t(title_text))
             if isinstance(widget, QTabBar):
-                for i in range(widget.count()):
-                    widget.setTabText(i, self.t(widget.tabText(i)))
+                widget.blockSignals(True)
+                try:
+                    for i in range(widget.count()):
+                        widget.setTabText(i, self.t(widget.tabText(i)))
+                finally:
+                    widget.blockSignals(False)
             if isinstance(widget, QComboBox):
-                for i in range(widget.count()):
-                    widget.setItemText(i, self.t(widget.itemText(i)))
+                widget.blockSignals(True)
+                try:
+                    for i in range(widget.count()):
+                        widget.setItemText(i, self.t(widget.itemText(i)))
+                finally:
+                    widget.blockSignals(False)
             if hasattr(widget, 'text') and hasattr(widget, 'setText'):
                 try:
                     txt = widget.text()
@@ -2926,13 +2934,17 @@ class BluraySubtitleGUI(QWidget):
         code = 'zh' if language_code == 'zh' else 'en'
         self._language_code = code
         CURRENT_UI_LANGUAGE = code
-        self.setWindowTitle(self.t('BluraySubtitle'))
-        self._translate_widget_texts()
-        self._refresh_language_combo()
-        self._refresh_all_table_headers()
-        self._refresh_language_dependent_sizes()
-        self.on_select_function(force=True, keep_inputs=True, keep_state=True)
-        self._refresh_language_dependent_sizes()
+        self._language_updating = True
+        try:
+            self.setWindowTitle(self.t('BluraySubtitle'))
+            self._translate_widget_texts()
+            self._refresh_language_combo()
+            self._refresh_all_table_headers()
+            self._refresh_language_dependent_sizes()
+            self.on_select_function(force=True, keep_inputs=True, keep_state=True)
+            self._refresh_language_dependent_sizes()
+        finally:
+            self._language_updating = False
 
     def _on_language_changed(self):
         code = self.language_combo.currentData() or 'en'
@@ -5149,6 +5161,9 @@ class BluraySubtitleGUI(QWidget):
             return 1
 
     def on_select_function(self, force: bool = False, keep_inputs: bool = False, keep_state: bool = False):
+        if getattr(self, '_language_updating', False):
+            keep_inputs = True
+            keep_state = True
         function_id = self.get_selected_function_id()
 
         last_function_id = int(getattr(self, '_selected_function_id', 0) or 0)
@@ -6246,6 +6261,15 @@ if __name__ == "__main__":
             border: 1px solid #888888;
         }
         
+        QTableView::item:hover {
+            background-color: #f0f0f0; /* 确保是一个实色，而不是半透明色 */
+        }
+
+        QTableView::indicator:hover {
+            background-color: transparent; 
+            border: none;
+        }
+                
         QMenu {
             font-size: 8pt;
         } 
