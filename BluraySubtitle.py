@@ -11,6 +11,7 @@ import builtins
 import copy
 import ctypes
 import datetime
+import time
 import json
 import multiprocessing
 import os
@@ -93,6 +94,8 @@ MKV_LABELS = ['path', 'duration']
 REMUX_LABELS = ['sub_path', 'language', 'ep_duration', 'bdmv_index', 'chapter_index', 'm2ts_file', 'output_name']
 ENCODE_LABELS = ['sub_path', 'language', 'ep_duration', 'bdmv_index', 'chapter_index', 'm2ts_file', 'output_name', 'vpy_path', 'edit_vpy', 'preview_script']
 ENCODE_SP_LABELS = ['bdmv_index', 'mpls_file', 'm2ts_file', 'duration', 'output_name', 'tracks', 'vpy_path', 'edit_vpy', 'preview_script']
+ENCODE_REMUX_LABELS = ['sub_path', 'language', 'ep_duration', 'output_name', 'vpy_path', 'edit_vpy', 'preview_script', 'edit_tracks']
+ENCODE_REMUX_SP_LABELS = ['duration', 'output_name', 'edit_tracks', 'vpy_path', 'edit_vpy', 'preview_script']
 CONFIGURATION = {}
 CURRENT_UI_LANGUAGE = 'en'
 APP_TITLE = 'BluraySubtitle v2.1+'
@@ -129,6 +132,8 @@ I18N_ZH_TO_EN = {
     '原盘': 'Blu-ray',
     '字幕': 'Subtitles',
     '选择原盘所在的文件夹': 'Select the Blu-ray folder',
+    '选择 remux 所在的文件夹': 'Select the remux folder',
+    '选择文件夹': 'Select folder',
     '选择单集字幕所在的文件夹': 'Select the subtitle folder',
     '选择单集字幕所在的文件夹：': 'Select the subtitle folder:',
     '选择mkv文件所在的文件夹': 'Select the MKV folder',
@@ -1688,6 +1693,34 @@ class BluraySubtitle:
         pid_to_lang: Optional[dict[int, str]] = None
     ) -> tuple[list[str], list[str]]:
         pid_lang = pid_to_lang or {}
+        def _parse_pid(raw_id: object) -> Optional[int]:
+            s = str(raw_id or '').strip()
+            if not s:
+                return None
+            try:
+                if s.lower().startswith('0x'):
+                    return int(s, 16)
+                if any(c in 'abcdefABCDEF' for c in s):
+                    return int(s, 16)
+                return int(s, 10)
+            except Exception:
+                try:
+                    return int(s, 16)
+                except Exception:
+                    return None
+
+        def _get_lang(stream_info: dict[str, object]) -> str:
+            pid = _parse_pid(stream_info.get('id'))
+            if pid is not None and pid in pid_lang:
+                return str(pid_lang.get(pid, 'und') or 'und')
+            try:
+                idx = int(str(stream_info.get('index') or '').strip())
+                if idx in pid_lang:
+                    return str(pid_lang.get(idx, 'und') or 'und')
+            except Exception:
+                pass
+            return 'und'
+
         audio_type_weight = {'': -1, 'aac': 1, 'ac3': 2, 'eac3': 3, 'lpcm': 4, 'dts': 5, 'dts_hd_ma': 6, 'truehd': 7}
         selected_eng_audio_track = ['', '']
         selected_zho_audio_track = ['', '']
@@ -1698,12 +1731,7 @@ class BluraySubtitle:
                 codec_name = str(stream_info.get('codec_name') or '')
                 if codec_name == 'dts' and str(stream_info.get('profile') or '') == 'DTS-HD MA':
                     codec_name = 'dts_hd_ma'
-                lang = 'und'
-                try:
-                    pid = int(str(stream_info.get('id') or '0'), 16)
-                    lang = pid_lang.get(pid, 'und')
-                except Exception:
-                    pass
+                lang = _get_lang(stream_info)
                 idx = str(stream_info.get('index') or '')
                 if lang == 'eng':
                     if not selected_eng_audio_track[1] or audio_type_weight.get(codec_name, -1) > audio_type_weight.get(selected_eng_audio_track[1], -1):
@@ -1712,12 +1740,7 @@ class BluraySubtitle:
                     if not selected_zho_audio_track[1] or audio_type_weight.get(codec_name, -1) > audio_type_weight.get(selected_zho_audio_track[1], -1):
                         selected_zho_audio_track = [idx, codec_name]
             elif codec_type == 'subtitle':
-                lang = 'und'
-                try:
-                    pid = int(str(stream_info.get('id') or '0'), 16)
-                    lang = pid_lang.get(pid, 'und')
-                except Exception:
-                    pass
+                lang = _get_lang(stream_info)
                 if lang in ['eng', 'zho']:
                     copy_sub_track.append(str(stream_info.get('index') or ''))
         if not copy_sub_track:
@@ -1733,12 +1756,7 @@ class BluraySubtitle:
                     break
             for stream_info in streams:
                 if str(stream_info.get('codec_type') or '') == 'audio':
-                    lang = 'und'
-                    try:
-                        pid = int(str(stream_info.get('id') or '0'), 16)
-                        lang = pid_lang.get(pid, 'und')
-                    except Exception:
-                        pass
+                    lang = _get_lang(stream_info)
                     idx = str(stream_info.get('index') or '')
                     if lang == 'jpn' and idx not in copy_audio_track:
                         copy_audio_track.append(idx)
@@ -2056,7 +2074,7 @@ class BluraySubtitle:
                                              f'"{mpls_file_path}"',
                                              shell=True).wait()
                             parsed_m2ts_files |= set(index_to_m2ts.values())
-                stream_folder = os.path.dirname(mpls_path).removesuffix('PLAYLIST') + 'STREAM'
+                stream_folder = os.path.dirname(mpls_path).replace('PLAYLIST', '') + 'STREAM'
                 for stream_file in sorted(os.listdir(stream_folder)):
                     if cancel_event and cancel_event.is_set():
                         raise _Cancelled()
@@ -2194,7 +2212,7 @@ class BluraySubtitle:
                                              f'"{mpls_file_path}"',
                                              shell=True).wait()
                             parsed_m2ts_files |= set(index_to_m2ts.values())
-                stream_folder = os.path.dirname(mpls_path).removesuffix('PLAYLIST') + 'STREAM'
+                stream_folder = os.path.dirname(mpls_path).replace('PLAYLIST', '') + 'STREAM'
                 for stream_file in os.listdir(stream_folder):
                     if cancel_event and cancel_event.is_set():
                         raise _Cancelled()
@@ -2230,12 +2248,26 @@ class BluraySubtitle:
         self.completion()
         self._progress(1000, '完成')
 
-    def process_audio_to_flac(self, output_file, dst_folder, i) -> tuple[int, dict[int, str], list[str]]:
+    def process_audio_to_flac(self, output_file, dst_folder, i, source_file: Optional[str] = None) -> tuple[int, dict[int, str], list[str]]:
         dolby_truehd_tracks = []
         track_bits = {}
         track_id_delay_map = {}
-        if os.path.exists(output_file):
-            subprocess.Popen(f'"{FFPROBE_PATH}" -v error -show_streams -show_format -of json "{output_file}" >info.json 2>&1',
+        duplicate_track_source: dict[int, int] = {}
+        self._track_flac_map = {}
+        self._audio_tracks_to_exclude = set()
+        flac_files = []
+        src_mkv = os.path.normpath(source_file) if source_file else os.path.normpath(output_file)
+        def _track_id_from_path(p: str) -> Optional[int]:
+            name = os.path.basename(p or '')
+            m = re.search(r'(?i)\.track(\d+)', name)
+            if not m:
+                return None
+            try:
+                return int(m.group(1))
+            except Exception:
+                return None
+        if os.path.exists(src_mkv):
+            subprocess.Popen(f'"{FFPROBE_PATH}" -v error -show_streams -show_format -of json "{src_mkv}" >info.json 2>&1',
                              shell=True).wait()
             with open('info.json', 'r', encoding='utf-8') as fp:
                 data = json.load(fp)
@@ -2252,7 +2284,8 @@ class BluraySubtitle:
                     track_bits[stream['index']] = int(stream.get('bits_per_raw_sample') or 24)
         else:
             print('\033[31m错误，电影混流失败，请检查任务输出\033[0m')
-        track_count, track_info = self.extract_lossless(output_file, dolby_truehd_tracks)
+        base = os.path.join(dst_folder, os.path.splitext(os.path.basename(output_file))[0])
+        track_count, track_info = self.extract_lossless(src_mkv, dolby_truehd_tracks, output_base=base)
         if track_info:
             ext_fn_map = {}
             for file1 in os.listdir(dst_folder):
@@ -2265,10 +2298,12 @@ class BluraySubtitle:
                         ext_fn_map[ext] = [file1_path]
             for ext, fns in ext_fn_map.items():
                 if len(fns) > 1:
-                    fpts = []
+                    fpts: list[tuple[np.ndarray, int]] = []
                     for fn in fns:
                         tmp_wav = None
                         fp_source = fn
+                        track_id = _track_id_from_path(fn)
+                        track_id_val = int(track_id) if track_id is not None else -1
                         try:
                             if ext not in ('wav', 'w64', 'flac'):
                                 tmp_wav = os.path.splitext(fn)[0] + '.fp.wav'
@@ -2296,17 +2331,19 @@ class BluraySubtitle:
                                 except Exception:
                                     pass
                         duplicate_track = False
-                        for _fpt in fpts:
+                        for _fpt, _src_track_id in fpts:
                             denom = (np.linalg.norm(fpt) * np.linalg.norm(_fpt))
                             if denom and (np.dot(fpt, _fpt) / denom) > 0.998:
                                 os.remove(fn)
-                                track_id = int(os.path.split(fn)[-1].split('.')[-2].removeprefix('track'))
-                                track_info.pop(track_id, None)
+                                if track_id_val > -1 and _src_track_id > -1:
+                                    duplicate_track_source[track_id_val] = _src_track_id
+                                    self._audio_tracks_to_exclude.add(track_id_val)
+                                    track_info.pop(track_id_val, None)
                                 print(f'找到一个重复音轨 ｢{fn}｣，已删除')
                                 duplicate_track = True
                                 break
                         if not duplicate_track:
-                            fpts.append(fpt)
+                            fpts.append((fpt, track_id_val))
 
             def _is_silent_audio(path: str, threshold_db: float = -60.0) -> tuple[bool, float]:
                 y = None
@@ -2349,6 +2386,8 @@ class BluraySubtitle:
 
             for file1 in os.listdir(dst_folder):
                 file1_path = os.path.join(dst_folder, file1)
+                if not os.path.isfile(file1_path):
+                    continue
                 if (file1_path != output_file and not file1_path.endswith('.mkv') and not file1_path.endswith('.lwi')
                         and not file1_path.endswith('.hevc') and not file1_path.endswith('.ass')
                         and not file1_path.endswith('.ssa') and not file1_path.endswith('.srt')):
@@ -2363,14 +2402,19 @@ class BluraySubtitle:
                         except Exception:
                             pass
                         try:
-                            track_id = int(os.path.split(file1_path)[-1].split('.')[-2].removeprefix('track'))
-                            track_info.pop(track_id, None)
+                            track_id = _track_id_from_path(file1_path)
+                            if track_id is not None:
+                                track_info.pop(int(track_id), None)
+                                self._audio_tracks_to_exclude.add(int(track_id))
                         except Exception:
                             pass
                         print(f'检测到空音轨 ｢{file1_path}｣ 平均 {avg_db:.1f} dB，已删除')
                         continue
                     print(f'正在压缩音轨 ｢{file1_path}｣')
-                    track_id = int(os.path.split(file1_path)[-1].split('.')[-2].removeprefix('track'))
+                    track_id = _track_id_from_path(file1_path)
+                    if track_id is None:
+                        continue
+                    track_id = int(track_id)
                     if track_id in track_id_delay_map:
                         delay_sec = track_id_delay_map[track_id]
                         delay_ms = int(round(delay_sec * 1000.0))
@@ -2404,12 +2448,14 @@ class BluraySubtitle:
                             delta = os.path.getsize(file1_path) - os.path.getsize(flac_file)
                             os.remove(file1_path)
                             print(f'将音轨 ｢{file1_path}｣ 压缩成flac，减小体积 {delta / 1024 ** 2:.3f} MiB')
+                            self._audio_tracks_to_exclude.add(track_id)
                         else:
                             subprocess.Popen(f'{FFMPEG_PATH} -i "{file1_path}" -c:a flac "{flac_file}"', shell=True).wait()
                             if os.path.exists(flac_file):
                                 delta = os.path.getsize(file1_path) - os.path.getsize(flac_file)
                                 os.remove(file1_path)
                                 print(f'将音轨 ｢{file1_path}｣ 用ffmpeg压缩成flac，减小体积 {delta / 1024 ** 2:.3f} MiB')
+                                self._audio_tracks_to_exclude.add(track_id)
                     else:
                         bits = track_bits.get(track_id, 24)
                         effective_bits = get_compressed_effective_depth(file1_path)
@@ -2426,6 +2472,7 @@ class BluraySubtitle:
                             else:
                                 delta = os.path.getsize(file1_path) - os.path.getsize(flac_file)
                                 print(f'将音轨 ｢{file1_path}｣ 压缩成flac，减小体积 {delta / 1024 ** 2:.3f} MiB')
+                                self._audio_tracks_to_exclude.add(track_id)
                         else:
                             subprocess.Popen(f'{FFMPEG_PATH} -i "{wav_file}" -c:a flac "{flac_file}"', shell=True).wait()
                             if os.path.exists(flac_file):
@@ -2435,6 +2482,7 @@ class BluraySubtitle:
                                 else:
                                     delta = os.path.getsize(file1_path) - os.path.getsize(flac_file)
                                     print(f'将音轨 ｢{file1_path}｣ 用ffmpeg压缩成flac，减小体积 {delta / 1024 ** 2:.3f} MiB')
+                                    self._audio_tracks_to_exclude.add(track_id)
                             else:
                                 print('\033[31m错误，ffmpeg压缩也失败\033[0m')
                         os.remove(file1_path)
@@ -2442,7 +2490,7 @@ class BluraySubtitle:
             flac_files = []
             for file1 in os.listdir(dst_folder):
                 file1_path = os.path.join(dst_folder, file1)
-                if file1_path.endswith('.flac'):
+                if os.path.isfile(file1_path) and file1_path.endswith('.flac'):
                     flac_files.append(file1_path)
             if not flac_files:
                 for file1 in os.listdir(dst_folder):
@@ -2452,20 +2500,33 @@ class BluraySubtitle:
                             n = len(os.listdir(dst_folder))
                             print(f'flac 压缩 wav 文件 ｢{file1_path}｣ 失败，将使用 ffmpeg 压缩')
                             subprocess.Popen(
-                                f'{FFMPEG_PATH} -i "{file1_path}" -c:a flac "{file1_path.removesuffix(".wav") + ".flac"}"', shell=True).wait()
+                                f'{FFMPEG_PATH} -i "{file1_path}" -c:a flac "{file1_path[:-4] + ".flac"}"', shell=True).wait()
                             if len(os.listdir(dst_folder)) > n:
                                 os.remove(file1_path)
                 for file1 in os.listdir(dst_folder):
                     file1_path = os.path.join(dst_folder, file1)
-                    if file1_path.endswith('.flac'):
+                    if os.path.isfile(file1_path) and file1_path.endswith('.flac'):
                         flac_files.append(file1_path)
+            track_flac_map: dict[int, str] = {}
+            for flac in flac_files:
+                tid = _track_id_from_path(flac)
+                if tid is not None:
+                    track_flac_map[int(tid)] = flac
+            self._track_flac_map = track_flac_map
+            for tid in track_info.keys():
+                try:
+                    self._audio_tracks_to_exclude.add(int(tid))
+                except Exception:
+                    pass
         return track_count, track_info, flac_files
 
-    def flac_task(self, output_file, dst_folder, i):
-        track_count, track_info, flac_files = self.process_audio_to_flac(output_file, dst_folder, i)
+    def flac_task(self, output_file, dst_folder, i, source_file: Optional[str] = None):
+        track_count, track_info, flac_files = self.process_audio_to_flac(output_file, dst_folder, i, source_file=source_file)
         if flac_files:
-            output_file1 = os.path.join(dst_folder, os.path.splitext(output_file)[0] + '(1).mkv')
-            remux_cmd = self.generate_remux_cmd(track_count, track_info, flac_files, output_file1, output_file)
+            src_mkv = os.path.normpath(source_file) if source_file else os.path.normpath(output_file)
+            same_mkv = os.path.normpath(output_file) == src_mkv
+            output_file1 = (os.path.splitext(output_file)[0] + '.tmp.mkv') if same_mkv else output_file
+            remux_cmd = self.generate_remux_cmd(track_count, track_info, flac_files, output_file1, src_mkv)
             if self.sub_files and len(self.sub_files) >= i and i > -1:
                 lang = 'chi'
                 try:
@@ -2477,15 +2538,17 @@ class BluraySubtitle:
                 remux_cmd += f' --language 0:{lang} "{self.sub_files[i - 1]}"'
             print(f'混流命令：{remux_cmd}')
             subprocess.Popen(remux_cmd, shell=True).wait()
-            if os.path.getsize(output_file1) > os.path.getsize(output_file):
-                os.remove(output_file1)
-            else:
-                os.remove(output_file)
-                os.rename(output_file1, output_file)
+            if same_mkv:
+                if os.path.getsize(output_file1) > os.path.getsize(output_file):
+                    os.remove(output_file1)
+                else:
+                    os.remove(output_file)
+                    os.rename(output_file1, output_file)
             for flac_file in flac_files:
                 os.remove(flac_file)
 
-    def encode_task(self, output_file, dst_folder, i, vpy_path: str, vspipe_mode: str, x265_mode: str, x265_params: str, sub_pack_mode: str):
+    def encode_task(self, output_file, dst_folder, i, vpy_path: str, vspipe_mode: str, x265_mode: str, x265_params: str, sub_pack_mode: str, source_file: Optional[str] = None):
+        src_mkv = os.path.normpath(source_file) if source_file else os.path.normpath(output_file)
         def update_vpy_script():
             if not os.path.exists(vpy_path):
                 return
@@ -2496,7 +2559,7 @@ class BluraySubtitle:
                 traceback.print_exc()
                 return
 
-            mkv_real_path = os.path.normpath(output_file)
+            mkv_real_path = os.path.normpath(src_mkv)
             subtitle_real_path = None
             if self.sub_files and len(self.sub_files) >= i and i > -1:
                 subtitle_real_path = os.path.normpath(self.sub_files[i - 1])
@@ -2561,11 +2624,14 @@ class BluraySubtitle:
         cmd = f'"{vspipe_exe}" --y4m "{vpy_path}" - | "{x265_exe}" {x265_params or ""} --y4m -D 10 -o "{hevc_file}" -'
         print(f'压制命令：{cmd}')
         subprocess.Popen(cmd, shell=True, env=vspipe_env).wait()
-        cleanup_lwi_for_source(output_file)
-        track_count, track_info, flac_files = self.process_audio_to_flac(output_file, dst_folder, i)
+        cleanup_lwi_for_source(src_mkv)
+        track_count, track_info, flac_files = self.process_audio_to_flac(output_file, dst_folder, i, source_file=src_mkv)
         if flac_files or os.path.exists(hevc_file):
-            output_file1 = os.path.join(dst_folder, os.path.splitext(output_file)[0] + '(1).mkv')
-            remux_cmd = self.generate_remux_cmd(track_count, track_info, flac_files, output_file1, output_file,
+            same_mkv = os.path.normpath(output_file) == src_mkv
+            output_file1 = (os.path.splitext(output_file)[0] + '.tmp.mkv') if same_mkv else output_file
+            if not same_mkv and os.path.exists(output_file1):
+                force_remove_file(output_file1)
+            remux_cmd = self.generate_remux_cmd(track_count, track_info, flac_files, output_file1, src_mkv,
                                                 hevc_file=hevc_file if os.path.exists(hevc_file) else None)
             if sub_pack_mode == 'soft':
                 if self.sub_files and len(self.sub_files) >= i and i > -1:
@@ -2579,18 +2645,23 @@ class BluraySubtitle:
                     remux_cmd += f' --language 0:{lang} "{self.sub_files[i - 1]}"'
             print(f'混流命令：{remux_cmd}')
             subprocess.Popen(remux_cmd, shell=True).wait()
-            if os.path.getsize(output_file1) > os.path.getsize(output_file):
-                os.remove(output_file1)
-            else:
-                os.remove(output_file)
-                os.rename(output_file1, output_file)
+            if same_mkv:
+                if os.path.getsize(output_file1) > os.path.getsize(output_file):
+                    os.remove(output_file1)
+                else:
+                    os.remove(output_file)
+                    os.rename(output_file1, output_file)
             for flac_file in flac_files:
                 os.remove(flac_file)
             if os.path.exists(hevc_file):
                 os.remove(hevc_file)
-        cleanup_lwi_for_source(output_file)
+        cleanup_lwi_for_source(src_mkv)
 
     def generate_remux_cmd(self, track_count, track_info, flac_files, output_file, mkv_file, hevc_file: Optional[str] = None):
+        copy_audio_track = list(getattr(self, '_active_copy_audio_track', []) or [])
+        copy_sub_track = list(getattr(self, '_active_copy_sub_track', []) or [])
+        track_flac_map = getattr(self, '_track_flac_map', {}) or {}
+        audio_tracks_to_exclude = sorted({int(x) for x in (getattr(self, '_audio_tracks_to_exclude', set()) or set()) if str(x).strip() != ''})
         tracker_order = []
         audio_tracks = []
         pcm_track_count = 0
@@ -2598,27 +2669,34 @@ class BluraySubtitle:
         for _ in range(track_count + 1):
             if _ in track_info:
                 pcm_track_count += 1
-                try:
-                    language_options.append(f'--language 0:{track_info[_]} "{flac_files[pcm_track_count - 1]}"')
-                except IndexError:
-                    continue
-                audio_tracks.append(str(_))
+                flac_src = track_flac_map.get(_)
+                if not flac_src:
+                    try:
+                        flac_src = flac_files[pcm_track_count - 1]
+                    except IndexError:
+                        continue
+                language_options.append(f'--language 0:{track_info[_]} "{flac_src}"')
                 tracker_order.append(f'{pcm_track_count}:0')
+            elif _ in audio_tracks_to_exclude:
+                continue
             else:
                 tracker_order.append(f'0:{_}')
         tracker_order = ','.join(tracker_order)
-        audio_track_num = len(audio_tracks)
-        audio_tracks = '!' + ','.join(audio_tracks)
+        audio_tracks = ('!' + ','.join([str(x) for x in audio_tracks_to_exclude])) if audio_tracks_to_exclude else ''
         language_options = ' '.join(language_options)
         if not hevc_file:
             return (f'"{MKV_MERGE_PATH}" {mkvtoolnix_ui_language_arg()} -o "{output_file}" --track-order {tracker_order} '
-                    f'-a {audio_tracks} "{mkv_file}" {language_options}')
+                    f'{("-a " + ",".join(copy_audio_track)) if copy_audio_track else ""} '
+                    f'{("-s " + ",".join(copy_sub_track)) if copy_sub_track else ""} '
+                    f'{"-a " + audio_tracks if audio_tracks else ""} "{mkv_file}" {language_options}')
         else:
-            tracker_order = f'{audio_track_num + 1}:0,{tracker_order}'
+            tracker_order = f'{pcm_track_count + 1}:0,{tracker_order}'
             return (f'"{MKV_MERGE_PATH}" {mkvtoolnix_ui_language_arg()} -o "{output_file}" --track-order {tracker_order} '
-                    f'-d !0 -a {audio_tracks} "{mkv_file}" {language_options} "{hevc_file}"')
+                    f'{("-a " + ",".join(copy_audio_track)) if copy_audio_track else ""} '
+                    f'{("-s " + ",".join(copy_sub_track)) if copy_sub_track else ""} '
+                    f'-d !0 {"-a " + audio_tracks if audio_tracks else ""} "{mkv_file}" {language_options} "{hevc_file}"')
 
-    def extract_lossless(self, mkv_file: str, dolby_truehd_tracks: list[int]) -> tuple[int, dict[int, str]]:
+    def extract_lossless(self, mkv_file: str, dolby_truehd_tracks: list[int], output_base: Optional[str] = None) -> tuple[int, dict[int, str]]:
         if sys.platform == 'win32':
             process = subprocess.Popen(f'"{MKV_INFO_PATH}" "{mkv_file}" --ui-language en',
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -2662,9 +2740,10 @@ class BluraySubtitle:
 
         if track_info:
             extract_info = []
+            base = output_base if output_base else mkv_file[:-4]
             for track_id, lang in track_info.items():
                 extract_info.append(
-                    f'{track_id}:"{mkv_file.removesuffix(".mkv")}.track{track_id}.{track_suffix_info[track_id]}"')
+                    f'{track_id}:"{base}.track{track_id}.{track_suffix_info[track_id]}"')
             extract_cmd = f'"{MKV_EXTRACT_PATH}" {mkvtoolnix_ui_language_arg()} "{mkv_file}" tracks {" ".join(extract_info)}'
             print(f'正在提取无损音轨，命令: {extract_cmd}')
             subprocess.Popen(extract_cmd, shell=True).wait()
@@ -2853,6 +2932,120 @@ class EncodeWorker(QObject):
                 x265_params=self.x265_params,
                 sub_pack_mode=self.sub_pack_mode
             )
+        except _Cancelled:
+            self.canceled.emit()
+        except Exception:
+            self.failed.emit(traceback.format_exc())
+        else:
+            self.finished.emit()
+
+
+class EncodeMkvFolderWorker(QObject):
+    progress = pyqtSignal(int)
+    label = pyqtSignal(str)
+    finished = pyqtSignal()
+    canceled = pyqtSignal()
+    failed = pyqtSignal(str)
+
+    def __init__(
+        self,
+        mkv_rows: list[dict[str, str]],
+        sp_rows: list[dict[str, str]],
+        output_folder: str,
+        cancel_event: threading.Event,
+        vspipe_mode: str,
+        x265_mode: str,
+        x265_params: str,
+        sub_pack_mode: str,
+    ):
+        super().__init__()
+        self.mkv_rows = mkv_rows
+        self.sp_rows = sp_rows
+        self.output_folder = output_folder
+        self.cancel_event = cancel_event
+        self.vspipe_mode = vspipe_mode
+        self.x265_mode = x265_mode
+        self.x265_params = x265_params
+        self.sub_pack_mode = sub_pack_mode
+
+    def _link_or_copy(self, src: str, dst: str):
+        if os.path.exists(dst):
+            force_remove_file(dst)
+        try:
+            os.link(src, dst)
+            return
+        except Exception:
+            pass
+        shutil.copy2(src, dst)
+
+    def run(self):
+        try:
+            def progress_cb(value: Optional[int] = None, text: Optional[str] = None):
+                if value is not None:
+                    self.progress.emit(int(value))
+                if text:
+                    self.label.emit(str(text))
+                if self.cancel_event.is_set():
+                    raise _Cancelled()
+
+            dst_folder = os.path.normpath(self.output_folder)
+            os.makedirs(dst_folder, exist_ok=True)
+
+            sub_files = [str(r.get('sub_path') or '') for r in self.mkv_rows]
+            episode_subtitle_languages = [str(r.get('language') or '') for r in self.mkv_rows]
+
+            bs = BluraySubtitle('', sub_files, True, progress_cb, movie_mode=True)
+            bs.episode_subtitle_languages = episode_subtitle_languages
+
+            total = max(1, len(self.mkv_rows) + len(self.sp_rows))
+            done = 0
+            for i, row in enumerate(self.mkv_rows):
+                progress_cb(int(done / total * 1000), f'压制中 {done + 1}/{total}')
+                src = os.path.normpath(str(row.get('src_path') or ''))
+                out_name = str(row.get('output_name') or '').strip() or os.path.basename(src)
+                if not out_name.lower().endswith('.mkv'):
+                    out_name += '.mkv'
+                dst = os.path.join(dst_folder, out_name)
+                vpy_path = str(row.get('vpy_path') or '').strip()
+                bs.encode_task(
+                    dst,
+                    dst_folder,
+                    i + 1,
+                    vpy_path,
+                    self.vspipe_mode,
+                    self.x265_mode,
+                    self.x265_params,
+                    self.sub_pack_mode,
+                    source_file=src
+                )
+                done += 1
+
+            sps_out = None
+            for row in self.sp_rows:
+                progress_cb(int(done / total * 1000), f'压制中 {done + 1}/{total}')
+                src = os.path.normpath(str(row.get('src_path') or ''))
+                out_name = str(row.get('output_name') or '').strip() or os.path.basename(src)
+                if not out_name.lower().endswith('.mkv'):
+                    out_name += '.mkv'
+                if sps_out is None:
+                    sps_out = os.path.join(dst_folder, 'SPs')
+                    os.makedirs(sps_out, exist_ok=True)
+                dst = os.path.join(sps_out, out_name)
+                vpy_path = str(row.get('vpy_path') or '').strip()
+                bs.encode_task(
+                    dst,
+                    sps_out,
+                    -1,
+                    vpy_path,
+                    self.vspipe_mode,
+                    self.x265_mode,
+                    self.x265_params,
+                    self.sub_pack_mode,
+                    source_file=src
+                )
+                done += 1
+
+            progress_cb(1000, '完成')
         except _Cancelled:
             self.canceled.emit()
         except Exception:
@@ -3202,7 +3395,7 @@ class BluraySubtitleGUI(QWidget):
             self._refresh_opacity_controls()
             return
         if self._theme_mode == 'colorful':
-            opacity = float(getattr(self, '_colorful_opacity', 0.96) or 0.96)
+            opacity = float(getattr(self, '_colorful_opacity', 0.94) or 0.94)
             opacity = min(1.0, max(0.6, opacity))
             self._colorful_opacity = opacity
             try:
@@ -3284,6 +3477,14 @@ class BluraySubtitleGUI(QWidget):
             "QLineEdit,QPlainTextEdit,QTextEdit{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;}"
             "QComboBox{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;padding:2px 6px;}"
             "QComboBox QAbstractItemView{background:#2a2a2a;color:#e6e6e6;selection-background-color:#3a5fcd;}"
+            "QRadioButton{color:#e6e6e6;}"
+            "QRadioButton::indicator{width:14px;height:14px;border-radius:7px;border:2px solid #5b7fff;background:#2a2a2a;}"
+            "QRadioButton::indicator:checked{background:#3a5fcd;border:2px solid #5b7fff;}"
+            "QRadioButton::indicator:checked:hover{background:#4a6fe0;}"
+            "QRadioButton::indicator:unchecked:hover{border:2px solid #7a93ff;}"
+            "QRadioButton:disabled{color:#9aa0b3;}"
+            "QRadioButton::indicator:disabled{border:2px solid #555a6b;background:#252525;}"
+            "QRadioButton::indicator:checked:disabled{border:2px solid #555a6b;background:#555a6b;}"
             "QPushButton,QToolButton{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;padding:4px 8px;}"
             "QPushButton:hover,QToolButton:hover{background:#333333;}"
             "QPushButton:pressed,QToolButton:pressed{background:#3a3a3a;}"
@@ -3436,7 +3637,10 @@ class BluraySubtitleGUI(QWidget):
 
     def _localized_headers_for_keys(self, keys: list[str]) -> list[str]:
         if getattr(self, '_language_code', CURRENT_UI_LANGUAGE) != 'zh':
-            return list(keys)
+            en = {
+                'edit_tracks': 'tracks',
+            }
+            return [en.get(k, k) for k in keys]
         zh = {
             'path': '路径',
             'size': '大小',
@@ -3453,10 +3657,12 @@ class BluraySubtitleGUI(QWidget):
             'ep_duration': '单集时长',
             'm2ts_file': 'm2ts 文件',
             'language': '语言',
+            'lang': '语言',
             'output_name': '输出文件名',
             'vpy_path': 'vpy 路径',
             'edit_vpy': '编辑 vpy',
             'preview_script': '预览',
+            'edit_tracks': '编辑轨道',
             'mpls_file': 'mpls 文件',
             'chapters': '章节',
             'main': '主播放列表',
@@ -3492,7 +3698,8 @@ class BluraySubtitleGUI(QWidget):
                 elif function_id == 3:
                     self._set_table_headers(self.table2, REMUX_LABELS)
                 elif function_id == 4:
-                    self._set_table_headers(self.table2, ENCODE_LABELS)
+                    labels = ENCODE_REMUX_LABELS if getattr(self, '_encode_input_mode', 'bdmv') == 'remux' else ENCODE_LABELS
+                    self._set_table_headers(self.table2, labels)
                 self._resize_table_columns_for_language(self.table2)
                 self._scroll_table_h_to_right(self.table2)
         except Exception:
@@ -3500,7 +3707,8 @@ class BluraySubtitleGUI(QWidget):
 
         try:
             if hasattr(self, 'table3') and self.table3:
-                self._set_table_headers(self.table3, ENCODE_SP_LABELS)
+                labels = ENCODE_REMUX_SP_LABELS if getattr(self, '_encode_input_mode', 'bdmv') == 'remux' else ENCODE_SP_LABELS
+                self._set_table_headers(self.table3, labels)
                 self._resize_table_columns_for_language(self.table3)
                 self._scroll_table_h_to_right(self.table3)
         except Exception:
@@ -3922,8 +4130,8 @@ class BluraySubtitleGUI(QWidget):
         layout.addWidget(button)
         return widget
 
-    def create_language_combo(self, initial: str = 'chi') -> QComboBox:
-        combo = QComboBox()
+    def create_language_combo(self, initial: str = 'chi', parent: Optional[QWidget] = None) -> QComboBox:
+        combo = QComboBox(parent)
         combo.setEditable(True)
         combo.addItems(['chi', 'zho', 'jpn', 'eng', 'kor', 'und'])
         auto_lang = 'eng' if getattr(self, '_language_code', CURRENT_UI_LANGUAGE) != 'zh' else 'chi'
@@ -3935,7 +4143,10 @@ class BluraySubtitleGUI(QWidget):
         function_id = self.get_selected_function_id()
         if function_id not in (3, 4) or not hasattr(self, 'table2') or not self.table2:
             return
-        labels = ENCODE_LABELS if function_id == 4 else REMUX_LABELS
+        if function_id == 4 and getattr(self, '_encode_input_mode', 'bdmv') == 'remux':
+            labels = ENCODE_REMUX_LABELS
+        else:
+            labels = ENCODE_LABELS if function_id == 4 else REMUX_LABELS
         try:
             lang_col = labels.index('language')
         except Exception:
@@ -3956,7 +4167,10 @@ class BluraySubtitleGUI(QWidget):
         function_id = self.get_selected_function_id()
         if function_id not in (3, 4) or not hasattr(self, 'table2') or not self.table2:
             return
-        labels = ENCODE_LABELS if function_id == 4 else REMUX_LABELS
+        if function_id == 4 and getattr(self, '_encode_input_mode', 'bdmv') == 'remux':
+            labels = ENCODE_REMUX_LABELS
+        else:
+            labels = ENCODE_LABELS if function_id == 4 else REMUX_LABELS
         try:
             sub_col = labels.index('sub_path')
             lang_col = labels.index('language')
@@ -3976,7 +4190,8 @@ class BluraySubtitleGUI(QWidget):
     def get_vpy_path_from_row(self, row_index: int) -> str:
         if self.get_selected_function_id() != 4:
             return ''
-        vpy_col = ENCODE_LABELS.index('vpy_path')
+        labels = ENCODE_REMUX_LABELS if getattr(self, '_encode_input_mode', 'bdmv') == 'remux' else ENCODE_LABELS
+        vpy_col = labels.index('vpy_path')
         w = self.table2.cellWidget(row_index, vpy_col)
         if w:
             line_edit = w.findChild(QLineEdit)
@@ -4368,6 +4583,24 @@ class BluraySubtitleGUI(QWidget):
         if row_index < 0:
             return
 
+        if getattr(self, '_encode_input_mode', 'bdmv') == 'remux':
+            video_path = self._get_remux_source_path_from_table2_row(row_index)
+            should_load_subtitle = False
+            try:
+                should_load_subtitle = bool(getattr(self, 'sub_pack_hard_radio', None) and self.sub_pack_hard_radio.isChecked())
+            except Exception:
+                should_load_subtitle = False
+            subtitle_path = ''
+            try:
+                sub_col = ENCODE_REMUX_LABELS.index('sub_path')
+                sub_item = self.table2.item(row_index, sub_col)
+                subtitle_path = sub_item.text().strip() if should_load_subtitle and sub_item and sub_item.text().strip() else ''
+            except Exception:
+                subtitle_path = ''
+            vpy_path = self.get_vpy_path_from_row(row_index)
+            self._preview_script_for_row(vpy_path=vpy_path, video_path=video_path, subtitle_path=subtitle_path)
+            return
+
         try:
             bdmv_col = ENCODE_LABELS.index('bdmv_index')
             m2ts_col = ENCODE_LABELS.index('m2ts_file')
@@ -4398,9 +4631,10 @@ class BluraySubtitleGUI(QWidget):
     def ensure_encode_row_widgets(self, row_index: int):
         if self.get_selected_function_id() != 4:
             return
-        vpy_col = ENCODE_LABELS.index('vpy_path')
-        edit_col = ENCODE_LABELS.index('edit_vpy')
-        preview_col = ENCODE_LABELS.index('preview_script')
+        labels = ENCODE_REMUX_LABELS if getattr(self, '_encode_input_mode', 'bdmv') == 'remux' else ENCODE_LABELS
+        vpy_col = labels.index('vpy_path')
+        edit_col = labels.index('edit_vpy')
+        preview_col = labels.index('preview_script')
 
         if not self.table2.cellWidget(row_index, vpy_col):
             self.table2.setCellWidget(row_index, vpy_col, self.create_vpy_path_widget(parent=self.table2))
@@ -4420,7 +4654,8 @@ class BluraySubtitleGUI(QWidget):
     def get_sp_vpy_path_from_row(self, row_index: int) -> str:
         if self.get_selected_function_id() != 4:
             return ''
-        vpy_col = ENCODE_SP_LABELS.index('vpy_path')
+        labels = ENCODE_REMUX_SP_LABELS if getattr(self, '_encode_input_mode', 'bdmv') == 'remux' else ENCODE_SP_LABELS
+        vpy_col = labels.index('vpy_path')
         w = self.table3.cellWidget(row_index, vpy_col)
         if w:
             line_edit = w.findChild(QLineEdit)
@@ -4455,6 +4690,12 @@ class BluraySubtitleGUI(QWidget):
         except Exception:
             row_index = -1
         if row_index < 0:
+            return
+
+        if getattr(self, '_encode_input_mode', 'bdmv') == 'remux':
+            video_path = self._get_remux_source_path_from_table3_row(row_index)
+            vpy_path = self.get_sp_vpy_path_from_row(row_index)
+            self._preview_script_for_row(vpy_path=vpy_path, video_path=video_path, subtitle_path='')
             return
 
         try:
@@ -4797,8 +5038,13 @@ class BluraySubtitleGUI(QWidget):
 
         tools_layout.addWidget(QLabel('x265参数：', tools_row))
         self.x265_preset_combo = QComboBox(tools_row)
-        self.x265_preset_combo.addItems(list(self._encode_preset_params.keys()))
-        self.x265_preset_combo.setCurrentText('均衡')
+        self.x265_preset_combo.addItem('快速', '快速')
+        self.x265_preset_combo.addItem('均衡', '均衡')
+        self.x265_preset_combo.addItem('高质', '高质')
+        self.x265_preset_combo.addItem('极限', '极限')
+        self.x265_preset_combo.addItem('自订', '自订')
+        idx_balanced = self.x265_preset_combo.findData('均衡')
+        self.x265_preset_combo.setCurrentIndex(0 if idx_balanced < 0 else idx_balanced)
         self._adjust_combo_width_to_contents(self.x265_preset_combo)
         tools_layout.addWidget(self.x265_preset_combo)
 
@@ -4819,7 +5065,7 @@ class BluraySubtitleGUI(QWidget):
                 self._encode_setting_updating = False
 
         def on_preset_changed():
-            preset = self.x265_preset_combo.currentText()
+            preset = str(self.x265_preset_combo.currentData() or self.x265_preset_combo.currentText() or '')
             if preset == '自订':
                 return
             set_params_for_preset(preset)
@@ -4827,12 +5073,14 @@ class BluraySubtitleGUI(QWidget):
         def on_params_edited():
             if self._encode_setting_updating:
                 return
-            if self.x265_preset_combo.currentText() != '自订':
-                self.x265_preset_combo.setCurrentText('自订')
+            if str(self.x265_preset_combo.currentData() or '') != '自订':
+                idx_custom = self.x265_preset_combo.findData('自订')
+                if idx_custom >= 0:
+                    self.x265_preset_combo.setCurrentIndex(idx_custom)
 
         self.x265_preset_combo.currentIndexChanged.connect(on_preset_changed)
         self.x265_params_edit.textChanged.connect(on_params_edited)
-        set_params_for_preset(self.x265_preset_combo.currentText())
+        set_params_for_preset(str(self.x265_preset_combo.currentData() or '均衡'))
 
         sub_pack_row = QWidget(self.encode_box)
         sub_pack_layout = QHBoxLayout()
@@ -4925,7 +5173,7 @@ class BluraySubtitleGUI(QWidget):
         self.opacity_label = QLabel('透明度', language_row)
         self.opacity_slider = QSlider(Qt.Orientation.Horizontal, language_row)
         self.opacity_slider.setRange(60, 100)
-        self.opacity_slider.setValue(int(getattr(self, '_colorful_opacity', 0.96) * 100))
+        self.opacity_slider.setValue(int(getattr(self, '_colorful_opacity', 0.94) * 100))
         self.opacity_slider.setFixedWidth(140)
         self.opacity_slider.valueChanged.connect(self._on_opacity_changed)
         language_layout.addWidget(self.opacity_label)
@@ -5018,6 +5266,7 @@ class BluraySubtitleGUI(QWidget):
         bdmv.setLayout(v_layout)
         bluray_path_box = CustomBox('原盘', self)
         bluray_path_box.setProperty("noMargin", True)
+        self.bluray_path_box = bluray_path_box
         h_layout = QHBoxLayout()
         h_layout.setContentsMargins(0, 0, 0, 0)
         h_layout.setSpacing(4)
@@ -5035,12 +5284,59 @@ class BluraySubtitleGUI(QWidget):
         h_layout.addWidget(button1_open)
         v_layout.addWidget(bluray_path_box)
 
+        remux_path_box = CustomBox('Remux', self)
+        remux_path_box.setProperty("noMargin", True)
+        remux_layout = QHBoxLayout()
+        remux_layout.setContentsMargins(0, 0, 0, 0)
+        remux_layout.setSpacing(4)
+        remux_path_box.setLayout(remux_layout)
+        self.remux_folder_path = QLineEdit()
+        self.remux_folder_path.setMinimumWidth(200)
+        self.remux_folder_path.setAcceptDrops(False)
+        self.remux_folder_path.textChanged.connect(lambda _=None: QTimer.singleShot(150, self._populate_encode_from_remux_folder))
+        remux_btn = QPushButton("选择")
+        remux_btn.clicked.connect(self.select_remux_folder)
+        remux_btn_open = QPushButton("打开")
+        remux_btn_open.clicked.connect(lambda _=None: self.open_folder_path(self.remux_folder_path.text()))
+        remux_layout.addWidget(self.remux_folder_path)
+        remux_layout.addWidget(remux_btn)
+        remux_layout.addWidget(remux_btn_open)
+        self.remux_path_box = remux_path_box
+        self.remux_path_box.setVisible(False)
+        v_layout.addWidget(remux_path_box)
+
         label1_container = QWidget(self)
         label1_layout = QVBoxLayout()
         label1_layout.setContentsMargins(0, 0, 0, 0)
         label1_layout.setSpacing(0)
         label1_container.setLayout(label1_layout)
-        label1_layout.addWidget(self.label1)
+        self.label1.setText(self.t('选择文件夹'))
+
+        encode_source_row = QWidget(self)
+        encode_source_layout = QHBoxLayout()
+        encode_source_layout.setContentsMargins(0, 0, 0, 0)
+        encode_source_layout.setSpacing(8)
+        encode_source_row.setLayout(encode_source_layout)
+        encode_source_layout.addWidget(self.label1)
+        self.encode_source_bdmv_radio = QRadioButton('原盘', encode_source_row)
+        self.encode_source_remux_radio = QRadioButton('Remux', encode_source_row)
+        self.encode_source_bdmv_radio.setChecked(True)
+        encode_source_layout.addWidget(self.encode_source_bdmv_radio)
+        encode_source_layout.addWidget(self.encode_source_remux_radio)
+        encode_source_layout.addStretch(1)
+        self.encode_source_row = encode_source_row
+        self.encode_source_row.setVisible(self.get_selected_function_id() == 4)
+        self._encode_input_mode = 'bdmv'
+
+        def on_encode_source_changed():
+            self._encode_input_mode = 'remux' if self.encode_source_remux_radio.isChecked() else 'bdmv'
+            try:
+                self._apply_encode_input_mode_ui()
+            except Exception:
+                traceback.print_exc()
+
+        self.encode_source_bdmv_radio.toggled.connect(on_encode_source_changed)
+        self.encode_source_remux_radio.toggled.connect(on_encode_source_changed)
         label1_layout.addWidget(bdmv)
 
         self.table1 = QTableWidget()
@@ -5052,6 +5348,14 @@ class BluraySubtitleGUI(QWidget):
         self.bdmv_folder_path.textChanged.connect(self.on_bdmv_folder_path_change)
         v_layout.addWidget(self.table1)
         self.layout.addWidget(label1_container)
+        try:
+            idx = self.layout.indexOf(self.episode_mode_row)
+            if idx >= 0:
+                self.layout.insertWidget(idx, self.encode_source_row)
+            else:
+                self.layout.insertWidget(1, self.encode_source_row)
+        except Exception:
+            self.layout.insertWidget(1, self.encode_source_row)
 
         subtitle = QGroupBox()
         subtitle.setProperty("noTitle", True)
@@ -5203,6 +5507,31 @@ class BluraySubtitleGUI(QWidget):
         table_ok = False
         if bdmv_path:
             try:
+                start_ts = time.time()
+                progress_dialog = QProgressDialog(self.t('读取中'), '', 0, 1000, self)
+                progress_dialog.setMinimumWidth(420)
+                bar = QProgressBar(progress_dialog)
+                bar.setRange(0, 1000)
+                bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                progress_dialog.setBar(bar)
+                progress_dialog.setCancelButton(None)
+                progress_dialog.setMinimumDuration(0)
+                progress_dialog.setAutoClose(False)
+                progress_dialog.setAutoReset(False)
+                progress_dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+                show_timer = QTimer(self)
+                show_timer.setSingleShot(True)
+                show_timer.setInterval(2000)
+
+                def show_if_needed():
+                    try:
+                        if (time.time() - start_ts) >= 2.0:
+                            progress_dialog.show()
+                    except Exception:
+                        pass
+
+                show_timer.timeout.connect(show_if_needed)
+                show_timer.start()
                 self.table1.setColumnCount(len(BDMV_LABELS))
                 self._set_table_headers(self.table1, BDMV_LABELS)
                 i = 0
@@ -5210,6 +5539,8 @@ class BluraySubtitleGUI(QWidget):
                     dirs.sort()  # Sort dirs to ensure consistent order on all platforms
                     if 'BDMV' in dirs and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV')):
                         i += 1
+                    if (time.time() - start_ts) >= 2.0:
+                        QCoreApplication.processEvents()
                 self.table1.setRowCount(i)
                 i = 0
                 for root, dirs, files in os.walk(bdmv_path):
@@ -5268,11 +5599,15 @@ class BluraySubtitleGUI(QWidget):
                                         table_widget.setItem(mpls_n, 5, QTableWidgetItem(''))
                                 table_widget.resizeColumnsToContents()
                                 mpls_n += 1
+                                if (time.time() - start_ts) >= 2.0:
+                                    QCoreApplication.processEvents()
                         self.table1.setItem(i, 0, FilePathTableWidgetItem(os.path.normpath(root)))
                         self.table1.setItem(i, 1, QTableWidgetItem(get_folder_size(root)))
                         self.table1.setCellWidget(i, 2, table_widget)
                         self.table1.setRowHeight(i, 100)
                         i += 1
+                        if (time.time() - start_ts) >= 2.0:
+                            QCoreApplication.processEvents()
                 self.table1.resizeColumnsToContents()
                 if self.get_selected_function_id() in (3, 4):
                     self.table1.setColumnWidth(2, 620 if getattr(self, '_language_code', CURRENT_UI_LANGUAGE) == 'zh' else 560)
@@ -5280,7 +5615,19 @@ class BluraySubtitleGUI(QWidget):
                     self.table1.setColumnWidth(2, 420 if getattr(self, '_language_code', CURRENT_UI_LANGUAGE) == 'zh' else 370)
                 self._scroll_table_h_to_right(self.table1)
                 table_ok = True
+                try:
+                    show_timer.stop()
+                    progress_dialog.close()
+                    progress_dialog.deleteLater()
+                except Exception:
+                    pass
             except Exception as e:
+                try:
+                    show_timer.stop()
+                    progress_dialog.close()
+                    progress_dialog.deleteLater()
+                except Exception:
+                    pass
                 self.table1.clear()
                 self.table1.setColumnCount(len(BDMV_LABELS))
                 self._set_table_headers(self.table1, BDMV_LABELS)
@@ -6269,18 +6616,25 @@ class BluraySubtitleGUI(QWidget):
         except Exception:
             return []
 
-    def _show_tracks_dialog(self, title: str, streams: list[dict[str, object]], selected_indexes: Optional[set[str]] = None) -> Optional[set[str]]:
+    def _show_tracks_dialog(
+        self,
+        title: str,
+        streams: list[dict[str, object]],
+        selected_indexes: Optional[set[str]] = None,
+        pid_lang: Optional[dict[int, str]] = None
+    ) -> Optional[set[str]]:
         dlg = QDialog(self)
         dlg.setWindowTitle(title)
         layout = QVBoxLayout()
         dlg.setLayout(layout)
         table = QTableWidget(dlg)
         self._set_compact_table(table, row_height=22, header_height=22)
-        cols = ['index', 'select', 'id', 'codec_type', 'codec_name', 'start_time']
+        cols = ['index', 'select', 'id', 'lang', 'codec_type', 'codec_name', 'start_time']
         table.setColumnCount(len(cols))
         self._set_table_headers(table, cols)
         table.setRowCount(len(streams))
         selected = selected_indexes or set()
+        pid_to_lang = pid_lang or {}
         for r, s in enumerate(streams):
             idx_text = str(s.get('index', ''))
             codec_type = str(s.get('codec_type') or '')
@@ -6294,7 +6648,22 @@ class BluraySubtitleGUI(QWidget):
             for c, key in enumerate(cols):
                 if key == 'select':
                     continue
-                v = s.get(key, '')
+                if key == 'lang':
+                    v = 'und'
+                    try:
+                        pid = self._parse_stream_pid(s.get('id'))
+                        if pid is not None and pid in pid_to_lang:
+                            v = pid_to_lang.get(pid, 'und')
+                        else:
+                            try:
+                                idx = int(str(s.get('index') or '').strip())
+                                v = pid_to_lang.get(idx, 'und')
+                            except Exception:
+                                v = 'und'
+                    except Exception:
+                        v = 'und'
+                else:
+                    v = s.get(key, '')
                 table.setItem(r, c, QTableWidgetItem('' if v is None else str(v)))
         table.resizeColumnsToContents()
         layout.addWidget(table)
@@ -6405,7 +6774,7 @@ class BluraySubtitleGUI(QWidget):
             key = f'main::{os.path.normpath(mpls_path)}'
             cfg = getattr(self, '_track_selection_config', {}).get(key, {})
             selected = set((cfg.get('audio') or []) + (cfg.get('subtitle') or []))
-            selected_after = self._show_tracks_dialog(self.t('编辑轨道'), streams, selected)
+            selected_after = self._show_tracks_dialog(self.t('编辑轨道'), streams, selected, chapter.pid_to_lang)
             if selected_after is None:
                 return
             audio: list[str] = []
@@ -6948,6 +7317,8 @@ class BluraySubtitleGUI(QWidget):
             self.output_folder_row.setVisible(function_id in (3, 4))
         if hasattr(self, 'episode_mode_row') and self.episode_mode_row:
             self.episode_mode_row.setVisible(function_id in (1, 3, 4))
+        if hasattr(self, 'encode_source_row') and self.encode_source_row:
+            self.encode_source_row.setVisible(function_id == 4)
         if hasattr(self, 'table3'):
             self.table3.setVisible(function_id in (3, 4))
             try:
@@ -6961,6 +7332,17 @@ class BluraySubtitleGUI(QWidget):
                 self._scroll_table_h_to_right(self.table3)
             except Exception:
                 pass
+        if function_id != 4:
+            self._encode_input_mode = 'bdmv'
+            try:
+                if hasattr(self, 'encode_source_bdmv_radio') and self.encode_source_bdmv_radio:
+                    self.encode_source_bdmv_radio.setChecked(True)
+            except Exception:
+                pass
+        try:
+            self._apply_encode_input_mode_ui()
+        except Exception:
+            pass
         if function_id == 4:
             QTimer.singleShot(0, self.ensure_default_vpy_file)
 
@@ -7075,6 +7457,357 @@ class BluraySubtitleGUI(QWidget):
         folder = QFileDialog.getExistingDirectory(self, self.t("选择文件夹"))
         self.bdmv_folder_path.setText(os.path.normpath(folder))
 
+    def select_remux_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, self.t("选择文件夹"))
+        if folder and hasattr(self, 'remux_folder_path'):
+            self.remux_folder_path.setText(os.path.normpath(folder))
+
+    def _apply_encode_input_mode_ui(self):
+        if self.get_selected_function_id() != 4:
+            try:
+                if hasattr(self, 'remux_path_box') and self.remux_path_box:
+                    self.remux_path_box.setVisible(False)
+                if hasattr(self, 'bluray_path_box') and self.bluray_path_box:
+                    self.bluray_path_box.setVisible(True)
+                if hasattr(self, 'table1') and self.table1:
+                    self.table1.setVisible(True)
+                if hasattr(self, 'series_mode_radio') and self.series_mode_radio:
+                    self.series_mode_radio.setEnabled(True)
+                if hasattr(self, 'movie_mode_radio') and self.movie_mode_radio:
+                    self.movie_mode_radio.setEnabled(True)
+                if hasattr(self, 'approx_episode_minutes_combo') and self.approx_episode_minutes_combo:
+                    self.approx_episode_minutes_combo.setEnabled(self.series_mode_radio.isChecked() if hasattr(self, 'series_mode_radio') else True)
+            except Exception:
+                pass
+            return
+
+        remux_mode = getattr(self, '_encode_input_mode', 'bdmv') == 'remux'
+        try:
+            self.label1.setText(self.t("选择文件夹"))
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self, 'bluray_path_box') and self.bluray_path_box:
+                self.bluray_path_box.setVisible(not remux_mode)
+            if hasattr(self, 'remux_path_box') and self.remux_path_box:
+                self.remux_path_box.setVisible(remux_mode)
+            if hasattr(self, 'table1') and self.table1:
+                self.table1.setVisible(not remux_mode)
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self, 'series_mode_radio') and self.series_mode_radio:
+                self.series_mode_radio.setEnabled(not remux_mode)
+                if remux_mode:
+                    self.series_mode_radio.setChecked(True)
+            if hasattr(self, 'movie_mode_radio') and self.movie_mode_radio:
+                self.movie_mode_radio.setEnabled(not remux_mode)
+            if hasattr(self, 'approx_episode_minutes_combo') and self.approx_episode_minutes_combo:
+                self.approx_episode_minutes_combo.setEnabled((not remux_mode) and bool(self.series_mode_radio.isChecked()))
+        except Exception:
+            pass
+
+        if remux_mode:
+            self.table2.setColumnCount(len(ENCODE_REMUX_LABELS))
+            self._set_table_headers(self.table2, ENCODE_REMUX_LABELS)
+            self.table3.setColumnCount(len(ENCODE_REMUX_SP_LABELS))
+            self._set_table_headers(self.table3, ENCODE_REMUX_SP_LABELS)
+            self._update_language_combo_enabled_state()
+            if getattr(self, '_language_updating', False):
+                self.table2.resizeColumnsToContents()
+                self._resize_table_columns_for_language(self.table2)
+                self._scroll_table_h_to_right(self.table2)
+                self.table3.resizeColumnsToContents()
+                self._resize_table_columns_for_language(self.table3)
+                self._scroll_table_h_to_right(self.table3)
+            else:
+                self.table2.setRowCount(0)
+                self.table3.setRowCount(0)
+                try:
+                    self._populate_encode_from_remux_folder()
+                except Exception:
+                    pass
+        else:
+            self.table2.setColumnCount(len(ENCODE_LABELS))
+            self._set_table_headers(self.table2, ENCODE_LABELS)
+            self.table3.setColumnCount(len(ENCODE_SP_LABELS))
+            self._set_table_headers(self.table3, ENCODE_SP_LABELS)
+
+    def _parse_stream_pid(self, raw_id: object) -> Optional[int]:
+        s = str(raw_id or '').strip()
+        if not s:
+            return None
+        try:
+            if s.lower().startswith('0x'):
+                return int(s, 16)
+            if any(c in 'abcdefABCDEF' for c in s):
+                return int(s, 16)
+            return int(s, 10)
+        except Exception:
+            try:
+                return int(s, 16)
+            except Exception:
+                return None
+
+    def _get_remux_source_path_from_table2_row(self, row_index: int) -> str:
+        try:
+            out_col = ENCODE_REMUX_LABELS.index('output_name')
+        except Exception:
+            out_col = 3
+        item = self.table2.item(row_index, out_col)
+        if item:
+            data = item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(data, str) and data:
+                return os.path.normpath(data)
+        if hasattr(self, 'remux_folder_path'):
+            folder = self._normalize_path_input(self.remux_folder_path.text())
+            if folder and item and item.text().strip():
+                return os.path.normpath(os.path.join(folder, item.text().strip()))
+        return ''
+
+    def _get_remux_source_path_from_table3_row(self, row_index: int) -> str:
+        try:
+            out_col = ENCODE_REMUX_SP_LABELS.index('output_name')
+        except Exception:
+            out_col = 1
+        item = self.table3.item(row_index, out_col)
+        if item:
+            data = item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(data, str) and data:
+                return os.path.normpath(data)
+        if hasattr(self, 'remux_folder_path'):
+            folder = self._normalize_path_input(self.remux_folder_path.text())
+            sp_folder = os.path.join(folder, 'SPs') if folder else ''
+            if sp_folder and item and item.text().strip():
+                return os.path.normpath(os.path.join(sp_folder, item.text().strip()))
+        return ''
+
+    def _pid_lang_from_ffprobe_streams(self, streams: list[dict[str, object]]) -> dict[int, str]:
+        out: dict[int, str] = {}
+        for s in streams or []:
+            lang = 'und'
+            try:
+                direct = s.get('lang') or s.get('language')
+                if direct:
+                    lang = str(direct)
+                else:
+                    tags = s.get('tags') or {}
+                    if isinstance(tags, dict):
+                        tag_lang = tags.get('lang') or tags.get('language')
+                        if tag_lang:
+                            lang = str(tag_lang)
+            except Exception:
+                lang = 'und'
+            pid = self._parse_stream_pid(s.get('id'))
+            if pid is not None:
+                out[pid] = lang
+            try:
+                idx = int(str(s.get('index') or '').strip())
+                out[idx] = lang
+            except Exception:
+                pass
+        return out
+
+    def on_edit_tracks_from_mkv_row(self, table: QTableWidget, row_index: int):
+        try:
+            if table is self.table2:
+                src = self._get_remux_source_path_from_table2_row(row_index)
+                key = f'mkv::{os.path.normpath(src)}'
+            else:
+                src = self._get_remux_source_path_from_table3_row(row_index)
+                key = f'mkvsp::{os.path.normpath(src)}'
+            if not src or not os.path.exists(src):
+                QMessageBox.information(self, " ", "未找到 mkv 文件")
+                return
+            streams = self._read_ffprobe_streams(src)
+            pid_lang = self._pid_lang_from_ffprobe_streams(streams)
+            cfg = getattr(self, '_track_selection_config', {})
+            if key not in cfg:
+                a, s = BluraySubtitle._default_track_selection_from_streams(streams, pid_lang)
+                cfg[key] = {'audio': a, 'subtitle': s}
+            selected = set((cfg.get(key, {}).get('audio') or []) + (cfg.get(key, {}).get('subtitle') or []))
+            selected_after = self._show_tracks_dialog(self.t('编辑轨道'), streams, selected, pid_lang)
+            if selected_after is None:
+                return
+            audio: list[str] = []
+            subtitle: list[str] = []
+            for st in streams:
+                idx = str(st.get('index', ''))
+                if idx not in selected_after:
+                    continue
+                ctype = str(st.get('codec_type') or '')
+                if ctype == 'audio':
+                    audio.append(idx)
+                elif ctype == 'subtitle':
+                    subtitle.append(idx)
+            cfg[key] = {'audio': audio, 'subtitle': subtitle}
+        except Exception:
+            QMessageBox.information(self, " ", traceback.format_exc())
+
+    def _populate_encode_from_remux_folder(self):
+        if self.get_selected_function_id() != 4 or getattr(self, '_encode_input_mode', 'bdmv') != 'remux':
+            return
+        folder = self._normalize_path_input(self.remux_folder_path.text() if hasattr(self, 'remux_folder_path') else '')
+        if not folder or not os.path.isdir(folder):
+            return
+        start_ts = time.time()
+        progress_dialog = QProgressDialog(self.t('读取中'), '', 0, 1000, self)
+        progress_dialog.setMinimumWidth(420)
+        bar = QProgressBar(progress_dialog)
+        bar.setRange(0, 1000)
+        bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        progress_dialog.setBar(bar)
+        progress_dialog.setCancelButton(None)
+        progress_dialog.setMinimumDuration(0)
+        progress_dialog.setAutoClose(False)
+        progress_dialog.setAutoReset(False)
+        progress_dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+        show_timer = QTimer(self)
+        show_timer.setSingleShot(True)
+        show_timer.setInterval(2000)
+
+        def show_if_needed():
+            try:
+                if (time.time() - start_ts) >= 2.0:
+                    progress_dialog.show()
+            except Exception:
+                pass
+
+        show_timer.timeout.connect(show_if_needed)
+        show_timer.start()
+        mkvs = [f for f in os.listdir(folder) if f.lower().endswith('.mkv') and os.path.isfile(os.path.join(folder, f))]
+        mkvs.sort(key=lambda x: x.lower())
+        self.table2.setSortingEnabled(False)
+        self.table2.setRowCount(len(mkvs))
+        for r, name in enumerate(mkvs):
+            src = os.path.normpath(os.path.join(folder, name))
+            sub_col = ENCODE_REMUX_LABELS.index('sub_path')
+            lang_col = ENCODE_REMUX_LABELS.index('language')
+            dur_col = ENCODE_REMUX_LABELS.index('ep_duration')
+            out_col = ENCODE_REMUX_LABELS.index('output_name')
+            tracks_col = ENCODE_REMUX_LABELS.index('edit_tracks')
+            self.table2.setItem(r, sub_col, FilePathTableWidgetItem(''))
+            combo = self.create_language_combo(parent=self.table2)
+            self.table2.setCellWidget(r, lang_col, combo)
+            try:
+                dur = MKV(src).get_duration()
+                self.table2.setItem(r, dur_col, QTableWidgetItem(get_time_str(dur)))
+            except Exception:
+                self.table2.setItem(r, dur_col, QTableWidgetItem(''))
+            out_item = QTableWidgetItem(name)
+            out_item.setData(Qt.ItemDataRole.UserRole, src)
+            self.table2.setItem(r, out_col, out_item)
+            btn_tracks = QToolButton(self.table2)
+            btn_tracks.setText(self.t('编辑轨道'))
+            btn_tracks.clicked.connect(partial(self.on_edit_tracks_from_mkv_row, self.table2, r))
+            self.table2.setCellWidget(r, tracks_col, btn_tracks)
+            self.ensure_encode_row_widgets(r)
+            if (time.time() - start_ts) >= 2.0:
+                try:
+                    bar.setValue(int((r + 1) / max(1, len(mkvs)) * 1000))
+                except Exception:
+                    pass
+                QCoreApplication.processEvents()
+        self.table2.resizeColumnsToContents()
+        self._resize_table_columns_for_language(self.table2)
+        self._scroll_table_h_to_right(self.table2)
+        self._update_language_combo_enabled_state()
+        self.table2.setSortingEnabled(True)
+        try:
+            show_timer.stop()
+            progress_dialog.close()
+            progress_dialog.deleteLater()
+        except Exception:
+            pass
+        self._populate_encode_sps_from_remux_folder(folder)
+
+    def _populate_encode_sps_from_remux_folder(self, folder: str):
+        if self.get_selected_function_id() != 4 or getattr(self, '_encode_input_mode', 'bdmv') != 'remux':
+            return
+        sp_folder = os.path.join(folder, 'SPs')
+        if not os.path.isdir(sp_folder):
+            self.table3.setRowCount(0)
+            return
+        start_ts = time.time()
+        progress_dialog = QProgressDialog(self.t('读取中'), '', 0, 1000, self)
+        progress_dialog.setMinimumWidth(420)
+        bar = QProgressBar(progress_dialog)
+        bar.setRange(0, 1000)
+        bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        progress_dialog.setBar(bar)
+        progress_dialog.setCancelButton(None)
+        progress_dialog.setMinimumDuration(0)
+        progress_dialog.setAutoClose(False)
+        progress_dialog.setAutoReset(False)
+        progress_dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+        show_timer = QTimer(self)
+        show_timer.setSingleShot(True)
+        show_timer.setInterval(2000)
+
+        def show_if_needed():
+            try:
+                if (time.time() - start_ts) >= 2.0:
+                    progress_dialog.show()
+            except Exception:
+                pass
+
+        show_timer.timeout.connect(show_if_needed)
+        show_timer.start()
+        mkvs = [f for f in os.listdir(sp_folder) if f.lower().endswith('.mkv') and os.path.isfile(os.path.join(sp_folder, f))]
+        mkvs.sort(key=lambda x: x.lower())
+        self.table3.setSortingEnabled(False)
+        self.table3.setRowCount(len(mkvs))
+        for r, name in enumerate(mkvs):
+            src = os.path.normpath(os.path.join(sp_folder, name))
+            dur_col = ENCODE_REMUX_SP_LABELS.index('duration')
+            out_col = ENCODE_REMUX_SP_LABELS.index('output_name')
+            tracks_col = ENCODE_REMUX_SP_LABELS.index('edit_tracks')
+            try:
+                dur = MKV(src).get_duration()
+                self.table3.setItem(r, dur_col, QTableWidgetItem(get_time_str(dur)))
+            except Exception:
+                self.table3.setItem(r, dur_col, QTableWidgetItem(''))
+            out_item = QTableWidgetItem(name)
+            out_item.setData(Qt.ItemDataRole.UserRole, src)
+            self.table3.setItem(r, out_col, out_item)
+            btn_tracks = QToolButton(self.table3)
+            btn_tracks.setText(self.t('编辑轨道'))
+            btn_tracks.clicked.connect(partial(self.on_edit_tracks_from_mkv_row, self.table3, r))
+            self.table3.setCellWidget(r, tracks_col, btn_tracks)
+            vpy_col = ENCODE_REMUX_SP_LABELS.index('vpy_path')
+            edit_col = ENCODE_REMUX_SP_LABELS.index('edit_vpy')
+            preview_col = ENCODE_REMUX_SP_LABELS.index('preview_script')
+            if not self.table3.cellWidget(r, vpy_col):
+                self.table3.setCellWidget(r, vpy_col, self.create_vpy_path_widget(parent=self.table3))
+            if not self.table3.cellWidget(r, edit_col):
+                btn = QToolButton(self.table3)
+                btn.setText(self.t('edit'))
+                btn.clicked.connect(self.on_edit_sp_vpy_clicked)
+                self.table3.setCellWidget(r, edit_col, btn)
+            if not self.table3.cellWidget(r, preview_col):
+                btn = QToolButton(self.table3)
+                btn.setText(self.t('preview'))
+                btn.clicked.connect(self.on_preview_sp_scripts_clicked)
+                self.table3.setCellWidget(r, preview_col, btn)
+            if (time.time() - start_ts) >= 2.0:
+                try:
+                    bar.setValue(int((r + 1) / max(1, len(mkvs)) * 1000))
+                except Exception:
+                    pass
+                QCoreApplication.processEvents()
+        self.table3.resizeColumnsToContents()
+        self._resize_table_columns_for_language(self.table3)
+        self._scroll_table_h_to_right(self.table3)
+        self.table3.setSortingEnabled(True)
+        try:
+            show_timer.stop()
+            progress_dialog.close()
+            progress_dialog.deleteLater()
+        except Exception:
+            pass
+
     def open_folder_path(self, path: str):
         path = self._normalize_path_input(path)
         if not path:
@@ -7102,6 +7835,15 @@ class BluraySubtitleGUI(QWidget):
     def select_subtitle_folder(self):
         folder = QFileDialog.getExistingDirectory(self, self.t("选择文件夹"))
         self.subtitle_folder_path.setText(os.path.normpath(folder))
+
+    def _resolve_remux_output_folder(self, base_folder: str) -> str:
+        if self.get_selected_function_id() == 4 and getattr(self, '_encode_input_mode', 'bdmv') == 'remux':
+            remux_folder = self._normalize_path_input(self.remux_folder_path.text() if hasattr(self, 'remux_folder_path') else '')
+            if remux_folder:
+                folder_name = os.path.basename(remux_folder.rstrip(os.sep))
+                if folder_name:
+                    return os.path.join(base_folder, folder_name)
+        return base_folder
 
     def select_output_folder(self):
         start = self.output_folder_path.text().strip() if hasattr(self, 'output_folder_path') else ''
@@ -7141,6 +7883,131 @@ class BluraySubtitleGUI(QWidget):
         self._current_cancel_event = cancel_event
         self._exe_button_default_text = self.exe_button.text()
         self._update_exe_button_progress(0, '准备中')
+
+        if getattr(self, '_encode_input_mode', 'bdmv') == 'remux':
+            folder = self._normalize_path_input(self.remux_folder_path.text() if hasattr(self, 'remux_folder_path') else '')
+            if not folder or not os.path.isdir(folder):
+                self._current_cancel_event = None
+                self._reset_exe_button()
+                self.exe_button.setEnabled(True)
+                QMessageBox.information(self, " ", "未选择 remux 所在的文件夹")
+                return
+            try:
+                remux_folder = os.path.normpath(folder)
+                output_norm = os.path.normpath(output_folder)
+                parent_of_remux = os.path.normpath(os.path.dirname(remux_folder.rstrip(os.sep)))
+                if output_norm == parent_of_remux:
+                    self._current_cancel_event = None
+                    self._reset_exe_button()
+                    self.exe_button.setEnabled(True)
+                    QMessageBox.information(self, " ", "输出文件夹为输入文件夹的上级目录，请修改输出文件夹")
+                    return
+            except Exception:
+                pass
+            output_folder = self._resolve_remux_output_folder(output_folder)
+
+            mkv_rows: list[dict[str, str]] = []
+            for i in range(self.table2.rowCount()):
+                src = self._get_remux_source_path_from_table2_row(i)
+                if not src or not os.path.exists(src):
+                    continue
+                try:
+                    out_col = ENCODE_REMUX_LABELS.index('output_name')
+                    lang_col = ENCODE_REMUX_LABELS.index('language')
+                    sub_col = ENCODE_REMUX_LABELS.index('sub_path')
+                except Exception:
+                    out_col, lang_col, sub_col = 3, 1, 0
+                out_item = self.table2.item(i, out_col)
+                out_name = out_item.text().strip() if out_item and out_item.text() else os.path.basename(src)
+                sub_item = self.table2.item(i, sub_col)
+                sub_path = sub_item.text().strip() if sub_item and sub_item.text() else ''
+                lang = ''
+                combo = self.table2.cellWidget(i, lang_col)
+                if isinstance(combo, QComboBox):
+                    lang = str(combo.currentData() or combo.currentText() or '').strip()
+                vpy_path = self.get_vpy_path_from_row(i) or self.get_default_vpy_path()
+                mkv_rows.append({
+                    'src_path': src,
+                    'output_name': out_name,
+                    'sub_path': sub_path,
+                    'language': lang,
+                    'vpy_path': vpy_path,
+                })
+
+            sp_rows: list[dict[str, str]] = []
+            if hasattr(self, 'table3'):
+                for i in range(self.table3.rowCount()):
+                    src = self._get_remux_source_path_from_table3_row(i)
+                    if not src or not os.path.exists(src):
+                        continue
+                    try:
+                        out_col = ENCODE_REMUX_SP_LABELS.index('output_name')
+                    except Exception:
+                        out_col = 1
+                    out_item = self.table3.item(i, out_col)
+                    out_name = out_item.text().strip() if out_item and out_item.text() else os.path.basename(src)
+                    vpy_path = self.get_sp_vpy_path_from_row(i) or self.get_default_vpy_path()
+                    sp_rows.append({
+                        'src_path': src,
+                        'output_name': out_name,
+                        'vpy_path': vpy_path,
+                    })
+
+            vspipe_mode = 'bundle' if self.vspipe_mode_combo.currentText() == '程序自带' else 'system'
+            x265_mode = 'bundle' if self.x265_mode_combo.currentText() == '程序自带' else 'system'
+            x265_params = self.x265_params_edit.toPlainText().strip()
+            if self.sub_pack_hard_radio.isChecked():
+                sub_pack_mode = 'hard'
+            elif self.sub_pack_soft_radio.isChecked():
+                sub_pack_mode = 'soft'
+            else:
+                sub_pack_mode = 'external'
+
+            self._encode_thread = QThread(self)
+            self._encode_worker = EncodeMkvFolderWorker(
+                mkv_rows=mkv_rows,
+                sp_rows=sp_rows,
+                output_folder=output_folder,
+                cancel_event=cancel_event,
+                vspipe_mode=vspipe_mode,
+                x265_mode=x265_mode,
+                x265_params=x265_params,
+                sub_pack_mode=sub_pack_mode,
+            )
+            self._encode_worker.moveToThread(self._encode_thread)
+            self._encode_thread.started.connect(self._encode_worker.run)
+            self._encode_worker.progress.connect(self._on_exe_button_progress_value)
+            self._encode_worker.label.connect(self._on_exe_button_progress_text)
+
+            def cleanup():
+                self._current_cancel_event = None
+                self._reset_exe_button()
+                self.exe_button.setEnabled(True)
+                if hasattr(self, '_encode_thread') and self._encode_thread:
+                    self._encode_thread.quit()
+                    self._encode_thread.wait()
+                    self._encode_thread.deleteLater()
+                    self._encode_thread = None
+                if hasattr(self, '_encode_worker') and self._encode_worker:
+                    self._encode_worker.deleteLater()
+                    self._encode_worker = None
+
+            def on_finished():
+                cleanup()
+                self._show_bottom_message('原盘压制成功！')
+
+            def on_canceled():
+                cleanup()
+
+            def on_failed(message: str):
+                cleanup()
+                QMessageBox.information(self, " ", message)
+
+            self._encode_worker.finished.connect(on_finished)
+            self._encode_worker.canceled.connect(on_canceled)
+            self._encode_worker.failed.connect(on_failed)
+            self._encode_thread.start()
+            return
 
         sub_files = [self.table2.item(i, 0).text() for i in range(0, self.table2.rowCount()) if self.table2.item(i, 0)]
         episode_output_names = self._get_episode_output_names_from_table2()
@@ -7693,6 +8560,8 @@ class CustomBox(QGroupBox):  # 为 Box 框提供拖拽文件夹的功能
             w.bdmv_folder_path.setText(dropped_path)
         if self.box_title == '字幕' and hasattr(w, 'subtitle_folder_path'):
             w.subtitle_folder_path.setText(dropped_path)
+        if self.box_title == 'Remux' and hasattr(w, 'remux_folder_path'):
+            w.remux_folder_path.setText(dropped_path)
 
 
 def get_folder_size(folder_path: str) -> str:
