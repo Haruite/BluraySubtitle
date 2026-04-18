@@ -89,8 +89,8 @@ MKV_EXTRACT_PATH = ''
 BDMV_LABELS = ['path', 'size', 'info']
 SUBTITLE_LABELS = ['select', 'path', 'sub_duration', 'bdmv_index', 'chapter_index', 'offset']
 MKV_LABELS = ['path', 'duration']
-REMUX_LABELS = ['sub_path', 'ep_duration', 'bdmv_index', 'chapter_index', 'm2ts_file', 'output_name']
-ENCODE_LABELS = ['sub_path', 'ep_duration', 'bdmv_index', 'chapter_index', 'm2ts_file', 'output_name', 'vpy_path', 'edit_vpy', 'preview_script']
+REMUX_LABELS = ['sub_path', 'language', 'ep_duration', 'bdmv_index', 'chapter_index', 'm2ts_file', 'output_name']
+ENCODE_LABELS = ['sub_path', 'language', 'ep_duration', 'bdmv_index', 'chapter_index', 'm2ts_file', 'output_name', 'vpy_path', 'edit_vpy', 'preview_script']
 ENCODE_SP_LABELS = ['bdmv_index', 'mpls_file', 'm2ts_file', 'duration', 'output_name', 'vpy_path', 'edit_vpy', 'preview_script']
 CONFIGURATION = {}
 CURRENT_UI_LANGUAGE = 'en'
@@ -1831,7 +1831,8 @@ class BluraySubtitle:
                        cancel_event: Optional[threading.Event] = None,
                        ensure_tools: bool = True,
                        sp_entries: Optional[list[dict[str, int | str]]] = None,
-                       episode_output_names: Optional[list[str]] = None):
+                       episode_output_names: Optional[list[str]] = None,
+                       episode_subtitle_languages: Optional[list[str]] = None):
         dst_folder, mkv_files_before, bdmv_index_conf = self._prepare_episode_run(
             table, folder_path, configuration, ensure_tools
         )
@@ -1839,6 +1840,7 @@ class BluraySubtitle:
         self._build_main_episode_mkvs(bdmv_index_conf, dst_folder, cancel_event=cancel_event)
 
         self.checked = True
+        self.episode_subtitle_languages = episode_subtitle_languages or []
         mkv_files = self._collect_target_mkv_files(dst_folder, mkv_files_before)
         mkv_files = self._apply_episode_output_names(mkv_files, episode_output_names)
         if cancel_event and cancel_event.is_set():
@@ -1919,6 +1921,7 @@ class BluraySubtitle:
                         sp_vpy_paths: Optional[list[str]] = None,
                         sp_entries: Optional[list[dict[str, int | str]]] = None,
                         episode_output_names: Optional[list[str]] = None,
+                        episode_subtitle_languages: Optional[list[str]] = None,
                         vspipe_mode: str = 'bundle',
                         x265_mode: str = 'bundle',
                         x265_params: str = '',
@@ -1930,6 +1933,7 @@ class BluraySubtitle:
         self._build_main_episode_mkvs(bdmv_index_conf, dst_folder, cancel_event=cancel_event)
 
         self.checked = True
+        self.episode_subtitle_languages = episode_subtitle_languages or []
         mkv_files = self._collect_target_mkv_files(dst_folder, mkv_files_before)
         mkv_files = self._apply_episode_output_names(mkv_files, episode_output_names)
         if cancel_event and cancel_event.is_set():
@@ -2268,7 +2272,14 @@ class BluraySubtitle:
             output_file1 = os.path.join(dst_folder, os.path.splitext(output_file)[0] + '(1).mkv')
             remux_cmd = self.generate_remux_cmd(track_count, track_info, flac_files, output_file1, output_file)
             if self.sub_files and len(self.sub_files) >= i and i > -1:
-                remux_cmd += f' --language 0:chi "{self.sub_files[i - 1]}"'
+                lang = 'chi'
+                try:
+                    langs = getattr(self, 'episode_subtitle_languages', None) or []
+                    if 0 <= (i - 1) < len(langs) and str(langs[i - 1]).strip():
+                        lang = str(langs[i - 1]).strip()
+                except Exception:
+                    lang = 'chi'
+                remux_cmd += f' --language 0:{lang} "{self.sub_files[i - 1]}"'
             print(f'混流命令：{remux_cmd}')
             subprocess.Popen(remux_cmd, shell=True).wait()
             if os.path.getsize(output_file1) > os.path.getsize(output_file):
@@ -2363,7 +2374,14 @@ class BluraySubtitle:
                                                 hevc_file=hevc_file if os.path.exists(hevc_file) else None)
             if sub_pack_mode == 'soft':
                 if self.sub_files and len(self.sub_files) >= i and i > -1:
-                    remux_cmd += f' --language 0:chi "{self.sub_files[i - 1]}"'
+                    lang = 'chi'
+                    try:
+                        langs = getattr(self, 'episode_subtitle_languages', None) or []
+                        if 0 <= (i - 1) < len(langs) and str(langs[i - 1]).strip():
+                            lang = str(langs[i - 1]).strip()
+                    except Exception:
+                        lang = 'chi'
+                    remux_cmd += f' --language 0:{lang} "{self.sub_files[i - 1]}"'
             print(f'混流命令：{remux_cmd}')
             subprocess.Popen(remux_cmd, shell=True).wait()
             if os.path.getsize(output_file1) > os.path.getsize(output_file):
@@ -2528,7 +2546,7 @@ class RemuxWorker(QObject):
     def __init__(self, bdmv_path: str, sub_files: list[str], checked: bool, output_folder: str,
                  configuration: dict[int, dict[str, int | str]], selected_mpls: list[tuple[str, str]],
                  cancel_event: threading.Event, sp_entries: list[dict[str, int | str]],
-                 episode_output_names: list[str]):
+                 episode_output_names: list[str], episode_subtitle_languages: list[str]):
         super().__init__()
         self.bdmv_path = bdmv_path
         self.sub_files = sub_files
@@ -2539,6 +2557,7 @@ class RemuxWorker(QObject):
         self.cancel_event = cancel_event
         self.sp_entries = sp_entries
         self.episode_output_names = episode_output_names
+        self.episode_subtitle_languages = episode_subtitle_languages
 
     def run(self):
         try:
@@ -2560,7 +2579,8 @@ class RemuxWorker(QObject):
                 cancel_event=self.cancel_event,
                 ensure_tools=False,
                 sp_entries=self.sp_entries,
-                episode_output_names=self.episode_output_names
+                episode_output_names=self.episode_output_names,
+                episode_subtitle_languages=self.episode_subtitle_languages
             )
         except _Cancelled:
             self.canceled.emit()
@@ -2579,7 +2599,7 @@ class EncodeWorker(QObject):
     def __init__(self, bdmv_path: str, sub_files: list[str], checked: bool, output_folder: str,
                  configuration: dict[int, dict[str, int | str]], selected_mpls: list[tuple[str, str]],
                  cancel_event: threading.Event, vpy_paths: list[str], sp_vpy_paths: list[str], sp_entries: list[dict[str, int | str]],
-                 episode_output_names: list[str],
+                 episode_output_names: list[str], episode_subtitle_languages: list[str],
                  vspipe_mode: str, x265_mode: str, x265_params: str, sub_pack_mode: str):
         super().__init__()
         self.bdmv_path = bdmv_path
@@ -2593,6 +2613,7 @@ class EncodeWorker(QObject):
         self.sp_vpy_paths = sp_vpy_paths
         self.sp_entries = sp_entries
         self.episode_output_names = episode_output_names
+        self.episode_subtitle_languages = episode_subtitle_languages
         self.vspipe_mode = vspipe_mode
         self.x265_mode = x265_mode
         self.x265_params = x265_params
@@ -2621,6 +2642,7 @@ class EncodeWorker(QObject):
                 sp_vpy_paths=self.sp_vpy_paths,
                 sp_entries=self.sp_entries,
                 episode_output_names=self.episode_output_names,
+                episode_subtitle_languages=self.episode_subtitle_languages,
                 vspipe_mode=self.vspipe_mode,
                 x265_mode=self.x265_mode,
                 x265_params=self.x265_params,
@@ -2946,6 +2968,7 @@ class BluraySubtitleGUI(QWidget):
             self._refresh_language_dependent_sizes()
             self.on_select_function(force=True, keep_inputs=True, keep_state=True)
             self._refresh_language_dependent_sizes()
+            self._refresh_language_column_defaults()
         finally:
             self._language_updating = False
 
@@ -2969,6 +2992,7 @@ class BluraySubtitleGUI(QWidget):
             'sub_path': '字幕路径',
             'ep_duration': '单集时长',
             'm2ts_file': 'm2ts 文件',
+            'language': '语言',
             'output_name': '输出文件名',
             'vpy_path': 'vpy 路径',
             'edit_vpy': '编辑 vpy',
@@ -2995,6 +3019,35 @@ class BluraySubtitleGUI(QWidget):
         try:
             if hasattr(self, 'table1') and self.table1:
                 self._set_table_headers(self.table1, BDMV_LABELS)
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self, 'table2') and self.table2:
+                function_id = self.get_selected_function_id()
+                if function_id == 1:
+                    self._set_table_headers(self.table2, SUBTITLE_LABELS)
+                elif function_id == 2:
+                    self._set_table_headers(self.table2, MKV_LABELS)
+                elif function_id == 3:
+                    self._set_table_headers(self.table2, REMUX_LABELS)
+                elif function_id == 4:
+                    self._set_table_headers(self.table2, ENCODE_LABELS)
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self, 'table3') and self.table3:
+                self._set_table_headers(self.table3, ENCODE_SP_LABELS)
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self, 'table1') and self.table1:
+                for r in range(self.table1.rowCount()):
+                    info_table = self.table1.cellWidget(r, 2)
+                    if isinstance(info_table, QTableWidget):
+                        self._set_table_headers(info_table, ['mpls_file', 'duration', 'chapters', 'main', 'play'])
         except Exception:
             pass
 
@@ -3077,7 +3130,7 @@ class BluraySubtitleGUI(QWidget):
         lang = getattr(self, '_language_code', CURRENT_UI_LANGUAGE)
         try:
             if hasattr(self, 'table1') and self.table1:
-                self.table1.setColumnWidth(2, 360 if lang == 'zh' else 370)
+                self.table1.setColumnWidth(2, 420 if lang == 'zh' else 370)
                 for r in range(self.table1.rowCount()):
                     info_table = self.table1.cellWidget(r, 2)
                     if isinstance(info_table, QTableWidget):
@@ -3369,6 +3422,57 @@ class BluraySubtitleGUI(QWidget):
         layout.addWidget(line_edit)
         layout.addWidget(button)
         return widget
+
+    def create_language_combo(self, initial: str = 'chi') -> QComboBox:
+        combo = QComboBox()
+        combo.setEditable(True)
+        combo.addItems(['chi', 'zho', 'jpn', 'eng', 'kor', 'und'])
+        auto_lang = 'eng' if getattr(self, '_language_code', CURRENT_UI_LANGUAGE) != 'zh' else 'chi'
+        combo.setCurrentText((initial or auto_lang).strip() or auto_lang)
+        combo._auto_lang = auto_lang
+        return combo
+
+    def _refresh_language_column_defaults(self):
+        function_id = self.get_selected_function_id()
+        if function_id not in (3, 4) or not hasattr(self, 'table2') or not self.table2:
+            return
+        labels = ENCODE_LABELS if function_id == 4 else REMUX_LABELS
+        try:
+            lang_col = labels.index('language')
+        except Exception:
+            return
+        auto_lang = 'eng' if getattr(self, '_language_code', CURRENT_UI_LANGUAGE) != 'zh' else 'chi'
+        for r in range(self.table2.rowCount()):
+            w = self.table2.cellWidget(r, lang_col)
+            if not isinstance(w, QComboBox):
+                continue
+            prev_auto = str(getattr(w, '_auto_lang', auto_lang) or auto_lang)
+            prev_text = w.currentText().strip()
+            if (not prev_text) or (prev_text == prev_auto):
+                w.setCurrentText(auto_lang)
+            w._auto_lang = auto_lang
+        self._update_language_combo_enabled_state()
+
+    def _update_language_combo_enabled_state(self):
+        function_id = self.get_selected_function_id()
+        if function_id not in (3, 4) or not hasattr(self, 'table2') or not self.table2:
+            return
+        labels = ENCODE_LABELS if function_id == 4 else REMUX_LABELS
+        try:
+            sub_col = labels.index('sub_path')
+            lang_col = labels.index('language')
+        except Exception:
+            return
+        auto_lang = 'eng' if getattr(self, '_language_code', CURRENT_UI_LANGUAGE) != 'zh' else 'chi'
+        for r in range(self.table2.rowCount()):
+            sub_item = self.table2.item(r, sub_col)
+            has_sub = bool(sub_item and sub_item.text() and sub_item.text().strip())
+            w = self.table2.cellWidget(r, lang_col)
+            if isinstance(w, QComboBox):
+                w.setEnabled(has_sub)
+                if not has_sub:
+                    w.setCurrentText(auto_lang)
+                    w._auto_lang = auto_lang
 
     def get_vpy_path_from_row(self, row_index: int) -> str:
         if self.get_selected_function_id() != 4:
@@ -3968,6 +4072,26 @@ class BluraySubtitleGUI(QWidget):
             names.append(item.text().strip() if item and item.text() else '')
         return names
 
+    def _get_episode_subtitle_languages_from_table2(self) -> list[str]:
+        langs: list[str] = []
+        function_id = self.get_selected_function_id()
+        if function_id == 3:
+            col = REMUX_LABELS.index('language')
+        elif function_id == 4:
+            col = ENCODE_LABELS.index('language')
+        else:
+            return langs
+        default_lang = 'eng' if getattr(self, '_language_code', CURRENT_UI_LANGUAGE) != 'zh' else 'chi'
+        for i in range(self.table2.rowCount()):
+            w = self.table2.cellWidget(i, col)
+            if isinstance(w, QComboBox):
+                v = w.currentText().strip()
+            else:
+                it = self.table2.item(i, col)
+                v = it.text().strip() if it and it.text() else ''
+            langs.append(v or default_lang)
+        return langs
+
     def refresh_sp_table(self, configuration: dict[int, dict[str, int | str]]):
         function_id = self.get_selected_function_id()
         if function_id not in (3, 4) or not configuration:
@@ -4527,7 +4651,7 @@ class BluraySubtitleGUI(QWidget):
                         self.table1.setRowHeight(i, 100)
                         i += 1
                 self.table1.resizeColumnsToContents()
-                self.table1.setColumnWidth(2, 360 if getattr(self, '_language_code', CURRENT_UI_LANGUAGE) == 'zh' else 370)
+                self.table1.setColumnWidth(2, 420 if getattr(self, '_language_code', CURRENT_UI_LANGUAGE) == 'zh' else 370)
                 self._scroll_table_h_to_right(self.table1)
                 table_ok = True
             except Exception as e:
@@ -4555,6 +4679,7 @@ class BluraySubtitleGUI(QWidget):
             finally:
                 self.subtitle_folder_path.blockSignals(False)
         self._pending_subtitle_folder = folder
+        self._update_language_combo_enabled_state()
         if hasattr(self, '_subtitle_scan_cancel_event') and self._subtitle_scan_cancel_event:
             self._subtitle_scan_cancel_event.set()
         if not folder:
@@ -4930,10 +5055,16 @@ class BluraySubtitleGUI(QWidget):
                 old_sorting = self.table2.isSortingEnabled()
                 self.table2.setSortingEnabled(False)
                 self.table2.setRowCount(len(configuration))
-                output_col = ENCODE_LABELS.index('output_name') if function_id == 4 else REMUX_LABELS.index('output_name')
+                labels = ENCODE_LABELS if function_id == 4 else REMUX_LABELS
+                duration_col = labels.index('ep_duration')
+                bdmv_col = labels.index('bdmv_index')
+                chapter_col = labels.index('chapter_index')
+                m2ts_col = labels.index('m2ts_file')
+                language_col = labels.index('language')
+                output_col = labels.index('output_name')
                 auto_output_name_map = self._build_episode_output_name_map(configuration)
                 for sub_index, con in configuration.items():
-                    self.table2.setItem(sub_index, 2, QTableWidgetItem(str(con['bdmv_index'])))
+                    self.table2.setItem(sub_index, bdmv_col, QTableWidgetItem(str(con['bdmv_index'])))
                     chapter_combo = QComboBox()
                     duration = 0
                     chapter = Chapter(str(con['selected_mpls']) + '.mpls')
@@ -4954,9 +5085,24 @@ class BluraySubtitleGUI(QWidget):
                     else:
                         duration = chapter.get_total_time() - index_to_offset[j1]
                     duration = get_time_str(duration)
-                    self.table2.setCellWidget(sub_index, 3, chapter_combo)
-                    self.table2.setItem(sub_index, 4, QTableWidgetItem(', '.join(m2ts_files)))
-                    self.table2.setItem(sub_index, 1, QTableWidgetItem(duration))
+                    self.table2.setCellWidget(sub_index, chapter_col, chapter_combo)
+                    self.table2.setItem(sub_index, m2ts_col, QTableWidgetItem(', '.join(m2ts_files)))
+                    self.table2.setItem(sub_index, duration_col, QTableWidgetItem(duration))
+
+                    prev_lang_widget = self.table2.cellWidget(sub_index, language_col)
+                    prev_lang = ''
+                    prev_auto_lang = ''
+                    if isinstance(prev_lang_widget, QComboBox):
+                        prev_lang = prev_lang_widget.currentText().strip()
+                        prev_auto_lang = str(getattr(prev_lang_widget, '_auto_lang', 'chi') or 'chi')
+                    auto_lang = 'eng' if getattr(self, '_language_code', CURRENT_UI_LANGUAGE) != 'zh' else 'chi'
+                    if prev_lang and prev_lang != prev_auto_lang:
+                        final_lang = prev_lang
+                    else:
+                        final_lang = auto_lang
+                    lang_combo = self.create_language_combo(final_lang)
+                    lang_combo._auto_lang = auto_lang
+                    self.table2.setCellWidget(sub_index, language_col, lang_combo)
                     auto_name = auto_output_name_map.get(sub_index, '')
                     prev_item = self.table2.item(sub_index, output_col)
                     prev_text = prev_item.text().strip() if prev_item and prev_item.text() else ''
@@ -4984,6 +5130,7 @@ class BluraySubtitleGUI(QWidget):
                                 self.table2.setItem(i, 0, FilePathTableWidgetItem(sub_file))
                 self.table2.resizeColumnsToContents()
                 self._resize_table_columns_for_language(self.table2)
+                self._update_language_combo_enabled_state()
                 if function_id in (3, 4):
                     self.refresh_sp_table(configuration)
                 self.table2.setSortingEnabled(old_sorting)
@@ -5022,8 +5169,12 @@ class BluraySubtitleGUI(QWidget):
                     if file.endswith(".ass") or file.endswith(".ssa") or file.endswith('srt') or file.endswith('.sup'):
                         sub_files.append(os.path.normpath(os.path.join(self.subtitle_folder_path.text().strip(), file)))
             sub_combo_index = {}
+            labels = ENCODE_LABELS if self.get_selected_function_id() == 4 else REMUX_LABELS
+            chapter_col = labels.index('chapter_index')
             for sub_index in range(self.table2.rowCount()):
-                sub_combo_index[sub_index] = self.table2.cellWidget(sub_index, 3).currentIndex() + 1
+                w = self.table2.cellWidget(sub_index, chapter_col)
+                if isinstance(w, QComboBox):
+                    sub_combo_index[sub_index] = w.currentIndex() + 1
             bs = BluraySubtitle(
                 self.bdmv_folder_path.text(),
                 sub_files,
@@ -5551,6 +5702,7 @@ class BluraySubtitleGUI(QWidget):
 
         sub_files = [self.table2.item(i, 0).text() for i in range(0, self.table2.rowCount()) if self.table2.item(i, 0)]
         episode_output_names = self._get_episode_output_names_from_table2()
+        episode_subtitle_languages = self._get_episode_subtitle_languages_from_table2()
         vpy_paths = []
         for i in range(self.table2.rowCount()):
             try:
@@ -5623,6 +5775,7 @@ class BluraySubtitleGUI(QWidget):
             sp_vpy_paths,
             sp_entries,
             episode_output_names,
+            episode_subtitle_languages,
             vspipe_mode,
             x265_mode,
             x265_params,
@@ -5824,6 +5977,7 @@ class BluraySubtitleGUI(QWidget):
 
         sub_files = [self.table2.item(i, 0).text() for i in range(0, self.table2.rowCount()) if self.table2.item(i, 0)]
         episode_output_names = self._get_episode_output_names_from_table2()
+        episode_subtitle_languages = self._get_episode_subtitle_languages_from_table2()
         sp_entries = []
         if hasattr(self, 'table3'):
             for i in range(self.table3.rowCount()):
@@ -5872,7 +6026,8 @@ class BluraySubtitleGUI(QWidget):
             selected_mpls,
             cancel_event,
             sp_entries,
-            episode_output_names
+            episode_output_names,
+            episode_subtitle_languages
         )
         self._remux_worker.moveToThread(self._remux_thread)
         self._remux_thread.started.connect(self._remux_worker.run)
