@@ -47,9 +47,10 @@ except Exception:
     soundfile = None
 from PyQt6.QtCore import QCoreApplication, Qt, QPoint, QObject, QThread, QTimer, QEventLoop, QProcess, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QDragMoveEvent, QDropEvent, QPaintEvent, QDragEnterEvent, QFontMetrics
-from PyQt6.QtWidgets import QApplication, QWidget, QVBoxLayout, QFileDialog, QLabel, QToolButton, QLineEdit, \
-    QMessageBox, QHBoxLayout, QGroupBox, QCheckBox, QProgressDialog, QProgressBar, QRadioButton, QButtonGroup, \
-    QTableWidget, QTableWidgetItem, QDialog, QPushButton, QComboBox, QMenu, QAbstractItemView, QPlainTextEdit, QSizePolicy, QHeaderView, QInputDialog, QTabBar
+from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QFileDialog, QLabel, QToolButton, QLineEdit,
+    QMessageBox, QHBoxLayout, QGroupBox, QCheckBox, QProgressDialog, QProgressBar, QRadioButton, QButtonGroup,
+    QTableWidget, QTableWidgetItem, QDialog, QPushButton, QComboBox, QMenu, QAbstractItemView, QPlainTextEdit,
+    QSizePolicy, QHeaderView, QInputDialog, QTabBar, QSlider)
 
 if sys.platform == 'win32':
     import winreg
@@ -109,6 +110,11 @@ def mkvtoolnix_ui_language_arg() -> str:
 I18N_ZH_TO_EN = {
     'BluraySubtitle': 'BluraySubtitle',
     '语言': 'Language',
+    '模式': 'Mode',
+    '浅色': 'Light',
+    '深色': 'Dark',
+    '彩色': 'Colorful',
+    '透明度': 'Opacity',
     '选择功能': 'Function',
     '剧集模式': 'Series mode',
     '电影模式': 'Movie mode',
@@ -3122,6 +3128,7 @@ class SubtitleFolderScanWorker(QObject):
 class BluraySubtitleGUI(QWidget):
     def __init__(self):
         super().__init__()
+        self.setObjectName('mainWindow')
         self.init_ui()
         self.altered = False
 
@@ -3140,9 +3147,214 @@ class BluraySubtitleGUI(QWidget):
         self.language_combo.setCurrentIndex(idx)
         self.language_combo.blockSignals(False)
 
+    def _refresh_theme_combo(self):
+        if not hasattr(self, 'theme_label') or not hasattr(self, 'theme_combo'):
+            return
+        current_mode = self.theme_combo.currentData() or getattr(self, '_theme_mode', 'light')
+        self.theme_label.setText(self.t('模式'))
+        self.theme_combo.blockSignals(True)
+        try:
+            self.theme_combo.clear()
+            self.theme_combo.addItem(self.t('浅色'), 'light')
+            self.theme_combo.addItem(self.t('深色'), 'dark')
+            self.theme_combo.addItem(self.t('彩色'), 'colorful')
+            if str(current_mode) == 'dark':
+                idx = 1
+            elif str(current_mode) == 'colorful':
+                idx = 2
+            else:
+                idx = 0
+            self.theme_combo.setCurrentIndex(idx)
+        finally:
+            self.theme_combo.blockSignals(False)
+        self._refresh_opacity_controls()
+
+    def _refresh_opacity_controls(self):
+        label = getattr(self, 'opacity_label', None)
+        slider = getattr(self, 'opacity_slider', None)
+        visible = getattr(self, '_theme_mode', 'light') == 'colorful'
+        if isinstance(label, QLabel):
+            label.setText(self.t('透明度'))
+            label.setVisible(visible)
+        if isinstance(slider, QSlider):
+            slider.setVisible(visible)
+
+    def _apply_theme(self, mode: str):
+        m = str(mode or 'light')
+        if m == 'dark':
+            self._theme_mode = 'dark'
+        elif m == 'colorful':
+            self._theme_mode = 'colorful'
+        else:
+            self._theme_mode = 'light'
+        app = QApplication.instance()
+        if not app:
+            return
+        if self._theme_mode == 'light':
+            try:
+                self.setWindowOpacity(1.0)
+            except Exception:
+                pass
+            app.setStyleSheet(
+                "QTabBar::tab:selected{background:#e6e6e6;color:#000000;border:1px solid #c8c8c8;}"
+            )
+            self._refresh_function_tabbar_theme()
+            self._refresh_opacity_controls()
+            return
+        if self._theme_mode == 'colorful':
+            opacity = float(getattr(self, '_colorful_opacity', 0.96) or 0.96)
+            opacity = min(1.0, max(0.6, opacity))
+            self._colorful_opacity = opacity
+            try:
+                self.setWindowOpacity(opacity)
+            except Exception:
+                pass
+            app.setStyleSheet(
+                "QWidget{background:transparent;color:#1f2330;}"
+                "QWidget#mainWindow{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #fff3c4,stop:0.55 #fffdf3,stop:1 #eef6ff);}"
+                "QDialog{background:rgba(255,255,255,235);border:1px solid rgba(214,217,230,220);}"
+                "QWidget:disabled{color:#8b92a8;}"
+                "QLineEdit,QPlainTextEdit,QTextEdit{background:rgba(255,255,255,220);color:#1f2330;border:1px solid rgba(214,217,230,220);border-radius:4px;}"
+                "QLineEdit:disabled,QPlainTextEdit:disabled,QTextEdit:disabled{background:#f3f4f8;color:#8b92a8;border:1px solid #dde0ea;}"
+                "QComboBox{background:rgba(255,255,255,220);color:#1f2330;border:1px solid rgba(214,217,230,220);border-radius:4px;padding:2px 6px;}"
+                "QComboBox:disabled{background:#f3f4f8;color:#8b92a8;border:1px solid #dde0ea;}"
+                "QComboBox QAbstractItemView{background:#ffffff;color:#1f2330;selection-background-color:#7c3aed;selection-color:#ffffff;}"
+                "QGroupBox{background:rgba(255,255,255,190);border:1px solid rgba(214,217,230,220);border-radius:8px;margin-top:10px;}"
+                "QGroupBox::title{subcontrol-origin:margin;left:8px;padding:0 6px;color:#7c3aed;}"
+                "QRadioButton{color:#1f2330;}"
+                "QRadioButton:disabled{color:#8b92a8;}"
+                "QRadioButton::indicator{width:14px;height:14px;border-radius:7px;border:2px solid #7c3aed;background:rgba(255,255,255,220);}"
+                "QRadioButton::indicator:checked{background:#7c3aed;border:2px solid #6d28d9;}"
+                "QRadioButton::indicator:checked:hover{background:#6d28d9;}"
+                "QRadioButton::indicator:unchecked:hover{border:2px solid #6d28d9;}"
+                "QRadioButton::indicator:disabled{border:2px solid #c7cbe0;background:rgba(243,244,248,220);}"
+                "QRadioButton::indicator:checked:disabled{border:2px solid #c7cbe0;background:rgba(199,203,224,220);}"
+                "QTableWidget{gridline-color:#e2e4f0;background:rgba(255,255,255,210);alternate-background-color:rgba(246,244,255,210);selection-background-color:#34d399;selection-color:#0b1220;border-radius:6px;}"
+                "QTableWidget#table1{background:rgba(234,243,255,220);alternate-background-color:rgba(214,233,255,220);}"
+                "QTableWidget#table2{background:rgba(240,255,246,220);alternate-background-color:rgba(220,250,232,220);}"
+                "QTableWidget#table3{background:rgba(255,248,236,220);alternate-background-color:rgba(255,235,213,220);}"
+                "QHeaderView::section{background:rgba(240,243,255,235);color:#1f2330;border:1px solid rgba(214,217,230,220);padding:4px;}"
+                "QPushButton,QToolButton{background:rgba(255,255,255,220);color:#1f2330;border:1px solid rgba(214,217,230,220);border-radius:8px;padding:4px 10px;}"
+                "QPushButton:hover,QToolButton:hover{border:1px solid #7c3aed;}"
+                "QPushButton:pressed,QToolButton:pressed{background:#f2e9ff;}"
+                "QToolButton:checked{background:#ffedd5;border:1px solid #fb923c;color:#7c2d12;}"
+                "QToolButton:checked:hover{background:#fed7aa;}"
+                "QPushButton:disabled,QToolButton:disabled{background:#f3f4f8;color:#8b92a8;border:1px solid #dde0ea;}"
+                "QScrollBar:horizontal{background:#fbfbff;height:12px;margin:0px 14px 0px 14px;border:1px solid #d6d9e6;border-radius:5px;}"
+                "QScrollBar::handle:horizontal{background:#a78bfa;min-width:24px;border-radius:4px;}"
+                "QScrollBar::handle:horizontal:hover{background:#7c3aed;}"
+                "QScrollBar::add-line:horizontal{background:#f0f3ff;width:14px;subcontrol-position:right;subcontrol-origin:margin;border:1px solid #d6d9e6;}"
+                "QScrollBar::sub-line:horizontal{background:#f0f3ff;width:14px;subcontrol-position:left;subcontrol-origin:margin;border:1px solid #d6d9e6;}"
+                "QScrollBar::add-page:horizontal,QScrollBar::sub-page:horizontal{background:none;}"
+                "QScrollBar:vertical{background:#fbfbff;width:12px;margin:14px 0px 14px 0px;border:1px solid #d6d9e6;border-radius:5px;}"
+                "QScrollBar::handle:vertical{background:#a78bfa;min-height:24px;border-radius:4px;}"
+                "QScrollBar::handle:vertical:hover{background:#7c3aed;}"
+                "QScrollBar::add-line:vertical{background:#f0f3ff;height:14px;subcontrol-position:bottom;subcontrol-origin:margin;border:1px solid #d6d9e6;}"
+                "QScrollBar::sub-line:vertical{background:#f0f3ff;height:14px;subcontrol-position:top;subcontrol-origin:margin;border:1px solid #d6d9e6;}"
+                "QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:none;}"
+                "QTableWidget#table1 QScrollBar::handle:horizontal{background:#60a5fa;}"
+                "QTableWidget#table1 QScrollBar::handle:horizontal:hover{background:#2563eb;}"
+                "QTableWidget#table1 QScrollBar::handle:vertical{background:#60a5fa;}"
+                "QTableWidget#table1 QScrollBar::handle:vertical:hover{background:#2563eb;}"
+                "QTableWidget#table2 QScrollBar::handle:horizontal{background:#34d399;}"
+                "QTableWidget#table2 QScrollBar::handle:horizontal:hover{background:#059669;}"
+                "QTableWidget#table2 QScrollBar::handle:vertical{background:#34d399;}"
+                "QTableWidget#table2 QScrollBar::handle:vertical:hover{background:#059669;}"
+                "QTableWidget#table3 QScrollBar::handle:horizontal{background:#fb923c;}"
+                "QTableWidget#table3 QScrollBar::handle:horizontal:hover{background:#ea580c;}"
+                "QTableWidget#table3 QScrollBar::handle:vertical{background:#fb923c;}"
+                "QTableWidget#table3 QScrollBar::handle:vertical:hover{background:#ea580c;}"
+                "QMenu{background:#ffffff;color:#1f2330;border:1px solid #d6d9e6;}"
+                "QMenu::item:selected{background:#7c3aed;color:#ffffff;}"
+                "QProgressBar{background:#ffffff;border:1px solid #d6d9e6;border-radius:6px;text-align:center;color:#1f2330;}"
+                "QProgressBar::chunk{background:#34d399;border-radius:6px;}"
+                "QTabBar::tab{background:#f0f3ff;color:#1f2330;border:1px solid #d6d9e6;border-bottom:none;padding:6px 10px;border-top-left-radius:6px;border-top-right-radius:6px;}"
+                "QTabBar::tab:selected{background:#7c3aed;color:#ffffff;border:1px solid #6d28d9;border-bottom:none;}"
+                "QToolTip{background:#1f2330;color:#ffffff;border:1px solid #7c3aed;}"
+            )
+            self._refresh_function_tabbar_theme()
+            self._refresh_opacity_controls()
+            return
+        try:
+            self.setWindowOpacity(1.0)
+        except Exception:
+            pass
+        app.setStyleSheet(
+            "QWidget{background:#1f1f1f;color:#e6e6e6;}"
+            "QLineEdit,QPlainTextEdit,QTextEdit{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;}"
+            "QComboBox{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;padding:2px 6px;}"
+            "QComboBox QAbstractItemView{background:#2a2a2a;color:#e6e6e6;selection-background-color:#3a5fcd;}"
+            "QPushButton,QToolButton{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;padding:4px 8px;}"
+            "QPushButton:hover,QToolButton:hover{background:#333333;}"
+            "QPushButton:pressed,QToolButton:pressed{background:#3a3a3a;}"
+            "QToolButton:checked{background:#3a5fcd;border:1px solid #5b7fff;color:#ffffff;}"
+            "QToolButton:checked:hover{background:#4a6fe0;}"
+            "QGroupBox{border:1px solid #3a3a3a;margin-top:10px;}"
+            "QGroupBox::title{subcontrol-origin:margin;left:8px;padding:0 4px;}"
+            "QTableWidget{gridline-color:#3a3a3a;background:#202020;alternate-background-color:#242424;}"
+            "QHeaderView::section{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;padding:4px;}"
+            "QScrollBar:horizontal{background:#1f1f1f;height:12px;margin:0px 14px 0px 14px;border:1px solid #2b2b2b;}"
+            "QScrollBar::handle:horizontal{background:#555555;min-width:24px;border-radius:4px;}"
+            "QScrollBar::handle:horizontal:hover{background:#666666;}"
+            "QScrollBar::add-line:horizontal{background:#2a2a2a;width:14px;subcontrol-position:right;subcontrol-origin:margin;border:1px solid #3a3a3a;}"
+            "QScrollBar::sub-line:horizontal{background:#2a2a2a;width:14px;subcontrol-position:left;subcontrol-origin:margin;border:1px solid #3a3a3a;}"
+            "QScrollBar::add-page:horizontal,QScrollBar::sub-page:horizontal{background:none;}"
+            "QScrollBar:vertical{background:#1f1f1f;width:12px;margin:14px 0px 14px 0px;border:1px solid #2b2b2b;}"
+            "QScrollBar::handle:vertical{background:#555555;min-height:24px;border-radius:4px;}"
+            "QScrollBar::handle:vertical:hover{background:#666666;}"
+            "QScrollBar::add-line:vertical{background:#2a2a2a;height:14px;subcontrol-position:bottom;subcontrol-origin:margin;border:1px solid #3a3a3a;}"
+            "QScrollBar::sub-line:vertical{background:#2a2a2a;height:14px;subcontrol-position:top;subcontrol-origin:margin;border:1px solid #3a3a3a;}"
+            "QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:none;}"
+            "QMenu{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;}"
+            "QMenu::item:selected{background:#3a5fcd;}"
+            "QProgressBar{background:#2a2a2a;border:1px solid #3a3a3a;text-align:center;color:#e6e6e6;}"
+            "QProgressBar::chunk{background:#3a5fcd;}"
+            "QToolTip{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;}"
+        )
+        self._refresh_function_tabbar_theme()
+        self._refresh_opacity_controls()
+
+    def _on_opacity_changed(self, value: int):
+        try:
+            v = int(value)
+        except Exception:
+            v = 96
+        opacity = min(100, max(60, v)) / 100.0
+        self._colorful_opacity = opacity
+        if getattr(self, '_theme_mode', 'light') == 'colorful':
+            try:
+                self.setWindowOpacity(opacity)
+            except Exception:
+                pass
+
+    def _refresh_function_tabbar_theme(self):
+        tabbar = getattr(self, 'function_tabbar', None)
+        if not isinstance(tabbar, QTabBar):
+            return
+        if getattr(self, '_theme_mode', 'light') != 'colorful':
+            tabbar.setStyleSheet('')
+            return
+        fid = self.get_selected_function_id() if hasattr(self, 'get_selected_function_id') else 1
+        accent = {
+            1: ('#0ea5e9', '#0284c7'),
+            2: ('#14b8a6', '#0f766e'),
+            3: ('#f59e0b', '#b45309'),
+            4: ('#ef4444', '#b91c1c'),
+        }.get(int(fid), ('#7c3aed', '#6d28d9'))
+        tabbar.setStyleSheet(
+            "QTabBar::tab{background:#f0f3ff;color:#1f2330;border:1px solid #d6d9e6;border-bottom:none;padding:6px 10px;border-top-left-radius:6px;border-top-right-radius:6px;}"
+            f"QTabBar::tab:selected{{background:{accent[0]};color:#ffffff;border:1px solid {accent[1]};border-bottom:none;font-weight:600;}}"
+        )
+
+    def _on_theme_changed(self):
+        mode = self.theme_combo.currentData() if hasattr(self, 'theme_combo') else 'light'
+        self._apply_theme(str(mode))
+
     def _translate_widget_texts(self):
         for widget in self.findChildren(QWidget):
             if widget is getattr(self, 'language_combo', None):
+                continue
+            if widget is getattr(self, 'theme_combo', None):
                 continue
             if widget is getattr(self, 'subtitle_suffix_combo', None):
                 continue
@@ -3186,6 +3398,7 @@ class BluraySubtitleGUI(QWidget):
             self._translate_widget_texts()
             self._refresh_subtitle_suffix_options()
             self._refresh_language_combo()
+            self._refresh_theme_combo()
             self._refresh_all_table_headers()
             self._refresh_language_dependent_sizes()
             self.on_select_function(force=True, keep_inputs=True, keep_state=True)
@@ -3280,12 +3493,16 @@ class BluraySubtitleGUI(QWidget):
                     self._set_table_headers(self.table2, REMUX_LABELS)
                 elif function_id == 4:
                     self._set_table_headers(self.table2, ENCODE_LABELS)
+                self._resize_table_columns_for_language(self.table2)
+                self._scroll_table_h_to_right(self.table2)
         except Exception:
             pass
 
         try:
             if hasattr(self, 'table3') and self.table3:
                 self._set_table_headers(self.table3, ENCODE_SP_LABELS)
+                self._resize_table_columns_for_language(self.table3)
+                self._scroll_table_h_to_right(self.table3)
         except Exception:
             pass
 
@@ -3294,7 +3511,14 @@ class BluraySubtitleGUI(QWidget):
                 for r in range(self.table1.rowCount()):
                     info_table = self.table1.cellWidget(r, 2)
                     if isinstance(info_table, QTableWidget):
-                        self._set_table_headers(info_table, ['mpls_file', 'duration', 'chapters', 'main', 'play'])
+                        info_keys = ['mpls_file', 'duration', 'chapters', 'main', 'play']
+                        try:
+                            if info_table.columnCount() > len(info_keys):
+                                info_keys.append('tracks')
+                        except Exception:
+                            pass
+                        self._set_table_headers(info_table, info_keys)
+                        self._resize_table_columns_for_language(info_table)
         except Exception:
             pass
 
@@ -3379,7 +3603,7 @@ class BluraySubtitleGUI(QWidget):
             if hasattr(self, 'table1') and self.table1:
                 function_id = self.get_selected_function_id() if hasattr(self, 'get_selected_function_id') else 0
                 if function_id in (3, 4):
-                    self.table1.setColumnWidth(2, 500 if lang == 'zh' else 440)
+                    self.table1.setColumnWidth(2, 620 if lang == 'zh' else 560)
                 else:
                     self.table1.setColumnWidth(2, 420 if lang == 'zh' else 370)
                 for r in range(self.table1.rowCount()):
@@ -3542,7 +3766,19 @@ class BluraySubtitleGUI(QWidget):
 
     def closeEvent(self, event):
         self.delete_default_vpy_file()
+        try:
+            if os.path.exists('info.json'):
+                force_remove_file('info.json')
+        except Exception:
+            pass
         return super().closeEvent(event)
+
+    def _cleanup_info_json_if_needed(self):
+        try:
+            if os.path.exists('info.json'):
+                force_remove_file('info.json')
+        except Exception:
+            pass
 
     def _set_compact_table(self, table: QTableWidget, row_height: int = 22, header_height: int = 22):
         table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
@@ -4675,6 +4911,25 @@ class BluraySubtitleGUI(QWidget):
         self.language_combo.currentIndexChanged.connect(lambda _=None: self._on_language_changed())
         language_layout.addWidget(self.language_label)
         language_layout.addWidget(self.language_combo)
+        language_layout.addSpacing(12)
+        self.theme_label = QLabel('模式', language_row)
+        self.theme_combo = QComboBox(language_row)
+        self.theme_combo.addItem('浅色', 'light')
+        self.theme_combo.addItem('深色', 'dark')
+        self.theme_combo.addItem('彩色', 'colorful')
+        self.theme_combo.setCurrentIndex(0)
+        self.theme_combo.currentIndexChanged.connect(lambda _=None: self._on_theme_changed())
+        language_layout.addWidget(self.theme_label)
+        language_layout.addWidget(self.theme_combo)
+        language_layout.addSpacing(12)
+        self.opacity_label = QLabel('透明度', language_row)
+        self.opacity_slider = QSlider(Qt.Orientation.Horizontal, language_row)
+        self.opacity_slider.setRange(60, 100)
+        self.opacity_slider.setValue(int(getattr(self, '_colorful_opacity', 0.96) * 100))
+        self.opacity_slider.setFixedWidth(140)
+        self.opacity_slider.valueChanged.connect(self._on_opacity_changed)
+        language_layout.addWidget(self.opacity_label)
+        language_layout.addWidget(self.opacity_slider)
         language_layout.addStretch(1)
         self.layout.addWidget(language_row)
 
@@ -4688,6 +4943,7 @@ class BluraySubtitleGUI(QWidget):
         self.subtitle_folder_path.setMinimumWidth(200)
 
         self.function_tabbar = QTabBar(function_button)
+        self.function_tabbar.setObjectName('functionTabbar')
         self.function_tabbar.setExpanding(True)
         self.function_tabbar.setMovable(False)
         self.function_tabbar.setDocumentMode(True)
@@ -4788,6 +5044,7 @@ class BluraySubtitleGUI(QWidget):
         label1_layout.addWidget(bdmv)
 
         self.table1 = QTableWidget()
+        self.table1.setObjectName('table1')
         self.table1.setColumnCount(len(BDMV_LABELS))
         self._set_table_headers(self.table1, BDMV_LABELS)
         self.table1.setSortingEnabled(True)
@@ -4830,6 +5087,7 @@ class BluraySubtitleGUI(QWidget):
         label2_layout.addWidget(subtitle)
 
         self.table2 = CustomTableWidget(self, self.on_subtitle_drop)
+        self.table2.setObjectName('table2')
         self._set_compact_table(self.table2, row_height=22, header_height=22)
         self.table2.setColumnCount(len(SUBTITLE_LABELS))
         self._set_table_headers(self.table2, SUBTITLE_LABELS)
@@ -4845,6 +5103,7 @@ class BluraySubtitleGUI(QWidget):
         self._pending_subtitle_folder = ''
         v_layout.addWidget(self.table2)
         self.table3 = QTableWidget(self)
+        self.table3.setObjectName('table3')
         self._set_compact_table(self.table3, row_height=22, header_height=22)
         self.table3.setColumnCount(len(ENCODE_SP_LABELS))
         self._set_table_headers(self.table3, ENCODE_SP_LABELS)
@@ -4917,6 +5176,7 @@ class BluraySubtitleGUI(QWidget):
         self.setLayout(self.layout)
         self._track_selection_config: dict[str, dict[str, list[str]]] = {}
         self._apply_language('en')
+        self._apply_theme(getattr(self, '_theme_mode', 'light'))
 
     def on_bdmv_folder_path_change(self):
         raw = self.bdmv_folder_path.text()
@@ -5015,7 +5275,7 @@ class BluraySubtitleGUI(QWidget):
                         i += 1
                 self.table1.resizeColumnsToContents()
                 if self.get_selected_function_id() in (3, 4):
-                    self.table1.setColumnWidth(2, 500 if getattr(self, '_language_code', CURRENT_UI_LANGUAGE) == 'zh' else 440)
+                    self.table1.setColumnWidth(2, 620 if getattr(self, '_language_code', CURRENT_UI_LANGUAGE) == 'zh' else 560)
                 else:
                     self.table1.setColumnWidth(2, 420 if getattr(self, '_language_code', CURRENT_UI_LANGUAGE) == 'zh' else 370)
                 self._scroll_table_h_to_right(self.table1)
@@ -6675,11 +6935,14 @@ class BluraySubtitleGUI(QWidget):
             keep_inputs = True
             keep_state = True
         function_id = self.get_selected_function_id()
+        if function_id not in (3, 4):
+            self._cleanup_info_json_if_needed()
 
         last_function_id = int(getattr(self, '_selected_function_id', 0) or 0)
         if (not force) and function_id and last_function_id == function_id:
             return
         self._selected_function_id = function_id
+        self._refresh_function_tabbar_theme()
 
         if hasattr(self, 'output_folder_row') and self.output_folder_row:
             self.output_folder_row.setVisible(function_id in (3, 4))
@@ -6695,6 +6958,7 @@ class BluraySubtitleGUI(QWidget):
                 self.table3.setColumnHidden(vpy_col, not is_encode)
                 self.table3.setColumnHidden(edit_col, not is_encode)
                 self.table3.setColumnHidden(preview_col, not is_encode)
+                self._scroll_table_h_to_right(self.table3)
             except Exception:
                 pass
         if function_id == 4:
@@ -6805,6 +7069,7 @@ class BluraySubtitleGUI(QWidget):
         if not keep_inputs:
             self.bdmv_folder_path.clear()
             self.subtitle_folder_path.clear()
+        self._refresh_function_tabbar_theme()
 
     def select_bdmv_folder(self):
         folder = QFileDialog.getExistingDirectory(self, self.t("选择文件夹"))
