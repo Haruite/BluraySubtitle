@@ -29,6 +29,14 @@ from struct import unpack
 from typing import Optional, Generator, Callable
 from urllib.parse import urlparse, unquote
 
+try:
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+except Exception:
+    pass
+
 import librosa
 import librosa.feature
 import numpy as np
@@ -86,6 +94,16 @@ ENCODE_LABELS = ['sub_path', 'ep_duration', 'bdmv_index', 'chapter_index', 'm2ts
 ENCODE_SP_LABELS = ['bdmv_index', 'mpls_file', 'm2ts_file', 'duration', 'vpy_path', 'edit_vpy', 'preview_script']
 CONFIGURATION = {}
 CURRENT_UI_LANGUAGE = 'en'
+
+
+def get_mkvtoolnix_ui_language() -> str:
+    if CURRENT_UI_LANGUAGE == 'zh':
+        return 'zh_CN'
+    return 'en' if sys.platform == 'win32' else 'en_US'
+
+
+def mkvtoolnix_ui_language_arg() -> str:
+    return f'--ui-language {get_mkvtoolnix_ui_language()}'
 
 I18N_ZH_TO_EN = {
     'BluraySubtitle': 'BluraySubtitle',
@@ -167,6 +185,50 @@ I18N_ZH_TO_EN = {
     '执行命令: ': 'Run command: ',
     '压制命令：': 'Encode command:',
     '混流命令：': 'Mux command:',
+    '混流命令: ': 'Mux command: ',
+    '正在分析mpls的第一个文件 ｢': 'Analyzing first stream file in mpls ｢',
+    '｣ 的轨道': '｣ tracks',
+    '选择音频轨道 ': 'Selected audio tracks ',
+    '，字幕轨道 ': ', subtitle tracks ',
+    '找到封面图片 ｢': 'Found cover image ｢',
+    '输出文件名': 'Output filename ',
+    '\x1b[31m错误,｢': '\x1b[31mError,｢',
+    '\x1b[31m错误，ffmpeg压缩也失败\x1b[0m': '\x1b[31mError: ffmpeg compression also failed\x1b[0m',
+    '\x1b[31m错误，电影混流失败，请检查任务输出\x1b[0m': '\x1b[31mError: muxing failed, please check task output\x1b[0m',
+    ' dB，已删除': ' dB, deleted',
+    ', 时长: ': ', duration: ',
+    'FFmpeg 执行出错: ': 'FFmpeg error: ',
+    'ffmpeg 压缩的flac文件比原音轨大，将删除 ｢': 'ffmpeg-compressed FLAC is larger than the original track, deleting ｢',
+    'flac 压缩 wav 文件 ｢': 'flac compressing wav file ｢',
+    'flac 文件比原音轨大，将删除 ｢': 'FLAC is larger than the original track, deleting ｢',
+    '多进程加载失败，切换到单进程: ': 'Multiprocess load failed, switching to single process: ',
+    '字幕拖入处理失败，请检查字幕文件和原盘路径': 'Subtitle drag-in failed, please check the subtitle files and Blu-ray path',
+    '字幕文件 ｢': 'Subtitle file ｢',
+    '字幕文件加载失败 ｢': 'Failed to load subtitle file ｢',
+    '字幕文件加载失败: ': 'Failed to load subtitle file: ',
+    '字幕文件加载成功 ｢': 'Subtitle file loaded ｢',
+    '将音轨 ｢': 'Track ｢',
+    '找到一个重复音轨 ｢': 'Found a duplicate audio track ｢',
+    '拖入字幕处理失败: ': 'Subtitle drag-in failed: ',
+    '检测到文件 ｢': 'Detected file ｢',
+    '检测到空音轨 ｢': 'Detected empty audio track ｢',
+    '正在压缩音轨 ｢': 'Compressing audio track ｢',
+    '正在提取无损音轨，命令: ': 'Extracting lossless tracks, command: ',
+    '生成配置失败: ': 'Failed to generate configuration: ',
+    '获取字幕时长失败: ': 'Failed to get subtitle duration: ',
+    '转换完成: ｢': 'Conversion completed: ｢',
+    '集数：': 'Episode: ',
+    '｣ 中的m2ts文件 ｢': '｣ m2ts file in ｢',
+    '｣ 压缩成flac，减小体积 ': '｣ compressed to FLAC to reduce size ',
+    '｣ 失败，将使用 ffmpeg 压缩': '｣ failed, will use ffmpeg to compress',
+    '｣ 实际有效位深为 ': '｣ actual effective bit depth is ',
+    '｣ 平均 ': '｣ average ',
+    '｣ 有延迟 ': '｣ has delay ',
+    '｣ 有效位深较低，正在优化为 16-bit...': '｣ effective bit depth is low, optimizing to 16-bit...',
+    '｣ 未找到\x1b[0m': '｣ not found\x1b[0m',
+    '｣ 用ffmpeg压缩成flac，减小体积 ': '｣ compressed to FLAC with ffmpeg to reduce size ',
+    '｣ 解析失败: ': '｣ parse failed: ',
+    '｣，已删除': '｣, deleted',
     '多进程模式解析字幕': 'Parsing subtitles in multiprocessing mode',
     '单进程模式解析字幕': 'Parsing subtitles in single-process mode',
     '解析字幕': 'Parsing Subtitles',
@@ -776,10 +838,10 @@ class MKV:
         if content == 'CHAPTER01=00:00:00.000\nCHAPTER01NAME=Chapter 01':
             return
         if edit_file:
-            subprocess.Popen(rf'"{MKV_PROP_EDIT_PATH}" "{self.path}" --chapters chapter.txt', shell=True).wait()
+            subprocess.Popen(rf'"{MKV_PROP_EDIT_PATH}" {mkvtoolnix_ui_language_arg()} "{self.path}" --chapters chapter.txt', shell=True).wait()
         else:
             new_path = os.path.join(os.path.dirname(self.path), 'output', os.path.basename(self.path))
-            subprocess.Popen(rf'"{MKV_MERGE_PATH}" --chapters chapter.txt -o "{new_path}" "{self.path}"', shell=True).wait()
+            subprocess.Popen(rf'"{MKV_MERGE_PATH}" {mkvtoolnix_ui_language_arg()} --chapters chapter.txt -o "{new_path}" "{self.path}"', shell=True).wait()
 
 
 class M2TS:
@@ -1438,11 +1500,70 @@ class BluraySubtitle:
             except:
                 pass
 
-    def episodes_remux(self, table: Optional[QTableWidget], folder_path: str,
-                       selected_mpls: Optional[list[tuple[str, str]]] = None,
-                       configuration: Optional[dict[int, dict[str, int | str]]] = None,
-                       cancel_event: Optional[threading.Event] = None,
-                       ensure_tools: bool = True):
+    def _create_sp_mkvs_from_entries(
+        self,
+        bdmv_index_conf: dict[int, list[dict[str, int | str]]],
+        sp_entries: list[dict[str, int | str]],
+        sps_folder: str,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> list[tuple[int, str]]:
+        sp_index_by_bdmv: dict[int, int] = {}
+        created: list[tuple[int, str]] = []
+        for entry_idx, entry in enumerate(sp_entries, start=1):
+            if cancel_event and cancel_event.is_set():
+                raise _Cancelled()
+            try:
+                sp_bdmv_index = int(entry.get('bdmv_index') or 0)
+            except Exception:
+                sp_bdmv_index = 0
+            if sp_bdmv_index <= 0 or sp_bdmv_index not in bdmv_index_conf:
+                continue
+
+            bdmv_vol = '0' * (3 - len(str(sp_bdmv_index))) + str(sp_bdmv_index)
+            confs = bdmv_index_conf[sp_bdmv_index]
+            main_mpls_path = confs[0]['selected_mpls'] + '.mpls'
+            playlist_dir = os.path.dirname(main_mpls_path)
+            stream_dir = os.path.join(os.path.dirname(playlist_dir), 'STREAM')
+
+            mpls_file = str(entry.get('mpls_file') or '').strip()
+            m2ts_file = str(entry.get('m2ts_file') or '').strip()
+
+            sp_mkv_path = ''
+            cmd = ''
+            if mpls_file:
+                sp_index_by_bdmv[sp_bdmv_index] = sp_index_by_bdmv.get(sp_bdmv_index, 0) + 1
+                sp_mkv_path = os.path.join(sps_folder, f'BD_Vol_{bdmv_vol}_SP0{sp_index_by_bdmv[sp_bdmv_index]}.mkv')
+                mpls_file_path = os.path.join(playlist_dir, mpls_file)
+                cmd = f'"{MKV_MERGE_PATH}" {mkvtoolnix_ui_language_arg()} --chapter-language eng -o "{sp_mkv_path}" "{mpls_file_path}"'
+            else:
+                m2ts_files = [x.strip() for x in m2ts_file.split(',') if x.strip()]
+                if m2ts_files:
+                    m2ts_name = m2ts_files[0]
+                    sp_mkv_path = os.path.join(sps_folder, f'BD_Vol_{bdmv_vol}_{m2ts_name[:-5]}.mkv')
+                    cmd = f'"{MKV_MERGE_PATH}" {mkvtoolnix_ui_language_arg()} -o "{sp_mkv_path}" "{os.path.join(stream_dir, m2ts_name)}"'
+
+            if not cmd or not sp_mkv_path:
+                continue
+            subprocess.Popen(cmd, shell=True).wait()
+            if os.path.exists(sp_mkv_path):
+                created.append((entry_idx, sp_mkv_path))
+        return created
+
+    def _mkv_sort_key(self, p: str):
+        name = os.path.basename(p)
+        m = re.search(r'BD_Vol_(\d{3})', name)
+        vol = int(m.group(1)) if m else 9999
+        m2 = re.search(r'-(\d{3})\.mkv$', name, re.IGNORECASE)
+        seg = int(m2.group(1)) if m2 else 0
+        return vol, seg, name.lower()
+
+    def _prepare_episode_run(
+        self,
+        table: Optional[QTableWidget],
+        folder_path: str,
+        configuration: Optional[dict[int, dict[str, int | str]]],
+        ensure_tools: bool,
+    ) -> tuple[str, set[str], dict[int, list[dict[str, int | str]]]]:
         if configuration is not None:
             self.configuration = configuration
         elif not CONFIGURATION:
@@ -1452,30 +1573,79 @@ class BluraySubtitle:
                 self.configuration = self.generate_configuration(table)
         else:
             self.configuration = CONFIGURATION
-        if not os.path.exists(dst_folder := os.path.join(folder_path, os.path.basename(self.bdmv_path))):
+
+        dst_folder = os.path.join(folder_path, os.path.basename(self.bdmv_path))
+        if not os.path.exists(dst_folder):
             os.mkdir(dst_folder)
-        mkv_files_before = set()
+
         try:
             mkv_files_before = {f for f in os.listdir(dst_folder) if f.lower().endswith('.mkv')}
         except Exception:
             mkv_files_before = set()
-        bdmv_index_conf = {}
-        for sub_index, conf in self.configuration.items():
-            if conf['bdmv_index'] in bdmv_index_conf:
-                bdmv_index_conf[conf['bdmv_index']].append(conf)
+
+        bdmv_index_conf: dict[int, list[dict[str, int | str]]] = {}
+        for _, conf in self.configuration.items():
+            bdmv_index = int(conf['bdmv_index'])
+            if bdmv_index in bdmv_index_conf:
+                bdmv_index_conf[bdmv_index].append(conf)
             else:
-                bdmv_index_conf[conf['bdmv_index']] = [conf]
+                bdmv_index_conf[bdmv_index] = [conf]
+
         if ensure_tools:
             find_mkvtoolinx()
 
-        def mkv_sort_key(p: str):
-            name = os.path.basename(p)
-            m = re.search(r'BD_Vol_(\d{3})', name)
-            vol = int(m.group(1)) if m else 9999
-            m2 = re.search(r'-(\d{3})\.mkv$', name, re.IGNORECASE)
-            seg = int(m2.group(1)) if m2 else 0
-            return vol, seg, name.lower()
+        return dst_folder, mkv_files_before, bdmv_index_conf
 
+    def _collect_target_mkv_files(self, dst_folder: str, mkv_files_before: set[str]) -> list[str]:
+        try:
+            mkv_files_after = [f for f in os.listdir(dst_folder) if f.lower().endswith('.mkv')]
+        except Exception:
+            mkv_files_after = []
+        created = [os.path.join(dst_folder, f) for f in mkv_files_after if f not in mkv_files_before]
+        if created:
+            return sorted(created, key=self._mkv_sort_key)
+        return sorted([os.path.join(dst_folder, f) for f in mkv_files_after], key=self._mkv_sort_key)
+
+    def _apply_episode_prefix(self, mkv_files: list[str]) -> list[str]:
+        total = len(mkv_files)
+        if total <= 0:
+            return mkv_files
+        width = len(str(total))
+        updated: list[str] = []
+        for i, p in enumerate(mkv_files, start=1):
+            folder = os.path.dirname(p)
+            base = os.path.basename(p)
+            base_no_prefix = re.sub(r'^EP\d+\s+', '', base, flags=re.IGNORECASE)
+            prefix = f'EP{str(i).zfill(width)} '
+            new_base = prefix + base_no_prefix
+            new_path = os.path.join(folder, new_base)
+            if os.path.normcase(p) == os.path.normcase(new_path):
+                updated.append(p)
+                continue
+            if not os.path.exists(p):
+                updated.append(p)
+                continue
+            if os.path.exists(new_path):
+                stem, ext = os.path.splitext(new_base)
+                k = 1
+                candidate = new_path
+                while os.path.exists(candidate):
+                    candidate = os.path.join(folder, f'{stem} ({k}){ext}')
+                    k += 1
+                new_path = candidate
+            try:
+                os.rename(p, new_path)
+                updated.append(new_path)
+            except Exception:
+                updated.append(p)
+        return updated
+
+    def _build_main_episode_mkvs(
+        self,
+        bdmv_index_conf: dict[int, list[dict[str, int | str]]],
+        dst_folder: str,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> None:
         bdmv_index_list = sorted(bdmv_index_conf.keys())
         for idx, bdmv_index in enumerate(bdmv_index_list, start=1):
             if cancel_event and cancel_event.is_set():
@@ -1502,19 +1672,16 @@ class BluraySubtitle:
             selected_zho_audio_track = ['', '']
             copy_sub_track = []
             for stream_info in data['streams']:
-
                 if stream_info['codec_type'] == 'audio':
                     codec_name = stream_info['codec_name']
                     if codec_name == 'dts' and stream_info.get('profile') == 'DTS-HD MA':
                         codec_name = 'dts_hd_ma'
                     lang = chapter.pid_to_lang.get(int(stream_info['id'], 16), 'und')
                     if lang == 'eng':
-                        if not selected_eng_audio_track[1] or audio_type_weight[codec_name] > audio_type_weight[
-                            selected_eng_audio_track[1]]:
+                        if not selected_eng_audio_track[1] or audio_type_weight[codec_name] > audio_type_weight[selected_eng_audio_track[1]]:
                             selected_eng_audio_track = [str(stream_info['index']), codec_name]
                     elif lang == 'zho':
-                        if not selected_zho_audio_track[1] or audio_type_weight[codec_name] > audio_type_weight[
-                            selected_zho_audio_track[1]]:
+                        if not selected_zho_audio_track[1] or audio_type_weight[codec_name] > audio_type_weight[selected_zho_audio_track[1]]:
                             selected_zho_audio_track = [str(stream_info['index']), codec_name]
                 elif stream_info['codec_type'] == 'subtitle':
                     lang = chapter.pid_to_lang.get(int(stream_info['id'], 16), 'und')
@@ -1558,14 +1725,10 @@ class BluraySubtitle:
                 output_name = os.path.split(mpls_path[:-24])[-1]
             else:
                 for filename in os.listdir(meta_folder):
-                    # 获取附件Cover
-                    if filename.endswith('.jpg') or filename.endswith('.JPG') or filename.endswith(
-                            '.JPEG') or filename.endswith('.jpeg') or filename.endswith('.png') or filename.endswith(
-                        '.PNG'):
+                    if filename.endswith('.jpg') or filename.endswith('.JPG') or filename.endswith('.JPEG') or filename.endswith('.jpeg') or filename.endswith('.png') or filename.endswith('.PNG'):
                         if os.path.getsize(os.path.join(meta_folder, filename)) > cover_size:
                             cover = os.path.join(meta_folder, filename)
                             cover_size = os.path.getsize(os.path.join(meta_folder, filename))
-                # 获取输出文件名
                 output_name = ''
                 for filename in os.listdir(meta_folder):
                     if filename == 'bdmt_eng.xml':
@@ -1619,7 +1782,7 @@ class BluraySubtitle:
             chapter_split = ','.join(map(str, [conf['chapter_index'] for conf in confs]))
             bdmv_vol = '0' * (3 - len(str(bdmv_index))) + str(bdmv_index)
             output_file = f'{os.path.join(dst_folder, output_name)}_BD_Vol_{bdmv_vol}.mkv'
-            remux_cmd = (f'"{MKV_MERGE_PATH}" --split chapters:{chapter_split} -o "{output_file}" '
+            remux_cmd = (f'"{MKV_MERGE_PATH}" {mkvtoolnix_ui_language_arg()} --split chapters:{chapter_split} -o "{output_file}" '
                          f'{("-a " + ",".join(copy_audio_track)) if copy_audio_track else ""} '
                          f'{("-s " + ",".join(copy_sub_track)) if copy_sub_track else ""} '
                          f'{(" --attachment-name Cover.jpg" + " --attach-file " + "\"" + cover + "\"") if cover else ""}  '
@@ -1629,17 +1792,21 @@ class BluraySubtitle:
             subprocess.Popen(remux_cmd, shell=True).wait()
             self._progress(int(idx / max(len(bdmv_index_list), 1) * 300))
 
+    def episodes_remux(self, table: Optional[QTableWidget], folder_path: str,
+                       selected_mpls: Optional[list[tuple[str, str]]] = None,
+                       configuration: Optional[dict[int, dict[str, int | str]]] = None,
+                       cancel_event: Optional[threading.Event] = None,
+                       ensure_tools: bool = True,
+                       sp_entries: Optional[list[dict[str, int | str]]] = None):
+        dst_folder, mkv_files_before, bdmv_index_conf = self._prepare_episode_run(
+            table, folder_path, configuration, ensure_tools
+        )
+
+        self._build_main_episode_mkvs(bdmv_index_conf, dst_folder, cancel_event=cancel_event)
+
         self.checked = True
-        mkv_files_after = []
-        try:
-            mkv_files_after = [f for f in os.listdir(dst_folder) if f.lower().endswith('.mkv')]
-        except Exception:
-            mkv_files_after = []
-        created = [os.path.join(dst_folder, f) for f in mkv_files_after if f not in mkv_files_before]
-        if created:
-            mkv_files = sorted(created, key=mkv_sort_key)
-        else:
-            mkv_files = sorted([os.path.join(dst_folder, f) for f in mkv_files_after], key=mkv_sort_key)
+        mkv_files = self._collect_target_mkv_files(dst_folder, mkv_files_before)
+        mkv_files = self._apply_episode_prefix(mkv_files)
         if cancel_event and cancel_event.is_set():
             raise _Cancelled()
         self._progress(310, '写入章节中')
@@ -1657,44 +1824,53 @@ class BluraySubtitle:
 
         sps_folder = dst_folder + os.sep + 'SPs'
         os.mkdir(sps_folder)
-        for bdmv_index in bdmv_index_list:
-            if cancel_event and cancel_event.is_set():
-                raise _Cancelled()
-            confs = bdmv_index_conf[bdmv_index]
-            bdmv_vol = '0' * (3 - len(str(bdmv_index))) + str(bdmv_index)
-            mpls_path = confs[0]['selected_mpls'] + '.mpls'
-            index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(Chapter(mpls_path))
-            main_m2ts_files = set(index_to_m2ts.values())
-            parsed_m2ts_files = set(main_m2ts_files)
-            sp_index = 0
-            for mpls_file in sorted(os.listdir(os.path.dirname(mpls_path))):
+
+        if sp_entries is not None:
+            self._create_sp_mkvs_from_entries(bdmv_index_conf, sp_entries, sps_folder, cancel_event=cancel_event)
+        else:
+            for bdmv_index in sorted(bdmv_index_conf.keys()):
                 if cancel_event and cancel_event.is_set():
                     raise _Cancelled()
-                if not mpls_file.endswith('.mpls'):
-                    continue
-                mpls_file_path = os.path.join(os.path.dirname(mpls_path), mpls_file)
-                if mpls_file_path != mpls_path:
-                    index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(Chapter(mpls_file_path))
-                    if set(index_to_m2ts.values()).issubset(main_m2ts_files):
+                confs = bdmv_index_conf[bdmv_index]
+                bdmv_vol = '0' * (3 - len(str(bdmv_index))) + str(bdmv_index)
+                mpls_path = confs[0]['selected_mpls'] + '.mpls'
+                index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(Chapter(mpls_path))
+                main_m2ts_files = set(index_to_m2ts.values())
+                parsed_m2ts_files = set(main_m2ts_files)
+                sp_index = 0
+                for mpls_file in sorted(os.listdir(os.path.dirname(mpls_path))):
+                    if cancel_event and cancel_event.is_set():
+                        raise _Cancelled()
+                    if not mpls_file.endswith('.mpls'):
                         continue
-                    if len(index_to_m2ts) > 1:
-                        sp_index += 1
-                        subprocess.Popen(f'"{MKV_MERGE_PATH}" -o "{sps_folder}{os.sep}BD_Vol_'
-                                         f'{bdmv_vol}_SP0{sp_index}.mkv" "{mpls_file_path}"', shell=True).wait()
-                        parsed_m2ts_files |= set(index_to_m2ts.values())
-            stream_folder = os.path.dirname(mpls_path).removesuffix('PLAYLIST') + 'STREAM'
-            for stream_file in sorted(os.listdir(stream_folder)):
-                if cancel_event and cancel_event.is_set():
-                    raise _Cancelled()
-                if stream_file not in parsed_m2ts_files and stream_file.endswith('.m2ts'):
-                    if M2TS(os.path.join(stream_folder, stream_file)).get_duration() > 30 * 90000:
-                        subprocess.Popen(f'"{MKV_MERGE_PATH}" -o "{sps_folder}{os.sep}BD_Vol_'
-                                         f'{bdmv_vol}_{stream_file[:-5]}.mkv" '
-                                         f'"{os.path.join(stream_folder, stream_file)}"', shell=True).wait()
+                    mpls_file_path = os.path.join(os.path.dirname(mpls_path), mpls_file)
+                    if mpls_file_path != mpls_path:
+                        index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(Chapter(mpls_file_path))
+                        if set(index_to_m2ts.values()).issubset(main_m2ts_files):
+                            continue
+                        if len(index_to_m2ts) > 1:
+                            sp_index += 1
+                            subprocess.Popen(f'"{MKV_MERGE_PATH}" {mkvtoolnix_ui_language_arg()} '
+                                             f'--chapter-language eng -o "{sps_folder}{os.sep}BD_Vol_'
+                                             f'{bdmv_vol}_SP0{sp_index}.mkv" "{mpls_file_path}"', shell=True).wait()
+                            parsed_m2ts_files |= set(index_to_m2ts.values())
+                stream_folder = os.path.dirname(mpls_path).removesuffix('PLAYLIST') + 'STREAM'
+                for stream_file in sorted(os.listdir(stream_folder)):
+                    if cancel_event and cancel_event.is_set():
+                        raise _Cancelled()
+                    if stream_file not in parsed_m2ts_files and stream_file.endswith('.m2ts'):
+                        if M2TS(os.path.join(stream_folder, stream_file)).get_duration() > 30 * 90000:
+                            subprocess.Popen(f'"{MKV_MERGE_PATH}" {mkvtoolnix_ui_language_arg()} -o "{sps_folder}{os.sep}BD_Vol_'
+                                             f'{bdmv_vol}_{stream_file[:-5]}.mkv" '
+                                             f'"{os.path.join(stream_folder, stream_file)}"', shell=True).wait()
+        sp_files = [sp for sp in os.listdir(sps_folder) if sp.lower().endswith('.mkv')]
+        sp_files.sort()
+        total_sp = len(sp_files) or 1
         self._progress(900, '处理 SPs 音轨')
-        for sp in os.listdir(sps_folder):
+        for idx, sp in enumerate(sp_files, start=1):
             if cancel_event and cancel_event.is_set():
                 raise _Cancelled()
+            self._progress(900 + int(90 * idx / total_sp), f'处理 SPs 音轨 {idx}/{total_sp}：{sp}')
             self.flac_task(sps_folder + os.sep + sp, sps_folder, -1)
 
         self.completion()
@@ -1712,201 +1888,15 @@ class BluraySubtitle:
                         x265_mode: str = 'bundle',
                         x265_params: str = '',
                         sub_pack_mode: str = 'external'):
-        if configuration is not None:
-            self.configuration = configuration
-        elif not CONFIGURATION:
-            if table is None:
-                self.configuration = {}
-            else:
-                self.configuration = self.generate_configuration(table)
-        else:
-            self.configuration = CONFIGURATION
-        if not os.path.exists(dst_folder := os.path.join(folder_path, os.path.basename(self.bdmv_path))):
-            os.mkdir(dst_folder)
-        mkv_files_before = set()
-        try:
-            mkv_files_before = {f for f in os.listdir(dst_folder) if f.lower().endswith('.mkv')}
-        except Exception:
-            mkv_files_before = set()
-        bdmv_index_conf = {}
-        for sub_index, conf in self.configuration.items():
-            if conf['bdmv_index'] in bdmv_index_conf:
-                bdmv_index_conf[conf['bdmv_index']].append(conf)
-            else:
-                bdmv_index_conf[conf['bdmv_index']] = [conf]
-        if ensure_tools:
-            find_mkvtoolinx()
+        dst_folder, mkv_files_before, bdmv_index_conf = self._prepare_episode_run(
+            table, folder_path, configuration, ensure_tools
+        )
 
-        def mkv_sort_key(p: str):
-            name = os.path.basename(p)
-            m = re.search(r'BD_Vol_(\d{3})', name)
-            vol = int(m.group(1)) if m else 9999
-            m2 = re.search(r'-(\d{3})\.mkv$', name, re.IGNORECASE)
-            seg = int(m2.group(1)) if m2 else 0
-            return vol, seg, name.lower()
-
-        bdmv_index_list = sorted(bdmv_index_conf.keys())
-        for idx, bdmv_index in enumerate(bdmv_index_list, start=1):
-            if cancel_event and cancel_event.is_set():
-                raise _Cancelled()
-            confs = bdmv_index_conf[bdmv_index]
-            try:
-                confs = sorted(confs, key=lambda c: int(c.get('chapter_index') or 0))
-            except Exception:
-                pass
-            mpls_path = confs[0]['selected_mpls'] + '.mpls'
-
-            chapter = Chapter(mpls_path)
-            chapter.get_pid_to_language()
-            m2ts_file = os.path.join(os.path.join(mpls_path[:-19], 'STREAM'), chapter.in_out_time[0][0] + '.m2ts')
-            print(f'正在分析mpls的第一个文件 ｢{m2ts_file}｣ 的轨道')
-            self._progress(text=f'分析轨道：{os.path.basename(m2ts_file)}')
-            cmd = f'"{FFPROBE_PATH}" -v error -show_streams -show_format -of json "{m2ts_file}" >info.json 2>&1'
-            subprocess.Popen(cmd, shell=True).wait()
-
-            with open('info.json', 'r', encoding='utf-8') as fp:
-                data = json.load(fp)
-            audio_type_weight = {'': -1, 'aac': 1, 'ac3': 2, 'eac3': 3, 'lpcm': 4, 'dts': 5, 'dts_hd_ma': 6, 'truehd': 7}
-            selected_eng_audio_track = ['', '']
-            selected_zho_audio_track = ['', '']
-            copy_sub_track = []
-            for stream_info in data['streams']:
-
-                if stream_info['codec_type'] == 'audio':
-                    codec_name = stream_info['codec_name']
-                    if codec_name == 'dts' and stream_info.get('profile') == 'DTS-HD MA':
-                        codec_name = 'dts_hd_ma'
-                    lang = chapter.pid_to_lang.get(int(stream_info['id'], 16), 'und')
-                    if lang == 'eng':
-                        if not selected_eng_audio_track[1] or audio_type_weight[codec_name] > audio_type_weight[
-                            selected_eng_audio_track[1]]:
-                            selected_eng_audio_track = [str(stream_info['index']), codec_name]
-                    elif lang == 'zho':
-                        if not selected_zho_audio_track[1] or audio_type_weight[codec_name] > audio_type_weight[
-                            selected_zho_audio_track[1]]:
-                            selected_zho_audio_track = [str(stream_info['index']), codec_name]
-                elif stream_info['codec_type'] == 'subtitle':
-                    lang = chapter.pid_to_lang.get(int(stream_info['id'], 16), 'und')
-                    if lang in ['eng', 'zho']:
-                        copy_sub_track.append(str(stream_info['index']))
-            if not copy_sub_track:
-                for stream_info in data['streams']:
-                    if stream_info['codec_type'] == 'subtitle':
-                        copy_sub_track.append(str(stream_info['index']))
-                        break
-            if not selected_zho_audio_track[0] and not selected_eng_audio_track[0]:
-                copy_audio_track = []
-                for stream_info in data['streams']:
-                    if stream_info['codec_type'] == 'audio':
-                        copy_audio_track.append(str(stream_info['index']))
-                        break
-                for stream_info in data['streams']:
-                    if stream_info['codec_type'] == 'audio':
-                        lang = chapter.pid_to_lang.get(int(stream_info['id'], 16), 'und')
-                        if lang == 'jpn' and str(stream_info['index']) not in copy_audio_track:
-                            copy_audio_track.append(str(stream_info['index']))
-            else:
-                if selected_eng_audio_track[0] and selected_zho_audio_track[0]:
-                    copy_audio_track = [selected_eng_audio_track[0], selected_zho_audio_track[0]]
-                elif not selected_eng_audio_track[0]:
-                    copy_audio_track = [selected_zho_audio_track[0]]
-                else:
-                    copy_audio_track = [selected_eng_audio_track[0]]
-                first_audio_index = 1
-                for stream_info in data['streams']:
-                    if stream_info['codec_type'] == 'audio':
-                        first_audio_index = stream_info['index']
-                        break
-                if str(first_audio_index) not in (selected_zho_audio_track[0], selected_eng_audio_track[0]):
-                    copy_audio_track.append(str(first_audio_index))
-            print(f'选择音频轨道 {copy_audio_track}，字幕轨道 {copy_sub_track}')
-            meta_folder = os.path.join(os.path.join(mpls_path[:-19], 'META', 'DL'))
-            cover = ''
-            cover_size = 0
-            if not os.path.exists(meta_folder):
-                output_name = os.path.split(mpls_path[:-24])[-1]
-            else:
-                for filename in os.listdir(meta_folder):
-                    if filename.endswith('.jpg') or filename.endswith('.JPG') or filename.endswith(
-                            '.JPEG') or filename.endswith('.jpeg') or filename.endswith('.png') or filename.endswith(
-                        '.PNG'):
-                        if os.path.getsize(os.path.join(meta_folder, filename)) > cover_size:
-                            cover = os.path.join(meta_folder, filename)
-                            cover_size = os.path.getsize(os.path.join(meta_folder, filename))
-                output_name = ''
-                for filename in os.listdir(meta_folder):
-                    if filename == 'bdmt_eng.xml':
-                        try:
-                            tree = et.parse(os.path.join(meta_folder, filename))
-                            _folder = tree.getroot()
-                            ns = {'di': 'urn:BDA:bdmv;discinfo'}
-                            output_name = _folder.find('.//di:name', ns).text
-                            break
-                        except (et.ParseError, FileNotFoundError):
-                            continue
-                if not output_name:
-                    for filename in os.listdir(meta_folder):
-                        if filename == 'bdmt_zho.xml':
-                            try:
-                                tree = et.parse(os.path.join(meta_folder, filename))
-                                _folder = tree.getroot()
-                                ns = {'di': 'urn:BDA:bdmv;discinfo'}
-                                output_name = _folder.find('.//di:name', ns).text
-                                break
-                            except (et.ParseError, FileNotFoundError):
-                                continue
-                if not output_name:
-                    for filename in os.listdir(meta_folder):
-                        try:
-                            tree = et.parse(os.path.join(meta_folder, filename))
-                            _folder = tree.getroot()
-                            ns = {'di': 'urn:BDA:bdmv;discinfo'}
-                            output_name = _folder.find('.//di:name', ns).text
-                            break
-                        except (et.ParseError, FileNotFoundError):
-                            continue
-                if not output_name:
-                    output_name = os.path.split(mpls_path[:-24])[-1]
-            char_map = {
-                '?': '？',
-                '*': '★',
-                '<': '《',
-                '>': '》',
-                ':': '：',
-                '"': "'",
-                '/': '／',
-                '\\': '／',
-                '|': '￨'
-            }
-            output_name = ''.join(char_map.get(char) or char for char in output_name)
-            if cover:
-                print(f"找到封面图片 ｢{cover}｣")
-            print(f'输出文件名{output_name}.mkv')
-
-            chapter_split = ','.join(map(str, [conf['chapter_index'] for conf in confs]))
-            bdmv_vol = '0' * (3 - len(str(bdmv_index))) + str(bdmv_index)
-            output_file = f'{os.path.join(dst_folder, output_name)}_BD_Vol_{bdmv_vol}.mkv'
-            remux_cmd = (f'"{MKV_MERGE_PATH}" --split chapters:{chapter_split} -o "{output_file}" '
-                         f'{("-a " + ",".join(copy_audio_track)) if copy_audio_track else ""} '
-                         f'{("-s " + ",".join(copy_sub_track)) if copy_sub_track else ""} '
-                         f'{(" --attachment-name Cover.jpg" + " --attach-file " + "\"" + cover + "\"") if cover else ""}  '
-                         f'"{mpls_path}"')
-            print(f'混流命令: {remux_cmd}')
-            self._progress(text=f'混流中：BD_Vol_{bdmv_vol}')
-            subprocess.Popen(remux_cmd, shell=True).wait()
-            self._progress(int(idx / max(len(bdmv_index_list), 1) * 300))
+        self._build_main_episode_mkvs(bdmv_index_conf, dst_folder, cancel_event=cancel_event)
 
         self.checked = True
-        mkv_files_after = []
-        try:
-            mkv_files_after = [f for f in os.listdir(dst_folder) if f.lower().endswith('.mkv')]
-        except Exception:
-            mkv_files_after = []
-        created = [os.path.join(dst_folder, f) for f in mkv_files_after if f not in mkv_files_before]
-        if created:
-            mkv_files = sorted(created, key=mkv_sort_key)
-        else:
-            mkv_files = sorted([os.path.join(dst_folder, f) for f in mkv_files_after], key=mkv_sort_key)
+        mkv_files = self._collect_target_mkv_files(dst_folder, mkv_files_before)
+        mkv_files = self._apply_episode_prefix(mkv_files)
         if cancel_event and cancel_event.is_set():
             raise _Cancelled()
         self._progress(310, '写入章节中')
@@ -1941,48 +1931,15 @@ class BluraySubtitle:
         os.mkdir(sps_folder)
         self._progress(900, '处理 SPs 音轨')
 
-        if sp_entries:
-            sp_index_by_bdmv: dict[int, int] = {}
-            total_sp = len(sp_entries) or 1
-            for idx, entry in enumerate(sp_entries, start=1):
+        if sp_entries is not None:
+            created_sp = self._create_sp_mkvs_from_entries(bdmv_index_conf, sp_entries, sps_folder, cancel_event=cancel_event)
+            total_sp = len(created_sp) or 1
+            for idx, (entry_idx, sp_mkv_path) in enumerate(created_sp, start=1):
                 if cancel_event and cancel_event.is_set():
                     raise _Cancelled()
-                try:
-                    sp_bdmv_index = int(entry.get('bdmv_index') or 0)
-                except Exception:
-                    sp_bdmv_index = 0
-                if sp_bdmv_index <= 0 or sp_bdmv_index not in bdmv_index_conf:
-                    continue
-                bdmv_vol = '0' * (3 - len(str(sp_bdmv_index))) + str(sp_bdmv_index)
-                confs = bdmv_index_conf[sp_bdmv_index]
-                main_mpls_path = confs[0]['selected_mpls'] + '.mpls'
-                playlist_dir = os.path.dirname(main_mpls_path)
-                stream_dir = os.path.join(os.path.dirname(playlist_dir), 'STREAM')
-
-                mpls_file = str(entry.get('mpls_file') or '').strip()
-                m2ts_file = str(entry.get('m2ts_file') or '').strip()
-
-                sp_mkv_path = None
-                if mpls_file:
-                    sp_index_by_bdmv[sp_bdmv_index] = sp_index_by_bdmv.get(sp_bdmv_index, 0) + 1
-                    sp_mkv_path = os.path.join(sps_folder, f'BD_Vol_{bdmv_vol}_SP0{sp_index_by_bdmv[sp_bdmv_index]}.mkv')
-                    mpls_file_path = os.path.join(playlist_dir, mpls_file)
-                    subprocess.Popen(f'"{MKV_MERGE_PATH}" -o "{sp_mkv_path}" "{mpls_file_path}"', shell=True).wait()
-                else:
-                    m2ts_files = [x.strip() for x in m2ts_file.split(',') if x.strip()]
-                    if m2ts_files:
-                        m2ts_name = m2ts_files[0]
-                        sp_mkv_path = os.path.join(sps_folder, f'BD_Vol_{bdmv_vol}_{m2ts_name[:-5]}.mkv')
-                        subprocess.Popen(
-                            f'"{MKV_MERGE_PATH}" -o "{sp_mkv_path}" "{os.path.join(stream_dir, m2ts_name)}"',
-                            shell=True
-                        ).wait()
-
-                if not sp_mkv_path or not os.path.exists(sp_mkv_path):
-                    continue
                 self._progress(text=f'压制并混流 SPs：{os.path.basename(sp_mkv_path)}')
-                if sp_vpy_paths and 0 <= (idx - 1) < len(sp_vpy_paths) and sp_vpy_paths[idx - 1]:
-                    cur_sp_vpy = str(sp_vpy_paths[idx - 1])
+                if sp_vpy_paths and 0 <= (entry_idx - 1) < len(sp_vpy_paths) and sp_vpy_paths[entry_idx - 1]:
+                    cur_sp_vpy = str(sp_vpy_paths[entry_idx - 1])
                 else:
                     cur_sp_vpy = os.path.join(os.getcwd(), 'vpy.vpy')
                 self.encode_task(sp_mkv_path, sps_folder, -1, cur_sp_vpy, vspipe_mode, x265_mode, x265_params, 'external')
@@ -2009,7 +1966,8 @@ class BluraySubtitle:
                             continue
                         if len(index_to_m2ts) > 1:
                             sp_index += 1
-                            subprocess.Popen(f'"{MKV_MERGE_PATH}" -o "{sps_folder}{os.sep}BD_Vol_'
+                            subprocess.Popen(f'"{MKV_MERGE_PATH}" {mkvtoolnix_ui_language_arg()} '
+                                             f'--chapter-language eng -o "{sps_folder}{os.sep}BD_Vol_'
                                              f'{bdmv_vol}_SP0{sp_index}.mkv" "{mpls_file_path}"', shell=True).wait()
                             parsed_m2ts_files |= set(index_to_m2ts.values())
                 stream_folder = os.path.dirname(mpls_path).removesuffix('PLAYLIST') + 'STREAM'
@@ -2018,7 +1976,7 @@ class BluraySubtitle:
                         raise _Cancelled()
                     if stream_file not in parsed_m2ts_files and stream_file.endswith('.m2ts'):
                         if M2TS(os.path.join(stream_folder, stream_file)).get_duration() > 30 * 90000:
-                            subprocess.Popen(f'"{MKV_MERGE_PATH}" -o "{sps_folder}{os.sep}BD_Vol_'
+                            subprocess.Popen(f'"{MKV_MERGE_PATH}" {mkvtoolnix_ui_language_arg()} -o "{sps_folder}{os.sep}BD_Vol_'
                                              f'{bdmv_vol}_{stream_file[:-5]}.mkv" '
                                              f'"{os.path.join(stream_folder, stream_file)}"', shell=True).wait()
             sp_files = [os.path.join(sps_folder, sp) for sp in os.listdir(sps_folder) if sp.endswith('.mkv')]
@@ -2405,11 +2363,11 @@ class BluraySubtitle:
         audio_tracks = '!' + ','.join(audio_tracks)
         language_options = ' '.join(language_options)
         if not hevc_file:
-            return (f'"{MKV_MERGE_PATH}" -o "{output_file}" --track-order {tracker_order} '
+            return (f'"{MKV_MERGE_PATH}" {mkvtoolnix_ui_language_arg()} -o "{output_file}" --track-order {tracker_order} '
                     f'-a {audio_tracks} "{mkv_file}" {language_options}')
         else:
             tracker_order = f'{audio_track_num + 1}:0,{tracker_order}'
-            return (f'"{MKV_MERGE_PATH}" -o "{output_file}" --track-order {tracker_order} '
+            return (f'"{MKV_MERGE_PATH}" {mkvtoolnix_ui_language_arg()} -o "{output_file}" --track-order {tracker_order} '
                     f'-d !0 -a {audio_tracks} "{mkv_file}" {language_options} "{hevc_file}"')
 
     def extract_lossless(self, mkv_file: str, dolby_truehd_tracks: list[int]) -> tuple[int, dict[int, str]]:
@@ -2459,7 +2417,7 @@ class BluraySubtitle:
             for track_id, lang in track_info.items():
                 extract_info.append(
                     f'{track_id}:"{mkv_file.removesuffix(".mkv")}.track{track_id}.{track_suffix_info[track_id]}"')
-            extract_cmd = f'"{MKV_EXTRACT_PATH}" "{mkv_file}" tracks {" ".join(extract_info)}'
+            extract_cmd = f'"{MKV_EXTRACT_PATH}" {mkvtoolnix_ui_language_arg()} "{mkv_file}" tracks {" ".join(extract_info)}'
             print(f'正在提取无损音轨，命令: {extract_cmd}')
             subprocess.Popen(extract_cmd, shell=True).wait()
 
@@ -2534,7 +2492,7 @@ class RemuxWorker(QObject):
 
     def __init__(self, bdmv_path: str, sub_files: list[str], checked: bool, output_folder: str,
                  configuration: dict[int, dict[str, int | str]], selected_mpls: list[tuple[str, str]],
-                 cancel_event: threading.Event):
+                 cancel_event: threading.Event, sp_entries: list[dict[str, int | str]]):
         super().__init__()
         self.bdmv_path = bdmv_path
         self.sub_files = sub_files
@@ -2543,6 +2501,7 @@ class RemuxWorker(QObject):
         self.configuration = configuration
         self.selected_mpls = selected_mpls
         self.cancel_event = cancel_event
+        self.sp_entries = sp_entries
 
     def run(self):
         try:
@@ -2562,7 +2521,8 @@ class RemuxWorker(QObject):
                 selected_mpls=self.selected_mpls,
                 configuration=self.configuration,
                 cancel_event=self.cancel_event,
-                ensure_tools=False
+                ensure_tools=False,
+                sp_entries=self.sp_entries
             )
         except _Cancelled:
             self.canceled.emit()
@@ -2902,6 +2862,8 @@ class BluraySubtitleGUI(QWidget):
         for widget in self.findChildren(QWidget):
             if widget is getattr(self, 'language_combo', None):
                 continue
+            if isinstance(widget, (QLineEdit, QPlainTextEdit)):
+                continue
             if isinstance(widget, QGroupBox):
                 title_getter = getattr(widget, 'title', None)
                 title_text = title_getter() if callable(title_getter) else ''
@@ -3008,6 +2970,27 @@ class BluraySubtitleGUI(QWidget):
         except Exception:
             pass
 
+    def _resize_table_columns_for_language(self, table: QTableWidget):
+        if not table:
+            return
+        try:
+            table.resizeColumnsToContents()
+        except Exception:
+            pass
+        try:
+            header = table.horizontalHeader()
+            fm = QFontMetrics(header.font())
+            for col in range(table.columnCount()):
+                item = table.horizontalHeaderItem(col)
+                txt = item.text() if item else ''
+                if not txt:
+                    continue
+                min_w = int(fm.horizontalAdvance(txt) + 24)
+                if table.columnWidth(col) < min_w:
+                    table.setColumnWidth(col, min_w)
+        except Exception:
+            pass
+
     def _refresh_language_dependent_sizes(self):
         lang = getattr(self, '_language_code', CURRENT_UI_LANGUAGE)
         try:
@@ -3028,21 +3011,13 @@ class BluraySubtitleGUI(QWidget):
 
         try:
             if hasattr(self, 'table2') and self.table2:
-                function_id = self.get_selected_function_id()
-                if function_id == 1:
-                    self._set_table_headers(self.table2, SUBTITLE_LABELS)
-                elif function_id == 2:
-                    self._set_table_headers(self.table2, MKV_LABELS)
-                elif function_id == 3:
-                    self._set_table_headers(self.table2, REMUX_LABELS)
-                else:
-                    self._set_table_headers(self.table2, ENCODE_LABELS)
+                self._resize_table_columns_for_language(self.table2)
         except Exception:
             pass
 
         try:
             if hasattr(self, 'table3') and self.table3:
-                self._set_table_headers(self.table3, ENCODE_SP_LABELS)
+                self._resize_table_columns_for_language(self.table3)
         except Exception:
             pass
 
@@ -3051,7 +3026,7 @@ class BluraySubtitleGUI(QWidget):
                 for r in range(self.table1.rowCount()):
                     info_table = self.table1.cellWidget(r, 2)
                     if isinstance(info_table, QTableWidget):
-                        self._set_table_headers(info_table, ['mpls_file', 'duration', 'chapters', 'main', 'play'])
+                        self._resize_table_columns_for_language(info_table)
         except Exception:
             pass
 
@@ -5619,6 +5594,20 @@ class BluraySubtitleGUI(QWidget):
         self._update_exe_button_progress(0, '准备中')
 
         sub_files = [self.table2.item(i, 0).text() for i in range(0, self.table2.rowCount()) if self.table2.item(i, 0)]
+        sp_entries = []
+        if hasattr(self, 'table3'):
+            for i in range(self.table3.rowCount()):
+                try:
+                    bdmv_index_item = self.table3.item(i, 0)
+                    mpls_item = self.table3.item(i, 1)
+                    m2ts_item = self.table3.item(i, 2)
+                    sp_entries.append({
+                        'bdmv_index': int(bdmv_index_item.text()) if bdmv_index_item and bdmv_index_item.text() else 0,
+                        'mpls_file': mpls_item.text().strip() if mpls_item and mpls_item.text() else '',
+                        'm2ts_file': m2ts_item.text().strip() if m2ts_item and m2ts_item.text() else ''
+                    })
+                except Exception:
+                    sp_entries.append({'bdmv_index': 0, 'mpls_file': '', 'm2ts_file': ''})
         selected_mpls = self.get_selected_mpls_no_ext()
         if not selected_mpls:
             self._current_cancel_event = None
@@ -5649,7 +5638,8 @@ class BluraySubtitleGUI(QWidget):
             output_folder,
             configuration,
             selected_mpls,
-            cancel_event
+            cancel_event,
+            sp_entries
         )
         self._remux_worker.moveToThread(self._remux_thread)
         self._remux_thread.started.connect(self._remux_worker.run)
