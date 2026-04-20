@@ -3225,7 +3225,9 @@ class BluraySubtitle:
                                 if os.path.exists(tmp_wav):
                                     fp_source = tmp_wav
                             y, sr = librosa.load(fp_source, sr=None, mono=True)
-                            chroma = librosa.feature.chroma_stft(y=y, sr=sr)
+                            if y is None or len(y) == 0 or float(np.max(np.abs(y))) < 1e-8:
+                                raise Exception('silent')
+                            chroma = librosa.feature.chroma_stft(y=y, sr=sr, tuning=0.0)
                             fpt = np.mean(chroma, axis=1)
                         except Exception:
                             if tmp_wav and os.path.exists(tmp_wav):
@@ -3273,6 +3275,25 @@ class BluraySubtitle:
                             fpts.append((fpt, track_id_val, fn))
 
             def _is_silent_audio(path: str, threshold_db: float = -60.0) -> tuple[bool, float]:
+                try:
+                    proc = subprocess.run(
+                        f'"{FFMPEG_PATH}" -hide_banner -nostats -i "{path}" -af volumedetect -f null -',
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        encoding='utf-8',
+                        errors='ignore'
+                    )
+                    text_out = (proc.stderr or '') + '\n' + (proc.stdout or '')
+                    m_mean = re.search(r'mean_volume:\s*([-\d\.]+)\s*dB', text_out)
+                    m_max = re.search(r'max_volume:\s*([-\d\.]+)\s*dB', text_out)
+                    mean_db = float(m_mean.group(1)) if m_mean else float('-inf')
+                    max_db = float(m_max.group(1)) if m_max else float('-inf')
+                    if mean_db == float('-inf') and max_db == float('-inf'):
+                        return True, float('-inf')
+                    return (max_db < threshold_db), mean_db
+                except Exception:
+                    pass
                 y = None
                 sr = None
                 if soundfile is not None:
@@ -3306,9 +3327,15 @@ class BluraySubtitle:
                                 os.remove(tmp)
                             except Exception:
                                 pass
+                if y is None or len(y) == 0:
+                    return True, float('-inf')
+                if float(np.max(np.abs(y))) < 1e-8:
+                    return True, float('-inf')
                 rms = librosa.feature.rms(y=y)
                 db = librosa.amplitude_to_db(rms, ref=np.max)
-                avg_db = float(np.mean(db))
+                avg_db = float(np.mean(db)) if db.size else float('-inf')
+                if avg_db != avg_db:
+                    return True, float('-inf')
                 return avg_db < threshold_db, avg_db
 
             for file1 in os.listdir(dst_folder):
