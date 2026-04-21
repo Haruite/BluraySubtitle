@@ -12689,11 +12689,37 @@ class BluraySubtitleGUI(QWidget):
             if hasattr(self, 'tables_splitter') and self.tables_splitter:
                 if remux_mode:
                     total_h = max(320, self.tables_splitter.height() or self.height())
-                    top_h = max(88, min(150, int(total_h * 0.2)))
-                    self.tables_splitter.setSizes([top_h, max(180, total_h - top_h)])
+                    top_h = max(44, min(96, int(total_h * 0.12)))
+                    if hasattr(self, 'label1_container') and self.label1_container:
+                        try:
+                            self.label1_container.adjustSize()
+                            content_h = int(self.label1_container.sizeHint().height())
+                        except Exception:
+                            content_h = top_h
+                        top_h = max(40, min(120, content_h + 2))
+                        self.label1_container.setMinimumHeight(top_h)
+                        self.label1_container.setMaximumHeight(top_h)
+                        self.label1_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+                    if hasattr(self, 'label2_container') and self.label2_container:
+                        self.label2_container.setMinimumHeight(0)
+                        self.label2_container.setMaximumHeight(16777215)
+                        self.label2_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+                    self.tables_splitter.setStretchFactor(0, 0)
+                    self.tables_splitter.setStretchFactor(1, 1)
+                    self.tables_splitter.setSizes([top_h, max(220, total_h - top_h)])
                 else:
                     total_h = max(320, self.tables_splitter.height() or self.height())
                     half = max(160, int(total_h * 0.5))
+                    if hasattr(self, 'label1_container') and self.label1_container:
+                        self.label1_container.setMinimumHeight(0)
+                        self.label1_container.setMaximumHeight(16777215)
+                        self.label1_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+                    if hasattr(self, 'label2_container') and self.label2_container:
+                        self.label2_container.setMinimumHeight(0)
+                        self.label2_container.setMaximumHeight(16777215)
+                        self.label2_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+                    self.tables_splitter.setStretchFactor(0, 1)
+                    self.tables_splitter.setStretchFactor(1, 1)
                     self.tables_splitter.setSizes([half, max(160, total_h - half)])
         except Exception:
             pass
