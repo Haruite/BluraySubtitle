@@ -100,7 +100,7 @@ ENCODE_REMUX_SP_LABELS = ['duration', 'output_name', 'vpy_path', 'edit_vpy', 'pr
 CONFIGURATION = {}
 DEFAULT_APPROX_EPISODE_DURATION_SECONDS = 24 * 60  # default approx. minutes→seconds for episode split heuristics
 CURRENT_UI_LANGUAGE = 'en'
-APP_TITLE = 'BluraySubtitle v3.1'
+APP_TITLE = 'BluraySubtitle v3.1+'
 
 
 def get_mkvtoolnix_ui_language() -> str:
@@ -8855,6 +8855,7 @@ class BluraySubtitleGUI(QWidget):
         v_layout.addWidget(remux_path_box)
 
         label1_container = QWidget(self)
+        self.label1_container = label1_container
         label1_layout = QVBoxLayout()
         label1_layout.setContentsMargins(0, 0, 0, 0)
         label1_layout.setSpacing(0)
@@ -8946,6 +8947,7 @@ class BluraySubtitleGUI(QWidget):
         v_layout.addWidget(subtitle_path_box)
 
         label2_container = QWidget(self)
+        self.label2_container = label2_container
         label2_layout = QVBoxLayout()
         label2_layout.setContentsMargins(0, 0, 0, 0)
         label2_layout.setSpacing(0)
@@ -9001,6 +9003,7 @@ class BluraySubtitleGUI(QWidget):
         bdmv.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         subtitle.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         tables_splitter = QSplitter(Qt.Orientation.Vertical, self)
+        self.tables_splitter = tables_splitter
         tables_splitter.setObjectName('tablesSplitter')
         tables_splitter.setChildrenCollapsible(False)
         tables_splitter.addWidget(label1_container)
@@ -12680,6 +12683,18 @@ class BluraySubtitleGUI(QWidget):
                 self.table1.setVisible(not remux_mode)
             if hasattr(self, 'select_all_tracks_row') and self.select_all_tracks_row:
                 self.select_all_tracks_row.setVisible(not remux_mode)
+        except Exception:
+            pass
+        try:
+            if hasattr(self, 'tables_splitter') and self.tables_splitter:
+                if remux_mode:
+                    total_h = max(320, self.tables_splitter.height() or self.height())
+                    top_h = max(88, min(150, int(total_h * 0.2)))
+                    self.tables_splitter.setSizes([top_h, max(180, total_h - top_h)])
+                else:
+                    total_h = max(320, self.tables_splitter.height() or self.height())
+                    half = max(160, int(total_h * 0.5))
+                    self.tables_splitter.setSizes([half, max(160, total_h - half)])
         except Exception:
             pass
 
