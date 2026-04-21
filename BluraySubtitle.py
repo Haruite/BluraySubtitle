@@ -28,7 +28,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from functools import reduce, partial
 from struct import unpack
-from typing import Optional, Generator, Callable
+from typing import BinaryIO, Callable, Generator, Optional
 from urllib.parse import urlparse, unquote
 
 try:
@@ -52,7 +52,7 @@ from PyQt6.QtGui import QPainter, QColor, QDragMoveEvent, QDropEvent, QPaintEven
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QFileDialog, QLabel, QToolButton, QLineEdit,
     QMessageBox, QHBoxLayout, QGroupBox, QCheckBox, QProgressDialog, QProgressBar, QRadioButton, QButtonGroup,
     QTableWidget, QTableWidgetItem, QDialog, QPushButton, QComboBox, QMenu, QAbstractItemView, QPlainTextEdit,
-    QSizePolicy, QHeaderView, QInputDialog, QTabBar, QSlider)
+    QSizePolicy, QHeaderView, QInputDialog, QTabBar, QSlider, QSplitter)
 
 if sys.platform == 'win32':
     import winreg
@@ -92,12 +92,13 @@ MKV_EXTRACT_PATH = ''
 BDMV_LABELS = ['path', 'size', 'info', 'remux_cmd']
 SUBTITLE_LABELS = ['select', 'path', 'sub_duration', 'ep_duration', 'bdmv_index', 'chapter_index', 'offset', 'warning']
 MKV_LABELS = ['path', 'duration']
-REMUX_LABELS = ['sub_path', 'language', 'ep_duration', 'bdmv_index', 'chapter_index', 'm2ts_file', 'output_name', 'play']
-ENCODE_LABELS = ['sub_path', 'language', 'ep_duration', 'bdmv_index', 'chapter_index', 'm2ts_file', 'output_name', 'vpy_path', 'edit_vpy', 'preview_script', 'play']
+REMUX_LABELS = ['sub_path', 'language', 'ep_duration', 'bdmv_index', 'start_at_chapter', 'end_at_chapter', 'm2ts_file', 'output_name', 'play']
+ENCODE_LABELS = ['sub_path', 'language', 'ep_duration', 'bdmv_index', 'start_at_chapter', 'end_at_chapter', 'm2ts_file', 'output_name', 'vpy_path', 'edit_vpy', 'preview_script', 'play']
 ENCODE_SP_LABELS = ['select', 'bdmv_index', 'mpls_file', 'm2ts_file', 'duration', 'output_name', 'tracks', 'vpy_path', 'edit_vpy', 'preview_script', 'play']
 ENCODE_REMUX_LABELS = ['sub_path', 'language', 'ep_duration', 'output_name', 'vpy_path', 'edit_vpy', 'preview_script', 'play', 'edit_tracks', 'edit_chapters', 'edit_attachments']
 ENCODE_REMUX_SP_LABELS = ['duration', 'output_name', 'vpy_path', 'edit_vpy', 'preview_script', 'play', 'edit_tracks', 'edit_chapters', 'edit_attachments']
 CONFIGURATION = {}
+DEFAULT_APPROX_EPISODE_DURATION_SECONDS = 24 * 60  # default approx. minutes→seconds for episode split heuristics
 CURRENT_UI_LANGUAGE = 'en'
 APP_TITLE = 'BluraySubtitle v3.0+'
 
@@ -130,6 +131,7 @@ I18N_ZH_TO_EN = {
     '编辑附件': 'edit attachments',
     '选择所有轨道': 'Select all tracks',
     'Select all tracks': 'Select all tracks',
+    '全选': 'Select all',
     '提取': 'extract',
     '生成合并字幕': 'Merge Subtitles',
     '给mkv添加章节': 'Add Chapters To MKV',
@@ -148,6 +150,8 @@ I18N_ZH_TO_EN = {
     '直接编辑原文件': 'Edit Original File Directly',
     '输出文件夹': 'Output Folder',
     '选择': 'Select',
+    '确定': 'OK',
+    '取消': 'Cancel',
     '保存': 'Save',
     '关闭': 'Close',
     '复制信息': 'Copy Info',
@@ -208,13 +212,11 @@ I18N_ZH_TO_EN = {
     '未选择原盘主mpls': 'Main MPLS is not selected',
     '未选择字幕文件': 'Subtitle file is not selected',
     '提示': 'Prompt',
-    '取消': 'Cancel',
     '（点击取消）': '(click to cancel)',
     '选择m2ts文件': 'Select M2TS File',
     '检测到多个 m2ts 文件，请选择要预览的文件：': 'Multiple M2TS files detected, choose one for preview:',
     '检测到多个字幕文件，请选择要预览的文件：': 'Multiple subtitle files detected, choose one for preview:',
     '选择vpy文件': 'Select VPy File',
-    '选择文件夹': 'Select Folder',
     '选择输出文件夹': 'Select Output Folder',
     'vpy路径为空': 'VPy path is empty',
     '启动 vsedit 失败': 'Failed to launch vsedit',
@@ -890,9 +892,217 @@ class MKV:
 
 
 class M2TS:
+    frame_size = 192
+    _TS_PACKET = 188
+    _SYNC = 0x47
+
     def __init__(self, filename: str):
         self.filename = filename
-        self.frame_size = 192
+
+    @staticmethod
+    def _pts_from_pes_header(p: bytes) -> int:
+        pts = ((p[0] >> 1) & 0x07) << 30
+        val = p[1] << 8 | p[2]
+        pts |= (val >> 1) << 15
+        val = p[3] << 8 | p[4]
+        pts |= val >> 1
+        return pts
+
+    @staticmethod
+    def _pes_payload_after_pointer(payload: bytes) -> bytes:
+        if not payload:
+            return b''
+        pf = payload[0]
+        after = payload[1 + pf:]
+        if after.startswith(b'\x00\x00\x01'):
+            return after
+        if payload.startswith(b'\x00\x00\x01'):
+            return payload
+        return after
+
+    @staticmethod
+    def _ts_payload(pkt: bytes) -> tuple[Optional[bytes], int, bool]:
+        if len(pkt) < M2TS._TS_PACKET or pkt[0] != M2TS._SYNC:
+            return None, -1, False
+        if pkt[1] & 0x80:
+            pass
+        pid = ((pkt[1] & 0x1F) << 8) | pkt[2]
+        pusi = (pkt[1] & 0x40) != 0
+        afc = (pkt[3] & 0x30) >> 4
+        off = 4
+        if afc & 2:
+            if off >= len(pkt):
+                return None, pid, pusi
+            adapt_len = pkt[4]
+            off = 5 + adapt_len
+            if off > len(pkt):
+                return None, pid, pusi
+        if (afc & 1) == 0:
+            return None, pid, pusi
+        return pkt[off:M2TS._TS_PACKET], pid, pusi
+
+    @staticmethod
+    def _file_size(stream: BinaryIO) -> int:
+        try:
+            pos = stream.tell()
+            stream.seek(0, os.SEEK_END)
+            n = stream.tell()
+            stream.seek(pos)
+            return int(n)
+        except OSError:
+            return 256 * 1024
+
+    @staticmethod
+    def _score_alignment(buf: bytes, phase: int, stride: int, sync_off: int) -> int:
+        c = 0
+        pos = phase + sync_off
+        while pos + M2TS._TS_PACKET <= len(buf):
+            if buf[pos] == M2TS._SYNC:
+                c += 1
+            pos += stride
+        return c
+
+    @staticmethod
+    def _best_phase_for_params(buf: bytes, stride: int, sync_off: int) -> tuple[int, int]:
+        best_p, best_s = 0, -1
+        for phase in range(stride):
+            s = M2TS._score_alignment(buf, phase, stride, sync_off)
+            if s > best_s:
+                best_s = s
+                best_p = phase
+        return best_p, best_s
+
+    @staticmethod
+    def _choose_transport_layout(stream: BinaryIO, m2ts: Optional[bool]) -> tuple[int, int, int]:
+        pos = stream.tell()
+        sample = stream.read(min(512 * 1024, max(M2TS._file_size(stream), 512 * 1024)))
+        stream.seek(pos)
+
+        if m2ts is not None:
+            stride, off = (M2TS.frame_size, 4) if m2ts else (M2TS._TS_PACKET, 0)
+            phase, _ = M2TS._best_phase_for_params(sample, stride, off)
+            return phase, stride, off
+
+        best: tuple[int, int, int, int] = (-1, 0, M2TS.frame_size, 4)
+        for stride, sync_off in ((M2TS.frame_size, 4), (M2TS._TS_PACKET, 0), (M2TS.frame_size, 0)):
+            phase, score = M2TS._best_phase_for_params(sample, stride, sync_off)
+            if score > best[0]:
+                best = (score, phase, stride, sync_off)
+        return best[1], best[2], best[3]
+
+    @staticmethod
+    def _scan_first_pts(
+        stream: BinaryIO,
+        *,
+        m2ts: Optional[bool] = None,
+        max_bytes: Optional[int] = None,
+        skip_pids: Optional[set[int]] = None,
+        debug: bool = False,
+    ) -> Optional[int]:
+        skip = skip_pids or set()
+        skip |= {0x0000, 0x1FFF}
+
+        start_phase, spacing, sync_off = M2TS._choose_transport_layout(stream, m2ts)
+        stream.seek(start_phase)
+        if debug:
+            print(
+                f'[M2TS.get_first_pts] seek={start_phase} stride={spacing} sync_off={sync_off}',
+                file=sys.stderr,
+            )
+
+        pending: dict[int, bytearray] = {}
+        total_read = 0
+        pending_max = 256 * 1024
+
+        while True:
+            block = stream.read(spacing)
+            if len(block) < spacing:
+                break
+            total_read += len(block)
+            if max_bytes is not None and total_read > max_bytes:
+                break
+            if sync_off + M2TS._TS_PACKET > len(block):
+                break
+            pkt = block[sync_off:sync_off + M2TS._TS_PACKET]
+            if pkt[0] != M2TS._SYNC:
+                continue
+
+            payload, pid, pusi = M2TS._ts_payload(pkt)
+            if payload is None or pid in skip:
+                continue
+
+            if pusi:
+                if not payload:
+                    pending.pop(pid, None)
+                    continue
+                pf = payload[0]
+                if not payload.startswith(b'\x00\x00\x01') and 1 + pf > len(payload):
+                    pending.pop(pid, None)
+                    continue
+                pending[pid] = bytearray(M2TS._pes_payload_after_pointer(payload))
+            else:
+                if pid not in pending:
+                    continue
+                pending[pid].extend(payload)
+                if len(pending[pid]) > pending_max:
+                    pending.pop(pid, None)
+                    continue
+
+            buf = pending.get(pid)
+            if not buf or len(buf) < 9:
+                continue
+
+            if buf[0:3] != b'\x00\x00\x01':
+                pending.pop(pid, None)
+                continue
+
+            flags_hi = buf[6]
+            if (flags_hi & 0xC0) != 0x80:
+                pending.pop(pid, None)
+                continue
+
+            flags_lo = buf[7]
+            pes_hdr_remain = buf[8]
+            need = 9 + pes_hdr_remain
+            if len(buf) < need:
+                continue
+
+            if (flags_lo & 0xC0) == 0:
+                pending.pop(pid, None)
+                continue
+
+            if len(buf) < 14:
+                continue
+
+            pts = M2TS._pts_from_pes_header(bytes(buf[9:14]))
+            pending.pop(pid, None)
+            if debug:
+                print(f'[M2TS.get_first_pts] first PTS from PID 0x{pid:04x} = {pts}', file=sys.stderr)
+            return pts
+
+        return None
+
+    def get_first_pts(
+        self,
+        *,
+        m2ts: Optional[bool] = None,
+        max_bytes: Optional[int] = None,
+        skip_pids: Optional[set[int]] = None,
+        debug: bool = False,
+    ) -> Optional[int]:
+        """First presentation timestamp (90 kHz units) from elementary streams, or None."""
+        with open(self.filename, 'rb') as f:
+            pts = M2TS._scan_first_pts(f, m2ts=m2ts, max_bytes=max_bytes, skip_pids=skip_pids, debug=debug)
+        if pts is not None:
+            return pts
+        if m2ts is not None:
+            return None
+        for forced in (True, False):
+            with open(self.filename, 'rb') as f:
+                pts = M2TS._scan_first_pts(f, m2ts=forced, max_bytes=max_bytes, skip_pids=skip_pids, debug=debug)
+            if pts is not None:
+                return pts
+        return None
 
     def get_duration(self) -> int:
         with open(self.filename, "rb") as self.m2ts_file:
@@ -956,7 +1166,7 @@ class M2TS:
 class BluraySubtitle:
     def __init__(self, bluray_path:str, sub_files: list[str] = None, checked: bool = True,
                  progress_dialog: Optional[object] = None,
-                 approx_episode_duration_seconds: float = 24 * 60,
+                 approx_episode_duration_seconds: float = DEFAULT_APPROX_EPISODE_DURATION_SECONDS,
                  movie_mode: bool = False):
         self.tmp_folders = []
         if sys.platform == 'win32':
@@ -993,11 +1203,12 @@ class BluraySubtitle:
         self.configuration = {}
         self._subtitle_cache: dict[str, Subtitle] = {}
         self.movie_mode = bool(movie_mode)
+        self._sp_index_by_bdmv: dict[int, int] = {}
         try:
             val = float(approx_episode_duration_seconds)
-            self.approx_episode_duration_seconds = val if val > 0 else 24 * 60
+            self.approx_episode_duration_seconds = val if val > 0 else DEFAULT_APPROX_EPISODE_DURATION_SECONDS
         except Exception:
-            self.approx_episode_duration_seconds = 24 * 60
+            self.approx_episode_duration_seconds = DEFAULT_APPROX_EPISODE_DURATION_SECONDS
 
     def _progress(self, value: Optional[int] = None, text: Optional[str] = None):
         if self.progress_dialog is None:
@@ -1216,7 +1427,11 @@ class BluraySubtitle:
                     break
             # 3) Fallback by system language preference.
             if not output_name:
-                sys_lang = (locale.getdefaultlocale()[0] or '').lower() if locale.getdefaultlocale() else ''
+                try:
+                    loc = locale.getlocale()
+                    sys_lang = (loc[0] or '').lower() if isinstance(loc, tuple) and loc else ''
+                except Exception:
+                    sys_lang = ''
                 prefer = ['zho', 'chi', 'zh'] if sys_lang.startswith('zh') else ['eng', 'en']
                 for lang in prefer:
                     f = xml_map.get(f'bdmt_{lang}.xml')
@@ -1244,6 +1459,13 @@ class BluraySubtitle:
         cache[selected_mpls_no_ext] = output_name
         return output_name
 
+    @staticmethod
+    def _configuration_default_chapter_segments_checked(
+        configuration: dict[int, dict[str, int | str]],
+    ) -> None:
+        for v in configuration.values():
+            v.setdefault('chapter_segments_fully_checked', True)
+
     def generate_configuration(self, table: QTableWidget,
                                sub_combo_index: Optional[dict[int, int]] = None,
                                subtitle_index: Optional[int] = None) -> dict[int, dict[str, int | str]]:
@@ -1251,7 +1473,8 @@ class BluraySubtitle:
         sub_index = 0
         bdmv_index = 0
         global CONFIGURATION
-        approx_end_time = float(getattr(self, 'approx_episode_duration_seconds', 24 * 60) or (24 * 60))
+        approx_end_time = float(getattr(self, 'approx_episode_duration_seconds', DEFAULT_APPROX_EPISODE_DURATION_SECONDS)
+                                or DEFAULT_APPROX_EPISODE_DURATION_SECONDS)
         if self.sub_files:
             # 在主线程中总是使用单进程模式，避免多进程问题
             missing = [p for p in self.sub_files if p and p not in self._subtitle_cache]
@@ -1318,6 +1541,7 @@ class BluraySubtitle:
                             j += 1
                     offset += (play_item_in_out_time[2] - play_item_in_out_time[1]) / 45000
                     left_time += (play_item_in_out_time[1] - play_item_in_out_time[2]) / 45000
+            self._configuration_default_chapter_segments_checked(configuration)
             CONFIGURATION = configuration
             return configuration
         for folder, chapter, selected_mpls in self.select_mpls_from_table(table):
@@ -1368,6 +1592,7 @@ class BluraySubtitle:
             sub_index += 1
             if sub_index == len(self.sub_files):
                 break
+        self._configuration_default_chapter_segments_checked(configuration)
         CONFIGURATION = configuration
         return configuration
 
@@ -1381,7 +1606,8 @@ class BluraySubtitle:
         configuration = {}
         sub_index = 0
         global CONFIGURATION
-        approx_end_time = float(getattr(self, 'approx_episode_duration_seconds', 24 * 60) or (24 * 60))
+        approx_end_time = float(getattr(self, 'approx_episode_duration_seconds', DEFAULT_APPROX_EPISODE_DURATION_SECONDS)
+                                or DEFAULT_APPROX_EPISODE_DURATION_SECONDS)
 
         if self.sub_files:
             # 在主线程中总是使用单进程模式，避免多进程问题
@@ -1454,6 +1680,7 @@ class BluraySubtitle:
                             j += 1
                     offset += (play_item_in_out_time[2] - play_item_in_out_time[1]) / 45000
                     left_time += (play_item_in_out_time[1] - play_item_in_out_time[2]) / 45000
+            self._configuration_default_chapter_segments_checked(configuration)
             CONFIGURATION = configuration
             return configuration
 
@@ -1507,6 +1734,7 @@ class BluraySubtitle:
             sub_index += 1
             if sub_index == len(self.sub_files):
                 break
+        self._configuration_default_chapter_segments_checked(configuration)
         CONFIGURATION = configuration
         return configuration
 
@@ -1552,9 +1780,131 @@ class BluraySubtitle:
             sub.dump(conf['folder'] + suffix, conf['selected_mpls'] + suffix)
         self._progress(1000)
 
-    def add_chapter_to_mkv(self, mkv_files, table: Optional[QTableWidget] = None,
-                           selected_mpls: Optional[list[tuple[str, str]]] = None,
-                           cancel_event: Optional[threading.Event] = None):
+    def _group_mkv_paths_by_bdmv(self, sorted_paths: list[str], bdmv_keys: list[int]) -> dict[int, list[str]]:
+        """Map episode MKV paths to configuration bdmv_index (from BD_Vol_XXX in filename)."""
+        if not sorted_paths:
+            return {k: [] for k in bdmv_keys}
+        if len(bdmv_keys) == 1:
+            return {bdmv_keys[0]: list(sorted_paths)}
+        out: dict[int, list[str]] = {k: [] for k in bdmv_keys}
+        for p in sorted_paths:
+            m = re.search(r'BD_Vol_(\d{3})', os.path.basename(p or ''), re.I)
+            if m:
+                try:
+                    v = int(m.group(1))
+                except Exception:
+                    continue
+                if v in out:
+                    out[v].append(p)
+        return out
+
+    def _write_remux_segment_chapter_txt(
+        self,
+        mpls_path: str,
+        start_chapter: int,
+        end_chapter: int,
+        out_path: str,
+    ) -> None:
+        """Write OGM chapter file for one episode remux segment.
+
+        Episode covers MPLS chapter marks with indices ``start_chapter`` .. ``end_chapter - 1``
+        (same half-open interval as split). For each original mark ``j`` in that range:
+        new index is ``j - start_chapter + 1`` (e.g. start 11 → new 01..06 for j=11..16),
+        timestamp is ``offset(j) - offset(start_chapter)`` (first chapter is always 0).
+        """
+        chapter = Chapter(mpls_path)
+        _, index_to_offset = get_index_to_m2ts_and_offset(chapter)
+        rows = sum(map(len, chapter.mark_info.values()))
+        total_end = rows + 1
+        s = max(1, min(int(start_chapter), total_end))
+        e = max(s + 1, min(int(end_chapter), total_end))
+        t0 = float(index_to_offset.get(s, 0.0))
+
+        lines: list[str] = []
+        for j in range(s, e):
+            if j > rows:
+                break
+            new_idx = j - s + 1
+            off = float(index_to_offset.get(j, 0.0))
+            rel = max(0.0, off - t0)
+            append_ogm_chapter_lines(lines, new_idx, rel)
+        out_dir = os.path.dirname(out_path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        with open(out_path, 'w', encoding='utf-8-sig') as f:
+            f.write('\n'.join(lines) + ('\n' if lines else ''))
+
+    def _ordered_episode_confs_by_bdmv(
+        self, configuration: dict[int, dict[str, int | str]]
+    ) -> dict[int, list[dict[str, int | str]]]:
+        by_bdmv: dict[int, list[dict[str, int | str]]] = {}
+        for _, conf in (configuration or {}).items():
+            bdmv_index = int(conf.get('bdmv_index') or 0)
+            by_bdmv.setdefault(bdmv_index, []).append(conf)
+        for bdmv_index, confs in by_bdmv.items():
+            try:
+                confs.sort(key=lambda c: int(c.get('chapter_index') or c.get('start_at_chapter') or 0))
+            except Exception:
+                pass
+            by_bdmv[bdmv_index] = confs
+        return by_bdmv
+
+    def _add_chapter_to_mkv_from_configuration(
+        self,
+        mkv_files: list[str],
+        configuration: dict[int, dict[str, int | str]],
+        cancel_event: Optional[threading.Event] = None,
+    ) -> None:
+        by_bdmv = self._ordered_episode_confs_by_bdmv(configuration)
+        bdmv_keys = sorted(by_bdmv.keys())
+        sorted_paths = sorted(mkv_files, key=self._mkv_sort_key)
+        grouped = self._group_mkv_paths_by_bdmv(sorted_paths, bdmv_keys)
+        total_mkv = sum(len(grouped.get(b, [])) for b in bdmv_keys)
+        done = 0
+        chapter_txt = os.path.join(os.getcwd(), 'chapter.txt')
+        for bdmv_index in bdmv_keys:
+            paths = grouped.get(bdmv_index, [])
+            confs = by_bdmv.get(bdmv_index, [])
+            n = min(len(paths), len(confs))
+            if len(paths) != len(confs):
+                print(f'add_chapter_to_mkv: BD Vol {bdmv_index} MKV 数 ({len(paths)}) 与配置集数 ({len(confs)}) 不一致，处理前 {n} 个')
+            rows_cache: dict[str, int] = {}
+            for i in range(n):
+                if cancel_event and cancel_event.is_set():
+                    raise _Cancelled()
+                conf = confs[i]
+                mkv_path = paths[i]
+                mpls_key = str(conf.get('selected_mpls') or '').strip()
+                if not mpls_key:
+                    continue
+                mpls_path = mpls_key if mpls_key.lower().endswith('.mpls') else mpls_key + '.mpls'
+                if mpls_key not in rows_cache:
+                    ch = Chapter(mpls_path)
+                    rows_cache[mpls_key] = sum(map(len, ch.mark_info.values()))
+                rows = rows_cache[mpls_key]
+                total_end = rows + 1
+                s = int(conf.get('start_at_chapter') or conf.get('chapter_index') or 1)
+                if conf.get('end_at_chapter'):
+                    e = int(conf.get('end_at_chapter') or total_end)
+                elif i + 1 < len(confs):
+                    e = int(confs[i + 1].get('start_at_chapter') or confs[i + 1].get('chapter_index') or total_end)
+                else:
+                    e = total_end
+                s = max(1, min(s, total_end))
+                e = max(s + 1, min(e, total_end))
+                self._write_remux_segment_chapter_txt(mpls_path, s, e, chapter_txt)
+                MKV(mkv_path).add_chapter(self.checked)
+                done += 1
+                self._progress(int(done / max(total_mkv, 1) * 1000))
+        self._progress(1000)
+
+    def _add_chapter_to_mkv_by_duration(
+        self,
+        mkv_files: list[str],
+        table: Optional[QTableWidget] = None,
+        selected_mpls: Optional[list[tuple[str, str]]] = None,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> None:
         mkv_index = 0
         def _vol_from_name(p: str) -> Optional[int]:
             m = re.search(r'BD_Vol_(\d{3})', os.path.basename(p or ''))
@@ -1628,17 +1978,7 @@ class BluraySubtitle:
                         chapter_text.clear()
 
                     chapter_id += 1
-                    chapter_id_str = ('0' if chapter_id < 10 else '') + str(chapter_id)
-                    hours = int(real_time // 3600)
-                    minutes = int((real_time % 3600) // 60)
-                    seconds = real_time % 60
-                    seconds_str = (('0' if seconds < 10 else '') + str(seconds))[:6]
-                    seconds_str += '00.000'[len(seconds_str) - 6:]
-                    real_time_str = (('0' if hours < 10 else '') + str(hours) + ':'
-                                     + ('0' if minutes < 10 else '') + str(minutes) + ':'
-                                     + seconds_str)
-                    chapter_text.append(f'CHAPTER{chapter_id_str}={real_time_str}')
-                    chapter_text.append(f'CHAPTER{chapter_id_str}NAME=Chapter {chapter_id_str}')
+                    append_ogm_chapter_lines(chapter_text, chapter_id, max(0.0, float(real_time)))
                 play_item_duration_time_sum += (out_time - in_time) / 45000
 
             with open(f'chapter.txt', 'w', encoding='utf-8-sig') as f:
@@ -1655,6 +1995,26 @@ class BluraySubtitle:
                 current_target_vol = _vol_from_name(mkv_files[mkv_index])
 
         self._progress(1000)
+
+    def add_chapter_to_mkv(
+        self,
+        mkv_files,
+        table: Optional[QTableWidget] = None,
+        selected_mpls: Optional[list[tuple[str, str]]] = None,
+        cancel_event: Optional[threading.Event] = None,
+        configuration: Optional[dict[int, dict[str, int | str]]] = None,
+    ):
+        """Apply chapters to each episode MKV from configuration (remux / encode).
+
+        For an episode with ``start_at_chapter=11`` and ``end_at_chapter=17``, writes six
+        entries ``Chapter 01``..``Chapter 06`` at times 0 and ``offset(j)-offset(11)`` for
+        MPLS marks ``j`` = 11..16 (new ordinal = ``j - 10`` in that example).
+        """
+        cfg = configuration if configuration is not None else self.configuration
+        if cfg:
+            self._add_chapter_to_mkv_from_configuration(mkv_files, cfg, cancel_event=cancel_event)
+        else:
+            self._add_chapter_to_mkv_by_duration(mkv_files, table, selected_mpls, cancel_event=cancel_event)
 
     def completion(self):  # 补全蓝光目录；删除临时文件
         if self.checked:
@@ -1772,6 +2132,20 @@ class BluraySubtitle:
             if not src_path or not sp_mkv_path:
                 continue
             config_key = BluraySubtitle._sp_track_key_from_entry(entry)
+            try:
+                tracks_cfg = getattr(self, 'track_selection_config', {}) or {}
+                if (isinstance(tracks_cfg, dict)
+                        and mpls_file
+                        and config_key not in tracks_cfg):
+                    main_key = f'main::{os.path.normpath(main_mpls_path)}'
+                    if main_key in tracks_cfg:
+                        mcfg = tracks_cfg.get(main_key) or {}
+                        tracks_cfg[config_key] = {
+                            'audio': list(mcfg.get('audio') or []),
+                            'subtitle': list(mcfg.get('subtitle') or []),
+                        }
+            except Exception:
+                pass
             pid_to_lang: dict[int, str] = {}
             if use_chapter_language:
                 try:
@@ -1847,14 +2221,47 @@ class BluraySubtitle:
                 continue
 
             chapter_txt = os.path.join(sps_folder, f'{os.path.splitext(os.path.basename(sp_mkv_path))[0]}.chapter.txt')
-            if use_chapter_language:
+            
+            # Check if this is a custom chapter segment (e.g. chapter_3_to_chapter_6, beginning_to_chapter_4, chapter_33_to_ending)
+            custom_chapter = False
+            custom_parts = ''
+            if re.search(r'(beginning|chapter_\d+)_to_(chapter_\d+|ending)', output_name, re.IGNORECASE):
+                custom_chapter = True
+                # Generate custom chapter file
+                self._write_custom_chapter_for_segment(main_mpls_path, chapter_txt, output_name)
                 try:
-                    offs = self._write_chapter_txt_from_mpls(src_path, chapter_txt)
-                    if not offs or len(offs) == 1 and offs[0] == 0.0:
-                        force_remove_file(chapter_txt)
+                    ch_tmp = Chapter(main_mpls_path)
+                    _i2m, i2o = get_index_to_m2ts_and_offset(ch_tmp)
+                    rows_tmp = sum(map(len, ch_tmp.mark_info.values()))
+                    total_end = rows_tmp + 1
+                    m = re.search(r'(beginning|chapter_(\d+))_to_(chapter_(\d+)|ending)', output_name, re.IGNORECASE)
+                    if m:
+                        start_idx = 1 if (m.group(1) or '').lower() == 'beginning' else int(m.group(2) or 1)
+                        end_idx = total_end if (m.group(3) or '').lower() == 'ending' else int(m.group(4) or total_end)
+                        start_idx = max(1, min(start_idx, total_end))
+                        end_idx = max(start_idx + 1, min(end_idx, total_end))
+                        st = get_time_str(float(i2o.get(start_idx, 0.0)))
+                        ed = get_time_str(float(ch_tmp.get_total_time() if end_idx >= total_end else i2o.get(end_idx, ch_tmp.get_total_time())))
+                        if st == '0':
+                            st = '00:00:00.000'
+                        if ed == '0':
+                            ed = '00:00:00.000'
+                        custom_parts = f'{st}-{ed}'
                 except Exception:
-                    traceback.print_exc()
+                    custom_parts = ''
+            
+            if use_chapter_language or custom_chapter:
+                if not custom_chapter:
+                    try:
+                        offs = self._write_chapter_txt_from_mpls(src_path, chapter_txt)
+                        if not offs or len(offs) == 1 and offs[0] == 0.0:
+                            force_remove_file(chapter_txt)
+                    except Exception:
+                        traceback.print_exc()
+                split_custom = (f'--split parts:{custom_parts} ' if custom_parts else '')
                 cmd = (f'"{MKV_MERGE_PATH}" {mkvtoolnix_ui_language_arg()} '
+                       f'{split_custom}'
+                       f'--chapters "{chapter_txt}" '
                        f'-o "{sp_mkv_path}" '
                        f'{("-a " + ",".join(copy_audio_track)) if copy_audio_track else ""} '
                        f'{("-s " + ",".join(copy_sub_track)) if copy_sub_track else ""} '
@@ -1864,11 +2271,55 @@ class BluraySubtitle:
                        f'{("-a " + ",".join(copy_audio_track)) if copy_audio_track else ""} '
                        f'{("-s " + ",".join(copy_sub_track)) if copy_sub_track else ""} '
                        f'"{src_path}"')
-            subprocess.Popen(cmd, shell=True).wait()
-            if not os.path.exists(sp_mkv_path):
+            ret_sp = subprocess.Popen(cmd, shell=True).wait()
+            sp_ok = os.path.isfile(sp_mkv_path)
+            if not sp_ok and (use_chapter_language or custom_chapter):
+                stem_out, ext_out = os.path.splitext(sp_mkv_path)
+                for suf in ('-001', '-01'):
+                    alt_out = f'{stem_out}{suf}{ext_out}'
+                    if os.path.isfile(alt_out):
+                        sp_ok = True
+                        break
+            mux_failed = (ret_sp != 0 or not sp_ok)
+            if mux_failed and str(src_path).lower().endswith('.mpls'):
+                n_fc = 0
+                try:
+                    n_fc = len(Chapter(src_path).in_out_time or [])
+                except Exception:
+                    n_fc = 0
+                # Full-playlist concat does not reproduce ``--split parts:custom_parts`` windows from main MPLS.
+                if n_fc > 1 and not (custom_chapter and str(custom_parts).strip()):
+                    cover_sp = ''
+                    try:
+                        meta_folder = os.path.join(src_path[:-19], 'META', 'DL')
+                        if os.path.isdir(meta_folder):
+                            c_sz = 0
+                            for fn in os.listdir(meta_folder):
+                                if fn.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.webp')):
+                                    fp = os.path.join(meta_folder, fn)
+                                    try:
+                                        sz = os.path.getsize(fp)
+                                        if sz > c_sz:
+                                            cover_sp, c_sz = fp, sz
+                                    except Exception:
+                                        pass
+                    except Exception:
+                        cover_sp = ''
+                    if self._try_remux_mpls_track_aligned_concat(
+                        os.path.normpath(src_path),
+                        os.path.normpath(sp_mkv_path),
+                        copy_audio_track,
+                        copy_sub_track,
+                        pid_to_lang,
+                        cover_sp,
+                        cancel_event=cancel_event,
+                    ):
+                        sp_ok = os.path.isfile(sp_mkv_path)
+                        mux_failed = not sp_ok
+            if mux_failed:
                 try:
                     force_remove_file(chapter_txt)
-                except:
+                except Exception:
                     pass
                 continue
             if use_chapter_language and sp_mkv_path.lower().endswith('.mkv') and os.path.exists(sp_mkv_path):
@@ -1914,20 +2365,52 @@ class BluraySubtitle:
             if off not in offs:
                 offs.append(off)
 
-        def fmt(t: float) -> str:
-            if t <= 0:
-                return '00:00:00.000'
-            s = get_time_str(t)
-            return '00:00:00.000' if s == '0' else s
-
         lines: list[str] = []
         for i, off in enumerate(offs, start=1):
-            lines.append(f'CHAPTER{i:02d}={fmt(off)}')
-            lines.append(f'CHAPTER{i:02d}NAME=Chapter {i:02d}')
+            append_ogm_chapter_lines(lines, i, off)
         os.makedirs(os.path.dirname(chapter_txt_path) or '.', exist_ok=True)
         with open(chapter_txt_path, 'w', encoding='utf-8-sig') as f:
             f.write('\n'.join(lines) + ('\n' if lines else ''))
         return offs
+
+    def _get_chapter_offsets(self, mpls_path: str) -> list[float]:
+        chapter = Chapter(mpls_path)
+        mark_info = chapter.mark_info
+        in_out_time = chapter.in_out_time
+        mpls_duration = chapter.get_total_time()
+
+        offsets = []
+        offset = 0
+        for ref_to_play_item_id, mark_timestamps in mark_info.items():
+            for mark_timestamp in mark_timestamps:
+                off = offset + (mark_timestamp - in_out_time[ref_to_play_item_id][1]) / 45000
+                if mpls_duration - off >= 0.001:
+                    offsets.append(off)
+            offset += (in_out_time[ref_to_play_item_id][2] - in_out_time[ref_to_play_item_id][1]) / 45000
+
+        offs = []
+        for off in offsets:
+            if off not in offs:
+                offs.append(off)
+        return offs
+
+    def _write_custom_chapter_for_segment(self, mpls_path: str, chapter_txt_path: str, output_name: str):
+        """Parse SP suffix like beginning_to_chapter_4, chapter_33_to_chapter_40, chapter_33_to_ending; same bounds as --split parts."""
+        m = re.search(r'(beginning|chapter_(\d+))_to_(chapter_(\d+)|ending)', output_name, re.IGNORECASE)
+        if not m:
+            return
+        chapter = Chapter(mpls_path)
+        rows = sum(map(len, chapter.mark_info.values()))
+        total_end = rows + 1
+        start_idx = 1 if (m.group(1) or '').lower() == 'beginning' else int(m.group(2) or 1)
+        g3 = (m.group(3) or '').lower()
+        if g3 == 'ending':
+            end_idx = total_end
+        else:
+            end_idx = int(m.group(4) or total_end)
+        start_idx = max(1, min(start_idx, total_end))
+        end_idx = max(start_idx + 1, min(end_idx, total_end))
+        self._write_remux_segment_chapter_txt(mpls_path, start_idx, end_idx, chapter_txt_path)
 
     def _mkv_sort_key(self, p: str):
         name = os.path.basename(p)
@@ -2049,6 +2532,42 @@ class BluraySubtitle:
             return streams if isinstance(streams, list) else []
         except Exception:
             return []
+
+    @staticmethod
+    def _ffprobe_stream_service_id(stream: dict) -> Optional[int]:
+        """MPEG-TS elementary stream id from ffprobe ``streams[]`` (field ``id``, e.g. ``0x1011``)."""
+        if not isinstance(stream, dict):
+            return None
+        raw = stream.get('id')
+        if raw is None:
+            return None
+        try:
+            if isinstance(raw, int):
+                return int(raw) & 0xFFFF
+            s = str(raw).strip()
+            if s.lower().startswith('0x'):
+                return int(s, 16)
+            return int(s, 0)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _ffprobe_stream_index_to_service_pid(m2ts_path: str) -> dict[int, int]:
+        """Map ffprobe / mkvmerge stream index (0,1,…) → TS PID from ``streams[].id``. m2ts has no reliable language tags."""
+        out: dict[int, int] = {}
+        for s in BluraySubtitle._ffprobe_streams(m2ts_path) or []:
+            if not isinstance(s, dict):
+                continue
+            if str(s.get('codec_type') or '') not in ('video', 'audio', 'subtitle', 'subtitles'):
+                continue
+            try:
+                idx = int(s.get('index'))
+            except Exception:
+                continue
+            pid = BluraySubtitle._ffprobe_stream_service_id(s)
+            if pid is not None:
+                out[idx] = pid
+        return out
 
     @staticmethod
     def _ffprobe_video_frame_count_static(media_path: str) -> int:
@@ -2369,6 +2888,7 @@ class BluraySubtitle:
                 return v
             return 'und'
 
+        idx_to_pid = BluraySubtitle._ffprobe_stream_index_to_service_pid(input_m2ts_path)
         input_info = BluraySubtitle._mkvmerge_identify_json(input_m2ts_path)
         in_tracks = input_info.get('tracks') or []
         if not isinstance(in_tracks, list):
@@ -2406,19 +2926,26 @@ class BluraySubtitle:
                 include = tid in sel_s
             if not include:
                 continue
-            props = t.get('properties') or {}
-            if not isinstance(props, dict):
-                props = {}
-            for k in ('stream_id', 'number'):
-                try:
-                    pid = int(props.get(k))
-                    break
-                except Exception:
-                    pid = None
-            if t_type in ('audio', 'subtitles') and pid is not None:
-                expected_by_type[t_type].append(_norm_lang(pid_to_lang.get(pid, 'und')))
-            else:
-                expected_by_type[t_type].append('und')
+            pid = idx_to_pid.get(tid)
+            if pid is None:
+                props = t.get('properties') or {}
+                if isinstance(props, dict):
+                    for k in ('stream_id', 'number'):
+                        v = props.get(k)
+                        if v is None:
+                            continue
+                        try:
+                            if isinstance(v, str) and v.strip().lower().startswith('0x'):
+                                pid = int(v.strip(), 16)
+                            else:
+                                pid = int(v)
+                            break
+                        except Exception:
+                            pid = None
+            lang = 'und'
+            if pid is not None:
+                lang = str(pid_to_lang.get(pid) or 'und')
+            expected_by_type[t_type].append(_norm_lang(lang))
 
         out_info = BluraySubtitle._mkvmerge_identify_json(output_mkv_path)
         out_tracks = out_info.get('tracks') or []
@@ -2492,6 +3019,815 @@ class BluraySubtitle:
                         print(f'[lang-fix] stdout:\n{p3.stdout}')
                     if (p3.stderr or '').strip():
                         print(f'[lang-fix] stderr:\n{p3.stderr}')
+            except Exception:
+                pass
+
+    @staticmethod
+    def _ordered_ffprobe_track_slots_for_remux(
+        m2ts_path: str,
+        copy_audio_track: list[str],
+        copy_sub_track: list[str],
+    ) -> list[dict[str, object]]:
+        """Reference order: first video, then selected audios / subs by ffprobe ``index``; PID from ``id`` hex."""
+        streams = [s for s in (BluraySubtitle._ffprobe_streams(m2ts_path) or []) if isinstance(s, dict)]
+        out: list[dict[str, object]] = []
+        for s in streams:
+            if str(s.get('codec_type') or '') != 'video':
+                continue
+            pid = BluraySubtitle._ffprobe_stream_service_id(s)
+            if pid is not None:
+                out.append({'type': 'video', 'pid': pid})
+            break
+        for aid in copy_audio_track or []:
+            try:
+                want_idx = int(str(aid).strip())
+            except Exception:
+                continue
+            for s in streams:
+                if str(s.get('codec_type') or '') != 'audio':
+                    continue
+                try:
+                    if int(s.get('index')) != want_idx:
+                        continue
+                except Exception:
+                    continue
+                pid = BluraySubtitle._ffprobe_stream_service_id(s)
+                if pid is not None:
+                    out.append({'type': 'audio', 'pid': pid})
+                break
+        for sid in copy_sub_track or []:
+            try:
+                want_idx = int(str(sid).strip())
+            except Exception:
+                continue
+            for s in streams:
+                if str(s.get('codec_type') or '') not in ('subtitle', 'subtitles'):
+                    continue
+                try:
+                    if int(s.get('index')) != want_idx:
+                        continue
+                except Exception:
+                    continue
+                pid = BluraySubtitle._ffprobe_stream_service_id(s)
+                if pid is not None:
+                    out.append({'type': 'subtitles', 'pid': pid})
+                break
+        return out
+
+    @staticmethod
+    def _mkvmerge_tid_for_ffprobe_pid(m2ts_path: str, pid: int, slot_type: str) -> Optional[int]:
+        """mkvmerge track id for this m2ts = ffprobe stream ``index`` of the stream with matching ``id`` (PID)."""
+        streams = [s for s in (BluraySubtitle._ffprobe_streams(m2ts_path) or []) if isinstance(s, dict)]
+        for s in streams:
+            ct = str(s.get('codec_type') or '')
+            if slot_type == 'video':
+                if ct != 'video':
+                    continue
+            elif slot_type == 'audio':
+                if ct != 'audio':
+                    continue
+            elif slot_type == 'subtitles':
+                if ct not in ('subtitle', 'subtitles'):
+                    continue
+            else:
+                continue
+            spid = BluraySubtitle._ffprobe_stream_service_id(s)
+            if spid != pid:
+                continue
+            try:
+                return int(s.get('index'))
+            except Exception:
+                return None
+        return None
+
+    @staticmethod
+    def _map_ffprobe_slots_to_mkvmerge_track_ids(
+        ref_slots: list[dict[str, object]],
+        m2ts_path: str,
+    ) -> Optional[list[int]]:
+        """Same slot order as ref_slots; each slot matched by ffprobe PID on ``m2ts_path``."""
+        mapped: list[int] = []
+        for slot in ref_slots:
+            typ = str(slot.get('type') or '')
+            try:
+                pid = int(slot.get('pid'))
+            except Exception:
+                return None
+            tid = BluraySubtitle._mkvmerge_tid_for_ffprobe_pid(m2ts_path, pid, typ)
+            if tid is None:
+                return None
+            mapped.append(tid)
+        return mapped
+
+    @staticmethod
+    def _track_lists_from_mkvmerge_cmd(cmd: str) -> tuple[Optional[list[str]], Optional[list[str]]]:
+        """
+        Best-effort parse of ``-a`` / ``-s`` track lists from a mkvmerge command line.
+        Returns (audio_ids, subtitle_ids); each entry is None if that flag was not found
+        (caller should keep defaults from ``_select_tracks_for_source``).
+        Returns (None, None) only when neither flag appears.
+        """
+        if not (cmd or '').strip():
+            return None, None
+
+        def _last_flag(flag: str) -> Optional[list[str]]:
+            line = re.sub(r'[\r\n]+', ' ', cmd)
+            matches = list(re.finditer(rf'(?:^|[\s]){re.escape(flag)}\s+(\S+)', line))
+            if not matches:
+                return None
+            tok = matches[-1].group(1).strip().strip('"').strip("'")
+            if not tok or tok in ('*', '!'):
+                return None
+            parts = [p.strip() for p in tok.split(',') if p.strip()]
+            return parts or None
+
+        a = _last_flag('-a')
+        s = _last_flag('-s')
+        if a is None and s is None:
+            return None, None
+        return a, s
+
+    @staticmethod
+    def _fallback_track_lists(
+        remux_cmd: str,
+        copy_audio_track: list[str],
+        copy_sub_track: list[str],
+    ) -> tuple[list[str], list[str]]:
+        pa, ps = BluraySubtitle._track_lists_from_mkvmerge_cmd(remux_cmd)
+        fa = list(pa) if pa is not None else list(copy_audio_track)
+        fs = list(ps) if ps is not None else list(copy_sub_track)
+        return fa, fs
+
+    @staticmethod
+    def _m2ts_clip_time_window_sec(m2ts_path: str, in_time: int, out_time: int) -> tuple[bool, float, float]:
+        """
+        (needs_split, start_sec, end_sec) for one playlist item.
+        start = (in_time*2 - first_pts)/90000
+        end   = start + (out_time-in_time)/45000
+        No split when start==0 and end ~= file duration.
+        """
+        clip_sec = max(0.0, (out_time - in_time) / 45000.0)
+        pts: Optional[int] = None
+        dur90: Optional[int] = None
+        try:
+            if m2ts_path and os.path.isfile(m2ts_path):
+                m2 = M2TS(m2ts_path)
+                pts = m2.get_first_pts(m2ts=True)
+                try:
+                    dur90 = int(m2.get_duration())
+                except Exception:
+                    dur90 = None
+        except Exception:
+            pts = None
+            dur90 = None
+        if pts is None:
+            return False, 0.0, clip_sec
+        start_sec = (in_time * 2 - pts) / 90000.0
+        end_sec = start_sec + clip_sec
+        file_dur_sec = (dur90 / 90000.0) if (dur90 is not None and dur90 > 0) else clip_sec
+        if abs(start_sec) < 1e-3 and abs(end_sec - file_dur_sec) < 1e-3:
+            return False, 0.0, file_dur_sec
+        s = max(0.0, start_sec)
+        e = max(0.0, end_sec)
+        if e <= s + 1e-3:
+            # Guard against producing --split parts:00:00:00.000-00:00:00.000
+            return False, 0.0, file_dur_sec
+        return True, s, e
+
+    @staticmethod
+    def _mkvmerge_track_order_arg(mapped_ids: list[int]) -> str:
+        return ','.join(f'0:{tid}' for tid in mapped_ids)
+
+    @staticmethod
+    def _mkvmerge_select_flags_from_mapped(mapped_ids: list[int], cur_identify: dict[str, object]) -> tuple[str, str, str]:
+        """Return (d_flags, a_flags, s_flags) for mkvmerge: enable only mapped ids per type."""
+        cur_tracks = [t for t in (cur_identify.get('tracks') or []) if isinstance(t, dict)]
+        v_ids = []
+        a_ids = []
+        s_ids = []
+        want = set(int(x) for x in mapped_ids)
+        for t in cur_tracks:
+            try:
+                tid = int(t.get('id'))
+            except Exception:
+                continue
+            if tid not in want:
+                continue
+            typ = str(t.get('type') or '')
+            if typ == 'video':
+                v_ids.append(tid)
+            elif typ == 'audio':
+                a_ids.append(tid)
+            elif typ == 'subtitles':
+                s_ids.append(tid)
+        d_f = ','.join(str(x) for x in v_ids) if v_ids else ''
+        a_f = ','.join(str(x) for x in a_ids) if a_ids else ''
+        s_f = ','.join(str(x) for x in s_ids) if s_ids else ''
+        return d_f, a_f, s_f
+
+    @staticmethod
+    def _series_episode_segments_bounds(chapter: Chapter, confs: list[dict[str, int | str]]) -> list[tuple[int, int]]:
+        """Same (start_chapter, end_chapter) pairs as the series branch of ``_make_main_mpls_remux_cmd``."""
+        if not confs:
+            return []
+        confs_sorted = sorted(confs, key=lambda c: int(c.get('chapter_index') or c.get('start_at_chapter') or 1))
+        rows = sum(map(len, chapter.mark_info.values()))
+        total_end = rows + 1
+        segments: list[tuple[int, int]] = []
+        for i, c in enumerate(confs_sorted):
+            s = int(c.get('start_at_chapter') or c.get('chapter_index') or 1)
+            if c.get('end_at_chapter'):
+                e = int(c.get('end_at_chapter') or total_end)
+            elif i + 1 < len(confs_sorted):
+                e = int(confs_sorted[i + 1].get('start_at_chapter') or confs_sorted[i + 1].get('chapter_index') or total_end)
+            else:
+                e = total_end
+            s = max(1, min(s, total_end))
+            e = max(s + 1, min(e, total_end))
+            segments.append((s, e))
+        return segments
+
+    @staticmethod
+    def _expected_mkvmerge_split_output_paths(output_norm: str, n_segments: int) -> list[str]:
+        """Paths ``stem-001.mkv`` … mkvmerge writes when ``-o stem.mkv`` and ``--split parts:``."""
+        if n_segments <= 1 or not output_norm:
+            return []
+        d = os.path.dirname(output_norm)
+        base = os.path.basename(output_norm)
+        stem, ext = os.path.splitext(base)
+        ex = ext if ext else '.mkv'
+        return [os.path.join(d, f'{stem}-{k + 1:03d}{ex}') for k in range(n_segments)]
+
+    @staticmethod
+    def _filter_ref_slots_common_across_playlist(
+        ref_slots: list[dict[str, object]],
+        stream_dir: str,
+        rows: list[tuple[str, int, int]],
+    ) -> Optional[list[dict[str, object]]]:
+        """
+        Keep only slots whose PID exists (same codec_type) in every m2ts of this playlist.
+        This implements "drop extra / keep common" to avoid aborting concat on missing optional tracks.
+        """
+        if not ref_slots:
+            return []
+        clip_pid_sets: list[dict[str, set[int]]] = []
+        for fname, _in_time, _out_time in rows:
+            m2ts_path = os.path.join(stream_dir, f'{fname}.m2ts')
+            if not os.path.isfile(m2ts_path):
+                return None
+            by_type: dict[str, set[int]] = {'video': set(), 'audio': set(), 'subtitles': set()}
+            for s in BluraySubtitle._ffprobe_streams(m2ts_path) or []:
+                if not isinstance(s, dict):
+                    continue
+                ct = str(s.get('codec_type') or '')
+                if ct == 'video':
+                    typ = 'video'
+                elif ct == 'audio':
+                    typ = 'audio'
+                elif ct in ('subtitle', 'subtitles'):
+                    typ = 'subtitles'
+                else:
+                    continue
+                pid = BluraySubtitle._ffprobe_stream_service_id(s)
+                if pid is not None:
+                    by_type[typ].add(pid)
+            clip_pid_sets.append(by_type)
+        kept: list[dict[str, object]] = []
+        dropped: list[tuple[str, int]] = []
+        for slot in ref_slots:
+            typ = str(slot.get('type') or '')
+            try:
+                pid = int(slot.get('pid'))
+            except Exception:
+                dropped.append((typ, -1))
+                continue
+            ok = True
+            for ps in clip_pid_sets:
+                if pid not in ps.get(typ, set()):
+                    ok = False
+                    break
+            if ok:
+                kept.append(slot)
+            else:
+                dropped.append((typ, pid))
+        if dropped:
+            msg = ', '.join(f'{t}:{("0x%X" % p) if p >= 0 else "?"}' for t, p in dropped)
+            print(f'[remux-fallback] drop non-common slots: {msg}')
+        has_video = any(str(x.get('type') or '') == 'video' for x in kept)
+        if not has_video:
+            return None
+        return kept
+
+    @staticmethod
+    def _ffprobe_audio_stream_by_pid(m2ts_path: str, pid: int) -> Optional[dict[str, object]]:
+        for s in BluraySubtitle._ffprobe_streams(m2ts_path) or []:
+            if not isinstance(s, dict):
+                continue
+            if str(s.get('codec_type') or '') != 'audio':
+                continue
+            spid = BluraySubtitle._ffprobe_stream_service_id(s)
+            if spid == pid:
+                return s
+        return None
+
+    @staticmethod
+    def _channel_layout_from_count(ch: int) -> str:
+        if ch <= 1:
+            return 'mono'
+        if ch == 2:
+            return 'stereo'
+        if ch == 6:
+            return '5.1'
+        if ch == 8:
+            return '7.1'
+        return 'stereo'
+
+    @staticmethod
+    def _build_slot_mux_plan_with_silence(
+        ref_slots: list[dict[str, object]],
+        m2ts_path: str,
+    ) -> Optional[list[dict[str, object]]]:
+        """
+        Resolve each reference slot to current m2ts track id.
+        Missing audio slots are marked with ``needs_silence=True``; video/subtitle must exist.
+        """
+        out: list[dict[str, object]] = []
+        for slot in ref_slots:
+            typ = str(slot.get('type') or '')
+            try:
+                pid = int(slot.get('pid'))
+            except Exception:
+                return None
+            tid = BluraySubtitle._mkvmerge_tid_for_ffprobe_pid(m2ts_path, pid, typ)
+            if tid is None:
+                if typ == 'audio':
+                    out.append({'type': typ, 'pid': pid, 'tid': None, 'needs_silence': True})
+                    continue
+                return None
+            out.append({'type': typ, 'pid': pid, 'tid': tid, 'needs_silence': False})
+        return out
+
+    @staticmethod
+    def _create_silence_track_for_audio_slot(
+        ref_audio_stream: dict[str, object],
+        duration_sec: float,
+        out_path: str,
+    ) -> bool:
+        if duration_sec <= 0.0:
+            return False
+        sr = 48000
+        ch = 2
+        bits = 16
+        try:
+            sr = int(float(ref_audio_stream.get('sample_rate') or 48000))
+        except Exception:
+            sr = 48000
+        try:
+            ch = int(ref_audio_stream.get('channels') or 2)
+        except Exception:
+            ch = 2
+        try:
+            bits = int(ref_audio_stream.get('bits_per_raw_sample') or 0)
+            if bits <= 0:
+                bits = 16
+        except Exception:
+            bits = 16
+        layout = BluraySubtitle._channel_layout_from_count(ch)
+        if bits >= 24:
+            acodec = 'pcm_s24be'
+        elif bits >= 20:
+            acodec = 'pcm_s24be'
+        else:
+            acodec = 'pcm_s16be'
+        ff = FFMPEG_PATH if FFMPEG_PATH else 'ffmpeg'
+        cmd = (
+            f'"{ff}" -y -f lavfi -i "anullsrc=r={sr}:cl={layout}" '
+            f'-t {max(0.001, duration_sec):.6f} -c:a {acodec} "{out_path}"'
+        )
+        try:
+            rc = subprocess.Popen(cmd, shell=True).wait()
+        except Exception:
+            return False
+        return rc == 0 and os.path.isfile(out_path)
+
+    def _try_remux_mpls_track_aligned_concat(
+        self,
+        mpls_path: str,
+        output_file: str,
+        copy_audio_track: list[str],
+        copy_sub_track: list[str],
+        pid_to_lang: dict[int, str],
+        cover: str,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> bool:
+        """
+        Fallback when direct ``mkvmerge … mpls`` fails (e.g. different track counts across m2ts).
+        Track identity uses ffprobe ``streams[].id`` (e.g. ``0x1011``) as PID; mkvmerge track id = ffprobe ``index``.
+        Per-clip m2ts mux with ``--split parts`` if needed, ``--track-order`` aligned to first m2ts, then
+        ``+`` concat with ``--append-mode track``. Languages: ``_fix_output_track_languages_with_mkvpropedit`` on caller.
+        """
+        try:
+            find_mkvtoolinx()
+        except Exception:
+            pass
+        exe = MKV_MERGE_PATH or shutil.which('mkvmerge') or 'mkvmerge'
+        chapter = Chapter(mpls_path)
+        chapter.get_pid_to_language()
+        playlist_dir = os.path.dirname(os.path.normpath(mpls_path))
+        stream_dir = os.path.normpath(os.path.join(playlist_dir, '..', 'STREAM'))
+        rows = list(chapter.in_out_time or [])
+        if len(rows) < 2:
+            return False
+        first_name, _it0, _ot0 = rows[0]
+        first_m2ts = os.path.join(stream_dir, f'{first_name}.m2ts')
+        if not os.path.isfile(first_m2ts):
+            print(f'[remux-fallback] missing first m2ts: {first_m2ts}')
+            return False
+        ref_slots = BluraySubtitle._ordered_ffprobe_track_slots_for_remux(
+            first_m2ts, copy_audio_track, copy_sub_track
+        )
+        if not ref_slots:
+            print('[remux-fallback] no reference track slots from ffprobe on first m2ts')
+            return False
+        ui = ''
+        try:
+            ui = (mkvtoolnix_ui_language_arg() or '').strip()
+        except Exception:
+            pass
+        out_dir = os.path.dirname(os.path.normpath(output_file)) or '.'
+        os.makedirs(out_dir, exist_ok=True)
+        part_dir = os.path.join(out_dir, f'_remux_align_{os.getpid()}_{int(time.time() * 1000) & 0xFFFFFF}')
+        os.makedirs(part_dir, exist_ok=True)
+        parts: list[str] = []
+        try:
+            for idx, (fname, in_time, out_time) in enumerate(rows):
+                if cancel_event and cancel_event.is_set():
+                    raise _Cancelled()
+                m2ts_path = os.path.join(stream_dir, f'{fname}.m2ts')
+                if not os.path.isfile(m2ts_path):
+                    print(f'[remux-fallback] missing m2ts: {m2ts_path}')
+                    return False
+                cur_ident = BluraySubtitle._mkvmerge_identify_json(m2ts_path)
+                slot_plan = BluraySubtitle._build_slot_mux_plan_with_silence(ref_slots, m2ts_path)
+                if slot_plan is None:
+                    print(f'[remux-fallback] could not map ffprobe PIDs to mkvmerge ids for {m2ts_path}')
+                    return False
+                mapped = [int(x.get('tid')) for x in slot_plan if not bool(x.get('needs_silence'))]
+                d_f, a_f, s_f = BluraySubtitle._mkvmerge_select_flags_from_mapped(mapped, cur_ident)
+                part_out = os.path.join(part_dir, f'part_{idx:03d}.mkv')
+                needs_split, t0, t1 = BluraySubtitle._m2ts_clip_time_window_sec(m2ts_path, in_time, out_time)
+                split_arg = ''
+                clip_duration_sec = max(0.0, (out_time - in_time) / 45000.0)
+                if needs_split:
+                    st = get_time_str(t0)
+                    ed = get_time_str(t1)
+                    if st == '0':
+                        st = '00:00:00.000'
+                    if ed == '0':
+                        ed = '00:00:00.000'
+                    split_arg = f'--split parts:{st}-{ed}'
+                    clip_duration_sec = max(0.0, float(t1) - float(t0))
+                inputs: list[str] = [f'"{m2ts_path}"']
+                track_order_parts: list[str] = []
+                silent_idx = 0
+                for slot in slot_plan:
+                    if bool(slot.get('needs_silence')):
+                        pid = int(slot.get('pid'))
+                        ref_stream = BluraySubtitle._ffprobe_audio_stream_by_pid(first_m2ts, pid)
+                        if not isinstance(ref_stream, dict):
+                            print(f'[remux-fallback] missing reference audio stream for pid=0x{pid:X}')
+                            return False
+                        silent_path = os.path.join(part_dir, f'part_{idx:03d}_sil_{pid:04x}.mka')
+                        if not BluraySubtitle._create_silence_track_for_audio_slot(ref_stream, clip_duration_sec, silent_path):
+                            print(f'[remux-fallback] failed creating silence track for pid=0x{pid:X}')
+                            return False
+                        silent_idx += 1
+                        inputs.append(f'"{silent_path}"')
+                        track_order_parts.append(f'{silent_idx}:0')
+                    else:
+                        track_order_parts.append(f'0:{int(slot.get("tid"))}')
+                to_arg = ','.join(track_order_parts)
+                bits: list[str] = [f'"{exe}"']
+                if ui:
+                    bits.append(ui)
+                if split_arg:
+                    bits.append(split_arg)
+                bits += [f'--track-order {to_arg}', '-o', f'"{part_out}"']
+                if d_f:
+                    bits += ['-d', d_f]
+                if a_f:
+                    bits += ['-a', a_f]
+                if s_f:
+                    bits += ['-s', s_f]
+                bits += inputs
+                cmd = ' '.join(bits)
+                print(f'[remux-fallback] {cmd}')
+                rc = self._run_single_command(cmd)
+                if rc != 0:
+                    print(f'[remux-fallback] part mux failed rc={rc} idx={idx}')
+                    return False
+                actual_part = part_out
+                if not os.path.isfile(actual_part):
+                    prefix = f'part_{idx:03d}'
+                    try:
+                        cands = sorted(
+                            os.path.join(part_dir, fn)
+                            for fn in os.listdir(part_dir)
+                            if fn.startswith(prefix) and fn.lower().endswith('.mkv')
+                        )
+                    except Exception:
+                        cands = []
+                    if not cands:
+                        print(f'[remux-fallback] missing part output after mux: {part_out}')
+                        return False
+                    actual_part = cands[0]
+                parts.append(actual_part)
+            if not parts:
+                return False
+            if cancel_event and cancel_event.is_set():
+                raise _Cancelled()
+            cover_arg = ''
+            if cover and os.path.isfile(cover):
+                cover_arg = f'--attachment-name Cover.jpg --attach-file "{cover}"'
+            concat_bits: list[str] = [f'"{exe}"']
+            if ui:
+                concat_bits.append(ui)
+            concat_bits += ['--append-mode', 'track', '-o', f'"{output_file}"', f'"{parts[0]}"']
+            for p in parts[1:]:
+                concat_bits.append('+')
+                concat_bits.append(f'"{p}"')
+            if cover_arg:
+                concat_bits.append(cover_arg)
+            ccmd = ' '.join(concat_bits)
+            while '  ' in ccmd:
+                ccmd = ccmd.replace('  ', ' ')
+            print(f'[remux-fallback] concat: {ccmd}')
+            rc2 = self._run_single_command(ccmd)
+            if rc2 != 0:
+                print(f'[remux-fallback] concat failed rc={rc2}')
+                return False
+            return os.path.isfile(output_file)
+        except _Cancelled:
+            raise
+        except Exception:
+            traceback.print_exc()
+            return False
+        finally:
+            try:
+                shutil.rmtree(part_dir, ignore_errors=True)
+            except Exception:
+                pass
+
+    def _try_remux_mpls_split_outputs_track_aligned(
+        self,
+        mpls_path: str,
+        output_file: str,
+        confs: list[dict[str, int | str]],
+        copy_audio_track: list[str],
+        copy_sub_track: list[str],
+        pid_to_lang: dict[int, str],
+        cover: str,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> bool:
+        """
+        Fallback when ``mkvmerge mpls`` with ``--split parts`` fails but multiple episode MKVs are required.
+        For each episode window on the MPLS timeline, mux overlapping m2ts slices with ffprobe PID-aligned
+        ``--track-order``, then ``+`` concat slices; writes ``basename-001.mkv``, ``-002.mkv``, … like mkvmerge.
+        """
+        del pid_to_lang  # languages fixed by caller via ``_fix_output_track_languages_with_mkvpropedit``
+        out_norm = os.path.normpath(output_file) if output_file else ''
+        if not out_norm or getattr(self, 'movie_mode', False):
+            print('[remux-fallback-split] skip: empty output path or movie_mode')
+            return False
+        try:
+            find_mkvtoolinx()
+        except Exception:
+            pass
+        exe = MKV_MERGE_PATH or shutil.which('mkvmerge') or 'mkvmerge'
+        chapter = Chapter(mpls_path)
+        chapter.get_pid_to_language()
+        segments = BluraySubtitle._series_episode_segments_bounds(chapter, confs)
+        expected = BluraySubtitle._expected_mkvmerge_split_output_paths(out_norm, len(segments))
+        if len(segments) <= 1 or len(expected) != len(segments):
+            print(
+                f'[remux-fallback-split] skip: need 2+ episode segments; '
+                f'segments={len(segments)} expected_files={len(expected)}'
+            )
+            return False
+        playlist_dir = os.path.dirname(os.path.normpath(mpls_path))
+        stream_dir = os.path.normpath(os.path.join(playlist_dir, '..', 'STREAM'))
+        play_rows = list(chapter.in_out_time or [])
+        if len(play_rows) < 2:
+            print(f'[remux-fallback-split] skip: playlist has only {len(play_rows)} clip(s)')
+            return False
+        first_name, _it0, _ot0 = play_rows[0]
+        first_m2ts = os.path.join(stream_dir, f'{first_name}.m2ts')
+        if not os.path.isfile(first_m2ts):
+            print(f'[remux-fallback-split] missing first m2ts: {first_m2ts}')
+            return False
+        ref_slots = BluraySubtitle._ordered_ffprobe_track_slots_for_remux(
+            first_m2ts, copy_audio_track, copy_sub_track
+        )
+        if not ref_slots:
+            print('[remux-fallback-split] no reference track slots from ffprobe on first m2ts')
+            return False
+        ui = ''
+        try:
+            ui = (mkvtoolnix_ui_language_arg() or '').strip()
+        except Exception:
+            pass
+        out_dir = os.path.dirname(out_norm) or '.'
+        os.makedirs(out_dir, exist_ok=True)
+        part_dir = os.path.join(out_dir, f'_remux_split_align_{os.getpid()}_{int(time.time() * 1000) & 0xFFFFFF}')
+        os.makedirs(part_dir, exist_ok=True)
+        rows = sum(map(len, chapter.mark_info.values()))
+        total_end = rows + 1
+        _, index_to_offset = get_index_to_m2ts_and_offset(chapter)
+
+        def _off(idx: int) -> float:
+            if idx >= total_end:
+                return chapter.get_total_time()
+            return float(index_to_offset.get(idx, 0.0))
+
+        eps = 1e-5
+        try:
+            print(
+                f'[remux-fallback-split] start: {len(segments)} episodes -> '
+                f'{", ".join(os.path.basename(p) for p in expected)}'
+            )
+            try:
+                self._progress(text=f'多集分片回退：{len(segments)} 个 MKV…')
+            except Exception:
+                pass
+            for seg_idx, ((cs, ce), dest_path) in enumerate(zip(segments, expected)):
+                if cancel_event and cancel_event.is_set():
+                    raise _Cancelled()
+                w0 = float(_off(cs))
+                w1 = float(_off(ce))
+                pieces: list[str] = []
+                acc = 0.0
+                for clip_idx, (fname, in_time, out_time) in enumerate(play_rows):
+                    if cancel_event and cancel_event.is_set():
+                        raise _Cancelled()
+                    clip_acc = acc
+                    dur = max(0.0, (out_time - in_time) / 45000.0)
+                    seg_lo = max(w0, clip_acc)
+                    seg_hi = min(w1, clip_acc + dur)
+                    acc = clip_acc + dur
+                    if dur <= eps or seg_lo + eps >= seg_hi:
+                        continue
+                    m2ts_path = os.path.join(stream_dir, f'{fname}.m2ts')
+                    if not os.path.isfile(m2ts_path):
+                        print(f'[remux-fallback-split] missing m2ts: {m2ts_path}')
+                        return False
+                    need, a, b = BluraySubtitle._m2ts_clip_time_window_sec(m2ts_path, in_time, out_time)
+                    full_lo = 0.0 if not need else float(a)
+                    full_hi = float(b)
+                    span = max(0.0, full_hi - full_lo)
+                    if span <= eps:
+                        continue
+                    p0 = (seg_lo - clip_acc) / dur
+                    p1 = (seg_hi - clip_acc) / dur
+                    p0 = min(1.0, max(0.0, p0))
+                    p1 = min(1.0, max(0.0, p1))
+                    if p1 <= p0 + eps / max(dur, eps):
+                        continue
+                    slice_start = full_lo + p0 * span
+                    slice_end = full_lo + p1 * span
+                    if slice_end <= slice_start + eps:
+                        continue
+                    is_full_window = (slice_start <= full_lo + eps) and (slice_end >= full_hi - eps)
+                    split_arg = ''
+                    if is_full_window and not need:
+                        split_arg = ''
+                    elif is_full_window and need:
+                        st = get_time_str(a)
+                        ed = get_time_str(b)
+                        if st == '0':
+                            st = '00:00:00.000'
+                        if ed == '0':
+                            ed = '00:00:00.000'
+                        split_arg = f'--split parts:{st}-{ed}'
+                    else:
+                        st = get_time_str(slice_start)
+                        ed = get_time_str(slice_end)
+                        if st == '0':
+                            st = '00:00:00.000'
+                        if ed == '0':
+                            ed = '00:00:00.000'
+                        split_arg = f'--split parts:{st}-{ed}'
+                    cur_ident = BluraySubtitle._mkvmerge_identify_json(m2ts_path)
+                    slot_plan = BluraySubtitle._build_slot_mux_plan_with_silence(ref_slots, m2ts_path)
+                    if slot_plan is None:
+                        print(f'[remux-fallback-split] could not map ffprobe PIDs for {m2ts_path}')
+                        return False
+                    mapped = [int(x.get('tid')) for x in slot_plan if not bool(x.get('needs_silence'))]
+                    d_f, a_f, s_f = BluraySubtitle._mkvmerge_select_flags_from_mapped(mapped, cur_ident)
+                    clip_duration_sec = max(0.0, slice_end - slice_start)
+                    inputs: list[str] = [f'"{m2ts_path}"']
+                    track_order_parts: list[str] = []
+                    silent_idx = 0
+                    for slot in slot_plan:
+                        if bool(slot.get('needs_silence')):
+                            pid = int(slot.get('pid'))
+                            ref_stream = BluraySubtitle._ffprobe_audio_stream_by_pid(first_m2ts, pid)
+                            if not isinstance(ref_stream, dict):
+                                print(f'[remux-fallback-split] missing reference audio stream for pid=0x{pid:X}')
+                                return False
+                            silent_path = os.path.join(part_dir, f'ep{seg_idx:03d}_c{clip_idx:03d}_sil_{pid:04x}.mka')
+                            if not BluraySubtitle._create_silence_track_for_audio_slot(ref_stream, clip_duration_sec, silent_path):
+                                print(f'[remux-fallback-split] failed creating silence for pid=0x{pid:X}')
+                                return False
+                            silent_idx += 1
+                            inputs.append(f'"{silent_path}"')
+                            track_order_parts.append(f'{silent_idx}:0')
+                        else:
+                            track_order_parts.append(f'0:{int(slot.get("tid"))}')
+                    to_arg = ','.join(track_order_parts)
+                    part_out = os.path.join(part_dir, f'ep{seg_idx:03d}_c{clip_idx:03d}.mkv')
+                    bits: list[str] = [f'"{exe}"']
+                    if ui:
+                        bits.append(ui)
+                    if split_arg:
+                        bits.append(split_arg)
+                    bits += [f'--track-order {to_arg}', '-o', f'"{part_out}"']
+                    if d_f:
+                        bits += ['-d', d_f]
+                    if a_f:
+                        bits += ['-a', a_f]
+                    if s_f:
+                        bits += ['-s', s_f]
+                    bits += inputs
+                    cmd = ' '.join(bits)
+                    print(f'[remux-fallback-split] {cmd}')
+                    rc = self._run_single_command(cmd)
+                    if rc != 0:
+                        print(f'[remux-fallback-split] part mux failed rc={rc} seg={seg_idx} clip={clip_idx}')
+                        return False
+                    actual_part = part_out
+                    if not os.path.isfile(actual_part):
+                        prefix = f'ep{seg_idx:03d}_c{clip_idx:03d}'
+                        try:
+                            cands = sorted(
+                                os.path.join(part_dir, fn)
+                                for fn in os.listdir(part_dir)
+                                if fn.startswith(prefix) and fn.lower().endswith('.mkv')
+                            )
+                        except Exception:
+                            cands = []
+                        if not cands:
+                            print(f'[remux-fallback-split] missing part after mux: {part_out}')
+                            return False
+                        actual_part = cands[0]
+                    pieces.append(actual_part)
+                if not pieces:
+                    print(
+                        f'[remux-fallback-split] no m2ts pieces for segment {seg_idx} '
+                        f'(time window {w0:.3f}s .. {w1:.3f}s)'
+                    )
+                    return False
+                if cancel_event and cancel_event.is_set():
+                    raise _Cancelled()
+                cover_arg = ''
+                if cover and os.path.isfile(cover):
+                    cover_arg = f'--attachment-name Cover.jpg --attach-file "{cover}"'
+                if len(pieces) == 1:
+                    concat_bits = [f'"{exe}"']
+                    if ui:
+                        concat_bits.append(ui)
+                    concat_bits += ['-o', f'"{dest_path}"', f'"{pieces[0]}"']
+                    if cover_arg:
+                        concat_bits.append(cover_arg)
+                else:
+                    concat_bits = [f'"{exe}"']
+                    if ui:
+                        concat_bits.append(ui)
+                    concat_bits += ['--append-mode', 'track', '-o', f'"{dest_path}"', f'"{pieces[0]}"']
+                    for p in pieces[1:]:
+                        concat_bits.append('+')
+                        concat_bits.append(f'"{p}"')
+                    if cover_arg:
+                        concat_bits.append(cover_arg)
+                ccmd = ' '.join(concat_bits)
+                while '  ' in ccmd:
+                    ccmd = ccmd.replace('  ', ' ')
+                print(f'[remux-fallback-split] segment {seg_idx + 1}: {ccmd}')
+                rc2 = self._run_single_command(ccmd)
+                if rc2 != 0:
+                    print(f'[remux-fallback-split] segment concat failed rc={rc2} seg={seg_idx}')
+                    return False
+                if not os.path.isfile(dest_path):
+                    print(f'[remux-fallback-split] missing output: {dest_path}')
+                    return False
+            return all(os.path.isfile(p) for p in expected)
+        except _Cancelled:
+            raise
+        except Exception:
+            traceback.print_exc()
+            return False
+        finally:
+            try:
+                shutil.rmtree(part_dir, ignore_errors=True)
             except Exception:
                 pass
 
@@ -2676,23 +4012,98 @@ class BluraySubtitle:
         for idx, bdmv_index in enumerate(bdmv_index_list, start=1):
             if cancel_event and cancel_event.is_set():
                 raise _Cancelled()
-            confs = bdmv_index_conf[bdmv_index]
+            confs = list(bdmv_index_conf[bdmv_index])
             try:
-                confs = sorted(confs, key=lambda c: int(c.get('chapter_index') or 0))
+                confs = sorted(
+                    confs,
+                    key=lambda c: int(c.get('chapter_index') or c.get('start_at_chapter') or 1),
+                )
             except Exception:
                 pass
             remux_cmd, m2ts_file, bdmv_vol, output_file, mpls_path, pid_to_lang, copy_audio_track, copy_sub_track = self._make_main_mpls_remux_cmd(
                 confs=confs,
                 dst_folder=dst_folder,
                 bdmv_index=bdmv_index,
-                disc_count=len(bdmv_index_conf)
+                disc_count=len(bdmv_index_conf),
+                ensure_disc_out_dir=True,
             )
             if m2ts_file:
                 print(f'正在分析mpls的第一个文件 ｢{m2ts_file}｣ 的轨道')
                 self._progress(text=f'分析轨道：{os.path.basename(m2ts_file)}')
             print(f'混流命令: {remux_cmd}')
             self._progress(text=f'混流中：BD_Vol_{bdmv_vol}')
-            self._run_shell_command(remux_cmd)
+            ret = self._run_shell_command(remux_cmd)
+            try:
+                ch_tmp = Chapter(mpls_path)
+                n_clips = len(ch_tmp.in_out_time or [])
+            except Exception:
+                n_clips = 0
+            cover = ''
+            if n_clips > 1:
+                try:
+                    meta_folder = os.path.join(mpls_path[:-19], 'META', 'DL')
+                    cover_size = 0
+                    if os.path.exists(meta_folder):
+                        for filename in os.listdir(meta_folder):
+                            if filename.endswith(('.jpg', '.JPG', '.JPEG', '.jpeg', '.png', '.PNG')):
+                                fp = os.path.join(meta_folder, filename)
+                                sz = os.path.getsize(fp)
+                                if sz > cover_size:
+                                    cover = fp
+                                    cover_size = sz
+                except Exception:
+                    cover = ''
+            out_n = os.path.normpath(output_file) if output_file else ''
+            out_exists = bool(out_n and os.path.isfile(out_n))
+            expected_split_paths: list[str] = []
+            if (not getattr(self, 'movie_mode', False)) and out_n and confs:
+                try:
+                    ch_seg = Chapter(mpls_path)
+                    segs_b = BluraySubtitle._series_episode_segments_bounds(ch_seg, confs)
+                    expected_split_paths = BluraySubtitle._expected_mkvmerge_split_output_paths(out_n, len(segs_b))
+                except Exception:
+                    expected_split_paths = []
+            split_by_config = len(expected_split_paths) > 1
+            stem_base, ext_base = os.path.splitext(os.path.basename(out_n)) if out_n else ('', '.mkv')
+            alt001 = os.path.join(os.path.dirname(out_n), f'{stem_base}-001{ext_base or ".mkv"}') if out_n else ''
+            if split_by_config:
+                primary_ok = (ret == 0) and all(os.path.isfile(p) for p in expected_split_paths)
+            elif out_n and expected_split_paths:
+                primary_ok = (ret == 0) and (out_exists or (bool(alt001) and os.path.isfile(alt001)))
+            else:
+                primary_ok = (ret == 0) and out_exists
+            fb_audio, fb_sub = BluraySubtitle._fallback_track_lists(remux_cmd, copy_audio_track, copy_sub_track)
+            if n_clips > 1 and not primary_ok:
+                if split_by_config:
+                    self._progress(text=f'混流回退（多集分片对齐）：BD_Vol_{bdmv_vol}')
+                    split_ok = self._try_remux_mpls_split_outputs_track_aligned(
+                        mpls_path,
+                        out_n,
+                        confs,
+                        fb_audio,
+                        fb_sub,
+                        pid_to_lang,
+                        cover,
+                        cancel_event=cancel_event,
+                    )
+                    if split_ok:
+                        ret = 0
+                        primary_ok = all(os.path.isfile(p) for p in expected_split_paths)
+                    else:
+                        print(f'[remux-fallback-split] failed for BD_Vol_{bdmv_vol} (see logs above)')
+                        self._progress(text=f'多集分片回退失败：BD_Vol_{bdmv_vol}（见终端 [remux-fallback-split]）')
+                if n_clips > 1 and not primary_ok and (not split_by_config):
+                    self._progress(text=f'混流回退（多 m2ts 对齐）：BD_Vol_{bdmv_vol}')
+                    if self._try_remux_mpls_track_aligned_concat(
+                        mpls_path,
+                        out_n,
+                        fb_audio,
+                        fb_sub,
+                        pid_to_lang,
+                        cover,
+                        cancel_event=cancel_event,
+                    ):
+                        ret = 0
             try:
                 targets: list[str] = []
                 out = os.path.normpath(output_file) if output_file else ''
@@ -2721,8 +4132,21 @@ class BluraySubtitle:
                 pass
             self._progress(int(idx / max(len(bdmv_index_list), 1) * 300))
 
-    @staticmethod
-    def _run_shell_command(cmd: str) -> int:
+    def _run_shell_command(self, cmd: str) -> int:
+        # Split multi-line commands and execute them sequentially
+        commands = [line.strip() for line in cmd.split('\n') if line.strip()]
+        if len(commands) <= 1:
+            # Single command, execute as before
+            return self._run_single_command(cmd)
+        else:
+            # Multiple commands, execute sequentially
+            for single_cmd in commands:
+                ret = self._run_single_command(single_cmd)
+                if ret != 0:
+                    return ret
+            return 0
+
+    def _run_single_command(self, cmd: str) -> int:
         if sys.platform == 'win32':
             return subprocess.Popen(cmd, shell=True).wait()
         def _fix_rm_glob(raw: str) -> str:
@@ -2756,6 +4180,8 @@ class BluraySubtitle:
         dst_folder: str,
         bdmv_index: int,
         disc_count: int,
+        *,
+        ensure_disc_out_dir: bool = False,
     ) -> tuple[str, str, str, str, str, dict[int, str], list[str], list[str]]:
         mpls_path = confs[0]['selected_mpls'] + '.mpls'
         disc_name = ''
@@ -2773,7 +4199,7 @@ class BluraySubtitle:
                     disc_out_dir = os.path.join(dst_folder, disc_name)
             except Exception:
                 disc_out_dir = os.path.join(dst_folder, disc_name)
-        if disc_out_dir:
+        if disc_out_dir and ensure_disc_out_dir:
             try:
                 os.makedirs(disc_out_dir, exist_ok=True)
             except Exception:
@@ -2839,12 +4265,38 @@ class BluraySubtitle:
             else:
                 remux_cmd = default_cmd
         else:
-            chapter_split = ','.join(map(str, [conf['chapter_index'] for conf in confs]))
+            confs_sorted = sorted(confs, key=lambda c: int(c.get('chapter_index') or c.get('start_at_chapter') or 1))
+            rows = sum(map(len, chapter.mark_info.values()))
+            total_end = rows + 1
+            segments = BluraySubtitle._series_episode_segments_bounds(chapter, confs)
+            chapter_starts = [int(c.get('start_at_chapter') or c.get('chapter_index') or 1) for c in confs_sorted]
+            chapter_after_first = [s for s in chapter_starts[1:] if 1 < s <= rows]
+            chapter_split = ','.join(map(str, chapter_after_first))
+            use_split_parts = not bool(confs[0].get('chapter_segments_fully_checked', True)) if confs else False
+            index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(chapter)
+            def _off(idx: int) -> float:
+                if idx >= total_end:
+                    return chapter.get_total_time()
+                return float(index_to_offset.get(idx, 0.0))
+            parts_list: list[str] = []
+            for s, e in segments:
+                st = get_time_str(_off(s))
+                ed = get_time_str(_off(e))
+                if st == '0':
+                    st = '00:00:00.000'
+                if ed == '0':
+                    ed = '00:00:00.000'
+                parts_list.append(f'{st}-{ed}')
+            parts_split = ','.join(parts_list)
             output_file = f'{os.path.join(disc_out_dir or dst_folder, output_name)}_BD_Vol_{bdmv_vol}.mkv'
             default_audio_opts = (f'-a {",".join(copy_audio_track)}' if copy_audio_track else '')
             default_sub_opts = (f'-s {",".join(copy_sub_track)}' if copy_sub_track else '')
             default_cover_opts = (f'--attachment-name Cover.jpg --attach-file "{cover}"' if cover else '')
-            default_cmd = (f'"{MKV_MERGE_PATH}" {mkvtoolnix_ui_language_arg()} --split chapters:{chapter_split} -o "{output_file}" '
+            if use_split_parts:
+                split_arg = (f'--split parts:{parts_split}' if parts_split else '')
+            else:
+                split_arg = (f'--split chapters:{chapter_split}' if chapter_split else '')
+            default_cmd = (f'"{MKV_MERGE_PATH}" {mkvtoolnix_ui_language_arg()} {split_arg} -o "{output_file}" '
                            f'{default_audio_opts} {default_sub_opts} {default_cover_opts} "{mpls_path}"').strip()
             custom_cmd = str(confs[0].get('main_remux_cmd') or '').strip()
             if custom_cmd:
@@ -2854,7 +4306,8 @@ class BluraySubtitle:
                              .replace('{audio_opts}', default_audio_opts)
                              .replace('{sub_opts}', default_sub_opts)
                              .replace('{cover_opts}', default_cover_opts)
-                             .replace('{chapter_split}', chapter_split))
+                             .replace('{chapter_split}', chapter_split)
+                             .replace('{parts_split}', parts_split))
             else:
                 remux_cmd = default_cmd
         return remux_cmd, m2ts_file, bdmv_vol, output_file, mpls_path, chapter.pid_to_lang, copy_audio_track, copy_sub_track
@@ -2881,7 +4334,10 @@ class BluraySubtitle:
             raise _Cancelled()
         if not getattr(self, 'movie_mode', False):
             self._progress(310, '写入章节中')
-            self.add_chapter_to_mkv(mkv_files, table, selected_mpls=selected_mpls, cancel_event=cancel_event)
+            self.add_chapter_to_mkv(
+                mkv_files, table, selected_mpls=selected_mpls, cancel_event=cancel_event,
+                configuration=self.configuration,
+            )
             self._progress(400)
 
         i = 0
@@ -3011,7 +4467,10 @@ class BluraySubtitle:
             raise _Cancelled()
         if not getattr(self, 'movie_mode', False):
             self._progress(310, '写入章节中')
-            self.add_chapter_to_mkv(mkv_files, table, selected_mpls=selected_mpls, cancel_event=cancel_event)
+            self.add_chapter_to_mkv(
+                mkv_files, table, selected_mpls=selected_mpls, cancel_event=cancel_event,
+                configuration=self.configuration,
+            )
             self._progress(400)
 
         i = 0
@@ -4450,8 +5909,11 @@ class BluraySubtitleGUI(QWidget):
     def __init__(self):
         super().__init__()
         self.setObjectName('mainWindow')
-        self.init_ui()
         self.altered = False
+        self._sp_index_by_bdmv: dict[int, int] = {}
+        self._chapter_checkbox_states: dict[str, list[bool]] = {}  # Save chapter checkbox states
+        self._last_config_inputs: dict[str, object] = {}
+        self.init_ui()
 
     def t(self, text: str) -> str:
         return translate_text(str(text), getattr(self, '_language_code', CURRENT_UI_LANGUAGE))
@@ -4800,6 +6262,8 @@ class BluraySubtitleGUI(QWidget):
             'tracks': '轨道',
             'bdmv_index': '原盘序号',
             'chapter_index': '章节序号',
+            'start_at_chapter': '起始章节',
+            'end_at_chapter': '结束章节',
             'offset': '偏移',
             'duration': '时长',
             'sub_path': '字幕路径',
@@ -5578,6 +7042,21 @@ class BluraySubtitleGUI(QWidget):
         except Exception:
             self._show_error_dialog(traceback.format_exc())
 
+    def _on_play_sp_table_row_clicked(self):
+        try:
+            sender = self.sender()
+            if sender is None or not hasattr(self, 'table3') or not self.table3:
+                return
+            row_index = self.table3.indexAt(sender.pos()).row()
+            if row_index < 0:
+                return
+            bdmv_col = ENCODE_SP_LABELS.index('bdmv_index')
+            mpls_col = ENCODE_SP_LABELS.index('mpls_file')
+            m2ts_col = ENCODE_SP_LABELS.index('m2ts_file')
+            self.on_play_sp_table_row(row_index, bdmv_col, mpls_col, m2ts_col)
+        except Exception:
+            self._show_error_dialog(traceback.format_exc())
+
     def _get_first_subtitle_path_for_bdmv_index(self, bdmv_index: int) -> str:
         if self.get_selected_function_id() != 4:
             return ''
@@ -6177,22 +7656,35 @@ class BluraySubtitleGUI(QWidget):
                 sp_no = str(seq).zfill(digits)
                 bdmv_vol = f'{bdmv_index:03d}'
                 special = str(out_item.data(Qt.ItemDataRole.UserRole + 2) or '')
+                name_suffix = str(out_item.data(Qt.ItemDataRole.UserRole + 3) or '')
                 mpls_file = self.table3.item(r, mpls_col).text().strip() if self.table3.item(r, mpls_col) else ''
                 m2ts_text = self.table3.item(r, m2ts_col).text().strip() if self.table3.item(r, m2ts_col) else ''
                 m2ts_files = [x.strip() for x in m2ts_text.split(',') if x.strip()]
                 base_name = f'BD_Vol_{bdmv_vol}_SP{sp_no}'
                 if not mpls_file and m2ts_files:
                     base_name = f'BD_Vol_{bdmv_vol}_{os.path.splitext(os.path.basename(m2ts_files[0]))[0]}'
+                # Preserve custom suffix (e.g. chapter range suffix) across track edits and recompute.
+                if (not name_suffix) and mpls_file:
+                    try:
+                        cur_name = out_item.text().strip()
+                        cur_stem = os.path.splitext(cur_name)[0]
+                        m = re.match(r'^BD_Vol_\d+_SP\d+(.*)$', cur_stem)
+                        if m and m.group(1):
+                            name_suffix = m.group(1)
+                            out_item.setData(Qt.ItemDataRole.UserRole + 3, name_suffix)
+                    except Exception:
+                        pass
+                base_with_suffix = f'{base_name}{name_suffix}'
                 if special == 'single_frame':
-                    out_item.setText(f'{base_name}.png')
+                    out_item.setText(f'{base_with_suffix}.png')
                     continue
                 if special == 'multi_frame':
-                    out_item.setText(f'{base_name}')
+                    out_item.setText(f'{base_with_suffix}')
                     continue
                 key = BluraySubtitle._sp_track_key_from_entry(self._table3_get_sp_entry_for_row(r))
                 cfg = getattr(self, '_track_selection_config', {}) or {}
                 if not (isinstance(cfg, dict) and key in cfg):
-                    out_item.setText(f'{base_name}.mkv')
+                    out_item.setText(f'{base_with_suffix}.mkv')
                     continue
                 tr = cfg.get(key, {}) if isinstance(cfg, dict) else {}
                 sel_audio = list(tr.get('audio') or [])
@@ -6220,12 +7712,12 @@ class BluraySubtitleGUI(QWidget):
                                 else:
                                     ext = {'aac': 'm4a'}.get(c, c or 'audio')
                                 break
-                    out_item.setText(f'{base_name}.{ext}')
+                    out_item.setText(f'{base_with_suffix}.{ext}')
                     continue
                 if len(sel_audio) > 1 and len(sel_sub) == 0 and is_audio_only:
-                    out_item.setText(f'{base_name}.mka')
+                    out_item.setText(f'{base_with_suffix}.mka')
                     continue
-                out_item.setText(f'{base_name}.mkv')
+                out_item.setText(f'{base_with_suffix}.mkv')
 
     def _all_track_ids_from_streams(self, streams: list[dict[str, object]]) -> tuple[list[str], list[str]]:
         audio: list[str] = []
@@ -6450,9 +7942,21 @@ class BluraySubtitleGUI(QWidget):
                     if not isinstance(cfg, dict):
                         self._track_selection_config = {}
                         cfg = self._track_selection_config
-                    if select_all or (sp_key not in cfg):
+                    if select_all:
                         cfg[sp_key] = {'audio': list(tracks_payload.get('audio') or []),
                                        'subtitle': list(tracks_payload.get('subtitle') or [])}
+                    elif sp_key not in cfg:
+                        bdmv_item = self.table3.item(row, ENCODE_SP_LABELS.index('bdmv_index'))
+                        mpls_item = self.table3.item(row, ENCODE_SP_LABELS.index('mpls_file'))
+                        try:
+                            bdmv_index = int(bdmv_item.text().strip()) if bdmv_item and bdmv_item.text() else 0
+                        except Exception:
+                            bdmv_index = 0
+                        mpls_file = mpls_item.text().strip() if mpls_item and mpls_item.text() else ''
+                        self._inherit_main_track_config_for_sp_key(bdmv_index, mpls_file, sp_key)
+                        if sp_key not in cfg:
+                            cfg[sp_key] = {'audio': list(tracks_payload.get('audio') or []),
+                                           'subtitle': list(tracks_payload.get('subtitle') or [])}
             except Exception:
                 pass
         finally:
@@ -6461,6 +7965,214 @@ class BluraySubtitleGUI(QWidget):
             self._recompute_sp_output_names()
         except Exception:
             pass
+
+    @staticmethod
+    def _parse_display_time_to_seconds(s: str) -> float:
+        try:
+            parts = [p for p in str(s or '').strip().split(':') if p != '']
+            if not parts:
+                return 0.0
+            val = 0.0
+            for n in parts:
+                val = val * 60.0 + float(n)
+            return val
+        except Exception:
+            return 0.0
+
+    @staticmethod
+    def _is_auto_chapter_segment_sp_item(out_item: Optional[QTableWidgetItem]) -> bool:
+        """SP rows derived from main-mpls chapter inclusion (checkbox / end_at_chapter tail). Not merged from refresh snapshot."""
+        if not out_item:
+            return False
+        if out_item.data(Qt.ItemDataRole.UserRole + 4) == 'chapter_segment_sp':
+            return True
+        suf = str(out_item.data(Qt.ItemDataRole.UserRole + 3) or '').strip()
+        if not suf:
+            return False
+        return bool(re.search(r'^_(beginning|chapter_\d+)_to_(chapter_\d+|ending)$', suf, re.I))
+
+    def _filtered_chapter_visible_layout(self, mpls_path: str) -> tuple[list[int], dict[int, str]]:
+        """Match ChapterWindow: visible chapter rows and chapter_to_m2ts (1-based keys in filtered order)."""
+        chapter = Chapter(mpls_path)
+        mark_info = chapter.mark_info
+        in_out_time = chapter.in_out_time
+        mpls_duration = chapter.get_total_time()
+        chapter_to_m2ts: dict[int, str] = {}
+        filtered_to_unfiltered: list[int] = []
+        offset = 0
+        ch_idx = 1
+        unfiltered_c = 0
+        for ref_to_play_item_id, mark_timestamps in mark_info.items():
+            m2ts_base = in_out_time[ref_to_play_item_id][0] + '.m2ts'
+            for mark_timestamp in mark_timestamps:
+                unfiltered_c += 1
+                off = offset + (mark_timestamp - in_out_time[ref_to_play_item_id][1]) / 45000
+                if mpls_duration - off >= 0.001:
+                    filtered_to_unfiltered.append(unfiltered_c)
+                    chapter_to_m2ts[ch_idx] = m2ts_base
+                    ch_idx += 1
+            offset += (in_out_time[ref_to_play_item_id][2] - in_out_time[ref_to_play_item_id][1]) / 45000
+        return filtered_to_unfiltered, chapter_to_m2ts
+
+    def _unchecked_segments_from_checkbox_states(self, mpls_path: str) -> tuple[list[tuple[int, int]], dict[int, str]]:
+        """Filtered table row indices (same as ChapterWindow.get_unchecked_segments) from _chapter_checkbox_states."""
+        path = mpls_path if str(mpls_path).lower().endswith('.mpls') else f'{mpls_path}.mpls'
+        filtered_map, chapter_to_m2ts = self._filtered_chapter_visible_layout(path)
+        if not filtered_map:
+            return [], chapter_to_m2ts
+        chapter = Chapter(path)
+        rows = sum(map(len, chapter.mark_info.values()))
+        states = list(self._chapter_checkbox_states.get(path, []))
+        if len(states) < rows:
+            states += [True] * (rows - len(states))
+        unchecked_rows: list[int] = []
+        for r, c in enumerate(filtered_map):
+            if 1 <= c <= len(states) and (not states[c - 1]):
+                unchecked_rows.append(r)
+        segments: list[tuple[int, int]] = []
+        if unchecked_rows:
+            start = unchecked_rows[0]
+            prev = unchecked_rows[0]
+            for row_i in unchecked_rows[1:]:
+                if row_i == prev + 1:
+                    prev = row_i
+                else:
+                    segments.append((start, prev))
+                    start = row_i
+                    prev = row_i
+            segments.append((start, prev))
+        return segments, chapter_to_m2ts
+
+    def _max_sp_serial_for_bdmv(self, bdmv_index: int) -> int:
+        mmax = 0
+        if not hasattr(self, 'table3') or not self.table3:
+            return 0
+        try:
+            bdmv_col = ENCODE_SP_LABELS.index('bdmv_index')
+            out_col = ENCODE_SP_LABELS.index('output_name')
+        except Exception:
+            return 0
+        for r in range(self.table3.rowCount()):
+            try:
+                b = int(self.table3.item(r, bdmv_col).text().strip())
+            except Exception:
+                continue
+            if b != bdmv_index:
+                continue
+            it = self.table3.item(r, out_col)
+            t = it.text().strip() if it and it.text() else ''
+            m = re.search(r'(?i)BD_Vol_\d+_SP(\d+)', t)
+            if m:
+                mmax = max(mmax, int(m.group(1)))
+        return mmax
+
+    def _remove_table3_auto_chapter_sp_rows(self, bdmv_index: int, mpls_basename: str):
+        if not hasattr(self, 'table3') or not self.table3:
+            return
+        if self.table3.columnCount() != len(ENCODE_SP_LABELS):
+            return
+        try:
+            bdmv_col = ENCODE_SP_LABELS.index('bdmv_index')
+            mpls_col = ENCODE_SP_LABELS.index('mpls_file')
+            out_col = ENCODE_SP_LABELS.index('output_name')
+        except Exception:
+            return
+        target = (mpls_basename or '').strip()
+        for r in range(self.table3.rowCount() - 1, -1, -1):
+            try:
+                b = int(self.table3.item(r, bdmv_col).text().strip())
+            except Exception:
+                continue
+            if b != bdmv_index:
+                continue
+            m_item = self.table3.item(r, mpls_col)
+            m_val = m_item.text().strip() if m_item and m_item.text() else ''
+            if m_val != target:
+                continue
+            out_item = self.table3.item(r, out_col)
+            if not self._is_auto_chapter_segment_sp_item(out_item):
+                continue
+            self.table3.removeRow(r)
+
+    def _sync_chapter_checkbox_sp_for_mpls(self, mpls_path: str, bdmv_index: int):
+        if self.get_selected_function_id() not in (3, 4):
+            return
+        path = mpls_path if str(mpls_path).lower().endswith('.mpls') else f'{mpls_path}.mpls'
+        if not os.path.exists(path):
+            return
+        self._remove_table3_auto_chapter_sp_rows(bdmv_index, os.path.basename(path))
+        self._sp_index_by_bdmv[bdmv_index] = self._max_sp_serial_for_bdmv(bdmv_index)
+        segments, c2m = self._unchecked_segments_from_checkbox_states(path)
+        if segments:
+            self._add_sp_entries_for_unchecked_segments(path, segments, bdmv_index, c2m)
+
+    def _sync_chapter_checkbox_sp_rows_all_volumes(self, configuration: dict[int, dict[str, int | str]]):
+        if self.get_selected_function_id() not in (3, 4) or not configuration:
+            return
+        selected_mpls = self.get_selected_mpls_no_ext()
+        if not selected_mpls:
+            return
+        folder_to_bdmv: dict[str, int] = {}
+        bdmv_to_mpls: dict[int, str] = {}
+        for folder, mpls_no_ext in selected_mpls:
+            if folder not in folder_to_bdmv:
+                folder_to_bdmv[folder] = len(folder_to_bdmv) + 1
+            bdmv_to_mpls[folder_to_bdmv[folder]] = mpls_no_ext
+        for bdmv_index, mpls_no_ext in sorted(bdmv_to_mpls.items(), key=lambda x: x[0]):
+            self._sync_chapter_checkbox_sp_for_mpls(mpls_no_ext + '.mpls', bdmv_index)
+
+    def _snapshot_chapter_segment_sp_entries(self) -> list[dict[str, object]]:
+        """Preserve ad-hoc SP rows across refresh; auto chapter-segment rows are re-applied via _sync_chapter_checkbox_sp_rows_all_volumes."""
+        if not hasattr(self, 'table3') or not self.table3:
+            return []
+        if self.table3.columnCount() != len(ENCODE_SP_LABELS):
+            return []
+        try:
+            sel_col = ENCODE_SP_LABELS.index('select')
+            bdmv_col = ENCODE_SP_LABELS.index('bdmv_index')
+            mpls_col = ENCODE_SP_LABELS.index('mpls_file')
+            m2ts_col = ENCODE_SP_LABELS.index('m2ts_file')
+            dur_col = ENCODE_SP_LABELS.index('duration')
+            out_col = ENCODE_SP_LABELS.index('output_name')
+        except Exception:
+            return []
+        out: list[dict[str, object]] = []
+        for r in range(self.table3.rowCount()):
+            out_item = self.table3.item(r, out_col)
+            if not out_item:
+                continue
+            if self._is_auto_chapter_segment_sp_item(out_item):
+                continue
+            suffix = str(out_item.data(Qt.ItemDataRole.UserRole + 3) or '').strip()
+            if not suffix:
+                continue
+            try:
+                bdmv_index = int(self.table3.item(r, bdmv_col).text().strip())
+            except Exception:
+                continue
+            mpls_item = self.table3.item(r, mpls_col)
+            m2ts_item = self.table3.item(r, m2ts_col)
+            mpls_file = mpls_item.text().strip() if mpls_item and mpls_item.text() else ''
+            m2ts_text = m2ts_item.text().strip() if m2ts_item and m2ts_item.text() else ''
+            m2ts_files = [x.strip() for x in m2ts_text.split(',') if x.strip()]
+            dur_item = self.table3.item(r, dur_col)
+            dur = self._parse_display_time_to_seconds(dur_item.text() if dur_item else '')
+            sel_item = self.table3.item(r, sel_col)
+            default_selected = bool(sel_item and sel_item.checkState() == Qt.CheckState.Checked)
+            is_disabled = bool((not sel_item) or (not (sel_item.flags() & Qt.ItemFlag.ItemIsEnabled)))
+            special = str(out_item.data(Qt.ItemDataRole.UserRole + 2) or '')
+            out.append({
+                'bdmv_index': bdmv_index,
+                'mpls_file': mpls_file,
+                'm2ts_files': m2ts_files,
+                'duration': dur,
+                'default_selected': default_selected,
+                'disabled': is_disabled,
+                'special': special,
+                'preserve_chapter_sp': True,
+                'name_suffix': suffix,
+            })
+        return out
 
     def refresh_sp_table(self, configuration: dict[int, dict[str, int | str]]):
         function_id = self.get_selected_function_id()
@@ -6572,17 +8284,36 @@ class BluraySubtitleGUI(QWidget):
                             'special': '',
                         })
 
-            entries = sorted(
-                entries,
-                key=lambda e: (
+            def _sp_entry_sort_key(e: dict[str, object]):
+                return (
                     int(e.get('bdmv_index') or 0),
                     1 if not str(e.get('mpls_file') or '').strip() else 0,
                     str(e.get('mpls_file') or ''),
-                    ','.join([str(x) for x in (e.get('m2ts_files') or [])])
+                    ','.join([str(x) for x in (e.get('m2ts_files') or [])]),
                 )
-            )
+
+            def _sp_entry_key_tuple(e: dict[str, object]):
+                return (
+                    int(e.get('bdmv_index') or 0),
+                    str(e.get('mpls_file') or ''),
+                    ','.join([str(x) for x in (e.get('m2ts_files') or [])]),
+                )
+
+            entries = sorted(entries, key=_sp_entry_sort_key)
+            preserved_sp = self._snapshot_chapter_segment_sp_entries()
+            if preserved_sp:
+                by_key: dict[tuple[int, str, str], dict[str, object]] = {}
+                for e in entries:
+                    by_key[_sp_entry_key_tuple(e)] = e
+                for pe in preserved_sp:
+                    by_key[_sp_entry_key_tuple(pe)] = pe
+                entries = sorted(by_key.values(), key=_sp_entry_sort_key)
 
             old_sorting = self.table3.isSortingEnabled()
+            old_current_row = self.table3.currentRow()
+            old_current_col = self.table3.currentColumn()
+            old_h_scroll = self.table3.horizontalScrollBar().value() if self.table3.horizontalScrollBar() else 0
+            old_v_scroll = self.table3.verticalScrollBar().value() if self.table3.verticalScrollBar() else 0
             self.table3.setSortingEnabled(False)
             try:
                 self._updating_sp_table = True
@@ -6628,27 +8359,33 @@ class BluraySubtitleGUI(QWidget):
                     tracks_col = ENCODE_SP_LABELS.index('tracks')
                     btn_tracks = QToolButton(self.table3)
                     btn_tracks.setText(self.t('编辑轨道'))
-                    btn_tracks.clicked.connect(partial(self.on_edit_tracks_from_sp_table, i))
+                    btn_tracks.clicked.connect(self._on_edit_tracks_from_sp_table_clicked)
                     btn_tracks.setEnabled(not is_disabled)
                     self.table3.setCellWidget(i, tracks_col, btn_tracks)
                     play_col = ENCODE_SP_LABELS.index('play') if 'play' in ENCODE_SP_LABELS else -1
                     if play_col >= 0:
                         btn_play = QToolButton(self.table3)
                         btn_play.setText(self.t('play'))
-                        btn_play.clicked.connect(partial(self.on_play_sp_table_row, i, bdmv_col, mpls_col, m2ts_col))
+                        btn_play.clicked.connect(self._on_play_sp_table_row_clicked)
                         btn_play.setEnabled(not is_disabled)
                         self.table3.setCellWidget(i, play_col, btn_play)
                     key = (bdmv_index, mpls_file, ','.join(m2ts_files))
                     prev = old_name_map.get(key)
                     prev_text = prev[0] if prev else ''
                     prev_auto = prev[1] if prev else None
-                    if prev_text and isinstance(prev_auto, str) and prev_text != prev_auto:
-                        final_text = prev_text
+                    if e.get('preserve_chapter_sp'):
+                        out_item = QTableWidgetItem('')
+                        out_item.setData(Qt.ItemDataRole.UserRole, '')
+                        out_item.setData(Qt.ItemDataRole.UserRole + 2, special)
+                        out_item.setData(Qt.ItemDataRole.UserRole + 3, str(e.get('name_suffix') or ''))
                     else:
-                        final_text = auto_out_name
-                    out_item = QTableWidgetItem(final_text)
-                    out_item.setData(Qt.ItemDataRole.UserRole, auto_out_name)
-                    out_item.setData(Qt.ItemDataRole.UserRole + 2, special)
+                        if prev_text and isinstance(prev_auto, str) and prev_text != prev_auto:
+                            final_text = prev_text
+                        else:
+                            final_text = auto_out_name
+                        out_item = QTableWidgetItem(final_text)
+                        out_item.setData(Qt.ItemDataRole.UserRole, auto_out_name)
+                        out_item.setData(Qt.ItemDataRole.UserRole + 2, special)
                     self.table3.setItem(i, out_col, out_item)
                     if function_id == 4:
                         vpy_col = ENCODE_SP_LABELS.index('vpy_path')
@@ -6672,9 +8409,24 @@ class BluraySubtitleGUI(QWidget):
                             self.table3.setItem(i, col, None)
                             self.table3.setCellWidget(i, col, None)
                 self._recompute_sp_output_names()
+                try:
+                    self._sync_chapter_checkbox_sp_rows_all_volumes(configuration)
+                except Exception:
+                    traceback.print_exc()
+                self._recompute_sp_output_names()
                 self.table3.resizeColumnsToContents()
                 self._resize_table_columns_for_language(self.table3)
-                self._scroll_table_h_to_right(self.table3)
+                try:
+                    if 0 <= old_current_row < self.table3.rowCount() and 0 <= old_current_col < self.table3.columnCount():
+                        self.table3.setCurrentCell(old_current_row, old_current_col)
+                    else:
+                        self.table3.clearSelection()
+                    if self.table3.horizontalScrollBar():
+                        self.table3.horizontalScrollBar().setValue(old_h_scroll)
+                    if self.table3.verticalScrollBar():
+                        self.table3.verticalScrollBar().setValue(old_v_scroll)
+                except Exception:
+                    pass
             finally:
                 self._updating_sp_table = False
                 self.table3.setSortingEnabled(old_sorting)
@@ -7054,13 +8806,14 @@ class BluraySubtitleGUI(QWidget):
 
         self.table1 = QTableWidget()
         self.table1.setObjectName('table1')
+        self.table1.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.table1.setColumnCount(len(BDMV_LABELS))
         self._set_table_headers(self.table1, BDMV_LABELS)
         self.table1.setSortingEnabled(True)
         self.table1.horizontalHeader().setSortIndicatorShown(True)
         self.bdmv_folder_path.textChanged.connect(self.on_bdmv_folder_path_change)
         v_layout.addWidget(self.table1)
-        self.layout.addWidget(label1_container)
+        v_layout.setStretch(v_layout.indexOf(self.table1), 1)
         try:
             idx = self.layout.indexOf(self.episode_mode_row)
             if idx >= 0:
@@ -7105,6 +8858,7 @@ class BluraySubtitleGUI(QWidget):
 
         self.table2 = CustomTableWidget(self, self.on_subtitle_drop)
         self.table2.setObjectName('table2')
+        self.table2.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._set_compact_table(self.table2, row_height=22, header_height=22)
         self.table2.setColumnCount(len(SUBTITLE_LABELS))
         self._set_table_headers(self.table2, SUBTITLE_LABELS)
@@ -7118,9 +8872,14 @@ class BluraySubtitleGUI(QWidget):
         self._subtitle_scan_debounce.setInterval(250)
         self._subtitle_scan_debounce.timeout.connect(self._start_subtitle_folder_scan)
         self._pending_subtitle_folder = ''
-        v_layout.addWidget(self.table2)
+        self._chapter_combo_debounce = QTimer(self)
+        self._chapter_combo_debounce.setSingleShot(True)
+        self._chapter_combo_debounce.setInterval(120)
+        self._chapter_combo_debounce.timeout.connect(self._run_chapter_combo_update)
+        self._pending_chapter_combo_index = -1
         self.table3 = QTableWidget(self)
         self.table3.setObjectName('table3')
+        self.table3.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._set_compact_table(self.table3, row_height=22, header_height=22)
         self.table3.setColumnCount(len(ENCODE_SP_LABELS))
         self._set_table_headers(self.table3, ENCODE_SP_LABELS)
@@ -7129,8 +8888,31 @@ class BluraySubtitleGUI(QWidget):
         self._updating_sp_table = False
         self.table3.itemChanged.connect(self._on_table3_item_changed)
         self.table3.setVisible(False)
-        v_layout.addWidget(self.table3)
-        self.layout.addWidget(label2_container)
+        self.subtitle_tables_splitter = QSplitter(Qt.Orientation.Vertical, subtitle)
+        self.subtitle_tables_splitter.setObjectName('subtitleTablesSplitter')
+        self.subtitle_tables_splitter.setChildrenCollapsible(False)
+        self.subtitle_tables_splitter.addWidget(self.table2)
+        self.subtitle_tables_splitter.addWidget(self.table3)
+        self.subtitle_tables_splitter.setStretchFactor(0, 1)
+        self.subtitle_tables_splitter.setStretchFactor(1, 1)
+        self.subtitle_tables_splitter.setSizes([360, 360])
+        v_layout.addWidget(self.subtitle_tables_splitter)
+        v_layout.setStretch(v_layout.indexOf(self.subtitle_tables_splitter), 1)
+
+        label1_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        label2_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        bdmv.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        subtitle.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        tables_splitter = QSplitter(Qt.Orientation.Vertical, self)
+        tables_splitter.setObjectName('tablesSplitter')
+        tables_splitter.setChildrenCollapsible(False)
+        tables_splitter.addWidget(label1_container)
+        tables_splitter.addWidget(label2_container)
+        tables_splitter.setStretchFactor(0, 1)
+        tables_splitter.setStretchFactor(1, 1)
+        tables_splitter.setSizes([480, 480])
+        self.layout.addWidget(tables_splitter)
+        self.layout.setStretch(self.layout.indexOf(tables_splitter), 1)
 
         self.encode_box = QGroupBox('压制', self)
         self.encode_box.setProperty("tightGroup", True)
@@ -7297,7 +9079,7 @@ class BluraySubtitleGUI(QWidget):
                                 table_widget.setItem(mpls_n, 1, QTableWidgetItem(total_time_str))
                                 btn1 = QToolButton()
                                 btn1.setText(self.t('view chapters'))
-                                btn1.clicked.connect(partial(self.on_button_click, mpls_path))
+                                btn1.clicked.connect(partial(self.on_button_click, mpls_path, mpls_path == selected_mpls, i + 1))
                                 table_widget.setCellWidget(mpls_n, 2, btn1)
                                 btn2 = QToolButton()
                                 btn2.setCheckable(True)
@@ -7325,7 +9107,8 @@ class BluraySubtitleGUI(QWidget):
                         self.table1.setItem(i, 1, QTableWidgetItem(get_folder_size(root)))
                         self.table1.setCellWidget(i, 2, table_widget)
                         if self.get_selected_function_id() in (3, 4):
-                            cmd_text = self._build_main_remux_cmd_template(selected_mpls, i + 1, root)
+                            resolved_bdmv_index = self._resolve_bdmv_index_for_main_mpls(selected_mpls, i + 1)
+                            cmd_text = self._build_main_remux_cmd_template(selected_mpls, resolved_bdmv_index, root)
                             self.table1.setCellWidget(i, BDMV_LABELS.index('remux_cmd'),
                                                       self._create_main_remux_cmd_editor(cmd_text, self.table1))
                         else:
@@ -7609,6 +9392,9 @@ class BluraySubtitleGUI(QWidget):
             configuration = payload.get('configuration') or {}
             if configuration:
                 self.on_configuration(configuration)
+            elif self.get_selected_function_id() in (3, 4) and (not self._is_movie_mode()):
+                self.table2.setRowCount(0)
+                self.refresh_sp_table({})
 
         def on_canceled():
             cleanup()
@@ -7778,7 +9564,253 @@ class BluraySubtitleGUI(QWidget):
                 self.table2.setCellWidget(sub_index, chapter_col, None)
                 self.table2.setItem(sub_index, offset_col, None)
 
-    def on_configuration(self, configuration: dict[int, dict[str, int | str]]):
+    def _chapter_label_text(self, value: int, rows: int, has_beginning: bool, for_end: bool = False) -> str:
+        if for_end and value >= rows + 1:
+            return 'ending'
+        if for_end and has_beginning and value == 1:
+            return 'chapter 01'
+        if has_beginning and value == 1:
+            return 'beginning'
+        chapter_no = value - 1 if has_beginning else value
+        if chapter_no < 1:
+            chapter_no = 1
+        return f'chapter {chapter_no:02d}'
+
+    def _build_start_chapter_options(self, rows: int, has_beginning: bool) -> list[tuple[int, str]]:
+        return [(v, self._chapter_label_text(v, rows, has_beginning, for_end=False)) for v in range(1, rows + 1)]
+
+    def _build_end_chapter_combo(self, rows: int, has_beginning: bool, start_value: int, selected_value: int = 0) -> QComboBox:
+        combo = QComboBox()
+        for v in range(1, rows + 2):
+            combo.addItem(self._chapter_label_text(v, rows, has_beginning, for_end=True), v)
+        self._apply_end_combo_min_constraint(combo, max(1, int(start_value) + 1))
+        if selected_value <= 0:
+            selected_value = max(1, int(start_value) + 1)
+        selected_idx = -1
+        for i in range(combo.count()):
+            if int(combo.itemData(i) or 0) == int(selected_value):
+                selected_idx = i
+                break
+        if selected_idx < 0:
+            for i in range(combo.count()):
+                v = int(combo.itemData(i) or 0)
+                if v >= max(1, int(start_value) + 1):
+                    selected_idx = i
+                    break
+        if selected_idx >= 0:
+            combo.setCurrentIndex(selected_idx)
+        combo._prev_end_value = int(combo.currentData() or (combo.currentIndex() + 1))
+        return combo
+
+    def _apply_end_combo_min_constraint(self, combo: QComboBox, min_allowed: int):
+        model = combo.model()
+        ending_value = int(combo.itemData(combo.count() - 1) or (combo.count()))
+        for i in range(combo.count()):
+            v = int(combo.itemData(i) or (i + 1))
+            item = model.item(i) if hasattr(model, 'item') else None
+            if item is not None:
+                item.setEnabled((v >= min_allowed) or (v == ending_value))
+        cur_v = int(combo.currentData() or (combo.currentIndex() + 1))
+        if cur_v < min_allowed and cur_v != ending_value:
+            for i in range(combo.count()):
+                v = int(combo.itemData(i) or (i + 1))
+                if (v >= min_allowed) or (v == ending_value):
+                    combo.blockSignals(True)
+                    combo.setCurrentIndex(i)
+                    combo.blockSignals(False)
+                    break
+
+    def _set_segment_states_for_range(self, mpls_no_ext: str, start_idx: int, end_idx: int, checked: bool):
+        if not mpls_no_ext:
+            return
+        mpls_path = mpls_no_ext + '.mpls'
+        try:
+            rows = int(self._chapter_node_data(mpls_no_ext).get('rows') or 0)
+        except Exception:
+            rows = 0
+        if rows <= 0:
+            return
+        states = list(self._chapter_checkbox_states.get(mpls_path, []))
+        if len(states) < rows:
+            states += [True] * (rows - len(states))
+        s = max(1, min(int(start_idx), rows))
+        e = max(1, min(int(end_idx), rows))
+        if s > e:
+            s, e = e, s
+        for i in range(s, e + 1):
+            states[i - 1] = bool(checked)
+        self._chapter_checkbox_states[mpls_path] = states
+
+    def _apply_start_chapter_constraints(self, labels: list[str]):
+        if 'start_at_chapter' not in labels:
+            return
+        start_col = labels.index('start_at_chapter')
+        end_col = labels.index('end_at_chapter') if 'end_at_chapter' in labels else -1
+        bdmv_col = labels.index('bdmv_index')
+        selected_mpls = self.get_selected_mpls_no_ext()
+        folder_to_bdmv_index: dict[str, int] = {}
+        bdmv_to_mpls: dict[int, str] = {}
+        for folder, mpls_no_ext in selected_mpls:
+            if folder not in folder_to_bdmv_index:
+                folder_to_bdmv_index[folder] = len(folder_to_bdmv_index) + 1
+            bdmv_to_mpls[folder_to_bdmv_index[folder]] = mpls_no_ext
+        prev_end_by_bdmv: dict[int, int] = {}
+        for r in range(self.table2.rowCount()):
+            b_item = self.table2.item(r, bdmv_col)
+            try:
+                bdmv_index = int(b_item.text().strip()) if b_item and b_item.text() else 0
+            except Exception:
+                bdmv_index = 0
+            combo = self.table2.cellWidget(r, start_col)
+            if not isinstance(combo, QComboBox):
+                continue
+            min_allowed = prev_end_by_bdmv.get(bdmv_index, 1)
+            mpls_no_ext = bdmv_to_mpls.get(bdmv_index, '')
+            checked_states: list[bool] = []
+            if mpls_no_ext:
+                mpls_path = mpls_no_ext + '.mpls'
+                checked_states = list(self._chapter_checkbox_states.get(mpls_path, []))
+            # Make sure every item has stable numeric value data.
+            for i in range(combo.count()):
+                if combo.itemData(i) is None:
+                    combo.setItemData(i, i + 1)
+            model = combo.model()
+            for i in range(combo.count()):
+                v = int(combo.itemData(i) or (i + 1))
+                item = model.item(i) if hasattr(model, 'item') else None
+                if item is not None:
+                    enabled_by_segment = True
+                    if checked_states and 1 <= v <= len(checked_states):
+                        enabled_by_segment = bool(checked_states[v - 1])
+                    item.setEnabled((v >= min_allowed) and enabled_by_segment)
+            cur_v = int(combo.currentData() or (combo.currentIndex() + 1))
+            if cur_v < min_allowed:
+                for i in range(combo.count()):
+                    v = int(combo.itemData(i) or (i + 1))
+                    if v >= min_allowed:
+                        combo.blockSignals(True)
+                        combo.setCurrentIndex(i)
+                        combo.blockSignals(False)
+                        cur_v = v
+                        break
+            if end_col >= 0:
+                end_val = 0
+                end_combo = self.table2.cellWidget(r, end_col)
+                if isinstance(end_combo, QComboBox):
+                    try:
+                        end_val = int(end_combo.currentData() or 0)
+                    except Exception:
+                        end_val = 0
+                else:
+                    end_item = self.table2.item(r, end_col)
+                    if end_item:
+                        try:
+                            end_val = int(end_item.data(Qt.ItemDataRole.UserRole + 1) or 0)
+                        except Exception:
+                            end_val = 0
+                prev_end_by_bdmv[bdmv_index] = end_val if end_val > 0 else cur_v
+            else:
+                prev_end_by_bdmv[bdmv_index] = cur_v
+
+    def _on_end_chapter_combo_changed(self, row: int, labels: list[str]):
+        if row < 0 or row >= self.table2.rowCount():
+            return
+        start_col = labels.index('start_at_chapter')
+        end_col = labels.index('end_at_chapter')
+        start_combo = self.table2.cellWidget(row, start_col)
+        end_combo = self.table2.cellWidget(row, end_col)
+        if isinstance(start_combo, QComboBox) and isinstance(end_combo, QComboBox):
+            start_v = int(start_combo.currentData() or (start_combo.currentIndex() + 1))
+            old_v = int(getattr(end_combo, '_prev_end_value', end_combo.currentData() or (end_combo.currentIndex() + 1)))
+            self._apply_end_combo_min_constraint(end_combo, start_v + 1)
+            new_v = int(end_combo.currentData() or (end_combo.currentIndex() + 1))
+            if new_v < old_v:
+                bdmv_col = labels.index('bdmv_index')
+                b_item = self.table2.item(row, bdmv_col)
+                try:
+                    bdmv_index = int(b_item.text().strip()) if b_item and b_item.text() else 0
+                except Exception:
+                    bdmv_index = 0
+                selected_mpls = self.get_selected_mpls_no_ext()
+                folder_to_bdmv_index: dict[str, int] = {}
+                bdmv_to_mpls: dict[int, str] = {}
+                for folder, mpls_no_ext in selected_mpls:
+                    if folder not in folder_to_bdmv_index:
+                        folder_to_bdmv_index[folder] = len(folder_to_bdmv_index) + 1
+                    bdmv_to_mpls[folder_to_bdmv_index[folder]] = mpls_no_ext
+                mpls_no_ext = bdmv_to_mpls.get(bdmv_index, '')
+                # Next episode start must be on the *same* main MPLS (not the next table row when it is another disc/volume).
+                next_start_same_mpls = 0
+                for r2 in range(row + 1, self.table2.rowCount()):
+                    b2 = self.table2.item(r2, bdmv_col)
+                    try:
+                        b2i = int(b2.text().strip()) if b2 and b2.text() else 0
+                    except Exception:
+                        b2i = 0
+                    if bdmv_to_mpls.get(b2i, '') != mpls_no_ext:
+                        continue
+                    nxc = self.table2.cellWidget(r2, start_col)
+                    if isinstance(nxc, QComboBox):
+                        next_start_same_mpls = int(nxc.currentData() or (nxc.currentIndex() + 1))
+                    break
+                if next_start_same_mpls > 0 and next_start_same_mpls > new_v:
+                    self._set_segment_states_for_range(mpls_no_ext, new_v, next_start_same_mpls - 1, False)
+                elif next_start_same_mpls <= 0 and mpls_no_ext:
+                    # Last episode on this MPLS: uncheck from new end through last chapter mark.
+                    try:
+                        total_rows = int(self._chapter_node_data(mpls_no_ext).get('rows') or 0)
+                    except Exception:
+                        total_rows = 0
+                    if total_rows > 0 and new_v <= total_rows:
+                        self._set_segment_states_for_range(mpls_no_ext, new_v, total_rows, False)
+            end_combo._prev_end_value = int(end_combo.currentData() or (end_combo.currentIndex() + 1))
+        self._apply_start_chapter_constraints(labels)
+        # End changes also trigger configuration regeneration.
+        self.on_chapter_combo(row)
+
+    def _sync_end_chapter_min_constraints(self, labels: list[str]):
+        if 'start_at_chapter' not in labels or 'end_at_chapter' not in labels:
+            return
+        start_col = labels.index('start_at_chapter')
+        end_col = labels.index('end_at_chapter')
+        bdmv_col = labels.index('bdmv_index')
+        selected_mpls = self.get_selected_mpls_no_ext()
+        folder_to_bdmv_index: dict[str, int] = {}
+        bdmv_to_mpls: dict[int, str] = {}
+        for folder, mpls_no_ext in selected_mpls:
+            if folder not in folder_to_bdmv_index:
+                folder_to_bdmv_index[folder] = len(folder_to_bdmv_index) + 1
+            bdmv_to_mpls[folder_to_bdmv_index[folder]] = mpls_no_ext
+        for r in range(self.table2.rowCount()):
+            s = self.table2.cellWidget(r, start_col)
+            e = self.table2.cellWidget(r, end_col)
+            if isinstance(s, QComboBox) and isinstance(e, QComboBox):
+                start_v = int(s.currentData() or (s.currentIndex() + 1))
+                self._apply_end_combo_min_constraint(e, start_v + 1)
+                b_item = self.table2.item(r, bdmv_col)
+                try:
+                    bdmv_index = int(b_item.text().strip()) if b_item and b_item.text() else 0
+                except Exception:
+                    bdmv_index = 0
+                mpls_no_ext = bdmv_to_mpls.get(bdmv_index, '')
+                checked_states: list[bool] = []
+                if mpls_no_ext:
+                    checked_states = list(self._chapter_checkbox_states.get(mpls_no_ext + '.mpls', []))
+                if checked_states:
+                    model = e.model()
+                    ending_value = int(e.itemData(e.count() - 1) or e.count())
+                    last_chapter_checked = bool(checked_states[-1]) if checked_states else True
+                    for i in range(e.count()):
+                        v = int(e.itemData(i) or (i + 1))
+                        item = model.item(i) if hasattr(model, 'item') else None
+                        if item is None:
+                            continue
+                        if v == ending_value:
+                            item.setEnabled(bool(last_chapter_checked))
+                        elif 1 <= v <= len(checked_states):
+                            item.setEnabled(item.isEnabled() and bool(checked_states[v - 1]))
+
+    def on_configuration(self, configuration: dict[int, dict[str, int | str]], update_sp_table: bool = True):
         try:
             if not configuration:
                 print('配置为空，跳过更新')
@@ -7791,7 +9823,8 @@ class BluraySubtitleGUI(QWidget):
                 labels = ENCODE_LABELS if function_id == 4 else REMUX_LABELS
                 duration_col = labels.index('ep_duration')
                 bdmv_col = labels.index('bdmv_index')
-                chapter_col = labels.index('chapter_index')
+                start_col = labels.index('start_at_chapter')
+                end_col = labels.index('end_at_chapter')
                 m2ts_col = labels.index('m2ts_file')
                 language_col = labels.index('language')
                 output_col = labels.index('output_name')
@@ -7855,10 +9888,14 @@ class BluraySubtitleGUI(QWidget):
                         self.table2.setItem(row_i, bdmv_col, QTableWidgetItem(str(bdmv_index)))
 
                         chapter_combo = QComboBox()
-                        chapter_combo.addItems(['1'])
+                        chapter_combo.addItem('chapter 01', 1)
                         chapter_combo.setCurrentIndex(0)
+                        chapter_combo._prev_start_value = int(chapter_combo.currentData() or 1)
                         chapter_combo.setEnabled(False)
-                        self.table2.setCellWidget(row_i, chapter_col, chapter_combo)
+                        self.table2.setCellWidget(row_i, start_col, chapter_combo)
+                        end_combo = self._build_end_chapter_combo(1, False, 1, 2)
+                        end_combo.currentIndexChanged.connect(partial(self._on_end_chapter_combo_changed, row_i, labels))
+                        self.table2.setCellWidget(row_i, end_col, end_combo)
 
                         chapter = Chapter(str(con0['selected_mpls']) + '.mpls')
                         total_time = chapter.get_total_time()
@@ -7916,23 +9953,45 @@ class BluraySubtitleGUI(QWidget):
                         duration = 0
                         chapter = Chapter(str(con['selected_mpls']) + '.mpls')
                         rows = sum(map(len, chapter.mark_info.values()))
-                        j1 = con['chapter_index']
+                        j1 = int(con.get('chapter_index') or 1)
                         next_con = configuration.get(sub_index + 1)
-                        if next_con and next_con.get('folder') == con.get('folder') and next_con.get('selected_mpls') == con.get('selected_mpls'):
-                            j2 = next_con['chapter_index']
+                        if con.get('end_at_chapter'):
+                            j2 = int(con.get('end_at_chapter') or 0)
+                        elif next_con and next_con.get('folder') == con.get('folder') and next_con.get('selected_mpls') == con.get('selected_mpls'):
+                            j2 = int(next_con.get('chapter_index') or 0)
                         else:
                             j2 = rows + 1
+                        # Clamp bounds to avoid invalid chapter indices (e.g. rows+1 start).
+                        j1 = max(1, min(j1, rows + 1))
+                        j2 = max(j1 + 1, min(j2, rows + 1))
                         index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(chapter)
-                        m2ts_files = sorted(list(set([index_to_m2ts[i] for i in range(j1, j2)])))
-                        chapter_combo.addItems([str(r + 1) for r in range(rows)])
-                        chapter_combo.setCurrentIndex(con['chapter_index'] - 1)
+                        m2ts_files = sorted(list(set([index_to_m2ts[i] for i in range(j1, j2) if i in index_to_m2ts])))
+                        has_beginning = False
+                        try:
+                            has_beginning = bool(float(index_to_offset.get(1, 0.0) or 0.0) > 0.001)
+                        except Exception:
+                            has_beginning = False
+                        options = self._build_start_chapter_options(rows, has_beginning)
+                        for v, txt in options:
+                            chapter_combo.addItem(txt, v)
+                        selected_idx = 0
+                        for i_opt in range(chapter_combo.count()):
+                            if int(chapter_combo.itemData(i_opt) or 0) == int(con['chapter_index']):
+                                selected_idx = i_opt
+                                break
+                        chapter_combo.setCurrentIndex(selected_idx)
+                        chapter_combo._prev_start_value = int(chapter_combo.currentData() or (chapter_combo.currentIndex() + 1))
                         chapter_combo.currentIndexChanged.connect(partial(self.on_chapter_combo, sub_index))
-                        if next_con and next_con.get('folder') == con.get('folder') and next_con.get('selected_mpls') == con.get('selected_mpls'):
-                            duration = index_to_offset[next_con['chapter_index']] - index_to_offset[j1]
-                        else:
-                            duration = chapter.get_total_time() - index_to_offset[j1]
+                        start_off = float(index_to_offset.get(j1, chapter.get_total_time()))
+                        end_off = float(index_to_offset.get(j2, chapter.get_total_time()))
+                        if end_off < start_off:
+                            end_off = start_off
+                        duration = end_off - start_off
                         duration = get_time_str(duration)
-                        self.table2.setCellWidget(sub_index, chapter_col, chapter_combo)
+                        self.table2.setCellWidget(sub_index, start_col, chapter_combo)
+                        end_combo = self._build_end_chapter_combo(rows, has_beginning, int(j1), int(j2))
+                        end_combo.currentIndexChanged.connect(partial(self._on_end_chapter_combo_changed, sub_index, labels))
+                        self.table2.setCellWidget(sub_index, end_col, end_combo)
                         self.table2.setItem(sub_index, m2ts_col, QTableWidgetItem(', '.join(m2ts_files)))
                         self.table2.setItem(sub_index, duration_col, QTableWidgetItem(duration))
 
@@ -7983,9 +10042,12 @@ class BluraySubtitleGUI(QWidget):
                 self.table2.resizeColumnsToContents()
                 self._resize_table_columns_for_language(self.table2)
                 self._update_language_combo_enabled_state()
+                self._sync_end_chapter_min_constraints(labels)
+                self._apply_start_chapter_constraints(labels)
                 self._scroll_table_h_to_right(self.table2)
                 if function_id in (3, 4):
-                    self.refresh_sp_table(configuration)
+                    if update_sp_table:
+                        self.refresh_sp_table(configuration)
                     try:
                         self._refresh_table1_remux_cmds()
                     except Exception:
@@ -8048,31 +10110,49 @@ class BluraySubtitleGUI(QWidget):
 
     def on_chapter_combo(self, subtitle_index: int):
         if self.get_selected_function_id() in (3, 4):
-            sub_files = []
-            if self.subtitle_folder_path.text().strip():
-                for file in sorted(os.listdir(self.subtitle_folder_path.text().strip())):
-                    if file.endswith(".ass") or file.endswith(".ssa") or file.endswith('srt') or file.endswith('.sup'):
-                        sub_files.append(os.path.normpath(os.path.join(self.subtitle_folder_path.text().strip(), file)))
-            sub_combo_index = {}
             labels = ENCODE_LABELS if self.get_selected_function_id() == 4 else REMUX_LABELS
-            chapter_col = labels.index('chapter_index')
-            for sub_index in range(self.table2.rowCount()):
-                w = self.table2.cellWidget(sub_index, chapter_col)
-                if isinstance(w, QComboBox):
-                    sub_combo_index[sub_index] = w.currentIndex() + 1
-            bs = BluraySubtitle(
-                self.bdmv_folder_path.text(),
-                sub_files,
-                self.checkbox1.isChecked(),
-                None,
-                approx_episode_duration_seconds=self._get_approx_episode_duration_seconds()
-            )
-            selected_mpls = self.get_selected_mpls_no_ext()
-            if selected_mpls:
-                configuration = bs.generate_configuration_from_selected_mpls(selected_mpls, sub_combo_index, subtitle_index)
+            try:
+                row = int(subtitle_index)
+            except Exception:
+                row = -1
+            if 0 <= row < self.table2.rowCount():
+                start_col = labels.index('start_at_chapter')
+                end_col = labels.index('end_at_chapter')
+                bdmv_col = labels.index('bdmv_index')
+                start_combo = self.table2.cellWidget(row, start_col)
+                if isinstance(start_combo, QComboBox):
+                    new_start = int(start_combo.currentData() or (start_combo.currentIndex() + 1))
+                    old_start = int(getattr(start_combo, '_prev_start_value', new_start))
+                    if (new_start > old_start) and (row > 0):
+                        prev_end_combo = self.table2.cellWidget(row - 1, end_col)
+                        prev_end = int(prev_end_combo.currentData() or (prev_end_combo.currentIndex() + 1)) if isinstance(prev_end_combo, QComboBox) else 0
+                        b_cur = self.table2.item(row, bdmv_col)
+                        b_prev = self.table2.item(row - 1, bdmv_col)
+                        try:
+                            bdmv_cur = int(b_cur.text().strip()) if b_cur and b_cur.text() else 0
+                        except Exception:
+                            bdmv_cur = 0
+                        try:
+                            bdmv_prev = int(b_prev.text().strip()) if b_prev and b_prev.text() else 0
+                        except Exception:
+                            bdmv_prev = 0
+                        if (bdmv_cur == bdmv_prev) and prev_end > 0 and new_start > prev_end:
+                            selected_mpls = self.get_selected_mpls_no_ext()
+                            folder_to_bdmv_index: dict[str, int] = {}
+                            bdmv_to_mpls: dict[int, str] = {}
+                            for folder, mpls_no_ext in selected_mpls:
+                                if folder not in folder_to_bdmv_index:
+                                    folder_to_bdmv_index[folder] = len(folder_to_bdmv_index) + 1
+                                bdmv_to_mpls[folder_to_bdmv_index[folder]] = mpls_no_ext
+                            mpls_no_ext = bdmv_to_mpls.get(bdmv_cur, '')
+                            self._set_segment_states_for_range(mpls_no_ext, prev_end, new_start - 1, False)
+                    start_combo._prev_start_value = new_start
+            self._sync_end_chapter_min_constraints(labels)
+            self._pending_chapter_combo_index = int(subtitle_index)
+            if hasattr(self, '_chapter_combo_debounce') and isinstance(self._chapter_combo_debounce, QTimer):
+                self._chapter_combo_debounce.start()
             else:
-                configuration = bs.generate_configuration(self.table1, sub_combo_index, subtitle_index)
-            self.on_configuration(configuration)
+                self._run_chapter_combo_update()
         else:
             sub_files = [self.table2.item(sub_index, 1).text() for sub_index in range(self.table2.rowCount()) if
                          self.sub_check_state[sub_index] == 2]
@@ -8096,6 +10176,248 @@ class BluraySubtitleGUI(QWidget):
             else:
                 configuration = bs.generate_configuration(self.table1, sub_combo_index, subtitle_index)
             self.on_configuration(configuration)
+
+    def _run_chapter_combo_update(self):
+        if self.get_selected_function_id() not in (3, 4):
+            return
+        try:
+            configuration = self._generate_configuration_from_ui_inputs()
+            # start/end chapter edits (e.g. last episode end_at_chapter) change episode bounds; keep SP table in sync.
+            self.on_configuration(configuration, update_sp_table=True)
+        except Exception:
+            self._show_error_dialog(traceback.format_exc())
+
+    def _chapter_node_data(self, mpls_path_no_ext: str) -> dict[str, object]:
+        chapter = Chapter(mpls_path_no_ext + '.mpls')
+        index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(chapter)
+        rows = sum(map(len, chapter.mark_info.values()))
+        offsets: dict[int, float] = {}
+        for i in range(1, rows + 1):
+            offsets[i] = float(index_to_offset.get(i, 0.0))
+        offsets[rows + 1] = float(chapter.get_total_time())
+        m2ts_map: dict[int, str] = {}
+        for i in range(1, rows + 1):
+            m2ts_map[i] = str(index_to_m2ts.get(i) or '')
+        has_beginning = bool(offsets.get(1, 0.0) > 0.001)
+        return {'rows': rows, 'offsets': offsets, 'm2ts': m2ts_map, 'has_beginning': has_beginning}
+
+    def _collect_config_inputs(self) -> dict[str, object]:
+        labels = ENCODE_LABELS if self.get_selected_function_id() == 4 else REMUX_LABELS
+        start_col = labels.index('start_at_chapter')
+        end_col = labels.index('end_at_chapter')
+        bdmv_col = labels.index('bdmv_index')
+        selected_mpls = self.get_selected_mpls_no_ext()
+        folder_to_bdmv_index: dict[str, int] = {}
+        bdmv_to_mpls: dict[int, str] = {}
+        for folder, mpls_no_ext in selected_mpls:
+            if folder not in folder_to_bdmv_index:
+                folder_to_bdmv_index[folder] = len(folder_to_bdmv_index) + 1
+            bdmv_to_mpls[folder_to_bdmv_index[folder]] = mpls_no_ext
+        start_values: dict[int, int] = {}
+        end_values: dict[int, int] = {}
+        row_bdmv: dict[int, int] = {}
+        for r in range(self.table2.rowCount()):
+            b_item = self.table2.item(r, bdmv_col)
+            try:
+                bdmv = int(b_item.text().strip()) if b_item and b_item.text() else 0
+            except Exception:
+                bdmv = 0
+            row_bdmv[r] = bdmv
+            s = self.table2.cellWidget(r, start_col)
+            e = self.table2.cellWidget(r, end_col)
+            start_values[r] = int(s.currentData() or (s.currentIndex() + 1)) if isinstance(s, QComboBox) else 1
+            if isinstance(e, QComboBox):
+                end_values[r] = int(e.currentData() or (e.currentIndex() + 1))
+            else:
+                it = self.table2.item(r, end_col)
+                end_values[r] = int(it.data(Qt.ItemDataRole.UserRole + 1) or 0) if it else 0
+        segment_states: dict[str, list[bool]] = {}
+        for _, mpls_no_ext in selected_mpls:
+            mpls_path = mpls_no_ext + '.mpls'
+            nd = self._chapter_node_data(mpls_no_ext)
+            rows = int(nd['rows'])
+            saved = list(self._chapter_checkbox_states.get(mpls_path, []))
+            if len(saved) < rows:
+                saved += [True] * (rows - len(saved))
+            segment_states[mpls_no_ext] = saved[:rows]
+        return {
+            'selected_mpls': selected_mpls,
+            'bdmv_to_mpls': bdmv_to_mpls,
+            'row_bdmv': row_bdmv,
+            'start': start_values,
+            'end': end_values,
+            'segments': segment_states,
+        }
+
+    def _diff_config_inputs(self, prev: dict[str, object], cur: dict[str, object]) -> tuple[str, int]:
+        p_seg = prev.get('segments', {}) if isinstance(prev, dict) else {}
+        c_seg = cur.get('segments', {})
+        if p_seg != c_seg:
+            return 'segments', 0
+        p_start = prev.get('start', {}) if isinstance(prev, dict) else {}
+        c_start = cur.get('start', {})
+        changed_rows = sorted([r for r in c_start.keys() if int(p_start.get(r, c_start[r])) != int(c_start[r])])
+        if changed_rows:
+            return 'start', int(changed_rows[0])
+        p_end = prev.get('end', {}) if isinstance(prev, dict) else {}
+        c_end = cur.get('end', {})
+        changed_rows = sorted([r for r in c_end.keys() if int(p_end.get(r, c_end[r])) != int(c_end[r])])
+        if changed_rows:
+            return 'end', int(changed_rows[0])
+        return 'none', -1
+
+    def _closest_endpoint(self, start_idx: int, target_sec: float, rows: int, offsets: dict[int, float], m2ts: dict[int, str], checked: list[bool]) -> int:
+        candidates = [i for i in range(start_idx + 1, rows + 2) if (i == rows + 1) or checked[i - 1]]
+        if not candidates:
+            return min(rows + 1, start_idx + 1)
+        chapter_end = min(candidates, key=lambda e: abs((offsets.get(e, offsets[rows + 1]) - offsets.get(start_idx, 0.0)) - target_sec))
+        file_candidates = []
+        for e in candidates:
+            if e == rows + 1:
+                file_candidates.append(e)
+                continue
+            prev_f = m2ts.get(e - 1, '')
+            cur_f = m2ts.get(e, '')
+            if e == 1 or cur_f != prev_f:
+                file_candidates.append(e)
+        if not file_candidates:
+            return chapter_end
+        file_end = min(file_candidates, key=lambda e: abs((offsets.get(e, offsets[rows + 1]) - offsets.get(start_idx, 0.0)) - target_sec))
+        diff_file = (offsets.get(file_end, offsets[rows + 1]) - offsets.get(start_idx, 0.0)) - target_sec
+        if (-target_sec * 0.25) <= diff_file <= (target_sec * 0.5):
+            return file_end
+        diff_ch = (offsets.get(chapter_end, offsets[rows + 1]) - offsets.get(start_idx, 0.0)) - target_sec
+        score_file = diff_file if diff_file >= 0 else (-2.0 * diff_file)
+        score_ch = diff_ch if diff_ch >= 0 else (-2.0 * diff_ch)
+        return file_end if score_file <= score_ch else chapter_end
+
+    def _generate_configuration_from_ui_inputs(self) -> dict[int, dict[str, int | str]]:
+        inputs = self._collect_config_inputs()
+        mode, changed_row = self._diff_config_inputs(getattr(self, '_last_config_inputs', {}), inputs)
+        self._last_config_inputs = inputs
+        selected_mpls = list(inputs.get('selected_mpls') or [])
+        if not selected_mpls:
+            return {}
+        bdmv_to_mpls = dict(inputs.get('bdmv_to_mpls') or {})
+        row_bdmv = dict(inputs.get('row_bdmv') or {})
+        starts = dict(inputs.get('start') or {})
+        ends = dict(inputs.get('end') or {})
+        segments = dict(inputs.get('segments') or {})
+        prev_conf = dict(getattr(self, '_last_configuration_34', {}) or {})
+        approx_end_time = float(getattr(self, 'approx_episode_duration_seconds', DEFAULT_APPROX_EPISODE_DURATION_SECONDS)
+                                or DEFAULT_APPROX_EPISODE_DURATION_SECONDS)
+        gui_sub_files: list[str] = []
+        try:
+            for i in range(self.table2.rowCount()):
+                it = self.table2.item(i, 0)
+                p = it.text().strip() if it and it.text() else ''
+                if p and (p.endswith('.ass') or p.endswith('.ssa') or p.endswith('.srt') or p.endswith('.sup')):
+                    gui_sub_files.append(p)
+        except Exception:
+            gui_sub_files = []
+        if gui_sub_files:
+            missing = [p for p in gui_sub_files if p and p not in self._subtitle_cache]
+            for p in missing:
+                try:
+                    self._subtitle_cache[p] = Subtitle(p)
+                except Exception:
+                    pass
+            sub_max_end = [self._subtitle_cache[p].max_end_time() if p in self._subtitle_cache else approx_end_time for p in gui_sub_files]
+        else:
+            sub_max_end = []
+        conf: dict[int, dict[str, int | str]] = {}
+        rows = self.table2.rowCount()
+        for r in range(rows):
+            bdmv_index = int(row_bdmv.get(r, 0) or 0)
+            mpls_no_ext = bdmv_to_mpls.get(bdmv_index, '')
+            if not mpls_no_ext:
+                continue
+            node = self._chapter_node_data(mpls_no_ext)
+            total_rows = int(node['rows'])
+            offsets = dict(node['offsets'])
+            m2ts = dict(node['m2ts'])
+            checked = list(segments.get(mpls_no_ext, [True] * total_rows))
+            if len(checked) < total_rows:
+                checked += [True] * (total_rows - len(checked))
+            prev_same_mpls = bool((r - 1) in conf and str(conf[r - 1].get('selected_mpls') or '') == mpls_no_ext)
+            if r < changed_row and mode in ('start', 'end') and r in prev_conf:
+                conf[r] = dict(prev_conf[r])
+                conf[r]['chapter_segments_fully_checked'] = all(checked[:total_rows])
+                continue
+            start_idx = int(starts.get(r, 1) or 1)
+            start_idx = max(1, min(total_rows, start_idx))
+            while start_idx <= total_rows and not checked[start_idx - 1]:
+                start_idx += 1
+            if start_idx > total_rows:
+                start_idx = total_rows
+            if mode == 'segments':
+                first_checked = next((i for i in range(1, total_rows + 1) if checked[i - 1]), 1)
+                if not prev_same_mpls:
+                    start_idx = first_checked
+                elif prev_same_mpls:
+                    start_idx = int(conf[r - 1].get('end_at_chapter') or start_idx)
+                    if start_idx <= total_rows and not checked[start_idx - 1]:
+                        start_idx = next((i for i in range(start_idx, total_rows + 1) if checked[i - 1]), first_checked)
+            if mode == 'end' and r > changed_row and changed_row in conf:
+                changed_bdmv = int(row_bdmv.get(changed_row, 0) or 0)
+                changed_mpls = bdmv_to_mpls.get(changed_bdmv, '')
+                if changed_mpls != mpls_no_ext:
+                    # End change in another mpls should not affect this row.
+                    if r in prev_conf:
+                        conf[r] = dict(prev_conf[r])
+                        conf[r]['chapter_segments_fully_checked'] = all(checked[:total_rows])
+                        continue
+                prev_end_new = int(conf[changed_row].get('end_at_chapter') or start_idx)
+                prev_end_old = int(prev_conf.get(changed_row, {}).get('end_at_chapter') or prev_end_new)
+                if prev_end_new <= prev_end_old:
+                    if r in prev_conf:
+                        conf[r] = dict(prev_conf[r])
+                        conf[r]['chapter_segments_fully_checked'] = all(checked[:total_rows])
+                        continue
+                start_idx = prev_end_new
+            target_sec = float(sub_max_end[r] if r < len(sub_max_end) else approx_end_time)
+            chosen_end = int(ends.get(r, 0) or 0)
+            if chosen_end <= start_idx:
+                chosen_end = self._closest_endpoint(start_idx, target_sec, total_rows, offsets, m2ts, checked)
+            if chosen_end > total_rows + 1:
+                chosen_end = total_rows + 1
+            # If unchecked region starts before chosen end, cut here.
+            for k in range(start_idx, min(chosen_end, total_rows + 1)):
+                if k <= total_rows and not checked[k - 1]:
+                    chosen_end = k
+                    break
+            dur = max(0.0, float(offsets.get(chosen_end, offsets.get(total_rows + 1, 0.0))) - float(offsets.get(start_idx, 0.0)))
+            folder = selected_mpls[min(max(bdmv_index - 1, 0), len(selected_mpls) - 1)][0] if selected_mpls else ''
+            disc_output_name = ''
+            try:
+                prev_row_conf = prev_conf.get(r, {}) if isinstance(prev_conf, dict) else {}
+                if str(prev_row_conf.get('selected_mpls') or '') == mpls_no_ext:
+                    disc_output_name = str(prev_row_conf.get('disc_output_name') or '').strip()
+                if not disc_output_name and isinstance(prev_conf, dict):
+                    for _, pc in prev_conf.items():
+                        if str(pc.get('selected_mpls') or '') == mpls_no_ext:
+                            disc_output_name = str(pc.get('disc_output_name') or '').strip()
+                            if disc_output_name:
+                                break
+            except Exception:
+                disc_output_name = ''
+            if not disc_output_name:
+                disc_output_name = self._resolve_output_name_from_mpls(mpls_no_ext)
+            conf[r] = {
+                'folder': folder,
+                'selected_mpls': mpls_no_ext,
+                'bdmv_index': bdmv_index,
+                'chapter_index': int(start_idx),
+                'start_at_chapter': int(start_idx),
+                'end_at_chapter': int(chosen_end),
+                'offset': get_time_str(float(offsets.get(start_idx, 0.0))),
+                'ep_duration': get_time_str(dur),
+                'disc_output_name': disc_output_name,
+                'chapter_segments_fully_checked': all(checked[:total_rows]),
+            }
+        global CONFIGURATION
+        CONFIGURATION = conf
+        return conf
 
     def on_button_play(self, mpls_path: str, btn: QToolButton):
         def _select_subtitle_file_for_mpls(mpls_path: str) -> Optional[str]:
@@ -8228,6 +10550,66 @@ class BluraySubtitleGUI(QWidget):
                 pass
             subprocess.run(['xdg-open', mpls_path])
 
+    def _is_mpls_currently_main(self, mpls_path: str) -> bool:
+        """True if this playlist file is the checked main MPLS for its disc row in table1."""
+        try:
+            norm_target = os.path.normpath(mpls_path)
+        except Exception:
+            return False
+        if not norm_target.lower().endswith('.mpls'):
+            norm_target = norm_target + '.mpls'
+        for bdmv_index in range(self.table1.rowCount()):
+            root_item = self.table1.item(bdmv_index, 0)
+            if not root_item or not str(root_item.text() or '').strip():
+                continue
+            root = os.path.normpath(root_item.text().strip())
+            info = self.table1.cellWidget(bdmv_index, 2)
+            if not isinstance(info, QTableWidget):
+                continue
+            for mpls_i in range(info.rowCount()):
+                it0 = info.item(mpls_i, 0)
+                if not it0 or not str(it0.text() or '').strip():
+                    continue
+                row_mpls = os.path.normpath(os.path.join(root, 'BDMV', 'PLAYLIST', it0.text().strip()))
+                if row_mpls != norm_target:
+                    continue
+                main_btn = info.cellWidget(mpls_i, 3)
+                return isinstance(main_btn, QToolButton) and main_btn.isChecked()
+        return False
+
+    def _resync_episode_tables_from_main_mpls_selection(self) -> None:
+        """After main MPLS toggles, refresh table2 / table3 so deselected discs disappear."""
+        if self.get_selected_function_id() not in (3, 4) or self._is_movie_mode():
+            return
+        raw = (self.subtitle_folder_path.text() or '').strip()
+        sub_folder = self._normalize_path_input(raw) if raw else ''
+        if sub_folder and os.path.isdir(sub_folder):
+            self._pending_subtitle_folder = sub_folder
+            self._subtitle_scan_debounce.stop()
+            self._subtitle_scan_debounce.start()
+            return
+        try:
+            selected = self.get_selected_mpls_no_ext()
+            bs = BluraySubtitle(
+                self.bdmv_folder_path.text(),
+                [],
+                self.checkbox1.isChecked(),
+                None,
+                approx_episode_duration_seconds=self._get_approx_episode_duration_seconds(),
+            )
+            if not selected:
+                self.table2.setRowCount(0)
+                self.refresh_sp_table({})
+                return
+            configuration = bs.generate_configuration_from_selected_mpls(selected)
+            if configuration:
+                self.on_configuration(configuration, update_sp_table=True)
+            else:
+                self.table2.setRowCount(0)
+                self.refresh_sp_table({})
+        except Exception:
+            traceback.print_exc()
+
     def on_button_main(self, mpls_path: str):
         def has_subtitle_in_table2() -> bool:
             return self._has_subtitle_in_table2()
@@ -8277,7 +10659,7 @@ class BluraySubtitleGUI(QWidget):
         if self.get_selected_function_id() in (3, 4) and self._is_movie_mode():
             self._refresh_movie_table2()
         else:
-            self.on_subtitle_folder_path_change()
+            self._resync_episode_tables_from_main_mpls_selection()
 
     def _has_subtitle_in_table2(self) -> bool:
         try:
@@ -8595,12 +10977,13 @@ class BluraySubtitleGUI(QWidget):
         if is_mkvinfo:
             cols = ['track_number', 'select', 'track_uid', 'track_type', 'language', 'codec_id', 'extract']
         else:
-            cols = ['index', 'select', 'id', 'lang', 'codec_type', 'codec_name', 'start_time']
+            cols = ['index', 'select', 'id', 'language', 'codec_type', 'codec_name', 'start_time']
         table.setColumnCount(len(cols))
         self._set_table_headers(table, cols)
         table.setRowCount(len(streams))
         selected = selected_indexes or set()
         pid_to_lang = pid_lang or {}
+        original_languages: list[str] = []
         for r, s in enumerate(streams):
             idx_text = str(s.get('index', ''))
             codec_type = str(s.get('codec_type') or '')
@@ -8633,11 +11016,9 @@ class BluraySubtitleGUI(QWidget):
                     continue
                 if key == 'track_number' and is_mkvinfo:
                     v = s.get('track_number', s.get('track_id', ''))
-                elif key == 'language' and is_mkvinfo:
-                    v = s.get('language', s.get('lang', 'und'))
-                elif key == 'lang':
+                elif key == 'language':
                     if is_mkvinfo:
-                        v = s.get('lang', 'und')
+                        v = s.get('language', s.get('lang', 'und'))
                     else:
                         v = 'und'
                         try:
@@ -8652,6 +11033,12 @@ class BluraySubtitleGUI(QWidget):
                                     v = 'und'
                         except Exception:
                             v = 'und'
+                    item = QTableWidgetItem('' if v is None else str(v))
+                    item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+                    item.setBackground(QColor('#e0f0ff'))
+                    table.setItem(r, c, item)
+                    original_languages.append('' if v is None else str(v))
+                    continue
                 else:
                     v = s.get(key, '')
                 table.setItem(r, c, QTableWidgetItem('' if v is None else str(v)))
@@ -8663,12 +11050,98 @@ class BluraySubtitleGUI(QWidget):
         btn_row.setLayout(btn_layout)
         btn_ok = QPushButton(self.t('选择'), dlg)
         btn_cancel = QPushButton(self.t('取消'), dlg)
-        btn_ok.clicked.connect(dlg.accept)
         btn_cancel.clicked.connect(dlg.reject)
+        status_label = QLabel(dlg)
+        status_label.setVisible(False)
+        
+        def apply_and_accept():
+            if source_mkv and is_mkvinfo and len(streams) == table.rowCount():
+                lang_col = cols.index('language') if 'language' in cols else -1
+                if lang_col >= 0:
+                    changed: list[tuple[int, str]] = []
+                    for r, s in enumerate(streams):
+                        item = table.item(r, lang_col)
+                        if not item:
+                            continue
+                        new_lang = str(item.text()).strip()
+                        old_lang = original_languages[r] if r < len(original_languages) else ''
+                        if not new_lang or new_lang == old_lang:
+                            continue
+                        try:
+                            track_num = int(s.get('track_number_1based') or s.get('track_id') + 1)
+                        except Exception:
+                            try:
+                                track_num = int(str(s.get('track_id') or '').strip()) + 1
+                            except Exception:
+                                try:
+                                    track_num = int(str(s.get('index') or '').strip()) + 1
+                                except Exception:
+                                    track_num = r + 1
+                        changed.append((track_num, new_lang))
+                    if changed:
+                        try:
+                            find_mkvtoolinx()
+                        except Exception:
+                            pass
+                        exe = MKV_PROP_EDIT_PATH or shutil.which('mkvpropedit') or 'mkvpropedit'
+                        if exe:
+                            args = [exe]
+                            try:
+                                ui = get_mkvtoolnix_ui_language()
+                                if ui:
+                                    args += ['--ui-language', ui]
+                            except Exception:
+                                pass
+                            args.append(source_mkv)
+                            for track_num, lang in changed:
+                                args += ['--edit', f'track:{track_num}', '--set', f'language={lang}']
+                            try:
+                                p = subprocess.run(args, capture_output=True, text=True, encoding='utf-8', errors='ignore', shell=False)
+                                if p.returncode == 0:
+                                    try:
+                                        updated_streams = self._read_mkvinfo_tracks(source_mkv)
+                                        for r, s in enumerate(streams):
+                                            if r < len(updated_streams):
+                                                new_lang_value = str(updated_streams[r].get('language', updated_streams[r].get('lang', 'und')))
+                                                lang_item = table.item(r, lang_col)
+                                                if lang_item:
+                                                    lang_item.setText(new_lang_value)
+                                    except Exception:
+                                        pass
+                                    status_label.setText(self.t('语言修改成功！'))
+                                    status_label.setStyleSheet('color:#16a34a;font-weight:bold;')
+                                    status_label.setVisible(True)
+                                    def on_success_timeout():
+                                        status_label.setVisible(False)
+                                        dlg.accept()
+                                    QTimer.singleShot(3000, on_success_timeout)
+                                else:
+                                    error_msg = f'mkvpropedit failed: {p.returncode}'
+                                    if p.stdout or p.stderr:
+                                        error_msg += f'\n{(p.stdout or "").strip()}\n{(p.stderr or "").strip()}'
+                                    status_label.setText(error_msg)
+                                    status_label.setStyleSheet('color:#dc2626;font-weight:bold;')
+                                    status_label.setVisible(True)
+                                    QTimer.singleShot(3000, lambda: status_label.setVisible(False))
+                            except Exception as e:
+                                status_label.setText(f'Error: {str(e)}')
+                                status_label.setStyleSheet('color:#dc2626;font-weight:bold;')
+                                status_label.setVisible(True)
+                                QTimer.singleShot(3000, lambda: status_label.setVisible(False))
+                        else:
+                            status_label.setText(self.t('未找到 mkvpropedit'))
+                            status_label.setStyleSheet('color:#dc2626;font-weight:bold;')
+                            status_label.setVisible(True)
+                            QTimer.singleShot(3000, lambda: status_label.setVisible(False))
+            else:
+                dlg.accept()
+        
+        btn_ok.clicked.connect(apply_and_accept)
         btn_layout.addStretch(1)
         btn_layout.addWidget(btn_ok)
         btn_layout.addWidget(btn_cancel)
         layout.addWidget(btn_row)
+        layout.addWidget(status_label)
         dlg.resize(720, 420)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return None
@@ -8741,6 +11214,39 @@ class BluraySubtitleGUI(QWidget):
             chapter.pid_to_lang
         )
         cfg[key] = {'audio': copy_audio_track, 'subtitle': copy_sub_track}
+
+    def _inherit_main_track_config_for_sp_key(self, bdmv_index: int, mpls_file: str, sp_key: str):
+        if not sp_key:
+            return
+        cfg = getattr(self, '_track_selection_config', None)
+        if not isinstance(cfg, dict):
+            self._track_selection_config = {}
+            cfg = self._track_selection_config
+        if sp_key in cfg:
+            return
+        mpls_name = str(mpls_file or '').strip()
+        if not mpls_name:
+            return
+        main_mpls_path = self._get_main_mpls_path_for_bdmv_index(bdmv_index)
+        if main_mpls_path:
+            main_key = f'main::{os.path.normpath(main_mpls_path)}'
+            if main_key in cfg:
+                main_cfg = cfg.get(main_key) or {}
+                cfg[sp_key] = {
+                    'audio': list(main_cfg.get('audio') or []),
+                    'subtitle': list(main_cfg.get('subtitle') or []),
+                }
+                return
+        playlist_dir = self._get_playlist_dir_for_bdmv_index(bdmv_index)
+        if playlist_dir:
+            mpls_path = os.path.normpath(os.path.join(playlist_dir, mpls_name))
+            alt_key = f'main::{mpls_path}'
+            if alt_key in cfg:
+                main_cfg = cfg.get(alt_key) or {}
+                cfg[sp_key] = {
+                    'audio': list(main_cfg.get('audio') or []),
+                    'subtitle': list(main_cfg.get('subtitle') or []),
+                }
 
     def _refresh_track_selection_config_for_selected_main(self):
         if self.get_selected_function_id() not in (3, 4):
@@ -8819,6 +11325,28 @@ class BluraySubtitleGUI(QWidget):
                 return f'"{mkvmerge_exe}" {mkvtoolnix_ui_language_arg()} -o "{output_folder}" "{mpls_path}"'
             except Exception:
                 return ''
+
+    def _resolve_bdmv_index_for_main_mpls(self, mpls_path: str, fallback_index: int) -> int:
+        """Resolve bdmv_index from latest configuration using selected main mpls path."""
+        try:
+            target = os.path.normpath(str(mpls_path or '').strip())
+        except Exception:
+            target = ''
+        if not target:
+            return int(fallback_index)
+        try:
+            latest = getattr(self, '_last_configuration_34', {}) or {}
+            for conf in latest.values():
+                if not isinstance(conf, dict):
+                    continue
+                conf_mpls = os.path.normpath(str(conf.get('selected_mpls') or '') + '.mpls')
+                if conf_mpls == target:
+                    val = int(conf.get('bdmv_index') or 0)
+                    if val > 0:
+                        return val
+        except Exception:
+            pass
+        return int(fallback_index)
 
     def _collect_main_remux_cmd_map_from_table1(self) -> dict[str, str]:
         out: dict[str, str] = {}
@@ -8899,7 +11427,8 @@ class BluraySubtitleGUI(QWidget):
                 editor.setPlainText('')
                 editor._updating_cmd = False
                 continue
-            auto_cmd = self._build_main_remux_cmd_template(selected_mpls_path, row + 1, root)
+            resolved_bdmv_index = self._resolve_bdmv_index_for_main_mpls(selected_mpls_path, row + 1)
+            auto_cmd = self._build_main_remux_cmd_template(selected_mpls_path, resolved_bdmv_index, root)
             cur_txt = editor.toPlainText()
             if (not getattr(editor, '_user_modified', False)) or (not cur_txt.strip()) or (cur_txt == getattr(editor, '_auto_cmd', '')):
                 editor._updating_cmd = True
@@ -8942,6 +11471,13 @@ class BluraySubtitleGUI(QWidget):
 
     def on_edit_tracks_from_sp_table(self, row: int):
         try:
+            if row < 0 or row >= self.table3.rowCount():
+                sender = self.sender()
+                if sender is not None and hasattr(self, 'table3') and self.table3:
+                    try:
+                        row = self.table3.indexAt(sender.pos()).row()
+                    except Exception:
+                        row = -1
             if row < 0 or row >= self.table3.rowCount():
                 return
             bdmv_item = self.table3.item(row, ENCODE_SP_LABELS.index('bdmv_index'))
@@ -8993,6 +11529,8 @@ class BluraySubtitleGUI(QWidget):
                 pid_lang = self._pid_lang_from_ffprobe_streams(streams)
 
             if key not in cfg:
+                self._inherit_main_track_config_for_sp_key(bdmv_index, mpls_file, key)
+            if key not in cfg:
                 a, s = BluraySubtitle._default_track_selection_from_streams(streams, pid_lang)
                 cfg[key] = {'audio': a, 'subtitle': s}
             cur = cfg.get(key, {})
@@ -9012,43 +11550,352 @@ class BluraySubtitleGUI(QWidget):
                 elif ctype == 'subtitle':
                     subtitle.append(idx)
             cfg[key] = {'audio': audio, 'subtitle': subtitle}
+            if mpls_file:
+                try:
+                    playlist_dir = self._get_playlist_dir_for_bdmv_index(bdmv_index)
+                    if playlist_dir:
+                        main_key = f'main::{os.path.normpath(os.path.join(playlist_dir, mpls_file))}'
+                        cfg[main_key] = {'audio': list(audio), 'subtitle': list(subtitle)}
+                    selected_main_path = self._get_main_mpls_path_for_bdmv_index(bdmv_index)
+                    if selected_main_path:
+                        selected_main_key = f'main::{os.path.normpath(selected_main_path)}'
+                        cfg[selected_main_key] = {'audio': list(audio), 'subtitle': list(subtitle)}
+                except Exception:
+                    pass
+            keep_row = row
+            keep_col = ENCODE_SP_LABELS.index('output_name')
+            keep_h_scroll = self.table3.horizontalScrollBar().value() if self.table3.horizontalScrollBar() else 0
+            keep_v_scroll = self.table3.verticalScrollBar().value() if self.table3.verticalScrollBar() else 0
             self._recompute_sp_output_names()
+            try:
+                if self.table3.horizontalScrollBar():
+                    self.table3.horizontalScrollBar().setValue(keep_h_scroll)
+                if self.table3.verticalScrollBar():
+                    self.table3.verticalScrollBar().setValue(keep_v_scroll)
+                if 0 <= keep_row < self.table3.rowCount():
+                    keep_item = self.table3.item(keep_row, keep_col) or self.table3.item(keep_row, 0)
+                    if keep_item:
+                        self.table3.setCurrentItem(keep_item)
+            except Exception:
+                pass
+            try:
+                self._refresh_table1_remux_cmds()
+            except Exception:
+                pass
         except Exception:
             self._show_error_dialog(traceback.format_exc())
 
-    def on_button_click(self, mpls_path: str):
+    def _on_edit_tracks_from_sp_table_clicked(self):
+        self.on_edit_tracks_from_sp_table(-1)
+
+    def on_button_click(self, mpls_path: str, is_main_at_build: bool = True, bdmv_index: int = 0):
+        is_main = self._is_mpls_currently_main(mpls_path)
         class ChapterWindow(QDialog):
             def __init__(this):
                 super(ChapterWindow, this).__init__()
                 this.setWindowTitle(f"{self.t('章节')}: {mpls_path}")
                 layout = QVBoxLayout()
-                table_widget = QTableWidget()
-                self._set_compact_table(table_widget, row_height=20, header_height=20)
-                table_widget.setColumnCount(2)
-                self._set_table_headers(table_widget, ['offset', 'file'])
+                this.table_widget = QTableWidget()
+                self._set_compact_table(this.table_widget, row_height=20, header_height=20)
+                this.table_widget.setColumnCount(4)
+                self._set_table_headers(this.table_widget, ['select', 'start', 'end', 'file'])
                 chapter = Chapter(mpls_path)
+                this.chapter = chapter
                 mark_info = chapter.mark_info
                 in_out_time = chapter.in_out_time
-                rows = sum(map(len, mark_info.values()))
-                table_widget.setRowCount(rows)
-                r = 0
+                mpls_duration = chapter.get_total_time()
+
+                offs = []
                 offset = 0
+                chapter_to_m2ts = {}
+                ch_idx = 1
                 for ref_to_play_item_id, mark_timestamps in mark_info.items():
+                    m2ts = in_out_time[ref_to_play_item_id][0] + '.m2ts'
                     for mark_timestamp in mark_timestamps:
                         off = offset + (mark_timestamp - in_out_time[ref_to_play_item_id][1]) / 45000
-                        table_widget.setItem(r, 0, QTableWidgetItem(get_time_str(off)))
-                        table_widget.setItem(r, 1, QTableWidgetItem(in_out_time[ref_to_play_item_id][0] + '.m2ts'))
-                        r += 1
+                        if mpls_duration - off >= 0.001:
+                            offs.append(off)
+                            chapter_to_m2ts[ch_idx] = m2ts
+                            ch_idx += 1
                     offset += (in_out_time[ref_to_play_item_id][2] - in_out_time[ref_to_play_item_id][1]) / 45000
-                layout.addWidget(table_widget)
+
+                this.chapter_to_m2ts = chapter_to_m2ts
+                this.table_widget.setRowCount(len(offs))
+                
+                # Get saved checkbox states for this mpls_path
+                saved_states = self._chapter_checkbox_states.get(mpls_path, [])
+                
+                for i, off in enumerate(offs):
+                    item = QTableWidgetItem(f'Chapter {i+1:02d} - {get_time_str(off)}')
+                    this.table_widget.setItem(i, 1, item)
+                    item = QTableWidgetItem()
+                    if is_main:
+                        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+                        # Restore saved state or default to Checked
+                        if i < len(saved_states):
+                            item.setCheckState(Qt.CheckState.Checked if saved_states[i] else Qt.CheckState.Unchecked)
+                        else:
+                            item.setCheckState(Qt.CheckState.Checked)
+                    else:
+                        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
+                        item.setCheckState(Qt.CheckState.Unchecked)
+                    this.table_widget.setItem(i, 0, item)
+                    this.table_widget.setItem(i, 3, QTableWidgetItem(chapter_to_m2ts.get(i+1, '')))
+                for i in range(len(offs)-1):
+                    this.table_widget.setItem(i, 2, QTableWidgetItem(f'Chapter {i+2:02d} - {get_time_str(offs[i+1])}'))
+                if offs:
+                    this.table_widget.setItem(len(offs)-1, 2, QTableWidgetItem(f'Ending - {get_time_str(mpls_duration)}'))
+                this.table_widget.resizeColumnsToContents()
+                layout.addWidget(this.table_widget)
+                
+                # Add OK and Cancel buttons
+                button_layout = QHBoxLayout()
+                select_all_button = QPushButton(self.t('全选'))
+                ok_button = QPushButton(self.t('确定') if is_main else self.t('关闭'))
+                cancel_button = QPushButton(self.t('取消'))
+                select_all_button.setEnabled(bool(is_main))
+                select_all_button.clicked.connect(this.select_all_chapters)
+                button_layout.addWidget(select_all_button)
+                ok_button.clicked.connect(this.accept)
+                cancel_button.clicked.connect(this.reject)
+                if not is_main:
+                    cancel_button.setVisible(False)
+                button_layout.addWidget(ok_button)
+                button_layout.addWidget(cancel_button)
+                layout.addLayout(button_layout)
+                
                 this.setLayout(layout)
-                height = rows * 30 + 60
+                this.setMinimumWidth(500)
+                height = len(offs) * 30 + 100
                 height = 1000 if height > 1000 else height
-                if rows > 1:
+                if len(offs) > 1:
                     this.setMinimumHeight(height)
 
+            def get_unchecked_segments(this):
+                unchecked_rows = []
+                for row in range(this.table_widget.rowCount()):
+                    item = this.table_widget.item(row, 0)
+                    if item and item.checkState() == Qt.CheckState.Unchecked:
+                        unchecked_rows.append(row)
+                # Find consecutive segments
+                segments = []
+                if unchecked_rows:
+                    start = unchecked_rows[0]
+                    prev = unchecked_rows[0]
+                    for r in unchecked_rows[1:]:
+                        if r == prev + 1:
+                            prev = r
+                        else:
+                            segments.append((start, prev))
+                            start = r
+                            prev = r
+                    segments.append((start, prev))
+                return segments
+
+            def select_all_chapters(this):
+                for row in range(this.table_widget.rowCount()):
+                    item = this.table_widget.item(row, 0)
+                    if not item:
+                        continue
+                    if item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
+                        item.setCheckState(Qt.CheckState.Checked)
+
         chapter_window = ChapterWindow()
-        chapter_window.exec()
+        result = chapter_window.exec()
+        if result == QDialog.DialogCode.Accepted:
+            if not self._is_mpls_currently_main(mpls_path):
+                return
+            # Save checkbox states for this mpls_path
+            states = []
+            for row in range(chapter_window.table_widget.rowCount()):
+                item = chapter_window.table_widget.item(row, 0)
+                if item:
+                    states.append(item.checkState() == Qt.CheckState.Checked)
+            self._chapter_checkbox_states[mpls_path] = states
+            try:
+                if self.get_selected_function_id() in (3, 4):
+                    cfg = self._generate_configuration_from_ui_inputs()
+                    self.on_configuration(cfg, update_sp_table=False)
+            except Exception:
+                self._show_error_dialog(traceback.format_exc())
+            try:
+                if self.get_selected_function_id() in (3, 4):
+                    self._sync_chapter_checkbox_sp_for_mpls(mpls_path, bdmv_index)
+                    self._recompute_sp_output_names()
+                    self._start_sp_table_scan()
+            except Exception:
+                self._show_error_dialog(traceback.format_exc())
+
+    def _add_sp_entries_for_unchecked_segments(self, mpls_path: str, segments: list[tuple[int, int]], bdmv_index: int, chapter_to_m2ts: dict = None):
+        chapter = Chapter(mpls_path)
+        mark_info = chapter.mark_info
+        in_out_time = chapter.in_out_time
+        
+        if chapter_to_m2ts is None:
+            chapter_to_m2ts = {}
+
+        # Get current sp_index for this bdmv_index
+        sp_index = self._sp_index_by_bdmv.get(bdmv_index, 0)
+
+        def _chapter_sort_value(name: str) -> int:
+            s = str(name or '')
+            if re.search(r'_beginning_to_', s, re.I):
+                return 0
+            m = re.search(r'_chapter_(\d+)_to_', s, re.I)
+            return int(m.group(1)) if m else 10 ** 9
+
+        def _find_insert_row(target_bdmv: int, target_mpls: str, target_start_chapter: int) -> int:
+            if not hasattr(self, 'table3') or not self.table3:
+                return 0
+            bdmv_col = ENCODE_SP_LABELS.index('bdmv_index')
+            mpls_col = ENCODE_SP_LABELS.index('mpls_file')
+            out_col = ENCODE_SP_LABELS.index('output_name')
+            total = self.table3.rowCount()
+            first_target_bdmv = -1
+            for r in range(total):
+                b_item = self.table3.item(r, bdmv_col)
+                m_item = self.table3.item(r, mpls_col)
+                o_item = self.table3.item(r, out_col)
+                try:
+                    b_val = int(b_item.text().strip()) if b_item and b_item.text() else 0
+                except Exception:
+                    b_val = 0
+                m_val = m_item.text().strip() if m_item and m_item.text() else ''
+                out_val = o_item.text().strip() if o_item and o_item.text() else ''
+                if b_val == target_bdmv and first_target_bdmv < 0:
+                    first_target_bdmv = r
+                if b_val > target_bdmv:
+                    return r
+                if b_val < target_bdmv:
+                    continue
+                target_mpls_norm = str(target_mpls or '').strip()
+                m_val_norm = str(m_val or '').strip()
+                target_sort = (1 if not target_mpls_norm else 0, target_mpls_norm.lower())
+                cur_sort = (1 if not m_val_norm else 0, m_val_norm.lower())
+                if cur_sort > target_sort:
+                    return r
+                if cur_sort < target_sort:
+                    continue
+                if m_val_norm != target_mpls_norm:
+                    continue
+                cur_start = _chapter_sort_value(out_val)
+                if target_start_chapter <= cur_start:
+                    return r
+            if first_target_bdmv >= 0:
+                # Append after all rows of this bdmv when no same-mpls chapter slot is found.
+                last = first_target_bdmv
+                while last + 1 < total:
+                    b_item2 = self.table3.item(last + 1, bdmv_col)
+                    try:
+                        b_val2 = int(b_item2.text().strip()) if b_item2 and b_item2.text() else 0
+                    except Exception:
+                        b_val2 = 0
+                    if b_val2 != target_bdmv:
+                        break
+                    last += 1
+                return last + 1
+            return total
+
+        # Visible chapter boundaries must match ChapterWindow (filter marks too close to MPLS end).
+        mpls_duration = chapter.get_total_time()
+        chapter_bounds: list[float] = []
+        offset = 0
+        for ref_to_play_item_id, mark_timestamps in mark_info.items():
+            for mark_timestamp in mark_timestamps:
+                off = offset + (mark_timestamp - in_out_time[ref_to_play_item_id][1]) / 45000
+                if mpls_duration - off >= 0.001:
+                    chapter_bounds.append(off)
+            offset += (in_out_time[ref_to_play_item_id][2] - in_out_time[ref_to_play_item_id][1]) / 45000
+        chapter_bounds.append(mpls_duration)
+
+        for start_row, end_row in segments:
+            if start_row < 0 or end_row < 0:
+                continue
+            if start_row >= len(chapter_bounds) - 1 or end_row >= len(chapter_bounds) - 1:
+                continue
+            sp_index += 1
+            start_chapter = start_row + 1  # 1-based
+            end_chapter = end_row + 2     # end is the next chapter
+
+            # Calculate duration (indices align with view-chapters table rows)
+            start_time = float(chapter_bounds[start_row])
+            end_time = float(chapter_bounds[end_row + 1])
+            duration = end_time - start_time
+
+            # Collect m2ts files
+            m2ts_files = []
+            for i in range(start_row, end_row + 1):
+                m2ts = chapter_to_m2ts.get(i + 1)  # i+1 because chapter indices are 1-based
+                if m2ts:
+                    m2ts_files.append(m2ts)
+            
+            m2ts_files = list(dict.fromkeys(m2ts_files))  # Remove duplicates while preserving order
+
+            # Generate output name
+            bdmv_vol = '0' * (3 - len(str(bdmv_index))) + str(bdmv_index)
+            sp_no = str(sp_index).zfill(2)
+            total_rows = len(chapter_bounds) - 1
+            start_tag = f'chapter_{start_chapter}'
+            end_tag = f'chapter_{end_chapter}'
+            if start_row == 0:
+                start_tag = 'beginning'
+            if end_row == total_rows - 1:
+                end_tag = 'ending'
+            suffix = f'_{start_tag}_to_{end_tag}'
+            out_name = f'BD_Vol_{bdmv_vol}_SP{sp_no}{suffix}.mkv'
+
+            # Add to table3
+            if hasattr(self, 'table3') and self.table3:
+                row = _find_insert_row(bdmv_index, os.path.basename(mpls_path), start_chapter)
+                self.table3.insertRow(row)
+                sel_col = ENCODE_SP_LABELS.index('select')
+                bdmv_col = ENCODE_SP_LABELS.index('bdmv_index')
+                mpls_col = ENCODE_SP_LABELS.index('mpls_file')
+                m2ts_col = ENCODE_SP_LABELS.index('m2ts_file')
+                dur_col = ENCODE_SP_LABELS.index('duration')
+                out_col = ENCODE_SP_LABELS.index('output_name')
+                tracks_col = ENCODE_SP_LABELS.index('tracks')
+                play_col = ENCODE_SP_LABELS.index('play')
+
+                # Select checkbox
+                sel_item = QTableWidgetItem()
+                sel_item.setFlags(sel_item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+                sel_item.setCheckState(Qt.CheckState.Checked if duration >= 30.0 else Qt.CheckState.Unchecked)
+                self.table3.setItem(row, sel_col, sel_item)
+
+                self.table3.setItem(row, bdmv_col, QTableWidgetItem(str(bdmv_index)))
+                self.table3.setItem(row, mpls_col, QTableWidgetItem(os.path.basename(mpls_path)))
+                self.table3.setItem(row, m2ts_col, QTableWidgetItem(','.join(m2ts_files)))
+                self.table3.setItem(row, dur_col, QTableWidgetItem(get_time_str(duration)))
+                out_item = QTableWidgetItem(out_name)
+                out_item.setData(Qt.ItemDataRole.UserRole + 3, suffix)
+                out_item.setData(Qt.ItemDataRole.UserRole + 4, 'chapter_segment_sp')
+                self.table3.setItem(row, out_col, out_item)
+                
+                # Set tracks button
+                btn_tracks = QToolButton(self.table3)
+                btn_tracks.setText(self.t('编辑轨道'))
+                btn_tracks.clicked.connect(self._on_edit_tracks_from_sp_table_clicked)
+                self.table3.setCellWidget(row, tracks_col, btn_tracks)
+                
+                # Set play button
+                btn_play = QToolButton(self.table3)
+                btn_play.setText(self.t('play'))
+                btn_play.clicked.connect(self._on_play_sp_table_row_clicked)
+                self.table3.setCellWidget(row, play_col, btn_play)
+
+        # Update sp_index
+        self._sp_index_by_bdmv[bdmv_index] = sp_index
+        
+        # Make table3 visible after adding entries
+        if self.table3.rowCount() > 0:
+            self.table3.setVisible(True)
+        
+        # Refresh sorting after adding entries (do not auto-scroll).
+        if hasattr(self, 'table3') and self.table3:
+            was_sorting = self.table3.isSortingEnabled()
+            self.table3.setSortingEnabled(False)
+            self.table3.setSortingEnabled(was_sorting)
 
     def on_subtitle_menu(self, pos: QPoint):
         row_indexes = [i.row() for i in self.table2.selectionModel().selection().indexes()]
@@ -9194,9 +12041,9 @@ class BluraySubtitleGUI(QWidget):
         try:
             minutes = float(raw)
             if minutes <= 0:
-                minutes = 24.0
+                minutes = DEFAULT_APPROX_EPISODE_DURATION_SECONDS / 60.0
         except Exception:
-            minutes = 24.0
+            minutes = DEFAULT_APPROX_EPISODE_DURATION_SECONDS / 60.0
         return minutes * 60.0
 
     def _is_movie_mode(self) -> bool:
@@ -9388,7 +12235,8 @@ class BluraySubtitleGUI(QWidget):
         labels = ENCODE_LABELS if function_id == 4 else REMUX_LABELS
         duration_col = labels.index('ep_duration')
         bdmv_col = labels.index('bdmv_index')
-        chapter_col = labels.index('chapter_index')
+        chapter_col = labels.index('start_at_chapter')
+        end_col = labels.index('end_at_chapter')
         m2ts_col = labels.index('m2ts_file')
         language_col = labels.index('language')
         output_col = labels.index('output_name')
@@ -9458,10 +12306,14 @@ class BluraySubtitleGUI(QWidget):
 
                 self.table2.setItem(row_i, bdmv_col, QTableWidgetItem(str(bdmv_index)))
                 chapter_combo = QComboBox()
-                chapter_combo.addItems(['1'])
+                chapter_combo.addItem('chapter 01', 1)
                 chapter_combo.setCurrentIndex(0)
+                chapter_combo._prev_start_value = int(chapter_combo.currentData() or 1)
                 chapter_combo.setEnabled(False)
                 self.table2.setCellWidget(row_i, chapter_col, chapter_combo)
+                end_combo = self._build_end_chapter_combo(1, False, 1, 2)
+                end_combo.currentIndexChanged.connect(partial(self._on_end_chapter_combo_changed, row_i, labels))
+                self.table2.setCellWidget(row_i, end_col, end_combo)
                 self.table2.setItem(row_i, m2ts_col, QTableWidgetItem(', '.join(m2ts_files)))
                 self.table2.setItem(row_i, duration_col, QTableWidgetItem(get_time_str(total_time)))
 
@@ -9507,6 +12359,8 @@ class BluraySubtitleGUI(QWidget):
         self.table2.resizeColumnsToContents()
         self._resize_table_columns_for_language(self.table2)
         self._update_language_combo_enabled_state()
+        self._sync_end_chapter_min_constraints(labels)
+        self._apply_start_chapter_constraints(labels)
         self._scroll_table_h_to_right(self.table2)
 
     def on_select_function(self, force: bool = False, keep_inputs: bool = False, keep_state: bool = False):
@@ -11182,13 +14036,23 @@ class BluraySubtitleGUI(QWidget):
         if not mkv_files:
             mkv_files = [self.table2.item(mkv_index, 0).text() for mkv_index in range(self.table2.rowCount())]
         try:
+            chapter_cfg: dict[int, dict[str, int | str]] = {}
+            try:
+                if not self._is_movie_mode():
+                    chapter_cfg = self._generate_configuration_from_ui_inputs()
+            except Exception:
+                chapter_cfg = {}
             bs = BluraySubtitle(
                 self.bdmv_folder_path.text(),
                 mkv_files,
                 self.checkbox1.isChecked(),
                 self._update_exe_button_progress
             )
-            bs.add_chapter_to_mkv(mkv_files, self.table1, cancel_event=cancel_event)
+            bs.configuration = chapter_cfg
+            bs.add_chapter_to_mkv(
+                mkv_files, self.table1, cancel_event=cancel_event,
+                configuration=chapter_cfg if chapter_cfg else None,
+            )
             self._current_cancel_event = None
             self._reset_exe_button()
             self.exe_button.setEnabled(True)
@@ -11430,6 +14294,27 @@ def get_time_str(duration: float) -> str:
     ms = f'{int(minutes):02d}'
     ss = f'{seconds:06.3f}'
     return f'{hs}:{ms}:{ss}'
+
+
+def format_ogm_chapter_timestamp(seconds: float) -> str:
+    """Timestamp for OGM/Matroska simple chapter files: always ``HH:MM:SS.mmm``; zero is ``00:00:00.000``."""
+    try:
+        seconds = float(seconds)
+    except Exception:
+        seconds = 0.0
+    if seconds <= 0.0:
+        return '00:00:00.000'
+    ts = get_time_str(seconds)
+    return '00:00:00.000' if ts == '0' else ts
+
+
+def append_ogm_chapter_lines(lines: list[str], chapter_index: int, time_seconds: float) -> None:
+    """Append one chapter entry: ``CHAPTER01=00:00:00.000`` and ``CHAPTER01NAME=Chapter 01`` (1-based index)."""
+    n = max(1, int(chapter_index))
+    sid = f'{n:02d}'
+    ts = format_ogm_chapter_timestamp(time_seconds)
+    lines.append(f'CHAPTER{sid}={ts}')
+    lines.append(f'CHAPTER{sid}NAME=Chapter {sid}')
 
 
 def get_index_to_m2ts_and_offset(chapter: Chapter) -> tuple[dict[int, str], dict[int, float]]:
