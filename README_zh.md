@@ -1,5 +1,7 @@
 # BluraySubtitle
 
+[English](./README.md) | [简体中文](./README_zh.md)
+
 BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 工具。  
 它将以下四类功能整合在一个应用中：
 
@@ -297,6 +299,10 @@ python BluraySubtitle.py
 docker build -t bluray-subtitle-ubuntu .
 ```
 
+`build.sh` 当前支持以下宿主系统：
+- Ubuntu 22.04 / 24.04 / 25.10 / 26.04（beta）
+- Debian 12 / 13
+
 拉取预构建镜像：
 
 ```bash
@@ -358,5 +364,3 @@ res = res.std.Trim(first=0, length=720)
 测试后删除即可。
 
 ---
-
-## 说明

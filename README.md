@@ -1,5 +1,7 @@
 # BluraySubtitle
 
+[English](./README.md) | [简体中文](./README_zh.md)
+
 BluraySubtitle is a GUI tool for Blu-ray workflows on Windows/Linux (including Docker).  
 It provides four integrated modes:
 
@@ -298,6 +300,10 @@ Build image:
 ```bash
 docker build -t bluray-subtitle-ubuntu .
 ```
+
+`build.sh` currently supports these host systems:
+- Ubuntu 22.04 / 24.04 / 25.10 / 26.04 (beta)
+- Debian 12 / 13
 
 Pull prebuilt:
 
