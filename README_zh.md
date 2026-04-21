@@ -74,7 +74,7 @@ BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 
 
 这部分用更好懂的方式说明程序内部怎么做。
 
-#### A）SP 处理规则（按你的要求整理）
+#### A）SP 处理规则
 
 1. 新增 `select/选择` 列，用来控制这一行 SP 是否参与混流。  
 2. 不再按 MPLS 章节数分流逻辑；MPLS 行统一走 MPLS 处理，`table3` 的所有行都保留 MPLS 信息。  

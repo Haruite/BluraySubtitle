@@ -74,7 +74,7 @@ These paths are used to improve output stability across inconsistent source play
 
 This section explains the internal behavior in plain language.
 
-#### A) SP remux rules (your requirement list)
+#### A) SP remux rules 
 
 1. Add a `select` column to decide whether the SP row should be remuxed.
 2. Do not branch by MPLS chapter count anymore; MPLS rows always stay in SP logic, and `table3` keeps MPLS fields for all rows.
