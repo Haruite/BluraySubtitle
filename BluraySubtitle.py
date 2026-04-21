@@ -1,10 +1,10 @@
-# 功能1：生成合并字幕
-# 功能2：给mkv添加章节
-# 功能3：原盘remux
-# 功能4：原盘压制
-# 功能234需要安装mkvtoolnix，指定FLAC_PATH和FLAC_THREADS(flac版本需大于等于1.5.0)
-# 功能34需要指定FFMPEG_PATH和FFPROBE_PATH
-# 功能4需要安装vapoursynth，并将vspipe(.exe)和x265(.exe)添加到系统path
+# Feature 1: generate merged subtitles
+# Feature 2: add chapters to MKV files
+# Feature 3: Blu-ray remux
+# Feature 4: Blu-ray encode
+# Features 2/3/4 require mkvtoolnix and FLAC_PATH/FLAC_THREADS (flac >= 1.5.0)
+# Features 3/4 require FFMPEG_PATH and FFPROBE_PATH
+# Feature 4 requires vapoursynth and vspipe(.exe)/x265(.exe) in PATH
 # pip install pycountry PyQt6 librosa
 import _io
 import builtins
@@ -58,12 +58,12 @@ if sys.platform == 'win32':
     import winreg
 
 
-FLAC_PATH = r'C:\Downloads\flac-1.5.0-win\Win64\flac.exe'  # flac可执行文件路径
-FLAC_THREADS = 20  # flac线程数
-FFMPEG_PATH = r'C:\Downloads\ffmpeg-8.1-essentials_build\bin\ffmpeg.exe'  # ffmpeg可执行文件路径
-FFPROBE_PATH = r'C:\Downloads\ffmpeg-8.1-essentials_build\bin\ffprobe.exe'  # ffprobe可执行文件路径
-X265_PATH = r'C:\Software\x265.exe'  # x265可执行文件路径
-VSEDIT_PATH = r'C:\Software\vapoursynth\vsedit.exe'  # vapoursynth editor 路径
+FLAC_PATH = r'C:\Downloads\flac-1.5.0-win\Win64\flac.exe'  # flac executable path
+FLAC_THREADS = 20  # flac thread count
+FFMPEG_PATH = r'C:\Downloads\ffmpeg-8.1-essentials_build\bin\ffmpeg.exe'  # ffmpeg executable path
+FFPROBE_PATH = r'C:\Downloads\ffmpeg-8.1-essentials_build\bin\ffprobe.exe'  # ffprobe executable path
+X265_PATH = r'C:\Software\x265.exe'  # x265 executable path
+VSEDIT_PATH = r'C:\Software\vapoursynth\vsedit.exe'  # vapoursynth editor path
 
 
 def is_docker():
@@ -74,13 +74,13 @@ def is_docker():
     )
 
 
-if sys.platform != 'win32':  # 不是 windows 平台
-    FLAC_PATH = '/usr/bin/flac'  # flac可执行文件路径
-    FFMPEG_PATH = '/usr/bin/ffmpeg'  # ffmpeg可执行文件路径
-    FFPROBE_PATH = '/usr/bin/ffprobe'  # ffprobe可执行文件路径
-    X265_PATH = '/usr/bin/x265'  # x265可执行文件路径
-    PLUGIN_PATH = os.path.expanduser('~/plugins')  # 插件所在目录
-    VSEDIT_PATH = r'/usr/bin/vsedit'  # vapoursynth editor 路径
+if sys.platform != 'win32':  # non-Windows platform defaults
+    FLAC_PATH = '/usr/bin/flac'  # flac executable path
+    FFMPEG_PATH = '/usr/bin/ffmpeg'  # ffmpeg executable path
+    FFPROBE_PATH = '/usr/bin/ffprobe'  # ffprobe executable path
+    X265_PATH = '/usr/bin/x265'  # x265 executable path
+    PLUGIN_PATH = os.path.expanduser('~/plugins')  # plugin directory
+    VSEDIT_PATH = r'/usr/bin/vsedit'  # vapoursynth editor path
     if is_docker():
         PLUGIN_PATH = '/app/plugins'
 
@@ -227,6 +227,16 @@ I18N_ZH_TO_EN = {
     '压制命令：': 'Encode command:',
     '混流命令：': 'Mux command:',
     '混流命令: ': 'Mux command: ',
+    '分析轨道：': 'Analyzing tracks: ',
+    '混流中：': 'Muxing: ',
+    '多集分片回退：': 'Multi-episode split fallback: ',
+    '混流回退（多集分片对齐）：': 'Mux fallback (multi-episode split aligned): ',
+    '多集分片回退失败：': 'Multi-episode split fallback failed: ',
+    '（见终端 [remux-fallback-split]）': ' (see terminal [remux-fallback-split])',
+    '混流回退（多 m2ts 对齐）：': 'Mux fallback (multi-m2ts aligned): ',
+    '压缩音轨：': 'Compressing audio: ',
+    '压制并混流：': 'Encode and mux: ',
+    '压制并混流 SPs：': 'Encode and mux SPs: ',
     '正在分析mpls的第一个文件 ｢': 'Analyzing first stream file in mpls ｢',
     '｣ 的轨道': '｣ tracks',
     '选择音频轨道 ': 'Selected audio tracks ',
@@ -238,6 +248,7 @@ I18N_ZH_TO_EN = {
     '\x1b[31m错误，电影混流失败，请检查任务输出\x1b[0m': '\x1b[31mError: muxing failed, please check task output\x1b[0m',
     ' dB，已删除': ' dB, deleted',
     ', 时长: ': ', duration: ',
+    '时长: ': 'Duration: ',
     'FFmpeg 执行出错: ': 'FFmpeg error: ',
     'ffmpeg 压缩的flac文件比原音轨大，将删除 ｢': 'ffmpeg-compressed FLAC is larger than the original track, deleting ｢',
     'flac 压缩 wav 文件 ｢': 'flac compressing wav file ｢',
@@ -246,6 +257,7 @@ I18N_ZH_TO_EN = {
     '字幕拖入处理失败，请检查字幕文件和原盘路径': 'Subtitle drag-in failed, please check the subtitle files and Blu-ray path',
     '字幕文件 ｢': 'Subtitle file ｢',
     '字幕文件加载失败 ｢': 'Failed to load subtitle file ｢',
+    '字幕文件加载失败': 'Failed to load subtitle file',
     '字幕文件加载失败: ': 'Failed to load subtitle file: ',
     '字幕文件加载成功 ｢': 'Subtitle file loaded ｢',
     '将音轨 ｢': 'Track ｢',
@@ -278,8 +290,10 @@ I18N_ZH_TO_EN = {
     '尝试多进程解析，失败时回退到单进程': 'Trying multiprocessing, fallback to single-process on failure',
     '字幕文件全部加载失败': 'Failed to load all subtitle files',
     '成功加载 ': 'Loaded successfully ',
+    ' 个': ' items',
     ' 个字幕文件': ' subtitle files',
     '多进程解析失败，切换到单进程模式: ': 'Multiprocessing parse failed, switching to single-process: ',
+    '多进程解析失败，切换到单进程模式（mode）: ': 'Multiprocessing parse failed, switching to single-process mode: ',
     '配置为空，跳过更新': 'Configuration is empty, skipping update',
     '章节': 'Chapters',
     '编辑字幕': 'Edit Subtitle',
@@ -288,6 +302,59 @@ I18N_ZH_TO_EN = {
     '预览': 'preview',
     '编辑vpy': 'edit_vpy',
     '编辑': 'edit',
+    '目录: ': 'folder: ',
+    '切片时间: ': 'in_out_time: ',
+    '章节标记: ': 'mark_info: ',
+    '章节写入: BD卷 ': 'add_chapter_to_mkv: BD Vol ',
+    ' MKV数(': ' MKV 数 (',
+    ') 与配置集数(': ') 与配置集数 (',
+    ') 不一致，处理前 ': ') 不一致，处理前 ',
+    '[M2TS.get_first_pts] PID 0x': '[M2TS.get_first_pts] first PTS from PID 0x',
+    '[语言修正] 未找到 mkvpropedit，跳过: ': '[lang-fix] mkvpropedit not found, skip: ',
+    '[语言修正] 输入 identify 为空: ': '[lang-fix] input identify empty: ',
+    '[语言修正] 输出 identify 为空: ': '[lang-fix] output identify empty: ',
+    '[语言修正] ': '[lang-fix] ',
+    '[语言修正] mkvpropedit 失败 rc=': '[lang-fix] mkvpropedit failed rc=',
+    '[语言修正] 标准输出:\n': '[lang-fix] stdout:\n',
+    '[语言修正] 标准错误:\n': '[lang-fix] stderr:\n',
+    '[语言修正] shell 回退失败 rc=': '[lang-fix] shell fallback failed rc=',
+    '[语言修正] 异常回退失败 rc=': '[lang-fix] exception fallback failed rc=',
+    '[混流回退] 丢弃非公共轨位: ': '[remux-fallback] drop non-common slots: ',
+    '[混流回退] 缺少首个m2ts: ': '[remux-fallback] missing first m2ts: ',
+    '[混流回退] 首个m2ts没有可参考轨位': '[remux-fallback] no reference track slots from ffprobe on first m2ts',
+    '[混流回退] 缺少m2ts: ': '[remux-fallback] missing m2ts: ',
+    '[混流回退] 无法映射 ffprobe PID 到 mkvmerge 轨道ID: ': '[remux-fallback] could not map ffprobe PIDs to mkvmerge ids for ',
+    '[混流回退] 缺少参考音轨 pid=0x': '[remux-fallback] missing reference audio stream for pid=0x',
+    '[混流回退] 生成静音轨失败 pid=0x': '[remux-fallback] failed creating silence track for pid=0x',
+    '[混流回退] 分片混流失败 rc=': '[remux-fallback] part mux failed rc=',
+    ' 索引=': ' idx=',
+    '[混流回退] 分片输出缺失: ': '[remux-fallback] missing part output after mux: ',
+    '[混流回退] 拼接命令: ': '[remux-fallback] concat: ',
+    '[混流回退] 拼接失败 rc=': '[remux-fallback] concat failed rc=',
+    '[分片回退] 跳过: 输出路径为空或电影模式': '[remux-fallback-split] skip: empty output path or movie_mode',
+    '[分片回退] 跳过: 播放列表仅有 ': '[remux-fallback-split] skip: playlist has only ',
+    ' 个 clip': ' clip(s)',
+    '[分片回退] 缺少首个m2ts: ': '[remux-fallback-split] missing first m2ts: ',
+    '[分片回退] 首个m2ts没有可参考轨位': '[remux-fallback-split] no reference track slots from ffprobe on first m2ts',
+    '[分片回退] 缺少m2ts: ': '[remux-fallback-split] missing m2ts: ',
+    '[分片回退] 无法映射 ffprobe PID: ': '[remux-fallback-split] could not map ffprobe PIDs for ',
+    '[分片回退] 缺少参考音轨 pid=0x': '[remux-fallback-split] missing reference audio stream for pid=0x',
+    '[分片回退] 生成静音失败 pid=0x': '[remux-fallback-split] failed creating silence for pid=0x',
+    '[分片回退] 分片混流失败 rc=': '[remux-fallback-split] part mux failed rc=',
+    ' 集=': ' seg=',
+    ' 片段=': ' clip=',
+    '[分片回退] 分片输出缺失: ': '[remux-fallback-split] missing part after mux: ',
+    '[分片回退] 第 ': '[remux-fallback-split] segment ',
+    ' 段拼接: ': ': ',
+    '[分片回退] 分段拼接失败 rc=': '[remux-fallback-split] segment concat failed rc=',
+    '[分片回退] 输出缺失: ': '[remux-fallback-split] missing output: ',
+    '[分片回退] BD卷 ': '[remux-fallback-split] failed for BD_Vol_',
+    ' 回退失败（见上方日志）': ' (see logs above)',
+    '[分片回退] 跳过: 需要至少2个分段; ': '[remux-fallback-split] skip: need 2+ episode segments; ',
+    '分段数=': 'segments=',
+    ' 预期文件数=': ' expected_files=',
+    '[分片回退] 开始: ': '[remux-fallback-split] start: ',
+    ' 集 -> ': ' episodes -> ',
 }
 I18N_EN_TO_ZH = {v: k for k, v in I18N_ZH_TO_EN.items()}
 
@@ -303,7 +370,7 @@ def translate_text(text: str, language: Optional[str] = None) -> str:
     for src in sorted(mapping.keys(), key=len, reverse=True):
         if not src or src not in result:
             continue
-        # For plain ASCII words, only replace whole tokens to avoid cases like "mkvextract" -> "mkv提取".
+        # For plain ASCII words, only replace whole tokens (e.g. avoid "mkvextract" -> "mkv extract").
         if re.fullmatch(r'[A-Za-z0-9_]+', src):
             result = re.sub(rf'(?<![A-Za-z0-9_]){re.escape(src)}(?![A-Za-z0-9_])', mapping[src], result)
         else:
@@ -339,27 +406,27 @@ class Chapter:
     formats: dict[int, str] = {1: '>B', 2: '>H', 4: '>I', 8: '>Q'}
 
     def __init__(self, file_path: str):
-        # 参考 https://github.com/lw/BluRay/wiki/PlayItem
+        # Reference: https://github.com/lw/BluRay/wiki/PlayItem
 
-        # in_out_time 是一个列表，列表的每一项是一个元组，按照播放对应的顺序
-        # 元组第一位为文件名，第二位是 in_time，第三位是 out_time
-        # 对应 m2ts 文件的播放时长为 (out_time - in_time) / 45000
+        # in_out_time is an ordered list of tuples for playback items.
+        # tuple[0] is clip filename, tuple[1] is in_time, tuple[2] is out_time.
+        # Clip playback duration is (out_time - in_time) / 45000.
         self.in_out_time: list[tuple[str, int, int]] = []
 
-        # mark_info 是一个字典
-        # 字典的键 ref_to_play_item_id 对应 in_out_time 的索引
-        # 字典的值为由章节标记对应的时间戳 mark_timestamp 组成的列表
-        # 那么时间戳对应在 mpls 的播放时间为 (mark_timestamp - in_time) / 45000
-        # + (0 ~ ref_to_play_item_id 所有文件对应的播放时长之和)
-        # 举个例子 (来自 BanG Dream! It's MyGO!!!!! 原盘上卷)
+        # mark_info is a dict where:
+        # key ref_to_play_item_id maps to an index in in_out_time,
+        # value is a list of chapter mark timestamps mark_timestamp.
+        # Timeline offset in MPLS is:
+        # (mark_timestamp - in_time) / 45000 + sum(previous clip durations).
+        # Example (from BanG Dream! It's MyGO!!!!! Blu-ray vol.1):
         # in_out_time = [('00000', 1647000000, 1711414350), ('00001', 1647000000, 1710963900), ...]
         # mark_info = {0: [1647000000, 1655188805, 1689886593, 1706626441, 1710676738],
         # 1: [1647000000, 1649522520, 1653570939, 1685023610, 1706174115, 1710224411], ...}
-        # mark_info 键 1 对应的时间戳列表中的 1649522520 对应的播放时间计算如下：
-        # 首先 ref_to_play_item_id 为 1，对应 in_out_time 中索引为 1 的项，即 ('00001', 1647000000, 1710963900)
-        # 由此可知 1649522520 这个时间戳相对文件开始的 in_time 的时间差为 (1649522520 - 1647000000) / 45000 = 56.056 秒
-        # 文件索引为 1，那么前面有一个文件，其播放时长为 (1711414350 - 1647000000) / 45000 = 1431.43 秒
-        # 所以 1649522520 这个时间戳在整个播放列表中的时间位置为 1431.43 + 56.056 = 1487.486 秒 即 24:47.486
+        # For mark_info key=1, timestamp 1649522520:
+        # ref_to_play_item_id=1 => in_out_time[1] is ('00001', 1647000000, 1710963900).
+        # Local offset is (1649522520 - 1647000000) / 45000 = 56.056s.
+        # Previous clip duration is (1711414350 - 1647000000) / 45000 = 1431.43s.
+        # Final playlist position is 1431.43 + 56.056 = 1487.486s (24:47.486).
         self.mark_info: dict[int, list[int]] = {}
         self.file_path: str = file_path
         self.pid_to_lang = {}
@@ -400,10 +467,10 @@ class Chapter:
     def _unpack_byte(self, n: int):
         return unpack(self.formats[n], self.mpls_file.read(n))[0]
 
-    def get_total_time(self):  # 获取播放列表的总时长
+    def get_total_time(self):  # total playlist duration
         return sum(map(lambda x: (x[2] - x[1]) / 45000, self.in_out_time))
 
-    def get_total_time_no_repeat(self):  # 获取播放列表中时长，重复播放同一文件只计算一次
+    def get_total_time_no_repeat(self):  # playlist duration counting repeated clips only once
         return sum({x[0]: (x[2] - x[1]) / 45000 for x in self.in_out_time}.values())
 
     def get_pid_to_language(self):
@@ -507,19 +574,19 @@ class Ass:
                 elif 'event' in section_title.lower():
                     if line.startswith(';'):
                         continue
-                    try:  # 每一行解析都加 try，防止个别行格式错误导致整个合并失败
+                    try:  # parse each line defensively to avoid failing whole merge on malformed rows
                         elements = ([line[:line.index(':')]]
                                     + list(map(lambda _attr: _attr.strip(), line[line.index(':') + 1:].split(','))))
                         if not self.event_attrs:
                             self.event_attrs += elements
                         else:
                             event = Event()
-                            if len(elements) > len(self.event_attrs):  # 字幕内容中包含 ','
+                            if len(elements) > len(self.event_attrs):  # subtitle text itself contains commas
                                 elements = (elements[:len(self.event_attrs) - 1] +
                                             [','.join(elements[len(self.event_attrs) - 1:])])
                             for i, attr in enumerate(elements):
                                 key = self.event_attrs[i]
-                                if key.lower() in ('start', 'end'):  # 将 Start 和 End 两个时间字符串转换为 timedelta 格式
+                                if key.lower() in ('start', 'end'):  # convert Start/End timestamp text to timedelta
                                     attr = datetime.timedelta(
                                         seconds=reduce(lambda a, b: a * 60 + b, map(float, attr.split(':'))))
                                 setattr(event, self.event_attrs[i], attr)
@@ -782,14 +849,14 @@ class Subtitle:
                     return 0
                 max_end = max(end_set)
                 end_set.remove(max_end)
-                if end_set:  # 确保还有其他元素
+                if end_set:  # ensure there are still candidate end times
                     max_end_1 = max(end_set)
                     if max_end_1 < max_end - 300:
-                        return max_end_1  # 防止个别 Event 结束时间超长(比如评论音轨超出那一集的结束时间)
+                        return max_end_1  # cap abnormally long events (e.g., commentary stream exceeding episode end)
                 return max_end
             return 0
         except Exception as e:
-            print(f'获取字幕时长失败: {str(e)}')
+            print(f'Failed to get subtitle duration: {str(e)}')
             return 0
 
 
@@ -797,7 +864,7 @@ def _parse_subtitle_worker(file_path: str) -> tuple[str, Subtitle | None]:
     try:
         return file_path, Subtitle(file_path)
     except Exception as e:
-        print(f'字幕文件 ｢{file_path}｣ 解析失败: {str(e)}')
+        print(f'Subtitle file ｢{file_path}｣ parse failed: {str(e)}')
         return file_path, None
 
 
@@ -1077,7 +1144,11 @@ class M2TS:
             pts = M2TS._pts_from_pes_header(bytes(buf[9:14]))
             pending.pop(pid, None)
             if debug:
-                print(f'[M2TS.get_first_pts] first PTS from PID 0x{pid:04x} = {pts}', file=sys.stderr)
+                print(
+                    f'{translate_text("[M2TS.get_first_pts] first PTS from PID 0x")}{pid:04x}'
+                    f'{translate_text(" = ")}{pts}',
+                    file=sys.stderr
+                )
             return pts
 
         return None
@@ -1210,6 +1281,9 @@ class BluraySubtitle:
         except Exception:
             self.approx_episode_duration_seconds = DEFAULT_APPROX_EPISODE_DURATION_SECONDS
 
+    def t(self, text: str) -> str:
+        return translate_text(str(text), getattr(self, '_language_code', CURRENT_UI_LANGUAGE))
+
     def _progress(self, value: Optional[int] = None, text: Optional[str] = None):
         if self.progress_dialog is None:
             return
@@ -1229,56 +1303,56 @@ class BluraySubtitle:
             QCoreApplication.processEvents()
 
     def _preload_subtitles(self, file_paths: list[str], cancel_event: Optional[threading.Event] = None):
+        """Preload subtitles into cache with platform-aware fallback strategy."""
         if not file_paths:
             return
         missing = [p for p in file_paths if p and p not in self._subtitle_cache]
         if not missing:
             return
         
-        # 根据平台选择策略
+        # Choose loading strategy by platform.
         if sys.platform == 'win32':
-            # Windows下直接使用多进程
+            # Windows: use multiprocessing directly.
             self._preload_subtitles_multiprocess(missing, cancel_event)
         else:
-            # Linux下尝试多进程，失败则回退到单进程
+            # Linux: try multiprocessing first, then fall back to single process.
             try:
                 self._preload_subtitles_multiprocess(missing, cancel_event)
             except Exception as e:
-                print(f'多进程解析失败，切换到单进程模式: {str(e)}')
+                print(f'Multiprocessing parse failed, switching to single-process mode: {str(e)}')
                 self._preload_subtitles_single(missing, cancel_event)
     
     def _preload_subtitles_single(self, file_paths: list[str], cancel_event: Optional[threading.Event] = None):
-        """单进程模式解析字幕"""
+        """Parse subtitles in single-process mode."""
         for p in file_paths:
             if cancel_event and cancel_event.is_set():
                 raise _Cancelled()
             try:
                 self._subtitle_cache[p] = Subtitle(p)
             except Exception as e:
-                print(f'字幕文件加载失败 ｢{p}｣: {str(e)}')
+                print(f'Failed to load subtitle file ｢{p}｣: {str(e)}')
     
     def _preload_subtitles_multiprocess(self, file_paths: list[str], cancel_event: Optional[threading.Event] = None):
-        """多进程模式解析字幕"""
+        """Parse subtitles in multiprocessing mode."""
         if len(file_paths) == 1:
             p = file_paths[0]
             try:
                 self._subtitle_cache[p] = Subtitle(p)
             except Exception as e:
-                print(f'字幕文件加载失败 ｢{p}｣: {str(e)}')
+                print(f'Failed to load subtitle file ｢{p}｣: {str(e)}')
             return
 
-        # 在 Linux 下，如果发现是子进程在运行，直接退出，防止递归弹出窗口
+        # On Linux, exit in worker subprocess to avoid recursive window spawning.
         if sys.platform != 'win32' and multiprocessing.current_process().name != 'MainProcess':
             return
 
         max_workers = min(len(file_paths), os.cpu_count() or 1)
 
-        # 适配 Linux/Windows 的上下文获取
-        mp_context = None
+        # Select multiprocessing context for Linux/Windows compatibility.
         if sys.platform == 'win32':
             mp_context = multiprocessing.get_context('spawn')
         else:
-            # Linux 默认使用 fork，在 GUI 中更稳定，但必须配合 if __name__ == "__main__"
+            # Linux defaults to fork; more stable for GUI, but requires __main__ guard.
             mp_context = multiprocessing.get_context('fork')
 
         try:
@@ -1296,12 +1370,12 @@ class BluraySubtitle:
                             self._subtitle_cache[p] = sub
                     except Exception as e:
                         if p:
-                            print(f'字幕文件加载失败 ｢{p}｣: {str(e)}')
+                            print(f'Failed to load subtitle file ｢{p}｣: {str(e)}')
                         else:
-                            print(f'字幕文件加载失败: {str(e)}')
+                            print(f'Failed to load subtitle file: {str(e)}')
         except Exception as e:
-            # 多进程失败，抛出异常让上层处理
-            raise Exception(f'多进程解析失败: {str(e)}')
+            # Propagate exception so caller can decide fallback behavior.
+            raise Exception(f'Multiprocessing parse failed: {str(e)}')
 
     @staticmethod
     def get_available_drives():
@@ -1334,7 +1408,7 @@ class BluraySubtitle:
                         if os.path.exists(m2ts_file):
                             total_size += os.path.getsize(m2ts_file)
                         else:
-                            print(f'\033[31m错误,｢{mpls_file_path}｣ 中的m2ts文件 ｢{m2ts_file}｣ 未找到\033[0m')
+                            print(f'\033[31mError, m2ts file ｢{m2ts_file}｣ in ｢{mpls_file_path}｣ not found\033[0m')
                     stream_files.add(in_out_time[0])
             indicator = chapter.get_total_time_no_repeat() * (1 + sum(map(len, chapter.mark_info.values())) / 5
                                                               ) * os.path.getsize(mpls_file_path) * total_size
@@ -1476,15 +1550,15 @@ class BluraySubtitle:
         approx_end_time = float(getattr(self, 'approx_episode_duration_seconds', DEFAULT_APPROX_EPISODE_DURATION_SECONDS)
                                 or DEFAULT_APPROX_EPISODE_DURATION_SECONDS)
         if self.sub_files:
-            # 在主线程中总是使用单进程模式，避免多进程问题
+            # Always use single process in main thread to avoid multiprocessing edge cases.
             missing = [p for p in self.sub_files if p and p not in self._subtitle_cache]
             if missing:
-                # 直接使用单进程加载，避免多进程在主线程中的问题
+                # Use single-process loading directly in main thread.
                 for p in missing:
                     try:
                         self._subtitle_cache[p] = Subtitle(p)
                     except Exception as e:
-                        print(f'字幕文件加载失败 ｢{p}｣: {str(e)}')
+                        print(f'Failed to load subtitle file ｢{p}｣: {str(e)}')
             sub_max_end = [self._subtitle_cache[p].max_end_time() for p in self.sub_files]
         else:
             sub_max_end = []
@@ -1610,15 +1684,15 @@ class BluraySubtitle:
                                 or DEFAULT_APPROX_EPISODE_DURATION_SECONDS)
 
         if self.sub_files:
-            # 在主线程中总是使用单进程模式，避免多进程问题
+            # Always use single process in main thread to avoid multiprocessing edge cases.
             missing = [p for p in self.sub_files if p and p not in self._subtitle_cache]
             if missing:
-                # 直接使用单进程加载，避免多进程在主线程中的问题
+                # Use single-process loading directly in main thread.
                 for p in missing:
                     try:
                         self._subtitle_cache[p] = Subtitle(p)
                     except Exception as e:
-                        print(f'字幕文件加载失败 ｢{p}｣: {str(e)}')
+                        print(f'Failed to load subtitle file ｢{p}｣: {str(e)}')
             sub_max_end = [self._subtitle_cache[p].max_end_time() for p in self.sub_files]
         else:
             sub_max_end = []
@@ -1760,7 +1834,7 @@ class BluraySubtitle:
                            f'合并中 {sub_index + 1}/{len(self.sub_files)}')
             if conf_tmp['bdmv_index'] != bdmv_index:
                 if bdmv_index > 0:
-                    self._progress(text='写入字幕文件')
+                    self._progress(text='Writing Subtitle File')
                     if hasattr(sub, 'content'):
                         suffix = str(getattr(self, 'subtitle_suffix', '') or '')
                         sub.dump(conf['folder'] + suffix, conf['selected_mpls'] + suffix)
@@ -1774,7 +1848,7 @@ class BluraySubtitle:
             conf = conf_tmp
             if cancel_event and cancel_event.is_set():
                 raise _Cancelled()
-        self._progress(text='写入字幕文件')
+        self._progress(text='Writing Subtitle File')
         if hasattr(sub, 'content'):
             suffix = str(getattr(self, 'subtitle_suffix', '') or '')
             sub.dump(conf['folder'] + suffix, conf['selected_mpls'] + suffix)
@@ -1867,7 +1941,12 @@ class BluraySubtitle:
             confs = by_bdmv.get(bdmv_index, [])
             n = min(len(paths), len(confs))
             if len(paths) != len(confs):
-                print(f'add_chapter_to_mkv: BD Vol {bdmv_index} MKV 数 ({len(paths)}) 与配置集数 ({len(confs)}) 不一致，处理前 {n} 个')
+                print(
+                    f'{self.t("章节写入: BD卷 ")}{bdmv_index}'
+                    f'{self.t(" MKV数(")}{len(paths)}'
+                    f'{self.t(") 与配置集数(")}{len(confs)}'
+                    f'{self.t(") 不一致，处理前 ")}{n}{self.t(" 个")}'
+                )
             rows_cache: dict[str, int] = {}
             for i in range(n):
                 if cancel_event and cancel_event.is_set():
@@ -1935,10 +2014,10 @@ class BluraySubtitle:
             if mkv_index >= len(mkv_files):
                 break
             duration = MKV(mkv_files[mkv_index]).get_duration()
-            print(f'folder: {folder}')
-            print(f'in_out_time: {chapter.in_out_time}')
-            print(f'mark_info: {chapter.mark_info}')
-            print(f'集数：{mkv_index + 1}, 时长: {duration}')
+            print(f'{self.t("folder: ")}{folder}')
+            print(f'{self.t("in_out_time: ")}{chapter.in_out_time}')
+            print(f'{self.t("mark_info: ")}{chapter.mark_info}')
+            print(f'{self.t("Episode: ")}{mkv_index + 1}, {self.t("Duration: ")}{duration}')
 
             play_item_duration_time_sum = 0
             episode_duration_time_sum = 0
@@ -1974,7 +2053,7 @@ class BluraySubtitle:
                             volume_done = True
                             break
                         duration = MKV(mkv_files[mkv_index]).get_duration()
-                        print(f'集数：{mkv_index + 1}, 时长: {duration}')
+                        print(f'{self.t("Episode: ")}{mkv_index + 1}, {self.t("Duration: ")}{duration}')
                         chapter_text.clear()
 
                     chapter_id += 1
@@ -2016,7 +2095,8 @@ class BluraySubtitle:
         else:
             self._add_chapter_to_mkv_by_duration(mkv_files, table, selected_mpls, cancel_event=cancel_event)
 
-    def completion(self):  # 补全蓝光目录；删除临时文件
+    def completion(self):  # complete Blu-ray folder; remove temporary files
+        """Finalize folder layout after processing and clean temporary artifacts."""
         if self.checked:
             for folder in self.bluray_folders:
                 bdmv = os.path.join(folder, 'BDMV')
@@ -2282,7 +2362,6 @@ class BluraySubtitle:
                         break
             mux_failed = (ret_sp != 0 or not sp_ok)
             if mux_failed and str(src_path).lower().endswith('.mpls'):
-                n_fc = 0
                 try:
                     n_fc = len(Chapter(src_path).in_out_time or [])
                 except Exception:
@@ -2310,7 +2389,6 @@ class BluraySubtitle:
                         os.path.normpath(sp_mkv_path),
                         copy_audio_track,
                         copy_sub_track,
-                        pid_to_lang,
                         cover_sp,
                         cancel_event=cancel_event,
                     ):
@@ -2655,7 +2733,6 @@ class BluraySubtitle:
     @staticmethod
     def _is_silent_audio_file(path: str, threshold_db: float = -60.0) -> tuple[bool, float]:
         y = None
-        sr = None
         if soundfile is not None:
             try:
                 info = soundfile.info(path)
@@ -2697,7 +2774,6 @@ class BluraySubtitle:
         if not out_flac:
             return False
         os.makedirs(os.path.dirname(out_flac) or '.', exist_ok=True)
-        tmp_wav = ''
         owns_tmp = True
         lower = str(input_media).lower()
         if lower.endswith(('.wav', '.w64')):
@@ -2726,7 +2802,6 @@ class BluraySubtitle:
                     except Exception:
                         pass
                 return False
-            effective_bits = 24
             try:
                 effective_bits = get_effective_bit_depth(tmp_wav)
             except Exception:
@@ -2775,14 +2850,6 @@ class BluraySubtitle:
                     os.remove(tmp_wav)
                 except Exception:
                     pass
-        if p.returncode != 0:
-            return []
-        try:
-            data = json.loads(p.stdout or "{}")
-            streams = data.get("streams") or []
-            return streams if isinstance(streams, list) else []
-        except Exception:
-            return []
 
     @staticmethod
     def _pid_lang_from_mkvmerge_json(media_path: str) -> dict[int, str]:
@@ -3159,6 +3226,38 @@ class BluraySubtitle:
         return fa, fs
 
     @staticmethod
+    def _split_segment_count_from_mkvmerge_cmd(cmd: str) -> Optional[int]:
+        """
+        Best-effort parse of mkvmerge ``--split``.
+        Supports ``--split parts:...`` and ``--split chapters:...``.
+        Returns segment count when recognizable; otherwise None.
+        """
+        raw = (cmd or '').strip()
+        if not raw:
+            return None
+        text = re.sub(r'[\r\n]+', ' ', raw)
+        m = re.search(r'--split\s+("([^"]+)"|\'([^\']+)\'|(\S+))', text)
+        if not m:
+            return None
+        spec = (m.group(2) or m.group(3) or m.group(4) or '').strip()
+        low = spec.lower()
+        if low.startswith('parts:'):
+            payload = spec[6:].strip()
+            if not payload:
+                return None
+            segs = [x.strip() for x in payload.split(',') if x.strip()]
+            return len(segs) if segs else None
+        if low.startswith('chapters:'):
+            payload = spec[9:].strip()
+            if not payload:
+                return None
+            if payload.lower() in ('all',):
+                return None
+            cuts = [x.strip() for x in payload.split(',') if x.strip()]
+            return (len(cuts) + 1) if cuts else 1
+        return None
+
+    @staticmethod
     def _m2ts_clip_time_window_sec(m2ts_path: str, in_time: int, out_time: int) -> tuple[bool, float, float]:
         """
         (needs_split, start_sec, end_sec) for one playlist item.
@@ -3375,9 +3474,6 @@ class BluraySubtitle:
     ) -> bool:
         if duration_sec <= 0.0:
             return False
-        sr = 48000
-        ch = 2
-        bits = 16
         try:
             sr = int(float(ref_audio_stream.get('sample_rate') or 48000))
         except Exception:
@@ -3416,7 +3512,6 @@ class BluraySubtitle:
         output_file: str,
         copy_audio_track: list[str],
         copy_sub_track: list[str],
-        pid_to_lang: dict[int, str],
         cover: str,
         cancel_event: Optional[threading.Event] = None,
     ) -> bool:
@@ -3585,7 +3680,6 @@ class BluraySubtitle:
         confs: list[dict[str, int | str]],
         copy_audio_track: list[str],
         copy_sub_track: list[str],
-        pid_to_lang: dict[int, str],
         cover: str,
         cancel_event: Optional[threading.Event] = None,
     ) -> bool:
@@ -3594,7 +3688,6 @@ class BluraySubtitle:
         For each episode window on the MPLS timeline, mux overlapping m2ts slices with ffprobe PID-aligned
         ``--track-order``, then ``+`` concat slices; writes ``basename-001.mkv``, ``-002.mkv``, … like mkvmerge.
         """
-        del pid_to_lang  # languages fixed by caller via ``_fix_output_track_languages_with_mkvpropedit``
         out_norm = os.path.normpath(output_file) if output_file else ''
         if not out_norm or getattr(self, 'movie_mode', False):
             print('[remux-fallback-split] skip: empty output path or movie_mode')
@@ -3656,7 +3749,7 @@ class BluraySubtitle:
                 f'{", ".join(os.path.basename(p) for p in expected)}'
             )
             try:
-                self._progress(text=f'多集分片回退：{len(segments)} 个 MKV…')
+                self._progress(text=f'Multi-episode split fallback: {len(segments)} MKV...')
             except Exception:
                 pass
             for seg_idx, ((cs, ce), dest_path) in enumerate(zip(segments, expected)):
@@ -3697,7 +3790,6 @@ class BluraySubtitle:
                     if slice_end <= slice_start + eps:
                         continue
                     is_full_window = (slice_start <= full_lo + eps) and (slice_end >= full_hi - eps)
-                    split_arg = ''
                     if is_full_window and not need:
                         split_arg = ''
                     elif is_full_window and need:
@@ -4028,10 +4120,10 @@ class BluraySubtitle:
                 ensure_disc_out_dir=True,
             )
             if m2ts_file:
-                print(f'正在分析mpls的第一个文件 ｢{m2ts_file}｣ 的轨道')
-                self._progress(text=f'分析轨道：{os.path.basename(m2ts_file)}')
-            print(f'混流命令: {remux_cmd}')
-            self._progress(text=f'混流中：BD_Vol_{bdmv_vol}')
+                print(f'{self.t("Analyzing first stream file in mpls ｢")}{m2ts_file}{self.t("｣ tracks")}')
+                self._progress(text=f'{self.t("分析轨道：")}{os.path.basename(m2ts_file)}')
+            print(f'{self.t("Mux command: ")}{remux_cmd}')
+            self._progress(text=f'{self.t("混流中：")}BD_Vol_{bdmv_vol}')
             ret = self._run_shell_command(remux_cmd)
             try:
                 ch_tmp = Chapter(mpls_path)
@@ -4063,6 +4155,14 @@ class BluraySubtitle:
                     expected_split_paths = BluraySubtitle._expected_mkvmerge_split_output_paths(out_n, len(segs_b))
                 except Exception:
                     expected_split_paths = []
+            try:
+                cmd_split_count = BluraySubtitle._split_segment_count_from_mkvmerge_cmd(remux_cmd)
+            except Exception:
+                cmd_split_count = None
+            if out_n and isinstance(cmd_split_count, int) and cmd_split_count > 1:
+                expected_from_cmd = BluraySubtitle._expected_mkvmerge_split_output_paths(out_n, cmd_split_count)
+                if len(expected_from_cmd) >= len(expected_split_paths):
+                    expected_split_paths = expected_from_cmd
             split_by_config = len(expected_split_paths) > 1
             stem_base, ext_base = os.path.splitext(os.path.basename(out_n)) if out_n else ('', '.mkv')
             alt001 = os.path.join(os.path.dirname(out_n), f'{stem_base}-001{ext_base or ".mkv"}') if out_n else ''
@@ -4075,14 +4175,13 @@ class BluraySubtitle:
             fb_audio, fb_sub = BluraySubtitle._fallback_track_lists(remux_cmd, copy_audio_track, copy_sub_track)
             if n_clips > 1 and not primary_ok:
                 if split_by_config:
-                    self._progress(text=f'混流回退（多集分片对齐）：BD_Vol_{bdmv_vol}')
+                    self._progress(text=f'Mux fallback (multi-episode split aligned): BD_Vol_{bdmv_vol}')
                     split_ok = self._try_remux_mpls_split_outputs_track_aligned(
                         mpls_path,
                         out_n,
                         confs,
                         fb_audio,
                         fb_sub,
-                        pid_to_lang,
                         cover,
                         cancel_event=cancel_event,
                     )
@@ -4091,15 +4190,14 @@ class BluraySubtitle:
                         primary_ok = all(os.path.isfile(p) for p in expected_split_paths)
                     else:
                         print(f'[remux-fallback-split] failed for BD_Vol_{bdmv_vol} (see logs above)')
-                        self._progress(text=f'多集分片回退失败：BD_Vol_{bdmv_vol}（见终端 [remux-fallback-split]）')
+                        self._progress(text=f'Multi-episode split fallback failed: BD_Vol_{bdmv_vol} (see terminal [remux-fallback-split])')
                 if n_clips > 1 and not primary_ok and (not split_by_config):
-                    self._progress(text=f'混流回退（多 m2ts 对齐）：BD_Vol_{bdmv_vol}')
+                    self._progress(text=f'Mux fallback (multi-m2ts aligned): BD_Vol_{bdmv_vol}')
                     if self._try_remux_mpls_track_aligned_concat(
                         mpls_path,
                         out_n,
                         fb_audio,
                         fb_sub,
-                        pid_to_lang,
                         cover,
                         cancel_event=cancel_event,
                     ):
@@ -4345,7 +4443,7 @@ class BluraySubtitle:
             if cancel_event and cancel_event.is_set():
                 raise _Cancelled()
             i += 1
-            self._progress(text=f'压缩音轨：{os.path.basename(mkv_file)}')
+            self._progress(text=f'Compressing audio: {os.path.basename(mkv_file)}')
             self.flac_task(mkv_file, dst_folder, i)
             self._progress(400 + int(400 * i / len(mkv_files)))
 
@@ -4478,7 +4576,7 @@ class BluraySubtitle:
             if cancel_event and cancel_event.is_set():
                 raise _Cancelled()
             i += 1
-            self._progress(text=f'压制并混流：{os.path.basename(mkv_file)}')
+            self._progress(text=f'Encode and mux: {os.path.basename(mkv_file)}')
             vpy_path = None
             if vpy_paths and 0 <= (i - 1) < len(vpy_paths):
                 vpy_path = vpy_paths[i - 1]
@@ -4507,7 +4605,7 @@ class BluraySubtitle:
             for idx, (entry_idx, sp_mkv_path) in enumerate(created_sp, start=1):
                 if cancel_event and cancel_event.is_set():
                     raise _Cancelled()
-                self._progress(text=f'压制并混流 SPs：{os.path.basename(sp_mkv_path)}')
+                self._progress(text=f'Encode and mux SPs: {os.path.basename(sp_mkv_path)}')
                 if os.path.isdir(sp_mkv_path) or (not os.path.exists(sp_mkv_path)):
                     self._progress(900 + int(90 * idx / total_sp))
                     continue
@@ -4602,7 +4700,7 @@ class BluraySubtitle:
             for idx, sp_path in enumerate(sp_files, start=1):
                 if cancel_event and cancel_event.is_set():
                     raise _Cancelled()
-                self._progress(text=f'压制并混流 SPs：{os.path.basename(sp_path)}')
+                self._progress(text=f'Encode and mux SPs: {os.path.basename(sp_path)}')
                 if sp_path.lower().endswith('.mka'):
                     self.flac_task(sp_path, sps_folder, -1)
                 else:
@@ -4651,7 +4749,7 @@ class BluraySubtitle:
                 if stream['codec_name'] in ('truehd', 'dts'):
                     track_bits[stream['index']] = int(stream.get('bits_per_raw_sample') or 24)
         else:
-            print('\033[31m错误，电影混流失败，请检查任务输出\033[0m')
+            print('\033[31mError: movie mux failed, please check task output\033[0m')
         base = os.path.join(dst_folder, os.path.splitext(os.path.basename(output_file))[0])
         track_count, track_info = self.extract_lossless(src_mkv, dolby_truehd_tracks, output_base=base)
         if track_info:
@@ -4720,14 +4818,14 @@ class BluraySubtitle:
                                         self._audio_tracks_to_exclude.add(_src_track_id)
                                         track_info.pop(_src_track_id, None)
                                     fpts[j] = (fpt, track_id_val, fn)
-                                    print(f'找到一个重复音轨 ｢{_src_fn}｣，已删除')
+                                    print(f'Found duplicate audio track ｢{_src_fn}｣, deleted')
                                 else:
                                     os.remove(fn)
                                     if track_id_val > -1 and _src_track_id > -1:
                                         duplicate_track_source[track_id_val] = _src_track_id
                                         self._audio_tracks_to_exclude.add(track_id_val)
                                         track_info.pop(track_id_val, None)
-                                    print(f'找到一个重复音轨 ｢{fn}｣，已删除')
+                                    print(f'Found duplicate audio track ｢{fn}｣, deleted')
                                 duplicate_track = True
                                 break
                         if not duplicate_track:
@@ -4754,7 +4852,6 @@ class BluraySubtitle:
                 except Exception:
                     pass
                 y = None
-                sr = None
                 if soundfile is not None:
                     try:
                         info = soundfile.info(path)
@@ -4824,14 +4921,14 @@ class BluraySubtitle:
                                 self._audio_tracks_to_exclude.add(int(track_id))
                         except Exception:
                             pass
-                        print(f'检测到空音轨 ｢{file1_path}｣ 平均 {avg_db:.1f} dB，已删除')
+                        print(f'{translate_text("Detected empty audio track ｢")}{file1_path}{translate_text("｣ average ")}{avg_db:.1f}{translate_text(" dB, deleted")}')
                         continue
-                    print(f'正在压缩音轨 ｢{file1_path}｣')
+                    print(f'{translate_text("Compressing audio track ｢")}{file1_path}{translate_text("｣")}')
                     track_id = int(track_id)
                     if track_id in track_id_delay_map:
                         delay_sec = track_id_delay_map[track_id]
                         delay_ms = int(round(delay_sec * 1000.0))
-                        print(f'检测到文件 ｢{file1_path}｣ 有延迟 {delay_ms} ms')
+                        print(f'{translate_text("Detected file ｢")}{file1_path}{translate_text("｣ has delay ")}{delay_ms} ms')
                         output_fn = os.path.splitext(file1_path)[0] + '.delayfix.wav'
                         fix_audio_delay_to_lossless(file1_path, delay_ms, output_fn)
                         if os.path.exists(output_fn):
@@ -4845,13 +4942,13 @@ class BluraySubtitle:
                         bits = track_bits.get(track_id, 16)
                         effective_bits = get_effective_bit_depth(file1_path)
                         if effective_bits < bits:
-                            print(f"检测到文件 ｢{file1_path}｣ 有效位深较低，正在优化为 16-bit...")
+                            print(f'{translate_text("Detected file ｢")}{file1_path}{translate_text("｣ effective bit depth is low, optimizing to 16-bit...")}')
                             codec = "pcm_s16le"
                             output_fn = os.path.splitext(file1_path)[0] + '(1).wav'
                             cmd = f'"{FFMPEG_PATH}" -hide_banner -loglevel error -i "{file1_path}" -c:a {codec} "{output_fn}" -y'
                             subprocess.run(cmd, shell=True, check=True)
                             if os.path.exists(output_fn):
-                                print(f"转换完成: ｢{output_fn}｣")
+                                print(f'{translate_text("Conversion completed: ｢")}{output_fn}{translate_text("｣")}')
                                 os.remove(file1_path)
                                 os.rename(output_fn, file1_path)
 
@@ -4860,44 +4957,44 @@ class BluraySubtitle:
                         if os.path.exists(flac_file):
                             delta = os.path.getsize(file1_path) - os.path.getsize(flac_file)
                             os.remove(file1_path)
-                            print(f'将音轨 ｢{file1_path}｣ 压缩成flac，减小体积 {delta / 1024 ** 2:.3f} MiB')
+                            print(f'{translate_text("Track ｢")}{file1_path}{translate_text("｣ compressed to FLAC to reduce size ")}{delta / 1024 ** 2:.3f} MiB')
                             self._audio_tracks_to_exclude.add(track_id)
                         else:
                             subprocess.Popen(f'{FFMPEG_PATH} -i "{file1_path}" -c:a flac "{flac_file}"', shell=True).wait()
                             if os.path.exists(flac_file):
                                 delta = os.path.getsize(file1_path) - os.path.getsize(flac_file)
                                 os.remove(file1_path)
-                                print(f'将音轨 ｢{file1_path}｣ 用ffmpeg压缩成flac，减小体积 {delta / 1024 ** 2:.3f} MiB')
+                                print(f'{translate_text("Track ｢")}{file1_path}{translate_text("｣ compressed to FLAC with ffmpeg to reduce size ")}{delta / 1024 ** 2:.3f} MiB')
                                 self._audio_tracks_to_exclude.add(track_id)
                     else:
                         bits = track_bits.get(track_id, 24)
                         effective_bits = get_compressed_effective_depth(file1_path)
                         if effective_bits < bits:
-                            print(f'检测到文件 ｢{file1_path}｣ 实际有效位深为 {effective_bits} bits')
+                            print(f'{translate_text("Detected file ｢")}{file1_path}{translate_text("｣ actual effective bit depth is ")}{effective_bits} bits')
                         wav_file = os.path.splitext(file1_path)[0] + '.wav'
                         subprocess.Popen(f'{FFMPEG_PATH} -i "{file1_path}"  -c:a pcm_s{effective_bits}le -f w64 "{wav_file}"', shell=True).wait()
                         flac_file = os.path.splitext(file1_path)[0] + '.flac'
                         subprocess.Popen(f'{FLAC_PATH} -8 -j {FLAC_THREADS} "{wav_file}" -o "{flac_file}"', shell=True).wait()
                         if os.path.exists(flac_file):
                             if os.path.getsize(flac_file) > os.path.getsize(file1_path):
-                                print(f'flac 文件比原音轨大，将删除 ｢{flac_file}｣')
+                                print(f'{translate_text("FLAC is larger than the original track, deleting ｢")}{flac_file}{translate_text("｣")}')
                                 os.remove(flac_file)
                             else:
                                 delta = os.path.getsize(file1_path) - os.path.getsize(flac_file)
-                                print(f'将音轨 ｢{file1_path}｣ 压缩成flac，减小体积 {delta / 1024 ** 2:.3f} MiB')
+                                print(f'{translate_text("Track ｢")}{file1_path}{translate_text("｣ compressed to FLAC to reduce size ")}{delta / 1024 ** 2:.3f} MiB')
                                 self._audio_tracks_to_exclude.add(track_id)
                         else:
                             subprocess.Popen(f'{FFMPEG_PATH} -i "{wav_file}" -c:a flac "{flac_file}"', shell=True).wait()
                             if os.path.exists(flac_file):
                                 if os.path.getsize(flac_file) > os.path.getsize(file1_path):
-                                    print(f'ffmpeg 压缩的flac文件比原音轨大，将删除 ｢{flac_file}｣')
+                                    print(f'{translate_text("ffmpeg-compressed FLAC is larger than the original track, deleting ｢")}{flac_file}{translate_text("｣")}')
                                     os.remove(flac_file)
                                 else:
                                     delta = os.path.getsize(file1_path) - os.path.getsize(flac_file)
-                                    print(f'将音轨 ｢{file1_path}｣ 用ffmpeg压缩成flac，减小体积 {delta / 1024 ** 2:.3f} MiB')
+                                    print(f'{translate_text("Track ｢")}{file1_path}{translate_text("｣ compressed to FLAC with ffmpeg to reduce size ")}{delta / 1024 ** 2:.3f} MiB')
                                     self._audio_tracks_to_exclude.add(track_id)
                             else:
-                                print('\033[31m错误，ffmpeg压缩也失败\033[0m')
+                                print('\033[31mError: ffmpeg compression also failed\033[0m')
                         os.remove(file1_path)
                         os.remove(wav_file)
             flac_files = []
@@ -4917,7 +5014,7 @@ class BluraySubtitle:
                     if file1_path != output_file:
                         if file1_path.endswith('.wav') and (base_prefix and os.path.basename(file1_path).startswith(base_prefix)) and ('.track' in os.path.basename(file1_path).lower()):
                             n = len(os.listdir(dst_folder))
-                            print(f'flac 压缩 wav 文件 ｢{file1_path}｣ 失败，将使用 ffmpeg 压缩')
+                            print(f'{translate_text("flac compressing wav file ｢")}{file1_path}{translate_text("｣ failed, will use ffmpeg to compress")}')
                             subprocess.Popen(
                                 f'{FFMPEG_PATH} -i "{file1_path}" -c:a flac "{file1_path[:-4] + ".flac"}"', shell=True).wait()
                             if len(os.listdir(dst_folder)) > n:
@@ -4960,7 +5057,7 @@ class BluraySubtitle:
                 except Exception:
                     lang = 'chi'
                 remux_cmd += f' --language 0:{lang} "{self.sub_files[i - 1]}"'
-            print(f'混流命令：{remux_cmd}')
+            print(f'{translate_text("Mux command:")}{remux_cmd}')
             subprocess.Popen(remux_cmd, shell=True).wait()
             if same_mkv:
                 if os.path.getsize(output_file1) > os.path.getsize(output_file):
@@ -5047,7 +5144,7 @@ class BluraySubtitle:
             x265_exe = 'x265.exe' if sys.platform == 'win32' else 'x265'
         hevc_file = os.path.join(dst_folder, os.path.splitext(os.path.basename(output_file))[0] + '.hevc')
         cmd = f'"{vspipe_exe}" --y4m "{vpy_path}" - | "{x265_exe}" {x265_params or ""} --y4m -D 10 -o "{hevc_file}" -'
-        print(f'压制命令：{cmd}')
+        print(f'{translate_text("Encode command:")}{cmd}')
         subprocess.Popen(cmd, shell=True, env=vspipe_env).wait()
         cleanup_lwi_for_source(src_mkv)
         track_count, track_info, flac_files = self.process_audio_to_flac(output_file, dst_folder, i, source_file=src_mkv)
@@ -5068,7 +5165,7 @@ class BluraySubtitle:
                     except Exception:
                         lang = 'chi'
                     remux_cmd += f' --language 0:{lang} "{self.sub_files[i - 1]}"'
-            print(f'混流命令：{remux_cmd}')
+            print(f'{translate_text("Mux command:")}{remux_cmd}')
             subprocess.Popen(remux_cmd, shell=True).wait()
             if same_mkv:
                 if os.path.getsize(output_file1) > os.path.getsize(output_file):
@@ -5170,7 +5267,7 @@ class BluraySubtitle:
                 extract_info.append(
                     f'{track_id}:"{base}.track{track_id}.{track_suffix_info[track_id]}"')
             extract_cmd = f'"{MKV_EXTRACT_PATH}" {mkvtoolnix_ui_language_arg()} "{mkv_file}" tracks {" ".join(extract_info)}'
-            print(f'正在提取无损音轨，命令: {extract_cmd}')
+            print(f'{translate_text("Extracting lossless tracks, command: ")}{extract_cmd}')
             subprocess.Popen(extract_cmd, shell=True).wait()
 
         return track_count, track_info
@@ -5559,37 +5656,37 @@ class MergeWorker(QObject):
                 bs = BluraySubtitle(self.bdmv_path, self.sub_files, self.checked, progress_cb)
                 bs.subtitle_suffix = self.subtitle_suffix
             
-                # 根据平台选择字幕加载策略
+                # Select subtitle preload strategy by platform.
                 if self.sub_files:
                     progress_cb(text='加载字幕')
                     if sys.platform == 'win32':
-                        # Windows下使用多进程
+                        # Windows: prefer multiprocessing.
                         try:
                             bs._preload_subtitles_multiprocess(self.sub_files, self.cancel_event)
                         except Exception as e:
-                            print(f'多进程加载失败，切换到单进程: {str(e)}')
-                            # 回退到单进程
+                            print(f'{translate_text("Multiprocess load failed, switching to single process: ")}{str(e)}')
+                            # Fallback to single-process loading.
                             for p in self.sub_files:
                                 if self.cancel_event.is_set():
                                     raise _Cancelled()
                                 try:
                                     bs._subtitle_cache[p] = Subtitle(p)
                                 except Exception as e2:
-                                    print(f'字幕文件加载失败 ｢{p}｣: {str(e2)}')
+                                    print(f'{translate_text("Failed to load subtitle file ｢")}{p}{translate_text("｣: ")}{str(e2)}')
                     else:
-                        # Linux下尝试多进程，失败则回退到单进程
+                        # Linux: try multiprocessing, then fallback to single process on failure.
                         try:
                             bs._preload_subtitles_multiprocess(self.sub_files, self.cancel_event)
                         except Exception as e:
-                            print(f'多进程加载失败，切换到单进程: {str(e)}')
-                            # 回退到单进程
+                            print(f'{translate_text("Multiprocess load failed, switching to single process: ")}{str(e)}')
+                            # Fallback to single-process loading.
                             for p in self.sub_files:
                                 if self.cancel_event.is_set():
                                     raise _Cancelled()
                                 try:
                                     bs._subtitle_cache[p] = Subtitle(p)
                                 except Exception as e2:
-                                    print(f'字幕文件加载失败 ｢{p}｣: {str(e2)}')
+                                    print(f'{translate_text("Failed to load subtitle file ｢")}{p}{translate_text("｣: ")}{str(e2)}')
                 
                 progress_cb(text='生成配置')
                 configuration = bs.generate_configuration_from_selected_mpls(
@@ -5657,31 +5754,31 @@ class SubtitleFolderScanWorker(QObject):
             self.label.emit('解析字幕 0/{}'.format(len(files)))
             self.progress.emit(0)
             
-            # 根据平台选择字幕解析策略
+            # Choose subtitle parsing strategy by platform.
             if sys.platform == 'win32':
-                # Windows下使用多进程
+                # Windows: use multiprocessing.
                 subtitle_cache = self._parse_subtitles_multiprocess(files)
             else:
-                # Linux下尝试多进程，失败则回退到单进程
+                # Linux: try multiprocessing, then fallback to single process on failure.
                 try:
                     subtitle_cache = self._parse_subtitles_multiprocess(files)
                 except Exception as e:
-                    print(f'多进程解析失败，切换到单进程模式: {str(e)}')
+                    print(f'{translate_text("Multiprocessing parse failed, switching to single-process mode: ")}{str(e)}')
                     subtitle_cache = self._parse_subtitles_single(files)
             
             if not subtitle_cache:
-                print('字幕文件全部加载失败')
+                print(translate_text('Failed to load all subtitle files'))
                 self.result.emit({'seq': self.seq, 'mode': self.mode, 'rows': [], 'configuration': {}})
                 return
             
-            print(f'成功加载 {len(subtitle_cache)} 个字幕文件')
+            print(f'{translate_text("Loaded successfully ")}{len(subtitle_cache)}{translate_text(" subtitle files")}')
             
             successful_files = [p for p in files if p in subtitle_cache]
 
             try:
                 rows = [(p, get_time_str(subtitle_cache[p].max_end_time())) for p in successful_files]
             except Exception as e:
-                print(f'获取字幕时长失败: {str(e)}')
+                print(f'{translate_text("Failed to get subtitle duration: ")}{str(e)}')
                 rows = [(p, '未知') for p in successful_files]
 
             configuration = {}
@@ -5696,7 +5793,7 @@ class SubtitleFolderScanWorker(QObject):
                         cancel_event=self.cancel_event
                     )
                 except Exception as e:
-                    print(f'生成配置失败: {str(e)}')
+                    print(f'{translate_text("Failed to generate configuration: ")}{str(e)}')
                     import traceback
                     traceback.print_exc()
                     configuration = {}
@@ -5709,16 +5806,16 @@ class SubtitleFolderScanWorker(QObject):
             self.failed.emit(traceback.format_exc())
     
     def _parse_subtitles_with_fallback(self, files: list[str]) -> dict[str, Subtitle]:
-        """尝试多进程解析，失败时回退到单进程"""
+        """Try multiprocessing subtitle parsing and fall back to single process on failure."""
         subtitle_cache: dict[str, Subtitle] = {}
         try:
             return self._parse_subtitles_multiprocess(files)
         except Exception as e:
-            print(f'多进程解析失败，切换到单进程模式: {str(e)}')
+            print(f'{translate_text("Multiprocessing parse failed, switching to single-process mode: ")}{str(e)}')
             return self._parse_subtitles_single(files)
     
     def _parse_subtitles_single(self, files: list[str]) -> dict[str, Subtitle]:
-        """单进程模式解析字幕"""
+        """Parse subtitles in single-process mode."""
         subtitle_cache: dict[str, Subtitle] = {}
         total = len(files)
         loaded_count = 0
@@ -5729,9 +5826,9 @@ class SubtitleFolderScanWorker(QObject):
                 sub = Subtitle(p)
                 subtitle_cache[p] = sub
                 loaded_count += 1
-                print(f'字幕文件加载成功 ｢{p}｣')
+                print(f'{translate_text("Subtitle file loaded ｢")}{p}{translate_text("｣")}')
             except Exception as e:
-                print(f'字幕文件加载失败 ｢{p}｣: {type(e).__name__}: {str(e)}')
+                print(f'{translate_text("Failed to load subtitle file ｢")}{p}{translate_text("｣: ")}{type(e).__name__}: {str(e)}')
                 import traceback
                 traceback.print_exc()
             self.label.emit(f'解析字幕 {i + 1}/{total}（已加载 {loaded_count}）')
@@ -5739,9 +5836,9 @@ class SubtitleFolderScanWorker(QObject):
         return subtitle_cache
     
     def _parse_subtitles_multiprocess(self, files: list[str]) -> dict[str, Subtitle]:
-        """多进程模式解析字幕"""
+        """Parse subtitles in multiprocessing mode."""
         if len(files) == 1:
-            # 单个文件直接使用单进程
+            # For a single file, use single-process directly.
             return self._parse_subtitles_single(files)
             
         subtitle_cache: dict[str, Subtitle] = {}
@@ -5767,15 +5864,15 @@ class SubtitleFolderScanWorker(QObject):
                             subtitle_cache[p] = sub
                     except Exception as e:
                         if p:
-                            print(f'字幕文件加载失败 ｢{p}｣: {str(e)}')
+                            print(f'{translate_text("Failed to load subtitle file ｢")}{p}{translate_text("｣: ")}{str(e)}')
                         else:
-                            print(f'字幕文件加载失败: {str(e)}')
+                            print(f'{translate_text("Failed to load subtitle file: ")}{str(e)}')
                     done += 1
                     self.label.emit(f'解析字幕 {done}/{total}')
                     self.progress.emit(int(done / total * 700))
         except Exception as e:
-            # 多进程失败，抛出异常让上层处理
-            raise Exception(f'多进程解析失败: {str(e)}')
+            # Propagate exception so the caller can handle fallback.
+            raise Exception(f'Multiprocessing parse failed: {str(e)}')
         return subtitle_cache
 
 
@@ -6503,7 +6600,7 @@ class BluraySubtitleGUI(QWidget):
             + plugin_line +
             '\n'
             '\n'
-            'a = r""  #（可以不填，程序会自动生成）\n'
+            'a = r""  # optional, auto-generated by app\n'
             '\n'
             'src8 = core.lsmas.LWLibavSource(a)\n'
             'src16 = core.fmtc.bitdepth(src8, bits=16)\n'
@@ -6525,7 +6622,7 @@ class BluraySubtitleGUI(QWidget):
             '    res = mvf.ToRGB(res, full=False, depth=8)\n'
             'else:\n'
             '    res = core.fmtc.bitdepth(res, bits=10)\n'
-            '# sub_file = ""  #（可以不填，程序会自动生成）\n'
+            '# sub_file = ""  # optional, auto-generated by app\n'
             '# res = core.assrender.TextSub(res, file=sub_file)\n'
             'res.set_output()\n'
             'src8.set_output(1)\n'
@@ -6566,7 +6663,7 @@ class BluraySubtitleGUI(QWidget):
         if not os.path.exists(path):
             return
 
-        target_1 = 'sub_file = \"\"  #（可以不填，程序会自动生成）'
+        target_1 = 'sub_file = \"\"  # optional, auto-generated by app'
         target_2 = 'res = core.assrender.TextSub(res, file=sub_file)'
 
         try:
@@ -8358,7 +8455,7 @@ class BluraySubtitleGUI(QWidget):
                     self.table3.setItem(i, dur_col, QTableWidgetItem(get_time_str(dur)))
                     tracks_col = ENCODE_SP_LABELS.index('tracks')
                     btn_tracks = QToolButton(self.table3)
-                    btn_tracks.setText(self.t('编辑轨道'))
+                    btn_tracks.setText(self.t('edit tracks'))
                     btn_tracks.clicked.connect(self._on_edit_tracks_from_sp_table_clicked)
                     btn_tracks.setEnabled(not is_disabled)
                     self.table3.setCellWidget(i, tracks_col, btn_tracks)
@@ -9433,11 +9530,11 @@ class BluraySubtitleGUI(QWidget):
                 configuration = bs.generate_configuration(self.table1)
             self.on_configuration(configuration)
         except Exception as e:
-            print(f'拖入字幕处理失败: {str(e)}')
+            print(f'{translate_text("Subtitle drag-in failed: ")}{str(e)}')
             import traceback
             traceback.print_exc()
-            # 显示错误信息但不弹出对话框
-            print('字幕拖入处理失败，请检查字幕文件和原盘路径')
+            # Log error information without showing a popup dialog.
+            print(translate_text('Subtitle drag-in failed, please check the subtitle files and Blu-ray path'))
 
     def get_mkv_files_in_table_order(self):
         """
@@ -9813,7 +9910,7 @@ class BluraySubtitleGUI(QWidget):
     def on_configuration(self, configuration: dict[int, dict[str, int | str]], update_sp_table: bool = True):
         try:
             if not configuration:
-                print('配置为空，跳过更新')
+                print(translate_text('Configuration is empty, skipping update'))
                 return
             function_id = self.get_selected_function_id()
             if function_id in (3, 4):
@@ -10472,7 +10569,7 @@ class BluraySubtitleGUI(QWidget):
         action = btn.property('action') or ''
         is_preview = (action == 'preview') or (btn.text() in ('preview', self.t('preview')))
         if is_preview and self.altered:
-            # 只有在字幕文件不存在时才生成
+            # Generate subtitles only when no subtitle file exists.
             mpls_name = mpls_path[:-5]
             has_subtitle = (os.path.exists(mpls_name + '.ass') or 
                           os.path.exists(mpls_name + '.srt') or
@@ -10480,15 +10577,15 @@ class BluraySubtitleGUI(QWidget):
             if not has_subtitle:
                 success = self.generate_subtitle(silent_mode=True)
                 if success:
-                    # 重新检查字幕文件是否存在
+                    # Re-check subtitle existence after generation.
                     has_subtitle = (os.path.exists(mpls_name + '.ass') or 
                                   os.path.exists(mpls_name + '.srt') or
                                   os.path.exists(mpls_name + '.ssa'))
             if not has_subtitle:
-                # 如果仍然没有字幕文件，显示提示但仍允许播放
+                # Still allow playback even if subtitle generation failed.
                 QMessageBox.information(self, "提示", "字幕文件不存在，将播放无字幕版本")
         elif is_preview:
-            # 检查字幕文件是否存在
+            # Check whether subtitle file exists.
             mpls_name = mpls_path[:-5]
             has_subtitle = (os.path.exists(mpls_name + '.ass') or 
                           os.path.exists(mpls_name + '.srt') or
@@ -10540,9 +10637,9 @@ class BluraySubtitleGUI(QWidget):
                 if not desktop_file:
                     output = subprocess.check_output(["xdg-mime", "query", "default", "video/mp4"])
                     desktop_file = output.decode('utf-8').strip()
-                # linux下mpv启用蓝光支持，请编译前在源文件夹执行命令
+                # Enable Blu-ray support in Linux mpv build by running in source directory:
                 # echo "--enable-libbluray" > ffmpeg_options
-                # 和
+                # and
                 # echo "-Dlibbluray=enabled" > mpv_options
                 if 'mpv' in desktop_file:
                     mpv_play_mpls(mpls_path, 'mpv')
@@ -13528,7 +13625,7 @@ class BluraySubtitleGUI(QWidget):
         if getattr(self, '_current_cancel_event', None) is not None:
             self._current_cancel_event.set()
             self.exe_button.setEnabled(False)
-            self._update_exe_button_progress(text='正在取消...')
+            self._update_exe_button_progress(text='Canceling...')
             return
 
         function_id = self.get_selected_function_id()
@@ -14225,7 +14322,7 @@ class BluraySubtitleGUI(QWidget):
         return
 
 
-class CustomBox(QGroupBox):  # 为 Box 框提供拖拽文件夹的功能
+class CustomBox(QGroupBox):  # Drag-and-drop folder input helper for boxed rows.
     def __init__(self, title: str, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setAcceptDrops(True)
@@ -14433,7 +14530,7 @@ def get_mpv_safe_path(extension=".mp4"):
         if prog_id.startswith("AppX") or "WMP11" in prog_id or "Windows.Photos" in prog_id:
             return None
 
-        base_name = prog_id.split('\\')[-1] # 去掉路径前缀
+        base_name = prog_id.split('\\')[-1]  # Remove registry path prefix.
         names_to_try = [base_name]
         if not base_name.lower().endswith(".exe"):
             names_to_try.append(base_name + ".exe")
@@ -14475,8 +14572,8 @@ def get_mpv_safe_path(extension=".mp4"):
 
 
 def fix_audio_delay_to_lossless(input_file, delay_ms, output_file, track_index=0):
-    """处理音频延迟。"""
-    # 处理路径：防止路径中有空格，统一加上双引号
+    """Apply audio delay correction while preserving lossless output when possible."""
+    # Quote paths to safely handle whitespace.
     input_file_q = f'"{input_file}"'
     output_file_q = f'"{output_file}"'
 
@@ -14492,25 +14589,25 @@ def fix_audio_delay_to_lossless(input_file, delay_ms, output_file, track_index=0
     common_opts = "-hide_banner -loglevel error -y"
 
     if delay_ms > 0:
-        # 正延迟：补静音
+        # Positive delay: pad with silence.
         cmd = f'"{FFMPEG_PATH}" {common_opts} -i {input_file_q} {map_str} -af "adelay={delay_ms}:all=1" {codec_str} {output_file_q}'
 
     elif delay_ms < 0:
-        # 负延迟：裁剪开头
+        # Negative delay: trim from the start.
         start_time = abs(delay_ms) / 1000.0
-        # 注意：-ss 放在 -i 之后保证次世代音轨的解码级精确度
+        # Keep -ss after -i for decode-level accuracy on HD audio codecs.
         cmd = f'"{FFMPEG_PATH}" {common_opts} -i {input_file_q} -ss {start_time} {map_str} {codec_str} {output_file_q}'
 
     else:
-        # 无延迟
+        # No delay.
         cmd = f'"{FFMPEG_PATH}" {common_opts} -i {input_file_q} {map_str} {codec_str} {output_file_q}'
 
     try:
-        print(f"执行命令: {cmd}")
+        print(f"Run command: {cmd}")
         subprocess.run(cmd, shell=True, check=True)
-        print(f"处理完成: {output_file}")
+        print(f"Completed: {output_file}")
     except subprocess.CalledProcessError as e:
-        print(f"FFmpeg 执行出错: {e}")
+        print(f"FFmpeg error: {e}")
 
 
 def get_effective_bit_depth(file_path):
@@ -14524,7 +14621,7 @@ def get_effective_bit_depth(file_path):
 
 
 def get_audio_duration(file_path):
-    """获取音频总时长（秒）"""
+    """Return total audio duration in seconds using ffprobe metadata."""
     cmd = f'"{FFPROBE_PATH}" -v error -show_entries format=duration:stream=duration -of json "{file_path}"'
     try:
         proc = subprocess.run(cmd, shell=True, capture_output=True, text=True, encoding='utf-8')
@@ -14554,7 +14651,7 @@ def get_audio_duration(file_path):
 
 
 def get_compressed_effective_depth(file_path, check_duration=10):
-    """自适应长度的有效位深检测"""
+    """Estimate effective bit depth from a middle sample window of compressed audio."""
     if soundfile is None:
         return 24
     total_duration = get_audio_duration(file_path)
@@ -14575,29 +14672,29 @@ def get_compressed_effective_depth(file_path, check_duration=10):
 
 def get_vspipe_context():
     """
-    针对“整包嵌套”方案的路径获取函数。
+    Resolve bundled vspipe path and runtime environment for nested package layout.
     """
-    # 1. 获取解压后的根目录
+    # 1) Resolve extracted bundle root.
     bundle_dir = getattr(sys, '_MEIPASS', os.path.abspath("."))
 
-    # 2. 定位嵌套的 release 文件夹
-    # 路径结构：_MEIPASS/vs_pkg/vspipe.exe
+    # 2) Locate nested release folder.
+    # Expected layout: _MEIPASS/vs_pkg/vspipe(.exe)
     vs_pkg_dir = os.path.join(bundle_dir, "vs_pkg")
 
-    # 3. 构造环境
+    # 3) Build environment.
     env = os.environ.copy()
 
-    # 清理主程序的 Python 干扰
+    # Remove parent-process Python variables to avoid runtime conflicts.
     env.pop('PYTHONHOME', None)
     env.pop('PYTHONPATH', None)
 
     if sys.platform == 'win32':
         vspipe_exe = os.path.join(vs_pkg_dir, "vspipe.exe")
-        # 关键：由于 python313.dll 在 vs_pkg 根目录，我们要把 vs_pkg 加进 PATH
+        # python313.dll is in vs_pkg root; add it to PATH.
         env['PATH'] = f"{vs_pkg_dir};{env.get('PATH', '')}"
-        # 告诉 vspipe 它的 Python 环境就在它所在的那个嵌套文件夹里
+        # Point vspipe to the embedded Python home.
         env['PYTHONHOME'] = vs_pkg_dir
-        # 插件路径：对应你 release-x64 里的原始结构
+        # Plugin directory mirrors original release-x64 structure.
         env['VAPOURSYNTH_PLUGINS'] = os.path.join(vs_pkg_dir, "vapoursynth64", "coreplugins")
 
     else:  # Linux
@@ -14605,7 +14702,7 @@ def get_vspipe_context():
         env['LD_LIBRARY_PATH'] = f"{vs_pkg_dir}:{env.get('LD_LIBRARY_PATH', '')}"
         env['PYTHONHOME'] = vs_pkg_dir
         env['PATH'] = f"{vs_pkg_dir}:{env.get('PATH', '')}"
-        # 假设 Linux 下插件目录结构一致
+        # Assume Linux plugin structure is consistent.
         env['VAPOURSYNTH_PLUGINS'] = os.path.join(vs_pkg_dir, "plugins")
 
     return vspipe_exe, env
@@ -14823,7 +14920,7 @@ if __name__ == "__main__":
         }
         
         QTableView::item:hover {
-            background-color: #f0f0f0; /* 确保是一个实色，而不是半透明色 */
+            background-color: #f0f0f0; /* keep solid color, avoid semi-transparency */
         }
 
         QTableView::indicator:hover {
