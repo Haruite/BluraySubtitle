@@ -2368,28 +2368,12 @@ class BluraySubtitle:
                     n_fc = 0
                 # Full-playlist concat does not reproduce ``--split parts:custom_parts`` windows from main MPLS.
                 if n_fc > 1 and not (custom_chapter and str(custom_parts).strip()):
-                    cover_sp = ''
-                    try:
-                        meta_folder = os.path.join(src_path[:-19], 'META', 'DL')
-                        if os.path.isdir(meta_folder):
-                            c_sz = 0
-                            for fn in os.listdir(meta_folder):
-                                if fn.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.webp')):
-                                    fp = os.path.join(meta_folder, fn)
-                                    try:
-                                        sz = os.path.getsize(fp)
-                                        if sz > c_sz:
-                                            cover_sp, c_sz = fp, sz
-                                    except Exception:
-                                        pass
-                    except Exception:
-                        cover_sp = ''
                     if self._try_remux_mpls_track_aligned_concat(
                         os.path.normpath(src_path),
                         os.path.normpath(sp_mkv_path),
                         copy_audio_track,
                         copy_sub_track,
-                        cover_sp,
+                        '',
                         cancel_event=cancel_event,
                     ):
                         sp_ok = os.path.isfile(sp_mkv_path)
