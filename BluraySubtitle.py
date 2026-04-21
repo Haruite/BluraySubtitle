@@ -100,7 +100,7 @@ ENCODE_REMUX_SP_LABELS = ['duration', 'output_name', 'vpy_path', 'edit_vpy', 'pr
 CONFIGURATION = {}
 DEFAULT_APPROX_EPISODE_DURATION_SECONDS = 24 * 60  # default approx. minutes→seconds for episode split heuristics
 CURRENT_UI_LANGUAGE = 'en'
-APP_TITLE = 'BluraySubtitle v3.0+'
+APP_TITLE = 'BluraySubtitle v3.1'
 
 
 def get_mkvtoolnix_ui_language() -> str:
