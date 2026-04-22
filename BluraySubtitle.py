@@ -8972,10 +8972,10 @@ class BluraySubtitleGUI(QWidget):
                 key = BluraySubtitle._sp_track_key_from_entry(self._table3_get_sp_entry_for_row(r))
                 cfg = getattr(self, '_track_selection_config', {}) or {}
                 if not (isinstance(cfg, dict) and key in cfg):
-                    prev_text = out_item.text().strip()
-                    # Preserve folder-style output name (no suffix) for multi-m2ts rows.
-                    if mpls_file and len(m2ts_files_unique) > 1 and prev_text and os.path.splitext(prev_text)[1] == '':
-                        out_item.setText(f'{base_with_suffix}')
+                    # Undetermined multi-m2ts MPLS row: wait for async scan result
+                    # (single_frame/multi_frame) before showing output name.
+                    if mpls_file and len(m2ts_files_unique) > 1 and (special == ''):
+                        out_item.setText('')
                     else:
                         out_item.setText(f'{base_with_suffix}.mkv')
                     continue
