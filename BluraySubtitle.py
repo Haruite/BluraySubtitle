@@ -5205,7 +5205,7 @@ class BluraySubtitle:
             table, folder_path, configuration, ensure_tools
         )
 
-        # self._build_main_episode_mkvs(bdmv_index_conf, dst_folder, cancel_event=cancel_event)
+        self._build_main_episode_mkvs(bdmv_index_conf, dst_folder, cancel_event=cancel_event)
 
         self.checked = True
         self.episode_subtitle_languages = episode_subtitle_languages or []
@@ -11883,6 +11883,10 @@ class BluraySubtitleGUI(QWidget):
                     start_idx = prev_end_new
                 target_sec = float(sub_max_end[r] if r < len(sub_max_end) else approx_end_time)
                 chosen_end = int(ends.get(r, 0) or 0)
+                if mode == 'segments':
+                    # On view-chapters state changes, always recompute episode end from
+                    # current checked segments instead of keeping stale table2 end value.
+                    chosen_end = 0
                 if chosen_end <= start_idx:
                     chosen_end = self._closest_endpoint(start_idx, target_sec, total_rows, offsets, m2ts, checked)
                 if chosen_end > total_rows + 1:
