@@ -293,6 +293,16 @@ Typical:
 
 ---
 
+## build.sh (Linux Runtime Environment Script)
+
+`build.sh` is a script used to build the program runtime environment for specific Linux systems, currently supporting:
+- Ubuntu 22.04 / 24.04 / 25.10 / 26.04 (beta)
+- Debian 12 / 13
+
+It is recommended to run `build.sh` in a remote terminal, because remote terminal execution uses tmux-style output and the logs are cleaner and easier to read.
+
+---
+
 ## Docker
 
 Build image:
@@ -300,10 +310,6 @@ Build image:
 ```bash
 docker build -t bluray-subtitle-ubuntu .
 ```
-
-`build.sh` currently supports these host systems:
-- Ubuntu 22.04 / 24.04 / 25.10 / 26.04 (beta)
-- Debian 12 / 13
 
 Pull prebuilt:
 
