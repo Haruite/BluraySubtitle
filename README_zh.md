@@ -77,21 +77,22 @@ BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 
 #### A）SP 处理规则
 
 1. 新增 `select/选择` 列，用来控制这一行 SP 是否参与混流。  
-2. 不再按 MPLS 章节数分流逻辑；MPLS 行统一走 MPLS 处理，`table3` 的所有行都保留 MPLS 信息。  
-3. `table3` 行顺序与 `table1` 一致，按 MPLS 文件名顺序排列。  
+2. 不再按 MPLS 章节数分流逻辑；MPLS 行统一走 MPLS 处理，没有 MPLS 再按 M2TS 处理。  
+3. `table3` 行顺序排列，先按 BDMV 分卷顺序，再按 MPLS 名，最后无 MPLS 的列按照 M2TS 名排序
 4. 默认输出名统一为 `BD_Vol_{bdmv_vol}_SP{n}.mkv`；`n` 是同一卷内“已选择”MPLS 的序号，从 1 开始，位数统一，不足补 0。  
 5. 如果某个 MPLS 包含的所有文件都在主 MPLS 内，该行默认不勾选。  
-6. 时长小于 30 秒的 MPLS 也会加入 `table3`，但默认不勾选。  
-7. 特例 1：如果 MPLS 只有一个 m2ts 且该 m2ts 只有 1 帧，默认勾选，输出为 `BD_Vol_{bdmv_vol}_SP{n}.png`。  
-8. 特例 2：如果 MPLS 有多个 m2ts 且每个都只有 1 帧，默认勾选，输出为文件夹 `BD_Vol_{bdmv_vol}_SP{n}`，文件名格式 `{m}-{m2ts_name}.png`（`m` 从 1 开始补 0，`m2ts_name` 不带 `.m2ts`）。  
-9. 如果该 MPLS 没有选中任何轨道，输出文件名置空，混流时直接跳过。  
-10. 如果只选中 1 条音轨，输出名改为对应原始音频后缀，混流时直接提取。  
-11. 如果选中多条音轨（且不走视频封装），输出为 `BD_Vol_{bdmv_vol}_SP{n}.mka`。  
-12. 修改轨道后，立即触发输出文件名重算。  
-13. MPLS 混流后先清章节：`mkvpropedit output.mkv --chapters ""`；再从 MPLS 生成 `chapter.txt`，去掉末尾章节点，且只有在内容不等于“仅一个 00:00:00 章节”时才写回。  
-14. 若无法读取该 MPLS 的第一个 m2ts，该行置灰不可编辑，混流时跳过。  
-15. 混流完成后，按主 MPLS 同样规则检查轨道语言，不一致时用 `mkvpropedit` 修正。  
-16. 最后再扫描一遍“未被任何 MPLS 覆盖”的 m2ts 并追加到 `table3`：  
+6. 时长小于 30 秒（注意，获取时长使用的是 `get_duration_no_repeat`，重复文件只计算一次时长）的 MPLS 和 M2TS 也会加入 `table3`，但默认不勾选。  
+7. 特例 1：如果 MPLS 包括三个及以上不同文件，默认勾选。
+8. 特例 1：如果 MPLS 只有一个 m2ts 且该 m2ts 只有 1 帧，默认勾选，输出为 `BD_Vol_{bdmv_vol}_SP{n}.png`。  
+9. 特例 2：如果 MPLS 有多个 m2ts 且每个都只有 1 帧，默认勾选，输出为文件夹 `BD_Vol_{bdmv_vol}_SP{n}`，文件名格式 `{m}-{m2ts_name}.png`（`m` 从 1 开始补 0，`m2ts_name` 不带 `.m2ts`）。  
+10. 如果该 MPLS 没有选中任何轨道，输出文件名置空，混流时直接跳过。  
+11. 如果只选中 1 条音轨，输出名改为对应原始音频后缀，混流时直接提取。  
+12. 如果选中多条音轨（且不走视频封装），输出为 `BD_Vol_{bdmv_vol}_SP{n}.mka`。  
+13. 修改轨道后，立即触发输出文件名重算。  
+14. MPLS 混流后先清章节：`mkvpropedit output.mkv --chapters ""`；再从 MPLS 生成 `chapter.txt`，去掉末尾章节点，且只有在内容不等于“仅一个 00:00:00 章节”时才写回。  
+15. 若无法读取该 MPLS 的第一个 m2ts，该行置灰不可编辑，混流时跳过。  
+16. 混流完成后，按主 MPLS 同样规则检查轨道语言，不一致时用 `mkvpropedit` 修正。  
+17. 最后再扫描一遍“未被任何 MPLS 覆盖”的 m2ts 并追加到 `table3`：  
     - 用 `M2TS.get_duration` 取时长；  
     - 时长 `< 30s` 默认不勾选；  
     - 时长 `= 0` 的行置灰不可编辑并跳过；  
@@ -115,7 +116,8 @@ SP 混流失败时怎么处理：
 1. 先分析第一个 m2ts 的轨道，作为“参考轨道布局”。  
 2. 遍历 `Chapter(mpls_path).in_out_time`，对每个片段计算：  
    - `start_time = (in_time * 2 - first_pts) / 90000`  
-   - `end_time = start_time + (out_time - in_time) / 45000`  
+   - `end_time = start_time + (out_time - in_time) / 45000`   
+注意不是取文件开头时间作为 start_time，有些片段不是从文件开头开始播放，比如 a 文件播放中间穿插了一段 b 文件，那么 b 文件播放结束回到 a 文件那段就不是从 a 文件起始开始播放的。
 3. 若 `start_time == 0` 且 `abs(end_time - 文件总时长秒) < 0.001`，则直接整段混流；否则使用 `--split parts:start-end`。  
 4. 每个片段按参考轨道做对齐：  
    - 参考里没有的轨道（PID 不在首片段）丢弃；  
@@ -342,9 +344,15 @@ docker pull --platform linux/amd64 haruite/bluraysubtitle:latest
 ## 常见问题排查
 
 - 剧集映射不对：
-  - 检查 main MPLS；
-  - 检查章节起止；
-  - 检查字幕行顺序。
+  - 检查 main MPLS，播放MPLS，选择正确的MPLS；
+  - 检查章节起止，比如最后一集最后一个章节是版权提示，需要裁除，有三种方法：  
+    a. 在主播放列表”查看章节"中中取消最后一段勾选并保存  
+    b. 选择最后一集的结束章节，将 ending 改为最后一个章节  
+    c. 混流命令编辑框中修改混流命令，请参阅 https://mkvtoolnix.download/doc/mkvmerge.html 中的--split parts 和 --split chapters 部分
+  - 检查字幕行顺序，可以点击文件名 header 栏排序。
+  - 检查字幕时长，如果时长超长，很有可能是字幕文件有问题。可以右键 edit 编辑字幕，编辑字幕时会优先展示结束时间最晚的那些字幕，对有问题的字幕，修改其结束时间后保存，或者一并选择右键删除即可。
+- 存在特典盘：
+  - 取消特点盘分卷的 main MPLS 选择即可
 - 预览无法启动：
   - 检查 `vsedit` 路径；
   - 检查 VPy 文件与插件可用性。
