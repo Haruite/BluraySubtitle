@@ -8928,11 +8928,6 @@ class BluraySubtitleGUI(QWidget):
                     self.table3.setItem(r, out_col, out_item)
                 sel_it = self.table3.item(r, sel_col)
                 selected = bool(sel_it and sel_it.flags() & Qt.ItemFlag.ItemIsEnabled and sel_it.checkState() == Qt.CheckState.Checked)
-                if not selected:
-                    out_item.setText('')
-                    continue
-                seq += 1
-                sp_no = str(seq).zfill(digits)
                 bdmv_vol = f'{bdmv_index:03d}'
                 special = str(out_item.data(Qt.ItemDataRole.UserRole + 2) or '')
                 name_suffix = str(out_item.data(Qt.ItemDataRole.UserRole + 3) or '')
@@ -8940,6 +8935,11 @@ class BluraySubtitleGUI(QWidget):
                 m2ts_text = self.table3.item(r, m2ts_col).text().strip() if self.table3.item(r, m2ts_col) else ''
                 m2ts_files = [x.strip() for x in m2ts_text.split(',') if x.strip()]
                 m2ts_files_unique = list(dict.fromkeys(m2ts_files))
+                if not selected:
+                    out_item.setText('')
+                    continue
+                seq += 1
+                sp_no = str(seq).zfill(digits)
                 base_name = f'BD_Vol_{bdmv_vol}_SP{sp_no}'
                 if not mpls_file and m2ts_files:
                     base_name = f'BD_Vol_{bdmv_vol}_{os.path.splitext(os.path.basename(m2ts_files[0]))[0]}'
