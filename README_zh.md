@@ -291,6 +291,16 @@ python BluraySubtitle.py
 
 ---
 
+## build.sh（Linux 运行环境脚本）
+
+`build.sh`是用于构建特定 Linux 系统程序运行环境的脚本，当前支持：
+- Ubuntu 22.04 / 24.04 / 25.10 / 26.04（beta）
+- Debian 12 / 13
+
+建议在远程终端中执行 `build.sh`，因为远程终端会使用 tmux 输出，日志更简洁、更易读。
+
+---
+
 ## Docker
 
 构建镜像：
@@ -298,10 +308,6 @@ python BluraySubtitle.py
 ```bash
 docker build -t bluray-subtitle-ubuntu .
 ```
-
-`build.sh` 当前支持以下宿主系统：
-- Ubuntu 22.04 / 24.04 / 25.10 / 26.04（beta）
-- Debian 12 / 13
 
 拉取预构建镜像：
 
