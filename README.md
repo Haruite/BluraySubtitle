@@ -77,21 +77,22 @@ This section explains the internal behavior in plain language.
 #### A) SP remux rules 
 
 1. Add a `select` column to decide whether the SP row should be remuxed.
-2. Do not branch by MPLS chapter count anymore; MPLS rows always stay in SP logic, and `table3` keeps MPLS fields for all rows.
-3. Row order in `table3` follows `table1`, sorted by MPLS filename.
+2. Do not branch by MPLS chapter count anymore; MPLS rows always use MPLS logic, and if no MPLS is available then M2TS logic is used.
+3. `table3` row order is: first by BDMV volume order, then by MPLS filename, and finally non-MPLS rows by M2TS filename.
 4. Default SP output name is always `BD_Vol_{bdmv_vol}_SP{n}.mkv`; `n` is the index of selected MPLS rows inside the same disc, starting at 1 with zero-padding to equal width.
 5. If all files from an MPLS are already covered by main MPLS, that SP row is added but unchecked by default.
-6. MPLS shorter than 30 seconds is still added to `table3`, also unchecked by default.
-7. Special case 1: one-m2ts MPLS and that m2ts has only one frame -> checked by default, output becomes `BD_Vol_{bdmv_vol}_SP{n}.png`.
-8. Special case 2: multi-m2ts MPLS and every m2ts has only one frame -> checked by default, output is folder `BD_Vol_{bdmv_vol}_SP{n}`, files are `{m}-{m2ts_name}.png` (zero-padded `m`, `m2ts_name` without `.m2ts`).
-9. If no track is selected for an MPLS row, output name is empty and that row is skipped at remux time.
-10. If exactly one audio track is selected, output name becomes the original raw extension and the track is extracted directly.
-11. If multiple audio tracks are selected (and no video path is needed), output is `BD_Vol_{bdmv_vol}_SP{n}.mka`.
-12. After track edits, output filename is recalculated immediately.
-13. For MPLS remux output: clear chapters first (`mkvpropedit output.mkv --chapters ""`), then rebuild chapter text from MPLS, drop the tail chapter marker, and only write it back if it is not just a single `00:00:00` chapter.
-14. If first m2ts cannot be read for an MPLS row, that row is grayed out (read-only) and skipped during remux.
-15. After remux, check output track languages the same way as main MPLS output, and fix mismatches using `mkvpropedit`.
-16. Final scan also adds leftover m2ts files not included in any MPLS:
+6. MPLS and M2TS shorter than 30 seconds are still added to `table3` (duration uses `get_duration_no_repeat`, duplicate files counted once), but unchecked by default.
+7. Special case: if an MPLS includes 3 or more distinct files, it is checked by default.
+8. Special case 1: one-m2ts MPLS and that m2ts has only one frame -> checked by default, output becomes `BD_Vol_{bdmv_vol}_SP{n}.png`.
+9. Special case 2: multi-m2ts MPLS and every m2ts has only one frame -> checked by default, output is folder `BD_Vol_{bdmv_vol}_SP{n}`, files are `{m}-{m2ts_name}.png` (zero-padded `m`, `m2ts_name` without `.m2ts`).
+10. If no track is selected for an MPLS row, output name is empty and that row is skipped at remux time.
+11. If exactly one audio track is selected, output name becomes the original raw extension and the track is extracted directly.
+12. If multiple audio tracks are selected (and no video path is needed), output is `BD_Vol_{bdmv_vol}_SP{n}.mka`.
+13. After track edits, output filename is recalculated immediately.
+14. For MPLS remux output: clear chapters first (`mkvpropedit output.mkv --chapters ""`), then rebuild chapter text from MPLS, drop the tail chapter marker, and only write it back if it is not just a single `00:00:00` chapter.
+15. If first m2ts cannot be read for an MPLS row, that row is grayed out (read-only) and skipped during remux.
+16. After remux, check output track languages the same way as main MPLS output, and fix mismatches using `mkvpropedit`.
+17. Final scan also adds leftover m2ts files not included in any MPLS:
     - duration from `M2TS.get_duration`,
     - `< 30s` -> unchecked by default,
     - `0s` -> grayed out and skipped,
@@ -299,7 +300,7 @@ Typical:
 - Ubuntu 22.04 / 24.04 / 25.10 / 26.04 (beta)
 - Debian 12 / 13
 
-It is recommended to run `build.sh` in a remote terminal, because remote terminal execution uses tmux-style output and the logs are cleaner and easier to read.
+It is recommended to run `build.sh` in a remote terminal, because remote terminal execution uses tmux output and logs are cleaner and easier to read.
 
 ---
 
@@ -344,9 +345,15 @@ docker pull --platform linux/amd64 haruite/bluraysubtitle:latest
 ## Troubleshooting
 
 - Wrong episode/subtitle mapping:
-  - re-check main MPLS,
-  - verify chapter start/end,
-  - reorder subtitle rows.
+  - re-check main MPLS (play MPLS and choose the correct one),
+  - verify chapter range; for example if the final chapter is copyright/notice content, trim it using one of these:
+    - uncheck the last segment in `view chapters` of main playlist and save,
+    - change the final episode `end_at_chapter` to the last real ending chapter,
+    - edit remux command (`--split parts` / `--split chapters`) in mkvmerge docs: https://mkvtoolnix.download/doc/mkvmerge.html
+  - reorder subtitle rows (you can sort by filename header),
+  - verify subtitle durations; if a file is abnormally long, use right-click `edit` to fix or delete problematic subtitle lines.
+- If there is a bonus/extra disc:
+  - uncheck `main MPLS` for that bonus disc volume.
 - Preview issues:
   - confirm `vsedit` path,
   - confirm VPy file exists and plugins are available.
