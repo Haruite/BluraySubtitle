@@ -27,6 +27,7 @@ import xml.etree.ElementTree as et
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from functools import reduce, partial
+from statistics import median
 from struct import unpack
 from typing import BinaryIO, Callable, Generator, Optional
 from urllib.parse import urlparse, unquote
@@ -1253,9 +1254,146 @@ class M2TS:
                 return pts
         return None
 
+    @staticmethod
+    def _scan_last_pts(
+        stream: BinaryIO,
+        *,
+        m2ts: Optional[bool] = None,
+        max_bytes: Optional[int] = None,
+        skip_pids: Optional[set[int]] = None,
+        start_pos: Optional[int] = None,
+    ) -> Optional[int]:
+        skip = skip_pids or set()
+        skip |= {0x0000, 0x1FFF}
+
+        start_phase, spacing, sync_off = M2TS._choose_transport_layout(stream, m2ts)
+        scan_pos = start_phase if start_pos is None else max(start_phase, int(start_pos))
+        # Align scan start to packet boundary selected by phase/spacing.
+        if scan_pos > start_phase:
+            scan_pos = start_phase + ((scan_pos - start_phase) // spacing) * spacing
+        stream.seek(scan_pos)
+
+        pending: dict[int, bytearray] = {}
+        total_read = 0
+        pending_max = 256 * 1024
+        last_pts = None
+
+        while True:
+            block = stream.read(spacing)
+            if len(block) < spacing:
+                break
+            total_read += len(block)
+            if max_bytes is not None and total_read > max_bytes:
+                break
+            if sync_off + M2TS._TS_PACKET > len(block):
+                break
+            pkt = block[sync_off:sync_off + M2TS._TS_PACKET]
+            if pkt[0] != M2TS._SYNC:
+                continue
+
+            payload, pid, pusi = M2TS._ts_payload(pkt)
+            if payload is None or pid in skip:
+                continue
+
+            if pusi:
+                if not payload:
+                    pending.pop(pid, None)
+                    continue
+                pf = payload[0]
+                if not payload.startswith(b'\x00\x00\x01') and 1 + pf > len(payload):
+                    pending.pop(pid, None)
+                    continue
+                pending[pid] = bytearray(M2TS._pes_payload_after_pointer(payload))
+            else:
+                if pid not in pending:
+                    continue
+                pending[pid].extend(payload)
+                if len(pending[pid]) > pending_max:
+                    pending.pop(pid, None)
+                    continue
+
+            buf = pending.get(pid)
+            if not buf or len(buf) < 14:
+                continue
+            if buf[0:3] != b'\x00\x00\x01':
+                pending.pop(pid, None)
+                continue
+
+            flags_hi = buf[6]
+            if (flags_hi & 0xC0) != 0x80:
+                pending.pop(pid, None)
+                continue
+
+            flags_lo = buf[7]
+            pes_hdr_remain = buf[8]
+            need = 9 + pes_hdr_remain
+            if len(buf) < need:
+                continue
+            if (flags_lo & 0xC0) == 0:
+                pending.pop(pid, None)
+                continue
+
+            pts = M2TS._pts_from_pes_header(bytes(buf[9:14]))
+            pending.pop(pid, None)
+            last_pts = pts
+
+        return last_pts
+
+    def get_last_pts(
+        self,
+        *,
+        m2ts: Optional[bool] = None,
+        max_bytes: Optional[int] = None,
+        skip_pids: Optional[set[int]] = None,
+    ) -> Optional[int]:
+        file_size = os.path.getsize(self.filename)
+        # Search from file tail first; grow window progressively.
+        tail_windows = [8 * 1024 * 1024, 32 * 1024 * 1024, 128 * 1024 * 1024]
+        if max_bytes is not None:
+            tail_windows = [max(1024 * 1024, int(max_bytes))]
+
+        layouts = [m2ts] if m2ts is not None else [None, True, False]
+        for layout in layouts:
+            for win in tail_windows:
+                start = max(file_size - win, 0)
+                with open(self.filename, 'rb') as f:
+                    pts = M2TS._scan_last_pts(
+                        f, m2ts=layout, max_bytes=None, skip_pids=skip_pids, start_pos=start
+                    )
+                if pts is not None:
+                    return pts
+
+        # Rare fallback: full-file pass (keeps correctness if tail lacks PUSI/PES start).
+        if m2ts is not None:
+            with open(self.filename, 'rb') as f:
+                return M2TS._scan_last_pts(f, m2ts=m2ts, max_bytes=max_bytes, skip_pids=skip_pids)
+            return None
+        for forced in (True, False):
+            with open(self.filename, 'rb') as f:
+                pts = M2TS._scan_last_pts(f, m2ts=forced, max_bytes=max_bytes, skip_pids=skip_pids)
+            if pts is not None:
+                return pts
+        return None
+
     def get_duration(self) -> int:
-        with open(self.filename, "rb") as self.m2ts_file:
-            try:
+        try:
+            # Match tsMuxer's effective behavior: duration from PTS timeline (last-first).
+            first_pts = self.get_first_pts(max_bytes=16 * 1024 * 1024)
+            last_pts = self.get_last_pts()
+            if first_pts is not None and last_pts is not None:
+                pts_duration = int(last_pts - first_pts)
+                if pts_duration > 0:
+                    return pts_duration
+                # Single-frame clips often have first_pts == last_pts.
+                # tsMuxer side uses frame duration context; mimic by adding one frame.
+                fps = self.read_frame_rate_from_m2ts(use_ffprobe_fallback=True)
+                if fps and fps > 0:
+                    one_frame_90k = int(round(90000.0 / float(fps)))
+                    if one_frame_90k > 0:
+                        return one_frame_90k
+
+            # Fallback to old PCR-based estimation.
+            with open(self.filename, "rb") as self.m2ts_file:
                 buffer_size = 256 * 1024
                 buffer_size -= buffer_size % self.frame_size
                 cur_pos = 0
@@ -1266,6 +1404,7 @@ class M2TS:
                     self.m2ts_file.read(182)
                     if first_pcr_val != -1:
                         break
+                    cur_pos += self.frame_size
 
                 buffer_size = 256 * 1024
                 buffer_size -= buffer_size % self.frame_size
@@ -1276,9 +1415,11 @@ class M2TS:
                     last_pcr_val = self.get_last_pcr_val(buffer_size)
                     buffer_size *= 4
 
-                return 0 if  last_pcr_val == -1 else last_pcr_val - first_pcr_val
-            except:
-                return 0
+                if first_pcr_val == -1 or last_pcr_val == -1:
+                    return 0
+                return max(int(last_pcr_val - first_pcr_val), 0)
+        except Exception:
+            return 0
 
     def get_last_pcr_val(self, buffer_size) -> int:
         last_pcr_val = -1
@@ -1310,6 +1451,387 @@ class M2TS:
             pcr_val = (pcr << 1) + pcr_lo
             return pcr_val
         return -1
+
+    def read_frame_rate_from_m2ts(
+        self,
+        *,
+        m2ts: Optional[bool] = None,
+        max_bytes: Optional[int] = 128 * 1024 * 1024,
+        sample_count: int = 24,
+        use_ffprobe_fallback: bool = False,
+        debug: bool = False,
+    ) -> Optional[float]:
+        def _ffprobe_frame_rate(path: str) -> Optional[float]:
+            exe = FFPROBE_PATH if FFPROBE_PATH else (shutil.which('ffprobe') or 'ffprobe')
+            cmd = [
+                exe,
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=avg_frame_rate,r_frame_rate",
+                "-of",
+                "default=nokey=1:noprint_wrappers=1",
+                path,
+            ]
+            try:
+                out = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL, timeout=8)
+            except Exception:
+                return None
+            vals = [x.strip() for x in str(out or '').splitlines() if x.strip()]
+            for s in vals:
+                if "/" in s:
+                    a, b = s.split("/", 1)
+                    try:
+                        num = float(a)
+                        den = float(b)
+                        if den != 0:
+                            fps = num / den
+                            if fps > 0:
+                                return round(fps, 3)
+                    except ValueError:
+                        continue
+                else:
+                    try:
+                        fps = float(s)
+                        if fps > 0:
+                            return round(fps, 3)
+                    except ValueError:
+                        continue
+            return None
+
+        def _iter_pes_pts(stream: BinaryIO):
+            skip = {0x0000, 0x1FFF}
+            start_phase, spacing, sync_off = M2TS._choose_transport_layout(stream, m2ts)
+            stream.seek(start_phase)
+            pending: dict[int, bytearray] = {}
+            total_read = 0
+            pending_max = 256 * 1024
+
+            while True:
+                block = stream.read(spacing)
+                if len(block) < spacing:
+                    break
+                total_read += len(block)
+                if max_bytes is not None and total_read > max_bytes:
+                    break
+
+                pkt = block[sync_off: sync_off + M2TS._TS_PACKET]
+                if len(pkt) < M2TS._TS_PACKET or pkt[0] != M2TS._SYNC:
+                    continue
+                payload, pid, pusi = M2TS._ts_payload(pkt)
+                if payload is None or pid in skip:
+                    continue
+
+                if pusi:
+                    if not payload:
+                        pending.pop(pid, None)
+                        continue
+                    pf = payload[0]
+                    if not payload.startswith(b"\x00\x00\x01") and 1 + pf > len(payload):
+                        pending.pop(pid, None)
+                        continue
+                    pending[pid] = bytearray(M2TS._pes_payload_after_pointer(payload))
+                else:
+                    if pid not in pending:
+                        continue
+                    pending[pid].extend(payload)
+                    if len(pending[pid]) > pending_max:
+                        pending.pop(pid, None)
+                        continue
+
+                buf = pending.get(pid)
+                if not buf or len(buf) < 14:
+                    continue
+                if buf[0:3] != b"\x00\x00\x01":
+                    pending.pop(pid, None)
+                    continue
+
+                stream_id = buf[3]
+                flags_hi = buf[6]
+                if (flags_hi & 0xC0) != 0x80:
+                    pending.pop(pid, None)
+                    continue
+                flags_lo = buf[7]
+                pes_hdr_remain = buf[8]
+                need = 9 + pes_hdr_remain
+                if len(buf) < need:
+                    continue
+                if (flags_lo & 0xC0) == 0:
+                    pending.pop(pid, None)
+                    continue
+
+                pts = M2TS._pts_from_pes_header(bytes(buf[9:14]))
+                pending.pop(pid, None)
+                yield pid, stream_id, pts
+
+        def _read_bits(data: bytes, bitpos: int, n: int) -> tuple[int, int]:
+            v = 0
+            for _ in range(n):
+                byte_i = bitpos >> 3
+                shift = 7 - (bitpos & 7)
+                v = (v << 1) | ((data[byte_i] >> shift) & 1)
+                bitpos += 1
+            return v, bitpos
+
+        def _read_ue(data: bytes, bitpos: int) -> tuple[int, int]:
+            zeros = 0
+            while True:
+                bit, bitpos = _read_bits(data, bitpos, 1)
+                if bit == 1:
+                    break
+                zeros += 1
+            if zeros == 0:
+                return 0, bitpos
+            suffix, bitpos = _read_bits(data, bitpos, zeros)
+            return ((1 << zeros) - 1) + suffix, bitpos
+
+        def _read_se(data: bytes, bitpos: int) -> tuple[int, int]:
+            code_num, bitpos = _read_ue(data, bitpos)
+            val = (code_num + 1) // 2
+            if code_num % 2 == 0:
+                val = -val
+            return val, bitpos
+
+        def _rbsp_from_ebsp(ebsp: bytes) -> bytes:
+            out = bytearray()
+            i = 0
+            while i < len(ebsp):
+                if i + 2 < len(ebsp) and ebsp[i] == 0x00 and ebsp[i + 1] == 0x00 and ebsp[i + 2] == 0x03:
+                    out.extend((0x00, 0x00))
+                    i += 3
+                else:
+                    out.append(ebsp[i])
+                    i += 1
+            return bytes(out)
+
+        def _h264_fps_from_sps_nal(sps_nal: bytes) -> Optional[float]:
+            if len(sps_nal) < 4:
+                return None
+            rbsp = _rbsp_from_ebsp(sps_nal[1:])
+            bitpos = 0
+            try:
+                profile_idc, bitpos = _read_bits(rbsp, bitpos, 8)
+                _, bitpos = _read_bits(rbsp, bitpos, 8)
+                _, bitpos = _read_bits(rbsp, bitpos, 8)
+                _, bitpos = _read_ue(rbsp, bitpos)
+
+                high_profiles = {100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135}
+                if profile_idc in high_profiles:
+                    chroma_format_idc, bitpos = _read_ue(rbsp, bitpos)
+                    if chroma_format_idc == 3:
+                        _, bitpos = _read_bits(rbsp, bitpos, 1)
+                    _, bitpos = _read_ue(rbsp, bitpos)
+                    _, bitpos = _read_ue(rbsp, bitpos)
+                    _, bitpos = _read_bits(rbsp, bitpos, 1)
+                    seq_scaling_matrix_present_flag, bitpos = _read_bits(rbsp, bitpos, 1)
+                    if seq_scaling_matrix_present_flag:
+                        max_lists = 8 if chroma_format_idc != 3 else 12
+                        for i in range(max_lists):
+                            present, bitpos = _read_bits(rbsp, bitpos, 1)
+                            if present:
+                                size = 16 if i < 6 else 64
+                                last = 8
+                                nxt = 8
+                                for _ in range(size):
+                                    if nxt != 0:
+                                        delta, bitpos = _read_se(rbsp, bitpos)
+                                        nxt = (last + delta + 256) % 256
+                                    last = nxt if nxt != 0 else last
+
+                _, bitpos = _read_ue(rbsp, bitpos)
+                pic_order_cnt_type, bitpos = _read_ue(rbsp, bitpos)
+                if pic_order_cnt_type == 0:
+                    _, bitpos = _read_ue(rbsp, bitpos)
+                elif pic_order_cnt_type == 1:
+                    _, bitpos = _read_bits(rbsp, bitpos, 1)
+                    _, bitpos = _read_se(rbsp, bitpos)
+                    _, bitpos = _read_se(rbsp, bitpos)
+                    n, bitpos = _read_ue(rbsp, bitpos)
+                    for _ in range(n):
+                        _, bitpos = _read_se(rbsp, bitpos)
+
+                _, bitpos = _read_ue(rbsp, bitpos)
+                _, bitpos = _read_bits(rbsp, bitpos, 1)
+                _, bitpos = _read_ue(rbsp, bitpos)
+                _, bitpos = _read_ue(rbsp, bitpos)
+                frame_mbs_only_flag, bitpos = _read_bits(rbsp, bitpos, 1)
+                if frame_mbs_only_flag == 0:
+                    _, bitpos = _read_bits(rbsp, bitpos, 1)
+                _, bitpos = _read_bits(rbsp, bitpos, 1)
+                frame_cropping_flag, bitpos = _read_bits(rbsp, bitpos, 1)
+                if frame_cropping_flag:
+                    for _ in range(4):
+                        _, bitpos = _read_ue(rbsp, bitpos)
+
+                vui_present, bitpos = _read_bits(rbsp, bitpos, 1)
+                if not vui_present:
+                    return None
+                ar_info, bitpos = _read_bits(rbsp, bitpos, 1)
+                if ar_info:
+                    ar_idc, bitpos = _read_bits(rbsp, bitpos, 8)
+                    if ar_idc == 255:
+                        _, bitpos = _read_bits(rbsp, bitpos, 16)
+                        _, bitpos = _read_bits(rbsp, bitpos, 16)
+                over_scan, bitpos = _read_bits(rbsp, bitpos, 1)
+                if over_scan:
+                    _, bitpos = _read_bits(rbsp, bitpos, 1)
+                video_signal, bitpos = _read_bits(rbsp, bitpos, 1)
+                if video_signal:
+                    _, bitpos = _read_bits(rbsp, bitpos, 3)
+                    _, bitpos = _read_bits(rbsp, bitpos, 1)
+                    colour_desc, bitpos = _read_bits(rbsp, bitpos, 1)
+                    if colour_desc:
+                        _, bitpos = _read_bits(rbsp, bitpos, 24)
+                chroma_loc, bitpos = _read_bits(rbsp, bitpos, 1)
+                if chroma_loc:
+                    _, bitpos = _read_ue(rbsp, bitpos)
+                    _, bitpos = _read_ue(rbsp, bitpos)
+
+                timing_info_present, bitpos = _read_bits(rbsp, bitpos, 1)
+                if not timing_info_present:
+                    return None
+                num_units_in_tick, bitpos = _read_bits(rbsp, bitpos, 32)
+                time_scale, bitpos = _read_bits(rbsp, bitpos, 32)
+                if num_units_in_tick == 0:
+                    return None
+                fps = time_scale / (2.0 * num_units_in_tick)
+                return round(fps, 3)
+            except Exception:
+                return None
+
+        def _extract_h264_sps_from_annexb(es_data: bytes) -> Optional[bytes]:
+            i = 0
+            n = len(es_data)
+            while i + 4 < n:
+                if es_data[i: i + 3] == b"\x00\x00\x01":
+                    sc = 3
+                elif i + 4 < n and es_data[i: i + 4] == b"\x00\x00\x00\x01":
+                    sc = 4
+                else:
+                    i += 1
+                    continue
+                start = i + sc
+                j = start
+                while j + 4 < n and es_data[j: j + 3] != b"\x00\x00\x01" and es_data[j: j + 4] != b"\x00\x00\x00\x01":
+                    j += 1
+                nal = es_data[start:j]
+                if nal and (nal[0] & 0x1F) == 7:
+                    return nal
+                i = j
+            return None
+
+        try:
+            video_stream_ids = set(range(0xE0, 0xF0))
+            pts_by_pid: dict[int, list[int]] = {}
+            es_by_pid: dict[int, bytearray] = {}
+
+            with open(self.filename, "rb") as f:
+                for pid, stream_id, pts in _iter_pes_pts(f):
+                    if stream_id not in video_stream_ids:
+                        continue
+                    lst = pts_by_pid.setdefault(pid, [])
+                    lst.append(pts)
+                    if len(lst) >= sample_count + 1:
+                        break
+
+            if not pts_by_pid:
+                if use_ffprobe_fallback:
+                    ff = _ffprobe_frame_rate(self.filename)
+                    return ff
+                return None
+
+            best_pid = max(pts_by_pid, key=lambda p: len(pts_by_pid[p]))
+            with open(self.filename, "rb") as f:
+                start_phase, spacing, sync_off = M2TS._choose_transport_layout(f, m2ts)
+                f.seek(start_phase)
+                pending: dict[int, bytearray] = {}
+                read_bytes = 0
+                while True:
+                    block = f.read(spacing)
+                    if len(block) < spacing:
+                        break
+                    read_bytes += len(block)
+                    if max_bytes is not None and read_bytes > max_bytes:
+                        break
+                    pkt = block[sync_off: sync_off + M2TS._TS_PACKET]
+                    if len(pkt) < M2TS._TS_PACKET or pkt[0] != M2TS._SYNC:
+                        continue
+                    payload, pid, pusi = M2TS._ts_payload(pkt)
+                    if payload is None or pid != best_pid:
+                        continue
+                    if pusi:
+                        if not payload:
+                            pending.pop(pid, None)
+                            continue
+                        pending[pid] = bytearray(M2TS._pes_payload_after_pointer(payload))
+                    else:
+                        if pid not in pending:
+                            continue
+                        pending[pid].extend(payload)
+                    buf = pending.get(pid)
+                    if not buf or len(buf) < 9 or buf[0:3] != b"\x00\x00\x01":
+                        continue
+                    hdr_len = 9 + buf[8]
+                    if len(buf) < hdr_len:
+                        continue
+                    payload_es = buf[hdr_len:]
+                    es_by_pid.setdefault(pid, bytearray()).extend(payload_es)
+                    if len(es_by_pid[pid]) > 2 * 1024 * 1024:
+                        break
+                    sps = _extract_h264_sps_from_annexb(bytes(es_by_pid[pid]))
+                    if sps:
+                        fps = _h264_fps_from_sps_nal(sps)
+                        if fps:
+                            return fps
+                    pending.pop(pid, None)
+
+            pts_list = pts_by_pid[best_pid]
+            if len(pts_list) < 2:
+                if use_ffprobe_fallback:
+                    ff = _ffprobe_frame_rate(self.filename)
+                    return ff
+                return None
+            deltas = []
+            for a, b in zip(pts_list, pts_list[1:]):
+                d = b - a
+                if d > 0:
+                    deltas.append(d)
+            if not deltas:
+                if use_ffprobe_fallback:
+                    ff = _ffprobe_frame_rate(self.filename)
+                    return ff
+                return None
+
+            delta = median(deltas)
+            fps = 90000.0 / float(delta)
+            common = (23.976, 24.0, 25.0, 29.97, 30.0, 50.0, 59.94, 60.0)
+            best = min(common, key=lambda x: abs(x - fps))
+            if abs(best - fps) / best < 0.01:
+                return best
+            fps_r = round(fps, 3)
+            if use_ffprobe_fallback:
+                ff = _ffprobe_frame_rate(self.filename)
+                if ff is not None:
+                    return ff
+            return fps_r
+        except Exception:
+            if use_ffprobe_fallback:
+                return _ffprobe_frame_rate(self.filename)
+            return None
+
+    def get_total_frames(self) -> int:
+        fps = self.read_frame_rate_from_m2ts()
+        if not fps or fps <= 0.0:
+            return -1
+        dur90 = self.get_duration()
+        if dur90 <= 0:
+            return -1
+        dur_sec = float(dur90) / 90000.0
+        frame_sec = 1.0 / float(fps)
+        frames = int(round(dur_sec / frame_sec))
+        return frames if frames > 0 else -1
 
 
 class BluraySubtitle:
@@ -6202,7 +6724,8 @@ class SpTableScanWorker(QObject):
                 if key in frame_count_cache:
                     return frame_count_cache[key]
                 try:
-                    c = BluraySubtitle._ffprobe_video_frame_count_static(key)
+                    m = M2TS(key)
+                    c = m.get_total_frames()
                 except Exception:
                     c = -1
                 frame_count_cache[key] = int(c)
@@ -6310,7 +6833,10 @@ class SpTableScanWorker(QObject):
                                     any_video = False
                                     break
                                 if c < 0:
-                                    disabled = True
+                                    # Unknown frame count should not disable the row.
+                                    # Keep row editable/selectable; just skip single-frame tagging.
+                                    frame_counts = []
+                                    any_video = False
                                     break
                                 any_video = True
                                 frame_counts.append(c)
