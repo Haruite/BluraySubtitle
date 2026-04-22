@@ -4947,14 +4947,31 @@ class BluraySubtitle:
                 if len(expected_from_cmd) >= len(expected_split_paths):
                     expected_split_paths = expected_from_cmd
             split_by_config = len(expected_split_paths) > 1
+            ret_ok = (ret in (0, 1))
             stem_base, ext_base = os.path.splitext(os.path.basename(out_n)) if out_n else ('', '.mkv')
             alt001 = os.path.join(os.path.dirname(out_n), f'{stem_base}-001{ext_base or ".mkv"}') if out_n else ''
+            print(f'[split-check] bdmv={bdmv_vol} ret={ret} ret_ok={ret_ok} out="{out_n}" n_clips={n_clips} split_by_config={split_by_config}')
+            print(f'[split-check] expected_split_paths({len(expected_split_paths)}): {expected_split_paths}')
+            print(f'[split-check] cmd_split_count={cmd_split_count} alt001="{alt001}" out_exists={out_exists}')
             if split_by_config:
-                primary_ok = (ret == 0) and all(os.path.isfile(p) for p in expected_split_paths)
+                exists_map = {p: os.path.isfile(p) for p in expected_split_paths}
+                print(f'[split-check] exists(initial): {exists_map}')
+                primary_ok = ret_ok and all(exists_map.values())
+                if (not primary_ok) and ret_ok and expected_split_paths:
+                    # On some filesystems, split files may appear shortly after process exit.
+                    # Retry briefly before deciding fallback is needed.
+                    for retry_i in range(5):
+                        time.sleep(0.2)
+                        exists_map = {p: os.path.isfile(p) for p in expected_split_paths}
+                        print(f'[split-check] exists(retry#{retry_i + 1}): {exists_map}')
+                        if all(exists_map.values()):
+                            primary_ok = True
+                            break
             elif out_n and expected_split_paths:
-                primary_ok = (ret == 0) and (out_exists or (bool(alt001) and os.path.isfile(alt001)))
+                primary_ok = ret_ok and (out_exists or (bool(alt001) and os.path.isfile(alt001)))
             else:
-                primary_ok = (ret == 0) and out_exists
+                primary_ok = ret_ok and out_exists
+            print(f'[split-check] primary_ok={primary_ok}')
             fb_audio, fb_sub = BluraySubtitle._fallback_track_lists(remux_cmd, copy_audio_track, copy_sub_track)
             if n_clips > 1 and not primary_ok:
                 if split_by_config:
