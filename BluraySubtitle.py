@@ -9476,7 +9476,7 @@ class BluraySubtitleGUI(QWidget):
             return
         mpls_file = os.path.basename(mpls_path)
         unique_m2ts = len(set(m2ts_files))
-        default_selected = True if unique_m2ts == 3 else bool(duration >= 30.0)
+        default_selected = True if unique_m2ts >= 3 else bool(duration >= 30.0)
 
         sel_col = ENCODE_SP_LABELS.index('select')
         bdmv_col = ENCODE_SP_LABELS.index('bdmv_index')
@@ -9690,16 +9690,17 @@ class BluraySubtitleGUI(QWidget):
                     m2ts_files = ordered
                     m2ts_set = set(m2ts_files)
                     default_selected = True
-                    if m2ts_set and m2ts_set.issubset(main_m2ts_files):
+                    in_main_subset = bool(m2ts_set and m2ts_set.issubset(main_m2ts_files))
+                    if in_main_subset:
                         default_selected = False
-                    if len(m2ts_set) == 3:
+                    elif len(m2ts_set) >= 3:
                         default_selected = True
                     dur = ch.get_total_time()
                     try:
                         dur_for_select = float(ch.get_total_time_no_repeat())
                     except Exception:
                         dur_for_select = float(dur)
-                    if len(m2ts_set) != 3 and dur_for_select < 30:
+                    if len(m2ts_set) < 3 and dur_for_select < 30:
                         default_selected = False
                     entries.append({
                         'bdmv_index': bdmv_index,
