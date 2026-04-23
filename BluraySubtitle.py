@@ -95,7 +95,7 @@ SUBTITLE_LABELS = ['select', 'path', 'sub_duration', 'ep_duration', 'bdmv_index'
 MKV_LABELS = ['path', 'duration']
 REMUX_LABELS = ['sub_path', 'language', 'ep_duration', 'bdmv_index', 'start_at_chapter', 'end_at_chapter', 'm2ts_file', 'output_name', 'play']
 ENCODE_LABELS = ['sub_path', 'language', 'ep_duration', 'bdmv_index', 'start_at_chapter', 'end_at_chapter', 'm2ts_file', 'output_name', 'vpy_path', 'edit_vpy', 'preview_script', 'play']
-ENCODE_SP_LABELS = ['select', 'bdmv_index', 'mpls_file', 'm2ts_file', 'duration', 'output_name', 'tracks', 'vpy_path', 'edit_vpy', 'preview_script', 'play']
+ENCODE_SP_LABELS = ['select', 'bdmv_index', 'mpls_file', 'm2ts_file', 'm2ts_type', 'duration', 'output_name', 'tracks', 'vpy_path', 'edit_vpy', 'preview_script', 'play']
 ENCODE_REMUX_LABELS = ['sub_path', 'language', 'ep_duration', 'output_name', 'vpy_path', 'edit_vpy', 'preview_script', 'play', 'edit_tracks', 'edit_chapters', 'edit_attachments']
 ENCODE_REMUX_SP_LABELS = ['duration', 'output_name', 'vpy_path', 'edit_vpy', 'preview_script', 'play', 'edit_tracks', 'edit_chapters', 'edit_attachments']
 CONFIGURATION = {}
@@ -1183,6 +1183,8 @@ class M2TS:
         self._last_pts_cache: dict[tuple[Optional[bool], Optional[int], frozenset[int]], Optional[int]] = {}
         self._duration_cache: dict[tuple[bool, bool], int] = {}
         self._tracks_info_cache: dict[tuple[Optional[bool], int], list[dict[str, object]]] = {}
+        self._fps_cache: dict[tuple[Optional[bool], Optional[int], int, bool], Optional[float]] = {}
+        self._total_frames_cache: Optional[int] = None
 
     def _current_file_signature(self) -> Optional[tuple[int, int]]:
         try:
@@ -1197,6 +1199,8 @@ class M2TS:
         self._last_pts_cache.clear()
         self._duration_cache.clear()
         self._tracks_info_cache.clear()
+        self._fps_cache.clear()
+        self._total_frames_cache = None
 
     def _ensure_cache_valid(self) -> None:
         sig = self._current_file_signature()
@@ -1562,10 +1566,12 @@ class M2TS:
             if pts is not None:
                 self._last_pts_cache[cache_key] = pts
                 return pts
-        self._last_pts_cache[cache_key] = None
-        return None
+        # Single-frame streams may only expose one valid PTS; in that case last == first.
+        first_pts = self.get_first_pts(m2ts=m2ts, max_bytes=max_bytes, skip_pids=skip_pids, debug=False)
+        self._last_pts_cache[cache_key] = first_pts
+        return first_pts
 
-    def get_duration(self, *, prefer_pcr: bool = True, use_pts_fallback: bool = True) -> int:
+    def get_duration(self, *, prefer_pcr: bool = True, use_pts_fallback: bool = True, debug: bool = False) -> int:
         self._ensure_cache_valid()
         cache_key = (bool(prefer_pcr), bool(use_pts_fallback))
         if cache_key in self._duration_cache:
@@ -1596,11 +1602,18 @@ class M2TS:
 
                     if first_pcr_val == -1 or last_pcr_val == -1:
                         return 0
-                    return max(int(last_pcr_val - first_pcr_val), 0)
+                    pcr_dur = max(int(last_pcr_val - first_pcr_val), 0)
+                    return pcr_dur
 
             def _duration_by_pts() -> int:
                 first_pts = self.get_first_pts(max_bytes=16 * 1024 * 1024)
                 last_pts = self.get_last_pts()
+                # Single-frame or sparse streams may expose only one boundary PTS.
+                # Treat missing side as equal to known side so timeline remains valid.
+                if first_pts is None and last_pts is not None:
+                    first_pts = last_pts
+                elif last_pts is None and first_pts is not None:
+                    last_pts = first_pts
                 if first_pts is not None and last_pts is not None:
                     pts_duration = int(last_pts - first_pts)
                     if pts_duration > 0:
@@ -1646,20 +1659,37 @@ class M2TS:
             cur_pos += self.frame_size
         return last_pcr_val
 
-    def unpack_bytes(self, n: int) -> int:
+    def unpack_bytes(self, n: int) -> Optional[int]:
         formats: dict[int, str] = {1: '>B', 2: '>H', 4: '>I', 8: '>Q'}
-        return unpack(formats[n], self.m2ts_file.read(n))[0]
+        try:
+            data = self.m2ts_file.read(n)
+        except Exception:
+            return None
+        if len(data) != n:
+            return None
+        return unpack(formats[n], data)[0]
 
     def get_pcr_val(self) -> int:
-        af_exists = (self.unpack_bytes(1) >> 5) % 2
-        adaptive_field_length = self.unpack_bytes(1)
-        pcr_exist = (self.unpack_bytes(1) >> 4) % 2
+        b0 = self.unpack_bytes(1)
+        b1 = self.unpack_bytes(1)
+        b2 = self.unpack_bytes(1)
+        if b0 is None or b1 is None or b2 is None:
+            return -1
+        af_exists = (b0 >> 5) % 2
+        adaptive_field_length = b1
+        pcr_exist = (b2 >> 4) % 2
         if af_exists and adaptive_field_length and pcr_exist:
             tmp = []
             for _ in range(4):
-                tmp.append(self.unpack_bytes(1))
+                b = self.unpack_bytes(1)
+                if b is None:
+                    return -1
+                tmp.append(b)
             pcr = tmp[3] + (tmp[2] << 8) + (tmp[1] << 16) + (tmp[0] << 24)
-            pcr_lo = self.unpack_bytes(1) >> 7
+            pcr_lo_raw = self.unpack_bytes(1)
+            if pcr_lo_raw is None:
+                return -1
+            pcr_lo = pcr_lo_raw >> 7
             pcr_val = (pcr << 1) + pcr_lo
             return pcr_val
         return -1
@@ -1673,6 +1703,11 @@ class M2TS:
         use_ffprobe_fallback: bool = False,
         debug: bool = False,
     ) -> Optional[float]:
+        self._ensure_cache_valid()
+        fps_cache_key = (m2ts, max_bytes, int(sample_count), bool(use_ffprobe_fallback))
+        if not debug and fps_cache_key in self._fps_cache:
+            return self._fps_cache[fps_cache_key]
+
         def _probe_frame_rate_fallback(path: str) -> Optional[float]:
             exe = FFPROBE_PATH if FFPROBE_PATH else (shutil.which('ffprobe') or 'ffprobe')
             cmd = [
@@ -1962,7 +1997,9 @@ class M2TS:
                     ff = _probe_frame_rate_fallback(self.filename)
                     if debug:
                         sp_debug_log(f'm2ts_fps source=ffprobe path={self.filename!r} fps={ff}')
+                    self._fps_cache[fps_cache_key] = ff
                     return ff
+                self._fps_cache[fps_cache_key] = None
                 return None
 
             best_pid = max(pts_by_pid, key=lambda p: len(pts_by_pid[p]))
@@ -2017,6 +2054,7 @@ class M2TS:
                         if fps:
                             if debug:
                                 sp_debug_log(f'm2ts_fps source=sps path={self.filename!r} fps={fps}')
+                            self._fps_cache[fps_cache_key] = fps
                             return fps
                     pending.pop(pid, None)
 
@@ -2028,7 +2066,9 @@ class M2TS:
                     ff = _probe_frame_rate_fallback(self.filename)
                     if debug:
                         sp_debug_log(f'm2ts_fps source=ffprobe path={self.filename!r} fps={ff}')
+                    self._fps_cache[fps_cache_key] = ff
                     return ff
+                self._fps_cache[fps_cache_key] = None
                 return None
             deltas = []
             for a, b in zip(pts_list, pts_list[1:]):
@@ -2043,7 +2083,9 @@ class M2TS:
                     ff = _probe_frame_rate_fallback(self.filename)
                     if debug:
                         sp_debug_log(f'm2ts_fps source=ffprobe path={self.filename!r} fps={ff}')
+                    self._fps_cache[fps_cache_key] = ff
                     return ff
+                self._fps_cache[fps_cache_key] = None
                 return None
 
             delta = median(deltas)
@@ -2055,6 +2097,7 @@ class M2TS:
             if abs(best - fps) / best < 0.01:
                 if debug:
                     sp_debug_log(f'm2ts_fps source=pts path={self.filename!r} fps={fps:.6f} snapped={best}')
+                self._fps_cache[fps_cache_key] = best
                 return best
             fps_r = round(fps, 3)
             if debug:
@@ -2062,24 +2105,40 @@ class M2TS:
             if use_ffprobe_fallback:
                 ff = _probe_frame_rate_fallback(self.filename)
                 if ff is not None:
+                    self._fps_cache[fps_cache_key] = ff
                     return ff
+            self._fps_cache[fps_cache_key] = fps_r
             return fps_r
         except Exception:
             if use_ffprobe_fallback:
-                return _probe_frame_rate_fallback(self.filename)
+                ff = _probe_frame_rate_fallback(self.filename)
+                self._fps_cache[fps_cache_key] = ff
+                return ff
+            self._fps_cache[fps_cache_key] = None
             return None
 
     def get_total_frames(self) -> int:
+        self._ensure_cache_valid()
+        if self._total_frames_cache is not None:
+            return self._total_frames_cache
+        # Accuracy-first path: use full FPS parsing.
         fps = self.read_frame_rate_from_m2ts()
         if not fps or fps <= 0.0:
+            self._total_frames_cache = -1
             return -1
-        dur90 = self.get_duration()
+
+        # Accuracy-first duration: prefer PTS timeline, fallback to PCR only when needed.
+        dur90 = self.get_duration(prefer_pcr=False, use_pts_fallback=True)
         if dur90 <= 0:
+            dur90 = self.get_duration(prefer_pcr=True, use_pts_fallback=True)
+        if dur90 <= 0:
+            self._total_frames_cache = -1
             return -1
         dur_sec = float(dur90) / 90000.0
         frame_sec = 1.0 / float(fps)
         frames = int(round(dur_sec / frame_sec))
-        return frames if frames > 0 else -1
+        self._total_frames_cache = frames if frames > 0 else -1
+        return self._total_frames_cache
 
     @staticmethod
     def _ycbcr_to_rgba(y: int, cb: int, cr: int, alpha: int) -> tuple[int, int, int, int]:
@@ -2450,6 +2509,62 @@ class M2TS:
     ) -> list[dict[str, object]]:
         """Compatibility wrapper for singular API name."""
         return self.get_tracks_info(m2ts=m2ts, max_scan_bytes=max_scan_bytes)
+
+    def get_m2ts_type(
+        self,
+        *,
+        m2ts: Optional[bool] = None,
+        max_scan_bytes: int = 8 * 1024 * 1024,
+    ) -> str:
+        """
+        Classify M2TS content type from detected track composition.
+        Returns one of:
+        - video
+        - audio_only
+        - igs_menu
+        - subtitle_only
+        - audio_with_subtitle
+        - private_or_other
+        - mixed_non_video
+        - unknown
+        """
+        tracks = self.get_tracks_info(m2ts=m2ts, max_scan_bytes=max_scan_bytes)
+        if not tracks:
+            return "unknown"
+
+        has_video = False
+        has_audio = False
+        has_subtitle = False
+        has_other = False
+        has_igs = False
+
+        for tr in tracks:
+            ctype = str(tr.get("codec_type") or "other")
+            cname = str(tr.get("codec_name") or "unknown")
+            if ctype == "video":
+                has_video = True
+            elif ctype == "audio":
+                has_audio = True
+            elif ctype == "subtitle":
+                has_subtitle = True
+            else:
+                has_other = True
+            if cname == "igs":
+                has_igs = True
+
+        if has_video:
+            return "video"
+        if has_igs and not has_video:
+            return "igs_menu"
+        if has_audio and not has_subtitle and not has_other:
+            return "audio_only"
+        if has_subtitle and not has_audio and not has_other:
+            return "subtitle_only"
+        if has_audio and has_subtitle and not has_video:
+            return "audio_with_subtitle"
+        if has_other and not (has_video or has_audio or has_subtitle):
+            return "private_or_other"
+        return "mixed_non_video"
 
     def extract_igs_menu_png(
         self,
@@ -3890,6 +4005,7 @@ class BluraySubtitle:
 
             mpls_file = str(entry.get('mpls_file') or '').strip()
             m2ts_file = str(entry.get('m2ts_file') or '').strip()
+            m2ts_type = str(entry.get('m2ts_type') or '').strip()
             output_name = str(entry.get('output_name') or '').strip()
             selected = bool(entry.get('selected', True))
             if (not selected) or (not output_name):
@@ -4000,8 +4116,8 @@ class BluraySubtitle:
                     except Exception:
                         pass
                 uniq_m2ts = m2ts_list
-                # Zero-duration single m2ts: export IGS menu pages with dedicated parser.
-                if (not mpls_file) and len(uniq_m2ts) == 1 and ('.' not in os.path.basename(output_name)):
+                # Only igs_menu uses dedicated IGS parser for folder output.
+                if (not mpls_file) and (m2ts_type == 'igs_menu') and len(uniq_m2ts) == 1 and ('.' not in os.path.basename(output_name)):
                     folder_out = sp_mkv_path
                     os.makedirs(folder_out, exist_ok=True)
                     try:
@@ -7821,6 +7937,8 @@ class SpTableScanWorker(QObject):
                 special = ''
                 select_override = None
                 tracks_payload: dict[str, list[str]] = {}
+                m2ts_type = ''
+                allow_tracks_when_disabled = False
 
                 if force_disabled:
                     disabled = True
@@ -7839,6 +7957,14 @@ class SpTableScanWorker(QObject):
 
                 if not disabled:
                     try:
+                        if (not mpls_path) and m2ts_paths:
+                            try:
+                                m2ts_type = str(M2TS(m2ts_paths[0]).get_m2ts_type() or '').strip()
+                            except Exception:
+                                m2ts_type = ''
+                            if m2ts_type in ('private_or_other', 'mixed_non_video'):
+                                disabled = True
+                                allow_tracks_when_disabled = True
                         if mpls_path and os.path.exists(mpls_path) and m2ts_paths:
                             try:
                                 ch = Chapter(mpls_path)
@@ -7898,11 +8024,10 @@ class SpTableScanWorker(QObject):
                                     any_video = False
                                     break
                                 if c < 0:
-                                    # Unknown frame count should not disable the row.
-                                    # Keep row editable/selectable; just skip single-frame tagging.
-                                    frame_counts = []
-                                    any_video = False
-                                    break
+                                    # For multi-m2ts playlists, unknown frame count on a subset of clips
+                                    # should not invalidate one-frame menu classification entirely.
+                                    # Keep this clip as unknown and continue using known clips.
+                                    continue
                                 any_video = True
                                 frame_counts.append(c)
                             if (not disabled) and any_video and frame_counts:
@@ -7920,6 +8045,8 @@ class SpTableScanWorker(QObject):
                     'sp_key': sp_key,
                     'tracks': tracks_payload,
                     'mpls_path': mpls_path,
+                    'm2ts_type': m2ts_type,
+                    'allow_tracks_when_disabled': bool(allow_tracks_when_disabled),
                 })
 
             self.finished.emit()
@@ -9937,11 +10064,13 @@ class BluraySubtitleGUI(QWidget):
         bdmv_col = ENCODE_SP_LABELS.index('bdmv_index')
         mpls_col = ENCODE_SP_LABELS.index('mpls_file')
         m2ts_col = ENCODE_SP_LABELS.index('m2ts_file')
+        type_col = ENCODE_SP_LABELS.index('m2ts_type')
         out_col = ENCODE_SP_LABELS.index('output_name')
         sel_col = ENCODE_SP_LABELS.index('select')
         bdmv_item = self.table3.item(row, bdmv_col)
         mpls_item = self.table3.item(row, mpls_col)
         m2ts_item = self.table3.item(row, m2ts_col)
+        type_item = self.table3.item(row, type_col)
         out_item = self.table3.item(row, out_col)
         sel_item = self.table3.item(row, sel_col)
         try:
@@ -9958,6 +10087,7 @@ class BluraySubtitleGUI(QWidget):
             'bdmv_index': bi,
             'mpls_file': mpls_item.text().strip() if mpls_item and mpls_item.text() else '',
             'm2ts_file': m2ts_item.text().strip() if m2ts_item and m2ts_item.text() else '',
+            'm2ts_type': type_item.text().strip() if type_item and type_item.text() else '',
             'output_name': out_item.text().strip() if out_item and out_item.text() else '',
             'selected': bool(sel_item and sel_item.flags() & Qt.ItemFlag.ItemIsEnabled and sel_item.checkState() == Qt.CheckState.Checked),
             'bdmv_root': bdmv_root,
@@ -9971,6 +10101,7 @@ class BluraySubtitleGUI(QWidget):
         bdmv_col = ENCODE_SP_LABELS.index('bdmv_index')
         mpls_col = ENCODE_SP_LABELS.index('mpls_file')
         m2ts_col = ENCODE_SP_LABELS.index('m2ts_file')
+        type_col = ENCODE_SP_LABELS.index('m2ts_type')
         rows_by_vol: dict[int, list[int]] = {}
         for r in range(self.table3.rowCount()):
             try:
@@ -9983,6 +10114,7 @@ class BluraySubtitleGUI(QWidget):
 
         audio_only_cache: dict[tuple[int, str], bool] = {}
         single_audio_ext_cache: dict[tuple[int, str, str], str] = {}
+        single_sub_ext_cache: dict[tuple[int, str, str], str] = {}
         for bdmv_index, rows in rows_by_vol.items():
             selected_rows = []
             for r in rows:
@@ -10003,6 +10135,7 @@ class BluraySubtitleGUI(QWidget):
                 name_suffix = str(out_item.data(Qt.ItemDataRole.UserRole + 3) or '')
                 mpls_file = self.table3.item(r, mpls_col).text().strip() if self.table3.item(r, mpls_col) else ''
                 m2ts_text = self.table3.item(r, m2ts_col).text().strip() if self.table3.item(r, m2ts_col) else ''
+                m2ts_type = self.table3.item(r, type_col).text().strip() if self.table3.item(r, type_col) else ''
                 m2ts_files = [x.strip() for x in m2ts_text.split(',') if x.strip()]
                 m2ts_files_unique = list(dict.fromkeys(m2ts_files))
                 if not selected:
@@ -10039,9 +10172,18 @@ class BluraySubtitleGUI(QWidget):
                 if eff_special == 'multi_frame':
                     out_item.setText(f'{base_with_suffix}')
                     continue
-                # Zero-duration single m2ts rows are typically IGS menus:
-                # output as folder name (no extension), extracted by extract_igs_menu_png.
-                if (not mpls_file) and len(m2ts_files_unique) == 1:
+                if (not mpls_file) and m2ts_type == 'igs_menu':
+                    out_item.setText(f'{base_with_suffix}')
+                    continue
+                # Zero-duration menu rows should use folder name (no extension),
+                # extracted by extract_igs_menu_png.
+                # Keep this robust for both:
+                # 1) direct single m2ts rows
+                # 2) mpls rows that include multiple one-frame m2ts clips
+                if (
+                    ((not mpls_file) and len(m2ts_files_unique) == 1)
+                    or (mpls_file and len(m2ts_files_unique) > 1)
+                ):
                     try:
                         d_item = self.table3.item(r, ENCODE_SP_LABELS.index('duration'))
                         d_sec = self._parse_display_time_to_seconds(d_item.text() if d_item else '')
@@ -10104,6 +10246,41 @@ class BluraySubtitleGUI(QWidget):
                 if len(sel_audio) > 1 and len(sel_sub) == 0 and is_audio_only:
                     out_item.setText(f'{base_with_suffix}.mka')
                     continue
+                if not mpls_file:
+                    if m2ts_type in ('private_or_other', 'mixed_non_video'):
+                        out_item.setText('')
+                        continue
+                    if m2ts_type == 'audio_with_subtitle':
+                        out_item.setText(f'{base_with_suffix}.mka')
+                        continue
+                    if m2ts_type == 'subtitle_only':
+                        if len(sel_sub) <= 0:
+                            out_item.setText('')
+                            continue
+                        if len(sel_sub) == 1:
+                            ext = 'sup'
+                            if m2ts_files:
+                                src = os.path.join(self._get_stream_dir_for_bdmv_index(bdmv_index), m2ts_files[0])
+                                ext_cache_key = (int(bdmv_index), os.path.normpath(src), str(sel_sub[0]))
+                                if ext_cache_key in single_sub_ext_cache:
+                                    ext = str(single_sub_ext_cache[ext_cache_key] or 'sup')
+                                else:
+                                    streams = self._read_m2ts_track_info(src) if str(src).lower().endswith('.m2ts') else self._read_media_streams_local(src)
+                                    for s in streams:
+                                        if str(s.get('codec_type') or '') != 'subtitle':
+                                            continue
+                                        if str(s.get('index', '')) == str(sel_sub[0]):
+                                            c = str(s.get('codec_name') or '').lower()
+                                            if c in ('subrip', 'srt'):
+                                                ext = 'srt'
+                                            else:
+                                                ext = 'sup'
+                                            break
+                                    single_sub_ext_cache[ext_cache_key] = ext
+                            out_item.setText(f'{base_with_suffix}.{ext}')
+                            continue
+                        out_item.setText(f'{base_with_suffix}.mks')
+                        continue
                 out_item.setText(f'{base_with_suffix}.mkv')
 
     def _all_track_ids_from_streams(self, streams: list[dict[str, object]]) -> tuple[list[str], list[str]]:
@@ -10363,6 +10540,7 @@ class BluraySubtitleGUI(QWidget):
     def _on_sp_table_scan_result(self, row: int, disabled: bool, special: str, payload: object):
         try:
             sel_col = ENCODE_SP_LABELS.index('select')
+            type_col = ENCODE_SP_LABELS.index('m2ts_type')
             out_col = ENCODE_SP_LABELS.index('output_name')
             tracks_col = ENCODE_SP_LABELS.index('tracks')
             play_col = ENCODE_SP_LABELS.index('play') if 'play' in ENCODE_SP_LABELS else -1
@@ -10373,10 +10551,14 @@ class BluraySubtitleGUI(QWidget):
         select_override = None
         sp_key = ''
         tracks_payload = {}
+        m2ts_type = ''
+        allow_tracks_when_disabled = False
         if isinstance(payload, dict):
             select_override = payload.get('select_override')
             sp_key = str(payload.get('sp_key') or '').strip()
             tracks_payload = payload.get('tracks') or {}
+            m2ts_type = str(payload.get('m2ts_type') or '').strip()
+            allow_tracks_when_disabled = bool(payload.get('allow_tracks_when_disabled') or False)
         try:
             self._updating_sp_table = True
             sel_item = self.table3.item(row, sel_col)
@@ -10395,9 +10577,14 @@ class BluraySubtitleGUI(QWidget):
             out_item = self.table3.item(row, out_col)
             if out_item:
                 out_item.setData(Qt.ItemDataRole.UserRole + 2, str(special or ''))
+            type_item = self.table3.item(row, type_col)
+            if not type_item:
+                type_item = QTableWidgetItem('')
+                self.table3.setItem(row, type_col, type_item)
+            type_item.setText(m2ts_type)
             btn_tracks = self.table3.cellWidget(row, tracks_col)
             if isinstance(btn_tracks, QToolButton):
-                btn_tracks.setEnabled(not disabled)
+                btn_tracks.setEnabled((not disabled) or allow_tracks_when_disabled)
             if play_col >= 0:
                 btn_play = self.table3.cellWidget(row, play_col)
                 if isinstance(btn_play, QToolButton):
@@ -10857,6 +11044,7 @@ class BluraySubtitleGUI(QWidget):
                         'bdmv_index': bdmv_index,
                         'mpls_file': os.path.basename(mpls_file_path),
                         'm2ts_files': m2ts_files,
+                        'm2ts_type': '',
                         'duration': dur,
                         'default_selected': bool(default_selected),
                         'disabled': False,
@@ -10896,6 +11084,7 @@ class BluraySubtitleGUI(QWidget):
                             'bdmv_index': bdmv_index,
                             'mpls_file': '',
                             'm2ts_files': [sf],
+                            'm2ts_type': '',
                             'duration': dur,
                             # Zero-duration m2ts (typically IGS menu streams) should stay optional:
                             # keep row enabled, but default to unchecked.
@@ -10937,11 +11126,12 @@ class BluraySubtitleGUI(QWidget):
             self.table3.setSortingEnabled(False)
             try:
                 self._updating_sp_table = True
-                old_name_map: dict[tuple[int, str, str], tuple[str, Optional[str]]] = {}
+                old_name_map: dict[tuple[int, str, str], tuple[str, Optional[str], str]] = {}
                 sel_col = ENCODE_SP_LABELS.index('select')
                 bdmv_col = ENCODE_SP_LABELS.index('bdmv_index')
                 mpls_col = ENCODE_SP_LABELS.index('mpls_file')
                 m2ts_col = ENCODE_SP_LABELS.index('m2ts_file')
+                type_col = ENCODE_SP_LABELS.index('m2ts_type')
                 dur_col = ENCODE_SP_LABELS.index('duration')
                 out_col = ENCODE_SP_LABELS.index('output_name')
                 for r in range(self.table3.rowCount()):
@@ -10951,13 +11141,18 @@ class BluraySubtitleGUI(QWidget):
                     out_item = self.table3.item(r, out_col)
                     if bdmv_item and out_item and out_item.text():
                         key = (int(bdmv_item.text() or 0), mpls_item.text() if mpls_item else '', m2ts_item.text() if m2ts_item else '')
-                        old_name_map[key] = (out_item.text().strip(), out_item.data(Qt.ItemDataRole.UserRole) if out_item else None)
+                        old_name_map[key] = (
+                            out_item.text().strip(),
+                            out_item.data(Qt.ItemDataRole.UserRole) if out_item else None,
+                            str(out_item.data(Qt.ItemDataRole.UserRole + 2) or '').strip(),
+                        )
 
                 self.table3.setRowCount(len(entries))
                 for i, e in enumerate(entries):
                     bdmv_index = int(e.get('bdmv_index') or 0)
                     mpls_file = str(e.get('mpls_file') or '')
                     m2ts_files = [str(x) for x in (e.get('m2ts_files') or [])]
+                    m2ts_type = str(e.get('m2ts_type') or '')
                     dur = float(e.get('duration') or 0.0)
                     auto_out_name = ''
                     is_disabled = bool(e.get('disabled'))
@@ -10975,6 +11170,7 @@ class BluraySubtitleGUI(QWidget):
                     self.table3.setItem(i, bdmv_col, QTableWidgetItem(str(bdmv_index)))
                     self.table3.setItem(i, mpls_col, QTableWidgetItem(mpls_file))
                     self.table3.setItem(i, m2ts_col, QTableWidgetItem(','.join(m2ts_files)))
+                    self.table3.setItem(i, type_col, QTableWidgetItem(m2ts_type))
                     self.table3.setItem(i, dur_col, QTableWidgetItem(get_time_str(dur)))
                     tracks_col = ENCODE_SP_LABELS.index('tracks')
                     btn_tracks = QToolButton(self.table3)
@@ -10993,10 +11189,12 @@ class BluraySubtitleGUI(QWidget):
                     prev = old_name_map.get(key)
                     prev_text = prev[0] if prev else ''
                     prev_auto = prev[1] if prev else None
+                    prev_special = prev[2] if prev else ''
+                    effective_special = special or prev_special
                     if e.get('preserve_chapter_sp'):
                         out_item = QTableWidgetItem('')
                         out_item.setData(Qt.ItemDataRole.UserRole, '')
-                        out_item.setData(Qt.ItemDataRole.UserRole + 2, special)
+                        out_item.setData(Qt.ItemDataRole.UserRole + 2, effective_special)
                         out_item.setData(Qt.ItemDataRole.UserRole + 3, str(e.get('name_suffix') or ''))
                     else:
                         if prev_text and isinstance(prev_auto, str) and prev_text != prev_auto:
@@ -11005,7 +11203,7 @@ class BluraySubtitleGUI(QWidget):
                             final_text = auto_out_name
                         out_item = QTableWidgetItem(final_text)
                         out_item.setData(Qt.ItemDataRole.UserRole, auto_out_name)
-                        out_item.setData(Qt.ItemDataRole.UserRole + 2, special)
+                        out_item.setData(Qt.ItemDataRole.UserRole + 2, effective_special)
                     self.table3.setItem(i, out_col, out_item)
                     if function_id == 4:
                         vpy_col = ENCODE_SP_LABELS.index('vpy_path')
