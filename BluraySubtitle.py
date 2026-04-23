@@ -8233,6 +8233,7 @@ class BluraySubtitleGUI(QWidget):
                 "QTableWidget#table2{background:rgba(240,255,246,220);alternate-background-color:rgba(220,250,232,220);}"
                 "QTableWidget#table3{background:rgba(255,248,236,220);alternate-background-color:rgba(255,235,213,220);}"
                 "QHeaderView::section{background:rgba(240,243,255,235);color:#1f2330;border:1px solid rgba(214,217,230,220);padding:4px;}"
+                "QTableCornerButton::section{background:rgba(240,243,255,235);border:1px solid rgba(214,217,230,220);}"
                 "QPushButton,QToolButton{background:rgba(255,255,255,220);color:#1f2330;border:1px solid rgba(214,217,230,220);border-radius:8px;padding:4px 10px;}"
                 "QPushButton:hover,QToolButton:hover{border:1px solid #7c3aed;}"
                 "QPushButton:pressed,QToolButton:pressed{background:#f2e9ff;}"
@@ -8300,6 +8301,7 @@ class BluraySubtitleGUI(QWidget):
             "QGroupBox::title{subcontrol-origin:margin;left:8px;padding:0 4px;}"
             "QTableWidget{gridline-color:#3a3a3a;background:#202020;alternate-background-color:#242424;}"
             "QHeaderView::section{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;padding:4px;}"
+            "QTableCornerButton::section{background:#2a2a2a;border:1px solid #3a3a3a;}"
             "QScrollBar:horizontal{background:#1f1f1f;height:12px;margin:0px 14px 0px 14px;border:1px solid #2b2b2b;}"
             "QScrollBar::handle:horizontal{background:#555555;min-width:24px;border-radius:4px;}"
             "QScrollBar::handle:horizontal:hover{background:#666666;}"
@@ -12392,8 +12394,9 @@ class BluraySubtitleGUI(QWidget):
     def _chapter_label_text(self, value: int, rows: int, has_beginning: bool, for_end: bool = False) -> str:
         if for_end and value >= rows + 1:
             return 'ending'
-        if for_end and has_beginning and value == 1:
-            return 'chapter 01'
+        # End selector should show explicit chapter index (same as --split chapters value).
+        if for_end:
+            return f'chapter {max(1, int(value)):02d}'
         if has_beginning and value == 1:
             return 'beginning'
         chapter_no = value - 1 if has_beginning else value
@@ -12549,7 +12552,7 @@ class BluraySubtitleGUI(QWidget):
             old_v = int(getattr(end_combo, '_prev_end_value', end_combo.currentData() or (end_combo.currentIndex() + 1)))
             self._apply_end_combo_min_constraint(end_combo, start_v + 1)
             new_v = int(end_combo.currentData() or (end_combo.currentIndex() + 1))
-            if new_v < old_v:
+            if new_v != old_v:
                 bdmv_col = labels.index('bdmv_index')
                 b_item = self.table2.item(row, bdmv_col)
                 try:
@@ -12564,8 +12567,8 @@ class BluraySubtitleGUI(QWidget):
                         folder_to_bdmv_index[folder] = len(folder_to_bdmv_index) + 1
                     bdmv_to_mpls[folder_to_bdmv_index[folder]] = mpls_no_ext
                 mpls_no_ext = bdmv_to_mpls.get(bdmv_index, '')
-                # Next episode start must be on the *same* main MPLS (not the next table row when it is another disc/volume).
-                next_start_same_mpls = 0
+                # Next episode start must be on the same main MPLS.
+                next_row_same_mpls = -1
                 for r2 in range(row + 1, self.table2.rowCount()):
                     b2 = self.table2.item(r2, bdmv_col)
                     try:
@@ -12574,21 +12577,62 @@ class BluraySubtitleGUI(QWidget):
                         b2i = 0
                     if bdmv_to_mpls.get(b2i, '') != mpls_no_ext:
                         continue
-                    nxc = self.table2.cellWidget(r2, start_col)
-                    if isinstance(nxc, QComboBox):
-                        next_start_same_mpls = int(nxc.currentData() or (nxc.currentIndex() + 1))
+                    next_row_same_mpls = r2
                     break
-                if next_start_same_mpls > 0 and next_start_same_mpls > new_v:
-                    self._set_segment_states_for_range(mpls_no_ext, new_v, next_start_same_mpls - 1, False)
-                elif next_start_same_mpls <= 0 and mpls_no_ext:
-                    # Last episode on this MPLS: uncheck from new end through last chapter mark.
+                if mpls_no_ext:
+                    mpls_path = mpls_no_ext + '.mpls'
+                    checked_states = list(self._chapter_checkbox_states.get(mpls_path, []))
                     try:
                         total_rows = int(self._chapter_node_data(mpls_no_ext).get('rows') or 0)
                     except Exception:
                         total_rows = 0
-                    if total_rows > 0 and new_v <= total_rows:
-                        self._set_segment_states_for_range(mpls_no_ext, new_v, total_rows, False)
+                    if len(checked_states) < total_rows:
+                        checked_states += [True] * (total_rows - len(checked_states))
+                    next_start = max(1, min(int(new_v), max(1, total_rows)))
+                    if checked_states and total_rows > 0:
+                        found = next((i for i in range(next_start, total_rows + 1) if checked_states[i - 1]), None)
+                        if found is not None:
+                            next_start = int(found)
+                    if (new_v > old_v) and next_row_same_mpls >= 0 and total_rows > 0 and int(new_v) >= (total_rows + 1):
+                        # Expanded back to ending: collapse split row.
+                        self._chapter_pending_remove_row = int(next_row_same_mpls)
+                        self._chapter_pending_append_episode = None
+                    elif next_row_same_mpls >= 0:
+                        # Keep following row start synced to the current end.
+                        if total_rows > 0 and int(new_v) >= (total_rows + 1):
+                            self._chapter_pending_remove_row = int(next_row_same_mpls)
+                            self._chapter_pending_append_episode = None
+                        nxc = self.table2.cellWidget(next_row_same_mpls, start_col)
+                        if isinstance(nxc, QComboBox):
+                            for i in range(nxc.count()):
+                                if int(nxc.itemData(i) or (i + 1)) == int(next_start):
+                                    nxc.blockSignals(True)
+                                    nxc.setCurrentIndex(i)
+                                    nxc.blockSignals(False)
+                                    nxc._prev_start_value = int(next_start)
+                                    break
+                    else:
+                        was_ending = bool(total_rows > 0 and int(old_v) >= (total_rows + 1))
+                        # Fallback: if previous value tracking was lost, infer by tail state.
+                        if (not was_ending) and total_rows > 0:
+                            try:
+                                was_ending = int(new_v) <= total_rows and bool(int(old_v) == int(new_v))
+                            except Exception:
+                                was_ending = False
+                        if (old_v > new_v) and was_ending:
+                        # Special case: end changed from ending to earlier chapter on the tail episode.
+                        # Request one extra episode starting at the current end.
+                            self._chapter_pending_append_episode = {
+                                'row': int(row),
+                                'bdmv_index': int(bdmv_index),
+                                'mpls_no_ext': str(mpls_no_ext),
+                                'start_at_chapter': int(next_start),
+                            }
+                        else:
+                            self._chapter_pending_append_episode = None
+                self._chapter_combo_force_mode = ('end', int(row))
             end_combo._prev_end_value = int(end_combo.currentData() or (end_combo.currentIndex() + 1))
+        self._chapter_change_reason = 'end'
         self._apply_start_chapter_constraints(labels)
         # End changes also trigger configuration regeneration.
         self.on_chapter_combo(row)
@@ -12952,6 +12996,8 @@ class BluraySubtitleGUI(QWidget):
 
     def on_chapter_combo(self, subtitle_index: int):
         if self.get_selected_function_id() in (3, 4):
+            if str(getattr(self, '_chapter_change_reason', '') or '') != 'end':
+                self._chapter_change_reason = 'start'
             labels = ENCODE_LABELS if self.get_selected_function_id() == 4 else REMUX_LABELS
             try:
                 row = int(subtitle_index)
@@ -13023,9 +13069,24 @@ class BluraySubtitleGUI(QWidget):
         if self.get_selected_function_id() not in (3, 4):
             return
         try:
+            forced = getattr(self, '_chapter_combo_force_mode', None)
+            reason = str(getattr(self, '_chapter_change_reason', '') or '').strip()
+            self._chapter_change_reason = ''
+            try:
+                cur_inputs = self._collect_config_inputs()
+                mode, _ = self._diff_config_inputs(getattr(self, '_last_config_inputs', {}), cur_inputs)
+            except Exception:
+                mode = 'segments'
+            if reason in ('start', 'end', 'segments'):
+                mode = reason
+            if isinstance(forced, tuple) and len(forced) == 2:
+                try:
+                    mode = str(forced[0] or mode)
+                except Exception:
+                    pass
             configuration = self._generate_configuration_from_ui_inputs()
-            # start/end chapter edits (e.g. last episode end_at_chapter) change episode bounds; keep SP table in sync.
-            self.on_configuration(configuration, update_sp_table=True)
+            # Only view-chapters (segment checkbox) changes should refresh SP table.
+            self.on_configuration(configuration, update_sp_table=(mode == 'segments'))
         except Exception:
             self._show_error_dialog(traceback.format_exc())
 
@@ -13138,6 +13199,14 @@ class BluraySubtitleGUI(QWidget):
         try:
             inputs = self._collect_config_inputs()
             mode, changed_row = self._diff_config_inputs(getattr(self, '_last_config_inputs', {}), inputs)
+            forced = getattr(self, '_chapter_combo_force_mode', None)
+            if isinstance(forced, tuple) and len(forced) == 2:
+                try:
+                    mode = str(forced[0] or mode)
+                    changed_row = int(forced[1])
+                except Exception:
+                    pass
+            self._chapter_combo_force_mode = None
             self._last_config_inputs = inputs
             selected_mpls = list(inputs.get('selected_mpls') or [])
             if not selected_mpls:
@@ -13172,9 +13241,13 @@ class BluraySubtitleGUI(QWidget):
             conf: dict[int, dict[str, int | str]] = {}
             rows = self.table2.rowCount()
             node_cache: dict[str, dict[str, object]] = {}
+            remove_row = int(getattr(self, '_chapter_pending_remove_row', -1) or -1)
+            self._chapter_pending_remove_row = -1
             for r in range(rows):
                 if r % 2 == 0:
                     self._tick_delayed_busy(busy, self.t('Regenerating configuration...'))
+                if remove_row >= 0 and int(r) == int(remove_row):
+                    continue
                 bdmv_index = int(row_bdmv.get(r, 0) or 0)
                 mpls_no_ext = bdmv_to_mpls.get(bdmv_index, '')
                 if not mpls_no_ext:
@@ -13218,14 +13291,6 @@ class BluraySubtitleGUI(QWidget):
                             conf[r] = dict(prev_conf[r])
                             conf[r]['chapter_segments_fully_checked'] = all(checked[:total_rows])
                             continue
-                    prev_end_new = int(conf[changed_row].get('end_at_chapter') or start_idx)
-                    prev_end_old = int(prev_conf.get(changed_row, {}).get('end_at_chapter') or prev_end_new)
-                    if prev_end_new <= prev_end_old:
-                        if r in prev_conf:
-                            conf[r] = dict(prev_conf[r])
-                            conf[r]['chapter_segments_fully_checked'] = all(checked[:total_rows])
-                            continue
-                    start_idx = prev_end_new
                 target_sec = float(sub_max_end[r] if r < len(sub_max_end) else approx_end_time)
                 chosen_end = int(ends.get(r, 0) or 0)
                 if mode == 'segments':
@@ -13237,10 +13302,12 @@ class BluraySubtitleGUI(QWidget):
                 if chosen_end > total_rows + 1:
                     chosen_end = total_rows + 1
                 # If unchecked region starts before chosen end, cut here.
-                for k in range(start_idx, min(chosen_end, total_rows + 1)):
-                    if k <= total_rows and not checked[k - 1]:
-                        chosen_end = k
-                        break
+                # Keep explicit table2 start/end selections authoritative for start/end edits.
+                if mode not in ('start', 'end'):
+                    for k in range(start_idx, min(chosen_end, total_rows + 1)):
+                        if k <= total_rows and not checked[k - 1]:
+                            chosen_end = k
+                            break
                 dur = max(0.0, float(offsets.get(chosen_end, offsets.get(total_rows + 1, 0.0))) - float(offsets.get(start_idx, 0.0)))
                 folder = selected_mpls[min(max(bdmv_index - 1, 0), len(selected_mpls) - 1)][0] if selected_mpls else ''
                 disc_output_name = ''
@@ -13270,6 +13337,72 @@ class BluraySubtitleGUI(QWidget):
                     'disc_output_name': disc_output_name,
                     'chapter_segments_fully_checked': all(checked[:total_rows]),
                 }
+            append_req = getattr(self, '_chapter_pending_append_episode', None)
+            self._chapter_pending_append_episode = None
+            append_new_key: Optional[int] = None
+            append_after_row = -1
+            if isinstance(append_req, dict):
+                try:
+                    append_after_row = int(append_req.get('row') or -1)
+                    req_mpls = str(append_req.get('mpls_no_ext') or '').strip()
+                    req_bdmv = int(append_req.get('bdmv_index') or 0)
+                    req_start = int(append_req.get('start_at_chapter') or 1)
+                except Exception:
+                    req_mpls, req_bdmv, req_start = '', 0, 1
+                    append_after_row = -1
+                if req_mpls and req_bdmv > 0:
+                    node = node_cache.get(req_mpls) or self._chapter_node_data(req_mpls)
+                    node_cache[req_mpls] = node
+                    total_rows = int(node.get('rows') or 0)
+                    offsets = dict(node.get('offsets') or {})
+                    m2ts = dict(node.get('m2ts') or {})
+                    checked = list(segments.get(req_mpls, [True] * total_rows))
+                    if len(checked) < total_rows:
+                        checked += [True] * (total_rows - len(checked))
+                    if total_rows > 0:
+                        start_idx = max(1, min(req_start, total_rows))
+                        if checked and not checked[start_idx - 1]:
+                            start_idx = next((i for i in range(start_idx, total_rows + 1) if checked[i - 1]), start_idx)
+                        target_sec = float(sub_max_end[len(conf)] if len(conf) < len(sub_max_end) else approx_end_time)
+                        chosen_end = self._closest_endpoint(start_idx, target_sec, total_rows, offsets, m2ts, checked)
+                        if chosen_end <= start_idx:
+                            chosen_end = min(total_rows + 1, start_idx + 1)
+                        for k in range(start_idx, min(chosen_end, total_rows + 1)):
+                            if k <= total_rows and not checked[k - 1]:
+                                chosen_end = k
+                                break
+                        dur = max(
+                            0.0,
+                            float(offsets.get(chosen_end, offsets.get(total_rows + 1, 0.0))) - float(offsets.get(start_idx, 0.0))
+                        )
+                        folder = selected_mpls[min(max(req_bdmv - 1, 0), len(selected_mpls) - 1)][0] if selected_mpls else ''
+                        disc_output_name = self._resolve_output_name_from_mpls(req_mpls)
+                        new_key = (max(conf.keys()) + 1) if conf else 0
+                        append_new_key = int(new_key)
+                        conf[new_key] = {
+                            'folder': folder,
+                            'selected_mpls': req_mpls,
+                            'bdmv_index': req_bdmv,
+                            'chapter_index': int(start_idx),
+                            'start_at_chapter': int(start_idx),
+                            'end_at_chapter': int(chosen_end),
+                            'offset': get_time_str(float(offsets.get(start_idx, 0.0))),
+                            'ep_duration': get_time_str(dur),
+                            'disc_output_name': disc_output_name,
+                            'chapter_segments_fully_checked': all(checked[:total_rows]),
+                        }
+            # Keep UI order stable: when split from ending, insert new row right after source row.
+            if conf:
+                items = sorted(conf.items(), key=lambda kv: int(kv[0]))
+                if (append_new_key is not None) and (append_after_row >= 0):
+                    idx_new = next((i for i, (k, _) in enumerate(items) if int(k) == int(append_new_key)), -1)
+                    idx_after = next((i for i, (k, _) in enumerate(items) if int(k) == int(append_after_row)), -1)
+                    if idx_new >= 0 and idx_after >= 0 and idx_new != idx_after + 1:
+                        one = items.pop(idx_new)
+                        if idx_new < idx_after:
+                            idx_after -= 1
+                        items.insert(idx_after + 1, one)
+                conf = {i: dict(v) for i, (_, v) in enumerate(items)}
             global CONFIGURATION
             CONFIGURATION = conf
             return conf
