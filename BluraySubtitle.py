@@ -329,9 +329,9 @@ I18N_ZH_TO_EN = {
     '[语言修正] 异常回退失败 rc=': '[lang-fix] exception fallback failed rc=',
     '[混流回退] 丢弃非公共轨位: ': '[remux-fallback] drop non-common slots: ',
     '[混流回退] 缺少首个m2ts: ': '[remux-fallback] missing first m2ts: ',
-    '[混流回退] 首个m2ts没有可参考轨位': '[remux-fallback] no reference track slots from ffprobe on first m2ts',
+    '[混流回退] 首个m2ts没有可参考轨位': '[remux-fallback] no reference track slots on first m2ts',
     '[混流回退] 缺少m2ts: ': '[remux-fallback] missing m2ts: ',
-    '[混流回退] 无法映射 ffprobe PID 到 mkvmerge 轨道ID: ': '[remux-fallback] could not map ffprobe PIDs to mkvmerge ids for ',
+    '[混流回退] 无法映射 PID 到 mkvmerge 轨道ID: ': '[remux-fallback] could not map PIDs to mkvmerge ids for ',
     '[混流回退] 缺少参考音轨 pid=0x': '[remux-fallback] missing reference audio stream for pid=0x',
     '[混流回退] 生成静音轨失败 pid=0x': '[remux-fallback] failed creating silence track for pid=0x',
     '[混流回退] 分片混流失败 rc=': '[remux-fallback] part mux failed rc=',
@@ -343,9 +343,9 @@ I18N_ZH_TO_EN = {
     '[分片回退] 跳过: 播放列表仅有 ': '[remux-fallback-split] skip: playlist has only ',
     ' 个 clip': ' clip(s)',
     '[分片回退] 缺少首个m2ts: ': '[remux-fallback-split] missing first m2ts: ',
-    '[分片回退] 首个m2ts没有可参考轨位': '[remux-fallback-split] no reference track slots from ffprobe on first m2ts',
+    '[分片回退] 首个m2ts没有可参考轨位': '[remux-fallback-split] no reference track slots on first m2ts',
     '[分片回退] 缺少m2ts: ': '[remux-fallback-split] missing m2ts: ',
-    '[分片回退] 无法映射 ffprobe PID: ': '[remux-fallback-split] could not map ffprobe PIDs for ',
+    '[分片回退] 无法映射 PID: ': '[remux-fallback-split] could not map PIDs for ',
     '[分片回退] 缺少参考音轨 pid=0x': '[remux-fallback-split] missing reference audio stream for pid=0x',
     '[分片回退] 生成静音失败 pid=0x': '[remux-fallback-split] failed creating silence for pid=0x',
     '[分片回退] 分片混流失败 rc=': '[remux-fallback-split] part mux failed rc=',
@@ -452,6 +452,20 @@ def print_exception_terminal(exc: BaseException) -> None:
 
 def print_terminal_line(message: str) -> None:
     print(translate_text(message), file=_terminal_err_stream(), flush=True)
+
+
+def sp_debug_log(message: str) -> None:
+    """
+    Lightweight SP debug logger.
+    Enable with SP_DEBUG=1/true/yes/on in environment.
+    """
+    try:
+        enabled = str(os.environ.get('SP_DEBUG', '')).strip().lower() in ('1', 'true', 'yes', 'on')
+        if not enabled:
+            return
+        print(f'[SP-DEBUG] {message}', file=_terminal_err_stream(), flush=True)
+    except Exception:
+        pass
 
 
 _ORIGINAL_PRINT = builtins.print
@@ -1004,23 +1018,142 @@ class MKV:
         find_mkvtoolinx()
 
     def get_duration(self):
-        subprocess.Popen(rf'"{MKV_INFO_PATH}" "{self.path}" -r mkvinfo.txt --ui-language en_US', shell=True).wait()
-        pattern = '| + Duration: '
-        duration = 0
-        with open('mkvinfo.txt', 'r', encoding='utf-8-sig') as f:
-            for line in f:
-                if line[:len(pattern)] == pattern:
-                    time_str = line[len(pattern):]
-                    duration = int(time_str[:2]) * 3600 + int(time_str[3:5]) * 60 + float(time_str[6:])
-        if duration == 0:
-            subprocess.Popen(rf'"{MKV_INFO_PATH}" "{self.path}" -r mkvinfo.txt --ui-language en', shell=True).wait()
-            pattern = '| + Duration: '
-            with open('mkvinfo.txt', 'r', encoding='utf-8-sig') as f:
-                for line in f:
-                    if line[:len(pattern)] == pattern:
-                        time_str = line[len(pattern):]
-                        duration = int(time_str[:2]) * 3600 + int(time_str[3:5]) * 60 + float(time_str[6:])
-        return duration
+        # Matroska IDs used by mkvinfo:
+        # Segment: 0x18538067, Info: 0x1549A966,
+        # TimecodeScale: 0x2AD7B1 (default 1000000 ns), Duration: 0x4489 (float)
+        SEGMENT_ID = 0x18538067
+        INFO_ID = 0x1549A966
+        TIMECODE_SCALE_ID = 0x2AD7B1
+        DURATION_ID = 0x4489
+        DEFAULT_TIMECODE_SCALE = 1000000
+
+        def read_vint(f, for_id: bool):
+            first_b = f.read(1)
+            if not first_b:
+                return None, 0
+
+            first = first_b[0]
+            mask = 0x80
+            length = 1
+            while length <= 8 and (first & mask) == 0:
+                mask >>= 1
+                length += 1
+            if length > 8:
+                return None, 0
+
+            rest = f.read(length - 1)
+            if len(rest) != length - 1:
+                return None, 0
+            raw = first_b + rest
+
+            if for_id:
+                return int.from_bytes(raw, "big"), length
+
+            value = first & (mask - 1)
+            for idx in range(1, length):
+                value = (value << 8) | raw[idx]
+
+            unknown_size = value == (1 << (7 * length)) - 1
+            return (None if unknown_size else value), length
+
+        def parse_uint(buf: bytes) -> int:
+            if not buf:
+                return 0
+            return int.from_bytes(buf, "big", signed=False)
+
+        def parse_float(buf: bytes):
+            if len(buf) == 4:
+                return unpack(">f", buf)[0]
+            if len(buf) == 8:
+                return unpack(">d", buf)[0]
+            return None
+
+        def skip_bytes(f, n: int):
+            if n <= 0:
+                return
+            f.seek(n, 1)
+
+        def read_info_duration(f, info_end: int):
+            duration = None
+            timecode_scale = DEFAULT_TIMECODE_SCALE
+
+            while f.tell() < info_end:
+                el_id, id_len = read_vint(f, for_id=True)
+                if id_len == 0:
+                    break
+
+                el_size, size_len = read_vint(f, for_id=False)
+                if size_len == 0:
+                    break
+
+                payload_start = f.tell()
+                payload_end = info_end if el_size is None else min(info_end, payload_start + el_size)
+                if payload_end < payload_start:
+                    break
+                payload_len = payload_end - payload_start
+
+                if el_id == TIMECODE_SCALE_ID:
+                    payload = f.read(payload_len)
+                    timecode_scale = parse_uint(payload) or DEFAULT_TIMECODE_SCALE
+                elif el_id == DURATION_ID:
+                    payload = f.read(payload_len)
+                    duration = parse_float(payload)
+                else:
+                    skip_bytes(f, payload_len)
+
+                f.seek(payload_end)
+            if duration is None:
+                return None
+            return float(duration) * float(timecode_scale) / 1_000_000_000.0
+
+        with open(self.path, "rb") as f:
+            try:
+                file_size = f.seek(0, 2)
+                f.seek(0)
+            except OSError:
+                file_size = 1 << 63
+
+            while f.tell() < file_size:
+                el_id, id_len = read_vint(f, for_id=True)
+                if id_len == 0:
+                    break
+
+                el_size, size_len = read_vint(f, for_id=False)
+                if size_len == 0:
+                    break
+
+                payload_start = f.tell()
+                payload_end = file_size if el_size is None else min(file_size, payload_start + el_size)
+                if payload_end < payload_start:
+                    break
+
+                if el_id != SEGMENT_ID:
+                    f.seek(payload_end)
+                    continue
+
+                while f.tell() < payload_end:
+                    child_id, child_id_len = read_vint(f, for_id=True)
+                    if child_id_len == 0:
+                        break
+
+                    child_size, child_size_len = read_vint(f, for_id=False)
+                    if child_size_len == 0:
+                        break
+
+                    child_payload_start = f.tell()
+                    child_end = payload_end if child_size is None else min(payload_end, child_payload_start + child_size)
+                    if child_end < child_payload_start:
+                        break
+
+                    if child_id == INFO_ID:
+                        duration_seconds = read_info_duration(f, child_end)
+                        if duration_seconds is not None:
+                            return duration_seconds
+
+                    f.seek(child_end)
+                break
+
+        raise RuntimeError(f"Cannot parse MKV duration from EBML: {self.path}")
 
     def add_chapter(self, edit_file: bool):
         with open('chapter.txt', 'r', encoding='utf-8-sig') as f:
@@ -1044,6 +1177,47 @@ class M2TS:
 
     def __init__(self, filename: str):
         self.filename = filename
+        self._cache_file_sig: Optional[tuple[int, int]] = None
+        self._layout_cache: dict[Optional[bool], tuple[int, int, int]] = {}
+        self._first_pts_cache: dict[tuple[Optional[bool], Optional[int], frozenset[int]], Optional[int]] = {}
+        self._last_pts_cache: dict[tuple[Optional[bool], Optional[int], frozenset[int]], Optional[int]] = {}
+        self._duration_cache: dict[tuple[bool, bool], int] = {}
+        self._tracks_info_cache: dict[tuple[Optional[bool], int], list[dict[str, object]]] = {}
+
+    def _current_file_signature(self) -> Optional[tuple[int, int]]:
+        try:
+            st = os.stat(self.filename)
+            return int(st.st_size), int(st.st_mtime_ns)
+        except OSError:
+            return None
+
+    def _clear_runtime_caches(self) -> None:
+        self._layout_cache.clear()
+        self._first_pts_cache.clear()
+        self._last_pts_cache.clear()
+        self._duration_cache.clear()
+        self._tracks_info_cache.clear()
+
+    def _ensure_cache_valid(self) -> None:
+        sig = self._current_file_signature()
+        if self._cache_file_sig != sig:
+            self._cache_file_sig = sig
+            self._clear_runtime_caches()
+
+    def _choose_transport_layout_cached(self, stream: BinaryIO, m2ts: Optional[bool]) -> tuple[int, int, int]:
+        self._ensure_cache_valid()
+        cached = self._layout_cache.get(m2ts)
+        if cached is not None:
+            return cached
+        layout = M2TS._choose_transport_layout(stream, m2ts)
+        self._layout_cache[m2ts] = layout
+        return layout
+
+    @staticmethod
+    def _normalize_skip_pids(skip_pids: Optional[set[int]]) -> frozenset[int]:
+        if not skip_pids:
+            return frozenset()
+        return frozenset(int(x) for x in skip_pids)
 
     @staticmethod
     def _pts_from_pes_header(p: bytes) -> int:
@@ -1241,17 +1415,25 @@ class M2TS:
         debug: bool = False,
     ) -> Optional[int]:
         """First presentation timestamp (90 kHz units) from elementary streams, or None."""
+        self._ensure_cache_valid()
+        cache_key = (m2ts, max_bytes, M2TS._normalize_skip_pids(skip_pids))
+        if cache_key in self._first_pts_cache:
+            return self._first_pts_cache[cache_key]
         with open(self.filename, 'rb') as f:
             pts = M2TS._scan_first_pts(f, m2ts=m2ts, max_bytes=max_bytes, skip_pids=skip_pids, debug=debug)
         if pts is not None:
+            self._first_pts_cache[cache_key] = pts
             return pts
         if m2ts is not None:
+            self._first_pts_cache[cache_key] = None
             return None
         for forced in (True, False):
             with open(self.filename, 'rb') as f:
                 pts = M2TS._scan_first_pts(f, m2ts=forced, max_bytes=max_bytes, skip_pids=skip_pids, debug=debug)
             if pts is not None:
+                self._first_pts_cache[cache_key] = pts
                 return pts
+        self._first_pts_cache[cache_key] = None
         return None
 
     @staticmethod
@@ -1346,6 +1528,10 @@ class M2TS:
         max_bytes: Optional[int] = None,
         skip_pids: Optional[set[int]] = None,
     ) -> Optional[int]:
+        self._ensure_cache_valid()
+        cache_key = (m2ts, max_bytes, M2TS._normalize_skip_pids(skip_pids))
+        if cache_key in self._last_pts_cache:
+            return self._last_pts_cache[cache_key]
         file_size = os.path.getsize(self.filename)
         # Search from file tail first; grow window progressively.
         tail_windows = [8 * 1024 * 1024, 32 * 1024 * 1024, 128 * 1024 * 1024]
@@ -1361,64 +1547,90 @@ class M2TS:
                         f, m2ts=layout, max_bytes=None, skip_pids=skip_pids, start_pos=start
                     )
                 if pts is not None:
+                    self._last_pts_cache[cache_key] = pts
                     return pts
 
         # Rare fallback: full-file pass (keeps correctness if tail lacks PUSI/PES start).
         if m2ts is not None:
             with open(self.filename, 'rb') as f:
-                return M2TS._scan_last_pts(f, m2ts=m2ts, max_bytes=max_bytes, skip_pids=skip_pids)
-            return None
+                pts = M2TS._scan_last_pts(f, m2ts=m2ts, max_bytes=max_bytes, skip_pids=skip_pids)
+            self._last_pts_cache[cache_key] = pts
+            return pts
         for forced in (True, False):
             with open(self.filename, 'rb') as f:
                 pts = M2TS._scan_last_pts(f, m2ts=forced, max_bytes=max_bytes, skip_pids=skip_pids)
             if pts is not None:
+                self._last_pts_cache[cache_key] = pts
                 return pts
+        self._last_pts_cache[cache_key] = None
         return None
 
-    def get_duration(self) -> int:
+    def get_duration(self, *, prefer_pcr: bool = True, use_pts_fallback: bool = True) -> int:
+        self._ensure_cache_valid()
+        cache_key = (bool(prefer_pcr), bool(use_pts_fallback))
+        if cache_key in self._duration_cache:
+            return self._duration_cache[cache_key]
         try:
-            # Match tsMuxer's effective behavior: duration from PTS timeline (last-first).
-            first_pts = self.get_first_pts(max_bytes=16 * 1024 * 1024)
-            last_pts = self.get_last_pts()
-            if first_pts is not None and last_pts is not None:
-                pts_duration = int(last_pts - first_pts)
-                if pts_duration > 0:
-                    return pts_duration
-                # Single-frame clips often have first_pts == last_pts.
-                # tsMuxer side uses frame duration context; mimic by adding one frame.
-                fps = self.read_frame_rate_from_m2ts(use_ffprobe_fallback=True)
-                if fps and fps > 0:
-                    one_frame_90k = int(round(90000.0 / float(fps)))
-                    if one_frame_90k > 0:
-                        return one_frame_90k
+            def _duration_by_pcr() -> int:
+                with open(self.filename, "rb") as self.m2ts_file:
+                    buffer_size = 256 * 1024
+                    buffer_size -= buffer_size % self.frame_size
+                    cur_pos = 0
+                    first_pcr_val = -1
+                    while cur_pos < buffer_size:
+                        self.m2ts_file.read(7)
+                        first_pcr_val = self.get_pcr_val()
+                        self.m2ts_file.read(182)
+                        if first_pcr_val != -1:
+                            break
+                        cur_pos += self.frame_size
 
-            # Fallback to old PCR-based estimation.
-            with open(self.filename, "rb") as self.m2ts_file:
-                buffer_size = 256 * 1024
-                buffer_size -= buffer_size % self.frame_size
-                cur_pos = 0
-                first_pcr_val = -1
-                while cur_pos < buffer_size:
-                    self.m2ts_file.read(7)
-                    first_pcr_val = self.get_pcr_val()
-                    self.m2ts_file.read(182)
-                    if first_pcr_val != -1:
-                        break
-                    cur_pos += self.frame_size
-
-                buffer_size = 256 * 1024
-                buffer_size -= buffer_size % self.frame_size
-                last_pcr_val = self.get_last_pcr_val(buffer_size)
-                buffer_size *= 4
-
-                while last_pcr_val == -1 and buffer_size <= 1024 * 1024:
+                    buffer_size = 256 * 1024
+                    buffer_size -= buffer_size % self.frame_size
                     last_pcr_val = self.get_last_pcr_val(buffer_size)
                     buffer_size *= 4
 
-                if first_pcr_val == -1 or last_pcr_val == -1:
-                    return 0
-                return max(int(last_pcr_val - first_pcr_val), 0)
+                    while last_pcr_val == -1 and buffer_size <= 1024 * 1024:
+                        last_pcr_val = self.get_last_pcr_val(buffer_size)
+                        buffer_size *= 4
+
+                    if first_pcr_val == -1 or last_pcr_val == -1:
+                        return 0
+                    return max(int(last_pcr_val - first_pcr_val), 0)
+
+            def _duration_by_pts() -> int:
+                first_pts = self.get_first_pts(max_bytes=16 * 1024 * 1024)
+                last_pts = self.get_last_pts()
+                if first_pts is not None and last_pts is not None:
+                    pts_duration = int(last_pts - first_pts)
+                    if pts_duration > 0:
+                        return pts_duration
+                    # Single-frame clips often have first_pts == last_pts.
+                    fps = self.read_frame_rate_from_m2ts(use_ffprobe_fallback=True)
+                    if fps and fps > 0:
+                        one_frame_90k = int(round(90000.0 / float(fps)))
+                        if one_frame_90k > 0:
+                            return one_frame_90k
+                return 0
+
+            if prefer_pcr:
+                dur = _duration_by_pcr()
+                if dur > 0 or not use_pts_fallback:
+                    self._duration_cache[cache_key] = dur
+                    return dur
+                dur = _duration_by_pts()
+                self._duration_cache[cache_key] = dur
+                return dur
+
+            dur = _duration_by_pts()
+            if dur > 0 or not use_pts_fallback:
+                self._duration_cache[cache_key] = dur
+                return dur
+            dur = _duration_by_pcr()
+            self._duration_cache[cache_key] = dur
+            return dur
         except Exception:
+            self._duration_cache[cache_key] = 0
             return 0
 
     def get_last_pcr_val(self, buffer_size) -> int:
@@ -1461,7 +1673,7 @@ class M2TS:
         use_ffprobe_fallback: bool = False,
         debug: bool = False,
     ) -> Optional[float]:
-        def _ffprobe_frame_rate(path: str) -> Optional[float]:
+        def _probe_frame_rate_fallback(path: str) -> Optional[float]:
             exe = FFPROBE_PATH if FFPROBE_PATH else (shutil.which('ffprobe') or 'ffprobe')
             cmd = [
                 exe,
@@ -1723,6 +1935,12 @@ class M2TS:
             return None
 
         try:
+            if debug:
+                sp_debug_log(
+                    f'm2ts_fps_begin path={self.filename!r} m2ts={m2ts} '
+                    f'max_bytes={max_bytes} sample_count={sample_count} '
+                    f'use_ffprobe_fallback={use_ffprobe_fallback}'
+                )
             video_stream_ids = set(range(0xE0, 0xF0))
             pts_by_pid: dict[int, list[int]] = {}
             es_by_pid: dict[int, bytearray] = {}
@@ -1736,15 +1954,26 @@ class M2TS:
                     if len(lst) >= sample_count + 1:
                         break
 
+            if debug:
+                pid_counts = {int(k): len(v) for k, v in pts_by_pid.items()}
+                sp_debug_log(f'm2ts_fps_pts_collected pid_counts={pid_counts}')
             if not pts_by_pid:
                 if use_ffprobe_fallback:
-                    ff = _ffprobe_frame_rate(self.filename)
+                    ff = _probe_frame_rate_fallback(self.filename)
+                    if debug:
+                        sp_debug_log(f'm2ts_fps source=ffprobe path={self.filename!r} fps={ff}')
                     return ff
                 return None
 
             best_pid = max(pts_by_pid, key=lambda p: len(pts_by_pid[p]))
+            if debug:
+                sp_debug_log(f'm2ts_fps_best_pid pid=0x{int(best_pid):04x} count={len(pts_by_pid.get(best_pid) or [])}')
             with open(self.filename, "rb") as f:
                 start_phase, spacing, sync_off = M2TS._choose_transport_layout(f, m2ts)
+                if debug:
+                    sp_debug_log(
+                        f'm2ts_fps_layout start_phase={start_phase} spacing={spacing} sync_off={sync_off}'
+                    )
                 f.seek(start_phase)
                 pending: dict[int, bytearray] = {}
                 read_bytes = 0
@@ -1779,18 +2008,26 @@ class M2TS:
                     payload_es = buf[hdr_len:]
                     es_by_pid.setdefault(pid, bytearray()).extend(payload_es)
                     if len(es_by_pid[pid]) > 2 * 1024 * 1024:
+                        if debug:
+                            sp_debug_log(f'm2ts_fps_sps_buffer_limit pid=0x{int(pid):04x}')
                         break
                     sps = _extract_h264_sps_from_annexb(bytes(es_by_pid[pid]))
                     if sps:
                         fps = _h264_fps_from_sps_nal(sps)
                         if fps:
+                            if debug:
+                                sp_debug_log(f'm2ts_fps source=sps path={self.filename!r} fps={fps}')
                             return fps
                     pending.pop(pid, None)
 
             pts_list = pts_by_pid[best_pid]
+            if debug:
+                sp_debug_log(f'm2ts_fps_pts_list_len pid=0x{int(best_pid):04x} len={len(pts_list)}')
             if len(pts_list) < 2:
                 if use_ffprobe_fallback:
-                    ff = _ffprobe_frame_rate(self.filename)
+                    ff = _probe_frame_rate_fallback(self.filename)
+                    if debug:
+                        sp_debug_log(f'm2ts_fps source=ffprobe path={self.filename!r} fps={ff}')
                     return ff
                 return None
             deltas = []
@@ -1798,27 +2035,38 @@ class M2TS:
                 d = b - a
                 if d > 0:
                     deltas.append(d)
+            if debug:
+                preview = deltas[:8]
+                sp_debug_log(f'm2ts_fps_deltas count={len(deltas)} preview={preview}')
             if not deltas:
                 if use_ffprobe_fallback:
-                    ff = _ffprobe_frame_rate(self.filename)
+                    ff = _probe_frame_rate_fallback(self.filename)
+                    if debug:
+                        sp_debug_log(f'm2ts_fps source=ffprobe path={self.filename!r} fps={ff}')
                     return ff
                 return None
 
             delta = median(deltas)
             fps = 90000.0 / float(delta)
+            if debug:
+                sp_debug_log(f'm2ts_fps_raw delta={float(delta)} fps={fps}')
             common = (23.976, 24.0, 25.0, 29.97, 30.0, 50.0, 59.94, 60.0)
             best = min(common, key=lambda x: abs(x - fps))
             if abs(best - fps) / best < 0.01:
+                if debug:
+                    sp_debug_log(f'm2ts_fps source=pts path={self.filename!r} fps={fps:.6f} snapped={best}')
                 return best
             fps_r = round(fps, 3)
+            if debug:
+                sp_debug_log(f'm2ts_fps source=pts path={self.filename!r} fps={fps_r}')
             if use_ffprobe_fallback:
-                ff = _ffprobe_frame_rate(self.filename)
+                ff = _probe_frame_rate_fallback(self.filename)
                 if ff is not None:
                     return ff
             return fps_r
         except Exception:
             if use_ffprobe_fallback:
-                return _ffprobe_frame_rate(self.filename)
+                return _probe_frame_rate_fallback(self.filename)
             return None
 
     def get_total_frames(self) -> int:
@@ -1833,8 +2081,737 @@ class M2TS:
         frames = int(round(dur_sec / frame_sec))
         return frames if frames > 0 else -1
 
+    @staticmethod
+    def _ycbcr_to_rgba(y: int, cb: int, cr: int, alpha: int) -> tuple[int, int, int, int]:
+        r = int(round(y + 1.402 * (cr - 128)))
+        g = int(round(y - 0.344136 * (cb - 128) - 0.714136 * (cr - 128)))
+        b = int(round(y + 1.772 * (cb - 128)))
+        r = 0 if r < 0 else 255 if r > 255 else r
+        g = 0 if g < 0 else 255 if g > 255 else g
+        b = 0 if b < 0 else 255 if b > 255 else b
+        a = 0 if alpha < 0 else 255 if alpha > 255 else alpha
+        return r, g, b, a
+
+    @staticmethod
+    def _decode_pgs_rle(rle: bytes, width: int, height: int) -> Optional[bytes]:
+        if width <= 0 or height <= 0:
+            return None
+        dst = bytearray(width * height)
+        dst_i = 0
+        x = 0
+        y = 0
+        i = 0
+        n = len(rle)
+        while i < n and y < height and dst_i < len(dst):
+            b = rle[i]
+            i += 1
+            if b != 0:
+                if x < width:
+                    dst[dst_i] = b
+                    dst_i += 1
+                    x += 1
+                continue
+            if i >= n:
+                break
+            b2 = rle[i]
+            i += 1
+            if b2 == 0:
+                # end of line
+                if x < width:
+                    pad = width - x
+                    dst_i += pad
+                x = 0
+                y += 1
+                continue
+            has_color = (b2 & 0x80) != 0
+            long_len = (b2 & 0x40) != 0
+            if long_len:
+                if i >= n:
+                    break
+                run_len = ((b2 & 0x3F) << 8) | rle[i]
+                i += 1
+            else:
+                run_len = b2 & 0x3F
+            color = 0
+            if has_color:
+                if i >= n:
+                    break
+                color = rle[i]
+                i += 1
+            for _ in range(run_len):
+                if y >= height or dst_i >= len(dst):
+                    break
+                if x >= width:
+                    x = 0
+                    y += 1
+                    if y >= height:
+                        break
+                dst[dst_i] = color
+                dst_i += 1
+                x += 1
+        return bytes(dst)
+
+    @staticmethod
+    def _write_rgba_png(path: str, width: int, height: int, rgba: bytes) -> None:
+        import struct
+        import zlib
+
+        def chunk(tag: bytes, data: bytes) -> bytes:
+            return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+
+        raw = bytearray()
+        stride = width * 4
+        for y in range(height):
+            raw.append(0)  # filter type 0
+            s = y * stride
+            raw.extend(rgba[s: s + stride])
+        png = bytearray(b"\x89PNG\r\n\x1a\n")
+        png.extend(chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)))
+        png.extend(chunk(b"IDAT", zlib.compress(bytes(raw), level=6)))
+        png.extend(chunk(b"IEND", b""))
+        with open(path, "wb") as f:
+            f.write(png)
+
+    @staticmethod
+    def _extract_igs_pids(
+        stream: BinaryIO,
+        *,
+        m2ts: Optional[bool] = None,
+        max_scan_bytes: int = 8 * 1024 * 1024,
+    ) -> set[int]:
+        igs_pids: set[int] = set()
+        pmt_pids: set[int] = set()
+        parsed_pmts: set[int] = set()
+
+        start_phase, spacing, sync_off = M2TS._choose_transport_layout(stream, m2ts)
+        stream.seek(start_phase)
+        total = 0
+        while total < max_scan_bytes:
+            block = stream.read(spacing)
+            if len(block) < spacing:
+                break
+            total += len(block)
+            pkt = block[sync_off: sync_off + M2TS._TS_PACKET]
+            if len(pkt) < M2TS._TS_PACKET or pkt[0] != M2TS._SYNC:
+                continue
+            payload, pid, pusi = M2TS._ts_payload(pkt)
+            if payload is None or not pusi or not payload:
+                continue
+            ptr = payload[0]
+            start = 1 + ptr
+            if start >= len(payload):
+                continue
+            sec = payload[start:]
+            if len(sec) < 12:
+                continue
+            table_id = sec[0]
+            section_len = ((sec[1] & 0x0F) << 8) | sec[2]
+            section_end = 3 + section_len
+            if section_end > len(sec) or section_end < 12:
+                continue
+            body_end = section_end - 4  # exclude CRC
+            if table_id == 0x00 and pid == 0x0000:
+                # PAT
+                i = 8
+                while i + 4 <= body_end:
+                    program_number = (sec[i] << 8) | sec[i + 1]
+                    pmt_pid = ((sec[i + 2] & 0x1F) << 8) | sec[i + 3]
+                    if program_number != 0:
+                        pmt_pids.add(pmt_pid)
+                    i += 4
+            elif table_id == 0x02 and pid in pmt_pids and pid not in parsed_pmts:
+                parsed_pmts.add(pid)
+                if body_end < 12:
+                    continue
+                prog_info_len = ((sec[10] & 0x0F) << 8) | sec[11]
+                i = 12 + prog_info_len
+                while i + 5 <= body_end:
+                    stream_type = sec[i]
+                    es_pid = ((sec[i + 1] & 0x1F) << 8) | sec[i + 2]
+                    es_info_len = ((sec[i + 3] & 0x0F) << 8) | sec[i + 4]
+                    if stream_type == 0x91:
+                        igs_pids.add(es_pid)
+                    i += 5 + es_info_len
+            if igs_pids and parsed_pmts:
+                # enough for extraction
+                pass
+        return igs_pids
+
+    @staticmethod
+    def _codec_from_stream_type(stream_type: int, descriptors: bytes = b"") -> tuple[str, str]:
+        # MPEG-TS stream_type mappings for common Blu-ray/media tracks.
+        stream_type_map: dict[int, tuple[str, str]] = {
+            0x01: ("video", "mpeg1video"),
+            0x02: ("video", "mpeg2video"),
+            0x03: ("audio", "mp3"),
+            0x04: ("audio", "mp3"),
+            0x0F: ("audio", "aac"),
+            0x10: ("video", "mpeg4"),
+            0x11: ("audio", "aac_latm"),
+            0x1B: ("video", "h264"),
+            0x20: ("video", "mvc"),
+            0x24: ("video", "hevc"),
+            0x42: ("video", "avs"),
+            0xEA: ("video", "vc1"),
+            0x80: ("audio", "pcm_bluray"),
+            0x81: ("audio", "ac3"),
+            0x82: ("audio", "dts"),
+            0x83: ("audio", "truehd"),
+            0x84: ("audio", "eac3"),
+            0x85: ("audio", "dts_hd"),
+            0x86: ("audio", "dts_hd_ma"),
+            0xA1: ("audio", "eac3"),
+            0xA2: ("audio", "dts_hd"),
+            0x90: ("subtitle", "pgs"),
+            0x91: ("subtitle", "igs"),
+            0x92: ("subtitle", "textst"),
+        }
+        if stream_type in stream_type_map:
+            return stream_type_map[stream_type]
+
+        # For private data stream type, check descriptors for codec hints.
+        if stream_type == 0x06 and descriptors:
+            i = 0
+            while i + 2 <= len(descriptors):
+                tag = descriptors[i]
+                ln = descriptors[i + 1]
+                end = i + 2 + ln
+                if end > len(descriptors):
+                    break
+                if tag == 0x6A:
+                    return "audio", "ac3"
+                if tag == 0x7A:
+                    return "audio", "eac3"
+                if tag == 0x7B:
+                    return "audio", "dts"
+                if tag == 0x7C:
+                    return "audio", "aac"
+                if tag == 0x56:
+                    return "subtitle", "dvb_subtitle"
+                if tag == 0x59:
+                    return "subtitle", "dvb_teletext"
+                i = end
+        return "other", "unknown"
+
+    @staticmethod
+    def _stream_type_text(stream_type: int) -> str:
+        stream_type_text_map: dict[int, str] = {
+            0x01: "MPEG-1 video stream",
+            0x02: "MPEG-2 video stream",
+            0x1B: "MPEG-4 AVC video stream",
+            0x20: "MPEG-4 MVC video stream",
+            0xEA: "SMTPE VC-1 video stream",
+            0x24: "HEVC video stream (including DV stream)",
+            0x03: "MPEG-1 audio stream",
+            0x04: "MPEG-2 audio stream",
+            0x80: "LPCM audio stream (primary audio)",
+            0x81: "Dolby Digital audio stream (primary audio)",
+            0x82: "DTS audio stream (primary audio)",
+            0x83: "Dolby Digital TrueHD audio stream (primary audio)",
+            0x84: "Dolby Digital Plus audio stream (primary audio)",
+            0x85: "DTS-HD High Resolution Audio audio stream (primary audio)",
+            0x86: "DTS-HD Master Audio audio stream (primary audio)",
+            0xA1: "Dolby Digital Plus audio stream (secondary audio)",
+            0xA2: "DTS-HD audio stream (secondary audio)",
+            0x90: "Presentation Graphics stream",
+            0x91: "Interactive Graphics stream",
+            0x92: "Text Subtitle stream",
+        }
+        text = stream_type_text_map.get(stream_type, "Unknown stream type")
+        return f"{int(stream_type)}({text})"
+
+    def get_tracks_info(
+        self,
+        *,
+        m2ts: Optional[bool] = None,
+        max_scan_bytes: int = 8 * 1024 * 1024,
+    ) -> list[dict[str, object]]:
+        """
+        Parse PAT/PMT and return elementary stream track metadata list.
+        Each item includes at least pid/codec_type/codec_name.
+        """
+        self._ensure_cache_valid()
+        cache_key = (m2ts, int(max_scan_bytes))
+        cached = self._tracks_info_cache.get(cache_key)
+        if cached is not None:
+            return [dict(item) for item in cached]
+
+        tracks_by_pid: dict[int, dict[str, object]] = {}
+        pmt_pids: dict[int, int] = {}
+        parsed_pmts: set[int] = set()
+        pmt_pid_set: set[int] = set()
+
+        with open(self.filename, "rb") as stream:
+            start_phase, spacing, sync_off = self._choose_transport_layout_cached(stream, m2ts)
+            stream.seek(start_phase)
+            total = 0
+
+            while total < max_scan_bytes:
+                block = stream.read(spacing)
+                if len(block) < spacing:
+                    break
+                total += len(block)
+                pkt = block[sync_off: sync_off + M2TS._TS_PACKET]
+                if len(pkt) < M2TS._TS_PACKET or pkt[0] != M2TS._SYNC:
+                    continue
+
+                payload, pid, pusi = M2TS._ts_payload(pkt)
+                if payload is None or not pusi or not payload:
+                    continue
+                if pid != 0x0000 and pid not in pmt_pid_set:
+                    continue
+
+                ptr = payload[0]
+                sec_pos = 1 + ptr
+                if sec_pos >= len(payload):
+                    continue
+                sec_data = payload[sec_pos:]
+
+                while len(sec_data) >= 3:
+                    section_len = ((sec_data[1] & 0x0F) << 8) | sec_data[2]
+                    section_total = 3 + section_len
+                    if section_total < 12 or section_total > len(sec_data):
+                        break
+                    sec = sec_data[:section_total]
+                    sec_data = sec_data[section_total:]
+                    table_id = sec[0]
+                    body_end = section_total - 4  # exclude CRC
+                    if body_end < 8:
+                        continue
+
+                    if table_id == 0x00 and pid == 0x0000:
+                        i = 8
+                        while i + 4 <= body_end:
+                            program_number = (sec[i] << 8) | sec[i + 1]
+                            pmt_pid = ((sec[i + 2] & 0x1F) << 8) | sec[i + 3]
+                            if program_number != 0:
+                                pmt_pids[program_number] = pmt_pid
+                                pmt_pid_set.add(pmt_pid)
+                            i += 4
+                    elif table_id == 0x02 and pid in pmt_pid_set:
+                        if pid in parsed_pmts:
+                            continue
+                        parsed_pmts.add(pid)
+                        program_number = (sec[3] << 8) | sec[4]
+                        if body_end < 12:
+                            continue
+                        pcr_pid = ((sec[8] & 0x1F) << 8) | sec[9]
+                        prog_info_len = ((sec[10] & 0x0F) << 8) | sec[11]
+                        i = 12 + prog_info_len
+                        while i + 5 <= body_end:
+                            stream_type = sec[i]
+                            es_pid = ((sec[i + 1] & 0x1F) << 8) | sec[i + 2]
+                            es_info_len = ((sec[i + 3] & 0x0F) << 8) | sec[i + 4]
+                            desc_start = i + 5
+                            desc_end = min(desc_start + es_info_len, body_end)
+                            descriptors = sec[desc_start:desc_end]
+                            codec_type, codec_name = M2TS._codec_from_stream_type(stream_type, descriptors)
+
+                            lang = None
+                            j = 0
+                            while j + 2 <= len(descriptors):
+                                tag = descriptors[j]
+                                ln = descriptors[j + 1]
+                                end = j + 2 + ln
+                                if end > len(descriptors):
+                                    break
+                                if tag == 0x0A and ln >= 3:
+                                    lang_bytes = descriptors[j + 2:j + 5]
+                                    try:
+                                        lang = lang_bytes.decode("ascii", errors="ignore").strip() or None
+                                    except Exception:
+                                        lang = None
+                                    break
+                                j = end
+
+                            tracks_by_pid[es_pid] = {
+                                "pid": es_pid,
+                                "program_number": program_number,
+                                "pmt_pid": pid,
+                                "is_pcr_pid": es_pid == pcr_pid,
+                                "stream_type": M2TS._stream_type_text(stream_type),
+                                "codec_type": codec_type,
+                                "codec_name": codec_name,
+                                "language_from_pmt_descriptor": lang,
+                            }
+                            i += 5 + es_info_len
+                if pmt_pids and len(parsed_pmts) >= len(set(pmt_pids.values())):
+                    break
+
+        tracks = [tracks_by_pid[k] for k in sorted(tracks_by_pid)]
+        self._tracks_info_cache[cache_key] = [dict(item) for item in tracks]
+        return tracks
+
+    def get_track_info(
+        self,
+        *,
+        m2ts: Optional[bool] = None,
+        max_scan_bytes: int = 8 * 1024 * 1024,
+    ) -> list[dict[str, object]]:
+        """Compatibility wrapper for singular API name."""
+        return self.get_tracks_info(m2ts=m2ts, max_scan_bytes=max_scan_bytes)
+
+    def extract_igs_menu_png(
+        self,
+        output_dir: str,
+        *,
+        m2ts: Optional[bool] = None,
+        max_bytes: Optional[int] = 512 * 1024 * 1024,
+        max_frames: int = 1000,
+        debug: bool = False,
+    ) -> list[str]:
+        """
+        Extract IGS menu pages as PNG files (close to igstools output style).
+        One image per page/state pair: normal|selected|activated x start|stop.
+        """
+        import os
+        import struct
+
+        os.makedirs(output_dir, exist_ok=True)
+        out_files: list[str] = []
+
+        def u8(buf: bytes, off: int) -> int:
+            return buf[off]
+
+        def u16(buf: bytes, off: int) -> int:
+            return (buf[off] << 8) | buf[off + 1]
+
+        def u24(buf: bytes, off: int) -> int:
+            return (buf[off] << 16) | (buf[off + 1] << 8) | buf[off + 2]
+
+        def parse_button_segment(body: bytes) -> Optional[dict[str, object]]:
+            # Matches igstools/parser.py parse_button_segment (without command decoding usage).
+            if len(body) < 13:
+                return None
+            width, height, fr_id, comp_num, comp_state, seq_desc, l1, l2, l3, model_flags = struct.unpack_from(
+                ">HHBHBBBBBB", body, 0
+            )
+            _ = (fr_id, comp_num, comp_state, seq_desc, l1, l2, l3)  # parsed for alignment/compat
+            p = 13
+            if (model_flags & 0x80) == 0:
+                if p + 10 > len(body):
+                    return None
+                p += 10  # composition_timeout_pts + selection_timeout_pts (5+5)
+            if p + 3 > len(body):
+                return None
+            p += 3  # user_timeout_duration
+            if p + 1 > len(body):
+                return None
+            page_count = body[p]
+            p += 1
+
+            pages: list[dict[str, object]] = []
+            for _page_i in range(page_count):
+                if p + 10 > len(body):
+                    break
+                page_id = body[p]
+                p += 1
+                p += 1  # unknown byte
+                p += 8  # UO mask
+
+                def read_effects() -> Optional[dict[str, object]]:
+                    nonlocal p
+                    if p + 1 > len(body):
+                        return None
+                    windows: dict[int, dict[str, int]] = {}
+                    effects: list[dict[str, object]] = []
+                    wcnt = body[p]
+                    p += 1
+                    for _ in range(wcnt):
+                        if p + 9 > len(body):
+                            return None
+                        wid = body[p]
+                        x = u16(body, p + 1)
+                        y = u16(body, p + 3)
+                        w = u16(body, p + 5)
+                        h = u16(body, p + 7)
+                        p += 9
+                        windows[wid] = {"x": x, "y": y, "width": w, "height": h}
+                    if p + 1 > len(body):
+                        return None
+                    ecnt = body[p]
+                    p += 1
+                    for _ in range(ecnt):
+                        if p + 5 > len(body):
+                            return None
+                        duration = u24(body, p)
+                        palette_idx = body[p + 3]
+                        num_obj = body[p + 4]
+                        p += 5
+                        objs: list[dict[str, int]] = []
+                        for _ in range(num_obj):
+                            if p + 8 > len(body):
+                                return None
+                            obj_id = u16(body, p)
+                            window_id = u16(body, p + 2)
+                            ox = u16(body, p + 4)
+                            oy = u16(body, p + 6)
+                            p += 8
+                            objs.append({"id": obj_id, "window": window_id, "x": ox, "y": oy})
+                        effects.append({"duration": duration, "palette": palette_idx, "objects": objs})
+                    return {"windows": windows, "effects": effects}
+
+                in_eff = read_effects()
+                if in_eff is None:
+                    break
+                out_eff = read_effects()
+                if out_eff is None:
+                    break
+
+                if p + 7 > len(body):
+                    break
+                fr_div = body[p]
+                def_button = u16(body, p + 1)
+                def_activated = u16(body, p + 3)
+                page_palette = body[p + 5]
+                bog_count = body[p + 6]
+                p += 7
+                _ = (fr_div, def_button, def_activated)
+
+                bogs: list[dict[str, object]] = []
+                for _ in range(bog_count):
+                    if p + 3 > len(body):
+                        break
+                    bog_def = u16(body, p)
+                    btn_count = body[p + 2]
+                    p += 3
+                    _ = bog_def
+                    buttons: list[dict[str, object]] = []
+                    for _ in range(btn_count):
+                        if p + 35 > len(body):
+                            break
+                        fields = struct.unpack_from(">HHB" + "H" * 15, body, p)
+                        p += 35
+                        button_id = fields[0]
+                        bx = fields[3]
+                        by = fields[4]
+                        picstart_normal = fields[9]
+                        picstop_normal = fields[10]
+                        picstart_selected = fields[12]
+                        picstop_selected = fields[13]
+                        picstart_activated = fields[15]
+                        picstop_activated = fields[16]
+                        cmd_count = fields[17]
+                        if p + cmd_count * 12 > len(body):
+                            break
+                        p += cmd_count * 12  # skip commands
+                        buttons.append(
+                            {
+                                "id": button_id,
+                                "x": bx,
+                                "y": by,
+                                "states": {
+                                    "normal": {"start": picstart_normal, "stop": picstop_normal},
+                                    "selected": {"start": picstart_selected, "stop": picstop_selected},
+                                    "activated": {"start": picstart_activated, "stop": picstop_activated},
+                                },
+                            }
+                        )
+                    bogs.append({"buttons": buttons})
+
+                pages.append({"id": page_id, "palette": page_palette, "bogs": bogs})
+
+            return {"width": width, "height": height, "pages": pages}
+
+        def overlay_rgba(dst: bytearray, dst_w: int, dst_h: int, src: bytes, src_w: int, src_h: int, x: int, y: int) -> None:
+            if src_w <= 0 or src_h <= 0:
+                return
+            for sy in range(src_h):
+                dy = y + sy
+                if dy < 0 or dy >= dst_h:
+                    continue
+                srow = sy * src_w * 4
+                drow = dy * dst_w * 4
+                for sx in range(src_w):
+                    dx = x + sx
+                    if dx < 0 or dx >= dst_w:
+                        continue
+                    so = srow + sx * 4
+                    do = drow + dx * 4
+                    sa = src[so + 3]
+                    if sa == 0:
+                        continue
+                    if sa == 255:
+                        dst[do: do + 4] = src[so: so + 4]
+                        continue
+                    inv = 255 - sa
+                    dr, dg, db, da = dst[do], dst[do + 1], dst[do + 2], dst[do + 3]
+                    sr, sg, sb = src[so], src[so + 1], src[so + 2]
+                    dst[do] = (sr * sa + dr * inv) // 255
+                    dst[do + 1] = (sg * sa + dg * inv) // 255
+                    dst[do + 2] = (sb * sa + db * inv) // 255
+                    dst[do + 3] = min(255, sa + (da * inv) // 255)
+
+        with open(self.filename, "rb") as f:
+            igs_pids = M2TS._extract_igs_pids(f, m2ts=m2ts)
+        if debug:
+            print(f"[M2TS.extract_igs_menu_png] detected IGS PIDs: {[hex(x) for x in sorted(igs_pids)]}", file=sys.stderr)
+        if not igs_pids:
+            return out_files
+
+        with open(self.filename, "rb") as f:
+            start_phase, spacing, sync_off = M2TS._choose_transport_layout(f, m2ts)
+            f.seek(start_phase)
+            total = 0
+            seg_buf: dict[int, bytearray] = {pid: bytearray() for pid in igs_pids}
+            # Per PID parse state (similar to igstools model).
+            palettes_by_pid: dict[int, list[dict[int, tuple[int, int, int, int]]]] = {pid: [] for pid in igs_pids}
+            pictures_by_pid: dict[int, dict[int, dict[str, object]]] = {pid: {} for pid in igs_pids}
+            pic_pending: dict[int, dict[int, dict[str, object]]] = {pid: {} for pid in igs_pids}
+            menu_model_by_pid: dict[int, dict[str, object]] = {}
+
+            while True:
+                block = f.read(spacing)
+                if len(block) < spacing:
+                    break
+                total += len(block)
+                if max_bytes is not None and total > max_bytes:
+                    break
+
+                pkt = block[sync_off: sync_off + M2TS._TS_PACKET]
+                if len(pkt) < M2TS._TS_PACKET or pkt[0] != M2TS._SYNC:
+                    continue
+                payload, pid, pusi = M2TS._ts_payload(pkt)
+                if payload is None or pid not in igs_pids:
+                    continue
+
+                es = b""
+                cur_pts = None
+                if pusi:
+                    pes = M2TS._pes_payload_after_pointer(payload)
+                    if len(pes) >= 9 and pes[0:3] == b"\x00\x00\x01":
+                        flags_lo = pes[7]
+                        hdr_len = 9 + pes[8]
+                        if (flags_lo & 0x80) and len(pes) >= 14:
+                            cur_pts = M2TS._pts_from_pes_header(pes[9:14])
+                        es = pes[hdr_len:] if hdr_len <= len(pes) else b""
+                    else:
+                        es = payload
+                else:
+                    es = payload
+                if not es:
+                    continue
+
+                sb = seg_buf[pid]
+                sb.extend(es)
+                while len(sb) >= 3:
+                    seg_type = sb[0]
+                    seg_len = (sb[1] << 8) | sb[2]
+                    if len(sb) < 3 + seg_len:
+                        break
+                    body = bytes(sb[3: 3 + seg_len])
+                    del sb[: 3 + seg_len]
+
+                    if seg_type == 0x14 and len(body) >= 2:
+                        # Palette segment: igstools treats first 2 bytes as unknown.
+                        pal: dict[int, tuple[int, int, int, int]] = {}
+                        i = 2
+                        while i + 5 <= len(body):
+                            idx = body[i]
+                            y = body[i + 1]
+                            cr = body[i + 2]
+                            cb = body[i + 3]
+                            a = body[i + 4]
+                            pal[idx] = M2TS._ycbcr_to_rgba(y, cb, cr, a)
+                            i += 5
+                        palettes_by_pid[pid].append(pal)
+                    elif seg_type == 0x15 and len(body) >= 4:
+                        # Picture segment (IGS object), supports continuation sequence.
+                        obj_id = (body[0] << 8) | body[1]
+                        seq = body[3]
+                        first_in_seq = (seq & 0x80) != 0
+                        st = pic_pending[pid].setdefault(obj_id, {"w": 0, "h": 0, "need": None, "data": bytearray()})
+                        off = 4
+                        if first_in_seq and len(body) >= 11:
+                            total_obj = (body[4] << 16) | (body[5] << 8) | body[6]
+                            w = (body[7] << 8) | body[8]
+                            h = (body[9] << 8) | body[10]
+                            st["w"] = w
+                            st["h"] = h
+                            st["need"] = max(total_obj - 4, 0)
+                            st["data"] = bytearray()
+                            off = 11
+                        st["data"].extend(body[off:])
+                        need = st.get("need")
+                        if isinstance(need, int) and need >= 0 and len(st["data"]) >= need:
+                            w = int(st.get("w") or 0)
+                            h = int(st.get("h") or 0)
+                            pix = M2TS._decode_pgs_rle(bytes(st["data"][:need]), w, h)
+                            if pix is not None and w > 0 and h > 0:
+                                pictures_by_pid[pid][obj_id] = {"w": w, "h": h, "pix": pix}
+                            st["data"] = bytearray()
+                            st["need"] = None
+                    elif seg_type == 0x18:
+                        # Button segment holds page/button topology/state mapping.
+                        model = parse_button_segment(body)
+                        if model:
+                            menu_model_by_pid[pid] = model
+
+            # Compose page-state PNG files, close to igstools menu_to_png output.
+            states = (("normal", "start"), ("normal", "stop"),
+                      ("selected", "start"), ("selected", "stop"),
+                      ("activated", "start"), ("activated", "stop"))
+
+            for pid in sorted(igs_pids):
+                model = menu_model_by_pid.get(pid)
+                if not model:
+                    continue
+                width = int(model.get("width") or 0)
+                height = int(model.get("height") or 0)
+                if width <= 0 or height <= 0:
+                    continue
+                palettes = palettes_by_pid.get(pid, [])
+                pictures = pictures_by_pid.get(pid, {})
+                pages = model.get("pages") or []
+                for page in pages:
+                    page_id = int(page.get("id") or 0)
+                    pal_idx = int(page.get("palette") or 0)
+                    pal = palettes[pal_idx] if 0 <= pal_idx < len(palettes) else {}
+                    for state1, state2 in states:
+                        canvas = bytearray(width * height * 4)
+                        for bog in (page.get("bogs") or []):
+                            for btn in (bog.get("buttons") or []):
+                                # Same fallback preference as igstools.
+                                prefs = ((state1, state2), (state1, "start"), ("normal", state2), ("normal", "start"))
+                                chosen_id = None
+                                btn_states = btn.get("states") or {}
+                                for s1, s2 in prefs:
+                                    sub = btn_states.get(s1) or {}
+                                    pid_obj = sub.get(s2)
+                                    if isinstance(pid_obj, int) and pid_obj != 0xFFFF and pid_obj in pictures:
+                                        chosen_id = pid_obj
+                                        break
+                                if chosen_id is None:
+                                    continue
+                                pic = pictures[chosen_id]
+                                pw = int(pic["w"])
+                                ph = int(pic["h"])
+                                pix = pic["pix"]
+                                rgba = bytearray(pw * ph * 4)
+                                for i_px, idx in enumerate(pix):
+                                    r, g, b, a = pal.get(idx, (0, 0, 0, 0))
+                                    o = i_px * 4
+                                    rgba[o] = r
+                                    rgba[o + 1] = g
+                                    rgba[o + 2] = b
+                                    rgba[o + 3] = a
+                                overlay_rgba(canvas, width, height, bytes(rgba), pw, ph, int(btn.get("x") or 0), int(btn.get("y") or 0))
+                        if len(out_files) >= max_frames:
+                            return out_files
+                        name = f"igs_pid{pid:04x}_page{page_id:03d}_{state1}_{state2}.png"
+                        out_path = os.path.join(output_dir, name)
+                        M2TS._write_rgba_png(out_path, width, height, bytes(canvas))
+                        out_files.append(out_path)
+                        if debug:
+                            print(f"[M2TS.extract_igs_menu_png] write {name} ({width}x{height})", file=sys.stderr)
+
+        return out_files
+
 
 class BluraySubtitle:
+    _m2ts_track_info_cache_lock = threading.Lock()
+    _m2ts_track_info_cache: dict[str, tuple[tuple[int, int], list[dict[str, object]]]] = {}
+
     def __init__(self, bluray_path:str, sub_files: list[str] = None, checked: bool = True,
                  progress_dialog: Optional[object] = None,
                  approx_episode_duration_seconds: float = DEFAULT_APPROX_EPISODE_DURATION_SECONDS,
@@ -2989,7 +3966,7 @@ class BluraySubtitle:
                     pid_to_lang = {}
             if (not pid_to_lang) and src_path.lower().endswith('.m2ts'):
                 try:
-                    pid_to_lang = self._pid_lang_from_ffprobe_streams(self._read_ffprobe_streams(src_path))
+                    pid_to_lang = self._pid_lang_from_m2ts_track_info(self._read_m2ts_track_info(src_path))
                 except Exception:
                     pid_to_lang = {}
             copy_audio_track, copy_sub_track = self._select_tracks_for_source(
@@ -3023,6 +4000,19 @@ class BluraySubtitle:
                     except Exception:
                         pass
                 uniq_m2ts = m2ts_list
+                # Zero-duration single m2ts: export IGS menu pages with dedicated parser.
+                if (not mpls_file) and len(uniq_m2ts) == 1 and ('.' not in os.path.basename(output_name)):
+                    folder_out = sp_mkv_path
+                    os.makedirs(folder_out, exist_ok=True)
+                    try:
+                        if not stream_dir or not os.path.isdir(stream_dir):
+                            stream_dir = os.path.normpath(os.path.join(os.path.dirname(playlist_dir), 'STREAM'))
+                        src_menu = os.path.join(stream_dir, uniq_m2ts[0])
+                        M2TS(src_menu).extract_igs_menu_png(folder_out)
+                    except Exception:
+                        print_exc_terminal()
+                    created.append((entry_idx, folder_out))
+                    continue
                 if not stream_dir or not os.path.isdir(stream_dir):
                     stream_dir = os.path.normpath(os.path.join(os.path.dirname(playlist_dir), 'STREAM'))
                 # Multiple distinct clips: extract folder of PNGs even if UI wrongly used .png (single-file) suffix.
@@ -3305,7 +4295,7 @@ class BluraySubtitle:
                     return None
 
         def _get_lang(stream_info: dict[str, object]) -> str:
-            pid = _parse_pid(stream_info.get('id'))
+            pid = _parse_pid(stream_info.get('pid'))
             if pid is not None and pid in pid_lang:
                 return str(pid_lang.get(pid, 'und') or 'und')
             try:
@@ -3372,7 +4362,7 @@ class BluraySubtitle:
         return [x for x in copy_audio_track if x != ''], [x for x in copy_sub_track if x != '']
 
     @staticmethod
-    def _ffprobe_streams(media_path: str) -> list[dict[str, object]]:
+    def _read_media_streams(media_path: str) -> list[dict[str, object]]:
         if not media_path or not os.path.exists(media_path):
             return []
         exe = FFPROBE_PATH if FFPROBE_PATH else 'ffprobe'
@@ -3395,8 +4385,8 @@ class BluraySubtitle:
             return []
 
     @staticmethod
-    def _ffprobe_stream_service_id(stream: dict) -> Optional[int]:
-        """MPEG-TS elementary stream id from ffprobe ``streams[]`` (field ``id``, e.g. ``0x1011``)."""
+    def _stream_service_id(stream: dict) -> Optional[int]:
+        """MPEG-TS elementary stream id from stream metadata field ``id`` (e.g. ``0x1011``)."""
         if not isinstance(stream, dict):
             return None
         raw = stream.get('id')
@@ -3413,10 +4403,10 @@ class BluraySubtitle:
             return None
 
     @staticmethod
-    def _ffprobe_stream_index_to_service_pid(m2ts_path: str) -> dict[int, int]:
-        """Map ffprobe / mkvmerge stream index (0,1,…) → TS PID from ``streams[].id``. m2ts has no reliable language tags."""
+    def _stream_index_to_service_pid(m2ts_path: str) -> dict[int, int]:
+        """Map stream index (0,1,…) → TS PID from ``streams[].id``. m2ts has no reliable language tags."""
         out: dict[int, int] = {}
-        for s in BluraySubtitle._ffprobe_streams(m2ts_path) or []:
+        for s in BluraySubtitle._m2ts_track_streams(m2ts_path):
             if not isinstance(s, dict):
                 continue
             if str(s.get('codec_type') or '') not in ('video', 'audio', 'subtitle', 'subtitles'):
@@ -3425,13 +4415,57 @@ class BluraySubtitle:
                 idx = int(s.get('index'))
             except Exception:
                 continue
-            pid = BluraySubtitle._ffprobe_stream_service_id(s)
+            pid = BluraySubtitle._stream_service_id(s)
             if pid is not None:
                 out[idx] = pid
         return out
 
     @staticmethod
-    def _ffprobe_video_frame_count_static(media_path: str) -> int:
+    def _m2ts_track_streams(m2ts_path: str) -> list[dict[str, object]]:
+        if not m2ts_path or not os.path.exists(m2ts_path):
+            return []
+        key = os.path.normpath(m2ts_path)
+        try:
+            st = os.stat(key)
+            sig = (int(st.st_size), int(st.st_mtime_ns))
+        except OSError:
+            return []
+        try:
+            with BluraySubtitle._m2ts_track_info_cache_lock:
+                cached = BluraySubtitle._m2ts_track_info_cache.get(key)
+                if cached and cached[0] == sig:
+                    return [dict(x) for x in (cached[1] or [])]
+        except Exception:
+            pass
+        try:
+            tracks = M2TS(key).get_track_info()
+        except Exception:
+            return []
+        out: list[dict[str, object]] = []
+        for i, t in enumerate(tracks or []):
+            if not isinstance(t, dict):
+                continue
+            row = dict(t)
+            try:
+                pid = int(row.get('pid'))
+            except Exception:
+                pid = None
+            ctype = str(row.get('codec_type') or '')
+            if ctype == 'subtitle':
+                ctype = 'subtitles'
+            row['codec_type'] = ctype
+            row['index'] = i
+            row['id'] = f'0x{pid:04x}' if pid is not None else ''
+            out.append(row)
+        try:
+            with BluraySubtitle._m2ts_track_info_cache_lock:
+                BluraySubtitle._m2ts_track_info_cache[key] = (sig, [dict(x) for x in out])
+        except Exception:
+            pass
+        return out
+
+    @staticmethod
+    def _video_frame_count_static(media_path: str) -> int:
         if not media_path or not os.path.exists(media_path):
             return -1
         exe = FFPROBE_PATH if FFPROBE_PATH else 'ffprobe'
@@ -3462,7 +4496,10 @@ class BluraySubtitle:
 
     @staticmethod
     def _is_audio_only_media(media_path: str) -> bool:
-        streams = BluraySubtitle._ffprobe_streams(media_path)
+        if str(media_path or '').lower().endswith('.m2ts'):
+            streams = BluraySubtitle._m2ts_track_streams(media_path)
+        else:
+            streams = BluraySubtitle._read_media_streams(media_path)
         if not streams:
             return False
         has_audio = False
@@ -3481,7 +4518,7 @@ class BluraySubtitle:
             return
         if not str(output_file).lower().endswith('.mka'):
             return
-        streams = BluraySubtitle._ffprobe_streams(output_file)
+        streams = BluraySubtitle._read_media_streams(output_file)
         audio_streams = [s for s in streams if str(s.get('codec_type') or '') == 'audio']
         if len(audio_streams) != 1:
             return
@@ -3738,7 +4775,7 @@ class BluraySubtitle:
                 return v
             return 'und'
 
-        idx_to_pid = BluraySubtitle._ffprobe_stream_index_to_service_pid(input_m2ts_path)
+        idx_to_pid = BluraySubtitle._stream_index_to_service_pid(input_m2ts_path)
         input_info = BluraySubtitle._mkvmerge_identify_json(input_m2ts_path)
         in_tracks = input_info.get('tracks') or []
         if not isinstance(in_tracks, list):
@@ -3873,18 +4910,18 @@ class BluraySubtitle:
                 pass
 
     @staticmethod
-    def _ordered_ffprobe_track_slots_for_remux(
+    def _ordered_track_slots_for_remux(
         m2ts_path: str,
         copy_audio_track: list[str],
         copy_sub_track: list[str],
     ) -> list[dict[str, object]]:
-        """Reference order: first video, then selected audios / subs by ffprobe ``index``; PID from ``id`` hex."""
-        streams = [s for s in (BluraySubtitle._ffprobe_streams(m2ts_path) or []) if isinstance(s, dict)]
+        """Reference order: first video, then selected audios / subs by stream ``index``; PID from ``id`` hex."""
+        streams = [s for s in BluraySubtitle._m2ts_track_streams(m2ts_path) if isinstance(s, dict)]
         out: list[dict[str, object]] = []
         for s in streams:
             if str(s.get('codec_type') or '') != 'video':
                 continue
-            pid = BluraySubtitle._ffprobe_stream_service_id(s)
+            pid = BluraySubtitle._stream_service_id(s)
             if pid is not None:
                 out.append({'type': 'video', 'pid': pid})
             break
@@ -3901,7 +4938,7 @@ class BluraySubtitle:
                         continue
                 except Exception:
                     continue
-                pid = BluraySubtitle._ffprobe_stream_service_id(s)
+                pid = BluraySubtitle._stream_service_id(s)
                 if pid is not None:
                     out.append({'type': 'audio', 'pid': pid})
                 break
@@ -3918,16 +4955,16 @@ class BluraySubtitle:
                         continue
                 except Exception:
                     continue
-                pid = BluraySubtitle._ffprobe_stream_service_id(s)
+                pid = BluraySubtitle._stream_service_id(s)
                 if pid is not None:
                     out.append({'type': 'subtitles', 'pid': pid})
                 break
         return out
 
     @staticmethod
-    def _mkvmerge_tid_for_ffprobe_pid(m2ts_path: str, pid: int, slot_type: str) -> Optional[int]:
-        """mkvmerge track id for this m2ts = ffprobe stream ``index`` of the stream with matching ``id`` (PID)."""
-        streams = [s for s in (BluraySubtitle._ffprobe_streams(m2ts_path) or []) if isinstance(s, dict)]
+    def _mkvmerge_tid_for_pid(m2ts_path: str, pid: int, slot_type: str) -> Optional[int]:
+        """mkvmerge track id for this m2ts = stream ``index`` of the stream with matching ``id`` (PID)."""
+        streams = [s for s in BluraySubtitle._m2ts_track_streams(m2ts_path) if isinstance(s, dict)]
         for s in streams:
             ct = str(s.get('codec_type') or '')
             if slot_type == 'video':
@@ -3941,7 +4978,7 @@ class BluraySubtitle:
                     continue
             else:
                 continue
-            spid = BluraySubtitle._ffprobe_stream_service_id(s)
+            spid = BluraySubtitle._stream_service_id(s)
             if spid != pid:
                 continue
             try:
@@ -3951,11 +4988,11 @@ class BluraySubtitle:
         return None
 
     @staticmethod
-    def _map_ffprobe_slots_to_mkvmerge_track_ids(
+    def _map_slots_to_mkvmerge_track_ids(
         ref_slots: list[dict[str, object]],
         m2ts_path: str,
     ) -> Optional[list[int]]:
-        """Same slot order as ref_slots; each slot matched by ffprobe PID on ``m2ts_path``."""
+        """Same slot order as ref_slots; each slot matched by PID on ``m2ts_path``."""
         mapped: list[int] = []
         for slot in ref_slots:
             typ = str(slot.get('type') or '')
@@ -3963,7 +5000,7 @@ class BluraySubtitle:
                 pid = int(slot.get('pid'))
             except Exception:
                 return None
-            tid = BluraySubtitle._mkvmerge_tid_for_ffprobe_pid(m2ts_path, pid, typ)
+            tid = BluraySubtitle._mkvmerge_tid_for_pid(m2ts_path, pid, typ)
             if tid is None:
                 return None
             mapped.append(tid)
@@ -4158,7 +5195,7 @@ class BluraySubtitle:
             if not os.path.isfile(m2ts_path):
                 return None
             by_type: dict[str, set[int]] = {'video': set(), 'audio': set(), 'subtitles': set()}
-            for s in BluraySubtitle._ffprobe_streams(m2ts_path) or []:
+            for s in BluraySubtitle._m2ts_track_streams(m2ts_path):
                 if not isinstance(s, dict):
                     continue
                 ct = str(s.get('codec_type') or '')
@@ -4170,7 +5207,7 @@ class BluraySubtitle:
                     typ = 'subtitles'
                 else:
                     continue
-                pid = BluraySubtitle._ffprobe_stream_service_id(s)
+                pid = BluraySubtitle._stream_service_id(s)
                 if pid is not None:
                     by_type[typ].add(pid)
             clip_pid_sets.append(by_type)
@@ -4201,13 +5238,13 @@ class BluraySubtitle:
         return kept
 
     @staticmethod
-    def _ffprobe_audio_stream_by_pid(m2ts_path: str, pid: int) -> Optional[dict[str, object]]:
-        for s in BluraySubtitle._ffprobe_streams(m2ts_path) or []:
+    def _audio_stream_by_pid(m2ts_path: str, pid: int) -> Optional[dict[str, object]]:
+        for s in BluraySubtitle._m2ts_track_streams(m2ts_path):
             if not isinstance(s, dict):
                 continue
             if str(s.get('codec_type') or '') != 'audio':
                 continue
-            spid = BluraySubtitle._ffprobe_stream_service_id(s)
+            spid = BluraySubtitle._stream_service_id(s)
             if spid == pid:
                 return s
         return None
@@ -4240,7 +5277,7 @@ class BluraySubtitle:
                 pid = int(slot.get('pid'))
             except Exception:
                 return None
-            tid = BluraySubtitle._mkvmerge_tid_for_ffprobe_pid(m2ts_path, pid, typ)
+            tid = BluraySubtitle._mkvmerge_tid_for_pid(m2ts_path, pid, typ)
             if tid is None:
                 if typ == 'audio':
                     out.append({'type': typ, 'pid': pid, 'tid': None, 'needs_silence': True})
@@ -4300,7 +5337,7 @@ class BluraySubtitle:
     ) -> bool:
         """
         Fallback when direct ``mkvmerge … mpls`` fails (e.g. different track counts across m2ts).
-        Track identity uses ffprobe ``streams[].id`` (e.g. ``0x1011``) as PID; mkvmerge track id = ffprobe ``index``.
+        Track identity uses ``streams[].id`` (e.g. ``0x1011``) as PID; mkvmerge track id = stream ``index``.
         Per-clip m2ts mux with ``--split parts`` if needed, ``--track-order`` aligned to first m2ts, then
         ``+`` concat with ``--append-mode track``. Languages: ``_fix_output_track_languages_with_mkvpropedit`` on caller.
         """
@@ -4321,11 +5358,11 @@ class BluraySubtitle:
         if not os.path.isfile(first_m2ts):
             print(f'[remux-fallback] missing first m2ts: {first_m2ts}')
             return False
-        ref_slots = BluraySubtitle._ordered_ffprobe_track_slots_for_remux(
+        ref_slots = BluraySubtitle._ordered_track_slots_for_remux(
             first_m2ts, copy_audio_track, copy_sub_track
         )
         if not ref_slots:
-            print('[remux-fallback] no reference track slots from ffprobe on first m2ts')
+            print('[remux-fallback] no reference track slots on first m2ts')
             return False
         ui = ''
         try:
@@ -4348,7 +5385,7 @@ class BluraySubtitle:
                 cur_ident = BluraySubtitle._mkvmerge_identify_json(m2ts_path)
                 slot_plan = BluraySubtitle._build_slot_mux_plan_with_silence(ref_slots, m2ts_path)
                 if slot_plan is None:
-                    print(f'[remux-fallback] could not map ffprobe PIDs to mkvmerge ids for {m2ts_path}')
+                    print(f'[remux-fallback] could not map PIDs to mkvmerge ids for {m2ts_path}')
                     return False
                 mapped = [int(x.get('tid')) for x in slot_plan if not bool(x.get('needs_silence'))]
                 d_f, a_f, s_f = BluraySubtitle._mkvmerge_select_flags_from_mapped(mapped, cur_ident)
@@ -4371,7 +5408,7 @@ class BluraySubtitle:
                 for slot in slot_plan:
                     if bool(slot.get('needs_silence')):
                         pid = int(slot.get('pid'))
-                        ref_stream = BluraySubtitle._ffprobe_audio_stream_by_pid(first_m2ts, pid)
+                        ref_stream = BluraySubtitle._audio_stream_by_pid(first_m2ts, pid)
                         if not isinstance(ref_stream, dict):
                             print(f'[remux-fallback] missing reference audio stream for pid=0x{pid:X}')
                             return False
@@ -4468,7 +5505,7 @@ class BluraySubtitle:
     ) -> bool:
         """
         Fallback when ``mkvmerge mpls`` with ``--split parts`` fails but multiple episode MKVs are required.
-        For each episode window on the MPLS timeline, mux overlapping m2ts slices with ffprobe PID-aligned
+        For each episode window on the MPLS timeline, mux overlapping m2ts slices with PID-aligned
         ``--track-order``, then ``+`` concat slices; writes ``basename-001.mkv``, ``-002.mkv``, … like mkvmerge.
         """
         out_norm = os.path.normpath(output_file) if output_file else ''
@@ -4501,11 +5538,11 @@ class BluraySubtitle:
         if not os.path.isfile(first_m2ts):
             print(f'[remux-fallback-split] missing first m2ts: {first_m2ts}')
             return False
-        ref_slots = BluraySubtitle._ordered_ffprobe_track_slots_for_remux(
+        ref_slots = BluraySubtitle._ordered_track_slots_for_remux(
             first_m2ts, copy_audio_track, copy_sub_track
         )
         if not ref_slots:
-            print('[remux-fallback-split] no reference track slots from ffprobe on first m2ts')
+            print('[remux-fallback-split] no reference track slots on first m2ts')
             return False
         ui = ''
         try:
@@ -4594,7 +5631,7 @@ class BluraySubtitle:
                     cur_ident = BluraySubtitle._mkvmerge_identify_json(m2ts_path)
                     slot_plan = BluraySubtitle._build_slot_mux_plan_with_silence(ref_slots, m2ts_path)
                     if slot_plan is None:
-                        print(f'[remux-fallback-split] could not map ffprobe PIDs for {m2ts_path}')
+                        print(f'[remux-fallback-split] could not map PIDs for {m2ts_path}')
                         return False
                     mapped = [int(x.get('tid')) for x in slot_plan if not bool(x.get('needs_silence'))]
                     d_f, a_f, s_f = BluraySubtitle._mkvmerge_select_flags_from_mapped(mapped, cur_ident)
@@ -4605,7 +5642,7 @@ class BluraySubtitle:
                     for slot in slot_plan:
                         if bool(slot.get('needs_silence')):
                             pid = int(slot.get('pid'))
-                            ref_stream = BluraySubtitle._ffprobe_audio_stream_by_pid(first_m2ts, pid)
+                            ref_stream = BluraySubtitle._audio_stream_by_pid(first_m2ts, pid)
                             if not isinstance(ref_stream, dict):
                                 print(f'[remux-fallback-split] missing reference audio stream for pid=0x{pid:X}')
                                 return False
@@ -4730,14 +5767,17 @@ class BluraySubtitle:
                         probe_path = m2ts_path
             except Exception:
                 pass
-        streams = BluraySubtitle._ffprobe_streams(probe_path)
+        if str(probe_path).lower().endswith('.m2ts'):
+            streams = self._read_m2ts_track_info(probe_path)
+        else:
+            streams = BluraySubtitle._read_media_streams(probe_path)
         pid_lang = pid_to_lang or {}
         if not pid_lang:
             out: dict[int, str] = {}
             for s in streams or []:
                 lang = 'und'
                 try:
-                    direct = s.get('lang') or s.get('language')
+                    direct = s.get('lang') or s.get('language') or s.get('language_from_pmt_descriptor')
                     if direct:
                         lang = str(direct)
                     else:
@@ -4769,6 +5809,11 @@ class BluraySubtitle:
                             out[int(sid, 16)] = lang
                         else:
                             out[int(sid, 10)] = lang
+                except Exception:
+                    pass
+                try:
+                    pid = int(str(s.get('pid') or '').strip())
+                    out[pid] = lang
                 except Exception:
                     pass
             pid_lang = out
@@ -6730,7 +7775,10 @@ class SpTableScanWorker(QObject):
                 if key in streams_cache:
                     return streams_cache[key]
                 try:
-                    v = BluraySubtitle._ffprobe_streams(key)
+                    if str(key).lower().endswith('.m2ts'):
+                        v = BluraySubtitle._m2ts_track_streams(key)
+                    else:
+                        v = BluraySubtitle._read_media_streams(key)
                 except Exception:
                     v = []
                 streams_cache[key] = v or []
@@ -8855,9 +9903,14 @@ class BluraySubtitleGUI(QWidget):
             langs.append(v or default_lang)
         return langs
 
-    def _ffprobe_video_frame_count(self, media_path: str) -> int:
+    def _video_frame_count(self, media_path: str) -> int:
         if not media_path or not os.path.exists(media_path):
             return -1
+        if str(media_path).lower().endswith('.m2ts'):
+            try:
+                return int(M2TS(media_path).get_total_frames())
+            except Exception:
+                return -1
         cmd = (f'"{FFPROBE_PATH}" -v error -count_frames -select_streams v:0 '
                f'-show_entries stream=nb_read_frames,nb_frames -of json "{media_path}"')
         try:
@@ -8986,6 +10039,17 @@ class BluraySubtitleGUI(QWidget):
                 if eff_special == 'multi_frame':
                     out_item.setText(f'{base_with_suffix}')
                     continue
+                # Zero-duration single m2ts rows are typically IGS menus:
+                # output as folder name (no extension), extracted by extract_igs_menu_png.
+                if (not mpls_file) and len(m2ts_files_unique) == 1:
+                    try:
+                        d_item = self.table3.item(r, ENCODE_SP_LABELS.index('duration'))
+                        d_sec = self._parse_display_time_to_seconds(d_item.text() if d_item else '')
+                    except Exception:
+                        d_sec = 0.0
+                    if d_sec <= 0.0:
+                        out_item.setText(f'{base_with_suffix}')
+                        continue
                 key = BluraySubtitle._sp_track_key_from_entry(self._table3_get_sp_entry_for_row(r))
                 cfg = getattr(self, '_track_selection_config', {}) or {}
                 if not (isinstance(cfg, dict) and key in cfg):
@@ -9020,7 +10084,10 @@ class BluraySubtitleGUI(QWidget):
                         if ext_cache_key in single_audio_ext_cache:
                             ext = str(single_audio_ext_cache[ext_cache_key] or 'audio')
                         else:
-                            streams = self._read_ffprobe_streams(src)
+                            if str(src).lower().endswith('.m2ts'):
+                                streams = self._read_m2ts_track_info(src)
+                            else:
+                                streams = self._read_media_streams_local(src)
                             for s in streams:
                                 if str(s.get('codec_type') or '') != 'audio':
                                     continue
@@ -9103,7 +10170,7 @@ class BluraySubtitleGUI(QWidget):
                 m2ts_path = self._get_first_m2ts_for_mpls(selected_mpls_path)
                 if not m2ts_path:
                     continue
-                streams = self._read_ffprobe_streams(m2ts_path)
+                streams = self._read_m2ts_track_info(m2ts_path)
                 a, s = self._all_track_ids_from_streams(streams)
                 self._track_selection_config[f'main::{os.path.normpath(selected_mpls_path)}'] = {'audio': a, 'subtitle': s}
         except Exception:
@@ -9129,7 +10196,7 @@ class BluraySubtitleGUI(QWidget):
                     if not (stream_dir and m2ts_files):
                         continue
                     first_m2ts = os.path.normpath(os.path.join(stream_dir, m2ts_files[0]))
-                    streams = self._read_ffprobe_streams(first_m2ts)
+                    streams = self._read_m2ts_track_info(first_m2ts)
                     a, s = self._all_track_ids_from_streams(streams)
                     entry = self._table3_get_sp_entry_for_row(r)
                     key = BluraySubtitle._sp_track_key_from_entry(entry)
@@ -9190,6 +10257,31 @@ class BluraySubtitleGUI(QWidget):
         mpls_col = ENCODE_SP_LABELS.index('mpls_file')
         m2ts_col = ENCODE_SP_LABELS.index('m2ts_file')
         rows: list[dict[str, object]] = []
+        start_ts = time.time()
+        progress_dialog = QProgressDialog(self.t('读取中'), '', 0, 1000, self)
+        progress_dialog.setMinimumWidth(420)
+        bar = QProgressBar(progress_dialog)
+        bar.setRange(0, 1000)
+        bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        progress_dialog.setBar(bar)
+        progress_dialog.setCancelButton(None)
+        progress_dialog.setMinimumDuration(0)
+        progress_dialog.setAutoClose(False)
+        progress_dialog.setAutoReset(False)
+        progress_dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+        show_timer = QTimer(self)
+        show_timer.setSingleShot(True)
+        show_timer.setInterval(2000)
+
+        def show_if_needed():
+            try:
+                if (time.time() - start_ts) >= 2.0:
+                    progress_dialog.show()
+            except Exception:
+                pass
+
+        show_timer.timeout.connect(show_if_needed)
+        show_timer.start()
         select_all = bool(getattr(self, 'select_all_tracks_checkbox', None) and self.select_all_tracks_checkbox.isChecked())
         for r in range(self.table3.rowCount()):
             try:
@@ -9212,6 +10304,12 @@ class BluraySubtitleGUI(QWidget):
 
         cancel_event = threading.Event()
         self._sp_scan_cancel_event = cancel_event
+        self._sp_scan_progress_dialog = progress_dialog
+        self._sp_scan_progress_bar = bar
+        self._sp_scan_progress_show_timer = show_timer
+        self._sp_scan_progress_total = max(1, len(rows))
+        self._sp_scan_progress_done = 0
+        self._sp_scan_progress_rows_seen = set()
         thread = QThread(self)
         worker = SpTableScanWorker(rows, cancel_event)
         worker.moveToThread(thread)
@@ -9224,6 +10322,25 @@ class BluraySubtitleGUI(QWidget):
                 self._sp_scan_in_progress = False
             except Exception:
                 pass
+            try:
+                t = getattr(self, '_sp_scan_progress_show_timer', None)
+                if isinstance(t, QTimer):
+                    t.stop()
+            except Exception:
+                pass
+            try:
+                dlg = getattr(self, '_sp_scan_progress_dialog', None)
+                if isinstance(dlg, QProgressDialog):
+                    dlg.close()
+                    dlg.deleteLater()
+            except Exception:
+                pass
+            self._sp_scan_progress_dialog = None
+            self._sp_scan_progress_bar = None
+            self._sp_scan_progress_show_timer = None
+            self._sp_scan_progress_rows_seen = set()
+            self._sp_scan_progress_total = 0
+            self._sp_scan_progress_done = 0
             try:
                 worker.deleteLater()
             except Exception:
@@ -9311,6 +10428,18 @@ class BluraySubtitleGUI(QWidget):
                 pass
         finally:
             self._updating_sp_table = False
+        try:
+            seen = getattr(self, '_sp_scan_progress_rows_seen', None)
+            if isinstance(seen, set):
+                seen.add(int(row))
+                done = len(seen)
+                self._sp_scan_progress_done = done
+                total = max(1, int(getattr(self, '_sp_scan_progress_total', 1) or 1))
+                bar = getattr(self, '_sp_scan_progress_bar', None)
+                if isinstance(bar, QProgressBar):
+                    bar.setValue(int(done / total * 1000))
+        except Exception:
+            pass
         if not bool(getattr(self, '_sp_scan_in_progress', False)):
             try:
                 self._recompute_sp_output_names()
@@ -9768,8 +10897,10 @@ class BluraySubtitleGUI(QWidget):
                             'mpls_file': '',
                             'm2ts_files': [sf],
                             'duration': dur,
+                            # Zero-duration m2ts (typically IGS menu streams) should stay optional:
+                            # keep row enabled, but default to unchecked.
                             'default_selected': bool(dur >= 30.0),
-                            'disabled': bool(dur <= 0.0),
+                            'disabled': False,
                             'special': '',
                         })
 
@@ -10656,7 +11787,6 @@ class BluraySubtitleGUI(QWidget):
                     self.on_configuration(configuration)
                 finally:
                     self._end_delayed_busy(busy)
-
     def on_subtitle_folder_path_change(self):
         raw = self.subtitle_folder_path.text()
         folder = self._normalize_path_input(raw)
@@ -12262,7 +13392,7 @@ class BluraySubtitleGUI(QWidget):
         except Exception:
             return ''
 
-    def _read_ffprobe_streams(self, media_path: str) -> list[dict[str, object]]:
+    def _read_media_streams_local(self, media_path: str) -> list[dict[str, object]]:
         if not media_path or not os.path.exists(media_path):
             return []
         exe = FFPROBE_PATH if FFPROBE_PATH else 'ffprobe'
@@ -12275,6 +13405,28 @@ class BluraySubtitleGUI(QWidget):
             )
         except Exception:
             return []
+
+    def _read_m2ts_track_info(self, m2ts_path: str) -> list[dict[str, object]]:
+        streams = BluraySubtitle._m2ts_track_streams(m2ts_path)
+        out: list[dict[str, object]] = []
+        for s in streams:
+            row = dict(s)
+            row['index'] = str(row.get('index', ''))
+            out.append(row)
+        return out
+
+    def _pid_lang_from_m2ts_track_info(self, tracks: list[dict[str, object]]) -> dict[int, str]:
+        out: dict[int, str] = {}
+        for s in tracks or []:
+            if not isinstance(s, dict):
+                continue
+            lang = str(s.get('language_from_pmt_descriptor') or 'und').strip() or 'und'
+            try:
+                pid = int(s.get('pid'))
+                out[pid] = lang
+            except Exception:
+                pass
+        return out
         if p.returncode != 0:
             return []
         try:
@@ -12511,14 +13663,24 @@ class BluraySubtitleGUI(QWidget):
         layout = QVBoxLayout()
         dlg.setLayout(layout)
         table = QTableWidget(dlg)
-        self._set_compact_table(table, row_height=22, header_height=22)
+        self._set_compact_table(table, row_height=22, header_height=64)
         is_mkvinfo = any(('codec_id' in (s or {})) or ('track_id' in (s or {})) for s in (streams or []))
         if is_mkvinfo:
             cols = ['track_number', 'select', 'track_uid', 'track_type', 'language', 'codec_id', 'extract']
         else:
-            cols = ['index', 'select', 'id', 'language', 'codec_type', 'codec_name', 'start_time']
+            cols = [
+                'index', 'select', 'pid', 'program_number', 'pmt_pid', 'is_pcr_pid',
+                'stream_type', 'language', 'codec_type', 'codec_name', 'language_from_pmt_descriptor'
+            ]
         table.setColumnCount(len(cols))
         self._set_table_headers(table, cols)
+        if not is_mkvinfo:
+            try:
+                header_item = table.horizontalHeaderItem(cols.index('language_from_pmt_descriptor'))
+                if header_item:
+                    header_item.setText('language_\nfrom_pmt_\ndescriptor')
+            except Exception:
+                pass
         table.setRowCount(len(streams))
         selected = selected_indexes or set()
         pid_to_lang = pid_lang or {}
@@ -12561,7 +13723,7 @@ class BluraySubtitleGUI(QWidget):
                     else:
                         v = 'und'
                         try:
-                            pid = self._parse_stream_pid(s.get('id'))
+                            pid = self._parse_stream_pid(s.get('pid'))
                             if pid is not None and pid in pid_to_lang:
                                 v = pid_to_lang.get(pid, 'und')
                             else:
@@ -12582,6 +13744,17 @@ class BluraySubtitleGUI(QWidget):
                     v = s.get(key, '')
                 table.setItem(r, c, QTableWidgetItem('' if v is None else str(v)))
         table.resizeColumnsToContents()
+        if not is_mkvinfo:
+            try:
+                stream_type_col = cols.index('stream_type')
+                lang_desc_col = cols.index('language_from_pmt_descriptor')
+                table.setColumnWidth(stream_type_col, 93)
+                table.setColumnWidth(lang_desc_col, 73)
+                header = table.horizontalHeader()
+                header.setSectionResizeMode(stream_type_col, QHeaderView.ResizeMode.Fixed)
+                header.setSectionResizeMode(lang_desc_col, QHeaderView.ResizeMode.Fixed)
+            except Exception:
+                pass
         layout.addWidget(table)
         btn_row = QWidget(dlg)
         btn_layout = QHBoxLayout()
@@ -12681,7 +13854,7 @@ class BluraySubtitleGUI(QWidget):
         btn_layout.addWidget(btn_cancel)
         layout.addWidget(btn_row)
         layout.addWidget(status_label)
-        dlg.resize(720, 420)
+        dlg.resize(980, 460)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return None
         selected_after: set[str] = set()
@@ -12747,7 +13920,7 @@ class BluraySubtitleGUI(QWidget):
             return
         chapter = Chapter(mpls_path)
         chapter.get_pid_to_language()
-        streams = self._read_ffprobe_streams(m2ts_path)
+        streams = self._read_m2ts_track_info(m2ts_path)
         copy_audio_track, copy_sub_track = BluraySubtitle._default_track_selection_from_streams(
             streams,
             chapter.pid_to_lang
@@ -12984,7 +14157,7 @@ class BluraySubtitleGUI(QWidget):
             self._ensure_default_track_config_for_main(mpls_path)
             chapter = Chapter(mpls_path)
             chapter.get_pid_to_language()
-            streams = self._read_ffprobe_streams(m2ts_path)
+            streams = self._read_m2ts_track_info(m2ts_path)
             pid_lang = chapter.pid_to_lang
             key = f'main::{os.path.normpath(mpls_path)}'
             cfg = getattr(self, '_track_selection_config', {}).get(key, {})
@@ -13049,7 +14222,7 @@ class BluraySubtitleGUI(QWidget):
                     return
                 chapter = Chapter(mpls_path)
                 chapter.get_pid_to_language()
-                streams = self._read_ffprobe_streams(m2ts_path)
+                streams = self._read_m2ts_track_info(m2ts_path)
                 pid_lang = chapter.pid_to_lang
             else:
                 m2ts_files = self._split_m2ts_files(m2ts_text)
@@ -13064,8 +14237,9 @@ class BluraySubtitleGUI(QWidget):
                 if not os.path.exists(m2ts_path):
                     QMessageBox.information(self, " ", f"未找到 m2ts 文件：\n{m2ts_path}")
                     return
-                streams = self._read_ffprobe_streams(m2ts_path)
-                pid_lang = self._pid_lang_from_ffprobe_streams(streams)
+                streams = self._read_m2ts_track_info(m2ts_path)
+                # No MPLS language map available for pure m2ts rows; keep PMT descriptor as reference.
+                pid_lang = self._pid_lang_from_m2ts_track_info(streams)
 
             if key not in cfg:
                 self._inherit_main_track_config_for_sp_key(bdmv_index, mpls_file, key)
@@ -14236,6 +15410,8 @@ class BluraySubtitleGUI(QWidget):
             self._set_table_headers(self.table3, ENCODE_SP_LABELS)
 
     def _parse_stream_pid(self, raw_id: object) -> Optional[int]:
+        if isinstance(raw_id, int):
+            return int(raw_id)
         s = str(raw_id or '').strip()
         if not s:
             return None
@@ -14284,7 +15460,7 @@ class BluraySubtitleGUI(QWidget):
                 return os.path.normpath(os.path.join(sp_folder, item.text().strip()))
         return ''
 
-    def _pid_lang_from_ffprobe_streams(self, streams: list[dict[str, object]]) -> dict[int, str]:
+    def _pid_lang_from_streams(self, streams: list[dict[str, object]]) -> dict[int, str]:
         out: dict[int, str] = {}
         for s in streams or []:
             lang = 'und'
@@ -16133,7 +17309,7 @@ def get_effective_bit_depth(file_path):
 
 
 def get_audio_duration(file_path):
-    """Return total audio duration in seconds using ffprobe metadata."""
+    """Return total audio duration in seconds using probed metadata."""
     cmd = f'"{FFPROBE_PATH}" -v error -show_entries format=duration:stream=duration -of json "{file_path}"'
     try:
         proc = subprocess.run(cmd, shell=True, capture_output=True, text=True, encoding='utf-8')
