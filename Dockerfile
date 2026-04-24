@@ -100,8 +100,9 @@ RUN ldconfig
 COPY x265 /usr/bin/
 RUN chmod +x /usr/bin/x265
 
-# 复制项目文件
-COPY BluraySubtitle.py /app/
+# 复制项目文件（已迁移为 src/ 目录结构）
+COPY src/ /app/src/
+COPY *.py /app/
 
 # 在 Ubuntu 25.10 中，pip 默认受 PEP 668 限制，建议使用虚拟环境或 --break-system-packages
 RUN pip3 install --no-cache-dir --break-system-packages pycountry PyQt6 librosa
@@ -116,5 +117,5 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y libunwind8 libunwind-dev xdg-utils nautilus libgl1-mesa-dri libglx-mesa0 mesa-vulkan-drivers && rm -rf /var/lib/apt/lists/*
 
-# 启动程序
-CMD ["sh", "-c", "python3 BluraySubtitle.py"]
+# 启动程序（新入口）
+CMD ["sh", "-c", "python3 -m src.main"]
