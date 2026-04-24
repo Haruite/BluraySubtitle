@@ -1,0 +1,512 @@
+"""Target module for lifecycle/bootstrap methods of `BluraySubtitleGUI`."""
+import os
+import time
+from typing import Optional
+
+from PyQt6.QtCore import Qt, QTimer, QCoreApplication
+from PyQt6.QtWidgets import QApplication, QVBoxLayout, QWidget, QHBoxLayout, QLabel, QComboBox, QSlider, QGroupBox, \
+    QLineEdit, QTabBar, QRadioButton, QButtonGroup, QPushButton, QCheckBox, QTableWidget, QSizePolicy, QSplitter, \
+    QProgressDialog, QProgressBar
+
+from src.core import APP_TITLE, BDMV_LABELS, SUBTITLE_LABELS, ENCODE_SP_LABELS
+from src.exports.utils import print_exc_terminal, force_remove_file
+from src.runtime.gui_runtime_classes.custom_box import CustomBox
+from src.runtime.gui_runtime_classes.custom_table_widget import CustomTableWidget
+from .gui_base import BluraySubtitleGuiBase
+
+
+class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
+        def __init__(self):
+            super().__init__()
+            self.setObjectName('mainWindow')
+            self.altered = False
+            self._sp_index_by_bdmv: dict[int, int] = {}
+            self._chapter_checkbox_states: dict[str, list[bool]] = {}  # Save chapter checkbox states
+            self._last_config_inputs: dict[str, object] = {}
+            self.init_ui()
+
+        def init_ui(self):
+            self.setWindowTitle(APP_TITLE)
+            self.setMinimumWidth(860)
+            self.setMinimumHeight(820)
+            self.resize(1000, 1000)
+            self._geometry = self.saveGeometry()
+            self._language_code = 'en'
+            global CURRENT_UI_LANGUAGE
+            CURRENT_UI_LANGUAGE = 'en'
+
+            app = QApplication.instance()
+            if app:
+                app.aboutToQuit.connect(self.delete_default_vpy_file)
+
+            self.layout = QVBoxLayout()
+            self.layout.setContentsMargins(8, 8, 8, 8)
+            self.layout.setSpacing(6)
+
+            language_row = QWidget(self)
+            language_layout = QHBoxLayout()
+            language_layout.setContentsMargins(8, 0, 8, 0)
+            language_layout.setSpacing(6)
+            language_row.setLayout(language_layout)
+            self.language_label = QLabel('语言', language_row)
+            self.language_combo = QComboBox(language_row)
+            self.language_combo.addItem('English', 'en')
+            self.language_combo.addItem('简体中文', 'zh')
+            self.language_combo.setCurrentIndex(0)
+            self.language_combo.currentIndexChanged.connect(lambda _=None: self._on_language_changed())
+            language_layout.addWidget(self.language_label)
+            language_layout.addWidget(self.language_combo)
+            language_layout.addSpacing(12)
+            self.theme_label = QLabel('模式', language_row)
+            self.theme_combo = QComboBox(language_row)
+            self.theme_combo.addItem('浅色', 'light')
+            self.theme_combo.addItem('深色', 'dark')
+            self.theme_combo.addItem('彩色', 'colorful')
+            self.theme_combo.setCurrentIndex(0)
+            self.theme_combo.currentIndexChanged.connect(lambda _=None: self._on_theme_changed())
+            language_layout.addWidget(self.theme_label)
+            language_layout.addWidget(self.theme_combo)
+            language_layout.addSpacing(12)
+            self.opacity_label = QLabel('透明度', language_row)
+            self.opacity_slider = QSlider(Qt.Orientation.Horizontal, language_row)
+            self.opacity_slider.setRange(60, 100)
+            self.opacity_slider.setValue(int(getattr(self, '_colorful_opacity', 0.94) * 100))
+            self.opacity_slider.setFixedWidth(140)
+            self.opacity_slider.valueChanged.connect(self._on_opacity_changed)
+            self.opacity_slider.sliderReleased.connect(
+                lambda: self.opacity_slider.setValue(
+                    100 if self.opacity_slider.value() >= 99 else self.opacity_slider.value())
+            )
+            language_layout.addWidget(self.opacity_label)
+            language_layout.addWidget(self.opacity_slider)
+            language_layout.addStretch(1)
+            self.layout.addWidget(language_row)
+
+            function_button = QGroupBox(self.t('选择功能'), self)
+            self.function_button = function_button
+            h_layout = QHBoxLayout()
+            h_layout.setContentsMargins(8, 10, 8, 6)
+            h_layout.setSpacing(12)
+            function_button.setLayout(h_layout)
+            self.subtitle_folder_path = QLineEdit()
+            self.subtitle_folder_path.setMinimumWidth(200)
+
+            self.function_tabbar = QTabBar(function_button)
+            self.function_tabbar.setObjectName('functionTabbar')
+            self.function_tabbar.setExpanding(True)
+            self.function_tabbar.setMovable(False)
+            self.function_tabbar.setDocumentMode(True)
+            self.function_tabbar.addTab(self.t("生成合并字幕"))
+            self.function_tabbar.addTab(self.t("给mkv添加章节"))
+            self.function_tabbar.addTab(self.t("原盘remux"))
+            self.function_tabbar.addTab(self.t("原盘压制"))
+            self.function_tabbar.setCurrentIndex(0)
+            self._selected_function_id = 1
+            self.function_tabbar.currentChanged.connect(lambda _=None: self.on_select_function())
+            h_layout.addWidget(self.function_tabbar)
+            self.layout.addWidget(function_button)
+
+            mode_row = QWidget(self)
+            mode_row.setProperty("noMargin", True)
+            mode_layout = QHBoxLayout()
+            mode_layout.setContentsMargins(8, 0, 8, 0)
+            mode_layout.setSpacing(6)
+            mode_row.setLayout(mode_layout)
+
+            self.series_mode_radio = QRadioButton("剧集模式", mode_row)
+            self.movie_mode_radio = QRadioButton("电影模式", mode_row)
+            self.series_mode_radio.setChecked(True)
+
+            mode_layout.addWidget(self.series_mode_radio)
+
+            self.episode_length_container = QWidget(mode_row)
+            episode_length_layout = QHBoxLayout()
+            episode_length_layout.setContentsMargins(0, 0, 0, 0)
+            episode_length_layout.setSpacing(4)
+            self.episode_length_container.setLayout(episode_length_layout)
+            episode_length_layout.addWidget(QLabel("（", self.episode_length_container))
+            episode_length_layout.addWidget(QLabel("每集时长大约（分钟）：", self.episode_length_container))
+            self.approx_episode_minutes_combo = QComboBox(self.episode_length_container)
+            self.approx_episode_minutes_combo.setEditable(True)
+            self.approx_episode_minutes_combo.addItems(["3", "24", "50"])
+            self.approx_episode_minutes_combo.setCurrentText("24")
+            self.approx_episode_minutes_combo.setMinimumWidth(120)
+            self._adjust_combo_width_to_contents(self.approx_episode_minutes_combo, padding=54, min_width=120,
+                                                 max_width=220)
+            episode_length_layout.addWidget(self.approx_episode_minutes_combo)
+            episode_length_layout.addWidget(QLabel("）", self.episode_length_container))
+            mode_layout.addWidget(self.episode_length_container)
+
+            mode_layout.addSpacing(8)
+            mode_layout.addWidget(self.movie_mode_radio)
+            mode_layout.addStretch(1)
+
+            mode_group = QButtonGroup(mode_row)
+            mode_group.addButton(self.series_mode_radio)
+            mode_group.addButton(self.movie_mode_radio)
+            self._mode_group = mode_group
+
+            def update_episode_length_enabled_state():
+                enabled = self.series_mode_radio.isChecked()
+                self.approx_episode_minutes_combo.setEnabled(enabled)
+                self._apply_episode_mode_to_table2()
+                if self.get_selected_function_id() in (3, 4):
+                    try:
+                        self._refresh_table1_remux_cmds()
+                    except Exception:
+                        pass
+
+            self.series_mode_radio.toggled.connect(update_episode_length_enabled_state)
+            self.movie_mode_radio.toggled.connect(update_episode_length_enabled_state)
+            update_episode_length_enabled_state()
+
+            self.episode_mode_row = mode_row
+            self.episode_mode_row.setVisible(self.get_selected_function_id() in (1, 3, 4))
+            self.approx_episode_minutes_combo.currentTextChanged.connect(
+                lambda _=None: self._rebuild_configuration_for_function_34())
+            self.layout.addWidget(self.episode_mode_row)
+
+            bdmv = QGroupBox()
+            bdmv.setProperty("noTitle", True)
+            v_layout = QVBoxLayout()
+            v_layout.setContentsMargins(8, 2, 8, 6)
+            v_layout.setSpacing(4)
+            bdmv.setLayout(v_layout)
+            bluray_path_box = CustomBox('原盘', self)
+            bluray_path_box.setProperty("noMargin", True)
+            self.bluray_path_box = bluray_path_box
+            h_layout = QHBoxLayout()
+            h_layout.setContentsMargins(0, 0, 0, 0)
+            h_layout.setSpacing(4)
+            bluray_path_box.setLayout(h_layout)
+            self.label1 = QLabel("选择原盘所在的文件夹", self)
+            self.bdmv_folder_path = QLineEdit()
+            self.bdmv_folder_path.setMinimumWidth(200)
+            self.bdmv_folder_path.setAcceptDrops(False)
+            button1 = QPushButton("选择")
+            button1.clicked.connect(self.select_bdmv_folder)
+            button1_open = QPushButton("打开")
+            button1_open.clicked.connect(lambda _=None: self.open_folder_path(self.bdmv_folder_path.text()))
+            h_layout.addWidget(self.bdmv_folder_path)
+            h_layout.addWidget(button1)
+            h_layout.addWidget(button1_open)
+            v_layout.addWidget(bluray_path_box)
+
+            remux_path_box = CustomBox('Remux', self)
+            remux_path_box.setProperty("noMargin", True)
+            remux_layout = QHBoxLayout()
+            remux_layout.setContentsMargins(0, 0, 0, 0)
+            remux_layout.setSpacing(4)
+            remux_path_box.setLayout(remux_layout)
+            self.remux_folder_path = QLineEdit()
+            self.remux_folder_path.setMinimumWidth(200)
+            self.remux_folder_path.setAcceptDrops(False)
+            self.remux_folder_path.textChanged.connect(
+                lambda _=None: QTimer.singleShot(150, self._populate_encode_from_remux_folder))
+            remux_btn = QPushButton("选择")
+            remux_btn.clicked.connect(self.select_remux_folder)
+            remux_btn_open = QPushButton("打开")
+            remux_btn_open.clicked.connect(lambda _=None: self.open_folder_path(self.remux_folder_path.text()))
+            remux_layout.addWidget(self.remux_folder_path)
+            remux_layout.addWidget(remux_btn)
+            remux_layout.addWidget(remux_btn_open)
+            self.remux_path_box = remux_path_box
+            self.remux_path_box.setVisible(False)
+            v_layout.addWidget(remux_path_box)
+
+            label1_container = QWidget(self)
+            self.label1_container = label1_container
+            label1_layout = QVBoxLayout()
+            label1_layout.setContentsMargins(0, 0, 0, 0)
+            label1_layout.setSpacing(0)
+            label1_container.setLayout(label1_layout)
+            self.label1.setText(self.t('选择文件夹'))
+
+            encode_source_row = QWidget(self)
+            encode_source_layout = QHBoxLayout()
+            encode_source_layout.setContentsMargins(0, 0, 0, 0)
+            encode_source_layout.setSpacing(8)
+            encode_source_row.setLayout(encode_source_layout)
+            encode_source_layout.addWidget(self.label1)
+            self.encode_source_bdmv_radio = QRadioButton('原盘', encode_source_row)
+            self.encode_source_remux_radio = QRadioButton('Remux', encode_source_row)
+            self.encode_source_bdmv_radio.setChecked(True)
+            encode_source_layout.addWidget(self.encode_source_bdmv_radio)
+            encode_source_layout.addWidget(self.encode_source_remux_radio)
+            encode_source_layout.addStretch(1)
+            self.encode_source_row = encode_source_row
+            self.encode_source_row.setVisible(self.get_selected_function_id() == 4)
+            self._encode_input_mode = 'bdmv'
+
+            def on_encode_source_changed():
+                self._encode_input_mode = 'remux' if self.encode_source_remux_radio.isChecked() else 'bdmv'
+                try:
+                    self._apply_encode_input_mode_ui()
+                except Exception:
+                    print_exc_terminal()
+
+            self.encode_source_bdmv_radio.toggled.connect(on_encode_source_changed)
+            self.encode_source_remux_radio.toggled.connect(on_encode_source_changed)
+            label1_layout.addWidget(bdmv)
+
+            select_all_tracks_row = QWidget(self)
+            select_all_tracks_layout = QHBoxLayout()
+            select_all_tracks_layout.setContentsMargins(0, 0, 0, 0)
+            select_all_tracks_layout.setSpacing(8)
+            select_all_tracks_row.setLayout(select_all_tracks_layout)
+            self.select_all_tracks_checkbox = QCheckBox(self.t('Select all tracks'), select_all_tracks_row)
+            self.select_all_tracks_checkbox.setChecked(False)
+            self.select_all_tracks_checkbox.toggled.connect(self._on_select_all_tracks_toggled)
+            select_all_tracks_layout.addWidget(self.select_all_tracks_checkbox)
+            select_all_tracks_layout.addStretch(1)
+            self.select_all_tracks_row = select_all_tracks_row
+            v_layout.addWidget(select_all_tracks_row)
+
+            self.table1 = QTableWidget()
+            self.table1.setObjectName('table1')
+            self.table1.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            self.table1.setColumnCount(len(BDMV_LABELS))
+            self._set_table_headers(self.table1, BDMV_LABELS)
+            self.table1.setSortingEnabled(True)
+            self.table1.horizontalHeader().setSortIndicatorShown(True)
+            self.bdmv_folder_path.textChanged.connect(self.on_bdmv_folder_path_change)
+            v_layout.addWidget(self.table1)
+            v_layout.setStretch(v_layout.indexOf(self.table1), 1)
+            try:
+                idx = self.layout.indexOf(self.episode_mode_row)
+                if idx >= 0:
+                    self.layout.insertWidget(idx, self.encode_source_row)
+                else:
+                    self.layout.insertWidget(1, self.encode_source_row)
+            except Exception:
+                self.layout.insertWidget(1, self.encode_source_row)
+
+            subtitle = QGroupBox()
+            subtitle.setProperty("noTitle", True)
+            v_layout = QVBoxLayout()
+            v_layout.setContentsMargins(8, 2, 8, 6)
+            v_layout.setSpacing(4)
+            subtitle.setLayout(v_layout)
+            subtitle_path_box = CustomBox('字幕', self)
+            subtitle_path_box.setProperty("noMargin", True)
+            h_layout = QHBoxLayout()
+            h_layout.setContentsMargins(0, 0, 0, 0)
+            h_layout.setSpacing(4)
+            subtitle_path_box.setLayout(h_layout)
+            self.label2 = QLabel("选择单集字幕所在的文件夹：", self)
+            self.subtitle_folder_path = QLineEdit()
+            self.subtitle_folder_path.setMinimumWidth(200)
+            self.subtitle_folder_path.setAcceptDrops(False)
+            button2 = QPushButton("选择")
+            button2.clicked.connect(self.select_subtitle_folder)
+            button2_open = QPushButton("打开")
+            button2_open.clicked.connect(lambda _=None: self.open_folder_path(self.subtitle_folder_path.text()))
+            h_layout.addWidget(self.subtitle_folder_path)
+            h_layout.addWidget(button2)
+            h_layout.addWidget(button2_open)
+            v_layout.addWidget(subtitle_path_box)
+
+            label2_container = QWidget(self)
+            self.label2_container = label2_container
+            label2_layout = QVBoxLayout()
+            label2_layout.setContentsMargins(0, 0, 0, 0)
+            label2_layout.setSpacing(0)
+            label2_container.setLayout(label2_layout)
+            label2_layout.addWidget(self.label2)
+            label2_layout.addWidget(subtitle)
+
+            self.table2 = CustomTableWidget(self, self.on_subtitle_drop)
+            self.table2.setObjectName('table2')
+            self.table2.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            self._set_compact_table(self.table2, row_height=22, header_height=22)
+            self.table2.setColumnCount(len(SUBTITLE_LABELS))
+            self._set_table_headers(self.table2, SUBTITLE_LABELS)
+            self._set_table2_subtitle_column_order()
+            self.table2.setSortingEnabled(True)
+            self.table2.horizontalHeader().setSortIndicatorShown(True)
+            self.table2.horizontalHeader().sortIndicatorChanged.connect(self.on_subtitle_table_sorted)
+            self.subtitle_folder_path.textChanged.connect(self.on_subtitle_folder_path_change)
+            self._subtitle_scan_debounce = QTimer(self)
+            self._subtitle_scan_debounce.setSingleShot(True)
+            self._subtitle_scan_debounce.setInterval(250)
+            self._subtitle_scan_debounce.timeout.connect(self._start_subtitle_folder_scan)
+            self._pending_subtitle_folder = ''
+            self._chapter_combo_debounce = QTimer(self)
+            self._chapter_combo_debounce.setSingleShot(True)
+            self._chapter_combo_debounce.setInterval(120)
+            self._chapter_combo_debounce.timeout.connect(self._run_chapter_combo_update)
+            self._pending_chapter_combo_index = -1
+            self.table3 = QTableWidget(self)
+            self.table3.setObjectName('table3')
+            self.table3.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            self._set_compact_table(self.table3, row_height=22, header_height=22)
+            self.table3.setColumnCount(len(ENCODE_SP_LABELS))
+            self._set_table_headers(self.table3, ENCODE_SP_LABELS)
+            self.table3.setSortingEnabled(True)
+            self.table3.horizontalHeader().setSortIndicatorShown(True)
+            self._updating_sp_table = False
+            self.table3.itemChanged.connect(self._on_table3_item_changed)
+            self.table3.setVisible(False)
+            self.subtitle_tables_splitter = QSplitter(Qt.Orientation.Vertical, subtitle)
+            self.subtitle_tables_splitter.setObjectName('subtitleTablesSplitter')
+            self.subtitle_tables_splitter.setChildrenCollapsible(False)
+            self.subtitle_tables_splitter.addWidget(self.table2)
+            self.subtitle_tables_splitter.addWidget(self.table3)
+            self.subtitle_tables_splitter.setStretchFactor(0, 1)
+            self.subtitle_tables_splitter.setStretchFactor(1, 1)
+            self.subtitle_tables_splitter.setSizes([360, 360])
+            v_layout.addWidget(self.subtitle_tables_splitter)
+            v_layout.setStretch(v_layout.indexOf(self.subtitle_tables_splitter), 1)
+
+            label1_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            label2_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            bdmv.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            subtitle.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            tables_splitter = QSplitter(Qt.Orientation.Vertical, self)
+            self.tables_splitter = tables_splitter
+            tables_splitter.setObjectName('tablesSplitter')
+            tables_splitter.setChildrenCollapsible(False)
+            tables_splitter.addWidget(label1_container)
+            tables_splitter.addWidget(label2_container)
+            tables_splitter.setStretchFactor(0, 1)
+            tables_splitter.setStretchFactor(1, 1)
+            tables_splitter.setSizes([480, 480])
+            self.layout.addWidget(tables_splitter)
+            self.layout.setStretch(self.layout.indexOf(tables_splitter), 1)
+
+            self.encode_box = QGroupBox('压制', self)
+            self.encode_box.setProperty("tightGroup", True)
+            self.encode_box.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+            self.encode_box.setVisible(False)
+            self.init_encode_box()
+            self.layout.addWidget(self.encode_box)
+
+            self.checkbox1 = QCheckBox("补全蓝光目录")
+            self.checkbox1.setChecked(True)
+            merge_options_row = QWidget(self)
+            merge_options_row.setProperty("noMargin", True)
+            merge_options_layout = QHBoxLayout()
+            merge_options_layout.setContentsMargins(8, 0, 8, 0)
+            merge_options_layout.setSpacing(6)
+            merge_options_row.setLayout(merge_options_layout)
+            merge_options_layout.addWidget(self.checkbox1)
+            merge_options_layout.addSpacing(12)
+
+            self.subtitle_suffix_label = QLabel("添加后缀", merge_options_row)
+            merge_options_layout.addWidget(self.subtitle_suffix_label)
+            self.subtitle_suffix_combo = QComboBox(merge_options_row)
+            self.subtitle_suffix_combo.setEditable(True)
+            self.subtitle_suffix_combo.setMinimumWidth(160)
+            merge_options_layout.addWidget(self.subtitle_suffix_combo)
+            merge_options_layout.addStretch(1)
+            self.merge_options_row = merge_options_row
+            self.merge_options_row.setVisible(self.get_selected_function_id() == 1)
+            self._refresh_subtitle_suffix_options()
+            self.layout.addWidget(self.merge_options_row)
+            output_path_row = QWidget(self)
+            output_path_row.setProperty("noMargin", True)
+            output_path_layout = QHBoxLayout()
+            output_path_layout.setContentsMargins(8, 0, 8, 0)
+            output_path_layout.setSpacing(4)
+            output_path_row.setLayout(output_path_layout)
+            output_path_layout.addWidget(QLabel("输出文件夹", self))
+            self.output_folder_path = QLineEdit()
+            self.output_folder_path.setMinimumWidth(200)
+            self.output_folder_path.setAcceptDrops(False)
+            self._auto_output_folder = ''
+            self.output_folder_path.textEdited.connect(lambda _: setattr(self, '_output_folder_user_edited', True))
+            self._remux_cmd_refresh_timer = QTimer(self)
+            self._remux_cmd_refresh_timer.setSingleShot(True)
+            self._remux_cmd_refresh_timer.setInterval(300)
+            self._remux_cmd_refresh_timer.timeout.connect(
+                lambda: self._refresh_table1_remux_cmds() if self.get_selected_function_id() in (3, 4) else None)
+            self.output_folder_path.textChanged.connect(lambda _=None: self._remux_cmd_refresh_timer.start())
+            button_output = QPushButton("选择")
+            button_output.clicked.connect(self.select_output_folder)
+            button_output_open = QPushButton("打开")
+            button_output_open.clicked.connect(lambda _=None: self.open_folder_path(self.output_folder_path.text()))
+            output_path_layout.addWidget(self.output_folder_path)
+            output_path_layout.addWidget(button_output)
+            output_path_layout.addWidget(button_output_open)
+            self.output_folder_row = output_path_row
+            self.output_folder_row.setVisible(self.get_selected_function_id() in (3, 4))
+            self.layout.addWidget(self.output_folder_row)
+            self.exe_button = QPushButton("生成字幕")
+            self.exe_button.clicked.connect(self.main)
+            self.exe_button.setMinimumHeight(38)
+            self.layout.addWidget(self.exe_button)
+            self.bottom_message_label = QLabel('', self)
+            self.bottom_message_label.setStyleSheet('color: #007BFF;')
+            self.bottom_message_label.setVisible(False)
+            self.layout.addWidget(self.bottom_message_label)
+
+            self.setLayout(self.layout)
+            self._track_selection_config: dict[str, dict[str, list[str]]] = {}
+            self._apply_language('en')
+            self._apply_theme(getattr(self, '_theme_mode', 'light'))
+
+        def closeEvent(self, event):
+            self.delete_default_vpy_file()
+            try:
+                if os.path.exists('info.json'):
+                    force_remove_file('info.json')
+            except Exception:
+                pass
+            return super().closeEvent(event)
+
+        def _cleanup_info_json_if_needed(self):
+            try:
+                if os.path.exists('info.json'):
+                    force_remove_file('info.json')
+            except Exception:
+                pass
+
+        def _begin_delayed_busy(self, label_text: str, minimum_delay_sec: float = 2.0) -> dict[str, object]:
+            return {
+                'start': time.time(),
+                'delay': float(minimum_delay_sec),
+                'text': str(label_text or ''),
+                'dialog': None,
+            }
+
+        def _tick_delayed_busy(self, state: Optional[dict[str, object]], text: Optional[str] = None):
+            if not isinstance(state, dict):
+                return
+            if text:
+                state['text'] = str(text)
+            dlg = state.get('dialog')
+            if dlg is None and (time.time() - float(state.get('start') or 0.0)) >= float(state.get('delay') or 2.0):
+                dlg = QProgressDialog(str(state.get('text') or self.t('Loading...')), '', 0, 0, self)
+                dlg.setCancelButton(None)
+                # Non-modal: show progress hint without freezing the whole UI.
+                dlg.setWindowModality(Qt.WindowModality.NonModal)
+                dlg.setMinimumWidth(420)
+                bar = QProgressBar(dlg)
+                bar.setRange(0, 0)
+                bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                dlg.setBar(bar)
+                dlg.setMinimumDuration(0)
+                dlg.setAutoClose(False)
+                dlg.setAutoReset(False)
+                dlg.show()
+                state['dialog'] = dlg
+            elif dlg is not None and text:
+                try:
+                    dlg.setLabelText(str(state.get('text') or ''))
+                except Exception:
+                    pass
+            try:
+                QCoreApplication.processEvents()
+            except Exception:
+                pass
+
+        def _end_delayed_busy(self, state: Optional[dict[str, object]]):
+            if not isinstance(state, dict):
+                return
+            dlg = state.get('dialog')
+            if dlg is not None:
+                try:
+                    dlg.close()
+                    dlg.deleteLater()
+                except Exception:
+                    pass
