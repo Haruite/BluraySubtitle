@@ -365,6 +365,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                 'ep_duration': '单集时长',
                 'm2ts_file': 'm2ts 文件',
                 'language': '语言',
+                'sub_language': 'sub_language',
                 'lang': '语言',
                 'track_number': '轨道号',
                 'track_uid': 'UID',

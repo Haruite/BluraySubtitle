@@ -38,7 +38,11 @@ class SubtitleFolderScanWorker(QObject):
         try:
             if self.mode == 2:
                 root = self.subtitle_folder.strip()
-                mkv_paths = [os.path.normpath(os.path.join(root, f)) for f in os.listdir(root) if f.endswith('.mkv')]
+                mkv_paths = [
+                    os.path.normpath(os.path.join(root, f))
+                    for f in os.listdir(root)
+                    if f.lower().endswith('.mkv') and os.path.isfile(os.path.join(root, f))
+                ]
                 mkv_paths.sort()
                 rows = []
                 total = len(mkv_paths) or 1

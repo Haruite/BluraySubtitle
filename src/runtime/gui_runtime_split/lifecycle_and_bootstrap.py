@@ -1,4 +1,14 @@
 """Target module for lifecycle/bootstrap methods of `BluraySubtitleGUI`."""
+
+if __name__ == "__main__" and __package__ is None:
+    import sys
+
+    sys.stderr.write(
+        "This file is a mixin, not an entry point. From the repository root run:\n"
+        "  python -m src.main\n"
+    )
+    raise SystemExit(1)
+
 import os
 import time
 from typing import Optional
@@ -168,10 +178,18 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
 
             bdmv = QGroupBox()
             bdmv.setProperty("noTitle", True)
-            v_layout = QVBoxLayout()
-            v_layout.setContentsMargins(8, 2, 8, 6)
-            v_layout.setSpacing(4)
-            bdmv.setLayout(v_layout)
+            bdmv_top = QVBoxLayout()
+            bdmv_top.setContentsMargins(8, 2, 8, 6)
+            bdmv_top.setSpacing(4)
+            bdmv.setLayout(bdmv_top)
+
+            self.bdmv_path_row = QWidget(self)
+            bdmv_path_outer = QHBoxLayout(self.bdmv_path_row)
+            bdmv_path_outer.setContentsMargins(0, 0, 0, 0)
+            bdmv_path_outer.setSpacing(4)
+            self.bdmv_path_label = QLabel('选择BDMV所在的文件夹', self)
+            bdmv_path_outer.addWidget(self.bdmv_path_label)
+
             bluray_path_box = CustomBox('原盘', self)
             bluray_path_box.setProperty("noMargin", True)
             self.bluray_path_box = bluray_path_box
@@ -179,18 +197,18 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             h_layout.setContentsMargins(0, 0, 0, 0)
             h_layout.setSpacing(4)
             bluray_path_box.setLayout(h_layout)
-            self.label1 = QLabel("选择原盘所在的文件夹", self)
             self.bdmv_folder_path = QLineEdit()
             self.bdmv_folder_path.setMinimumWidth(200)
             self.bdmv_folder_path.setAcceptDrops(False)
-            button1 = QPushButton("选择")
+            button1 = QPushButton('选择')
             button1.clicked.connect(self.select_bdmv_folder)
-            button1_open = QPushButton("打开")
+            button1_open = QPushButton('打开')
             button1_open.clicked.connect(lambda _=None: self.open_folder_path(self.bdmv_folder_path.text()))
             h_layout.addWidget(self.bdmv_folder_path)
             h_layout.addWidget(button1)
             h_layout.addWidget(button1_open)
-            v_layout.addWidget(bluray_path_box)
+            bdmv_path_outer.addWidget(bluray_path_box, 1)
+            self.layout.addWidget(self.bdmv_path_row)
 
             remux_path_box = CustomBox('Remux', self)
             remux_path_box.setProperty("noMargin", True)
@@ -203,16 +221,16 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             self.remux_folder_path.setAcceptDrops(False)
             self.remux_folder_path.textChanged.connect(
                 lambda _=None: QTimer.singleShot(150, self._populate_encode_from_remux_folder))
-            remux_btn = QPushButton("选择")
+            remux_btn = QPushButton('选择')
             remux_btn.clicked.connect(self.select_remux_folder)
-            remux_btn_open = QPushButton("打开")
+            remux_btn_open = QPushButton('打开')
             remux_btn_open.clicked.connect(lambda _=None: self.open_folder_path(self.remux_folder_path.text()))
             remux_layout.addWidget(self.remux_folder_path)
             remux_layout.addWidget(remux_btn)
             remux_layout.addWidget(remux_btn_open)
             self.remux_path_box = remux_path_box
             self.remux_path_box.setVisible(False)
-            v_layout.addWidget(remux_path_box)
+            bdmv_top.addWidget(remux_path_box)
 
             label1_container = QWidget(self)
             self.label1_container = label1_container
@@ -220,6 +238,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             label1_layout.setContentsMargins(0, 0, 0, 0)
             label1_layout.setSpacing(0)
             label1_container.setLayout(label1_layout)
+            self.label1 = QLabel('选择文件夹', self)
             self.label1.setText(self.t('选择文件夹'))
 
             encode_source_row = QWidget(self)
@@ -249,6 +268,11 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             self.encode_source_remux_radio.toggled.connect(on_encode_source_changed)
             label1_layout.addWidget(bdmv)
 
+            bdmv_body = QWidget(bdmv)
+            v_layout = QVBoxLayout(bdmv_body)
+            v_layout.setContentsMargins(0, 0, 0, 0)
+            v_layout.setSpacing(4)
+
             select_all_tracks_row = QWidget(self)
             select_all_tracks_layout = QHBoxLayout()
             select_all_tracks_layout.setContentsMargins(0, 0, 0, 0)
@@ -272,6 +296,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             self.bdmv_folder_path.textChanged.connect(self.on_bdmv_folder_path_change)
             v_layout.addWidget(self.table1)
             v_layout.setStretch(v_layout.indexOf(self.table1), 1)
+            bdmv_top.addWidget(bdmv_body, 1)
             try:
                 idx = self.layout.indexOf(self.episode_mode_row)
                 if idx >= 0:
@@ -283,37 +308,43 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
 
             subtitle = QGroupBox()
             subtitle.setProperty("noTitle", True)
-            v_layout = QVBoxLayout()
-            v_layout.setContentsMargins(8, 2, 8, 6)
-            v_layout.setSpacing(4)
-            subtitle.setLayout(v_layout)
+            subtitle_inner_layout = QVBoxLayout()
+            subtitle_inner_layout.setContentsMargins(8, 2, 8, 6)
+            subtitle_inner_layout.setSpacing(4)
+            subtitle.setLayout(subtitle_inner_layout)
+
+            label2_container = QWidget(self)
+            self.label2_container = label2_container
+            self._label2_outer_layout = QVBoxLayout()
+            self._label2_outer_layout.setContentsMargins(0, 0, 0, 0)
+            self._label2_outer_layout.setSpacing(0)
+            label2_container.setLayout(self._label2_outer_layout)
+
+            self.subtitle_path_row = QWidget(label2_container)
+            subtitle_path_outer = QHBoxLayout(self.subtitle_path_row)
+            subtitle_path_outer.setContentsMargins(8, 2, 8, 2)
+            subtitle_path_outer.setSpacing(4)
+            self.label2 = QLabel('选择单集字幕所在的文件夹', self)
+            subtitle_path_outer.addWidget(self.label2)
+
             subtitle_path_box = CustomBox('字幕', self)
             subtitle_path_box.setProperty("noMargin", True)
             h_layout = QHBoxLayout()
             h_layout.setContentsMargins(0, 0, 0, 0)
             h_layout.setSpacing(4)
             subtitle_path_box.setLayout(h_layout)
-            self.label2 = QLabel("选择单集字幕所在的文件夹：", self)
             self.subtitle_folder_path = QLineEdit()
             self.subtitle_folder_path.setMinimumWidth(200)
             self.subtitle_folder_path.setAcceptDrops(False)
-            button2 = QPushButton("选择")
+            button2 = QPushButton('选择')
             button2.clicked.connect(self.select_subtitle_folder)
-            button2_open = QPushButton("打开")
+            button2_open = QPushButton('打开')
             button2_open.clicked.connect(lambda _=None: self.open_folder_path(self.subtitle_folder_path.text()))
             h_layout.addWidget(self.subtitle_folder_path)
             h_layout.addWidget(button2)
             h_layout.addWidget(button2_open)
-            v_layout.addWidget(subtitle_path_box)
-
-            label2_container = QWidget(self)
-            self.label2_container = label2_container
-            label2_layout = QVBoxLayout()
-            label2_layout.setContentsMargins(0, 0, 0, 0)
-            label2_layout.setSpacing(0)
-            label2_container.setLayout(label2_layout)
-            label2_layout.addWidget(self.label2)
-            label2_layout.addWidget(subtitle)
+            self.subtitle_path_box = subtitle_path_box
+            subtitle_path_outer.addWidget(subtitle_path_box, 1)
 
             self.table2 = CustomTableWidget(self, self.on_subtitle_drop)
             self.table2.setObjectName('table2')
@@ -355,8 +386,12 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             self.subtitle_tables_splitter.setStretchFactor(0, 1)
             self.subtitle_tables_splitter.setStretchFactor(1, 1)
             self.subtitle_tables_splitter.setSizes([360, 360])
-            v_layout.addWidget(self.subtitle_tables_splitter)
-            v_layout.setStretch(v_layout.indexOf(self.subtitle_tables_splitter), 1)
+            subtitle_inner_layout.addWidget(self.subtitle_tables_splitter)
+            subtitle_inner_layout.setStretch(
+                subtitle_inner_layout.indexOf(self.subtitle_tables_splitter), 1)
+
+            self._subtitle_tables_host = subtitle
+            self._label2_outer_layout.addWidget(subtitle)
 
             label1_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             label2_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -442,8 +477,26 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
 
             self.setLayout(self.layout)
             self._track_selection_config: dict[str, dict[str, list[str]]] = {}
+            self._reposition_subtitle_path_box()
             self._apply_language('en')
             self._apply_theme(getattr(self, '_theme_mode', 'light'))
+
+        def _reposition_subtitle_path_box(self):
+            outer = getattr(self, '_label2_outer_layout', None)
+            row = getattr(self, 'subtitle_path_row', None)
+            host = getattr(self, '_subtitle_tables_host', None)
+            if outer is None or row is None or host is None:
+                return
+            if outer.indexOf(row) >= 0:
+                outer.removeWidget(row)
+            idx_host = outer.indexOf(host)
+            if idx_host < 0:
+                outer.insertWidget(0, row)
+                return
+            if self.get_selected_function_id() in (3, 4):
+                outer.insertWidget(idx_host + 1, row)
+            else:
+                outer.insertWidget(idx_host, row)
 
         def closeEvent(self, event):
             self.delete_default_vpy_file()
