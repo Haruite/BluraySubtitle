@@ -1171,20 +1171,14 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 if self._is_movie_mode():
                     self._refresh_movie_table2()
                 else:
-                    busy = self._begin_delayed_busy(self.t('Loading...'))
-                    try:
-                        self._tick_delayed_busy(busy, self.t('Regenerating configuration...'))
-                        configuration = BluraySubtitle(
-                            self.bdmv_folder_path.text(),
-                            [],
-                            self.checkbox1.isChecked(),
-                            None,
-                            approx_episode_duration_seconds=self._get_approx_episode_duration_seconds()
-                        ).generate_configuration(self.table1)
-                        self._tick_delayed_busy(busy, self.t('Updating table rows...'))
-                        self.on_configuration(configuration)
-                    finally:
-                        self._end_delayed_busy(busy)
+                    configuration = BluraySubtitle(
+                        self.bdmv_folder_path.text(),
+                        [],
+                        self.checkbox1.isChecked(),
+                        None,
+                        approx_episode_duration_seconds=self._get_approx_episode_duration_seconds()
+                    ).generate_configuration(self.table1)
+                    self.on_configuration(configuration)
 
         def remux_episodes(self):
             output_folder = os.path.normpath(self.output_folder_path.text().strip()) if hasattr(self,

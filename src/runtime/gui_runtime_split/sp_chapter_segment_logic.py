@@ -1016,6 +1016,8 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                 if hasattr(self, 'table3'):
                     self.table3.setRowCount(0)
                 return
+            if self._is_movie_mode():
+                return
             try:
                 if self.table3.columnCount() != len(ENCODE_SP_LABELS):
                     self.table3.setColumnCount(len(ENCODE_SP_LABELS))
