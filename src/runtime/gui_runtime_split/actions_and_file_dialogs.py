@@ -178,8 +178,11 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     self._subtitle_scan_progress_dialog = None
                 if getattr(self, '_subtitle_scan_thread', None):
                     try:
+                        t_wait = time.perf_counter()
+                        print('[ShutdownDebug] subtitle_scan_thread.quit()')
                         self._subtitle_scan_thread.quit()
                         self._subtitle_scan_thread.wait()
+                        print(f"[ShutdownDebug] subtitle_scan_thread.wait() done in {(time.perf_counter() - t_wait) * 1000:.1f} ms")
                         self._subtitle_scan_thread.deleteLater()
                     except Exception:
                         pass
@@ -778,8 +781,11 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     self._reset_exe_button()
                     self.exe_button.setEnabled(True)
                     if hasattr(self, '_encode_thread') and self._encode_thread:
+                        t_wait = time.perf_counter()
+                        print('[ShutdownDebug] encode_thread(remux-mode).quit()')
                         self._encode_thread.quit()
                         self._encode_thread.wait()
+                        print(f"[ShutdownDebug] encode_thread(remux-mode).wait() done in {(time.perf_counter() - t_wait) * 1000:.1f} ms")
                         self._encode_thread.deleteLater()
                         self._encode_thread = None
                     if hasattr(self, '_encode_worker') and self._encode_worker:
@@ -912,8 +918,11 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 self._reset_exe_button()
                 self.exe_button.setEnabled(True)
                 if hasattr(self, '_encode_thread') and self._encode_thread:
+                    t_wait = time.perf_counter()
+                    print('[ShutdownDebug] encode_thread(bdmv-mode).quit()')
                     self._encode_thread.quit()
                     self._encode_thread.wait()
+                    print(f"[ShutdownDebug] encode_thread(bdmv-mode).wait() done in {(time.perf_counter() - t_wait) * 1000:.1f} ms")
                     self._encode_thread.deleteLater()
                     self._encode_thread = None
                 if hasattr(self, '_encode_worker') and self._encode_worker:
@@ -1010,8 +1019,11 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     self._current_cancel_event = None
                     self._reset_exe_button()
                     if hasattr(self, '_merge_thread') and self._merge_thread:
+                        t_wait = time.perf_counter()
+                        print('[ShutdownDebug] merge_thread(movie).quit()')
                         self._merge_thread.quit()
                         self._merge_thread.wait()
+                        print(f"[ShutdownDebug] merge_thread(movie).wait() done in {(time.perf_counter() - t_wait) * 1000:.1f} ms")
                         self._merge_thread.deleteLater()
                         self._merge_thread = None
                     if hasattr(self, '_merge_worker') and self._merge_worker:
@@ -1096,8 +1108,11 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 self._current_cancel_event = None
                 self._reset_exe_button()
                 if hasattr(self, '_merge_thread') and self._merge_thread:
+                    t_wait = time.perf_counter()
+                    print('[ShutdownDebug] merge_thread(series).quit()')
                     self._merge_thread.quit()
                     self._merge_thread.wait()
+                    print(f"[ShutdownDebug] merge_thread(series).wait() done in {(time.perf_counter() - t_wait) * 1000:.1f} ms")
                     self._merge_thread.deleteLater()
                     self._merge_thread = None
                 if hasattr(self, '_merge_worker') and self._merge_worker:

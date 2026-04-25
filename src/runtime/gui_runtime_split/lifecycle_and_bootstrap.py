@@ -452,7 +452,9 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
                     force_remove_file('info.json')
             except Exception:
                 pass
-            return super().closeEvent(event)
+            event.accept()
+            print('[BluraySubtitle] window close accepted', flush=True)
+            return
 
         def _cleanup_info_json_if_needed(self):
             try:

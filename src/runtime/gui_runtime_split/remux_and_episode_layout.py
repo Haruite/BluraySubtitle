@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import QTableWidget, QToolButton, QPlainTextEdit, QWidget, 
 
 from src.bdmv import Chapter
 from src.core import BDMV_LABELS, find_mkvtoolinx, MKV_MERGE_PATH, mkvtoolnix_ui_language_arg, ENCODE_REMUX_LABELS, \
-    ENCODE_REMUX_SP_LABELS, SUBTITLE_LABELS, ENCODE_LABELS, REMUX_LABELS, CURRENT_UI_LANGUAGE
+    ENCODE_REMUX_SP_LABELS, SUBTITLE_LABELS, ENCODE_LABELS, REMUX_LABELS, CURRENT_UI_LANGUAGE, ENCODE_SP_LABELS
 from src.domain import Subtitle
 from src.exports.utils import get_time_str, get_index_to_m2ts_and_offset, print_exc_terminal, get_folder_size
 from src.runtime.gui_runtime_classes.file_path_table_widget_item import FilePathTableWidgetItem
@@ -807,6 +807,9 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                     None,
                     approx_episode_duration_seconds=self._get_approx_episode_duration_seconds(),
                 )
+                prev_folder_mains = self._folder_set_mains_from_configuration(last_cfg)
+                cur_folder_mains = self._folder_set_mains_from_selected(selected)
+                affected = self._folders_with_changed_main_selection(selected, last_cfg)
                 if sub_files or not last_cfg or not prev_set:
                     full_cfg = bs.generate_configuration_from_selected_mpls(selected)
                     configuration = {
@@ -814,7 +817,6 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                         for i, (_, c) in enumerate(sorted((full_cfg or {}).items(), key=lambda kv: int(kv[0])))
                     }
                 else:
-                    affected = self._folders_with_changed_main_selection(selected, last_cfg)
                     if not affected:
                         configuration = {
                             i: dict(c) if isinstance(c, dict) else c
@@ -849,12 +851,80 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                         BluraySubtitle._configuration_default_chapter_segments_checked(configuration)
                 self._selected_main_mpls_prev = current_set
                 if configuration:
-                    self.on_configuration(configuration, update_sp_table=True)
+                    # Keep table2 regeneration, but reconnect main-toggle path to incremental table3 updates.
+                    self.on_configuration(configuration, update_sp_table=False)
+                    # Recompute SP rows only for affected volumes using existing incremental methods.
+                    for folder_norm in sorted(affected):
+                        bdmv_index = self._bdmv_index_for_table1_folder_norm(folder_norm)
+                        if bdmv_index <= 0:
+                            continue
+                        prev_mains = set(prev_folder_mains.get(folder_norm, set()))
+                        cur_mains = set(cur_folder_mains.get(folder_norm, set()))
+                        to_add_sp = sorted(prev_mains - cur_mains)
+                        to_remove_sp = sorted(cur_mains - prev_mains)
+
+                        for mpls_no_ext in to_add_sp:
+                            try:
+                                self._add_or_update_table3_mpls_as_sp(int(bdmv_index), str(mpls_no_ext) + '.mpls')
+                            except Exception:
+                                print_exc_terminal()
+                        for mpls_no_ext in to_remove_sp:
+                            try:
+                                self._remove_table3_rows_for_main_mpls(int(bdmv_index), str(mpls_no_ext) + '.mpls')
+                            except Exception:
+                                print_exc_terminal()
+                    try:
+                        self._recompute_sp_output_names()
+                    except Exception:
+                        pass
                 else:
                     self.table2.setRowCount(0)
                     self.refresh_sp_table({})
             except Exception:
                 print_exc_terminal()
+
+        def _remove_table3_rows_for_main_mpls(self, bdmv_index: int, mpls_path: str):
+            """Remove table3 rows that correspond to a now-selected main MPLS."""
+            if not hasattr(self, 'table3') or not self.table3:
+                return
+            if self.table3.columnCount() <= 0:
+                return
+            try:
+                bdmv_col = ENCODE_SP_LABELS.index('bdmv_index')
+                mpls_col = ENCODE_SP_LABELS.index('mpls_file')
+                m2ts_col = ENCODE_SP_LABELS.index('m2ts_file')
+                out_col = ENCODE_SP_LABELS.index('output_name')
+            except Exception:
+                return
+            try:
+                chapter = Chapter(mpls_path)
+                idx_to_m2ts, _ = get_index_to_m2ts_and_offset(chapter)
+                ordered: list[str] = []
+                for k in sorted(idx_to_m2ts.keys()):
+                    v = str(idx_to_m2ts.get(k) or '').strip()
+                    if v and v not in ordered:
+                        ordered.append(v)
+                target_m2ts = ','.join(ordered)
+            except Exception:
+                target_m2ts = ''
+            target_mpls = os.path.basename(mpls_path)
+            for r in range(self.table3.rowCount() - 1, -1, -1):
+                try:
+                    rb = int(self.table3.item(r, bdmv_col).text().strip()) if self.table3.item(r, bdmv_col) else 0
+                except Exception:
+                    rb = 0
+                if rb != int(bdmv_index):
+                    continue
+                rm = self.table3.item(r, mpls_col).text().strip() if self.table3.item(r, mpls_col) else ''
+                if rm != target_mpls:
+                    continue
+                out_item = self.table3.item(r, out_col)
+                if self._is_auto_chapter_segment_sp_item(out_item):
+                    continue
+                r2 = self.table3.item(r, m2ts_col).text().strip() if self.table3.item(r, m2ts_col) else ''
+                if target_m2ts and r2 != target_m2ts:
+                    continue
+                self.table3.removeRow(r)
 
         @staticmethod
         def _parse_display_time_to_seconds(s: str) -> float:
