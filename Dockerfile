@@ -60,7 +60,7 @@ RUN tar zxvf /app/R57.A12.tar.gz --strip-components=1 && \
 RUN ln -s /usr/local/lib/python3.13/site-packages/vapoursynth.so /usr/lib/python3/dist-packages/vapoursynth.so
 
 # 复制 vs scripts（zip 内无顶层目录）
-COPY ./VapourSynthScripts.zip /tmp/VapourSynthScripts.zip
+COPY ./VapourSynthScripts/VapourSynthScripts.zip /tmp/VapourSynthScripts.zip
 RUN unzip -q -o /tmp/VapourSynthScripts.zip -d /usr/local/lib/python3.13/dist-packages/ && \
     rm -f /tmp/VapourSynthScripts.zip
 

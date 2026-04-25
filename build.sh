@@ -901,9 +901,12 @@ install_vapoursynth() {
 }
 
 install_vapoursynth_scripts() {
-  local src_zip="$REPO_DIR/VapourSynthScripts.zip"
+  local src_zip="$REPO_DIR/VapourSynthScripts/VapourSynthScripts.zip"
+  if [[ ! -f "$src_zip" && -f "$REPO_DIR/VapourSynthScripts.zip" ]]; then
+    src_zip="$REPO_DIR/VapourSynthScripts.zip"
+  fi
   if [[ ! -f "$src_zip" ]]; then
-    log "未找到 VapourSynthScripts.zip，跳过安装脚本"
+    log "未找到 VapourSynthScripts zip 包，跳过安装脚本"
     return 0
   fi
 
