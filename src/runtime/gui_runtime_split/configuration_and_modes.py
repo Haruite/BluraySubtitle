@@ -23,12 +23,29 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
         def _apply_encode_input_mode_ui(self):
             if self.get_selected_function_id() != 4:
                 try:
+                    if hasattr(self, 'bdmv_path_label') and self.bdmv_path_label:
+                        self.bdmv_path_label.setText(self.t('选择BDMV所在的文件夹'))
                     if hasattr(self, 'remux_path_box') and self.remux_path_box:
                         self.remux_path_box.setVisible(False)
                     if hasattr(self, 'bluray_path_box') and self.bluray_path_box:
                         self.bluray_path_box.setVisible(True)
                     if hasattr(self, 'table1') and self.table1:
                         self.table1.setVisible(True)
+                    if hasattr(self, 'label1_container') and self.label1_container:
+                        self.label1_container.setVisible(True)
+                        self.label1_container.setMinimumHeight(0)
+                        self.label1_container.setMaximumHeight(16777215)
+                        self.label1_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+                    if hasattr(self, 'label2_container') and self.label2_container:
+                        self.label2_container.setMinimumHeight(0)
+                        self.label2_container.setMaximumHeight(16777215)
+                        self.label2_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+                    if hasattr(self, 'tables_splitter') and self.tables_splitter:
+                        total_h = max(320, self.tables_splitter.height() or self.height())
+                        half = max(160, int(total_h * 0.5))
+                        self.tables_splitter.setStretchFactor(0, 1)
+                        self.tables_splitter.setStretchFactor(1, 1)
+                        self.tables_splitter.setSizes([half, max(160, total_h - half)])
                     if hasattr(self, 'series_mode_radio') and self.series_mode_radio:
                         self.series_mode_radio.setEnabled(True)
                     if hasattr(self, 'movie_mode_radio') and self.movie_mode_radio:
@@ -51,8 +68,14 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     self.bluray_path_box.setVisible(not remux_mode)
                 if hasattr(self, 'remux_path_box') and self.remux_path_box:
                     self.remux_path_box.setVisible(remux_mode)
+                if hasattr(self, 'bdmv_path_label') and self.bdmv_path_label:
+                    self.bdmv_path_label.setText(
+                        self.t('选择remux所在文件夹') if remux_mode else self.t('选择BDMV所在的文件夹')
+                    )
                 if hasattr(self, 'table1') and self.table1:
                     self.table1.setVisible(not remux_mode)
+                if hasattr(self, 'label1_container') and self.label1_container:
+                    self.label1_container.setVisible(not remux_mode)
                 if hasattr(self, 'select_all_tracks_row') and self.select_all_tracks_row:
                     self.select_all_tracks_row.setVisible(True)
             except Exception:
@@ -61,17 +84,11 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 if hasattr(self, 'tables_splitter') and self.tables_splitter:
                     if remux_mode:
                         total_h = max(320, self.tables_splitter.height() or self.height())
-                        top_h = max(44, min(96, int(total_h * 0.12)))
+                        top_h = 0
                         if hasattr(self, 'label1_container') and self.label1_container:
-                            try:
-                                self.label1_container.adjustSize()
-                                content_h = int(self.label1_container.sizeHint().height())
-                            except Exception:
-                                content_h = top_h
-                            top_h = max(40, min(120, content_h + 2))
-                            self.label1_container.setMinimumHeight(top_h)
-                            self.label1_container.setMaximumHeight(top_h)
-                            self.label1_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+                            self.label1_container.setMinimumHeight(0)
+                            self.label1_container.setMaximumHeight(0)
+                            self.label1_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
                         if hasattr(self, 'label2_container') and self.label2_container:
                             self.label2_container.setMinimumHeight(0)
                             self.label2_container.setMaximumHeight(16777215)

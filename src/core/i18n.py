@@ -37,6 +37,7 @@ I18N_ZH_TO_EN = {
     '选择原盘所在的文件夹': 'Select the Blu-ray folder',
     '选择BDMV所在的文件夹': 'Select the BDMV folder',
     '选择 remux 所在的文件夹': 'Select the remux folder',
+    '选择remux所在文件夹': 'Select the remux folder',
     '选择文件夹': 'Select folder',
     '选择单集字幕所在的文件夹': 'Select the subtitle folder',
     '选择单集字幕所在的文件夹：': 'Select the subtitle folder:',
