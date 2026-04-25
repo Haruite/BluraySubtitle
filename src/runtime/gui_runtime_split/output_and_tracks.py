@@ -99,7 +99,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
         def _get_episode_output_names_from_table2(self) -> list[str]:
             names: list[str] = []
             function_id = self.get_selected_function_id()
-            if function_id == 3:
+            if function_id in (3, 5):
                 col = REMUX_LABELS.index('output_name')
             elif function_id == 4:
                 col = ENCODE_LABELS.index('output_name')
@@ -107,7 +107,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                 return names
             auto_name_map: dict[int, str] = {}
             try:
-                if function_id in (3, 4) and (not self._is_movie_mode()):
+                if function_id in (3, 4, 5) and (not self._is_movie_mode()):
                     conf = getattr(self, '_last_configuration_34', None)
                     if isinstance(conf, dict) and conf:
                         auto_name_map = self._build_episode_output_name_map(conf)
@@ -124,7 +124,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
         def _get_episode_subtitle_languages_from_table2(self) -> list[str]:
             langs: list[str] = []
             function_id = self.get_selected_function_id()
-            if function_id == 3:
+            if function_id in (3, 5):
                 col = REMUX_LABELS.index('language')
             elif function_id == 4:
                 col = ENCODE_LABELS.index('language')

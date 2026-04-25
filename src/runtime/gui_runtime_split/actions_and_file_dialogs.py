@@ -113,7 +113,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             elif function_id == 2:
                 mode = 2
                 title = '读取MKV中'
-            elif function_id == 3:
+            elif function_id in (3, 5):
                 mode = 3
                 title = '读取字幕中'
             else:
@@ -218,7 +218,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     self._refresh_movie_subtitle_table2(payload.get('rows') or [])
                     self._update_main_row_play_button()
                     return
-                if payload.get('mode') in (3, 4) and self._is_movie_mode():
+                if payload.get('mode') in (3, 4, 5) and self._is_movie_mode():
                     rows = payload.get('rows') or []
                     for i, (path, _dur) in enumerate(rows):
                         if i < self.table2.rowCount():
@@ -304,7 +304,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 configuration = payload.get('configuration') or {}
                 if configuration:
                     self.on_configuration(configuration)
-                elif self.get_selected_function_id() in (3, 4) and (not self._is_movie_mode()):
+                elif self.get_selected_function_id() in (3, 4, 5) and (not self._is_movie_mode()):
                     self.table2.setRowCount(0)
                     self.refresh_sp_table({})
 
@@ -1317,6 +1317,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 self.remux_episodes()
             if function_id == 4:
                 self.encode_bluray()
+            if function_id == 5:
+                QMessageBox.information(self, " ", self.t("原盘DIY功能暂未实现"))
 
         def on_button_click(self, mpls_path: str, is_main_at_build: bool = True, bdmv_index: int = 0):
             is_main = self._is_mpls_currently_main(mpls_path)
@@ -1455,7 +1457,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 progress.show()
                 QCoreApplication.processEvents()
                 try:
-                    if self.get_selected_function_id() in (3, 4):
+                    if self.get_selected_function_id() in (3, 4, 5):
                         progress.setLabelText(self.t('Regenerating configuration...'))
                         QCoreApplication.processEvents()
                         cfg = self._generate_configuration_from_ui_inputs()
@@ -1463,7 +1465,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 except Exception:
                     self._show_error_dialog(traceback.format_exc())
                 try:
-                    if self.get_selected_function_id() in (3, 4):
+                    if self.get_selected_function_id() in (3, 4, 5):
                         progress.setLabelText(self.t('Refreshing SP table...'))
                         QCoreApplication.processEvents()
                         self._sync_chapter_checkbox_sp_for_mpls(mpls_path, bdmv_index)
@@ -1506,7 +1508,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     if play_btn:
                         play_btn.setProperty('action', 'preview' if (checked and subtitle) else 'play')
                         play_btn.setText(self.t('preview') if (checked and subtitle) else self.t('play'))
-                    if self.get_selected_function_id() in (3, 4) and info.columnCount() > 5:
+                    if self.get_selected_function_id() in (3, 4, 5) and info.columnCount() > 5:
                         if checked:
                             btn_tracks = QToolButton()
                             btn_tracks.setText(self.t('编辑轨道'))
@@ -1516,13 +1518,13 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                             info.setCellWidget(mpls_index, 5, None)
                             info.setItem(mpls_index, 5, QTableWidgetItem(''))
                     break
-            if self.get_selected_function_id() in (3, 4):
+            if self.get_selected_function_id() in (3, 4, 5):
                 self._refresh_track_selection_config_for_selected_main()
                 try:
                     self._refresh_table1_remux_cmds()
                 except Exception:
                     pass
-            if self.get_selected_function_id() in (3, 4) and self._is_movie_mode():
+            if self.get_selected_function_id() in (3, 4, 5) and self._is_movie_mode():
                 self._refresh_movie_table2()
             else:
                 self._resync_episode_tables_from_main_mpls_selection()
@@ -1660,10 +1662,10 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
 
         def on_subtitle_drop(self):
             try:
-                if self.get_selected_function_id() in (3, 4) and self._is_movie_mode():
+                if self.get_selected_function_id() in (3, 4, 5) and self._is_movie_mode():
                     self._refresh_movie_table2()
                     return
-                if self.get_selected_function_id() in (3, 4):
+                if self.get_selected_function_id() in (3, 4, 5):
                     sub_files = [self.table2.item(sub_index, 0).text() for sub_index in range(self.table2.rowCount())
                                  if self.table2.item(sub_index, 0)]
                 else:
@@ -1768,7 +1770,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                         self.table2.setItem(i, 1, QTableWidgetItem(get_time_str(MKV(item.text()).get_duration())))
                 return
             else:
-                sort_col = 0 if (self.get_selected_function_id() in (3, 4)) else 1
+                sort_col = 0 if (self.get_selected_function_id() in (3, 4, 5)) else 1
                 if logicalIndex != sort_col:
                     return
 
@@ -1785,11 +1787,11 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                             self.table2.setItem(i, SUBTITLE_LABELS.index('sub_duration'),
                                                 QTableWidgetItem(get_time_str(Subtitle(item.text()).max_end_time())))
 
-                if self.get_selected_function_id() in (3, 4) and self._is_movie_mode():
+                if self.get_selected_function_id() in (3, 4, 5) and self._is_movie_mode():
                     return
 
                 # Rebuild configuration after sorting
-                if self.get_selected_function_id() in (3, 4):
+                if self.get_selected_function_id() in (3, 4, 5):
                     sub_files = [self.table2.item(sub_index, 0).text() for sub_index in range(self.table2.rowCount())
                                  if self.table2.item(sub_index, 0) and self.table2.item(sub_index, 0).text()]
                 else:

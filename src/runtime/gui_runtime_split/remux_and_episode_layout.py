@@ -530,7 +530,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
 
         def _refresh_movie_table2(self):
             function_id = self.get_selected_function_id()
-            if function_id not in (3, 4):
+            if function_id not in (3, 4, 5):
                 return
             selected_mpls = self.get_selected_mpls_no_ext()
             labels = ENCODE_LABELS if function_id == 4 else REMUX_LABELS
@@ -656,7 +656,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 self.table2.setSortingEnabled(old_sorting)
 
             self._movie_configuration = configuration
-            if function_id in (3, 4):
+            if function_id in (3, 4, 5):
                 self.refresh_sp_table(configuration)
             self.table2.resizeColumnsToContents()
             self._resize_table_columns_for_language(self.table2)
@@ -725,7 +725,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             if not hasattr(self, 'table2') or not self.table2:
                 return
             function_id = self.get_selected_function_id()
-            if function_id not in (3, 4):
+            if function_id not in (3, 4, 5):
                 return
             labels = ENCODE_LABELS if function_id == 4 else REMUX_LABELS
             if 'bdmv_index' not in labels:
@@ -776,7 +776,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
 
         def _resync_episode_tables_from_main_mpls_selection(self) -> None:
             """After main MPLS toggles, refresh only affected main-mpls configuration."""
-            if self.get_selected_function_id() not in (3, 4) or self._is_movie_mode():
+            if self.get_selected_function_id() not in (3, 4, 5) or self._is_movie_mode():
                 return
             try:
                 selected = self.get_selected_mpls_no_ext()
@@ -1067,7 +1067,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                             table_widget = QTableWidget()
                             self._set_compact_table(table_widget, row_height=20, header_height=20)
                             info_headers = ['mpls_file', 'duration', 'chapters', 'main', 'play']
-                            if self.get_selected_function_id() in (3, 4):
+                            if self.get_selected_function_id() in (3, 4, 5):
                                 info_headers.append('tracks')
                             table_widget.setColumnCount(len(info_headers))
                             self._set_table_headers(table_widget, info_headers)
@@ -1109,7 +1109,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                                 btn3.setProperty('action', 'play')
                                 btn3.clicked.connect(partial(self.on_button_play, mpls_path, btn3))
                                 table_widget.setCellWidget(mpls_n, 4, btn3)
-                                if self.get_selected_function_id() in (3, 4):
+                                if self.get_selected_function_id() in (3, 4, 5):
                                     if mpls_path == selected_mpls:
                                         btn4 = QToolButton()
                                         btn4.setText(self.t('编辑轨道'))
@@ -1124,7 +1124,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                             self.table1.setItem(i, 0, FilePathTableWidgetItem(os.path.normpath(root)))
                             self.table1.setItem(i, 1, QTableWidgetItem(get_folder_size(root)))
                             self.table1.setCellWidget(i, 2, table_widget)
-                            if self.get_selected_function_id() in (3, 4):
+                            if self.get_selected_function_id() in (3, 4, 5):
                                 resolved_bdmv_index = self._resolve_bdmv_index_for_main_mpls(selected_mpls, i + 1)
                                 cmd_text = self._build_main_remux_cmd_template(selected_mpls, resolved_bdmv_index, root)
                                 self.table1.setCellWidget(i, BDMV_LABELS.index('remux_cmd'),
@@ -1136,7 +1136,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                             if (time.time() - start_ts) >= 2.0:
                                 QCoreApplication.processEvents()
                     self.table1.resizeColumnsToContents()
-                    if self.get_selected_function_id() in (3, 4):
+                    if self.get_selected_function_id() in (3, 4, 5):
                         self.table1.setColumnWidth(2, 620 if getattr(self, '_language_code',
                                                                      CURRENT_UI_LANGUAGE) == 'zh' else 560)
                         self.table1.setColumnWidth(3, 420 if getattr(self, '_language_code',
@@ -1164,10 +1164,10 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                     self.table1.setColumnCount(len(BDMV_LABELS))
                     self._set_table_headers(self.table1, BDMV_LABELS)
                     self.table1.setRowCount(0)
-            if bdmv_path and table_ok and self.get_selected_function_id() in (3, 4):
+            if bdmv_path and table_ok and self.get_selected_function_id() in (3, 4, 5):
                 self._refresh_track_selection_config_for_selected_main()
             self.altered = True
-            if self.get_selected_function_id() in (3, 4) and bdmv_path and table_ok:
+            if self.get_selected_function_id() in (3, 4, 5) and bdmv_path and table_ok:
                 if self._is_movie_mode():
                     self._refresh_movie_table2()
                 else:

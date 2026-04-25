@@ -528,7 +528,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     col = SUBTITLE_LABELS.index('path')
                 elif function_id == 2:
                     col = MKV_LABELS.index('path')
-                elif function_id in (3, 4):
+                elif function_id in (3, 4, 5):
                     labels = ENCODE_LABELS if function_id == 4 else REMUX_LABELS
                     col = labels.index('sub_path')
                 else:
@@ -736,7 +736,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                 self.table3.removeRow(r)
 
         def _run_chapter_combo_update(self):
-            if self.get_selected_function_id() not in (3, 4):
+            if self.get_selected_function_id() not in (3, 4, 5):
                 return
             try:
                 forced = getattr(self, '_chapter_combo_force_mode', None)
@@ -835,7 +835,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             return out
 
         def _sync_chapter_checkbox_sp_for_mpls(self, mpls_path: str, bdmv_index: int):
-            if self.get_selected_function_id() not in (3, 4):
+            if self.get_selected_function_id() not in (3, 4, 5):
                 return
             path = mpls_path if str(mpls_path).lower().endswith('.mpls') else f'{mpls_path}.mpls'
             if not os.path.exists(path):
@@ -847,7 +847,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                 self._add_sp_entries_for_unchecked_segments(path, segments, bdmv_index, c2m)
 
         def _sync_chapter_checkbox_sp_rows_all_volumes(self, configuration: dict[int, dict[str, int | str]]):
-            if self.get_selected_function_id() not in (3, 4) or not configuration:
+            if self.get_selected_function_id() not in (3, 4, 5) or not configuration:
                 return
             selected_mpls = self.get_selected_mpls_no_ext()
             if not selected_mpls:
@@ -929,7 +929,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             return segments, chapter_to_m2ts
 
         def on_chapter_combo(self, subtitle_index: int):
-            if self.get_selected_function_id() in (3, 4):
+            if self.get_selected_function_id() in (3, 4, 5):
                 if str(getattr(self, '_chapter_change_reason', '') or '') != 'end':
                     self._chapter_change_reason = 'start'
                 labels = ENCODE_LABELS if self.get_selected_function_id() == 4 else REMUX_LABELS
@@ -1012,7 +1012,35 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
 
         def refresh_sp_table(self, configuration: dict[int, dict[str, int | str]]):
             function_id = self.get_selected_function_id()
-            if function_id not in (3, 4):
+            if function_id == 5:
+                # DIY mode keeps remux-like table1/table2 only; no SP/table3 workflow.
+                try:
+                    if hasattr(self, '_sp_scan_cancel_event') and self._sp_scan_cancel_event:
+                        self._sp_scan_cancel_event.set()
+                except Exception:
+                    pass
+                try:
+                    if hasattr(self, '_sp_scan_progress_show_timer') and self._sp_scan_progress_show_timer:
+                        self._sp_scan_progress_show_timer.stop()
+                except Exception:
+                    pass
+                try:
+                    if hasattr(self, '_sp_scan_progress_dialog') and self._sp_scan_progress_dialog:
+                        self._sp_scan_progress_dialog.close()
+                        self._sp_scan_progress_dialog.deleteLater()
+                except Exception:
+                    pass
+                self._sp_scan_progress_dialog = None
+                self._sp_scan_progress_bar = None
+                self._sp_scan_progress_show_timer = None
+                self._sp_scan_progress_rows_seen = set()
+                self._sp_scan_progress_total = 0
+                self._sp_scan_progress_done = 0
+                self._sp_scan_in_progress = False
+                if hasattr(self, 'table3'):
+                    self.table3.setRowCount(0)
+                return
+            if function_id not in (3, 4, 5):
                 if hasattr(self, 'table3'):
                     self.table3.setRowCount(0)
                 return
