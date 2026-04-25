@@ -230,7 +230,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             remux_layout.addWidget(remux_btn_open)
             self.remux_path_box = remux_path_box
             self.remux_path_box.setVisible(False)
-            bdmv_top.addWidget(remux_path_box)
+            bdmv_path_outer.addWidget(remux_path_box, 1)
 
             label1_container = QWidget(self)
             self.label1_container = label1_container
@@ -284,7 +284,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             select_all_tracks_layout.addWidget(self.select_all_tracks_checkbox)
             select_all_tracks_layout.addStretch(1)
             self.select_all_tracks_row = select_all_tracks_row
-            v_layout.addWidget(select_all_tracks_row)
+            self.layout.addWidget(select_all_tracks_row)
 
             self.table1 = QTableWidget()
             self.table1.setObjectName('table1')
