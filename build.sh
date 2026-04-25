@@ -152,8 +152,8 @@ ensure_sudo_once() {
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO_DIR"
 
-if [[ ! -f "$REPO_DIR/BluraySubtitle.py" ]]; then
-  die "请在项目根目录运行（需要存在 BluraySubtitle.py）"
+if [[ ! -d "$REPO_DIR/src" || ! -f "$REPO_DIR/src/main.py" ]]; then
+  die "请在项目根目录运行（需要存在 src/main.py）"
 fi
 
 is_remote_ssh() {
@@ -901,10 +901,15 @@ install_vapoursynth() {
 }
 
 install_vapoursynth_scripts() {
-  local src_dir="$REPO_DIR/VapourSynthScripts"
-  if [[ ! -d "$src_dir" ]]; then
-    log "未找到 VapourSynthScripts 目录，跳过安装脚本"
+  local src_zip="$REPO_DIR/VapourSynthScripts.zip"
+  if [[ ! -f "$src_zip" ]]; then
+    log "未找到 VapourSynthScripts.zip，跳过安装脚本"
     return 0
+  fi
+
+  if ! command -v unzip >/dev/null 2>&1; then
+    apt_update
+    apt_install unzip || die "安装 unzip 失败"
   fi
 
   local py_ver
@@ -912,13 +917,18 @@ install_vapoursynth_scripts() {
   local dst_dir="/usr/local/lib/python${py_ver}/dist-packages"
   sudo mkdir -p "$dst_dir"
 
+  local tmp_dir
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' RETURN
+  unzip -q -o "$src_zip" -d "$tmp_dir" || die "解压 VapourSynthScripts.zip 失败"
+
   local copied=0
   while IFS= read -r -d '' file; do
     sudo cp -f "$file" "$dst_dir/" || die "复制脚本失败：$file"
     copied=$((copied + 1))
-  done < <(find "$src_dir" -maxdepth 1 -type f -name "*.py" -print0)
+  done < <(find "$tmp_dir" -maxdepth 1 -type f -name "*.py" -print0)
 
-  log "已复制 VapourSynthScripts 脚本到 ${dst_dir}（数量：${copied}）"
+  log "已从 VapourSynthScripts.zip 复制脚本到 ${dst_dir}（数量：${copied}）"
 }
 
 install_vapoursynth_editor() {

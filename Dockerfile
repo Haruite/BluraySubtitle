@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
     python3-venv \
+    unzip \
     ffmpeg \
     wget \
     fonts-wqy-microhei \
@@ -58,8 +59,10 @@ RUN tar zxvf /app/R57.A12.tar.gz --strip-components=1 && \
     ldconfig
 RUN ln -s /usr/local/lib/python3.13/site-packages/vapoursynth.so /usr/lib/python3/dist-packages/vapoursynth.so
 
-# 复制 vs scripts
-COPY ./VapourSynthScripts/ /usr/local/lib/python3.13/dist-packages/
+# 复制 vs scripts（zip 内无顶层目录）
+COPY ./VapourSynthScripts.zip /tmp/VapourSynthScripts.zip
+RUN unzip -q -o /tmp/VapourSynthScripts.zip -d /usr/local/lib/python3.13/dist-packages/ && \
+    rm -f /tmp/VapourSynthScripts.zip
 
 # 复制 plugins
 COPY ./plugins/ /app/plugins/
