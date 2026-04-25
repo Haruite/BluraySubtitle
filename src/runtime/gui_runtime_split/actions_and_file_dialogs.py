@@ -1840,7 +1840,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
 
         def select_bdmv_folder(self):
             folder = QFileDialog.getExistingDirectory(self, self.t("选择文件夹"))
-            self.bdmv_folder_path.setText(os.path.normpath(folder))
+            if folder:
+                self.bdmv_folder_path.setText(os.path.normpath(folder))
 
         def select_output_folder(self):
             start = self.output_folder_path.text().strip() if hasattr(self, 'output_folder_path') else ''
@@ -1855,4 +1856,5 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
 
         def select_subtitle_folder(self):
             folder = QFileDialog.getExistingDirectory(self, self.t("选择文件夹"))
-            self.subtitle_folder_path.setText(os.path.normpath(folder))
+            if folder:
+                self.subtitle_folder_path.setText(os.path.normpath(folder))

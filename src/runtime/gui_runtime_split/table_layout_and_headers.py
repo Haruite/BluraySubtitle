@@ -11,7 +11,13 @@ from .gui_base import BluraySubtitleGuiBase
 class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
         def _set_table_headers(self, table: QTableWidget, keys: list[str]):
             try:
-                table.setHorizontalHeaderLabels(self._localized_headers_for_keys(keys))
+                display_keys = list(keys)
+                # For table2 (remux/encode views), show the language column as sub_language.
+                if table is getattr(self, 'table2', None) and 'language' in display_keys:
+                    function_id = self.get_selected_function_id() if hasattr(self, 'get_selected_function_id') else 0
+                    if function_id in (3, 4):
+                        display_keys = ['sub_language' if k == 'language' else k for k in display_keys]
+                table.setHorizontalHeaderLabels(self._localized_headers_for_keys(display_keys))
             except Exception:
                 pass
 
@@ -125,20 +131,28 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
                         desired = min(fixed_limit, int(max_w + 24))
                         table.setColumnWidth(col, max(60, desired))
                 elif table is getattr(self, 'table3', None):
-                    col = ENCODE_SP_LABELS.index('output_name')
                     header = table.horizontalHeader()
-                    header.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
+                    # Keep output name readable but bounded.
+                    col_output = ENCODE_SP_LABELS.index('output_name')
+                    header.setSectionResizeMode(col_output, QHeaderView.ResizeMode.Fixed)
                     fixed_limit = 160
                     fm_h = QFontMetrics(header.font())
-                    header_item = table.horizontalHeaderItem(col)
+                    header_item = table.horizontalHeaderItem(col_output)
                     max_w = fm_h.horizontalAdvance(header_item.text()) if header_item and header_item.text() else 0
                     fm_c = QFontMetrics(table.font())
                     for r in range(table.rowCount()):
-                        it = table.item(r, col)
+                        it = table.item(r, col_output)
                         if it and it.text():
                             max_w = max(max_w, fm_c.horizontalAdvance(it.text()))
                     desired = min(fixed_limit, int(max_w + 24))
-                    table.setColumnWidth(col, max(60, desired))
+                    table.setColumnWidth(col_output, max(60, desired))
+
+                    # Make m2ts_file column fixed-width and wrap long file lists.
+                    col_m2ts = ENCODE_SP_LABELS.index('m2ts_file')
+                    header.setSectionResizeMode(col_m2ts, QHeaderView.ResizeMode.Fixed)
+                    table.setColumnWidth(col_m2ts, 220)
+                    table.setWordWrap(True)
+                    table.resizeRowsToContents()
             except Exception:
                 pass
 

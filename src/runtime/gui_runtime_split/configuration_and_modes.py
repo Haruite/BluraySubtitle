@@ -929,7 +929,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 QTimer.singleShot(0, self.ensure_default_vpy_file)
 
             if function_id == 1:
-                self.label2.setText(self.t("选择单集字幕所在的文件夹"))
+                self.label2.setText(self.t("选择字幕文件夹"))
                 self.exe_button.setText(self.t("生成字幕"))
                 self.encode_box.setVisible(False)
                 if not self.checkbox1.isVisible():
@@ -955,7 +955,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     self._set_table2_subtitle_column_order()
 
             if function_id == 2:
-                self.label2.setText(self.t("选择mkv文件所在的文件夹"))
+                self.label2.setText(self.t("选择mkv所在文件夹"))
                 self.exe_button.setText(self.t("添加章节"))
                 self.encode_box.setVisible(False)
                 if not self.checkbox1.isVisible():
@@ -983,7 +983,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             if function_id == 3:
                 if not keep_state:
                     self._geometry = self.saveGeometry()
-                self.label2.setText(self.t("选择字幕文件所在的文件夹（可选）"))
+                self.label2.setText(self.t("选择字幕文件夹（可选）"))
                 self.exe_button.setText(self.t("开始remux"))
                 self.encode_box.setVisible(False)
                 self.checkbox1.setVisible(False)
@@ -1008,7 +1008,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             if function_id == 4:
                 if not keep_state:
                     self._geometry = self.saveGeometry()
-                self.label2.setText(self.t("选择字幕文件所在的文件夹（可选）"))
+                self.label2.setText(self.t("选择字幕文件夹（可选）"))
                 self.exe_button.setText(self.t("开始压制"))
                 self.checkbox1.setVisible(False)
                 if hasattr(self, 'merge_options_row') and self.merge_options_row:
@@ -1033,6 +1033,10 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             if not keep_inputs:
                 self.bdmv_folder_path.clear()
                 self.subtitle_folder_path.clear()
+            try:
+                self._reposition_subtitle_path_box()
+            except Exception:
+                pass
             self._refresh_function_tabbar_theme()
 
         def get_selected_function_id(self) -> int:
