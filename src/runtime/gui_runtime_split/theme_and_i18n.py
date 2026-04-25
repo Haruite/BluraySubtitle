@@ -249,6 +249,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                 2: ('#14b8a6', '#0f766e'),
                 3: ('#f59e0b', '#b45309'),
                 4: ('#ef4444', '#b91c1c'),
+                5: ('#8b5cf6', '#6d28d9'),
             }.get(int(fid), ('#7c3aed', '#6d28d9'))
             tabbar.setStyleSheet(
                 "QTabBar::tab{background:#f0f3ff;color:#1f2330;border:1px solid #d6d9e6;border-bottom:none;padding:6px 10px;border-top-left-radius:6px;border-top-right-radius:6px;}"
@@ -414,7 +415,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
             try:
                 if hasattr(self, 'table1') and self.table1:
                     function_id = self.get_selected_function_id() if hasattr(self, 'get_selected_function_id') else 0
-                    if function_id in (3, 4):
+                    if function_id in (3, 4, 5):
                         self.table1.setColumnWidth(2, 620 if lang == 'zh' else 560)
                     else:
                         self.table1.setColumnWidth(2, 420 if lang == 'zh' else 370)

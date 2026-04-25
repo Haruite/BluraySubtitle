@@ -162,7 +162,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 else:
                     self.on_subtitle_folder_path_change()
                 return
-            if function_id not in (3, 4):
+            if function_id not in (3, 4, 5):
                 return
             if self._is_movie_mode():
                 self._refresh_movie_table2()
@@ -508,7 +508,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 return False
 
         def _rebuild_configuration_for_function_34(self):
-            if self.get_selected_function_id() not in (3, 4):
+            if self.get_selected_function_id() not in (3, 4, 5):
                 return
             if not self.bdmv_folder_path.text().strip():
                 return
@@ -542,7 +542,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     print(translate_text('Configuration is empty, skipping update'))
                     return
                 function_id = self.get_selected_function_id()
-                if function_id in (3, 4):
+                if function_id in (3, 4, 5):
                     if bool(update_sp_table):
                         busy = self._begin_delayed_busy(self.t('Updating table rows...'))
                     self._last_configuration_34 = configuration
@@ -809,7 +809,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     self._sync_end_chapter_min_constraints(labels)
                     self._apply_start_chapter_constraints(labels)
                     self._scroll_table_h_to_right(self.table2)
-                    if function_id in (3, 4):
+                    if function_id in (3, 4, 5):
                         if update_sp_table:
                             self._tick_delayed_busy(busy, self.t('Refreshing SP table...'))
                             self.refresh_sp_table(configuration)
@@ -883,7 +883,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 keep_inputs = True
                 keep_state = True
             function_id = self.get_selected_function_id()
-            if function_id not in (3, 4):
+            if function_id not in (3, 4, 5):
                 self._cleanup_info_json_if_needed()
 
             last_function_id = int(getattr(self, '_selected_function_id', 0) or 0)
@@ -893,12 +893,12 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             self._refresh_function_tabbar_theme()
 
             if hasattr(self, 'output_folder_row') and self.output_folder_row:
-                self.output_folder_row.setVisible(function_id in (3, 4))
+                self.output_folder_row.setVisible(function_id in (3, 4, 5))
             if hasattr(self, 'select_all_tracks_row') and self.select_all_tracks_row:
-                visible = function_id in (3, 4)
+                visible = function_id in (3, 4, 5)
                 self.select_all_tracks_row.setVisible(visible)
             if hasattr(self, 'episode_mode_row') and self.episode_mode_row:
-                self.episode_mode_row.setVisible(function_id in (1, 3, 4))
+                self.episode_mode_row.setVisible(function_id in (1, 3, 4, 5))
             if hasattr(self, 'encode_source_row') and self.encode_source_row:
                 self.encode_source_row.setVisible(function_id == 4)
             if hasattr(self, 'table3'):
@@ -921,7 +921,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 except Exception:
                     pass
 
-            if function_id in (3, 4):
+            if function_id in (3, 4, 5):
                 try:
                     if self.table1.columnCount() != len(BDMV_LABELS):
                         self.table1.setColumnCount(len(BDMV_LABELS))
@@ -953,8 +953,6 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 self.encode_box.setVisible(False)
                 if not self.checkbox1.isVisible():
                     self.checkbox1.setVisible(True)
-                    if hasattr(self, '_geometry') and self._geometry is not None:
-                        self.restoreGeometry(self._geometry)
                 self.checkbox1.setText(self.t('补全蓝光目录'))
                 if hasattr(self, 'merge_options_row') and self.merge_options_row:
                     self.merge_options_row.setVisible(True)
@@ -979,8 +977,6 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 self.encode_box.setVisible(False)
                 if not self.checkbox1.isVisible():
                     self.checkbox1.setVisible(True)
-                    if hasattr(self, '_geometry') and self._geometry is not None:
-                        self.restoreGeometry(self._geometry)
                 self.checkbox1.setText(self.t('直接编辑原文件'))
                 if hasattr(self, 'merge_options_row') and self.merge_options_row:
                     self.merge_options_row.setVisible(True)
@@ -1049,6 +1045,33 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                         self.table3.setColumnCount(len(ENCODE_SP_LABELS))
                         self._set_table_headers(self.table3, ENCODE_SP_LABELS)
 
+            if function_id == 5:
+                if not keep_state:
+                    self._geometry = self.saveGeometry()
+                self.label2.setText(self.t("选择字幕文件夹（可选）"))
+                self.exe_button.setText(self.t("开始DIY（暂未实现）"))
+                self.encode_box.setVisible(False)
+                self.checkbox1.setVisible(False)
+                if hasattr(self, 'merge_options_row') and self.merge_options_row:
+                    self.merge_options_row.setVisible(False)
+                if not keep_state:
+                    self.table1.clear()
+                    self.table1.setRowCount(0)
+                    self.table1.setColumnCount(len(BDMV_LABELS))
+                    self._set_table_headers(self.table1, BDMV_LABELS)
+                    self.table2.clear()
+                    self.table2.setRowCount(0)
+                    self.table2.setColumnCount(len(REMUX_LABELS))
+                    self._set_table_headers(self.table2, REMUX_LABELS)
+                    self._set_table2_default_column_order()
+                    if hasattr(self, 'table3'):
+                        self.table3.clear()
+                        self.table3.setRowCount(0)
+                        self.table3.setColumnCount(len(ENCODE_SP_LABELS))
+                        self._set_table_headers(self.table3, ENCODE_SP_LABELS)
+                if hasattr(self, 'table3'):
+                    self.table3.setVisible(False)
+
             if not keep_inputs:
                 self.bdmv_folder_path.clear()
                 self.subtitle_folder_path.clear()
@@ -1064,13 +1087,15 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 if tabbar is not None:
                     idx = int(tabbar.currentIndex())
                     if idx >= 0:
-                        return idx + 1
+                        order = list(getattr(self, '_function_id_order', [1, 2, 3, 4]))
+                        if idx < len(order):
+                            return int(order[idx])
             except Exception:
                 pass
             try:
-                return int(getattr(self, '_selected_function_id', 1) or 1)
+                return int(getattr(self, '_selected_function_id', 3) or 3)
             except Exception:
-                return 1
+                return 3
 
         def get_selected_mpls_no_ext(self) -> list[tuple[str, str]]:
             selected = []

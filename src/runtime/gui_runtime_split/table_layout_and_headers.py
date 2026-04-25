@@ -15,7 +15,7 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
                 # For table2 (remux/encode views), show the language column as sub_language.
                 if table is getattr(self, 'table2', None) and 'language' in display_keys:
                     function_id = self.get_selected_function_id() if hasattr(self, 'get_selected_function_id') else 0
-                    if function_id in (3, 4):
+                    if function_id in (3, 4, 5):
                         display_keys = ['sub_language' if k == 'language' else k for k in display_keys]
                 table.setHorizontalHeaderLabels(self._localized_headers_for_keys(display_keys))
             except Exception:
@@ -199,7 +199,7 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
 
         def _refresh_language_column_defaults(self):
             function_id = self.get_selected_function_id()
-            if function_id not in (3, 4) or not hasattr(self, 'table2') or not self.table2:
+            if function_id not in (3, 4, 5) or not hasattr(self, 'table2') or not self.table2:
                 return
             if function_id == 4 and getattr(self, '_encode_input_mode', 'bdmv') == 'remux':
                 labels = ENCODE_REMUX_LABELS
@@ -223,7 +223,7 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
 
         def _update_language_combo_enabled_state(self):
             function_id = self.get_selected_function_id()
-            if function_id not in (3, 4) or not hasattr(self, 'table2') or not self.table2:
+            if function_id not in (3, 4, 5) or not hasattr(self, 'table2') or not self.table2:
                 return
             if function_id == 4 and getattr(self, '_encode_input_mode', 'bdmv') == 'remux':
                 labels = ENCODE_REMUX_LABELS

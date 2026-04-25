@@ -1043,7 +1043,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             return selected_after
 
         def _refresh_track_selection_config_for_selected_main(self):
-            if self.get_selected_function_id() not in (3, 4):
+            if self.get_selected_function_id() not in (3, 4, 5):
                 return
             for mpls_path in self._get_selected_main_mpls_paths():
                 try:

@@ -106,12 +106,14 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             self.function_tabbar.setExpanding(True)
             self.function_tabbar.setMovable(False)
             self.function_tabbar.setDocumentMode(True)
-            self.function_tabbar.addTab(self.t("生成合并字幕"))
-            self.function_tabbar.addTab(self.t("给mkv添加章节"))
             self.function_tabbar.addTab(self.t("原盘remux"))
             self.function_tabbar.addTab(self.t("原盘压制"))
+            self.function_tabbar.addTab(self.t("原盘DIY"))
+            self.function_tabbar.addTab(self.t("生成合并字幕"))
+            self.function_tabbar.addTab(self.t("给mkv添加章节"))
             self.function_tabbar.setCurrentIndex(0)
-            self._selected_function_id = 1
+            self._function_id_order = [3, 4, 5, 1, 2]
+            self._selected_function_id = 3
             self.function_tabbar.currentChanged.connect(lambda _=None: self.on_select_function())
             h_layout.addWidget(self.function_tabbar)
             self.layout.addWidget(function_button)
@@ -160,7 +162,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
                 enabled = self.series_mode_radio.isChecked()
                 self.approx_episode_minutes_combo.setEnabled(enabled)
                 self._apply_episode_mode_to_table2()
-                if self.get_selected_function_id() in (3, 4):
+                if self.get_selected_function_id() in (3, 4, 5):
                     try:
                         self._refresh_table1_remux_cmds()
                     except Exception:
@@ -171,7 +173,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             update_episode_length_enabled_state()
 
             self.episode_mode_row = mode_row
-            self.episode_mode_row.setVisible(self.get_selected_function_id() in (1, 3, 4))
+            self.episode_mode_row.setVisible(self.get_selected_function_id() in (1, 3, 4, 5))
             self.approx_episode_minutes_combo.currentTextChanged.connect(
                 lambda _=None: self._rebuild_configuration_for_function_34())
             self.layout.addWidget(self.episode_mode_row)
@@ -454,7 +456,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             self._remux_cmd_refresh_timer.setSingleShot(True)
             self._remux_cmd_refresh_timer.setInterval(300)
             self._remux_cmd_refresh_timer.timeout.connect(
-                lambda: self._refresh_table1_remux_cmds() if self.get_selected_function_id() in (3, 4) else None)
+                lambda: self._refresh_table1_remux_cmds() if self.get_selected_function_id() in (3, 4, 5) else None)
             self.output_folder_path.textChanged.connect(lambda _=None: self._remux_cmd_refresh_timer.start())
             button_output = QPushButton("选择")
             button_output.clicked.connect(self.select_output_folder)
@@ -464,7 +466,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             output_path_layout.addWidget(button_output)
             output_path_layout.addWidget(button_output_open)
             self.output_folder_row = output_path_row
-            self.output_folder_row.setVisible(self.get_selected_function_id() in (3, 4))
+            self.output_folder_row.setVisible(self.get_selected_function_id() in (3, 4, 5))
             self.layout.addWidget(self.output_folder_row)
             self.exe_button = QPushButton("生成字幕")
             self.exe_button.clicked.connect(self.main)
@@ -493,7 +495,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             if idx_host < 0:
                 outer.insertWidget(0, row)
                 return
-            if self.get_selected_function_id() in (3, 4):
+            if self.get_selected_function_id() in (3, 4, 5):
                 outer.insertWidget(idx_host + 1, row)
             else:
                 outer.insertWidget(idx_host, row)
