@@ -8,6 +8,22 @@ from .gui_base import BluraySubtitleGuiBase
 
 
 class ThemeI18nMixin(BluraySubtitleGuiBase):
+        def _window_opacity_supported(self) -> bool:
+            app = QApplication.instance()
+            if not app:
+                return False
+            platform_name = (app.platformName() or '').lower()
+            # Wayland backend does not support per-window opacity in Qt.
+            return 'wayland' not in platform_name
+
+        def _set_window_opacity_if_supported(self, opacity: float):
+            if not self._window_opacity_supported():
+                return
+            try:
+                self.setWindowOpacity(opacity)
+            except Exception:
+                pass
+
         def t(self, text: str) -> str:
             return translate_text(str(text), getattr(self, '_language_code', CURRENT_UI_LANGUAGE))
 
@@ -48,7 +64,10 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
         def _refresh_opacity_controls(self):
             label = getattr(self, 'opacity_label', None)
             slider = getattr(self, 'opacity_slider', None)
-            visible = getattr(self, '_theme_mode', 'light') == 'colorful'
+            visible = (
+                getattr(self, '_theme_mode', 'light') == 'colorful'
+                and self._window_opacity_supported()
+            )
             if isinstance(label, QLabel):
                 label.setText(self.t('透明度'))
                 label.setVisible(visible)
@@ -67,10 +86,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
             if not app:
                 return
             if self._theme_mode == 'light':
-                try:
-                    self.setWindowOpacity(1.0)
-                except Exception:
-                    pass
+                self._set_window_opacity_if_supported(1.0)
                 app.setStyleSheet(
                     "QTabBar::tab:selected{background:#e6e6e6;color:#000000;border:1px solid #c8c8c8;}"
                 )
@@ -81,10 +97,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                 opacity = float(getattr(self, '_colorful_opacity', 0.94) or 0.94)
                 opacity = min(1.0, max(0.6, opacity))
                 self._colorful_opacity = opacity
-                try:
-                    self.setWindowOpacity(opacity)
-                except Exception:
-                    pass
+                self._set_window_opacity_if_supported(opacity)
                 app.setStyleSheet(
                     "QWidget{background:transparent;color:#1f2330;}"
                     "QWidget#mainWindow{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #fff3c4,stop:0.55 #fffdf3,stop:1 #eef6ff);}"
@@ -168,10 +181,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                 self._refresh_function_tabbar_theme()
                 self._refresh_opacity_controls()
                 return
-            try:
-                self.setWindowOpacity(1.0)
-            except Exception:
-                pass
+            self._set_window_opacity_if_supported(1.0)
             app.setStyleSheet(
                 "QWidget{background:#1f1f1f;color:#e6e6e6;}"
                 "QLineEdit,QPlainTextEdit,QTextEdit{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;}"
@@ -224,10 +234,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
             opacity = min(100, max(60, v)) / 100.0
             self._colorful_opacity = opacity
             if getattr(self, '_theme_mode', 'light') == 'colorful':
-                try:
-                    self.setWindowOpacity(opacity)
-                except Exception:
-                    pass
+                self._set_window_opacity_if_supported(opacity)
 
         def _refresh_function_tabbar_theme(self):
             tabbar = getattr(self, 'function_tabbar', None)
