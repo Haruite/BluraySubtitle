@@ -75,6 +75,21 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             if not folder or not os.path.isdir(folder):
                 return
 
+            # If a previous scan UI is still around, close it before starting a new scan.
+            if getattr(self, '_subtitle_scan_show_timer', None):
+                try:
+                    self._subtitle_scan_show_timer.stop()
+                except Exception:
+                    pass
+                self._subtitle_scan_show_timer = None
+            if getattr(self, '_subtitle_scan_progress_dialog', None):
+                try:
+                    self._subtitle_scan_progress_dialog.close()
+                    self._subtitle_scan_progress_dialog.deleteLater()
+                except Exception:
+                    pass
+                self._subtitle_scan_progress_dialog = None
+
             if hasattr(self, '_subtitle_scan_cancel_event') and self._subtitle_scan_cancel_event:
                 self._subtitle_scan_cancel_event.set()
             if hasattr(self, '_subtitle_scan_thread') and self._subtitle_scan_thread:

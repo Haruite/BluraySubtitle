@@ -169,7 +169,8 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 return
             configuration = getattr(self, '_last_configuration_34', None)
             if isinstance(configuration, dict) and configuration:
-                self.on_configuration(configuration)
+                # Mode toggle (movie <-> series) should not rebuild table3/SP scan.
+                self.on_configuration(configuration, update_sp_table=False)
 
         def _collect_config_inputs(self) -> dict[str, object]:
             labels = ENCODE_LABELS if self.get_selected_function_id() == 4 else REMUX_LABELS
@@ -542,7 +543,8 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     return
                 function_id = self.get_selected_function_id()
                 if function_id in (3, 4):
-                    busy = self._begin_delayed_busy(self.t('Updating table rows...'))
+                    if bool(update_sp_table):
+                        busy = self._begin_delayed_busy(self.t('Updating table rows...'))
                     self._last_configuration_34 = configuration
                     try:
                         self._selected_main_mpls_prev = {

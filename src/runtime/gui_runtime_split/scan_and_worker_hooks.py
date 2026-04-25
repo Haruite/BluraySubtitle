@@ -107,6 +107,43 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
             mpls_col = ENCODE_SP_LABELS.index('mpls_file')
             m2ts_col = ENCODE_SP_LABELS.index('m2ts_file')
             rows: list[dict[str, object]] = []
+            select_all = bool(
+                getattr(self, 'select_all_tracks_checkbox', None) and self.select_all_tracks_checkbox.isChecked())
+            for r in range(self.table3.rowCount()):
+                try:
+                    bdmv_index = int(self.table3.item(r, bdmv_col).text().strip())
+                except Exception:
+                    continue
+                stream_dir = self._get_stream_dir_for_bdmv_index(bdmv_index)
+                playlist_dir = self._get_playlist_dir_for_bdmv_index(bdmv_index)
+                mpls_file = self.table3.item(r, mpls_col).text().strip() if self.table3.item(r, mpls_col) else ''
+                mpls_path = os.path.normpath(os.path.join(playlist_dir, mpls_file)) if playlist_dir and mpls_file else ''
+                m2ts_text = self.table3.item(r, m2ts_col).text().strip() if self.table3.item(r, m2ts_col) else ''
+                m2ts_files = self._split_m2ts_files(m2ts_text)
+                m2ts_files_unique = list(dict.fromkeys([os.path.basename(x) for x in m2ts_files if x]))
+                m2ts_paths = [os.path.normpath(os.path.join(stream_dir, f)) for f in
+                              m2ts_files_unique] if stream_dir else []
+                entry = {'bdmv_index': bdmv_index, 'mpls_file': mpls_file, 'm2ts_file': ','.join(m2ts_files),
+                         'output_name': ''}
+                sp_key = BluraySubtitle._sp_track_key_from_entry(entry)
+                sel_item = self.table3.item(r, ENCODE_SP_LABELS.index('select'))
+                force_disabled = bool((not sel_item) or (not (sel_item.flags() & Qt.ItemFlag.ItemIsEnabled)))
+                # Skip truly empty rows to avoid unnecessary scan/progress popup.
+                if (not force_disabled) and (not mpls_path) and (not m2ts_paths):
+                    continue
+                rows.append({'row': r, 'm2ts_paths': m2ts_paths, 'mpls_path': mpls_path, 'sp_key': sp_key,
+                             'force_disabled': force_disabled, 'select_all': select_all})
+
+            if not rows:
+                self._sp_scan_in_progress = False
+                self._sp_scan_progress_dialog = None
+                self._sp_scan_progress_bar = None
+                self._sp_scan_progress_show_timer = None
+                self._sp_scan_progress_rows_seen = set()
+                self._sp_scan_progress_total = 0
+                self._sp_scan_progress_done = 0
+                return
+
             start_ts = time.time()
             progress_dialog = QProgressDialog(self.t('读取中'), '', 0, 1000, self)
             progress_dialog.setMinimumWidth(420)
@@ -132,29 +169,6 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
 
             show_timer.timeout.connect(show_if_needed)
             show_timer.start()
-            select_all = bool(
-                getattr(self, 'select_all_tracks_checkbox', None) and self.select_all_tracks_checkbox.isChecked())
-            for r in range(self.table3.rowCount()):
-                try:
-                    bdmv_index = int(self.table3.item(r, bdmv_col).text().strip())
-                except Exception:
-                    continue
-                stream_dir = self._get_stream_dir_for_bdmv_index(bdmv_index)
-                playlist_dir = self._get_playlist_dir_for_bdmv_index(bdmv_index)
-                mpls_file = self.table3.item(r, mpls_col).text().strip() if self.table3.item(r, mpls_col) else ''
-                mpls_path = os.path.normpath(os.path.join(playlist_dir, mpls_file)) if playlist_dir and mpls_file else ''
-                m2ts_text = self.table3.item(r, m2ts_col).text().strip() if self.table3.item(r, m2ts_col) else ''
-                m2ts_files = self._split_m2ts_files(m2ts_text)
-                m2ts_files_unique = list(dict.fromkeys([os.path.basename(x) for x in m2ts_files if x]))
-                m2ts_paths = [os.path.normpath(os.path.join(stream_dir, f)) for f in
-                              m2ts_files_unique] if stream_dir else []
-                entry = {'bdmv_index': bdmv_index, 'mpls_file': mpls_file, 'm2ts_file': ','.join(m2ts_files),
-                         'output_name': ''}
-                sp_key = BluraySubtitle._sp_track_key_from_entry(entry)
-                sel_item = self.table3.item(r, ENCODE_SP_LABELS.index('select'))
-                force_disabled = bool((not sel_item) or (not (sel_item.flags() & Qt.ItemFlag.ItemIsEnabled)))
-                rows.append({'row': r, 'm2ts_paths': m2ts_paths, 'mpls_path': mpls_path, 'sp_key': sp_key,
-                             'force_disabled': force_disabled, 'select_all': select_all})
 
             cancel_event = threading.Event()
             self._sp_scan_cancel_event = cancel_event
