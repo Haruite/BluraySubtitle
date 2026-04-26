@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPlainTextEdit, QWidge
     QAbstractItemView, QMenu, QMessageBox, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, QFileDialog
 
 from src.bdmv import Chapter
-from src.core import MKV_LABELS, REMUX_LABELS, ENCODE_LABELS, SUBTITLE_LABELS, ENCODE_REMUX_LABELS, \
+from src.core import MKV_LABELS, REMUX_LABELS, DIY_REMUX_LABELS, ENCODE_LABELS, SUBTITLE_LABELS, ENCODE_REMUX_LABELS, \
     ENCODE_REMUX_SP_LABELS, CURRENT_UI_LANGUAGE, find_mkvtoolinx, is_docker
 from src.core.i18n import translate_text
 from src.domain import MKV, Ass, SRT, Subtitle
@@ -264,6 +264,17 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                         self.table2.setItem(i, 0, FilePathTableWidgetItem(path))
                         self.table2.setItem(i, 1, QTableWidgetItem(dur))
                         self.ensure_encode_row_widgets(i)
+                    self.table2.resizeColumnsToContents()
+                    self._scroll_table_h_to_right(self.table2)
+                elif payload.get('mode') == 5:
+                    self.table2.clear()
+                    self.table2.setColumnCount(len(DIY_REMUX_LABELS))
+                    self._set_table_headers(self.table2, DIY_REMUX_LABELS)
+                    self._set_table2_default_column_order()
+                    self.table2.setRowCount(len(rows))
+                    for i, (path, dur) in enumerate(rows):
+                        self.table2.setItem(i, 0, FilePathTableWidgetItem(path))
+                        self.table2.setItem(i, 1, QTableWidgetItem(dur))
                     self.table2.resizeColumnsToContents()
                     self._scroll_table_h_to_right(self.table2)
                 else:
@@ -1168,13 +1179,21 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             return success
 
         def init_encode_box(self):
-            self._encode_preset_params = {
+            self._x265_preset_params = {
                 '快速': '--preset fast --crf 20 --aq-mode 2 --bframes 8 --ref 4 --me 2 --subme 2',
                 '均衡': '--preset slower --crf 18 --aq-mode 3 --bframes 8 --ref 5 --me 3 --subme 4',
                 '高质': '--preset slower --crf 16 --aq-mode 3 --bframes 8 --psy-rd 2.0 --psy-rdoq 1.0 --deblock -1:-1 --rc-lookahead 60 --ref 6 --subme 5',
                 '极限': '--preset placebo --crf 14 --pme --pmode --aq-mode 3 --aq-strength 1.0 --cbqpoffs -2 --crqpoffs -2 --bframes 12 --b-adapt 2 --ref 6 --rc-lookahead 120 --lookahead-threads 0 --psy-rd 2.5 --psy-rdoq 2.0 --rdoq-level 2 --deblock -2:-2 --qcomp 0.65 --merange 57 --no-sao --no-strong-intra-smoothing',
                 '自订': ''
             }
+            self._x264_preset_params = {
+                '快速': '--preset fast --crf 20 --profile high --level 4.1 --bframes 4 --ref 4',
+                '均衡': '--preset medium --crf 18 --profile high --level 4.1 --bframes 6 --ref 5 --deblock -1:-1',
+                '高质': '--preset slow --crf 16 --profile high --level 4.1 --bframes 8 --ref 6 --deblock -1:-1 --aq-mode 2',
+                '极限': '--preset veryslow --crf 14 --profile high --level 4.1 --bframes 10 --ref 8 --aq-mode 2 --trellis 2',
+                '自订': ''
+            }
+            self._encode_preset_params = dict(self._x265_preset_params)
             self._encode_setting_updating = False
 
             layout = QVBoxLayout()
@@ -1194,7 +1213,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             self.vspipe_mode_combo.addItems(['程序自带', '系统'])
             tools_layout.addWidget(self.vspipe_mode_combo)
 
-            tools_layout.addWidget(QLabel('x265：', tools_row))
+            self.x265_mode_label = QLabel('x265：', tools_row)
+            tools_layout.addWidget(self.x265_mode_label)
             self.x265_mode_combo = QComboBox(tools_row)
             self.x265_mode_combo.addItems(['程序自带', '系统'])
             tools_layout.addWidget(self.x265_mode_combo)
@@ -1209,7 +1229,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 self.vspipe_mode_combo.setCurrentText('系统')
                 self.x265_mode_combo.setCurrentText('系统')
 
-            tools_layout.addWidget(QLabel('x265参数：', tools_row))
+            self.x265_params_label = QLabel('x265参数：', tools_row)
+            tools_layout.addWidget(self.x265_params_label)
             self.x265_preset_combo = QComboBox(tools_row)
             self.x265_preset_combo.addItem('快速', '快速')
             self.x265_preset_combo.addItem('均衡', '均衡')
@@ -1509,14 +1530,18 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                         play_btn.setProperty('action', 'preview' if (checked and subtitle) else 'play')
                         play_btn.setText(self.t('preview') if (checked and subtitle) else self.t('play'))
                     if self.get_selected_function_id() in (3, 4, 5) and info.columnCount() > 5:
-                        if checked:
-                            btn_tracks = QToolButton()
-                            btn_tracks.setText(self.t('编辑轨道'))
+                        btn_tracks = QToolButton()
+                        btn_tracks.setText(self.t('编辑轨道'))
+                        can_edit_tracks = bool(checked)
+                        if self.get_selected_function_id() == 5:
+                            is_simple_diy = bool(getattr(self, 'diy_simple_radio', None) and self.diy_simple_radio.isChecked())
+                            scope_all = bool(getattr(self, 'track_scope_all_radio', None) and self.track_scope_all_radio.isChecked())
+                            can_edit_tracks = is_simple_diy and (scope_all or bool(checked))
+                        if can_edit_tracks:
                             btn_tracks.clicked.connect(partial(self.on_edit_tracks_from_mpls, row_mpls))
-                            info.setCellWidget(mpls_index, 5, btn_tracks)
                         else:
-                            info.setCellWidget(mpls_index, 5, None)
-                            info.setItem(mpls_index, 5, QTableWidgetItem(''))
+                            btn_tracks.setEnabled(False)
+                        info.setCellWidget(mpls_index, 5, btn_tracks)
                     break
             if self.get_selected_function_id() in (3, 4, 5):
                 self._refresh_track_selection_config_for_selected_main()
@@ -1701,6 +1726,11 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     self.subtitle_folder_path.blockSignals(False)
             self._pending_subtitle_folder = folder
             self._update_language_combo_enabled_state()
+            if self.get_selected_function_id() == 5 and bool(
+                    getattr(self, 'diy_simple_radio', None) and self.diy_simple_radio.isChecked()):
+                # Simple DIY subtitle settings are independent from episode configuration.
+                self._save_simple_diy_subtitle_config()
+                return
             if hasattr(self, '_subtitle_scan_cancel_event') and self._subtitle_scan_cancel_event:
                 self._subtitle_scan_cancel_event.set()
             if not folder:

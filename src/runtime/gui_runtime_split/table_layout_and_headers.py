@@ -119,12 +119,16 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
                     function_id = self.get_selected_function_id()
                     if function_id == 3:
                         col = REMUX_LABELS.index('output_name')
+                        labels = REMUX_LABELS
                     elif function_id == 4:
                         col = ENCODE_LABELS.index('output_name')
+                        labels = ENCODE_LABELS
                     elif function_id == 5:
                         col = -1
+                        labels = DIY_REMUX_LABELS
                     else:
                         col = -1
+                        labels = []
                     if col >= 0:
                         header = table.horizontalHeader()
                         header.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
@@ -139,6 +143,11 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
                                 max_w = max(max_w, fm_c.horizontalAdvance(it.text()))
                         desired = min(fixed_limit, int(max_w + 24))
                         table.setColumnWidth(col, max(60, desired))
+                    if labels and 'play' in labels:
+                        play_col = labels.index('play')
+                        header = table.horizontalHeader()
+                        header.setSectionResizeMode(play_col, QHeaderView.ResizeMode.Fixed)
+                        table.setColumnWidth(play_col, 68)
                 elif table is getattr(self, 'table3', None):
                     header = table.horizontalHeader()
                     # Keep output name readable but bounded.

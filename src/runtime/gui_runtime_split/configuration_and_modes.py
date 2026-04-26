@@ -174,7 +174,13 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 self.on_configuration(configuration, update_sp_table=False)
 
         def _collect_config_inputs(self) -> dict[str, object]:
-            labels = ENCODE_LABELS if self.get_selected_function_id() == 4 else REMUX_LABELS
+            current_fid = self.get_selected_function_id()
+            if current_fid == 4:
+                labels = ENCODE_LABELS
+            elif current_fid == 5:
+                labels = DIY_REMUX_LABELS
+            else:
+                labels = REMUX_LABELS
             start_col = labels.index('start_at_chapter')
             end_col = labels.index('end_at_chapter')
             bdmv_col = labels.index('bdmv_index')
@@ -565,14 +571,19 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                         chapter_cache[key] = ch_obj
                         return ch_obj
 
-                    labels = ENCODE_LABELS if function_id == 4 else REMUX_LABELS
+                    if function_id == 4:
+                        labels = ENCODE_LABELS
+                    elif function_id == 5:
+                        labels = DIY_REMUX_LABELS
+                    else:
+                        labels = REMUX_LABELS
                     duration_col = labels.index('ep_duration')
                     bdmv_col = labels.index('bdmv_index')
                     start_col = labels.index('start_at_chapter')
                     end_col = labels.index('end_at_chapter')
                     m2ts_col = labels.index('m2ts_file')
                     language_col = labels.index('language')
-                    output_col = labels.index('output_name')
+                    output_col = labels.index('output_name') if 'output_name' in labels else -1
                     play_col = labels.index('play') if 'play' in labels else -1
                     auto_output_name_map = self._build_episode_output_name_map(configuration)
                     if self._is_movie_mode():
@@ -602,11 +613,12 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                                 if isinstance(w, QComboBox):
                                     prev_lang_by_bdmv[bdmv_index] = w.currentText().strip()
                                     prev_auto_lang_by_bdmv[bdmv_index] = str(getattr(w, '_auto_lang', '') or '')
-                                it = self.table2.item(r, output_col)
-                                if it and it.text():
-                                    auto = it.data(Qt.ItemDataRole.UserRole)
-                                    prev_name_by_bdmv[bdmv_index] = (it.text().strip(),
-                                                                     auto if isinstance(auto, str) else '')
+                                if output_col >= 0:
+                                    it = self.table2.item(r, output_col)
+                                    if it and it.text():
+                                        auto = it.data(Qt.ItemDataRole.UserRole)
+                                        prev_name_by_bdmv[bdmv_index] = (it.text().strip(),
+                                                                         auto if isinstance(auto, str) else '')
                         except Exception:
                             pass
 
@@ -683,9 +695,10 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                                 final_text = prev_name
                             else:
                                 final_text = auto_name
-                            new_item = QTableWidgetItem(final_text)
-                            new_item.setData(Qt.ItemDataRole.UserRole, auto_name)
-                            self.table2.setItem(row_i, output_col, new_item)
+                            if output_col >= 0:
+                                new_item = QTableWidgetItem(final_text)
+                                new_item.setData(Qt.ItemDataRole.UserRole, auto_name)
+                                self.table2.setItem(row_i, output_col, new_item)
 
                             if sub_files_in_folder:
                                 idx = first_sub_index
@@ -907,10 +920,30 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             if hasattr(self, 'track_scope_row') and self.track_scope_row:
                 simple_diy = bool(getattr(self, 'diy_simple_radio', None) and self.diy_simple_radio.isChecked())
                 self.track_scope_row.setVisible(function_id == 5 and simple_diy)
+            if hasattr(self, 'simple_diy_sub_lang_combo') and self.simple_diy_sub_lang_combo:
+                self.simple_diy_sub_lang_combo.setVisible(function_id == 5 and simple_diy)
+            if hasattr(self, 'simple_diy_sub_lang_label') and self.simple_diy_sub_lang_label:
+                self.simple_diy_sub_lang_label.setVisible(function_id == 5 and simple_diy)
+            if hasattr(self, 'simple_diy_add_sub_row_btn') and self.simple_diy_add_sub_row_btn:
+                if function_id == 5 and simple_diy:
+                    row_count = 1 + len(getattr(self, '_simple_diy_sub_rows', []) or [])
+                    self.simple_diy_add_sub_row_btn.setVisible(row_count == 1)
+                else:
+                    self.simple_diy_add_sub_row_btn.setVisible(False)
+            if hasattr(self, 'simple_diy_remove_sub_row_btn') and self.simple_diy_remove_sub_row_btn:
+                if function_id == 5 and simple_diy:
+                    row_count = 1 + len(getattr(self, '_simple_diy_sub_rows', []) or [])
+                    self.simple_diy_remove_sub_row_btn.setVisible(row_count > 1)
+                else:
+                    self.simple_diy_remove_sub_row_btn.setVisible(False)
+            if hasattr(self, 'simple_diy_extra_sub_rows') and self.simple_diy_extra_sub_rows:
+                self.simple_diy_extra_sub_rows.setVisible(function_id == 5 and simple_diy)
             if hasattr(self, 'episode_mode_row') and self.episode_mode_row:
                 self.episode_mode_row.setVisible(function_id in (1, 3, 4, 5))
             if hasattr(self, 'diy_mode_row') and self.diy_mode_row:
                 self.diy_mode_row.setVisible(function_id == 5)
+            if hasattr(self, 'subtitle_path_box') and self.subtitle_path_box:
+                self.subtitle_path_box.setVisible(True)
             if hasattr(self, 'encode_source_row') and self.encode_source_row:
                 self.encode_source_row.setVisible(function_id == 4)
             if hasattr(self, 'table3'):
@@ -1024,8 +1057,8 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     self._set_table_headers(self.table1, BDMV_LABELS)
                     self.table2.clear()
                     self.table2.setRowCount(0)
-                    self.table2.setColumnCount(len(DIY_REMUX_LABELS))
-                    self._set_table_headers(self.table2, DIY_REMUX_LABELS)
+                    self.table2.setColumnCount(len(REMUX_LABELS))
+                    self._set_table_headers(self.table2, REMUX_LABELS)
                     self._set_table2_default_column_order()
                     if hasattr(self, 'table3'):
                         self.table3.clear()
@@ -1074,8 +1107,8 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     self._set_table_headers(self.table1, DIY_BDMV_LABELS)
                     self.table2.clear()
                     self.table2.setRowCount(0)
-                    self.table2.setColumnCount(len(REMUX_LABELS))
-                    self._set_table_headers(self.table2, REMUX_LABELS)
+                    self.table2.setColumnCount(len(DIY_REMUX_LABELS))
+                    self._set_table_headers(self.table2, DIY_REMUX_LABELS)
                     self._set_table2_default_column_order()
                     if hasattr(self, 'table3'):
                         self.table3.clear()
@@ -1084,6 +1117,50 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                         self._set_table_headers(self.table3, DIY_SP_LABELS)
                 if hasattr(self, 'table3'):
                     self.table3.setVisible(False)
+                simple_diy = bool(getattr(self, 'diy_simple_radio', None) and self.diy_simple_radio.isChecked())
+                if hasattr(self, 'label2'):
+                    self.label2.setText(self.t("选择字幕所在文件夹"))
+                if hasattr(self, 'simple_diy_sub_lang_combo') and self.simple_diy_sub_lang_combo:
+                    default_lang = 'chi' if getattr(self, '_language_code', CURRENT_UI_LANGUAGE) == 'zh' else 'eng'
+                    if (self.simple_diy_sub_lang_combo.currentText() or '').strip() in ('', 'und'):
+                        self.simple_diy_sub_lang_combo.setCurrentText(default_lang)
+                if simple_diy and hasattr(self, 'table2') and self.table2:
+                    try:
+                        if 'sub_path' in DIY_REMUX_LABELS:
+                            self.table2.setColumnHidden(DIY_REMUX_LABELS.index('sub_path'), True)
+                        if 'language' in DIY_REMUX_LABELS:
+                            self.table2.setColumnHidden(DIY_REMUX_LABELS.index('language'), True)
+                    except Exception:
+                        pass
+                if simple_diy:
+                    try:
+                        need_encode = False
+                        conv_cfg = getattr(self, '_track_convert_config', {}) or {}
+                        for mp in conv_cfg.values():
+                            vals = [str(v or '') for v in (mp or {}).values()]
+                            if any(v in ('h264(encoded)', 'h265(encoded)') for v in vals):
+                                need_encode = True
+                                break
+                        self.encode_box.setVisible(need_encode)
+                        if hasattr(self, '_sub_pack_row') and self._sub_pack_row:
+                            self._sub_pack_row.setVisible(False)
+                        if hasattr(self, 'x265_mode_label') and self.x265_mode_label and hasattr(self, 'x265_params_label') and self.x265_params_label:
+                            use_x264 = any(
+                                str(v or '') == 'h264(encoded)'
+                                for mp in conv_cfg.values() for v in (mp or {}).values()
+                            )
+                            if use_x264:
+                                self.x265_mode_label.setText('x264：')
+                                self.x265_params_label.setText('x264参数：')
+                                if hasattr(self, '_x264_preset_params'):
+                                    self._encode_preset_params = self._x264_preset_params
+                            else:
+                                self.x265_mode_label.setText('x265：')
+                                self.x265_params_label.setText('x265参数：')
+                                if hasattr(self, '_x265_preset_params'):
+                                    self._encode_preset_params = self._x265_preset_params
+                    except Exception:
+                        pass
 
             if not keep_inputs:
                 self.bdmv_folder_path.clear()
