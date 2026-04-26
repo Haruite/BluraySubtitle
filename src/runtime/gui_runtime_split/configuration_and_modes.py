@@ -10,7 +10,8 @@ from PyQt6.QtWidgets import QSizePolicy, QComboBox, QTableWidgetItem, QToolButto
 
 from src.bdmv import Chapter
 from src.core import ENCODE_REMUX_LABELS, ENCODE_REMUX_SP_LABELS, ENCODE_LABELS, ENCODE_SP_LABELS, REMUX_LABELS, \
-    DEFAULT_APPROX_EPISODE_DURATION_SECONDS, CURRENT_UI_LANGUAGE, SUBTITLE_LABELS, BDMV_LABELS, MKV_LABELS
+    DEFAULT_APPROX_EPISODE_DURATION_SECONDS, CURRENT_UI_LANGUAGE, SUBTITLE_LABELS, BDMV_LABELS, MKV_LABELS, \
+    DIY_BDMV_LABELS, DIY_SP_LABELS, DIY_REMUX_LABELS
 from src.core.i18n import translate_text
 from src.domain import Subtitle
 from src.exports.utils import get_time_str, print_exc_terminal, get_index_to_m2ts_and_offset
@@ -895,16 +896,27 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             if hasattr(self, 'output_folder_row') and self.output_folder_row:
                 self.output_folder_row.setVisible(function_id in (3, 4, 5))
             if hasattr(self, 'select_all_tracks_row') and self.select_all_tracks_row:
-                visible = function_id in (3, 4, 5)
+                visible = function_id in (3, 4)
                 self.select_all_tracks_row.setVisible(visible)
+            if hasattr(self, 'subtitle_formats_hint_label') and self.subtitle_formats_hint_label:
+                self.subtitle_formats_hint_label.setVisible(function_id == 5)
+            if hasattr(self, 'subtitle_convert_checkbox') and self.subtitle_convert_checkbox:
+                self.subtitle_convert_checkbox.setVisible(function_id == 5)
+            if hasattr(self, 'subtitle_hint_row') and self.subtitle_hint_row:
+                self.subtitle_hint_row.setVisible(function_id == 5)
+            if hasattr(self, 'track_scope_row') and self.track_scope_row:
+                simple_diy = bool(getattr(self, 'diy_simple_radio', None) and self.diy_simple_radio.isChecked())
+                self.track_scope_row.setVisible(function_id == 5 and simple_diy)
             if hasattr(self, 'episode_mode_row') and self.episode_mode_row:
                 self.episode_mode_row.setVisible(function_id in (1, 3, 4, 5))
+            if hasattr(self, 'diy_mode_row') and self.diy_mode_row:
+                self.diy_mode_row.setVisible(function_id == 5)
             if hasattr(self, 'encode_source_row') and self.encode_source_row:
                 self.encode_source_row.setVisible(function_id == 4)
             if hasattr(self, 'table3'):
                 self.table3.setVisible(function_id in (3, 4))
                 try:
-                    labels = ENCODE_SP_LABELS
+                    labels = DIY_SP_LABELS if function_id == 5 else ENCODE_SP_LABELS
                     if function_id == 4 and getattr(self, '_encode_input_mode', 'bdmv') == 'remux':
                         labels = ENCODE_REMUX_SP_LABELS
                     if self.table3.columnCount() != len(labels):
@@ -923,10 +935,11 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
 
             if function_id in (3, 4, 5):
                 try:
-                    if self.table1.columnCount() != len(BDMV_LABELS):
-                        self.table1.setColumnCount(len(BDMV_LABELS))
-                        self._set_table_headers(self.table1, BDMV_LABELS)
-                    cmd_col = BDMV_LABELS.index('remux_cmd') if 'remux_cmd' in BDMV_LABELS else -1
+                    table1_labels = DIY_BDMV_LABELS if function_id == 5 else BDMV_LABELS
+                    if self.table1.columnCount() != len(table1_labels):
+                        self.table1.setColumnCount(len(table1_labels))
+                        self._set_table_headers(self.table1, table1_labels)
+                    cmd_col = table1_labels.index('remux_cmd') if 'remux_cmd' in table1_labels else -1
                     if cmd_col >= 0:
                         self.table1.setColumnWidth(cmd_col, 420 if getattr(self, '_language_code',
                                                                            CURRENT_UI_LANGUAGE) == 'zh' else 380)
@@ -1011,8 +1024,8 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     self._set_table_headers(self.table1, BDMV_LABELS)
                     self.table2.clear()
                     self.table2.setRowCount(0)
-                    self.table2.setColumnCount(len(REMUX_LABELS))
-                    self._set_table_headers(self.table2, REMUX_LABELS)
+                    self.table2.setColumnCount(len(DIY_REMUX_LABELS))
+                    self._set_table_headers(self.table2, DIY_REMUX_LABELS)
                     self._set_table2_default_column_order()
                     if hasattr(self, 'table3'):
                         self.table3.clear()
@@ -1057,8 +1070,8 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 if not keep_state:
                     self.table1.clear()
                     self.table1.setRowCount(0)
-                    self.table1.setColumnCount(len(BDMV_LABELS))
-                    self._set_table_headers(self.table1, BDMV_LABELS)
+                    self.table1.setColumnCount(len(DIY_BDMV_LABELS))
+                    self._set_table_headers(self.table1, DIY_BDMV_LABELS)
                     self.table2.clear()
                     self.table2.setRowCount(0)
                     self.table2.setColumnCount(len(REMUX_LABELS))
@@ -1067,8 +1080,8 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     if hasattr(self, 'table3'):
                         self.table3.clear()
                         self.table3.setRowCount(0)
-                        self.table3.setColumnCount(len(ENCODE_SP_LABELS))
-                        self._set_table_headers(self.table3, ENCODE_SP_LABELS)
+                        self.table3.setColumnCount(len(DIY_SP_LABELS))
+                        self._set_table_headers(self.table3, DIY_SP_LABELS)
                 if hasattr(self, 'table3'):
                     self.table3.setVisible(False)
 

@@ -4,7 +4,7 @@ from PyQt6.QtGui import QFontMetrics
 from PyQt6.QtWidgets import QTableWidget, QComboBox, QHeaderView
 
 from src.core import BDMV_LABELS, SUBTITLE_LABELS, MKV_LABELS, REMUX_LABELS, ENCODE_REMUX_LABELS, ENCODE_LABELS, \
-    ENCODE_REMUX_SP_LABELS, ENCODE_SP_LABELS, CURRENT_UI_LANGUAGE
+    ENCODE_REMUX_SP_LABELS, ENCODE_SP_LABELS, DIY_BDMV_LABELS, DIY_SP_LABELS, DIY_REMUX_LABELS, CURRENT_UI_LANGUAGE
 from .gui_base import BluraySubtitleGuiBase
 
 
@@ -24,7 +24,8 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
         def _refresh_all_table_headers(self):
             try:
                 if hasattr(self, 'table1') and self.table1:
-                    self._set_table_headers(self.table1, BDMV_LABELS)
+                    function_id = self.get_selected_function_id() if hasattr(self, 'get_selected_function_id') else 0
+                    self._set_table_headers(self.table1, DIY_BDMV_LABELS if function_id == 5 else BDMV_LABELS)
             except Exception:
                 pass
 
@@ -41,6 +42,8 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
                         labels = ENCODE_REMUX_LABELS if getattr(self, '_encode_input_mode',
                                                                 'bdmv') == 'remux' else ENCODE_LABELS
                         self._set_table_headers(self.table2, labels)
+                    elif function_id == 5:
+                        self._set_table_headers(self.table2, DIY_REMUX_LABELS)
                     self._resize_table_columns_for_language(self.table2)
                     self._scroll_table_h_to_right(self.table2)
             except Exception:
@@ -48,8 +51,12 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
 
             try:
                 if hasattr(self, 'table3') and self.table3:
-                    labels = ENCODE_REMUX_SP_LABELS if getattr(self, '_encode_input_mode',
-                                                               'bdmv') == 'remux' else ENCODE_SP_LABELS
+                    function_id = self.get_selected_function_id() if hasattr(self, 'get_selected_function_id') else 0
+                    if function_id == 5:
+                        labels = DIY_SP_LABELS
+                    else:
+                        labels = ENCODE_REMUX_SP_LABELS if getattr(self, '_encode_input_mode',
+                                                                   'bdmv') == 'remux' else ENCODE_SP_LABELS
                     self._set_table_headers(self.table3, labels)
                     self._resize_table_columns_for_language(self.table3)
                     self._scroll_table_h_to_right(self.table3)
@@ -114,6 +121,8 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
                         col = REMUX_LABELS.index('output_name')
                     elif function_id == 4:
                         col = ENCODE_LABELS.index('output_name')
+                    elif function_id == 5:
+                        col = -1
                     else:
                         col = -1
                     if col >= 0:
