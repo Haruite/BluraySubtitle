@@ -17,7 +17,7 @@ FFPROBE_PATH = r"C:\Downloads\ffmpeg-8.1-essentials_build\bin\ffprobe.exe"
 X265_PATH = r"C:\Software\x265.exe"
 VSEDIT_PATH = r"C:\Software\vapoursynth\vsedit.exe"
 PLUGIN_PATH = ""
-LIBASS_PATH = ""
+LIBASS_PATH = r"C:\Downloads\libass.dll"
 
 if sys.platform != "win32":
     FLAC_PATH = "/usr/bin/flac"
@@ -26,6 +26,7 @@ if sys.platform != "win32":
     X265_PATH = "/usr/bin/x265"
     PLUGIN_PATH = os.path.expanduser("~/plugins")
     VSEDIT_PATH = "/usr/bin/vsedit"
+    LIBASS_PATH = ''
     if is_docker():
         PLUGIN_PATH = "/app/plugins"
 
