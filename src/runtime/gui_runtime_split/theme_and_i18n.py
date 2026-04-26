@@ -1,4 +1,5 @@
 """Target module for theme/language methods of `BluraySubtitleGUI`."""
+from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import QApplication, QLabel, QSlider, QTabBar, QWidget, QPlainTextEdit, QLineEdit, QGroupBox, \
     QComboBox, QTableWidget
 
@@ -60,6 +61,53 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
             finally:
                 self.theme_combo.blockSignals(False)
             self._refresh_opacity_controls()
+
+        def _refresh_font_size_combo(self):
+            label = getattr(self, 'font_size_label', None)
+            combo = getattr(self, 'font_size_combo', None)
+            if isinstance(label, QLabel):
+                label.setText(self.t('UI Font'))
+            if not isinstance(combo, QComboBox):
+                return
+            current_size = int(getattr(self, '_ui_font_point_size', 10) or 10)
+            combo.blockSignals(True)
+            try:
+                idx = combo.findData(current_size)
+                combo.setCurrentIndex(idx if idx >= 0 else 1)
+            finally:
+                combo.blockSignals(False)
+
+        def _apply_ui_font_size(self, point_size: int):
+            app = QApplication.instance()
+            if not app:
+                return
+            size = max(8, min(24, int(point_size)))
+            self._ui_font_point_size = size
+            f = app.font()
+            if not isinstance(f, QFont):
+                return
+            f.setPointSize(size)
+            app.setFont(f)
+            # Apply to the current window tree immediately so existing widgets refresh.
+            self.setFont(f)
+            for widget in self.findChildren(QWidget):
+                try:
+                    widget.setFont(f)
+                except Exception:
+                    pass
+            self.update()
+
+        def _on_font_size_changed(self):
+            combo = getattr(self, 'font_size_combo', None)
+            if not isinstance(combo, QComboBox):
+                return
+            data = combo.currentData()
+            try:
+                text_value = (combo.currentText() or '').strip()
+                size = int(data if data is not None else text_value)
+            except Exception:
+                size = 10
+            self._apply_ui_font_size(size)
 
         def _refresh_opacity_controls(self):
             label = getattr(self, 'opacity_label', None)
@@ -240,20 +288,39 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
             tabbar = getattr(self, 'function_tabbar', None)
             if not isinstance(tabbar, QTabBar):
                 return
-            if getattr(self, '_theme_mode', 'light') != 'colorful':
-                tabbar.setStyleSheet('')
+            mode = getattr(self, '_theme_mode', 'light')
+            if mode == 'colorful':
+                fid = self.get_selected_function_id() if hasattr(self, 'get_selected_function_id') else 1
+                accent = {
+                    1: ('#0ea5e9', '#0284c7'),
+                    2: ('#14b8a6', '#0f766e'),
+                    3: ('#f59e0b', '#b45309'),
+                    4: ('#ef4444', '#b91c1c'),
+                    5: ('#8b5cf6', '#6d28d9'),
+                }.get(int(fid), ('#7c3aed', '#6d28d9'))
+                tabbar.setStyleSheet(
+                    "QTabBar::tab{background:#f0f3ff;color:#1f2330;border:1px solid #d6d9e6;border-bottom:none;"
+                    "padding:6px 10px;border-top-left-radius:6px;border-top-right-radius:6px;}"
+                    "QTabBar::tab:hover{background:#e6ecff;}"
+                    f"QTabBar::tab:selected{{background:{accent[0]};color:#ffffff;border:1px solid {accent[1]};"
+                    "border-bottom:none;font-weight:700;}"
+                )
                 return
-            fid = self.get_selected_function_id() if hasattr(self, 'get_selected_function_id') else 1
-            accent = {
-                1: ('#0ea5e9', '#0284c7'),
-                2: ('#14b8a6', '#0f766e'),
-                3: ('#f59e0b', '#b45309'),
-                4: ('#ef4444', '#b91c1c'),
-                5: ('#8b5cf6', '#6d28d9'),
-            }.get(int(fid), ('#7c3aed', '#6d28d9'))
+            if mode == 'dark':
+                tabbar.setStyleSheet(
+                    "QTabBar::tab{background:#2a2a2a;color:#cbd1e4;border:1px solid #3a3a3a;border-bottom:none;"
+                    "padding:6px 10px;border-top-left-radius:6px;border-top-right-radius:6px;}"
+                    "QTabBar::tab:hover{background:#32323a;color:#e6e6e6;}"
+                    "QTabBar::tab:selected{background:#3a5fcd;color:#ffffff;border:1px solid #5b7fff;"
+                    "border-bottom:none;font-weight:700;}"
+                )
+                return
             tabbar.setStyleSheet(
-                "QTabBar::tab{background:#f0f3ff;color:#1f2330;border:1px solid #d6d9e6;border-bottom:none;padding:6px 10px;border-top-left-radius:6px;border-top-right-radius:6px;}"
-                f"QTabBar::tab:selected{{background:{accent[0]};color:#ffffff;border:1px solid {accent[1]};border-bottom:none;font-weight:600;}}"
+                "QTabBar::tab{background:#f5f6fb;color:#3a3f52;border:1px solid #d0d5e4;border-bottom:none;"
+                "padding:6px 10px;border-top-left-radius:6px;border-top-right-radius:6px;}"
+                "QTabBar::tab:hover{background:#eceffa;}"
+                "QTabBar::tab:selected{background:#2563eb;color:#ffffff;border:1px solid #1d4ed8;"
+                "border-bottom:none;font-weight:700;}"
             )
 
         def _on_theme_changed(self):
@@ -265,6 +332,8 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                 if widget is getattr(self, 'language_combo', None):
                     continue
                 if widget is getattr(self, 'theme_combo', None):
+                    continue
+                if widget is getattr(self, 'font_size_combo', None):
                     continue
                 if widget is getattr(self, 'subtitle_suffix_combo', None):
                     continue
@@ -309,6 +378,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                 self._refresh_subtitle_suffix_options()
                 self._refresh_language_combo()
                 self._refresh_theme_combo()
+                self._refresh_font_size_combo()
                 self._refresh_all_table_headers()
                 self._refresh_language_dependent_sizes()
                 self.on_select_function(force=True, keep_inputs=True, keep_state=True)
