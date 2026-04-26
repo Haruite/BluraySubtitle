@@ -130,6 +130,13 @@ class BluraySubtitleGuiBase(QWidget):
         self.subtitle_suffix_combo = None
         self.subtitle_suffix_label = None
         self.subtitle_tables_splitter = None
+        self.simple_diy_sub_lang_combo = None
+        self.simple_diy_sub_lang_label = None
+        self.simple_diy_add_sub_row_btn = None
+        self.simple_diy_remove_sub_row_btn = None
+        self.simple_diy_extra_sub_rows = None
+        self.subtitle_label_row = None
+        self._simple_diy_subtitle_config = None
         self.track_scope_row = None
         self.track_scope_main_radio = None
         self.track_scope_all_radio = None
@@ -141,7 +148,9 @@ class BluraySubtitleGuiBase(QWidget):
         self.theme_label = None
         self.vspipe_mode_combo = None
         self.x265_mode_combo = None
+        self.x265_mode_label = None
         self.x265_params_edit = None
+        self.x265_params_label = None
         self.x265_preset_combo = None
 
     def __init_subclass__(cls, **kwargs):

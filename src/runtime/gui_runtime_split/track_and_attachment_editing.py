@@ -44,6 +44,14 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                     out.append(os.path.normpath(os.path.join(root, 'BDMV', 'PLAYLIST', mpls_file)))
             return out
 
+        def _bdmv_root_from_mpls_path(self, mpls_path: str) -> str:
+            try:
+                p = os.path.normpath(str(mpls_path or ''))
+                # .../<root>/BDMV/PLAYLIST/*.mpls
+                return os.path.normpath(os.path.dirname(os.path.dirname(os.path.dirname(p))))
+            except Exception:
+                return ''
+
         def _sync_main_mpls_track_config_by_pid(
                 self,
                 source_mpls_path: str,
@@ -53,6 +61,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 source_language_map: dict[str, str],
         ):
             source_path = os.path.normpath(source_mpls_path)
+            source_root = self._bdmv_root_from_mpls_path(source_path)
             selected_pids: set[int] = set()
             convert_by_pid: dict[int, str] = {}
             language_by_pid: dict[int, str] = {}
@@ -77,28 +86,48 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
 
             for target_mpls_path in self._iter_selected_main_mpls_paths():
                 target_path = os.path.normpath(target_mpls_path)
+                if self._bdmv_root_from_mpls_path(target_path) != source_root:
+                    # Only sync within the same disc volume.
+                    continue
                 target_key = f'main::{target_path}'
                 if target_path == source_path:
-                    target_streams = source_streams
-                else:
-                    m2ts_path = self._get_first_m2ts_for_mpls(target_path)
-                    if not m2ts_path:
-                        continue
-                    target_streams = self._read_m2ts_track_info(m2ts_path)
+                    # Source MPLS has already been saved from the dialog result.
+                    continue
+                m2ts_path = self._get_first_m2ts_for_mpls(target_path)
+                if not m2ts_path:
+                    continue
+                target_streams = self._read_m2ts_track_info(m2ts_path)
 
-                audio: list[str] = []
-                subtitle: list[str] = []
-                t_convert: dict[str, str] = {}
-                t_language: dict[str, str] = {}
+                existing_sel = cfg_sel.get(target_key) or {}
+                existing_selected = set((existing_sel.get('audio') or []) + (existing_sel.get('subtitle') or []))
+                existing_convert = dict(cfg_conv.get(target_key) or {})
+                existing_language = dict(cfg_lang.get(target_key) or {})
+
+                audio: list[str] = list(existing_sel.get('audio') or [])
+                subtitle: list[str] = list(existing_sel.get('subtitle') or [])
+                t_convert: dict[str, str] = dict(existing_convert)
+                t_language: dict[str, str] = dict(existing_language)
+                audio_set = set(audio)
+                subtitle_set = set(subtitle)
                 for st in target_streams:
                     idx = str(st.get('index', ''))
                     pid = self._parse_stream_pid(st.get('pid'))
                     ctype = str(st.get('codec_type') or '').strip().lower()
-                    if (pid is not None) and (pid in selected_pids):
-                        if ctype == 'audio':
+                    if pid is not None and pid in selected_pids:
+                        if ctype == 'audio' and idx not in audio_set:
                             audio.append(idx)
-                        elif ctype == 'subtitle':
+                            audio_set.add(idx)
+                        elif ctype == 'subtitle' and idx not in subtitle_set:
                             subtitle.append(idx)
+                            subtitle_set.add(idx)
+                    elif pid is not None and pid in set(convert_by_pid.keys()) | set(language_by_pid.keys()):
+                        # Same PID exists in source but not selected now -> deselect only this PID.
+                        if idx in audio_set:
+                            audio = [x for x in audio if x != idx]
+                            audio_set.discard(idx)
+                        if idx in subtitle_set:
+                            subtitle = [x for x in subtitle if x != idx]
+                            subtitle_set.discard(idx)
                     if (pid is not None) and (pid in convert_by_pid):
                         t_convert[idx] = convert_by_pid[pid]
                     if (pid is not None) and (pid in language_by_pid):
@@ -1350,6 +1379,8 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 lang_cfg = getattr(self, '_track_language_config', {})
                 lang_cfg[key] = dict(getattr(self, '_last_track_language_map', {}) or {})
                 self._track_language_config = lang_cfg
+                if self.get_selected_function_id() == 5:
+                    self.on_select_function(force=True, keep_inputs=True, keep_state=True)
             except Exception:
                 self._show_error_dialog(traceback.format_exc())
 
@@ -1404,6 +1435,8 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                     dict(getattr(self, '_last_track_language_map', {}) or {}),
                 )
                 self._refresh_table1_remux_cmds()
+                if self.get_selected_function_id() == 5:
+                    self.on_select_function(force=True, keep_inputs=True, keep_state=True)
             except Exception:
                 self._show_error_dialog(traceback.format_exc())
 
@@ -1537,5 +1570,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                     self._refresh_table1_remux_cmds()
                 except Exception:
                     pass
+                if self.get_selected_function_id() == 5:
+                    self.on_select_function(force=True, keep_inputs=True, keep_state=True)
             except Exception:
                 self._show_error_dialog(traceback.format_exc())

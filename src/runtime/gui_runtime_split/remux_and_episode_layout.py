@@ -11,9 +11,9 @@ from PyQt6.QtWidgets import QTableWidget, QToolButton, QPlainTextEdit, QWidget, 
     QProgressDialog, QProgressBar, QMessageBox
 
 from src.bdmv import Chapter
-from src.core import BDMV_LABELS, DIY_BDMV_LABELS, find_mkvtoolinx, MKV_MERGE_PATH, mkvtoolnix_ui_language_arg, \
-    ENCODE_REMUX_LABELS, ENCODE_REMUX_SP_LABELS, SUBTITLE_LABELS, ENCODE_LABELS, REMUX_LABELS, CURRENT_UI_LANGUAGE, \
-    ENCODE_SP_LABELS
+from src.core import BDMV_LABELS, DIY_BDMV_LABELS, DIY_REMUX_LABELS, find_mkvtoolinx, MKV_MERGE_PATH, \
+    mkvtoolnix_ui_language_arg, ENCODE_REMUX_LABELS, ENCODE_REMUX_SP_LABELS, SUBTITLE_LABELS, ENCODE_LABELS, \
+    REMUX_LABELS, CURRENT_UI_LANGUAGE, ENCODE_SP_LABELS
 from src.domain import Subtitle
 from src.exports.utils import get_time_str, get_index_to_m2ts_and_offset, print_exc_terminal, get_folder_size
 from src.runtime.gui_runtime_classes.file_path_table_widget_item import FilePathTableWidgetItem
@@ -534,14 +534,19 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             if function_id not in (3, 4, 5):
                 return
             selected_mpls = self.get_selected_mpls_no_ext()
-            labels = ENCODE_LABELS if function_id == 4 else REMUX_LABELS
+            if function_id == 4:
+                labels = ENCODE_LABELS
+            elif function_id == 5:
+                labels = DIY_REMUX_LABELS
+            else:
+                labels = REMUX_LABELS
             duration_col = labels.index('ep_duration')
             bdmv_col = labels.index('bdmv_index')
             chapter_col = labels.index('start_at_chapter')
             end_col = labels.index('end_at_chapter')
             m2ts_col = labels.index('m2ts_file')
             language_col = labels.index('language')
-            output_col = labels.index('output_name')
+            output_col = labels.index('output_name') if 'output_name' in labels else -1
 
             prev_lang_by_bdmv: dict[int, str] = {}
             prev_auto_lang_by_bdmv: dict[int, str] = {}
@@ -559,10 +564,11 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                     if isinstance(w, QComboBox):
                         prev_lang_by_bdmv[bdmv_index] = w.currentText().strip()
                         prev_auto_lang_by_bdmv[bdmv_index] = str(getattr(w, '_auto_lang', '') or '')
-                    it = self.table2.item(r, output_col)
-                    if it and it.text():
-                        auto = it.data(Qt.ItemDataRole.UserRole)
-                        prev_name_by_bdmv[bdmv_index] = (it.text().strip(), auto if isinstance(auto, str) else '')
+                    if output_col >= 0:
+                        it = self.table2.item(r, output_col)
+                        if it and it.text():
+                            auto = it.data(Qt.ItemDataRole.UserRole)
+                            prev_name_by_bdmv[bdmv_index] = (it.text().strip(), auto if isinstance(auto, str) else '')
             except Exception:
                 pass
 
@@ -637,9 +643,10 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                         final_text = prev_name
                     else:
                         final_text = auto_name
-                    out_item = QTableWidgetItem(final_text)
-                    out_item.setData(Qt.ItemDataRole.UserRole, auto_name)
-                    self.table2.setItem(row_i, output_col, out_item)
+                    if output_col >= 0:
+                        out_item = QTableWidgetItem(final_text)
+                        out_item.setData(Qt.ItemDataRole.UserRole, auto_name)
+                        self.table2.setItem(row_i, output_col, out_item)
 
                     if function_id == 4:
                         self.ensure_encode_row_widgets(row_i)
@@ -728,7 +735,12 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             function_id = self.get_selected_function_id()
             if function_id not in (3, 4, 5):
                 return
-            labels = ENCODE_LABELS if function_id == 4 else REMUX_LABELS
+            if function_id == 4:
+                labels = ENCODE_LABELS
+            elif function_id == 5:
+                labels = DIY_REMUX_LABELS
+            else:
+                labels = REMUX_LABELS
             if 'bdmv_index' not in labels:
                 return
             col = labels.index('bdmv_index')
@@ -791,7 +803,13 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 prev_set = set(getattr(self, '_selected_main_mpls_prev', set()) or set())
                 last_cfg = dict(getattr(self, '_last_configuration_34', {}) or {})
                 sub_files: list[str] = []
-                labels = ENCODE_LABELS if self.get_selected_function_id() == 4 else REMUX_LABELS
+                selected_fid = self.get_selected_function_id()
+                if selected_fid == 4:
+                    labels = ENCODE_LABELS
+                elif selected_fid == 5:
+                    labels = DIY_REMUX_LABELS
+                else:
+                    labels = REMUX_LABELS
                 try:
                     sub_col = labels.index('sub_path')
                     for r in range(self.table2.rowCount()):
@@ -1118,13 +1136,13 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                                         scope_all = bool(getattr(self, 'track_scope_all_radio', None) and
                                                          self.track_scope_all_radio.isChecked())
                                         show_tracks = is_simple_diy and (scope_all or (mpls_path == selected_mpls))
+                                    btn4 = QToolButton()
+                                    btn4.setText(self.t('编辑轨道'))
                                     if show_tracks:
-                                        btn4 = QToolButton()
-                                        btn4.setText(self.t('编辑轨道'))
                                         btn4.clicked.connect(partial(self.on_edit_tracks_from_mpls, mpls_path))
-                                        table_widget.setCellWidget(mpls_n, 5, btn4)
                                     else:
-                                        table_widget.setItem(mpls_n, 5, QTableWidgetItem(''))
+                                        btn4.setEnabled(False)
+                                    table_widget.setCellWidget(mpls_n, 5, btn4)
                                 table_widget.resizeColumnsToContents()
                                 mpls_n += 1
                                 if (time.time() - start_ts) >= 2.0:

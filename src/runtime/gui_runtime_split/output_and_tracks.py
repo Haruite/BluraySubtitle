@@ -10,7 +10,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QComboBox, QTableWidgetItem, QTableWidget, QToolButton
 
 from src.bdmv import M2TS
-from src.core import REMUX_LABELS, ENCODE_LABELS, CURRENT_UI_LANGUAGE, FFPROBE_PATH, ENCODE_SP_LABELS
+from src.core import REMUX_LABELS, DIY_REMUX_LABELS, ENCODE_LABELS, CURRENT_UI_LANGUAGE, FFPROBE_PATH, ENCODE_SP_LABELS
 from src.runtime.services import BluraySubtitle
 from .gui_base import BluraySubtitleGuiBase
 
@@ -99,8 +99,10 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
         def _get_episode_output_names_from_table2(self) -> list[str]:
             names: list[str] = []
             function_id = self.get_selected_function_id()
-            if function_id in (3, 5):
+            if function_id == 3:
                 col = REMUX_LABELS.index('output_name')
+            elif function_id == 5:
+                return names
             elif function_id == 4:
                 col = ENCODE_LABELS.index('output_name')
             else:
@@ -124,8 +126,10 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
         def _get_episode_subtitle_languages_from_table2(self) -> list[str]:
             langs: list[str] = []
             function_id = self.get_selected_function_id()
-            if function_id in (3, 5):
+            if function_id == 3:
                 col = REMUX_LABELS.index('language')
+            elif function_id == 5:
+                col = DIY_REMUX_LABELS.index('language')
             elif function_id == 4:
                 col = ENCODE_LABELS.index('language')
             else:

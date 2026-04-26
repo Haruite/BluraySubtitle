@@ -16,7 +16,7 @@ from typing import Optional
 from PyQt6.QtCore import Qt, QTimer, QCoreApplication
 from PyQt6.QtWidgets import QApplication, QVBoxLayout, QWidget, QHBoxLayout, QLabel, QComboBox, QSlider, QGroupBox, \
     QLineEdit, QTabBar, QRadioButton, QButtonGroup, QPushButton, QCheckBox, QTableWidget, QSizePolicy, QSplitter, \
-    QProgressDialog, QProgressBar
+    QProgressDialog, QProgressBar, QFileDialog
 
 from src.core import APP_TITLE, BDMV_LABELS, SUBTITLE_LABELS, ENCODE_SP_LABELS
 from src.exports.utils import print_exc_terminal, force_remove_file
@@ -356,12 +356,18 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             subtitle_hint_outer.addWidget(self.subtitle_convert_checkbox)
             subtitle_hint_outer.addStretch(1)
 
+            self.subtitle_label_row = QWidget(label2_container)
+            subtitle_label_outer = QHBoxLayout(self.subtitle_label_row)
+            subtitle_label_outer.setContentsMargins(8, 2, 8, 0)
+            subtitle_label_outer.setSpacing(4)
+            self.label2 = QLabel('选择单集字幕所在的文件夹', self)
+            subtitle_label_outer.addWidget(self.label2)
+            subtitle_label_outer.addStretch(1)
+
             self.subtitle_path_row = QWidget(label2_container)
             subtitle_path_outer = QHBoxLayout(self.subtitle_path_row)
             subtitle_path_outer.setContentsMargins(8, 2, 8, 2)
             subtitle_path_outer.setSpacing(4)
-            self.label2 = QLabel('选择单集字幕所在的文件夹', self)
-            subtitle_path_outer.addWidget(self.label2)
 
             subtitle_path_box = CustomBox('字幕', self)
             subtitle_path_box.setProperty("noMargin", True)
@@ -381,9 +387,130 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             h_layout.addWidget(button2_open)
             self.subtitle_path_box = subtitle_path_box
             subtitle_path_outer.addWidget(subtitle_path_box, 1)
+            self.simple_diy_sub_lang_label = QLabel(self.t('语言'), self.subtitle_path_row)
+            self.simple_diy_sub_lang_label.setVisible(False)
+            subtitle_path_outer.addWidget(self.simple_diy_sub_lang_label)
+            self.simple_diy_sub_lang_combo = QComboBox(self.subtitle_path_row)
+            self.simple_diy_sub_lang_combo.addItems(['und', 'chi', 'eng', 'jpn'])
+            self.simple_diy_sub_lang_combo.setEditable(True)
+            self.simple_diy_sub_lang_combo.setCurrentText('eng')
+            self.simple_diy_sub_lang_combo.setVisible(False)
+            self.simple_diy_sub_lang_combo.currentIndexChanged.connect(
+                lambda _=None: self._save_simple_diy_subtitle_config()
+            )
+            subtitle_path_outer.addWidget(self.simple_diy_sub_lang_combo)
+            self.simple_diy_remove_sub_row_btn = QPushButton('-', self.subtitle_path_row)
+            self.simple_diy_remove_sub_row_btn.setFixedWidth(28)
+            self.simple_diy_remove_sub_row_btn.setVisible(False)
+            subtitle_path_outer.addWidget(self.simple_diy_remove_sub_row_btn)
+            self.simple_diy_add_sub_row_btn = QPushButton('+', self.subtitle_path_row)
+            self.simple_diy_add_sub_row_btn.setFixedWidth(28)
+            self.simple_diy_add_sub_row_btn.setVisible(False)
+            subtitle_path_outer.addWidget(self.simple_diy_add_sub_row_btn)
             self.subtitle_formats_hint_label.setVisible(False)
             self.subtitle_convert_checkbox.setVisible(False)
             self.subtitle_hint_row.setVisible(False)
+
+            self.simple_diy_extra_sub_rows = QWidget(label2_container)
+            self.simple_diy_extra_sub_rows_layout = QVBoxLayout(self.simple_diy_extra_sub_rows)
+            self.simple_diy_extra_sub_rows_layout.setContentsMargins(8, 0, 8, 0)
+            self.simple_diy_extra_sub_rows_layout.setSpacing(4)
+            self.simple_diy_extra_sub_rows.setVisible(False)
+            self._simple_diy_sub_rows: list[dict[str, object]] = []
+
+            def _default_diy_sub_lang() -> str:
+                return 'chi' if getattr(self, '_language_code', 'en') == 'zh' else 'eng'
+
+            def _refresh_simple_diy_sub_row_buttons():
+                rows = [None] + list(self._simple_diy_sub_rows)
+                last_idx = len(rows) - 1
+                for i, row_info in enumerate(rows):
+                    if i == 0:
+                        add_btn = self.simple_diy_add_sub_row_btn
+                        del_btn = self.simple_diy_remove_sub_row_btn
+                    else:
+                        add_btn = row_info.get('add_btn')
+                        del_btn = row_info.get('del_btn')
+                    if add_btn:
+                        add_btn.setVisible(i == last_idx)
+                    if del_btn:
+                        del_btn.setVisible(i == last_idx and len(rows) > 1)
+
+            def _add_simple_diy_sub_row():
+                row = QWidget(self.simple_diy_extra_sub_rows)
+                row_layout = QHBoxLayout(row)
+                row_layout.setContentsMargins(0, 0, 0, 0)
+                row_layout.setSpacing(4)
+                box = CustomBox('字幕', row)
+                box.setProperty("noMargin", True)
+                h = QHBoxLayout()
+                h.setContentsMargins(0, 0, 0, 0)
+                h.setSpacing(4)
+                box.setLayout(h)
+                edit = QLineEdit()
+                edit.setMinimumWidth(200)
+                btn_sel = QPushButton('选择')
+                btn_open = QPushButton('打开')
+                def _pick_folder(target_edit: QLineEdit):
+                    picked = QFileDialog.getExistingDirectory(self, self.t('选择文件夹'))
+                    if picked:
+                        target_edit.setText(os.path.normpath(picked))
+                btn_sel.clicked.connect(lambda _=None, e=edit: _pick_folder(e))
+                btn_open.clicked.connect(lambda _=None, e=edit: self.open_folder_path(e.text()))
+                h.addWidget(edit)
+                h.addWidget(btn_sel)
+                h.addWidget(btn_open)
+                lang_label = QLabel(self.t('语言'), row)
+                lang = QComboBox(row)
+                lang.addItems(['und', 'chi', 'eng', 'jpn'])
+                lang.setEditable(True)
+                lang.setCurrentText(_default_diy_sub_lang())
+                lang.currentIndexChanged.connect(lambda _=None: self._save_simple_diy_subtitle_config())
+                btn_del = QPushButton('-', row)
+                btn_del.setFixedWidth(28)
+                btn_add = QPushButton('+', row)
+                btn_add.setFixedWidth(28)
+                btn_add.clicked.connect(_add_simple_diy_sub_row)
+                def _remove_this_row():
+                    try:
+                        self.simple_diy_extra_sub_rows_layout.removeWidget(row)
+                    except Exception:
+                        pass
+                    row.setParent(None)
+                    row.deleteLater()
+                    self._simple_diy_sub_rows = [x for x in self._simple_diy_sub_rows if x.get('row') is not row]
+                    _refresh_simple_diy_sub_row_buttons()
+                    self._save_simple_diy_subtitle_config()
+                btn_del.clicked.connect(_remove_this_row)
+                row_layout.addWidget(box, 1)
+                row_layout.addWidget(lang_label)
+                row_layout.addWidget(lang)
+                row_layout.addWidget(btn_del)
+                row_layout.addWidget(btn_add)
+                self.simple_diy_extra_sub_rows_layout.addWidget(row)
+                self._simple_diy_sub_rows.append({
+                    'row': row,
+                    'edit': edit,
+                    'lang': lang,
+                    'lang_label': lang_label,
+                    'add_btn': btn_add,
+                    'del_btn': btn_del,
+                })
+                edit.textChanged.connect(lambda _=None: self._save_simple_diy_subtitle_config())
+                _refresh_simple_diy_sub_row_buttons()
+                self._save_simple_diy_subtitle_config()
+
+            self.simple_diy_add_sub_row_btn.clicked.connect(_add_simple_diy_sub_row)
+            self.simple_diy_remove_sub_row_btn.clicked.connect(
+                lambda _=None: (
+                    self._simple_diy_sub_rows and
+                    self._simple_diy_sub_rows[-1].get('del_btn') and
+                    self._simple_diy_sub_rows[-1]['del_btn'].click()
+                )
+            )
+            self.subtitle_folder_path.textChanged.connect(lambda _=None: self._save_simple_diy_subtitle_config())
+            self.simple_diy_sub_lang_combo.setCurrentText(_default_diy_sub_lang())
+            _refresh_simple_diy_sub_row_buttons()
 
             self.track_scope_row = QWidget(label2_container)
             track_scope_outer = QHBoxLayout(self.track_scope_row)
@@ -545,45 +672,104 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         def _reposition_subtitle_path_box(self):
             outer = getattr(self, '_label2_outer_layout', None)
             hint_row = getattr(self, 'subtitle_hint_row', None)
+            label_row = getattr(self, 'subtitle_label_row', None)
             row = getattr(self, 'subtitle_path_row', None)
+            extra_rows = getattr(self, 'simple_diy_extra_sub_rows', None)
             scope_row = getattr(self, 'track_scope_row', None)
             host = getattr(self, '_subtitle_tables_host', None)
             if outer is None or row is None or host is None:
                 return
             if hint_row is not None and outer.indexOf(hint_row) >= 0:
                 outer.removeWidget(hint_row)
+            if label_row is not None and outer.indexOf(label_row) >= 0:
+                outer.removeWidget(label_row)
             if outer.indexOf(row) >= 0:
                 outer.removeWidget(row)
+            if extra_rows is not None and outer.indexOf(extra_rows) >= 0:
+                outer.removeWidget(extra_rows)
             if scope_row is not None and outer.indexOf(scope_row) >= 0:
                 outer.removeWidget(scope_row)
             idx_host = outer.indexOf(host)
             if idx_host < 0:
                 if hint_row is not None:
                     outer.insertWidget(0, hint_row)
-                outer.insertWidget(1 if hint_row is not None else 0, row)
+                insert_base = 1 if hint_row is not None else 0
+                if label_row is not None:
+                    outer.insertWidget(insert_base, label_row)
+                    insert_base += 1
+                outer.insertWidget(insert_base, row)
+                if extra_rows is not None:
+                    outer.insertWidget(insert_base + 1, extra_rows)
                 if scope_row is not None:
-                    outer.insertWidget(2 if hint_row is not None else 1, scope_row)
+                    outer.insertWidget(insert_base + (2 if extra_rows is not None else 1), scope_row)
                 return
             if self.get_selected_function_id() in (3, 4, 5):
                 if hint_row is not None:
                     outer.insertWidget(idx_host + 1, hint_row)
-                    outer.insertWidget(idx_host + 2, row)
+                    if label_row is not None:
+                        outer.insertWidget(idx_host + 2, label_row)
+                    outer.insertWidget(idx_host + (3 if label_row is not None else 2), row)
+                    if extra_rows is not None:
+                        outer.insertWidget(idx_host + (4 if label_row is not None else 3), extra_rows)
                     if scope_row is not None:
-                        outer.insertWidget(idx_host + 3, scope_row)
+                        offset = (5 if (label_row is not None and extra_rows is not None)
+                                  else 4 if (label_row is not None or extra_rows is not None) else 3)
+                        outer.insertWidget(idx_host + offset, scope_row)
                 else:
-                    outer.insertWidget(idx_host + 1, row)
+                    if label_row is not None:
+                        outer.insertWidget(idx_host + 1, label_row)
+                    outer.insertWidget(idx_host + (2 if label_row is not None else 1), row)
+                    if extra_rows is not None:
+                        outer.insertWidget(idx_host + (3 if label_row is not None else 2), extra_rows)
                     if scope_row is not None:
-                        outer.insertWidget(idx_host + 2, scope_row)
+                        offset = (4 if (label_row is not None and extra_rows is not None)
+                                  else 3 if (label_row is not None or extra_rows is not None) else 2)
+                        outer.insertWidget(idx_host + offset, scope_row)
             else:
                 if hint_row is not None:
                     outer.insertWidget(idx_host, hint_row)
-                    outer.insertWidget(idx_host + 1, row)
+                    if label_row is not None:
+                        outer.insertWidget(idx_host + 1, label_row)
+                    outer.insertWidget(idx_host + (2 if label_row is not None else 1), row)
+                    if extra_rows is not None:
+                        outer.insertWidget(idx_host + (3 if label_row is not None else 2), extra_rows)
                     if scope_row is not None:
-                        outer.insertWidget(idx_host + 2, scope_row)
+                        offset = (4 if (label_row is not None and extra_rows is not None)
+                                  else 3 if (label_row is not None or extra_rows is not None) else 2)
+                        outer.insertWidget(idx_host + offset, scope_row)
                 else:
-                    outer.insertWidget(idx_host, row)
+                    if label_row is not None:
+                        outer.insertWidget(idx_host, label_row)
+                    outer.insertWidget(idx_host + (1 if label_row is not None else 0), row)
+                    if extra_rows is not None:
+                        outer.insertWidget(idx_host + (2 if label_row is not None else 1), extra_rows)
                     if scope_row is not None:
-                        outer.insertWidget(idx_host + 1, scope_row)
+                        offset = (3 if (label_row is not None and extra_rows is not None)
+                                  else 2 if (label_row is not None or extra_rows is not None) else 1)
+                        outer.insertWidget(idx_host + offset, scope_row)
+
+        def _save_simple_diy_subtitle_config(self):
+            try:
+                if self.get_selected_function_id() != 5:
+                    return
+                if not (getattr(self, 'diy_simple_radio', None) and self.diy_simple_radio.isChecked()):
+                    return
+                rows = []
+                main_path = (self.subtitle_folder_path.text() or '').strip()
+                main_lang = (self.simple_diy_sub_lang_combo.currentText() or 'und').strip() if getattr(
+                    self, 'simple_diy_sub_lang_combo', None) else 'und'
+                if main_path or main_lang:
+                    rows.append({'path': main_path, 'language': main_lang or 'und'})
+                for row_info in getattr(self, '_simple_diy_sub_rows', []):
+                    edit = row_info.get('edit')
+                    combo = row_info.get('lang')
+                    p = (edit.text() or '').strip() if edit else ''
+                    l = (combo.currentText() or 'und').strip() if combo else 'und'
+                    if p or l:
+                        rows.append({'path': p, 'language': l or 'und'})
+                self._simple_diy_subtitle_config = rows
+            except Exception:
+                pass
 
         def closeEvent(self, event):
             self.delete_default_vpy_file()
