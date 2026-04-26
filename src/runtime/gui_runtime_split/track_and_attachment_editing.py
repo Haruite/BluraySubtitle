@@ -23,6 +23,36 @@ from .gui_base import BluraySubtitleGuiBase
 
 
 class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
+        def _iter_all_mpls_paths_in_root(self, source_root: str) -> list[str]:
+            out: list[str] = []
+            if not hasattr(self, 'table1') or not self.table1:
+                return out
+            root_norm = os.path.normpath(str(source_root or ''))
+            for r in range(self.table1.rowCount()):
+                root_item = self.table1.item(r, 0)
+                root = root_item.text().strip() if root_item and root_item.text() else ''
+                if not root:
+                    continue
+                if os.path.normpath(root) != root_norm:
+                    continue
+                info = self.table1.cellWidget(r, 2)
+                if not isinstance(info, QTableWidget):
+                    continue
+                for i in range(info.rowCount()):
+                    mpls_item = info.item(i, 0)
+                    mpls_file = mpls_item.text().strip() if mpls_item and mpls_item.text() else ''
+                    if not mpls_file:
+                        continue
+                    out.append(os.path.normpath(os.path.join(root, 'BDMV', 'PLAYLIST', mpls_file)))
+            return out
+
+        def _should_sync_main_track_scope_all(self) -> bool:
+            if self.get_selected_function_id() != 5:
+                return False
+            if not (getattr(self, 'diy_simple_radio', None) and self.diy_simple_radio.isChecked()):
+                return False
+            return bool(getattr(self, 'track_scope_all_radio', None) and self.track_scope_all_radio.isChecked())
+
         def _iter_selected_main_mpls_paths(self) -> list[str]:
             out: list[str] = []
             if not hasattr(self, 'table1') or not self.table1:
@@ -84,7 +114,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             cfg_conv = getattr(self, '_track_convert_config', {})
             cfg_lang = getattr(self, '_track_language_config', {})
 
-            for target_mpls_path in self._iter_selected_main_mpls_paths():
+            for target_mpls_path in self._iter_all_mpls_paths_in_root(source_root):
                 target_path = os.path.normpath(target_mpls_path)
                 if self._bdmv_root_from_mpls_path(target_path) != source_root:
                     # Only sync within the same disc volume.
@@ -1427,13 +1457,14 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 lang_cfg = getattr(self, '_track_language_config', {})
                 lang_cfg[key] = dict(getattr(self, '_last_track_language_map', {}) or {})
                 self._track_language_config = lang_cfg
-                self._sync_main_mpls_track_config_by_pid(
-                    mpls_path,
-                    streams,
-                    set(selected_after),
-                    dict(getattr(self, '_last_track_convert_map', {}) or {}),
-                    dict(getattr(self, '_last_track_language_map', {}) or {}),
-                )
+                if self._should_sync_main_track_scope_all():
+                    self._sync_main_mpls_track_config_by_pid(
+                        mpls_path,
+                        streams,
+                        set(selected_after),
+                        dict(getattr(self, '_last_track_convert_map', {}) or {}),
+                        dict(getattr(self, '_last_track_language_map', {}) or {}),
+                    )
                 self._refresh_table1_remux_cmds()
                 if self.get_selected_function_id() == 5:
                     self.on_select_function(force=True, keep_inputs=True, keep_state=True)
