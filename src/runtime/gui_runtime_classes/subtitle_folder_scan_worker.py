@@ -49,7 +49,7 @@ class SubtitleFolderScanWorker(QObject):
                 for i, p in enumerate(mkv_paths):
                     if self.cancel_event.is_set():
                         raise _Cancelled()
-                    self.label.emit(f'读取MKV {i + 1}/{len(mkv_paths)}')
+                    self.label.emit(f'Reading MKV {i + 1}/{len(mkv_paths)}')
                     rows.append((p, get_time_str(MKV(p).get_duration())))
                     self.progress.emit(int((i + 1) / total * 1000))
                 self.result.emit({'seq': self.seq, 'mode': self.mode, 'rows': rows})
@@ -68,7 +68,7 @@ class SubtitleFolderScanWorker(QObject):
                     '[BluraySubtitle] Subtitle-folder scan worker: finished successfully (no subtitle files).')
                 return
 
-            self.label.emit('解析字幕 0/{}'.format(len(files)))
+            self.label.emit('Parsing Subtitles 0/{}'.format(len(files)))
             self.progress.emit(0)
 
             # Choose subtitle parsing strategy by platform.
@@ -99,11 +99,11 @@ class SubtitleFolderScanWorker(QObject):
                 rows = [(p, get_time_str(subtitle_cache[p].max_end_time())) for p in successful_files]
             except Exception as e:
                 print(f'{translate_text("Failed to get subtitle duration: ")}{str(e)}')
-                rows = [(p, '未知') for p in successful_files]
+                rows = [(p, 'Unknown') for p in successful_files]
 
             configuration = {}
             if not (self.movie_mode and self.mode in (1, 3, 4)):
-                self.label.emit('生成配置')
+                self.label.emit('Generating Configuration')
                 self.progress.emit(850)
                 try:
                     bs = BluraySubtitle(self.bdmv_path, successful_files, self.checked, None)
@@ -155,7 +155,7 @@ class SubtitleFolderScanWorker(QObject):
                 print(
                     f'{translate_text("Failed to load subtitle file ｢")}{p}{translate_text("｣: ")}{type(e).__name__}: {str(e)}')
                 print_exc_terminal()
-            self.label.emit(f'解析字幕 {i + 1}/{total}（已加载 {loaded_count}）')
+            self.label.emit(f'Parsing Subtitles {i + 1}/{total} (loaded {loaded_count})')
             self.progress.emit(int((i + 1) / total * 700))
         return subtitle_cache
 
@@ -193,7 +193,7 @@ class SubtitleFolderScanWorker(QObject):
                         else:
                             print(f'{translate_text("Failed to load subtitle file: ")}{str(e)}')
                     done += 1
-                    self.label.emit(f'解析字幕 {done}/{total}')
+                    self.label.emit(f'Parsing Subtitles {done}/{total}')
                     self.progress.emit(int(done / total * 700))
         except Exception as e:
             # Propagate exception so the caller can handle fallback.

@@ -130,13 +130,13 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
             line_edit = QLineEdit(widget)
             line_edit.setText(initial_path or self.get_default_vpy_path())
 
-            button = QPushButton(self.t('选择'), widget)
+            button = QPushButton(self.t('Select'), widget)
 
             def select_file():
                 start_dir = os.path.dirname(line_edit.text()) if line_edit.text() else os.getcwd()
                 path, _ = QFileDialog.getOpenFileName(
                     self,
-                    self.t("选择vpy文件"),
+                    self.t("Select VPy File"),
                     start_dir,
                     "Python/VapourSynth (*.py *.vpy)"
                 )
@@ -163,10 +163,10 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
 
         def open_vpy_in_editor(self, path: str):
             if not path:
-                QMessageBox.information(self, "提示", "vpy路径为空")
+                QMessageBox.information(self, "Prompt", "VPy path is empty")
                 return
             if not os.path.exists(path):
-                QMessageBox.information(self, "提示", f"文件不存在：{path}")
+                QMessageBox.information(self, "Prompt", f"File does not exist: {path}")
                 return
             if sys.platform == 'win32':
                 os.startfile(path)
@@ -176,17 +176,17 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
         def open_vpy_in_vsedit(self, path: str) -> Optional[QProcess]:
             path = str(path or '').strip()
             if not path:
-                QMessageBox.information(self, "提示", "vpy路径为空")
+                QMessageBox.information(self, "Prompt", "VPy path is empty")
                 return None
             if not os.path.exists(path):
-                QMessageBox.information(self, "提示", f"文件不存在：{path}")
+                QMessageBox.information(self, "Prompt", f"File does not exist: {path}")
                 return None
 
             vsedit_exe = VSEDIT_PATH
             if not vsedit_exe or not os.path.exists(vsedit_exe):
                 vsedit_exe = shutil.which('vsedit') or ''
             if not vsedit_exe:
-                QMessageBox.information(self, "提示", "未找到 vsedit，请检查 VSEDIT_PATH 或系统 PATH")
+                QMessageBox.information(self, "Prompt", "vsedit not found, check VSEDIT_PATH or system PATH")
                 return None
 
             try:
@@ -195,7 +195,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                 proc.setArguments([os.path.normpath(path)])
                 proc.start()
                 if not proc.waitForStarted(2000):
-                    QMessageBox.warning(self, "提示", "启动 vsedit 失败")
+                    QMessageBox.warning(self, "Prompt", "Failed to launch vsedit")
                     try:
                         proc.kill()
                     except Exception:
@@ -204,7 +204,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                     return None
                 return proc
             except Exception as e:
-                QMessageBox.warning(self, "提示", f"打开 vsedit 失败：{e}")
+                QMessageBox.warning(self, "Prompt", f"Failed to open vsedit: {e}")
                 return None
 
         def _restore_default_vpy_after_preview(self, mapping: dict[str, tuple[str, str]]):
@@ -646,7 +646,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
 
         def _preview_script_for_row(self, vpy_path: str, video_path: str, subtitle_path: str):
             if not video_path:
-                QMessageBox.information(self, "提示", "无法确定视频文件路径")
+                QMessageBox.information(self, "Prompt", "Cannot determine video file path")
                 return
 
             vpy_path = (vpy_path or '').strip()
@@ -665,7 +665,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                     temp_vpy = self._create_temp_preview_vpy_from_default(video_path=video_path,
                                                                           subtitle_path=subtitle_path or '')
                     if not temp_vpy:
-                        QMessageBox.warning(self, "提示", "生成预览脚本失败")
+                        QMessageBox.warning(self, "Prompt", "Failed to generate preview script")
                         return
                     proc = self.open_vpy_in_vsedit(temp_vpy)
                     if not proc:
@@ -702,7 +702,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                                                    subtitle_path=subtitle_path or '')
                     self.open_vpy_in_vsedit(vpy_path)
             except Exception as e:
-                QMessageBox.warning(self, "提示", f"预览脚本失败：{e}")
+                QMessageBox.warning(self, "Prompt", f"Preview script failed: {e}")
 
         def on_edit_vpy_clicked(self):
             if self.get_selected_function_id() != 4:

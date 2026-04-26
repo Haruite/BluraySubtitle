@@ -257,7 +257,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
 
                         # Set tracks button
                         btn_tracks = QToolButton(self.table3)
-                        btn_tracks.setText(self.t('编辑轨道'))
+                        btn_tracks.setText(self.t('edit tracks'))
                         btn_tracks.clicked.connect(self._on_edit_tracks_from_sp_table_clicked)
                         self.table3.setCellWidget(row, tracks_col, btn_tracks)
 

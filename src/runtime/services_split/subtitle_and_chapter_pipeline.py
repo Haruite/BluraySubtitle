@@ -80,7 +80,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
             conf = self.configuration[0]
             for sub_index, conf_tmp in self.configuration.items():
                 self._progress(int((sub_index + 1) / len(self.sub_files) * 1000),
-                               f'合并中 {sub_index + 1}/{len(self.sub_files)}')
+                               f'Merging {sub_index + 1}/{len(self.sub_files)}')
                 if conf_tmp['bdmv_index'] != bdmv_index:
                     if bdmv_index > 0:
                         self._progress(text='Writing Subtitle File')
@@ -217,10 +217,10 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                 n = min(len(paths), len(confs))
                 if len(paths) != len(confs):
                     print(
-                        f'{self.t("章节写入: BD卷 ")}{bdmv_index}'
-                        f'{self.t(" MKV数(")}{len(paths)}'
-                        f'{self.t(") 与配置集数(")}{len(confs)}'
-                        f'{self.t(") 不一致，处理前 ")}{n}{self.t(" 个")}'
+                        f'{self.t("add_chapter_to_mkv: BD Vol ")}{bdmv_index}'
+                        f'{self.t(" MKV count (")}{len(paths)}'
+                        f'{self.t(") differs from configuration count (")}{len(confs)}'
+                        f'{self.t("), processing first ")}{n}{self.t(" items")}'
                     )
                 rows_cache: dict[str, int] = {}
                 split_bounds_override: list[tuple[int, int]] = []

@@ -31,10 +31,10 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
             if not hasattr(self, 'language_label') or not hasattr(self, 'language_combo'):
                 return
             current_code = self.language_combo.currentData() or 'en'
-            self.language_label.setText(self.t('语言'))
+            self.language_label.setText(self.t('Language'))
             self.language_combo.blockSignals(True)
             self.language_combo.setItemText(0, 'English')
-            self.language_combo.setItemText(1, '简体中文')
+            self.language_combo.setItemText(1, 'Simplified Chinese')
             idx = 0 if current_code == 'en' else 1
             self.language_combo.setCurrentIndex(idx)
             self.language_combo.blockSignals(False)
@@ -43,13 +43,13 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
             if not hasattr(self, 'theme_label') or not hasattr(self, 'theme_combo'):
                 return
             current_mode = self.theme_combo.currentData() or getattr(self, '_theme_mode', 'light')
-            self.theme_label.setText(self.t('模式'))
+            self.theme_label.setText(self.t('Mode'))
             self.theme_combo.blockSignals(True)
             try:
                 self.theme_combo.clear()
-                self.theme_combo.addItem(self.t('浅色'), 'light')
-                self.theme_combo.addItem(self.t('深色'), 'dark')
-                self.theme_combo.addItem(self.t('彩色'), 'colorful')
+                self.theme_combo.addItem(self.t('Light'), 'light')
+                self.theme_combo.addItem(self.t('Dark'), 'dark')
+                self.theme_combo.addItem(self.t('Colorful'), 'colorful')
                 if str(current_mode) == 'dark':
                     idx = 1
                 elif str(current_mode) == 'colorful':
@@ -69,7 +69,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                 and self._window_opacity_supported()
             )
             if isinstance(label, QLabel):
-                label.setText(self.t('透明度'))
+                label.setText(self.t('Opacity'))
                 label.setVisible(visible)
             if isinstance(slider, QSlider):
                 slider.setVisible(visible)
@@ -355,60 +355,60 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                 }
                 return [en.get(k, k) for k in keys]
             zh = {
-                'path': '路径',
-                'size': '大小',
-                'info': '信息',
-                'remux_cmd': '混流命令',
-                'select': '选择',
-                'sub_duration': '字幕时长',
-                'warning': '提示',
-                'tracks': '轨道',
-                'bdmv_index': '原盘序号',
-                'chapter_index': '章节序号',
-                'start_at_chapter': '起始章节',
-                'end_at_chapter': '结束章节',
-                'offset': '偏移',
-                'duration': '时长',
-                'sub_path': '字幕路径',
-                'ep_duration': '单集时长',
-                'm2ts_file': 'm2ts 文件',
-                'm2ts_type': 'm2ts 类型',
-                'language': '语言',
-                'sub_language': '字幕语言',
-                'lang': '语言',
-                'track_number': '轨道号',
+                'path': 'path',
+                'size': 'size',
+                'info': 'info',
+                'remux_cmd': 'remux cmd',
+                'select': 'select',
+                'sub_duration': 'subtitle duration',
+                'warning': 'warning',
+                'tracks': 'tracks',
+                'bdmv_index': 'bdmv index',
+                'chapter_index': 'chapter index',
+                'start_at_chapter': 'start chapter',
+                'end_at_chapter': 'end chapter',
+                'offset': 'offset',
+                'duration': 'duration',
+                'sub_path': 'subtitle path',
+                'ep_duration': 'episode duration',
+                'm2ts_file': 'm2ts file',
+                'm2ts_type': 'm2ts type',
+                'language': 'language',
+                'sub_language': 'subtitle language',
+                'lang': 'language',
+                'track_number': 'track number',
                 'track_uid': 'UID',
-                'track_type': '类型',
+                'track_type': 'type',
                 'codec_id': 'Codec ID',
-                'convert': '转换',
-                'channels': '声道',
-                'bit_depth': '位深',
-                'sampling_frequency': '采样率',
-                'pixel_width': '宽度',
-                'pixel_height': '高度',
-                'default_duration': '默认时长',
-                'extract': '提取',
-                'edit_chapters': '编辑章节',
-                'edit_attachments': '编辑附件',
-                'filename': '文件名',
-                'mime_type': 'MIME 类型',
+                'convert': 'convert',
+                'channels': 'channels',
+                'bit_depth': 'bit depth',
+                'sampling_frequency': 'sampling frequency',
+                'pixel_width': 'width',
+                'pixel_height': 'height',
+                'default_duration': 'default duration',
+                'extract': 'extract',
+                'edit_chapters': 'edit chapters',
+                'edit_attachments': 'edit attachments',
+                'filename': 'filename',
+                'mime_type': 'MIME type',
                 'uid': 'UID',
-                'file_size': '文件大小',
+                'file_size': 'file size',
                 'id': 'ID',
-                'output_name': '输出文件名',
-                'vpy_path': 'vpy 路径',
-                'edit_vpy': '编辑 vpy',
-                'preview_script': '预览',
-                'edit_tracks': '编辑轨道',
-                'mpls_file': 'mpls 文件',
-                'chapters': '章节',
-                'main': '主播放列表',
-                'play': '播放',
-                'file': '文件',
-                'index': '序号',
-                'start': '开始',
-                'end': '结束',
-                'text': '内容',
+                'output_name': 'output filename',
+                'vpy_path': 'vpy path',
+                'edit_vpy': 'edit vpy',
+                'preview_script': 'preview',
+                'edit_tracks': 'edit tracks',
+                'mpls_file': 'mpls file',
+                'chapters': 'chapters',
+                'main': 'main playlist',
+                'play': 'play',
+                'file': 'file',
+                'index': 'index',
+                'start': 'start',
+                'end': 'end',
+                'text': 'text',
             }
             return [zh.get(k, str(k).replace('_', ' ')) for k in keys]
 

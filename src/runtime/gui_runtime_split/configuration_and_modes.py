@@ -25,7 +25,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             if self.get_selected_function_id() != 4:
                 try:
                     if hasattr(self, 'bdmv_path_label') and self.bdmv_path_label:
-                        self.bdmv_path_label.setText(self.t('选择BDMV所在的文件夹'))
+                        self.bdmv_path_label.setText(self.t('Select the BDMV folder'))
                     if hasattr(self, 'remux_path_box') and self.remux_path_box:
                         self.remux_path_box.setVisible(False)
                     if hasattr(self, 'bluray_path_box') and self.bluray_path_box:
@@ -60,7 +60,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
 
             remux_mode = getattr(self, '_encode_input_mode', 'bdmv') == 'remux'
             try:
-                self.label1.setText(self.t("选择文件夹"))
+                self.label1.setText(self.t("Select folder"))
             except Exception:
                 pass
 
@@ -71,7 +71,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     self.remux_path_box.setVisible(remux_mode)
                 if hasattr(self, 'bdmv_path_label') and self.bdmv_path_label:
                     self.bdmv_path_label.setText(
-                        self.t('选择remux所在文件夹') if remux_mode else self.t('选择BDMV所在的文件夹')
+                        self.t('Select the remux folder') if remux_mode else self.t('Select the BDMV folder')
                     )
                 if hasattr(self, 'table1') and self.table1:
                     self.table1.setVisible(not remux_mode)
@@ -710,6 +710,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                                 btn_play = QToolButton(self.table2)
                                 btn_play.setText(self.t('play'))
                                 btn_play.clicked.connect(partial(self.on_play_table2_disc_row, row_i, bdmv_col, m2ts_col))
+                                self.table2.setItem(row_i, play_col, None)
                                 self.table2.setCellWidget(row_i, play_col, btn_play)
                     else:
                         self.table2.setRowCount(len(configuration))
@@ -785,23 +786,25 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                             lang_combo = self.create_language_combo(final_lang)
                             lang_combo._auto_lang = auto_lang
                             self.table2.setCellWidget(sub_index, language_col, lang_combo)
-                            auto_name = auto_output_name_map.get(sub_index, '')
-                            prev_item = self.table2.item(sub_index, output_col)
-                            prev_text = prev_item.text().strip() if prev_item and prev_item.text() else ''
-                            prev_auto = prev_item.data(Qt.ItemDataRole.UserRole) if prev_item else None
-                            if prev_text and isinstance(prev_auto, str) and prev_text != prev_auto:
-                                final_text = prev_text
-                            else:
-                                final_text = auto_name
-                            new_item = QTableWidgetItem(final_text)
-                            new_item.setData(Qt.ItemDataRole.UserRole, auto_name)
-                            self.table2.setItem(sub_index, output_col, new_item)
+                            if output_col >= 0:
+                                auto_name = auto_output_name_map.get(sub_index, '')
+                                prev_item = self.table2.item(sub_index, output_col)
+                                prev_text = prev_item.text().strip() if prev_item and prev_item.text() else ''
+                                prev_auto = prev_item.data(Qt.ItemDataRole.UserRole) if prev_item else None
+                                if prev_text and isinstance(prev_auto, str) and prev_text != prev_auto:
+                                    final_text = prev_text
+                                else:
+                                    final_text = auto_name
+                                new_item = QTableWidgetItem(final_text)
+                                new_item.setData(Qt.ItemDataRole.UserRole, auto_name)
+                                self.table2.setItem(sub_index, output_col, new_item)
                             self.ensure_encode_row_widgets(sub_index)
                             if play_col >= 0:
                                 btn_play = QToolButton(self.table2)
                                 btn_play.setText(self.t('play'))
                                 btn_play.clicked.connect(
                                     partial(self.on_play_table2_disc_row, sub_index, bdmv_col, m2ts_col))
+                                self.table2.setItem(sub_index, play_col, None)
                                 self.table2.setCellWidget(sub_index, play_col, btn_play)
                     if self.subtitle_folder_path.text().strip():
                         sub_files = []
@@ -915,6 +918,9 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 self.subtitle_formats_hint_label.setVisible(function_id == 5)
             if hasattr(self, 'subtitle_convert_checkbox') and self.subtitle_convert_checkbox:
                 self.subtitle_convert_checkbox.setVisible(function_id == 5)
+            if hasattr(self, 'subtitle_bluray_compat_checkbox') and self.subtitle_bluray_compat_checkbox:
+                simple_diy = bool(getattr(self, 'diy_simple_radio', None) and self.diy_simple_radio.isChecked())
+                self.subtitle_bluray_compat_checkbox.setVisible(function_id == 5 and simple_diy)
             if hasattr(self, 'subtitle_hint_row') and self.subtitle_hint_row:
                 self.subtitle_hint_row.setVisible(function_id == 5)
             if hasattr(self, 'track_scope_row') and self.track_scope_row:
@@ -994,12 +1000,12 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 QTimer.singleShot(0, self.ensure_default_vpy_file)
 
             if function_id == 1:
-                self.label2.setText(self.t("选择字幕文件夹"))
-                self.exe_button.setText(self.t("生成字幕"))
+                self.label2.setText(self.t("Select the subtitle folder"))
+                self.exe_button.setText(self.t("Generate Subtitles"))
                 self.encode_box.setVisible(False)
                 if not self.checkbox1.isVisible():
                     self.checkbox1.setVisible(True)
-                self.checkbox1.setText(self.t('补全蓝光目录'))
+                self.checkbox1.setText(self.t('Complete Blu-ray Folder'))
                 if hasattr(self, 'merge_options_row') and self.merge_options_row:
                     self.merge_options_row.setVisible(True)
                 if hasattr(self, 'subtitle_suffix_label') and self.subtitle_suffix_label:
@@ -1018,12 +1024,12 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     self._set_table2_subtitle_column_order()
 
             if function_id == 2:
-                self.label2.setText(self.t("选择mkv所在文件夹"))
-                self.exe_button.setText(self.t("添加章节"))
+                self.label2.setText(self.t("Select the MKV folder"))
+                self.exe_button.setText(self.t("Add Chapters"))
                 self.encode_box.setVisible(False)
                 if not self.checkbox1.isVisible():
                     self.checkbox1.setVisible(True)
-                self.checkbox1.setText(self.t('直接编辑原文件'))
+                self.checkbox1.setText(self.t('Edit Original File Directly'))
                 if hasattr(self, 'merge_options_row') and self.merge_options_row:
                     self.merge_options_row.setVisible(True)
                 if hasattr(self, 'subtitle_suffix_label') and self.subtitle_suffix_label:
@@ -1044,8 +1050,8 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             if function_id == 3:
                 if not keep_state:
                     self._geometry = self.saveGeometry()
-                self.label2.setText(self.t("选择字幕文件夹（可选）"))
-                self.exe_button.setText(self.t("开始remux"))
+                self.label2.setText(self.t("Select the subtitle folder (optional)"))
+                self.exe_button.setText(self.t("Start Remux"))
                 self.encode_box.setVisible(False)
                 self.checkbox1.setVisible(False)
                 if hasattr(self, 'merge_options_row') and self.merge_options_row:
@@ -1069,8 +1075,8 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             if function_id == 4:
                 if not keep_state:
                     self._geometry = self.saveGeometry()
-                self.label2.setText(self.t("选择字幕文件夹（可选）"))
-                self.exe_button.setText(self.t("开始压制"))
+                self.label2.setText(self.t("Select the subtitle folder (optional)"))
+                self.exe_button.setText(self.t("Start Encode"))
                 self.checkbox1.setVisible(False)
                 if hasattr(self, 'merge_options_row') and self.merge_options_row:
                     self.merge_options_row.setVisible(False)
@@ -1094,12 +1100,18 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             if function_id == 5:
                 if not keep_state:
                     self._geometry = self.saveGeometry()
-                self.label2.setText(self.t("选择字幕文件夹（可选）"))
-                self.exe_button.setText(self.t("开始DIY（暂未实现）"))
+                self.label2.setText(self.t("Select the subtitle folder (optional)"))
+                self.exe_button.setText(self.t("Start DIY (Not implemented yet)"))
                 self.encode_box.setVisible(False)
                 self.checkbox1.setVisible(False)
                 if hasattr(self, 'merge_options_row') and self.merge_options_row:
                     self.merge_options_row.setVisible(False)
+                if self.table2.columnCount() != len(DIY_REMUX_LABELS):
+                    self.table2.setColumnCount(len(DIY_REMUX_LABELS))
+                    self._set_table_headers(self.table2, DIY_REMUX_LABELS)
+                if hasattr(self, 'table3') and self.table3 and self.table3.columnCount() != len(DIY_SP_LABELS):
+                    self.table3.setColumnCount(len(DIY_SP_LABELS))
+                    self._set_table_headers(self.table3, DIY_SP_LABELS)
                 if not keep_state:
                     self.table1.clear()
                     self.table1.setRowCount(0)
@@ -1119,7 +1131,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     self.table3.setVisible(False)
                 simple_diy = bool(getattr(self, 'diy_simple_radio', None) and self.diy_simple_radio.isChecked())
                 if hasattr(self, 'label2'):
-                    self.label2.setText(self.t("选择字幕所在文件夹"))
+                    self.label2.setText(self.t("Select subtitles folder"))
                 if hasattr(self, 'simple_diy_sub_lang_combo') and self.simple_diy_sub_lang_combo:
                     default_lang = 'chi' if getattr(self, '_language_code', CURRENT_UI_LANGUAGE) == 'zh' else 'eng'
                     if (self.simple_diy_sub_lang_combo.currentText() or '').strip() in ('', 'und'):
@@ -1151,12 +1163,12 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                             )
                             if use_x264:
                                 self.x265_mode_label.setText('x264：')
-                                self.x265_params_label.setText('x264参数：')
+                                self.x265_params_label.setText('x264 Params:')
                                 if hasattr(self, '_x264_preset_params'):
                                     self._encode_preset_params = self._x264_preset_params
                             else:
                                 self.x265_mode_label.setText('x265：')
-                                self.x265_params_label.setText('x265参数：')
+                                self.x265_params_label.setText('x265 Params:')
                                 if hasattr(self, '_x265_preset_params'):
                                     self._encode_preset_params = self._x265_preset_params
                     except Exception:

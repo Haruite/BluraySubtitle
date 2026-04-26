@@ -98,8 +98,8 @@ class PlaybackPathsMixin(BluraySubtitleGuiBase):
 
             item, ok = QInputDialog.getItem(
                 self,
-                self.t("选择m2ts文件"),
-                self.t("检测到多个 m2ts 文件，请选择要预览的文件："),
+                self.t("Select M2TS File"),
+                self.t("Multiple M2TS files detected, choose one for preview:"),
                 m2ts_files,
                 0,
                 False
@@ -116,7 +116,7 @@ class PlaybackPathsMixin(BluraySubtitleGuiBase):
 
         def _play_m2ts_path(self, m2ts_path: str):
             if not m2ts_path or not os.path.exists(m2ts_path):
-                QMessageBox.information(self, " ", f"未找到 m2ts 文件：\n{m2ts_path}")
+                QMessageBox.information(self, " ", f"M2TS file not found:\n{m2ts_path}")
                 return
             if sys.platform == 'win32':
                 mp4_exe_path = get_mpv_safe_path(".mp4")
@@ -153,13 +153,13 @@ class PlaybackPathsMixin(BluraySubtitleGuiBase):
                     playlist_dir = self._get_playlist_dir_for_bdmv_index(bdmv_index)
                     if not playlist_dir:
                         QMessageBox.information(self, " ",
-                                                f"未找到对应的蓝光目录（bdmv_index={bdmv_index}），无法定位 mpls 文件")
+                                                f"Matching Blu-ray directory not found (bdmv_index={bdmv_index}), cannot locate MPLS file")
                         return
                     mpls_path = os.path.normpath(os.path.join(playlist_dir, mpls_file))
                     if os.path.exists(mpls_path):
                         self._play_mpls_path(mpls_path)
                         return
-                    QMessageBox.information(self, " ", f"未找到 mpls 文件：\n{mpls_path}")
+                    QMessageBox.information(self, " ", f"MPLS file not found:\n{mpls_path}")
                     return
                 m2ts_item = self.table3.item(row_index, m2ts_col)
                 m2ts_files = self._split_m2ts_files(m2ts_item.text() if m2ts_item else '')

@@ -33,9 +33,9 @@ class CustomBox(QGroupBox):  # Drag-and-drop folder input helper for boxed rows.
         if not w:
             return
 
-        if self.box_title == '原盘' and hasattr(w, 'bdmv_folder_path'):
+        if self.box_title == 'Blu-ray' and hasattr(w, 'bdmv_folder_path'):
             w.bdmv_folder_path.setText(dropped_path)
-        if self.box_title == '字幕' and hasattr(w, 'subtitle_folder_path'):
+        if self.box_title == 'Subtitles' and hasattr(w, 'subtitle_folder_path'):
             w.subtitle_folder_path.setText(dropped_path)
         if self.box_title == 'Remux' and hasattr(w, 'remux_folder_path'):
             w.remux_folder_path.setText(dropped_path)

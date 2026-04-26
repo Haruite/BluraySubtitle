@@ -12,7 +12,7 @@ from typing import Optional
 from PyQt6.QtCore import Qt, QTimer, QThread, QCoreApplication, QPoint, QEventLoop
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPlainTextEdit, QWidget, QHBoxLayout, QPushButton, \
     QApplication, QProgressDialog, QProgressBar, QTableWidgetItem, QTableWidget, QToolButton, QComboBox, \
-    QAbstractItemView, QMenu, QMessageBox, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, QFileDialog
+    QAbstractItemView, QMenu, QMessageBox, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, QFileDialog, QCheckBox
 
 from src.bdmv import Chapter
 from src.core import MKV_LABELS, REMUX_LABELS, DIY_REMUX_LABELS, ENCODE_LABELS, SUBTITLE_LABELS, ENCODE_REMUX_LABELS, \
@@ -31,6 +31,38 @@ from .gui_base import BluraySubtitleGuiBase
 
 
 class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
+        @staticmethod
+        def _append_compat_arg_if_missing(base: str, option_name: str, option_value: str = '') -> str:
+            text = str(base or '').strip()
+            pattern = rf'(^|\s){re.escape(option_name)}(\s|$)'
+            if re.search(pattern, text):
+                return text
+            addon = option_name if not option_value else f'{option_name} {option_value}'
+            return f'{text} {addon}'.strip()
+
+        def _effective_encode_params(self) -> str:
+            raw = self.x265_params_edit.toPlainText().strip() if hasattr(self, 'x265_params_edit') else ''
+            use_compat = bool(
+                getattr(self, 'use_bluray_compat_params_checkbox', None)
+                and self.use_bluray_compat_params_checkbox.isChecked()
+            )
+            if not use_compat:
+                return raw
+
+            mode_label = str(getattr(self, 'x265_mode_label', None).text() if getattr(self, 'x265_mode_label', None) else '')
+            is_x264 = mode_label.lower().startswith('x264')
+            params = str(raw or '').strip()
+            if is_x264:
+                params = self._append_compat_arg_if_missing(params, '--profile', 'high')
+                params = self._append_compat_arg_if_missing(params, '--level', '4.1')
+                params = self._append_compat_arg_if_missing(params, '--keyint', '24')
+            else:
+                params = self._append_compat_arg_if_missing(params, '--profile', 'main10')
+                params = self._append_compat_arg_if_missing(params, '--level-idc', '4.1')
+                params = self._append_compat_arg_if_missing(params, '--vbv-maxrate', '30000')
+                params = self._append_compat_arg_if_missing(params, '--vbv-bufsize', '30000')
+            return params
+
         def _show_error_dialog(self, err_text: str):
             try:
                 s = str(err_text or '').strip()
@@ -58,8 +90,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             btn_layout = QHBoxLayout()
             btn_layout.setContentsMargins(0, 0, 0, 0)
             btn_row.setLayout(btn_layout)
-            btn_copy = QPushButton(self.t('复制信息'), dlg)
-            btn_close = QPushButton(self.t('关闭'), dlg)
+            btn_copy = QPushButton(self.t('Copy Info'), dlg)
+            btn_close = QPushButton(self.t('Close'), dlg)
             btn_layout.addStretch(1)
             btn_layout.addWidget(btn_copy)
             btn_layout.addWidget(btn_close)
@@ -109,16 +141,16 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             function_id = self.get_selected_function_id()
             if function_id == 1:
                 mode = 1
-                title = '读取字幕中'
+                title = 'Reading Subtitles'
             elif function_id == 2:
                 mode = 2
-                title = '读取MKV中'
+                title = 'Reading MKV'
             elif function_id in (3, 5):
                 mode = 3
-                title = '读取字幕中'
+                title = 'Reading Subtitles'
             else:
                 mode = 4
-                title = '读取字幕中'
+                title = 'Reading Subtitles'
 
             if not hasattr(self, '_subtitle_scan_seq'):
                 self._subtitle_scan_seq = 0
@@ -129,7 +161,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
 
             selected_mpls = self.get_selected_mpls_no_ext()
 
-            progress_dialog = QProgressDialog(self.t(title), self.t('取消'), 0, 1000, self)
+            progress_dialog = QProgressDialog(self.t(title), self.t('Cancel'), 0, 1000, self)
             progress_dialog.setMinimumWidth(400)
             bar = QProgressBar(progress_dialog)
             bar.setRange(0, 1000)
@@ -338,7 +370,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             if not folder or not os.path.isdir(folder):
                 return
             start_ts = time.time()
-            progress_dialog = QProgressDialog(self.t('读取中'), '', 0, 1000, self)
+            progress_dialog = QProgressDialog(self.t('Loading...'), '', 0, 1000, self)
             progress_dialog.setMinimumWidth(420)
             bar = QProgressBar(progress_dialog)
             bar.setRange(0, 1000)
@@ -392,7 +424,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 btn_play.clicked.connect(partial(self.open_file_path, src))
                 self.table2.setCellWidget(r, play_col, btn_play)
                 btn_tracks = QToolButton(self.table2)
-                btn_tracks.setText(self.t('编辑轨道'))
+                btn_tracks.setText(self.t('edit tracks'))
                 btn_tracks.clicked.connect(partial(self.on_edit_tracks_from_mkv_row, self.table2, r))
                 self.table2.setCellWidget(r, tracks_col, btn_tracks)
                 btn_chapters = QToolButton(self.table2)
@@ -431,7 +463,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 self.table3.setRowCount(0)
                 return
             start_ts = time.time()
-            progress_dialog = QProgressDialog(self.t('读取中'), '', 0, 1000, self)
+            progress_dialog = QProgressDialog(self.t('Loading...'), '', 0, 1000, self)
             progress_dialog.setMinimumWidth(420)
             bar = QProgressBar(progress_dialog)
             bar.setRange(0, 1000)
@@ -481,7 +513,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 btn_play.clicked.connect(partial(self.open_file_path, src))
                 self.table3.setCellWidget(r, play_col, btn_play)
                 btn_tracks = QToolButton(self.table3)
-                btn_tracks.setText(self.t('编辑轨道'))
+                btn_tracks.setText(self.t('edit tracks'))
                 btn_tracks.clicked.connect(partial(self.on_edit_tracks_from_mkv_row, self.table3, r))
                 self.table3.setCellWidget(r, tracks_col, btn_tracks)
                 btn_chapters = QToolButton(self.table3)
@@ -528,7 +560,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             cancel_event = threading.Event()
             self._current_cancel_event = cancel_event
             self._exe_button_default_text = self.exe_button.text()
-            self._update_exe_button_progress(0, '编辑中' if self.checkbox1.isChecked() else '混流中')
+            self._update_exe_button_progress(0, 'Editing' if self.checkbox1.isChecked() else 'Muxing')
 
             # Use sorted mkv files if table is sorted, otherwise use original order
             mkv_files = self.get_mkv_files_in_table_order()
@@ -556,9 +588,9 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 self._reset_exe_button()
                 self.exe_button.setEnabled(True)
                 if self.checkbox1.isChecked():
-                    self._show_bottom_message('添加章节成功，mkv章节已添加')
+                    self._show_bottom_message('Chapters added to MKV successfully')
                 else:
-                    self._show_bottom_message('添加章节成功，生成的新mkv文件在output文件夹下')
+                    self._show_bottom_message('Chapters added successfully, new MKV is in output folder')
             except _Cancelled:
                 self._current_cancel_event = None
                 self._reset_exe_button()
@@ -585,7 +617,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 def __init__(this):
                     super(SubtitleEditDialog, this).__init__()
                     this.altered = False
-                    this.setWindowTitle(f"{self.t('编辑字幕')}: {path}")
+                    this.setWindowTitle(f"{self.t('Edit Subtitle')}: {path}")
                     layout = QVBoxLayout()
                     this.table_widget = QTableWidget()
                     this.table_widget.horizontalHeader().setSortIndicatorShown(True)
@@ -692,10 +724,10 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             output_folder = os.path.normpath(self.output_folder_path.text().strip()) if hasattr(self,
                                                                                                 'output_folder_path') else ''
             if not output_folder:
-                QMessageBox.information(self, " ", "未选择输出文件夹")
+                QMessageBox.information(self, " ", "Output folder is not selected")
                 return
             if not os.path.isdir(output_folder):
-                QMessageBox.information(self, " ", "输出文件夹不存在")
+                QMessageBox.information(self, " ", "Output folder does not exist")
                 return
             self.ensure_default_vpy_file()
             find_mkvtoolinx()
@@ -703,7 +735,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             cancel_event = threading.Event()
             self._current_cancel_event = cancel_event
             self._exe_button_default_text = self.exe_button.text()
-            self._update_exe_button_progress(0, '准备中')
+            self._update_exe_button_progress(0, 'Preparing')
 
             if getattr(self, '_encode_input_mode', 'bdmv') == 'remux':
                 folder = self._normalize_path_input(
@@ -712,7 +744,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     self._current_cancel_event = None
                     self._reset_exe_button()
                     self.exe_button.setEnabled(True)
-                    QMessageBox.information(self, " ", "未选择 remux 所在的文件夹")
+                    QMessageBox.information(self, " ", "Select the remux folder")
                     return
                 try:
                     remux_folder = os.path.normpath(folder)
@@ -722,7 +754,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                         self._current_cancel_event = None
                         self._reset_exe_button()
                         self.exe_button.setEnabled(True)
-                        QMessageBox.information(self, " ", "输出文件夹为输入文件夹的上级目录，请修改输出文件夹")
+                        QMessageBox.information(self, " ", "Output folder is parent of input folder, please change output folder")
                         return
                 except Exception:
                     pass
@@ -775,9 +807,9 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                             'vpy_path': vpy_path,
                         })
 
-                vspipe_mode = 'bundle' if self.vspipe_mode_combo.currentText() == '程序自带' else 'system'
-                x265_mode = 'bundle' if self.x265_mode_combo.currentText() == '程序自带' else 'system'
-                x265_params = self.x265_params_edit.toPlainText().strip()
+                vspipe_mode = 'bundle' if self.vspipe_mode_combo.currentText() == 'Built-in' else 'system'
+                x265_mode = 'bundle' if self.x265_mode_combo.currentText() == 'Built-in' else 'system'
+                x265_params = self._effective_encode_params()
                 if self.sub_pack_hard_radio.isChecked():
                     sub_pack_mode = 'hard'
                 elif self.sub_pack_soft_radio.isChecked():
@@ -820,7 +852,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
 
                 def on_finished():
                     cleanup()
-                    self._show_bottom_message('原盘压制成功！')
+                    self._show_bottom_message('Blu-ray encode completed!')
 
                 def on_canceled():
                     cleanup()
@@ -864,7 +896,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 self._current_cancel_event = None
                 self._reset_exe_button()
                 self.exe_button.setEnabled(True)
-                QMessageBox.information(self, " ", "未选择原盘主mpls")
+                QMessageBox.information(self, " ", "Main MPLS is not selected")
                 return
             configuration: dict[int, dict[str, int | str]] = {}
             if self._is_movie_mode():
@@ -874,7 +906,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     self._current_cancel_event = None
                     self._reset_exe_button()
                     self.exe_button.setEnabled(True)
-                    QMessageBox.information(self, " ", "配置为空，跳过更新")
+                    QMessageBox.information(self, " ", "Configuration is empty, skipping update")
                     return
             else:
                 try:
@@ -903,9 +935,9 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             except Exception:
                 pass
 
-            vspipe_mode = 'bundle' if self.vspipe_mode_combo.currentText() == '程序自带' else 'system'
-            x265_mode = 'bundle' if self.x265_mode_combo.currentText() == '程序自带' else 'system'
-            x265_params = self.x265_params_edit.toPlainText().strip()
+            vspipe_mode = 'bundle' if self.vspipe_mode_combo.currentText() == 'Built-in' else 'system'
+            x265_mode = 'bundle' if self.x265_mode_combo.currentText() == 'Built-in' else 'system'
+            x265_params = self._effective_encode_params()
             if self.sub_pack_hard_radio.isChecked():
                 sub_pack_mode = 'hard'
             elif self.sub_pack_soft_radio.isChecked():
@@ -957,7 +989,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
 
             def on_finished():
                 cleanup()
-                self._show_bottom_message('原盘压制成功！')
+                self._show_bottom_message('Blu-ray encode completed!')
 
             def on_canceled():
                 cleanup()
@@ -976,7 +1008,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 selected_mpls = self.get_selected_mpls_no_ext()
                 if not selected_mpls:
                     if not silent_mode:
-                        QMessageBox.information(self, " ", "未选择原盘主mpls")
+                        QMessageBox.information(self, " ", "Main MPLS is not selected")
                     return False
 
                 folder_to_bdmv: dict[str, int] = {}
@@ -1015,15 +1047,15 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
 
                 if not tasks:
                     if not silent_mode:
-                        QMessageBox.information(self, " ", "未选择字幕文件")
+                        QMessageBox.information(self, " ", "Subtitle file is not selected")
                     return False
 
                 cancel_event = threading.Event()
                 self._current_cancel_event = cancel_event
                 self._exe_button_default_text = self.exe_button.text()
                 self._exe_button_progress_value = 0
-                self._exe_button_progress_text = '字幕生成中'
-                self._update_exe_button_progress(0, '字幕生成中')
+                self._exe_button_progress_text = 'Generating Subtitles'
+                self._update_exe_button_progress(0, 'Generating Subtitles')
                 self._merge_thread = QThread(self)
                 self._merge_worker = MergeWorker(
                     self.bdmv_folder_path.text(),
@@ -1062,7 +1094,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     success = True
                     cleanup()
                     if not silent_mode:
-                        self._show_bottom_message("生成字幕成功！", 10000)
+                        self._show_bottom_message("Subtitle generation completed!", 10000)
 
                 def on_canceled():
                     cleanup()
@@ -1099,21 +1131,21 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     sub_files.append(item.text())
             if not sub_files:
                 if not silent_mode:
-                    QMessageBox.information(self, " ", "未选择字幕文件")
+                    QMessageBox.information(self, " ", "Subtitle file is not selected")
                 return False
 
             selected_mpls = self.get_selected_mpls_no_ext()
             if not selected_mpls:
                 if not silent_mode:
-                    QMessageBox.information(self, " ", "未选择原盘主mpls")
+                    QMessageBox.information(self, " ", "Main MPLS is not selected")
                 return False
 
             cancel_event = threading.Event()
             self._current_cancel_event = cancel_event
             self._exe_button_default_text = self.exe_button.text()
             self._exe_button_progress_value = 0
-            self._exe_button_progress_text = '字幕生成中'
-            self._update_exe_button_progress(0, '字幕生成中')
+            self._exe_button_progress_text = 'Generating Subtitles'
+            self._update_exe_button_progress(0, 'Generating Subtitles')
             self._merge_thread = QThread(self)
             self._merge_worker = MergeWorker(
                 self.bdmv_folder_path.text(),
@@ -1151,7 +1183,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 success = True
                 cleanup()
                 if not silent_mode:
-                    self._show_bottom_message("生成字幕成功！", 10000)
+                    self._show_bottom_message("Subtitle generation completed!", 10000)
 
             def on_canceled():
                 cleanup()
@@ -1180,18 +1212,18 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
 
         def init_encode_box(self):
             self._x265_preset_params = {
-                '快速': '--preset fast --crf 20 --aq-mode 2 --bframes 8 --ref 4 --me 2 --subme 2',
-                '均衡': '--preset slower --crf 18 --aq-mode 3 --bframes 8 --ref 5 --me 3 --subme 4',
-                '高质': '--preset slower --crf 16 --aq-mode 3 --bframes 8 --psy-rd 2.0 --psy-rdoq 1.0 --deblock -1:-1 --rc-lookahead 60 --ref 6 --subme 5',
-                '极限': '--preset placebo --crf 14 --pme --pmode --aq-mode 3 --aq-strength 1.0 --cbqpoffs -2 --crqpoffs -2 --bframes 12 --b-adapt 2 --ref 6 --rc-lookahead 120 --lookahead-threads 0 --psy-rd 2.5 --psy-rdoq 2.0 --rdoq-level 2 --deblock -2:-2 --qcomp 0.65 --merange 57 --no-sao --no-strong-intra-smoothing',
-                '自订': ''
+                'Fast': '--preset fast --crf 20 --aq-mode 2 --bframes 8 --ref 4 --me 2 --subme 2',
+                'Balanced': '--preset slower --crf 18 --aq-mode 3 --bframes 8 --ref 5 --me 3 --subme 4',
+                'High Quality': '--preset slower --crf 16 --aq-mode 3 --bframes 8 --psy-rd 2.0 --psy-rdoq 1.0 --deblock -1:-1 --rc-lookahead 60 --ref 6 --subme 5',
+                'Extreme': '--preset placebo --crf 14 --pme --pmode --aq-mode 3 --aq-strength 1.0 --cbqpoffs -2 --crqpoffs -2 --bframes 12 --b-adapt 2 --ref 6 --rc-lookahead 120 --lookahead-threads 0 --psy-rd 2.5 --psy-rdoq 2.0 --rdoq-level 2 --deblock -2:-2 --qcomp 0.65 --merange 57 --no-sao --no-strong-intra-smoothing',
+                'Custom': ''
             }
             self._x264_preset_params = {
-                '快速': '--preset fast --crf 20 --profile high --level 4.1 --bframes 4 --ref 4',
-                '均衡': '--preset medium --crf 18 --profile high --level 4.1 --bframes 6 --ref 5 --deblock -1:-1',
-                '高质': '--preset slow --crf 16 --profile high --level 4.1 --bframes 8 --ref 6 --deblock -1:-1 --aq-mode 2',
-                '极限': '--preset veryslow --crf 14 --profile high --level 4.1 --bframes 10 --ref 8 --aq-mode 2 --trellis 2',
-                '自订': ''
+                'Fast': '--preset fast --crf 20 --profile high --level 4.1 --bframes 4 --ref 4',
+                'Balanced': '--preset medium --crf 18 --profile high --level 4.1 --bframes 6 --ref 5 --deblock -1:-1',
+                'High Quality': '--preset slow --crf 16 --profile high --level 4.1 --bframes 8 --ref 6 --deblock -1:-1 --aq-mode 2',
+                'Extreme': '--preset veryslow --crf 14 --profile high --level 4.1 --bframes 10 --ref 8 --aq-mode 2 --trellis 2',
+                'Custom': ''
             }
             self._encode_preset_params = dict(self._x265_preset_params)
             self._encode_setting_updating = False
@@ -1208,41 +1240,44 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             tools_layout.setSpacing(4)
             tools_row.setLayout(tools_layout)
 
-            tools_layout.addWidget(QLabel('vspipe：', tools_row))
+            tools_layout.addWidget(QLabel('vspipe:', tools_row))
             self.vspipe_mode_combo = QComboBox(tools_row)
-            self.vspipe_mode_combo.addItems(['程序自带', '系统'])
+            self.vspipe_mode_combo.addItems(['Built-in', 'System'])
             tools_layout.addWidget(self.vspipe_mode_combo)
 
-            self.x265_mode_label = QLabel('x265：', tools_row)
+            self.x265_mode_label = QLabel('x265:', tools_row)
             tools_layout.addWidget(self.x265_mode_label)
             self.x265_mode_combo = QComboBox(tools_row)
-            self.x265_mode_combo.addItems(['程序自带', '系统'])
+            self.x265_mode_combo.addItems(['Built-in', 'System'])
             tools_layout.addWidget(self.x265_mode_combo)
 
             is_pyinstaller_bundle = bool(getattr(sys, 'frozen', False)) and hasattr(sys, '_MEIPASS')
             if not is_pyinstaller_bundle:
-                self.vspipe_mode_combo.setCurrentText('系统')
+                self.vspipe_mode_combo.setCurrentText('System')
                 self.vspipe_mode_combo.setEnabled(False)
-                self.x265_mode_combo.setCurrentText('系统')
+                self.x265_mode_combo.setCurrentText('System')
                 self.x265_mode_combo.setEnabled(False)
             elif is_docker():
-                self.vspipe_mode_combo.setCurrentText('系统')
-                self.x265_mode_combo.setCurrentText('系统')
+                self.vspipe_mode_combo.setCurrentText('System')
+                self.x265_mode_combo.setCurrentText('System')
 
-            self.x265_params_label = QLabel('x265参数：', tools_row)
+            self.x265_params_label = QLabel('x265 Params:', tools_row)
             tools_layout.addWidget(self.x265_params_label)
             self.x265_preset_combo = QComboBox(tools_row)
-            self.x265_preset_combo.addItem('快速', '快速')
-            self.x265_preset_combo.addItem('均衡', '均衡')
-            self.x265_preset_combo.addItem('高质', '高质')
-            self.x265_preset_combo.addItem('极限', '极限')
-            self.x265_preset_combo.addItem('自订', '自订')
-            idx_balanced = self.x265_preset_combo.findData('均衡')
+            self.x265_preset_combo.addItem('Fast', 'Fast')
+            self.x265_preset_combo.addItem('Balanced', 'Balanced')
+            self.x265_preset_combo.addItem('High Quality', 'High Quality')
+            self.x265_preset_combo.addItem('Extreme', 'Extreme')
+            self.x265_preset_combo.addItem('Custom', 'Custom')
+            idx_balanced = self.x265_preset_combo.findData('Balanced')
             self.x265_preset_combo.setCurrentIndex(0 if idx_balanced < 0 else idx_balanced)
             self._adjust_combo_width_to_contents(self.x265_preset_combo)
             tools_layout.addWidget(self.x265_preset_combo)
 
             tools_layout.addStretch(1)
+            self.use_bluray_compat_params_checkbox = QCheckBox('Use Blu-ray compatible params', tools_row)
+            self.use_bluray_compat_params_checkbox.setChecked(False)
+            tools_layout.addWidget(self.use_bluray_compat_params_checkbox)
             layout.addWidget(tools_row)
 
             self.x265_params_edit = QPlainTextEdit(self.encode_box)
@@ -1260,21 +1295,21 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
 
             def on_preset_changed():
                 preset = str(self.x265_preset_combo.currentData() or self.x265_preset_combo.currentText() or '')
-                if preset == '自订':
+                if preset == 'Custom':
                     return
                 set_params_for_preset(preset)
 
             def on_params_edited():
                 if self._encode_setting_updating:
                     return
-                if str(self.x265_preset_combo.currentData() or '') != '自订':
-                    idx_custom = self.x265_preset_combo.findData('自订')
+                if str(self.x265_preset_combo.currentData() or '') != 'Custom':
+                    idx_custom = self.x265_preset_combo.findData('Custom')
                     if idx_custom >= 0:
                         self.x265_preset_combo.setCurrentIndex(idx_custom)
 
             self.x265_preset_combo.currentIndexChanged.connect(on_preset_changed)
             self.x265_params_edit.textChanged.connect(on_params_edited)
-            set_params_for_preset(str(self.x265_preset_combo.currentData() or '均衡'))
+            set_params_for_preset(str(self.x265_preset_combo.currentData() or 'Balanced'))
 
             sub_pack_row = QWidget(self.encode_box)
             sub_pack_layout = QHBoxLayout()
@@ -1282,10 +1317,10 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             sub_pack_layout.setSpacing(4)
             sub_pack_row.setLayout(sub_pack_layout)
 
-            sub_pack_layout.addWidget(QLabel('字幕封装方式：', sub_pack_row))
-            self.sub_pack_external_radio = QRadioButton('外挂', sub_pack_row)
-            self.sub_pack_soft_radio = QRadioButton('内挂', sub_pack_row)
-            self.sub_pack_hard_radio = QRadioButton('内嵌', sub_pack_row)
+            sub_pack_layout.addWidget(QLabel('Subtitle Packaging:', sub_pack_row))
+            self.sub_pack_external_radio = QRadioButton('External', sub_pack_row)
+            self.sub_pack_soft_radio = QRadioButton('Softsub', sub_pack_row)
+            self.sub_pack_hard_radio = QRadioButton('Hardsub', sub_pack_row)
             self.sub_pack_external_radio.setChecked(True)
 
             sub_pack_layout.addWidget(self.sub_pack_external_radio)
@@ -1339,7 +1374,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             if function_id == 4:
                 self.encode_bluray()
             if function_id == 5:
-                QMessageBox.information(self, " ", self.t("原盘DIY功能暂未实现"))
+                QMessageBox.information(self, " ", self.t("Blu-ray DIY is not implemented yet"))
 
         def on_button_click(self, mpls_path: str, is_main_at_build: bool = True, bdmv_index: int = 0):
             is_main = self._is_mpls_currently_main(mpls_path)
@@ -1347,7 +1382,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             class ChapterWindow(QDialog):
                 def __init__(this):
                     super(ChapterWindow, this).__init__()
-                    this.setWindowTitle(f"{self.t('章节')}: {mpls_path}")
+                    this.setWindowTitle(f"{self.t('Chapters')}: {mpls_path}")
                     layout = QVBoxLayout()
                     this.table_widget = QTableWidget()
                     self._set_compact_table(this.table_widget, row_height=20, header_height=20)
@@ -1406,9 +1441,9 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
 
                     # Add OK and Cancel buttons
                     button_layout = QHBoxLayout()
-                    select_all_button = QPushButton(self.t('全选'))
-                    ok_button = QPushButton(self.t('确定') if is_main else self.t('关闭'))
-                    cancel_button = QPushButton(self.t('取消'))
+                    select_all_button = QPushButton(self.t('Select all'))
+                    ok_button = QPushButton(self.t('OK') if is_main else self.t('Close'))
+                    cancel_button = QPushButton(self.t('Cancel'))
                     select_all_button.setEnabled(bool(is_main))
                     select_all_button.clicked.connect(this.select_all_chapters)
                     button_layout.addWidget(select_all_button)
@@ -1531,7 +1566,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                         play_btn.setText(self.t('preview') if (checked and subtitle) else self.t('play'))
                     if self.get_selected_function_id() in (3, 4, 5) and info.columnCount() > 5:
                         btn_tracks = QToolButton()
-                        btn_tracks.setText(self.t('编辑轨道'))
+                        btn_tracks.setText(self.t('edit tracks'))
                         can_edit_tracks = bool(checked)
                         if self.get_selected_function_id() == 5:
                             is_simple_diy = bool(getattr(self, 'diy_simple_radio', None) and self.diy_simple_radio.isChecked())
@@ -1577,8 +1612,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     display = [os.path.basename(p) for p in candidates]
                     item, ok = QInputDialog.getItem(
                         self,
-                        self.t("选择字幕文件"),
-                        self.t("检测到多个字幕文件，请选择要预览的文件："),
+                        self.t("Select subtitle file"),
+                        self.t("Multiple subtitle files detected, choose one for preview:"),
                         display,
                         0,
                         False
@@ -1621,7 +1656,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                                         os.path.exists(mpls_name + '.ssa'))
                 if not has_subtitle:
                     # Still allow playback even if subtitle generation failed.
-                    QMessageBox.information(self, "提示", "字幕文件不存在，将播放无字幕版本")
+                    QMessageBox.information(self, "Prompt", "Subtitle file does not exist; playback will continue without subtitles")
             elif is_preview:
                 # Check whether subtitle file exists.
                 mpls_name = mpls_path[:-5]
@@ -1629,7 +1664,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                                 os.path.exists(mpls_name + '.srt') or
                                 os.path.exists(mpls_name + '.ssa'))
                 if not has_subtitle:
-                    QMessageBox.information(self, "提示", "字幕文件不存在，将播放无字幕版本")
+                    QMessageBox.information(self, "Prompt", "Subtitle file does not exist; playback will continue without subtitles")
             if sys.platform != 'linux':
                 if sys.platform == 'win32':
                     mp4_exe_path = get_mpv_safe_path(".mp4")
@@ -1846,10 +1881,10 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         def open_file_path(self, path: str):
             path = self._normalize_path_input(path)
             if not path:
-                QMessageBox.information(self, " ", "未填写文件路径")
+                QMessageBox.information(self, " ", "File path is empty")
                 return
             if not os.path.exists(path):
-                QMessageBox.warning(self, "打开文件失败", f"文件不存在：\n{path}")
+                QMessageBox.warning(self, "Open File Failed", f"File does not exist:\n{path}")
                 return
             try:
                 if sys.platform == 'win32':
@@ -1859,12 +1894,12 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 else:
                     subprocess.Popen(['xdg-open', path])
             except Exception as e:
-                QMessageBox.warning(self, "打开文件失败", f"无法打开文件：\n{path}\n\n{e}")
+                QMessageBox.warning(self, "Open File Failed", f"Cannot open file:\n{path}\n\n{e}")
 
         def open_folder_path(self, path: str):
             path = self._normalize_path_input(path)
             if not path:
-                QMessageBox.information(self, " ", "未填写文件夹路径")
+                QMessageBox.information(self, " ", "Folder path is empty")
                 return
 
             normalized = path
@@ -1872,7 +1907,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 normalized = os.path.normpath(os.path.dirname(normalized))
 
             if not os.path.isdir(normalized):
-                QMessageBox.warning(self, "打开文件夹失败", f"文件夹不存在：\n{normalized}")
+                QMessageBox.warning(self, "Open Folder Failed", f"Folder does not exist:\n{normalized}")
                 return
 
             try:
@@ -1883,25 +1918,25 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 else:
                     subprocess.Popen(['xdg-open', normalized])
             except Exception as e:
-                QMessageBox.warning(self, "打开文件夹失败", f"无法打开文件夹：\n{normalized}\n\n{e}")
+                QMessageBox.warning(self, "Open Folder Failed", f"Cannot open folder:\n{normalized}\n\n{e}")
 
         def select_bdmv_folder(self):
-            folder = QFileDialog.getExistingDirectory(self, self.t("选择文件夹"))
+            folder = QFileDialog.getExistingDirectory(self, self.t("Select folder"))
             if folder:
                 self.bdmv_folder_path.setText(os.path.normpath(folder))
 
         def select_output_folder(self):
             start = self.output_folder_path.text().strip() if hasattr(self, 'output_folder_path') else ''
-            folder = QFileDialog.getExistingDirectory(self, self.t("选择输出文件夹"), start)
+            folder = QFileDialog.getExistingDirectory(self, self.t("Select Output Folder"), start)
             if folder:
                 self.output_folder_path.setText(os.path.normpath(folder))
 
         def select_remux_folder(self):
-            folder = QFileDialog.getExistingDirectory(self, self.t("选择文件夹"))
+            folder = QFileDialog.getExistingDirectory(self, self.t("Select folder"))
             if folder and hasattr(self, 'remux_folder_path'):
                 self.remux_folder_path.setText(os.path.normpath(folder))
 
         def select_subtitle_folder(self):
-            folder = QFileDialog.getExistingDirectory(self, self.t("选择文件夹"))
+            folder = QFileDialog.getExistingDirectory(self, self.t("Select folder"))
             if folder:
                 self.subtitle_folder_path.setText(os.path.normpath(folder))

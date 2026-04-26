@@ -150,7 +150,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             except Exception:
                 bit_depth = 0
 
-            options: list[str] = [self.t('不转换')]
+            options: list[str] = [self.t('No conversion')]
             if codec_type == 'video':
                 if codec_id == 'V_MPEG4/ISO/AVC' or codec_name == 'h264':
                     options.append('h264(encoded)')
@@ -206,7 +206,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             except Exception:
                 pass
             if not MKV_EXTRACT_PATH or not MKV_PROP_EDIT_PATH:
-                QMessageBox.information(self, " ", "未找到 mkvextract 或 mkvpropedit")
+                QMessageBox.information(self, " ", "mkvextract or mkvpropedit not found")
                 return
             tmp_dir = tempfile.mkdtemp(prefix='BluraySubtitle_chapters_')
             chapter_path = os.path.join(tmp_dir, 'chapter.txt')
@@ -219,7 +219,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 content = ''
 
             dlg = QDialog(self)
-            dlg.setWindowTitle(self.t('编辑章节'))
+            dlg.setWindowTitle(self.t('edit chapters'))
             layout = QVBoxLayout()
             dlg.setLayout(layout)
             editor = QPlainTextEdit(dlg)
@@ -229,8 +229,8 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             btn_layout = QHBoxLayout()
             btn_layout.setContentsMargins(0, 0, 0, 0)
             btn_row.setLayout(btn_layout)
-            btn_save = QPushButton(self.t('保存'), dlg)
-            btn_close = QPushButton(self.t('关闭'), dlg)
+            btn_save = QPushButton(self.t('Save'), dlg)
+            btn_close = QPushButton(self.t('Close'), dlg)
             btn_layout.addStretch(1)
             btn_layout.addWidget(btn_save)
             btn_layout.addWidget(btn_close)
@@ -254,12 +254,12 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                     out = (p.stdout or '') + '\n' + (p.stderr or '')
                 except Exception:
                     out = traceback.format_exc()
-                is_error = ('错误' in out) or ('error' in out.lower())
+                is_error = ('Error' in out) or ('error' in out.lower())
                 if is_error:
-                    status_label.setText(self.t('保存失败，请检查'))
+                    status_label.setText(self.t('Save failed, please check'))
                     status_label.setStyleSheet('color:#dc2626;')
                 else:
-                    status_label.setText(self.t('保存章节成功！'))
+                    status_label.setText(self.t('Chapters saved!'))
                     status_label.setStyleSheet('color:#16a34a;')
                 status_label.setVisible(True)
                 QTimer.singleShot(3000, lambda: status_label.setVisible(False))
@@ -275,11 +275,11 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             except Exception:
                 pass
             if not MKV_EXTRACT_PATH:
-                QMessageBox.information(self, " ", "未找到 mkvextract")
+                QMessageBox.information(self, " ", "mkvextract not found")
                 return
             aid = str(attachment_id or '').strip()
             if not aid:
-                QMessageBox.information(self, " ", "未找到附件 ID")
+                QMessageBox.information(self, " ", "Attachment ID not found")
                 return
             safe_name = os.path.basename(str(filename or '').strip()) or f'attachment_{aid}.bin'
             safe_name = safe_name.replace('\\', '_').replace('/', '_')
@@ -720,7 +720,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 pass
 
             dlg = QDialog(self)
-            dlg.setWindowTitle(self.t('编辑附件'))
+            dlg.setWindowTitle(self.t('Edit Attachment'))
             layout = QVBoxLayout()
             dlg.setLayout(layout)
 
@@ -736,11 +736,11 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             form_layout.setContentsMargins(0, 0, 0, 0)
             form_layout.setSpacing(6)
             form.setLayout(form_layout)
-            form_layout.addWidget(QLabel(self.t('文件名'), form))
+            form_layout.addWidget(QLabel(self.t('filename'), form))
             name_edit = QLineEdit(form)
             name_edit.setMinimumWidth(160)
             form_layout.addWidget(name_edit)
-            form_layout.addWidget(QLabel(self.t('MIME 类型'), form))
+            form_layout.addWidget(QLabel(self.t('mime_type'), form))
             mime_edit = QLineEdit(form)
             mime_edit.setMinimumWidth(150)
             form_layout.addWidget(mime_edit)
@@ -756,11 +756,11 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             file_layout.setContentsMargins(0, 0, 0, 0)
             file_layout.setSpacing(6)
             file_row.setLayout(file_layout)
-            file_layout.addWidget(QLabel(self.t('请选择附件'), file_row))
+            file_layout.addWidget(QLabel(self.t('Select attachment file'), file_row))
             file_edit = QLineEdit(file_row)
             file_edit.setMinimumWidth(360)
             file_layout.addWidget(file_edit)
-            btn_browse = QPushButton(self.t('选择'), file_row)
+            btn_browse = QPushButton(self.t('Select'), file_row)
             file_layout.addWidget(btn_browse)
             layout.addWidget(file_row)
 
@@ -773,12 +773,12 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             btn_layout.setContentsMargins(0, 0, 0, 0)
             btn_layout.setSpacing(6)
             btn_row.setLayout(btn_layout)
-            btn_add = QPushButton(self.t('添加附件'), dlg)
-            btn_replace = QPushButton(self.t('替换'), dlg)
-            btn_update = QPushButton(self.t('更新'), dlg)
-            btn_delete = QPushButton(self.t('删除'), dlg)
-            btn_refresh = QPushButton(self.t('刷新'), dlg)
-            btn_close = QPushButton(self.t('关闭'), dlg)
+            btn_add = QPushButton(self.t('Add Attachment'), dlg)
+            btn_replace = QPushButton(self.t('Replace'), dlg)
+            btn_update = QPushButton(self.t('Update'), dlg)
+            btn_delete = QPushButton(self.t('Delete'), dlg)
+            btn_refresh = QPushButton(self.t('Refresh'), dlg)
+            btn_close = QPushButton(self.t('Close'), dlg)
             btn_layout.addWidget(btn_add)
             btn_layout.addWidget(btn_replace)
             btn_layout.addWidget(btn_update)
@@ -792,10 +792,10 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
 
             def set_status(ok: bool, details: str):
                 if ok:
-                    status_label.setText(self.t('附件操作成功！'))
+                    status_label.setText(self.t('Attachment updated!'))
                     status_label.setStyleSheet('color:#16a34a;')
                 else:
-                    status_label.setText(self.t('附件操作失败，请检查'))
+                    status_label.setText(self.t('Attachment update failed, please check'))
                     status_label.setStyleSheet('color:#dc2626;')
                 status_label.setVisible(True)
                 QTimer.singleShot(3000, lambda: status_label.setVisible(False))
@@ -835,7 +835,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                     for c, key in enumerate(cols):
                         if key == 'extract':
                             btn = QToolButton(table)
-                            btn.setText(self.t('提取'))
+                            btn.setText(self.t('extract'))
                             aid = str(row.get('id', '') or '')
                             fn = str(row.get('filename', '') or '')
                             btn.clicked.connect(partial(self._extract_attachment_to_temp_and_open, mkv_path, aid, fn))
@@ -856,20 +856,20 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             def browse_file():
                 start = file_edit.text().strip()
                 start_dir = os.path.dirname(start) if start else ''
-                path = QFileDialog.getOpenFileName(dlg, self.t('选择'), start_dir)[0]
+                path = QFileDialog.getOpenFileName(dlg, self.t('Select'), start_dir)[0]
                 if path:
                     file_edit.setText(os.path.normpath(path))
 
             def run_propedit(args: list[str]) -> tuple[bool, str]:
                 if not MKV_PROP_EDIT_PATH:
-                    return False, self.t('未找到 mkvpropedit')
+                    return False, self.t('mkvpropedit not found')
                 cmd = f'"{MKV_PROP_EDIT_PATH}" {mkvtoolnix_ui_language_arg()} "{mkv_path}" ' + ' '.join(args)
                 try:
                     p = subprocess.run(cmd, shell=True, capture_output=True, text=True, encoding='utf-8', errors='ignore')
                     out = (p.stdout or '') + '\n' + (p.stderr or '')
                 except Exception:
                     return False, traceback.format_exc()
-                is_error = ('错误' in out) or ('error' in out.lower()) or (p.returncode != 0)
+                is_error = ('Error' in out) or ('error' in out.lower()) or (p.returncode != 0)
                 return (not is_error), out.strip()
 
             def apply_replace():
@@ -878,7 +878,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                     return
                 src_file = self._normalize_path_input(file_edit.text())
                 if not src_file or not os.path.isfile(src_file):
-                    QMessageBox.information(self, " ", self.t('请选择附件'))
+                    QMessageBox.information(self, " ", self.t('Select attachment file'))
                     return
                 row = state['rows'][r]
                 sel = selector_for_row(row)
@@ -934,7 +934,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             def apply_add():
                 src_file = self._normalize_path_input(file_edit.text())
                 if not src_file or not os.path.isfile(src_file):
-                    QMessageBox.information(self, " ", self.t('请选择附件'))
+                    QMessageBox.information(self, " ", self.t('Select attachment file'))
                     return
                 before_rows = list(state.get('rows') or [])
                 before_set = {(str(x.get('id') or ''), str(x.get('filename') or '')) for x in before_rows}
@@ -1028,7 +1028,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                     if key == 'extract':
                         if source_mkv and is_mkvinfo:
                             btn = QToolButton(table)
-                            btn.setText(self.t('提取'))
+                            btn.setText(self.t('extract'))
                             try:
                                 tid = int(str(s.get('track_id') or s.get('index') or '').strip())
                             except Exception:
@@ -1102,8 +1102,8 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             btn_layout = QHBoxLayout()
             btn_layout.setContentsMargins(0, 0, 0, 0)
             btn_row.setLayout(btn_layout)
-            btn_ok = QPushButton(self.t('选择'), dlg)
-            btn_cancel = QPushButton(self.t('取消'), dlg)
+            btn_ok = QPushButton(self.t('Select'), dlg)
+            btn_cancel = QPushButton(self.t('Cancel'), dlg)
             btn_cancel.clicked.connect(dlg.reject)
             status_label = QLabel(dlg)
             status_label.setVisible(False)
@@ -1118,7 +1118,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                         cb = table.cellWidget(r, convert_col)
                         if isinstance(cb, QComboBox):
                             v = (cb.currentText() or '').strip()
-                            if v and v != self.t('不转换'):
+                            if v and v != self.t('No conversion'):
                                 conversion_map[idx] = v
                 self._last_track_convert_map = conversion_map
                 if 'language' in cols:
@@ -1187,7 +1187,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                                                         lang_item.setText(new_lang_value)
                                         except Exception:
                                             pass
-                                        status_label.setText(self.t('语言修改成功！'))
+                                        status_label.setText(self.t('Language updated successfully!'))
                                         status_label.setStyleSheet('color:#16a34a;font-weight:bold;')
                                         status_label.setVisible(True)
 
@@ -1210,7 +1210,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                                     status_label.setVisible(True)
                                     QTimer.singleShot(3000, lambda: status_label.setVisible(False))
                             else:
-                                status_label.setText(self.t('未找到 mkvpropedit'))
+                                status_label.setText(self.t('mkvpropedit not found'))
                                 status_label.setStyleSheet('color:#dc2626;font-weight:bold;')
                                 status_label.setVisible(True)
                                 QTimer.singleShot(3000, lambda: status_label.setVisible(False))
@@ -1305,7 +1305,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 else:
                     src = self._get_remux_source_path_from_table3_row(row_index)
                 if not src or not os.path.exists(src):
-                    QMessageBox.information(self, " ", "未找到 mkv 文件")
+                    QMessageBox.information(self, " ", "MKV file not found")
                     return
                 self._show_attachments_dialog(src)
             except Exception:
@@ -1318,7 +1318,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 else:
                     src = self._get_remux_source_path_from_table3_row(row_index)
                 if not src or not os.path.exists(src):
-                    QMessageBox.information(self, " ", "未找到 mkv 文件")
+                    QMessageBox.information(self, " ", "MKV file not found")
                     return
                 self._edit_chapters_for_mkv(src)
             except Exception:
@@ -1333,7 +1333,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                     src = self._get_remux_source_path_from_table3_row(row_index)
                     key = f'mkvsp::{os.path.normpath(src)}'
                 if not src or not os.path.exists(src):
-                    QMessageBox.information(self, " ", "未找到 mkv 文件")
+                    QMessageBox.information(self, " ", "MKV file not found")
                     return
                 streams = self._read_mkvinfo_tracks(src)
                 pid_lang = {}
@@ -1351,7 +1351,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 selected = set((cfg.get(key, {}).get('audio') or []) + (cfg.get(key, {}).get('subtitle') or []))
                 convert_map = dict((conv_cfg_all.get(key) or {}))
                 selected_after = self._show_tracks_dialog(
-                    self.t('编辑轨道'),
+                    self.t('edit tracks'),
                     streams,
                     selected,
                     pid_lang,
@@ -1388,7 +1388,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             try:
                 m2ts_path = self._get_first_m2ts_for_mpls(mpls_path)
                 if not m2ts_path:
-                    QMessageBox.information(self, " ", "未找到 m2ts 文件")
+                    QMessageBox.information(self, " ", "M2TS file not found")
                     return
                 self._ensure_default_track_config_for_main(mpls_path)
                 chapter = Chapter(mpls_path)
@@ -1400,7 +1400,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 selected = set((cfg.get('audio') or []) + (cfg.get('subtitle') or []))
                 convert_map = dict((getattr(self, '_track_convert_config', {}).get(key) or {}))
                 selected_after = self._show_tracks_dialog(
-                    self.t('编辑轨道'),
+                    self.t('edit tracks'),
                     streams,
                     selected,
                     pid_lang,
@@ -1470,15 +1470,15 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                     playlist_dir = self._get_playlist_dir_for_bdmv_index(bdmv_index)
                     if not playlist_dir:
                         QMessageBox.information(self, " ",
-                                                f"未找到对应的蓝光目录（bdmv_index={bdmv_index}），无法定位 mpls 文件")
+                                                f"Matching Blu-ray directory not found (bdmv_index={bdmv_index}), cannot locate MPLS file")
                         return
                     mpls_path = os.path.normpath(os.path.join(playlist_dir, mpls_file))
                     if not os.path.exists(mpls_path):
-                        QMessageBox.information(self, " ", f"未找到 mpls 文件：\n{mpls_path}")
+                        QMessageBox.information(self, " ", f"MPLS file not found:\n{mpls_path}")
                         return
                     m2ts_path = self._get_first_m2ts_for_mpls(mpls_path)
                     if not m2ts_path:
-                        QMessageBox.information(self, " ", "未找到 m2ts 文件")
+                        QMessageBox.information(self, " ", "M2TS file not found")
                         return
                     chapter = Chapter(mpls_path)
                     chapter.get_pid_to_language()
@@ -1487,16 +1487,16 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 else:
                     m2ts_files = self._split_m2ts_files(m2ts_text)
                     if not m2ts_files:
-                        QMessageBox.information(self, " ", "未找到 m2ts 文件")
+                        QMessageBox.information(self, " ", "M2TS file not found")
                         return
                     stream_dir = self._get_stream_dir_for_bdmv_index(bdmv_index)
                     if not stream_dir:
                         QMessageBox.information(self, " ",
-                                                f"未找到对应的蓝光目录（bdmv_index={bdmv_index}），无法定位 m2ts 文件")
+                                                f"Matching Blu-ray directory not found (bdmv_index={bdmv_index}), cannot locate M2TS file")
                         return
                     m2ts_path = os.path.normpath(os.path.join(stream_dir, m2ts_files[0]))
                     if not os.path.exists(m2ts_path):
-                        QMessageBox.information(self, " ", f"未找到 m2ts 文件：\n{m2ts_path}")
+                        QMessageBox.information(self, " ", f"M2TS file not found:\n{m2ts_path}")
                         return
                     streams = self._read_m2ts_track_info(m2ts_path)
                     # No MPLS language map available for pure m2ts rows; keep PMT descriptor as reference.
@@ -1511,7 +1511,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 selected = set((cur.get('audio') or []) + (cur.get('subtitle') or []))
                 convert_map = dict((getattr(self, '_track_convert_config', {}).get(key) or {}))
                 selected_after = self._show_tracks_dialog(
-                    self.t('编辑轨道'),
+                    self.t('edit tracks'),
                     streams,
                     selected,
                     pid_lang,
