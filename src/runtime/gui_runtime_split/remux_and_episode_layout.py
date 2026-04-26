@@ -11,8 +11,9 @@ from PyQt6.QtWidgets import QTableWidget, QToolButton, QPlainTextEdit, QWidget, 
     QProgressDialog, QProgressBar, QMessageBox
 
 from src.bdmv import Chapter
-from src.core import BDMV_LABELS, find_mkvtoolinx, MKV_MERGE_PATH, mkvtoolnix_ui_language_arg, ENCODE_REMUX_LABELS, \
-    ENCODE_REMUX_SP_LABELS, SUBTITLE_LABELS, ENCODE_LABELS, REMUX_LABELS, CURRENT_UI_LANGUAGE, ENCODE_SP_LABELS
+from src.core import BDMV_LABELS, DIY_BDMV_LABELS, find_mkvtoolinx, MKV_MERGE_PATH, mkvtoolnix_ui_language_arg, \
+    ENCODE_REMUX_LABELS, ENCODE_REMUX_SP_LABELS, SUBTITLE_LABELS, ENCODE_LABELS, REMUX_LABELS, CURRENT_UI_LANGUAGE, \
+    ENCODE_SP_LABELS
 from src.domain import Subtitle
 from src.exports.utils import get_time_str, get_index_to_m2ts_and_offset, print_exc_terminal, get_folder_size
 from src.runtime.gui_runtime_classes.file_path_table_widget_item import FilePathTableWidgetItem
@@ -1050,8 +1051,9 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
 
                     show_timer.timeout.connect(show_if_needed)
                     show_timer.start()
-                    self.table1.setColumnCount(len(BDMV_LABELS))
-                    self._set_table_headers(self.table1, BDMV_LABELS)
+                    table1_labels = DIY_BDMV_LABELS if self.get_selected_function_id() == 5 else BDMV_LABELS
+                    self.table1.setColumnCount(len(table1_labels))
+                    self._set_table_headers(self.table1, table1_labels)
                     i = 0
                     for root, dirs, files in os.walk(bdmv_path):
                         dirs.sort()  # Sort dirs to ensure consistent order on all platforms
@@ -1110,7 +1112,13 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                                 btn3.clicked.connect(partial(self.on_button_play, mpls_path, btn3))
                                 table_widget.setCellWidget(mpls_n, 4, btn3)
                                 if self.get_selected_function_id() in (3, 4, 5):
-                                    if mpls_path == selected_mpls:
+                                    show_tracks = (mpls_path == selected_mpls)
+                                    if self.get_selected_function_id() == 5:
+                                        is_simple_diy = bool(getattr(self, 'diy_simple_radio', None) and self.diy_simple_radio.isChecked())
+                                        scope_all = bool(getattr(self, 'track_scope_all_radio', None) and
+                                                         self.track_scope_all_radio.isChecked())
+                                        show_tracks = is_simple_diy and (scope_all or (mpls_path == selected_mpls))
+                                    if show_tracks:
                                         btn4 = QToolButton()
                                         btn4.setText(self.t('编辑轨道'))
                                         btn4.clicked.connect(partial(self.on_edit_tracks_from_mpls, mpls_path))
@@ -1124,23 +1132,26 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                             self.table1.setItem(i, 0, FilePathTableWidgetItem(os.path.normpath(root)))
                             self.table1.setItem(i, 1, QTableWidgetItem(get_folder_size(root)))
                             self.table1.setCellWidget(i, 2, table_widget)
-                            if self.get_selected_function_id() in (3, 4, 5):
+                            if self.get_selected_function_id() in (3, 4):
                                 resolved_bdmv_index = self._resolve_bdmv_index_for_main_mpls(selected_mpls, i + 1)
                                 cmd_text = self._build_main_remux_cmd_template(selected_mpls, resolved_bdmv_index, root)
                                 self.table1.setCellWidget(i, BDMV_LABELS.index('remux_cmd'),
                                                           self._create_main_remux_cmd_editor(cmd_text, self.table1))
-                            else:
+                            elif self.get_selected_function_id() not in (3, 4, 5):
                                 self.table1.setItem(i, BDMV_LABELS.index('remux_cmd'), QTableWidgetItem(''))
                             self.table1.setRowHeight(i, 100)
                             i += 1
                             if (time.time() - start_ts) >= 2.0:
                                 QCoreApplication.processEvents()
                     self.table1.resizeColumnsToContents()
-                    if self.get_selected_function_id() in (3, 4, 5):
+                    if self.get_selected_function_id() in (3, 4):
                         self.table1.setColumnWidth(2, 620 if getattr(self, '_language_code',
                                                                      CURRENT_UI_LANGUAGE) == 'zh' else 560)
                         self.table1.setColumnWidth(3, 420 if getattr(self, '_language_code',
                                                                      CURRENT_UI_LANGUAGE) == 'zh' else 380)
+                    elif self.get_selected_function_id() == 5:
+                        self.table1.setColumnWidth(2, 620 if getattr(self, '_language_code',
+                                                                     CURRENT_UI_LANGUAGE) == 'zh' else 560)
                     else:
                         self.table1.setColumnWidth(2, 420 if getattr(self, '_language_code',
                                                                      CURRENT_UI_LANGUAGE) == 'zh' else 370)
@@ -1161,8 +1172,9 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                     except Exception:
                         pass
                     self.table1.clear()
-                    self.table1.setColumnCount(len(BDMV_LABELS))
-                    self._set_table_headers(self.table1, BDMV_LABELS)
+                    table1_labels = DIY_BDMV_LABELS if self.get_selected_function_id() == 5 else BDMV_LABELS
+                    self.table1.setColumnCount(len(table1_labels))
+                    self._set_table_headers(self.table1, table1_labels)
                     self.table1.setRowCount(0)
             if bdmv_path and table_ok and self.get_selected_function_id() in (3, 4, 5):
                 self._refresh_track_selection_config_for_selected_main()

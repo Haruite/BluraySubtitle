@@ -80,6 +80,8 @@ class BluraySubtitleGuiBase(QWidget):
         self._subtitle_scan_worker = None
         self._theme_mode = None
         self._track_selection_config = None
+        self._track_convert_config = None
+        self._track_language_config = None
         self._updating_sp_table = None
         self._vsedit_edit_sessions = None
         self._vsedit_preview_sessions = None
@@ -93,6 +95,10 @@ class BluraySubtitleGuiBase(QWidget):
         self.encode_source_bdmv_radio = None
         self.encode_source_remux_radio = None
         self.encode_source_row = None
+        self.diy_mode_row = None
+        self.diy_mode_label = None
+        self.diy_simple_radio = None
+        self.diy_advanced_radio = None
         self.episode_length_container = None
         self.episode_mode_row = None
         self.exe_button = None
@@ -124,6 +130,9 @@ class BluraySubtitleGuiBase(QWidget):
         self.subtitle_suffix_combo = None
         self.subtitle_suffix_label = None
         self.subtitle_tables_splitter = None
+        self.track_scope_row = None
+        self.track_scope_main_radio = None
+        self.track_scope_all_radio = None
         self.table1 = None
         self.table2 = None
         self.table3 = None

@@ -13,7 +13,7 @@ import pycountry
 from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import QMessageBox, QDialog, QVBoxLayout, QPlainTextEdit, QWidget, QHBoxLayout, QPushButton, \
-    QLabel, QTableWidget, QLineEdit, QTableWidgetItem, QToolButton, QFileDialog, QHeaderView
+    QLabel, QTableWidget, QLineEdit, QTableWidgetItem, QToolButton, QFileDialog, QHeaderView, QComboBox
 
 from src.bdmv import Chapter
 from src.core import find_mkvtoolinx, MKV_EXTRACT_PATH, MKV_PROP_EDIT_PATH, mkvtoolnix_ui_language_arg, FFPROBE_PATH, \
@@ -23,6 +23,132 @@ from .gui_base import BluraySubtitleGuiBase
 
 
 class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
+        def _iter_selected_main_mpls_paths(self) -> list[str]:
+            out: list[str] = []
+            if not hasattr(self, 'table1') or not self.table1:
+                return out
+            for r in range(self.table1.rowCount()):
+                root_item = self.table1.item(r, 0)
+                root = root_item.text().strip() if root_item and root_item.text() else ''
+                info = self.table1.cellWidget(r, 2)
+                if not root or not isinstance(info, QTableWidget):
+                    continue
+                for i in range(info.rowCount()):
+                    main_btn = info.cellWidget(i, 3)
+                    if not isinstance(main_btn, QToolButton) or (not main_btn.isChecked()):
+                        continue
+                    mpls_item = info.item(i, 0)
+                    mpls_file = mpls_item.text().strip() if mpls_item and mpls_item.text() else ''
+                    if not mpls_file:
+                        continue
+                    out.append(os.path.normpath(os.path.join(root, 'BDMV', 'PLAYLIST', mpls_file)))
+            return out
+
+        def _sync_main_mpls_track_config_by_pid(
+                self,
+                source_mpls_path: str,
+                source_streams: list[dict[str, object]],
+                source_selected_indexes: set[str],
+                source_convert_map: dict[str, str],
+                source_language_map: dict[str, str],
+        ):
+            source_path = os.path.normpath(source_mpls_path)
+            selected_pids: set[int] = set()
+            convert_by_pid: dict[int, str] = {}
+            language_by_pid: dict[int, str] = {}
+            for s in source_streams:
+                idx = str(s.get('index', ''))
+                pid = self._parse_stream_pid(s.get('pid'))
+                if pid is None:
+                    continue
+                ctype = str(s.get('codec_type') or '').strip().lower()
+                if idx in source_selected_indexes and ctype in ('audio', 'subtitle'):
+                    selected_pids.add(pid)
+                cv = str(source_convert_map.get(idx, '') or '').strip()
+                if cv:
+                    convert_by_pid[pid] = cv
+                lg = str(source_language_map.get(idx, '') or '').strip()
+                if lg:
+                    language_by_pid[pid] = lg
+
+            cfg_sel = getattr(self, '_track_selection_config', {})
+            cfg_conv = getattr(self, '_track_convert_config', {})
+            cfg_lang = getattr(self, '_track_language_config', {})
+
+            for target_mpls_path in self._iter_selected_main_mpls_paths():
+                target_path = os.path.normpath(target_mpls_path)
+                target_key = f'main::{target_path}'
+                if target_path == source_path:
+                    target_streams = source_streams
+                else:
+                    m2ts_path = self._get_first_m2ts_for_mpls(target_path)
+                    if not m2ts_path:
+                        continue
+                    target_streams = self._read_m2ts_track_info(m2ts_path)
+
+                audio: list[str] = []
+                subtitle: list[str] = []
+                t_convert: dict[str, str] = {}
+                t_language: dict[str, str] = {}
+                for st in target_streams:
+                    idx = str(st.get('index', ''))
+                    pid = self._parse_stream_pid(st.get('pid'))
+                    ctype = str(st.get('codec_type') or '').strip().lower()
+                    if (pid is not None) and (pid in selected_pids):
+                        if ctype == 'audio':
+                            audio.append(idx)
+                        elif ctype == 'subtitle':
+                            subtitle.append(idx)
+                    if (pid is not None) and (pid in convert_by_pid):
+                        t_convert[idx] = convert_by_pid[pid]
+                    if (pid is not None) and (pid in language_by_pid):
+                        t_language[idx] = language_by_pid[pid]
+
+                cfg_sel[target_key] = {'audio': audio, 'subtitle': subtitle}
+                cfg_conv[target_key] = t_convert
+                cfg_lang[target_key] = t_language
+
+            self._track_selection_config = cfg_sel
+            self._track_convert_config = cfg_conv
+            self._track_language_config = cfg_lang
+
+        def _conversion_options_for_stream(self, stream: dict[str, object], is_mkvinfo: bool) -> list[str]:
+            codec_type = str(stream.get('codec_type') or '').strip().lower()
+            codec_id = str(stream.get('codec_id') or '').strip().upper()
+            codec_name = str(stream.get('codec_name') or '').strip().lower()
+            try:
+                bit_depth = int(str(stream.get('bit_depth') or '').strip())
+            except Exception:
+                bit_depth = 0
+
+            options: list[str] = [self.t('不转换')]
+            if codec_type == 'video':
+                if codec_id == 'V_MPEG4/ISO/AVC' or codec_name == 'h264':
+                    options.append('h264(encoded)')
+                elif codec_id == 'V_MPEG4/ISO/HEVC' or codec_name == 'hevc' or codec_name == 'h265':
+                    options.append('h265(encoded)')
+                return options
+
+            if codec_type != 'audio':
+                return options
+
+            is_pcm = (
+                codec_id in ('A_PCM/INT/LIT', 'A_PCM/INT/BIG')
+                or codec_name in ('lpcm', 'pcm_bluray')
+                or codec_name.startswith('pcm')
+            )
+            is_lossless = is_pcm or codec_id in ('A_TRUEHD', 'A_MLP', 'A_FLAC') or codec_id.startswith('A_DTS')
+            if is_lossless:
+                options.append('ac3(640 kbps)')
+            if is_pcm and bit_depth > 16:
+                options.append('pcm(16bit)')
+                return options
+            if is_lossless and (not is_pcm):
+                options.append('pcm(16bit)')
+                if bit_depth >= 24:
+                    options.append('lpcm(24bit)')
+            return options
+
         def _codec_name_from_codec_id(self, codec_id: str) -> str:
             cid = str(codec_id or '').strip()
             if cid.startswith('A_DTS'):
@@ -826,7 +952,9 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 streams: list[dict[str, object]],
                 selected_indexes: Optional[set[str]] = None,
                 pid_lang: Optional[dict[int, str]] = None,
-                source_mkv: Optional[str] = None
+                source_mkv: Optional[str] = None,
+                convert_map: Optional[dict[str, str]] = None,
+                language_map: Optional[dict[str, str]] = None
         ) -> Optional[set[str]]:
             dlg = QDialog(self)
             dlg.setWindowTitle(title)
@@ -836,11 +964,11 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             self._set_compact_table(table, row_height=22, header_height=64)
             is_mkvinfo = any(('codec_id' in (s or {})) or ('track_id' in (s or {})) for s in (streams or []))
             if is_mkvinfo:
-                cols = ['track_number', 'select', 'track_uid', 'track_type', 'language', 'codec_id', 'extract']
+                cols = ['track_number', 'select', 'track_uid', 'track_type', 'language', 'codec_id', 'convert', 'extract']
             else:
                 cols = [
                     'index', 'select', 'pid', 'program_number', 'pmt_pid', 'is_pcr_pid',
-                    'stream_type', 'language', 'codec_type', 'codec_name', 'language_from_pmt_descriptor'
+                    'stream_type', 'language', 'codec_type', 'codec_name', 'convert', 'language_from_pmt_descriptor'
                 ]
             table.setColumnCount(len(cols))
             self._set_table_headers(table, cols)
@@ -885,6 +1013,18 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                         else:
                             table.setItem(r, c, QTableWidgetItem(''))
                         continue
+                    if key == 'convert':
+                        cb = QComboBox(table)
+                        options = self._conversion_options_for_stream(s, is_mkvinfo)
+                        cb.addItems(options)
+                        idx_text = str(s.get('index', ''))
+                        wanted = str((convert_map or {}).get(idx_text, '') or '').strip()
+                        if wanted and wanted in options:
+                            cb.setCurrentText(wanted)
+                        else:
+                            cb.setCurrentIndex(0)
+                        table.setCellWidget(r, c, cb)
+                        continue
                     if key == 'track_number' and is_mkvinfo:
                         v = s.get('track_number', s.get('track_id', ''))
                     elif key == 'language':
@@ -904,6 +1044,9 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                                         v = 'und'
                             except Exception:
                                 v = 'und'
+                        override_lang = str((language_map or {}).get(idx_text, '') or '').strip()
+                        if override_lang:
+                            v = override_lang
                         item = QTableWidgetItem('' if v is None else str(v))
                         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
                         item.setBackground(QColor('#e0f0ff'))
@@ -937,6 +1080,28 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             status_label.setVisible(False)
 
             def apply_and_accept():
+                conversion_map: dict[str, str] = {}
+                language_selected_map: dict[str, str] = {}
+                if 'convert' in cols:
+                    convert_col = cols.index('convert')
+                    for r, st in enumerate(streams):
+                        idx = str(st.get('index', ''))
+                        cb = table.cellWidget(r, convert_col)
+                        if isinstance(cb, QComboBox):
+                            v = (cb.currentText() or '').strip()
+                            if v and v != self.t('不转换'):
+                                conversion_map[idx] = v
+                self._last_track_convert_map = conversion_map
+                if 'language' in cols:
+                    lang_col_for_save = cols.index('language')
+                    for r, st in enumerate(streams):
+                        idx = str(st.get('index', ''))
+                        it = table.item(r, lang_col_for_save)
+                        if it:
+                            lv = str(it.text() or '').strip()
+                            if lv:
+                                language_selected_map[idx] = lv
+                self._last_track_language_map = language_selected_map
                 if source_mkv and is_mkvinfo and len(streams) == table.rowCount():
                     lang_col = cols.index('language') if 'language' in cols else -1
                     if lang_col >= 0:
@@ -1150,11 +1315,21 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                     except Exception:
                         pass
                 cfg = getattr(self, '_track_selection_config', {})
+                conv_cfg_all = getattr(self, '_track_convert_config', {})
                 if key not in cfg:
                     a, s = BluraySubtitle._default_track_selection_from_streams(streams, pid_lang)
                     cfg[key] = {'audio': a, 'subtitle': s}
                 selected = set((cfg.get(key, {}).get('audio') or []) + (cfg.get(key, {}).get('subtitle') or []))
-                selected_after = self._show_tracks_dialog(self.t('编辑轨道'), streams, selected, pid_lang, source_mkv=src)
+                convert_map = dict((conv_cfg_all.get(key) or {}))
+                selected_after = self._show_tracks_dialog(
+                    self.t('编辑轨道'),
+                    streams,
+                    selected,
+                    pid_lang,
+                    source_mkv=src,
+                    convert_map=convert_map,
+                    language_map=dict((getattr(self, '_track_language_config', {}).get(key) or {}))
+                )
                 if selected_after is None:
                     return
                 audio: list[str] = []
@@ -1169,6 +1344,12 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                     elif ctype == 'subtitle':
                         subtitle.append(idx)
                 cfg[key] = {'audio': audio, 'subtitle': subtitle}
+                conv_cfg = getattr(self, '_track_convert_config', {})
+                conv_cfg[key] = dict(getattr(self, '_last_track_convert_map', {}) or {})
+                self._track_convert_config = conv_cfg
+                lang_cfg = getattr(self, '_track_language_config', {})
+                lang_cfg[key] = dict(getattr(self, '_last_track_language_map', {}) or {})
+                self._track_language_config = lang_cfg
             except Exception:
                 self._show_error_dialog(traceback.format_exc())
 
@@ -1186,7 +1367,15 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 key = f'main::{os.path.normpath(mpls_path)}'
                 cfg = getattr(self, '_track_selection_config', {}).get(key, {})
                 selected = set((cfg.get('audio') or []) + (cfg.get('subtitle') or []))
-                selected_after = self._show_tracks_dialog(self.t('编辑轨道'), streams, selected, pid_lang)
+                convert_map = dict((getattr(self, '_track_convert_config', {}).get(key) or {}))
+                selected_after = self._show_tracks_dialog(
+                    self.t('编辑轨道'),
+                    streams,
+                    selected,
+                    pid_lang,
+                    convert_map=convert_map,
+                    language_map=dict((getattr(self, '_track_language_config', {}).get(key) or {}))
+                )
                 if selected_after is None:
                     return
                 audio: list[str] = []
@@ -1201,6 +1390,19 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                     elif ctype == 'subtitle':
                         subtitle.append(idx)
                 self._track_selection_config[key] = {'audio': audio, 'subtitle': subtitle}
+                conv_cfg = getattr(self, '_track_convert_config', {})
+                conv_cfg[key] = dict(getattr(self, '_last_track_convert_map', {}) or {})
+                self._track_convert_config = conv_cfg
+                lang_cfg = getattr(self, '_track_language_config', {})
+                lang_cfg[key] = dict(getattr(self, '_last_track_language_map', {}) or {})
+                self._track_language_config = lang_cfg
+                self._sync_main_mpls_track_config_by_pid(
+                    mpls_path,
+                    streams,
+                    set(selected_after),
+                    dict(getattr(self, '_last_track_convert_map', {}) or {}),
+                    dict(getattr(self, '_last_track_language_map', {}) or {}),
+                )
                 self._refresh_table1_remux_cmds()
             except Exception:
                 self._show_error_dialog(traceback.format_exc())
@@ -1274,7 +1476,15 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                     cfg[key] = {'audio': a, 'subtitle': s}
                 cur = cfg.get(key, {})
                 selected = set((cur.get('audio') or []) + (cur.get('subtitle') or []))
-                selected_after = self._show_tracks_dialog(self.t('编辑轨道'), streams, selected, pid_lang)
+                convert_map = dict((getattr(self, '_track_convert_config', {}).get(key) or {}))
+                selected_after = self._show_tracks_dialog(
+                    self.t('编辑轨道'),
+                    streams,
+                    selected,
+                    pid_lang,
+                    convert_map=convert_map,
+                    language_map=dict((getattr(self, '_track_language_config', {}).get(key) or {}))
+                )
                 if selected_after is None:
                     return
                 audio: list[str] = []
@@ -1289,6 +1499,12 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                     elif ctype == 'subtitle':
                         subtitle.append(idx)
                 cfg[key] = {'audio': audio, 'subtitle': subtitle}
+                conv_cfg = getattr(self, '_track_convert_config', {})
+                conv_cfg[key] = dict(getattr(self, '_last_track_convert_map', {}) or {})
+                self._track_convert_config = conv_cfg
+                lang_cfg = getattr(self, '_track_language_config', {})
+                lang_cfg[key] = dict(getattr(self, '_last_track_language_map', {}) or {})
+                self._track_language_config = lang_cfg
                 if mpls_file:
                     try:
                         playlist_dir = self._get_playlist_dir_for_bdmv_index(bdmv_index)

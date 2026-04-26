@@ -118,6 +118,29 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             h_layout.addWidget(self.function_tabbar)
             self.layout.addWidget(function_button)
 
+            self.diy_mode_row = QWidget(self)
+            self.diy_mode_row.setProperty("noMargin", True)
+            diy_mode_layout = QHBoxLayout()
+            diy_mode_layout.setContentsMargins(8, 0, 8, 0)
+            diy_mode_layout.setSpacing(6)
+            self.diy_mode_row.setLayout(diy_mode_layout)
+            self.diy_mode_label = QLabel("选择：", self.diy_mode_row)
+            self.diy_simple_radio = QRadioButton("简易DIY", self.diy_mode_row)
+            self.diy_advanced_radio = QRadioButton("高级DIY", self.diy_mode_row)
+            self.diy_simple_radio.setChecked(True)
+            diy_mode_layout.addWidget(self.diy_mode_label)
+            diy_mode_layout.addWidget(self.diy_simple_radio)
+            diy_mode_layout.addWidget(self.diy_advanced_radio)
+            diy_mode_layout.addStretch(1)
+            diy_mode_group = QButtonGroup(self.diy_mode_row)
+            diy_mode_group.addButton(self.diy_simple_radio)
+            diy_mode_group.addButton(self.diy_advanced_radio)
+            self._diy_mode_group = diy_mode_group
+            self.diy_simple_radio.toggled.connect(lambda _=None: self.on_select_function(force=True, keep_inputs=True, keep_state=True))
+            self.diy_advanced_radio.toggled.connect(lambda _=None: self.on_select_function(force=True, keep_inputs=True, keep_state=True))
+            self.diy_mode_row.setVisible(self.get_selected_function_id() == 5)
+            self.layout.addWidget(self.diy_mode_row)
+
             mode_row = QWidget(self)
             mode_row.setProperty("noMargin", True)
             mode_layout = QHBoxLayout()
@@ -322,6 +345,17 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             self._label2_outer_layout.setSpacing(0)
             label2_container.setLayout(self._label2_outer_layout)
 
+            self.subtitle_hint_row = QWidget(label2_container)
+            subtitle_hint_outer = QHBoxLayout(self.subtitle_hint_row)
+            subtitle_hint_outer.setContentsMargins(8, 2, 8, 0)
+            subtitle_hint_outer.setSpacing(4)
+            self.subtitle_formats_hint_label = QLabel(self.t('支持 ass/ssa/srt/sup 格式            '), self.subtitle_hint_row)
+            subtitle_hint_outer.addWidget(self.subtitle_formats_hint_label)
+            self.subtitle_convert_checkbox = QCheckBox(self.t('srt 转 ass 转 sup'), self.subtitle_hint_row)
+            self.subtitle_convert_checkbox.setChecked(False)
+            subtitle_hint_outer.addWidget(self.subtitle_convert_checkbox)
+            subtitle_hint_outer.addStretch(1)
+
             self.subtitle_path_row = QWidget(label2_container)
             subtitle_path_outer = QHBoxLayout(self.subtitle_path_row)
             subtitle_path_outer.setContentsMargins(8, 2, 8, 2)
@@ -347,6 +381,29 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             h_layout.addWidget(button2_open)
             self.subtitle_path_box = subtitle_path_box
             subtitle_path_outer.addWidget(subtitle_path_box, 1)
+            self.subtitle_formats_hint_label.setVisible(False)
+            self.subtitle_convert_checkbox.setVisible(False)
+            self.subtitle_hint_row.setVisible(False)
+
+            self.track_scope_row = QWidget(label2_container)
+            track_scope_outer = QHBoxLayout(self.track_scope_row)
+            track_scope_outer.setContentsMargins(8, 0, 8, 2)
+            track_scope_outer.setSpacing(4)
+            self.track_scope_label = QLabel(self.t('编辑轨道生效范围：'), self.track_scope_row)
+            self.track_scope_main_radio = QRadioButton(self.t('主mpls'), self.track_scope_row)
+            self.track_scope_all_radio = QRadioButton(self.t('全部'), self.track_scope_row)
+            self.track_scope_all_radio.setChecked(True)
+            self.track_scope_main_radio.toggled.connect(
+                lambda _=None: self.on_bdmv_folder_path_change() if self.get_selected_function_id() == 5 else None
+            )
+            self.track_scope_all_radio.toggled.connect(
+                lambda _=None: self.on_bdmv_folder_path_change() if self.get_selected_function_id() == 5 else None
+            )
+            track_scope_outer.addWidget(self.track_scope_label)
+            track_scope_outer.addWidget(self.track_scope_main_radio)
+            track_scope_outer.addWidget(self.track_scope_all_radio)
+            track_scope_outer.addStretch(1)
+            self.track_scope_row.setVisible(False)
 
             self.table2 = CustomTableWidget(self, self.on_subtitle_drop)
             self.table2.setObjectName('table2')
@@ -479,26 +536,54 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
 
             self.setLayout(self.layout)
             self._track_selection_config: dict[str, dict[str, list[str]]] = {}
+            self._track_convert_config: dict[str, dict[str, str]] = {}
+            self._track_language_config: dict[str, dict[str, str]] = {}
             self._reposition_subtitle_path_box()
             self._apply_language('en')
             self._apply_theme(getattr(self, '_theme_mode', 'light'))
 
         def _reposition_subtitle_path_box(self):
             outer = getattr(self, '_label2_outer_layout', None)
+            hint_row = getattr(self, 'subtitle_hint_row', None)
             row = getattr(self, 'subtitle_path_row', None)
+            scope_row = getattr(self, 'track_scope_row', None)
             host = getattr(self, '_subtitle_tables_host', None)
             if outer is None or row is None or host is None:
                 return
+            if hint_row is not None and outer.indexOf(hint_row) >= 0:
+                outer.removeWidget(hint_row)
             if outer.indexOf(row) >= 0:
                 outer.removeWidget(row)
+            if scope_row is not None and outer.indexOf(scope_row) >= 0:
+                outer.removeWidget(scope_row)
             idx_host = outer.indexOf(host)
             if idx_host < 0:
-                outer.insertWidget(0, row)
+                if hint_row is not None:
+                    outer.insertWidget(0, hint_row)
+                outer.insertWidget(1 if hint_row is not None else 0, row)
+                if scope_row is not None:
+                    outer.insertWidget(2 if hint_row is not None else 1, scope_row)
                 return
             if self.get_selected_function_id() in (3, 4, 5):
-                outer.insertWidget(idx_host + 1, row)
+                if hint_row is not None:
+                    outer.insertWidget(idx_host + 1, hint_row)
+                    outer.insertWidget(idx_host + 2, row)
+                    if scope_row is not None:
+                        outer.insertWidget(idx_host + 3, scope_row)
+                else:
+                    outer.insertWidget(idx_host + 1, row)
+                    if scope_row is not None:
+                        outer.insertWidget(idx_host + 2, scope_row)
             else:
-                outer.insertWidget(idx_host, row)
+                if hint_row is not None:
+                    outer.insertWidget(idx_host, hint_row)
+                    outer.insertWidget(idx_host + 1, row)
+                    if scope_row is not None:
+                        outer.insertWidget(idx_host + 2, scope_row)
+                else:
+                    outer.insertWidget(idx_host, row)
+                    if scope_row is not None:
+                        outer.insertWidget(idx_host + 1, scope_row)
 
         def closeEvent(self, event):
             self.delete_default_vpy_file()
