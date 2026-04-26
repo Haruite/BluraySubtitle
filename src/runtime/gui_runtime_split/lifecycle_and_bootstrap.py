@@ -61,7 +61,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             self.language_label = QLabel('Language', language_row)
             self.language_combo = QComboBox(language_row)
             self.language_combo.addItem('English', 'en')
-            self.language_combo.addItem('Simplified Chinese', 'zh')
+            self.language_combo.addItem('简体中文', 'zh')
             self.language_combo.setCurrentIndex(0)
             self.language_combo.currentIndexChanged.connect(lambda _=None: self._on_language_changed())
             language_layout.addWidget(self.language_label)
