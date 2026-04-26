@@ -40,18 +40,18 @@ class MergeWorker(QObject):
                 if self.cancel_event.is_set():
                     raise _Cancelled()
 
-            progress_cb(text='准备中')
+            progress_cb(text='Preparing')
             if self.movie_tasks:
                 total = len(self.movie_tasks) or 1
                 suffix = self.subtitle_suffix
                 for idx, (sub_path, folder, selected_mpls_no_ext) in enumerate(self.movie_tasks, start=1):
                     if self.cancel_event.is_set():
                         raise _Cancelled()
-                    progress_cb(int((idx - 1) / total * 1000), f'写入字幕文件 {idx}/{total}')
+                    progress_cb(int((idx - 1) / total * 1000), f'Writing Subtitle File {idx}/{total}')
                     sub = Subtitle(sub_path)
                     if hasattr(sub, 'content'):
                         sub.dump(folder + suffix, selected_mpls_no_ext + suffix)
-                progress_cb(1000, '完成')
+                progress_cb(1000, 'Done')
                 print_terminal_line('[BluraySubtitle] Merge worker (movie mode): finished successfully.')
             else:
                 bs = BluraySubtitle(self.bdmv_path, self.sub_files, self.checked, progress_cb)
@@ -59,7 +59,7 @@ class MergeWorker(QObject):
 
                 # Select subtitle preload strategy by platform.
                 if self.sub_files:
-                    progress_cb(text='加载字幕')
+                    progress_cb(text='Loading Subtitles')
                     if sys.platform == 'win32':
                         # Windows: prefer multiprocessing.
                         try:
@@ -93,12 +93,12 @@ class MergeWorker(QObject):
                                     print(
                                         f'{translate_text("Failed to load subtitle file ｢")}{p}{translate_text("｣: ")}{str(e2)}')
 
-                progress_cb(text='生成配置')
+                progress_cb(text='Generating Configuration')
                 configuration = bs.generate_configuration_from_selected_mpls(
                     self.selected_mpls,
                     cancel_event=self.cancel_event
                 )
-                progress_cb(text='合并字幕')
+                progress_cb(text='Merge Subtitles')
                 bs.generate_bluray_subtitle(configuration=configuration, cancel_event=self.cancel_event)
                 bs.completion()
                 print_terminal_line('[BluraySubtitle] Merge worker: finished successfully.')

@@ -100,7 +100,7 @@ class EncodeMkvFolderWorker(QObject):
             total = max(1, len(self.mkv_rows) + len(self.sp_rows))
             done = 0
             for i, row in enumerate(self.mkv_rows):
-                progress_cb(int(done / total * 1000), f'压制中 {done + 1}/{total}')
+                progress_cb(int(done / total * 1000), f'Encoding {done + 1}/{total}')
                 src = os.path.normpath(str(row.get('src_path') or ''))
                 out_name = str(row.get('output_name') or '').strip() or os.path.basename(src)
                 if not out_name.lower().endswith('.mkv'):
@@ -122,7 +122,7 @@ class EncodeMkvFolderWorker(QObject):
 
             sps_out = None
             for row in self.sp_rows:
-                progress_cb(int(done / total * 1000), f'压制中 {done + 1}/{total}')
+                progress_cb(int(done / total * 1000), f'Encoding {done + 1}/{total}')
                 src = os.path.normpath(str(row.get('src_path') or ''))
                 out_name = str(row.get('output_name') or '').strip() or os.path.basename(src)
                 if not out_name.lower().endswith('.mkv'):
@@ -146,12 +146,12 @@ class EncodeMkvFolderWorker(QObject):
                 done += 1
 
             try:
-                progress_cb(int(done / total * 1000), '复制非MKV文件')
+                progress_cb(int(done / total * 1000), 'Copying non-MKV files')
                 self._copy_non_mkv_from_remux_folder(self.remux_folder, dst_folder)
             except Exception:
                 pass
 
-            progress_cb(1000, '完成')
+            progress_cb(1000, 'Done')
         except _Cancelled:
             print_terminal_line('[BluraySubtitle] Encode MKV-folder worker: canceled.')
             self.canceled.emit()

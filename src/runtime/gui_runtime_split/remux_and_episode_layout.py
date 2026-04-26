@@ -449,7 +449,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                             sec = float(Subtitle(p).max_end_time())
                             file_rows.append((p, get_time_str(sec), sec))
                         except Exception:
-                            file_rows.append((p, '未知', None))
+                            file_rows.append((p, 'Unknown', None))
 
             sub_duration_col = SUBTITLE_LABELS.index('sub_duration')
             ep_duration_col = SUBTITLE_LABELS.index('ep_duration')
@@ -486,7 +486,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                         total_time = Chapter(mpls_no_ext + '.mpls').get_total_time()
                         self.table2.setItem(i, ep_duration_col, QTableWidgetItem(get_time_str(total_time)))
                     except Exception:
-                        self.table2.setItem(i, ep_duration_col, QTableWidgetItem('未知'))
+                        self.table2.setItem(i, ep_duration_col, QTableWidgetItem('Unknown'))
                         total_time = None
 
                     self.table2.setItem(i, bdmv_col, QTableWidgetItem(str(bdmv_index)))
@@ -504,7 +504,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                         if isinstance(sub_sec, (int, float)) and isinstance(total_time, (int, float)) and total_time > 0:
                             if float(sub_sec) <= float(total_time) / 2.0:
                                 warn_item.setText('!')
-                                warn_item.setToolTip(self.t('可能需要剧集模式'))
+                                warn_item.setToolTip(self.t('May require series mode'))
                     except Exception:
                         pass
                     self.table2.setItem(i, warn_col, warn_item)
@@ -1045,7 +1045,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             if bdmv_path:
                 try:
                     start_ts = time.time()
-                    progress_dialog = QProgressDialog(self.t('读取中'), '', 0, 1000, self)
+                    progress_dialog = QProgressDialog(self.t('Loading...'), '', 0, 1000, self)
                     progress_dialog.setMinimumWidth(420)
                     bar = QProgressBar(progress_dialog)
                     bar.setRange(0, 1000)
@@ -1137,7 +1137,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                                                          self.track_scope_all_radio.isChecked())
                                         show_tracks = is_simple_diy and (scope_all or (mpls_path == selected_mpls))
                                     btn4 = QToolButton()
-                                    btn4.setText(self.t('编辑轨道'))
+                                    btn4.setText(self.t('edit tracks'))
                                     if show_tracks:
                                         btn4.clicked.connect(partial(self.on_edit_tracks_from_mpls, mpls_path))
                                     else:
@@ -1214,17 +1214,17 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             output_folder = os.path.normpath(self.output_folder_path.text().strip()) if hasattr(self,
                                                                                                 'output_folder_path') else ''
             if not output_folder:
-                QMessageBox.information(self, " ", "未选择输出文件夹")
+                QMessageBox.information(self, " ", "Output folder is not selected")
                 return
             if not os.path.isdir(output_folder):
-                QMessageBox.information(self, " ", "输出文件夹不存在")
+                QMessageBox.information(self, " ", "Output folder does not exist")
                 return
             find_mkvtoolinx()
 
             cancel_event = threading.Event()
             self._current_cancel_event = cancel_event
             self._exe_button_default_text = self.exe_button.text()
-            self._update_exe_button_progress(0, '准备中')
+            self._update_exe_button_progress(0, 'Preparing')
 
             sub_files = [self.table2.item(i, 0).text() for i in range(0, self.table2.rowCount()) if self.table2.item(i, 0)]
             episode_output_names = self._get_episode_output_names_from_table2()
@@ -1244,7 +1244,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 self._current_cancel_event = None
                 self._reset_exe_button()
                 self.exe_button.setEnabled(True)
-                QMessageBox.information(self, " ", "未选择原盘主mpls")
+                QMessageBox.information(self, " ", "Main MPLS is not selected")
                 return
             configuration: dict[int, dict[str, int | str]] = {}
             if self._is_movie_mode():
@@ -1254,7 +1254,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                     self._current_cancel_event = None
                     self._reset_exe_button()
                     self.exe_button.setEnabled(True)
-                    QMessageBox.information(self, " ", "配置为空，跳过更新")
+                    QMessageBox.information(self, " ", "Configuration is empty, skipping update")
                     return
             else:
                 try:
@@ -1317,7 +1317,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
 
             def on_finished():
                 cleanup()
-                self._show_bottom_message('原盘remux成功！')
+                self._show_bottom_message('Blu-ray remux completed!')
 
             def on_canceled():
                 cleanup()

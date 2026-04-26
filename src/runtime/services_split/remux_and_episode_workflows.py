@@ -140,9 +140,9 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 )
                 if m2ts_file:
                     print(f'{self.t("Analyzing first stream file in mpls ｢")}{m2ts_file}{self.t("｣ tracks")}')
-                    self._progress(text=f'{self.t("分析轨道：")}{os.path.basename(m2ts_file)}')
+                    self._progress(text=f'{self.t("Analyzing tracks: ")}{os.path.basename(m2ts_file)}')
                 print(f'{self.t("Mux command: ")}{remux_cmd}')
-                self._progress(text=f'{self.t("混流中：")}BD_Vol_{bdmv_vol}')
+                self._progress(text=f'{self.t("Muxing: ")}BD_Vol_{bdmv_vol}')
                 ret = self._run_shell_command(remux_cmd)
                 try:
                     ch_tmp = Chapter(mpls_path)
@@ -477,7 +477,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             if cancel_event and cancel_event.is_set():
                 raise _Cancelled()
             if not getattr(self, 'movie_mode', False):
-                self._progress(310, '写入章节中')
+                self._progress(310, 'Writing Chapters')
                 self.add_chapter_to_mkv(
                     mkv_files, table, selected_mpls=selected_mpls, cancel_event=cancel_event,
                     configuration=self.configuration,
@@ -583,15 +583,15 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             sp_files = [sp for sp in os.listdir(sps_folder) if sp.lower().endswith(('.mkv', '.mka'))]
             sp_files.sort()
             total_sp = len(sp_files) or 1
-            self._progress(900, '处理 SPs 音轨')
+            self._progress(900, 'Processing SP audio tracks')
             for idx, sp in enumerate(sp_files, start=1):
                 if cancel_event and cancel_event.is_set():
                     raise _Cancelled()
-                self._progress(900 + int(90 * idx / total_sp), f'处理 SPs 音轨 {idx}/{total_sp}：{sp}')
+                self._progress(900 + int(90 * idx / total_sp), f'Processing SP audio tracks {idx}/{total_sp}: {sp}')
                 self.flac_task(sps_folder + os.sep + sp, sps_folder, -1)
 
             self.completion()
-            self._progress(1000, '完成')
+            self._progress(1000, 'Done')
 
         def episodes_encode(self, table: Optional[QTableWidget], folder_path: str,
                             selected_mpls: Optional[list[tuple[str, str]]] = None,
@@ -620,7 +620,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             if cancel_event and cancel_event.is_set():
                 raise _Cancelled()
             if not getattr(self, 'movie_mode', False):
-                self._progress(310, '写入章节中')
+                self._progress(310, 'Writing Chapters')
                 self.add_chapter_to_mkv(
                     mkv_files, table, selected_mpls=selected_mpls, cancel_event=cancel_event,
                     configuration=self.configuration,
@@ -653,7 +653,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
 
             sps_folder = dst_folder + os.sep + 'SPs'
             os.mkdir(sps_folder)
-            self._progress(900, '处理 SPs 音轨')
+            self._progress(900, 'Processing SP audio tracks')
 
             if sp_entries is not None:
                 created_sp = self._create_sp_mkvs_from_entries(bdmv_index_conf, sp_entries, sps_folder,
@@ -782,7 +782,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     self._progress(900 + int(90 * idx / total_sp))
 
             self.completion()
-            self._progress(1000, '完成')
+            self._progress(1000, 'Done')
 
         def generate_remux_cmd(self, track_count, track_info, flac_files, output_file, mkv_file,
                                hevc_file: Optional[str] = None):

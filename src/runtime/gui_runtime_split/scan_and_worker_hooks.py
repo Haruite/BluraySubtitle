@@ -31,8 +31,8 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
             stop2 = f"{min(1.0, ratio + 0.001):.3f}"
             percent = ratio * 100
 
-            cancel_suffix = self.t("（点击取消）") if getattr(self, '_current_cancel_event',
-                                                            None) is not None and t != self.t('正在取消...') else ""
+            cancel_suffix = self.t("(click to cancel)") if getattr(self, '_current_cancel_event',
+                                                            None) is not None and t != self.t('Canceling...') else ""
             if t:
                 self.exe_button.setText(f"{t}{cancel_suffix} {percent:.1f}%")
             else:
@@ -145,7 +145,7 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
                 return
 
             start_ts = time.time()
-            progress_dialog = QProgressDialog(self.t('读取中'), '', 0, 1000, self)
+            progress_dialog = QProgressDialog(self.t('Loading...'), '', 0, 1000, self)
             progress_dialog.setMinimumWidth(420)
             bar = QProgressBar(progress_dialog)
             bar.setRange(0, 1000)
