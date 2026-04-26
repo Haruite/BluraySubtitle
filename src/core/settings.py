@@ -17,6 +17,7 @@ FFPROBE_PATH = r"C:\Downloads\ffmpeg-8.1-essentials_build\bin\ffprobe.exe"
 X265_PATH = r"C:\Software\x265.exe"
 VSEDIT_PATH = r"C:\Software\vapoursynth\vsedit.exe"
 PLUGIN_PATH = ""
+LIBASS_PATH = ""
 
 if sys.platform != "win32":
     FLAC_PATH = "/usr/bin/flac"
