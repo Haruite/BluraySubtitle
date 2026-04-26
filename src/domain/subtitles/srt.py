@@ -1,6 +1,9 @@
 import _io
 import re
 
+from .timecode import parse_hhmmss_ms_to_seconds
+from src.exports.utils import get_time_str
+
 
 class SRT:
     def __init__(self, fp: _io.TextIOWrapper):
@@ -32,6 +35,38 @@ class SRT:
                 fp.write(str(line[0]) + '\n')
                 fp.write(f'{line[1]} --> {line[2]}\n')
                 fp.write(line[3] + '\n\n')
+
+    def append_srt(self, other: 'SRT', shift_time: float):
+        if not hasattr(other, 'lines') or not other.lines:
+            return self
+
+        index = self.lines[-1][0] if self.lines else 0
+        for line in other.lines:
+            start_time = parse_hhmmss_ms_to_seconds(line[1])
+            end_time = parse_hhmmss_ms_to_seconds(line[2])
+            self.lines.append([
+                line[0] + index,
+                get_time_str(start_time + shift_time),
+                get_time_str(end_time + shift_time),
+                line[3]
+            ])
+        return self
+
+    def cut_srt(self, start_time: float, end_time: float):
+        cut_lines = []
+        for line in self.lines:
+            line_start = parse_hhmmss_ms_to_seconds(line[1])
+            line_end = parse_hhmmss_ms_to_seconds(line[2])
+            if line_start < start_time or line_end > end_time:
+                continue
+            cut_lines.append([
+                len(cut_lines) + 1,
+                get_time_str(line_start - start_time),
+                get_time_str(line_end - start_time),
+                line[3],
+            ])
+        self.lines = cut_lines
+        return self
 
 
 __all__ = ["SRT"]
