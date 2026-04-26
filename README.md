@@ -379,3 +379,12 @@ res = res.std.Trim(first=0, length=720)
 Then remove it for full encode.
 
 ---
+
+## Credits
+
+- [tsMuxer](https://github.com/justdan96/tsMuxer)
+- [BluRay](https://github.com/lw/BluRay)
+- [shinya](https://github.com/shimamura-hougetsu/shinya)
+- [ass2bdnxml](https://github.com/Masaiki/ass2bdnxml)
+- [BDSup2Sub](https://github.com/mjuhasz/BDSup2Sub)
+- [Spp2Pgs](https://github.com/subelf/Spp2Pgs)
