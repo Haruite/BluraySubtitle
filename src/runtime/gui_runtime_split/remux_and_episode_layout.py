@@ -1133,9 +1133,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                                     show_tracks = (mpls_path == selected_mpls)
                                     if self.get_selected_function_id() == 5:
                                         is_simple_diy = bool(getattr(self, 'diy_simple_radio', None) and self.diy_simple_radio.isChecked())
-                                        scope_all = bool(getattr(self, 'track_scope_all_radio', None) and
-                                                         self.track_scope_all_radio.isChecked())
-                                        show_tracks = is_simple_diy and (scope_all or (mpls_path == selected_mpls))
+                                    show_tracks = is_simple_diy
                                     btn4 = QToolButton()
                                     btn4.setText(self.t('edit tracks'))
                                     if show_tracks:

@@ -1570,8 +1570,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                         can_edit_tracks = bool(checked)
                         if self.get_selected_function_id() == 5:
                             is_simple_diy = bool(getattr(self, 'diy_simple_radio', None) and self.diy_simple_radio.isChecked())
-                            scope_all = bool(getattr(self, 'track_scope_all_radio', None) and self.track_scope_all_radio.isChecked())
-                            can_edit_tracks = is_simple_diy and (scope_all or bool(checked))
+                            can_edit_tracks = is_simple_diy
                         if can_edit_tracks:
                             btn_tracks.clicked.connect(partial(self.on_edit_tracks_from_mpls, row_mpls))
                         else:
