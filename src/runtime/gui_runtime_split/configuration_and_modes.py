@@ -1163,12 +1163,12 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                             )
                             if use_x264:
                                 self.x265_mode_label.setText('x264：')
-                                self.x265_params_label.setText('x264 Params:')
+                                self.x265_params_label.setText(self.t('x264 Params:'))
                                 if hasattr(self, '_x264_preset_params'):
                                     self._encode_preset_params = self._x264_preset_params
                             else:
                                 self.x265_mode_label.setText('x265：')
-                                self.x265_params_label.setText('x265 Params:')
+                                self.x265_params_label.setText(self.t('x265 Params:'))
                                 if hasattr(self, '_x265_preset_params'):
                                     self._encode_preset_params = self._x265_preset_params
                     except Exception:

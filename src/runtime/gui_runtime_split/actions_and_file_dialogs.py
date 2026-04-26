@@ -1261,7 +1261,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 self.vspipe_mode_combo.setCurrentText('System')
                 self.x265_mode_combo.setCurrentText('System')
 
-            self.x265_params_label = QLabel('x265 Params:', tools_row)
+            self.x265_params_label = QLabel(self.t('x265 Params:'), tools_row)
             tools_layout.addWidget(self.x265_params_label)
             self.x265_preset_combo = QComboBox(tools_row)
             self.x265_preset_combo.addItem('Fast', 'Fast')
@@ -1275,7 +1275,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             tools_layout.addWidget(self.x265_preset_combo)
 
             tools_layout.addStretch(1)
-            self.use_bluray_compat_params_checkbox = QCheckBox('Use Blu-ray compatible params', tools_row)
+            self.use_bluray_compat_params_checkbox = QCheckBox(self.t('Use Blu-ray compatible params'), tools_row)
             self.use_bluray_compat_params_checkbox.setChecked(False)
             tools_layout.addWidget(self.use_bluray_compat_params_checkbox)
             layout.addWidget(tools_row)
