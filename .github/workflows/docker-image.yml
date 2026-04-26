@@ -1,4 +1,4 @@
-name: Build BluraySubtitle for Ubuntu 25.10
+name: Build BluraySubtitle for Ubuntu 26.04
 
 on:
   push:
@@ -31,6 +31,6 @@ jobs:
           push: true
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/bluraysubtitle:latest
-            ${{ secrets.DOCKERHUB_USERNAME }}/bluraysubtitle:25.10
+            ${{ secrets.DOCKERHUB_USERNAME }}/bluraysubtitle:26.04
           cache-from: type=gha
           cache-to: type=gha,mode=max

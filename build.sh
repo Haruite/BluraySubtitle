@@ -974,7 +974,7 @@ install_vapoursynth_editor() {
       cp "$REPO_DIR/Packages/R19-mod-6.9.tar.gz" . || exit 1
     else
       log "本地源码包不存在，尝试在线下载"
-      tmux_run "下载 vsedit R19-mod-6.9" wget -O R19-mod-6.9.tar.gz https://github.com/Yurihaia/vapoursynth-editor/archive/refs/tags/R19-mod-6.9.tar.gz || exit 1
+      tmux_run "下载 vsedit R19-mod-6.9" wget -O R19-mod-6.9.tar.gz https://github.com/YomikoR/VapourSynth-Editor/archive/refs/tags/R19-mod-6.9.tar.gz || exit 1
     fi
 
     log "解压 vsedit 源码包"
