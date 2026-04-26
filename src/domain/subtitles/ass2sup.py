@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import argparse
 import atexit
 import ctypes
@@ -16,6 +15,8 @@ from concurrent.futures import ProcessPoolExecutor
 from typing import List, Optional, Tuple
 import numpy as np
 from PIL import Image
+
+from core.settings import LIBASS_PATH
 
 
 class ASS_Image(ctypes.Structure):
@@ -308,8 +309,45 @@ def write_bdn_xml(
 
 
 def load_libass():
-    libname = ctypes.util.find_library("ass") or "libass.so.9"
-    lib = ctypes.CDLL(libname)
+    candidates = []
+    if LIBASS_PATH:
+        candidates.append(LIBASS_PATH)
+
+    found = ctypes.util.find_library("ass")
+    if found:
+        candidates.append(found)
+
+    if os.name == "nt":
+        candidates.extend([
+            "libass.dll",
+            "ass.dll",
+        ])
+    elif sys.platform == "darwin":
+        candidates.extend([
+            "libass.dylib",
+            "/opt/homebrew/lib/libass.dylib",
+            "/usr/local/lib/libass.dylib",
+        ])
+    else:
+        candidates.extend([
+            "libass.so.9",
+            "libass.so",
+        ])
+
+    tried = []
+    lib = None
+    for name in candidates:
+        if not name:
+            continue
+        tried.append(name)
+        try:
+            lib = ctypes.CDLL(name)
+            break
+        except OSError:
+            continue
+
+    if lib is None:
+        raise RuntimeError(f"failed to load libass; tried: {tried}")
     lib.ass_library_init.restype = ctypes.c_void_p
     lib.ass_library_done.argtypes = [ctypes.c_void_p]
     lib.ass_renderer_init.argtypes = [ctypes.c_void_p]
@@ -895,3 +933,4 @@ def _entrypoint() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(_entrypoint())
+
