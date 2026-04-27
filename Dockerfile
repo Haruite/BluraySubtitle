@@ -309,20 +309,18 @@ RUN set -eux; \
 RUN python3 -m pip install --break-system-packages --upgrade pycountry PyQt6 librosa || \
     python3 -m pip install --upgrade pycountry PyQt6 librosa
 
-COPY VapourSynthScripts/ /app/VapourSynthScripts/
-
 RUN set -eux; \
-    SRC_ZIP="/app/VapourSynthScripts/VapourSynthScripts.zip"; \
-    if [ ! -f "${SRC_ZIP}" ] && [ -f /app/VapourSynthScripts.zip ]; then SRC_ZIP="/app/VapourSynthScripts.zip"; fi; \
-    if [ -f "${SRC_ZIP}" ]; then \
-      PYV="$(python3 -c 'import sys; print("%d.%d" % (sys.version_info.major, sys.version_info.minor))')"; \
-      DST="/usr/local/lib/python${PYV}/dist-packages"; \
-      mkdir -p "${DST}"; \
-      TMP="$(mktemp -d)"; \
-      unzip -q -o "${SRC_ZIP}" -d "${TMP}"; \
-      find "${TMP}" -maxdepth 1 -type f -name "*.py" -exec cp -f {} "${DST}/" \; ; \
-      rm -rf "${TMP}"; \
-    fi
+    apt-get update && apt-get install -y --no-install-recommends p7zip-full && rm -rf /var/lib/apt/lists/*; \
+    mkdir -p /tmp/vcbs && cd /tmp/vcbs; \
+    wget -O vapoursynth_portable.7z "https://github.com/AmusementClub/tools/releases/download/2025H1p/vapoursynth_portable_25H1.1p_cpu.7z"; \
+    7z x vapoursynth_portable.7z -o./extracted; \
+    PYV="$(python3 -c 'import sys; print("%d.%d" % (sys.version_info.major, sys.version_info.minor))')"; \
+    DST="/usr/local/lib/python${PYV}/dist-packages"; \
+    mkdir -p "${DST}"; \
+    SCRIPTS_DIR="$(find ./extracted -maxdepth 2 -type d -name VapourSynthScripts | head -n1)"; \
+    test -n "${SCRIPTS_DIR}"; \
+    find "${SCRIPTS_DIR}" -maxdepth 1 -type f -name "*.py" -exec cp -f {} "${DST}/" \; ; \
+    rm -rf /tmp/vcbs
 
 ENV LD_PRELOAD=/usr/local/lib/libvapoursynth-script.so
 
