@@ -149,13 +149,6 @@ ensure_sudo_once() {
   trap 'kill "${SUDO_KEEPALIVE_PID:-0}" >/dev/null 2>&1 || true' EXIT
 }
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$REPO_DIR"
-
-if [[ ! -d "$REPO_DIR/src" || ! -f "$REPO_DIR/src/main.py" ]]; then
-  die "请在项目根目录运行（需要存在 src/main.py）"
-fi
-
 is_remote_ssh() {
   [[ -n "${SSH_CONNECTION:-}" || -n "${SSH_CLIENT:-}" || -n "${SSH_TTY:-}" ]]
 }
@@ -604,13 +597,7 @@ install_lsmash() {
   (
     cd "$build_dir" || exit 1
     
-    if [[ -f "$REPO_DIR/Packages/v2.14.5.tar.gz" ]]; then
-      log "使用本地源码包：Packages/v2.14.5.tar.gz"
-      cp "$REPO_DIR/Packages/v2.14.5.tar.gz" . || exit 1
-    else
-      log "本地源码包不存在，尝试在线下载"
-      tmux_run "下载 lsmash v2.14.5" wget -O v2.14.5.tar.gz https://github.com/l-smash/l-smash/archive/refs/tags/v2.14.5.tar.gz || exit 1
-    fi
+    tmux_run "下载 lsmash v2.14.5" wget -O v2.14.5.tar.gz https://github.com/l-smash/l-smash/archive/refs/tags/v2.14.5.tar.gz || exit 1
 
     tmux_run "解压 lsmash v2.14.5" tar zxvf v2.14.5.tar.gz || exit 1
     cd l-smash-2.14.5 || exit 1
@@ -854,14 +841,8 @@ install_vapoursynth() {
   (
     cd "$build_dir" || exit 1
     
-    if [[ -f "$REPO_DIR/Packages/R57.A12.tar.gz" ]]; then
-      log "使用本地源码包：Packages/R57.A12.tar.gz"
-      cp "$REPO_DIR/Packages/R57.A12.tar.gz" . || exit 1
-    else
-      log "本地源码包不存在，尝试在线下载"
-      # 原提供的链接会报 404，这里替换为 Github 归档源码链接，解压后目录名一致
-      tmux_run "下载 VapourSynth R57.A12" wget -O R57.A12.tar.gz https://github.com/AmusementClub/vapoursynth-classic/archive/refs/tags/R57.A12.tar.gz || exit 1
-    fi
+    # 原提供的链接会报 404，这里替换为 Github 归档源码链接，解压后目录名一致
+    tmux_run "下载 VapourSynth R57.A12" wget -O R57.A12.tar.gz https://github.com/AmusementClub/vapoursynth-classic/archive/refs/tags/R57.A12.tar.gz || exit 1
 
     log "解压 VapourSynth 源码包"
     tmux_run "解压 VapourSynth R57.A12" tar zxvf R57.A12.tar.gz || exit 1
@@ -901,18 +882,17 @@ install_vapoursynth() {
 }
 
 install_vapoursynth_scripts() {
-  local src_zip="$REPO_DIR/VapourSynthScripts/VapourSynthScripts.zip"
-  if [[ ! -f "$src_zip" && -f "$REPO_DIR/VapourSynthScripts.zip" ]]; then
-    src_zip="$REPO_DIR/VapourSynthScripts.zip"
-  fi
-  if [[ ! -f "$src_zip" ]]; then
-    log "未找到 VapourSynthScripts zip 包，跳过安装脚本"
-    return 0
-  fi
+  log "下载 VCB-S VapourSynth 可移植包并提取 VapourSynthScripts"
 
-  if ! command -v unzip >/dev/null 2>&1; then
+  local vcbs_url="https://github.com/AmusementClub/tools/releases/download/2025H1p/vapoursynth_portable_25H1.1p_cpu.7z"
+
+  if ! command -v 7z >/dev/null 2>&1; then
     apt_update
-    apt_install unzip || die "安装 unzip 失败"
+    apt_install p7zip-full || die "安装 p7zip-full 失败"
+  fi
+  if ! command -v wget >/dev/null 2>&1; then
+    apt_update
+    apt_install wget || die "安装 wget 失败"
   fi
 
   local py_ver
@@ -923,15 +903,23 @@ install_vapoursynth_scripts() {
   local tmp_dir
   tmp_dir="$(mktemp -d)"
   trap 'rm -rf "$tmp_dir"' RETURN
-  unzip -q -o "$src_zip" -d "$tmp_dir" || die "解压 VapourSynthScripts.zip 失败"
+
+  tmux_run "下载 vapoursynth_portable_25H1.1p_cpu.7z" wget -O "$tmp_dir/vapoursynth_portable.7z" "$vcbs_url" || die "下载 7z 包失败"
+  tmux_run "解压 vapoursynth_portable.7z" 7z x "$tmp_dir/vapoursynth_portable.7z" "-o$tmp_dir/extracted" || die "解压 7z 包失败"
+
+  local scripts_dir
+  scripts_dir="$(find "$tmp_dir/extracted" -maxdepth 2 -type d -name VapourSynthScripts | head -n1)"
+  if [[ -z "${scripts_dir:-}" ]]; then
+    die "未在解压目录中找到 VapourSynthScripts 子目录"
+  fi
 
   local copied=0
   while IFS= read -r -d '' file; do
     sudo cp -f "$file" "$dst_dir/" || die "复制脚本失败：$file"
     copied=$((copied + 1))
-  done < <(find "$tmp_dir" -maxdepth 1 -type f -name "*.py" -print0)
+  done < <(find "$scripts_dir" -maxdepth 1 -type f -name "*.py" -print0)
 
-  log "已从 VapourSynthScripts.zip 复制脚本到 ${dst_dir}（数量：${copied}）"
+  log "已从 VapourSynthScripts 复制脚本到 ${dst_dir}（数量：${copied}）"
 }
 
 install_vapoursynth_editor() {
@@ -969,13 +957,7 @@ install_vapoursynth_editor() {
     mkdir -p vsedit_build
     cd vsedit_build || exit 1
 
-    if [[ -f "$REPO_DIR/Packages/R19-mod-6.9.tar.gz" ]]; then
-      log "使用本地源码包：Packages/R19-mod-6.9.tar.gz"
-      cp "$REPO_DIR/Packages/R19-mod-6.9.tar.gz" . || exit 1
-    else
-      log "本地源码包不存在，尝试在线下载"
-      tmux_run "下载 vsedit R19-mod-6.9" wget -O R19-mod-6.9.tar.gz https://github.com/YomikoR/VapourSynth-Editor/archive/refs/tags/R19-mod-6.9.tar.gz || exit 1
-    fi
+    tmux_run "下载 vsedit R19-mod-6.9" wget -O R19-mod-6.9.tar.gz https://github.com/YomikoR/VapourSynth-Editor/archive/refs/tags/R19-mod-6.9.tar.gz || exit 1
 
     log "解压 vsedit 源码包"
     tmux_run "解压 vsedit 源码包" tar -zxvf R19-mod-6.9.tar.gz --strip-components=1 || exit 1
@@ -1608,7 +1590,6 @@ fi
 
 
 log "完成。推荐的运行方式："
-echo "cd \"$REPO_DIR\""
 #echo "export FFMPEG_PATH=/usr/bin/ffmpeg"
 #echo "export FFPROBE_PATH=/usr/bin/ffprobe"
 #echo "export FLAC_PATH=/usr/bin/flac"
