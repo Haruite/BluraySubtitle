@@ -921,6 +921,9 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
         if hasattr(self, 'subtitle_bluray_compat_checkbox') and self.subtitle_bluray_compat_checkbox:
             simple_diy = bool(getattr(self, 'diy_simple_radio', None) and self.diy_simple_radio.isChecked())
             self.subtitle_bluray_compat_checkbox.setVisible(function_id == 5 and simple_diy)
+        if hasattr(self, 'use_bluray_compat_params_checkbox') and self.use_bluray_compat_params_checkbox:
+            # x264/x265 Blu-ray compatibility params are only for DIY workflow.
+            self.use_bluray_compat_params_checkbox.setVisible(function_id == 5)
         if hasattr(self, 'subtitle_hint_row') and self.subtitle_hint_row:
             self.subtitle_hint_row.setVisible(function_id == 5)
         if hasattr(self, 'track_scope_row') and self.track_scope_row:
