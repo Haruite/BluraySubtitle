@@ -321,6 +321,24 @@ RUN set -eux; \
     find "${SCRIPTS_DIR}" -maxdepth 1 -type f -name "*.py" -exec cp -f {} "${DST}/" \; ; \
     rm -rf /tmp/vcbs
 
+RUN set -eux; \
+    mkdir -p /tmp/x264 && cd /tmp/x264; \
+    git clone https://code.videolan.org/videolan/x264.git; \
+    cd x264; \
+    ./configure --enable-static --enable-shared; \
+    make -j"$(nproc)"; \
+    cp x264 /usr/bin/x264; \
+    chmod +x /usr/bin/x264; \
+    rm -rf /tmp/x264
+
+RUN set -eux; \
+    mkdir -p /tmp/tsmuxer && cd /tmp/tsmuxer; \
+    wget https://github.com/justdan96/tsMuxer/releases/download/2.7.0/tsMuxer-2.7.0-linux.zip; \
+    unzip tsMuxer-2.7.0-linux.zip; \
+    cp tsMuxeR /usr/bin/tsMuxeR; \
+    chmod +x /usr/bin/tsMuxeR; \
+    rm -rf /tmp/tsmuxer
+
 ENV LD_PRELOAD=/usr/local/lib/libvapoursynth-script.so
 
 WORKDIR /app

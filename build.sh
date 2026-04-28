@@ -770,6 +770,89 @@ install_x265() {
 }
 
 # ---------------------------------------------------------------------------
+# x264
+# ---------------------------------------------------------------------------
+
+install_x264() {
+  log "$(msg 'Installing x264 (build from source)' '安装 x264（从源码编译并安装）')"
+
+  if [[ -x "/usr/bin/x264" ]] || command -v x264 >/dev/null 2>&1; then
+    log "$(msg 'x264 already installed, skipping build' '检测到 x264 已安装，跳过编译')"
+    return 0
+  fi
+
+  local deps=(build-essential git yasm)
+  local missing_deps=()
+  local dep
+  for dep in "${deps[@]}"; do
+    if ! dpkg-query -W -f='${Status}' "$dep" 2>/dev/null | grep -q "install ok installed"; then
+      missing_deps+=("$dep")
+    fi
+  done
+  if (( ${#missing_deps[@]} > 0 )); then
+    apt_update
+    apt_install "${missing_deps[@]}" || die "$(msg 'Failed to install x264 dependencies' 'x264 依赖安装失败')"
+  fi
+
+  local build_dir
+  build_dir="$(mktemp -d)"
+
+  (
+    cd "$build_dir" || exit 1
+    tmux_run "$(msg 'Download x264 source' '下载 x264 源码')" git clone https://code.videolan.org/videolan/x264.git || exit 1
+    cd x264 || exit 1
+    tmux_run "x264 configure" ./configure --enable-static --enable-shared || exit 1
+    tmux_run "x264 make" make -j"$(nproc)" || exit 1
+    sudo cp x264 /usr/bin/x264 || exit 1
+    sudo chmod +x /usr/bin/x264 || exit 1
+  ) || die "$(msg 'x264 build/install failed' 'x264 编译/安装失败')"
+
+  rm -rf "$build_dir"
+  log "$(msg 'x264 installation complete' 'x264 安装完成')"
+}
+
+# ---------------------------------------------------------------------------
+# tsMuxer
+# ---------------------------------------------------------------------------
+
+install_tsmuxer() {
+  log "$(msg 'Installing tsMuxer 2.7.0' '安装 tsMuxer 2.7.0')"
+
+  if [[ -x "/usr/bin/tsMuxeR" ]] || command -v tsMuxeR >/dev/null 2>&1; then
+    log "$(msg 'tsMuxeR already installed, skipping' '检测到 tsMuxeR 已安装，跳过')"
+    return 0
+  fi
+
+  local deps=(wget unzip)
+  local missing_deps=()
+  local dep
+  for dep in "${deps[@]}"; do
+    if ! dpkg-query -W -f='${Status}' "$dep" 2>/dev/null | grep -q "install ok installed"; then
+      missing_deps+=("$dep")
+    fi
+  done
+  if (( ${#missing_deps[@]} > 0 )); then
+    apt_update
+    apt_install "${missing_deps[@]}" || die "$(msg 'Failed to install tsMuxer dependencies' 'tsMuxer 依赖安装失败')"
+  fi
+
+  local build_dir
+  build_dir="$(mktemp -d)"
+
+  (
+    cd "$build_dir" || exit 1
+    tmux_run "$(msg 'Download tsMuxer-2.7.0-linux.zip' '下载 tsMuxer-2.7.0-linux.zip')" \
+      wget https://github.com/justdan96/tsMuxer/releases/download/2.7.0/tsMuxer-2.7.0-linux.zip || exit 1
+    tmux_run "$(msg 'Extract tsMuxer zip package' '解压 tsMuxer 压缩包')" unzip tsMuxer-2.7.0-linux.zip || exit 1
+    sudo cp tsMuxeR /usr/bin/tsMuxeR || exit 1
+    sudo chmod +x /usr/bin/tsMuxeR || exit 1
+  ) || die "$(msg 'tsMuxer install failed' 'tsMuxer 安装失败')"
+
+  rm -rf "$build_dir"
+  log "$(msg 'tsMuxer installation complete' 'tsMuxer 安装完成')"
+}
+
+# ---------------------------------------------------------------------------
 # FLAC
 # ---------------------------------------------------------------------------
 
@@ -1698,7 +1781,9 @@ fi
 install_shaderc_fix
 install_mkvtoolnix
 install_mpv
+install_x264
 install_x265
+install_tsmuxer
 install_flac
 install_vapoursynth
 install_vapoursynth_scripts
