@@ -306,8 +306,7 @@ RUN set -eux; \
     cp "$(find "$PWD" -maxdepth 2 -name libvsnlm_ispc.so -type f | head -n1)" /root/plugins/; \
     rm -rf /tmp/vsplugins /tmp/ispc.tar.gz /tmp/ispc-v1.23.0-linux
 
-RUN python3 -m pip install --break-system-packages --upgrade pycountry PyQt6 librosa || \
-    python3 -m pip install --upgrade pycountry PyQt6 librosa
+RUN python3 -m pip install --break-system-packages --upgrade pycountry PyQt6 librosa pillow
 
 RUN set -eux; \
     apt-get update && apt-get install -y --no-install-recommends p7zip-full && rm -rf /var/lib/apt/lists/*; \

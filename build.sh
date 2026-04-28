@@ -1706,8 +1706,8 @@ install_vapoursynth_editor
 build_vs_plugins
 install_desktop_shortcuts
 
-log "$(msg 'Installing Python dependencies (system python3: pycountry PyQt6 librosa)' '安装 Python 依赖（使用系统 python3：pycountry PyQt6 librosa）')"
-if ! pip3 show pycountry PyQt6 librosa >/dev/null 2>&1; then
+log "$(msg 'Installing Python dependencies (system python3: pycountry PyQt6 librosa pillow)' '安装 Python 依赖（使用系统 python3：pycountry PyQt6 librosa）')"
+if ! pip3 show pycountry PyQt6 librosa pillow >/dev/null 2>&1; then
   py_minor="$(python3 -c 'import sys; print(sys.version_info.minor)' 2>/dev/null || echo 0)"
   if (( py_minor >= 12 )); then
     tmux_run "$(msg 'Install Python dependencies' '安装 Python 依赖')" env PIP_DISABLE_PIP_VERSION_CHECK=1 pip3 install --upgrade -q --progress-bar off pycountry PyQt6 librosa --break-system-packages >/dev/null 2>&1 \
