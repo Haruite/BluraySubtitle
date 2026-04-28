@@ -243,6 +243,12 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             try:
                 targets: list[str] = []
                 out = os.path.normpath(output_file) if output_file else ''
+                lang_cfg_all = getattr(self, 'track_language_config', {}) or {}
+                lang_override = {}
+                try:
+                    lang_override = dict(lang_cfg_all.get(f'main::{os.path.normpath(mpls_path)}') or {})
+                except Exception:
+                    lang_override = {}
                 if out:
                     out_dir = os.path.dirname(out)
                     base_stem = os.path.splitext(os.path.basename(out))[0]
@@ -262,7 +268,8 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                         m2ts_file,
                         pid_to_lang,
                         copy_audio_track,
-                        copy_sub_track
+                        copy_sub_track,
+                        lang_override
                     )
             except Exception:
                 pass

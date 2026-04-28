@@ -1130,10 +1130,10 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                             btn3.clicked.connect(partial(self.on_button_play, mpls_path, btn3))
                             table_widget.setCellWidget(mpls_n, 4, btn3)
                             if self.get_selected_function_id() in (3, 4, 5):
-                                show_tracks = (mpls_path == selected_mpls)
+                                show_tracks = True
                                 if self.get_selected_function_id() == 5:
                                     is_simple_diy = bool(getattr(self, 'diy_simple_radio', None) and self.diy_simple_radio.isChecked())
-                                show_tracks = is_simple_diy
+                                    show_tracks = is_simple_diy
                                 btn4 = QToolButton()
                                 btn4.setText(self.t('edit tracks'))
                                 if show_tracks:
@@ -1293,7 +1293,8 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             episode_output_names,
             episode_subtitle_languages,
             movie_mode=self._is_movie_mode(),
-            track_selection_config=getattr(self, '_track_selection_config', {})
+            track_selection_config=getattr(self, '_track_selection_config', {}),
+            track_language_config=getattr(self, '_track_language_config', {})
         )
         self._remux_worker.moveToThread(self._remux_thread)
         self._remux_thread.started.connect(self._remux_worker.run)

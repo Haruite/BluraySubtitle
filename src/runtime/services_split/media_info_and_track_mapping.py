@@ -576,6 +576,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             pid_to_lang: dict[int, str],
             selected_audio_ids: list[str],
             selected_sub_ids: list[str],
+            override_lang_by_source_index: Optional[dict[str, str]] = None,
     ):
         if not output_mkv_path or not os.path.exists(output_mkv_path):
             return
@@ -615,6 +616,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 pass
 
         expected_by_type: dict[str, list[str]] = {'video': [], 'audio': [], 'subtitles': []}
+        override_map = {str(k): str(v) for k, v in (override_lang_by_source_index or {}).items() if str(v).strip()}
         for t in in_tracks:
             if not isinstance(t, dict):
                 continue
@@ -631,6 +633,10 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             elif t_type == 'subtitles':
                 include = tid in sel_s
             if not include:
+                continue
+            lang_override = override_map.get(str(tid), '').strip()
+            if lang_override:
+                expected_by_type[t_type].append(_norm_lang(lang_override))
                 continue
             pid = idx_to_pid.get(tid)
             if pid is None:

@@ -1022,13 +1022,20 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
         table = QTableWidget(dlg)
         self._set_compact_table(table, row_height=22, header_height=64)
         is_mkvinfo = any(('codec_id' in (s or {})) or ('track_id' in (s or {})) for s in (streams or []))
+        show_convert_col = (self.get_selected_function_id() == 5)
         if is_mkvinfo:
-            cols = ['track_number', 'select', 'track_uid', 'track_type', 'language', 'codec_id', 'convert', 'extract']
+            cols = ['track_number', 'select', 'track_uid', 'track_type', 'language', 'codec_id']
+            if show_convert_col:
+                cols.append('convert')
+            cols.append('extract')
         else:
             cols = [
                 'index', 'select', 'pid', 'program_number', 'pmt_pid', 'is_pcr_pid',
-                'stream_type', 'language', 'codec_type', 'codec_name', 'convert', 'language_from_pmt_descriptor'
+                'stream_type', 'language', 'codec_type', 'codec_name'
             ]
+            if show_convert_col:
+                cols.append('convert')
+            cols.append('language_from_pmt_descriptor')
         table.setColumnCount(len(cols))
         self._set_table_headers(table, cols)
         if not is_mkvinfo:
