@@ -18,7 +18,7 @@ X265_PATH = r"C:\Software\x265.exe"
 X264_PATH = r"C:\Software\x264.exe"
 VSEDIT_PATH = r"C:\Software\vapoursynth\vsedit.exe"
 PLUGIN_PATH = ""
-LIBASS_PATH = r"C:\Downloads\libass.dll"
+LIBASS_PATH = r"C:\Downloads\libass-9.dll"
 
 if sys.platform != "win32":
     FLAC_PATH = "/usr/bin/flac"

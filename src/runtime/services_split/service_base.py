@@ -267,7 +267,7 @@ class BluraySubtitleServiceBase:
         raise NotImplementedError
 
     @staticmethod
-    def _fix_output_track_languages_with_mkvpropedit(output_mkv_path: str, input_m2ts_path: str, pid_to_lang: dict[int, str], selected_audio_ids: list[str], selected_sub_ids: list[str]):
+    def _fix_output_track_languages_with_mkvpropedit(output_mkv_path: str, input_m2ts_path: str, pid_to_lang: dict[int, str], selected_audio_ids: list[str], selected_sub_ids: list[str], override_lang_by_source_index: Optional[dict[str, str]]=None):
         """Stub for `_fix_output_track_languages_with_mkvpropedit`."""
         raise NotImplementedError
 

@@ -964,7 +964,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             x265_params,
             sub_pack_mode,
             movie_mode=self._is_movie_mode(),
-            track_selection_config=getattr(self, '_track_selection_config', {})
+            track_selection_config=getattr(self, '_track_selection_config', {}),
+            track_language_config=getattr(self, '_track_language_config', {})
         )
         self._encode_worker.moveToThread(self._encode_thread)
         self._encode_thread.started.connect(self._encode_worker.run)
@@ -1513,7 +1514,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             progress.show()
             QCoreApplication.processEvents()
             try:
-                if self.get_selected_function_id() in (3, 4, 5):
+                if self.get_selected_function_id() in (3, 4):
                     progress.setLabelText(self.t('Regenerating configuration...'))
                     QCoreApplication.processEvents()
                     cfg = self._generate_configuration_from_ui_inputs()
@@ -1521,7 +1522,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             except Exception:
                 self._show_error_dialog(traceback.format_exc())
             try:
-                if self.get_selected_function_id() in (3, 4, 5):
+                if self.get_selected_function_id() in (3, 4):
                     progress.setLabelText(self.t('Refreshing SP table...'))
                     QCoreApplication.processEvents()
                     self._sync_chapter_checkbox_sp_for_mpls(mpls_path, bdmv_index)
@@ -1567,7 +1568,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 if self.get_selected_function_id() in (3, 4, 5) and info.columnCount() > 5:
                     btn_tracks = QToolButton()
                     btn_tracks.setText(self.t('edit tracks'))
-                    can_edit_tracks = bool(checked)
+                    can_edit_tracks = True
                     if self.get_selected_function_id() == 5:
                         is_simple_diy = bool(getattr(self, 'diy_simple_radio', None) and self.diy_simple_radio.isChecked())
                         can_edit_tracks = is_simple_diy

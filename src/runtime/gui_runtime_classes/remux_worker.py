@@ -20,7 +20,8 @@ class RemuxWorker(QObject):
                  cancel_event: threading.Event, sp_entries: list[dict[str, int | str]],
                  episode_output_names: list[str], episode_subtitle_languages: list[str],
                  movie_mode: bool = False,
-                 track_selection_config: Optional[dict[str, dict[str, list[str]]]] = None):
+                 track_selection_config: Optional[dict[str, dict[str, list[str]]]] = None,
+                 track_language_config: Optional[dict[str, dict[str, str]]] = None):
         super().__init__()
         self.bdmv_path = bdmv_path
         self.sub_files = sub_files
@@ -34,6 +35,7 @@ class RemuxWorker(QObject):
         self.episode_subtitle_languages = episode_subtitle_languages
         self.movie_mode = bool(movie_mode)
         self.track_selection_config = track_selection_config or {}
+        self.track_language_config = track_language_config or {}
 
     def run(self):
         try:
@@ -48,6 +50,7 @@ class RemuxWorker(QObject):
             bs = BluraySubtitle(self.bdmv_path, self.sub_files, self.checked, progress_cb, movie_mode=self.movie_mode)
             bs.configuration = self.configuration
             bs.track_selection_config = self.track_selection_config
+            bs.track_language_config = self.track_language_config
             bs.episodes_remux(
                 None,
                 self.output_folder,
