@@ -19,6 +19,7 @@ X264_PATH = r"C:\Software\x264.exe"
 VSEDIT_PATH = r"C:\Software\vapoursynth\vsedit.exe"
 PLUGIN_PATH = ""
 LIBASS_PATH = r"C:\Downloads\libass-9.dll"
+TS_MUXER_PATH = r"C:\Software\tsMuxeR.exe"
 
 if sys.platform != "win32":
     FLAC_PATH = "/usr/bin/flac"
@@ -29,6 +30,7 @@ if sys.platform != "win32":
     PLUGIN_PATH = os.path.expanduser("~/plugins")
     VSEDIT_PATH = "/usr/bin/vsedit"
     LIBASS_PATH = ''
+    TSMUXER_PATH = '/usr/bin/tsMuxeR'
     if is_docker():
         PLUGIN_PATH = "/app/plugins"
 
