@@ -5,7 +5,7 @@ import shutil
 import subprocess
 import threading
 from functools import reduce
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from PyQt6.QtWidgets import QTableWidget
 
@@ -521,6 +521,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
             sp_entries: list[dict[str, int | str]],
             sps_folder: str,
             cancel_event: Optional[threading.Event] = None,
+            progress_cb: Optional[Callable[[int, str], None]] = None,
     ) -> list[tuple[int, str]]:
         sp_index_by_bdmv: dict[int, int] = {}
         created: list[tuple[int, str]] = []
@@ -691,6 +692,8 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                     except Exception:
                         print_exc_terminal()
                     created.append((entry_idx, folder_out))
+                    if progress_cb:
+                        progress_cb(entry_idx, folder_out)
                     continue
                 if not stream_dir or not os.path.isdir(stream_dir):
                     stream_dir = os.path.normpath(os.path.join(os.path.dirname(playlist_dir), 'STREAM'))
@@ -709,6 +712,8 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                             shell=True
                         ).wait()
                     created.append((entry_idx, folder_out))
+                    if progress_cb:
+                        progress_cb(entry_idx, folder_out)
                     continue
                 if output_name.lower().endswith('.png'):
                     if uniq_m2ts:
@@ -719,6 +724,8 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                         ).wait()
                         if os.path.exists(sp_mkv_path):
                             created.append((entry_idx, sp_mkv_path))
+                            if progress_cb:
+                                progress_cb(entry_idx, sp_mkv_path)
                     continue
                 folder_out = sp_mkv_path
                 os.makedirs(folder_out, exist_ok=True)
@@ -732,6 +739,8 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                         shell=True
                     ).wait()
                 created.append((entry_idx, folder_out))
+                if progress_cb:
+                    progress_cb(entry_idx, folder_out)
                 continue
 
             # Single selected audio track with raw extension: extract directly.
@@ -749,6 +758,8 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                         ).wait()
                     if os.path.exists(sp_mkv_path):
                         created.append((entry_idx, sp_mkv_path))
+                        if progress_cb:
+                            progress_cb(entry_idx, sp_mkv_path)
                 continue
 
             chapter_txt = os.path.join(sps_folder, f'{os.path.splitext(os.path.basename(sp_mkv_path))[0]}.chapter.txt')
@@ -880,6 +891,8 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                 pass
             if os.path.exists(sp_mkv_path):
                 created.append((entry_idx, sp_mkv_path))
+                if progress_cb:
+                    progress_cb(entry_idx, sp_mkv_path)
         return created
 
     def _write_chapter_txt_from_mpls(self, mpls_path: str, chapter_txt_path: str) -> list[float]:

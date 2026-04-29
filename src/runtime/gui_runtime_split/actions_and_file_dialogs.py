@@ -276,6 +276,9 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
 
             rows = payload.get('rows') or []
             if payload.get('mode') == 3:
+                if not rows:
+                    # In remux/encode flows subtitle folder is optional; keep current rows.
+                    return
                 self.table2.clear()
                 self.table2.setColumnCount(len(REMUX_LABELS))
                 self._set_table_headers(self.table2, REMUX_LABELS)
@@ -287,6 +290,9 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 self.table2.resizeColumnsToContents()
                 self._scroll_table_h_to_right(self.table2)
             elif payload.get('mode') == 4:
+                if not rows:
+                    # In remux/encode flows subtitle folder is optional; keep current rows.
+                    return
                 self.table2.clear()
                 self.table2.setColumnCount(len(ENCODE_LABELS))
                 self._set_table_headers(self.table2, ENCODE_LABELS)
@@ -299,6 +305,9 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 self.table2.resizeColumnsToContents()
                 self._scroll_table_h_to_right(self.table2)
             elif payload.get('mode') == 5:
+                if not rows:
+                    # In remux/encode flows subtitle folder is optional; keep current rows.
+                    return
                 self.table2.clear()
                 self.table2.setColumnCount(len(DIY_REMUX_LABELS))
                 self._set_table_headers(self.table2, DIY_REMUX_LABELS)
@@ -348,8 +357,10 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             if configuration:
                 self.on_configuration(configuration)
             elif self.get_selected_function_id() in (3, 4, 5) and (not self._is_movie_mode()):
-                self.table2.setRowCount(0)
-                self.refresh_sp_table({})
+                # Keep existing episode rows when subtitle scan returns empty results.
+                # In remux/encode modes, table2 is source-driven by main MPLS selection,
+                # not subtitle-folder scan results.
+                pass
 
         def on_canceled():
             cleanup()
@@ -810,6 +821,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             vspipe_mode = 'bundle' if self.vspipe_mode_combo.currentText() == 'Built-in' else 'system'
             x265_mode = 'bundle' if self.x265_mode_combo.currentText() == 'Built-in' else 'system'
             x265_params = self._effective_encode_params()
+            use_getnative = bool(getattr(self, "use_getnative_checkbox", None) and self.use_getnative_checkbox.isChecked())
             if self.sub_pack_hard_radio.isChecked():
                 sub_pack_mode = 'hard'
             elif self.sub_pack_soft_radio.isChecked():
@@ -828,6 +840,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 x265_mode=x265_mode,
                 x265_params=x265_params,
                 sub_pack_mode=sub_pack_mode,
+                use_getnative=use_getnative,
             )
             self._encode_worker.moveToThread(self._encode_thread)
             self._encode_thread.started.connect(self._encode_worker.run)
@@ -938,6 +951,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         vspipe_mode = 'bundle' if self.vspipe_mode_combo.currentText() == 'Built-in' else 'system'
         x265_mode = 'bundle' if self.x265_mode_combo.currentText() == 'Built-in' else 'system'
         x265_params = self._effective_encode_params()
+        use_getnative = bool(getattr(self, "use_getnative_checkbox", None) and self.use_getnative_checkbox.isChecked())
         if self.sub_pack_hard_radio.isChecked():
             sub_pack_mode = 'hard'
         elif self.sub_pack_soft_radio.isChecked():
@@ -963,6 +977,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             x265_mode,
             x265_params,
             sub_pack_mode,
+            use_getnative=use_getnative,
             movie_mode=self._is_movie_mode(),
             track_selection_config=getattr(self, '_track_selection_config', {}),
             track_language_config=getattr(self, '_track_language_config', {})
@@ -1276,6 +1291,9 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         tools_layout.addWidget(self.x265_preset_combo)
 
         tools_layout.addStretch(1)
+        self.use_getnative_checkbox = QCheckBox(self.t('Use getnative for native resolution'), tools_row)
+        self.use_getnative_checkbox.setChecked(True)
+        tools_layout.addWidget(self.use_getnative_checkbox)
         self.use_bluray_compat_params_checkbox = QCheckBox(self.t('Use Blu-ray compatible params'), tools_row)
         self.use_bluray_compat_params_checkbox.setChecked(False)
         tools_layout.addWidget(self.use_bluray_compat_params_checkbox)

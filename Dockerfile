@@ -131,6 +131,20 @@ RUN set -eux; \
     rm -rf /tmp/vs
 
 RUN set -eux; \
+    mkdir -p /tmp/descale && cd /tmp/descale; \
+    git clone https://github.com/Irrational-Encoding-Wizardry/vapoursynth-descale.git; \
+    cd vapoursynth-descale; \
+    meson setup build --buildtype=release; \
+    ninja -C build; \
+    ninja -C build install; \
+    ldconfig; \
+    mkdir -p /app/plugins; \
+    if [ -f /usr/local/lib/vapoursynth/libdescale.so ]; then cp /usr/local/lib/vapoursynth/libdescale.so /app/plugins/libdescale.so; \
+    elif [ -f /usr/lib/vapoursynth/libdescale.so ]; then cp /usr/lib/vapoursynth/libdescale.so /app/plugins/libdescale.so; \
+    else echo "libdescale.so not found after install" >&2; exit 1; fi; \
+    rm -rf /tmp/descale
+
+RUN set -eux; \
     mkdir -p /tmp/vsedit/vsedit_build && cd /tmp/vsedit/vsedit_build; \
     wget -O R19-mod-6.9.tar.gz https://github.com/YomikoR/VapourSynth-Editor/archive/refs/tags/R19-mod-6.9.tar.gz; \
     tar -zxvf R19-mod-6.9.tar.gz --strip-components=1; \
@@ -150,7 +164,7 @@ RUN set -eux; \
     chmod +x /usr/local/bin/vsedit; \
     rm -rf /tmp/vsedit
 
-RUN mkdir -p /root/plugins /tmp/vsplugins
+RUN mkdir -p /app/plugins /tmp/vsplugins
 
 RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
@@ -162,7 +176,7 @@ RUN set -eux; \
     if [ -n "${AVCODEC_MAJOR}" ] && [ "${AVCODEC_MAJOR}" -lt 60 ]; then git -c advice.detachedHead=false checkout -q 70e19fb || true; fi; \
     python3 -c "import re;from pathlib import Path;p=Path('../common/decode.c'); d=p.read_text(encoding='utf-8',errors='replace') if p.exists() else ''; d=re.sub(r'^.*AV_PIX_FMT_D3D12\\\\\\\\n.*$','',d,flags=re.MULTILINE); d=re.sub(r'^#ifndef AV_PIX_FMT_D3D12\\\\n#define AV_PIX_FMT_D3D12 .*?\\\\n#endif\\\\n\\\\n?','',d,flags=re.MULTILINE); p.write_text(d,encoding='utf-8') if p.exists() else None"; \
     meson setup build; ninja -C build; \
-    cp "$(find "$PWD" -maxdepth 3 -name libvslsmashsource.so -type f | head -n1)" /root/plugins/
+    cp "$(find "$PWD" -maxdepth 3 -name libvslsmashsource.so -type f | head -n1)" /app/plugins/
 
 RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
@@ -173,7 +187,7 @@ RUN set -eux; \
     cd VapourSynth-EEDI3-r9; \
     find . -type f -name EEDI3.cpp -exec sed -i 's/std::max_align_t/max_align_t/g' {} +; \
     python3 -c "import re; c=open('meson.build',encoding='utf-8',errors='replace').read(); c=re.sub(r'incdir = include_directories\\(.*?check: true,.*?\\.stdout\\(\\)\\.strip\\(\\),\\s*\\)','incdir = \\'/usr/local/include/vapoursynth\\'',c,flags=re.DOTALL); open('meson.build','w',encoding='utf-8').write(c)"; \
-    meson setup build; ninja -C build; cp build/eedi3m.so /root/plugins/
+    meson setup build; ninja -C build; cp build/eedi3m.so /app/plugins/
 
 RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
@@ -183,7 +197,7 @@ RUN set -eux; \
     tar zxvf r10.tar.gz; \
     cd VapourSynth-AddGrain-r10; \
     meson setup build; ninja -C build; \
-    cp build/libaddgrain.so /root/plugins/
+    cp build/libaddgrain.so /app/plugins/
 
 RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
@@ -191,7 +205,7 @@ RUN set -eux; \
     cd /tmp/vsplugins; \
     wget -O assrender.zip https://github.com/AmusementClub/assrender/releases/download/0.38.3/assrender_linux-x64_v0.38.3.zip; \
     unzip -o assrender.zip; \
-    cp libassrender.so /root/plugins/
+    cp libassrender.so /app/plugins/
 
 RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
@@ -203,7 +217,7 @@ RUN set -eux; \
     chmod +x configure; \
     ./configure; \
     make -j"$(nproc)"; \
-    cp "$(find "$PWD" -maxdepth 3 -name libbilateral.so -type f | head -n1)" /root/plugins/
+    cp "$(find "$PWD" -maxdepth 3 -name libbilateral.so -type f | head -n1)" /app/plugins/
 
 RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
@@ -213,7 +227,7 @@ RUN set -eux; \
     tar zxvf r7.tar.gz; \
     cd VapourSynth-DFTTest-r7; \
     meson setup build; ninja -C build; \
-    cp build/libdfttest.so /root/plugins/
+    cp build/libdfttest.so /app/plugins/
 
 RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
@@ -223,7 +237,7 @@ RUN set -eux; \
     tar zxvf r7.1.tar.gz; \
     cd VapourSynth-EEDI2-r7.1; \
     meson setup build; ninja -C build; \
-    cp build/libeedi2.so /root/plugins/
+    cp build/libeedi2.so /app/plugins/
 
 RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
@@ -235,7 +249,7 @@ RUN set -eux; \
     ./autogen.sh; \
     ./configure; \
     make -j"$(nproc)"; \
-    cp "$PWD/.libs/libfmtconv.so" /root/plugins/
+    cp "$PWD/.libs/libfmtconv.so" /app/plugins/
 
 RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
@@ -245,7 +259,7 @@ RUN set -eux; \
     tar zxvf R1.tar.gz; \
     cd vs-removegrain-R1/src; \
     g++ -shared -fPIC -O3 -Wall $(pkg-config --cflags vapoursynth) clense.cpp removegrainvs.cpp repairvs.cpp shared.cpp verticalcleaner.cpp -o libremovegrain.so; \
-    cp libremovegrain.so /root/plugins/
+    cp libremovegrain.so /app/plugins/
 
 RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
@@ -256,7 +270,7 @@ RUN set -eux; \
     cd VapourSynth-SangNomMod-0.1-fix; \
     ./configure; \
     make -j"$(nproc)"; \
-    cp "$(find "$PWD" -maxdepth 3 -name libsangnommod.so -type f | head -n1)" /root/plugins/
+    cp "$(find "$PWD" -maxdepth 3 -name libsangnommod.so -type f | head -n1)" /app/plugins/
 
 RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
@@ -267,7 +281,7 @@ RUN set -eux; \
     cd vs-placebo-2.0.0; \
     git clone https://github.com/sekrit-twc/libp2p.git; \
     meson setup build; ninja -C build; \
-    cp "$(find "$PWD/build" -maxdepth 2 -name libvs_placebo.so -type f | head -n1)" /root/plugins/
+    cp "$(find "$PWD/build" -maxdepth 2 -name libvs_placebo.so -type f | head -n1)" /app/plugins/
 
 RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
@@ -275,7 +289,7 @@ RUN set -eux; \
     cd /tmp/vsplugins; \
     wget -O zsmooth.zip https://github.com/adworacz/zsmooth/releases/download/0.7/libzsmooth.x86_64-gnu.so.zip; \
     unzip -o zsmooth.zip; \
-    mv libzsmooth.x86_64-gnu.so /root/plugins/
+    mv libzsmooth.x86_64-gnu.so /app/plugins/
 
 RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
@@ -286,7 +300,7 @@ RUN set -eux; \
     cd vapoursynth-mvtools-26; \
     python3 -c "import re; c=open('meson.build',encoding='utf-8',errors='replace').read(); c=re.sub(r\"incdir\\s*=\\s*include_directories\\s*\\(\\s*'vapoursynth/include'\\s*\\)\",\"incdir = '/usr/local/include/vapoursynth'\",c,flags=re.DOTALL); open('meson.build','w',encoding='utf-8').write(c)"; \
     meson setup build; ninja -C build; \
-    cp build/mvtools.so /root/plugins/
+    cp build/mvtools.so /app/plugins/
 
 RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
@@ -303,10 +317,10 @@ RUN set -eux; \
     tar zxvf v2.tar.gz; \
     cd vs-nlm-ispc-2; mkdir -p build && cd build; \
     cmake ..; make -j"$(nproc)"; \
-    cp "$(find "$PWD" -maxdepth 2 -name libvsnlm_ispc.so -type f | head -n1)" /root/plugins/; \
+    cp "$(find "$PWD" -maxdepth 2 -name libvsnlm_ispc.so -type f | head -n1)" /app/plugins/; \
     rm -rf /tmp/vsplugins /tmp/ispc.tar.gz /tmp/ispc-v1.23.0-linux
 
-RUN python3 -m pip install --break-system-packages --upgrade pycountry PyQt6 librosa pillow
+RUN python3 -m pip install --break-system-packages --upgrade pycountry PyQt6 librosa pillow matplotlib
 
 RUN set -eux; \
     apt-get update && apt-get install -y --no-install-recommends p7zip-full && rm -rf /var/lib/apt/lists/*; \

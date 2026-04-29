@@ -29,6 +29,7 @@ class EncodeMkvFolderWorker(QObject):
         x265_mode: str,
         x265_params: str,
         sub_pack_mode: str,
+        use_getnative: bool = True,
     ):
         super().__init__()
         self.mkv_rows = mkv_rows
@@ -40,6 +41,7 @@ class EncodeMkvFolderWorker(QObject):
         self.x265_mode = x265_mode
         self.x265_params = x265_params
         self.sub_pack_mode = sub_pack_mode
+        self.use_getnative = bool(use_getnative)
 
     def _link_or_copy(self, src: str, dst: str):
         if os.path.exists(dst):
@@ -96,6 +98,7 @@ class EncodeMkvFolderWorker(QObject):
 
             bs = BluraySubtitle('', sub_files, True, progress_cb, movie_mode=True)
             bs.episode_subtitle_languages = episode_subtitle_languages
+            bs.use_getnative = bool(getattr(self, "use_getnative", True))
 
             total = max(1, len(self.mkv_rows) + len(self.sp_rows))
             done = 0
@@ -106,6 +109,9 @@ class EncodeMkvFolderWorker(QObject):
                 if not out_name.lower().endswith('.mkv'):
                     out_name += '.mkv'
                 dst = os.path.join(dst_folder, out_name)
+                if os.path.exists(dst) and os.path.isfile(dst):
+                    done += 1
+                    continue
                 vpy_path = str(row.get('vpy_path') or '').strip()
                 bs.encode_task(
                     dst,
@@ -131,6 +137,9 @@ class EncodeMkvFolderWorker(QObject):
                     sps_out = os.path.join(dst_folder, 'SPs')
                     os.makedirs(sps_out, exist_ok=True)
                 dst = os.path.join(sps_out, out_name)
+                if os.path.exists(dst) and os.path.isfile(dst):
+                    done += 1
+                    continue
                 vpy_path = str(row.get('vpy_path') or '').strip()
                 bs.encode_task(
                     dst,
