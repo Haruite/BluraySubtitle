@@ -147,6 +147,7 @@ class BluraySubtitleGuiBase(QWidget):
         self.theme_combo = None
         self.theme_label = None
         self.vspipe_mode_combo = None
+        self.use_getnative_checkbox = None
         self.x265_mode_combo = None
         self.x265_mode_label = None
         self.x265_params_edit = None
@@ -1001,4 +1002,3 @@ class BluraySubtitleGuiBase(QWidget):
     def t(self, text: str) -> str:
         """Stub for `t`."""
         raise NotImplementedError
-

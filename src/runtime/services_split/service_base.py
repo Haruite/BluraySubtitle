@@ -176,7 +176,14 @@ class BluraySubtitleServiceBase:
         """Finalize folder layout after processing and clean temporary artifacts."""
         raise NotImplementedError
 
-    def _create_sp_mkvs_from_entries(self, bdmv_index_conf: dict[int, list[dict[str, int | str]]], sp_entries: list[dict[str, int | str]], sps_folder: str, cancel_event: Optional[threading.Event]=None) -> list[tuple[int, str]]:
+    def _create_sp_mkvs_from_entries(
+            self,
+            bdmv_index_conf: dict[int, list[dict[str, int | str]]],
+            sp_entries: list[dict[str, int | str]],
+            sps_folder: str,
+            cancel_event: Optional[threading.Event] = None,
+            progress_cb=None,
+    ) -> list[tuple[int, str]]:
         """Stub for `_create_sp_mkvs_from_entries`."""
         raise NotImplementedError
 

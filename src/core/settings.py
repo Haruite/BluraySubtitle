@@ -20,6 +20,10 @@ VSEDIT_PATH = r"C:\Software\vapoursynth\vsedit.exe"
 PLUGIN_PATH = ""
 LIBASS_PATH = r"C:\Downloads\libass-9.dll"
 TS_MUXER_PATH = r"C:\Software\tsMuxeR.exe"
+MKV_INFO_PATH = ""
+MKV_MERGE_PATH = ""
+MKV_PROP_EDIT_PATH = ""
+MKV_EXTRACT_PATH = ""
 
 if sys.platform != "win32":
     FLAC_PATH = "/usr/bin/flac"
@@ -33,12 +37,12 @@ if sys.platform != "win32":
     TSMUXER_PATH = '/usr/bin/tsMuxeR'
     if is_docker():
         PLUGIN_PATH = "/app/plugins"
+    MKV_INFO_PATH = '/usr/bin/mkvinfo'
+    MKV_MERGE_PATH = '/usr/bin/mkvmerge'
+    MKV_PROP_EDIT_PATH = '/usr/bin/mkvpropedit'
+    MKV_EXTRACT_PATH = '/usr/bin/mkvextract'
 
 
-MKV_INFO_PATH = ""
-MKV_MERGE_PATH = ""
-MKV_PROP_EDIT_PATH = ""
-MKV_EXTRACT_PATH = ""
 BDMV_LABELS = ["path", "size", "info", "remux_cmd"]
 DIY_BDMV_LABELS = ["path", "size", "info"]
 SUBTITLE_LABELS = ["select", "path", "sub_duration", "ep_duration", "bdmv_index", "chapter_index", "offset", "warning"]

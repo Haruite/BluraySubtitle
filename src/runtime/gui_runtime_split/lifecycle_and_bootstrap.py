@@ -366,7 +366,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         subtitle_hint_outer = QHBoxLayout(self.subtitle_hint_row)
         subtitle_hint_outer.setContentsMargins(8, 2, 8, 0)
         subtitle_hint_outer.setSpacing(4)
-        self.subtitle_formats_hint_label = QLabel(self.t('Supports ass/ssa/srt/sup formats            '), self.subtitle_hint_row)
+        self.subtitle_formats_hint_label = QLabel(self.t('Supports ass/ssa/srt/sup formats'), self.subtitle_hint_row)
         subtitle_hint_outer.addWidget(self.subtitle_formats_hint_label)
         self.subtitle_convert_checkbox = QCheckBox(self.t('Convert srt -> ass -> sup'), self.subtitle_hint_row)
         self.subtitle_convert_checkbox.setChecked(False)

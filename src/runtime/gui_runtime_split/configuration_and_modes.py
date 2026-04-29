@@ -906,6 +906,12 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
         last_function_id = int(getattr(self, '_selected_function_id', 0) or 0)
         if (not force) and function_id and last_function_id == function_id:
             return
+        # Keep previous behavior: remove temporary default vpy when leaving encode mode.
+        if last_function_id == 4 and function_id != 4:
+            try:
+                self.delete_default_vpy_file()
+            except Exception:
+                pass
         self._selected_function_id = function_id
         self._refresh_function_tabbar_theme()
 

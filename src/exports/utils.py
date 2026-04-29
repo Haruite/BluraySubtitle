@@ -11,7 +11,7 @@ import traceback
 import numpy as np
 import soundfile
 
-from ..core.i18n import translate_text
+from ..core.i18n import translate_text, _terminal_err_stream
 
 if sys.platform == 'win32':
     import winreg

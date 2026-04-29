@@ -1068,6 +1068,58 @@ install_vapoursynth() {
 }
 
 # ---------------------------------------------------------------------------
+# descale
+# ---------------------------------------------------------------------------
+
+install_descale() {
+  log "$(msg 'Installing VapourSynth descale plugin' '安装 VapourSynth descale 插件')"
+
+  local plugins_dir="$HOME/plugins"
+  mkdir -p "$plugins_dir"
+  if [[ -f "$plugins_dir/libdescale.so" ]]; then
+    log "$(msg 'descale plugin already exists in ~/plugins, skipping' '检测到 ~/plugins 已存在 descale 插件，跳过')"
+    return 0
+  fi
+
+  local deps=(git meson ninja-build pkg-config build-essential)
+  local missing_deps=()
+  local dep
+  for dep in "${deps[@]}"; do
+    if ! dpkg-query -W -f='${Status}' "$dep" 2>/dev/null | grep -q "install ok installed"; then
+      missing_deps+=("$dep")
+    fi
+  done
+  if (( ${#missing_deps[@]} > 0 )); then
+    apt_update
+    apt_install "${missing_deps[@]}" || die "$(msg 'Failed to install descale dependencies' 'descale 依赖安装失败')"
+  fi
+
+  local build_dir
+  build_dir="$(mktemp -d)"
+  (
+    cd "$build_dir" || exit 1
+    tmux_run "$(msg 'Download vapoursynth-descale' '下载 vapoursynth-descale')" git clone https://github.com/Irrational-Encoding-Wizardry/vapoursynth-descale.git || exit 1
+    cd vapoursynth-descale || exit 1
+    tmux_run "descale meson setup" meson setup build --buildtype=release || exit 1
+    tmux_run "descale ninja" ninja -C build || exit 1
+    tmux_run "descale install" sudo ninja -C build install || exit 1
+    sudo ldconfig || exit 1
+  ) || die "$(msg 'descale build/install failed' 'descale 编译/安装失败')"
+
+  local descale_src=""
+  if [[ -f "/usr/local/lib/vapoursynth/libdescale.so" ]]; then
+    descale_src="/usr/local/lib/vapoursynth/libdescale.so"
+  elif [[ -f "/usr/lib/vapoursynth/libdescale.so" ]]; then
+    descale_src="/usr/lib/vapoursynth/libdescale.so"
+  fi
+  [[ -n "$descale_src" ]] || die "$(msg 'descale installed but libdescale.so not found in system vapoursynth paths' 'descale 安装完成但未在系统 vapoursynth 路径找到 libdescale.so')"
+  cp "$descale_src" "$plugins_dir/libdescale.so" || die "$(msg 'Failed to copy libdescale.so to ~/plugins' '复制 libdescale.so 到 ~/plugins 失败')"
+
+  rm -rf "$build_dir"
+  log "$(msg 'descale plugin installation complete (copied to ~/plugins)' 'descale 插件安装完成（已复制到 ~/plugins）')"
+}
+
+# ---------------------------------------------------------------------------
 # VapourSynthScripts
 # ---------------------------------------------------------------------------
 
@@ -1786,20 +1838,21 @@ install_x265
 install_tsmuxer
 install_flac
 install_vapoursynth
+install_descale
 install_vapoursynth_scripts
 install_vapoursynth_editor
 build_vs_plugins
 install_desktop_shortcuts
 
-log "$(msg 'Installing Python dependencies (system python3: pycountry PyQt6 librosa pillow)' '安装 Python 依赖（使用系统 python3：pycountry PyQt6 librosa）')"
-if ! pip3 show pycountry PyQt6 librosa pillow >/dev/null 2>&1; then
+log "$(msg 'Installing Python dependencies (system python3: pycountry PyQt6 librosa pillow matplotlib)' '安装 Python 依赖（使用系统 python3：pycountry PyQt6 librosa pillow matplotlib）')"
+if ! pip3 show pycountry PyQt6 librosa pillow matplotlib >/dev/null 2>&1; then
   py_minor="$(python3 -c 'import sys; print(sys.version_info.minor)' 2>/dev/null || echo 0)"
   if (( py_minor >= 12 )); then
-    tmux_run "$(msg 'Install Python dependencies' '安装 Python 依赖')" env PIP_DISABLE_PIP_VERSION_CHECK=1 pip3 install --upgrade -q pycountry PyQt6 librosa pillow --break-system-packages >/dev/null 2>&1 \
-      || tmux_run "$(msg 'Install Python dependencies (retry)' '安装 Python 依赖(重试)')" env PIP_DISABLE_PIP_VERSION_CHECK=1 pip3 install --upgrade pycountry PyQt6 librosa --break-system-packages
+    tmux_run "$(msg 'Install Python dependencies' '安装 Python 依赖')" env PIP_DISABLE_PIP_VERSION_CHECK=1 pip3 install --upgrade -q pycountry PyQt6 librosa pillow matplotlib --break-system-packages >/dev/null 2>&1 \
+      || tmux_run "$(msg 'Install Python dependencies (retry)' '安装 Python 依赖(重试)')" env PIP_DISABLE_PIP_VERSION_CHECK=1 pip3 install --upgrade pycountry PyQt6 librosa pillow matplotlib --break-system-packages
   else
-    tmux_run "$(msg 'Install Python dependencies' '安装 Python 依赖')" env PIP_DISABLE_PIP_VERSION_CHECK=1 pip3 install --upgrade -q pycountry PyQt6 librosa pillow >/dev/null 2>&1 \
-      || tmux_run "$(msg 'Install Python dependencies (retry)' '安装 Python 依赖(重试)')" env PIP_DISABLE_PIP_VERSION_CHECK=1 pip3 install --upgrade pycountry PyQt6 librosa
+    tmux_run "$(msg 'Install Python dependencies' '安装 Python 依赖')" env PIP_DISABLE_PIP_VERSION_CHECK=1 pip3 install --upgrade -q pycountry PyQt6 librosa pillow matplotlib >/dev/null 2>&1 \
+      || tmux_run "$(msg 'Install Python dependencies (retry)' '安装 Python 依赖(重试)')" env PIP_DISABLE_PIP_VERSION_CHECK=1 pip3 install --upgrade pycountry PyQt6 librosa pillow matplotlib
   fi
 else
   log "$(msg 'Python dependencies already installed, skipping' 'Python 依赖已安装，跳过')"
