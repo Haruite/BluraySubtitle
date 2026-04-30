@@ -11,7 +11,7 @@ from typing import Optional
 from PyQt6.QtWidgets import QTableWidget
 
 from src.bdmv import Chapter
-from src.core import CONFIGURATION, find_mkvtoolinx, MKV_MERGE_PATH, mkvtoolnix_ui_language_arg
+from src.core import CONFIGURATION, find_mkvtoolinx, mkvtoolnix_ui_language_arg
 from src.core import settings as core_settings
 from src.exports.utils import get_index_to_m2ts_and_offset, get_time_str, force_remove_file, print_exc_terminal
 from .service_base import BluraySubtitleServiceBase
