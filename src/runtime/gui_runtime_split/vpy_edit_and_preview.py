@@ -759,8 +759,8 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                     except Exception:
                         sess_temp = ''
                     if sess_temp:
-                        self._merge_temp_edit_back_to_default_vpy(sess_temp)
-                        self._normalize_default_vpy_runtime_lines()
+                        # Preview temp scripts must never be merged back to default vpy.
+                        # They contain preview-only edits (e.g. Trim) and compatibility wrappers.
                         try:
                             os.remove(sess_temp)
                         except Exception:
