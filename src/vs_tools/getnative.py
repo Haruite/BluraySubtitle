@@ -137,6 +137,13 @@ def _vpy_call(input_png: str, params: Dict) -> Dict:
     try:
         vspipe_exe, vspipe_env = _resolve_vspipe()
         env = dict(vspipe_env or os.environ.copy())
+        try:
+            from src.core.settings import PLUGIN_PATH as _plugin_path
+        except Exception:
+            _plugin_path = os.environ.get("BLURAYSUB_PLUGIN_PATH", "")
+        _pp = str(_plugin_path or "").strip()
+        if _pp:
+            env["BLURAYSUB_PLUGIN_PATH"] = _pp
         env["BLURAYSUB_GETNATIVE_INPUT_PNG"] = input_png
         env["BLURAYSUB_GETNATIVE_OUTPUT_JSON"] = output_json
         env["BLURAYSUB_GETNATIVE_PARAMS_JSON"] = json.dumps(params, ensure_ascii=False)
