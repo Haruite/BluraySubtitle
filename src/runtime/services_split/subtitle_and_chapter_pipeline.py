@@ -878,7 +878,10 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
             try:
                 if sp_mkv_path.lower().endswith(('.mkv', '.mka')) and first_m2ts_for_lang and pid_to_lang:
                     lang_cfg_all = getattr(self, 'track_language_config', {}) or {}
-                    lang_override = dict(lang_cfg_all.get(key) or {}) if isinstance(lang_cfg_all, dict) else {}
+                    lang_override = {}
+                    if isinstance(lang_cfg_all, dict):
+                        lang_key = f'main::{os.path.normpath(src_path)}'
+                        lang_override = dict(lang_cfg_all.get(lang_key) or {})
                     _svc_cls()._fix_output_track_languages_with_mkvpropedit(
                         sp_mkv_path,
                         first_m2ts_for_lang,
