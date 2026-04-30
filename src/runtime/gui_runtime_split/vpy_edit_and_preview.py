@@ -477,24 +477,6 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                     out.append(f'{indent}{comment}{expr}{suffix}\n')
                     continue
 
-                if raw.strip() == 'dbed = mvf.LimitFilter(dbed, nr16, thr=0.55, elast=1.5, planes=[0, 1, 2])':
-                    out.extend([
-                        'try:\n',
-                        '    dbed = mvf.LimitFilter(dbed, nr16, thr=0.55, elast=1.5, planes=[0, 1, 2])\n',
-                        'except Exception:\n',
-                        '    dbed = nr16\n',
-                    ])
-                    continue
-
-                if raw.strip() == 'mergedY = mvf.LimitFilter(dbedY, aaedY, thr=1.0, elast=1.5)':
-                    out.extend([
-                        'try:\n',
-                        '    mergedY = mvf.LimitFilter(dbedY, aaedY, thr=1.0, elast=1.5)\n',
-                        'except Exception:\n',
-                        '    mergedY = aaedY\n',
-                    ])
-                    continue
-
                 out.append(line if line.endswith('\n') else line + '\n')
 
             fd, temp_vpy = tempfile.mkstemp(prefix='bluraysubtitle_preview_', suffix='.vpy')
@@ -759,8 +741,8 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                     except Exception:
                         sess_temp = ''
                     if sess_temp:
-                        # Preview temp scripts must never be merged back to default vpy.
-                        # They contain preview-only edits (e.g. Trim) and compatibility wrappers.
+                        self._merge_temp_edit_back_to_default_vpy(sess_temp)
+                        self._normalize_default_vpy_runtime_lines()
                         try:
                             os.remove(sess_temp)
                         except Exception:
