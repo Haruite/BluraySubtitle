@@ -7,6 +7,7 @@ Supports both:
 
 import os
 import sys
+import multiprocessing
 
 _wayland_quiet_rule = "qt.qpa.wayland.textinput.warning=false"
 _existing_rules = os.environ.get("QT_LOGGING_RULES", "").strip()
@@ -29,5 +30,6 @@ except ImportError:
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     main()
 

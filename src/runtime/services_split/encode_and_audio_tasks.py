@@ -2,10 +2,12 @@
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import traceback
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -27,53 +29,265 @@ _GETNATIVE_DEBUG_DIR_ENV = str(os.getenv("BLURAYSUB_GETNATIVE_DEBUG_DIR", "") or
 GETNATIVE_DEBUG_DIR = os.path.abspath(_GETNATIVE_DEBUG_DIR_ENV) if _GETNATIVE_DEBUG_DIR_ENV else None
 
 
-def _estimate_native_from_image_worker(image_path: str, plugin_path: str, debug_dir: Optional[str]) -> dict:
-    try:
-        import vapoursynth as vs
-        from vapoursynth import core
-    except Exception as e:
-        return {
-            "ok": False,
-            "image": os.path.basename(image_path),
-            "stage": "import_vapoursynth",
-            "error": f"{type(e).__name__} - {e}",
-        }
+def _windows_no_window_flags() -> int:
+    if sys.platform == "win32":
+        return int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    return 0
 
+
+def _split_x265_extra_args(params: str) -> list[str]:
+    s = (params or "").strip()
+    if not s:
+        return []
     try:
+        return shlex.split(s, posix=sys.platform != "win32")
+    except ValueError:
+        return s.split()
+
+
+def _emit_encode_log_line(message: str) -> None:
+    try:
+        print_terminal_line(message)
+    except Exception:
+        print(message, flush=True)
+
+
+def _encode_inherit_subprocess_stderr() -> bool:
+    """True when not frozen: inherit vspipe/x265 stderr so the terminal shows native x265 output (\\r, no app parsing)."""
+    return not (bool(getattr(sys, "frozen", False)) and hasattr(sys, "_MEIPASS"))
+
+
+def _pump_subprocess_stderr_raw(stream) -> None:
+    """Forward child stderr bytes unchanged (PyInstaller / no TTY)."""
+    if stream is None:
+        return
+    out = getattr(sys.stderr, "buffer", None)
+    try:
+        while True:
+            chunk = stream.read(65536)
+            if not chunk:
+                break
+            if out is not None:
+                try:
+                    out.write(chunk)
+                    out.flush()
+                except Exception:
+                    pass
+            else:
+                try:
+                    sys.stderr.write(chunk.decode("utf-8", errors="replace"))
+                    sys.stderr.flush()
+                except Exception:
+                    pass
+    finally:
         try:
-            if plugin_path and hasattr(core, "std") and hasattr(core.std, "LoadAllPlugins"):
-                if not (hasattr(core, "descale") and (hasattr(core, "lsmas") or hasattr(core, "imwri") or hasattr(core, "imwrif"))):
-                    core.std.LoadAllPlugins(plugin_path)
+            stream.close()
         except Exception:
             pass
 
-        imwri = getattr(core, "imwri", getattr(core, "imwrif", None))
-        if imwri is not None:
-            src = imwri.Read(image_path)
-            loader = "imwri"
-        elif hasattr(core, "lsmas"):
-            src = core.lsmas.LWLibavSource(image_path)
-            loader = "lsmas"
-        elif hasattr(core, "ffms2"):
-            src = core.ffms2.Source(image_path)
-            loader = "ffms2"
+
+_X265_STATUS_PERCENT_RE = re.compile(r"\[\s*(\d+(?:\.\d+)?)\s*%\s*\]")
+
+
+def _pump_x265_stderr_percent_steps(stream) -> None:
+    """
+    PyInstaller: x265 overwrites one status line with \\r. Each full snapshot ends at the next \\r;
+    only those complete segments are parsed (avoids emitting half-lines when read() splits mid-line).
+    Status lines like ``[1.0%] 326/32896 frames, ...`` are printed once per int(percent) step; other
+    lines (warnings, etc.) print every time.
+    """
+    if stream is None:
+        return
+    out = getattr(sys.stderr, "buffer", None)
+    last_int_pct = -1
+
+    def write_line(text: str) -> None:
+        t = text.rstrip("\r\n")
+        if not t:
+            return
+        b = (t + "\n").encode("utf-8", errors="replace")
+        if out is not None:
+            try:
+                out.write(b)
+                out.flush()
+            except Exception:
+                pass
         else:
-            return {
-                "ok": False,
-                "image": os.path.basename(image_path),
-                "stage": "load_image",
-                "error": "no available image source plugin (imwri/lsmas/ffms2)",
-            }
+            try:
+                sys.stderr.write(t + "\n")
+                sys.stderr.flush()
+            except Exception:
+                pass
 
-        gray_cf = getattr(vs, "GRAY", None)
-        if gray_cf is None:
-            gray_cf = getattr(getattr(vs, "ColorFamily", object), "GRAY", 1)
-        gray_fmt = getattr(vs, "GRAYS", None)
-        gray = core.std.ShufflePlanes(src, 0, gray_cf)
-        if gray_fmt is not None:
-            gray = gray.resize.Point(format=gray_fmt)
+    def handle_segment(seg: str) -> None:
+        nonlocal last_int_pct
+        st = seg.strip()
+        if not st:
+            return
+        m = _X265_STATUS_PERCENT_RE.search(st)
+        if m:
+            pct = float(m.group(1))
+            ip = int(min(100, max(0, pct)))
+            if ip > last_int_pct:
+                last_int_pct = ip
+                write_line(st)
+        else:
+            write_line(st)
 
-        h = int(gray.height)
+    buf = bytearray()
+    chunk_size = 8192
+    try:
+        while True:
+            chunk = stream.read(chunk_size)
+            if not chunk:
+                break
+            buf.extend(chunk)
+            while b"\n" in buf:
+                line, rest = buf.split(b"\n", 1)
+                buf[:] = rest
+                seg = line.split(b"\r")[-1].decode("utf-8", errors="replace")
+                handle_segment(seg)
+            if b"\r" in buf:
+                parts = bytes(buf).split(b"\r")
+                for part in parts[:-1]:
+                    if not part.strip():
+                        continue
+                    seg = part.decode("utf-8", errors="replace")
+                    handle_segment(seg)
+                buf[:] = parts[-1]
+            if len(buf) > 262144:
+                del buf[:-131072]
+        if buf.strip():
+            seg = bytes(buf).decode("utf-8", errors="replace").strip()
+            if seg:
+                handle_segment(seg)
+    finally:
+        try:
+            stream.close()
+        except Exception:
+            pass
+
+
+def _run_vspipe_x265_with_progress(
+    vspipe_exe: str,
+    vpy_path: str,
+    x265_exe: str,
+    x265_params: str,
+    hevc_file: str,
+    env: Optional[dict],
+) -> int:
+    """
+    vspipe --y4m | x265 without cmd.exe.
+    Direct Python: stderr inherited and no CREATE_NO_WINDOW so cmd shows x265. Frozen: vspipe stderr raw; x265 stderr
+    parsed for ``[n.n%]`` status lines and printed once per integer percent.
+    """
+    env_use = dict(env) if env else os.environ.copy()
+    inherit_err = _encode_inherit_subprocess_stderr()
+    popen_kw: dict = {"env": env_use}
+    # CREATE_NO_WINDOW detaches from the parent console; stderr=None then often produces no visible x265 output in cmd.
+    if sys.platform == "win32" and not inherit_err:
+        popen_kw["creationflags"] = _windows_no_window_flags()
+    # Default pipe buffering can hold stderr until the buffer fills or the process exits, so progress
+    # appears only at the end; bufsize=0 uses unbuffered binary readers on the pipe fds.
+    if not inherit_err:
+        popen_kw["bufsize"] = 0
+    stderr_v = None if inherit_err else subprocess.PIPE
+    stderr_x = None if inherit_err else subprocess.PIPE
+
+    vspipe_cmd = [str(vspipe_exe), "--y4m", str(vpy_path), "-"]
+    x265_parts = _split_x265_extra_args(x265_params)
+    x265_cmd = [str(x265_exe)] + x265_parts + ["--y4m", "-D", "10", "-o", str(hevc_file), "-"]
+
+    p_v = subprocess.Popen(
+        vspipe_cmd,
+        stdout=subprocess.PIPE,
+        stderr=stderr_v,
+        **popen_kw,
+    )
+    p_x = subprocess.Popen(
+        x265_cmd,
+        stdin=p_v.stdout,
+        stdout=subprocess.DEVNULL,
+        stderr=stderr_x,
+        **popen_kw,
+    )
+    if p_v.stdout is not None:
+        p_v.stdout.close()
+
+    pump_threads: list[threading.Thread] = []
+    if not inherit_err:
+        t_v = threading.Thread(target=_pump_subprocess_stderr_raw, args=(p_v.stderr,), daemon=True)
+        t_x = threading.Thread(target=_pump_x265_stderr_percent_steps, args=(p_x.stderr,), daemon=True)
+        t_v.start()
+        t_x.start()
+        pump_threads = [t_v, t_x]
+
+    rc_x = int(p_x.wait())
+    rc_v = int(p_v.wait())
+    for t in pump_threads:
+        t.join(timeout=5.0)
+    if rc_x != 0:
+        return rc_x
+    return rc_v
+
+
+def _ensure_runtime_vpy_file(vpy_path: str) -> bool:
+    path = os.path.abspath(vpy_path or "").strip()
+    if not path:
+        return False
+    if os.path.isfile(path):
+        return True
+    try:
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        content = (
+            "import os\n"
+            "import hashlib\n"
+            "import vapoursynth as vs\n"
+            "from vapoursynth import core\n"
+            "a = r\"\"  # optional, auto-generated by app\n"
+            "native_h = 0  # optional, auto-generated by app\n"
+            "native_kernel = \"\"  # optional, auto-generated by app\n"
+            "try:\n"
+            "    src8 = core.lsmas.LWLibavSource(a)\n"
+            "except BaseException as _e:\n"
+            "    if _e.__class__ in (KeyboardInterrupt, SystemExit):\n"
+            "        raise\n"
+            "    if type(_e).__name__ in (\"KeyboardInterrupt\", \"SystemExit\"):\n"
+            "        raise\n"
+            "    if hasattr(core, \"ffms2\"):\n"
+            "        _t = os.environ.get(\"TEMP\") or os.environ.get(\"TMP\") or os.path.expandvars(\"%TEMP%\") or \".\"\n"
+            "        _k = hashlib.sha1(os.path.normcase(os.path.normpath(a)).encode(\"utf-8\")).hexdigest()\n"
+            "        _ffidx = os.path.join(_t, \"bluraysub_ffms2_\" + _k + \".ffindex\")\n"
+            "        try:\n"
+            "            src8 = core.ffms2.Source(a, cachefile=_ffidx)\n"
+            "        except TypeError:\n"
+            "            src8 = core.ffms2.Source(a)\n"
+            "    else:\n"
+            "        raise\n"
+            "res = core.fmtc.bitdepth(src8, bits=10)\n"
+            "# sub_file = \"\"  # optional, auto-generated by app\n"
+            "# res = core.assrender.TextSub(res, file=sub_file)\n"
+            "res.set_output()\n"
+            "src8.set_output(1)\n"
+        )
+        with open(path, "w", encoding="utf-8") as fp:
+            fp.write(content)
+        return True
+    except Exception:
+        print_exc_terminal()
+        return False
+
+
+def _estimate_native_from_image_worker(image_path: str, plugin_path: str, debug_dir: Optional[str]) -> dict:
+    try:
+        # Keep worker independent from vapoursynth; VS work happens inside getnative.vpy via vspipe.
+        from PIL import Image
+
+        with Image.open(image_path) as img:
+            h = int(img.height)
+        loader = "pil"
         min_h = max(240, int(h * 0.40))
         max_h = min(h - 2, int(h * 0.98))
         if min_h >= max_h:
@@ -113,7 +327,7 @@ def _estimate_native_from_image_worker(image_path: str, plugin_path: str, debug_
 
         def _run_getnative_in_range(lo: int, hi: int) -> tuple[float, str, float, dict]:
             out0 = auto_getnative(
-                gray[0],
+                image_path,
                 src_heights=tuple(range(lo, hi + 1)),
                 debug_dir=debug_out_dir,
                 fast_mode=True,
@@ -123,7 +337,12 @@ def _estimate_native_from_image_worker(image_path: str, plugin_path: str, debug_
                 max_kernels=16,
                 consensus_quit=True,
             )
-            props0 = out0.get_frame(0).props
+            if isinstance(out0, dict):
+                props0 = dict(out0)
+            elif hasattr(out0, "get_frame"):
+                props0 = dict(out0.get_frame(0).props)
+            else:
+                raise TypeError(f"unsupported getnative return type: {type(out0).__name__}")
             kernel0 = props0.get("getnative_kernel", "")
             if isinstance(kernel0, bytes):
                 kernel0 = kernel0.decode("utf-8", errors="ignore")
@@ -224,7 +443,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     f'"{FFMPEG_PATH}" -hide_banner -loglevel error -y -i "{video_path}" '
                     f'-vf "{vfexpr}" -vsync 0 -frames:v {target} -frame_pts 1 "{pattern}"'
                 )
-                subprocess.Popen(cmd, shell=True).wait()
+                subprocess.Popen(cmd, shell=True, creationflags=_windows_no_window_flags()).wait()
 
                 imgs = sorted(
                     os.path.join(temp_dir, n)
@@ -361,8 +580,9 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     pass
 
         if len(valid_results) < 2:
+            total_seen = max(1, int(evaluated))
             self._log_getnative(
-                f'[BluraySubtitle] getnative: insufficient valid curves ({len(valid_results)}/{len(all_seen)})'
+                f'[BluraySubtitle] getnative: insufficient valid curves ({len(valid_results)}/{total_seen})'
             )
             return None
 
@@ -459,7 +679,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     lang = 'chi'
                 remux_cmd += f' --language 0:{lang} "{self.sub_files[i - 1]}"'
             print(f'{translate_text("Mux command:")}{remux_cmd}')
-            subprocess.Popen(remux_cmd, shell=True).wait()
+            subprocess.Popen(remux_cmd, shell=True, creationflags=_windows_no_window_flags()).wait()
             if same_mkv:
                 if os.path.getsize(output_file1) > os.path.getsize(output_file):
                     os.remove(output_file1)
@@ -472,6 +692,14 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
 
     def encode_task(self, output_file, dst_folder, i, vpy_path: str, vspipe_mode: str, x265_mode: str, x265_params: str,
                     sub_pack_mode: str, source_file: Optional[str] = None):
+        if not os.path.isfile(vpy_path):
+            if _ensure_runtime_vpy_file(vpy_path):
+                self._log_getnative(f'{self.t("[BluraySubtitle] recreate missing vpy: ")}{vpy_path}')
+            else:
+                self._log_getnative(f'{self.t("[BluraySubtitle] vpy not found and recreate failed: ")}{vpy_path}')
+        if not os.path.isfile(vpy_path):
+            return
+
         src_mkv = os.path.normpath(source_file) if source_file else os.path.normpath(output_file)
         self._cleanup_getnative_artifacts()
         use_getnative = bool(getattr(self, "use_getnative", True))
@@ -569,24 +797,6 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             if not updated:
                 return
             script_text = ''.join(new_lines)
-            # Heal accidental duplicated wrappers like:
-            # try:
-            # try:
-            #   ...
-            # except ...
-            # except ...
-            while '\ntry:\ntry:\n' in script_text:
-                script_text = script_text.replace('\ntry:\ntry:\n', '\ntry:\n')
-            while '\nexcept Exception:\n    dbed = nr16\nexcept Exception:\n    dbed = nr16\n' in script_text:
-                script_text = script_text.replace(
-                    '\nexcept Exception:\n    dbed = nr16\nexcept Exception:\n    dbed = nr16\n',
-                    '\nexcept Exception:\n    dbed = nr16\n'
-                )
-            while '\nexcept Exception:\n    mergedY = aaedY\nexcept Exception:\n    mergedY = aaedY\n' in script_text:
-                script_text = script_text.replace(
-                    '\nexcept Exception:\n    mergedY = aaedY\nexcept Exception:\n    mergedY = aaedY\n',
-                    '\nexcept Exception:\n    mergedY = aaedY\n'
-                )
             try:
                 with open(vpy_path, 'w', encoding='utf-8') as fp:
                     fp.write(script_text)
@@ -617,10 +827,15 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
         hevc_file = os.path.join(dst_folder, os.path.splitext(os.path.basename(output_file))[0] + '.hevc')
         cmd = f'"{vspipe_exe}" --y4m "{vpy_path}" - | "{x265_exe}" {x265_params or ""} --y4m -D 10 -o "{hevc_file}" -'
         print(f'{translate_text("Encode command:")}{cmd}')
-        subprocess.Popen(cmd, shell=True, env=vspipe_env).wait()
+        enc_rc = _run_vspipe_x265_with_progress(
+            vspipe_exe, vpy_path, x265_exe, x265_params or "", hevc_file, vspipe_env
+        )
+        if enc_rc != 0:
+            _emit_encode_log_line(f"[BluraySubtitle] encode pipeline exited with code {enc_rc}")
         cleanup_lwi_for_source(src_mkv)
         track_count, track_info, flac_files = self.process_audio_to_flac(output_file, dst_folder, i,
                                                                          source_file=src_mkv)
+
         if flac_files or os.path.exists(hevc_file):
             same_mkv = os.path.normpath(output_file) == src_mkv
             output_file1 = (os.path.splitext(output_file)[0] + '.tmp.mkv') if same_mkv else output_file
@@ -639,7 +854,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                         lang = 'chi'
                     remux_cmd += f' --language 0:{lang} "{self.sub_files[i - 1]}"'
             print(f'{translate_text("Mux command:")}{remux_cmd}')
-            subprocess.Popen(remux_cmd, shell=True).wait()
+            subprocess.Popen(remux_cmd, shell=True, creationflags=_windows_no_window_flags()).wait()
             if same_mkv:
                 if os.path.getsize(output_file1) > os.path.getsize(output_file):
                     os.remove(output_file1)
@@ -657,11 +872,13 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
         if sys.platform == 'win32':
             process = subprocess.Popen(f'"{MKV_INFO_PATH}" "{mkv_file}" --ui-language en',
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                       encoding='utf-8', errors='ignore', shell=True)
+                                       encoding='utf-8', errors='ignore', shell=True,
+                                       creationflags=_windows_no_window_flags())
         else:
             process = subprocess.Popen(f'"{MKV_INFO_PATH}" "{mkv_file}" --ui-language en_US',
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                       encoding='utf-8', errors='ignore', shell=True)
+                                       encoding='utf-8', errors='ignore', shell=True,
+                                       creationflags=_windows_no_window_flags())
         stdout, stderr = process.communicate()
 
         track_info = {}
@@ -703,6 +920,6 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     f'{track_id}:"{base}.track{track_id}.{track_suffix_info[track_id]}"')
             extract_cmd = f'"{MKV_EXTRACT_PATH}" {mkvtoolnix_ui_language_arg()} "{mkv_file}" tracks {" ".join(extract_info)}'
             print(f'{translate_text("Extracting lossless tracks, command: ")}{extract_cmd}')
-            subprocess.Popen(extract_cmd, shell=True).wait()
+            subprocess.Popen(extract_cmd, shell=True, creationflags=_windows_no_window_flags()).wait()
 
         return track_count, track_info
