@@ -8,6 +8,12 @@ import numpy as np
 import vapoursynth as vs
 from muvsfunc import core, measurediff, rescale
 
+# Linux/macOS: VS does not auto-scan a plugin dir like some Windows installs. The app sets
+# BLURAYSUB_PLUGIN_PATH from settings.PLUGIN_PATH when invoking vspipe (see getnative.py _vpy_call).
+_bluraysub_plugin_path = str(os.getenv("BLURAYSUB_PLUGIN_PATH", "") or "").strip()
+if _bluraysub_plugin_path and os.path.isdir(_bluraysub_plugin_path):
+    vs.core.std.LoadAllPlugins(_bluraysub_plugin_path)
+
 
 def _write(payload):
     out_json = str(os.getenv("BLURAYSUB_GETNATIVE_OUTPUT_JSON", "") or "").strip()
