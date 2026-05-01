@@ -44,7 +44,6 @@ class MiscWorkflowsMixin(BluraySubtitleServiceBase):
         approx_end_time = float(
             getattr(self, 'approx_episode_duration_seconds', DEFAULT_APPROX_EPISODE_DURATION_SECONDS)
             or DEFAULT_APPROX_EPISODE_DURATION_SECONDS)
-        sub_max_end: list[float] = []
         folder_to_bdmv_index: dict[str, int] = {}
         for i, f in enumerate(getattr(self, 'bluray_folders', []) or []):
             try:

@@ -871,17 +871,16 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         return fa, fs
 
     @staticmethod
-    def _split_segment_count_from_mkvmerge_cmd(cmd: str) -> Optional[int]:
-        """
-        Best-effort parse of mkvmerge ``--split``.
-        Supports ``--split parts:...`` and ``--split chapters:...``.
-        Returns segment count when recognizable; otherwise None.
-        """
-        raw = (cmd or '').strip()
+    def _remux_cmd_shell_lines(cmd: str) -> list[str]:
+        """Non-empty lines of ``remux_cmd`` (``\\n`` / ``\\r\\n``) for per-line parsing and execution."""
+        return [ln.strip() for ln in (cmd or '').splitlines() if ln.strip()]
+
+    @staticmethod
+    def _split_segment_count_from_mkvmerge_one_line(line: str) -> Optional[int]:
+        raw = (line or '').strip()
         if not raw:
             return None
-        text = re.sub(r'[\r\n]+', ' ', raw)
-        m = re.search(r'--split\s+("([^"]+)"|\'([^\']+)\'|(\S+))', text)
+        m = re.search(r'--split\s+("([^"]+)"|\'([^\']+)\'|(\S+))', raw)
         if not m:
             return None
         spec = (m.group(2) or m.group(3) or m.group(4) or '').strip()
@@ -901,6 +900,126 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             cuts = [x.strip() for x in payload.split(',') if x.strip()]
             return (len(cuts) + 1) if cuts else 1
         return None
+
+    @staticmethod
+    def _split_segment_count_from_mkvmerge_cmd(cmd: str) -> Optional[int]:
+        """
+        Best-effort parse of mkvmerge ``--split`` (newline-split: sum counts from each line that has ``--split``).
+        Supports ``--split parts:...`` and ``--split chapters:...``.
+        """
+        lines = _svc_cls()._remux_cmd_shell_lines(cmd)
+        if not lines:
+            return None
+        total = 0
+        found = False
+        for ln in lines:
+            n = _svc_cls()._split_segment_count_from_mkvmerge_one_line(ln)
+            if isinstance(n, int) and n > 0:
+                total += n
+                found = True
+        return total if found else None
+
+    @staticmethod
+    def _split_chapters_ints_from_mkvmerge_one_line(line: str) -> Optional[list[int]]:
+        """Parse ``--split chapters:n,m,...`` from one command line; None if absent / unexpanded / invalid."""
+        raw = (line or '').strip()
+        if not raw or '{' in raw:
+            return None
+        m = re.search(r'--split\s+("([^"]+)"|\'([^\']+)\'|(\S+))', raw)
+        if not m:
+            return None
+        spec = (m.group(2) or m.group(3) or m.group(4) or '').strip()
+        low = spec.lower()
+        if not low.startswith('chapters:'):
+            return None
+        payload = spec[9:].strip()
+        if not payload or payload.lower() in ('all',):
+            return None
+        out: list[int] = []
+        for x in payload.split(','):
+            x = x.strip()
+            if not x:
+                continue
+            try:
+                out.append(int(x, 10))
+            except ValueError:
+                return None
+        return out or None
+
+    @staticmethod
+    def _mkvmerge_output_path_from_line(line: str) -> Optional[str]:
+        raw = (line or '').strip()
+        if not raw:
+            return None
+        m = re.search(r'\s(?:-o|--output)\s+("[^"]*"|\'[^\']*\'|[^\s]+)', raw, re.IGNORECASE)
+        if not m:
+            return None
+        p = (m.group(1) or '').strip()
+        if len(p) >= 2 and p[0] == p[-1] and p[0] in '"\'':
+            p = p[1:-1]
+        return p.strip() or None
+
+    @staticmethod
+    def _mkvmerge_output_path_from_cmd(cmd: str) -> Optional[str]:
+        """First ``-o`` / ``--output`` path when scanning ``remux_cmd`` line by line."""
+        for ln in _svc_cls()._remux_cmd_shell_lines(cmd):
+            p = _svc_cls()._mkvmerge_output_path_from_line(ln)
+            if p:
+                return p
+        return _svc_cls()._mkvmerge_output_path_from_line(cmd or '')
+
+    @staticmethod
+    def _conf_selected_mpls_stem(conf: dict[str, int | str]) -> str:
+        raw = str(conf.get('selected_mpls') or '').strip()
+        return os.path.splitext(os.path.basename(raw.replace('\\', '/')))[0]
+
+    @staticmethod
+    def _mkvmerge_expected_paths_for_shell_line(
+            line: str,
+            confs: list[dict[str, int | str]],
+            mpls_path_default: str,
+    ) -> tuple[Optional[str], list[str]]:
+        """
+        For one shell line: primary ``-o`` path and expected MKV paths after ``--split``
+        (``stem.mkv`` or ``stem-001.mkv`` …). Uses ``confs`` / default MPLS when segment
+        count cannot be parsed from the line.
+        """
+        out = _svc_cls()._mkvmerge_output_path_from_line(line)
+        if not out:
+            return None, []
+        out_n = os.path.normpath(out)
+        nseg = _svc_cls()._split_segment_count_from_mkvmerge_one_line(line)
+        if (nseg is None or nseg < 1) and '--split' in line.lower() and confs:
+            stem_ln = _svc_cls()._mkvmerge_line_source_mpls_stem(line)
+            sub: list[dict[str, int | str]] = []
+            for c in confs:
+                sc = _svc_cls()._conf_selected_mpls_stem(c)
+                if stem_ln and sc and stem_ln.lower() != sc.lower():
+                    continue
+                sub.append(c)
+            if not sub:
+                sub = list(confs)
+            sub.sort(key=lambda c: int(c.get('chapter_index') or c.get('start_at_chapter') or 0))
+            mp = ''
+            for c in sub:
+                kk = str(c.get('selected_mpls') or '').strip()
+                cand = kk if kk.lower().endswith('.mpls') else (kk + '.mpls' if kk else '')
+                if cand and os.path.isfile(cand):
+                    mp = cand
+                    break
+            if not mp and mpls_path_default and os.path.isfile(mpls_path_default):
+                mp = mpls_path_default
+            if mp:
+                try:
+                    ch = Chapter(mp)
+                    nseg = len(_svc_cls()._series_episode_segments_bounds(ch, sub))
+                except Exception:
+                    nseg = None
+        if nseg is None or nseg < 1:
+            nseg = 1
+        if nseg <= 1:
+            return out_n, [out_n]
+        return out_n, _svc_cls()._expected_mkvmerge_split_output_paths(out_n, nseg)
 
     @staticmethod
     def _m2ts_clip_time_window_sec(m2ts_path: str, in_time: int, out_time: int) -> tuple[bool, float, float]:
@@ -990,8 +1109,125 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 e = total_end
             s = max(1, min(s, total_end))
             e = max(s + 1, min(e, total_end))
-            segments.append((s, e))
+            seg = (s, e)
+            if segments and segments[-1] == seg:
+                continue
+            segments.append(seg)
         return segments
+
+    @staticmethod
+    def _episode_float_windows_from_config_bounds(
+            mpls_path: str, confs: list[dict[str, int | str]],
+    ) -> list[tuple[float, float]]:
+        """MPLS timeline (start_sec, end_sec) windows matching table2 / ``confs`` episode chapter bounds."""
+        if not mpls_path or (not confs) or (not os.path.isfile(mpls_path)):
+            return []
+        ch_tmp = Chapter(mpls_path)
+        segs_tmp = _svc_cls()._series_episode_segments_bounds(ch_tmp, confs)
+        if not segs_tmp:
+            return []
+        _i2m_tmp, i2o_tmp = get_index_to_m2ts_and_offset(ch_tmp)
+        rows_tmp = sum(map(len, ch_tmp.mark_info.values()))
+        total_end_tmp = rows_tmp + 1
+
+        def _off_tmp(idx: int) -> float:
+            if idx >= total_end_tmp:
+                return ch_tmp.get_total_time()
+            return float(i2o_tmp.get(idx, 0.0))
+
+        return [(float(_off_tmp(s0)), float(_off_tmp(e0))) for s0, e0 in segs_tmp]
+
+    @staticmethod
+    def theoretical_remux_output_paths_ordered(
+            cmd: str,
+            confs: list[dict[str, int | str]],
+            mpls_path_default: str,
+    ) -> list[str]:
+        """Ordered theoretical mkvmerge ``-o`` outputs for ``remux_cmd`` (same aggregation as split-check)."""
+        lines = _svc_cls()._remux_cmd_shell_lines(cmd)
+        if not lines and (cmd or '').strip():
+            lines = [(cmd or '').strip()]
+        ordered: list[str] = []
+        for ln in lines:
+            _ob, expected_line = _svc_cls()._mkvmerge_expected_paths_for_shell_line(
+                ln, confs, mpls_path_default)
+            if expected_line:
+                ordered.extend(expected_line)
+        return [os.path.normpath(p) for p in ordered]
+
+    @staticmethod
+    def _remux_parsed_chapter_bounds_for_theory_count(
+            cmd: str,
+            confs: list[dict[str, int | str]],
+            mpls_path0: str,
+            n_expect: int,
+    ) -> Optional[list[tuple[int, int]]]:
+        """Chapter index bounds derived only from ``remux_cmd`` parsing (multi-line / ``--split``), not table2."""
+        if n_expect < 1:
+            return None
+        mb = _svc_cls()._chapter_split_bounds_from_multi_line_remux_cmd(cmd, confs)
+        if mb and len(mb) == n_expect:
+            return mb
+        lines_chk = _svc_cls()._remux_cmd_shell_lines(cmd)
+        if not lines_chk and (cmd or '').strip():
+            lines_chk = [(cmd or '').strip()]
+        stem0 = ''
+        if mpls_path0:
+            stem0 = os.path.splitext(os.path.basename(mpls_path0.replace('\\', '/')))[0]
+        windows = _svc_cls()._split_parts_windows_from_mkvmerge_cmd(cmd, mpls_stem=stem0 or None)
+        if not windows:
+            for ln in lines_chk:
+                cuts_ln = _svc_cls()._split_chapters_ints_from_mkvmerge_one_line(ln)
+                if not cuts_ln:
+                    continue
+                stem_ln = _svc_cls()._mkvmerge_line_source_mpls_stem(ln)
+                mpath_use = ''
+                for c in confs:
+                    raw_m = str(c.get('selected_mpls') or '').strip()
+                    sc = os.path.splitext(os.path.basename(raw_m.replace('\\', '/')))[0]
+                    if stem_ln and sc and stem_ln.lower() != sc.lower():
+                        continue
+                    cand = raw_m if raw_m.lower().endswith('.mpls') else (raw_m + '.mpls' if raw_m else '')
+                    if cand and os.path.isfile(cand):
+                        mpath_use = cand
+                        break
+                if not mpath_use and mpls_path0 and os.path.isfile(mpls_path0):
+                    mpath_use = mpls_path0
+                if mpath_use:
+                    windows = _svc_cls()._time_windows_from_split_chapter_numbers(mpath_use, cuts_ln)
+                    if windows:
+                        break
+        if windows and mpls_path0 and os.path.isfile(mpls_path0):
+            bounds = _svc_cls()._chapter_bounds_from_split_windows(mpls_path0, windows)
+            if len(bounds) == n_expect:
+                return bounds
+        return None
+
+    @staticmethod
+    def _time_windows_from_split_chapter_numbers(mpls_path: str, cuts: list[int]) -> list[tuple[float, float]]:
+        """Turn ``--split chapters:`` cut numbers (split before chapter N) into MPLS time windows."""
+        if not mpls_path or (not cuts) or (not os.path.isfile(mpls_path)):
+            return []
+        chapter = Chapter(mpls_path)
+        _, i2o = get_index_to_m2ts_and_offset(chapter)
+        rows = sum(map(len, chapter.mark_info.values()))
+        total_end = rows + 1
+
+        def off(i: int) -> float:
+            if i >= total_end:
+                return chapter.get_total_time()
+            return float(i2o.get(i, 0.0))
+
+        cuts_sorted = sorted({int(c) for c in cuts if 1 < int(c) <= total_end})
+        if not cuts_sorted:
+            return []
+        windows: list[tuple[float, float]] = []
+        prev = 1
+        for c in cuts_sorted:
+            windows.append((off(prev), off(c)))
+            prev = c
+        windows.append((off(prev), chapter.get_total_time()))
+        return windows
 
     @staticmethod
     def _expected_mkvmerge_split_output_paths(output_norm: str, n_segments: int) -> list[str]:

@@ -6,6 +6,7 @@ Do not edit manually; regenerate when mixin methods change.
 
 from __future__ import annotations
 
+import copy
 from typing import Any, Optional
 
 from PyQt6.QtCore import QPoint, Qt, QProcess
@@ -154,10 +155,17 @@ class BluraySubtitleGuiBase(QWidget):
         self.x265_params_label = None
         self.x265_preset_combo = None
 
+    def _configuration_snapshot_for_service_run(self) -> dict[int, dict[str, int | str]]:
+        """Deep copy of table2-authoritative episode configuration for remux/encode workers."""
+        cfg = getattr(self, '_last_configuration_34', None)
+        if isinstance(cfg, dict) and cfg:
+            return copy.deepcopy(cfg)
+        return {}
+
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         for _name, _obj in BluraySubtitleGuiBase.__dict__.items():
-            if _name in ('__init__', '__init_subclass__'):
+            if _name in ('__init__', '__init_subclass__', '_configuration_snapshot_for_service_run'):
                 continue
             _fn = None
             if isinstance(_obj, staticmethod):
@@ -257,7 +265,7 @@ class BluraySubtitleGuiBase(QWidget):
         """Stub for `_cleanup_info_json_if_needed`."""
         raise NotImplementedError
 
-    def _closest_endpoint(self, start_idx: int, target_sec: float, rows: int, offsets: dict[int, float], m2ts: dict[int, str], checked: list[bool]) -> int:
+    def _closest_endpoint(self, start_idx: int, target_sec: float, rows: int, offsets: dict[int, float], m2ts: dict[int, str], checked: list[bool], approx_episode_sec: Optional[float] = None) -> int:
         """Stub for `_closest_endpoint`."""
         raise NotImplementedError
 

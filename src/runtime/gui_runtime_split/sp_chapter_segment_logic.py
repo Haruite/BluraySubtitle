@@ -307,20 +307,36 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
         end_col = labels.index('end_at_chapter') if 'end_at_chapter' in labels else -1
         bdmv_col = labels.index('bdmv_index')
         bdmv_to_mpls = self._bdmv_to_first_main_mpls_from_table1()
-        prev_end_by_bdmv: dict[int, int] = {}
+
+        def _table2_row_mpls_no_ext(row_i: int) -> str:
+            bi = self.table2.item(row_i, bdmv_col)
+            m = str(bi.data(Qt.ItemDataRole.UserRole) or '').strip() if bi else ''
+            if not m and bi and str(bi.text() or '').strip():
+                try:
+                    bix = int(bi.text().strip())
+                except Exception:
+                    bix = 0
+                m = str(bdmv_to_mpls.get(bix, '') or '').strip()
+            return m
+
         for r in range(self.table2.rowCount()):
-            b_item = self.table2.item(r, bdmv_col)
-            try:
-                bdmv_index = int(b_item.text().strip()) if b_item and b_item.text() else 0
-            except Exception:
-                bdmv_index = 0
             combo = self.table2.cellWidget(r, start_col)
             if not isinstance(combo, QComboBox):
                 continue
-            min_allowed = prev_end_by_bdmv.get(bdmv_index, 1)
-            mpls_no_ext = str(b_item.data(Qt.ItemDataRole.UserRole) or '').strip() if b_item else ''
-            if not mpls_no_ext:
-                mpls_no_ext = bdmv_to_mpls.get(bdmv_index, '')
+            mpls_no_ext = _table2_row_mpls_no_ext(r)
+            min_allowed = 1
+            if r > 0:
+                prev_mpls = _table2_row_mpls_no_ext(r - 1)
+                if prev_mpls and (prev_mpls == mpls_no_ext) and end_col >= 0:
+                    end_prev = self.table2.cellWidget(r - 1, end_col)
+                    pe = 0
+                    if isinstance(end_prev, QComboBox):
+                        try:
+                            pe = int(end_prev.currentData() or 0)
+                        except Exception:
+                            pe = 0
+                    if pe > 0:
+                        min_allowed = pe
             checked_states: list[bool] = []
             if mpls_no_ext:
                 mpls_path = mpls_no_ext + '.mpls'
@@ -346,26 +362,130 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                         combo.blockSignals(True)
                         combo.setCurrentIndex(i)
                         combo.blockSignals(False)
-                        cur_v = v
                         break
-            if end_col >= 0:
-                end_val = 0
-                end_combo = self.table2.cellWidget(r, end_col)
-                if isinstance(end_combo, QComboBox):
-                    try:
-                        end_val = int(end_combo.currentData() or 0)
-                    except Exception:
-                        end_val = 0
-                else:
-                    end_item = self.table2.item(r, end_col)
-                    if end_item:
-                        try:
-                            end_val = int(end_item.data(Qt.ItemDataRole.UserRole + 1) or 0)
-                        except Exception:
-                            end_val = 0
-                prev_end_by_bdmv[bdmv_index] = end_val if end_val > 0 else cur_v
-            else:
-                prev_end_by_bdmv[bdmv_index] = cur_v
+
+    def _refresh_table2_m2ts_duration_from_widgets(
+        self,
+        labels: list[str],
+        *,
+        prev_ui_m2ts_by_row: dict[int, str] | None = None,
+        cfg_fill_m2ts_by_row: dict[int, str] | None = None,
+    ) -> None:
+        """After start/end constraints, recompute m2ts + ep_duration from current combo values (matches on_configuration).
+
+        prev_ui_m2ts_by_row: m2ts column text before this on_configuration cleared/rebuilt the table.
+        cfg_fill_m2ts_by_row: m2ts written from configuration j1/j2 in the same pass (pre-constraint combo fixes).
+        """
+        need = ('start_at_chapter', 'end_at_chapter', 'm2ts_file', 'ep_duration', 'bdmv_index')
+        if self._is_movie_mode():
+            return
+        missing = [x for x in need if x not in labels]
+        if missing:
+            return
+        start_col = labels.index('start_at_chapter')
+        end_col = labels.index('end_at_chapter')
+        m2ts_col = labels.index('m2ts_file')
+        duration_col = labels.index('ep_duration')
+        bdmv_col = labels.index('bdmv_index')
+        nrows = self.table2.rowCount()
+        prev_ui = prev_ui_m2ts_by_row or {}
+        cfg_fill = cfg_fill_m2ts_by_row or {}
+        bdmv_to_mpls = self._bdmv_to_first_main_mpls_from_table1()
+        chapter_cache: dict[str, Chapter] = {}
+        chapter_load_errors: list[str] = []
+        cell_updates: list[str] = []
+        cfg_vs_combo: list[str] = []
+        prev_ui_vs_now: list[str] = []
+        skipped_noncombo: list[int] = []
+        skipped_nompls: list[int] = []
+
+        def _chapter_for(mpls_ne: str) -> Chapter | None:
+            k = str(mpls_ne or '').strip()
+            if not k:
+                return None
+            if k not in chapter_cache:
+                try:
+                    chapter_cache[k] = Chapter(k + '.mpls')
+                except Exception as ex:
+                    chapter_load_errors.append(f'{os.path.basename(k)}:{type(ex).__name__}')
+                    return None
+            return chapter_cache[k]
+
+        for r in range(nrows):
+            sc = self.table2.cellWidget(r, start_col)
+            ec = self.table2.cellWidget(r, end_col)
+            if not isinstance(sc, QComboBox) or not isinstance(ec, QComboBox):
+                skipped_noncombo.append(r)
+                continue
+            b_item = self.table2.item(r, bdmv_col)
+            bdmv_txt = b_item.text().strip() if b_item and b_item.text() else ''
+            ur_mpls = str(b_item.data(Qt.ItemDataRole.UserRole) or '').strip() if b_item else ''
+            mpls_no_ext = ur_mpls
+            mpls_src = 'UserRole'
+            if not mpls_no_ext and b_item and str(b_item.text() or '').strip():
+                try:
+                    bix = int(b_item.text().strip())
+                except Exception:
+                    bix = 0
+                mpls_no_ext = str(bdmv_to_mpls.get(bix, '') or '').strip()
+                mpls_src = 'table1'
+            if not mpls_no_ext:
+                skipped_nompls.append(r)
+                continue
+            prev_m2_item = self.table2.item(r, m2ts_col)
+            prev_dur_item = self.table2.item(r, duration_col)
+            prev_m2 = prev_m2_item.text().strip() if prev_m2_item and prev_m2_item.text() else ''
+            prev_dur = prev_dur_item.text().strip() if prev_dur_item and prev_dur_item.text() else ''
+            a_prev_ui = prev_ui.get(r, '')
+            b_cfg_fill = cfg_fill.get(r, '')
+            chapter = _chapter_for(mpls_no_ext)
+            if chapter is None:
+                continue
+            rows = sum(map(len, chapter.mark_info.values()))
+            j1_fb = int(sc.currentIndex() + 1)
+            j2_fb = int(ec.currentIndex() + 1)
+            raw_j1 = sc.currentData()
+            raw_j2 = ec.currentData()
+            # Same as on_configuration: falsy currentData() falls back to index+1.
+            j1 = int(raw_j1 or j1_fb)
+            j2 = int(raw_j2 or j2_fb)
+            j1 = max(1, min(j1, rows + 1))
+            j2 = max(j1 + 1, min(j2, rows + 1))
+            index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(chapter)
+            idx_range = list(range(j1, j2))
+            missing_idx = [i for i in idx_range if i not in index_to_m2ts]
+            m2ts_files = sorted(list(set([index_to_m2ts[i] for i in idx_range if i in index_to_m2ts])))
+            start_off = float(index_to_offset.get(j1, chapter.get_total_time()))
+            end_off = float(index_to_offset.get(j2, chapter.get_total_time()))
+            if end_off < start_off:
+                end_off = start_off
+            new_dur_str = get_time_str(end_off - start_off)
+            new_m2_str = ', '.join(m2ts_files)
+            self.table2.setItem(r, m2ts_col, QTableWidgetItem(new_m2_str))
+            self.table2.setItem(r, duration_col, QTableWidgetItem(new_dur_str))
+            mpl_tail = os.path.basename(str(mpls_no_ext)) if mpls_no_ext else '?'
+            stx = sc.currentText()
+            etx = ec.currentText()
+            diag_core = (
+                f'bdmv={bdmv_txt!r} mpls={mpl_tail!r}({mpls_src}) marks={rows} | '
+                f'start data={raw_j1!r} idx={sc.currentIndex()} fb={j1_fb} text={stx!r} | '
+                f'end data={raw_j2!r} idx={ec.currentIndex()} fb={j2_fb} text={etx!r} | '
+                f'j1,j2={j1},{j2} range(j1,j2)={idx_range!r} len={len(idx_range)} missing_idx={missing_idx!r} | '
+                f'A_prevUI={a_prev_ui!r} B_cfg={b_cfg_fill!r} C_cell={prev_m2!r} D_combo={new_m2_str!r}'
+            )
+            if new_m2_str != prev_m2 or new_dur_str != prev_dur:
+                cell_updates.append(
+                    f'r{r}: m2ts {prev_m2!r}->{new_m2_str!r} dur {prev_dur!r}->{new_dur_str!r} | {diag_core}'
+                )
+            if b_cfg_fill != new_m2_str:
+                cfg_vs_combo.append(
+                    f'r{r}: cfg!=combo | {diag_core} | hint: combo_refresh(D) != cfg_fill(B) after constraints'
+                )
+            if a_prev_ui and a_prev_ui != new_m2_str:
+                prev_ui_vs_now.append(
+                    f'r{r}: prev_ui!=now | {diag_core} | '
+                    f'hint: compare A(last UI) vs B(cfg fill) vs D(combo); B==D means refresh matched widgets'
+                )
 
     def _build_end_chapter_combo(self, rows: int, has_beginning: bool, start_value: int,
                                  selected_value: int = 0) -> QComboBox:
@@ -422,7 +542,8 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
         return {'rows': rows, 'offsets': offsets, 'm2ts': m2ts_map, 'has_beginning': has_beginning}
 
     def _closest_endpoint(self, start_idx: int, target_sec: float, rows: int, offsets: dict[int, float],
-                          m2ts: dict[int, str], checked: list[bool]) -> int:
+                          m2ts: dict[int, str], checked: list[bool],
+                          approx_episode_sec: Optional[float] = None) -> int:
         candidates = [i for i in range(start_idx + 1, rows + 2) if (i == rows + 1) or checked[i - 1]]
         if not candidates:
             return min(rows + 1, start_idx + 1)
@@ -438,16 +559,31 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             if e == 1 or cur_f != prev_f:
                 file_candidates.append(e)
         if not file_candidates:
-            return chapter_end
-        file_end = min(file_candidates, key=lambda e: abs(
-            (offsets.get(e, offsets[rows + 1]) - offsets.get(start_idx, 0.0)) - target_sec))
-        diff_file = (offsets.get(file_end, offsets[rows + 1]) - offsets.get(start_idx, 0.0)) - target_sec
-        if (-target_sec * 0.25) <= diff_file <= (target_sec * 0.5):
-            return file_end
-        diff_ch = (offsets.get(chapter_end, offsets[rows + 1]) - offsets.get(start_idx, 0.0)) - target_sec
-        score_file = diff_file if diff_file >= 0 else (-2.0 * diff_file)
-        score_ch = diff_ch if diff_ch >= 0 else (-2.0 * diff_ch)
-        return file_end if score_file <= score_ch else chapter_end
+            result = chapter_end
+        else:
+            file_end = min(file_candidates, key=lambda e: abs(
+                (offsets.get(e, offsets[rows + 1]) - offsets.get(start_idx, 0.0)) - target_sec))
+            diff_file = (offsets.get(file_end, offsets[rows + 1]) - offsets.get(start_idx, 0.0)) - target_sec
+            if (-target_sec * 0.25) <= diff_file <= (target_sec * 0.5):
+                result = file_end
+            else:
+                diff_ch = (offsets.get(chapter_end, offsets[rows + 1]) - offsets.get(start_idx, 0.0)) - target_sec
+                score_file = diff_file if diff_file >= 0 else (-2.0 * diff_file)
+                score_ch = diff_ch if diff_ch >= 0 else (-2.0 * diff_ch)
+                result = file_end if score_file <= score_ch else chapter_end
+        # Match generate_configuration: if playlist tail after this end is too short for another episode,
+        # absorb it into this segment (avoid splitting off a ~copyright bumper as a fake episode).
+        if approx_episode_sec is not None and result < rows + 1:
+            try:
+                thr = max(0.0, float(approx_episode_sec) - 300.0)
+                playlist_end = float(offsets.get(rows + 1, 0.0))
+                end_off = float(offsets.get(result, playlist_end))
+                remaining = playlist_end - end_off
+                if remaining >= 0.0 and remaining < thr:
+                    return rows + 1
+            except Exception:
+                pass
+        return result
 
     def _filtered_chapter_visible_layout(self, mpls_path: str) -> tuple[list[int], dict[int, str]]:
         """Match ChapterWindow: visible chapter rows and chapter_to_m2ts (1-based keys in filtered order)."""
@@ -941,6 +1077,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                 start_col = labels.index('start_at_chapter')
                 end_col = labels.index('end_at_chapter')
                 bdmv_col = labels.index('bdmv_index')
+                b_row = self.table2.item(row, bdmv_col)
                 start_combo = self.table2.cellWidget(row, start_col)
                 if isinstance(start_combo, QComboBox):
                     new_start = int(start_combo.currentData() or (start_combo.currentIndex() + 1))
@@ -960,24 +1097,12 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                             bdmv_prev = int(b_prev.text().strip()) if b_prev and b_prev.text() else 0
                         except Exception:
                             bdmv_prev = 0
-                        if (bdmv_cur == bdmv_prev) and prev_end > 0 and new_start > prev_end:
-                            b_item = self.table2.item(row, bdmv_col)
-                            mpls_no_ext = str(b_item.data(Qt.ItemDataRole.UserRole) or '').strip() if b_item else ''
-                            if not mpls_no_ext:
-                                selected_mpls = self.get_selected_mpls_no_ext()
-                                bdmv_to_mpls: dict[int, str] = {}
-                                for r in range(self.table1.rowCount()):
-                                    it = self.table1.item(r, 0)
-                                    if not it or not str(it.text() or '').strip():
-                                        continue
-                                    root = os.path.normpath(it.text().strip())
-                                    bi = int(r + 1)
-                                    for folder, m in selected_mpls:
-                                        if os.path.normpath(str(folder)) == root:
-                                            bdmv_to_mpls[bi] = str(m).strip()
-                                            break
-                                mpls_no_ext = bdmv_to_mpls.get(bdmv_cur, '')
-                            self._set_segment_states_for_range(mpls_no_ext, prev_end, new_start - 1, False)
+                        b_item = self.table2.item(row, bdmv_col)
+                        p_item = self.table2.item(row - 1, bdmv_col)
+                        mpls_cur = str(b_item.data(Qt.ItemDataRole.UserRole) or '').strip() if b_item else ''
+                        mpls_prev = str(p_item.data(Qt.ItemDataRole.UserRole) or '').strip() if p_item else ''
+                        if (bdmv_cur == bdmv_prev) and mpls_cur and (mpls_cur == mpls_prev) and prev_end > 0 and new_start > prev_end:
+                            self._set_segment_states_for_range(mpls_cur, prev_end, new_start - 1, False)
                     start_combo._prev_start_value = new_start
             self._sync_end_chapter_min_constraints(labels)
             self._pending_chapter_combo_index = int(subtitle_index)

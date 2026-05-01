@@ -912,7 +912,6 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             self.exe_button.setEnabled(True)
             QMessageBox.information(self, " ", "Main MPLS is not selected")
             return
-        configuration: dict[int, dict[str, int | str]] = {}
         if self._is_movie_mode():
             self._refresh_movie_table2()
             configuration = getattr(self, '_movie_configuration', {}) or {}
@@ -923,25 +922,12 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 QMessageBox.information(self, " ", "Configuration is empty, skipping update")
                 return
         else:
-            try:
-                bs = BluraySubtitle(
-                    self.bdmv_folder_path.text(),
-                    sub_files,
-                    self.checkbox1.isChecked(),
-                    self._update_exe_button_progress,
-                    approx_episode_duration_seconds=self._get_approx_episode_duration_seconds()
-                )
-                configuration = bs.generate_configuration_from_selected_mpls(selected_mpls, cancel_event=cancel_event)
-            except _Cancelled:
+            configuration = self._configuration_snapshot_for_service_run()
+            if not configuration:
                 self._current_cancel_event = None
                 self._reset_exe_button()
                 self.exe_button.setEnabled(True)
-                return
-            except Exception as e:
-                self._current_cancel_event = None
-                self._reset_exe_button()
-                self.exe_button.setEnabled(True)
-                self._show_error_dialog(traceback.format_exc())
+                QMessageBox.information(self, ' ', 'Configuration is empty, skipping update')
                 return
 
         try:
@@ -1758,7 +1744,15 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 approx_episode_duration_seconds=self._get_approx_episode_duration_seconds()
             )
             selected_mpls = self.get_selected_mpls_no_ext()
-            if selected_mpls:
+            if self.get_selected_function_id() in (3, 4, 5) and not self._is_movie_mode() and self.table2.rowCount() > 0:
+                try:
+                    configuration = self._generate_configuration_from_ui_inputs()
+                except Exception:
+                    if selected_mpls:
+                        configuration = bs.generate_configuration_from_selected_mpls(selected_mpls)
+                    else:
+                        configuration = bs.generate_configuration(self.table1)
+            elif selected_mpls:
                 configuration = bs.generate_configuration_from_selected_mpls(selected_mpls)
             else:
                 configuration = bs.generate_configuration(self.table1)
@@ -1823,7 +1817,15 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 approx_episode_duration_seconds=self._get_approx_episode_duration_seconds()
             )
             selected_mpls = self.get_selected_mpls_no_ext()
-            if selected_mpls:
+            if self.get_selected_function_id() in (3, 4, 5) and not self._is_movie_mode() and self.table2.rowCount() > 0:
+                try:
+                    configuration = self._generate_configuration_from_ui_inputs()
+                except Exception:
+                    if selected_mpls:
+                        configuration = bs.generate_configuration_from_selected_mpls(selected_mpls)
+                    else:
+                        configuration = bs.generate_configuration(self.table1)
+            elif selected_mpls:
                 configuration = bs.generate_configuration_from_selected_mpls(selected_mpls)
             else:
                 configuration = bs.generate_configuration(self.table1)
@@ -1889,7 +1891,15 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 approx_episode_duration_seconds=self._get_approx_episode_duration_seconds()
             )
             selected_mpls = self.get_selected_mpls_no_ext()
-            if selected_mpls:
+            if self.get_selected_function_id() in (3, 4, 5) and not self._is_movie_mode() and self.table2.rowCount() > 0:
+                try:
+                    configuration = self._generate_configuration_from_ui_inputs()
+                except Exception:
+                    if selected_mpls:
+                        configuration = bs.generate_configuration_from_selected_mpls(selected_mpls)
+                    else:
+                        configuration = bs.generate_configuration(self.table1)
+            elif selected_mpls:
                 configuration = bs.generate_configuration_from_selected_mpls(selected_mpls)
             else:
                 configuration = bs.generate_configuration(self.table1)

@@ -333,6 +333,72 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
         for v in configuration.values():
             v.setdefault('chapter_segments_fully_checked', True)
 
+    @staticmethod
+    def _configuration_drop_invalid_episode_rows(
+            configuration: dict[int, dict[str, int | str]],
+    ) -> dict[int, dict[str, int | str]]:
+        """Remove episodes whose chapter bounds are invalid (start >= end)."""
+        if not configuration:
+            return configuration
+        kept: list[dict[str, int | str]] = []
+        for k in sorted(configuration.keys(), key=lambda x: int(x)):
+            row = configuration[k]
+            if not isinstance(row, dict):
+                continue
+            try:
+                s = int(row.get('start_at_chapter') or row.get('chapter_index') or 0)
+                e = int(row.get('end_at_chapter') or 0)
+            except Exception:
+                kept.append(dict(row))
+                continue
+            if e <= 0:
+                kept.append(dict(row))
+                continue
+            if s >= e:
+                continue
+            kept.append(dict(row))
+        return {i: dict(v) for i, v in enumerate(kept)}
+
+    @staticmethod
+    def _finalize_configuration_episode_rows(
+            configuration: dict[int, dict[str, int | str]],
+    ) -> dict[int, dict[str, int | str]]:
+        """Enrich chapter bounds, defaults, then drop invalid episodes."""
+        LifecycleConfigurationMixin._enrich_configuration_chapter_bounds(configuration)
+        LifecycleConfigurationMixin._configuration_default_chapter_segments_checked(configuration)
+        return LifecycleConfigurationMixin._configuration_drop_invalid_episode_rows(configuration)
+
+    @staticmethod
+    def _enrich_configuration_chapter_bounds(configuration: dict[int, dict[str, int | str]]) -> None:
+        """Mirror on_configuration episode bounds: set start_at_chapter/end_at_chapter from chapter_index."""
+        if not configuration:
+            return
+        rows_cache: dict[str, int] = {}
+
+        def _rows_for_mpls(mpls_no_ext: str) -> int:
+            k = str(mpls_no_ext or '').strip()
+            if k not in rows_cache:
+                rows_cache[k] = sum(map(len, Chapter(k + '.mpls').mark_info.values()))
+            return rows_cache[k]
+
+        items = sorted(configuration.items(), key=lambda kv: int(kv[0]))
+        for i, (_key, con) in enumerate(items):
+            mpls = str(con.get('selected_mpls') or '')
+            rows = _rows_for_mpls(mpls)
+            j1 = int(con.get('chapter_index') or 1)
+            next_con = items[i + 1][1] if i + 1 < len(items) else None
+            if con.get('end_at_chapter'):
+                j2 = int(con.get('end_at_chapter') or 0)
+            elif next_con and str(next_con.get('selected_mpls') or '') == str(con.get('selected_mpls') or ''):
+                j2 = int(next_con.get('chapter_index') or 0)
+            else:
+                j2 = rows + 1
+            j1 = max(1, min(j1, rows + 1))
+            j2 = max(j1 + 1, min(j2, rows + 1))
+            con['chapter_index'] = j1
+            con['start_at_chapter'] = j1
+            con['end_at_chapter'] = j2
+
     def generate_configuration(self, table: QTableWidget,
                                sub_combo_index: Optional[dict[int, int]] = None,
                                subtitle_index: Optional[int] = None) -> dict[int, dict[str, int | str]]:
@@ -383,7 +449,7 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
                         if offset > sub_end_time - 300 or offset == 0:
                             if (((sub_index + 1 < len(self.sub_files)) if self.sub_files else True)
                                     and left_time > (
-                                    sub_max_end[sub_index + 1] if self.sub_files else approx_end_time) - 180):
+                                    sub_max_end[sub_index + 1] if self.sub_files else approx_end_time) - 300):
                                 sub_end_time = offset + (sub_max_end[sub_index] if self.sub_files else approx_end_time)
                                 configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
                                                             'bdmv_index': bdmv_index, 'chapter_index': j,
@@ -416,7 +482,7 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
                             j += 1
                     offset += (play_item_in_out_time[2] - play_item_in_out_time[1]) / 45000
                     left_time += (play_item_in_out_time[1] - play_item_in_out_time[2]) / 45000
-            self._configuration_default_chapter_segments_checked(configuration)
+            configuration = self._finalize_configuration_episode_rows(configuration)
             CONFIGURATION = configuration
             return configuration
         for folder, chapter, selected_mpls in self.select_mpls_from_table(table):
@@ -441,7 +507,7 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
                     if time_shift > sub_end_time - 300:
                         if (((sub_index + 1 < len(self.sub_files)) if self.sub_files else True)
                                 and left_time > (
-                                sub_max_end[sub_index + 1] if self.sub_files else approx_end_time) - 180):
+                                sub_max_end[sub_index + 1] if self.sub_files else approx_end_time) - 300):
                             sub_index += 1
                             sub_end_time = (
                                         time_shift + (sub_max_end[sub_index] if self.sub_files else approx_end_time))
@@ -472,7 +538,7 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
             sub_index += 1
             if sub_index == len(self.sub_files):
                 break
-        self._configuration_default_chapter_segments_checked(configuration)
+        configuration = self._finalize_configuration_episode_rows(configuration)
         CONFIGURATION = configuration
         return configuration
 
@@ -575,7 +641,7 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
                             j += 1
                     offset += (play_item_in_out_time[2] - play_item_in_out_time[1]) / 45000
                     left_time += (play_item_in_out_time[1] - play_item_in_out_time[2]) / 45000
-            self._configuration_default_chapter_segments_checked(configuration)
+            configuration = self._finalize_configuration_episode_rows(configuration)
             CONFIGURATION = configuration
             return configuration
 
@@ -643,6 +709,6 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
                 sub_index += 1
                 if sub_index == len(self.sub_files):
                     break
-        self._configuration_default_chapter_segments_checked(configuration)
+        configuration = self._finalize_configuration_episode_rows(configuration)
         CONFIGURATION = configuration
         return configuration

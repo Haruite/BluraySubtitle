@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import QTableWidget
 from src.bdmv import Chapter
 from src.core import CONFIGURATION, find_mkvtoolinx, mkvtoolnix_ui_language_arg
 from src.core import settings as core_settings
+from src.domain import MKV
 from src.exports.utils import get_index_to_m2ts_and_offset, get_time_str, force_remove_file, print_exc_terminal
 from .service_base import BluraySubtitleServiceBase
 from ..services.cancelled import _Cancelled
@@ -61,6 +62,14 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
 
         bdmv_index_conf: dict[int, list[dict[str, int | str]]] = {}
         for _, conf in self.configuration.items():
+            try:
+                if conf.get('end_at_chapter') is not None:
+                    s = int(conf.get('start_at_chapter') or conf.get('chapter_index') or 0)
+                    e = int(conf.get('end_at_chapter') or 0)
+                    if e > 0 and s >= e:
+                        continue
+            except Exception:
+                pass
             bdmv_index = int(conf['bdmv_index'])
             if bdmv_index in bdmv_index_conf:
                 bdmv_index_conf[bdmv_index].append(conf)
@@ -129,6 +138,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             dst_folder: str,
             cancel_event: Optional[threading.Event] = None,
     ) -> None:
+        self._remux_chapter_skip_paths = set()
         bdmv_index_list = sorted(bdmv_index_conf.keys())
         for idx, bdmv_index in enumerate(bdmv_index_list, start=1):
             if cancel_event and cancel_event.is_set():
@@ -153,7 +163,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 self._progress(text=f'{self.t("Analyzing tracks: ")}{os.path.basename(m2ts_file)}')
             print(f'{self.t("Mux command: ")}{remux_cmd}')
             self._progress(text=f'{self.t("Muxing: ")}BD_Vol_{bdmv_vol}')
-            ret = self._run_shell_command(remux_cmd)
+            ret, line_rets = self._run_shell_command_detailed(remux_cmd)
             try:
                 ch_tmp = Chapter(mpls_path)
                 n_clips = len(ch_tmp.in_out_time or [])
@@ -174,51 +184,102 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                                     cover_size = sz
                 except Exception:
                     cover = ''
+            def _norm_skip(p: str) -> str:
+                return os.path.normcase(os.path.normpath(p))
+
             out_n = os.path.normpath(output_file) if output_file else ''
+            try:
+                parsed_out = _svc_cls()._mkvmerge_output_path_from_cmd(remux_cmd)
+                if parsed_out:
+                    out_n = os.path.normpath(parsed_out)
+            except Exception:
+                pass
             out_exists = bool(out_n and os.path.isfile(out_n))
             expected_split_paths: list[str] = []
-            if (not getattr(self, 'movie_mode', False)) and out_n and confs:
+            lines_mx = _svc_cls()._remux_cmd_shell_lines(remux_cmd)
+            if not lines_mx and (remux_cmd or '').strip():
+                lines_mx = [(remux_cmd or '').strip()]
+            if not line_rets:
+                line_rets = [int(ret)]
+            while len(line_rets) < len(lines_mx):
+                line_rets.append(int(line_rets[-1]))
+            line_rets = [int(x) for x in line_rets[:len(lines_mx)]] if lines_mx else line_rets
+            ret_ok = (ret in (0, 1))
+            primary_ok = True
+            split_by_config = False
+            line_mux_checks: list[dict[str, object]] = []
+            if (not getattr(self, 'movie_mode', False)) and lines_mx and confs:
+                for li, ln in enumerate(lines_mx):
+                    rline = int(line_rets[li]) if li < len(line_rets) else int(ret)
+                    rline_ok = rline in (0, 1)
+                    ob, expected_line = _svc_cls()._mkvmerge_expected_paths_for_shell_line(
+                        ln, confs, mpls_path)
+                    if not expected_line:
+                        continue
+                    split_by_config = split_by_config or len(expected_line) > 1
+                    exists_map_ln = {p: os.path.isfile(p) for p in expected_line}
+                    ok_ln = rline_ok and all(exists_map_ln.values())
+                    if (not ok_ln) and rline_ok and expected_line:
+                        for retry_i in range(5):
+                            time.sleep(0.2)
+                            exists_map_ln = {p: os.path.isfile(p) for p in expected_line}
+                            if all(exists_map_ln.values()):
+                                ok_ln = True
+                                break
+                    line_mux_checks.append({
+                        'expected': list(expected_line),
+                        'ok': ok_ln,
+                        'ret': rline,
+                    })
+                    if not ok_ln:
+                        for p in expected_line:
+                            self._remux_chapter_skip_paths.add(_norm_skip(p))
+                    primary_ok = primary_ok and ok_ln
+                if line_mux_checks:
+                    expected_split_paths = []
+                    for c in line_mux_checks:
+                        expected_split_paths.extend(c['expected'])  # type: ignore[arg-type]
+            if not line_mux_checks and (not getattr(self, 'movie_mode', False)) and out_n and confs:
                 try:
                     ch_seg = Chapter(mpls_path)
                     segs_b = _svc_cls()._series_episode_segments_bounds(ch_seg, confs)
                     expected_split_paths = _svc_cls()._expected_mkvmerge_split_output_paths(out_n, len(segs_b))
                 except Exception:
                     expected_split_paths = []
-            try:
-                cmd_split_count = _svc_cls()._split_segment_count_from_mkvmerge_cmd(remux_cmd)
-            except Exception:
-                cmd_split_count = None
-            if out_n and isinstance(cmd_split_count, int) and cmd_split_count > 1:
-                expected_from_cmd = _svc_cls()._expected_mkvmerge_split_output_paths(out_n, cmd_split_count)
-                if len(expected_from_cmd) >= len(expected_split_paths):
-                    expected_split_paths = expected_from_cmd
-            split_by_config = len(expected_split_paths) > 1
-            ret_ok = (ret in (0, 1))
-            stem_base, ext_base = os.path.splitext(os.path.basename(out_n)) if out_n else ('', '.mkv')
-            alt001 = os.path.join(os.path.dirname(out_n), f'{stem_base}-001{ext_base or ".mkv"}') if out_n else ''
-            print(
-                f'[split-check] bdmv={bdmv_vol} ret={ret} ret_ok={ret_ok} out="{out_n}" n_clips={n_clips} split_by_config={split_by_config}')
-            print(f'[split-check] expected_split_paths({len(expected_split_paths)}): {expected_split_paths}')
-            print(f'[split-check] cmd_split_count={cmd_split_count} alt001="{alt001}" out_exists={out_exists}')
-            if split_by_config:
-                exists_map = {p: os.path.isfile(p) for p in expected_split_paths}
-                print(f'[split-check] exists(initial): {exists_map}')
-                primary_ok = ret_ok and all(exists_map.values())
-                if (not primary_ok) and ret_ok and expected_split_paths:
-                    # On some filesystems, split files may appear shortly after process exit.
-                    # Retry briefly before deciding fallback is needed.
-                    for retry_i in range(5):
-                        time.sleep(0.2)
-                        exists_map = {p: os.path.isfile(p) for p in expected_split_paths}
-                        print(f'[split-check] exists(retry#{retry_i + 1}): {exists_map}')
-                        if all(exists_map.values()):
-                            primary_ok = True
-                            break
-            elif out_n and expected_split_paths:
-                primary_ok = ret_ok and (out_exists or (bool(alt001) and os.path.isfile(alt001)))
-            else:
+                try:
+                    cmd_split_count = _svc_cls()._split_segment_count_from_mkvmerge_cmd(remux_cmd)
+                except Exception:
+                    cmd_split_count = None
+                if out_n and isinstance(cmd_split_count, int) and cmd_split_count > 1:
+                    expected_from_cmd = _svc_cls()._expected_mkvmerge_split_output_paths(out_n, cmd_split_count)
+                    if len(expected_from_cmd) >= len(expected_split_paths):
+                        expected_split_paths = expected_from_cmd
+                split_by_config = len(expected_split_paths) > 1
+                stem_base, ext_base = os.path.splitext(os.path.basename(out_n)) if out_n else ('', '.mkv')
+                alt001 = os.path.join(os.path.dirname(out_n), f'{stem_base}-001{ext_base or ".mkv"}') if out_n else ''
+                if split_by_config:
+                    exists_map = {p: os.path.isfile(p) for p in expected_split_paths}
+                    primary_ok = ret_ok and all(exists_map.values())
+                    if (not primary_ok) and ret_ok and expected_split_paths:
+                        for retry_i in range(5):
+                            time.sleep(0.2)
+                            exists_map = {p: os.path.isfile(p) for p in expected_split_paths}
+                            if all(exists_map.values()):
+                                primary_ok = True
+                                break
+                elif out_n and expected_split_paths:
+                    primary_ok = ret_ok and (out_exists or (bool(alt001) and os.path.isfile(alt001)))
+                else:
+                    primary_ok = ret_ok and out_exists
+                if not primary_ok and expected_split_paths:
+                    for p in expected_split_paths:
+                        self._remux_chapter_skip_paths.add(_norm_skip(p))
+                elif not primary_ok and out_n:
+                    self._remux_chapter_skip_paths.add(_norm_skip(out_n))
+            if not line_mux_checks and getattr(self, 'movie_mode', False):
                 primary_ok = ret_ok and out_exists
-            print(f'[split-check] primary_ok={primary_ok}')
+                if not primary_ok and out_n:
+                    self._remux_chapter_skip_paths.add(_norm_skip(out_n))
             fb_audio, fb_sub = _svc_cls()._fallback_track_lists(remux_cmd, copy_audio_track, copy_sub_track)
             if n_clips > 1 and not primary_ok:
                 if split_by_config:
@@ -233,8 +294,10 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                         cancel_event=cancel_event,
                     )
                     if split_ok:
-                        ret = 0
                         primary_ok = all(os.path.isfile(p) for p in expected_split_paths)
+                        if primary_ok:
+                            for p in expected_split_paths:
+                                self._remux_chapter_skip_paths.discard(_norm_skip(p))
                     else:
                         print(f'[remux-fallback-split] failed for BD_Vol_{bdmv_vol} (see logs above)')
                         self._progress(
@@ -252,16 +315,22 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                         ret = 0
             try:
                 targets: list[str] = []
-                out = os.path.normpath(output_file) if output_file else ''
                 lang_cfg_all = getattr(self, 'track_language_config', {}) or {}
-                lang_override = {}
                 try:
                     lang_override = dict(lang_cfg_all.get(f'main::{os.path.normpath(mpls_path)}') or {})
                 except Exception:
                     lang_override = {}
-                if out:
-                    out_dir = os.path.dirname(out)
-                    base_stem = os.path.splitext(os.path.basename(out))[0]
+                outs_seen: set[str] = set()
+                for ln in lines_mx:
+                    o = _svc_cls()._mkvmerge_output_path_from_line(ln)
+                    if not o:
+                        continue
+                    o = os.path.normpath(o)
+                    if o in outs_seen:
+                        continue
+                    outs_seen.add(o)
+                    out_dir = os.path.dirname(o)
+                    base_stem = os.path.splitext(os.path.basename(o))[0]
                     if out_dir and os.path.isdir(out_dir):
                         for fn in os.listdir(out_dir):
                             low = fn.lower()
@@ -269,8 +338,21 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                                 fp = os.path.normpath(os.path.join(out_dir, fn))
                                 if os.path.isfile(fp):
                                     targets.append(fp)
-                    if os.path.exists(out):
-                        targets.append(out)
+                    if os.path.exists(o):
+                        targets.append(o)
+                out_fb = out_n if out_n else (os.path.normpath(output_file) if output_file else '')
+                if out_fb and out_fb not in outs_seen:
+                    out_dir = os.path.dirname(out_fb)
+                    base_stem = os.path.splitext(os.path.basename(out_fb))[0]
+                    if out_dir and os.path.isdir(out_dir):
+                        for fn in os.listdir(out_dir):
+                            low = fn.lower()
+                            if (fn.startswith(base_stem)) and low.endswith(('.mkv', '.mka')):
+                                fp = os.path.normpath(os.path.join(out_dir, fn))
+                                if os.path.isfile(fp):
+                                    targets.append(fp)
+                    if os.path.exists(out_fb):
+                        targets.append(out_fb)
                 targets = sorted(list(dict.fromkeys(targets)))
                 for t in targets:
                     _svc_cls()._fix_output_track_languages_with_mkvpropedit(
@@ -285,19 +367,35 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 pass
             self._progress(int(idx / max(len(bdmv_index_list), 1) * 300))
 
-    def _run_shell_command(self, cmd: str) -> int:
-        # Split multi-line commands and execute them sequentially
-        commands = [line.strip() for line in cmd.split('\n') if line.strip()]
+    @staticmethod
+    def _dedupe_remux_shell_lines(cmd: str) -> str:
+        """Drop duplicate non-empty lines so the same mkvmerge invocation is not run twice."""
+        lines = [ln.strip() for ln in (cmd or '').splitlines() if ln.strip()]
+        if len(lines) <= 1:
+            return (cmd or '').strip()
+        seen: set[str] = set()
+        uniq: list[str] = []
+        for ln in lines:
+            if ln in seen:
+                continue
+            seen.add(ln)
+            uniq.append(ln)
+        return '\n'.join(uniq)
+
+    def _run_shell_command_detailed(self, cmd: str) -> tuple[int, list[int]]:
+        """Run ``remux_cmd`` line-by-line; return (max exit code, per-line codes)."""
+        commands = [line.strip() for line in cmd.splitlines() if line.strip()]
+        if not commands:
+            return 0, []
         if len(commands) <= 1:
-            # Single command, execute as before
-            return self._run_single_command(cmd)
-        else:
-            # Multiple commands, execute sequentially
-            for single_cmd in commands:
-                ret = self._run_single_command(single_cmd)
-                if ret != 0:
-                    return ret
-            return 0
+            r = self._run_single_command(cmd)
+            return r, [int(r)]
+        rets = [int(self._run_single_command(c)) for c in commands]
+        return (max(rets) if rets else 0), rets
+
+    def _run_shell_command(self, cmd: str) -> int:
+        r, _ = self._run_shell_command_detailed(cmd)
+        return int(r)
 
     def _run_single_command(self, cmd: str) -> int:
         if sys.platform == 'win32':
@@ -340,7 +438,6 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             ensure_disc_out_dir: bool = False,
     ) -> tuple[str, str, str, str, str, dict[int, str], list[str], list[str]]:
         mpls_path = confs[0]['selected_mpls'] + '.mpls'
-        disc_name = ''
         try:
             disc_name = os.path.basename(os.path.normpath(str(getattr(self, 'bdmv_path', '') or '')).rstrip(os.sep))
         except Exception:
@@ -413,26 +510,43 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             default_cmd = (
                 f'"{mkvmerge_exe}" {mkvtoolnix_ui_language_arg()} --chapter-language eng -o "{output_file}" '
                 f'{default_audio_opts} {default_sub_opts} {default_cover_opts} "{mpls_path}"').strip()
-            custom_cmd = str(confs[0].get('main_remux_cmd') or '').strip()
-            if custom_cmd:
-                remux_cmd = (custom_cmd
-                             .replace('{output_file}', output_file)
+            tpls_mv = [str(c.get('main_remux_cmd') or '').strip() for c in confs]
+            nonempty_mv = [t for t in tpls_mv if t]
+            if not nonempty_mv:
+                remux_cmd = default_cmd
+            elif len(set(nonempty_mv)) == 1 and all(tpls_mv):
+                u = tpls_mv[0]
+                remux_cmd = (u.replace('{output_file}', output_file)
                              .replace('{mpls_path}', mpls_path)
                              .replace('{audio_opts}', default_audio_opts)
                              .replace('{sub_opts}', default_sub_opts)
                              .replace('{cover_opts}', default_cover_opts)
-                             .replace('{chapter_split}', ''))
+                             .replace('{chapter_split}', '')
+                             .replace('{parts_split}', ''))
             else:
-                remux_cmd = default_cmd
+                lines_mv: list[str] = []
+                for i, c in enumerate(confs):
+                    t = str(c.get('main_remux_cmd') or '').strip()
+                    if t:
+                        lines_mv.append(
+                            t.replace('{output_file}', output_file)
+                            .replace('{mpls_path}', mpls_path)
+                            .replace('{audio_opts}', default_audio_opts)
+                            .replace('{sub_opts}', default_sub_opts)
+                            .replace('{cover_opts}', default_cover_opts)
+                            .replace('{chapter_split}', '')
+                            .replace('{parts_split}', ''))
+                    else:
+                        od, ob = os.path.split(output_file)
+                        stem_o, ext_o = os.path.splitext(ob)
+                        out_i = os.path.join(od, f'{stem_o}_line{i + 1:02d}{ext_o or ".mkv"}')
+                        lines_mv.append(
+                            (f'"{mkvmerge_exe}" {mkvtoolnix_ui_language_arg()} --chapter-language eng -o "{out_i}" '
+                             f'{default_audio_opts} {default_sub_opts} {default_cover_opts} "{mpls_path}"').strip())
+                remux_cmd = '\n'.join(lines_mv)
         else:
-            confs_sorted = sorted(confs, key=lambda c: int(c.get('chapter_index') or c.get('start_at_chapter') or 1))
             rows = sum(map(len, chapter.mark_info.values()))
             total_end = rows + 1
-            segments = _svc_cls()._series_episode_segments_bounds(chapter, confs)
-            chapter_starts = [int(c.get('start_at_chapter') or c.get('chapter_index') or 1) for c in confs_sorted]
-            chapter_after_first = [s for s in chapter_starts[1:] if 1 < s <= rows]
-            chapter_split = ','.join(map(str, chapter_after_first))
-            use_split_parts = not bool(confs[0].get('chapter_segments_fully_checked', True)) if confs else False
             index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(chapter)
 
             def _off(idx: int) -> float:
@@ -440,16 +554,26 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     return chapter.get_total_time()
                 return float(index_to_offset.get(idx, 0.0))
 
-            parts_list: list[str] = []
-            for s, e in segments:
-                st = get_time_str(_off(s))
-                ed = get_time_str(_off(e))
-                if st == '0':
-                    st = '00:00:00.000'
-                if ed == '0':
-                    ed = '00:00:00.000'
-                parts_list.append(f'{st}-{ed}')
-            parts_split = ','.join(parts_list)
+            def _parts_chapter_for_sub_confs(sub_confs: list[dict[str, int | str]]) -> tuple[str, str, bool]:
+                if not sub_confs:
+                    return '', '', False
+                segl = _svc_cls()._series_episode_segments_bounds(chapter, sub_confs)
+                cstarts = [int(s) for s, _ in segl]
+                cafter = [s for s in cstarts[1:] if 1 < s <= rows]
+                csplit = ','.join(map(str, cafter))
+                use_parts = not bool(sub_confs[0].get('chapter_segments_fully_checked', True))
+                pl: list[str] = []
+                for s, e in segl:
+                    st = get_time_str(_off(s))
+                    ed = get_time_str(_off(e))
+                    if st == '0':
+                        st = '00:00:00.000'
+                    if ed == '0':
+                        ed = '00:00:00.000'
+                    pl.append(f'{st}-{ed}')
+                return ','.join(pl), csplit, use_parts
+
+            parts_split, chapter_split, use_split_parts = _parts_chapter_for_sub_confs(confs)
             output_file = f'{os.path.join(disc_out_dir or dst_folder, output_name)}_BD_Vol_{bdmv_vol}.mkv'
             default_audio_opts = (f'-a {",".join(copy_audio_track)}' if copy_audio_track else '')
             default_sub_opts = (f'-s {",".join(copy_sub_track)}' if copy_sub_track else '')
@@ -460,10 +584,13 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 split_arg = (f'--split chapters:{chapter_split}' if chapter_split else '')
             default_cmd = (f'"{mkvmerge_exe}" {mkvtoolnix_ui_language_arg()} {split_arg} -o "{output_file}" '
                            f'{default_audio_opts} {default_sub_opts} {default_cover_opts} "{mpls_path}"').strip()
-            custom_cmd = str(confs[0].get('main_remux_cmd') or '').strip()
-            if custom_cmd:
-                remux_cmd = (custom_cmd
-                             .replace('{output_file}', output_file)
+            tpls = [str(c.get('main_remux_cmd') or '').strip() for c in confs]
+            nonempty = [t for t in tpls if t]
+            if not nonempty:
+                remux_cmd = default_cmd
+            elif len(set(nonempty)) == 1 and all(tpls):
+                u = tpls[0]
+                remux_cmd = (u.replace('{output_file}', output_file)
                              .replace('{mpls_path}', mpls_path)
                              .replace('{audio_opts}', default_audio_opts)
                              .replace('{sub_opts}', default_sub_opts)
@@ -471,8 +598,226 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                              .replace('{chapter_split}', chapter_split)
                              .replace('{parts_split}', parts_split))
             else:
-                remux_cmd = default_cmd
+                lines_ep: list[str] = []
+                for i, c in enumerate(confs):
+                    ps_i, cs_i, usp_i = _parts_chapter_for_sub_confs([c])
+                    t = str(c.get('main_remux_cmd') or '').strip()
+                    if usp_i:
+                        split_arg_i = (f'--split parts:{ps_i}' if ps_i else '')
+                    else:
+                        split_arg_i = (f'--split chapters:{cs_i}' if cs_i else '')
+                    if t:
+                        lines_ep.append(
+                            t.replace('{output_file}', output_file)
+                            .replace('{mpls_path}', mpls_path)
+                            .replace('{audio_opts}', default_audio_opts)
+                            .replace('{sub_opts}', default_sub_opts)
+                            .replace('{cover_opts}', default_cover_opts)
+                            .replace('{chapter_split}', cs_i)
+                            .replace('{parts_split}', ps_i))
+                    else:
+                        od, ob = os.path.split(output_file)
+                        stem_o, ext_o = os.path.splitext(ob)
+                        out_i = os.path.join(od, f'{stem_o}_line{i + 1:02d}{ext_o or ".mkv"}')
+                        lines_ep.append(
+                            (f'"{mkvmerge_exe}" {mkvtoolnix_ui_language_arg()} {split_arg_i} -o "{out_i}" '
+                             f'{default_audio_opts} {default_sub_opts} {default_cover_opts} "{mpls_path}"').strip())
+                remux_cmd = '\n'.join(lines_ep)
+        remux_cmd = self._dedupe_remux_shell_lines(remux_cmd)
         return remux_cmd, m2ts_file, bdmv_vol, output_file, mpls_path, chapter.pid_to_lang, copy_audio_track, copy_sub_track
+
+    def _remux_remap_chapter_skip_after_rename(self, mkv_files: list[str]) -> None:
+        """Point ``_remux_chapter_skip_paths`` at post-rename paths when basename is unchanged."""
+        try:
+            old_sk = getattr(self, '_remux_chapter_skip_paths', None) or set()
+            if not old_sk or not mkv_files:
+                return
+            by_bn = {
+                os.path.normcase(os.path.basename(mf)): os.path.normcase(os.path.normpath(mf))
+                for mf in mkv_files
+            }
+            repl: set[str] = set()
+            for s in old_sk:
+                bn = os.path.normcase(os.path.basename(str(s)))
+                repl.add(by_bn.get(bn, os.path.normcase(os.path.normpath(str(s)))))
+            self._remux_chapter_skip_paths = repl
+        except Exception:
+            pass
+
+    def _post_remux_finalize_episodes(
+            self,
+            dst_folder: str,
+            bdmv_index_conf: dict[int, list[dict[str, int | str]]],
+            configuration: dict[int, dict[str, int | str]],
+            episode_output_names: Optional[list[str]],
+            cancel_event: Optional[threading.Event],
+    ) -> tuple[list[str], bool]:
+        """
+        After mux: validate theoretical ``-o`` outputs vs disk (excluding split-check skips),
+        optional chapter-debug from remux parse or table2 bounds, then rename to table2 names when counts align.
+
+        Parses using ``main_remux_cmd`` from configuration (table1 remux column). If that string is empty,
+        uses the built-in mux template from ``_make_main_mpls_remux_cmd`` (same as mux execution) only for
+        parsing—not as a replacement for what was displayed in table1.
+
+        Returns ``([], True)`` when validation fails (caller should fall back to raw collected mkvs).
+        """
+        cfg_sorted_keys = sorted(configuration.keys())
+        names = episode_output_names or []
+        skip_norm = getattr(self, '_remux_chapter_skip_paths', None) or set()
+        path_by_conf_key: dict[int, str] = {}
+
+        def _norm_path(p: str) -> str:
+            return os.path.normcase(os.path.normpath(p))
+
+        char_map = {
+            '?': '？', '*': '★', '<': '《', '>': '》', ':': '：', '"': "'", '/': '／', '\\': '／', '|': '￨'
+        }
+
+        for bdmv_index in sorted(bdmv_index_conf.keys()):
+            if cancel_event and cancel_event.is_set():
+                raise _Cancelled()
+            confs = sorted(
+                list(bdmv_index_conf[bdmv_index]),
+                key=lambda c: int(c.get('chapter_index') or c.get('start_at_chapter') or 1),
+            )
+            built = self._make_main_mpls_remux_cmd(
+                confs=confs,
+                dst_folder=dst_folder,
+                bdmv_index=bdmv_index,
+                disc_count=len(bdmv_index_conf),
+                ensure_disc_out_dir=True,
+            )
+            remux_cmd = str(built[0] or '').strip()
+            built_mpls = str(built[4] or '').strip()
+            mpls_path = ''
+            if built_mpls:
+                mpls_path = built_mpls if built_mpls.lower().endswith('.mpls') else (built_mpls + '.mpls')
+            if not mpls_path:
+                raw_mpls = str(confs[0].get('selected_mpls') or '').strip()
+                mpls_path = raw_mpls if raw_mpls.lower().endswith('.mpls') else (raw_mpls + '.mpls' if raw_mpls else '')
+            theory = _svc_cls().theoretical_remux_output_paths_ordered(remux_cmd, confs, mpls_path)
+            if not theory:
+                print(f'{self.t("[post-remux] ")}{self.t("abort: could not derive theoretical outputs from remux_cmd")}')
+                return [], True
+            for tp in theory:
+                tn = _norm_path(tp)
+                if tn in skip_norm:
+                    continue
+                if not os.path.isfile(tp):
+                    print(f'{self.t("[post-remux] ")}{self.t("abort: missing expected output: ")}{tp}')
+                    return [], True
+
+            keys_vol = sorted(
+                [k for k in cfg_sorted_keys if int(configuration[k].get('bdmv_index', 0)) == bdmv_index],
+                key=lambda kk: int(configuration[kk].get('chapter_index') or configuration[kk].get('start_at_chapter') or 1),
+            )
+            bounds: Optional[list[tuple[int, int]]] = None
+            rb = _svc_cls()._remux_parsed_chapter_bounds_for_theory_count(
+                remux_cmd, confs, mpls_path, len(theory))
+            if rb and len(rb) == len(theory):
+                bounds = rb
+            if bounds is None and len(theory) == len(confs):
+                try:
+                    segs_pc: list[tuple[int, int]] = []
+                    for c in confs:
+                        sm = str(c.get('selected_mpls') or '').strip()
+                        mp_c = sm if sm.lower().endswith('.mpls') else (sm + '.mpls' if sm else '')
+                        if not mp_c or not os.path.isfile(mp_c):
+                            segs_pc = []
+                            break
+                        ch_c = Chapter(mp_c)
+                        seg_one = _svc_cls()._series_episode_segments_bounds(ch_c, [c])
+                        if len(seg_one) != 1:
+                            segs_pc = []
+                            break
+                        segs_pc.append(seg_one[0])
+                    if len(segs_pc) == len(theory):
+                        bounds = segs_pc
+                except Exception:
+                    bounds = None
+            if bounds is None and len(theory) == len(keys_vol):
+                try:
+                    ch = Chapter(mpls_path)
+                    segs = _svc_cls()._series_episode_segments_bounds(ch, confs)
+                    if len(segs) == len(theory):
+                        bounds = segs
+                except Exception:
+                    bounds = None
+
+            def _mpls_for_conf_index(idx: int) -> str:
+                if idx < 0 or idx >= len(confs):
+                    return mpls_path
+                sm = str(confs[idx].get('selected_mpls') or '').strip()
+                if not sm:
+                    return mpls_path
+                return sm if sm.lower().endswith('.mpls') else (sm + '.mpls')
+
+            chapter_txt = os.path.join(os.getcwd(), 'chapter.txt')
+            if bounds and len(bounds) == len(theory):
+                for i, tp in enumerate(theory):
+                    if cancel_event and cancel_event.is_set():
+                        raise _Cancelled()
+                    if _norm_path(tp) in skip_norm:
+                        continue
+                    if not os.path.isfile(tp):
+                        continue
+                    s0, e0 = bounds[i]
+                    self._write_remux_segment_chapter_txt(_mpls_for_conf_index(i), s0, e0, chapter_txt)
+                    MKV(tp).add_chapter(self.checked)
+
+            if len(theory) == len(keys_vol):
+                for i, k in enumerate(keys_vol):
+                    tp = theory[i]
+                    if _norm_path(tp) in skip_norm:
+                        continue
+                    if os.path.isfile(tp):
+                        path_by_conf_key[k] = tp
+
+                for i, tp in enumerate(theory):
+                    if _norm_path(tp) in skip_norm:
+                        continue
+                    k = keys_vol[i]
+                    raw_name = ''
+                    try:
+                        if isinstance(k, int) and 0 <= k < len(names):
+                            raw_name = str(names[k] or '').strip()
+                    except Exception:
+                        raw_name = ''
+                    if not raw_name:
+                        continue
+                    new_base = ''.join(char_map.get(ch) or ch for ch in raw_name)
+                    new_base = new_base.strip().rstrip('.')
+                    if not new_base.lower().endswith('.mkv'):
+                        new_base += '.mkv'
+                    folder = os.path.dirname(tp)
+                    new_path = os.path.join(folder, new_base)
+                    cur = path_by_conf_key.get(k, tp)
+                    if not cur or not os.path.isfile(cur):
+                        continue
+                    if os.path.normcase(cur) == os.path.normcase(new_path):
+                        path_by_conf_key[k] = new_path
+                        continue
+                    if os.path.exists(new_path):
+                        stem, ext = os.path.splitext(new_base)
+                        n = 1
+                        candidate = new_path
+                        while os.path.exists(candidate):
+                            candidate = os.path.join(folder, f'{stem} ({n}){ext}')
+                            n += 1
+                        new_path = candidate
+                    try:
+                        os.rename(cur, new_path)
+                        path_by_conf_key[k] = new_path
+                    except Exception:
+                        print_exc_terminal()
+
+        final_mkvs: list[str] = []
+        for k in cfg_sorted_keys:
+            p = path_by_conf_key.get(k)
+            if p and os.path.isfile(p):
+                final_mkvs.append(p)
+        return final_mkvs, False
 
     def episodes_remux(self, table: Optional[QTableWidget], folder_path: str,
                        selected_mpls: Optional[list[tuple[str, str]]] = None,
@@ -490,17 +835,28 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
 
         self.checked = True
         self.episode_subtitle_languages = episode_subtitle_languages or []
-        mkv_files = self._collect_target_mkv_files(dst_folder, mkv_files_before)
-        mkv_files = self._apply_episode_output_names(mkv_files, episode_output_names)
+        mkv_raw = self._collect_target_mkv_files(dst_folder, mkv_files_before)
+        if getattr(self, 'movie_mode', False):
+            mkv_files = self._apply_episode_output_names(mkv_raw, episode_output_names)
+            self._remux_remap_chapter_skip_after_rename(mkv_files)
+        else:
+            self._progress(310, 'Writing Chapters')
+            mkv_files, post_aborted = self._post_remux_finalize_episodes(
+                dst_folder, bdmv_index_conf, self.configuration, episode_output_names, cancel_event)
+            if post_aborted:
+                print(f'{self.t("[post-remux] ")}{self.t("aborted chapter/rename pipeline (theory parse or missing outputs)")}')
+                mkv_files = mkv_raw
+            elif not mkv_files:
+                mkv_files = mkv_raw
         if cancel_event and cancel_event.is_set():
             raise _Cancelled()
-        if not getattr(self, 'movie_mode', False):
+        if getattr(self, 'movie_mode', False):
             self._progress(310, 'Writing Chapters')
             self.add_chapter_to_mkv(
                 mkv_files, table, selected_mpls=selected_mpls, cancel_event=cancel_event,
                 configuration=self.configuration,
             )
-            self._progress(400)
+        self._progress(400)
 
         i = 0
         for mkv_file in mkv_files:
@@ -509,7 +865,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             i += 1
             self._progress(text=f'Compressing audio: {os.path.basename(mkv_file)}')
             self.flac_task(mkv_file, dst_folder, i)
-            self._progress(400 + int(400 * i / len(mkv_files)))
+            self._progress(400 + int(400 * i / max(len(mkv_files), 1)))
 
         sps_folder = dst_folder + os.sep + 'SPs'
         os.mkdir(sps_folder)
@@ -663,6 +1019,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         self.episode_subtitle_languages = episode_subtitle_languages or []
         mkv_files = self._collect_target_mkv_files(dst_folder, mkv_files_before)
         mkv_files = self._apply_episode_output_names(mkv_files, episode_output_names)
+        self._remux_remap_chapter_skip_after_rename(mkv_files)
         if cancel_event and cancel_event.is_set():
             raise _Cancelled()
         if not getattr(self, 'movie_mode', False):
