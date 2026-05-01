@@ -14,6 +14,8 @@ from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
+from core.settings import VSPIPE_PATH
+
 
 class _KernelResult:
     def __init__(
@@ -69,10 +71,7 @@ def _resolve_vspipe():
             if os.path.isfile(p):
                 return (p, env)
 
-    for n in local_names:
-        found = shutil.which(n)
-        if found:
-            return (found, env)
+    return (VSPIPE_PATH, env)
 
     raise FileNotFoundError(
         "vspipe executable not found. Set BLURAYSUB_VSPIPE to full path "
