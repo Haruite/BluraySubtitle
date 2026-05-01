@@ -17,6 +17,7 @@ FFPROBE_PATH = r"C:\Downloads\ffmpeg-8.1-essentials_build\bin\ffprobe.exe"
 X265_PATH = r"C:\Software\x265.exe"
 X264_PATH = r"C:\Software\x264.exe"
 VSEDIT_PATH = r"C:\Software\vapoursynth\vsedit.exe"
+VSPIPE_PATH = r"C:\Software\vapoursynth\vspipe.exe"
 PLUGIN_PATH = ""
 LIBASS_PATH = r"C:\Downloads\libass-9.dll"
 TS_MUXER_PATH = r"C:\Software\tsMuxeR.exe"
@@ -33,6 +34,7 @@ if sys.platform != "win32":
     X264_PATH = "/usr/bin/x264"
     PLUGIN_PATH = os.path.expanduser("~/plugins")
     VSEDIT_PATH = "/usr/bin/vsedit"
+    VSPIPE_PATH = "/usr/bin/vspipe"
     LIBASS_PATH = ''
     TSMUXER_PATH = '/usr/bin/tsMuxeR'
     if is_docker():

@@ -15,6 +15,7 @@ from typing import Optional
 
 import pycountry
 
+from core.settings import VSPIPE_PATH
 from ...core import FFMPEG_PATH
 from ...core.settings import PLUGIN_PATH
 from .service_base import BluraySubtitleServiceBase
@@ -817,13 +818,8 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
         if vspipe_mode == 'bundle':
             vspipe_exe, vspipe_env = get_vspipe_context()
         else:
-            vspipe_exe, vspipe_env = 'vspipe.exe', None
-            if sys.platform != 'win32':
-                vspipe_exe = 'vspipe'
-        if x265_mode == 'bundle':
-            x265_exe = X265_PATH
-        else:
-            x265_exe = 'x265.exe' if sys.platform == 'win32' else 'x265'
+            vspipe_exe, vspipe_env = VSPIPE_PATH, None
+        x265_exe = X265_PATH
         hevc_file = os.path.join(dst_folder, os.path.splitext(os.path.basename(output_file))[0] + '.hevc')
         cmd = f'"{vspipe_exe}" --y4m "{vpy_path}" - | "{x265_exe}" {x265_params or ""} --y4m -D 10 -o "{hevc_file}" -'
         print(f'{translate_text("Encode command:")}{cmd}')
