@@ -330,6 +330,9 @@ I18N_ZH_TO_EN = {
     '清空章节: ': 'clear chapters: ',
     '应用章节文件: ': 'apply chapter file: ',
     '移除临时章节文件: ': 'remove temporary chapter file: ',
+    '多行混流命令章节边界（已应用）: ': 'multi-line remux_cmd chapter bounds (applied): ',
+    '按 table2 章节边界推算 split 时间轴: ': 'derived split timeline from table2 chapter bounds: ',
+    '跳过章节（该行混流失败或 split-check 未通过）: ': 'skip chapters (remux failed or split-check for this output): ',
     '旧流程 SP 使用章节文件混流: ': 'legacy SP remux with chapter file: ',
     '手动章节编辑应用: ': 'manual chapter edit apply: ',
     '读取中': 'Loading...',
@@ -337,7 +340,6 @@ I18N_ZH_TO_EN = {
     '重新生成配置中...': 'Regenerating configuration...',
     '刷新SP表中...': 'Refreshing SP table...',
     '更新表格行中...': 'Updating table rows...',
-    # Terminal / error dialog (English key in code → Chinese UI via EN_TO_ZH)
     '错误': 'Error',
     '[BluraySubtitle] 回溯信息（可从终端复制）': '[BluraySubtitle] --- traceback (copy from terminal) ---',
     '[BluraySubtitle] 异常详情（可从终端复制）': '[BluraySubtitle] --- exception (copy from terminal) ---',

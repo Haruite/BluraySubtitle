@@ -150,8 +150,13 @@ class BluraySubtitleServiceBase:
         raise NotImplementedError
 
     @staticmethod
-    def _split_parts_windows_from_mkvmerge_cmd(cmd: str) -> list[tuple[float, float]]:
+    def _split_parts_windows_from_mkvmerge_cmd(cmd: str, *, mpls_stem: Optional[str] = None) -> list[tuple[float, float]]:
         """Stub for `_split_parts_windows_from_mkvmerge_cmd`."""
+        raise NotImplementedError
+
+    @staticmethod
+    def _split_parts_windows_from_mkvmerge_one_line(line: str) -> list[tuple[float, float]]:
+        """Stub for ``_split_parts_windows_from_mkvmerge_one_line``."""
         raise NotImplementedError
 
     @staticmethod
@@ -309,12 +314,48 @@ class BluraySubtitleServiceBase:
         raise NotImplementedError
 
     @staticmethod
+    def _remux_cmd_shell_lines(cmd: str) -> list[str]:
+        """Stub for ``_remux_cmd_shell_lines``."""
+        raise NotImplementedError
+
+    @staticmethod
     def _split_segment_count_from_mkvmerge_cmd(cmd: str) -> Optional[int]:
         """
         Best-effort parse of mkvmerge ``--split``.
         Supports ``--split parts:...`` and ``--split chapters:...``.
         Returns segment count when recognizable; otherwise None.
         """
+        raise NotImplementedError
+
+    @staticmethod
+    def _split_segment_count_from_mkvmerge_one_line(line: str) -> Optional[int]:
+        """Stub for ``_split_segment_count_from_mkvmerge_one_line``."""
+        raise NotImplementedError
+
+    @staticmethod
+    def _split_chapters_ints_from_mkvmerge_one_line(line: str) -> Optional[list[int]]:
+        """Stub for ``_split_chapters_ints_from_mkvmerge_one_line``."""
+        raise NotImplementedError
+
+    @staticmethod
+    def _mkvmerge_output_path_from_cmd(cmd: str) -> Optional[str]:
+        """Parse ``-o`` / ``--output`` path from a full mkvmerge command line (after template substitution)."""
+        raise NotImplementedError
+
+    @staticmethod
+    def _mkvmerge_output_path_from_line(line: str) -> Optional[str]:
+        """Stub for ``_mkvmerge_output_path_from_line``."""
+        raise NotImplementedError
+
+    @staticmethod
+    def _conf_selected_mpls_stem(conf: dict[str, int | str]) -> str:
+        """Stub for ``_conf_selected_mpls_stem``."""
+        raise NotImplementedError
+
+    @staticmethod
+    def _mkvmerge_expected_paths_for_shell_line(
+            line: str, confs: list[dict[str, int | str]], mpls_path_default: str) -> tuple[Optional[str], list[str]]:
+        """Stub for ``_mkvmerge_expected_paths_for_shell_line``."""
         raise NotImplementedError
 
     @staticmethod
@@ -340,6 +381,16 @@ class BluraySubtitleServiceBase:
     @staticmethod
     def _series_episode_segments_bounds(chapter: Chapter, confs: list[dict[str, int | str]]) -> list[tuple[int, int]]:
         """Same (start_chapter, end_chapter) pairs as the series branch of ``_make_main_mpls_remux_cmd``."""
+        raise NotImplementedError
+
+    @staticmethod
+    def _episode_float_windows_from_config_bounds(mpls_path: str, confs: list[dict[str, int | str]]) -> list[tuple[float, float]]:
+        """Stub for ``_episode_float_windows_from_config_bounds``."""
+        raise NotImplementedError
+
+    @staticmethod
+    def _time_windows_from_split_chapter_numbers(mpls_path: str, cuts: list[int]) -> list[tuple[float, float]]:
+        """Stub for ``_time_windows_from_split_chapter_numbers``."""
         raise NotImplementedError
 
     @staticmethod
@@ -420,8 +471,16 @@ class BluraySubtitleServiceBase:
         """Stub for `_build_main_episode_mkvs`."""
         raise NotImplementedError
 
+    def _remux_remap_chapter_skip_after_rename(self, mkv_files: list[str]) -> None:
+        """Stub for `_remux_remap_chapter_skip_after_rename`."""
+        raise NotImplementedError
+
     def _run_shell_command(self, cmd: str) -> int:
         """Stub for `_run_shell_command`."""
+        raise NotImplementedError
+
+    def _run_shell_command_detailed(self, cmd: str) -> tuple[int, list[int]]:
+        """Stub for `_run_shell_command_detailed`."""
         raise NotImplementedError
 
     def _run_single_command(self, cmd: str) -> int:

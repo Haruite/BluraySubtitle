@@ -230,29 +230,88 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                 mpls_path0 = mpls_key0 if mpls_key0.lower().endswith('.mpls') else (
                     mpls_key0 + '.mpls' if mpls_key0 else '')
                 cmd0 = str((first_conf or {}).get('main_remux_cmd') or '').strip()
-                windows = _svc_cls()._split_parts_windows_from_mkvmerge_cmd(cmd0)
-                if (not windows) and ('{parts_split}' in cmd0) and mpls_path0 and os.path.isfile(mpls_path0):
-                    ch_tmp = Chapter(mpls_path0)
-                    segs_tmp = _svc_cls()._series_episode_segments_bounds(ch_tmp, confs)
-                    _i2m_tmp, i2o_tmp = get_index_to_m2ts_and_offset(ch_tmp)
-                    rows_tmp = sum(map(len, ch_tmp.mark_info.values()))
-                    total_end_tmp = rows_tmp + 1
+                lines_chk = _svc_cls()._remux_cmd_shell_lines(cmd0)
+                used_multiline_bounds = False
+                if len(lines_chk) > 1:
+                    mb = _svc_cls()._chapter_split_bounds_from_multi_line_remux_cmd(cmd0, confs)
+                    if mb:
+                        split_bounds_override = mb
+                        used_multiline_bounds = True
+                        print(
+                            f'{self.t("[chapter-debug] ")}{self.t("multi-line remux_cmd chapter bounds (applied): ")}{len(mb)}'
+                        )
+                if not used_multiline_bounds:
+                    stem0 = ''
+                    if mpls_path0:
+                        stem0 = os.path.splitext(os.path.basename(mpls_path0.replace('\\', '/')))[0]
+                    has_split = any('--split' in ln.lower() for ln in lines_chk) if lines_chk else (
+                        '--split' in cmd0.lower())
+                    windows = _svc_cls()._split_parts_windows_from_mkvmerge_cmd(cmd0, mpls_stem=stem0 or None)
+                    if not windows:
+                        for ln in lines_chk:
+                            cuts_ln = _svc_cls()._split_chapters_ints_from_mkvmerge_one_line(ln)
+                            if not cuts_ln:
+                                continue
+                            stem_ln = _svc_cls()._mkvmerge_line_source_mpls_stem(ln)
+                            mpath_use = ''
+                            for c in confs:
+                                raw_m = str(c.get('selected_mpls') or '').strip()
+                                sc = os.path.splitext(os.path.basename(raw_m.replace('\\', '/')))[0]
+                                if stem_ln and sc and stem_ln.lower() != sc.lower():
+                                    continue
+                                cand = raw_m if raw_m.lower().endswith('.mpls') else (raw_m + '.mpls' if raw_m else '')
+                                if cand and os.path.isfile(cand):
+                                    mpath_use = cand
+                                    break
+                            if not mpath_use and mpls_path0 and os.path.isfile(mpls_path0):
+                                mpath_use = mpls_path0
+                            if mpath_use:
+                                windows = _svc_cls()._time_windows_from_split_chapter_numbers(mpath_use, cuts_ln)
+                                if windows:
+                                    break
+                    if (not windows) and ('{parts_split}' in cmd0) and mpls_path0 and os.path.isfile(mpls_path0):
+                        ch_tmp = Chapter(mpls_path0)
+                        segs_tmp = _svc_cls()._series_episode_segments_bounds(ch_tmp, confs)
+                        _i2m_tmp, i2o_tmp = get_index_to_m2ts_and_offset(ch_tmp)
+                        rows_tmp = sum(map(len, ch_tmp.mark_info.values()))
+                        total_end_tmp = rows_tmp + 1
 
-                    def _off_tmp(idx: int) -> float:
-                        if idx >= total_end_tmp:
-                            return ch_tmp.get_total_time()
-                        return float(i2o_tmp.get(idx, 0.0))
+                        def _off_tmp(idx: int) -> float:
+                            if idx >= total_end_tmp:
+                                return ch_tmp.get_total_time()
+                            return float(i2o_tmp.get(idx, 0.0))
 
-                    windows = [(float(_off_tmp(s0)), float(_off_tmp(e0))) for s0, e0 in segs_tmp]
-                if windows and mpls_path0 and os.path.isfile(mpls_path0):
-                    split_bounds_override = _svc_cls()._chapter_bounds_from_split_windows(mpls_path0, windows)
+                        windows = [(float(_off_tmp(s0)), float(_off_tmp(e0))) for s0, e0 in segs_tmp]
+                    if (not windows) and has_split and mpls_path0 and os.path.isfile(mpls_path0) and confs:
+                        windows = _svc_cls()._episode_float_windows_from_config_bounds(mpls_path0, confs)
+                        if windows:
+                            print(
+                                f'{self.t("[chapter-debug] ")}{self.t("derived split timeline from table2 chapter bounds: ")}{len(windows)}'
+                            )
+                    if windows and mpls_path0 and os.path.isfile(mpls_path0):
+                        split_bounds_override = _svc_cls()._chapter_bounds_from_split_windows(mpls_path0, windows)
             except Exception:
                 split_bounds_override = []
+            skip_chapter_norm: set[str] = set()
+            try:
+                skip_chapter_norm = set(getattr(self, '_remux_chapter_skip_paths', None) or set())
+            except Exception:
+                skip_chapter_norm = set()
             for i in range(n):
                 if cancel_event and cancel_event.is_set():
                     raise _Cancelled()
                 conf = confs[i]
                 mkv_path = paths[i]
+                try:
+                    if skip_chapter_norm and os.path.normcase(os.path.normpath(mkv_path)) in skip_chapter_norm:
+                        print(
+                            f'{self.t("[chapter-debug] ")}{self.t("skip chapters (remux failed or split-check for this output): ")}{mkv_path}'
+                        )
+                        done += 1
+                        self._progress(int(done / max(total_mkv, 1) * 1000))
+                        continue
+                except Exception:
+                    pass
                 mpls_key = str(conf.get('selected_mpls') or '').strip()
                 if not mpls_key:
                     continue
@@ -297,12 +356,11 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
             return None
 
     @staticmethod
-    def _split_parts_windows_from_mkvmerge_cmd(cmd: str) -> list[tuple[float, float]]:
-        raw = (cmd or '').strip()
+    def _split_parts_windows_from_mkvmerge_one_line(line: str) -> list[tuple[float, float]]:
+        raw = (line or '').strip()
         if not raw:
             return []
-        text = re.sub(r'[\r\n]+', ' ', raw)
-        m = re.search(r'--split\s+("([^"]+)"|\'([^\']+)\'|(\S+))', text)
+        m = re.search(r'--split\s+("([^"]+)"|\'([^\']+)\'|(\S+))', raw)
         if not m:
             return []
         spec = (m.group(2) or m.group(3) or m.group(4) or '').strip()
@@ -325,6 +383,114 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                 continue
             out.append((a, b))
         return out
+
+    @staticmethod
+    def _split_parts_windows_from_mkvmerge_cmd(cmd: str, *, mpls_stem: Optional[str] = None) -> list[tuple[float, float]]:
+        """Parse ``--split parts:`` time windows; newline-split ``remux_cmd``, optional ``mpls_stem`` filters lines."""
+        lines = _svc_cls()._remux_cmd_shell_lines(cmd)
+        if not lines:
+            return []
+        filt = (mpls_stem or '').strip()
+        if len(lines) == 1:
+            return _svc_cls()._split_parts_windows_from_mkvmerge_one_line(lines[0])
+        acc: list[tuple[float, float]] = []
+        for ln in lines:
+            if filt:
+                st = _svc_cls()._mkvmerge_line_source_mpls_stem(ln)
+                if st.lower() != filt.lower():
+                    continue
+            acc.extend(_svc_cls()._split_parts_windows_from_mkvmerge_one_line(ln))
+        if acc:
+            return acc
+        if filt:
+            for ln in lines:
+                w = _svc_cls()._split_parts_windows_from_mkvmerge_one_line(ln)
+                if w:
+                    return w
+        return []
+
+    @staticmethod
+    def _mkvmerge_line_source_mpls_stem(line: str) -> str:
+        """Playlist stem (e.g. ``00001``) from the last ``.mpls`` path token on one mkvmerge command line."""
+        line = (line or '').strip()
+        if not line:
+            return ''
+        named = re.findall(r'["\']([^"\']+\.(?:mpls|MPLS))["\']', line)
+        if named:
+            return os.path.splitext(os.path.basename(named[-1]))[0]
+        bare = re.findall(r'(?:^|\s)((?:[A-Za-z]:)?[^\s"\']+\.(?:mpls|MPLS))(?=\s|$)', line, re.I)
+        if bare:
+            return os.path.splitext(os.path.basename(bare[-1]))[0]
+        return ''
+
+    @staticmethod
+    def _chapter_split_bounds_from_multi_line_remux_cmd(
+            cmd0: str, confs: list[dict[str, object]],
+    ) -> list[tuple[int, int]]:
+        """
+        When ``main_remux_cmd`` has multiple lines (separate mkvmerge invocations), map each line's
+        ``--split parts:`` windows to episode rows in order: match playlist stem on the line to
+        ``selected_mpls``, then convert time windows to chapter bounds on that playlist.
+        """
+        lines = _svc_cls()._remux_cmd_shell_lines(cmd0)
+        if len(lines) <= 1:
+            return []
+        bounds_out: list[tuple[int, int]] = []
+        ci = 0
+        for ln in lines:
+            wins = _svc_cls()._split_parts_windows_from_mkvmerge_one_line(ln)
+            stem_ln = _svc_cls()._mkvmerge_line_source_mpls_stem(ln)
+            if not wins and '--split' in ln.lower():
+                cuts_ln = _svc_cls()._split_chapters_ints_from_mkvmerge_one_line(ln)
+                sub_confs: list[dict[str, object]] = []
+                for c in confs:
+                    raw_m = str(c.get('selected_mpls') or '').strip()
+                    sc = os.path.splitext(os.path.basename(raw_m.replace('\\', '/')))[0]
+                    if stem_ln and sc and stem_ln.lower() != sc.lower():
+                        continue
+                    sub_confs.append(c)
+                if stem_ln and not sub_confs:
+                    continue
+                if not sub_confs:
+                    sub_confs = list(confs)
+                sub_confs.sort(key=lambda c: int(c.get('chapter_index') or c.get('start_at_chapter') or 0))
+                mpath = ''
+                for c in sub_confs:
+                    kk = str(c.get('selected_mpls') or '').strip()
+                    cand = kk if kk.lower().endswith('.mpls') else (kk + '.mpls' if kk else '')
+                    if cand and os.path.isfile(cand):
+                        mpath = cand
+                        break
+                if cuts_ln and mpath:
+                    wins = _svc_cls()._time_windows_from_split_chapter_numbers(mpath, cuts_ln)
+                if not wins and mpath and sub_confs:
+                    wins = _svc_cls()._episode_float_windows_from_config_bounds(mpath, sub_confs)
+            if not wins:
+                continue
+            for w0, w1 in wins:
+                placed = False
+                j = ci
+                while j < len(confs):
+                    conf = confs[j]
+                    raw_m = str(conf.get('selected_mpls') or '').strip()
+                    stem_c = os.path.splitext(os.path.basename(raw_m.replace('\\', '/')))[0]
+                    if stem_ln and stem_c and stem_ln.lower() != stem_c.lower():
+                        j += 1
+                        continue
+                    mpls_key = raw_m
+                    mpls_path = mpls_key if mpls_key.lower().endswith('.mpls') else (mpls_key + '.mpls' if mpls_key else '')
+                    if not mpls_path or not os.path.isfile(mpls_path):
+                        j += 1
+                        continue
+                    bb = _svc_cls()._chapter_bounds_from_split_windows(mpls_path, [(w0, w1)])
+                    if bb:
+                        bounds_out.append(bb[0])
+                    ci = j + 1
+                    placed = True
+                    break
+                if not placed:
+                    break
+        return bounds_out
 
     @staticmethod
     def _chapter_bounds_from_split_windows(mpls_path: str, windows: list[tuple[float, float]]) -> list[tuple[int, int]]:
@@ -553,10 +719,27 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
             main_mpls_path = ''
             playlist_dir = ''
             stream_dir = ''
+
+            def _resolve_main_mpls_from_confs() -> str:
+                if not confs:
+                    return ''
+                smain = str(confs[0].get('selected_mpls') or '').strip()
+                if not smain:
+                    return ''
+                if os.path.isabs(smain) or ('/' in smain.replace('\\', '/')):
+                    return smain if smain.lower().endswith('.mpls') else smain + '.mpls'
+                base = os.path.basename(smain.replace('\\', '/'))
+                if not base.lower().endswith('.mpls'):
+                    base = base + '.mpls'
+                if playlist_dir and os.path.isdir(playlist_dir):
+                    return os.path.normpath(os.path.join(playlist_dir, base))
+                return base if base.lower().endswith('.mpls') else base + '.mpls'
+
             if bdmv_root and os.path.isdir(os.path.normpath(os.path.join(bdmv_root, 'BDMV', 'PLAYLIST'))):
                 root_n = os.path.normpath(bdmv_root)
                 playlist_dir = os.path.join(root_n, 'BDMV', 'PLAYLIST')
                 stream_dir = os.path.join(root_n, 'BDMV', 'STREAM')
+                main_mpls_path = _resolve_main_mpls_from_confs()
             elif confs:
                 smain = str(confs[0].get('selected_mpls') or '').strip()
                 if smain:
@@ -768,32 +951,39 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
             custom_chapter = False
             custom_parts = ''
             if re.search(r'(beginning|chapter_\d+)_to_(chapter_\d+|ending)', output_name, re.IGNORECASE):
-                custom_chapter = True
-                # Generate custom chapter file
-                self._write_custom_chapter_for_segment(main_mpls_path, chapter_txt, output_name)
-                print(
-                    f'{self.t("[chapter-debug] ")}{self.t("custom SP chapter file ready: ")}{chapter_txt} ({output_name})')
-                try:
-                    ch_tmp = Chapter(main_mpls_path)
-                    _i2m, i2o = get_index_to_m2ts_and_offset(ch_tmp)
-                    rows_tmp = sum(map(len, ch_tmp.mark_info.values()))
-                    total_end = rows_tmp + 1
-                    m = re.search(r'(beginning|chapter_(\d+))_to_(chapter_(\d+)|ending)', output_name, re.IGNORECASE)
-                    if m:
-                        start_idx = 1 if (m.group(1) or '').lower() == 'beginning' else int(m.group(2) or 1)
-                        end_idx = total_end if (m.group(3) or '').lower() == 'ending' else int(m.group(4) or total_end)
-                        start_idx = max(1, min(start_idx, total_end))
-                        end_idx = max(start_idx + 1, min(end_idx, total_end))
-                        st = get_time_str(float(i2o.get(start_idx, 0.0)))
-                        ed = get_time_str(float(ch_tmp.get_total_time() if end_idx >= total_end else i2o.get(end_idx,
-                                                                                                             ch_tmp.get_total_time())))
-                        if st == '0':
-                            st = '00:00:00.000'
-                        if ed == '0':
-                            ed = '00:00:00.000'
-                        custom_parts = f'{st}-{ed}'
-                except Exception:
-                    custom_parts = ''
+                if not (main_mpls_path and os.path.isfile(main_mpls_path)):
+                    print(
+                        f'[sp-mux-debug] skip custom chapter: main_mpls_path missing or not a file '
+                        f'(got {main_mpls_path!r}); entry bdmv={sp_bdmv_index} mpls_file={mpls_file!r} '
+                        f'bdmv_root={bdmv_root!r} conf0_mpls={(confs[0].get("selected_mpls") if confs else None)!r}'
+                    )
+                    custom_chapter = False
+                else:
+                    custom_chapter = True
+                    self._write_custom_chapter_for_segment(main_mpls_path, chapter_txt, output_name)
+                    print(
+                        f'{self.t("[chapter-debug] ")}{self.t("custom SP chapter file ready: ")}{chapter_txt} ({output_name})')
+                    try:
+                        ch_tmp = Chapter(main_mpls_path)
+                        _i2m, i2o = get_index_to_m2ts_and_offset(ch_tmp)
+                        rows_tmp = sum(map(len, ch_tmp.mark_info.values()))
+                        total_end = rows_tmp + 1
+                        m = re.search(r'(beginning|chapter_(\d+))_to_(chapter_(\d+)|ending)', output_name, re.IGNORECASE)
+                        if m:
+                            start_idx = 1 if (m.group(1) or '').lower() == 'beginning' else int(m.group(2) or 1)
+                            end_idx = total_end if (m.group(3) or '').lower() == 'ending' else int(m.group(4) or total_end)
+                            start_idx = max(1, min(start_idx, total_end))
+                            end_idx = max(start_idx + 1, min(end_idx, total_end))
+                            st = get_time_str(float(i2o.get(start_idx, 0.0)))
+                            ed = get_time_str(float(ch_tmp.get_total_time() if end_idx >= total_end else i2o.get(end_idx,
+                                                                                                                 ch_tmp.get_total_time())))
+                            if st == '0':
+                                st = '00:00:00.000'
+                            if ed == '0':
+                                ed = '00:00:00.000'
+                            custom_parts = f'{st}-{ed}'
+                    except Exception:
+                        custom_parts = ''
 
             mux_chapter_txt = ''
             if use_chapter_language or custom_chapter:
@@ -953,6 +1143,12 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
 
     def _write_custom_chapter_for_segment(self, mpls_path: str, chapter_txt_path: str, output_name: str):
         """Parse SP suffix like beginning_to_chapter_4, chapter_33_to_chapter_40, chapter_33_to_ending; same bounds as --split parts."""
+        if not (mpls_path and str(mpls_path).strip()):
+            print(f'[sp-mux-debug] _write_custom_chapter_for_segment: empty mpls_path output_name={output_name!r}')
+            return
+        if not os.path.isfile(mpls_path):
+            print(f'[sp-mux-debug] _write_custom_chapter_for_segment: not a file mpls_path={mpls_path!r}')
+            return
         m = re.search(r'(beginning|chapter_(\d+))_to_(chapter_(\d+)|ending)', output_name, re.IGNORECASE)
         if not m:
             return

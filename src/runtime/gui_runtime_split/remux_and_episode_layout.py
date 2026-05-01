@@ -18,19 +18,41 @@ from src.domain import Subtitle
 from src.exports.utils import get_time_str, get_index_to_m2ts_and_offset, print_exc_terminal, get_folder_size
 from src.runtime.gui_runtime_classes.file_path_table_widget_item import FilePathTableWidgetItem
 from src.runtime.gui_runtime_classes.remux_worker import RemuxWorker
-from src.runtime.services import BluraySubtitle, _Cancelled
+from src.runtime.services import BluraySubtitle
 from .gui_base import BluraySubtitleGuiBase
 
 
 class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
+    @staticmethod
+    def _main_mpls_abs_path_for_remux_cmd_lookup(conf: dict[str, int | str]) -> str:
+        """Match ``cmd_map`` keys from table1: normpath(root/BDMV/PLAYLIST/<file>.mpls)."""
+        raw = str(conf.get('selected_mpls') or '').strip()
+        if not raw:
+            return ''
+        raw_n = os.path.normpath(raw.replace('/', os.sep))
+        low = raw_n.lower()
+        if low.endswith('.mpls') and os.path.isabs(raw_n):
+            return raw_n
+        stem = os.path.splitext(os.path.basename(raw_n))[0]
+        pl_name = f'{stem}.mpls'
+        folder = str(conf.get('folder') or '').strip()
+        if not folder:
+            return os.path.normpath(pl_name)
+        folder_n = os.path.normpath(folder.replace('/', os.sep))
+        return os.path.normpath(os.path.join(folder_n, 'BDMV', 'PLAYLIST', pl_name))
+
     def _apply_main_remux_cmds_to_configuration(self, configuration: dict[int, dict[str, int | str]]):
         cmd_map = self._collect_main_remux_cmd_map_from_table1()
         if not cmd_map:
             return
         for _, conf in configuration.items():
+            if not isinstance(conf, dict):
+                continue
             try:
-                mpls_path = os.path.normpath(str(conf.get('selected_mpls') or '') + '.mpls')
+                mpls_path = self._main_mpls_abs_path_for_remux_cmd_lookup(conf)
             except Exception:
+                continue
+            if not mpls_path:
                 continue
             cmd = cmd_map.get(mpls_path, '')
             if cmd:
@@ -98,9 +120,12 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 lines = [ln.strip() for ln in editor.toPlainText().splitlines() if ln.strip()]
                 if not lines:
                     continue
-                for i, mpls_path in enumerate(selected_paths):
-                    if i < len(lines):
-                        out[mpls_path] = lines[i]
+                if len(selected_paths) == 1:
+                    out[selected_paths[0]] = '\n'.join(lines)
+                else:
+                    for i, mpls_path in enumerate(selected_paths):
+                        if i < len(lines):
+                            out[mpls_path] = lines[i]
         return out
 
     def _build_main_remux_cmd_template(
@@ -131,12 +156,12 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 try:
                     conf_mpls_no_ext = os.path.normpath(str(conf.get('selected_mpls') or '').strip())
                     if int(conf.get('bdmv_index') or 0) == int(bdmv_index) and conf_mpls_no_ext == target_mpls_no_ext:
-                        confs.append(conf)
+                        # Use a detached copy; never mutate shared configuration in cmd preview generation.
+                        confs.append(dict(conf))
                 except Exception:
                     pass
         except Exception:
             confs = []
-        disc_count = 1
         try:
             latest = getattr(self, '_last_configuration_34', {}) or {}
             disc_count = len({int(v.get('bdmv_index') or 0) for v in latest.values() if isinstance(v, dict)}) or 1
@@ -148,17 +173,13 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             confs = sorted(confs, key=lambda c: int(c.get('chapter_index') or 0))
         except Exception:
             pass
+        seq_tag = ''
         if int(name_seq_total) > 1:
             try:
                 seq_tag = f'_{int(name_seq_index) + 1}'
-                for c in confs:
-                    base = str(c.get('disc_output_name') or '').strip()
-                    if base:
-                        c['disc_output_name'] = f'{base}{seq_tag}'
             except Exception:
-                pass
+                seq_tag = ''
         try:
-            top = ''
             try:
                 top = os.path.normpath(self.bdmv_folder_path.text().strip()) if hasattr(self,
                                                                                         'bdmv_folder_path') else ''
@@ -169,6 +190,22 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             bs.movie_mode = bool(self._is_movie_mode())
             cmd, _m2ts, _vol, _out, _mpls, _pid, _a, _s = bs._make_main_mpls_remux_cmd(confs, output_folder or '',
                                                                                        int(bdmv_index), disc_count)
+            if seq_tag:
+                def _inject_seq_into_output_path(text: str) -> str:
+                    marker = '-o "'
+                    p0 = text.find(marker)
+                    if p0 < 0:
+                        return text
+                    p0 += len(marker)
+                    p1 = text.find('"', p0)
+                    if p1 < 0:
+                        return text
+                    out_path = text[p0:p1]
+                    stem, ext = os.path.splitext(out_path)
+                    new_out = f'{stem}{seq_tag}{ext or ".mkv"}'
+                    return text[:p0] + new_out + text[p1:]
+
+                cmd = _inject_seq_into_output_path(cmd)
             return cmd
         except Exception:
             try:
@@ -830,7 +867,13 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             cur_folder_mains = self._folder_set_mains_from_selected(selected)
             affected = self._folders_with_changed_main_selection(selected, last_cfg)
             if sub_files or not last_cfg or not prev_set:
-                full_cfg = bs.generate_configuration_from_selected_mpls(selected)
+                if self.table2.rowCount() > 0:
+                    try:
+                        full_cfg = self._generate_configuration_from_ui_inputs()
+                    except Exception:
+                        full_cfg = bs.generate_configuration_from_selected_mpls(selected)
+                else:
+                    full_cfg = bs.generate_configuration_from_selected_mpls(selected)
                 configuration = {
                     i: dict(c) if isinstance(c, dict) else c
                     for i, (_, c) in enumerate(sorted((full_cfg or {}).items(), key=lambda kv: int(kv[0])))
@@ -867,7 +910,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                                 if cbi == bi:
                                     merged_list.append(dict(c))
                     configuration = {i: c for i, c in enumerate(merged_list)}
-                    BluraySubtitle._configuration_default_chapter_segments_checked(configuration)
+                    configuration = BluraySubtitle._finalize_configuration_episode_rows(configuration)
             self._selected_main_mpls_prev = current_set
             if configuration:
                 # Keep table2 regeneration, but reconnect main-toggle path to incremental table3 updates.
@@ -1244,7 +1287,6 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             self.exe_button.setEnabled(True)
             QMessageBox.information(self, " ", "Main MPLS is not selected")
             return
-        configuration: dict[int, dict[str, int | str]] = {}
         if self._is_movie_mode():
             self._refresh_movie_table2()
             configuration = getattr(self, '_movie_configuration', {}) or {}
@@ -1255,25 +1297,12 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 QMessageBox.information(self, " ", "Configuration is empty, skipping update")
                 return
         else:
-            try:
-                bs = BluraySubtitle(
-                    self.bdmv_folder_path.text(),
-                    sub_files,
-                    self.checkbox1.isChecked(),
-                    self._update_exe_button_progress,
-                    approx_episode_duration_seconds=self._get_approx_episode_duration_seconds()
-                )
-                configuration = bs.generate_configuration_from_selected_mpls(selected_mpls, cancel_event=cancel_event)
-            except _Cancelled:
+            configuration = self._configuration_snapshot_for_service_run()
+            if not configuration:
                 self._current_cancel_event = None
                 self._reset_exe_button()
                 self.exe_button.setEnabled(True)
-                return
-            except Exception as e:
-                self._current_cancel_event = None
-                self._reset_exe_button()
-                self.exe_button.setEnabled(True)
-                self._show_error_dialog(traceback.format_exc())
+                QMessageBox.information(self, ' ', 'Configuration is empty, skipping update')
                 return
         try:
             self._apply_main_remux_cmds_to_configuration(configuration)
