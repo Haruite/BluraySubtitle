@@ -1323,7 +1323,8 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             episode_subtitle_languages,
             movie_mode=self._is_movie_mode(),
             track_selection_config=getattr(self, '_track_selection_config', {}),
-            track_language_config=getattr(self, '_track_language_config', {})
+            track_language_config=getattr(self, '_track_language_config', {}),
+            track_lossless_audio_config=getattr(self, '_track_lossless_audio_config', {})
         )
         self._remux_worker.moveToThread(self._remux_thread)
         self._remux_thread.started.connect(self._remux_worker.run)

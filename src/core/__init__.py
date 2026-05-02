@@ -11,6 +11,7 @@ from .settings import ENCODE_REMUX_LABELS
 from .settings import ENCODE_REMUX_SP_LABELS
 from .settings import ENCODE_SP_LABELS
 from .settings import DIY_SP_LABELS
+from .settings import FDK_AAC_PATH
 from .settings import FFMPEG_PATH
 from .settings import FFPROBE_PATH
 from .settings import FLAC_PATH
@@ -35,6 +36,7 @@ __all__ = [
     "FLAC_PATH",
     "FLAC_THREADS",
     "find_mkvtoolinx",
+    "FDK_AAC_PATH",
     "FFMPEG_PATH",
     "FFPROBE_PATH",
     "X265_PATH",

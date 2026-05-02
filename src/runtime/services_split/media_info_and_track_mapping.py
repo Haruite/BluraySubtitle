@@ -15,7 +15,7 @@ import pycountry
 import soundfile
 
 from src.bdmv import M2TS, Chapter
-from src.core import FFPROBE_PATH, FFMPEG_PATH, FLAC_PATH, FLAC_THREADS, MKV_MERGE_PATH, MKV_PROP_EDIT_PATH, \
+from src.core import FDK_AAC_PATH, FFPROBE_PATH, FFMPEG_PATH, FLAC_PATH, FLAC_THREADS, MKV_MERGE_PATH, MKV_PROP_EDIT_PATH, \
     find_mkvtoolinx, get_mkvtoolnix_ui_language, mkvtoolnix_ui_language_arg
 from src.core.i18n import translate_text
 from src.exports.utils import get_effective_bit_depth, get_time_str, print_exc_terminal, get_index_to_m2ts_and_offset, \
@@ -1897,6 +1897,192 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         first_m2ts = m2ts_file.split(',')[0].strip() if m2ts_file else ''
         return f'sp::{bdmv_index}::m2ts::{first_m2ts}'
 
+    @staticmethod
+    def _canonical_remux_mkv_path(path: str) -> str:
+        """Stable comparison key for remux MKV paths (symlinks, slashes, Windows case)."""
+        p = os.path.normpath(str(path or ''))
+        try:
+            if os.path.isfile(p):
+                return os.path.normcase(os.path.normpath(os.path.realpath(p)))
+        except Exception:
+            pass
+        return os.path.normcase(p)
+
+    def _lossless_submap_from_track_cfg(self, cfg_all: dict[str, object], nk: str) -> dict[str, str]:
+        """Collect lossless codec choices for nk using exact and fuzzy mkv:: / mkvsp:: keys."""
+        out: dict[str, str] = {}
+        if not nk:
+            return out
+        want = self._canonical_remux_mkv_path(nk)
+
+        def ingest(sub: object) -> None:
+            if not isinstance(sub, dict):
+                return
+            for ix, v in sub.items():
+                vv = str(v or '').strip().lower()
+                if vv in ('flac', 'aac', 'opus'):
+                    out[str(ix)] = vv
+
+        mkv_key = f'mkv::{os.path.normpath(nk)}'
+        mkvsp_key = f'mkvsp::{os.path.normpath(nk)}'
+        for k in (mkv_key, mkvsp_key):
+            if k in cfg_all and isinstance(cfg_all[k], dict):
+                ingest(cfg_all[k])
+        if out:
+            return out
+
+        for prefix in ('mkv::', 'mkvsp::'):
+            for k, sub in cfg_all.items():
+                if not isinstance(k, str) or not k.startswith(prefix):
+                    continue
+                rest = k[len(prefix):].strip()
+                if not rest:
+                    continue
+                if self._canonical_remux_mkv_path(rest) != want:
+                    continue
+                ingest(sub)
+        if out:
+            return out
+
+        # Single remux key in project (common): user path differs slightly from stored key
+        remux_entries: list[tuple[str, dict[str, str]]] = []
+        for k, sub in cfg_all.items():
+            if not isinstance(k, str) or not isinstance(sub, dict):
+                continue
+            if not (k.startswith('mkv::') or k.startswith('mkvsp::')):
+                continue
+            d: dict[str, str] = {}
+            for ix, v in sub.items():
+                vv = str(v or '').strip().lower()
+                if vv in ('flac', 'aac', 'opus'):
+                    d[str(ix)] = vv
+            if d:
+                remux_entries.append((k, d))
+        if len(remux_entries) == 1:
+            ingest(remux_entries[0][1])
+
+        return out
+
+    def _resolve_lossless_audio_map_for_mkv(self, mkv_path: str, episode_i: int) -> dict[str, str]:
+        """Map mkv stream index (decimal string) -> flac|aac|opus from GUI track_lossless_audio_config."""
+        out: dict[str, str] = {}
+        cfg_all = getattr(self, 'track_lossless_audio_config', None) or {}
+        if not isinstance(cfg_all, dict):
+            return out
+        nk = os.path.normpath(str(mkv_path or ''))
+        out = self._lossless_submap_from_track_cfg(cfg_all, nk)
+        if out:
+            return out
+        try:
+            cfg = getattr(self, 'configuration', None) or {}
+            keys = sorted(cfg.keys(), key=lambda x: (0, int(x)) if str(x).isdigit() else (1, str(x)))
+            ix = int(episode_i) - 1
+            if keys and ix >= 0 and ix < len(keys):
+                c = cfg.get(keys[ix], {}) or {}
+                sm = str(c.get('selected_mpls') or '').strip()
+                if sm:
+                    if not sm.lower().endswith('.mpls'):
+                        sm = sm + '.mpls'
+                    base_name = os.path.basename(sm)
+                    for root in list(getattr(self, 'bluray_folders', None) or []):
+                        for cand in (
+                            os.path.normpath(os.path.join(root, 'BDMV', 'PLAYLIST', base_name)),
+                            os.path.normpath(os.path.join(root, 'BDMV', 'PLAYLIST', sm)),
+                        ):
+                            if os.path.isfile(cand):
+                                mk_main = f'main::{cand}'
+                                if mk_main in cfg_all and isinstance(cfg_all[mk_main], dict):
+                                    for ix2, v in (cfg_all[mk_main] or {}).items():
+                                        vv = str(v or '').strip().lower()
+                                        if vv in ('flac', 'aac', 'opus'):
+                                            out[str(ix2)] = vv
+                                return out
+                    bp = getattr(self, 'bdmv_path', '') or ''
+                    if bp:
+                        cand = os.path.normpath(os.path.join(bp, 'BDMV', 'PLAYLIST', base_name))
+                        if os.path.isfile(cand):
+                            mk_main = f'main::{cand}'
+                            if mk_main in cfg_all and isinstance(cfg_all[mk_main], dict):
+                                for ix2, v in (cfg_all[mk_main] or {}).items():
+                                    vv = str(v or '').strip().lower()
+                                    if vv in ('flac', 'aac', 'opus'):
+                                        out[str(ix2)] = vv
+                            return out
+        except Exception:
+            pass
+        return out
+
+    @staticmethod
+    def _lossless_codec_choice(map_by_idx: dict[str, str], idx_str: str) -> str:
+        v = str((map_by_idx or {}).get(str(idx_str), '') or '').strip().lower()
+        return v if v in ('flac', 'aac', 'opus') else 'flac'
+
+    @staticmethod
+    def _wav_channel_count(wav_path: str) -> int:
+        try:
+            info = soundfile.info(wav_path)
+            ch = int(info.channels)
+            if ch > 0:
+                return ch
+        except Exception:
+            pass
+        try:
+            proc = subprocess.run(
+                f'"{FFPROBE_PATH}" -v error -select_streams a:0 -show_entries stream=channels '
+                f'-of default=noprint_wrappers=1:nokey=1 "{wav_path}"',
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            ch = int((proc.stdout or '').strip())
+            if ch > 0:
+                return ch
+        except Exception:
+            pass
+        return 2
+
+    @staticmethod
+    def _ffmpeg_compress_wav_to_codec(wav_path: str, out_path: str, codec: str) -> bool:
+        codec = str(codec or 'flac').strip().lower()
+        if codec == 'flac':
+            try:
+                subprocess.run(
+                    f'"{FFMPEG_PATH}" -hide_banner -loglevel error -y -i "{wav_path}" -c:a flac "{out_path}"',
+                    shell=True,
+                    check=False,
+                )
+                return os.path.isfile(out_path) and os.path.getsize(out_path) > 0
+            except Exception:
+                return False
+        if codec == 'aac':
+            try:
+                exe = (FDK_AAC_PATH or '').strip()
+                if not exe:
+                    return False
+                subprocess.run(
+                    f'"{exe}" -m 5 "{wav_path}" -o "{out_path}"',
+                    shell=True,
+                    check=False,
+                )
+                return os.path.isfile(out_path) and os.path.getsize(out_path) > 0
+            except Exception:
+                return False
+        if codec == 'opus':
+            try:
+                nch = MediaInfoTrackMappingMixin._wav_channel_count(wav_path)
+                br = '128k' if nch <= 2 else '256k'
+                subprocess.run(
+                    f'"{FFMPEG_PATH}" -hide_banner -loglevel error -y -i "{wav_path}" -c:a libopus -b:a {br} '
+                    f'"{out_path}"',
+                    shell=True,
+                    check=False,
+                )
+                return os.path.isfile(out_path) and os.path.getsize(out_path) > 0
+            except Exception:
+                return False
+        return False
+
     def process_audio_to_flac(self, output_file, dst_folder, i, source_file: Optional[str] = None) -> tuple[
         int, dict[int, str], list[str]]:
         dolby_truehd_tracks = []
@@ -1907,6 +2093,11 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         self._audio_tracks_to_exclude = set()
         flac_files = []
         src_mkv = os.path.normpath(source_file) if source_file else os.path.normpath(output_file)
+        try:
+            ei = int(i) if i is not None else -1
+        except Exception:
+            ei = -1
+        la_map = self._resolve_lossless_audio_map_for_mkv(src_mkv, ei)
 
         def _track_id_from_path(p: str) -> Optional[int]:
             name = os.path.basename(p or '')
@@ -2143,69 +2334,109 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                                 os.remove(file1_path)
                                 os.rename(output_fn, file1_path)
 
-                        flac_file = os.path.splitext(file1_path)[0] + '.flac'
-                        subprocess.Popen(f'"{FLAC_PATH}" -8 -j {FLAC_THREADS} "{file1_path}" -o "{flac_file}"',
-                                         shell=True).wait()
-                        if os.path.exists(flac_file):
-                            delta = os.path.getsize(file1_path) - os.path.getsize(flac_file)
-                            os.remove(file1_path)
-                            print(
-                                f'{translate_text("Track ｢")}{file1_path}{translate_text("｣ compressed to FLAC to reduce size ")}{delta / 1024 ** 2:.3f} MiB')
-                            self._audio_tracks_to_exclude.add(track_id)
-                        else:
-                            subprocess.Popen(f'{FFMPEG_PATH} -i "{file1_path}" -c:a flac "{flac_file}"',
+                        codec_choice = self._lossless_codec_choice(la_map, str(track_id))
+                        base_no_ext = os.path.splitext(file1_path)[0]
+                        flac_file = base_no_ext + '.flac'
+                        if codec_choice == 'flac':
+                            subprocess.Popen(f'"{FLAC_PATH}" -8 -j {FLAC_THREADS} "{file1_path}" -o "{flac_file}"',
                                              shell=True).wait()
                             if os.path.exists(flac_file):
                                 delta = os.path.getsize(file1_path) - os.path.getsize(flac_file)
                                 os.remove(file1_path)
                                 print(
-                                    f'{translate_text("Track ｢")}{file1_path}{translate_text("｣ compressed to FLAC with ffmpeg to reduce size ")}{delta / 1024 ** 2:.3f} MiB')
+                                    f'{translate_text("Track ｢")}{file1_path}{translate_text("｣ compressed to FLAC to reduce size ")}{delta / 1024 ** 2:.3f} MiB')
+                                self._audio_tracks_to_exclude.add(track_id)
+                            else:
+                                subprocess.Popen(f'{FFMPEG_PATH} -i "{file1_path}" -c:a flac "{flac_file}"',
+                                                 shell=True).wait()
+                                if os.path.exists(flac_file):
+                                    delta = os.path.getsize(file1_path) - os.path.getsize(flac_file)
+                                    os.remove(file1_path)
+                                    print(
+                                        f'{translate_text("Track ｢")}{file1_path}{translate_text("｣ compressed to FLAC with ffmpeg to reduce size ")}{delta / 1024 ** 2:.3f} MiB')
+                                    self._audio_tracks_to_exclude.add(track_id)
+                        else:
+                            out_audio = base_no_ext + ('.m4a' if codec_choice == 'aac' else '.opus')
+                            if self._ffmpeg_compress_wav_to_codec(file1_path, out_audio, codec_choice):
+                                delta = os.path.getsize(file1_path) - os.path.getsize(out_audio)
+                                os.remove(file1_path)
+                                print(
+                                    f'{translate_text("Track ｢")}{file1_path}{translate_text("｣ compressed to ")}{codec_choice.upper()}{translate_text(" to reduce size ")}{delta / 1024 ** 2:.3f} MiB')
                                 self._audio_tracks_to_exclude.add(track_id)
                     else:
+                        codec_choice2 = self._lossless_codec_choice(la_map, str(track_id))
                         bits = track_bits.get(track_id, 24)
                         effective_bits = get_compressed_effective_depth(file1_path)
                         if effective_bits < bits:
                             print(
                                 f'{translate_text("Detected file ｢")}{file1_path}{translate_text("｣ actual effective bit depth is ")}{effective_bits} bits')
                         wav_file = os.path.splitext(file1_path)[0] + '.wav'
+                        # fdkaac only accepts classic RIFF WAVE; Wave64 (-f w64) yields "unsupported input file".
+                        pcm_container = 'wav' if codec_choice2 in ('aac', 'opus') else 'w64'
                         subprocess.Popen(
-                            f'{FFMPEG_PATH} -i "{file1_path}"  -c:a pcm_s{effective_bits}le -f w64 "{wav_file}"',
+                            f'"{FFMPEG_PATH}" -hide_banner -loglevel error -y -i "{file1_path}" '
+                            f'-c:a pcm_s{effective_bits}le -f {pcm_container} "{wav_file}"',
                             shell=True).wait()
-                        flac_file = os.path.splitext(file1_path)[0] + '.flac'
-                        subprocess.Popen(f'{FLAC_PATH} -8 -j {FLAC_THREADS} "{wav_file}" -o "{flac_file}"',
-                                         shell=True).wait()
-                        if os.path.exists(flac_file):
-                            if os.path.getsize(flac_file) > os.path.getsize(file1_path):
-                                print(
-                                    f'{translate_text("FLAC is larger than the original track, deleting ｢")}{flac_file}{translate_text("｣")}')
-                                os.remove(flac_file)
-                            else:
-                                delta = os.path.getsize(file1_path) - os.path.getsize(flac_file)
-                                print(
-                                    f'{translate_text("Track ｢")}{file1_path}{translate_text("｣ compressed to FLAC to reduce size ")}{delta / 1024 ** 2:.3f} MiB')
-                                self._audio_tracks_to_exclude.add(track_id)
-                        else:
-                            subprocess.Popen(f'{FFMPEG_PATH} -i "{wav_file}" -c:a flac "{flac_file}"',
+                        base_no_ext2 = os.path.splitext(file1_path)[0]
+                        flac_file = base_no_ext2 + '.flac'
+                        if codec_choice2 == 'flac':
+                            subprocess.Popen(f'{FLAC_PATH} -8 -j {FLAC_THREADS} "{wav_file}" -o "{flac_file}"',
                                              shell=True).wait()
                             if os.path.exists(flac_file):
                                 if os.path.getsize(flac_file) > os.path.getsize(file1_path):
                                     print(
-                                        f'{translate_text("ffmpeg-compressed FLAC is larger than the original track, deleting ｢")}{flac_file}{translate_text("｣")}')
+                                        f'{translate_text("FLAC is larger than the original track, deleting ｢")}{flac_file}{translate_text("｣")}')
                                     os.remove(flac_file)
                                 else:
                                     delta = os.path.getsize(file1_path) - os.path.getsize(flac_file)
                                     print(
-                                        f'{translate_text("Track ｢")}{file1_path}{translate_text("｣ compressed to FLAC with ffmpeg to reduce size ")}{delta / 1024 ** 2:.3f} MiB')
+                                        f'{translate_text("Track ｢")}{file1_path}{translate_text("｣ compressed to FLAC to reduce size ")}{delta / 1024 ** 2:.3f} MiB')
                                     self._audio_tracks_to_exclude.add(track_id)
                             else:
-                                print('\033[31mError: ffmpeg compression also failed\033[0m')
-                        os.remove(file1_path)
-                        os.remove(wav_file)
+                                subprocess.Popen(f'{FFMPEG_PATH} -i "{wav_file}" -c:a flac "{flac_file}"',
+                                                 shell=True).wait()
+                                if os.path.exists(flac_file):
+                                    if os.path.getsize(flac_file) > os.path.getsize(file1_path):
+                                        print(
+                                            f'{translate_text("ffmpeg-compressed FLAC is larger than the original track, deleting ｢")}{flac_file}{translate_text("｣")}')
+                                        os.remove(flac_file)
+                                    else:
+                                        delta = os.path.getsize(file1_path) - os.path.getsize(flac_file)
+                                        print(
+                                            f'{translate_text("Track ｢")}{file1_path}{translate_text("｣ compressed to FLAC with ffmpeg to reduce size ")}{delta / 1024 ** 2:.3f} MiB')
+                                        self._audio_tracks_to_exclude.add(track_id)
+                                else:
+                                    print('\033[31mError: ffmpeg compression also failed\033[0m')
+                            os.remove(file1_path)
+                            os.remove(wav_file)
+                        else:
+                            out_audio2 = base_no_ext2 + ('.m4a' if codec_choice2 == 'aac' else '.opus')
+                            if self._ffmpeg_compress_wav_to_codec(wav_file, out_audio2, codec_choice2):
+                                delta = os.path.getsize(file1_path) - os.path.getsize(out_audio2)
+                                try:
+                                    os.remove(file1_path)
+                                except Exception:
+                                    pass
+                                try:
+                                    os.remove(wav_file)
+                                except Exception:
+                                    pass
+                                print(
+                                    f'{translate_text("Track ｢")}{file1_path}{translate_text("｣ compressed to ")}{codec_choice2.upper()}{translate_text(" to reduce size ")}{delta / 1024 ** 2:.3f} MiB')
+                                self._audio_tracks_to_exclude.add(track_id)
+                            else:
+                                print('\033[31mError: lossless audio intermediate encode failed\033[0m')
+                                try:
+                                    os.remove(wav_file)
+                                except Exception:
+                                    pass
             flac_files = []
             base_prefix = os.path.splitext(os.path.basename(output_file or ''))[0]
+            _lossless_audio_suffixes = ('.flac', '.m4a', '.opus')
             for file1 in os.listdir(dst_folder):
                 file1_path = os.path.join(dst_folder, file1)
-                if not (os.path.isfile(file1_path) and file1_path.endswith('.flac')):
+                low = file1_path.lower()
+                if not (os.path.isfile(file1_path) and low.endswith(_lossless_audio_suffixes)):
                     continue
                 if base_prefix and (not file1.startswith(base_prefix)):
                     continue
@@ -2229,7 +2460,8 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                                 os.remove(file1_path)
                 for file1 in os.listdir(dst_folder):
                     file1_path = os.path.join(dst_folder, file1)
-                    if not (os.path.isfile(file1_path) and file1_path.endswith('.flac')):
+                    low2 = file1_path.lower()
+                    if not (os.path.isfile(file1_path) and low2.endswith(_lossless_audio_suffixes)):
                         continue
                     if base_prefix and (not file1.startswith(base_prefix)):
                         continue

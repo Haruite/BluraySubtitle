@@ -429,6 +429,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
     def _localized_headers_for_keys(self, keys: list[str]) -> list[str]:
         if getattr(self, '_language_code', CURRENT_UI_LANGUAGE) != 'zh':
             en = {
+                'audio_convert': 'audio convert',
                 'edit_tracks': 'tracks',
                 'extract': 'extract',
                 'edit_chapters': 'chapters',
@@ -463,6 +464,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
             'track_type': '类型',
             'codec_id': 'Codec ID',
             'convert': '转换',
+            'audio_convert': '音频转换',
             'channels': '声道',
             'bit_depth': '位深',
             'sampling_frequency': '采样率',

@@ -99,6 +99,7 @@ I18N_ZH_TO_EN = {
     '程序自带': 'Built-in',
     '系统': 'System',
     '快速': 'Fast',
+    '无损音频压缩': 'Lossless audio compression',
     '均衡': 'Balanced',
     '高质': 'High Quality',
     '极限': 'Extreme',

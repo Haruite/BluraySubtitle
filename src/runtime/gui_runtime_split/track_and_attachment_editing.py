@@ -89,12 +89,15 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             source_selected_indexes: set[str],
             source_convert_map: dict[str, str],
             source_language_map: dict[str, str],
+            source_lossless_audio_map: Optional[dict[str, str]] = None,
     ):
         source_path = os.path.normpath(source_mpls_path)
         source_root = self._bdmv_root_from_mpls_path(source_path)
         selected_pids: set[int] = set()
         convert_by_pid: dict[int, str] = {}
         language_by_pid: dict[int, str] = {}
+        lossless_by_pid: dict[int, str] = {}
+        slm = source_lossless_audio_map if isinstance(source_lossless_audio_map, dict) else {}
         for s in source_streams:
             idx = str(s.get('index', ''))
             pid = self._parse_stream_pid(s.get('pid'))
@@ -109,10 +112,16 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             lg = str(source_language_map.get(idx, '') or '').strip()
             if lg:
                 language_by_pid[pid] = lg
+            la = str(slm.get(idx, '') or '').strip().lower()
+            if la in ('flac', 'aac', 'opus'):
+                lossless_by_pid[pid] = la
 
         cfg_sel = getattr(self, '_track_selection_config', {})
         cfg_conv = getattr(self, '_track_convert_config', {})
         cfg_lang = getattr(self, '_track_language_config', {})
+        cfg_la = getattr(self, '_track_lossless_audio_config', {})
+        if not isinstance(cfg_la, dict):
+            cfg_la = {}
 
         for target_mpls_path in self._iter_all_mpls_paths_in_root(source_root):
             target_path = os.path.normpath(target_mpls_path)
@@ -132,11 +141,13 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             existing_selected = set((existing_sel.get('audio') or []) + (existing_sel.get('subtitle') or []))
             existing_convert = dict(cfg_conv.get(target_key) or {})
             existing_language = dict(cfg_lang.get(target_key) or {})
+            existing_lossless = dict(cfg_la.get(target_key) or {})
 
             audio: list[str] = list(existing_sel.get('audio') or [])
             subtitle: list[str] = list(existing_sel.get('subtitle') or [])
             t_convert: dict[str, str] = dict(existing_convert)
             t_language: dict[str, str] = dict(existing_language)
+            t_lossless: dict[str, str] = dict(existing_lossless)
             audio_set = set(audio)
             subtitle_set = set(subtitle)
             for st in target_streams:
@@ -150,7 +161,8 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                     elif ctype == 'subtitle' and idx not in subtitle_set:
                         subtitle.append(idx)
                         subtitle_set.add(idx)
-                elif pid is not None and pid in set(convert_by_pid.keys()) | set(language_by_pid.keys()):
+                elif pid is not None and pid in (
+                        set(convert_by_pid.keys()) | set(language_by_pid.keys()) | set(lossless_by_pid.keys())):
                     # Same PID exists in source but not selected now -> deselect only this PID.
                     if idx in audio_set:
                         audio = [x for x in audio if x != idx]
@@ -162,14 +174,18 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                     t_convert[idx] = convert_by_pid[pid]
                 if (pid is not None) and (pid in language_by_pid):
                     t_language[idx] = language_by_pid[pid]
+                if (pid is not None) and (pid in lossless_by_pid):
+                    t_lossless[idx] = lossless_by_pid[pid]
 
             cfg_sel[target_key] = {'audio': audio, 'subtitle': subtitle}
             cfg_conv[target_key] = t_convert
             cfg_lang[target_key] = t_language
+            cfg_la[target_key] = t_lossless
 
         self._track_selection_config = cfg_sel
         self._track_convert_config = cfg_conv
         self._track_language_config = cfg_lang
+        self._track_lossless_audio_config = cfg_la
 
     def _conversion_options_for_stream(self, stream: dict[str, object], is_mkvinfo: bool) -> list[str]:
         codec_type = str(stream.get('codec_type') or '').strip().lower()
@@ -207,6 +223,96 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             if bit_depth >= 24:
                 options.append('lpcm(24bit)')
         return options
+
+    @staticmethod
+    def _is_lossless_audio_stream_dict(s: dict[str, object]) -> bool:
+        codec_type = str(s.get('codec_type') or '').strip().lower()
+        if codec_type != 'audio':
+            return False
+        codec_id = str(s.get('codec_id') or '').strip().upper()
+        codec_name = str(s.get('codec_name') or '').strip().lower()
+        try:
+            bit_depth = int(str(s.get('bit_depth') or '').strip())
+        except Exception:
+            bit_depth = 0
+        is_pcm = (
+            codec_id in ('A_PCM/INT/LIT', 'A_PCM/INT/BIG')
+            or codec_name in ('lpcm', 'pcm_bluray')
+            or codec_name.startswith('pcm')
+        )
+        return bool(
+            is_pcm or codec_id in ('A_TRUEHD', 'A_MLP', 'A_FLAC') or codec_id.startswith('A_DTS')
+        )
+
+    def _streams_for_track_config_key(self, key: str) -> list[dict[str, object]]:
+        k = str(key or '')
+        try:
+            if k.startswith('mkv::'):
+                p = k[len('mkv::'):]
+                if p and os.path.isfile(p):
+                    return self._read_mkvinfo_tracks(p)
+            if k.startswith('mkvsp::'):
+                p = k[len('mkvsp::'):]
+                if p and os.path.isfile(p):
+                    return self._read_mkvinfo_tracks(p)
+            if k.startswith('main::'):
+                mpls = k[len('main::'):]
+                m2 = self._get_first_m2ts_for_mpls(mpls)
+                if m2 and os.path.isfile(m2):
+                    return self._read_m2ts_track_info(m2)
+            if k.startswith('sp::'):
+                parts = k.split('::')
+                if len(parts) >= 4:
+                    try:
+                        bdmv_index = int(parts[1])
+                    except Exception:
+                        bdmv_index = 0
+                    kind = parts[2]
+                    rest = '::'.join(parts[3:])
+                    if kind == 'mpls' and rest:
+                        playlist_dir = self._get_playlist_dir_for_bdmv_index(bdmv_index)
+                        if playlist_dir:
+                            mpls = os.path.normpath(os.path.join(playlist_dir, os.path.basename(rest)))
+                            if os.path.isfile(mpls):
+                                m2 = self._get_first_m2ts_for_mpls(mpls)
+                                if m2 and os.path.isfile(m2):
+                                    return self._read_m2ts_track_info(m2)
+                    elif kind == 'm2ts' and rest:
+                        stream_dir = self._get_stream_dir_for_bdmv_index(bdmv_index)
+                        if stream_dir:
+                            m2 = os.path.normpath(os.path.join(stream_dir, os.path.basename(rest)))
+                            if os.path.isfile(m2):
+                                return self._read_m2ts_track_info(m2)
+        except Exception:
+            pass
+        return []
+
+    def apply_lossless_audio_preset_globally(self, codec: str) -> None:
+        c = str(codec or 'flac').strip().lower()
+        if c not in ('flac', 'aac', 'opus'):
+            c = 'flac'
+        cfg_out = getattr(self, '_track_lossless_audio_config', None)
+        if not isinstance(cfg_out, dict):
+            cfg_out = {}
+        sel = getattr(self, '_track_selection_config', None) or {}
+        keys: set[str] = set()
+        if isinstance(sel, dict):
+            keys |= set(sel.keys())
+        keys |= set(cfg_out.keys())
+        for key in sorted(keys):
+            streams = self._streams_for_track_config_key(str(key))
+            if not streams:
+                continue
+            m: dict[str, str] = dict(cfg_out.get(key) or {})
+            for s in streams:
+                if not self._is_lossless_audio_stream_dict(s):
+                    continue
+                ix = str(s.get('index', ''))
+                if not ix:
+                    continue
+                m[ix] = c
+            cfg_out[str(key)] = m
+        self._track_lossless_audio_config = cfg_out
 
     def _codec_name_from_codec_id(self, codec_id: str) -> str:
         cid = str(codec_id or '').strip()
@@ -1013,7 +1119,8 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             pid_lang: Optional[dict[int, str]] = None,
             source_mkv: Optional[str] = None,
             convert_map: Optional[dict[str, str]] = None,
-            language_map: Optional[dict[str, str]] = None
+            language_map: Optional[dict[str, str]] = None,
+            lossless_audio_map: Optional[dict[str, str]] = None,
     ) -> Optional[set[str]]:
         dlg = QDialog(self)
         dlg.setWindowTitle(title)
@@ -1022,19 +1129,25 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
         table = QTableWidget(dlg)
         self._set_compact_table(table, row_height=22, header_height=64)
         is_mkvinfo = any(('codec_id' in (s or {})) or ('track_id' in (s or {})) for s in (streams or []))
-        show_convert_col = (self.get_selected_function_id() == 5)
+        show_legacy_convert = (self.get_selected_function_id() == 5)
+        show_audio_convert_col = self.get_selected_function_id() in (4, 5)
+        la_in = lossless_audio_map if isinstance(lossless_audio_map, dict) else {}
         if is_mkvinfo:
             cols = ['track_number', 'select', 'track_uid', 'track_type', 'language', 'codec_id']
-            if show_convert_col:
+            if show_legacy_convert:
                 cols.append('convert')
+            if show_audio_convert_col:
+                cols.append('audio_convert')
             cols.append('extract')
         else:
             cols = [
                 'index', 'select', 'pid', 'program_number', 'pmt_pid', 'is_pcr_pid',
                 'stream_type', 'language', 'codec_type', 'codec_name'
             ]
-            if show_convert_col:
+            if show_legacy_convert:
                 cols.append('convert')
+            if show_audio_convert_col:
+                cols.append('audio_convert')
             cols.append('language_from_pmt_descriptor')
         table.setColumnCount(len(cols))
         self._set_table_headers(table, cols)
@@ -1061,6 +1174,18 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             table.setCellWidget(r, cols.index('select'), select_btn)
             for c, key in enumerate(cols):
                 if key == 'select':
+                    continue
+                if key == 'audio_convert':
+                    if self._is_lossless_audio_stream_dict(s):
+                        cb = QComboBox(table)
+                        for opt in ('flac', 'aac', 'opus'):
+                            cb.addItem(opt)
+                        idx_text = str(s.get('index', ''))
+                        prev = str(la_in.get(idx_text, '') or '').strip().lower()
+                        cb.setCurrentText(prev if prev in ('flac', 'aac', 'opus') else 'flac')
+                        table.setCellWidget(r, c, cb)
+                    else:
+                        table.setItem(r, c, QTableWidgetItem(''))
                     continue
                 if key == 'extract':
                     if source_mkv and is_mkvinfo:
@@ -1158,6 +1283,17 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                         if v and v != self.t('No conversion'):
                             conversion_map[idx] = v
             self._last_track_convert_map = conversion_map
+            lossless_audio_map_out: dict[str, str] = {}
+            if 'audio_convert' in cols:
+                lac = cols.index('audio_convert')
+                for r, st in enumerate(streams):
+                    idx = str(st.get('index', ''))
+                    cb = table.cellWidget(r, lac)
+                    if isinstance(cb, QComboBox):
+                        v = (cb.currentText() or '').strip().lower()
+                        if v in ('flac', 'aac', 'opus'):
+                            lossless_audio_map_out[idx] = v
+            self._last_track_lossless_audio_map = lossless_audio_map_out
             if 'language' in cols:
                 lang_col_for_save = cols.index('language')
                 for r, st in enumerate(streams):
@@ -1387,6 +1523,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 cfg[key] = {'audio': a, 'subtitle': s}
             selected = set((cfg.get(key, {}).get('audio') or []) + (cfg.get(key, {}).get('subtitle') or []))
             convert_map = dict((conv_cfg_all.get(key) or {}))
+            la_map = dict((getattr(self, '_track_lossless_audio_config', {}).get(key) or {}))
             selected_after = self._show_tracks_dialog(
                 self.t('edit tracks'),
                 streams,
@@ -1394,7 +1531,8 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 pid_lang,
                 source_mkv=src,
                 convert_map=convert_map,
-                language_map=dict((getattr(self, '_track_language_config', {}).get(key) or {}))
+                language_map=dict((getattr(self, '_track_language_config', {}).get(key) or {})),
+                lossless_audio_map=la_map,
             )
             if selected_after is None:
                 return
@@ -1413,6 +1551,11 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             conv_cfg = getattr(self, '_track_convert_config', {})
             conv_cfg[key] = dict(getattr(self, '_last_track_convert_map', {}) or {})
             self._track_convert_config = conv_cfg
+            la_cfg = getattr(self, '_track_lossless_audio_config', {}) or {}
+            if not isinstance(la_cfg, dict):
+                la_cfg = {}
+            la_cfg[key] = dict(getattr(self, '_last_track_lossless_audio_map', {}) or {})
+            self._track_lossless_audio_config = la_cfg
             lang_cfg = getattr(self, '_track_language_config', {})
             lang_cfg[key] = dict(getattr(self, '_last_track_language_map', {}) or {})
             self._track_language_config = lang_cfg
@@ -1436,13 +1579,15 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             cfg = getattr(self, '_track_selection_config', {}).get(key, {})
             selected = set((cfg.get('audio') or []) + (cfg.get('subtitle') or []))
             convert_map = dict((getattr(self, '_track_convert_config', {}).get(key) or {}))
+            la_map = dict((getattr(self, '_track_lossless_audio_config', {}).get(key) or {}))
             selected_after = self._show_tracks_dialog(
                 self.t('edit tracks'),
                 streams,
                 selected,
                 pid_lang,
                 convert_map=convert_map,
-                language_map=dict((getattr(self, '_track_language_config', {}).get(key) or {}))
+                language_map=dict((getattr(self, '_track_language_config', {}).get(key) or {})),
+                lossless_audio_map=la_map,
             )
             if selected_after is None:
                 return
@@ -1461,6 +1606,11 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             conv_cfg = getattr(self, '_track_convert_config', {})
             conv_cfg[key] = dict(getattr(self, '_last_track_convert_map', {}) or {})
             self._track_convert_config = conv_cfg
+            la_cfg = getattr(self, '_track_lossless_audio_config', {}) or {}
+            if not isinstance(la_cfg, dict):
+                la_cfg = {}
+            la_cfg[key] = dict(getattr(self, '_last_track_lossless_audio_map', {}) or {})
+            self._track_lossless_audio_config = la_cfg
             lang_cfg = getattr(self, '_track_language_config', {})
             lang_cfg[key] = dict(getattr(self, '_last_track_language_map', {}) or {})
             self._track_language_config = lang_cfg
@@ -1471,6 +1621,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                     set(selected_after),
                     dict(getattr(self, '_last_track_convert_map', {}) or {}),
                     dict(getattr(self, '_last_track_language_map', {}) or {}),
+                    dict(getattr(self, '_last_track_lossless_audio_map', {}) or {}),
                 )
             self._refresh_table1_remux_cmds()
             if self.get_selected_function_id() == 5:
@@ -1548,13 +1699,15 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             cur = cfg.get(key, {})
             selected = set((cur.get('audio') or []) + (cur.get('subtitle') or []))
             convert_map = dict((getattr(self, '_track_convert_config', {}).get(key) or {}))
+            la_map = dict((getattr(self, '_track_lossless_audio_config', {}).get(key) or {}))
             selected_after = self._show_tracks_dialog(
                 self.t('edit tracks'),
                 streams,
                 selected,
                 pid_lang,
                 convert_map=convert_map,
-                language_map=dict((getattr(self, '_track_language_config', {}).get(key) or {}))
+                language_map=dict((getattr(self, '_track_language_config', {}).get(key) or {})),
+                lossless_audio_map=la_map,
             )
             if selected_after is None:
                 return
@@ -1573,6 +1726,11 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             conv_cfg = getattr(self, '_track_convert_config', {})
             conv_cfg[key] = dict(getattr(self, '_last_track_convert_map', {}) or {})
             self._track_convert_config = conv_cfg
+            la_cfg = getattr(self, '_track_lossless_audio_config', {}) or {}
+            if not isinstance(la_cfg, dict):
+                la_cfg = {}
+            la_cfg[key] = dict(getattr(self, '_last_track_lossless_audio_map', {}) or {})
+            self._track_lossless_audio_config = la_cfg
             lang_cfg = getattr(self, '_track_language_config', {})
             lang_cfg[key] = dict(getattr(self, '_last_track_language_map', {}) or {})
             self._track_language_config = lang_cfg

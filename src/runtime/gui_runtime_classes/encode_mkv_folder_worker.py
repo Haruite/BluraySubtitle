@@ -2,7 +2,7 @@ import os
 import shutil
 import threading
 import traceback
-from typing import Optional
+from typing import Any, Optional
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
@@ -32,6 +32,9 @@ class EncodeMkvFolderWorker(QObject):
         encode_tool: str = 'x265',
         encode_bit_depth: str = '10',
         use_getnative: bool = True,
+        track_selection_config: Optional[dict[str, Any]] = None,
+        track_language_config: Optional[dict[str, dict[str, str]]] = None,
+        track_lossless_audio_config: Optional[dict[str, dict[str, str]]] = None,
     ):
         super().__init__()
         self.mkv_rows = mkv_rows
@@ -46,6 +49,9 @@ class EncodeMkvFolderWorker(QObject):
         self.encode_tool = encode_tool
         self.encode_bit_depth = encode_bit_depth
         self.use_getnative = bool(use_getnative)
+        self.track_selection_config = track_selection_config or {}
+        self.track_language_config = track_language_config or {}
+        self.track_lossless_audio_config = track_lossless_audio_config or {}
 
     def _link_or_copy(self, src: str, dst: str):
         if os.path.exists(dst):
@@ -103,6 +109,9 @@ class EncodeMkvFolderWorker(QObject):
             bs = BluraySubtitle('', sub_files, True, progress_cb, movie_mode=True)
             bs.episode_subtitle_languages = episode_subtitle_languages
             bs.use_getnative = bool(getattr(self, "use_getnative", True))
+            bs.track_selection_config = self.track_selection_config
+            bs.track_language_config = self.track_language_config
+            bs.track_lossless_audio_config = self.track_lossless_audio_config
 
             total = max(1, len(self.mkv_rows) + len(self.sp_rows))
             done = 0

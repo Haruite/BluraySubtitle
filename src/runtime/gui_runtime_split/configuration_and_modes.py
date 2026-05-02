@@ -148,10 +148,34 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 except Exception:
                     pass
         else:
+            # BDMV vs remux use different column counts and semantics (ENCODE_LABELS has bdmv/chapter/m2ts;
+            # ENCODE_REMUX has output/vpy earlier + mkv track buttons). If we only resize columns, old
+            # QTableWidgetItem / cellWidget stay at the same (row,col) and appear under wrong headers.
             self.table2.setColumnCount(len(ENCODE_LABELS))
             self._set_table_headers(self.table2, ENCODE_LABELS)
             self.table3.setColumnCount(len(ENCODE_SP_LABELS))
             self._set_table_headers(self.table3, ENCODE_SP_LABELS)
+            self.table2.setRowCount(0)
+            self.table3.setRowCount(0)
+            self._set_table2_default_column_order()
+            self._update_language_combo_enabled_state()
+            try:
+                cfg = getattr(self, '_last_configuration_34', None)
+                if isinstance(cfg, dict) and cfg:
+                    self.on_configuration(cfg, update_sp_table=True)
+                elif self._is_movie_mode():
+                    self._refresh_movie_table2()
+            except Exception:
+                print_exc_terminal()
+            try:
+                self.table2.resizeColumnsToContents()
+                self._resize_table_columns_for_language(self.table2)
+                self._scroll_table_h_to_right(self.table2)
+                self.table3.resizeColumnsToContents()
+                self._resize_table_columns_for_language(self.table3)
+                self._scroll_table_h_to_right(self.table3)
+            except Exception:
+                pass
 
     def _apply_episode_mode_to_table2(self):
         if not hasattr(self, '_subtitle_scan_debounce'):

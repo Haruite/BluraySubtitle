@@ -21,7 +21,8 @@ class RemuxWorker(QObject):
                  episode_output_names: list[str], episode_subtitle_languages: list[str],
                  movie_mode: bool = False,
                  track_selection_config: Optional[dict[str, dict[str, list[str]]]] = None,
-                 track_language_config: Optional[dict[str, dict[str, str]]] = None):
+                 track_language_config: Optional[dict[str, dict[str, str]]] = None,
+                 track_lossless_audio_config: Optional[dict[str, dict[str, str]]] = None):
         super().__init__()
         self.bdmv_path = bdmv_path
         self.sub_files = sub_files
@@ -36,6 +37,7 @@ class RemuxWorker(QObject):
         self.movie_mode = bool(movie_mode)
         self.track_selection_config = track_selection_config or {}
         self.track_language_config = track_language_config or {}
+        self.track_lossless_audio_config = track_lossless_audio_config or {}
 
     def run(self):
         try:
@@ -51,6 +53,7 @@ class RemuxWorker(QObject):
             bs.configuration = self.configuration
             bs.track_selection_config = self.track_selection_config
             bs.track_language_config = self.track_language_config
+            bs.track_lossless_audio_config = self.track_lossless_audio_config
             bs.episodes_remux(
                 None,
                 self.output_folder,
