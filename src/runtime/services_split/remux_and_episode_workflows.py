@@ -159,7 +159,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 ensure_disc_out_dir=True,
             )
             if m2ts_file:
-                print(f'{self.t("Analyzing first stream file in mpls ｢")}{m2ts_file}{self.t("｣ tracks")}')
+                print(f'{self.t("Analyzing first stream file in mpls [")}{m2ts_file}{self.t("] tracks")}')
                 self._progress(text=f'{self.t("Analyzing tracks: ")}{os.path.basename(m2ts_file)}')
             print(f'{self.t("Mux command: ")}{remux_cmd}')
             self._progress(text=f'{self.t("Muxing: ")}BD_Vol_{bdmv_vol}')
@@ -1008,7 +1008,9 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                         vspipe_mode: str = 'bundle',
                         x265_mode: str = 'bundle',
                         x265_params: str = '',
-                        sub_pack_mode: str = 'external'):
+                        sub_pack_mode: str = 'external',
+                        encode_tool: str = 'x265',
+                        encode_bit_depth: str = '10'):
         dst_folder, mkv_files_before, bdmv_index_conf = self._prepare_episode_run(
             table, folder_path, configuration, ensure_tools
         )
@@ -1047,7 +1049,10 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 vpy_path = vpy_paths[i - 1]
             if not vpy_path:
                 vpy_path = os.path.join(os.getcwd(), 'vpy.vpy')
-            self.encode_task(mkv_file, dst_folder, i, vpy_path, vspipe_mode, x265_mode, x265_params, sub_pack_mode)
+            self.encode_task(
+                mkv_file, dst_folder, i, vpy_path, vspipe_mode, x265_mode, x265_params, sub_pack_mode,
+                encode_tool=encode_tool, encode_bit_depth=encode_bit_depth,
+            )
             if sub_pack_mode == 'external' and self.sub_files and len(self.sub_files) >= i and i > -1:
                 sub_src = self.sub_files[i - 1]
                 sub_ext = os.path.splitext(sub_src)[1].lower()
@@ -1087,8 +1092,10 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     cur_sp_vpy = str(sp_vpy_paths[entry_idx - 1])
                 else:
                     cur_sp_vpy = os.path.join(os.getcwd(), 'vpy.vpy')
-                self.encode_task(sp_mkv_path, sps_folder, -1, cur_sp_vpy, vspipe_mode, x265_mode, x265_params,
-                                 'external')
+                self.encode_task(
+                    sp_mkv_path, sps_folder, -1, cur_sp_vpy, vspipe_mode, x265_mode, x265_params,
+                    'external', encode_tool=encode_tool, encode_bit_depth=encode_bit_depth,
+                )
                 self._progress(900 + int(90 * idx / total_sp))
         else:
             single_volume = bool(getattr(self, 'movie_mode', False) and len(bdmv_index_conf) == 1)
@@ -1186,15 +1193,17 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                         cur_sp_vpy = sp_vpy_paths[idx - 1]
                     else:
                         cur_sp_vpy = os.path.join(os.getcwd(), 'vpy.vpy')
-                    self.encode_task(sp_path, sps_folder, -1, cur_sp_vpy, vspipe_mode, x265_mode, x265_params,
-                                     'external')
+                    self.encode_task(
+                        sp_path, sps_folder, -1, cur_sp_vpy, vspipe_mode, x265_mode, x265_params,
+                        'external', encode_tool=encode_tool, encode_bit_depth=encode_bit_depth,
+                    )
                 self._progress(900 + int(90 * idx / total_sp))
 
         self.completion()
         self._progress(1000, 'Done')
 
     def generate_remux_cmd(self, track_count, track_info, flac_files, output_file, mkv_file,
-                           hevc_file: Optional[str] = None):
+                           encoded_video_file: Optional[str] = None):
         mkvmerge_exe = self._mkvmerge_exe()
         copy_audio_track = list(getattr(self, '_active_copy_audio_track', []) or [])
         copy_sub_track = list(getattr(self, '_active_copy_sub_track', []) or [])
@@ -1223,7 +1232,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         tracker_order = ','.join(tracker_order)
         audio_tracks = ('!' + ','.join([str(x) for x in audio_tracks_to_exclude])) if audio_tracks_to_exclude else ''
         language_options = ' '.join(language_options)
-        if not hevc_file:
+        if not encoded_video_file:
             return (
                 f'"{mkvmerge_exe}" {mkvtoolnix_ui_language_arg()} -o "{output_file}" --track-order {tracker_order} '
                 f'{("-a " + ",".join(copy_audio_track)) if copy_audio_track else ""} '
@@ -1235,4 +1244,4 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 f'"{mkvmerge_exe}" {mkvtoolnix_ui_language_arg()} -o "{output_file}" --track-order {tracker_order} '
                 f'{("-a " + ",".join(copy_audio_track)) if copy_audio_track else ""} '
                 f'{("-s " + ",".join(copy_sub_track)) if copy_sub_track else ""} '
-                f'-d !0 {"-a " + audio_tracks if audio_tracks else ""} "{mkv_file}" {language_options} "{hevc_file}"')
+                f'-d !0 {"-a " + audio_tracks if audio_tracks else ""} "{mkv_file}" {language_options} "{encoded_video_file}"')

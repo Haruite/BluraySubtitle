@@ -17,6 +17,70 @@ from .gui_base import BluraySubtitleGuiBase
 
 
 class VpyEditPreviewMixin(BluraySubtitleGuiBase):
+    def _selected_output_bits_for_vpy(self) -> int:
+        """Bits for ``fmtc.bitdepth(..., bits=N)``: follows Encode UI / BD encode constraints."""
+        try:
+            fn = getattr(self, '_current_encode_tool_and_depth', None)
+            if callable(fn):
+                _t, depth = fn()
+                if str(depth).isdigit():
+                    return int(depth)
+        except Exception:
+            pass
+        try:
+            bdc = getattr(self, 'encode_bit_depth_combo', None)
+            if bdc is not None:
+                d = bdc.currentData()
+                if d is not None and str(d).isdigit():
+                    return int(d)
+        except Exception:
+            pass
+        return 10
+
+    @staticmethod
+    def _patch_fmtc_output_bits_in_text(raw_line: str, bits: int) -> str:
+        """Rewrite ``core.fmtc.bitdepth(res|src8, bits=…)`` to the chosen output depth."""
+        out = raw_line
+        for _pat in (
+            r'(core\.fmtc\.bitdepth\(res,\s*bits=)\d+',
+            r'(core\.fmtc\.bitdepth\(src8,\s*bits=)\d+',
+        ):
+            out = re.sub(_pat, lambda m: m.group(1) + str(int(bits)), out)
+        return out
+
+    def sync_default_vpy_fmtc_with_encode_ui(self) -> None:
+        """Write ``fmtc.bitdepth(..., bits=N)`` into default ``vpy.vpy`` from Encode tool + output depth."""
+        try:
+            box = getattr(self, 'encode_box', None)
+            if box is not None and not box.isVisible():
+                return
+        except Exception:
+            pass
+        path = self.get_default_vpy_path()
+        if not os.path.isfile(path):
+            return
+        bits = self._selected_output_bits_for_vpy()
+        try:
+            with open(path, 'r', encoding='utf-8') as fp:
+                lines = fp.readlines()
+        except Exception:
+            return
+        new_lines: list[str] = []
+        changed = False
+        for line in lines:
+            raw = line.rstrip('\r\n')
+            patched = self._patch_fmtc_output_bits_in_text(raw, bits)
+            if patched != raw:
+                changed = True
+            new_lines.append(patched + '\n')
+        if not changed:
+            return
+        try:
+            with open(path, 'w', encoding='utf-8') as fp:
+                fp.writelines(new_lines)
+        except Exception:
+            print_exc_terminal()
+
     def get_default_vpy_path(self) -> str:
         return os.path.normpath(os.path.abspath('vpy.vpy'))
 
@@ -24,9 +88,18 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
         path = self.get_default_vpy_path()
         if os.path.exists(path) and os.path.isfile(path):
             return
-        deband_line = 'dbed = core.neo_f3kdb.Deband(nr16, 12, 72, 48, 48, 0, 0, output_depth=16).neo_f3kdb.Deband(24, 56, 32, 32, 0, 0, output_depth=16)\n'
+        # placebo.Deband accepts only 8 / 16-bit integer or 32-bit float; normalize before deband.
+        work_pl = '_nr_pl = core.fmtc.bitdepth(nr16, bits=16)\n'
+        deband_line = (
+            work_pl
+            + 'dbed = core.neo_f3kdb.Deband(_nr_pl, 12, 72, 48, 48, 0, 0, output_depth=16)'
+            + '.neo_f3kdb.Deband(24, 56, 32, 32, 0, 0, output_depth=16)\n'
+        )
         if sys.platform != 'win32':
-            deband_line = 'dbed = core.placebo.Deband(nr16, planes=7, iterations=2, threshold=4.5, radius=16.0, grain=0.0)\n'
+            deband_line = (
+                work_pl
+                + 'dbed = core.placebo.Deband(_nr_pl, planes=7, iterations=2, threshold=4.5, radius=16.0, grain=0.0)\n'
+            )
         plugin_line = (
             '' if sys.platform == 'win32' else
             'PLUGIN_PATH = "/app/plugins" if os.path.exists("/.dockerenv") else os.path.expanduser("~/plugins")\n'
@@ -114,12 +187,20 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                 '        proc16 = low\n'
                 'nr16 = core.nlm_ispc.NLMeans(proc16, d=0, wmode=3, h=3)\n'
                 + deband_line +
-                'dbed = mvf.LimitFilter(dbed, nr16, thr=0.55, elast=1.5, planes=[0, 1, 2])\n'
-                'nr16Y = core.std.ShufflePlanes(nr16, 0, GRAY_CF)\n'
+                'dbed = mvf.LimitFilter(dbed, _nr_pl, thr=0.55, elast=1.5, planes=[0, 1, 2])\n'
+                'nr16Y = core.std.ShufflePlanes(_nr_pl, 0, GRAY_CF)\n'
                 'aa_nr16Y = core.eedi2.EEDI2(nr16Y, field=1, mthresh=10, lthresh=20, vthresh=20, maxd=24, nt=50)\n'
                 'aa_nr16Y = core.fmtc.resample(aa_nr16Y, proc_w, proc_h, 0, -0.5).std.Transpose()\n'
                 'aa_nr16Y = core.eedi2.EEDI2(aa_nr16Y, field=1, mthresh=10, lthresh=20, vthresh=20, maxd=24, nt=50)\n'
                 'aa_nr16Y = core.fmtc.resample(aa_nr16Y, proc_h, proc_w, 0, -0.5).std.Transpose()\n'
+                'if (\n'
+                '    aa_nr16Y.width != nr16Y.width\n'
+                '    or aa_nr16Y.height != nr16Y.height\n'
+                '    or aa_nr16Y.format.id != nr16Y.format.id\n'
+                '):\n'
+                '    aa_nr16Y = core.resize.Bicubic(\n'
+                '        aa_nr16Y, nr16Y.width, nr16Y.height, format=nr16Y.format\n'
+                '    )\n'
                 'aaedY = core.rgvs.Repair(aa_nr16Y, nr16Y, 2)\n'
                 'dbedY = core.std.ShufflePlanes(dbed, 0, GRAY_CF)\n'
                 'mergedY = mvf.LimitFilter(dbedY, aaedY, thr=1.0, elast=1.5)\n'
@@ -326,9 +407,15 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
         def norm(s: str) -> str:
             return s.rstrip('\r\n')
 
+        bits = self._selected_output_bits_for_vpy()
         changed = False
         for idx, line in enumerate(lines):
             raw = norm(line)
+            pb = self._patch_fmtc_output_bits_in_text(raw, bits)
+            if pb != raw:
+                raw = pb
+                lines[idx] = raw + '\n'
+                changed = True
             m_a = re.match(r'^(\s*)(#\s*)?(a\s*=\s*)r?[\'"].*?[\'"](\s*(#.*)?)$', raw)
             if m_a:
                 indent = m_a.group(1)
@@ -444,12 +531,14 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
         if not os.path.exists(default_vpy):
             return ''
         try:
+            bits = self._selected_output_bits_for_vpy()
             with open(default_vpy, 'r', encoding='utf-8') as fp:
                 lines = fp.readlines()
 
             out: list[str] = []
             for line in lines:
                 raw = line.rstrip('\r\n')
+                raw = self._patch_fmtc_output_bits_in_text(raw, bits)
 
                 if not raw.lstrip().startswith('#'):
                     m_a = re.match(r'^(\s*a\s*=\s*)r?[\'"].*?[\'"](\s*(#.*)?)$', raw)
@@ -495,12 +584,14 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
         if not os.path.exists(default_vpy):
             return ''
         try:
+            bits = self._selected_output_bits_for_vpy()
             with open(default_vpy, 'r', encoding='utf-8') as fp:
                 lines = fp.readlines()
 
             out: list[str] = []
             for line in lines:
                 raw = line.rstrip('\r\n')
+                raw = self._patch_fmtc_output_bits_in_text(raw, bits)
 
                 m_a = re.match(r'^(\s*)(#\s*)?(a\s*=\s*)r?[\'"].*?[\'"](\s*(#.*)?)$', raw)
                 if m_a:

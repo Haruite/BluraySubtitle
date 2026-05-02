@@ -20,6 +20,8 @@ class EncodeWorker(QObject):
                  cancel_event: threading.Event, vpy_paths: list[str], sp_vpy_paths: list[str], sp_entries: list[dict[str, int | str]],
                  episode_output_names: list[str], episode_subtitle_languages: list[str],
                  vspipe_mode: str, x265_mode: str, x265_params: str, sub_pack_mode: str,
+                 encode_tool: str = 'x265',
+                 encode_bit_depth: str = '10',
                  use_getnative: bool = True,
                  movie_mode: bool = False,
                  track_selection_config: Optional[dict[str, dict[str, list[str]]]] = None,
@@ -41,6 +43,8 @@ class EncodeWorker(QObject):
         self.x265_mode = x265_mode
         self.x265_params = x265_params
         self.sub_pack_mode = sub_pack_mode
+        self.encode_tool = encode_tool
+        self.encode_bit_depth = encode_bit_depth
         self.use_getnative = bool(use_getnative)
         self.movie_mode = bool(movie_mode)
         self.track_selection_config = track_selection_config or {}
@@ -76,7 +80,9 @@ class EncodeWorker(QObject):
                 vspipe_mode=self.vspipe_mode,
                 x265_mode=self.x265_mode,
                 x265_params=self.x265_params,
-                sub_pack_mode=self.sub_pack_mode
+                sub_pack_mode=self.sub_pack_mode,
+                encode_tool=self.encode_tool,
+                encode_bit_depth=self.encode_bit_depth,
             )
         except _Cancelled:
             print_terminal_line('[BluraySubtitle] Encode worker: canceled.')

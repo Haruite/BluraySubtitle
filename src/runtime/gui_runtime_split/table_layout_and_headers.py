@@ -81,7 +81,8 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
 
     def _adjust_combo_width_to_contents(self, combo: QComboBox, padding: int = 44, min_width: int = 80,
                                         max_width: int = 520):
-        if not combo:
+        # PyQt6: bool(QComboBox()) is False — use explicit None check only.
+        if combo is None:
             return
         try:
             fm = QFontMetrics(combo.font())

@@ -1310,23 +1310,24 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                             need_encode = True
                             break
                     self.encode_box.setVisible(need_encode)
+                    if need_encode and hasattr(self, '_apply_encode_codec_slot_visibility'):
+                        self._apply_encode_codec_slot_visibility()
                     if hasattr(self, '_sub_pack_row') and self._sub_pack_row:
                         self._sub_pack_row.setVisible(False)
-                    if hasattr(self, 'x265_mode_label') and self.x265_mode_label and hasattr(self, 'x265_params_label') and self.x265_params_label:
+                    if (
+                        getattr(self, 'encode_tool_combo', None) is not None
+                        and getattr(self, 'x265_params_label', None) is not None
+                    ):
                         use_x264 = any(
                             str(v or '') == 'h264(encoded)'
                             for mp in conv_cfg.values() for v in (mp or {}).values()
                         )
                         if use_x264:
-                            self.x265_mode_label.setText('x264：')
-                            self.x265_params_label.setText(self.t('x264 Params:'))
-                            if hasattr(self, '_x264_preset_params'):
-                                self._encode_preset_params = self._x264_preset_params
+                            self.encode_tool_combo.setCurrentText('x264')
                         else:
-                            self.x265_mode_label.setText('x265：')
-                            self.x265_params_label.setText(self.t('x265 Params:'))
-                            if hasattr(self, '_x265_preset_params'):
-                                self._encode_preset_params = self._x265_preset_params
+                            self.encode_tool_combo.setCurrentText('x265')
+                        if hasattr(self, '_refresh_encode_tool_dependent_ui'):
+                            self._refresh_encode_tool_dependent_ui(True)
                 except Exception:
                     pass
 
@@ -1338,6 +1339,15 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
         except Exception:
             pass
         self._refresh_function_tabbar_theme()
+        # Encode / DIY+encode: update codec row vs DIY hint, then refill bit depth (Blu-ray Encode has full BPP list).
+        try:
+            if hasattr(self, '_apply_encode_codec_slot_visibility'):
+                self._apply_encode_codec_slot_visibility()
+            box = getattr(self, 'encode_box', None)
+            if box is not None and box.isVisible() and hasattr(self, '_refresh_encode_tool_dependent_ui'):
+                self._refresh_encode_tool_dependent_ui(False)
+        except Exception:
+            pass
 
     def get_selected_function_id(self) -> int:
         try:

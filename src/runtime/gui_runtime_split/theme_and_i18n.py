@@ -352,6 +352,11 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                 finally:
                     widget.blockSignals(False)
             if isinstance(widget, QComboBox):
+                if widget in (
+                    getattr(self, 'encode_tool_combo', None),
+                    getattr(self, 'encode_bit_depth_combo', None),
+                ):
+                    continue
                 widget.blockSignals(True)
                 try:
                     for i in range(widget.count()):
@@ -384,6 +389,13 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
             self.on_select_function(force=True, keep_inputs=True, keep_state=True)
             self._refresh_language_dependent_sizes()
             self._refresh_language_column_defaults()
+            try:
+                if getattr(self, 'encode_tool_combo', None) is not None and callable(
+                    getattr(self, '_refill_encode_bit_depth_combo', None)
+                ):
+                    self._refill_encode_bit_depth_combo(self.encode_tool_combo.currentText())
+            except Exception:
+                pass
         finally:
             self._language_updating = False
 

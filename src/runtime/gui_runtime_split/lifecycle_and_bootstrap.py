@@ -537,7 +537,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         track_scope_outer = QHBoxLayout(self.track_scope_row)
         track_scope_outer.setContentsMargins(8, 0, 8, 2)
         track_scope_outer.setSpacing(4)
-        self.track_scope_label = QLabel(self.t('Track edit scope：'), self.track_scope_row)
+        self.track_scope_label = QLabel(self.t('Track edit scope:'), self.track_scope_row)
         self.track_scope_main_radio = QRadioButton(self.t('Main mpls'), self.track_scope_row)
         self.track_scope_all_radio = QRadioButton(self.t('All'), self.track_scope_row)
         self.track_scope_all_radio.setChecked(True)

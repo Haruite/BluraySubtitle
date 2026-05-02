@@ -2090,7 +2090,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 if track_id is None:
                     continue
                 if (file1_path != output_file and not file1_path.endswith('.mkv') and not file1_path.endswith('.lwi')
-                        and not file1_path.endswith('.hevc') and not file1_path.endswith('.ass')
+                        and not file1_path.endswith(('.hevc', '.h264', '.ivf')) and not file1_path.endswith('.ass')
                         and not file1_path.endswith('.ssa') and not file1_path.endswith('.srt')):
                     try:
                         silent, avg_db = _is_silent_audio(file1_path, -60.0)

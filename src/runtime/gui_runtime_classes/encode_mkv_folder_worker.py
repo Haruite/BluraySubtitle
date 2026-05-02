@@ -29,6 +29,8 @@ class EncodeMkvFolderWorker(QObject):
         x265_mode: str,
         x265_params: str,
         sub_pack_mode: str,
+        encode_tool: str = 'x265',
+        encode_bit_depth: str = '10',
         use_getnative: bool = True,
     ):
         super().__init__()
@@ -41,6 +43,8 @@ class EncodeMkvFolderWorker(QObject):
         self.x265_mode = x265_mode
         self.x265_params = x265_params
         self.sub_pack_mode = sub_pack_mode
+        self.encode_tool = encode_tool
+        self.encode_bit_depth = encode_bit_depth
         self.use_getnative = bool(use_getnative)
 
     def _link_or_copy(self, src: str, dst: str):
@@ -122,7 +126,9 @@ class EncodeMkvFolderWorker(QObject):
                     self.x265_mode,
                     self.x265_params,
                     self.sub_pack_mode,
-                    source_file=src
+                    source_file=src,
+                    encode_tool=self.encode_tool,
+                    encode_bit_depth=self.encode_bit_depth,
                 )
                 done += 1
 
@@ -150,7 +156,9 @@ class EncodeMkvFolderWorker(QObject):
                     self.x265_mode,
                     self.x265_params,
                     self.sub_pack_mode,
-                    source_file=src
+                    source_file=src,
+                    encode_tool=self.encode_tool,
+                    encode_bit_depth=self.encode_bit_depth,
                 )
                 done += 1
 

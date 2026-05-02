@@ -562,6 +562,7 @@ install_mpv() {
   log "$(msg 'Installing mpv build dependencies' '安装 mpv 编译所需系统依赖')"
   local mpv_deps=(
     build-essential cmake meson ninja-build git pkg-config yasm nasm
+    libdav1d-dev
     libssl-dev libjpeg-dev zlib1g-dev libavcodec-dev libavformat-dev
     libavutil-dev libswscale-dev libswresample-dev libavfilter-dev
     libass-dev libfribidi-dev libfreetype-dev libfontconfig1-dev
@@ -630,6 +631,7 @@ install_mpv() {
     rm -rf mpv/build ffmpeg/build libass/build 2>/dev/null || true
 
     echo "--enable-libbluray" > ffmpeg_options || exit 1
+    echo "--enable-libdav1d" >> ffmpeg_options || exit 1
     echo "-Dlibbluray=enabled" > mpv_options || exit 1
     if [[ "$is_ubuntu_2204" == "true" || "$is_debian_12" == "true" ]]; then
       log "$(msg 'Compatibility mode detected (Ubuntu 22.04/Debian 12): disabling Vulkan/Shaderc in mpv-build libplacebo to ensure mpv compiles' '检测到系统需要兼容模式（Ubuntu 22.04/Debian 12），禁用 mpv-build 内置 libplacebo 的 Vulkan/Shaderc 构建以保证 mpv 可编译')"
@@ -1122,6 +1124,18 @@ APPLY = [
         Path("Source/App/app_process_cmd.c"),
         """    double   max_pix_value = (app_cfg->config.encoder_bit_depth == 8) ? 255 : 1023;""",
         """    double max_pix_value = (double)((1u << app_cfg->config.encoder_bit_depth) - 1);""",
+    ),
+    # Upstream write_bitdepth() logs SVT_ERROR("Profile 2 Not supported") on the *valid* path for
+    # Professional + 10/12-bit; the second bit is still written. Remove the bogus line (see entropy_coding.c).
+    (
+        Path("Source/Lib/Codec/entropy_coding.c"),
+        """    if (scs->static_config.profile == PROFESSIONAL_PROFILE && scs->static_config.encoder_bit_depth != EB_EIGHT_BIT) {
+        SVT_ERROR("Profile 2 Not supported\\n");
+        svt_aom_wb_write_bit(wb, scs->static_config.encoder_bit_depth == EB_TEN_BIT ? 0 : 1);
+    }""",
+        """    if (scs->static_config.profile == PROFESSIONAL_PROFILE && scs->static_config.encoder_bit_depth != EB_EIGHT_BIT) {
+        svt_aom_wb_write_bit(wb, scs->static_config.encoder_bit_depth == EB_TEN_BIT ? 0 : 1);
+    }""",
     ),
 ]
 

@@ -16,6 +16,8 @@ FFMPEG_PATH = r"C:\Downloads\ffmpeg-8.1-essentials_build\bin\ffmpeg.exe"
 FFPROBE_PATH = r"C:\Downloads\ffmpeg-8.1-essentials_build\bin\ffprobe.exe"
 X265_PATH = r"C:\Software\x265.exe"
 X264_PATH = r"C:\Software\x264.exe"
+SVT_AV1_PATH = r'C:\Software\SvtAv1EncApp.exe'
+FDK_AAC_PATH = r'C:\Software\fdkaac.exe'
 VSEDIT_PATH = r"C:\Software\vapoursynth\vsedit.exe"
 VSPIPE_PATH = r"C:\Software\vapoursynth\vspipe.exe"
 PLUGIN_PATH = ""
@@ -32,9 +34,11 @@ if sys.platform != "win32":
     FFPROBE_PATH = "/usr/bin/ffprobe"
     X265_PATH = "/usr/bin/x265"
     X264_PATH = "/usr/bin/x264"
+    SVT_AV1_PATH = "/usr/bin/SvtAv1EncApp"
+    FDK_AAC_PATH = "/usr/local/bin/fdkaac"
     PLUGIN_PATH = os.path.expanduser("~/plugins")
     VSEDIT_PATH = "/usr/bin/vsedit"
-    VSPIPE_PATH = "/usr/bin/vspipe"
+    VSPIPE_PATH = "/usr/local/bin/vspipe"
     LIBASS_PATH = ''
     TSMUXER_PATH = '/usr/bin/tsMuxeR'
     if is_docker():
@@ -59,7 +63,7 @@ ENCODE_REMUX_SP_LABELS = ["duration", "output_name", "vpy_path", "edit_vpy", "pr
 CONFIGURATION = {}
 DEFAULT_APPROX_EPISODE_DURATION_SECONDS = 24 * 60
 CURRENT_UI_LANGUAGE = "en"
-APP_TITLE = "BluraySubtitle v3.5"
+APP_TITLE = "BluraySubtitle v3.6"
 
 
 def get_mkvtoolnix_ui_language() -> str:
@@ -101,4 +105,3 @@ def find_mkvtoolinx() -> None:
     if not MKV_EXTRACT_PATH:
         default_mkv_extract_path = r"C:\Program Files\MKVToolNix\mkvextract.exe" if sys.platform == "win32" else "/usr/bin/mkvextract"
         MKV_EXTRACT_PATH = _resolve_mkvtoolnix_path(default_mkv_extract_path, "mkvextract")
-
