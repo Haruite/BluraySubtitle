@@ -82,6 +82,7 @@ class BluraySubtitleGuiBase(QWidget):
         self._theme_mode = None
         self._track_selection_config = None
         self._track_convert_config = None
+        self._track_lossless_audio_config = None
         self._track_language_config = None
         self._updating_sp_table = None
         self._vsedit_edit_sessions = None

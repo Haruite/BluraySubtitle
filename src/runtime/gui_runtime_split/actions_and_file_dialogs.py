@@ -127,8 +127,25 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         ):
             if w is not None:
                 w.setVisible(show_full_codec)
+        row_la = getattr(self, 'lossless_audio_preset_row', None)
+        if row_la is not None:
+            row_la.setVisible(show_full_codec)
         if hint is not None:
             hint.setVisible(show_diy_hint)
+
+    def _on_encode_lossless_audio_preset_changed(self) -> None:
+        if getattr(self, '_encode_lossless_preset_updating', False):
+            return
+        try:
+            combo = getattr(self, 'encode_lossless_audio_combo', None)
+            if combo is None:
+                return
+            c = combo.currentData()
+            if c is None:
+                c = (combo.currentText() or 'flac').lower()
+            self.apply_lossless_audio_preset_globally(str(c))
+        except Exception:
+            print_exc_terminal()
 
     def _show_error_dialog(self, err_text: str):
         try:
@@ -911,6 +928,9 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 encode_tool=encode_tool,
                 encode_bit_depth=encode_bit_depth,
                 use_getnative=use_getnative,
+                track_selection_config=getattr(self, '_track_selection_config', {}),
+                track_language_config=getattr(self, '_track_language_config', {}),
+                track_lossless_audio_config=getattr(self, '_track_lossless_audio_config', {}),
             )
             self._encode_worker.moveToThread(self._encode_thread)
             self._encode_thread.started.connect(self._encode_worker.run)
@@ -1039,7 +1059,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             use_getnative=use_getnative,
             movie_mode=self._is_movie_mode(),
             track_selection_config=getattr(self, '_track_selection_config', {}),
-            track_language_config=getattr(self, '_track_language_config', {})
+            track_language_config=getattr(self, '_track_language_config', {}),
+            track_lossless_audio_config=getattr(self, '_track_lossless_audio_config', {})
         )
         self._encode_worker.moveToThread(self._encode_thread)
         self._encode_thread.started.connect(self._encode_worker.run)
@@ -1474,6 +1495,24 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         self.use_bluray_compat_params_checkbox.setChecked(False)
         tools_layout.addWidget(self.use_bluray_compat_params_checkbox)
         layout.addWidget(tools_row)
+
+        self.lossless_audio_preset_row = QWidget(self.encode_box)
+        la_layout = QHBoxLayout()
+        la_layout.setContentsMargins(0, 0, 0, 0)
+        la_layout.setSpacing(4)
+        self.lossless_audio_preset_row.setLayout(la_layout)
+        self.lossless_audio_compression_label = QLabel(self.t('Lossless audio compression'), self.lossless_audio_preset_row)
+        la_layout.addWidget(self.lossless_audio_compression_label)
+        self.encode_lossless_audio_combo = QComboBox(self.lossless_audio_preset_row)
+        self.encode_lossless_audio_combo.addItem('FLAC', 'flac')
+        self.encode_lossless_audio_combo.addItem('AAC', 'aac')
+        self.encode_lossless_audio_combo.addItem('Opus', 'opus')
+        self.encode_lossless_audio_combo.setCurrentIndex(0)
+        self._encode_lossless_preset_updating = False
+        self.encode_lossless_audio_combo.currentIndexChanged.connect(self._on_encode_lossless_audio_preset_changed)
+        la_layout.addWidget(self.encode_lossless_audio_combo)
+        la_layout.addStretch(1)
+        layout.addWidget(self.lossless_audio_preset_row)
 
         self.x265_params_edit = QPlainTextEdit(self.encode_box)
         self.x265_params_edit.setFixedHeight(46)

@@ -1013,17 +1013,44 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
         track_info = {}
         track_count = 0
         track_suffix_info = {}
+        track_id = -1
+        code_id_to_stream_type = {'A_DTS': 'DTS', 'A_PCM/INT/LIT': 'LPCM', 'A_PCM/INT/BIG': 'LPCM',
+                                  'A_TRUEHD': 'TRUEHD', 'A_MLP': 'TRUEHD', 'A_FLAC': 'FLAC'}
         for line in stdout.splitlines():
-            if line.startswith('|  + Track number: '):
-                track_id = int(re.findall(r'\d+', line.removeprefix('|  + Track number: '))[0]) - 1
+            if (line.startswith('|  + Track number: ') or line.startswith('| + Track number: ')
+                    or line.startswith('|+ Track number: ')):
+                tail = line.split(':', 1)[1] if ':' in line else ''
+                nums = re.findall(r'\d+', tail)
+                if len(nums) >= 2:
+                    track_id = int(nums[1])
+                elif len(nums) == 1:
+                    track_id = int(nums[0]) - 1
+                else:
+                    track_id = -1
+                    continue
                 track_count = max(track_count, track_id)
-            if line.startswith('|  + Codec ID: '):
-                codec_id = line.removeprefix('|  + Codec ID: ').strip()
-                code_id_to_stream_type = {'A_DTS': 'DTS', 'A_PCM/INT/LIT': 'LPCM', 'A_PCM/INT/BIG': 'LPCM',
-                                          'A_TRUEHD': 'TRUEHD', 'A_MLP': 'TRUEHD'}
+                continue
+            if track_id < 0:
+                continue
+            if (line.startswith('|  + Codec ID: ') or line.startswith('| + Codec ID: ')
+                    or line.startswith('|+ Codec ID: ')):
+                codec_id = line.split(':', 1)[1].strip() if ':' in line else ''
                 stream_type = code_id_to_stream_type.get(codec_id)
-            if line.startswith('|  + Language (IETF BCP 47): '):
-                bcp_47_code = line.removeprefix('|  + Language (IETF BCP 47): ').strip()
+                if stream_type in ('LPCM', 'DTS', 'TRUEHD', 'FLAC'):
+                    if track_id not in dolby_truehd_tracks:
+                        if stream_type == 'LPCM':
+                            track_suffix_info[track_id] = 'wav'
+                        elif stream_type == 'DTS':
+                            track_suffix_info[track_id] = 'dts'
+                        elif stream_type == 'FLAC':
+                            track_suffix_info[track_id] = 'flac'
+                        else:
+                            track_suffix_info[track_id] = 'thd'
+                        track_info.setdefault(track_id, 'und')
+                continue
+            if (line.startswith('|  + Language (IETF BCP 47): ') or line.startswith(
+                    '| + Language (IETF BCP 47): ') or line.startswith('|+ Language (IETF BCP 47): ')):
+                bcp_47_code = line.split(':', 1)[1].strip() if ':' in line else ''
                 language = pycountry.languages.get(alpha_2=bcp_47_code.split('-')[0])
                 if language is None:
                     language = pycountry.languages.get(alpha_3=bcp_47_code.split('-')[0])
@@ -1031,15 +1058,9 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     lang = getattr(language, "bibliographic", getattr(language, "alpha_3", None))
                 else:
                     lang = 'und'
-                if stream_type in ('LPCM', 'DTS', 'TRUEHD'):
-                    if track_id not in dolby_truehd_tracks:
-                        track_info[track_id] = lang
-                        if stream_type == 'LPCM':
-                            track_suffix_info[track_id] = 'wav'
-                        elif stream_type == 'DTS':
-                            track_suffix_info[track_id] = 'dts'
-                        else:
-                            track_suffix_info[track_id] = 'thd'
+                if track_id in track_suffix_info:
+                    track_info[track_id] = lang
+                continue
 
         if track_info:
             extract_info = []

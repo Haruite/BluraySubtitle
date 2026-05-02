@@ -685,6 +685,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.setLayout(self.layout)
         self._track_selection_config: dict[str, dict[str, list[str]]] = {}
         self._track_convert_config: dict[str, dict[str, str]] = {}
+        self._track_lossless_audio_config: dict[str, dict[str, str]] = {}
         self._track_language_config: dict[str, dict[str, str]] = {}
         self._reposition_subtitle_path_box()
         self._apply_language('en')
