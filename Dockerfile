@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.6
 FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -31,7 +32,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libbz2-dev libcmark-dev libflac-dev libfmt-dev libgmp-dev libgtest-dev liblzo2-dev libmagic-dev \
     libvorbis-dev libpcre2-8-0 libpcre2-dev \
     nlohmann-json3-dev po4a rake ruby xsltproc debhelper fakeroot dpkg-dev docbook-xsl \
-    libxxhash-dev libfftw3-dev \
+    libxxhash-dev libfftw3-dev p7zip-full \
     && rm -rf /var/lib/apt/lists/*
 
 RUN fc-cache -f >/dev/null 2>&1 || true
@@ -97,22 +98,336 @@ RUN set -eux; \
     ldconfig; \
     rm -rf /tmp/lsmash
 
-RUN set -eux; \
-    mkdir -p /tmp/x265 && cd /tmp/x265; \
-    wget https://github.com/msg7086/x265-Yuuki-Asuna/archive/refs/tags/Asuna-2.8.tar.gz; \
-    tar zxvf Asuna-2.8.tar.gz; \
-    cd x265-Yuuki-Asuna-Asuna-2.8/source; \
-    sed -i 's/cmake_minimum_required(VERSION .*)/cmake_minimum_required(VERSION 3.5)/g' CMakeLists.txt; \
-    sed -i '/cmake_policy(SET CMP0025 OLD)/d' CMakeLists.txt; \
-    sed -i '/cmake_policy(SET CMP0054 OLD)/d' CMakeLists.txt; \
-    sed -i '/cmake_minimum_required/d' CMakeLists.txt; \
-    sed -i '1i cmake_minimum_required(VERSION 3.5)' CMakeLists.txt; \
-    mkdir -p build && cd build; \
-    cmake -G "Unix Makefiles" -DENABLE_SHARED=OFF -DHIGH_BIT_DEPTH=ON -DSTATIC_LINK_CRT=ON -DCMAKE_EXE_LINKER_FLAGS="-static" ..; \
-    make -j"$(nproc)"; \
-    cp x265 /usr/bin/x265; \
-    chmod +x /usr/bin/x265; \
-    rm -rf /tmp/x265
+RUN bash <<'EOS'
+set -euo pipefail
+mkdir -p /tmp/x265
+cd /tmp/x265
+git clone --depth 1 https://github.com/msg7086/x265-Yuuki-Asuna.git
+x265_repo=/tmp/x265/x265-Yuuki-Asuna
+MULTIBUILD=${x265_repo}/build/linux
+SRCROOT=${x265_repo}/source
+test -f "${SRCROOT}/CMakeLists.txt"
+
+case ${MAKEFLAGS-} in
+'')
+	_j="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
+	case "$_j" in ''|*[!0-9]*) _j=4 ;; esac
+	export MAKEFLAGS="-j${_j}"
+	;;
+esac
+
+x265_cmake_extra_args="-DCMAKE_POLICY_VERSION_MINIMUM=3.10"
+
+CXXBIN="${CXX:-c++}"
+LINK_MODE="${X265_LINK:-auto}"
+_libstd=""
+_libc=""
+if command -v "$CXXBIN" >/dev/null 2>&1; then
+	_libstd="$("$CXXBIN" -print-file-name=libstdc++.a 2>/dev/null || true)"
+	_libc="$("$CXXBIN" -print-file-name=libc.a 2>/dev/null || true)"
+fi
+_stdc_ok=0
+_libc_ok=0
+[ -n "$_libstd" ] && [ -f "$_libstd" ] && _stdc_ok=1
+[ -n "$_libc" ] && [ -f "$_libc" ] && _libc_ok=1
+
+X265_CMAKE_EXE_LINKER_FLAGS=""
+case "$LINK_MODE" in
+full)
+	[ "$_stdc_ok" = 1 ] && [ "$_libc_ok" = 1 ] || exit 1
+	X265_CMAKE_EXE_LINKER_FLAGS=-static
+	;;
+mostly)
+	[ "$_stdc_ok" = 1 ] || exit 1
+	X265_CMAKE_EXE_LINKER_FLAGS="-static-libgcc -static-libstdc++"
+	;;
+x265-only)
+	X265_CMAKE_EXE_LINKER_FLAGS=""
+	;;
+auto)
+	if [ "$_stdc_ok" = 1 ]; then
+		X265_CMAKE_EXE_LINKER_FLAGS="-static-libgcc -static-libstdc++"
+	else
+		X265_CMAKE_EXE_LINKER_FLAGS=""
+	fi
+	;;
+*) exit 1 ;;
+esac
+
+command -v python3 >/dev/null 2>&1 || exit 1
+python3 - "$SRCROOT" <<'PY'
+import pathlib, sys
+
+root = pathlib.Path(sys.argv[1])
+marker = "# x265-multilib-fullstatic: cmake4-patched\n"
+main_cm = root / "CMakeLists.txt"
+text = main_cm.read_text(encoding="utf-8", errors="surrogateescape")
+if marker in text:
+    sys.exit(0)
+
+anchor = "option(FPROFILE_GENERATE"
+idx = text.find(anchor)
+if idx < 0:
+    sys.exit("error: x265 CMakeLists.txt missing anchor %r" % (anchor,))
+
+header = (
+    "# vim: syntax=cmake\n"
+    + marker
+    + "cmake_minimum_required(VERSION 3.10)\n\n"
+    + "if(NOT CMAKE_BUILD_TYPE)\n"
+    + "    # default to Release build for GCC builds\n"
+    + "    set(CMAKE_BUILD_TYPE Release CACHE STRING\n"
+    + '        "Choose the type of build, options are: None(CMAKE_CXX_FLAGS or CMAKE_C_FLAGS used) Debug Release RelWithDebInfo MinSizeRel."\n'
+    + "        FORCE)\n"
+    + "endif()\n"
+    + 'message(STATUS "cmake version ${CMAKE_VERSION}")\n'
+    + "if(POLICY CMP0025)\n"
+    + "    cmake_policy(SET CMP0025 NEW)\n"
+    + "endif()\n"
+    + "if(POLICY CMP0042)\n"
+    + "    cmake_policy(SET CMP0042 NEW) # MACOSX_RPATH\n"
+    + "endif()\n"
+    + "if(POLICY CMP0054)\n"
+    + "    cmake_policy(SET CMP0054 NEW)\n"
+    + "endif()\n\n"
+    + "project(x265 LANGUAGES C CXX)\n"
+    + "include(CheckIncludeFiles)\n"
+    + "include(CheckFunctionExists)\n"
+    + "include(CheckSymbolExists)\n"
+    + "include(CheckCXXCompilerFlag)\n\n"
+)
+
+rest = text[idx:]
+rest = rest.replace(
+    'if(${CMAKE_CXX_COMPILER_ID} STREQUAL "Clang")',
+    'if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")',
+)
+rest = rest.replace(
+    'if(${CMAKE_CXX_COMPILER_ID} STREQUAL "Intel")',
+    'if(CMAKE_CXX_COMPILER_ID STREQUAL "Intel")',
+)
+rest = rest.replace(
+    'if(${CMAKE_CXX_COMPILER_ID} STREQUAL "GNU")',
+    'if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")',
+)
+rest = rest.replace(
+    "if(IS_ABSOLUTE ${LIB} AND EXISTS ${LIB})",
+    'if(IS_ABSOLUTE "${LIB}" AND EXISTS "${LIB}")',
+)
+
+main_cm.write_text(header + rest, encoding="utf-8", errors="surrogateescape")
+
+hdr = root / "dynamicHDR10" / "CMakeLists.txt"
+if hdr.is_file():
+    ht = hdr.read_text(encoding="utf-8", errors="surrogateescape")
+    old = "cmake_minimum_required (VERSION 2.8.11)"
+    new = "cmake_minimum_required(VERSION 3.10)"
+    if old in ht:
+        hdr.write_text(ht.replace(old, new, 1), encoding="utf-8", errors="surrogateescape")
+sys.exit(0)
+PY
+
+mkdir -p "$MULTIBUILD/8bit" "$MULTIBUILD/10bit" "$MULTIBUILD/12bit"
+
+cd "$MULTIBUILD/12bit"
+cmake "$x265_cmake_extra_args" "$SRCROOT" \
+	-DHIGH_BIT_DEPTH=ON \
+	-DEXPORT_C_API=OFF \
+	-DENABLE_SHARED=OFF \
+	-DENABLE_CLI=OFF \
+	-DMAIN12=ON \
+	-DENABLE_LIBNUMA=OFF
+make
+
+cd "$MULTIBUILD/10bit"
+cmake "$x265_cmake_extra_args" "$SRCROOT" \
+	-DHIGH_BIT_DEPTH=ON \
+	-DEXPORT_C_API=OFF \
+	-DENABLE_SHARED=OFF \
+	-DENABLE_CLI=OFF \
+	-DENABLE_LIBNUMA=OFF
+make
+
+cd "$MULTIBUILD/8bit"
+ln -sf ../10bit/libx265.a libx265_main10.a
+ln -sf ../12bit/libx265.a libx265_main12.a
+if [ -n "$X265_CMAKE_EXE_LINKER_FLAGS" ]; then
+	cmake "$x265_cmake_extra_args" "$SRCROOT" \
+		-DENABLE_SHARED=OFF \
+		-DENABLE_LIBNUMA=OFF \
+		-DCMAKE_EXE_LINKER_FLAGS="$X265_CMAKE_EXE_LINKER_FLAGS" \
+		-DEXTRA_LIB="x265_main10.a;x265_main12.a" \
+		-DEXTRA_LINK_FLAGS=-L. \
+		-DLINKED_10BIT=ON \
+		-DLINKED_12BIT=ON
+else
+	cmake "$x265_cmake_extra_args" "$SRCROOT" \
+		-DENABLE_SHARED=OFF \
+		-DENABLE_LIBNUMA=OFF \
+		-DEXTRA_LIB="x265_main10.a;x265_main12.a" \
+		-DEXTRA_LINK_FLAGS=-L. \
+		-DLINKED_10BIT=ON \
+		-DLINKED_12BIT=ON
+fi
+make
+
+mv libx265.a libx265_main.a
+if [ "$(uname)" = "Linux" ]; then
+	ar -M <<'ARSCRIPT'
+CREATE libx265.a
+ADDLIB libx265_main.a
+ADDLIB libx265_main10.a
+ADDLIB libx265_main12.a
+SAVE
+END
+ARSCRIPT
+else
+	libtool -static -o libx265.a libx265_main.a libx265_main10.a libx265_main12.a 2>/dev/null
+fi
+
+if command -v strip >/dev/null 2>&1; then
+	strip "$MULTIBUILD/8bit/x265" 2>/dev/null || true
+fi
+
+cp "$MULTIBUILD/8bit/x265" /usr/bin/x265
+chmod +x /usr/bin/x265
+rm -rf /tmp/x265
+EOS
+
+RUN bash <<'SVTAV1EOS'
+set -euo pipefail
+mkdir -p /tmp/svtav1
+cd /tmp/svtav1
+git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
+svt_root=/tmp/svtav1/SVT-AV1
+test -f "$svt_root/Source/Lib/Globals/enc_settings.c"
+
+case ${MAKEFLAGS-} in
+'')
+	_j="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
+	case "$_j" in ''|*[!0-9]*) _j=4 ;; esac
+	export MAKEFLAGS="-j${_j}"
+	;;
+esac
+command -v python3 >/dev/null 2>&1 || exit 1
+python3 - "$svt_root" <<'SVTAV1PATCH'
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+
+APPLY = [
+    (
+        Path("Source/Lib/Globals/enc_settings.c"),
+        """    if ((config->encoder_bit_depth != 8) && (config->encoder_bit_depth != 10)) {
+        SVT_ERROR("Encoder Bit Depth shall be only 8 or 10 \\n");
+        return_error = EB_ErrorBadParameter;
+    }
+    // Check if the EncoderBitDepth is conformant with the Profile constraint""",
+        """#if CONFIG_ENABLE_HIGH_BIT_DEPTH
+    if (config->encoder_bit_depth != 8 && config->encoder_bit_depth != 10 &&
+        config->encoder_bit_depth != EB_TWELVE_BIT) {
+        SVT_ERROR("Encoder Bit Depth shall be only 8, 10, or 12\\n");
+        return_error = EB_ErrorBadParameter;
+    }
+    if (config->encoder_bit_depth == EB_TWELVE_BIT && config->profile != PROFESSIONAL_PROFILE) {
+        SVT_ERROR("12-bit encoding requires Professional profile (seq_profile / --profile 2)\\n");
+        return_error = EB_ErrorBadParameter;
+    }
+#else
+    if ((config->encoder_bit_depth != 8) && (config->encoder_bit_depth != 10)) {
+        SVT_ERROR("Encoder Bit Depth shall be only 8 or 10 \\n");
+        return_error = EB_ErrorBadParameter;
+    }
+#endif
+    // Check if the EncoderBitDepth is conformant with the Profile constraint""",
+    ),
+    (
+        Path("Source/App/app_config.c"),
+        """#define INPUT_DEPTH_TOKEN "--input-depth"
+#define KEYINT_TOKEN "--keyint\"""",
+        """#define INPUT_DEPTH_TOKEN "--input-depth"
+#if CONFIG_ENABLE_HIGH_BIT_DEPTH
+#define INPUT_DEPTH_HELP \\
+    "Input video file and output bitstream bit-depth, default is 8 [8, 10, 12]. 12-bit requires " \\
+    "`--profile 2` (Professional)"
+#else
+#define INPUT_DEPTH_HELP "Input video file and output bitstream bit-depth, default is 8 [8, 10]"
+#endif
+#define KEYINT_TOKEN "--keyint\"""",
+    ),
+    (
+        Path("Source/App/app_config.c"),
+        """    {INPUT_DEPTH_TOKEN, "Input video file and output bitstream bit-depth, default is 8 [8, 10]"},""",
+        """    {INPUT_DEPTH_TOKEN, INPUT_DEPTH_HELP},""",
+    ),
+    (
+        Path("Source/App/app_config.c"),
+        """    frame_size = frame_size << ((app_cfg->config.encoder_bit_depth == 10) ? 1 : 0);""",
+        """    frame_size = frame_size << ((app_cfg->config.encoder_bit_depth > 8) ? 1 : 0);""",
+    ),
+    (
+        Path("Source/App/app_main.c"),
+        """        double max_pix_value  = (cfg->encoder_bit_depth == 8) ? 255 : 1023;""",
+        """        double max_pix_value = (double)((1u << cfg->encoder_bit_depth) - 1);""",
+    ),
+    (
+        Path("Source/App/app_process_cmd.c"),
+        """    double   max_pix_value = (app_cfg->config.encoder_bit_depth == 8) ? 255 : 1023;""",
+        """    double max_pix_value = (double)((1u << app_cfg->config.encoder_bit_depth) - 1);""",
+    ),
+]
+
+
+def run_apply():
+    for rel, old, new in APPLY:
+        path = root / rel
+        text = path.read_text(encoding="utf-8")
+        if "12-bit encoding requires Professional profile" in text and rel.name == "enc_settings.c":
+            continue
+        if old not in text:
+            if new in text:
+                continue
+            sys.exit(1)
+        path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+
+run_apply()
+sys.exit(0)
+SVTAV1PATCH
+
+cd "$svt_root/Build/linux"
+./build.sh release static
+
+test -f "$svt_root/Bin/Release/SvtAv1EncApp"
+cp "$svt_root/Bin/Release/SvtAv1EncApp" /usr/bin/SvtAv1EncApp
+chmod +x /usr/bin/SvtAv1EncApp
+rm -rf /tmp/svtav1
+SVTAV1EOS
+
+RUN bash <<'FDKAAC'
+set -euo pipefail
+mkdir -p /tmp/fdk
+cd /tmp/fdk
+wget -q -O v2.0.3.tar.gz https://github.com/mstorsjo/fdk-aac/archive/refs/tags/v2.0.3.tar.gz
+tar zxf v2.0.3.tar.gz
+cd fdk-aac-2.0.3
+./autogen.sh
+./configure
+make -j"$(nproc)"
+make install
+ldconfig
+cd /tmp/fdk
+git clone --depth 1 https://github.com/nu774/fdkaac.git
+cd fdkaac
+autoreconf -i
+./configure
+make -j"$(nproc)"
+make install
+ldconfig
+rm -rf /tmp/fdk
+FDKAAC
 
 RUN set -eux; \
     mkdir -p /tmp/vs && cd /tmp/vs; \
@@ -323,7 +638,6 @@ RUN set -eux; \
 RUN python3 -m pip install --break-system-packages --upgrade pycountry PyQt6 librosa pillow matplotlib
 
 RUN set -eux; \
-    apt-get update && apt-get install -y --no-install-recommends p7zip-full && rm -rf /var/lib/apt/lists/*; \
     mkdir -p /tmp/vcbs && cd /tmp/vcbs; \
     wget -O vapoursynth_portable.7z "https://github.com/AmusementClub/tools/releases/download/2025H1p/vapoursynth_portable_25H1.1p_cpu.7z"; \
     7z x vapoursynth_portable.7z -o./extracted; \
@@ -339,9 +653,9 @@ RUN set -eux; \
     mkdir -p /tmp/x264 && cd /tmp/x264; \
     git clone https://code.videolan.org/videolan/x264.git; \
     cd x264; \
-    ./configure --enable-static --enable-shared; \
+    ./configure --enable-static --bit-depth=all --extra-ldflags="-static"; \
     make -j"$(nproc)"; \
-    cp x264 /usr/bin/x264; \
+    cp x264 /usr/bin/; \
     chmod +x /usr/bin/x264; \
     rm -rf /tmp/x264
 

@@ -378,6 +378,42 @@ res = res.std.Trim(first=0, length=720)
 
 Then remove it for full encode.
 
+### Some discs append a short copyright notice after the last episode—how do I remove it?
+
+Open **View chapters**; the notice is usually the last segment—uncheck it and save.
+
+### Some discs use one MPLS per episode; how do I handle bonus discs?
+
+You can select multiple **main MPLS** entries to cover multiple episodes, or leave none selected for bonus-disc-only volumes.
+
+### How do I extract IGS menus? What about single-frame video?
+
+IGS menus are off by default; enable M2TS rows whose type is `igs_menu`. Single-frame video is saved as PNG by default—nothing else required.
+
+### Why is the remux larger than the original disc?
+
+Often because bonus/extra clips are duplicated across playlists. Check each MPLS and **View chapters**; if a playlist overlaps the main one, set that overlapping MPLS as **main MPLS**, open **View chapters**, uncheck the duplicate segments, then uncheck the matching rows in the SP table below.
+
+### Does encode mode tag chapters as OP/ED?
+
+No. If you need that, remux the disc first, then in encode mode choose the remux as the source—you can use **Edit chapters** to set chapter titles.
+
+### Why does getnative report different native resolutions per episode?
+
+That is normal: some discs mix native resolutions, and authoring is messy. Run a test pass; if results are similar across episodes, auto getnative is fine. Otherwise turn off auto getnative and edit the VPy with the resolution and scaling you trust—or leave those fields empty.
+
+### Why do remux track languages differ from MKVToolNix for some discs?
+
+If they disagree, it is likely an MKVToolNix bug. This tool follows the disc; it does not rewrite `und` tracks to `jpn`, etc.
+
+### Why is the codebase so large?
+
+The workflow is complex, and a lot of code was AI-generated with redundancy—I trim it when I see it and when fixing bugs, and plan a broader cleanup/refactor when time allows.
+
+### Is the program reliable? Can AI-written code be trusted?
+
+Judge for yourself and use your own discretion.
+
 ---
 
 ## Credits

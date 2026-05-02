@@ -657,11 +657,39 @@ EOF
 # L-SMASH
 # ---------------------------------------------------------------------------
 
+__lsmash_is_installed() {
+  if pkg-config --exists liblsmash 2>/dev/null || pkg-config --exists lsmash 2>/dev/null; then
+    return 0
+  fi
+  if ldconfig -p 2>/dev/null | grep -qE '\bliblsmash\.so\b'; then
+    return 0
+  fi
+  if sudo ldconfig -p 2>/dev/null | grep -qE '\bliblsmash\.so\b'; then
+    return 0
+  fi
+  local _f
+  shopt -s nullglob
+  for _f in \
+    /usr/local/lib/liblsmash.so* \
+    /usr/lib/x86_64-linux-gnu/liblsmash.so* \
+    /usr/lib/aarch64-linux-gnu/liblsmash.so* \
+    /usr/lib/liblsmash.so* \
+    "${HOME}/.local/lib/liblsmash.so"*; do
+    if [[ -e "$_f" ]]; then
+      shopt -u nullglob
+      return 0
+    fi
+  done
+  shopt -u nullglob
+  return 1
+}
+
 install_lsmash() {
   log "$(msg 'Installing L-SMASH (build from source)' '安装 lsmash（从源码编译并安装）')"
 
-  if sudo ldconfig -p 2>/dev/null | grep -qE '\bliblsmash\.so\b'; then
-    log "$(msg 'L-SMASH already installed (liblsmash.so found in ldconfig), skipping' '检测到 lsmash 已安装（ldconfig 中存在 liblsmash.so），跳过编译安装')"
+  if __lsmash_is_installed; then
+    log "$(msg 'L-SMASH already installed (liblsmash detected), skipping build' \
+      '检测到 L-SMASH 已安装（liblsmash），跳过编译安装')"
     return 0
   fi
 
@@ -703,10 +731,256 @@ install_lsmash() {
 # x265 (Yuuki-Asuna fork)
 # ---------------------------------------------------------------------------
 
+# $1 = absolute path to cloned repo root (.../x265-Yuuki-Asuna).
+__build_x265_yuuki_multilib() {
+  local x265_repo="$1"
+  local MULTIBUILD="${x265_repo}/build/linux"
+  local SRCROOT="${x265_repo}/source"
+
+  [[ -f "${SRCROOT}/CMakeLists.txt" ]] || \
+    die "$(msg 'x265 source tree has no CMakeLists.txt' 'x265 源码目录中找不到 CMakeLists.txt')"
+
+  case ${MAKEFLAGS-} in
+  '')
+    local _j
+    _j="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
+    case "$_j" in ''|*[!0-9]*) _j=4 ;; esac
+    export MAKEFLAGS="-j${_j}"
+    ;;
+  esac
+
+  local is_u2604=0
+  local x265_cmake_extra_args=""
+  if [[ -r /etc/os-release ]]; then
+    # shellcheck source=/dev/null
+    source /etc/os-release
+    if [[ "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" == "26.04" ]]; then
+      is_u2604=1
+      x265_cmake_extra_args="-DCMAKE_POLICY_VERSION_MINIMUM=3.10"
+    fi
+  fi
+
+  local CXXBIN="${CXX:-c++}"
+  local LINK_MODE="${X265_LINK:-auto}"
+  local _libstd="" _libc=""
+  if command -v "$CXXBIN" >/dev/null 2>&1; then
+    _libstd="$("$CXXBIN" -print-file-name=libstdc++.a 2>/dev/null || true)"
+    _libc="$("$CXXBIN" -print-file-name=libc.a 2>/dev/null || true)"
+  fi
+  local _stdc_ok=0 _libc_ok=0
+  [[ -n "$_libstd" && -f "$_libstd" ]] && _stdc_ok=1
+  [[ -n "$_libc" && -f "$_libc" ]] && _libc_ok=1
+
+  local X265_CMAKE_EXE_LINKER_FLAGS=""
+  case "$LINK_MODE" in
+  full)
+    if [[ "$_stdc_ok" != 1 || "$_libc_ok" != 1 ]]; then
+      die "$(msg 'X265_LINK=full needs static libstdc++.a and libc.a (see compiler -print-file-name).' \
+        'X265_LINK=full 需要 libstdc++.a 与 libc.a（可用编译器 -print-file-name 检查）。')"
+    fi
+    X265_CMAKE_EXE_LINKER_FLAGS=-static
+    ;;
+  mostly)
+    if [[ "$_stdc_ok" != 1 ]]; then
+      die "$(msg 'X265_LINK=mostly needs libstdc++.a from your g++ dev package.' \
+        'X265_LINK=mostly 需要 g++ 开发包提供的 libstdc++.a。')"
+    fi
+    X265_CMAKE_EXE_LINKER_FLAGS="-static-libgcc -static-libstdc++"
+    ;;
+  x265-only)
+    X265_CMAKE_EXE_LINKER_FLAGS=""
+    ;;
+  auto)
+    # Do not use full -static here: multilib x265 often still pulls libc/libm via .so even when
+    # libc.a exists, which breaks the link. Use mostly-static C++ or fully dynamic unless
+    # X265_LINK=full (explicit) after installing a complete static toolchain.
+    if [[ "$_stdc_ok" == 1 ]]; then
+      X265_CMAKE_EXE_LINKER_FLAGS="-static-libgcc -static-libstdc++"
+      log "$(msg 'x265 link mode: auto → mostly static C++ (-static-libgcc -static-libstdc++).' \
+        'x265 链接方式：auto → 以静态 C++ 运行时为主（-static-libgcc -static-libstdc++）。')"
+    else
+      X265_CMAKE_EXE_LINKER_FLAGS=""
+      log "$(msg 'x265 link mode: auto → dynamic C++ runtime (install libstdc++-*-dev for mostly-static).' \
+        'x265 链接方式：auto → 动态 C++ 运行时（安装 libstdc++-*-dev 可启用 mostly-static）。')"
+    fi
+    ;;
+  *)
+    die "$(msg "Unknown X265_LINK=${LINK_MODE} (use auto|full|mostly|x265-only)." \
+      "未知的 X265_LINK=${LINK_MODE}（请使用 auto|full|mostly|x265-only）。")"
+    ;;
+  esac
+
+  if (( is_u2604 )); then
+    command -v python3 >/dev/null 2>&1 || \
+      die "$(msg 'python3 is required to patch x265 for CMake 4.x on Ubuntu 26.04.' \
+        '在 Ubuntu 26.04 上为 x265 打 CMake 4.x 补丁需要 python3。')"
+    log "$(msg 'Patching x265 CMakeLists for CMake 4.x (Ubuntu 26.04)...' \
+      '正在为 x265 应用 CMake 4.x 兼容补丁（Ubuntu 26.04）…')"
+    python3 - "$SRCROOT" <<'PY' || die "$(msg 'x265 CMakeLists patch failed' 'x265 CMakeLists 补丁失败')"
+import pathlib, sys
+
+root = pathlib.Path(sys.argv[1])
+marker = "# x265-multilib-fullstatic: cmake4-patched\n"
+main_cm = root / "CMakeLists.txt"
+text = main_cm.read_text(encoding="utf-8", errors="surrogateescape")
+if marker in text:
+    sys.exit(0)
+
+anchor = "option(FPROFILE_GENERATE"
+idx = text.find(anchor)
+if idx < 0:
+    sys.exit("error: x265 CMakeLists.txt missing anchor %r" % (anchor,))
+
+header = (
+    "# vim: syntax=cmake\n"
+    + marker
+    + "cmake_minimum_required(VERSION 3.10)\n\n"
+    + "if(NOT CMAKE_BUILD_TYPE)\n"
+    + "    # default to Release build for GCC builds\n"
+    + "    set(CMAKE_BUILD_TYPE Release CACHE STRING\n"
+    + '        "Choose the type of build, options are: None(CMAKE_CXX_FLAGS or CMAKE_C_FLAGS used) Debug Release RelWithDebInfo MinSizeRel."\n'
+    + "        FORCE)\n"
+    + "endif()\n"
+    + 'message(STATUS "cmake version ${CMAKE_VERSION}")\n'
+    + "if(POLICY CMP0025)\n"
+    + "    cmake_policy(SET CMP0025 NEW)\n"
+    + "endif()\n"
+    + "if(POLICY CMP0042)\n"
+    + "    cmake_policy(SET CMP0042 NEW) # MACOSX_RPATH\n"
+    + "endif()\n"
+    + "if(POLICY CMP0054)\n"
+    + "    cmake_policy(SET CMP0054 NEW)\n"
+    + "endif()\n\n"
+    + "project(x265 LANGUAGES C CXX)\n"
+    + "include(CheckIncludeFiles)\n"
+    + "include(CheckFunctionExists)\n"
+    + "include(CheckSymbolExists)\n"
+    + "include(CheckCXXCompilerFlag)\n\n"
+)
+
+rest = text[idx:]
+rest = rest.replace(
+    'if(${CMAKE_CXX_COMPILER_ID} STREQUAL "Clang")',
+    'if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")',
+)
+rest = rest.replace(
+    'if(${CMAKE_CXX_COMPILER_ID} STREQUAL "Intel")',
+    'if(CMAKE_CXX_COMPILER_ID STREQUAL "Intel")',
+)
+rest = rest.replace(
+    'if(${CMAKE_CXX_COMPILER_ID} STREQUAL "GNU")',
+    'if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")',
+)
+rest = rest.replace(
+    "if(IS_ABSOLUTE ${LIB} AND EXISTS ${LIB})",
+    'if(IS_ABSOLUTE "${LIB}" AND EXISTS "${LIB}")',
+)
+
+main_cm.write_text(header + rest, encoding="utf-8", errors="surrogateescape")
+
+hdr = root / "dynamicHDR10" / "CMakeLists.txt"
+if hdr.is_file():
+    ht = hdr.read_text(encoding="utf-8", errors="surrogateescape")
+    old = "cmake_minimum_required (VERSION 2.8.11)"
+    new = "cmake_minimum_required(VERSION 3.10)"
+    if old in ht:
+        hdr.write_text(ht.replace(old, new, 1), encoding="utf-8", errors="surrogateescape")
+sys.exit(0)
+PY
+    log "$(msg 'x265 CMake 4.x patch step finished.' 'x265 CMake 4.x 补丁步骤已完成。')"
+  else
+    log "$(msg 'Skipping x265 CMake 4.x patch (not Ubuntu 26.04).' \
+      '非 Ubuntu 26.04，跳过 x265 的 CMake 4.x 补丁。')"
+  fi
+
+  mkdir -p "${MULTIBUILD}/8bit" "${MULTIBUILD}/10bit" "${MULTIBUILD}/12bit"
+
+  local -a _x265_ecmake=()
+  [[ -n "$x265_cmake_extra_args" ]] && _x265_ecmake+=("$x265_cmake_extra_args")
+
+  log "$(msg 'x265: configuring 12-bit core (static, no CLI)' 'x265：配置 12-bit 核心（静态库，无 CLI）')"
+  cd "${MULTIBUILD}/12bit" || die "$(msg 'Cannot cd to x265 12-bit build dir' '无法进入 x265 12-bit 构建目录')"
+  tmux_run "$(msg 'x265 12-bit: cmake' 'x265 12-bit：cmake')" \
+    cmake "${_x265_ecmake[@]}" "$SRCROOT" \
+      -DHIGH_BIT_DEPTH=ON \
+      -DEXPORT_C_API=OFF \
+      -DENABLE_SHARED=OFF \
+      -DENABLE_CLI=OFF \
+      -DMAIN12=ON \
+      -DENABLE_LIBNUMA=OFF
+  tmux_run "$(msg 'x265 12-bit: make' 'x265 12-bit：make')" make
+
+  log "$(msg 'x265: configuring 10-bit core (static, no CLI)' 'x265：配置 10-bit 核心（静态库，无 CLI）')"
+  cd "${MULTIBUILD}/10bit" || die "$(msg 'Cannot cd to x265 10-bit build dir' '无法进入 x265 10-bit 构建目录')"
+  tmux_run "$(msg 'x265 10-bit: cmake' 'x265 10-bit：cmake')" \
+    cmake "${_x265_ecmake[@]}" "$SRCROOT" \
+      -DHIGH_BIT_DEPTH=ON \
+      -DEXPORT_C_API=OFF \
+      -DENABLE_SHARED=OFF \
+      -DENABLE_CLI=OFF \
+      -DENABLE_LIBNUMA=OFF
+  tmux_run "$(msg 'x265 10-bit: make' 'x265 10-bit：make')" make
+
+  log "$(msg 'x265: configuring 8-bit multilib CLI' 'x265：配置 8-bit multilib 可执行文件')"
+  cd "${MULTIBUILD}/8bit" || die "$(msg 'Cannot cd to x265 8-bit build dir' '无法进入 x265 8-bit 构建目录')"
+  ln -sf ../10bit/libx265.a libx265_main10.a
+  ln -sf ../12bit/libx265.a libx265_main12.a
+  if [[ -n "$X265_CMAKE_EXE_LINKER_FLAGS" ]]; then
+    tmux_run "$(msg 'x265 8-bit: cmake (with linker flags)' 'x265 8-bit：cmake（含链接器参数）')" \
+      cmake "${_x265_ecmake[@]}" "$SRCROOT" \
+        -DENABLE_SHARED=OFF \
+        -DENABLE_LIBNUMA=OFF \
+        -DCMAKE_EXE_LINKER_FLAGS="$X265_CMAKE_EXE_LINKER_FLAGS" \
+        -DEXTRA_LIB="x265_main10.a;x265_main12.a" \
+        -DEXTRA_LINK_FLAGS=-L. \
+        -DLINKED_10BIT=ON \
+        -DLINKED_12BIT=ON
+  else
+    tmux_run "$(msg 'x265 8-bit: cmake' 'x265 8-bit：cmake')" \
+      cmake "${_x265_ecmake[@]}" "$SRCROOT" \
+        -DENABLE_SHARED=OFF \
+        -DENABLE_LIBNUMA=OFF \
+        -DEXTRA_LIB="x265_main10.a;x265_main12.a" \
+        -DEXTRA_LINK_FLAGS=-L. \
+        -DLINKED_10BIT=ON \
+        -DLINKED_12BIT=ON
+  fi
+  tmux_run "$(msg 'x265 8-bit: make' 'x265 8-bit：make')" make
+
+  log "$(msg 'x265: merging static libraries (ar)' 'x265：合并静态库（ar）')"
+  mv libx265.a libx265_main.a
+  if [[ "$(uname)" == "Linux" ]]; then
+    ar -M <<EOF
+CREATE libx265.a
+ADDLIB libx265_main.a
+ADDLIB libx265_main10.a
+ADDLIB libx265_main12.a
+SAVE
+END
+EOF
+  else
+    libtool -static -o libx265.a libx265_main.a libx265_main10.a libx265_main12.a 2>/dev/null
+  fi
+
+  if command -v strip >/dev/null 2>&1; then
+    strip "${MULTIBUILD}/8bit/x265" 2>/dev/null || true
+  fi
+
+  local _x265_out="${MULTIBUILD}/8bit/x265"
+  [[ -f "$_x265_out" ]] || die "$(msg 'x265 binary missing after build' '编译完成后未找到 x265 可执行文件')"
+  log "$(msg 'Installing x265 to /usr/bin' '正在将 x265 安装到 /usr/bin')"
+  if command -v sudo >/dev/null 2>&1 && [[ "$(id -u)" -ne 0 ]]; then
+    sudo cp "$_x265_out" /usr/bin/
+    sudo chmod +x /usr/bin/x265
+  else
+    cp "$_x265_out" /usr/bin/
+    chmod +x /usr/bin/x265
+  fi
+}
+
 install_x265() {
   log "$(msg 'Installing x265 (Yuuki-Asuna fork)' '开始安装 x265 (Yuuki-Asuna 版)')"
 
-  # Skip if already installed
   if [[ -x "/usr/bin/x265" ]] || command -v x265 >/dev/null 2>&1; then
     log "$(msg 'x265 already exists, skipping build' '检测到 x265 已存在，跳过编译。')"
     return 0
@@ -714,8 +988,7 @@ install_x265() {
 
   install_lsmash
 
-  # Install build dependencies
-  local deps=(build-essential cmake git yasm nasm wget)
+  local deps=(build-essential cmake git yasm nasm python3)
   apt_update
   apt_install "${deps[@]}" || die "$(msg 'Failed to install x265 dependencies' 'x265 依赖安装失败')"
 
@@ -724,45 +997,9 @@ install_x265() {
 
   (
     cd "$build_dir" || exit 1
-    log "$(msg 'Downloading x265-Yuuki-Asuna source...' '下载 x265-Yuuki-Asuna 源码...')"
-    tmux_run "$(msg 'Download x265 Asuna-2.8' '下载 x265 Asuna-2.8')" wget https://github.com/msg7086/x265-Yuuki-Asuna/archive/refs/tags/Asuna-2.8.tar.gz || exit 1
-    tmux_run "$(msg 'Extract x265 Asuna-2.8' '解压 x265 Asuna-2.8')" tar zxvf Asuna-2.8.tar.gz || exit 1
-
-    cd x265-Yuuki-Asuna-Asuna-2.8/source || exit 1
-
-    # --- Special handling for Ubuntu 26.04 (CMake 4.x) ---
-    if grep -q "26.04" /etc/os-release; then
-      log "$(msg 'Ubuntu 26.04 detected, applying CMake 4.x compatibility patch...' '检测到 Ubuntu 26.04，正在应用 CMake 4.x 兼容性补丁...')"
-
-      # 1. Bump minimum required version to 3.5
-      sed -i 's/cmake_minimum_required(VERSION .*)/cmake_minimum_required(VERSION 3.5)/g' CMakeLists.txt
-
-      # 2. Remove OLD policy settings no longer supported by CMake 4.x
-      sed -i '/cmake_policy(SET CMP0025 OLD)/d' CMakeLists.txt
-      sed -i '/cmake_policy(SET CMP0054 OLD)/d' CMakeLists.txt
-
-      # 3. Fix project() declaration order:
-      #    First remove the existing cmake_minimum_required line (usually around line 20) to avoid duplication,
-      #    then insert a fresh declaration at the very top of the file.
-      sed -i '/cmake_minimum_required/d' CMakeLists.txt
-      sed -i '1i cmake_minimum_required(VERSION 3.5)' CMakeLists.txt
-    fi
-
-    mkdir -p build && cd build || exit 1
-
-    log "$(msg 'Configuring CMake project...' '配置 CMake 项目...')"
-    tmux_run "x265 cmake" cmake -G "Unix Makefiles" \
-          -DENABLE_SHARED=OFF \
-          -DHIGH_BIT_DEPTH=ON \
-          -DSTATIC_LINK_CRT=ON \
-          -DCMAKE_EXE_LINKER_FLAGS="-static" \
-          .. || exit 1
-
-    log "$(msg "Compiling x265 (using $(nproc) cores)..." "正在编译 x265 (使用 $(nproc) 核心)...")"
-    tmux_run "x265 make" make -j"$(nproc)" || exit 1
-
-    log "$(msg 'Installing build artifact...' '安装编译产物...')"
-    sudo cp x265 /usr/bin/x265 || exit 1
+    tmux_run "$(msg 'Clone x265-Yuuki-Asuna' '克隆 x265-Yuuki-Asuna')" \
+      git clone --depth 1 https://github.com/msg7086/x265-Yuuki-Asuna.git || exit 1
+    __build_x265_yuuki_multilib "${build_dir}/x265-Yuuki-Asuna" || exit 1
   ) || die "$(msg 'x265 build or install failed' 'x265 编译或安装过程中出错')"
 
   rm -rf "$build_dir"
@@ -801,14 +1038,145 @@ install_x264() {
     cd "$build_dir" || exit 1
     tmux_run "$(msg 'Download x264 source' '下载 x264 源码')" git clone https://code.videolan.org/videolan/x264.git || exit 1
     cd x264 || exit 1
-    tmux_run "x264 configure" ./configure --enable-static --enable-shared || exit 1
+    tmux_run "x264 configure" ./configure --enable-static --bit-depth=all --extra-ldflags="-static" || exit 1
     tmux_run "x264 make" make -j"$(nproc)" || exit 1
-    sudo cp x264 /usr/bin/x264 || exit 1
+    sudo cp x264 /usr/bin/ || exit 1
     sudo chmod +x /usr/bin/x264 || exit 1
   ) || die "$(msg 'x264 build/install failed' 'x264 编译/安装失败')"
 
   rm -rf "$build_dir"
   log "$(msg 'x264 installation complete' 'x264 安装完成')"
+}
+
+# ---------------------------------------------------------------------------
+# SVT-AV1 (AOMediaCodec + 12-bit patches)
+# ---------------------------------------------------------------------------
+
+__apply_svt_av1_source_patches() {
+  local svt_root="$1"
+  command -v python3 >/dev/null 2>&1 || \
+    die "$(msg 'python3 is required for SVT-AV1 source patches.' '应用 SVT-AV1 源码补丁需要 python3。')"
+  log "$(msg 'SVT-AV1: applying 12-bit source patches...' 'SVT-AV1：正在应用 12-bit 源码补丁…')"
+  python3 - "$svt_root" <<'SVTAV1PY'
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+
+APPLY = [
+    (
+        Path("Source/Lib/Globals/enc_settings.c"),
+        """    if ((config->encoder_bit_depth != 8) && (config->encoder_bit_depth != 10)) {
+        SVT_ERROR("Encoder Bit Depth shall be only 8 or 10 \\n");
+        return_error = EB_ErrorBadParameter;
+    }
+    // Check if the EncoderBitDepth is conformant with the Profile constraint""",
+        """#if CONFIG_ENABLE_HIGH_BIT_DEPTH
+    if (config->encoder_bit_depth != 8 && config->encoder_bit_depth != 10 &&
+        config->encoder_bit_depth != EB_TWELVE_BIT) {
+        SVT_ERROR("Encoder Bit Depth shall be only 8, 10, or 12\\n");
+        return_error = EB_ErrorBadParameter;
+    }
+    if (config->encoder_bit_depth == EB_TWELVE_BIT && config->profile != PROFESSIONAL_PROFILE) {
+        SVT_ERROR("12-bit encoding requires Professional profile (seq_profile / --profile 2)\\n");
+        return_error = EB_ErrorBadParameter;
+    }
+#else
+    if ((config->encoder_bit_depth != 8) && (config->encoder_bit_depth != 10)) {
+        SVT_ERROR("Encoder Bit Depth shall be only 8 or 10 \\n");
+        return_error = EB_ErrorBadParameter;
+    }
+#endif
+    // Check if the EncoderBitDepth is conformant with the Profile constraint""",
+    ),
+    (
+        Path("Source/App/app_config.c"),
+        """#define INPUT_DEPTH_TOKEN "--input-depth"
+#define KEYINT_TOKEN "--keyint\"""",
+        """#define INPUT_DEPTH_TOKEN "--input-depth"
+#if CONFIG_ENABLE_HIGH_BIT_DEPTH
+#define INPUT_DEPTH_HELP \\
+    "Input video file and output bitstream bit-depth, default is 8 [8, 10, 12]. 12-bit requires " \\
+    "`--profile 2` (Professional)"
+#else
+#define INPUT_DEPTH_HELP "Input video file and output bitstream bit-depth, default is 8 [8, 10]"
+#endif
+#define KEYINT_TOKEN "--keyint\"""",
+    ),
+    (
+        Path("Source/App/app_config.c"),
+        """    {INPUT_DEPTH_TOKEN, "Input video file and output bitstream bit-depth, default is 8 [8, 10]"},""",
+        """    {INPUT_DEPTH_TOKEN, INPUT_DEPTH_HELP},""",
+    ),
+    (
+        Path("Source/App/app_config.c"),
+        """    frame_size = frame_size << ((app_cfg->config.encoder_bit_depth == 10) ? 1 : 0);""",
+        """    frame_size = frame_size << ((app_cfg->config.encoder_bit_depth > 8) ? 1 : 0);""",
+    ),
+    (
+        Path("Source/App/app_main.c"),
+        """        double max_pix_value  = (cfg->encoder_bit_depth == 8) ? 255 : 1023;""",
+        """        double max_pix_value = (double)((1u << cfg->encoder_bit_depth) - 1);""",
+    ),
+    (
+        Path("Source/App/app_process_cmd.c"),
+        """    double   max_pix_value = (app_cfg->config.encoder_bit_depth == 8) ? 255 : 1023;""",
+        """    double max_pix_value = (double)((1u << app_cfg->config.encoder_bit_depth) - 1);""",
+    ),
+]
+
+
+def run_apply():
+    for rel, old, new in APPLY:
+        path = root / rel
+        text = path.read_text(encoding="utf-8")
+        if "12-bit encoding requires Professional profile" in text and rel.name == "enc_settings.c":
+            continue
+        if old not in text:
+            if new in text:
+                continue
+            sys.exit(1)
+        path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+
+run_apply()
+sys.exit(0)
+SVTAV1PY
+  log "$(msg 'SVT-AV1: source patch step finished.' 'SVT-AV1：源码补丁步骤已完成。')"
+}
+
+install_svt_av1() {
+  log "$(msg 'Installing SVT-AV1 (with 12-bit patches)' '正在安装 SVT-AV1（含 12-bit 补丁）')"
+
+  if [[ -x "/usr/bin/SvtAv1EncApp" ]] || command -v SvtAv1EncApp >/dev/null 2>&1; then
+    log "$(msg 'SvtAv1EncApp already installed, skipping build' '检测到 SvtAv1EncApp 已安装，跳过编译')"
+    return 0
+  fi
+
+  local deps=(build-essential cmake git python3 nasm)
+  apt_update
+  apt_install "${deps[@]}" || die "$(msg 'Failed to install SVT-AV1 dependencies' 'SVT-AV1 依赖安装失败')"
+
+  local build_dir
+  build_dir="$(mktemp -d)"
+
+  (
+    cd "$build_dir" || exit 1
+    tmux_run "$(msg 'Clone SVT-AV1' '克隆 SVT-AV1')" \
+      git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git || exit 1
+    __apply_svt_av1_source_patches "${build_dir}/SVT-AV1" || exit 1
+    tmux_run "$(msg 'SVT-AV1: build release static' 'SVT-AV1：release static 编译')" \
+      bash -c "set -e; cd '${build_dir}/SVT-AV1/Build/linux' && ./build.sh release static" || exit 1
+    _svt_bin="${build_dir}/SVT-AV1/Bin/Release/SvtAv1EncApp"
+    [[ -f "$_svt_bin" ]] || exit 1
+    log "$(msg 'Installing SvtAv1EncApp to /usr/bin' '正在安装 SvtAv1EncApp 到 /usr/bin')"
+    sudo cp "$_svt_bin" /usr/bin/SvtAv1EncApp || exit 1
+    sudo chmod +x /usr/bin/SvtAv1EncApp || exit 1
+  ) || die "$(msg 'SVT-AV1 build or install failed' 'SVT-AV1 编译或安装失败')"
+
+  rm -rf "$build_dir"
+  log "$(msg 'SVT-AV1 installation complete' 'SVT-AV1 安装完成')"
 }
 
 # ---------------------------------------------------------------------------
@@ -850,6 +1218,62 @@ install_tsmuxer() {
 
   rm -rf "$build_dir"
   log "$(msg 'tsMuxer installation complete' 'tsMuxer 安装完成')"
+}
+
+# ---------------------------------------------------------------------------
+# FDK-AAC + fdkaac CLI (nu774)
+# ---------------------------------------------------------------------------
+
+install_fdk_aac() {
+  log "$(msg 'Installing FDK-AAC library and fdkaac CLI' '正在安装 FDK-AAC 库与 fdkaac 命令行工具')"
+
+  if command -v fdkaac >/dev/null 2>&1; then
+    log "$(msg 'fdkaac already installed, skipping build' '检测到 fdkaac 已安装，跳过编译')"
+    return 0
+  fi
+
+  local deps=(
+    build-essential wget tar git autoconf automake libtool pkg-config
+  )
+  local missing_deps=()
+  local dep
+  for dep in "${deps[@]}"; do
+    if ! dpkg-query -W -f='${Status}' "$dep" 2>/dev/null | grep -q "install ok installed"; then
+      missing_deps+=("$dep")
+    fi
+  done
+  if (( ${#missing_deps[@]} > 0 )); then
+    apt_update
+    apt_install "${missing_deps[@]}" || die "$(msg 'Failed to install FDK-AAC build dependencies' 'FDK-AAC 编译依赖安装失败')"
+  fi
+
+  local build_dir
+  build_dir="$(mktemp -d)"
+
+  (
+    cd "$build_dir" || exit 1
+    tmux_run "$(msg 'Download fdk-aac v2.0.3 source' '下载 fdk-aac v2.0.3 源码')" \
+      wget -O v2.0.3.tar.gz https://github.com/mstorsjo/fdk-aac/archive/refs/tags/v2.0.3.tar.gz || exit 1
+    tmux_run "$(msg 'Extract fdk-aac tarball' '解压 fdk-aac 源码包')" tar zxvf v2.0.3.tar.gz || exit 1
+    cd fdk-aac-2.0.3 || exit 1
+    tmux_run "$(msg 'fdk-aac: autogen.sh' 'fdk-aac：autogen.sh')" ./autogen.sh || exit 1
+    tmux_run "$(msg 'fdk-aac: configure' 'fdk-aac：configure')" ./configure || exit 1
+    tmux_run "$(msg 'fdk-aac: make' 'fdk-aac：make')" make -j"$(nproc)" || exit 1
+    tmux_run "$(msg 'fdk-aac: make install' 'fdk-aac：make install')" sudo make install || exit 1
+    sudo ldconfig || true
+    cd "$build_dir" || exit 1
+    tmux_run "$(msg 'Clone fdkaac (nu774)' '克隆 fdkaac（nu774）')" \
+      git clone https://github.com/nu774/fdkaac.git || exit 1
+    cd fdkaac || exit 1
+    tmux_run "$(msg 'fdkaac: autoreconf -i' 'fdkaac：autoreconf -i')" autoreconf -i || exit 1
+    tmux_run "$(msg 'fdkaac: configure' 'fdkaac：configure')" ./configure || exit 1
+    tmux_run "$(msg 'fdkaac: make' 'fdkaac：make')" make -j"$(nproc)" || exit 1
+    tmux_run "$(msg 'fdkaac: make install' 'fdkaac：make install')" sudo make install || exit 1
+    sudo ldconfig || true
+  ) || die "$(msg 'FDK-AAC / fdkaac build or install failed' 'FDK-AAC / fdkaac 编译或安装失败')"
+
+  rm -rf "$build_dir"
+  log "$(msg 'FDK-AAC and fdkaac installation complete' 'FDK-AAC 与 fdkaac 安装完成')"
 }
 
 # ---------------------------------------------------------------------------
@@ -1835,7 +2259,9 @@ install_mkvtoolnix
 install_mpv
 install_x264
 install_x265
+install_svt_av1
 install_tsmuxer
+install_fdk_aac
 install_flac
 install_vapoursynth
 install_descale
