@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections import deque
 import threading
 import traceback
 import multiprocessing
@@ -19,9 +20,15 @@ from core.settings import VSPIPE_PATH
 from ...core import FFMPEG_PATH
 from ...core.settings import PLUGIN_PATH
 from .service_base import BluraySubtitleServiceBase
-from ...core import X265_PATH, MKV_INFO_PATH, MKV_EXTRACT_PATH, mkvtoolnix_ui_language_arg
+from ...core import MKV_INFO_PATH, MKV_EXTRACT_PATH, mkvtoolnix_ui_language_arg
 from ...core.i18n import translate_text
-from ...exports.utils import print_exc_terminal, get_vspipe_context, force_remove_file, print_terminal_line
+from ...exports.utils import (
+    print_exc_terminal,
+    get_vspipe_context,
+    force_remove_file,
+    print_terminal_line,
+    resolve_encoder_executable_path,
+)
 from ...vs_tools.getnative import getnative as auto_getnative
 
 MIGRATE_METHODS = ['flac_task', 'encode_task', 'extract_lossless']
@@ -44,6 +51,43 @@ def _split_x265_extra_args(params: str) -> list[str]:
         return shlex.split(s, posix=sys.platform != "win32")
     except ValueError:
         return s.split()
+
+
+def _normalize_x264_extra_for_bit_depth(extra: list[str], bd: str) -> list[str]:
+    """Map x264 --profile to output depth: 8-bit → high, 10-bit → high10 (see x264 --output-depth)."""
+    out = list(extra)
+    b = str(bd or "").strip()
+    if b not in ("8", "10"):
+        return out
+    want = "high10" if b == "10" else "high"
+
+    i = 0
+    found_profile = False
+    while i < len(out):
+        tok = out[i]
+        if tok == "--profile" and i + 1 < len(out):
+            found_profile = True
+            pv = out[i + 1]
+            if pv == "high" and want == "high10":
+                out[i + 1] = "high10"
+            elif pv == "high10" and want == "high":
+                out[i + 1] = "high"
+            i += 2
+            continue
+        if isinstance(tok, str) and tok.startswith("--profile="):
+            found_profile = True
+            key, _, val = tok.partition("=")
+            if val == "high" and want == "high10":
+                out[i] = f"{key}=high10"
+            elif val == "high10" and want == "high":
+                out[i] = f"{key}=high"
+            i += 1
+            continue
+        i += 1
+
+    if not found_profile and b == "10":
+        out = ["--profile", "high10"] + out
+    return out
 
 
 def _emit_encode_log_line(message: str) -> None:
@@ -90,7 +134,7 @@ def _pump_subprocess_stderr_raw(stream) -> None:
 _X265_STATUS_PERCENT_RE = re.compile(r"\[\s*(\d+(?:\.\d+)?)\s*%\s*\]")
 
 
-def _pump_x265_stderr_percent_steps(stream) -> None:
+def _pump_x265_stderr_percent_steps(stream, line_tail: Optional[deque] = None) -> None:
     """
     PyInstaller: x265 overwrites one status line with \\r. Each full snapshot ends at the next \\r;
     only those complete segments are parsed (avoids emitting half-lines when read() splits mid-line).
@@ -106,6 +150,8 @@ def _pump_x265_stderr_percent_steps(stream) -> None:
         t = text.rstrip("\r\n")
         if not t:
             return
+        if line_tail is not None:
+            line_tail.append(t)
         b = (t + "\n").encode("utf-8", errors="replace")
         if out is not None:
             try:
@@ -169,35 +215,38 @@ def _pump_x265_stderr_percent_steps(stream) -> None:
             pass
 
 
-def _run_vspipe_x265_with_progress(
+def _run_vspipe_piped_encode(
     vspipe_exe: str,
     vpy_path: str,
-    x265_exe: str,
-    x265_params: str,
-    hevc_file: str,
+    encoder_cmd: list[str],
     env: Optional[dict],
+    *,
+    x265_style_progress: bool = False,
 ) -> int:
     """
-    vspipe --y4m | x265 without cmd.exe.
-    Direct Python: stderr inherited and no CREATE_NO_WINDOW so cmd shows x265. Frozen: vspipe stderr raw; x265 stderr
-    parsed for ``[n.n%]`` status lines and printed once per integer percent.
+    vspipe --y4m | encoder (x264 / x265 / SvtAv1EncApp) without cmd.exe.
+    In a real TTY, inherit the encoder stderr so x265 can use \\r line progress; otherwise pipe and
+    (for x265) percent-filter; on non-TTY failure, re-print a short stderr tail.
     """
     env_use = dict(env) if env else os.environ.copy()
     inherit_err = _encode_inherit_subprocess_stderr()
-    popen_kw: dict = {"env": env_use}
-    # CREATE_NO_WINDOW detaches from the parent console; stderr=None then often produces no visible x265 output in cmd.
+    try:
+        stderr_is_tty = sys.stderr.isatty()
+    except Exception:
+        stderr_is_tty = False
+    use_encoder_stderr_inherit = bool(inherit_err and stderr_is_tty)
+    popen_kw: dict = {"env": env_use, "bufsize": 0}
     if sys.platform == "win32" and not inherit_err:
         popen_kw["creationflags"] = _windows_no_window_flags()
-    # Default pipe buffering can hold stderr until the buffer fills or the process exits, so progress
-    # appears only at the end; bufsize=0 uses unbuffered binary readers on the pipe fds.
-    if not inherit_err:
-        popen_kw["bufsize"] = 0
     stderr_v = None if inherit_err else subprocess.PIPE
-    stderr_x = None if inherit_err else subprocess.PIPE
+    stderr_e = None if use_encoder_stderr_inherit else subprocess.PIPE
 
     vspipe_cmd = [str(vspipe_exe), "--y4m", str(vpy_path), "-"]
-    x265_parts = _split_x265_extra_args(x265_params)
-    x265_cmd = [str(x265_exe)] + x265_parts + ["--y4m", "-D", "10", "-o", str(hevc_file), "-"]
+    enc_cmd = [str(x) for x in encoder_cmd]
+
+    enc_tail: Optional[deque] = None
+    if x265_style_progress and stderr_e is not None:
+        enc_tail = deque(maxlen=120)
 
     p_v = subprocess.Popen(
         vspipe_cmd,
@@ -205,31 +254,64 @@ def _run_vspipe_x265_with_progress(
         stderr=stderr_v,
         **popen_kw,
     )
-    p_x = subprocess.Popen(
-        x265_cmd,
+    p_e = subprocess.Popen(
+        enc_cmd,
         stdin=p_v.stdout,
         stdout=subprocess.DEVNULL,
-        stderr=stderr_x,
+        stderr=stderr_e,
         **popen_kw,
     )
     if p_v.stdout is not None:
         p_v.stdout.close()
 
     pump_threads: list[threading.Thread] = []
-    if not inherit_err:
+    if stderr_v is not None:
         t_v = threading.Thread(target=_pump_subprocess_stderr_raw, args=(p_v.stderr,), daemon=True)
-        t_x = threading.Thread(target=_pump_x265_stderr_percent_steps, args=(p_x.stderr,), daemon=True)
         t_v.start()
-        t_x.start()
-        pump_threads = [t_v, t_x]
+        pump_threads.append(t_v)
+    if stderr_e is not None:
+        if x265_style_progress:
+            t_e = threading.Thread(
+                target=_pump_x265_stderr_percent_steps,
+                args=(p_e.stderr, enc_tail),
+                daemon=True,
+            )
+        else:
+            t_e = threading.Thread(target=_pump_subprocess_stderr_raw, args=(p_e.stderr,), daemon=True)
+        t_e.start()
+        pump_threads.append(t_e)
 
-    rc_x = int(p_x.wait())
+    rc_e = int(p_e.wait())
     rc_v = int(p_v.wait())
     for t in pump_threads:
         t.join(timeout=5.0)
-    if rc_x != 0:
-        return rc_x
+    if rc_e != 0:
+        try:
+            show_tail = not stderr_is_tty
+        except Exception:
+            show_tail = True
+        if enc_tail and show_tail:
+            for ln in enc_tail:
+                try:
+                    print(ln, file=sys.stderr, flush=True)
+                except Exception:
+                    pass
+        return rc_e
     return rc_v
+
+
+def _normalize_encode_tool_label(raw: str) -> str:
+    s = (raw or "").strip().lower()
+    if s in ("x264", "x265", "svtav1"):
+        return s
+    if s == "sav1" or s == "av1":
+        return "svtav1"
+    return "x265"
+
+
+def _video_intermediate_extension(tool: str) -> str:
+    t = _normalize_encode_tool_label(tool)
+    return { "x264": ".h264", "x265": ".hevc", "svtav1": ".ivf" }[t]
 
 
 def _ensure_runtime_vpy_file(vpy_path: str) -> bool:
@@ -692,7 +774,8 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
         self._extract_single_audio_from_mka(output_file)
 
     def encode_task(self, output_file, dst_folder, i, vpy_path: str, vspipe_mode: str, x265_mode: str, x265_params: str,
-                    sub_pack_mode: str, source_file: Optional[str] = None):
+                    sub_pack_mode: str, source_file: Optional[str] = None,
+                    encode_tool: str = 'x265', encode_bit_depth: str = '10'):
         if not os.path.isfile(vpy_path):
             if _ensure_runtime_vpy_file(vpy_path):
                 self._log_getnative(f'{self.t("[BluraySubtitle] recreate missing vpy: ")}{vpy_path}')
@@ -702,6 +785,24 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             return
 
         src_mkv = os.path.normpath(source_file) if source_file else os.path.normpath(output_file)
+        tool_key = _normalize_encode_tool_label(encode_tool)
+        bd = str(encode_bit_depth or '10').strip()
+        if bd not in ('8', '10', '12'):
+            bd = '10'
+        bits_int = int(bd)
+        # SVT-AV1 12-bit needs --profile 2; upstream once spammed SVT_ERROR("Profile 2 Not supported") on the
+        # valid Professional bit-depth write path (entropy_coding write_bitdepth). We default to 10-bit SVT to
+        # avoid experimental 12-bit glitches; use x265 or a rebuild with our SVT patches for 12-bit.
+        if tool_key == 'svtav1' and bd == '12':
+            try:
+                _emit_encode_log_line(
+                    "[BluraySubtitle] SVT-AV1: 12-bit is experimental; using 10-bit (use x265 for stable 12-bit, "
+                    "or rebuild SvtAv1EncApp with build.sh SVT patches including entropy_coding fix)."
+                )
+            except Exception:
+                pass
+            bd = '10'
+            bits_int = 10
         self._cleanup_getnative_artifacts()
         use_getnative = bool(getattr(self, "use_getnative", True))
         native_info = None
@@ -793,6 +894,15 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     updated = True
                     continue
 
+                if re.search(r'core\.fmtc\.bitdepth\((res|src8),\s*bits=\d+', line):
+                    nl = line
+                    for _pat in (r'(core\.fmtc\.bitdepth\(res,\s*bits=)\d+', r'(core\.fmtc\.bitdepth\(src8,\s*bits=)\d+'):
+                        nl = re.sub(_pat, lambda m: m.group(1) + str(bits_int), nl)
+                    if nl != line:
+                        new_lines.append(nl)
+                        updated = True
+                        continue
+
                 new_lines.append(line)
 
             if not updated:
@@ -819,12 +929,35 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             vspipe_exe, vspipe_env = get_vspipe_context()
         else:
             vspipe_exe, vspipe_env = VSPIPE_PATH, None
-        x265_exe = X265_PATH
-        hevc_file = os.path.join(dst_folder, os.path.splitext(os.path.basename(output_file))[0] + '.hevc')
-        cmd = f'"{vspipe_exe}" --y4m "{vpy_path}" - | "{x265_exe}" {x265_params or ""} --y4m -D 10 -o "{hevc_file}" -'
-        print(f'{translate_text("Encode command:")}{cmd}')
-        enc_rc = _run_vspipe_x265_with_progress(
-            vspipe_exe, vpy_path, x265_exe, x265_params or "", hevc_file, vspipe_env
+
+        enc_bundle = (x265_mode or '') == 'bundle'
+        enc_mode = 'bundle' if enc_bundle else 'system'
+        enc_exe = resolve_encoder_executable_path(tool_key, enc_mode)
+        ext = _video_intermediate_extension(tool_key)
+        encoded_path = os.path.join(dst_folder, os.path.splitext(os.path.basename(output_file))[0] + ext)
+        extra = _split_x265_extra_args(x265_params or '')
+        if tool_key == 'x264':
+            extra = _normalize_x264_extra_for_bit_depth(extra, bd)
+
+        if tool_key == 'x264':
+            enc_cmd = [enc_exe, '--demuxer', 'y4m', '-'] + extra + ['--output-depth', bd, '-o', encoded_path]
+            use_x265_stderr_steps = False
+        elif tool_key == 'x265':
+            # Stdin is already '--y4m' '-' ; a trailing '-' is parsed as a second input (unused) and can abort x265.
+            enc_cmd = (
+                [enc_exe]
+                + extra
+                + ['--y4m', '-', '--input-depth', bd, '--output-depth', bd, '-o', encoded_path]
+            )
+            use_x265_stderr_steps = True
+        else:
+            enc_cmd = [enc_exe, '-i', 'stdin', '--input-depth', bd] + extra + ['-b', encoded_path]
+            use_x265_stderr_steps = False
+
+        cmd_echo = f'"{vspipe_exe}" --y4m "{vpy_path}" - | ' + ' '.join(f'"{a}"' if (' ' in str(a) or ';' in str(a)) else str(a) for a in enc_cmd)
+        print(f'{translate_text("Encode command:")}{cmd_echo}')
+        enc_rc = _run_vspipe_piped_encode(
+            str(vspipe_exe), vpy_path, enc_cmd, vspipe_env, x265_style_progress=use_x265_stderr_steps
         )
         if enc_rc != 0:
             _emit_encode_log_line(f"[BluraySubtitle] encode pipeline exited with code {enc_rc}")
@@ -832,13 +965,13 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
         track_count, track_info, flac_files = self.process_audio_to_flac(output_file, dst_folder, i,
                                                                          source_file=src_mkv)
 
-        if flac_files or os.path.exists(hevc_file):
+        if flac_files or os.path.exists(encoded_path):
             same_mkv = os.path.normpath(output_file) == src_mkv
             output_file1 = (os.path.splitext(output_file)[0] + '.tmp.mkv') if same_mkv else output_file
             if not same_mkv and os.path.exists(output_file1):
                 force_remove_file(output_file1)
             remux_cmd = self.generate_remux_cmd(track_count, track_info, flac_files, output_file1, src_mkv,
-                                                hevc_file=hevc_file if os.path.exists(hevc_file) else None)
+                                                encoded_video_file=encoded_path if os.path.exists(encoded_path) else None)
             if sub_pack_mode == 'soft':
                 if self.sub_files and len(self.sub_files) >= i and i > -1:
                     lang = 'chi'
@@ -859,8 +992,8 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     os.rename(output_file1, output_file)
             for flac_file in flac_files:
                 os.remove(flac_file)
-            if os.path.exists(hevc_file):
-                os.remove(hevc_file)
+            if os.path.exists(encoded_path):
+                os.remove(encoded_path)
         cleanup_lwi_for_source(src_mkv)
 
     def extract_lossless(self, mkv_file: str, dolby_truehd_tracks: list[int], output_base: Optional[str] = None) -> \

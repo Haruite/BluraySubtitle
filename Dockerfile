@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1-mesa-dev libvdpau-dev libva-dev libx11-dev libxext-dev libxv-dev libxinerama-dev \
     libwayland-dev libxkbcommon-dev libegl1-mesa-dev libplacebo-dev libspirv-cross-c-shared-dev libshaderc-dev \
     libasound2-dev libpulse-dev libjack-dev libpipewire-0.3-dev \
+    libdav1d-dev \
     libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev \
     libmujs-dev libbluray-dev libxrandr-dev libxpresent-dev libxss-dev libdvdnav-dev libdvdread-dev \
     libzimg-dev libarchive-dev librubberband-dev libsdl2-dev libdrm-dev libgbm-dev \
@@ -80,6 +81,7 @@ RUN set -eux; \
     cd mpv-build; \
     rm -rf mpv/build ffmpeg/build libass/build || true; \
     echo "--enable-libbluray" > ffmpeg_options; \
+    echo "--enable-libdav1d" >> ffmpeg_options; \
     echo "-Dlibbluray=enabled" > mpv_options; \
     export PKG_CONFIG_PATH="/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     ./rebuild -j"$(nproc)"; \
@@ -375,6 +377,16 @@ APPLY = [
         Path("Source/App/app_process_cmd.c"),
         """    double   max_pix_value = (app_cfg->config.encoder_bit_depth == 8) ? 255 : 1023;""",
         """    double max_pix_value = (double)((1u << app_cfg->config.encoder_bit_depth) - 1);""",
+    ),
+    (
+        Path("Source/Lib/Codec/entropy_coding.c"),
+        """    if (scs->static_config.profile == PROFESSIONAL_PROFILE && scs->static_config.encoder_bit_depth != EB_EIGHT_BIT) {
+        SVT_ERROR("Profile 2 Not supported\\n");
+        svt_aom_wb_write_bit(wb, scs->static_config.encoder_bit_depth == EB_TEN_BIT ? 0 : 1);
+    }""",
+        """    if (scs->static_config.profile == PROFESSIONAL_PROFILE && scs->static_config.encoder_bit_depth != EB_EIGHT_BIT) {
+        svt_aom_wb_write_bit(wb, scs->static_config.encoder_bit_depth == EB_TEN_BIT ? 0 : 1);
+    }""",
     ),
 ]
 

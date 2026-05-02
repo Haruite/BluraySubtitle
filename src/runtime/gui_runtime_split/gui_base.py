@@ -149,6 +149,12 @@ class BluraySubtitleGuiBase(QWidget):
         self.theme_label = None
         self.vspipe_mode_combo = None
         self.use_getnative_checkbox = None
+        self.encode_tool_combo = None
+        self.encode_tool_label = None
+        self.encode_source_label = None
+        self.encode_bit_depth_combo = None
+        self.encode_bit_depth_label = None
+        self.diy_bd_encode_hint_label = None
         self.x265_mode_combo = None
         self.x265_mode_label = None
         self.x265_params_edit = None

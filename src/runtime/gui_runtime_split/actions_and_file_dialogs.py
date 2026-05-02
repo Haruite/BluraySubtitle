@@ -49,9 +49,28 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         )
         if not use_compat:
             return raw
+        # Blu-ray compatibility tweaks apply only on DIY (function 5), not on Blu-ray Encode (4).
+        try:
+            if self.get_selected_function_id() != 5:
+                return str(raw or '').strip()
+        except Exception:
+            return str(raw or '').strip()
 
-        mode_label = str(getattr(self, 'x265_mode_label', None).text() if getattr(self, 'x265_mode_label', None) else '')
-        is_x264 = mode_label.lower().startswith('x264')
+        enc_combo = getattr(self, 'encode_tool_combo', None)
+        tool = (
+            (enc_combo.currentText() or '').strip().lower()
+            if enc_combo is not None
+            else ''
+        )
+        if tool == 'svtav1':
+            return str(raw or '').strip()
+        if tool == 'x264':
+            is_x264 = True
+        elif tool in ('x265', 'svtav1'):
+            is_x264 = False
+        else:
+            mode_label = str(getattr(self, 'x265_mode_label', None).text() if getattr(self, 'x265_mode_label', None) else '')
+            is_x264 = mode_label.lower().startswith('x264')
         params = str(raw or '').strip()
         if is_x264:
             params = self._append_compat_arg_if_missing(params, '--profile', 'high')
@@ -63,6 +82,53 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             params = self._append_compat_arg_if_missing(params, '--vbv-maxrate', '30000')
             params = self._append_compat_arg_if_missing(params, '--vbv-bufsize', '30000')
         return params
+
+    def _current_encode_tool_and_depth(self) -> tuple[str, str]:
+        try:
+            fid = int(self.get_selected_function_id())
+        except Exception:
+            fid = 0
+        # Blu-ray DIY (5): BD-compliant encode only — fixed by video track conversion (no encoder/BPP UI).
+        if fid == 5:
+            conv_cfg = getattr(self, '_track_convert_config', {}) or {}
+            use_x264 = any(
+                str(v or '') == 'h264(encoded)'
+                for mp in conv_cfg.values() for v in (mp or {}).values()
+            )
+            return ('x264', '8') if use_x264 else ('x265', '10')
+        tool = 'x265'
+        depth = '10'
+        ec = getattr(self, 'encode_tool_combo', None)
+        if ec is not None:
+            tool = (ec.currentText() or 'x265').strip()
+        bdc = getattr(self, 'encode_bit_depth_combo', None)
+        if bdc is not None:
+            d = bdc.currentData()
+            if d is not None:
+                depth = str(d)
+        return tool, depth
+
+    def _apply_encode_codec_slot_visibility(self) -> None:
+        """Blu-ray Encode (4): full encoder + bit depth. DIY encode (5): hide both (fixed BD rules)."""
+        try:
+            fid = int(self.get_selected_function_id())
+        except Exception:
+            fid = 0
+        box = getattr(self, 'encode_box', None)
+        encode_visible = box is not None and box.isVisible()
+        show_full_codec = fid == 4 and encode_visible
+        show_diy_hint = fid == 5 and encode_visible
+        hint = getattr(self, 'diy_bd_encode_hint_label', None)
+        for w in (
+            getattr(self, 'encode_tool_label', None),
+            getattr(self, 'encode_tool_combo', None),
+            getattr(self, 'encode_bit_depth_label', None),
+            getattr(self, 'encode_bit_depth_combo', None),
+        ):
+            if w is not None:
+                w.setVisible(show_full_codec)
+        if hint is not None:
+            hint.setVisible(show_diy_hint)
 
     def _show_error_dialog(self, err_text: str):
         try:
@@ -821,6 +887,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
 
             vspipe_mode = 'bundle' if self.vspipe_mode_combo.currentText() == 'Built-in' else 'system'
             x265_mode = 'bundle' if self.x265_mode_combo.currentText() == 'Built-in' else 'system'
+            encode_tool, encode_bit_depth = self._current_encode_tool_and_depth()
             x265_params = self._effective_encode_params()
             use_getnative = bool(getattr(self, "use_getnative_checkbox", None) and self.use_getnative_checkbox.isChecked())
             if self.sub_pack_hard_radio.isChecked():
@@ -841,6 +908,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 x265_mode=x265_mode,
                 x265_params=x265_params,
                 sub_pack_mode=sub_pack_mode,
+                encode_tool=encode_tool,
+                encode_bit_depth=encode_bit_depth,
                 use_getnative=use_getnative,
             )
             self._encode_worker.moveToThread(self._encode_thread)
@@ -937,6 +1006,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
 
         vspipe_mode = 'bundle' if self.vspipe_mode_combo.currentText() == 'Built-in' else 'system'
         x265_mode = 'bundle' if self.x265_mode_combo.currentText() == 'Built-in' else 'system'
+        encode_tool, encode_bit_depth = self._current_encode_tool_and_depth()
         x265_params = self._effective_encode_params()
         use_getnative = bool(getattr(self, "use_getnative_checkbox", None) and self.use_getnative_checkbox.isChecked())
         if self.sub_pack_hard_radio.isChecked():
@@ -964,6 +1034,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             x265_mode,
             x265_params,
             sub_pack_mode,
+            encode_tool=encode_tool,
+            encode_bit_depth=encode_bit_depth,
             use_getnative=use_getnative,
             movie_mode=self._is_movie_mode(),
             track_selection_config=getattr(self, '_track_selection_config', {}),
@@ -1213,6 +1285,89 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             loop.exec()
         return success
 
+    def _refill_encode_bit_depth_combo(self, tool: str) -> None:
+        # PyQt6: bool(QComboBox()) is False — never use `if not combo` on QWidget subclasses.
+        if getattr(self, 'encode_bit_depth_combo', None) is None:
+            return
+        prev = self.encode_bit_depth_combo.currentData()
+        self.encode_bit_depth_combo.blockSignals(True)
+        self.encode_bit_depth_combo.clear()
+        t = (tool or '').strip().lower()
+        if t == 'x264':
+            self.encode_bit_depth_combo.addItem(self.t('8-bit'), '8')
+            self.encode_bit_depth_combo.addItem(self.t('10-bit'), '10')
+        else:
+            self.encode_bit_depth_combo.addItem(self.t('8-bit'), '8')
+            self.encode_bit_depth_combo.addItem(self.t('10-bit'), '10')
+            self.encode_bit_depth_combo.addItem(self.t('12-bit'), '12')
+        want = str(prev) if prev is not None else ''
+        pick = -1
+        for i in range(self.encode_bit_depth_combo.count()):
+            if str(self.encode_bit_depth_combo.itemData(i) or '') == want:
+                pick = i
+                break
+        if pick < 0:
+            for i in range(self.encode_bit_depth_combo.count()):
+                if str(self.encode_bit_depth_combo.itemData(i) or '') == '10':
+                    pick = i
+                    break
+        if pick < 0:
+            pick = 0
+        self.encode_bit_depth_combo.setCurrentIndex(pick)
+        self.encode_bit_depth_combo.blockSignals(False)
+        try:
+            if hasattr(self, '_adjust_combo_width_to_contents'):
+                self._adjust_combo_width_to_contents(self.encode_bit_depth_combo)
+        except Exception:
+            pass
+
+    def _refresh_encode_tool_dependent_ui(self, apply_preset: bool = True) -> None:
+        if getattr(self, 'encode_tool_combo', None) is None:
+            return
+        enc = self.encode_tool_combo
+        if enc.count() == 2:
+            try:
+                if enc.itemText(0) == 'x264' and enc.itemText(1) == 'x265':
+                    cur = (enc.currentText() or '').strip()
+                    enc.blockSignals(True)
+                    try:
+                        enc.clear()
+                        enc.addItems(['x264', 'x265', 'SvtAv1'])
+                        enc.setCurrentText(cur if cur in ('x264', 'x265', 'SvtAv1') else 'x265')
+                    finally:
+                        enc.blockSignals(False)
+            except Exception:
+                pass
+        tool = (self.encode_tool_combo.currentText() or 'x265').strip()
+        if tool == 'x264':
+            self.x265_params_label.setText(self.t('x264 Params:'))
+            self._encode_preset_params = dict(self._x264_preset_params)
+        elif tool == 'SvtAv1':
+            self.x265_params_label.setText(self.t('SvtAv1 Params:'))
+            self._encode_preset_params = dict(self._svtav1_preset_params)
+        else:
+            self.x265_params_label.setText(self.t('x265 Params:'))
+            self._encode_preset_params = dict(self._x265_preset_params)
+        self._refill_encode_bit_depth_combo(tool)
+        try:
+            sync = getattr(self, 'sync_default_vpy_fmtc_with_encode_ui', None)
+            if callable(sync):
+                sync()
+        except Exception:
+            pass
+        if not apply_preset or getattr(self, 'x265_preset_combo', None) is None:
+            return
+        preset = str(self.x265_preset_combo.currentData() or self.x265_preset_combo.currentText() or '')
+        if preset == 'Custom':
+            return
+        params = self._encode_preset_params.get(preset, '')
+        self._encode_setting_updating = True
+        try:
+            if hasattr(self, 'x265_params_edit') and self.x265_params_edit:
+                self.x265_params_edit.setPlainText(params)
+        finally:
+            self._encode_setting_updating = False
+
     def init_encode_box(self):
         self._x265_preset_params = {
             'Fast': '--preset fast --crf 20 --aq-mode 2 --bframes 8 --ref 4 --me 2 --subme 2',
@@ -1226,6 +1381,16 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             'Balanced': '--preset medium --crf 18 --profile high --level 4.1 --bframes 6 --ref 5 --deblock -1:-1',
             'High Quality': '--preset slow --crf 16 --profile high --level 4.1 --bframes 8 --ref 6 --deblock -1:-1 --aq-mode 2',
             'Extreme': '--preset veryslow --crf 14 --profile high --level 4.1 --bframes 10 --ref 8 --aq-mode 2 --trellis 2',
+            'Custom': ''
+        }
+        # SvtAv1EncApp-style presets (CLI differs from x265; tune when wiring encode logic).
+        # Do not add --enable-overlays for normal content: AV1 overlay frames are a special mode and with
+        # 12-bit / profile 2 have produced broken streams (~hundred kbps, grey/decoding glitches) in the wild.
+        self._svtav1_preset_params = {
+            'Fast': '--preset 10 --crf 32 --keyint 240 --tune 0',
+            'Balanced': '--preset 6 --crf 24 --keyint 240 --tune 0',
+            'High Quality': '--preset 4 --crf 20 --keyint 240 --tune 0 --film-grain 4',
+            'Extreme': '--preset 2 --crf 16 --keyint 240 --tune 0 --film-grain 0 --aq-mode 2',
             'Custom': ''
         }
         self._encode_preset_params = dict(self._x265_preset_params)
@@ -1248,11 +1413,35 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         self.vspipe_mode_combo.addItems(['Built-in', 'System'])
         tools_layout.addWidget(self.vspipe_mode_combo)
 
-        self.x265_mode_label = QLabel('x265:', tools_row)
-        tools_layout.addWidget(self.x265_mode_label)
+        self.encode_tool_label = QLabel(self.t('Encoder tool:'), tools_row)
+        tools_layout.addWidget(self.encode_tool_label)
+        self.encode_tool_combo = QComboBox(tools_row)
+        self.encode_tool_combo.addItems(['x264', 'x265', 'SvtAv1'])
+        self.encode_tool_combo.setCurrentText('x265')
+        tools_layout.addWidget(self.encode_tool_combo)
+
+        self.encode_source_label = QLabel(self.t('Selection source:'), tools_row)
+        tools_layout.addWidget(self.encode_source_label)
         self.x265_mode_combo = QComboBox(tools_row)
         self.x265_mode_combo.addItems(['Built-in', 'System'])
         tools_layout.addWidget(self.x265_mode_combo)
+
+        self.encode_bit_depth_label = QLabel(self.t('Output bit depth:'), tools_row)
+        tools_layout.addWidget(self.encode_bit_depth_label)
+        self.encode_bit_depth_combo = QComboBox(tools_row)
+        tools_layout.addWidget(self.encode_bit_depth_combo)
+
+        self.diy_bd_encode_hint_label = QLabel(
+            self.t(
+                'BD压制说明：视频轨道转为「重编码」时按蓝光规格固定为 x264 8bit 或 x265 10bit，此处不可更改编码器与位深。'
+            ),
+            tools_row,
+        )
+        self.diy_bd_encode_hint_label.setVisible(False)
+        self.diy_bd_encode_hint_label.setWordWrap(False)
+        tools_layout.addWidget(self.diy_bd_encode_hint_label)
+
+        self.x265_mode_label = None
 
         is_pyinstaller_bundle = bool(getattr(sys, 'frozen', False)) and hasattr(sys, '_MEIPASS')
         if not is_pyinstaller_bundle:
@@ -1315,7 +1504,20 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
 
         self.x265_preset_combo.currentIndexChanged.connect(on_preset_changed)
         self.x265_params_edit.textChanged.connect(on_params_edited)
-        set_params_for_preset(str(self.x265_preset_combo.currentData() or 'Balanced'))
+
+        self.encode_tool_combo.currentIndexChanged.connect(lambda _=None: self._refresh_encode_tool_dependent_ui(True))
+
+        def _sync_vpy_fmtc_from_encode_controls(*_args) -> None:
+            try:
+                sync = getattr(self, 'sync_default_vpy_fmtc_with_encode_ui', None)
+                if callable(sync):
+                    sync()
+            except Exception:
+                pass
+
+        self.encode_bit_depth_combo.currentIndexChanged.connect(_sync_vpy_fmtc_from_encode_controls)
+        self._apply_encode_codec_slot_visibility()
+        self._refresh_encode_tool_dependent_ui(True)
 
         sub_pack_row = QWidget(self.encode_box)
         sub_pack_layout = QHBoxLayout()

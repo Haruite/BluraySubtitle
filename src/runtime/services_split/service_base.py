@@ -495,7 +495,7 @@ class BluraySubtitleServiceBase:
         """Stub for `episodes_remux`."""
         raise NotImplementedError
 
-    def episodes_encode(self, table: Optional[QTableWidget], folder_path: str, selected_mpls: Optional[list[tuple[str, str]]]=None, configuration: Optional[dict[int, dict[str, int | str]]]=None, cancel_event: Optional[threading.Event]=None, ensure_tools: bool=True, vpy_paths: Optional[list[str]]=None, sp_vpy_paths: Optional[list[str]]=None, sp_entries: Optional[list[dict[str, int | str]]]=None, episode_output_names: Optional[list[str]]=None, episode_subtitle_languages: Optional[list[str]]=None, vspipe_mode: str='bundle', x265_mode: str='bundle', x265_params: str='', sub_pack_mode: str='external'):
+    def episodes_encode(self, table: Optional[QTableWidget], folder_path: str, selected_mpls: Optional[list[tuple[str, str]]]=None, configuration: Optional[dict[int, dict[str, int | str]]]=None, cancel_event: Optional[threading.Event]=None, ensure_tools: bool=True, vpy_paths: Optional[list[str]]=None, sp_vpy_paths: Optional[list[str]]=None, sp_entries: Optional[list[dict[str, int | str]]]=None, episode_output_names: Optional[list[str]]=None, episode_subtitle_languages: Optional[list[str]]=None, vspipe_mode: str='bundle', x265_mode: str='bundle', x265_params: str='', sub_pack_mode: str='external', encode_tool: str='x265', encode_bit_depth: str='10'):
         """Stub for `episodes_encode`."""
         raise NotImplementedError
 
@@ -507,11 +507,11 @@ class BluraySubtitleServiceBase:
         """Stub for `flac_task`."""
         raise NotImplementedError
 
-    def encode_task(self, output_file, dst_folder, i, vpy_path: str, vspipe_mode: str, x265_mode: str, x265_params: str, sub_pack_mode: str, source_file: Optional[str]=None):
+    def encode_task(self, output_file, dst_folder, i, vpy_path: str, vspipe_mode: str, x265_mode: str, x265_params: str, sub_pack_mode: str, source_file: Optional[str]=None, encode_tool: str='x265', encode_bit_depth: str='10'):
         """Stub for `encode_task`."""
         raise NotImplementedError
 
-    def generate_remux_cmd(self, track_count, track_info, flac_files, output_file, mkv_file, hevc_file: Optional[str]=None):
+    def generate_remux_cmd(self, track_count, track_info, flac_files, output_file, mkv_file, encoded_video_file: Optional[str]=None):
         """Stub for `generate_remux_cmd`."""
         raise NotImplementedError
 

@@ -287,12 +287,44 @@ def get_compressed_effective_depth(file_path, check_duration=10):
             os.remove(temp_wav)
 
 
+def bundle_application_root() -> str:
+    """PyInstaller extracted root, or cwd when running from source."""
+    return getattr(sys, '_MEIPASS', os.path.abspath('.'))
+
+
+def resolve_encoder_executable_path(tool: str, mode: str) -> str:
+    """
+    Resolve x264 / x265 / SVT-AV1 encoder binary.
+
+    ``mode`` is ``bundle`` (next to the frozen exe / bundle root) or ``system``
+    (``X264_PATH`` / ``X265_PATH`` / ``SVT_AV1_PATH`` from settings).
+    """
+    from core.settings import X264_PATH, X265_PATH, SVT_AV1_PATH
+
+    t = (tool or '').strip().lower()
+    if t == 'svtav1':
+        key = 'svtav1'
+    elif t in ('x264', 'x265'):
+        key = t
+    else:
+        key = 'x265'
+    if mode == 'bundle':
+        root = bundle_application_root()
+        if sys.platform == 'win32':
+            names = {'x264': 'x264.exe', 'x265': 'x265.exe', 'svtav1': 'SvtAv1EncApp.exe'}
+        else:
+            names = {'x264': 'x264', 'x265': 'x265', 'svtav1': 'SvtAv1EncApp'}
+        return os.path.join(root, names[key])
+    defaults = {'x264': X264_PATH, 'x265': X265_PATH, 'svtav1': SVT_AV1_PATH}
+    return str(defaults[key])
+
+
 def get_vspipe_context():
     """
     Resolve bundled vspipe path and runtime environment for nested package layout.
     """
     # 1) Resolve extracted bundle root.
-    bundle_dir = getattr(sys, '_MEIPASS', os.path.abspath("."))
+    bundle_dir = bundle_application_root()
 
     # 2) Locate nested release folder.
     # Expected layout: _MEIPASS/vs_pkg/vspipe(.exe)
@@ -359,6 +391,8 @@ __all__ = [
     "get_effective_bit_depth",
     "get_audio_duration",
     "get_compressed_effective_depth",
+    "bundle_application_root",
+    "resolve_encoder_executable_path",
     "get_vspipe_context",
     "print_terminal_line",
     "print_exc_terminal",
