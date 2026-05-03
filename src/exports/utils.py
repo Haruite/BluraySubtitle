@@ -20,6 +20,15 @@ from ..core import get_mkvtoolnix_ui_language, FFMPEG_PATH, FFPROBE_PATH
 from ..core import mkvtoolnix_ui_language_arg
 
 
+def mkv_codec_id_is_dts_family(codec_id: str) -> bool:
+    """
+    True for Matroska DTS / DTS-HD (MA, HR, …) as reported by mkvinfo.
+    Common values include ``A_DTS`` and ``A_MS/DTS``; the latter is not matched by ``startswith('A_DTS')``.
+    """
+    cid = str(codec_id or '').strip().upper()
+    return bool(cid.startswith('A_') and 'DTS' in cid)
+
+
 def get_folder_size(folder_path: str) -> str:
     byte = 0
     for root, dirs, files in os.walk(folder_path):
@@ -394,6 +403,7 @@ __all__ = [
     "bundle_application_root",
     "resolve_encoder_executable_path",
     "get_vspipe_context",
+    "mkv_codec_id_is_dts_family",
     "print_terminal_line",
     "print_exc_terminal",
     "print_tb_string_terminal",
