@@ -27,6 +27,7 @@ from ...exports.utils import (
     force_remove_file,
     print_terminal_line,
     resolve_encoder_executable_path,
+    mkv_codec_id_is_dts_family,
 )
 from ...vs_tools.getnative import getnative as auto_getnative
 
@@ -1034,6 +1035,8 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     or line.startswith('|+ Codec ID: ')):
                 codec_id = line.split(':', 1)[1].strip() if ':' in line else ''
                 stream_type = code_id_to_stream_type.get(codec_id)
+                if stream_type is None and mkv_codec_id_is_dts_family(codec_id):
+                    stream_type = 'DTS'
                 if stream_type in ('LPCM', 'DTS', 'TRUEHD', 'FLAC'):
                     if track_id not in dolby_truehd_tracks:
                         if stream_type == 'LPCM':

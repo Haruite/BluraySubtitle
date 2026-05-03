@@ -18,8 +18,15 @@ from PyQt6.QtWidgets import QMessageBox, QDialog, QVBoxLayout, QPlainTextEdit, Q
 from src.bdmv import Chapter
 from src.core import find_mkvtoolinx, MKV_EXTRACT_PATH, MKV_PROP_EDIT_PATH, mkvtoolnix_ui_language_arg, FFPROBE_PATH, \
     MKV_INFO_PATH, MKV_MERGE_PATH, get_mkvtoolnix_ui_language, ENCODE_SP_LABELS
+from src.exports.utils import mkv_codec_id_is_dts_family
 from src.runtime.services import BluraySubtitle
 from .gui_base import BluraySubtitleGuiBase
+
+
+def _bd_lossless_audio_codec_name(codec_name: str) -> bool:
+    """Blu-ray m2ts / ffprobe-style ``codec_name`` (no Matroska ``codec_id`` on m2ts rows)."""
+    cn = str(codec_name or '').strip().lower()
+    return cn in ('dts', 'dts_hd', 'dts_hd_ma', 'truehd', 'flac')
 
 
 class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
@@ -212,7 +219,12 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             or codec_name in ('lpcm', 'pcm_bluray')
             or codec_name.startswith('pcm')
         )
-        is_lossless = is_pcm or codec_id in ('A_TRUEHD', 'A_MLP', 'A_FLAC') or codec_id.startswith('A_DTS')
+        is_lossless = (
+            is_pcm
+            or codec_id in ('A_TRUEHD', 'A_MLP', 'A_FLAC')
+            or mkv_codec_id_is_dts_family(codec_id)
+            or _bd_lossless_audio_codec_name(codec_name)
+        )
         if is_lossless:
             options.append('ac3(640 kbps)')
         if is_pcm and bit_depth > 16:
@@ -241,7 +253,10 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             or codec_name.startswith('pcm')
         )
         return bool(
-            is_pcm or codec_id in ('A_TRUEHD', 'A_MLP', 'A_FLAC') or codec_id.startswith('A_DTS')
+            is_pcm
+            or codec_id in ('A_TRUEHD', 'A_MLP', 'A_FLAC')
+            or mkv_codec_id_is_dts_family(codec_id)
+            or _bd_lossless_audio_codec_name(codec_name)
         )
 
     def _streams_for_track_config_key(self, key: str) -> list[dict[str, object]]:
@@ -316,7 +331,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
 
     def _codec_name_from_codec_id(self, codec_id: str) -> str:
         cid = str(codec_id or '').strip()
-        if cid.startswith('A_DTS'):
+        if mkv_codec_id_is_dts_family(cid):
             return 'dts'
         if cid in ('A_TRUEHD', 'A_MLP'):
             return 'truehd'
@@ -458,7 +473,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             return '.ac3'
         if cid == 'A_ALAC':
             return '.caf'
-        if cid == 'A_DTS':
+        if mkv_codec_id_is_dts_family(cid):
             return '.dts'
         if cid == 'A_FLAC':
             return '.flac'
