@@ -29,6 +29,32 @@ def _svc_cls():
     return BluraySubtitle
 
 
+def _audio_file_channel_count(path: str) -> int:
+    """Channel count of the first audio stream in a file; 0 if unknown."""
+    if not path or not os.path.isfile(path):
+        return 0
+    try:
+        info = soundfile.info(path)
+        ch = int(info.channels)
+        if ch > 0:
+            return ch
+    except Exception:
+        pass
+    try:
+        proc = subprocess.run(
+            f'"{FFPROBE_PATH}" -v error -select_streams a:0 -show_entries stream=channels '
+            f'-of default=noprint_wrappers=1:nokey=1 "{path}"',
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        ch = int((proc.stdout or '').strip())
+        return ch if ch > 0 else 0
+    except Exception:
+        return 0
+
+
 class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
     @staticmethod
     def _default_track_selection_from_streams(
@@ -2013,9 +2039,12 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         return out
 
     @staticmethod
-    def _lossless_codec_choice(map_by_idx: dict[str, str], idx_str: str) -> str:
+    def _lossless_codec_choice(map_by_idx: dict[str, str], idx_str: str, default: str = 'flac') -> str:
         v = str((map_by_idx or {}).get(str(idx_str), '') or '').strip().lower()
-        return v if v in ('flac', 'aac', 'opus') else 'flac'
+        if v in ('flac', 'aac', 'opus'):
+            return v
+        d = str(default or 'flac').strip().lower()
+        return d if d in ('flac', 'aac', 'opus') else 'flac'
 
     @staticmethod
     def _wav_channel_count(wav_path: str) -> int:
@@ -2041,6 +2070,24 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         except Exception:
             pass
         return 2
+
+    @staticmethod
+    def _wav_channel_layout(wav_path: str) -> str:
+        """ffprobe channel_layout for stream 0 (e.g. ``stereo``, ``5.1(side)``); empty if unknown."""
+        if not wav_path or not os.path.isfile(wav_path):
+            return ''
+        try:
+            proc = subprocess.run(
+                f'"{FFPROBE_PATH}" -v error -select_streams a:0 '
+                f'-show_entries stream=channel_layout -of default=noprint_wrappers=1:nokey=1 "{wav_path}"',
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            return (proc.stdout or '').strip()
+        except Exception:
+            return ''
 
     @staticmethod
     def _ffmpeg_compress_wav_to_codec(wav_path: str, out_path: str, codec: str) -> bool:
@@ -2071,13 +2118,19 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         if codec == 'opus':
             try:
                 nch = MediaInfoTrackMappingMixin._wav_channel_count(wav_path)
+                layout = MediaInfoTrackMappingMixin._wav_channel_layout(wav_path)
                 br = '128k' if nch <= 2 else '256k'
-                subprocess.run(
-                    f'"{FFMPEG_PATH}" -hide_banner -loglevel error -y -i "{wav_path}" -c:a libopus -b:a {br} '
-                    f'"{out_path}"',
-                    shell=True,
-                    check=False,
+                # Surround: libopus needs explicit mapping family (default -1 fails on layouts like 5.1(side)).
+                map_f = '-mapping_family 1 ' if nch > 2 else ''
+                af = ''
+                if (layout or '').strip().lower() == '5.1(side)':
+                    af = '-af "aformat=channel_layouts=5.1" '
+                cmd = (
+                    f'"{FFMPEG_PATH}" -hide_banner -loglevel error -y -i "{wav_path}" '
+                    f'{af}-c:a libopus {map_f}-b:a {br} "{out_path}"'
                 )
+                print(f'{translate_text("Opus encode command:")}{cmd}')
+                subprocess.run(cmd, shell=True, check=False)
                 return os.path.isfile(out_path) and os.path.getsize(out_path) > 0
             except Exception:
                 return False
@@ -2098,6 +2151,9 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         except Exception:
             ei = -1
         la_map = self._resolve_lossless_audio_map_for_mkv(src_mkv, ei)
+        default_la = str(getattr(self, 'default_lossless_audio_codec', '') or 'flac').strip().lower()
+        if default_la not in ('flac', 'aac', 'opus'):
+            default_la = 'flac'
 
         def _track_id_from_path(p: str) -> Optional[int]:
             name = os.path.basename(p or '')
@@ -2144,12 +2200,13 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 if len(fns) > 1:
                     fns = sorted(fns, key=lambda p: (
                         _track_id_from_path(p) if _track_id_from_path(p) is not None else 10 ** 9, p))
-                    fpts: list[tuple[np.ndarray, int, str]] = []
+                    fpts: list[tuple[np.ndarray, int, str, int]] = []
                     for fn in fns:
                         tmp_wav = None
                         fp_source = fn
                         track_id = _track_id_from_path(fn)
                         track_id_val = int(track_id) if track_id is not None else -1
+                        n_ch = _audio_file_channel_count(fn)
                         try:
                             if ext not in ('wav', 'w64', 'flac'):
                                 tmp_wav = os.path.splitext(fn)[0] + '.fp.wav'
@@ -2179,7 +2236,9 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                                 except Exception:
                                     pass
                         duplicate_track = False
-                        for j, (_fpt, _src_track_id, _src_fn) in enumerate(list(fpts)):
+                        for j, (_fpt, _src_track_id, _src_fn, ch_prev) in enumerate(list(fpts)):
+                            if n_ch > 0 and ch_prev > 0 and n_ch != ch_prev:
+                                continue
                             denom = (np.linalg.norm(fpt) * np.linalg.norm(_fpt))
                             sim = (np.dot(fpt, _fpt) / denom) if denom else 0.0
                             if sim > 0.9997:
@@ -2196,7 +2255,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                                         duplicate_track_source[_src_track_id] = track_id_val
                                         self._audio_tracks_to_exclude.add(_src_track_id)
                                         track_info.pop(_src_track_id, None)
-                                    fpts[j] = (fpt, track_id_val, fn)
+                                    fpts[j] = (fpt, track_id_val, fn, n_ch)
                                     print(f'Found duplicate audio track ｢{_src_fn}｣, deleted')
                                 else:
                                     os.remove(fn)
@@ -2208,7 +2267,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                                 duplicate_track = True
                                 break
                         if not duplicate_track:
-                            fpts.append((fpt, track_id_val, fn))
+                            fpts.append((fpt, track_id_val, fn, n_ch))
 
             def _is_silent_audio(path: str, threshold_db: float = -60.0) -> tuple[bool, float]:
                 try:
@@ -2334,7 +2393,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                                 os.remove(file1_path)
                                 os.rename(output_fn, file1_path)
 
-                        codec_choice = self._lossless_codec_choice(la_map, str(track_id))
+                        codec_choice = self._lossless_codec_choice(la_map, str(track_id), default_la)
                         base_no_ext = os.path.splitext(file1_path)[0]
                         flac_file = base_no_ext + '.flac'
                         if codec_choice == 'flac':
@@ -2364,7 +2423,13 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                                     f'{translate_text("Track ｢")}{file1_path}{translate_text("｣ compressed to ")}{codec_choice.upper()}{translate_text(" to reduce size ")}{delta / 1024 ** 2:.3f} MiB')
                                 self._audio_tracks_to_exclude.add(track_id)
                     else:
-                        codec_choice2 = self._lossless_codec_choice(la_map, str(track_id))
+                        codec_choice2 = self._lossless_codec_choice(la_map, str(track_id), default_la)
+                        # MKV already holds FLAC: mux extracted file as-is instead of decode→WAV→FLAC.
+                        if codec_choice2 == 'flac' and file1_path.lower().endswith('.flac'):
+                            print(
+                                f'{translate_text("Track ｢")}{file1_path}{translate_text("｣ is already FLAC, skipping re-encode")}')
+                            self._audio_tracks_to_exclude.add(track_id)
+                            continue
                         bits = track_bits.get(track_id, 24)
                         effective_bits = get_compressed_effective_depth(file1_path)
                         if effective_bits < bits:
