@@ -299,7 +299,7 @@ def resolve_encoder_executable_path(tool: str, mode: str) -> str:
     ``mode`` is ``bundle`` (next to the frozen exe / bundle root) or ``system``
     (``X264_PATH`` / ``X265_PATH`` / ``SVT_AV1_PATH`` from settings).
     """
-    from core.settings import X264_PATH, X265_PATH, SVT_AV1_PATH
+    from ..core.settings import X264_PATH, X265_PATH, SVT_AV1_PATH
 
     t = (tool or '').strip().lower()
     if t == 'svtav1':

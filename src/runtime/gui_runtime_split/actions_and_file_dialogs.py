@@ -31,6 +31,11 @@ from src.runtime.services import BluraySubtitle, _Cancelled
 from .gui_base import BluraySubtitleGuiBase
 
 
+def _is_pyinstaller_frozen_bundle() -> bool:
+    """True when running as a PyInstaller-built executable (onefile/onedir with ``_MEIPASS``)."""
+    return bool(getattr(sys, "frozen", False)) and hasattr(sys, "_MEIPASS")
+
+
 class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
     @staticmethod
     def _append_compat_arg_if_missing(base: str, option_name: str, option_value: str = '') -> str:
@@ -107,6 +112,18 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             if d is not None:
                 depth = str(d)
         return tool, depth
+
+    def _current_encode_lossless_audio_codec(self) -> str:
+        """Encode-page preset (FLAC / AAC / Opus) used when per-MKV track map has no entry for a stream."""
+        combo = getattr(self, 'encode_lossless_audio_combo', None)
+        if combo is None:
+            return 'flac'
+        c = combo.currentData()
+        if c is None:
+            c = str(combo.currentText() or '').strip().lower()
+        else:
+            c = str(c).strip().lower()
+        return c if c in ('flac', 'aac', 'opus') else 'flac'
 
     def _apply_encode_codec_slot_visibility(self) -> None:
         """Blu-ray Encode (4): full encoder + bit depth. DIY encode (5): hide both (fixed BD rules)."""
@@ -931,6 +948,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 track_selection_config=getattr(self, '_track_selection_config', {}),
                 track_language_config=getattr(self, '_track_language_config', {}),
                 track_lossless_audio_config=getattr(self, '_track_lossless_audio_config', {}),
+                default_lossless_audio_codec=self._current_encode_lossless_audio_codec(),
             )
             self._encode_worker.moveToThread(self._encode_thread)
             self._encode_thread.started.connect(self._encode_worker.run)
@@ -1060,7 +1078,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             movie_mode=self._is_movie_mode(),
             track_selection_config=getattr(self, '_track_selection_config', {}),
             track_language_config=getattr(self, '_track_language_config', {}),
-            track_lossless_audio_config=getattr(self, '_track_lossless_audio_config', {})
+            track_lossless_audio_config=getattr(self, '_track_lossless_audio_config', {}),
+            default_lossless_audio_codec=self._current_encode_lossless_audio_codec(),
         )
         self._encode_worker.moveToThread(self._encode_thread)
         self._encode_thread.started.connect(self._encode_worker.run)
@@ -1306,6 +1325,20 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             loop.exec()
         return success
 
+    def _update_encode_bit_depth_combo_tooltip(self) -> None:
+        """SvtAv1 + 12-bit only: tooltip (x265 12-bit has no warning). Frozen bundle: no SvtAv1 12-bit row."""
+        cb = getattr(self, 'encode_bit_depth_combo', None)
+        if cb is None:
+            return
+        if _is_pyinstaller_frozen_bundle():
+            cb.setToolTip('')
+            return
+        enc = (getattr(self, 'encode_tool_combo', None).currentText() or '').strip().lower()
+        if enc == 'svtav1' and str(cb.currentData() or '') == '12':
+            cb.setToolTip(self.t('Not officially supported'))
+        else:
+            cb.setToolTip('')
+
     def _refill_encode_bit_depth_combo(self, tool: str) -> None:
         # PyQt6: bool(QComboBox()) is False — never use `if not combo` on QWidget subclasses.
         if getattr(self, 'encode_bit_depth_combo', None) is None:
@@ -1320,7 +1353,13 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         else:
             self.encode_bit_depth_combo.addItem(self.t('8-bit'), '8')
             self.encode_bit_depth_combo.addItem(self.t('10-bit'), '10')
-            self.encode_bit_depth_combo.addItem(self.t('12-bit'), '12')
+            # PyInstaller: omit 12-bit for SvtAv1 only (upstream grey-stream risk); x265 keeps 12-bit.
+            omit_12 = _is_pyinstaller_frozen_bundle() and t == 'svtav1'
+            if not omit_12:
+                self.encode_bit_depth_combo.addItem(self.t('12-bit'), '12')
+                i12 = self.encode_bit_depth_combo.count() - 1
+                tip12 = self.t('Not officially supported') if t == 'svtav1' else ''
+                self.encode_bit_depth_combo.setItemData(i12, tip12, Qt.ItemDataRole.ToolTipRole)
         want = str(prev) if prev is not None else ''
         pick = -1
         for i in range(self.encode_bit_depth_combo.count()):
@@ -1336,6 +1375,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             pick = 0
         self.encode_bit_depth_combo.setCurrentIndex(pick)
         self.encode_bit_depth_combo.blockSignals(False)
+        self._update_encode_bit_depth_combo_tooltip()
         try:
             if hasattr(self, '_adjust_combo_width_to_contents'):
                 self._adjust_combo_width_to_contents(self.encode_bit_depth_combo)
@@ -1404,9 +1444,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             'Extreme': '--preset veryslow --crf 14 --profile high --level 4.1 --bframes 10 --ref 8 --aq-mode 2 --trellis 2',
             'Custom': ''
         }
-        # SvtAv1EncApp-style presets (CLI differs from x265; tune when wiring encode logic).
-        # Do not add --enable-overlays for normal content: AV1 overlay frames are a special mode and with
-        # 12-bit / profile 2 have produced broken streams (~hundred kbps, grey/decoding glitches) in the wild.
+        # SvtAv1EncApp-style presets (CLI differs from x265). 12-bit: encode_task adds --profile 2 if not in params.
+        # Do not add --enable-overlays for normal content (overlay frames are a special mode).
         self._svtav1_preset_params = {
             'Fast': '--preset 10 --crf 32 --keyint 240 --tune 0',
             'Balanced': '--preset 6 --crf 24 --keyint 240 --tune 0',
@@ -1464,7 +1503,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
 
         self.x265_mode_label = None
 
-        is_pyinstaller_bundle = bool(getattr(sys, 'frozen', False)) and hasattr(sys, '_MEIPASS')
+        is_pyinstaller_bundle = _is_pyinstaller_frozen_bundle()
         if not is_pyinstaller_bundle:
             self.vspipe_mode_combo.setCurrentText('System')
             self.vspipe_mode_combo.setEnabled(False)
@@ -1551,6 +1590,10 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 sync = getattr(self, 'sync_default_vpy_fmtc_with_encode_ui', None)
                 if callable(sync):
                     sync()
+            except Exception:
+                pass
+            try:
+                self._update_encode_bit_depth_combo_tooltip()
             except Exception:
                 pass
 

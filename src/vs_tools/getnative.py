@@ -14,7 +14,7 @@ from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
-from core.settings import VSPIPE_PATH
+from ..core.settings import VSPIPE_PATH
 
 
 class _KernelResult:

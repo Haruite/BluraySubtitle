@@ -35,6 +35,7 @@ class EncodeMkvFolderWorker(QObject):
         track_selection_config: Optional[dict[str, Any]] = None,
         track_language_config: Optional[dict[str, dict[str, str]]] = None,
         track_lossless_audio_config: Optional[dict[str, dict[str, str]]] = None,
+        default_lossless_audio_codec: str = 'flac',
     ):
         super().__init__()
         self.mkv_rows = mkv_rows
@@ -52,6 +53,8 @@ class EncodeMkvFolderWorker(QObject):
         self.track_selection_config = track_selection_config or {}
         self.track_language_config = track_language_config or {}
         self.track_lossless_audio_config = track_lossless_audio_config or {}
+        d = str(default_lossless_audio_codec or 'flac').strip().lower()
+        self.default_lossless_audio_codec = d if d in ('flac', 'aac', 'opus') else 'flac'
 
     def _link_or_copy(self, src: str, dst: str):
         if os.path.exists(dst):
@@ -112,6 +115,7 @@ class EncodeMkvFolderWorker(QObject):
             bs.track_selection_config = self.track_selection_config
             bs.track_language_config = self.track_language_config
             bs.track_lossless_audio_config = self.track_lossless_audio_config
+            bs.default_lossless_audio_codec = self.default_lossless_audio_codec
 
             total = max(1, len(self.mkv_rows) + len(self.sp_rows))
             done = 0

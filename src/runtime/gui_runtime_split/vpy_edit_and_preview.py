@@ -39,14 +39,23 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
 
     @staticmethod
     def _patch_fmtc_output_bits_in_text(raw_line: str, bits: int) -> str:
-        """Rewrite ``core.fmtc.bitdepth(res|src8, bits=…)`` to the chosen output depth."""
-        out = raw_line
-        for _pat in (
-            r'(core\.fmtc\.bitdepth\(res,\s*bits=)\d+',
-            r'(core\.fmtc\.bitdepth\(src8,\s*bits=)\d+',
-        ):
-            out = re.sub(_pat, lambda m: m.group(1) + str(int(bits)), out)
-        return out
+        """Rewrite only final-output fmtc lines (LHS ``res``), not intermediates like ``src16 = fmtc(src8,…)``."""
+        s = raw_line.lstrip()
+        if re.match(r"res\s*=\s*core\.fmtc\.bitdepth\s*\(\s*src8\s*,", s):
+            return re.sub(
+                r"(core\.fmtc\.bitdepth\(\s*src8\s*,\s*bits\s*=\s*)\d+",
+                lambda m: m.group(1) + str(int(bits)),
+                raw_line,
+                count=1,
+            )
+        if re.match(r"res\s*=\s*core\.fmtc\.bitdepth\s*\(\s*res\s*,", s):
+            return re.sub(
+                r"(core\.fmtc\.bitdepth\(\s*res\s*,\s*bits\s*=\s*)\d+",
+                lambda m: m.group(1) + str(int(bits)),
+                raw_line,
+                count=1,
+            )
+        return raw_line
 
     def sync_default_vpy_fmtc_with_encode_ui(self) -> None:
         """Write ``fmtc.bitdepth(..., bits=N)`` into default ``vpy.vpy`` from Encode tool + output depth."""

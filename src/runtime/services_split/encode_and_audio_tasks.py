@@ -7,7 +7,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections import deque
 import threading
 import traceback
 import multiprocessing
@@ -16,7 +15,7 @@ from typing import Optional
 
 import pycountry
 
-from core.settings import VSPIPE_PATH
+from ...core.settings import VSPIPE_PATH
 from ...core import FFMPEG_PATH
 from ...core.settings import PLUGIN_PATH
 from .service_base import BluraySubtitleServiceBase
@@ -131,102 +130,16 @@ def _pump_subprocess_stderr_raw(stream) -> None:
             pass
 
 
-_X265_STATUS_PERCENT_RE = re.compile(r"\[\s*(\d+(?:\.\d+)?)\s*%\s*\]")
-
-
-def _pump_x265_stderr_percent_steps(stream, line_tail: Optional[deque] = None) -> None:
-    """
-    PyInstaller: x265 overwrites one status line with \\r. Each full snapshot ends at the next \\r;
-    only those complete segments are parsed (avoids emitting half-lines when read() splits mid-line).
-    Status lines like ``[1.0%] 326/32896 frames, ...`` are printed once per int(percent) step; other
-    lines (warnings, etc.) print every time.
-    """
-    if stream is None:
-        return
-    out = getattr(sys.stderr, "buffer", None)
-    last_int_pct = -1
-
-    def write_line(text: str) -> None:
-        t = text.rstrip("\r\n")
-        if not t:
-            return
-        if line_tail is not None:
-            line_tail.append(t)
-        b = (t + "\n").encode("utf-8", errors="replace")
-        if out is not None:
-            try:
-                out.write(b)
-                out.flush()
-            except Exception:
-                pass
-        else:
-            try:
-                sys.stderr.write(t + "\n")
-                sys.stderr.flush()
-            except Exception:
-                pass
-
-    def handle_segment(seg: str) -> None:
-        nonlocal last_int_pct
-        st = seg.strip()
-        if not st:
-            return
-        m = _X265_STATUS_PERCENT_RE.search(st)
-        if m:
-            pct = float(m.group(1))
-            ip = int(min(100, max(0, pct)))
-            if ip > last_int_pct:
-                last_int_pct = ip
-                write_line(st)
-        else:
-            write_line(st)
-
-    buf = bytearray()
-    chunk_size = 8192
-    try:
-        while True:
-            chunk = stream.read(chunk_size)
-            if not chunk:
-                break
-            buf.extend(chunk)
-            while b"\n" in buf:
-                line, rest = buf.split(b"\n", 1)
-                buf[:] = rest
-                seg = line.split(b"\r")[-1].decode("utf-8", errors="replace")
-                handle_segment(seg)
-            if b"\r" in buf:
-                parts = bytes(buf).split(b"\r")
-                for part in parts[:-1]:
-                    if not part.strip():
-                        continue
-                    seg = part.decode("utf-8", errors="replace")
-                    handle_segment(seg)
-                buf[:] = parts[-1]
-            if len(buf) > 262144:
-                del buf[:-131072]
-        if buf.strip():
-            seg = bytes(buf).decode("utf-8", errors="replace").strip()
-            if seg:
-                handle_segment(seg)
-    finally:
-        try:
-            stream.close()
-        except Exception:
-            pass
-
-
 def _run_vspipe_piped_encode(
     vspipe_exe: str,
     vpy_path: str,
     encoder_cmd: list[str],
     env: Optional[dict],
-    *,
-    x265_style_progress: bool = False,
 ) -> int:
     """
     vspipe --y4m | encoder (x264 / x265 / SvtAv1EncApp) without cmd.exe.
     In a real TTY, inherit the encoder stderr so x265 can use \\r line progress; otherwise pipe and
-    (for x265) percent-filter; on non-TTY failure, re-print a short stderr tail.
+    forward stderr bytes unchanged (same as x264/SVT) so logs match the encoder's native output.
     """
     env_use = dict(env) if env else os.environ.copy()
     inherit_err = _encode_inherit_subprocess_stderr()
@@ -243,10 +156,6 @@ def _run_vspipe_piped_encode(
 
     vspipe_cmd = [str(vspipe_exe), "--y4m", str(vpy_path), "-"]
     enc_cmd = [str(x) for x in encoder_cmd]
-
-    enc_tail: Optional[deque] = None
-    if x265_style_progress and stderr_e is not None:
-        enc_tail = deque(maxlen=120)
 
     p_v = subprocess.Popen(
         vspipe_cmd,
@@ -270,14 +179,7 @@ def _run_vspipe_piped_encode(
         t_v.start()
         pump_threads.append(t_v)
     if stderr_e is not None:
-        if x265_style_progress:
-            t_e = threading.Thread(
-                target=_pump_x265_stderr_percent_steps,
-                args=(p_e.stderr, enc_tail),
-                daemon=True,
-            )
-        else:
-            t_e = threading.Thread(target=_pump_subprocess_stderr_raw, args=(p_e.stderr,), daemon=True)
+        t_e = threading.Thread(target=_pump_subprocess_stderr_raw, args=(p_e.stderr,), daemon=True)
         t_e.start()
         pump_threads.append(t_e)
 
@@ -286,18 +188,63 @@ def _run_vspipe_piped_encode(
     for t in pump_threads:
         t.join(timeout=5.0)
     if rc_e != 0:
-        try:
-            show_tail = not stderr_is_tty
-        except Exception:
-            show_tail = True
-        if enc_tail and show_tail:
-            for ln in enc_tail:
-                try:
-                    print(ln, file=sys.stderr, flush=True)
-                except Exception:
-                    pass
         return rc_e
     return rc_v
+
+
+def _run_vspipe_svt_win_tempfile_encode(
+    vspipe_exe: str,
+    vpy_path: str,
+    encoder_cmd: list[str],
+    env: Optional[dict],
+    *,
+    temp_dir: Optional[str] = None,
+) -> int:
+    """
+    Windows-only escape hatch: vspipe → full .y4m on disk → SvtAv1EncApp -i <file>.
+    Avoids pipe short-read / CRLF / CRT quirks; needs free disk space for the entire y4m stream.
+    """
+    env_use = dict(env) if env else os.environ.copy()
+    popen_kw: dict = {"env": env_use}
+    if sys.platform == "win32":
+        popen_kw["creationflags"] = _windows_no_window_flags()
+    td = temp_dir
+    if td:
+        try:
+            os.makedirs(td, exist_ok=True)
+        except Exception:
+            td = None
+    fd, y4m_path = tempfile.mkstemp(
+        prefix="bluraysub_svt_", suffix=".y4m", dir=td if td else None
+    )
+    os.close(fd)
+    vspipe_cmd = [str(vspipe_exe), "--y4m", str(vpy_path), "-"]
+    enc_cmd = [str(x) for x in encoder_cmd]
+    try:
+        with open(y4m_path, "wb") as y4m_f:
+            p_v = subprocess.run(vspipe_cmd, stdout=y4m_f, stderr=subprocess.PIPE, **popen_kw)
+        if p_v.returncode != 0:
+            try:
+                tail = (p_v.stderr or b"").decode("utf-8", errors="replace")[-600:]
+                _emit_encode_log_line(f"[BluraySubtitle] vspipe temp-y4m failed rc={p_v.returncode}\n{tail}")
+            except Exception:
+                pass
+            return int(p_v.returncode)
+        enc_fs = [y4m_path if a.lower() == "stdin" else a for a in enc_cmd]
+        p_e = subprocess.run(enc_fs, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, **popen_kw)
+        if p_e.returncode != 0:
+            try:
+                tail = (p_e.stderr or b"").decode("utf-8", errors="replace")[-800:]
+                if tail.strip():
+                    _emit_encode_log_line(f"[BluraySubtitle] SvtAv1EncApp stderr (tail):\n{tail}")
+            except Exception:
+                pass
+        return int(p_e.returncode)
+    finally:
+        try:
+            os.remove(y4m_path)
+        except OSError:
+            pass
 
 
 def _normalize_encode_tool_label(raw: str) -> str:
@@ -307,6 +254,17 @@ def _normalize_encode_tool_label(raw: str) -> str:
     if s == "sav1" or s == "av1":
         return "svtav1"
     return "x265"
+
+
+def _svtav1_extra_has_explicit_profile(extra: list[str]) -> bool:
+    """True if SvtAv1EncApp args already set --profile / -profile (12-bit needs profile 2 when unset)."""
+    for a in extra or []:
+        al = str(a).strip().lower()
+        if al in ("--profile", "-profile"):
+            return True
+        if al.startswith("--profile=") or al.startswith("-profile="):
+            return True
+    return False
 
 
 def _video_intermediate_extension(tool: str) -> str:
@@ -790,19 +748,6 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
         if bd not in ('8', '10', '12'):
             bd = '10'
         bits_int = int(bd)
-        # SVT-AV1 12-bit needs --profile 2; upstream once spammed SVT_ERROR("Profile 2 Not supported") on the
-        # valid Professional bit-depth write path (entropy_coding write_bitdepth). We default to 10-bit SVT to
-        # avoid experimental 12-bit glitches; use x265 or a rebuild with our SVT patches for 12-bit.
-        if tool_key == 'svtav1' and bd == '12':
-            try:
-                _emit_encode_log_line(
-                    "[BluraySubtitle] SVT-AV1: 12-bit is experimental; using 10-bit (use x265 for stable 12-bit, "
-                    "or rebuild SvtAv1EncApp with build.sh SVT patches including entropy_coding fix)."
-                )
-            except Exception:
-                pass
-            bd = '10'
-            bits_int = 10
         self._cleanup_getnative_artifacts()
         use_getnative = bool(getattr(self, "use_getnative", True))
         native_info = None
@@ -843,11 +788,39 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             def _to_py_r_string(value: str) -> str:
                 return 'r"' + value.replace('"', '\\"') + '"'
 
+            def _patch_output_fmtc_bitdepth_line(line: str) -> tuple[str, bool]:
+                """
+                Only touch the *final* encode output depth:
+                - res = core.fmtc.bitdepth(res, bits=N)   (typical custom script)
+                - res = core.fmtc.bitdepth(src8, bits=N)  (default template)
+                Do NOT rewrite e.g. src16 = core.fmtc.bitdepth(src8, bits=8) — that desyncs the
+                filter chain and the y4m C tag vs --input-depth (garbage on any OS, easy to miss).
+                """
+                t = line.rstrip("\r\n")
+                s = t.lstrip()
+                if re.match(r"res\s*=\s*core\.fmtc\.bitdepth\s*\(\s*src8\s*,", s):
+                    nl = re.sub(
+                        r"(core\.fmtc\.bitdepth\(\s*src8\s*,\s*bits\s*=\s*)\d+",
+                        lambda m: m.group(1) + str(bits_int),
+                        line,
+                        count=1,
+                    )
+                    return (nl, nl != line)
+                if re.match(r"res\s*=\s*core\.fmtc\.bitdepth\s*\(\s*res\s*,", s):
+                    nl = re.sub(
+                        r"(core\.fmtc\.bitdepth\(\s*res\s*,\s*bits\s*=\s*)\d+",
+                        lambda m: m.group(1) + str(bits_int),
+                        line,
+                        count=1,
+                    )
+                    return (nl, nl != line)
+                return (line, False)
+
             updated = False
             new_lines = []
             for line in lines:
                 stripped = line.lstrip()
-                if stripped.startswith('a ='):
+                if re.match(r"^a\s*=\s*", stripped):
                     indent = line[:len(line) - len(stripped)]
                     comment = ''
                     if '#' in stripped:
@@ -894,14 +867,11 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     updated = True
                     continue
 
-                if re.search(r'core\.fmtc\.bitdepth\((res|src8),\s*bits=\d+', line):
-                    nl = line
-                    for _pat in (r'(core\.fmtc\.bitdepth\(res,\s*bits=)\d+', r'(core\.fmtc\.bitdepth\(src8,\s*bits=)\d+'):
-                        nl = re.sub(_pat, lambda m: m.group(1) + str(bits_int), nl)
-                    if nl != line:
-                        new_lines.append(nl)
-                        updated = True
-                        continue
+                nl, ch = _patch_output_fmtc_bitdepth_line(line)
+                if ch:
+                    new_lines.append(nl)
+                    updated = True
+                    continue
 
                 new_lines.append(line)
 
@@ -938,10 +908,11 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
         extra = _split_x265_extra_args(x265_params or '')
         if tool_key == 'x264':
             extra = _normalize_x264_extra_for_bit_depth(extra, bd)
+        elif tool_key == 'svtav1' and bd == '12' and not _svtav1_extra_has_explicit_profile(extra):
+            extra = ['--profile', '2'] + list(extra)
 
         if tool_key == 'x264':
             enc_cmd = [enc_exe, '--demuxer', 'y4m', '-'] + extra + ['--output-depth', bd, '-o', encoded_path]
-            use_x265_stderr_steps = False
         elif tool_key == 'x265':
             # Stdin is already '--y4m' '-' ; a trailing '-' is parsed as a second input (unused) and can abort x265.
             enc_cmd = (
@@ -949,16 +920,43 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 + extra
                 + ['--y4m', '-', '--input-depth', bd, '--output-depth', bd, '-o', encoded_path]
             )
-            use_x265_stderr_steps = True
         else:
-            enc_cmd = [enc_exe, '-i', 'stdin', '--input-depth', bd] + extra + ['-b', encoded_path]
-            use_x265_stderr_steps = False
+            # Windows: SVT-AV1 hand-tuned asm can corrupt output (upstream unfixed); force portable C paths.
+            if sys.platform == "win32":
+                enc_cmd = [enc_exe, "--asm", "c", "-i", "stdin", "--input-depth", bd] + extra + ["-b", encoded_path]
+            else:
+                enc_cmd = [enc_exe, "-i", "stdin", "--input-depth", bd] + extra + ["-b", encoded_path]
 
-        cmd_echo = f'"{vspipe_exe}" --y4m "{vpy_path}" - | ' + ' '.join(f'"{a}"' if (' ' in str(a) or ';' in str(a)) else str(a) for a in enc_cmd)
-        print(f'{translate_text("Encode command:")}{cmd_echo}')
-        enc_rc = _run_vspipe_piped_encode(
-            str(vspipe_exe), vpy_path, enc_cmd, vspipe_env, x265_style_progress=use_x265_stderr_steps
+        use_svt_win_temp_y4m = (
+            tool_key == "svtav1"
+            and sys.platform == "win32"
+            and str(os.environ.get("BLURAYSUB_SVT_WIN_TEMP_Y4M", "") or "").strip() == "1"
         )
+        if use_svt_win_temp_y4m:
+            cmd_echo = (
+                f'[temp y4m] "{vspipe_exe}" --y4m "{vpy_path}" -  -->  "{enc_cmd[0]}" -i <temp.y4m> ... -b "{encoded_path}"'
+            )
+            try:
+                _emit_encode_log_line(
+                    "[BluraySubtitle] SVT-AV1: temp y4m file mode (BLURAYSUB_SVT_WIN_TEMP_Y4M=1); high disk use."
+                )
+            except Exception:
+                pass
+        else:
+            cmd_echo = f'"{vspipe_exe}" --y4m "{vpy_path}" - | ' + " ".join(
+                f'"{a}"' if (" " in str(a) or ";" in str(a)) else str(a) for a in enc_cmd
+            )
+        print(f'{translate_text("Encode command:")}{cmd_echo}')
+        if use_svt_win_temp_y4m:
+            enc_rc = _run_vspipe_svt_win_tempfile_encode(
+                str(vspipe_exe),
+                vpy_path,
+                enc_cmd,
+                vspipe_env,
+                temp_dir=os.path.dirname(encoded_path) or None,
+            )
+        else:
+            enc_rc = _run_vspipe_piped_encode(str(vspipe_exe), vpy_path, enc_cmd, vspipe_env)
         if enc_rc != 0:
             _emit_encode_log_line(f"[BluraySubtitle] encode pipeline exited with code {enc_rc}")
         cleanup_lwi_for_source(src_mkv)
