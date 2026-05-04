@@ -1,20 +1,21 @@
 # BluraySubtitle
 
-[English](./README.md) | [简体中文](./README_zh.md)
+[English](./README.md) | [简体中文](README.zh-Hans.md)
 
 BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 工具。  
 它将以下四类功能整合在一个应用中：
 
-1. **生成合并字幕**
-2. **给 MKV 添加章节**
-3. **原盘 Remux**
-4. **原盘压制**
+1. **原盘 Remux**
+2. **原盘压制**
+3. **原盘 DIY（待开发）**
+4. **生成合并字幕**
+5. **给 MKV 添加章节**
 
 ---
 
 ## 亮点
 
-- 一个应用覆盖蓝光常见全流程（合并字幕、章节、Remux、压制）。
+- 一个应用覆盖蓝光常见全流程（Remux、压制、DIY、合并字幕、章节）。
 - 剧集/电影双模式，配合主播放列表与章节映射。
 - Remux 具备失败自动修复能力，稳定性更高。
 - 压制流程支持逐行 vpy 编辑与预览。
@@ -47,8 +48,11 @@ BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 
 - 主播放列表支持编辑混流命令（`remux_cmd`）。
 - 压制参数支持：
   - `vspipe` 来源（程序自带 / 系统）
-  - `x265` 来源（程序自带 / 系统）
-  - x265 参数预设与自定义
+  - 压制工具（x264 / x265 / SvtAv1EncApp）
+  - 压制工具来源（程序自带 / 系统）
+  - 输出视频位深（x264 - 8 / 10 bit, x265 - 8 / 10 / 12 bit, SvtAv1 - 8 / 10 / 12? bit）
+  - 压制工具参数预设与自定义
+  - 无损音频转换（flac / aac / opus）
   - 字幕封装：外挂 / 内挂 / 内嵌
 - 每一行支持独立 VPy 路径（正片与 SP）。
 
@@ -88,16 +92,19 @@ BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 
 10. 如果该 MPLS 没有选中任何轨道，输出文件名置空，混流时直接跳过。  
 11. 如果只选中 1 条音轨，输出名改为对应原始音频后缀，混流时直接提取。  
 12. 如果选中多条音轨（且不走视频封装），输出为 `BD_Vol_{bdmv_vol}_SP{n}.mka`。  
-13. 修改轨道后，立即触发输出文件名重算。  
-14. MPLS 混流后先清章节：`mkvpropedit output.mkv --chapters ""`；再从 MPLS 生成 `chapter.txt`，去掉末尾章节点，且只有在内容不等于“仅一个 00:00:00 章节”时才写回。  
-15. 若无法读取该 MPLS 的第一个 m2ts，该行置灰不可编辑，混流时跳过。  
-16. 混流完成后，按主 MPLS 同样规则检查轨道语言，不一致时用 `mkvpropedit` 修正。  
-17. 最后再扫描一遍“未被任何 MPLS 覆盖”的 m2ts 并追加到 `table3`：  
+13. 字幕轨道同理，只选一条时输出为原始后缀，选多条输出为 mks。
+14. 修改轨道后，立即触发输出文件名重算。  
+15. MPLS 混流后先清章节：`mkvpropedit output.mkv --chapters ""`；再从 MPLS 生成 `chapter.txt`，去掉末尾章节点，且只有在内容不等于“仅一个 00:00:00 章节”时才写回。  
+16. 若无法读取该 MPLS 的第一个 m2ts，该行置灰不可编辑，混流时跳过。  
+17. 混流完成后，按主 MPLS 同样规则检查轨道语言，不一致时用 `mkvpropedit` 修正。  
+18. 最后再扫描一遍“未被任何 MPLS 覆盖”的 m2ts 并追加到 `table3`：
+    - 先判断 m2ts 类型，有 video / audio_only / igs_menu / subtitle_only / audio_with_subtitle / private_or other / mixed_non_video / unknow
+    - 后三种类型不支持（es 裸流提取后不能识别）直接整行置灰，igs_menu 支持提取但是默认不勾选；  
     - 用 `M2TS.get_duration` 取时长；  
     - 时长 `< 30s` 默认不勾选；  
     - 时长 `= 0` 的行置灰不可编辑并跳过；  
     - 选中后的基础输出名是 `BD_Vol_{bdmv_vol}_{m2ts_name}`；  
-    - 后缀规则：一帧 -> png、单音轨 -> 直接提取原始后缀、多音轨 -> mka、其他 -> mkv。  
+    - 后缀规则：一帧 -> png、单音轨 -> 直接提取原始后缀、多音轨 -> mka、单字幕和多字幕、其他 -> mkv。  
 
 SP 混流失败时怎么处理：
 
@@ -158,7 +165,7 @@ SP 混流失败时怎么处理：
 2. 一旦遇到“未勾选区间起点”，当前集立即结束，`end_at_chapter` 设在该处；下一集从该区间末端重新开始。  
 3. 每集目标时长：有字幕时取该集字幕 `max_end_time`，无字幕时取 `approx episode length`。  
 4. 对每一集取两个候选终点：  
-   - 候选 A：最接近目标时长的“文件结束点”（从 view chapters 中判断该节点与上一个节点 m2ts 是否变化）；  
+   - 候选 A：最接近目标时长的“文件结束点”（从 view chapters 中判断该节点与上一个节点 m2ts 是否变化），且该节点距离整个 mpls 结束的剩余时间大于预估的一集时间 -300 秒；  
    - 候选 B：最接近目标时长的“章节点”。  
 5. 终点选择规则：  
    - 若候选 A 的偏差在 `[-1/4*目标时长, +1/2*目标时长]`，优先选候选 A；  
@@ -174,7 +181,7 @@ SP 混流失败时怎么处理：
 **第三优先：end_at_chapter 变化（按扩大/缩小分支处理）**
 
 1. 变化集之前保持不变。  
-2. 若 `end_at_chapter` 改小：后续集不重算，只清理空白区间节点勾选。  
+2. 若 `end_at_chapter` 改小：后续集重算。  
 3. 若 `end_at_chapter` 改大：下一集从其后“第一个仍被勾选节点”开始，重算后续各集 `start/end`。  
 
 下拉可选性约束：
@@ -201,7 +208,7 @@ SP 混流失败时怎么处理：
 示例：
 
 ```bash
-pip install PyQt6 librosa pycountry
+pip install PyQt6 librosa pycountry pillow matplotlib
 ```
 
 ### 外部工具
@@ -214,8 +221,11 @@ pip install PyQt6 librosa pycountry
 
 - VapourSynth 运行时与相关插件
 - `vspipe`
-- `x265`
 - `vsedit`
+- `x264`
+- `x265`
+- `SvtAv1EncApp`
+- `fdkaac`
 
 > 具体使用程序自带还是系统路径，取决于当前模式与设置项。
 
@@ -224,7 +234,7 @@ pip install PyQt6 librosa pycountry
 ## 快速开始
 
 ```bash
-python BluraySubtitle.py
+python src/main.py
 ```
 
 1. 在顶部选择语言与主题。
@@ -345,10 +355,9 @@ docker pull --platform linux/amd64 haruite/bluraysubtitle:latest
 
 - 剧集映射不对：
   - 检查 main MPLS，播放MPLS，选择正确的MPLS；
-  - 检查章节起止，比如最后一集最后一个章节是版权提示，需要裁除，有三种方法：  
-    a. 在主播放列表”查看章节"中中取消最后一段勾选并保存  
-    b. 选择最后一集的结束章节，将 ending 改为最后一个章节  
-    c. 混流命令编辑框中修改混流命令，请参阅 https://mkvtoolnix.download/doc/mkvmerge.html 中的--split parts 和 --split chapters 部分
+  - 检查章节起止，比如最后一集最后一个章节是版权提示，需要裁除，有两种方法：  
+    a. 在主播放列表”查看章节"中取消最后一段勾选并保存
+    b. 混流命令编辑框中修改混流命令，请参阅 https://mkvtoolnix.download/doc/mkvmerge.html 中的--split parts 和 --split chapters 部分
   - 检查字幕行顺序，可以点击文件名 header 栏排序。
   - 检查字幕时长，如果时长超长，很有可能是字幕文件有问题。可以右键 edit 编辑字幕，编辑字幕时会优先展示结束时间最晚的那些字幕，对有问题的字幕，修改其结束时间后保存，或者一并选择右键删除即可。
 - 存在特典盘：
@@ -375,18 +384,6 @@ docker pull --platform linux/amd64 haruite/bluraysubtitle:latest
 res = res.std.Trim(first=0, length=720)
 ```
 
-### 有些原盘最后一集后面紧跟几秒钟版权提示，怎么删除？
-
-点击查看章节，版权提示片段通常在最后一个片段，反选保存即可。
-
-### 有些原盘一集一个 mpls，以及特典盘的处理？
-
-主 mpls 可以选多个，解决多集的问题；也可以不选，解决特典盘的问题。
-
-### IGS菜单如何提取？单帧视频如何提取？
-
-igs 菜单默认不选，勾选 m2ts 类型为 igs_menu 的项目即可。单帧视频默认勾选并保存为 png，什么都不用做。
-
 ### 为什么 remux 出来的体积比原盘大？
 
 大概率存在重复的特典片段。解决方法: 检查各 mpls，点击查看章节，如果有 mpls 的片段与主 mpls 的片段重叠，选择该 mpls 为主 mpls，然后点击查看章节，取消重复段落的勾选，注意下方 SP 表会出现对应的项目，反选即可。
@@ -398,10 +395,6 @@ igs 菜单默认不选，勾选 m2ts 类型为 igs_menu 的项目即可。单帧
 ### 为什么 getnative 获取的每集的原始分辨率不一样？
 
 正常现象，因为有些原盘不止一种原生分辨率，以及原盘制作流程的复杂性，导致源分辨率难以分辨。可以先跑一遍测试，如果每集输出的原始分辨率结果基本相同则可以用程序自动的 getnative，否则去掉勾选自动 getnative 选项并编辑 vpy 填入你认为的原始分辨率和缩放算法，或者根本不填。
-
-### 为什么有些原盘 remux 轨道语言与 MKVToolNix 显示的轨道语言不一致？
-
-如果有那是 MKVToolNix 的 bug，本工具轨道语言完全符合原盘，默认不强行将 und 轨道改为 jpn 等。
 
 ### 为什么代码量这么大？
 
