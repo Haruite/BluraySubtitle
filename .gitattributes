@@ -1,0 +1,2 @@
+# Avoid CRLF in shell scripts (Linux: shebang becomes "bash\r" and /usr/bin/env fails).
+*.sh text eol=lf

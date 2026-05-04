@@ -518,6 +518,54 @@ install_libdovi() {
 }
 
 # ---------------------------------------------------------------------------
+# dav1d (for mpv-build / ffmpeg --enable-libdav1d)
+# ---------------------------------------------------------------------------
+
+# mpv-build's ffmpeg expects dav1d >= 1.0.0; Ubuntu 22.04 / Debian 12 often ship 0.9.x only.
+ensure_dav1d_for_mpv() {
+  log "$(msg 'Checking dav1d (mpv-build ffmpeg requires >= 1.0.0)' '检查 dav1d（mpv-build 内置 ffmpeg 需要 >= 1.0.0）')"
+
+  local pc_extra="/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/aarch64-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig"
+  local mod=""
+  if PKG_CONFIG_PATH="${pc_extra}:${PKG_CONFIG_PATH:-}" pkg-config --exists dav1d 2>/dev/null; then
+    mod="$(PKG_CONFIG_PATH="${pc_extra}:${PKG_CONFIG_PATH:-}" pkg-config --modversion dav1d 2>/dev/null | head -n 1 || true)"
+  fi
+  if [[ -n "${mod:-}" ]] && dpkg --compare-versions "${mod}" ge "1.0.0" 2>/dev/null; then
+    log "$(msg "dav1d satisfied (${mod} >= 1.0.0), skipping source build" "dav1d 已满足（${mod} >= 1.0.0），跳过源码编译")"
+    return 0
+  fi
+
+  log "$(msg "dav1d missing or too old (${mod:-none} < 1.0.0), building from Videolan git" "dav1d 缺失或版本过低（${mod:-无} < 1.0.0），将从 Videolan 源码编译安装")"
+
+  command -v meson >/dev/null 2>&1 || die "$(msg 'meson is required to build dav1d' '编译 dav1d 需要 meson')"
+  command -v ninja >/dev/null 2>&1 || die "$(msg 'ninja is required to build dav1d' '编译 dav1d 需要 ninja')"
+
+  local build_dir
+  build_dir="$(mktemp -d)"
+
+  (
+    cd "$build_dir" || exit 1
+    tmux_run "$(msg 'Clone dav1d' '克隆 dav1d')" git clone https://code.videolan.org/videolan/dav1d.git || exit 1
+    cd dav1d || exit 1
+    tmux_run "$(msg 'dav1d meson setup' 'dav1d meson 配置')" meson setup build --buildtype release -Ddefault_library=static || exit 1
+    tmux_run "$(msg 'dav1d ninja build' 'dav1d ninja 构建')" ninja -C build || exit 1
+    tmux_run "$(msg 'dav1d ninja install' 'dav1d 安装')" sudo ninja -C build install || exit 1
+    tmux_run "ldconfig" sudo ldconfig || exit 1
+  ) || die "$(msg 'dav1d build/install failed' 'dav1d 编译/安装失败')"
+
+  rm -rf "$build_dir"
+
+  mod=""
+  if PKG_CONFIG_PATH="${pc_extra}:${PKG_CONFIG_PATH:-}" pkg-config --exists dav1d 2>/dev/null; then
+    mod="$(PKG_CONFIG_PATH="${pc_extra}:${PKG_CONFIG_PATH:-}" pkg-config --modversion dav1d 2>/dev/null | head -n 1 || true)"
+  fi
+  if [[ -z "${mod:-}" ]] || ! dpkg --compare-versions "${mod}" ge "1.0.0" 2>/dev/null; then
+    die "$(msg "dav1d install verification failed (pkg-config modversion: ${mod:-none})" "dav1d 安装后校验失败（pkg-config 模块版本：${mod:-无}）")"
+  fi
+  log "$(msg "dav1d from source ready (${mod})" "dav1d 源码安装完成（${mod}）")"
+}
+
+# ---------------------------------------------------------------------------
 # mpv
 # ---------------------------------------------------------------------------
 
@@ -618,6 +666,9 @@ install_mpv() {
     export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"
   fi
 
+  export PATH="/usr/local/bin:${HOME}/.local/bin:${PATH:-}"
+  ensure_dav1d_for_mpv
+
   local build_dir
   build_dir="$(mktemp -d)"
 
@@ -641,7 +692,7 @@ install_mpv() {
 EOF
     fi
 
-    export PKG_CONFIG_PATH="$HOME/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
+    export PKG_CONFIG_PATH="/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/aarch64-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:${HOME}/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
     export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"
 
     tmux_run "mpv-build rebuild" ./rebuild -j"$(nproc)" || exit 1
@@ -1558,26 +1609,133 @@ install_descale() {
 }
 
 # ---------------------------------------------------------------------------
+# 7-Zip CLI (VapourSynth portable .7z)
+# ---------------------------------------------------------------------------
+
+# Ubuntu/Debian p7zip-full is often 7-Zip 16.x and fails on newer methods (e.g. Delta + LZMA2 in recent archives).
+ensure_modern_7zip_cli() {
+  BLURAY_7ZZ_BIN=""
+
+  if command -v 7zz >/dev/null 2>&1; then
+    BLURAY_7ZZ_BIN="$(command -v 7zz)"
+    return 0
+  fi
+
+  local p7_ver=""
+  if command -v 7z >/dev/null 2>&1; then
+    p7_ver="$(7z 2>&1 | head -n 1 | grep -oE '([0-9]+\.[0-9]+)' | head -n 1 || true)"
+  fi
+  if [[ -n "${p7_ver:-}" ]] && dpkg --compare-versions "$p7_ver" ge "22.00" 2>/dev/null; then
+    BLURAY_7ZZ_BIN="$(command -v 7z)"
+    return 0
+  fi
+
+  local seven_rel="26.01"
+  local seven_tag="2601"
+  local arch_7=""
+  case "$(uname -m)" in
+    x86_64 | amd64) arch_7="x64" ;;
+    aarch64 | arm64) arch_7="arm64" ;;
+    armv7l | armv6l) arch_7="arm" ;;
+    i686 | i386 | x86) arch_7="x86" ;;
+    *)
+      die "$(msg 'Unsupported CPU for 7-Zip bootstrap (install 7zz or p7zip >= 22)' '当前 CPU 无法自动下载 7-Zip CLI，请手动安装 7zz 或 p7zip >= 22')"
+      ;;
+  esac
+
+  if ! dpkg-query -W -f='${Status}' xz-utils 2>/dev/null | grep -q "install ok installed"; then
+    apt_update
+    apt_install xz-utils || die "$(msg 'Failed to install xz-utils (needed to unpack 7-Zip CLI tarball)' '安装 xz-utils 失败（解压 7-Zip 官方包需要）')"
+  fi
+
+  local cache_root="${HOME}/.cache/BluraySubtitle"
+  local dest="${cache_root}/7zip-${seven_tag}-linux-${arch_7}"
+  mkdir -p "$dest"
+
+  local zzpath=""
+  zzpath="$(find "$dest" -maxdepth 2 -type f -name 7zz -print -quit 2>/dev/null || true)"
+  if [[ -n "${zzpath:-}" && -f "$zzpath" ]]; then
+    chmod +x "$zzpath" || true
+    if [[ -x "$zzpath" ]]; then
+      BLURAY_7ZZ_BIN="$zzpath"
+      return 0
+    fi
+  fi
+
+  local url="https://github.com/ip7z/7zip/releases/download/${seven_rel}/7z${seven_tag}-linux-${arch_7}.tar.xz"
+  local tball="${dest}/7z${seven_tag}-linux-${arch_7}.tar.xz"
+
+  log "$(msg "Installing official 7-Zip CLI (${seven_rel}) under ~/.cache/BluraySubtitle (system p7zip is too old for some .7z files)" "正在安装官方 7-Zip 命令行（${seven_rel}）到 ~/.cache/BluraySubtitle（系统 p7zip 过旧，无法解压部分 .7z）")"
+
+  if command -v wget >/dev/null 2>&1; then
+    wget -O "$tball" "$url" || die "$(msg 'Failed to download official 7-Zip CLI tarball' '下载官方 7-Zip 命令行包失败')"
+  elif command -v curl >/dev/null 2>&1; then
+    curl -fsSL -o "$tball" "$url" || die "$(msg 'Failed to download official 7-Zip CLI tarball (curl)' '下载官方 7-Zip 命令行包失败（curl）')"
+  else
+    apt_update
+    apt_install wget curl || die "$(msg 'Failed to install wget/curl' '安装 wget/curl 失败')"
+    wget -O "$tball" "$url" || die "$(msg 'Failed to download official 7-Zip CLI tarball' '下载官方 7-Zip 命令行包失败')"
+  fi
+
+  tmux_run "$(msg 'Extract official 7-Zip CLI tarball' '解压官方 7-Zip 命令行包')" tar -xJf "$tball" -C "$dest" || die "$(msg 'Failed to extract official 7-Zip CLI tarball' '解压官方 7-Zip 命令行包失败')"
+
+  zzpath="$(find "$dest" -maxdepth 3 -type f -name 7zz -print -quit 2>/dev/null || true)"
+  [[ -n "${zzpath:-}" && -f "$zzpath" ]] || die "$(msg '7zz not found after extracting official 7-Zip tarball' '解压官方 7-Zip 包后未找到 7zz')"
+  chmod +x "$zzpath" || die "$(msg 'chmod 7zz failed' 'chmod 7zz 失败')"
+  [[ -x "$zzpath" ]] || die "$(msg '7zz is not executable' '7zz 不可执行')"
+
+  BLURAY_7ZZ_BIN="$zzpath"
+}
+
+# ---------------------------------------------------------------------------
 # VapourSynthScripts
 # ---------------------------------------------------------------------------
 
+# Subset of the VCB-S portable bundle's VapourSynthScripts/ used here (same filenames as reference bundle).
 install_vapoursynth_scripts() {
+  local py_ver
+  py_ver="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+  local dst_dir="/usr/local/lib/python${py_ver}/dist-packages"
+
+  # Reference layout (e.g. .../VapourSynthScripts/*.py); keep in sync when updating the portable package.
+  local -a vs_script_names=(
+    MCDenoise.py
+    adjust.py
+    dfttest2.py
+    havsfunc.py
+    mirvsfunc.py
+    muvsfunc.py
+    muvsfunc_numpy.py
+    mvsfunc.py
+    nnedi3_resample.py
+    vsTAAmbk.py
+    vsmlrt.py
+  )
+
+  local name all_present=1
+  for name in "${vs_script_names[@]}"; do
+    if [[ ! -f "${dst_dir}/${name}" ]]; then
+      all_present=0
+      break
+    fi
+  done
+  if (( all_present )); then
+    log "$(msg "VapourSynthScripts (${#vs_script_names[@]} .py files) already installed at ${dst_dir}, skipping portable 7z" "VapourSynthScripts（${#vs_script_names[@]} 个 .py）已在 ${dst_dir}，跳过便携包下载/解压")"
+    return 0
+  fi
+
   log "$(msg 'Downloading VCB-S VapourSynth portable package and extracting VapourSynthScripts' '下载 VCB-S VapourSynth 可移植包并提取 VapourSynthScripts')"
 
   local vcbs_url="https://github.com/AmusementClub/tools/releases/download/2025H1p/vapoursynth_portable_25H1.1p_cpu.7z"
 
-  if ! command -v 7z >/dev/null 2>&1; then
-    apt_update
-    apt_install p7zip-full || die "$(msg 'Failed to install p7zip-full' '安装 p7zip-full 失败')"
-  fi
+  ensure_modern_7zip_cli
+  [[ -n "${BLURAY_7ZZ_BIN:-}" ]] || die "$(msg '7-Zip CLI path not set' '未设置 7-Zip 可执行路径')"
+
   if ! command -v wget >/dev/null 2>&1; then
     apt_update
     apt_install wget || die "$(msg 'Failed to install wget' '安装 wget 失败')"
   fi
 
-  local py_ver
-  py_ver="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
-  local dst_dir="/usr/local/lib/python${py_ver}/dist-packages"
   sudo mkdir -p "$dst_dir"
 
   local tmp_dir
@@ -1585,7 +1743,7 @@ install_vapoursynth_scripts() {
   trap 'rm -rf "$tmp_dir"' RETURN
 
   tmux_run "$(msg 'Download vapoursynth_portable_25H1.1p_cpu.7z' '下载 vapoursynth_portable_25H1.1p_cpu.7z')" wget -O "$tmp_dir/vapoursynth_portable.7z" "$vcbs_url" || die "$(msg 'Failed to download 7z package' '下载 7z 包失败')"
-  tmux_run "$(msg 'Extract vapoursynth_portable.7z' '解压 vapoursynth_portable.7z')" 7z x "$tmp_dir/vapoursynth_portable.7z" "-o$tmp_dir/extracted" || die "$(msg 'Failed to extract 7z package' '解压 7z 包失败')"
+  tmux_run "$(msg 'Extract vapoursynth_portable.7z' '解压 vapoursynth_portable.7z')" "$BLURAY_7ZZ_BIN" x "$tmp_dir/vapoursynth_portable.7z" "-o$tmp_dir/extracted" || die "$(msg 'Failed to extract 7z package' '解压 7z 包失败')"
 
   local scripts_dir
   scripts_dir="$(find "$tmp_dir/extracted" -maxdepth 2 -type d -name VapourSynthScripts | head -n1)"
@@ -1594,10 +1752,13 @@ install_vapoursynth_scripts() {
   fi
 
   local copied=0
-  while IFS= read -r -d '' file; do
-    sudo cp -f "$file" "$dst_dir/" || die "$(msg "Failed to copy script: $file" "复制脚本失败：$file")"
+  for name in "${vs_script_names[@]}"; do
+    if [[ ! -f "${scripts_dir}/${name}" ]]; then
+      die "$(msg "Expected script missing in archive: ${name}" "压缩包中缺少预期脚本：${name}")"
+    fi
+    sudo cp -f "${scripts_dir}/${name}" "$dst_dir/" || die "$(msg "Failed to copy script: ${name}" "复制脚本失败：${name}")"
     copied=$((copied + 1))
-  done < <(find "$scripts_dir" -maxdepth 1 -type f -name "*.py" -print0)
+  done
 
   log "$(msg "Copied ${copied} script(s) from VapourSynthScripts to ${dst_dir}" "已从 VapourSynthScripts 复制脚本到 ${dst_dir}（数量：${copied}）")"
 }
@@ -2232,6 +2393,53 @@ install_shaderc_fix() {
 }
 
 # ---------------------------------------------------------------------------
+# BluraySubtitle Python deps (must match "python3" used to run src.main)
+# ---------------------------------------------------------------------------
+
+__bluray_python_imports_ok() {
+  python3 -c "import pycountry; import PyQt6.QtCore; import librosa; from PIL import Image; import matplotlib" >/dev/null 2>&1
+}
+
+# --break-system-packages exists from pip ~23; Ubuntu 22.04's python3-pip is often older.
+__pip_supports_break_system_packages() {
+  python3 -m pip install --help 2>/dev/null | grep -qE '(^|[[:space:]])--break-system-packages([[:space:]]|$)'
+}
+
+install_bluray_python_deps() {
+  log "$(msg 'Installing Python dependencies (python3 -m pip: pycountry PyQt6 librosa pillow matplotlib)' '安装 Python 依赖（python3 -m pip：pycountry PyQt6 librosa pillow matplotlib）')"
+
+  if __bluray_python_imports_ok; then
+    log "$(msg 'Python app dependencies already importable, skipping pip' 'Python 应用依赖已可导入，跳过 pip')"
+    return 0
+  fi
+
+  if ! python3 -m pip --version >/dev/null 2>&1; then
+    apt_update
+    apt_install python3-pip || die "$(msg 'Failed to install python3-pip' '安装 python3-pip 失败')"
+  fi
+
+  local pip_extra=()
+  local pip_mode_msg_en pip_mode_msg_zh
+  if __pip_supports_break_system_packages; then
+    pip_extra=(--break-system-packages)
+    pip_mode_msg_en='Install Python dependencies (python3 -m pip --break-system-packages)'
+    pip_mode_msg_zh='安装 Python 依赖（python3 -m pip --break-system-packages）'
+  else
+    pip_extra=(--user)
+    pip_mode_msg_en='Install Python dependencies (python3 -m pip --user; pip too old for --break-system-packages)'
+    pip_mode_msg_zh='安装 Python 依赖（python3 -m pip --user；当前 pip 过旧不支持 --break-system-packages，需要时可自行 python3 -m pip install -U pip）'
+  fi
+
+  tmux_run "$(msg "$pip_mode_msg_en" "$pip_mode_msg_zh")" \
+    env PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade "${pip_extra[@]}" pycountry PyQt6 librosa pillow matplotlib \
+    || tmux_run "$(msg 'Install Python dependencies (retry)' '安装 Python 依赖(重试)')" \
+      env PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade "${pip_extra[@]}" pycountry PyQt6 librosa pillow matplotlib \
+    || die "$(msg 'Failed to install Python dependencies with python3 -m pip' '使用 python3 -m pip 安装依赖失败')"
+
+  __bluray_python_imports_ok || die "$(msg 'Python deps installed but import check failed. Note: Pillow is imported as PIL (e.g. from PIL import Image), not import pillow' '依赖已安装但仍无法通过导入检查。说明：Pillow 的安装包名为 pillow，代码中应使用 from PIL import Image，不要写 import pillow')"
+}
+
+# ---------------------------------------------------------------------------
 # Main execution
 # ---------------------------------------------------------------------------
 
@@ -2284,19 +2492,7 @@ install_vapoursynth_editor
 build_vs_plugins
 install_desktop_shortcuts
 
-log "$(msg 'Installing Python dependencies (system python3: pycountry PyQt6 librosa pillow matplotlib)' '安装 Python 依赖（使用系统 python3：pycountry PyQt6 librosa pillow matplotlib）')"
-if ! pip3 show pycountry PyQt6 librosa pillow matplotlib >/dev/null 2>&1; then
-  py_minor="$(python3 -c 'import sys; print(sys.version_info.minor)' 2>/dev/null || echo 0)"
-  if (( py_minor >= 12 )); then
-    tmux_run "$(msg 'Install Python dependencies' '安装 Python 依赖')" env PIP_DISABLE_PIP_VERSION_CHECK=1 pip3 install --upgrade -q pycountry PyQt6 librosa pillow matplotlib --break-system-packages >/dev/null 2>&1 \
-      || tmux_run "$(msg 'Install Python dependencies (retry)' '安装 Python 依赖(重试)')" env PIP_DISABLE_PIP_VERSION_CHECK=1 pip3 install --upgrade pycountry PyQt6 librosa pillow matplotlib --break-system-packages
-  else
-    tmux_run "$(msg 'Install Python dependencies' '安装 Python 依赖')" env PIP_DISABLE_PIP_VERSION_CHECK=1 pip3 install --upgrade -q pycountry PyQt6 librosa pillow matplotlib >/dev/null 2>&1 \
-      || tmux_run "$(msg 'Install Python dependencies (retry)' '安装 Python 依赖(重试)')" env PIP_DISABLE_PIP_VERSION_CHECK=1 pip3 install --upgrade pycountry PyQt6 librosa pillow matplotlib
-  fi
-else
-  log "$(msg 'Python dependencies already installed, skipping' 'Python 依赖已安装，跳过')"
-fi
+install_bluray_python_deps
 
 
 log "$(msg 'Done. Recommended way to run:' '完成。推荐的运行方式：')"
