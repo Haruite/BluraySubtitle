@@ -1668,13 +1668,13 @@ ensure_modern_7zip_cli() {
   log "$(msg "Installing official 7-Zip CLI (${seven_rel}) under ~/.cache/BluraySubtitle (system p7zip is too old for some .7z files)" "正在安装官方 7-Zip 命令行（${seven_rel}）到 ~/.cache/BluraySubtitle（系统 p7zip 过旧，无法解压部分 .7z）")"
 
   if command -v wget >/dev/null 2>&1; then
-    wget -O "$tball" "$url" || die "$(msg 'Failed to download official 7-Zip CLI tarball' '下载官方 7-Zip 命令行包失败')"
+    wget -q -O "$tball" "$url" || die "$(msg 'Failed to download official 7-Zip CLI tarball' '下载官方 7-Zip 命令行包失败')"
   elif command -v curl >/dev/null 2>&1; then
     curl -fsSL -o "$tball" "$url" || die "$(msg 'Failed to download official 7-Zip CLI tarball (curl)' '下载官方 7-Zip 命令行包失败（curl）')"
   else
     apt_update
     apt_install wget curl || die "$(msg 'Failed to install wget/curl' '安装 wget/curl 失败')"
-    wget -O "$tball" "$url" || die "$(msg 'Failed to download official 7-Zip CLI tarball' '下载官方 7-Zip 命令行包失败')"
+    wget -q -O "$tball" "$url" || die "$(msg 'Failed to download official 7-Zip CLI tarball' '下载官方 7-Zip 命令行包失败')"
   fi
 
   tmux_run "$(msg 'Extract official 7-Zip CLI tarball' '解压官方 7-Zip 命令行包')" tar -xJf "$tball" -C "$dest" || die "$(msg 'Failed to extract official 7-Zip CLI tarball' '解压官方 7-Zip 命令行包失败')"
@@ -1742,7 +1742,7 @@ install_vapoursynth_scripts() {
   tmp_dir="$(mktemp -d)"
   trap 'rm -rf "$tmp_dir"' RETURN
 
-  tmux_run "$(msg 'Download vapoursynth_portable_25H1.1p_cpu.7z' '下载 vapoursynth_portable_25H1.1p_cpu.7z')" wget -O "$tmp_dir/vapoursynth_portable.7z" "$vcbs_url" || die "$(msg 'Failed to download 7z package' '下载 7z 包失败')"
+  tmux_run "$(msg 'Download vapoursynth_portable_25H1.1p_cpu.7z' '下载 vapoursynth_portable_25H1.1p_cpu.7z')" wget -q -O "$tmp_dir/vapoursynth_portable.7z" "$vcbs_url" || die "$(msg 'Failed to download 7z package' '下载 7z 包失败')"
   tmux_run "$(msg 'Extract vapoursynth_portable.7z' '解压 vapoursynth_portable.7z')" "$BLURAY_7ZZ_BIN" x "$tmp_dir/vapoursynth_portable.7z" "-o$tmp_dir/extracted" || die "$(msg 'Failed to extract 7z package' '解压 7z 包失败')"
 
   local scripts_dir
