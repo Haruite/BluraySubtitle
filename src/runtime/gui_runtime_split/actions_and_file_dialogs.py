@@ -522,6 +522,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             attachments_col = ENCODE_REMUX_LABELS.index('edit_attachments')
             self.table2.setItem(r, sub_col, FilePathTableWidgetItem(''))
             combo = self.create_language_combo(parent=self.table2)
+            self.table2.setItem(r, lang_col, None)
             self.table2.setCellWidget(r, lang_col, combo)
             try:
                 dur = MKV(src).get_duration()

@@ -130,6 +130,8 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
         if remux_mode:
             self.table2.setColumnCount(len(ENCODE_REMUX_LABELS))
             self._set_table_headers(self.table2, ENCODE_REMUX_LABELS)
+            for c in range(self.table2.columnCount()):
+                self.table2.setColumnHidden(c, False)
             self.table3.setColumnCount(len(ENCODE_REMUX_SP_LABELS))
             self._set_table_headers(self.table3, ENCODE_REMUX_SP_LABELS)
             self._update_language_combo_enabled_state()
@@ -153,6 +155,8 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             # QTableWidgetItem / cellWidget stay at the same (row,col) and appear under wrong headers.
             self.table2.setColumnCount(len(ENCODE_LABELS))
             self._set_table_headers(self.table2, ENCODE_LABELS)
+            for c in range(self.table2.columnCount()):
+                self.table2.setColumnHidden(c, False)
             self.table3.setColumnCount(len(ENCODE_SP_LABELS))
             self._set_table_headers(self.table3, ENCODE_SP_LABELS)
             self.table2.setRowCount(0)
@@ -851,6 +855,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                             final_lang = auto_lang
                         lang_combo = self.create_language_combo(final_lang)
                         lang_combo._auto_lang = auto_lang
+                        self.table2.setItem(row_i, language_col, None)
                         self.table2.setCellWidget(row_i, language_col, lang_combo)
 
                         auto_name = auto_output_name_map.get(first_sub_index, '')
@@ -951,6 +956,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                             final_lang = auto_lang
                         lang_combo = self.create_language_combo(final_lang)
                         lang_combo._auto_lang = auto_lang
+                        self.table2.setItem(sub_index, language_col, None)
                         self.table2.setCellWidget(sub_index, language_col, lang_combo)
                         if output_col >= 0:
                             auto_name = auto_output_name_map.get(sub_index, '')
@@ -1132,6 +1138,8 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             self.subtitle_path_box.setVisible(True)
         if hasattr(self, 'encode_source_row') and self.encode_source_row:
             self.encode_source_row.setVisible(function_id == 4)
+        if hasattr(self, '_sub_pack_row') and self._sub_pack_row:
+            self._sub_pack_row.setVisible(function_id == 4)
         if hasattr(self, 'table3'):
             self.table3.setVisible(function_id in (3, 4))
             try:
@@ -1245,6 +1253,8 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 self.table2.setRowCount(0)
                 self.table2.setColumnCount(len(REMUX_LABELS))
                 self._set_table_headers(self.table2, REMUX_LABELS)
+                for c in range(self.table2.columnCount()):
+                    self.table2.setColumnHidden(c, False)
                 self._set_table2_default_column_order()
                 if hasattr(self, 'table3'):
                     self.table3.clear()
@@ -1270,6 +1280,8 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 self.table2.setRowCount(0)
                 self.table2.setColumnCount(len(ENCODE_LABELS))
                 self._set_table_headers(self.table2, ENCODE_LABELS)
+                for c in range(self.table2.columnCount()):
+                    self.table2.setColumnHidden(c, False)
                 self._set_table2_default_column_order()
                 if hasattr(self, 'table3'):
                     self.table3.clear()
@@ -1322,6 +1334,14 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                         self.table2.setColumnHidden(DIY_REMUX_LABELS.index('sub_path'), True)
                     if 'language' in DIY_REMUX_LABELS:
                         self.table2.setColumnHidden(DIY_REMUX_LABELS.index('language'), True)
+                except Exception:
+                    pass
+            elif hasattr(self, 'table2') and self.table2:
+                try:
+                    if 'sub_path' in DIY_REMUX_LABELS:
+                        self.table2.setColumnHidden(DIY_REMUX_LABELS.index('sub_path'), False)
+                    if 'language' in DIY_REMUX_LABELS:
+                        self.table2.setColumnHidden(DIY_REMUX_LABELS.index('language'), False)
                 except Exception:
                     pass
             if simple_diy:
