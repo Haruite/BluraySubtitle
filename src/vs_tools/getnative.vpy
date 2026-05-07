@@ -24,7 +24,35 @@ def _write(payload):
 
 
 def _blank():
-    core.std.BlankClip(width=8, height=8, format=vs.GRAY8, length=1).set_output()
+    fmt = getattr(vs, "GRAY8", None)
+    if fmt is None:
+        # Newer VS exposes preset formats under PresetFormat instead of module-level constants.
+        preset = getattr(vs, "PresetFormat", None)
+        fmt = getattr(preset, "GRAY8", None) if preset is not None else None
+    if fmt is None:
+        # Last-resort fallback for API variants that only expose query_video_format.
+        try:
+            qvf = core.query_video_format
+        except Exception:
+            qvf = None
+        if qvf is not None:
+            gray_cf = getattr(getattr(vs, "ColorFamily", object), "GRAY", None)
+            int_st = getattr(getattr(vs, "SampleType", object), "INTEGER", None)
+            if gray_cf is not None and int_st is not None:
+                try:
+                    vf = qvf(
+                        color_family=gray_cf,
+                        sample_type=int_st,
+                        bits_per_sample=8,
+                        subsampling_w=0,
+                        subsampling_h=0,
+                    )
+                    fmt = getattr(vf, "id", None)
+                except Exception:
+                    fmt = None
+    if fmt is None:
+        raise RuntimeError("Could not resolve GRAY8 format for BlankClip")
+    core.std.BlankClip(width=8, height=8, format=fmt, length=1).set_output()
 
 
 def _parse_params():
