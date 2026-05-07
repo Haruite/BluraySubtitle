@@ -673,6 +673,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                     final_lang = auto_lang
                 lang_combo = self.create_language_combo(final_lang)
                 lang_combo._auto_lang = auto_lang
+                self.table2.setItem(row_i, language_col, None)
                 self.table2.setCellWidget(row_i, language_col, lang_combo)
 
                 prev_name, prev_auto = prev_name_by_bdmv.get(bdmv_index, ('', ''))
