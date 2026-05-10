@@ -429,6 +429,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
     def _localized_headers_for_keys(self, keys: list[str]) -> list[str]:
         if getattr(self, '_language_code', CURRENT_UI_LANGUAGE) != 'zh':
             en = {
+                'm2ts_file_detail': 'm2ts detail',
                 'audio_convert': 'audio convert',
                 'edit_tracks': 'tracks',
                 'extract': 'extract',
@@ -455,6 +456,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
             'sub_path': '字幕路径',
             'ep_duration': '单集时长',
             'm2ts_file': 'm2ts 文件',
+            'm2ts_file_detail': 'm2ts 片段时间',
             'm2ts_type': 'm2ts 类型',
             'language': '语言',
             'sub_language': '字幕语言',

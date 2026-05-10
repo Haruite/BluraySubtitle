@@ -5,7 +5,7 @@ import traceback
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from src.bdmv import M2TS, Chapter
-from src.exports.utils import print_terminal_line, print_tb_string_terminal
+from src.exports.utils import print_tb_string_terminal
 from src.runtime.services import BluraySubtitle
 
 
@@ -73,7 +73,6 @@ class SpTableScanWorker(QObject):
                 force_disabled = bool(r.get('force_disabled') or False)
                 select_all = bool(r.get('select_all') or False)
                 disabled = False
-                disabled_reason = ''
                 special = ''
                 select_override = None
                 tracks_payload: dict[str, list[str]] = {}
@@ -82,23 +81,18 @@ class SpTableScanWorker(QObject):
 
                 if force_disabled:
                     disabled = True
-                    disabled_reason = 'force_disabled'
                 elif not m2ts_paths:
                     disabled = True
-                    disabled_reason = 'empty_m2ts_paths'
                 else:
                     first = m2ts_paths[0]
                     if (not first) or (not os.path.exists(first)):
                         disabled = True
-                        disabled_reason = 'first_missing'
                     else:
                         try:
                             if not _streams(first):
                                 disabled = True
-                                disabled_reason = 'first_no_streams'
                         except Exception:
                             disabled = True
-                            disabled_reason = 'first_streams_exception'
 
                 if not disabled:
                     try:
@@ -110,7 +104,6 @@ class SpTableScanWorker(QObject):
                                 m2ts_type = ''
                             if m2ts_type in ('private_or_other', 'mixed_non_video'):
                                 disabled = True
-                                disabled_reason = f'm2ts_type={m2ts_type}'
                                 allow_tracks_when_disabled = True
                         if mpls_path and os.path.exists(mpls_path) and m2ts_paths:
                             try:
@@ -126,7 +119,7 @@ class SpTableScanWorker(QObject):
                             try:
                                 if select_all:
                                     a = [str(x.get('index', '')).strip() for x in streams if str(x.get('codec_type') or '') == 'audio' and str(x.get('index', '')).strip() != '']
-                                    s = [str(x.get('index', '')).strip() for x in streams if str(x.get('codec_type') or '') == 'subtitle' and str(x.get('index', '')).strip() != '']
+                                    s = [str(x.get('index', '')).strip() for x in streams if str(x.get('codec_type') or '') in ('subtitle', 'subtitles') and str(x.get('index', '')).strip() != '']
                                 else:
                                     a, s = BluraySubtitle._default_track_selection_from_streams(streams, pid_to_lang)
                                 tracks_payload = {'audio': a, 'subtitle': s}
@@ -140,7 +133,7 @@ class SpTableScanWorker(QObject):
                             try:
                                 if select_all:
                                     a = [str(x.get('index', '')).strip() for x in streams if str(x.get('codec_type') or '') == 'audio' and str(x.get('index', '')).strip() != '']
-                                    s = [str(x.get('index', '')).strip() for x in streams if str(x.get('codec_type') or '') == 'subtitle' and str(x.get('index', '')).strip() != '']
+                                    s = [str(x.get('index', '')).strip() for x in streams if str(x.get('codec_type') or '') in ('subtitle', 'subtitles') and str(x.get('index', '')).strip() != '']
                                 else:
                                     a, s = BluraySubtitle._default_track_selection_from_streams(streams, {})
                                 tracks_payload = {'audio': a, 'subtitle': s}
@@ -183,15 +176,6 @@ class SpTableScanWorker(QObject):
                                 elif len(uniq_m2ts_paths) > 1 and all(x <= 1 for x in frame_counts):
                                     special = 'multi_frame'
                                     select_override = True
-                    except Exception:
-                        pass
-                if disabled:
-                    try:
-                        if mpls_path:
-                            print_terminal_line(
-                                f'[SPDebug] row_disabled row={row} reason={str(locals().get("disabled_reason", "unknown"))} '
-                                f'mpls={os.path.basename(mpls_path)} m2ts_count={len(m2ts_paths)} force={bool(force_disabled)}'
-                            )
                     except Exception:
                         pass
 

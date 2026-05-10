@@ -14,7 +14,7 @@ from src.core import ENCODE_REMUX_LABELS, ENCODE_REMUX_SP_LABELS, ENCODE_LABELS,
     DIY_BDMV_LABELS, DIY_SP_LABELS, DIY_REMUX_LABELS
 from src.core.i18n import translate_text
 from src.domain import Subtitle
-from src.exports.utils import get_time_str, print_exc_terminal, get_index_to_m2ts_and_offset
+from src.exports.utils import get_time_str, print_exc_terminal, get_index_to_m2ts_and_offset, ui_perf_log
 from src.runtime.gui_runtime_classes.file_path_table_widget_item import FilePathTableWidgetItem
 from src.runtime.services import BluraySubtitle
 from .gui_base import BluraySubtitleGuiBase
@@ -193,13 +193,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             return
         if function_id not in (3, 4, 5):
             return
-        if self._is_movie_mode():
-            self._refresh_movie_table2()
-            return
-        configuration = getattr(self, '_last_configuration_34', None)
-        if isinstance(configuration, dict) and configuration:
-            # Mode toggle (movie <-> series) should not rebuild table3/SP scan.
-            self.on_configuration(configuration, update_sp_table=False)
+        self._full_refresh_remux_encode_tables_for_mode()
 
     def _collect_config_inputs(self) -> dict[str, object]:
         current_fid = self.get_selected_function_id()
@@ -669,6 +663,43 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
         except Exception:
             return False
 
+    def _full_refresh_remux_encode_tables_for_mode(self) -> None:
+        """Rebuild table2 and table3 from table1 / main MPLS (full refresh on series/movie toggle)."""
+        if self.get_selected_function_id() not in (3, 4, 5):
+            return
+        if not self.bdmv_folder_path.text().strip() or self.table1.rowCount() == 0:
+            return
+        if self._is_movie_mode():
+            self._refresh_movie_table2()
+            return
+        try:
+            sub_files = [
+                self.table2.item(i, 0).text().strip()
+                for i in range(self.table2.rowCount())
+                if self.table2.item(i, 0) and self.table2.item(i, 0).text()
+            ]
+            bs = BluraySubtitle(
+                self.bdmv_folder_path.text(),
+                sub_files,
+                self.checkbox1.isChecked(),
+                None,
+                approx_episode_duration_seconds=self._get_approx_episode_duration_seconds(),
+            )
+            selected_mpls = self.get_selected_mpls_no_ext()
+            if not selected_mpls:
+                self.table2.setRowCount(0)
+                self.refresh_sp_table({})
+                self._last_configuration_34 = {}
+                try:
+                    self._selected_main_mpls_prev = set()
+                except Exception:
+                    pass
+                return
+            configuration = bs.generate_configuration_from_selected_mpls(selected_mpls)
+            self.on_configuration(configuration, update_sp_table=True)
+        except Exception:
+            print_exc_terminal()
+
     def _rebuild_configuration_for_function_34(self):
         if self.get_selected_function_id() not in (3, 4, 5):
             return
@@ -709,6 +740,11 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 return
             function_id = self.get_selected_function_id()
             if function_id in (3, 4, 5):
+                ui_perf_log(
+                    f'on_configuration enter fid={function_id} update_sp_table={bool(update_sp_table)} '
+                    f'movie_mode={bool(self._is_movie_mode())}',
+                    reset=True,
+                )
                 if bool(update_sp_table):
                     busy = self._begin_delayed_busy(self.t('Updating table rows...'))
                 self._last_configuration_34 = configuration
@@ -741,6 +777,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 start_col = labels.index('start_at_chapter')
                 end_col = labels.index('end_at_chapter')
                 m2ts_col = labels.index('m2ts_file')
+                m2ts_detail_col = labels.index('m2ts_file_detail') if 'm2ts_file_detail' in labels else -1
                 language_col = labels.index('language')
                 output_col = labels.index('output_name') if 'output_name' in labels else -1
                 play_col = labels.index('play') if 'play' in labels else -1
@@ -867,6 +904,16 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                             final_text = prev_name
                         else:
                             final_text = auto_name
+                        if m2ts_detail_col >= 0:
+                            sm = str(con0.get('selected_mpls') or '').strip()
+                            mpls_full = sm if sm.lower().endswith('.mpls') else (f'{sm}.mpls' if sm else '')
+                            detail_txt = ''
+                            if mpls_full and os.path.isfile(mpls_full):
+                                try:
+                                    detail_txt = self._m2ts_file_detail_from_mpls_path(mpls_full)
+                                except Exception:
+                                    detail_txt = ''
+                            self.table2.setItem(row_i, m2ts_detail_col, QTableWidgetItem(detail_txt))
                         if output_col >= 0:
                             new_item = QTableWidgetItem(final_text)
                             new_item.setData(Qt.ItemDataRole.UserRole, auto_name)
@@ -884,6 +931,8 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                             btn_play.clicked.connect(partial(self.on_play_table2_disc_row, row_i, bdmv_col, m2ts_col))
                             self.table2.setItem(row_i, play_col, None)
                             self.table2.setCellWidget(row_i, play_col, btn_play)
+                    ui_perf_log(
+                        f'table2 movie-mode rows={self.table2.rowCount()} cfg_keys={len(configuration)}')
                 else:
                     self.table2.setRowCount(len(configuration))
                     for sub_index, con in configuration.items():
@@ -941,6 +990,17 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                             partial(self._on_end_chapter_combo_changed, sub_index, labels))
                         self.table2.setCellWidget(sub_index, end_col, end_combo)
                         self.table2.setItem(sub_index, m2ts_col, QTableWidgetItem(', '.join(m2ts_files)))
+                        if m2ts_detail_col >= 0:
+                            sm = str(con.get('selected_mpls') or '').strip()
+                            mpls_full = sm if sm.lower().endswith('.mpls') else (f'{sm}.mpls' if sm else '')
+                            detail_txt = ''
+                            if mpls_full and os.path.isfile(mpls_full):
+                                try:
+                                    detail_txt = BluraySubtitle.m2ts_file_detail_for_mpls_timeline_window(
+                                        mpls_full, start_off, end_off)
+                                except Exception:
+                                    detail_txt = ''
+                            self.table2.setItem(sub_index, m2ts_detail_col, QTableWidgetItem(detail_txt))
                         self.table2.setItem(sub_index, duration_col, QTableWidgetItem(duration))
 
                         prev_lang_widget = self.table2.cellWidget(sub_index, language_col)
@@ -978,6 +1038,8 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                                 partial(self.on_play_table2_disc_row, sub_index, bdmv_col, m2ts_col))
                             self.table2.setItem(sub_index, play_col, None)
                             self.table2.setCellWidget(sub_index, play_col, btn_play)
+                    ui_perf_log(
+                        f'table2 episode-mode rows={self.table2.rowCount()} cfg_keys={len(configuration)}')
                 if self.subtitle_folder_path.text().strip():
                     sub_files = []
                     try:
@@ -992,21 +1054,27 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                         for i, sub_file in enumerate(sub_files):
                             if (not self._is_movie_mode()) and i < len(configuration) and i < self.table2.rowCount():
                                 self.table2.setItem(i, 0, FilePathTableWidgetItem(sub_file))
+                ui_perf_log('before table2 resizeColumnsToContents')
                 self.table2.resizeColumnsToContents()
                 self._resize_table_columns_for_language(self.table2)
                 self._update_language_combo_enabled_state()
+                ui_perf_log('before _sync/_apply chapter constraints')
                 self._sync_end_chapter_min_constraints(labels)
                 self._apply_start_chapter_constraints(labels)
+                ui_perf_log('before _refresh_table2_m2ts_duration_from_widgets')
                 self._refresh_table2_m2ts_duration_from_widgets(
                     labels,
                     prev_ui_m2ts_by_row=prev_ui_m2ts_by_row,
                     cfg_fill_m2ts_by_row=cfg_fill_m2ts_by_row,
                 )
+                ui_perf_log('after _refresh_table2_m2ts_duration_from_widgets')
                 self._scroll_table_h_to_right(self.table2)
                 if function_id in (3, 4, 5):
                     if update_sp_table:
+                        ui_perf_log('before refresh_sp_table')
                         self._tick_delayed_busy(busy, self.t('Refreshing SP table...'))
                         self.refresh_sp_table(configuration)
+                        ui_perf_log('after refresh_sp_table')
                     try:
                         self._refresh_table1_remux_cmds()
                     except Exception:
@@ -1156,6 +1224,10 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     self.table3.setColumnHidden(labels.index('edit_vpy'), not is_encode)
                 if 'preview_script' in labels:
                     self.table3.setColumnHidden(labels.index('preview_script'), not is_encode)
+                try:
+                    self._apply_hidden_m2ts_file_detail_columns()
+                except Exception:
+                    pass
                 self._scroll_table_h_to_right(self.table3)
             except Exception:
                 pass
@@ -1255,6 +1327,10 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 self._set_table_headers(self.table2, REMUX_LABELS)
                 for c in range(self.table2.columnCount()):
                     self.table2.setColumnHidden(c, False)
+                try:
+                    self._apply_hidden_m2ts_file_detail_columns()
+                except Exception:
+                    pass
                 self._set_table2_default_column_order()
                 if hasattr(self, 'table3'):
                     self.table3.clear()
@@ -1282,6 +1358,10 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 self._set_table_headers(self.table2, ENCODE_LABELS)
                 for c in range(self.table2.columnCount()):
                     self.table2.setColumnHidden(c, False)
+                try:
+                    self._apply_hidden_m2ts_file_detail_columns()
+                except Exception:
+                    pass
                 self._set_table2_default_column_order()
                 if hasattr(self, 'table3'):
                     self.table3.clear()

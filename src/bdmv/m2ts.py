@@ -1225,6 +1225,163 @@ class M2TS:
         text = stream_type_text_map.get(stream_type, "Unknown stream type")
         return f"{int(stream_type)}({text})"
 
+    _PSI_ASSEMBLY_MAX = 4096
+
+    @staticmethod
+    def _psi_collector() -> dict[str, object]:
+        return {"buf": bytearray(), "expect_ptr": True}
+
+    @staticmethod
+    def _psi_feed(col: dict[str, object], payload: bytes, pusi: bool, max_buf: int) -> None:
+        """
+        Append TS payload bytes for one PAT/PMT PID, matching tsMuxer: new PUSI starts a payload unit
+        (clear buffer); continuation packets append until a full PSI section is assembled.
+        """
+        buf: bytearray = col["buf"]  # type: ignore[assignment]
+        if pusi:
+            buf.clear()
+            col["expect_ptr"] = True
+            buf.extend(payload)
+        else:
+            if len(buf) == 0:
+                return
+            if len(buf) + len(payload) > max_buf:
+                buf.clear()
+                col["expect_ptr"] = True
+                return
+            buf.extend(payload)
+
+    @staticmethod
+    def _psi_apply_section(
+        sec: bytes,
+        stream_pid: int,
+        tracks_by_pid: dict[int, dict[str, object]],
+        pmt_pids: dict[int, int],
+        pmt_pid_set: set[int],
+        parsed_pmts: set[int],
+    ) -> None:
+        if len(sec) < 12:
+            return
+        table_id = sec[0]
+        section_total = len(sec)
+        body_end = section_total - 4
+        if body_end < 8:
+            return
+
+        if table_id == 0x00 and stream_pid == 0x0000:
+            i = 8
+            while i + 4 <= body_end:
+                program_number = (sec[i] << 8) | sec[i + 1]
+                pmt_pid = ((sec[i + 2] & 0x1F) << 8) | sec[i + 3]
+                if program_number != 0:
+                    pmt_pids[program_number] = pmt_pid
+                    pmt_pid_set.add(pmt_pid)
+                i += 4
+            return
+
+        if table_id == 0x02 and stream_pid in pmt_pid_set:
+            if stream_pid in parsed_pmts:
+                return
+            parsed_pmts.add(stream_pid)
+            program_number = (sec[3] << 8) | sec[4]
+            if body_end < 12:
+                return
+            pcr_pid = ((sec[8] & 0x1F) << 8) | sec[9]
+            prog_info_len = ((sec[10] & 0x0F) << 8) | sec[11]
+            i = 12 + prog_info_len
+            while i + 5 <= body_end:
+                stream_type = sec[i]
+                es_pid = ((sec[i + 1] & 0x1F) << 8) | sec[i + 2]
+                es_info_len = ((sec[i + 3] & 0x0F) << 8) | sec[i + 4]
+                desc_start = i + 5
+                desc_end = min(desc_start + es_info_len, body_end)
+                descriptors = sec[desc_start:desc_end]
+                codec_type, codec_name = M2TS._codec_from_stream_type(stream_type, descriptors)
+
+                lang = None
+                j = 0
+                while j + 2 <= len(descriptors):
+                    tag = descriptors[j]
+                    ln = descriptors[j + 1]
+                    end = j + 2 + ln
+                    if end > len(descriptors):
+                        break
+                    if tag == 0x0A and ln >= 3:
+                        lang_bytes = descriptors[j + 2:j + 5]
+                        try:
+                            lang = lang_bytes.decode("ascii", errors="ignore").strip() or None
+                        except Exception:
+                            lang = None
+                        break
+                    j = end
+
+                tracks_by_pid[es_pid] = {
+                    "pid": es_pid,
+                    "program_number": program_number,
+                    "pmt_pid": stream_pid,
+                    "is_pcr_pid": es_pid == pcr_pid,
+                    "stream_type": M2TS._stream_type_text(stream_type),
+                    "codec_type": codec_type,
+                    "codec_name": codec_name,
+                    "language_from_pmt_descriptor": lang,
+                }
+                i += 5 + es_info_len
+
+    @staticmethod
+    def _psi_drain(
+        col: dict[str, object],
+        stream_pid: int,
+        tracks_by_pid: dict[int, dict[str, object]],
+        pmt_pids: dict[int, int],
+        pmt_pid_set: set[int],
+        parsed_pmts: set[int],
+    ) -> None:
+        """Extract every complete PSI section from the front of the assembly buffer (ISO 13818-1)."""
+        buf: bytearray = col["buf"]  # type: ignore[assignment]
+        max_ptr = M2TS._TS_PACKET - 4
+        while True:
+            if len(buf) < 3:
+                return
+            if col["expect_ptr"]:  # type: ignore[operator]
+                ptr = buf[0]
+                if ptr == 0xFF:
+                    buf.clear()
+                    col["expect_ptr"] = True
+                    return
+                if ptr > max_ptr:
+                    buf.clear()
+                    col["expect_ptr"] = True
+                    return
+                if len(buf) < 1 + ptr + 3:
+                    return
+                off = 1 + ptr
+                section_len = ((buf[off + 1] & 0x0F) << 8) | buf[off + 2]
+                section_total = 3 + section_len
+                if section_total < 12:
+                    buf.clear()
+                    col["expect_ptr"] = True
+                    return
+                if len(buf) < off + section_total:
+                    return
+                sec = bytes(memoryview(buf)[off : off + section_total])
+                del buf[: off + section_total]
+                col["expect_ptr"] = len(buf) == 0
+                M2TS._psi_apply_section(sec, stream_pid, tracks_by_pid, pmt_pids, pmt_pid_set, parsed_pmts)
+                continue
+
+            section_len = ((buf[1] & 0x0F) << 8) | buf[2]
+            section_total = 3 + section_len
+            if section_total < 12:
+                buf.clear()
+                col["expect_ptr"] = True
+                return
+            if len(buf) < section_total:
+                return
+            sec = bytes(memoryview(buf)[:section_total])
+            del buf[:section_total]
+            col["expect_ptr"] = len(buf) == 0
+            M2TS._psi_apply_section(sec, stream_pid, tracks_by_pid, pmt_pids, pmt_pid_set, parsed_pmts)
+
     def get_tracks_info(
         self,
         *,
@@ -1234,6 +1391,9 @@ class M2TS:
         """
         Parse PAT/PMT and return elementary stream track metadata list.
         Each item includes at least pid/codec_type/codec_name.
+
+        PAT/PMT sections may span multiple TS packets (common on UHD / long PMT); assembly matches
+        tsMuxer (``TSDemuxer::getTrackList`` + ``TS_program_map_section::isFullBuff`` semantics).
         """
         self._ensure_cache_valid()
         cache_key = (m2ts, int(max_scan_bytes))
@@ -1245,6 +1405,8 @@ class M2TS:
         pmt_pids: dict[int, int] = {}
         parsed_pmts: set[int] = set()
         pmt_pid_set: set[int] = set()
+        psi_cols: dict[int, dict[str, object]] = {0: M2TS._psi_collector()}
+        max_psi = M2TS._PSI_ASSEMBLY_MAX
 
         with open(self.filename, "rb") as stream:
             start_phase, spacing, sync_off = self._choose_transport_layout_cached(stream, m2ts)
@@ -1261,85 +1423,17 @@ class M2TS:
                     continue
 
                 payload, pid, pusi = M2TS._ts_payload(pkt)
-                if payload is None or not pusi or not payload:
+                if payload is None or not payload:
                     continue
                 if pid != 0x0000 and pid not in pmt_pid_set:
                     continue
 
-                ptr = payload[0]
-                sec_pos = 1 + ptr
-                if sec_pos >= len(payload):
-                    continue
-                sec_data = payload[sec_pos:]
+                col = psi_cols.setdefault(pid, M2TS._psi_collector())
+                M2TS._psi_feed(col, payload, pusi, max_psi)
+                M2TS._psi_drain(col, pid, tracks_by_pid, pmt_pids, pmt_pid_set, parsed_pmts)
+                for new_pmt in list(pmt_pid_set):
+                    psi_cols.setdefault(new_pmt, M2TS._psi_collector())
 
-                while len(sec_data) >= 3:
-                    section_len = ((sec_data[1] & 0x0F) << 8) | sec_data[2]
-                    section_total = 3 + section_len
-                    if section_total < 12 or section_total > len(sec_data):
-                        break
-                    sec = sec_data[:section_total]
-                    sec_data = sec_data[section_total:]
-                    table_id = sec[0]
-                    body_end = section_total - 4  # exclude CRC
-                    if body_end < 8:
-                        continue
-
-                    if table_id == 0x00 and pid == 0x0000:
-                        i = 8
-                        while i + 4 <= body_end:
-                            program_number = (sec[i] << 8) | sec[i + 1]
-                            pmt_pid = ((sec[i + 2] & 0x1F) << 8) | sec[i + 3]
-                            if program_number != 0:
-                                pmt_pids[program_number] = pmt_pid
-                                pmt_pid_set.add(pmt_pid)
-                            i += 4
-                    elif table_id == 0x02 and pid in pmt_pid_set:
-                        if pid in parsed_pmts:
-                            continue
-                        parsed_pmts.add(pid)
-                        program_number = (sec[3] << 8) | sec[4]
-                        if body_end < 12:
-                            continue
-                        pcr_pid = ((sec[8] & 0x1F) << 8) | sec[9]
-                        prog_info_len = ((sec[10] & 0x0F) << 8) | sec[11]
-                        i = 12 + prog_info_len
-                        while i + 5 <= body_end:
-                            stream_type = sec[i]
-                            es_pid = ((sec[i + 1] & 0x1F) << 8) | sec[i + 2]
-                            es_info_len = ((sec[i + 3] & 0x0F) << 8) | sec[i + 4]
-                            desc_start = i + 5
-                            desc_end = min(desc_start + es_info_len, body_end)
-                            descriptors = sec[desc_start:desc_end]
-                            codec_type, codec_name = M2TS._codec_from_stream_type(stream_type, descriptors)
-
-                            lang = None
-                            j = 0
-                            while j + 2 <= len(descriptors):
-                                tag = descriptors[j]
-                                ln = descriptors[j + 1]
-                                end = j + 2 + ln
-                                if end > len(descriptors):
-                                    break
-                                if tag == 0x0A and ln >= 3:
-                                    lang_bytes = descriptors[j + 2:j + 5]
-                                    try:
-                                        lang = lang_bytes.decode("ascii", errors="ignore").strip() or None
-                                    except Exception:
-                                        lang = None
-                                    break
-                                j = end
-
-                            tracks_by_pid[es_pid] = {
-                                "pid": es_pid,
-                                "program_number": program_number,
-                                "pmt_pid": pid,
-                                "is_pcr_pid": es_pid == pcr_pid,
-                                "stream_type": M2TS._stream_type_text(stream_type),
-                                "codec_type": codec_type,
-                                "codec_name": codec_name,
-                                "language_from_pmt_descriptor": lang,
-                            }
-                            i += 5 + es_info_len
                 if pmt_pids and len(parsed_pmts) >= len(set(pmt_pids.values())):
                     break
 
@@ -1403,7 +1497,7 @@ class M2TS:
                 has_video = True
             elif ctype == "audio":
                 has_audio = True
-            elif ctype == "subtitle":
+            elif ctype in ("subtitle", "subtitles"):
                 has_subtitle = True
             else:
                 has_other = True

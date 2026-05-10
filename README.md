@@ -47,7 +47,9 @@ Encode mode supports two input sources:
 - Blu-ray (original disc layout)
 - Remux (MKV)
 
-Other controls:
+The **main playlist** supports editing the mux command (`remux_cmd`).
+
+Encode options include:
 
 - **`vspipe` source**: bundled / system
 - **Encoder**: **x264 / x265 / SvtAv1EncApp**
@@ -72,12 +74,11 @@ Other controls:
 
 Built-in handling for common mkvtoolnix edge cases:
 
-- Rewrite chapters when splitting/segmenting.
-- Fix output track languages with **`mkvpropedit`**.
+- Rewrite chapters when splitting/segmenting (where needed).
 - When **MPLS direct mux fails**, automatic repair paths:
   - multi-clip **track-aligned concat** fallback,
   - **multi-episode split-output** fallback,
-  - better success rate on complex playlists.
+  - higher success rate on complex playlists.
 
 ### Implementation Notes (Plain Language)
 
@@ -126,20 +127,20 @@ The app checks return code and output validity; on failure it enters fallback re
 
 **Single-output fallback** (common for SP, movie mode):
 
-1. Parse tracks from the **first m2ts** as the **reference layout**.  
+1. Take the tracks selected under **Edit tracks** in the GUI as the **reference layout**.  
 2. Walk **`Chapter(mpls_path).in_out_time`**; for each clip compute:  
    - `start_time = (in_time * 2 - first_pts) / 90000`  
    - `end_time = start_time + (out_time - in_time) / 45000`  
    **Note:** `start_time` is **not** always “from file start”. Some playlists play the middle of file A, then file B, then return to A—not from time 0 of A.  
 3. If `start_time == 0` and `abs(end_time - file_duration_sec) < 0.001`, mux the **whole** file; else use **`--split parts:start-end`**.  
-4. Per-clip alignment vs reference:  
-   - drop tracks **not** in the reference (PID missing from first clip);  
-   - keep tracks that **are** in the reference;  
-   - **fill missing reference audio** with silence tracks.  
-5. Each clip mux command includes **`--track-order FID:TID,...`** so final order matches the first m2ts.  
+4. Per clip, align to the reference layout:  
+   - run **`mkvmerge --identify`**, then mux with **`mkvmerge`** using **only** the tracks that correspond to the selected PIDs;  
+   - if tracks are still missing, probe with **tsMuxer**; if tsMuxer can supply **all** missing tracks **except audio**, **demux** those with tsMuxer and merge them in—otherwise **abort with an error**;  
+   - any **audio** tracks still missing afterward are filled with **silence** tracks.  
+5. Each clip mux command includes **`--track-order FID:TID,...`** so final track order matches the **first m2ts** reference.  
 6. Concatenate clip outputs in order with **`+`** and **`--append-mode track`**.  
-7. **`mkvpropedit`** for language fix.  
-8. Write chapters (existing helpers); **audio compression** and other steps are handled elsewhere.
+7. After mux, fix track languages with **`mkvpropedit`** where applicable.  
+8. Write chapters (existing helpers); **audio compression** and later steps are handled elsewhere—this path covers mux and repair only.
 
 **Multi-output fallback** (one MPLS → several files):
 
@@ -150,10 +151,10 @@ The app checks return code and output validity; on failure it enters fallback re
    - **first** file in window: start = `window_start - clip_timeline_start`, end per single-output formula;  
    - **middle** files: same as single-output;  
    - **last** file in window: start per single-output, end = `start + (window_end - clip_timeline_start)`.  
-5. Each slice: same **reference layout + silence fill + stable `--track-order`**.  
+5. Each slice: same **reference layout + missing-track repair + stable `--track-order`** (same rules as single-output fallback).  
 6. Append slices into one file per window.  
 7. Verify expected outputs (`-001`, `-002`, …) all exist; incomplete → fallback failed.  
-8. On success: language fix + chapter write as in the main flow.
+8. On successful outputs: run the same **language fix** and **chapter write** pipeline as in the main flow.
 
 #### C) `view chapters` / `start_at_chapter` / `end_at_chapter` linkage (regeneration rules)
 
@@ -197,7 +198,7 @@ Config generation should treat at least these **three** inputs as core; **any** 
 
 - Main remux command placeholders: **`{output_file}`**, **`{audio_opts}`**, **`{sub_opts}`**, **`{parts_split}`**.  
 - If the primary command output is wrong, fallbacks still use parsed args or default tracks where possible.  
-- Chapter rewrite and language fix run **after mux** to dodge mkvmerge metadata quirks.
+- Chapter rewrite and language correction run **after mux** mainly to work around mkvtoolnix edge cases in metadata handling.
 
 ---
 
@@ -400,6 +401,11 @@ No. Remux the disc first, then in encode mode choose **Remux** as the source and
 ### Why does getnative report different native resolutions per episode?
 
 Normal: some discs mix resolutions and authoring is messy. Run a test pass; if results are similar, keep **auto getnative**. Otherwise disable it and edit the VPy with the resolution/scaling you trust—or leave those fields empty.
+
+### Why does PotPlayer / mpv show two audio tracks on an MPLS (and eac3to / mkvmerge list two) while this app shows one?
+
+One track is **hidden** by MPLS rules. Players and tools that read **m2ts** or **clpi** still list both. **PowerDVD** follows MPLS strictly—you won’t see the hidden track there.  
+Usually the remaining audible material for that extra track appears elsewhere on the disc in another MPLS; **Blu-ray Remux** and **Encode** handle this so valid audio is not dropped.
 
 ### Why is the codebase so large?
 

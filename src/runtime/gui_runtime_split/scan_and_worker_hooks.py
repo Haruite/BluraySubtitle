@@ -7,13 +7,35 @@ from typing import Optional
 from PyQt6.QtCore import QTimer, QThread, Qt
 from PyQt6.QtWidgets import QProgressDialog, QProgressBar, QTableWidgetItem, QToolButton
 
-from src.core import ENCODE_SP_LABELS, ENCODE_REMUX_LABELS, ENCODE_LABELS
+from src.core import ENCODE_SP_LABELS, ENCODE_REMUX_LABELS, ENCODE_LABELS, DIY_SP_LABELS
 from src.runtime.gui_runtime_classes.sp_table_scan_worker import SpTableScanWorker
 from src.runtime.services import BluraySubtitle
 from .gui_base import BluraySubtitleGuiBase
 
 
 class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
+    def _dismiss_sp_scan_progress_ui(self):
+        """Close SP table scan progress UI and clear refs (safe when restarting or early-exiting a scan)."""
+        try:
+            t = getattr(self, '_sp_scan_progress_show_timer', None)
+            if isinstance(t, QTimer):
+                t.stop()
+        except Exception:
+            pass
+        try:
+            dlg = getattr(self, '_sp_scan_progress_dialog', None)
+            if isinstance(dlg, QProgressDialog):
+                dlg.close()
+                dlg.deleteLater()
+        except Exception:
+            pass
+        self._sp_scan_progress_dialog = None
+        self._sp_scan_progress_bar = None
+        self._sp_scan_progress_show_timer = None
+        self._sp_scan_progress_rows_seen = set()
+        self._sp_scan_progress_total = 0
+        self._sp_scan_progress_done = 0
+
     def _update_exe_button_progress(self, value: Optional[int] = None, text: Optional[str] = None):
         if not hasattr(self, 'exe_button') or not self.exe_button:
             return
@@ -102,6 +124,7 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
                 self._sp_scan_thread.wait(200)
         except Exception:
             pass
+        self._dismiss_sp_scan_progress_ui()
 
         bdmv_col = ENCODE_SP_LABELS.index('bdmv_index')
         mpls_col = ENCODE_SP_LABELS.index('mpls_file')
@@ -136,12 +159,6 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
 
         if not rows:
             self._sp_scan_in_progress = False
-            self._sp_scan_progress_dialog = None
-            self._sp_scan_progress_bar = None
-            self._sp_scan_progress_show_timer = None
-            self._sp_scan_progress_rows_seen = set()
-            self._sp_scan_progress_total = 0
-            self._sp_scan_progress_done = 0
             return
 
         start_ts = time.time()
@@ -190,25 +207,7 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
                 self._sp_scan_in_progress = False
             except Exception:
                 pass
-            try:
-                t = getattr(self, '_sp_scan_progress_show_timer', None)
-                if isinstance(t, QTimer):
-                    t.stop()
-            except Exception:
-                pass
-            try:
-                dlg = getattr(self, '_sp_scan_progress_dialog', None)
-                if isinstance(dlg, QProgressDialog):
-                    dlg.close()
-                    dlg.deleteLater()
-            except Exception:
-                pass
-            self._sp_scan_progress_dialog = None
-            self._sp_scan_progress_bar = None
-            self._sp_scan_progress_show_timer = None
-            self._sp_scan_progress_rows_seen = set()
-            self._sp_scan_progress_total = 0
-            self._sp_scan_progress_done = 0
+            self._dismiss_sp_scan_progress_ui()
             try:
                 worker.deleteLater()
             except Exception:
@@ -274,6 +273,18 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
                 type_item = QTableWidgetItem('')
                 self.table3.setItem(row, type_col, type_item)
             type_item.setText(m2ts_type)
+            try:
+                labels_sp = DIY_SP_LABELS if self.get_selected_function_id() == 5 else ENCODE_SP_LABELS
+                if 'm2ts_file_detail' in labels_sp:
+                    det_col = labels_sp.index('m2ts_file_detail')
+                    dtxt = self._m2ts_file_detail_for_sp_table_row(row, labels_sp)
+                    dit = self.table3.item(row, det_col)
+                    if not dit:
+                        dit = QTableWidgetItem('')
+                        self.table3.setItem(row, det_col, dit)
+                    dit.setText(dtxt)
+            except Exception:
+                pass
             btn_tracks = self.table3.cellWidget(row, tracks_col)
             if isinstance(btn_tracks, QToolButton):
                 btn_tracks.setEnabled((not disabled) or allow_tracks_when_disabled)

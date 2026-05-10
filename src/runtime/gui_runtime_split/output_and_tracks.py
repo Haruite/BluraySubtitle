@@ -3,63 +3,37 @@ import json
 import os
 import re
 import subprocess
-import xml.etree.ElementTree as et
 from typing import Optional
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QComboBox, QTableWidgetItem, QTableWidget, QToolButton
 
-from src.bdmv import M2TS
-from src.core import REMUX_LABELS, DIY_REMUX_LABELS, ENCODE_LABELS, CURRENT_UI_LANGUAGE, FFPROBE_PATH, ENCODE_SP_LABELS
+from src.bdmv import M2TS, Chapter
+from src.core import REMUX_LABELS, DIY_REMUX_LABELS, ENCODE_LABELS, CURRENT_UI_LANGUAGE, FFPROBE_PATH, ENCODE_SP_LABELS, \
+    DIY_SP_LABELS
 from src.runtime.services import BluraySubtitle
+from src.runtime.services_split.lifecycle_and_configuration import LifecycleConfigurationMixin
 from .gui_base import BluraySubtitleGuiBase
 
 
 class OutputTracksMixin(BluraySubtitleGuiBase):
     def _resolve_output_name_from_mpls(self, mpls_no_ext: str) -> str:
-        mpls_path = mpls_no_ext + '.mpls'
-        meta_folder = os.path.join(os.path.join(mpls_path[:-19], 'META', 'DL'))
-        output_name = ''
-        if not os.path.exists(meta_folder):
-            output_name = os.path.split(mpls_path[:-24])[-1]
-        else:
-            for filename in os.listdir(meta_folder):
-                if filename == 'bdmt_eng.xml':
-                    try:
-                        tree = et.parse(os.path.join(meta_folder, filename))
-                        _folder = tree.getroot()
-                        ns = {'di': 'urn:BDA:bdmv;discinfo'}
-                        output_name = _folder.find('.//di:name', ns).text
-                        break
-                    except (et.ParseError, FileNotFoundError):
-                        continue
-            if not output_name:
-                for filename in os.listdir(meta_folder):
-                    if filename == 'bdmt_zho.xml':
-                        try:
-                            tree = et.parse(os.path.join(meta_folder, filename))
-                            _folder = tree.getroot()
-                            ns = {'di': 'urn:BDA:bdmv;discinfo'}
-                            output_name = _folder.find('.//di:name', ns).text
-                            break
-                        except (et.ParseError, FileNotFoundError):
-                            continue
-            if not output_name:
-                for filename in os.listdir(meta_folder):
-                    try:
-                        tree = et.parse(os.path.join(meta_folder, filename))
-                        _folder = tree.getroot()
-                        ns = {'di': 'urn:BDA:bdmv;discinfo'}
-                        output_name = _folder.find('.//di:name', ns).text
-                        break
-                    except (et.ParseError, FileNotFoundError):
-                        continue
-            if not output_name:
-                output_name = os.path.split(mpls_path[:-24])[-1]
-        char_map = {
-            '?': '？', '*': '★', '<': '《', '>': '》', ':': '：', '"': "'", '/': '／', '\\': '／', '|': '￨'
-        }
-        return ''.join(char_map.get(char) or char for char in output_name)
+        raw = str(mpls_no_ext or '').strip()
+        if not raw:
+            return ''
+        mpls_full = raw if raw.lower().endswith('.mpls') else raw + '.mpls'
+        try:
+            folder = os.path.normpath(os.path.join(os.path.dirname(os.path.normpath(mpls_full)), '..', '..'))
+        except Exception:
+            folder = ''
+        if (not folder) or (not os.path.isdir(os.path.join(folder, 'BDMV'))):
+            try:
+                folder = os.path.normpath(self.bdmv_folder_path.text().strip()) if hasattr(self, 'bdmv_folder_path') else ''
+            except Exception:
+                folder = ''
+        stem = raw[:-5] if raw.lower().endswith('.mpls') else raw
+        stem = os.path.normpath(stem)
+        return LifecycleConfigurationMixin.resolve_disc_output_title(folder, stem)
 
     def _build_episode_output_name_map(self, configuration: dict[int, dict[str, int | str]]) -> dict[int, str]:
         if not configuration:
@@ -198,10 +172,19 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                 bdmv_root = str(self._get_disc_root_for_bdmv_index(bi) or '').strip()
             except Exception:
                 bdmv_root = ''
+        det_txt = ''
+        try:
+            if 'm2ts_file_detail' in ENCODE_SP_LABELS:
+                dc = ENCODE_SP_LABELS.index('m2ts_file_detail')
+                dit = self.table3.item(row, dc)
+                det_txt = dit.text().strip() if dit and dit.text() else ''
+        except Exception:
+            det_txt = ''
         return {
             'bdmv_index': bi,
             'mpls_file': mpls_item.text().strip() if mpls_item and mpls_item.text() else '',
             'm2ts_file': m2ts_item.text().strip() if m2ts_item and m2ts_item.text() else '',
+            'm2ts_file_detail': det_txt,
             'm2ts_type': type_item.text().strip() if type_item and type_item.text() else '',
             'output_name': out_item.text().strip() if out_item and out_item.text() else '',
             'selected': bool(
@@ -209,15 +192,155 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
             'bdmv_root': bdmv_root,
         }
 
+    def _m2ts_file_detail_from_mpls_path(self, mpls_path: str) -> str:
+        """Full path to ``*.mpls``; detail string follows README ``in_out_time`` + first_pts formula."""
+        mp = str(mpls_path or '').strip()
+        if not mp or not os.path.isfile(mp):
+            return ''
+        return BluraySubtitle.m2ts_file_detail_from_mpls_playlist(mp)
+
+    def _m2ts_file_detail_for_sp_table_row(self, row: int, labels: Optional[list[str]] = None) -> str:
+        if row < 0 or not hasattr(self, 'table3') or not self.table3:
+            return ''
+        labels = labels or (
+            DIY_SP_LABELS if self.get_selected_function_id() == 5 else ENCODE_SP_LABELS
+        )
+        if 'm2ts_file_detail' not in labels:
+            return ''
+        try:
+            bdmv_col = labels.index('bdmv_index')
+            mpls_col = labels.index('mpls_file')
+            m2ts_col = labels.index('m2ts_file')
+        except Exception:
+            return ''
+        bdmv_item = self.table3.item(row, bdmv_col)
+        try:
+            bdmv_index = int(bdmv_item.text().strip()) if bdmv_item and bdmv_item.text() else 0
+        except Exception:
+            bdmv_index = 0
+        mpls_file = self.table3.item(row, mpls_col).text().strip() if self.table3.item(row, mpls_col) else ''
+        m2ts_text = self.table3.item(row, m2ts_col).text().strip() if self.table3.item(row, m2ts_col) else ''
+        playlist_dir = self._get_playlist_dir_for_bdmv_index(bdmv_index)
+        sp_mpls = os.path.normpath(os.path.join(playlist_dir, mpls_file)) if playlist_dir and mpls_file else ''
+        if sp_mpls and os.path.isfile(sp_mpls):
+            return self._m2ts_file_detail_from_mpls_path(sp_mpls)
+        stream_dir = self._get_stream_dir_for_bdmv_index(bdmv_index)
+        m2ts_files = self._split_m2ts_files(m2ts_text)
+        paths = [os.path.normpath(os.path.join(stream_dir, f)) for f in m2ts_files if f.strip()]
+        paths = [p for p in paths if p]
+        if not paths:
+            return ''
+        return BluraySubtitle.m2ts_file_detail_for_standalone_m2ts_paths(paths)
+
+    def _table2_labels_for_current_mode(self):
+        fid = self.get_selected_function_id()
+        if fid == 3:
+            return REMUX_LABELS
+        if fid == 4:
+            return ENCODE_LABELS
+        if fid == 5:
+            return DIY_REMUX_LABELS
+        return None
+
+    def _table2_output_name_if_same_m2ts_detail(self, bdmv_index: int, detail_sp: str) -> str:
+        labels = self._table2_labels_for_current_mode()
+        if not labels or 'm2ts_file_detail' not in labels or 'output_name' not in labels:
+            return ''
+        d_sp = (detail_sp or '').strip()
+        if not d_sp:
+            return ''
+        try:
+            det_col = labels.index('m2ts_file_detail')
+            out_col = labels.index('output_name')
+            bdmv_col = labels.index('bdmv_index')
+        except Exception:
+            return ''
+        bi = int(bdmv_index)
+        for r in range(self.table2.rowCount()):
+            try:
+                it_b = self.table2.item(r, bdmv_col)
+                row_bdmv = int(it_b.text().strip()) if it_b and it_b.text() else 0
+            except Exception:
+                row_bdmv = 0
+            if row_bdmv != bi:
+                continue
+            it_det = self.table2.item(r, det_col)
+            det_t2 = (it_det.text() if it_det and it_det.text() else '').strip()
+            if det_t2 != d_sp:
+                continue
+            it_out = self.table2.item(r, out_col)
+            return (it_out.text() if it_out and it_out.text() else '').strip()
+        return ''
+
+    def _sp_output_display_path(
+        self,
+        bdmv_index: int,
+        row_r: int,
+        candidate_rel: str,
+        *,
+        detail_override: Optional[str] = None,
+        table2_detail_out_map: Optional[dict[str, str]] = None,
+    ) -> str:
+        cand = (candidate_rel or '').strip().replace('\\', '/')
+        if not cand:
+            return ''
+        if detail_override is not None:
+            detail = (detail_override or '').strip()
+        else:
+            detail = self._m2ts_file_detail_for_sp_table_row(row_r, ENCODE_SP_LABELS).strip()
+        if table2_detail_out_map is not None:
+            linked = (table2_detail_out_map.get(detail) or '').strip()
+        else:
+            linked = self._table2_output_name_if_same_m2ts_detail(bdmv_index, detail)
+        if linked:
+            return linked.replace('\\', '/')
+        low = cand.lower()
+        if low.startswith('sps/'):
+            return cand
+        return f'SPs/{cand}'
+
+    def _refresh_table3_m2ts_file_detail(self, only_bdmv_index: Optional[int] = None):
+        if not hasattr(self, 'table3') or not self.table3:
+            return
+        labels = DIY_SP_LABELS if self.get_selected_function_id() == 5 else ENCODE_SP_LABELS
+        if 'm2ts_file_detail' not in labels:
+            return
+        try:
+            det_col = labels.index('m2ts_file_detail')
+            bdmv_col = labels.index('bdmv_index')
+        except Exception:
+            return
+        for r in range(self.table3.rowCount()):
+            if only_bdmv_index is not None:
+                try:
+                    if int(self.table3.item(r, bdmv_col).text().strip()) != int(only_bdmv_index):
+                        continue
+                except Exception:
+                    continue
+            txt = self._m2ts_file_detail_for_sp_table_row(r, labels)
+            it = self.table3.item(r, det_col)
+            if not it:
+                it = QTableWidgetItem('')
+                self.table3.setItem(r, det_col, it)
+            it.setText(txt)
+
     def _recompute_sp_output_names(self, only_bdmv_index: Optional[int] = None):
         if not hasattr(self, 'table3') or not self.table3:
             return
-        out_col = ENCODE_SP_LABELS.index('output_name')
-        sel_col = ENCODE_SP_LABELS.index('select')
-        bdmv_col = ENCODE_SP_LABELS.index('bdmv_index')
-        mpls_col = ENCODE_SP_LABELS.index('mpls_file')
-        m2ts_col = ENCODE_SP_LABELS.index('m2ts_file')
-        type_col = ENCODE_SP_LABELS.index('m2ts_type')
+        labels = DIY_SP_LABELS if self.get_selected_function_id() == 5 else ENCODE_SP_LABELS
+        if 'output_name' not in labels:
+            try:
+                self._refresh_table3_m2ts_file_detail(only_bdmv_index)
+            except Exception:
+                pass
+            return
+        out_col = labels.index('output_name')
+        sel_col = labels.index('select')
+        bdmv_col = labels.index('bdmv_index')
+        mpls_col = labels.index('mpls_file')
+        m2ts_col = labels.index('m2ts_file')
+        type_col = labels.index('m2ts_type')
+        dur_col = labels.index('duration')
         rows_by_vol: dict[int, list[int]] = {}
         for r in range(self.table3.rowCount()):
             try:
@@ -228,6 +351,33 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
         if only_bdmv_index is not None:
             rows_by_vol = {k: v for k, v in rows_by_vol.items() if int(k) == int(only_bdmv_index)}
 
+        t2_by_bdmv: dict[int, dict[str, str]] = {}
+        labels_t2 = self._table2_labels_for_current_mode()
+        try:
+            if labels_t2 and 'm2ts_file_detail' in labels_t2 and 'output_name' in labels_t2:
+                # Must not reuse names `out_col` / `det_col`: table2 REMUX_LABELS indices differ from table3
+                # ENCODE_SP_LABELS (e.g. output_name is 8 vs 7); overwriting broke SP output → tracks column.
+                det_col_t2 = labels_t2.index('m2ts_file_detail')
+                out_col_t2 = labels_t2.index('output_name')
+                bdmv_col_t2 = labels_t2.index('bdmv_index')
+                for r2 in range(self.table2.rowCount()):
+                    it_b = self.table2.item(r2, bdmv_col_t2)
+                    try:
+                        bi = int(it_b.text().strip()) if it_b and it_b.text() else 0
+                    except Exception:
+                        bi = 0
+                    if bi <= 0:
+                        continue
+                    it_det = self.table2.item(r2, det_col_t2)
+                    it_out = self.table2.item(r2, out_col_t2)
+                    det_txt = (it_det.text() if it_det and it_det.text() else '').strip()
+                    out_txt = (it_out.text() if it_out and it_out.text() else '').strip()
+                    if det_txt:
+                        t2_by_bdmv.setdefault(bi, {})[det_txt] = out_txt
+        except Exception:
+            t2_by_bdmv = {}
+
+        sp_detail_cache: dict[tuple[int, str, str], str] = {}
         audio_only_cache: dict[tuple[int, str], bool] = {}
         single_audio_ext_cache: dict[tuple[int, str, str], str] = {}
         single_sub_ext_cache: dict[tuple[int, str, str], str] = {}
@@ -244,6 +394,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                 if not out_item:
                     out_item = QTableWidgetItem('')
                     self.table3.setItem(r, out_col, out_item)
+
                 sel_it = self.table3.item(r, sel_col)
                 selected = bool(
                     sel_it and sel_it.flags() & Qt.ItemFlag.ItemIsEnabled and sel_it.checkState() == Qt.CheckState.Checked)
@@ -259,6 +410,18 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                     out_item.setText('')
                     continue
                 seq += 1
+                detail_key = (int(bdmv_index), str(mpls_file or ''), str(m2ts_text or ''))
+                if detail_key not in sp_detail_cache:
+                    sp_detail_cache[detail_key] = self._m2ts_file_detail_for_sp_table_row(r, labels).strip()
+                detail_row = sp_detail_cache[detail_key]
+
+                def _set_sp_out(rel: str):
+                    out_item.setText(self._sp_output_display_path(
+                        bdmv_index, r, rel,
+                        detail_override=detail_row,
+                        table2_detail_out_map=t2_by_bdmv.get(int(bdmv_index)),
+                    ))
+
                 sp_no = str(seq).zfill(digits)
                 base_name = f'BD_Vol_{bdmv_vol}_SP{sp_no}'
                 if not mpls_file and m2ts_files:
@@ -266,8 +429,10 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                 # Preserve custom suffix (e.g. chapter range suffix) across track edits and recompute.
                 if (not name_suffix) and mpls_file:
                     try:
-                        cur_name = out_item.text().strip()
+                        cur_name = out_item.text().strip().replace('\\', '/')
                         cur_stem = os.path.splitext(cur_name)[0]
+                        if cur_stem.lower().startswith('sps/'):
+                            cur_stem = cur_stem[4:]
                         m = re.match(r'^BD_Vol_\d+_SP\d+(.*)$', cur_stem)
                         if m and m.group(1):
                             name_suffix = m.group(1)
@@ -284,13 +449,13 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                     except Exception:
                         pass
                 if eff_special == 'single_frame':
-                    out_item.setText(f'{base_with_suffix}.png')
+                    _set_sp_out(f'{base_with_suffix}.png')
                     continue
                 if eff_special == 'multi_frame':
-                    out_item.setText(f'{base_with_suffix}')
+                    _set_sp_out(f'{base_with_suffix}')
                     continue
                 if (not mpls_file) and m2ts_type == 'igs_menu':
-                    out_item.setText(f'{base_with_suffix}')
+                    _set_sp_out(f'{base_with_suffix}')
                     continue
                 # Zero-duration menu rows should use folder name (no extension),
                 # extracted by extract_igs_menu_png.
@@ -302,12 +467,12 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                         or (mpls_file and len(m2ts_files_unique) > 1)
                 ):
                     try:
-                        d_item = self.table3.item(r, ENCODE_SP_LABELS.index('duration'))
+                        d_item = self.table3.item(r, dur_col)
                         d_sec = self._parse_display_time_to_seconds(d_item.text() if d_item else '')
                     except Exception:
                         d_sec = 0.0
                     if d_sec <= 0.0:
-                        out_item.setText(f'{base_with_suffix}')
+                        _set_sp_out(f'{base_with_suffix}')
                         continue
                 key = BluraySubtitle._sp_track_key_from_entry(self._table3_get_sp_entry_for_row(r))
                 cfg = getattr(self, '_track_selection_config', {}) or {}
@@ -317,7 +482,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                     if mpls_file and len(m2ts_files_unique) > 1 and (special == ''):
                         out_item.setText('')
                     else:
-                        out_item.setText(f'{base_with_suffix}.mkv')
+                        _set_sp_out(f'{base_with_suffix}.mkv')
                     continue
                 tr = cfg.get(key, {}) if isinstance(cfg, dict) else {}
                 sel_audio = list(tr.get('audio') or [])
@@ -359,17 +524,17 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                                         ext = {'aac': 'm4a'}.get(c, c or 'audio')
                                     break
                             single_audio_ext_cache[ext_cache_key] = ext
-                    out_item.setText(f'{base_with_suffix}.{ext}')
+                    _set_sp_out(f'{base_with_suffix}.{ext}')
                     continue
                 if len(sel_audio) > 1 and len(sel_sub) == 0 and is_audio_only:
-                    out_item.setText(f'{base_with_suffix}.mka')
+                    _set_sp_out(f'{base_with_suffix}.mka')
                     continue
                 if not mpls_file:
                     if m2ts_type in ('private_or_other', 'mixed_non_video'):
                         out_item.setText('')
                         continue
                     if m2ts_type == 'audio_with_subtitle':
-                        out_item.setText(f'{base_with_suffix}.mka')
+                        _set_sp_out(f'{base_with_suffix}.mka')
                         continue
                     if m2ts_type == 'subtitle_only':
                         if len(sel_sub) <= 0:
@@ -386,7 +551,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                                     streams = self._read_m2ts_track_info(src) if str(src).lower().endswith(
                                         '.m2ts') else self._read_media_streams_local(src)
                                     for s in streams:
-                                        if str(s.get('codec_type') or '') != 'subtitle':
+                                        if str(s.get('codec_type') or '') not in ('subtitle', 'subtitles'):
                                             continue
                                         if str(s.get('index', '')) == str(sel_sub[0]):
                                             c = str(s.get('codec_name') or '').lower()
@@ -396,11 +561,16 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                                                 ext = 'sup'
                                             break
                                     single_sub_ext_cache[ext_cache_key] = ext
-                            out_item.setText(f'{base_with_suffix}.{ext}')
+                            _set_sp_out(f'{base_with_suffix}.{ext}')
                             continue
-                        out_item.setText(f'{base_with_suffix}.mks')
+                        _set_sp_out(f'{base_with_suffix}.mks')
                         continue
-                out_item.setText(f'{base_with_suffix}.mkv')
+                _set_sp_out(f'{base_with_suffix}.mkv')
+
+        try:
+            self._refresh_table3_m2ts_file_detail(only_bdmv_index)
+        except Exception:
+            pass
 
     def _all_track_ids_from_streams(self, streams: list[dict[str, object]]) -> tuple[list[str], list[str]]:
         audio: list[str] = []
@@ -412,7 +582,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
             ctype = str(s.get('codec_type') or '')
             if ctype == 'audio':
                 audio.append(idx)
-            elif ctype == 'subtitle':
+            elif ctype in ('subtitle', 'subtitles'):
                 subtitle.append(idx)
         return audio, subtitle
 
@@ -469,6 +639,12 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                 if not m2ts_path:
                     continue
                 streams = self._read_m2ts_track_info(m2ts_path)
+                try:
+                    ch = Chapter(selected_mpls_path)
+                    ch.get_pid_to_language()
+                    streams = self._filter_streams_by_pid_lang(streams, ch.pid_to_lang)
+                except Exception:
+                    pass
                 a, s = self._all_track_ids_from_streams(streams)
                 self._track_selection_config[f'main::{os.path.normpath(selected_mpls_path)}'] = {'audio': a,
                                                                                                  'subtitle': s}
@@ -489,13 +665,33 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                         bdmv_index = int(self.table3.item(r, bdmv_col).text().strip())
                     except Exception:
                         continue
-                    stream_dir = self._get_stream_dir_for_bdmv_index(bdmv_index)
-                    m2ts_text = self.table3.item(r, m2ts_col).text().strip() if self.table3.item(r, m2ts_col) else ''
-                    m2ts_files = self._split_m2ts_files(m2ts_text)
-                    if not (stream_dir and m2ts_files):
-                        continue
-                    first_m2ts = os.path.normpath(os.path.join(stream_dir, m2ts_files[0]))
-                    streams = self._read_m2ts_track_info(first_m2ts)
+                    streams: list[dict[str, object]] = []
+                    mpls_file = self.table3.item(r, mpls_col).text().strip() if self.table3.item(r, mpls_col) else ''
+                    if mpls_file:
+                        playlist_dir = self._get_playlist_dir_for_bdmv_index(bdmv_index)
+                        if not playlist_dir:
+                            continue
+                        mpls_path = os.path.normpath(os.path.join(playlist_dir, mpls_file))
+                        if not os.path.isfile(mpls_path):
+                            continue
+                        first_m2ts = self._get_first_m2ts_for_mpls(mpls_path)
+                        if not first_m2ts:
+                            continue
+                        streams = self._read_m2ts_track_info(first_m2ts)
+                        try:
+                            ch = Chapter(mpls_path)
+                            ch.get_pid_to_language()
+                            streams = self._filter_streams_by_pid_lang(streams, ch.pid_to_lang)
+                        except Exception:
+                            pass
+                    else:
+                        stream_dir = self._get_stream_dir_for_bdmv_index(bdmv_index)
+                        m2ts_text = self.table3.item(r, m2ts_col).text().strip() if self.table3.item(r, m2ts_col) else ''
+                        m2ts_files = self._split_m2ts_files(m2ts_text)
+                        if not (stream_dir and m2ts_files):
+                            continue
+                        first_m2ts = os.path.normpath(os.path.join(stream_dir, m2ts_files[0]))
+                        streams = self._read_m2ts_track_info(first_m2ts)
                     a, s = self._all_track_ids_from_streams(streams)
                     entry = self._table3_get_sp_entry_for_row(r)
                     key = BluraySubtitle._sp_track_key_from_entry(entry)

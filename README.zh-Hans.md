@@ -68,7 +68,6 @@ BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 
 针对常见 mkvtoolnix 边缘问题，内置了修复逻辑：
 
 - 需要时重写章节（分段/切割场景）。
-- 使用 `mkvpropedit` 修正输出轨道语言。
 - 当 `mpls` 直接混流失败时自动走修复路径：
   - 多片段轨道对齐拼接回退，
   - 多集分片输出回退，
@@ -120,16 +119,16 @@ SP 混流失败时怎么处理：
 
 单文件输出回退（常见于 SP、电影模式）：
 
-1. 先分析第一个 m2ts 的轨道，作为“参考轨道布局”。  
+1. 先取 GUI 中“编辑轨道”选中的轨道，作为“参考轨道布局”。  
 2. 遍历 `Chapter(mpls_path).in_out_time`，对每个片段计算：  
    - `start_time = (in_time * 2 - first_pts) / 90000`  
    - `end_time = start_time + (out_time - in_time) / 45000`   
 注意不是取文件开头时间作为 start_time，有些片段不是从文件开头开始播放，比如 a 文件播放中间穿插了一段 b 文件，那么 b 文件播放结束回到 a 文件那段就不是从 a 文件起始开始播放的。
 3. 若 `start_time == 0` 且 `abs(end_time - 文件总时长秒) < 0.001`，则直接整段混流；否则使用 `--split parts:start-end`。  
 4. 每个片段按参考轨道做对齐：  
-   - 参考里没有的轨道（PID 不在首片段）丢弃；  
-   - 参考里有的轨道保留；  
-   - 缺失的参考音轨补静音轨。  
+   - 先用 `mkvmerge --identify` 检测，然后直接用 `mkvmerge` 混流，只混流选中的 pid 对应的轨道  
+   - 如果缺轨道，用 `tsmuxer` 检测 m2ts 轨道，如果 `tsmuxer` 能补齐所有轨道（音轨除外）则用 `tsmuxer` 进行 demux 并补齐轨道，否则直接报错退出  
+   - 最后缺失的音轨再用静音填充  
 5. 生成每段命令时带 `--track-order FID:TID,...`，保证最终轨道顺序和第一个 m2ts 一致。  
 6. 各段产物按顺序用 `+` 拼接，并加 `--append-mode track`。  
 7. 混流后用 `mkvpropedit` 修正轨道语言。  
@@ -395,6 +394,11 @@ res = res.std.Trim(first=0, length=720)
 ### 为什么 getnative 获取的每集的原始分辨率不一样？
 
 正常现象，因为有些原盘不止一种原生分辨率，以及原盘制作流程的复杂性，导致源分辨率难以分辨。可以先跑一遍测试，如果每集输出的原始分辨率结果基本相同则可以用程序自动的 getnative，否则去掉勾选自动 getnative 选项并编辑 vpy 填入你认为的原始分辨率和缩放算法，或者根本不填。
+
+### 我有一个原盘，potplayer / mpv 播放 mpls 都显示两条音轨，eac3to 和 mkvmerge 也显示 mpls 有两条音轨，为什么你的工具显示只有一条？
+
+因为有一条音轨被 mpls 隐藏了。而那些软件都会读取 m2ts 或 clpi 文件，所以显示有两条音轨。真正遵守 mpls 规则的是 PowerDVD，用 PowerDVD 播放就不会显示隐藏音轨。
+通常来说，剩下的一条音轨的有效部分会在原盘某个 mpls 中出现，不用担心，原盘 remux 和原盘压制都会处理，保证不会丢失原盘的有效信息。
 
 ### 为什么代码量这么大？
 

@@ -142,8 +142,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         except Exception:
             pass
         try:
-            output_folder = os.path.normpath(self.output_folder_path.text().strip()) if hasattr(self,
-                                                                                                'output_folder_path') else ''
+            output_folder = self._remux_dst_folder_for_cmd_template(root)
         except Exception:
             output_folder = ''
         confs: list[dict[str, int | str]] = []
@@ -582,8 +581,10 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         chapter_col = labels.index('start_at_chapter')
         end_col = labels.index('end_at_chapter')
         m2ts_col = labels.index('m2ts_file')
+        m2ts_detail_col = labels.index('m2ts_file_detail') if 'm2ts_file_detail' in labels else -1
         language_col = labels.index('language')
         output_col = labels.index('output_name') if 'output_name' in labels else -1
+        play_col = labels.index('play') if 'play' in labels else -1
 
         prev_lang_by_bdmv: dict[int, str] = {}
         prev_auto_lang_by_bdmv: dict[int, str] = {}
@@ -650,7 +651,9 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 if sub_files_in_folder and row_i < len(sub_files_in_folder):
                     self.table2.setItem(row_i, 0, FilePathTableWidgetItem(sub_files_in_folder[row_i]))
 
-                self.table2.setItem(row_i, bdmv_col, QTableWidgetItem(str(bdmv_index)))
+                bdmv_item = QTableWidgetItem(str(bdmv_index))
+                bdmv_item.setData(Qt.ItemDataRole.UserRole, str(mpls_no_ext or ''))
+                self.table2.setItem(row_i, bdmv_col, bdmv_item)
                 chapter_combo = QComboBox()
                 chapter_combo.addItem('chapter 01', 1)
                 chapter_combo.setCurrentIndex(0)
@@ -661,6 +664,13 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 end_combo.currentIndexChanged.connect(partial(self._on_end_chapter_combo_changed, row_i, labels))
                 self.table2.setCellWidget(row_i, end_col, end_combo)
                 self.table2.setItem(row_i, m2ts_col, QTableWidgetItem(', '.join(m2ts_files)))
+                if m2ts_detail_col >= 0:
+                    detail_txt = ''
+                    try:
+                        detail_txt = self._m2ts_file_detail_from_mpls_path(mpls_path)
+                    except Exception:
+                        detail_txt = ''
+                    self.table2.setItem(row_i, m2ts_detail_col, QTableWidgetItem(detail_txt))
                 self.table2.setItem(row_i, duration_col, QTableWidgetItem(get_time_str(total_time)))
 
                 prev_lang = prev_lang_by_bdmv.get(bdmv_index, '').strip()
@@ -688,6 +698,12 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
 
                 if function_id == 4:
                     self.ensure_encode_row_widgets(row_i)
+                if play_col >= 0:
+                    btn_play = QToolButton(self.table2)
+                    btn_play.setText(self.t('play'))
+                    btn_play.clicked.connect(partial(self.on_play_table2_disc_row, row_i, bdmv_col, m2ts_col))
+                    self.table2.setItem(row_i, play_col, None)
+                    self.table2.setCellWidget(row_i, play_col, btn_play)
 
                 configuration[row_i] = {
                     'folder': folder,
@@ -702,6 +718,10 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             self.table2.setSortingEnabled(old_sorting)
 
         self._movie_configuration = configuration
+        try:
+            self._last_configuration_34 = {int(k): dict(v) for k, v in configuration.items()}
+        except Exception:
+            self._last_configuration_34 = dict(configuration)
         if function_id in (3, 4, 5):
             self.refresh_sp_table(configuration)
         self.table2.resizeColumnsToContents()
@@ -824,6 +844,27 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 if folder_name:
                     return os.path.join(base_folder, folder_name)
         return base_folder
+
+    def _remux_dst_folder_for_cmd_template(self, root: str) -> str:
+        """Folder passed to ``_make_main_mpls_remux_cmd`` when generating table1 remux text.
+
+        BDMV 压制 (function 4, BDMV source): mux into ``<输出>/_encode_remux_stage/<盘文件夹名>/`` so it matches
+        ``episodes_encode`` (same rule as ``_prepare_episode_run``: ``basename(bdmv_path)``, i.e. main
+        ``bdmv_folder_path``, not table1 row root — which may be a subfolder like a product code).
+        """
+        base_out = os.path.normpath(self.output_folder_path.text().strip()) if hasattr(self,
+                                                                                        'output_folder_path') else ''
+        if not base_out:
+            return ''
+        if self.get_selected_function_id() == 4 and getattr(self, '_encode_input_mode', 'bdmv') == 'bdmv':
+            try:
+                top = os.path.normpath(self.bdmv_folder_path.text().strip()) if hasattr(self,
+                                                                                         'bdmv_folder_path') else ''
+            except Exception:
+                top = ''
+            disc_bn = os.path.basename(os.path.normpath((top or root or '')).rstrip(os.sep)) or 'BDMV'
+            return os.path.normpath(os.path.join(base_out, '_encode_remux_stage', disc_bn))
+        return os.path.normpath(self._resolve_remux_output_folder(base_out))
 
     def _resync_episode_tables_from_main_mpls_selection(self) -> None:
         """After main MPLS toggles, refresh only affected main-mpls configuration."""

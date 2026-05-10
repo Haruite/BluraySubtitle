@@ -582,6 +582,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self._set_table_headers(self.table3, ENCODE_SP_LABELS)
         self.table3.setSortingEnabled(True)
         self.table3.horizontalHeader().setSortIndicatorShown(True)
+        self.table3.horizontalHeader().setSectionsMovable(False)
         self._updating_sp_table = False
         self.table3.itemChanged.connect(self._on_table3_item_changed)
         self.table3.setVisible(False)
@@ -690,6 +691,13 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self._reposition_subtitle_path_box()
         self._apply_language('en')
         self._apply_theme(getattr(self, '_theme_mode', 'light'))
+        # Default tab is Blu-ray Remux, but table2 is constructed for subtitle mode; without this,
+        # on_select_function returns early (last_function_id == function_id) and columns stay wrong
+        # until the user switches tabs.
+        try:
+            self.on_select_function(force=True, keep_inputs=True, keep_state=False)
+        except Exception:
+            pass
 
     def _reposition_subtitle_path_box(self):
         outer = getattr(self, '_label2_outer_layout', None)

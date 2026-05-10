@@ -188,6 +188,9 @@ class BluraySubtitleServiceBase:
             sps_folder: str,
             cancel_event: Optional[threading.Event] = None,
             progress_cb=None,
+            dst_folder: Optional[str] = None,
+            episode_output_names: Optional[list[str]] = None,
+            configuration_full: Optional[dict[int, dict[str, int | str]]] = None,
     ) -> list[tuple[int, str]]:
         """Stub for `_create_sp_mkvs_from_entries`."""
         raise NotImplementedError
@@ -280,7 +283,7 @@ class BluraySubtitleServiceBase:
 
     @staticmethod
     def _fix_output_track_languages_with_mkvpropedit(output_mkv_path: str, input_m2ts_path: str, pid_to_lang: dict[int, str], selected_audio_ids: list[str], selected_sub_ids: list[str], override_lang_by_source_index: Optional[dict[str, str]]=None):
-        """Stub for `_fix_output_track_languages_with_mkvpropedit`."""
+        """No-op stub; real mixin disables post-mux language edits."""
         raise NotImplementedError
 
     @staticmethod
@@ -434,7 +437,7 @@ class BluraySubtitleServiceBase:
         Fallback when direct ``mkvmerge … mpls`` fails (e.g. different track counts across m2ts).
         Track identity uses ``streams[].id`` (e.g. ``0x1011``) as PID; mkvmerge track id = stream ``index``.
         Per-clip m2ts mux with ``--split parts`` if needed, ``--track-order`` aligned to first m2ts, then
-        ``+`` concat with ``--append-mode track``. Languages: ``_fix_output_track_languages_with_mkvpropedit`` on caller.
+        ``+`` concat with ``--append-mode track``. Track languages come from mux only (no mkvpropedit lang pass).
         """
         raise NotImplementedError
 
@@ -467,7 +470,15 @@ class BluraySubtitleServiceBase:
         """Stub for `_apply_episode_output_names`."""
         raise NotImplementedError
 
-    def _build_main_episode_mkvs(self, bdmv_index_conf: dict[int, list[dict[str, int | str]]], dst_folder: str, cancel_event: Optional[threading.Event]=None) -> None:
+    def _build_main_episode_mkvs(
+            self,
+            bdmv_index_conf: dict[int, list[dict[str, int | str]]],
+            dst_folder: str,
+            cancel_event: Optional[threading.Event] = None,
+            *,
+            mux_progress_base: int = 0,
+            mux_progress_span: int = 380,
+    ) -> None:
         """Stub for `_build_main_episode_mkvs`."""
         raise NotImplementedError
 
@@ -487,7 +498,15 @@ class BluraySubtitleServiceBase:
         """Stub for `_run_single_command`."""
         raise NotImplementedError
 
-    def _make_main_mpls_remux_cmd(self, confs: list[dict[str, int | str]], dst_folder: str, bdmv_index: int, disc_count: int, *, ensure_disc_out_dir: bool=False) -> tuple[str, str, str, str, str, dict[int, str], list[str], list[str]]:
+    def _make_main_mpls_remux_cmd(
+            self,
+            confs: list[dict[str, int | str]],
+            dst_folder: str,
+            bdmv_index: int,
+            disc_count: int,
+            *,
+            ensure_disc_out_dir: bool = False,
+    ) -> tuple[str, str, str, str, str, dict[int, str], list[str], list[str]]:
         """Stub for `_make_main_mpls_remux_cmd`."""
         raise NotImplementedError
 

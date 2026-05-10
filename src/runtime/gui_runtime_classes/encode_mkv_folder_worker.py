@@ -2,7 +2,7 @@ import os
 import shutil
 import threading
 import traceback
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
@@ -36,6 +36,7 @@ class EncodeMkvFolderWorker(QObject):
         track_language_config: Optional[dict[str, dict[str, str]]] = None,
         track_lossless_audio_config: Optional[dict[str, dict[str, str]]] = None,
         default_lossless_audio_codec: str = 'flac',
+        progress_bridge: Optional[Callable[[Optional[int], Optional[str]], None]] = None,
     ):
         super().__init__()
         self.mkv_rows = mkv_rows
@@ -55,6 +56,7 @@ class EncodeMkvFolderWorker(QObject):
         self.track_lossless_audio_config = track_lossless_audio_config or {}
         d = str(default_lossless_audio_codec or 'flac').strip().lower()
         self.default_lossless_audio_codec = d if d in ('flac', 'aac', 'opus') else 'flac'
+        self.progress_bridge = progress_bridge
 
     def _link_or_copy(self, src: str, dst: str):
         if os.path.exists(dst):
@@ -100,6 +102,13 @@ class EncodeMkvFolderWorker(QObject):
                     self.progress.emit(int(value))
                 if text:
                     self.label.emit(str(text))
+                br = getattr(self, 'progress_bridge', None)
+                if callable(br):
+                    try:
+                        br(value, text)
+                    except TypeError:
+                        if value is not None:
+                            br(value)
                 if self.cancel_event.is_set():
                     raise _Cancelled()
 
@@ -119,6 +128,7 @@ class EncodeMkvFolderWorker(QObject):
 
             total = max(1, len(self.mkv_rows) + len(self.sp_rows))
             done = 0
+            # Episode main MKVs first, then SPs (BDMV encode / remux-folder both rely on this order).
             for i, row in enumerate(self.mkv_rows):
                 progress_cb(int(done / total * 1000), f'Encoding {done + 1}/{total}')
                 src = os.path.normpath(str(row.get('src_path') or ''))
@@ -150,11 +160,15 @@ class EncodeMkvFolderWorker(QObject):
                 progress_cb(int(done / total * 1000), f'Encoding {done + 1}/{total}')
                 src = os.path.normpath(str(row.get('src_path') or ''))
                 out_name = str(row.get('output_name') or '').strip() or os.path.basename(src)
-                if not out_name.lower().endswith('.mkv'):
-                    out_name += '.mkv'
                 if sps_out is None:
                     sps_out = os.path.join(dst_folder, 'SPs')
                     os.makedirs(sps_out, exist_ok=True)
+                if src.lower().endswith('.mka'):
+                    bs.flac_task(src, sps_out, -1)
+                    done += 1
+                    continue
+                if not out_name.lower().endswith('.mkv'):
+                    out_name += '.mkv'
                 dst = os.path.join(sps_out, out_name)
                 if os.path.exists(dst) and os.path.isfile(dst):
                     done += 1

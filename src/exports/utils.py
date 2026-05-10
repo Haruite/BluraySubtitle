@@ -366,6 +366,26 @@ def get_vspipe_context():
     return vspipe_exe, env
 
 
+def ui_perf_enabled() -> bool:
+    """Reserved; UI perf logging is disabled."""
+    return False
+
+
+def bluraysub_sp_diag_enabled() -> bool:
+    """Reserved; SP diagnostic logging is disabled."""
+    return False
+
+
+def sp_diag_log(_message: str) -> None:
+    """No-op (verbose SP tracing removed)."""
+    pass
+
+
+def ui_perf_log(_label: str, *, reset: bool = False) -> None:
+    """No-op (UI perf tracing removed)."""
+    pass
+
+
 def print_terminal_line(message: str) -> None:
     print(translate_text(message), file=_terminal_err_stream(), flush=True)
 
@@ -405,6 +425,8 @@ __all__ = [
     "get_vspipe_context",
     "mkv_codec_id_is_dts_family",
     "print_terminal_line",
+    "ui_perf_enabled",
+    "ui_perf_log",
     "print_exc_terminal",
     "print_tb_string_terminal",
 ]

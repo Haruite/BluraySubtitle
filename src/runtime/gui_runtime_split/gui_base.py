@@ -212,6 +212,10 @@ class BluraySubtitleGuiBase(QWidget):
         """Stub for `_apply_episode_mode_to_table2`."""
         raise NotImplementedError
 
+    def _full_refresh_remux_encode_tables_for_mode(self) -> None:
+        """Stub for `_full_refresh_remux_encode_tables_for_mode`."""
+        raise NotImplementedError
+
     def _apply_language(self, language_code: str):
         """Stub for `_apply_language`."""
         raise NotImplementedError
@@ -654,6 +658,10 @@ class BluraySubtitleGuiBase(QWidget):
 
     def _resolve_remux_output_folder(self, base_folder: str) -> str:
         """Stub for `_resolve_remux_output_folder`."""
+        raise NotImplementedError
+
+    def _remux_dst_folder_for_cmd_template(self, root: str) -> str:
+        """Stub for `_remux_dst_folder_for_cmd_template`."""
         raise NotImplementedError
 
     def _resolve_table2_row_edit_context(self, row_index: int) -> tuple[str, str]:

@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 from functools import reduce
 from typing import Any, Callable, Optional
@@ -10,7 +11,8 @@ from typing import Any, Callable, Optional
 from PyQt6.QtWidgets import QTableWidget
 
 from src.bdmv import Chapter, M2TS
-from src.core import CONFIGURATION, FFMPEG_PATH, MKV_MERGE_PATH, mkvtoolnix_ui_language_arg, MKV_PROP_EDIT_PATH
+from src.core import CONFIGURATION, FFMPEG_PATH, MKV_MERGE_PATH, MKV_EXTRACT_PATH, mkvtoolnix_ui_language_arg, \
+    MKV_PROP_EDIT_PATH
 from src.domain import MKV
 from src.exports.utils import get_index_to_m2ts_and_offset, append_ogm_chapter_lines, force_remove_folder, \
     force_remove_file, print_terminal_line, print_exc_terminal, get_time_str
@@ -681,6 +683,501 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                 pass
         print_terminal_line('[BluraySubtitle] completion(): cleanup finished.')
 
+    @staticmethod
+    def _sp_output_is_episode_linked(output_name: str) -> bool:
+        n = output_name.strip().replace('\\', '/')
+        if n.lower().startswith('sps/'):
+            return False
+        return os.path.basename(n).upper().startswith('EP')
+
+    def _conf_key_matching_episode_basename(
+            self,
+            basename: str,
+            episode_output_names: list[str],
+            configuration: dict[int, dict[str, int | str]],
+    ):
+        def _sort_key_conf(k: object) -> int:
+            try:
+                return int(k)  # type: ignore[arg-type]
+            except Exception:
+                return 0
+
+        for key in sorted(configuration.keys(), key=_sort_key_conf):
+            try:
+                ki = int(key)
+            except Exception:
+                continue
+            if ki < 0 or ki >= len(episode_output_names):
+                continue
+            cell = (episode_output_names[ki] or '').strip()
+            if os.path.basename(cell.replace('\\', '/')) == basename:
+                return key
+        return None
+
+    @staticmethod
+    def _absolute_selected_mpls_from_conf_row(conf: dict[str, int | str], playlist_dir: str) -> str:
+        smain = str(conf.get('selected_mpls') or '').strip()
+        if not smain:
+            return ''
+        if os.path.isabs(smain) or ('/' in smain.replace('\\', '/')):
+            return os.path.normpath(smain if smain.lower().endswith('.mpls') else smain + '.mpls')
+        base = os.path.basename(smain.replace('\\', '/'))
+        if not base.lower().endswith('.mpls'):
+            base = base + '.mpls'
+        if playlist_dir and os.path.isdir(playlist_dir):
+            return os.path.normpath(os.path.join(playlist_dir, base))
+        return ''
+
+    def _compute_mkv_id_to_m2ts_pid_core(self, mp: str, mcfg: dict[str, object]) -> dict[int, int]:
+        """Mux-slot index -> M2TS PID for first play-item m2ts: video (optional indices or first stream), then audio, then subtitle."""
+        main_audio_idx = [str(x) for x in (mcfg.get('audio') or [])]
+        main_sub_idx = [str(x) for x in (mcfg.get('subtitle') or [])]
+        raw_vid = mcfg.get('video')
+        main_video_idx = [str(x) for x in raw_vid] if isinstance(raw_vid, list) else []
+        try:
+            ch_m = Chapter(mp)
+            idx_to_m2ts_m, _ = get_index_to_m2ts_and_offset(ch_m)
+            if not idx_to_m2ts_m:
+                return {}
+            fk_m = sorted(idx_to_m2ts_m.keys())[0]
+            stream_dir_m = os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(mp)), 'STREAM'))
+            first_m2ts_main = os.path.join(stream_dir_m, idx_to_m2ts_m[fk_m])
+        except Exception:
+            return {}
+        if not os.path.isfile(first_m2ts_main):
+            return {}
+        streams_m = _svc_cls()._m2ts_track_streams(first_m2ts_main)
+        by_idx: dict[str, int] = {}
+        for s in streams_m or []:
+            if not isinstance(s, dict):
+                continue
+            ix = str(s.get('index') or '').strip()
+            if not ix:
+                continue
+            pid = _svc_cls()._stream_service_id(s)
+            if pid is None:
+                continue
+            ctype = str(s.get('codec_type') or '').strip().lower()
+            if ctype == 'subtitles':
+                ctype = 'subtitle'
+            if ctype not in ('audio', 'subtitle', 'video'):
+                continue
+            by_idx[ix] = int(pid)
+        out: dict[int, int] = {}
+        slot = 0
+        if main_video_idx:
+            for idx in main_video_idx:
+                p = by_idx.get(str(idx).strip())
+                if p is not None:
+                    out[slot] = int(p)
+                    slot += 1
+        else:
+            for s in streams_m or []:
+                if not isinstance(s, dict):
+                    continue
+                if str(s.get('codec_type') or '').strip().lower() != 'video':
+                    continue
+                p = _svc_cls()._stream_service_id(s)
+                if p is not None:
+                    out[slot] = int(p)
+                    slot += 1
+                    break
+        for group in (main_audio_idx, main_sub_idx):
+            for idx in group:
+                p = by_idx.get(str(idx).strip())
+                if p is not None:
+                    out[slot] = int(p)
+                    slot += 1
+        return out
+
+    def _compute_mkv_id_to_m2ts_pid_for_main_mpls(self, mpls_path: str) -> dict[int, int]:
+        """Mux-slot -> M2TS PID for episode main MPLS (video slot + configured audio + subtitle)."""
+        mp = os.path.normpath(str(mpls_path or '').strip())
+        if not mp.lower().endswith('.mpls'):
+            mp = mp + '.mpls'
+        tracks_cfg = getattr(self, 'track_selection_config', {}) or {}
+        if not isinstance(tracks_cfg, dict):
+            tracks_cfg = {}
+        mcfg = tracks_cfg.get(f'main::{mp}') or {}
+        return self._compute_mkv_id_to_m2ts_pid_core(mp, mcfg)
+
+    @staticmethod
+    def _ident_muxable_track_count(ident_ep: dict) -> int:
+        """video + audio + subtitles entries in mkvmerge identify JSON (episode file)."""
+        n = 0
+        for t in (ident_ep.get('tracks') or []) if isinstance(ident_ep.get('tracks'), list) else []:
+            if not isinstance(t, dict):
+                continue
+            typ = str(t.get('type') or '').strip().lower()
+            if typ == 'subtitle':
+                typ = 'subtitles'
+            if typ in ('video', 'audio', 'subtitles'):
+                n += 1
+        return n
+
+    @staticmethod
+    def _episode_ident_track_type(ident_ep: dict, tid: int) -> str:
+        """mkvmerge track ``type`` for ``tid`` in episode identify JSON (lowercase; subtitle -> subtitles)."""
+        for t in (ident_ep.get('tracks') or []) if isinstance(ident_ep.get('tracks'), list) else []:
+            if not isinstance(t, dict):
+                continue
+            try:
+                if int(t.get('id')) != int(tid):
+                    continue
+            except Exception:
+                continue
+            typ = str(t.get('type') or '').strip().lower()
+            if typ == 'subtitle':
+                return 'subtitles'
+            return typ
+        return ''
+
+    @staticmethod
+    def _episode_sp_mux_mkv_cache_key(episode_mkv: str) -> str:
+        return os.path.normcase(os.path.normpath(os.path.abspath(episode_mkv)))
+
+    @staticmethod
+    def _mkvmerge_ident_transport_pid(props: object) -> Optional[int]:
+        """MPEG-TS PID from mkvmerge identify JSON (exclude Matroska track ordinals mistaken for PID)."""
+        if not isinstance(props, dict):
+            return None
+        for key in ('stream_id', 'original_transport_stream_id'):
+            v = _svc_cls()._int_from_mkvmerge_prop(props.get(key))
+            if v is not None and 1 <= int(v) <= 0x1FFF:
+                return int(v)
+        return None
+
+    @staticmethod
+    def _mkvmerge_episode_tid_for_pid(ident_ep: dict, want_pid: int, allowed_types: tuple[str, ...]) -> Optional[int]:
+        """Find mkvmerge track id in episode MKV for a Blu-ray transport PID."""
+        allow = {x.lower() for x in allowed_types}
+        if 'subtitle' in allow:
+            allow.add('subtitles')
+        fallbacks: list[tuple[int, int]] = []
+        for t in (ident_ep.get('tracks') or []) if isinstance(ident_ep.get('tracks'), list) else []:
+            if not isinstance(t, dict):
+                continue
+            typ = str(t.get('type') or '').strip().lower()
+            if typ not in allow:
+                continue
+            try:
+                tid = int(t.get('id'))
+            except Exception:
+                continue
+            props = t.get('properties') if isinstance(t.get('properties'), dict) else {}
+            got = SubtitleChapterPipelineMixin._mkvmerge_ident_transport_pid(props)
+            if got is not None and int(got) == int(want_pid):
+                return tid
+            sid = _svc_cls()._int_from_mkvmerge_prop(props.get('stream_id'))
+            if sid is not None and int(sid) == int(want_pid):
+                return tid
+        return None
+
+    @staticmethod
+    def _episode_ident_tid_transport_pid(ident_ep: dict, tid: int) -> Optional[int]:
+        """Transport PID for one mkvmerge track id in episode MKV identify JSON."""
+        for t in (ident_ep.get('tracks') or []) if isinstance(ident_ep.get('tracks'), list) else []:
+            if not isinstance(t, dict):
+                continue
+            try:
+                if int(t.get('id')) != int(tid):
+                    continue
+            except Exception:
+                continue
+            props = t.get('properties') if isinstance(t.get('properties'), dict) else {}
+            p = SubtitleChapterPipelineMixin._mkvmerge_ident_transport_pid(props)
+            if p is not None:
+                return int(p)
+            for key in ('stream_id', 'original_transport_stream_id'):
+                p = _svc_cls()._int_from_mkvmerge_prop(props.get(key))
+                if p is not None:
+                    return int(p)
+        return None
+
+    @staticmethod
+    def _merged_mkv_id_to_m2ts_pid_episode_sp(
+            main_map: dict[int, int],
+            sp_selected_pids: list[int],
+    ) -> dict[int, int]:
+        """After EP+SP mux: main playlist slots then SP transport PIDs not already in main (order = sp_selected_pids)."""
+        main_vals = set(main_map.values())
+        out: dict[int, int] = {i: main_map[i] for i in sorted(main_map.keys())}
+        k = len(out)
+        for p in sp_selected_pids:
+            if p in main_vals:
+                continue
+            out[k] = int(p)
+            k += 1
+        return out
+
+    def _mux_episode_linked_sp_mkvmerge(
+            self,
+            *,
+            episode_mkv: str,
+            sp_mpls_path: str,
+            episode_main_mpls: str,
+            cmd_audio_sp: list[str],
+            cmd_sub_sp: list[str],
+            cancel_event: Optional[threading.Event],
+    ) -> bool:
+        """Merge episode MKV (FID 0) + SP MPLS (FID 1).
+
+        ``--track-order`` = unique union of (main_mpls_selected_pids + sp_selected_pids), sorted by PID;
+        each PID maps to ``0:mkv_id`` if that PID is a value in ``mkv_id_to_m2ts_pid_main`` (key = mkvmerge
+        track id), else ``1:track_id`` from ``mkvmerge --identify`` on ``sp_mpls_path``. Episode identify
+        is only used to classify ``0:`` entries for ``-a`` / ``-s`` flags.
+        """
+        em_norm = os.path.normpath(episode_main_mpls)
+
+        try:
+            ch_m = Chapter(episode_main_mpls)
+            idx_to_m2ts_m, _ = get_index_to_m2ts_and_offset(ch_m)
+            if not idx_to_m2ts_m:
+                return False
+            fk_m = sorted(idx_to_m2ts_m.keys())[0]
+            playlist_dir_m = os.path.dirname(episode_main_mpls)
+            stream_dir_m = os.path.normpath(os.path.join(os.path.dirname(playlist_dir_m), 'STREAM'))
+            first_m2ts_main = os.path.join(stream_dir_m, idx_to_m2ts_m[fk_m])
+        except Exception:
+            return False
+        if not os.path.isfile(first_m2ts_main):
+            return False
+
+        ident_ep = _svc_cls()._mkvmerge_identify_json(episode_mkv)
+
+        cache_key = self._episode_sp_mux_mkv_cache_key(episode_mkv)
+        _sp_mux_cache = getattr(self, '_episode_sp_mux_last_after_mux_map', None)
+        if not isinstance(_sp_mux_cache, dict):
+            _sp_mux_cache = {}
+            self._episode_sp_mux_last_after_mux_map = _sp_mux_cache
+        _prev_mux_map = _sp_mux_cache.get(cache_key)
+        _n_ident_muxable = self._ident_muxable_track_count(ident_ep)
+        cached_episode_baseline_map: Optional[dict[int, int]] = None
+        if (
+                isinstance(_prev_mux_map, dict)
+                and len(_prev_mux_map) > 0
+                and _n_ident_muxable == len(_prev_mux_map)
+        ):
+            cached_episode_baseline_map = dict(_prev_mux_map)
+
+        ident_sp = _svc_cls()._mkvmerge_identify_json(sp_mpls_path)
+        sp_tid_to_pid: dict[int, int] = {}
+        sp_tid_to_typ: dict[int, str] = {}
+        for t in (ident_sp.get('tracks') or []) if isinstance(ident_sp.get('tracks'), list) else []:
+            if not isinstance(t, dict):
+                continue
+            try:
+                tid = int(t.get('id'))
+            except Exception:
+                continue
+            typ = str(t.get('type') or '').strip().lower()
+            props = t.get('properties') or {}
+            if not isinstance(props, dict):
+                props = {}
+            pid = SubtitleChapterPipelineMixin._mkvmerge_ident_transport_pid(props)
+            if pid is None:
+                pid = _svc_cls()._int_from_mkvmerge_prop(props.get('stream_id'))
+            if pid is None:
+                pid = _svc_cls()._int_from_mkvmerge_prop(props.get('number'))
+            if pid is None:
+                continue
+            if typ not in ('audio', 'subtitles', 'video'):
+                continue
+            sp_tid_to_pid[tid] = int(pid)
+            sp_tid_to_typ[tid] = typ
+
+        sp_selected_pids: list[int] = []
+        for tid_str in list(cmd_audio_sp or []) + list(cmd_sub_sp or []):
+            try:
+                tid_sp = int(str(tid_str).strip())
+            except Exception:
+                continue
+            pid_sp = sp_tid_to_pid.get(tid_sp)
+            if pid_sp is not None:
+                sp_selected_pids.append(int(pid_sp))
+
+        if cached_episode_baseline_map is not None:
+            mkv_map_main: dict[int, int] = dict(cached_episode_baseline_map)
+        else:
+            mkv_map_main = self._compute_mkv_id_to_m2ts_pid_for_main_mpls(em_norm)
+        if not mkv_map_main:
+            return False
+        main_mpls_selected_pids = [mkv_map_main[i] for i in sorted(mkv_map_main.keys())]
+
+        sp_pid_to_tid: dict[int, int] = {}
+        for tid_sp in sorted(sp_tid_to_pid.keys()):
+            sp_pid_to_tid.setdefault(int(sp_tid_to_pid[tid_sp]), int(tid_sp))
+
+        ep_pid_to_mkv_id: dict[int, int] = {}
+        for mkv_k in sorted(mkv_map_main.keys()):
+            ep_pid_to_mkv_id[int(mkv_map_main[mkv_k])] = int(mkv_k)
+
+        episode_pid_values = set(ep_pid_to_mkv_id.keys())
+        pids_sorted = sorted(set(main_mpls_selected_pids) | set(sp_selected_pids))
+        order_parts: list[str] = []
+        for pid in pids_sorted:
+            if pid in episode_pid_values:
+                order_parts.append(f'0:{ep_pid_to_mkv_id[pid]}')
+            else:
+                tid_sp = sp_pid_to_tid.get(pid)
+                if tid_sp is None:
+                    return False
+                order_parts.append(f'1:{tid_sp}')
+        if not order_parts:
+            return False
+        order_str = ','.join(order_parts)
+
+        sp_mux_includes_video = False
+        af0: list[str] = []
+        sf0: list[str] = []
+        af1: list[str] = []
+        sf1: list[str] = []
+        for part in order_parts:
+            seg = part.split(':', 1)
+            if len(seg) != 2:
+                continue
+            try:
+                fid_o = int(seg[0])
+                tid_o = int(seg[1])
+            except Exception:
+                continue
+            if fid_o == 0:
+                ty_e = self._episode_ident_track_type(ident_ep, tid_o)
+                if ty_e == 'video':
+                    continue
+                if ty_e == 'audio':
+                    af0.append(str(tid_o))
+                elif ty_e in ('subtitles', 'subtitle'):
+                    sf0.append(str(tid_o))
+            else:
+                ty_s = str(sp_tid_to_typ.get(tid_o, '') or '').lower()
+                if ty_s == 'video':
+                    sp_mux_includes_video = True
+                elif ty_s == 'audio':
+                    af1.append(str(tid_o))
+                elif ty_s in ('subtitles', 'subtitle'):
+                    sf1.append(str(tid_o))
+
+        stem, ext = os.path.splitext(episode_mkv)
+        tmp_out = f'{stem}.tmp{ext}'
+        try:
+            if os.path.isfile(tmp_out):
+                force_remove_file(tmp_out)
+        except Exception:
+            pass
+
+        exe = MKV_MERGE_PATH or 'mkvmerge'
+        ui_arg = mkvtoolnix_ui_language_arg().strip()
+        cmd_parts: list[str] = [f'"{exe}"']
+        if ui_arg:
+            cmd_parts.append(ui_arg)
+        cmd_parts.extend(['-o', f'"{tmp_out}"'])
+        if af0:
+            cmd_parts.extend(['-a', ','.join(af0)])
+        if sf0:
+            cmd_parts.extend(['-s', ','.join(sf0)])
+        cmd_parts.append(f'"{episode_mkv}"')
+        if not sp_mux_includes_video:
+            cmd_parts.extend(['-d', '!0'])
+        if af1:
+            cmd_parts.extend(['-a', ','.join(af1)])
+        if sf1:
+            cmd_parts.extend(['-s', ','.join(sf1)])
+        cmd_parts.append(f'"{sp_mpls_path}"')
+        cmd_parts.extend(['--track-order', order_str])
+        cmd = ' '.join(cmd_parts)
+
+        print(f'[episode-sp-mux] mkvmerge: {cmd}')
+
+        chapter_tmp = ''
+        chapters_saved_ok = False
+        try:
+            fd, chapter_tmp = tempfile.mkstemp(suffix='.xml', prefix='ep_sp_chapters_')
+            os.close(fd)
+            ex_exe = MKV_EXTRACT_PATH or 'mkvextract'
+            ui_ex = mkvtoolnix_ui_language_arg().strip()
+            ex_cmd_parts = [f'"{ex_exe}"']
+            if ui_ex:
+                ex_cmd_parts.append(ui_ex)
+            ex_cmd_parts.extend([f'"{episode_mkv}"', 'chapters', '--simple', f'"{chapter_tmp}"'])
+            ex_cmd = ' '.join(ex_cmd_parts)
+            if subprocess.Popen(ex_cmd, shell=True).wait() == 0:
+                if os.path.isfile(chapter_tmp) and os.path.getsize(chapter_tmp) > 0:
+                    chapters_saved_ok = True
+            if not chapters_saved_ok:
+                try:
+                    force_remove_file(chapter_tmp)
+                except Exception:
+                    pass
+                chapter_tmp = ''
+        except Exception:
+            chapter_tmp = ''
+            chapters_saved_ok = False
+
+        if cancel_event and cancel_event.is_set():
+            if chapter_tmp:
+                try:
+                    force_remove_file(chapter_tmp)
+                except Exception:
+                    pass
+            raise _Cancelled()
+        ret = subprocess.Popen(cmd, shell=True).wait()
+        if ret != 0 or (not os.path.isfile(tmp_out)):
+            try:
+                force_remove_file(tmp_out)
+            except Exception:
+                pass
+            if chapter_tmp:
+                try:
+                    force_remove_file(chapter_tmp)
+                except Exception:
+                    pass
+            return False
+        try:
+            force_remove_file(episode_mkv)
+        except Exception:
+            pass
+        try:
+            os.rename(tmp_out, episode_mkv)
+        except Exception:
+            try:
+                force_remove_file(tmp_out)
+            except Exception:
+                pass
+            if chapter_tmp:
+                try:
+                    force_remove_file(chapter_tmp)
+                except Exception:
+                    pass
+            return False
+
+        try:
+            pe_exe = MKV_PROP_EDIT_PATH or 'mkvpropedit'
+            ui_pe = mkvtoolnix_ui_language_arg().strip()
+            clr_parts = [f'"{pe_exe}"']
+            if ui_pe:
+                clr_parts.append(ui_pe)
+            clr_parts.extend([f'"{episode_mkv}"', '--chapters', '""'])
+            subprocess.Popen(' '.join(clr_parts), shell=True).wait()
+            if chapters_saved_ok and chapter_tmp and os.path.isfile(chapter_tmp):
+                rst_parts = [f'"{pe_exe}"']
+                if ui_pe:
+                    rst_parts.append(ui_pe)
+                rst_parts.extend([f'"{episode_mkv}"', '--chapters', f'"{chapter_tmp}"'])
+                subprocess.Popen(' '.join(rst_parts), shell=True).wait()
+        except Exception:
+            pass
+        finally:
+            if chapter_tmp:
+                try:
+                    force_remove_file(chapter_tmp)
+                except Exception:
+                    pass
+
+        mkv_after = self._merged_mkv_id_to_m2ts_pid_episode_sp(mkv_map_main, sp_selected_pids)
+        _sp_mux_cache[cache_key] = dict(mkv_after)
+        return True
+
     def _create_sp_mkvs_from_entries(
             self,
             bdmv_index_conf: dict[int, list[dict[str, int | str]]],
@@ -688,9 +1185,14 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
             sps_folder: str,
             cancel_event: Optional[threading.Event] = None,
             progress_cb: Optional[Callable[[int, str], None]] = None,
+            dst_folder: Optional[str] = None,
+            episode_output_names: Optional[list[str]] = None,
+            configuration_full: Optional[dict[int, dict[str, int | str]]] = None,
     ) -> list[tuple[int, str]]:
         sp_index_by_bdmv: dict[int, int] = {}
         created: list[tuple[int, str]] = []
+        cfg_full = configuration_full if configuration_full is not None else getattr(self, 'configuration', {}) or {}
+        episode_names = list(episode_output_names or [])
         single_volume = bool(getattr(self, 'movie_mode', False) and len(bdmv_index_conf) == 1)
         selected_counts: dict[int, int] = {}
         for e in sp_entries:
@@ -836,11 +1338,50 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                 pid_to_lang,
                 config_key=config_key
             )
+            cmd_audio_track = list(copy_audio_track)
+            cmd_sub_track = list(copy_sub_track)
+            if str(src_path).lower().endswith('.mpls'):
+                cmd_audio_track, cmd_sub_track = _svc_cls()._map_selected_tracks_to_mpls_track_ids(
+                    src_path, copy_audio_track, copy_sub_track
+                )
+
+            sp_playlist_mpls = ''
+            if mpls_file:
+                sp_playlist_mpls = os.path.normpath(os.path.join(playlist_dir, mpls_file))
+            if (mpls_file and dst_folder and episode_output_names is not None
+                    and sp_playlist_mpls and os.path.isfile(sp_playlist_mpls)
+                    and self._sp_output_is_episode_linked(output_name)):
+                bn = os.path.basename(output_name.strip().replace('\\', '/'))
+                ck = self._conf_key_matching_episode_basename(bn, episode_names, cfg_full)
+                if ck is not None:
+                    conf_ep = cfg_full.get(ck) or {}
+                    episode_main_mpls = self._absolute_selected_mpls_from_conf_row(conf_ep, playlist_dir)
+                    episode_mkv = os.path.normpath(os.path.join(dst_folder, bn))
+                    ca_ep, cs_ep = _svc_cls()._map_selected_tracks_to_mpls_track_ids(
+                        sp_playlist_mpls, copy_audio_track, copy_sub_track)
+                    if (episode_main_mpls and os.path.isfile(episode_main_mpls) and os.path.isfile(episode_mkv)):
+                        ok = self._mux_episode_linked_sp_mkvmerge(
+                            episode_mkv=episode_mkv,
+                            sp_mpls_path=sp_playlist_mpls,
+                            episode_main_mpls=os.path.normpath(episode_main_mpls),
+                            cmd_audio_sp=list(ca_ep),
+                            cmd_sub_sp=list(cs_ep),
+                            cancel_event=cancel_event,
+                        )
+                        if ok and os.path.isfile(episode_mkv):
+                            created.append((entry_idx, episode_mkv))
+                            if progress_cb:
+                                progress_cb(entry_idx, episode_mkv)
+                continue
+
             if output_name:
+                rel = output_name.strip().replace('\\', '/')
                 if single_volume:
-                    output_name = re.sub(rf'(?i)^BD_Vol_{bdmv_vol}_', '', output_name)
-                sp_mkv_path = os.path.join(sps_folder, output_name)
-            if single_volume:
+                    subdir, base_only = os.path.split(rel)
+                    base_only = re.sub(rf'(?i)^BD_Vol_{bdmv_vol}_', '', base_only)
+                    rel = f'{subdir}/{base_only}' if subdir else base_only
+                sp_mkv_path = os.path.normpath(os.path.join(sps_folder, rel))
+            elif single_volume:
                 base_name = os.path.basename(sp_mkv_path)
                 base_name = re.sub(rf'(?i)^BD_Vol_{bdmv_vol}_', '', base_name)
                 sp_mkv_path = os.path.join(sps_folder, base_name)
@@ -882,8 +1423,9 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                     stream_dir = os.path.normpath(os.path.join(os.path.dirname(playlist_dir), 'STREAM'))
                 # Multiple distinct clips: extract folder of PNGs even if UI wrongly used .png (single-file) suffix.
                 if len(uniq_m2ts) > 1:
-                    folder_stem = os.path.splitext(os.path.basename(output_name))[0]
-                    folder_out = os.path.join(sps_folder, folder_stem)
+                    folder_out = os.path.normpath(
+                        os.path.join(sps_folder, os.path.splitext(output_name)[0])
+                    )
                     os.makedirs(folder_out, exist_ok=True)
                     width = max(2, len(str(max(len(uniq_m2ts), 1))))
                     for n, m2 in enumerate(uniq_m2ts, start=1):
@@ -945,7 +1487,11 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                             progress_cb(entry_idx, sp_mkv_path)
                 continue
 
-            chapter_txt = os.path.join(sps_folder, f'{os.path.splitext(os.path.basename(sp_mkv_path))[0]}.chapter.txt')
+            out_dir_mkv = os.path.dirname(os.path.normpath(sp_mkv_path))
+            if out_dir_mkv:
+                os.makedirs(out_dir_mkv, exist_ok=True)
+            ch_stem = os.path.splitext(os.path.basename(sp_mkv_path))[0]
+            chapter_txt = os.path.join(out_dir_mkv or '.', f'{ch_stem}.chapter.txt')
 
             # Check if this is a custom chapter segment (e.g. chapter_3_to_chapter_6, beginning_to_chapter_4, chapter_33_to_ending)
             custom_chapter = False
@@ -1008,13 +1554,13 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                        f'{split_custom}'
                        f'{chapters_arg}'
                        f'-o "{sp_mkv_path}" '
-                       f'{("-a " + ",".join(copy_audio_track)) if copy_audio_track else ""} '
-                       f'{("-s " + ",".join(copy_sub_track)) if copy_sub_track else ""} '
+                       f'{("-a " + ",".join(cmd_audio_track)) if cmd_audio_track else ""} '
+                       f'{("-s " + ",".join(cmd_sub_track)) if cmd_sub_track else ""} '
                        f'"{src_path}"')
             else:
                 cmd = (f'"{MKV_MERGE_PATH}" {mkvtoolnix_ui_language_arg()} -o "{sp_mkv_path}" '
-                       f'{("-a " + ",".join(copy_audio_track)) if copy_audio_track else ""} '
-                       f'{("-s " + ",".join(copy_sub_track)) if copy_sub_track else ""} '
+                       f'{("-a " + ",".join(cmd_audio_track)) if cmd_audio_track else ""} '
+                       f'{("-s " + ",".join(cmd_sub_track)) if cmd_sub_track else ""} '
                        f'"{src_path}"')
             ret_sp = subprocess.Popen(cmd, shell=True).wait()
             sp_ok = os.path.isfile(sp_mkv_path)
@@ -1032,6 +1578,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                 except Exception:
                     n_fc = 0
                 # Full-playlist concat does not reproduce ``--split parts:custom_parts`` windows from main MPLS.
+                # Use m2ts indices from edit-tracks (_select_tracks_for_source), not cmd_audio_track / remux -a/-s.
                 if n_fc > 1 and not (custom_chapter and str(custom_parts).strip()):
                     if self._try_remux_mpls_track_aligned_concat(
                             os.path.normpath(src_path),
@@ -1065,23 +1612,6 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                         print(f'{self.t("[chapter-debug] ")}{self.t("remove temporary chapter file: ")}{chapter_txt}')
                 except:
                     pass
-            try:
-                if sp_mkv_path.lower().endswith(('.mkv', '.mka')) and first_m2ts_for_lang and pid_to_lang:
-                    lang_cfg_all = getattr(self, 'track_language_config', {}) or {}
-                    lang_override = {}
-                    if isinstance(lang_cfg_all, dict):
-                        lang_key = f'main::{os.path.normpath(src_path)}'
-                        lang_override = dict(lang_cfg_all.get(lang_key) or {})
-                    _svc_cls()._fix_output_track_languages_with_mkvpropedit(
-                        sp_mkv_path,
-                        first_m2ts_for_lang,
-                        pid_to_lang,
-                        copy_audio_track,
-                        copy_sub_track,
-                        lang_override
-                    )
-            except Exception:
-                pass
             if os.path.exists(sp_mkv_path):
                 created.append((entry_idx, sp_mkv_path))
                 if progress_cb:

@@ -137,6 +137,9 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             bdmv_index_conf: dict[int, list[dict[str, int | str]]],
             dst_folder: str,
             cancel_event: Optional[threading.Event] = None,
+            *,
+            mux_progress_base: int = 0,
+            mux_progress_span: int = 380,
     ) -> None:
         self._remux_chapter_skip_paths = set()
         bdmv_index_list = sorted(bdmv_index_conf.keys())
@@ -313,59 +316,10 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                             cancel_event=cancel_event,
                     ):
                         ret = 0
-            try:
-                targets: list[str] = []
-                lang_cfg_all = getattr(self, 'track_language_config', {}) or {}
-                try:
-                    lang_override = dict(lang_cfg_all.get(f'main::{os.path.normpath(mpls_path)}') or {})
-                except Exception:
-                    lang_override = {}
-                outs_seen: set[str] = set()
-                for ln in lines_mx:
-                    o = _svc_cls()._mkvmerge_output_path_from_line(ln)
-                    if not o:
-                        continue
-                    o = os.path.normpath(o)
-                    if o in outs_seen:
-                        continue
-                    outs_seen.add(o)
-                    out_dir = os.path.dirname(o)
-                    base_stem = os.path.splitext(os.path.basename(o))[0]
-                    if out_dir and os.path.isdir(out_dir):
-                        for fn in os.listdir(out_dir):
-                            low = fn.lower()
-                            if (fn.startswith(base_stem)) and low.endswith(('.mkv', '.mka')):
-                                fp = os.path.normpath(os.path.join(out_dir, fn))
-                                if os.path.isfile(fp):
-                                    targets.append(fp)
-                    if os.path.exists(o):
-                        targets.append(o)
-                out_fb = out_n if out_n else (os.path.normpath(output_file) if output_file else '')
-                if out_fb and out_fb not in outs_seen:
-                    out_dir = os.path.dirname(out_fb)
-                    base_stem = os.path.splitext(os.path.basename(out_fb))[0]
-                    if out_dir and os.path.isdir(out_dir):
-                        for fn in os.listdir(out_dir):
-                            low = fn.lower()
-                            if (fn.startswith(base_stem)) and low.endswith(('.mkv', '.mka')):
-                                fp = os.path.normpath(os.path.join(out_dir, fn))
-                                if os.path.isfile(fp):
-                                    targets.append(fp)
-                    if os.path.exists(out_fb):
-                        targets.append(out_fb)
-                targets = sorted(list(dict.fromkeys(targets)))
-                for t in targets:
-                    _svc_cls()._fix_output_track_languages_with_mkvpropedit(
-                        t,
-                        m2ts_file,
-                        pid_to_lang,
-                        copy_audio_track,
-                        copy_sub_track,
-                        lang_override
-                    )
-            except Exception:
-                pass
-            self._progress(int(idx / max(len(bdmv_index_list), 1) * 300))
+                        if out_n and os.path.isfile(out_n):
+                            self._remux_chapter_skip_paths.discard(_norm_skip(out_n))
+            self._progress(
+                mux_progress_base + int(idx / max(len(bdmv_index_list), 1) * mux_progress_span))
 
     @staticmethod
     def _dedupe_remux_shell_lines(cmd: str) -> str:
@@ -466,6 +420,9 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             chapter.pid_to_lang,
             config_key=f'main::{os.path.normpath(mpls_path)}'
         )
+        cmd_audio_track, cmd_sub_track = _svc_cls()._map_selected_tracks_to_mpls_track_ids(
+            mpls_path, copy_audio_track, copy_sub_track
+        )
         meta_folder = os.path.join(os.path.join(mpls_path[:-19], 'META', 'DL'))
         cover = ''
         cover_size = 0
@@ -504,8 +461,8 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 out_base = re.sub(rf'(?i)^BD_Vol_{bdmv_vol}_', '', out_base)
                 out_base = re.sub(rf'(?i)_BD_Vol_{bdmv_vol}(?=\.mkv$)', '', out_base)
                 output_file = os.path.join(out_dir, out_base)
-            default_audio_opts = (f'-a {",".join(copy_audio_track)}' if copy_audio_track else '')
-            default_sub_opts = (f'-s {",".join(copy_sub_track)}' if copy_sub_track else '')
+            default_audio_opts = (f'-a {",".join(cmd_audio_track)}' if cmd_audio_track else '')
+            default_sub_opts = (f'-s {",".join(cmd_sub_track)}' if cmd_sub_track else '')
             default_cover_opts = (f'--attachment-name Cover.jpg --attach-file "{cover}"' if cover else '')
             default_cmd = (
                 f'"{mkvmerge_exe}" {mkvtoolnix_ui_language_arg()} --chapter-language eng -o "{output_file}" '
@@ -575,8 +532,8 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
 
             parts_split, chapter_split, use_split_parts = _parts_chapter_for_sub_confs(confs)
             output_file = f'{os.path.join(disc_out_dir or dst_folder, output_name)}_BD_Vol_{bdmv_vol}.mkv'
-            default_audio_opts = (f'-a {",".join(copy_audio_track)}' if copy_audio_track else '')
-            default_sub_opts = (f'-s {",".join(copy_sub_track)}' if copy_sub_track else '')
+            default_audio_opts = (f'-a {",".join(cmd_audio_track)}' if cmd_audio_track else '')
+            default_sub_opts = (f'-s {",".join(cmd_sub_track)}' if cmd_sub_track else '')
             default_cover_opts = (f'--attachment-name Cover.jpg --attach-file "{cover}"' if cover else '')
             if use_split_parts:
                 split_arg = (f'--split parts:{parts_split}' if parts_split else '')
@@ -840,7 +797,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             mkv_files = self._apply_episode_output_names(mkv_raw, episode_output_names)
             self._remux_remap_chapter_skip_after_rename(mkv_files)
         else:
-            self._progress(310, 'Writing Chapters')
+            self._progress(385, 'Writing Chapters')
             mkv_files, post_aborted = self._post_remux_finalize_episodes(
                 dst_folder, bdmv_index_conf, self.configuration, episode_output_names, cancel_event)
             if post_aborted:
@@ -851,24 +808,17 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         if cancel_event and cancel_event.is_set():
             raise _Cancelled()
         if getattr(self, 'movie_mode', False):
-            self._progress(310, 'Writing Chapters')
+            self._progress(385, 'Writing Chapters')
             self.add_chapter_to_mkv(
                 mkv_files, table, selected_mpls=selected_mpls, cancel_event=cancel_event,
                 configuration=self.configuration,
             )
+        # 0–40 % (~0–400): main MPLS mux (in _build_main_episode_mkvs), rename, chapters, track languages.
         self._progress(400)
 
-        i = 0
-        for mkv_file in mkv_files:
-            if cancel_event and cancel_event.is_set():
-                raise _Cancelled()
-            i += 1
-            self._progress(text=f'Compressing audio: {os.path.basename(mkv_file)}')
-            self.flac_task(mkv_file, dst_folder, i)
-            self._progress(400 + int(400 * i / max(len(mkv_files), 1)))
-
-        sps_folder = dst_folder + os.sep + 'SPs'
-        os.mkdir(sps_folder)
+        # 40–50 % (~400–500): SP mux before main MKV lossless audio handling.
+        # Outputs use paths under dst_folder (e.g. SPs/… in output_name); do not pre-create a dedicated SPs root.
+        sp_output_base = dst_folder
         sp_mux_done = 0
         selected_sp_total = 0
         if sp_entries is not None:
@@ -884,7 +834,8 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             sp_mux_done += 1
             known_total = max(selected_sp_total, 1) if selected_sp_total > 0 else 0
             denom = known_total if known_total else 40
-            p = 800 + min(95, int(95 * min(sp_mux_done, denom) / denom))
+            frac = min(sp_mux_done, denom) / float(max(denom, 1))
+            p = 400 + min(99, int(100 * frac))
             if known_total:
                 self._progress(p, f'Muxing SP {sp_mux_done}/{known_total}: {item_name}')
             else:
@@ -894,9 +845,12 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             self._create_sp_mkvs_from_entries(
                 bdmv_index_conf,
                 sp_entries,
-                sps_folder,
+                sp_output_base,
                 cancel_event=cancel_event,
                 progress_cb=lambda _idx, path: _progress_sp_mux(os.path.basename(path)),
+                dst_folder=dst_folder,
+                episode_output_names=list(episode_output_names or []),
+                configuration_full=dict(self.configuration or {}),
             )
         else:
             single_volume = bool(getattr(self, 'movie_mode', False) and len(bdmv_index_conf) == 1)
@@ -928,7 +882,10 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                                      'output_name': out_name}
                             key = _svc_cls()._sp_track_key_from_entry(entry)
                             copy_audio_track, copy_sub_track = self._select_tracks_for_source(mpls_file_path, {}, key)
-                            chapter_txt = os.path.join(sps_folder, f'{os.path.splitext(out_name)[0]}.chapter.txt')
+                            cmd_audio_track, cmd_sub_track = _svc_cls()._map_selected_tracks_to_mpls_track_ids(
+                                mpls_file_path, copy_audio_track, copy_sub_track
+                            )
+                            chapter_txt = os.path.join(dst_folder, 'SPs', f'{os.path.splitext(out_name)[0]}.chapter.txt')
                             try:
                                 offs = self._write_chapter_txt_from_mpls(mpls_file_path, chapter_txt)
                                 if len(offs) == 1 and offs[0] == 0.0:
@@ -944,9 +901,9 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                                     f'{self.t("[chapter-debug] ")}{self.t("legacy SP remux with chapter file: ")}{chapter_txt} -> {out_name}')
                             subprocess.Popen(f'"{self._mkvmerge_exe()}" {mkvtoolnix_ui_language_arg()} '
                                              f'{("--chapters " + "\"" + chapter_txt + "\"") if chapter_txt else ""} '
-                                             f'-o "{os.path.join(sps_folder, out_name)}" '
-                                             f'{("-a " + ",".join(copy_audio_track)) if copy_audio_track else ""} '
-                                             f'{("-s " + ",".join(copy_sub_track)) if copy_sub_track else ""} '
+                                             f'-o "{os.path.join(dst_folder, "SPs", out_name)}" '
+                                             f'{("-a " + ",".join(cmd_audio_track)) if cmd_audio_track else ""} '
+                                             f'{("-s " + ",".join(cmd_sub_track)) if cmd_sub_track else ""} '
                                              f'"{mpls_file_path}"',
                                              shell=True).wait()
                             _progress_sp_mux(out_name)
@@ -975,22 +932,43 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                                 os.path.join(stream_folder, stream_file), {}, key
                             )
                             subprocess.Popen(
-                                f'"{self._mkvmerge_exe()}" {mkvtoolnix_ui_language_arg()} -o "{os.path.join(sps_folder, out_name)}" '
+                                f'"{self._mkvmerge_exe()}" {mkvtoolnix_ui_language_arg()} -o "{os.path.join(dst_folder, "SPs", out_name)}" '
                                 f'{("-a " + ",".join(copy_audio_track)) if copy_audio_track else ""} '
                                 f'{("-s " + ",".join(copy_sub_track)) if copy_sub_track else ""} '
                                 f'"{os.path.join(stream_folder, stream_file)}"',
                                 shell=True
                             ).wait()
                             _progress_sp_mux(out_name)
-        sp_files = [sp for sp in os.listdir(sps_folder) if sp.lower().endswith(('.mkv', '.mka'))]
+
+        self._progress(500)
+
+        # 50–90 % (~500–900): main MPLS MKV audio (lossless extract / re-mux, etc.).
+        i = 0
+        n_main = max(len(mkv_files), 1)
+        for mkv_file in mkv_files:
+            if cancel_event and cancel_event.is_set():
+                raise _Cancelled()
+            i += 1
+            self._progress(text=f'Compressing audio: {os.path.basename(mkv_file)}')
+            self.flac_task(mkv_file, dst_folder, i)
+            self._progress(500 + int(400 * i / n_main))
+        if not mkv_files:
+            self._progress(900)
+
+        # 90–100 % (~900–1000): SP audio (files under dst_folder/SPs when present).
+        sp_subdir = os.path.join(dst_folder, 'SPs')
+        sp_files = (
+            [sp for sp in os.listdir(sp_subdir) if sp.lower().endswith(('.mkv', '.mka'))]
+            if os.path.isdir(sp_subdir) else []
+        )
         sp_files.sort()
         total_sp = len(sp_files) or 1
         self._progress(900, 'Processing SP audio tracks')
         for idx, sp in enumerate(sp_files, start=1):
             if cancel_event and cancel_event.is_set():
                 raise _Cancelled()
-            self._progress(900 + int(90 * idx / total_sp), f'Processing SP audio tracks {idx}/{total_sp}: {sp}')
-            self.flac_task(sps_folder + os.sep + sp, sps_folder, -1)
+            self._progress(900 + int(100 * idx / total_sp), f'Processing SP audio tracks {idx}/{total_sp}: {sp}')
+            self.flac_task(os.path.join(sp_subdir, sp), dst_folder, -1)
 
         self.completion()
         self._progress(1000, 'Done')
@@ -1011,92 +989,93 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                         sub_pack_mode: str = 'external',
                         encode_tool: str = 'x265',
                         encode_bit_depth: str = '10'):
-        dst_folder, mkv_files_before, bdmv_index_conf = self._prepare_episode_run(
-            table, folder_path, configuration, ensure_tools
+        """BDMV encode: remux (main + SP) under ``<out>/_encode_remux_stage/<disc>/``; encode writes to ``<out>/<disc>/``.
+
+        Remux stays in the stage folder. ``EncodeMkvFolderWorker`` outputs directly to the final disc folder
+        (main episode MKVs first, then ``SPs/``); no post-encode folder migration.
+        """
+        from ..gui_runtime_classes.encode_mkv_folder_worker import EncodeMkvFolderWorker
+
+        vpy_paths = vpy_paths or []
+        sp_vpy_paths = sp_vpy_paths or []
+        episode_output_names = list(episode_output_names or [])
+        episode_subtitle_languages = list(episode_subtitle_languages or [])
+        default_vpy = os.path.join(os.getcwd(), 'vpy.vpy')
+
+        def bridge_encode_folder(value: Optional[int] = None, text: Optional[str] = None) -> None:
+            """Mux uses 0–1000; encode uses a separate 0–1000 on the same UI bar."""
+            if value is not None:
+                vv = max(0, min(1000, int(value)))
+                self._progress(vv, text)
+            elif text is not None:
+                self._progress(text=text)
+
+        base_out = os.path.normpath(folder_path)
+        stage_parent = os.path.join(base_out, '_encode_remux_stage')
+        os.makedirs(stage_parent, exist_ok=True)
+
+        dst_stage, mkv_files_before, bdmv_index_conf = self._prepare_episode_run(
+            table, stage_parent, configuration, ensure_tools)
+        final_disc = os.path.join(base_out, os.path.basename(self.bdmv_path))
+
+        self._build_main_episode_mkvs(
+            bdmv_index_conf,
+            dst_stage,
+            cancel_event=cancel_event,
+            mux_progress_base=0,
+            mux_progress_span=720,
         )
 
-        self._build_main_episode_mkvs(bdmv_index_conf, dst_folder, cancel_event=cancel_event)
-
         self.checked = True
-        self.episode_subtitle_languages = episode_subtitle_languages or []
-        mkv_files = self._collect_target_mkv_files(dst_folder, mkv_files_before)
-        mkv_files = self._apply_episode_output_names(mkv_files, episode_output_names)
+        self.episode_subtitle_languages = episode_subtitle_languages
+        mkv_raw = self._collect_target_mkv_files(dst_stage, mkv_files_before)
+        mkv_files = self._apply_episode_output_names(mkv_raw, episode_output_names)
         self._remux_remap_chapter_skip_after_rename(mkv_files)
         if cancel_event and cancel_event.is_set():
             raise _Cancelled()
         if not getattr(self, 'movie_mode', False):
-            self._progress(310, 'Writing Chapters')
+            self._progress(760, 'Writing Chapters')
             self.add_chapter_to_mkv(
                 mkv_files, table, selected_mpls=selected_mpls, cancel_event=cancel_event,
                 configuration=self.configuration,
             )
-            self._progress(400)
+        self._progress(800)
 
-        i = 0
-        for mkv_file in mkv_files:
-            if cancel_event and cancel_event.is_set():
-                raise _Cancelled()
-            i += 1
-            try:
-                if os.path.basename(mkv_file) in mkv_files_before and os.path.exists(mkv_file):
-                    self._progress(400 + int(400 * i / len(mkv_files)))
-                    continue
-            except Exception:
-                pass
-            self._progress(text=f'Encode and mux: {os.path.basename(mkv_file)}')
-            vpy_path = None
-            if vpy_paths and 0 <= (i - 1) < len(vpy_paths):
-                vpy_path = vpy_paths[i - 1]
-            if not vpy_path:
-                vpy_path = os.path.join(os.getcwd(), 'vpy.vpy')
-            self.encode_task(
-                mkv_file, dst_folder, i, vpy_path, vspipe_mode, x265_mode, x265_params, sub_pack_mode,
-                encode_tool=encode_tool, encode_bit_depth=encode_bit_depth,
-            )
-            if sub_pack_mode == 'external' and self.sub_files and len(self.sub_files) >= i and i > -1:
-                sub_src = self.sub_files[i - 1]
-                sub_ext = os.path.splitext(sub_src)[1].lower()
-                if sub_ext in ('.ass', '.ssa', '.srt'):
-                    video_base = os.path.splitext(os.path.basename(mkv_file))[0]
-                    sub_dst = os.path.join(dst_folder, video_base + sub_ext)
-                    try:
-                        shutil.copy2(sub_src, sub_dst)
-                    except Exception:
-                        print_exc_terminal()
-            self._progress(400 + int(400 * i / len(mkv_files)))
-
-        sps_folder = dst_folder + os.sep + 'SPs'
-        os.mkdir(sps_folder)
-        self._progress(900, 'Processing SP audio tracks')
-
+        sp_output_base = dst_stage
+        sp_mux_done = 0
+        selected_sp_total = 0
         if sp_entries is not None:
-            created_sp = self._create_sp_mkvs_from_entries(bdmv_index_conf, sp_entries, sps_folder,
-                                                           cancel_event=cancel_event)
-            total_sp = len(created_sp) or 1
-            for idx, (entry_idx, sp_mkv_path) in enumerate(created_sp, start=1):
-                if cancel_event and cancel_event.is_set():
-                    raise _Cancelled()
-                self._progress(text=f'Encode and mux SPs: {os.path.basename(sp_mkv_path)}')
-                if os.path.isdir(sp_mkv_path) or (not os.path.exists(sp_mkv_path)):
-                    self._progress(900 + int(90 * idx / total_sp))
-                    continue
-                low = sp_mkv_path.lower()
-                if low.endswith('.mka'):
-                    self.flac_task(sp_mkv_path, sps_folder, -1)
-                    self._progress(900 + int(90 * idx / total_sp))
-                    continue
-                if (not low.endswith('.mkv')):
-                    self._progress(900 + int(90 * idx / total_sp))
-                    continue
-                if sp_vpy_paths and 0 <= (entry_idx - 1) < len(sp_vpy_paths) and sp_vpy_paths[entry_idx - 1]:
-                    cur_sp_vpy = str(sp_vpy_paths[entry_idx - 1])
-                else:
-                    cur_sp_vpy = os.path.join(os.getcwd(), 'vpy.vpy')
-                self.encode_task(
-                    sp_mkv_path, sps_folder, -1, cur_sp_vpy, vspipe_mode, x265_mode, x265_params,
-                    'external', encode_tool=encode_tool, encode_bit_depth=encode_bit_depth,
+            try:
+                selected_sp_total = sum(
+                    1 for e in sp_entries if bool(e.get('selected', True)) and str(e.get('output_name') or '').strip()
                 )
-                self._progress(900 + int(90 * idx / total_sp))
+            except Exception:
+                selected_sp_total = 0
+
+        def _progress_sp_mux_enc(item_name: str):
+            nonlocal sp_mux_done
+            sp_mux_done += 1
+            known_total = max(selected_sp_total, 1) if selected_sp_total > 0 else 0
+            denom = known_total if known_total else 40
+            frac = min(sp_mux_done, denom) / float(max(denom, 1))
+            p = 800 + min(199, int(200 * frac))
+            if known_total:
+                self._progress(p, f'Muxing SP {sp_mux_done}/{known_total}: {item_name}')
+            else:
+                self._progress(p, f'Muxing SP {sp_mux_done}: {item_name}')
+
+        created_sp: list[tuple[int, str]] = []
+        if sp_entries is not None:
+            created_sp = self._create_sp_mkvs_from_entries(
+                bdmv_index_conf,
+                sp_entries,
+                sp_output_base,
+                cancel_event=cancel_event,
+                progress_cb=lambda _i, path: _progress_sp_mux_enc(os.path.basename(path)),
+                dst_folder=dst_stage,
+                episode_output_names=list(episode_output_names or []),
+                configuration_full=dict(self.configuration or {}),
+            )
         else:
             single_volume = bool(getattr(self, 'movie_mode', False) and len(bdmv_index_conf) == 1)
             for bdmv_index, confs in bdmv_index_conf.items():
@@ -1126,7 +1105,10 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                                      'output_name': out_name}
                             key = _svc_cls()._sp_track_key_from_entry(entry)
                             copy_audio_track, copy_sub_track = self._select_tracks_for_source(mpls_file_path, {}, key)
-                            chapter_txt = os.path.join(sps_folder, f'{os.path.splitext(out_name)[0]}.chapter.txt')
+                            cmd_audio_track, cmd_sub_track = _svc_cls()._map_selected_tracks_to_mpls_track_ids(
+                                mpls_file_path, copy_audio_track, copy_sub_track
+                            )
+                            chapter_txt = os.path.join(dst_stage, 'SPs', f'{os.path.splitext(out_name)[0]}.chapter.txt')
                             try:
                                 offs = self._write_chapter_txt_from_mpls(mpls_file_path, chapter_txt)
                                 if len(offs) == 1 and offs[0] == 0.0:
@@ -1141,12 +1123,13 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                                 print(
                                     f'{self.t("[chapter-debug] ")}{self.t("legacy SP remux with chapter file: ")}{chapter_txt} -> {out_name}')
                             subprocess.Popen(f'"{self._mkvmerge_exe()}" {mkvtoolnix_ui_language_arg()} '
-                                             f'{("--chapters " + "\"" + chapter_txt + "\"") if chapter_txt else ""} '
-                                             f'-o "{os.path.join(sps_folder, out_name)}" '
-                                             f'{("-a " + ",".join(copy_audio_track)) if copy_audio_track else ""} '
-                                             f'{("-s " + ",".join(copy_sub_track)) if copy_sub_track else ""} '
-                                             f'"{mpls_file_path}"',
-                                             shell=True).wait()
+                                               f'{("--chapters " + "\"" + chapter_txt + "\"") if chapter_txt else ""} '
+                                               f'-o "{os.path.join(dst_stage, "SPs", out_name)}" '
+                                               f'{("-a " + ",".join(cmd_audio_track)) if cmd_audio_track else ""} '
+                                               f'{("-s " + ",".join(cmd_sub_track)) if cmd_sub_track else ""} '
+                                               f'"{mpls_file_path}"',
+                                               shell=True).wait()
+                            _progress_sp_mux_enc(out_name)
                             if chapter_txt:
                                 try:
                                     force_remove_file(chapter_txt)
@@ -1172,32 +1155,95 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                                 os.path.join(stream_folder, stream_file), {}, key
                             )
                             subprocess.Popen(
-                                f'"{self._mkvmerge_exe()}" {mkvtoolnix_ui_language_arg()} -o "{os.path.join(sps_folder, out_name)}" '
+                                f'"{self._mkvmerge_exe()}" {mkvtoolnix_ui_language_arg()} -o "{os.path.join(dst_stage, "SPs", out_name)}" '
                                 f'{("-a " + ",".join(copy_audio_track)) if copy_audio_track else ""} '
                                 f'{("-s " + ",".join(copy_sub_track)) if copy_sub_track else ""} '
                                 f'"{os.path.join(stream_folder, stream_file)}"',
                                 shell=True
                             ).wait()
-            sp_files = [os.path.join(sps_folder, sp) for sp in os.listdir(sps_folder) if
-                        sp.lower().endswith(('.mkv', '.mka'))]
-            sp_files.sort()
-            total_sp = len(sp_files) or 1
-            for idx, sp_path in enumerate(sp_files, start=1):
-                if cancel_event and cancel_event.is_set():
-                    raise _Cancelled()
-                self._progress(text=f'Encode and mux SPs: {os.path.basename(sp_path)}')
-                if sp_path.lower().endswith('.mka'):
-                    self.flac_task(sp_path, sps_folder, -1)
-                else:
-                    if sp_vpy_paths and 0 <= (idx - 1) < len(sp_vpy_paths) and sp_vpy_paths[idx - 1]:
-                        cur_sp_vpy = sp_vpy_paths[idx - 1]
-                    else:
-                        cur_sp_vpy = os.path.join(os.getcwd(), 'vpy.vpy')
-                    self.encode_task(
-                        sp_path, sps_folder, -1, cur_sp_vpy, vspipe_mode, x265_mode, x265_params,
-                        'external', encode_tool=encode_tool, encode_bit_depth=encode_bit_depth,
-                    )
-                self._progress(900 + int(90 * idx / total_sp))
+                            _progress_sp_mux_enc(out_name)
+
+        self._progress(1000)
+
+        mkv_rows: list[dict[str, str]] = []
+        for i, mkv_file in enumerate(mkv_files):
+            oname = episode_output_names[i] if i < len(episode_output_names) else os.path.basename(mkv_file)
+            mkv_rows.append({
+                'src_path': mkv_file,
+                'output_name': oname,
+                'sub_path': self.sub_files[i] if self.sub_files and i < len(self.sub_files) else '',
+                'language': episode_subtitle_languages[i] if i < len(episode_subtitle_languages) else '',
+                'vpy_path': vpy_paths[i] if i < len(vpy_paths) else default_vpy,
+            })
+
+        sp_rows: list[dict[str, str]] = []
+        if created_sp:
+            for entry_idx, sp_mkv_path in created_sp:
+                if os.path.isdir(sp_mkv_path) or (not os.path.exists(sp_mkv_path)):
+                    continue
+                cur_sp_vpy = (
+                    str(sp_vpy_paths[entry_idx - 1])
+                    if sp_vpy_paths and 0 <= entry_idx - 1 < len(sp_vpy_paths) and sp_vpy_paths[entry_idx - 1]
+                    else default_vpy
+                )
+                sp_rows.append({
+                    'src_path': sp_mkv_path,
+                    'output_name': os.path.basename(sp_mkv_path),
+                    'vpy_path': cur_sp_vpy,
+                })
+        else:
+            legacy_sp_dir = os.path.join(dst_stage, 'SPs')
+            sp_files_list = sorted(
+                f for f in os.listdir(legacy_sp_dir) if f.lower().endswith(('.mkv', '.mka'))
+            ) if os.path.isdir(legacy_sp_dir) else []
+            for idx, fn in enumerate(sp_files_list):
+                sp_rows.append({
+                    'src_path': os.path.join(legacy_sp_dir, fn),
+                    'output_name': fn,
+                    'vpy_path': sp_vpy_paths[idx] if idx < len(sp_vpy_paths) else default_vpy,
+                })
+
+        worker = EncodeMkvFolderWorker(
+            mkv_rows=mkv_rows,
+            sp_rows=sp_rows,
+            remux_folder=dst_stage,
+            output_folder=final_disc,
+            cancel_event=cancel_event,
+            vspipe_mode=vspipe_mode,
+            x265_mode=x265_mode,
+            x265_params=x265_params,
+            sub_pack_mode=sub_pack_mode,
+            encode_tool=encode_tool,
+            encode_bit_depth=encode_bit_depth,
+            use_getnative=bool(getattr(self, 'use_getnative', True)),
+            track_selection_config=getattr(self, 'track_selection_config', {}) or {},
+            track_language_config=getattr(self, 'track_language_config', {}) or {},
+            track_lossless_audio_config=getattr(self, 'track_lossless_audio_config', {}) or {},
+            default_lossless_audio_codec=str(getattr(self, 'default_lossless_audio_codec', '') or 'flac'),
+            progress_bridge=bridge_encode_folder,
+        )
+        worker.run()
+
+        if sub_pack_mode == 'external' and self.sub_files:
+            for i, row in enumerate(mkv_rows):
+                if i >= len(self.sub_files):
+                    break
+                sub_src = self.sub_files[i]
+                sub_ext = os.path.splitext(sub_src)[1].lower()
+                if sub_ext not in ('.ass', '.ssa', '.srt'):
+                    continue
+                out_nm = str(row.get('output_name') or '').strip()
+                video_base = os.path.splitext(os.path.basename(out_nm))[0]
+                sub_dst = os.path.join(final_disc, video_base + sub_ext)
+                try:
+                    shutil.copy2(sub_src, sub_dst)
+                except Exception:
+                    print_exc_terminal()
+
+        try:
+            shutil.rmtree(stage_parent, ignore_errors=True)
+        except Exception:
+            pass
 
         self.completion()
         self._progress(1000, 'Done')

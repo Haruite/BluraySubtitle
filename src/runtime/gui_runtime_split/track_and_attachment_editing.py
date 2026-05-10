@@ -17,8 +17,8 @@ from PyQt6.QtWidgets import QMessageBox, QDialog, QVBoxLayout, QPlainTextEdit, Q
 
 from src.bdmv import Chapter
 from src.core import find_mkvtoolinx, MKV_EXTRACT_PATH, MKV_PROP_EDIT_PATH, mkvtoolnix_ui_language_arg, FFPROBE_PATH, \
-    MKV_INFO_PATH, MKV_MERGE_PATH, get_mkvtoolnix_ui_language, ENCODE_SP_LABELS
-from src.exports.utils import mkv_codec_id_is_dts_family
+    MKV_INFO_PATH, MKV_MERGE_PATH, get_mkvtoolnix_ui_language, ENCODE_SP_LABELS, REMUX_LABELS, DIY_REMUX_LABELS
+from src.exports.utils import mkv_codec_id_is_dts_family, print_terminal_line, sp_diag_log
 from src.runtime.services import BluraySubtitle
 from .gui_base import BluraySubtitleGuiBase
 
@@ -111,7 +111,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             if pid is None:
                 continue
             ctype = str(s.get('codec_type') or '').strip().lower()
-            if idx in source_selected_indexes and ctype in ('audio', 'subtitle'):
+            if idx in source_selected_indexes and (ctype == 'audio' or ctype in ('subtitle', 'subtitles')):
                 selected_pids.add(pid)
             cv = str(source_convert_map.get(idx, '') or '').strip()
             if cv:
@@ -165,7 +165,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                     if ctype == 'audio' and idx not in audio_set:
                         audio.append(idx)
                         audio_set.add(idx)
-                    elif ctype == 'subtitle' and idx not in subtitle_set:
+                    elif ctype in ('subtitle', 'subtitles') and idx not in subtitle_set:
                         subtitle.append(idx)
                         subtitle_set.add(idx)
                 elif pid is not None and pid in (
@@ -193,6 +193,55 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
         self._track_convert_config = cfg_conv
         self._track_language_config = cfg_lang
         self._track_lossless_audio_config = cfg_la
+
+    def _table2_labels_remux_or_diy(self) -> Optional[list[str]]:
+        fid = self.get_selected_function_id()
+        if fid == 3:
+            return list(REMUX_LABELS)
+        if fid == 5:
+            return list(DIY_REMUX_LABELS)
+        return None
+
+    def _table2_row_mpls_path(self, row: int) -> str:
+        labels = self._table2_labels_remux_or_diy()
+        if not labels or row < 0 or row >= self.table2.rowCount():
+            return ''
+        bdmv_col = labels.index('bdmv_index')
+        bi = self.table2.item(row, bdmv_col)
+        if not bi:
+            return ''
+        raw = str(bi.data(Qt.ItemDataRole.UserRole) or '').strip()
+        bdmv_to_mpls: dict[int, str] = {}
+        try:
+            bdmv_to_mpls = self._bdmv_to_first_main_mpls_from_table1()
+        except Exception:
+            pass
+        if not raw and str(bi.text() or '').strip():
+            try:
+                bix = int(bi.text().strip())
+            except Exception:
+                bix = 0
+            raw = str(bdmv_to_mpls.get(bix, '') or '').strip()
+        if not raw:
+            return ''
+        low = raw.replace('\\', '/').lower()
+        if low.endswith('.mpls'):
+            p = os.path.normpath(raw)
+            return p if os.path.isfile(p) else ''
+        cand = os.path.normpath(raw + ('.mpls' if not low.endswith('.mpls') else ''))
+        if os.path.isfile(cand):
+            return cand
+        try:
+            bix = int(bi.text().strip())
+        except Exception:
+            bix = 0
+        root = self._get_root_for_bdmv_index(bix)
+        if not root:
+            return ''
+        base = os.path.basename(raw)
+        stem = os.path.splitext(base)[0]
+        out = os.path.normpath(os.path.join(root, 'BDMV', 'PLAYLIST', stem + '.mpls'))
+        return out if os.path.isfile(out) else ''
 
     def _conversion_options_for_stream(self, stream: dict[str, object], is_mkvinfo: bool) -> list[str]:
         codec_type = str(stream.get('codec_type') or '').strip().lower()
@@ -581,6 +630,19 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 out[idx] = lang
             except Exception:
                 pass
+        return out
+
+    def _filter_streams_by_pid_lang(self, streams: list[dict[str, object]], pid_lang: dict[int, str]) -> list[dict[str, object]]:
+        """Keep only tracks whose PID exists in Chapter.pid_to_lang."""
+        if not isinstance(pid_lang, dict) or not pid_lang:
+            return list(streams or [])
+        out: list[dict[str, object]] = []
+        for s in streams or []:
+            if not isinstance(s, dict):
+                continue
+            pid = self._parse_stream_pid(s.get('pid'))
+            if (pid is not None) and (pid in pid_lang):
+                out.append(s)
         return out
 
     def _read_m2ts_track_info(self, m2ts_path: str) -> list[dict[str, object]]:
@@ -1433,6 +1495,20 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             except Exception:
                 pass
 
+    def _default_track_lists_for_mpls_path(self, mpls_path: str) -> Optional[tuple[list[str], list[str]]]:
+        """Same pipeline as `_ensure_default_track_config_for_main`: MPLS → first m2ts → default track ids."""
+        m2ts_path = self._get_first_m2ts_for_mpls(mpls_path)
+        if not m2ts_path:
+            return None
+        chapter = Chapter(mpls_path)
+        chapter.get_pid_to_language()
+        streams = self._read_m2ts_track_info(m2ts_path)
+        copy_audio_track, copy_sub_track = BluraySubtitle._default_track_selection_from_streams(
+            streams,
+            chapter.pid_to_lang
+        )
+        return copy_audio_track, copy_sub_track
+
     def _ensure_default_track_config_for_main(self, mpls_path: str):
         cfg = getattr(self, '_track_selection_config', None)
         if not isinstance(cfg, dict):
@@ -1441,16 +1517,10 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
         key = f'main::{os.path.normpath(mpls_path)}'
         if key in cfg:
             return
-        m2ts_path = self._get_first_m2ts_for_mpls(mpls_path)
-        if not m2ts_path:
+        pair = self._default_track_lists_for_mpls_path(mpls_path)
+        if not pair:
             return
-        chapter = Chapter(mpls_path)
-        chapter.get_pid_to_language()
-        streams = self._read_m2ts_track_info(m2ts_path)
-        copy_audio_track, copy_sub_track = BluraySubtitle._default_track_selection_from_streams(
-            streams,
-            chapter.pid_to_lang
-        )
+        copy_audio_track, copy_sub_track = pair
         cfg[key] = {'audio': copy_audio_track, 'subtitle': copy_sub_track}
 
     def _inherit_main_track_config_for_sp_key(self, bdmv_index: int, mpls_file: str, sp_key: str):
@@ -1465,26 +1535,14 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
         mpls_name = str(mpls_file or '').strip()
         if not mpls_name:
             return
-        main_mpls_path = self._get_main_mpls_path_for_bdmv_index(bdmv_index)
-        if main_mpls_path:
-            main_key = f'main::{os.path.normpath(main_mpls_path)}'
-            if main_key in cfg:
-                main_cfg = cfg.get(main_key) or {}
-                cfg[sp_key] = {
-                    'audio': list(main_cfg.get('audio') or []),
-                    'subtitle': list(main_cfg.get('subtitle') or []),
-                }
-                return
         playlist_dir = self._get_playlist_dir_for_bdmv_index(bdmv_index)
-        if playlist_dir:
-            mpls_path = os.path.normpath(os.path.join(playlist_dir, mpls_name))
-            alt_key = f'main::{mpls_path}'
-            if alt_key in cfg:
-                main_cfg = cfg.get(alt_key) or {}
-                cfg[sp_key] = {
-                    'audio': list(main_cfg.get('audio') or []),
-                    'subtitle': list(main_cfg.get('subtitle') or []),
-                }
+        if not playlist_dir:
+            return
+        mpls_path = os.path.normpath(os.path.join(playlist_dir, mpls_name))
+        pair = self._default_track_lists_for_mpls_path(mpls_path)
+        if not pair:
+            return
+        cfg[sp_key] = {'audio': list(pair[0]), 'subtitle': list(pair[1])}
 
     def on_edit_attachments_from_mkv_row(self, table: QTableWidget, row_index: int):
         try:
@@ -1560,7 +1618,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 ctype = str(st.get('codec_type') or '')
                 if ctype == 'audio':
                     audio.append(idx)
-                elif ctype == 'subtitle':
+                elif ctype in ('subtitle', 'subtitles'):
                     subtitle.append(idx)
             cfg[key] = {'audio': audio, 'subtitle': subtitle}
             conv_cfg = getattr(self, '_track_convert_config', {})
@@ -1581,15 +1639,36 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
 
     def on_edit_tracks_from_mpls(self, mpls_path: str):
         try:
+            sp_diag_log(f'edit_tracks_from_mpls begin mpls_path={mpls_path!s}')
             m2ts_path = self._get_first_m2ts_for_mpls(mpls_path)
             if not m2ts_path:
+                print_terminal_line(
+                    f'[edit tracks] table1 main MPLS: _get_first_m2ts_for_mpls returned empty '
+                    f'(mpls={mpls_path!s})'
+                )
                 QMessageBox.information(self, " ", "M2TS file not found")
                 return
+            if not os.path.isfile(m2ts_path):
+                print_terminal_line(
+                    f'[edit tracks] table1 main MPLS: m2ts path missing on disk m2ts_path={m2ts_path!s}'
+                )
             self._ensure_default_track_config_for_main(mpls_path)
             chapter = Chapter(mpls_path)
             chapter.get_pid_to_language()
             streams = self._read_m2ts_track_info(m2ts_path)
+            n_raw = len(streams)
             pid_lang = chapter.pid_to_lang
+            streams = self._filter_streams_by_pid_lang(streams, pid_lang)
+            n_filt = len(streams)
+            sp_diag_log(
+                f'edit_tracks_from_mpls streams raw={n_raw} after_pid_filter={n_filt} '
+                f'pid_lang_entries={len(pid_lang)} m2ts={m2ts_path!s}'
+            )
+            if not streams:
+                print_terminal_line(
+                    f'[edit tracks] table1 main MPLS: empty stream list after read/filter '
+                    f'(raw={n_raw} filtered={n_filt}) m2ts={m2ts_path!s} mpls={mpls_path!s}'
+                )
             key = f'main::{os.path.normpath(mpls_path)}'
             cfg = getattr(self, '_track_selection_config', {}).get(key, {})
             selected = set((cfg.get('audio') or []) + (cfg.get('subtitle') or []))
@@ -1615,7 +1694,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 ctype = str(s.get('codec_type') or '')
                 if ctype == 'audio':
                     audio.append(idx)
-                elif ctype == 'subtitle':
+                elif ctype in ('subtitle', 'subtitles'):
                     subtitle.append(idx)
             self._track_selection_config[key] = {'audio': audio, 'subtitle': subtitle}
             conv_cfg = getattr(self, '_track_convert_config', {})
@@ -1661,6 +1740,9 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             mpls_file = mpls_item.text().strip() if mpls_item and mpls_item.text() else ''
             m2ts_item = self.table3.item(row, ENCODE_SP_LABELS.index('m2ts_file'))
             m2ts_text = m2ts_item.text().strip() if m2ts_item and m2ts_item.text() else ''
+            sp_diag_log(
+                f'edit_tracks_from_sp_table row={row} bdmv={bdmv_index} mpls_file={mpls_file!r} m2ts_text={m2ts_text!r}'
+            )
             entry = {'bdmv_index': bdmv_index, 'mpls_file': mpls_file, 'm2ts_file': m2ts_text, 'output_name': ''}
             key = BluraySubtitle._sp_track_key_from_entry(entry)
             cfg = getattr(self, '_track_selection_config', None)
@@ -1682,12 +1764,32 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                     return
                 m2ts_path = self._get_first_m2ts_for_mpls(mpls_path)
                 if not m2ts_path:
+                    print_terminal_line(
+                        f'[edit tracks] table3 SP (mpls row): _get_first_m2ts_for_mpls empty '
+                        f'mpls_path={mpls_path!s}'
+                    )
                     QMessageBox.information(self, " ", "M2TS file not found")
                     return
+                if not os.path.isfile(m2ts_path):
+                    print_terminal_line(
+                        f'[edit tracks] table3 SP (mpls row): m2ts not on disk m2ts_path={m2ts_path!s}'
+                    )
                 chapter = Chapter(mpls_path)
                 chapter.get_pid_to_language()
                 streams = self._read_m2ts_track_info(m2ts_path)
+                n_raw = len(streams)
                 pid_lang = chapter.pid_to_lang
+                streams = self._filter_streams_by_pid_lang(streams, pid_lang)
+                n_filt = len(streams)
+                sp_diag_log(
+                    f'edit_tracks SP mpls row streams raw={n_raw} filtered={n_filt} '
+                    f'pid_lang={len(pid_lang)} m2ts={m2ts_path!s}'
+                )
+                if not streams:
+                    print_terminal_line(
+                        f'[edit tracks] table3 SP (mpls row): empty after read/filter raw={n_raw} filtered={n_filt} '
+                        f'm2ts={m2ts_path!s} mpls={mpls_path!s}'
+                    )
             else:
                 m2ts_files = self._split_m2ts_files(m2ts_text)
                 if not m2ts_files:
@@ -1700,11 +1802,23 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                     return
                 m2ts_path = os.path.normpath(os.path.join(stream_dir, m2ts_files[0]))
                 if not os.path.exists(m2ts_path):
+                    print_terminal_line(
+                        f'[edit tracks] table3 SP (orphan m2ts): file missing m2ts_path={m2ts_path!s}'
+                    )
                     QMessageBox.information(self, " ", f"M2TS file not found:\n{m2ts_path}")
                     return
                 streams = self._read_m2ts_track_info(m2ts_path)
+                n_raw = len(streams)
                 # No MPLS language map available for pure m2ts rows; keep PMT descriptor as reference.
                 pid_lang = self._pid_lang_from_m2ts_track_info(streams)
+                sp_diag_log(
+                    f'edit_tracks SP orphan row streams={n_raw} m2ts={m2ts_path!s} pid_lang={len(pid_lang)}'
+                )
+                if not streams:
+                    print_terminal_line(
+                        f'[edit tracks] table3 SP (orphan m2ts): _read_m2ts_track_info returned no streams '
+                        f'm2ts={m2ts_path!s}'
+                    )
 
             if key not in cfg:
                 self._inherit_main_track_config_for_sp_key(bdmv_index, mpls_file, key)
@@ -1735,7 +1849,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 ctype = str(st.get('codec_type') or '')
                 if ctype == 'audio':
                     audio.append(idx)
-                elif ctype == 'subtitle':
+                elif ctype in ('subtitle', 'subtitles'):
                     subtitle.append(idx)
             cfg[key] = {'audio': audio, 'subtitle': subtitle}
             conv_cfg = getattr(self, '_track_convert_config', {})

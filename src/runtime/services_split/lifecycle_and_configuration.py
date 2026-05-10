@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import QTableWidget, QToolButton
 from src.bdmv import Chapter
 from src.core import MKV_MERGE_PATH
 from src.exports.utils import get_time_str
+from .media_info_and_track_mapping import MediaInfoTrackMappingMixin
 from .service_base import BluraySubtitleServiceBase
 from ..services.cancelled import _Cancelled
 from ...core import DEFAULT_APPROX_EPISODE_DURATION_SECONDS, CURRENT_UI_LANGUAGE
@@ -220,25 +221,19 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
                     selected_mpls = os.path.join(bluray_folder, 'BDMV', 'PLAYLIST', mpls_file)
                     yield bluray_folder, Chapter(selected_mpls), selected_mpls[:-5]
 
-    def _resolve_disc_output_name(self, selected_mpls_no_ext: str) -> str:
-        cache = getattr(self, '_disc_output_name_cache', None)
-        if cache is None:
-            cache = {}
-            self._disc_output_name_cache = cache
-        if selected_mpls_no_ext in cache:
-            return cache[selected_mpls_no_ext]
-
+    @staticmethod
+    def resolve_disc_output_title(bdmv_root: str, selected_mpls_no_ext: str) -> str:
+        """Disc / volume title for remux ``-o`` and table2 ``output_name`` (same rules as ``_resolve_disc_output_name``)."""
         mpls_path = selected_mpls_no_ext + '.mpls'
         meta_folder = os.path.join(os.path.join(mpls_path[:-19], 'META', 'DL'))
         output_name = ''
-        # 1) Find first audio language from the first m2ts of selected main mpls.
         first_audio_lang = ''
         try:
             chapter = Chapter(mpls_path)
             if chapter.in_out_time:
                 first_m2ts = os.path.join(os.path.dirname(os.path.dirname(mpls_path)), 'STREAM',
                                           chapter.in_out_time[0][0] + '.m2ts')
-                mkvmerge_info = self._pid_lang_from_mkvmerge_json(first_m2ts)
+                mkvmerge_info = MediaInfoTrackMappingMixin._pid_lang_from_mkvmerge_json(first_m2ts)
                 if mkvmerge_info:
                     exe = MKV_MERGE_PATH if MKV_MERGE_PATH else 'mkvmerge'
                     p = subprocess.run(
@@ -273,7 +268,6 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
         if os.path.isdir(meta_folder):
             xml_files = sorted([f for f in os.listdir(meta_folder) if f.lower().endswith('.xml')])
             xml_map = {f.lower(): f for f in xml_files}
-            # 2) Prefer XML title matching first-audio language.
             lang_candidates = []
             if first_audio_lang:
                 lang_candidates.append(first_audio_lang)
@@ -292,7 +286,6 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
                             break
                 if output_name:
                     break
-            # 3) Fallback by system language preference.
             if not output_name:
                 try:
                     loc = locale.getlocale()
@@ -306,25 +299,33 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
                         output_name = _read_xml_title(os.path.join(meta_folder, f))
                         if output_name:
                             break
-            # 4) Fallback first xml title.
             if not output_name:
                 for f in xml_files:
                     output_name = _read_xml_title(os.path.join(meta_folder, f))
                     if output_name:
                         break
-        # 5) No xml title -> use outer folder name of selected bluray input path.
         if not output_name:
             try:
-                base = os.path.basename(os.path.normpath(str(getattr(self, 'bdmv_path', '') or '')).rstrip(os.sep))
+                base = os.path.basename(os.path.normpath(str(bdmv_root or '')).rstrip(os.sep))
                 output_name = base or os.path.split(mpls_path[:-24])[-1]
             except Exception:
                 output_name = os.path.split(mpls_path[:-24])[-1]
         char_map = {
             '?': '？', '*': '★', '<': '《', '>': '》', ':': '：', '"': "'", '/': '／', '\\': '／', '|': '￨'
         }
-        output_name = ''.join(char_map.get(char) or char for char in output_name)
-        cache[selected_mpls_no_ext] = output_name
-        return output_name
+        return ''.join(char_map.get(char) or char for char in output_name)
+
+    def _resolve_disc_output_name(self, selected_mpls_no_ext: str) -> str:
+        cache = getattr(self, '_disc_output_name_cache', None)
+        if cache is None:
+            cache = {}
+            self._disc_output_name_cache = cache
+        if selected_mpls_no_ext in cache:
+            return cache[selected_mpls_no_ext]
+        root = os.path.normpath(str(getattr(self, 'bdmv_path', '') or '')).rstrip(os.sep)
+        out = LifecycleConfigurationMixin.resolve_disc_output_title(root, selected_mpls_no_ext)
+        cache[selected_mpls_no_ext] = out
+        return out
 
     @staticmethod
     def _configuration_default_chapter_segments_checked(

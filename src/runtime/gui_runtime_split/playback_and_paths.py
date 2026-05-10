@@ -6,6 +6,7 @@ import sys
 import traceback
 from urllib.parse import urlparse, unquote
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QInputDialog, QToolButton, QMessageBox
 
 from src.core import ENCODE_SP_LABELS, ENCODE_LABELS
@@ -132,6 +133,16 @@ class PlaybackPathsMixin(BluraySubtitleGuiBase):
                 bdmv_index = int(bdmv_item.text().strip()) if bdmv_item and bdmv_item.text().strip() else 0
             except Exception:
                 bdmv_index = 0
+            if self._is_movie_mode() and bdmv_item:
+                sm = str(bdmv_item.data(Qt.ItemDataRole.UserRole) or '').strip()
+                if sm:
+                    mpls_path = sm if sm.lower().endswith('.mpls') else sm + '.mpls'
+                    mpls_path = os.path.normpath(mpls_path)
+                    if os.path.isfile(mpls_path):
+                        self._play_mpls_path(mpls_path)
+                        return
+                    QMessageBox.information(self, " ", f"MPLS file not found:\n{mpls_path}")
+                    return
             m2ts_item = self.table2.item(row_index, m2ts_col)
             m2ts_files = self._split_m2ts_files(m2ts_item.text() if m2ts_item else '')
             video_path = self._select_video_path(bdmv_index, m2ts_files)

@@ -9,9 +9,20 @@ from PyQt6.QtWidgets import QTableWidgetItem, QToolButton, QComboBox, QTableWidg
 
 from src.bdmv import Chapter
 from src.core import ENCODE_SP_LABELS, SUBTITLE_LABELS, MKV_LABELS, ENCODE_LABELS, REMUX_LABELS
-from src.exports.utils import get_index_to_m2ts_and_offset, get_time_str, print_exc_terminal
+from src.exports.utils import (
+    get_index_to_m2ts_and_offset,
+    get_time_str,
+    print_exc_terminal,
+    print_terminal_line,
+    sp_diag_log,
+    ui_perf_log,
+)
 from src.runtime.services import BluraySubtitle
 from .gui_base import BluraySubtitleGuiBase
+
+# Skip full M2TS duration probe for tiny STREAM orphans (menus / bumps); avoids hundreds of
+# synchronous parses on large discs during refresh_sp_table (UI thread).
+_SP_ORPHAN_M2TS_SKIP_DURATION_BYTES = 512 * 1024
 
 
 class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
@@ -41,6 +52,8 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
         bdmv_col = ENCODE_SP_LABELS.index('bdmv_index')
         mpls_col = ENCODE_SP_LABELS.index('mpls_file')
         m2ts_col = ENCODE_SP_LABELS.index('m2ts_file')
+        det_col = ENCODE_SP_LABELS.index('m2ts_file_detail')
+        type_col = ENCODE_SP_LABELS.index('m2ts_type')
         dur_col = ENCODE_SP_LABELS.index('duration')
         out_col = ENCODE_SP_LABELS.index('output_name')
         tracks_col = ENCODE_SP_LABELS.index('tracks')
@@ -73,13 +86,17 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             self.table3.setItem(target_row, bdmv_col, QTableWidgetItem(str(bdmv_index)))
             self.table3.setItem(target_row, mpls_col, QTableWidgetItem(mpls_file))
             self.table3.setItem(target_row, m2ts_col, QTableWidgetItem(','.join(m2ts_files)))
+            self.table3.setItem(target_row, det_col, QTableWidgetItem(''))
+            self.table3.setItem(target_row, type_col, QTableWidgetItem(''))
             self.table3.setItem(target_row, dur_col, QTableWidgetItem(get_time_str(duration)))
             if not self.table3.item(target_row, out_col):
                 self.table3.setItem(target_row, out_col, QTableWidgetItem(''))
+            self.table3.setItem(target_row, tracks_col, None)
             btn_tracks = QToolButton(self.table3)
             btn_tracks.setText(self.t('edit tracks'))
             btn_tracks.clicked.connect(self._on_edit_tracks_from_sp_table_clicked)
             self.table3.setCellWidget(target_row, tracks_col, btn_tracks)
+            self.table3.setItem(target_row, play_col, None)
             btn_play = QToolButton(self.table3)
             btn_play.setText(self.t('play'))
             btn_play.clicked.connect(self._on_play_sp_table_row_clicked)
@@ -218,6 +235,8 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     bdmv_col = ENCODE_SP_LABELS.index('bdmv_index')
                     mpls_col = ENCODE_SP_LABELS.index('mpls_file')
                     m2ts_col = ENCODE_SP_LABELS.index('m2ts_file')
+                    det_col = ENCODE_SP_LABELS.index('m2ts_file_detail')
+                    type_col = ENCODE_SP_LABELS.index('m2ts_type')
                     dur_col = ENCODE_SP_LABELS.index('duration')
                     out_col = ENCODE_SP_LABELS.index('output_name')
                     tracks_col = ENCODE_SP_LABELS.index('tracks')
@@ -232,6 +251,8 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     self.table3.setItem(row, bdmv_col, QTableWidgetItem(str(bdmv_index)))
                     self.table3.setItem(row, mpls_col, QTableWidgetItem(os.path.basename(mpls_path)))
                     self.table3.setItem(row, m2ts_col, QTableWidgetItem(','.join(m2ts_files)))
+                    self.table3.setItem(row, det_col, QTableWidgetItem(''))
+                    self.table3.setItem(row, type_col, QTableWidgetItem(''))
                     self.table3.setItem(row, dur_col, QTableWidgetItem(get_time_str(duration)))
                     out_item = QTableWidgetItem(out_name)
                     out_item.setData(Qt.ItemDataRole.UserRole + 3, suffix)
@@ -251,17 +272,20 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                         if not isinstance(cfg, dict):
                             self._track_selection_config = {}
                             cfg = self._track_selection_config
-                        self._inherit_main_track_config_for_sp_key(int(bdmv_index), os.path.basename(mpls_path), sp_key)
+                        self._inherit_main_track_config_for_sp_key(int(bdmv_index), os.path.basename(mpls_path),
+                                                                   sp_key)
                     except Exception:
                         pass
 
                     # Set tracks button
+                    self.table3.setItem(row, tracks_col, None)
                     btn_tracks = QToolButton(self.table3)
                     btn_tracks.setText(self.t('edit tracks'))
                     btn_tracks.clicked.connect(self._on_edit_tracks_from_sp_table_clicked)
                     self.table3.setCellWidget(row, tracks_col, btn_tracks)
 
                     # Set play button
+                    self.table3.setItem(row, play_col, None)
                     btn_play = QToolButton(self.table3)
                     btn_play.setText(self.t('play'))
                     btn_play.clicked.connect(self._on_play_sp_table_row_clicked)
@@ -388,6 +412,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
         duration_col = labels.index('ep_duration')
         bdmv_col = labels.index('bdmv_index')
         nrows = self.table2.rowCount()
+        ui_perf_log(f'_refresh_table2_m2ts_duration_from_widgets begin nrows={nrows}')
         prev_ui = prev_ui_m2ts_by_row or {}
         cfg_fill = cfg_fill_m2ts_by_row or {}
         bdmv_to_mpls = self._bdmv_to_first_main_mpls_from_table1()
@@ -486,6 +511,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     f'r{r}: prev_ui!=now | {diag_core} | '
                     f'hint: compare A(last UI) vs B(cfg fill) vs D(combo); B==D means refresh matched widgets'
                 )
+        ui_perf_log(f'_refresh_table2_m2ts_duration_from_widgets done nrows={nrows}')
 
     def _build_end_chapter_combo(self, rows: int, has_beginning: bool, start_value: int,
                                  selected_value: int = 0) -> QComboBox:
@@ -645,14 +671,30 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             chapter = Chapter(mpls_path)
             index_to_m2ts, _ = get_index_to_m2ts_and_offset(chapter)
             if not index_to_m2ts:
+                print_terminal_line(
+                    f'[_get_first_m2ts_for_mpls] empty index_to_m2ts (no play items?) mpls={mpls_path!s}'
+                )
                 return ''
             first_key = sorted(index_to_m2ts.keys())[0]
             m2ts_name = index_to_m2ts.get(first_key) or ''
             playlist_dir = os.path.dirname(mpls_path)
             bdmv_dir = os.path.dirname(playlist_dir)
             stream_dir = os.path.join(bdmv_dir, 'STREAM')
-            return os.path.normpath(os.path.join(stream_dir, str(m2ts_name)))
-        except Exception:
+            out = os.path.normpath(os.path.join(stream_dir, str(m2ts_name)))
+            sp_diag_log(
+                f'_get_first_m2ts_for_mpls mpls={mpls_path!s} first_clip={m2ts_name!s} -> {out!s} '
+                f'isfile={os.path.isfile(out)}'
+            )
+            if not os.path.isfile(out):
+                print_terminal_line(
+                    f'[_get_first_m2ts_for_mpls] STREAM file missing expected_path={out!s} mpls={mpls_path!s}'
+                )
+            return out
+        except Exception as ex:
+            print_terminal_line(
+                f'[_get_first_m2ts_for_mpls] exception mpls={mpls_path!s} {type(ex).__name__}: {ex}'
+            )
+            sp_diag_log(traceback.format_exc())
             return ''
 
     def _has_subtitle_in_table2(self) -> bool:
@@ -1169,8 +1211,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             if hasattr(self, 'table3'):
                 self.table3.setRowCount(0)
             return
-        if self._is_movie_mode():
-            return
+        ui_perf_log(f'refresh_sp_table enter fid={function_id}')
         try:
             if self.table3.columnCount() != len(ENCODE_SP_LABELS):
                 self.table3.setColumnCount(len(ENCODE_SP_LABELS))
@@ -1204,6 +1245,10 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     selected_main_by_bdmv[bdmv_index] = paths
             except Exception:
                 print_exc_terminal()
+            ui_perf_log(
+                f'refresh_sp_table disc_roots={len(disc_root_by_bdmv)} '
+                f'selected_main_lists={sum(len(v) for v in selected_main_by_bdmv.values())}'
+            )
 
             # Keep compatibility when table1 is unavailable by falling back to configuration.
             if not disc_root_by_bdmv:
@@ -1233,19 +1278,6 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     continue
                 selected_main_paths = list(dict.fromkeys(selected_main_by_bdmv.get(bdmv_index, [])))
                 selected_main_paths = [x for x in selected_main_paths if os.path.exists(x)]
-                mpls_path = selected_main_paths[0] if selected_main_paths else ''
-                try:
-                    main_m2ts_files: set[str] = set()
-                    for mp in selected_main_paths:
-                        chapter = Chapter(mp)
-                        index_to_m2ts, _ = get_index_to_m2ts_and_offset(chapter)
-                        for v in index_to_m2ts.values():
-                            vv = str(v or '').strip()
-                            if vv:
-                                main_m2ts_files.add(vv)
-                except Exception:
-                    print_exc_terminal()
-                    continue
                 selected_main_basename_set = {os.path.basename(x) for x in selected_main_paths}
 
                 try:
@@ -1254,16 +1286,23 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     print_exc_terminal()
                     playlist_files = []
 
+                # One pass: collect all m2ts referenced by any playlist, and build SP rows for
+                # non-main playlists (previously this scanned *.mpls twice with Chapter each).
+                all_mpls_m2ts: set[str] = set()
                 for mpls_file in sorted(playlist_files):
                     if not mpls_file.endswith('.mpls'):
                         continue
                     mpls_file_path = os.path.join(playlist_dir, mpls_file)
-                    if os.path.basename(mpls_file_path) in selected_main_basename_set:
-                        continue
                     try:
                         ch = Chapter(mpls_file_path)
                         idx_to_m2ts, _ = get_index_to_m2ts_and_offset(ch)
                     except Exception:
+                        continue
+                    for _, v in idx_to_m2ts.items():
+                        vv = str(v or '').strip()
+                        if vv:
+                            all_mpls_m2ts.add(vv)
+                    if os.path.basename(mpls_file_path) in selected_main_basename_set:
                         continue
                     ordered: list[str] = []
                     try:
@@ -1276,11 +1315,6 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     m2ts_files = ordered
                     m2ts_set = set(m2ts_files)
                     default_selected = True
-                    in_main_subset = bool(m2ts_set and m2ts_set.issubset(main_m2ts_files))
-                    if in_main_subset:
-                        default_selected = False
-                    elif len(m2ts_set) >= 3:
-                        default_selected = True
                     dur = ch.get_total_time()
                     try:
                         dur_for_select = float(ch.get_total_time_no_repeat())
@@ -1300,19 +1334,6 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     })
 
                 # Add remaining m2ts not referenced by any playlist mpls.
-                all_mpls_m2ts: set[str] = set()
-                for pf in playlist_files:
-                    if not pf.endswith('.mpls'):
-                        continue
-                    try:
-                        ch2 = Chapter(os.path.join(playlist_dir, pf))
-                        idx2, _ = get_index_to_m2ts_and_offset(ch2)
-                        for _, v in idx2.items():
-                            vv = str(v or '').strip()
-                            if vv:
-                                all_mpls_m2ts.add(vv)
-                    except Exception:
-                        continue
                 stream_folder = os.path.join(os.path.dirname(playlist_dir), 'STREAM')
                 if os.path.isdir(stream_folder):
                     try:
@@ -1324,10 +1345,18 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                             continue
                         if sf in all_mpls_m2ts:
                             continue
+                        m2ts_path = os.path.join(stream_folder, sf)
                         try:
-                            dur = BluraySubtitle._m2ts_duration_90k(os.path.join(stream_folder, sf)) / 90000.0
+                            sz = os.path.getsize(m2ts_path)
                         except Exception:
+                            sz = 0
+                        if sz < _SP_ORPHAN_M2TS_SKIP_DURATION_BYTES:
                             dur = 0.0
+                        else:
+                            try:
+                                dur = BluraySubtitle._m2ts_duration_90k(m2ts_path) / 90000.0
+                            except Exception:
+                                dur = 0.0
                         entries.append({
                             'bdmv_index': bdmv_index,
                             'mpls_file': '',
@@ -1340,6 +1369,8 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                             'disabled': False,
                             'special': '',
                         })
+
+            ui_perf_log(f'refresh_sp_table entries built len={len(entries)}')
 
             def _sp_entry_sort_key(e: dict[str, object]):
                 return (
@@ -1370,6 +1401,8 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                         by_key[k] = pe
                 entries = sorted(by_key.values(), key=_sp_entry_sort_key)
 
+            ui_perf_log(f'refresh_sp_table after sort/preserve rows_out={len(entries)}')
+
             old_sorting = self.table3.isSortingEnabled()
             old_current_row = self.table3.currentRow()
             old_current_col = self.table3.currentColumn()
@@ -1377,6 +1410,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             old_v_scroll = self.table3.verticalScrollBar().value() if self.table3.verticalScrollBar() else 0
             self.table3.setSortingEnabled(False)
             try:
+                ui_perf_log(f'refresh_sp_table fill_table3 begin prev_rows={self.table3.rowCount()}')
                 self._updating_sp_table = True
                 old_name_map: dict[tuple[int, str, str], tuple[str, Optional[str], str]] = {}
                 row_cache: dict[tuple[int, str, str], dict[str, object]] = {}
@@ -1385,6 +1419,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                 bdmv_col = ENCODE_SP_LABELS.index('bdmv_index')
                 mpls_col = ENCODE_SP_LABELS.index('mpls_file')
                 m2ts_col = ENCODE_SP_LABELS.index('m2ts_file')
+                det_col = ENCODE_SP_LABELS.index('m2ts_file_detail')
                 type_col = ENCODE_SP_LABELS.index('m2ts_type')
                 dur_col = ENCODE_SP_LABELS.index('duration')
                 out_col = ENCODE_SP_LABELS.index('output_name')
@@ -1439,21 +1474,9 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     self.table3.setItem(i, bdmv_col, QTableWidgetItem(str(bdmv_index)))
                     self.table3.setItem(i, mpls_col, QTableWidgetItem(mpls_file))
                     self.table3.setItem(i, m2ts_col, QTableWidgetItem(','.join(m2ts_files)))
+                    self.table3.setItem(i, det_col, QTableWidgetItem(''))
                     self.table3.setItem(i, type_col, QTableWidgetItem(m2ts_type))
                     self.table3.setItem(i, dur_col, QTableWidgetItem(get_time_str(dur)))
-                    tracks_col = ENCODE_SP_LABELS.index('tracks')
-                    btn_tracks = QToolButton(self.table3)
-                    btn_tracks.setText(self.t('edit tracks'))
-                    btn_tracks.clicked.connect(self._on_edit_tracks_from_sp_table_clicked)
-                    btn_tracks.setEnabled(not is_disabled)
-                    self.table3.setCellWidget(i, tracks_col, btn_tracks)
-                    play_col = ENCODE_SP_LABELS.index('play') if 'play' in ENCODE_SP_LABELS else -1
-                    if play_col >= 0:
-                        btn_play = QToolButton(self.table3)
-                        btn_play.setText(self.t('play'))
-                        btn_play.clicked.connect(self._on_play_sp_table_row_clicked)
-                        btn_play.setEnabled(not is_disabled)
-                        self.table3.setCellWidget(i, play_col, btn_play)
                     key = (bdmv_index, mpls_file, ','.join(m2ts_files))
                     prev = old_name_map.get(key)
                     prev_text = prev[0] if prev else ''
@@ -1500,10 +1523,28 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                         out_item.setData(Qt.ItemDataRole.UserRole + 2, effective_special)
                         out_item.setData(Qt.ItemDataRole.UserRole + 3, out_item_suffix)
                     self.table3.setItem(i, out_col, out_item)
+                    tracks_col = ENCODE_SP_LABELS.index('tracks')
+                    self.table3.setItem(i, tracks_col, None)
+                    btn_tracks = QToolButton(self.table3)
+                    btn_tracks.setText(self.t('edit tracks'))
+                    btn_tracks.clicked.connect(self._on_edit_tracks_from_sp_table_clicked)
+                    btn_tracks.setEnabled(not is_disabled)
+                    self.table3.setCellWidget(i, tracks_col, btn_tracks)
+                    play_col = ENCODE_SP_LABELS.index('play') if 'play' in ENCODE_SP_LABELS else -1
+                    if play_col >= 0:
+                        self.table3.setItem(i, play_col, None)
+                        btn_play = QToolButton(self.table3)
+                        btn_play.setText(self.t('play'))
+                        btn_play.clicked.connect(self._on_play_sp_table_row_clicked)
+                        btn_play.setEnabled(not is_disabled)
+                        self.table3.setCellWidget(i, play_col, btn_play)
                     if function_id == 4:
                         vpy_col = ENCODE_SP_LABELS.index('vpy_path')
                         edit_col = ENCODE_SP_LABELS.index('edit_vpy')
                         preview_col = ENCODE_SP_LABELS.index('preview_script')
+                        self.table3.setItem(i, vpy_col, None)
+                        self.table3.setItem(i, edit_col, None)
+                        self.table3.setItem(i, preview_col, None)
                         self.table3.setCellWidget(i, vpy_col, self.create_vpy_path_widget(parent=self.table3))
                         btn = QToolButton(self.table3)
                         btn.setText(self.t('edit'))
@@ -1521,14 +1562,23 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                                 continue
                             self.table3.setItem(i, col, None)
                             self.table3.setCellWidget(i, col, None)
+                ui_perf_log(f'refresh_sp_table fill_table3 done rows={len(entries)}')
                 self._recompute_sp_output_names()
+                ui_perf_log('refresh_sp_table after _recompute_sp_output_names (1)')
                 try:
                     self._sync_chapter_checkbox_sp_rows_all_volumes(configuration)
                 except Exception:
                     print_exc_terminal()
+                ui_perf_log('refresh_sp_table after _sync_chapter_checkbox_sp_rows_all_volumes')
                 self._recompute_sp_output_names()
+                ui_perf_log('refresh_sp_table after _recompute_sp_output_names (2)')
                 self.table3.resizeColumnsToContents()
                 self._resize_table_columns_for_language(self.table3)
+                try:
+                    self._reset_table3_column_layout()
+                except Exception:
+                    pass
+                ui_perf_log('refresh_sp_table after table3 resizeColumnsToContents')
                 try:
                     if 0 <= old_current_row < self.table3.rowCount() and 0 <= old_current_col < self.table3.columnCount():
                         self.table3.setCurrentCell(old_current_row, old_current_col)
@@ -1543,10 +1593,12 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             finally:
                 self._updating_sp_table = False
                 self.table3.setSortingEnabled(old_sorting)
+            ui_perf_log('refresh_sp_table before _start_sp_table_scan')
             try:
                 self._start_sp_table_scan()
             except Exception:
                 pass
+            ui_perf_log('refresh_sp_table after _start_sp_table_scan')
         except Exception:
             print_exc_terminal()
             self.table3.setRowCount(0)

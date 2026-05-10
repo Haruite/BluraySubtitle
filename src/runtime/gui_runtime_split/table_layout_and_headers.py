@@ -9,6 +9,41 @@ from .gui_base import BluraySubtitleGuiBase
 
 
 class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
+    def _apply_hidden_m2ts_file_detail_columns(self):
+        """Hide m2ts_file_detail on table2/table3 (internal timeline detail; not shown in UI)."""
+        try:
+            fid = self.get_selected_function_id() if hasattr(self, 'get_selected_function_id') else 0
+            if hasattr(self, 'table2') and self.table2:
+                enc_remux = fid == 4 and getattr(self, '_encode_input_mode', 'bdmv') == 'remux'
+                if fid == 3:
+                    t2labels = list(REMUX_LABELS)
+                elif enc_remux:
+                    t2labels = list(ENCODE_REMUX_LABELS)
+                elif fid == 4:
+                    t2labels = list(ENCODE_LABELS)
+                elif fid == 5:
+                    t2labels = list(DIY_REMUX_LABELS)
+                else:
+                    t2labels = []
+                if t2labels and 'm2ts_file_detail' in t2labels:
+                    c = t2labels.index('m2ts_file_detail')
+                    if c < self.table2.columnCount():
+                        self.table2.setColumnHidden(c, True)
+            if hasattr(self, 'table3') and self.table3:
+                remux_sp = fid == 4 and getattr(self, '_encode_input_mode', 'bdmv') == 'remux'
+                if fid == 5:
+                    t3labels = list(DIY_SP_LABELS)
+                elif remux_sp:
+                    t3labels = list(ENCODE_REMUX_SP_LABELS)
+                else:
+                    t3labels = list(ENCODE_SP_LABELS)
+                if t3labels and 'm2ts_file_detail' in t3labels:
+                    c = t3labels.index('m2ts_file_detail')
+                    if c < self.table3.columnCount():
+                        self.table3.setColumnHidden(c, True)
+        except Exception:
+            pass
+
     def _set_table_headers(self, table: QTableWidget, keys: list[str]):
         try:
             display_keys = list(keys)
@@ -55,8 +90,11 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
                 if function_id == 5:
                     labels = DIY_SP_LABELS
                 else:
-                    labels = ENCODE_REMUX_SP_LABELS if getattr(self, '_encode_input_mode',
-                                                               'bdmv') == 'remux' else ENCODE_SP_LABELS
+                    # Same rule as _resize_table_columns_for_language / refresh_sp_table: remux SP schema is only for
+                    # encode (fid 4) + remux input — not for episode remux (fid 3). Wrong labels here shift headers
+                    # vs logical columns (13 ENCODE_SP_* vs 9 ENCODE_REMUX_SP_*), so output_name appears under tracks.
+                    remux_sp = function_id == 4 and getattr(self, '_encode_input_mode', 'bdmv') == 'remux'
+                    labels = ENCODE_REMUX_SP_LABELS if remux_sp else ENCODE_SP_LABELS
                 self._set_table_headers(self.table3, labels)
                 self._resize_table_columns_for_language(self.table3)
                 self._scroll_table_h_to_right(self.table3)
@@ -118,22 +156,23 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
         try:
             if table is getattr(self, 'table2', None):
                 function_id = self.get_selected_function_id()
+                labels: list[str] = []
+                col = -1
                 if function_id == 3:
+                    labels = list(REMUX_LABELS)
                     col = REMUX_LABELS.index('output_name')
-                    labels = REMUX_LABELS
                 elif function_id == 4:
-                    col = ENCODE_LABELS.index('output_name')
-                    labels = ENCODE_LABELS
+                    labels = list(
+                        ENCODE_REMUX_LABELS if getattr(self, '_encode_input_mode', 'bdmv') == 'remux' else ENCODE_LABELS
+                    )
+                    col = labels.index('output_name') if 'output_name' in labels else -1
                 elif function_id == 5:
+                    labels = list(DIY_REMUX_LABELS)
                     col = -1
-                    labels = DIY_REMUX_LABELS
-                else:
-                    col = -1
-                    labels = []
+                header = table.horizontalHeader()
                 if col >= 0:
-                    header = table.horizontalHeader()
                     header.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
-                    fixed_limit = 160
+                    fixed_limit = 280
                     fm_h = QFontMetrics(header.font())
                     header_item = table.horizontalHeaderItem(col)
                     max_w = fm_h.horizontalAdvance(header_item.text()) if header_item and header_item.text() else 0
@@ -144,9 +183,12 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
                             max_w = max(max_w, fm_c.horizontalAdvance(it.text()))
                     desired = min(fixed_limit, int(max_w + 24))
                     table.setColumnWidth(col, max(60, desired))
+                if labels and 'm2ts_file_detail' in labels:
+                    det_col = labels.index('m2ts_file_detail')
+                    header.setSectionResizeMode(det_col, QHeaderView.ResizeMode.Fixed)
+                    table.setColumnWidth(det_col, 280)
                 if labels and 'play' in labels:
                     play_col = labels.index('play')
-                    header = table.horizontalHeader()
                     header.setSectionResizeMode(play_col, QHeaderView.ResizeMode.Fixed)
                     table.setColumnWidth(play_col, 68)
             elif table is getattr(self, 'table3', None):
@@ -159,7 +201,7 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
                     labels = ENCODE_REMUX_SP_LABELS
                     col_output = labels.index('output_name')
                     header.setSectionResizeMode(col_output, QHeaderView.ResizeMode.Fixed)
-                    fixed_limit = 160
+                    fixed_limit = 280
                     fm_h = QFontMetrics(header.font())
                     header_item = table.horizontalHeaderItem(col_output)
                     max_w = fm_h.horizontalAdvance(header_item.text()) if header_item and header_item.text() else 0
@@ -169,7 +211,7 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
                         if it and it.text():
                             max_w = max(max_w, fm_c.horizontalAdvance(it.text()))
                     desired = min(fixed_limit, int(max_w + 24))
-                    table.setColumnWidth(col_output, max(60, desired))
+                    table.setColumnWidth(col_output, max(160, desired))
 
                     col_play = labels.index('play')
                     header.setSectionResizeMode(col_play, QHeaderView.ResizeMode.Fixed)
@@ -182,7 +224,7 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
                     # Keep output name readable but bounded.
                     col_output = ENCODE_SP_LABELS.index('output_name')
                     header.setSectionResizeMode(col_output, QHeaderView.ResizeMode.Fixed)
-                    fixed_limit = 160
+                    fixed_limit = 280
                     fm_h = QFontMetrics(header.font())
                     header_item = table.horizontalHeaderItem(col_output)
                     max_w = fm_h.horizontalAdvance(header_item.text()) if header_item and header_item.text() else 0
@@ -192,14 +234,24 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
                         if it and it.text():
                             max_w = max(max_w, fm_c.horizontalAdvance(it.text()))
                     desired = min(fixed_limit, int(max_w + 24))
-                    table.setColumnWidth(col_output, max(60, desired))
+                    # Minimum width avoids zero/narrow output column (path text painting into tracks on Windows).
+                    table.setColumnWidth(col_output, max(160, desired))
 
                     # Make m2ts_file column fixed-width and wrap long file lists.
                     col_m2ts = ENCODE_SP_LABELS.index('m2ts_file')
                     header.setSectionResizeMode(col_m2ts, QHeaderView.ResizeMode.Fixed)
                     table.setColumnWidth(col_m2ts, 220)
-                    table.setWordWrap(True)
-                    table.resizeRowsToContents()
+                    try:
+                        col_m2ts_d = ENCODE_SP_LABELS.index('m2ts_file_detail')
+                        header.setSectionResizeMode(col_m2ts_d, QHeaderView.ResizeMode.Fixed)
+                        table.setColumnWidth(col_m2ts_d, 280)
+                    except Exception:
+                        pass
+                    table.setWordWrap(False)
+        except Exception:
+            pass
+        try:
+            self._apply_hidden_m2ts_file_detail_columns()
         except Exception:
             pass
 
@@ -233,6 +285,21 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
             current_visual_index = header.visualIndex(logical_index)
             if current_visual_index != desired_visual_index:
                 header.moveSection(current_visual_index, desired_visual_index)
+
+    def _reset_table3_column_layout(self):
+        """Logical column index must match header label; hidden/detail columns + resize can desync on Windows."""
+        if not hasattr(self, 'table3') or not self.table3:
+            return
+        t = self.table3
+        hdr = t.horizontalHeader()
+        hdr.setSectionsMovable(False)
+        n = int(t.columnCount())
+        if n <= 1:
+            return
+        try:
+            self._set_table_column_visual_order(t, list(range(n)))
+        except Exception:
+            pass
 
     def _set_table2_default_column_order(self):
         self._set_table_column_visual_order(self.table2, list(range(self.table2.columnCount())))
