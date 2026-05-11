@@ -875,11 +875,17 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
 
                         index_to_m2ts, _index_to_offset = get_index_to_m2ts_and_offset(chapter)
                         try:
-                            rows = sum(map(len, chapter.mark_info.values()))
-                            m2ts_files = sorted(
-                                list(set(index_to_m2ts[i] for i in range(1, rows + 1) if i in index_to_m2ts)))
+                            m2ts_files = list(dict.fromkeys(
+                                [f'{stem}.m2ts' for stem, _, _ in (chapter.in_out_time or [])]))
                         except Exception:
-                            m2ts_files = sorted(list(set(index_to_m2ts.values())))
+                            m2ts_files = []
+                        if not m2ts_files:
+                            try:
+                                rows = sum(map(len, chapter.mark_info.values()))
+                                m2ts_files = list(dict.fromkeys(
+                                    index_to_m2ts[i] for i in range(1, rows + 1) if i in index_to_m2ts))
+                            except Exception:
+                                m2ts_files = list(dict.fromkeys(index_to_m2ts[k] for k in index_to_m2ts))
                         self.table2.setItem(row_i, m2ts_col, QTableWidgetItem(', '.join(m2ts_files)))
 
                         prev_lang = prev_lang_by_bdmv.get(bdmv_index, '').strip()
@@ -960,7 +966,23 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                         j1 = max(1, min(j1, rows + 1))
                         j2 = max(j1 + 1, min(j2, rows + 1))
                         index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(chapter)
-                        m2ts_files = sorted(list(set([index_to_m2ts[i] for i in range(j1, j2) if i in index_to_m2ts])))
+                        start_off = float(index_to_offset.get(j1, chapter.get_total_time()))
+                        end_off = float(index_to_offset.get(j2, chapter.get_total_time()))
+                        if end_off < start_off:
+                            end_off = start_off
+                        sm = str(con.get('selected_mpls') or '').strip()
+                        mpls_full = sm if sm.lower().endswith('.mpls') else (f'{sm}.mpls' if sm else '')
+                        m2ts_files: list[str] = []
+                        if mpls_full and os.path.isfile(mpls_full):
+                            try:
+                                m2ts_files = list(
+                                    BluraySubtitle.m2ts_basenames_from_mpls_timeline_window(
+                                        mpls_full, start_off, end_off))
+                            except Exception:
+                                m2ts_files = []
+                        if not m2ts_files:
+                            m2ts_files = list(dict.fromkeys(
+                                [index_to_m2ts[i] for i in range(j1, j2) if i in index_to_m2ts]))
                         cfg_fill_m2ts_by_row[int(sub_index)] = ', '.join(m2ts_files)
                         try:
                             has_beginning = bool(float(index_to_offset.get(1, 0.0) or 0.0) > 0.001)
@@ -978,10 +1000,6 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                         chapter_combo._prev_start_value = int(
                             chapter_combo.currentData() or (chapter_combo.currentIndex() + 1))
                         chapter_combo.currentIndexChanged.connect(partial(self.on_chapter_combo, sub_index))
-                        start_off = float(index_to_offset.get(j1, chapter.get_total_time()))
-                        end_off = float(index_to_offset.get(j2, chapter.get_total_time()))
-                        if end_off < start_off:
-                            end_off = start_off
                         duration = end_off - start_off
                         duration = get_time_str(duration)
                         self.table2.setCellWidget(sub_index, start_col, chapter_combo)

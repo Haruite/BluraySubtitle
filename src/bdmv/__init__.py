@@ -1,6 +1,9 @@
 """Blu-ray parser layer (migration stage)."""
 
 from .clpi import CLPI
+from .clpi import clpi_path_from_m2ts_path
+from .clpi import pid_to_lang_from_clpi_path
+from .clpi import pid_to_lang_from_m2ts_path
 from .chapter import Chapter
 from .core import InfoDict
 from .core import pack_bytes
@@ -41,6 +44,9 @@ __all__ = [
     "PlayListMarkItem",
     "MPLS",
     "CLPI",
+    "clpi_path_from_m2ts_path",
+    "pid_to_lang_from_clpi_path",
+    "pid_to_lang_from_m2ts_path",
     "Chapter",
 ]
 

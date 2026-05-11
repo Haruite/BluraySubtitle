@@ -14,7 +14,7 @@ import numpy as np
 import pycountry
 import soundfile
 
-from src.bdmv import M2TS, Chapter
+from src.bdmv import M2TS, Chapter, pid_to_lang_from_m2ts_path
 from src.core import FDK_AAC_PATH, FFPROBE_PATH, FFMPEG_PATH, FLAC_PATH, FLAC_THREADS, MKV_MERGE_PATH, MKV_PROP_EDIT_PATH, \
     find_mkvtoolinx, get_mkvtoolnix_ui_language, mkvtoolnix_ui_language_arg
 from src.core import settings as core_settings
@@ -133,6 +133,8 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
 
         def _get_lang(stream_info: dict[str, object]) -> str:
             pid = _parse_pid(stream_info.get('pid'))
+            if pid is None:
+                pid = _parse_pid(stream_info.get('id'))
             if pid is not None and pid in pid_lang:
                 return str(pid_lang.get(pid, 'und') or 'und')
             try:
@@ -1251,6 +1253,21 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         return ','.join(parts)
 
     @staticmethod
+    def m2ts_file_basenames_from_mpls_playlist(mpls_path: str) -> list[str]:
+        """
+        Playlist play-item order: each ``Chapter(mpls_path).in_out_time`` row contributes ``<clip>.m2ts``
+        from the tuple's clip-information filename (first field).
+        """
+        mp = str(mpls_path or '').strip()
+        if not mp or not mp.lower().endswith('.mpls') or not os.path.isfile(mp):
+            return []
+        try:
+            rows = list(Chapter(mp).in_out_time or [])
+        except Exception:
+            return []
+        return list(dict.fromkeys([f'{fname}.m2ts' for fname, _, _ in rows]))
+
+    @staticmethod
     def m2ts_file_detail_for_standalone_m2ts_paths(m2ts_paths: list[str]) -> str:
         parts: list[str] = []
         for p in m2ts_paths or []:
@@ -1321,6 +1338,21 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         result = ','.join(parts)
         _MPLS_TIMELINE_DETAIL_CACHE[ck] = result
         return result
+
+    @staticmethod
+    def m2ts_basenames_from_mpls_timeline_window(mpls_path: str, w0: float, w1: float) -> list[str]:
+        """Ordered unique ``*.m2ts`` names used by ``m2ts_file_detail_for_mpls_timeline_window`` for [w0,w1)."""
+        detail = MediaInfoTrackMappingMixin.m2ts_file_detail_for_mpls_timeline_window(mpls_path, w0, w1)
+        out: list[str] = []
+        for seg in (detail or '').split(','):
+            seg = seg.strip()
+            if not seg:
+                continue
+            head = seg.split('(', 1)[0].strip()
+            bn = os.path.basename(head)
+            if bn.lower().endswith('.m2ts') and bn not in out:
+                out.append(bn)
+        return out
 
     @staticmethod
     def _mkvmerge_track_order_arg(mapped_ids: list[int]) -> str:
@@ -2779,7 +2811,16 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             streams = self._read_m2ts_track_info(probe_path)
         else:
             streams = _svc_cls()._read_media_streams(probe_path)
-        pid_lang = pid_to_lang or {}
+        pid_lang = pid_to_lang if isinstance(pid_to_lang, dict) else {}
+        if (
+                not pid_lang
+                and str(probe_path).lower().endswith('.m2ts')
+                and os.path.isfile(probe_path)
+        ):
+            try:
+                pid_lang = pid_to_lang_from_m2ts_path(probe_path)
+            except Exception:
+                pid_lang = {}
         if not pid_lang:
             out: dict[int, str] = {}
             for s in streams or []:

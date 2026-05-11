@@ -34,13 +34,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             self._set_table_headers(self.table3, ENCODE_SP_LABELS)
         try:
             chapter = Chapter(mpls_path)
-            idx_to_m2ts, _ = get_index_to_m2ts_and_offset(chapter)
-            ordered: list[str] = []
-            for k in sorted(idx_to_m2ts.keys()):
-                v = str(idx_to_m2ts.get(k) or '').strip()
-                if v and v not in ordered:
-                    ordered.append(v)
-            m2ts_files = ordered
+            m2ts_files = list(BluraySubtitle.m2ts_file_basenames_from_mpls_playlist(mpls_path))
             duration = float(chapter.get_total_time())
         except Exception:
             return
@@ -480,11 +474,30 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(chapter)
             idx_range = list(range(j1, j2))
             missing_idx = [i for i in idx_range if i not in index_to_m2ts]
-            m2ts_files = sorted(list(set([index_to_m2ts[i] for i in idx_range if i in index_to_m2ts])))
             start_off = float(index_to_offset.get(j1, chapter.get_total_time()))
             end_off = float(index_to_offset.get(j2, chapter.get_total_time()))
             if end_off < start_off:
                 end_off = start_off
+            movie_style = not sc.isEnabled()
+            if movie_style:
+                m2ts_files = list(dict.fromkeys(
+                    [f'{stem}.m2ts' for stem, _, _ in (chapter.in_out_time or [])]))
+                if not m2ts_files:
+                    m2ts_files = list(dict.fromkeys(index_to_m2ts[k] for k in index_to_m2ts))
+            else:
+                mpls_key = str(mpls_no_ext or '').strip()
+                mpls_full = mpls_key if mpls_key.lower().endswith('.mpls') else f'{mpls_key}.mpls'
+                m2ts_files = []
+                if mpls_full and os.path.isfile(mpls_full):
+                    try:
+                        m2ts_files = list(
+                            BluraySubtitle.m2ts_basenames_from_mpls_timeline_window(
+                                mpls_full, start_off, end_off))
+                    except Exception:
+                        m2ts_files = []
+                if not m2ts_files:
+                    m2ts_files = list(dict.fromkeys(
+                        [index_to_m2ts[i] for i in idx_range if i in index_to_m2ts]))
             new_dur_str = get_time_str(end_off - start_off)
             new_m2_str = ', '.join(m2ts_files)
             self.table2.setItem(r, m2ts_col, QTableWidgetItem(new_m2_str))
@@ -1297,24 +1310,14 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     mpls_file_path = os.path.join(playlist_dir, mpls_file)
                     try:
                         ch = Chapter(mpls_file_path)
-                        idx_to_m2ts, _ = get_index_to_m2ts_and_offset(ch)
+                        m2ts_files = list(BluraySubtitle.m2ts_file_basenames_from_mpls_playlist(mpls_file_path))
                     except Exception:
                         continue
-                    for _, v in idx_to_m2ts.items():
-                        vv = str(v or '').strip()
-                        if vv:
-                            all_mpls_m2ts.add(vv)
+                    for bn in m2ts_files:
+                        if bn:
+                            all_mpls_m2ts.add(bn)
                     if os.path.basename(mpls_file_path) in selected_main_basename_set:
                         continue
-                    ordered: list[str] = []
-                    try:
-                        for k in sorted(idx_to_m2ts.keys()):
-                            v = str(idx_to_m2ts.get(k) or '').strip()
-                            if v and v not in ordered:
-                                ordered.append(v)
-                    except Exception:
-                        ordered = [str(x).strip() for x in idx_to_m2ts.values() if str(x).strip()]
-                    m2ts_files = ordered
                     m2ts_set = set(m2ts_files)
                     default_selected = True
                     dur = ch.get_total_time()

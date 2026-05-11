@@ -10,7 +10,7 @@ from typing import Any, Callable, Optional
 
 from PyQt6.QtWidgets import QTableWidget
 
-from src.bdmv import Chapter, M2TS
+from src.bdmv import Chapter, M2TS, pid_to_lang_from_m2ts_path
 from src.core import CONFIGURATION, FFMPEG_PATH, MKV_MERGE_PATH, MKV_EXTRACT_PATH, mkvtoolnix_ui_language_arg, \
     MKV_PROP_EDIT_PATH
 from src.domain import MKV
@@ -1331,9 +1331,14 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                     pid_to_lang = {}
             if (not pid_to_lang) and src_path.lower().endswith('.m2ts'):
                 try:
-                    pid_to_lang = self._pid_lang_from_m2ts_track_info(self._read_m2ts_track_info(src_path))
+                    pid_to_lang = pid_to_lang_from_m2ts_path(src_path)
                 except Exception:
                     pid_to_lang = {}
+                if not pid_to_lang:
+                    try:
+                        pid_to_lang = self._pid_lang_from_m2ts_track_info(self._read_m2ts_track_info(src_path))
+                    except Exception:
+                        pid_to_lang = {}
             copy_audio_track, copy_sub_track = self._select_tracks_for_source(
                 src_path,
                 pid_to_lang,

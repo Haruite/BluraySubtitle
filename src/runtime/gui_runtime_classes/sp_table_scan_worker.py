@@ -4,7 +4,7 @@ import traceback
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
-from src.bdmv import M2TS, Chapter
+from src.bdmv import M2TS, Chapter, pid_to_lang_from_m2ts_path
 from src.exports.utils import print_tb_string_terminal
 from src.runtime.services import BluraySubtitle
 
@@ -131,11 +131,16 @@ class SpTableScanWorker(QObject):
                             except Exception:
                                 streams = []
                             try:
+                                pid_to_lang = {}
+                                try:
+                                    pid_to_lang = pid_to_lang_from_m2ts_path(m2ts_paths[0])
+                                except Exception:
+                                    pid_to_lang = {}
                                 if select_all:
                                     a = [str(x.get('index', '')).strip() for x in streams if str(x.get('codec_type') or '') == 'audio' and str(x.get('index', '')).strip() != '']
                                     s = [str(x.get('index', '')).strip() for x in streams if str(x.get('codec_type') or '') in ('subtitle', 'subtitles') and str(x.get('index', '')).strip() != '']
                                 else:
-                                    a, s = BluraySubtitle._default_track_selection_from_streams(streams, {})
+                                    a, s = BluraySubtitle._default_track_selection_from_streams(streams, pid_to_lang)
                                 tracks_payload = {'audio': a, 'subtitle': s}
                             except Exception:
                                 tracks_payload = {}

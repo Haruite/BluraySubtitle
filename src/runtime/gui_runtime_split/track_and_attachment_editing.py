@@ -15,7 +15,7 @@ from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import QMessageBox, QDialog, QVBoxLayout, QPlainTextEdit, QWidget, QHBoxLayout, QPushButton, \
     QLabel, QTableWidget, QLineEdit, QTableWidgetItem, QToolButton, QFileDialog, QHeaderView, QComboBox
 
-from src.bdmv import Chapter
+from src.bdmv import Chapter, pid_to_lang_from_m2ts_path
 from src.core import find_mkvtoolinx, MKV_EXTRACT_PATH, MKV_PROP_EDIT_PATH, mkvtoolnix_ui_language_arg, FFPROBE_PATH, \
     MKV_INFO_PATH, MKV_MERGE_PATH, get_mkvtoolnix_ui_language, ENCODE_SP_LABELS, REMUX_LABELS, DIY_REMUX_LABELS
 from src.exports.utils import mkv_codec_id_is_dts_family, print_terminal_line, sp_diag_log
@@ -1302,6 +1302,8 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                         v = 'und'
                         try:
                             pid = self._parse_stream_pid(s.get('pid'))
+                            if pid is None:
+                                pid = self._parse_stream_pid(s.get('id'))
                             if pid is not None and pid in pid_to_lang:
                                 v = pid_to_lang.get(pid, 'und')
                             else:
@@ -1809,8 +1811,12 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                     return
                 streams = self._read_m2ts_track_info(m2ts_path)
                 n_raw = len(streams)
-                # No MPLS language map available for pure m2ts rows; keep PMT descriptor as reference.
-                pid_lang = self._pid_lang_from_m2ts_track_info(streams)
+                try:
+                    pid_lang = dict(pid_to_lang_from_m2ts_path(m2ts_path) or {})
+                except Exception:
+                    pid_lang = {}
+                if not pid_lang:
+                    pid_lang = self._pid_lang_from_m2ts_track_info(streams)
                 sp_diag_log(
                     f'edit_tracks SP orphan row streams={n_raw} m2ts={m2ts_path!s} pid_lang={len(pid_lang)}'
                 )

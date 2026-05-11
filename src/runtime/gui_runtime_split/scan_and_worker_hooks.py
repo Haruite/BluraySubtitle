@@ -275,14 +275,8 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
             type_item.setText(m2ts_type)
             try:
                 labels_sp = DIY_SP_LABELS if self.get_selected_function_id() == 5 else ENCODE_SP_LABELS
-                if 'm2ts_file_detail' in labels_sp:
-                    det_col = labels_sp.index('m2ts_file_detail')
-                    dtxt = self._m2ts_file_detail_for_sp_table_row(row, labels_sp)
-                    dit = self.table3.item(row, det_col)
-                    if not dit:
-                        dit = QTableWidgetItem('')
-                        self.table3.setItem(row, det_col, dit)
-                    dit.setText(dtxt)
+                if 'm2ts_file_detail' in labels_sp and 'm2ts_file' in labels_sp:
+                    self._sync_sp_table_row_m2ts_column_from_detail(row, labels_sp)
             except Exception:
                 pass
             btn_tracks = self.table3.cellWidget(row, tracks_col)

@@ -8,7 +8,7 @@ from typing import Optional
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QComboBox, QTableWidgetItem, QTableWidget, QToolButton
 
-from src.bdmv import M2TS, Chapter
+from src.bdmv import M2TS, Chapter, pid_to_lang_from_m2ts_path
 from src.core import REMUX_LABELS, DIY_REMUX_LABELS, ENCODE_LABELS, CURRENT_UI_LANGUAGE, FFPROBE_PATH, ENCODE_SP_LABELS, \
     DIY_SP_LABELS
 from src.runtime.services import BluraySubtitle
@@ -306,7 +306,6 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
         if 'm2ts_file_detail' not in labels:
             return
         try:
-            det_col = labels.index('m2ts_file_detail')
             bdmv_col = labels.index('bdmv_index')
         except Exception:
             return
@@ -317,12 +316,52 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                         continue
                 except Exception:
                     continue
-            txt = self._m2ts_file_detail_for_sp_table_row(r, labels)
-            it = self.table3.item(r, det_col)
-            if not it:
-                it = QTableWidgetItem('')
-                self.table3.setItem(r, det_col, it)
-            it.setText(txt)
+            self._sync_sp_table_row_m2ts_column_from_detail(r, labels)
+
+    def _sync_sp_table_row_m2ts_column_from_detail(self, row: int, labels: Optional[list[str]] = None) -> None:
+        """Fill ``m2ts_file_detail``; set ``m2ts_file`` from MPLS ``in_out_time`` order (clip stem → ``.m2ts``)."""
+        if row < 0 or not hasattr(self, 'table3') or not self.table3:
+            return
+        labels = labels or (
+            DIY_SP_LABELS if self.get_selected_function_id() == 5 else ENCODE_SP_LABELS
+        )
+        if 'm2ts_file' not in labels or 'm2ts_file_detail' not in labels:
+            return
+        try:
+            det_col = labels.index('m2ts_file_detail')
+            m2_col = labels.index('m2ts_file')
+            mpls_col = labels.index('mpls_file')
+            bdmv_col = labels.index('bdmv_index')
+        except Exception:
+            return
+        try:
+            bdmv_index = int(self.table3.item(row, bdmv_col).text().strip())
+        except Exception:
+            bdmv_index = 0
+        mpls_item = self.table3.item(row, mpls_col)
+        mpls_file = mpls_item.text().strip() if mpls_item and mpls_item.text() else ''
+        playlist_dir = self._get_playlist_dir_for_bdmv_index(bdmv_index)
+        sp_mpls = os.path.normpath(os.path.join(playlist_dir, mpls_file)) if playlist_dir and mpls_file else ''
+
+        txt = self._m2ts_file_detail_for_sp_table_row(row, labels).strip()
+        dit = self.table3.item(row, det_col)
+        if not dit:
+            dit = QTableWidgetItem('')
+            self.table3.setItem(row, det_col, dit)
+        dit.setText(txt)
+
+        extracted: list[str] = []
+        if sp_mpls and os.path.isfile(sp_mpls):
+            extracted = list(BluraySubtitle.m2ts_file_basenames_from_mpls_playlist(sp_mpls))
+        elif not mpls_file:
+            m2ts_text = self.table3.item(row, m2_col).text().strip() if self.table3.item(row, m2_col) else ''
+            for f in self._split_m2ts_files(m2ts_text):
+                bn = os.path.basename(f.strip())
+                if bn.lower().endswith('.m2ts') and bn not in extracted:
+                    extracted.append(bn)
+
+        if extracted:
+            self.table3.setItem(row, m2_col, QTableWidgetItem(','.join(extracted)))
 
     def _recompute_sp_output_names(self, only_bdmv_index: Optional[int] = None):
         if not hasattr(self, 'table3') or not self.table3:
@@ -334,6 +373,10 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
             except Exception:
                 pass
             return
+        try:
+            self._refresh_table3_m2ts_file_detail(only_bdmv_index)
+        except Exception:
+            pass
         out_col = labels.index('output_name')
         sel_col = labels.index('select')
         bdmv_col = labels.index('bdmv_index')
@@ -409,6 +452,9 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                 if not selected:
                     out_item.setText('')
                     continue
+                m2ts_text = self.table3.item(r, m2ts_col).text().strip() if self.table3.item(r, m2ts_col) else ''
+                m2ts_files = [x.strip() for x in m2ts_text.split(',') if x.strip()]
+                m2ts_files_unique = list(dict.fromkeys(m2ts_files))
                 seq += 1
                 detail_key = (int(bdmv_index), str(mpls_file or ''), str(m2ts_text or ''))
                 if detail_key not in sp_detail_cache:
@@ -477,9 +523,15 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                 key = BluraySubtitle._sp_track_key_from_entry(self._table3_get_sp_entry_for_row(r))
                 cfg = getattr(self, '_track_selection_config', {}) or {}
                 if not (isinstance(cfg, dict) and key in cfg):
-                    # Undetermined multi-m2ts MPLS row: wait for async scan result
-                    # (single_frame/multi_frame) before showing output name.
-                    if mpls_file and len(m2ts_files_unique) > 1 and (special == ''):
+                    # Undetermined multi-m2ts MPLS row: wait for async scan (single_frame / multi_frame)
+                    # only when 2 clips; 3+ distinct clips default to normal mux (README) and are not
+                    # single-frame galleries.
+                    if (
+                        mpls_file
+                        and len(m2ts_files_unique) > 1
+                        and (special == '')
+                        and len(m2ts_files_unique) < 3
+                    ):
                         out_item.setText('')
                     else:
                         _set_sp_out(f'{base_with_suffix}.mkv')
@@ -488,7 +540,12 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                 sel_audio = list(tr.get('audio') or [])
                 sel_sub = list(tr.get('subtitle') or [])
                 if (not sel_audio) and (not sel_sub):
-                    out_item.setText('')
+                    # README: no tracks → skip mux; exception: multi-clip MPLS (3+ distinct STREAM files)
+                    # still shows default .mkv name so short bonus playlists are not stuck blank.
+                    if mpls_file and len(m2ts_files_unique) >= 3:
+                        _set_sp_out(f'{base_with_suffix}.mkv')
+                    else:
+                        out_item.setText('')
                     continue
                 is_audio_only = False
                 if m2ts_files:
@@ -692,6 +749,12 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                             continue
                         first_m2ts = os.path.normpath(os.path.join(stream_dir, m2ts_files[0]))
                         streams = self._read_m2ts_track_info(first_m2ts)
+                        try:
+                            pl = pid_to_lang_from_m2ts_path(first_m2ts)
+                            if pl:
+                                streams = self._filter_streams_by_pid_lang(streams, pl)
+                        except Exception:
+                            pass
                     a, s = self._all_track_ids_from_streams(streams)
                     entry = self._table3_get_sp_entry_for_row(r)
                     key = BluraySubtitle._sp_track_key_from_entry(entry)

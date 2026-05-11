@@ -1,3 +1,6 @@
+import os
+from pathlib import Path
+
 from .core import InfoDict, unpack_bytes
 
 
@@ -91,4 +94,65 @@ class CLPI:
         }
 
 
-__all__ = ["CLPI"]
+def clpi_path_from_m2ts_path(m2ts_path: str) -> str:
+    """
+    Map ``.../BDMV/STREAM/xxxxx.m2ts`` to ``.../BDMV/CLIPINF/xxxxx.clpi`` (Blu-ray layout).
+    """
+    p = Path(os.path.normpath(str(m2ts_path or "").strip()))
+    if p.suffix.lower() != ".m2ts":
+        return ""
+    if p.parent.name.lower() == "stream":
+        return str(p.parent.parent / "CLIPINF" / f"{p.stem}.clpi")
+    parts = list(p.parts)
+    for i, part in enumerate(parts):
+        if part.lower() == "stream":
+            parts[i] = "CLIPINF"
+            return str(Path(*parts).with_name(f"{p.stem}.clpi"))
+    return ""
+
+
+def _normalize_clip_language_code(raw: object) -> str:
+    """Trim BD padding; lowercase ISO 639-2/T codes; map Chinese variants to ``zho`` for track-selection parity."""
+    t = str(raw or "").replace("\x00", "").strip().lower()
+    if not t:
+        return "und"
+    t = t[:3]
+    if t in ("chi", "cmn", "yue", "nan"):
+        return "zho"
+    return t
+
+
+def pid_to_lang_from_clpi_path(clpi_path: str) -> dict[int, str]:
+    """Build transport-stream PID -> ISO-639-2 language (or ``und``) from a clip info file (first program)."""
+    out: dict[int, str] = {}
+    path = os.path.normpath(str(clpi_path or "").strip())
+    if not path or not os.path.isfile(path):
+        return out
+    try:
+        clip = CLPI(path, strict=False)
+        programs = (clip.data.get("ProgramInfo") or {}).get("Programs") or []
+    except Exception:
+        return out
+    if not programs:
+        return out
+    for stream in programs[0].get("StreamsInPS") or []:
+        try:
+            pid = int(stream.get("StreamPID", -1))
+        except Exception:
+            continue
+        sci = stream.get("StreamCodingInfo")
+        if not isinstance(sci, dict):
+            sci = {}
+        raw = sci.get("Language", "und")
+        if raw is None:
+            raw = "und"
+        out[pid] = _normalize_clip_language_code(raw)
+    return out
+
+
+def pid_to_lang_from_m2ts_path(m2ts_path: str) -> dict[int, str]:
+    """Same as ``src/tmp.py`` (shinya ``ClipInformationFile``): CLPI next to the M2TS under ``CLIPINF``."""
+    return pid_to_lang_from_clpi_path(clpi_path_from_m2ts_path(m2ts_path))
+
+
+__all__ = ["CLPI", "clpi_path_from_m2ts_path", "pid_to_lang_from_clpi_path", "pid_to_lang_from_m2ts_path"]

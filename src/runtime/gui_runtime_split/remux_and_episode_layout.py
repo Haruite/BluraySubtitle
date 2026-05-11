@@ -642,8 +642,8 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 mpls_path = mpls_no_ext + '.mpls'
                 chapter = Chapter(mpls_path)
                 total_time = chapter.get_total_time()
-                index_to_m2ts, _index_to_offset = get_index_to_m2ts_and_offset(chapter)
-                m2ts_files = sorted(list(set(index_to_m2ts.values())))
+                m2ts_files = list(
+                    dict.fromkeys([f'{stem}.m2ts' for stem, _, _ in (chapter.in_out_time or [])]))
                 disc_name = self._resolve_output_name_from_mpls(mpls_no_ext)
                 bdmv_vol = f'{bdmv_index:03d}'
                 auto_name = f'{disc_name}.mkv' if single_volume else f'{disc_name}_BD_Vol_{bdmv_vol}.mkv'
