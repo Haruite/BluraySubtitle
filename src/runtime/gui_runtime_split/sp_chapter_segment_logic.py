@@ -181,7 +181,8 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
         mpls_duration = chapter.get_total_time()
         chapter_bounds: list[float] = []
         offset = 0
-        for ref_to_play_item_id, mark_timestamps in mark_info.items():
+        for ref_to_play_item_id in range(len(in_out_time)):
+            mark_timestamps = mark_info.get(ref_to_play_item_id) or []
             for mark_timestamp in mark_timestamps:
                 off = offset + (mark_timestamp - in_out_time[ref_to_play_item_id][1]) / 45000
                 if mpls_duration - off >= 0.001:
@@ -622,7 +623,8 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
         offset = 0
         ch_idx = 1
         unfiltered_c = 0
-        for ref_to_play_item_id, mark_timestamps in mark_info.items():
+        for ref_to_play_item_id in range(len(in_out_time)):
+            mark_timestamps = mark_info.get(ref_to_play_item_id) or []
             m2ts_base = in_out_time[ref_to_play_item_id][0] + '.m2ts'
             for mark_timestamp in mark_timestamps:
                 unfiltered_c += 1

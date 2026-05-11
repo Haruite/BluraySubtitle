@@ -1689,7 +1689,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 offset = 0
                 chapter_to_m2ts = {}
                 ch_idx = 1
-                for ref_to_play_item_id, mark_timestamps in mark_info.items():
+                for ref_to_play_item_id in range(len(in_out_time)):
+                    mark_timestamps = mark_info.get(ref_to_play_item_id) or []
                     m2ts = in_out_time[ref_to_play_item_id][0] + '.m2ts'
                     for mark_timestamp in mark_timestamps:
                         off = offset + (mark_timestamp - in_out_time[ref_to_play_item_id][1]) / 45000

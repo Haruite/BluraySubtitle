@@ -85,21 +85,28 @@ def append_ogm_chapter_lines(lines: list[str], chapter_index: int, time_seconds:
     lines.append(f'CHAPTER{sid}NAME=Chapter {sid}')
 
 def get_index_to_m2ts_and_offset(chapter) -> tuple[dict[int, str], dict[int, float]]:
+    """
+    Map 1-based chapter indices to m2ts stem and playlist offset (seconds).
+
+    Play items must be walked in **playlist order** (``in_out_time`` indices). Iterating
+    ``mark_info`` dict keys alone is wrong when marks appear out of strict key order in the MPLS.
+    """
     j = 1
     rows = sum(map(len, chapter.mark_info.values()))
-    index_to_m2ts = {}
-    index_to_offset = {}
-    offset = 0
-    for ref_to_play_item_id, mark_timestamps in chapter.mark_info.items():
+    index_to_m2ts: dict[int, str] = {}
+    index_to_offset: dict[int, float] = {}
+    offset = 0.0
+    for ref_to_play_item_id in range(len(chapter.in_out_time)):
+        mark_timestamps = chapter.mark_info.get(ref_to_play_item_id) or []
+        in_t = chapter.in_out_time[ref_to_play_item_id][1]
+        out_t = chapter.in_out_time[ref_to_play_item_id][2]
+        stem = chapter.in_out_time[ref_to_play_item_id][0] + '.m2ts'
         for mark_timestamp in mark_timestamps:
-            index_to_m2ts[j] = chapter.in_out_time[ref_to_play_item_id][0] + '.m2ts'
-            off = offset + (mark_timestamp -
-                            chapter.in_out_time[ref_to_play_item_id][1]) / 45000
-            index_to_offset[j] = off
+            index_to_m2ts[j] = stem
+            index_to_offset[j] = offset + (mark_timestamp - in_t) / 45000.0
             j += 1
-        offset += (chapter.in_out_time[ref_to_play_item_id][2] -
-                   chapter.in_out_time[ref_to_play_item_id][1]) / 45000
-        index_to_offset[rows + j] = offset
+        offset += (out_t - in_t) / 45000.0
+    index_to_offset[rows + 1] = offset
     return index_to_m2ts, index_to_offset
 
 

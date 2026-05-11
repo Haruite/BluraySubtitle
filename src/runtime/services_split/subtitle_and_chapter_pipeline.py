@@ -569,7 +569,8 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
             chapter_id = 0
             chapter_text = []
             volume_done = False
-            for ref_to_play_item_id, mark_timestamps in chapter.mark_info.items():
+            for ref_to_play_item_id in range(len(chapter.in_out_time)):
+                mark_timestamps = chapter.mark_info.get(ref_to_play_item_id) or []
                 if volume_done:
                     break
                 if cancel_event and cancel_event.is_set():
@@ -1626,7 +1627,8 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
 
         offsets = []
         offset = 0
-        for ref_to_play_item_id, mark_timestamps in mark_info.items():
+        for ref_to_play_item_id in range(len(in_out_time)):
+            mark_timestamps = mark_info.get(ref_to_play_item_id) or []
             for mark_timestamp in mark_timestamps:
                 off = offset + (mark_timestamp - in_out_time[ref_to_play_item_id][1]) / 45000
                 if mpls_duration - off >= 0.001:
@@ -1658,7 +1660,8 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
 
         offsets = []
         offset = 0
-        for ref_to_play_item_id, mark_timestamps in mark_info.items():
+        for ref_to_play_item_id in range(len(in_out_time)):
+            mark_timestamps = mark_info.get(ref_to_play_item_id) or []
             for mark_timestamp in mark_timestamps:
                 off = offset + (mark_timestamp - in_out_time[ref_to_play_item_id][1]) / 45000
                 if mpls_duration - off >= 0.001:
