@@ -1909,6 +1909,26 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             return None
         return out
 
+    @staticmethod
+    def _remux_fallback_promote_merge_to_part_out(part_out: str, merged_path: str) -> bool:
+        """Replace ``part_out`` with ``merged_path`` (delete existing ``part_out`` first)."""
+        pn = os.path.normpath(part_out)
+        mn = os.path.normpath(merged_path)
+        if mn == pn:
+            return os.path.isfile(pn)
+        if not os.path.isfile(mn):
+            return False
+        try:
+            if os.path.isfile(pn):
+                os.remove(pn)
+        except OSError:
+            return False
+        try:
+            os.replace(mn, pn)
+        except OSError:
+            return False
+        return os.path.isfile(pn)
+
     def _remux_fallback_merge_demux_with_base(
             self,
             exe: str,
@@ -1918,6 +1938,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             demux_by_pid: dict[int, str],
             pid_to_lang: dict[int, str],
             out_mkv: str,
+            split_arg: Optional[str] = None,
     ) -> bool:
         """Merge ``base_mkv`` (optional) with elementary streams; ``--track-order`` by ascending PID."""
         if not demux_by_pid:
@@ -1935,6 +1956,8 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         bits: list[str] = [f'"{exe}"']
         if ui:
             bits.append(ui)
+        if split_arg:
+            bits.append(split_arg)
         start_idx = 0
         if base_mkv and os.path.isfile(base_mkv):
             bits.append(f'"{base_mkv}"')
@@ -2196,9 +2219,12 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 return False
             merged_mkv = os.path.join(work_dir, f'{part_tag}_tsmux_merge.mkv')
             if not self._remux_fallback_merge_demux_with_base(
-                    exe, ui, cur_mkv, m2ts_pid_list, demux_map, pid_to_lang, merged_mkv):
+                    exe, ui, cur_mkv, m2ts_pid_list, demux_map, pid_to_lang, merged_mkv,
+                    split_arg=split_arg):
                 return False
-            cur_mkv = merged_mkv
+            if not _svc_cls()._remux_fallback_promote_merge_to_part_out(part_out, merged_mkv):
+                return False
+            cur_mkv = part_out
             m2ts_pid_list = sorted(set(m2ts_pid_list) | need_pids)
             print(f'[remux-fallback] m2ts_pid_list(after tsMuxer)={m2ts_pid_list}')
         have2 = set(m2ts_pid_list)
@@ -2220,8 +2246,11 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 if demux_au is not None:
                     merged_au = os.path.join(work_dir, f'{aud_tag}_merge.mkv')
                     if self._remux_fallback_merge_demux_with_base(
-                            exe, ui, cur_mkv, m2ts_pid_list, demux_au, pid_to_lang, merged_au):
-                        cur_mkv = merged_au
+                            exe, ui, cur_mkv, m2ts_pid_list, demux_au, pid_to_lang, merged_au,
+                            split_arg=split_arg):
+                        if not _svc_cls()._remux_fallback_promote_merge_to_part_out(part_out, merged_au):
+                            return False
+                        cur_mkv = part_out
                         m2ts_pid_list = sorted(set(m2ts_pid_list) | need_au)
                         print(
                             f'[remux-fallback] m2ts_pid_list(after tsMuxer audio recovery)={m2ts_pid_list}'
