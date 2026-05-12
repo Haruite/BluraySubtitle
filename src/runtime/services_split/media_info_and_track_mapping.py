@@ -3123,6 +3123,39 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             except Exception:
                 return None
 
+        def _norm_track_lang_for_dedupe(raw: object) -> str:
+            s = str(raw or '').strip().lower()
+            if not s:
+                return 'und'
+            if s in ('chi', 'cmn', 'yue', 'nan'):
+                return 'zho'
+            return s[:3] if len(s) >= 3 else s
+
+        def _snippet_waveform_corr(path_a: str, path_b: str) -> Optional[float]:
+            """
+            Pearson correlation on time-aligned mono snippets. Chroma-only dedupe falsely merges
+            alternate dub tracks that share score/SFX in the same window.
+            """
+            for off_sec in (60.0, 15.0, 0.0):
+                try:
+                    ya, _ = librosa.load(path_a, sr=8000, mono=True, offset=off_sec, duration=25.0)
+                    yb, _ = librosa.load(path_b, sr=8000, mono=True, offset=off_sec, duration=25.0)
+                except Exception:
+                    continue
+                n = min(len(ya), len(yb))
+                if n < 40000:
+                    continue
+                ya = np.asarray(ya[:n], dtype=np.float64)
+                yb = np.asarray(yb[:n], dtype=np.float64)
+                sa = float(np.std(ya))
+                sb = float(np.std(yb))
+                if sa < 1e-9 or sb < 1e-9:
+                    continue
+                r = float(np.corrcoef(ya, yb)[0, 1])
+                if r == r:
+                    return r
+            return None
+
         if os.path.exists(src_mkv):
             subprocess.Popen(
                 f'"{FFPROBE_PATH}" -v error -show_streams -show_format -of json "{src_mkv}" >info.json 2>&1',
@@ -3200,6 +3233,13 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                             denom = (np.linalg.norm(fpt) * np.linalg.norm(_fpt))
                             sim = (np.dot(fpt, _fpt) / denom) if denom else 0.0
                             if sim > 0.9997:
+                                la = _norm_track_lang_for_dedupe(track_info.get(track_id_val, 'und'))
+                                lb = _norm_track_lang_for_dedupe(track_info.get(_src_track_id, 'und'))
+                                if la != 'und' and lb != 'und' and la != lb:
+                                    continue
+                                r_snip = _snippet_waveform_corr(fn, _src_fn)
+                                if r_snip is None or r_snip < 0.9975:
+                                    continue
                                 # Keep smaller track id when two tracks are considered duplicated.
                                 keep_current = False
                                 if track_id_val > -1 and _src_track_id > -1 and track_id_val < _src_track_id:
