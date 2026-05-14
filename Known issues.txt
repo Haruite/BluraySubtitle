@@ -1,0 +1,6 @@
+1. 查看章节勾选选中的片段，table2的m2ts_file列没有变化
+2. 界面语言切换成中文时，remux_cmd命令的--ui-language还是en
+3. 如果table3的SP的m2ts_detail正好包含在table2的某一行的m2ts_detail中，且所有轨道也被包含，则该行默认应该不勾选。
+4. 非无损音轨没有检查重复/空音轨，也没有调整延迟
+5. TrueHD Atmos音轨没有处理
+6. 没有检查花屏
