@@ -8,7 +8,9 @@ from typing import Optional
 from src.core import CURRENT_UI_LANGUAGE
 
 I18N_ZH_TO_EN = {
-    'BluraySubtitle': 'BluraySubtitle',
+    '第三方许可': 'Third-party notices',
+    '打包内未找到 THIRD_PARTY_NOTICES.md。': 'THIRD_PARTY_NOTICES.md was not found in this bundle.',
+    '无法读取 THIRD_PARTY_NOTICES.md：': 'Could not read THIRD_PARTY_NOTICES.md:',
     '语言': 'Language',
     '模式': 'Mode',
     '浅色': 'Light',

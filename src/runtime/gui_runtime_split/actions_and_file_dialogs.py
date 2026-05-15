@@ -21,7 +21,7 @@ from src.core import MKV_LABELS, REMUX_LABELS, DIY_REMUX_LABELS, ENCODE_LABELS, 
 from src.core.i18n import translate_text
 from src.domain import MKV, Ass, SRT, Subtitle
 from src.exports.utils import print_terminal_line, print_tb_string_terminal, get_time_str, get_mpv_safe_path, \
-    print_exc_terminal
+    print_exc_terminal, third_party_notices_markdown_path
 from src.runtime.gui_runtime_classes.encode_mkv_folder_worker import EncodeMkvFolderWorker
 from src.runtime.gui_runtime_classes.encode_worker import EncodeWorker
 from src.runtime.gui_runtime_classes.file_path_table_widget_item import FilePathTableWidgetItem
@@ -37,6 +37,49 @@ def _is_pyinstaller_frozen_bundle() -> bool:
 
 
 class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
+    def _open_third_party_notices_dialog(self):
+        """Show bundled ``THIRD_PARTY_NOTICES.md`` (PyInstaller build only)."""
+        if not _is_pyinstaller_frozen_bundle():
+            return
+        path = third_party_notices_markdown_path()
+        if not path:
+            QMessageBox.information(
+                self,
+                self.t('Third-party notices'),
+                self.t('THIRD_PARTY_NOTICES.md was not found in this bundle.'),
+            )
+            return
+        try:
+            with open(path, encoding='utf-8', errors='replace') as f:
+                body = f.read()
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                self.t('Third-party notices'),
+                self.t('Could not read THIRD_PARTY_NOTICES.md:') + f' {exc}',
+            )
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle(self.t('Third-party notices'))
+        layout = QVBoxLayout()
+        dlg.setLayout(layout)
+        editor = QPlainTextEdit(dlg)
+        editor.setReadOnly(True)
+        editor.setPlainText(body)
+        editor.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        layout.addWidget(editor)
+        btn_row = QWidget(dlg)
+        btn_layout = QHBoxLayout()
+        btn_layout.setContentsMargins(0, 0, 0, 0)
+        btn_row.setLayout(btn_layout)
+        btn_close = QPushButton(self.t('Close'), dlg)
+        btn_layout.addStretch(1)
+        btn_layout.addWidget(btn_close)
+        layout.addWidget(btn_row)
+        btn_close.clicked.connect(dlg.accept)
+        dlg.resize(800, 620)
+        dlg.exec()
+
     @staticmethod
     def _append_compat_arg_if_missing(base: str, option_name: str, option_value: str = '') -> str:
         text = str(base or '').strip()

@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import traceback
+from typing import Optional
 
 import numpy as np
 import soundfile
@@ -306,6 +307,36 @@ def get_compressed_effective_depth(file_path, check_duration=10):
 def bundle_application_root() -> str:
     """PyInstaller extracted root, or cwd when running from source."""
     return getattr(sys, '_MEIPASS', os.path.abspath('.'))
+
+
+def third_party_notices_markdown_path() -> Optional[str]:
+    """
+    Resolve ``THIRD_PARTY_NOTICES.md`` for the PyInstaller bundle (``legal/`` subfolder)
+    or for a source checkout / cwd.
+    """
+    rel_candidates = (
+        os.path.join('legal', 'THIRD_PARTY_NOTICES.md'),
+        'THIRD_PARTY_NOTICES.md',
+    )
+    seen: set[str] = set()
+    roots: list[str] = []
+    mei = getattr(sys, '_MEIPASS', None)
+    if mei:
+        roots.append(mei)
+    here = os.path.dirname(os.path.abspath(__file__))
+    repo_root = os.path.abspath(os.path.join(here, '..', '..'))
+    roots.append(repo_root)
+    roots.append(os.path.abspath(os.getcwd()))
+    for root in roots:
+        norm_root = os.path.normcase(os.path.normpath(root))
+        if norm_root in seen:
+            continue
+        seen.add(norm_root)
+        for rel in rel_candidates:
+            candidate = os.path.normpath(os.path.join(root, rel))
+            if os.path.isfile(candidate):
+                return candidate
+    return None
 
 
 def resolve_encoder_executable_path(tool: str, mode: str) -> str:

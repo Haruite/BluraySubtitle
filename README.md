@@ -2,8 +2,10 @@
 
 [English](./README.md) | [简体中文](README.zh-Hans.md)
 
+Windows x64 executable: [download](https://sbx.mysmy.top/tools/BluraySubtitle_windows_x64.exe)
+
 BluraySubtitle is a GUI tool for Blu-ray workflows on **Windows / Linux** (including **Docker**).  
-It integrates the following capabilities in one application:
+It brings the following five areas of functionality together in one application:
 
 1. **Blu-ray Remux**
 2. **Blu-ray Encode**
@@ -15,10 +17,10 @@ It integrates the following capabilities in one application:
 
 ## Highlights
 
-- One app for common Blu-ray steps (Remux, Encode, DIY, merge subtitles, chapters).
-- **Series / Movie** modes with main playlist and chapter mapping.
-- Remux includes **automatic repair / fallback** for higher stability.
-- Encode flow supports **per-row VPy** editing and preview.
+- One application covers the common full Blu-ray workflow (Remux, Encode, DIY, merge subtitles, chapters).
+- Features are **auto-configured**—low learning curve; casual users can finish tasks with just a couple of clicks.
+- The UI still offers **high freedom** for advanced users.
+- **Careful operation logic** and **strong error recovery**.
 - Cross-platform: **Windows / Linux / Docker**.
 
 ---
@@ -29,16 +31,34 @@ It integrates the following capabilities in one application:
 
 - **Language**: English / Simplified Chinese.
 - **Themes**: Light / Dark / Colorful (with opacity).
-- Per-disc **main playlist** (`main MPLS`) selection.
-- Table **playback preview** (`play`).
-- Compact **table-first** workflow; drag-and-drop reordering where applicable.
+- **Table-centered compact** workflow.
+- Press the **bottom** button to start work; the UI **stays responsive** while jobs run.
+- On-screen settings drive internal processing—**what you see is what you get**.
+
+### Series / Movie Mode
+
+- **Series mode** for per-episode splitting, or **Movie mode** without splitting.
+- Built-in logic splits episodes along the **chapter timeline**; optional **approx. episode length** helps estimation.
+- Per-row **start chapter / end chapter** (chapter span control in remux / encode flows).
+
+#### Playlist management
+
+- **Main MPLS** is chosen automatically with high accuracy.
+- You can **pick the main MPLS manually**; each disc volume allows **any number** of main playlists.
+- The main playlist supports **chapter-segment selection**, linked with **start / end chapter** splitting.
+- **Unchecked** segments in the main MPLS plus **other playlists** are treated as **bonus SP** material.
 
 ### Track Management
 
-- Edit tracks (audio / subtitle) **per source**.
-- **Select all tracks** in one click (including remux-source workflows).
-- Track choices feed into **Remux / Encode** command generation.
-- **Main feature, SP, and remux sources** use separate config keys to avoid cross-talk.
+- Every track **except video** can be selected independently.
+- A built-in default track-selection policy adapts to different disc layouts—**not** “select everything”, but keeps what matters.
+- **Select all tracks** in one click.
+
+### Bonus SP Management
+
+- Each **SP row** can be selected independently.
+- SP rows that contain **useful** content are auto-selected.
+- Multiple SP layouts are supported so valid disc extras are covered.
 
 ### Remux / Encode Controls
 
@@ -57,18 +77,12 @@ Encode options include:
 - **Output video bit depth**  
   - x264: 8 / 10 bit  
   - x265: 8 / 10 / 12 bit  
-  - SvtAv1: 8 / 10 / 12 bit (see in-app notes for 12-bit / packaged builds)
+  - SvtAv1: 8 / 10 / 12? bit (see in-app notes)
 - Encoder **presets** and **custom** parameters
-- **Lossless audio recompression**: **FLAC / AAC / Opus** (per-track where configured)
+- **Lossless audio recompression**: **FLAC / AAC / Opus**
 - **Subtitle packaging**: external / softsub / hardsub
 - **Per-row VPy path** for main episodes and SP rows
-
-### Series / Movie Mode
-
-- **Series** and **Movie** modes.
-- Episode split by **chapter timeline**.
-- Per-row **start chapter / end chapter** (chapter range for remux/encode).
-- Series flow supports chapter segments and SP handling.
+- **Remux-as-source** unlocks more actions, such as **editing chapters / attachments**.
 
 ### mkvtoolnix Compatibility Fixes
 
@@ -82,7 +96,7 @@ Built-in handling for common mkvtoolnix edge cases:
 
 ### Implementation Notes (Plain Language)
 
-This section explains internal behavior in approachable terms.
+This section explains, in plain language, how the program behaves internally.
 
 #### A) SP handling rules
 
@@ -93,8 +107,8 @@ This section explains internal behavior in approachable terms.
 5. If **every file** from an MPLS is already covered by the **main MPLS**, that row is added but **unchecked** by default.  
 6. MPLS and M2TS shorter than **30 seconds** are still added to `table3` (duration uses **`get_duration_no_repeat`**; duplicate files counted once), but **unchecked** by default.  
 7. **Special case**: if an MPLS includes **three or more distinct** files, it is **checked** by default.  
-8. **Special case 1**: MPLS has **one** m2ts and that m2ts has **only one frame** → checked by default, output **`BD_Vol_{bdmv_vol}_SP{n}.png`**.  
-9. **Special case 2**: MPLS has **multiple** m2ts and **each** has only one frame → checked by default, output is folder **`BD_Vol_{bdmv_vol}_SP{n}`**, files **`{m}-{m2ts_name}.png`** (`m` zero-padded from 1, `m2ts_name` without `.m2ts`).  
+8. **Special case (single-frame still)**: MPLS has **one** m2ts and that m2ts has **only one frame** → checked by default, output **`BD_Vol_{bdmv_vol}_SP{n}.png`**.  
+9. **Special case (multi still)**: MPLS has **multiple** m2ts and **each** has only one frame → checked by default, output is folder **`BD_Vol_{bdmv_vol}_SP{n}`**, files **`{m}-{m2ts_name}.png`** (`m` zero-padded from 1, `m2ts_name` without `.m2ts`).  
 10. If **no track** is selected for an MPLS row, the output name is **empty** and the row is **skipped** at mux time.  
 11. If **exactly one audio** track is selected, the output name uses the **original audio extension** and the track is **extracted** directly.  
 12. If **multiple audio** tracks are selected (and there is no video mux path), output is **`BD_Vol_{bdmv_vol}_SP{n}.mka`**.  
@@ -120,7 +134,7 @@ This section explains internal behavior in approachable terms.
 - Final success is judged by **whether the output file really exists** (including split-style suffix checks).  
 - **Chapter rewrite** and **language fix** run only after **success**; failed rows stay failed but **do not block** other rows.
 
-#### B) When MPLS mux fails — repair flow
+#### B) When MPLS mux fails — how it is repaired
 
 `mkvmerge` can fail on MPLS mux (especially multi-file playlists) when m2ts layouts differ.  
 The app checks return code and output validity; on failure it enters fallback repair.
@@ -156,7 +170,7 @@ The app checks return code and output validity; on failure it enters fallback re
 7. Verify expected outputs (`-001`, `-002`, …) all exist; incomplete → fallback failed.  
 8. On successful outputs: run the same **language fix** and **chapter write** pipeline as in the main flow.
 
-#### C) `view chapters` / `start_at_chapter` / `end_at_chapter` linkage (regeneration rules)
+#### C) `view chapters` / `start_at_chapter` / `end_at_chapter` linkage and config regeneration (refactor rules)
 
 Config generation should treat at least these **three** inputs as core; **any** change triggers recompute:
 
@@ -194,7 +208,7 @@ Config generation should treat at least these **three** inputs as core; **any** 
 - Nodes **unchecked** in `view chapters` must be **disabled** in both `start_at_chapter` and `end_at_chapter` combos.  
 - Still require **`end_at_chapter > start_at_chapter`**.
 
-#### D) Other notes
+#### D) Additional notes
 
 - Main remux command placeholders: **`{output_file}`**, **`{audio_opts}`**, **`{sub_opts}`**, **`{parts_split}`**.  
 - If the primary command output is wrong, fallbacks still use parsed args or default tracks where possible.  
@@ -247,13 +261,13 @@ python src/main.py
 3. Load source folder/file for the current mode.  
 4. Confirm **main MPLS** and table mapping.  
 5. Adjust tracks, chapter range, or encode options if needed.  
-6. Press the bottom **Run** button.
+6. Click the bottom **Run** button to start the task.
 
 ---
 
-## Mode Usage
+## Usage by mode
 
-### 1) Merge Subtitles
+## 1) Merge Subtitles
 
 Typical flow:
 
@@ -266,10 +280,10 @@ Typical flow:
 Tips:
 
 - If mapping fails, check **main MPLS** first.  
-- If subtitle order is wrong, sort by filename header or drag rows.  
+- If subtitle order is wrong, **click the filename column header** to sort, or drag rows to reorder.  
 - If a subtitle duration looks impossible, fix the subtitle file first (right-click **edit** prioritizes lines with the latest end times; fix ends or delete bad lines).
 
-### 2) Add Chapters To MKV
+## 2) Add Chapters To MKV
 
 Typical flow:
 
@@ -278,7 +292,7 @@ Typical flow:
 3. Verify main MPLS.  
 4. Run chapter write.
 
-### 3) Blu-ray Remux
+## 3) Blu-ray Remux
 
 Typical flow:
 
@@ -288,7 +302,7 @@ Typical flow:
 4. (Optional) Edit remux command.  
 5. Choose output folder and run.
 
-### 4) Blu-ray Encode
+## 4) Blu-ray Encode
 
 Typical flow:
 
@@ -312,7 +326,7 @@ Typical flow:
 
 `build.sh` builds the program’s Linux runtime environment. Currently supported:
 
-- Ubuntu 22.04 / 24.04 / 25.10 / 26.04 (beta)  
+- Ubuntu 22.04 / 24.04 / 25.10 / 26.04  
 - Debian 12 / 13  
 
 Prefer running `build.sh` in a **remote terminal**: it uses **tmux** for cleaner, easier-to-read logs.
@@ -367,7 +381,7 @@ docker pull --platform linux/amd64 haruite/bluraysubtitle:latest
   - Check subtitle row order (sort by filename column).  
   - Check subtitle duration; abnormally long files are often broken subtitles—use right-click **edit** / delete as needed.
 - **Bonus / extra disc**  
-  - Uncheck **main MPLS** for that bonus volume.
+  - Uncheck **main MPLS** for that bonus-disc volume.
 - **Preview won’t start**  
   - Check **`vsedit`** path.  
   - Check VPy file and plugins.

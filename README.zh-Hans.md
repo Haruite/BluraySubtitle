@@ -2,6 +2,8 @@
 
 [English](./README.md) | [简体中文](README.zh-Hans.md)
 
+Windows 可执行文[下载](https://sbx.mysmy.top/tools/BluraySubtitle_windows_x64.exe)
+
 BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 工具。  
 它将以下五类功能整合在一个应用中：
 

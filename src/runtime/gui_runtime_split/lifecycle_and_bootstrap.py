@@ -10,6 +10,7 @@ if __name__ == "__main__" and __package__ is None:
     raise SystemExit(1)
 
 import os
+import sys
 import time
 from typing import Optional
 
@@ -106,6 +107,12 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         )
         language_layout.addWidget(self.opacity_label)
         language_layout.addWidget(self.opacity_slider)
+        self.third_party_notices_btn = QPushButton(self.t('Third-party notices'), language_row)
+        self.third_party_notices_btn.clicked.connect(lambda _=None: self._open_third_party_notices_dialog())
+        self.third_party_notices_btn.setVisible(
+            bool(getattr(sys, 'frozen', False)) and hasattr(sys, '_MEIPASS')
+        )
+        language_layout.addWidget(self.third_party_notices_btn)
         language_layout.addStretch(1)
         self.layout.addWidget(language_row)
 
