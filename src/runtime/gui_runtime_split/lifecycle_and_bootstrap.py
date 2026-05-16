@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import QApplication, QVBoxLayout, QWidget, QHBoxLayout, QLa
     QProgressDialog, QProgressBar, QFileDialog
 
 from src.core import APP_TITLE, BDMV_LABELS, SUBTITLE_LABELS, ENCODE_SP_LABELS
+import src.core.settings as core_settings
 from src.exports.utils import print_exc_terminal, force_remove_file
 from src.runtime.gui_runtime_classes.custom_box import CustomBox
 from src.runtime.gui_runtime_classes.custom_table_widget import CustomTableWidget
@@ -43,8 +44,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.resize(1000, 1000)
         self._geometry = self.saveGeometry()
         self._language_code = 'en'
-        global CURRENT_UI_LANGUAGE
-        CURRENT_UI_LANGUAGE = 'en'
+        core_settings.CURRENT_UI_LANGUAGE = 'en'
 
         app = QApplication.instance()
         if app:
@@ -208,6 +208,10 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         def update_episode_length_enabled_state():
             enabled = self.series_mode_radio.isChecked()
             self.approx_episode_minutes_combo.setEnabled(enabled)
+            try:
+                self._update_trim_copyright_tail_checkbox_for_episode_movie_mode()
+            except Exception:
+                pass
             self._apply_episode_mode_to_table2()
             if self.get_selected_function_id() in (3, 4, 5):
                 try:
@@ -331,6 +335,13 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.select_all_tracks_checkbox.setChecked(False)
         self.select_all_tracks_checkbox.toggled.connect(self._on_select_all_tracks_toggled)
         select_all_tracks_layout.addWidget(self.select_all_tracks_checkbox)
+        self.trim_copyright_tail_checkbox = QCheckBox(self.t('裁剪版权片段'), select_all_tracks_row)
+        self.trim_copyright_tail_checkbox.setChecked(True)
+        self.trim_copyright_tail_checkbox.toggled.connect(self._on_trim_copyright_tail_toggled)
+        select_all_tracks_layout.addWidget(self.trim_copyright_tail_checkbox)
+        self.mux_dolby_vision_checkbox = QCheckBox(self.t('混流Dolby Vision'), select_all_tracks_row)
+        self.mux_dolby_vision_checkbox.setChecked(True)
+        select_all_tracks_layout.addWidget(self.mux_dolby_vision_checkbox)
         select_all_tracks_layout.addStretch(1)
         self.select_all_tracks_row = select_all_tracks_row
         self.layout.addWidget(select_all_tracks_row)

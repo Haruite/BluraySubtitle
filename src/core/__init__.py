@@ -12,11 +12,12 @@ from .settings import ENCODE_REMUX_SP_LABELS
 from .settings import ENCODE_SP_LABELS
 from .settings import DIY_SP_LABELS
 from .settings import FDK_AAC_PATH
+from .settings import DOVI_TOOL_PATH
 from .settings import FFMPEG_PATH
 from .settings import FFPROBE_PATH
 from .settings import FLAC_PATH
 from .settings import FLAC_THREADS
-from .settings import find_mkvtoolinx
+from .settings import find_mkvtoolnix
 from .settings import MKV_EXTRACT_PATH
 from .settings import MKV_INFO_PATH
 from .settings import MKV_LABELS
@@ -35,8 +36,9 @@ __all__ = [
     "is_docker",
     "FLAC_PATH",
     "FLAC_THREADS",
-    "find_mkvtoolinx",
+    "find_mkvtoolnix",
     "FDK_AAC_PATH",
+    "DOVI_TOOL_PATH",
     "FFMPEG_PATH",
     "FFPROBE_PATH",
     "X265_PATH",

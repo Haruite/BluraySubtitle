@@ -13,7 +13,89 @@ from src.core import REMUX_LABELS, DIY_REMUX_LABELS, ENCODE_LABELS, CURRENT_UI_L
     DIY_SP_LABELS
 from src.runtime.services import BluraySubtitle
 from src.runtime.services_split.lifecycle_and_configuration import LifecycleConfigurationMixin
+from src.runtime.services_split.misc_workflows import (
+    _movie_main_duration_by_bdmv_from_mpls_paths,
+    _movie_sp_duration_matches_main,
+)
 from .gui_base import BluraySubtitleGuiBase
+
+_M2TS_DETAIL_SEGMENT_RE = re.compile(r'^(.+?)\(([^)]+)-([^)]+)\)\s*$')
+
+
+def _parse_m2ts_detail_time_to_seconds(s: str) -> float:
+    try:
+        parts = [p for p in str(s or '').strip().split(':') if p != '']
+        if not parts:
+            return 0.0
+        val = 0.0
+        for n in parts:
+            val = val * 60.0 + float(n)
+        return val
+    except Exception:
+        return 0.0
+
+
+def parse_m2ts_file_detail_segments(detail: str) -> list[tuple[str, float, float]]:
+    """Parse ``clip.m2ts(HH:MM:SS.mmm-HH:MM:SS.mmm),...`` into (basename, start_sec, end_sec)."""
+    text = str(detail or '').strip()
+    if not text:
+        return []
+    segments: list[tuple[str, float, float]] = []
+    for part in text.split(','):
+        piece = part.strip()
+        if not piece:
+            continue
+        m = _M2TS_DETAIL_SEGMENT_RE.match(piece)
+        if not m:
+            return []
+        name = m.group(1).strip()
+        start_sec = _parse_m2ts_detail_time_to_seconds(m.group(2))
+        end_sec = _parse_m2ts_detail_time_to_seconds(m.group(3))
+        segments.append((name, start_sec, end_sec))
+    return segments
+
+
+def m2ts_file_detail_segments_contained_in(sp_detail: str, episode_detail: str, *, eps: float = 0.05) -> bool:
+    """True when every SP clip/time window lies inside some matching clip window on the episode row."""
+    sp_segs = parse_m2ts_file_detail_segments(sp_detail)
+    if not sp_segs:
+        return False
+    ep_segs = parse_m2ts_file_detail_segments(episode_detail)
+    if not ep_segs:
+        return False
+    for name, s0, s1 in sp_segs:
+        if s1 <= s0 + eps:
+            continue
+        matched = False
+        for en, a0, a1 in ep_segs:
+            if en != name:
+                continue
+            if s0 + eps >= a0 and s1 <= a1 + eps:
+                matched = True
+                break
+        if not matched:
+            return False
+    return True
+
+
+def filter_m2ts_file_detail_by_basenames(detail: str, basenames: list[str]) -> str:
+    """Keep only ``clip.m2ts(start-end)`` segments whose basename is in ``basenames``."""
+    wanted = {
+        os.path.basename(str(b or '')).strip().lower()
+        for b in basenames
+        if str(b or '').strip()
+    }
+    if not wanted:
+        return str(detail or '').strip()
+    parts: list[str] = []
+    for part in str(detail or '').split(','):
+        piece = part.strip()
+        if not piece:
+            continue
+        head = piece.split('(', 1)[0].strip().lower()
+        if head in wanted:
+            parts.append(piece)
+    return ','.join(parts)
 
 
 class OutputTracksMixin(BluraySubtitleGuiBase):
@@ -84,12 +166,34 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
         auto_name_map: dict[int, str] = {}
         try:
             if function_id in (3, 4, 5) and (not self._is_movie_mode()):
-                conf = getattr(self, '_last_configuration_34', None)
+                conf = (
+                    getattr(self, '_last_configuration_34', None)
+                    or getattr(self, 'configuration', None)
+                )
                 if isinstance(conf, dict) and conf:
                     auto_name_map = self._build_episode_output_name_map(conf)
         except Exception:
             auto_name_map = {}
+        movie_conf = getattr(self, '_movie_configuration', None) or {}
         for i in range(self.table2.rowCount()):
+            if self._is_movie_mode() and function_id in (3, 4):
+                mpls_no_ext = ''
+                if isinstance(movie_conf, dict) and i in movie_conf:
+                    mpls_no_ext = str(movie_conf[i].get('selected_mpls') or '').strip()
+                if not mpls_no_ext and isinstance(movie_conf, dict) and movie_conf:
+                    first = movie_conf[sorted(movie_conf.keys())[0]]
+                    mpls_no_ext = str(first.get('selected_mpls') or '').strip()
+                if not mpls_no_ext:
+                    labels = self._table2_labels_remux_or_diy()
+                    if labels and 'bdmv_index' in labels:
+                        bi = self.table2.item(i, labels.index('bdmv_index'))
+                        if bi:
+                            mpls_no_ext = str(bi.data(Qt.ItemDataRole.UserRole) or '').strip()
+                text = self._resolve_output_name_from_mpls(mpls_no_ext) if mpls_no_ext else ''
+                if text and not text.lower().endswith('.mkv'):
+                    text += '.mkv'
+                names.append(text)
+                continue
             item = self.table2.item(i, col)
             text = item.text().strip() if item and item.text() else ''
             if (not text) and i in auto_name_map:
@@ -220,17 +324,8 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
             bdmv_index = 0
         mpls_file = self.table3.item(row, mpls_col).text().strip() if self.table3.item(row, mpls_col) else ''
         m2ts_text = self.table3.item(row, m2ts_col).text().strip() if self.table3.item(row, m2ts_col) else ''
-        playlist_dir = self._get_playlist_dir_for_bdmv_index(bdmv_index)
-        sp_mpls = os.path.normpath(os.path.join(playlist_dir, mpls_file)) if playlist_dir and mpls_file else ''
-        if sp_mpls and os.path.isfile(sp_mpls):
-            return self._m2ts_file_detail_from_mpls_path(sp_mpls)
-        stream_dir = self._get_stream_dir_for_bdmv_index(bdmv_index)
         m2ts_files = self._split_m2ts_files(m2ts_text)
-        paths = [os.path.normpath(os.path.join(stream_dir, f)) for f in m2ts_files if f.strip()]
-        paths = [p for p in paths if p]
-        if not paths:
-            return ''
-        return BluraySubtitle.m2ts_file_detail_for_standalone_m2ts_paths(paths)
+        return self._sp_m2ts_detail_for_entry(bdmv_index, mpls_file, m2ts_files)
 
     def _table2_labels_for_current_mode(self):
         fid = self.get_selected_function_id()
@@ -241,6 +336,275 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
         if fid == 5:
             return DIY_REMUX_LABELS
         return None
+
+    def _track_id_sets_for_config_key(
+        self, key: str, *, mpls_path_fallback: str = '',
+    ) -> tuple[set[str], set[str]]:
+        cfg = getattr(self, '_track_selection_config', {}) or {}
+        if isinstance(cfg, dict) and key in cfg and isinstance(cfg[key], dict):
+            tr = cfg[key]
+            return (
+                {str(x) for x in (tr.get('audio') or []) if str(x).strip()},
+                {str(x) for x in (tr.get('subtitle') or []) if str(x).strip()},
+            )
+        mp = str(mpls_path_fallback or '').strip()
+        if mp and os.path.isfile(mp):
+            try:
+                pair = self._default_track_lists_for_mpls_path(mp)
+                if pair:
+                    return {str(x) for x in pair[0]}, {str(x) for x in pair[1]}
+            except Exception:
+                pass
+        return set(), set()
+
+    def _track_selection_contained_in(self, sub_key: str, sup_key: str, *,
+                                    sub_mpls_fallback: str = '', sup_mpls_fallback: str = '') -> bool:
+        sa, ss = self._track_id_sets_for_config_key(sub_key, mpls_path_fallback=sub_mpls_fallback)
+        ma, ms = self._track_id_sets_for_config_key(sup_key, mpls_path_fallback=sup_mpls_fallback)
+        if sa and not sa.issubset(ma):
+            return False
+        if ss and not ss.issubset(ms):
+            return False
+        return True
+
+    def _iter_table2_episode_m2ts_details(self, bdmv_index: int):
+        """Yield (m2ts_file_detail, main_mpls_full_path) for table2 rows on this disc."""
+        labels = self._table2_labels_for_current_mode()
+        if not labels or 'm2ts_file_detail' not in labels:
+            return
+        try:
+            det_col = labels.index('m2ts_file_detail')
+            bdmv_col = labels.index('bdmv_index')
+        except Exception:
+            return
+        bi = int(bdmv_index)
+        for r in range(self.table2.rowCount()):
+            try:
+                b_item = self.table2.item(r, bdmv_col)
+                row_bdmv = int(b_item.text().strip()) if b_item and b_item.text() else 0
+            except Exception:
+                row_bdmv = 0
+            if row_bdmv != bi:
+                continue
+            it_det = self.table2.item(r, det_col)
+            det = (it_det.text() if it_det and it_det.text() else '').strip()
+            if not det:
+                continue
+            mpls_stem = ''
+            try:
+                if b_item:
+                    mpls_stem = str(b_item.data(Qt.ItemDataRole.UserRole) or '').strip()
+            except Exception:
+                mpls_stem = ''
+            if not mpls_stem:
+                try:
+                    mpls_stem = str(self._bdmv_to_first_main_mpls_from_table1().get(bi, '') or '').strip()
+                except Exception:
+                    mpls_stem = ''
+            if not mpls_stem:
+                yield det, ''
+                continue
+            mpls_full = mpls_stem if mpls_stem.lower().endswith('.mpls') else f'{mpls_stem}.mpls'
+            playlist_dir = self._get_playlist_dir_for_bdmv_index(bi)
+            if playlist_dir and not os.path.isabs(mpls_full):
+                mpls_full = os.path.normpath(os.path.join(playlist_dir, os.path.basename(mpls_full)))
+            else:
+                mpls_full = os.path.normpath(mpls_full)
+            yield det, mpls_full
+
+    def _m2ts_detail_for_stream_on_disc_playlists(
+        self, bdmv_index: int, m2ts_files: list[str],
+    ) -> str:
+        """Match orphan STREAM clips to a playlist ``in_out_time`` window before whole-file fallback."""
+        playlist_dir = self._get_playlist_dir_for_bdmv_index(int(bdmv_index))
+        if not playlist_dir or not os.path.isdir(playlist_dir):
+            return ''
+        segments: list[str] = []
+        for bn in m2ts_files or []:
+            bn = os.path.basename(str(bn or '').strip())
+            if not bn:
+                continue
+            found = ''
+            try:
+                for mpls in sorted(os.listdir(playlist_dir)):
+                    if not str(mpls).lower().endswith('.mpls'):
+                        continue
+                    mp = os.path.normpath(os.path.join(playlist_dir, mpls))
+                    if not os.path.isfile(mp):
+                        continue
+                    full = BluraySubtitle.m2ts_file_detail_from_mpls_playlist(mp).strip()
+                    if not full:
+                        continue
+                    filt = filter_m2ts_file_detail_by_basenames(full, [bn])
+                    if filt:
+                        found = filt
+                        break
+            except Exception:
+                found = ''
+            if found:
+                segments.extend([p.strip() for p in found.split(',') if p.strip()])
+        return ','.join(segments)
+
+    def _sp_m2ts_detail_for_entry(self, bdmv_index: int, mpls_file: str, m2ts_files: list[str]) -> str:
+        """SP ``m2ts_file_detail``: MPLS rows use ``in_out_time`` via ``m2ts_file_detail_from_mpls_playlist``."""
+        mpls_name = str(mpls_file or '').strip()
+        playlist_dir = self._get_playlist_dir_for_bdmv_index(int(bdmv_index))
+        if mpls_name and playlist_dir:
+            mpls_path = os.path.normpath(os.path.join(playlist_dir, mpls_name))
+            if os.path.isfile(mpls_path):
+                try:
+                    detail = BluraySubtitle.m2ts_file_detail_from_mpls_playlist(mpls_path).strip()
+                    if detail and m2ts_files:
+                        detail = filter_m2ts_file_detail_by_basenames(detail, m2ts_files)
+                    return detail
+                except Exception:
+                    return ''
+            return ''
+        disc_detail = self._m2ts_detail_for_stream_on_disc_playlists(bdmv_index, m2ts_files)
+        if disc_detail:
+            return disc_detail
+        paths: list[str] = []
+        stream_dir = self._get_stream_dir_for_bdmv_index(int(bdmv_index))
+        for bn in m2ts_files or []:
+            bn = str(bn or '').strip()
+            if not bn:
+                continue
+            if stream_dir:
+                paths.append(os.path.normpath(os.path.join(stream_dir, bn)))
+        if paths:
+            try:
+                return BluraySubtitle.m2ts_file_detail_for_standalone_m2ts_paths(paths).strip()
+            except Exception:
+                pass
+        return ''
+
+    def _sp_covered_by_table2_movie_row(self, bdmv_index: int, sp_detail: str) -> bool:
+        """Movie mode: SP redundant when m2ts_detail equals or is contained in some table2 row (no track check)."""
+        sp_detail = str(sp_detail or '').strip()
+        if not sp_detail:
+            return False
+        for ep_detail, _main_mpls in self._iter_table2_episode_m2ts_details(bdmv_index):
+            ep_detail = str(ep_detail or '').strip()
+            if not ep_detail:
+                continue
+            if sp_detail == ep_detail:
+                return True
+            if m2ts_file_detail_segments_contained_in(sp_detail, ep_detail):
+                return True
+        return False
+
+    def _sp_covered_by_table2_episode_row(
+        self, bdmv_index: int, sp_detail: str, sp_track_key: str, *,
+        sp_mpls_path: str = '',
+    ) -> bool:
+        """SP row is redundant when its timeline and tracks are already covered by some table2 episode row."""
+        sp_detail = str(sp_detail or '').strip()
+        if not sp_detail:
+            return False
+        if self._is_movie_mode():
+            return self._sp_covered_by_table2_movie_row(bdmv_index, sp_detail)
+        for ep_detail, main_mpls in self._iter_table2_episode_m2ts_details(bdmv_index):
+            if not m2ts_file_detail_segments_contained_in(sp_detail, ep_detail):
+                continue
+            main_key = f'main::{os.path.normpath(main_mpls)}' if main_mpls else ''
+            if not main_key:
+                return True
+            if self._track_selection_contained_in(
+                sp_track_key, main_key,
+                sub_mpls_fallback=sp_mpls_path, sup_mpls_fallback=main_mpls,
+            ):
+                return True
+        return False
+
+    def _movie_main_duration_map_from_table1(self) -> dict[int, float]:
+        selected_main_by_bdmv: dict[int, list[str]] = {}
+        try:
+            for r in range(self.table1.rowCount()):
+                bdmv_index = int(r + 1)
+                root_item = self.table1.item(r, 0)
+                root = root_item.text().strip() if root_item and root_item.text() else ''
+                if not root:
+                    continue
+                info = self.table1.cellWidget(r, 2)
+                if not isinstance(info, QTableWidget):
+                    continue
+                paths: list[str] = []
+                for i in range(info.rowCount()):
+                    btn = info.cellWidget(i, 3)
+                    if not (isinstance(btn, QToolButton) and btn.isChecked()):
+                        continue
+                    it = info.item(i, 0)
+                    mpls_file = it.text().strip() if it and it.text() else ''
+                    if mpls_file:
+                        paths.append(os.path.normpath(os.path.join(root, 'BDMV', 'PLAYLIST', mpls_file)))
+                if paths:
+                    selected_main_by_bdmv[bdmv_index] = paths
+        except Exception:
+            pass
+        return _movie_main_duration_by_bdmv_from_mpls_paths(selected_main_by_bdmv)
+
+    def _apply_table3_uncheck_rows_covered_by_table2(self) -> None:
+        """Uncheck auto SP rows whose content is already muxed via a table2 episode row."""
+        if not hasattr(self, 'table3') or not self.table3:
+            return
+        if self.get_selected_function_id() not in (3, 4, 5):
+            return
+        try:
+            sel_col = ENCODE_SP_LABELS.index('select')
+            bdmv_col = ENCODE_SP_LABELS.index('bdmv_index')
+            mpls_col = ENCODE_SP_LABELS.index('mpls_file')
+            m2ts_col = ENCODE_SP_LABELS.index('m2ts_file')
+            det_col = ENCODE_SP_LABELS.index('m2ts_file_detail')
+            dur_col = ENCODE_SP_LABELS.index('duration')
+        except Exception:
+            return
+        main_duration_by_bdmv: dict[int, float] = {}
+        if self._is_movie_mode():
+            main_duration_by_bdmv = self._movie_main_duration_map_from_table1()
+        for r in range(self.table3.rowCount()):
+            sel_item = self.table3.item(r, sel_col)
+            if not sel_item:
+                continue
+            if not (sel_item.flags() & Qt.ItemFlag.ItemIsEnabled):
+                continue
+            if str(sel_item.data(Qt.ItemDataRole.UserRole) or '').strip() == 'user':
+                continue
+            try:
+                bdmv_index = int(self.table3.item(r, bdmv_col).text().strip())
+            except Exception:
+                continue
+            mpls_item = self.table3.item(r, mpls_col)
+            mpls_file = mpls_item.text().strip() if mpls_item and mpls_item.text() else ''
+            m2ts_item = self.table3.item(r, m2ts_col)
+            m2ts_text = m2ts_item.text().strip() if m2ts_item and m2ts_item.text() else ''
+            det_item = self.table3.item(r, det_col)
+            sp_detail = det_item.text().strip() if det_item and det_item.text() else ''
+            if not sp_detail:
+                sp_detail = self._m2ts_file_detail_for_sp_table_row(r, ENCODE_SP_LABELS).strip()
+            entry = {'bdmv_index': bdmv_index, 'mpls_file': mpls_file, 'm2ts_file': m2ts_text, 'output_name': ''}
+            sp_key = BluraySubtitle._sp_track_key_from_entry(entry)
+            sp_mpls = ''
+            if mpls_file:
+                playlist_dir = self._get_playlist_dir_for_bdmv_index(bdmv_index)
+                if playlist_dir:
+                    sp_mpls = os.path.normpath(os.path.join(playlist_dir, mpls_file))
+            if self._sp_covered_by_table2_episode_row(bdmv_index, sp_detail, sp_key, sp_mpls_path=sp_mpls):
+                sel_item.setCheckState(Qt.CheckState.Unchecked)
+                continue
+            if self._is_movie_mode():
+                main_dur = main_duration_by_bdmv.get(bdmv_index)
+                if main_dur is not None:
+                    dur_item = self.table3.item(r, dur_col)
+                    dur_sec = 0.0
+                    if dur_item and dur_item.text().strip():
+                        try:
+                            parts = [p for p in dur_item.text().strip().split(':') if p != '']
+                            for n in parts:
+                                dur_sec = dur_sec * 60.0 + float(n)
+                        except Exception:
+                            dur_sec = 0.0
+                    if _movie_sp_duration_matches_main(dur_sec, main_dur):
+                        sel_item.setCheckState(Qt.CheckState.Unchecked)
 
     def _table2_output_name_if_same_m2ts_detail(self, bdmv_index: int, detail_sp: str) -> str:
         labels = self._table2_labels_for_current_mode()

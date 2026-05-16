@@ -123,6 +123,8 @@ class BluraySubtitleGuiBase(QWidget):
         self.remux_path_box = None
         self.select_all_tracks_checkbox = None
         self.select_all_tracks_row = None
+        self.trim_copyright_tail_checkbox = None
+        self.mux_dolby_vision_checkbox = None
         self.series_mode_radio = None
         self.sub_check_state = None
         self.sub_pack_external_radio = None

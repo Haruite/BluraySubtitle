@@ -1339,6 +1339,21 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                         pid_to_lang = self._pid_lang_from_m2ts_track_info(self._read_m2ts_track_info(src_path))
                     except Exception:
                         pid_to_lang = {}
+            sp_loop_mpls: Optional[dict[str, object]] = None
+            if mpls_file and os.path.isfile(os.path.join(playlist_dir, mpls_file)):
+                try:
+                    sp_loop_mpls = _svc_cls()._detect_sp_looping_mpls(
+                        os.path.normpath(os.path.join(playlist_dir, mpls_file)))
+                except Exception:
+                    sp_loop_mpls = None
+            sp_loop_split = ''
+            if sp_loop_mpls and str(sp_loop_mpls.get('split_parts') or '').strip():
+                sp_loop_split = f'--split parts:{sp_loop_mpls["split_parts"]} '
+                print(
+                    f'[sp-mux] looping playlist ({sp_loop_mpls.get("kind")}): '
+                    f'{sp_loop_mpls["split_parts"]}'
+                )
+
             copy_audio_track, copy_sub_track = self._select_tracks_for_source(
                 src_path,
                 pid_to_lang,
@@ -1538,7 +1553,29 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                         custom_parts = ''
 
             mux_chapter_txt = ''
-            if use_chapter_language or custom_chapter:
+            use_full_m2ts_mux = False
+            if str(src_path).lower().endswith('.mpls'):
+                self._set_dovi_mux_plan_for_mpls(src_path)
+            identify_ok = self._mkvmerge_identify_covers_remux_slots(
+                src_path, copy_audio_track, copy_sub_track)
+            if not identify_ok:
+                print('[remux-fallback] skipping primary SP mkvmerge (see identify check lines above)')
+            # Movie-mode MPLS SP: full playlist mux when mkvmerge --identify lists every required track.
+            movie_sp_full_mux = (
+                bool(getattr(self, 'movie_mode', False))
+                and bool(mpls_file)
+                and sp_mkv_path.lower().endswith('.mkv')
+                and not custom_chapter
+                and identify_ok
+            )
+            if movie_sp_full_mux:
+                dovi_opts = _svc_cls()._mkvmerge_dovi_primary_video_opts(
+                    src_path, getattr(self, '_dovi_mux_plan', None))
+                cmd = (f'"{MKV_MERGE_PATH}" {mkvtoolnix_ui_language_arg()} '
+                       f'{dovi_opts} {sp_loop_split}'
+                       f'-o "{sp_mkv_path}" '
+                       f'"{src_path}"')
+            elif use_chapter_language or custom_chapter:
                 if not custom_chapter:
                     try:
                         offs = self._write_chapter_txt_from_mpls(src_path, chapter_txt)
@@ -1555,21 +1592,38 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                 else:
                     mux_chapter_txt = chapter_txt
                 split_custom = (f'--split parts:{custom_parts} ' if custom_parts else '')
+                split_mux = split_custom if custom_parts else sp_loop_split
                 chapters_arg = f'--chapters "{mux_chapter_txt}" ' if mux_chapter_txt else ''
                 cmd = (f'"{MKV_MERGE_PATH}" {mkvtoolnix_ui_language_arg()} '
-                       f'{split_custom}'
+                       f'{split_mux}'
                        f'{chapters_arg}'
                        f'-o "{sp_mkv_path}" '
                        f'{("-a " + ",".join(cmd_audio_track)) if cmd_audio_track else ""} '
                        f'{("-s " + ",".join(cmd_sub_track)) if cmd_sub_track else ""} '
                        f'"{src_path}"')
             else:
-                cmd = (f'"{MKV_MERGE_PATH}" {mkvtoolnix_ui_language_arg()} -o "{sp_mkv_path}" '
-                       f'{("-a " + ",".join(cmd_audio_track)) if cmd_audio_track else ""} '
-                       f'{("-s " + ",".join(cmd_sub_track)) if cmd_sub_track else ""} '
-                       f'"{src_path}"')
-            ret_sp = subprocess.Popen(cmd, shell=True).wait()
-            sp_ok = os.path.isfile(sp_mkv_path)
+                use_full_m2ts_mux = (
+                    (not mpls_file)
+                    and str(src_path).lower().endswith('.m2ts')
+                    and sp_mkv_path.lower().endswith('.mkv')
+                    and not _svc_cls()._is_audio_only_media(src_path)
+                )
+                if use_full_m2ts_mux:
+                    # Orphan/feature m2ts: same as movie_remux.py (mux entire clip, all tracks).
+                    cmd = (f'"{MKV_MERGE_PATH}" {mkvtoolnix_ui_language_arg()} -o "{sp_mkv_path}" '
+                           f'"{src_path}"')
+                else:
+                    cmd = (f'"{MKV_MERGE_PATH}" {mkvtoolnix_ui_language_arg()} '
+                           f'{sp_loop_split}'
+                           f'-o "{sp_mkv_path}" '
+                           f'{("-a " + ",".join(cmd_audio_track)) if cmd_audio_track else ""} '
+                           f'{("-s " + ",".join(cmd_sub_track)) if cmd_sub_track else ""} '
+                           f'"{src_path}"')
+            sp_ok = False
+            if identify_ok or (not str(src_path).lower().endswith('.mpls')):
+                print(f'{self.t("混流命令: ")}{cmd}')
+                ret_sp = subprocess.Popen(cmd, shell=True).wait()
+                sp_ok = os.path.isfile(sp_mkv_path)
             if not sp_ok and (use_chapter_language or custom_chapter):
                 stem_out, ext_out = os.path.splitext(sp_mkv_path)
                 for suf in ('-001', '-01'):
@@ -1577,7 +1631,9 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                     if os.path.isfile(alt_out):
                         sp_ok = True
                         break
-            mux_failed = (ret_sp != 0 or not sp_ok)
+            mux_failed = not sp_ok
+            if identify_ok and (not sp_ok):
+                mux_failed = True
             if mux_failed and str(src_path).lower().endswith('.mpls'):
                 try:
                     n_fc = len(Chapter(src_path).in_out_time or [])
@@ -1585,13 +1641,43 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                     n_fc = 0
                 # Full-playlist concat does not reproduce ``--split parts:custom_parts`` windows from main MPLS.
                 # Use m2ts indices from edit-tracks (_select_tracks_for_source), not cmd_audio_track / remux -a/-s.
-                if n_fc > 1 and not (custom_chapter and str(custom_parts).strip()):
-                    if self._try_remux_mpls_track_aligned_concat(
+                if (custom_chapter and str(custom_parts).strip()):
+                    pass
+                elif n_fc > 1:
+                    max_sp_clips = 0
+                    if sp_loop_mpls:
+                        try:
+                            max_sp_clips = int(sp_loop_mpls.get('max_clips') or 0)
+                        except Exception:
+                            max_sp_clips = 0
+                    fb_ok = False
+                    if max_sp_clips == 1:
+                        fb_ok = bool(self._try_remux_mpls_single_clip_track_aligned(
+                            os.path.normpath(src_path),
+                            os.path.normpath(sp_mkv_path),
+                            copy_audio_track,
+                            copy_sub_track,
+                            cancel_event=cancel_event,
+                        ))
+                    else:
+                        fb_ok = bool(self._try_remux_mpls_track_aligned_concat(
                             os.path.normpath(src_path),
                             os.path.normpath(sp_mkv_path),
                             copy_audio_track,
                             copy_sub_track,
                             '',
+                            cancel_event=cancel_event,
+                            max_play_items=max_sp_clips if max_sp_clips > 0 else None,
+                        ))
+                    if fb_ok:
+                        sp_ok = os.path.isfile(sp_mkv_path)
+                        mux_failed = not sp_ok
+                elif n_fc == 1:
+                    if self._try_remux_mpls_single_clip_track_aligned(
+                            os.path.normpath(src_path),
+                            os.path.normpath(sp_mkv_path),
+                            copy_audio_track,
+                            copy_sub_track,
                             cancel_event=cancel_event,
                     ):
                         sp_ok = os.path.isfile(sp_mkv_path)

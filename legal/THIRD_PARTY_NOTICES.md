@@ -66,9 +66,9 @@ These are **two separate upstreams**: the `fdkaac` program links against or ship
 ## x265
 
 - **Files:** `x265.exe`
-- **Version:** Asuna-2.8
+- **Version:** 3.5
 - **License:** GPL-2.0
-- **Source:** https://github.com/msg7086/x265-Yuuki-Asuna/archive/refs/tags/Asuna-2.8.zip
+- **Source:** https://github.com/msg7086/x265-Yuuki-Asuna
 
 ---
 
@@ -87,6 +87,24 @@ These are **two separate upstreams**: the `fdkaac` program links against or ship
 - **Version:** v2.7.0
 - **License:** Apache-2.0
 - **Source:** https://github.com/justdan96/tsMuxer/archive/refs/tags/2.7.0.zip
+
+---
+
+## dovi_tool
+
+- **Files:** `dovi_tool.exe`
+- **Version:** 2.3.2
+- **License:** MIT
+- **Source:** https://github.com/quietvoid/dovi_tool/archive/refs/tags/2.3.2.zip
+
+---
+
+## truehdd
+
+- **Files:** `truehdd.exe`
+- **Version:** 0.4.0
+- **License:** Apache 2.0
+- **Source:** https://github.com/truehdd/truehdd/archive/refs/tags/0.4.0.zip
 
 ---
 

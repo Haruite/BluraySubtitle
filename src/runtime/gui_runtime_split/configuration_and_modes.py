@@ -8,13 +8,14 @@ from typing import Optional
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import QSizePolicy, QComboBox, QTableWidgetItem, QToolButton, QTableWidget
 
-from src.bdmv import Chapter
+from src.bdmv.chapter import Chapter, chapter_tail_trim_active_for_path, chapter_tail_trim_clear, chapter_tail_trim_register_path
 from src.core import ENCODE_REMUX_LABELS, ENCODE_REMUX_SP_LABELS, ENCODE_LABELS, ENCODE_SP_LABELS, REMUX_LABELS, \
     DEFAULT_APPROX_EPISODE_DURATION_SECONDS, CURRENT_UI_LANGUAGE, SUBTITLE_LABELS, BDMV_LABELS, MKV_LABELS, \
     DIY_BDMV_LABELS, DIY_SP_LABELS, DIY_REMUX_LABELS
 from src.core.i18n import translate_text
 from src.domain import Subtitle
-from src.exports.utils import get_time_str, print_exc_terminal, get_index_to_m2ts_and_offset, ui_perf_log
+from src.exports.utils import get_time_str, print_exc_terminal, get_index_to_m2ts_and_offset, ui_perf_log, \
+    chapter_cfg_chain_print
 from src.runtime.gui_runtime_classes.file_path_table_widget_item import FilePathTableWidgetItem
 from src.runtime.services import BluraySubtitle
 from .gui_base import BluraySubtitleGuiBase
@@ -174,7 +175,17 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             try:
                 self.table2.resizeColumnsToContents()
                 self._resize_table_columns_for_language(self.table2)
-                self._scroll_table_h_to_right(self.table2)
+                if self._is_movie_mode():
+                    fid = self.get_selected_function_id()
+                    if fid == 4:
+                        t2labels = list(ENCODE_LABELS)
+                    elif fid == 5:
+                        t2labels = list(DIY_REMUX_LABELS)
+                    else:
+                        t2labels = list(REMUX_LABELS)
+                    self._finalize_movie_mode_table2_layout(t2labels)
+                else:
+                    self._scroll_table_h_to_right(self.table2)
                 self.table3.resizeColumnsToContents()
                 self._resize_table_columns_for_language(self.table3)
                 self._scroll_table_h_to_right(self.table3)
@@ -194,6 +205,33 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
         if function_id not in (3, 4, 5):
             return
         self._full_refresh_remux_encode_tables_for_mode()
+
+    def _update_trim_copyright_tail_checkbox_for_episode_movie_mode(self) -> None:
+        """Movie mode: trim checkbox off and disabled. Series mode: restore last series choice (default on)."""
+        cb = getattr(self, 'trim_copyright_tail_checkbox', None)
+        if not cb or self.get_selected_function_id() not in (3, 4):
+            return
+        try:
+            if self._is_movie_mode():
+                if cb.isEnabled():
+                    try:
+                        self._trim_tail_last_series_checked = bool(cb.isChecked())
+                    except Exception:
+                        self._trim_tail_last_series_checked = True
+                cb.blockSignals(True)
+                cb.setEnabled(False)
+                cb.setChecked(False)
+                cb.blockSignals(False)
+            else:
+                cb.blockSignals(True)
+                cb.setEnabled(True)
+                cb.setChecked(bool(getattr(self, '_trim_tail_last_series_checked', True)))
+                cb.blockSignals(False)
+        except Exception:
+            try:
+                cb.blockSignals(False)
+            except Exception:
+                pass
 
     def _collect_config_inputs(self) -> dict[str, object]:
         current_fid = self.get_selected_function_id()
@@ -264,6 +302,64 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             'segments': segment_states,
         }
 
+    def _sync_chapter_tail_trim_episode(self) -> None:
+        """Register in-process Chapter tail trim (copyright bumper) for series remux/encode (fid 3/4)."""
+        from src.runtime.services_split.media_info_and_track_mapping import mpls_playlist_caches_clear
+
+        chapter_tail_trim_clear()
+        try:
+            fid = int(self.get_selected_function_id() or 0)
+        except Exception:
+            fid = 0
+        if self._is_movie_mode() or fid not in (3, 4):
+            mpls_playlist_caches_clear()
+            return
+        cb = getattr(self, 'trim_copyright_tail_checkbox', None)
+        want = bool(cb and cb.isChecked())
+        try:
+            selected = list(self.get_selected_mpls_no_ext() or [])
+        except Exception:
+            selected = []
+        if not want:
+            for _folder, mpls_ne in selected:
+                stem = str(mpls_ne or '').strip()
+                if not stem:
+                    continue
+                if stem.lower().endswith('.mpls'):
+                    stem = stem[:-5]
+                try:
+                    rows = int(self._chapter_node_data(stem).get('rows') or 0)
+                    self._chapter_checkbox_states[stem + '.mpls'] = [True] * max(rows, 0)
+                except Exception:
+                    pass
+            mpls_playlist_caches_clear()
+            return
+        for _folder, mpls_ne in selected:
+            stem = str(mpls_ne or '').strip()
+            if not stem:
+                continue
+            path = stem if stem.lower().endswith('.mpls') else stem + '.mpls'
+            try:
+                if os.path.isfile(path):
+                    chapter_tail_trim_register_path(path)
+            except Exception:
+                pass
+        mpls_playlist_caches_clear()
+
+    def _on_trim_copyright_tail_toggled(self, _checked: bool = False) -> None:
+        try:
+            cb = getattr(self, 'trim_copyright_tail_checkbox', None)
+            if cb and cb.isEnabled() and (not self._is_movie_mode()):
+                self._trim_tail_last_series_checked = bool(cb.isChecked())
+        except Exception:
+            pass
+        try:
+            self._sync_chapter_tail_trim_episode()
+            self._full_refresh_remux_encode_tables_for_mode()
+            self._refresh_table1_remux_cmds()
+        except Exception:
+            print_exc_terminal()
+
     def _diff_config_inputs(self, prev: dict[str, object], cur: dict[str, object]) -> tuple[str, int]:
         p_seg = prev.get('segments', {}) if isinstance(prev, dict) else {}
         c_seg = cur.get('segments', {})
@@ -294,6 +390,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
     def _generate_configuration_from_ui_inputs(self) -> dict[int, dict[str, int | str]]:
         busy = self._begin_delayed_busy(self.t('Regenerating configuration...'))
         try:
+            self._sync_chapter_tail_trim_episode()
             inputs = self._collect_config_inputs()
             old_inputs = getattr(self, '_last_config_inputs', {}) or {}
             mode, changed_row = self._diff_config_inputs(old_inputs, inputs)
@@ -309,6 +406,42 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     pass
             self._chapter_combo_force_mode = None
             self._last_config_inputs = inputs
+            _seg_in = dict(inputs.get('segments') or {})
+            _prev_conf_snapshot = getattr(self, '_last_configuration_34', None) or {}
+            _prev_keys = (
+                sorted(int(k) for k in _prev_conf_snapshot.keys())
+                if isinstance(_prev_conf_snapshot, dict) else []
+            )
+            chapter_cfg_chain_print(
+                '_generate:after_inputs '
+                f'mode={mode!r} changed_row={changed_row} segment_changed_mpls={sorted(segment_changed_mpls)!r} '
+                f'selected_mpls_n={len(inputs.get("selected_mpls") or [])} table2_rows={self.table2.rowCount()} '
+                f'prev_conf_keys={_prev_keys!r}',
+            )
+            _trim_cb = getattr(self, 'trim_copyright_tail_checkbox', None)
+            want_tail_trim = bool(
+                _trim_cb and _trim_cb.isChecked()
+                and (not self._is_movie_mode())
+                and self.get_selected_function_id() in (3, 4)
+            )
+
+            def _chapter_seg_fully_checked(mpls_key: str, checked_list: list[bool], total: int) -> bool:
+                if total <= 0:
+                    return True
+                base = all(checked_list[:total])
+                if not want_tail_trim:
+                    return base
+                mp = str(mpls_key or '').strip()
+                if not mp.lower().endswith('.mpls'):
+                    mp = mp + '.mpls'
+                try:
+                    if chapter_tail_trim_active_for_path(mp):
+                        return False
+                except Exception:
+                    pass
+                return base
+            for _stem in sorted(segment_changed_mpls):
+                chapter_cfg_chain_print(f'_generate:segments[{_stem!r}]={_seg_in.get(_stem)!r}')
             selected_mpls = list(inputs.get('selected_mpls') or [])
             if not selected_mpls:
                 return {}
@@ -375,7 +508,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     checked += [True] * (total_rows - len(checked))
                 if r < changed_row and mode in ('start', 'end') and r in prev_conf:
                     conf[r] = dict(prev_conf[r])
-                    conf[r]['chapter_segments_fully_checked'] = all(checked[:total_rows])
+                    conf[r]['chapter_segments_fully_checked'] = _chapter_seg_fully_checked(mpls_no_ext, checked, total_rows)
                     continue
                 if (
                         mode == 'segments'
@@ -386,7 +519,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                         and str(prev_conf[r].get('selected_mpls') or '').strip() == mpls_no_ext
                 ):
                     conf[r] = dict(prev_conf[r])
-                    conf[r]['chapter_segments_fully_checked'] = all(checked[:total_rows])
+                    conf[r]['chapter_segments_fully_checked'] = _chapter_seg_fully_checked(mpls_no_ext, checked, total_rows)
                     last_end_by_mpls[mpls_no_ext] = int(conf[r].get('end_at_chapter') or 0)
                     continue
                 raw_start = int(starts.get(r, 1) or 1)
@@ -420,7 +553,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                         # End change in another mpls should not affect this row.
                         if r in prev_conf:
                             conf[r] = dict(prev_conf[r])
-                            conf[r]['chapter_segments_fully_checked'] = all(checked[:total_rows])
+                            conf[r]['chapter_segments_fully_checked'] = _chapter_seg_fully_checked(mpls_no_ext, checked, total_rows)
                             continue
                 target_sec = float(sub_max_end[r] if r < len(sub_max_end) else approx_end_time)
                 chosen_end = raw_end
@@ -475,7 +608,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     'offset': get_time_str(float(offsets.get(start_idx, 0.0))),
                     'ep_duration': get_time_str(dur),
                     'disc_output_name': disc_output_name,
-                    'chapter_segments_fully_checked': all(checked[:total_rows]),
+                    'chapter_segments_fully_checked': _chapter_seg_fully_checked(mpls_no_ext, checked, total_rows),
                 }
                 last_end_by_mpls[mpls_no_ext] = int(chosen_end)
             # Sync continuation markers from actual conf (includes frozen start/end rows that skipped updates).
@@ -556,7 +689,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                         'offset': get_time_str(float(offsets.get(start_idx, 0.0))),
                         'ep_duration': get_time_str(dur),
                         'disc_output_name': disc_output_name,
-                        'chapter_segments_fully_checked': all(checked[:total_rows]),
+                        'chapter_segments_fully_checked': _chapter_seg_fully_checked(mpls_no_ext, checked, total_rows),
                     }
                     last_end_by_mpls[mpls_no_ext] = int(chosen_end)
                     _expanded = True
@@ -621,7 +754,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                                 'offset': get_time_str(float(offsets.get(start_idx, 0.0))),
                                 'ep_duration': get_time_str(dur),
                                 'disc_output_name': disc_output_name,
-                                'chapter_segments_fully_checked': all(checked[:total_rows]),
+                                'chapter_segments_fully_checked': _chapter_seg_fully_checked(req_mpls, checked, total_rows),
                             }
             # Keep UI order stable: when split from ending, insert new row right after source row.
             if conf:
@@ -639,6 +772,14 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 conf = {i: dict(v) for i, (_, v) in enumerate(items)}
             global CONFIGURATION
             CONFIGURATION = conf
+            for _k in sorted(conf.keys(), key=lambda x: int(x)):
+                _row = conf[_k]
+                chapter_cfg_chain_print(
+                    f'_generate:conf[{_k}] bdmv={_row.get("bdmv_index")} '
+                    f'mpls={_row.get("selected_mpls")!r} start={_row.get("start_at_chapter")} '
+                    f'end={_row.get("end_at_chapter")} ep_dur={_row.get("ep_duration")!r} '
+                    f'offset={_row.get("offset")!r} all_seg_checked={_row.get("chapter_segments_fully_checked")}',
+                )
             return conf
         finally:
             self._end_delayed_busy(busy)
@@ -667,6 +808,10 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
         """Rebuild table2 and table3 from table1 / main MPLS (full refresh on series/movie toggle)."""
         if self.get_selected_function_id() not in (3, 4, 5):
             return
+        try:
+            self._sync_chapter_tail_trim_episode()
+        except Exception:
+            print_exc_terminal()
         if not self.bdmv_folder_path.text().strip() or self.table1.rowCount() == 0:
             return
         if self._is_movie_mode():
@@ -697,6 +842,13 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 return
             configuration = bs.generate_configuration_from_selected_mpls(selected_mpls)
             self.on_configuration(configuration, update_sp_table=True)
+            try:
+                if self.table2.rowCount() > 0 and self.get_selected_function_id() in (3, 4, 5):
+                    cfg2 = self._generate_configuration_from_ui_inputs()
+                    if cfg2:
+                        self.on_configuration(cfg2, update_sp_table=True)
+            except Exception:
+                print_exc_terminal()
         except Exception:
             print_exc_terminal()
 
@@ -711,6 +863,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             self._refresh_movie_table2()
             return
         try:
+            self._sync_chapter_tail_trim_episode()
             if self.table2.rowCount() > 0:
                 configuration = self._generate_configuration_from_ui_inputs()
             else:
@@ -745,6 +898,17 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     f'movie_mode={bool(self._is_movie_mode())}',
                     reset=True,
                 )
+                chapter_cfg_chain_print(
+                    f'on_configuration:enter fid={function_id} update_sp_table={bool(update_sp_table)} '
+                    f'movie={self._is_movie_mode()} cfg_entries={len(configuration)}',
+                )
+                for _ck in sorted(configuration.keys(), key=lambda x: int(x)):
+                    _c = configuration[_ck]
+                    chapter_cfg_chain_print(
+                        f'on_configuration:cfg[{_ck}] bdmv={_c.get("bdmv_index")} '
+                        f'mpls={_c.get("selected_mpls")!r} chapter_index={_c.get("chapter_index")} '
+                        f'end_at_chapter={_c.get("end_at_chapter")} ep_duration={_c.get("ep_duration")!r}',
+                    )
                 if bool(update_sp_table):
                     busy = self._begin_delayed_busy(self.t('Updating table rows...'))
                 self._last_configuration_34 = configuration
@@ -858,16 +1022,12 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                         bdmv_item.setData(Qt.ItemDataRole.UserRole, str(con0.get('selected_mpls') or ''))
                         self.table2.setItem(row_i, bdmv_col, bdmv_item)
 
-                        chapter_combo = QComboBox()
-                        chapter_combo.addItem('chapter 01', 1)
-                        chapter_combo.setCurrentIndex(0)
-                        chapter_combo._prev_start_value = int(chapter_combo.currentData() or 1)
-                        chapter_combo.setEnabled(False)
-                        self.table2.setCellWidget(row_i, start_col, chapter_combo)
-                        end_combo = self._build_end_chapter_combo(1, False, 1, 2)
-                        end_combo.currentIndexChanged.connect(
-                            partial(self._on_end_chapter_combo_changed, row_i, labels))
-                        self.table2.setCellWidget(row_i, end_col, end_combo)
+                        self._apply_movie_mode_table2_chapter_widgets(
+                            row_i,
+                            labels,
+                            str(con0.get('selected_mpls') or ''),
+                            connect_end_handler=True,
+                        )
 
                         chapter = _chapter_cached(str(con0['selected_mpls']))
                         total_time = chapter.get_total_time()
@@ -965,27 +1125,13 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                         # Clamp bounds to avoid invalid chapter indices (e.g. rows+1 start).
                         j1 = max(1, min(j1, rows + 1))
                         j2 = max(j1 + 1, min(j2, rows + 1))
-                        index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(chapter)
-                        start_off = float(index_to_offset.get(j1, chapter.get_total_time()))
-                        end_off = float(index_to_offset.get(j2, chapter.get_total_time()))
-                        if end_off < start_off:
-                            end_off = start_off
                         sm = str(con.get('selected_mpls') or '').strip()
-                        mpls_full = sm if sm.lower().endswith('.mpls') else (f'{sm}.mpls' if sm else '')
-                        m2ts_files: list[str] = []
-                        if mpls_full and os.path.isfile(mpls_full):
-                            try:
-                                m2ts_files = list(
-                                    BluraySubtitle.m2ts_basenames_from_mpls_timeline_window(
-                                        mpls_full, start_off, end_off))
-                            except Exception:
-                                m2ts_files = []
-                        if not m2ts_files:
-                            m2ts_files = list(dict.fromkeys(
-                                [index_to_m2ts[i] for i in range(j1, j2) if i in index_to_m2ts]))
-                        cfg_fill_m2ts_by_row[int(sub_index)] = ', '.join(m2ts_files)
+                        m2ts_joined, detail_txt, duration = self._table2_m2ts_detail_duration_from_chapter_bounds(
+                            sm, j1, j2)
+                        cfg_fill_m2ts_by_row[int(sub_index)] = m2ts_joined
                         try:
-                            has_beginning = bool(float(index_to_offset.get(1, 0.0) or 0.0) > 0.001)
+                            has_beginning = bool(
+                                self._chapter_node_data(str(con['selected_mpls'])).get('has_beginning'))
                         except Exception:
                             has_beginning = False
                         options = self._build_start_chapter_options(rows, has_beginning)
@@ -1000,24 +1146,13 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                         chapter_combo._prev_start_value = int(
                             chapter_combo.currentData() or (chapter_combo.currentIndex() + 1))
                         chapter_combo.currentIndexChanged.connect(partial(self.on_chapter_combo, sub_index))
-                        duration = end_off - start_off
-                        duration = get_time_str(duration)
                         self.table2.setCellWidget(sub_index, start_col, chapter_combo)
                         end_combo = self._build_end_chapter_combo(rows, has_beginning, int(j1), int(j2))
                         end_combo.currentIndexChanged.connect(
                             partial(self._on_end_chapter_combo_changed, sub_index, labels))
                         self.table2.setCellWidget(sub_index, end_col, end_combo)
-                        self.table2.setItem(sub_index, m2ts_col, QTableWidgetItem(', '.join(m2ts_files)))
+                        self.table2.setItem(sub_index, m2ts_col, QTableWidgetItem(m2ts_joined))
                         if m2ts_detail_col >= 0:
-                            sm = str(con.get('selected_mpls') or '').strip()
-                            mpls_full = sm if sm.lower().endswith('.mpls') else (f'{sm}.mpls' if sm else '')
-                            detail_txt = ''
-                            if mpls_full and os.path.isfile(mpls_full):
-                                try:
-                                    detail_txt = BluraySubtitle.m2ts_file_detail_for_mpls_timeline_window(
-                                        mpls_full, start_off, end_off)
-                                except Exception:
-                                    detail_txt = ''
                             self.table2.setItem(sub_index, m2ts_detail_col, QTableWidgetItem(detail_txt))
                         self.table2.setItem(sub_index, duration_col, QTableWidgetItem(duration))
 
@@ -1077,16 +1212,45 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 self._resize_table_columns_for_language(self.table2)
                 self._update_language_combo_enabled_state()
                 ui_perf_log('before _sync/_apply chapter constraints')
-                self._sync_end_chapter_min_constraints(labels)
-                self._apply_start_chapter_constraints(labels)
+                chapter_cfg_chain_print(
+                    f'on_configuration:before_sync_constraints fid={function_id} '
+                    f'prev_ui_m2ts_by_row={prev_ui_m2ts_by_row!r} cfg_fill_m2ts_by_row={cfg_fill_m2ts_by_row!r}',
+                )
+                if self._is_movie_mode():
+                    self._finalize_movie_mode_table2_layout(labels)
+                else:
+                    self._sync_end_chapter_min_constraints(labels)
+                    self._apply_start_chapter_constraints(labels)
+                _combo_snap: dict[str, object] = {}
+                for __r in range(self.table2.rowCount()):
+                    _sc = self.table2.cellWidget(__r, start_col)
+                    _ec = self.table2.cellWidget(__r, end_col)
+                    if isinstance(_sc, QComboBox) and isinstance(_ec, QComboBox):
+                        _combo_snap[str(__r)] = {
+                            'start_data': _sc.currentData(),
+                            'end_data': _ec.currentData(),
+                            'start_idx': _sc.currentIndex(),
+                            'end_idx': _ec.currentIndex(),
+                            'start_txt': _sc.currentText(),
+                            'end_txt': _ec.currentText(),
+                        }
+                    else:
+                        _combo_snap[str(__r)] = {'start': type(_sc).__name__, 'end': type(_ec).__name__}
+                chapter_cfg_chain_print(
+                    f'on_configuration:after_constraints_combo_snapshot fid={function_id} {_combo_snap!r}',
+                )
                 ui_perf_log('before _refresh_table2_m2ts_duration_from_widgets')
                 self._refresh_table2_m2ts_duration_from_widgets(
                     labels,
                     prev_ui_m2ts_by_row=prev_ui_m2ts_by_row,
                     cfg_fill_m2ts_by_row=cfg_fill_m2ts_by_row,
                 )
+                chapter_cfg_chain_print(f'on_configuration:after_refresh_table2_m2ts_from_widgets fid={function_id}')
                 ui_perf_log('after _refresh_table2_m2ts_duration_from_widgets')
-                self._scroll_table_h_to_right(self.table2)
+                if self._is_movie_mode():
+                    self._finalize_movie_mode_table2_layout(labels)
+                else:
+                    self._scroll_table_h_to_right(self.table2)
                 if function_id in (3, 4, 5):
                     if update_sp_table:
                         ui_perf_log('before refresh_sp_table')
@@ -1252,6 +1416,10 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
 
         if function_id in (3, 4, 5):
             try:
+                try:
+                    self._update_trim_copyright_tail_checkbox_for_episode_movie_mode()
+                except Exception:
+                    pass
                 table1_labels = DIY_BDMV_LABELS if function_id == 5 else BDMV_LABELS
                 if self.table1.columnCount() != len(table1_labels):
                     self.table1.setColumnCount(len(table1_labels))

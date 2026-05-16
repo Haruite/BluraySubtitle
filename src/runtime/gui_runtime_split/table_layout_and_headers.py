@@ -9,6 +9,47 @@ from .gui_base import BluraySubtitleGuiBase
 
 
 class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
+    def _show_m2ts_file_detail_columns(self) -> None:
+        """Show m2ts_file_detail on table2/table3 (movie mode: compare SP vs main row)."""
+        try:
+            fid = self.get_selected_function_id() if hasattr(self, 'get_selected_function_id') else 0
+            if hasattr(self, 'table2') and self.table2:
+                enc_remux = fid == 4 and getattr(self, '_encode_input_mode', 'bdmv') == 'remux'
+                if fid == 3:
+                    t2labels = list(REMUX_LABELS)
+                elif enc_remux:
+                    t2labels = list(ENCODE_REMUX_LABELS)
+                elif fid == 4:
+                    t2labels = list(ENCODE_LABELS)
+                elif fid == 5:
+                    t2labels = list(DIY_REMUX_LABELS)
+                else:
+                    t2labels = []
+                if t2labels and 'm2ts_file_detail' in t2labels:
+                    c = t2labels.index('m2ts_file_detail')
+                    if c < self.table2.columnCount():
+                        self.table2.setColumnHidden(c, False)
+                        hdr = self.table2.horizontalHeader()
+                        hdr.setSectionResizeMode(c, QHeaderView.ResizeMode.Interactive)
+                        self.table2.setColumnWidth(c, max(280, int(self.table2.columnWidth(c) or 0)))
+            if hasattr(self, 'table3') and self.table3:
+                remux_sp = fid == 4 and getattr(self, '_encode_input_mode', 'bdmv') == 'remux'
+                if fid == 5:
+                    t3labels = list(DIY_SP_LABELS)
+                elif remux_sp:
+                    t3labels = list(ENCODE_REMUX_SP_LABELS)
+                else:
+                    t3labels = list(ENCODE_SP_LABELS)
+                if t3labels and 'm2ts_file_detail' in t3labels:
+                    c = t3labels.index('m2ts_file_detail')
+                    if c < self.table3.columnCount():
+                        self.table3.setColumnHidden(c, False)
+                        hdr = self.table3.horizontalHeader()
+                        hdr.setSectionResizeMode(c, QHeaderView.ResizeMode.Interactive)
+                        self.table3.setColumnWidth(c, max(280, int(self.table3.columnWidth(c) or 0)))
+        except Exception:
+            pass
+
     def _apply_hidden_m2ts_file_detail_columns(self):
         """Hide m2ts_file_detail on table2/table3 (internal timeline detail; not shown in UI)."""
         try:

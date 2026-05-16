@@ -3,7 +3,8 @@ from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import QApplication, QLabel, QSlider, QTabBar, QWidget, QPlainTextEdit, QLineEdit, QGroupBox, \
     QComboBox, QTableWidget
 
-from src.core import APP_TITLE, CURRENT_UI_LANGUAGE
+from src.core import APP_TITLE
+import src.core.settings as core_settings
 from src.core.i18n import translate_text
 from .gui_base import BluraySubtitleGuiBase
 
@@ -26,7 +27,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
             pass
 
     def t(self, text: str) -> str:
-        return translate_text(str(text), getattr(self, '_language_code', CURRENT_UI_LANGUAGE))
+        return translate_text(str(text), getattr(self, '_language_code', None) or core_settings.CURRENT_UI_LANGUAGE)
 
     def _refresh_language_combo(self):
         if not hasattr(self, 'language_label') or not hasattr(self, 'language_combo'):
@@ -372,10 +373,9 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                     pass
 
     def _apply_language(self, language_code: str):
-        global CURRENT_UI_LANGUAGE
         code = 'zh' if language_code == 'zh' else 'en'
         self._language_code = code
-        CURRENT_UI_LANGUAGE = code
+        core_settings.CURRENT_UI_LANGUAGE = code
         self._language_updating = True
         try:
             self.setWindowTitle(APP_TITLE)
@@ -407,7 +407,8 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
         combo.blockSignals(True)
         try:
             combo.clear()
-            if getattr(self, '_language_code', CURRENT_UI_LANGUAGE) == 'zh':
+            _lang = getattr(self, '_language_code', None) or core_settings.CURRENT_UI_LANGUAGE
+            if _lang == 'zh':
                 items = ["", ".zh-Hans", ".zh-Hant", ".chs", ".cht", ".sc", ".tc", ".big5", ".gb"]
             else:
                 items = ["", "en", "eng", "en_US", "jpn", "jp", "kor"]
@@ -427,7 +428,8 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
         self._apply_language(str(code))
 
     def _localized_headers_for_keys(self, keys: list[str]) -> list[str]:
-        if getattr(self, '_language_code', CURRENT_UI_LANGUAGE) != 'zh':
+        _lang = getattr(self, '_language_code', None) or core_settings.CURRENT_UI_LANGUAGE
+        if _lang != 'zh':
             en = {
                 'm2ts_file_detail': 'm2ts detail',
                 'audio_convert': 'audio convert',
@@ -499,7 +501,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
         return [zh.get(k, str(k).replace('_', ' ')) for k in keys]
 
     def _refresh_language_dependent_sizes(self):
-        lang = getattr(self, '_language_code', CURRENT_UI_LANGUAGE)
+        lang = getattr(self, '_language_code', None) or core_settings.CURRENT_UI_LANGUAGE
         try:
             if hasattr(self, 'table1') and self.table1:
                 function_id = self.get_selected_function_id() if hasattr(self, 'get_selected_function_id') else 0

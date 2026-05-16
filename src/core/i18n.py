@@ -5,7 +5,7 @@ import re
 import sys
 from typing import Optional
 
-from src.core import CURRENT_UI_LANGUAGE
+import src.core.settings as _core_settings
 
 I18N_ZH_TO_EN = {
     '第三方许可': 'Third-party notices',
@@ -36,6 +36,8 @@ I18N_ZH_TO_EN = {
     '编辑章节': 'edit chapters',
     '编辑附件': 'Edit Attachment',
     '选择所有轨道': 'Select all tracks',
+    '裁剪版权片段': 'Trim copyright bumper',
+    '混流Dolby Vision': 'Mux Dolby Vision',
     'sub_language': '字幕语言',
     'm2ts_type': 'm2ts 类型',
     '支持 ass/ssa/srt/sup 格式': 'Supports ass/ssa/srt/sup formats',
@@ -168,6 +170,12 @@ I18N_ZH_TO_EN = {
     'Opus编码命令：': 'Opus encode command:',
     '混流命令：': 'Mux command:',
     '混流命令: ': 'Mux command: ',
+    'mkvmerge 混流失败 (exit ': 'mkvmerge mux failed (exit ',
+    ')，保留原 MKV：': '), keeping original MKV: ',
+    'mkvmerge 混流未生成有效 tmp，保留原 MKV：': 'mkvmerge produced no valid tmp, keeping original MKV: ',
+    '混流后文件变大 (': 'Mux output is larger (',
+    ')，仍应用音轨替换结果': '), applying audio replacement anyway',
+    ')：': '): ',
     'getnative 需要 GRAYS 灰度单帧输入': 'getnative expects GRAYS input clip',
     'getnative 当前只支持单帧 GRAYS 输入': 'src.getnative.getnative currently expects a single-frame GRAYS clip.',
     'src_heights 不能为空': 'src_heights cannot be empty.',
@@ -186,6 +194,9 @@ I18N_ZH_TO_EN = {
     '压制并混流 SPs：': 'Encode and mux SPs: ',
     '正在分析mpls的第一个文件 [': 'Analyzing first stream file in mpls [',
     '] 的轨道': '] tracks',
+    '使用 edit-tracks 选轨，主 MPLS': 'Applying edit-tracks for main MPLS',
+    '默认选轨，主 MPLS': 'Default track selection for main MPLS',
+    '（参考 m2ts: ': '(ref m2ts: ',
     '选择音频轨道 ': 'Selected audio tracks ',
     '，字幕轨道 ': ', subtitle tracks ',
     '找到封面图片 ｢': 'Found cover image ｢',
@@ -200,6 +211,8 @@ I18N_ZH_TO_EN = {
     'ffmpeg 压缩的flac文件比原音轨大，将删除 ｢': 'ffmpeg-compressed FLAC is larger than the original track, deleting ｢',
     'flac 压缩 wav 文件 ｢': 'flac compressing wav file ｢',
     'flac 文件比原音轨大，将删除 ｢': 'FLAC is larger than the original track, deleting ｢',
+    'flac 文件比原音轨大，TrueHD 仍保留 FLAC ｢': 'FLAC is larger than the original track, keeping FLAC for TrueHD ｢',
+    'ffmpeg 压缩的 flac 比原音轨大，TrueHD 仍保留 FLAC ｢': 'ffmpeg-compressed FLAC is larger than the original track, keeping FLAC for TrueHD ｢',
     '多进程加载失败，切换到单进程: ': 'Multiprocess load failed, switching to single process: ',
     '字幕拖入处理失败，请检查字幕文件和原盘路径': 'Subtitle drag-in failed, please check the subtitle files and Blu-ray path',
     '字幕文件 ｢': 'Subtitle file ｢',
@@ -214,6 +227,18 @@ I18N_ZH_TO_EN = {
     '检测到空音轨 ｢': 'Detected empty audio track ｢',
     '正在压缩音轨 ｢': 'Compressing audio track ｢',
     '正在提取无损音轨，命令: ': 'Extracting lossless tracks, command: ',
+    '正在提取音轨，命令: ': 'Extracting audio tracks, command: ',
+    '保留有损音轨 ｢': 'Keeping lossy audio track ｢',
+    '有损音轨 ｢': 'Lossy track ｢',
+    'TrueHD Atmos 解码命令：': 'TrueHD Atmos decode command: ',
+    'TrueHD Atmos PCM 回退解码：': 'TrueHD Atmos PCM fallback decode: ',
+    'truehdd W64 转 RIFF WAV：': 'truehdd W64 to RIFF WAV: ',
+    'truehdd 原始 PCM→WAV (': 'truehdd raw PCM→WAV (',
+    'TrueHD Atmos 音轨 ｢': 'TrueHD Atmos track ｢',
+    'TrueHD 音轨 ｢': 'TrueHD track ｢',
+    '｣ 未成功 truehdd 解码，保留原盘音轨': '｣ truehdd decode failed; keeping mux from source MKV',
+    '｣ 已解码为 ｢': '｣ decoded to ｢',
+    '（混流时用 mkvmerge -y 校正延迟）': ' (mkvmerge -y at mux)',
     '生成配置失败: ': 'Failed to generate configuration: ',
     '获取字幕时长失败: ': 'Failed to get subtitle duration: ',
     '转换完成: ｢': 'Conversion completed: ｢',
@@ -389,7 +414,7 @@ def _terminal_err_stream():
 def translate_text(text: str, language: Optional[str] = None) -> str:
     if not isinstance(text, str):
         return text
-    lang = language or CURRENT_UI_LANGUAGE
+    lang = language or _core_settings.CURRENT_UI_LANGUAGE
     mapping = I18N_ZH_TO_EN if lang == 'en' else I18N_EN_TO_ZH
     if text in mapping:
         return mapping[text]

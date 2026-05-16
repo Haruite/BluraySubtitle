@@ -17,11 +17,20 @@ from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPlainTextEdit, QWidge
 
 from src.bdmv import Chapter
 from src.core import MKV_LABELS, REMUX_LABELS, DIY_REMUX_LABELS, ENCODE_LABELS, SUBTITLE_LABELS, ENCODE_REMUX_LABELS, \
-    ENCODE_REMUX_SP_LABELS, CURRENT_UI_LANGUAGE, find_mkvtoolinx, is_docker
+    ENCODE_REMUX_SP_LABELS, CURRENT_UI_LANGUAGE, find_mkvtoolnix, is_docker
 from src.core.i18n import translate_text
 from src.domain import MKV, Ass, SRT, Subtitle
-from src.exports.utils import print_terminal_line, print_tb_string_terminal, get_time_str, get_mpv_safe_path, \
-    print_exc_terminal, third_party_notices_markdown_path
+from src.exports.utils import (
+    print_terminal_line,
+    print_tb_string_terminal,
+    get_time_str,
+    get_mpv_safe_path,
+    print_exc_terminal,
+    third_party_notices_markdown_path,
+    chapter_cfg_chain_print,
+    chapter_view_segment_trace_begin,
+    chapter_view_segment_trace_end,
+)
 from src.runtime.gui_runtime_classes.encode_mkv_folder_worker import EncodeMkvFolderWorker
 from src.runtime.gui_runtime_classes.encode_worker import EncodeWorker
 from src.runtime.gui_runtime_classes.file_path_table_widget_item import FilePathTableWidgetItem
@@ -886,7 +895,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             QMessageBox.information(self, " ", "Output folder does not exist")
             return
         self.ensure_default_vpy_file()
-        find_mkvtoolinx()
+        find_mkvtoolnix()
 
         cancel_event = threading.Event()
         self._current_cancel_event = cancel_event
@@ -1073,7 +1082,13 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 QMessageBox.information(self, " ", "Configuration is empty, skipping update")
                 return
         else:
-            configuration = self._configuration_snapshot_for_service_run()
+            try:
+                self._sync_chapter_tail_trim_episode()
+                configuration = self._generate_configuration_from_ui_inputs()
+            except Exception:
+                configuration = {}
+            if not configuration:
+                configuration = self._configuration_snapshot_for_service_run()
             if not configuration:
                 self._current_cancel_event = None
                 self._reset_exe_button()
@@ -1098,6 +1113,15 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         else:
             sub_pack_mode = 'external'
 
+        _trim_cb = getattr(self, 'trim_copyright_tail_checkbox', None)
+        episode_trim_copyright_tail = bool(
+            _trim_cb and _trim_cb.isChecked()
+            and (not self._is_movie_mode())
+            and self.get_selected_function_id() in (3, 4)
+        )
+        _dovi_cb = getattr(self, 'mux_dolby_vision_checkbox', None)
+        mux_dolby_vision = bool(_dovi_cb is None or _dovi_cb.isChecked())
+
         self._encode_thread = QThread(self)
         self._encode_worker = EncodeWorker(
             self.bdmv_folder_path.text(),
@@ -1120,6 +1144,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             encode_bit_depth=encode_bit_depth,
             use_getnative=use_getnative,
             movie_mode=self._is_movie_mode(),
+            episode_trim_copyright_tail=episode_trim_copyright_tail,
+            mux_dolby_vision=mux_dolby_vision,
             track_selection_config=getattr(self, '_track_selection_config', {}),
             track_language_config=getattr(self, '_track_language_config', {}),
             track_lossless_audio_config=getattr(self, '_track_lossless_audio_config', {}),
@@ -1832,12 +1858,21 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             if not self._is_mpls_currently_main(mpls_path):
                 return
             # Save checkbox states for this mpls_path
+            prev_states = self._chapter_checkbox_states.get(mpls_path)
             states = []
             for row in range(chapter_window.table_widget.rowCount()):
                 item = chapter_window.table_widget.item(row, 0)
                 if item:
                     states.append(item.checkState() == Qt.CheckState.Checked)
+            segment_selection_changed = prev_states is None or prev_states != states
             self._chapter_checkbox_states[mpls_path] = states
+            if segment_selection_changed:
+                chapter_view_segment_trace_begin()
+            chapter_cfg_chain_print(
+                f'on_button_click:view_chapters_accepted mpls_path={mpls_path!r} '
+                f'fid={self.get_selected_function_id()} bdmv_index={bdmv_index} '
+                f'segment_selection_changed={segment_selection_changed}',
+            )
             progress = QProgressDialog(self.t('Applying chapter selection...'), '', 0, 0, self)
             progress.setCancelButton(None)
             progress.setWindowModality(Qt.WindowModality.ApplicationModal)
@@ -1852,7 +1887,11 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     progress.setLabelText(self.t('Regenerating configuration...'))
                     QCoreApplication.processEvents()
                     cfg = self._generate_configuration_from_ui_inputs()
+                    chapter_cfg_chain_print(
+                        f'on_button_click:before_on_configuration cfg_keys_n={len(cfg)}',
+                    )
                     self.on_configuration(cfg, update_sp_table=False)
+                    chapter_cfg_chain_print('on_button_click:after_on_configuration')
             except Exception:
                 self._show_error_dialog(traceback.format_exc())
             try:
@@ -1861,11 +1900,16 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     QCoreApplication.processEvents()
                     self._sync_chapter_checkbox_sp_for_mpls(mpls_path, bdmv_index)
                     self._recompute_sp_output_names(only_bdmv_index=bdmv_index)
+                    chapter_cfg_chain_print(
+                        f'on_button_click:after_sync_sp_and_recompute_names bdmv_index={bdmv_index}',
+                    )
             except Exception:
                 self._show_error_dialog(traceback.format_exc())
             finally:
                 progress.close()
                 progress.deleteLater()
+                if segment_selection_changed:
+                    chapter_view_segment_trace_end()
 
     def on_button_main(self, mpls_path: str, clicked_checked: Optional[bool] = None):
         def has_subtitle_in_table2() -> bool:

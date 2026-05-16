@@ -518,6 +518,120 @@ install_libdovi() {
 }
 
 # ---------------------------------------------------------------------------
+# dovi_tool (prebuilt release binary for BluraySubtitle remux)
+# ---------------------------------------------------------------------------
+
+DOVI_TOOL_VERSION="${DOVI_TOOL_VERSION:-2.3.2}"
+
+install_dovi_tool() {
+  log "$(msg "Installing dovi_tool ${DOVI_TOOL_VERSION} (prebuilt)" "安装 dovi_tool ${DOVI_TOOL_VERSION}（预编译包）")"
+
+  if [[ -x /usr/bin/dovi_tool ]]; then
+    log "$(msg 'dovi_tool already installed (/usr/bin/dovi_tool), skipping' '检测到 dovi_tool 已安装（/usr/bin/dovi_tool），跳过')"
+    return 0
+  fi
+
+  local arch tarball
+  case "$(uname -m)" in
+    x86_64 | amd64)
+      arch=x86_64
+      ;;
+    aarch64 | arm64)
+      arch=aarch64
+      ;;
+    *)
+      die "$(msg "Unsupported CPU architecture for dovi_tool prebuilt: $(uname -m)" "当前 CPU 架构不支持预编译 dovi_tool：$(uname -m)")"
+      ;;
+  esac
+  tarball="dovi_tool-${DOVI_TOOL_VERSION}-${arch}-unknown-linux-musl.tar.gz"
+
+  local deps=(wget tar)
+  local missing_deps=()
+  local dep
+  for dep in "${deps[@]}"; do
+    if ! dpkg-query -W -f='${Status}' "$dep" 2>/dev/null | grep -q "install ok installed"; then
+      missing_deps+=("$dep")
+    fi
+  done
+  if (( ${#missing_deps[@]} > 0 )); then
+    apt_update
+    apt_install "${missing_deps[@]}" || die "$(msg 'Failed to install dovi_tool dependencies' 'dovi_tool 依赖安装失败')"
+  fi
+
+  local build_dir
+  build_dir="$(mktemp -d)"
+
+  (
+    cd "$build_dir" || exit 1
+    tmux_run "$(msg "Download ${tarball}" "下载 ${tarball}")" \
+      wget "https://github.com/quietvoid/dovi_tool/releases/download/${DOVI_TOOL_VERSION}/${tarball}" || exit 1
+    tmux_run "$(msg 'Extract dovi_tool tarball' '解压 dovi_tool 压缩包')" tar zxvf "$tarball" || exit 1
+    sudo cp dovi_tool /usr/bin/dovi_tool || exit 1
+    sudo chmod +x /usr/bin/dovi_tool || exit 1
+  ) || die "$(msg 'dovi_tool install failed' 'dovi_tool 安装失败')"
+
+  rm -rf "$build_dir"
+  log "$(msg 'dovi_tool installation complete' 'dovi_tool 安装完成')"
+}
+
+# ---------------------------------------------------------------------------
+# truehdd (prebuilt release binary for TrueHD+Atmos decode)
+# ---------------------------------------------------------------------------
+
+TRUEHDD_VERSION="${TRUEHDD_VERSION:-0.4.0}"
+
+install_truehdd() {
+  log "$(msg "Installing truehdd ${TRUEHDD_VERSION} (prebuilt)" "安装 truehdd ${TRUEHDD_VERSION}（预编译包）")"
+
+  if [[ -x /usr/bin/truehdd ]]; then
+    log "$(msg 'truehdd already installed (/usr/bin/truehdd), skipping' '检测到 truehdd 已安装（/usr/bin/truehdd），跳过')"
+    return 0
+  fi
+
+  local arch tarball
+  case "$(uname -m)" in
+    x86_64 | amd64)
+      arch=x86_64
+      ;;
+    aarch64 | arm64)
+      arch=aarch64
+      ;;
+    *)
+      die "$(msg "Unsupported CPU architecture for truehdd prebuilt: $(uname -m)" "当前 CPU 架构不支持预编译 truehdd：$(uname -m)")"
+      ;;
+  esac
+  tarball="truehdd-${TRUEHDD_VERSION}-${arch}-unknown-linux-gnu.tar.gz"
+
+  local deps=(wget tar)
+  local missing_deps=()
+  local dep
+  for dep in "${deps[@]}"; do
+    if ! dpkg-query -W -f='${Status}' "$dep" 2>/dev/null | grep -q "install ok installed"; then
+      missing_deps+=("$dep")
+    fi
+  done
+  if (( ${#missing_deps[@]} > 0 )); then
+    apt_update
+    apt_install "${missing_deps[@]}" || die "$(msg 'Failed to install truehdd dependencies' 'truehdd 依赖安装失败')"
+  fi
+
+  local build_dir
+  build_dir="$(mktemp -d)"
+
+  (
+    cd "$build_dir" || exit 1
+    tmux_run "$(msg "Download ${tarball}" "下载 ${tarball}")" \
+      wget "https://github.com/truehdd/truehdd/releases/download/${TRUEHDD_VERSION}/${tarball}" || exit 1
+    tmux_run "$(msg 'Extract truehdd tarball' '解压 truehdd 压缩包')" tar zxvf "$tarball" || exit 1
+    sudo cp truehdd /usr/bin/truehdd || exit 1
+    sudo chmod +x /usr/bin/truehdd || exit 1
+  ) || die "$(msg 'truehdd install failed' 'truehdd 安装失败')"
+
+  rm -rf "$build_dir"
+  log "$(msg 'truehdd installation complete' 'truehdd 安装完成')"
+}
+
+# ---------------------------------------------------------------------------
 # dav1d (for mpv-build / ffmpeg --enable-libdav1d)
 # ---------------------------------------------------------------------------
 
@@ -2483,6 +2597,8 @@ install_x264
 install_x265
 install_svt_av1
 install_tsmuxer
+install_dovi_tool
+install_truehdd
 install_fdk_aac
 install_flac
 install_vapoursynth

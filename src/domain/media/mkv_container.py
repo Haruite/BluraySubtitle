@@ -2,7 +2,7 @@ import os
 import subprocess
 from struct import unpack
 
-from src.core import find_mkvtoolinx
+from src.core import find_mkvtoolnix
 from src.core import mkvtoolnix_ui_language_arg
 from src.core import settings as core_settings
 from src.core.i18n import translate_text
@@ -11,7 +11,7 @@ from src.core.i18n import translate_text
 class MKV:
     def __init__(self, path: str):
         self.path = path
-        find_mkvtoolinx()
+        find_mkvtoolnix()
 
     def get_duration(self):
         # Matroska IDs used by mkvinfo:

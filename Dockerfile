@@ -76,6 +76,32 @@ RUN set -eux; \
     rm -rf /tmp/dovi
 
 RUN set -eux; \
+    DOVI_VER=2.3.2; \
+    case "$(uname -m)" in \
+      x86_64|amd64) DOVI_ARCH=x86_64 ;; \
+      aarch64|arm64) DOVI_ARCH=aarch64 ;; \
+      *) echo "unsupported arch for dovi_tool: $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    mkdir -p /tmp/dovi_bin && cd /tmp/dovi_bin; \
+    wget -q "https://github.com/quietvoid/dovi_tool/releases/download/${DOVI_VER}/dovi_tool-${DOVI_VER}-${DOVI_ARCH}-unknown-linux-musl.tar.gz"; \
+    tar zxf "dovi_tool-${DOVI_VER}-${DOVI_ARCH}-unknown-linux-musl.tar.gz"; \
+    install -m 0755 dovi_tool /usr/bin/dovi_tool; \
+    rm -rf /tmp/dovi_bin
+
+RUN set -eux; \
+    TRUEHDD_VER=0.4.0; \
+    case "$(uname -m)" in \
+      x86_64|amd64) TRUEHDD_ARCH=x86_64 ;; \
+      aarch64|arm64) TRUEHDD_ARCH=aarch64 ;; \
+      *) echo "unsupported arch for truehdd: $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    mkdir -p /tmp/truehdd_bin && cd /tmp/truehdd_bin; \
+    wget -q "https://github.com/truehdd/truehdd/releases/download/${TRUEHDD_VER}/truehdd-${TRUEHDD_VER}-${TRUEHDD_ARCH}-unknown-linux-gnu.tar.gz"; \
+    tar zxf "truehdd-${TRUEHDD_VER}-${TRUEHDD_ARCH}-unknown-linux-gnu.tar.gz"; \
+    install -m 0755 truehdd /usr/bin/truehdd; \
+    rm -rf /tmp/truehdd_bin
+
+RUN set -eux; \
     mkdir -p /tmp/mpv && cd /tmp/mpv; \
     git clone https://github.com/mpv-player/mpv-build.git; \
     cd mpv-build; \
@@ -678,6 +704,9 @@ RUN set -eux; \
     cp tsMuxeR /usr/bin/tsMuxeR; \
     chmod +x /usr/bin/tsMuxeR; \
     rm -rf /tmp/tsmuxer
+
+RUN test -x /usr/bin/dovi_tool
+RUN test -x /usr/bin/truehdd
 
 ENV LD_PRELOAD=/usr/local/lib/libvapoursynth-script.so
 

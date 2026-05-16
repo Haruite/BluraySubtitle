@@ -424,6 +424,27 @@ def ui_perf_log(_label: str, *, reset: bool = False) -> None:
     pass
 
 
+_CHAPTER_VIEW_SEGMENT_TRACE_ACTIVE = False
+
+
+def chapter_view_segment_trace_begin() -> None:
+    """Enable :func:`chapter_cfg_chain_print` until :func:`chapter_view_segment_trace_end` (view-chapters segment apply)."""
+    global _CHAPTER_VIEW_SEGMENT_TRACE_ACTIVE
+    _CHAPTER_VIEW_SEGMENT_TRACE_ACTIVE = True
+
+
+def chapter_view_segment_trace_end() -> None:
+    global _CHAPTER_VIEW_SEGMENT_TRACE_ACTIVE
+    _CHAPTER_VIEW_SEGMENT_TRACE_ACTIVE = False
+
+
+def chapter_cfg_chain_print(message: str) -> None:
+    """Print one line to stderr while view-chapters segment-apply tracing is active (temporary debug)."""
+    if not _CHAPTER_VIEW_SEGMENT_TRACE_ACTIVE:
+        return
+    print(f'[BluraySubtitle][chapter-cfg] {message}', file=_terminal_err_stream(), flush=True)
+
+
 def print_terminal_line(message: str) -> None:
     print(translate_text(message), file=_terminal_err_stream(), flush=True)
 
@@ -465,6 +486,9 @@ __all__ = [
     "print_terminal_line",
     "ui_perf_enabled",
     "ui_perf_log",
+    "chapter_cfg_chain_print",
+    "chapter_view_segment_trace_begin",
+    "chapter_view_segment_trace_end",
     "print_exc_terminal",
     "print_tb_string_terminal",
 ]

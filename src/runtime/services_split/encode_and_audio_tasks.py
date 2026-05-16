@@ -15,8 +15,8 @@ from typing import Optional
 
 import pycountry
 
-from ...core.settings import VSPIPE_PATH
-from ...core import FFMPEG_PATH
+from ...core.settings import VSPIPE_PATH, TRUEHDD_PATH
+from ...core import FFMPEG_PATH, FFPROBE_PATH
 from ...core.settings import PLUGIN_PATH
 from .service_base import BluraySubtitleServiceBase
 from ...core import MKV_INFO_PATH, MKV_EXTRACT_PATH, mkvtoolnix_ui_language_arg
@@ -33,6 +33,176 @@ from ...vs_tools.getnative import getnative as auto_getnative
 
 MIGRATE_METHODS = ['flac_task', 'encode_task', 'extract_lossless']
 KEEP_GETNATIVE_ARTIFACTS = bool(str(os.getenv("BLURAYSUB_KEEP_GETNATIVE_ARTIFACTS", "") or "").strip() == "1")
+
+_EXTERNAL_AUDIO_SUFFIXES = (
+    '.flac', '.m4a', '.opus', '.ac3', '.eac3', '.aac', '.mp3', '.mp2', '.ogg', '.dts', '.thd', '.wav', '.w64',
+)
+
+
+def _truehdd_exe() -> str:
+    from ...core import settings as _core_settings
+    raw = str(getattr(_core_settings, 'TRUEHDD_PATH', '') or TRUEHDD_PATH or '').strip()
+    if raw and os.path.isfile(raw):
+        return raw
+    return shutil.which('truehdd') or shutil.which('truehdd.exe') or ''
+
+
+def _ffprobe_audio_params(path: str) -> dict[str, int]:
+    """Best-effort channel count / sample rate for elementary or PCM audio."""
+    out = {'channels': 8, 'sample_rate': 48000, 'bits': 24}
+    if not path or not os.path.isfile(path):
+        return out
+    try:
+        proc = subprocess.run(
+            [FFPROBE_PATH or 'ffprobe', '-v', 'error', '-select_streams', 'a:0',
+             '-show_entries', 'stream=channels,sample_rate,bits_per_raw_sample,sample_fmt',
+             '-of', 'json', path],
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='ignore',
+            shell=False,
+        )
+        data = json.loads(proc.stdout or '{}')
+        streams = data.get('streams') or []
+        if not streams:
+            return out
+        st = streams[0] if isinstance(streams[0], dict) else {}
+        try:
+            out['channels'] = max(1, int(st.get('channels') or out['channels']))
+        except Exception:
+            pass
+        try:
+            out['sample_rate'] = max(1, int(st.get('sample_rate') or out['sample_rate']))
+        except Exception:
+            pass
+        try:
+            bits = int(st.get('bits_per_raw_sample') or 0)
+            if bits > 0:
+                out['bits'] = bits
+        except Exception:
+            pass
+        fmt = str(st.get('sample_fmt') or '').lower()
+        if 's32' in fmt:
+            out['bits'] = 32
+        elif 's16' in fmt:
+            out['bits'] = 16
+    except Exception:
+        pass
+    return out
+
+
+def _pcm_raw_to_wav(pcm_path: str, wav_path: str, channels: int, sample_rate: int, bits: int = 24) -> bool:
+    """
+    Wrap truehdd raw PCM (24-bit little-endian per ``truehdd decode --format pcm``) as RIFF WAV.
+
+    *channels* and *sample_rate* must match the decoded presentation; wrong values produce noise.
+    """
+    if not os.path.isfile(pcm_path):
+        return False
+    bits = 24 if int(bits or 0) not in (16, 24, 32) else int(bits)
+    fmt = {16: 's16le', 24: 's24le', 32: 's32le'}[bits]
+    try:
+        ch = max(1, int(channels or 8))
+        sr = max(1, int(sample_rate or 48000))
+    except Exception:
+        ch, sr = 8, 48000
+    pcm_codec = {16: 'pcm_s16le', 24: 'pcm_s24le', 32: 'pcm_s32le'}[bits]
+    cmd = (
+        f'"{FFMPEG_PATH}" -hide_banner -loglevel error -y '
+        f'-f {fmt} -ar {sr} -ac {ch} -i "{pcm_path}" -c:a {pcm_codec} "{wav_path}"'
+    )
+    try:
+        subprocess.run(cmd, shell=True, check=False, creationflags=_windows_no_window_flags())
+        return os.path.isfile(wav_path) and os.path.getsize(wav_path) > 0
+    except Exception:
+        return False
+
+
+def _ffmpeg_container_to_riff_wav(src_path: str, wav_path: str) -> bool:
+    """Demux truehdd W64/CAF (or any ffmpeg-readable audio) into standard RIFF WAV."""
+    if not os.path.isfile(src_path):
+        return False
+    cmd = (
+        f'"{FFMPEG_PATH}" -hide_banner -loglevel error -y '
+        f'-i "{src_path}" -c:a pcm_s24le "{wav_path}"'
+    )
+    try:
+        subprocess.run(cmd, shell=True, check=False, creationflags=_windows_no_window_flags())
+        return os.path.isfile(wav_path) and os.path.getsize(wav_path) > 0
+    except Exception:
+        return False
+
+
+def _truehdd_info_pcm_params(exe: str, thd_path: str, presentation: int) -> dict[str, int]:
+    """Parse ``truehdd info`` text for a presentation's channel count and sample rate."""
+    out = {'channels': 8, 'sample_rate': 48000, 'bits': 24}
+    if not exe or not os.path.isfile(thd_path):
+        return out
+    try:
+        proc = subprocess.run(
+            [exe, 'info', thd_path],
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='ignore',
+            shell=False,
+            creationflags=_windows_no_window_flags(),
+        )
+    except Exception:
+        return out
+    text = f'{proc.stdout or ""}\n{proc.stderr or ""}'
+    pres = int(presentation)
+    block = text
+    for marker in (
+            f'presentation {pres}',
+            f'Presentation {pres}',
+            f'presentation index {pres}',
+            f'Presentation index {pres}',
+    ):
+        idx = text.lower().find(marker.lower())
+        if idx >= 0:
+            block = text[idx:idx + 4000]
+            break
+    ch_m = re.search(r'(?i)(?:channels?|ch)\s*[:=]\s*(\d+)', block)
+    if ch_m:
+        try:
+            out['channels'] = max(1, int(ch_m.group(1)))
+        except Exception:
+            pass
+    sr_m = re.search(r'(?i)sample\s*rate\s*[:=]?\s*(\d+)', block)
+    if not sr_m:
+        sr_m = re.search(r'(?i)(\d{5,6})\s*Hz', block)
+    if sr_m:
+        try:
+            out['sample_rate'] = max(1, int(sr_m.group(1)))
+        except Exception:
+            pass
+    return out
+
+
+def _lossy_extract_suffix_for_codec_id(codec_id: str) -> Optional[str]:
+    """Elementary-file suffix for lossy audio Codec IDs (excludes LPCM/DTS/TRUEHD/FLAC handled elsewhere)."""
+    cid = str(codec_id or '').strip().upper()
+    if not cid or cid in ('A_PCM/INT/LIT', 'A_PCM/INT/BIG', 'A_TRUEHD', 'A_MLP', 'A_FLAC'):
+        return None
+    if mkv_codec_id_is_dts_family(cid):
+        return None
+    if cid == 'A_AC3':
+        return 'ac3'
+    if cid == 'A_EAC3':
+        return 'eac3'
+    if cid.startswith('A_AAC'):
+        return 'aac'
+    if cid == 'A_MPEG/L3':
+        return 'mp3'
+    if cid == 'A_MPEG/L2':
+        return 'mp2'
+    if cid == 'A_OPUS':
+        return 'opus'
+    if cid == 'A_VORBIS':
+        return 'ogg'
+    return None
 _GETNATIVE_DEBUG_DIR_ENV = str(os.getenv("BLURAYSUB_GETNATIVE_DEBUG_DIR", "") or "").strip()
 GETNATIVE_DEBUG_DIR = os.path.abspath(_GETNATIVE_DEBUG_DIR_ENV) if _GETNATIVE_DEBUG_DIR_ENV else None
 
@@ -41,6 +211,56 @@ def _windows_no_window_flags() -> int:
     if sys.platform == "win32":
         return int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
     return 0
+
+
+def _run_mkvmerge_shell(cmd: str) -> int:
+    try:
+        return int(subprocess.Popen(
+            cmd, shell=True, creationflags=_windows_no_window_flags(),
+        ).wait())
+    except Exception:
+        return -1
+
+
+def _commit_inplace_mkv_remux(output_file: str, temp_mkv: str, mux_rc: int) -> bool:
+    """
+    Replace *output_file* with *temp_mkv* after a same-path audio remux.
+
+    Do not discard the remux solely because the container grew (e.g. TrueHD→FLAC
+    swap can still increase size when other tracks/subtitles differ).
+    """
+    if mux_rc != 0:
+        print(
+            f'{translate_text("mkvmerge 混流失败 (exit ")}{mux_rc}'
+            f'{translate_text(")，保留原 MKV：")}{output_file}',
+            flush=True,
+        )
+        if os.path.isfile(temp_mkv):
+            force_remove_file(temp_mkv)
+        return False
+    if not os.path.isfile(temp_mkv) or os.path.getsize(temp_mkv) < 1024:
+        print(
+            f'{translate_text("mkvmerge 混流未生成有效 tmp，保留原 MKV：")}{output_file}',
+            flush=True,
+        )
+        if os.path.isfile(temp_mkv):
+            force_remove_file(temp_mkv)
+        return False
+    try:
+        orig_sz = os.path.getsize(output_file)
+        new_sz = os.path.getsize(temp_mkv)
+    except OSError:
+        orig_sz = 0
+        new_sz = 0
+    if new_sz > orig_sz:
+        print(
+            f'{translate_text("混流后文件变大 (")}{new_sz / 1024 ** 2:.1f} MiB > '
+            f'{orig_sz / 1024 ** 2:.1f} MiB{translate_text(")，仍应用音轨替换结果")}',
+            flush=True,
+        )
+    force_remove_file(output_file)
+    os.rename(temp_mkv, output_file)
+    return True
 
 
 def _split_x265_extra_args(params: str) -> list[str]:
@@ -706,11 +926,15 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
     def flac_task(self, output_file, dst_folder, i, source_file: Optional[str] = None):
         track_count, track_info, flac_files = self.process_audio_to_flac(output_file, dst_folder, i,
                                                                          source_file=source_file)
-        if flac_files:
+        external_audio = list(dict.fromkeys(
+            (getattr(self, '_track_flac_map', {}) or {}).values()))
+        if not external_audio:
+            external_audio = list(flac_files or [])
+        if external_audio:
             src_mkv = os.path.normpath(source_file) if source_file else os.path.normpath(output_file)
             same_mkv = os.path.normpath(output_file) == src_mkv
             output_file1 = (os.path.splitext(output_file)[0] + '.tmp.mkv') if same_mkv else output_file
-            remux_cmd = self.generate_remux_cmd(track_count, track_info, flac_files, output_file1, src_mkv)
+            remux_cmd = self.generate_remux_cmd(track_count, track_info, external_audio, output_file1, src_mkv)
             if self.sub_files and len(self.sub_files) >= i and i > -1:
                 lang = 'chi'
                 try:
@@ -721,15 +945,20 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     lang = 'chi'
                 remux_cmd += f' --language 0:{lang} "{self.sub_files[i - 1]}"'
             print(f'{translate_text("Mux command:")}{remux_cmd}')
-            subprocess.Popen(remux_cmd, shell=True, creationflags=_windows_no_window_flags()).wait()
-            if same_mkv:
-                if os.path.getsize(output_file1) > os.path.getsize(output_file):
-                    os.remove(output_file1)
-                else:
-                    os.remove(output_file)
-                    os.rename(output_file1, output_file)
-            for flac_file in flac_files:
-                os.remove(flac_file)
+            mux_rc = _run_mkvmerge_shell(remux_cmd)
+            committed = (not same_mkv) or _commit_inplace_mkv_remux(output_file, output_file1, mux_rc)
+            if committed and mux_rc == 0:
+                for audio_file in external_audio:
+                    try:
+                        os.remove(audio_file)
+                    except OSError:
+                        pass
+            elif mux_rc != 0 and not same_mkv:
+                print(
+                    f'{translate_text("mkvmerge 混流失败 (exit ")}{mux_rc}'
+                    f'{translate_text(")：")}{output_file1}',
+                    flush=True,
+                )
         self._extract_single_audio_from_mka(output_file)
 
     def encode_task(self, output_file, dst_folder, i, vpy_path: str, vspipe_mode: str, x265_mode: str, x265_params: str,
@@ -964,12 +1193,16 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
         track_count, track_info, flac_files = self.process_audio_to_flac(output_file, dst_folder, i,
                                                                          source_file=src_mkv)
 
-        if flac_files or os.path.exists(encoded_path):
+        external_audio = list(dict.fromkeys(
+            (getattr(self, '_track_flac_map', {}) or {}).values()))
+        if not external_audio:
+            external_audio = list(flac_files or [])
+        if external_audio or os.path.exists(encoded_path):
             same_mkv = os.path.normpath(output_file) == src_mkv
             output_file1 = (os.path.splitext(output_file)[0] + '.tmp.mkv') if same_mkv else output_file
             if not same_mkv and os.path.exists(output_file1):
                 force_remove_file(output_file1)
-            remux_cmd = self.generate_remux_cmd(track_count, track_info, flac_files, output_file1, src_mkv,
+            remux_cmd = self.generate_remux_cmd(track_count, track_info, external_audio, output_file1, src_mkv,
                                                 encoded_video_file=encoded_path if os.path.exists(encoded_path) else None)
             if sub_pack_mode == 'soft':
                 if self.sub_files and len(self.sub_files) >= i and i > -1:
@@ -982,21 +1215,162 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                         lang = 'chi'
                     remux_cmd += f' --language 0:{lang} "{self.sub_files[i - 1]}"'
             print(f'{translate_text("Mux command:")}{remux_cmd}')
-            subprocess.Popen(remux_cmd, shell=True, creationflags=_windows_no_window_flags()).wait()
-            if same_mkv:
-                if os.path.getsize(output_file1) > os.path.getsize(output_file):
-                    os.remove(output_file1)
-                else:
-                    os.remove(output_file)
-                    os.rename(output_file1, output_file)
-            for flac_file in flac_files:
-                os.remove(flac_file)
+            mux_rc = _run_mkvmerge_shell(remux_cmd)
+            committed = (not same_mkv) or _commit_inplace_mkv_remux(output_file, output_file1, mux_rc)
+            if committed and mux_rc == 0:
+                for audio_file in external_audio:
+                    try:
+                        os.remove(audio_file)
+                    except OSError:
+                        pass
+            elif mux_rc != 0 and not same_mkv:
+                print(
+                    f'{translate_text("mkvmerge 混流失败 (exit ")}{mux_rc}'
+                    f'{translate_text(")：")}{output_file1}',
+                    flush=True,
+                )
             if os.path.exists(encoded_path):
                 os.remove(encoded_path)
         cleanup_lwi_for_source(src_mkv)
 
-    def extract_lossless(self, mkv_file: str, dolby_truehd_tracks: list[int], output_base: Optional[str] = None) -> \
-    tuple[int, dict[int, str]]:
+    def _decode_truehd_atmos_thd_files(self, output_base: str, track_info: dict[int, str]) -> None:
+        """Decode TrueHD+Atmos ``.thd`` with truehdd, then RIFF WAV for the FLAC pass."""
+        truehdd_ids = set(getattr(self, '_truehdd_decode_track_ids', None) or ())
+        if not truehdd_ids:
+            return
+        exe = _truehdd_exe()
+        if not exe:
+            print('[truehdd] executable not found (set TRUEHDD_PATH or install truehdd)')
+            return
+        base = str(output_base or '').strip()
+        if not base:
+            return
+        presentation = 2
+        for track_id in sorted(truehdd_ids):
+            if track_id not in track_info:
+                continue
+            thd_path = f'{base}.track{int(track_id)}.thd'
+            if not os.path.isfile(thd_path):
+                print(f'[truehdd] skip track {track_id}: missing {thd_path}')
+                continue
+            out_base = os.path.splitext(thd_path)[0]
+            wav_path = out_base + '.wav'
+            riff_tmp = out_base + '.__riff.wav'
+            w64_path = out_base + '.wav'
+            decoded_pcm_prefix = os.path.join(os.path.dirname(thd_path), f'decoded_track{int(track_id)}')
+            for stale in (
+                    wav_path,
+                    riff_tmp,
+                    f'{decoded_pcm_prefix}.pcm',
+                    f'{decoded_pcm_prefix}.wav',
+                    f'{decoded_pcm_prefix}.w64',
+            ):
+                if os.path.isfile(stale):
+                    try:
+                        os.remove(stale)
+                    except Exception:
+                        pass
+            cmd = (
+                f'"{exe}" --progress decode --format w64 --presentation {presentation} '
+                f'--output-path "{out_base}" "{thd_path}"'
+            )
+            print(f'{translate_text("TrueHD Atmos 解码命令：")}{cmd}')
+            wav_ok = False
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    shell=True,
+                    creationflags=_windows_no_window_flags(),
+                )
+            except Exception as ex:
+                print(f'[truehdd] decode failed track {track_id}: {ex}')
+                proc = None
+            if proc is not None and proc.returncode == 0 and os.path.isfile(w64_path):
+                print(
+                    f'{translate_text("truehdd W64 转 RIFF WAV：")}'
+                    f'"{FFMPEG_PATH}" -i "{w64_path}" -c:a pcm_s24le "{riff_tmp}"')
+                if _ffmpeg_container_to_riff_wav(w64_path, riff_tmp):
+                    try:
+                        os.remove(w64_path)
+                    except Exception:
+                        pass
+                    try:
+                        os.replace(riff_tmp, wav_path)
+                    except Exception:
+                        if os.path.isfile(riff_tmp):
+                            shutil.move(riff_tmp, wav_path)
+                    wav_ok = os.path.isfile(wav_path) and os.path.getsize(wav_path) > 0
+            if not wav_ok:
+                if proc is not None and proc.returncode != 0:
+                    print(f'[truehdd] w64 decode exit {proc.returncode} track {track_id}, trying raw PCM fallback')
+                for stale in (w64_path, riff_tmp):
+                    if os.path.isfile(stale):
+                        try:
+                            os.remove(stale)
+                        except Exception:
+                            pass
+                pcm_cmd = (
+                    f'"{exe}" --progress decode --format pcm --presentation {presentation} '
+                    f'--output-path "{decoded_pcm_prefix}" "{thd_path}"'
+                )
+                print(f'{translate_text("TrueHD Atmos PCM 回退解码：")}{pcm_cmd}')
+                try:
+                    pcm_proc = subprocess.run(
+                        pcm_cmd,
+                        shell=True,
+                        creationflags=_windows_no_window_flags(),
+                    )
+                except Exception as ex:
+                    print(f'[truehdd] pcm fallback failed track {track_id}: {ex}')
+                    continue
+                if pcm_proc.returncode != 0:
+                    print(f'[truehdd] pcm fallback exit {pcm_proc.returncode} track {track_id}')
+                    continue
+                pcm_candidates = sorted(
+                    f for f in os.listdir(os.path.dirname(thd_path) or '.')
+                    if f.lower().startswith(os.path.basename(decoded_pcm_prefix).lower())
+                    and f.lower().endswith('.pcm')
+                )
+                pcm_path = ''
+                if pcm_candidates:
+                    pcm_path = os.path.normpath(os.path.join(os.path.dirname(thd_path), pcm_candidates[0]))
+                if not pcm_path or not os.path.isfile(pcm_path):
+                    print(f'[truehdd] no PCM output for track {track_id} (expected {decoded_pcm_prefix}.pcm)')
+                    continue
+                params = _truehdd_info_pcm_params(exe, thd_path, presentation)
+                print(
+                    f'{translate_text("truehdd 原始 PCM→WAV (")}{params["channels"]} ch, '
+                    f'{params["sample_rate"]} Hz, {params["bits"]} bit{translate_text(")：")}'
+                    f'-f s24le -ar {params["sample_rate"]} -ac {params["channels"]}')
+                if not _pcm_raw_to_wav(
+                        pcm_path,
+                        wav_path,
+                        params['channels'],
+                        params['sample_rate'],
+                        params.get('bits', 24),
+                ):
+                    print(f'[truehdd] PCM→WAV failed track {track_id}: {pcm_path}')
+                    continue
+                try:
+                    os.remove(pcm_path)
+                except Exception:
+                    pass
+                for extra in pcm_candidates[1:]:
+                    try:
+                        os.remove(os.path.join(os.path.dirname(thd_path), extra))
+                    except Exception:
+                        pass
+                wav_ok = True
+            if not wav_ok:
+                continue
+            try:
+                os.remove(thd_path)
+            except Exception:
+                pass
+            print(
+                f'{translate_text("TrueHD Atmos 音轨 ｢")}{thd_path}{translate_text("｣ 已解码为 ｢")}{wav_path}{translate_text("｣")}')
+
+    def extract_lossless(self, mkv_file: str, output_base: Optional[str] = None) -> tuple[int, dict[int, str]]:
         if sys.platform == 'win32':
             process = subprocess.Popen(f'"{MKV_INFO_PATH}" "{mkv_file}" --ui-language en',
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -1012,6 +1386,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
         track_info = {}
         track_count = 0
         track_suffix_info = {}
+        lossy_track_ids: set[int] = set()
         track_id = -1
         code_id_to_stream_type = {'A_DTS': 'DTS', 'A_PCM/INT/LIT': 'LPCM', 'A_PCM/INT/BIG': 'LPCM',
                                   'A_TRUEHD': 'TRUEHD', 'A_MLP': 'TRUEHD', 'A_FLAC': 'FLAC'}
@@ -1038,16 +1413,21 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 if stream_type is None and mkv_codec_id_is_dts_family(codec_id):
                     stream_type = 'DTS'
                 if stream_type in ('LPCM', 'DTS', 'TRUEHD', 'FLAC'):
-                    if track_id not in dolby_truehd_tracks:
-                        if stream_type == 'LPCM':
-                            track_suffix_info[track_id] = 'wav'
-                        elif stream_type == 'DTS':
-                            track_suffix_info[track_id] = 'dts'
-                        elif stream_type == 'FLAC':
-                            track_suffix_info[track_id] = 'flac'
-                        else:
-                            track_suffix_info[track_id] = 'thd'
+                    if stream_type == 'LPCM':
+                        track_suffix_info[track_id] = 'wav'
+                    elif stream_type == 'DTS':
+                        track_suffix_info[track_id] = 'dts'
+                    elif stream_type == 'FLAC':
+                        track_suffix_info[track_id] = 'flac'
+                    else:
+                        track_suffix_info[track_id] = 'thd'
+                    track_info.setdefault(track_id, 'und')
+                else:
+                    lossy_suffix = _lossy_extract_suffix_for_codec_id(codec_id)
+                    if lossy_suffix and track_id not in track_suffix_info:
+                        track_suffix_info[track_id] = lossy_suffix
                         track_info.setdefault(track_id, 'und')
+                        lossy_track_ids.add(track_id)
                 continue
             if (line.startswith('|  + Language (IETF BCP 47): ') or line.startswith(
                     '| + Language (IETF BCP 47): ') or line.startswith('|+ Language (IETF BCP 47): ')):
@@ -1070,7 +1450,8 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 extract_info.append(
                     f'{track_id}:"{base}.track{track_id}.{track_suffix_info[track_id]}"')
             extract_cmd = f'"{MKV_EXTRACT_PATH}" {mkvtoolnix_ui_language_arg()} "{mkv_file}" tracks {" ".join(extract_info)}'
-            print(f'{translate_text("Extracting lossless tracks, command: ")}{extract_cmd}')
+            print(f'{translate_text("正在提取音轨，命令: ")}{extract_cmd}')
             subprocess.Popen(extract_cmd, shell=True, creationflags=_windows_no_window_flags()).wait()
 
+        self._extracted_lossy_track_ids = lossy_track_ids
         return track_count, track_info

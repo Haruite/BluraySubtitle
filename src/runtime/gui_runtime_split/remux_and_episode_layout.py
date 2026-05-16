@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import QTableWidget, QToolButton, QPlainTextEdit, QWidget, 
     QProgressDialog, QProgressBar, QMessageBox
 
 from src.bdmv import Chapter
-from src.core import BDMV_LABELS, DIY_BDMV_LABELS, DIY_REMUX_LABELS, find_mkvtoolinx, MKV_MERGE_PATH, \
+from src.core import BDMV_LABELS, DIY_BDMV_LABELS, DIY_REMUX_LABELS, find_mkvtoolnix, MKV_MERGE_PATH, \
     mkvtoolnix_ui_language_arg, ENCODE_REMUX_LABELS, ENCODE_REMUX_SP_LABELS, SUBTITLE_LABELS, ENCODE_LABELS, \
     REMUX_LABELS, CURRENT_UI_LANGUAGE, ENCODE_SP_LABELS
 from src.domain import Subtitle
@@ -138,7 +138,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             name_seq_total: int = 1,
     ) -> str:
         try:
-            find_mkvtoolinx()
+            find_mkvtoolnix()
         except Exception:
             pass
         try:
@@ -640,7 +640,12 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             self.table2.setRowCount(len(disc_rows))
             for row_i, (bdmv_index, folder, mpls_no_ext) in enumerate(disc_rows):
                 mpls_path = mpls_no_ext + '.mpls'
-                chapter = Chapter(mpls_path)
+                playlist_dir = self._get_playlist_dir_for_bdmv_index(bdmv_index)
+                mpls_full = mpls_path
+                if playlist_dir:
+                    mpls_full = os.path.normpath(
+                        os.path.join(playlist_dir, os.path.basename(mpls_path)))
+                chapter = Chapter(mpls_full if os.path.isfile(mpls_full) else mpls_path)
                 total_time = chapter.get_total_time()
                 m2ts_files = list(
                     dict.fromkeys([f'{stem}.m2ts' for stem, _, _ in (chapter.in_out_time or [])]))
@@ -654,20 +659,13 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 bdmv_item = QTableWidgetItem(str(bdmv_index))
                 bdmv_item.setData(Qt.ItemDataRole.UserRole, str(mpls_no_ext or ''))
                 self.table2.setItem(row_i, bdmv_col, bdmv_item)
-                chapter_combo = QComboBox()
-                chapter_combo.addItem('chapter 01', 1)
-                chapter_combo.setCurrentIndex(0)
-                chapter_combo._prev_start_value = int(chapter_combo.currentData() or 1)
-                chapter_combo.setEnabled(False)
-                self.table2.setCellWidget(row_i, chapter_col, chapter_combo)
-                end_combo = self._build_end_chapter_combo(1, False, 1, 2)
-                end_combo.currentIndexChanged.connect(partial(self._on_end_chapter_combo_changed, row_i, labels))
-                self.table2.setCellWidget(row_i, end_col, end_combo)
+                self._apply_movie_mode_table2_chapter_widgets(
+                    row_i, labels, mpls_no_ext, connect_end_handler=True)
                 self.table2.setItem(row_i, m2ts_col, QTableWidgetItem(', '.join(m2ts_files)))
                 if m2ts_detail_col >= 0:
                     detail_txt = ''
                     try:
-                        detail_txt = self._m2ts_file_detail_from_mpls_path(mpls_path)
+                        detail_txt = self._m2ts_file_detail_from_mpls_path(mpls_full)
                     except Exception:
                         detail_txt = ''
                     self.table2.setItem(row_i, m2ts_detail_col, QTableWidgetItem(detail_txt))
@@ -724,12 +722,8 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             self._last_configuration_34 = dict(configuration)
         if function_id in (3, 4, 5):
             self.refresh_sp_table(configuration)
-        self.table2.resizeColumnsToContents()
-        self._resize_table_columns_for_language(self.table2)
         self._update_language_combo_enabled_state()
-        self._sync_end_chapter_min_constraints(labels)
-        self._apply_start_chapter_constraints(labels)
-        self._scroll_table_h_to_right(self.table2)
+        self._finalize_movie_mode_table2_layout(labels)
 
     def _refresh_table1_remux_cmds(self):
         if not hasattr(self, 'table1') or not self.table1:
@@ -1284,6 +1278,10 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             if self._is_movie_mode():
                 self._refresh_movie_table2()
             else:
+                try:
+                    self._sync_chapter_tail_trim_episode()
+                except Exception:
+                    pass
                 configuration = BluraySubtitle(
                     self.bdmv_folder_path.text(),
                     [],
@@ -1292,6 +1290,13 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                     approx_episode_duration_seconds=self._get_approx_episode_duration_seconds()
                 ).generate_configuration(self.table1)
                 self.on_configuration(configuration)
+                try:
+                    if self.table2.rowCount() > 0 and self.get_selected_function_id() in (3, 4, 5):
+                        cfg2 = self._generate_configuration_from_ui_inputs()
+                        if cfg2:
+                            self.on_configuration(cfg2, update_sp_table=True)
+                except Exception:
+                    pass
 
     def remux_episodes(self):
         output_folder = os.path.normpath(self.output_folder_path.text().strip()) if hasattr(self,
@@ -1302,7 +1307,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         if not os.path.isdir(output_folder):
             QMessageBox.information(self, " ", "Output folder does not exist")
             return
-        find_mkvtoolinx()
+        find_mkvtoolnix()
 
         cancel_event = threading.Event()
         self._current_cancel_event = cancel_event
@@ -1339,7 +1344,13 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 QMessageBox.information(self, " ", "Configuration is empty, skipping update")
                 return
         else:
-            configuration = self._configuration_snapshot_for_service_run()
+            try:
+                self._sync_chapter_tail_trim_episode()
+                configuration = self._generate_configuration_from_ui_inputs()
+            except Exception:
+                configuration = {}
+            if not configuration:
+                configuration = self._configuration_snapshot_for_service_run()
             if not configuration:
                 self._current_cancel_event = None
                 self._reset_exe_button()
@@ -1350,6 +1361,15 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             self._apply_main_remux_cmds_to_configuration(configuration)
         except Exception:
             pass
+
+        _trim_cb = getattr(self, 'trim_copyright_tail_checkbox', None)
+        episode_trim_copyright_tail = bool(
+            _trim_cb and _trim_cb.isChecked()
+            and (not self._is_movie_mode())
+            and self.get_selected_function_id() in (3, 4)
+        )
+        _dovi_cb = getattr(self, 'mux_dolby_vision_checkbox', None)
+        mux_dolby_vision = bool(_dovi_cb is None or _dovi_cb.isChecked())
 
         self._remux_thread = QThread(self)
         self._remux_worker = RemuxWorker(
@@ -1364,6 +1384,8 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             episode_output_names,
             episode_subtitle_languages,
             movie_mode=self._is_movie_mode(),
+            episode_trim_copyright_tail=episode_trim_copyright_tail,
+            mux_dolby_vision=mux_dolby_vision,
             track_selection_config=getattr(self, '_track_selection_config', {}),
             track_language_config=getattr(self, '_track_language_config', {}),
             track_lossless_audio_config=getattr(self, '_track_lossless_audio_config', {}),

@@ -1,3 +1,4 @@
+import os
 import threading
 import traceback
 from typing import Optional
@@ -24,6 +25,8 @@ class EncodeWorker(QObject):
                  encode_bit_depth: str = '10',
                  use_getnative: bool = True,
                  movie_mode: bool = False,
+                 episode_trim_copyright_tail: bool = False,
+                 mux_dolby_vision: bool = True,
                  track_selection_config: Optional[dict[str, dict[str, list[str]]]] = None,
                  track_language_config: Optional[dict[str, dict[str, str]]] = None,
                  track_lossless_audio_config: Optional[dict[str, dict[str, str]]] = None,
@@ -49,6 +52,8 @@ class EncodeWorker(QObject):
         self.encode_bit_depth = encode_bit_depth
         self.use_getnative = bool(use_getnative)
         self.movie_mode = bool(movie_mode)
+        self.episode_trim_copyright_tail = bool(episode_trim_copyright_tail)
+        self.mux_dolby_vision = bool(mux_dolby_vision)
         self.track_selection_config = track_selection_config or {}
         self.track_language_config = track_language_config or {}
         self.track_lossless_audio_config = track_lossless_audio_config or {}
@@ -57,6 +62,23 @@ class EncodeWorker(QObject):
 
     def run(self):
         try:
+            from src.bdmv.chapter import chapter_tail_trim_clear, chapter_tail_trim_register_path
+            from src.runtime.services_split.media_info_and_track_mapping import mpls_playlist_caches_clear
+
+            chapter_tail_trim_clear()
+            if (not self.movie_mode) and self.episode_trim_copyright_tail:
+                for _folder, mpls_ne in (self.selected_mpls or []):
+                    stem = str(mpls_ne or '').strip()
+                    if not stem:
+                        continue
+                    path = stem if stem.lower().endswith('.mpls') else stem + '.mpls'
+                    try:
+                        if os.path.isfile(path):
+                            chapter_tail_trim_register_path(path)
+                    except Exception:
+                        pass
+            mpls_playlist_caches_clear()
+
             def progress_cb(value: Optional[int] = None, text: Optional[str] = None):
                 if value is not None:
                     self.progress.emit(int(value))
@@ -65,7 +87,10 @@ class EncodeWorker(QObject):
                 if self.cancel_event.is_set():
                     raise _Cancelled()
 
-            bs = BluraySubtitle(self.bdmv_path, self.sub_files, self.checked, progress_cb, movie_mode=self.movie_mode)
+            bs = BluraySubtitle(
+                self.bdmv_path, self.sub_files, self.checked, progress_cb,
+                movie_mode=self.movie_mode, mux_dolby_vision=self.mux_dolby_vision,
+            )
             bs.configuration = self.configuration
             bs.track_selection_config = self.track_selection_config
             bs.track_language_config = self.track_language_config

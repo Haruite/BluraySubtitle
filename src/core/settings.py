@@ -18,6 +18,8 @@ X265_PATH = r"C:\Software\x265.exe"
 X264_PATH = r"C:\Software\x264.exe"
 SVT_AV1_PATH = r'C:\Software\SvtAv1EncApp.exe'
 FDK_AAC_PATH = r'C:\Software\fdkaac.exe'
+DOVI_TOOL_PATH = r'C:\Software\dovi_tool.exe'
+TRUEHDD_PATH = r'C:\Software\truehdd.exe'
 VSEDIT_PATH = r"C:\Software\vapoursynth\vsedit.exe"
 VSPIPE_PATH = r"C:\Software\vapoursynth\vspipe.exe"
 PLUGIN_PATH = ""
@@ -36,6 +38,8 @@ if sys.platform != "win32":
     X264_PATH = "/usr/bin/x264"
     SVT_AV1_PATH = "/usr/bin/SvtAv1EncApp"
     FDK_AAC_PATH = "/usr/local/bin/fdkaac"
+    DOVI_TOOL_PATH = "/usr/bin/dovi_tool"
+    TRUEHDD_PATH = '/usr/bin/truehdd'
     PLUGIN_PATH = os.path.expanduser("~/plugins")
     VSEDIT_PATH = "/usr/bin/vsedit"
     VSPIPE_PATH = "/usr/local/bin/vspipe"
@@ -83,7 +87,7 @@ def _resolve_mkvtoolnix_path(default_path: str, binary_name: str) -> str:
     return resolved or ""
 
 
-def find_mkvtoolinx() -> None:
+def find_mkvtoolnix() -> None:
     """Resolve mkvtoolnix executable paths into global settings."""
     global MKV_INFO_PATH
     global MKV_MERGE_PATH

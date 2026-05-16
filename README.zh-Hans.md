@@ -368,9 +368,7 @@ docker pull --platform linux/amd64 haruite/bluraysubtitle:latest
 
 - 剧集映射不对：
   - 检查 main MPLS，播放MPLS，选择正确的MPLS；
-  - 检查章节起止，比如最后一集最后一个章节是版权提示，需要裁除，有两种方法：  
-    a. 在主播放列表”查看章节"中取消最后一段勾选并保存
-    b. 混流命令编辑框中修改混流命令，请参阅 https://mkvtoolnix.download/doc/mkvmerge.html 中的--split parts 和 --split chapters 部分
+  - 检查章节起止。
   - 检查字幕行顺序，可以点击文件名 header 栏排序。
   - 检查字幕时长，如果时长超长，很有可能是字幕文件有问题。可以右键 edit 编辑字幕，编辑字幕时会优先展示结束时间最晚的那些字幕，对有问题的字幕，修改其结束时间后保存，或者一并选择右键删除即可。
 - 存在特典盘：

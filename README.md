@@ -375,9 +375,7 @@ docker pull --platform linux/amd64 haruite/bluraysubtitle:latest
 
 - **Wrong episode mapping**  
   - Check **main MPLS**; play the MPLS and pick the correct one.  
-  - Check chapter ends (e.g. last episode ends with a copyright bumper). Two approaches:  
-    - (a) In main playlist **View chapters**, uncheck the last segment and save.  
-    - (b) Edit the mux command: see mkvmerge **`--split parts`** and **`--split chapters`**: https://mkvtoolnix.download/doc/mkvmerge.html  
+  - Check chapter ends. 
   - Check subtitle row order (sort by filename column).  
   - Check subtitle duration; abnormally long files are often broken subtitles—use right-click **edit** / delete as needed.
 - **Bonus / extra disc**  

@@ -31,7 +31,8 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
     def __init__(self, bluray_path: str, sub_files: list[str] = None, checked: bool = True,
                  progress_dialog: Optional[object] = None,
                  approx_episode_duration_seconds: float = DEFAULT_APPROX_EPISODE_DURATION_SECONDS,
-                 movie_mode: bool = False):
+                 movie_mode: bool = False,
+                 mux_dolby_vision: bool = True):
         self.tmp_folders = []
         if sys.platform == 'win32':
             for root, dirs, files in os.walk(bluray_path):
@@ -67,6 +68,8 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
         self.configuration = {}
         self._subtitle_cache: dict[str, Subtitle] = {}
         self.movie_mode = bool(movie_mode)
+        self.mux_dolby_vision = bool(mux_dolby_vision)
+        self._dovi_mux_plan: Optional[dict[str, object]] = None
         self._sp_index_by_bdmv: dict[int, int] = {}
         try:
             val = float(approx_episode_duration_seconds)
@@ -222,17 +225,69 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
                     yield bluray_folder, Chapter(selected_mpls), selected_mpls[:-5]
 
     @staticmethod
+    def _disc_paths_for_output_title(bdmv_root: str, selected_mpls_no_ext: str) -> tuple[str, str, str]:
+        """
+        Resolve ``(mpls_path, meta_dl_dir, stream_dir)`` for title lookup.
+
+        ``selected_mpls_no_ext`` may be a stem (``00800``), ``BDMV/PLAYLIST/00800``, or a full path.
+        """
+        root = os.path.normpath(str(bdmv_root or '')).rstrip(os.sep)
+        raw = str(selected_mpls_no_ext or '').strip().replace('\\', '/')
+        stem = os.path.basename(raw)
+        if stem.lower().endswith('.mpls'):
+            stem = stem[:-5]
+        candidates: list[str] = []
+        if raw.lower().endswith('.mpls'):
+            candidates.append(raw)
+        if raw:
+            if os.path.isabs(raw):
+                candidates.append(raw)
+            else:
+                if root:
+                    candidates.append(os.path.join(root, raw))
+                candidates.append(raw)
+            if not raw.lower().endswith('.mpls'):
+                if root:
+                    candidates.append(os.path.join(root, raw + '.mpls'))
+                candidates.append(raw + '.mpls')
+        if root:
+            candidates.append(os.path.join(root, 'BDMV', 'PLAYLIST', f'{stem}.mpls'))
+            candidates.append(os.path.join(root, f'{stem}.mpls'))
+        candidates.append(f'{stem}.mpls')
+        mpls_path = ''
+        for cand in candidates:
+            try:
+                cp = os.path.normpath(cand)
+            except Exception:
+                continue
+            if os.path.isfile(cp):
+                mpls_path = cp
+                break
+        if not mpls_path:
+            mpls_path = os.path.normpath(
+                os.path.join(root, 'BDMV', 'PLAYLIST', f'{stem}.mpls') if root else f'{stem}.mpls')
+        playlist_dir = os.path.normpath(os.path.join(os.path.dirname(mpls_path), '..'))
+        if os.path.isdir(os.path.join(playlist_dir, 'PLAYLIST')):
+            bdmv_dir = playlist_dir
+        elif root and os.path.isdir(os.path.join(root, 'BDMV')):
+            bdmv_dir = os.path.normpath(os.path.join(root, 'BDMV'))
+        else:
+            bdmv_dir = playlist_dir
+        meta_folder = os.path.join(bdmv_dir, 'META', 'DL')
+        stream_dir = os.path.join(bdmv_dir, 'STREAM')
+        return mpls_path, meta_folder, stream_dir
+
+    @staticmethod
     def resolve_disc_output_title(bdmv_root: str, selected_mpls_no_ext: str) -> str:
         """Disc / volume title for remux ``-o`` and table2 ``output_name`` (same rules as ``_resolve_disc_output_name``)."""
-        mpls_path = selected_mpls_no_ext + '.mpls'
-        meta_folder = os.path.join(os.path.join(mpls_path[:-19], 'META', 'DL'))
+        mpls_path, meta_folder, stream_dir = LifecycleConfigurationMixin._disc_paths_for_output_title(
+            bdmv_root, selected_mpls_no_ext)
         output_name = ''
         first_audio_lang = ''
         try:
             chapter = Chapter(mpls_path)
             if chapter.in_out_time:
-                first_m2ts = os.path.join(os.path.dirname(os.path.dirname(mpls_path)), 'STREAM',
-                                          chapter.in_out_time[0][0] + '.m2ts')
+                first_m2ts = os.path.join(stream_dir, chapter.in_out_time[0][0] + '.m2ts')
                 mkvmerge_info = MediaInfoTrackMappingMixin._pid_lang_from_mkvmerge_json(first_m2ts)
                 if mkvmerge_info:
                     exe = MKV_MERGE_PATH if MKV_MERGE_PATH else 'mkvmerge'

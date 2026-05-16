@@ -534,7 +534,7 @@ class BluraySubtitleServiceBase:
         """Stub for `generate_remux_cmd`."""
         raise NotImplementedError
 
-    def extract_lossless(self, mkv_file: str, dolby_truehd_tracks: list[int], output_base: Optional[str]=None) -> tuple[int, dict[int, str]]:
+    def extract_lossless(self, mkv_file: str, output_base: Optional[str]=None) -> tuple[int, dict[int, str]]:
         """Stub for `extract_lossless`."""
         raise NotImplementedError
 
