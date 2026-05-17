@@ -19,13 +19,15 @@ from ...core.settings import VSPIPE_PATH, TRUEHDD_PATH
 from ...core import FFMPEG_PATH, FFPROBE_PATH
 from ...core.settings import PLUGIN_PATH
 from .service_base import BluraySubtitleServiceBase
-from ...core import MKV_INFO_PATH, MKV_EXTRACT_PATH, mkvtoolnix_ui_language_arg
+from ...core import MKV_INFO_PATH, MKV_EXTRACT_PATH, DOVI_TOOL_PATH, mkvtoolnix_ui_language_arg
+from .media_info_and_track_mapping import MediaInfoTrackMappingMixin
 from ...core.i18n import translate_text
 from ...exports.utils import (
     print_exc_terminal,
     get_vspipe_context,
     force_remove_file,
     print_terminal_line,
+    run_shell_command_with_output,
     resolve_encoder_executable_path,
     mkv_codec_id_is_dts_family,
 )
@@ -214,12 +216,7 @@ def _windows_no_window_flags() -> int:
 
 
 def _run_mkvmerge_shell(cmd: str) -> int:
-    try:
-        return int(subprocess.Popen(
-            cmd, shell=True, creationflags=_windows_no_window_flags(),
-        ).wait())
-    except Exception:
-        return -1
+    return run_shell_command_with_output(cmd)
 
 
 def _commit_inplace_mkv_remux(output_file: str, temp_mkv: str, mux_rc: int) -> bool:
@@ -315,6 +312,29 @@ def _emit_encode_log_line(message: str) -> None:
         print_terminal_line(message)
     except Exception:
         print(message, flush=True)
+
+
+def _format_encoder_cmd_for_echo(enc_cmd: list) -> str:
+    """Shell-style echo string; always quote paths after ``-o`` / ``-b``."""
+    parts: list[str] = []
+    i = 0
+    if enc_cmd:
+        exe = str(enc_cmd[0])
+        parts.append(f'"{exe}"' if (' ' in exe or ';' in exe) else exe)
+        i = 1
+    while i < len(enc_cmd):
+        tok = str(enc_cmd[i])
+        if tok in ('-o', '-b') and i + 1 < len(enc_cmd):
+            parts.append(tok)
+            parts.append(f'"{enc_cmd[i + 1]}"')
+            i += 2
+            continue
+        if ' ' in tok or ';' in tok:
+            parts.append(f'"{tok}"')
+        else:
+            parts.append(tok)
+        i += 1
+    return ' '.join(parts)
 
 
 def _encode_inherit_subprocess_stderr() -> bool:
@@ -491,6 +511,236 @@ def _svtav1_extra_has_explicit_profile(extra: list[str]) -> bool:
 def _video_intermediate_extension(tool: str) -> str:
     t = _normalize_encode_tool_label(tool)
     return { "x264": ".h264", "x265": ".hevc", "svtav1": ".ivf" }[t]
+
+
+def encode_dovi_supported(tool: str, encode_bit_depth: str) -> bool:
+    """Dolby Vision encode path requires x265 or SVT-AV1 at 10-bit or deeper."""
+    tool_key = _normalize_encode_tool_label(tool)
+    if tool_key not in ('x265', 'svtav1'):
+        return False
+    try:
+        bd = int(str(encode_bit_depth or '10').strip())
+    except Exception:
+        bd = 10
+    return bd >= 10
+
+
+def encode_dovi_preflight_mkv_paths(
+        mkv_paths: list[str],
+        encode_tool: str,
+        encode_bit_depth: str,
+) -> Optional[str]:
+    """Return an error message if any *mkv_paths* is Dolby Vision but encode settings are unsupported."""
+    if encode_dovi_supported(encode_tool, encode_bit_depth):
+        return None
+    for p in mkv_paths or []:
+        path = os.path.normpath(str(p or ''))
+        if not path or not os.path.isfile(path):
+            continue
+        if MediaInfoTrackMappingMixin.mkvinfo_dolby_vision_track_id(path) is not None:
+            return translate_text('Dolby Vision 不支持 h264 或输出位深 8bit')
+    return None
+
+
+def _dovi_tool_exe_encode() -> str:
+    raw = str(DOVI_TOOL_PATH or '').strip()
+    if raw and os.path.isfile(raw):
+        return raw
+    return shutil.which('dovi_tool') or shutil.which('dovi_tool.exe') or ''
+
+
+def prepare_encode_dolby_vision(
+        mkv_path: str,
+        dst_folder: str,
+        track_id: int,
+) -> Optional[dict[str, str]]:
+    """
+  Extract DoVi HEVC from MKV, demux BL for VapourSynth, ``extract-rpu`` from source HEVC.
+
+  Returns dict with keys ``bl_hevc``, ``rpu_bin``, ``work_dir`` or None on failure.
+    """
+    mkv_path = os.path.normpath(str(mkv_path or ''))
+    if not mkv_path or not os.path.isfile(mkv_path):
+        return None
+    work_dir = os.path.normpath(os.path.join(str(dst_folder or '.'), '_dovi_encode'))
+    try:
+        os.makedirs(work_dir, exist_ok=True)
+    except Exception:
+        return None
+    stem = os.path.splitext(os.path.basename(mkv_path))[0]
+    extract_path = os.path.normpath(os.path.join(work_dir, f'{stem}.dovi_src.hevc'))
+    target_el = os.path.normpath(os.path.join(work_dir, f'{stem}.EL.hevc'))
+    target_bl = os.path.normpath(os.path.join(work_dir, f'{stem}.BL.hevc'))
+    rpu_path = os.path.normpath(os.path.join(work_dir, 'RPU.bin'))
+    for stale in (extract_path, target_el, target_bl, rpu_path):
+        try:
+            if os.path.isfile(stale):
+                os.remove(stale)
+        except OSError:
+            pass
+    extract_exe = str(MKV_EXTRACT_PATH or '').strip() or 'mkvextract'
+    extract_cmd = (
+        f'"{extract_exe}" {mkvtoolnix_ui_language_arg()} tracks "{mkv_path}" '
+        f'{int(track_id)}:"{extract_path}"'
+    )
+    print(f'[encode-dovi] {extract_cmd}')
+    rc = run_shell_command_with_output(extract_cmd)
+    if rc != 0:
+        print(f'[encode-dovi] mkvextract failed: exit {rc}')
+    if rc != 0 or not os.path.isfile(extract_path) or os.path.getsize(extract_path) < 1024:
+        print(f'[encode-dovi] mkvextract failed rc={rc}')
+        return None
+    dovi_exe = _dovi_tool_exe_encode()
+    if not dovi_exe:
+        print('[encode-dovi] dovi_tool executable not found (DOVI_TOOL_PATH)')
+        return None
+    demux_cmd = (
+        f'"{dovi_exe}" -m 2 demux -e "{target_el}" -b "{target_bl}" "{extract_path}"'
+    )
+    print(f'[encode-dovi] output dir: {work_dir}')
+    print(f'[encode-dovi] {demux_cmd}')
+    rc_d = run_shell_command_with_output(demux_cmd, cwd=work_dir)
+    if rc_d != 0:
+        print(f'[encode-dovi] dovi_tool demux exit {rc_d}')
+        return None
+    el_path, bl_path = target_el, target_bl
+    min_hevc = 1024
+    if (
+            not os.path.isfile(bl_path)
+            or os.path.getsize(bl_path) < min_hevc
+    ):
+        print(
+            f'[encode-dovi] demux did not produce BL under {work_dir}: '
+            f'{os.path.basename(target_bl)}',
+        )
+        return None
+    extract_rpu_cmd = f'"{dovi_exe}" extract-rpu "{extract_path}" -o "{rpu_path}"'
+    print(f'[encode-dovi] {extract_rpu_cmd}')
+    rc_rpu = run_shell_command_with_output(extract_rpu_cmd, timeout=7200)
+    if rc_rpu != 0 or not os.path.isfile(rpu_path) or os.path.getsize(rpu_path) < 64:
+        print(f'[encode-dovi] extract-rpu failed rc={rc_rpu}')
+        return None
+    for discard in (el_path, extract_path):
+        try:
+            if os.path.isfile(discard):
+                os.remove(discard)
+        except OSError:
+            pass
+    print(f'[encode-dovi] RPU.bin ok, BL={bl_path}')
+    return {'bl_hevc': bl_path, 'rpu_bin': rpu_path, 'work_dir': work_dir}
+
+
+def dovi_tool_inject_rpu_hevc(hevc_path: str, rpu_bin: str) -> bool:
+    """Inject RPU into encoded HEVC; replace *hevc_path* in place."""
+    hevc = os.path.normpath(str(hevc_path or ''))
+    rpu = os.path.normpath(str(rpu_bin or ''))
+    if not hevc or not rpu or not os.path.isfile(hevc) or not os.path.isfile(rpu):
+        return False
+    exe = _dovi_tool_exe_encode()
+    if not exe:
+        print('[encode-dovi] dovi_tool executable not found for inject-rpu')
+        return False
+    out_tmp = hevc + '.tmp.hevc'
+    try:
+        if os.path.isfile(out_tmp):
+            os.remove(out_tmp)
+    except OSError:
+        pass
+    cmd = f'"{exe}" inject-rpu -i "{hevc}" --rpu-in "{rpu}" -o "{out_tmp}"'
+    print(f'[encode-dovi] {cmd}')
+    rc = run_shell_command_with_output(cmd, timeout=7200)
+    if rc != 0 or not os.path.isfile(out_tmp):
+        print(f'[encode-dovi] inject-rpu failed rc={rc}')
+        return False
+    try:
+        os.remove(hevc)
+    except OSError:
+        pass
+    try:
+        os.replace(out_tmp, hevc)
+    except OSError:
+        try:
+            shutil.copy2(out_tmp, hevc)
+            os.remove(out_tmp)
+        except Exception:
+            return False
+    try:
+        if os.path.isfile(out_tmp):
+            os.remove(out_tmp)
+    except OSError:
+        pass
+    out_sz = os.path.getsize(hevc) if os.path.isfile(hevc) else 0
+    print(f'[encode-dovi] inject-rpu ok -> {hevc} ({out_sz} bytes)', flush=True)
+    return out_sz > 1024
+
+
+def cleanup_encode_dolby_vision_workdir(plan: Optional[dict[str, str]]) -> None:
+    if not plan:
+        return
+    for key in ('el_hevc', 'bl_hevc', 'rpu_bin', 'dovi_src_hevc'):
+        p = str((plan or {}).get(key) or '')
+        if p and os.path.isfile(p):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+    wd = str((plan or {}).get('work_dir') or '')
+    if wd and os.path.isdir(wd):
+        try:
+            shutil.rmtree(wd, ignore_errors=True)
+        except Exception:
+            pass
+
+
+_VPY_A_LINE_RE = re.compile(
+    r'^(\s*)(#\s*)?(\ba\s*=\s*)(.+?)(\s*(#.*)?)\s*$',
+)
+
+
+def _to_vpy_raw_string(value: str) -> str:
+    return 'r"' + str(value or '').replace('"', '\\"') + '"'
+
+
+def _write_vpy_video_source_a(vpy_path: str, video_path: str) -> bool:
+    """Set ``a = r"..."`` in *vpy_path* (skip commented assignments)."""
+    vpy_path = os.path.normpath(os.path.abspath(str(vpy_path or '').strip()))
+    video_path = os.path.normpath(str(video_path or '').strip())
+    if not vpy_path or not os.path.isfile(vpy_path) or not video_path:
+        return False
+    try:
+        with open(vpy_path, 'r', encoding='utf-8') as fp:
+            lines = fp.readlines()
+    except Exception:
+        print_exc_terminal()
+        return False
+    rhs = _to_vpy_raw_string(video_path)
+    patched = False
+    new_lines: list[str] = []
+    for line in lines:
+        raw = line.rstrip('\r\n')
+        m = _VPY_A_LINE_RE.match(raw)
+        if not m or m.group(2):
+            new_lines.append(line)
+            continue
+        indent, expr, suffix = m.group(1), m.group(3), m.group(5) or ''
+        new_raw = f'{indent}{expr}{rhs}{suffix}'
+        new_lines.append(new_raw + '\n')
+        patched = True
+    if not patched:
+        insert_at = len(new_lines)
+        for idx, line in enumerate(new_lines):
+            if 'LWLibavSource' in line or 'ffms2.Source' in line:
+                insert_at = idx
+                break
+        new_lines.insert(insert_at, f'a = {rhs}  # auto-generated by app\n')
+    try:
+        with open(vpy_path, 'w', encoding='utf-8') as fp:
+            fp.writelines(new_lines)
+    except Exception:
+        print_exc_terminal()
+        return False
+    print(f'[encode] vpy a = {video_path}', flush=True)
+    return True
 
 
 def _ensure_runtime_vpy_file(vpy_path: str) -> bool:
@@ -964,6 +1214,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
     def encode_task(self, output_file, dst_folder, i, vpy_path: str, vspipe_mode: str, x265_mode: str, x265_params: str,
                     sub_pack_mode: str, source_file: Optional[str] = None,
                     encode_tool: str = 'x265', encode_bit_depth: str = '10'):
+        vpy_path = os.path.normpath(os.path.abspath(str(vpy_path or '').strip()))
         if not os.path.isfile(vpy_path):
             if _ensure_runtime_vpy_file(vpy_path):
                 self._log_getnative(f'{self.t("[BluraySubtitle] recreate missing vpy: ")}{vpy_path}')
@@ -978,16 +1229,41 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
         if bd not in ('8', '10', '12'):
             bd = '10'
         bits_int = int(bd)
+        vpy_video_source = src_mkv
+        encode_dovi_plan: Optional[dict[str, str]] = None
+        if str(src_mkv).lower().endswith('.mkv') and os.path.isfile(src_mkv):
+            dv_tid = MediaInfoTrackMappingMixin.mkvinfo_dolby_vision_track_id(src_mkv)
+            if dv_tid is not None:
+                if not encode_dovi_supported(encode_tool, bd):
+                    print(
+                        f'[encode-dovi] {translate_text("Dolby Vision 不支持 h264 或输出位深 8bit")} '
+                        f'({os.path.basename(src_mkv)})',
+                        flush=True,
+                    )
+                    return
+                try:
+                    self._progress(text=f'Dolby Vision: preparing {os.path.basename(src_mkv)}')
+                except Exception:
+                    pass
+                encode_dovi_plan = prepare_encode_dolby_vision(src_mkv, dst_folder, int(dv_tid))
+                if not encode_dovi_plan:
+                    print(
+                        f'[encode-dovi] failed to prepare Dolby Vision encode for {src_mkv}',
+                        flush=True,
+                    )
+                    return
+                vpy_video_source = str(encode_dovi_plan.get('bl_hevc') or src_mkv)
         self._cleanup_getnative_artifacts()
         use_getnative = bool(getattr(self, "use_getnative", True))
         native_info = None
         if use_getnative:
-            self._log_getnative(f'{self.t("[BluraySubtitle] getnative - start analyzing ")}{os.path.basename(src_mkv)}')
+            self._log_getnative(
+                f'{self.t("[BluraySubtitle] getnative - start analyzing ")}{os.path.basename(vpy_video_source)}')
             try:
-                self._progress(text=f'{self.t("Getnative analyzing: ")}{os.path.basename(src_mkv)}')
+                self._progress(text=f'{self.t("Getnative analyzing: ")}{os.path.basename(vpy_video_source)}')
             except Exception:
                 pass
-            native_info = self._infer_native_resolution(src_mkv)
+            native_info = self._infer_native_resolution(vpy_video_source)
             self._cleanup_getnative_artifacts()
             if native_info:
                 self._log_getnative(
@@ -996,7 +1272,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 )
             else:
                 self._log_getnative(
-                    f'{self.t("[BluraySubtitle] getnative - ")}{os.path.basename(src_mkv)} -> '
+                    f'{self.t("[BluraySubtitle] getnative - ")}{os.path.basename(vpy_video_source)} -> '
                     f'{self.t("no confident native resolution")}'
                 )
 
@@ -1010,13 +1286,9 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 print_exc_terminal()
                 return
 
-            mkv_real_path = os.path.normpath(src_mkv)
             subtitle_real_path = None
             if self.sub_files and len(self.sub_files) >= i and i > -1:
                 subtitle_real_path = os.path.normpath(self.sub_files[i - 1])
-
-            def _to_py_r_string(value: str) -> str:
-                return 'r"' + value.replace('"', '\\"') + '"'
 
             def _patch_output_fmtc_bitdepth_line(line: str) -> tuple[str, bool]:
                 """
@@ -1050,14 +1322,6 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             new_lines = []
             for line in lines:
                 stripped = line.lstrip()
-                if re.match(r"^a\s*=\s*", stripped):
-                    indent = line[:len(line) - len(stripped)]
-                    comment = ''
-                    if '#' in stripped:
-                        comment = ' #' + stripped.split('#', 1)[1].rstrip('\n')
-                    new_lines.append(f'{indent}a = {_to_py_r_string(mkv_real_path)}{comment}\n')
-                    updated = True
-                    continue
 
                 if stripped.startswith('native_h ='):
                     if not native_info:
@@ -1093,7 +1357,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     comment = ''
                     if '#' in stripped:
                         comment = ' #' + stripped.split('#', 1)[1].rstrip('\n')
-                    new_lines.append(f'{indent}sub_file = {_to_py_r_string(subtitle_real_path)}{comment}\n')
+                    new_lines.append(f'{indent}sub_file = {_to_vpy_raw_string(subtitle_real_path)}{comment}\n')
                     updated = True
                     continue
 
@@ -1115,6 +1379,14 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 print_exc_terminal()
 
         update_vpy_script()
+        if not _write_vpy_video_source_a(vpy_path, vpy_video_source):
+            print(
+                f'[encode] failed to set vpy source (a) in {vpy_path}',
+                flush=True,
+            )
+            if encode_dovi_plan:
+                cleanup_encode_dolby_vision_workdir(encode_dovi_plan)
+            return
 
         def cleanup_lwi_for_source(source_path: str):
             for suffix in ('.lwi', '.lwi.lock'):
@@ -1129,6 +1401,8 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             vspipe_exe, vspipe_env = get_vspipe_context()
         else:
             vspipe_exe, vspipe_env = VSPIPE_PATH, None
+        vspipe_env = dict(vspipe_env) if vspipe_env else dict(os.environ)
+        vspipe_env['BLURAYSUB_VPY_SOURCE'] = os.path.normpath(vpy_video_source)
 
         enc_bundle = (x265_mode or '') == 'bundle'
         enc_mode = 'bundle' if enc_bundle else 'system'
@@ -1173,9 +1447,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             except Exception:
                 pass
         else:
-            cmd_echo = f'"{vspipe_exe}" --y4m "{vpy_path}" - | ' + " ".join(
-                f'"{a}"' if (" " in str(a) or ";" in str(a)) else str(a) for a in enc_cmd
-            )
+            cmd_echo = f'"{vspipe_exe}" --y4m "{vpy_path}" - | {_format_encoder_cmd_for_echo(enc_cmd)}'
         print(f'{translate_text("Encode command:")}{cmd_echo}')
         if use_svt_win_temp_y4m:
             enc_rc = _run_vspipe_svt_win_tempfile_encode(
@@ -1189,6 +1461,22 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             enc_rc = _run_vspipe_piped_encode(str(vspipe_exe), vpy_path, enc_cmd, vspipe_env)
         if enc_rc != 0:
             _emit_encode_log_line(f"[BluraySubtitle] encode pipeline exited with code {enc_rc}")
+        cleanup_lwi_for_source(vpy_video_source)
+        if encode_dovi_plan and enc_rc != 0:
+            cleanup_encode_dolby_vision_workdir(encode_dovi_plan)
+            encode_dovi_plan = None
+        if encode_dovi_plan and enc_rc == 0 and os.path.isfile(encoded_path):
+            try:
+                self._progress(text=f'Dolby Vision: inject RPU {os.path.basename(encoded_path)}')
+            except Exception:
+                pass
+            rpu_path = str(encode_dovi_plan.get('rpu_bin') or '')
+            if not dovi_tool_inject_rpu_hevc(encoded_path, rpu_path):
+                print('[encode-dovi] post-encode inject-rpu failed', flush=True)
+                cleanup_encode_dolby_vision_workdir(encode_dovi_plan)
+                return
+            cleanup_encode_dolby_vision_workdir(encode_dovi_plan)
+            encode_dovi_plan = None
         cleanup_lwi_for_source(src_mkv)
         track_count, track_info, flac_files = self.process_audio_to_flac(output_file, dst_folder, i,
                                                                          source_file=src_mkv)
@@ -1276,16 +1564,8 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             )
             print(f'{translate_text("TrueHD Atmos 解码命令：")}{cmd}')
             wav_ok = False
-            try:
-                proc = subprocess.run(
-                    cmd,
-                    shell=True,
-                    creationflags=_windows_no_window_flags(),
-                )
-            except Exception as ex:
-                print(f'[truehdd] decode failed track {track_id}: {ex}')
-                proc = None
-            if proc is not None and proc.returncode == 0 and os.path.isfile(w64_path):
+            rc_decode = run_shell_command_with_output(cmd)
+            if rc_decode == 0 and os.path.isfile(w64_path):
                 print(
                     f'{translate_text("truehdd W64 转 RIFF WAV：")}'
                     f'"{FFMPEG_PATH}" -i "{w64_path}" -c:a pcm_s24le "{riff_tmp}"')
@@ -1301,8 +1581,8 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                             shutil.move(riff_tmp, wav_path)
                     wav_ok = os.path.isfile(wav_path) and os.path.getsize(wav_path) > 0
             if not wav_ok:
-                if proc is not None and proc.returncode != 0:
-                    print(f'[truehdd] w64 decode exit {proc.returncode} track {track_id}, trying raw PCM fallback')
+                if rc_decode != 0:
+                    print(f'[truehdd] w64 decode exit {rc_decode} track {track_id}, trying raw PCM fallback')
                 for stale in (w64_path, riff_tmp):
                     if os.path.isfile(stale):
                         try:
@@ -1314,17 +1594,9 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     f'--output-path "{decoded_pcm_prefix}" "{thd_path}"'
                 )
                 print(f'{translate_text("TrueHD Atmos PCM 回退解码：")}{pcm_cmd}')
-                try:
-                    pcm_proc = subprocess.run(
-                        pcm_cmd,
-                        shell=True,
-                        creationflags=_windows_no_window_flags(),
-                    )
-                except Exception as ex:
-                    print(f'[truehdd] pcm fallback failed track {track_id}: {ex}')
-                    continue
-                if pcm_proc.returncode != 0:
-                    print(f'[truehdd] pcm fallback exit {pcm_proc.returncode} track {track_id}')
+                pcm_rc = run_shell_command_with_output(pcm_cmd)
+                if pcm_rc != 0:
+                    print(f'[truehdd] pcm fallback exit {pcm_rc} track {track_id}')
                     continue
                 pcm_candidates = sorted(
                     f for f in os.listdir(os.path.dirname(thd_path) or '.')

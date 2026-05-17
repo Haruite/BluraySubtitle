@@ -80,6 +80,10 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 self.label1_container.setVisible(not remux_mode)
             if hasattr(self, 'select_all_tracks_row') and self.select_all_tracks_row:
                 self.select_all_tracks_row.setVisible(True)
+            if hasattr(self, 'trim_copyright_tail_checkbox') and self.trim_copyright_tail_checkbox:
+                self.trim_copyright_tail_checkbox.setVisible(not remux_mode)
+            if hasattr(self, 'mux_dolby_vision_checkbox') and self.mux_dolby_vision_checkbox:
+                self.mux_dolby_vision_checkbox.setVisible(not remux_mode)
         except Exception:
             pass
         try:

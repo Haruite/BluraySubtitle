@@ -445,6 +445,63 @@ def chapter_cfg_chain_print(message: str) -> None:
     print(f'[BluraySubtitle][chapter-cfg] {message}', file=_terminal_err_stream(), flush=True)
 
 
+def run_shell_command_with_output(
+        cmd: str,
+        *,
+        cwd: Optional[str] = None,
+        timeout: Optional[float] = None,
+) -> int:
+    """Run a shell command and show merged stdout/stderr (not captured silently)."""
+    out = _terminal_err_stream()
+    kw: dict = {'shell': True}
+    if cwd:
+        kw['cwd'] = cwd
+    if timeout is not None:
+        kw['timeout'] = timeout
+    try:
+        inherit = bool(sys.stderr.isatty() or sys.stdout.isatty())
+    except Exception:
+        inherit = False
+    if inherit:
+        try:
+            return int(subprocess.run(cmd, **kw).returncode)
+        except subprocess.TimeoutExpired:
+            print('[BluraySubtitle] command timed out', file=out, flush=True)
+            return -1
+        except Exception as ex:
+            print(f'[BluraySubtitle] command failed: {ex}', file=out, flush=True)
+            return -1
+    popen_kw: dict = {
+        'shell': True,
+        'stdout': subprocess.PIPE,
+        'stderr': subprocess.STDOUT,
+        'text': True,
+        'encoding': 'utf-8',
+        'errors': 'replace',
+        'bufsize': 1,
+    }
+    if cwd:
+        popen_kw['cwd'] = cwd
+    try:
+        proc = subprocess.Popen(cmd, **popen_kw)
+    except Exception as ex:
+        print(f'[BluraySubtitle] command failed to start: {ex}', file=out, flush=True)
+        return -1
+    if proc.stdout:
+        for line in proc.stdout:
+            print(line, end='', file=out, flush=True)
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        print('[BluraySubtitle] command timed out', file=out, flush=True)
+        return -1
+    return int(proc.returncode if proc.returncode is not None else -1)
+
+
 def print_terminal_line(message: str) -> None:
     print(translate_text(message), file=_terminal_err_stream(), flush=True)
 
@@ -483,6 +540,7 @@ __all__ = [
     "resolve_encoder_executable_path",
     "get_vspipe_context",
     "mkv_codec_id_is_dts_family",
+    "run_shell_command_with_output",
     "print_terminal_line",
     "ui_perf_enabled",
     "ui_perf_log",

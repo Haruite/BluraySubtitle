@@ -157,6 +157,15 @@ The `vs_pkg/` directory in the PyInstaller bundle mirrors a **Windows x64 portab
 
 ---
 
+### VapourSynth Editor
+
+- **Files:** `vsedit.exe` 
+- **Version:** R19-mod-6.9
+- **License:** MIT
+- **Source:** https://github.com/YomikoR/VapourSynth-Editor/archive/refs/tags/R19-mod-6.9.zip
+
+---
+
 ## PyInstaller runtime
 
 - **Files:** Bootloader and extracted stdlib in the onefile bundle.

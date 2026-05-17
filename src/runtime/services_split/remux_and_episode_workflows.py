@@ -14,7 +14,13 @@ from src.bdmv import Chapter
 from src.core import CONFIGURATION, find_mkvtoolnix, mkvtoolnix_ui_language_arg
 from src.core import settings as core_settings
 from src.domain import MKV
-from src.exports.utils import get_index_to_m2ts_and_offset, get_time_str, force_remove_file, print_exc_terminal
+from src.exports.utils import (
+    get_index_to_m2ts_and_offset,
+    get_time_str,
+    force_remove_file,
+    print_exc_terminal,
+    run_shell_command_with_output,
+)
 from .service_base import BluraySubtitleServiceBase
 from ..services.cancelled import _Cancelled
 
@@ -414,35 +420,28 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         return int(r)
 
     def _run_single_command(self, cmd: str) -> int:
-        if sys.platform == 'win32':
-            return subprocess.Popen(cmd, shell=True).wait()
+        if sys.platform != 'win32':
+            cmd = self._fix_remux_shell_rm_glob(cmd)
+        return run_shell_command_with_output(cmd)
 
-        def _fix_rm_glob(raw: str) -> str:
-            # Convert rm "dir/*-007.mkv" -> rm "dir/"*-007.mkv so glob can expand.
-            def _fix_quoted_token(m):
-                token = m.group(1)
-                if '*' not in token or '/' not in token:
-                    return m.group(0)
-                i = token.rfind('/')
-                if i < 0:
-                    return m.group(0)
-                prefix = token[:i + 1]
-                suffix = token[i + 1:]
-                if '*' not in suffix:
-                    return m.group(0)
-                return f'"{prefix}"{suffix}'
+    @staticmethod
+    def _fix_remux_shell_rm_glob(raw: str) -> str:
+        def _fix_quoted_token(m):
+            token = m.group(1)
+            if '*' not in token or '/' not in token:
+                return m.group(0)
+            i = token.rfind('/')
+            if i < 0:
+                return m.group(0)
+            prefix = token[:i + 1]
+            suffix = token[i + 1:]
+            if '*' not in suffix:
+                return m.group(0)
+            return f'"{prefix}"{suffix}'
 
-            out = re.sub(r'"([^"]*\*[^"]*)"', _fix_quoted_token, raw)
-            # If user chains cleanup with '&& rm', mkvmerge may return non-zero even when files are created,
-            # so run cleanup unconditionally.
-            out = re.sub(r'\s*&&\s*rm\b', r'; rm -f', out)
-            return out
-
-        cmd = _fix_rm_glob(cmd)
-        try:
-            return subprocess.Popen(['bash', '-lc', cmd]).wait()
-        except Exception:
-            return subprocess.Popen(cmd, shell=True).wait()
+        out = re.sub(r'"([^"]*\*[^"]*)"', _fix_quoted_token, raw)
+        out = re.sub(r'\s*&&\s*rm\b', r'; rm -f', out)
+        return out
 
     def _make_main_mpls_remux_cmd(
             self,
@@ -986,13 +985,14 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                             if chapter_txt:
                                 print(
                                     f'{self.t("[chapter-debug] ")}{self.t("legacy SP remux with chapter file: ")}{chapter_txt} -> {out_name}')
-                            subprocess.Popen(f'"{self._mkvmerge_exe()}" {mkvtoolnix_ui_language_arg()} '
-                                             f'{("--chapters " + "\"" + chapter_txt + "\"") if chapter_txt else ""} '
-                                             f'-o "{os.path.join(dst_folder, "SPs", out_name)}" '
-                                             f'{("-a " + ",".join(cmd_audio_track)) if cmd_audio_track else ""} '
-                                             f'{("-s " + ",".join(cmd_sub_track)) if cmd_sub_track else ""} '
-                                             f'"{mpls_file_path}"',
-                                             shell=True).wait()
+                            run_shell_command_with_output(
+                                f'"{self._mkvmerge_exe()}" {mkvtoolnix_ui_language_arg()} '
+                                f'{("--chapters " + "\"" + chapter_txt + "\"") if chapter_txt else ""} '
+                                f'-o "{os.path.join(dst_folder, "SPs", out_name)}" '
+                                f'{("-a " + ",".join(cmd_audio_track)) if cmd_audio_track else ""} '
+                                f'{("-s " + ",".join(cmd_sub_track)) if cmd_sub_track else ""} '
+                                f'"{mpls_file_path}"',
+                            )
                             _progress_sp_mux(out_name)
                             if chapter_txt:
                                 try:
@@ -1209,13 +1209,14 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                             if chapter_txt:
                                 print(
                                     f'{self.t("[chapter-debug] ")}{self.t("legacy SP remux with chapter file: ")}{chapter_txt} -> {out_name}')
-                            subprocess.Popen(f'"{self._mkvmerge_exe()}" {mkvtoolnix_ui_language_arg()} '
-                                               f'{("--chapters " + "\"" + chapter_txt + "\"") if chapter_txt else ""} '
-                                               f'-o "{os.path.join(dst_stage, "SPs", out_name)}" '
-                                               f'{("-a " + ",".join(cmd_audio_track)) if cmd_audio_track else ""} '
-                                               f'{("-s " + ",".join(cmd_sub_track)) if cmd_sub_track else ""} '
-                                               f'"{mpls_file_path}"',
-                                               shell=True).wait()
+                            run_shell_command_with_output(
+                                f'"{self._mkvmerge_exe()}" {mkvtoolnix_ui_language_arg()} '
+                                f'{("--chapters " + "\"" + chapter_txt + "\"") if chapter_txt else ""} '
+                                f'-o "{os.path.join(dst_stage, "SPs", out_name)}" '
+                                f'{("-a " + ",".join(cmd_audio_track)) if cmd_audio_track else ""} '
+                                f'{("-s " + ",".join(cmd_sub_track)) if cmd_sub_track else ""} '
+                                f'"{mpls_file_path}"',
+                            )
                             _progress_sp_mux_enc(out_name)
                             if chapter_txt:
                                 try:
@@ -1241,13 +1242,12 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                             copy_audio_track, copy_sub_track = self._select_tracks_for_source(
                                 os.path.join(stream_folder, stream_file), {}, key
                             )
-                            subprocess.Popen(
+                            run_shell_command_with_output(
                                 f'"{self._mkvmerge_exe()}" {mkvtoolnix_ui_language_arg()} -o "{os.path.join(dst_stage, "SPs", out_name)}" '
                                 f'{("-a " + ",".join(copy_audio_track)) if copy_audio_track else ""} '
                                 f'{("-s " + ",".join(copy_sub_track)) if copy_sub_track else ""} '
                                 f'"{os.path.join(stream_folder, stream_file)}"',
-                                shell=True
-                            ).wait()
+                            )
                             _progress_sp_mux_enc(out_name)
 
         self._progress(1000)
@@ -1335,26 +1335,73 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         self.completion()
         self._progress(1000, 'Done')
 
+    def _remux_exclude_audio_track_ids(
+            self,
+            mkv_file: str,
+            track_info: dict[int, str],
+            track_flac_map: dict[int, str],
+            *,
+            drop_all_source_audio: bool = False,
+    ) -> list[int]:
+        """mkvmerge ``-a !`` track IDs (from ``mkvmerge --identify``, not ffprobe index)."""
+        from .media_info_and_track_mapping import MediaInfoTrackMappingMixin as _mit
+        exclude: set[int] = set()
+        if drop_all_source_audio:
+            exclude.update(_mit._mkvmerge_track_ids_by_type(mkv_file, 'audio'))
+        for tid in (getattr(self, '_audio_tracks_to_exclude', None) or set()):
+            try:
+                exclude.add(int(tid))
+            except Exception:
+                pass
+        for tid in track_info:
+            src = track_flac_map.get(tid)
+            if src and os.path.isfile(str(src)):
+                exclude.add(int(tid))
+        if not drop_all_source_audio and exclude:
+            mkv_audio = set(_mit._mkvmerge_track_ids_by_type(mkv_file, 'audio'))
+            mkv_video = set(_mit._mkvmerge_track_ids_by_type(mkv_file, 'video'))
+            if 0 in exclude and 0 in mkv_video and mkv_audio:
+                exclude.discard(0)
+                exclude.add(min(mkv_audio))
+        for vid in _mit._mkvmerge_track_ids_by_type(mkv_file, 'video'):
+            exclude.discard(int(vid))
+        return sorted(exclude)
+
     def generate_remux_cmd(self, track_count, track_info, flac_files, output_file, mkv_file,
                            encoded_video_file: Optional[str] = None):
+        from .media_info_and_track_mapping import MediaInfoTrackMappingMixin as _mit
         mkvmerge_exe = self._mkvmerge_exe()
         copy_audio_track = list(getattr(self, '_active_copy_audio_track', []) or [])
         copy_sub_track = list(getattr(self, '_active_copy_sub_track', []) or [])
         track_flac_map = getattr(self, '_track_flac_map', {}) or {}
         track_mux_sync_ms = getattr(self, '_track_mux_sync_ms', {}) or {}
-        audio_tracks_to_exclude = sorted(
-            int(tid) for tid in track_info
-            if track_flac_map.get(tid) and os.path.isfile(str(track_flac_map.get(tid)))
+        has_external_audio = any(
+            track_flac_map.get(tid) and os.path.isfile(str(track_flac_map.get(tid)))
+            for tid in track_info
         )
-        tracker_order = []
-        audio_tracks = []
+        drop_all_src_audio = bool(encoded_video_file and has_external_audio)
+        exclude_audio_ids = self._remux_exclude_audio_track_ids(
+            mkv_file, track_info, track_flac_map, drop_all_source_audio=drop_all_src_audio,
+        )
+        mkv_video_ids = set(_mit._mkvmerge_track_ids_by_type(mkv_file, 'video'))
+        mkv_audio_ids = set(_mit._mkvmerge_track_ids_by_type(mkv_file, 'audio'))
+        video_tracks = (
+            '!' + ','.join(str(x) for x in sorted(mkv_video_ids))
+        ) if mkv_video_ids else ''
+        audio_tracks = ('!' + ','.join(str(x) for x in exclude_audio_ids)) if exclude_audio_ids else ''
+        video_order = [f'0:{v}' for v in sorted(mkv_video_ids)]
+        ext_order: list[str] = []
+        mkv_order: list[str] = []
         pcm_track_count = 0
         language_options = []
         for _ in range(track_count + 1):
+            if _ in mkv_video_ids:
+                continue
             if _ in track_info:
                 flac_src = track_flac_map.get(_)
                 if not flac_src or not os.path.isfile(str(flac_src)):
-                    tracker_order.append(f'0:{_}')
+                    if _ not in mkv_audio_ids:
+                        mkv_order.append(f'0:{_}')
                     continue
                 pcm_track_count += 1
                 lang_opt = f'--language 0:{track_info[_]}'
@@ -1364,24 +1411,31 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     sync_ms = 0
                 sync_opt = f'-y 0:{sync_ms}' if sync_ms else ''
                 language_options.append(f'{lang_opt} {sync_opt} "{flac_src}"'.strip())
-                tracker_order.append(f'{pcm_track_count}:0')
-            elif _ in audio_tracks_to_exclude:
+                ext_order.append(f'{pcm_track_count}:0')
                 continue
-            else:
-                tracker_order.append(f'0:{_}')
-        tracker_order = ','.join(tracker_order)
-        audio_tracks = ('!' + ','.join([str(x) for x in audio_tracks_to_exclude])) if audio_tracks_to_exclude else ''
+            if _ in exclude_audio_ids or _ in mkv_audio_ids:
+                continue
+            mkv_order.append(f'0:{_}')
         language_options = ' '.join(language_options)
         if not encoded_video_file:
-            return (
+            tracker_order = ','.join(video_order + ext_order + mkv_order)
+            cmd = (
                 f'"{mkvmerge_exe}" {mkvtoolnix_ui_language_arg()} -o "{output_file}" --track-order {tracker_order} '
                 f'{("-a " + ",".join(copy_audio_track)) if copy_audio_track else ""} '
                 f'{("-s " + ",".join(copy_sub_track)) if copy_sub_track else ""} '
                 f'{"-a " + audio_tracks if audio_tracks else ""} "{mkv_file}" {language_options}')
         else:
-            tracker_order = f'{pcm_track_count + 1}:0,{tracker_order}'
-            return (
+            video_in = pcm_track_count + 1
+            tracker_order = ','.join([f'{video_in}:0'] + ext_order + mkv_order)
+            d_flag = f'-d {video_tracks} ' if video_tracks else ''
+            cmd = (
                 f'"{mkvmerge_exe}" {mkvtoolnix_ui_language_arg()} -o "{output_file}" --track-order {tracker_order} '
                 f'{("-a " + ",".join(copy_audio_track)) if copy_audio_track else ""} '
                 f'{("-s " + ",".join(copy_sub_track)) if copy_sub_track else ""} '
-                f'-d !0 {"-a " + audio_tracks if audio_tracks else ""} "{mkv_file}" {language_options} "{encoded_video_file}"')
+                f'{d_flag}{"-a " + audio_tracks if audio_tracks else ""} "{mkv_file}" {language_options} "{encoded_video_file}"')
+        print(
+            f'[encode-mux] exclude audio={exclude_audio_ids} video={sorted(mkv_video_ids)} '
+            f'-d {video_tracks or "(none)"} track-order={tracker_order}',
+            flush=True,
+        )
+        return cmd

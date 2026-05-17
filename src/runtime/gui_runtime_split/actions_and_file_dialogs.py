@@ -601,6 +601,10 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             btn_attachments.clicked.connect(partial(self.on_edit_attachments_from_mkv_row, self.table2, r))
             self.table2.setCellWidget(r, attachments_col, btn_attachments)
             self.ensure_encode_row_widgets(r)
+            try:
+                self._ensure_default_track_config_for_mkv(src, sp=False)
+            except Exception:
+                pass
             if (time.time() - start_ts) >= 2.0:
                 try:
                     bar.setValue(int((r + 1) / max(1, len(mkvs)) * 1000))
@@ -704,6 +708,10 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 btn.setText(self.t('preview'))
                 btn.clicked.connect(self.on_preview_sp_scripts_clicked)
                 self.table3.setCellWidget(r, preview_col, btn)
+            try:
+                self._ensure_default_track_config_for_mkv(src, sp=True)
+            except Exception:
+                pass
             if (time.time() - start_ts) >= 2.0:
                 try:
                     bar.setValue(int((r + 1) / max(1, len(mkvs)) * 1000))
@@ -983,6 +991,20 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 sub_pack_mode = 'soft'
             else:
                 sub_pack_mode = 'external'
+
+            from src.runtime.services_split.encode_and_audio_tasks import encode_dovi_preflight_mkv_paths
+
+            dovi_err = encode_dovi_preflight_mkv_paths(
+                [str(r.get('src_path') or '') for r in mkv_rows],
+                encode_tool,
+                encode_bit_depth,
+            )
+            if dovi_err:
+                self._current_cancel_event = None
+                self._reset_exe_button()
+                self.exe_button.setEnabled(True)
+                QMessageBox.warning(self, ' ', self.t('Dolby Vision 不支持 h264 或输出位深 8bit'))
+                return
 
             self._encode_thread = QThread(self)
             self._encode_worker = EncodeMkvFolderWorker(

@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -20,7 +21,7 @@ from src.core import FDK_AAC_PATH, FFPROBE_PATH, FFMPEG_PATH, FLAC_PATH, FLAC_TH
 from src.core import settings as core_settings
 from src.core.i18n import translate_text
 from src.exports.utils import get_effective_bit_depth, get_time_str, print_exc_terminal, get_index_to_m2ts_and_offset, \
-    fix_audio_delay_to_lossless, get_compressed_effective_depth
+    fix_audio_delay_to_lossless, get_compressed_effective_depth, run_shell_command_with_output
 from .service_base import BluraySubtitleServiceBase
 from ..services.cancelled import _Cancelled
 
@@ -282,6 +283,83 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         return [p for p in video_pids if int(p) != el_pid]
 
     @staticmethod
+    def mkvinfo_dolby_vision_track_id(mkv_path: str) -> Optional[int]:
+        """
+        Return mkvmerge/mkvextract video track id when *mkvinfo* reports Dolby Vision (dvvC block addition).
+
+        Uses ``mkvinfo --ui-language en``; matches tracks whose block-addition mapping includes
+        ``Dolby Vision configuration``.
+        """
+        mkv_path = os.path.normpath(str(mkv_path or ''))
+        if not mkv_path or not os.path.isfile(mkv_path):
+            return None
+        try:
+            find_mkvtoolnix()
+        except Exception:
+            pass
+        info_exe = str(getattr(core_settings, 'MKV_INFO_PATH', '') or '').strip()
+        if not info_exe or not os.path.isfile(info_exe):
+            return None
+        ui_lang = 'en' if sys.platform == 'win32' else 'en_US'
+        try:
+            proc = subprocess.run(
+                [info_exe, mkv_path, '--ui-language', ui_lang],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='ignore',
+                shell=False,
+            )
+        except Exception:
+            return None
+        if proc.returncode != 0:
+            return None
+        text = proc.stdout or ''
+        in_track = False
+        is_video = False
+        has_dovi = False
+        track_id: Optional[int] = None
+        first_dovi_tid: Optional[int] = None
+
+        def _flush_track() -> None:
+            nonlocal in_track, is_video, has_dovi, track_id, first_dovi_tid
+            if in_track and is_video and has_dovi and track_id is not None and first_dovi_tid is None:
+                first_dovi_tid = int(track_id)
+            in_track = False
+            is_video = False
+            has_dovi = False
+            track_id = None
+
+        for raw in text.splitlines():
+            line = raw.strip()
+            if line in ('|+ Track', '| + Track', '|  + Track'):
+                _flush_track()
+                in_track = True
+                continue
+            if not in_track:
+                continue
+            if (
+                    line.startswith('|+ Track type: video')
+                    or line.startswith('| + Track type: video')
+                    or line.startswith('|  + Track type: video')
+            ):
+                is_video = True
+                continue
+            if 'track ID for mkvmerge & mkvextract:' in line:
+                nums = re.findall(r'\d+', line.split(':', 1)[-1])
+                if nums:
+                    try:
+                        track_id = int(nums[-1])
+                    except Exception:
+                        track_id = None
+                continue
+            low = line.lower()
+            if 'dolby vision configuration' in low or 'dvvC'.lower() in low or '(dvvc)' in low:
+                has_dovi = True
+        _flush_track()
+        return first_dovi_tid
+
+    @staticmethod
     def _dovi_tool_exe() -> str:
         raw = str(getattr(core_settings, 'DOVI_TOOL_PATH', '') or DOVI_TOOL_PATH or '').strip()
         if raw and os.path.isfile(raw):
@@ -309,16 +387,9 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 os.remove(out_tmp)
         except OSError:
             pass
-        cmd = f'"{exe}" -m 0 mux --bl "{bl}" --el "{el}" -o "{out_tmp}"'
+        cmd = f'"{exe}" -m 2 mux --bl "{bl}" --el "{el}" -o "{out_tmp}" --discard'
         print(f'[remux-fallback] {cmd}')
-        try:
-            rc = subprocess.run(
-                cmd, shell=True, capture_output=True, text=True,
-                encoding='utf-8', errors='replace', timeout=7200,
-            ).returncode
-        except Exception as ex:
-            print(f'[remux-fallback] dovi_tool mux failed: {ex}')
-            rc = -1
+        rc = run_shell_command_with_output(cmd, timeout=7200)
         if rc != 0 or not os.path.isfile(out_tmp):
             print('[remux-fallback] dovi_tool mux failed')
             try:
@@ -341,6 +412,75 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 return False
         print(f'[remux-fallback] dovi_tool mux ok -> {os.path.basename(bl)}')
         return True
+
+    @staticmethod
+    def _norm_lang_for_track_selection(raw: object) -> str:
+        """Normalize ISO/BCP47/MKV language tags for default eng/zho track picking."""
+        s = str(raw or '').strip().lower().replace('_', '-')
+        if not s:
+            return 'und'
+        if s in ('eng', 'en') or s.startswith('en-'):
+            return 'eng'
+        if s in ('zho', 'chi', 'cmn', 'yue', 'nan', 'zh', 'chs', 'cht') or s.startswith('zh'):
+            return 'zho'
+        if s in ('jpn', 'ja') or s.startswith('ja-'):
+            return 'jpn'
+        if s in ('kor', 'ko') or s.startswith('ko-'):
+            return 'kor'
+        if len(s) >= 3 and re.match(r'^[a-z]{3}', s):
+            return s[:3]
+        return s if s else 'und'
+
+    @staticmethod
+    def _pid_lang_from_media_streams(streams: list[dict[str, object]]) -> dict[int, str]:
+        """Build index/PID → language map from ffprobe/M2TS stream dicts (encode/remux defaults)."""
+        out: dict[int, str] = {}
+        for s in streams or []:
+            if not isinstance(s, dict):
+                continue
+            lang = 'und'
+            try:
+                direct = s.get('lang') or s.get('language') or s.get('language_from_pmt_descriptor')
+                if direct:
+                    lang = str(direct)
+                else:
+                    tags = s.get('tags') or {}
+                    if isinstance(tags, dict):
+                        tag_lang = tags.get('lang') or tags.get('language')
+                        if tag_lang:
+                            lang = str(tag_lang)
+            except Exception:
+                lang = 'und'
+            try:
+                if len(lang) == 2:
+                    language = pycountry.languages.get(alpha_2=lang.lower())
+                    if language:
+                        lang = getattr(language, 'bibliographic', getattr(language, 'alpha_3', None)) or lang
+            except Exception:
+                pass
+            lang = _svc_cls()._norm_lang_for_track_selection(lang)
+            try:
+                idx = int(str(s.get('index') or '').strip())
+                out[idx] = lang
+            except Exception:
+                pass
+            try:
+                sid = str(s.get('id') or '').strip()
+                if sid:
+                    if sid.lower().startswith('0x'):
+                        out[int(sid, 16)] = lang
+                    elif any(c in 'abcdefABCDEF' for c in sid):
+                        out[int(sid, 16)] = lang
+                    else:
+                        out[int(sid, 10)] = lang
+            except Exception:
+                pass
+            try:
+                pid = int(str(s.get('pid') or '').strip())
+                out[pid] = lang
+            except Exception:
+                pass
+        return out
 
     @staticmethod
     def _default_track_selection_from_streams(
@@ -371,13 +511,21 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             if pid is None:
                 pid = _parse_pid(stream_info.get('id'))
             if pid is not None and pid in pid_lang:
-                return str(pid_lang.get(pid, 'und') or 'und')
+                return _svc_cls()._norm_lang_for_track_selection(pid_lang.get(pid, 'und'))
             try:
                 idx = int(str(stream_info.get('index') or '').strip())
                 if idx in pid_lang:
-                    return str(pid_lang.get(idx, 'und') or 'und')
+                    return _svc_cls()._norm_lang_for_track_selection(pid_lang.get(idx, 'und'))
             except Exception:
                 pass
+            for key in ('language', 'lang'):
+                if stream_info.get(key):
+                    return _svc_cls()._norm_lang_for_track_selection(stream_info.get(key))
+            tags = stream_info.get('tags')
+            if isinstance(tags, dict):
+                for key in ('language', 'lang'):
+                    if tags.get(key):
+                        return _svc_cls()._norm_lang_for_track_selection(tags.get(key))
             return 'und'
 
         audio_type_weight = {'': -1, 'aac': 1, 'ac3': 2, 'eac3': 3, 'lpcm': 4, 'dts': 5, 'dts_hd_ma': 6, 'truehd': 7}
@@ -884,6 +1032,25 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         except Exception:
             return {}
         return data if isinstance(data, dict) else {}
+
+    @staticmethod
+    def _mkvmerge_track_ids_by_type(media_path: str, track_type: str) -> list[int]:
+        """mkvmerge JSON ``tracks[].id`` for *track_type* (``video`` / ``audio`` / ``subtitles``)."""
+        want = str(track_type or '').strip().lower()
+        if want == 'subtitle':
+            want = 'subtitles'
+        out: list[int] = []
+        ident = _svc_cls()._mkvmerge_identify_json(media_path)
+        for t in ident.get('tracks') or []:
+            if not isinstance(t, dict):
+                continue
+            if str(t.get('type') or '').strip().lower() != want:
+                continue
+            try:
+                out.append(int(t['id']))
+            except Exception:
+                continue
+        return out
 
     @staticmethod
     def _int_from_mkvmerge_prop(raw: object) -> Optional[int]:
@@ -2513,7 +2680,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             base_track_by_pid: Optional[dict[int, int]] = None,
             pid_order: Optional[list[int]] = None,
     ) -> bool:
-        """Merge ``base_mkv`` (optional) with tsMuxer elementary streams; ``--track-order`` follows ``pid_order``."""
+        """Merge ``base_mkv`` (optional) with tsMuxer elementary streams; ``--track-order`` by ascending MPEG PID."""
         if not demux_by_pid:
             if base_mkv and os.path.isfile(base_mkv):
                 try:
@@ -2523,12 +2690,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                     return False
             return False
         base_set = set(base_pid_list)
-        demux_pids_ordered = [
-            p for p in (pid_order or [])
-            if p in demux_by_pid
-        ]
-        if not demux_pids_ordered:
-            demux_pids_ordered = sorted(demux_by_pid.keys())
+        demux_pids_ordered = sorted(demux_by_pid.keys())
         bits: list[str] = [f'"{exe}"']
         if ui:
             bits.append(ui)
@@ -2550,9 +2712,8 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         if not track_map and base_set:
             for i, pid in enumerate(base_pid_list):
                 track_map[pid] = i
-        order_pids = [p for p in (pid_order or []) if p in base_set or p in demux_by_pid]
-        if not order_pids:
-            order_pids = sorted(base_set | set(demux_pids_ordered))
+        allowed_pids = base_set | set(demux_by_pid.keys())
+        order_pids = sorted(allowed_pids)
         order_parts: list[str] = []
         for pid in order_pids:
             if pid in base_set and base_mkv and os.path.isfile(base_mkv):
@@ -2962,7 +3123,8 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                     exe, ui, cur_mkv, m2ts_pid_list, demux_map, pid_to_lang, merged_mkv,
                     split_arg=split_arg,
                     base_track_by_pid=base_track_by_pid,
-                    pid_order=pid_order):
+                    pid_order=pid_order,
+            ):
                 return False
             if not _svc_cls()._remux_fallback_promote_merge_to_part_out(part_out, merged_mkv):
                 return False
@@ -2994,7 +3156,8 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                             exe, ui, cur_mkv, m2ts_pid_list, demux_au, pid_to_lang, merged_au,
                             split_arg=split_arg,
                             base_track_by_pid=base_track_by_pid,
-                            pid_order=pid_order):
+                            pid_order=pid_order,
+                    ):
                         if not _svc_cls()._remux_fallback_promote_merge_to_part_out(part_out, merged_au):
                             return False
                         cur_mkv = part_out
@@ -3631,50 +3794,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             except Exception:
                 pid_lang = {}
         if not pid_lang:
-            out: dict[int, str] = {}
-            for s in streams or []:
-                lang = 'und'
-                try:
-                    direct = s.get('lang') or s.get('language') or s.get('language_from_pmt_descriptor')
-                    if direct:
-                        lang = str(direct)
-                    else:
-                        tags = s.get('tags') or {}
-                        if isinstance(tags, dict):
-                            tag_lang = tags.get('lang') or tags.get('language')
-                            if tag_lang:
-                                lang = str(tag_lang)
-                except Exception:
-                    lang = 'und'
-                try:
-                    if len(lang) == 2:
-                        language = pycountry.languages.get(alpha_2=lang.lower())
-                        if language:
-                            lang = getattr(language, "bibliographic", getattr(language, "alpha_3", None)) or lang
-                except Exception:
-                    pass
-                try:
-                    idx = int(str(s.get('index') or '').strip())
-                    out[idx] = lang
-                except Exception:
-                    pass
-                try:
-                    sid = str(s.get('id') or '').strip()
-                    if sid:
-                        if sid.lower().startswith('0x'):
-                            out[int(sid, 16)] = lang
-                        elif any(c in 'abcdefABCDEF' for c in sid):
-                            out[int(sid, 16)] = lang
-                        else:
-                            out[int(sid, 10)] = lang
-                except Exception:
-                    pass
-                try:
-                    pid = int(str(s.get('pid') or '').strip())
-                    out[pid] = lang
-                except Exception:
-                    pass
-            pid_lang = out
+            pid_lang = _svc_cls()._pid_lang_from_media_streams(streams)
         return _svc_cls()._default_track_selection_from_streams(streams, pid_lang)
 
     @staticmethod
@@ -4014,6 +4134,26 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             """TrueHD: always mux FLAC when encode succeeded (even if larger than .thd)."""
             return _is_truehd_extract_path(src_path, tid)
 
+        def _register_mux_sync_delay(tid: int, path: str) -> None:
+            """Record mkvmerge ``-y`` sync (ms) for external audio muxed back into the MKV."""
+            if tid not in track_id_delay_map:
+                return
+            try:
+                delay_ms = int(round(float(track_id_delay_map[tid]) * 1000.0))
+            except Exception:
+                return
+            if delay_ms == 0:
+                return
+            self._track_mux_sync_ms[int(tid)] = delay_ms
+            ext = os.path.splitext(str(path or ''))[1].lower()
+            if ext == '.dts':
+                label = translate_text('DTS 音轨 ｢')
+            else:
+                label = translate_text('有损音轨 ｢')
+            print(
+                f'{label}{path}{translate_text("｣ 有延迟 ")}{delay_ms} ms'
+                f'{translate_text("（混流时用 mkvmerge -y 校正延迟）")}')
+
         if track_info:
             ext_fn_map = {}
             for file1 in os.listdir(dst_folder):
@@ -4208,13 +4348,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                     if track_id in lossy_track_ids or _is_lossy_audio_file(file1_path):
                         if track_id not in lossy_track_ids:
                             lossy_track_ids.add(track_id)
-                        if track_id in track_id_delay_map:
-                            delay_ms = int(round(float(track_id_delay_map[track_id]) * 1000.0))
-                            if delay_ms != 0:
-                                self._track_mux_sync_ms[track_id] = delay_ms
-                                print(
-                                    f'{translate_text("有损音轨 ｢")}{file1_path}{translate_text("｣ 有延迟 ")}{delay_ms} ms'
-                                    f'{translate_text("（混流时用 mkvmerge -y 校正延迟）")}')
+                        _register_mux_sync_delay(track_id, file1_path)
                         print(f'{translate_text("保留有损音轨 ｢")}{file1_path}{translate_text("｣")}')
                         self._audio_tracks_to_exclude.add(track_id)
                         continue
@@ -4346,6 +4480,14 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                                     os.remove(file1_path)
                                 except Exception:
                                     pass
+                            elif (
+                                    os.path.isfile(file1_path)
+                                    and str(file1_path or '').lower().endswith('.dts')
+                            ):
+                                _register_mux_sync_delay(track_id, file1_path)
+                                self._audio_tracks_to_exclude.add(track_id)
+                                print(
+                                    f'{translate_text("FLAC 比 DTS 大，保留 DTS 音轨 ｢")}{file1_path}{translate_text("｣")}')
                             if os.path.exists(wav_file):
                                 try:
                                     os.remove(wav_file)
@@ -4427,5 +4569,11 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 tid = _track_id_from_path(ext_path)
                 if tid is not None:
                     track_flac_map[int(tid)] = ext_path
+            for tid, ext_path in track_flac_map.items():
+                if os.path.splitext(str(ext_path or ''))[1].lower() != '.dts':
+                    continue
+                if int(tid) in self._track_mux_sync_ms:
+                    continue
+                _register_mux_sync_delay(int(tid), ext_path)
             self._track_flac_map = track_flac_map
         return track_count, track_info, flac_files

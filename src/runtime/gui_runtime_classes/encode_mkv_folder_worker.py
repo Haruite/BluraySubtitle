@@ -97,6 +97,15 @@ class EncodeMkvFolderWorker(QObject):
 
     def run(self):
         try:
+            from src.runtime.services_split.encode_and_audio_tasks import encode_dovi_preflight_mkv_paths
+
+            srcs = [str(r.get('src_path') or '') for r in (self.mkv_rows or [])]
+            dovi_err = encode_dovi_preflight_mkv_paths(
+                srcs, self.encode_tool, self.encode_bit_depth,
+            )
+            if dovi_err:
+                raise RuntimeError(dovi_err)
+
             def progress_cb(value: Optional[int] = None, text: Optional[str] = None):
                 if value is not None:
                     self.progress.emit(int(value))

@@ -1497,6 +1497,29 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             except Exception:
                 pass
 
+    @staticmethod
+    def _streams_for_track_selection_dialog(streams: list[dict[str, object]]) -> list[dict[str, object]]:
+        """Normalize stream rows so ``index``/``codec_type`` match edit-tracks dialog expectations."""
+        out: list[dict[str, object]] = []
+        for s in streams or []:
+            if not isinstance(s, dict):
+                continue
+            row = dict(s)
+            try:
+                row['index'] = str(row.get('index', '')).strip()
+            except Exception:
+                row['index'] = ''
+            ctype = str(row.get('codec_type') or '').strip().lower()
+            if ctype == 'subtitles':
+                ctype = 'subtitle'
+            row['codec_type'] = ctype
+            lang = BluraySubtitle._norm_lang_for_track_selection(
+                row.get('language') or row.get('lang') or 'und')
+            row['language'] = lang
+            row['lang'] = lang
+            out.append(row)
+        return out
+
     def _default_track_lists_for_mpls_path(self, mpls_path: str) -> Optional[tuple[list[str], list[str]]]:
         """Same pipeline as `_ensure_default_track_config_for_main`: MPLS → first m2ts → default track ids."""
         m2ts_path = self._get_first_m2ts_for_mpls(mpls_path)
@@ -1505,11 +1528,26 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
         chapter = Chapter(mpls_path)
         chapter.get_pid_to_language()
         streams = self._read_m2ts_track_info(m2ts_path)
+        pid_lang = dict(chapter.pid_to_lang or {})
+        for k, v in list(pid_lang.items()):
+            pid_lang[int(k)] = BluraySubtitle._norm_lang_for_track_selection(v)
         copy_audio_track, copy_sub_track = BluraySubtitle._default_track_selection_from_streams(
             streams,
-            chapter.pid_to_lang
+            pid_lang
         )
         return copy_audio_track, copy_sub_track
+
+    def _default_track_lists_for_mkv_path(self, mkv_path: str) -> Optional[tuple[list[str], list[str]]]:
+        """Remux MKV defaults: ffprobe streams + same algorithm as ``_select_tracks_for_source``."""
+        mkv_path = os.path.normpath(str(mkv_path or ''))
+        if not mkv_path or not os.path.isfile(mkv_path):
+            return None
+        streams = BluraySubtitle._read_media_streams(mkv_path)
+        if not streams:
+            return None
+        pid_lang = BluraySubtitle._pid_lang_from_media_streams(streams)
+        ui_streams = self._streams_for_track_selection_dialog(streams)
+        return BluraySubtitle._default_track_selection_from_streams(ui_streams, pid_lang)
 
     def _ensure_default_track_config_for_main(self, mpls_path: str):
         cfg = getattr(self, '_track_selection_config', None)
@@ -1524,6 +1562,23 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             return
         copy_audio_track, copy_sub_track = pair
         cfg[key] = {'audio': copy_audio_track, 'subtitle': copy_sub_track}
+
+    def _ensure_default_track_config_for_mkv(self, mkv_path: str, *, sp: bool = False) -> None:
+        cfg = getattr(self, '_track_selection_config', None)
+        if not isinstance(cfg, dict):
+            self._track_selection_config = {}
+            cfg = self._track_selection_config
+        mkv_path = os.path.normpath(str(mkv_path or ''))
+        prefix = 'mkvsp::' if sp else 'mkv::'
+        key = f'{prefix}{mkv_path}'
+        if key in cfg:
+            tr = cfg.get(key) or {}
+            if (tr.get('audio') or tr.get('subtitle')):
+                return
+        pair = self._default_track_lists_for_mkv_path(mkv_path)
+        if not pair:
+            return
+        cfg[key] = {'audio': list(pair[0]), 'subtitle': list(pair[1])}
 
     def _inherit_main_track_config_for_sp_key(self, bdmv_index: int, mpls_file: str, sp_key: str):
         if not sp_key:
@@ -1577,25 +1632,23 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             if table is self.table2:
                 src = self._get_remux_source_path_from_table2_row(row_index)
                 key = f'mkv::{os.path.normpath(src)}'
+                is_sp = False
             else:
                 src = self._get_remux_source_path_from_table3_row(row_index)
                 key = f'mkvsp::{os.path.normpath(src)}'
+                is_sp = True
             if not src or not os.path.exists(src):
                 QMessageBox.information(self, " ", "MKV file not found")
                 return
-            streams = self._read_mkvinfo_tracks(src)
-            pid_lang = {}
-            for s in streams:
-                try:
-                    tid = int(str(s.get('track_id') or s.get('index') or '').strip())
-                    pid_lang[tid] = str(s.get('language') or s.get('lang') or 'und')
-                except Exception:
-                    pass
+            self._ensure_default_track_config_for_mkv(src, sp=is_sp)
+            streams_raw = BluraySubtitle._read_media_streams(src)
+            if not streams_raw:
+                streams = self._read_mkvinfo_tracks(src)
+            else:
+                streams = self._streams_for_track_selection_dialog(streams_raw)
+            pid_lang = BluraySubtitle._pid_lang_from_media_streams(streams_raw or streams)
             cfg = getattr(self, '_track_selection_config', {})
             conv_cfg_all = getattr(self, '_track_convert_config', {})
-            if key not in cfg:
-                a, s = BluraySubtitle._default_track_selection_from_streams(streams, pid_lang)
-                cfg[key] = {'audio': a, 'subtitle': s}
             selected = set((cfg.get(key, {}).get('audio') or []) + (cfg.get(key, {}).get('subtitle') or []))
             convert_map = dict((conv_cfg_all.get(key) or {}))
             la_map = dict((getattr(self, '_track_lossless_audio_config', {}).get(key) or {}))
