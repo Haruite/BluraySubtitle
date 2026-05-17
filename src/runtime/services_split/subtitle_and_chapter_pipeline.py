@@ -1553,7 +1553,6 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                         custom_parts = ''
 
             mux_chapter_txt = ''
-            use_full_m2ts_mux = False
             if str(src_path).lower().endswith('.mpls'):
                 self._set_dovi_mux_plan_for_mpls(src_path)
             identify_ok = self._mkvmerge_identify_covers_remux_slots(
@@ -1602,23 +1601,32 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                        f'{("-s " + ",".join(cmd_sub_track)) if cmd_sub_track else ""} '
                        f'"{src_path}"')
             else:
-                use_full_m2ts_mux = (
-                    (not mpls_file)
-                    and str(src_path).lower().endswith('.m2ts')
-                    and sp_mkv_path.lower().endswith('.mkv')
-                    and not _svc_cls()._is_audio_only_media(src_path)
-                )
-                if use_full_m2ts_mux:
-                    # Orphan/feature m2ts: same as movie_remux.py (mux entire clip, all tracks).
-                    cmd = (f'"{MKV_MERGE_PATH}" {mkvtoolnix_ui_language_arg()} -o "{sp_mkv_path}" '
-                           f'"{src_path}"')
+                track_sel = ''
+                if str(src_path).lower().endswith('.m2ts'):
+                    dovi_plan = getattr(self, '_dovi_mux_plan', None)
+                    if not (isinstance(dovi_plan, dict) and dovi_plan.get('active')):
+                        dovi_plan = None
+                    d_v, a_v, s_v = _svc_cls()._mkvmerge_das_flag_strings_for_m2ts(
+                        src_path, copy_audio_track, copy_sub_track, dovi_plan=dovi_plan,
+                    )
+                    flag_bits: list[str] = []
+                    if d_v:
+                        flag_bits.append(f'-d {d_v}')
+                    if a_v:
+                        flag_bits.append(f'-a {a_v}')
+                    if s_v:
+                        flag_bits.append(f'-s {s_v}')
+                    track_sel = (' '.join(flag_bits) + ' ') if flag_bits else ''
                 else:
-                    cmd = (f'"{MKV_MERGE_PATH}" {mkvtoolnix_ui_language_arg()} '
-                           f'{sp_loop_split}'
-                           f'-o "{sp_mkv_path}" '
-                           f'{("-a " + ",".join(cmd_audio_track)) if cmd_audio_track else ""} '
-                           f'{("-s " + ",".join(cmd_sub_track)) if cmd_sub_track else ""} '
-                           f'"{src_path}"')
+                    if cmd_audio_track:
+                        track_sel += f'-a {",".join(cmd_audio_track)} '
+                    if cmd_sub_track:
+                        track_sel += f'-s {",".join(cmd_sub_track)} '
+                cmd = (f'"{MKV_MERGE_PATH}" {mkvtoolnix_ui_language_arg()} '
+                       f'{sp_loop_split}'
+                       f'-o "{sp_mkv_path}" '
+                       f'{track_sel}'
+                       f'"{src_path}"')
             sp_ok = False
             if identify_ok or (not str(src_path).lower().endswith('.mpls')):
                 print(f'{self.t("混流命令: ")}{cmd}')

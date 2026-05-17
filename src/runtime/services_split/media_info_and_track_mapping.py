@@ -2054,6 +2054,41 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         return d_f, a_f, s_f
 
     @staticmethod
+    def _mkvmerge_das_flag_strings_for_m2ts(
+            m2ts_path: str,
+            copy_audio_track: list[str],
+            copy_sub_track: list[str],
+            dovi_plan: Optional[dict[str, object]] = None,
+    ) -> tuple[str, str, str]:
+        """
+        mkvmerge ``-d`` / ``-a`` / ``-s`` values for one ``.m2ts`` (track ids, not stream row indices).
+
+        Maps edit-tracks stream indices → PID → mkvmerge id; falls back to raw index strings when mapping fails.
+        """
+        path = os.path.normpath(str(m2ts_path or ''))
+        if not path or not os.path.isfile(path):
+            return '', '', ''
+
+        def _index_fallback() -> tuple[str, str, str]:
+            a_f = ','.join(str(x).strip() for x in (copy_audio_track or []) if str(x).strip())
+            s_f = ','.join(str(x).strip() for x in (copy_sub_track or []) if str(x).strip())
+            return '', a_f, s_f
+
+        ref_slots = _svc_cls()._ordered_track_slots_for_remux(
+            path,
+            list(copy_audio_track or []),
+            list(copy_sub_track or []),
+            dovi_plan=dovi_plan if isinstance(dovi_plan, dict) else None,
+        )
+        if not ref_slots:
+            return _index_fallback()
+        mapped = _svc_cls()._map_slots_to_mkvmerge_track_ids(ref_slots, path)
+        if not mapped:
+            return _index_fallback()
+        ident = _svc_cls()._mkvmerge_identify_json(path)
+        return _svc_cls()._mkvmerge_select_flags_from_mapped(mapped, ident)
+
+    @staticmethod
     def _series_episode_segments_bounds(chapter: Chapter, confs: list[dict[str, int | str]]) -> list[tuple[int, int]]:
         """Same (start_chapter, end_chapter) pairs as the series branch of ``_make_main_mpls_remux_cmd``."""
         if not confs:
