@@ -12,8 +12,8 @@ def is_docker() -> bool:
 
 FLAC_PATH = r"C:\Downloads\flac-1.5.0-win\Win64\flac.exe"
 FLAC_THREADS = 20
-FFMPEG_PATH = r"C:\Downloads\ffmpeg-8.1-essentials_build\bin\ffmpeg.exe"
-FFPROBE_PATH = r"C:\Downloads\ffmpeg-8.1-essentials_build\bin\ffprobe.exe"
+FFMPEG_PATH = r"C:\Downloads\ffmpeg-8.1.2-essentials_build\bin\ffmpeg.exe"
+FFPROBE_PATH = r"C:\Downloads\ffmpeg-8.1.2-essentials_build\bin\ffprobe.exe"
 X265_PATH = r"C:\Software\x265.exe"
 X264_PATH = r"C:\Software\x264.exe"
 SVT_AV1_PATH = r'C:\Software\SvtAv1EncApp.exe'

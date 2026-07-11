@@ -316,16 +316,44 @@ ensure_meson_version() {
 install_mkvtoolnix() {
   log "$(msg 'Installing mkvtoolnix / mkvtoolnix-gui (build deb from source)' '安装 mkvtoolnix / mkvtoolnix-gui（从源码编译 deb 并安装）')"
 
-  if [[ -x "/usr/bin/mkvmerge" ]]; then
-    log "$(msg 'mkvtoolnix already installed (/usr/bin/mkvmerge exists), skipping' '检测到 mkvtoolnix 已安装（/usr/bin/mkvmerge 存在），跳过编译安装')"
-    return 0
-  fi
-
   command -v apt-get >/dev/null 2>&1 || die "$(msg 'apt-get is missing' '缺少 apt-get')"
+  command -v dpkg >/dev/null 2>&1 || die "$(msg 'dpkg is missing; cannot compare mkvtoolnix versions' '缺少 dpkg，无法比较 mkvtoolnix 版本')"
   if ! command -v curl >/dev/null 2>&1; then
     apt_update
     apt_install curl
   fi
+
+  local version
+  version="$(
+    curl -s "https://mkvtoolnix.download/latest-release.xml" \
+      | grep -oP '(?<=<version>).*?(?=</version>)' \
+      | head -n 1
+  )"
+  if [[ -z "${version:-}" ]]; then
+    die "$(msg 'Failed to fetch latest mkvtoolnix version' '获取 mkvtoolnix 最新版本失败')"
+  fi
+  log "$(msg "Latest mkvtoolnix version: ${version}" "检测到 mkvtoolnix 最新版本：${version}")"
+
+  local current_version=""
+  if command -v mkvmerge >/dev/null 2>&1; then
+    if command -v dpkg-query >/dev/null 2>&1; then
+      current_version="$(dpkg-query -W -f='${Version}' mkvtoolnix 2>/dev/null | sed 's/-.*//' || true)"
+    fi
+    if [[ -z "${current_version:-}" ]]; then
+      current_version="$(mkvmerge --version 2>/dev/null | head -n 1 | grep -oE 'v[0-9]+(\.[0-9]+)+' | head -n 1 | tr -d 'v' || true)"
+    fi
+    if [[ -n "${current_version:-}" ]]; then
+      log "$(msg "Installed mkvtoolnix version: ${current_version}" "检测到已安装 mkvtoolnix 版本：${current_version}")"
+      if dpkg --compare-versions "$current_version" ge "$version"; then
+        log "$(msg "mkvtoolnix version satisfied (${current_version} >= ${version}), skipping build" "mkvtoolnix 版本已满足要求（${current_version} >= ${version}），跳过编译安装")"
+        return 0
+      fi
+      log "$(msg "mkvtoolnix version is outdated (${current_version} < ${version}), rebuilding from source" "检测到 mkvtoolnix 版本较旧（${current_version} < ${version}），将从源码编译升级")"
+    else
+      log "$(msg 'mkvmerge found but version could not be determined, rebuilding from source' '检测到 mkvmerge 但无法解析版本号，将从源码编译安装')"
+    fi
+  fi
+
   if ! command -v dpkg-buildpackage >/dev/null 2>&1; then
     apt_update
     apt_install dpkg-dev
@@ -339,16 +367,6 @@ install_mkvtoolnix() {
   libogg-dev libpcre2-8-0 libpcre2-dev libqt6svg6-dev libvorbis-dev \
   nlohmann-json3-dev pkg-config po4a qt6-base-dev qt6-base-dev-tools qt6-multimedia-dev \
   rake ruby xsltproc zlib1g-dev unzip pkg-config libtool autoconf
-  local version
-  version="$(
-    curl -s "https://mkvtoolnix.download/latest-release.xml" \
-      | grep -oP '(?<=<version>).*?(?=</version>)' \
-      | head -n 1
-  )"
-  if [[ -z "${version:-}" ]]; then
-    die "$(msg 'Failed to fetch latest mkvtoolnix version' '获取 mkvtoolnix 最新版本失败')"
-  fi
-  log "$(msg "Latest mkvtoolnix version: ${version}" "检测到 mkvtoolnix 最新版本：${version}")"
 
   local build_dir
   build_dir="$(mktemp -d)"

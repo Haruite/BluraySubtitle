@@ -50,6 +50,16 @@ RUN set -eux; \
     XML="$(curl -fsSL https://mkvtoolnix.download/latest-release.xml)"; \
     VERSION="$(printf '%s' "$XML" | python3 -c "import re,sys; x=sys.stdin.read(); m=re.search(r'<latest-source>.*?<version>([^<]+)</version>', x, re.S); print((m.group(1) if m else '').strip())")"; \
     test -n "$VERSION"; \
+    CURRENT=""; \
+    if command -v mkvmerge >/dev/null 2>&1; then \
+      CURRENT="$(dpkg-query -W -f='${Version}' mkvtoolnix 2>/dev/null | sed 's/-.*//' || true)"; \
+      if [ -z "$CURRENT" ]; then \
+        CURRENT="$(mkvmerge --version 2>/dev/null | head -n 1 | grep -oE 'v[0-9]+(\.[0-9]+)+' | head -n 1 | tr -d v || true)"; \
+      fi; \
+    fi; \
+    if [ -n "$CURRENT" ] && dpkg --compare-versions "$CURRENT" ge "$VERSION"; then \
+      exit 0; \
+    fi; \
     mkdir -p /tmp/mkv && cd /tmp/mkv; \
     curl -fsSL -o "mkvtoolnix_${VERSION}.orig.tar.xz" "https://mkvtoolnix.download/sources/mkvtoolnix-${VERSION}.tar.xz"; \
     tar xJf "mkvtoolnix_${VERSION}.orig.tar.xz"; \
