@@ -46,31 +46,107 @@ RUN set -eux; \
     ensure_meson_version; \
     python3 -m pip install --break-system-packages --upgrade cython || python3 -m pip install --upgrade cython
 
-RUN set -eux; \
-    XML="$(curl -fsSL https://mkvtoolnix.download/latest-release.xml)"; \
-    VERSION="$(printf '%s' "$XML" | python3 -c "import re,sys; x=sys.stdin.read(); m=re.search(r'<latest-source>.*?<version>([^<]+)</version>', x, re.S); print((m.group(1) if m else '').strip())")"; \
-    test -n "$VERSION"; \
-    CURRENT=""; \
-    if command -v mkvmerge >/dev/null 2>&1; then \
-      CURRENT="$(dpkg-query -W -f='${Version}' mkvtoolnix 2>/dev/null | sed 's/-.*//' || true)"; \
-      if [ -z "$CURRENT" ]; then \
-        CURRENT="$(mkvmerge --version 2>/dev/null | head -n 1 | grep -oE 'v[0-9]+(\.[0-9]+)+' | head -n 1 | tr -d v || true)"; \
-      fi; \
-    fi; \
-    if [ -n "$CURRENT" ] && dpkg --compare-versions "$CURRENT" ge "$VERSION"; then \
-      exit 0; \
-    fi; \
-    mkdir -p /tmp/mkv && cd /tmp/mkv; \
-    curl -fsSL -o "mkvtoolnix_${VERSION}.orig.tar.xz" "https://mkvtoolnix.download/sources/mkvtoolnix-${VERSION}.tar.xz"; \
-    tar xJf "mkvtoolnix_${VERSION}.orig.tar.xz"; \
-    cd "mkvtoolnix-${VERSION}"; \
-    cp -R packaging/debian debian; \
-    ./debian/create_files.rb; \
-    python3 -c "import base64; exec(base64.b64decode('aW1wb3J0IHJlCmZyb20gcGF0aGxpYiBpbXBvcnQgUGF0aAoKcnVsZXNfcGF0aCA9IFBhdGgoImRlYmlhbi9ydWxlcyIpCnRleHQgPSBydWxlc19wYXRoLnJlYWRfdGV4dChlbmNvZGluZz0idXRmLTgiLCBlcnJvcnM9InJlcGxhY2UiKS5zcGxpdGxpbmVzKGtlZXBlbmRzPVRydWUpCnN0YXJ0ID0gbmV4dCgoaSBmb3IgaSwgbGluZSBpbiBlbnVtZXJhdGUodGV4dCkgaWYgbGluZS5zdGFydHN3aXRoKCJvdmVycmlkZV9kaF9hdXRvX2J1aWxkOiIpKSwgTm9uZSkKaWYgc3RhcnQgaXMgTm9uZToKICAgIHJhaXNlIFN5c3RlbUV4aXQoImRlYmlhbi9ydWxlczogbWlzc2luZyBvdmVycmlkZV9kaF9hdXRvX2J1aWxkIikKZW5kID0gc3RhcnQgKyAxCndoaWxlIGVuZCA8IGxlbih0ZXh0KToKICAgIGxpbmUgPSB0ZXh0W2VuZF0KICAgIGlmIGxpbmUuc3RhcnRzd2l0aCgiXHQiKSBvciBsaW5lLnN0cmlwKCkgPT0gIiI6CiAgICAgICAgZW5kICs9IDEKICAgICAgICBjb250aW51ZQogICAgaWYgcmUubWF0Y2gociJeW15cdFxzXS4rPzpccyooIy4qKT8kIiwgbGluZSk6CiAgICAgICAgYnJlYWsKICAgIGVuZCArPSAxCnJlcGxhY2VtZW50ID0gWwogICAgIm92ZXJyaWRlX2RoX2F1dG9fYnVpbGQ6XG4iLAogICAgImlmZXEgKCwkKGZpbHRlciBub2NoZWNrLCQoREVCX0JVSUxEX09QVElPTlMpKSlcbiIsCiAgICAiXHRMQ19BTEw9QyAuL2RyYWtlIC1qJChzaGVsbCBucHJvYykgdGVzdHM6cnVuX3VuaXRcbiIsCiAgICAiZW5kaWZcbiIsCiAgICAiXG4iLAogICAgIlx0Li9kcmFrZSAtaiQoc2hlbGwgbnByb2MpXG4iLApdCnRleHRbc3RhcnQ6ZW5kXSA9IHJlcGxhY2VtZW50CnJ1bGVzX3BhdGgud3JpdGVfdGV4dCgiIi5qb2luKHRleHQpLCBlbmNvZGluZz0idXRmLTgiKQo=').decode())"; \
-    dpkg-buildpackage -b --no-sign; \
-    apt-get update; \
-    apt-get install -y ../mkvtoolnix*.deb || (dpkg -i ../mkvtoolnix*.deb || true; apt-get -f install -y); \
-    rm -rf /tmp/mkv
+RUN bash <<'MKVTOOLNIX'
+set -euo pipefail
+XML="$(curl -fsSL https://mkvtoolnix.download/latest-release.xml)"
+VERSION="$(printf '%s' "$XML" | python3 -c "import re,sys; x=sys.stdin.read(); m=re.search(r'<latest-source>.*?<version>([^<]+)</version>', x, re.S); print((m.group(1) if m else '').strip())")"
+test -n "$VERSION"
+CURRENT=""
+if command -v mkvmerge >/dev/null 2>&1; then
+  CURRENT="$(dpkg-query -W -f='${Version}' mkvtoolnix 2>/dev/null | sed 's/-.*//' || true)"
+  if [ -z "$CURRENT" ]; then
+    CURRENT="$(mkvmerge --version 2>/dev/null | head -n 1 | grep -oE 'v[0-9]+(\.[0-9]+)+' | head -n 1 | tr -d v || true)"
+  fi
+fi
+if [ -n "$CURRENT" ] && dpkg --compare-versions "$CURRENT" ge "$VERSION"; then
+  exit 0
+fi
+mkdir -p /tmp/mkv && cd /tmp/mkv
+curl -fsSL -o "mkvtoolnix_${VERSION}.orig.tar.xz" "https://mkvtoolnix.download/sources/mkvtoolnix-${VERSION}.tar.xz"
+tar xJf "mkvtoolnix_${VERSION}.orig.tar.xz"
+cd "mkvtoolnix-${VERSION}"
+cp -R packaging/debian debian
+./debian/create_files.rb
+python3 - <<'PY'
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+rules_path = Path("debian/rules")
+text = rules_path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+
+start = None
+for i, line in enumerate(text):
+    if line.startswith("override_dh_auto_build:"):
+        start = i
+        break
+if start is None:
+    raise SystemExit("debian/rules: override_dh_auto_build not found")
+
+end = start + 1
+while end < len(text):
+    line = text[end]
+    if line.startswith("\t") or line.strip() == "":
+        end += 1
+        continue
+    if re.match(r"^[^\t\s].+?:\s*(#.*)?$", line):
+        break
+    end += 1
+
+replacement = [
+    "override_dh_auto_build:\n",
+    "\texport LD_LIBRARY_PATH=\n",
+    "\texport LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib\n",
+    "\texport PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig\n",
+    "\texport LDFLAGS=\"-L/usr/lib/x86_64-linux-gnu -Wl,-rpath-link,/usr/lib/x86_64-linux-gnu\"\n",
+    "ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))\n",
+    "\tLC_ALL=C ./drake -j$(shell nproc) tests:run_unit\n",
+    "endif\n",
+    "\n",
+    "\t./drake -j$(shell nproc)\n",
+]
+
+text[start:end] = replacement
+new_end = start + len(replacement)
+
+if not any(line.startswith("override_dh_shlibdeps:") for line in text):
+    text[new_end:new_end] = [
+        "\n",
+        "override_dh_shlibdeps:\n",
+        "\tdh_shlibdeps --dpkg-shlibdeps-params=--ignore-missing-info\n",
+    ]
+
+rules_path.write_text("".join(text), encoding="utf-8")
+PY
+BOOST_QUARANTINE=""
+if compgen -G "/usr/local/lib/libboost_*.so*" >/dev/null; then
+  BOOST_QUARANTINE="$(mktemp -d)"
+  mv /usr/local/lib/libboost_*.so* "$BOOST_QUARANTINE/"
+  ldconfig
+fi
+restore_boost() {
+  if [ -n "${BOOST_QUARANTINE:-}" ] && [ -d "$BOOST_QUARANTINE" ]; then
+    mv "$BOOST_QUARANTINE"/libboost_*.so* /usr/local/lib/ 2>/dev/null || true
+    ldconfig
+    rm -rf "$BOOST_QUARANTINE"
+  fi
+}
+trap restore_boost EXIT
+rm -rf debian/mkvtoolnix debian/mkvtoolnix-gui 2>/dev/null || true
+./drake clean 2>/dev/null || true
+export LD_LIBRARY_PATH=""
+export LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:/usr/lib"
+export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+export LDFLAGS="-L/usr/lib/x86_64-linux-gnu -Wl,-rpath-link,/usr/lib/x86_64-linux-gnu"
+export DEB_BUILD_OPTIONS="${DEB_BUILD_OPTIONS:-nocheck}"
+dpkg-buildpackage -b --no-sign
+restore_boost
+trap - EXIT
+apt-get update
+apt-get install -y ../mkvtoolnix*.deb || (dpkg -i ../mkvtoolnix*.deb || true; apt-get -f install -y)
+rm -rf /tmp/mkv
+MKVTOOLNIX
 
 RUN set -eux; \
     mkdir -p /tmp/dovi && cd /tmp/dovi; \
@@ -529,17 +605,69 @@ RUN set -eux; \
 
 RUN mkdir -p /app/plugins /tmp/vsplugins
 
-RUN set -eux; \
-    export PATH=/root/.local/bin:$PATH; \
-    export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
-    cd /tmp/vsplugins; \
-    git clone https://github.com/HomeOfAviSynthPlusEvolution/L-SMASH-Works.git; \
-    cd L-SMASH-Works/VapourSynth; \
-    AVCODEC_MAJOR="$(pkg-config --modversion libavcodec 2>/dev/null | cut -d. -f1 || true)"; \
-    if [ -n "${AVCODEC_MAJOR}" ] && [ "${AVCODEC_MAJOR}" -lt 60 ]; then git -c advice.detachedHead=false checkout -q 70e19fb || true; fi; \
-    python3 -c "import re;from pathlib import Path;p=Path('../common/decode.c'); d=p.read_text(encoding='utf-8',errors='replace') if p.exists() else ''; d=re.sub(r'^.*AV_PIX_FMT_D3D12\\\\\\\\n.*$','',d,flags=re.MULTILINE); d=re.sub(r'^#ifndef AV_PIX_FMT_D3D12\\\\n#define AV_PIX_FMT_D3D12 .*?\\\\n#endif\\\\n\\\\n?','',d,flags=re.MULTILINE); p.write_text(d,encoding='utf-8') if p.exists() else None"; \
-    meson setup build; ninja -C build; \
-    cp "$(find "$PWD" -maxdepth 3 -name libvslsmashsource.so -type f | head -n1)" /app/plugins/
+RUN bash <<'LSMASH'
+set -euo pipefail
+export PATH=/root/.local/bin:$PATH
+export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
+cd /tmp/vsplugins
+git clone https://github.com/HomeOfAviSynthPlusEvolution/L-SMASH-Works.git
+cd L-SMASH-Works/VapourSynth
+need_compat=false
+if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libavcodec; then
+  avcodec_ver="$(pkg-config --modversion libavcodec 2>/dev/null | head -n 1 || true)"
+  avcodec_major="${avcodec_ver%%.*}"
+  if [[ "$avcodec_major" =~ ^[0-9]+$ ]] && (( avcodec_major < 60 )); then
+    need_compat=true
+  fi
+fi
+if [[ "$need_compat" == "true" ]]; then
+  git checkout . && git -c advice.detachedHead=false checkout -q 70e19fb
+else
+  git checkout . && git -c advice.detachedHead=false checkout -q ae51313
+fi
+python3 - <<'PY'
+import re
+from pathlib import Path
+
+decode_path = Path("../common/decode.c")
+data = decode_path.read_text(encoding="utf-8", errors="replace")
+data = re.sub(r"^.*AV_PIX_FMT_D3D12\\n.*$", "", data, flags=re.MULTILINE)
+data = re.sub(r"^#ifndef AV_PIX_FMT_D3D12\\n#define AV_PIX_FMT_D3D12 .*?\\n#endif\\n\\n?", "", data, flags=re.MULTILINE)
+
+header_paths = [
+    Path("/usr/include/x86_64-linux-gnu/libavutil/pixfmt.h"),
+    Path("/usr/include/libavutil/pixfmt.h"),
+    Path("/usr/local/include/libavutil/pixfmt.h"),
+]
+header_has_enum = False
+for hp in header_paths:
+    if hp.is_file():
+        txt = hp.read_text(encoding="utf-8", errors="replace")
+        if "AV_PIX_FMT_D3D12" in txt:
+            header_has_enum = True
+            break
+
+if ("AV_PIX_FMT_D3D12" in data) and (not header_has_enum):
+    shim = "\n".join([
+        "#define AV_PIX_FMT_D3D12 AV_PIX_FMT_NONE",
+        "",
+    ])
+    data = shim + data
+decode_path.write_text(data, encoding="utf-8")
+
+libav_path = Path("../common/libavsmash.c")
+if libav_path.is_file():
+    libav_data = libav_path.read_text(encoding="utf-8", errors="replace")
+    v410_line = "        ELSE_IF_GET_CODEC_ID_FROM_CODEC_TYPE(AV_CODEC_ID_V410, QT_CODEC_TYPE_V410_VIDEO);\n"
+    if v410_line in libav_data:
+        libav_data = libav_data.replace(v410_line, "")
+    libav_path.write_text(libav_data, encoding="utf-8")
+PY
+rm -rf build
+meson setup build
+ninja -C build
+cp "$(find "$PWD" -maxdepth 3 -name libvslsmashsource.so -type f | head -n1)" /app/plugins/
+LSMASH
 
 RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \

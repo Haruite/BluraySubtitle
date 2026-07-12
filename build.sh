@@ -57,6 +57,82 @@ log()      { echo -e "\n[BluraySubtitle][SETUP] $*\n"; }
 die()      { echo -e "\n[BluraySubtitle][ERROR] $*\n" >&2; exit 1; }
 log_blue() { printf "\n\033[34m[BluraySubtitle][SETUP] %s\033[0m\n\n" "$*"; }
 
+bluray_build_tmp_base() {
+  local base="${BLURAY_BUILD_TMP:-${TMPDIR:-}}"
+  local candidate
+  if [[ -z "$base" ]]; then
+    for candidate in /var/tmp /tmp; do
+      if [[ -d "$candidate" && -w "$candidate" ]]; then
+        base="$candidate"
+        break
+      fi
+    done
+  fi
+  [[ -n "$base" ]] || base="/tmp"
+  mkdir -p "$base" 2>/dev/null || true
+  printf '%s' "$base"
+}
+
+bluray_mktemp_dir() {
+  local base tmp
+  base="$(bluray_build_tmp_base)"
+  tmp="$(mktemp -d -p "$base" 2>/dev/null || mktemp -d 2>/dev/null || true)"
+  if [[ -z "${tmp:-}" ]]; then
+    die "$(msg "Failed to create temp directory (disk quota exceeded?). Set BLURAY_BUILD_TMP to a directory with free space and retry." "创建临时目录失败（磁盘配额已满？）。请设置 BLURAY_BUILD_TMP 指向有足够空间的目录后重试。")"
+  fi
+  printf '%s' "$tmp"
+}
+
+bluray_mktemp_log_or_empty() {
+  local base log
+  base="$(bluray_build_tmp_base)"
+  log="$(mktemp -p "$base" bluraysubtitle.XXXXXX.log 2>/dev/null || mktemp -t bluraysubtitle.XXXXXX.log 2>/dev/null || true)"
+  if [[ -n "${log:-}" ]] && : >"$log" 2>/dev/null; then
+    printf '%s' "$log"
+  fi
+}
+
+apt_clean() {
+  sudo env DEBIAN_FRONTEND=noninteractive apt-get clean -y >/dev/null 2>&1 || true
+  sudo env DEBIAN_FRONTEND=noninteractive apt-get autoremove -y >/dev/null 2>&1 || true
+}
+
+bluray_sudo() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
+
+bluray_quarantine_local_boost() {
+  BLURAY_BOOST_QUARANTINE_DIR="$(bluray_mktemp_dir)/boost-quarantine"
+  mkdir -p "$BLURAY_BOOST_QUARANTINE_DIR"
+  shopt -s nullglob
+  local libs=(/usr/local/lib/libboost_*.so*)
+  if (( ${#libs[@]} > 0 )); then
+    log "$(msg 'Temporarily hiding /usr/local Boost libraries so mkvtoolnix links against system packages' '临时隐藏 /usr/local 下的 Boost 库，使 mkvtoolnix 链接系统包版本')"
+    bluray_sudo mv "${libs[@]}" "$BLURAY_BOOST_QUARANTINE_DIR/"
+    bluray_sudo ldconfig
+  fi
+  shopt -u nullglob
+}
+
+bluray_restore_local_boost() {
+  if [[ -z "${BLURAY_BOOST_QUARANTINE_DIR:-}" || ! -d "$BLURAY_BOOST_QUARANTINE_DIR" ]]; then
+    return 0
+  fi
+  shopt -s nullglob
+  local libs=("$BLURAY_BOOST_QUARANTINE_DIR"/libboost_*.so*)
+  if (( ${#libs[@]} > 0 )); then
+    bluray_sudo mv "${libs[@]}" /usr/local/lib/
+    bluray_sudo ldconfig
+  fi
+  shopt -u nullglob
+  rm -rf "$BLURAY_BOOST_QUARANTINE_DIR" || true
+  unset BLURAY_BOOST_QUARANTINE_DIR
+}
+
 # ---------------------------------------------------------------------------
 # Terminal helpers
 # ---------------------------------------------------------------------------
@@ -78,7 +154,11 @@ tmux_run() {
 
   printf "\n[BluraySubtitle][SETUP] $(msg 'Running' '执行')：%s" "$title"
   local logfile
-  logfile="$(mktemp -t bluraysubtitle.XXXXXX.log)"
+  logfile="$(bluray_mktemp_log_or_empty)"
+  if [[ -z "${logfile:-}" ]]; then
+    "$@" || return $?
+    return 0
+  fi
 
   # 1. Open a split pane. The original printf that enabled mouse tracking has been
   #    removed to prevent garbled output.
@@ -369,7 +449,7 @@ install_mkvtoolnix() {
   rake ruby xsltproc zlib1g-dev unzip pkg-config libtool autoconf
 
   local build_dir
-  build_dir="$(mktemp -d)"
+  build_dir="$(bluray_mktemp_dir)"
 
   (
     cd "$build_dir" || exit 1
@@ -383,7 +463,7 @@ install_mkvtoolnix() {
     cp -R packaging/debian debian || exit 1
     ./debian/create_files.rb 2>&1 | sed -E '/^Creating files for ubuntu /d;/ handling .*debian\/(control|rules)\.erb$/d' || exit 1
 
-    log "$(msg 'Patching debian/rules (add parallel build flags to override_dh_auto_build)' '修改 debian/rules（override_dh_auto_build 加入并行编译参数）')"
+    log "$(msg 'Patching debian/rules (parallel build + system Boost + shlibdeps)' '修改 debian/rules（并行编译、优先系统 Boost、shlibdeps 容错）')"
     python3 - <<'PY' || exit 1
 from __future__ import annotations
 
@@ -413,6 +493,10 @@ while end < len(text):
 
 replacement = [
     "override_dh_auto_build:\n",
+    "\texport LD_LIBRARY_PATH=\n",
+    "\texport LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib\n",
+    "\texport PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig\n",
+    "\texport LDFLAGS=\"-L/usr/lib/x86_64-linux-gnu -Wl,-rpath-link,/usr/lib/x86_64-linux-gnu\"\n",
     "ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))\n",
     "\tLC_ALL=C ./drake -j$(shell nproc) tests:run_unit\n",
     "endif\n",
@@ -421,17 +505,45 @@ replacement = [
 ]
 
 text[start:end] = replacement
+new_end = start + len(replacement)
+
+if not any(line.startswith("override_dh_shlibdeps:") for line in text):
+    text[new_end:new_end] = [
+        "\n",
+        "override_dh_shlibdeps:\n",
+        "\tdh_shlibdeps --dpkg-shlibdeps-params=--ignore-missing-info\n",
+    ]
+
 rules_path.write_text("".join(text), encoding="utf-8")
 PY
 
+    bluray_quarantine_local_boost
+    trap bluray_restore_local_boost EXIT
+
+    log "$(msg 'Cleaning previous mkvtoolnix build artifacts' '清理 mkvtoolnix 旧的编译产物')"
+    rm -rf debian/mkvtoolnix debian/mkvtoolnix-gui 2>/dev/null || true
+    ./drake clean 2>/dev/null || true
+
     log "$(msg 'Building deb package (dpkg-buildpackage)' '开始编译 deb（dpkg-buildpackage）')"
+    export LD_LIBRARY_PATH=""
+    export LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:/usr/lib"
+    export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+    export LDFLAGS="-L/usr/lib/x86_64-linux-gnu -Wl,-rpath-link,/usr/lib/x86_64-linux-gnu"
+    export DEB_BUILD_OPTIONS="${DEB_BUILD_OPTIONS:-nocheck}"
     tmux_run "dpkg-buildpackage" dpkg-buildpackage -b --no-sign || exit 1
+    bluray_restore_local_boost
+    trap - EXIT
 
     log "$(msg 'Installing built deb packages' '安装编译产物（源码上级目录的 mkvtoolnix*.deb）')"
-    mapfile -t debs < <(find .. -maxdepth 1 -type f -name "mkvtoolnix*.deb" -print | sort)
+    mapfile -t debs < <(find "$build_dir" -maxdepth 1 -type f -name "mkvtoolnix*.deb" -print | sort)
     if (( ${#debs[@]} == 0 )); then
       die "$(msg 'No mkvtoolnix*.deb found (build may have failed)' '未找到 mkvtoolnix*.deb（编译可能失败）')"
     fi
+
+    log "$(msg 'Removing mkvtoolnix build tree to free disk space before installing debs' '安装 deb 前清理 mkvtoolnix 编译目录以释放磁盘空间')"
+    rm -rf "$build_dir/mkvtoolnix-${version}" "$build_dir/mkvtoolnix_${version}.orig.tar.xz" || true
+    find "$build_dir" -maxdepth 1 -type f \( -name "*.changes" -o -name "*.buildinfo" -o -name "*.ddeb" -o -name "*.dsc" \) -delete 2>/dev/null || true
+    apt_clean
 
     log "$(msg 'Installing all mkvtoolnix debs in one pass (auto-resolves dependency order)' '一次性安装全部 mkvtoolnix deb（自动处理依赖顺序）')"
     if ! apt_install "${debs[@]}"; then
@@ -439,6 +551,7 @@ PY
       sudo dpkg -i "${debs[@]}" || true
       apt_fix_broken || exit 1
     fi
+    apt_clean
   ) || die "$(msg 'mkvtoolnix build/install failed (if missing deps, install them manually and retry)' 'mkvtoolnix 编译/安装失败（如提示缺依赖，可手动补齐后重试）')"
 
   rm -rf "$build_dir"
@@ -2119,22 +2232,27 @@ build_vs_plugins() {
       if [[ "$need_compat" == "true" ]]; then
         log "$(msg 'Old FFmpeg API detected (or compatibility mode required), rolling back L-SMASH-Works to compatible commit' '检测到旧版 FFmpeg API（或系统需兼容模式），回退 L-SMASH-Works 到兼容提交')"
         tmux_run "L-SMASH-Works git checkout" bash -lc "git checkout . && git -c advice.detachedHead=false checkout -q 70e19fb" || log "$(msg 'Warning: git rollback failed, trying to continue with current version' '警告：Git 回退失败，尝试继续使用当前版本')"
+      else
+        log "$(msg 'Pinning L-SMASH-Works to last VapourSynth API v3 compatible commit' '固定 L-SMASH-Works 到最后一个兼容 VapourSynth API v3 的提交')"
+        tmux_run "L-SMASH-Works git checkout" bash -lc "git checkout . && git -c advice.detachedHead=false checkout -q ae51313" || log "$(msg 'Warning: git checkout ae51313 failed, trying to continue with current version' '警告：切换到 ae51313 失败，尝试继续使用当前版本')"
       fi
 
-      # 2. Apply the D3D12 macro patch regardless of version (defensive measure)
+      # Apply FFmpeg compatibility patches (D3D12 shim, remove removed codec IDs).
       local decode_file="../common/decode.c"
       if [[ -f "$decode_file" ]]; then
           python3 - <<'PY' || exit 1
 import re
 from pathlib import Path
-path = Path("../common/decode.c")
-data = path.read_text(encoding="utf-8", errors="replace")
-data = re.sub(r"^.*AV_PIX_FMT_D3D12\\\\n.*$", "", data, flags=re.MULTILINE)
+
+decode_path = Path("../common/decode.c")
+data = decode_path.read_text(encoding="utf-8", errors="replace")
+data = re.sub(r"^.*AV_PIX_FMT_D3D12\\n.*$", "", data, flags=re.MULTILINE)
 data = re.sub(r"^#ifndef AV_PIX_FMT_D3D12\\n#define AV_PIX_FMT_D3D12 .*?\\n#endif\\n\\n?", "", data, flags=re.MULTILINE)
 
 header_paths = [
     Path("/usr/include/x86_64-linux-gnu/libavutil/pixfmt.h"),
     Path("/usr/include/libavutil/pixfmt.h"),
+    Path("/usr/local/include/libavutil/pixfmt.h"),
 ]
 header_has_enum = False
 for hp in header_paths:
@@ -2150,7 +2268,15 @@ if ("AV_PIX_FMT_D3D12" in data) and (not header_has_enum):
         "",
     ])
     data = shim + data
-path.write_text(data, encoding="utf-8")
+decode_path.write_text(data, encoding="utf-8")
+
+libav_path = Path("../common/libavsmash.c")
+if libav_path.is_file():
+    libav_data = libav_path.read_text(encoding="utf-8", errors="replace")
+    v410_line = "        ELSE_IF_GET_CODEC_ID_FROM_CODEC_TYPE(AV_CODEC_ID_V410, QT_CODEC_TYPE_V410_VIDEO);\n"
+    if v410_line in libav_data:
+        libav_data = libav_data.replace(v410_line, "")
+    libav_path.write_text(libav_data, encoding="utf-8")
 PY
       fi
       rm -rf build
