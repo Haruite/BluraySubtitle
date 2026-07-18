@@ -153,7 +153,7 @@ RUN set -eux; \
     if ! command -v cargo >/dev/null 2>&1; then curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y; fi; \
     . /root/.cargo/env; \
     cargo install cargo-c; \
-    git clone https://github.com/quietvoid/dovi_tool.git; \
+    git clone --depth 1 --branch 2.3.3 https://github.com/quietvoid/dovi_tool.git; \
     cd dovi_tool/dolby_vision; \
     cargo cinstall --release --prefix=/root/.local; \
     test "$(find /root/.local -name 'libdovi.so*' 2>/dev/null | wc -l)" -ge 1; \
@@ -162,7 +162,7 @@ RUN set -eux; \
     rm -rf /tmp/dovi
 
 RUN set -eux; \
-    DOVI_VER=2.3.2; \
+    DOVI_VER=2.3.3; \
     case "$(uname -m)" in \
       x86_64|amd64) DOVI_ARCH=x86_64 ;; \
       aarch64|arm64) DOVI_ARCH=aarch64 ;; \
@@ -412,7 +412,7 @@ RUN bash <<'SVTAV1EOS'
 set -euo pipefail
 mkdir -p /tmp/svtav1
 cd /tmp/svtav1
-git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git
+git clone --depth 1 --branch v4.2.0 https://gitlab.com/AOMediaCodec/SVT-AV1.git
 svt_root=/tmp/svtav1/SVT-AV1
 test -f "$svt_root/Source/Lib/Globals/enc_settings.c"
 
@@ -543,7 +543,7 @@ make -j"$(nproc)"
 make install
 ldconfig
 cd /tmp/fdk
-git clone --depth 1 https://github.com/nu774/fdkaac.git
+git clone --depth 1 --branch v1.0.7 https://github.com/nu774/fdkaac.git
 cd fdkaac
 autoreconf -i
 ./configure
@@ -585,8 +585,8 @@ RUN set -eux; \
 
 RUN set -eux; \
     mkdir -p /tmp/vsedit/vsedit_build && cd /tmp/vsedit/vsedit_build; \
-    wget -O R19-mod-6.9.tar.gz https://github.com/YomikoR/VapourSynth-Editor/archive/refs/tags/R19-mod-6.9.tar.gz; \
-    tar -zxvf R19-mod-6.9.tar.gz --strip-components=1; \
+    wget -O R19-mod-6.10.tar.gz https://github.com/YomikoR/VapourSynth-Editor/archive/refs/tags/R19-mod-6.10.tar.gz; \
+    tar -zxvf R19-mod-6.10.tar.gz --strip-components=1; \
     ldconfig; \
     cd pro; \
     export CPLUS_INCLUDE_PATH=/usr/local/include/vapoursynth; \
@@ -694,9 +694,10 @@ RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     cd /tmp/vsplugins; \
-    wget -O assrender.zip https://github.com/AmusementClub/assrender/releases/download/0.38.3/assrender_linux-x64_v0.38.3.zip; \
-    unzip -o assrender.zip; \
-    cp libassrender.so /app/plugins/
+    git clone --depth 1 --branch 0.38.4 https://github.com/AmusementClub/assrender.git; \
+    cd assrender; cmake -S . -B build -DCMAKE_BUILD_TYPE=Release; \
+    cmake --build build --parallel "$(nproc)"; \
+    cp "$(find "$PWD/build" -name libassrender.so -type f | head -n1)" /app/plugins/
 
 RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
@@ -767,11 +768,10 @@ RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     cd /tmp/vsplugins; \
-    wget -O 2.0.0.tar.gz https://github.com/Lypheo/vs-placebo/archive/refs/tags/2.0.0.tar.gz; \
-    tar zxvf 2.0.0.tar.gz; \
-    cd vs-placebo-2.0.0; \
-    git clone https://github.com/sekrit-twc/libp2p.git; \
-    meson setup build; ninja -C build; \
+    wget -O 2.0.4.tar.gz https://github.com/Lypheo/vs-placebo/archive/refs/tags/2.0.4.tar.gz; \
+    tar zxvf 2.0.4.tar.gz; \
+    cd vs-placebo-2.0.4; \
+    meson setup build -Dr73-compat=true; ninja -C build; \
     cp "$(find "$PWD/build" -maxdepth 2 -name libvs_placebo.so -type f | head -n1)" /app/plugins/
 
 RUN set -eux; \
@@ -796,20 +796,20 @@ RUN set -eux; \
 RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
-    wget -O /tmp/ispc.tar.gz https://github.com/ispc/ispc/releases/download/v1.23.0/ispc-v1.23.0-linux.tar.gz; \
+    wget -O /tmp/ispc.tar.gz https://github.com/ispc/ispc/releases/download/v1.31.0/ispc-v1.31.0-linux.tar.gz; \
     cd /tmp; tar -xvf ispc.tar.gz; \
-    mv ispc-v1.23.0-linux/bin/ispc /usr/local/bin/; chmod +x /usr/local/bin/ispc
+    mv ispc-v1.31.0-linux/bin/ispc /usr/local/bin/; chmod +x /usr/local/bin/ispc
 
 RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     cd /tmp/vsplugins; \
-    wget -O v2.tar.gz https://github.com/AmusementClub/vs-nlm-ispc/archive/refs/tags/v2.tar.gz; \
-    tar zxvf v2.tar.gz; \
-    cd vs-nlm-ispc-2; mkdir -p build && cd build; \
+    wget -O v4.tar.gz https://github.com/AmusementClub/vs-nlm-ispc/archive/refs/tags/v4.tar.gz; \
+    tar zxvf v4.tar.gz; \
+    cd vs-nlm-ispc-4; mkdir -p build && cd build; \
     cmake ..; make -j"$(nproc)"; \
     cp "$(find "$PWD" -maxdepth 2 -name libvsnlm_ispc.so -type f | head -n1)" /app/plugins/; \
-    rm -rf /tmp/vsplugins /tmp/ispc.tar.gz /tmp/ispc-v1.23.0-linux
+    rm -rf /tmp/vsplugins /tmp/ispc.tar.gz /tmp/ispc-v1.31.0-linux
 
 RUN python3 -m pip install --break-system-packages --upgrade pycountry PyQt6 librosa pillow matplotlib
 

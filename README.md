@@ -322,14 +322,14 @@ Typical flow:
 
 ---
 
-## `build.sh` (Linux runtime environment)
+## `setup_linux_environment.sh` (Linux runtime environment)
 
-`build.sh` builds the program’s Linux runtime environment. Currently supported:
+`setup_linux_environment.sh` builds the program’s Linux runtime environment. Currently supported:
 
 - Ubuntu 22.04 / 24.04 / 25.10 / 26.04  
 - Debian 12 / 13  
 
-Prefer running `build.sh` in a **remote terminal**: it uses **tmux** for cleaner, easier-to-read logs.
+Prefer running `setup_linux_environment.sh` in a **remote terminal**: it uses **tmux** for cleaner, easier-to-read logs.
 
 ---
 

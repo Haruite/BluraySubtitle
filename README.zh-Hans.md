@@ -316,13 +316,13 @@ python src/main.py
 
 ---
 
-## build.sh（Linux 运行环境脚本）
+## setup_linux_environment.sh（Linux 运行环境脚本）
 
-`build.sh`是用于构建特定 Linux 系统程序运行环境的脚本，当前支持：
+`setup_linux_environment.sh`是用于构建特定 Linux 系统程序运行环境的脚本，当前支持：
 - Ubuntu 22.04 / 24.04 / 25.10 / 26.04
 - Debian 12 / 13
 
-建议在远程终端中执行 `build.sh`，因为远程终端会使用 tmux 输出，日志更简洁、更易读。
+建议在远程终端中执行 `setup_linux_environment.sh`，因为远程终端会使用 tmux 输出，日志更简洁、更易读。
 
 ---
 

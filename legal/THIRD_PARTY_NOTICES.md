@@ -1,15 +1,15 @@
 # Third-party notices (bundled binaries)
 
-**Product:** BluraySubtitle (Windows, PyInstaller onefile build)  
+**Product:** BluraySubtitle (Windows, PyInstaller onefile build)
 
 ---
 
 ## FFmpeg / FFprobe
 
 - **Files:** `ffmpeg.exe`, `ffprobe.exe`
-- **Shipped build (from spec):** `ffmpeg-8.1-essentials_build` 
+- **Shipped build (from spec):** `ffmpeg-8.1.2-essentials_build`
 - **License:** GPL v3
-- **Source for this build:** https://github.com/FFmpeg/FFmpeg/commit/4867d251ad
+- **Source for this build:** https://github.com/FFmpeg/FFmpeg/tree/n8.1.2
 
 **Trademark:** If you redistribute FFmpeg binaries, follow FFmpeg’s trademark policy: https://ffmpeg.org/legal.html
 
@@ -36,7 +36,7 @@ These are **two separate upstreams**: the `fdkaac` program links against or ship
   - Most of the project: **Zlib License** — SPDX: **`Zlib`**
   - Bundled sources also include **MIT** (e.g. `parson`), **BSD-4-clause** (e.g. `getopt`), and **BSD-style** (e.g. `lpc.c` / `lpc.h`) as listed in the same `COPYING` file.
 - **Full license text (this tag):** https://raw.githubusercontent.com/nu774/fdkaac/v1.0.7/COPYING
-- **Source code (tagged tree):** https://github.com/nu774/fdkaac/tree/v1.0.7  
+- **Source code (tagged tree):** https://github.com/nu774/fdkaac/tree/v1.0.7
 - **Source archive (reproducible tarball):** https://github.com/nu774/fdkaac/archive/refs/tags/v1.0.7.tar.gz
 
 ### Fraunhofer FDK AAC Codec Library — https://github.com/mstorsjo/fdk-aac
@@ -45,7 +45,7 @@ These are **two separate upstreams**: the `fdkaac` program links against or ship
 - **Version:** **v2.0.3** (Git commit `716f4394641d53f0d79c9ddac3fa93b03a49f278` — peeled from tag `v2.0.3`)
 - **License:** **Fraunhofer “Software License for The Fraunhofer FDK AAC Codec Library for Android”** — a **project-specific** license (upstream ships it as **`NOTICE`**). It is **not** Apache-2.0 or LGPL; there is **no single widely used SPDX identifier** for it (some manifests use a custom `LicenseRef-…` after internal policy).
 - **Full license text (this tag):** https://raw.githubusercontent.com/mstorsjo/fdk-aac/v2.0.3/NOTICE
-- **Source code (tagged tree):** https://github.com/mstorsjo/fdk-aac/tree/v2.0.3  
+- **Source code (tagged tree):** https://github.com/mstorsjo/fdk-aac/tree/v2.0.3
 - **Source archive (reproducible tarball):** https://github.com/mstorsjo/fdk-aac/archive/refs/tags/v2.0.3.tar.gz
 
 **Redistribution notes:** in particular, binary redistributions are expected to **retain the complete license text** in documentation or accompanying materials, and to **make the complete source of the FDK AAC Codec (and your modifications, if any) available without charge** to recipients of binaries — **and this license does not grant patent rights**; AAC may require separate patent licensing for some uses (upstream points to Via Licensing / patent holders).
@@ -75,9 +75,10 @@ These are **two separate upstreams**: the `fdkaac` program links against or ship
 ## SVT-AV1 (SvtAv1EncApp)
 
 - **Files:** `SvtAv1EncApp.exe`
-- **Version:** v4.1.0
+- **Version:** v4.2.0
 - **License:** BSD 3-Clause
-- **Source:** https://gitlab.com/AOMediaCodec/SVT-AV1/-/archive/v4.1.0/SVT-AV1-v4.1.0.zip
+- **Source:** https://gitlab.com/AOMediaCodec/SVT-AV1/-/archive/v4.2.0/SVT-AV1-v4.2.0.zip
+- **Build note:** The bundled Windows encoder was built from this tag with the 12-bit application patch documented in `setup_linux_environment.sh` and `Dockerfile`; 8/10/12-bit encoding was tested.
 
 ---
 
@@ -93,9 +94,9 @@ These are **two separate upstreams**: the `fdkaac` program links against or ship
 ## dovi_tool
 
 - **Files:** `dovi_tool.exe`
-- **Version:** 2.3.2
+- **Version:** 2.3.3
 - **License:** MIT
-- **Source:** https://github.com/quietvoid/dovi_tool/archive/refs/tags/2.3.2.zip
+- **Source:** https://github.com/quietvoid/dovi_tool/archive/refs/tags/2.3.3.zip
 
 ---
 
@@ -110,20 +111,22 @@ These are **two separate upstreams**: the `fdkaac` program links against or ship
 
 ## libass
 
-- **Files:** `libass-9.dll` 
+- **Files:** `libass-9.dll`
 - **Version:** 0.17.4
-- **License:** ISC 
+- **License:** ISC
 - **Source:** https://github.com/libass/libass/archive/refs/tags/0.17.4.zip
+- **Build:** MSYS2 UCRT64 shared libass with its non-system dependencies linked statically. Fontconfig is disabled in favor of the Windows DirectWrite/GDI font provider; libunibreak and x86 assembly are enabled. The packaged DLL imports only Windows system DLLs.
+- **Statically linked components:** FreeType (FTL/GPL), FriBidi (LGPL-2.1-or-later), HarfBuzz (MIT), libunibreak (Zlib), GNU libiconv/gettext (LGPL), GLib (LGPL-2.1-or-later), PCRE2 (BSD), Graphite2 (MPL/LGPL/GPL), Brotli (MIT), bzip2, libpng, zlib, and the GCC/MinGW runtime libraries (GPL with the GCC Runtime Library Exception). Source and license metadata are available from https://packages.msys2.org/.
 
 ---
 
 ## MKVToolNix
 
 - **Files:** `mkvmerge.exe`, `mkvextract.exe`, `mkvinfo.exe`, `mkvpropedit.exe`
-- **Version:** v98.0
+- **Version:** v100.0
 - **License:** GPL v2
 - **Full license text:** https://codeberg.org/mbunkus/mkvtoolnix/raw/branch/main/COPYING
-- **Source:** https://codeberg.org/mbunkus/mkvtoolnix/archive/release-98.0.zip
+- **Source:** https://codeberg.org/mbunkus/mkvtoolnix/archive/release-100.0.zip
 - **Notes:** Additional bundled libraries and assets are listed in upstream `README.md` (section “Included third-party components and their licenses”) under `doc/licenses/`.
 
 ---
@@ -134,42 +137,43 @@ The `vs_pkg/` directory in the PyInstaller bundle mirrors a **Windows x64 portab
 
 ### VapourSynth-Classic (core runtime, `vspipe`, etc.)
 
-- **Upstream:** https://github.com/AmusementClub/vapoursynth-classic  
-- **Release / tag:** R57.A12  
-- **License:** **GNU Lesser General Public License v3** — SPDX: **`LGPL-3.0-or-later`**  
-- **Full license text (this tag):** https://raw.githubusercontent.com/AmusementClub/vapoursynth-classic/R57.A12/COPYING.LESSER  
-- **Source archive:** https://github.com/AmusementClub/vapoursynth-classic/archive/refs/tags/R57.A12.zip  
+- **Upstream:** https://github.com/AmusementClub/vapoursynth-classic
+- **Release / tag:** R57.A12
+- **License:** **GNU Lesser General Public License v3** — SPDX: **`LGPL-3.0-or-later`**
+- **Full license text (this tag):** https://raw.githubusercontent.com/AmusementClub/vapoursynth-classic/R57.A12/COPYING.LESSER
+- **Source archive:** https://github.com/AmusementClub/vapoursynth-classic/archive/refs/tags/R57.A12.zip
 
 ### CPython — Windows embeddable distribution
 
-- **Files (typical):** `python313.dll`, embeddable stdlib zip, and related files from the **embed** layout under `vs_pkg/`  
-- **Version:** 3.13.13 (amd64 embeddable zip)  
-- **Downloaded from:** https://www.python.org/ftp/python/3.13.13/python-3.13.13-embed-amd64.zip  
-- **License:** **Python Software Foundation License** — SPDX: **`PSF-2.0`**   
-- **License overview:** https://docs.python.org/3/license.html  
-- **Corresponding source (CPython):** https://www.python.org/ftp/python/3.13.13/Python-3.13.13.tgz  
+- **Files (typical):** `python313.dll`, embeddable stdlib zip, and related files from the **embed** layout under `vs_pkg/`
+- **Version:** 3.13.13 (amd64 embeddable zip)
+- **Downloaded from:** https://www.python.org/ftp/python/3.13.13/python-3.13.13-embed-amd64.zip
+- **License:** **Python Software Foundation License** — SPDX: **`PSF-2.0`**
+- **License overview:** https://docs.python.org/3/license.html
+- **Corresponding source (CPython):** https://www.python.org/ftp/python/3.13.13/Python-3.13.13.tgz
 
 ### VapourSynthScripts + bundled filters (AmusementClub/tools)
 
-- **Upstream packages:** assets from **https://github.com/AmusementClub/tools/releases** .  
-- **Version:** 2025H1p 
-- **License:** the **tools** repository does **not** publish a single root `LICENSE` file on GitHub; components may differ. 
+- **Upstream packages:** assets from **https://github.com/AmusementClub/tools/releases** .
+- **Version:** 2025H1p
+- **License:** the **tools** repository does **not** publish a single root `LICENSE` file on GitHub; components may differ.
 
 ---
 
 ### VapourSynth Editor
 
-- **Files:** `vsedit.exe` 
-- **Version:** R19-mod-6.9
+- **Files:** `vsedit.exe`
+- **Version:** R19-mod-6.10
 - **License:** MIT
-- **Source:** https://github.com/YomikoR/VapourSynth-Editor/archive/refs/tags/R19-mod-6.9.zip
+- **Source:** https://github.com/YomikoR/VapourSynth-Editor/archive/refs/tags/R19-mod-6.10.zip
 
 ---
 
 ## PyInstaller runtime
 
 - **Files:** Bootloader and extracted stdlib in the onefile bundle.
-- **License:** PyInstaller is **GPL-2.0-or-later** with a runtime exception for the bootloader’s effect on your app — read current PyInstaller `COPYING.txt`: https://github.com/pyinstaller/pyinstaller  
-- **Source:**  https://github.com/pyinstaller/pyinstaller/releases/6.20.0
+- **Version:** 6.21.0
+- **License:** PyInstaller is **GPL-2.0-or-later** with a runtime exception for the bootloader’s effect on your app — read current PyInstaller `COPYING.txt`: https://github.com/pyinstaller/pyinstaller
+- **Source:**  https://github.com/pyinstaller/pyinstaller/releases/6.21.0
 
 ---

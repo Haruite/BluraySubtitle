@@ -621,7 +621,7 @@ install_libdovi() {
     tmux_run "$(msg 'Install cargo-c' '安装 cargo-c')" cargo install cargo-c || exit 1
 
     log "$(msg "Building and installing to $HOME/.local" "编译并安装到 $HOME/.local")"
-    tmux_run "$(msg 'Download dovi_tool' '下载 dovi_tool')" git clone https://github.com/quietvoid/dovi_tool.git || exit 1
+    tmux_run "$(msg 'Download dovi_tool' '下载 dovi_tool')" git clone --depth 1 --branch 2.3.3 https://github.com/quietvoid/dovi_tool.git || exit 1
     cd dovi_tool/dolby_vision || exit 1
     tmux_run "$(msg 'Build and install dolby_vision' '编译安装 dolby_vision')" cargo cinstall --release --prefix="$HOME/.local" || exit 1
 
@@ -652,7 +652,8 @@ install_libdovi() {
 # dovi_tool (prebuilt release binary for BluraySubtitle remux)
 # ---------------------------------------------------------------------------
 
-DOVI_TOOL_VERSION="${DOVI_TOOL_VERSION:-2.3.2}"
+# Keep the release number explicit so CLI and libdovi builds stay reproducible.
+DOVI_TOOL_VERSION="${DOVI_TOOL_VERSION:-2.3.3}"
 
 install_dovi_tool() {
   log "$(msg "Installing dovi_tool ${DOVI_TOOL_VERSION} (prebuilt)" "安装 dovi_tool ${DOVI_TOOL_VERSION}（预编译包）")"
@@ -1456,6 +1457,7 @@ SVTAV1PY
   log "$(msg 'SVT-AV1: source patch step finished.' 'SVT-AV1：源码补丁步骤已完成。')"
 }
 
+# Build the tested v4.2.0 tag; the patch helper above enables 8/10/12-bit input.
 install_svt_av1() {
   log "$(msg 'Installing SVT-AV1 (with 12-bit patches)' '正在安装 SVT-AV1（含 12-bit 补丁）')"
 
@@ -1474,7 +1476,7 @@ install_svt_av1() {
   (
     cd "$build_dir" || exit 1
     tmux_run "$(msg 'Clone SVT-AV1' '克隆 SVT-AV1')" \
-      git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git || exit 1
+      git clone --depth 1 --branch v4.2.0 https://gitlab.com/AOMediaCodec/SVT-AV1.git || exit 1
     __apply_svt_av1_source_patches "${build_dir}/SVT-AV1" || exit 1
     tmux_run "$(msg 'SVT-AV1: build release static' 'SVT-AV1：release static 编译')" \
       bash -c "set -e; cd '${build_dir}/SVT-AV1/Build/linux' && ./build.sh release static" || exit 1
@@ -1572,8 +1574,9 @@ install_fdk_aac() {
     tmux_run "$(msg 'fdk-aac: make install' 'fdk-aac：make install')" sudo make install || exit 1
     sudo ldconfig || true
     cd "$build_dir" || exit 1
-    tmux_run "$(msg 'Clone fdkaac (nu774)' '克隆 fdkaac（nu774）')" \
-      git clone https://github.com/nu774/fdkaac.git || exit 1
+    # fdkaac 1.0.7 is the version bundled by the Windows build as well.
+    tmux_run "$(msg 'Clone fdkaac 1.0.7 (nu774)' '克隆 fdkaac 1.0.7（nu774）')" \
+      git clone --depth 1 --branch v1.0.7 https://github.com/nu774/fdkaac.git || exit 1
     cd fdkaac || exit 1
     tmux_run "$(msg 'fdkaac: autoreconf -i' 'fdkaac：autoreconf -i')" autoreconf -i || exit 1
     tmux_run "$(msg 'fdkaac: configure' 'fdkaac：configure')" ./configure || exit 1
@@ -2012,6 +2015,7 @@ install_vapoursynth_scripts() {
 # VapourSynth Editor (vsedit)
 # ---------------------------------------------------------------------------
 
+# R19-mod-6.10 is the latest editor tested against the classic VapourSynth stack.
 install_vapoursynth_editor() {
   log "$(msg 'Installing VapourSynth Editor (vsedit, build from source)' '安装 vapoursynth-editor (vsedit)（从源码编译并安装）')"
 
@@ -2047,10 +2051,10 @@ install_vapoursynth_editor() {
     mkdir -p vsedit_build
     cd vsedit_build || exit 1
 
-    tmux_run "$(msg 'Download vsedit R19-mod-6.9' '下载 vsedit R19-mod-6.9')" wget -O R19-mod-6.9.tar.gz https://github.com/YomikoR/VapourSynth-Editor/archive/refs/tags/R19-mod-6.9.tar.gz || exit 1
+    tmux_run "$(msg 'Download vsedit R19-mod-6.10' '下载 vsedit R19-mod-6.10')" wget -O R19-mod-6.10.tar.gz https://github.com/YomikoR/VapourSynth-Editor/archive/refs/tags/R19-mod-6.10.tar.gz || exit 1
 
     log "$(msg 'Extracting vsedit source tarball' '解压 vsedit 源码包')"
-    tmux_run "$(msg 'Extract vsedit source' '解压 vsedit 源码包')" tar -zxvf R19-mod-6.9.tar.gz --strip-components=1 || exit 1
+    tmux_run "$(msg 'Extract vsedit source' '解压 vsedit 源码包')" tar -zxvf R19-mod-6.10.tar.gz --strip-components=1 || exit 1
     sudo ldconfig
 
     if [[ -f "resources/vsedit.png" ]]; then
@@ -2184,7 +2188,7 @@ build_vs_plugins() {
 
   local deps=(
     build-essential git wget tar unzip sed
-    meson ninja-build cmake
+    meson ninja-build cmake libass-dev
     autoconf automake libtool pkg-config
     libxxhash-dev
     python3 python3-pip
@@ -2291,6 +2295,7 @@ PY
       log "$(msg 'libvslsmashsource.so already exists, skipping' '已存在 libvslsmashsource.so，跳过')"
     fi
 
+    # Keep r9: r10 declares VapourSynth >= R74, but this project uses R57.A12.
     if [[ ! -f "$plugins_dir/eedi3m.so" ]]; then
       log "$(msg 'Building VapourSynth-EEDI3 (r9)' '编译 VapourSynth-EEDI3 (r9)')"
       cd "$HOME" || exit 1
@@ -2329,12 +2334,20 @@ PY
       log "$(msg 'libaddgrain.so already exists, skipping' '已存在 libaddgrain.so，跳过')"
     fi
 
+    # The upstream Linux binary requires GLIBC_2.38, so build from source on the
+    # target system to remain loadable on Ubuntu 22.04 and Debian 12.
     if [[ ! -f "$plugins_dir/libassrender.so" ]]; then
-      log "$(msg 'Installing assrender (0.38.3)' '安装 assrender (0.38.3)')"
+      log "$(msg 'Building assrender (0.38.4)' '编译 assrender (0.38.4)')"
       cd "$HOME" || exit 1
-      tmux_run "$(msg 'Download assrender 0.38.3' '下载 assrender 0.38.3')" wget -O assrender_linux-x64_v0.38.3.zip https://github.com/AmusementClub/assrender/releases/download/0.38.3/assrender_linux-x64_v0.38.3.zip || exit 1
-      tmux_run "$(msg 'Extract assrender 0.38.3' '解压 assrender 0.38.3')" unzip -o assrender_linux-x64_v0.38.3.zip || exit 1
-      cp libassrender.so "$plugins_dir/" || exit 1
+      tmux_run "$(msg 'Clone assrender 0.38.4' '克隆 assrender 0.38.4')" git clone --depth 1 --branch 0.38.4 https://github.com/AmusementClub/assrender.git assrender-0.38.4 || exit 1
+      cd assrender-0.38.4 || exit 1
+      rm -rf build
+      tmux_run "assrender cmake" cmake -S . -B build -DCMAKE_BUILD_TYPE=Release || exit 1
+      tmux_run "assrender build" cmake --build build --parallel "$(nproc)" || exit 1
+      local out
+      out="$(find "$PWD/build" -name "libassrender.so" -type f | head -n 1)"
+      [[ -n "${out:-}" ]] || exit 1
+      cp "$out" "$plugins_dir/" || exit 1
       cd "$build_dir" || exit 1
     else
       log "$(msg 'libassrender.so already exists, skipping' '已存在 libassrender.so，跳过')"
@@ -2439,21 +2452,20 @@ PY
       log "$(msg 'libsangnommod.so already exists, skipping' '已存在 libsangnommod.so，跳过')"
     fi
 
+    # 2.0.4 supports the legacy install layout through -Dr73-compat=true.
     if [[ ! -f "$plugins_dir/libvs_placebo.so" ]]; then
-      log "$(msg 'Building vs-placebo (2.0.0)' '编译 vs-placebo (2.0.0)')"
+      log "$(msg 'Building vs-placebo (2.0.4)' '编译 vs-placebo (2.0.4)')"
       cd "$HOME" || exit 1
       install_libplacebo_latest
-      tmux_run "$(msg 'Download vs-placebo 2.0.0' '下载 vs-placebo 2.0.0')" wget -O 2.0.0.tar.gz https://github.com/Lypheo/vs-placebo/archive/refs/tags/2.0.0.tar.gz || exit 1
-      tmux_run "$(msg 'Extract vs-placebo 2.0.0' '解压 vs-placebo 2.0.0')" tar zxvf 2.0.0.tar.gz || exit 1
-      cd vs-placebo-2.0.0/ || exit 1
+      tmux_run "$(msg 'Download vs-placebo 2.0.4' '下载 vs-placebo 2.0.4')" wget -O 2.0.4.tar.gz https://github.com/Lypheo/vs-placebo/archive/refs/tags/2.0.4.tar.gz || exit 1
+      tmux_run "$(msg 'Extract vs-placebo 2.0.4' '解压 vs-placebo 2.0.4')" tar zxvf 2.0.4.tar.gz || exit 1
+      cd vs-placebo-2.0.4/ || exit 1
       export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:$HOME/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
       export C_INCLUDE_PATH="$HOME/.local/include:${C_INCLUDE_PATH:-}"
       export LIBRARY_PATH="$HOME/.local/lib/x86_64-linux-gnu:${LIBRARY_PATH:-}"
       export LD_LIBRARY_PATH="$HOME/.local/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
-      rm -rf libp2p
-      tmux_run "$(msg 'Download libp2p' '下载 libp2p')" git clone https://github.com/sekrit-twc/libp2p.git || exit 1
       rm -rf build
-      tmux_run "vs-placebo meson setup" meson setup build || exit 1
+      tmux_run "vs-placebo meson setup" meson setup build -Dr73-compat=true || exit 1
       tmux_run "vs-placebo ninja" ninja -C build || exit 1
       local out
       out="$(find "$PWD/build" -maxdepth 2 -name "libvs_placebo.so" -type f | head -n 1)"
@@ -2464,22 +2476,28 @@ PY
       log "$(msg 'libvs_placebo.so already exists, skipping' '已存在 libvs_placebo.so，跳过')"
     fi
 
-    if ! command -v ispc >/dev/null 2>&1; then
-      log "$(msg 'Installing ispc (v1.23.0)' '安装 ispc (v1.23.0)')"
-      tmux_run "$(msg 'Download ispc v1.23.0' '下载 ispc v1.23.0')" wget -O ispc-v1.23.0-linux.tar.gz https://github.com/ispc/ispc/releases/download/v1.23.0/ispc-v1.23.0-linux.tar.gz || exit 1
-      tmux_run "$(msg 'Extract ispc v1.23.0' '解压 ispc v1.23.0')" tar -xvf ispc-v1.23.0-linux.tar.gz || exit 1
-      sudo mv ispc-v1.23.0-linux/bin/ispc /usr/local/bin/ || exit 1
+    # Upgrade ISPC when an older binary is present; command existence alone is insufficient.
+    local required_ispc_version="1.31.0"
+    local current_ispc_version=""
+    if command -v ispc >/dev/null 2>&1; then
+      current_ispc_version="$(ispc --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)"
+    fi
+    if [[ -z "$current_ispc_version" ]] || dpkg --compare-versions "$current_ispc_version" lt "$required_ispc_version"; then
+      log "$(msg 'Installing ispc (v1.31.0)' '安装 ispc (v1.31.0)')"
+      tmux_run "$(msg 'Download ispc v1.31.0' '下载 ispc v1.31.0')" wget -O ispc-v1.31.0-linux.tar.gz https://github.com/ispc/ispc/releases/download/v1.31.0/ispc-v1.31.0-linux.tar.gz || exit 1
+      tmux_run "$(msg 'Extract ispc v1.31.0' '解压 ispc v1.31.0')" tar -xvf ispc-v1.31.0-linux.tar.gz || exit 1
+      sudo mv ispc-v1.31.0-linux/bin/ispc /usr/local/bin/ || exit 1
       sudo chmod +x /usr/local/bin/ispc || exit 1
     else
-      log "$(msg 'ispc already found, skipping installation' '已检测到 ispc，跳过安装')"
+      log "$(msg "ispc version satisfied (${current_ispc_version} >= ${required_ispc_version}), skipping" "ispc 版本满足要求（${current_ispc_version} >= ${required_ispc_version}），跳过安装")"
     fi
 
     if [[ ! -f "$plugins_dir/libvsnlm_ispc.so" ]]; then
-      log "$(msg 'Building vs-nlm-ispc (v2)' '编译 vs-nlm-ispc (v2)')"
+      log "$(msg 'Building vs-nlm-ispc (v4)' '编译 vs-nlm-ispc (v4)')"
       cd "$HOME" || exit 1
-      tmux_run "$(msg 'Download vs-nlm-ispc v2' '下载 vs-nlm-ispc v2')" wget -O v2.tar.gz https://github.com/AmusementClub/vs-nlm-ispc/archive/refs/tags/v2.tar.gz || exit 1
-      tmux_run "$(msg 'Extract vs-nlm-ispc v2' '解压 vs-nlm-ispc v2')" tar zxvf v2.tar.gz || exit 1
-      cd vs-nlm-ispc-2/ || exit 1
+      tmux_run "$(msg 'Download vs-nlm-ispc v4' '下载 vs-nlm-ispc v4')" wget -O v4.tar.gz https://github.com/AmusementClub/vs-nlm-ispc/archive/refs/tags/v4.tar.gz || exit 1
+      tmux_run "$(msg 'Extract vs-nlm-ispc v4' '解压 vs-nlm-ispc v4')" tar zxvf v4.tar.gz || exit 1
+      cd vs-nlm-ispc-4/ || exit 1
       mkdir -p build || exit 1
       cd build || exit 1
       tmux_run "vs-nlm-ispc cmake" cmake .. || exit 1
@@ -2493,6 +2511,7 @@ PY
       log "$(msg 'libvsnlm_ispc.so already exists, skipping' '已存在 libvsnlm_ispc.so，跳过')"
     fi
 
+    # Keep zsmooth 0.7 because newer binaries are incompatible with R57.A12.
     if [[ ! -f "$plugins_dir/libzsmooth.x86_64-gnu.so" ]]; then
       log "$(msg 'Installing zsmooth (binary package)' '安装 zsmooth（二进制包）')"
       cd "$HOME" || exit 1
@@ -2504,6 +2523,7 @@ PY
       log "$(msg 'libzsmooth.x86_64-gnu.so already exists, skipping' '已存在 libzsmooth.x86_64-gnu.so，跳过')"
     fi
 
+    # Keep mvtools v26: v29_2 declares VapourSynth >= R74.
     if [[ ! -f "$plugins_dir/mvtools.so" ]]; then
       log "$(msg 'Building vapoursynth-mvtools (v26)' '编译 vapoursynth-mvtools (v26)')"
       cd "$HOME" || exit 1
@@ -2530,14 +2550,14 @@ PY
     log "$(msg 'Cleaning up downloaded archives and source directories' '清理下载压缩包与源码目录')"
     cd "$HOME" || exit 1
     rm -f \
-      r9.tar.gz r10.tar.gz assrender_linux-x64_v0.38.3.zip r3.tar.gz r7.tar.gz r7.1.tar.gz \
-      r30.tar.gz R1.tar.gz v0.1-fix.tar.gz 2.0.0.tar.gz v2.tar.gz libzsmooth.x86_64-gnu.so.zip v26.tar.gz \
-      ispc-v1.23.0-linux.tar.gz libassrender.so \
+      r9.tar.gz r10.tar.gz r3.tar.gz r7.tar.gz r7.1.tar.gz \
+      r30.tar.gz R1.tar.gz v0.1-fix.tar.gz 2.0.4.tar.gz v4.tar.gz libzsmooth.x86_64-gnu.so.zip v26.tar.gz \
+      ispc-v1.31.0-linux.tar.gz libassrender.so \
       || true
     rm -rf \
-      L-SMASH-Works VapourSynth-EEDI3-r9 VapourSynth-AddGrain-r10 VapourSynth-Bilateral-r3 \
+      L-SMASH-Works assrender-0.38.4 VapourSynth-EEDI3-r9 VapourSynth-AddGrain-r10 VapourSynth-Bilateral-r3 \
       VapourSynth-DFTTest-r7 VapourSynth-EEDI2-r7.1 fmtconv-r30 vs-removegrain-R1 VapourSynth-SangNomMod-0.1-fix \
-      vs-placebo-2.0.0 vs-nlm-ispc-2 vapoursynth-mvtools-26 ispc-v1.23.0-linux \
+      vs-placebo-2.0.4 vs-nlm-ispc-4 vapoursynth-mvtools-26 ispc-v1.31.0-linux \
       || true
 
     log "$(msg "VS plugins build complete, output directory: $plugins_dir" "VS 插件编译完成，输出目录：$plugins_dir")"
