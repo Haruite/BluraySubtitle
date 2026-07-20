@@ -2,6 +2,8 @@
 
 [English](./README.md) | [简体中文](README.zh-Hans.md)
 
+开发文档：[强制代码修改规范](docs/development/code-standards.zh-Hans.md) | [重构历史](docs/refactoring/refactoring-history.zh-Hans.md)
+
 Windows 可执行文[下载](https://sbx.mysmy.top/tools/BluraySubtitle_windows_x64.exe)
 
 BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 工具。  

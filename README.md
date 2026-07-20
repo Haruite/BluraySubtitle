@@ -2,6 +2,8 @@
 
 [English](./README.md) | [简体中文](README.zh-Hans.md)
 
+Development: [mandatory code modification standards](docs/development/code-standards.md) | [refactoring history](docs/refactoring/refactoring-history.md)
+
 Windows x64 executable: [download](https://sbx.mysmy.top/tools/BluraySubtitle_windows_x64.exe)
 
 BluraySubtitle is a GUI tool for Blu-ray workflows on **Windows / Linux** (including **Docker**).  

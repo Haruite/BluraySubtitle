@@ -1,5 +1,7 @@
 # Phase 1 Refactoring Contract and Configuration Matrix
 
+Related documents: [Code Modification Standards](../development/code-standards.md) | [Refactoring History](refactoring-history.md)
+
 ## Purpose
 
 This document records the confirmed behavior contract for the Python refactor and maps the current GUI-to-execution configuration flow. It distinguishes current behavior from required behavior so that later refactoring does not silently invent business rules.
