@@ -12,7 +12,6 @@ from src.runtime.gui_runtime_split.remux_and_episode_layout import RemuxEpisodeL
 from src.runtime.services_split.lifecycle_and_configuration import LifecycleConfigurationMixin
 from src.runtime.services_split.misc_workflows import MiscWorkflowsMixin
 from src.runtime.services_split.remux_and_episode_workflows import RemuxEpisodeWorkflowsMixin
-from src.runtime.services_split.subtitle_and_chapter_pipeline import SubtitleChapterPipelineMixin
 
 
 class _Combo:
@@ -318,13 +317,6 @@ class ExplicitServiceConfigurationTests(unittest.TestCase):
                 "unused",
                 None,
                 False,
-            )
-
-    def test_subtitle_generation_requires_explicit_configuration(self) -> None:
-        with self.assertRaisesRegex(ValueError, "Task configuration is required"):
-            SubtitleChapterPipelineMixin.generate_bluray_subtitle(
-                SimpleNamespace(),
-                configuration=None,
             )
 
     def test_episode_run_rejects_invalid_chapter_range_before_writing(self) -> None:

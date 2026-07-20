@@ -5,23 +5,27 @@ from .ass_model import Ass
 from .pgs import PGS
 from .srt import SRT
 from .timecode import parse_hhmmss_ms_to_seconds
+from src.core.i18n import translate_text
 from src.exports.utils import get_time_str
+
 
 class Subtitle:
     def __init__(self, file_path: str):
         self.max_end = 0
-        if file_path.endswith('.sup'):
-            self.max_end = PGS(file_path).max_end
+        file_extension = file_path.lower()
+        if file_extension.endswith('.sup'):
+            self.content = PGS(file_path)
+            self.max_end = self.content.max_end
             return
         try:
             with open(file_path, 'r', encoding='utf-8-sig') as f:
-                if file_path.endswith('.srt'):
+                if file_extension.endswith('.srt'):
                     self.content = SRT(f)
                 else:
                     self.content = Ass(f)
         except:
             with open(file_path, 'r', encoding='utf-16') as f:
-                if file_path.endswith('.srt'):
+                if file_extension.endswith('.srt'):
                     self.content = SRT(f)
                 else:
                     self.content = Ass(f)
@@ -62,6 +66,14 @@ class Subtitle:
             return
 
         if hasattr(other.content, 'lines'):
+            return
+
+        if hasattr(self.content, 'packets'):
+            if hasattr(other.content, 'packets'):
+                self.content.append_pgs(other.content, time_shift)
+                self.max_end = self.content.max_end
+            return
+        if hasattr(other.content, 'packets'):
             return
 
         style_attrs = getattr(self.content, 'style_attrs', None)
@@ -122,22 +134,26 @@ class Subtitle:
                     new_content = Ass(f)
         self.append_subtitle(Subtitle.from_parsed(new_content), time_shift)
 
-    def dump(self, file_path: str, selected_mpls: str):
+    def output_extension(self) -> str:
         if hasattr(self.content, 'lines'):
-            with open(file_path + '.srt', "w", encoding='utf-8-sig') as f:
-                self.content.dump_file(f)
-            with open(selected_mpls + '.srt', "w", encoding='utf-8-sig') as f:
-                self.content.dump_file(f)
-        elif self.content.script_type == 'v4.00+':
-            with open(file_path + '.ass', "w", encoding='utf-8-sig') as f:
-                self.content.dump_file(f)
-            with open(selected_mpls + '.ass', "w", encoding='utf-8-sig') as f:
-                self.content.dump_file(f)
-        else:
-            with open(file_path + '.ssa', "w", encoding='utf-8-sig') as f:
-                self.content.dump_file(f)
-            with open(selected_mpls + '.ssa', "w", encoding='utf-8-sig') as f:
-                self.content.dump_file(f)
+            return '.srt'
+        if hasattr(self.content, 'packets'):
+            return '.sup'
+        if getattr(self.content, 'script_type', '') == 'v4.00+':
+            return '.ass'
+        if getattr(self.content, 'script_type', ''):
+            return '.ssa'
+        raise ValueError(translate_text('Unsupported subtitle content'))
+
+    def dump(self, file_path: str, selected_mpls: str):
+        extension = self.output_extension()
+        for output_path in (file_path + extension, selected_mpls + extension):
+            if extension == '.sup':
+                with open(output_path, 'xb') as file:
+                    self.content.dump_file(file)
+            else:
+                with open(output_path, 'x', encoding='utf-8-sig') as file:
+                    self.content.dump_file(file)
 
     def max_end_time(self):
         try:

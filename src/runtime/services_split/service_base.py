@@ -113,8 +113,8 @@ class BluraySubtitleServiceBase:
         """Stub for `generate_configuration_from_selected_mpls`."""
         raise NotImplementedError
 
-    def generate_bluray_subtitle(self, configuration: Optional[dict[int, dict[str, int | str]]]=None, cancel_event: Optional[threading.Event]=None):
-        """Stub for `generate_bluray_subtitle`."""
+    def merge_subtitles(self, selected_mpls: list[tuple[str, str]], movie_tasks: Optional[list[tuple[str, str, str]]]=None, subtitle_suffix: str='', cancel_event: Optional[threading.Event]=None) -> list[str]:
+        """Merge selected subtitle rows and write both disc-root and playlist-adjacent outputs."""
         raise NotImplementedError
 
     def _group_mkv_paths_by_bdmv(self, sorted_paths: list[str], bdmv_keys: list[int]) -> dict[int, list[str]]:

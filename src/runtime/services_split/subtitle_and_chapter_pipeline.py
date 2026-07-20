@@ -5,7 +5,6 @@ import shutil
 import subprocess
 import tempfile
 import threading
-from functools import reduce
 from typing import Any, Callable, Optional
 
 from PyQt6.QtWidgets import QTableWidget
@@ -14,7 +13,7 @@ from src.bdmv import Chapter, M2TS, pid_to_lang_from_m2ts_path
 from src.core import FFMPEG_PATH, MKV_MERGE_PATH, MKV_EXTRACT_PATH, mkvtoolnix_ui_language_arg, \
     MKV_PROP_EDIT_PATH
 from src.core.i18n import translate_text
-from src.domain import MKV
+from src.domain import MKV, Subtitle
 from src.exports.utils import get_index_to_m2ts_and_offset, append_ogm_chapter_lines, force_remove_folder, \
     force_remove_file, print_terminal_line, print_exc_terminal, get_time_str
 from .service_base import BluraySubtitleServiceBase
@@ -64,44 +63,104 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                 out[pid] = lang
         return out
 
-    def generate_bluray_subtitle(self,
-                                 configuration: Optional[dict[int, dict[str, int | str]]] = None,
-                                 cancel_event: Optional[threading.Event] = None):
-        if configuration is None:
-            raise ValueError(translate_text('Task configuration is required'))
-        if not configuration:
-            raise ValueError(translate_text('Task configuration is empty'))
-        self.configuration = configuration
-        if not self.sub_files:
-            return
-        self._preload_subtitles(self.sub_files, cancel_event=cancel_event)
-        sub = self._subtitle_cache[self.sub_files[0]].clone()
-        bdmv_index = 0
-        conf = self.configuration[0]
-        for sub_index, conf_tmp in self.configuration.items():
-            self._progress(int((sub_index + 1) / len(self.sub_files) * 1000),
-                           f'Merging {sub_index + 1}/{len(self.sub_files)}')
-            if conf_tmp['bdmv_index'] != bdmv_index:
-                if bdmv_index > 0:
-                    self._progress(text='Writing Subtitle File')
-                    if hasattr(sub, 'content'):
-                        suffix = str(getattr(self, 'subtitle_suffix', '') or '')
-                        sub.dump(conf['folder'] + suffix, conf['selected_mpls'] + suffix)
-                    sub = self._subtitle_cache[self.sub_files[sub_index]].clone()
-                bdmv_index = conf_tmp['bdmv_index']
-            else:
-                sub.append_subtitle(
-                    self._subtitle_cache[self.sub_files[sub_index]],
-                    reduce(lambda a, b: a * 60 + b, map(float, conf_tmp['offset'].split(':')))
+    def merge_subtitles(
+            self,
+            selected_mpls: list[tuple[str, str]],
+            movie_tasks: Optional[list[tuple[str, str, str]]] = None,
+            subtitle_suffix: str = '',
+            cancel_event: Optional[threading.Event] = None,
+    ) -> list[str]:
+        """Merge the selected subtitle rows and write every planned output without overwriting files."""
+        movie_tasks = list(movie_tasks or [])
+        subtitle_files = [task[0] for task in movie_tasks] if movie_tasks else list(self.sub_files or [])
+        if not subtitle_files:
+            raise ValueError(translate_text('Subtitle file is not selected'))
+
+        self._progress(text='Loading Subtitles')
+        self._preload_subtitles(subtitle_files, cancel_event=cancel_event)
+        suffix = str(subtitle_suffix or '')
+        output_jobs: list[tuple[Subtitle, str, str]] = []
+
+        if movie_tasks:
+            for subtitle_path, folder, selected_mpls_no_ext in movie_tasks:
+                output_jobs.append((
+                    self._subtitle_cache[subtitle_path].clone(),
+                    folder + suffix,
+                    selected_mpls_no_ext + suffix,
+                ))
+        else:
+            self._progress(text='Generating Configuration')
+            configuration = self.generate_configuration_from_selected_mpls(
+                selected_mpls,
+                cancel_event=cancel_event,
+            )
+            if not configuration:
+                raise ValueError(translate_text('Task configuration is empty'))
+            configuration_rows = [configuration[key] for key in sorted(configuration, key=int)]
+            if len(configuration_rows) != len(subtitle_files):
+                raise ValueError(translate_text(
+                    'Could not map all selected subtitle files to the selected main playlists'
+                ))
+
+            merged_subtitle = None
+            current_bdmv_index = None
+            output_folder_base = ''
+            output_mpls_base = ''
+            for subtitle_index, (subtitle_path, row) in enumerate(zip(subtitle_files, configuration_rows)):
+                if cancel_event and cancel_event.is_set():
+                    raise _Cancelled()
+                self._progress(
+                    int((subtitle_index + 1) / len(subtitle_files) * 700),
+                    f'Merging {subtitle_index + 1}/{len(subtitle_files)}',
                 )
-            conf = conf_tmp
+                parsed_subtitle = self._subtitle_cache[subtitle_path]
+                bdmv_index = int(row['bdmv_index'])
+                if current_bdmv_index != bdmv_index:
+                    if merged_subtitle is not None:
+                        output_jobs.append((merged_subtitle, output_folder_base, output_mpls_base))
+                    merged_subtitle = parsed_subtitle.clone()
+                    current_bdmv_index = bdmv_index
+                else:
+                    if merged_subtitle.output_extension() != parsed_subtitle.output_extension():
+                        raise ValueError(translate_text(
+                            'Subtitle formats cannot be mixed within one merged output'
+                        ))
+                    offset_seconds = 0.0
+                    for time_part in str(row['offset']).split(':'):
+                        offset_seconds = offset_seconds * 60 + float(time_part)
+                    merged_subtitle.append_subtitle(parsed_subtitle, offset_seconds)
+                output_folder_base = str(row['folder']) + suffix
+                output_mpls_base = str(row['selected_mpls']) + suffix
+            if merged_subtitle is not None:
+                output_jobs.append((merged_subtitle, output_folder_base, output_mpls_base))
+            self.configuration = configuration
+
+        # Plan and validate every destination before the first file is created.
+        output_paths: list[str] = []
+        normalized_paths: set[str] = set()
+        for merged_subtitle, folder_base, mpls_base in output_jobs:
+            extension = merged_subtitle.output_extension()
+            for output_path in (folder_base + extension, mpls_base + extension):
+                normalized_path = os.path.normcase(os.path.abspath(output_path))
+                if normalized_path in normalized_paths:
+                    raise ValueError(translate_text('Duplicate output path: {path}').format(path=output_path))
+                if os.path.exists(output_path):
+                    raise FileExistsError(
+                        translate_text('Output file already exists: {path}').format(path=output_path)
+                    )
+                normalized_paths.add(normalized_path)
+                output_paths.append(output_path)
+
+        for output_index, (merged_subtitle, folder_base, mpls_base) in enumerate(output_jobs, start=1):
             if cancel_event and cancel_event.is_set():
                 raise _Cancelled()
-        self._progress(text='Writing Subtitle File')
-        if hasattr(sub, 'content'):
-            suffix = str(getattr(self, 'subtitle_suffix', '') or '')
-            sub.dump(conf['folder'] + suffix, conf['selected_mpls'] + suffix)
-        self._progress(1000)
+            self._progress(
+                700 + int(output_index / len(output_jobs) * 300),
+                f'Writing Subtitle File {output_index}/{len(output_jobs)}',
+            )
+            merged_subtitle.dump(folder_base, mpls_base)
+        self._progress(1000, 'Done')
+        return output_paths
 
     def _group_mkv_paths_by_bdmv(self, sorted_paths: list[str], bdmv_keys: list[int]) -> dict[int, list[str]]:
         """Map episode MKV paths to configuration bdmv_index (from BD_Vol_XXX in filename)."""

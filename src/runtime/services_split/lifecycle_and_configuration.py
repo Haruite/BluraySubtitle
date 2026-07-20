@@ -99,24 +99,24 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
             QCoreApplication.processEvents()
 
     def _preload_subtitles(self, file_paths: list[str], cancel_event: Optional[threading.Event] = None):
-        """Preload subtitles into cache with platform-aware fallback strategy."""
+        """Parse every requested subtitle once and fail if any input cannot be loaded."""
         if not file_paths:
             return
         missing = [p for p in file_paths if p and p not in self._subtitle_cache]
         if not missing:
             return
-
-        # Choose loading strategy by platform.
-        if sys.platform == 'win32':
-            # Windows: use multiprocessing directly.
+        try:
             self._preload_subtitles_multiprocess(missing, cancel_event)
-        else:
-            # Linux: try multiprocessing first, then fall back to single process.
-            try:
-                self._preload_subtitles_multiprocess(missing, cancel_event)
-            except Exception as e:
-                print(f'Multiprocessing parse failed, switching to single-process mode: {str(e)}')
-                self._preload_subtitles_single(missing, cancel_event)
+        except _Cancelled:
+            raise
+        except Exception as error:
+            print(f'Multiprocessing parse failed, switching to single-process mode: {str(error)}')
+        remaining = [path for path in missing if path not in self._subtitle_cache]
+        if remaining:
+            self._preload_subtitles_single(remaining, cancel_event)
+        unloaded = [path for path in missing if path not in self._subtitle_cache]
+        if unloaded:
+            raise ValueError(translate_text('Failed to load subtitle file: {path}').format(path=unloaded[0]))
 
     def _preload_subtitles_single(self, file_paths: list[str], cancel_event: Optional[threading.Event] = None):
         """Parse subtitles in single-process mode."""

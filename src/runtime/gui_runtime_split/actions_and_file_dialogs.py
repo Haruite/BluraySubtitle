@@ -34,7 +34,7 @@ from src.exports.utils import (
 from src.runtime.gui_runtime_classes.encode_mkv_folder_worker import EncodeMkvFolderWorker
 from src.runtime.gui_runtime_classes.encode_worker import EncodeWorker
 from src.runtime.gui_runtime_classes.file_path_table_widget_item import FilePathTableWidgetItem
-from src.runtime.gui_runtime_classes.merge_worker import MergeWorker
+from src.runtime.gui_runtime_classes.merge_worker import MergeSubtitleRequest, MergeWorker
 from src.runtime.gui_runtime_classes.subtitle_folder_scan_worker import SubtitleFolderScanWorker
 from src.runtime.services import BluraySubtitle, _Cancelled
 from .gui_base import BluraySubtitleGuiBase
@@ -1203,141 +1203,85 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         self._encode_thread.start()
 
     def generate_subtitle(self, silent_mode: bool = False):
-        if self._is_movie_mode():
-            selected_mpls = self.get_selected_mpls_no_ext()
-            if not selected_mpls:
-                if not silent_mode:
-                    QMessageBox.information(self, " ", "Main MPLS is not selected")
-                return False
-
-            folder_to_bdmv: dict[str, int] = {}
-            bdmv_to_info: dict[int, tuple[str, str]] = {}
-            for folder, mpls_no_ext in selected_mpls:
-                if folder not in folder_to_bdmv:
-                    folder_to_bdmv[folder] = len(folder_to_bdmv) + 1
-                bdmv_to_info[folder_to_bdmv[folder]] = (folder, mpls_no_ext)
-
-            try:
-                bdmv_col = SUBTITLE_LABELS.index('bdmv_index')
-            except Exception:
-                bdmv_col = 4
-
-            tasks: list[tuple[str, str, str]] = []
-            for r in range(self.table2.rowCount()):
-                it = self.table2.item(r, 0)
-                if not it or it.checkState() != Qt.CheckState.Checked:
-                    continue
-                p_item = self.table2.item(r, 1)
-                if not p_item or not p_item.text().strip():
-                    continue
-                sub_path = p_item.text().strip()
-                if not os.path.exists(sub_path):
-                    continue
-                bdmv_item = self.table2.item(r, bdmv_col)
-                try:
-                    bdmv_index = int(bdmv_item.text().strip()) if bdmv_item and bdmv_item.text().strip() else 0
-                except Exception:
-                    bdmv_index = 0
-                info = bdmv_to_info.get(bdmv_index)
-                if not info:
-                    continue
-                folder, mpls_no_ext = info
-                tasks.append((sub_path, folder, mpls_no_ext))
-
-            if not tasks:
-                if not silent_mode:
-                    QMessageBox.information(self, " ", "Subtitle file is not selected")
-                return False
-
-            cancel_event = threading.Event()
-            self._current_cancel_event = cancel_event
-            self._exe_button_default_text = self.exe_button.text()
-            self._exe_button_progress_value = 0
-            self._exe_button_progress_text = 'Generating Subtitles'
-            self._update_exe_button_progress(0, 'Generating Subtitles')
-            self._merge_thread = QThread(self)
-            self._merge_worker = MergeWorker(
-                self.bdmv_folder_path.text(),
-                [],
-                self.checkbox1.isChecked(),
-                selected_mpls,
-                cancel_event,
-                subtitle_suffix=self._get_subtitle_suffix()
-            )
-            self._merge_worker.movie_tasks = tasks
-            self._merge_worker.moveToThread(self._merge_thread)
-            self._merge_thread.started.connect(self._merge_worker.run)
-            self._merge_worker.progress.connect(self._on_exe_button_progress_value)
-            self._merge_worker.label.connect(self._on_exe_button_progress_text)
-
-            success = False
-
-            def cleanup():
-                self._current_cancel_event = None
-                self._reset_exe_button()
-                if hasattr(self, '_merge_thread') and self._merge_thread:
-                    t_wait = time.perf_counter()
-                    print('[ShutdownDebug] merge_thread(movie).quit()')
-                    self._merge_thread.quit()
-                    self._merge_thread.wait()
-                    print(f"[ShutdownDebug] merge_thread(movie).wait() done in {(time.perf_counter() - t_wait) * 1000:.1f} ms")
-                    self._merge_thread.deleteLater()
-                    self._merge_thread = None
-                if hasattr(self, '_merge_worker') and self._merge_worker:
-                    self._merge_worker.deleteLater()
-                    self._merge_worker = None
-                self.altered = False
-
-            def on_finished():
-                nonlocal success
-                success = True
-                cleanup()
-                if not silent_mode:
-                    self._show_bottom_message("Subtitle generation completed!", 10000)
-
-            def on_canceled():
-                cleanup()
-
-            def on_failed(message: str):
-                cleanup()
-                if not silent_mode:
-                    self._show_error_dialog(message)
-
-            self._merge_worker.finished.connect(on_finished)
-            self._merge_worker.canceled.connect(on_canceled)
-            self._merge_worker.failed.connect(on_failed)
-            self._merge_thread.start()
-            if silent_mode:
-                loop = QEventLoop()
-
-                def quit_loop():
-                    if loop.isRunning():
-                        loop.quit()
-
-                self._merge_worker.finished.connect(quit_loop)
-                self._merge_worker.canceled.connect(quit_loop)
-                self._merge_worker.failed.connect(quit_loop)
-                loop.exec()
-                return success
-            return True
-
-        sub_files = []
-        for sub_index in range(self.table2.rowCount()):
-            if self.sub_check_state[sub_index] != 2:
-                continue
-            item = self.table2.item(sub_index, 1)
-            if item and item.text():
-                sub_files.append(item.text())
-        if not sub_files:
-            if not silent_mode:
-                QMessageBox.information(self, " ", "Subtitle file is not selected")
-            return False
-
         selected_mpls = self.get_selected_mpls_no_ext()
         if not selected_mpls:
             if not silent_mode:
                 QMessageBox.information(self, " ", "Main MPLS is not selected")
             return False
+
+        subtitle_suffix = self._get_subtitle_suffix()
+        movie_tasks: list[tuple[str, str, str]] = []
+        subtitle_files: list[str] = []
+        try:
+            if '/' in subtitle_suffix or '\\' in subtitle_suffix:
+                raise ValueError(self.t('Subtitle suffix cannot contain path separators'))
+            for _folder, selected_mpls_no_ext in selected_mpls:
+                mpls_path = selected_mpls_no_ext + '.mpls'
+                if not os.path.isfile(mpls_path):
+                    raise FileNotFoundError(
+                        self.t('Selected main playlist does not exist: {path}').format(path=mpls_path)
+                    )
+
+            selected_subtitle_rows: list[tuple[int, str]] = []
+            for row in range(self.table2.rowCount()):
+                selected_item = self.table2.item(row, 0)
+                if not selected_item or selected_item.checkState() != Qt.CheckState.Checked:
+                    continue
+                path_item = self.table2.item(row, 1)
+                subtitle_path = path_item.text().strip() if path_item else ''
+                if not subtitle_path:
+                    raise ValueError(self.t('Subtitle file is not selected'))
+                if not os.path.isfile(subtitle_path):
+                    raise FileNotFoundError(
+                        self.t('Subtitle file does not exist: {path}').format(path=subtitle_path)
+                    )
+                if os.path.splitext(subtitle_path)[1].lower() not in {'.ass', '.ssa', '.srt', '.sup'}:
+                    raise ValueError(
+                        self.t('Unsupported subtitle format: {path}').format(path=subtitle_path)
+                    )
+                subtitle_files.append(subtitle_path)
+                selected_subtitle_rows.append((row, subtitle_path))
+
+            if self._is_movie_mode():
+                folder_to_bdmv: dict[str, int] = {}
+                bdmv_to_info: dict[int, tuple[str, str]] = {}
+                for folder, selected_mpls_no_ext in selected_mpls:
+                    if folder not in folder_to_bdmv:
+                        folder_to_bdmv[folder] = len(folder_to_bdmv) + 1
+                    bdmv_to_info[folder_to_bdmv[folder]] = (folder, selected_mpls_no_ext)
+
+                bdmv_column = SUBTITLE_LABELS.index('bdmv_index')
+                for row, subtitle_path in selected_subtitle_rows:
+                    bdmv_item = self.table2.item(row, bdmv_column)
+                    try:
+                        bdmv_index = int(bdmv_item.text().strip()) if bdmv_item else 0
+                    except (TypeError, ValueError):
+                        bdmv_index = 0
+                    disc_info = bdmv_to_info.get(bdmv_index)
+                    if not disc_info:
+                        raise ValueError(
+                            self.t('Subtitle row {row} does not match a selected Blu-ray disc').format(row=row + 1)
+                        )
+                    folder, selected_mpls_no_ext = disc_info
+                    movie_tasks.append((subtitle_path, folder, selected_mpls_no_ext))
+        except (OSError, ValueError) as error:
+            if not silent_mode:
+                self._show_error_dialog(str(error))
+            return False
+
+        if not subtitle_files:
+            if not silent_mode:
+                QMessageBox.information(self, " ", "Subtitle file is not selected")
+            return False
+
+        request = MergeSubtitleRequest(
+            bdmv_path=self.bdmv_folder_path.text().strip(),
+            subtitle_files=tuple(subtitle_files),
+            complete_bluray_folder=self.checkbox1.isChecked(),
+            selected_mpls=tuple(selected_mpls),
+            subtitle_suffix=subtitle_suffix,
+            movie_tasks=tuple(movie_tasks),
+        )
 
         cancel_event = threading.Event()
         self._current_cancel_event = cancel_event
@@ -1346,14 +1290,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         self._exe_button_progress_text = 'Generating Subtitles'
         self._update_exe_button_progress(0, 'Generating Subtitles')
         self._merge_thread = QThread(self)
-        self._merge_worker = MergeWorker(
-            self.bdmv_folder_path.text(),
-            sub_files,
-            self.checkbox1.isChecked(),
-            selected_mpls,
-            cancel_event,
-            subtitle_suffix=self._get_subtitle_suffix()
-        )
+        self._merge_worker = MergeWorker(request, cancel_event)
         self._merge_worker.moveToThread(self._merge_thread)
         self._merge_thread.started.connect(self._merge_worker.run)
         self._merge_worker.progress.connect(self._on_exe_button_progress_value)
@@ -1365,11 +1302,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             self._current_cancel_event = None
             self._reset_exe_button()
             if hasattr(self, '_merge_thread') and self._merge_thread:
-                t_wait = time.perf_counter()
-                print('[ShutdownDebug] merge_thread(series).quit()')
                 self._merge_thread.quit()
                 self._merge_thread.wait()
-                print(f"[ShutdownDebug] merge_thread(series).wait() done in {(time.perf_counter() - t_wait) * 1000:.1f} ms")
                 self._merge_thread.deleteLater()
                 self._merge_thread = None
             if hasattr(self, '_merge_worker') and self._merge_worker:
@@ -1395,19 +1329,20 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         self._merge_worker.finished.connect(on_finished)
         self._merge_worker.canceled.connect(on_canceled)
         self._merge_worker.failed.connect(on_failed)
-        self._merge_thread.start()
+        loop = QEventLoop() if silent_mode else None
         if silent_mode:
-            loop = QEventLoop()
-
             def quit_loop():
-                if loop.isRunning():
+                if loop and loop.isRunning():
                     loop.quit()
 
             self._merge_worker.finished.connect(quit_loop)
             self._merge_worker.canceled.connect(quit_loop)
             self._merge_worker.failed.connect(quit_loop)
+        self._merge_thread.start()
+        if loop:
             loop.exec()
-        return success
+            return success
+        return True
 
     def _update_encode_bit_depth_combo_tooltip(self) -> None:
         """SvtAv1 + 12-bit only: tooltip (x265 12-bit has no warning). Frozen bundle: no SvtAv1 12-bit row."""
@@ -1991,7 +1926,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     return None
                 candidates = []
                 for f in os.listdir(folder):
-                    if not (f.endswith('.ass') or f.endswith('.srt') or f.endswith('.ssa')):
+                    if not (f.endswith('.ass') or f.endswith('.srt') or f.endswith('.ssa') or f.endswith('.sup')):
                         continue
                     if not f.startswith(base):
                         continue
@@ -2038,14 +1973,16 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             mpls_name = mpls_path[:-5]
             has_subtitle = (os.path.exists(mpls_name + '.ass') or
                             os.path.exists(mpls_name + '.srt') or
-                            os.path.exists(mpls_name + '.ssa'))
+                            os.path.exists(mpls_name + '.ssa') or
+                            os.path.exists(mpls_name + '.sup'))
             if not has_subtitle:
                 success = self.generate_subtitle(silent_mode=True)
                 if success:
                     # Re-check subtitle existence after generation.
                     has_subtitle = (os.path.exists(mpls_name + '.ass') or
                                     os.path.exists(mpls_name + '.srt') or
-                                    os.path.exists(mpls_name + '.ssa'))
+                                    os.path.exists(mpls_name + '.ssa') or
+                                    os.path.exists(mpls_name + '.sup'))
             if not has_subtitle:
                 # Still allow playback even if subtitle generation failed.
                 QMessageBox.information(self, "Prompt", "Subtitle file does not exist; playback will continue without subtitles")
@@ -2054,7 +1991,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             mpls_name = mpls_path[:-5]
             has_subtitle = (os.path.exists(mpls_name + '.ass') or
                             os.path.exists(mpls_name + '.srt') or
-                            os.path.exists(mpls_name + '.ssa'))
+                            os.path.exists(mpls_name + '.ssa') or
+                            os.path.exists(mpls_name + '.sup'))
             if not has_subtitle:
                 QMessageBox.information(self, "Prompt", "Subtitle file does not exist; playback will continue without subtitles")
         if sys.platform != 'linux':

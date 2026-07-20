@@ -411,7 +411,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
             if _lang == 'zh':
                 items = ["", ".zh-Hans", ".zh-Hant", ".chs", ".cht", ".sc", ".tc", ".big5", ".gb"]
             else:
-                items = ["", "en", "eng", "en_US", "jpn", "jp", "kor"]
+                items = ["", ".en", ".eng", ".en_US", ".jpn", ".jp", ".kor"]
             combo.addItems(items)
             combo.setCurrentText(current if current != '' else '')
         finally:
