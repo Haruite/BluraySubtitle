@@ -1,0 +1,2329 @@
+{
+  "chinese_comments": [],
+  "chinese_source_strings": [
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "BD\u538b\u5236\u8bf4\u660e\uff1a\u89c6\u9891\u8f68\u9053\u8f6c\u4e3a\u300c\u91cd\u7f16\u7801\u300d\u65f6\u6309\u84dd\u5149\u89c4\u683c\u56fa\u5b9a\u4e3a x264 8bit \u6216 x265 10bit\uff0c\u6b64\u5904\u4e0d\u53ef\u66f4\u6539\u7f16\u7801\u5668\u4e0e\u4f4d\u6df1\u3002",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "Dolby Vision \u4e0d\u652f\u6301 h264 \u6216\u8f93\u51fa\u4f4d\u6df1 8bit",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/lifecycle_and_bootstrap.py",
+      "text": "\u6df7\u6d41Dolby Vision",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/lifecycle_and_bootstrap.py",
+      "text": "\u7b80\u4f53\u4e2d\u6587",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/lifecycle_and_bootstrap.py",
+      "text": "\u88c1\u526a\u7248\u6743\u7247\u6bb5",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/remux_and_episode_layout.py",
+      "text": "Folder passed to ``_make_main_mpls_remux_cmd`` when generating table1 remux text.\n\n        BDMV \u538b\u5236 (function 4, BDMV source): mux into ``<\u8f93\u51fa>/_encode_remux_stage/<\u76d8\u6587\u4ef6\u5939\u540d>/`` so it matches\n        ``episodes_encode`` (same rule as ``_prepare_episode_run``: ``basename(bdmv_path)``, i.e. main\n        ``bdmv_folder_path``, not table1 row root \u2014 which may be a subfolder like a product code).\n        ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/sp_chapter_segment_logic.py",
+      "text": "``(m2ts_file, m2ts_file_detail, ep_duration)`` for mark bounds ``[j1, j2)`` on playlist timeline.\n\n        ``j1``/``j2`` are the same 1-based indices as ``start_at_chapter`` / ``end_at_chapter`` combo\n        ``itemData`` (``j2`` exclusive end on the mark axis). Timeline overlap matches\n        ``BluraySubtitle.m2ts_file_detail_for_mpls_timeline_window`` / README.zh-Hans \u591a\u6587\u4ef6\u8f93\u51fa\u56de\u9000.\n        ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "MIME \u7c7b\u578b",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "m2ts \u6587\u4ef6",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "m2ts \u7247\u6bb5\u65f6\u95f4",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "m2ts \u7c7b\u578b",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "mpls \u6587\u4ef6",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "vpy \u8def\u5f84",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u4e3b\u64ad\u653e\u5217\u8868",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u4f4d\u6df1",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u4fe1\u606f",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u504f\u79fb",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u5185\u5bb9",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u5355\u96c6\u65f6\u957f",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u539f\u76d8\u5e8f\u53f7",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u58f0\u9053",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u5927\u5c0f",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u5b57\u5e55\u65f6\u957f",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u5b57\u5e55\u8bed\u8a00",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u5b57\u5e55\u8def\u5f84",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u5bbd\u5ea6",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u5e8f\u53f7",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u5f00\u59cb",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u63d0\u53d6",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u63d0\u793a",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u64ad\u653e",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u6587\u4ef6",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u6587\u4ef6\u540d",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u6587\u4ef6\u5927\u5c0f",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u65f6\u957f",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u6df7\u6d41\u547d\u4ee4",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u7ae0\u8282",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u7ae0\u8282\u5e8f\u53f7",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u7b80\u4f53\u4e2d\u6587",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u7c7b\u578b",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u7ed3\u675f",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u7ed3\u675f\u7ae0\u8282",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u7f16\u8f91 vpy",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u7f16\u8f91\u7ae0\u8282",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u7f16\u8f91\u8f68\u9053",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u7f16\u8f91\u9644\u4ef6",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u8bed\u8a00",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u8d77\u59cb\u7ae0\u8282",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u8def\u5f84",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u8f68\u9053",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u8f68\u9053\u53f7",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u8f6c\u6362",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u8f93\u51fa\u6587\u4ef6\u540d",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u9009\u62e9",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u91c7\u6837\u7387",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u97f3\u9891\u8f6c\u6362",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u9884\u89c8",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u9ad8\u5ea6",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/theme_and_i18n.py",
+      "text": "\u9ed8\u8ba4\u65f6\u957f",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": ")\uff0c\u4ecd\u5e94\u7528\u97f3\u8f68\u66ff\u6362\u7ed3\u679c",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": ")\uff0c\u4fdd\u7559\u539f MKV\uff1a",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "Dolby Vision \u4e0d\u652f\u6301 h264 \u6216\u8f93\u51fa\u4f4d\u6df1 8bit",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "TrueHD Atmos PCM \u56de\u9000\u89e3\u7801\uff1a",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "TrueHD Atmos \u89e3\u7801\u547d\u4ee4\uff1a",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "TrueHD Atmos \u97f3\u8f68 \uff62",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "mkvmerge \u6df7\u6d41\u5931\u8d25 (exit ",
+      "count": 3
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "mkvmerge \u6df7\u6d41\u672a\u751f\u6210\u6709\u6548 tmp\uff0c\u4fdd\u7559\u539f MKV\uff1a",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "truehdd W64 \u8f6c RIFF WAV\uff1a",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "truehdd \u539f\u59cb PCM\u2192WAV (",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "\u6b63\u5728\u63d0\u53d6\u97f3\u8f68\uff0c\u547d\u4ee4: ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "\u6df7\u6d41\u540e\u6587\u4ef6\u53d8\u5927 (",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "\uff63 \u5df2\u89e3\u7801\u4e3a \uff62",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "DTS \u97f3\u8f68 \uff62",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "FLAC \u6bd4 DTS \u5927\uff0c\u4fdd\u7559 DTS \u97f3\u8f68 \uff62",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "TrueHD \u97f3\u8f68 \uff62",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "ffmpeg \u538b\u7f29\u7684 flac \u6bd4\u539f\u97f3\u8f68\u5927\uff0cTrueHD \u4ecd\u4fdd\u7559 FLAC \uff62",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "flac \u6587\u4ef6\u6bd4\u539f\u97f3\u8f68\u5927\uff0cTrueHD \u4ecd\u4fdd\u7559 FLAC \uff62",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "\u4fdd\u7559\u6709\u635f\u97f3\u8f68 \uff62",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "\u6709\u635f\u97f3\u8f68 \uff62",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "\uff08\u6df7\u6d41\u65f6\u7528 mkvmerge -y \u6821\u6b63\u5ef6\u8fdf\uff09",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "\uff63 \u6709\u5ef6\u8fdf ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "\uff63 \u672a\u6210\u529f truehdd \u89e3\u7801\uff0c\u4fdd\u7559\u539f\u76d8\u97f3\u8f68",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/remux_and_episode_workflows.py",
+      "text": "\u4f7f\u7528 edit-tracks \u9009\u8f68\uff0c\u4e3b MPLS",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/remux_and_episode_workflows.py",
+      "text": "\u9ed8\u8ba4\u9009\u8f68\uff0c\u4e3b MPLS",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/remux_and_episode_workflows.py",
+      "text": "\uff08\u53c2\u8003 m2ts: ",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/services_split/subtitle_and_chapter_pipeline.py",
+      "text": "\u6df7\u6d41\u547d\u4ee4: ",
+      "count": 1
+    }
+  ],
+  "direct_user_visible_strings": [
+    {
+      "path": "src/bdmv/m2ts.py",
+      "text": " stride=",
+      "count": 1
+    },
+    {
+      "path": "src/bdmv/m2ts.py",
+      "text": " sync_off=",
+      "count": 1
+    },
+    {
+      "path": "src/bdmv/m2ts.py",
+      "text": "[M2TS.extract_igs_menu_png] detected IGS PIDs: ",
+      "count": 1
+    },
+    {
+      "path": "src/bdmv/m2ts.py",
+      "text": "[M2TS.extract_igs_menu_png] write ",
+      "count": 1
+    },
+    {
+      "path": "src/bdmv/m2ts.py",
+      "text": "[M2TS.get_first_pts] seek=",
+      "count": 1
+    },
+    {
+      "path": "src/bdmv/m2ts.py",
+      "text": "x",
+      "count": 1
+    },
+    {
+      "path": "src/core/i18n.py",
+      "text": "[SP-DEBUG] ",
+      "count": 1
+    },
+    {
+      "path": "src/domain/subtitles/ass2sup.py",
+      "text": " (epoch_objects=",
+      "count": 1
+    },
+    {
+      "path": "src/domain/subtitles/ass2sup.py",
+      "text": " (jobs=",
+      "count": 1
+    },
+    {
+      "path": "src/domain/subtitles/ass2sup.py",
+      "text": " bd_compat=",
+      "count": 1
+    },
+    {
+      "path": "src/domain/subtitles/ass2sup.py",
+      "text": " dropped=",
+      "count": 1
+    },
+    {
+      "path": "src/domain/subtitles/ass2sup.py",
+      "text": " epoch_resets=",
+      "count": 1
+    },
+    {
+      "path": "src/domain/subtitles/ass2sup.py",
+      "text": " erasers=",
+      "count": 1
+    },
+    {
+      "path": "src/domain/subtitles/ass2sup.py",
+      "text": " event(s)",
+      "count": 1
+    },
+    {
+      "path": "src/domain/subtitles/ass2sup.py",
+      "text": " events -> ",
+      "count": 1
+    },
+    {
+      "path": "src/domain/subtitles/ass2sup.py",
+      "text": " final_comp_num=",
+      "count": 1
+    },
+    {
+      "path": "src/domain/subtitles/ass2sup.py",
+      "text": " fps=",
+      "count": 1
+    },
+    {
+      "path": "src/domain/subtitles/ass2sup.py",
+      "text": " jobs=",
+      "count": 1
+    },
+    {
+      "path": "src/domain/subtitles/ass2sup.py",
+      "text": " object_reuse=",
+      "count": 1
+    },
+    {
+      "path": "src/domain/subtitles/ass2sup.py",
+      "text": " palette_reuse=",
+      "count": 1
+    },
+    {
+      "path": "src/domain/subtitles/ass2sup.py",
+      "text": " video_format=",
+      "count": 1
+    },
+    {
+      "path": "src/domain/subtitles/ass2sup.py",
+      "text": ", chunks=",
+      "count": 1
+    },
+    {
+      "path": "src/domain/subtitles/ass2sup.py",
+      "text": ", epoch_palettes=",
+      "count": 1
+    },
+    {
+      "path": "src/domain/subtitles/ass2sup.py",
+      "text": "ass2sup: input=",
+      "count": 1
+    },
+    {
+      "path": "src/domain/subtitles/ass2sup.py",
+      "text": "bd-compat(on): dropped ",
+      "count": 1
+    },
+    {
+      "path": "src/domain/subtitles/ass2sup.py",
+      "text": "bd-compat(on): events_in=",
+      "count": 1
+    },
+    {
+      "path": "src/domain/subtitles/ass2sup.py",
+      "text": "bd-compat(on): packed ",
+      "count": 1
+    },
+    {
+      "path": "src/domain/subtitles/ass2sup.py",
+      "text": "bd-compat(on): precomputing graphics payloads with jobs=",
+      "count": 1
+    },
+    {
+      "path": "src/domain/subtitles/ass2sup.py",
+      "text": "done: ",
+      "count": 2
+    },
+    {
+      "path": "src/domain/subtitles/ass2sup.py",
+      "text": "input file not found: ",
+      "count": 1
+    },
+    {
+      "path": "src/domain/subtitles/ass2sup.py",
+      "text": "interrupted; workers terminated",
+      "count": 1
+    },
+    {
+      "path": "src/domain/subtitles/ass2sup.py",
+      "text": "no dialogue events found",
+      "count": 1
+    },
+    {
+      "path": "src/domain/subtitles/ass2sup.py",
+      "text": "no events found in BDN XML",
+      "count": 1
+    },
+    {
+      "path": "src/domain/subtitles/ass2sup.py",
+      "text": "temp kept: ",
+      "count": 1
+    },
+    {
+      "path": "src/domain/subtitles/srt2ass.py",
+      "text": " not exist",
+      "count": 1
+    },
+    {
+      "path": "src/domain/subtitles/subtitle.py",
+      "text": "Failed to get subtitle duration: ",
+      "count": 1
+    },
+    {
+      "path": "src/exports/utils.py",
+      "text": "Completed: ",
+      "count": 1
+    },
+    {
+      "path": "src/exports/utils.py",
+      "text": "FFmpeg error: ",
+      "count": 1
+    },
+    {
+      "path": "src/exports/utils.py",
+      "text": "Run command: ",
+      "count": 1
+    },
+    {
+      "path": "src/exports/utils.py",
+      "text": "[BluraySubtitle] command failed to start: ",
+      "count": 1
+    },
+    {
+      "path": "src/exports/utils.py",
+      "text": "[BluraySubtitle] command failed: ",
+      "count": 1
+    },
+    {
+      "path": "src/exports/utils.py",
+      "text": "[BluraySubtitle] command timed out",
+      "count": 2
+    },
+    {
+      "path": "src/exports/utils.py",
+      "text": "[BluraySubtitle][chapter-cfg] ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_classes/encode_mkv_folder_worker.py",
+      "text": "[BluraySubtitle] Encode MKV-folder worker: canceled.",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_classes/encode_mkv_folder_worker.py",
+      "text": "[BluraySubtitle] Encode MKV-folder worker: finished successfully.",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_classes/encode_worker.py",
+      "text": "[BluraySubtitle] Encode worker: canceled.",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_classes/encode_worker.py",
+      "text": "[BluraySubtitle] Encode worker: finished successfully.",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_classes/merge_worker.py",
+      "text": "[BluraySubtitle] Merge worker (movie mode): finished successfully.",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_classes/merge_worker.py",
+      "text": "[BluraySubtitle] Merge worker: canceled.",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_classes/merge_worker.py",
+      "text": "[BluraySubtitle] Merge worker: finished successfully.",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_classes/remux_worker.py",
+      "text": "[BluraySubtitle] Remux worker: canceled.",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_classes/remux_worker.py",
+      "text": "[BluraySubtitle] Remux worker: finished successfully.",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_classes/subtitle_folder_scan_worker.py",
+      "text": "[BluraySubtitle] Subtitle-folder scan worker: canceled.",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_classes/subtitle_folder_scan_worker.py",
+      "text": "[BluraySubtitle] Subtitle-folder scan worker: finished successfully (MKV list).",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_classes/subtitle_folder_scan_worker.py",
+      "text": "[BluraySubtitle] Subtitle-folder scan worker: finished successfully (no subtitle files).",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_classes/subtitle_folder_scan_worker.py",
+      "text": "[BluraySubtitle] Subtitle-folder scan worker: finished successfully (no subtitles loaded).",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_classes/subtitle_folder_scan_worker.py",
+      "text": "[BluraySubtitle] Subtitle-folder scan worker: finished successfully.",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": " ms",
+      "count": 5
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "Cannot open file:\n",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "Cannot open folder:\n",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "Configuration is empty, skipping update",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "File does not exist:\n",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "File path is empty",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "Folder does not exist:\n",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "Folder path is empty",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "Main MPLS is not selected",
+      "count": 3
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "Open File Failed",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "Open Folder Failed",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "Output folder does not exist",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "Output folder is not selected",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "Output folder is parent of input folder, please change output folder",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "Prompt",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "Select the remux folder",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "Subtitle Packaging:",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "Subtitle file does not exist; playback will continue without subtitles",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "Subtitle file is not selected",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "[BluraySubtitle] Error (printed to terminal for copy/paste):",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "[ShutdownDebug] encode_thread(bdmv-mode).quit()",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "[ShutdownDebug] encode_thread(bdmv-mode).wait() done in ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "[ShutdownDebug] encode_thread(remux-mode).quit()",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "[ShutdownDebug] encode_thread(remux-mode).wait() done in ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "[ShutdownDebug] merge_thread(movie).quit()",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "[ShutdownDebug] merge_thread(movie).wait() done in ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "[ShutdownDebug] merge_thread(series).quit()",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "[ShutdownDebug] merge_thread(series).wait() done in ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "[ShutdownDebug] subtitle_scan_thread.quit()",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "[ShutdownDebug] subtitle_scan_thread.wait() done in ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "save",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "vspipe:",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/lifecycle_and_bootstrap.py",
+      "text": "Add suffix",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/lifecycle_and_bootstrap.py",
+      "text": "Approx. episode length (minutes):",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/lifecycle_and_bootstrap.py",
+      "text": "Complete Blu-ray Folder",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/lifecycle_and_bootstrap.py",
+      "text": "Encode",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/lifecycle_and_bootstrap.py",
+      "text": "Generate Subtitles",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/lifecycle_and_bootstrap.py",
+      "text": "Language",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/lifecycle_and_bootstrap.py",
+      "text": "Mode",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/lifecycle_and_bootstrap.py",
+      "text": "Opacity",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/lifecycle_and_bootstrap.py",
+      "text": "Open",
+      "count": 5
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/lifecycle_and_bootstrap.py",
+      "text": "Output Folder",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/lifecycle_and_bootstrap.py",
+      "text": "Select",
+      "count": 5
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/lifecycle_and_bootstrap.py",
+      "text": "Select folder",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/lifecycle_and_bootstrap.py",
+      "text": "Select the BDMV folder",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/lifecycle_and_bootstrap.py",
+      "text": "Select the subtitle folder",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/lifecycle_and_bootstrap.py",
+      "text": "Select:",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/lifecycle_and_bootstrap.py",
+      "text": "UI Font",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/lifecycle_and_bootstrap.py",
+      "text": "[BluraySubtitle] window close accepted",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/playback_and_paths.py",
+      "text": "), cannot locate MPLS file",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/playback_and_paths.py",
+      "text": "M2TS file not found:\n",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/playback_and_paths.py",
+      "text": "MPLS file not found:\n",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/playback_and_paths.py",
+      "text": "Matching Blu-ray directory not found (bdmv_index=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/remux_and_episode_layout.py",
+      "text": "Configuration is empty, skipping update",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/remux_and_episode_layout.py",
+      "text": "Main MPLS is not selected",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/remux_and_episode_layout.py",
+      "text": "Output folder does not exist",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/remux_and_episode_layout.py",
+      "text": "Output folder is not selected",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/scan_and_worker_hooks.py",
+      "text": "s)",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/sp_chapter_segment_logic.py",
+      "text": " mpls=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/sp_chapter_segment_logic.py",
+      "text": "[_get_first_m2ts_for_mpls] STREAM file missing expected_path=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/sp_chapter_segment_logic.py",
+      "text": "[_get_first_m2ts_for_mpls] exception mpls=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/sp_chapter_segment_logic.py",
+      "text": "[_get_first_m2ts_for_mpls] no play items mpls=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/track_and_attachment_editing.py",
+      "text": " filtered=",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/track_and_attachment_editing.py",
+      "text": " m2ts=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/track_and_attachment_editing.py",
+      "text": " mpls=",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/track_and_attachment_editing.py",
+      "text": ") m2ts=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/track_and_attachment_editing.py",
+      "text": "), cannot locate M2TS file",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/track_and_attachment_editing.py",
+      "text": "), cannot locate MPLS file",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/track_and_attachment_editing.py",
+      "text": "Attachment ID not found",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/track_and_attachment_editing.py",
+      "text": "Error: ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/track_and_attachment_editing.py",
+      "text": "M2TS file not found",
+      "count": 3
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/track_and_attachment_editing.py",
+      "text": "M2TS file not found:\n",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/track_and_attachment_editing.py",
+      "text": "MKV file not found",
+      "count": 3
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/track_and_attachment_editing.py",
+      "text": "MPLS file not found:\n",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/track_and_attachment_editing.py",
+      "text": "Matching Blu-ray directory not found (bdmv_index=",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/track_and_attachment_editing.py",
+      "text": "[edit tracks] table1 main MPLS: _get_first_m2ts_for_mpls returned empty (mpls=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/track_and_attachment_editing.py",
+      "text": "[edit tracks] table1 main MPLS: empty stream list after read/filter (raw=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/track_and_attachment_editing.py",
+      "text": "[edit tracks] table1 main MPLS: m2ts path missing on disk m2ts_path=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/track_and_attachment_editing.py",
+      "text": "[edit tracks] table3 SP (mpls row): _get_first_m2ts_for_mpls empty mpls_path=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/track_and_attachment_editing.py",
+      "text": "[edit tracks] table3 SP (mpls row): empty after read/filter raw=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/track_and_attachment_editing.py",
+      "text": "[edit tracks] table3 SP (mpls row): m2ts not on disk m2ts_path=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/track_and_attachment_editing.py",
+      "text": "[edit tracks] table3 SP (orphan m2ts): _read_m2ts_track_info returned no streams m2ts=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/track_and_attachment_editing.py",
+      "text": "[edit tracks] table3 SP (orphan m2ts): file missing m2ts_path=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/track_and_attachment_editing.py",
+      "text": "language_\nfrom_pmt_\ndescriptor",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/track_and_attachment_editing.py",
+      "text": "mkvextract not found",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/track_and_attachment_editing.py",
+      "text": "mkvextract or mkvpropedit not found",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/vpy_edit_and_preview.py",
+      "text": "Cannot determine video file path",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/vpy_edit_and_preview.py",
+      "text": "Failed to generate preview script",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/vpy_edit_and_preview.py",
+      "text": "Failed to launch vsedit",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/vpy_edit_and_preview.py",
+      "text": "Failed to open vsedit: ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/vpy_edit_and_preview.py",
+      "text": "File does not exist: ",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/vpy_edit_and_preview.py",
+      "text": "Preview script failed: ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/vpy_edit_and_preview.py",
+      "text": "Prompt",
+      "count": 10
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/vpy_edit_and_preview.py",
+      "text": "VPy path is empty",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/vpy_edit_and_preview.py",
+      "text": "vsedit not found, check VSEDIT_PATH or system PATH",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": " (expected ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": " -ac ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": " Hz, ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": " MiB",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": " MiB > ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": " bit",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": " bytes)",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": " ch, ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": " track ",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "\" -c:a pcm_s24le \"",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "\" -i \"",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": ", trying raw PCM fallback",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "-f s24le -ar ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": ".pcm)",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": ": missing ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "[encode-dovi] ",
+      "count": 5
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "[encode-dovi] RPU.bin ok, BL=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "[encode-dovi] demux did not produce BL under ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "[encode-dovi] dovi_tool demux exit ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "[encode-dovi] dovi_tool executable not found (DOVI_TOOL_PATH)",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "[encode-dovi] dovi_tool executable not found for inject-rpu",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "[encode-dovi] extract-rpu failed rc=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "[encode-dovi] failed to prepare Dolby Vision encode for ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "[encode-dovi] inject-rpu failed rc=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "[encode-dovi] inject-rpu ok -> ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "[encode-dovi] mkvextract failed rc=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "[encode-dovi] mkvextract failed: exit ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "[encode-dovi] output dir: ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "[encode-dovi] post-encode inject-rpu failed",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "[encode] failed to set vpy source (a) in ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "[encode] vpy a = ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "[truehdd] PCM\u2192WAV failed track ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "[truehdd] executable not found (set TRUEHDD_PATH or install truehdd)",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "[truehdd] no PCM output for track ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "[truehdd] pcm fallback exit ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "[truehdd] skip track ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "[truehdd] w64 decode exit ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/lifecycle_and_configuration.py",
+      "text": "\u001b[31mError, m2ts file \uff62",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/lifecycle_and_configuration.py",
+      "text": "Failed to load subtitle file \uff62",
+      "count": 5
+    },
+    {
+      "path": "src/runtime/services_split/lifecycle_and_configuration.py",
+      "text": "Failed to load subtitle file: ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/lifecycle_and_configuration.py",
+      "text": "Multiprocessing parse failed, switching to single-process mode: ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/lifecycle_and_configuration.py",
+      "text": "\uff63 in \uff62",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/lifecycle_and_configuration.py",
+      "text": "\uff63 not found\u001b[0m",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "\u001b[31mError: ffmpeg compression also failed\u001b[0m",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "\u001b[31mError: lossless audio intermediate encode failed\u001b[0m",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "\u001b[31mError: movie mux failed, please check task output\u001b[0m",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": " (read-back failed: ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": " (time window ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": " EL=0x",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": " MiB",
+      "count": 6
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": " bits",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": " clip(s)",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": " episodes -> ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": " expected_files=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": " got ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": " ms",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": " mux=",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": " not in base track map",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": " not in m2ts_pid_list",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": " play item(s) only",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": " probe=",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": " seg=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "): mux first ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": ", 0x",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "; abort",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "; will try silence if needed",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "Found duplicate audio track \uff62",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[dovi] MPLS Dolby Vision pair BL=0x",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[dovi] clip Dolby Vision pair BL=0x",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback-split] missing first m2ts: ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback-split] missing m2ts: ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback-split] missing output: ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback-split] missing part after mux: ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback-split] no m2ts pieces for segment ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback-split] no track slots from edit-tracks selection",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback-split] segment ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback-split] segment concat failed rc=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback-split] skip: empty output path or movie_mode",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback-split] skip: need 2+ episode segments; segments=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback-split] skip: playlist has only ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback-split] start: ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] ",
+      "count": 4
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback]   identify stream_id: video=[",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback]   identify target: ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback]   missing PID(s): ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback]   probe m2ts: ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback]   remux slots: ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] PID set mismatch: expected ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] SP looping playlist (",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] concat failed rc=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] concat: ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] dovi_tool executable not found (DOVI_TOOL_PATH)",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] dovi_tool mux failed",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] dovi_tool mux ok -> ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] drop non-common slots: ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] m2ts_pid_list(after dovi_tool)=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] m2ts_pid_list(after mkvmerge base)=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] m2ts_pid_list(after mkvmerge)=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] m2ts_pid_list(after silence)=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] m2ts_pid_list(after tsMuxer audio recovery)=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] m2ts_pid_list(after tsMuxer)=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] merge-append ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] merge: PID 0x",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] merge: orphan PID 0x",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] missing first m2ts: ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] missing m2ts: ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] missing part output after mux: ",
+      "count": 3
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] missing single-clip m2ts: ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] mkvmerge --identify check failed: ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] mkvmerge audio/sub base mux for Dolby Vision failed",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] mkvmerge mux from m2ts failed",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] no MKV output",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] no base MKV for Dolby Vision merge",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] no base MKV to append silence audio",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] no mkvmerge-mappable audio/sub for Dolby Vision base mux",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] no track slots for single-clip MPLS",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] no track slots from edit-tracks selection",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] silence pad: ffmpeg failed",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] silence pad: no reference audio template",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] silence-merge ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] silence-merge: PID 0x",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] silence-pad ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] silence: ffmpeg failed for PID 0x",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] silence: no template for PID 0x",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] silence: unsupported audio codec for PID 0x",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] tsMuxeR executable not found",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] tsMuxer Dolby Vision demux PIDs: 0x",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] tsMuxer audio demux failed; may try silence",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] tsMuxer audio recovery merge failed; may try silence",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] tsMuxer cannot supply Dolby Vision BL/EL PIDs; need=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] tsMuxer cannot supply all missing non-audio PIDs; need=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] tsMuxer demux did not yield all requested PIDs",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] tsMuxer demux failed rc=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] tsMuxer demux for missing PIDs: ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] tsMuxer meta (",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] tsMuxer meta written ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "[remux-fallback] tsMuxer probe missing some audio PIDs ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "] audio=[",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "] subtitles=[",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "s .. ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "s)",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "\uff63, deleted",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/services_split/remux_and_episode_workflows.py",
+      "text": " (see logs above)",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/remux_and_episode_workflows.py",
+      "text": " -d ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/remux_and_episode_workflows.py",
+      "text": " track-order=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/remux_and_episode_workflows.py",
+      "text": " video=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/remux_and_episode_workflows.py",
+      "text": "[encode-mux] exclude audio=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/remux_and_episode_workflows.py",
+      "text": "[remux-fallback-split] failed for BD_Vol_",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/remux_and_episode_workflows.py",
+      "text": "[remux-fallback] skipping primary mkvmerge (see identify check lines above)",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/subtitle_and_chapter_pipeline.py",
+      "text": " (mpls=",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/services_split/subtitle_and_chapter_pipeline.py",
+      "text": " bdmv_root=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/subtitle_and_chapter_pipeline.py",
+      "text": " conf0_mpls=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/subtitle_and_chapter_pipeline.py",
+      "text": " end=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/subtitle_and_chapter_pipeline.py",
+      "text": " entries=",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/services_split/subtitle_and_chapter_pipeline.py",
+      "text": " mpls_file=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/subtitle_and_chapter_pipeline.py",
+      "text": " start=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/subtitle_and_chapter_pipeline.py",
+      "text": "); entry bdmv=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/subtitle_and_chapter_pipeline.py",
+      "text": "[BluraySubtitle] completion(): cleanup finished.",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/subtitle_and_chapter_pipeline.py",
+      "text": "[episode-sp-mux] mkvmerge: ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/subtitle_and_chapter_pipeline.py",
+      "text": "[remux-fallback] skipping primary SP mkvmerge (see identify check lines above)",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/subtitle_and_chapter_pipeline.py",
+      "text": "[sp-mux-debug] _write_custom_chapter_for_segment: empty mpls_path output_name=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/subtitle_and_chapter_pipeline.py",
+      "text": "[sp-mux-debug] _write_custom_chapter_for_segment: not a file mpls_path=",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/subtitle_and_chapter_pipeline.py",
+      "text": "[sp-mux-debug] skip custom chapter: main_mpls_path missing or not a file (got ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/subtitle_and_chapter_pipeline.py",
+      "text": "[sp-mux] looping playlist (",
+      "count": 1
+    },
+    {
+      "path": "src/scripts/batch_remux_movie.py",
+      "text": " GiB.",
+      "count": 1
+    },
+    {
+      "path": "src/scripts/batch_remux_movie.py",
+      "text": " GiB\uff0cReduce size ",
+      "count": 1
+    },
+    {
+      "path": "src/scripts/batch_remux_movie.py",
+      "text": " GiB\uff0cremux size ",
+      "count": 1
+    },
+    {
+      "path": "src/scripts/batch_remux_movie.py",
+      "text": " disc(s) under ",
+      "count": 1
+    },
+    {
+      "path": "src/scripts/batch_remux_movie.py",
+      "text": " has done\uff0cBDMV size ",
+      "count": 1
+    },
+    {
+      "path": "src/scripts/batch_remux_movie.py",
+      "text": "--- remux ",
+      "count": 1
+    },
+    {
+      "path": "src/scripts/batch_remux_movie.py",
+      "text": ": cannot chdir to PLAYLIST (",
+      "count": 1
+    },
+    {
+      "path": "src/scripts/batch_remux_movie.py",
+      "text": ": cannot chdir to disc root (",
+      "count": 1
+    },
+    {
+      "path": "src/scripts/batch_remux_movie.py",
+      "text": ": empty movie configuration",
+      "count": 1
+    },
+    {
+      "path": "src/scripts/batch_remux_movie.py",
+      "text": ": no main MPLS found",
+      "count": 1
+    },
+    {
+      "path": "src/scripts/batch_remux_movie.py",
+      "text": "Found ",
+      "count": 1
+    },
+    {
+      "path": "src/scripts/batch_remux_movie.py",
+      "text": "No BDMV/PLAYLIST found under ",
+      "count": 1
+    },
+    {
+      "path": "src/scripts/batch_remux_movie.py",
+      "text": "Remux ",
+      "count": 1
+    },
+    {
+      "path": "src/scripts/batch_remux_movie.py",
+      "text": "Skip remux ",
+      "count": 5
+    }
+  ],
+  "unmapped_translation_calls": [
+    {
+      "path": "src/bdmv/m2ts.py",
+      "text": " = ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_classes/merge_worker.py",
+      "text": "\uff63: ",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/gui_runtime_classes/subtitle_folder_scan_worker.py",
+      "text": "\uff63",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_classes/subtitle_folder_scan_worker.py",
+      "text": "\uff63: ",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "BD\u538b\u5236\u8bf4\u660e\uff1a\u89c6\u9891\u8f68\u9053\u8f6c\u4e3a\u300c\u91cd\u7f16\u7801\u300d\u65f6\u6309\u84dd\u5149\u89c4\u683c\u56fa\u5b9a\u4e3a x264 8bit \u6216 x265 10bit\uff0c\u6b64\u5904\u4e0d\u53ef\u66f4\u6539\u7f16\u7801\u5668\u4e0e\u4f4d\u6df1\u3002",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/actions_and_file_dialogs.py",
+      "text": "Dolby Vision \u4e0d\u652f\u6301 h264 \u6216\u8f93\u51fa\u4f4d\u6df1 8bit",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/lifecycle_and_bootstrap.py",
+      "text": "\u6df7\u6d41Dolby Vision",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/gui_runtime_split/lifecycle_and_bootstrap.py",
+      "text": "\u88c1\u526a\u7248\u6743\u7247\u6bb5",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": " -> ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": ")\uff0c\u4ecd\u5e94\u7528\u97f3\u8f68\u66ff\u6362\u7ed3\u679c",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": ")\uff0c\u4fdd\u7559\u539f MKV\uff1a",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": ")\uff1a",
+      "count": 3
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "Dolby Vision \u4e0d\u652f\u6301 h264 \u6216\u8f93\u51fa\u4f4d\u6df1 8bit",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "TrueHD Atmos PCM \u56de\u9000\u89e3\u7801\uff1a",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "TrueHD Atmos \u89e3\u7801\u547d\u4ee4\uff1a",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "TrueHD Atmos \u97f3\u8f68 \uff62",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "[BluraySubtitle] recreate missing vpy: ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "[BluraySubtitle] vpy not found and recreate failed: ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "mkvmerge \u6df7\u6d41\u5931\u8d25 (exit ",
+      "count": 3
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "mkvmerge \u6df7\u6d41\u672a\u751f\u6210\u6709\u6548 tmp\uff0c\u4fdd\u7559\u539f MKV\uff1a",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "truehdd W64 \u8f6c RIFF WAV\uff1a",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "truehdd \u539f\u59cb PCM\u2192WAV (",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "\u6b63\u5728\u63d0\u53d6\u97f3\u8f68\uff0c\u547d\u4ee4: ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "\u6df7\u6d41\u540e\u6587\u4ef6\u53d8\u5927 (",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "\uff63",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/encode_and_audio_tasks.py",
+      "text": "\uff63 \u5df2\u89e3\u7801\u4e3a \uff62",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": " to reduce size ",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "DTS \u97f3\u8f68 \uff62",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "FLAC \u6bd4 DTS \u5927\uff0c\u4fdd\u7559 DTS \u97f3\u8f68 \uff62",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "TrueHD \u97f3\u8f68 \uff62",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "ffmpeg \u538b\u7f29\u7684 flac \u6bd4\u539f\u97f3\u8f68\u5927\uff0cTrueHD \u4ecd\u4fdd\u7559 FLAC \uff62",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "flac \u6587\u4ef6\u6bd4\u539f\u97f3\u8f68\u5927\uff0cTrueHD \u4ecd\u4fdd\u7559 FLAC \uff62",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "\u4fdd\u7559\u6709\u635f\u97f3\u8f68 \uff62",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "\u6709\u635f\u97f3\u8f68 \uff62",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "\uff08\u6df7\u6d41\u65f6\u7528 mkvmerge -y \u6821\u6b63\u5ef6\u8fdf\uff09",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "\uff63",
+      "count": 8
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "\uff63 compressed to ",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "\uff63 is already FLAC, skipping re-encode",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "\uff63 \u6709\u5ef6\u8fdf ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/media_info_and_track_mapping.py",
+      "text": "\uff63 \u672a\u6210\u529f truehdd \u89e3\u7801\uff0c\u4fdd\u7559\u539f\u76d8\u97f3\u8f68",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/remux_and_episode_workflows.py",
+      "text": "[post-remux] ",
+      "count": 3
+    },
+    {
+      "path": "src/runtime/services_split/remux_and_episode_workflows.py",
+      "text": "abort: could not derive theoretical outputs from remux_cmd",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/remux_and_episode_workflows.py",
+      "text": "abort: missing expected output: ",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/remux_and_episode_workflows.py",
+      "text": "aborted chapter/rename pipeline (theory parse or missing outputs)",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/remux_and_episode_workflows.py",
+      "text": "\u4f7f\u7528 edit-tracks \u9009\u8f68\uff0c\u4e3b MPLS",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/remux_and_episode_workflows.py",
+      "text": "\u9ed8\u8ba4\u9009\u8f68\uff0c\u4e3b MPLS",
+      "count": 1
+    },
+    {
+      "path": "src/runtime/services_split/remux_and_episode_workflows.py",
+      "text": "\uff08\u53c2\u8003 m2ts: ",
+      "count": 2
+    },
+    {
+      "path": "src/runtime/services_split/subtitle_and_chapter_pipeline.py",
+      "text": "\u6df7\u6d41\u547d\u4ee4: ",
+      "count": 1
+    }
+  ]
+}

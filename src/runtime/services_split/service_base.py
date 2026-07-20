@@ -1,9 +1,13 @@
-"""Auto-generated base contracts for `BluraySubtitle` split migration."""
+"""IDE contracts for the split `BluraySubtitle` service.
+
+The declarations are verified against the mixins by
+`tools/check_split_contracts.py`.
+"""
 
 from __future__ import annotations
 
 import threading
-from typing import Any, Optional, Generator
+from typing import Any, Callable, Optional, Generator
 
 from PyQt6.QtWidgets import QTableWidget
 
@@ -187,7 +191,7 @@ class BluraySubtitleServiceBase:
             sp_entries: list[dict[str, int | str]],
             sps_folder: str,
             cancel_event: Optional[threading.Event] = None,
-            progress_cb=None,
+            progress_cb: Optional[Callable[[int, str], None]] = None,
             dst_folder: Optional[str] = None,
             episode_output_names: Optional[list[str]] = None,
             configuration_full: Optional[dict[int, dict[str, int | str]]] = None,
@@ -287,7 +291,7 @@ class BluraySubtitleServiceBase:
         raise NotImplementedError
 
     @staticmethod
-    def _ordered_track_slots_for_remux(m2ts_path: str, copy_audio_track: list[str], copy_sub_track: list[str]) -> list[dict[str, object]]:
+    def _ordered_track_slots_for_remux(m2ts_path: str, copy_audio_track: list[str], copy_sub_track: list[str], dovi_plan: Optional[dict[str, object]]=None) -> list[dict[str, object]]:
         """Reference order: first video, then selected audios / subs by stream ``index``; PID from ``id`` hex."""
         raise NotImplementedError
 
@@ -432,7 +436,7 @@ class BluraySubtitleServiceBase:
         """Stub for `_create_silence_track_for_audio_slot`."""
         raise NotImplementedError
 
-    def _try_remux_mpls_track_aligned_concat(self, mpls_path: str, output_file: str, copy_audio_track: list[str], copy_sub_track: list[str], cover: str, cancel_event: Optional[threading.Event]=None) -> bool:
+    def _try_remux_mpls_track_aligned_concat(self, mpls_path: str, output_file: str, copy_audio_track: list[str], copy_sub_track: list[str], cover: str, cancel_event: Optional[threading.Event]=None, *, max_play_items: Optional[int]=None) -> bool:
         """
         Fallback when direct ``mkvmerge … mpls`` fails (e.g. different track counts across m2ts).
         Track identity uses ``streams[].id`` (e.g. ``0x1011``) as PID; mkvmerge track id = stream ``index``.
@@ -536,5 +540,419 @@ class BluraySubtitleServiceBase:
 
     def extract_lossless(self, mkv_file: str, output_base: Optional[str]=None) -> tuple[int, dict[int, str]]:
         """Stub for `extract_lossless`."""
+        raise NotImplementedError
+
+    @staticmethod
+    def _absolute_selected_mpls_from_conf_row(conf: dict[str, int | str], playlist_dir: str) -> str:
+        raise NotImplementedError
+
+    def _assign_movie_sp_output_names(self, entries: list[dict[str, object]]) -> None:
+        raise NotImplementedError
+
+    @staticmethod
+    def _audio_stream_ok_for_pcm_silence_template(stream: dict[str, object]) -> bool:
+        raise NotImplementedError
+
+    @staticmethod
+    def _canonical_remux_mkv_path(path: str) -> str:
+        raise NotImplementedError
+
+    @staticmethod
+    def _chapter_split_bounds_from_multi_line_remux_cmd(cmd0: str, confs: list[dict[str, object]]) -> list[tuple[int, int]]:
+        raise NotImplementedError
+
+    def _cleanup_getnative_artifacts(self):
+        raise NotImplementedError
+
+    @staticmethod
+    def _clip_ref_slots_for_m2ts(ref_slots: list[dict[str, object]], m2ts_path: str, dovi_plan: Optional[dict[str, object]]=None) -> list[dict[str, object]]:
+        raise NotImplementedError
+
+    @staticmethod
+    def _collect_tsmuxer_demux_files(demux_dir: str, stem_hint: str) -> list[tuple[int, str]]:
+        raise NotImplementedError
+
+    def _compute_mkv_id_to_m2ts_pid_core(self, mp: str, mcfg: dict[str, object]) -> dict[int, int]:
+        raise NotImplementedError
+
+    def _compute_mkv_id_to_m2ts_pid_for_main_mpls(self, mpls_path: str) -> dict[int, int]:
+        raise NotImplementedError
+
+    def _conf_key_matching_episode_basename(self, basename: str, episode_output_names: list[str], configuration: dict[int, dict[str, int | str]]):
+        raise NotImplementedError
+
+    @staticmethod
+    def _configuration_drop_invalid_episode_rows(configuration: dict[int, dict[str, int | str]]) -> dict[int, dict[str, int | str]]:
+        raise NotImplementedError
+
+    def _decode_truehd_atmos_thd_files(self, output_base: str, track_info: dict[int, str]) -> None:
+        raise NotImplementedError
+
+    @staticmethod
+    def _dedupe_remux_shell_lines(cmd: str) -> str:
+        raise NotImplementedError
+
+    @staticmethod
+    def _detect_sp_looping_mpls(mpls_path: str) -> Optional[dict[str, object]]:
+        raise NotImplementedError
+
+    @staticmethod
+    def _disc_paths_for_output_title(bdmv_root: str, selected_mpls_no_ext: str) -> tuple[str, str, str]:
+        raise NotImplementedError
+
+    @staticmethod
+    def _dovi_tool_exe() -> str:
+        raise NotImplementedError
+
+    @staticmethod
+    def _dovi_tool_mux_bl_el(bl_hevc: str, el_hevc: str) -> bool:
+        raise NotImplementedError
+
+    @staticmethod
+    def _enrich_configuration_chapter_bounds(configuration: dict[int, dict[str, int | str]]) -> None:
+        raise NotImplementedError
+
+    @staticmethod
+    def _episode_ident_tid_transport_pid(ident_ep: dict, tid: int) -> Optional[int]:
+        raise NotImplementedError
+
+    @staticmethod
+    def _episode_ident_track_type(ident_ep: dict, tid: int) -> str:
+        raise NotImplementedError
+
+    @staticmethod
+    def _episode_sp_mux_mkv_cache_key(episode_mkv: str) -> str:
+        raise NotImplementedError
+
+    def _estimate_native_from_image(self, image_path: str) -> Optional[dict]:
+        raise NotImplementedError
+
+    def _extract_sample_images(self, video_path: str, temp_dir: str, max_total: int=100) -> list[str]:
+        raise NotImplementedError
+
+    @staticmethod
+    def _ffmpeg_compress_wav_to_codec(wav_path: str, out_path: str, codec: str) -> bool:
+        raise NotImplementedError
+
+    @staticmethod
+    def _filter_video_pids_for_dovi_plan(video_pids: list[int], dovi_plan: Optional[dict[str, object]]) -> list[int]:
+        raise NotImplementedError
+
+    @staticmethod
+    def _finalize_configuration_episode_rows(configuration: dict[int, dict[str, int | str]]) -> dict[int, dict[str, int | str]]:
+        raise NotImplementedError
+
+    @staticmethod
+    def _fix_remux_shell_rm_glob(raw: str) -> str:
+        raise NotImplementedError
+
+    @staticmethod
+    def _format_remux_slot_pid_list(slots: list[dict[str, object]]) -> str:
+        raise NotImplementedError
+
+    @staticmethod
+    def _frame_discriminability_score(image_path: str) -> float:
+        raise NotImplementedError
+
+    @staticmethod
+    def _ident_muxable_track_count(ident_ep: dict) -> int:
+        raise NotImplementedError
+
+    @staticmethod
+    def _in_out_play_item_duration_sec(row: tuple) -> float:
+        raise NotImplementedError
+
+    @staticmethod
+    def _in_out_play_item_key(row: tuple) -> tuple[str, int, int]:
+        raise NotImplementedError
+
+    def _infer_native_resolution(self, video_path: str) -> Optional[dict]:
+        raise NotImplementedError
+
+    @staticmethod
+    def _int_from_mkvmerge_prop(raw: object) -> Optional[int]:
+        raise NotImplementedError
+
+    @staticmethod
+    def _log_getnative(message: str):
+        raise NotImplementedError
+
+    @staticmethod
+    def _log_mkvmerge_identify_slot_gap(ident_path: str, probe_m2ts: str, ref_slots: list[dict[str, object]], ident: Optional[dict[str, object]], reason: str, missing_slots: Optional[list[dict[str, object]]]=None) -> None:
+        raise NotImplementedError
+
+    @staticmethod
+    def _lossless_codec_choice(map_by_idx: dict[str, str], idx_str: str, default: str='flac') -> str:
+        raise NotImplementedError
+
+    def _lossless_submap_from_track_cfg(self, cfg_all: dict[str, object], nk: str) -> dict[str, str]:
+        raise NotImplementedError
+
+    @staticmethod
+    def _map_selected_tracks_to_mpls_track_ids(mpls_path: str, selected_audio_track_indexes: list[str], selected_sub_track_indexes: list[str]) -> tuple[list[str], list[str]]:
+        raise NotImplementedError
+
+    @staticmethod
+    def _merged_mkv_id_to_m2ts_pid_episode_sp(main_map: dict[int, int], sp_selected_pids: list[int]) -> dict[int, int]:
+        raise NotImplementedError
+
+    @staticmethod
+    def _mkvmerge_audio_track_count(media_path: str) -> int:
+        raise NotImplementedError
+
+    @staticmethod
+    def _mkvmerge_das_flag_strings_for_m2ts(m2ts_path: str, copy_audio_track: list[str], copy_sub_track: list[str], dovi_plan: Optional[dict[str, object]]=None) -> tuple[str, str, str]:
+        raise NotImplementedError
+
+    @staticmethod
+    def _mkvmerge_dovi_primary_video_opts(mpls_path: str, dovi_plan: Optional[dict[str, object]]) -> str:
+        raise NotImplementedError
+
+    @staticmethod
+    def _mkvmerge_episode_tid_for_pid(ident_ep: dict, want_pid: int, allowed_types: tuple[str, ...]) -> Optional[int]:
+        raise NotImplementedError
+
+    @staticmethod
+    def _mkvmerge_exe() -> str:
+        raise NotImplementedError
+
+    @staticmethod
+    def _mkvmerge_ident_transport_pid(props: object) -> Optional[int]:
+        raise NotImplementedError
+
+    def _mkvmerge_identify_covers_remux_slots(self, source_path: str, copy_audio_track: list[str], copy_sub_track: list[str]) -> bool:
+        raise NotImplementedError
+
+    @staticmethod
+    def _mkvmerge_identify_tid_for_pid_file(media_path: str, pid: int) -> Optional[int]:
+        raise NotImplementedError
+
+    @staticmethod
+    def _mkvmerge_line_source_mpls_stem(line: str) -> str:
+        raise NotImplementedError
+
+    @staticmethod
+    def _mkvmerge_track_ids_by_type(media_path: str, track_type: str) -> list[int]:
+        raise NotImplementedError
+
+    def _movie_sp_covered_by_table2(self, bdmv_index: int, sp_detail: str, table2_details: list[str]) -> bool:
+        raise NotImplementedError
+
+    @staticmethod
+    def _mpls_hevc_dv_video_pids(mpls_path: str) -> list[int]:
+        raise NotImplementedError
+
+    @staticmethod
+    def _mpls_identify_has_slot(ident: dict[str, object], slot: dict[str, object]) -> bool:
+        raise NotImplementedError
+
+    @staticmethod
+    def _mpls_identify_pids_by_type(ident: dict[str, object]) -> dict[str, list[int]]:
+        raise NotImplementedError
+
+    def _mux_episode_linked_sp_mkvmerge(self, *, episode_mkv: str, sp_mpls_path: str, episode_main_mpls: str, cmd_audio_sp: list[str], cmd_sub_sp: list[str], cancel_event: Optional[threading.Event]) -> bool:
+        raise NotImplementedError
+
+    @staticmethod
+    def _norm_lang_for_track_selection(raw: object) -> str:
+        raise NotImplementedError
+
+    @staticmethod
+    def _norm_lang_mkv(lcode: str) -> str:
+        raise NotImplementedError
+
+    @staticmethod
+    def _parse_tsmuxer_probe_output(text: str) -> list[dict[str, object]]:
+        raise NotImplementedError
+
+    def _patch_missing_audio_with_silence(self, mkv_path: str, ref_slots: list[dict[str, object]], first_m2ts: str, clip_duration_sec: float, work_dir: str, tag: str, exe: str, ui: str) -> bool:
+        raise NotImplementedError
+
+    @staticmethod
+    def _pid_lang_from_m2ts_track_info(track_info: list[dict[str, object]]) -> dict[int, str]:
+        raise NotImplementedError
+
+    @staticmethod
+    def _pid_lang_from_media_streams(streams: list[dict[str, object]]) -> dict[int, str]:
+        raise NotImplementedError
+
+    def _planned_output_names_for_remux(self, bdmv_index_conf: dict[int, list[dict[str, int | str]]]) -> list[str]:
+        raise NotImplementedError
+
+    def _post_remux_finalize_episodes(self, dst_folder: str, bdmv_index_conf: dict[int, list[dict[str, int | str]]], configuration: dict[int, dict[str, int | str]], episode_output_names: Optional[list[str]], cancel_event: Optional[threading.Event]) -> tuple[list[str], bool]:
+        raise NotImplementedError
+
+    @staticmethod
+    def _probe_fps_from_tsmuxer_tracks(tracks: list[dict[str, object]]) -> str:
+        raise NotImplementedError
+
+    @staticmethod
+    def _probe_m2ts_for_remux_source(source_path: str) -> tuple[str, str]:
+        raise NotImplementedError
+
+    @staticmethod
+    def _read_m2ts_track_info(m2ts_path: str) -> list[dict[str, object]]:
+        raise NotImplementedError
+
+    @staticmethod
+    def _ref_slot_pid_set(ref_slots: list[dict[str, object]]) -> set[int]:
+        raise NotImplementedError
+
+    def _remux_exclude_audio_track_ids(self, mkv_file: str, track_info: dict[int, str], track_flac_map: dict[int, str], *, drop_all_source_audio: bool=False) -> list[int]:
+        raise NotImplementedError
+
+    def _remux_fallback_append_silence_pid_order(self, exe: str, ui: str, base_mkv: str, m2ts_pid_list: list[int], audio_slots: list[dict[str, object]], first_m2ts: str, clip_duration_sec: float, work_dir: str, part_tag: str, pid_to_lang: dict[int, str], out_mkv: str) -> Optional[list[int]]:
+        raise NotImplementedError
+
+    @staticmethod
+    def _remux_fallback_demux_slot_guess(fpth: str) -> str:
+        raise NotImplementedError
+
+    def _remux_fallback_merge_demux_with_base(self, exe: str, ui: str, base_mkv: Optional[str], base_pid_list: list[int], demux_by_pid: dict[int, str], pid_to_lang: dict[int, str], out_mkv: str, split_arg: Optional[str]=None, *, base_track_by_pid: Optional[dict[int, int]]=None, pid_order: Optional[list[int]]=None) -> bool:
+        raise NotImplementedError
+
+    @staticmethod
+    def _remux_fallback_promote_merge_to_part_out(part_out: str, merged_path: str) -> bool:
+        raise NotImplementedError
+
+    @staticmethod
+    def _remux_fallback_run_tsmuxer_demux_subset(m2ts_path: str, work_dir: str, part_tag: str, pid_to_lang: dict[int, str], want_pids: set[int], tsm_all: list[dict[str, object]], *, path_tag: Optional[str]=None) -> Optional[dict[int, str]]:
+        raise NotImplementedError
+
+    def _remux_one_m2ts_clip_or_tsmuxer(self, m2ts_path: str, mpls_path: str, first_m2ts: str, ref_slots: list[dict[str, object]], part_out: str, split_arg: str, clip_duration_sec: float, work_dir: str, part_tag: str, exe: str, ui: str) -> bool:
+        raise NotImplementedError
+
+    @staticmethod
+    def _remux_parsed_chapter_bounds_for_theory_count(cmd: str, confs: list[dict[str, int | str]], mpls_path0: str, n_expect: int) -> Optional[list[tuple[int, int]]]:
+        raise NotImplementedError
+
+    def _resolve_lossless_audio_map_for_mkv(self, mkv_path: str, episode_i: int) -> dict[str, str]:
+        raise NotImplementedError
+
+    @staticmethod
+    def _resolve_mpls_path_from_conf(conf: dict[str, int | str], bdmv_root: str='') -> str:
+        raise NotImplementedError
+
+    @staticmethod
+    def _run_tsmuxer_probe(m2ts_path: str) -> str:
+        raise NotImplementedError
+
+    @staticmethod
+    def _sanitize_movie_output_basename(name: str) -> str:
+        raise NotImplementedError
+
+    def _set_dovi_mux_plan_for_mpls(self, mpls_path: str) -> None:
+        raise NotImplementedError
+
+    @staticmethod
+    def _slot_pids_in_order(slots: list[dict[str, object]]) -> list[int]:
+        raise NotImplementedError
+
+    def _sp_m2ts_detail_for_entry(self, bdmv_index: int, mpls_file: str, m2ts_files: list[str]) -> str:
+        raise NotImplementedError
+
+    @staticmethod
+    def _sp_output_is_episode_linked(output_name: str) -> bool:
+        raise NotImplementedError
+
+    @staticmethod
+    def _split_parts_from_start_duration(duration_sec: float) -> str:
+        raise NotImplementedError
+
+    def _try_remux_mpls_single_clip_track_aligned(self, mpls_path: str, output_file: str, copy_audio_track: list[str], copy_sub_track: list[str], cancel_event: Optional[threading.Event]=None) -> bool:
+        raise NotImplementedError
+
+    @staticmethod
+    def _tsmuxer_demux_audio_use_track0_after_identify(fpth: str, slot_type: str) -> bool:
+        raise NotImplementedError
+
+    @staticmethod
+    def _tsmuxer_demux_skip_audio_identify(fpth: str) -> bool:
+        raise NotImplementedError
+
+    @staticmethod
+    def _tsmuxer_exe() -> str:
+        raise NotImplementedError
+
+    @staticmethod
+    def _tsmuxer_has_video_and_subtitles(tracks: list[dict[str, object]]) -> bool:
+        raise NotImplementedError
+
+    @staticmethod
+    def _tsmuxer_mpeg_pid(row: dict[str, object]) -> Optional[int]:
+        raise NotImplementedError
+
+    @staticmethod
+    def _tsmuxer_rows_for_pids(tsm_all: list[dict[str, object]], want_pids: set[int]) -> Optional[list[dict[str, object]]]:
+        raise NotImplementedError
+
+    @staticmethod
+    def _tsmuxer_tracks_ordered_for_ref_slots(tsmuxer_tracks: list[dict[str, object]], ref_slots: list[dict[str, object]]) -> list[dict[str, object]]:
+        raise NotImplementedError
+
+    @staticmethod
+    def _video_pids_on_m2ts(m2ts_path: str) -> list[int]:
+        raise NotImplementedError
+
+    @staticmethod
+    def _wav_channel_count(wav_path: str) -> int:
+        raise NotImplementedError
+
+    @staticmethod
+    def _wav_channel_layout(wav_path: str) -> str:
+        raise NotImplementedError
+
+    @staticmethod
+    def _write_tsmuxer_demux_meta(m2ts_path: str, tracks: list[dict[str, object]], pid_to_lang: dict[int, str], out_meta_path: str, fps_default: str) -> bool:
+        raise NotImplementedError
+
+    def build_movie_mode_configuration(self, selected_mpls: list[tuple[str, str]]) -> tuple[dict[int, dict[str, int | str]], list[str]]:
+        raise NotImplementedError
+
+    def build_movie_mode_sp_entries(self, configuration: dict[int, dict[str, int | str]]) -> list[dict[str, int | str]]:
+        raise NotImplementedError
+
+    @staticmethod
+    def detect_dovi_mux_pair(mpls_path: str, probe_m2ts: str, mux_dolby_vision: bool) -> Optional[dict[str, object]]:
+        raise NotImplementedError
+
+    @staticmethod
+    def m2ts_basenames_from_mpls_timeline_window(mpls_path: str, w0: float, w1: float) -> list[str]:
+        raise NotImplementedError
+
+    @staticmethod
+    def m2ts_file_basenames_from_mpls_playlist(mpls_path: str) -> list[str]:
+        raise NotImplementedError
+
+    @staticmethod
+    def m2ts_file_detail_for_mpls_timeline_window(mpls_path: str, w0: float, w1: float) -> str:
+        raise NotImplementedError
+
+    @staticmethod
+    def m2ts_file_detail_for_standalone_m2ts_paths(m2ts_paths: list[str]) -> str:
+        raise NotImplementedError
+
+    @staticmethod
+    def m2ts_file_detail_from_mpls_playlist(mpls_path: str) -> str:
+        raise NotImplementedError
+
+    @staticmethod
+    def m2ts_file_detail_whole_stream_file(m2ts_path: str) -> str:
+        raise NotImplementedError
+
+    @staticmethod
+    def m2ts_sp_custom_segment_time_window_sec(mpls_path: str, output_name: str) -> Optional[tuple[float, float]]:
+        raise NotImplementedError
+
+    @staticmethod
+    def mkvinfo_dolby_vision_track_id(mkv_path: str) -> Optional[int]:
+        raise NotImplementedError
+
+    @staticmethod
+    def resolve_disc_output_title(bdmv_root: str, selected_mpls_no_ext: str) -> str:
+        raise NotImplementedError
+
+    @staticmethod
+    def theoretical_remux_output_paths_ordered(cmd: str, confs: list[dict[str, int | str]], mpls_path_default: str) -> list[str]:
         raise NotImplementedError
 
