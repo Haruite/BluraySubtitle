@@ -64,7 +64,6 @@ ENCODE_SP_LABELS = ["select", "bdmv_index", "mpls_file", "m2ts_file", "m2ts_file
 DIY_SP_LABELS = ["select", "bdmv_index", "mpls_file", "m2ts_file", "m2ts_file_detail", "m2ts_type", "duration", "tracks", "vpy_path", "edit_vpy", "preview_script", "play"]
 ENCODE_REMUX_LABELS = ["sub_path", "language", "ep_duration", "output_name", "vpy_path", "edit_vpy", "preview_script", "play", "edit_tracks", "edit_chapters", "edit_attachments"]
 ENCODE_REMUX_SP_LABELS = ["duration", "output_name", "vpy_path", "edit_vpy", "preview_script", "play", "edit_tracks", "edit_chapters", "edit_attachments"]
-CONFIGURATION = {}
 DEFAULT_APPROX_EPISODE_DURATION_SECONDS = 24 * 60
 CURRENT_UI_LANGUAGE = "en"
 APP_TITLE = "BluraySubtitle v3.8"

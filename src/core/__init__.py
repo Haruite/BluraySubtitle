@@ -3,7 +3,6 @@
 from .settings import APP_TITLE
 from .settings import BDMV_LABELS
 from .settings import DIY_BDMV_LABELS
-from .settings import CONFIGURATION
 from .settings import CURRENT_UI_LANGUAGE
 from .settings import DEFAULT_APPROX_EPISODE_DURATION_SECONDS
 from .settings import ENCODE_LABELS
@@ -58,7 +57,6 @@ __all__ = [
     "DIY_SP_LABELS",
     "ENCODE_REMUX_LABELS",
     "ENCODE_REMUX_SP_LABELS",
-    "CONFIGURATION",
     "DEFAULT_APPROX_EPISODE_DURATION_SECONDS",
     "CURRENT_UI_LANGUAGE",
     "APP_TITLE",

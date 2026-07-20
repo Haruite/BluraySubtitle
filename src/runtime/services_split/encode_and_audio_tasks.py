@@ -1185,7 +1185,12 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             same_mkv = os.path.normpath(output_file) == src_mkv
             output_file1 = (os.path.splitext(output_file)[0] + '.tmp.mkv') if same_mkv else output_file
             remux_cmd = self.generate_remux_cmd(track_count, track_info, external_audio, output_file1, src_mkv)
-            if self.sub_files and len(self.sub_files) >= i and i > -1:
+            if (
+                    self.sub_files
+                    and len(self.sub_files) >= i
+                    and i > -1
+                    and str(self.sub_files[i - 1] or '').strip()
+            ):
                 lang = 'chi'
                 try:
                     langs = getattr(self, 'episode_subtitle_languages', None) or []
@@ -1287,7 +1292,12 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 return
 
             subtitle_real_path = None
-            if self.sub_files and len(self.sub_files) >= i and i > -1:
+            if (
+                    self.sub_files
+                    and len(self.sub_files) >= i
+                    and i > -1
+                    and str(self.sub_files[i - 1] or '').strip()
+            ):
                 subtitle_real_path = os.path.normpath(self.sub_files[i - 1])
 
             def _patch_output_fmtc_bitdepth_line(line: str) -> tuple[str, bool]:
@@ -1493,7 +1503,12 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             remux_cmd = self.generate_remux_cmd(track_count, track_info, external_audio, output_file1, src_mkv,
                                                 encoded_video_file=encoded_path if os.path.exists(encoded_path) else None)
             if sub_pack_mode == 'soft':
-                if self.sub_files and len(self.sub_files) >= i and i > -1:
+                if (
+                        self.sub_files
+                        and len(self.sub_files) >= i
+                        and i > -1
+                        and str(self.sub_files[i - 1] or '').strip()
+                ):
                     lang = 'chi'
                     try:
                         langs = getattr(self, 'episode_subtitle_languages', None) or []

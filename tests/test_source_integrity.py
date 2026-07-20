@@ -44,6 +44,20 @@ class SourceIntegrityTests(unittest.TestCase):
         self.assertTrue(hasattr(gui_runtime, "BluraySubtitleGUI"))
         self.assertTrue(callable(bootstrap.main))
 
+    def test_legacy_global_configuration_is_removed(self) -> None:
+        production_files = [
+            path
+            for path in (REPOSITORY_ROOT / "src").rglob("*.py")
+            if not EXCLUDED_DIRECTORIES.intersection(path.relative_to(REPOSITORY_ROOT).parts)
+        ]
+        occurrences: list[str] = []
+        for path in production_files:
+            tree = ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
+            if any(isinstance(node, ast.Name) and node.id == "CONFIGURATION" for node in ast.walk(tree)):
+                occurrences.append(str(path.relative_to(REPOSITORY_ROOT)))
+
+        self.assertEqual(occurrences, [])
+
 
 if __name__ == "__main__":
     unittest.main()

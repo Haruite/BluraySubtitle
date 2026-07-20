@@ -461,7 +461,6 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
         configuration = {}
         sub_index = 0
         bdmv_index = 0
-        global CONFIGURATION
         approx_end_time = float(
             getattr(self, 'approx_episode_duration_seconds', DEFAULT_APPROX_EPISODE_DURATION_SECONDS)
             or DEFAULT_APPROX_EPISODE_DURATION_SECONDS)
@@ -539,7 +538,6 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
                     offset += (play_item_in_out_time[2] - play_item_in_out_time[1]) / 45000
                     left_time += (play_item_in_out_time[1] - play_item_in_out_time[2]) / 45000
             configuration = self._finalize_configuration_episode_rows(configuration)
-            CONFIGURATION = configuration
             return configuration
         for folder, chapter, selected_mpls in self.select_mpls_from_table(table):
             disc_output_name = self._resolve_disc_output_name(selected_mpls)
@@ -595,7 +593,6 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
             if sub_index == len(self.sub_files):
                 break
         configuration = self._finalize_configuration_episode_rows(configuration)
-        CONFIGURATION = configuration
         return configuration
 
     def generate_configuration_from_selected_mpls(self, selected_mpls: list[tuple[str, str]],
@@ -607,7 +604,6 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
             return {}
         configuration = {}
         sub_index = 0
-        global CONFIGURATION
         approx_end_time = float(
             getattr(self, 'approx_episode_duration_seconds', DEFAULT_APPROX_EPISODE_DURATION_SECONDS)
             or DEFAULT_APPROX_EPISODE_DURATION_SECONDS)
@@ -698,7 +694,6 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
                     offset += (play_item_in_out_time[2] - play_item_in_out_time[1]) / 45000
                     left_time += (play_item_in_out_time[1] - play_item_in_out_time[2]) / 45000
             configuration = self._finalize_configuration_episode_rows(configuration)
-            CONFIGURATION = configuration
             return configuration
 
         if not self.sub_files:
@@ -766,5 +761,4 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
                 if sub_index == len(self.sub_files):
                     break
         configuration = self._finalize_configuration_episode_rows(configuration)
-        CONFIGURATION = configuration
         return configuration

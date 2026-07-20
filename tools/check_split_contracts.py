@@ -31,7 +31,7 @@ CONTRACTS = (
         "src/runtime/gui_runtime_split",
         "gui_base.py",
         "BluraySubtitleGuiBase",
-        frozenset({"__init_subclass__", "_configuration_snapshot_for_service_run"}),
+        frozenset({"__init_subclass__"}),
         frozenset({"__init__"}),
     ),
 )

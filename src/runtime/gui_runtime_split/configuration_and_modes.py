@@ -1,4 +1,5 @@
 """Target module for configuration and mode-related GUI methods."""
+import copy
 import os
 import re
 import traceback
@@ -774,8 +775,6 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                             idx_after -= 1
                         items.insert(idx_after + 1, one)
                 conf = {i: dict(v) for i, (_, v) in enumerate(items)}
-            global CONFIGURATION
-            CONFIGURATION = conf
             for _k in sorted(conf.keys(), key=lambda x: int(x)):
                 _row = conf[_k]
                 chapter_cfg_chain_print(
@@ -787,6 +786,22 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             return conf
         finally:
             self._end_delayed_busy(busy)
+
+    def _configuration_for_service_run(self) -> dict[int, dict[str, int | str]]:
+        """Build one launch snapshot from the current, fully refreshed GUI state."""
+        if self._is_movie_mode():
+            self._refresh_movie_table2()
+            configuration = getattr(self, '_movie_configuration', None)
+        else:
+            configuration = self._generate_configuration_from_ui_inputs()
+            if configuration:
+                # Configuration generation can add or remove episode rows. Rebuild the
+                # visible tables before launch so row settings and configuration align.
+                self.on_configuration(configuration, update_sp_table=True)
+        if not isinstance(configuration, dict) or not configuration:
+            raise ValueError(self.t('Task configuration is empty'))
+        self._apply_main_remux_cmds_to_configuration(configuration)
+        return copy.deepcopy(configuration)
 
     def _get_approx_episode_duration_seconds(self) -> float:
         combo = getattr(self, 'approx_episode_minutes_combo', None)

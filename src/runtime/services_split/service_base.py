@@ -113,7 +113,7 @@ class BluraySubtitleServiceBase:
         """Stub for `generate_configuration_from_selected_mpls`."""
         raise NotImplementedError
 
-    def generate_bluray_subtitle(self, table: Optional[QTableWidget]=None, configuration: Optional[dict[int, dict[str, int | str]]]=None, cancel_event: Optional[threading.Event]=None):
+    def generate_bluray_subtitle(self, configuration: Optional[dict[int, dict[str, int | str]]]=None, cancel_event: Optional[threading.Event]=None):
         """Stub for `generate_bluray_subtitle`."""
         raise NotImplementedError
 
@@ -462,7 +462,7 @@ class BluraySubtitleServiceBase:
         """Stub for `_sp_track_key_from_entry`."""
         raise NotImplementedError
 
-    def _prepare_episode_run(self, table: Optional[QTableWidget], folder_path: str, configuration: Optional[dict[int, dict[str, int | str]]], ensure_tools: bool) -> tuple[str, set[str], dict[int, list[dict[str, int | str]]]]:
+    def _prepare_episode_run(self, folder_path: str, configuration: Optional[dict[int, dict[str, int | str]]], ensure_tools: bool) -> tuple[str, set[str], dict[int, list[dict[str, int | str]]]]:
         """Stub for `_prepare_episode_run`."""
         raise NotImplementedError
 
@@ -774,9 +774,6 @@ class BluraySubtitleServiceBase:
 
     @staticmethod
     def _pid_lang_from_media_streams(streams: list[dict[str, object]]) -> dict[int, str]:
-        raise NotImplementedError
-
-    def _planned_output_names_for_remux(self, bdmv_index_conf: dict[int, list[dict[str, int | str]]]) -> list[str]:
         raise NotImplementedError
 
     def _post_remux_finalize_episodes(self, dst_folder: str, bdmv_index_conf: dict[int, list[dict[str, int | str]]], configuration: dict[int, dict[str, int | str]], episode_output_names: Optional[list[str]], cancel_event: Optional[threading.Event]) -> tuple[list[str], bool]:

@@ -127,7 +127,6 @@ def remux_one_disc(bdmv_folder: str, movie_root: str, output_root: str) -> None:
             return
         _patch_configuration_mpls_paths(configuration, bdmv_folder, mpls_no_ext)
         sp_entries = bs.build_movie_mode_sp_entries(configuration)
-        bs.configuration = configuration
         os.chdir(bdmv_folder)
         dst_folder = _dst_folder_for_bdmv(movie_root, output_root, bdmv_folder)
         os.makedirs(dst_folder, exist_ok=True)

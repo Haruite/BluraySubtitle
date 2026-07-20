@@ -919,31 +919,33 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 self.exe_button.setEnabled(True)
                 QMessageBox.information(self, " ", "Select the remux folder")
                 return
-            try:
-                remux_folder = os.path.normpath(folder)
-                output_norm = os.path.normpath(output_folder)
-                parent_of_remux = os.path.normpath(os.path.dirname(remux_folder.rstrip(os.sep)))
-                if output_norm == parent_of_remux:
-                    self._current_cancel_event = None
-                    self._reset_exe_button()
-                    self.exe_button.setEnabled(True)
-                    QMessageBox.information(self, " ", "Output folder is parent of input folder, please change output folder")
-                    return
-            except Exception:
-                pass
+            remux_folder = os.path.normpath(folder)
+            output_norm = os.path.normpath(output_folder)
+            parent_of_remux = os.path.normpath(os.path.dirname(remux_folder.rstrip(os.sep)))
+            if output_norm == parent_of_remux:
+                self._current_cancel_event = None
+                self._reset_exe_button()
+                self.exe_button.setEnabled(True)
+                QMessageBox.information(self, " ", "Output folder is parent of input folder, please change output folder")
+                return
             output_folder = self._resolve_remux_output_folder(output_folder)
 
             mkv_rows: list[dict[str, str]] = []
+            out_col = ENCODE_REMUX_LABELS.index('output_name')
+            lang_col = ENCODE_REMUX_LABELS.index('language')
+            sub_col = ENCODE_REMUX_LABELS.index('sub_path')
             for i in range(self.table2.rowCount()):
                 src = self._get_remux_source_path_from_table2_row(i)
                 if not src or not os.path.exists(src):
-                    continue
-                try:
-                    out_col = ENCODE_REMUX_LABELS.index('output_name')
-                    lang_col = ENCODE_REMUX_LABELS.index('language')
-                    sub_col = ENCODE_REMUX_LABELS.index('sub_path')
-                except Exception:
-                    out_col, lang_col, sub_col = 3, 1, 0
+                    self._current_cancel_event = None
+                    self._reset_exe_button()
+                    self.exe_button.setEnabled(True)
+                    QMessageBox.information(
+                        self,
+                        " ",
+                        self.t('Encode source does not exist in row {row}').format(row=i + 1),
+                    )
+                    return
                 out_item = self.table2.item(i, out_col)
                 out_name = out_item.text().strip() if out_item and out_item.text() else os.path.basename(src)
                 sub_item = self.table2.item(i, sub_col)
@@ -963,14 +965,19 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
 
             sp_rows: list[dict[str, str]] = []
             if hasattr(self, 'table3'):
+                out_col = ENCODE_REMUX_SP_LABELS.index('output_name')
                 for i in range(self.table3.rowCount()):
                     src = self._get_remux_source_path_from_table3_row(i)
                     if not src or not os.path.exists(src):
-                        continue
-                    try:
-                        out_col = ENCODE_REMUX_SP_LABELS.index('output_name')
-                    except Exception:
-                        out_col = 1
+                        self._current_cancel_event = None
+                        self._reset_exe_button()
+                        self.exe_button.setEnabled(True)
+                        QMessageBox.information(
+                            self,
+                            " ",
+                            self.t('SP source does not exist in row {row}').format(row=i + 1),
+                        )
+                        return
                     out_item = self.table3.item(i, out_col)
                     out_name = out_item.text().strip() if out_item and out_item.text() else os.path.basename(src)
                     vpy_path = self.get_sp_vpy_path_from_row(i) or self.get_default_vpy_path()
@@ -1063,30 +1070,6 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             self._encode_thread.start()
             return
 
-        sub_files = [self.table2.item(i, 0).text() for i in range(0, self.table2.rowCount()) if self.table2.item(i, 0)]
-        episode_output_names = self._get_episode_output_names_from_table2()
-        episode_subtitle_languages = self._get_episode_subtitle_languages_from_table2()
-        vpy_paths = []
-        for i in range(self.table2.rowCount()):
-            try:
-                vpy_paths.append(self.get_vpy_path_from_row(i))
-            except Exception:
-                vpy_paths.append(self.get_default_vpy_path())
-        sp_vpy_paths = []
-        sp_entries = []
-        if hasattr(self, 'table3'):
-            for i in range(self.table3.rowCount()):
-                try:
-                    sp_vpy_paths.append(self.get_sp_vpy_path_from_row(i))
-                except Exception:
-                    sp_vpy_paths.append(self.get_default_vpy_path())
-                try:
-                    sp_entries.append(self._table3_get_sp_entry_for_row(i))
-                except Exception:
-                    sp_entries.append({
-                        'bdmv_index': 0, 'mpls_file': '', 'm2ts_file': '', 'selected': False, 'output_name': '',
-                        'bdmv_root': '',
-                    })
         selected_mpls = self.get_selected_mpls_no_ext()
         if not selected_mpls:
             self._current_cancel_event = None
@@ -1094,34 +1077,43 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             self.exe_button.setEnabled(True)
             QMessageBox.information(self, " ", "Main MPLS is not selected")
             return
-        if self._is_movie_mode():
-            self._refresh_movie_table2()
-            configuration = getattr(self, '_movie_configuration', {}) or {}
-            if not configuration:
-                self._current_cancel_event = None
-                self._reset_exe_button()
-                self.exe_button.setEnabled(True)
-                QMessageBox.information(self, " ", "Configuration is empty, skipping update")
-                return
-        else:
-            try:
-                self._sync_chapter_tail_trim_episode()
-                configuration = self._generate_configuration_from_ui_inputs()
-            except Exception:
-                configuration = {}
-            if not configuration:
-                configuration = self._configuration_snapshot_for_service_run()
-            if not configuration:
-                self._current_cancel_event = None
-                self._reset_exe_button()
-                self.exe_button.setEnabled(True)
-                QMessageBox.information(self, ' ', 'Configuration is empty, skipping update')
-                return
-
         try:
-            self._apply_main_remux_cmds_to_configuration(configuration)
+            configuration = self._configuration_for_service_run()
+            sub_files = [
+                self.table2.item(row, 0).text() if self.table2.item(row, 0) else ''
+                for row in range(self.table2.rowCount())
+            ]
+            episode_output_names = self._get_episode_output_names_from_table2()
+            episode_subtitle_languages = self._get_episode_subtitle_languages_from_table2()
+            vpy_paths = [
+                self.get_vpy_path_from_row(row)
+                for row in range(self.table2.rowCount())
+            ]
+            sp_vpy_paths = (
+                [
+                    self.get_sp_vpy_path_from_row(row)
+                    for row in range(self.table3.rowCount())
+                ]
+                if hasattr(self, 'table3')
+                else []
+            )
+            sp_entries = (
+                [
+                    self._table3_get_sp_entry_for_row(row)
+                    for row in range(self.table3.rowCount())
+                ]
+                if hasattr(self, 'table3')
+                else []
+            )
         except Exception:
-            pass
+            self._current_cancel_event = None
+            self._reset_exe_button()
+            self.exe_button.setEnabled(True)
+            self._show_error_dialog(
+                f"{self.t('Failed to build the task from the current GUI configuration')}"
+                f"\n\n{traceback.format_exc()}"
+            )
+            return
 
         vspipe_mode = 'bundle' if self.vspipe_mode_combo.currentText() == 'Built-in' else 'system'
         x265_mode = 'bundle' if self.x265_mode_combo.currentText() == 'Built-in' else 'system'

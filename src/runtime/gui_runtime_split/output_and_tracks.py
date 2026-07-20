@@ -174,26 +174,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                     auto_name_map = self._build_episode_output_name_map(conf)
         except Exception:
             auto_name_map = {}
-        movie_conf = getattr(self, '_movie_configuration', None) or {}
         for i in range(self.table2.rowCount()):
-            if self._is_movie_mode() and function_id in (3, 4):
-                mpls_no_ext = ''
-                if isinstance(movie_conf, dict) and i in movie_conf:
-                    mpls_no_ext = str(movie_conf[i].get('selected_mpls') or '').strip()
-                if not mpls_no_ext and isinstance(movie_conf, dict) and movie_conf:
-                    first = movie_conf[sorted(movie_conf.keys())[0]]
-                    mpls_no_ext = str(first.get('selected_mpls') or '').strip()
-                if not mpls_no_ext:
-                    labels = self._table2_labels_remux_or_diy()
-                    if labels and 'bdmv_index' in labels:
-                        bi = self.table2.item(i, labels.index('bdmv_index'))
-                        if bi:
-                            mpls_no_ext = str(bi.data(Qt.ItemDataRole.UserRole) or '').strip()
-                text = self._resolve_output_name_from_mpls(mpls_no_ext) if mpls_no_ext else ''
-                if text and not text.lower().endswith('.mkv'):
-                    text += '.mkv'
-                names.append(text)
-                continue
             item = self.table2.item(i, col)
             text = item.text().strip() if item and item.text() else ''
             if (not text) and i in auto_name_map:

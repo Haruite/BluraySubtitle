@@ -79,7 +79,6 @@ class RemuxWorker(QObject):
                 self.bdmv_path, self.sub_files, self.checked, progress_cb,
                 movie_mode=self.movie_mode, mux_dolby_vision=self.mux_dolby_vision,
             )
-            bs.configuration = self.configuration
             bs.track_selection_config = self.track_selection_config
             bs.track_language_config = self.track_language_config
             bs.track_lossless_audio_config = self.track_lossless_audio_config

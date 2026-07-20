@@ -48,10 +48,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         for _, conf in configuration.items():
             if not isinstance(conf, dict):
                 continue
-            try:
-                mpls_path = self._main_mpls_abs_path_for_remux_cmd_lookup(conf)
-            except Exception:
-                continue
+            mpls_path = self._main_mpls_abs_path_for_remux_cmd_lookup(conf)
             if not mpls_path:
                 continue
             cmd = cmd_map.get(mpls_path, '')
@@ -116,16 +113,19 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             if not selected_paths:
                 continue
             editor = self.table1.cellWidget(r, cmd_col)
-            if isinstance(editor, QPlainTextEdit):
-                lines = [ln.strip() for ln in editor.toPlainText().splitlines() if ln.strip()]
-                if not lines:
-                    continue
-                if len(selected_paths) == 1:
-                    out[selected_paths[0]] = '\n'.join(lines)
-                else:
-                    for i, mpls_path in enumerate(selected_paths):
-                        if i < len(lines):
-                            out[mpls_path] = lines[i]
+            lines = (
+                [line.strip() for line in editor.toPlainText().splitlines() if line.strip()]
+                if isinstance(editor, QPlainTextEdit)
+                else []
+            )
+            if len(lines) != len(selected_paths):
+                raise ValueError(self.t(
+                    'The number of remux commands ({command_count}) must match the number of selected main '
+                    'playlists ({playlist_count})'
+                ).format(command_count=len(lines), playlist_count=len(selected_paths)))
+            # Command lines and selected playlists use the same visible table order.
+            for mpls_path, command in zip(selected_paths, lines):
+                out[mpls_path] = command
         return out
 
     def _build_main_remux_cmd_template(
@@ -1314,19 +1314,6 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         self._exe_button_default_text = self.exe_button.text()
         self._update_exe_button_progress(0, 'Preparing')
 
-        sub_files = [self.table2.item(i, 0).text() for i in range(0, self.table2.rowCount()) if self.table2.item(i, 0)]
-        episode_output_names = self._get_episode_output_names_from_table2()
-        episode_subtitle_languages = self._get_episode_subtitle_languages_from_table2()
-        sp_entries = []
-        if hasattr(self, 'table3'):
-            for i in range(self.table3.rowCount()):
-                try:
-                    sp_entries.append(self._table3_get_sp_entry_for_row(i))
-                except Exception:
-                    sp_entries.append({
-                        'bdmv_index': 0, 'mpls_file': '', 'm2ts_file': '', 'selected': False, 'output_name': '',
-                        'bdmv_root': '',
-                    })
         selected_mpls = self.get_selected_mpls_no_ext()
         if not selected_mpls:
             self._current_cancel_event = None
@@ -1334,33 +1321,31 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             self.exe_button.setEnabled(True)
             QMessageBox.information(self, " ", "Main MPLS is not selected")
             return
-        if self._is_movie_mode():
-            self._refresh_movie_table2()
-            configuration = getattr(self, '_movie_configuration', {}) or {}
-            if not configuration:
-                self._current_cancel_event = None
-                self._reset_exe_button()
-                self.exe_button.setEnabled(True)
-                QMessageBox.information(self, " ", "Configuration is empty, skipping update")
-                return
-        else:
-            try:
-                self._sync_chapter_tail_trim_episode()
-                configuration = self._generate_configuration_from_ui_inputs()
-            except Exception:
-                configuration = {}
-            if not configuration:
-                configuration = self._configuration_snapshot_for_service_run()
-            if not configuration:
-                self._current_cancel_event = None
-                self._reset_exe_button()
-                self.exe_button.setEnabled(True)
-                QMessageBox.information(self, ' ', 'Configuration is empty, skipping update')
-                return
         try:
-            self._apply_main_remux_cmds_to_configuration(configuration)
+            configuration = self._configuration_for_service_run()
+            sub_files = [
+                self.table2.item(row, 0).text() if self.table2.item(row, 0) else ''
+                for row in range(self.table2.rowCount())
+            ]
+            episode_output_names = self._get_episode_output_names_from_table2()
+            episode_subtitle_languages = self._get_episode_subtitle_languages_from_table2()
+            sp_entries = (
+                [
+                    self._table3_get_sp_entry_for_row(row)
+                    for row in range(self.table3.rowCount())
+                ]
+                if hasattr(self, 'table3')
+                else []
+            )
         except Exception:
-            pass
+            self._current_cancel_event = None
+            self._reset_exe_button()
+            self.exe_button.setEnabled(True)
+            self._show_error_dialog(
+                f"{self.t('Failed to build the task from the current GUI configuration')}"
+                f"\n\n{traceback.format_exc()}"
+            )
+            return
 
         _trim_cb = getattr(self, 'trim_copyright_tail_checkbox', None)
         episode_trim_copyright_tail = bool(

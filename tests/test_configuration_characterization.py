@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from src.runtime.gui_runtime_classes.bluray_subtitle_gui_entry import BluraySubtitleGUI
+from src.runtime.gui_runtime_split import remux_and_episode_layout as remux_layout
+from src.runtime.gui_runtime_split.remux_and_episode_layout import RemuxEpisodeLayoutMixin
 from src.runtime.services_split.lifecycle_and_configuration import LifecycleConfigurationMixin
 from src.runtime.services_split.misc_workflows import MiscWorkflowsMixin
+from src.runtime.services_split.remux_and_episode_workflows import RemuxEpisodeWorkflowsMixin
+from src.runtime.services_split.subtitle_and_chapter_pipeline import SubtitleChapterPipelineMixin
 
 
 class _Combo:
@@ -38,37 +43,161 @@ class _TextEdit:
         return self._text
 
 
-class ConfigurationSnapshotTests(unittest.TestCase):
-    def test_service_snapshot_is_a_recursive_copy(self) -> None:
-        source = {
+class _TableItem:
+    def __init__(self, text: str) -> None:
+        self._text = text
+
+    def text(self) -> str:
+        return self._text
+
+
+class _PlaylistTable:
+    def __init__(self, playlist_names: list[str]) -> None:
+        self._playlist_names = playlist_names
+
+    def rowCount(self) -> int:
+        return len(self._playlist_names)
+
+    def cellWidget(self, row: int, column: int) -> _CheckBox | None:
+        return _CheckBox(True) if column == 3 else None
+
+    def item(self, row: int, column: int) -> _TableItem | None:
+        return _TableItem(self._playlist_names[row]) if column == 0 else None
+
+
+class _MainPlaylistTable:
+    def __init__(self, playlist_names: list[str], command_text: str) -> None:
+        self._playlist_table = _PlaylistTable(playlist_names)
+        self._command_editor = _TextEdit(command_text)
+
+    def rowCount(self) -> int:
+        return 1
+
+    def item(self, row: int, column: int) -> _TableItem | None:
+        return _TableItem(r'D:\Disc') if row == 0 and column == 0 else None
+
+    def cellWidget(self, row: int, column: int) -> object | None:
+        if row != 0:
+            return None
+        return self._playlist_table if column == 2 else self._command_editor
+
+
+class ServiceRunConfigurationTests(unittest.TestCase):
+    def test_series_run_uses_current_gui_configuration_and_returns_a_copy(self) -> None:
+        current = {
             0: {
                 "selected_mpls": "00001",
                 "track_ids": ["4352", "4608"],
                 "metadata": {"language": "eng"},
             }
         }
-        owner = SimpleNamespace(_last_configuration_34=source)
-
-        snapshot = BluraySubtitleGUI._configuration_snapshot_for_service_run(owner)
-        snapshot[0]["track_ids"].append("4609")
-        snapshot[0]["metadata"]["language"] = "chi"
-
-        self.assertEqual(source[0]["track_ids"], ["4352", "4608"])
-        self.assertEqual(source[0]["metadata"], {"language": "eng"})
-        self.assertIsNot(snapshot, source)
-        self.assertIsNot(snapshot[0], source[0])
-
-    def test_service_snapshot_returns_empty_dict_without_nonempty_mapping(self) -> None:
-        self.assertEqual(
-            BluraySubtitleGUI._configuration_snapshot_for_service_run(SimpleNamespace()),
-            {},
+        applied: list[dict[int, dict[str, object]]] = []
+        owner = SimpleNamespace(
+            _last_configuration_34={0: {"selected_mpls": "stale"}},
+            _is_movie_mode=lambda: False,
+            _generate_configuration_from_ui_inputs=lambda: current,
+            on_configuration=lambda configuration, update_sp_table=True: None,
+            _apply_main_remux_cmds_to_configuration=lambda value: applied.append(value),
+            t=lambda text: text,
         )
-        self.assertEqual(
-            BluraySubtitleGUI._configuration_snapshot_for_service_run(
-                SimpleNamespace(_last_configuration_34=[])
-            ),
-            {},
+
+        configuration = BluraySubtitleGUI._configuration_for_service_run(owner)
+        configuration[0]["track_ids"].append("4609")
+        configuration[0]["metadata"]["language"] = "chi"
+
+        self.assertEqual(current[0]["track_ids"], ["4352", "4608"])
+        self.assertEqual(current[0]["metadata"], {"language": "eng"})
+        self.assertEqual(applied, [current])
+        self.assertIsNot(configuration, current)
+        self.assertIsNot(configuration[0], current[0])
+
+    def test_movie_run_refreshes_and_uses_current_movie_configuration(self) -> None:
+        current = {0: {"selected_mpls": "movie"}}
+        owner = SimpleNamespace(
+            _movie_configuration={0: {"selected_mpls": "stale"}},
+            _is_movie_mode=lambda: True,
+            _apply_main_remux_cmds_to_configuration=lambda value: None,
+            t=lambda text: text,
         )
+
+        def refresh() -> None:
+            owner._movie_configuration = current
+
+        owner._refresh_movie_table2 = refresh
+
+        configuration = BluraySubtitleGUI._configuration_for_service_run(owner)
+
+        self.assertEqual(configuration, current)
+        self.assertIsNot(configuration, current)
+
+    def test_current_configuration_failure_is_not_replaced_by_old_snapshot(self) -> None:
+        def fail() -> dict[int, dict[str, object]]:
+            raise RuntimeError("invalid current state")
+
+        owner = SimpleNamespace(
+            _last_configuration_34={0: {"selected_mpls": "stale"}},
+            _is_movie_mode=lambda: False,
+            _generate_configuration_from_ui_inputs=fail,
+            on_configuration=lambda configuration, update_sp_table=True: None,
+            _apply_main_remux_cmds_to_configuration=lambda value: None,
+            t=lambda text: text,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "invalid current state"):
+            BluraySubtitleGUI._configuration_for_service_run(owner)
+
+    def test_empty_current_configuration_is_an_error(self) -> None:
+        owner = SimpleNamespace(
+            _last_configuration_34={0: {"selected_mpls": "stale"}},
+            _is_movie_mode=lambda: False,
+            _generate_configuration_from_ui_inputs=lambda: {},
+            on_configuration=lambda configuration, update_sp_table=True: None,
+            _apply_main_remux_cmds_to_configuration=lambda value: None,
+            t=lambda text: text,
+        )
+
+        with self.assertRaisesRegex(ValueError, "Task configuration is empty"):
+            BluraySubtitleGUI._configuration_for_service_run(owner)
+
+
+class MainRemuxCommandMappingTests(unittest.TestCase):
+    def test_each_selected_main_playlist_maps_to_one_command_line(self) -> None:
+        owner = SimpleNamespace(
+            table1=_MainPlaylistTable(['00001.mpls', '00002.mpls'], 'command one\ncommand two'),
+            t=lambda text: text,
+        )
+
+        with patch.multiple(
+                remux_layout,
+                QTableWidget=_PlaylistTable,
+                QToolButton=_CheckBox,
+                QPlainTextEdit=_TextEdit,
+        ):
+            result = RemuxEpisodeLayoutMixin._collect_main_remux_cmd_map_from_table1(owner)
+
+        self.assertEqual(list(result.values()), ['command one', 'command two'])
+
+    def test_command_count_must_match_selected_main_playlist_count(self) -> None:
+        mismatches = [
+            (['00001.mpls'], ''),
+            (['00001.mpls'], 'command one\ncommand two'),
+            (['00001.mpls', '00002.mpls'], 'command one'),
+        ]
+
+        with patch.multiple(
+                remux_layout,
+                QTableWidget=_PlaylistTable,
+                QToolButton=_CheckBox,
+                QPlainTextEdit=_TextEdit,
+        ):
+            for playlist_names, command_text in mismatches:
+                with self.subTest(playlist_names=playlist_names, command_text=command_text):
+                    owner = SimpleNamespace(
+                        table1=_MainPlaylistTable(playlist_names, command_text),
+                        t=lambda text: text,
+                    )
+                    with self.assertRaisesRegex(ValueError, 'must match'):
+                        RemuxEpisodeLayoutMixin._collect_main_remux_cmd_map_from_table1(owner)
 
 
 class ConfigurationRowTests(unittest.TestCase):
@@ -162,6 +291,62 @@ class ConfigurationRowTests(unittest.TestCase):
                 2: "EP3 DiscA_BD_Vol_001-001.mkv",
             },
         )
+
+    def test_movie_output_name_comes_from_the_visible_table_cell(self) -> None:
+        output_item = SimpleNamespace(text=lambda: "Custom Movie Name.mkv")
+        table = SimpleNamespace(
+            rowCount=lambda: 1,
+            item=lambda row, column: output_item,
+        )
+        owner = SimpleNamespace(
+            table2=table,
+            get_selected_function_id=lambda: 3,
+            _is_movie_mode=lambda: True,
+        )
+
+        self.assertEqual(
+            BluraySubtitleGUI._get_episode_output_names_from_table2(owner),
+            ["Custom Movie Name.mkv"],
+        )
+
+
+class ExplicitServiceConfigurationTests(unittest.TestCase):
+    def test_episode_run_requires_explicit_configuration(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Task configuration is required"):
+            RemuxEpisodeWorkflowsMixin._prepare_episode_run(
+                SimpleNamespace(),
+                "unused",
+                None,
+                False,
+            )
+
+    def test_subtitle_generation_requires_explicit_configuration(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Task configuration is required"):
+            SubtitleChapterPipelineMixin.generate_bluray_subtitle(
+                SimpleNamespace(),
+                configuration=None,
+            )
+
+    def test_episode_run_rejects_invalid_chapter_range_before_writing(self) -> None:
+        configuration = {
+            0: {
+                "bdmv_index": 1,
+                "chapter_index": 4,
+                "start_at_chapter": 4,
+                "end_at_chapter": 4,
+            }
+        }
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "End chapter must be greater than start chapter in row 1",
+        ):
+            RemuxEpisodeWorkflowsMixin._prepare_episode_run(
+                SimpleNamespace(),
+                "unused",
+                configuration,
+                False,
+            )
 
 
 class GuiEncodeConfigurationTests(unittest.TestCase):

@@ -34,6 +34,7 @@ It brings the following five areas of functionality together in one application:
 - **Table-centered compact** workflow.
 - Press the **bottom** button to start work; the UI **stays responsive** while jobs run.
 - On-screen settings drive internal processing—**what you see is what you get**.
+- If the current GUI state cannot produce a valid task configuration, the task does not start and reports an error; a previous configuration is never reused.
 
 ### Series / Movie Mode
 
@@ -67,7 +68,8 @@ Encode mode supports two input sources:
 - Blu-ray (original disc layout)
 - Remux (MKV)
 
-The **main playlist** supports editing the mux command (`remux_cmd`).
+The **main playlist** supports editing the mux command (`remux_cmd`). Every selected main playlist must have exactly
+one non-empty command line; a count mismatch is rejected before the task starts.
 
 Encode options include:
 

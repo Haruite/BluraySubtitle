@@ -11,8 +11,9 @@ from typing import Any, Callable, Optional
 from PyQt6.QtWidgets import QTableWidget
 
 from src.bdmv import Chapter, M2TS, pid_to_lang_from_m2ts_path
-from src.core import CONFIGURATION, FFMPEG_PATH, MKV_MERGE_PATH, MKV_EXTRACT_PATH, mkvtoolnix_ui_language_arg, \
+from src.core import FFMPEG_PATH, MKV_MERGE_PATH, MKV_EXTRACT_PATH, mkvtoolnix_ui_language_arg, \
     MKV_PROP_EDIT_PATH
+from src.core.i18n import translate_text
 from src.domain import MKV
 from src.exports.utils import get_index_to_m2ts_and_offset, append_ogm_chapter_lines, force_remove_folder, \
     force_remove_file, print_terminal_line, print_exc_terminal, get_time_str
@@ -63,17 +64,14 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                 out[pid] = lang
         return out
 
-    def generate_bluray_subtitle(self, table: Optional[QTableWidget] = None,
+    def generate_bluray_subtitle(self,
                                  configuration: Optional[dict[int, dict[str, int | str]]] = None,
                                  cancel_event: Optional[threading.Event] = None):
-        if configuration is not None:
-            self.configuration = configuration
-        elif CONFIGURATION:
-            self.configuration = CONFIGURATION
-        else:
-            if table is None:
-                raise ValueError('table is required when configuration is not provided')
-            self.configuration = self.generate_configuration(table)
+        if configuration is None:
+            raise ValueError(translate_text('Task configuration is required'))
+        if not configuration:
+            raise ValueError(translate_text('Task configuration is empty'))
+        self.configuration = configuration
         if not self.sub_files:
             return
         self._preload_subtitles(self.sub_files, cancel_event=cancel_event)

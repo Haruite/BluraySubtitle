@@ -6,7 +6,6 @@ The declarations are verified against the mixins by
 
 from __future__ import annotations
 
-import copy
 from typing import Any, Optional
 
 from PyQt6.QtCore import QPoint, Qt, QProcess
@@ -164,17 +163,13 @@ class BluraySubtitleGuiBase(QWidget):
         self.x265_params_label = None
         self.x265_preset_combo = None
 
-    def _configuration_snapshot_for_service_run(self) -> dict[int, dict[str, int | str]]:
-        """Deep copy of table2-authoritative episode configuration for remux/encode workers."""
-        cfg = getattr(self, '_last_configuration_34', None)
-        if isinstance(cfg, dict) and cfg:
-            return copy.deepcopy(cfg)
-        return {}
+    def _configuration_for_service_run(self) -> dict[int, dict[str, int | str]]:
+        raise NotImplementedError
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
         for _name, _obj in BluraySubtitleGuiBase.__dict__.items():
-            if _name in ('__init__', '__init_subclass__', '_configuration_snapshot_for_service_run'):
+            if _name in ('__init__', '__init_subclass__'):
                 continue
             _fn = None
             if isinstance(_obj, staticmethod):
