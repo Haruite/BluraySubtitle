@@ -1064,38 +1064,13 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                         info.resizeColumnsToContents()
 
     def get_mkv_files_in_table_order(self):
-        """
-        Get mkv files from table2 in the order they are displayed (respecting sorting).
-        """
+        """Return MKV paths in their current visible table order."""
+        path_col = 0 if self.get_selected_function_id() == 2 else 1
         mkv_files = []
-        # Get the path column index based on selected function
-        if self.get_selected_function_id() == 2:
-            path_col = 0  # MKV_LABELS = ['path', 'duration']
-            sort_col = 0
-        else:
-            path_col = 1  # SUBTITLE_LABELS = ['select', 'path', ...]
-            sort_col = 1
-
-        # Get all rows with their data
-        rows_data = []
         for row_index in range(self.table2.rowCount()):
             item = self.table2.item(row_index, path_col)
             if item and item.text():
-                rows_data.append((row_index, item.text()))
-
-        # Check if table is sorted on path column
-        sort_column = self.table2.horizontalHeader().sortIndicatorSection()
-        sort_order = self.table2.horizontalHeader().sortIndicatorOrder()
-
-        # If sorted on path column, sort rows_data accordingly
-        if sort_column == sort_col:
-            rows_data.sort(key=lambda x: x[1], reverse=(sort_order == Qt.SortOrder.DescendingOrder))
-
-        # Extract the sorted mkv file paths
-        for _, path in rows_data:
-            if path:
-                mkv_files.append(path)
-
+                mkv_files.append(item.text())
         return mkv_files
 
     def on_bdmv_folder_path_change(self):

@@ -2,6 +2,7 @@
 
 from .app import BluraySubtitle
 from .app import BluraySubtitleGUI
+from .app import ChapterWorker
 from .app import CustomBox
 from .app import CustomTableWidget
 from .app import EncodeMkvFolderWorker
@@ -16,6 +17,7 @@ __all__ = [
     "BluraySubtitle",
     "FilePathTableWidgetItem",
     "CustomTableWidget",
+    "ChapterWorker",
     "RemuxWorker",
     "EncodeWorker",
     "EncodeMkvFolderWorker",

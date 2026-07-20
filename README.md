@@ -299,6 +299,14 @@ Typical flow:
 3. Verify main MPLS.  
 4. Run chapter write.
 
+Behavior:
+
+- MKVs are initially listed by filename. The task captures and uses their current visible table order when it starts.
+- Selected main playlists are used in order, and MKVs are matched sequentially through their durations and playlist chapter marks. MKV filenames do not need a `BD_Vol_NNN` marker.
+- **Edit Original File Directly** applies chapters with `mkvpropedit`. When it is unchecked, `mkvmerge` writes each result to an `output` subfolder of the source MKV directory.
+- Every main playlist, MKV input, required MKVToolNix executable, and deterministic output collision is checked before the worker starts. Existing outputs are errors and are never overwritten.
+- Chapter matching is planned before any MKV is changed. If the selected playlists cannot cover all listed MKVs, the task stops without writing chapters.
+
 ## 3) Blu-ray Remux
 
 Typical flow:

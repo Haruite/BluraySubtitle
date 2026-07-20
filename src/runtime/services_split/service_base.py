@@ -168,6 +168,10 @@ class BluraySubtitleServiceBase:
         """Stub for `_chapter_bounds_from_split_windows`."""
         raise NotImplementedError
 
+    def add_chapters_to_mkv(self, mkv_targets: list[tuple[str, str]], selected_mpls: list[str], edit_original: bool, cancel_event: Optional[threading.Event]=None) -> None:
+        """Match ordered MKVs to ordered playlists and apply the resulting chapter documents."""
+        raise NotImplementedError
+
     def _add_chapter_to_mkv_by_duration(self, mkv_files: list[str], table: Optional[QTableWidget]=None, selected_mpls: Optional[list[tuple[str, str]]]=None, cancel_event: Optional[threading.Event]=None) -> None:
         """Stub for `_add_chapter_to_mkv_by_duration`."""
         raise NotImplementedError

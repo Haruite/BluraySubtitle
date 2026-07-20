@@ -1,6 +1,7 @@
 """GUI and worker/runtime related exports."""
 
 from .gui_runtime_classes import BluraySubtitleGUI
+from .gui_runtime_classes import ChapterWorker
 from .gui_runtime_classes import CustomBox
 from .gui_runtime_classes import CustomTableWidget
 from .gui_runtime_classes import EncodeMkvFolderWorker
@@ -16,6 +17,7 @@ __all__ = [
     "BluraySubtitle",
     "FilePathTableWidgetItem",
     "CustomTableWidget",
+    "ChapterWorker",
     "RemuxWorker",
     "EncodeWorker",
     "EncodeMkvFolderWorker",

@@ -2,8 +2,7 @@ import os
 import subprocess
 from struct import unpack
 
-from src.core import find_mkvtoolnix
-from src.core import mkvtoolnix_ui_language_arg
+from src.core import find_mkvtoolnix, get_mkvtoolnix_ui_language
 from src.core import settings as core_settings
 from src.core.i18n import translate_text
 
@@ -151,25 +150,63 @@ class MKV:
 
         raise RuntimeError(f"Cannot parse MKV duration from EBML: {self.path}")
 
-    def add_chapter(self, edit_file: bool):
-        with open('chapter.txt', 'r', encoding='utf-8-sig') as f:
-            content = f.read()
-        if content == 'CHAPTER01=00:00:00.000\nCHAPTER01NAME=Chapter 01':
-            print(f'{translate_text("[chapter-debug] ")}{translate_text("skip writing trivial single chapter for: ")}{self.path}')
-            return
+    def add_chapter(
+            self,
+            edit_file: bool,
+            chapter_path: str = 'chapter.txt',
+            output_path: str | None = None,
+    ) -> None:
+        with open(chapter_path, 'r', encoding='utf-8-sig') as chapter_file:
+            chapter_text = chapter_file.read()
+        normalized_text = chapter_text.replace('\r\n', '\n').strip()
+        trivial_chapter = 'CHAPTER01=00:00:00.000\nCHAPTER01NAME=Chapter 01'
+        has_meaningful_chapters = bool(normalized_text) and normalized_text != trivial_chapter
+
+        ui_language = get_mkvtoolnix_ui_language()
         if edit_file:
-            print(f'{translate_text("[chapter-debug] ")}{translate_text("apply chapter.txt via mkvpropedit -> ")}{self.path}')
-            subprocess.Popen(
-                rf'"{core_settings.MKV_PROP_EDIT_PATH}" {mkvtoolnix_ui_language_arg()} "{self.path}" --chapters chapter.txt',
-                shell=True,
-            ).wait()
+            if not has_meaningful_chapters:
+                return
+            executable = core_settings.MKV_PROP_EDIT_PATH
+            if not executable or not os.path.isfile(executable):
+                raise FileNotFoundError(translate_text('mkvpropedit not found'))
+            command = [
+                executable,
+                '--ui-language', ui_language,
+                self.path,
+                '--chapters', chapter_path,
+            ]
+            failed_message = translate_text('mkvpropedit failed for: {path}').format(path=self.path)
+            failed_output = None
         else:
-            new_path = os.path.join(os.path.dirname(self.path), 'output', os.path.basename(self.path))
-            print(f'{translate_text("[chapter-debug] ")}{translate_text("mux with chapter.txt via mkvmerge -> ")}{new_path}')
-            subprocess.Popen(
-                rf'"{core_settings.MKV_MERGE_PATH}" {mkvtoolnix_ui_language_arg()} --chapters chapter.txt -o "{new_path}" "{self.path}"',
-                shell=True,
-            ).wait()
+            executable = core_settings.MKV_MERGE_PATH
+            if not executable or not os.path.isfile(executable):
+                raise FileNotFoundError(translate_text('mkvmerge not found'))
+            new_path = output_path or os.path.join(
+                os.path.dirname(self.path), 'output', os.path.basename(self.path)
+            )
+            if os.path.exists(new_path):
+                raise FileExistsError(
+                    translate_text('Output file already exists: {path}').format(path=new_path)
+                )
+            output_directory = os.path.dirname(new_path)
+            if output_directory:
+                os.makedirs(output_directory, exist_ok=True)
+            command = [executable, '--ui-language', ui_language]
+            if has_meaningful_chapters:
+                command.extend(['--chapters', chapter_path])
+            command.extend(['-o', new_path, self.path])
+            failed_message = translate_text('mkvmerge failed for: {path}').format(path=self.path)
+            failed_output = new_path
+
+        result = subprocess.run(command, shell=False)
+        if result.returncode in (0, 1):
+            return
+        if failed_output and os.path.exists(failed_output):
+            try:
+                os.remove(failed_output)
+            except OSError:
+                pass
+        raise RuntimeError(failed_message)
 
 
 __all__ = ["MKV"]

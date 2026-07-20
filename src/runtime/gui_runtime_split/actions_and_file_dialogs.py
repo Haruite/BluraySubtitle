@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPlainTextEdit, QWidge
 from src.bdmv import Chapter
 from src.core import MKV_LABELS, REMUX_LABELS, DIY_REMUX_LABELS, ENCODE_LABELS, SUBTITLE_LABELS, ENCODE_REMUX_LABELS, \
     ENCODE_REMUX_SP_LABELS, CURRENT_UI_LANGUAGE, find_mkvtoolnix, is_docker
+import src.core.settings as core_settings
 from src.core.i18n import translate_text
 from src.domain import MKV, Ass, SRT, Subtitle
 from src.exports.utils import (
@@ -34,9 +35,10 @@ from src.exports.utils import (
 from src.runtime.gui_runtime_classes.encode_mkv_folder_worker import EncodeMkvFolderWorker
 from src.runtime.gui_runtime_classes.encode_worker import EncodeWorker
 from src.runtime.gui_runtime_classes.file_path_table_widget_item import FilePathTableWidgetItem
+from src.runtime.gui_runtime_classes.chapter_worker import AddChaptersRequest, ChapterWorker
 from src.runtime.gui_runtime_classes.merge_worker import MergeSubtitleRequest, MergeWorker
 from src.runtime.gui_runtime_classes.subtitle_folder_scan_worker import SubtitleFolderScanWorker
-from src.runtime.services import BluraySubtitle, _Cancelled
+from src.runtime.services import BluraySubtitle
 from .gui_base import BluraySubtitleGuiBase
 
 
@@ -730,51 +732,104 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             pass
 
     def add_chapters(self):
+        try:
+            selected_mpls = self.get_selected_mpls_no_ext()
+            if not selected_mpls:
+                raise ValueError(self.t('Main MPLS is not selected'))
+            selected_mpls_paths = []
+            for _, selected_mpls_no_ext in selected_mpls:
+                mpls_path = selected_mpls_no_ext + '.mpls'
+                if not os.path.isfile(mpls_path):
+                    raise FileNotFoundError(
+                        self.t('Selected main playlist does not exist: {path}').format(path=mpls_path)
+                    )
+                selected_mpls_paths.append(selected_mpls_no_ext)
+
+            mkv_files = self.get_mkv_files_in_table_order()
+            if not mkv_files:
+                raise ValueError(self.t('MKV file is not selected'))
+            for mkv_path in mkv_files:
+                if not os.path.isfile(mkv_path):
+                    raise FileNotFoundError(
+                        self.t('MKV file does not exist: {path}').format(path=mkv_path)
+                    )
+
+            edit_original = self.checkbox1.isChecked()
+            find_mkvtoolnix()
+            required_tool = core_settings.MKV_PROP_EDIT_PATH if edit_original else core_settings.MKV_MERGE_PATH
+            if not required_tool or not os.path.isfile(required_tool):
+                tool_name = 'mkvpropedit not found' if edit_original else 'mkvmerge not found'
+                raise FileNotFoundError(self.t(tool_name))
+
+            targets = []
+            planned_outputs = set()
+            for mkv_path in mkv_files:
+                output_path = mkv_path if edit_original else os.path.join(
+                    os.path.dirname(mkv_path), 'output', os.path.basename(mkv_path)
+                )
+                if not edit_original:
+                    normalized_output = os.path.normcase(os.path.abspath(output_path))
+                    if normalized_output in planned_outputs:
+                        raise ValueError(
+                            self.t('Duplicate output path: {path}').format(path=output_path)
+                        )
+                    if os.path.exists(output_path):
+                        raise FileExistsError(
+                            self.t('Output file already exists: {path}').format(path=output_path)
+                        )
+                    planned_outputs.add(normalized_output)
+                targets.append((mkv_path, output_path))
+        except (OSError, ValueError) as error:
+            self._show_error_dialog(str(error))
+            return False
+
+        request = AddChaptersRequest(
+            bdmv_path=self.bdmv_folder_path.text().strip(),
+            mkv_targets=tuple(targets),
+            selected_mpls=tuple(selected_mpls_paths),
+            edit_original=edit_original,
+        )
         cancel_event = threading.Event()
         self._current_cancel_event = cancel_event
         self._exe_button_default_text = self.exe_button.text()
-        self._update_exe_button_progress(0, 'Editing' if self.checkbox1.isChecked() else 'Muxing')
+        self._exe_button_progress_value = 0
+        self._exe_button_progress_text = 'Editing' if edit_original else 'Muxing'
+        self._update_exe_button_progress(0, self._exe_button_progress_text)
+        self._chapter_thread = QThread(self)
+        self._chapter_worker = ChapterWorker(request, cancel_event)
+        self._chapter_worker.moveToThread(self._chapter_thread)
+        self._chapter_thread.started.connect(self._chapter_worker.run)
+        self._chapter_worker.progress.connect(self._on_exe_button_progress_value)
+        self._chapter_worker.label.connect(self._on_exe_button_progress_text)
 
-        # Use sorted mkv files if table is sorted, otherwise use original order
-        mkv_files = self.get_mkv_files_in_table_order()
-        if not mkv_files:
-            mkv_files = [self.table2.item(mkv_index, 0).text() for mkv_index in range(self.table2.rowCount())]
-        try:
-            chapter_cfg: dict[int, dict[str, int | str]] = {}
-            try:
-                if not self._is_movie_mode():
-                    chapter_cfg = self._generate_configuration_from_ui_inputs()
-            except Exception:
-                chapter_cfg = {}
-            bs = BluraySubtitle(
-                self.bdmv_folder_path.text(),
-                mkv_files,
-                self.checkbox1.isChecked(),
-                self._update_exe_button_progress
-            )
-            bs.configuration = chapter_cfg
-            bs.add_chapter_to_mkv(
-                mkv_files, self.table1, cancel_event=cancel_event,
-                configuration=chapter_cfg if chapter_cfg else None,
-            )
+        def cleanup():
             self._current_cancel_event = None
             self._reset_exe_button()
-            self.exe_button.setEnabled(True)
-            if self.checkbox1.isChecked():
+            if self._chapter_thread:
+                self._chapter_thread.quit()
+                self._chapter_thread.wait()
+                self._chapter_thread.deleteLater()
+                self._chapter_thread = None
+            if self._chapter_worker:
+                self._chapter_worker.deleteLater()
+                self._chapter_worker = None
+
+        def on_finished():
+            cleanup()
+            if request.edit_original:
                 self._show_bottom_message('Chapters added to MKV successfully')
             else:
                 self._show_bottom_message('Chapters added successfully, new MKV is in output folder')
-        except _Cancelled:
-            self._current_cancel_event = None
-            self._reset_exe_button()
-            self.exe_button.setEnabled(True)
-        except Exception as e:
-            self._current_cancel_event = None
-            self._reset_exe_button()
-            self.exe_button.setEnabled(True)
-            self._show_error_dialog(traceback.format_exc())
-        else:
-            bs.completion()
+
+        def on_failed(message: str):
+            cleanup()
+            self._show_error_dialog(message)
+
+        self._chapter_worker.finished.connect(on_finished)
+        self._chapter_worker.canceled.connect(cleanup)
+        self._chapter_worker.failed.connect(on_failed)
+        self._chapter_thread.start()
+        return True
 
     def create_language_combo(self, initial: str = 'chi', parent: Optional[QWidget] = None) -> QComboBox:
         combo = QComboBox(parent)

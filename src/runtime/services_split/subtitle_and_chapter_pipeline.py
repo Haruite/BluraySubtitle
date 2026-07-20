@@ -577,6 +577,116 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
             bounds.append((s, e))
         return bounds
 
+    def add_chapters_to_mkv(
+            self,
+            mkv_targets: list[tuple[str, str]],
+            selected_mpls: list[str],
+            edit_original: bool,
+            cancel_event: Optional[threading.Event] = None,
+    ) -> None:
+        """Match ordered MKVs to ordered playlists and apply the resulting chapter documents."""
+        if not mkv_targets:
+            raise ValueError(translate_text('MKV file is not selected'))
+        if not selected_mpls:
+            raise ValueError(translate_text('Main MPLS is not selected'))
+
+        for _, output_path in mkv_targets:
+            if not edit_original and os.path.exists(output_path):
+                raise FileExistsError(
+                    translate_text('Output file already exists: {path}').format(path=output_path)
+                )
+
+        durations = []
+        for target_index, (mkv_path, _) in enumerate(mkv_targets):
+            if cancel_event and cancel_event.is_set():
+                raise _Cancelled()
+            durations.append(MKV(mkv_path).get_duration())
+            self._progress(int((target_index + 1) / len(mkv_targets) * 250), 'Preparing')
+
+        # Each matching chapter mark closes the current MKV. The remaining marks at
+        # the end of one playlist belong to that playlist's final unmatched MKV.
+        chapter_documents: list[tuple[str, str, str]] = []
+        target_index = 0
+        for selected_mpls_no_ext in selected_mpls:
+            if target_index >= len(mkv_targets):
+                break
+            if cancel_event and cancel_event.is_set():
+                raise _Cancelled()
+            mpls_path = selected_mpls_no_ext
+            if not mpls_path.lower().endswith('.mpls'):
+                mpls_path += '.mpls'
+            chapter = Chapter(mpls_path)
+            current_duration = durations[target_index]
+            play_item_duration = 0.0
+            completed_episode_duration = 0.0
+            chapter_number = 0
+            chapter_lines: list[str] = []
+
+            for play_item_id, (_, in_time, out_time) in enumerate(chapter.in_out_time):
+                if target_index >= len(mkv_targets):
+                    break
+                if cancel_event and cancel_event.is_set():
+                    raise _Cancelled()
+                for mark_timestamp in chapter.mark_info.get(play_item_id) or []:
+                    if cancel_event and cancel_event.is_set():
+                        raise _Cancelled()
+                    relative_time = play_item_duration + (
+                        mark_timestamp - in_time
+                    ) / 45000 - completed_episode_duration
+                    if abs(relative_time - current_duration) < 0.1:
+                        source_path, output_path = mkv_targets[target_index]
+                        chapter_documents.append(
+                            (source_path, output_path, '\n'.join(chapter_lines))
+                        )
+                        completed_episode_duration += relative_time
+                        target_index += 1
+                        if target_index >= len(mkv_targets):
+                            break
+                        current_duration = durations[target_index]
+                        chapter_number = 0
+                        chapter_lines = []
+                        relative_time = 0.0
+
+                    chapter_number += 1
+                    append_ogm_chapter_lines(
+                        chapter_lines,
+                        chapter_number,
+                        max(0.0, float(relative_time)),
+                    )
+                play_item_duration += (out_time - in_time) / 45000
+
+            if target_index < len(mkv_targets):
+                source_path, output_path = mkv_targets[target_index]
+                chapter_documents.append((source_path, output_path, '\n'.join(chapter_lines)))
+                target_index += 1
+
+        if target_index < len(mkv_targets):
+            unmatched_path = mkv_targets[target_index][0]
+            raise ValueError(
+                translate_text(
+                    'Could not map all MKV files to the selected main playlists: {path}'
+                ).format(path=unmatched_path)
+            )
+
+        with tempfile.TemporaryDirectory(prefix='bluray-subtitle-chapters-') as temporary_directory:
+            total = len(chapter_documents)
+            for document_index, (source_path, output_path, chapter_text) in enumerate(
+                    chapter_documents, start=1):
+                if cancel_event and cancel_event.is_set():
+                    raise _Cancelled()
+                chapter_path = os.path.join(
+                    temporary_directory, f'chapter-{document_index:04d}.txt'
+                )
+                with open(chapter_path, 'w', encoding='utf-8-sig') as chapter_file:
+                    chapter_file.write(chapter_text)
+                MKV(source_path).add_chapter(
+                    edit_original,
+                    chapter_path,
+                    None if edit_original else output_path,
+                )
+                self._progress(250 + int(document_index / total * 750), 'Writing Chapters')
+        self._progress(1000, 'Done')
+
     def _add_chapter_to_mkv_by_duration(
             self,
             mkv_files: list[str],
