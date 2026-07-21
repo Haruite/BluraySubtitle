@@ -167,11 +167,11 @@ RUN set -eux; \
       aarch64|arm64) DOVI_ARCH=aarch64 ;; \
       *) echo "unsupported arch for dovi_tool: $(uname -m)" >&2; exit 1 ;; \
     esac; \
-    cd /tmp/dovi; \
+    mkdir -p /tmp/dovi_bin && cd /tmp/dovi_bin; \
     wget -q "https://github.com/quietvoid/dovi_tool/releases/download/${DOVI_VER}/dovi_tool-${DOVI_VER}-${DOVI_ARCH}-unknown-linux-musl.tar.gz"; \
     tar zxf "dovi_tool-${DOVI_VER}-${DOVI_ARCH}-unknown-linux-musl.tar.gz"; \
     install -m 0755 dovi_tool /usr/bin/dovi_tool; \
-    rm -rf /tmp/dovi
+    rm -rf /tmp/dovi /tmp/dovi_bin
 
 RUN set -eux; \
     TRUEHDD_VER="$(git ls-remote --refs --tags --sort=-version:refname https://github.com/truehdd/truehdd.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')"; \
