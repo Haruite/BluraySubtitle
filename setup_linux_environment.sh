@@ -92,6 +92,26 @@ bluray_mktemp_log_or_empty() {
   fi
 }
 
+# Resolve the newest stable numeric tag without depending on a forge API or jq.
+# A caller may narrow the accepted tag syntax and remote tag glob per project.
+latest_stable_tag() {
+  local repository_url="$1"
+  local stable_pattern="${2:-^[vV]?[0-9]+([.][0-9]+)+$}"
+  local tag_glob="${3:-*}"
+  local tag
+
+  tag="$(
+    git ls-remote --exit-code --refs --tags --sort=-version:refname \
+      "$repository_url" "$tag_glob" \
+      | awk -F 'refs/tags/' -v stable_pattern="$stable_pattern" \
+        'NF == 2 && $2 ~ stable_pattern { print $2; exit }'
+  )" || true
+  if [[ -z "${tag:-}" ]]; then
+    die "$(msg "Failed to resolve the latest stable tag for ${repository_url}" "无法获取 ${repository_url} 的最新稳定标签")"
+  fi
+  printf '%s' "$tag"
+}
+
 apt_clean() {
   sudo env DEBIAN_FRONTEND=noninteractive apt-get clean -y >/dev/null 2>&1 || true
   sudo env DEBIAN_FRONTEND=noninteractive apt-get autoremove -y >/dev/null 2>&1 || true
@@ -589,6 +609,10 @@ install_libdovi() {
     return 0
   fi
 
+  if [[ -z "$DOVI_TOOL_VERSION" ]]; then
+    DOVI_TOOL_VERSION="$(latest_stable_tag https://github.com/quietvoid/dovi_tool.git)"
+  fi
+
   local deps=(
     build-essential curl pkg-config git
     libssl-dev
@@ -612,16 +636,18 @@ install_libdovi() {
     cd "$build_dir" || exit 1
 
     log "$(msg 'Setting up Rust environment' '配置 Rust 环境')"
-    if ! command -v cargo >/dev/null 2>&1; then
+    if ! command -v rustup >/dev/null 2>&1; then
       tmux_run "$(msg 'Download and install rustup' '下载并安装 rustup')" bash -lc "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y" || exit 1
     fi
     source "$HOME/.cargo/env" || exit 1
+    tmux_run "$(msg 'Update the stable Rust toolchain' '更新 Rust stable 工具链')" rustup update stable || exit 1
 
     log "$(msg 'Installing cargo-c' '安装 cargo-c')"
     tmux_run "$(msg 'Install cargo-c' '安装 cargo-c')" cargo install cargo-c || exit 1
 
     log "$(msg "Building and installing to $HOME/.local" "编译并安装到 $HOME/.local")"
-    tmux_run "$(msg 'Download dovi_tool' '下载 dovi_tool')" git clone --depth 1 --branch 2.3.3 https://github.com/quietvoid/dovi_tool.git || exit 1
+    tmux_run "$(msg "Download dovi_tool ${DOVI_TOOL_VERSION}" "下载 dovi_tool ${DOVI_TOOL_VERSION}")" \
+      git clone --depth 1 --branch "$DOVI_TOOL_VERSION" https://github.com/quietvoid/dovi_tool.git || exit 1
     cd dovi_tool/dolby_vision || exit 1
     tmux_run "$(msg 'Build and install dolby_vision' '编译安装 dolby_vision')" cargo cinstall --release --prefix="$HOME/.local" || exit 1
 
@@ -652,10 +678,13 @@ install_libdovi() {
 # dovi_tool (prebuilt release binary for BluraySubtitle remux)
 # ---------------------------------------------------------------------------
 
-# Keep the release number explicit so CLI and libdovi builds stay reproducible.
-DOVI_TOOL_VERSION="${DOVI_TOOL_VERSION:-2.3.3}"
+# Set DOVI_TOOL_VERSION to pin a release; by default both libdovi and the CLI use latest stable.
+DOVI_TOOL_VERSION="${DOVI_TOOL_VERSION:-}"
 
 install_dovi_tool() {
+  if [[ -z "$DOVI_TOOL_VERSION" ]]; then
+    DOVI_TOOL_VERSION="$(latest_stable_tag https://github.com/quietvoid/dovi_tool.git)"
+  fi
   log "$(msg "Installing dovi_tool ${DOVI_TOOL_VERSION} (prebuilt)" "安装 dovi_tool ${DOVI_TOOL_VERSION}（预编译包）")"
 
   if [[ -x /usr/bin/dovi_tool ]]; then
@@ -677,7 +706,7 @@ install_dovi_tool() {
   esac
   tarball="dovi_tool-${DOVI_TOOL_VERSION}-${arch}-unknown-linux-musl.tar.gz"
 
-  local deps=(wget tar)
+  local deps=(git wget tar)
   local missing_deps=()
   local dep
   for dep in "${deps[@]}"; do
@@ -710,9 +739,13 @@ install_dovi_tool() {
 # truehdd (prebuilt release binary for TrueHD+Atmos decode)
 # ---------------------------------------------------------------------------
 
-TRUEHDD_VERSION="${TRUEHDD_VERSION:-0.4.0}"
+# Set TRUEHDD_VERSION to pin a release; otherwise resolve the latest stable tag.
+TRUEHDD_VERSION="${TRUEHDD_VERSION:-}"
 
 install_truehdd() {
+  if [[ -z "$TRUEHDD_VERSION" ]]; then
+    TRUEHDD_VERSION="$(latest_stable_tag https://github.com/truehdd/truehdd.git)"
+  fi
   log "$(msg "Installing truehdd ${TRUEHDD_VERSION} (prebuilt)" "安装 truehdd ${TRUEHDD_VERSION}（预编译包）")"
 
   if [[ -x /usr/bin/truehdd ]]; then
@@ -734,7 +767,7 @@ install_truehdd() {
   esac
   tarball="truehdd-${TRUEHDD_VERSION}-${arch}-unknown-linux-gnu.tar.gz"
 
-  local deps=(wget tar)
+  local deps=(git wget tar)
   local missing_deps=()
   local dep
   for dep in "${deps[@]}"; do
@@ -992,7 +1025,7 @@ install_lsmash() {
     return 0
   fi
 
-  local deps=(build-essential wget tar)
+  local deps=(build-essential git)
   local missing_deps=()
   for dep in "${deps[@]}"; do
     if ! dpkg-query -W -f='${Status}' "$dep" 2>/dev/null | grep -q "install ok installed"; then
@@ -1010,10 +1043,11 @@ install_lsmash() {
   (
     cd "$build_dir" || exit 1
 
-    tmux_run "$(msg 'Download L-SMASH v2.14.5' '下载 lsmash v2.14.5')" wget -O v2.14.5.tar.gz https://github.com/l-smash/l-smash/archive/refs/tags/v2.14.5.tar.gz || exit 1
-
-    tmux_run "$(msg 'Extract L-SMASH v2.14.5' '解压 lsmash v2.14.5')" tar zxvf v2.14.5.tar.gz || exit 1
-    cd l-smash-2.14.5 || exit 1
+    local lsmash_tag
+    lsmash_tag="${LSMASH_VERSION:-$(latest_stable_tag https://github.com/l-smash/l-smash.git)}"
+    tmux_run "$(msg "Clone L-SMASH ${lsmash_tag}" "克隆 lsmash ${lsmash_tag}")" \
+      git clone --depth 1 --branch "$lsmash_tag" https://github.com/l-smash/l-smash.git l-smash || exit 1
+    cd l-smash || exit 1
 
     log "$(msg 'Configuring and building L-SMASH' '配置与编译 lsmash')"
     tmux_run "lsmash configure" ./configure --enable-shared || exit 1
@@ -1495,15 +1529,20 @@ install_svt_av1() {
 # tsMuxer
 # ---------------------------------------------------------------------------
 
+TSMUXER_VERSION="${TSMUXER_VERSION:-}"
+
 install_tsmuxer() {
-  log "$(msg 'Installing tsMuxer 2.7.0' '安装 tsMuxer 2.7.0')"
+  local tsmuxer_tag tsmuxer_version
+  tsmuxer_tag="${TSMUXER_VERSION:-$(latest_stable_tag https://github.com/justdan96/tsMuxer.git)}"
+  tsmuxer_version="${tsmuxer_tag#v}"
+  log "$(msg "Installing tsMuxer ${tsmuxer_version}" "安装 tsMuxer ${tsmuxer_version}")"
 
   if [[ -x "/usr/bin/tsMuxeR" ]] || command -v tsMuxeR >/dev/null 2>&1; then
     log "$(msg 'tsMuxeR already installed, skipping' '检测到 tsMuxeR 已安装，跳过')"
     return 0
   fi
 
-  local deps=(wget unzip)
+  local deps=(git wget unzip)
   local missing_deps=()
   local dep
   for dep in "${deps[@]}"; do
@@ -1521,9 +1560,10 @@ install_tsmuxer() {
 
   (
     cd "$build_dir" || exit 1
-    tmux_run "$(msg 'Download tsMuxer-2.7.0-linux.zip' '下载 tsMuxer-2.7.0-linux.zip')" \
-      wget https://github.com/justdan96/tsMuxer/releases/download/2.7.0/tsMuxer-2.7.0-linux.zip || exit 1
-    tmux_run "$(msg 'Extract tsMuxer zip package' '解压 tsMuxer 压缩包')" unzip tsMuxer-2.7.0-linux.zip || exit 1
+    local archive="tsMuxer-${tsmuxer_version}-linux.zip"
+    tmux_run "$(msg "Download ${archive}" "下载 ${archive}")" \
+      wget "https://github.com/justdan96/tsMuxer/releases/download/${tsmuxer_tag}/${archive}" || exit 1
+    tmux_run "$(msg 'Extract tsMuxer zip package' '解压 tsMuxer 压缩包')" unzip "$archive" || exit 1
     sudo cp tsMuxeR /usr/bin/tsMuxeR || exit 1
     sudo chmod +x /usr/bin/tsMuxeR || exit 1
   ) || die "$(msg 'tsMuxer install failed' 'tsMuxer 安装失败')"
@@ -1564,19 +1604,20 @@ install_fdk_aac() {
 
   (
     cd "$build_dir" || exit 1
-    tmux_run "$(msg 'Download fdk-aac v2.0.3 source' '下载 fdk-aac v2.0.3 源码')" \
-      wget -O v2.0.3.tar.gz https://github.com/mstorsjo/fdk-aac/archive/refs/tags/v2.0.3.tar.gz || exit 1
-    tmux_run "$(msg 'Extract fdk-aac tarball' '解压 fdk-aac 源码包')" tar zxvf v2.0.3.tar.gz || exit 1
-    cd fdk-aac-2.0.3 || exit 1
+    local fdk_aac_tag fdkaac_tag
+    fdk_aac_tag="${FDK_AAC_VERSION:-$(latest_stable_tag https://github.com/mstorsjo/fdk-aac.git)}"
+    fdkaac_tag="${FDKAAC_VERSION:-$(latest_stable_tag https://github.com/nu774/fdkaac.git)}"
+    tmux_run "$(msg "Clone fdk-aac ${fdk_aac_tag}" "克隆 fdk-aac ${fdk_aac_tag}")" \
+      git clone --depth 1 --branch "$fdk_aac_tag" https://github.com/mstorsjo/fdk-aac.git fdk-aac || exit 1
+    cd fdk-aac || exit 1
     tmux_run "$(msg 'fdk-aac: autogen.sh' 'fdk-aac：autogen.sh')" ./autogen.sh || exit 1
     tmux_run "$(msg 'fdk-aac: configure' 'fdk-aac：configure')" ./configure || exit 1
     tmux_run "$(msg 'fdk-aac: make' 'fdk-aac：make')" make -j"$(nproc)" || exit 1
     tmux_run "$(msg 'fdk-aac: make install' 'fdk-aac：make install')" sudo make install || exit 1
     sudo ldconfig || true
     cd "$build_dir" || exit 1
-    # fdkaac 1.0.7 is the version bundled by the Windows build as well.
-    tmux_run "$(msg 'Clone fdkaac 1.0.7 (nu774)' '克隆 fdkaac 1.0.7（nu774）')" \
-      git clone --depth 1 --branch v1.0.7 https://github.com/nu774/fdkaac.git || exit 1
+    tmux_run "$(msg "Clone fdkaac ${fdkaac_tag} (nu774)" "克隆 fdkaac ${fdkaac_tag}（nu774）")" \
+      git clone --depth 1 --branch "$fdkaac_tag" https://github.com/nu774/fdkaac.git || exit 1
     cd fdkaac || exit 1
     tmux_run "$(msg 'fdkaac: autoreconf -i' 'fdkaac：autoreconf -i')" autoreconf -i || exit 1
     tmux_run "$(msg 'fdkaac: configure' 'fdkaac：configure')" ./configure || exit 1
@@ -1594,7 +1635,10 @@ install_fdk_aac() {
 # ---------------------------------------------------------------------------
 
 install_flac() {
-  log "$(msg 'Installing flac (requires >= 1.5.0, build from source)' '安装 flac（要求 >= 1.5.0，从源码编译并安装）')"
+  local flac_tag latest_flac_version
+  flac_tag="${FLAC_VERSION:-$(latest_stable_tag https://github.com/xiph/flac.git)}"
+  latest_flac_version="${flac_tag#v}"
+  log "$(msg "Installing latest flac (${latest_flac_version}, build from source)" "安装最新 flac（${latest_flac_version}，从源码编译并安装）")"
 
   if [[ -x "/usr/bin/flac" ]] || command -v flac >/dev/null 2>&1; then
     local flac_bin
@@ -1603,16 +1647,13 @@ install_flac() {
     flac_version=$("$flac_bin" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
 
     if [[ -n "$flac_version" ]]; then
-      local lowest
-      lowest=$(printf '%s\n' "1.5.0" "$flac_version" | sort -V | head -n1)
-      if [[ "$lowest" == "$flac_version" && "$flac_version" != "1.5.0" ]]; then
-        log "$(msg "flac version ($flac_version) is below 1.5.0, removing old version and rebuilding" "检测到 flac 版本 ($flac_version) 小于 1.5.0，将卸载旧版本并重新编译安装")"
-        sudo apt-get remove -y flac >/dev/null 2>&1 || true
-        sudo rm -f "$flac_bin"
-      else
-        log "$(msg "flac already installed and version ($flac_version) >= 1.5.0, skipping" "检测到 flac 已安装且版本 ($flac_version) >= 1.5.0，跳过编译安装")"
+      if dpkg --compare-versions "$flac_version" ge "$latest_flac_version"; then
+        log "$(msg "flac already installed and current (${flac_version} >= ${latest_flac_version}), skipping" "检测到 flac 已安装且为当前版本（${flac_version} >= ${latest_flac_version}），跳过编译安装")"
         return 0
       fi
+      log "$(msg "flac is outdated (${flac_version} < ${latest_flac_version}), removing it before rebuilding" "检测到 flac 版本过旧（${flac_version} < ${latest_flac_version}），卸载后重新编译")"
+      sudo apt-get remove -y flac >/dev/null 2>&1 || true
+      sudo rm -f "$flac_bin"
     else
       log "$(msg 'Cannot parse installed flac version, attempting to rebuild' '无法解析已安装的 flac 版本，尝试重新编译安装')"
       sudo apt-get remove -y flac >/dev/null 2>&1 || true
@@ -1620,7 +1661,7 @@ install_flac() {
     fi
   fi
 
-  local deps=(libogg-dev libtool-bin gettext wget tar xz-utils)
+  local deps=(libogg-dev libtool-bin gettext git)
   local missing_deps=()
   for dep in "${deps[@]}"; do
     if ! dpkg-query -W -f='${Status}' "$dep" 2>/dev/null | grep -q "install ok installed"; then
@@ -1637,12 +1678,9 @@ install_flac() {
 
   (
     cd "$build_dir" || exit 1
-    log "$(msg 'Downloading flac source tarball' '下载 flac 源码包')"
-    tmux_run "$(msg 'Download flac 1.5.0' '下载 flac 1.5.0')" wget https://github.com/xiph/flac/releases/download/1.5.0/flac-1.5.0.tar.xz || exit 1
-    log "$(msg 'Extracting flac source tarball' '解压 flac 源码包')"
-    tmux_run "$(msg 'Extract flac 1.5.0' '解压 flac 1.5.0')" tar -xvf flac-1.5.0.tar.xz || exit 1
-
-    cd flac-1.5.0 || exit 1
+    tmux_run "$(msg "Clone flac ${flac_tag}" "克隆 flac ${flac_tag}")" \
+      git clone --depth 1 --branch "$flac_tag" https://github.com/xiph/flac.git flac || exit 1
+    cd flac || exit 1
 
     log "$(msg 'Configuring and building flac' '配置与编译 flac')"
     tmux_run "flac autogen" ./autogen.sh || exit 1
@@ -1878,8 +1916,15 @@ ensure_modern_7zip_cli() {
     return 0
   fi
 
-  local seven_rel="26.01"
-  local seven_tag="2601"
+  if ! command -v git >/dev/null 2>&1; then
+    apt_update
+    apt_install git || die "$(msg 'Failed to install git (needed to resolve the latest 7-Zip release)' '安装 git 失败（获取最新 7-Zip 版本需要）')"
+  fi
+
+  local seven_release_tag seven_version seven_tag
+  seven_release_tag="${SEVENZIP_VERSION:-$(latest_stable_tag https://github.com/ip7z/7zip.git '^[0-9]+[.][0-9]+$')}"
+  seven_version="${seven_release_tag#v}"
+  seven_tag="${seven_version//./}"
   local arch_7=""
   case "$(uname -m)" in
     x86_64 | amd64) arch_7="x64" ;;
@@ -1910,10 +1955,10 @@ ensure_modern_7zip_cli() {
     fi
   fi
 
-  local url="https://github.com/ip7z/7zip/releases/download/${seven_rel}/7z${seven_tag}-linux-${arch_7}.tar.xz"
+  local url="https://github.com/ip7z/7zip/releases/download/${seven_release_tag}/7z${seven_tag}-linux-${arch_7}.tar.xz"
   local tball="${dest}/7z${seven_tag}-linux-${arch_7}.tar.xz"
 
-  log "$(msg "Installing official 7-Zip CLI (${seven_rel}) under ~/.cache/BluraySubtitle (system p7zip is too old for some .7z files)" "正在安装官方 7-Zip 命令行（${seven_rel}）到 ~/.cache/BluraySubtitle（系统 p7zip 过旧，无法解压部分 .7z）")"
+  log "$(msg "Installing official 7-Zip CLI (${seven_version}) under ~/.cache/BluraySubtitle (system p7zip is too old for some .7z files)" "正在安装官方 7-Zip 命令行（${seven_version}）到 ~/.cache/BluraySubtitle（系统 p7zip 过旧，无法解压部分 .7z）")"
 
   if command -v wget >/dev/null 2>&1; then
     wget -q -O "$tball" "$url" || die "$(msg 'Failed to download official 7-Zip CLI tarball' '下载官方 7-Zip 命令行包失败')"
@@ -2728,7 +2773,7 @@ require_supported_os
 repair_broken_apt_state
 
 sys_deps=(
-  python3 python3-pip python3-venv cmake ninja-build
+  python3 python3-pip python3-venv cmake ninja-build git
   ffmpeg wget fonts-wqy-microhei flac gedit
   libegl1 libopengl0 libglib2.0-0 libxkbcommon0 libdbus-1-3
   libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0

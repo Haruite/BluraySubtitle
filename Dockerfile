@@ -149,33 +149,33 @@ rm -rf /tmp/mkv
 MKVTOOLNIX
 
 RUN set -eux; \
+    DOVI_VER="$(git ls-remote --refs --tags --sort=-version:refname https://github.com/quietvoid/dovi_tool.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')"; \
+    test -n "$DOVI_VER"; \
     mkdir -p /tmp/dovi && cd /tmp/dovi; \
-    if ! command -v cargo >/dev/null 2>&1; then curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y; fi; \
+    if ! command -v rustup >/dev/null 2>&1; then curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y; fi; \
     . /root/.cargo/env; \
+    rustup update stable; \
     cargo install cargo-c; \
-    git clone --depth 1 --branch 2.3.3 https://github.com/quietvoid/dovi_tool.git; \
+    git clone --depth 1 --branch "$DOVI_VER" https://github.com/quietvoid/dovi_tool.git; \
     cd dovi_tool/dolby_vision; \
     cargo cinstall --release --prefix=/root/.local; \
     test "$(find /root/.local -name 'libdovi.so*' 2>/dev/null | wc -l)" -ge 1; \
     find /root/.local -name 'libdovi.so*' -exec cp -a {} /usr/local/lib/ \; ; \
     ldconfig; \
-    rm -rf /tmp/dovi
-
-RUN set -eux; \
-    DOVI_VER=2.3.3; \
     case "$(uname -m)" in \
       x86_64|amd64) DOVI_ARCH=x86_64 ;; \
       aarch64|arm64) DOVI_ARCH=aarch64 ;; \
       *) echo "unsupported arch for dovi_tool: $(uname -m)" >&2; exit 1 ;; \
     esac; \
-    mkdir -p /tmp/dovi_bin && cd /tmp/dovi_bin; \
+    cd /tmp/dovi; \
     wget -q "https://github.com/quietvoid/dovi_tool/releases/download/${DOVI_VER}/dovi_tool-${DOVI_VER}-${DOVI_ARCH}-unknown-linux-musl.tar.gz"; \
     tar zxf "dovi_tool-${DOVI_VER}-${DOVI_ARCH}-unknown-linux-musl.tar.gz"; \
     install -m 0755 dovi_tool /usr/bin/dovi_tool; \
-    rm -rf /tmp/dovi_bin
+    rm -rf /tmp/dovi
 
 RUN set -eux; \
-    TRUEHDD_VER=0.4.0; \
+    TRUEHDD_VER="$(git ls-remote --refs --tags --sort=-version:refname https://github.com/truehdd/truehdd.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')"; \
+    test -n "$TRUEHDD_VER"; \
     case "$(uname -m)" in \
       x86_64|amd64) TRUEHDD_ARCH=x86_64 ;; \
       aarch64|arm64) TRUEHDD_ARCH=aarch64 ;; \
@@ -202,10 +202,11 @@ RUN set -eux; \
     rm -rf /tmp/mpv
 
 RUN set -eux; \
+    LSMASH_TAG="$(git ls-remote --refs --tags --sort=-version:refname https://github.com/l-smash/l-smash.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')"; \
+    test -n "$LSMASH_TAG"; \
     mkdir -p /tmp/lsmash && cd /tmp/lsmash; \
-    wget -O v2.14.5.tar.gz https://github.com/l-smash/l-smash/archive/refs/tags/v2.14.5.tar.gz; \
-    tar zxvf v2.14.5.tar.gz; \
-    cd l-smash-2.14.5; \
+    git clone --depth 1 --branch "$LSMASH_TAG" https://github.com/l-smash/l-smash.git l-smash; \
+    cd l-smash; \
     ./configure --enable-shared; \
     make -j"$(nproc)"; \
     make install; \
@@ -532,18 +533,25 @@ SVTAV1EOS
 
 RUN bash <<'FDKAAC'
 set -euo pipefail
+latest_stable_tag() {
+  git ls-remote --refs --tags --sort=-version:refname "$1" |
+    awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }'
+}
 mkdir -p /tmp/fdk
 cd /tmp/fdk
-wget -q -O v2.0.3.tar.gz https://github.com/mstorsjo/fdk-aac/archive/refs/tags/v2.0.3.tar.gz
-tar zxf v2.0.3.tar.gz
-cd fdk-aac-2.0.3
+FDK_AAC_TAG="$(latest_stable_tag https://github.com/mstorsjo/fdk-aac.git)"
+FDKAAC_TAG="$(latest_stable_tag https://github.com/nu774/fdkaac.git)"
+test -n "$FDK_AAC_TAG"
+test -n "$FDKAAC_TAG"
+git clone --depth 1 --branch "$FDK_AAC_TAG" https://github.com/mstorsjo/fdk-aac.git fdk-aac
+cd fdk-aac
 ./autogen.sh
 ./configure
 make -j"$(nproc)"
 make install
 ldconfig
 cd /tmp/fdk
-git clone --depth 1 --branch v1.0.7 https://github.com/nu774/fdkaac.git
+git clone --depth 1 --branch "$FDKAAC_TAG" https://github.com/nu774/fdkaac.git
 cd fdkaac
 autoreconf -i
 ./configure
@@ -552,6 +560,27 @@ make install
 ldconfig
 rm -rf /tmp/fdk
 FDKAAC
+
+RUN bash <<'FLAC'
+set -euo pipefail
+FLAC_TAG="$(git ls-remote --refs --tags --sort=-version:refname https://github.com/xiph/flac.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')"
+test -n "$FLAC_TAG"
+FLAC_VERSION="${FLAC_TAG#v}"
+CURRENT_FLAC_VERSION="$(flac --version 2>/dev/null | grep -oE '[0-9]+[.][0-9]+[.][0-9]+' | head -n 1 || true)"
+if [ -n "$CURRENT_FLAC_VERSION" ] && dpkg --compare-versions "$CURRENT_FLAC_VERSION" ge "$FLAC_VERSION"; then
+  exit 0
+fi
+mkdir -p /tmp/flac
+cd /tmp/flac
+git clone --depth 1 --branch "$FLAC_TAG" https://github.com/xiph/flac.git flac
+cd flac
+./autogen.sh
+./configure --enable-static --enable-shared --enable-64-bit-words
+make -j"$(nproc)"
+make install
+ldconfig
+rm -rf /tmp/flac
+FLAC
 
 RUN set -eux; \
     mkdir -p /tmp/vs && cd /tmp/vs; \
@@ -814,9 +843,26 @@ RUN set -eux; \
 RUN python3 -m pip install --break-system-packages --upgrade pycountry PyQt6 librosa pillow matplotlib
 
 RUN set -eux; \
+    SEVENZIP_RELEASE="$(git ls-remote --refs --tags --sort=-version:refname https://github.com/ip7z/7zip.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[0-9]+[.][0-9]+$/ { print $2; exit }')"; \
+    test -n "$SEVENZIP_RELEASE"; \
+    SEVENZIP_ASSET_VERSION="$(printf '%s' "$SEVENZIP_RELEASE" | tr -d '.')"; \
+    case "$(uname -m)" in \
+      x86_64|amd64) SEVENZIP_ARCH=x64 ;; \
+      aarch64|arm64) SEVENZIP_ARCH=arm64 ;; \
+      armv7l|armv6l) SEVENZIP_ARCH=arm ;; \
+      i686|i386|x86) SEVENZIP_ARCH=x86 ;; \
+      *) echo "unsupported arch for 7-Zip: $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    mkdir -p /tmp/7zip && cd /tmp/7zip; \
+    wget -q "https://github.com/ip7z/7zip/releases/download/${SEVENZIP_RELEASE}/7z${SEVENZIP_ASSET_VERSION}-linux-${SEVENZIP_ARCH}.tar.xz"; \
+    tar -xJf "7z${SEVENZIP_ASSET_VERSION}-linux-${SEVENZIP_ARCH}.tar.xz"; \
+    install -m 0755 7zz /usr/local/bin/7zz; \
+    rm -rf /tmp/7zip
+
+RUN set -eux; \
     mkdir -p /tmp/vcbs && cd /tmp/vcbs; \
     wget -O vapoursynth_portable.7z "https://github.com/AmusementClub/tools/releases/download/2025H1p/vapoursynth_portable_25H1.1p_cpu.7z"; \
-    7z x vapoursynth_portable.7z -o./extracted; \
+    7zz x vapoursynth_portable.7z -o./extracted; \
     PYV="$(python3 -c 'import sys; print("%d.%d" % (sys.version_info.major, sys.version_info.minor))')"; \
     DST="/usr/local/lib/python${PYV}/dist-packages"; \
     mkdir -p "${DST}"; \
@@ -836,9 +882,12 @@ RUN set -eux; \
     rm -rf /tmp/x264
 
 RUN set -eux; \
+    TSMUXER_TAG="$(git ls-remote --refs --tags --sort=-version:refname https://github.com/justdan96/tsMuxer.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')"; \
+    test -n "$TSMUXER_TAG"; \
+    TSMUXER_VER="${TSMUXER_TAG#v}"; \
     mkdir -p /tmp/tsmuxer && cd /tmp/tsmuxer; \
-    wget https://github.com/justdan96/tsMuxer/releases/download/2.7.0/tsMuxer-2.7.0-linux.zip; \
-    unzip tsMuxer-2.7.0-linux.zip; \
+    wget "https://github.com/justdan96/tsMuxer/releases/download/${TSMUXER_TAG}/tsMuxer-${TSMUXER_VER}-linux.zip"; \
+    unzip "tsMuxer-${TSMUXER_VER}-linux.zip"; \
     cp tsMuxeR /usr/bin/tsMuxeR; \
     chmod +x /usr/bin/tsMuxeR; \
     rm -rf /tmp/tsmuxer
