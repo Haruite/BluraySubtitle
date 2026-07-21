@@ -423,16 +423,26 @@ install_mkvtoolnix() {
     apt_install curl
   fi
 
-  local version
-  version="$(
+  local latest_version version
+  latest_version="$(
     curl -s "https://mkvtoolnix.download/latest-release.xml" \
       | grep -oP '(?<=<version>).*?(?=</version>)' \
       | head -n 1
   )"
-  if [[ -z "${version:-}" ]]; then
+  if [[ -z "${latest_version:-}" ]]; then
     die "$(msg 'Failed to fetch latest mkvtoolnix version' '获取 mkvtoolnix 最新版本失败')"
   fi
-  log "$(msg "Latest mkvtoolnix version: ${version}" "检测到 mkvtoolnix 最新版本：${version}")"
+  version="${MKVTOOLNIX_VERSION:-$latest_version}"
+
+  # Qt string literal operators used since MKVToolNix 99 require Qt >= 6.4.
+  # Ubuntu 22.04 ships Qt 6.2, so keep the last compatible release by default.
+  if [[ -z "${MKVTOOLNIX_VERSION:-}" && "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" == "22.04" ]] \
+      && dpkg --compare-versions "$version" gt "98.0"; then
+    version="98.0"
+    log "$(msg "Latest mkvtoolnix is ${latest_version}; using ${version} on Ubuntu 22.04 for Qt 6.2 compatibility" "mkvtoolnix 最新版本为 ${latest_version}；Ubuntu 22.04 使用 ${version} 以兼容 Qt 6.2")"
+  else
+    log "$(msg "Selected mkvtoolnix version: ${version} (latest upstream: ${latest_version})" "选择 mkvtoolnix 版本：${version}（上游最新：${latest_version}）")"
+  fi
 
   local current_version=""
   if command -v mkvmerge >/dev/null 2>&1; then
