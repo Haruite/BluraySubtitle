@@ -174,10 +174,13 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                     auto_name_map = self._build_episode_output_name_map(conf)
         except Exception:
             auto_name_map = {}
+        exact_remux_name = function_id == 3
         for i in range(self.table2.rowCount()):
             item = self.table2.item(i, col)
-            text = item.text().strip() if item and item.text() else ''
-            if (not text) and i in auto_name_map:
+            text = item.text() if exact_remux_name and item else (
+                item.text().strip() if item and item.text() else ''
+            )
+            if (not text) and i in auto_name_map and not exact_remux_name:
                 text = auto_name_map.get(i, '')
             names.append(text)
         return names

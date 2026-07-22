@@ -12,6 +12,7 @@ from typing import Any, Callable, Optional, Generator
 from PyQt6.QtWidgets import QTableWidget
 
 from src.bdmv import Chapter
+from src.runtime.remux import RemuxMainJob, RemuxRequest
 
 
 class BluraySubtitleServiceBase:
@@ -290,8 +291,8 @@ class BluraySubtitleServiceBase:
         raise NotImplementedError
 
     @staticmethod
-    def _fix_output_track_languages_with_mkvpropedit(output_mkv_path: str, input_m2ts_path: str, pid_to_lang: dict[int, str], selected_audio_ids: list[str], selected_sub_ids: list[str], override_lang_by_source_index: Optional[dict[str, str]]=None):
-        """No-op stub; real mixin disables post-mux language edits."""
+    def _fix_output_track_languages_with_mkvpropedit(output_mkv_path: str, input_m2ts_path: str, selected_audio_ids: list[str], selected_sub_ids: list[str], override_lang_by_source_index: Optional[dict[str, str]]=None, dovi_plan: Optional[dict[str, object]]=None) -> None:
+        """Stub for `_fix_output_track_languages_with_mkvpropedit`."""
         raise NotImplementedError
 
     @staticmethod
@@ -466,12 +467,8 @@ class BluraySubtitleServiceBase:
         """Stub for `_sp_track_key_from_entry`."""
         raise NotImplementedError
 
-    def _prepare_episode_run(self, folder_path: str, configuration: Optional[dict[int, dict[str, int | str]]], ensure_tools: bool) -> tuple[str, set[str], dict[int, list[dict[str, int | str]]]]:
-        """Stub for `_prepare_episode_run`."""
-        raise NotImplementedError
-
-    def _collect_target_mkv_files(self, dst_folder: str, mkv_files_before: set[str]) -> list[str]:
-        """Stub for `_collect_target_mkv_files`."""
+    def _prepare_remux_main_jobs(self, request: RemuxRequest) -> tuple[str, list[RemuxMainJob]]:
+        """Stub for `_prepare_remux_main_jobs`."""
         raise NotImplementedError
 
     def _apply_episode_output_names(self, mkv_files: list[str], output_names: Optional[list[str]]=None) -> list[str]:
@@ -480,13 +477,12 @@ class BluraySubtitleServiceBase:
 
     def _build_main_episode_mkvs(
             self,
-            bdmv_index_conf: dict[int, list[dict[str, int | str]]],
-            dst_folder: str,
+            jobs: list[RemuxMainJob],
             cancel_event: Optional[threading.Event] = None,
             *,
             mux_progress_base: int = 0,
             mux_progress_span: int = 380,
-    ) -> None:
+    ) -> list[str]:
         """Stub for `_build_main_episode_mkvs`."""
         raise NotImplementedError
 
@@ -514,11 +510,11 @@ class BluraySubtitleServiceBase:
             disc_count: int,
             *,
             ensure_disc_out_dir: bool = False,
-    ) -> tuple[str, str, str, str, str, dict[int, str], list[str], list[str]]:
+    ) -> tuple[str, str, str, str, str, list[str], list[str]]:
         """Stub for `_make_main_mpls_remux_cmd`."""
         raise NotImplementedError
 
-    def episodes_remux(self, table: Optional[QTableWidget], folder_path: str, selected_mpls: Optional[list[tuple[str, str]]]=None, configuration: Optional[dict[int, dict[str, int | str]]]=None, cancel_event: Optional[threading.Event]=None, ensure_tools: bool=True, sp_entries: Optional[list[dict[str, int | str]]]=None, episode_output_names: Optional[list[str]]=None, episode_subtitle_languages: Optional[list[str]]=None):
+    def episodes_remux(self, request: RemuxRequest, cancel_event: Optional[threading.Event]=None) -> None:
         """Stub for `episodes_remux`."""
         raise NotImplementedError
 
@@ -780,7 +776,7 @@ class BluraySubtitleServiceBase:
     def _pid_lang_from_media_streams(streams: list[dict[str, object]]) -> dict[int, str]:
         raise NotImplementedError
 
-    def _post_remux_finalize_episodes(self, dst_folder: str, bdmv_index_conf: dict[int, list[dict[str, int | str]]], configuration: dict[int, dict[str, int | str]], episode_output_names: Optional[list[str]], cancel_event: Optional[threading.Event]) -> tuple[list[str], bool]:
+    def _post_remux_finalize_episodes(self, jobs: list[RemuxMainJob], cancel_event: Optional[threading.Event]) -> list[str]:
         raise NotImplementedError
 
     @staticmethod

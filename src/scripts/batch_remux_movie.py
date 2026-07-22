@@ -94,7 +94,8 @@ def _patch_configuration_mpls_paths(
 
 
 def remux_one_disc(bdmv_folder: str, movie_root: str, output_root: str) -> None:
-    from src.core import find_mkvtoolnix
+    from src.core import find_mkvtoolnix, translate_text
+    from src.runtime.remux import RemuxRequest
     from src.runtime.services import BluraySubtitle
 
     bdmv_folder = os.path.normpath(bdmv_folder)
@@ -120,7 +121,7 @@ def remux_one_disc(bdmv_folder: str, movie_root: str, output_root: str) -> None:
         except OSError as exc:
             print(f'Skip remux {bdmv_folder}: cannot chdir to PLAYLIST ({exc})', flush=True)
             return
-        selected_mpls = [(bdmv_folder, mpls_no_ext)]
+        selected_mpls = [(bdmv_folder, os.path.splitext(main_mpls_path)[0])]
         configuration, episode_output_names = bs.build_movie_mode_configuration(selected_mpls)
         if not configuration:
             print(f'Skip remux {bdmv_folder}: empty movie configuration', flush=True)
@@ -129,26 +130,37 @@ def remux_one_disc(bdmv_folder: str, movie_root: str, output_root: str) -> None:
         sp_entries = bs.build_movie_mode_sp_entries(configuration)
         os.chdir(bdmv_folder)
         dst_folder = _dst_folder_for_bdmv(movie_root, output_root, bdmv_folder)
-        os.makedirs(dst_folder, exist_ok=True)
         remux_parent = os.path.dirname(dst_folder)
-        bs.episodes_remux(
-            None,
-            os.path.normpath(remux_parent),
-            selected_mpls=selected_mpls,
+        request = RemuxRequest(
+            bdmv_path=bdmv_folder,
+            subtitle_files=(),
+            complete_bluray_folder=False,
+            output_folder=os.path.normpath(remux_parent),
             configuration=configuration,
-            cancel_event=None,
+            selected_mpls=tuple(selected_mpls),
+            sp_entries=tuple(sp_entries),
+            episode_output_names=tuple(episode_output_names),
+            episode_subtitle_languages=tuple('' for _ in configuration),
+            movie_mode=True,
+            mux_dolby_vision=True,
             ensure_tools=True,
-            sp_entries=sp_entries,
-            episode_output_names=episode_output_names,
-            episode_subtitle_languages=[],
+        )
+        bs.episodes_remux(
+            request,
+            cancel_event=None,
         )
         bd_size = _folder_size_gib(bdmv_folder)
         remux_size = _folder_size_gib(dst_folder)
-        print(
-            f'Remux {bdmv_folder} has done，BDMV size {bd_size} GiB，remux size {remux_size} GiB，'
-            f'Reduce size {bd_size - remux_size:.3f} GiB.',
-            flush=True,
+        summary = translate_text(
+            'Remux {path} completed: BDMV size {bd_size} GiB, remux size {remux_size} GiB, '
+            'reduced size {reduced_size:.3f} GiB.'
+        ).format(
+            path=bdmv_folder,
+            bd_size=bd_size,
+            remux_size=remux_size,
+            reduced_size=bd_size - remux_size,
         )
+        print(summary, flush=True)
     except Exception as exc:
         print(f'Skip remux {bdmv_folder}: {exc}', flush=True)
     finally:

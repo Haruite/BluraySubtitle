@@ -1,4 +1,5 @@
 """Target module for remux command and episode-table linkage methods."""
+import copy
 import os
 import threading
 import time
@@ -11,13 +12,14 @@ from PyQt6.QtWidgets import QTableWidget, QToolButton, QPlainTextEdit, QWidget, 
     QProgressDialog, QProgressBar, QMessageBox
 
 from src.bdmv import Chapter
-from src.core import BDMV_LABELS, DIY_BDMV_LABELS, DIY_REMUX_LABELS, find_mkvtoolnix, MKV_MERGE_PATH, \
-    mkvtoolnix_ui_language_arg, ENCODE_REMUX_LABELS, ENCODE_REMUX_SP_LABELS, SUBTITLE_LABELS, ENCODE_LABELS, \
+from src.core import BDMV_LABELS, DIY_BDMV_LABELS, DIY_REMUX_LABELS, find_mkvtoolnix, \
+    ENCODE_REMUX_LABELS, ENCODE_REMUX_SP_LABELS, SUBTITLE_LABELS, ENCODE_LABELS, \
     REMUX_LABELS, CURRENT_UI_LANGUAGE, ENCODE_SP_LABELS
 from src.domain import Subtitle
 from src.exports.utils import get_time_str, get_index_to_m2ts_and_offset, print_exc_terminal, get_folder_size
 from src.runtime.gui_runtime_classes.file_path_table_widget_item import FilePathTableWidgetItem
 from src.runtime.gui_runtime_classes.remux_worker import RemuxWorker
+from src.runtime.remux import RemuxRequest
 from src.runtime.services import BluraySubtitle
 from .gui_base import BluraySubtitleGuiBase
 
@@ -187,8 +189,12 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             bs = BluraySubtitle(top or root, [], False, None, movie_mode=self._is_movie_mode())
             bs.track_selection_config = getattr(self, '_track_selection_config', {}) or {}
             bs.movie_mode = bool(self._is_movie_mode())
-            cmd, _m2ts, _vol, _out, _mpls, _pid, _a, _s = bs._make_main_mpls_remux_cmd(confs, output_folder or '',
-                                                                                       int(bdmv_index), disc_count)
+            cmd, _m2ts, _vol, _out, _mpls, _a, _s = bs._make_main_mpls_remux_cmd(
+                confs,
+                output_folder or '',
+                int(bdmv_index),
+                disc_count,
+            )
             if seq_tag:
                 def _inject_seq_into_output_path(text: str) -> str:
                     marker = '-o "'
@@ -207,11 +213,9 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 cmd = _inject_seq_into_output_path(cmd)
             return cmd
         except Exception:
-            try:
-                mkvmerge_exe = MKV_MERGE_PATH if MKV_MERGE_PATH else 'mkvmerge'
-                return f'"{mkvmerge_exe}" {mkvtoolnix_ui_language_arg()} -o "{output_folder}" "{mpls_path}"'
-            except Exception:
-                return ''
+            # An empty preview is rejected before execution; never replace a failed build with an incomplete command.
+            print_exc_terminal()
+            return ''
 
     def _create_main_remux_cmd_editor(self, text: str, parent: Optional[QWidget] = None) -> QPlainTextEdit:
         editor = QPlainTextEdit(parent if parent is not None else self.table1)
@@ -842,9 +846,10 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
     def _remux_dst_folder_for_cmd_template(self, root: str) -> str:
         """Folder passed to ``_make_main_mpls_remux_cmd`` when generating table1 remux text.
 
-        BDMV 压制 (function 4, BDMV source): mux into ``<输出>/_encode_remux_stage/<盘文件夹名>/`` so it matches
-        ``episodes_encode`` (same rule as ``_prepare_episode_run``: ``basename(bdmv_path)``, i.e. main
-        ``bdmv_folder_path``, not table1 row root — which may be a subfolder like a product code).
+        Blu-ray Encode (function 4, Blu-ray source): mux into
+        ``<output>/_encode_remux_stage/<disc-folder-name>/`` so it matches
+        ``episodes_encode`` (the disc folder is ``basename(bdmv_path)``, using the main
+        ``bdmv_folder_path`` rather than a table1 row root such as a product-code subfolder).
         """
         base_out = os.path.normpath(self.output_folder_path.text().strip()) if hasattr(self,
                                                                                         'output_folder_path') else ''
@@ -1274,29 +1279,30 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                     pass
 
     def remux_episodes(self):
-        output_folder = os.path.normpath(self.output_folder_path.text().strip()) if hasattr(self,
-                                                                                            'output_folder_path') else ''
-        if not output_folder:
-            QMessageBox.information(self, " ", "Output folder is not selected")
-            return
-        if not os.path.isdir(output_folder):
-            QMessageBox.information(self, " ", "Output folder does not exist")
-            return
-        find_mkvtoolnix()
-
-        cancel_event = threading.Event()
-        self._current_cancel_event = cancel_event
-        self._exe_button_default_text = self.exe_button.text()
-        self._update_exe_button_progress(0, 'Preparing')
-
-        selected_mpls = self.get_selected_mpls_no_ext()
-        if not selected_mpls:
-            self._current_cancel_event = None
-            self._reset_exe_button()
-            self.exe_button.setEnabled(True)
-            QMessageBox.information(self, " ", "Main MPLS is not selected")
-            return
         try:
+            output_folder = os.path.normpath(
+                self.output_folder_path.text().strip()
+            ) if hasattr(self, 'output_folder_path') else ''
+            if not output_folder:
+                raise ValueError(self.t('Output folder is not selected'))
+            if not os.path.isdir(output_folder):
+                raise FileNotFoundError(self.t('Output folder does not exist'))
+            find_mkvtoolnix()
+
+            selected_mpls = self.get_selected_mpls_no_ext()
+            if not selected_mpls:
+                raise ValueError(self.t('Main MPLS is not selected'))
+            normalized_selected_mpls: list[tuple[str, str]] = []
+            for folder, mpls_no_extension in selected_mpls:
+                folder_path = os.path.normpath(str(folder or '').strip())
+                playlist_path = os.path.normpath(str(mpls_no_extension or '').strip())
+                playlist_file = playlist_path if playlist_path.lower().endswith('.mpls') else f'{playlist_path}.mpls'
+                if not os.path.isfile(playlist_file):
+                    raise FileNotFoundError(
+                        self.t('Selected main playlist does not exist: {path}').format(path=playlist_file)
+                    )
+                normalized_selected_mpls.append((folder_path, os.path.splitext(playlist_file)[0]))
+
             configuration = self._configuration_for_service_run()
             sub_files = [
                 self.table2.item(row, 0).text() if self.table2.item(row, 0) else ''
@@ -1312,45 +1318,71 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 if hasattr(self, 'table3')
                 else []
             )
+            if len(episode_output_names) != len(configuration):
+                raise ValueError(self.t(
+                    'The number of episode output names ({name_count}) must match the task row count ({row_count})'
+                ).format(name_count=len(episode_output_names), row_count=len(configuration)))
+            if len(episode_subtitle_languages) != len(configuration):
+                raise ValueError(self.t(
+                    'The number of subtitle languages ({language_count}) must match the task row count ({row_count})'
+                ).format(language_count=len(episode_subtitle_languages), row_count=len(configuration)))
+            for row_number, output_name in enumerate(episode_output_names, start=1):
+                if not str(output_name or '').strip():
+                    raise ValueError(
+                        self.t('Episode output name is empty in row {row}').format(row=row_number)
+                    )
+
+            trim_checkbox = getattr(self, 'trim_copyright_tail_checkbox', None)
+            dovi_checkbox = getattr(self, 'mux_dolby_vision_checkbox', None)
+            if dovi_checkbox is None:
+                raise RuntimeError(self.t('Dolby Vision option is unavailable'))
+            default_audio_codec = str(self._current_encode_lossless_audio_codec() or '').strip().lower()
+            if default_audio_codec not in ('flac', 'aac', 'opus'):
+                raise ValueError(
+                    self.t('Unsupported lossless audio codec: {codec}').format(
+                        codec=default_audio_codec or '<empty>'
+                    )
+                )
+            request = RemuxRequest(
+                bdmv_path=os.path.normpath(self.bdmv_folder_path.text().strip()),
+                subtitle_files=tuple(sub_files),
+                complete_bluray_folder=bool(self.checkbox1.isChecked()),
+                output_folder=output_folder,
+                configuration=copy.deepcopy(configuration),
+                selected_mpls=tuple(normalized_selected_mpls),
+                sp_entries=tuple(copy.deepcopy(sp_entries)),
+                episode_output_names=tuple(episode_output_names),
+                episode_subtitle_languages=tuple(episode_subtitle_languages),
+                movie_mode=bool(self._is_movie_mode()),
+                episode_trim_copyright_tail=bool(
+                    trim_checkbox
+                    and trim_checkbox.isChecked()
+                    and not self._is_movie_mode()
+                    and self.get_selected_function_id() in (3, 4)
+                ),
+                mux_dolby_vision=bool(dovi_checkbox.isChecked()),
+                track_selection_config=copy.deepcopy(getattr(self, '_track_selection_config', {}) or {}),
+                track_language_config=copy.deepcopy(getattr(self, '_track_language_config', {}) or {}),
+                track_lossless_audio_config=copy.deepcopy(
+                    getattr(self, '_track_lossless_audio_config', {}) or {}
+                ),
+                default_lossless_audio_codec=default_audio_codec,
+                ensure_tools=False,
+            )
         except Exception:
-            self._current_cancel_event = None
-            self._reset_exe_button()
-            self.exe_button.setEnabled(True)
             self._show_error_dialog(
                 f"{self.t('Failed to build the task from the current GUI configuration')}"
                 f"\n\n{traceback.format_exc()}"
             )
-            return
+            return False
 
-        _trim_cb = getattr(self, 'trim_copyright_tail_checkbox', None)
-        episode_trim_copyright_tail = bool(
-            _trim_cb and _trim_cb.isChecked()
-            and (not self._is_movie_mode())
-            and self.get_selected_function_id() in (3, 4)
-        )
-        _dovi_cb = getattr(self, 'mux_dolby_vision_checkbox', None)
-        mux_dolby_vision = bool(_dovi_cb is None or _dovi_cb.isChecked())
+        cancel_event = threading.Event()
+        self._current_cancel_event = cancel_event
+        self._exe_button_default_text = self.exe_button.text()
+        self._update_exe_button_progress(0, 'Preparing')
 
         self._remux_thread = QThread(self)
-        self._remux_worker = RemuxWorker(
-            self.bdmv_folder_path.text(),
-            sub_files,
-            self.checkbox1.isChecked(),
-            output_folder,
-            configuration,
-            selected_mpls,
-            cancel_event,
-            sp_entries,
-            episode_output_names,
-            episode_subtitle_languages,
-            movie_mode=self._is_movie_mode(),
-            episode_trim_copyright_tail=episode_trim_copyright_tail,
-            mux_dolby_vision=mux_dolby_vision,
-            track_selection_config=getattr(self, '_track_selection_config', {}),
-            track_language_config=getattr(self, '_track_language_config', {}),
-            track_lossless_audio_config=getattr(self, '_track_lossless_audio_config', {}),
-            default_lossless_audio_codec=self._current_encode_lossless_audio_codec(),
-        )
+        self._remux_worker = RemuxWorker(request, cancel_event)
         self._remux_worker.moveToThread(self._remux_thread)
         self._remux_thread.started.connect(self._remux_worker.run)
         self._remux_worker.progress.connect(self._on_exe_button_progress_value)
@@ -1384,4 +1416,4 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         self._remux_worker.canceled.connect(on_canceled)
         self._remux_worker.failed.connect(on_failed)
         self._remux_thread.start()
-        return
+        return True

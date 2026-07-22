@@ -25,11 +25,11 @@ History entries must reflect the author's documented intent. Unresolved behavior
 
 | Stage | Scope | Status | Commit |
 | --- | --- | --- | --- |
-| Phase 1 | Contract, configuration matrix, and safety baseline | Complete | `d889262` |
-| Phase 2 | GUI-to-worker-to-service configuration ownership | Complete | `40ade6c` |
-| Phase 3.1 | Merge Subtitles workflow | Complete | `c2ed4d8` |
-| Phase 3.2 | Add Chapters workflow | Complete | `0a7b49f` |
-| Phase 3.3 | Blu-ray Remux workflow | Pending | — |
+| Phase 1 | Contract, configuration matrix, and safety baseline | Complete | `d0262d5` |
+| Phase 2 | GUI-to-worker-to-service configuration ownership | Complete | `ceb2927` |
+| Phase 3.1 | Merge Subtitles workflow | Complete | `7def4df` |
+| Phase 3.2 | Add Chapters workflow | Complete | `107cea1` |
+| Phase 3.3 | Blu-ray Remux workflow | Complete | This change |
 | Phase 3.4 | Blu-ray Encode workflow | Pending | — |
 | Phase 3.5 | SP, track alignment, and missing-track repair | Pending | — |
 | Phase 3.6 | Audio conversion and Dolby Vision | Pending | — |
@@ -37,7 +37,7 @@ History entries must reflect the author's documented intent. Unresolved behavior
 ## Phase 1 — Contract and Safety Baseline
 
 Date: 2026-07-20  
-Commit: `d889262` (`chore: establish phase 1 refactoring baseline`)
+Commit: `d0262d5` (`chore: establish phase 1 refactoring baseline`)
 
 ### Scope
 
@@ -81,7 +81,7 @@ No production workflow was rewritten. The configuration boundary and each workfl
 ## Phase 2 — Explicit GUI and Runtime Configuration
 
 Date: 2026-07-20  
-Commit: `40ade6c` (`refactor: unify GUI and runtime task configuration`)
+Commit: `ceb2927` (`refactor: unify GUI and runtime task configuration`)
 
 ### Scope
 
@@ -124,7 +124,7 @@ This phase unified ownership but did not yet rewrite the individual Remux, Encod
 ## Phase 3.1 — Merge Subtitles Workflow
 
 Date: 2026-07-20  
-Commit: `c2ed4d8` (`refactor: unify subtitle merge workflow`)
+Commit: `7def4df` (`refactor: unify subtitle merge workflow`)
 
 ### Scope
 
@@ -165,7 +165,7 @@ Merge-only changes did not redesign Add Chapters, Remux, Encode, SP, audio conve
 ## Phase 3.2 — Add Chapters Workflow
 
 Date: 2026-07-20  
-Commit: `0a7b49f` (`refactor: unify add chapters workflow`)
+Commit: `107cea1` (`refactor: unify add chapters workflow`)
 
 ### Scope
 
@@ -213,3 +213,58 @@ Rebuilt Add Chapters as an independent GUI request, background worker, and plain
 ### Deferred
 
 The legacy chapter entry still used internally by Remux/Encode remains until those workflows are refactored. Their broader orchestration was not changed in this batch.
+
+## Phase 3.3 — Blu-ray Remux Workflow
+
+Date: 2026-07-22
+Commit: Included in this change
+
+### Scope
+
+Rebuilt the Remux GUI request, worker boundary, preflight plan, main-playlist execution, and final output mapping. The existing fallback algorithms remain available, but now execute within one deterministic job per selected main playlist.
+
+### Redundant or Conflicting Paths Removed
+
+- Removed the worker's long list of mirrored GUI arguments and repeated service configuration assignments.
+- Removed per-disc grouping that could execute only the first main playlist when several selected main playlists belonged to the same disc.
+- Removed early output-directory creation and later directory scanning used to rediscover task outputs.
+- Removed automatic output-name character replacement, numeric collision suffixes, and fallback to unrelated raw output files.
+- Removed the forced **Complete Blu-ray Folder** state.
+
+### Logic Changes
+
+- One owned Remux request captures the current GUI configuration, selected main playlists, visible output names and languages, SP rows, track settings, default audio codec, movie mode, trimming, Dolby Vision, and folder-completion option.
+- Selected main playlists are planned in visible order. Each selected main playlist must produce exactly one non-empty command and one execution job, including multiple main playlists from the same disc.
+- The GUI command preview consumes the same seven-value command result as execution. If command generation fails, the preview remains empty and is rejected during configuration capture instead of synthesizing an executable-looking command without the planned output path or track options.
+- Every theoretical command output and final GUI output path is derived before the output directory is created. Configuration-row counts, chapter ranges, duplicate paths, and existing files are validated before writing.
+- Final names are applied exactly as displayed. A missing `.mkv` extension is appended; invalid Windows file names are explicit errors.
+- A main command or fallback must produce every planned output for its job. Missing outputs now fail the task instead of being silently skipped; task-created partial expected outputs are removed after failure.
+- Finalization consumes the planned output list rather than scanning the destination directory, and uses a task-local temporary chapter file.
+- Chapter metadata is edited in the newly generated task outputs regardless of the folder-completion checkbox; that checkbox controls only Blu-ray folder completion.
+- Languages saved by **Edit Tracks** are captured per main-playlist job, and `mkvpropedit` availability is checked before output creation. After either the primary command or any fallback succeeds, only the configured languages for included tracks are applied; the output is identified again and verified. Mapping, command, or verification failure fails the job and removes its newly created main outputs.
+- Episode output order remains aligned with configuration order for later subtitle, language, SP, audio, and Dolby Vision processing.
+- **Complete Blu-ray Folder** now follows the captured checkbox value exactly.
+
+### Documentation and i18n
+
+- Updated both README versions with the one-main-playlist-to-one-job rule, pre-write output planning, exact naming, collision behavior, strict completion, checkbox ownership, and verified main-output language correction.
+- Added bilingual validation, command-failure, missing-output, output-mapping, and language-correction messages.
+- Updated the service IDE compatibility declarations and the repository batch-movie caller.
+
+### Verification
+
+- Added tests for GUI request capture, complete command preview, failed-preview rejection, same-disc multiple main playlists, one-command jobs, duplicate and existing outputs, invalid chapter ranges before directory creation, failed commands, exact final naming, temporary chapter cleanup, language capture, preflight tool availability, fallback language correction, and verified `mkvpropedit` arguments.
+- Updated worker-boundary and configuration-characterization tests for the explicit request contract.
+- The concentrated repository run completed 58 tests successfully.
+- Python compilation, i18n audit, split-contract audit, `git diff --check`, and CRLF checks passed.
+
+### Manual Media Checks Still Required
+
+- Series Remux from `E:\BDMV`, including visible episode names, chapter ranges, subtitle languages, and track settings. Change at least one selected audio or subtitle language in **Edit Tracks**, then inspect the final MKV metadata.
+- Movie Remux of the available Avatar and both Zootopia discs, especially their remux-fallback paths.
+- Existing-output collision without any new output, and optional same-disc multiple-main-playlist order.
+- **Complete Blu-ray Folder** both disabled and enabled; enabled tests must use a disposable source copy because completion changes the Blu-ray folder.
+
+### Deferred
+
+SP, including its own output-language mapping, track alignment and missing-track repair, audio conversion, and Dolby Vision internals were not redesigned in this workflow. Encode only adopts the shared main-Remux planning boundary needed to keep that code path working; its broader orchestration remains for Phase 3.4.

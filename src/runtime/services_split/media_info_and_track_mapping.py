@@ -1166,19 +1166,195 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
     def _fix_output_track_languages_with_mkvpropedit(
             output_mkv_path: str,
             input_m2ts_path: str,
-            pid_to_lang: dict[int, str],
             selected_audio_ids: list[str],
             selected_sub_ids: list[str],
             override_lang_by_source_index: Optional[dict[str, str]] = None,
-    ):
-        """
-        Post-mux language rewriting is disabled.
+            dovi_plan: Optional[dict[str, object]] = None,
+    ) -> None:
+        """Apply only the languages captured by Edit Tracks to one completed Remux output."""
+        language_overrides = {
+            str(source_index): str(language).strip()
+            for source_index, language in (override_lang_by_source_index or {}).items()
+            if str(language).strip()
+        }
+        if not language_overrides:
+            return
+        if not output_mkv_path or not os.path.isfile(output_mkv_path):
+            raise FileNotFoundError(
+                translate_text('Main remux output is missing: {path}').format(path=output_mkv_path)
+            )
+        if not input_m2ts_path or not os.path.isfile(input_m2ts_path):
+            raise RuntimeError(
+                translate_text('Configured track languages could not be mapped to: {path}').format(
+                    path=output_mkv_path
+                )
+            )
 
-        mkvmerge already sets languages from stream metadata; MPLS ``pid_to_lang`` is incomplete when a
-        playlist omits tracks, and SP/epilogue mux can add tracks whose order no longer matches a single
-        MPLS PID map.
-        """
-        return
+        source_slots: dict[str, list[tuple[int, int, str]]] = {
+            'video': [],
+            'audio': [],
+            'subtitles': [],
+        }
+        source_streams = [
+            stream for stream in _svc_cls()._m2ts_track_streams(input_m2ts_path)
+            if isinstance(stream, dict)
+        ]
+        streams_by_index = {
+            str(stream.get('index', '')).strip(): stream
+            for stream in source_streams
+        }
+        for source_order, stream in enumerate(source_streams):
+            source_index = str(stream.get('index', '')).strip()
+            track_type = str(stream.get('codec_type') or '').strip().lower()
+            if track_type != 'video':
+                continue
+            pid = _svc_cls()._stream_service_id(stream)
+            source_slots['video'].append((
+                int(pid) if pid is not None else 0x7FFFFFFF,
+                source_order,
+                source_index,
+            ))
+        for track_type, selected_ids in (
+                ('audio', selected_audio_ids),
+                ('subtitles', selected_sub_ids),
+        ):
+            for selected_order, selected_id in enumerate(selected_ids):
+                source_index = str(selected_id)
+                stream = streams_by_index.get(source_index)
+                if not stream:
+                    continue
+                source_type = str(stream.get('codec_type') or '').strip().lower()
+                if source_type in ('subtitle', 'subtitles'):
+                    source_type = 'subtitles'
+                if source_type != track_type:
+                    continue
+                pid = _svc_cls()._stream_service_id(stream)
+                source_slots[track_type].append((
+                    int(pid) if pid is not None else 0x7FFFFFFF,
+                    selected_order,
+                    source_index,
+                ))
+
+        if isinstance(dovi_plan, dict) and dovi_plan.get('active'):
+            try:
+                enhancement_pid = int(dovi_plan.get('el_pid'))
+            except (TypeError, ValueError):
+                enhancement_pid = -1
+            if dovi_plan.get('mux_enabled'):
+                try:
+                    base_pid = int(dovi_plan.get('bl_pid'))
+                except (TypeError, ValueError):
+                    base_pid = -1
+                base_slots = [
+                    slot for slot in source_slots['video']
+                    if slot[0] == base_pid
+                ]
+                source_slots['video'] = base_slots or source_slots['video'][:1]
+            elif enhancement_pid >= 0:
+                source_slots['video'] = [
+                    slot for slot in source_slots['video']
+                    if slot[0] != enhancement_pid
+                ]
+
+        output_info = _svc_cls()._mkvmerge_identify_json(output_mkv_path)
+        output_tracks = output_info.get('tracks') or []
+        if not isinstance(output_tracks, list) or not output_tracks:
+            raise RuntimeError(
+                translate_text('Configured track languages could not be mapped to: {path}').format(
+                    path=output_mkv_path
+                )
+            )
+        output_by_type: dict[str, list[tuple[int, dict[str, object]]]] = {
+            'video': [],
+            'audio': [],
+            'subtitles': [],
+        }
+        for output_index, track in enumerate(output_tracks):
+            if not isinstance(track, dict):
+                continue
+            track_type = str(track.get('type') or '').strip().lower()
+            if track_type in ('subtitle', 'subtitles'):
+                track_type = 'subtitles'
+            if track_type in output_by_type:
+                output_by_type[track_type].append((output_index, track))
+
+        edits: list[tuple[int, int, str]] = []
+        for track_type, slots in source_slots.items():
+            configured_slots = [
+                slot for slot in slots if slot[2] in language_overrides
+            ]
+            if not configured_slots:
+                continue
+            typed_output_tracks = output_by_type[track_type]
+            if len(typed_output_tracks) != len(slots):
+                raise RuntimeError(
+                    translate_text('Configured track languages could not be mapped to: {path}').format(
+                        path=output_mkv_path
+                    )
+                )
+            for source_position, source_slot in enumerate(slots):
+                source_index = source_slot[2]
+                desired_language = language_overrides.get(source_index)
+                if not desired_language:
+                    continue
+                output_index, output_track = typed_output_tracks[source_position]
+                properties = output_track.get('properties') or {}
+                if not isinstance(properties, dict):
+                    properties = {}
+                actual_languages = {
+                    str(properties.get(property_name) or '').strip().lower()
+                    for property_name in ('language', 'language_ietf')
+                    if str(properties.get(property_name) or '').strip()
+                }
+                if desired_language.lower() in actual_languages:
+                    continue
+                # `track:n` uses the one-based order returned by `mkvmerge --identify`.
+                track_number = output_index + 1
+                edits.append((output_index, track_number, desired_language))
+
+        if not edits:
+            return
+        find_mkvtoolnix()
+        executable = core_settings.MKV_PROP_EDIT_PATH or shutil.which('mkvpropedit')
+        if not executable or not os.path.isfile(executable):
+            raise FileNotFoundError(translate_text('mkvpropedit not found'))
+        command = [executable]
+        ui_language = get_mkvtoolnix_ui_language()
+        if ui_language:
+            command.extend(['--ui-language', ui_language])
+        command.append(output_mkv_path)
+        for _output_index, track_number, desired_language in edits:
+            command.extend([
+                '--edit',
+                f'track:{track_number}',
+                '--set',
+                f'language={desired_language}',
+            ])
+        result = subprocess.run(command, capture_output=True, text=True, encoding='utf-8',
+                                errors='replace', shell=False)
+        if result.returncode not in (0, 1):
+            raise RuntimeError(
+                translate_text('mkvpropedit failed for: {path}').format(path=output_mkv_path)
+            )
+
+        verified_info = _svc_cls()._mkvmerge_identify_json(output_mkv_path)
+        verified_tracks = verified_info.get('tracks') or []
+        for output_index, _track_number, desired_language in edits:
+            try:
+                properties = verified_tracks[output_index].get('properties') or {}
+                actual_languages = {
+                    str(properties.get(property_name) or '').strip().lower()
+                    for property_name in ('language', 'language_ietf')
+                    if str(properties.get(property_name) or '').strip()
+                }
+            except (AttributeError, IndexError, TypeError):
+                actual_languages = set()
+            if desired_language.lower() not in actual_languages:
+                raise RuntimeError(
+                    translate_text('Track language correction did not apply to: {path}').format(
+                        path=output_mkv_path
+                    )
+                )
 
     @staticmethod
     def _ordered_track_slots_for_remux(

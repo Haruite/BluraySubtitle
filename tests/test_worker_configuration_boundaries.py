@@ -44,25 +44,27 @@ class WorkerConfigurationBoundaryTests(unittest.TestCase):
 
     def test_remux_worker_passes_only_its_explicit_configuration(self) -> None:
         configuration = {0: {"selected_mpls": "00001", "start_at_chapter": 1}}
-        worker = remux_worker_module.RemuxWorker(
-            "disc",
-            [""],
-            True,
-            "output",
-            configuration,
-            [],
-            threading.Event(),
-            [],
-            ["Episode.mkv"],
-            ["eng"],
+        request = remux_worker_module.RemuxRequest(
+            bdmv_path='disc',
+            subtitle_files=('',),
+            complete_bluray_folder=True,
+            output_folder='output',
+            configuration=configuration,
+            selected_mpls=(),
+            sp_entries=(),
+            episode_output_names=('Episode.mkv',),
+            episode_subtitle_languages=('eng',),
         )
+        worker = remux_worker_module.RemuxWorker(request, threading.Event())
 
         with patch.object(remux_worker_module, "BluraySubtitle", _FakeService):
             worker.run()
 
         service = _FakeService.instances[0]
+        self.assertEqual(service.init_args[:3], ('disc', [''], True))
         self.assertFalse(service.configuration_was_preassigned)
-        self.assertIs(service.remux_call[1]["configuration"], configuration)
+        self.assertIs(service.remux_call[0][0], request)
+        self.assertIs(service.remux_call[0][0].configuration, configuration)
 
     def test_encode_worker_passes_only_its_explicit_configuration(self) -> None:
         configuration = {0: {"selected_mpls": "00001", "start_at_chapter": 1}}

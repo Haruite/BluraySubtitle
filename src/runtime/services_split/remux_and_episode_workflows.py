@@ -4,6 +4,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from typing import Optional
@@ -22,6 +23,7 @@ from src.exports.utils import (
     print_exc_terminal,
     run_shell_command_with_output,
 )
+from src.runtime.remux import RemuxMainJob, RemuxRequest
 from .service_base import BluraySubtitleServiceBase
 from ..services.cancelled import _Cancelled
 
@@ -41,65 +43,242 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             pass
         return core_settings.MKV_MERGE_PATH or shutil.which('mkvmerge') or 'mkvmerge'
 
-    def _prepare_episode_run(
-            self,
-            folder_path: str,
-            configuration: Optional[dict[int, dict[str, int | str]]],
-            ensure_tools: bool,
-    ) -> tuple[str, set[str], dict[int, list[dict[str, int | str]]]]:
-        if configuration is None:
-            raise ValueError(translate_text('Task configuration is required'))
-        if not configuration:
-            raise ValueError(translate_text('Task configuration is empty'))
-        self.configuration = configuration
-
-        bdmv_index_conf: dict[int, list[dict[str, int | str]]] = {}
-        for row_number, conf in enumerate(self.configuration.values(), start=1):
-            try:
-                start_chapter = int(
-                    conf.get('start_at_chapter')
-                    or conf.get('chapter_index')
-                    or 0
-                )
-                end_chapter = int(conf.get('end_at_chapter') or 0)
-                bdmv_index = int(conf['bdmv_index'])
-            except (KeyError, TypeError, ValueError) as error:
-                raise ValueError(
-                    translate_text('Invalid task configuration in row {row}').format(
-                        row=row_number,
-                    )
-                ) from error
-            if end_chapter > 0 and start_chapter >= end_chapter:
-                raise ValueError(
-                    translate_text(
-                        'End chapter must be greater than start chapter in row {row}'
-                    ).format(row=row_number)
-                )
-            bdmv_index_conf.setdefault(bdmv_index, []).append(conf)
-
-        dst_folder = os.path.join(folder_path, os.path.basename(self.bdmv_path))
-        if not os.path.exists(dst_folder):
-            os.mkdir(dst_folder)
-
-        try:
-            mkv_files_before = {f for f in os.listdir(dst_folder) if f.lower().endswith(('.mkv', '.mka'))}
-        except Exception:
-            mkv_files_before = set()
-
-        if ensure_tools:
+    def _prepare_remux_main_jobs(self, request: RemuxRequest) -> tuple[str, list[RemuxMainJob]]:
+        """Resolve every selected main playlist and all output paths before the first write."""
+        if request.ensure_tools:
             find_mkvtoolnix()
+        output_parent = os.path.dirname(os.path.normpath(request.output_folder))
+        if os.path.exists(request.output_folder) and not os.path.isdir(request.output_folder):
+            raise NotADirectoryError(translate_text('Output folder does not exist'))
+        if not os.path.exists(request.output_folder) and not os.path.isdir(output_parent):
+            raise FileNotFoundError(translate_text('Output folder does not exist'))
+        if not request.configuration:
+            raise ValueError(translate_text('Task configuration is empty'))
+        if not request.selected_mpls:
+            raise ValueError(translate_text('Main MPLS is not selected'))
 
-        return dst_folder, mkv_files_before, bdmv_index_conf
+        configuration = {
+            int(key): dict(value)
+            for key, value in request.configuration.items()
+            if isinstance(value, dict)
+        }
+        if len(configuration) != len(request.configuration):
+            raise ValueError(translate_text('Task configuration contains an invalid row'))
+        ordered_keys = sorted(configuration)
+        if len(request.episode_output_names) != len(ordered_keys):
+            raise ValueError(translate_text(
+                'The number of episode output names ({name_count}) must match the task row count ({row_count})'
+            ).format(name_count=len(request.episode_output_names), row_count=len(ordered_keys)))
+        if len(request.episode_subtitle_languages) != len(ordered_keys):
+            raise ValueError(translate_text(
+                'The number of subtitle languages ({language_count}) must match the task row count ({row_count})'
+            ).format(language_count=len(request.episode_subtitle_languages), row_count=len(ordered_keys)))
 
-    def _collect_target_mkv_files(self, dst_folder: str, mkv_files_before: set[str]) -> list[str]:
-        try:
-            mkv_files_after = [f for f in os.listdir(dst_folder) if f.lower().endswith(('.mkv', '.mka'))]
-        except Exception:
-            mkv_files_after = []
-        created = [os.path.join(dst_folder, f) for f in mkv_files_after if f not in mkv_files_before]
-        if created:
-            return sorted(created, key=self._mkv_sort_key)
-        return sorted([os.path.join(dst_folder, f) for f in mkv_files_after], key=self._mkv_sort_key)
+        self.configuration = configuration
+        row_position = {key: position for position, key in enumerate(ordered_keys)}
+        dst_folder = os.path.join(
+            os.path.normpath(request.output_folder),
+            os.path.basename(os.path.normpath(request.bdmv_path).rstrip(os.sep)),
+        )
+        disc_count = len({int(configuration[key].get('bdmv_index') or 0) for key in ordered_keys})
+        unmatched_keys = set(ordered_keys)
+        selected_paths: set[str] = set()
+        jobs: list[RemuxMainJob] = []
+
+        for folder, selected_mpls in request.selected_mpls:
+            selected_conf = {'folder': folder, 'selected_mpls': selected_mpls}
+            selected_path = _svc_cls()._resolve_mpls_path_from_conf(selected_conf, request.bdmv_path)
+            selected_norm = os.path.normcase(os.path.abspath(selected_path))
+            if selected_norm in selected_paths:
+                raise ValueError(
+                    translate_text('Selected main playlist is duplicated: {path}').format(path=selected_path)
+                )
+            selected_paths.add(selected_norm)
+            if not os.path.isfile(selected_path):
+                raise FileNotFoundError(
+                    translate_text('Selected main playlist does not exist: {path}').format(path=selected_path)
+                )
+
+            matching_keys = [
+                key for key in ordered_keys
+                if os.path.normcase(os.path.abspath(
+                    _svc_cls()._resolve_mpls_path_from_conf(configuration[key], request.bdmv_path)
+                )) == selected_norm
+            ]
+            if not matching_keys:
+                raise ValueError(
+                    translate_text('Selected main playlist has no task rows: {path}').format(path=selected_path)
+                )
+            matching_keys.sort(
+                key=lambda key: int(
+                    configuration[key].get('chapter_index')
+                    or configuration[key].get('start_at_chapter')
+                    or 1
+                )
+            )
+            unmatched_keys.difference_update(matching_keys)
+            configurations = [configuration[key] for key in matching_keys]
+            bdmv_indexes = {int(conf.get('bdmv_index') or 0) for conf in configurations}
+            if len(bdmv_indexes) != 1 or next(iter(bdmv_indexes)) <= 0:
+                raise ValueError(
+                    translate_text('Main playlist task rows have inconsistent disc indexes: {path}').format(
+                        path=selected_path
+                    )
+                )
+            for key in matching_keys:
+                conf = configuration[key]
+                try:
+                    start_chapter = int(conf.get('start_at_chapter') or conf.get('chapter_index') or 0)
+                    end_chapter = int(conf.get('end_at_chapter') or 0)
+                except (TypeError, ValueError) as error:
+                    raise ValueError(
+                        translate_text('Invalid task configuration in row {row}').format(
+                            row=row_position[key] + 1
+                        )
+                    ) from error
+                if end_chapter > 0 and start_chapter >= end_chapter:
+                    raise ValueError(
+                        translate_text('End chapter must be greater than start chapter in row {row}').format(
+                            row=row_position[key] + 1
+                        )
+                    )
+
+            explicit_commands = {
+                str(conf.get('main_remux_cmd') or '').strip()
+                for conf in configurations
+                if str(conf.get('main_remux_cmd') or '').strip()
+            }
+            if len(explicit_commands) > 1:
+                raise ValueError(
+                    translate_text('Main playlist task rows have conflicting remux commands: {path}').format(
+                        path=selected_path
+                    )
+                )
+
+            built = self._make_main_mpls_remux_cmd(
+                configurations,
+                dst_folder,
+                next(iter(bdmv_indexes)),
+                max(disc_count, 1),
+                ensure_disc_out_dir=False,
+            )
+            command, m2ts_file, volume, default_output, mpls_path, audio_tracks, subtitle_tracks = built
+            command_lines = _svc_cls()._remux_cmd_shell_lines(command)
+            if len(command_lines) != 1:
+                raise ValueError(
+                    translate_text('Each selected main playlist must have exactly one remux command: {path}').format(
+                        path=mpls_path
+                    )
+                )
+            expected_outputs = _svc_cls().theoretical_remux_output_paths_ordered(
+                command, configurations, mpls_path
+            )
+            if not expected_outputs:
+                raise ValueError(
+                    translate_text('Could not derive remux outputs from the command for: {path}').format(
+                        path=mpls_path
+                    )
+                )
+            if len(expected_outputs) != len(configurations):
+                raise ValueError(translate_text(
+                    'The remux output count ({output_count}) must match the task row count ({row_count}) for: {path}'
+                ).format(
+                    output_count=len(expected_outputs),
+                    row_count=len(configurations),
+                    path=mpls_path,
+                ))
+
+            final_outputs: list[str] = []
+            for key, expected_output in zip(matching_keys, expected_outputs):
+                output_name = str(request.episode_output_names[row_position[key]] or '')
+                if not output_name.strip():
+                    raise ValueError(
+                        translate_text('Episode output name is empty in row {row}').format(
+                            row=row_position[key] + 1
+                        )
+                    )
+                reserved_names = {'CON', 'PRN', 'AUX', 'NUL'} | {
+                    f'{prefix}{number}'
+                    for prefix in ('COM', 'LPT')
+                    for number in range(1, 10)
+                }
+                if (
+                        output_name.rstrip(' .') != output_name
+                        or output_name != os.path.basename(output_name)
+                        or any(character in output_name for character in '<>:"/\\|?*')
+                        or any(ord(character) < 32 for character in output_name)
+                        or os.path.splitext(output_name)[0].upper() in reserved_names
+                ):
+                    raise ValueError(
+                        translate_text('Invalid episode output name in row {row}: {name}').format(
+                            row=row_position[key] + 1,
+                            name=output_name,
+                        )
+                    )
+                if not output_name.lower().endswith('.mkv'):
+                    output_name += '.mkv'
+                final_outputs.append(os.path.join(os.path.dirname(expected_output), output_name))
+
+            jobs.append(RemuxMainJob(
+                configuration_keys=tuple(matching_keys),
+                configurations=tuple(configurations),
+                bdmv_index=next(iter(bdmv_indexes)),
+                command=command_lines[0],
+                m2ts_file=m2ts_file,
+                volume=volume,
+                primary_output=os.path.normpath(
+                    _svc_cls()._mkvmerge_output_path_from_cmd(command) or default_output
+                ),
+                mpls_path=mpls_path,
+                audio_tracks=tuple(audio_tracks),
+                subtitle_tracks=tuple(subtitle_tracks),
+                expected_outputs=tuple(os.path.normpath(path) for path in expected_outputs),
+                final_outputs=tuple(os.path.normpath(path) for path in final_outputs),
+                track_language_overrides=tuple(
+                    (str(track_index), str(language).strip())
+                    for track_index, language in (
+                        (request.track_language_config or {}).get(
+                            f'main::{os.path.normpath(mpls_path)}', {}
+                        ) or {}
+                    ).items()
+                    if str(language).strip()
+                ),
+            ))
+
+        if unmatched_keys:
+            first_key = min(unmatched_keys)
+            unmatched_path = _svc_cls()._resolve_mpls_path_from_conf(
+                configuration[first_key], request.bdmv_path
+            )
+            raise ValueError(
+                translate_text('Task row references an unselected main playlist: {path}').format(
+                    path=unmatched_path
+                )
+            )
+
+        path_owners: dict[str, tuple[int, int]] = {}
+        for job_index, job in enumerate(jobs):
+            for output_index, (expected_output, final_output) in enumerate(
+                    zip(job.expected_outputs, job.final_outputs)):
+                owner = (job_index, output_index)
+                for output_path in (expected_output, final_output):
+                    normalized_path = os.path.normcase(os.path.abspath(output_path))
+                    previous_owner = path_owners.get(normalized_path)
+                    if previous_owner is not None and previous_owner != owner:
+                        raise ValueError(
+                            translate_text('Duplicate output path: {path}').format(path=output_path)
+                        )
+                    path_owners[normalized_path] = owner
+                    if os.path.exists(output_path):
+                        raise FileExistsError(
+                            translate_text('Output file already exists: {path}').format(path=output_path)
+                        )
+        if any(job.track_language_overrides for job in jobs):
+            find_mkvtoolnix()
+            mkvpropedit_path = core_settings.MKV_PROP_EDIT_PATH or shutil.which('mkvpropedit')
+            if not mkvpropedit_path or not os.path.isfile(mkvpropedit_path):
+                raise FileNotFoundError(translate_text('mkvpropedit not found'))
+        return dst_folder, jobs
 
     def _apply_episode_output_names(self, mkv_files: list[str], output_names: Optional[list[str]] = None) -> list[str]:
         total = len(mkv_files)
@@ -144,79 +323,72 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
 
     def _build_main_episode_mkvs(
             self,
-            bdmv_index_conf: dict[int, list[dict[str, int | str]]],
-            dst_folder: str,
+            jobs: list[RemuxMainJob],
             cancel_event: Optional[threading.Event] = None,
             *,
             mux_progress_base: int = 0,
             mux_progress_span: int = 380,
-    ) -> None:
+    ) -> list[str]:
+        """Execute each planned main-playlist command and require every planned output."""
         self._remux_chapter_skip_paths = set()
-        bdmv_index_list = sorted(bdmv_index_conf.keys())
-        for idx, bdmv_index in enumerate(bdmv_index_list, start=1):
+        completed_outputs: list[str] = []
+        for job_index, job in enumerate(jobs, start=1):
             if cancel_event and cancel_event.is_set():
                 raise _Cancelled()
-            confs = list(bdmv_index_conf[bdmv_index])
-            try:
-                confs = sorted(
-                    confs,
-                    key=lambda c: int(c.get('chapter_index') or c.get('start_at_chapter') or 1),
-                )
-            except Exception:
-                pass
-            remux_cmd, m2ts_file, bdmv_vol, output_file, mpls_path, pid_to_lang, copy_audio_track, copy_sub_track = self._make_main_mpls_remux_cmd(
-                confs=confs,
-                dst_folder=dst_folder,
-                bdmv_index=bdmv_index,
-                disc_count=len(bdmv_index_conf),
-                ensure_disc_out_dir=True,
-            )
-            if mpls_path:
-                config_key = f'main::{os.path.normpath(mpls_path)}'
+            configurations = [dict(conf) for conf in job.configurations]
+            if job.mpls_path:
+                config_key = f'main::{os.path.normpath(job.mpls_path)}'
                 tracks_cfg = getattr(self, 'track_selection_config', {}) or {}
                 if config_key in tracks_cfg:
                     cfg = tracks_cfg.get(config_key) or {}
-                    na = len(cfg.get('audio') or [])
-                    ns = len(cfg.get('subtitle') or [])
-                    ref = os.path.basename(m2ts_file) if m2ts_file else ''
+                    audio_count = len(cfg.get('audio') or [])
+                    subtitle_count = len(cfg.get('subtitle') or [])
                     msg = (
-                        f'{self.t("使用 edit-tracks 选轨，主 MPLS")} '
-                        f'[{os.path.basename(mpls_path)}]: {na} audio, {ns} subtitle'
+                        f'{self.t("Using tracks selected in Edit Tracks for main MPLS")} '
+                        f'[{os.path.basename(job.mpls_path)}]: '
+                        f'{audio_count} audio, {subtitle_count} subtitle'
                     )
-                    if ref:
-                        msg += f' {self.t("（参考 m2ts: ")}{ref})'
-                    print(msg)
-                    self._progress(text=msg)
                 else:
-                    ref = os.path.basename(m2ts_file) if m2ts_file else ''
                     msg = (
-                        f'{self.t("默认选轨，主 MPLS")} '
-                        f'[{os.path.basename(mpls_path)}]'
+                        f'{self.t("Using default track selection for main MPLS")} '
+                        f'[{os.path.basename(job.mpls_path)}]'
                     )
-                    if ref:
-                        msg += f' {self.t("（参考 m2ts: ")}{ref})'
-                    print(msg)
-                    self._progress(text=msg)
-            self._set_dovi_mux_plan_for_mpls(mpls_path)
+                if job.m2ts_file:
+                    msg += f' {self.t("(reference M2TS: ")}{os.path.basename(job.m2ts_file)})'
+                print(msg)
+                self._progress(text=msg)
+
+            self._set_dovi_mux_plan_for_mpls(job.mpls_path)
             identify_ok = self._mkvmerge_identify_covers_remux_slots(
-                mpls_path, copy_audio_track, copy_sub_track)
+                job.mpls_path, list(job.audio_tracks), list(job.subtitle_tracks)
+            )
             if not identify_ok:
                 print('[remux-fallback] skipping primary mkvmerge (see identify check lines above)')
-            print(f'{self.t("Mux command: ")}{remux_cmd}')
-            self._progress(text=f'{self.t("Muxing: ")}BD_Vol_{bdmv_vol}')
+            print(f'{self.t("Mux command: ")}{job.command}')
+            self._progress(text=f'{self.t("Muxing: ")}BD_Vol_{job.volume}')
             if identify_ok:
-                ret, line_rets = self._run_shell_command_detailed(remux_cmd)
+                return_code, _line_return_codes = self._run_shell_command_detailed(job.command)
             else:
-                ret, line_rets = -1, [-1]
+                return_code = -1
+
+            primary_ok = return_code in (0, 1) and all(
+                os.path.isfile(path) for path in job.expected_outputs
+            )
+            if return_code in (0, 1) and not primary_ok:
+                for _attempt in range(5):
+                    time.sleep(0.2)
+                    if all(os.path.isfile(path) for path in job.expected_outputs):
+                        primary_ok = True
+                        break
+
             try:
-                ch_tmp = Chapter(mpls_path)
-                n_clips = len(ch_tmp.in_out_time or [])
+                clip_count = len(Chapter(job.mpls_path).in_out_time or [])
             except Exception:
-                n_clips = 0
+                clip_count = 0
             cover = ''
-            if n_clips > 1:
+            if clip_count > 1:
                 try:
-                    bdmv_dir = os.path.normpath(os.path.join(os.path.dirname(mpls_path), '..'))
+                    bdmv_dir = os.path.normpath(os.path.join(os.path.dirname(job.mpls_path), '..'))
                     meta_folder = os.path.join(bdmv_dir, 'META', 'DL')
                     cover_size = 0
                     if os.path.exists(meta_folder):
@@ -229,151 +401,84 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                                     cover_size = sz
                 except Exception:
                     cover = ''
-            def _norm_skip(p: str) -> str:
-                return os.path.normcase(os.path.normpath(p))
 
-            out_n = os.path.normpath(output_file) if output_file else ''
-            try:
-                parsed_out = _svc_cls()._mkvmerge_output_path_from_cmd(remux_cmd)
-                if parsed_out:
-                    out_n = os.path.normpath(parsed_out)
-            except Exception:
-                pass
-            out_exists = bool(out_n and os.path.isfile(out_n))
-            expected_split_paths: list[str] = []
-            lines_mx = _svc_cls()._remux_cmd_shell_lines(remux_cmd)
-            if not lines_mx and (remux_cmd or '').strip():
-                lines_mx = [(remux_cmd or '').strip()]
-            if not line_rets:
-                line_rets = [int(ret)]
-            while len(line_rets) < len(lines_mx):
-                line_rets.append(int(line_rets[-1]))
-            line_rets = [int(x) for x in line_rets[:len(lines_mx)]] if lines_mx else line_rets
-            ret_ok = (ret in (0, 1))
-            primary_ok = True
-            split_by_config = False
-            line_mux_checks: list[dict[str, object]] = []
-            if (not getattr(self, 'movie_mode', False)) and lines_mx and confs:
-                for li, ln in enumerate(lines_mx):
-                    rline = int(line_rets[li]) if li < len(line_rets) else int(ret)
-                    rline_ok = rline in (0, 1)
-                    ob, expected_line = _svc_cls()._mkvmerge_expected_paths_for_shell_line(
-                        ln, confs, mpls_path)
-                    if not expected_line:
-                        continue
-                    split_by_config = split_by_config or len(expected_line) > 1
-                    exists_map_ln = {p: os.path.isfile(p) for p in expected_line}
-                    ok_ln = rline_ok and all(exists_map_ln.values())
-                    if (not ok_ln) and rline_ok and expected_line:
-                        for retry_i in range(5):
-                            time.sleep(0.2)
-                            exists_map_ln = {p: os.path.isfile(p) for p in expected_line}
-                            if all(exists_map_ln.values()):
-                                ok_ln = True
-                                break
-                    line_mux_checks.append({
-                        'expected': list(expected_line),
-                        'ok': ok_ln,
-                        'ret': rline,
-                    })
-                    if not ok_ln:
-                        for p in expected_line:
-                            self._remux_chapter_skip_paths.add(_norm_skip(p))
-                    primary_ok = primary_ok and ok_ln
-                if line_mux_checks:
-                    expected_split_paths = []
-                    for c in line_mux_checks:
-                        expected_split_paths.extend(c['expected'])  # type: ignore[arg-type]
-            if not line_mux_checks and (not getattr(self, 'movie_mode', False)) and out_n and confs:
-                try:
-                    ch_seg = Chapter(mpls_path)
-                    segs_b = _svc_cls()._series_episode_segments_bounds(ch_seg, confs)
-                    expected_split_paths = _svc_cls()._expected_mkvmerge_split_output_paths(out_n, len(segs_b))
-                except Exception:
-                    expected_split_paths = []
-                try:
-                    cmd_split_count = _svc_cls()._split_segment_count_from_mkvmerge_cmd(remux_cmd)
-                except Exception:
-                    cmd_split_count = None
-                if out_n and isinstance(cmd_split_count, int) and cmd_split_count > 1:
-                    expected_from_cmd = _svc_cls()._expected_mkvmerge_split_output_paths(out_n, cmd_split_count)
-                    if len(expected_from_cmd) >= len(expected_split_paths):
-                        expected_split_paths = expected_from_cmd
-                split_by_config = len(expected_split_paths) > 1
-                stem_base, ext_base = os.path.splitext(os.path.basename(out_n)) if out_n else ('', '.mkv')
-                alt001 = os.path.join(os.path.dirname(out_n), f'{stem_base}-001{ext_base or ".mkv"}') if out_n else ''
-                if split_by_config:
-                    exists_map = {p: os.path.isfile(p) for p in expected_split_paths}
-                    primary_ok = ret_ok and all(exists_map.values())
-                    if (not primary_ok) and ret_ok and expected_split_paths:
-                        for retry_i in range(5):
-                            time.sleep(0.2)
-                            exists_map = {p: os.path.isfile(p) for p in expected_split_paths}
-                            if all(exists_map.values()):
-                                primary_ok = True
-                                break
-                elif out_n and expected_split_paths:
-                    primary_ok = ret_ok and (out_exists or (bool(alt001) and os.path.isfile(alt001)))
-                else:
-                    primary_ok = ret_ok and out_exists
-                if not primary_ok and expected_split_paths:
-                    for p in expected_split_paths:
-                        self._remux_chapter_skip_paths.add(_norm_skip(p))
-                elif not primary_ok and out_n:
-                    self._remux_chapter_skip_paths.add(_norm_skip(out_n))
-            if not line_mux_checks and getattr(self, 'movie_mode', False):
-                primary_ok = ret_ok and out_exists
-                if not primary_ok and out_n:
-                    self._remux_chapter_skip_paths.add(_norm_skip(out_n))
-            fb_audio, fb_sub = _svc_cls()._fallback_track_lists(remux_cmd, copy_audio_track, copy_sub_track)
-            if not primary_ok and n_clips == 1:
-                self._progress(text=f'Mux fallback (single-clip aligned): BD_Vol_{bdmv_vol}')
+            fallback_audio, fallback_subtitle = _svc_cls()._fallback_track_lists(
+                job.command, list(job.audio_tracks), list(job.subtitle_tracks)
+            )
+            split_output = len(job.expected_outputs) > 1
+            if not primary_ok and clip_count == 1 and not split_output:
+                self._progress(text=f'Mux fallback (single-clip aligned): BD_Vol_{job.volume}')
                 if self._try_remux_mpls_single_clip_track_aligned(
-                        mpls_path,
-                        out_n,
-                        fb_audio,
-                        fb_sub,
+                        job.mpls_path,
+                        job.primary_output,
+                        fallback_audio,
+                        fallback_subtitle,
                         cancel_event=cancel_event,
                 ):
-                    primary_ok = bool(out_n and os.path.isfile(out_n))
-                    if primary_ok:
-                        self._remux_chapter_skip_paths.discard(_norm_skip(out_n))
-            if n_clips > 1 and not primary_ok:
-                if split_by_config:
-                    self._progress(text=f'Mux fallback (multi-episode split aligned): BD_Vol_{bdmv_vol}')
-                    split_ok = self._try_remux_mpls_split_outputs_track_aligned(
-                        mpls_path,
-                        out_n,
-                        confs,
-                        fb_audio,
-                        fb_sub,
+                    primary_ok = all(os.path.isfile(path) for path in job.expected_outputs)
+            if clip_count > 1 and not primary_ok:
+                if split_output:
+                    self._progress(text=f'Mux fallback (multi-episode split aligned): BD_Vol_{job.volume}')
+                    self._try_remux_mpls_split_outputs_track_aligned(
+                        job.mpls_path,
+                        job.primary_output,
+                        configurations,
+                        fallback_audio,
+                        fallback_subtitle,
                         cover,
                         cancel_event=cancel_event,
                     )
-                    if split_ok:
-                        primary_ok = all(os.path.isfile(p) for p in expected_split_paths)
-                        if primary_ok:
-                            for p in expected_split_paths:
-                                self._remux_chapter_skip_paths.discard(_norm_skip(p))
-                    else:
-                        print(f'[remux-fallback-split] failed for BD_Vol_{bdmv_vol} (see logs above)')
-                        self._progress(
-                            text=f'Multi-episode split fallback failed: BD_Vol_{bdmv_vol} (see terminal [remux-fallback-split])')
-                if n_clips > 1 and not primary_ok and (not split_by_config):
-                    self._progress(text=f'Mux fallback (multi-m2ts aligned): BD_Vol_{bdmv_vol}')
-                    if self._try_remux_mpls_track_aligned_concat(
-                            mpls_path,
-                            out_n,
-                            fb_audio,
-                            fb_sub,
+                    primary_ok = all(os.path.isfile(path) for path in job.expected_outputs)
+                else:
+                    self._progress(text=f'Mux fallback (multi-m2ts aligned): BD_Vol_{job.volume}')
+                    self._try_remux_mpls_track_aligned_concat(
+                            job.mpls_path,
+                            job.primary_output,
+                            fallback_audio,
+                            fallback_subtitle,
                             cover,
                             cancel_event=cancel_event,
-                    ):
-                        ret = 0
-                        if out_n and os.path.isfile(out_n):
-                            self._remux_chapter_skip_paths.discard(_norm_skip(out_n))
+                    )
+                    primary_ok = all(os.path.isfile(path) for path in job.expected_outputs)
+
+            if not primary_ok:
+                missing_outputs = [path for path in job.expected_outputs if not os.path.isfile(path)]
+                for output_path in job.expected_outputs:
+                    if os.path.isfile(output_path):
+                        force_remove_file(output_path)
+                raise RuntimeError(
+                    translate_text('Main remux failed for {path}; missing outputs: {outputs}').format(
+                        path=job.mpls_path,
+                        outputs=', '.join(missing_outputs) or ', '.join(job.expected_outputs),
+                    )
+                )
+
+            if job.track_language_overrides:
+                try:
+                    for output_path in job.expected_outputs:
+                        self._progress(
+                            text=f'{self.t("Correcting track languages: ")}'
+                                 f'{os.path.basename(output_path)}'
+                        )
+                        _svc_cls()._fix_output_track_languages_with_mkvpropedit(
+                            output_path,
+                            job.m2ts_file,
+                            list(job.audio_tracks),
+                            list(job.subtitle_tracks),
+                            dict(job.track_language_overrides),
+                            getattr(self, '_dovi_mux_plan', None),
+                        )
+                except Exception:
+                    for output_path in job.expected_outputs:
+                        if os.path.isfile(output_path):
+                            force_remove_file(output_path)
+                    raise
+
+            completed_outputs.extend(job.expected_outputs)
             self._progress(
-                mux_progress_base + int(idx / max(len(bdmv_index_list), 1) * mux_progress_span))
+                mux_progress_base + int(job_index / max(len(jobs), 1) * mux_progress_span)
+            )
+        return completed_outputs
 
     @staticmethod
     def _dedupe_remux_shell_lines(cmd: str) -> str:
@@ -437,7 +542,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             disc_count: int,
             *,
             ensure_disc_out_dir: bool = False,
-    ) -> tuple[str, str, str, str, str, dict[int, str], list[str], list[str]]:
+    ) -> tuple[str, str, str, str, str, list[str], list[str]]:
         conf0 = confs[0]
         mpls_path = _svc_cls()._resolve_mpls_path_from_conf(
             conf0, str(getattr(self, 'bdmv_path', '') or ''))
@@ -601,7 +706,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 else default_cmd
             )
         remux_cmd = self._dedupe_remux_shell_lines(remux_cmd)
-        return remux_cmd, m2ts_file, bdmv_vol, output_file, mpls_path, chapter.pid_to_lang, copy_audio_track, copy_sub_track
+        return remux_cmd, m2ts_file, bdmv_vol, output_file, mpls_path, copy_audio_track, copy_sub_track
 
     def _remux_remap_chapter_skip_after_rename(self, mkv_files: list[str]) -> None:
         """Point ``_remux_chapter_skip_paths`` at post-rename paths when basename is unchanged."""
@@ -623,216 +728,94 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
 
     def _post_remux_finalize_episodes(
             self,
-            dst_folder: str,
-            bdmv_index_conf: dict[int, list[dict[str, int | str]]],
-            configuration: dict[int, dict[str, int | str]],
-            episode_output_names: Optional[list[str]],
+            jobs: list[RemuxMainJob],
             cancel_event: Optional[threading.Event],
-    ) -> tuple[list[str], bool]:
-        """
-        After mux: validate theoretical ``-o`` outputs vs disk (excluding split-check skips),
-        optional chapter-debug from remux parse or table2 bounds, then rename to table2 names when counts align.
+    ) -> list[str]:
+        """Write per-row chapters and apply the exact planned GUI output names."""
+        final_by_configuration_key: dict[int, str] = {}
+        with tempfile.TemporaryDirectory(prefix='bluray-subtitle-remux-chapters-') as temporary_directory:
+            chapter_index = 0
+            for job in jobs:
+                if cancel_event and cancel_event.is_set():
+                    raise _Cancelled()
+                configurations = [dict(conf) for conf in job.configurations]
+                bounds = _svc_cls()._remux_parsed_chapter_bounds_for_theory_count(
+                    job.command,
+                    configurations,
+                    job.mpls_path,
+                    len(job.expected_outputs),
+                )
+                if bounds is None:
+                    bounds = _svc_cls()._series_episode_segments_bounds(
+                        Chapter(job.mpls_path), configurations
+                    )
+                if len(bounds) != len(job.expected_outputs):
+                    raise ValueError(
+                        translate_text('Could not map chapter ranges to remux outputs for: {path}').format(
+                            path=job.mpls_path
+                        )
+                    )
 
-        Parses using ``main_remux_cmd`` from configuration (table1 remux column). If that string is empty,
-        uses the built-in mux template from ``_make_main_mpls_remux_cmd`` (same as mux execution) only for
-        parsing—not as a replacement for what was displayed in table1.
-
-        Returns ``([], True)`` when validation fails (caller should fall back to raw collected mkvs).
-        """
-        cfg_sorted_keys = sorted(configuration.keys())
-        names = episode_output_names or []
-        skip_norm = getattr(self, '_remux_chapter_skip_paths', None) or set()
-        path_by_conf_key: dict[int, str] = {}
-
-        def _norm_path(p: str) -> str:
-            return os.path.normcase(os.path.normpath(p))
-
-        char_map = {
-            '?': '？', '*': '★', '<': '《', '>': '》', ':': '：', '"': "'", '/': '／', '\\': '／', '|': '￨'
-        }
-
-        for bdmv_index in sorted(bdmv_index_conf.keys()):
-            if cancel_event and cancel_event.is_set():
-                raise _Cancelled()
-            confs = sorted(
-                list(bdmv_index_conf[bdmv_index]),
-                key=lambda c: int(c.get('chapter_index') or c.get('start_at_chapter') or 1),
-            )
-            built = self._make_main_mpls_remux_cmd(
-                confs=confs,
-                dst_folder=dst_folder,
-                bdmv_index=bdmv_index,
-                disc_count=len(bdmv_index_conf),
-                ensure_disc_out_dir=True,
-            )
-            remux_cmd = str(built[0] or '').strip()
-            built_mpls = str(built[4] or '').strip()
-            mpls_path = ''
-            if built_mpls:
-                mpls_path = built_mpls if built_mpls.lower().endswith('.mpls') else (built_mpls + '.mpls')
-            if not mpls_path:
-                raw_mpls = str(confs[0].get('selected_mpls') or '').strip()
-                mpls_path = raw_mpls if raw_mpls.lower().endswith('.mpls') else (raw_mpls + '.mpls' if raw_mpls else '')
-            theory = _svc_cls().theoretical_remux_output_paths_ordered(remux_cmd, confs, mpls_path)
-            if not theory:
-                print(f'{self.t("[post-remux] ")}{self.t("abort: could not derive theoretical outputs from remux_cmd")}')
-                return [], True
-            for tp in theory:
-                tn = _norm_path(tp)
-                if tn in skip_norm:
-                    continue
-                if not os.path.isfile(tp):
-                    print(f'{self.t("[post-remux] ")}{self.t("abort: missing expected output: ")}{tp}')
-                    return [], True
-
-            keys_vol = sorted(
-                [k for k in cfg_sorted_keys if int(configuration[k].get('bdmv_index', 0)) == bdmv_index],
-                key=lambda kk: int(configuration[kk].get('chapter_index') or configuration[kk].get('start_at_chapter') or 1),
-            )
-            bounds: Optional[list[tuple[int, int]]] = None
-            rb = _svc_cls()._remux_parsed_chapter_bounds_for_theory_count(
-                remux_cmd, confs, mpls_path, len(theory))
-            if rb and len(rb) == len(theory):
-                bounds = rb
-            if bounds is None and len(theory) == len(confs):
-                try:
-                    segs_pc: list[tuple[int, int]] = []
-                    for c in confs:
-                        sm = str(c.get('selected_mpls') or '').strip()
-                        mp_c = sm if sm.lower().endswith('.mpls') else (sm + '.mpls' if sm else '')
-                        if not mp_c or not os.path.isfile(mp_c):
-                            segs_pc = []
-                            break
-                        ch_c = Chapter(mp_c)
-                        seg_one = _svc_cls()._series_episode_segments_bounds(ch_c, [c])
-                        if len(seg_one) != 1:
-                            segs_pc = []
-                            break
-                        segs_pc.append(seg_one[0])
-                    if len(segs_pc) == len(theory):
-                        bounds = segs_pc
-                except Exception:
-                    bounds = None
-            if bounds is None and len(theory) == len(keys_vol):
-                try:
-                    ch = Chapter(mpls_path)
-                    segs = _svc_cls()._series_episode_segments_bounds(ch, confs)
-                    if len(segs) == len(theory):
-                        bounds = segs
-                except Exception:
-                    bounds = None
-
-            def _mpls_for_conf_index(idx: int) -> str:
-                if idx < 0 or idx >= len(confs):
-                    return mpls_path
-                sm = str(confs[idx].get('selected_mpls') or '').strip()
-                if not sm:
-                    return mpls_path
-                return sm if sm.lower().endswith('.mpls') else (sm + '.mpls')
-
-            chapter_txt = os.path.join(os.getcwd(), 'chapter.txt')
-            if bounds and len(bounds) == len(theory):
-                for i, tp in enumerate(theory):
+                for configuration_key, expected_output, final_output, (start_chapter, end_chapter) in zip(
+                        job.configuration_keys,
+                        job.expected_outputs,
+                        job.final_outputs,
+                        bounds,
+                ):
                     if cancel_event and cancel_event.is_set():
                         raise _Cancelled()
-                    if _norm_path(tp) in skip_norm:
-                        continue
-                    if not os.path.isfile(tp):
-                        continue
-                    s0, e0 = bounds[i]
-                    self._write_remux_segment_chapter_txt(_mpls_for_conf_index(i), s0, e0, chapter_txt)
-                    MKV(tp).add_chapter(self.checked)
+                    if not os.path.isfile(expected_output):
+                        raise RuntimeError(
+                            translate_text('Main remux output is missing: {path}').format(
+                                path=expected_output
+                            )
+                        )
+                    chapter_index += 1
+                    chapter_path = os.path.join(
+                        temporary_directory, f'chapter-{chapter_index:04d}.txt'
+                    )
+                    self._write_remux_segment_chapter_txt(
+                        job.mpls_path,
+                        start_chapter,
+                        end_chapter,
+                        chapter_path,
+                    )
+                    MKV(expected_output).add_chapter(True, chapter_path)
+                    if os.path.normcase(expected_output) != os.path.normcase(final_output):
+                        os.rename(expected_output, final_output)
+                    final_by_configuration_key[configuration_key] = final_output
 
-            if len(theory) == len(keys_vol):
-                for i, k in enumerate(keys_vol):
-                    tp = theory[i]
-                    if _norm_path(tp) in skip_norm:
-                        continue
-                    if os.path.isfile(tp):
-                        path_by_conf_key[k] = tp
+        ordered_keys = sorted(self.configuration)
+        if set(final_by_configuration_key) != set(ordered_keys):
+            raise RuntimeError(translate_text('Remux did not produce an output for every task row'))
+        return [final_by_configuration_key[key] for key in ordered_keys]
 
-                for i, tp in enumerate(theory):
-                    if _norm_path(tp) in skip_norm:
-                        continue
-                    k = keys_vol[i]
-                    raw_name = ''
-                    try:
-                        if isinstance(k, int) and 0 <= k < len(names):
-                            raw_name = str(names[k] or '').strip()
-                    except Exception:
-                        raw_name = ''
-                    if not raw_name:
-                        continue
-                    new_base = ''.join(char_map.get(ch) or ch for ch in raw_name)
-                    new_base = new_base.strip().rstrip('.')
-                    if not new_base.lower().endswith('.mkv'):
-                        new_base += '.mkv'
-                    folder = os.path.dirname(tp)
-                    new_path = os.path.join(folder, new_base)
-                    cur = path_by_conf_key.get(k, tp)
-                    if not cur or not os.path.isfile(cur):
-                        continue
-                    if os.path.normcase(cur) == os.path.normcase(new_path):
-                        path_by_conf_key[k] = new_path
-                        continue
-                    if os.path.exists(new_path):
-                        stem, ext = os.path.splitext(new_base)
-                        n = 1
-                        candidate = new_path
-                        while os.path.exists(candidate):
-                            candidate = os.path.join(folder, f'{stem} ({n}){ext}')
-                            n += 1
-                        new_path = candidate
-                    try:
-                        os.rename(cur, new_path)
-                        path_by_conf_key[k] = new_path
-                    except Exception:
-                        print_exc_terminal()
+    def episodes_remux(
+            self,
+            request: RemuxRequest,
+            cancel_event: Optional[threading.Event] = None,
+    ) -> None:
+        """Run one complete Remux request without consulting GUI or directory contents."""
+        self.checked = request.complete_bluray_folder
+        self.movie_mode = request.movie_mode
+        self.sub_files = list(request.subtitle_files)
+        self.episode_subtitle_languages = list(request.episode_subtitle_languages)
+        dst_folder, jobs = self._prepare_remux_main_jobs(request)
 
-        final_mkvs: list[str] = []
-        for k in cfg_sorted_keys:
-            p = path_by_conf_key.get(k)
-            if p and os.path.isfile(p):
-                final_mkvs.append(p)
-        return final_mkvs, False
-
-    def episodes_remux(self, table: Optional[QTableWidget], folder_path: str,
-                       selected_mpls: Optional[list[tuple[str, str]]] = None,
-                       configuration: Optional[dict[int, dict[str, int | str]]] = None,
-                       cancel_event: Optional[threading.Event] = None,
-                       ensure_tools: bool = True,
-                       sp_entries: Optional[list[dict[str, int | str]]] = None,
-                       episode_output_names: Optional[list[str]] = None,
-                       episode_subtitle_languages: Optional[list[str]] = None):
-        dst_folder, mkv_files_before, bdmv_index_conf = self._prepare_episode_run(
-            folder_path, configuration, ensure_tools
-        )
-
-        self._build_main_episode_mkvs(bdmv_index_conf, dst_folder, cancel_event=cancel_event)
-
-        self.checked = True
-        self.episode_subtitle_languages = episode_subtitle_languages or []
-        mkv_raw = self._collect_target_mkv_files(dst_folder, mkv_files_before)
-        if getattr(self, 'movie_mode', False):
-            mkv_files = self._apply_episode_output_names(mkv_raw, episode_output_names)
-            self._remux_remap_chapter_skip_after_rename(mkv_files)
-        else:
-            self._progress(385, 'Writing Chapters')
-            mkv_files, post_aborted = self._post_remux_finalize_episodes(
-                dst_folder, bdmv_index_conf, self.configuration, episode_output_names, cancel_event)
-            if post_aborted:
-                print(f'{self.t("[post-remux] ")}{self.t("aborted chapter/rename pipeline (theory parse or missing outputs)")}')
-                mkv_files = mkv_raw
-            elif not mkv_files:
-                mkv_files = mkv_raw
+        # Planning must finish before this task creates its first output directory.
+        os.makedirs(dst_folder, exist_ok=True)
+        self._build_main_episode_mkvs(jobs, cancel_event=cancel_event)
         if cancel_event and cancel_event.is_set():
             raise _Cancelled()
-        if getattr(self, 'movie_mode', False):
-            self._progress(385, 'Writing Chapters')
-            self.add_chapter_to_mkv(
-                mkv_files, table, selected_mpls=selected_mpls, cancel_event=cancel_event,
-                configuration=self.configuration,
-            )
+        self._progress(385, 'Writing Chapters')
+        mkv_files = self._post_remux_finalize_episodes(jobs, cancel_event)
+
+        bdmv_index_conf: dict[int, list[dict[str, int | str]]] = {}
+        for configuration in self.configuration.values():
+            bdmv_index = int(configuration.get('bdmv_index') or 0)
+            bdmv_index_conf.setdefault(bdmv_index, []).append(configuration)
+        sp_entries = list(request.sp_entries)
+        episode_output_names = list(request.episode_output_names)
         # 0–40 % (~0–400): main MPLS mux (in _build_main_episode_mkvs), rename, chapters, track languages.
         self._progress(400)
 
@@ -1033,15 +1016,45 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
 
         base_out = os.path.normpath(folder_path)
         stage_parent = os.path.join(base_out, '_encode_remux_stage')
-        os.makedirs(stage_parent, exist_ok=True)
-
-        dst_stage, mkv_files_before, bdmv_index_conf = self._prepare_episode_run(
-            stage_parent, configuration, ensure_tools)
+        selected_for_stage = list(selected_mpls or [])
+        if not selected_for_stage:
+            seen_stage_mpls: set[str] = set()
+            for conf in (configuration or {}).values():
+                mpls_path = _svc_cls()._resolve_mpls_path_from_conf(conf, self.bdmv_path)
+                normalized_mpls = os.path.normcase(os.path.abspath(mpls_path))
+                if normalized_mpls in seen_stage_mpls:
+                    continue
+                seen_stage_mpls.add(normalized_mpls)
+                selected_for_stage.append((str(conf.get('folder') or self.bdmv_path), os.path.splitext(mpls_path)[0]))
+        stage_request = RemuxRequest(
+            bdmv_path=os.path.normpath(self.bdmv_path),
+            subtitle_files=tuple(self.sub_files or []),
+            complete_bluray_folder=bool(self.checked),
+            output_folder=stage_parent,
+            configuration=dict(configuration or {}),
+            selected_mpls=tuple(selected_for_stage),
+            sp_entries=tuple(sp_entries or []),
+            episode_output_names=tuple(episode_output_names),
+            episode_subtitle_languages=tuple(episode_subtitle_languages),
+            movie_mode=bool(getattr(self, 'movie_mode', False)),
+            mux_dolby_vision=bool(getattr(self, 'mux_dolby_vision', True)),
+            track_selection_config=dict(getattr(self, 'track_selection_config', {}) or {}),
+            track_language_config=dict(getattr(self, 'track_language_config', {}) or {}),
+            track_lossless_audio_config=dict(getattr(self, 'track_lossless_audio_config', {}) or {}),
+            default_lossless_audio_codec=str(
+                getattr(self, 'default_lossless_audio_codec', 'flac') or 'flac'
+            ),
+            ensure_tools=ensure_tools,
+        )
+        dst_stage, main_jobs = self._prepare_remux_main_jobs(stage_request)
+        os.makedirs(dst_stage, exist_ok=True)
+        bdmv_index_conf: dict[int, list[dict[str, int | str]]] = {}
+        for conf in self.configuration.values():
+            bdmv_index_conf.setdefault(int(conf.get('bdmv_index') or 0), []).append(conf)
         final_disc = os.path.join(base_out, os.path.basename(self.bdmv_path))
 
         self._build_main_episode_mkvs(
-            bdmv_index_conf,
-            dst_stage,
+            main_jobs,
             cancel_event=cancel_event,
             mux_progress_base=0,
             mux_progress_span=720,
@@ -1049,7 +1062,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
 
         self.checked = True
         self.episode_subtitle_languages = episode_subtitle_languages
-        mkv_raw = self._collect_target_mkv_files(dst_stage, mkv_files_before)
+        mkv_raw = [path for job in main_jobs for path in job.expected_outputs]
         mkv_files = self._apply_episode_output_names(mkv_raw, episode_output_names)
         self._remux_remap_chapter_skip_after_rename(mkv_files)
         if cancel_event and cancel_event.is_set():

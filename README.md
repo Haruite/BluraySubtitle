@@ -73,6 +73,19 @@ Encode mode supports two input sources:
 The **main playlist** supports editing the mux command (`remux_cmd`). Every selected main playlist must have exactly
 one non-empty command line; a count mismatch is rejected before the task starts.
 
+Remux captures one complete GUI request when the task starts. Each selected main playlist owns and executes exactly
+one command in the current visible selection order, including multiple main playlists selected from the same disc.
+Before creating the output directory, the task derives every command output and every final episode filename. The
+derived output count must match the visible episode rows; duplicate paths and existing outputs are errors. Final
+episode names are applied exactly as shown (`.mkv` is appended when omitted), and invalid filenames are rejected
+instead of being rewritten. If the primary command and its documented fallback paths still do not create every
+planned output, Remux stops with an error instead of scanning the directory and continuing with unrelated files.
+**Complete Blu-ray Folder** is applied exactly as selected and is no longer forced on by Remux execution.
+After every main-playlist command or fallback has created all planned outputs, Remux applies the language values saved
+by **Edit tracks** to the included video, audio, and subtitle tracks. It changes only mismatches with `mkvpropedit`,
+identifies the output again, and verifies the result. A mapping, tool, or verification failure stops the task and
+removes that job's newly created main outputs instead of silently keeping incorrect metadata.
+
 Encode options include:
 
 - **`vspipe` source**: bundled / system
@@ -120,7 +133,7 @@ This section explains, in plain language, how the program behaves internally.
 14. After **track edits**, output filenames are **recalculated immediately**.  
 15. After MPLS mux: clear chapters with **`mkvpropedit output.mkv --chapters ""`**, then build **`chapter.txt`** from MPLS, drop the **tail chapter marker**, and write chapters back **only** if the result is **not** “a single `00:00:00` chapter only”.  
 16. If the **first m2ts** of an MPLS cannot be read, the row is **grayed out** (read-only) and **skipped** on mux.  
-17. After mux completes, **track languages** are checked like main MPLS output; mismatches are fixed with **`mkvpropedit`**.  
+17. This main-playlist output step does not cover SP track-language correction; that work is deferred to the separate SP workflow refactoring.
 18. Finally, scan **m2ts files not covered by any MPLS** and append them to `table3`:
     - classify with `M2TS.get_m2ts_type` / track composition: `video` / `audio_only` / `igs_menu` / `subtitle_only` / `audio_with_subtitle` / `private_or_other` / `mixed_non_video` / `unknown`;
     - the last three types are **unsupported** (grayed out: raw ES not identifiable after extract); **`igs_menu`** can be extracted but is **unchecked** by default;
@@ -157,7 +170,7 @@ The app checks return code and output validity; on failure it enters fallback re
    - any **audio** tracks still missing afterward are filled with **silence** tracks.  
 5. Each clip mux command includes **`--track-order FID:TID,...`** so final track order matches the **first m2ts** reference.  
 6. Concatenate clip outputs in order with **`+`** and **`--append-mode track`**.  
-7. After mux, fix track languages with **`mkvpropedit`** where applicable.  
+7. When this fallback is used for a main Remux output, apply the languages saved by **Edit tracks** with **`mkvpropedit`** and verify the result.
 8. Write chapters (existing helpers); **audio compression** and later steps are handled elsewhere—this path covers mux and repair only.
 
 **Multi-output fallback** (one MPLS → several files):
@@ -216,6 +229,7 @@ Config generation should treat at least these **three** inputs as core; **any** 
 
 - Main remux command placeholders: **`{output_file}`**, **`{audio_opts}`**, **`{sub_opts}`**, **`{parts_split}`**.  
 - If the primary command output is wrong, fallbacks still use parsed args or default tracks where possible.  
+- After fallback, every planned output must exist; incomplete main-playlist output fails the task.
 - Chapter rewrite and language correction run **after mux** mainly to work around mkvtoolnix edge cases in metadata handling.
 
 ---
@@ -318,6 +332,10 @@ Typical flow:
 3. Verify main MPLS and chapter span.  
 4. (Optional) Edit remux command.  
 5. Choose output folder and run.
+
+At launch, Remux freezes the current playlist order, commands, chapter ranges, output names, subtitle languages,
+track settings, Dolby Vision option, and **Complete Blu-ray Folder** option into one request. All main outputs are
+planned before writing; existing or duplicate outputs stop the task without overwrite or automatic renaming.
 
 ## 4) Blu-ray Encode
 

@@ -309,38 +309,6 @@ class ConfigurationRowTests(unittest.TestCase):
         )
 
 
-class ExplicitServiceConfigurationTests(unittest.TestCase):
-    def test_episode_run_requires_explicit_configuration(self) -> None:
-        with self.assertRaisesRegex(ValueError, "Task configuration is required"):
-            RemuxEpisodeWorkflowsMixin._prepare_episode_run(
-                SimpleNamespace(),
-                "unused",
-                None,
-                False,
-            )
-
-    def test_episode_run_rejects_invalid_chapter_range_before_writing(self) -> None:
-        configuration = {
-            0: {
-                "bdmv_index": 1,
-                "chapter_index": 4,
-                "start_at_chapter": 4,
-                "end_at_chapter": 4,
-            }
-        }
-
-        with self.assertRaisesRegex(
-            ValueError,
-            "End chapter must be greater than start chapter in row 1",
-        ):
-            RemuxEpisodeWorkflowsMixin._prepare_episode_run(
-                SimpleNamespace(),
-                "unused",
-                configuration,
-                False,
-            )
-
-
 class GuiEncodeConfigurationTests(unittest.TestCase):
     def test_function_selection_uses_visible_tab_order(self) -> None:
         tabbar = SimpleNamespace(currentIndex=lambda: 2)
