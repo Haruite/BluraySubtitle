@@ -341,11 +341,34 @@ python src/main.py
 
 ---
 
+## setup_windows_environment.ps1（Windows 环境配置脚本）
+
+`setup_windows_environment.ps1` 用于配置完整的本地运行与编译环境，仅支持 **Windows 10 / Windows 11 x64 工作站版本**。
+
+首次运行前，先允许当前用户执行本地 PowerShell 脚本，再从仓库根目录启动：
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
+.\setup_windows_environment.ps1
+```
+
+脚本会申请管理员权限、询问显示语言，并支持中断后重新运行。下载时会自动使用已配置的 **Windows 系统代理**；如果无法直连下载源，请先配置系统代理再启动脚本。
+
+---
+
 ## setup_linux_environment.sh（Linux 运行环境脚本）
 
-`setup_linux_environment.sh`是用于构建特定 Linux 系统程序运行环境的脚本，当前支持：
+`setup_linux_environment.sh` 是用于构建特定 Linux 系统程序运行环境的脚本，当前支持：
+
 - Ubuntu 22.04 / 24.04 / 25.10 / 26.04
 - Debian 12 / 13
+
+首次运行前先授予脚本执行权限，再从仓库根目录启动：
+
+```bash
+chmod +x setup_linux_environment.sh
+./setup_linux_environment.sh
+```
 
 建议在远程终端中执行 `setup_linux_environment.sh`，因为远程终端会使用 tmux 输出，日志更简洁、更易读。
 

@@ -357,12 +357,34 @@ Typical flow:
 
 ---
 
+## `setup_windows_environment.ps1` (Windows environment setup)
+
+`setup_windows_environment.ps1` configures the complete local runtime and build environment. It supports only **Windows 10 / Windows 11 x64 workstation editions**.
+
+Before the first run, allow locally created PowerShell scripts for the current user, then start the setup from the repository root:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
+.\setup_windows_environment.ps1
+```
+
+The script requests administrator permission, asks for the display language, and can be rerun after interruption. Downloads use the configured **Windows system proxy** automatically; configure the system proxy first when direct access to the download sources is unavailable.
+
+---
+
 ## `setup_linux_environment.sh` (Linux runtime environment)
 
 `setup_linux_environment.sh` builds the program’s Linux runtime environment. Currently supported:
 
 - Ubuntu 22.04 / 24.04 / 25.10 / 26.04  
 - Debian 12 / 13  
+
+Make the script executable before the first run, then start it from the repository root:
+
+```bash
+chmod +x setup_linux_environment.sh
+./setup_linux_environment.sh
+```
 
 Prefer running `setup_linux_environment.sh` in a **remote terminal**: it uses **tmux** for cleaner, easier-to-read logs.
 

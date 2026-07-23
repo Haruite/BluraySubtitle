@@ -21,6 +21,7 @@ When the author establishes a new rule, update this file and its Simplified Chin
 - Use the simplest correct implementation.
 - Remove duplicated, contradictory, unreachable, and unnecessary logic when it is within the current scope.
 - Do not add speculative checks or abstractions for cases that the product does not require.
+- Avoid any unnecessary validation unrelated to the objective. Prefer simple structural or literal checks, and use strict regular-expression matching only when the format itself is part of the requirement.
 - Validate a fact at its owning boundary instead of repeating the same validation through every layer.
 - Reuse one implementation for genuinely shared behavior. Do not force unrelated workflows through a shared abstraction merely because their code looks similar.
 - Prefer one function for one complete operation. Do not split a straightforward operation into many tiny forwarding or one-line helpers.

@@ -214,6 +214,25 @@ Rebuilt Add Chapters as an independent GUI request, background worker, and plain
 
 The legacy chapter entry still used internally by Remux/Encode remains until those workflows are refactored. Their broader orchestration was not changed in this batch.
 
+## Windows Environment Setup Script — Phases 1–5
+
+Date: 2026-07-23
+
+### Summary
+
+- Phase 1 added the elevated, bilingual Windows 10/11 x64 bootstrap, fixed paths, system proxy support, temporary-directory cleanup, and resumable state.
+- Phase 2 added the Python and native build toolchain, including conditional MSYS2 setup only when compiled outputs need work.
+- Phase 3 added the media inspection, muxing, conversion, and disc utility executables used by the application.
+- Phase 4 added x264, multi-bit-depth x265 and SVT-AV1, fdkaac, and libass preparation.
+- Phase 5 added the portable VapourSynth Classic environment with embedded Python 3.13, NumPy, VSEdit, scripts, and the 15 baseline plugins.
+- All phases detect existing installations, skip satisfied components, and repair or upgrade components when required.
+
+### Verification
+
+- The single Windows setup test module contains 49 passing tests.
+- PowerShell parsing, file-format, and whitespace checks passed.
+- A complete clean-machine installation remains a manual verification.
+
 ## Phase 3.3 — Blu-ray Remux Workflow
 
 Date: 2026-07-22
