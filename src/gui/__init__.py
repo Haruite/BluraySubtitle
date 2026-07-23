@@ -5,7 +5,6 @@ from .app import BluraySubtitleGUI
 from .app import ChapterWorker
 from .app import CustomBox
 from .app import CustomTableWidget
-from .app import EncodeMkvFolderWorker
 from .app import EncodeWorker
 from .app import FilePathTableWidgetItem
 from .app import MergeWorker
@@ -20,7 +19,6 @@ __all__ = [
     "ChapterWorker",
     "RemuxWorker",
     "EncodeWorker",
-    "EncodeMkvFolderWorker",
     "MergeWorker",
     "SubtitleFolderScanWorker",
     "SpTableScanWorker",

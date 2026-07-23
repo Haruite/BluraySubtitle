@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import QTableWidget
 
 from src.bdmv import Chapter
 from src.runtime.remux import RemuxMainJob, RemuxRequest
+from src.runtime.encode import EncodeRequest, EncodeRow
 
 
 class BluraySubtitleServiceBase:
@@ -518,7 +519,25 @@ class BluraySubtitleServiceBase:
         """Stub for `episodes_remux`."""
         raise NotImplementedError
 
-    def episodes_encode(self, table: Optional[QTableWidget], folder_path: str, selected_mpls: Optional[list[tuple[str, str]]]=None, configuration: Optional[dict[int, dict[str, int | str]]]=None, cancel_event: Optional[threading.Event]=None, ensure_tools: bool=True, vpy_paths: Optional[list[str]]=None, sp_vpy_paths: Optional[list[str]]=None, sp_entries: Optional[list[dict[str, int | str]]]=None, episode_output_names: Optional[list[str]]=None, episode_subtitle_languages: Optional[list[str]]=None, vspipe_mode: str='bundle', x265_mode: str='bundle', x265_params: str='', sub_pack_mode: str='external', encode_tool: str='x265', encode_bit_depth: str='10'):
+    def _encode_mkv_rows(
+            self,
+            request: EncodeRequest,
+            main_rows: list[EncodeRow],
+            sp_rows: list[EncodeRow],
+            cancel_event: Optional[threading.Event],
+            *,
+            companion_root: str = '',
+            progress_base: int = 0,
+            progress_span: int = 1000,
+    ) -> None:
+        """Stub for `_encode_mkv_rows`."""
+        raise NotImplementedError
+
+    def episodes_encode(
+            self,
+            request: EncodeRequest,
+            cancel_event: Optional[threading.Event] = None,
+    ) -> None:
         """Stub for `episodes_encode`."""
         raise NotImplementedError
 

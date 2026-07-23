@@ -5,7 +5,6 @@ from ..runtime.gui_runtime import BluraySubtitleGUI
 from ..runtime.gui_runtime import ChapterWorker
 from ..runtime.gui_runtime import CustomBox
 from ..runtime.gui_runtime import CustomTableWidget
-from ..runtime.gui_runtime import EncodeMkvFolderWorker
 from ..runtime.gui_runtime import EncodeWorker
 from ..runtime.gui_runtime import FilePathTableWidgetItem
 from ..runtime.gui_runtime import MergeWorker
@@ -20,7 +19,6 @@ __all__ = [
     "ChapterWorker",
     "RemuxWorker",
     "EncodeWorker",
-    "EncodeMkvFolderWorker",
     "MergeWorker",
     "SubtitleFolderScanWorker",
     "SpTableScanWorker",

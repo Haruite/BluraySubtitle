@@ -9,6 +9,7 @@ from unittest.mock import patch
 from src.runtime.gui_runtime_classes import encode_worker as encode_worker_module
 from src.runtime.gui_runtime_classes import merge_worker as merge_worker_module
 from src.runtime.gui_runtime_classes import remux_worker as remux_worker_module
+from src.runtime.encode import EncodeRequest, EncodeRow, EncodeSettings
 
 
 class _FakeService:
@@ -68,31 +69,40 @@ class WorkerConfigurationBoundaryTests(unittest.TestCase):
 
     def test_encode_worker_passes_only_its_explicit_configuration(self) -> None:
         configuration = {0: {"selected_mpls": "00001", "start_at_chapter": 1}}
-        worker = encode_worker_module.EncodeWorker(
-            "disc",
-            [""],
-            True,
-            "output",
-            configuration,
-            [],
-            threading.Event(),
-            ["episode.vpy"],
-            [],
-            [],
-            ["Episode.mkv"],
-            ["eng"],
-            "bundle",
-            "bundle",
-            "--crf 18",
-            "external",
+        request = EncodeRequest(
+            input_mode='bdmv',
+            source_root='disc',
+            output_folder='output/disc',
+            staging_folder='output/_encode_remux_stage',
+            main_rows=(EncodeRow(
+                source_path='',
+                output_path='output/disc/Episode.mkv',
+                vpy_path='episode.vpy',
+                configuration_key=0,
+                configuration=configuration[0],
+            ),),
+            sp_rows=(),
+            settings=EncodeSettings(
+                vspipe_mode='bundle',
+                encoder_mode='bundle',
+                encoder_parameters='--crf 18',
+                subtitle_mode='external',
+                encoder='x265',
+                bit_depth='10',
+                use_getnative=True,
+                default_lossless_audio_codec='flac',
+            ),
         )
+        worker = encode_worker_module.EncodeWorker(request, threading.Event())
 
         with patch.object(encode_worker_module, "BluraySubtitle", _FakeService):
             worker.run()
 
         service = _FakeService.instances[0]
         self.assertFalse(service.configuration_was_preassigned)
-        self.assertIs(service.encode_call[1]["configuration"], configuration)
+        self.assertEqual(service.init_args[:3], ('disc', [''], False))
+        self.assertIs(service.encode_call[0][0], request)
+        self.assertIs(service.encode_call[0][0].main_rows[0].configuration, configuration[0])
 
     def test_merge_worker_passes_one_complete_request_and_applies_completion(self) -> None:
         request = merge_worker_module.MergeSubtitleRequest(

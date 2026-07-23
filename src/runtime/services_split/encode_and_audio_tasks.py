@@ -1221,12 +1221,9 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     encode_tool: str = 'x265', encode_bit_depth: str = '10'):
         vpy_path = os.path.normpath(os.path.abspath(str(vpy_path or '').strip()))
         if not os.path.isfile(vpy_path):
-            if _ensure_runtime_vpy_file(vpy_path):
-                self._log_getnative(f'{self.t("[BluraySubtitle] recreate missing vpy: ")}{vpy_path}')
-            else:
-                self._log_getnative(f'{self.t("[BluraySubtitle] vpy not found and recreate failed: ")}{vpy_path}')
-        if not os.path.isfile(vpy_path):
-            return
+            raise FileNotFoundError(
+                translate_text('VPy file does not exist: {path}').format(path=vpy_path)
+            )
 
         src_mkv = os.path.normpath(source_file) if source_file else os.path.normpath(output_file)
         tool_key = _normalize_encode_tool_label(encode_tool)
@@ -1241,11 +1238,16 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             if dv_tid is not None:
                 if not encode_dovi_supported(encode_tool, bd):
                     print(
-                        f'[encode-dovi] {translate_text("Dolby Vision 不支持 h264 或输出位深 8bit")} '
+                        f'[encode-dovi] '
+                        f'{translate_text("Dolby Vision is not supported with H.264 or 8-bit output depth")} '
                         f'({os.path.basename(src_mkv)})',
                         flush=True,
                     )
-                    return
+                    raise RuntimeError(
+                        translate_text('Dolby Vision encode settings are not supported: {path}').format(
+                            path=src_mkv
+                        )
+                    )
                 try:
                     self._progress(text=f'Dolby Vision: preparing {os.path.basename(src_mkv)}')
                 except Exception:
@@ -1256,7 +1258,11 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                         f'[encode-dovi] failed to prepare Dolby Vision encode for {src_mkv}',
                         flush=True,
                     )
-                    return
+                    raise RuntimeError(
+                        translate_text('Failed to prepare Dolby Vision encode: {path}').format(
+                            path=src_mkv
+                        )
+                    )
                 vpy_video_source = str(encode_dovi_plan.get('bl_hevc') or src_mkv)
         self._cleanup_getnative_artifacts()
         use_getnative = bool(getattr(self, "use_getnative", True))
@@ -1396,7 +1402,11 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             )
             if encode_dovi_plan:
                 cleanup_encode_dolby_vision_workdir(encode_dovi_plan)
-            return
+            raise RuntimeError(
+                translate_text('Failed to set the VPy video source: {path}').format(
+                    path=vpy_path
+                )
+            )
 
         def cleanup_lwi_for_source(source_path: str):
             for suffix in ('.lwi', '.lwi.lock'):
@@ -1475,6 +1485,23 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
         if encode_dovi_plan and enc_rc != 0:
             cleanup_encode_dolby_vision_workdir(encode_dovi_plan)
             encode_dovi_plan = None
+        if enc_rc != 0:
+            if os.path.isfile(encoded_path):
+                force_remove_file(encoded_path)
+            raise RuntimeError(
+                translate_text('Encode pipeline failed with exit code {code}: {path}').format(
+                    code=enc_rc,
+                    path=src_mkv,
+                )
+            )
+        if not os.path.isfile(encoded_path):
+            if encode_dovi_plan:
+                cleanup_encode_dolby_vision_workdir(encode_dovi_plan)
+            raise RuntimeError(
+                translate_text('Encoded video output is missing: {path}').format(
+                    path=encoded_path
+                )
+            )
         if encode_dovi_plan and enc_rc == 0 and os.path.isfile(encoded_path):
             try:
                 self._progress(text=f'Dolby Vision: inject RPU {os.path.basename(encoded_path)}')
@@ -1484,7 +1511,11 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             if not dovi_tool_inject_rpu_hevc(encoded_path, rpu_path):
                 print('[encode-dovi] post-encode inject-rpu failed', flush=True)
                 cleanup_encode_dolby_vision_workdir(encode_dovi_plan)
-                return
+                raise RuntimeError(
+                    translate_text('Failed to inject Dolby Vision RPU: {path}').format(
+                        path=encoded_path
+                    )
+                )
             cleanup_encode_dolby_vision_workdir(encode_dovi_plan)
             encode_dovi_plan = None
         cleanup_lwi_for_source(src_mkv)
@@ -1499,7 +1530,11 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             same_mkv = os.path.normpath(output_file) == src_mkv
             output_file1 = (os.path.splitext(output_file)[0] + '.tmp.mkv') if same_mkv else output_file
             if not same_mkv and os.path.exists(output_file1):
-                force_remove_file(output_file1)
+                raise FileExistsError(
+                    translate_text('Output file already exists: {path}').format(
+                        path=output_file1
+                    )
+                )
             remux_cmd = self.generate_remux_cmd(track_count, track_info, external_audio, output_file1, src_mkv,
                                                 encoded_video_file=encoded_path if os.path.exists(encoded_path) else None)
             if sub_pack_mode == 'soft':
@@ -1531,6 +1566,13 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     f'{translate_text("mkvmerge 混流失败 (exit ")}{mux_rc}'
                     f'{translate_text(")：")}{output_file1}',
                     flush=True,
+                )
+                if os.path.isfile(output_file1):
+                    force_remove_file(output_file1)
+                if os.path.isfile(encoded_path):
+                    force_remove_file(encoded_path)
+                raise RuntimeError(
+                    translate_text('mkvmerge failed for: {path}').format(path=output_file1)
                 )
             if os.path.exists(encoded_path):
                 os.remove(encoded_path)

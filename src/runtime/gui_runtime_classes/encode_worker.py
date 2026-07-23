@@ -1,11 +1,11 @@
-import os
 import threading
 import traceback
 from typing import Optional
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
-from src.exports.utils import print_terminal_line, print_tb_string_terminal
+from src.exports.utils import print_tb_string_terminal, print_terminal_line
+from src.runtime.encode import EncodeRequest
 from src.runtime.services import _Cancelled, BluraySubtitle
 
 
@@ -16,70 +16,29 @@ class EncodeWorker(QObject):
     canceled = pyqtSignal()
     failed = pyqtSignal(str)
 
-    def __init__(self, bdmv_path: str, sub_files: list[str], checked: bool, output_folder: str,
-                 configuration: dict[int, dict[str, int | str]], selected_mpls: list[tuple[str, str]],
-                 cancel_event: threading.Event, vpy_paths: list[str], sp_vpy_paths: list[str], sp_entries: list[dict[str, int | str]],
-                 episode_output_names: list[str], episode_subtitle_languages: list[str],
-                 vspipe_mode: str, x265_mode: str, x265_params: str, sub_pack_mode: str,
-                 encode_tool: str = 'x265',
-                 encode_bit_depth: str = '10',
-                 use_getnative: bool = True,
-                 movie_mode: bool = False,
-                 episode_trim_copyright_tail: bool = False,
-                 mux_dolby_vision: bool = True,
-                 track_selection_config: Optional[dict[str, dict[str, list[str]]]] = None,
-                 track_language_config: Optional[dict[str, dict[str, str]]] = None,
-                 track_lossless_audio_config: Optional[dict[str, dict[str, str]]] = None,
-                 default_lossless_audio_codec: str = 'flac'):
+    def __init__(self, request: EncodeRequest, cancel_event: threading.Event):
         super().__init__()
-        self.bdmv_path = bdmv_path
-        self.sub_files = sub_files
-        self.checked = checked
-        self.output_folder = output_folder
-        self.configuration = configuration
-        self.selected_mpls = selected_mpls
+        self.request = request
         self.cancel_event = cancel_event
-        self.vpy_paths = vpy_paths
-        self.sp_vpy_paths = sp_vpy_paths
-        self.sp_entries = sp_entries
-        self.episode_output_names = episode_output_names
-        self.episode_subtitle_languages = episode_subtitle_languages
-        self.vspipe_mode = vspipe_mode
-        self.x265_mode = x265_mode
-        self.x265_params = x265_params
-        self.sub_pack_mode = sub_pack_mode
-        self.encode_tool = encode_tool
-        self.encode_bit_depth = encode_bit_depth
-        self.use_getnative = bool(use_getnative)
-        self.movie_mode = bool(movie_mode)
-        self.episode_trim_copyright_tail = bool(episode_trim_copyright_tail)
-        self.mux_dolby_vision = bool(mux_dolby_vision)
-        self.track_selection_config = track_selection_config or {}
-        self.track_language_config = track_language_config or {}
-        self.track_lossless_audio_config = track_lossless_audio_config or {}
-        d = str(default_lossless_audio_codec or 'flac').strip().lower()
-        self.default_lossless_audio_codec = d if d in ('flac', 'aac', 'opus') else 'flac'
 
     def run(self):
         try:
             from src.bdmv.chapter import chapter_tail_trim_clear, chapter_tail_trim_register_path
             from src.runtime.services_split.media_info_and_track_mapping import mpls_playlist_caches_clear
 
+            request = self.request
             chapter_tail_trim_clear()
-            if (not self.movie_mode) and self.episode_trim_copyright_tail:
-                for _folder, mpls_ne in (self.selected_mpls or []):
-                    stem = str(mpls_ne or '').strip()
-                    if not stem:
+            if (not request.movie_mode) and request.episode_trim_copyright_tail:
+                for _folder, selected_mpls in request.selected_mpls:
+                    playlist_path = str(selected_mpls or '').strip()
+                    if not playlist_path:
                         continue
-                    path = stem if stem.lower().endswith('.mpls') else stem + '.mpls'
-                    try:
-                        if os.path.isfile(path):
-                            chapter_tail_trim_register_path(path)
-                    except Exception:
-                        pass
+                    if not playlist_path.lower().endswith('.mpls'):
+                        playlist_path += '.mpls'
+                    chapter_tail_trim_register_path(playlist_path)
             mpls_playlist_caches_clear()
 
-            def progress_cb(value: Optional[int] = None, text: Optional[str] = None):
+            def progress_callback(value: Optional[int] = None, text: Optional[str] = None):
                 if value is not None:
                     self.progress.emit(int(value))
                 if text:
@@ -87,41 +46,22 @@ class EncodeWorker(QObject):
                 if self.cancel_event.is_set():
                     raise _Cancelled()
 
-            bs = BluraySubtitle(
-                self.bdmv_path, self.sub_files, self.checked, progress_cb,
-                movie_mode=self.movie_mode, mux_dolby_vision=self.mux_dolby_vision,
+            service = BluraySubtitle(
+                request.source_root,
+                [row.subtitle_path for row in request.main_rows],
+                False,
+                progress_callback,
+                movie_mode=request.movie_mode,
+                mux_dolby_vision=request.mux_dolby_vision,
             )
-            bs.track_selection_config = self.track_selection_config
-            bs.track_language_config = self.track_language_config
-            bs.track_lossless_audio_config = self.track_lossless_audio_config
-            bs.default_lossless_audio_codec = self.default_lossless_audio_codec
-            bs.use_getnative = bool(getattr(self, "use_getnative", True))
-            bs.episodes_encode(
-                None,
-                self.output_folder,
-                selected_mpls=self.selected_mpls,
-                configuration=self.configuration,
-                cancel_event=self.cancel_event,
-                ensure_tools=False,
-                vpy_paths=self.vpy_paths,
-                sp_vpy_paths=self.sp_vpy_paths,
-                sp_entries=self.sp_entries,
-                episode_output_names=self.episode_output_names,
-                episode_subtitle_languages=self.episode_subtitle_languages,
-                vspipe_mode=self.vspipe_mode,
-                x265_mode=self.x265_mode,
-                x265_params=self.x265_params,
-                sub_pack_mode=self.sub_pack_mode,
-                encode_tool=self.encode_tool,
-                encode_bit_depth=self.encode_bit_depth,
-            )
+            service.episodes_encode(request, cancel_event=self.cancel_event)
         except _Cancelled:
             print_terminal_line('[BluraySubtitle] Encode worker: canceled.')
             self.canceled.emit()
         except Exception:
-            tb = traceback.format_exc()
-            print_tb_string_terminal(tb)
-            self.failed.emit(tb)
+            traceback_text = traceback.format_exc()
+            print_tb_string_terminal(traceback_text)
+            self.failed.emit(traceback_text)
         else:
             print_terminal_line('[BluraySubtitle] Encode worker: finished successfully.')
             self.finished.emit()

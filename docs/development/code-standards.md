@@ -57,7 +57,8 @@ When the author establishes a new rule, update this file and its Simplified Chin
 - Preflight should focus on facts already known from the request: required paths, selected inputs, required tools, invalid ranges, incomplete row mappings, command structure, output paths, and deterministic collisions.
 - Do not duplicate expensive media probing or add restrictive checks that reject valid inputs without a confirmed rule.
 - Media-dependent failures discovered during execution must identify the affected source or row and fail clearly.
-- An existing planned output is always an error. Do not overwrite, skip, rename, reuse, or silently accept it.
+- An existing planned output is an error unless a confirmed product rule defines the workflow as resumable. Existing outputs must never be overwritten, renamed, or reused as a different result.
+- A resumable workflow must document which output types count as completed and report every skipped output in task progress.
 - When output paths can be derived before execution, derive and check the complete set before the first write.
 - When mapping can be planned before execution, complete the plan before mutating source files or creating final outputs.
 - External commands must have their return status checked. Tool-specific warning return codes may be accepted only when documented or verified.
@@ -84,6 +85,7 @@ When the author establishes a new rule, update this file and its Simplified Chin
 - Route user-visible text through `self.t(...)` or `translate_text(...)` at the appropriate presentation boundary.
 - Dynamic messages should translate a stable template and then substitute values.
 - Update `README.md` and `README.zh-Hans.md` together whenever product behavior or retained implementation detail is documented.
+- README files describe current functionality, retained implementation behavior, and operational cautions. Historical comparisons, removed behavior, refactoring rationale, and future cleanup plans belong in refactoring history or development documents, not in README.
 
 ## 8. File Format
 
@@ -94,7 +96,7 @@ When the author establishes a new rule, update this file and its Simplified Chin
 
 ## 9. Confirmed Product Constraints
 
-- An already existing output file is an explicit error.
+- Remux-source Encode is resumable. Existing planned main, SP, external-subtitle, and companion outputs are treated as completed and skipped without overwrite; remaining rows continue. Duplicate paths within the current request remain errors.
 - Blu-ray DIY remains visible and its code is retained. Its incomplete execution must not be presented as complete.
 - Configured track-language changes must be applied to the output.
 - Generic video conversion is not supported by Blu-ray Remux or Blu-ray Encode. Future DIY video conversion requires a separately confirmed design.

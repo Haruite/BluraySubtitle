@@ -5,7 +5,6 @@ from .bluray_subtitle_gui_entry import BluraySubtitleGUI
 from .chapter_worker import ChapterWorker
 from .custom_box import CustomBox
 from .custom_table_widget import CustomTableWidget
-from .encode_mkv_folder_worker import EncodeMkvFolderWorker
 from .encode_worker import EncodeWorker
 from .file_path_table_widget_item import FilePathTableWidgetItem
 from .merge_worker import MergeWorker
@@ -19,7 +18,6 @@ __all__ = [
     "ChapterWorker",
     "RemuxWorker",
     "EncodeWorker",
-    "EncodeMkvFolderWorker",
     "MergeWorker",
     "SubtitleFolderScanWorker",
     "SpTableScanWorker",

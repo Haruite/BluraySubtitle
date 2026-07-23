@@ -287,3 +287,60 @@ Rebuilt the Remux GUI request, worker boundary, preflight plan, main-playlist ex
 ### Deferred
 
 SP, including its own output-language mapping, track alignment and missing-track repair, audio conversion, and Dolby Vision internals were not redesigned in this workflow. Encode only adopts the shared main-Remux planning boundary needed to keep that code path working; its broader orchestration remains for Phase 3.4.
+
+## Phase 3.4 — Blu-ray Encode Main Workflow
+
+Date: 2026-07-22
+Commit: Included in this change
+
+### Scope
+
+Rebuilt the Encode launch, worker, Blu-ray staging, and shared row-execution path for both Blu-ray and Remux inputs. SP mux algorithms, track alignment, missing-track repair, audio conversion algorithms, and Dolby Vision algorithms remain in their later workflow phases.
+
+### Redundant or Conflicting Paths Removed
+
+- Removed the duplicated Blu-ray/Remux GUI launch branches and their duplicated thread cleanup and signal wiring.
+- Removed the worker's long mirrored parameter list in favor of one immutable Encode request.
+- Removed `EncodeMkvFolderWorker` and the nested synchronous Worker call inside the service. Execution failures now propagate to the one GUI Worker instead of being converted into an inner signal and then followed by a false outer success.
+- Removed parallel arrays for subtitles, output names, languages, VPy paths, configurations, and SP entries. Each visible row now owns its related values and exact output path.
+- Removed directory scanning used to rediscover staged main outputs after Remux.
+- Removed Encode's hidden **Complete Blu-ray Folder** read, forced enabled state, and `completion()` call.
+- Removed legacy silent existing-output skips, best-effort copy failures, and runtime regeneration of a missing explicit VPy file. Remux-source resume now follows one explicit documented rule instead.
+
+### Logic Changes
+
+- One request captures the input mode, ordered main/SP rows, exact outputs, subtitles and languages, VPy paths, all encoder controls, trimming and Dolby Vision controls, and track settings before the worker starts.
+- Both input modes use one Worker and one shared row executor. Source-specific code now only decides whether source MKVs already exist or must first be Remuxed into staging.
+- Deterministic preflight checks the source, selected main playlists, row/configuration counts, VPy files, required tools, output containment and names, duplicate paths, strict Blu-ray output collisions, and a non-empty staging directory before worker launch.
+- Blu-ray input uses the exact Remux main-job planner and finalizer. Planned names, chapters, fallback behavior, selected tracks, and track-language corrections are retained in the staged sources before encoding.
+- Encode never completes or mutates the selected Blu-ray source. It owns only its disc subfolder under `_encode_remux_stage`; cleanup does not remove a pre-existing staging parent.
+- Remux input keeps non-MKV companion files at their relative paths. External subtitle filenames follow each visible main output basename in both input modes. Duplicate destinations within one request and copy failures are errors.
+- Blu-ray input rejects existing planned outputs. Remux input treats existing planned main/SP outputs, external subtitles, and companion files as completed, reports each skip, and continues with the remaining rows without overwriting anything.
+- Missing row outputs after `encode_task` are errors. A nonzero encoder pipeline, missing encoded elementary stream, failed VPy source update, failed Dolby Vision preparation/injection, or failed final `mkvmerge` now stops the task. Video encode failure cannot continue into audio processing and accidentally mux the original video.
+- Episode-linked SP rows remain represented in the request but are not encoded twice after their staged effect has already been applied to the main source.
+
+### Documentation and i18n
+
+- Updated both README versions with the single-request contract, preflight, exact outputs, staging ownership, companion/external-subtitle behavior, and strict pipeline failure behavior.
+- Added bilingual Encode preflight, progress, missing-output, tool, VPy, and pipeline-failure messages.
+- Synchronized service IDE declarations and removed the obsolete worker exports.
+
+### Verification
+
+- Added focused tests for GUI request capture without the hidden checkbox, duplicate outputs, strict Blu-ray collisions, resumable Remux outputs and sidecars, output containment, missing VPy files, shared executor failure behavior, Blu-ray staging ownership, and encoder-failure propagation before audio/mux.
+- Updated the worker boundary test for the immutable request.
+- The concentrated repository run completed 114 tests successfully.
+- Python compilation, i18n audit, split-contract audit, `git diff --check`, and CRLF checks passed.
+
+### Manual Media Checks Still Required
+
+- Encode one short anime episode from `E:\BDMV` and verify the visible output name, chapters, selected tracks, edited track languages, chosen VPy, encoder, bit depth, parameters, subtitle mode, and lossless-audio choice.
+- Encode a short test from a Remux folder and verify the same settings plus external-subtitle naming and relative companion-file copies.
+- Confirm Blu-ray input rejects an existing main/SP output before writing any new final output.
+- Start a Remux-source task with some existing main/SP/subtitle/companion outputs and some missing outputs; confirm existing files remain unchanged, each skip is reported, and the remaining outputs are produced.
+- Force an encoder failure with a disposable short task and confirm that no final MKV is reported as successful.
+- Exercise a Dolby Vision source with supported settings and an intentionally unsupported setting. Use disposable output/staging directories; the source Blu-ray directory should remain unchanged.
+
+### Deferred
+
+SP muxing and special-output algorithms, track alignment and missing-track repair, lossless-audio conversion internals, and Dolby Vision preparation/injection internals were not redesigned. This phase changes only their request/orchestration boundary and failure propagation where required to make the Encode main workflow truthful.

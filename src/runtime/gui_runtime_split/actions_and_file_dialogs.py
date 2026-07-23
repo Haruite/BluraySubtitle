@@ -1,4 +1,5 @@
 """Target module for button handlers and file/folder dialog actions."""
+import copy
 import datetime
 import os
 import re
@@ -32,8 +33,8 @@ from src.exports.utils import (
     chapter_view_segment_trace_begin,
     chapter_view_segment_trace_end,
 )
-from src.runtime.gui_runtime_classes.encode_mkv_folder_worker import EncodeMkvFolderWorker
 from src.runtime.gui_runtime_classes.encode_worker import EncodeWorker
+from src.runtime.encode import EncodeRequest, EncodeRow, EncodeSettings, validate_encode_request
 from src.runtime.gui_runtime_classes.file_path_table_widget_item import FilePathTableWidgetItem
 from src.runtime.gui_runtime_classes.chapter_worker import AddChaptersRequest, ChapterWorker
 from src.runtime.gui_runtime_classes.merge_worker import MergeSubtitleRequest, MergeWorker
@@ -949,277 +950,227 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         subtitle_edit_dialog.exec()
 
     def encode_bluray(self):
-        output_folder = os.path.normpath(self.output_folder_path.text().strip()) if hasattr(self,
-                                                                                            'output_folder_path') else ''
-        if not output_folder:
-            QMessageBox.information(self, " ", "Output folder is not selected")
+        output_base = os.path.normpath(
+            self.output_folder_path.text().strip()
+        ) if hasattr(self, 'output_folder_path') else ''
+        if not output_base:
+            QMessageBox.information(self, ' ', self.t('Output folder is not selected'))
             return
-        if not os.path.isdir(output_folder):
-            QMessageBox.information(self, " ", "Output folder does not exist")
+        if not os.path.isdir(output_base):
+            QMessageBox.information(self, ' ', self.t('Output folder does not exist'))
             return
-        self.ensure_default_vpy_file()
-        find_mkvtoolnix()
+
+        try:
+            self.ensure_default_vpy_file()
+            vspipe_mode = 'bundle' if self.vspipe_mode_combo.currentText() == 'Built-in' else 'system'
+            encoder_mode = 'bundle' if self.x265_mode_combo.currentText() == 'Built-in' else 'system'
+            encoder, bit_depth = self._current_encode_tool_and_depth()
+            encoder = str(encoder or '').strip().lower()
+            if self.sub_pack_hard_radio.isChecked():
+                subtitle_mode = 'hard'
+            elif self.sub_pack_soft_radio.isChecked():
+                subtitle_mode = 'soft'
+            else:
+                subtitle_mode = 'external'
+            encode_settings = EncodeSettings(
+                vspipe_mode=vspipe_mode,
+                encoder_mode=encoder_mode,
+                encoder_parameters=self._effective_encode_params(),
+                subtitle_mode=subtitle_mode,
+                encoder=encoder,
+                bit_depth=bit_depth,
+                use_getnative=bool(
+                    getattr(self, 'use_getnative_checkbox', None)
+                    and self.use_getnative_checkbox.isChecked()
+                ),
+                default_lossless_audio_codec=self._current_encode_lossless_audio_codec(),
+            )
+
+            input_mode = getattr(self, '_encode_input_mode', 'bdmv')
+            main_rows: list[EncodeRow] = []
+            sp_rows: list[EncodeRow] = []
+            selected_mpls: tuple[tuple[str, str], ...] = ()
+            staging_folder = ''
+            if input_mode == 'remux':
+                source_root = self._normalize_path_input(
+                    self.remux_folder_path.text() if hasattr(self, 'remux_folder_path') else ''
+                )
+                if not source_root:
+                    raise FileNotFoundError(self.t('Select the remux folder'))
+                source_root = os.path.normpath(source_root)
+                output_folder = self._resolve_remux_output_folder(output_base)
+                output_column = ENCODE_REMUX_LABELS.index('output_name')
+                language_column = ENCODE_REMUX_LABELS.index('language')
+                subtitle_column = ENCODE_REMUX_LABELS.index('sub_path')
+                for row_index in range(self.table2.rowCount()):
+                    source_path = self._get_remux_source_path_from_table2_row(row_index)
+                    output_item = self.table2.item(row_index, output_column)
+                    output_name = (
+                        output_item.text().strip()
+                        if output_item and output_item.text()
+                        else os.path.basename(source_path)
+                    )
+                    if not output_name.lower().endswith('.mkv'):
+                        output_name += '.mkv'
+                    subtitle_item = self.table2.item(row_index, subtitle_column)
+                    subtitle_path = (
+                        subtitle_item.text().strip()
+                        if subtitle_item and subtitle_item.text()
+                        else ''
+                    )
+                    language = ''
+                    language_combo = self.table2.cellWidget(row_index, language_column)
+                    if isinstance(language_combo, QComboBox):
+                        language = str(
+                            language_combo.currentData()
+                            or language_combo.currentText()
+                            or ''
+                        ).strip()
+                    main_rows.append(EncodeRow(
+                        source_path=os.path.normpath(source_path),
+                        output_path=os.path.join(output_folder, output_name),
+                        vpy_path=self.get_vpy_path_from_row(row_index) or self.get_default_vpy_path(),
+                        subtitle_path=os.path.normpath(subtitle_path) if subtitle_path else '',
+                        subtitle_language=language,
+                    ))
+
+                if hasattr(self, 'table3'):
+                    output_column = ENCODE_REMUX_SP_LABELS.index('output_name')
+                    for row_index in range(self.table3.rowCount()):
+                        source_path = self._get_remux_source_path_from_table3_row(row_index)
+                        output_item = self.table3.item(row_index, output_column)
+                        output_name = (
+                            output_item.text().strip()
+                            if output_item and output_item.text()
+                            else os.path.basename(source_path)
+                        )
+                        if not source_path.lower().endswith('.mka') and not output_name.lower().endswith('.mkv'):
+                            output_name += '.mkv'
+                        sp_rows.append(EncodeRow(
+                            source_path=os.path.normpath(source_path),
+                            output_path=os.path.join(output_folder, 'SPs', output_name),
+                            vpy_path=self.get_sp_vpy_path_from_row(row_index) or self.get_default_vpy_path(),
+                        ))
+            else:
+                source_root = os.path.normpath(self.bdmv_folder_path.text().strip())
+                selected_mpls = tuple(self.get_selected_mpls_no_ext())
+                configuration = self._configuration_for_service_run()
+                ordered_configuration = [
+                    (int(key), dict(configuration[key]))
+                    for key in sorted(configuration)
+                ]
+                if len(ordered_configuration) != self.table2.rowCount():
+                    raise ValueError(self.t('Task configuration does not match the visible encode rows'))
+                output_folder = os.path.join(
+                    output_base,
+                    os.path.basename(source_root.rstrip(os.sep)),
+                )
+                staging_folder = os.path.join(output_base, '_encode_remux_stage')
+                output_names = self._get_episode_output_names_from_table2()
+                subtitle_languages = self._get_episode_subtitle_languages_from_table2()
+                for row_index, (configuration_key, row_configuration) in enumerate(
+                        ordered_configuration):
+                    output_name = output_names[row_index].strip()
+                    if not output_name.lower().endswith('.mkv'):
+                        output_name += '.mkv'
+                    subtitle_item = self.table2.item(row_index, 0)
+                    subtitle_path = (
+                        subtitle_item.text().strip()
+                        if subtitle_item and subtitle_item.text()
+                        else ''
+                    )
+                    main_rows.append(EncodeRow(
+                        source_path='',
+                        output_path=os.path.join(output_folder, output_name),
+                        vpy_path=self.get_vpy_path_from_row(row_index) or self.get_default_vpy_path(),
+                        subtitle_path=os.path.normpath(subtitle_path) if subtitle_path else '',
+                        subtitle_language=subtitle_languages[row_index],
+                        configuration_key=configuration_key,
+                        configuration=row_configuration,
+                    ))
+
+                if hasattr(self, 'table3'):
+                    main_output_paths = {
+                        os.path.normcase(os.path.abspath(row.output_path))
+                        for row in main_rows
+                    }
+                    for row_index in range(self.table3.rowCount()):
+                        sp_entry = self._table3_get_sp_entry_for_row(row_index)
+                        output_name = str(sp_entry.get('output_name') or '').strip()
+                        sp_output_path = (
+                            os.path.normpath(os.path.join(output_folder, output_name))
+                            if output_name
+                            else ''
+                        )
+                        sp_rows.append(EncodeRow(
+                            source_path='',
+                            output_path=sp_output_path,
+                            vpy_path=self.get_sp_vpy_path_from_row(row_index) or self.get_default_vpy_path(),
+                            sp_entry=sp_entry,
+                            selected=bool(sp_entry.get('selected', True)),
+                            uses_main_output=bool(
+                                sp_output_path
+                                and os.path.normcase(os.path.abspath(sp_output_path))
+                                in main_output_paths
+                            ),
+                        ))
+
+            trim_checkbox = getattr(self, 'trim_copyright_tail_checkbox', None)
+            episode_trim_copyright_tail = bool(
+                trim_checkbox
+                and trim_checkbox.isChecked()
+                and not self._is_movie_mode()
+                and self.get_selected_function_id() in (3, 4)
+            )
+            dolby_vision_checkbox = getattr(self, 'mux_dolby_vision_checkbox', None)
+            request = EncodeRequest(
+                input_mode=input_mode,
+                source_root=source_root,
+                output_folder=os.path.normpath(output_folder),
+                staging_folder=os.path.normpath(staging_folder) if staging_folder else '',
+                main_rows=tuple(main_rows),
+                sp_rows=tuple(sp_rows),
+                settings=encode_settings,
+                selected_mpls=selected_mpls,
+                movie_mode=self._is_movie_mode(),
+                episode_trim_copyright_tail=episode_trim_copyright_tail,
+                mux_dolby_vision=bool(
+                    dolby_vision_checkbox is None or dolby_vision_checkbox.isChecked()
+                ),
+                track_selection_config=copy.deepcopy(
+                    getattr(self, '_track_selection_config', {}) or {}
+                ),
+                track_language_config=copy.deepcopy(
+                    getattr(self, '_track_language_config', {}) or {}
+                ),
+                track_lossless_audio_config=copy.deepcopy(
+                    getattr(self, '_track_lossless_audio_config', {}) or {}
+                ),
+            )
+            validate_encode_request(request, check_tools=True)
+
+            if request.input_mode == 'remux':
+                from src.runtime.services_split.encode_and_audio_tasks import encode_dovi_preflight_mkv_paths
+
+                dolby_vision_error = encode_dovi_preflight_mkv_paths(
+                    [row.source_path for row in request.main_rows],
+                    request.settings.encoder,
+                    request.settings.bit_depth,
+                )
+                if dolby_vision_error:
+                    QMessageBox.warning(self, ' ', dolby_vision_error)
+                    return
+        except Exception as error:
+            print_tb_string_terminal(traceback.format_exc())
+            self._show_error_dialog(str(error))
+            return
 
         cancel_event = threading.Event()
         self._current_cancel_event = cancel_event
         self._exe_button_default_text = self.exe_button.text()
         self._update_exe_button_progress(0, 'Preparing')
-
-        if getattr(self, '_encode_input_mode', 'bdmv') == 'remux':
-            folder = self._normalize_path_input(
-                self.remux_folder_path.text() if hasattr(self, 'remux_folder_path') else '')
-            if not folder or not os.path.isdir(folder):
-                self._current_cancel_event = None
-                self._reset_exe_button()
-                self.exe_button.setEnabled(True)
-                QMessageBox.information(self, " ", "Select the remux folder")
-                return
-            remux_folder = os.path.normpath(folder)
-            output_norm = os.path.normpath(output_folder)
-            parent_of_remux = os.path.normpath(os.path.dirname(remux_folder.rstrip(os.sep)))
-            if output_norm == parent_of_remux:
-                self._current_cancel_event = None
-                self._reset_exe_button()
-                self.exe_button.setEnabled(True)
-                QMessageBox.information(self, " ", "Output folder is parent of input folder, please change output folder")
-                return
-            output_folder = self._resolve_remux_output_folder(output_folder)
-
-            mkv_rows: list[dict[str, str]] = []
-            out_col = ENCODE_REMUX_LABELS.index('output_name')
-            lang_col = ENCODE_REMUX_LABELS.index('language')
-            sub_col = ENCODE_REMUX_LABELS.index('sub_path')
-            for i in range(self.table2.rowCount()):
-                src = self._get_remux_source_path_from_table2_row(i)
-                if not src or not os.path.exists(src):
-                    self._current_cancel_event = None
-                    self._reset_exe_button()
-                    self.exe_button.setEnabled(True)
-                    QMessageBox.information(
-                        self,
-                        " ",
-                        self.t('Encode source does not exist in row {row}').format(row=i + 1),
-                    )
-                    return
-                out_item = self.table2.item(i, out_col)
-                out_name = out_item.text().strip() if out_item and out_item.text() else os.path.basename(src)
-                sub_item = self.table2.item(i, sub_col)
-                sub_path = sub_item.text().strip() if sub_item and sub_item.text() else ''
-                lang = ''
-                combo = self.table2.cellWidget(i, lang_col)
-                if isinstance(combo, QComboBox):
-                    lang = str(combo.currentData() or combo.currentText() or '').strip()
-                vpy_path = self.get_vpy_path_from_row(i) or self.get_default_vpy_path()
-                mkv_rows.append({
-                    'src_path': src,
-                    'output_name': out_name,
-                    'sub_path': sub_path,
-                    'language': lang,
-                    'vpy_path': vpy_path,
-                })
-
-            sp_rows: list[dict[str, str]] = []
-            if hasattr(self, 'table3'):
-                out_col = ENCODE_REMUX_SP_LABELS.index('output_name')
-                for i in range(self.table3.rowCount()):
-                    src = self._get_remux_source_path_from_table3_row(i)
-                    if not src or not os.path.exists(src):
-                        self._current_cancel_event = None
-                        self._reset_exe_button()
-                        self.exe_button.setEnabled(True)
-                        QMessageBox.information(
-                            self,
-                            " ",
-                            self.t('SP source does not exist in row {row}').format(row=i + 1),
-                        )
-                        return
-                    out_item = self.table3.item(i, out_col)
-                    out_name = out_item.text().strip() if out_item and out_item.text() else os.path.basename(src)
-                    vpy_path = self.get_sp_vpy_path_from_row(i) or self.get_default_vpy_path()
-                    sp_rows.append({
-                        'src_path': src,
-                        'output_name': out_name,
-                        'vpy_path': vpy_path,
-                    })
-
-            vspipe_mode = 'bundle' if self.vspipe_mode_combo.currentText() == 'Built-in' else 'system'
-            x265_mode = 'bundle' if self.x265_mode_combo.currentText() == 'Built-in' else 'system'
-            encode_tool, encode_bit_depth = self._current_encode_tool_and_depth()
-            x265_params = self._effective_encode_params()
-            use_getnative = bool(getattr(self, "use_getnative_checkbox", None) and self.use_getnative_checkbox.isChecked())
-            if self.sub_pack_hard_radio.isChecked():
-                sub_pack_mode = 'hard'
-            elif self.sub_pack_soft_radio.isChecked():
-                sub_pack_mode = 'soft'
-            else:
-                sub_pack_mode = 'external'
-
-            from src.runtime.services_split.encode_and_audio_tasks import encode_dovi_preflight_mkv_paths
-
-            dovi_err = encode_dovi_preflight_mkv_paths(
-                [str(r.get('src_path') or '') for r in mkv_rows],
-                encode_tool,
-                encode_bit_depth,
-            )
-            if dovi_err:
-                self._current_cancel_event = None
-                self._reset_exe_button()
-                self.exe_button.setEnabled(True)
-                QMessageBox.warning(self, ' ', self.t('Dolby Vision 不支持 h264 或输出位深 8bit'))
-                return
-
-            self._encode_thread = QThread(self)
-            self._encode_worker = EncodeMkvFolderWorker(
-                mkv_rows=mkv_rows,
-                sp_rows=sp_rows,
-                remux_folder=remux_folder,
-                output_folder=output_folder,
-                cancel_event=cancel_event,
-                vspipe_mode=vspipe_mode,
-                x265_mode=x265_mode,
-                x265_params=x265_params,
-                sub_pack_mode=sub_pack_mode,
-                encode_tool=encode_tool,
-                encode_bit_depth=encode_bit_depth,
-                use_getnative=use_getnative,
-                track_selection_config=getattr(self, '_track_selection_config', {}),
-                track_language_config=getattr(self, '_track_language_config', {}),
-                track_lossless_audio_config=getattr(self, '_track_lossless_audio_config', {}),
-                default_lossless_audio_codec=self._current_encode_lossless_audio_codec(),
-            )
-            self._encode_worker.moveToThread(self._encode_thread)
-            self._encode_thread.started.connect(self._encode_worker.run)
-            self._encode_worker.progress.connect(self._on_exe_button_progress_value)
-            self._encode_worker.label.connect(self._on_exe_button_progress_text)
-
-            def cleanup():
-                self._current_cancel_event = None
-                self._reset_exe_button()
-                self.exe_button.setEnabled(True)
-                if hasattr(self, '_encode_thread') and self._encode_thread:
-                    t_wait = time.perf_counter()
-                    print('[ShutdownDebug] encode_thread(remux-mode).quit()')
-                    self._encode_thread.quit()
-                    self._encode_thread.wait()
-                    print(f"[ShutdownDebug] encode_thread(remux-mode).wait() done in {(time.perf_counter() - t_wait) * 1000:.1f} ms")
-                    self._encode_thread.deleteLater()
-                    self._encode_thread = None
-                if hasattr(self, '_encode_worker') and self._encode_worker:
-                    self._encode_worker.deleteLater()
-                    self._encode_worker = None
-
-            def on_finished():
-                cleanup()
-                self._show_bottom_message('Blu-ray encode completed!')
-
-            def on_canceled():
-                cleanup()
-
-            def on_failed(message: str):
-                cleanup()
-                self._show_error_dialog(message)
-
-            self._encode_worker.finished.connect(on_finished)
-            self._encode_worker.canceled.connect(on_canceled)
-            self._encode_worker.failed.connect(on_failed)
-            self._encode_thread.start()
-            return
-
-        selected_mpls = self.get_selected_mpls_no_ext()
-        if not selected_mpls:
-            self._current_cancel_event = None
-            self._reset_exe_button()
-            self.exe_button.setEnabled(True)
-            QMessageBox.information(self, " ", "Main MPLS is not selected")
-            return
-        try:
-            configuration = self._configuration_for_service_run()
-            sub_files = [
-                self.table2.item(row, 0).text() if self.table2.item(row, 0) else ''
-                for row in range(self.table2.rowCount())
-            ]
-            episode_output_names = self._get_episode_output_names_from_table2()
-            episode_subtitle_languages = self._get_episode_subtitle_languages_from_table2()
-            vpy_paths = [
-                self.get_vpy_path_from_row(row)
-                for row in range(self.table2.rowCount())
-            ]
-            sp_vpy_paths = (
-                [
-                    self.get_sp_vpy_path_from_row(row)
-                    for row in range(self.table3.rowCount())
-                ]
-                if hasattr(self, 'table3')
-                else []
-            )
-            sp_entries = (
-                [
-                    self._table3_get_sp_entry_for_row(row)
-                    for row in range(self.table3.rowCount())
-                ]
-                if hasattr(self, 'table3')
-                else []
-            )
-        except Exception:
-            self._current_cancel_event = None
-            self._reset_exe_button()
-            self.exe_button.setEnabled(True)
-            self._show_error_dialog(
-                f"{self.t('Failed to build the task from the current GUI configuration')}"
-                f"\n\n{traceback.format_exc()}"
-            )
-            return
-
-        vspipe_mode = 'bundle' if self.vspipe_mode_combo.currentText() == 'Built-in' else 'system'
-        x265_mode = 'bundle' if self.x265_mode_combo.currentText() == 'Built-in' else 'system'
-        encode_tool, encode_bit_depth = self._current_encode_tool_and_depth()
-        x265_params = self._effective_encode_params()
-        use_getnative = bool(getattr(self, "use_getnative_checkbox", None) and self.use_getnative_checkbox.isChecked())
-        if self.sub_pack_hard_radio.isChecked():
-            sub_pack_mode = 'hard'
-        elif self.sub_pack_soft_radio.isChecked():
-            sub_pack_mode = 'soft'
-        else:
-            sub_pack_mode = 'external'
-
-        _trim_cb = getattr(self, 'trim_copyright_tail_checkbox', None)
-        episode_trim_copyright_tail = bool(
-            _trim_cb and _trim_cb.isChecked()
-            and (not self._is_movie_mode())
-            and self.get_selected_function_id() in (3, 4)
-        )
-        _dovi_cb = getattr(self, 'mux_dolby_vision_checkbox', None)
-        mux_dolby_vision = bool(_dovi_cb is None or _dovi_cb.isChecked())
-
         self._encode_thread = QThread(self)
-        self._encode_worker = EncodeWorker(
-            self.bdmv_folder_path.text(),
-            sub_files,
-            self.checkbox1.isChecked(),
-            output_folder,
-            configuration,
-            selected_mpls,
-            cancel_event,
-            vpy_paths,
-            sp_vpy_paths,
-            sp_entries,
-            episode_output_names,
-            episode_subtitle_languages,
-            vspipe_mode,
-            x265_mode,
-            x265_params,
-            sub_pack_mode,
-            encode_tool=encode_tool,
-            encode_bit_depth=encode_bit_depth,
-            use_getnative=use_getnative,
-            movie_mode=self._is_movie_mode(),
-            episode_trim_copyright_tail=episode_trim_copyright_tail,
-            mux_dolby_vision=mux_dolby_vision,
-            track_selection_config=getattr(self, '_track_selection_config', {}),
-            track_language_config=getattr(self, '_track_language_config', {}),
-            track_lossless_audio_config=getattr(self, '_track_lossless_audio_config', {}),
-            default_lossless_audio_codec=self._current_encode_lossless_audio_codec(),
-        )
+        self._encode_worker = EncodeWorker(request, cancel_event)
         self._encode_worker.moveToThread(self._encode_thread)
         self._encode_thread.started.connect(self._encode_worker.run)
         self._encode_worker.progress.connect(self._on_exe_button_progress_value)
@@ -1229,15 +1180,12 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             self._current_cancel_event = None
             self._reset_exe_button()
             self.exe_button.setEnabled(True)
-            if hasattr(self, '_encode_thread') and self._encode_thread:
-                t_wait = time.perf_counter()
-                print('[ShutdownDebug] encode_thread(bdmv-mode).quit()')
+            if getattr(self, '_encode_thread', None):
                 self._encode_thread.quit()
                 self._encode_thread.wait()
-                print(f"[ShutdownDebug] encode_thread(bdmv-mode).wait() done in {(time.perf_counter() - t_wait) * 1000:.1f} ms")
                 self._encode_thread.deleteLater()
                 self._encode_thread = None
-            if hasattr(self, '_encode_worker') and self._encode_worker:
+            if getattr(self, '_encode_worker', None):
                 self._encode_worker.deleteLater()
                 self._encode_worker = None
 
