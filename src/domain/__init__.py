@@ -1,4 +1,4 @@
-"""Domain models layer (migration stage)."""
+"""Domain models used by the application workflows."""
 
 from .media import ISO
 from .media import MKV

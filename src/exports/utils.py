@@ -17,8 +17,7 @@ from ..core.i18n import translate_text, _terminal_err_stream
 if sys.platform == 'win32':
     import winreg
 
-from ..core import get_mkvtoolnix_ui_language, FFMPEG_PATH, FFPROBE_PATH
-from ..core import mkvtoolnix_ui_language_arg
+from ..core import FFMPEG_PATH, FFPROBE_PATH
 
 
 def mkv_codec_id_is_dts_family(codec_id: str) -> bool:
@@ -63,6 +62,20 @@ def get_time_str(duration: float) -> str:
     ms = f'{int(minutes):02d}'
     ss = f'{seconds:06.3f}'
     return f'{hs}:{ms}:{ss}'
+
+
+def parse_time_to_seconds(value: object, default: Optional[float] = 0.0) -> Optional[float]:
+    """Parse a colon-separated time value, accepting hours, minutes, or seconds."""
+    try:
+        result = 0.0
+        parts = [part for part in str(value or '').strip().split(':') if part]
+        if not parts:
+            return default
+        for part in parts:
+            result = result * 60.0 + float(part)
+        return result
+    except (TypeError, ValueError):
+        return default
 
 
 def format_ogm_chapter_timestamp(seconds: float) -> str:
@@ -238,7 +251,7 @@ def fix_audio_delay_to_lossless(input_file, delay_ms, output_file, track_index=0
 
     try:
         print(f"Run command: {cmd}")
-        subprocess.run(cmd, shell=True, check=True)
+        run_command(cmd, check=True)
         print(f"Completed: {output_file}")
     except subprocess.CalledProcessError as e:
         print(f"FFmpeg error: {e}")
@@ -258,7 +271,7 @@ def get_audio_duration(file_path):
     """Return total audio duration in seconds using probed metadata."""
     cmd = f'"{FFPROBE_PATH}" -v error -show_entries format=duration:stream=duration -of json "{file_path}"'
     try:
-        proc = subprocess.run(cmd, shell=True, capture_output=True, text=True, encoding='utf-8')
+        proc = run_command(cmd, capture_output=True, text=True, encoding='utf-8')
     except Exception:
         return 0.0
     if proc.returncode != 0 or not (proc.stdout or '').strip():
@@ -295,7 +308,7 @@ def get_compressed_effective_depth(file_path, check_duration=10):
 
     try:
         cmd = f'"{FFMPEG_PATH}" -hide_banner -loglevel error -ss {start_time} -i "{file_path}" -t {check_duration} -map 0:a:0 -c:a pcm_s24le "{temp_wav}" -y'
-        subprocess.run(cmd, shell=True, check=True)
+        run_command(cmd, check=True)
         data, sr = soundfile.read(temp_wav, dtype='int32')
         is_16bit = np.all(data % 65536 == 0)
         return 16 if is_16bit else 24
@@ -404,102 +417,13 @@ def get_vspipe_context():
     return vspipe_exe, env
 
 
-def ui_perf_enabled() -> bool:
-    """Reserved; UI perf logging is disabled."""
-    return False
-
-
-def bluraysub_sp_diag_enabled() -> bool:
-    """Reserved; SP diagnostic logging is disabled."""
-    return False
-
-
-def sp_diag_log(_message: str) -> None:
-    """No-op (verbose SP tracing removed)."""
-    pass
-
-
-def ui_perf_log(_label: str, *, reset: bool = False) -> None:
-    """No-op (UI perf tracing removed)."""
-    pass
-
-
-_CHAPTER_VIEW_SEGMENT_TRACE_ACTIVE = False
-
-
-def chapter_view_segment_trace_begin() -> None:
-    """Enable :func:`chapter_cfg_chain_print` until :func:`chapter_view_segment_trace_end` (view-chapters segment apply)."""
-    global _CHAPTER_VIEW_SEGMENT_TRACE_ACTIVE
-    _CHAPTER_VIEW_SEGMENT_TRACE_ACTIVE = True
-
-
-def chapter_view_segment_trace_end() -> None:
-    global _CHAPTER_VIEW_SEGMENT_TRACE_ACTIVE
-    _CHAPTER_VIEW_SEGMENT_TRACE_ACTIVE = False
-
-
-def chapter_cfg_chain_print(message: str) -> None:
-    """Print one line to stderr while view-chapters segment-apply tracing is active (temporary debug)."""
-    if not _CHAPTER_VIEW_SEGMENT_TRACE_ACTIVE:
-        return
-    print(f'[BluraySubtitle][chapter-cfg] {message}', file=_terminal_err_stream(), flush=True)
-
-
-def run_shell_command_with_output(
-        cmd: str,
-        *,
-        cwd: Optional[str] = None,
-        timeout: Optional[float] = None,
-) -> int:
-    """Run a shell command and show merged stdout/stderr (not captured silently)."""
-    out = _terminal_err_stream()
-    kw: dict = {'shell': True}
-    if cwd:
-        kw['cwd'] = cwd
-    if timeout is not None:
-        kw['timeout'] = timeout
-    try:
-        inherit = bool(sys.stderr.isatty() or sys.stdout.isatty())
-    except Exception:
-        inherit = False
-    if inherit:
-        try:
-            return int(subprocess.run(cmd, **kw).returncode)
-        except subprocess.TimeoutExpired:
-            print('[BluraySubtitle] command timed out', file=out, flush=True)
-            return -1
-        except Exception as ex:
-            print(f'[BluraySubtitle] command failed: {ex}', file=out, flush=True)
-            return -1
-    popen_kw: dict = {
-        'shell': True,
-        'stdout': subprocess.PIPE,
-        'stderr': subprocess.STDOUT,
-        'text': True,
-        'encoding': 'utf-8',
-        'errors': 'replace',
-        'bufsize': 1,
-    }
-    if cwd:
-        popen_kw['cwd'] = cwd
-    try:
-        proc = subprocess.Popen(cmd, **popen_kw)
-    except Exception as ex:
-        print(f'[BluraySubtitle] command failed to start: {ex}', file=out, flush=True)
-        return -1
-    if proc.stdout:
-        for line in proc.stdout:
-            print(line, end='', file=out, flush=True)
-    try:
-        proc.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        try:
-            proc.kill()
-        except Exception:
-            pass
-        print('[BluraySubtitle] command timed out', file=out, flush=True)
-        return -1
-    return int(proc.returncode if proc.returncode is not None else -1)
+def run_command(command, *, wait: bool = True, log_template: str = '', **kwargs):
+    """Run every external command through one process boundary."""
+    kwargs.setdefault('shell', isinstance(command, str))
+    if log_template:
+        command_text = command if isinstance(command, str) else subprocess.list2cmdline(command)
+        print(translate_text(log_template).format(command=command_text), flush=True)
+    return (subprocess.run if wait else subprocess.Popen)(command, **kwargs)
 
 
 def print_terminal_line(message: str) -> None:
@@ -526,6 +450,7 @@ __all__ = [
     "mkvtoolnix_ui_language_arg",
     "get_folder_size",
     "get_time_str",
+    "parse_time_to_seconds",
     "format_ogm_chapter_timestamp",
     "append_ogm_chapter_lines",
     "get_index_to_m2ts_and_offset",
@@ -540,14 +465,8 @@ __all__ = [
     "resolve_encoder_executable_path",
     "get_vspipe_context",
     "mkv_codec_id_is_dts_family",
-    "run_shell_command_with_output",
+    "run_command",
     "print_terminal_line",
-    "ui_perf_enabled",
-    "ui_perf_log",
-    "chapter_cfg_chain_print",
-    "chapter_view_segment_trace_begin",
-    "chapter_view_segment_trace_end",
     "print_exc_terminal",
     "print_tb_string_terminal",
 ]
-

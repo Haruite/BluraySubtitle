@@ -14,6 +14,7 @@ from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
+from src.exports.utils import run_command
 from ..core.settings import VSPIPE_PATH
 
 
@@ -78,11 +79,6 @@ def _resolve_vspipe():
         "(example: C:/Software/release-x64/vspipe.exe) or add vspipe to PATH."
     )
 
-
-def _normalize_src_heights(src_heights: Union[int, float, Sequence[int], Sequence[float]]) -> Tuple[float, ...]:
-    if isinstance(src_heights, (int, float)):
-        return (float(src_heights),)
-    return tuple(float(h) for h in src_heights)
 
 
 def _resolve_getnative_vpy_path() -> str:
@@ -154,7 +150,7 @@ def _vpy_call(input_png: str, params: Dict) -> Dict:
         }
         if os.name == "nt":
             run_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        proc = subprocess.run([vspipe_exe, vpy_path, "-"], **run_kwargs)
+        proc = run_command([vspipe_exe, vpy_path, "-"], **run_kwargs)
         if proc.returncode != 0:
             raise RuntimeError(f"vspipe failed ({proc.returncode}): {(proc.stderr or proc.stdout or '').strip()}")
         with open(output_json, "r", encoding="utf-8") as f:
@@ -291,14 +287,13 @@ def _best_height_from_curve(heights: Sequence[float], vals: Sequence[float]) -> 
     tail_start = max_hv - 80.0
     tail_idx = [j for j, hh in enumerate(heights) if float(hh) >= tail_start]
     tail_osc = False
-    body_noise = noise
+
     body_d1_mad = max(1e-9, _mad(np.diff(resid).tolist()))
     if len(tail_idx) >= 20:
         a = int(tail_idx[0])
         b = int(tail_idx[-1]) + 1
         seg = np.asarray(resid[a:b], dtype=np.float64)
-        if a >= 30:
-            body_noise = max(1e-9, _mad(np.asarray(resid[:a], dtype=np.float64).tolist()))
+
         if a >= 30:
             body_d1_mad = max(1e-9, _mad(np.diff(np.asarray(resid[:a], dtype=np.float64)).tolist()))
         dif = np.diff(seg)
@@ -400,7 +395,7 @@ def _best_height_from_curve(heights: Sequence[float], vals: Sequence[float]) -> 
         hr = max(0.0, min(1.0, h0 / max_hv))
         return (float(s0) * (hr**alpha), float(s0), h0)
 
-    (seg_l, seg_r), seg_items = max(segments.items(), key=_seg_rank)
+    (seg_l, seg_r), _ = max(segments.items(), key=_seg_rank)
     in_seg = list(range(seg_l, seg_r + 1))
     best_i = max(in_seg, key=lambda j: float(dip[j]))
     peak = float(dip[best_i])
@@ -500,7 +495,7 @@ def getnative(
         raise TypeError("split mode expects PNG path as `clip` argument")
 
     input_png = str(clip)
-    height_list = _normalize_src_heights(src_heights)
+    height_list = (float(src_heights),) if isinstance(src_heights, (int, float)) else tuple(float(h) for h in src_heights)
     if not height_list:
         raise ValueError("src_heights cannot be empty.")
 
@@ -606,4 +601,3 @@ def getnative(
         "filename": filename,
         "dark": dark,
     }
-

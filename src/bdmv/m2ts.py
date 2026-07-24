@@ -3,15 +3,14 @@ import shutil
 import subprocess
 import sys
 from statistics import median
-from struct import unpack
 from typing import Optional, BinaryIO
 
-from .core import InfoDict
+from .core import InfoDict, unpack_bytes
 from .structures.stream_attributes import StreamAttributes
 from .structures.stream_entry import StreamEntry
 from src.core import FFPROBE_PATH
-from src.core.i18n import sp_debug_log
-from src.core.i18n import translate_text
+from src.core.i18n import sp_debug_log, translate_text
+from src.exports.utils import run_command
 
 
 class M2TS:
@@ -31,12 +30,6 @@ class M2TS:
         self._fps_cache: dict[tuple[Optional[bool], Optional[int], int, bool], Optional[float]] = {}
         self._total_frames_cache: Optional[int] = None
 
-    def _current_file_signature(self) -> Optional[tuple[int, int]]:
-        try:
-            st = os.stat(self.filename)
-            return int(st.st_size), int(st.st_mtime_ns)
-        except OSError:
-            return None
 
     def _clear_runtime_caches(self) -> None:
         self._layout_cache.clear()
@@ -49,7 +42,11 @@ class M2TS:
         self._total_frames_cache = None
 
     def _ensure_cache_valid(self) -> None:
-        sig = self._current_file_signature()
+        try:
+            stat = os.stat(self.filename)
+            sig = (int(stat.st_size), int(stat.st_mtime_ns))
+        except OSError:
+            sig = None
         if self._cache_file_sig != sig:
             self._cache_file_sig = sig
             self._clear_runtime_caches()
@@ -111,16 +108,6 @@ class M2TS:
             return None, pid, pusi
         return pkt[off:M2TS._TS_PACKET], pid, pusi
 
-    @staticmethod
-    def _file_size(stream: BinaryIO) -> int:
-        try:
-            pos = stream.tell()
-            stream.seek(0, os.SEEK_END)
-            n = stream.tell()
-            stream.seek(pos)
-            return int(n)
-        except OSError:
-            return 256 * 1024
 
     @staticmethod
     def _score_alignment(buf: bytes, phase: int, stride: int, sync_off: int) -> int:
@@ -145,7 +132,7 @@ class M2TS:
     @staticmethod
     def _choose_transport_layout(stream: BinaryIO, m2ts: Optional[bool]) -> tuple[int, int, int]:
         pos = stream.tell()
-        sample = stream.read(min(512 * 1024, max(M2TS._file_size(stream), 512 * 1024)))
+        sample = stream.read(512 * 1024)
         stream.seek(pos)
 
         if m2ts is not None:
@@ -505,39 +492,19 @@ class M2TS:
             cur_pos += self.frame_size
         return last_pcr_val
 
-    def unpack_bytes(self, n: int) -> Optional[int]:
-        formats: dict[int, str] = {1: '>B', 2: '>H', 4: '>I', 8: '>Q'}
-        try:
-            data = self.m2ts_file.read(n)
-        except Exception:
-            return None
-        if len(data) != n:
-            return None
-        return unpack(formats[n], data)[0]
-
     def get_pcr_val(self) -> int:
-        b0 = self.unpack_bytes(1)
-        b1 = self.unpack_bytes(1)
-        b2 = self.unpack_bytes(1)
-        if b0 is None or b1 is None or b2 is None:
+        header = self.m2ts_file.read(3)
+        if len(header) != 3:
             return -1
+        b0, b1, b2 = header
         af_exists = (b0 >> 5) % 2
         adaptive_field_length = b1
         pcr_exist = (b2 >> 4) % 2
         if af_exists and adaptive_field_length and pcr_exist:
-            tmp = []
-            for _ in range(4):
-                b = self.unpack_bytes(1)
-                if b is None:
-                    return -1
-                tmp.append(b)
-            pcr = tmp[3] + (tmp[2] << 8) + (tmp[1] << 16) + (tmp[0] << 24)
-            pcr_lo_raw = self.unpack_bytes(1)
-            if pcr_lo_raw is None:
+            pcr_data = self.m2ts_file.read(5)
+            if len(pcr_data) != 5:
                 return -1
-            pcr_lo = pcr_lo_raw >> 7
-            pcr_val = (pcr << 1) + pcr_lo
-            return pcr_val
+            return (unpack_bytes(pcr_data, 0, 4) << 1) + (pcr_data[4] >> 7)
         return -1
 
     def read_frame_rate_from_m2ts(
@@ -569,7 +536,7 @@ class M2TS:
                 path,
             ]
             try:
-                out = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL, timeout=8)
+                out = run_command(cmd, text=True, stderr=subprocess.DEVNULL, timeout=8, capture_output=True, check=True).stdout
             except Exception:
                 return None
             vals = [x.strip() for x in str(out or '').splitlines() if x.strip()]
@@ -1441,14 +1408,6 @@ class M2TS:
         self._tracks_info_cache[cache_key] = [dict(item) for item in tracks]
         return tracks
 
-    def get_track_info(
-        self,
-        *,
-        m2ts: Optional[bool] = None,
-        max_scan_bytes: int = 8 * 1024 * 1024,
-    ) -> list[dict[str, object]]:
-        """Compatibility wrapper for singular API name."""
-        return self.get_tracks_info(m2ts=m2ts, max_scan_bytes=max_scan_bytes)
 
     def get_m2ts_type(
         self,
@@ -1537,14 +1496,8 @@ class M2TS:
         os.makedirs(output_dir, exist_ok=True)
         out_files: list[str] = []
 
-        def u8(buf: bytes, off: int) -> int:
-            return buf[off]
-
         def u16(buf: bytes, off: int) -> int:
             return (buf[off] << 8) | buf[off + 1]
-
-        def u24(buf: bytes, off: int) -> int:
-            return (buf[off] << 16) | (buf[off + 1] << 8) | buf[off + 2]
 
         def parse_button_segment(body: bytes) -> Optional[dict[str, object]]:
             # Matches igstools/parser.py parse_button_segment (without command decoding usage).
@@ -1601,7 +1554,7 @@ class M2TS:
                     for _ in range(ecnt):
                         if p + 5 > len(body):
                             return None
-                        duration = u24(body, p)
+                        duration = (body[p] << 16) | (body[p + 1] << 8) | body[p + 2]
                         palette_idx = body[p + 3]
                         num_obj = body[p + 4]
                         p += 5
@@ -1741,16 +1694,10 @@ class M2TS:
                 payload, pid, pusi = M2TS._ts_payload(pkt)
                 if payload is None or pid not in igs_pids:
                     continue
-
-                es = b""
-                cur_pts = None
                 if pusi:
                     pes = M2TS._pes_payload_after_pointer(payload)
                     if len(pes) >= 9 and pes[0:3] == b"\x00\x00\x01":
-                        flags_lo = pes[7]
                         hdr_len = 9 + pes[8]
-                        if (flags_lo & 0x80) and len(pes) >= 14:
-                            cur_pts = M2TS._pts_from_pes_header(pes[9:14])
                         es = pes[hdr_len:] if hdr_len <= len(pes) else b""
                     else:
                         es = payload
@@ -1931,4 +1878,3 @@ class M2TS:
         return None
 
 __all__ = ["M2TS"]
-

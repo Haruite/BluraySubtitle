@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import os
 import shutil
-import subprocess
 import tempfile
 from dataclasses import dataclass
 
 from src.core import find_mkvtoolnix, mkvtoolnix_ui_language_arg
 from src.core import settings as core_settings
 from src.core.i18n import translate_text
+from src.exports.utils import run_command
 
 
 def dolby_vision_tool_path() -> str:
@@ -19,27 +19,6 @@ def dolby_vision_tool_path() -> str:
     if configured_path and os.path.isfile(configured_path):
         return configured_path
     return shutil.which('dovi_tool') or shutil.which('dovi_tool.exe') or ''
-
-
-def _run_dolby_vision_command(
-        command: list[str],
-        *,
-        cwd: str | None = None,
-        timeout: int = 7200,
-) -> int:
-    print(
-        translate_text('Dolby Vision command: {command}').format(
-            command=subprocess.list2cmdline(command)
-        ),
-        flush=True,
-    )
-    completed = subprocess.run(
-        command,
-        cwd=cwd,
-        shell=False,
-        timeout=timeout,
-    )
-    return int(completed.returncode)
 
 
 @dataclass(frozen=True)
@@ -84,7 +63,7 @@ def prepare_dolby_vision_encode(
         if ui_language:
             extract_command.extend(ui_language.split())
         extract_command.extend(['tracks', source_path, f'{int(track_id)}:{source_hevc}'])
-        extract_result = subprocess.run(extract_command, shell=False)
+        extract_result = run_command(extract_command)
         if (
                 extract_result.returncode not in (0, 1)
                 or not os.path.isfile(source_hevc)
@@ -107,7 +86,8 @@ def prepare_dolby_vision_encode(
             base_layer,
             source_hevc,
         ]
-        if _run_dolby_vision_command(demux_command, cwd=work_folder) != 0 or not (
+        if run_command(demux_command, cwd=work_folder, timeout=7200,
+                       log_template='Dolby Vision command: {command}').returncode != 0 or not (
                 os.path.isfile(base_layer) and os.path.getsize(base_layer) > 0
         ):
             raise RuntimeError(
@@ -126,7 +106,8 @@ def prepare_dolby_vision_encode(
             '-o',
             rpu_path,
         ]
-        if _run_dolby_vision_command(rpu_command, cwd=work_folder) != 0 or not (
+        if run_command(rpu_command, cwd=work_folder, timeout=7200,
+                       log_template='Dolby Vision command: {command}').returncode != 0 or not (
                 os.path.isfile(rpu_path) and os.path.getsize(rpu_path) > 0
         ):
             raise RuntimeError(
@@ -166,7 +147,8 @@ def inject_dolby_vision_rpu(encoded_hevc: str, plan: DolbyVisionEncodePlan) -> N
         temporary_output,
     ]
     try:
-        if _run_dolby_vision_command(command) != 0 or not (
+        if run_command(command, timeout=7200,
+                       log_template='Dolby Vision command: {command}').returncode != 0 or not (
                 os.path.isfile(temporary_output) and os.path.getsize(temporary_output) > 0
         ):
             raise RuntimeError(
@@ -209,7 +191,8 @@ def mux_dolby_vision_layers(base_layer: str, enhancement_layer: str) -> None:
         temporary_output,
     ]
     try:
-        if _run_dolby_vision_command(command) != 0 or not (
+        if run_command(command, timeout=7200,
+                       log_template='Dolby Vision command: {command}').returncode != 0 or not (
                 os.path.isfile(temporary_output) and os.path.getsize(temporary_output) > 0
         ):
             raise RuntimeError(

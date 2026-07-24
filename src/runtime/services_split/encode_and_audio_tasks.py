@@ -1,4 +1,5 @@
 """Auto-generated split target: encode_and_audio_tasks."""
+
 import json
 import os
 import re
@@ -27,6 +28,7 @@ from src.runtime.dolby_vision import (
 )
 from ...core.i18n import translate_text
 from ...exports.utils import (
+    run_command,
     print_exc_terminal,
     get_vspipe_context,
     force_remove_file,
@@ -42,20 +44,6 @@ _GETNATIVE_DEBUG_DIR_ENV = str(os.getenv("BLURAYSUB_GETNATIVE_DEBUG_DIR", "") or
 GETNATIVE_DEBUG_DIR = os.path.abspath(_GETNATIVE_DEBUG_DIR_ENV) if _GETNATIVE_DEBUG_DIR_ENV else None
 
 
-def _windows_no_window_flags() -> int:
-    if sys.platform == "win32":
-        return int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    return 0
-
-
-def _split_x265_extra_args(params: str) -> list[str]:
-    s = (params or "").strip()
-    if not s:
-        return []
-    try:
-        return shlex.split(s, posix=sys.platform != "win32")
-    except ValueError:
-        return s.split()
 
 
 def _normalize_x264_extra_for_bit_depth(extra: list[str], bd: str) -> list[str]:
@@ -101,7 +89,6 @@ def _emit_encode_log_line(message: str) -> None:
     except Exception:
         print(message, flush=True)
 
-
 def _format_encoder_cmd_for_echo(enc_cmd: list) -> str:
     """Shell-style echo string; always quote paths after ``-o`` / ``-b``."""
     parts: list[str] = []
@@ -124,10 +111,6 @@ def _format_encoder_cmd_for_echo(enc_cmd: list) -> str:
         i += 1
     return ' '.join(parts)
 
-
-def _encode_inherit_subprocess_stderr() -> bool:
-    """True when not frozen: inherit vspipe/x265 stderr so the terminal shows native x265 output (\\r, no app parsing)."""
-    return not (bool(getattr(sys, "frozen", False)) and hasattr(sys, "_MEIPASS"))
 
 
 def _pump_subprocess_stderr_raw(stream) -> None:
@@ -171,7 +154,8 @@ def _run_vspipe_piped_encode(
     forward stderr bytes unchanged (same as x264/SVT) so logs match the encoder's native output.
     """
     env_use = dict(env) if env else os.environ.copy()
-    inherit_err = _encode_inherit_subprocess_stderr()
+    # Frozen builds pipe native progress because their stderr is not a real terminal.
+    inherit_err = not (bool(getattr(sys, "frozen", False)) and hasattr(sys, "_MEIPASS"))
     try:
         stderr_is_tty = sys.stderr.isatty()
     except Exception:
@@ -179,21 +163,23 @@ def _run_vspipe_piped_encode(
     use_encoder_stderr_inherit = bool(inherit_err and stderr_is_tty)
     popen_kw: dict = {"env": env_use, "bufsize": 0}
     if sys.platform == "win32" and not inherit_err:
-        popen_kw["creationflags"] = _windows_no_window_flags()
+        popen_kw["creationflags"] = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if sys.platform == "win32" else 0
     stderr_v = None if inherit_err else subprocess.PIPE
     stderr_e = None if use_encoder_stderr_inherit else subprocess.PIPE
 
     vspipe_cmd = [str(vspipe_exe), "--y4m", str(vpy_path), "-"]
     enc_cmd = [str(x) for x in encoder_cmd]
 
-    p_v = subprocess.Popen(
+    p_v = run_command(
         vspipe_cmd,
+        wait=False,
         stdout=subprocess.PIPE,
         stderr=stderr_v,
         **popen_kw,
     )
-    p_e = subprocess.Popen(
+    p_e = run_command(
         enc_cmd,
+        wait=False,
         stdin=p_v.stdout,
         stdout=subprocess.DEVNULL,
         stderr=stderr_e,
@@ -236,7 +222,7 @@ def _run_vspipe_svt_win_tempfile_encode(
     env_use = dict(env) if env else os.environ.copy()
     popen_kw: dict = {"env": env_use}
     if sys.platform == "win32":
-        popen_kw["creationflags"] = _windows_no_window_flags()
+        popen_kw["creationflags"] = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if sys.platform == "win32" else 0
     td = temp_dir
     if td:
         try:
@@ -251,7 +237,7 @@ def _run_vspipe_svt_win_tempfile_encode(
     enc_cmd = [str(x) for x in encoder_cmd]
     try:
         with open(y4m_path, "wb") as y4m_f:
-            p_v = subprocess.run(vspipe_cmd, stdout=y4m_f, stderr=subprocess.PIPE, **popen_kw)
+            p_v = run_command(vspipe_cmd, stdout=y4m_f, stderr=subprocess.PIPE, **popen_kw)
         if p_v.returncode != 0:
             try:
                 tail = (p_v.stderr or b"").decode("utf-8", errors="replace")[-600:]
@@ -260,7 +246,7 @@ def _run_vspipe_svt_win_tempfile_encode(
                 pass
             return int(p_v.returncode)
         enc_fs = [y4m_path if a.lower() == "stdin" else a for a in enc_cmd]
-        p_e = subprocess.run(enc_fs, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, **popen_kw)
+        p_e = run_command(enc_fs, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, **popen_kw)
         if p_e.returncode != 0:
             try:
                 tail = (p_e.stderr or b"").decode("utf-8", errors="replace")[-800:]
@@ -276,41 +262,12 @@ def _run_vspipe_svt_win_tempfile_encode(
             pass
 
 
-def _normalize_encode_tool_label(raw: str) -> str:
-    s = (raw or "").strip().lower()
-    if s in ("x264", "x265", "svtav1"):
-        return s
-    if s == "sav1" or s == "av1":
-        return "svtav1"
-    return "x265"
 
-
-def _svtav1_extra_has_explicit_profile(extra: list[str]) -> bool:
-    """True if SvtAv1EncApp args already set --profile / -profile (12-bit needs profile 2 when unset)."""
-    for a in extra or []:
-        al = str(a).strip().lower()
-        if al in ("--profile", "-profile"):
-            return True
-        if al.startswith("--profile=") or al.startswith("-profile="):
-            return True
-    return False
-
-
-def _video_intermediate_extension(tool: str) -> str:
-    t = _normalize_encode_tool_label(tool)
-    return { "x264": ".h264", "x265": ".hevc", "svtav1": ".ivf" }[t]
 
 
 def encode_dovi_preservation_supported(tool: str, encode_bit_depth: str) -> bool:
     """Return whether the current tools can inject Dolby Vision into the encoded stream."""
-    tool_key = _normalize_encode_tool_label(tool)
-    if tool_key != 'x265':
-        return False
-    try:
-        bd = int(str(encode_bit_depth or '10').strip())
-    except Exception:
-        bd = 10
-    return bd >= 10
+    return tool == 'x265' and int(encode_bit_depth) >= 10
 
 
 def encode_dovi_preflight_mkv_paths(
@@ -328,7 +285,7 @@ def encode_dovi_preflight_mkv_paths(
     ]
     if not dolby_vision_paths:
         return None
-    if _normalize_encode_tool_label(encoder) == 'svtav1':
+    if encoder == 'svtav1':
         return None
     if not encode_dovi_preservation_supported(encoder, bit_depth):
         return translate_text(
@@ -540,12 +497,6 @@ def _estimate_native_from_image_worker(image_path: str, plugin_path: str, debug_
 
 
 class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
-    @staticmethod
-    def _log_getnative(message: str):
-        try:
-            print_terminal_line(message)
-        except Exception:
-            print(message, flush=True)
 
     @staticmethod
     def _frame_discriminability_score(image_path: str) -> float:
@@ -595,13 +546,13 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             ('fps_1', 'fps=1,scale=iw:ih'),
         ]
         try:
-            for ridx, (rname, vfexpr) in enumerate(rounds, start=1):
+            for ridx, (_, vfexpr) in enumerate(rounds, start=1):
                 pattern = os.path.join(temp_dir, "frame_%012d.png")
                 cmd = (
                     f'"{FFMPEG_PATH}" -hide_banner -loglevel error -y -i "{video_path}" '
                     f'-vf "{vfexpr}" -vsync 0 -frames:v {target} -frame_pts 1 "{pattern}"'
                 )
-                subprocess.Popen(cmd, shell=True, creationflags=_windows_no_window_flags()).wait()
+                run_command(cmd, creationflags=int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if sys.platform == "win32" else 0)
 
                 imgs = sorted(
                     os.path.join(temp_dir, n)
@@ -614,7 +565,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
 
                 ranked = sorted(score_map.items(), key=lambda kv: kv[1], reverse=True)
                 selected = [p for p, _ in ranked][:target]
-                self._log_getnative(
+                _emit_encode_log_line(
                     f'{self.t("[BluraySubtitle] getnative frame-screen round ")}{ridx}/{len(rounds)} - '
                     f'{self.t("candidates=")}{len(score_map)}{self.t(", selected=")}{len(selected)}'
                 )
@@ -629,8 +580,6 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             print_exc_terminal()
             return []
 
-    def _estimate_native_from_image(self, image_path: str) -> Optional[dict]:
-        return _estimate_native_from_image_worker(image_path, str(PLUGIN_PATH or '').strip(), GETNATIVE_DEBUG_DIR)
 
     def _infer_native_resolution(self, video_path: str) -> Optional[dict]:
         desired_valid = 5
@@ -654,13 +603,13 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 cursor += len(batch)
                 evaluated += len(batch)
 
-                self._log_getnative(
+                _emit_encode_log_line(
                     f'{self.t("[BluraySubtitle] getnative round ")}{(evaluated + batch_size - 1) // batch_size} - '
                     f'{self.t("evaluating ")}{len(batch)}{self.t(" new samples ")}'
                     f'{self.t("(valid_so_far=")}{len(valid_results)})'
                 )
                 for idx, image in enumerate(batch, start=1):
-                    self._log_getnative(
+                    _emit_encode_log_line(
                         f'{self.t("[BluraySubtitle] getnative sample begin ")}{idx}/{len(batch)} - {os.path.basename(image)}'
                     )
 
@@ -687,26 +636,29 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                                 }
                     eval_sequence = [(img, ordered_results.get(img, {})) for img in batch]
                 except Exception as e:
-                    self._log_getnative(
+                    _emit_encode_log_line(
                         f'{self.t("[BluraySubtitle] getnative - multiprocessing unavailable, fallback to single process ")}'
                         f'({type(e).__name__} - {e})'
                     )
-                    eval_sequence = [(img, self._estimate_native_from_image(img) or {}) for img in batch]
+                    eval_sequence = [
+                        (image, _estimate_native_from_image_worker(image, plugin_dir, GETNATIVE_DEBUG_DIR) or {})
+                        for image in batch
+                    ]
 
                 for image, r in eval_sequence:
                     if not bool(r.get("ok", False)):
-                        self._log_getnative(
+                        _emit_encode_log_line(
                             f'{self.t("[BluraySubtitle] getnative sample failed: ")}{os.path.basename(image)} '
                             f'{self.t("(stage=")}{r.get("stage", "unknown")}{self.t(", error=")}{r.get("error", "unknown")})'
                         )
                         tb = str(r.get("traceback", "") or "").strip()
                         if tb:
-                            self._log_getnative(
+                            _emit_encode_log_line(
                                 f'{self.t("[BluraySubtitle] getnative traceback for ")}{os.path.basename(image)}\n{tb}'
                             )
                         continue
                     if int(r.get("curve_valid", 1)) == 1:
-                        self._log_getnative(
+                        _emit_encode_log_line(
                             f'{self.t("[BluraySubtitle] getnative sample: ")}{r.get("image","")} -> '
                             f'{r.get("height",0):.2f}p {r.get("kernel","")} {self.t("score=")}{r.get("score",0):.6f} '
                             f'{self.t("range=")}{tuple(r.get("range", []))} {self.t("loader=")}{r.get("loader","unknown")} '
@@ -716,7 +668,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                         )
                         valid_results.append(r)
                     else:
-                        self._log_getnative(
+                        _emit_encode_log_line(
                             f'{self.t("[BluraySubtitle] getnative sample rejected by curve-shape: ")}'
                             f'{r.get("image","")} {self.t("edge_hit=")}{r.get("edge_hit",0)} '
                             f'{self.t("decreasing_ratio=")}{float(r.get("decreasing_ratio",0.0)):.3f} '
@@ -739,7 +691,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
 
         if len(valid_results) < 2:
             total_seen = max(1, int(evaluated))
-            self._log_getnative(
+            _emit_encode_log_line(
                 f'[BluraySubtitle] getnative: insufficient valid curves ({len(valid_results)}/{total_seen})'
             )
             return None
@@ -759,23 +711,22 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             hr = max(0.0, min(1.0, h / hi))
             return s * (hr**4.0)
 
-        def _bucket_weight(rows: list[dict]) -> float:
-            ws = sorted((_row_weight(x) for x in rows), reverse=True)
-            return float(sum(ws[:3]))
-
-        best_key, best_rows = max(buckets.items(), key=lambda kv: (_bucket_weight(kv[1]), kv[0]))
+        _, best_rows = max(
+            buckets.items(),
+            key=lambda item: (sum(sorted((_row_weight(row) for row in item[1]), reverse=True)[:3]), item[0]),
+        )
         kept = best_rows
 
         heights = sorted(float(x["height"]) for x in kept)
         spread = heights[-1] - heights[0]
         if spread > 24:
-            self._log_getnative(
+            _emit_encode_log_line(
                 f'{self.t("[BluraySubtitle] getnative - sample spread too large ")}'
                 f'({spread:.2f} > 24){self.t(", no consensus")}'
             )
             return None
 
-        ws = [max(0.0, float(x.get("score", 0.0))) for x in kept]
+
         w2 = [_row_weight(x) for x in kept]
         wsum = float(sum(w2))
         if wsum <= 0:
@@ -846,17 +797,14 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
 
         src_mkv = os.path.normpath(source_file)
         output_folder = os.path.dirname(os.path.abspath(output_file))
-        tool_key = _normalize_encode_tool_label(encoder)
-        bd = str(bit_depth or '10').strip()
-        if bd not in ('8', '10', '12'):
-            bd = '10'
+        bd = bit_depth
         bits_int = int(bd)
         vpy_video_source = src_mkv
         encode_dovi_plan: Optional[DolbyVisionEncodePlan] = None
         if str(src_mkv).lower().endswith('.mkv') and os.path.isfile(src_mkv):
             dv_tid = MediaInfoTrackMappingMixin.mkvinfo_dolby_vision_track_id(src_mkv)
             if dv_tid is not None:
-                if tool_key == 'svtav1':
+                if encoder == 'svtav1':
                     message = translate_text(
                         'Dolby Vision metadata will not be retained for SVT-AV1 output: {path}'
                     ).format(path=src_mkv)
@@ -897,7 +845,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             use_getnative = bool(getattr(self, "use_getnative", True))
             native_info = None
             if use_getnative:
-                self._log_getnative(
+                _emit_encode_log_line(
                     f'{self.t("[BluraySubtitle] getnative - start analyzing ")}{os.path.basename(vpy_video_source)}')
                 try:
                     self._progress(text=f'{self.t("Getnative analyzing: ")}{os.path.basename(vpy_video_source)}')
@@ -906,12 +854,12 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 native_info = self._infer_native_resolution(vpy_video_source)
                 self._cleanup_getnative_artifacts()
                 if native_info:
-                    self._log_getnative(
+                    _emit_encode_log_line(
                         f'{self.t("[BluraySubtitle] getnative - ")}{os.path.basename(src_mkv)} -> '
                         f'{native_info["height"]}p ({native_info["kernel"]}, {self.t("score>=")}{native_info["confidence"]:.4f})'
                     )
                 else:
-                    self._log_getnative(
+                    _emit_encode_log_line(
                         f'{self.t("[BluraySubtitle] getnative - ")}{os.path.basename(vpy_video_source)} -> '
                         f'{self.t("no confident native resolution")}'
                     )
@@ -1046,20 +994,26 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             vspipe_env = dict(vspipe_env) if vspipe_env else dict(os.environ)
             vspipe_env['BLURAYSUB_VPY_SOURCE'] = os.path.normpath(vpy_video_source)
 
-            enc_bundle = encoder_mode == 'bundle'
-            enc_mode = 'bundle' if enc_bundle else 'system'
-            enc_exe = resolve_encoder_executable_path(tool_key, enc_mode)
-            ext = _video_intermediate_extension(tool_key)
+            enc_exe = resolve_encoder_executable_path(encoder, encoder_mode)
+
+            ext = {'x264': '.h264', 'x265': '.hevc', 'svtav1': '.ivf'}[encoder]
             encoded_path = os.path.join(output_folder, os.path.splitext(os.path.basename(output_file))[0] + ext)
-            extra = _split_x265_extra_args(encoder_parameters or '')
-            if tool_key == 'x264':
+            try:
+                extra = shlex.split(encoder_parameters, posix=sys.platform != 'win32')
+            except ValueError:
+                extra = encoder_parameters.split()
+            if encoder == 'x264':
                 extra = _normalize_x264_extra_for_bit_depth(extra, bd)
-            elif tool_key == 'svtav1' and bd == '12' and not _svtav1_extra_has_explicit_profile(extra):
+            elif encoder == 'svtav1' and bd == '12' and not any(
+                    str(arg).strip().lower() in ('--profile', '-profile')
+                    or str(arg).strip().lower().startswith(('--profile=', '-profile='))
+                    for arg in extra
+            ):
                 extra = ['--profile', '2'] + list(extra)
 
-            if tool_key == 'x264':
+            if encoder == 'x264':
                 enc_cmd = [enc_exe, '--demuxer', 'y4m', '-'] + extra + ['--output-depth', bd, '-o', encoded_path]
-            elif tool_key == 'x265':
+            elif encoder == 'x265':
                 # Stdin is already '--y4m' '-' ; a trailing '-' is parsed as a second input (unused) and can abort x265.
                 enc_cmd = (
                     [enc_exe]
@@ -1074,7 +1028,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     enc_cmd = [enc_exe, "-i", "stdin", "--input-depth", bd] + extra + ["-b", encoded_path]
 
             use_svt_win_temp_y4m = (
-                tool_key == "svtav1"
+                encoder == "svtav1"
                 and sys.platform == "win32"
                 and str(os.environ.get("BLURAYSUB_SVT_WIN_TEMP_Y4M", "") or "").strip() == "1"
             )

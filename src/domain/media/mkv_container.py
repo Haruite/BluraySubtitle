@@ -1,10 +1,10 @@
 import os
-import subprocess
 from struct import unpack
 
 from src.core import find_mkvtoolnix, get_mkvtoolnix_ui_language
 from src.core import settings as core_settings
 from src.core.i18n import translate_text
+from src.exports.utils import run_command
 
 
 class MKV:
@@ -51,10 +51,6 @@ class MKV:
             unknown_size = value == (1 << (7 * length)) - 1
             return (None if unknown_size else value), length
 
-        def parse_uint(buf: bytes) -> int:
-            if not buf:
-                return 0
-            return int.from_bytes(buf, "big", signed=False)
 
         def parse_float(buf: bytes):
             if len(buf) == 4:
@@ -63,10 +59,6 @@ class MKV:
                 return unpack(">d", buf)[0]
             return None
 
-        def skip_bytes(f, n: int):
-            if n <= 0:
-                return
-            f.seek(n, 1)
 
         def read_info_duration(f, info_end: int):
             duration = None
@@ -89,14 +81,13 @@ class MKV:
 
                 if el_id == TIMECODE_SCALE_ID:
                     payload = f.read(payload_len)
-                    timecode_scale = parse_uint(payload) or DEFAULT_TIMECODE_SCALE
+                    timecode_scale = (int.from_bytes(payload, "big", signed=False) if payload else 0) or DEFAULT_TIMECODE_SCALE
                 elif el_id == DURATION_ID:
                     payload = f.read(payload_len)
                     duration = parse_float(payload)
-                else:
-                    skip_bytes(f, payload_len)
 
                 f.seek(payload_end)
+
             if duration is None:
                 return None
             return float(duration) * float(timecode_scale) / 1_000_000_000.0
@@ -198,7 +189,7 @@ class MKV:
             failed_message = translate_text('mkvmerge failed for: {path}').format(path=self.path)
             failed_output = new_path
 
-        result = subprocess.run(command, shell=False)
+        result = run_command(command)
         if result.returncode in (0, 1):
             return
         if failed_output and os.path.exists(failed_output):

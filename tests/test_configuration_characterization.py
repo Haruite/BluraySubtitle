@@ -11,7 +11,6 @@ from src.runtime.gui_runtime_split import remux_and_episode_layout as remux_layo
 from src.runtime.gui_runtime_split.remux_and_episode_layout import RemuxEpisodeLayoutMixin
 from src.runtime.services_split.lifecycle_and_configuration import LifecycleConfigurationMixin
 from src.runtime.services_split.misc_workflows import MiscWorkflowsMixin
-from src.runtime.services_split.remux_and_episode_workflows import RemuxEpisodeWorkflowsMixin
 
 
 class _Combo:
@@ -202,14 +201,15 @@ class MainRemuxCommandMappingTests(unittest.TestCase):
 class ConfigurationRowTests(unittest.TestCase):
     def test_chapter_segment_default_preserves_explicit_false(self) -> None:
         configuration = {
-            0: {"selected_mpls": "00001"},
-            1: {"selected_mpls": "00002", "chapter_segments_fully_checked": False},
+            0: {"start_at_chapter": 1, "end_at_chapter": 2},
+            1: {"start_at_chapter": 1, "end_at_chapter": 2, "chapter_segments_fully_checked": False},
         }
 
-        LifecycleConfigurationMixin._configuration_default_chapter_segments_checked(configuration)
+        with patch.object(LifecycleConfigurationMixin, '_enrich_configuration_chapter_bounds'):
+            result = LifecycleConfigurationMixin._finalize_configuration_episode_rows(configuration)
 
-        self.assertTrue(configuration[0]["chapter_segments_fully_checked"])
-        self.assertFalse(configuration[1]["chapter_segments_fully_checked"])
+        self.assertTrue(result[0]["chapter_segments_fully_checked"])
+        self.assertFalse(result[1]["chapter_segments_fully_checked"])
 
     def test_invalid_chapter_ranges_are_removed_and_rows_reindexed(self) -> None:
         configuration = {

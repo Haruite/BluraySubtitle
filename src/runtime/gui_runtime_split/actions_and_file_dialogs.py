@@ -3,7 +3,6 @@ import copy
 import datetime
 import os
 import re
-import subprocess
 import sys
 import threading
 import time
@@ -23,17 +22,15 @@ import src.core.settings as core_settings
 from src.core.i18n import translate_text
 from src.domain import MKV, Ass, SRT, Subtitle
 from src.exports.utils import (
+    run_command,
     print_terminal_line,
     print_tb_string_terminal,
     get_time_str,
     get_mpv_safe_path,
     print_exc_terminal,
     third_party_notices_markdown_path,
-    chapter_cfg_chain_print,
-    chapter_view_segment_trace_begin,
-    chapter_view_segment_trace_end,
 )
-from src.runtime.sp import SpEntry
+from src.runtime.sp import SpEntry, media_track_key
 from src.runtime.gui_runtime_classes.encode_worker import EncodeWorker
 from src.runtime.encode import EncodeRequest, EncodeRow, EncodeSettings, validate_encode_request
 from src.runtime.gui_runtime_classes.file_path_table_widget_item import FilePathTableWidgetItem
@@ -1062,7 +1059,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                         vpy_path=self.get_vpy_path_from_row(row_index) or self.get_default_vpy_path(),
                         subtitle_path=os.path.normpath(subtitle_path) if subtitle_path else '',
                         subtitle_language=language,
-                        **captured_track_options(f'mkv::{os.path.normpath(source_path)}'),
+                        **captured_track_options(media_track_key('mkv', source_path)),
                     ))
 
                 if hasattr(self, 'table3'):
@@ -1081,7 +1078,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                             source_path=os.path.normpath(source_path),
                             output_path=os.path.join(output_folder, 'SPs', output_name),
                             vpy_path=self.get_sp_vpy_path_from_row(row_index) or self.get_default_vpy_path(),
-                            **captured_track_options(f'mkvsp::{os.path.normpath(source_path)}'),
+                            **captured_track_options(media_track_key('mkvsp', source_path)),
                         ))
             else:
                 source_root = os.path.normpath(self.bdmv_folder_path.text().strip())
@@ -1123,7 +1120,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                             configured_mpls if configured_mpls.lower().startswith('bdmv' + os.sep)
                             else os.path.join('BDMV', 'PLAYLIST', os.path.basename(configured_mpls)),
                         )
-                    main_track_key = f'main::{os.path.splitext(configured_mpls)[0]}.mpls'
+                    main_track_key = media_track_key('main', os.path.splitext(configured_mpls)[0] + '.mpls')
                     main_rows.append(EncodeRow(
                         source_path='',
                         output_path=os.path.join(output_folder, output_name),
@@ -1852,21 +1849,12 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             if not self._is_mpls_currently_main(mpls_path):
                 return
             # Save checkbox states for this mpls_path
-            prev_states = self._chapter_checkbox_states.get(mpls_path)
             states = []
             for row in range(chapter_window.table_widget.rowCount()):
                 item = chapter_window.table_widget.item(row, 0)
                 if item:
                     states.append(item.checkState() == Qt.CheckState.Checked)
-            segment_selection_changed = prev_states is None or prev_states != states
             self._chapter_checkbox_states[mpls_path] = states
-            if segment_selection_changed:
-                chapter_view_segment_trace_begin()
-            chapter_cfg_chain_print(
-                f'on_button_click:view_chapters_accepted mpls_path={mpls_path!r} '
-                f'fid={self.get_selected_function_id()} bdmv_index={bdmv_index} '
-                f'segment_selection_changed={segment_selection_changed}',
-            )
             progress = QProgressDialog(self.t('Applying chapter selection...'), '', 0, 0, self)
             progress.setCancelButton(None)
             progress.setWindowModality(Qt.WindowModality.ApplicationModal)
@@ -1881,11 +1869,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     progress.setLabelText(self.t('Regenerating configuration...'))
                     QCoreApplication.processEvents()
                     cfg = self._generate_configuration_from_ui_inputs()
-                    chapter_cfg_chain_print(
-                        f'on_button_click:before_on_configuration cfg_keys_n={len(cfg)}',
-                    )
                     self.on_configuration(cfg, update_sp_table=False)
-                    chapter_cfg_chain_print('on_button_click:after_on_configuration')
             except Exception:
                 self._show_error_dialog(traceback.format_exc())
             try:
@@ -1894,23 +1878,15 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     QCoreApplication.processEvents()
                     self._sync_chapter_checkbox_sp_for_mpls(mpls_path, bdmv_index)
                     self._recompute_sp_output_names(only_bdmv_index=bdmv_index)
-                    chapter_cfg_chain_print(
-                        f'on_button_click:after_sync_sp_and_recompute_names bdmv_index={bdmv_index}',
-                    )
             except Exception:
                 self._show_error_dialog(traceback.format_exc())
             finally:
                 progress.close()
                 progress.deleteLater()
-                if segment_selection_changed:
-                    chapter_view_segment_trace_end()
 
     def on_button_main(self, mpls_path: str, clicked_checked: Optional[bool] = None):
-        def has_subtitle_in_table2() -> bool:
-            return self._has_subtitle_in_table2()
+        subtitle = self._has_subtitle_in_table2()
 
-        subtitle = has_subtitle_in_table2()
-        applied_checked: Optional[bool] = None
         for bdmv_index in range(self.table1.rowCount()):
             root_item = self.table1.item(bdmv_index, 0)
             root = root_item.text().strip() if root_item and root_item.text() else ''
@@ -1932,7 +1908,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     isinstance(main_btn, QToolButton) and main_btn.isChecked())
                 if isinstance(main_btn, QToolButton):
                     main_btn.setChecked(checked)
-                applied_checked = bool(checked)
+
                 play_btn = info.cellWidget(mpls_index, 4)
                 if play_btn:
                     play_btn.setProperty('action', 'preview' if (checked and subtitle) else 'play')
@@ -2003,12 +1979,14 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         def mpv_play_mpls(mpls_path, mpv_path):
             sub_file = _select_subtitle_file_for_mpls(mpls_path)
             if sub_file:
-                subprocess.Popen(
-                    f'"{mpv_path}" --sub-file="{sub_file}" bd://mpls/{mpls_path[-10:-5]} --bluray-device="{mpls_path[:-25]}"',
-                    shell=True).wait()
+                run_command(
+                    f'"{mpv_path}" --sub-file="{sub_file}" bd://mpls/{mpls_path[-10:-5]} '
+                    f'--bluray-device="{mpls_path[:-25]}"'
+                )
             else:
-                subprocess.Popen(f'"{mpv_path}" bd://mpls/{mpls_path[-10:-5]} --bluray-device="{mpls_path[:-25]}"',
-                                 shell=True).wait()
+                run_command(
+                    f'"{mpv_path}" bd://mpls/{mpls_path[-10:-5]} --bluray-device="{mpls_path[:-25]}"'
+                )
             return
 
         action = btn.property('action') or ''
@@ -2069,21 +2047,21 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     my_env["LD_LIBRARY_PATH"] = "/usr/local/lib/mpv-bundle:" + my_env.get("LD_LIBRARY_PATH", "")
                     sub_file = _select_subtitle_file_for_mpls(mpls_path)
                     if sub_file:
-                        subprocess.Popen(
+                        run_command(
                             f'mpv --vo=x11 --profile=sw-fast --hwdec=no --framedrop=vo --sub-file="{sub_file}" bd://mpls/{mpls_path[-10:-5]} --bluray-device="{mpls_path[:-25]}"',
-                            shell=True, env=my_env).wait()
+                            env=my_env)
                     else:
-                        subprocess.Popen(
+                        run_command(
                             f'mpv --vo=x11 --profile=sw-fast --hwdec=no --framedrop=vo bd://mpls/{mpls_path[-10:-5]} --bluray-device="{mpls_path[:-25]}"',
-                            shell=True, env=my_env).wait()
+                            env=my_env)
                     return
                 except Exception:
                     pass
             try:
-                output = subprocess.check_output(["xdg-mime", "query", "default", "x-content/video-bluray"])
+                output = run_command(["xdg-mime", "query", "default", "x-content/video-bluray"], capture_output=True, check=True).stdout
                 desktop_file = output.decode('utf-8').strip()
                 if not desktop_file:
-                    output = subprocess.check_output(["xdg-mime", "query", "default", "video/mp4"])
+                    output = run_command(["xdg-mime", "query", "default", "video/mp4"], capture_output=True, check=True).stdout
                     desktop_file = output.decode('utf-8').strip()
                 # Enable Blu-ray support in Linux mpv build by running in source directory:
                 # echo "--enable-libbluray" > ffmpeg_options
@@ -2093,7 +2071,18 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     mpv_play_mpls(mpls_path, 'mpv')
             except:
                 pass
-            subprocess.run(['xdg-open', mpls_path])
+            run_command(['xdg-open', mpls_path])
+
+    def _apply_configuration_after_subtitle_change(self, sub_files: list[str]) -> None:
+        service = BluraySubtitle(
+            self.bdmv_folder_path.text(), sub_files, self.checkbox1.isChecked(), None,
+            approx_episode_duration_seconds=self._get_approx_episode_duration_seconds(),
+        )
+        if self.get_selected_function_id() in (3, 4, 5) and not self._is_movie_mode() and self.table2.rowCount():
+            configuration = self._generate_configuration_from_ui_inputs()
+        else:
+            configuration = service.generate_configuration_from_selected_mpls(self.get_selected_mpls_no_ext())
+        self.on_configuration(configuration)
 
     def on_subtitle_drop(self):
         try:
@@ -2106,27 +2095,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             else:
                 sub_files = [self.table2.item(sub_index, 1).text() for sub_index in range(self.table2.rowCount())
                              if self.table2.item(sub_index, 0) and self.table2.item(sub_index, 0).checkState() == 2]
-            bs = BluraySubtitle(
-                self.bdmv_folder_path.text(),
-                sub_files,
-                self.checkbox1.isChecked(),
-                None,
-                approx_episode_duration_seconds=self._get_approx_episode_duration_seconds()
-            )
-            selected_mpls = self.get_selected_mpls_no_ext()
-            if self.get_selected_function_id() in (3, 4, 5) and not self._is_movie_mode() and self.table2.rowCount() > 0:
-                try:
-                    configuration = self._generate_configuration_from_ui_inputs()
-                except Exception:
-                    if selected_mpls:
-                        configuration = bs.generate_configuration_from_selected_mpls(selected_mpls)
-                    else:
-                        configuration = bs.generate_configuration(self.table1)
-            elif selected_mpls:
-                configuration = bs.generate_configuration_from_selected_mpls(selected_mpls)
-            else:
-                configuration = bs.generate_configuration(self.table1)
-            self.on_configuration(configuration)
+            self._apply_configuration_after_subtitle_change(sub_files)
         except Exception as e:
             print(f'{translate_text("Subtitle drag-in failed: ")}{str(e)}')
             print_exc_terminal()
@@ -2179,27 +2148,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 return
             sub_files = [self.table2.item(sub_index, 1).text() for sub_index in range(self.table2.rowCount())
                          if self.sub_check_state[sub_index] == 2]
-            bs = BluraySubtitle(
-                self.bdmv_folder_path.text(),
-                sub_files,
-                self.checkbox1.isChecked(),
-                None,
-                approx_episode_duration_seconds=self._get_approx_episode_duration_seconds()
-            )
-            selected_mpls = self.get_selected_mpls_no_ext()
-            if self.get_selected_function_id() in (3, 4, 5) and not self._is_movie_mode() and self.table2.rowCount() > 0:
-                try:
-                    configuration = self._generate_configuration_from_ui_inputs()
-                except Exception:
-                    if selected_mpls:
-                        configuration = bs.generate_configuration_from_selected_mpls(selected_mpls)
-                    else:
-                        configuration = bs.generate_configuration(self.table1)
-            elif selected_mpls:
-                configuration = bs.generate_configuration_from_selected_mpls(selected_mpls)
-            else:
-                configuration = bs.generate_configuration(self.table1)
-            self.on_configuration(configuration)
+            self._apply_configuration_after_subtitle_change(sub_files)
         for sub_index, check_state in enumerate(self.sub_check_state):
             if check_state != 2:
                 bdmv_col = SUBTITLE_LABELS.index('bdmv_index')
@@ -2253,27 +2202,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             else:
                 sub_files = [self.table2.item(sub_index, 1).text() for sub_index in range(self.table2.rowCount())
                              if self.table2.item(sub_index, 0) and self.table2.item(sub_index, 0).checkState() == 2]
-            bs = BluraySubtitle(
-                self.bdmv_folder_path.text(),
-                sub_files,
-                self.checkbox1.isChecked(),
-                None,
-                approx_episode_duration_seconds=self._get_approx_episode_duration_seconds()
-            )
-            selected_mpls = self.get_selected_mpls_no_ext()
-            if self.get_selected_function_id() in (3, 4, 5) and not self._is_movie_mode() and self.table2.rowCount() > 0:
-                try:
-                    configuration = self._generate_configuration_from_ui_inputs()
-                except Exception:
-                    if selected_mpls:
-                        configuration = bs.generate_configuration_from_selected_mpls(selected_mpls)
-                    else:
-                        configuration = bs.generate_configuration(self.table1)
-            elif selected_mpls:
-                configuration = bs.generate_configuration_from_selected_mpls(selected_mpls)
-            else:
-                configuration = bs.generate_configuration(self.table1)
-            self.on_configuration(configuration)
+            self._apply_configuration_after_subtitle_change(sub_files)
         except Exception:
             print_exc_terminal()
 
@@ -2289,9 +2218,9 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             if sys.platform == 'win32':
                 os.startfile(path)
             elif sys.platform == 'darwin':
-                subprocess.Popen(['open', path])
+                run_command(['open', path], wait=False)
             else:
-                subprocess.Popen(['xdg-open', path])
+                run_command(['xdg-open', path], wait=False)
         except Exception as e:
             QMessageBox.warning(self, "Open File Failed", f"Cannot open file:\n{path}\n\n{e}")
 
@@ -2313,9 +2242,9 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             if sys.platform == 'win32':
                 os.startfile(normalized)
             elif sys.platform == 'darwin':
-                subprocess.Popen(['open', normalized])
+                run_command(['open', normalized], wait=False)
             else:
-                subprocess.Popen(['xdg-open', normalized])
+                run_command(['xdg-open', normalized], wait=False)
         except Exception as e:
             QMessageBox.warning(self, "Open Folder Failed", f"Cannot open folder:\n{normalized}\n\n{e}")
 

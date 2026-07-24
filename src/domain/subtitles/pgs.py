@@ -32,12 +32,6 @@ class PGS:
             })
             i = payload_end
 
-    def _build_packet_bytes(self, packet):
-        return (
-            b'PG'
-            + struct.pack('>IIBH', packet["pts"], packet["dts"], packet["seg_type"], len(packet["payload"]))
-            + packet["payload"]
-        )
 
     def _compute_max_end(self):
         end_set = set(self.iter_timestamp())
@@ -60,7 +54,11 @@ class PGS:
 
     def dump_file(self, fp: _io.BufferedWriter):
         for packet in self.packets:
-            fp.write(self._build_packet_bytes(packet))
+            fp.write(
+                b'PG'
+                + struct.pack('>IIBH', packet["pts"], packet["dts"], packet["seg_type"], len(packet["payload"]))
+                + packet["payload"]
+            )
 
     def append_pgs(self, other: 'PGS', shift_time: float):
         if not hasattr(other, 'packets') or not other.packets:

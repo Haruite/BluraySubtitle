@@ -1,9 +1,4 @@
-"""Subtitle domain scaffold (class-per-file migration layout).
-
-Migration note:
-- Keep runtime behavior via legacy bridge aliases for now.
-- Manually copy implementations from `BluraySubtitle.py` into each file later.
-"""
+"""Subtitle domain models and parsing helpers."""
 
 from .ass_model import Ass
 from .event_model import Event

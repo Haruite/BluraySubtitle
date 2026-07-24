@@ -5,14 +5,13 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess
 import tempfile
 from typing import Optional
 
 from src.core import find_mkvtoolnix, mkvtoolnix_ui_language_arg
 from src.core import settings as core_settings
 from src.core.i18n import translate_text
-from src.exports.utils import mkv_codec_id_is_dts_family
+from src.exports.utils import mkv_codec_id_is_dts_family, run_command
 
 
 def _identify_tracks(media_path: str) -> list[dict[str, object]]:
@@ -20,13 +19,12 @@ def _identify_tracks(media_path: str) -> list[dict[str, object]]:
     mkvmerge = str(core_settings.MKV_MERGE_PATH or '').strip() or shutil.which('mkvmerge') or ''
     if not mkvmerge:
         raise FileNotFoundError(translate_text('mkvmerge not found'))
-    result = subprocess.run(
+    result = run_command(
         [mkvmerge, '-J', media_path],
         capture_output=True,
         text=True,
         encoding='utf-8',
         errors='ignore',
-        shell=False,
     )
     if result.returncode != 0:
         raise RuntimeError(
@@ -39,16 +37,6 @@ def _identify_tracks(media_path: str) -> list[dict[str, object]]:
             translate_text('Could not identify media tracks: {path}').format(path=media_path)
         ) from error
     return [track for track in tracks if isinstance(track, dict)]
-
-
-def _run_audio_command(command: list[str]) -> int:
-    print(
-        translate_text('Audio command: {command}').format(
-            command=subprocess.list2cmdline(command)
-        ),
-        flush=True,
-    )
-    return int(subprocess.run(command, shell=False).returncode)
 
 
 def _is_lossless_audio_track(track: dict[str, object]) -> bool:
@@ -277,7 +265,7 @@ def mux_with_audio_conversion(
             if ui_language:
                 extract_command.extend(ui_language.split())
             extract_command.extend(['tracks', source_path, f'{track_id}:{extracted_audio}'])
-            extract_result = subprocess.run(extract_command, shell=False)
+            extract_result = run_command(extract_command)
             if extract_result.returncode not in (0, 1) or not (
                     os.path.isfile(extracted_audio) and os.path.getsize(extracted_audio) > 0
             ):
@@ -305,7 +293,7 @@ def mux_with_audio_conversion(
                 ]
                 decoded_wave = decoded_base + '.wav'
                 try:
-                    decode_succeeded = _run_audio_command(decode_command) == 0
+                    decode_succeeded = run_command(decode_command, log_template='Audio command: {command}').returncode == 0
                 except OSError:
                     decode_succeeded = False
                 if decode_succeeded and (
@@ -380,7 +368,7 @@ def mux_with_audio_conversion(
                     'pcm_s24le',
                     wave_path,
                 ]
-                if _run_audio_command(wave_command) != 0 or not os.path.isfile(wave_path):
+                if run_command(wave_command, log_template='Audio command: {command}').returncode != 0 or not os.path.isfile(wave_path):
                     raise RuntimeError(
                         translate_text('Audio decode failed for track {track}: {path}').format(
                             track=track_id,
@@ -390,7 +378,7 @@ def mux_with_audio_conversion(
                 converted_audio = os.path.join(work_folder, f'track-{track_id}.m4a')
                 conversion_command = [fdkaac, '-m', '5', '-o', converted_audio, wave_path]
 
-            if _run_audio_command(conversion_command) != 0 or not (
+            if run_command(conversion_command, log_template='Audio command: {command}').returncode != 0 or not (
                     os.path.isfile(converted_audio) and os.path.getsize(converted_audio) > 0
             ):
                 raise RuntimeError(
@@ -535,13 +523,8 @@ def mux_with_audio_conversion(
             temporary_output,
         ])
         mux_command.extend(input_arguments)
-        print(
-            translate_text('Mux command: {command}').format(
-                command=subprocess.list2cmdline(mux_command)
-            ),
-            flush=True,
-        )
-        mux_result = subprocess.run(mux_command, shell=False)
+        mux_result = run_command(mux_command, log_template='Mux command: {command}')
+
         if mux_result.returncode not in (0, 1) or not (
                 os.path.isfile(temporary_output) and os.path.getsize(temporary_output) > 0
         ):

@@ -842,12 +842,6 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         print('[BluraySubtitle] window close accepted', flush=True)
         return
 
-    def _cleanup_info_json_if_needed(self):
-        try:
-            if os.path.exists('info.json'):
-                force_remove_file('info.json')
-        except Exception:
-            pass
 
     def _begin_delayed_busy(self, label_text: str, minimum_delay_sec: float = 2.0) -> dict[str, object]:
         return {

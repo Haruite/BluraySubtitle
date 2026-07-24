@@ -71,8 +71,6 @@ class MPLS:
         if retime_mode not in {"keep", "clip_range", "preserve_duration"}:
             raise ValueError("retime_mode must be one of: keep, clip_range, preserve_duration")
 
-        def _is_video_stream_type(stream_type: int) -> bool:
-            return stream_type in {0x01, 0x02, 0x1B, 0xEA, 0x24, 0x20}
 
         def _choose_program(program_list: list[InfoDict]) -> InfoDict:
             if not program_list:
@@ -83,7 +81,7 @@ class MPLS:
                 streams = program.get("StreamsInPS") or []
                 for stream in streams:
                     sc = stream.get("StreamCodingInfo")
-                    if sc and _is_video_stream_type(int(sc.get("StreamCodingType", -1))):
+                    if sc and int(sc.get("StreamCodingType", -1)) in {0x01, 0x02, 0x1B, 0xEA, 0x24, 0x20}:
                         return program
             return max(program_list, key=lambda p: len(p.get("StreamsInPS") or []))
 

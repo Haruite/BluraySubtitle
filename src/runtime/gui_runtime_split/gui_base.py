@@ -259,9 +259,6 @@ class BluraySubtitleGuiBase(QWidget):
         """Stub for `_build_main_remux_cmd_template`."""
         raise NotImplementedError
 
-    def _build_start_chapter_options(self, rows: int, has_beginning: bool) -> list[tuple[int, str]]:
-        """Stub for `_build_start_chapter_options`."""
-        raise NotImplementedError
 
     def _chapter_label_text(self, value: int, rows: int, has_beginning: bool, for_end: bool=False) -> str:
         """Stub for `_chapter_label_text`."""
@@ -271,17 +268,11 @@ class BluraySubtitleGuiBase(QWidget):
         """Stub for `_chapter_node_data`."""
         raise NotImplementedError
 
-    def _cleanup_info_json_if_needed(self):
-        """Stub for `_cleanup_info_json_if_needed`."""
-        raise NotImplementedError
 
     def _closest_endpoint(self, start_idx: int, target_sec: float, rows: int, offsets: dict[int, float], m2ts: dict[int, str], checked: list[bool], approx_episode_sec: Optional[float] = None) -> int:
         """Stub for `_closest_endpoint`."""
         raise NotImplementedError
 
-    def _codec_name_from_codec_id(self, codec_id: str) -> str:
-        """Stub for `_codec_name_from_codec_id`."""
-        raise NotImplementedError
 
     def _collect_config_inputs(self) -> dict[str, object]:
         """Stub for `_collect_config_inputs`."""
@@ -454,9 +445,6 @@ class BluraySubtitleGuiBase(QWidget):
         """Restore end_at_chapter / disc_output_name on regenerated no-sub rows when episode keys match."""
         raise NotImplementedError
 
-    def _mkvextract_ext_from_codec_id(self, codec_id: str) -> str:
-        """Stub for `_mkvextract_ext_from_codec_id`."""
-        raise NotImplementedError
 
     def _normalize_default_vpy_runtime_lines(self):
         """Ensure default vpy keeps empty runtime placeholders for a= and sub_file=."""
@@ -466,9 +454,6 @@ class BluraySubtitleGuiBase(QWidget):
         """Stub for `_normalize_path_input`."""
         raise NotImplementedError
 
-    def _on_edit_tracks_from_sp_table_clicked(self):
-        """Stub for `_on_edit_tracks_from_sp_table_clicked`."""
-        raise NotImplementedError
 
     def _on_end_chapter_combo_changed(self, row: int, labels: list[str]):
         """Stub for `_on_end_chapter_combo_changed`."""
@@ -514,10 +499,6 @@ class BluraySubtitleGuiBase(QWidget):
         """Stub for `_on_theme_changed`."""
         raise NotImplementedError
 
-    @staticmethod
-    def _parse_display_time_to_seconds(s: str) -> float:
-        """Stub for `_parse_display_time_to_seconds`."""
-        raise NotImplementedError
 
     def _parse_stream_pid(self, raw_id: object) -> Optional[int]:
         """Stub for `_parse_stream_pid`."""
@@ -555,9 +536,6 @@ class BluraySubtitleGuiBase(QWidget):
         """Stub for `_read_m2ts_track_info`."""
         raise NotImplementedError
 
-    def _read_media_streams_local(self, media_path: str) -> list[dict[str, object]]:
-        """Stub for `_read_media_streams_local`."""
-        raise NotImplementedError
 
     def _read_mkvinfo_attachments(self, mkv_path: str) -> list[dict[str, str]]:
         """Stub for `_read_mkvinfo_attachments`."""
@@ -957,6 +935,10 @@ class BluraySubtitleGuiBase(QWidget):
         """Stub for `on_select_function`."""
         raise NotImplementedError
 
+    def _apply_configuration_after_subtitle_change(self, sub_files: list[str]) -> None:
+        """Stub for `_apply_configuration_after_subtitle_change`."""
+        raise NotImplementedError
+
     def on_subtitle_drop(self):
         """Stub for `on_subtitle_drop`."""
         raise NotImplementedError
@@ -1047,7 +1029,7 @@ class BluraySubtitleGuiBase(QWidget):
     def _bdmv_root_from_mpls_path(self, mpls_path: str) -> str:
         raise NotImplementedError
 
-    def _conversion_options_for_stream(self, stream: dict[str, object], is_mkvinfo: bool) -> list[str]:
+    def _conversion_options_for_stream(self, stream: dict[str, object]) -> list[str]:
         raise NotImplementedError
 
     def _current_encode_lossless_audio_codec(self) -> str:
@@ -1084,8 +1066,6 @@ class BluraySubtitleGuiBase(QWidget):
     def _iter_all_mpls_paths_in_root(self, source_root: str) -> list[str]:
         raise NotImplementedError
 
-    def _iter_selected_main_mpls_paths(self) -> list[str]:
-        raise NotImplementedError
 
     def _iter_table2_episode_m2ts_details(self, bdmv_index: int):
         raise NotImplementedError
@@ -1131,7 +1111,7 @@ class BluraySubtitleGuiBase(QWidget):
     def _refresh_font_size_combo(self):
         raise NotImplementedError
 
-    def _refresh_table2_m2ts_duration_from_widgets(self, labels: list[str], *, prev_ui_m2ts_by_row: dict[int, str] | None=None, cfg_fill_m2ts_by_row: dict[int, str] | None=None) -> None:
+    def _refresh_table2_m2ts_duration_from_widgets(self, labels: list[str]) -> None:
         raise NotImplementedError
 
     def _refresh_table3_m2ts_file_detail(self, only_bdmv_index: Optional[int]=None):
@@ -1158,8 +1138,6 @@ class BluraySubtitleGuiBase(QWidget):
     def _set_window_opacity_if_supported(self, opacity: float):
         raise NotImplementedError
 
-    def _should_sync_main_track_scope_all(self) -> bool:
-        raise NotImplementedError
 
     def _show_m2ts_file_detail_columns(self) -> None:
         raise NotImplementedError
@@ -1195,8 +1173,6 @@ class BluraySubtitleGuiBase(QWidget):
     def _table2_labels_for_current_mode(self):
         raise NotImplementedError
 
-    def _table2_labels_remux_or_diy(self) -> Optional[list[str]]:
-        raise NotImplementedError
 
     def _table2_m2ts_detail_duration_from_chapter_bounds(self, mpls_selected: str, j1: int, j2: int) -> tuple[str, str, str]:
         raise NotImplementedError

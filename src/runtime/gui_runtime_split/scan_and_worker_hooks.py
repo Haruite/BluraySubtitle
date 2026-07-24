@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import QProgressDialog, QProgressBar, QTableWidgetItem, QTo
 
 from src.core import ENCODE_SP_LABELS, ENCODE_REMUX_LABELS, ENCODE_LABELS, DIY_SP_LABELS
 from src.runtime.gui_runtime_classes.sp_table_scan_worker import SpTableScanWorker
-from src.runtime.services import BluraySubtitle
+from src.runtime.sp import SpEntry
 from .gui_base import BluraySubtitleGuiBase
 
 
@@ -148,7 +148,7 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
                           m2ts_files_unique] if stream_dir else []
             entry = {'bdmv_index': bdmv_index, 'mpls_file': mpls_file, 'm2ts_file': ','.join(m2ts_files),
                      'output_name': ''}
-            sp_key = BluraySubtitle._sp_track_key_from_entry(entry)
+            sp_key = SpEntry.from_mapping(entry).track_key
             sel_item = self.table3.item(r, ENCODE_SP_LABELS.index('select'))
             force_disabled = bool((not sel_item) or (not (sel_item.flags() & Qt.ItemFlag.ItemIsEnabled)))
             # Skip truly empty rows to avoid unnecessary scan/progress popup.

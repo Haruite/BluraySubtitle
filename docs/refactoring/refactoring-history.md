@@ -32,11 +32,12 @@ History entries must reflect the author's documented intent. Unresolved behavior
 | Phase 3.3 | Blu-ray Remux workflow | Complete | `b89f995` |
 | Phase 3.4 | Blu-ray Encode workflow | Complete | `d4adee2` |
 | Phase 3.5 | SP, track alignment, and missing-track repair | Complete | `51fbbea` |
-| Phase 3.6 | Audio conversion and Dolby Vision | Complete | This change |
+| Phase 3.6 | Audio conversion and Dolby Vision | Complete | `3f74ca0` |
+| Phase 4 | Shared logic and execution boundaries | Complete | This change |
 
 ## Phase 1 — Contract and Safety Baseline
 
-Date: 2026-07-20  
+Date: 2026-07-20
 Commit: `d0262d5` (`chore: establish phase 1 refactoring baseline`)
 
 ### Scope
@@ -80,7 +81,7 @@ No production workflow was rewritten. The configuration boundary and each workfl
 
 ## Phase 2 — Explicit GUI and Runtime Configuration
 
-Date: 2026-07-20  
+Date: 2026-07-20
 Commit: `ceb2927` (`refactor: unify GUI and runtime task configuration`)
 
 ### Scope
@@ -123,7 +124,7 @@ This phase unified ownership but did not yet rewrite the individual Remux, Encod
 
 ## Phase 3.1 — Merge Subtitles Workflow
 
-Date: 2026-07-20  
+Date: 2026-07-20
 Commit: `7def4df` (`refactor: unify subtitle merge workflow`)
 
 ### Scope
@@ -164,7 +165,7 @@ Merge-only changes did not redesign Add Chapters, Remux, Encode, SP, audio conve
 
 ## Phase 3.2 — Add Chapters Workflow
 
-Date: 2026-07-20  
+Date: 2026-07-20
 Commit: `107cea1` (`refactor: unify add chapters workflow`)
 
 ### Scope
@@ -446,3 +447,61 @@ Rebuilt the Encode audio-conversion and Dolby Vision paths around the immutable 
 ### Deferred
 
 AV1 Dolby Vision profile 10 authoring remains deferred until the project has a verified compatible encoder and packaging path. Video transcoding from **Edit Tracks** and the unfinished Blu-ray DIY encode path also remain outside this phase.
+## Phase 4 — Shared Logic and Execution Boundaries
+
+Date: 2026-07-24 to 2026-07-25
+Commit: Included in this change
+
+### Scope
+
+Simplified cross-workflow Python infrastructure after the workflow refactors. This phase consolidated configuration generation, displayed-time and M2TS-detail parsing, output-title resolution, track keys, binary integer reads, and external process execution without introducing a new product workflow.
+
+### Redundant or Conflicting Paths Removed
+
+- Removed the legacy table-based episode-configuration algorithm. GUI callers now adapt current selections to the single selected-MPLS generator instead of maintaining a second algorithm.
+- Moved displayed-time parsing and SP M2TS-detail parsing, containment, and filtering to shared helpers; removed the duplicate GUI and service copies.
+- Replaced repeated `main::`, `mkv::`, `mkvsp::`, and SP track-key construction with the shared track contracts.
+- Consolidated the three duplicated subtitle-change configuration refresh blocks into one GUI operation and simplified the GUI output-title adapter to the existing service owner.
+- Removed silent fallback from current GUI configuration generation to a separately regenerated default configuration.
+- Removed disabled UI-performance, SP-diagnostic, and chapter-trace facades and their diagnostic-only variables.
+- Removed duplicate Encode logging and shell-command wrappers, obsolete split-base declarations, unused imports, and assignments overwritten before their first use.
+- Routed all subprocess-based external-tool launches through `run_command`; command lists run without a shell and command strings use the shell at this single boundary. VSEdit remains a Qt-owned `QProcess` because its completion signals synchronize temporary scripts, while OS file-association opens are not tool commands.
+- Inlined one-use expression wrappers for playlist loop keys/durations, process flags, chapter timecodes, cache keys, output sanitizing, M2TS cache signatures, encoder arguments, and Remux-fallback PID/FPS/file-type/channel decisions; removed their matching split-base declarations.
+- Replaced the branch-heavy Matroska codec-name and extraction-extension selectors with one `_MKV_CODEC_INFO` lookup table.
+- Removed the unused `src/domain/subtitle.py` and `src/exports/subtitle_models.py` compatibility facades and the singular `M2TS.get_track_info()` compatibility wrapper.
+- Removed a redundant relative seek in MKV duration parsing and file-size arithmetic whose result was always the same 512-KiB M2TS probe window.
+- Removed the private `Chapter._unpack_byte()` and `M2TS.unpack_bytes()` implementations. Chapter/MPLS/CLPI integer decoding now uses `bdmv.core.unpack_bytes`, while M2TS reads each PCR header block once and sends its multi-byte value through the same decoder.
+
+### Logic Changes
+
+- The conflicting episode-tail tolerance is now consistently 300 seconds. The removed table algorithm already used 300 seconds, the selected-MPLS algorithm used 180 seconds, and both README versions document 300 seconds.
+- A failure while rebuilding configuration from current GUI controls is no longer replaced by a newly generated default configuration. The original error reaches the existing GUI error boundary or task preflight.
+- External process start and execution failures now follow the caller's existing checked return-code or exception path instead of the removed best-effort shell wrapper returning a synthetic `-1`.
+- The incomplete GUI-local ffprobe wrapper started the tool but returned no stream list. Non-M2TS SP output-extension detection now reuses the complete service media probe instead of receiving `None`.
+- Encode services now consume the canonical encoder and bit-depth values accepted by `validate_encode_request`. Unknown encoder labels are no longer converted to x265 and invalid bit depths are no longer converted to 10-bit after preflight; invalid configuration fails at the request boundary.
+- Binary parser results, output-title rules, valid track selections, valid Remux/Encode/SP behavior, audio conversion, and Dolby Vision product behavior are otherwise unchanged.
+
+### Documentation and i18n
+
+- No README product change was required because the retained 300-second rule already matches both README versions.
+- No new user-visible string was introduced; the i18n debt ratchet remains unchanged.
+- Synchronized this history entry in English and Simplified Chinese.
+
+### Verification
+
+- Source Python lines decreased from 35,671 to 34,420; function definitions decreased from 1,419 to 1,308.
+- Non-stub functions of six lines or fewer decreased from 213 to 177. A repository-wide one-use helper audit retained short functions only when they are callbacks, serialization/process-pool entry points, data-model methods, or independently meaningful parser/domain operations.
+- A repository-wide AST audit found no duplicate function definitions in modified modules; the remaining short-function list was reviewed by role instead of line count alone.
+- Before and after the binary-reader consolidation, structured snapshots from `00000.m2ts`, `00003.mpls`, and `00003.clpi` on the specified Cyberpunk: Edgerunners disc were identical in every field. The comparison covered PCR/PTS values, durations, frame rate, total frames, tracks, content type, complete MPLS/CLPI parse trees, chapters, PID languages, and byte-identical MPLS serialization.
+- The concentrated repository run completed 138 tests successfully; the test for a deleted argument-splitting helper was replaced by an Encode workflow assertion on the resulting encoder command.
+- Python compilation/import, i18n audit, split-contract audit, `git diff --check`, and CRLF checks passed.
+
+### Manual Media Checks Still Required
+
+- Change subtitle selection/order and chapter bounds in the GUI, then verify the visible Remux/Encode rows remain the configuration used at launch and that an invalid current value reports an error without a default fallback.
+- Run one short Remux and one short Encode task to cover the unified Windows command boundary, then inspect final names, tracks, languages, and chapters.
+- Use an SP-bearing disc to verify the shared M2TS-detail containment/filtering keeps the existing selected/unselected behavior and output names.
+
+### Deferred
+
+The remaining very long functions represent existing independent GUI construction or workflow stages and were not split merely to reduce their measured length. Blu-ray DIY encoding and generic video conversion in Edit Tracks remain outside this phase.

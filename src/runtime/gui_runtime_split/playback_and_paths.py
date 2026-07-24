@@ -1,7 +1,6 @@
 """Target module for playback/path helper methods of `BluraySubtitleGUI`."""
 import os
 import re
-import subprocess
 import sys
 import traceback
 from urllib.parse import urlparse, unquote
@@ -10,7 +9,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QInputDialog, QToolButton, QMessageBox
 
 from src.core import ENCODE_SP_LABELS, ENCODE_LABELS
-from src.exports.utils import get_mpv_safe_path
+from src.exports.utils import run_command, get_mpv_safe_path
 from .gui_base import BluraySubtitleGuiBase
 
 
@@ -122,7 +121,7 @@ class PlaybackPathsMixin(BluraySubtitleGuiBase):
         if sys.platform == 'win32':
             mp4_exe_path = get_mpv_safe_path(".mp4")
             if mp4_exe_path and str(mp4_exe_path).lower().endswith('mpv.exe'):
-                subprocess.Popen(f'"{mp4_exe_path}" "{m2ts_path}"', shell=True).wait()
+                run_command(f'"{mp4_exe_path}" "{m2ts_path}"')
                 return
         self.open_file_path(m2ts_path)
 

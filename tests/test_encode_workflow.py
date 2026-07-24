@@ -123,9 +123,6 @@ class _PipelineService(EncodeAudioTasksMixin):
         if text:
             self.progress_messages.append(text)
 
-    def _log_getnative(self, _message: str) -> None:
-        pass
-
     def _cleanup_getnative_artifacts(self) -> None:
         pass
 
@@ -565,6 +562,7 @@ class EncodeWorkflowTests(unittest.TestCase):
             service = _PipelineService()
 
             def encode_video(_vspipe, _vpy, encoder_command, _environment):
+                self.assertEqual(encoder_command[encoder_command.index('--preset') + 1], '6')
                 Path(encoder_command[encoder_command.index('-b') + 1]).write_bytes(b'av1')
                 return 0
 

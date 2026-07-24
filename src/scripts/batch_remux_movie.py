@@ -10,15 +10,9 @@ movie_folder = r'C:\tmp'  # parent folder containing BDMV disc directories
 output_folder = r'C:\Remux'  # remux output root
 
 
-def _repo_root() -> str:
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-
-
-def _ensure_import_path() -> None:
-    root = _repo_root()
-    if root not in sys.path:
-        sys.path.insert(0, root)
-
+repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if repo_root not in sys.path:
+    sys.path.insert(0, repo_root)
 
 def _folder_size_gib(folder: str) -> float:
     total = 0
@@ -75,23 +69,6 @@ def _progress_cb(value: int | None = None, text: str | None = None) -> None:
         print(f'{prefix}{text}', flush=True)
 
 
-def _mpls_rel_from_disc(mpls_no_ext: str) -> str:
-    """Relative MPLS path from disc root (matches GUI cwd assumptions for ``00800.mpls``)."""
-    stem = os.path.splitext(os.path.basename(str(mpls_no_ext or '').strip()))[0]
-    return os.path.join('BDMV', 'PLAYLIST', stem)
-
-
-def _patch_configuration_mpls_paths(
-    configuration: dict[int, dict[str, int | str]],
-    bdmv_folder: str,
-    mpls_no_ext: str,
-) -> None:
-    """Store ``selected_mpls`` as ``BDMV/PLAYLIST/<stem>`` so service code can open ``<stem>.mpls`` from disc root."""
-    rel = _mpls_rel_from_disc(mpls_no_ext)
-    for conf in configuration.values():
-        conf['folder'] = bdmv_folder
-        conf['selected_mpls'] = rel
-
 
 def remux_one_disc(bdmv_folder: str, movie_root: str, output_root: str) -> None:
     from src.core import find_mkvtoolnix, translate_text
@@ -127,7 +104,10 @@ def remux_one_disc(bdmv_folder: str, movie_root: str, output_root: str) -> None:
         if not configuration:
             print(f'Skip remux {bdmv_folder}: empty movie configuration', flush=True)
             return
-        _patch_configuration_mpls_paths(configuration, bdmv_folder, mpls_no_ext)
+        selected_mpls_relative = os.path.join('BDMV', 'PLAYLIST', mpls_no_ext)
+        for row in configuration.values():
+            row['folder'] = bdmv_folder
+            row['selected_mpls'] = selected_mpls_relative
         sp_entries = bs.build_movie_mode_sp_entries(configuration)
         os.chdir(bdmv_folder)
         dst_folder = _dst_folder_for_bdmv(movie_root, output_root, bdmv_folder)
@@ -172,7 +152,6 @@ def remux_one_disc(bdmv_folder: str, movie_root: str, output_root: str) -> None:
 
 
 def main() -> None:
-    _ensure_import_path()
     parser = argparse.ArgumentParser(
         description='Batch remux every BDMV under movie_folder (GUI movie mode defaults).',
     )

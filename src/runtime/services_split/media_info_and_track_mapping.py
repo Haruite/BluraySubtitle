@@ -1,4 +1,5 @@
 """Auto-generated split target: media_info_and_track_mapping."""
+
 import json
 import os
 import re
@@ -16,11 +17,11 @@ import pycountry
 import soundfile
 
 from src.bdmv import M2TS, Chapter, pid_to_lang_from_m2ts_path
-from src.core import FFPROBE_PATH, FFMPEG_PATH, FLAC_PATH, FLAC_THREADS, MKV_MERGE_PATH, MKV_PROP_EDIT_PATH, \
+from src.core import FFPROBE_PATH, FFMPEG_PATH, FLAC_PATH, FLAC_THREADS, MKV_MERGE_PATH, \
     find_mkvtoolnix, get_mkvtoolnix_ui_language, mkvtoolnix_ui_language_arg
 from src.core import settings as core_settings
 from src.core.i18n import translate_text
-from src.exports.utils import get_effective_bit_depth, get_time_str, print_exc_terminal, get_index_to_m2ts_and_offset
+from src.exports.utils import get_effective_bit_depth, get_time_str, print_exc_terminal, get_index_to_m2ts_and_offset, run_command
 from .service_base import BluraySubtitleServiceBase
 from src.runtime.dolby_vision import mux_dolby_vision_layers
 from ..services.cancelled import _Cancelled
@@ -99,10 +100,9 @@ def _audio_file_channel_count(path: str) -> int:
     except Exception:
         pass
     try:
-        proc = subprocess.run(
+        proc = run_command(
             f'"{FFPROBE_PATH}" -v error -select_streams a:0 -show_entries stream=channels '
             f'-of default=noprint_wrappers=1:nokey=1 "{path}"',
-            shell=True,
             capture_output=True,
             text=True,
             timeout=60,
@@ -114,20 +114,6 @@ def _audio_file_channel_count(path: str) -> int:
 
 
 class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
-    @staticmethod
-    def _in_out_play_item_key(row: tuple) -> tuple[str, int, int]:
-        return (str(row[0] or '').strip(), int(row[1]), int(row[2]))
-
-    @staticmethod
-    def _in_out_play_item_duration_sec(row: tuple) -> float:
-        return max(0.0, (int(row[2]) - int(row[1])) / 45000.0)
-
-    @staticmethod
-    def _split_parts_from_start_duration(duration_sec: float) -> str:
-        end = get_time_str(max(0.0, float(duration_sec)))
-        if end == '0':
-            end = '00:00:00.000'
-        return f'00:00:00.000-{end}'
 
     @staticmethod
     def _detect_sp_looping_mpls(mpls_path: str) -> Optional[dict[str, object]]:
@@ -145,15 +131,14 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             return None
         if len(ios) < 2:
             return None
-        keys = [_svc_cls()._in_out_play_item_key(r) for r in ios]
-        durs = [_svc_cls()._in_out_play_item_duration_sec(r) for r in ios]
-        if all(k == keys[0] for k in keys):
-            return {
-                'kind': 'all_same',
-                'max_clips': 1,
-                'split_parts': _svc_cls()._split_parts_from_start_duration(durs[0]),
-            }
-        split_two = _svc_cls()._split_parts_from_start_duration(durs[0] + durs[1])
+        keys = [(str(row[0] or '').strip(), int(row[1]), int(row[2])) for row in ios]
+        durations = [max(0.0, (int(row[2]) - int(row[1])) / 45000.0) for row in ios]
+        first_end = get_time_str(durations[0])
+        first_split = f'00:00:00.000-{first_end if first_end != "0" else "00:00:00.000"}'
+        if all(key == keys[0] for key in keys):
+            return {'kind': 'all_same', 'max_clips': 1, 'split_parts': first_split}
+        two_end = get_time_str(durations[0] + durations[1])
+        split_two = f'00:00:00.000-{two_end if two_end != "0" else "00:00:00.000"}'
         k0, k1 = keys[0], keys[1]
         if all(k == keys[1] for k in keys[1:]):
             return {'kind': 'tail_repeat', 'max_clips': 2, 'split_parts': split_two}
@@ -302,13 +287,12 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             return None
         ui_lang = 'en' if sys.platform == 'win32' else 'en_US'
         try:
-            proc = subprocess.run(
+            proc = run_command(
                 [info_exe, mkv_path, '--ui-language', ui_lang],
                 capture_output=True,
                 text=True,
                 encoding='utf-8',
                 errors='ignore',
-                shell=False,
             )
         except Exception:
             return None
@@ -537,11 +521,10 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             return []
         exe = FFPROBE_PATH if FFPROBE_PATH else 'ffprobe'
         try:
-            p = subprocess.run(
+            p = run_command(
                 [exe, "-v", "error", "-show_streams", "-of", "json", media_path],
                 capture_output=True,
                 text=True,
-                shell=False
             )
         except Exception:
             return []
@@ -612,7 +595,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         except Exception:
             pass
         try:
-            tracks = M2TS(key).get_track_info()
+            tracks = M2TS(key).get_tracks_info()
         except Exception:
             return []
         out: list[dict[str, object]] = []
@@ -700,7 +683,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         cmd = [exe, "-v", "error", "-count_frames", "-select_streams", "v:0",
                "-show_entries", "stream=nb_read_frames,nb_frames", "-of", "json", media_path]
         try:
-            p = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore', shell=False)
+            p = run_command(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore')
         except Exception:
             return -1
         if p.returncode != 0:
@@ -772,7 +755,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         dst = os.path.splitext(output_file)[0] + f'.{ext}'
         cmd = f'"{FFMPEG_PATH}" -hide_banner -loglevel error -y -i "{output_file}" -map 0:a:0 -c copy "{dst}"'
         try:
-            p = subprocess.run(cmd, shell=True, capture_output=True, text=True, encoding='utf-8', errors='ignore')
+            p = run_command(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore')
             if p.returncode == 0 and os.path.exists(dst):
                 os.remove(output_file)
         except Exception:
@@ -794,9 +777,8 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             fd, tmp = tempfile.mkstemp(prefix=f"temp_sil_{os.getpid()}_", suffix=".wav")
             os.close(fd)
             try:
-                subprocess.run(
+                run_command(
                     f'"{FFMPEG_PATH}" -hide_banner -loglevel error -y -i "{path}" -ac 1 -ar 22050 -c:a pcm_s16le "{tmp}"',
-                    shell=True,
                     check=True
                 )
                 if soundfile is None:
@@ -833,16 +815,16 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         tmp_wav2 = ''
         try:
             if owns_tmp:
-                subprocess.Popen(
-                    f'"{FFMPEG_PATH}" -hide_banner -loglevel error -y -i "{input_media}" -map 0:{map_idx} -c:a pcm_s24le -f w64 "{tmp_wav}"',
-                    shell=True
-                ).wait()
+                run_command(
+                    f'"{FFMPEG_PATH}" -hide_banner -loglevel error -y -i "{input_media}" '
+                    f'-map 0:{map_idx} -c:a pcm_s24le -f w64 "{tmp_wav}"'
+                )
                 if not os.path.exists(tmp_wav) or os.path.getsize(tmp_wav) <= 0:
                     return False
             try:
-                silent, avg_db = _svc_cls()._is_silent_audio_file(tmp_wav, -60.0)
+                silent, _ = _svc_cls()._is_silent_audio_file(tmp_wav, -60.0)
             except Exception:
-                silent, avg_db = False, 0.0
+                silent = False
             if silent:
                 if owns_tmp:
                     try:
@@ -857,10 +839,9 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             if effective_bits <= 16:
                 fd2, tmp_wav2 = tempfile.mkstemp(prefix=f"sp_audio16_{os.getpid()}_", suffix=".wav")
                 os.close(fd2)
-                subprocess.Popen(
-                    f'"{FFMPEG_PATH}" -hide_banner -loglevel error -y -i "{tmp_wav}" -c:a pcm_s16le "{tmp_wav2}"',
-                    shell=True
-                ).wait()
+                run_command(
+                    f'"{FFMPEG_PATH}" -hide_banner -loglevel error -y -i "{tmp_wav}" -c:a pcm_s16le "{tmp_wav2}"'
+                )
                 if os.path.exists(tmp_wav2) and os.path.getsize(tmp_wav2) > 0:
                     if owns_tmp:
                         try:
@@ -873,17 +854,15 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             ok = False
             if FLAC_PATH:
                 try:
-                    subprocess.Popen(f'"{FLAC_PATH}" -8 -j {FLAC_THREADS} "{tmp_wav}" -o "{out_flac}"',
-                                     shell=True).wait()
+                    run_command(f'"{FLAC_PATH}" -8 -j {FLAC_THREADS} "{tmp_wav}" -o "{out_flac}"')
                     ok = os.path.exists(out_flac) and os.path.getsize(out_flac) > 0
                 except Exception:
                     ok = False
             if not ok:
                 try:
-                    subprocess.Popen(
-                        f'"{FFMPEG_PATH}" -hide_banner -loglevel error -y -i "{tmp_wav}" -c:a flac "{out_flac}"',
-                        shell=True
-                    ).wait()
+                    run_command(
+                        f'"{FFMPEG_PATH}" -hide_banner -loglevel error -y -i "{tmp_wav}" -c:a flac "{out_flac}"'
+                    )
                     ok = os.path.exists(out_flac) and os.path.getsize(out_flac) > 0
                 except Exception:
                     ok = False
@@ -910,13 +889,12 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             pass
         exe = MKV_MERGE_PATH if MKV_MERGE_PATH else 'mkvmerge'
         try:
-            p = subprocess.run(
+            p = run_command(
                 [exe, "--identify", "--identification-format", "json", media_path],
                 capture_output=True,
                 text=True,
                 encoding='utf-8',
                 errors='ignore',
-                shell=False
             )
         except Exception:
             return {}
@@ -961,13 +939,12 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             pass
         exe = MKV_MERGE_PATH if MKV_MERGE_PATH else 'mkvmerge'
         try:
-            p = subprocess.run(
+            p = run_command(
                 [exe, "--identify", "--identification-format", "json", media_path],
                 capture_output=True,
                 text=True,
                 encoding='utf-8',
                 errors='ignore',
-                shell=False
             )
         except Exception:
             return {}
@@ -1276,8 +1253,8 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 '--set',
                 f'language={desired_language}',
             ])
-        result = subprocess.run(command, capture_output=True, text=True, encoding='utf-8',
-                                errors='replace', shell=False)
+        result = run_command(command, capture_output=True, text=True, encoding='utf-8',
+                                errors='replace')
         if result.returncode not in (0, 1):
             raise RuntimeError(
                 translate_text('mkvpropedit failed for: {path}').format(path=output_mkv_path)
@@ -1845,19 +1822,6 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             p = p[1:-1]
         return p.strip() or None
 
-    @staticmethod
-    def _mkvmerge_output_path_from_cmd(cmd: str) -> Optional[str]:
-        """First ``-o`` / ``--output`` path when scanning ``remux_cmd`` line by line."""
-        for ln in _svc_cls()._remux_cmd_shell_lines(cmd):
-            p = _svc_cls()._mkvmerge_output_path_from_line(ln)
-            if p:
-                return p
-        return _svc_cls()._mkvmerge_output_path_from_line(cmd or '')
-
-    @staticmethod
-    def _conf_selected_mpls_stem(conf: dict[str, int | str]) -> str:
-        raw = str(conf.get('selected_mpls') or '').strip()
-        return os.path.splitext(os.path.basename(raw.replace('\\', '/')))[0]
 
     @staticmethod
     def _mkvmerge_expected_paths_for_shell_line(
@@ -1879,7 +1843,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             stem_ln = _svc_cls()._mkvmerge_line_source_mpls_stem(line)
             sub: list[dict[str, int | str]] = []
             for c in confs:
-                sc = _svc_cls()._conf_selected_mpls_stem(c)
+                sc = os.path.splitext(os.path.basename(str(c.get('selected_mpls') or '').strip().replace('\\', '/')))[0]
                 if stem_ln and sc and stem_ln.lower() != sc.lower():
                     continue
                 sub.append(c)
@@ -2143,9 +2107,6 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 out.append(bn)
         return out
 
-    @staticmethod
-    def _mkvmerge_track_order_arg(mapped_ids: list[int]) -> str:
-        return ','.join(f'0:{tid}' for tid in mapped_ids)
 
     @staticmethod
     def _mkvmerge_select_flags_from_mapped(mapped_ids: list[int], cur_identify: dict[str, object]) -> tuple[
@@ -2421,17 +2382,6 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             return None
         return kept
 
-    @staticmethod
-    def _audio_stream_by_pid(m2ts_path: str, pid: int) -> Optional[dict[str, object]]:
-        for s in _svc_cls()._m2ts_track_streams(m2ts_path):
-            if not isinstance(s, dict):
-                continue
-            if str(s.get('codec_type') or '') != 'audio':
-                continue
-            spid = _svc_cls()._stream_service_id(s)
-            if spid == pid:
-                return s
-        return None
 
     @staticmethod
     def _tsmuxer_exe() -> str:
@@ -2451,9 +2401,8 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             return ''
         cmd = f'"{exe}" "{m2ts_path}"'
         try:
-            p = subprocess.run(
+            p = run_command(
                 cmd,
-                shell=True,
                 capture_output=True,
                 text=True,
                 encoding='utf-8',
@@ -2514,15 +2463,6 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 has_s = True
         return has_v and has_s
 
-    @staticmethod
-    def _ref_slot_pid_set(ref_slots: list[dict[str, object]]) -> set[int]:
-        out: set[int] = set()
-        for slot in ref_slots or []:
-            try:
-                out.add(int(slot.get('pid')))
-            except Exception:
-                continue
-        return out
 
     @staticmethod
     def _tsmuxer_tracks_ordered_for_ref_slots(
@@ -2615,35 +2555,8 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         out.sort(key=lambda x: x[0])
         return out
 
-    @staticmethod
-    def _probe_fps_from_tsmuxer_tracks(tracks: list[dict[str, object]]) -> str:
-        for t in tracks:
-            sid = str(t.get('stream_id') or '')
-            if sid.upper().startswith('V_'):
-                fps = str(t.get('fps') or '').strip()
-                if fps:
-                    return fps
-        return '23.976'
 
-    @staticmethod
-    def _mkvmerge_audio_track_count(media_path: str) -> int:
-        """Number of audio tracks mkvmerge reports for ``media_path`` (JSON identify)."""
-        ident = _svc_cls()._mkvmerge_identify_json(media_path)
-        n = 0
-        for t in ident.get('tracks') or []:
-            if isinstance(t, dict) and str(t.get('type') or '').strip().lower() == 'audio':
-                n += 1
-        return n
 
-    @staticmethod
-    def _tsmuxer_demux_skip_audio_identify(fpth: str) -> bool:
-        """Plain ``.ac3`` / ``.pcm`` elementary files: assume single logical track; no ``--identify``."""
-        bn = (os.path.basename(fpth or '') or '').lower()
-        if bn.endswith('.pcm'):
-            return True
-        if bn.endswith('.ac3') and '+' not in bn:
-            return True
-        return False
 
     @staticmethod
     def _tsmuxer_demux_audio_use_track0_after_identify(fpth: str, slot_type: str) -> bool:
@@ -2663,9 +2576,14 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             low = os.path.basename(fpth).lower()
             if low.endswith(('.hevc', '.h264', '.264', '.sup', '.sub', '.jpg', '.png')):
                 return False
-        if _svc_cls()._tsmuxer_demux_skip_audio_identify(fpth):
+        basename = os.path.basename(fpth).lower()
+        if basename.endswith('.pcm') or (basename.endswith('.ac3') and '+' not in basename):
             return False
-        return _svc_cls()._mkvmerge_audio_track_count(fpth) > 1
+        ident = _svc_cls()._mkvmerge_identify_json(fpth)
+        return sum(
+            isinstance(track, dict) and str(track.get('type') or '').strip().lower() == 'audio'
+            for track in ident.get('tracks') or []
+        ) > 1
 
     @staticmethod
     def _mkvmerge_identify_tid_for_pid_file(media_path: str, pid: int) -> Optional[int]:
@@ -2686,25 +2604,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 return None
         return None
 
-    @staticmethod
-    def _remux_fallback_demux_slot_guess(fpth: str) -> str:
-        low = (os.path.basename(fpth or '') or '').lower()
-        if low.endswith(('.sup',)):
-            return 'subtitles'
-        if low.endswith(('.hevc', '.h264', '.264', '.mkv')):
-            return 'video'
-        return 'audio'
 
-    @staticmethod
-    def _audio_stream_ok_for_pcm_silence_template(stream: dict[str, object]) -> bool:
-        """PCM-based silence template: reject codecs we do not approximate with anullsrc→PCM."""
-        c = str(stream.get('codec_name') or '').strip().lower()
-        if not c:
-            return False
-        ok_tokens = (
-            'pcm', 'ac3', 'eac3', 'truehd', 'dts', 'aac', 'opus', 'flac', 'mp3', 'atmos',
-        )
-        return any(tok in c for tok in ok_tokens)
 
     @staticmethod
     def _tsmuxer_mpeg_pid(row: dict[str, object]) -> Optional[int]:
@@ -2724,21 +2624,6 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 pass
         return tid
 
-    @staticmethod
-    def _tsmuxer_rows_for_pids(
-            tsm_all: list[dict[str, object]],
-            want_pids: set[int],
-    ) -> Optional[list[dict[str, object]]]:
-        by_pid: dict[int, dict[str, object]] = {}
-        for t in tsm_all or []:
-            if not isinstance(t, dict):
-                continue
-            pid = _svc_cls()._tsmuxer_mpeg_pid(t)
-            if pid is not None and pid in want_pids:
-                by_pid[pid] = t
-        if set(by_pid.keys()) != set(want_pids):
-            return None
-        return [by_pid[p] for p in sorted(want_pids)]
 
     @staticmethod
     def _remux_fallback_run_tsmuxer_demux_subset(
@@ -2751,10 +2636,21 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             *,
             path_tag: Optional[str] = None,
     ) -> Optional[dict[int, str]]:
-        rows = _svc_cls()._tsmuxer_rows_for_pids(tsm_all, want_pids)
+        rows_by_pid: dict[int, dict[str, object]] = {}
+        for track in tsm_all:
+            pid = _svc_cls()._tsmuxer_mpeg_pid(track)
+            if pid is not None and pid in want_pids:
+                rows_by_pid[pid] = track
+        if set(rows_by_pid) != want_pids:
+            return None
+        rows = [rows_by_pid[pid] for pid in sorted(want_pids)]
         if rows is None:
             return None
-        fps = _svc_cls()._probe_fps_from_tsmuxer_tracks(rows)
+        fps = next(
+            (str(row.get('fps') or '').strip() for row in rows
+             if str(row.get('stream_id') or '').upper().startswith('V_') and str(row.get('fps') or '').strip()),
+            '23.976',
+        )
         fs_tag = path_tag if path_tag else part_tag
         meta_path = os.path.join(work_dir, f'{fs_tag}_tsmux.meta')
         if not _svc_cls()._write_tsmuxer_demux_meta(m2ts_path, rows, pid_to_lang, meta_path, fps):
@@ -2775,7 +2671,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         tcmd = f'"{ts_exe}" "{meta_path}" "{demux_dir}"'
         print(f'[remux-fallback] {tcmd}')
         try:
-            rc0 = subprocess.run(tcmd, shell=True, capture_output=True, text=True,
+            rc0 = run_command(tcmd, capture_output=True, text=True,
                                  encoding='utf-8', errors='replace', timeout=7200).returncode
         except Exception:
             return None
@@ -2861,7 +2757,10 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             fpth = demux_by_pid[pid]
             lang = _svc_cls()._norm_lang_mkv(str(pid_to_lang.get(pid) or 'und'))
             bits.append(f'--language 0:{lang}')
-            sg = _svc_cls()._remux_fallback_demux_slot_guess(fpth)
+            extension = os.path.splitext(fpth)[1].lower()
+            sg = {'.sup': 'subtitles', '.hevc': 'video', '.h264': 'video', '.264': 'video', '.mkv': 'video'}.get(
+                extension, 'audio'
+            )
             if _svc_cls()._tsmuxer_demux_audio_use_track0_after_identify(fpth, sg):
                 bits += ['-a', '0']
             bits.append(f'"{fpth}"')
@@ -2913,11 +2812,20 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 pid = int(slot.get('pid'))
             except Exception:
                 continue
-            tmpl = _svc_cls()._audio_stream_by_pid(first_m2ts, pid)
+            tmpl = next(
+                (stream for stream in _svc_cls()._m2ts_track_streams(first_m2ts)
+                 if isinstance(stream, dict) and str(stream.get('codec_type') or '') == 'audio'
+                 and _svc_cls()._stream_service_id(stream) == pid),
+                None,
+            )
             if not isinstance(tmpl, dict):
                 print(f'[remux-fallback] silence: no template for PID 0x{pid:04x}')
                 return None
-            if not _svc_cls()._audio_stream_ok_for_pcm_silence_template(tmpl):
+            codec_name = str(tmpl.get('codec_name') or '').strip().lower()
+            if not codec_name or not any(
+                    token in codec_name
+                    for token in ('pcm', 'ac3', 'eac3', 'truehd', 'dts', 'aac', 'opus', 'flac', 'mp3', 'atmos')
+            ):
                 print(
                     f'[remux-fallback] silence: unsupported audio codec for PID 0x{pid:04x} '
                     f'({tmpl.get("codec_name")!r})'
@@ -3155,7 +3063,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             cur_mkv = part_out
             m2ts_pid_list = sorted(set(m2ts_pid_list) | {bl_pid})
             print(f'[remux-fallback] m2ts_pid_list(after dovi_tool)={m2ts_pid_list}')
-        ref_pid_set = _svc_cls()._ref_slot_pid_set(clip_slots)
+        ref_pid_set = {int(slot['pid']) for slot in clip_slots}
         if dovi_mux_video and dovi_plan:
             try:
                 ref_pid_set.add(int(dovi_plan['bl_pid']))
@@ -3318,17 +3226,6 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 return False
         return True
 
-    @staticmethod
-    def _channel_layout_from_count(ch: int) -> str:
-        if ch <= 1:
-            return 'mono'
-        if ch == 2:
-            return 'stereo'
-        if ch == 6:
-            return '5.1'
-        if ch == 8:
-            return '7.1'
-        return 'stereo'
 
     @staticmethod
     def _create_silence_track_for_audio_slot(
@@ -3352,7 +3249,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 bits = 16
         except Exception:
             bits = 16
-        layout = _svc_cls()._channel_layout_from_count(ch)
+        layout = {0: 'mono', 1: 'mono', 2: 'stereo', 6: '5.1', 8: '7.1'}.get(ch, 'stereo')
         if bits >= 24:
             acodec = 'pcm_s24be'
         elif bits >= 20:
@@ -3369,7 +3266,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             out_path,
         ]
         try:
-            result = subprocess.run(command, shell=False)
+            result = run_command(command)
         except Exception:
             return False
         return result.returncode == 0 and os.path.isfile(out_path)
@@ -3507,7 +3404,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             if cover and os.path.isfile(cover):
                 command.extend(['--attachment-name', 'Cover.jpg', '--attach-file', cover])
             print(f'[remux-fallback] concat: {subprocess.list2cmdline(command)}')
-            result = subprocess.run(command, shell=False)
+            result = run_command(command)
             if result.returncode not in (0, 1):
                 print(f'[remux-fallback] concat failed rc={result.returncode}')
                 return False
@@ -3779,16 +3676,3 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         if not pid_lang:
             pid_lang = _svc_cls()._pid_lang_from_media_streams(streams)
         return _svc_cls()._default_track_selection_from_streams(streams, pid_lang)
-
-    @staticmethod
-    def _sp_track_key_from_entry(entry: dict[str, int | str]) -> str:
-        try:
-            bdmv_index = int(entry.get('bdmv_index') or 0)
-        except Exception:
-            bdmv_index = 0
-        mpls_file = str(entry.get('mpls_file') or '').strip()
-        m2ts_file = str(entry.get('m2ts_file') or '').strip()
-        if mpls_file:
-            return f'sp::{bdmv_index}::mpls::{mpls_file}'
-        first_m2ts = m2ts_file.split(',')[0].strip() if m2ts_file else ''
-        return f'sp::{bdmv_index}::m2ts::{first_m2ts}'

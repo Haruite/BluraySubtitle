@@ -1,11 +1,11 @@
 """Auto-generated split target: lifecycle_and_configuration."""
+
 import ctypes
 import json
 import locale
 import multiprocessing
 import os
 import shutil
-import subprocess
 import sys
 import threading
 import xml.etree.ElementTree as et
@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import QTableWidget, QToolButton
 
 from src.bdmv import Chapter
 from src.core import MKV_MERGE_PATH
-from src.exports.utils import get_time_str
+from src.exports.utils import get_time_str, run_command
 from .media_info_and_track_mapping import MediaInfoTrackMappingMixin
 from .service_base import BluraySubtitleServiceBase
 from ..services.cancelled import _Cancelled
@@ -291,13 +291,12 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
                 mkvmerge_info = MediaInfoTrackMappingMixin._pid_lang_from_mkvmerge_json(first_m2ts)
                 if mkvmerge_info:
                     exe = MKV_MERGE_PATH if MKV_MERGE_PATH else 'mkvmerge'
-                    p = subprocess.run(
+                    p = run_command(
                         [exe, "--identify", "--identification-format", "json", first_m2ts],
                         capture_output=True,
                         text=True,
                         encoding='utf-8',
                         errors='ignore',
-                        shell=False
                     )
                     data = json.loads(p.stdout or "{}")
                     tracks = data.get('tracks') or []
@@ -361,8 +360,10 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
                         break
         if not output_name:
             try:
-                base = os.path.basename(os.path.normpath(str(bdmv_root or '')).rstrip(os.sep))
-                output_name = base or os.path.split(mpls_path[:-24])[-1]
+                resolved_root = os.path.normpath(os.path.join(os.path.dirname(mpls_path), '..', '..'))
+                fallback_root = resolved_root if os.path.isdir(os.path.join(resolved_root, 'BDMV')) else bdmv_root
+                output_name = os.path.basename(os.path.normpath(str(fallback_root or '')).rstrip(os.sep))
+                output_name = output_name or os.path.split(mpls_path[:-24])[-1]
             except Exception:
                 output_name = os.path.split(mpls_path[:-24])[-1]
         char_map = {
@@ -382,12 +383,6 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
         cache[selected_mpls_no_ext] = out
         return out
 
-    @staticmethod
-    def _configuration_default_chapter_segments_checked(
-            configuration: dict[int, dict[str, int | str]],
-    ) -> None:
-        for v in configuration.values():
-            v.setdefault('chapter_segments_fully_checked', True)
 
     @staticmethod
     def _configuration_drop_invalid_episode_rows(
@@ -421,7 +416,8 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
     ) -> dict[int, dict[str, int | str]]:
         """Enrich chapter bounds, defaults, then drop invalid episodes."""
         LifecycleConfigurationMixin._enrich_configuration_chapter_bounds(configuration)
-        LifecycleConfigurationMixin._configuration_default_chapter_segments_checked(configuration)
+        for row in configuration.values():
+            row.setdefault('chapter_segments_fully_checked', True)
         return LifecycleConfigurationMixin._configuration_drop_invalid_episode_rows(configuration)
 
     @staticmethod
@@ -454,146 +450,6 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
             con['chapter_index'] = j1
             con['start_at_chapter'] = j1
             con['end_at_chapter'] = j2
-
-    def generate_configuration(self, table: QTableWidget,
-                               sub_combo_index: Optional[dict[int, int]] = None,
-                               subtitle_index: Optional[int] = None) -> dict[int, dict[str, int | str]]:
-        configuration = {}
-        sub_index = 0
-        bdmv_index = 0
-        approx_end_time = float(
-            getattr(self, 'approx_episode_duration_seconds', DEFAULT_APPROX_EPISODE_DURATION_SECONDS)
-            or DEFAULT_APPROX_EPISODE_DURATION_SECONDS)
-        if self.sub_files:
-            # Always use single process in main thread to avoid multiprocessing edge cases.
-            missing = [p for p in self.sub_files if p and p not in self._subtitle_cache]
-            if missing:
-                # Use single-process loading directly in main thread.
-                for p in missing:
-                    try:
-                        self._subtitle_cache[p] = Subtitle(p)
-                    except Exception as e:
-                        print(f'Failed to load subtitle file ｢{p}｣: {str(e)}')
-            sub_max_end = [self._subtitle_cache[p].max_end_time() for p in self.sub_files]
-        else:
-            sub_max_end = []
-        if sub_combo_index:
-            chapter_index = sub_combo_index[sub_index]
-            for folder, chapter, selected_mpls in self.select_mpls_from_table(table):
-                disc_output_name = self._resolve_disc_output_name(selected_mpls)
-                for bdmv_index in range(table.rowCount()):
-                    if table.item(bdmv_index, 0).text() == folder:
-                        break
-                bdmv_index += 1
-                offset = 0
-                j = 1
-                left_time = chapter.get_total_time()
-                sub_end_time = sub_max_end[sub_index] if self.sub_files else approx_end_time
-                for i, play_item_in_out_time in enumerate(chapter.in_out_time):
-                    play_item_marks = chapter.mark_info.get(i)
-                    if sub_index <= subtitle_index and j == chapter_index:
-                        sub_end_time = offset + (sub_max_end[sub_index] if self.sub_files else approx_end_time)
-                        configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
-                                                    'bdmv_index': bdmv_index, 'chapter_index': j,
-                                                    'offset': get_time_str(offset),
-                                                    'disc_output_name': disc_output_name}
-                        sub_index += 1
-                        if sub_combo_index.get(sub_index):
-                            chapter_index = sub_combo_index[sub_index]
-                    elif sub_index > subtitle_index:
-                        if offset > sub_end_time - 300 or offset == 0:
-                            if (((sub_index + 1 < len(self.sub_files)) if self.sub_files else True)
-                                    and left_time > (
-                                    sub_max_end[sub_index + 1] if self.sub_files else approx_end_time) - 300):
-                                sub_end_time = offset + (sub_max_end[sub_index] if self.sub_files else approx_end_time)
-                                configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
-                                                            'bdmv_index': bdmv_index, 'chapter_index': j,
-                                                            'offset': get_time_str(offset),
-                                                            'disc_output_name': disc_output_name}
-                                sub_index += 1
-                    if play_item_marks:
-                        for mark in play_item_marks:
-                            time_shift = offset + (mark - play_item_in_out_time[1]) / 45000
-                            if sub_index <= subtitle_index and j == chapter_index:
-                                sub_end_time = time_shift + (
-                                    sub_max_end[sub_index] if self.sub_files else approx_end_time)
-                                configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
-                                                            'bdmv_index': bdmv_index, 'chapter_index': j,
-                                                            'offset': get_time_str(time_shift),
-                                                            'disc_output_name': disc_output_name}
-                                sub_index += 1
-                                if sub_combo_index.get(sub_index):
-                                    chapter_index = sub_combo_index[sub_index]
-                            elif sub_index > subtitle_index:
-                                if time_shift > sub_end_time and (
-                                        play_item_in_out_time[2] - mark) / 45000 > 1200:
-                                    sub_end_time = time_shift + (
-                                        sub_max_end[sub_index] if self.sub_files else approx_end_time)
-                                    configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
-                                                                'bdmv_index': bdmv_index, 'chapter_index': j,
-                                                                'offset': get_time_str(time_shift),
-                                                                'disc_output_name': disc_output_name}
-                                    sub_index += 1
-                            j += 1
-                    offset += (play_item_in_out_time[2] - play_item_in_out_time[1]) / 45000
-                    left_time += (play_item_in_out_time[1] - play_item_in_out_time[2]) / 45000
-            configuration = self._finalize_configuration_episode_rows(configuration)
-            return configuration
-        for folder, chapter, selected_mpls in self.select_mpls_from_table(table):
-            disc_output_name = self._resolve_disc_output_name(selected_mpls)
-            for bdmv_index in range(table.rowCount()):
-                if table.item(bdmv_index, 0).text() == folder:
-                    break
-            bdmv_index += 1
-            start_time = 0
-            sub_end_time = sub_max_end[sub_index] if self.sub_files else approx_end_time
-            left_time = chapter.get_total_time()
-            configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
-                                        'bdmv_index': bdmv_index, 'chapter_index': 1, 'offset': '0',
-                                        'disc_output_name': disc_output_name}
-            j = 1
-            for i, play_item_in_out_time in enumerate(chapter.in_out_time):
-                play_item_marks = chapter.mark_info.get(i)
-                chapter_num = len(play_item_marks or [])
-                if play_item_marks:
-                    play_item_duration_time = play_item_in_out_time[2] - play_item_in_out_time[1]
-                    time_shift = (start_time + play_item_marks[0] - play_item_in_out_time[1]) / 45000
-                    if time_shift > sub_end_time - 300:
-                        if (((sub_index + 1 < len(self.sub_files)) if self.sub_files else True)
-                                and left_time > (
-                                sub_max_end[sub_index + 1] if self.sub_files else approx_end_time) - 300):
-                            sub_index += 1
-                            sub_end_time = (
-                                        time_shift + (sub_max_end[sub_index] if self.sub_files else approx_end_time))
-                            configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
-                                                        'bdmv_index': bdmv_index, 'chapter_index': j,
-                                                        'offset': get_time_str(time_shift),
-                                                        'disc_output_name': disc_output_name}
-
-                    if play_item_duration_time / 45000 > 2600 and sub_end_time - time_shift < 1800:
-                        k = j
-                        for mark in play_item_marks[1:]:
-                            k += 1
-                            time_shift = (start_time + mark - play_item_in_out_time[1]) / 45000
-                            if time_shift > sub_end_time and (
-                                    play_item_in_out_time[2] - mark) / 45000 > 1200:
-                                sub_index += 1
-                                sub_end_time = (time_shift + (
-                                    sub_max_end[sub_index] if self.sub_files else approx_end_time))
-                                configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls,
-                                                            'bdmv_index': bdmv_index, 'chapter_index': k,
-                                                            'offset': get_time_str(time_shift),
-                                                            'disc_output_name': disc_output_name}
-
-                j += chapter_num
-                start_time += play_item_in_out_time[2] - play_item_in_out_time[1]
-                left_time += (play_item_in_out_time[1] - play_item_in_out_time[2]) / 45000
-
-            sub_index += 1
-            if sub_index == len(self.sub_files):
-                break
-        configuration = self._finalize_configuration_episode_rows(configuration)
-        return configuration
 
     def generate_configuration_from_selected_mpls(self, selected_mpls: list[tuple[str, str]],
                                                   sub_combo_index: Optional[dict[int, int]] = None,
@@ -660,7 +516,7 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
                         if offset > sub_end_time - 300 or offset == 0:
                             if (((sub_index + 1 < len(self.sub_files)) if self.sub_files else True)
                                     and left_time > (
-                                    sub_max_end[sub_index + 1] if self.sub_files else approx_end_time) - 180):
+                                    sub_max_end[sub_index + 1] if self.sub_files else approx_end_time) - 300):
                                 sub_end_time = offset + (sub_max_end[sub_index] if self.sub_files else approx_end_time)
                                 configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls_no_ext,
                                                             'bdmv_index': bdmv_index, 'chapter_index': j,
@@ -729,7 +585,7 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
                         if time_shift > sub_end_time - 300:
                             if (((sub_index + 1 < len(self.sub_files)) if self.sub_files else True)
                                     and left_time > (
-                                    sub_max_end[sub_index + 1] if self.sub_files else approx_end_time) - 180):
+                                    sub_max_end[sub_index + 1] if self.sub_files else approx_end_time) - 300):
                                 sub_index += 1
                                 sub_end_time = (time_shift + (
                                     sub_max_end[sub_index] if self.sub_files else approx_end_time))

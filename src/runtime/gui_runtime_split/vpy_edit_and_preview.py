@@ -1,8 +1,8 @@
 """Target module for VPy edit/preview methods of `BluraySubtitleGUI`."""
+
 import os
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 from typing import Optional
@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLineEdit, QPushButton, QFileD
 
 from src.core.settings import ENCODE_REMUX_LABELS, ENCODE_LABELS, VSEDIT_PATH, ENCODE_SP_LABELS, \
     ENCODE_REMUX_SP_LABELS
-from src.exports.utils import print_exc_terminal
+from src.exports.utils import print_exc_terminal, run_command
 from .gui_base import BluraySubtitleGuiBase
 
 
@@ -336,7 +336,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
         if sys.platform == 'win32':
             os.startfile(path)
         else:
-            subprocess.Popen(['xdg-open', path])
+            run_command(['xdg-open', path], wait=False)
 
     def open_vpy_in_vsedit(self, path: str) -> Optional[QProcess]:
         path = str(path or '').strip()

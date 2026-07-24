@@ -32,10 +32,6 @@ def _read_text_with_fallback(path: str) -> Tuple[str, str]:
     raise UnicodeError(f"Failed to decode {path!r} with supported encodings") from last_error
 
 
-def _normalize_lines(raw_text: str) -> list[str]:
-    text = raw_text.replace("\ufeff", "").replace("\r", "")
-    return [line.strip() for line in text.split("\n") if line.strip()]
-
 
 def _build_dialogue_lines(lines: list[str]) -> str:
     sub_lines = ""
@@ -85,7 +81,7 @@ def srt2ass(input_file: str) -> Optional[str]:
 
     raw_text, encoding = _read_text_with_fallback(input_file)
     utf8bom = "\ufeff" if "\ufeff" in raw_text else ""
-    lines = _normalize_lines(raw_text)
+    lines = [line.strip() for line in raw_text.replace("\ufeff", "").replace("\r", "").split("\n") if line.strip()]
     dialogue_lines = _build_dialogue_lines(lines)
     dialogue_lines = _apply_srt_to_ass_transform(dialogue_lines)
 

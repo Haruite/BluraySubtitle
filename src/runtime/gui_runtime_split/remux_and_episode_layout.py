@@ -9,14 +9,14 @@ from typing import Optional
 
 from PyQt6.QtCore import Qt, QTimer, QCoreApplication, QThread
 from PyQt6.QtWidgets import QTableWidget, QToolButton, QPlainTextEdit, QWidget, QTableWidgetItem, QComboBox, \
-    QProgressDialog, QProgressBar, QMessageBox
+    QProgressDialog, QProgressBar
 
 from src.bdmv import Chapter
 from src.core import BDMV_LABELS, DIY_BDMV_LABELS, DIY_REMUX_LABELS, find_mkvtoolnix, \
     ENCODE_REMUX_LABELS, ENCODE_REMUX_SP_LABELS, SUBTITLE_LABELS, ENCODE_LABELS, \
     REMUX_LABELS, CURRENT_UI_LANGUAGE, ENCODE_SP_LABELS
 from src.domain import Subtitle
-from src.exports.utils import get_time_str, get_index_to_m2ts_and_offset, print_exc_terminal, get_folder_size
+from src.exports.utils import get_time_str, get_index_to_m2ts_and_offset, print_exc_terminal, get_folder_size, parse_time_to_seconds
 from src.runtime.gui_runtime_classes.file_path_table_widget_item import FilePathTableWidgetItem
 from src.runtime.gui_runtime_classes.remux_worker import RemuxWorker
 from src.runtime.sp import SpEntry
@@ -382,11 +382,6 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         if not prev_rows:
             return
 
-        def ch_rows(mpl: str) -> int:
-            try:
-                return int(self._chapter_node_data(str(mpl).strip()).get('rows') or 0)
-            except Exception:
-                return 0
 
         def _copy_prefs(new_c: dict[str, int | str], pr: dict[str, int | str]) -> None:
             don = str(pr.get('disc_output_name') or '').strip()
@@ -395,7 +390,10 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             try:
                 ei = int(pr.get('end_at_chapter'))
                 st = int(new_c.get('chapter_index') or 1)
-                tr = ch_rows(str(new_c.get('selected_mpls') or '').strip())
+                try:
+                    tr = int(self._chapter_node_data(str(new_c.get('selected_mpls') or '').strip()).get('rows') or 0)
+                except Exception:
+                    tr = 0
                 if tr > 0 and ei > st and ei <= tr + 1:
                     new_c['end_at_chapter'] = ei
             except Exception:
@@ -458,26 +456,13 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             discs.append((folder_to_bdmv[folder], mpls_no_ext))
         discs.sort(key=lambda x: x[0])
 
-        def parse_time_str_to_seconds(s: str) -> Optional[float]:
-            try:
-                parts = [p for p in str(s or '').strip().split(':') if p != '']
-                if not parts:
-                    return None
-                nums = [float(p) for p in parts]
-                val = 0.0
-                for n in nums:
-                    val = val * 60.0 + float(n)
-                return val
-            except Exception:
-                return None
-
         file_rows: list[tuple[str, str, Optional[float]]] = []
         if rows:
             for p, d in rows:
                 if not p:
                     continue
                 dur_str = str(d or '').strip()
-                file_rows.append((str(p).strip(), dur_str, parse_time_str_to_seconds(dur_str)))
+                file_rows.append((str(p).strip(), dur_str, parse_time_to_seconds(dur_str, None)))
         else:
             folder = self.subtitle_folder_path.text().strip()
             if folder and os.path.isdir(folder):
@@ -583,8 +568,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             labels = REMUX_LABELS
         duration_col = labels.index('ep_duration')
         bdmv_col = labels.index('bdmv_index')
-        chapter_col = labels.index('start_at_chapter')
-        end_col = labels.index('end_at_chapter')
+
         m2ts_col = labels.index('m2ts_file')
         m2ts_detail_col = labels.index('m2ts_file_detail') if 'm2ts_file_detail' in labels else -1
         language_col = labels.index('language')
@@ -909,13 +893,11 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             cur_folder_mains = self._folder_set_mains_from_selected(selected)
             affected = self._folders_with_changed_main_selection(selected, last_cfg)
             if sub_files or not last_cfg or not prev_set:
-                if self.table2.rowCount() > 0:
-                    try:
-                        full_cfg = self._generate_configuration_from_ui_inputs()
-                    except Exception:
-                        full_cfg = bs.generate_configuration_from_selected_mpls(selected)
-                else:
-                    full_cfg = bs.generate_configuration_from_selected_mpls(selected)
+                full_cfg = (
+                    self._generate_configuration_from_ui_inputs()
+                    if self.table2.rowCount() > 0
+                    else bs.generate_configuration_from_selected_mpls(selected)
+                )
                 configuration = {
                     i: dict(c) if isinstance(c, dict) else c
                     for i, (_, c) in enumerate(sorted((full_cfg or {}).items(), key=lambda kv: int(kv[0])))
@@ -1030,19 +1012,6 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 continue
             self.table3.removeRow(r)
 
-    @staticmethod
-    def _parse_display_time_to_seconds(s: str) -> float:
-        try:
-            parts = [p for p in str(s or '').strip().split(':') if p != '']
-            if not parts:
-                return 0.0
-            val = 0.0
-            for n in parts:
-                val = val * 60.0 + float(n)
-            return val
-        except Exception:
-            return 0.0
-
     def _table1_bluray_folder_order(self) -> list[str]:
         out: list[str] = []
         try:
@@ -1133,7 +1102,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 self.table1.setColumnCount(len(table1_labels))
                 self._set_table_headers(self.table1, table1_labels)
                 i = 0
-                for root, dirs, files in os.walk(bdmv_path):
+                for root, dirs, _files in os.walk(bdmv_path):
                     dirs.sort()  # Sort dirs to ensure consistent order on all platforms
                     if 'BDMV' in dirs and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV')):
                         i += 1
@@ -1141,7 +1110,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                         QCoreApplication.processEvents()
                 self.table1.setRowCount(i)
                 i = 0
-                for root, dirs, files in os.walk(bdmv_path):
+                for root, dirs, _files in os.walk(bdmv_path):
                     dirs.sort()  # Sort dirs to ensure consistent order on all platforms
                     if 'BDMV' in dirs and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV')):
                         table_widget = QTableWidget()
@@ -1259,25 +1228,8 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             if self._is_movie_mode():
                 self._refresh_movie_table2()
             else:
-                try:
-                    self._sync_chapter_tail_trim_episode()
-                except Exception:
-                    pass
-                configuration = BluraySubtitle(
-                    self.bdmv_folder_path.text(),
-                    [],
-                    self.checkbox1.isChecked(),
-                    None,
-                    approx_episode_duration_seconds=self._get_approx_episode_duration_seconds()
-                ).generate_configuration(self.table1)
-                self.on_configuration(configuration)
-                try:
-                    if self.table2.rowCount() > 0 and self.get_selected_function_id() in (3, 4, 5):
-                        cfg2 = self._generate_configuration_from_ui_inputs()
-                        if cfg2:
-                            self.on_configuration(cfg2, update_sp_table=True)
-                except Exception:
-                    pass
+                self._full_refresh_remux_encode_tables_for_mode()
+
 
     def remux_episodes(self):
         try:

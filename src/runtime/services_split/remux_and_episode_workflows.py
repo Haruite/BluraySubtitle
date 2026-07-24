@@ -19,10 +19,10 @@ from src.exports.utils import (
     get_index_to_m2ts_and_offset,
     get_time_str,
     force_remove_file,
-    run_shell_command_with_output,
+    run_command,
 )
 from src.runtime.audio_conversion import mux_with_audio_conversion
-from src.runtime.sp import SpEntry, SpJob
+from src.runtime.sp import SpEntry, SpJob, media_track_key
 from src.runtime.remux import RemuxMainJob, RemuxRequest
 from src.runtime.encode import EncodeRequest, EncodeRow
 from .service_base import BluraySubtitleServiceBase
@@ -35,14 +35,6 @@ def _svc_cls():
 
 
 class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
-    @staticmethod
-    def _mkvmerge_exe() -> str:
-        """Resolve mkvmerge executable path dynamically."""
-        try:
-            find_mkvtoolnix()
-        except Exception:
-            pass
-        return core_settings.MKV_MERGE_PATH or shutil.which('mkvmerge') or 'mkvmerge'
 
     def _prepare_remux_main_jobs(self, request: RemuxRequest) -> tuple[str, list[RemuxMainJob]]:
         """Resolve every selected main playlist and all output paths before the first write."""
@@ -220,6 +212,11 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     output_name += '.mkv'
                 final_outputs.append(os.path.join(os.path.dirname(expected_output), output_name))
 
+            command_output = next(
+                (path for line in _svc_cls()._remux_cmd_shell_lines(command)
+                 if (path := _svc_cls()._mkvmerge_output_path_from_line(line))),
+                None,
+            ) or _svc_cls()._mkvmerge_output_path_from_line(command)
             jobs.append(RemuxMainJob(
                 configuration_keys=tuple(matching_keys),
                 configurations=tuple(configurations),
@@ -227,9 +224,8 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 command=command_lines[0],
                 m2ts_file=m2ts_file,
                 volume=volume,
-                primary_output=os.path.normpath(
-                    _svc_cls()._mkvmerge_output_path_from_cmd(command) or default_output
-                ),
+                primary_output=os.path.normpath(command_output or default_output),
+
                 mpls_path=mpls_path,
                 audio_tracks=tuple(audio_tracks),
                 subtitle_tracks=tuple(subtitle_tracks),
@@ -239,7 +235,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     (str(track_index), str(language).strip())
                     for track_index, language in (
                         (request.track_language_config or {}).get(
-                            f'main::{os.path.normpath(mpls_path)}', {}
+                            media_track_key('main', mpls_path), {}
                         ) or {}
                     ).items()
                     if str(language).strip()
@@ -517,7 +513,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 raise _Cancelled()
             configurations = [dict(conf) for conf in job.configurations]
             if job.mpls_path:
-                config_key = f'main::{os.path.normpath(job.mpls_path)}'
+                config_key = media_track_key('main', job.mpls_path)
                 tracks_cfg = getattr(self, 'track_selection_config', {}) or {}
                 if config_key in tracks_cfg:
                     cfg = tracks_cfg.get(config_key) or {}
@@ -678,14 +674,10 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         rets = [int(self._run_single_command(c)) for c in commands]
         return (max(rets) if rets else 0), rets
 
-    def _run_shell_command(self, cmd: str) -> int:
-        r, _ = self._run_shell_command_detailed(cmd)
-        return int(r)
-
     def _run_single_command(self, cmd: str) -> int:
         if sys.platform != 'win32':
             cmd = self._fix_remux_shell_rm_glob(cmd)
-        return run_shell_command_with_output(cmd)
+        return int(run_command(cmd).returncode)
 
     @staticmethod
     def _fix_remux_shell_rm_glob(raw: str) -> str:
@@ -747,7 +739,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         chapter.get_pid_to_language()
         probe_m2ts, _mpls = _svc_cls()._probe_m2ts_for_remux_source(mpls_path)
         m2ts_file = probe_m2ts or ''
-        config_key = f'main::{os.path.normpath(mpls_path)}'
+        config_key = media_track_key('main', mpls_path)
         copy_audio_track, copy_sub_track = self._select_tracks_for_source(
             probe_m2ts or mpls_path,
             chapter.pid_to_lang,
@@ -783,7 +775,11 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             output_name = resolved_title
 
         bdmv_vol = '0' * (3 - len(str(bdmv_index))) + str(bdmv_index)
-        mkvmerge_exe = self._mkvmerge_exe()
+        try:
+            find_mkvtoolnix()
+        except Exception:
+            pass
+        mkvmerge_exe = core_settings.MKV_MERGE_PATH or shutil.which('mkvmerge') or 'mkvmerge'
         if getattr(self, 'movie_mode', False):
             try:
                 output_name_from_conf = str(confs[0].get('output_name') or '').strip()
@@ -825,7 +821,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         else:
             rows = sum(map(len, chapter.mark_info.values()))
             total_end = rows + 1
-            index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(chapter)
+            _, index_to_offset = get_index_to_m2ts_and_offset(chapter)
 
             def _off(idx: int) -> float:
                 if idx >= total_end:
@@ -1137,7 +1133,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         total_rows = max(1, len(main_rows) + len(selected_sp_rows))
         completed_rows = 0
 
-        for row_index, row in enumerate(main_rows, start=1):
+        for row in main_rows:
             if cancel_event and cancel_event.is_set():
                 raise _Cancelled()
             self._progress(

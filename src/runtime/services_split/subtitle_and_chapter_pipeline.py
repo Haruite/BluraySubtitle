@@ -1,4 +1,5 @@
 """Auto-generated split target: subtitle_and_chapter_pipeline."""
+
 import os
 import re
 import shutil
@@ -9,15 +10,15 @@ from typing import Any, Callable, Optional
 
 from PyQt6.QtWidgets import QTableWidget
 
-from src.bdmv import Chapter, M2TS, pid_to_lang_from_m2ts_path
+from src.bdmv import Chapter, M2TS
 from src.core import FFMPEG_PATH, MKV_MERGE_PATH, MKV_EXTRACT_PATH, find_mkvtoolnix, \
     mkvtoolnix_ui_language_arg, MKV_PROP_EDIT_PATH
 from src.core.i18n import translate_text
 from src.domain import MKV, Subtitle
 from src.exports.utils import get_index_to_m2ts_and_offset, append_ogm_chapter_lines, force_remove_folder, \
-    force_remove_file, print_terminal_line, print_exc_terminal, get_time_str
+    force_remove_file, print_terminal_line, print_exc_terminal, get_time_str, parse_time_to_seconds, run_command
 from .service_base import BluraySubtitleServiceBase
-from src.runtime.sp import SpJob
+from src.runtime.sp import SpJob, media_track_key
 from ..services.cancelled import _Cancelled
 
 
@@ -126,9 +127,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                         raise ValueError(translate_text(
                             'Subtitle formats cannot be mixed within one merged output'
                         ))
-                    offset_seconds = 0.0
-                    for time_part in str(row['offset']).split(':'):
-                        offset_seconds = offset_seconds * 60 + float(time_part)
+                    offset_seconds = float(parse_time_to_seconds(row['offset']))
                     merged_subtitle.append_subtitle(parsed_subtitle, offset_seconds)
                 output_folder_base = str(row['folder']) + suffix
                 output_mpls_base = str(row['selected_mpls']) + suffix
@@ -408,10 +407,8 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
         if not m:
             return None
         try:
-            h = int(m.group(1))
-            mi = int(m.group(2))
-            sec = float(m.group(3))
-            return h * 3600.0 + mi * 60.0 + sec
+            return int(m.group(1)) * 3600.0 + int(m.group(2)) * 60.0 + float(m.group(3))
+
         except Exception:
             return None
 
@@ -743,7 +740,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                     break
                 if cancel_event and cancel_event.is_set():
                     raise _Cancelled()
-                clip_information_filename, in_time, out_time = chapter.in_out_time[ref_to_play_item_id]
+                _, in_time, out_time = chapter.in_out_time[ref_to_play_item_id]
                 for mark_timestamp in mark_timestamps:
                     if cancel_event and cancel_event.is_set():
                         raise _Cancelled()
@@ -922,43 +919,8 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
         tracks_cfg = getattr(self, 'track_selection_config', {}) or {}
         if not isinstance(tracks_cfg, dict):
             tracks_cfg = {}
-        mcfg = tracks_cfg.get(f'main::{mp}') or {}
+        mcfg = tracks_cfg.get(media_track_key('main', mp)) or {}
         return self._compute_mkv_id_to_m2ts_pid_core(mp, mcfg)
-
-    @staticmethod
-    def _ident_muxable_track_count(ident_ep: dict) -> int:
-        """video + audio + subtitles entries in mkvmerge identify JSON (episode file)."""
-        n = 0
-        for t in (ident_ep.get('tracks') or []) if isinstance(ident_ep.get('tracks'), list) else []:
-            if not isinstance(t, dict):
-                continue
-            typ = str(t.get('type') or '').strip().lower()
-            if typ == 'subtitle':
-                typ = 'subtitles'
-            if typ in ('video', 'audio', 'subtitles'):
-                n += 1
-        return n
-
-    @staticmethod
-    def _episode_ident_track_type(ident_ep: dict, tid: int) -> str:
-        """mkvmerge track ``type`` for ``tid`` in episode identify JSON (lowercase; subtitle -> subtitles)."""
-        for t in (ident_ep.get('tracks') or []) if isinstance(ident_ep.get('tracks'), list) else []:
-            if not isinstance(t, dict):
-                continue
-            try:
-                if int(t.get('id')) != int(tid):
-                    continue
-            except Exception:
-                continue
-            typ = str(t.get('type') or '').strip().lower()
-            if typ == 'subtitle':
-                return 'subtitles'
-            return typ
-        return ''
-
-    @staticmethod
-    def _episode_sp_mux_mkv_cache_key(episode_mkv: str) -> str:
-        return os.path.normcase(os.path.normpath(os.path.abspath(episode_mkv)))
 
     @staticmethod
     def _mkvmerge_ident_transport_pid(props: object) -> Optional[int]:
@@ -1022,19 +984,32 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
             return False
 
         ident_ep = _svc_cls()._mkvmerge_identify_json(episode_mkv)
+        episode_track_type: dict[int, str] = {}
+        muxable_track_count = 0
+        for track in ident_ep.get('tracks') or []:
+            if not isinstance(track, dict):
+                continue
+            track_type = str(track.get('type') or '').strip().lower()
+            track_type = 'subtitles' if track_type == 'subtitle' else track_type
+            if track_type not in ('video', 'audio', 'subtitles'):
+                continue
+            muxable_track_count += 1
+            try:
+                episode_track_type[int(track.get('id'))] = track_type
+            except Exception:
+                continue
 
-        cache_key = self._episode_sp_mux_mkv_cache_key(episode_mkv)
+        cache_key = os.path.normcase(os.path.normpath(os.path.abspath(episode_mkv)))
         _sp_mux_cache = getattr(self, '_episode_sp_mux_last_after_mux_map', None)
         if not isinstance(_sp_mux_cache, dict):
             _sp_mux_cache = {}
             self._episode_sp_mux_last_after_mux_map = _sp_mux_cache
         _prev_mux_map = _sp_mux_cache.get(cache_key)
-        _n_ident_muxable = self._ident_muxable_track_count(ident_ep)
         cached_episode_baseline_map: Optional[dict[int, int]] = None
         if (
                 isinstance(_prev_mux_map, dict)
                 and len(_prev_mux_map) > 0
-                and _n_ident_muxable == len(_prev_mux_map)
+                and muxable_track_count == len(_prev_mux_map)
         ):
             cached_episode_baseline_map = dict(_prev_mux_map)
 
@@ -1119,7 +1094,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
             except Exception:
                 continue
             if fid_o == 0:
-                ty_e = self._episode_ident_track_type(ident_ep, tid_o)
+                ty_e = episode_track_type.get(tid_o, '')
                 if ty_e == 'video':
                     continue
                 if ty_e == 'audio':
@@ -1190,7 +1165,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
             if ui_ex:
                 ex_cmd_parts.extend(ui_ex.split())
             ex_cmd_parts.extend([episode_mkv, 'chapters', '--simple', chapter_tmp])
-            if subprocess.run(ex_cmd_parts, shell=False).returncode == 0:
+            if run_command(ex_cmd_parts).returncode == 0:
                 if os.path.isfile(chapter_tmp) and os.path.getsize(chapter_tmp) > 0:
                     chapters_saved_ok = True
             if not chapters_saved_ok:
@@ -1210,7 +1185,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                 except Exception:
                     pass
             raise _Cancelled()
-        ret = subprocess.run(cmd_parts, shell=False).returncode
+        ret = run_command(cmd_parts).returncode
         if ret not in (0, 1) or not os.path.isfile(tmp_out):
             if os.path.isfile(tmp_out):
                 force_remove_file(tmp_out)
@@ -1226,7 +1201,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                 if ui_propedit:
                     propedit_args.extend(ui_propedit.split())
                 propedit_args.extend([tmp_out, '--chapters', chapter_tmp])
-                if subprocess.run(propedit_args, shell=False).returncode not in (0, 1):
+                if run_command(propedit_args).returncode not in (0, 1):
                     return False
 
             main_pids = set(mkv_map_main.values())
@@ -1360,10 +1335,10 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                         )
                     if output_path.lower().endswith('.png'):
                         os.makedirs(os.path.dirname(output_path), exist_ok=True)
-                        result = subprocess.run([
+                        result = run_command([
                             FFMPEG_PATH or 'ffmpeg', '-y', '-i', image_sources[0],
                             '-frames:v', '1', '-update', '1', output_path,
-                        ], shell=False)
+                        ])
                         if result.returncode != 0 or not os.path.isfile(output_path):
                             raise RuntimeError(
                                 translate_text('SP processing failed in row {row}: {path}').format(
@@ -1388,10 +1363,10 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                                     f'{os.path.splitext(os.path.basename(image_source))[0]}.png'
                                 )
                                 image_output = os.path.join(output_path, image_name)
-                                result = subprocess.run([
+                                result = run_command([
                                     FFMPEG_PATH or 'ffmpeg', '-y', '-i', image_source,
                                     '-frames:v', '1', '-update', '1', image_output,
-                                ], shell=False)
+                                ])
                                 if result.returncode != 0 or not os.path.isfile(image_output):
                                     raise RuntimeError(
                                         translate_text('SP processing failed in row {row}: {path}').format(
@@ -1412,16 +1387,16 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                             )
                         else:
                             os.makedirs(os.path.dirname(output_path), exist_ok=True)
-                            extraction_ok = subprocess.run([
+                            extraction_ok = run_command([
                                 FFMPEG_PATH or 'ffmpeg', '-y', '-i', source_path,
                                 '-map', f'0:{audio_tracks[0]}', '-c', 'copy', output_path,
-                            ], shell=False).returncode == 0
+                            ]).returncode == 0
                     elif len(subtitle_tracks) == 1 and not audio_tracks:
                         os.makedirs(os.path.dirname(output_path), exist_ok=True)
-                        extraction_ok = subprocess.run([
+                        extraction_ok = run_command([
                             FFMPEG_PATH or 'ffmpeg', '-y', '-i', source_path,
                             '-map', f'0:{subtitle_tracks[0]}', '-c', 'copy', output_path,
-                        ], shell=False).returncode == 0
+                        ]).returncode == 0
                     else:
                         extraction_ok = False
                     if not extraction_ok or not os.path.isfile(output_path):
@@ -1549,7 +1524,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                         )
                     command.append(source_path)
                     print(f'{self.t("Mux command: ")}{subprocess.list2cmdline(command)}')
-                    result = subprocess.run(command, shell=False)
+                    result = run_command(command)
                     if result.returncode in (0, 1):
                         candidates = [
                             os.path.join(temporary_folder, filename)
@@ -1583,17 +1558,13 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                     ui_language = mkvtoolnix_ui_language_arg().strip()
                     if ui_language:
                         propedit_command.extend(ui_language.split())
-                    clear_result = subprocess.run(
-                        propedit_command + [output_path, '--chapters', ''], shell=False,
-                    )
+                    clear_result = run_command(propedit_command + [output_path, '--chapters', ''])
                     if clear_result.returncode not in (0, 1):
                         raise RuntimeError(
                             translate_text('mkvpropedit failed for: {path}').format(path=output_path)
                         )
                     if os.path.isfile(chapter_path):
-                        chapter_result = subprocess.run(
-                            propedit_command + [output_path, '--chapters', chapter_path], shell=False,
-                        )
+                        chapter_result = run_command(propedit_command + [output_path, '--chapters', chapter_path])
                         if chapter_result.returncode not in (0, 1):
                             raise RuntimeError(
                                 translate_text('mkvpropedit failed for: {path}').format(path=output_path)

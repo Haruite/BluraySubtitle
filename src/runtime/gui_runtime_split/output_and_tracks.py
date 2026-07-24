@@ -1,8 +1,8 @@
 """Target module for output naming and track methods of `BluraySubtitleGUI`."""
+
 import json
 import os
 import re
-import subprocess
 from typing import Optional
 
 from PyQt6.QtCore import Qt
@@ -12,110 +12,23 @@ from src.bdmv import M2TS, Chapter, pid_to_lang_from_m2ts_path
 from src.core import REMUX_LABELS, DIY_REMUX_LABELS, ENCODE_LABELS, CURRENT_UI_LANGUAGE, FFPROBE_PATH, ENCODE_SP_LABELS, \
     DIY_SP_LABELS
 from src.runtime.services import BluraySubtitle
+from src.exports.utils import parse_time_to_seconds, run_command
 from src.runtime.services_split.lifecycle_and_configuration import LifecycleConfigurationMixin
+from src.runtime.sp import (
+    SpEntry, media_track_key, filter_m2ts_file_detail_by_basenames,
+    m2ts_file_detail_segments_contained_in,
+)
 from src.runtime.services_split.misc_workflows import (
     _movie_main_duration_by_bdmv_from_mpls_paths,
     _movie_sp_duration_matches_main,
 )
 from .gui_base import BluraySubtitleGuiBase
 
-_M2TS_DETAIL_SEGMENT_RE = re.compile(r'^(.+?)\(([^)]+)-([^)]+)\)\s*$')
-
-
-def _parse_m2ts_detail_time_to_seconds(s: str) -> float:
-    try:
-        parts = [p for p in str(s or '').strip().split(':') if p != '']
-        if not parts:
-            return 0.0
-        val = 0.0
-        for n in parts:
-            val = val * 60.0 + float(n)
-        return val
-    except Exception:
-        return 0.0
-
-
-def parse_m2ts_file_detail_segments(detail: str) -> list[tuple[str, float, float]]:
-    """Parse ``clip.m2ts(HH:MM:SS.mmm-HH:MM:SS.mmm),...`` into (basename, start_sec, end_sec)."""
-    text = str(detail or '').strip()
-    if not text:
-        return []
-    segments: list[tuple[str, float, float]] = []
-    for part in text.split(','):
-        piece = part.strip()
-        if not piece:
-            continue
-        m = _M2TS_DETAIL_SEGMENT_RE.match(piece)
-        if not m:
-            return []
-        name = m.group(1).strip()
-        start_sec = _parse_m2ts_detail_time_to_seconds(m.group(2))
-        end_sec = _parse_m2ts_detail_time_to_seconds(m.group(3))
-        segments.append((name, start_sec, end_sec))
-    return segments
-
-
-def m2ts_file_detail_segments_contained_in(sp_detail: str, episode_detail: str, *, eps: float = 0.05) -> bool:
-    """True when every SP clip/time window lies inside some matching clip window on the episode row."""
-    sp_segs = parse_m2ts_file_detail_segments(sp_detail)
-    if not sp_segs:
-        return False
-    ep_segs = parse_m2ts_file_detail_segments(episode_detail)
-    if not ep_segs:
-        return False
-    for name, s0, s1 in sp_segs:
-        if s1 <= s0 + eps:
-            continue
-        matched = False
-        for en, a0, a1 in ep_segs:
-            if en != name:
-                continue
-            if s0 + eps >= a0 and s1 <= a1 + eps:
-                matched = True
-                break
-        if not matched:
-            return False
-    return True
-
-
-def filter_m2ts_file_detail_by_basenames(detail: str, basenames: list[str]) -> str:
-    """Keep only ``clip.m2ts(start-end)`` segments whose basename is in ``basenames``."""
-    wanted = {
-        os.path.basename(str(b or '')).strip().lower()
-        for b in basenames
-        if str(b or '').strip()
-    }
-    if not wanted:
-        return str(detail or '').strip()
-    parts: list[str] = []
-    for part in str(detail or '').split(','):
-        piece = part.strip()
-        if not piece:
-            continue
-        head = piece.split('(', 1)[0].strip().lower()
-        if head in wanted:
-            parts.append(piece)
-    return ','.join(parts)
-
 
 class OutputTracksMixin(BluraySubtitleGuiBase):
     def _resolve_output_name_from_mpls(self, mpls_no_ext: str) -> str:
-        raw = str(mpls_no_ext or '').strip()
-        if not raw:
-            return ''
-        mpls_full = raw if raw.lower().endswith('.mpls') else raw + '.mpls'
-        try:
-            folder = os.path.normpath(os.path.join(os.path.dirname(os.path.normpath(mpls_full)), '..', '..'))
-        except Exception:
-            folder = ''
-        if (not folder) or (not os.path.isdir(os.path.join(folder, 'BDMV'))):
-            try:
-                folder = os.path.normpath(self.bdmv_folder_path.text().strip()) if hasattr(self, 'bdmv_folder_path') else ''
-            except Exception:
-                folder = ''
-        stem = raw[:-5] if raw.lower().endswith('.mpls') else raw
-        stem = os.path.normpath(stem)
-        return LifecycleConfigurationMixin.resolve_disc_output_title(folder, stem)
+        root = self.bdmv_folder_path.text().strip() if hasattr(self, 'bdmv_folder_path') else ''
+        return LifecycleConfigurationMixin.resolve_disc_output_title(root, mpls_no_ext)
 
     def _build_episode_output_name_map(self, configuration: dict[int, dict[str, int | str]]) -> dict[int, str]:
         if not configuration:
@@ -218,7 +131,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
         cmd = (f'"{FFPROBE_PATH}" -v error -count_frames -select_streams v:0 '
                f'-show_entries stream=nb_read_frames,nb_frames -of json "{media_path}"')
         try:
-            p = subprocess.run(cmd, shell=True, capture_output=True, text=True, encoding='utf-8', errors='ignore')
+            p = run_command(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore')
             if p.returncode != 0:
                 return -1
             data = json.loads(p.stdout or '{}')
@@ -490,7 +403,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
         for ep_detail, main_mpls in self._iter_table2_episode_m2ts_details(bdmv_index):
             if not m2ts_file_detail_segments_contained_in(sp_detail, ep_detail):
                 continue
-            main_key = f'main::{os.path.normpath(main_mpls)}' if main_mpls else ''
+            main_key = media_track_key('main', main_mpls) if main_mpls else ''
             if not main_key:
                 return True
             if self._track_selection_contained_in(
@@ -566,7 +479,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
             if not sp_detail:
                 sp_detail = self._m2ts_file_detail_for_sp_table_row(r, ENCODE_SP_LABELS).strip()
             entry = {'bdmv_index': bdmv_index, 'mpls_file': mpls_file, 'm2ts_file': m2ts_text, 'output_name': ''}
-            sp_key = BluraySubtitle._sp_track_key_from_entry(entry)
+            sp_key = SpEntry.from_mapping(entry).track_key
             sp_mpls = ''
             if mpls_file:
                 playlist_dir = self._get_playlist_dir_for_bdmv_index(bdmv_index)
@@ -795,12 +708,9 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                 mpls_file = self.table3.item(r, mpls_col).text().strip() if self.table3.item(r, mpls_col) else ''
                 m2ts_text = self.table3.item(r, m2ts_col).text().strip() if self.table3.item(r, m2ts_col) else ''
                 m2ts_type = self.table3.item(r, type_col).text().strip() if self.table3.item(r, type_col) else ''
-                m2ts_files = [x.strip() for x in m2ts_text.split(',') if x.strip()]
-                m2ts_files_unique = list(dict.fromkeys(m2ts_files))
                 if not selected:
                     out_item.setText('')
                     continue
-                m2ts_text = self.table3.item(r, m2ts_col).text().strip() if self.table3.item(r, m2ts_col) else ''
                 m2ts_files = [x.strip() for x in m2ts_text.split(',') if x.strip()]
                 m2ts_files_unique = list(dict.fromkeys(m2ts_files))
                 seq += 1
@@ -862,13 +772,13 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                 ):
                     try:
                         d_item = self.table3.item(r, dur_col)
-                        d_sec = self._parse_display_time_to_seconds(d_item.text() if d_item else '')
+                        d_sec = parse_time_to_seconds(d_item.text() if d_item else '')
                     except Exception:
                         d_sec = 0.0
                     if d_sec <= 0.0:
                         _set_sp_out(f'{base_with_suffix}')
                         continue
-                key = BluraySubtitle._sp_track_key_from_entry(self._table3_get_sp_entry_for_row(r))
+                key = SpEntry.from_mapping(self._table3_get_sp_entry_for_row(r)).track_key
                 cfg = getattr(self, '_track_selection_config', {}) or {}
                 if not (isinstance(cfg, dict) and key in cfg):
                     # Undetermined multi-m2ts MPLS row: wait for async scan (single_frame / multi_frame)
@@ -916,7 +826,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                             if str(src).lower().endswith('.m2ts'):
                                 streams = self._read_m2ts_track_info(src)
                             else:
-                                streams = self._read_media_streams_local(src)
+                                streams = BluraySubtitle._read_media_streams(src)
                             for s in streams:
                                 if str(s.get('codec_type') or '') != 'audio':
                                     continue
@@ -954,7 +864,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                                     ext = str(single_sub_ext_cache[ext_cache_key] or 'sup')
                                 else:
                                     streams = self._read_m2ts_track_info(src) if str(src).lower().endswith(
-                                        '.m2ts') else self._read_media_streams_local(src)
+                                        '.m2ts') else BluraySubtitle._read_media_streams(src)
                                     for s in streams:
                                         if str(s.get('codec_type') or '') not in ('subtitle', 'subtitles'):
                                             continue
@@ -1005,7 +915,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                         continue
                     streams = self._read_mkvinfo_tracks(src)
                     a, s = self._all_track_ids_from_streams(streams)
-                    self._track_selection_config[f'mkv::{os.path.normpath(src)}'] = {'audio': a, 'subtitle': s}
+                    self._track_selection_config[media_track_key('mkv', src)] = {'audio': a, 'subtitle': s}
             except Exception:
                 pass
             try:
@@ -1016,7 +926,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                             continue
                         streams = self._read_mkvinfo_tracks(src)
                         a, s = self._all_track_ids_from_streams(streams)
-                        self._track_selection_config[f'mkvsp::{os.path.normpath(src)}'] = {'audio': a, 'subtitle': s}
+                        self._track_selection_config[media_track_key('mkvsp', src)] = {'audio': a, 'subtitle': s}
             except Exception:
                 pass
             return
@@ -1051,7 +961,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                 except Exception:
                     pass
                 a, s = self._all_track_ids_from_streams(streams)
-                self._track_selection_config[f'main::{os.path.normpath(selected_mpls_path)}'] = {'audio': a,
+                self._track_selection_config[media_track_key('main', selected_mpls_path)] = {'audio': a,
                                                                                                  'subtitle': s}
         except Exception:
             pass
@@ -1105,7 +1015,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                             pass
                     a, s = self._all_track_ids_from_streams(streams)
                     entry = self._table3_get_sp_entry_for_row(r)
-                    key = BluraySubtitle._sp_track_key_from_entry(entry)
+                    key = SpEntry.from_mapping(entry).track_key
                     self._track_selection_config[key] = {'audio': a, 'subtitle': s}
         except Exception:
             pass

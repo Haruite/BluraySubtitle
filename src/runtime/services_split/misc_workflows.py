@@ -1,77 +1,22 @@
 """Auto-generated split target: misc_workflows."""
 import os
-import re
 import threading
 from typing import Optional
 
 from src.bdmv import Chapter
 from src.core import DEFAULT_APPROX_EPISODE_DURATION_SECONDS
 from src.exports.utils import get_time_str
+from src.runtime.sp import m2ts_file_detail_segments_contained_in, filter_m2ts_file_detail_by_basenames
 from .media_info_and_track_mapping import MediaInfoTrackMappingMixin
 from .service_base import BluraySubtitleServiceBase
 from ..services.cancelled import _Cancelled
 
 _SP_ORPHAN_M2TS_SKIP_DURATION_BYTES = 512 * 1024
 _MOVIE_SP_MAIN_DURATION_EPS = 0.001
-_M2TS_DETAIL_SEGMENT_RE = re.compile(r'^(.+?)\(([^)]+)-([^)]+)\)\s*$')
 _MOVIE_OUTPUT_CHAR_MAP = {
     '?': '？', '*': '★', '<': '《', '>': '》', ':': '：', '"': "'",
     '/': '／', '\\': '／', '|': '￨',
 }
-
-
-def _parse_m2ts_detail_time_to_seconds(s: str) -> float:
-    try:
-        parts = [p for p in str(s or '').strip().split(':') if p != '']
-        if not parts:
-            return 0.0
-        val = 0.0
-        for n in parts:
-            val = val * 60.0 + float(n)
-        return val
-    except Exception:
-        return 0.0
-
-
-def _m2ts_file_detail_segments_contained_in(sp_detail: str, episode_detail: str, *, eps: float = 0.05) -> bool:
-    sp_segs = _parse_m2ts_file_detail_segments(sp_detail)
-    if not sp_segs:
-        return False
-    ep_segs = _parse_m2ts_file_detail_segments(episode_detail)
-    if not ep_segs:
-        return False
-    for name, s0, s1 in sp_segs:
-        if s1 <= s0 + eps:
-            continue
-        matched = False
-        for en, a0, a1 in ep_segs:
-            if en != name:
-                continue
-            if s0 + eps >= a0 and s1 <= a1 + eps:
-                matched = True
-                break
-        if not matched:
-            return False
-    return True
-
-
-def _parse_m2ts_file_detail_segments(detail: str) -> list[tuple[str, float, float]]:
-    text = str(detail or '').strip()
-    if not text:
-        return []
-    segments: list[tuple[str, float, float]] = []
-    for part in text.split(','):
-        piece = part.strip()
-        if not piece:
-            continue
-        m = _M2TS_DETAIL_SEGMENT_RE.match(piece)
-        if not m:
-            return []
-        name = m.group(1).strip()
-        start_sec = _parse_m2ts_detail_time_to_seconds(m.group(2))
-        end_sec = _parse_m2ts_detail_time_to_seconds(m.group(3))
-        segments.append((name, start_sec, end_sec))
-    return segments
 
 
 def _movie_sp_duration_matches_main(sp_duration_sec: float, main_duration_sec: float) -> bool:
@@ -152,34 +97,6 @@ def _playlist_mpls_path(bdmv_root: str, selected_mpls: str) -> str:
     stem = os.path.splitext(os.path.basename(norm))[0]
     return os.path.normpath(os.path.join(root, 'BDMV', 'PLAYLIST', f'{stem}.mpls'))
 
-
-def _m2ts_has_video_or_audio(stream_path: str) -> bool:
-    try:
-        for s in MediaInfoTrackMappingMixin._m2ts_track_streams(stream_path) or []:
-            if str(s.get('codec_type') or '') in ('video', 'audio'):
-                return True
-    except Exception:
-        pass
-    return False
-
-
-def _filter_m2ts_file_detail_by_basenames(detail: str, basenames: list[str]) -> str:
-    wanted = {
-        os.path.basename(str(b or '')).strip().lower()
-        for b in basenames
-        if str(b or '').strip()
-    }
-    if not wanted:
-        return str(detail or '').strip()
-    parts: list[str] = []
-    for part in str(detail or '').split(','):
-        piece = part.strip()
-        if not piece:
-            continue
-        head = piece.split('(', 1)[0].strip().lower()
-        if head in wanted:
-            parts.append(piece)
-    return ','.join(parts)
 
 
 class MiscWorkflowsMixin(BluraySubtitleServiceBase):
@@ -274,10 +191,6 @@ class MiscWorkflowsMixin(BluraySubtitleServiceBase):
             sub_index += 1
         return configuration
 
-    @staticmethod
-    def _sanitize_movie_output_basename(name: str) -> str:
-        text = str(name or '').strip()
-        return ''.join(_MOVIE_OUTPUT_CHAR_MAP.get(ch, ch) for ch in text)
 
     def _sp_m2ts_detail_for_entry(self, bdmv_index: int, mpls_file: str, m2ts_files: list[str]) -> str:
         mpls_name = str(mpls_file or '').strip()
@@ -289,7 +202,7 @@ class MiscWorkflowsMixin(BluraySubtitleServiceBase):
                 try:
                     detail = MediaInfoTrackMappingMixin.m2ts_file_detail_from_mpls_playlist(mpls_path).strip()
                     if detail and m2ts_files:
-                        detail = _filter_m2ts_file_detail_by_basenames(detail, m2ts_files)
+                        detail = filter_m2ts_file_detail_by_basenames(detail, m2ts_files)
                     return detail
                 except Exception:
                     return ''
@@ -316,7 +229,7 @@ class MiscWorkflowsMixin(BluraySubtitleServiceBase):
                 continue
             if sp_detail == ep_detail:
                 return True
-            if _m2ts_file_detail_segments_contained_in(sp_detail, ep_detail):
+            if m2ts_file_detail_segments_contained_in(sp_detail, ep_detail):
                 return True
         return False
 
@@ -344,7 +257,7 @@ class MiscWorkflowsMixin(BluraySubtitleServiceBase):
             disc_name = self._resolve_disc_output_name(mpls_no_ext)
             bdmv_vol = f'{bdmv_index:03d}'
             auto_name = f'{disc_name}.mkv' if single_volume else f'{disc_name}_BD_Vol_{bdmv_vol}.mkv'
-            output_name = self._sanitize_movie_output_basename(auto_name)
+            output_name = ''.join(_MOVIE_OUTPUT_CHAR_MAP.get(character, character) for character in auto_name.strip())
             mpls_path = os.path.normpath(os.path.join(folder, 'BDMV', 'PLAYLIST', f'{mpls_no_ext}.mpls'))
             chapter = Chapter(mpls_path if os.path.isfile(mpls_path) else f'{mpls_no_ext}.mpls')
             rows = sum(map(len, chapter.mark_info.values()))
@@ -512,7 +425,15 @@ class MiscWorkflowsMixin(BluraySubtitleServiceBase):
                         dur = MediaInfoTrackMappingMixin._m2ts_duration_90k(m2ts_path) / 90000.0
                     except Exception:
                         dur = 0.0
-                orphan_selected = bool(dur >= 30.0) and _m2ts_has_video_or_audio(m2ts_path)
+                orphan_selected = False
+                if dur >= 30.0:
+                    try:
+                        orphan_selected = any(
+                            str(stream.get('codec_type') or '') in ('video', 'audio')
+                            for stream in MediaInfoTrackMappingMixin._m2ts_track_streams(m2ts_path) or []
+                        )
+                    except Exception:
+                        pass
                 main_dur = main_duration_by_bdmv.get(1)
                 if orphan_selected and main_dur is not None and _movie_sp_duration_matches_main(
                         float(dur), main_dur):

@@ -75,7 +75,7 @@ class AudioConversionTests(unittest.TestCase):
                     patch('src.runtime.audio_conversion._identify_tracks', side_effect=[source_tracks, output_tracks]),
                     patch('src.runtime.audio_conversion.find_mkvtoolnix'),
                     patch('src.runtime.audio_conversion.core_settings.MKV_MERGE_PATH', 'mkvmerge'),
-                    patch('src.runtime.audio_conversion.subprocess.run', side_effect=run_command),
+                    patch('src.runtime.audio_conversion.run_command', side_effect=run_command),
             ):
                 mux_with_audio_conversion(
                     str(source),
@@ -116,15 +116,13 @@ class AudioConversionTests(unittest.TestCase):
             def run_command(command, **_kwargs):
                 command = list(command)
                 commands.append(command)
-                if 'tracks' in command:
+                if command[0] == 'ffmpeg':
+                    Path(command[-1]).write_bytes(b'flac')
+                elif 'tracks' in command:
                     Path(command[-1].split(':', 1)[1]).write_bytes(b'truehd')
                 else:
                     Path(command[command.index('-o') + 1]).write_bytes(b'muxed')
                 return SimpleNamespace(returncode=0)
-
-            def convert_audio(command):
-                Path(command[-1]).write_bytes(b'flac')
-                return 0
 
             with (
                     patch('src.runtime.audio_conversion._identify_tracks', side_effect=[source_tracks, output_tracks]),
@@ -134,8 +132,7 @@ class AudioConversionTests(unittest.TestCase):
                     patch('src.runtime.audio_conversion.core_settings.FFMPEG_PATH', 'ffmpeg'),
                     patch('src.runtime.audio_conversion.core_settings.TRUEHDD_PATH', ''),
                     patch('src.runtime.audio_conversion.shutil.which', return_value=''),
-                    patch('src.runtime.audio_conversion.subprocess.run', side_effect=run_command),
-                    patch('src.runtime.audio_conversion._run_audio_command', side_effect=convert_audio),
+                    patch('src.runtime.audio_conversion.run_command', side_effect=run_command),
             ):
                 mux_with_audio_conversion(
                     str(source),
@@ -174,8 +171,7 @@ class AudioConversionTests(unittest.TestCase):
                     patch('src.runtime.audio_conversion.find_mkvtoolnix'),
                     patch('src.runtime.audio_conversion.core_settings.MKV_MERGE_PATH', 'mkvmerge'),
                     patch('src.runtime.audio_conversion._truehdd_path', return_value=''),
-                    patch('src.runtime.audio_conversion.subprocess.run', side_effect=run_mux),
-                    patch('src.runtime.audio_conversion._run_audio_command') as run_audio,
+                    patch('src.runtime.audio_conversion.run_command', side_effect=run_mux),
             ):
                 mux_with_audio_conversion(
                     str(source),
@@ -185,7 +181,7 @@ class AudioConversionTests(unittest.TestCase):
                     audio_codec_choices=('flac',),
                 )
 
-            run_audio.assert_not_called()
+            self.assertEqual(len(commands), 1)
             self.assertEqual(output.read_bytes(), b'muxed')
             self.assertEqual(commands[0][commands[0].index('-a') + 1], '1')
 
@@ -204,6 +200,8 @@ class AudioConversionTests(unittest.TestCase):
             def run_command(command, **_kwargs):
                 command = list(command)
                 commands.append(command)
+                if command[0] == 'truehdd':
+                    return SimpleNamespace(returncode=3)
                 if 'tracks' in command:
                     Path(command[-1].split(':', 1)[1]).write_bytes(b'truehd')
                 else:
@@ -217,8 +215,7 @@ class AudioConversionTests(unittest.TestCase):
                     patch('src.runtime.audio_conversion.core_settings.MKV_MERGE_PATH', 'mkvmerge'),
                     patch('src.runtime.audio_conversion.core_settings.FFMPEG_PATH', 'ffmpeg'),
                     patch('src.runtime.audio_conversion._truehdd_path', return_value='truehdd'),
-                    patch('src.runtime.audio_conversion.subprocess.run', side_effect=run_command),
-                    patch('src.runtime.audio_conversion._run_audio_command', return_value=3) as run_audio,
+                    patch('src.runtime.audio_conversion.run_command', side_effect=run_command),
             ):
                 mux_with_audio_conversion(
                     str(source),
@@ -228,8 +225,7 @@ class AudioConversionTests(unittest.TestCase):
                     audio_codec_choices=('flac',),
                 )
 
-            self.assertEqual(run_audio.call_count, 1)
-            self.assertEqual(run_audio.call_args.args[0][0], 'truehdd')
+            self.assertEqual(sum(command[0] == 'truehdd' for command in commands), 1)
             self.assertEqual(output.read_bytes(), b'muxed')
             self.assertEqual(commands[-1][commands[-1].index('-a') + 1], '1')
 
@@ -245,6 +241,8 @@ class AudioConversionTests(unittest.TestCase):
             ]
 
             def extract_track(command, **_kwargs):
+                if 'tracks' not in command:
+                    return SimpleNamespace(returncode=5)
                 extracted_path = Path(command[-1].split(':', 1)[1])
                 extracted_path.write_bytes(b'truehd')
                 return SimpleNamespace(returncode=0)
@@ -256,8 +254,7 @@ class AudioConversionTests(unittest.TestCase):
                     patch('src.runtime.audio_conversion.core_settings.FFMPEG_PATH', 'ffmpeg'),
                     patch('src.runtime.audio_conversion.core_settings.TRUEHDD_PATH', ''),
                     patch('src.runtime.audio_conversion.shutil.which', return_value=''),
-                    patch('src.runtime.audio_conversion.subprocess.run', side_effect=extract_track),
-                    patch('src.runtime.audio_conversion._run_audio_command', return_value=5),
+                    patch('src.runtime.audio_conversion.run_command', side_effect=extract_track),
             ):
                 with self.assertRaisesRegex(RuntimeError, 'Audio conversion failed'):
                     mux_with_audio_conversion(
@@ -343,11 +340,11 @@ class DolbyVisionTests(unittest.TestCase):
             def run_dovi(command, **_kwargs):
                 commands.append(list(command))
                 Path(command[command.index('-o') + 1]).write_bytes(b'combined')
-                return 0
+                return SimpleNamespace(returncode=0)
 
             with (
                     patch('src.runtime.dolby_vision.dolby_vision_tool_path', return_value='dovi_tool'),
-                    patch('src.runtime.dolby_vision._run_dolby_vision_command', side_effect=run_dovi),
+                    patch('src.runtime.dolby_vision.run_command', side_effect=run_dovi),
             ):
                 mux_dolby_vision_layers(str(base_layer), str(enhancement_layer))
 
@@ -362,25 +359,22 @@ class DolbyVisionTests(unittest.TestCase):
             source.write_bytes(b'source')
             dovi_commands: list[list[str]] = []
 
-            def extract_track(command, **_kwargs):
-                extracted_path = Path(command[-1].split(':', 1)[1])
-                extracted_path.write_bytes(b'hevc')
-                return SimpleNamespace(returncode=0)
-
-            def run_dovi(command, **_kwargs):
-                dovi_commands.append(list(command))
-                if 'demux' in command:
-                    Path(command[command.index('-b') + 1]).write_bytes(b'base')
+            def run_tool(command, **_kwargs):
+                if 'tracks' in command:
+                    Path(command[-1].split(':', 1)[1]).write_bytes(b'hevc')
                 else:
-                    Path(command[command.index('-o') + 1]).write_bytes(b'rpu')
-                return 0
+                    dovi_commands.append(list(command))
+                    if 'demux' in command:
+                        Path(command[command.index('-b') + 1]).write_bytes(b'base')
+                    else:
+                        Path(command[command.index('-o') + 1]).write_bytes(b'rpu')
+                return SimpleNamespace(returncode=0)
 
             with (
                     patch('src.runtime.dolby_vision.dolby_vision_tool_path', return_value='dovi_tool'),
                     patch('src.runtime.dolby_vision.find_mkvtoolnix'),
                     patch('src.runtime.dolby_vision.core_settings.MKV_EXTRACT_PATH', 'mkvextract'),
-                    patch('src.runtime.dolby_vision.subprocess.run', side_effect=extract_track),
-                    patch('src.runtime.dolby_vision._run_dolby_vision_command', side_effect=run_dovi),
+                    patch('src.runtime.dolby_vision.run_command', side_effect=run_tool),
             ):
                 first_plan = prepare_dolby_vision_encode(str(source), 0, str(root))
                 second_plan = prepare_dolby_vision_encode(str(source), 0, str(root))

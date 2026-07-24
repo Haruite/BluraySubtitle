@@ -317,7 +317,7 @@ class AddChaptersWorkflowTests(unittest.TestCase):
             tool_path.write_bytes(b'tool')
 
             with patch('src.domain.media.mkv_container.core_settings.MKV_MERGE_PATH', str(tool_path)), patch(
-                    'src.domain.media.mkv_container.subprocess.run',
+                    'src.domain.media.mkv_container.run_command',
                     return_value=SimpleNamespace(returncode=0),
             ) as run_command:
                 mkv = MKV.__new__(MKV)
