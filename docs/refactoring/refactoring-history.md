@@ -29,9 +29,9 @@ History entries must reflect the author's documented intent. Unresolved behavior
 | Phase 2 | GUI-to-worker-to-service configuration ownership | Complete | `ceb2927` |
 | Phase 3.1 | Merge Subtitles workflow | Complete | `7def4df` |
 | Phase 3.2 | Add Chapters workflow | Complete | `107cea1` |
-| Phase 3.3 | Blu-ray Remux workflow | Complete | This change |
-| Phase 3.4 | Blu-ray Encode workflow | Pending | — |
-| Phase 3.5 | SP, track alignment, and missing-track repair | Pending | — |
+| Phase 3.3 | Blu-ray Remux workflow | Complete | `b89f995` |
+| Phase 3.4 | Blu-ray Encode workflow | Complete | `d4adee2` |
+| Phase 3.5 | SP, track alignment, and missing-track repair | Complete | This change |
 | Phase 3.6 | Audio conversion and Dolby Vision | Pending | — |
 
 ## Phase 1 — Contract and Safety Baseline
@@ -236,7 +236,7 @@ Date: 2026-07-23
 ## Phase 3.3 — Blu-ray Remux Workflow
 
 Date: 2026-07-22
-Commit: Included in this change
+Commit: `b89f995` (`refactor(remux): rebuild main playlist workflow`)
 
 ### Scope
 
@@ -291,7 +291,7 @@ SP, including its own output-language mapping, track alignment and missing-track
 ## Phase 3.4 — Blu-ray Encode Main Workflow
 
 Date: 2026-07-22
-Commit: Included in this change
+Commit: `d4adee2` (`refactor(encode): unify Blu-ray and Remux encode workflows`)
 
 ### Scope
 
@@ -344,3 +344,53 @@ Rebuilt the Encode launch, worker, Blu-ray staging, and shared row-execution pat
 ### Deferred
 
 SP muxing and special-output algorithms, track alignment and missing-track repair, lossless-audio conversion internals, and Dolby Vision preparation/injection internals were not redesigned. This phase changes only their request/orchestration boundary and failure propagation where required to make the Encode main workflow truthful.
+
+## Phase 3.5 — SP, Track Alignment, and Missing-Track Repair
+
+Date: 2026-07-24
+Commit: Included in this change
+
+### Scope
+
+Rebuilt SP request capture, preflight planning, mux/extract execution, episode-linked SP handling, track-aligned fallback, and missing-track repair. Remux and Blu-ray-source Encode now use the same SP planner and executor.
+
+### Redundant or Conflicting Paths Removed
+
+- Removed the legacy SP executor that rediscovered sources and outputs at runtime, swallowed command failures, and continued after selected rows failed.
+- Removed the old directory-rescan SP branch and the separate single-clip and multi-clip aligned fallback implementations.
+- Removed unused duplicate silence-patching and slot-planning helpers.
+- Removed the track-editor side effect that copied an SP row's audio/subtitle selection into the main-playlist configuration.
+- Replaced best-effort shell execution in the SP primary, raw extraction, image extraction, episode-linked mux, chapter restore, silence generation, and aligned concatenation paths with checked argument-list execution.
+
+### Logic Changes
+
+- Each visible SP row is captured as an immutable entry. Remux and Blu-ray-source Encode refuse to launch while the SP track scan is still running.
+- All selected non-empty SP rows are planned before the task creates its first output directory. Planning resolves the exact source, exact visible output, selected tracks, edited languages, duplicate/existing outputs, and episode-output links.
+- Unchecked rows and rows whose empty output name intentionally represents no selected track remain skipped. Any other selected SP failure now stops the task instead of being silently ignored.
+- Container muxing explicitly disables unselected audio/subtitle tracks, and `.mka`/`.mks` outputs explicitly disable video. The exact GUI output name is used without runtime renaming or output rediscovery.
+- SP track languages are applied and verified on standalone container outputs. Episode-linked SP languages are applied only to newly appended SP tracks; the original episode is atomically replaced only after mux, chapter restoration, and language verification succeed. Raw/image outputs reject language metadata before execution.
+- One shared aligned fallback now handles both one-clip and multi-clip playlists. It maps each clip to the reference PID layout, requires tsMuxer to recover missing non-audio tracks, tries tsMuxer for missing audio, fills only the remaining audio gaps with format-matched silence, and verifies the final PID set before using the result.
+- `mkvmerge` return code 1 is consistently accepted as success with warnings in the aligned fallback, while a missing planned output still fails the task.
+
+### Documentation and i18n
+
+- Updated both README versions with exact SP request behavior, failure handling, language support, unified alignment, and the tsMuxer-before-silence repair order.
+- Added bilingual SP scan, preflight, execution, language, source, output, chapter, and fallback messages.
+- Synchronized the service IDE compatibility declarations and updated the batch Remux caller for the typed SP contract.
+
+### Verification
+
+- Added focused tests for exact SP outputs/tracks/languages, missing captured configuration, existing outputs, episode links, explicit track disabling, selected-row failure, shared single-clip fallback, tsMuxer-unavailable audio silence, and unrecoverable non-audio tracks.
+- The concentrated repository run completed 125 tests successfully.
+- Python compilation/import, i18n audit, split-contract audit, and `git diff --check` passed before the final line-ending audit.
+
+### Manual Media Checks Still Required
+
+- Remux an anime disc from `E:\BDMV` with several selected and unselected SP rows; verify visible output names, raw/container/image types, chapters, track selection, and existing-output rejection.
+- Edit one SP audio or subtitle language and verify the final `.mkv`, `.mka`, or `.mks` metadata. Also test an episode-linked SP row and confirm the episode chapters and original tracks remain intact.
+- Exercise both a one-clip and a multi-clip track-aligned fallback. Confirm missing audio is recovered by tsMuxer when available and uses silence only when recovery is unavailable; an unrecoverable missing subtitle/video track must fail.
+- Repeat the selected SP checks through Blu-ray-source Encode staging. The original Blu-ray directory must remain unchanged.
+
+### Deferred
+
+Audio-conversion algorithms and Dolby Vision preparation/injection remain Phase 3.6. This phase only preserves their existing integration points while refactoring SP and track alignment.

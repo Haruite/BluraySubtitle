@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from src.runtime.sp import SpEntry
+
 
 @dataclass(frozen=True)
 class RemuxRequest:
@@ -15,7 +17,7 @@ class RemuxRequest:
     output_folder: str
     configuration: dict[int, dict[str, int | str]]
     selected_mpls: tuple[tuple[str, str], ...]
-    sp_entries: tuple[dict[str, int | str], ...]
+    sp_entries: tuple[SpEntry, ...]
     episode_output_names: tuple[str, ...]
     episode_subtitle_languages: tuple[str, ...]
     movie_mode: bool = False

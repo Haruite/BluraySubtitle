@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import QTableWidget
 from src.bdmv import Chapter
 from src.runtime.remux import RemuxMainJob, RemuxRequest
 from src.runtime.encode import EncodeRequest, EncodeRow
+from src.runtime.sp import SpEntry, SpJob
 
 
 class BluraySubtitleServiceBase:
@@ -191,18 +192,13 @@ class BluraySubtitleServiceBase:
         """Finalize folder layout after processing and clean temporary artifacts."""
         raise NotImplementedError
 
-    def _create_sp_mkvs_from_entries(
+    def _build_sp_outputs(
             self,
-            bdmv_index_conf: dict[int, list[dict[str, int | str]]],
-            sp_entries: list[dict[str, int | str]],
-            sps_folder: str,
+            jobs: list[SpJob],
             cancel_event: Optional[threading.Event] = None,
             progress_cb: Optional[Callable[[int, str], None]] = None,
-            dst_folder: Optional[str] = None,
-            episode_output_names: Optional[list[str]] = None,
-            configuration_full: Optional[dict[int, dict[str, int | str]]] = None,
     ) -> list[tuple[int, str]]:
-        """Stub for `_create_sp_mkvs_from_entries`."""
+        """Stub for `_build_sp_outputs`."""
         raise NotImplementedError
 
     def _write_chapter_txt_from_mpls(self, mpls_path: str, chapter_txt_path: str) -> list[float]:
@@ -428,26 +424,18 @@ class BluraySubtitleServiceBase:
     def _channel_layout_from_count(ch: int) -> str:
         """Stub for `_channel_layout_from_count`."""
         raise NotImplementedError
-
     @staticmethod
-    def _build_slot_mux_plan_with_silence(ref_slots: list[dict[str, object]], m2ts_path: str) -> Optional[list[dict[str, object]]]:
-        """
-        Resolve each reference slot to current m2ts track id.
-        Missing audio slots are marked with ``needs_silence=True``; video/subtitle must exist.
-        """
-        raise NotImplementedError
 
-    @staticmethod
     def _create_silence_track_for_audio_slot(ref_audio_stream: dict[str, object], duration_sec: float, out_path: str) -> bool:
         """Stub for `_create_silence_track_for_audio_slot`."""
         raise NotImplementedError
 
-    def _try_remux_mpls_track_aligned_concat(self, mpls_path: str, output_file: str, copy_audio_track: list[str], copy_sub_track: list[str], cover: str, cancel_event: Optional[threading.Event]=None, *, max_play_items: Optional[int]=None) -> bool:
+    def _try_remux_mpls_track_aligned(self, mpls_path: str, output_file: str, copy_audio_track: list[str], copy_sub_track: list[str], cover: str, cancel_event: Optional[threading.Event]=None, *, max_play_items: Optional[int]=None) -> bool:
         """
         Fallback when direct ``mkvmerge … mpls`` fails (e.g. different track counts across m2ts).
         Track identity uses ``streams[].id`` (e.g. ``0x1011``) as PID; mkvmerge track id = stream ``index``.
         Per-clip m2ts mux with ``--split parts`` if needed, ``--track-order`` aligned to first m2ts, then
-        ``+`` concat with ``--append-mode track``. Track languages come from mux only (no mkvpropedit lang pass).
+        ``+`` concat with ``--append-mode track``. Callers apply configured languages after success.
         """
         raise NotImplementedError
 
@@ -470,6 +458,17 @@ class BluraySubtitleServiceBase:
 
     def _prepare_remux_main_jobs(self, request: RemuxRequest) -> tuple[str, list[RemuxMainJob]]:
         """Stub for `_prepare_remux_main_jobs`."""
+        raise NotImplementedError
+
+    def _prepare_sp_jobs(
+            self,
+            entries: tuple[SpEntry, ...],
+            destination_folder: str,
+            main_jobs: list[RemuxMainJob],
+            track_selection_config: dict[str, dict[str, list[str]]] | None,
+            track_language_config: dict[str, dict[str, str]],
+    ) -> list[SpJob]:
+        """Stub for `_prepare_sp_jobs`."""
         raise NotImplementedError
 
     def _apply_episode_output_names(self, mkv_files: list[str], output_names: Optional[list[str]]=None) -> list[str]:
@@ -561,10 +560,6 @@ class BluraySubtitleServiceBase:
         """Stub for `extract_lossless`."""
         raise NotImplementedError
 
-    @staticmethod
-    def _absolute_selected_mpls_from_conf_row(conf: dict[str, int | str], playlist_dir: str) -> str:
-        raise NotImplementedError
-
     def _assign_movie_sp_output_names(self, entries: list[dict[str, object]]) -> None:
         raise NotImplementedError
 
@@ -597,9 +592,6 @@ class BluraySubtitleServiceBase:
     def _compute_mkv_id_to_m2ts_pid_for_main_mpls(self, mpls_path: str) -> dict[int, int]:
         raise NotImplementedError
 
-    def _conf_key_matching_episode_basename(self, basename: str, episode_output_names: list[str], configuration: dict[int, dict[str, int | str]]):
-        raise NotImplementedError
-
     @staticmethod
     def _configuration_drop_invalid_episode_rows(configuration: dict[int, dict[str, int | str]]) -> dict[int, dict[str, int | str]]:
         raise NotImplementedError
@@ -629,10 +621,6 @@ class BluraySubtitleServiceBase:
 
     @staticmethod
     def _enrich_configuration_chapter_bounds(configuration: dict[int, dict[str, int | str]]) -> None:
-        raise NotImplementedError
-
-    @staticmethod
-    def _episode_ident_tid_transport_pid(ident_ep: dict, tid: int) -> Optional[int]:
         raise NotImplementedError
 
     @staticmethod
@@ -728,10 +716,6 @@ class BluraySubtitleServiceBase:
         raise NotImplementedError
 
     @staticmethod
-    def _mkvmerge_episode_tid_for_pid(ident_ep: dict, want_pid: int, allowed_types: tuple[str, ...]) -> Optional[int]:
-        raise NotImplementedError
-
-    @staticmethod
     def _mkvmerge_exe() -> str:
         raise NotImplementedError
 
@@ -769,7 +753,7 @@ class BluraySubtitleServiceBase:
     def _mpls_identify_pids_by_type(ident: dict[str, object]) -> dict[str, list[int]]:
         raise NotImplementedError
 
-    def _mux_episode_linked_sp_mkvmerge(self, *, episode_mkv: str, sp_mpls_path: str, episode_main_mpls: str, cmd_audio_sp: list[str], cmd_sub_sp: list[str], cancel_event: Optional[threading.Event]) -> bool:
+    def _mux_episode_linked_sp_mkvmerge(self, *, episode_mkv: str, sp_mpls_path: str, episode_main_mpls: str, cmd_audio_sp: list[str], cmd_sub_sp: list[str], language_by_sp_track_id: dict[str, str], cancel_event: Optional[threading.Event]) -> bool:
         raise NotImplementedError
 
     @staticmethod
@@ -782,9 +766,6 @@ class BluraySubtitleServiceBase:
 
     @staticmethod
     def _parse_tsmuxer_probe_output(text: str) -> list[dict[str, object]]:
-        raise NotImplementedError
-
-    def _patch_missing_audio_with_silence(self, mkv_path: str, ref_slots: list[dict[str, object]], first_m2ts: str, clip_duration_sec: float, work_dir: str, tag: str, exe: str, ui: str) -> bool:
         raise NotImplementedError
 
     @staticmethod
@@ -835,7 +816,7 @@ class BluraySubtitleServiceBase:
     def _remux_fallback_run_tsmuxer_demux_subset(m2ts_path: str, work_dir: str, part_tag: str, pid_to_lang: dict[int, str], want_pids: set[int], tsm_all: list[dict[str, object]], *, path_tag: Optional[str]=None) -> Optional[dict[int, str]]:
         raise NotImplementedError
 
-    def _remux_one_m2ts_clip_or_tsmuxer(self, m2ts_path: str, mpls_path: str, first_m2ts: str, ref_slots: list[dict[str, object]], part_out: str, split_arg: str, clip_duration_sec: float, work_dir: str, part_tag: str, exe: str, ui: str) -> bool:
+    def _remux_aligned_clip(self, m2ts_path: str, mpls_path: str, first_m2ts: str, ref_slots: list[dict[str, object]], part_out: str, split_arg: str, clip_duration_sec: float, work_dir: str, part_tag: str, exe: str, ui: str) -> bool:
         raise NotImplementedError
 
     @staticmethod
@@ -868,14 +849,7 @@ class BluraySubtitleServiceBase:
         raise NotImplementedError
 
     @staticmethod
-    def _sp_output_is_episode_linked(output_name: str) -> bool:
-        raise NotImplementedError
-
-    @staticmethod
     def _split_parts_from_start_duration(duration_sec: float) -> str:
-        raise NotImplementedError
-
-    def _try_remux_mpls_single_clip_track_aligned(self, mpls_path: str, output_file: str, copy_audio_track: list[str], copy_sub_track: list[str], cancel_event: Optional[threading.Event]=None) -> bool:
         raise NotImplementedError
 
     @staticmethod

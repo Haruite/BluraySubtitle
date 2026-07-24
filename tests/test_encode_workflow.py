@@ -101,7 +101,7 @@ class _BdmvEncodeService(_RowEncodeService):
         Path(staged_output).write_bytes(b'remux')
         return [staged_output]
 
-    def _create_sp_mkvs_from_entries(self, *_args, **_kwargs):
+    def _build_sp_outputs(self, *_args, **_kwargs):
         return []
 
     def _encode_mkv_rows(self, request, main_rows, sp_rows, cancel_event, **_kwargs):

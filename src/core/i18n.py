@@ -8,6 +8,22 @@ from typing import Optional
 import src.core.settings as _core_settings
 
 I18N_ZH_TO_EN = {
+    'SP 轨道扫描仍在进行': 'SP track scan is still running',
+    '第 {row} 行 SP 的蓝光原盘索引无效': 'SP row {row} has an invalid Blu-ray disc index',
+    '第 {row} 行 SP 没有对应的蓝光原盘目录': 'SP row {row} has no matching Blu-ray directory',
+    '第 {row} 行 SP 源不存在：{path}': 'SP source does not exist in row {row}: {path}',
+    '第 {row} 行 SP 没有源文件': 'SP row {row} has no source file',
+    '第 {row} 行 SP 没有捕获到轨道选择': 'SP row {row} has no captured track selection',
+    'SP 输出位于所选输出文件夹之外：{path}': 'SP output is outside the selected output folder: {path}',
+    '第 {row} 行 SP 没有匹配到计划中的分集输出：{path}': 'SP row {row} does not match a planned episode output: {path}',
+    '无法对第 {row} 行 SP 输出应用轨道语言：{path}': 'Track languages cannot be applied to SP output in row {row}: {path}',
+    '压制 SP 行没有任务配置': 'Encode SP row has no task configuration',
+    '第 {row} 行 SP 处理失败：{path}': 'SP processing failed in row {row}: {path}',
+    '第 {row} 行 SP 图像输出路径无效：{path}': 'SP row {row} has an invalid image output path: {path}',
+    '第 {row} 行 SP 没有对应的主播放列表': 'SP row {row} has no matching main playlist',
+    '第 {row} 行 SP 章节范围无效': 'SP row {row} has an invalid chapter range',
+    '轨道对齐回退：{name}': 'Track-aligned fallback: {name}',
+    '多输出轨道对齐回退：{name}': 'Multi-output track-aligned fallback: {name}',
     '正在修正轨道语言：': 'Correcting track languages: ',
     '无法把已配置的轨道语言映射到：{path}': 'Configured track languages could not be mapped to: {path}',
     '轨道语言修正未应用到：{path}': 'Track language correction did not apply to: {path}',

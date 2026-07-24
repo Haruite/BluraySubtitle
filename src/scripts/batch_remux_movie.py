@@ -97,6 +97,7 @@ def remux_one_disc(bdmv_folder: str, movie_root: str, output_root: str) -> None:
     from src.core import find_mkvtoolnix, translate_text
     from src.runtime.remux import RemuxRequest
     from src.runtime.services import BluraySubtitle
+    from src.runtime.sp import SpEntry
 
     bdmv_folder = os.path.normpath(bdmv_folder)
     playlist_cwd = os.path.join(bdmv_folder, 'BDMV', 'PLAYLIST')
@@ -138,7 +139,7 @@ def remux_one_disc(bdmv_folder: str, movie_root: str, output_root: str) -> None:
             output_folder=os.path.normpath(remux_parent),
             configuration=configuration,
             selected_mpls=tuple(selected_mpls),
-            sp_entries=tuple(sp_entries),
+            sp_entries=tuple(SpEntry.from_mapping(entry) for entry in sp_entries),
             episode_output_names=tuple(episode_output_names),
             episode_subtitle_languages=tuple('' for _ in configuration),
             movie_mode=True,

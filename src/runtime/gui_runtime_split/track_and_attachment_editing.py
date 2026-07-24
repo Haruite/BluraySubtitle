@@ -1922,18 +1922,6 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             lang_cfg = getattr(self, '_track_language_config', {})
             lang_cfg[key] = dict(getattr(self, '_last_track_language_map', {}) or {})
             self._track_language_config = lang_cfg
-            if mpls_file:
-                try:
-                    playlist_dir = self._get_playlist_dir_for_bdmv_index(bdmv_index)
-                    if playlist_dir:
-                        main_key = f'main::{os.path.normpath(os.path.join(playlist_dir, mpls_file))}'
-                        cfg[main_key] = {'audio': list(audio), 'subtitle': list(subtitle)}
-                    selected_main_path = self._get_main_mpls_path_for_bdmv_index(bdmv_index)
-                    if selected_main_path:
-                        selected_main_key = f'main::{os.path.normpath(selected_main_path)}'
-                        cfg[selected_main_key] = {'audio': list(audio), 'subtitle': list(subtitle)}
-                except Exception:
-                    pass
             keep_row = row
             keep_col = ENCODE_SP_LABELS.index('output_name')
             keep_h_scroll = self.table3.horizontalScrollBar().value() if self.table3.horizontalScrollBar() else 0

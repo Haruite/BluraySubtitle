@@ -419,9 +419,8 @@ class RemuxWorkflowTests(unittest.TestCase):
                 _set_dovi_mux_plan_for_mpls=lambda path: None,
                 _mkvmerge_identify_covers_remux_slots=lambda *args: True,
                 _run_shell_command_detailed=lambda command: (2, [2]),
-                _try_remux_mpls_single_clip_track_aligned=lambda *args, **kwargs: False,
                 _try_remux_mpls_split_outputs_track_aligned=lambda *args, **kwargs: False,
-                _try_remux_mpls_track_aligned_concat=lambda *args, **kwargs: False,
+                _try_remux_mpls_track_aligned=lambda *args, **kwargs: False,
             )
 
             with patch.object(remux_service_module, 'Chapter', return_value=_FakeChapter()):
@@ -471,9 +470,8 @@ class RemuxWorkflowTests(unittest.TestCase):
                 _dovi_mux_plan=None,
                 _mkvmerge_identify_covers_remux_slots=lambda *args: True,
                 _run_shell_command_detailed=lambda command: (2, [2]),
-                _try_remux_mpls_single_clip_track_aligned=fallback,
                 _try_remux_mpls_split_outputs_track_aligned=lambda *args, **kwargs: False,
-                _try_remux_mpls_track_aligned_concat=lambda *args, **kwargs: False,
+                _try_remux_mpls_track_aligned=fallback,
             )
 
             chapter = SimpleNamespace(in_out_time=[('00001', 0, 45000)])

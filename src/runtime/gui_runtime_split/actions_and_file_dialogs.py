@@ -33,6 +33,7 @@ from src.exports.utils import (
     chapter_view_segment_trace_begin,
     chapter_view_segment_trace_end,
 )
+from src.runtime.sp import SpEntry
 from src.runtime.gui_runtime_classes.encode_worker import EncodeWorker
 from src.runtime.encode import EncodeRequest, EncodeRow, EncodeSettings, validate_encode_request
 from src.runtime.gui_runtime_classes.file_path_table_widget_item import FilePathTableWidgetItem
@@ -961,6 +962,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             return
 
         try:
+            if bool(getattr(self, '_sp_scan_in_progress', False)):
+                raise RuntimeError(self.t('SP track scan is still running'))
             self.ensure_default_vpy_file()
             vspipe_mode = 'bundle' if self.vspipe_mode_combo.currentText() == 'Built-in' else 'system'
             encoder_mode = 'bundle' if self.x265_mode_combo.currentText() == 'Built-in' else 'system'
@@ -1095,8 +1098,10 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                         for row in main_rows
                     }
                     for row_index in range(self.table3.rowCount()):
-                        sp_entry = self._table3_get_sp_entry_for_row(row_index)
-                        output_name = str(sp_entry.get('output_name') or '').strip()
+                        sp_entry = SpEntry.from_mapping(
+                            self._table3_get_sp_entry_for_row(row_index)
+                        )
+                        output_name = sp_entry.output_name
                         sp_output_path = (
                             os.path.normpath(os.path.join(output_folder, output_name))
                             if output_name
@@ -1107,7 +1112,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                             output_path=sp_output_path,
                             vpy_path=self.get_sp_vpy_path_from_row(row_index) or self.get_default_vpy_path(),
                             sp_entry=sp_entry,
-                            selected=bool(sp_entry.get('selected', True)),
+                            selected=bool(sp_entry.selected and output_name),
                             uses_main_output=bool(
                                 sp_output_path
                                 and os.path.normcase(os.path.abspath(sp_output_path))

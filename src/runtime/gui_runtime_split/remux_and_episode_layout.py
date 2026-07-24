@@ -19,6 +19,7 @@ from src.domain import Subtitle
 from src.exports.utils import get_time_str, get_index_to_m2ts_and_offset, print_exc_terminal, get_folder_size
 from src.runtime.gui_runtime_classes.file_path_table_widget_item import FilePathTableWidgetItem
 from src.runtime.gui_runtime_classes.remux_worker import RemuxWorker
+from src.runtime.sp import SpEntry
 from src.runtime.remux import RemuxRequest
 from src.runtime.services import BluraySubtitle
 from .gui_base import BluraySubtitleGuiBase
@@ -1310,9 +1311,11 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             ]
             episode_output_names = self._get_episode_output_names_from_table2()
             episode_subtitle_languages = self._get_episode_subtitle_languages_from_table2()
+            if bool(getattr(self, '_sp_scan_in_progress', False)):
+                raise RuntimeError(self.t('SP track scan is still running'))
             sp_entries = (
                 [
-                    self._table3_get_sp_entry_for_row(row)
+                    SpEntry.from_mapping(self._table3_get_sp_entry_for_row(row))
                     for row in range(self.table3.rowCount())
                 ]
                 if hasattr(self, 'table3')
@@ -1350,7 +1353,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 output_folder=output_folder,
                 configuration=copy.deepcopy(configuration),
                 selected_mpls=tuple(normalized_selected_mpls),
-                sp_entries=tuple(copy.deepcopy(sp_entries)),
+                sp_entries=tuple(sp_entries),
                 episode_output_names=tuple(episode_output_names),
                 episode_subtitle_languages=tuple(episode_subtitle_languages),
                 movie_mode=bool(self._is_movie_mode()),

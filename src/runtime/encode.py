@@ -10,6 +10,7 @@ from src.core import find_mkvtoolnix
 from src.core import settings as core_settings
 from src.core.i18n import translate_text
 from src.exports.utils import get_vspipe_context, resolve_encoder_executable_path
+from src.runtime.sp import SpEntry
 
 
 @dataclass(frozen=True)
@@ -37,7 +38,7 @@ class EncodeRow:
     subtitle_language: str = ''
     configuration_key: int | None = None
     configuration: dict[str, int | str] | None = None
-    sp_entry: dict[str, int | str] | None = None
+    sp_entry: SpEntry | None = None
     selected: bool = True
     uses_main_output: bool = False
 

@@ -125,75 +125,39 @@ This section explains, in plain language, how the program behaves internally.
 
 #### A) SP handling rules
 
-1. A **`select`** column decides whether an SP row participates in muxing.  
+1. The **`select`** column decides whether an SP row participates in muxing. The task waits for the SP scan to finish, then captures the visible row order, source, output name, selected tracks, and edited languages together.
 2. MPLS rows always use MPLS logic; **M2TS** logic is used only when a row has no MPLS.
-3. **`table3` row order**: first by **BDMV volume** order, then by **MPLS name**, then rows **without MPLS** by **M2TS name**.  
-4. Default SP output name is always **`BD_Vol_{bdmv_vol}_SP{n}.mkv`**; `n` is the 1-based index of **selected** MPLS rows on the same disc, zero-padded to a uniform width.  
-5. If **every file** from an MPLS is already covered by the **main MPLS**, that row is added but **unchecked** by default.  
-6. MPLS and M2TS shorter than **30 seconds** are still added to `table3` (duration uses **`get_duration_no_repeat`**; duplicate files counted once), but **unchecked** by default.  
-7. **Special case**: if an MPLS includes **three or more distinct** files, it is **checked** by default.  
-8. **Special case (single-frame still)**: MPLS has **one** m2ts and that m2ts has **only one frame** → checked by default, output **`BD_Vol_{bdmv_vol}_SP{n}.png`**.  
-9. **Special case (multi still)**: MPLS has **multiple** m2ts and **each** has only one frame → checked by default, output is folder **`BD_Vol_{bdmv_vol}_SP{n}`**, files **`{m}-{m2ts_name}.png`** (`m` zero-padded from 1, `m2ts_name` without `.m2ts`).  
-10. If **no track** is selected for an MPLS row, the output name is **empty** and the row is **skipped** at mux time.  
-11. If **exactly one audio** track is selected, the output name uses the **original audio extension** and the track is **extracted** directly.  
-12. If **multiple audio** tracks are selected (and there is no video mux path), output is **`BD_Vol_{bdmv_vol}_SP{n}.mka`**.  
-13. **Subtitles**: one subtitle track → original extension; **multiple** subtitle tracks → **`.mks`**.  
-14. After **track edits**, output filenames are **recalculated immediately**.  
-15. After MPLS mux: clear chapters with **`mkvpropedit output.mkv --chapters ""`**, then build **`chapter.txt`** from MPLS, drop the **tail chapter marker**, and write chapters back **only** if the result is **not** “a single `00:00:00` chapter only”.  
-16. If the **first m2ts** of an MPLS cannot be read, the row is **grayed out** (read-only) and **skipped** on mux.  
-17. Track-language editing is currently unsupported for SP outputs.
-18. Finally, scan **m2ts files not covered by any MPLS** and append them to `table3`:
-    - classify with `M2TS.get_m2ts_type` / track composition: `video` / `audio_only` / `igs_menu` / `subtitle_only` / `audio_with_subtitle` / `private_or_other` / `mixed_non_video` / `unknown`;
-    - the last three types are **unsupported** (grayed out: raw ES not identifiable after extract); **`igs_menu`** can be extracted but is **unchecked** by default;
-    - duration via **`M2TS.get_duration`**;
-    - duration **&lt; 30s** → unchecked by default;
-    - duration **= 0** → grayed out, skipped;
-    - when selected, base output name **`BD_Vol_{bdmv_vol}_{m2ts_name}`**;
-    - suffix rules: one frame → **png**; single audio → **raw extract**; multi-audio → **mka**; single vs multiple subtitle and other cases → **mkv** (as per internal rules).
+3. SP rows are ordered by **BDMV volume**, then **MPLS name**, followed by uncovered **M2TS names**.
+4. The default MPLS output name is **`BD_Vol_{bdmv_vol}_SP{n}.mkv`**. The number is based on selected MPLS rows on the same disc and uses a consistent zero-padded width.
+5. An MPLS already covered completely by the main MPLS is shown but unchecked by default.
+6. MPLS and M2TS shorter than **30 seconds** remain visible but are unchecked by default. An MPLS containing at least three distinct files is checked by default.
+7. A single-frame SP is written as PNG. Multiple single-frame files are written to a folder as **`{n}-{m2ts_name}.png`**.
+8. No selected audio or subtitle track leaves the output name empty and intentionally skips that row. A single audio or subtitle track uses its elementary-stream extension; multiple audio tracks use `.mka`, multiple subtitle tracks use `.mks`, and normal video/container output uses `.mkv`.
+9. Editing tracks recalculates the output name immediately. The runtime uses the exact visible output name and does not silently rename it or rediscover another file.
+10. MPLS container outputs receive the MPLS chapters after muxing; a single zero-time chapter is omitted.
+11. Unreadable or unsupported rows are disabled during scanning. If a selected source or its captured track configuration becomes unavailable, the task reports an error instead of silently skipping it.
+12. Languages saved in **Edit Tracks** are applied and verified for `.mkv`, `.mka`, and `.mks` SP outputs, including tracks appended to an episode output. Raw streams and images cannot store this metadata, so such a language configuration is rejected before execution.
+13. M2TS files not covered by any MPLS are also listed. Video, audio-only, IGS menu, subtitle-only, and audio-with-subtitle layouts are supported where a deterministic output can be produced; unsupported or zero-duration rows are disabled.
 
 **When SP mux fails**
 
-- Unreadable source (e.g. first m2ts missing) → row grayed out, skipped at run time.  
-- Empty output name or no tracks selected → **intentional skip**, not an error.  
-- MPLS rows: **primary mux first**; on multi-clip failure, **track-aligned concat fallback**.  
-- Final success is judged by **whether the output file really exists** (including split-style suffix checks).  
-- **Chapter rewrite** and **language fix** run only after **success**; failed rows stay failed but **do not block** other rows.
+- Empty output names remain an intentional skip. Every selected row with a non-empty output is required to finish successfully.
+- Sources, captured tracks, exact output paths, collisions, existing files, and required language tools are checked before output creation whenever they can be determined in advance.
+- MPLS rows try the direct mux first, then use the same track-aligned fallback for one or multiple clips.
+- Success requires the exact planned output to exist. A failed selected row stops the task and removes only its task-created partial output; an episode file is replaced only after its SP mux has completed and been verified.
 
-#### B) When MPLS mux fails — how it is repaired
+#### B) How track alignment and missing-track repair work
 
-`mkvmerge` can fail on MPLS mux (especially multi-file playlists) when m2ts layouts differ.  
-The app checks return code and output validity; on failure it enters fallback repair.
+Direct MPLS muxing can fail when playlist clips have different track layouts. The fallback uses the tracks selected in **Edit Tracks** as the reference layout and processes every playlist clip against that layout:
 
-**Single-output fallback** (common for SP, movie mode):
+1. Playback ranges come from `Chapter(mpls_path).in_out_time`; partial clips use `--split parts:start-end`.
+2. `mkvmerge --identify` maps the selected PIDs available in the current clip and muxes them in the reference order.
+3. Missing non-audio tracks are recovered with tsMuxer. If tsMuxer cannot supply all of them, the fallback fails explicitly.
+4. Missing audio is also recovered with tsMuxer when possible. Only audio still unavailable afterward is replaced with a matching-duration silence track based on the reference audio format.
+5. The repaired PID set must exactly match the reference layout. One repaired clip is moved directly to the planned output; multiple clips are concatenated with `--append-mode track`.
+6. Main and standalone SP outputs then receive their configured track languages and chapters, with command results and final metadata checked.
 
-1. Take the tracks selected under **Edit tracks** in the GUI as the **reference layout**.  
-2. Walk **`Chapter(mpls_path).in_out_time`**; for each clip compute:  
-   - `start_time = (in_time * 2 - first_pts) / 90000`  
-   - `end_time = start_time + (out_time - in_time) / 45000`  
-   **Note:** `start_time` is **not** always “from file start”. Some playlists play the middle of file A, then file B, then return to A—not from time 0 of A.  
-3. If `start_time == 0` and `abs(end_time - file_duration_sec) < 0.001`, mux the **whole** file; else use **`--split parts:start-end`**.  
-4. Per clip, align to the reference layout:  
-   - run **`mkvmerge --identify`**, then mux with **`mkvmerge`** using **only** the tracks that correspond to the selected PIDs;  
-   - if tracks are still missing, probe with **tsMuxer**; if tsMuxer can supply **all** missing tracks **except audio**, **demux** those with tsMuxer and merge them in—otherwise **abort with an error**;  
-   - any **audio** tracks still missing afterward are filled with **silence** tracks.  
-5. Each clip mux command includes **`--track-order FID:TID,...`** so final track order matches the **first m2ts** reference.  
-6. Concatenate clip outputs in order with **`+`** and **`--append-mode track`**.  
-7. When this fallback is used for a main Remux output, apply the languages saved by **Edit tracks** with **`mkvpropedit`** and verify the result.
-8. Write chapters after muxing. **Audio compression** and later processing run in subsequent stages.
-
-**Multi-output fallback** (one MPLS → several files):
-
-1. Derive per-output time windows from chapter config and/or **`remux_cmd`** split hints.  
-2. Walk `in_out_time`, accumulate `((out_time - in_time) / 45000)` to place each m2ts on the playback timeline.  
-3. If an m2ts interval **overlaps** the current output window, that m2ts participates in that output.  
-4. Overlap slice bounds:  
-   - **first** file in window: start = `window_start - clip_timeline_start`, end per single-output formula;  
-   - **middle** files: same as single-output;  
-   - **last** file in window: start per single-output, end = `start + (window_end - clip_timeline_start)`.  
-5. Each slice: same **reference layout + missing-track repair + stable `--track-order`** (same rules as single-output fallback).  
-6. Append slices into one file per window.  
-7. Verify expected outputs (`-001`, `-002`, …) all exist; incomplete → fallback failed.  
-8. On successful outputs: run the same **language fix** and **chapter write** pipeline as in the main flow.
+The separate multi-output fallback used when one main MPLS is split into several episode files keeps the same per-clip alignment and missing-track rules, then validates every expected split output before finalization.
 
 #### C) `view chapters` / `start_at_chapter` / `end_at_chapter` linkage and configuration recalculation
 

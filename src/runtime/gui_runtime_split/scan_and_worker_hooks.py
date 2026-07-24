@@ -289,7 +289,7 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
             try:
                 select_all = bool(
                     getattr(self, 'select_all_tracks_checkbox', None) and self.select_all_tracks_checkbox.isChecked())
-                if sp_key and isinstance(tracks_payload, dict) and tracks_payload and (not disabled):
+                if sp_key and isinstance(tracks_payload, dict) and (not disabled):
                     cfg = getattr(self, '_track_selection_config', None)
                     if not isinstance(cfg, dict):
                         self._track_selection_config = {}
