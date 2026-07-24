@@ -1339,13 +1339,6 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             dovi_checkbox = getattr(self, 'mux_dolby_vision_checkbox', None)
             if dovi_checkbox is None:
                 raise RuntimeError(self.t('Dolby Vision option is unavailable'))
-            default_audio_codec = str(self._current_encode_lossless_audio_codec() or '').strip().lower()
-            if default_audio_codec not in ('flac', 'aac', 'opus'):
-                raise ValueError(
-                    self.t('Unsupported lossless audio codec: {codec}').format(
-                        codec=default_audio_codec or '<empty>'
-                    )
-                )
             request = RemuxRequest(
                 bdmv_path=os.path.normpath(self.bdmv_folder_path.text().strip()),
                 subtitle_files=tuple(sub_files),
@@ -1366,10 +1359,6 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 mux_dolby_vision=bool(dovi_checkbox.isChecked()),
                 track_selection_config=copy.deepcopy(getattr(self, '_track_selection_config', {}) or {}),
                 track_language_config=copy.deepcopy(getattr(self, '_track_language_config', {}) or {}),
-                track_lossless_audio_config=copy.deepcopy(
-                    getattr(self, '_track_lossless_audio_config', {}) or {}
-                ),
-                default_lossless_audio_codec=default_audio_codec,
                 ensure_tools=False,
             )
         except Exception:

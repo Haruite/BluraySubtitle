@@ -177,7 +177,7 @@ class RemuxWorkflowTests(unittest.TestCase):
             self.assertFalse(request.complete_bluray_folder)
             self.assertFalse(request.mux_dolby_vision)
             self.assertTrue(request.movie_mode)
-            self.assertEqual(request.default_lossless_audio_codec, 'opus')
+            self.assertFalse(hasattr(request, 'default_lossless_audio_codec'))
             self.assertIsNot(request.configuration, configuration)
 
     def test_gui_command_preview_keeps_the_complete_generated_command(self) -> None:

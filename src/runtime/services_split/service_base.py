@@ -26,11 +26,9 @@ class BluraySubtitleServiceBase:
         """Initialize optionally declared attrs for tooling."""
         if not bool(getattr(type(self), "__init_service_base_attrs__", False)):
             return
-        self._audio_tracks_to_exclude = None
         self._disc_output_name_cache = None
         self._sp_index_by_bdmv = None
         self._subtitle_cache = None
-        self._track_flac_map = None
         self.approx_episode_duration_seconds = None
         self.bdmv_path = None
         self.bluray_folders = None
@@ -540,24 +538,26 @@ class BluraySubtitleServiceBase:
         """Stub for `episodes_encode`."""
         raise NotImplementedError
 
-    def process_audio_to_flac(self, output_file, dst_folder, i, source_file: Optional[str]=None) -> tuple[int, dict[int, str], list[str]]:
-        """Stub for `process_audio_to_flac`."""
-        raise NotImplementedError
-
-    def flac_task(self, output_file, dst_folder, i, source_file: Optional[str]=None):
-        """Stub for `flac_task`."""
-        raise NotImplementedError
-
-    def encode_task(self, output_file, dst_folder, i, vpy_path: str, vspipe_mode: str, x265_mode: str, x265_params: str, sub_pack_mode: str, source_file: Optional[str]=None, encode_tool: str='x265', encode_bit_depth: str='10'):
+    def encode_task(
+            self,
+            output_file: str,
+            vpy_path: str,
+            vspipe_mode: str,
+            encoder_mode: str,
+            encoder_parameters: str,
+            subtitle_mode: str,
+            *,
+            source_file: str,
+            encoder: str,
+            bit_depth: str,
+            selected_audio_tracks: Optional[tuple[str, ...]],
+            selected_subtitle_tracks: Optional[tuple[str, ...]],
+            audio_codec_choices: tuple[str, ...],
+            track_language_overrides: tuple[tuple[str, str], ...],
+            subtitle_path: str = '',
+            subtitle_language: str = '',
+    ) -> None:
         """Stub for `encode_task`."""
-        raise NotImplementedError
-
-    def generate_remux_cmd(self, track_count, track_info, flac_files, output_file, mkv_file, encoded_video_file: Optional[str]=None):
-        """Stub for `generate_remux_cmd`."""
-        raise NotImplementedError
-
-    def extract_lossless(self, mkv_file: str, output_base: Optional[str]=None) -> tuple[int, dict[int, str]]:
-        """Stub for `extract_lossless`."""
         raise NotImplementedError
 
     def _assign_movie_sp_output_names(self, entries: list[dict[str, object]]) -> None:
@@ -565,10 +565,6 @@ class BluraySubtitleServiceBase:
 
     @staticmethod
     def _audio_stream_ok_for_pcm_silence_template(stream: dict[str, object]) -> bool:
-        raise NotImplementedError
-
-    @staticmethod
-    def _canonical_remux_mkv_path(path: str) -> str:
         raise NotImplementedError
 
     @staticmethod
@@ -596,9 +592,6 @@ class BluraySubtitleServiceBase:
     def _configuration_drop_invalid_episode_rows(configuration: dict[int, dict[str, int | str]]) -> dict[int, dict[str, int | str]]:
         raise NotImplementedError
 
-    def _decode_truehd_atmos_thd_files(self, output_base: str, track_info: dict[int, str]) -> None:
-        raise NotImplementedError
-
     @staticmethod
     def _dedupe_remux_shell_lines(cmd: str) -> str:
         raise NotImplementedError
@@ -609,14 +602,6 @@ class BluraySubtitleServiceBase:
 
     @staticmethod
     def _disc_paths_for_output_title(bdmv_root: str, selected_mpls_no_ext: str) -> tuple[str, str, str]:
-        raise NotImplementedError
-
-    @staticmethod
-    def _dovi_tool_exe() -> str:
-        raise NotImplementedError
-
-    @staticmethod
-    def _dovi_tool_mux_bl_el(bl_hevc: str, el_hevc: str) -> bool:
         raise NotImplementedError
 
     @staticmethod
@@ -635,10 +620,6 @@ class BluraySubtitleServiceBase:
         raise NotImplementedError
 
     def _extract_sample_images(self, video_path: str, temp_dir: str, max_total: int=100) -> list[str]:
-        raise NotImplementedError
-
-    @staticmethod
-    def _ffmpeg_compress_wav_to_codec(wav_path: str, out_path: str, codec: str) -> bool:
         raise NotImplementedError
 
     @staticmethod
@@ -686,13 +667,6 @@ class BluraySubtitleServiceBase:
 
     @staticmethod
     def _log_mkvmerge_identify_slot_gap(ident_path: str, probe_m2ts: str, ref_slots: list[dict[str, object]], ident: Optional[dict[str, object]], reason: str, missing_slots: Optional[list[dict[str, object]]]=None) -> None:
-        raise NotImplementedError
-
-    @staticmethod
-    def _lossless_codec_choice(map_by_idx: dict[str, str], idx_str: str, default: str='flac') -> str:
-        raise NotImplementedError
-
-    def _lossless_submap_from_track_cfg(self, cfg_all: dict[str, object], nk: str) -> dict[str, str]:
         raise NotImplementedError
 
     @staticmethod
@@ -795,9 +769,6 @@ class BluraySubtitleServiceBase:
     def _ref_slot_pid_set(ref_slots: list[dict[str, object]]) -> set[int]:
         raise NotImplementedError
 
-    def _remux_exclude_audio_track_ids(self, mkv_file: str, track_info: dict[int, str], track_flac_map: dict[int, str], *, drop_all_source_audio: bool=False) -> list[int]:
-        raise NotImplementedError
-
     def _remux_fallback_append_silence_pid_order(self, exe: str, ui: str, base_mkv: str, m2ts_pid_list: list[int], audio_slots: list[dict[str, object]], first_m2ts: str, clip_duration_sec: float, work_dir: str, part_tag: str, pid_to_lang: dict[int, str], out_mkv: str) -> Optional[list[int]]:
         raise NotImplementedError
 
@@ -821,9 +792,6 @@ class BluraySubtitleServiceBase:
 
     @staticmethod
     def _remux_parsed_chapter_bounds_for_theory_count(cmd: str, confs: list[dict[str, int | str]], mpls_path0: str, n_expect: int) -> Optional[list[tuple[int, int]]]:
-        raise NotImplementedError
-
-    def _resolve_lossless_audio_map_for_mkv(self, mkv_path: str, episode_i: int) -> dict[str, str]:
         raise NotImplementedError
 
     @staticmethod
@@ -882,14 +850,6 @@ class BluraySubtitleServiceBase:
 
     @staticmethod
     def _video_pids_on_m2ts(m2ts_path: str) -> list[int]:
-        raise NotImplementedError
-
-    @staticmethod
-    def _wav_channel_count(wav_path: str) -> int:
-        raise NotImplementedError
-
-    @staticmethod
-    def _wav_channel_layout(wav_path: str) -> str:
         raise NotImplementedError
 
     @staticmethod

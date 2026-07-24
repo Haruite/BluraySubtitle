@@ -9,9 +9,9 @@ from src.runtime.gui_runtime_split.output_and_tracks import (
     m2ts_file_detail_segments_contained_in,
     parse_m2ts_file_detail_segments,
 )
+from src.runtime.audio_conversion import _is_lossless_audio_track
 from src.runtime.services_split.encode_and_audio_tasks import (
     _format_encoder_cmd_for_echo,
-    _lossy_extract_suffix_for_codec_id,
     _normalize_x264_extra_for_bit_depth,
     _split_x265_extra_args,
 )
@@ -108,14 +108,18 @@ class EncoderOptionTests(unittest.TestCase):
             '-o "C:\\Output Folder\\video.hevc" -b "10" "input value"',
         )
 
-    def test_lossy_codec_suffix_mapping_excludes_lossless_families(self) -> None:
-        self.assertEqual(_lossy_extract_suffix_for_codec_id("A_AC3"), "ac3")
-        self.assertEqual(_lossy_extract_suffix_for_codec_id("A_EAC3"), "eac3")
-        self.assertEqual(_lossy_extract_suffix_for_codec_id("A_AAC/MPEG4/LC"), "aac")
-        self.assertEqual(_lossy_extract_suffix_for_codec_id("A_OPUS"), "opus")
-        self.assertIsNone(_lossy_extract_suffix_for_codec_id("A_TRUEHD"))
-        self.assertIsNone(_lossy_extract_suffix_for_codec_id("A_DTS"))
-        self.assertIsNone(_lossy_extract_suffix_for_codec_id("A_FLAC"))
+    def test_audio_conversion_only_targets_the_supported_lossless_families(self) -> None:
+        def track(codec_id: str, codec: str = '') -> dict[str, object]:
+            return {'codec': codec, 'properties': {'codec_id': codec_id}}
+
+        self.assertTrue(_is_lossless_audio_track(track('A_TRUEHD')))
+        self.assertTrue(_is_lossless_audio_track(track('A_DTS')))
+        self.assertTrue(_is_lossless_audio_track(track('A_FLAC')))
+        self.assertTrue(_is_lossless_audio_track(track('A_PCM/INT/LIT')))
+        self.assertFalse(_is_lossless_audio_track(track('A_AC3')))
+        self.assertFalse(_is_lossless_audio_track(track('A_EAC3')))
+        self.assertFalse(_is_lossless_audio_track(track('A_AAC/MPEG4/LC')))
+        self.assertFalse(_is_lossless_audio_track(track('A_OPUS')))
 
 
 if __name__ == "__main__":

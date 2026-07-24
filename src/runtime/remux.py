@@ -25,8 +25,6 @@ class RemuxRequest:
     mux_dolby_vision: bool = True
     track_selection_config: dict[str, dict[str, list[str]]] | None = None
     track_language_config: dict[str, dict[str, str]] | None = None
-    track_lossless_audio_config: dict[str, dict[str, str]] | None = None
-    default_lossless_audio_codec: str = 'flac'
     ensure_tools: bool = False
 
 

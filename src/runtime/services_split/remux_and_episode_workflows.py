@@ -3,7 +3,6 @@ import copy
 import os
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 import threading
@@ -20,9 +19,9 @@ from src.exports.utils import (
     get_index_to_m2ts_and_offset,
     get_time_str,
     force_remove_file,
-    print_exc_terminal,
     run_shell_command_with_output,
 )
+from src.runtime.audio_conversion import mux_with_audio_conversion
 from src.runtime.sp import SpEntry, SpJob
 from src.runtime.remux import RemuxMainJob, RemuxRequest
 from src.runtime.encode import EncodeRequest, EncodeRow
@@ -988,7 +987,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         if cancel_event and cancel_event.is_set():
             raise _Cancelled()
         self._progress(385, 'Writing Chapters')
-        mkv_files = self._post_remux_finalize_episodes(jobs, cancel_event)
+        self._post_remux_finalize_episodes(jobs, cancel_event)
 
         self._progress(400)
         completed_sp_jobs = 0
@@ -1010,36 +1009,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             cancel_event=cancel_event,
             progress_cb=report_sp_output,
         )
-        self._progress(500)
-
-        # 50–90 % (~500–900): main MPLS MKV audio (lossless extract / re-mux, etc.).
-        i = 0
-        n_main = max(len(mkv_files), 1)
-        for mkv_file in mkv_files:
-            if cancel_event and cancel_event.is_set():
-                raise _Cancelled()
-            i += 1
-            self._progress(text=f'Compressing audio: {os.path.basename(mkv_file)}')
-            self.flac_task(mkv_file, dst_folder, i)
-            self._progress(500 + int(400 * i / n_main))
-        if not mkv_files:
-            self._progress(900)
-
-        # 90–100 % (~900–1000): SP audio (files under dst_folder/SPs when present).
-        sp_subdir = os.path.join(dst_folder, 'SPs')
-        sp_files = (
-            [sp for sp in os.listdir(sp_subdir) if sp.lower().endswith(('.mkv', '.mka'))]
-            if os.path.isdir(sp_subdir) else []
-        )
-        sp_files.sort()
-        total_sp = len(sp_files) or 1
-        self._progress(900, 'Processing SP audio tracks')
-        for idx, sp in enumerate(sp_files, start=1):
-            if cancel_event and cancel_event.is_set():
-                raise _Cancelled()
-            self._progress(900 + int(100 * idx / total_sp), f'Processing SP audio tracks {idx}/{total_sp}: {sp}')
-            self.flac_task(os.path.join(sp_subdir, sp), dst_folder, -1)
-
+        self._progress(900)
         self.completion()
         self._progress(1000, 'Done')
 
@@ -1086,8 +1056,6 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         self.use_getnative = request.settings.use_getnative
         self.track_selection_config = copy.deepcopy(request.track_selection_config or {})
         self.track_language_config = copy.deepcopy(request.track_language_config or {})
-        self.track_lossless_audio_config = copy.deepcopy(request.track_lossless_audio_config or {})
-        self.default_lossless_audio_codec = request.settings.default_lossless_audio_codec
 
         planned_output_paths = {
             os.path.normcase(os.path.abspath(row.output_path))
@@ -1196,16 +1164,24 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             os.makedirs(os.path.dirname(row.output_path), exist_ok=True)
             self.encode_task(
                 row.output_path,
-                os.path.dirname(row.output_path),
-                row_index,
                 row.vpy_path,
                 request.settings.vspipe_mode,
                 request.settings.encoder_mode,
                 request.settings.encoder_parameters,
                 request.settings.subtitle_mode,
                 source_file=row.source_path,
-                encode_tool=request.settings.encoder,
-                encode_bit_depth=request.settings.bit_depth,
+                encoder=request.settings.encoder,
+                bit_depth=request.settings.bit_depth,
+                selected_audio_tracks=row.audio_tracks if request.input_mode == 'remux' else None,
+                selected_subtitle_tracks=row.subtitle_tracks if request.input_mode == 'remux' else None,
+                audio_codec_choices=row.audio_codec_choices,
+                track_language_overrides=(
+                    row.track_language_overrides
+                    if request.input_mode == 'remux'
+                    else ()
+                ),
+                subtitle_path=row.subtitle_path,
+                subtitle_language=row.subtitle_language,
             )
             if not os.path.isfile(row.output_path):
                 raise RuntimeError(
@@ -1252,25 +1228,39 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             if os.path.isdir(source_path):
                 shutil.copytree(source_path, row.output_path)
             elif source_path.lower().endswith('.mka'):
-                self.flac_task(
+                mux_with_audio_conversion(
+                    source_path,
                     row.output_path,
-                    os.path.dirname(row.output_path),
-                    -1,
-                    source_file=source_path,
+                    selected_audio_tracks=row.audio_tracks if request.input_mode == 'remux' else None,
+                    selected_subtitle_tracks=row.subtitle_tracks if request.input_mode == 'remux' else None,
+                    audio_codec_choices=row.audio_codec_choices,
+                    track_language_overrides=(
+                        row.track_language_overrides
+                        if request.input_mode == 'remux'
+                        else ()
+                    ),
                 )
             elif source_path.lower().endswith('.mkv'):
                 self.encode_task(
                     row.output_path,
-                    os.path.dirname(row.output_path),
-                    -1,
                     row.vpy_path,
                     request.settings.vspipe_mode,
                     request.settings.encoder_mode,
                     request.settings.encoder_parameters,
                     request.settings.subtitle_mode,
                     source_file=source_path,
-                    encode_tool=request.settings.encoder,
-                    encode_bit_depth=request.settings.bit_depth,
+                    encoder=request.settings.encoder,
+                    bit_depth=request.settings.bit_depth,
+                    selected_audio_tracks=row.audio_tracks if request.input_mode == 'remux' else None,
+                    selected_subtitle_tracks=row.subtitle_tracks if request.input_mode == 'remux' else None,
+                    audio_codec_choices=row.audio_codec_choices,
+                    track_language_overrides=(
+                        row.track_language_overrides
+                        if request.input_mode == 'remux'
+                        else ()
+                    ),
+                    subtitle_path=row.subtitle_path,
+                    subtitle_language=row.subtitle_language,
                 )
                 if not os.path.isfile(row.output_path):
                     raise RuntimeError(
@@ -1361,6 +1351,16 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         sp_entries = tuple(
             row.sp_entry for row in request.sp_rows if row.sp_entry is not None
         )
+        preserve_dolby_vision = (
+            request.mux_dolby_vision and request.settings.encoder != 'svtav1'
+        )
+        if request.mux_dolby_vision and not preserve_dolby_vision:
+            message = translate_text(
+                'Dolby Vision metadata will not be retained for SVT-AV1 output: {path}'
+            ).format(path=request.source_root)
+            print(f'[encode-dovi] {message}', flush=True)
+            self._progress(text=message)
+
         stage_request = RemuxRequest(
             bdmv_path=request.source_root,
             subtitle_files=subtitle_files,
@@ -1372,19 +1372,13 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             episode_output_names=episode_output_names,
             episode_subtitle_languages=episode_subtitle_languages,
             movie_mode=request.movie_mode,
-            mux_dolby_vision=request.mux_dolby_vision,
+            mux_dolby_vision=preserve_dolby_vision,
             track_selection_config=copy.deepcopy(request.track_selection_config or {}),
             track_language_config=copy.deepcopy(request.track_language_config or {}),
-            track_lossless_audio_config=copy.deepcopy(request.track_lossless_audio_config or {}),
-            default_lossless_audio_codec=request.settings.default_lossless_audio_codec,
             ensure_tools=False,
         )
-        self.sub_files = list(subtitle_files)
-        self.episode_subtitle_languages = list(episode_subtitle_languages)
         self.track_selection_config = copy.deepcopy(request.track_selection_config or {})
         self.track_language_config = copy.deepcopy(request.track_language_config or {})
-        self.track_lossless_audio_config = copy.deepcopy(request.track_lossless_audio_config or {})
-        self.default_lossless_audio_codec = request.settings.default_lossless_audio_codec
 
         staging_parent_existed = os.path.isdir(request.staging_folder)
         staging_disc_folder = ''
@@ -1433,10 +1427,24 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     staged_main_files,
                 )
             }
+            linked_sp_audio_codecs: dict[str, list[str]] = {}
+            for sp_row in request.sp_rows:
+                if sp_row.selected and sp_row.uses_main_output:
+                    output_key = os.path.normcase(os.path.abspath(sp_row.output_path))
+                    linked_sp_audio_codecs.setdefault(output_key, []).extend(
+                        sp_row.audio_codec_choices
+                    )
             resolved_main_rows = [
                 replace(
                     row,
                     source_path=staged_main_by_key[int(row.configuration_key)],
+                    audio_codec_choices=(
+                        row.audio_codec_choices
+                        + tuple(linked_sp_audio_codecs.get(
+                            os.path.normcase(os.path.abspath(row.output_path)),
+                            (),
+                        ))
+                    ),
                 )
                 for row in request.main_rows
             ]
@@ -1478,108 +1486,3 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     os.rmdir(request.staging_folder)
                 except OSError:
                     pass
-
-    def _remux_exclude_audio_track_ids(
-            self,
-            mkv_file: str,
-            track_info: dict[int, str],
-            track_flac_map: dict[int, str],
-            *,
-            drop_all_source_audio: bool = False,
-    ) -> list[int]:
-        """mkvmerge ``-a !`` track IDs (from ``mkvmerge --identify``, not ffprobe index)."""
-        from .media_info_and_track_mapping import MediaInfoTrackMappingMixin as _mit
-        exclude: set[int] = set()
-        if drop_all_source_audio:
-            exclude.update(_mit._mkvmerge_track_ids_by_type(mkv_file, 'audio'))
-        for tid in (getattr(self, '_audio_tracks_to_exclude', None) or set()):
-            try:
-                exclude.add(int(tid))
-            except Exception:
-                pass
-        for tid in track_info:
-            src = track_flac_map.get(tid)
-            if src and os.path.isfile(str(src)):
-                exclude.add(int(tid))
-        if not drop_all_source_audio and exclude:
-            mkv_audio = set(_mit._mkvmerge_track_ids_by_type(mkv_file, 'audio'))
-            mkv_video = set(_mit._mkvmerge_track_ids_by_type(mkv_file, 'video'))
-            if 0 in exclude and 0 in mkv_video and mkv_audio:
-                exclude.discard(0)
-                exclude.add(min(mkv_audio))
-        for vid in _mit._mkvmerge_track_ids_by_type(mkv_file, 'video'):
-            exclude.discard(int(vid))
-        return sorted(exclude)
-
-    def generate_remux_cmd(self, track_count, track_info, flac_files, output_file, mkv_file,
-                           encoded_video_file: Optional[str] = None):
-        from .media_info_and_track_mapping import MediaInfoTrackMappingMixin as _mit
-        mkvmerge_exe = self._mkvmerge_exe()
-        copy_audio_track = list(getattr(self, '_active_copy_audio_track', []) or [])
-        copy_sub_track = list(getattr(self, '_active_copy_sub_track', []) or [])
-        track_flac_map = getattr(self, '_track_flac_map', {}) or {}
-        track_mux_sync_ms = getattr(self, '_track_mux_sync_ms', {}) or {}
-        has_external_audio = any(
-            track_flac_map.get(tid) and os.path.isfile(str(track_flac_map.get(tid)))
-            for tid in track_info
-        )
-        drop_all_src_audio = bool(encoded_video_file and has_external_audio)
-        exclude_audio_ids = self._remux_exclude_audio_track_ids(
-            mkv_file, track_info, track_flac_map, drop_all_source_audio=drop_all_src_audio,
-        )
-        mkv_video_ids = set(_mit._mkvmerge_track_ids_by_type(mkv_file, 'video'))
-        mkv_audio_ids = set(_mit._mkvmerge_track_ids_by_type(mkv_file, 'audio'))
-        video_tracks = (
-            '!' + ','.join(str(x) for x in sorted(mkv_video_ids))
-        ) if mkv_video_ids else ''
-        audio_tracks = ('!' + ','.join(str(x) for x in exclude_audio_ids)) if exclude_audio_ids else ''
-        video_order = [f'0:{v}' for v in sorted(mkv_video_ids)]
-        ext_order: list[str] = []
-        mkv_order: list[str] = []
-        pcm_track_count = 0
-        language_options = []
-        for _ in range(track_count + 1):
-            if _ in mkv_video_ids:
-                continue
-            if _ in track_info:
-                flac_src = track_flac_map.get(_)
-                if not flac_src or not os.path.isfile(str(flac_src)):
-                    if _ not in mkv_audio_ids:
-                        mkv_order.append(f'0:{_}')
-                    continue
-                pcm_track_count += 1
-                lang_opt = f'--language 0:{track_info[_]}'
-                try:
-                    sync_ms = int(track_mux_sync_ms.get(int(_)))
-                except Exception:
-                    sync_ms = 0
-                sync_opt = f'-y 0:{sync_ms}' if sync_ms else ''
-                language_options.append(f'{lang_opt} {sync_opt} "{flac_src}"'.strip())
-                ext_order.append(f'{pcm_track_count}:0')
-                continue
-            if _ in exclude_audio_ids or _ in mkv_audio_ids:
-                continue
-            mkv_order.append(f'0:{_}')
-        language_options = ' '.join(language_options)
-        if not encoded_video_file:
-            tracker_order = ','.join(video_order + ext_order + mkv_order)
-            cmd = (
-                f'"{mkvmerge_exe}" {mkvtoolnix_ui_language_arg()} -o "{output_file}" --track-order {tracker_order} '
-                f'{("-a " + ",".join(copy_audio_track)) if copy_audio_track else ""} '
-                f'{("-s " + ",".join(copy_sub_track)) if copy_sub_track else ""} '
-                f'{"-a " + audio_tracks if audio_tracks else ""} "{mkv_file}" {language_options}')
-        else:
-            video_in = pcm_track_count + 1
-            tracker_order = ','.join([f'{video_in}:0'] + ext_order + mkv_order)
-            d_flag = f'-d {video_tracks} ' if video_tracks else ''
-            cmd = (
-                f'"{mkvmerge_exe}" {mkvtoolnix_ui_language_arg()} -o "{output_file}" --track-order {tracker_order} '
-                f'{("-a " + ",".join(copy_audio_track)) if copy_audio_track else ""} '
-                f'{("-s " + ",".join(copy_sub_track)) if copy_sub_track else ""} '
-                f'{d_flag}{"-a " + audio_tracks if audio_tracks else ""} "{mkv_file}" {language_options} "{encoded_video_file}"')
-        print(
-            f'[encode-mux] exclude audio={exclude_audio_ids} video={sorted(mkv_video_ids)} '
-            f'-d {video_tracks or "(none)"} track-order={tracker_order}',
-            flush=True,
-        )
-        return cmd

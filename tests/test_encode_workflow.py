@@ -6,6 +6,7 @@ import os
 import tempfile
 import threading
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -76,7 +77,7 @@ class _RowEncodeService(RemuxEpisodeWorkflowsMixin):
         if text:
             self.progress_messages.append(text)
 
-    def encode_task(self, output_file, _dst_folder, _index, _vpy_path, *_args, source_file=None, **_kwargs):
+    def encode_task(self, output_file, _vpy_path, *_args, source_file=None, **_kwargs):
         self.encode_calls.append((source_file, output_file))
         if self.create_outputs:
             Path(output_file).write_bytes(b'encoded')
@@ -112,20 +113,21 @@ class _PipelineService(EncodeAudioTasksMixin):
     use_getnative = False
     sub_files = []
 
+    def __init__(self) -> None:
+        self.progress_messages: list[str] = []
+
     def t(self, text: str) -> str:
         return text
 
     def _progress(self, value=None, text=None) -> None:
-        pass
+        if text:
+            self.progress_messages.append(text)
 
     def _log_getnative(self, _message: str) -> None:
         pass
 
     def _cleanup_getnative_artifacts(self) -> None:
         pass
-
-    def process_audio_to_flac(self, *_args, **_kwargs):
-        raise AssertionError('Audio processing must not start after an encoder failure')
 
 
 class EncodeWorkflowTests(unittest.TestCase):
@@ -148,6 +150,7 @@ class EncodeWorkflowTests(unittest.TestCase):
                     'start_at_chapter': 1,
                 }
             }
+            track_key = f'main::{playlist_base.with_suffix(".mpls")}'
             errors: list[str] = []
             owner = SimpleNamespace(
                 output_folder_path=SimpleNamespace(text=lambda: str(output_base)),
@@ -174,9 +177,9 @@ class EncodeWorkflowTests(unittest.TestCase):
                 get_default_vpy_path=lambda: str(vpy_path),
                 _is_movie_mode=lambda: False,
                 get_selected_function_id=lambda: 4,
-                _track_selection_config={'main': {'audio': ['1']}},
-                _track_language_config={'main': {'1': 'jpn'}},
-                _track_lossless_audio_config={'main': {'1': 'opus'}},
+                _track_selection_config={track_key: {'audio': ['1'], 'subtitle': ['2']}},
+                _track_language_config={track_key: {'1': 'jpn'}},
+                _track_lossless_audio_config={track_key: {'1': 'opus'}},
                 t=lambda text: text,
                 exe_button=SimpleNamespace(text=lambda: 'Start'),
                 _update_exe_button_progress=lambda *_args: None,
@@ -199,6 +202,10 @@ class EncodeWorkflowTests(unittest.TestCase):
             self.assertEqual(request.main_rows[0].output_path, str(output_base / 'Disc' / 'Visible Episode.mkv'))
             self.assertEqual(request.main_rows[0].subtitle_language, 'jpn')
             self.assertEqual(request.main_rows[0].vpy_path, str(vpy_path))
+            self.assertEqual(request.main_rows[0].audio_tracks, ('1',))
+            self.assertEqual(request.main_rows[0].subtitle_tracks, ('2',))
+            self.assertEqual(request.main_rows[0].audio_codec_choices, ('opus',))
+            self.assertEqual(request.main_rows[0].track_language_overrides, (('1', 'jpn'),))
             self.assertEqual(request.settings.default_lossless_audio_codec, 'opus')
             self.assertFalse(request.mux_dolby_vision)
             self.assertFalse(hasattr(owner, 'checkbox1'))
@@ -504,11 +511,119 @@ class EncodeWorkflowTests(unittest.TestCase):
 
             self.assertFalse(service.checked)
             self.assertFalse(service.stage_request.complete_bluray_folder)
+            self.assertTrue(service.stage_request.mux_dolby_vision)
             self.assertEqual(service.stage_request.episode_output_names, ('Episode.mkv',))
             resolved_main = service.resolved_rows[1][0]
             self.assertEqual(resolved_main.output_path, str(output_folder / 'Episode.mkv'))
             self.assertTrue(resolved_main.source_path.endswith(os.path.join('Disc', 'Episode.mkv')))
             self.assertFalse(staging_folder.exists())
+
+    def test_bdmv_svt_stage_omits_dolby_vision_metadata_with_a_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_folder = root / 'Disc'
+            source_folder.mkdir()
+            output_folder = root / 'output' / 'Disc'
+            staging_folder = root / 'output' / '_encode_remux_stage'
+            request = EncodeRequest(
+                input_mode='bdmv',
+                source_root=str(source_folder),
+                output_folder=str(output_folder),
+                staging_folder=str(staging_folder),
+                main_rows=(EncodeRow(
+                    source_path='',
+                    output_path=str(output_folder / 'Episode.mkv'),
+                    vpy_path=str(root / 'encode.vpy'),
+                    configuration_key=0,
+                    configuration={
+                        'bdmv_index': 1,
+                        'selected_mpls': '00001',
+                        'start_at_chapter': 1,
+                    },
+                ),),
+                sp_rows=(),
+                settings=replace(_settings(), encoder='svtav1'),
+                selected_mpls=((str(source_folder), '00001'),),
+            )
+            service = _BdmvEncodeService()
+            service.episodes_encode(request, threading.Event())
+
+            self.assertFalse(service.stage_request.mux_dolby_vision)
+            self.assertTrue(any(
+                'Dolby Vision metadata will not be retained for SVT-AV1 output' in message
+                for message in service.progress_messages
+            ))
+
+    def test_remux_svt_encode_omits_dolby_vision_injection_with_a_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_path = root / 'source.mkv'
+            output_path = root / 'output.mkv'
+            vpy_path = root / 'encode.vpy'
+            source_path.write_bytes(b'mkv')
+            vpy_path.write_text('a = r""\nres = core.fmtc.bitdepth(src8, bits=10)\n', encoding='utf-8')
+            service = _PipelineService()
+
+            def encode_video(_vspipe, _vpy, encoder_command, _environment):
+                Path(encoder_command[encoder_command.index('-b') + 1]).write_bytes(b'av1')
+                return 0
+
+            with (
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.MediaInfoTrackMappingMixin.mkvinfo_dolby_vision_track_id',
+                        return_value=0,
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.prepare_dolby_vision_encode'
+                    ) as prepare_dolby_vision,
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.inject_dolby_vision_rpu'
+                    ) as inject_dolby_vision,
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks._write_vpy_video_source_a',
+                        return_value=True,
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.get_vspipe_context',
+                        return_value=('vspipe', {}),
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.resolve_encoder_executable_path',
+                        return_value='SvtAv1EncApp',
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks._run_vspipe_piped_encode',
+                        side_effect=encode_video,
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.mux_with_audio_conversion'
+                    ) as final_mux,
+            ):
+                service.encode_task(
+                    str(output_path),
+                    str(vpy_path),
+                    'bundle',
+                    'bundle',
+                    '--preset 6',
+                    'external',
+                    encoder='svtav1',
+                    bit_depth='10',
+                    selected_audio_tracks=(),
+                    selected_subtitle_tracks=(),
+                    audio_codec_choices=(),
+                    track_language_overrides=(),
+                    subtitle_path='',
+                    subtitle_language='',
+                    source_file=str(source_path),
+                )
+
+            prepare_dolby_vision.assert_not_called()
+            inject_dolby_vision.assert_not_called()
+            final_mux.assert_called_once()
+            self.assertTrue(any(
+                'Dolby Vision metadata will not be retained for SVT-AV1 output' in message
+                for message in service.progress_messages
+            ))
 
     def test_encoder_failure_stops_before_audio_or_mux(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -544,13 +659,19 @@ class EncodeWorkflowTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'exit code 7'):
                     service.encode_task(
                         str(output_path),
-                        str(root),
-                        1,
                         str(vpy_path),
                         'bundle',
                         'bundle',
                         '--crf 18',
                         'external',
+                        encoder='x265',
+                        bit_depth='10',
+                        selected_audio_tracks=(),
+                        selected_subtitle_tracks=(),
+                        audio_codec_choices=(),
+                        track_language_overrides=(),
+                        subtitle_path='',
+                        subtitle_language='',
                         source_file=str(source_path),
                     )
             self.assertFalse(output_path.exists())

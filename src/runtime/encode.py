@@ -10,6 +10,7 @@ from src.core import find_mkvtoolnix
 from src.core import settings as core_settings
 from src.core.i18n import translate_text
 from src.exports.utils import get_vspipe_context, resolve_encoder_executable_path
+from src.runtime.audio_conversion import validate_audio_conversion_tools
 from src.runtime.sp import SpEntry
 
 
@@ -41,6 +42,10 @@ class EncodeRow:
     sp_entry: SpEntry | None = None
     selected: bool = True
     uses_main_output: bool = False
+    audio_tracks: tuple[str, ...] = ()
+    subtitle_tracks: tuple[str, ...] = ()
+    audio_codec_choices: tuple[str, ...] = ()
+    track_language_overrides: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -60,7 +65,6 @@ class EncodeRequest:
     mux_dolby_vision: bool = True
     track_selection_config: dict[str, dict[str, list[str]]] | None = None
     track_language_config: dict[str, dict[str, str]] | None = None
-    track_lossless_audio_config: dict[str, dict[str, str]] | None = None
 
 
 def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -> None:
@@ -197,6 +201,16 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
     selected_rows = [(row, False) for row in request.main_rows]
     selected_rows.extend((row, True) for row in request.sp_rows if row.selected)
     for row_number, (row, is_sp_row) in enumerate(selected_rows, 1):
+        if len(row.audio_tracks) != len(row.audio_codec_choices):
+            raise ValueError(
+                translate_text('Audio codec choices do not match selected tracks in row {row}').format(
+                    row=row_number
+                )
+            )
+        if any(codec not in ('flac', 'aac', 'opus') for codec in row.audio_codec_choices):
+            raise ValueError(
+                translate_text('Invalid audio codec choice in row {row}').format(row=row_number)
+            )
         source_path = os.path.abspath(os.path.normpath(row.source_path)) if row.source_path else ''
         if request.input_mode == 'remux' and not os.path.isfile(source_path):
             message = 'SP source does not exist in row {row}' if is_sp_row \
@@ -286,6 +300,16 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
     mkvmerge_path = core_settings.MKV_MERGE_PATH or shutil.which('mkvmerge')
     if not mkvmerge_path or not (os.path.isfile(mkvmerge_path) or shutil.which(mkvmerge_path)):
         raise FileNotFoundError(translate_text('mkvmerge not found'))
+    if request.input_mode == 'remux':
+        for row, _is_sp_row in selected_rows:
+            source_extension = os.path.splitext(row.source_path)[1].lower()
+            if os.path.exists(row.output_path) or source_extension not in ('.mkv', '.mka'):
+                continue
+            validate_audio_conversion_tools(
+                row.source_path,
+                row.audio_tracks,
+                row.audio_codec_choices,
+            )
     if any((languages or {}) for languages in (request.track_language_config or {}).values()):
         mkvpropedit_path = core_settings.MKV_PROP_EDIT_PATH or shutil.which('mkvpropedit')
         if not mkvpropedit_path or not (

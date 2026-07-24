@@ -55,8 +55,6 @@ class RemuxWorker(QObject):
             )
             bs.track_selection_config = request.track_selection_config or {}
             bs.track_language_config = request.track_language_config or {}
-            bs.track_lossless_audio_config = request.track_lossless_audio_config or {}
-            bs.default_lossless_audio_codec = request.default_lossless_audio_codec
             bs.episodes_remux(request, cancel_event=self.cancel_event)
         except _Cancelled:
             print_terminal_line('[BluraySubtitle] Remux worker: canceled.')

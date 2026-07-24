@@ -82,6 +82,10 @@ current GUI setting. After muxing, the language values saved by **Edit tracks** 
 audio, and subtitle tracks and then verified. A mapping, tool, or verification failure stops that job and removes its
 newly created main outputs.
 
+Remux preserves the selected source audio and does not apply Encode audio-conversion settings. With **Mux Dolby
+Vision** enabled, compatible base/enhancement layers are combined as profile 8.1; when disabled, the enhancement
+layer is not included.
+
 Encode options include:
 
 - **`vspipe` source**: bundled / system
@@ -93,6 +97,10 @@ Encode options include:
   - SvtAv1: 8 / 10 / 12? bit (see in-app notes)
 - Encoder **presets** and **custom** parameters
 - **Lossless audio recompression**: **FLAC / AAC / Opus**
+- Lossless PCM, TrueHD/MLP, DTS-family, and FLAC tracks use the per-track FLAC/AAC/Opus choice shown in
+  **Edit tracks**. Lossy audio is kept unchanged. TrueHD Atmos is converted only after `truehdd` successfully decodes
+  presentation 2; if `truehdd` is unavailable or fails, the original TrueHD track is kept. Other selected conversion
+  failures stop the row. For Remux input, a missing tool required by an actual conversion is reported before launch.
 - **Subtitle packaging**: external / softsub / hardsub
 - **Per-row VPy path** for main episodes and SP rows
 - **Remux-as-source** unlocks more actions, such as **editing chapters / attachments**.
@@ -108,6 +116,10 @@ duplicate output paths are reported before encoding whenever possible.
 - For Remux input, non-MKV companion files keep their relative paths, and external subtitles use the corresponding
   video output name.
 - Encoder, Dolby Vision, or final mux failures stop the task; incomplete results are not reported as successful.
+- Dolby Vision Encode is used when the Blu-ray Dolby Vision option is enabled or a Remux input already contains
+  Dolby Vision. x265 10-bit or 12-bit output retains Dolby Vision as profile 8.1. SVT-AV1 encoding is allowed, but the
+  current toolchain does not author AV1 Dolby Vision profile 10, so Dolby Vision metadata is omitted with an explicit
+  task message. x264 and x265 8-bit output are rejected when Dolby Vision preservation is requested.
 
 ### mkvtoolnix Compatibility Fixes
 
@@ -319,10 +331,10 @@ Typical flow:
 4. (Optional) Set **start / end chapter** per row.  
 5. Run encode.
 
-Encode uses the current row order, output names, VPy scripts, subtitles, track choices, and encoder settings. Planned
-outputs are never overwritten. Blu-ray input rejects existing outputs. Remux input reports and skips existing
-main/SP outputs, external subtitles, and companion files, then continues with the remaining work so a long encode can
-resume after interruption.
+Encode uses the current row order, output names, VPy scripts, subtitles, languages, track choices, per-track audio
+conversion choices, and encoder settings. Planned outputs are never overwritten. Blu-ray input rejects existing outputs.
+Remux input reports and skips existing main/SP outputs, external subtitles, and companion files, then continues with the
+remaining work so a long encode can resume after interruption.
 
 ---
 

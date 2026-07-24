@@ -988,6 +988,33 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 ),
                 default_lossless_audio_codec=self._current_encode_lossless_audio_codec(),
             )
+            track_selection_snapshot = copy.deepcopy(
+                getattr(self, '_track_selection_config', {}) or {}
+            )
+            track_language_snapshot = copy.deepcopy(
+                getattr(self, '_track_language_config', {}) or {}
+            )
+            audio_codec_snapshot = copy.deepcopy(
+                getattr(self, '_track_lossless_audio_config', {}) or {}
+            )
+
+            def captured_track_options(track_key: str) -> dict[str, tuple]:
+                selection = track_selection_snapshot.get(track_key) or {}
+                audio_tracks = tuple(str(track_id) for track_id in selection.get('audio') or ())
+                subtitle_tracks = tuple(str(track_id) for track_id in selection.get('subtitle') or ())
+                configured_codecs = audio_codec_snapshot.get(track_key) or {}
+                return {
+                    'audio_tracks': audio_tracks,
+                    'subtitle_tracks': subtitle_tracks,
+                    'audio_codec_choices': tuple(
+                        str(configured_codecs.get(track_id) or encode_settings.default_lossless_audio_codec)
+                        for track_id in audio_tracks
+                    ),
+                    'track_language_overrides': tuple(
+                        (str(track_id), str(language))
+                        for track_id, language in (track_language_snapshot.get(track_key) or {}).items()
+                    ),
+                }
 
             input_mode = getattr(self, '_encode_input_mode', 'bdmv')
             main_rows: list[EncodeRow] = []
@@ -1035,6 +1062,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                         vpy_path=self.get_vpy_path_from_row(row_index) or self.get_default_vpy_path(),
                         subtitle_path=os.path.normpath(subtitle_path) if subtitle_path else '',
                         subtitle_language=language,
+                        **captured_track_options(f'mkv::{os.path.normpath(source_path)}'),
                     ))
 
                 if hasattr(self, 'table3'):
@@ -1053,6 +1081,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                             source_path=os.path.normpath(source_path),
                             output_path=os.path.join(output_folder, 'SPs', output_name),
                             vpy_path=self.get_sp_vpy_path_from_row(row_index) or self.get_default_vpy_path(),
+                            **captured_track_options(f'mkvsp::{os.path.normpath(source_path)}'),
                         ))
             else:
                 source_root = os.path.normpath(self.bdmv_folder_path.text().strip())
@@ -1082,6 +1111,19 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                         if subtitle_item and subtitle_item.text()
                         else ''
                     )
+                    configured_mpls = os.path.normpath(
+                        str(row_configuration.get('selected_mpls') or '').strip()
+                    )
+                    if not os.path.isabs(configured_mpls):
+                        configured_root = os.path.normpath(
+                            str(row_configuration.get('folder') or source_root)
+                        )
+                        configured_mpls = os.path.join(
+                            configured_root,
+                            configured_mpls if configured_mpls.lower().startswith('bdmv' + os.sep)
+                            else os.path.join('BDMV', 'PLAYLIST', os.path.basename(configured_mpls)),
+                        )
+                    main_track_key = f'main::{os.path.splitext(configured_mpls)[0]}.mpls'
                     main_rows.append(EncodeRow(
                         source_path='',
                         output_path=os.path.join(output_folder, output_name),
@@ -1090,6 +1132,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                         subtitle_language=subtitle_languages[row_index],
                         configuration_key=configuration_key,
                         configuration=row_configuration,
+                        **captured_track_options(main_track_key),
                     ))
 
                 if hasattr(self, 'table3'):
@@ -1118,6 +1161,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                                 and os.path.normcase(os.path.abspath(sp_output_path))
                                 in main_output_paths
                             ),
+                            **captured_track_options(sp_entry.track_key),
                         ))
 
             trim_checkbox = getattr(self, 'trim_copyright_tail_checkbox', None)
@@ -1142,15 +1186,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 mux_dolby_vision=bool(
                     dolby_vision_checkbox is None or dolby_vision_checkbox.isChecked()
                 ),
-                track_selection_config=copy.deepcopy(
-                    getattr(self, '_track_selection_config', {}) or {}
-                ),
-                track_language_config=copy.deepcopy(
-                    getattr(self, '_track_language_config', {}) or {}
-                ),
-                track_lossless_audio_config=copy.deepcopy(
-                    getattr(self, '_track_lossless_audio_config', {}) or {}
-                ),
+                track_selection_config=track_selection_snapshot,
+                track_language_config=track_language_snapshot,
             )
             validate_encode_request(request, check_tools=True)
 

@@ -31,8 +31,8 @@ History entries must reflect the author's documented intent. Unresolved behavior
 | Phase 3.2 | Add Chapters workflow | Complete | `107cea1` |
 | Phase 3.3 | Blu-ray Remux workflow | Complete | `b89f995` |
 | Phase 3.4 | Blu-ray Encode workflow | Complete | `d4adee2` |
-| Phase 3.5 | SP, track alignment, and missing-track repair | Complete | This change |
-| Phase 3.6 | Audio conversion and Dolby Vision | Pending | — |
+| Phase 3.5 | SP, track alignment, and missing-track repair | Complete | `51fbbea` |
+| Phase 3.6 | Audio conversion and Dolby Vision | Complete | This change |
 
 ## Phase 1 — Contract and Safety Baseline
 
@@ -394,3 +394,55 @@ Rebuilt SP request capture, preflight planning, mux/extract execution, episode-l
 ### Deferred
 
 Audio-conversion algorithms and Dolby Vision preparation/injection remain Phase 3.6. This phase only preserves their existing integration points while refactoring SP and track alignment.
+
+## Phase 3.6 — Audio Conversion and Dolby Vision
+
+Date: 2026-07-24
+Commit: Included in this change
+
+### Scope
+
+Rebuilt the Encode audio-conversion and Dolby Vision paths around the immutable per-row request. Removed hidden Remux audio conversion, unified Dolby Vision command execution, and made non-fallback conversion or Dolby Vision preservation failures stop the task.
+
+### Redundant or Conflicting Paths Removed
+
+- Removed post-Remux audio conversion and the hidden dependency on Encode's default/per-track audio settings. Remux now preserves the selected source audio exactly.
+- Removed the legacy audio path that rescanned output folders, used fuzzy global track maps, extracted container tracks into guessed elementary-stream names, and silently removed or substituted tracks after conversion failures.
+- Removed duplicate FLAC/extraction/conversion entry points, temporary `info.json` state, output-size fallback decisions, and silent/duplicate-audio cleanup heuristics.
+- Removed the duplicated Encode Dolby Vision helpers, shared work folder, shell command construction, and separate BL/EL mux implementation. Encode injection and Remux BL/EL mux now use one checked module.
+
+### Logic Changes
+
+- Each visible Encode row captures its selected audio/subtitle track IDs, effective FLAC/AAC/Opus choice for every selected audio track, and edited track languages before the Worker starts.
+- Only PCM, TrueHD/MLP, DTS-family, and FLAC tracks are conversion candidates. Lossy audio remains unchanged, and FLAC selected as FLAC is not recompressed.
+- Remux-source preflight identifies the selected audio before launch and checks only tools required by actual conversions. Existing checkpoint outputs, lossy audio, and FLAC-to-FLAC selections do not add unnecessary tool requirements.
+- Selected audio tracks retain their source order and their language, name, default/forced flags, and delay metadata. Except for the documented TrueHD Atmos preservation fallback, a selected conversion, extraction, final mux, or verification failure stops the row; the final output is replaced atomically only after verification succeeds.
+- TrueHD Atmos is converted only after `truehdd` successfully decodes presentation 2. If `truehdd` is unavailable or its decode fails, that track skips conversion and the original TrueHD stream is retained. Standalone `.mka` SP outputs stay as `.mka` containers.
+- Blu-ray-source Encode applies languages during its owned staging Remux and does not reinterpret the original Blu-ray track IDs during the final mux. Episode-linked SP audio choices follow the appended staged-track order.
+- Remux's **Mux Dolby Vision** option continues to control whether compatible base and enhancement layers are combined as profile 8.1. Disabled means the enhancement layer is excluded.
+- Encode Dolby Vision preservation uses mode 2 RPU conversion in a unique task-owned work folder and injects only into an x265 10-bit or 12-bit HEVC stream. SVT-AV1 accepts Dolby Vision sources but emits an explicit task message and omits Dolby Vision metadata because the current toolchain cannot author AV1 Dolby Vision profile 10. x264 and x265 8-bit preservation requests are rejected. Output replacement and cleanup are task-scoped.
+
+### Documentation and i18n
+
+- Updated both README versions with the Remux/Encode audio boundary, the TrueHD Atmos preservation fallback, explicit failures, and the current x265/SVT-AV1 Dolby Vision behavior.
+- Added bilingual audio extraction, conversion, TrueHD Atmos preservation, mux verification, Dolby Vision preparation/injection, SVT-AV1 metadata-omission, cleanup, and unsupported-setting messages.
+- Synchronized the service IDE compatibility declarations with the reduced implementation surface.
+
+### Verification
+
+- Added focused tests for preserving lossy audio, successful lossless replacement with metadata, TrueHD Atmos preservation when `truehdd` is unavailable or fails, exact track/language muxing, explicit conversion failure and cleanup, x265 Dolby Vision preservation restrictions, SVT-AV1 processing without Dolby Vision injection, mode 2 RPU preparation, atomic BL/EL replacement, and unique task work folders.
+- Updated Encode/Remux request-capture and helper characterization tests for the new per-row contract and removed hidden Remux audio settings.
+- The concentrated repository run completed 139 tests successfully.
+- Python compilation, i18n audit, split-contract audit, `git diff --check`, and CRLF checks passed.
+
+### Manual Media Checks Still Required
+
+- Encode a short anime title from `E:\BDMV` with multiple selected audio tracks and choose different FLAC/AAC/Opus targets. Verify audio order, codecs, languages, names, default/forced flags, delays, and that an existing lossy track remains unchanged.
+- Repeat with a standalone `.mka` SP and an episode-linked SP; verify the output remains a valid container and appended-track choices match the GUI order.
+- Change Encode audio choices, then run Blu-ray Remux for the same selection and confirm Remux audio is unchanged.
+- Test Dolby Vision Remux with **Mux Dolby Vision** enabled and disabled, then Encode the Dolby Vision title with x265 10/12 bit and SVT-AV1. Confirm x265 retains profile 8.1, SVT-AV1 explicitly reports that Dolby Vision metadata is omitted, and x264/x265 8-bit preservation requests are rejected. Inspect every result with MediaInfo.
+- Repeat the relevant checks on a disc that enters `remux-fallback`, including `E:\Movies\疯狂动物城2.Zootopia 2 2025 2160p UHD Blu-ray DoVi HDR10 HEVC TrueHD 7.1-x-man@HDSky`.
+
+### Deferred
+
+AV1 Dolby Vision profile 10 authoring remains deferred until the project has a verified compatible encoder and packaging path. Video transcoding from **Edit Tracks** and the unfinished Blu-ray DIY encode path also remain outside this phase.
