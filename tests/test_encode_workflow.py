@@ -529,6 +529,7 @@ class EncodeWorkflowTests(unittest.TestCase):
             self.assertFalse(service.stage_request.complete_bluray_folder)
             self.assertTrue(service.stage_request.mux_dolby_vision)
             self.assertFalse(service.stage_request.convert_lossless_audio_to_flac)
+            self.assertFalse(service.stage_request.clean_audio_tracks)
             self.assertEqual(service.stage_request.episode_output_names, ('Episode.mkv',))
             resolved_main = service.resolved_rows[1][0]
             self.assertEqual(resolved_main.output_path, str(output_folder / 'Episode.mkv'))

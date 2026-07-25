@@ -170,7 +170,9 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         except Exception:
             disc_count = 1
         if not confs:
-            confs = [{'selected_mpls': mpls_path[:-5], 'chapter_index': 1}]
+            # Initial table scanning can request a preview before episode configuration exists.
+            # Preserve the row's discovered disc root instead of resolving the MPLS from the top-level input folder.
+            confs = [{'folder': root, 'selected_mpls': mpls_path[:-5], 'chapter_index': 1}]
         try:
             confs = sorted(confs, key=lambda c: int(c.get('chapter_index') or 0))
         except Exception:

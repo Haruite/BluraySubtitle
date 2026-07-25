@@ -7,6 +7,12 @@
 Windows x64 版本使用目录包发布。请完整解压发布压缩包，然后运行
 `BluraySubtitle_windows_x64.exe`；不要将它与旁边的 `_internal` 目录分离。
 
+Windows x64 下载：
+
+- [持续更新包](https://sbx.mysmy.top/tools/BluraySubtitle_windows_x64.7z)：
+  独立于 GitHub Release 的发布周期及时更新。
+- [GitHub Releases](https://github.com/Haruite/BluraySubtitle/releases)：随每个版本发布的归档包。
+
 BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 工具。  
 它将以下五类功能整合在一个应用中：
 
@@ -79,10 +85,19 @@ BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 
   选项。所有 FLAC 输出都会优先使用支持多线程的独立 `flac` 编码器；编码器不可用或失败时才回退到
   `ffmpeg`。两种 FLAC 编码都使用压缩级别 8；FFmpeg 的 level 12 会显著增加 Remux 时间，因此不会使用。
   FFmpeg 音频转换输出会完整显示在终端中。TrueHD 和 DTS 等压缩无损源在交给独立 `flac` 编码前仍可能
-  由 `ffmpeg` 解码。TrueHD Atmos 只有在 `truehdd` 成功解码 presentation 2 后才会转换；`truehdd` 不可用
-  或失败时保留原 TrueHD 音轨。
+  由 `ffmpeg` 解码。DTS 系列音轨仅在 FLAC 不大于提取出的 DTS 时才替换源音轨；如果 FLAC 更大，则删除
+  FLAC 并保留原 DTS。PCM 和 TrueHD/MLP 成功转换出的 FLAC 即使更大也仍然保留。TrueHD Atmos 只有在
+  `truehdd` 成功解码 presentation 2 后才会转换；`truehdd` 不可用或失败时保留原 TrueHD 音轨。
   启用“混流 Dolby Vision”时，兼容的基础层和增强层会合并为 Profile 8.1；关闭时不包含增强层。
 - 混流完成后，程序会把“编辑轨道”保存的语言应用到实际包含的视频、音频和字幕轨道并验证结果；映射、工具或验证失败时会中止当前任务并删除该任务新建的主输出。
+
+即使关闭“将无损音轨转换为 FLAC”，程序也会自动检查已选择的音轨。解码后的最大音量低于 -60 dB
+时，该音轨会作为静音轨移除。只有源编码家族和声道数相同的音轨才比较解码指纹；已知语言不同的音轨
+不会互相去重，完全重复时保留源顺序中最早的一条。每次移除都会在终端中提示。FFmpeg 会分析完整音轨，
+因此音轨很多且时长较长时会增加处理时间。分析前，全部已选音轨会通过一条 `mkvextract` 命令一起提取，
+这些临时音轨也会复用于后续音频转换，不会针对每条音轨重新读取巨大的源 MKV。因此输出盘需要为全部
+已选音轨预留足够的临时空间。提取或分析失败会中止任务，不会静默保留未经检查的音轨。
+
 - 压制参数支持：
   - `vspipe` 来源（程序自带 / 系统）
   - 压制工具（x264 / x265 / SvtAv1EncApp）
@@ -91,7 +106,7 @@ BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 
   - 压制工具参数预设与自定义
   - 无损音频转换（flac / aac / opus）
 - PCM、TrueHD/MLP、DTS 系列和 FLAC 等无损音轨使用“编辑轨道”中逐轨显示的 FLAC/AAC/Opus 选项；
-  有损音轨保持不变。TrueHD Atmos 只有在 `truehdd` 成功解码 presentation 2 后才会转换；`truehdd` 不可用或解码失败时保留原 TrueHD 音轨。其他已选择的音频转换失败时会中止当前行。Remux 来源中实际转换缺少必需工具时，会在任务启动前提示。
+  有损音轨保持不变。TrueHD Atmos 只有在 `truehdd` 成功解码 presentation 2 后才会转换；`truehdd` 不可用或解码失败时保留原 TrueHD 音轨。选择 FLAC 时同样应用上述 DTS/FLAC 体积规则。最终 Encode 混流同样执行上述静音/重复音轨清理；原盘暂存 Remux 不处理音频。其他已选择的音频转换失败时会中止当前行。Remux 来源中实际转换缺少必需工具时，会在任务启动前提示。
 - 字幕封装：外挂 / 内挂 / 内嵌
 - 每一行支持独立 VPy 路径（正片与 SP）。
 - Remux 来源支持更多功能，比如编辑章节/附件等。

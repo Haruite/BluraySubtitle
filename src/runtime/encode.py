@@ -10,7 +10,7 @@ from src.core import find_mkvtoolnix
 from src.core import settings as core_settings
 from src.core.i18n import translate_text
 from src.exports.utils import get_vspipe_context, resolve_encoder_executable_path
-from src.runtime.audio_conversion import validate_audio_conversion_tools
+from src.runtime.audio_conversion import validate_audio_cleanup_tools, validate_audio_conversion_tools
 from src.runtime.sp import SpEntry
 
 
@@ -309,6 +309,8 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
     mkvmerge_path = core_settings.MKV_MERGE_PATH or shutil.which('mkvmerge')
     if not mkvmerge_path or not (os.path.isfile(mkvmerge_path) or shutil.which(mkvmerge_path)):
         raise FileNotFoundError(translate_text('mkvmerge not found'))
+    if any(row.audio_tracks or row.audio_codec_choices for row, _is_sp_row in selected_rows):
+        validate_audio_cleanup_tools()
     if request.input_mode == 'remux':
         for row, _is_sp_row in selected_rows:
             source_extension = os.path.splitext(row.source_path)[1].lower()

@@ -11,7 +11,10 @@ from unittest.mock import patch
 
 from src.runtime.services import BluraySubtitle as _BluraySubtitle
 from src.runtime.audio_conversion import (
+    _analyze_audio_track,
+    _extract_selected_audio_tracks,
     mux_with_audio_conversion,
+    validate_audio_cleanup_tools,
     validate_audio_conversion_tools,
 )
 from src.runtime.dolby_vision import (
@@ -31,8 +34,9 @@ def _track(
         *,
         codec: str = '',
         language: str = 'und',
+        channels: int = 2,
 ) -> dict[str, object]:
-    return {
+    track = {
         'id': track_id,
         'type': track_type,
         'codec': codec,
@@ -43,9 +47,29 @@ def _track(
             'forced_track': False,
         },
     }
+    if track_type == 'audio':
+        track['properties']['audio_channels'] = channels
+    return track
+
+
+def _write_extracted_tracks(command: list[str], payload=b'audio') -> None:
+    for track_specification in command[command.index('tracks') + 2:]:
+        track_id, extracted_path = track_specification.split(':', 1)
+        Path(extracted_path).write_bytes(payload(int(track_id)) if callable(payload) else payload)
 
 
 class AudioConversionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        analysis_patcher = patch(
+            'src.runtime.audio_conversion._analyze_audio_track',
+            side_effect=lambda _ffmpeg, _extracted, _source, track_id: (
+                -20.0,
+                f'track-{track_id}',
+            ),
+        )
+        self.audio_analysis = analysis_patcher.start()
+        self.addCleanup(analysis_patcher.stop)
+
     def test_lossy_audio_is_preserved_with_exact_tracks_and_languages(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -66,9 +90,12 @@ class AudioConversionTests(unittest.TestCase):
             commands: list[list[str]] = []
 
             def run_command(command, **_kwargs):
-                commands.append(list(command))
-                destination = Path(command[command.index('-o') + 1])
-                destination.write_bytes(b'muxed')
+                command = list(command)
+                commands.append(command)
+                if 'tracks' in command:
+                    _write_extracted_tracks(command)
+                else:
+                    Path(command[command.index('-o') + 1]).write_bytes(b'muxed')
                 return SimpleNamespace(returncode=0)
 
             with (
@@ -87,8 +114,8 @@ class AudioConversionTests(unittest.TestCase):
                 )
 
             self.assertEqual(output.read_bytes(), b'muxed')
-            self.assertEqual(len(commands), 1)
-            mux_command = commands[0]
+            self.assertEqual(len(commands), 2)
+            mux_command = commands[-1]
             self.assertEqual(mux_command[mux_command.index('-a') + 1], '1')
             self.assertEqual(mux_command[mux_command.index('-s') + 1], '3')
             self.assertIn('0:0,0:1,0:3', mux_command)
@@ -119,9 +146,9 @@ class AudioConversionTests(unittest.TestCase):
                 if command[0] == 'ffmpeg':
                     Path(command[-1]).write_bytes(b'wave')
                 elif command[0] == 'flac':
-                    Path(command[command.index('-o') + 1]).write_bytes(b'flac')
+                    Path(command[command.index('-o') + 1]).write_bytes(b'larger-flac-output')
                 elif 'tracks' in command:
-                    Path(command[-1].split(':', 1)[1]).write_bytes(b'truehd')
+                    _write_extracted_tracks(command, b'truehd')
                 else:
                     Path(command[command.index('-o') + 1]).write_bytes(b'muxed')
                 return SimpleNamespace(returncode=0)
@@ -184,7 +211,7 @@ class AudioConversionTests(unittest.TestCase):
                 elif command[0] == 'flac':
                     Path(command[command.index('-o') + 1]).write_bytes(b'flac')
                 elif 'tracks' in command:
-                    Path(command[-1].split(':', 1)[1]).write_bytes(b'truehd')
+                    _write_extracted_tracks(command, b'truehd')
                 else:
                     Path(command[command.index('-o') + 1]).write_bytes(b'muxed')
                 return SimpleNamespace(returncode=0)
@@ -216,6 +243,134 @@ class AudioConversionTests(unittest.TestCase):
             self.assertEqual(mux_command[mux_command.index('-a') + 1], '1')
             self.assertIn('0:0,0:1,1:0', mux_command)
 
+    def test_remux_dts_uses_flac_only_when_the_converted_track_is_not_larger(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source = root / 'source.mkv'
+            source.write_bytes(b'source')
+            source_tracks = [
+                _track(0, 'video', 'V_MPEGH/ISO/HEVC'),
+                _track(1, 'audio', 'A_DTS', codec='DTS-HD Master Audio', language='eng'),
+                _track(2, 'audio', 'A_DTS', codec='DTS-HD Master Audio', language='jpn'),
+            ]
+            output_tracks = [
+                _track(0, 'video', 'V_MPEGH/ISO/HEVC'),
+                _track(1, 'audio', 'A_FLAC', codec='FLAC', language='eng'),
+                _track(2, 'audio', 'A_DTS', codec='DTS-HD Master Audio', language='jpn'),
+            ]
+            commands: list[list[str]] = []
+
+            def run_command(command, **_kwargs):
+                command = list(command)
+                commands.append(command)
+                if 'tracks' in command:
+                    _write_extracted_tracks(
+                        command,
+                        lambda track_id: b'dts-a' if track_id == 1 else b'dts',
+                    )
+                elif command[0] == 'ffmpeg':
+                    Path(command[-1]).write_bytes(b'wave')
+                elif command[0] == 'flac':
+                    converted = Path(command[command.index('-o') + 1])
+                    converted.write_bytes(b'flac!' if 'track-1' in converted.name else b'larger-flac-output')
+                else:
+                    Path(command[command.index('-o') + 1]).write_bytes(b'muxed')
+                return SimpleNamespace(returncode=0)
+
+            with (
+                    patch('src.runtime.audio_conversion._identify_tracks', side_effect=[source_tracks, output_tracks]),
+                    patch('src.runtime.audio_conversion.find_mkvtoolnix'),
+                    patch('src.runtime.audio_conversion.core_settings.MKV_EXTRACT_PATH', 'mkvextract'),
+                    patch('src.runtime.audio_conversion.core_settings.MKV_MERGE_PATH', 'mkvmerge'),
+                    patch('src.runtime.audio_conversion.core_settings.FFMPEG_PATH', 'ffmpeg'),
+                    patch('src.runtime.audio_conversion.core_settings.FLAC_PATH', 'flac'),
+                    patch('src.runtime.audio_conversion.core_settings.FLAC_THREADS', 4),
+                    patch('src.runtime.audio_conversion.shutil.which', return_value='flac'),
+                    patch('src.runtime.audio_conversion.run_command', side_effect=run_command),
+            ):
+                mux_with_audio_conversion(
+                    str(source),
+                    str(source),
+                    selected_audio_tracks=None,
+                    selected_subtitle_tracks=(),
+                    audio_codec_choices=(),
+                    convert_all_lossless_to_flac=True,
+                )
+
+            self.assertEqual(source.read_bytes(), b'muxed')
+            mux_command = commands[-1]
+            self.assertEqual(mux_command[mux_command.index('-a') + 1], '2')
+            self.assertEqual(
+                mux_command[mux_command.index('--track-order') + 1],
+                '0:0,1:0,0:2',
+            )
+            self.assertTrue(any('track-1.flac' in argument for argument in mux_command))
+            self.assertFalse(any('track-2.flac' in argument for argument in mux_command))
+
+    def test_silent_and_duplicate_audio_are_removed_without_reordering_kept_tracks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source = root / 'source.mkv'
+            output = root / 'output.mkv'
+            source.write_bytes(b'source')
+            source_tracks = [
+                _track(0, 'video', 'V_MPEGH/ISO/HEVC'),
+                _track(1, 'audio', 'A_AC3', codec='AC-3', language='eng'),
+                _track(2, 'audio', 'A_AC3', codec='AC-3', language='eng'),
+                _track(3, 'audio', 'A_AC3', codec='AC-3', language='jpn'),
+                _track(4, 'audio', 'A_AC3', codec='AC-3', language='eng'),
+                _track(5, 'audio', 'A_AC3', codec='AC-3', language='eng', channels=6),
+                _track(6, 'audio', 'A_AC3', codec='AC-3', language='eng'),
+            ]
+            output_tracks = [
+                _track(0, 'video', 'V_MPEGH/ISO/HEVC'),
+                _track(1, 'audio', 'A_AC3', codec='AC-3', language='eng'),
+                _track(2, 'audio', 'A_AC3', codec='AC-3', language='jpn'),
+                _track(3, 'audio', 'A_AC3', codec='AC-3', language='eng', channels=6),
+                _track(4, 'audio', 'A_AC3', codec='AC-3', language='eng'),
+            ]
+            self.audio_analysis.side_effect = [
+                (-20.0, 'same-audio'),
+                (-20.0, 'same-audio'),
+                (-20.0, 'same-audio'),
+                (float('-inf'), 'silence'),
+                (-20.0, 'same-audio'),
+                (-60.0, 'threshold-audio'),
+            ]
+            commands: list[list[str]] = []
+
+            def run_command(command, **_kwargs):
+                command = list(command)
+                commands.append(command)
+                if 'tracks' in command:
+                    _write_extracted_tracks(command)
+                else:
+                    Path(command[command.index('-o') + 1]).write_bytes(b'muxed')
+                return SimpleNamespace(returncode=0)
+
+            with (
+                    patch('src.runtime.audio_conversion._identify_tracks', side_effect=[source_tracks, output_tracks]),
+                    patch('src.runtime.audio_conversion.find_mkvtoolnix'),
+                    patch('src.runtime.audio_conversion.core_settings.MKV_MERGE_PATH', 'mkvmerge'),
+                    patch('src.runtime.audio_conversion.core_settings.FFMPEG_PATH', 'ffmpeg'),
+                    patch('src.runtime.audio_conversion.run_command', side_effect=run_command),
+            ):
+                mux_with_audio_conversion(
+                    str(source),
+                    str(output),
+                    selected_audio_tracks=('1', '2', '3', '4', '5', '6'),
+                    selected_subtitle_tracks=(),
+                    audio_codec_choices=('flac', 'flac', 'flac', 'flac', 'flac', 'flac'),
+                )
+
+            self.assertEqual(output.read_bytes(), b'muxed')
+            mux_command = commands[-1]
+            self.assertEqual(mux_command[mux_command.index('-a') + 1], '1,3,5,6')
+            self.assertEqual(
+                mux_command[mux_command.index('--track-order') + 1],
+                '0:0,0:1,0:3,0:5,0:6',
+            )
+
     def test_flac_encoder_failure_falls_back_to_ffmpeg(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -236,7 +391,7 @@ class AudioConversionTests(unittest.TestCase):
                 command = list(command)
                 commands.append(command)
                 if 'tracks' in command:
-                    Path(command[-1].split(':', 1)[1]).write_bytes(b'wave')
+                    _write_extracted_tracks(command, b'wave')
                     return SimpleNamespace(returncode=0)
                 if command[0] == 'flac':
                     Path(command[command.index('-o') + 1]).write_bytes(b'partial')
@@ -350,7 +505,10 @@ class AudioConversionTests(unittest.TestCase):
 
             def run_mux(command, **_kwargs):
                 commands.append(list(command))
-                Path(command[command.index('-o') + 1]).write_bytes(b'muxed')
+                if 'tracks' in command:
+                    _write_extracted_tracks(list(command))
+                else:
+                    Path(command[command.index('-o') + 1]).write_bytes(b'muxed')
                 return SimpleNamespace(returncode=0)
 
             with (
@@ -368,9 +526,9 @@ class AudioConversionTests(unittest.TestCase):
                     audio_codec_choices=('flac',),
                 )
 
-            self.assertEqual(len(commands), 1)
+            self.assertEqual(len(commands), 2)
             self.assertEqual(output.read_bytes(), b'muxed')
-            self.assertEqual(commands[0][commands[0].index('-a') + 1], '1')
+            self.assertEqual(commands[-1][commands[-1].index('-a') + 1], '1')
 
     def test_truehd_atmos_is_preserved_when_truehdd_decode_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -390,7 +548,7 @@ class AudioConversionTests(unittest.TestCase):
                 if command[0] == 'truehdd':
                     return SimpleNamespace(returncode=3)
                 if 'tracks' in command:
-                    Path(command[-1].split(':', 1)[1]).write_bytes(b'truehd')
+                    _write_extracted_tracks(command, b'truehd')
                 else:
                     Path(command[command.index('-o') + 1]).write_bytes(b'muxed')
                 return SimpleNamespace(returncode=0)
@@ -430,8 +588,7 @@ class AudioConversionTests(unittest.TestCase):
             def extract_track(command, **_kwargs):
                 if 'tracks' not in command:
                     return SimpleNamespace(returncode=5)
-                extracted_path = Path(command[-1].split(':', 1)[1])
-                extracted_path.write_bytes(b'truehd')
+                _write_extracted_tracks(list(command), b'truehd')
                 return SimpleNamespace(returncode=0)
 
             with (
@@ -458,39 +615,56 @@ class AudioConversionTests(unittest.TestCase):
 
     def test_preflight_does_not_require_conversion_tools_for_lossy_audio(self) -> None:
         tracks = [_track(1, 'audio', 'A_AC3', language='eng')]
-        with (
-                patch('src.runtime.audio_conversion._identify_tracks', return_value=tracks),
-                patch('src.runtime.audio_conversion.core_settings.MKV_EXTRACT_PATH', ''),
-                patch('src.runtime.audio_conversion.core_settings.FFMPEG_PATH', ''),
-                patch('src.runtime.audio_conversion.core_settings.FDK_AAC_PATH', ''),
-                patch('src.runtime.audio_conversion.shutil.which', return_value=''),
-        ):
-            validate_audio_conversion_tools('source.mkv', ('1',), ('aac',))
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            ffmpeg = root / 'ffmpeg.exe'
+            mkvextract = root / 'mkvextract.exe'
+            ffmpeg.write_bytes(b'tool')
+            mkvextract.write_bytes(b'tool')
+            with (
+                    patch('src.runtime.audio_conversion._identify_tracks', return_value=tracks),
+                    patch('src.runtime.audio_conversion.find_mkvtoolnix'),
+                    patch('src.runtime.audio_conversion.core_settings.MKV_EXTRACT_PATH', str(mkvextract)),
+                    patch('src.runtime.audio_conversion.core_settings.FFMPEG_PATH', str(ffmpeg)),
+                    patch('src.runtime.audio_conversion.core_settings.FDK_AAC_PATH', ''),
+                    patch('src.runtime.audio_conversion.shutil.which', return_value=''),
+            ):
+                validate_audio_conversion_tools('source.mkv', ('1',), ('aac',))
 
     def test_preflight_does_not_require_conversion_tools_when_atmos_is_preserved(self) -> None:
         tracks = [_track(1, 'audio', 'A_TRUEHD', codec='TrueHD Atmos')]
-        with (
-                patch('src.runtime.audio_conversion._identify_tracks', return_value=tracks),
-                patch('src.runtime.audio_conversion._truehdd_path', return_value=''),
-                patch('src.runtime.audio_conversion.core_settings.MKV_EXTRACT_PATH', ''),
-                patch('src.runtime.audio_conversion.core_settings.FFMPEG_PATH', ''),
-                patch('src.runtime.audio_conversion.core_settings.FDK_AAC_PATH', ''),
-                patch('src.runtime.audio_conversion.shutil.which', return_value=''),
-        ):
-            validate_audio_conversion_tools('source.mkv', ('1',), ('aac',))
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            ffmpeg = root / 'ffmpeg.exe'
+            mkvextract = root / 'mkvextract.exe'
+            ffmpeg.write_bytes(b'tool')
+            mkvextract.write_bytes(b'tool')
+            with (
+                    patch('src.runtime.audio_conversion._identify_tracks', return_value=tracks),
+                    patch('src.runtime.audio_conversion._truehdd_path', return_value=''),
+                    patch('src.runtime.audio_conversion.find_mkvtoolnix'),
+                    patch('src.runtime.audio_conversion.core_settings.MKV_EXTRACT_PATH', str(mkvextract)),
+                    patch('src.runtime.audio_conversion.core_settings.FFMPEG_PATH', str(ffmpeg)),
+                    patch('src.runtime.audio_conversion.core_settings.FDK_AAC_PATH', ''),
+                    patch('src.runtime.audio_conversion.shutil.which', return_value=''),
+            ):
+                validate_audio_conversion_tools('source.mkv', ('1',), ('aac',))
 
-    def test_preflight_uses_flac_for_pcm_without_requiring_ffmpeg(self) -> None:
+    def test_preflight_accepts_standalone_flac_with_cleanup_ffmpeg(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             flac = root / 'flac.exe'
             mkvextract = root / 'mkvextract.exe'
+            ffmpeg = root / 'ffmpeg.exe'
             flac.write_bytes(b'tool')
             mkvextract.write_bytes(b'tool')
+            ffmpeg.write_bytes(b'tool')
             tracks = [_track(1, 'audio', 'A_PCM/INT/LIT', codec='PCM')]
             with (
                     patch('src.runtime.audio_conversion._identify_tracks', return_value=tracks),
+                    patch('src.runtime.audio_conversion.find_mkvtoolnix'),
                     patch('src.runtime.audio_conversion.core_settings.MKV_EXTRACT_PATH', str(mkvextract)),
-                    patch('src.runtime.audio_conversion.core_settings.FFMPEG_PATH', ''),
+                    patch('src.runtime.audio_conversion.core_settings.FFMPEG_PATH', str(ffmpeg)),
                     patch('src.runtime.audio_conversion.core_settings.FLAC_PATH', str(flac)),
                     patch('src.runtime.audio_conversion.shutil.which', return_value=''),
             ):
@@ -506,6 +680,7 @@ class AudioConversionTests(unittest.TestCase):
             tracks = [_track(1, 'audio', 'A_TRUEHD', codec='TrueHD')]
             with (
                     patch('src.runtime.audio_conversion._identify_tracks', return_value=tracks),
+                    patch('src.runtime.audio_conversion.find_mkvtoolnix'),
                     patch('src.runtime.audio_conversion.core_settings.MKV_EXTRACT_PATH', str(mkvextract)),
                     patch('src.runtime.audio_conversion.core_settings.FFMPEG_PATH', str(ffmpeg)),
                     patch('src.runtime.audio_conversion.core_settings.FDK_AAC_PATH', ''),
@@ -513,6 +688,87 @@ class AudioConversionTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(FileNotFoundError, 'fdkaac'):
                     validate_audio_conversion_tools('source.mkv', ('1',), ('aac',))
+
+
+class AudioAnalysisTests(unittest.TestCase):
+    def test_selected_audio_is_extracted_in_one_source_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source = root / 'source.mkv'
+            source.write_bytes(b'mkv')
+            audio_tracks = [
+                _track(1, 'audio', 'A_AC3'),
+                _track(2, 'audio', 'A_FLAC'),
+                _track(3, 'audio', 'A_DTS'),
+            ]
+
+            def extract_tracks(command, **_kwargs):
+                _write_extracted_tracks(list(command))
+                return SimpleNamespace(returncode=0)
+
+            with (
+                    patch('src.runtime.audio_conversion.mkvtoolnix_ui_language_arg', return_value='--ui-language en'),
+                    patch('src.runtime.audio_conversion.run_command', side_effect=extract_tracks) as run,
+            ):
+                extracted_audio = _extract_selected_audio_tracks(
+                    'mkvextract',
+                    str(source),
+                    str(root),
+                    audio_tracks,
+                    (1, 3),
+                )
+
+            self.assertEqual(run.call_count, 1)
+            command = run.call_args.args[0]
+            self.assertEqual(command[:3], ['mkvextract', '--ui-language', 'en'])
+            self.assertEqual(command[3:5], ['tracks', str(source)])
+            self.assertEqual(len(command[5:]), 2)
+            self.assertEqual(Path(extracted_audio[1]).suffix, '.ac3')
+            self.assertEqual(Path(extracted_audio[3]).suffix, '.dts')
+            self.assertNotIn(2, extracted_audio)
+
+    def test_ffmpeg_analysis_reads_maximum_volume_and_decoded_fingerprint(self) -> None:
+        result = SimpleNamespace(
+            returncode=0,
+            stdout='SHA256=0123456789abcdef\n',
+            stderr='[Parsed_volumedetect] max_volume: -18.5 dB\n',
+        )
+        with patch('src.runtime.audio_conversion.run_command', return_value=result) as run:
+            maximum_volume, fingerprint = _analyze_audio_track(
+                'ffmpeg',
+                'track-7.dts',
+                'source.mkv',
+                7,
+            )
+
+        self.assertEqual(maximum_volume, -18.5)
+        self.assertEqual(fingerprint, '0123456789abcdef')
+        command = run.call_args.args[0]
+        self.assertEqual(command[command.index('-i') + 1], 'track-7.dts')
+        self.assertEqual(command[command.index('-map') + 1], '0:a:0')
+
+    def test_cleanup_preflight_reports_missing_ffmpeg(self) -> None:
+        with (
+                patch('src.runtime.audio_conversion.find_mkvtoolnix'),
+                patch('src.runtime.audio_conversion.core_settings.FFMPEG_PATH', ''),
+                patch('src.runtime.audio_conversion.shutil.which', return_value=''),
+        ):
+            with self.assertRaisesRegex(FileNotFoundError, 'ffmpeg'):
+                validate_audio_cleanup_tools()
+
+    def test_cleanup_preflight_reports_missing_mkvextract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            ffmpeg = Path(temporary_directory) / 'ffmpeg.exe'
+            ffmpeg.write_bytes(b'tool')
+            with (
+                    patch('src.runtime.audio_conversion.find_mkvtoolnix'),
+                    patch('src.runtime.audio_conversion.core_settings.FFMPEG_PATH', str(ffmpeg)),
+                    patch('src.runtime.audio_conversion.core_settings.MKV_EXTRACT_PATH', ''),
+                    patch('src.runtime.audio_conversion.shutil.which', return_value=''),
+            ):
+                with self.assertRaisesRegex(FileNotFoundError, 'mkvextract'):
+                    validate_audio_cleanup_tools()
+
 
 class DolbyVisionTests(unittest.TestCase):
     def test_preservation_support_is_limited_to_x265_hevc_at_ten_bit_or_deeper(self) -> None:

@@ -8,6 +8,12 @@ The Windows x64 release is a one-folder package. Extract the complete archive,
 then run `BluraySubtitle_windows_x64.exe` without moving it away from the
 adjacent `_internal` directory.
 
+Windows x64 downloads:
+
+- [Continuously updated package](https://sbx.mysmy.top/tools/BluraySubtitle_windows_x64.7z):
+  kept current independently of the GitHub release schedule.
+- [GitHub Releases](https://github.com/Haruite/BluraySubtitle/releases): versioned packages published with each release.
+
 BluraySubtitle is a GUI tool for Blu-ray workflows on **Windows / Linux** (including **Docker**).  
 It brings the following five areas of functionality together in one application:
 
@@ -90,10 +96,22 @@ selected source audio. Remux never uses Encode's AAC/Opus choices. All FLAC outp
 multithreaded `flac` encoder and falls back to `ffmpeg` if that encoder is unavailable or fails. Both FLAC encoders use
 compression level 8; FFmpeg level 12 is deliberately avoided because it can greatly increase Remux time. FFmpeg audio
 conversion output remains visible in the terminal. `ffmpeg` may still decode compressed sources such as TrueHD and
-DTS before standalone FLAC encoding. TrueHD Atmos is converted only after `truehdd` successfully decodes presentation
-2; if `truehdd` is unavailable or fails, the original
+DTS before standalone FLAC encoding. A DTS-family track is replaced only when its FLAC output is no larger than the
+extracted DTS; otherwise the original DTS track is retained. Successful PCM and TrueHD/MLP conversions remain FLAC
+even when the FLAC is larger. TrueHD Atmos is converted only after `truehdd` successfully decodes presentation 2; if
+`truehdd` is unavailable or fails, the original
 TrueHD track is kept. With **Mux Dolby Vision** enabled, compatible base/enhancement layers are combined as profile
 8.1; when disabled, the enhancement layer is not included.
+
+Selected audio is also checked automatically even when **Convert lossless audio to FLAC** is disabled. A track whose
+decoded maximum volume is below -60 dB is removed as silent. Decoded fingerprints are compared only for tracks in the
+same source codec family with the same channel count; tracks with different known languages are kept, and an exact
+duplicate keeps the earliest track in source order. Every removal is reported in the terminal. FFmpeg performs a
+full-track analysis, so sources with many long audio tracks take additional processing time. All selected audio tracks
+are extracted together by one `mkvextract` command before analysis, and those temporary tracks are reused for audio
+conversion; the large source MKV is not reopened separately for every audio track. The output volume therefore needs
+enough temporary free space for all selected audio tracks. An extraction or analysis failure stops the task instead of
+silently keeping an unchecked track.
 
 Encode options include:
 
@@ -109,7 +127,9 @@ Encode options include:
 - Lossless PCM, TrueHD/MLP, DTS-family, and FLAC tracks use the per-track FLAC/AAC/Opus choice shown in
   **Edit tracks**. Lossy audio is kept unchanged. TrueHD Atmos is converted only after `truehdd` successfully decodes
   presentation 2; if `truehdd` is unavailable or fails, the original TrueHD track is kept. Other selected conversion
-  failures stop the row. For Remux input, a missing tool required by an actual conversion is reported before launch.
+  failures stop the row. When FLAC is selected, the same DTS/FLAC size rule described above applies. For Remux input,
+  a missing tool required by an actual conversion is reported before launch. Final Encode muxing applies the same
+  automatic silent/duplicate cleanup; Blu-ray staging Remux does not process audio.
 - **Subtitle packaging**: external / softsub / hardsub
 - **Per-row VPy path** for main episodes and SP rows
 - **Remux-as-source** unlocks more actions, such as **editing chapters / attachments**.

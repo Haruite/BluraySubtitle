@@ -179,6 +179,7 @@ class RemuxWorkflowTests(unittest.TestCase):
             self.assertFalse(request.complete_bluray_folder)
             self.assertFalse(request.mux_dolby_vision)
             self.assertTrue(request.convert_lossless_audio_to_flac)
+            self.assertTrue(request.clean_audio_tracks)
             self.assertTrue(request.movie_mode)
             self.assertFalse(hasattr(request, 'default_lossless_audio_codec'))
             self.assertIsNot(request.configuration, configuration)
@@ -209,6 +210,9 @@ class RemuxWorkflowTests(unittest.TestCase):
 
             with patch.object(
                     remux_service_module,
+                    'validate_audio_cleanup_tools',
+            ), patch.object(
+                    remux_service_module,
                     'validate_audio_conversion_tools',
             ) as validate_tools, patch.object(
                     remux_service_module,
@@ -223,7 +227,7 @@ class RemuxWorkflowTests(unittest.TestCase):
                 self.assertTrue(call.kwargs['convert_all_lossless_to_flac'])
             owner.completion.assert_called_once_with()
 
-    def test_remux_flac_conversion_can_be_disabled(self) -> None:
+    def test_remux_flac_disabled_still_runs_automatic_audio_cleanup(self) -> None:
         request = replace(
             self._request(Path('root'), {0: {}}, [], ['Episode.mkv']),
             convert_lossless_audio_to_flac=False,
@@ -239,12 +243,33 @@ class RemuxWorkflowTests(unittest.TestCase):
             t=lambda text: text,
         )
 
-        with patch.object(remux_service_module, 'validate_audio_conversion_tools') as validate_tools, patch.object(
-                remux_service_module, 'mux_with_audio_conversion') as convert_audio:
+        with patch.object(
+                remux_service_module,
+                'validate_audio_cleanup_tools',
+        ) as validate_cleanup, patch.object(
+                remux_service_module,
+                'validate_audio_conversion_tools',
+        ) as validate_tools, patch.object(
+                remux_service_module,
+                'mux_with_audio_conversion',
+        ) as convert_audio:
             RemuxEpisodeWorkflowsMixin.episodes_remux(owner, request)
 
-        validate_tools.assert_not_called()
-        convert_audio.assert_not_called()
+        validate_cleanup.assert_called_once_with()
+        validate_tools.assert_called_once_with(
+            'Episode.mkv',
+            None,
+            (),
+            convert_all_lossless_to_flac=False,
+        )
+        convert_audio.assert_called_once_with(
+            'Episode.mkv',
+            'Episode.mkv',
+            selected_audio_tracks=None,
+            selected_subtitle_tracks=None,
+            audio_codec_choices=(),
+            convert_all_lossless_to_flac=False,
+        )
         owner.completion.assert_called_once_with()
 
     def test_gui_command_preview_keeps_the_complete_generated_command(self) -> None:
@@ -316,6 +341,50 @@ class RemuxWorkflowTests(unittest.TestCase):
             )
 
         self.assertEqual(command, '')
+
+    def test_gui_command_preview_keeps_nested_disc_root_before_configuration_exists(self) -> None:
+        top_folder = os.path.normpath(r'E:\BDMV\[BDMV] Series')
+        disc_root = os.path.join(top_folder, 'Disc 1', 'BD_VIDEO')
+        mpls_path = os.path.join(disc_root, 'BDMV', 'PLAYLIST', '00003.mpls')
+        expected_command = f'mkvmerge "{mpls_path}"'
+        service = SimpleNamespace(
+            _make_main_mpls_remux_cmd=Mock(return_value=(
+                expected_command,
+                os.path.join(disc_root, 'BDMV', 'STREAM', '00003.m2ts'),
+                '001',
+                os.path.normpath(r'E:\Output\Series.mkv'),
+                mpls_path,
+                [],
+                [],
+            )),
+        )
+        owner = SimpleNamespace(
+            _last_configuration_34={},
+            _remux_dst_folder_for_cmd_template=lambda _root: os.path.normpath(r'E:\Output'),
+            _is_movie_mode=lambda: True,
+            _track_selection_config={},
+            bdmv_folder_path=SimpleNamespace(text=lambda: top_folder),
+        )
+
+        with patch.object(remux_gui_module, 'find_mkvtoolnix'), patch.object(
+                remux_gui_module, 'BluraySubtitle', return_value=service):
+            command = RemuxEpisodeLayoutMixin._build_main_remux_cmd_template(
+                owner,
+                mpls_path,
+                1,
+                disc_root,
+            )
+
+        preview_configuration = service._make_main_mpls_remux_cmd.call_args.args[0][0]
+        self.assertEqual(command, expected_command)
+        self.assertEqual(preview_configuration['folder'], disc_root)
+        self.assertEqual(
+            MediaInfoTrackMappingMixin._resolve_mpls_path_from_conf(
+                preview_configuration,
+                top_folder,
+            ),
+            mpls_path,
+        )
 
     def test_dolby_vision_command_preview_probe_is_silent(self) -> None:
         detected_plan = {

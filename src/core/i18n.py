@@ -67,6 +67,7 @@ I18N_ZH_TO_EN = {
     'Dolby Vision 选项不可用': 'Dolby Vision option is unavailable',
     'FLAC 音频转换选项不可用': 'FLAC audio conversion option is unavailable',
     '正在将无损音轨转换为 FLAC：{name}': 'Converting lossless audio to FLAC: {name}',
+    '正在检查静音和重复音轨：{name}': 'Checking silent and duplicate audio: {name}',
     'MPLS Dolby Vision 轨道对 BL={base_pid} EL={enhancement_pid}；启用混流：{enabled}': 'MPLS Dolby Vision pair BL={base_pid} EL={enhancement_pid}; mux enabled: {enabled}',
     '不支持的无损音频编码：{codec}': 'Unsupported lossless audio codec: {codec}',
     'Remux {path} 已完成：BDMV 大小 {bd_size} GiB，Remux 大小 {remux_size} GiB，减少 {reduced_size:.3f} GiB。': 'Remux {path} completed: BDMV size {bd_size} GiB, remux size {remux_size} GiB, reduced size {reduced_size:.3f} GiB.',
@@ -298,8 +299,15 @@ I18N_ZH_TO_EN = {
     '有损音轨 ｢': 'Lossy track ｢',
     'DTS 音轨 ｢': 'DTS track ｢',
     'FLAC 比 DTS 大，保留 DTS 音轨 ｢': 'FLAC larger than DTS, keeping DTS track ｢',
-    'DTS 音轨 ｢': 'DTS track ｢',
-    'FLAC 比 DTS 大，保留 DTS 音轨 ｢': 'FLAC larger than DTS, keeping DTS track ｢',
+    'FLAC 大于 DTS 源音轨，保留原音轨：{path}':
+        'FLAC is larger than the DTS source; keeping the original track: {path}',
+    '音轨提取命令：{command}': 'Audio extraction command: {command}',
+    '音频分析命令：{command}': 'Audio analysis command: {command}',
+    '音轨 {track} 分析失败：{path}': 'Audio analysis failed for track {track}: {path}',
+    '已移除静音轨 {track}（{level:.1f} dB）：{path}':
+        'Silent audio track {track} was removed ({level:.1f} dB): {path}',
+    '已移除重复音轨 {track}；保留音轨 {kept}：{path}':
+        'Duplicate audio track {track} was removed; keeping track {kept}: {path}',
     'TrueHD Atmos 解码命令：': 'TrueHD Atmos decode command: ',
     'TrueHD Atmos PCM 回退解码：': 'TrueHD Atmos PCM fallback decode: ',
     'truehdd W64 转 RIFF WAV：': 'truehdd W64 to RIFF WAV: ',

@@ -21,7 +21,11 @@ from src.exports.utils import (
     force_remove_file,
     run_command,
 )
-from src.runtime.audio_conversion import mux_with_audio_conversion, validate_audio_conversion_tools
+from src.runtime.audio_conversion import (
+    mux_with_audio_conversion,
+    validate_audio_cleanup_tools,
+    validate_audio_conversion_tools,
+)
 from src.runtime.sp import SpEntry, SpJob, media_track_key
 from src.runtime.remux import RemuxMainJob, RemuxRequest
 from src.runtime.encode import EncodeRequest, EncodeRow
@@ -968,6 +972,8 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         self.movie_mode = request.movie_mode
         self.sub_files = list(request.subtitle_files)
         self.episode_subtitle_languages = list(request.episode_subtitle_languages)
+        if request.clean_audio_tracks:
+            validate_audio_cleanup_tools()
         dst_folder, jobs = self._prepare_remux_main_jobs(request)
         sp_jobs = self._prepare_sp_jobs(
             request.sp_entries,
@@ -1008,7 +1014,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         task_outputs = list(dict.fromkeys(
             main_outputs + [path for _entry_index, path in sp_outputs]
         ))
-        if request.convert_lossless_audio_to_flac:
+        if request.clean_audio_tracks or request.convert_lossless_audio_to_flac:
             matroska_outputs = [
                 path for path in task_outputs
                 if os.path.splitext(path)[1].lower() in ('.mkv', '.mka', '.mks')
@@ -1017,16 +1023,20 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 for output_path in matroska_outputs:
                     validate_audio_conversion_tools(
                         output_path,
+                        None,
                         (),
-                        (),
-                        convert_all_lossless_to_flac=True,
+                        convert_all_lossless_to_flac=request.convert_lossless_audio_to_flac,
                     )
                 for output_index, output_path in enumerate(matroska_outputs, start=1):
                     if cancel_event and cancel_event.is_set():
                         raise TaskCancelled()
                     self._progress(
                         900 + int(output_index / max(len(matroska_outputs), 1) * 90),
-                        self.t('Converting lossless audio to FLAC: {name}').format(
+                        self.t(
+                            'Converting lossless audio to FLAC: {name}'
+                            if request.convert_lossless_audio_to_flac
+                            else 'Checking silent and duplicate audio: {name}'
+                        ).format(
                             name=os.path.basename(output_path)
                         ),
                     )
@@ -1036,7 +1046,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                         selected_audio_tracks=None,
                         selected_subtitle_tracks=None,
                         audio_codec_choices=(),
-                        convert_all_lossless_to_flac=True,
+                        convert_all_lossless_to_flac=request.convert_lossless_audio_to_flac,
                     )
             except Exception:
                 for output_path in task_outputs:
@@ -1404,6 +1414,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             movie_mode=request.movie_mode,
             mux_dolby_vision=preserve_dolby_vision,
             convert_lossless_audio_to_flac=False,
+            clean_audio_tracks=False,
             track_selection_config=copy.deepcopy(request.track_selection_config or {}),
             track_language_config=copy.deepcopy(request.track_language_config or {}),
             ensure_tools=False,

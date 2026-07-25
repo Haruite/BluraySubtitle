@@ -675,3 +675,39 @@ Corrected failures found while validating the completed refactor, made SP scan r
 - Exercise an actual SP scan failure and confirm Remux remains blocked until the source is refreshed successfully.
 - Resume a Remux-input Encode with valid completed outputs, an empty main/SP output, and a wrong-type path; verify only valid checkpoints are skipped.
 - Run real standalone-FLAC success/failure fallback and manual MKV chapter/attachment/track extraction checks with the configured tools.
+
+## Post-Phase 6 — Deterministic Audio Cleanup Restoration
+
+Date: 2026-07-25
+Commit: Included in this change
+
+### Scope
+
+Restored the required silent-track, duplicate-track, and DTS/FLAC size decisions in the shared final audio pipeline without restoring output-directory discovery or filename-based track guesses.
+
+### Logic Changes
+
+- Final Blu-ray Remux and Encode muxing now analyzes every selected audio track. Remux performs cleanup even when lossless-to-FLAC conversion is disabled; Blu-ray Encode staging still leaves audio untouched and runs cleanup only after video encoding succeeds.
+- One `mkvextract` invocation extracts every selected audio track from the source Matroska into the task folder. Analysis and conversion reuse those files, so the large source container is no longer reopened once per track.
+- One FFmpeg pass per extracted track calculates full-track `volumedetect` maximum volume and a SHA-256 fingerprint of deterministic 8 kHz PCM. A maximum below -60 dB removes the track as silent. Extraction or analysis failure is explicit, and the required MKVToolNix and FFmpeg executables are checked before work when the source boundary permits it.
+- Duplicate comparison is limited to the same source codec family, channel count, and decoded fingerprint. Tracks with different known languages remain separate. A confirmed duplicate removes the later track and retains the earliest source-order track, so later conversion and final `mkvmerge --track-order` construction use one explicit kept-track list.
+- The implementation operates on captured Matroska track IDs. It does not scan the output directory, infer ownership from `.track` filenames, or inspect unrelated residual files.
+- DTS-family FLAC output now replaces the source only when it is no larger than the extracted DTS. A larger FLAC is deleted and the original DTS remains in its exact position; successful PCM and TrueHD/MLP FLAC output remains FLAC regardless of size.
+
+### Documentation and i18n
+
+- Both README versions explain automatic cleanup, the -60 dB threshold, duplicate boundaries, retained order, terminal reporting, one-pass extraction, full-track analysis time, and the Encode staging boundary.
+- Both code-standard versions record automatic cleanup as the explicit documented exception to retaining every selected GUI track and require one-pass selected-audio extraction.
+- Added bilingual extraction, analysis, progress, failure, silent-removal, duplicate-removal, and DTS-size-fallback messages.
+
+### Verification
+
+- Added focused coverage for single-command multi-track extraction, silent removal, same-language duplicate removal, different-language and different-channel preservation, retained source order, cleanup with Remux FLAC conversion disabled, Encode staging isolation, DTS/FLAC size fallback, TrueHD/MLP size behavior, analysis parsing, and missing-FFmpeg/mkvextract preflight.
+- The complete repository run passed all 188 tests. Python compilation, i18n and split-contract audits, `git diff --check`, and CRLF verification passed.
+- A real-tool synthetic Matroska check used two same-language identical FLAC tracks, one different-language identical FLAC track, and one silent FLAC track. One `mkvextract tracks` command extracted all four selected tracks; subsequent FFmpeg commands read only those temporary FLAC files. Analysis removed the later same-language duplicate and the -91 dB silent track, and MKVToolNix verification retained English and Japanese FLAC in the planned order.
+
+### Manual Media Checks Still Required
+
+- Run Remux on a disposable output using a disc with known silent and duplicated tracks. Compare `mkvmerge -J` track order, codec, language, channel count, flags, and delay against the GUI selection, confirming only the documented tracks are removed.
+- Repeat with FLAC conversion disabled, and with an Encode task, to verify final cleanup while the Blu-ray staging MKV retains all selected source audio.
+- Measure full-track analysis time on a title with several long audio tracks. The source disc is read-only; only the chosen output and task-owned temporary files may be changed.

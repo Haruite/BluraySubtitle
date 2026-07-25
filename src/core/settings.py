@@ -99,7 +99,7 @@ ENCODE_REMUX_LABELS = ["sub_path", "language", "ep_duration", "output_name", "vp
 ENCODE_REMUX_SP_LABELS = ["duration", "output_name", "vpy_path", "edit_vpy", "preview_script", "play", "edit_tracks", "edit_chapters", "edit_attachments"]
 DEFAULT_APPROX_EPISODE_DURATION_SECONDS = 24 * 60
 CURRENT_UI_LANGUAGE = "en"
-APP_TITLE = "BluraySubtitle v3.8"
+APP_TITLE = "BluraySubtitle v4.0"
 
 
 def get_mkvtoolnix_ui_language() -> str:

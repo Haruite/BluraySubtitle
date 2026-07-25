@@ -1,9 +1,10 @@
-"""Lossless-audio conversion and verified final Matroska muxing."""
+"""Automatic audio cleanup, lossless conversion, and verified Matroska muxing."""
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import tempfile
 from typing import Optional
@@ -63,23 +64,219 @@ def _truehdd_path() -> str:
     return shutil.which('truehdd') or shutil.which('truehdd.exe') or ''
 
 
+def validate_audio_cleanup_tools() -> None:
+    """Require the extractor and decoder used by automatic audio cleanup."""
+    find_mkvtoolnix()
+    ffmpeg = str(core_settings.FFMPEG_PATH or '').strip() or shutil.which('ffmpeg') or ''
+    if not ffmpeg or not (os.path.isfile(ffmpeg) or shutil.which(ffmpeg)):
+        raise FileNotFoundError(translate_text('ffmpeg executable does not exist'))
+    mkvextract = str(core_settings.MKV_EXTRACT_PATH or '').strip() or shutil.which('mkvextract') or ''
+    if not mkvextract or not (os.path.isfile(mkvextract) or shutil.which(mkvextract)):
+        raise FileNotFoundError(translate_text('mkvextract not found'))
+
+
+def _extract_selected_audio_tracks(
+        mkvextract: str,
+        source_path: str,
+        work_folder: str,
+        audio_tracks: list[dict[str, object]],
+        selected_audio: tuple[int, ...],
+) -> dict[int, str]:
+    """Extract every selected audio track in one source-container pass."""
+    if not selected_audio:
+        return {}
+    if not mkvextract:
+        raise FileNotFoundError(translate_text('mkvextract not found'))
+
+    extracted_audio_by_track: dict[int, str] = {}
+    extract_command = [mkvextract]
+    ui_language = mkvtoolnix_ui_language_arg().strip()
+    if ui_language:
+        extract_command.extend(ui_language.split())
+    extract_command.extend(['tracks', source_path])
+    extension_by_codec = {
+        'A_PCM/INT/LIT': '.wav',
+        'A_PCM/INT/BIG': '.wav',
+        'A_TRUEHD': '.thd',
+        'A_MLP': '.thd',
+        'A_FLAC': '.flac',
+        'A_AC3': '.ac3',
+        'A_EAC3': '.eac3',
+        'A_AAC': '.aac',
+        'A_MPEG/L3': '.mp3',
+        'A_MPEG/L2': '.mp2',
+        'A_OPUS': '.opus',
+        'A_VORBIS': '.ogg',
+    }
+    for track in audio_tracks:
+        track_id = int(track['id'])
+        if track_id not in selected_audio:
+            continue
+        properties = track.get('properties') if isinstance(track.get('properties'), dict) else {}
+        codec_id = str(properties.get('codec_id') or '').strip().upper()
+        extension = (
+            '.dts'
+            if mkv_codec_id_is_dts_family(codec_id)
+            else extension_by_codec.get(codec_id, '.audio')
+        )
+        extracted_audio = os.path.join(work_folder, f'track-{track_id}{extension}')
+        extracted_audio_by_track[track_id] = extracted_audio
+        extract_command.append(f'{track_id}:{extracted_audio}')
+
+    extract_result = run_command(
+        extract_command,
+        log_template='Audio extraction command: {command}',
+    )
+    for track_id, extracted_audio in extracted_audio_by_track.items():
+        if extract_result.returncode not in (0, 1) or not (
+                os.path.isfile(extracted_audio) and os.path.getsize(extracted_audio) > 0
+        ):
+            raise RuntimeError(
+                translate_text('Audio extraction failed for track {track}: {path}').format(
+                    track=track_id,
+                    path=source_path,
+                )
+            )
+    return extracted_audio_by_track
+
+
+def _analyze_audio_track(
+        ffmpeg: str,
+        extracted_audio: str,
+        source_path: str,
+        track_id: int,
+) -> tuple[float, str]:
+    """Analyze one previously extracted audio track."""
+    result = run_command(
+        [
+            ffmpeg, '-hide_banner', '-nostats', '-i', extracted_audio,
+            '-map', '0:a:0', '-af', 'volumedetect',
+            '-ar', '8000', '-c:a', 'pcm_s16le', '-f', 'hash', '-hash', 'sha256', '-',
+        ],
+        capture_output=True,
+        text=True,
+        encoding='utf-8',
+        errors='ignore',
+        log_template='Audio analysis command: {command}',
+    )
+    output = f'{result.stdout or ""}\n{result.stderr or ""}'
+    volume_match = re.search(
+        r'max_volume:\s*(-?inf|[-+]?\d+(?:\.\d+)?)\s*dB',
+        output,
+        flags=re.IGNORECASE,
+    )
+    fingerprint_match = re.search(r'\bSHA256=([0-9a-f]+)\b', output, flags=re.IGNORECASE)
+    if result.returncode != 0 or not volume_match or not fingerprint_match:
+        raise RuntimeError(
+            translate_text('Audio analysis failed for track {track}: {path}').format(
+                track=track_id,
+                path=source_path,
+            )
+        )
+    return float(volume_match.group(1)), fingerprint_match.group(1).lower()
+
+
+def _selected_audio_after_cleanup(
+        ffmpeg: str,
+        source_path: str,
+        audio_tracks: list[dict[str, object]],
+        selected_audio: tuple[int, ...],
+        language_by_track: dict[int, str],
+        extracted_audio_by_track: dict[int, str],
+) -> list[int]:
+    """Remove silent and exact duplicate selections while retaining source order."""
+    kept_audio: list[int] = []
+    fingerprints: dict[tuple[str, int, str], list[tuple[int, str]]] = {}
+    for track in audio_tracks:
+        track_id = int(track['id'])
+        if track_id not in selected_audio:
+            continue
+        properties = track.get('properties') if isinstance(track.get('properties'), dict) else {}
+        codec_id = str(properties.get('codec_id') or '').strip().upper()
+        codec_name = str(track.get('codec') or '').strip().lower()
+        maximum_volume, fingerprint = _analyze_audio_track(
+            ffmpeg,
+            extracted_audio_by_track[track_id],
+            source_path,
+            track_id,
+        )
+        if maximum_volume < -60.0:
+            print(
+                translate_text(
+                    'Silent audio track {track} was removed ({level:.1f} dB): {path}'
+                ).format(track=track_id, level=maximum_volume, path=source_path),
+                flush=True,
+            )
+            continue
+        try:
+            channel_count = int(properties.get('audio_channels') or 0)
+        except (TypeError, ValueError):
+            channel_count = 0
+        language = language_by_track.get(track_id) or str(properties.get('language') or 'und')
+        normalized_language = language.strip().lower().replace('_', '-').split('-', 1)[0]
+        if normalized_language in ('chi', 'cmn', 'yue', 'nan', 'zh'):
+            normalized_language = 'zho'
+        elif not normalized_language:
+            normalized_language = 'und'
+        if codec_id in ('A_PCM/INT/LIT', 'A_PCM/INT/BIG'):
+            codec_family = 'pcm'
+        elif codec_id in ('A_TRUEHD', 'A_MLP'):
+            codec_family = 'truehd'
+        elif mkv_codec_id_is_dts_family(codec_id):
+            codec_family = 'dts'
+        else:
+            codec_family = codec_id or codec_name
+        fingerprint_key = (codec_family, channel_count, fingerprint)
+        duplicate_track_id = next(
+            (
+                kept_track_id
+                for kept_track_id, kept_language in fingerprints.get(fingerprint_key, ())
+                if (
+                    normalized_language == 'und'
+                    or kept_language == 'und'
+                    or normalized_language == kept_language
+                )
+            ),
+            None,
+        )
+        if duplicate_track_id is not None:
+            print(
+                translate_text(
+                    'Duplicate audio track {track} was removed; keeping track {kept}: {path}'
+                ).format(track=track_id, kept=duplicate_track_id, path=source_path),
+                flush=True,
+            )
+            continue
+        fingerprints.setdefault(fingerprint_key, []).append((track_id, normalized_language))
+        kept_audio.append(track_id)
+    return kept_audio
+
+
 def validate_audio_conversion_tools(
         source_file: str,
-        selected_audio_tracks: tuple[str, ...],
+        selected_audio_tracks: Optional[tuple[str, ...]],
         audio_codec_choices: tuple[str, ...],
         *,
         convert_all_lossless_to_flac: bool = False,
 ) -> None:
-    """Check only tools required by conversions that can be determined before launch."""
-    if not selected_audio_tracks and not convert_all_lossless_to_flac:
+    """Check tools required by automatic cleanup and requested conversions."""
+    cleanup_only = (
+        selected_audio_tracks is None
+        and not audio_codec_choices
+        and not convert_all_lossless_to_flac
+    )
+    if selected_audio_tracks == () and not convert_all_lossless_to_flac:
         return
     tracks = _identify_tracks(source_file)
-    if convert_all_lossless_to_flac:
+    if convert_all_lossless_to_flac or selected_audio_tracks is None:
         selected_audio_tracks = tuple(
             str(track['id']) for track in tracks if track.get('type') == 'audio'
         )
+    if convert_all_lossless_to_flac:
         audio_codec_choices = ('flac',) * len(selected_audio_tracks)
-    if len(selected_audio_tracks) != len(audio_codec_choices):
+    if not selected_audio_tracks:
+        return
+    if not cleanup_only and len(selected_audio_tracks) != len(audio_codec_choices):
         raise ValueError(
             translate_text('Audio codec choices do not match selected tracks: {path}').format(
                 path=source_file
@@ -90,22 +287,21 @@ def validate_audio_conversion_tools(
         for track in tracks
         if track.get('type') == 'audio' and 'id' in track
     }
-    required_tools: set[str] = set()
-    configured_flac = str(core_settings.FLAC_PATH or '').strip()
-    flac_encoder = (
-        configured_flac
-        if configured_flac and (os.path.isfile(configured_flac) or shutil.which(configured_flac))
-        else shutil.which('flac') or shutil.which('flac.exe') or ''
-    )
-    for raw_track_id, raw_target_codec in zip(selected_audio_tracks, audio_codec_choices):
-        track_id = int(raw_track_id)
-        track = audio_by_id.get(track_id)
-        if track is None:
+    for raw_track_id in selected_audio_tracks:
+        if int(raw_track_id) not in audio_by_id:
             raise ValueError(
                 translate_text('Selected audio track is missing from: {path}').format(
                     path=source_file
                 )
             )
+    validate_audio_cleanup_tools()
+    if cleanup_only:
+        return
+
+    requires_fdkaac = False
+    for raw_track_id, raw_target_codec in zip(selected_audio_tracks, audio_codec_choices):
+        track_id = int(raw_track_id)
+        track = audio_by_id.get(track_id)
         target_codec = str(raw_target_codec).strip().lower()
         if target_codec not in ('flac', 'aac', 'opus'):
             raise ValueError(
@@ -116,7 +312,6 @@ def validate_audio_conversion_tools(
         properties = track.get('properties') if isinstance(track.get('properties'), dict) else {}
         codec_id = str(properties.get('codec_id') or '').strip().upper()
         codec_name = str(track.get('codec') or '').strip().lower()
-        truehd_atmos = codec_id in ('A_TRUEHD', 'A_MLP') and 'atmos' in codec_name
         if not _is_lossless_audio_track(track) or (
                 codec_id == 'A_FLAC' and target_codec == 'flac'
         ):
@@ -127,39 +322,17 @@ def validate_audio_conversion_tools(
                 and not _truehdd_path()
         ):
             continue
-        required_tools.add('mkvextract')
-        if target_codec == 'flac':
-            flac_input_is_wave = codec_id in ('A_PCM/INT/LIT', 'A_PCM/INT/BIG') or truehd_atmos
-            if not flac_encoder or not flac_input_is_wave:
-                required_tools.add('ffmpeg')
-        else:
-            required_tools.add('ffmpeg')
-            if target_codec == 'aac':
-                required_tools.add('fdkaac')
-
-    configured_tools = {
-        'ffmpeg': (
-            str(core_settings.FFMPEG_PATH or '').strip() or shutil.which('ffmpeg') or '',
-            'ffmpeg executable does not exist',
-        ),
-        'mkvextract': (
-            str(core_settings.MKV_EXTRACT_PATH or '').strip() or shutil.which('mkvextract') or '',
-            'mkvextract not found',
-        ),
-        'fdkaac': (
+        if target_codec == 'aac':
+            requires_fdkaac = True
+    if requires_fdkaac:
+        fdkaac = (
             str(core_settings.FDK_AAC_PATH or '').strip()
             or shutil.which('fdkaac')
             or shutil.which('fdkaac.exe')
-            or '',
-            'fdkaac executable does not exist',
-        ),
-    }
-    for tool_name in ('mkvextract', 'ffmpeg', 'fdkaac'):
-        if tool_name not in required_tools:
-            continue
-        executable, error_message = configured_tools[tool_name]
-        if not executable or not (os.path.isfile(executable) or shutil.which(executable)):
-            raise FileNotFoundError(translate_text(error_message))
+            or ''
+        )
+        if not fdkaac or not (os.path.isfile(fdkaac) or shutil.which(fdkaac)):
+            raise FileNotFoundError(translate_text('fdkaac executable does not exist'))
 
 
 def mux_with_audio_conversion(
@@ -175,7 +348,7 @@ def mux_with_audio_conversion(
         subtitle_file: str = '',
         subtitle_language: str = '',
 ) -> None:
-    """Convert selected lossless audio and create the exact planned Matroska output atomically."""
+    """Clean selected audio, convert requested lossless tracks, and mux atomically."""
     source_path = os.path.abspath(os.path.normpath(source_file))
     output_path = os.path.abspath(os.path.normpath(output_file))
     if not os.path.isfile(source_path):
@@ -190,6 +363,11 @@ def mux_with_audio_conversion(
     track_by_id = {int(track['id']): track for track in tracks if 'id' in track}
     source_audio = [int(track['id']) for track in tracks if track.get('type') == 'audio']
     source_subtitles = [int(track['id']) for track in tracks if track.get('type') == 'subtitles']
+    cleanup_only = (
+        selected_audio_tracks is None
+        and not audio_codec_choices
+        and not convert_all_lossless_to_flac
+    )
     if convert_all_lossless_to_flac:
         selected_audio = tuple(source_audio)
         audio_codec_choices = ('flac',) * len(selected_audio)
@@ -209,7 +387,7 @@ def mux_with_audio_conversion(
         raise ValueError(
             translate_text('Selected subtitle track is missing from: {path}').format(path=source_path)
         )
-    if len(selected_audio) != len(audio_codec_choices):
+    if not cleanup_only and len(selected_audio) != len(audio_codec_choices):
         raise ValueError(
             translate_text('Audio codec choices do not match selected tracks: {path}').format(
                 path=source_path
@@ -231,7 +409,7 @@ def mux_with_audio_conversion(
     expected_audio_codecs: list[str | None] = []
     try:
         find_mkvtoolnix()
-        mkvextract = ''
+        mkvextract = str(core_settings.MKV_EXTRACT_PATH or '').strip() or shutil.which('mkvextract') or ''
         ffmpeg = str(core_settings.FFMPEG_PATH or '').strip() or shutil.which('ffmpeg') or ''
         configured_flac = str(core_settings.FLAC_PATH or '').strip()
         flac_encoder = (
@@ -240,25 +418,52 @@ def mux_with_audio_conversion(
             else shutil.which('flac') or shutil.which('flac.exe') or ''
         )
 
-        for track in tracks:
-            if track.get('type') != 'audio':
-                continue
-            track_id = int(track['id'])
-            if track_id not in selected_audio:
-                continue
-            target_codec = str(codec_by_track[track_id]).strip().lower()
-            if target_codec not in ('flac', 'aac', 'opus'):
-                raise ValueError(
-                    translate_text('Unsupported lossless audio codec: {codec}').format(
-                        codec=target_codec
-                    )
+        if selected_audio and not ffmpeg:
+            raise FileNotFoundError(translate_text('ffmpeg executable does not exist'))
+        audio_tracks = [track for track in tracks if track.get('type') == 'audio']
+        unsupported_codec = next(
+            (
+                str(codec).strip().lower()
+                for codec in codec_by_track.values()
+                if str(codec).strip().lower() not in ('flac', 'aac', 'opus')
+            ),
+            '',
+        )
+        if unsupported_codec:
+            raise ValueError(
+                translate_text('Unsupported lossless audio codec: {codec}').format(
+                    codec=unsupported_codec
                 )
-            expected_audio_codecs.append(None)
-            if not _is_lossless_audio_track(track):
+            )
+        # The source MKV can be hundreds of gigabytes. Extract selected audio in
+        # one mkvextract invocation, then reuse the elementary streams for both
+        # cleanup analysis and conversion instead of reopening the MKV per track.
+        extracted_audio_by_track = _extract_selected_audio_tracks(
+            mkvextract,
+            source_path,
+            work_folder,
+            audio_tracks,
+            selected_audio,
+        )
+        kept_audio = _selected_audio_after_cleanup(
+            ffmpeg,
+            source_path,
+            audio_tracks,
+            selected_audio,
+            language_by_track,
+            extracted_audio_by_track,
+        )
+        for track in audio_tracks:
+            track_id = int(track['id'])
+            if track_id not in kept_audio:
                 continue
+            target_codec = str(codec_by_track.get(track_id) or '').strip().lower()
+            expected_audio_codecs.append(None)
             properties = track.get('properties') if isinstance(track.get('properties'), dict) else {}
             codec_id = str(properties.get('codec_id') or '').strip().upper()
             codec_name = str(track.get('codec') or '').strip().lower()
+            if not target_codec or not _is_lossless_audio_track(track):
+                continue
             if codec_id == 'A_FLAC' and target_codec == 'flac':
                 expected_audio_codecs[-1] = target_codec
                 continue
@@ -272,38 +477,7 @@ def mux_with_audio_conversion(
                     flush=True,
                 )
                 continue
-            if not mkvextract:
-                mkvextract = str(core_settings.MKV_EXTRACT_PATH or '').strip() or shutil.which('mkvextract') or ''
-            if not mkvextract:
-                raise FileNotFoundError(translate_text('mkvextract not found'))
-
-            if codec_id in ('A_PCM/INT/LIT', 'A_PCM/INT/BIG'):
-                source_extension = '.wav'
-            elif codec_id in ('A_TRUEHD', 'A_MLP'):
-                source_extension = '.thd'
-            elif codec_id == 'A_FLAC':
-                source_extension = '.flac'
-            elif mkv_codec_id_is_dts_family(codec_id):
-                source_extension = '.dts'
-            else:
-                source_extension = '.audio'
-            extracted_audio = os.path.join(work_folder, f'track-{track_id}{source_extension}')
-            extract_command = [mkvextract]
-            ui_language = mkvtoolnix_ui_language_arg().strip()
-            if ui_language:
-                extract_command.extend(ui_language.split())
-            extract_command.extend(['tracks', source_path, f'{track_id}:{extracted_audio}'])
-            extract_result = run_command(extract_command)
-            if extract_result.returncode not in (0, 1) or not (
-                    os.path.isfile(extracted_audio) and os.path.getsize(extracted_audio) > 0
-            ):
-                raise RuntimeError(
-                    translate_text('Audio extraction failed for track {track}: {path}').format(
-                        track=track_id,
-                        path=source_path,
-                    )
-                )
-
+            extracted_audio = extracted_audio_by_track[track_id]
             conversion_input = extracted_audio
             if truehd_atmos:
                 decoded_base = os.path.join(work_folder, f'track-{track_id}-decoded')
@@ -438,10 +612,33 @@ def mux_with_audio_conversion(
                         path=source_path,
                     )
                 )
+            # DTS is already a compact lossless source in this workflow. Replacing
+            # it with a larger FLAC defeats the conversion's size-saving purpose,
+            # so keep the original container track. PCM and TrueHD/MLP retain a
+            # successfully encoded FLAC even when it is larger, matching the
+            # established behavior for those formats.
+            if (
+                    target_codec == 'flac'
+                    and mkv_codec_id_is_dts_family(codec_id)
+                    and os.path.getsize(converted_audio) > os.path.getsize(extracted_audio)
+            ):
+                print(
+                    translate_text(
+                        'FLAC is larger than the DTS source; keeping the original track: {path}'
+                    ).format(path=extracted_audio),
+                    flush=True,
+                )
+                os.remove(converted_audio)
+                continue
             replacement_by_track[track_id] = (converted_audio, target_codec)
             expected_audio_codecs[-1] = target_codec
 
-        if convert_all_lossless_to_flac and same_path and not replacement_by_track:
+        if (
+                same_path
+                and not replacement_by_track
+                and len(kept_audio) == len(selected_audio)
+                and not language_by_track
+        ):
             return
         mkvmerge = str(core_settings.MKV_MERGE_PATH or '').strip() or shutil.which('mkvmerge') or ''
         if not mkvmerge:
@@ -450,7 +647,7 @@ def mux_with_audio_conversion(
         if encoded_video_file:
             input_arguments.append('-D')
         source_audio_to_keep = [
-            track_id for track_id in selected_audio if track_id not in replacement_by_track
+            track_id for track_id in kept_audio if track_id not in replacement_by_track
         ]
         input_arguments.extend(
             ['-a', ','.join(str(track_id) for track_id in source_audio_to_keep)]
@@ -542,7 +739,7 @@ def mux_with_audio_conversion(
                     track_order.append(f'0:{track_id}')
                     expected_languages.append(language_by_track.get(track_id))
             elif track_type == 'audio':
-                if track_id not in selected_audio:
+                if track_id not in kept_audio:
                     continue
                 if track_id in replacement_input:
                     track_order.append(f'{replacement_input[track_id]}:0')
@@ -591,7 +788,7 @@ def mux_with_audio_conversion(
                 translate_text('Final track verification failed: {path}').format(path=output_path)
             )
         output_audio = [track for track in output_tracks if track.get('type') == 'audio']
-        if len(output_audio) != len(selected_audio):
+        if len(output_audio) != len(kept_audio):
             raise RuntimeError(
                 translate_text('Final audio track verification failed: {path}').format(path=output_path)
             )
@@ -638,4 +835,8 @@ def mux_with_audio_conversion(
         shutil.rmtree(work_folder, ignore_errors=True)
 
 
-__all__ = ['mux_with_audio_conversion', 'validate_audio_conversion_tools']
+__all__ = [
+    'mux_with_audio_conversion',
+    'validate_audio_cleanup_tools',
+    'validate_audio_conversion_tools',
+]
