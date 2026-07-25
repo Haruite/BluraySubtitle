@@ -10,25 +10,58 @@ def is_docker() -> bool:
     return os.path.exists("/.dockerenv") or (os.path.isfile(path) and any("docker" in line for line in open(path)))
 
 
-FLAC_PATH = r"C:\Software\flac.exe"
+_BUNDLE_ROOT = (
+    os.path.abspath(str(sys._MEIPASS))
+    if (
+        sys.platform == "win32"
+        and bool(getattr(sys, "frozen", False))
+        and hasattr(sys, "_MEIPASS")
+    )
+    else ""
+)
+
+
+def _bundled_path(relative_path: str, system_path: str) -> str:
+    """Use a packaged tool in frozen builds and the configured system path otherwise."""
+    return os.path.join(_BUNDLE_ROOT, relative_path) if _BUNDLE_ROOT else system_path
+
+
+FLAC_PATH = _bundled_path("flac.exe", r"C:\Software\flac.exe")
 FLAC_THREADS = 20
-FFMPEG_PATH = r"C:\Software\ffmpeg.exe"
-FFPROBE_PATH = r"C:\Software\ffprobe.exe"
+FFMPEG_PATH = _bundled_path("ffmpeg.exe", r"C:\Software\ffmpeg.exe")
+FFPROBE_PATH = _bundled_path("ffprobe.exe", r"C:\Software\ffprobe.exe")
+# These paths remain system defaults because the GUI can explicitly select
+# bundled or system VapourSynth and encoder executables.
 X265_PATH = r"C:\Software\x265.exe"
 X264_PATH = r"C:\Software\x264.exe"
 SVT_AV1_PATH = r'C:\Software\SvtAv1EncApp.exe'
-FDK_AAC_PATH = r'C:\Software\fdkaac.exe'
-DOVI_TOOL_PATH = r'C:\Software\dovi_tool.exe'
-TRUEHDD_PATH = r'C:\Software\truehdd.exe'
-VSEDIT_PATH = r"C:\Software\vapoursynth\vsedit.exe"
+FDK_AAC_PATH = _bundled_path("fdkaac.exe", r"C:\Software\fdkaac.exe")
+DOVI_TOOL_PATH = _bundled_path("dovi_tool.exe", r"C:\Software\dovi_tool.exe")
+TRUEHDD_PATH = _bundled_path("truehdd.exe", r"C:\Software\truehdd.exe")
+VSEDIT_PATH = _bundled_path(
+    os.path.join("vs_pkg", "vsedit.exe"),
+    r"C:\Software\vapoursynth\vsedit.exe",
+)
 VSPIPE_PATH = r"C:\Software\vapoursynth\vspipe.exe"
 PLUGIN_PATH = ""
-LIBASS_PATH = r"C:\Software\libass-9.dll"
-TS_MUXER_PATH = r"C:\Software\tsMuxeR.exe"
-MKV_INFO_PATH = r"C:\Program Files\MKVToolNix\mkvinfo.exe"
-MKV_MERGE_PATH = r"C:\Program Files\MKVToolNix\mkvmerge.exe"
-MKV_PROP_EDIT_PATH = r"C:\Program Files\MKVToolNix\mkvpropedit.exe"
-MKV_EXTRACT_PATH = r"C:\Program Files\MKVToolNix\mkvextract.exe"
+LIBASS_PATH = _bundled_path("libass-9.dll", r"C:\Software\libass-9.dll")
+TS_MUXER_PATH = _bundled_path("tsMuxeR.exe", r"C:\Software\tsMuxeR.exe")
+MKV_INFO_PATH = _bundled_path(
+    "mkvinfo.exe",
+    r"C:\Program Files\MKVToolNix\mkvinfo.exe",
+)
+MKV_MERGE_PATH = _bundled_path(
+    "mkvmerge.exe",
+    r"C:\Program Files\MKVToolNix\mkvmerge.exe",
+)
+MKV_PROP_EDIT_PATH = _bundled_path(
+    "mkvpropedit.exe",
+    r"C:\Program Files\MKVToolNix\mkvpropedit.exe",
+)
+MKV_EXTRACT_PATH = _bundled_path(
+    "mkvextract.exe",
+    r"C:\Program Files\MKVToolNix\mkvextract.exe",
+)
 
 if sys.platform != "win32":
     FLAC_PATH = "/usr/bin/flac"

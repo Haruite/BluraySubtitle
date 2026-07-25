@@ -4,7 +4,9 @@
 
 Development: [mandatory code modification standards](docs/development/code-standards.md) | [refactoring history](docs/refactoring/refactoring-history.md)
 
-Windows x64 executable: [download](https://sbx.mysmy.top/tools/BluraySubtitle_windows_x64.exe)
+The Windows x64 release is a one-folder package. Extract the complete archive,
+then run `BluraySubtitle_windows_x64.exe` without moving it away from the
+adjacent `_internal` directory.
 
 BluraySubtitle is a GUI tool for Blu-ray workflows on **Windows / Linux** (including **Docker**).  
 It brings the following five areas of functionality together in one application:
@@ -232,13 +234,14 @@ Episode configuration is recalculated when any of these **three** inputs changes
 ### Python packages
 
 - `PyQt6`
-- `librosa`
+- `numpy`
+- `soundfile`
 - `pycountry`
 
 Example:
 
 ```bash
-pip install PyQt6 librosa pycountry pillow matplotlib
+pip install PyQt6 numpy soundfile pycountry pillow matplotlib
 ```
 
 ### External tools

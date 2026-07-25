@@ -4,7 +4,8 @@
 
 开发文档：[强制代码修改规范](docs/development/code-standards.zh-Hans.md) | [重构历史](docs/refactoring/refactoring-history.zh-Hans.md)
 
-Windows 可执行文件：[下载](https://sbx.mysmy.top/tools/BluraySubtitle_windows_x64.exe)
+Windows x64 版本使用目录包发布。请完整解压发布压缩包，然后运行
+`BluraySubtitle_windows_x64.exe`；不要将它与旁边的 `_internal` 目录分离。
 
 BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 工具。  
 它将以下五类功能整合在一个应用中：
@@ -208,13 +209,14 @@ BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 
 ### Python 依赖
 
 - `PyQt6`
-- `librosa`
+- `numpy`
+- `soundfile`
 - `pycountry`
 
 示例：
 
 ```bash
-pip install PyQt6 librosa pycountry pillow matplotlib
+pip install PyQt6 numpy soundfile pycountry pillow matplotlib
 ```
 
 ### 外部工具

@@ -165,9 +165,10 @@ $script:RequiredVapourSynthScripts = @(
 )
 $script:PythonPackages = @(
     [pscustomobject]@{ Distribution = "pip"; Import = "import pip" },
+    [pscustomobject]@{ Distribution = "numpy"; Import = "import numpy" },
     [pscustomobject]@{ Distribution = "pycountry"; Import = "import pycountry" },
     [pscustomobject]@{ Distribution = "PyQt6"; Import = "from PyQt6 import QtCore" },
-    [pscustomobject]@{ Distribution = "librosa"; Import = "import librosa" },
+    [pscustomobject]@{ Distribution = "soundfile"; Import = "import soundfile" },
     [pscustomobject]@{ Distribution = "pillow"; Import = "from PIL import Image" },
     [pscustomobject]@{ Distribution = "matplotlib"; Import = "import matplotlib" }
 )

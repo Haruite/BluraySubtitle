@@ -1,9 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller one-file build for the Windows x64 release.
+"""PyInstaller one-folder build for the Windows x64 release.
 
 Build from the repository root with:
 
     pyinstaller --clean --noconfirm BluraySubtitle_windows_x64.spec
+
+Archive the complete ``dist/BluraySubtitle_windows_x64`` directory for
+distribution; the executable depends on its adjacent ``_internal`` directory.
 
 The external tool locations are loaded from ``src/core/settings.py`` so the
 spec and the application configuration cannot silently drift apart.
@@ -12,7 +15,7 @@ spec and the application configuration cannot silently drift apart.
 from pathlib import Path
 import runpy
 
-from PyInstaller.utils.hooks import collect_all, collect_data_files
+from PyInstaller.utils.hooks import collect_data_files
 
 
 PROJECT_ROOT = Path(SPECPATH).resolve()
@@ -29,7 +32,7 @@ def required_path(path, description):
 
 
 def add_binary(items, path, description):
-    """Add a required executable/DLL to the bundle extraction root."""
+    """Add a required executable/DLL to the bundle support directory."""
     resolved = required_path(path, description)
     if not resolved.is_file():
         raise FileNotFoundError(f"Expected a file for {description}: {resolved}")
@@ -43,7 +46,7 @@ third_party_notices = required_path(
     "third-party notices",
 )
 
-# The application expects this exact frozen layout:
+# The application expects this exact bundled layout:
 #     sys._MEIPASS/vs_pkg/vspipe.exe
 # Copying the directory (rather than selecting individual files) also keeps
 # its portable Python, plugins, scripts, SDK, and VS Editor installation.
@@ -64,8 +67,8 @@ if vspipe_path.parent != vapoursynth_dir:
 
 binaries = []
 
-# Executables and DLLs configured in settings.py. They are placed at the
-# extraction root to preserve the layout of the previous one-file build.
+# Executables and DLLs configured in settings.py are placed in the support
+# directory addressed by sys._MEIPASS at runtime.
 for setting_name, description in (
     ("FLAC_PATH", "FLAC encoder"),
     ("FFMPEG_PATH", "FFmpeg"),
@@ -85,33 +88,19 @@ for setting_name, description in (
 ):
     add_binary(binaries, SETTINGS[setting_name], description)
 
-# flac.exe requires its adjacent runtime DLLs. metaflac.exe and fdk-aac.lib
-# were also present in the previous release bundle, so retain that layout.
+# flac.exe requires its adjacent runtime DLL.
 flac_dir = Path(SETTINGS["FLAC_PATH"]).parent
-for companion_name in ("metaflac.exe", "libFLAC.dll", "libFLAC++.dll"):
-    add_binary(binaries, flac_dir / companion_name, f"FLAC companion {companion_name}")
-
-fdk_aac_import_library = required_path(
-    Path(SETTINGS["FDK_AAC_PATH"]).with_name("fdk-aac.lib"),
-    "FDK-AAC import library",
-)
+add_binary(binaries, flac_dir / "libFLAC.dll", "FLAC runtime library")
 
 
 datas = [
     (str(getnative_vpy), "src/vs_tools"),
     (str(third_party_notices), "legal"),
-    (str(fdk_aac_import_library), "."),
     # A directory source copies all of its contents beneath this destination.
     (str(vapoursynth_dir), "vs_pkg"),
 ]
 
-# librosa exposes modules lazily; collecting all of it avoids late import
-# failures in audio analysis features. pycountry needs its packaged databases.
-hiddenimports = []
-librosa_datas, librosa_binaries, librosa_hiddenimports = collect_all("librosa")
-datas += librosa_datas
-binaries += librosa_binaries
-hiddenimports += librosa_hiddenimports
+# pycountry needs its packaged databases.
 datas += collect_data_files("pycountry")
 
 
@@ -120,7 +109,7 @@ a = Analysis(
     pathex=[str(PROJECT_ROOT)],
     binaries=binaries,
     datas=datas,
-    hiddenimports=hiddenimports,
+    hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -134,9 +123,8 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="BluraySubtitle_windows_x64",
     debug=False,
     bootloader_ignore_signals=False,
@@ -150,4 +138,14 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name="BluraySubtitle_windows_x64",
 )

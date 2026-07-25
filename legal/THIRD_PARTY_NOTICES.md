@@ -1,6 +1,6 @@
 # Third-party notices (bundled binaries)
 
-**Product:** BluraySubtitle (Windows, PyInstaller onefile build)
+**Product:** BluraySubtitle (Windows, PyInstaller one-folder build)
 
 ---
 
@@ -15,9 +15,9 @@
 
 ---
 
-## FLAC / metaflac / libFLAC / libFLAC++
+## FLAC / libFLAC
 
-- **Files:** `flac.exe`, `metaflac.exe`, `libFLAC.dll`, `libFLAC++.dll`
+- **Files:** `flac.exe`, `libFLAC.dll`
 - **Version:** 1.5.0
 - **License:** BSD-3-Clause
 - **Source:** https://ftp.osuosl.org/pub/xiph/releases/flac/flac-1.5.0.tar.xz
@@ -41,7 +41,7 @@ These are **two separate upstreams**: the `fdkaac` program links against or ship
 
 ### Fraunhofer FDK AAC Codec Library — https://github.com/mstorsjo/fdk-aac
 
-- **Bundled file(s):** `fdk-aac.lib`
+- **Bundled component:** statically linked into `fdkaac.exe`
 - **Version:** **v2.0.3** (Git commit `716f4394641d53f0d79c9ddac3fa93b03a49f278` — peeled from tag `v2.0.3`)
 - **License:** **Fraunhofer “Software License for The Fraunhofer FDK AAC Codec Library for Android”** — a **project-specific** license (upstream ships it as **`NOTICE`**). It is **not** Apache-2.0 or LGPL; there is **no single widely used SPDX identifier** for it (some manifests use a custom `LicenseRef-…` after internal policy).
 - **Full license text (this tag):** https://raw.githubusercontent.com/mstorsjo/fdk-aac/v2.0.3/NOTICE

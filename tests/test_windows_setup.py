@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import os
+import runpy
 import shutil
 import subprocess
+import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 SETUP_SCRIPT = REPOSITORY_ROOT / "setup_windows_environment.ps1"
 CMD_LAUNCHER = REPOSITORY_ROOT / "setup_windows_environment.cmd"
 SETTINGS_FILE = REPOSITORY_ROOT / "src" / "core" / "settings.py"
+SPEC_FILE = REPOSITORY_ROOT / "BluraySubtitle_windows_x64.spec"
 CODE_STANDARDS_EN = REPOSITORY_ROOT / "docs" / "development" / "code-standards.md"
 CODE_STANDARDS_ZH = (
     REPOSITORY_ROOT / "docs" / "development" / "code-standards.zh-Hans.md"
@@ -25,6 +29,7 @@ class WindowsSetupTests(unittest.TestCase):
         cls.raw = SETUP_SCRIPT.read_bytes()
         cls.source = cls.raw.decode("utf-8-sig")
         cls.settings_source = SETTINGS_FILE.read_text(encoding="utf-8")
+        cls.spec_source = SPEC_FILE.read_text(encoding="utf-8")
         cls.code_standards_en = CODE_STANDARDS_EN.read_text(encoding="utf-8")
         cls.code_standards_zh = CODE_STANDARDS_ZH.read_text(encoding="utf-8")
 
@@ -569,10 +574,19 @@ class WindowsSetupTests(unittest.TestCase):
         self.assertNotIn(r'C:\Downloads\libass-9.dll', self.settings_source)
 
     def test_python_dependencies_are_latest_version_components(self) -> None:
-        distributions = ("pip", "pycountry", "PyQt6", "librosa", "pillow", "matplotlib")
+        distributions = (
+            "pip",
+            "numpy",
+            "pycountry",
+            "PyQt6",
+            "soundfile",
+            "pillow",
+            "matplotlib",
+        )
         for distribution in distributions:
             with self.subTest(distribution=distribution):
                 self.assertIn(f'Distribution = "{distribution}"', self.source)
+        self.assertNotIn('Distribution = "librosa"', self.source)
         self.assertIn("Get-LatestPyPiVersion", self.source)
         self.assertIn("--upgrade", self.source)
         self.assertIn("--only-binary=:all:", self.source)
@@ -582,6 +596,54 @@ class WindowsSetupTests(unittest.TestCase):
             self.source.index('-Name "python-dependencies"'),
             self.source.index('-Name "python-system-path"'),
         )
+
+    def test_frozen_settings_resolve_packaged_tool_paths(self) -> None:
+        bundle_root = r"C:\Portable\BluraySubtitle\_internal"
+        with (
+            patch.object(sys, "frozen", True, create=True),
+            patch.object(sys, "_MEIPASS", bundle_root, create=True),
+        ):
+            settings = runpy.run_path(str(SETTINGS_FILE))
+
+        expected_paths = {
+            "FLAC_PATH": bundle_root + r"\flac.exe",
+            "FFMPEG_PATH": bundle_root + r"\ffmpeg.exe",
+            "FFPROBE_PATH": bundle_root + r"\ffprobe.exe",
+            "FDK_AAC_PATH": bundle_root + r"\fdkaac.exe",
+            "DOVI_TOOL_PATH": bundle_root + r"\dovi_tool.exe",
+            "TRUEHDD_PATH": bundle_root + r"\truehdd.exe",
+            "VSEDIT_PATH": bundle_root + r"\vs_pkg\vsedit.exe",
+            "LIBASS_PATH": bundle_root + r"\libass-9.dll",
+            "TS_MUXER_PATH": bundle_root + r"\tsMuxeR.exe",
+            "MKV_INFO_PATH": bundle_root + r"\mkvinfo.exe",
+            "MKV_MERGE_PATH": bundle_root + r"\mkvmerge.exe",
+            "MKV_PROP_EDIT_PATH": bundle_root + r"\mkvpropedit.exe",
+            "MKV_EXTRACT_PATH": bundle_root + r"\mkvextract.exe",
+        }
+        for setting_name, expected_path in expected_paths.items():
+            with self.subTest(setting_name=setting_name):
+                self.assertEqual(settings[setting_name], expected_path)
+
+    def test_frozen_settings_keep_explicit_system_mode_defaults(self) -> None:
+        with (
+            patch.object(sys, "frozen", True, create=True),
+            patch.object(sys, "_MEIPASS", r"C:\Portable\BluraySubtitle\_internal", create=True),
+        ):
+            settings = runpy.run_path(str(SETTINGS_FILE))
+
+        self.assertEqual(settings["VSPIPE_PATH"], r"C:\Software\vapoursynth\vspipe.exe")
+        self.assertEqual(settings["X264_PATH"], r"C:\Software\x264.exe")
+        self.assertEqual(settings["X265_PATH"], r"C:\Software\x265.exe")
+        self.assertEqual(settings["SVT_AV1_PATH"], r"C:\Software\SvtAv1EncApp.exe")
+
+    def test_pyinstaller_build_is_onedir_without_librosa_collection(self) -> None:
+        self.assertIn("exclude_binaries=True", self.spec_source)
+        self.assertIn("coll = COLLECT(", self.spec_source)
+        self.assertNotIn('collect_all("librosa")', self.spec_source)
+        self.assertNotIn("librosa_hiddenimports", self.spec_source)
+        self.assertNotIn("metaflac.exe", self.spec_source)
+        self.assertNotIn("libFLAC++.dll", self.spec_source)
+        self.assertNotIn("fdk-aac.lib", self.spec_source)
 
     def test_python_and_pip_are_added_to_machine_path(self) -> None:
         self.assertIn("function Add-PythonToMachinePath", self.source)

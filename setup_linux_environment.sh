@@ -2730,7 +2730,7 @@ install_shaderc_fix() {
 # ---------------------------------------------------------------------------
 
 __bluray_python_imports_ok() {
-  python3 -c "import pycountry; import PyQt6.QtCore; import librosa; from PIL import Image; import matplotlib" >/dev/null 2>&1
+  python3 -c "import numpy; import pycountry; import PyQt6.QtCore; import soundfile; from PIL import Image; import matplotlib" >/dev/null 2>&1
 }
 
 # --break-system-packages exists from pip ~23; Ubuntu 22.04's python3-pip is often older.
@@ -2739,7 +2739,7 @@ __pip_supports_break_system_packages() {
 }
 
 install_bluray_python_deps() {
-  log "$(msg 'Installing Python dependencies (python3 -m pip: pycountry PyQt6 librosa pillow matplotlib)' '安装 Python 依赖（python3 -m pip：pycountry PyQt6 librosa pillow matplotlib）')"
+  log "$(msg 'Installing Python dependencies (python3 -m pip: numpy pycountry PyQt6 soundfile pillow matplotlib)' '安装 Python 依赖（python3 -m pip：numpy pycountry PyQt6 soundfile pillow matplotlib）')"
 
   if __bluray_python_imports_ok; then
     log "$(msg 'Python app dependencies already importable, skipping pip' 'Python 应用依赖已可导入，跳过 pip')"
@@ -2764,9 +2764,9 @@ install_bluray_python_deps() {
   fi
 
   tmux_run "$(msg "$pip_mode_msg_en" "$pip_mode_msg_zh")" \
-    env PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade "${pip_extra[@]}" pycountry PyQt6 librosa pillow matplotlib \
+    env PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade "${pip_extra[@]}" numpy pycountry PyQt6 soundfile pillow matplotlib \
     || tmux_run "$(msg 'Install Python dependencies (retry)' '安装 Python 依赖(重试)')" \
-      env PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade "${pip_extra[@]}" pycountry PyQt6 librosa pillow matplotlib \
+      env PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade "${pip_extra[@]}" numpy pycountry PyQt6 soundfile pillow matplotlib \
     || die "$(msg 'Failed to install Python dependencies with python3 -m pip' '使用 python3 -m pip 安装依赖失败')"
 
   __bluray_python_imports_ok || die "$(msg 'Python deps installed but import check failed. Note: Pillow is imported as PIL (e.g. from PIL import Image), not import pillow' '依赖已安装但仍无法通过导入检查。说明：Pillow 的安装包名为 pillow，代码中应使用 from PIL import Image，不要写 import pillow')"

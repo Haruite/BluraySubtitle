@@ -11,7 +11,6 @@ import threading
 import time
 from typing import Optional
 
-import librosa
 import numpy as np
 import pycountry
 import soundfile
@@ -707,15 +706,20 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
     @staticmethod
     def _is_silent_audio_file(path: str, threshold_db: float = -60.0) -> tuple[bool, float]:
         y = None
-        if soundfile is not None:
-            try:
-                info = soundfile.info(path)
-                frames = min(int(info.frames), int(info.samplerate) * 30)
-                start = int(info.frames) // 2 if int(info.frames) > (frames * 2) else 0
-                data, sr = soundfile.read(path, start=start, frames=frames, dtype='float32', always_2d=True)
-                y = data.mean(axis=1)
-            except Exception:
-                y = None
+        try:
+            info = soundfile.info(path)
+            frames = min(int(info.frames), int(info.samplerate) * 30)
+            start = int(info.frames) // 2 if int(info.frames) > (frames * 2) else 0
+            data, _sample_rate = soundfile.read(
+                path,
+                start=start,
+                frames=frames,
+                dtype='float32',
+                always_2d=True,
+            )
+            y = data.mean(axis=1)
+        except Exception:
+            y = None
         if y is None:
             fd, tmp = tempfile.mkstemp(prefix=f"temp_sil_{os.getpid()}_", suffix=".wav")
             os.close(fd)
@@ -724,19 +728,29 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                     f'"{FFMPEG_PATH}" -hide_banner -loglevel error -y -i "{path}" -ac 1 -ar 22050 -c:a pcm_s16le "{tmp}"',
                     check=True
                 )
-                if soundfile is None:
-                    y, sr = librosa.load(tmp, sr=None, mono=True)
-                else:
-                    data, sr = soundfile.read(tmp, dtype='float32', always_2d=True)
-                    y = data.mean(axis=1)
+                data, _sample_rate = soundfile.read(tmp, dtype='float32', always_2d=True)
+                y = data.mean(axis=1)
             finally:
                 if os.path.exists(tmp):
                     try:
                         os.remove(tmp)
                     except Exception:
                         pass
-        rms = librosa.feature.rms(y=y)
-        db = librosa.amplitude_to_db(rms, ref=np.max)
+        frame_length = 2048
+        hop_length = 512
+        padded = np.pad(np.asarray(y, dtype=np.float32), frame_length // 2)
+        squared = np.square(padded, dtype=np.float64)
+        cumulative = np.concatenate(([0.0], np.cumsum(squared)))
+        frame_starts = np.arange(0, padded.size - frame_length + 1, hop_length)
+        frame_power = (
+            cumulative[frame_starts + frame_length] - cumulative[frame_starts]
+        ) / frame_length
+        rms = np.sqrt(frame_power)
+        minimum_amplitude = 1e-5
+        reference_amplitude = max(minimum_amplitude, float(np.max(rms)))
+        db = 20.0 * np.log10(np.maximum(minimum_amplitude, rms))
+        db -= 20.0 * np.log10(reference_amplitude)
+        db = np.maximum(db, float(np.max(db)) - 80.0)
         avg_db = float(np.mean(db))
         return avg_db < threshold_db, avg_db
 

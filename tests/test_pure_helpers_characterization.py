@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
+
+import numpy as np
+import soundfile
 
 from src.runtime.sp import (
     filter_m2ts_file_detail_by_basenames,
@@ -13,6 +18,9 @@ from src.runtime.audio_conversion import _is_lossless_audio_track
 from src.runtime.services_split.encode_and_audio_tasks import (
     _format_encoder_cmd_for_echo,
     _normalize_x264_extra_for_bit_depth,
+)
+from src.runtime.services_split.media_info_and_track_mapping import (
+    MediaInfoTrackMappingMixin,
 )
 from src.runtime.services_split.misc_workflows import _movie_sp_duration_matches_main
 
@@ -101,6 +109,24 @@ class EncoderOptionTests(unittest.TestCase):
         self.assertFalse(_is_lossless_audio_track(track('A_EAC3')))
         self.assertFalse(_is_lossless_audio_track(track('A_AAC/MPEG4/LC')))
         self.assertFalse(_is_lossless_audio_track(track('A_OPUS')))
+
+
+class SilentAudioAnalysisTests(unittest.TestCase):
+    def test_numpy_rms_matches_the_retained_relative_db_behavior(self) -> None:
+        sample_rate = 22050
+        audio = np.zeros(sample_rate * 2, dtype=np.float32)
+        audio[:2048] = 0.5
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio_path = Path(temp_dir) / "audio.wav"
+            soundfile.write(audio_path, audio, sample_rate, subtype="FLOAT")
+
+            silent, average_db = MediaInfoTrackMappingMixin._is_silent_audio_file(
+                str(audio_path),
+                threshold_db=-60.0,
+            )
+
+        self.assertTrue(silent)
+        self.assertLess(average_db, -60.0)
 
 
 if __name__ == "__main__":
