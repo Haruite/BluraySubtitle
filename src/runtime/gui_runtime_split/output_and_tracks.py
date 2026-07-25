@@ -625,6 +625,12 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
             self.table3.setItem(row, m2_col, QTableWidgetItem(','.join(extracted)))
 
     def _recompute_sp_output_names(self, only_bdmv_index: Optional[int] = None):
+        """Recompute names that depend on the current main rows and SP scan data.
+
+        The scan completion boundary calls this after every row result has been
+        applied. Interactive edits may call it again later, but task startup must
+        only consume the resulting visible names and must not invoke it.
+        """
         if not hasattr(self, 'table3') or not self.table3:
             return
         labels = DIY_SP_LABELS if self.get_selected_function_id() == 5 else ENCODE_SP_LABELS

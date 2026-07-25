@@ -1069,14 +1069,14 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         encode_sources = [
             row.source_path
             for row in main_rows
-            if not (resume_existing_outputs and os.path.exists(row.output_path))
+            if not (resume_existing_outputs and os.path.isfile(row.output_path) and os.path.getsize(row.output_path) > 0)
         ]
         encode_sources.extend(
             row.source_path
             for row in selected_sp_rows
             if (
                 str(row.source_path).lower().endswith('.mkv')
-                and not (resume_existing_outputs and os.path.exists(row.output_path))
+                and not (resume_existing_outputs and os.path.isfile(row.output_path) and os.path.getsize(row.output_path) > 0)
             )
         )
         dolby_vision_error = encode_dovi_preflight_mkv_paths(
@@ -1090,8 +1090,6 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         self.sub_files = [row.subtitle_path for row in main_rows]
         self.episode_subtitle_languages = [row.subtitle_language for row in main_rows]
         self.use_getnative = request.settings.use_getnative
-        self.track_selection_config = copy.deepcopy(request.track_selection_config or {})
-        self.track_language_config = copy.deepcopy(request.track_language_config or {})
 
         planned_output_paths = {
             os.path.normcase(os.path.abspath(row.output_path))
@@ -1114,11 +1112,12 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                             path=subtitle_destination
                         )
                     )
-                if os.path.exists(subtitle_destination) and not resume_existing_outputs:
+                if os.path.exists(subtitle_destination) and (not resume_existing_outputs or not os.path.isfile(subtitle_destination)):
                     raise FileExistsError(
-                        translate_text('Output file already exists: {path}').format(
-                            path=subtitle_destination
-                        )
+                        translate_text(
+                            'Existing resumable output is invalid: {path}'
+                            if resume_existing_outputs else 'Output file already exists: {path}'
+                        ).format(path=subtitle_destination)
                     )
                 planned_output_paths.add(normalized_destination)
                 external_subtitles.append((row.subtitle_path, subtitle_destination))
@@ -1153,22 +1152,16 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                                 path=destination_path
                             )
                         )
-                    if os.path.exists(destination_path) and not resume_existing_outputs:
+                    if os.path.exists(destination_path) and (not resume_existing_outputs or not os.path.isfile(destination_path)):
                         raise FileExistsError(
-                            translate_text('Output file already exists: {path}').format(
-                                path=destination_path
-                            )
+                            translate_text(
+                                'Existing resumable output is invalid: {path}'
+                                if resume_existing_outputs else 'Output file already exists: {path}'
+                            ).format(path=destination_path)
                         )
                     planned_output_paths.add(normalized_destination)
                     companion_files.append((source_path, destination_path))
 
-        for planned_output_path in planned_output_paths:
-            if os.path.exists(planned_output_path) and not resume_existing_outputs:
-                raise FileExistsError(
-                    translate_text('Output file already exists: {path}').format(
-                        path=planned_output_path
-                    )
-                )
         os.makedirs(request.output_folder, exist_ok=True)
         total_rows = max(1, len(main_rows) + len(selected_sp_rows))
         completed_rows = 0
@@ -1184,18 +1177,17 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 ),
             )
             if os.path.exists(row.output_path):
-                if resume_existing_outputs:
+                if resume_existing_outputs and os.path.isfile(row.output_path) and os.path.getsize(row.output_path) > 0:
                     self._progress(
-                        text=self.t('Skipping existing output: {path}').format(
-                            path=row.output_path
-                        )
+                        text=self.t('Skipping existing output: {path}').format(path=row.output_path)
                     )
                     completed_rows += 1
                     continue
                 raise FileExistsError(
-                    translate_text('Output file already exists: {path}').format(
-                        path=row.output_path
-                    )
+                    translate_text(
+                        'Existing resumable output is invalid: {path}'
+                        if resume_existing_outputs else 'Output file already exists: {path}'
+                    ).format(path=row.output_path)
                 )
             os.makedirs(os.path.dirname(row.output_path), exist_ok=True)
             self.encode_task(
@@ -1247,18 +1239,22 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 completed_rows += 1
                 continue
             if os.path.exists(row.output_path):
-                if resume_existing_outputs:
+                valid_checkpoint = (
+                    os.path.isdir(row.output_path)
+                    if os.path.isdir(source_path)
+                    else os.path.isfile(row.output_path) and os.path.getsize(row.output_path) > 0
+                )
+                if resume_existing_outputs and valid_checkpoint:
                     self._progress(
-                        text=self.t('Skipping existing output: {path}').format(
-                            path=row.output_path
-                        )
+                        text=self.t('Skipping existing output: {path}').format(path=row.output_path)
                     )
                     completed_rows += 1
                     continue
                 raise FileExistsError(
-                    translate_text('Output file already exists: {path}').format(
-                        path=row.output_path
-                    )
+                    translate_text(
+                        'Existing resumable output is invalid: {path}'
+                        if resume_existing_outputs else 'Output file already exists: {path}'
+                    ).format(path=row.output_path)
                 )
             os.makedirs(os.path.dirname(row.output_path), exist_ok=True)
             if os.path.isdir(source_path):
@@ -1314,17 +1310,16 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 if cancel_event and cancel_event.is_set():
                     raise TaskCancelled()
                 if os.path.exists(destination_path):
-                    if resume_existing_outputs:
+                    if resume_existing_outputs and os.path.isfile(destination_path):
                         self._progress(
-                            text=self.t('Skipping existing output: {path}').format(
-                                path=destination_path
-                            )
+                            text=self.t('Skipping existing output: {path}').format(path=destination_path)
                         )
                         continue
                     raise FileExistsError(
-                        translate_text('Output file already exists: {path}').format(
-                            path=destination_path
-                        )
+                        translate_text(
+                            'Existing resumable output is invalid: {path}'
+                            if resume_existing_outputs else 'Output file already exists: {path}'
+                        ).format(path=destination_path)
                     )
                 os.makedirs(os.path.dirname(destination_path), exist_ok=True)
                 shutil.copy2(source_path, destination_path)
@@ -1334,17 +1329,16 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 if cancel_event and cancel_event.is_set():
                     raise TaskCancelled()
                 if os.path.exists(destination_path):
-                    if resume_existing_outputs:
+                    if resume_existing_outputs and os.path.isfile(destination_path):
                         self._progress(
-                            text=self.t('Skipping existing output: {path}').format(
-                                path=destination_path
-                            )
+                            text=self.t('Skipping existing output: {path}').format(path=destination_path)
                         )
                         continue
                     raise FileExistsError(
-                        translate_text('Output file already exists: {path}').format(
-                            path=destination_path
-                        )
+                        translate_text(
+                            'Existing resumable output is invalid: {path}'
+                            if resume_existing_outputs else 'Output file already exists: {path}'
+                        ).format(path=destination_path)
                     )
                 shutil.copy2(source_path, destination_path)
         self._progress(progress_base + progress_span, 'Done')
@@ -1414,8 +1408,6 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             track_language_config=copy.deepcopy(request.track_language_config or {}),
             ensure_tools=False,
         )
-        self.track_selection_config = copy.deepcopy(request.track_selection_config or {})
-        self.track_language_config = copy.deepcopy(request.track_language_config or {})
 
         staging_parent_existed = os.path.isdir(request.staging_folder)
         staging_disc_folder = ''

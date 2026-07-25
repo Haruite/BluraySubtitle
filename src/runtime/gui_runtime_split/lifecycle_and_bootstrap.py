@@ -35,6 +35,9 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self._sp_index_by_bdmv: dict[int, int] = {}
         self._chapter_checkbox_states: dict[str, list[bool]] = {}  # Save chapter checkbox states
         self._last_config_inputs: dict[str, object] = {}
+        self._sp_scan_completed = True
+        self._sp_scan_pending_function_id = None
+        self._sp_scan_error = ''
         self.init_ui()
 
     def init_ui(self):

@@ -1,4 +1,13 @@
-"""Target module for scan/worker hook methods of `BluraySubtitleGUI`."""
+"""Asynchronous SP-table scan lifecycle for ``BluraySubtitleGUI``.
+
+``refresh_sp_table`` first builds a complete synchronous table3 and then calls
+``_start_sp_table_scan`` once. The worker reads the captured row paths without
+touching widgets and emits classification and default track-selection results.
+The GUI thread applies those results row by row. Only after every result is
+applied does ``_on_sp_table_scan_finished`` recompute dependent output names and
+mark the scan ready. QThread cleanup happens last and may resume one Remux or
+BDMV Encode click that ``main`` queued while the scan was active.
+"""
 import os
 import threading
 import time
@@ -37,14 +46,27 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
         self._sp_scan_progress_done = 0
 
     def _on_sp_scan_thread_finished(self):
+        """Release scan ownership and resume one queued task after valid completion.
+
+        This slot is a thread-lifecycle boundary, not the result-readiness
+        boundary. ``_on_sp_table_scan_finished`` must already have set
+        ``_sp_scan_completed`` before this signal is allowed to arrive.
+        """
         finished_thread = self.sender()
         if getattr(self, '_sp_scan_thread', None) is not finished_thread:
             return
+        pending_function_id = getattr(self, '_sp_scan_pending_function_id', None)
+        scan_completed = bool(getattr(self, '_sp_scan_completed', False))
         self._sp_scan_in_progress = False
         self._dismiss_sp_scan_progress_ui()
         self._sp_scan_cancel_event = None
         self._sp_scan_thread = None
         self._sp_scan_worker = None
+        if pending_function_id in (3, 4):
+            self._sp_scan_pending_function_id = None
+            self._reset_exe_button()
+            if scan_completed and self.get_selected_function_id() == pending_function_id:
+                QTimer.singleShot(0, self.main)
 
     def _update_exe_button_progress(self, value: Optional[int] = None, text: Optional[str] = None):
         if not hasattr(self, 'exe_button') or not self.exe_button:
@@ -122,6 +144,14 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
         self._bottom_message_timer.start()
 
     def _start_sp_table_scan(self):
+        """Replace the previous scan with one snapshot of the completed table3.
+
+        The synchronous refresh must finish adding, removing, and ordering rows
+        before this method is called. The worker receives only paths, row
+        indexes, stable track keys, and selection policy captured here. Starting
+        a task must never call this method because that would invalidate the GUI
+        snapshot that the task is about to execute.
+        """
         try:
             if hasattr(self, '_sp_scan_cancel_event') and isinstance(self._sp_scan_cancel_event, threading.Event):
                 self._sp_scan_cancel_event.set()
@@ -168,7 +198,10 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
                          'force_disabled': force_disabled, 'select_all': select_all})
 
         if not rows:
+            self._sp_scan_worker = None
             self._sp_scan_in_progress = False
+            self._sp_scan_completed = True
+            self._sp_scan_error = ''
             return
 
         start_ts = time.time()
@@ -211,21 +244,47 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
         thread.started.connect(worker.run)
         worker.result.connect(self._on_sp_table_scan_result)
         self._sp_scan_in_progress = True
+        self._sp_scan_completed = False
+        self._sp_scan_error = ''
+        # Result signals and the logical completion signal target the GUI thread.
+        # Blocking completion keeps their order deterministic: every queued row
+        # result and the final output-name pass finish before QThread cleanup can
+        # inspect readiness or resume a queued task.
+        worker.finished.connect(
+            self._on_sp_table_scan_finished,
+            Qt.ConnectionType.BlockingQueuedConnection,
+        )
         worker.finished.connect(worker.deleteLater)
         worker.finished.connect(thread.quit)
-        worker.finished.connect(self._on_sp_table_scan_finished)
         worker.canceled.connect(worker.deleteLater)
         worker.canceled.connect(thread.quit)
+        worker.failed.connect(
+            self._on_sp_table_scan_failed,
+            Qt.ConnectionType.BlockingQueuedConnection,
+        )
         worker.failed.connect(worker.deleteLater)
         worker.failed.connect(thread.quit)
-        worker.failed.connect(self._show_error_dialog)
         thread.finished.connect(self._on_sp_scan_thread_finished)
         thread.finished.connect(thread.deleteLater)
         self._sp_scan_thread = thread
         self._sp_scan_worker = worker
         thread.start()
 
+    def _on_sp_table_scan_failed(self, error: str):
+        if getattr(self, '_sp_scan_worker', None) is not self.sender():
+            return
+        self._sp_scan_error = str(error or self.t('SP track scan failed; refresh the source before starting the task'))
+        self._show_error_dialog(self._sp_scan_error)
+
     def _on_sp_table_scan_result(self, row: int, disabled: bool, special: str, payload: object):
+        """Apply one result from the current worker without probing media again.
+
+        Worker identity prevents a canceled/replaced scan from modifying the new
+        table. The supplied track selection is already the result of the media
+        probe and is stored directly under the row's stable SP key.
+        """
+        if getattr(self, '_sp_scan_worker', None) is not self.sender():
+            return
         try:
             sel_col = ENCODE_SP_LABELS.index('select')
             type_col = ENCODE_SP_LABELS.index('m2ts_type')
@@ -288,6 +347,10 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
                 select_all = bool(
                     getattr(self, 'select_all_tracks_checkbox', None) and self.select_all_tracks_checkbox.isChecked())
                 if sp_key and isinstance(tracks_payload, dict) and (not disabled):
+                    # Do not call the MPLS default-selection path here. Besides
+                    # repeating expensive work in the GUI thread, a second probe
+                    # can fail independently and leave a visible selected row
+                    # without the configuration already produced by the worker.
                     cfg = getattr(self, '_track_selection_config', None)
                     if not isinstance(cfg, dict):
                         self._track_selection_config = {}
@@ -296,17 +359,8 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
                         cfg[sp_key] = {'audio': list(tracks_payload.get('audio') or []),
                                        'subtitle': list(tracks_payload.get('subtitle') or [])}
                     elif sp_key not in cfg:
-                        bdmv_item = self.table3.item(row, ENCODE_SP_LABELS.index('bdmv_index'))
-                        mpls_item = self.table3.item(row, ENCODE_SP_LABELS.index('mpls_file'))
-                        try:
-                            bdmv_index = int(bdmv_item.text().strip()) if bdmv_item and bdmv_item.text() else 0
-                        except Exception:
-                            bdmv_index = 0
-                        mpls_file = mpls_item.text().strip() if mpls_item and mpls_item.text() else ''
-                        self._inherit_main_track_config_for_sp_key(bdmv_index, mpls_file, sp_key)
-                        if sp_key not in cfg:
-                            cfg[sp_key] = {'audio': list(tracks_payload.get('audio') or []),
-                                           'subtitle': list(tracks_payload.get('subtitle') or [])}
+                        cfg[sp_key] = {'audio': list(tracks_payload.get('audio') or []),
+                                       'subtitle': list(tracks_payload.get('subtitle') or [])}
             except Exception:
                 pass
         finally:

@@ -119,8 +119,8 @@ scripts or required tools, invalid paths, and duplicate output paths are reporte
 
 - **Blu-ray input** applies the selected playlists, chapter ranges, tracks, and edited track languages before
   encoding. An existing planned output stops the task and is never overwritten.
-- **Remux input** can resume after interruption. Existing main/SP outputs, external subtitles, and companion files
-  are reported as skipped, while missing outputs continue to be processed.
+- **Remux input** can resume after interruption. Existing non-empty main/SP files, external subtitles, and companion
+  files are reported as skipped. Empty main/SP files and paths of the wrong type are rejected; missing outputs continue.
 - For Remux input, non-MKV companion files keep their relative paths, and external subtitles use the corresponding
   video output name.
 - Encoder, Dolby Vision, or final mux failures stop the task; incomplete results are not reported as successful.
@@ -342,8 +342,8 @@ Typical flow:
 
 Encode uses the current row order, output names, VPy scripts, subtitles, languages, track choices, per-track audio
 conversion choices, and encoder settings. Planned outputs are never overwritten. Blu-ray input rejects existing outputs.
-Remux input reports and skips existing main/SP outputs, external subtitles, and companion files, then continues with the
-remaining work so a long encode can resume after interruption.
+Remux input reports and skips existing non-empty main/SP files, external subtitles, and companion files, then continues
+with the remaining work. Empty main/SP files and paths of the wrong type are rejected instead of treated as checkpoints.
 
 ---
 

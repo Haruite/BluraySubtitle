@@ -770,16 +770,19 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             self._end_delayed_busy(busy)
 
     def _configuration_for_service_run(self) -> dict[int, dict[str, int | str]]:
-        """Build one launch snapshot from the current, fully refreshed GUI state."""
-        if self._is_movie_mode():
-            self._refresh_movie_table2()
-            configuration = getattr(self, '_movie_configuration', None)
-        else:
-            configuration = self._generate_configuration_from_ui_inputs()
-            if configuration:
-                # Configuration generation can add or remove episode rows. Rebuild the
-                # visible tables before launch so row settings and configuration align.
-                self.on_configuration(configuration, update_sp_table=True)
+        """Capture the current visible task without rebuilding any GUI table.
+
+        Table1, table2, and table3 have already been refreshed before the Execute
+        button becomes useful. Calling ``on_configuration`` or a movie/series
+        refresh here would rebuild table3 and start a new SP scan after ``main``
+        has passed its readiness gate. The returned copy is therefore created
+        only from the configuration represented by the current visible controls.
+        """
+        configuration = (
+            getattr(self, '_movie_configuration', None)
+            if self._is_movie_mode()
+            else self._generate_configuration_from_ui_inputs()
+        )
         if not isinstance(configuration, dict) or not configuration:
             raise ValueError(self.t('Task configuration is empty'))
         self._apply_main_remux_cmds_to_configuration(configuration)
@@ -806,7 +809,13 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             return False
 
     def _full_refresh_remux_encode_tables_for_mode(self) -> None:
-        """Rebuild table2 and table3 from table1 / main MPLS (full refresh on series/movie toggle)."""
+        """Rebuild table2 and table3 after the source or movie/series mode changes.
+
+        A full series refresh has two ordered passes: build table2 from the
+        selected main playlists, then read the newly created visible controls
+        back into a configuration used for the sole table3 refresh. Table3 owns
+        the subsequent asynchronous SP scan.
+        """
         if self.get_selected_function_id() not in (3, 4, 5):
             return
         try:
@@ -842,6 +851,8 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     pass
                 return
             configuration = bs.generate_configuration_from_selected_mpls(selected_mpls)
+            # The first pass creates all table2 widgets. Their visible values are
+            # authoritative, so read them back before the only table3 refresh.
             self.on_configuration(configuration, update_sp_table=False)
             current_configuration = self._generate_configuration_from_ui_inputs() if self.table2.rowCount() > 0 else {}
             self.on_configuration(current_configuration or configuration, update_sp_table=True)
@@ -879,6 +890,13 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             print_exc_terminal()
 
     def on_configuration(self, configuration: dict[int, dict[str, int | str]], update_sp_table: bool = True):
+        """Apply a configuration to table2 and optionally rebuild table3 once.
+
+        ``update_sp_table=False`` is used by the first pass of a series refresh
+        while table2 widgets are still being created. When true,
+        ``refresh_sp_table`` runs only after table2 is stable; that method starts
+        the asynchronous scan whose readiness is enforced by ``main``.
+        """
         busy: Optional[dict[str, object]] = None
         try:
             if not configuration:

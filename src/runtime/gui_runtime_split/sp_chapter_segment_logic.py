@@ -979,10 +979,23 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
         self.on_chapter_combo(row)
 
     def _on_sp_table_scan_finished(self):
+        """Finalize all applied SP results and publish table3 as task-ready.
+
+        Output names depend on scan-produced row types and track selections, so
+        readiness is set only after the final name recomputation succeeds. The
+        blocking worker connection guarantees this slot finishes before the
+        QThread cleanup slot can resume a queued Remux or Encode task.
+        """
+        if getattr(self, '_sp_scan_worker', None) is not self.sender():
+            return
         try:
             self._recompute_sp_output_names()
-        except Exception:
-            pass
+        except Exception as error:
+            self._sp_scan_error = str(error)
+            self._show_error_dialog(self._sp_scan_error)
+            return
+        self._sp_scan_completed = True
+        self._sp_scan_error = ''
 
     def _remove_table3_auto_chapter_sp_rows(self, bdmv_index: int, mpls_basename: str):
         if not hasattr(self, 'table3') or not self.table3:
@@ -1276,6 +1289,19 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             self.on_configuration(configuration)
 
     def refresh_sp_table(self, configuration: dict[int, dict[str, int | str]]):
+        """Synchronously rebuild table3, then start its single background scan.
+
+        Main-playlist selection is read from table1, while episode association
+        and output naming use the stable table2/configuration state. Existing
+        visible row edits are preserved where their row identity still matches.
+        No worker is started until all rows and widgets have been installed and
+        sorting/selection state has been restored.
+
+        A populated table3 is not by itself a readiness signal: track discovery,
+        menu classification, automatic selection, and dependent output names are
+        completed asynchronously by ``_start_sp_table_scan``. Task launch waits
+        on that lifecycle instead of refreshing this table again.
+        """
         function_id = self.get_selected_function_id()
         if function_id == 5:
             # DIY mode keeps remux-like table1/table2 only; no SP/table3 workflow.
@@ -1301,7 +1327,10 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             self._sp_scan_progress_rows_seen = set()
             self._sp_scan_progress_total = 0
             self._sp_scan_progress_done = 0
+            self._sp_scan_worker = None
             self._sp_scan_in_progress = False
+            self._sp_scan_completed = True
+            self._sp_scan_error = ''
             if hasattr(self, 'table3'):
                 self.table3.setRowCount(0)
             return
@@ -1759,6 +1788,8 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                 self._updating_sp_table = False
                 self.table3.setSortingEnabled(old_sorting)
             try:
+                # This is the only scan start for this table rebuild. It must
+                # remain after the final row order and visible values are stable.
                 self._start_sp_table_scan()
             except Exception:
                 pass

@@ -758,11 +758,11 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         tmp_wav2 = ''
         try:
             if owns_tmp:
-                run_command(
-                    f'"{FFMPEG_PATH}" -y -i "{input_media}" '
-                    f'-map 0:{map_idx} -c:a pcm_s24le -f w64 "{tmp_wav}"'
-                )
-                if not os.path.exists(tmp_wav) or os.path.getsize(tmp_wav) <= 0:
+                decode_result = run_command([
+                    FFMPEG_PATH or 'ffmpeg', '-y', '-i', input_media,
+                    '-map', f'0:{map_idx}', '-c:a', 'pcm_s24le', '-f', 'w64', tmp_wav,
+                ])
+                if decode_result.returncode != 0 or not os.path.isfile(tmp_wav) or os.path.getsize(tmp_wav) <= 0:
                     return False
             try:
                 silent, _ = _svc_cls()._is_silent_audio_file(tmp_wav, -60.0)
@@ -782,10 +782,10 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             if effective_bits <= 16:
                 fd2, tmp_wav2 = tempfile.mkstemp(prefix=f"sp_audio16_{os.getpid()}_", suffix=".wav")
                 os.close(fd2)
-                run_command(
-                    f'"{FFMPEG_PATH}" -y -i "{tmp_wav}" -c:a pcm_s16le "{tmp_wav2}"'
-                )
-                if os.path.exists(tmp_wav2) and os.path.getsize(tmp_wav2) > 0:
+                conversion_result = run_command([
+                    FFMPEG_PATH or 'ffmpeg', '-y', '-i', tmp_wav, '-c:a', 'pcm_s16le', tmp_wav2,
+                ])
+                if conversion_result.returncode == 0 and os.path.isfile(tmp_wav2) and os.path.getsize(tmp_wav2) > 0:
                     if owns_tmp:
                         try:
                             os.remove(tmp_wav)
@@ -797,18 +797,25 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             ok = False
             if FLAC_PATH:
                 try:
-                    run_command(f'"{FLAC_PATH}" -8 -j {FLAC_THREADS} "{tmp_wav}" -o "{out_flac}"')
-                    ok = os.path.exists(out_flac) and os.path.getsize(out_flac) > 0
+                    result = run_command([
+                        FLAC_PATH, '-8', '-j', str(FLAC_THREADS), tmp_wav, '-o', out_flac,
+                    ])
+                    ok = result.returncode == 0 and os.path.isfile(out_flac) and os.path.getsize(out_flac) > 0
                 except Exception:
                     ok = False
             if not ok:
+                if os.path.isfile(out_flac):
+                    os.remove(out_flac)
                 try:
-                    run_command(
-                        f'"{FFMPEG_PATH}" -y -i "{tmp_wav}" -c:a flac -compression_level 8 "{out_flac}"'
-                    )
-                    ok = os.path.exists(out_flac) and os.path.getsize(out_flac) > 0
+                    result = run_command([
+                        FFMPEG_PATH or 'ffmpeg', '-y', '-i', tmp_wav,
+                        '-c:a', 'flac', '-compression_level', '8', out_flac,
+                    ])
+                    ok = result.returncode == 0 and os.path.isfile(out_flac) and os.path.getsize(out_flac) > 0
                 except Exception:
                     ok = False
+            if not ok and os.path.isfile(out_flac):
+                os.remove(out_flac)
             return ok
         finally:
             if tmp_wav2 and os.path.exists(tmp_wav2):

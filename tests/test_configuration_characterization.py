@@ -6,12 +6,19 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QTableWidgetItem
+
+from src.core import ENCODE_SP_LABELS
 from src.runtime.gui_runtime_classes.bluray_subtitle_gui_entry import BluraySubtitleGUI
 from src.runtime.gui_runtime_split import configuration_and_modes as configuration_modes
 from src.runtime.gui_runtime_split import remux_and_episode_layout as remux_layout
+from src.runtime.gui_runtime_split.actions_and_file_dialogs import ActionsAndDialogsMixin
 from src.runtime.gui_runtime_split.configuration_and_modes import ConfigurationModesMixin
 from src.runtime.gui_runtime_split.remux_and_episode_layout import RemuxEpisodeLayoutMixin
 from src.runtime.gui_runtime_split.scan_and_worker_hooks import ScanWorkerHooksMixin
+from src.runtime.gui_runtime_split.sp_chapter_segment_logic import SpChapterSegmentLogicMixin
+from src.runtime.gui_runtime_split.track_and_attachment_editing import TrackAttachmentEditingMixin
 from src.runtime.services_split.lifecycle_and_configuration import LifecycleConfigurationMixin
 from src.runtime.services_split.misc_workflows import MiscWorkflowsMixin
 
@@ -97,7 +104,7 @@ class ServiceRunConfigurationTests(unittest.TestCase):
             _last_configuration_34={0: {"selected_mpls": "stale"}},
             _is_movie_mode=lambda: False,
             _generate_configuration_from_ui_inputs=lambda: current,
-            on_configuration=lambda configuration, update_sp_table=True: None,
+            on_configuration=Mock(),
             _apply_main_remux_cmds_to_configuration=lambda value: applied.append(value),
             t=lambda text: text,
         )
@@ -111,25 +118,23 @@ class ServiceRunConfigurationTests(unittest.TestCase):
         self.assertEqual(applied, [current])
         self.assertIsNot(configuration, current)
         self.assertIsNot(configuration[0], current[0])
+        owner.on_configuration.assert_not_called()
 
-    def test_movie_run_refreshes_and_uses_current_movie_configuration(self) -> None:
+    def test_movie_run_uses_current_visible_configuration_without_refresh(self) -> None:
         current = {0: {"selected_mpls": "movie"}}
         owner = SimpleNamespace(
-            _movie_configuration={0: {"selected_mpls": "stale"}},
+            _movie_configuration=current,
             _is_movie_mode=lambda: True,
+            _refresh_movie_table2=Mock(),
             _apply_main_remux_cmds_to_configuration=lambda value: None,
             t=lambda text: text,
         )
-
-        def refresh() -> None:
-            owner._movie_configuration = current
-
-        owner._refresh_movie_table2 = refresh
 
         configuration = BluraySubtitleGUI._configuration_for_service_run(owner)
 
         self.assertEqual(configuration, current)
         self.assertIsNot(configuration, current)
+        owner._refresh_movie_table2.assert_not_called()
 
     def test_current_configuration_failure_is_not_replaced_by_old_snapshot(self) -> None:
         def fail() -> dict[int, dict[str, object]]:
@@ -395,6 +400,65 @@ class GuiEncodeConfigurationTests(unittest.TestCase):
         )
 
 
+class ManualChapterEditingTests(unittest.TestCase):
+    def test_extract_failure_stops_before_opening_the_chapter_editor(self) -> None:
+        error_dialog = Mock()
+        owner = SimpleNamespace(_show_error_dialog=error_dialog, t=lambda text: text)
+        result = SimpleNamespace(returncode=2, stdout='extract failed', stderr='')
+
+        with (
+                patch('src.runtime.gui_runtime_split.track_and_attachment_editing.find_mkvtoolnix'),
+                patch('src.runtime.gui_runtime_split.track_and_attachment_editing.MKV_EXTRACT_PATH', 'mkvextract'),
+                patch('src.runtime.gui_runtime_split.track_and_attachment_editing.MKV_PROP_EDIT_PATH', 'mkvpropedit'),
+                patch('src.runtime.gui_runtime_split.track_and_attachment_editing.run_command', return_value=result) as run,
+        ):
+            TrackAttachmentEditingMixin._edit_chapters_for_mkv(owner, 'episode.mkv')
+
+        error_dialog.assert_called_once_with('extract failed')
+        command = run.call_args.args[0]
+        self.assertEqual(command[0], 'mkvextract')
+        self.assertEqual(command[-3:-1], ['chapters', '--simple'])
+
+    def test_attachment_extract_failure_reports_the_tool_output(self) -> None:
+        error_dialog = Mock()
+        open_folder = Mock()
+        owner = SimpleNamespace(_show_error_dialog=error_dialog, open_folder_path=open_folder, t=lambda text: text)
+        result = SimpleNamespace(returncode=2, stdout='attachment extract failed', stderr='')
+
+        with (
+                patch('src.runtime.gui_runtime_split.track_and_attachment_editing.find_mkvtoolnix'),
+                patch('src.runtime.gui_runtime_split.track_and_attachment_editing.MKV_EXTRACT_PATH', 'mkvextract'),
+                patch('src.runtime.gui_runtime_split.track_and_attachment_editing.tempfile.mkdtemp', return_value='tmp'),
+                patch('src.runtime.gui_runtime_split.track_and_attachment_editing.run_command', return_value=result) as run,
+        ):
+            TrackAttachmentEditingMixin._extract_attachment_to_temp_and_open(
+                owner, 'episode.mkv', '3', 'cover.jpg'
+            )
+
+        error_dialog.assert_called_once_with('attachment extract failed')
+        open_folder.assert_not_called()
+        self.assertEqual(run.call_args.args[0][-2:], ['attachments', '3:tmp\\cover.jpg'])
+
+    def test_track_extract_opens_only_the_created_output(self) -> None:
+        error_dialog = Mock()
+        open_folder = Mock()
+        owner = SimpleNamespace(_show_error_dialog=error_dialog, open_folder_path=open_folder, t=lambda text: text)
+        result = SimpleNamespace(returncode=0, stdout='', stderr='')
+
+        with (
+                patch('src.runtime.gui_runtime_split.track_and_attachment_editing.find_mkvtoolnix'),
+                patch('src.runtime.gui_runtime_split.track_and_attachment_editing.MKV_EXTRACT_PATH', 'mkvextract'),
+                patch('src.runtime.gui_runtime_split.track_and_attachment_editing.tempfile.mkdtemp', return_value='tmp'),
+                patch('src.runtime.gui_runtime_split.track_and_attachment_editing.os.path.isfile', return_value=True),
+                patch('src.runtime.gui_runtime_split.track_and_attachment_editing.run_command', return_value=result) as run,
+        ):
+            TrackAttachmentEditingMixin._extract_track_to_temp_and_open(owner, 'episode.mkv', 2, 'A_FLAC')
+
+        error_dialog.assert_not_called()
+        open_folder.assert_called_once_with('tmp')
+        self.assertEqual(run.call_args.args[0][-2:], ['tracks', '2:tmp\\track2.flac'])
+
+
 class SpScanLifecycleTests(unittest.TestCase):
     def test_series_refresh_scans_only_the_final_gui_configuration(self) -> None:
         generated_configuration = {0: {'selected_mpls': 'generated'}}
@@ -456,6 +520,254 @@ class SpScanLifecycleTests(unittest.TestCase):
         self.assertIsNone(owner._sp_scan_worker)
         self.assertIsNone(owner._sp_scan_cancel_event)
         dismiss_progress.assert_called_once()
+
+
+    def test_remux_waits_for_the_current_sp_scan(self) -> None:
+        remux = Mock()
+        progress = Mock()
+        button = Mock()
+        owner = SimpleNamespace(
+            _current_cancel_event=None,
+            _sp_scan_thread=object(),
+            _sp_scan_completed=False,
+            _sp_scan_pending_function_id=None,
+            exe_button=button,
+            get_selected_function_id=lambda: 3,
+            _update_exe_button_progress=progress,
+            remux_episodes=remux,
+        )
+
+        ActionsAndDialogsMixin.main(owner)
+
+        self.assertEqual(owner._sp_scan_pending_function_id, 3)
+        button.setEnabled.assert_called_once_with(False)
+        progress.assert_called_once_with(value=0, text='Waiting for SP track scan')
+        remux.assert_not_called()
+
+    def test_missing_selected_sp_tracks_fail_without_restarting_the_full_scan(self) -> None:
+        remux = Mock()
+        start_scan = Mock()
+        error_dialog = Mock()
+        owner = SimpleNamespace(
+            _current_cancel_event=None,
+            _sp_scan_thread=None,
+            _sp_scan_completed=True,
+            _sp_scan_error='',
+            _sp_scan_pending_function_id=None,
+            _track_selection_config={},
+            table3=SimpleNamespace(rowCount=lambda: 1),
+            get_selected_function_id=lambda: 3,
+            _table3_get_sp_entry_for_row=lambda _row: {
+                'bdmv_index': 1,
+                'mpls_file': '00001.mpls',
+                'm2ts_file': '00001.m2ts',
+                'output_name': 'SPs/00001.mkv',
+                'selected': True,
+            },
+            _show_error_dialog=error_dialog,
+            t=lambda text: text,
+            remux_episodes=remux,
+            _start_sp_table_scan=start_scan,
+        )
+
+        ActionsAndDialogsMixin.main(owner)
+
+        start_scan.assert_not_called()
+        error_dialog.assert_called_once_with('SP row 1 has no captured track selection')
+        remux.assert_not_called()
+
+    def test_stale_sp_scan_boolean_does_not_block_remux(self) -> None:
+        remux = Mock()
+        owner = SimpleNamespace(
+            _current_cancel_event=None,
+            _sp_scan_thread=None,
+            _sp_scan_completed=False,
+            _sp_scan_in_progress=True,
+            get_selected_function_id=lambda: 3,
+            remux_episodes=remux,
+        )
+
+        ActionsAndDialogsMixin.main(owner)
+
+        remux.assert_called_once_with()
+
+    def test_remux_source_encode_does_not_wait_for_a_bdmv_sp_scan(self) -> None:
+        encode = Mock()
+        owner = SimpleNamespace(
+            _current_cancel_event=None,
+            _encode_input_mode='remux',
+            _sp_scan_thread=object(),
+            _sp_scan_error='stale BDMV scan failure',
+            get_selected_function_id=lambda: 4,
+            encode_bluray=encode,
+        )
+
+        ActionsAndDialogsMixin.main(owner)
+
+        encode.assert_called_once_with()
+
+    def test_failed_scan_state_blocks_later_remux(self) -> None:
+        remux = Mock()
+        error_dialog = Mock()
+        owner = SimpleNamespace(
+            _current_cancel_event=None,
+            _sp_scan_thread=None,
+            _sp_scan_completed=False,
+            _sp_scan_error='scan traceback',
+            get_selected_function_id=lambda: 3,
+            _show_error_dialog=error_dialog,
+            t=lambda text: text,
+            remux_episodes=remux,
+        )
+
+        ActionsAndDialogsMixin.main(owner)
+
+        error_dialog.assert_called_once_with('SP track scan failed; refresh the source before starting the task')
+        remux.assert_not_called()
+
+    def test_result_from_an_old_sp_worker_is_ignored(self) -> None:
+        old_worker = object()
+        owner = SimpleNamespace(_sp_scan_worker=object(), sender=lambda: old_worker)
+
+        ScanWorkerHooksMixin._on_sp_table_scan_result(owner, 0, False, '', {})
+
+    def test_scan_result_uses_the_worker_track_selection_without_reprobing(self) -> None:
+        class Table:
+            def __init__(self) -> None:
+                self.items: dict[tuple[int, int], QTableWidgetItem] = {}
+
+            def rowCount(self) -> int:
+                return 1
+
+            def item(self, row: int, column: int) -> QTableWidgetItem | None:
+                return self.items.get((row, column))
+
+            def setItem(self, row: int, column: int, item: QTableWidgetItem | None) -> None:
+                if item is not None:
+                    self.items[(row, column)] = item
+
+            def cellWidget(self, _row: int, _column: int) -> None:
+                return None
+
+        table = Table()
+        table.setItem(0, ENCODE_SP_LABELS.index('select'), QTableWidgetItem(''))
+        table.setItem(0, ENCODE_SP_LABELS.index('output_name'), QTableWidgetItem('SP.mkv'))
+        current_worker = object()
+        owner = SimpleNamespace(
+            _sp_scan_worker=current_worker,
+            _sp_scan_in_progress=True,
+            _sp_scan_progress_rows_seen=set(),
+            _sp_scan_progress_total=1,
+            _sp_scan_progress_bar=None,
+            _track_selection_config={},
+            table3=table,
+            sender=lambda: current_worker,
+            get_selected_function_id=lambda: 3,
+            _sync_sp_table_row_m2ts_column_from_detail=Mock(),
+            select_all_tracks_checkbox=SimpleNamespace(isChecked=lambda: False),
+        )
+
+        ScanWorkerHooksMixin._on_sp_table_scan_result(
+            owner,
+            0,
+            False,
+            '',
+            {
+                'sp_key': 'sp::1::mpls::00001.mpls',
+                'tracks': {'audio': ['1'], 'subtitle': ['2']},
+            },
+        )
+
+        self.assertEqual(
+            owner._track_selection_config['sp::1::mpls::00001.mpls'],
+            {'audio': ['1'], 'subtitle': ['2']},
+        )
+
+    def test_output_name_failure_keeps_the_sp_scan_invalid(self) -> None:
+        current_worker = object()
+        error_dialog = Mock()
+        owner = SimpleNamespace(
+            _sp_scan_worker=current_worker,
+            _sp_scan_completed=False,
+            sender=lambda: current_worker,
+            _recompute_sp_output_names=Mock(side_effect=RuntimeError('invalid SP output')),
+            _show_error_dialog=error_dialog,
+        )
+
+        SpChapterSegmentLogicMixin._on_sp_table_scan_finished(owner)
+
+        self.assertFalse(owner._sp_scan_completed)
+        self.assertEqual(owner._sp_scan_error, 'invalid SP output')
+        error_dialog.assert_called_once_with('invalid SP output')
+
+    def test_successful_sp_scan_resumes_the_queued_remux_once(self) -> None:
+        current_thread = object()
+        resume = Mock()
+        reset_button = Mock()
+        owner = SimpleNamespace(
+            _sp_scan_thread=current_thread,
+            _sp_scan_worker=object(),
+            _sp_scan_cancel_event=object(),
+            _sp_scan_in_progress=True,
+            _sp_scan_completed=True,
+            _sp_scan_pending_function_id=3,
+            sender=lambda: current_thread,
+            _dismiss_sp_scan_progress_ui=Mock(),
+            _reset_exe_button=reset_button,
+            get_selected_function_id=lambda: 3,
+            main=resume,
+        )
+
+        with patch('src.runtime.gui_runtime_split.scan_and_worker_hooks.QTimer.singleShot') as single_shot:
+            ScanWorkerHooksMixin._on_sp_scan_thread_finished(owner)
+
+        self.assertIsNone(owner._sp_scan_pending_function_id)
+        reset_button.assert_called_once_with()
+        single_shot.assert_called_once_with(0, resume)
+
+    def test_failed_sp_scan_does_not_resume_the_queued_remux(self) -> None:
+        current_thread = object()
+        owner = SimpleNamespace(
+            _sp_scan_thread=current_thread,
+            _sp_scan_worker=object(),
+            _sp_scan_cancel_event=object(),
+            _sp_scan_in_progress=True,
+            _sp_scan_completed=False,
+            _sp_scan_pending_function_id=3,
+            sender=lambda: current_thread,
+            _dismiss_sp_scan_progress_ui=Mock(),
+            _reset_exe_button=Mock(),
+            get_selected_function_id=lambda: 3,
+            main=Mock(),
+        )
+
+        with patch('src.runtime.gui_runtime_split.scan_and_worker_hooks.QTimer.singleShot') as single_shot:
+            ScanWorkerHooksMixin._on_sp_scan_thread_finished(owner)
+
+        single_shot.assert_not_called()
+        owner.main.assert_not_called()
+
+    def test_finished_old_sp_worker_does_not_complete_the_current_scan(self) -> None:
+        old_worker = object()
+        current_worker = object()
+        recompute = Mock()
+        owner = SimpleNamespace(
+            _sp_scan_worker=current_worker,
+            _sp_scan_completed=False,
+            sender=lambda: old_worker,
+            _recompute_sp_output_names=recompute,
+        )
+
+        SpChapterSegmentLogicMixin._on_sp_table_scan_finished(owner)
+
+        self.assertFalse(owner._sp_scan_completed)
+        recompute.assert_not_called()
+
+        owner.sender = lambda: current_worker
+        SpChapterSegmentLogicMixin._on_sp_table_scan_finished(owner)
+
+        self.assertTrue(owner._sp_scan_completed)
+        recompute.assert_called_once_with()
 
 
 if __name__ == "__main__":

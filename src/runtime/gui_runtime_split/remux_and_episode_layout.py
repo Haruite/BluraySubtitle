@@ -556,6 +556,13 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         self._update_main_row_play_button()
 
     def _refresh_movie_table2(self):
+        """Rebuild movie-mode table2 and then refresh table3 exactly once.
+
+        Explicit language and output-name edits are preserved while automatic
+        values are regenerated. ``_movie_configuration`` records the resulting
+        visible rows for task capture; ``refresh_sp_table`` is called only after
+        table2 and that configuration are complete.
+        """
         function_id = self.get_selected_function_id()
         if function_id not in (3, 4, 5):
             return
@@ -1225,6 +1232,9 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             self._refresh_track_selection_config_for_selected_main()
         self.altered = True
         if self.get_selected_function_id() in (3, 4, 5) and bdmv_path and table_ok:
+            # Table1 is now the complete playlist inventory. Build table2 from
+            # its selected main playlists, then table3 and its SP scan; never
+            # start those dependent refreshes while table1 is still changing.
             if self._is_movie_mode():
                 self._refresh_movie_table2()
             else:
@@ -1232,6 +1242,13 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
 
 
     def remux_episodes(self):
+        """Capture the ready Remux GUI state into one request and start its worker.
+
+        ``main`` calls this only after the BDMV SP scan has completed. This
+        method must not refresh table1/table2/table3: it snapshots their current
+        visible values, performs deterministic preflight, and gives the immutable
+        request to the worker.
+        """
         try:
             output_folder = os.path.normpath(
                 self.output_folder_path.text().strip()

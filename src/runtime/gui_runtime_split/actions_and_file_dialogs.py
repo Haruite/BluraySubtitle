@@ -948,6 +948,12 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         subtitle_edit_dialog.exec()
 
     def encode_bluray(self):
+        """Capture the ready Encode GUI state into one request and start its worker.
+
+        BDMV input reaches this method only after ``main`` accepts SP readiness.
+        Remux input has no BDMV SP dependency. Neither path may rebuild GUI
+        tables while creating the request.
+        """
         output_base = os.path.normpath(
             self.output_folder_path.text().strip()
         ) if hasattr(self, 'output_folder_path') else ''
@@ -1708,6 +1714,15 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         update_sub_pack_enabled_state()
 
     def main(self):
+        """Dispatch Execute without rebuilding the GUI state being executed.
+
+        For Remux and BDMV-source Encode, an active SP scan owns unfinished
+        table3 metadata and track selections. The click is queued by function ID
+        until that scan is finalized. A completed table with a selected SP row
+        but no captured track configuration is an explicit error; it is not
+        repaired by starting another hidden full-table scan. Once this gate
+        passes, the selected workflow captures the current visible controls once.
+        """
         if getattr(self, '_current_cancel_event', None) is not None:
             self._current_cancel_event.set()
             self.exe_button.setEnabled(False)
@@ -1715,6 +1730,35 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             return
 
         function_id = self.get_selected_function_id()
+        if function_id in (3, 4):
+            uses_bdmv_sp = function_id == 3 or getattr(self, '_encode_input_mode', 'bdmv') == 'bdmv'
+            if uses_bdmv_sp and getattr(self, '_sp_scan_error', ''):
+                self._show_error_dialog(self.t('SP track scan failed; refresh the source before starting the task'))
+                return
+            if uses_bdmv_sp and getattr(self, '_sp_scan_thread', None) is not None:
+                self._sp_scan_pending_function_id = function_id
+                self.exe_button.setEnabled(False)
+                self._update_exe_button_progress(value=0, text='Waiting for SP track scan')
+                return
+            if uses_bdmv_sp and (table3 := getattr(self, 'table3', None)) is not None:
+                missing_track_selection_row = 0
+                track_selection = getattr(self, '_track_selection_config', {}) or {}
+                for row in range(table3.rowCount()):
+                    try:
+                        sp_entry = SpEntry.from_mapping(self._table3_get_sp_entry_for_row(row))
+                    except Exception:
+                        missing_track_selection_row = row + 1
+                        break
+                    if sp_entry.selected and sp_entry.output_name and sp_entry.track_key not in track_selection:
+                        missing_track_selection_row = row + 1
+                        break
+                if missing_track_selection_row:
+                    self._show_error_dialog(
+                        self.t('SP row {row} has no captured track selection').format(
+                            row=missing_track_selection_row
+                        )
+                    )
+                    return
         if function_id == 1:
             self.generate_subtitle()
         if function_id == 2:

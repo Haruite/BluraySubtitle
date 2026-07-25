@@ -280,11 +280,12 @@ class AudioConversionTests(unittest.TestCase):
             input_wave = root / 'input.wav'
             output_flac = root / 'output.flac'
             input_wave.write_bytes(b'wave')
-            commands: list[str] = []
+            commands: list[list[str]] = []
 
             def run_command(command, **_kwargs):
-                commands.append(str(command))
-                if '-c:a flac' in command:
+                command = list(command)
+                commands.append(command)
+                if command[0] == 'ffmpeg' and command[command.index('-c:a') + 1] == 'flac':
                     output_flac.write_bytes(b'flac')
                 return SimpleNamespace(returncode=0)
 
@@ -301,9 +302,39 @@ class AudioConversionTests(unittest.TestCase):
 
             self.assertTrue(succeeded)
             self.assertEqual(len(commands), 2)
-            self.assertIn('-compression_level 8', commands[1])
+            self.assertEqual(commands[0][0], 'flac')
+            self.assertEqual(commands[1][commands[1].index('-compression_level') + 1], '8')
             self.assertNotIn('-hide_banner', commands[1])
             self.assertNotIn('-loglevel', commands[1])
+
+    def test_sp_flac_rejects_partial_outputs_from_failed_encoders(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            input_wave = root / 'input.wav'
+            output_flac = root / 'output.flac'
+            input_wave.write_bytes(b'wave')
+            commands: list[list[str]] = []
+
+            def run_command(command, **_kwargs):
+                command = list(command)
+                commands.append(command)
+                output_flac.write_bytes(b'partial')
+                return SimpleNamespace(returncode=2)
+
+            with (
+                    patch('src.runtime.services_split.media_info_and_track_mapping.FLAC_PATH', 'flac'),
+                    patch('src.runtime.services_split.media_info_and_track_mapping.FFMPEG_PATH', 'ffmpeg'),
+                    patch('src.runtime.services_split.media_info_and_track_mapping.get_effective_bit_depth', return_value=24),
+                    patch('src.runtime.services_split.media_info_and_track_mapping.run_command', side_effect=run_command),
+                    patch.object(_BluraySubtitle, '_is_silent_audio_file', return_value=(False, -20.0)),
+            ):
+                succeeded = _BluraySubtitle._compress_audio_stream_to_flac(
+                    str(input_wave), '0', str(output_flac)
+                )
+
+            self.assertFalse(succeeded)
+            self.assertEqual([command[0] for command in commands], ['flac', 'ffmpeg'])
+            self.assertFalse(output_flac.exists())
 
     def test_truehd_atmos_is_preserved_when_truehdd_is_unavailable(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

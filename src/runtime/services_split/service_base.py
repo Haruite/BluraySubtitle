@@ -7,9 +7,8 @@ The declarations are verified against the mixins by
 from __future__ import annotations
 
 import threading
-from typing import Any, Callable, Optional, Generator
+from typing import Any, Callable, Optional
 
-from PyQt6.QtWidgets import QTableWidget
 
 from src.bdmv import Chapter
 from src.runtime.remux import RemuxMainJob, RemuxRequest
@@ -56,12 +55,6 @@ class BluraySubtitleServiceBase:
                 setattr(_fn, "__service_base_stub__", True)
 
     # BEGIN GENERATED MIXIN CONTRACTS
-    def _add_chapter_to_mkv_by_duration(self, mkv_files: list[str], table: Optional[QTableWidget]=None, selected_mpls: Optional[list[tuple[str, str]]]=None, cancel_event: Optional[threading.Event]=None) -> None:
-        raise NotImplementedError
-
-    def _add_chapter_to_mkv_from_configuration(self, mkv_files: list[str], configuration: dict[int, dict[str, int | str]], cancel_event: Optional[threading.Event]=None) -> None:
-        raise NotImplementedError
-
     def _apply_episode_output_names(self, mkv_files: list[str], output_names: Optional[list[str]]=None) -> list[str]:
         raise NotImplementedError
 
@@ -188,9 +181,6 @@ class BluraySubtitleServiceBase:
     def _get_chapter_offsets(self, mpls_path: str) -> list[float]:
         raise NotImplementedError
 
-    def _group_mkv_paths_by_bdmv(self, sorted_paths: list[str], bdmv_keys: list[int]) -> dict[int, list[str]]:
-        raise NotImplementedError
-
     @staticmethod
     def _group_selected_mpls_by_folder_runs(selected_mpls: list[tuple[str, str]]) -> list[list[tuple[str, str]]]:
         raise NotImplementedError
@@ -243,9 +233,6 @@ class BluraySubtitleServiceBase:
 
     @staticmethod
     def _merged_mkv_id_to_m2ts_pid_episode_sp(main_track_id_to_pid: dict[int, int], selected_sp_pids: list[int]) -> dict[int, int]:
-        raise NotImplementedError
-
-    def _mkv_sort_key(self, p: str):
         raise NotImplementedError
 
     @staticmethod
@@ -319,9 +306,6 @@ class BluraySubtitleServiceBase:
 
     @staticmethod
     def _norm_lang_mkv(lcode: str) -> str:
-        raise NotImplementedError
-
-    def _ordered_episode_confs_by_bdmv(self, configuration: dict[int, dict[str, int | str]]) -> dict[int, list[dict[str, int | str]]]:
         raise NotImplementedError
 
     @staticmethod
@@ -529,9 +513,6 @@ class BluraySubtitleServiceBase:
     def _write_tsmuxer_demux_meta(m2ts_path: str, tracks: list[dict[str, object]], pid_to_lang: dict[int, str], out_meta_path: str, fps_default: str) -> bool:
         raise NotImplementedError
 
-    def add_chapter_to_mkv(self, mkv_files, table: Optional[QTableWidget]=None, selected_mpls: Optional[list[tuple[str, str]]]=None, cancel_event: Optional[threading.Event]=None, configuration: Optional[dict[int, dict[str, int | str]]]=None):
-        raise NotImplementedError
-
     def add_chapters_to_mkv(self, mkv_targets: list[tuple[str, str]], selected_mpls: list[str], edit_original: bool, cancel_event: Optional[threading.Event]=None) -> None:
         raise NotImplementedError
 
@@ -604,9 +585,6 @@ class BluraySubtitleServiceBase:
 
     @staticmethod
     def resolve_disc_output_title(bdmv_root: str, selected_mpls_no_ext: str) -> str:
-        raise NotImplementedError
-
-    def select_mpls_from_table(self, table: QTableWidget) -> Generator[str, Chapter, str]:
         raise NotImplementedError
 
     def t(self, text: str) -> str:

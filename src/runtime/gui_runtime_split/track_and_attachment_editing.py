@@ -376,24 +376,34 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             cfg_out[str(key)] = m
         self._track_lossless_audio_config = cfg_out
 
-
     def _edit_chapters_for_mkv(self, mkv_path: str):
         try:
             find_mkvtoolnix()
-        except Exception:
-            pass
+        except Exception as error:
+            self._show_error_dialog(str(error))
+            return
         if not MKV_EXTRACT_PATH or not MKV_PROP_EDIT_PATH:
-            QMessageBox.information(self, " ", "mkvextract or mkvpropedit not found")
+            QMessageBox.information(self, ' ', self.t('mkvextract or mkvpropedit not found'))
             return
         tmp_dir = tempfile.mkdtemp(prefix='BluraySubtitle_chapters_')
         chapter_path = os.path.join(tmp_dir, 'chapter.txt')
-        extract_cmd = f'"{MKV_EXTRACT_PATH}" {mkvtoolnix_ui_language_arg()} "{mkv_path}" chapters --simple "{chapter_path}"'
-        run_command(extract_cmd)
+        ui_language = get_mkvtoolnix_ui_language()
+        result = run_command(
+            [MKV_EXTRACT_PATH, '--ui-language', ui_language, mkv_path, 'chapters', '--simple', chapter_path],
+            capture_output=True, text=True, encoding='utf-8', errors='ignore',
+        )
+        if result.returncode not in (0, 1) or not os.path.isfile(chapter_path):
+            output = ((result.stdout or '') + '\n' + (result.stderr or '')).strip()
+            self._show_error_dialog(output or self.t('Chapter extraction failed'))
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            return
         try:
-            with open(chapter_path, 'r', encoding='utf-8-sig') as fp:
-                content = fp.read()
+            with open(chapter_path, 'r', encoding='utf-8-sig') as chapter_file:
+                content = chapter_file.read()
         except Exception:
-            content = ''
+            self._show_error_dialog(traceback.format_exc())
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            return
 
         dlg = QDialog(self)
         dlg.setWindowTitle(self.t('edit chapters'))
@@ -418,26 +428,19 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
 
         def on_save():
             try:
-                with open(chapter_path, 'w', encoding='utf-8') as fp:
-                    fp.write(editor.toPlainText())
+                with open(chapter_path, 'w', encoding='utf-8') as chapter_file:
+                    chapter_file.write(editor.toPlainText())
+                print(f'{self.t("[chapter-debug] ")}{self.t("manual chapter edit apply: ")}{chapter_path} -> {mkv_path}')
+                result = run_command(
+                    [MKV_PROP_EDIT_PATH, '--ui-language', ui_language, mkv_path, '--chapters', chapter_path],
+                    capture_output=True, text=True, encoding='utf-8', errors='ignore',
+                )
+                succeeded = result.returncode in (0, 1)
             except Exception:
+                succeeded = False
                 self._show_error_dialog(traceback.format_exc())
-                return
-            edit_cmd = f'"{MKV_PROP_EDIT_PATH}" {mkvtoolnix_ui_language_arg()} "{mkv_path}" --chapters "{chapter_path}"'
-            print(f'{self.t("[chapter-debug] ")}{self.t("manual chapter edit apply: ")}{chapter_path} -> {mkv_path}')
-            try:
-                p = run_command(edit_cmd, capture_output=True, text=True, encoding='utf-8',
-                                   errors='ignore')
-                out = (p.stdout or '') + '\n' + (p.stderr or '')
-            except Exception:
-                out = traceback.format_exc()
-            is_error = ('Error' in out) or ('error' in out.lower())
-            if is_error:
-                status_label.setText(self.t('Save failed, please check'))
-                status_label.setStyleSheet('color:#dc2626;')
-            else:
-                status_label.setText(self.t('Chapters saved!'))
-                status_label.setStyleSheet('color:#16a34a;')
+            status_label.setText(self.t('Chapters saved!' if succeeded else 'Save failed, please check'))
+            status_label.setStyleSheet('color:#16a34a;' if succeeded else 'color:#dc2626;')
             status_label.setVisible(True)
             QTimer.singleShot(3000, lambda: status_label.setVisible(False))
 
@@ -445,58 +448,74 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
         btn_close.clicked.connect(dlg.accept)
         dlg.resize(820, 560)
         dlg.exec()
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
     def _extract_attachment_to_temp_and_open(self, mkv_path: str, attachment_id: str, filename: str):
         try:
             find_mkvtoolnix()
-        except Exception:
-            pass
+        except Exception as error:
+            self._show_error_dialog(str(error))
+            return
         if not MKV_EXTRACT_PATH:
-            QMessageBox.information(self, " ", "mkvextract not found")
+            QMessageBox.information(self, ' ', self.t('mkvextract not found'))
             return
-        aid = str(attachment_id or '').strip()
-        if not aid:
-            QMessageBox.information(self, " ", "Attachment ID not found")
+        attachment_id = str(attachment_id or '').strip()
+        if not attachment_id:
+            QMessageBox.information(self, ' ', self.t('Attachment ID not found'))
             return
-        safe_name = os.path.basename(str(filename or '').strip()) or f'attachment_{aid}.bin'
+        safe_name = os.path.basename(str(filename or '').strip()) or f'attachment_{attachment_id}.bin'
         safe_name = safe_name.replace('\\', '_').replace('/', '_')
-        tmp_dir = tempfile.mkdtemp(prefix='BluraySubtitle_attach_')
-        out_path = os.path.join(tmp_dir, safe_name)
-        cmd = f'"{MKV_EXTRACT_PATH}" {mkvtoolnix_ui_language_arg()} "{mkv_path}" attachments {aid}:"{out_path}"'
+        temporary_directory = tempfile.mkdtemp(prefix='BluraySubtitle_attach_')
+        output_path = os.path.join(temporary_directory, safe_name)
         try:
-            p = run_command(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore')
-            out = (p.stdout or '') + '\n' + (p.stderr or '')
-            if p.returncode != 0:
-                self._show_error_dialog(out.strip() or 'mkvextract failed')
-                return
+            result = run_command(
+                [MKV_EXTRACT_PATH, '--ui-language', get_mkvtoolnix_ui_language(), mkv_path,
+                 'attachments', f'{attachment_id}:{output_path}'],
+                capture_output=True, text=True, encoding='utf-8', errors='ignore',
+            )
         except Exception:
+            shutil.rmtree(temporary_directory, ignore_errors=True)
             self._show_error_dialog(traceback.format_exc())
             return
-        self.open_folder_path(tmp_dir)
+        if result.returncode not in (0, 1) or not os.path.isfile(output_path):
+            output = ((result.stdout or '') + '\n' + (result.stderr or '')).strip()
+            shutil.rmtree(temporary_directory, ignore_errors=True)
+            self._show_error_dialog(output or self.t('Attachment extraction failed'))
+            return
+        self.open_folder_path(temporary_directory)
 
     def _extract_track_to_temp_and_open(self, mkv_path: str, track_id: int, codec_id: str):
         try:
             find_mkvtoolnix()
-        except Exception:
-            pass
-        if not MKV_EXTRACT_PATH:
+        except Exception as error:
+            self._show_error_dialog(str(error))
             return
-        tmp_dir = tempfile.mkdtemp(prefix='BluraySubtitle_extract_')
+        if not MKV_EXTRACT_PATH:
+            QMessageBox.information(self, ' ', self.t('mkvextract not found'))
+            return
         codec_id = str(codec_id or '').strip()
         codec_key = 'A_DTS' if mkv_codec_id_is_dts_family(codec_id) else (
             'A_AAC' if codec_id.startswith('A_AAC') else ('V_REAL' if codec_id.startswith('V_REAL/') else codec_id)
         )
-        ext = (_MKV_CODEC_INFO.get(codec_key) or ('', '.bin'))[1]
-        out_path = os.path.join(tmp_dir, f'track{track_id}{ext}')
-        cmd = f'"{MKV_EXTRACT_PATH}" {mkvtoolnix_ui_language_arg()} "{mkv_path}" tracks {track_id}:"{out_path}"'
-        run_command(cmd)
+        extension = (_MKV_CODEC_INFO.get(codec_key) or ('', '.bin'))[1]
+        temporary_directory = tempfile.mkdtemp(prefix='BluraySubtitle_extract_')
+        output_path = os.path.join(temporary_directory, f'track{track_id}{extension}')
         try:
-            self.open_folder_path(tmp_dir)
+            result = run_command(
+                [MKV_EXTRACT_PATH, '--ui-language', get_mkvtoolnix_ui_language(), mkv_path,
+                 'tracks', f'{track_id}:{output_path}'],
+                capture_output=True, text=True, encoding='utf-8', errors='ignore',
+            )
         except Exception:
-            pass
-
-
-
+            shutil.rmtree(temporary_directory, ignore_errors=True)
+            self._show_error_dialog(traceback.format_exc())
+            return
+        if result.returncode not in (0, 1) or not os.path.isfile(output_path):
+            output = ((result.stdout or '') + '\n' + (result.stderr or '')).strip()
+            shutil.rmtree(temporary_directory, ignore_errors=True)
+            self._show_error_dialog(output or self.t('Track extraction failed'))
+            return
+        self.open_folder_path(temporary_directory)
     def _parse_stream_pid(self, raw_id: object) -> Optional[int]:
         if isinstance(raw_id, int):
             return int(raw_id)

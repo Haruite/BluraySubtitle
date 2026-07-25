@@ -1,2 +1,2 @@
-"""Public export modules for staged migration."""
+"""Shared runtime utilities."""
 

@@ -54,8 +54,6 @@ class RemuxWorker(QObject):
                 movie_mode=request.movie_mode,
                 mux_dolby_vision=request.mux_dolby_vision,
             )
-            bs.track_selection_config = request.track_selection_config or {}
-            bs.track_language_config = request.track_language_config or {}
             bs.episodes_remux(request, cancel_event=self.cancel_event)
         except TaskCancelled:
             print_terminal_line('[BluraySubtitle] Remux worker: canceled.')

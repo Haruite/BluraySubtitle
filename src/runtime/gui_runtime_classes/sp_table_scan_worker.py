@@ -10,6 +10,15 @@ from src.runtime.services import BluraySubtitle
 
 
 class SpTableScanWorker(QObject):
+    """Probe one immutable snapshot of table3 rows outside the GUI thread.
+
+    Paths and selection policy are captured before the thread starts. Media
+    probes are cached by normalized path so repeated clips across playlists are
+    read once per scan. Each result contains only row metadata, classification,
+    and the calculated default track selection; the GUI thread remains the sole
+    owner of widgets and applies the payload through its current worker identity.
+    """
+
     result = pyqtSignal(int, bool, str, object)
     finished = pyqtSignal()
     canceled = pyqtSignal()
@@ -21,7 +30,10 @@ class SpTableScanWorker(QObject):
         self._cancel_event = cancel_event
 
     def run(self):
+        """Scan rows in visible order and emit exactly one result for each row."""
         try:
+            # These caches belong to one table snapshot. They must not survive a
+            # refresh because source files and visible selection policy can change.
             streams_cache: dict[str, list[dict[str, object]]] = {}
             frame_count_cache: dict[str, int] = {}
             audio_only_cache: dict[str, bool] = {}

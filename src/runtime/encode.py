@@ -273,10 +273,19 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
             if not (request.input_mode == 'bdmv' and is_sp_row and row.uses_main_output):
                 raise ValueError(translate_text('Duplicate output path: {path}').format(path=output_path))
         planned_outputs.add(normalized_output)
-        if request.input_mode != 'remux' and os.path.exists(output_path):
-            raise FileExistsError(
-                translate_text('Output file already exists: {path}').format(path=output_path)
-            )
+        if os.path.exists(output_path):
+            if request.input_mode != 'remux':
+                raise FileExistsError(
+                    translate_text('Output file already exists: {path}').format(path=output_path)
+                )
+            if os.path.isdir(source_path):
+                valid_checkpoint = os.path.isdir(output_path)
+            else:
+                valid_checkpoint = os.path.isfile(output_path) and os.path.getsize(output_path) > 0
+            if not valid_checkpoint:
+                raise FileExistsError(
+                    translate_text('Existing resumable output is invalid: {path}').format(path=output_path)
+                )
 
     if not check_tools:
         return

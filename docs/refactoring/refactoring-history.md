@@ -35,7 +35,7 @@ History entries must reflect the author's documented intent. Unresolved behavior
 | Phase 3.6 | Audio conversion and Dolby Vision | Complete | `3f74ca0` |
 | Phase 4 | Shared logic and execution boundaries | Complete | `c50f4e9` |
 | Phase 5 | Base contracts, i18n, naming, and algorithm notes | Complete | `b26803b` |
-| Phase 6 | Transport and subtitle parsers | Complete | This change |
+| Phase 6 | Transport and subtitle parsers | Complete | `ef9ea71` |
 
 ## Phase 1 — Contract and Safety Baseline
 
@@ -574,7 +574,7 @@ Blu-ray DIY encoding and generic video conversion in Edit Tracks remain outside 
 ## Phase 6 — Transport and Subtitle Parsers
 
 Date: 2026-07-25
-Commit: Included in this change
+Commit: `ef9ea71` (`refactor: complete phase 6 transport and subtitle parsers`)
 
 ### Scope
 
@@ -626,3 +626,52 @@ Refactored the M2TS transport parser, the shared media-information bridge, and t
 - Open the generated SPY×FAMILY SUP over the source video and inspect moving signs, fades, karaoke, boundaries between adjacent events, colors, and forced flags. A hardware-player or authored-disc check is still valuable for the compatibility path.
 - Refresh an SP table containing single-frame menu clips and an IGS menu source; verify automatic selection and extracted menu images in the GUI.
 - Exercise a VC-1 or MPEG-2 Blu-ray clip so the explicit ffprobe frame-rate fallback is covered with real media.
+
+## Post-Phase 6 — Stabilization and Structural Cleanup
+
+Date: 2026-07-25
+Commit: Included in this change
+
+### Scope
+
+Corrected failures found while validating the completed refactor, made SP scan readiness an explicit launch boundary, and removed migration-era entry points and an obsolete Qt-dependent chapter path. The current request-based Remux, Encode, and Add Chapters workflows remain the only execution paths.
+
+### SP Scan and Task Launch
+
+- The visible Remux/Encode tables can finish loading before the background SP worker has scanned every row. Before Phase 6, native timing could take about 3.1 seconds per M2TS; a table with hundreds of SP rows could therefore remain active for minutes even though the main interface looked complete.
+- The old `_sp_scan_in_progress` flag represented thread cleanup rather than result readiness. Earlier launch code could consequently report `SP track scan is still running` after the visible load completed; removing that check entirely allowed the opposite race, where a task could capture partially scanned SP rows.
+- Task snapshot creation also rebuilt the SP table and started a second scan after the Execute-button readiness check, then immediately captured the request. This caused the first launch to report a missing track selection while the second scan was still filling rows. Launch snapshots no longer refresh GUI tables; the Execute boundary waits for an active scan and reports the exact row if a completed table still lacks captured track configuration instead of silently starting another full scan.
+- Scan result readiness, worker identity, thread cleanup, pending launch, and scan failure are now separate states. The worker's already calculated track selection is applied directly without probing the same MPLS again on the GUI thread. A Remux or Blu-ray Encode click during the current scan is queued, and result completion is applied before the scan thread may stop. A successful scan and output-name recomputation resumes that exact function once; failure or cancellation does not start it.
+- Results and completion/failure signals from a replaced worker are ignored. A failed scan remains invalid after its thread exits, so clicking Remux again cannot bypass the failure; refreshing the source starts a new scan and clears the failure only when that scan is valid.
+
+### Other Corrections
+
+- Shared SP FLAC conversion now accepts output only when decoding and encoding return success and create a non-empty file. A partial standalone-FLAC output is removed before the visible level-8 FFmpeg fallback, and a failed fallback cannot leave a false checkpoint.
+- Remux-input Encode resume now treats only non-empty main/SP files, or the expected directory output for a directory source, as completed checkpoints. Empty files and wrong path types fail before encoding instead of being skipped. External subtitles and companion files still follow their documented file-exists resume rule.
+- Manual chapter, attachment, and track extraction now report missing tools and failed commands, use the shared argument-list command entry, validate both exit status and created output, and remove failed temporary output.
+
+### Structural Cleanup
+
+- Removed unused `src.gui`, `runtime.gui_runtime`, and `exports.bdmv_parser` migration facades. No repository entry point, test, build script, or documentation imported them.
+- Removed the unused Qt table-to-service chapter API and its filename-based `BD_Vol_NNN` grouping path. That path contradicted the established Add Chapters behavior, where externally supplied MKV files are matched to selected MPLS rows in current sorted order.
+- Removed duplicate worker/service copies of track-selection and track-language request state; current jobs continue to receive both configurations explicitly from the immutable request.
+- Regenerated both IDE base contracts after removing the obsolete methods and adding the SP lifecycle state.
+
+### Documentation and i18n
+
+- Recorded the actual Phase 6 commit as `ef9ea71` in both status tables and Phase 6 entries.
+- Clarified in both README versions that Remux-input Encode resumes from non-empty main/SP checkpoints and rejects empty or type-mismatched paths.
+- Added Simplified Chinese mappings for the SP wait/failure states and MKV extraction errors; source strings and comments remain English.
+
+### Verification
+
+- The complete repository run passed all 178 tests, including snapshot-without-refresh, queued SP launch, one-time resume, worker track-result reuse, missing-selection reporting, Remux-source Encode isolation, failed-scan blocking, stale-worker rejection, FLAC partial-output cleanup, invalid Encode checkpoints, and MKV extraction failures.
+- Python compilation, source-import checks, i18n audit, split-contract verification, `git diff --check`, and CRLF checks passed.
+- Two consecutive split-contract generation runs produce identical base files.
+
+### Manual Media Checks Still Required
+
+- Drag a large multi-disc source into Remux, click Execute while the SP scan is active, and confirm the task starts exactly once after the scan finishes. Then refresh or switch sources during a scan and confirm the replaced worker cannot alter the new table.
+- Exercise an actual SP scan failure and confirm Remux remains blocked until the source is refreshed successfully.
+- Resume a Remux-input Encode with valid completed outputs, an empty main/SP output, and a wrong-type path; verify only valid checkpoints are skipped.
+- Run real standalone-FLAC success/failure fallback and manual MKV chapter/attachment/track extraction checks with the configured tools.

@@ -62,7 +62,10 @@ class BluraySubtitleGuiBase(QWidget):
         self._selected_main_mpls_prev = None
         self._sp_index_by_bdmv = None
         self._sp_scan_cancel_event = None
+        self._sp_scan_completed = None
+        self._sp_scan_error = None
         self._sp_scan_in_progress = None
+        self._sp_scan_pending_function_id = None
         self._sp_scan_progress_bar = None
         self._sp_scan_progress_dialog = None
         self._sp_scan_progress_done = None
@@ -495,6 +498,9 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _on_sp_scan_thread_finished(self):
+        raise NotImplementedError
+
+    def _on_sp_table_scan_failed(self, error: str):
         raise NotImplementedError
 
     def _on_sp_table_scan_finished(self):

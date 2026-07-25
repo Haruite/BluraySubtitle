@@ -249,6 +249,15 @@ class EncodeWorkflowTests(unittest.TestCase):
             )
             validate_encode_request(existing_request)
 
+            output_path.unlink()
+            output_path.mkdir()
+            with self.assertRaisesRegex(FileExistsError, 'Existing resumable output is invalid'):
+                validate_encode_request(existing_request)
+            output_path.rmdir()
+            output_path.write_bytes(b'')
+            with self.assertRaisesRegex(FileExistsError, 'Existing resumable output is invalid'):
+                validate_encode_request(existing_request)
+
             disc_folder = root / 'Disc'
             playlist_folder = disc_folder / 'BDMV' / 'PLAYLIST'
             playlist_folder.mkdir(parents=True)
@@ -368,6 +377,15 @@ class EncodeWorkflowTests(unittest.TestCase):
                 f'Skipping existing output: {output_path}',
                 service.progress_messages,
             )
+
+            output_path.write_bytes(b'')
+            service = _RowEncodeService()
+            with patch(
+                    'src.runtime.services_split.encode_and_audio_tasks.encode_dovi_preflight_mkv_paths',
+                    return_value=None):
+                with self.assertRaisesRegex(FileExistsError, 'Existing resumable output is invalid'):
+                    service._encode_mkv_rows(request, [row, second_row], [], threading.Event())
+            self.assertEqual(service.encode_calls, [])
 
             bdmv_request = EncodeRequest(
                 input_mode='bdmv',

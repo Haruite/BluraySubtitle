@@ -10,10 +10,9 @@ import sys
 import threading
 import xml.etree.ElementTree as et
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from typing import Optional, Generator
+from typing import Optional
 
 from PyQt6.QtCore import QCoreApplication, QThread
-from PyQt6.QtWidgets import QTableWidget, QToolButton
 
 from src.bdmv import Chapter
 from src.core import MKV_MERGE_PATH
@@ -212,17 +211,6 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
                 max_indicator = indicator
                 selected_mpls = mpls_file_path
         return selected_mpls
-
-    def select_mpls_from_table(self, table: QTableWidget) -> Generator[str, Chapter, str]:
-        for bdmv_index in range(table.rowCount()):
-            bluray_folder = table.item(bdmv_index, 0).text()
-            info: QTableWidget = table.cellWidget(bdmv_index, 2)
-            for mpls_index in range(info.rowCount()):
-                main_btn: QToolButton = info.cellWidget(mpls_index, 3)
-                if main_btn.isChecked():
-                    mpls_file = info.item(mpls_index, 0).text()
-                    selected_mpls = os.path.join(bluray_folder, 'BDMV', 'PLAYLIST', mpls_file)
-                    yield bluray_folder, Chapter(selected_mpls), selected_mpls[:-5]
 
     @staticmethod
     def _disc_paths_for_output_title(bdmv_root: str, selected_mpls_no_ext: str) -> tuple[str, str, str]:
