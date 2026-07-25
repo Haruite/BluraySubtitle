@@ -33,7 +33,8 @@ Phase 1 的详细分析仍保存在 [第一阶段重构契约与配置矩阵](ph
 | Phase 3.4 | 原盘 Encode 工作流 | 已完成 | `d4adee2` |
 | Phase 3.5 | SP、轨道对齐与缺轨修复 | 已完成 | `51fbbea` |
 | Phase 3.6 | 音频转换和 Dolby Vision | 已完成 | `3f74ca0` |
-| Phase 4 | 公共逻辑与执行边界 | 已完成 | 本次修改 |
+| Phase 4 | 公共逻辑与执行边界 | 已完成 | `c50f4e9` |
+| Phase 5 | Base 契约、i18n、命名和算法注释 | 已完成 | 本次修改 |
 
 ## Phase 1——契约与安全基线
 
@@ -450,7 +451,7 @@ Remux/Encode 内部仍在使用的旧章节入口暂时保留，等待对应工�
 ## Phase 4——公共逻辑与执行边界
 
 日期：2026-07-24 至 2026-07-25
-提交：包含在本次修改中
+提交：`c50f4e9`（`refactor: consolidate shared logic and execution boundaries`）
 
 ### 范围
 
@@ -505,3 +506,66 @@ Remux/Encode 内部仍在使用的旧章节入口暂时保留，等待对应工�
 ### 推迟内容
 
 剩余超长函数对应已有的独立 GUI 构建或工作流阶段，本阶段不为降低测量长度而强行拆分。Blu-ray DIY 压制及“编辑轨道”中的通用视频转换仍不在本阶段范围内。
+
+## 第五阶段——Base 契约、i18n、命名与算法注释
+
+日期：2026-07-25
+提交：包含在本次修改中
+
+### 范围
+
+让 GUI/Service split 契约可以重复生成和检查，完成剩余源码语言清理，替换 fallback 与时间轴中的含糊命名，补充最可能继续维护的关键算法说明，并删除仅用于存放空取消哨兵类的文件。
+
+### 结构调整
+
+- `tools/check_split_contracts.py` 现在同时生成并验证 `gui_base.py` 与 `service_base.py` 中带标记的方法声明区段。`--write` 根据各自 mixin 更新两个 base；普通检查会在任一区段过期时报错，重复生成的字节结果保持一致。
+- 用共享的 `runtime.TaskCancelled` 异常替代私有 `_Cancelled` 类及其独立的 `services/cancelled.py` 模块。GUI Worker 和 Service mixin 现在使用同一种取消类型。
+- 清除源码模块中硬编码的简体中文。GUI 表头、语言名称、任务标签、提示及其他翻译字符串都以英文作为源码文本，并通过 `I18N_ZH_TO_EN` 解析。
+- 将 fallback、章节窗口、轨道映射、输入路径和 Dolby Vision 代码中的缩写变量替换为能表达职责的名称，并删除同一修改范围内遇到的无用值及仅使用一次的格式化/解析包装。
+- 为章节半开区间、分段时间轴投影、首个 play item 的 PID 槽位、Matroska 输入内局部 TID、分集关联 SP 映射、缺轨修复、PCM 静音生成及 Dolby Vision Profile 转换补充英文注释。
+
+### 逻辑变化
+
+- 轨道对齐 Remux fallback 现在只使用“编辑轨道”中可见且已选择的轨道。被 MPLS 隐藏的首个 M2TS 轨道会排除，所选视频索引会映射到后续各 clip，恢复轨道和静音轨道保持 GUI 选择顺序而不是 PID 数值顺序。
+- 纯视频双层 Dolby Vision SP 在启用“混流 Dolby Vision”时，以基础层 PID 保留一个合并后输出的视频槽位。原始 BL/EL 仍不会从 Matroska 输入直接复制，合并后的视频也可以在没有音频/字幕基础 MKV 时独立混流。
+- 多 clip fallback 的每个分段完成或失败后，都会立即删除属于该分段的 `*_tsmux_out` 和 `*_audrec_tsmux_out` 目录；最终分段 MKV 仍保留用于拼接。
+- 每次修复性合并后都会重新建立当前 PID 到 Matroska TID 的映射，再进入下一修复阶段，避免前一次合并改变轨道顺序后给下一阶段留下过期 TID。
+- 非音频缺轨仍必须由 tsMuxer 一次性完整修复。音频缺轨先使用 tsMuxer，只有无法解复用时才回退为 PCM 静音；静音继承参考槽位的采样率、声道数和位深。由于无论缺失源编码为何，替代轨道始终是 PCM，因此删除了已经没有意义的源编码白名单。
+- fallback 现在只接受精确规划的分段输出，不再搜索任意同前缀中间 MKV 并把它提升为成功结果。
+- 章节边界查找改用 `bisect_left` 实现已有的单调时间轴与一毫秒容差规则；生成的章节半开区间和重定位时间戳保持不变。
+- 分集关联 SP 只接受有效的 `stream_id` 或 `original_transport_stream_id` 作为 transport PID。所选 SP 轨道缺少这两个值时明确失败；不再把 `properties.number` 解释为 PID。
+- 原盘 Remux 现在捕获默认启用的“将无损音轨转换为 FLAC”选项。正片章节及全部 SP 混流完成后，所有最终 Matroska 输出通过共用且带验证的音频管线原地转换已选择的无损音轨；有损音轨和已有 FLAC 保持不变，关闭选项时保留源音轨。AAC 和 Opus 仍只属于 Encode。
+- 原盘 Encode 的暂存请求明确禁用 Remux FLAC 转换；暂存源音频保持不变，只有视频压制成功后，才由 Encode 最终混流执行逐轨配置的音频转换。
+- 共用 FLAC 目标现在使用配置的独立 `flac` 编码器、压缩级别 8 和 `FLAC_THREADS`。TrueHD/DTS 系列输入会在需要时先解码为 PCM；独立编码器不可用或编码失败时回退到压缩级别 8 的 `ffmpeg`，并在回退前删除不完整的 FLAC 输出。实际音频解码和编码的 FFmpeg 输出保持可见。
+
+### 文档与 i18n
+
+- 更新中英文 README，准确说明 fallback 遵循 GUI 可见轨道的选择顺序、排除 MPLS 隐藏轨道、让缺失音频的 PCM 静音继承参考轨道的采样率/声道数/位深，并要求分集关联 SP 提供真实 identify PID 字段。
+- 将剩余 GUI 表头和语言标签加入 `I18N_ZH_TO_EN`，修正方向写反的源文/译文条目，并重新生成 i18n 债务基线。
+- 增加 Remux FLAC 选项、选项不可用及转换进度的中英文文本，并在中英文 README 和代码规范中同步当前 Remux/Encode 音频边界、压缩级别、FFmpeg 可见输出以及独立 FLAC 的优先与回退规则。
+- 同步增加中英文第五阶段重构历史。
+
+### 验证
+
+- 全仓库 155 项测试全部通过，其中覆盖 GUI 可见轨道顺序、MPLS 隐藏轨道排除、所选视频逐 clip 映射、纯视频 Dolby Vision SP fallback、逐分段 tsMuxer 清理、Remux FLAC 默认/关闭行为、独立 FLAC 优先、共用及 SP 路径中 level 8 且输出可见的 ffmpeg 回退、Encode 暂存音频保留、SP PID 明确失败及拒绝同前缀 fallback 中间文件。
+- Python 编译和源码导入检查通过。
+- 对《疯狂动物城 2》原盘的 `01478.mpls` / `00304.m2ts` 完成只读检查：素材仅含 HEVC PID `0x1011` 和 `0x1015`，修正后的规划将 `0x1011` 保留为合并输出的视频索引 `0`。
+- 使用真实工具完成一秒 Matroska 检查：优先路径实际调用 `flac -8 -j 20`；随后强制独立编码失败，确认回退命令使用可见的 FFmpeg 输出和 `-compression_level 8`。PCM 成功转换为 FLAC，优先路径中的 AC-3 保持不变，轨道顺序、语言和最终 Codec ID 验证通过，并清除了任务自有临时文件。
+- i18n 审计结果为：源码英文注释之外的中文注释为零、`core/i18n.py` 之外的中文源码字符串为零、未映射翻译调用为零。
+- split 契约检查通过，连续执行两次 `--write` 后两个 base 文件完全一致。
+- `git diff --check`、重复定义/短文件复核和 CRLF 检查通过。
+
+### 仍需真实素材验证
+
+- 在已知肉酱盘/remux-fallback 原盘上执行轨道对齐 fallback，并使用 MediaInfo 和 mkvmerge identification 检查轨道顺序、语言、缺轨恢复、章节及最终时长。
+- 使用直接 Matroska 读取时缺少音频 PID 的案例，确认优先尝试 tsMuxer 恢复，并且只有恢复失败时才生成 PCM 静音。
+- 测试需要多个修复阶段的多 clip 标题，特别是首个 M2TS 含有被 MPLS 隐藏轨道的情况；确认每次合并后视频、音频和字幕选择仍与 GUI 一致。
+- 使用 mkvmerge identify 数据同时缺少两个有效 PID 字段的标题测试分集关联 SP；确认所选行会报告对应轨道和源路径，而不是使用 `properties.number`。
+- 检查简体中文和英文 GUI 的表头、语言标签、任务提示及取消行为。
+- 分别执行 Remux 与 Encode Dolby Vision 路径，检查结果 Profile 和轨道集合。
+- 使用 PCM、DTS-HD、TrueHD Atmos、已有 FLAC 和有损音轨，分别启用和关闭 FLAC 选项执行原盘 Remux；检查编码、轨道顺序、语言/标记、章节、附件和 `truehdd` 保留回退。
+- 执行一次短原盘 Encode，确认暂存 MKV 保留源音频，而最终输出只在视频成功后应用逐轨 Encode 选项。
+
+### 推迟内容
+
+Blu-ray DIY 压制及“编辑轨道”中的通用视频转换仍不在本阶段范围内。

@@ -33,7 +33,8 @@ History entries must reflect the author's documented intent. Unresolved behavior
 | Phase 3.4 | Blu-ray Encode workflow | Complete | `d4adee2` |
 | Phase 3.5 | SP, track alignment, and missing-track repair | Complete | `51fbbea` |
 | Phase 3.6 | Audio conversion and Dolby Vision | Complete | `3f74ca0` |
-| Phase 4 | Shared logic and execution boundaries | Complete | This change |
+| Phase 4 | Shared logic and execution boundaries | Complete | `c50f4e9` |
+| Phase 5 | Base contracts, i18n, naming, and algorithm notes | Complete | This change |
 
 ## Phase 1 — Contract and Safety Baseline
 
@@ -450,7 +451,7 @@ AV1 Dolby Vision profile 10 authoring remains deferred until the project has a v
 ## Phase 4 — Shared Logic and Execution Boundaries
 
 Date: 2026-07-24 to 2026-07-25
-Commit: Included in this change
+Commit: `c50f4e9` (`refactor: consolidate shared logic and execution boundaries`)
 
 ### Scope
 
@@ -505,3 +506,66 @@ Simplified cross-workflow Python infrastructure after the workflow refactors. Th
 ### Deferred
 
 The remaining very long functions represent existing independent GUI construction or workflow stages and were not split merely to reduce their measured length. Blu-ray DIY encoding and generic video conversion in Edit Tracks remain outside this phase.
+
+## Phase 5 — Base Contracts, i18n, Naming, and Algorithm Notes
+
+Date: 2026-07-25
+Commit: Included in this change
+
+### Scope
+
+Made the GUI/service split contracts reproducible, completed the remaining source-language cleanup, replaced unclear fallback and timeline names, documented the algorithms most likely to need future maintenance, and removed a file that existed only to hold an empty cancellation sentinel.
+
+### Structural Changes
+
+- `tools/check_split_contracts.py` now generates and verifies the marked method-declaration sections in both `gui_base.py` and `service_base.py`. `--write` updates both bases from their mixins; the normal check fails when either generated section is stale, and repeated generation is byte-stable.
+- Replaced the private `_Cancelled` class and its dedicated `services/cancelled.py` module with the shared `runtime.TaskCancelled` exception. GUI workers and service mixins now use the same cancellation type.
+- Removed hard-coded Simplified Chinese from source modules. GUI headers, language names, task labels, hints, and other translated strings now start from English source text and resolve through `I18N_ZH_TO_EN`.
+- Replaced abbreviated fallback, chapter-window, track-map, input-path, and Dolby Vision variables with names that describe their role. Removed unused values and one-use formatting/parsing wrappers encountered during the same edits.
+- Added English comments for chapter half-open ranges, split-timeline projection, first-play-item PID slots, Matroska input-local TIDs, episode-linked SP mapping, missing-track repair, PCM silence generation, and Dolby Vision profile conversion.
+
+### Logic Changes
+
+- Track-aligned Remux fallback now uses only tracks visible and selected in Edit Tracks. First-M2TS streams hidden by the MPLS are excluded, selected video indexes are mapped to each later clip, and recovered tracks or silence keep the GUI selection order instead of numeric PID order.
+- A video-only dual-layer Dolby Vision SP retains the base-layer PID as one logical output slot when **Mux Dolby Vision** is enabled. The raw BL/EL tracks remain excluded from the direct Matroska input, and the combined video can be muxed without an audio/subtitle base MKV.
+- Each multi-clip fallback part removes its own `*_tsmux_out` and `*_audrec_tsmux_out` directory immediately after that part succeeds or fails; final part MKVs remain available for concatenation.
+- Every repair merge rebuilds the current PID-to-Matroska-TID map before a later repair stage. This prevents a track reorder caused by one merge from leaving stale TIDs for the next merge.
+- Missing non-audio tracks remain an all-or-nothing tsMuxer repair. Missing audio first uses tsMuxer and falls back to PCM silence only when demux is unavailable; the silence inherits sample rate, channel count, and bit depth from the reference slot. The obsolete source-codec whitelist was removed because the generated replacement is PCM regardless of the missing codec name.
+- Fallback now accepts only the exact planned part output. It no longer searches for an arbitrary same-prefix intermediate MKV and promotes that file as a successful result.
+- Chapter-bound lookup now uses `bisect_left` for the existing monotonic one-millisecond-tolerant boundary rule. The resulting half-open chapter ranges and rebased timestamps are unchanged.
+- Episode-linked SP accepts only a valid `stream_id` or `original_transport_stream_id` as the transport PID. A selected SP track without either value fails explicitly; `properties.number` is no longer interpreted as a PID.
+- Blu-ray Remux now captures a default-enabled **Convert lossless audio to FLAC** option. After main chapters and all SP muxing are complete, every final Matroska output converts selected lossless audio to FLAC in place through the shared verified audio pipeline; lossy audio and existing FLAC remain unchanged, and disabling the option preserves source audio. AAC and Opus remain Encode-only choices.
+- Blu-ray Encode explicitly disables Remux FLAC conversion in its staging request. Its staged source audio remains untouched until video encoding succeeds and the Encode final mux performs the configured per-track audio conversion.
+- The shared FLAC target now uses the configured standalone `flac` encoder at compression level 8 with `FLAC_THREADS`. TrueHD/DTS-family inputs are decoded to PCM first when necessary; an unavailable or failed standalone encode falls back to `ffmpeg` at compression level 8, and partial FLAC output is removed before fallback. FFmpeg output for actual audio decoding and encoding remains visible.
+
+### Documentation and i18n
+
+- Updated both README versions to state precisely that fallback follows GUI-visible selected track order, excludes MPLS-hidden tracks, gives missing-audio PCM silence the reference sample rate, channel count, and bit depth, and requires real identify PID fields for episode-linked SP.
+- Added the remaining GUI table headers and language label to `I18N_ZH_TO_EN`, corrected reversed source/translation entries, and regenerated the i18n debt baseline.
+- Added bilingual Remux FLAC option, unavailable-state, and progress text; synchronized the current Remux/Encode audio boundary, compression level, visible FFmpeg output, and standalone FLAC priority/fallback rule in both README and code-standard versions.
+- Synchronized this Phase 5 entry in English and Simplified Chinese.
+
+### Verification
+
+- The complete repository run passed all 155 tests, including regression coverage for GUI-visible selected PID order, MPLS-hidden track exclusion, per-clip selected-video mapping, video-only Dolby Vision SP fallback, per-part tsMuxer cleanup, default/disabled Remux FLAC conversion, standalone FLAC priority, level-8 visible ffmpeg fallback in both shared and SP paths, Encode staging audio preservation, explicit SP PID failure, and rejection of same-prefix fallback intermediates.
+- Python compilation and source-import checks passed.
+- A read-only check of `01478.mpls` / `00304.m2ts` on the Zootopia 2 disc identified only HEVC PIDs `0x1011` and `0x1015`; the corrected plan retained `0x1011` as video index `0` for the combined output.
+- Real-tool one-second Matroska checks invoked `flac -8 -j 20` on the preferred path, then forced standalone failure and verified the fallback command used visible FFmpeg output with `-compression_level 8`. PCM converted to FLAC, AC-3 remained unchanged in the preferred-path check, order/language and final codec IDs were verified, and task-owned temporary files were removed.
+- The i18n audit reports zero Chinese source comments, zero Chinese source strings outside `core/i18n.py`, and zero unmapped translation calls.
+- Split-contract verification passes, and two consecutive `--write` runs produce identical base files.
+- `git diff --check`, duplicate-definition/short-file review, and CRLF checks passed.
+
+### Manual Media Checks Still Required
+
+- Run track-aligned fallback on the known meat-paste/remux-fallback discs. Inspect track order, languages, missing-track recovery, chapters, and final duration with MediaInfo and mkvmerge identification.
+- Use a case with an audio PID absent from the direct Matroska read. Confirm tsMuxer recovery is preferred and PCM silence is produced only when recovery fails.
+- Test a multi-clip title whose fallback needs more than one repair stage, especially one whose first M2TS contains tracks hidden by the MPLS; ensure video, audio, and subtitle selections still match the GUI after each merge.
+- Test episode-linked SP on a title whose mkvmerge identify data omits both accepted PID fields; verify the selected row fails with the affected track and source path instead of using `properties.number`.
+- Review Simplified Chinese and English GUI table headers, language labels, task hints, and cancellation behavior.
+- Exercise Remux and Encode Dolby Vision paths and inspect the resulting profile and track set.
+- Run Blu-ray Remux with the FLAC option enabled and disabled on PCM, DTS-HD, TrueHD Atmos, existing FLAC, and lossy audio. Inspect codecs, track order, language/flags, chapters, attachments, and the `truehdd` preservation fallback.
+- Run a short Blu-ray Encode and confirm its staging MKV retains source audio while the final output applies the per-track Encode choice only after video succeeds.
+
+### Deferred
+
+Blu-ray DIY encoding and generic video conversion in Edit Tracks remain outside this phase.

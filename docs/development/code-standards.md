@@ -99,6 +99,9 @@ When the author establishes a new rule, update this file and its Simplified Chin
 - Remux-source Encode is resumable. Existing planned main, SP, external-subtitle, and companion outputs are treated as completed and skipped without overwrite; remaining rows continue. Duplicate paths within the current request remain errors.
 - Blu-ray DIY remains visible and its code is retained. Its incomplete execution must not be presented as complete.
 - Configured track-language changes must be applied to the output.
+- Blu-ray Remux exposes a default-enabled option that converts selected lossless audio to FLAC after main and SP muxing. Disabled preserves source audio; Remux must not use AAC or Opus for this conversion.
+- FLAC output must prefer the configured standalone `flac` encoder with `FLAC_THREADS`. Compressed lossless sources may be decoded to PCM by `ffmpeg` first; an unavailable or failed standalone encoder falls back to `ffmpeg` for FLAC encoding. Both FLAC encoding paths use compression level 8, and FFmpeg output for actual audio decoding or encoding remains visible.
+- Blu-ray Encode staging Remux must preserve source audio. Encode audio conversion runs only in the final mux after video encoding succeeds.
 - Generic video conversion is not supported by Blu-ray Remux or Blu-ray Encode. Future DIY video conversion requires a separately confirmed design.
 - Every selected main MPLS corresponds to exactly one non-empty main Remux command.
 - README-documented technical fallback may change the method used, but it must preserve explicit GUI intent such as selected tracks, languages, chapter ranges, names, and output paths.

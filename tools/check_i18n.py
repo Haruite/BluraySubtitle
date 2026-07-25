@@ -150,7 +150,8 @@ def write_baseline(project_root: Path = PROJECT_ROOT) -> Path:
         for rule, counter in sorted(findings.items())
     }
     path = project_root / BASELINE_PATH
-    path.write_text(json.dumps(payload, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    content = json.dumps(payload, ensure_ascii=True, indent=2).replace("\n", "\r\n") + "\r\n"
+    path.write_bytes(content.encode("utf-8"))
     return path
 
 

@@ -17,6 +17,7 @@ import numpy as np
 from PIL import Image
 
 
+# Declare the incomplete ctypes structure first so its fields can contain a pointer to the same type.
 class ASS_Image(ctypes.Structure):
     pass
 

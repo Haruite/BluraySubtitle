@@ -23,6 +23,7 @@ class RemuxRequest:
     movie_mode: bool = False
     episode_trim_copyright_tail: bool = False
     mux_dolby_vision: bool = True
+    convert_lossless_audio_to_flac: bool = True
     track_selection_config: dict[str, dict[str, list[str]]] | None = None
     track_language_config: dict[str, dict[str, str]] | None = None
     ensure_tools: bool = False

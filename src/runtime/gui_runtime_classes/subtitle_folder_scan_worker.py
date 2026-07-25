@@ -11,7 +11,8 @@ from src.core.i18n import translate_text
 from src.domain import MKV, Subtitle
 from src.domain.subtitles import parse_subtitle_worker as _parse_subtitle_worker
 from src.exports.utils import get_time_str, print_terminal_line, print_exc_terminal, print_tb_string_terminal
-from src.runtime.services import _Cancelled, BluraySubtitle
+from src.runtime import TaskCancelled
+from src.runtime.services import BluraySubtitle
 
 
 class SubtitleFolderScanWorker(QObject):
@@ -48,7 +49,7 @@ class SubtitleFolderScanWorker(QObject):
                 total = len(mkv_paths) or 1
                 for i, p in enumerate(mkv_paths):
                     if self.cancel_event.is_set():
-                        raise _Cancelled()
+                        raise TaskCancelled()
                     self.label.emit(f'Reading MKV {i + 1}/{len(mkv_paths)}')
                     rows.append((p, get_time_str(MKV(p).get_duration())))
                     self.progress.emit(int((i + 1) / total * 1000))
@@ -121,7 +122,7 @@ class SubtitleFolderScanWorker(QObject):
             self.result.emit({'seq': self.seq, 'mode': self.mode, 'rows': rows, 'configuration': configuration,
                               'files': successful_files})
             print_terminal_line('[BluraySubtitle] Subtitle-folder scan worker: finished successfully.')
-        except _Cancelled:
+        except TaskCancelled:
             print_terminal_line('[BluraySubtitle] Subtitle-folder scan worker: canceled.')
             self.canceled.emit()
         except Exception:
@@ -145,15 +146,15 @@ class SubtitleFolderScanWorker(QObject):
         loaded_count = 0
         for i, p in enumerate(files):
             if self.cancel_event.is_set():
-                raise _Cancelled()
+                raise TaskCancelled()
             try:
                 sub = Subtitle(p)
                 subtitle_cache[p] = sub
                 loaded_count += 1
-                print(f'{translate_text("Subtitle file loaded ｢")}{p}{translate_text("｣")}')
+                print(f'{translate_text("Subtitle file loaded ｢")}{p}｣')
             except Exception as e:
                 print(
-                    f'{translate_text("Failed to load subtitle file ｢")}{p}{translate_text("｣: ")}{type(e).__name__}: {str(e)}')
+                    f'{translate_text("Failed to load subtitle file ｢")}{p}｣: {type(e).__name__}: {str(e)}')
                 print_exc_terminal()
             self.label.emit(f'Parsing Subtitles {i + 1}/{total} (loaded {loaded_count})')
             self.progress.emit(int((i + 1) / total * 700))
@@ -180,7 +181,7 @@ class SubtitleFolderScanWorker(QObject):
                     if self.cancel_event.is_set():
                         for f in futures:
                             f.cancel()
-                        raise _Cancelled()
+                        raise TaskCancelled()
                     p = None
                     try:
                         p, sub = fut.result()
@@ -189,7 +190,7 @@ class SubtitleFolderScanWorker(QObject):
                     except Exception as e:
                         if p:
                             print(
-                                f'{translate_text("Failed to load subtitle file ｢")}{p}{translate_text("｣: ")}{str(e)}')
+                                f'{translate_text("Failed to load subtitle file ｢")}{p}｣: {str(e)}')
                         else:
                             print(f'{translate_text("Failed to load subtitle file: ")}{str(e)}')
                     done += 1

@@ -236,7 +236,7 @@ class M2TS:
             if debug:
                 print(
                     f'{translate_text("[M2TS.get_first_pts] first PTS from PID 0x")}{pid:04x}'
-                    f'{translate_text(" = ")}{pts}',
+                    f' = {pts}',
                     file=sys.stderr
                 )
             return pts

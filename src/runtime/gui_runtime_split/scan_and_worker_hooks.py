@@ -36,6 +36,16 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
         self._sp_scan_progress_total = 0
         self._sp_scan_progress_done = 0
 
+    def _on_sp_scan_thread_finished(self):
+        finished_thread = self.sender()
+        if getattr(self, '_sp_scan_thread', None) is not finished_thread:
+            return
+        self._sp_scan_in_progress = False
+        self._dismiss_sp_scan_progress_ui()
+        self._sp_scan_cancel_event = None
+        self._sp_scan_thread = None
+        self._sp_scan_worker = None
+
     def _update_exe_button_progress(self, value: Optional[int] = None, text: Optional[str] = None):
         if not hasattr(self, 'exe_button') or not self.exe_button:
             return
@@ -201,28 +211,16 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
         thread.started.connect(worker.run)
         worker.result.connect(self._on_sp_table_scan_result)
         self._sp_scan_in_progress = True
-
-        def cleanup():
-            try:
-                self._sp_scan_in_progress = False
-            except Exception:
-                pass
-            self._dismiss_sp_scan_progress_ui()
-            try:
-                worker.deleteLater()
-            except Exception:
-                pass
-            try:
-                thread.quit()
-                thread.wait(200)
-                thread.deleteLater()
-            except Exception:
-                pass
-
-        worker.finished.connect(cleanup)
+        worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(thread.quit)
         worker.finished.connect(self._on_sp_table_scan_finished)
-        worker.canceled.connect(cleanup)
-        worker.failed.connect(lambda msg: (cleanup(), self._show_error_dialog(msg)))
+        worker.canceled.connect(worker.deleteLater)
+        worker.canceled.connect(thread.quit)
+        worker.failed.connect(worker.deleteLater)
+        worker.failed.connect(thread.quit)
+        worker.failed.connect(self._show_error_dialog)
+        thread.finished.connect(self._on_sp_scan_thread_finished)
+        thread.finished.connect(thread.deleteLater)
         self._sp_scan_thread = thread
         self._sp_scan_worker = worker
         thread.start()

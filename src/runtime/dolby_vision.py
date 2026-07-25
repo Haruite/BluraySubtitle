@@ -163,7 +163,11 @@ def inject_dolby_vision_rpu(encoded_hevc: str, plan: DolbyVisionEncodePlan) -> N
 
 
 def mux_dolby_vision_layers(base_layer: str, enhancement_layer: str) -> None:
-    """Combine task-owned BL and EL streams as profile 8.1 and replace BL atomically."""
+    """Convert a dual-layer profile 7 pair to a single-layer profile 8.1 stream.
+
+    dovi_tool mode 2 rewrites the RPU for profile 8.1 while ``--discard`` removes the enhancement-layer video.
+    The result replaces the task-owned BL only after dovi_tool creates a non-empty temporary output.
+    """
     base_path = os.path.abspath(os.path.normpath(base_layer))
     enhancement_path = os.path.abspath(os.path.normpath(enhancement_layer))
     dovi_tool = dolby_vision_tool_path()

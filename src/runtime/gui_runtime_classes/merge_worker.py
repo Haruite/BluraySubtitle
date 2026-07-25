@@ -6,7 +6,8 @@ from typing import Optional
 from PyQt6.QtCore import pyqtSignal, QObject
 
 from src.exports.utils import print_terminal_line, print_tb_string_terminal
-from src.runtime.services import _Cancelled, BluraySubtitle
+from src.runtime import TaskCancelled
+from src.runtime.services import BluraySubtitle
 
 
 @dataclass(frozen=True)
@@ -39,7 +40,7 @@ class MergeWorker(QObject):
                 if text:
                     self.label.emit(str(text))
                 if self.cancel_event.is_set():
-                    raise _Cancelled()
+                    raise TaskCancelled()
 
             progress_cb(text='Preparing')
             request = self.request
@@ -61,7 +62,7 @@ class MergeWorker(QObject):
                 print_terminal_line('[BluraySubtitle] Merge worker (movie mode): finished successfully.')
             else:
                 print_terminal_line('[BluraySubtitle] Merge worker: finished successfully.')
-        except _Cancelled:
+        except TaskCancelled:
             print_terminal_line('[BluraySubtitle] Merge worker: canceled.')
             self.canceled.emit()
         except Exception:

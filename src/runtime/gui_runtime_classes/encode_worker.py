@@ -6,7 +6,8 @@ from PyQt6.QtCore import QObject, pyqtSignal
 
 from src.exports.utils import print_tb_string_terminal, print_terminal_line
 from src.runtime.encode import EncodeRequest
-from src.runtime.services import _Cancelled, BluraySubtitle
+from src.runtime import TaskCancelled
+from src.runtime.services import BluraySubtitle
 
 
 class EncodeWorker(QObject):
@@ -44,7 +45,7 @@ class EncodeWorker(QObject):
                 if text:
                     self.label.emit(str(text))
                 if self.cancel_event.is_set():
-                    raise _Cancelled()
+                    raise TaskCancelled()
 
             service = BluraySubtitle(
                 request.source_root,
@@ -55,7 +56,7 @@ class EncodeWorker(QObject):
                 mux_dolby_vision=request.mux_dolby_vision,
             )
             service.episodes_encode(request, cancel_event=self.cancel_event)
-        except _Cancelled:
+        except TaskCancelled:
             print_terminal_line('[BluraySubtitle] Encode worker: canceled.')
             self.canceled.emit()
         except Exception:

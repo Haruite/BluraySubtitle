@@ -313,7 +313,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
 
         ``j1``/``j2`` are the same 1-based indices as ``start_at_chapter`` / ``end_at_chapter`` combo
         ``itemData`` (``j2`` exclusive end on the mark axis). Timeline overlap matches
-        ``BluraySubtitle.m2ts_file_detail_for_mpls_timeline_window`` / README.zh-Hans 多文件输出回退.
+        ``BluraySubtitle.m2ts_file_detail_for_mpls_timeline_window`` and the README multi-file fallback.
         """
         stem = str(mpls_selected or '').strip()
         if not stem:
@@ -522,6 +522,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             self.table2.setItem(r, duration_col, QTableWidgetItem(new_dur_str))
             if m2ts_detail_col >= 0:
                 self.table2.setItem(r, m2ts_detail_col, QTableWidgetItem(new_detail_str))
+
     def _build_end_chapter_combo(self, rows: int, has_beginning: bool, start_value: int,
                                  selected_value: int = 0) -> QComboBox:
         combo = QComboBox()

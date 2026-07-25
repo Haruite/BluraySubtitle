@@ -21,12 +21,12 @@ from src.exports.utils import (
     force_remove_file,
     run_command,
 )
-from src.runtime.audio_conversion import mux_with_audio_conversion
+from src.runtime.audio_conversion import mux_with_audio_conversion, validate_audio_conversion_tools
 from src.runtime.sp import SpEntry, SpJob, media_track_key
 from src.runtime.remux import RemuxMainJob, RemuxRequest
 from src.runtime.encode import EncodeRequest, EncodeRow
 from .service_base import BluraySubtitleServiceBase
-from ..services.cancelled import _Cancelled
+from .. import TaskCancelled
 
 
 def _svc_cls():
@@ -510,7 +510,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         completed_outputs: list[str] = []
         for job_index, job in enumerate(jobs, start=1):
             if cancel_event and cancel_event.is_set():
-                raise _Cancelled()
+                raise TaskCancelled()
             configurations = [dict(conf) for conf in job.configurations]
             if job.mpls_path:
                 config_key = media_track_key('main', job.mpls_path)
@@ -534,7 +534,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 print(msg)
                 self._progress(text=msg)
 
-            self._set_dovi_mux_plan_for_mpls(job.mpls_path)
+            self._set_dovi_mux_plan_for_mpls(job.mpls_path, report_detected_pair=True)
             identify_ok = self._mkvmerge_identify_covers_remux_slots(
                 job.mpls_path, list(job.audio_tracks), list(job.subtitle_tracks)
             )
@@ -905,7 +905,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             chapter_index = 0
             for job in jobs:
                 if cancel_event and cancel_event.is_set():
-                    raise _Cancelled()
+                    raise TaskCancelled()
                 configurations = [dict(conf) for conf in job.configurations]
                 bounds = _svc_cls()._remux_parsed_chapter_bounds_for_theory_count(
                     job.command,
@@ -931,7 +931,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                         bounds,
                 ):
                     if cancel_event and cancel_event.is_set():
-                        raise _Cancelled()
+                        raise TaskCancelled()
                     if not os.path.isfile(expected_output):
                         raise RuntimeError(
                             translate_text('Main remux output is missing: {path}').format(
@@ -981,9 +981,9 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         os.makedirs(dst_folder, exist_ok=True)
         self._build_main_episode_mkvs(jobs, cancel_event=cancel_event)
         if cancel_event and cancel_event.is_set():
-            raise _Cancelled()
+            raise TaskCancelled()
         self._progress(385, 'Writing Chapters')
-        self._post_remux_finalize_episodes(jobs, cancel_event)
+        main_outputs = self._post_remux_finalize_episodes(jobs, cancel_event)
 
         self._progress(400)
         completed_sp_jobs = 0
@@ -1000,12 +1000,52 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 ),
             )
 
-        self._build_sp_outputs(
+        sp_outputs = self._build_sp_outputs(
             sp_jobs,
             cancel_event=cancel_event,
             progress_cb=report_sp_output,
         )
-        self._progress(900)
+        task_outputs = list(dict.fromkeys(
+            main_outputs + [path for _entry_index, path in sp_outputs]
+        ))
+        if request.convert_lossless_audio_to_flac:
+            matroska_outputs = [
+                path for path in task_outputs
+                if os.path.splitext(path)[1].lower() in ('.mkv', '.mka', '.mks')
+            ]
+            try:
+                for output_path in matroska_outputs:
+                    validate_audio_conversion_tools(
+                        output_path,
+                        (),
+                        (),
+                        convert_all_lossless_to_flac=True,
+                    )
+                for output_index, output_path in enumerate(matroska_outputs, start=1):
+                    if cancel_event and cancel_event.is_set():
+                        raise TaskCancelled()
+                    self._progress(
+                        900 + int(output_index / max(len(matroska_outputs), 1) * 90),
+                        self.t('Converting lossless audio to FLAC: {name}').format(
+                            name=os.path.basename(output_path)
+                        ),
+                    )
+                    mux_with_audio_conversion(
+                        output_path,
+                        output_path,
+                        selected_audio_tracks=None,
+                        selected_subtitle_tracks=None,
+                        audio_codec_choices=(),
+                        convert_all_lossless_to_flac=True,
+                    )
+            except Exception:
+                for output_path in task_outputs:
+                    if os.path.isdir(output_path):
+                        shutil.rmtree(output_path, ignore_errors=True)
+                    elif os.path.isfile(output_path):
+                        force_remove_file(output_path)
+                raise
+        self._progress(990)
         self.completion()
         self._progress(1000, 'Done')
 
@@ -1092,7 +1132,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             }
             for current_folder, _directories, filenames in os.walk(root_path):
                 if cancel_event and cancel_event.is_set():
-                    raise _Cancelled()
+                    raise TaskCancelled()
                 relative_folder = os.path.relpath(current_folder, root_path)
                 for filename in filenames:
                     if filename.lower().endswith('.mkv'):
@@ -1135,7 +1175,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
 
         for row in main_rows:
             if cancel_event and cancel_event.is_set():
-                raise _Cancelled()
+                raise TaskCancelled()
             self._progress(
                 progress_base + int(completed_rows / total_rows * progress_span),
                 self.t('Encoding {current}/{total}').format(
@@ -1193,7 +1233,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         }
         for row in selected_sp_rows:
             if cancel_event and cancel_event.is_set():
-                raise _Cancelled()
+                raise TaskCancelled()
             self._progress(
                 progress_base + int(completed_rows / total_rows * progress_span),
                 self.t('Encoding {current}/{total}').format(
@@ -1272,7 +1312,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             self._progress(text=self.t('Copying companion files'))
             for source_path, destination_path in companion_files:
                 if cancel_event and cancel_event.is_set():
-                    raise _Cancelled()
+                    raise TaskCancelled()
                 if os.path.exists(destination_path):
                     if resume_existing_outputs:
                         self._progress(
@@ -1292,7 +1332,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             self._progress(text=self.t('Copying external subtitles'))
             for source_path, destination_path in external_subtitles:
                 if cancel_event and cancel_event.is_set():
-                    raise _Cancelled()
+                    raise TaskCancelled()
                 if os.path.exists(destination_path):
                     if resume_existing_outputs:
                         self._progress(
@@ -1369,6 +1409,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             episode_subtitle_languages=episode_subtitle_languages,
             movie_mode=request.movie_mode,
             mux_dolby_vision=preserve_dolby_vision,
+            convert_lossless_audio_to_flac=False,
             track_selection_config=copy.deepcopy(request.track_selection_config or {}),
             track_language_config=copy.deepcopy(request.track_language_config or {}),
             ensure_tools=False,

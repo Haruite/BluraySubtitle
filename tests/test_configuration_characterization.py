@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from src.runtime.gui_runtime_classes.bluray_subtitle_gui_entry import BluraySubtitleGUI
+from src.runtime.gui_runtime_split import configuration_and_modes as configuration_modes
 from src.runtime.gui_runtime_split import remux_and_episode_layout as remux_layout
+from src.runtime.gui_runtime_split.configuration_and_modes import ConfigurationModesMixin
 from src.runtime.gui_runtime_split.remux_and_episode_layout import RemuxEpisodeLayoutMixin
+from src.runtime.gui_runtime_split.scan_and_worker_hooks import ScanWorkerHooksMixin
 from src.runtime.services_split.lifecycle_and_configuration import LifecycleConfigurationMixin
 from src.runtime.services_split.misc_workflows import MiscWorkflowsMixin
 
@@ -390,6 +393,69 @@ class GuiEncodeConfigurationTests(unittest.TestCase):
             encode_tool_combo=_Combo(tool),
             _append_compat_arg_if_missing=BluraySubtitleGUI._append_compat_arg_if_missing,
         )
+
+
+class SpScanLifecycleTests(unittest.TestCase):
+    def test_series_refresh_scans_only_the_final_gui_configuration(self) -> None:
+        generated_configuration = {0: {'selected_mpls': 'generated'}}
+        current_configuration = {0: {'selected_mpls': 'current'}}
+        configuration_calls = []
+        owner = SimpleNamespace(
+            get_selected_function_id=lambda: 3,
+            _sync_chapter_tail_trim_episode=lambda: None,
+            bdmv_folder_path=SimpleNamespace(text=lambda: r'C:\Disc'),
+            table1=SimpleNamespace(rowCount=lambda: 1),
+            table2=SimpleNamespace(rowCount=lambda: 1, item=lambda *_args: None),
+            _is_movie_mode=lambda: False,
+            checkbox1=SimpleNamespace(isChecked=lambda: False),
+            _get_approx_episode_duration_seconds=lambda: 1440.0,
+            get_selected_mpls_no_ext=lambda: [(r'C:\Disc', r'C:\Disc\BDMV\PLAYLIST\00000')],
+            _generate_configuration_from_ui_inputs=lambda: current_configuration,
+            on_configuration=lambda configuration, update_sp_table=True: configuration_calls.append(
+                (configuration, update_sp_table)
+            ),
+        )
+        service = SimpleNamespace(
+            generate_configuration_from_selected_mpls=lambda _selected: generated_configuration
+        )
+
+        with patch.object(configuration_modes, 'BluraySubtitle', return_value=service):
+            ConfigurationModesMixin._full_refresh_remux_encode_tables_for_mode(owner)
+
+        self.assertEqual(configuration_calls, [
+            (generated_configuration, False),
+            (current_configuration, True),
+        ])
+
+    def test_finished_old_scan_does_not_clear_the_current_scan(self) -> None:
+        old_thread = object()
+        current_thread = object()
+        current_worker = object()
+        cancel_event = object()
+        dismiss_progress = Mock()
+        owner = SimpleNamespace(
+            _sp_scan_thread=current_thread,
+            _sp_scan_worker=current_worker,
+            _sp_scan_cancel_event=cancel_event,
+            _sp_scan_in_progress=True,
+            sender=lambda: old_thread,
+            _dismiss_sp_scan_progress_ui=dismiss_progress,
+        )
+
+        ScanWorkerHooksMixin._on_sp_scan_thread_finished(owner)
+
+        self.assertTrue(owner._sp_scan_in_progress)
+        self.assertIs(owner._sp_scan_thread, current_thread)
+        dismiss_progress.assert_not_called()
+
+        owner.sender = lambda: current_thread
+        ScanWorkerHooksMixin._on_sp_scan_thread_finished(owner)
+
+        self.assertFalse(owner._sp_scan_in_progress)
+        self.assertIsNone(owner._sp_scan_thread)
+        self.assertIsNone(owner._sp_scan_worker)
+        self.assertIsNone(owner._sp_scan_cancel_event)
+        dismiss_progress.assert_called_once()
 
 
 if __name__ == "__main__":

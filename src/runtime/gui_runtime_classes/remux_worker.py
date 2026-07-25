@@ -6,7 +6,8 @@ from PyQt6.QtCore import QObject, pyqtSignal
 
 from src.exports.utils import print_tb_string_terminal, print_terminal_line
 from src.runtime.remux import RemuxRequest
-from src.runtime.services import _Cancelled, BluraySubtitle
+from src.runtime import TaskCancelled
+from src.runtime.services import BluraySubtitle
 
 
 class RemuxWorker(QObject):
@@ -43,7 +44,7 @@ class RemuxWorker(QObject):
                 if text:
                     self.label.emit(str(text))
                 if self.cancel_event.is_set():
-                    raise _Cancelled()
+                    raise TaskCancelled()
 
             bs = BluraySubtitle(
                 request.bdmv_path,
@@ -56,7 +57,7 @@ class RemuxWorker(QObject):
             bs.track_selection_config = request.track_selection_config or {}
             bs.track_language_config = request.track_language_config or {}
             bs.episodes_remux(request, cancel_event=self.cancel_event)
-        except _Cancelled:
+        except TaskCancelled:
             print_terminal_line('[BluraySubtitle] Remux worker: canceled.')
             self.canceled.emit()
         except Exception:

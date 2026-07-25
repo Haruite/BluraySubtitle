@@ -959,8 +959,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             return
 
         try:
-            if bool(getattr(self, '_sp_scan_in_progress', False)):
-                raise RuntimeError(self.t('SP track scan is still running'))
+
             self.ensure_default_vpy_file()
             vspipe_mode = 'bundle' if self.vspipe_mode_combo.currentText() == 'Built-in' else 'system'
             encoder_mode = 'bundle' if self.x265_mode_combo.currentText() == 'Built-in' else 'system'
@@ -1554,7 +1553,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
 
         self.diy_bd_encode_hint_label = QLabel(
             self.t(
-                'BD压制说明：视频轨道转为「重编码」时按蓝光规格固定为 x264 8bit 或 x265 10bit，此处不可更改编码器与位深。'
+                'BD encode follows Blu-ray rules when re-encoding tracks (x264 8-bit or x265 10-bit); encoder and bit depth are fixed here.'
             ),
             tools_row,
         )

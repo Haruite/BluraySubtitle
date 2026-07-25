@@ -7,7 +7,8 @@ from PyQt6.QtCore import QObject, pyqtSignal
 
 from src.core.i18n import translate_text
 from src.exports.utils import print_terminal_line, print_tb_string_terminal
-from src.runtime.services import BluraySubtitle, _Cancelled
+from src.runtime import TaskCancelled
+from src.runtime.services import BluraySubtitle
 
 
 @dataclass(frozen=True)
@@ -38,7 +39,7 @@ class ChapterWorker(QObject):
                 if text:
                     self.label.emit(str(text))
                 if self.cancel_event.is_set():
-                    raise _Cancelled()
+                    raise TaskCancelled()
 
             request = self.request
             progress_cb(0, 'Preparing')
@@ -55,7 +56,7 @@ class ChapterWorker(QObject):
                 cancel_event=self.cancel_event,
             )
             print_terminal_line(translate_text('[BluraySubtitle] Add-chapters worker: finished successfully.'))
-        except _Cancelled:
+        except TaskCancelled:
             print_terminal_line(translate_text('[BluraySubtitle] Add-chapters worker: canceled.'))
             self.canceled.emit()
         except Exception:

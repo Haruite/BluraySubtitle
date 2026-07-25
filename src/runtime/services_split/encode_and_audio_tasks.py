@@ -672,7 +672,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                             f'{self.t("[BluraySubtitle] getnative sample rejected by curve-shape: ")}'
                             f'{r.get("image","")} {self.t("edge_hit=")}{r.get("edge_hit",0)} '
                             f'{self.t("decreasing_ratio=")}{float(r.get("decreasing_ratio",0.0)):.3f} '
-                            f'{self.t(" -> ")}{r.get("height",0):.2f}p {r.get("kernel","")} {self.t("score=")}{r.get("score",0):.6f}'
+                            f' -> {r.get("height",0):.2f}p {r.get("kernel","")} {self.t("score=")}{r.get("score",0):.6f}'
                         )
         finally:
             if not KEEP_GETNATIVE_ARTIFACTS:

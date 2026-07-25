@@ -1263,8 +1263,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             ]
             episode_output_names = self._get_episode_output_names_from_table2()
             episode_subtitle_languages = self._get_episode_subtitle_languages_from_table2()
-            if bool(getattr(self, '_sp_scan_in_progress', False)):
-                raise RuntimeError(self.t('SP track scan is still running'))
+
             sp_entries = (
                 [
                     SpEntry.from_mapping(self._table3_get_sp_entry_for_row(row))
@@ -1289,8 +1288,11 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
 
             trim_checkbox = getattr(self, 'trim_copyright_tail_checkbox', None)
             dovi_checkbox = getattr(self, 'mux_dolby_vision_checkbox', None)
+            flac_checkbox = getattr(self, 'remux_flac_checkbox', None)
             if dovi_checkbox is None:
                 raise RuntimeError(self.t('Dolby Vision option is unavailable'))
+            if flac_checkbox is None:
+                raise RuntimeError(self.t('FLAC audio conversion option is unavailable'))
             request = RemuxRequest(
                 bdmv_path=os.path.normpath(self.bdmv_folder_path.text().strip()),
                 subtitle_files=tuple(sub_files),
@@ -1309,6 +1311,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                     and self.get_selected_function_id() in (3, 4)
                 ),
                 mux_dolby_vision=bool(dovi_checkbox.isChecked()),
+                convert_lossless_audio_to_flac=bool(flac_checkbox.isChecked()),
                 track_selection_config=copy.deepcopy(getattr(self, '_track_selection_config', {}) or {}),
                 track_language_config=copy.deepcopy(getattr(self, '_track_language_config', {}) or {}),
                 ensure_tools=False,

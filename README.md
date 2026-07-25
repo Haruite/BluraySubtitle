@@ -82,9 +82,16 @@ current GUI setting. After muxing, the language values saved by **Edit tracks** 
 audio, and subtitle tracks and then verified. A mapping, tool, or verification failure stops that job and removes its
 newly created main outputs.
 
-Remux preserves the selected source audio and does not apply Encode audio-conversion settings. With **Mux Dolby
-Vision** enabled, compatible base/enhancement layers are combined as profile 8.1; when disabled, the enhancement
-layer is not included.
+Remux keeps selected lossy audio unchanged. Its **Convert lossless audio to FLAC** option is enabled by default and
+recompresses selected lossless tracks to FLAC after the main and SP outputs are complete; disabling it preserves the
+selected source audio. Remux never uses Encode's AAC/Opus choices. All FLAC output prefers the standalone
+multithreaded `flac` encoder and falls back to `ffmpeg` if that encoder is unavailable or fails. Both FLAC encoders use
+compression level 8; FFmpeg level 12 is deliberately avoided because it can greatly increase Remux time. FFmpeg audio
+conversion output remains visible in the terminal. `ffmpeg` may still decode compressed sources such as TrueHD and
+DTS before standalone FLAC encoding. TrueHD Atmos is converted only after `truehdd` successfully decodes presentation
+2; if `truehdd` is unavailable or fails, the original
+TrueHD track is kept. With **Mux Dolby Vision** enabled, compatible base/enhancement layers are combined as profile
+8.1; when disabled, the enhancement layer is not included.
 
 Encode options include:
 
@@ -106,8 +113,9 @@ Encode options include:
 - **Remux-as-source** unlocks more actions, such as **editing chapters / attachments**.
 
 Encode follows the visible row order and applies the displayed output names, per-row VPy scripts, subtitles,
-languages, track choices, and encoder settings. Missing inputs, VPy scripts or required tools, invalid paths, and
-duplicate output paths are reported before encoding whenever possible.
+languages, track choices, and encoder settings. For Blu-ray input, its temporary Remux preserves the selected source
+audio; lossless-audio conversion runs only during the final mux after video encoding succeeds. Missing inputs, VPy
+scripts or required tools, invalid paths, and duplicate output paths are reported before encoding whenever possible.
 
 - **Blu-ray input** applies the selected playlists, chapter ranges, tracks, and edited track languages before
   encoding. An existing planned output stops the task and is never overwritten.
@@ -156,6 +164,7 @@ This section explains, in plain language, how the program behaves internally.
 - Empty output names remain an intentional skip. Every selected row with a non-empty output is required to finish successfully.
 - Sources, captured tracks, exact output paths, collisions, existing files, and required language tools are checked before output creation whenever they can be determined in advance.
 - MPLS rows try the direct mux first, then use the same track-aligned fallback for one or multiple clips.
+- An SP track appended to an episode must expose a valid `stream_id` or `original_transport_stream_id`; `properties.number` is not a transport PID, so a selected track with neither PID field fails.
 - Success requires the exact planned output to exist. A failed selected row stops the task and removes only its task-created partial output; an episode file is replaced only after its SP mux has completed and been verified.
 
 #### B) How track alignment and missing-track repair work
@@ -163,9 +172,9 @@ This section explains, in plain language, how the program behaves internally.
 Direct MPLS muxing can fail when playlist clips have different track layouts. The fallback uses the tracks selected in **Edit Tracks** as the reference layout and processes every playlist clip against that layout:
 
 1. Playback ranges come from `Chapter(mpls_path).in_out_time`; partial clips use `--split parts:start-end`.
-2. `mkvmerge --identify` maps the selected PIDs available in the current clip and muxes them in the reference order.
+2. `mkvmerge --identify` maps only the tracks visible and selected in **Edit Tracks**. Tracks hidden by the MPLS are excluded, and recovered tracks keep the GUI selection order.
 3. Missing non-audio tracks are recovered with tsMuxer. If tsMuxer cannot supply all of them, the fallback fails explicitly.
-4. Missing audio is also recovered with tsMuxer when possible. Only audio still unavailable afterward is replaced with a matching-duration silence track based on the reference audio format.
+4. Missing audio is also recovered with tsMuxer when possible. Only audio still unavailable afterward is replaced with matching-duration PCM silence using the reference sample rate, channel count, and bit depth.
 5. The repaired PID set must exactly match the reference layout. One repaired clip is moved directly to the planned output; multiple clips are concatenated with `--append-mode track`.
 6. Main and standalone SP outputs then receive their configured track languages and chapters, with command results and final metadata checked.
 

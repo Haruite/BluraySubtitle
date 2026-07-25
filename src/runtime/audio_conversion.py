@@ -1,4 +1,4 @@
-"""Exact per-row audio conversion and final Matroska muxing for Encode."""
+"""Lossless-audio conversion and verified final Matroska muxing."""
 
 from __future__ import annotations
 
@@ -67,23 +67,36 @@ def validate_audio_conversion_tools(
         source_file: str,
         selected_audio_tracks: tuple[str, ...],
         audio_codec_choices: tuple[str, ...],
+        *,
+        convert_all_lossless_to_flac: bool = False,
 ) -> None:
     """Check only tools required by conversions that can be determined before launch."""
-    if not selected_audio_tracks:
+    if not selected_audio_tracks and not convert_all_lossless_to_flac:
         return
+    tracks = _identify_tracks(source_file)
+    if convert_all_lossless_to_flac:
+        selected_audio_tracks = tuple(
+            str(track['id']) for track in tracks if track.get('type') == 'audio'
+        )
+        audio_codec_choices = ('flac',) * len(selected_audio_tracks)
     if len(selected_audio_tracks) != len(audio_codec_choices):
         raise ValueError(
             translate_text('Audio codec choices do not match selected tracks: {path}').format(
                 path=source_file
             )
         )
-    tracks = _identify_tracks(source_file)
     audio_by_id = {
         int(track['id']): track
         for track in tracks
         if track.get('type') == 'audio' and 'id' in track
     }
     required_tools: set[str] = set()
+    configured_flac = str(core_settings.FLAC_PATH or '').strip()
+    flac_encoder = (
+        configured_flac
+        if configured_flac and (os.path.isfile(configured_flac) or shutil.which(configured_flac))
+        else shutil.which('flac') or shutil.which('flac.exe') or ''
+    )
     for raw_track_id, raw_target_codec in zip(selected_audio_tracks, audio_codec_choices):
         track_id = int(raw_track_id)
         track = audio_by_id.get(track_id)
@@ -103,6 +116,7 @@ def validate_audio_conversion_tools(
         properties = track.get('properties') if isinstance(track.get('properties'), dict) else {}
         codec_id = str(properties.get('codec_id') or '').strip().upper()
         codec_name = str(track.get('codec') or '').strip().lower()
+        truehd_atmos = codec_id in ('A_TRUEHD', 'A_MLP') and 'atmos' in codec_name
         if not _is_lossless_audio_track(track) or (
                 codec_id == 'A_FLAC' and target_codec == 'flac'
         ):
@@ -113,9 +127,15 @@ def validate_audio_conversion_tools(
                 and not _truehdd_path()
         ):
             continue
-        required_tools.update(('ffmpeg', 'mkvextract'))
-        if target_codec == 'aac':
-            required_tools.add('fdkaac')
+        required_tools.add('mkvextract')
+        if target_codec == 'flac':
+            flac_input_is_wave = codec_id in ('A_PCM/INT/LIT', 'A_PCM/INT/BIG') or truehd_atmos
+            if not flac_encoder or not flac_input_is_wave:
+                required_tools.add('ffmpeg')
+        else:
+            required_tools.add('ffmpeg')
+            if target_codec == 'aac':
+                required_tools.add('fdkaac')
 
     configured_tools = {
         'ffmpeg': (
@@ -149,6 +169,7 @@ def mux_with_audio_conversion(
         selected_audio_tracks: Optional[tuple[str, ...]],
         selected_subtitle_tracks: Optional[tuple[str, ...]],
         audio_codec_choices: tuple[str, ...],
+        convert_all_lossless_to_flac: bool = False,
         track_language_overrides: tuple[tuple[str, str], ...] = (),
         encoded_video_file: str = '',
         subtitle_file: str = '',
@@ -169,7 +190,10 @@ def mux_with_audio_conversion(
     track_by_id = {int(track['id']): track for track in tracks if 'id' in track}
     source_audio = [int(track['id']) for track in tracks if track.get('type') == 'audio']
     source_subtitles = [int(track['id']) for track in tracks if track.get('type') == 'subtitles']
-    if selected_audio_tracks is None:
+    if convert_all_lossless_to_flac:
+        selected_audio = tuple(source_audio)
+        audio_codec_choices = ('flac',) * len(selected_audio)
+    elif selected_audio_tracks is None:
         selected_audio = tuple(source_audio)
     else:
         selected_audio = tuple(int(track_id) for track_id in selected_audio_tracks)
@@ -209,6 +233,12 @@ def mux_with_audio_conversion(
         find_mkvtoolnix()
         mkvextract = ''
         ffmpeg = str(core_settings.FFMPEG_PATH or '').strip() or shutil.which('ffmpeg') or ''
+        configured_flac = str(core_settings.FLAC_PATH or '').strip()
+        flac_encoder = (
+            configured_flac
+            if configured_flac and (os.path.isfile(configured_flac) or shutil.which(configured_flac))
+            else shutil.which('flac') or shutil.which('flac.exe') or ''
+        )
 
         for track in tracks:
             if track.get('type') != 'audio':
@@ -242,8 +272,6 @@ def mux_with_audio_conversion(
                     flush=True,
                 )
                 continue
-            if not ffmpeg:
-                raise FileNotFoundError(translate_text('ffmpeg executable does not exist'))
             if not mkvextract:
                 mkvextract = str(core_settings.MKV_EXTRACT_PATH or '').strip() or shutil.which('mkvextract') or ''
             if not mkvextract:
@@ -311,23 +339,49 @@ def mux_with_audio_conversion(
 
             if target_codec == 'flac':
                 converted_audio = os.path.join(work_folder, f'track-{track_id}.flac')
-                conversion_command = [
-                    ffmpeg,
-                    '-hide_banner',
-                    '-loglevel',
-                    'error',
-                    '-y',
-                    '-i',
-                    conversion_input,
-                    '-map',
-                    '0:a:0',
-                    '-c:a',
-                    'flac',
-                    '-compression_level',
-                    '12',
-                    converted_audio,
-                ]
+                flac_input = conversion_input
+                # Compressed lossless streams must be decoded before the standalone FLAC encoder can read them.
+                if flac_encoder and os.path.splitext(flac_input)[1].lower() not in ('.wav', '.w64'):
+                    if not ffmpeg:
+                        raise FileNotFoundError(translate_text('ffmpeg executable does not exist'))
+                    flac_input = os.path.join(work_folder, f'track-{track_id}-decoded.wav')
+                    decode_command = [
+                        ffmpeg, '-y', '-i', conversion_input,
+                        '-map', '0:a:0', '-c:a', 'pcm_s24le', flac_input,
+                    ]
+                    if run_command(decode_command, log_template='Audio command: {command}').returncode != 0 or not (
+                            os.path.isfile(flac_input) and os.path.getsize(flac_input) > 0
+                    ):
+                        raise RuntimeError(
+                            translate_text('Audio decode failed for track {track}: {path}').format(
+                                track=track_id, path=source_path,
+                            )
+                        )
+                flac_succeeded = False
+                if flac_encoder:
+                    try:
+                        flac_succeeded = run_command([
+                            flac_encoder, '-8', '-j', str(core_settings.FLAC_THREADS), '-f',
+                            '-o', converted_audio, flac_input,
+                        ], log_template='Audio command: {command}').returncode == 0 and (
+                            os.path.isfile(converted_audio) and os.path.getsize(converted_audio) > 0
+                        )
+                    except OSError:
+                        flac_succeeded = False
+                conversion_command = None
+                if not flac_succeeded:
+                    # Reuse the decoded wave when the standalone FLAC encode fails.
+                    if os.path.isfile(converted_audio):
+                        os.remove(converted_audio)
+                    if not ffmpeg:
+                        raise FileNotFoundError(translate_text('ffmpeg executable does not exist'))
+                    conversion_command = [
+                        ffmpeg, '-y', '-i', flac_input, '-map', '0:a:0', '-c:a', 'flac',
+                        '-compression_level', '8', converted_audio,
+                    ]
             elif target_codec == 'opus':
+                if not ffmpeg:
+                    raise FileNotFoundError(translate_text('ffmpeg executable does not exist'))
                 converted_audio = os.path.join(work_folder, f'track-{track_id}.opus')
                 try:
                     channels = int(properties.get('audio_channels') or 2)
@@ -335,9 +389,6 @@ def mux_with_audio_conversion(
                     channels = 2
                 conversion_command = [
                     ffmpeg,
-                    '-hide_banner',
-                    '-loglevel',
-                    'error',
                     '-y',
                     '-i',
                     conversion_input,
@@ -350,15 +401,14 @@ def mux_with_audio_conversion(
                     conversion_command.extend(['-mapping_family', '1'])
                 conversion_command.extend(['-b:a', '128k' if channels <= 2 else '256k', converted_audio])
             else:
+                if not ffmpeg:
+                    raise FileNotFoundError(translate_text('ffmpeg executable does not exist'))
                 fdkaac = str(core_settings.FDK_AAC_PATH or '').strip() or shutil.which('fdkaac') or shutil.which('fdkaac.exe') or ''
                 if not fdkaac:
                     raise FileNotFoundError(translate_text('fdkaac executable does not exist'))
                 wave_path = os.path.join(work_folder, f'track-{track_id}.wav')
                 wave_command = [
                     ffmpeg,
-                    '-hide_banner',
-                    '-loglevel',
-                    'error',
                     '-y',
                     '-i',
                     conversion_input,
@@ -378,8 +428,9 @@ def mux_with_audio_conversion(
                 converted_audio = os.path.join(work_folder, f'track-{track_id}.m4a')
                 conversion_command = [fdkaac, '-m', '5', '-o', converted_audio, wave_path]
 
-            if run_command(conversion_command, log_template='Audio command: {command}').returncode != 0 or not (
-                    os.path.isfile(converted_audio) and os.path.getsize(converted_audio) > 0
+            if conversion_command is not None and (
+                    run_command(conversion_command, log_template='Audio command: {command}').returncode != 0
+                    or not (os.path.isfile(converted_audio) and os.path.getsize(converted_audio) > 0)
             ):
                 raise RuntimeError(
                     translate_text('Audio conversion failed for track {track}: {path}').format(
@@ -390,6 +441,8 @@ def mux_with_audio_conversion(
             replacement_by_track[track_id] = (converted_audio, target_codec)
             expected_audio_codecs[-1] = target_codec
 
+        if convert_all_lossless_to_flac and same_path and not replacement_by_track:
+            return
         mkvmerge = str(core_settings.MKV_MERGE_PATH or '').strip() or shutil.which('mkvmerge') or ''
         if not mkvmerge:
             raise FileNotFoundError(translate_text('mkvmerge not found'))

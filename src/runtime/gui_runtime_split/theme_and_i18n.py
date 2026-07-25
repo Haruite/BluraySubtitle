@@ -36,7 +36,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
         self.language_label.setText(self.t('Language'))
         self.language_combo.blockSignals(True)
         self.language_combo.setItemText(0, 'English')
-        self.language_combo.setItemText(1, '简体中文')
+        self.language_combo.setItemText(1, self.t('Simplified Chinese'))
         idx = 0 if current_code == 'en' else 1
         self.language_combo.setCurrentIndex(idx)
         self.language_combo.blockSignals(False)
@@ -428,77 +428,28 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
         self._apply_language(str(code))
 
     def _localized_headers_for_keys(self, keys: list[str]) -> list[str]:
-        _lang = getattr(self, '_language_code', None) or core_settings.CURRENT_UI_LANGUAGE
-        if _lang != 'zh':
-            en = {
-                'm2ts_file_detail': 'm2ts detail',
-                'audio_convert': 'audio convert',
-                'edit_tracks': 'tracks',
-                'extract': 'extract',
-                'edit_chapters': 'chapters',
-                'edit_attachments': 'attachments',
-                'remux_cmd': 'remux cmd',
-            }
-            return [en.get(k, k) for k in keys]
-        zh = {
-            'path': '路径',
-            'size': '大小',
-            'info': '信息',
-            'remux_cmd': '混流命令',
-            'select': '选择',
-            'sub_duration': '字幕时长',
-            'warning': '提示',
-            'tracks': '轨道',
-            'bdmv_index': '原盘序号',
-            'chapter_index': '章节序号',
-            'start_at_chapter': '起始章节',
-            'end_at_chapter': '结束章节',
-            'offset': '偏移',
-            'duration': '时长',
-            'sub_path': '字幕路径',
-            'ep_duration': '单集时长',
-            'm2ts_file': 'm2ts 文件',
-            'm2ts_file_detail': 'm2ts 片段时间',
-            'm2ts_type': 'm2ts 类型',
-            'language': '语言',
-            'sub_language': '字幕语言',
-            'lang': '语言',
-            'track_number': '轨道号',
-            'track_uid': 'UID',
-            'track_type': '类型',
-            'codec_id': 'Codec ID',
-            'convert': '转换',
-            'audio_convert': '音频转换',
-            'channels': '声道',
-            'bit_depth': '位深',
-            'sampling_frequency': '采样率',
-            'pixel_width': '宽度',
-            'pixel_height': '高度',
-            'default_duration': '默认时长',
-            'extract': '提取',
-            'edit_chapters': '编辑章节',
-            'edit_attachments': '编辑附件',
-            'filename': '文件名',
-            'mime_type': 'MIME 类型',
+        header_text = {
+            'm2ts_file_detail': 'm2ts detail',
+            'warning': 'Prompt',
+            'language': 'Language',
+            'lang': 'Language',
+            'select': 'Select',
+            'convert': 'convert',
+            'extract': 'extract',
+            'edit_chapters': 'edit chapters',
+            'edit_attachments': 'Edit Attachment',
+            'filename': 'filename',
+            'mime_type': 'mime_type',
             'uid': 'UID',
-            'file_size': '文件大小',
+            'track_uid': 'UID',
+            'codec_id': 'Codec ID',
             'id': 'ID',
-            'output_name': '输出文件名',
-            'vpy_path': 'vpy 路径',
-            'edit_vpy': '编辑 vpy',
-            'preview_script': '预览',
-            'edit_tracks': '编辑轨道',
-            'mpls_file': 'mpls 文件',
-            'chapters': '章节',
-            'main': '主播放列表',
-            'play': '播放',
-            'file': '文件',
-            'index': '序号',
-            'start': '开始',
-            'end': '结束',
-            'text': '内容',
+            'preview_script': 'preview',
+            'edit_tracks': 'edit tracks',
+            'chapters': 'Chapters',
+            'play': 'play',
         }
-        return [zh.get(k, str(k).replace('_', ' ')) for k in keys]
+        return [self.t(header_text.get(key, key.replace('_', ' '))) for key in keys]
 
     def _refresh_language_dependent_sizes(self):
         lang = getattr(self, '_language_code', None) or core_settings.CURRENT_UI_LANGUAGE

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import argparse
 import ast
 from dataclasses import dataclass
 from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+GENERATED_START = "    # BEGIN GENERATED MIXIN CONTRACTS"
+GENERATED_END = "    # END GENERATED MIXIN CONTRACTS"
 
 
 @dataclass(frozen=True)
@@ -84,9 +87,62 @@ def _method_contract(node: ast.FunctionDef | ast.AsyncFunctionDef) -> tuple[str,
     return signature, decorators
 
 
+def _generated_declarations(
+    methods: dict[str, ast.FunctionDef | ast.AsyncFunctionDef],
+) -> str:
+    lines = [GENERATED_START]
+    for method_name, node in sorted(methods.items()):
+        lines.extend(f"    @{ast.unparse(decorator)}" for decorator in node.decorator_list)
+        async_prefix = "async " if isinstance(node, ast.AsyncFunctionDef) else ""
+        return_annotation = f" -> {ast.unparse(node.returns)}" if node.returns else ""
+        lines.extend(
+            (
+                f"    {async_prefix}def {method_name}({ast.unparse(node.args)}){return_annotation}:",
+                "        raise NotImplementedError",
+                "",
+            )
+        )
+    lines.append(GENERATED_END)
+    return "\n".join(lines)
+
+
+def synchronize_contracts(project_root: Path = PROJECT_ROOT, write: bool = False) -> list[str]:
+    """Generate or verify both IDE base declaration blocks from their split mixins."""
+    errors: list[str] = []
+    for spec in CONTRACTS:
+        split_directory = project_root / spec.split_directory
+        base_path = split_directory / spec.base_filename
+        source = base_path.read_text(encoding="utf-8-sig")
+        start = source.find(GENERATED_START)
+        end = source.find(GENERATED_END)
+        if start < 0 or end < start:
+            errors.append(f"{spec.base_filename}: generated declaration markers are missing")
+            continue
+        end += len(GENERATED_END)
+        mixin_methods = _mixin_methods(split_directory, spec.base_filename)
+        generated = _generated_declarations(
+            {
+                name: node
+                for name, node in mixin_methods.items()
+                if name not in spec.signature_exceptions
+            }
+        )
+        if source[start:end] == generated:
+            continue
+        if not write:
+            errors.append(
+                f"{spec.base_filename}: generated declarations are stale; "
+                "run python tools/check_split_contracts.py --write"
+            )
+            continue
+        updated = source[:start] + generated + source[end:]
+        base_path.write_bytes(updated.replace("\n", "\r\n").encode("utf-8"))
+    return errors
+
+
 def contract_errors(project_root: Path = PROJECT_ROOT) -> list[str]:
     """Return missing or stale base declarations without importing PyQt or application code."""
-    errors: list[str] = []
+    errors = synchronize_contracts(project_root)
     for spec in CONTRACTS:
         split_directory = project_root / spec.split_directory
         mixin_methods = _mixin_methods(split_directory, spec.base_filename)
@@ -111,6 +167,20 @@ def contract_errors(project_root: Path = PROJECT_ROOT) -> list[str]:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--write",
+        action="store_true",
+        help="regenerate both IDE base declaration blocks before checking them",
+    )
+    args = parser.parse_args()
+    if args.write:
+        errors = synchronize_contracts(write=True)
+        if errors:
+            print("Split base contract generation failed:")
+            for error in errors:
+                print(f"- {error}")
+            return 1
     errors = contract_errors()
     if errors:
         print("Split base contract check failed:")

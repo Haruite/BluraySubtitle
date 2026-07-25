@@ -1438,11 +1438,12 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
         chapter.get_pid_to_language()
         streams = self._read_m2ts_track_info(m2ts_path)
         pid_lang = dict(chapter.pid_to_lang or {})
-        for k, v in list(pid_lang.items()):
-            pid_lang[int(k)] = BluraySubtitle._norm_lang_for_track_selection(v)
+        for pid, language in list(pid_lang.items()):
+            pid_lang[int(pid)] = BluraySubtitle._norm_lang_for_track_selection(language)
+        visible_streams = self._filter_streams_by_pid_lang(streams, pid_lang)
         copy_audio_track, copy_sub_track = BluraySubtitle._default_track_selection_from_streams(
-            streams,
-            pid_lang
+            visible_streams,
+            pid_lang,
         )
         return copy_audio_track, copy_sub_track
 

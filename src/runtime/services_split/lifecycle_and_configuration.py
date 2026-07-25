@@ -20,7 +20,7 @@ from src.core import MKV_MERGE_PATH
 from src.exports.utils import get_time_str, run_command
 from .media_info_and_track_mapping import MediaInfoTrackMappingMixin
 from .service_base import BluraySubtitleServiceBase
-from ..services.cancelled import _Cancelled
+from .. import TaskCancelled
 from ...core import DEFAULT_APPROX_EPISODE_DURATION_SECONDS, CURRENT_UI_LANGUAGE
 from ...core.i18n import translate_text
 from ...domain import ISO, Subtitle
@@ -107,7 +107,7 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
             return
         try:
             self._preload_subtitles_multiprocess(missing, cancel_event)
-        except _Cancelled:
+        except TaskCancelled:
             raise
         except Exception as error:
             print(f'Multiprocessing parse failed, switching to single-process mode: {str(error)}')
@@ -122,7 +122,7 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
         """Parse subtitles in single-process mode."""
         for p in file_paths:
             if cancel_event and cancel_event.is_set():
-                raise _Cancelled()
+                raise TaskCancelled()
             try:
                 self._subtitle_cache[p] = Subtitle(p)
             except Exception as e:
@@ -158,7 +158,7 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
                     if cancel_event and cancel_event.is_set():
                         for f in futures:
                             f.cancel()
-                        raise _Cancelled()
+                        raise TaskCancelled()
                     p = None
                     try:
                         p, sub = fut.result()
@@ -490,7 +490,7 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
             chapter_index = sub_combo_index[sub_index]
             for folder, selected_mpls_no_ext in selected_mpls:
                 if cancel_event and cancel_event.is_set():
-                    raise _Cancelled()
+                    raise TaskCancelled()
                 folder_n = os.path.normpath(str(folder))
                 if folder_n not in folder_to_bdmv_index:
                     folder_to_bdmv_index[folder_n] = len(folder_to_bdmv_index) + 1
@@ -562,7 +562,7 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
         else:
             for folder, selected_mpls_no_ext in selected_mpls:
                 if cancel_event and cancel_event.is_set():
-                    raise _Cancelled()
+                    raise TaskCancelled()
                 folder_n = os.path.normpath(str(folder))
                 if folder_n not in folder_to_bdmv_index:
                     folder_to_bdmv_index[folder_n] = len(folder_to_bdmv_index) + 1

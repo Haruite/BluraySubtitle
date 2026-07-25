@@ -55,6 +55,8 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 if hasattr(self, 'approx_episode_minutes_combo') and self.approx_episode_minutes_combo:
                     self.approx_episode_minutes_combo.setEnabled(
                         self.series_mode_radio.isChecked() if hasattr(self, 'series_mode_radio') else True)
+                if hasattr(self, 'remux_flac_checkbox') and self.remux_flac_checkbox:
+                    self.remux_flac_checkbox.setVisible(self.get_selected_function_id() == 3)
             except Exception:
                 pass
             return
@@ -84,6 +86,8 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 self.trim_copyright_tail_checkbox.setVisible(not remux_mode)
             if hasattr(self, 'mux_dolby_vision_checkbox') and self.mux_dolby_vision_checkbox:
                 self.mux_dolby_vision_checkbox.setVisible(not remux_mode)
+            if hasattr(self, 'remux_flac_checkbox') and self.remux_flac_checkbox:
+                self.remux_flac_checkbox.setVisible(False)
         except Exception:
             pass
         try:
@@ -838,11 +842,9 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     pass
                 return
             configuration = bs.generate_configuration_from_selected_mpls(selected_mpls)
-            self.on_configuration(configuration, update_sp_table=True)
-            if self.table2.rowCount() > 0:
-                current_configuration = self._generate_configuration_from_ui_inputs()
-                if current_configuration:
-                    self.on_configuration(current_configuration, update_sp_table=True)
+            self.on_configuration(configuration, update_sp_table=False)
+            current_configuration = self._generate_configuration_from_ui_inputs() if self.table2.rowCount() > 0 else {}
+            self.on_configuration(current_configuration or configuration, update_sp_table=True)
         except Exception:
             print_exc_terminal()
 
@@ -1278,6 +1280,8 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
         if hasattr(self, 'select_all_tracks_row') and self.select_all_tracks_row:
             visible = function_id in (3, 4)
             self.select_all_tracks_row.setVisible(visible)
+        if hasattr(self, 'remux_flac_checkbox') and self.remux_flac_checkbox:
+            self.remux_flac_checkbox.setVisible(function_id == 3)
         if hasattr(self, 'subtitle_formats_hint_label') and self.subtitle_formats_hint_label:
             self.subtitle_formats_hint_label.setVisible(function_id == 5)
         if hasattr(self, 'subtitle_convert_checkbox') and self.subtitle_convert_checkbox:

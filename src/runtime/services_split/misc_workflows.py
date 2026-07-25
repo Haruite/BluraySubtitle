@@ -9,7 +9,7 @@ from src.exports.utils import get_time_str
 from src.runtime.sp import m2ts_file_detail_segments_contained_in, filter_m2ts_file_detail_by_basenames
 from .media_info_and_track_mapping import MediaInfoTrackMappingMixin
 from .service_base import BluraySubtitleServiceBase
-from ..services.cancelled import _Cancelled
+from .. import TaskCancelled
 
 _SP_ORPHAN_M2TS_SKIP_DURATION_BYTES = 512 * 1024
 _MOVIE_SP_MAIN_DURATION_EPS = 0.001
@@ -141,7 +141,7 @@ class MiscWorkflowsMixin(BluraySubtitleServiceBase):
                 pass
         for folder, selected_mpls_no_ext in volume_selected:
             if cancel_event and cancel_event.is_set():
-                raise _Cancelled()
+                raise TaskCancelled()
             folder_n = os.path.normpath(str(folder))
             if folder_n not in folder_to_bdmv_index:
                 folder_to_bdmv_index[folder_n] = len(folder_to_bdmv_index) + 1
