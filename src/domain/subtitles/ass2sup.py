@@ -12,10 +12,19 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from multiprocessing import get_context
 from concurrent.futures import ProcessPoolExecutor
+from itertools import repeat
 from typing import List, Optional, Tuple
 import numpy as np
 from PIL import Image
 
+try:
+    from src.core.i18n import translate_text
+    from src.core.settings import LIBASS_PATH
+except ModuleNotFoundError:
+    # Direct script execution starts below the repository root, so expose the same shared configuration explicitly.
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+    from src.core.i18n import translate_text
+    from src.core.settings import LIBASS_PATH
 
 # Declare the incomplete ctypes structure first so its fields can contain a pointer to the same type.
 class ASS_Image(ctypes.Structure):
@@ -45,7 +54,6 @@ class Crop:
 
 @dataclass
 class Event:
-    image_number: int
     start_frame: int
     end_frame: int
     crop: Crop
@@ -53,7 +61,6 @@ class Event:
 
 @dataclass
 class Segment:
-    image_number: int
     start_frame: int
     end_frame: int
     crop: Crop
@@ -71,15 +78,17 @@ G_FPS_DEN = 1
 G_OUT_DIR = ""
 G_ASS_LOG_CB = None
 
-# Optional explicit libass path. If set, it is tried first.
-LIBASS_PATH = ""
-
 
 VIDEO_FORMATS = {
-    "720p": (1280, 720),
-    "1080p": (1920, 1080),
-    "1440p": (2560, 1440),
-    "2k": (2560, 1440),
+    '480i': (720, 480),
+    '480p': (720, 480),
+    '576i': (720, 576),
+    '576p': (720, 576),
+    '720p': (1280, 720),
+    '1080i': (1920, 1080),
+    '1080p': (1920, 1080),
+    '1440p': (2560, 1440),
+    '2k': (2560, 1440),
 }
 
 FPS_PRESETS = {
@@ -93,19 +102,6 @@ FPS_PRESETS = {
     "60": (60, 1, 60),
 }
 
-
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="ASS/SSA to BDN XML + PNG (Python + libass)")
-    p.add_argument("input", help="Input .ass/.ssa file")
-    p.add_argument("-o", "--output", required=True, help="Output BDN XML file")
-    p.add_argument("-v", "--video-format", default="1080p", help="720p,1080p,1440p,2k or WxH")
-    p.add_argument("-f", "--fps", default="23.976", help="e.g. 23.976,24,25,30000/1001")
-    p.add_argument("-g", "--font-dir", default=None, help="Additional font dir for libass")
-    p.add_argument("-t", "--trackname", default="Undefined", help="BDN Name Title")
-    p.add_argument("-l", "--language", default="und", help="BDN language code")
-    return p.parse_args()
-
-
 def parse_video_format(v: str) -> Tuple[int, int, str]:
     key = v.lower()
     if key in VIDEO_FORMATS:
@@ -116,7 +112,7 @@ def parse_video_format(v: str) -> Tuple[int, int, str]:
     elif "*" in key:
         parts = key.split("*", 1)
     else:
-        raise ValueError(f"invalid video format: {v}")
+        raise ValueError(translate_text("Invalid video format: {value}").format(value=v))
     w = int(parts[0])
     h = int(parts[1])
     return w, h, f"{w}x{h}"
@@ -131,48 +127,40 @@ def parse_fps(fps_text: str) -> Tuple[int, int, int, str]:
         num = int(num_s)
         den = int(den_s)
         if num <= 0 or den <= 0:
-            raise ValueError(f"invalid fps: {fps_text}")
+            raise ValueError(translate_text("Invalid frame rate: {value}").format(value=fps_text))
         tc_fps = int(round(num / den))
         return num, den, tc_fps, fps_text
     val = float(fps_text)
     if val <= 0:
-        raise ValueError(f"invalid fps: {fps_text}")
+        raise ValueError(translate_text("Invalid frame rate: {value}").format(value=fps_text))
     num = int(round(val * 1000))
     den = 1000
     tc_fps = int(round(val))
     return num, den, tc_fps, fps_text
 
 
-def parse_ass_time_to_ms(s: str) -> int:
-    # ASS timestamp: H:MM:SS.cs
-    hms, cs = s.strip().split(".")
-    h, m, sec = hms.split(":")
-    return (int(h) * 3600 + int(m) * 60 + int(sec)) * 1000 + int(cs) * 10
-
-
 def estimate_total_frames(ass_path: str, fps_num: int, fps_den: int) -> int:
     max_end_ms = 0
-    with open(ass_path, "r", encoding="utf-8", errors="ignore") as f:
-        for raw in f:
-            line = raw.strip()
-            if not line.startswith("Dialogue:"):
+    with open(ass_path, 'r', encoding='utf-8', errors='ignore') as subtitle_file:
+        for raw_line in subtitle_file:
+            line = raw_line.strip()
+            if not line.startswith('Dialogue:'):
                 continue
-            parts = line[len("Dialogue:"):].split(",", 3)
-            if len(parts) < 3:
+            fields = line[len('Dialogue:'):].split(',', 3)
+            if len(fields) < 3:
                 continue
             try:
-                start_ms = parse_ass_time_to_ms(parts[1])
-                end_ms = parse_ass_time_to_ms(parts[2])
-            except Exception:
+                start_hms, start_centiseconds = fields[1].strip().split('.')
+                end_hms, end_centiseconds = fields[2].strip().split('.')
+                start_hour, start_minute, start_second = (int(value) for value in start_hms.split(':'))
+                end_hour, end_minute, end_second = (int(value) for value in end_hms.split(':'))
+                start_ms = (start_hour * 3600 + start_minute * 60 + start_second) * 1000 + int(start_centiseconds) * 10
+                end_ms = (end_hour * 3600 + end_minute * 60 + end_second) * 1000 + int(end_centiseconds) * 10
+            except (TypeError, ValueError):
                 continue
-            if end_ms < start_ms:
-                continue
-            if end_ms > max_end_ms:
-                max_end_ms = end_ms
-    if max_end_ms <= 0:
-        return 0
-    return int(max_end_ms * fps_num / fps_den / 1000.0) + 1
-
+            if end_ms >= start_ms:
+                max_end_ms = max(max_end_ms, end_ms)
+    return int(max_end_ms * fps_num / fps_den / 1000.0) + 1 if max_end_ms > 0 else 0
 
 def mk_timecode(frame: int, fps: int) -> str:
     frames = frame % fps
@@ -182,11 +170,6 @@ def mk_timecode(frame: int, fps: int) -> str:
     m = t % 60
     h = t // 60
     return f"{h:02d}:{m:02d}:{s:02d}:{frames:02d}"
-
-
-def write_png_rgba(path: str, rgba: np.ndarray) -> None:
-    # Pillow's PNG codec is typically backed by libpng on Linux distributions.
-    Image.fromarray(rgba, mode="RGBA").save(path, format="PNG", compress_level=3)
 
 
 def crop_rgba(image: np.ndarray) -> Optional[Tuple[Crop, np.ndarray]]:
@@ -297,7 +280,7 @@ def write_bdn_xml(
         lines.append(
             f'<Event Forced="False" InTC="{mk_timecode(ev.start_frame, fps_tc)}" OutTC="{mk_timecode(ev.end_frame, fps_tc)}">'
         )
-        graphic_name = f"{ev.image_number:08d}_0.png"
+        graphic_name = f"{ev.start_frame:08d}_0.png"
         if png_rel_dir:
             graphic_name = f"{png_rel_dir}/{graphic_name}"
         lines.append(
@@ -349,7 +332,7 @@ def load_libass():
             continue
 
     if lib is None:
-        raise RuntimeError(f"failed to load libass; tried: {tried}")
+        raise RuntimeError(translate_text("Failed to load libass; tried: {paths}").format(paths=tried))
     lib.ass_library_init.restype = ctypes.c_void_p
     lib.ass_library_done.argtypes = [ctypes.c_void_p]
     lib.ass_renderer_init.argtypes = [ctypes.c_void_p]
@@ -367,19 +350,6 @@ def load_libass():
     lib.ass_set_message_cb.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
     return lib
 
-
-def silence_libass_logs(lib, ass_lib):
-    global G_ASS_LOG_CB
-    cb_t = ctypes.CFUNCTYPE(None, ctypes.c_int, ctypes.c_char_p, ctypes.c_void_p, ctypes.c_void_p)
-    if G_ASS_LOG_CB is None:
-        def _cb(level, fmt, va, data):
-            return
-        G_ASS_LOG_CB = cb_t(_cb)
-    lib.ass_set_message_cb(ass_lib, G_ASS_LOG_CB, None)
-
-
-def hash_rgba(data: np.ndarray) -> str:
-    return hashlib.blake2b(data.tobytes(), digest_size=16).hexdigest()
 
 
 def worker_cleanup():
@@ -399,10 +369,12 @@ def worker_cleanup():
 
 
 def init_worker(in_path: str, out_dir: str, width: int, height: int, fps_num: int, fps_den: int, font_dir: Optional[str]):
-    global G_LIB, G_ASS_LIB, G_RENDERER, G_TRACK, G_WIDTH, G_HEIGHT, G_FPS_NUM, G_FPS_DEN, G_OUT_DIR
+    global G_LIB, G_ASS_LIB, G_RENDERER, G_TRACK, G_WIDTH, G_HEIGHT, G_FPS_NUM, G_FPS_DEN, G_OUT_DIR, G_ASS_LOG_CB
     G_LIB = load_libass()
     G_ASS_LIB = G_LIB.ass_library_init()
-    silence_libass_logs(G_LIB, G_ASS_LIB)
+    callback_type = ctypes.CFUNCTYPE(None, ctypes.c_int, ctypes.c_char_p, ctypes.c_void_p, ctypes.c_void_p)
+    G_ASS_LOG_CB = callback_type(lambda _level, _format, _arguments, _data: None)
+    G_LIB.ass_set_message_cb(G_ASS_LIB, G_ASS_LOG_CB, None)
     G_RENDERER = G_LIB.ass_renderer_init(G_ASS_LIB)
     G_LIB.ass_set_storage_size(G_RENDERER, width, height)
     G_LIB.ass_set_frame_size(G_RENDERER, width, height)
@@ -411,7 +383,7 @@ def init_worker(in_path: str, out_dir: str, width: int, height: int, fps_num: in
     G_LIB.ass_set_fonts(G_RENDERER, None, None, 1, None, 1)
     G_TRACK = G_LIB.ass_read_file(G_ASS_LIB, os.path.abspath(in_path).encode("utf-8"), b"UTF-8")
     if not G_TRACK:
-        raise RuntimeError("worker failed to load subtitle track")
+        raise RuntimeError(translate_text("Worker failed to load subtitle track"))
     G_WIDTH = width
     G_HEIGHT = height
     G_FPS_NUM = fps_num
@@ -420,86 +392,75 @@ def init_worker(in_path: str, out_dir: str, width: int, height: int, fps_num: in
     atexit.register(worker_cleanup)
 
 
-def render_range(frame_range):
+def render_range(frame_range: Tuple[int, int]) -> List[Segment]:
     start, end = frame_range
-
     segments: List[Segment] = []
-    have_line = False
-    start_frame = 0
-    prev_hash = ""
-    prev_crop: Optional[Crop] = None
-    prev_png_rgba: Optional[np.ndarray] = None
-    prev_changed = True
+    segment_start = 0
+    previous_hash = ''
+    previous_crop: Optional[Crop] = None
+    previous_rgba: Optional[np.ndarray] = None
     changed_flag = ctypes.c_int(1)
 
-    for i in range(start, end):
-        ts_ms = int(i * G_FPS_DEN * 1000 / G_FPS_NUM)
-        img = G_LIB.ass_render_frame(G_RENDERER, G_TRACK, ts_ms, ctypes.byref(changed_flag))
-        changed = changed_flag.value != 0
-        if (not changed) and have_line and prev_crop is not None and prev_changed:
-            # libass reports frame unchanged: extend current segment directly.
-            prev_changed = changed
+    for frame_number in range(start, end):
+        timestamp_ms = int(frame_number * G_FPS_DEN * 1000 / G_FPS_NUM)
+        image_chain = G_LIB.ass_render_frame(G_RENDERER, G_TRACK, timestamp_ms, ctypes.byref(changed_flag))
+        if changed_flag.value == 0:
             continue
-
-        rgba = blend_ass_image_chain(img, G_WIDTH, G_HEIGHT)
-        cropped = crop_rgba(rgba)
-        prev_changed = changed
-
+        cropped = crop_rgba(blend_ass_image_chain(image_chain, G_WIDTH, G_HEIGHT))
         if cropped is None:
-            if have_line and prev_crop is not None:
-                if prev_png_rgba is not None:
-                    write_png_rgba(os.path.join(G_OUT_DIR, f"{start_frame:08d}_0.png"), prev_png_rgba)
-                segments.append(Segment(start_frame, start_frame, i, prev_crop, prev_hash))
-            have_line = False
-            prev_crop = None
-            prev_png_rgba = None
-            prev_hash = ""
+            if previous_crop is not None and previous_rgba is not None:
+                Image.fromarray(previous_rgba).save(
+                    os.path.join(G_OUT_DIR, f'{segment_start:08d}_0.png'), format='PNG', compress_level=3
+                )
+                segments.append(Segment(segment_start, frame_number, previous_crop, previous_hash))
+            previous_hash, previous_crop, previous_rgba = '', None, None
             continue
 
-        crop, png_rgba = cropped
-        h = hash_rgba(png_rgba)
-
-        if not have_line:
-            have_line = True
-            start_frame = i
-            prev_crop = crop
-            prev_png_rgba = png_rgba
-            prev_hash = h
+        crop, rgba = cropped
+        frame_hash = hashlib.blake2b(rgba.tobytes(), digest_size=16).hexdigest()
+        if previous_crop is None:
+            segment_start, previous_hash, previous_crop, previous_rgba = frame_number, frame_hash, crop, rgba
             continue
-
-        if (not changed) and h == prev_hash:
+        if frame_hash == previous_hash and crop == previous_crop:
             continue
+        if previous_rgba is not None:
+            Image.fromarray(previous_rgba).save(
+                os.path.join(G_OUT_DIR, f'{segment_start:08d}_0.png'), format='PNG', compress_level=3
+            )
+            segments.append(Segment(segment_start, frame_number, previous_crop, previous_hash))
+        segment_start, previous_hash, previous_crop, previous_rgba = frame_number, frame_hash, crop, rgba
 
-        if prev_crop is not None:
-            if prev_png_rgba is not None:
-                write_png_rgba(os.path.join(G_OUT_DIR, f"{start_frame:08d}_0.png"), prev_png_rgba)
-            segments.append(Segment(start_frame, start_frame, i, prev_crop, prev_hash))
-        start_frame = i
-        prev_crop = crop
-        prev_png_rgba = png_rgba
-        prev_hash = h
-
-    if have_line and prev_crop is not None:
-        if prev_png_rgba is not None:
-            write_png_rgba(os.path.join(G_OUT_DIR, f"{start_frame:08d}_0.png"), prev_png_rgba)
-        segments.append(Segment(start_frame, start_frame, end - 1, prev_crop, prev_hash))
-
+    if previous_crop is not None and previous_rgba is not None:
+        Image.fromarray(previous_rgba).save(
+            os.path.join(G_OUT_DIR, f'{segment_start:08d}_0.png'), format='PNG', compress_level=3
+        )
+        segments.append(Segment(segment_start, end, previous_crop, previous_hash))
     return segments
 
 
-def merge_segments(chunks: List[List[Segment]], out_dir: str) -> List[Event]:
+def merge_segments(chunks: List[List[Segment]]) -> List[Event]:
     merged: List[Segment] = []
     for chunk in chunks:
-        for seg in chunk:
-            if merged and seg.start_frame <= merged[-1].end_frame + 1 and seg.frame_hash == merged[-1].frame_hash:
-                merged[-1].end_frame = seg.end_frame
+        for segment in chunk:
+            if (
+                merged and segment.start_frame <= merged[-1].end_frame
+                and segment.frame_hash == merged[-1].frame_hash and segment.crop == merged[-1].crop
+            ):
+                merged[-1].end_frame = max(merged[-1].end_frame, segment.end_frame)
             else:
-                merged.append(seg)
-    return [Event(s.image_number, s.start_frame, s.end_frame, s.crop) for s in merged]
+                merged.append(segment)
+    return [Event(segment.start_frame, segment.end_frame, segment.crop) for segment in merged]
 
-
-def main() -> int:
-    args = parse_args()
+def main(argv: Optional[List[str]] = None, jobs: Optional[int] = None) -> int:
+    parser = argparse.ArgumentParser(description=translate_text("ASS/SSA to BDN XML + PNG (Python + libass)"))
+    parser.add_argument("input", help=translate_text("Input .ass/.ssa file"))
+    parser.add_argument("-o", "--output", required=True, help=translate_text("Output BDN XML file"))
+    parser.add_argument("-v", "--video-format", default="1080p", help=translate_text("720p, 1080p, 1440p, 2k, or WxH"))
+    parser.add_argument("-f", "--fps", default="23.976", help=translate_text("For example: 23.976, 24, 25, or 30000/1001"))
+    parser.add_argument("-g", "--font-dir", default=None, help=translate_text("Additional font directory for libass"))
+    parser.add_argument("-t", "--trackname", default="Undefined", help=translate_text("BDN name title"))
+    parser.add_argument("-l", "--language", default="und", help=translate_text("BDN language code"))
+    args = parser.parse_args(argv)
     in_path = args.input
     out_xml = args.output
     xml_abs = os.path.abspath(out_xml)
@@ -508,7 +469,7 @@ def main() -> int:
     png_dir_name = f"{xml_stem}_png"
     out_dir = os.path.join(xml_dir, png_dir_name)
     if not os.path.isfile(in_path):
-        print(f"input file not found: {in_path}", file=sys.stderr)
+        print(translate_text("Input file not found: {path}").format(path=in_path), file=sys.stderr)
         return 1
     os.makedirs(out_dir, exist_ok=True)
 
@@ -516,10 +477,10 @@ def main() -> int:
     fps_num, fps_den, tc_fps, fps_text = parse_fps(args.fps)
     total_frames = estimate_total_frames(in_path, fps_num, fps_den)
     if total_frames <= 0:
-        print("no dialogue events found", file=sys.stderr)
+        print(translate_text("No dialogue events found"), file=sys.stderr)
         return 1
 
-    jobs = max(1, min((os.cpu_count() or 1), total_frames))
+    jobs = max(1, min(jobs or (os.cpu_count() or 1), total_frames))
     # Very fine-grained chunks reduce tail latency from stragglers.
     # Use about ~1.5s per task (minimum 24 frames) for better end-phase core utilization.
     fps_float = fps_num / fps_den
@@ -546,10 +507,10 @@ def main() -> int:
             ) as ex:
                 chunks = list(ex.map(render_range, tasks, chunksize=1))
     except KeyboardInterrupt:
-        print("interrupted; workers terminated", file=sys.stderr)
+        print(translate_text("Interrupted; workers terminated"), file=sys.stderr)
         return 130
 
-    events = merge_segments(chunks, out_dir)
+    events = merge_segments(chunks)
 
     write_bdn_xml(
         output_xml=out_xml,
@@ -563,19 +524,17 @@ def main() -> int:
         png_rel_dir=png_dir_name,
     )
 
-    print(f"done: {len(events)} events -> {out_xml} (jobs={jobs}, chunks={len(tasks)})")
+    print(translate_text("Done: {count} events -> {path} (jobs={jobs}, chunks={chunks})").format(count=len(events), path=out_xml, jobs=jobs, chunks=len(tasks)))
     return 0
 
 
 @dataclass
 class BdnEvent:
-    in_tc: str
-    out_tc: str
+    start_frame: int
+    end_frame: int
     forced: bool
     x: int
     y: int
-    width: int
-    height: int
     png_path: str
 
 
@@ -587,175 +546,118 @@ class BdnDoc:
     events: List[BdnEvent]
 
 
-def _video_format_to_wh(s: str) -> Tuple[int, int]:
-    m = {
-        "480i": (720, 480),
-        "480p": (720, 480),
-        "576i": (720, 576),
-        "576p": (720, 576),
-        "720p": (1280, 720),
-        "1080i": (1920, 1080),
-        "1080p": (1920, 1080),
-    }
-    s = s.strip().lower()
-    if s in m:
-        return m[s]
-    if "x" in s:
-        a, b = s.split("x", 1)
-        return int(a), int(b)
-    raise ValueError(f"unsupported VideoFormat: {s}")
-
-
 def parse_bdn_xml(xml_path: str) -> BdnDoc:
     root = ET.parse(xml_path).getroot()
-    fmt = root.find("./Description/Format")
-    if fmt is None:
-        raise ValueError("invalid BDN XML: missing Description/Format")
-    vf = fmt.attrib.get("VideoFormat", "1080p")
-    fr = fmt.attrib.get("FrameRate", "23.976")
-    width, height = _video_format_to_wh(vf)
-    fps = float(fr)
-
-    base = os.path.dirname(os.path.abspath(xml_path))
+    format_node = root.find('./Description/Format')
+    if format_node is None:
+        raise ValueError(translate_text('Invalid BDN XML: missing Description/Format'))
+    width, height, _ = parse_video_format(format_node.attrib.get('VideoFormat', '1080p'))
+    fps_num, fps_den, nominal_fps, _ = parse_fps(format_node.attrib.get('FrameRate', '23.976'))
+    fps = fps_num / fps_den
+    base_directory = os.path.dirname(os.path.abspath(xml_path))
     events: List[BdnEvent] = []
-    for ev in root.findall("./Events/Event"):
-        in_tc = ev.attrib.get("InTC", "00:00:00:00")
-        out_tc = ev.attrib.get("OutTC", "00:00:00:00")
-        forced = ev.attrib.get("Forced", "False").lower() == "true"
-        g = ev.find("./Graphic")
-        if g is None:
+    for event_node in root.findall('./Events/Event'):
+        graphic = event_node.find('./Graphic')
+        if graphic is None:
             continue
-        png_name = (g.text or "").strip()
-        events.append(
-            BdnEvent(
-                in_tc=in_tc,
-                out_tc=out_tc,
-                forced=forced,
-                x=int(g.attrib.get("X", "0")),
-                y=int(g.attrib.get("Y", "0")),
-                width=int(g.attrib.get("Width", "0")),
-                height=int(g.attrib.get("Height", "0")),
-                png_path=os.path.join(base, png_name),
-            )
-        )
+        start_values = [int(value) for value in event_node.attrib.get('InTC', '00:00:00:00').split(':')]
+        end_values = [int(value) for value in event_node.attrib.get('OutTC', '00:00:00:00').split(':')]
+        start_frame = (((start_values[0] * 60 + start_values[1]) * 60 + start_values[2]) * nominal_fps) + start_values[3]
+        end_frame = (((end_values[0] * 60 + end_values[1]) * 60 + end_values[2]) * nominal_fps) + end_values[3]
+        events.append(BdnEvent(
+            start_frame=start_frame,
+            end_frame=end_frame,
+            forced=event_node.attrib.get('Forced', 'False').lower() == 'true',
+            x=int(graphic.attrib.get('X', '0')),
+            y=int(graphic.attrib.get('Y', '0')),
+            png_path=os.path.join(base_directory, (graphic.text or '').strip()),
+        ))
     return BdnDoc(width=width, height=height, fps=fps, events=events)
 
 
 def fps_id_for(fps: float) -> int:
-    table = [
-        (24000.0 / 1001.0, 0x10),
-        (23.975, 0x10),
-        (24.0, 0x20),
-        (25.0, 0x30),
-        (30000.0 / 1001.0, 0x40),
-        (50.0, 0x60),
-        (60000.0 / 1001.0, 0x70),
-    ]
-    best = min(table, key=lambda t: abs(t[0] - fps))
-    return best[1]
+    frame_rates = (
+        (24000.0 / 1001.0, 0x10), (24.0, 0x20), (25.0, 0x30), (30000.0 / 1001.0, 0x40),
+        (30.0, 0x50), (50.0, 0x60), (60000.0 / 1001.0, 0x70), (60.0, 0x80),
+    )
+    matched_rate, frame_rate_id = min(frame_rates, key=lambda item: abs(item[0] - fps))
+    if abs(matched_rate - fps) >= 0.01:
+        raise ValueError(translate_text('Unsupported Blu-ray frame rate: {fps}').format(fps=fps))
+    return frame_rate_id
 
 
 def _min_pts_interval_for_fps(fps: float) -> int:
-    # Borrowed from Spp2Pgs/PgsWriter::MinPtsIntervalTable semantics.
-    # Values are in 90kHz PTS ticks.
-    fps_id = fps_id_for(fps)
-    mapping = {
-        0x10: 3750,  # 23.976
-        0x20: 3750,  # 24
-        0x30: 3600,  # 25
-        0x40: 3000,  # 29.97
-        0x50: 3000,  # 30
-        0x60: 1800,  # 50
-        0x70: 1500,  # 59.94/60
-    }
-    return mapping.get(fps_id, 3750)
+    # Spp2Pgs PgsWriter::MinPtsIntervalTable, indexed by the Blu-ray frame-rate identifier.
+    return {0x10: 3750, 0x20: 3750, 0x30: 3600, 0x40: 3000, 0x50: 3000,
+            0x60: 1800, 0x70: 1500, 0x80: 1500}[fps_id_for(fps)]
 
 
-def tc_to_pts(tc: str, fps: float) -> int:
-    fps_tc = int(round(fps))
-    hh, mm, ss, ff = [int(x) for x in tc.split(":")]
-    frame_no = (((hh * 60 + mm) * 60 + ss) * fps_tc) + ff
-    return int(round(frame_no * 90000.0 / fps))
+def frame_to_pts(frame_number: int, fps: float) -> int:
+    return int(round(frame_number * 90000.0 / fps))
+
+def image_to_indexed_and_palette(image: Image.Image) -> Tuple[np.ndarray, List[Tuple[int, int, int, int]]]:
+    """Reserve palette index zero for transparency and retain one alpha value per encoded color."""
+    if image.mode == 'P':
+        indexed = np.array(image, dtype=np.uint8)
+        raw_palette = image.getpalette() or []
+        alpha = [255] * 256
+        transparency = image.info.get('transparency')
+        if isinstance(transparency, int):
+            alpha[transparency] = 0
+        elif isinstance(transparency, (bytes, bytearray, list, tuple)):
+            for index, value in enumerate(transparency[:256]):
+                alpha[index] = int(value)
+        transparent_index = min(range(256), key=alpha.__getitem__)
+        remap = np.arange(256, dtype=np.uint8)
+        remap[transparent_index] = 0
+        next_index = 1
+        for index in range(256):
+            if index != transparent_index:
+                remap[index] = next_index
+                next_index += 1
+        palette = [(0, 0, 0, 0)] * 256
+        for old_index in range(256):
+            new_index = int(remap[old_index])
+            if new_index:
+                offset = old_index * 3
+                palette[new_index] = (
+                    raw_palette[offset] if offset < len(raw_palette) else 0,
+                    raw_palette[offset + 1] if offset + 1 < len(raw_palette) else 0,
+                    raw_palette[offset + 2] if offset + 2 < len(raw_palette) else 0,
+                    alpha[old_index],
+                )
+        return remap[indexed], palette
+
+    rgba = np.array(image.convert('RGBA'), dtype=np.uint8)
+    alpha_channel = rgba[:, :, 3]
+    quantized = Image.fromarray(rgba).quantize(colors=254, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE)
+    indexed = np.array(quantized, dtype=np.uint8).astype(np.uint16) + 1
+    indexed[alpha_channel == 0] = 0
+    indexed = indexed.astype(np.uint8)
+    raw_palette = quantized.getpalette() or []
+    palette = [(0, 0, 0, 0)] * 256
+    for quantized_index in range(254):
+        palette_index = quantized_index + 1
+        mask = indexed == palette_index
+        offset = quantized_index * 3
+        palette[palette_index] = (
+            raw_palette[offset] if offset < len(raw_palette) else 0,
+            raw_palette[offset + 1] if offset + 1 < len(raw_palette) else 0,
+            raw_palette[offset + 2] if offset + 2 < len(raw_palette) else 0,
+            int(alpha_channel[mask].max()) if np.any(mask) else 0,
+        )
+    return indexed, palette
 
 
-def _alpha_table_for_p_image(img: Image.Image) -> List[int]:
-    alpha = [255] * 256
-    tr = img.info.get("transparency", None)
-    if tr is None:
-        return alpha
-    if isinstance(tr, int):
-        alpha[tr] = 0
-        return alpha
-    if isinstance(tr, (bytes, bytearray, list, tuple)):
-        n = min(256, len(tr))
-        for i in range(n):
-            alpha[i] = int(tr[i])
-    return alpha
-
-
-def _from_indexed_png(img: Image.Image) -> Tuple[np.ndarray, List[Tuple[int, int, int, int]]]:
-    arr = np.array(img, dtype=np.uint8)
-    pal_raw = img.getpalette() or []
-    atab = _alpha_table_for_p_image(img)
-    trans_old = min(range(256), key=lambda i: atab[i])
-    remap = np.arange(256, dtype=np.uint8)
-    remap[trans_old] = 0
-    nxt = 1
-    for i in range(256):
-        if i == trans_old:
-            continue
-        remap[i] = nxt
-        nxt += 1
-    idx = remap[arr]
-    pal = [(0, 0, 0, 0)] * 256
-    pal[0] = (0, 0, 0, 0)
-    for old_i in range(256):
-        new_i = int(remap[old_i])
-        if new_i == 0:
-            continue
-        r = pal_raw[old_i * 3 + 0] if old_i * 3 + 0 < len(pal_raw) else 0
-        g = pal_raw[old_i * 3 + 1] if old_i * 3 + 1 < len(pal_raw) else 0
-        b = pal_raw[old_i * 3 + 2] if old_i * 3 + 2 < len(pal_raw) else 0
-        pal[new_i] = (r, g, b, atab[old_i])
-    return idx, pal
-
-
-def _from_rgba_quantized(rgba: np.ndarray) -> Tuple[np.ndarray, List[Tuple[int, int, int, int]]]:
-    alpha = rgba[:, :, 3]
-    # Reserve palette index 0 for fully transparent pixels to avoid gray background boxes.
-    qimg = Image.fromarray(rgba, mode="RGBA").quantize(colors=254, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE)
-    idx = np.array(qimg, dtype=np.uint8).astype(np.uint16) + 1
-    idx[alpha == 0] = 0
-    idx = idx.astype(np.uint8)
-    pal_raw = qimg.getpalette() or []
-    pal = [(0, 0, 0, 0)] * 256
-    pal[0] = (0, 0, 0, 0)
-    for i in range(254):
-        r = pal_raw[i * 3 + 0] if i * 3 + 0 < len(pal_raw) else 0
-        g = pal_raw[i * 3 + 1] if i * 3 + 1 < len(pal_raw) else 0
-        b = pal_raw[i * 3 + 2] if i * 3 + 2 < len(pal_raw) else 0
-        pi = i + 1
-        mask = idx == pi
-        amax = int(alpha[mask].max()) if np.any(mask) else 0
-        pal[pi] = (r, g, b, amax)
-    return idx, pal
-
-
-def image_to_indexed_and_palette(img: Image.Image) -> Tuple[np.ndarray, List[Tuple[int, int, int, int]]]:
-    if img.mode == "P":
-        return _from_indexed_png(img)
-    return _from_rgba_quantized(np.array(img.convert("RGBA"), dtype=np.uint8))
-
-
-def rgb_to_ycrcb(r: int, g: int, b: int) -> Tuple[int, int, int]:
-    y = r * 0.2126 * 219.0 / 255.0 + g * 0.7152 * 219.0 / 255.0 + b * 0.0722 * 219.0 / 255.0
-    cb = -r * 0.2126 / 1.8556 * 224.0 / 255.0 - g * 0.7152 / 1.8556 * 224.0 / 255.0 + b * 0.5 * 224.0 / 255.0
-    cr = r * 0.5 * 224.0 / 255.0 - g * 0.7152 / 1.5748 * 224.0 / 255.0 - b * 0.0722 / 1.5748 * 224.0 / 255.0
-    y = max(16, min(235, 16 + int(round(y))))
-    cb = max(16, min(240, 128 + int(round(cb))))
-    cr = max(16, min(240, 128 + int(round(cr))))
-    return y, cr, cb
-
+def rgb_to_ycrcb(red: int, green: int, blue: int, image_height: int) -> Tuple[int, int, int]:
+    # Spp2Pgs uses BT.601 below 720 lines, BT.709 through 1080, and BT.2020 above 1080.
+    factors = (
+        ((8414, 16519, 3208, 524288), (-4857, -9535, 14392, 4194304), (14392, -12052, -2341, 4194304)),
+        ((5983, 20127, 2032, 524288), (-3298, -11094, 14392, 4194304), (14392, -13073, -1320, 4194304)),
+        ((7393, 19080, 1669, 524288), (-4019, -10373, 14392, 4194304), (14392, -13235, -1158, 4194304)),
+    )[0 if image_height < 720 else 2 if image_height > 1080 else 1]
+    values = [(((red * row[0] + green * row[1] + blue * row[2] + row[3]) >> 14) + 1) >> 1 for row in factors]
+    return values[0], values[2], values[1]
 
 def encode_rle(idx: np.ndarray) -> bytes:
     h, w = idx.shape
@@ -793,553 +695,265 @@ def pgs_packet(seg_type: int, pts: int, dts: int, payload: bytes) -> bytes:
     return b"PG" + struct.pack(">IIBH", pts & 0xFFFFFFFF, dts & 0xFFFFFFFF, seg_type & 0xFF, len(payload)) + payload
 
 
-def make_sup_frame(ev: BdnEvent, comp_num: int, v_w: int, v_h: int, fps: float, fps_id: int) -> bytes:
-    img = Image.open(ev.png_path)
-    width, height = img.size
-    idx, pal_rgba = image_to_indexed_and_palette(img)
-    rle = encode_rle(idx)
-    pal_size = max(1, int(idx.max()) + 1)
-    pts_start = tc_to_pts(ev.in_tc, fps)
-    pts_end = tc_to_pts(ev.out_tc, fps)
-    frame_init = (v_w * v_h * 9 + 3199) // 3200
-    window_init = (width * height * 9 + 3199) // 3200
-    image_decode = (width * height * 9 + 1599) // 1600
+def _build_graphics_payload(event: BdnEvent, video_width: int, video_height: int) -> dict:
+    with Image.open(event.png_path) as image:
+        width, height = image.size
+        indexed, rgba_palette = image_to_indexed_and_palette(image)
+    rle = encode_rle(indexed)
+    palette_size = max(1, int(indexed.max()) + 1)
+    palette_data = bytearray([0x00, 0x00])
+    for palette_index in range(palette_size):
+        red, green, blue, alpha = rgba_palette[palette_index]
+        y, cr, cb = rgb_to_ycrcb(red, green, blue, video_height)
+        palette_data += bytes([palette_index, y, cr, cb, alpha])
 
-    pcs_start = bytearray()
-    pcs_start += struct.pack(">HH", v_w, v_h)
-    pcs_start += bytes([fps_id, (comp_num >> 8) & 0xFF, comp_num & 0xFF, 0x80, 0x00, 0x00, 0x01])
-    pcs_start += struct.pack(">H", 0x0000)
-    pcs_start += bytes([0x00, 0x40 if ev.forced else 0x00])
-    pcs_start += struct.pack(">HH", ev.x, ev.y)
-
-    wds = bytearray([0x01, 0x00]) + struct.pack(">HHHH", ev.x, ev.y, width, height)
-    pds = bytearray([0x00, 0x00])
-    for i in range(pal_size):
-        r, g, b, a = pal_rgba[i]
-        y, cr, cb = rgb_to_ycrcb(r, g, b)
-        pds += bytes([i & 0xFF, y & 0xFF, cr & 0xFF, cb & 0xFF, a & 0xFF])
-
-    ods_packets: List[bytes] = []
-    first_sz = min(len(rle), 0xFFE4)
-    add_packets = 0 if len(rle) <= 0xFFE4 else 1 + (len(rle) - 0xFFE4) // 0xFFEB
-    marker = 0xC0000000 if add_packets == 0 else 0x80000000
-    obj_data_len = len(rle) + 4
-    ods_first = bytearray(struct.pack(">HBB", 0x0000, 0x00, 0x00))
-    ods_first[3] = 0xC0 if add_packets == 0 else 0x80
-    ods_first += struct.pack(">I", marker | (obj_data_len & 0x00FFFFFF))[1:]
-    ods_first += struct.pack(">HH", width, height)
-    ods_first += rle[:first_sz]
-    t = pts_start - (frame_init + window_init) + image_decode
-    ods_packets.append(pgs_packet(0x15, t, 0, bytes(ods_first)))
-    consumed = first_sz
+    first_fragment_size = min(len(rle), 0xFFE4)
+    object_data_length = len(rle) + 4
+    first_fragment = bytearray(struct.pack('>HBB', 0, 0, 0xC0 if len(rle) <= 0xFFE4 else 0x80))
+    first_fragment += struct.pack('>I', object_data_length & 0x00FFFFFF)[1:]
+    first_fragment += struct.pack('>HH', width, height) + rle[:first_fragment_size]
+    object_fragments = [bytes(first_fragment)]
+    consumed = first_fragment_size
     while consumed < len(rle):
-        sz = min(0xFFEB, len(rle) - consumed)
-        ods_next = bytearray(struct.pack(">HBB", 0x0000, 0x00, 0x40))
-        ods_next += rle[consumed:consumed + sz]
-        ods_packets.append(pgs_packet(0x15, t, 0, bytes(ods_next)))
-        consumed += sz
+        fragment_size = min(0xFFEB, len(rle) - consumed)
+        sequence_flag = 0x40 if consumed + fragment_size == len(rle) else 0x00
+        object_fragments.append(struct.pack('>HBB', 0, 0, sequence_flag) + rle[consumed:consumed + fragment_size])
+        consumed += fragment_size
 
-    packets = [
-        pgs_packet(0x16, pts_start, 0, bytes(pcs_start)),
-        pgs_packet(0x17, pts_start - window_init, 0, bytes(wds)),
-        pgs_packet(0x14, pts_start - (frame_init + window_init), 0, bytes(pds)),
-        *ods_packets,
-        pgs_packet(0x80, t, 0, b""),
-    ]
-    pcs_end = bytearray()
-    pcs_end += struct.pack(">HH", v_w, v_h)
-    pcs_end += bytes([fps_id, ((comp_num + 1) >> 8) & 0xFF, (comp_num + 1) & 0xFF, 0x00, 0x00, 0x00, 0x00])
-    packets += [
-        pgs_packet(0x16, pts_end, 0, bytes(pcs_end)),
-        pgs_packet(0x17, pts_end - window_init, 0, bytes(wds)),
-        pgs_packet(0x80, pts_end - window_init, 0, b""),
-    ]
-    return b"".join(packets)
-
-
-def _mk_tc_from_frame(frame: int, fps_tc: int) -> str:
-    hh = frame // (3600 * fps_tc)
-    mm = (frame // (60 * fps_tc)) % 60
-    ss = (frame // fps_tc) % 60
-    ff = frame % fps_tc
-    return f"{hh:02d}:{mm:02d}:{ss:02d}:{ff:02d}"
-
-
-def _tc_to_frame(tc: str, fps: float) -> int:
-    return int(round(tc_to_pts(tc, fps) * fps / 90000.0))
-
-
-def _event_from_frames(ev: BdnEvent, start_frame: int, end_frame: int, fps_tc: int) -> BdnEvent:
-    return BdnEvent(
-        in_tc=_mk_tc_from_frame(start_frame, fps_tc),
-        out_tc=_mk_tc_from_frame(end_frame, fps_tc),
-        forced=ev.forced,
-        x=ev.x,
-        y=ev.y,
-        width=ev.width,
-        height=ev.height,
-        png_path=ev.png_path,
-    )
-
-
-def _build_graphics_payload(ev: BdnEvent, v_w: int, v_h: int, fps: float) -> dict:
-    img = Image.open(ev.png_path)
-    width, height = img.size
-    idx, pal_rgba = image_to_indexed_and_palette(img)
-    rle = encode_rle(idx)
-    pal_size = max(1, int(idx.max()) + 1)
-
-    pds = bytearray([0x00, 0x00])
-    for i in range(pal_size):
-        r, g, b, a = pal_rgba[i]
-        y, cr, cb = rgb_to_ycrcb(r, g, b)
-        pds += bytes([i & 0xFF, y & 0xFF, cr & 0xFF, cb & 0xFF, a & 0xFF])
-
-    ods_payloads: List[bytes] = []
-    first_sz = min(len(rle), 0xFFE4)
-    add_packets = 0 if len(rle) <= 0xFFE4 else 1 + (len(rle) - 0xFFE4) // 0xFFEB
-    marker = 0xC0000000 if add_packets == 0 else 0x80000000
-    obj_data_len = len(rle) + 4
-    ods_first = bytearray(struct.pack(">HBB", 0x0000, 0x00, 0x00))
-    ods_first[3] = 0xC0 if add_packets == 0 else 0x80
-    ods_first += struct.pack(">I", marker | (obj_data_len & 0x00FFFFFF))[1:]
-    ods_first += struct.pack(">HH", width, height)
-    ods_first += rle[:first_sz]
-    ods_payloads.append(bytes(ods_first))
-    consumed = first_sz
-    while consumed < len(rle):
-        sz = min(0xFFEB, len(rle) - consumed)
-        ods_next = bytearray(struct.pack(">HBB", 0x0000, 0x00, 0x40))
-        ods_next += rle[consumed:consumed + sz]
-        ods_payloads.append(bytes(ods_next))
-        consumed += sz
-
-    frame_init = (v_w * v_h * 9 + 3199) // 3200
-    window_init = (width * height * 9 + 3199) // 3200
-    image_decode = (width * height * 9 + 1599) // 1600
-    pal_hash = hashlib.blake2b(bytes(pds), digest_size=16).hexdigest()
-    obj_seed = struct.pack(">HH", width, height) + rle
-    obj_hash = hashlib.blake2b(obj_seed, digest_size=16).hexdigest()
     return {
-        "w": width,
-        "h": height,
-        "x": ev.x,
-        "y": ev.y,
-        "forced": ev.forced,
-        "pds": bytes(pds),
-        "ods_payloads": ods_payloads,
-        "palette_hash": pal_hash,
-        "object_hash": obj_hash,
-        "rle_len": len(rle),
-        "frame_init": frame_init,
-        "window_init": window_init,
-        "image_decode": image_decode,
+        'w': width,
+        'h': height,
+        'x': event.x,
+        'y': event.y,
+        'forced': event.forced,
+        'pds': bytes(palette_data),
+        'ods_payloads': object_fragments,
+        # Decode durations are the integer forms used by Spp2Pgs for 256/128 Mpixel/s paths.
+        'frame_init': (video_width * video_height * 9 + 3199) // 3200,
+        'window_init': (width * height * 9 + 3199) // 3200,
+        'image_decode': (width * height * 9 + 1599) // 1600,
     }
 
 
-def _build_event_packets_compat(
-    ev: BdnEvent,
-    comp_num: int,
-    v_w: int,
-    v_h: int,
+def _build_event_packets(
+    event: BdnEvent,
+    graphics: dict,
+    composition_number: int,
+    video_width: int,
+    video_height: int,
     fps: float,
     fps_id: int,
-    palette_id: int,
-    object_id: int,
-    include_pds: bool,
-    include_ods: bool,
     epoch_start: bool,
-    object_version: int,
-) -> Tuple[bytes, int, int, int, str, str, int]:
-    g = _build_graphics_payload(ev, v_w, v_h, fps)
-    return _build_event_packets_compat_from_payload(
-        ev=ev,
-        g=g,
-        comp_num=comp_num,
-        v_w=v_w,
-        v_h=v_h,
-        fps=fps,
-        fps_id=fps_id,
-        palette_id=palette_id,
-        object_id=object_id,
-        include_pds=include_pds,
-        include_ods=include_ods,
-        epoch_start=epoch_start,
-        object_version=object_version,
+    buffer_version: int,
+) -> Tuple[bytes, int, int, int]:
+    start_pts = frame_to_pts(event.start_frame, fps)
+    end_pts = frame_to_pts(event.end_frame, fps)
+    decode_start = max(0, start_pts - graphics['frame_init'] - graphics['window_init'])
+    object_decode_end = max(0, decode_start + graphics['image_decode'])
+    presentation = bytearray(struct.pack('>HH', video_width, video_height))
+    presentation += bytes([
+        fps_id, (composition_number >> 8) & 0xFF, composition_number & 0xFF,
+        0x80 if epoch_start else 0x40, 0, 0, 0x01,
+    ])
+    presentation += struct.pack('>HBBHH', 0, 0, 0x40 if graphics['forced'] else 0, graphics['x'], graphics['y'])
+    window = bytes([0x01, 0x00]) + struct.pack(
+        '>HHHH', graphics['x'], graphics['y'], graphics['w'], graphics['h']
     )
-
-
-def _build_event_packets_compat_from_payload(
-    ev: BdnEvent,
-    g: dict,
-    comp_num: int,
-    v_w: int,
-    v_h: int,
-    fps: float,
-    fps_id: int,
-    palette_id: int,
-    object_id: int,
-    include_pds: bool,
-    include_ods: bool,
-    epoch_start: bool,
-    object_version: int,
-) -> Tuple[bytes, int, int, int, str, str, int]:
-    pts_start = tc_to_pts(ev.in_tc, fps)
-    pts_end = tc_to_pts(ev.out_tc, fps)
-
-    composition_state = 0x80 if epoch_start else (0x40 if include_ods else 0x00)
-    palette_update_flag = 0x80 if (include_pds and not include_ods) else 0x00
-    pcs_start = bytearray()
-    pcs_start += struct.pack(">HH", v_w, v_h)
-    pcs_start += bytes(
-        [
-            fps_id,
-            (comp_num >> 8) & 0xFF,
-            comp_num & 0xFF,
-            composition_state,
-            palette_update_flag,
-            palette_id & 0xFF,
-            0x01,
-        ]
-    )
-    pcs_start += struct.pack(">H", object_id & 0xFFFF)
-    pcs_start += bytes([0x00, 0x40 if g["forced"] else 0x00])
-    pcs_start += struct.pack(">HH", g["x"], g["y"])
-
-    wds = bytearray([0x01, 0x00]) + struct.pack(">HHHH", g["x"], g["y"], g["w"], g["h"])
-    t = pts_start - (g["frame_init"] + g["window_init"]) + g["image_decode"]
     packets = [
-        pgs_packet(0x16, pts_start, max(0, pts_start - (g["frame_init"] + g["window_init"])), bytes(pcs_start)),
-        pgs_packet(0x17, pts_start - g["window_init"], max(0, pts_start - (g["frame_init"] + g["window_init"])), bytes(wds)),
+        pgs_packet(0x16, start_pts, decode_start, bytes(presentation)),
+        pgs_packet(0x17, max(0, start_pts - graphics['window_init']), decode_start, window),
+        pgs_packet(0x14, decode_start, 0, bytes([0, buffer_version]) + graphics['pds'][2:]),
     ]
-    if include_pds:
-        pds_payload = bytearray([palette_id & 0xFF, 0x00])
-        pds_payload += g["pds"][2:]
-        packets.append(pgs_packet(0x14, pts_start - (g["frame_init"] + g["window_init"]), 0, bytes(pds_payload)))
-    if include_ods:
-        first = True
-        for ods_payload in g["ods_payloads"]:
-            patched = bytearray(ods_payload)
-            patched[0:2] = struct.pack(">H", object_id & 0xFFFF)
-            if first:
-                patched[2] = object_version & 0xFF
-                first = False
-            packets.append(pgs_packet(0x15, t, max(0, pts_start - (g["frame_init"] + g["window_init"])), bytes(patched)))
-    packets.append(pgs_packet(0x80, t, 0, b""))
+    for object_payload in graphics['ods_payloads']:
+        patched_payload = bytearray(object_payload)
+        patched_payload[:3] = struct.pack('>HB', 0, buffer_version)
+        packets.append(pgs_packet(0x15, object_decode_end, decode_start, bytes(patched_payload)))
+    packets.append(pgs_packet(0x80, object_decode_end, 0, b''))
 
-    pcs_end = bytearray()
-    pcs_end += struct.pack(">HH", v_w, v_h)
-    pcs_end += bytes([fps_id, ((comp_num + 1) >> 8) & 0xFF, (comp_num + 1) & 0xFF, 0x00, 0x00, 0x00, 0x00])
-    packets += [
-        pgs_packet(0x16, pts_end, 0, bytes(pcs_end)),
-        pgs_packet(0x17, pts_end - g["window_init"], 0, bytes(wds)),
-        pgs_packet(0x80, pts_end - g["window_init"], 0, b""),
-    ]
-    return (
-        b"".join(packets),
-        pts_start,
-        pts_end,
-        g["window_init"],
-        g["palette_hash"],
-        g["object_hash"],
-        g["rle_len"],
-    )
+    clear_presentation = struct.pack('>HHBHB', video_width, video_height, fps_id, (composition_number + 1) & 0xFFFF, 0)
+    clear_presentation += b'\x00\x00\x00'
+    packets.extend([
+        pgs_packet(0x16, end_pts, 0, clear_presentation),
+        pgs_packet(0x17, max(0, end_pts - graphics['window_init']), 0, window),
+        pgs_packet(0x80, max(0, end_pts - graphics['window_init']), 0, b''),
+    ])
+    return b''.join(packets), start_pts, end_pts, graphics['window_init']
 
-
-def _build_eraser_packets(v_w: int, v_h: int, fps_id: int, comp_num: int, pts: int, window_init: int) -> bytes:
+def _build_eraser_packets(
+    video_width: int, video_height: int, fps_id: int, composition_number: int, pts: int, window_init: int
+) -> bytes:
     dts = max(0, pts - window_init - 1)
-    pcs = bytearray()
-    pcs += struct.pack(">HH", v_w, v_h)
-    pcs += bytes([fps_id, (comp_num >> 8) & 0xFF, comp_num & 0xFF, 0x00, 0x00, 0x00, 0x00])
-    wds = bytearray([0x01, 0x00]) + struct.pack(">HHHH", 0, 0, 1, 1)
-    return b"".join(
-        [
-            pgs_packet(0x16, pts, dts, bytes(pcs)),
-            pgs_packet(0x17, dts + 1, dts, bytes(wds)),
-            pgs_packet(0x80, dts, 0, b""),
-        ]
-    )
+    presentation = struct.pack('>HHBHB', video_width, video_height, fps_id, composition_number & 0xFFFF, 0) + b'\x00\x00\x00'
+    window = bytes([0x01, 0x00]) + struct.pack('>HHHH', 0, 0, 1, 1)
+    return b''.join([
+        pgs_packet(0x16, pts, dts, presentation),
+        pgs_packet(0x17, dts + 1, dts, window),
+        pgs_packet(0x80, dts, 0, b''),
+    ])
 
 
-def _build_anchor_packets(v_w: int, v_h: int, fps: float, fps_id: int, comp_num: int, pts: int) -> bytes:
-    # Build a tiny transparent-like frame in memory.
-    pcs_start = bytearray(struct.pack(">HH", v_w, v_h))
-    pcs_start += bytes([fps_id, (comp_num >> 8) & 0xFF, comp_num & 0xFF, 0x80, 0x00, 0x00, 0x01])
-    pcs_start += struct.pack(">H", 0x0000) + bytes([0x00, 0x00]) + struct.pack(">HH", 0, 0)
-    wds = bytearray([0x01, 0x00]) + struct.pack(">HHHH", 0, 0, 1, 1)
-    pds = bytes([0x00, 0x00, 0x00, 16, 128, 128, 0])
-    ods = bytes([0x00, 0x00, 0xC0, 0x00, 0x00, 0x08, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00])
+def _build_anchor_packets(
+    video_width: int, video_height: int, fps: float, fps_id: int, composition_number: int, pts: int
+) -> bytes:
+    # Spp2Pgs registers a 1x1 zero-alpha anchor so the decoder has a valid initial epoch at PTS zero.
+    presentation = bytearray(struct.pack('>HH', video_width, video_height))
+    presentation += bytes([fps_id, (composition_number >> 8) & 0xFF, composition_number & 0xFF, 0x80, 0, 0, 1])
+    presentation += struct.pack('>HBBHH', 0, 0, 0, 0, 0)
+    window = bytes([1, 0]) + struct.pack('>HHHH', 0, 0, 1, 1)
+    palette = bytes([0, 0, 0, 16, 128, 128, 0])
+    image_object = bytes([0, 0, 0xC0, 0, 0, 8, 0, 1, 0, 1, 0, 1, 0, 0])
     dts = max(0, pts - 3750)
     end_pts = pts + _min_pts_interval_for_fps(fps)
-    pcs_end = bytearray(struct.pack(">HH", v_w, v_h))
-    pcs_end += bytes([fps_id, ((comp_num + 1) >> 8) & 0xFF, (comp_num + 1) & 0xFF, 0x00, 0x00, 0x00, 0x00])
-    return b"".join(
-        [
-            pgs_packet(0x16, pts, dts, bytes(pcs_start)),
-            pgs_packet(0x17, pts - 1, dts, bytes(wds)),
-            pgs_packet(0x14, dts, 0, pds),
-            pgs_packet(0x15, pts, dts, ods),
-            pgs_packet(0x80, pts, 0, b""),
-            pgs_packet(0x16, end_pts, 0, bytes(pcs_end)),
-            pgs_packet(0x17, end_pts - 1, 0, bytes(wds)),
-            pgs_packet(0x80, end_pts - 1, 0, b""),
-        ]
-    )
+    clear = struct.pack('>HHBHB', video_width, video_height, fps_id, (composition_number + 1) & 0xFFFF, 0) + b'\x00\x00\x00'
+    return b''.join([
+        pgs_packet(0x16, pts, dts, bytes(presentation)), pgs_packet(0x17, max(0, pts - 1), dts, window),
+        pgs_packet(0x14, dts, 0, palette), pgs_packet(0x15, pts, dts, image_object),
+        pgs_packet(0x80, pts, 0, b''), pgs_packet(0x16, end_pts, 0, clear),
+        pgs_packet(0x17, max(0, end_pts - 1), 0, window), pgs_packet(0x80, max(0, end_pts - 1), 0, b''),
+    ])
 
 
-def _build_frame_task(task):
-    idx, ev, v_w, v_h, fps, fps_id = task
-    return make_sup_frame(ev, idx * 2, v_w, v_h, fps, fps_id)
-
-
-def _precompute_graphics_task(task):
-    idx, ev, v_w, v_h, fps = task
-    return idx, _build_graphics_payload(ev, v_w, v_h, fps)
-
-
-def bdnxml_to_sup(xml_path: str, out_sup: str, jobs: int, bd_compat: str = "off", debug: bool = False) -> int:
-    doc = parse_bdn_xml(xml_path)
-    events = doc.events
-    if not events:
-        print("no events found in BDN XML", file=sys.stderr)
+def bdnxml_to_sup(xml_path: str, out_sup: str, jobs: int, bd_compat: str = 'off', debug: bool = False) -> int:
+    document = parse_bdn_xml(xml_path)
+    if not document.events:
+        print(translate_text('No events found in BDN XML'), file=sys.stderr)
         return 1
-    jobs = max(1, min(jobs, len(events)))
-    fps_id = fps_id_for(doc.fps)
-    if bd_compat == "on":
-        min_interval = _min_pts_interval_for_fps(doc.fps)
-        frame_pts = int(round(90000.0 / doc.fps))
-        fps_tc = max(1, int(round(doc.fps)))
-        min_frames = max(1, int(round(min_interval * doc.fps / 90000.0)))
-        comp_num = 0
-        last_end = -10**18
-        last_window_init = frame_pts
-        prev_end_frame = -10**9
-        # Approximate Spp2Pgs epoch constraints.
-        epoch_objects = 0
-        epoch_palettes = 0
-        epoch_buffer = 0
-        epoch_active = False
-        obj_cache: dict = {}
-        pal_cache: dict = {}
-        next_obj_id = 0
-        next_pal_id = 0
-        next_obj_version = 0
-        dropped = 0
-        epoch_resets = 0
-        palette_reuse = 0
-        object_reuse = 0
-        erasers = 0
-        graphics_payloads: List[dict] = [None] * len(events)
-        if jobs > 1 and len(events) > 1:
-            if debug:
-                print(f"bd-compat(on): precomputing graphics payloads with jobs={jobs}", file=sys.stderr)
-            ctx = get_context("spawn")
-            tasks = [(i, ev, doc.width, doc.height, doc.fps) for i, ev in enumerate(events)]
-            with ProcessPoolExecutor(max_workers=jobs, mp_context=ctx) as ex:
-                for idx, payload in ex.map(_precompute_graphics_task, tasks, chunksize=2):
-                    graphics_payloads[idx] = payload
-        else:
-            for i, ev in enumerate(events):
-                graphics_payloads[i] = _build_graphics_payload(ev, doc.width, doc.height, doc.fps)
+    previous_end_frame = -1
+    for event_index, event in enumerate(document.events):
+        if event.end_frame <= event.start_frame:
+            raise ValueError(translate_text('Invalid BDN event timing at event {event}').format(event=event_index + 1))
+        if event.start_frame < previous_end_frame:
+            raise ValueError(translate_text(
+                'Overlapping BDN events are not supported (event {event})'
+            ).format(event=event_index + 1))
+        previous_end_frame = event.end_frame
 
-        with open(out_sup, "wb") as f:
-            # Keep an initial zero anchor, like Spp2Pgs default behavior.
-            f.write(_build_anchor_packets(doc.width, doc.height, doc.fps, fps_id, comp_num, 0))
-            comp_num += 2
-            for i, ev in enumerate(events):
-                g = graphics_payloads[i]
-                start_frame = _tc_to_frame(ev.in_tc, doc.fps)
-                end_frame = _tc_to_frame(ev.out_tc, doc.fps)
-                if start_frame <= prev_end_frame:
-                    start_frame = prev_end_frame + 1
-                if end_frame - start_frame < min_frames:
-                    end_frame = start_frame + min_frames
-                if end_frame <= start_frame:
-                    dropped += 1
-                    continue
-                ev2 = _event_from_frames(ev, start_frame, end_frame, fps_tc)
-                pts_start = tc_to_pts(ev2.in_tc, doc.fps)
-                pts_end = tc_to_pts(ev2.out_tc, doc.fps)
-                win_init = g["window_init"]
-                pal_hash = g["palette_hash"]
-                obj_hash = g["object_hash"]
-                rle_len = g["rle_len"]
-                # Keep event gaps from getting too tiny in PTS domain.
-                if pts_start <= last_end:
-                    shift_pts = (last_end + frame_pts) - pts_start
-                    shift_frames = int(round(shift_pts * doc.fps / 90000.0))
-                    start_frame += shift_frames
-                    end_frame += shift_frames
-                    ev2 = _event_from_frames(ev, start_frame, end_frame, fps_tc)
-                    pts_start = tc_to_pts(ev2.in_tc, doc.fps)
-                    pts_end = tc_to_pts(ev2.out_tc, doc.fps)
-                if pts_end - pts_start < min_interval:
-                    end_frame = start_frame + min_frames
-                    ev2 = _event_from_frames(ev, start_frame, end_frame, fps_tc)
-                    pts_start = tc_to_pts(ev2.in_tc, doc.fps)
-                    pts_end = tc_to_pts(ev2.out_tc, doc.fps)
-                event_buffer = max(16, rle_len + 16)
-                need_new_epoch = False
-                if epoch_active:
-                    if pts_start > last_end + frame_pts:
-                        need_new_epoch = True
-                    if epoch_objects + 1 > 64:
-                        need_new_epoch = True
-                    if epoch_palettes + 1 > 8:
-                        need_new_epoch = True
-                    if epoch_buffer + event_buffer >= 4 * 1024 * 1024:
-                        need_new_epoch = True
-                if need_new_epoch and last_end > 0:
-                    f.write(_build_eraser_packets(doc.width, doc.height, fps_id, comp_num + 1, last_end, last_window_init))
-                    comp_num += 1
-                    erasers += 1
-                    epoch_objects = 0
-                    epoch_palettes = 0
-                    epoch_buffer = 0
-                    epoch_active = False
-                    epoch_resets += 1
-                    obj_cache.clear()
-                    pal_cache.clear()
-                    next_obj_id = 0
-                    next_pal_id = 0
-                    next_obj_version = 0
-                include_pds = pal_hash not in pal_cache
-                include_ods = obj_hash not in obj_cache
-                if not include_pds:
-                    palette_reuse += 1
-                if not include_ods:
-                    object_reuse += 1
-                if include_pds:
-                    if next_pal_id > 7:
-                        # hard-reset epoch palette space
-                        if epoch_active and last_end > 0:
-                            f.write(_build_eraser_packets(doc.width, doc.height, fps_id, comp_num + 1, last_end, last_window_init))
-                            comp_num += 1
-                            erasers += 1
-                        epoch_objects = 0
-                        epoch_palettes = 0
-                        epoch_buffer = 0
-                        epoch_active = False
-                        epoch_resets += 1
-                        obj_cache.clear()
-                        pal_cache.clear()
-                        next_obj_id = 0
-                        next_pal_id = 0
-                        next_obj_version = 0
-                    pal_cache[pal_hash] = next_pal_id
-                    next_pal_id += 1
-                if include_ods:
-                    if next_obj_id > 63:
-                        if epoch_active and last_end > 0:
-                            f.write(_build_eraser_packets(doc.width, doc.height, fps_id, comp_num + 1, last_end, last_window_init))
-                            comp_num += 1
-                            erasers += 1
-                        epoch_objects = 0
-                        epoch_palettes = 0
-                        epoch_buffer = 0
-                        epoch_active = False
-                        epoch_resets += 1
-                        obj_cache.clear()
-                        pal_cache.clear()
-                        next_obj_id = 0
-                        next_pal_id = 0
-                        next_obj_version = 0
-                    obj_cache[obj_hash] = (next_obj_id, next_obj_version)
-                    next_obj_id += 1
-                    next_obj_version = (next_obj_version + 1) & 0xFF
-                palette_id = pal_cache[pal_hash]
-                object_id, object_version = obj_cache[obj_hash]
-                frame, pts_start, pts_end, win_init, _, _, _ = _build_event_packets_compat_from_payload(
-                    ev2,
-                    g,
-                    comp_num,
-                    doc.width,
-                    doc.height,
-                    doc.fps,
-                    fps_id,
-                    palette_id,
-                    object_id,
-                    include_pds,
-                    include_ods,
-                    not epoch_active,
-                    object_version,
-                )
-                f.write(frame)
-                comp_num += 2
-                last_end = pts_end
-                last_window_init = win_init
-                prev_end_frame = end_frame
-                epoch_objects += 1 if include_ods else 0
-                epoch_palettes += 1 if include_pds else 0
-                epoch_buffer += event_buffer
-                epoch_active = True
-                if debug and (i + 1) % 200 == 0:
-                    print(
-                        f"bd-compat(on): packed {i + 1}/{len(events)} "
-                        f"(epoch_objects={epoch_objects}, epoch_palettes={epoch_palettes})",
-                        file=sys.stderr,
-                    )
-            if epoch_active and last_end > 0:
-                f.write(_build_eraser_packets(doc.width, doc.height, fps_id, comp_num + 1, last_end, last_window_init))
-                comp_num += 1
-                erasers += 1
-        if dropped:
-            print(f"bd-compat(on): dropped {dropped} event(s)", file=sys.stderr)
+    jobs = max(1, min(jobs, len(document.events)))
+    frame_rate_id = fps_id_for(document.fps)
+    if jobs > 1:
         if debug:
-            print(
-                "bd-compat(on): "
-                f"events_in={len(events)} dropped={dropped} "
-                f"palette_reuse={palette_reuse} object_reuse={object_reuse} "
-                f"epoch_resets={epoch_resets} erasers={erasers} "
-                f"final_comp_num={comp_num}",
-                file=sys.stderr,
-            )
+            print(translate_text('Precomputing graphics payloads with jobs={jobs}').format(jobs=jobs), file=sys.stderr)
+        context = get_context('spawn')
+        with ProcessPoolExecutor(max_workers=jobs, mp_context=context) as executor:
+            graphics_payloads = list(executor.map(
+                _build_graphics_payload, document.events, repeat(document.width), repeat(document.height), chunksize=2
+            ))
+    else:
+        graphics_payloads = [
+            _build_graphics_payload(event, document.width, document.height) for event in document.events
+        ]
+
+    composition_number = 0
+    if bd_compat != 'on':
+        with open(out_sup, 'wb') as output:
+            for event_index, (event, graphics) in enumerate(zip(document.events, graphics_payloads)):
+                packets, _, _, _ = _build_event_packets(
+                    event, graphics, composition_number, document.width, document.height, document.fps,
+                    frame_rate_id, True, (event_index + 1) & 0xFF,
+                )
+                output.write(packets)
+                composition_number += 2
         return 0
 
-    tasks = [(i, ev, doc.width, doc.height, doc.fps, fps_id) for i, ev in enumerate(events)]
-    with open(out_sup, "wb") as f:
-        if jobs == 1:
-            for task in tasks:
-                f.write(_build_frame_task(task))
-        else:
-            ctx = get_context("spawn")
-            with ProcessPoolExecutor(max_workers=jobs, mp_context=ctx) as ex:
-                for frame in ex.map(_build_frame_task, tasks, chunksize=4):
-                    f.write(frame)
+    minimum_interval = _min_pts_interval_for_fps(document.fps)
+    full_frame_area = document.width * document.height
+    full_decode_duration = max(
+        (full_frame_area * 9 + 3199) // 3200, (full_frame_area * 9 + 1599) // 1600
+    ) + (full_frame_area * 9 + 3199) // 3200
+    largest_window_area = 0
+    epoch_active = False
+    last_start_pts = last_end_pts = -10**18
+    last_window_init = frame_to_pts(1, document.fps)
+    epoch_resets = erasers = 0
+
+    with open(out_sup, 'wb') as output:
+        output.write(_build_anchor_packets(
+            document.width, document.height, document.fps, frame_rate_id, composition_number, 0
+        ))
+        composition_number += 2
+        for event_index, (event, graphics) in enumerate(zip(document.events, graphics_payloads)):
+            start_pts = frame_to_pts(event.start_frame, document.fps)
+            if epoch_active and start_pts < last_start_pts + minimum_interval:
+                raise ValueError(translate_text(
+                    'BDN events are too close for Blu-ray decoding (event {event})'
+                ).format(event=event_index + 1))
+
+            # Epoch separation follows Spp2Pgs: test the new event against the previous epoch's largest window
+            # before adding its crop. Each event is one flattened, non-overlapping bitmap, so palette/object buffer
+            # zero can be redefined after its clear composition; incremented versions prevent stale decoder reuse.
+            erase_duration = (largest_window_area * 9 + 3199) // 3200
+            possible_epoch_end = max(last_start_pts + max(minimum_interval, erase_duration), last_end_pts)
+            separated_epoch = epoch_active and start_pts - possible_epoch_end > full_decode_duration
+            if separated_epoch:
+                output.write(_build_eraser_packets(
+                    document.width, document.height, frame_rate_id, composition_number, last_end_pts, last_window_init
+                ))
+                composition_number += 1
+                erasers += 1
+                epoch_resets += 1
+                largest_window_area = graphics['w'] * graphics['h']
+                epoch_active = False
+            else:
+                largest_window_area = max(largest_window_area, graphics['w'] * graphics['h'])
+
+            packets, last_start_pts, last_end_pts, last_window_init = _build_event_packets(
+                event, graphics, composition_number, document.width, document.height, document.fps,
+                frame_rate_id, not epoch_active, (event_index + 1) & 0xFF,
+            )
+            output.write(packets)
+            composition_number += 2
+            epoch_active = True
+            if debug and (event_index + 1) % 200 == 0:
+                print(translate_text('Packed {current}/{total} events').format(
+                    current=event_index + 1, total=len(document.events)
+                ), file=sys.stderr)
+        if epoch_active:
+            output.write(_build_eraser_packets(
+                document.width, document.height, frame_rate_id, composition_number, last_end_pts, last_window_init
+            ))
+            erasers += 1
+
+    if debug:
+        print(translate_text(
+            'Blu-ray compatibility: events={events} epoch_resets={epoch_resets} erasers={erasers} '
+            'final_composition={composition}'
+        ).format(
+            events=len(document.events), epoch_resets=epoch_resets, erasers=erasers, composition=composition_number,
+        ), file=sys.stderr)
     return 0
 
-
 def _run_ass2sup_pipeline() -> int:
-    p = argparse.ArgumentParser(
-        description="ASS/SSA to SUP (embedded ass2bdnxml + bdnxml2sup)"
+    parser = argparse.ArgumentParser(
+        description=translate_text("ASS/SSA to SUP (embedded ass2bdnxml + bdnxml2sup)")
     )
-    p.add_argument("input_ass", help="Input ASS/SSA file")
-    p.add_argument("-o", "--output", required=True, help="Output SUP file")
-    p.add_argument("-v", "--video-format", default="1080p")
-    p.add_argument("-f", "--fps", default="23.976")
-    p.add_argument("-g", "--font-dir", default=None)
-    p.add_argument("-t", "--trackname", default="Undefined")
-    p.add_argument("-l", "--language", default="und")
-    p.add_argument("-j", "--jobs", type=int, default=max(1, (os.cpu_count() or 1)))
-    p.add_argument(
+    parser.add_argument("input_ass", help=translate_text("Input ASS/SSA file"))
+    parser.add_argument("-o", "--output", required=True, help=translate_text("Output SUP file"))
+    parser.add_argument("-v", "--video-format", default="1080p")
+    parser.add_argument("-f", "--fps", default="23.976")
+    parser.add_argument("-g", "--font-dir", default=None)
+    parser.add_argument("-t", "--trackname", default="Undefined")
+    parser.add_argument("-l", "--language", default="und")
+    parser.add_argument("-j", "--jobs", type=int, default=max(1, (os.cpu_count() or 1)))
+    parser.add_argument(
         "--bd-compat",
         choices=["off", "on"],
         default="off",
-        help="Blu-ray compatibility guard (off/on, on~Spp2Pgs-like)",
+        help=translate_text("Blu-ray compatibility guard (off/on; on follows Spp2Pgs)"),
     )
-    p.add_argument(
+    parser.add_argument(
         "--bd-compat-debug",
         action="store_true",
-        help="Print detailed debug stats for bd-compat path",
+        help=translate_text("Print detailed Blu-ray compatibility statistics"),
     )
-    p.add_argument("--keep-temp", action="store_true")
-    args = p.parse_args()
+    parser.add_argument("--keep-temp", action="store_true")
+    args = parser.parse_args()
     if args.bd_compat_debug:
-        print(
-            f"ass2sup: input={args.input_ass} video_format={args.video_format} fps={args.fps} "
-            f"bd_compat={args.bd_compat} jobs={max(1, args.jobs)}",
-            file=sys.stderr,
-        )
+        print(translate_text(
+            'ASS to SUP: input={input} video_format={video_format} fps={fps} bd_compat={bd_compat} jobs={jobs}'
+        ).format(
+            input=args.input_ass, video_format=args.video_format, fps=args.fps,
+            bd_compat=args.bd_compat, jobs=max(1, args.jobs),
+        ), file=sys.stderr)
 
     temp_root = tempfile.mkdtemp(prefix="ass2sup_")
     xml_tmp = os.path.join(temp_root, "intermediate.xml")
@@ -1362,38 +976,23 @@ def _run_ass2sup_pipeline() -> int:
             cmd1.extend(["-g", args.font_dir])
         cmd1.append(args.input_ass)
 
-        old_argv = sys.argv
-        try:
-            sys.argv = cmd1
-            rc = main()
-        finally:
-            sys.argv = old_argv
+        rc = main(cmd1[1:], jobs=max(1, args.jobs))
+
         if rc != 0:
             return rc
 
         # Stage 2: bdnxml -> sup (embedded implementation)
-        mode = args.bd_compat
-        rc = bdnxml_to_sup(xml_tmp, args.output, max(1, args.jobs), mode, args.bd_compat_debug)
+        rc = bdnxml_to_sup(xml_tmp, args.output, max(1, args.jobs), args.bd_compat, args.bd_compat_debug)
         if rc != 0:
             return rc
-        print(f"done: {args.output}")
+        print(translate_text("Done: {path}").format(path=args.output))
         return 0
     finally:
         if args.keep_temp:
-            print(f"temp kept: {temp_root}", file=sys.stderr)
+            print(translate_text("Temporary files kept: {path}").format(path=temp_root), file=sys.stderr)
         else:
             shutil.rmtree(temp_root, ignore_errors=True)
 
 
-def _entrypoint() -> int:
-    # Renamed file ass2sup.py enters pipeline mode by default.
-    # Old name ass2bdnxml.py keeps original behavior.
-    name = os.path.basename(sys.argv[0]).lower()
-    if name == "ass2sup.py":
-        return _run_ass2sup_pipeline()
-    return main()
-
-
 if __name__ == "__main__":
-    raise SystemExit(_entrypoint())
-
+    raise SystemExit(_run_ass2sup_pipeline())

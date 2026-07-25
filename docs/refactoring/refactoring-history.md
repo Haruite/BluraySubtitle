@@ -34,7 +34,8 @@ History entries must reflect the author's documented intent. Unresolved behavior
 | Phase 3.5 | SP, track alignment, and missing-track repair | Complete | `51fbbea` |
 | Phase 3.6 | Audio conversion and Dolby Vision | Complete | `3f74ca0` |
 | Phase 4 | Shared logic and execution boundaries | Complete | `c50f4e9` |
-| Phase 5 | Base contracts, i18n, naming, and algorithm notes | Complete | This change |
+| Phase 5 | Base contracts, i18n, naming, and algorithm notes | Complete | `b26803b` |
+| Phase 6 | Transport and subtitle parsers | Complete | This change |
 
 ## Phase 1 — Contract and Safety Baseline
 
@@ -350,7 +351,7 @@ SP muxing and special-output algorithms, track alignment and missing-track repai
 ## Phase 3.5 — SP, Track Alignment, and Missing-Track Repair
 
 Date: 2026-07-24
-Commit: Included in this change
+Commit: `51fbbea` (`refactor(sp): rebuild SP and track-alignment workflow`)
 
 ### Scope
 
@@ -400,7 +401,7 @@ Audio-conversion algorithms and Dolby Vision preparation/injection remain Phase 
 ## Phase 3.6 — Audio Conversion and Dolby Vision
 
 Date: 2026-07-24
-Commit: Included in this change
+Commit: `3f74ca0` (`refactor: simplify audio conversion and Dolby Vision handling`)
 
 ### Scope
 
@@ -510,7 +511,7 @@ The remaining very long functions represent existing independent GUI constructio
 ## Phase 5 — Base Contracts, i18n, Naming, and Algorithm Notes
 
 Date: 2026-07-25
-Commit: Included in this change
+Commit: `b26803b` (`refactor: complete phase 5 contracts and workflow cleanup`)
 
 ### Scope
 
@@ -569,3 +570,59 @@ Made the GUI/service split contracts reproducible, completed the remaining sourc
 ### Deferred
 
 Blu-ray DIY encoding and generic video conversion in Edit Tracks remain outside this phase.
+
+## Phase 6 — Transport and Subtitle Parsers
+
+Date: 2026-07-25
+Commit: Included in this change
+
+### Scope
+
+Refactored the M2TS transport parser, the shared media-information bridge, and the ASS-to-PGS converter. The work keeps parser behavior at explicit format boundaries, follows tsMuxer for permissive Blu-ray transport interpretation, and completes the Spp2Pgs-derived PGS timing and buffer rules used by this project.
+
+### M2TS and Media Mapping
+
+- Replaced per-packet file reads with one aligned transport-packet iterator that scans 4 MiB blocks and supports 192-byte M2TS and 188-byte MPEG-TS input. PTS scans, PAT/PMT assembly, frame-rate discovery, PCR duration, and IGS extraction now share this iterator.
+- Kept PAT/PMT parsing permissive like tsMuxer: sections are assembled without requiring a valid CRC, multi-packet PMTs remain supported, and the first complete program map ends the normal track probe.
+- Removed the PES-PTS frame-rate estimator. A HEVC VPS or AVC SPS now supplies the native timing fields using the same bit order and AVC/HEVC clock distinction as tsMuxer; unsupported native video codecs use the existing explicit ffprobe fallback only when a frame count is requested.
+- Replaced the stateful PCR seek/read helpers with direct adaptation-field parsing. Clip duration uses the PCR clock used by tsMuxer and falls back to PTS only when PCR is unavailable; total frames use that duration and the unrounded native rate.
+- Removed duplicate IGS PID discovery and reused the normal track parser. A caller-provided skipped-PID set is no longer mutated.
+- Replaced three service-level result caches plus the PTS cache with one unchanged-file parser cache. Track, duration, frame-count, and PTS callers now share the same `M2TS` instance and its internal values; the file-size/mtime signature replaces it when the source changes.
+
+### ASS to PGS
+
+- The converter now uses the configured shared `LIBASS_PATH`; direct script execution exposes the repository root before loading the same setting. The selected job count applies to both rendering and PGS payload preparation.
+- Corrected libass change handling so every unchanged frame extends the active subtitle segment. Segment ends are consistently exclusive, and identical pixels at different crop coordinates are no longer merged as one stationary subtitle.
+- Added rational BDN frame-rate parsing and all eight Blu-ray frame-rate identifiers, including distinct 30 and 60 fps values. Unsupported rates fail instead of being silently mapped to the nearest identifier.
+- Ported the Spp2Pgs integer BT.601/BT.709/BT.2020 color matrices, decode-duration formulas, minimum PTS intervals, initial transparent anchor, epoch-gap calculation, and ODS fragmentation sizes.
+- Every ODS fragment now receives the selected object version. Because libass has already flattened simultaneous layers into one non-overlapping bitmap event, each clear composition releases the single palette/object slot; the next event redefines slot zero with an incremented palette and object version instead of imposing artificial 8-palette/64-object epoch limits.
+- Invalid, overlapping, or decode-incompatible event timing now fails explicitly. The old compatibility path no longer shifts events or drops them silently.
+- Removed duplicate packet builders, timecode converters, palette paths, one-use wrappers, redundant image dimensions, and the filename-based compatibility entry point. User-visible command-line text is English in source and has Simplified Chinese entries in `I18N_ZH_TO_EN`.
+
+### Logic Changes
+
+- HEVC and AVC frame counts are now derived from stream timing and tsMuxer-compatible PCR duration. This corrects the previous result that treated multi-access-unit HEVC PES timestamps as frame intervals and could report 6.85 or 11.987 fps with substantially too few frames.
+- ASS animation and movement now retain their full unchanged duration and screen position. PGS output uses exact 30/60 fps identifiers, consistent fragment versions, and explicit timing errors rather than modified subtitle timing.
+- Valid PAT/PMT track results, M2TS type classification, IGS extraction intent, ASS styling, output resolution, and public Remux/Encode/SP behavior are otherwise unchanged.
+
+### Documentation and i18n
+
+- No README change was required because this phase changes parser correctness and performance rather than a user workflow or option.
+- Added bilingual ASS/BDN/PGS command-line descriptions, status messages, and parser errors to `I18N_ZH_TO_EN`.
+- Synchronized this Phase 6 entry in English and Simplified Chinese.
+
+### Verification
+
+- Added focused synthetic M2TS/MPEG-TS tests for PAT/PMT tracks, PTS/PCR duration, HEVC VPS timing, total frames, packet-layout detection, and caller-owned PID-set preservation.
+- Added ASS-to-PGS tests for all Blu-ray frame-rate identifiers, rational BDN rates, position-sensitive segment merging, full ODS fragment versioning, palette versioning, packet boundaries, and 30 fps PCS output.
+- On the largest clips from the three specified movie discs, parsed PID/codec order and 23.976 timing matched tsMuxer. PCR durations matched tsMuxer at 1,888.704, 911.223, and 768.824 seconds; resulting frame counts are 45,284, 21,848, and 18,433. Track scans complete in about 0.003–0.006 seconds and native HEVC timing in about 0.014–0.029 seconds, compared with about 0.13 and 3.1 seconds respectively before this phase.
+- The Cyberpunk: Edgerunners `00000.m2ts` AVC check matched tsMuxer for all nine tracks, 23.976 timing, and 1,440.720-second duration; the combined parser query completed in about 0.083 seconds.
+- Converted the specified SPY×FAMILY episode 1 ASS into 522 PGS events. ffprobe identified a 1920×1080 `hdmv_pgs_subtitle` stream, and mkvmerge accepted and muxed the 19,956,542-byte SUP without warnings.
+- The complete repository run passed all 163 tests. Python compilation, i18n audit, split-contract audit, `git diff --check`, and CRLF checks passed.
+- Modified source files decreased by 826 net lines before adding focused tests and this history entry.
+
+### Manual Media Checks Still Required
+
+- Open the generated SPY×FAMILY SUP over the source video and inspect moving signs, fades, karaoke, boundaries between adjacent events, colors, and forced flags. A hardware-player or authored-disc check is still valuable for the compatibility path.
+- Refresh an SP table containing single-frame menu clips and an IGS menu source; verify automatic selection and extracted menu images in the GUI.
+- Exercise a VC-1 or MPEG-2 Blu-ray clip so the explicit ffprobe frame-rate fallback is covered with real media.

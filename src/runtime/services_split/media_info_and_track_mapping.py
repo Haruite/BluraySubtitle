@@ -26,47 +26,51 @@ from .service_base import BluraySubtitleServiceBase
 from src.runtime.dolby_vision import mux_dolby_vision_layers
 from .. import TaskCancelled
 
-# Per-process caches for SP/detail UI: same STREAM files and MPLS playlists are touched many times.
-_M2TS_PTS_DUR_CACHE: dict[str, tuple[Optional[int], Optional[int]]] = {}
+# SP/detail views repeatedly query the same STREAM files and MPLS playlists. M2TS owns the parsed-value
+# caches; this process cache only keeps one parser per unchanged file so all callers share those results.
+_M2TS_PARSER_CACHE: dict[str, tuple[tuple[int, int], M2TS]] = {}
+_M2TS_PARSER_CACHE_LOCK = threading.RLock()
 _MPLS_PLAY_ROWS_CACHE: dict[str, list] = {}
 _MPLS_TIMELINE_DETAIL_CACHE: dict[tuple[str, float, float], str] = {}
 
 
 def mpls_playlist_caches_clear() -> None:
-    """Clear MPLS-derived UI caches (e.g. after episode-mode copyright-tail trim toggles)."""
+    """Clear MPLS-derived UI caches after playlist interpretation settings change."""
     _MPLS_PLAY_ROWS_CACHE.clear()
     _MPLS_TIMELINE_DETAIL_CACHE.clear()
 
 
-def _m2ts_cache_key(path: str) -> str:
+def _normalized_media_path(path: str) -> str:
+    return os.path.normcase(os.path.normpath(os.path.abspath(path)))
+
+
+def _cached_m2ts_parser(m2ts_path: str) -> Optional[M2TS]:
+    path = _normalized_media_path(m2ts_path)
     try:
-        return os.path.normcase(os.path.normpath(os.path.abspath(path)))
-    except Exception:
-        return os.path.normcase(os.path.normpath(path))
+        stat = os.stat(path)
+    except OSError:
+        return None
+    signature = (int(stat.st_size), int(stat.st_mtime_ns))
+    with _M2TS_PARSER_CACHE_LOCK:
+        cached = _M2TS_PARSER_CACHE.get(path)
+        if cached and cached[0] == signature:
+            return cached[1]
+        parser = M2TS(path)
+        _M2TS_PARSER_CACHE[path] = (signature, parser)
+        return parser
 
 
 def _m2ts_cached_pts_dur(m2ts_path: str) -> tuple[Optional[int], Optional[int]]:
-    key = _m2ts_cache_key(m2ts_path)
-    if key in _M2TS_PTS_DUR_CACHE:
-        return _M2TS_PTS_DUR_CACHE[key]
-    pts: Optional[int] = None
-    dur90: Optional[int] = None
+    parser = _cached_m2ts_parser(m2ts_path)
+    if parser is None:
+        return None, None
     try:
-        if m2ts_path and os.path.isfile(m2ts_path):
-            m2 = M2TS(m2ts_path)
-            pts = m2.get_first_pts(m2ts=True)
-            try:
-                dur90 = int(m2.get_duration())
-            except Exception:
-                dur90 = None
-    except Exception:
-        pts, dur90 = None, None
-    _M2TS_PTS_DUR_CACHE[key] = (pts, dur90)
-    return pts, dur90
-
+        return parser.get_first_pts(m2ts=True), int(parser.get_duration())
+    except (OSError, TypeError, ValueError):
+        return None, None
 
 def _mpls_play_rows_cached(mpls_path: str) -> list:
-    key = _m2ts_cache_key(mpls_path)
+    key = _normalized_media_path(mpls_path)
     if key in _MPLS_PLAY_ROWS_CACHE:
         return _MPLS_PLAY_ROWS_CACHE[key]
     pr: list = []
@@ -575,106 +579,45 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
 
     @staticmethod
     def _m2ts_track_streams(m2ts_path: str) -> list[dict[str, object]]:
-        if not m2ts_path or not os.path.exists(m2ts_path):
-            return []
-        key = os.path.normpath(m2ts_path)
-        try:
-            st = os.stat(key)
-            sig = (int(st.st_size), int(st.st_mtime_ns))
-        except OSError:
+        parser = _cached_m2ts_parser(m2ts_path)
+        if parser is None:
             return []
         try:
-            with _svc_cls()._m2ts_track_info_cache_lock:
-                cached = _svc_cls()._m2ts_track_info_cache.get(key)
-                if cached and cached[0] == sig:
-                    out_cached = [dict(x) for x in (cached[1] or [])]
-                    for r in out_cached:
-                        if str(r.get('codec_type') or '') == 'subtitles':
-                            r['codec_type'] = 'subtitle'
-                    return out_cached
-        except Exception:
-            pass
-        try:
-            tracks = M2TS(key).get_tracks_info()
-        except Exception:
+            tracks = parser.get_tracks_info()
+        except (OSError, TypeError, ValueError):
             return []
-        out: list[dict[str, object]] = []
-        for i, t in enumerate(tracks or []):
-            if not isinstance(t, dict):
-                continue
-            row = dict(t)
+        streams: list[dict[str, object]] = []
+        for index, track in enumerate(tracks):
+            row = dict(track)
             try:
-                pid = int(row.get('pid'))
-            except Exception:
+                pid = int(row['pid'])
+            except (KeyError, TypeError, ValueError):
                 pid = None
-            # Keep M2TS / internal ``subtitle`` (ffprobe JSON may use ``subtitles`` elsewhere).
             row['codec_type'] = str(row.get('codec_type') or '')
-            row['index'] = i
+            row['index'] = index
             row['id'] = f'0x{pid:04x}' if pid is not None else ''
-            out.append(row)
-        try:
-            with _svc_cls()._m2ts_track_info_cache_lock:
-                _svc_cls()._m2ts_track_info_cache[key] = (sig, [dict(x) for x in out])
-        except Exception:
-            pass
-        return out
+            streams.append(row)
+        return streams
 
     @staticmethod
     def _m2ts_duration_90k(m2ts_path: str) -> int:
-        key = os.path.normpath(str(m2ts_path or ''))
-        if not key:
+        parser = _cached_m2ts_parser(m2ts_path)
+        if parser is None:
             return 0
         try:
-            st = os.stat(key)
-            sig = (int(st.st_size), int(st.st_mtime_ns))
-        except Exception:
+            return int(parser.get_duration())
+        except (OSError, TypeError, ValueError):
             return 0
-        try:
-            with _svc_cls()._m2ts_duration_cache_lock:
-                cached = _svc_cls()._m2ts_duration_cache.get(key)
-                if cached and cached[0] == sig:
-                    return int(cached[1])
-        except Exception:
-            pass
-        try:
-            dur90 = int(M2TS(key).get_duration())
-        except Exception:
-            dur90 = 0
-        try:
-            with _svc_cls()._m2ts_duration_cache_lock:
-                _svc_cls()._m2ts_duration_cache[key] = (sig, int(dur90))
-        except Exception:
-            pass
-        return int(dur90)
 
     @staticmethod
     def _m2ts_frame_count(m2ts_path: str) -> int:
-        key = os.path.normpath(str(m2ts_path or ''))
-        if not key:
+        parser = _cached_m2ts_parser(m2ts_path)
+        if parser is None:
             return -1
         try:
-            st = os.stat(key)
-            sig = (int(st.st_size), int(st.st_mtime_ns))
-        except Exception:
+            return int(parser.get_total_frames())
+        except (OSError, TypeError, ValueError):
             return -1
-        try:
-            with _svc_cls()._m2ts_frame_count_cache_lock:
-                cached = _svc_cls()._m2ts_frame_count_cache.get(key)
-                if cached and cached[0] == sig:
-                    return int(cached[1])
-        except Exception:
-            pass
-        try:
-            cnt = int(M2TS(key).get_total_frames())
-        except Exception:
-            cnt = -1
-        try:
-            with _svc_cls()._m2ts_frame_count_cache_lock:
-                _svc_cls()._m2ts_frame_count_cache[key] = (sig, int(cnt))
-        except Exception:
-            pass
-        return int(cnt)
-
     @staticmethod
     def _video_frame_count_static(media_path: str) -> int:
         if not media_path or not os.path.exists(media_path):
@@ -2095,7 +2038,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         mp = str(mpls_path or '').strip()
         if not mp or not mp.lower().endswith('.mpls') or not os.path.isfile(mp):
             return ''
-        ck = (_m2ts_cache_key(mp), round(float(w0), 4), round(float(w1), 4))
+        ck = (_normalized_media_path(mp), round(float(w0), 4), round(float(w1), 4))
         if ck in _MPLS_TIMELINE_DETAIL_CACHE:
             return _MPLS_TIMELINE_DETAIL_CACHE[ck]
         playlist_dir = os.path.dirname(os.path.normpath(mp))
