@@ -10,7 +10,11 @@ from src.core import find_mkvtoolnix
 from src.core import settings as core_settings
 from src.core.i18n import translate_text
 from src.exports.utils import get_vspipe_context, resolve_encoder_executable_path
-from src.runtime.audio_conversion import validate_audio_cleanup_tools, validate_audio_conversion_tools
+from src.runtime.audio_conversion import (
+    AudioEncodingSettings,
+    validate_audio_cleanup_tools,
+    validate_audio_conversion_tools,
+)
 from src.runtime.sp import SpEntry
 
 
@@ -26,6 +30,7 @@ class EncodeSettings:
     bit_depth: str
     use_getnative: bool
     default_lossless_audio_codec: str
+    audio_encoding: AudioEncodingSettings = AudioEncodingSettings()
 
 
 @dataclass(frozen=True)

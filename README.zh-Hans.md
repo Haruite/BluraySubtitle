@@ -6,6 +6,9 @@
 
 Windows x64 版本使用目录包发布。请完整解压发布压缩包，然后运行
 `BluraySubtitle_windows_x64.exe`；不要将它与旁边的 `_internal` 目录分离。
+首次启动时，打包的 `config.default.json` 会在可执行文件旁创建可写的
+`config.json`；源码运行时则使用仓库根目录。程序目录必须可写；配置无效时程序会
+明确报错并保留原文件，不会覆盖。
 
 Windows x64 下载：
 
@@ -40,6 +43,8 @@ BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 
 
 - **中英文切换**（English / 简体中文）。
 - **主题切换**：浅色 / 深色 / 彩色（支持透明度调节）。
+- 右上角的**设置**窗口包含常规、路径、高级、外部工具和手动检查更新选项。
+- 应用设置及窗口大小和位置会保存在 `config.json` 中。
 - 以表格为核心的紧凑工作流。
 - 点击底部按钮即开始操作，不阻塞 UI。
 - 界面配置用于内部处理，所见即所得。
@@ -80,14 +85,16 @@ BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 
 - 最终分集名称严格使用界面中显示的名称；省略扩展名时补充 `.mkv`，无效文件名直接报错。
 - 主命令及 README 记录的 fallback 无法生成全部计划输出时，Remux 会报错停止，不会使用输出目录中的无关文件代替。
 - “补全蓝光目录”按照界面当前设置执行。
-- Remux 保持已选择的有损音轨不变。“将无损音轨转换为 FLAC”默认启用，在正片和 SP 输出全部完成后
+- Remux 保持已选择的有损音轨不变。“将无损音轨转换为 FLAC”默认启用（可在“高级”中配置启动状态），
+  在正片和 SP 输出全部完成后
   将已选择的无损音轨重新压缩为 FLAC；关闭时保留已选择的源音轨。Remux 不使用 Encode 的 AAC/Opus
-  选项。所有 FLAC 输出都会优先使用支持多线程的独立 `flac` 编码器；编码器不可用或失败时才回退到
-  `ffmpeg`。两种 FLAC 编码都使用压缩级别 8；FFmpeg 的 level 12 会显著增加 Remux 时间，因此不会使用。
-  FFmpeg 音频转换输出会完整显示在终端中。TrueHD 和 DTS 等压缩无损源在交给独立 `flac` 编码前仍可能
-  由 `ffmpeg` 解码。DTS 系列音轨仅在 FLAC 不大于提取出的 DTS 时才替换源音轨；如果 FLAC 更大，则删除
-  FLAC 并保留原 DTS。PCM 和 TrueHD/MLP 成功转换出的 FLAC 即使更大也仍然保留。TrueHD Atmos 只有在
-  `truehdd` 成功解码 presentation 2 后才会转换；`truehdd` 不可用或失败时保留原 TrueHD 音轨。
+  选项。所有 FLAC 输出都会优先使用支持多线程的独立 `flac` 编码器，并自动使用检测到的逻辑 CPU 线程数；
+  编码器不可用或失败时才回退到 `ffmpeg`。两种 FLAC 编码默认级别都是 8，可在“高级”设置中分别修改。
+  FFmpeg 音频转换输出会完整显示在终端中。TrueHD 和 DTS 等压缩无损源在交给
+  独立 `flac` 编码前仍可能由 `ffmpeg` 解码。DTS 系列音轨仅在 FLAC 不大于提取出的 DTS 时才替换源音轨；
+  如果 FLAC 更大，则删除 FLAC 并保留原 DTS。PCM 和 TrueHD/MLP 成功转换出的 FLAC 即使更大也仍然保留。
+  TrueHD Atmos 只有在 `truehdd` 成功解码 presentation 2 后才会转换；`truehdd` 不可用或失败时保留原
+  TrueHD 音轨。
   启用“混流 Dolby Vision”时，兼容的基础层和增强层会合并为 Profile 8.1；关闭时不包含增强层。
 - 混流完成后，程序会把“编辑轨道”保存的语言应用到实际包含的视频、音频和字幕轨道并验证结果；映射、工具或验证失败时会中止当前任务并删除该任务新建的主输出。
 
@@ -105,6 +112,10 @@ BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 
   - 输出视频位深（x264 - 8 / 10 bit, x265 - 8 / 10 / 12 bit, SvtAv1 - 8 / 10 / 12? bit）
   - 压制工具参数预设与自定义
   - 无损音频转换（flac / aac / opus）
+  - 启动时的编码器、位深、预设和预设参数来自“高级”设置；启动后每个任务仍以 Encode
+    页面当前可见的控件值为准
+  - 启动时的无损音频目标、字幕封装方式和 getnative 复选框同样来自“高级”设置，并可在
+    启动任务前继续修改
 - PCM、TrueHD/MLP、DTS 系列和 FLAC 等无损音轨使用“编辑轨道”中逐轨显示的 FLAC/AAC/Opus 选项；
   有损音轨保持不变。TrueHD Atmos 只有在 `truehdd` 成功解码 presentation 2 后才会转换；`truehdd` 不可用或解码失败时保留原 TrueHD 音轨。选择 FLAC 时同样应用上述 DTS/FLAC 体积规则。最终 Encode 混流同样执行上述静音/重复音轨清理；原盘暂存 Remux 不处理音频。其他已选择的音频转换失败时会中止当前行。Remux 来源中实际转换缺少必需工具时，会在任务启动前提示。
 - 字幕封装：外挂 / 内挂 / 内嵌

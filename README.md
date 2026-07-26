@@ -7,6 +7,10 @@ Development: [mandatory code modification standards](docs/development/code-stand
 The Windows x64 release is a one-folder package. Extract the complete archive,
 then run `BluraySubtitle_windows_x64.exe` without moving it away from the
 adjacent `_internal` directory.
+On first launch, the packaged `config.default.json` creates a writable
+`config.json` beside the executable. Source runs use the repository root instead.
+The program directory must therefore be writable; an invalid configuration is
+reported and left untouched.
 
 Windows x64 downloads:
 
@@ -39,8 +43,11 @@ It brings the following five areas of functionality together in one application:
 
 ### UI / Interaction
 
-- **Language**: English / Simplified Chinese.
+- **Language**: English / 简体中文 (native language names).
 - **Themes**: Light / Dark / Colorful (with opacity).
+- The top-right **Settings** dialog contains General, Paths, Advanced, External
+  tools, and manual update options.
+- Application settings and window size/position are remembered in `config.json`.
 - **Table-centered compact** workflow.
 - Press the **bottom** button to start work; the UI **stays responsive** while jobs run.
 - On-screen settings drive internal processing—**what you see is what you get**.
@@ -90,16 +97,18 @@ current GUI setting. After muxing, the language values saved by **Edit tracks** 
 audio, and subtitle tracks and then verified. A mapping, tool, or verification failure stops that job and removes its
 newly created main outputs.
 
-Remux keeps selected lossy audio unchanged. Its **Convert lossless audio to FLAC** option is enabled by default and
+Remux keeps selected lossy audio unchanged. Its **Convert lossless audio to FLAC** option is enabled by default
+(the startup state is configurable under **Advanced**) and
 recompresses selected lossless tracks to FLAC after the main and SP outputs are complete; disabling it preserves the
 selected source audio. Remux never uses Encode's AAC/Opus choices. All FLAC output prefers the standalone
-multithreaded `flac` encoder and falls back to `ffmpeg` if that encoder is unavailable or fails. Both FLAC encoders use
-compression level 8; FFmpeg level 12 is deliberately avoided because it can greatly increase Remux time. FFmpeg audio
-conversion output remains visible in the terminal. `ffmpeg` may still decode compressed sources such as TrueHD and
-DTS before standalone FLAC encoding. A DTS-family track is replaced only when its FLAC output is no larger than the
-extracted DTS; otherwise the original DTS track is retained. Successful PCM and TrueHD/MLP conversions remain FLAC
-even when the FLAC is larger. TrueHD Atmos is converted only after `truehdd` successfully decodes presentation 2; if
-`truehdd` is unavailable or fails, the original
+multithreaded `flac` encoder, which automatically uses the detected number of logical CPU threads, and falls back to
+`ffmpeg` if that encoder is unavailable or fails. Both FLAC encoders default to level 8 and can be configured
+independently on the **Advanced** settings page. FFmpeg audio conversion output remains visible in the terminal.
+`ffmpeg` may still decode compressed sources such as TrueHD and DTS before
+standalone FLAC encoding. A
+DTS-family track is replaced only when its FLAC output is no larger than the extracted DTS; otherwise the original DTS
+track is retained. Successful PCM and TrueHD/MLP conversions remain FLAC even when the FLAC is larger. TrueHD Atmos is
+converted only after `truehdd` successfully decodes presentation 2; if `truehdd` is unavailable or fails, the original
 TrueHD track is kept. With **Mux Dolby Vision** enabled, compatible base/enhancement layers are combined as profile
 8.1; when disabled, the enhancement layer is not included.
 
@@ -124,6 +133,12 @@ Encode options include:
   - SvtAv1: 8 / 10 / 12? bit (see in-app notes)
 - Encoder **presets** and **custom** parameters
 - **Lossless audio recompression**: **FLAC / AAC / Opus**
+- The startup encoder, bit depth, preset, and preset parameters come from
+  **Advanced** settings. After startup, the visible Encode controls remain
+  authoritative for every task.
+- The startup lossless-audio target, subtitle packaging mode, and getnative
+  checkbox also come from **Advanced** settings and remain freely editable
+  before launch.
 - Lossless PCM, TrueHD/MLP, DTS-family, and FLAC tracks use the per-track FLAC/AAC/Opus choice shown in
   **Edit tracks**. Lossy audio is kept unchanged. TrueHD Atmos is converted only after `truehdd` successfully decodes
   presentation 2; if `truehdd` is unavailable or fails, the original TrueHD track is kept. Other selected conversion

@@ -17,6 +17,7 @@ from src.domain import MKV, Subtitle
 from src.exports.utils import get_index_to_m2ts_and_offset, append_ogm_chapter_lines, force_remove_folder, \
     force_remove_file, print_terminal_line, print_exc_terminal, get_time_str, parse_time_to_seconds, run_command
 from .service_base import BluraySubtitleServiceBase
+from src.runtime.audio_conversion import AudioEncodingSettings
 from src.runtime.sp import SpJob, media_track_key
 from .. import TaskCancelled
 
@@ -936,6 +937,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
             jobs: list[SpJob],
             cancel_event: Optional[threading.Event] = None,
             progress_cb: Optional[Callable[[int, str], None]] = None,
+            audio_encoding: AudioEncodingSettings = AudioEncodingSettings(),
     ) -> list[tuple[int, str]]:
         """Execute the preflighted SP rows in visible order and require every planned output."""
         created_outputs: list[tuple[int, str]] = []
@@ -1072,7 +1074,10 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                     if len(audio_tracks) == 1 and not subtitle_tracks:
                         if output_extension == '.flac':
                             extraction_ok = _svc_cls()._compress_audio_stream_to_flac(
-                                job.first_m2ts_path, audio_tracks[0], output_path,
+                                job.first_m2ts_path,
+                                audio_tracks[0],
+                                output_path,
+                                audio_encoding,
                             )
                         else:
                             os.makedirs(os.path.dirname(output_path), exist_ok=True)

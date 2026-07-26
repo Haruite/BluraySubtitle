@@ -20,6 +20,8 @@ from PyQt6.QtWidgets import QApplication, QVBoxLayout, QWidget, QHBoxLayout, QLa
     QProgressDialog, QProgressBar, QFileDialog
 
 from src.core import APP_TITLE, BDMV_LABELS, SUBTITLE_LABELS, ENCODE_SP_LABELS
+from src.core.app_config import FUNCTION_PAGE_IDS, app_config_path, default_app_config, load_app_config
+from src.core.i18n import translate_text
 import src.core.settings as core_settings
 from src.exports.utils import print_exc_terminal, force_remove_file
 from src.runtime.gui_runtime_classes.custom_box import CustomBox
@@ -31,6 +33,22 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
     def __init__(self):
         super().__init__()
         self.setObjectName('mainWindow')
+        self._app_config_path = app_config_path()
+        self._app_config_load_failed = False
+        self._app_config_errors: list[Exception] = []
+        try:
+            self._app_config = load_app_config(self._app_config_path)
+        except Exception as error:
+            self._app_config = default_app_config()
+            self._app_config_load_failed = True
+            self._app_config_errors.append(error)
+        self._output_folder_values = {
+            3: self._app_config.paths.remux_output,
+            4: self._app_config.paths.encode_output,
+            5: '',
+        }
+        self._auto_output_folders = {3: '', 4: '', 5: ''}
+        self._window_geometry_restored = False
         self.altered = False
         self._sp_index_by_bdmv: dict[int, int] = {}
         self._chapter_checkbox_states: dict[str, list[bool]] = {}  # Save chapter checkbox states
@@ -45,9 +63,10 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.setMinimumWidth(860)
         self.setMinimumHeight(820)
         self.resize(1000, 1000)
-        self._geometry = self.saveGeometry()
-        self._language_code = 'en'
-        core_settings.CURRENT_UI_LANGUAGE = 'en'
+        self._language_code = self._app_config.ui.language
+        self._theme_mode = self._app_config.ui.theme
+        self._colorful_opacity = self._app_config.ui.opacity / 100.0
+        core_settings.CURRENT_UI_LANGUAGE = self._language_code
 
         app = QApplication.instance()
         if app:
@@ -65,8 +84,8 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.language_label = QLabel('Language', language_row)
         self.language_combo = QComboBox(language_row)
         self.language_combo.addItem('English', 'en')
-        self.language_combo.addItem(self.t('Simplified Chinese'), 'zh')
-        self.language_combo.setCurrentIndex(0)
+        self.language_combo.addItem(translate_text('Simplified Chinese', 'zh'), 'zh')
+        self.language_combo.setCurrentIndex(0 if self._language_code == 'en' else 1)
         self.language_combo.currentIndexChanged.connect(lambda _=None: self._on_language_changed())
         language_layout.addWidget(self.language_label)
         language_layout.addWidget(self.language_combo)
@@ -76,7 +95,8 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.theme_combo.addItem('Light', 'light')
         self.theme_combo.addItem('Dark', 'dark')
         self.theme_combo.addItem('Colorful', 'colorful')
-        self.theme_combo.setCurrentIndex(0)
+        theme_index = {'light': 0, 'dark': 1, 'colorful': 2}.get(self._theme_mode, 0)
+        self.theme_combo.setCurrentIndex(theme_index)
         self.theme_combo.currentIndexChanged.connect(lambda _=None: self._on_theme_changed())
         language_layout.addWidget(self.theme_label)
         language_layout.addWidget(self.theme_combo)
@@ -92,16 +112,17 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.font_size_combo.addItem('12', 12)
         self.font_size_combo.addItem('13', 13)
         self.font_size_combo.addItem('14', 14)
-        self.font_size_combo.setCurrentIndex(1)
+        font_index = self.font_size_combo.findData(self._app_config.ui.font_size)
+        self.font_size_combo.setCurrentIndex(font_index if font_index >= 0 else 4)
         self.font_size_combo.currentIndexChanged.connect(lambda _=None: self._on_font_size_changed())
-        self._apply_ui_font_size(10)
+        self._apply_ui_font_size(self._app_config.ui.font_size)
         language_layout.addWidget(self.font_size_label)
         language_layout.addWidget(self.font_size_combo)
         language_layout.addSpacing(12)
         self.opacity_label = QLabel('Opacity', language_row)
         self.opacity_slider = QSlider(Qt.Orientation.Horizontal, language_row)
         self.opacity_slider.setRange(60, 100)
-        self.opacity_slider.setValue(int(getattr(self, '_colorful_opacity', 0.94) * 100))
+        self.opacity_slider.setValue(self._app_config.ui.opacity)
         self.opacity_slider.setFixedWidth(140)
         self.opacity_slider.valueChanged.connect(self._on_opacity_changed)
         self.opacity_slider.sliderReleased.connect(
@@ -117,6 +138,9 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         )
         language_layout.addWidget(self.third_party_notices_btn)
         language_layout.addStretch(1)
+        self.settings_button = QPushButton(self.t('Settings'), language_row)
+        self.settings_button.clicked.connect(lambda _=None: self._show_settings_dialog())
+        language_layout.addWidget(self.settings_button)
         self.layout.addWidget(language_row)
 
         function_button = QGroupBox(self.t('Function'), self)
@@ -138,9 +162,10 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.function_tabbar.addTab(self.t("Blu-ray DIY"))
         self.function_tabbar.addTab(self.t("Merge Subtitles"))
         self.function_tabbar.addTab(self.t("Add Chapters To MKV"))
-        self.function_tabbar.setCurrentIndex(0)
         self._function_id_order = [3, 4, 5, 1, 2]
-        self._selected_function_id = 3
+        startup_function_id = FUNCTION_PAGE_IDS[self._app_config.startup.function_page]
+        self.function_tabbar.setCurrentIndex(self._function_id_order.index(startup_function_id))
+        self._selected_function_id = startup_function_id
         self.function_tabbar.currentChanged.connect(lambda _=None: self.on_select_function())
         h_layout.addWidget(self.function_tabbar)
         self.layout.addWidget(function_button)
@@ -177,7 +202,10 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
 
         self.series_mode_radio = QRadioButton("Series mode", mode_row)
         self.movie_mode_radio = QRadioButton("Movie mode", mode_row)
-        self.series_mode_radio.setChecked(True)
+        if self._app_config.startup.episode_mode == 'movie':
+            self.movie_mode_radio.setChecked(True)
+        else:
+            self.series_mode_radio.setChecked(True)
 
         mode_layout.addWidget(self.series_mode_radio)
 
@@ -683,8 +711,9 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.output_folder_path = QLineEdit()
         self.output_folder_path.setMinimumWidth(200)
         self.output_folder_path.setAcceptDrops(False)
-        self._auto_output_folder = ''
-        self.output_folder_path.textEdited.connect(lambda _: setattr(self, '_output_folder_user_edited', True))
+        self.output_folder_path.setText(
+            self._output_folder_values.get(self.get_selected_function_id(), '')
+        )
         self._remux_cmd_refresh_timer = QTimer(self)
         self._remux_cmd_refresh_timer.setSingleShot(True)
         self._remux_cmd_refresh_timer.setInterval(300)
@@ -716,15 +745,21 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self._track_lossless_audio_config: dict[str, dict[str, str]] = {}
         self._track_language_config: dict[str, dict[str, str]] = {}
         self._reposition_subtitle_path_box()
-        self._apply_language('en')
-        self._apply_theme(getattr(self, '_theme_mode', 'light'))
-        # Default tab is Blu-ray Remux, but table2 is constructed for subtitle mode; without this,
-        # on_select_function returns early (last_function_id == function_id) and columns stay wrong
-        # until the user switches tabs.
+        self._apply_saved_ui_preferences()
+        self._apply_saved_encode_defaults()
+        # Table2 is initially constructed for subtitle mode, so initialize the configured startup page explicitly.
         try:
             self.on_select_function(force=True, keep_inputs=True, keep_state=False)
         except Exception:
             pass
+        try:
+            self._restore_window_geometry()
+        except Exception as error:
+            self._app_config_load_failed = True
+            self._app_config_errors.append(error)
+        if self._app_config_errors:
+            errors = '\n'.join(str(error) for error in self._app_config_errors)
+            QTimer.singleShot(0, lambda: self._show_app_config_error('load', errors))
 
     def _reposition_subtitle_path_box(self):
         outer = getattr(self, '_label2_outer_layout', None)
@@ -841,6 +876,11 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             pass
 
     def closeEvent(self, event):
+        if not self._app_config_load_failed:
+            try:
+                self._save_application_state()
+            except Exception as error:
+                self._show_app_config_error('save', error)
         self.delete_default_vpy_file()
         try:
             if os.path.exists('info.json'):

@@ -41,6 +41,10 @@ def add_binary(items, path, description):
 
 entry_script = required_path(PROJECT_ROOT / "src" / "main.py", "application entry point")
 getnative_vpy = required_path(PROJECT_ROOT / "src" / "vs_tools" / "getnative.vpy", "getnative.vpy")
+default_config = required_path(
+    PROJECT_ROOT / "config.default.json",
+    "default application configuration",
+)
 third_party_notices = required_path(
     PROJECT_ROOT / "legal" / "THIRD_PARTY_NOTICES.md",
     "third-party notices",
@@ -94,6 +98,8 @@ add_binary(binaries, flac_dir / "libFLAC.dll", "FLAC runtime library")
 
 
 datas = [
+    (str(default_config), "."),
+    (str(SETTINGS_PATH), "src/core"),
     (str(getnative_vpy), "src/vs_tools"),
     (str(third_party_notices), "legal"),
     # A directory source copies all of its contents beneath this destination.

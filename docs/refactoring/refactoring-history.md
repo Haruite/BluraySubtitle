@@ -537,7 +537,7 @@ Made the GUI/service split contracts reproducible, completed the remaining sourc
 - Episode-linked SP accepts only a valid `stream_id` or `original_transport_stream_id` as the transport PID. A selected SP track without either value fails explicitly; `properties.number` is no longer interpreted as a PID.
 - Blu-ray Remux now captures a default-enabled **Convert lossless audio to FLAC** option. After main chapters and all SP muxing are complete, every final Matroska output converts selected lossless audio to FLAC in place through the shared verified audio pipeline; lossy audio and existing FLAC remain unchanged, and disabling the option preserves source audio. AAC and Opus remain Encode-only choices.
 - Blu-ray Encode explicitly disables Remux FLAC conversion in its staging request. Its staged source audio remains untouched until video encoding succeeds and the Encode final mux performs the configured per-track audio conversion.
-- The shared FLAC target now uses the configured standalone `flac` encoder at compression level 8 with `FLAC_THREADS`. TrueHD/DTS-family inputs are decoded to PCM first when necessary; an unavailable or failed standalone encode falls back to `ffmpeg` at compression level 8, and partial FLAC output is removed before fallback. FFmpeg output for actual audio decoding and encoding remains visible.
+- The shared FLAC target now uses the configured standalone `flac` encoder at compression level 8 with an explicit thread count. TrueHD/DTS-family inputs are decoded to PCM first when necessary; an unavailable or failed standalone encode falls back to `ffmpeg` at compression level 8, and partial FLAC output is removed before fallback. FFmpeg output for actual audio decoding and encoding remains visible.
 
 ### Documentation and i18n
 
@@ -711,3 +711,96 @@ Restored the required silent-track, duplicate-track, and DTS/FLAC size decisions
 - Run Remux on a disposable output using a disc with known silent and duplicated tracks. Compare `mkvmerge -J` track order, codec, language, channel count, flags, and delay against the GUI selection, confirming only the documented tracks are removed.
 - Repeat with FLAC conversion disabled, and with an Encode task, to verify final cleanup while the Blu-ray staging MKV retains all selected source audio.
 - Measure full-track analysis time on a title with several long audio tracks. The source disc is read-only; only the chosen output and task-owned temporary files may be changed.
+
+## New Feature — Application Settings
+
+Date: 2026-07-26
+Commit: Included in this change
+
+### Scope
+
+Added a complete application-settings system: versioned configuration,
+window/UI-state persistence, startup and encoding defaults, editable external
+tool paths, and a manual GitHub Release update check.
+
+### Structural Changes
+
+- Added `src/core/app_config.py` with frozen preference records, schema
+  validation, source/frozen path resolution, first-run template loading, and
+  atomic sibling-file replacement.
+- Added tracked `config.default.json` and ignored the writable root-level
+  `config.json`. Frozen builds package the default template under `_MEIPASS`,
+  while the running application creates and updates `config.json` beside the
+  executable.
+- Added a standalone settings dialog with General, Paths, Advanced, and
+  External Tools pages. The External Tools page edits the effective
+  `src/core/settings.py`, validates Python syntax, and saves it atomically.
+- Frozen builds package the settings source as a template, seed an editable
+  copy beside the executable, and load it as an override on the next launch.
+- Extended the configuration with validated audio, Remux, and Encode
+  preferences. Existing schema-version-1 files without the new sections load
+  with backward-compatible defaults.
+- Centralized the built-in x264, x265, and SVT-AV1 preset maps, plus the
+  application-owned version and title.
+- Added a settings/state GUI mixin, regenerated the GUI base contract, and
+  removed state that could not distinguish Remux, Encode, and DIY output pages.
+- Added immutable `AudioEncodingSettings` to Remux/Encode requests and threaded
+  it through main, SP, direct-audio, and final-mux workflows.
+- Added an asynchronous Qt request for GitHub's latest published full Release.
+
+### Behavior Changes
+
+- Clean window close stores Qt window geometry, language, theme, font size, and
+  opacity. Successfully restored geometry bypasses first-run fitting and
+  centering.
+- Configured startup page, Series/Movie mode, Remux/Encode output folders, and
+  Encode/Remux defaults initialize visible controls. Tasks continue to capture
+  current visible values instead of rereading configuration.
+- Remux, Encode, and DIY retain independent output-folder values during the
+  current session.
+- Invalid configuration is reported and kept unchanged. A successful explicit
+  save can replace it; an ordinary close cannot overwrite a failed load.
+- Language selectors use native names, and dark-mode tabs have readable text
+  with distinct hover and selected backgrounds.
+- Standalone and FFmpeg FLAC levels default to 8 and are independently
+  configurable from 0–8 and 0–12. Standalone FLAC detects logical CPU threads.
+- FDK-AAC and Opus value 0 keeps automatic behavior; positive values are
+  explicit kbps targets. The settings page includes bitrate guidance.
+- The External Tools page checks active paths, lists missing tools, and points
+  users to the platform setup script.
+- Manual update checks read only the GitHub Release `tag_name`, compare numeric
+  versions asynchronously with a 15-second timeout, and never download files.
+  A newer result links to GitHub Releases and reminds the user to copy
+  `config.json` to the new program directory.
+
+### Documentation and i18n
+
+- Updated both README and code-standard versions with configuration placement,
+  first-run behavior, settings boundaries, audio defaults, update checking, and
+  continued visible-GUI authority.
+- Added English/Simplified Chinese text for all settings controls, guidance,
+  validation, persistence, external-tool, and update states.
+
+### Verification
+
+- Added focused coverage for configuration creation/loading/validation,
+  persistence and frozen paths, settings-dialog editing, startup initialization,
+  audio command values, external-tool detection, version comparison, manual
+  request start, release linking, and the `config.json` migration reminder.
+- The complete repository run passed all 208 tests. Python compilation, i18n
+  and split-contract audits, `git diff --check`, and CRLF verification passed.
+
+### Manual Checks Still Required
+
+- Build and launch the Windows one-folder package from a writable disposable
+  directory. Confirm packaged templates seed `config.json` and editable
+  `src/core/settings.py` files beside the executable.
+- Check window geometry on single- and multi-monitor layouts, all settings in
+  both languages, invalid/unwritable configuration handling, and every startup
+  encoder/bit-depth/default combination.
+- Temporarily configure a missing external tool and confirm the correct setup
+  script guidance, then restore the path.
+- Check updates once offline, once at the current version, and once against a
+  temporarily lower local version. Confirm the dialogs and external link.
+- Run short disposable Remux/Encode samples with non-default and automatic
+  audio values, then inspect terminal commands and final Matroska metadata.

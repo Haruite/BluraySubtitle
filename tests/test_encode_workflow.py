@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from src.runtime.audio_conversion import AudioEncodingSettings
 from src.runtime.encode import EncodeRequest, EncodeRow, EncodeSettings, validate_encode_request
 from src.runtime.services import BluraySubtitle as _BluraySubtitle
 from src.runtime.services_split.encode_and_audio_tasks import EncodeAudioTasksMixin
@@ -149,6 +150,12 @@ class EncodeWorkflowTests(unittest.TestCase):
             }
             track_key = f'main::{playlist_base.with_suffix(".mpls")}'
             errors: list[str] = []
+            audio_encoding = AudioEncodingSettings(
+                flac_compression_level=6,
+                ffmpeg_flac_compression_level=10,
+                fdkaac_bitrate_kbps=320,
+                opus_bitrate_kbps=192,
+            )
             owner = SimpleNamespace(
                 output_folder_path=SimpleNamespace(text=lambda: str(output_base)),
                 bdmv_folder_path=SimpleNamespace(text=lambda: str(source_folder)),
@@ -167,6 +174,7 @@ class EncodeWorkflowTests(unittest.TestCase):
                 _current_encode_tool_and_depth=lambda: ('x265', '10'),
                 _effective_encode_params=lambda: '--crf 18',
                 _current_encode_lossless_audio_codec=lambda: 'opus',
+                _captured_audio_encoding_settings=lambda: audio_encoding,
                 get_selected_mpls_no_ext=lambda: [(str(source_folder), str(playlist_base))],
                 _configuration_for_service_run=lambda: configuration,
                 _get_episode_output_names_from_table2=lambda: ['Visible Episode'],
@@ -205,6 +213,7 @@ class EncodeWorkflowTests(unittest.TestCase):
             self.assertEqual(request.main_rows[0].audio_codec_choices, ('opus',))
             self.assertEqual(request.main_rows[0].track_language_overrides, (('1', 'jpn'),))
             self.assertEqual(request.settings.default_lossless_audio_codec, 'opus')
+            self.assertEqual(request.settings.audio_encoding, audio_encoding)
             self.assertFalse(request.mux_dolby_vision)
             self.assertFalse(hasattr(owner, 'checkbox1'))
 

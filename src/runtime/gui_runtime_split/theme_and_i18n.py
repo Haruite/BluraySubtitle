@@ -36,7 +36,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
         self.language_label.setText(self.t('Language'))
         self.language_combo.blockSignals(True)
         self.language_combo.setItemText(0, 'English')
-        self.language_combo.setItemText(1, self.t('Simplified Chinese'))
+        self.language_combo.setItemText(1, translate_text('Simplified Chinese', 'zh'))
         idx = 0 if current_code == 'en' else 1
         self.language_combo.setCurrentIndex(idx)
         self.language_combo.blockSignals(False)
@@ -82,7 +82,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
         app = QApplication.instance()
         if not app:
             return
-        size = max(8, min(24, int(point_size)))
+        size = max(6, min(24, int(point_size)))
         self._ui_font_point_size = size
         f = app.font()
         if not isinstance(f, QFont):
@@ -270,6 +270,11 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
             "QMenu::item:selected{background:#3a5fcd;}"
             "QProgressBar{background:#2a2a2a;border:1px solid #3a3a3a;text-align:center;color:#e6e6e6;}"
             "QProgressBar::chunk{background:#3a5fcd;}"
+            "QTabBar::tab{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;"
+            "border-bottom:none;padding:6px 10px;}"
+            "QTabBar::tab:hover{background:#33333d;color:#ffffff;}"
+            "QTabBar::tab:selected{background:#3a5fcd;color:#ffffff;border:1px solid #5b7fff;"
+            "border-bottom:none;font-weight:700;}"
             "QToolTip{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;}"
         )
         self._refresh_function_tabbar_theme()

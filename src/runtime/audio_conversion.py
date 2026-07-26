@@ -7,12 +7,33 @@ import os
 import re
 import shutil
 import tempfile
+from dataclasses import dataclass
 from typing import Optional
 
 from src.core import find_mkvtoolnix, mkvtoolnix_ui_language_arg
 from src.core import settings as core_settings
 from src.core.i18n import translate_text
 from src.exports.utils import mkv_codec_id_is_dts_family, run_command
+
+
+@dataclass(frozen=True)
+class AudioEncodingSettings:
+    """Audio encoder values captured from application settings at task launch."""
+
+    flac_compression_level: int = 8
+    ffmpeg_flac_compression_level: int = 8
+    fdkaac_bitrate_kbps: int = 0
+    opus_bitrate_kbps: int = 0
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.flac_compression_level <= 8:
+            raise ValueError("FLAC compression level must be from 0 to 8")
+        if not 0 <= self.ffmpeg_flac_compression_level <= 12:
+            raise ValueError("FFmpeg FLAC compression level must be from 0 to 12")
+        if not 0 <= self.fdkaac_bitrate_kbps <= 1024:
+            raise ValueError("FDK-AAC bitrate must be from 0 to 1024 kbps")
+        if not 0 <= self.opus_bitrate_kbps <= 1024:
+            raise ValueError("Opus bitrate must be from 0 to 1024 kbps")
 
 
 def _identify_tracks(media_path: str) -> list[dict[str, object]]:
@@ -347,6 +368,7 @@ def mux_with_audio_conversion(
         encoded_video_file: str = '',
         subtitle_file: str = '',
         subtitle_language: str = '',
+        audio_encoding: AudioEncodingSettings = AudioEncodingSettings(),
 ) -> None:
     """Clean selected audio, convert requested lossless tracks, and mux atomically."""
     source_path = os.path.abspath(os.path.normpath(source_file))
@@ -535,7 +557,11 @@ def mux_with_audio_conversion(
                 if flac_encoder:
                     try:
                         flac_succeeded = run_command([
-                            flac_encoder, '-8', '-j', str(core_settings.FLAC_THREADS), '-f',
+                            flac_encoder,
+                            f'-{audio_encoding.flac_compression_level}',
+                            '-j',
+                            str(os.cpu_count() or 1),
+                            '-f',
                             '-o', converted_audio, flac_input,
                         ], log_template='Audio command: {command}').returncode == 0 and (
                             os.path.isfile(converted_audio) and os.path.getsize(converted_audio) > 0
@@ -551,7 +577,9 @@ def mux_with_audio_conversion(
                         raise FileNotFoundError(translate_text('ffmpeg executable does not exist'))
                     conversion_command = [
                         ffmpeg, '-y', '-i', flac_input, '-map', '0:a:0', '-c:a', 'flac',
-                        '-compression_level', '8', converted_audio,
+                        '-compression_level',
+                        str(audio_encoding.ffmpeg_flac_compression_level),
+                        converted_audio,
                     ]
             elif target_codec == 'opus':
                 if not ffmpeg:
@@ -573,7 +601,12 @@ def mux_with_audio_conversion(
                 ]
                 if channels > 2:
                     conversion_command.extend(['-mapping_family', '1'])
-                conversion_command.extend(['-b:a', '128k' if channels <= 2 else '256k', converted_audio])
+                opus_bitrate = (
+                    f'{audio_encoding.opus_bitrate_kbps}k'
+                    if audio_encoding.opus_bitrate_kbps
+                    else ('128k' if channels <= 2 else '256k')
+                )
+                conversion_command.extend(['-b:a', opus_bitrate, converted_audio])
             else:
                 if not ffmpeg:
                     raise FileNotFoundError(translate_text('ffmpeg executable does not exist'))
@@ -600,7 +633,18 @@ def mux_with_audio_conversion(
                         )
                     )
                 converted_audio = os.path.join(work_folder, f'track-{track_id}.m4a')
-                conversion_command = [fdkaac, '-m', '5', '-o', converted_audio, wave_path]
+                fdkaac_rate_control = (
+                    ['-b', str(audio_encoding.fdkaac_bitrate_kbps * 1000)]
+                    if audio_encoding.fdkaac_bitrate_kbps
+                    else ['-m', '5']
+                )
+                conversion_command = [
+                    fdkaac,
+                    *fdkaac_rate_control,
+                    '-o',
+                    converted_audio,
+                    wave_path,
+                ]
 
             if conversion_command is not None and (
                     run_command(conversion_command, log_template='Audio command: {command}').returncode != 0
@@ -836,6 +880,7 @@ def mux_with_audio_conversion(
 
 
 __all__ = [
+    'AudioEncodingSettings',
     'mux_with_audio_conversion',
     'validate_audio_cleanup_tools',
     'validate_audio_conversion_tools',

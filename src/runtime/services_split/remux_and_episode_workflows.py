@@ -1010,6 +1010,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             sp_jobs,
             cancel_event=cancel_event,
             progress_cb=report_sp_output,
+            audio_encoding=request.audio_encoding,
         )
         task_outputs = list(dict.fromkeys(
             main_outputs + [path for _entry_index, path in sp_outputs]
@@ -1047,6 +1048,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                         selected_subtitle_tracks=None,
                         audio_codec_choices=(),
                         convert_all_lossless_to_flac=request.convert_lossless_audio_to_flac,
+                        audio_encoding=request.audio_encoding,
                     )
             except Exception:
                 for output_path in task_outputs:
@@ -1220,6 +1222,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 ),
                 subtitle_path=row.subtitle_path,
                 subtitle_language=row.subtitle_language,
+                audio_encoding=request.settings.audio_encoding,
             )
             if not os.path.isfile(row.output_path):
                 raise RuntimeError(
@@ -1281,6 +1284,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                         if request.input_mode == 'remux'
                         else ()
                     ),
+                    audio_encoding=request.settings.audio_encoding,
                 )
             elif source_path.lower().endswith('.mkv'):
                 self.encode_task(
@@ -1303,6 +1307,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     ),
                     subtitle_path=row.subtitle_path,
                     subtitle_language=row.subtitle_language,
+                    audio_encoding=request.settings.audio_encoding,
                 )
                 if not os.path.isfile(row.output_path):
                     raise RuntimeError(
@@ -1459,6 +1464,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 sp_jobs,
                 cancel_event=cancel_event,
                 progress_cb=report_sp_mux,
+                audio_encoding=request.settings.audio_encoding,
             )
             staged_main_by_key = {
                 configuration_key: staged_path

@@ -3,6 +3,7 @@
 import os
 import shutil
 import sys
+from pathlib import Path
 
 
 def is_docker() -> bool:
@@ -21,13 +22,35 @@ _BUNDLE_ROOT = (
 )
 
 
+def editable_settings_path() -> Path:
+    """Return the source settings file edited by the settings dialog."""
+    if _BUNDLE_ROOT:
+        return Path(sys.executable).resolve().parent / "src" / "core" / "settings.py"
+    return Path(__file__).resolve()
+
+
+def ensure_editable_settings_file() -> Path:
+    """Create the external settings source used by frozen builds when needed."""
+    target = editable_settings_path()
+    if not _BUNDLE_ROOT or target.is_file():
+        return target
+    bundled_source = Path(_BUNDLE_ROOT) / "src" / "core" / "settings.py"
+    if not bundled_source.is_file():
+        return target
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(bundled_source, target)
+    except OSError:
+        pass
+    return target
+
+
 def _bundled_path(relative_path: str, system_path: str) -> str:
     """Use a packaged tool in frozen builds and the configured system path otherwise."""
     return os.path.join(_BUNDLE_ROOT, relative_path) if _BUNDLE_ROOT else system_path
 
 
 FLAC_PATH = _bundled_path("flac.exe", r"C:\Software\flac.exe")
-FLAC_THREADS = 20
 FFMPEG_PATH = _bundled_path("ffmpeg.exe", r"C:\Software\ffmpeg.exe")
 FFPROBE_PATH = _bundled_path("ffprobe.exe", r"C:\Software\ffprobe.exe")
 # These paths remain system defaults because the GUI can explicitly select
@@ -99,7 +122,6 @@ ENCODE_REMUX_LABELS = ["sub_path", "language", "ep_duration", "output_name", "vp
 ENCODE_REMUX_SP_LABELS = ["duration", "output_name", "vpy_path", "edit_vpy", "preview_script", "play", "edit_tracks", "edit_chapters", "edit_attachments"]
 DEFAULT_APPROX_EPISODE_DURATION_SECONDS = 24 * 60
 CURRENT_UI_LANGUAGE = "en"
-APP_TITLE = "BluraySubtitle v4.0"
 
 
 def get_mkvtoolnix_ui_language() -> str:
@@ -141,3 +163,21 @@ def find_mkvtoolnix() -> None:
     if not MKV_EXTRACT_PATH:
         default_mkv_extract_path = r"C:\Program Files\MKVToolNix\mkvextract.exe" if sys.platform == "win32" else "/usr/bin/mkvextract"
         MKV_EXTRACT_PATH = _resolve_mkvtoolnix_path(default_mkv_extract_path, "mkvextract")
+
+
+def _load_editable_settings() -> None:
+    """Apply the external settings source before frozen imports capture constants."""
+    if not _BUNDLE_ROOT or globals().get("_EDITABLE_SETTINGS_LOADING", False):
+        return
+    source_path = ensure_editable_settings_file()
+    if not source_path.is_file():
+        return
+    source = source_path.read_text(encoding="utf-8")
+    globals()["_EDITABLE_SETTINGS_LOADING"] = True
+    try:
+        exec(compile(source, str(source_path), "exec"), globals())
+    finally:
+        globals().pop("_EDITABLE_SETTINGS_LOADING", None)
+
+
+_load_editable_settings()

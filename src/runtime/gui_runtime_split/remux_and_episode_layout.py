@@ -1070,9 +1070,11 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             if hasattr(self, 'output_folder_path') and self.output_folder_path:
                 auto_output = os.path.normpath(os.path.dirname(bdmv_path)) if bdmv_path else ''
                 current_output = self.output_folder_path.text().strip()
-                last_auto = getattr(self, '_auto_output_folder', '')
+                function_id = self.get_selected_function_id()
+                auto_outputs = getattr(self, '_auto_output_folders', {})
+                last_auto = str(auto_outputs.get(function_id) or '')
                 if current_output == '' or current_output == last_auto:
-                    self._auto_output_folder = auto_output
+                    auto_outputs[function_id] = auto_output
                     if auto_output:
                         self.output_folder_path.setText(auto_output)
                     else:
@@ -1331,6 +1333,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 ),
                 mux_dolby_vision=bool(dovi_checkbox.isChecked()),
                 convert_lossless_audio_to_flac=bool(flac_checkbox.isChecked()),
+                audio_encoding=self._captured_audio_encoding_settings(),
                 track_selection_config=copy.deepcopy(getattr(self, '_track_selection_config', {}) or {}),
                 track_language_config=copy.deepcopy(getattr(self, '_track_language_config', {}) or {}),
                 ensure_tools=False,

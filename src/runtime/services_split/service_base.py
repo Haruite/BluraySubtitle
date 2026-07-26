@@ -11,6 +11,7 @@ from typing import Any, Callable, Optional
 
 
 from src.bdmv import Chapter
+from src.runtime.audio_conversion import AudioEncodingSettings
 from src.runtime.remux import RemuxMainJob, RemuxRequest
 from src.runtime.encode import EncodeRequest, EncodeRow
 from src.runtime.sp import SpEntry, SpJob
@@ -64,7 +65,7 @@ class BluraySubtitleServiceBase:
     def _build_main_episode_mkvs(self, jobs: list[RemuxMainJob], cancel_event: Optional[threading.Event]=None, *, mux_progress_base: int=0, mux_progress_span: int=380) -> list[str]:
         raise NotImplementedError
 
-    def _build_sp_outputs(self, jobs: list[SpJob], cancel_event: Optional[threading.Event]=None, progress_cb: Optional[Callable[[int, str], None]]=None) -> list[tuple[int, str]]:
+    def _build_sp_outputs(self, jobs: list[SpJob], cancel_event: Optional[threading.Event]=None, progress_cb: Optional[Callable[[int, str], None]]=None, audio_encoding: AudioEncodingSettings=AudioEncodingSettings()) -> list[tuple[int, str]]:
         raise NotImplementedError
 
     @staticmethod
@@ -87,7 +88,7 @@ class BluraySubtitleServiceBase:
         raise NotImplementedError
 
     @staticmethod
-    def _compress_audio_stream_to_flac(input_media: str, map_idx: str, out_flac: str) -> bool:
+    def _compress_audio_stream_to_flac(input_media: str, map_idx: str, out_flac: str, audio_encoding: AudioEncodingSettings=AudioEncodingSettings()) -> bool:
         raise NotImplementedError
 
     def _compute_mkv_id_to_m2ts_pid_core(self, mpls_path: str, track_configuration: dict[str, object]) -> dict[int, int]:
@@ -529,7 +530,7 @@ class BluraySubtitleServiceBase:
     def detect_dovi_mux_pair(mpls_path: str, probe_m2ts: str, mux_dolby_vision: bool) -> Optional[dict[str, object]]:
         raise NotImplementedError
 
-    def encode_task(self, output_file: str, vpy_path: str, vspipe_mode: str, encoder_mode: str, encoder_parameters: str, subtitle_mode: str, *, source_file: str, encoder: str, bit_depth: str, selected_audio_tracks: Optional[tuple[str, ...]], selected_subtitle_tracks: Optional[tuple[str, ...]], audio_codec_choices: tuple[str, ...], track_language_overrides: tuple[tuple[str, str], ...], subtitle_path: str='', subtitle_language: str='') -> None:
+    def encode_task(self, output_file: str, vpy_path: str, vspipe_mode: str, encoder_mode: str, encoder_parameters: str, subtitle_mode: str, *, source_file: str, encoder: str, bit_depth: str, selected_audio_tracks: Optional[tuple[str, ...]], selected_subtitle_tracks: Optional[tuple[str, ...]], audio_codec_choices: tuple[str, ...], track_language_overrides: tuple[tuple[str, str], ...], subtitle_path: str='', subtitle_language: str='', audio_encoding: AudioEncodingSettings=AudioEncodingSettings()) -> None:
         raise NotImplementedError
 
     def episodes_encode(self, request: EncodeRequest, cancel_event: Optional[threading.Event]=None) -> None:

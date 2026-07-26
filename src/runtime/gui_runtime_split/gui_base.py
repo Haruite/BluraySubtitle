@@ -22,7 +22,6 @@ class BluraySubtitleGuiBase(QWidget):
         super().__init__(*args, **kwargs)
         if not bool(getattr(type(self), "__init_gui_base_attrs__", False)):
             return
-        self._auto_output_folder = None
         self._bottom_message_remaining = None
         self._bottom_message_text = None
         self._bottom_message_timer = None
@@ -44,7 +43,11 @@ class BluraySubtitleGuiBase(QWidget):
         self._exe_button_default_text = None
         self._exe_button_progress_text = None
         self._exe_button_progress_value = None
-        self._geometry = None
+        self._app_config = None
+        self._app_config_errors = None
+        self._app_config_load_failed = None
+        self._app_config_path = None
+        self._auto_output_folders = None
         self._language_code = None
         self._language_updating = None
         self._last_config_inputs = None
@@ -59,6 +62,8 @@ class BluraySubtitleGuiBase(QWidget):
         self._remux_thread = None
         self._remux_worker = None
         self._selected_function_id = None
+        self._output_folder_values = None
+        self._window_geometry_restored = None
         self._selected_main_mpls_prev = None
         self._sp_index_by_bdmv = None
         self._sp_scan_cancel_event = None
@@ -121,6 +126,7 @@ class BluraySubtitleGuiBase(QWidget):
         self.movie_mode_radio = None
         self.opacity_label = None
         self.opacity_slider = None
+        self.settings_button = None
         self.output_folder_path = None
         self.output_folder_row = None
         self.remux_folder_path = None
@@ -228,6 +234,12 @@ class BluraySubtitleGuiBase(QWidget):
     def _apply_movie_mode_table2_chapter_widgets(self, row: int, labels: list[str], mpls_no_ext: str, *, connect_end_handler: bool=False) -> None:
         raise NotImplementedError
 
+    def _apply_saved_encode_defaults(self) -> None:
+        raise NotImplementedError
+
+    def _apply_saved_ui_preferences(self) -> None:
+        raise NotImplementedError
+
     def _apply_select_all_tracks_to_main_and_sp(self):
         raise NotImplementedError
 
@@ -262,6 +274,9 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _build_main_remux_cmd_template(self, mpls_path: str, bdmv_index: int, root: str, *, name_seq_index: int=0, name_seq_total: int=1) -> str:
+        raise NotImplementedError
+
+    def _captured_audio_encoding_settings(self) -> AudioEncodingSettings:
         raise NotImplementedError
 
     def _chapter_label_text(self, value: int, rows: int, has_beginning: bool, for_end: bool=False) -> str:
@@ -621,6 +636,9 @@ class BluraySubtitleGuiBase(QWidget):
     def _refresh_track_selection_config_for_selected_main(self):
         raise NotImplementedError
 
+    def _remember_output_folder_for_function(self, function_id: int) -> None:
+        raise NotImplementedError
+
     def _remove_table2_rows_by_bdmv_index(self, bdmv_index: int):
         raise NotImplementedError
 
@@ -663,10 +681,19 @@ class BluraySubtitleGuiBase(QWidget):
     def _restore_default_vpy_after_preview(self, mapping: dict[str, tuple[str, str]]):
         raise NotImplementedError
 
+    def _restore_output_folder_for_function(self, function_id: int) -> None:
+        raise NotImplementedError
+
+    def _restore_window_geometry(self) -> bool:
+        raise NotImplementedError
+
     def _resync_episode_tables_from_main_mpls_selection(self) -> None:
         raise NotImplementedError
 
     def _run_chapter_combo_update(self):
+        raise NotImplementedError
+
+    def _save_application_state(self) -> None:
         raise NotImplementedError
 
     def _save_simple_diy_subtitle_config(self):
@@ -682,6 +709,10 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _selected_output_bits_for_vpy(self) -> int:
+        raise NotImplementedError
+
+    @staticmethod
+    def _set_combo_value(combo: QComboBox, value: str) -> None:
         raise NotImplementedError
 
     def _set_compact_table(self, table: QTableWidget, row_height: int=22, header_height: int=22):
@@ -705,6 +736,9 @@ class BluraySubtitleGuiBase(QWidget):
     def _set_window_opacity_if_supported(self, opacity: float):
         raise NotImplementedError
 
+    def _show_app_config_error(self, action: str, error: Exception | str) -> None:
+        raise NotImplementedError
+
     def _show_attachments_dialog(self, mkv_path: str):
         raise NotImplementedError
 
@@ -715,6 +749,9 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _show_m2ts_file_detail_columns(self) -> None:
+        raise NotImplementedError
+
+    def _show_settings_dialog(self) -> None:
         raise NotImplementedError
 
     def _show_tracks_dialog(self, title: str, streams: list[dict[str, object]], selected_indexes: Optional[set[str]]=None, pid_lang: Optional[dict[int, str]]=None, source_mkv: Optional[str]=None, convert_map: Optional[dict[str, str]]=None, language_map: Optional[dict[str, str]]=None, lossless_audio_map: Optional[dict[str, str]]=None) -> Optional[set[str]]:
@@ -827,6 +864,9 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _vpy_raw_string(self, path: str) -> str:
+        raise NotImplementedError
+
+    def _window_geometry_text(self) -> str:
         raise NotImplementedError
 
     def _window_opacity_supported(self) -> bool:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from src.runtime.audio_conversion import AudioEncodingSettings
 from src.runtime.sp import SpEntry
 
 
@@ -25,6 +26,7 @@ class RemuxRequest:
     mux_dolby_vision: bool = True
     convert_lossless_audio_to_flac: bool = True
     clean_audio_tracks: bool = True
+    audio_encoding: AudioEncodingSettings = AudioEncodingSettings()
     track_selection_config: dict[str, dict[str, list[str]]] | None = None
     track_language_config: dict[str, dict[str, str]] | None = None
     ensure_tools: bool = False

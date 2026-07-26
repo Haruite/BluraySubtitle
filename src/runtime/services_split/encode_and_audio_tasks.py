@@ -19,7 +19,7 @@ from ...core import FFMPEG_PATH
 from ...core.settings import PLUGIN_PATH
 from .service_base import BluraySubtitleServiceBase
 from .media_info_and_track_mapping import MediaInfoTrackMappingMixin
-from src.runtime.audio_conversion import mux_with_audio_conversion
+from src.runtime.audio_conversion import AudioEncodingSettings, mux_with_audio_conversion
 from src.runtime.dolby_vision import (
     DolbyVisionEncodePlan,
     dolby_vision_tool_path,
@@ -788,6 +788,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             track_language_overrides: tuple[tuple[str, str], ...],
             subtitle_path: str = '',
             subtitle_language: str = '',
+            audio_encoding: AudioEncodingSettings = AudioEncodingSettings(),
     ) -> None:
         vpy_path = os.path.normpath(os.path.abspath(str(vpy_path or '').strip()))
         if not os.path.isfile(vpy_path):
@@ -1105,6 +1106,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     encoded_video_file=encoded_path,
                     subtitle_file=soft_subtitle,
                     subtitle_language=subtitle_language,
+                    audio_encoding=audio_encoding,
                 )
             finally:
                 if os.path.isfile(encoded_path):

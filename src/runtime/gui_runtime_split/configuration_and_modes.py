@@ -1284,6 +1284,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
         last_function_id = int(getattr(self, '_selected_function_id', 0) or 0)
         if (not force) and function_id and last_function_id == function_id:
             return
+        self._remember_output_folder_for_function(last_function_id)
         # Keep previous behavior: remove temporary default vpy when leaving encode mode.
         if last_function_id == 4 and function_id != 4:
             try:
@@ -1291,6 +1292,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             except Exception:
                 pass
         self._selected_function_id = function_id
+        self._restore_output_folder_for_function(function_id)
         self._refresh_function_tabbar_theme()
 
         if hasattr(self, 'output_folder_row') and self.output_folder_row:
@@ -1447,8 +1449,6 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 self._set_table2_default_column_order()
 
         if function_id == 3:
-            if not keep_state:
-                self._geometry = self.saveGeometry()
             self.label2.setText(self.t("Select the subtitle folder (optional)"))
             self.exe_button.setText(self.t("Start Remux"))
             self.encode_box.setVisible(False)
@@ -1478,8 +1478,6 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     self._set_table_headers(self.table3, ENCODE_SP_LABELS)
 
         if function_id == 4:
-            if not keep_state:
-                self._geometry = self.saveGeometry()
             self.label2.setText(self.t("Select the subtitle folder (optional)"))
             self.exe_button.setText(self.t("Start Encode"))
             self.checkbox1.setVisible(False)
@@ -1509,8 +1507,6 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     self._set_table_headers(self.table3, ENCODE_SP_LABELS)
 
         if function_id == 5:
-            if not keep_state:
-                self._geometry = self.saveGeometry()
             self.label2.setText(self.t("Select the subtitle folder (optional)"))
             self.exe_button.setText(self.t("Start DIY (Not implemented yet)"))
             self.encode_box.setVisible(False)

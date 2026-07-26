@@ -19,6 +19,8 @@ def run_src_entry() -> None:
         pass
     try:
         def fit_window_to_available_screen():
+            if bool(getattr(window, '_window_geometry_restored', False)):
+                return
             screen = window.screen() or app.primaryScreen()
             if not screen:
                 return

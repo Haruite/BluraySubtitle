@@ -5,6 +5,7 @@ All external imports should use this module instead of the legacy
 """
 
 from ..gui_runtime_split.lifecycle_and_bootstrap import LifecycleBootstrapMixin
+from ..gui_runtime_split.settings_and_state import SettingsStateMixin
 from ..gui_runtime_split.configuration_and_modes import ConfigurationModesMixin
 from ..gui_runtime_split.output_and_tracks import OutputTracksMixin
 from ..gui_runtime_split.playback_and_paths import PlaybackPathsMixin
@@ -21,6 +22,7 @@ from ..gui_runtime_split.gui_base import BluraySubtitleGuiBase
 
 class BluraySubtitleGUI(
     LifecycleBootstrapMixin,
+    SettingsStateMixin,
     ConfigurationModesMixin,
     ThemeI18nMixin,
     TableLayoutHeadersMixin,

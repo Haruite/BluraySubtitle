@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from src.runtime.services import BluraySubtitle as _BluraySubtitle
 from src.runtime.audio_conversion import (
+    AudioEncodingSettings,
     _analyze_audio_track,
     _extract_selected_audio_tracks,
     mux_with_audio_conversion,
@@ -160,7 +161,7 @@ class AudioConversionTests(unittest.TestCase):
                     patch('src.runtime.audio_conversion.core_settings.MKV_MERGE_PATH', 'mkvmerge'),
                     patch('src.runtime.audio_conversion.core_settings.FFMPEG_PATH', 'ffmpeg'),
                     patch('src.runtime.audio_conversion.core_settings.FLAC_PATH', 'flac'),
-                    patch('src.runtime.audio_conversion.core_settings.FLAC_THREADS', 6),
+                    patch('src.runtime.audio_conversion.os.cpu_count', return_value=6),
                     patch('src.runtime.audio_conversion.core_settings.TRUEHDD_PATH', ''),
                     patch('src.runtime.audio_conversion.shutil.which', return_value='flac'),
                     patch('src.runtime.audio_conversion.run_command', side_effect=run_command),
@@ -223,7 +224,7 @@ class AudioConversionTests(unittest.TestCase):
                     patch('src.runtime.audio_conversion.core_settings.MKV_MERGE_PATH', 'mkvmerge'),
                     patch('src.runtime.audio_conversion.core_settings.FFMPEG_PATH', 'ffmpeg'),
                     patch('src.runtime.audio_conversion.core_settings.FLAC_PATH', 'flac'),
-                    patch('src.runtime.audio_conversion.core_settings.FLAC_THREADS', 6),
+                    patch('src.runtime.audio_conversion.os.cpu_count', return_value=6),
                     patch('src.runtime.audio_conversion.core_settings.TRUEHDD_PATH', ''),
                     patch('src.runtime.audio_conversion.shutil.which', return_value='flac'),
                     patch('src.runtime.audio_conversion.run_command', side_effect=run_command),
@@ -284,7 +285,7 @@ class AudioConversionTests(unittest.TestCase):
                     patch('src.runtime.audio_conversion.core_settings.MKV_MERGE_PATH', 'mkvmerge'),
                     patch('src.runtime.audio_conversion.core_settings.FFMPEG_PATH', 'ffmpeg'),
                     patch('src.runtime.audio_conversion.core_settings.FLAC_PATH', 'flac'),
-                    patch('src.runtime.audio_conversion.core_settings.FLAC_THREADS', 4),
+                    patch('src.runtime.audio_conversion.os.cpu_count', return_value=4),
                     patch('src.runtime.audio_conversion.shutil.which', return_value='flac'),
                     patch('src.runtime.audio_conversion.run_command', side_effect=run_command),
             ):
@@ -409,7 +410,7 @@ class AudioConversionTests(unittest.TestCase):
                     patch('src.runtime.audio_conversion.core_settings.MKV_MERGE_PATH', 'mkvmerge'),
                     patch('src.runtime.audio_conversion.core_settings.FFMPEG_PATH', 'ffmpeg'),
                     patch('src.runtime.audio_conversion.core_settings.FLAC_PATH', 'flac'),
-                    patch('src.runtime.audio_conversion.core_settings.FLAC_THREADS', 4),
+                    patch('src.runtime.audio_conversion.os.cpu_count', return_value=4),
                     patch('src.runtime.audio_conversion.shutil.which', return_value='flac'),
                     patch('src.runtime.audio_conversion.run_command', side_effect=run_command),
             ):
@@ -419,17 +420,22 @@ class AudioConversionTests(unittest.TestCase):
                     selected_audio_tracks=('1',),
                     selected_subtitle_tracks=(),
                     audio_codec_choices=('flac',),
+                    audio_encoding=AudioEncodingSettings(
+                        flac_compression_level=5,
+                        ffmpeg_flac_compression_level=11,
+                    ),
                 )
 
             self.assertEqual(output.read_bytes(), b'muxed')
             self.assertEqual([command[0] for command in commands], ['mkvextract', 'flac', 'ffmpeg', 'mkvmerge'])
+            self.assertIn('-5', commands[1])
             self.assertEqual(commands[1][commands[1].index('-j') + 1], '4')
             self.assertEqual(commands[2][commands[2].index('-c:a') + 1], 'flac')
-            self.assertEqual(commands[2][commands[2].index('-compression_level') + 1], '8')
+            self.assertEqual(commands[2][commands[2].index('-compression_level') + 1], '11')
             self.assertNotIn('-hide_banner', commands[2])
             self.assertNotIn('-loglevel', commands[2])
 
-    def test_sp_flac_ffmpeg_fallback_uses_level_8_and_visible_output(self) -> None:
+    def test_sp_flac_ffmpeg_fallback_uses_configured_levels_and_visible_output(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             input_wave = root / 'input.wav'
@@ -447,20 +453,118 @@ class AudioConversionTests(unittest.TestCase):
             with (
                     patch('src.runtime.services_split.media_info_and_track_mapping.FLAC_PATH', 'flac'),
                     patch('src.runtime.services_split.media_info_and_track_mapping.FFMPEG_PATH', 'ffmpeg'),
+                    patch(
+                        'src.runtime.services_split.media_info_and_track_mapping.os.cpu_count',
+                        return_value=8,
+                    ),
                     patch('src.runtime.services_split.media_info_and_track_mapping.get_effective_bit_depth', return_value=24),
                     patch('src.runtime.services_split.media_info_and_track_mapping.run_command', side_effect=run_command),
                     patch.object(_BluraySubtitle, '_is_silent_audio_file', return_value=(False, -20.0)),
             ):
                 succeeded = _BluraySubtitle._compress_audio_stream_to_flac(
-                    str(input_wave), '0', str(output_flac)
+                    str(input_wave),
+                    '0',
+                    str(output_flac),
+                    AudioEncodingSettings(
+                        flac_compression_level=4,
+                        ffmpeg_flac_compression_level=12,
+                    ),
                 )
 
             self.assertTrue(succeeded)
             self.assertEqual(len(commands), 2)
             self.assertEqual(commands[0][0], 'flac')
-            self.assertEqual(commands[1][commands[1].index('-compression_level') + 1], '8')
+            self.assertIn('-4', commands[0])
+            self.assertEqual(commands[0][commands[0].index('-j') + 1], '8')
+            self.assertEqual(commands[1][commands[1].index('-compression_level') + 1], '12')
             self.assertNotIn('-hide_banner', commands[1])
             self.assertNotIn('-loglevel', commands[1])
+
+    def test_explicit_fdkaac_and_opus_bitrates_are_used(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source = root / 'source.mkv'
+            output = root / 'output.mkv'
+            source.write_bytes(b'source')
+            source_tracks = [
+                _track(0, 'video', 'V_MPEGH/ISO/HEVC'),
+                _track(1, 'audio', 'A_TRUEHD', codec='TrueHD', language='eng'),
+                _track(2, 'audio', 'A_PCM/INT/LIT', codec='PCM', language='jpn'),
+            ]
+            output_tracks = [
+                _track(0, 'video', 'V_MPEGH/ISO/HEVC'),
+                _track(1, 'audio', 'A_AAC', codec='AAC', language='eng'),
+                _track(2, 'audio', 'A_OPUS', codec='Opus', language='jpn'),
+            ]
+            commands: list[list[str]] = []
+
+            def run_command(command, **_kwargs):
+                command = list(command)
+                commands.append(command)
+                if 'tracks' in command:
+                    _write_extracted_tracks(command)
+                elif command[0] == 'fdkaac':
+                    Path(command[command.index('-o') + 1]).write_bytes(b'aac')
+                elif command[0] == 'ffmpeg':
+                    Path(command[-1]).write_bytes(b'audio')
+                else:
+                    Path(command[command.index('-o') + 1]).write_bytes(b'muxed')
+                return SimpleNamespace(returncode=0)
+
+            with (
+                    patch(
+                        'src.runtime.audio_conversion._identify_tracks',
+                        side_effect=[source_tracks, output_tracks],
+                    ),
+                    patch('src.runtime.audio_conversion.find_mkvtoolnix'),
+                    patch(
+                        'src.runtime.audio_conversion.core_settings.MKV_EXTRACT_PATH',
+                        'mkvextract',
+                    ),
+                    patch(
+                        'src.runtime.audio_conversion.core_settings.MKV_MERGE_PATH',
+                        'mkvmerge',
+                    ),
+                    patch(
+                        'src.runtime.audio_conversion.core_settings.FFMPEG_PATH',
+                        'ffmpeg',
+                    ),
+                    patch(
+                        'src.runtime.audio_conversion.core_settings.FDK_AAC_PATH',
+                        'fdkaac',
+                    ),
+                    patch('src.runtime.audio_conversion.run_command', side_effect=run_command),
+            ):
+                mux_with_audio_conversion(
+                    str(source),
+                    str(output),
+                    selected_audio_tracks=('1', '2'),
+                    selected_subtitle_tracks=(),
+                    audio_codec_choices=('aac', 'opus'),
+                    audio_encoding=AudioEncodingSettings(
+                        fdkaac_bitrate_kbps=320,
+                        opus_bitrate_kbps=192,
+                    ),
+                )
+
+            fdkaac_command = next(
+                command for command in commands if command[0] == 'fdkaac'
+            )
+            opus_command = next(
+                command
+                for command in commands
+                if command[0] == 'ffmpeg' and 'libopus' in command
+            )
+            self.assertEqual(
+                fdkaac_command[fdkaac_command.index('-b') + 1],
+                '320000',
+            )
+            self.assertNotIn('-m', fdkaac_command)
+            self.assertEqual(
+                opus_command[opus_command.index('-b:a') + 1],
+                '192k',
+            )
+            self.assertEqual(output.read_bytes(), b'muxed')
 
     def test_sp_flac_rejects_partial_outputs_from_failed_encoders(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from src.runtime.audio_conversion import AudioEncodingSettings
 from src.runtime.remux import RemuxMainJob, RemuxRequest
 from src.runtime.services import BluraySubtitle  # Import the composed service before its split mixins.
 from src.runtime.gui_runtime_classes.bluray_subtitle_gui_entry import BluraySubtitleGUI  # noqa: F401
@@ -133,6 +134,12 @@ class RemuxWorkflowTests(unittest.TestCase):
                 item=lambda row, column: SimpleNamespace(text=lambda: 'episode.ass') if column == 0 else None,
             )
             table3 = SimpleNamespace(rowCount=lambda: 0)
+            audio_encoding = AudioEncodingSettings(
+                flac_compression_level=5,
+                ffmpeg_flac_compression_level=11,
+                fdkaac_bitrate_kbps=256,
+                opus_bitrate_kbps=160,
+            )
             owner = SimpleNamespace(
                 output_folder_path=SimpleNamespace(text=lambda: str(output_folder)),
                 bdmv_folder_path=SimpleNamespace(text=lambda: str(root / 'Disc')),
@@ -151,6 +158,7 @@ class RemuxWorkflowTests(unittest.TestCase):
                 remux_flac_checkbox=SimpleNamespace(isChecked=lambda: True),
                 _sp_scan_in_progress=True,
                 _current_encode_lossless_audio_codec=lambda: 'opus',
+                _captured_audio_encoding_settings=lambda: audio_encoding,
                 _track_selection_config={'main': {'audio': ['1']}},
                 _track_language_config={'main': {'1': 'jpn'}},
                 _track_lossless_audio_config={'main': {'1': 'opus'}},
@@ -181,6 +189,7 @@ class RemuxWorkflowTests(unittest.TestCase):
             self.assertTrue(request.convert_lossless_audio_to_flac)
             self.assertTrue(request.clean_audio_tracks)
             self.assertTrue(request.movie_mode)
+            self.assertEqual(request.audio_encoding, audio_encoding)
             self.assertFalse(hasattr(request, 'default_lossless_audio_codec'))
             self.assertIsNot(request.configuration, configuration)
 
@@ -269,6 +278,7 @@ class RemuxWorkflowTests(unittest.TestCase):
             selected_subtitle_tracks=None,
             audio_codec_choices=(),
             convert_all_lossless_to_flac=False,
+            audio_encoding=request.audio_encoding,
         )
         owner.completion.assert_called_once_with()
 

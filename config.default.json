@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "window": {
+    "geometry": ""
+  },
+  "ui": {
+    "language": "en",
+    "theme": "light",
+    "font_size": 10,
+    "opacity": 94
+  },
+  "startup": {
+    "function_page": "bluray_remux",
+    "episode_mode": "series"
+  },
+  "paths": {
+    "remux_output": "",
+    "encode_output": ""
+  },
+  "audio": {
+    "flac_compression_level": 8,
+    "ffmpeg_flac_compression_level": 8,
+    "fdkaac_bitrate_kbps": 0,
+    "opus_bitrate_kbps": 0
+  },
+  "remux": {
+    "convert_lossless_audio_to_flac": true
+  },
+  "encode": {
+    "encoder": "x265",
+    "bit_depth": "10",
+    "preset": "Balanced",
+    "preset_parameters": "--preset slower --crf 18 --aq-mode 3 --bframes 8 --ref 5 --me 3 --subme 4",
+    "lossless_audio_codec": "flac",
+    "subtitle_mode": "external",
+    "use_getnative": true
+  }
+}

@@ -1,6 +1,7 @@
 """Core runtime/configuration layer (migration stage)."""
 
-from .settings import APP_TITLE
+from .version import APP_TITLE
+from .version import APP_VERSION
 from .settings import BDMV_LABELS
 from .settings import DIY_BDMV_LABELS
 from .settings import CURRENT_UI_LANGUAGE
@@ -15,7 +16,6 @@ from .settings import DOVI_TOOL_PATH
 from .settings import FFMPEG_PATH
 from .settings import FFPROBE_PATH
 from .settings import FLAC_PATH
-from .settings import FLAC_THREADS
 from .settings import find_mkvtoolnix
 from .settings import MKV_EXTRACT_PATH
 from .settings import MKV_INFO_PATH
@@ -34,7 +34,6 @@ from .settings import mkvtoolnix_ui_language_arg
 __all__ = [
     "is_docker",
     "FLAC_PATH",
-    "FLAC_THREADS",
     "find_mkvtoolnix",
     "FDK_AAC_PATH",
     "DOVI_TOOL_PATH",
@@ -60,6 +59,7 @@ __all__ = [
     "DEFAULT_APPROX_EPISODE_DURATION_SECONDS",
     "CURRENT_UI_LANGUAGE",
     "APP_TITLE",
+    "APP_VERSION",
     "get_mkvtoolnix_ui_language",
     "mkvtoolnix_ui_language_arg",
 ]

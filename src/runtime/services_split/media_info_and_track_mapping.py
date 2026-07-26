@@ -16,11 +16,12 @@ import pycountry
 import soundfile
 
 from src.bdmv import M2TS, Chapter, pid_to_lang_from_m2ts_path
-from src.core import FFPROBE_PATH, FFMPEG_PATH, FLAC_PATH, FLAC_THREADS, MKV_MERGE_PATH, \
+from src.core import FFPROBE_PATH, FFMPEG_PATH, FLAC_PATH, MKV_MERGE_PATH, \
     find_mkvtoolnix, get_mkvtoolnix_ui_language, mkvtoolnix_ui_language_arg
 from src.core import settings as core_settings
 from src.core.i18n import translate_text
 from src.exports.utils import get_effective_bit_depth, get_time_str, print_exc_terminal, get_index_to_m2ts_and_offset, run_command
+from src.runtime.audio_conversion import AudioEncodingSettings
 from .service_base import BluraySubtitleServiceBase
 from src.runtime.dolby_vision import mux_dolby_vision_layers
 from .. import TaskCancelled
@@ -755,7 +756,12 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         return avg_db < threshold_db, avg_db
 
     @staticmethod
-    def _compress_audio_stream_to_flac(input_media: str, map_idx: str, out_flac: str) -> bool:
+    def _compress_audio_stream_to_flac(
+            input_media: str,
+            map_idx: str,
+            out_flac: str,
+            audio_encoding: AudioEncodingSettings = AudioEncodingSettings(),
+    ) -> bool:
         if not input_media or not os.path.exists(input_media):
             return False
         if not out_flac:
@@ -812,7 +818,13 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             if FLAC_PATH:
                 try:
                     result = run_command([
-                        FLAC_PATH, '-8', '-j', str(FLAC_THREADS), tmp_wav, '-o', out_flac,
+                        FLAC_PATH,
+                        f'-{audio_encoding.flac_compression_level}',
+                        '-j',
+                        str(os.cpu_count() or 1),
+                        tmp_wav,
+                        '-o',
+                        out_flac,
                     ])
                     ok = result.returncode == 0 and os.path.isfile(out_flac) and os.path.getsize(out_flac) > 0
                 except Exception:
@@ -823,7 +835,11 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 try:
                     result = run_command([
                         FFMPEG_PATH or 'ffmpeg', '-y', '-i', tmp_wav,
-                        '-c:a', 'flac', '-compression_level', '8', out_flac,
+                        '-c:a',
+                        'flac',
+                        '-compression_level',
+                        str(audio_encoding.ffmpeg_flac_compression_level),
+                        out_flac,
                     ])
                     ok = result.returncode == 0 and os.path.isfile(out_flac) and os.path.getsize(out_flac) > 0
                 except Exception:

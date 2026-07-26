@@ -639,6 +639,9 @@ class WindowsSetupTests(unittest.TestCase):
     def test_pyinstaller_build_is_onedir_without_librosa_collection(self) -> None:
         self.assertIn("exclude_binaries=True", self.spec_source)
         self.assertIn("coll = COLLECT(", self.spec_source)
+        self.assertIn('PROJECT_ROOT / "config.default.json"', self.spec_source)
+        self.assertIn('(str(SETTINGS_PATH), "src/core")', self.spec_source)
+        self.assertIn('(str(default_config), ".")', self.spec_source)
         self.assertNotIn('collect_all("librosa")', self.spec_source)
         self.assertNotIn("librosa_hiddenimports", self.spec_source)
         self.assertNotIn("metaflac.exe", self.spec_source)
