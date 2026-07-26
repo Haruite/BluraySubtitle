@@ -2,7 +2,7 @@
 
 [English](./README.md) | [简体中文](README.zh-Hans.md)
 
-Development: [mandatory code modification standards](docs/development/code-standards.md) | [refactoring history](docs/refactoring/refactoring-history.md)
+Development: [mandatory code modification standards](docs/development/code-standards.md) | [media pipeline and tool selection](docs/development/media-pipeline-and-tool-selection.md) | [refactoring history](docs/refactoring/refactoring-history.md)
 
 The Windows x64 release is a one-folder package. Extract the complete archive,
 then run `BluraySubtitle_windows_x64.exe` without moving it away from the
@@ -109,8 +109,12 @@ standalone FLAC encoding. A
 DTS-family track is replaced only when its FLAC output is no larger than the extracted DTS; otherwise the original DTS
 track is retained. Successful PCM and TrueHD/MLP conversions remain FLAC even when the FLAC is larger. TrueHD Atmos is
 converted only after `truehdd` successfully decodes presentation 2; if `truehdd` is unavailable or fails, the original
-TrueHD track is kept. With **Mux Dolby Vision** enabled, compatible base/enhancement layers are combined as profile
-8.1; when disabled, the enhancement layer is not included.
+TrueHD track is kept. MKVToolNix does not repair damaged TrueHD frames, and eac3to does not reliably repair this class
+of damage either. Affected DIY discs may produce many `truehdd` errors and a decoded FLAC track that is shorter than
+the video even when the MKV duration looks plausible; compare decoded audio/video durations before discarding the
+source track. See [Media Pipeline Design and Tool Selection](docs/development/media-pipeline-and-tool-selection.md)
+for details. With **Mux Dolby Vision** enabled, compatible base/enhancement layers are combined as profile 8.1; when
+disabled, the enhancement layer is not included.
 
 Selected audio is also checked automatically even when **Convert lossless audio to FLAC** is disabled. A track whose
 decoded maximum volume is below -60 dB is removed as silent. Decoded fingerprints are compared only for tracks in the
@@ -212,7 +216,7 @@ Direct MPLS muxing can fail when playlist clips have different track layouts. Th
 2. `mkvmerge --identify` maps only the tracks visible and selected in **Edit Tracks**. Tracks hidden by the MPLS are excluded, and recovered tracks keep the GUI selection order.
 3. Missing non-audio tracks are recovered with tsMuxer. If tsMuxer cannot supply all of them, the fallback fails explicitly.
 4. Missing audio is also recovered with tsMuxer when possible. Only audio still unavailable afterward is replaced with matching-duration PCM silence using the reference sample rate, channel count, and bit depth.
-5. The repaired PID set must exactly match the reference layout. One repaired clip is moved directly to the planned output; multiple clips are concatenated with `--append-mode track`.
+5. The repaired PID set must exactly match the reference layout. One repaired clip is moved directly to the planned output; multiple clips are concatenated with `--append-mode file` so every track uses the same preceding-file timestamp boundary.
 6. Main and standalone SP outputs then receive their configured track languages and chapters, with command results and final metadata checked.
 
 The separate multi-output fallback used when one main MPLS is split into several episode files keeps the same per-clip alignment and missing-track rules, then validates every expected split output before finalization.
@@ -506,11 +510,6 @@ No. Remux the disc first, then in encode mode choose **Remux** as the source and
 ### Why does getnative report different native resolutions per episode?
 
 Normal: some discs mix resolutions and authoring is messy. Run a test pass; if results are similar, keep **auto getnative**. Otherwise disable it and edit the VPy with the resolution/scaling you trust—or leave those fields empty.
-
-### Why does PotPlayer / mpv show two audio tracks on an MPLS (and eac3to / mkvmerge list two) while this app shows one?
-
-One track is **hidden** by MPLS rules. Players and tools that read **m2ts** or **clpi** still list both. **PowerDVD** follows MPLS strictly—you won’t see the hidden track there.  
-Usually the remaining audible material for that extra track appears elsewhere on the disc in another MPLS; **Blu-ray Remux** and **Encode** handle this so valid audio is not dropped.
 
 ### Is the program reliable? Can AI-written code be trusted?
 

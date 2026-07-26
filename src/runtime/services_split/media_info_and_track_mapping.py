@@ -3328,7 +3328,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         selected audio/subtitle PIDs. mkvmerge is attempted first; tsMuxer may recover any selected PID that mkvmerge
         cannot expose. Missing video or subtitle is fatal, while missing audio may become layout-matched PCM
         silence only after tsMuxer recovery fails. Each clip is trimmed to its MPLS in/out window, and successful
-        parts are concatenated in playlist order with track append mode. Configured languages are applied by the
+        parts are concatenated in playlist order with file append mode. Configured languages are applied by the
         caller after the complete fallback succeeds.
 
         ``max_play_items`` deliberately truncates recognized looping SP menus so repeated menu clips are muxed
@@ -3433,7 +3433,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             command = [mkvmerge_executable]
             if ui_language_argument:
                 command.extend(ui_language_argument.split())
-            command.extend(['--append-mode', 'track', '-o', output_file, part_outputs[0]])
+            command.extend(['--append-mode', 'file', '-o', output_file, part_outputs[0]])
             for part_output in part_outputs[1:]:
                 command.extend(['+', part_output])
             if cover_path and os.path.isfile(cover_path):
@@ -3643,7 +3643,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                     command_parts += ['-o', f'"{episode_output}"', f'"{clip_outputs[0]}"']
                 else:
                     command_parts += [
-                        '--append-mode', 'track', '-o', f'"{episode_output}"', f'"{clip_outputs[0]}"',
+                        '--append-mode', 'file', '-o', f'"{episode_output}"', f'"{clip_outputs[0]}"',
                     ]
                     for clip_output in clip_outputs[1:]:
                         command_parts += ['+', f'"{clip_output}"']

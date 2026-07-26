@@ -6,7 +6,7 @@ import re
 from typing import Mapping
 
 
-APP_VERSION = "4.0"
+APP_VERSION = "4.1"
 APP_TITLE = f"BluraySubtitle v{APP_VERSION}"
 
 _VERSION_TAG_PATTERN = re.compile(

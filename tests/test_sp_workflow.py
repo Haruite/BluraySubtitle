@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -530,10 +531,13 @@ class TrackAlignmentTests(unittest.TestCase):
             first_m2ts.write_bytes(b'm2ts')
             second_m2ts.write_bytes(b'm2ts')
             calls = []
+            concat_commands = []
+            split_arguments = []
             temporary_directories = []
 
             def remux_clip(*args, **_kwargs):
                 calls.append(args[0])
+                split_arguments.append(args[5])
                 work_folder = Path(args[7])
                 part_tag = args[8]
                 for suffix in ('tsmux_out', 'audrec_tsmux_out'):
@@ -545,6 +549,7 @@ class TrackAlignmentTests(unittest.TestCase):
                 return True
 
             def run_concat(command):
+                concat_commands.append(command)
                 Path(command[command.index('-o') + 1]).write_bytes(b'joined')
                 return SimpleNamespace(returncode=0)
 
@@ -558,7 +563,7 @@ class TrackAlignmentTests(unittest.TestCase):
                 _ordered_track_slots_for_remux=lambda *_args, **_kwargs: [
                     {'type': 'video', 'pid': 0x1011}
                 ],
-                _m2ts_clip_time_window_sec=lambda *_args: (False, 0.0, 1.0),
+                _m2ts_clip_time_window_sec=lambda *_args: (True, 0.0, 1.0),
             )
             chapter = SimpleNamespace(
                 in_out_time=[('00001', 0, 45000), ('00002', 0, 45000)],
@@ -577,9 +582,93 @@ class TrackAlignmentTests(unittest.TestCase):
 
             self.assertTrue(result)
             self.assertEqual(calls, [str(first_m2ts), str(second_m2ts)])
+            self.assertEqual(
+                split_arguments,
+                ['--split parts:00:00:00.000-00:00:01.000'] * 2,
+            )
+            self.assertEqual(concat_commands[0][1:3], ['--append-mode', 'file'])
             self.assertEqual(output.read_bytes(), b'joined')
             self.assertTrue(temporary_directories)
             self.assertTrue(all(not path.exists() for path in temporary_directories))
+
+    def test_multi_output_fallback_uses_file_append_and_normalized_zero_start(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            playlist = root / 'BDMV' / 'PLAYLIST'
+            stream = root / 'BDMV' / 'STREAM'
+            playlist.mkdir(parents=True)
+            stream.mkdir(parents=True)
+            mpls = playlist / '00001.mpls'
+            first_m2ts = stream / '00001.m2ts'
+            second_m2ts = stream / '00002.m2ts'
+            output = root / 'Output.mkv'
+            expected_outputs = [root / 'Output-001.mkv', root / 'Output-002.mkv']
+            for path in (mpls, first_m2ts, second_m2ts):
+                path.write_bytes(b'source')
+            split_arguments = []
+            concat_commands = []
+
+            def remux_clip(*args, **_kwargs):
+                split_arguments.append(args[5])
+                Path(args[4]).write_bytes(b'part')
+                return True
+
+            def run_concat(command):
+                concat_commands.append(command)
+                match = re.search(r'-o "([^"]+)"', command)
+                self.assertIsNotNone(match)
+                Path(match.group(1)).write_bytes(b'joined')
+                return 0
+
+            owner = SimpleNamespace(
+                movie_mode=False,
+                _dovi_mux_plan=None,
+                _set_dovi_mux_plan_for_mpls=lambda _path: None,
+                _remux_aligned_clip=remux_clip,
+                _progress=lambda **_kwargs: None,
+                _run_single_command=run_concat,
+            )
+            fake_service_class = SimpleNamespace(
+                _series_episode_segments_bounds=lambda *_args: [(1, 2), (1, 2)],
+                _expected_mkvmerge_split_output_paths=lambda *_args: [
+                    str(path) for path in expected_outputs
+                ],
+                _ordered_track_slots_for_remux=lambda *_args, **_kwargs: [
+                    {'type': 'video', 'pid': 0x1011}
+                ],
+                _m2ts_clip_time_window_sec=lambda *_args: (True, 0.0, 1.0),
+            )
+            chapter = SimpleNamespace(
+                in_out_time=[('00001', 0, 45000), ('00002', 0, 45000)],
+                mark_info={'00001': [object()]},
+                get_total_time=lambda: 2.0,
+            )
+            with patch.object(track_module, '_svc_cls', return_value=fake_service_class), patch.object(
+                    track_module, 'Chapter', return_value=chapter), patch.object(
+                    track_module, 'find_mkvtoolnix'), patch.object(
+                    track_module, 'MKV_MERGE_PATH', 'mkvmerge'), patch.object(
+                    track_module, 'mkvtoolnix_ui_language_arg', return_value=''), patch.object(
+                    track_module, 'get_index_to_m2ts_and_offset', return_value=({}, {1: 0.0})):
+                result = MediaInfoTrackMappingMixin._try_remux_mpls_split_outputs_track_aligned(
+                    owner,
+                    str(mpls),
+                    str(output),
+                    [{}, {}],
+                    [],
+                    [],
+                    '',
+                )
+
+            self.assertTrue(result)
+            self.assertEqual(
+                split_arguments,
+                ['--split parts:00:00:00.000-00:00:01.000'] * 4,
+            )
+            self.assertEqual(len(concat_commands), 2)
+            self.assertTrue(all('--append-mode file' in command for command in concat_commands))
+            self.assertTrue(all('--append-mode track' not in command for command in concat_commands))
+            self.assertTrue(all(path.read_bytes() == b'joined' for path in expected_outputs))
+
     def test_dolby_vision_only_clip_can_mux_without_a_base_mkv(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

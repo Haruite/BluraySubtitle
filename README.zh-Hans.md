@@ -2,7 +2,7 @@
 
 [English](./README.md) | [简体中文](README.zh-Hans.md)
 
-开发文档：[强制代码修改规范](docs/development/code-standards.zh-Hans.md) | [重构历史](docs/refactoring/refactoring-history.zh-Hans.md)
+开发文档：[强制代码修改规范](docs/development/code-standards.zh-Hans.md) | [媒体处理方案与工具选型](docs/development/media-pipeline-and-tool-selection.zh-Hans.md) | [重构历史](docs/refactoring/refactoring-history.zh-Hans.md)
 
 Windows x64 版本使用目录包发布。请完整解压发布压缩包，然后运行
 `BluraySubtitle_windows_x64.exe`；不要将它与旁边的 `_internal` 目录分离。
@@ -94,7 +94,10 @@ BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 
   独立 `flac` 编码前仍可能由 `ffmpeg` 解码。DTS 系列音轨仅在 FLAC 不大于提取出的 DTS 时才替换源音轨；
   如果 FLAC 更大，则删除 FLAC 并保留原 DTS。PCM 和 TrueHD/MLP 成功转换出的 FLAC 即使更大也仍然保留。
   TrueHD Atmos 只有在 `truehdd` 成功解码 presentation 2 后才会转换；`truehdd` 不可用或失败时保留原
-  TrueHD 音轨。
+  TrueHD 音轨。MKVToolNix 不会修复损坏的 TrueHD 帧，eac3to 对这类损坏也不能稳定修复。部分 DIY
+  原盘即使 MKV 时长看起来正常，仍可能在 `truehdd` 中产生大量错误，并使解码后的 FLAC 比视频短；
+  删除源音轨前应比较解码音频和视频时长。详细原理见
+  [媒体处理方案与工具选型](docs/development/media-pipeline-and-tool-selection.zh-Hans.md)。
   启用“混流 Dolby Vision”时，兼容的基础层和增强层会合并为 Profile 8.1；关闭时不包含增强层。
 - 混流完成后，程序会把“编辑轨道”保存的语言应用到实际包含的视频、音频和字幕轨道并验证结果；映射、工具或验证失败时会中止当前任务并删除该任务新建的主输出。
 
@@ -176,7 +179,7 @@ BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 
 2. `mkvmerge --identify` 只映射“编辑轨道”中可见且已选择的轨道；被 MPLS 隐藏的轨道不会加入，恢复后的轨道保持 GUI 选择顺序。
 3. 缺少的非音频轨道使用 tsMuxer 恢复；tsMuxer 无法补齐时明确失败。
 4. 缺少的音轨也会优先尝试用 tsMuxer 恢复；只有仍然无法取得的音轨，才按参考采样率、声道数和位深补充等时长 PCM 静音。
-5. 修复后的 PID 集合必须与参考布局完全一致。只有一个片段时直接移动到计划输出；多个片段使用 `--append-mode track` 顺序拼接。
+5. 修复后的 PID 集合必须与参考布局完全一致。只有一个片段时直接移动到计划输出；多个片段使用 `--append-mode file` 顺序拼接，使所有轨道使用同一个前序文件时间戳边界。
 6. 主输出和独立 SP 输出随后写入已配置的轨道语言与章节，并检查命令结果和最终元数据。
 
 一个主 MPLS 拆分成多个分集文件时仍使用独立的多输出回退，但每个片段采用相同的轨道对齐和缺轨规则，并在收尾前确认所有计划输出都存在。
@@ -467,11 +470,6 @@ res = res.std.Trim(first=0, length=720)
 ### 为什么 getnative 获取的每集的原始分辨率不一样？
 
 正常现象，因为有些原盘不止一种原生分辨率，以及原盘制作流程的复杂性，导致源分辨率难以分辨。可以先跑一遍测试，如果每集输出的原始分辨率结果基本相同则可以用程序自动的 getnative，否则去掉勾选自动 getnative 选项并编辑 vpy 填入你认为的原始分辨率和缩放算法，或者根本不填。
-
-### 我有一个原盘，potplayer / mpv 播放 mpls 都显示两条音轨，eac3to 和 mkvmerge 也显示 mpls 有两条音轨，为什么你的工具显示只有一条？
-
-因为有一条音轨被 mpls 隐藏了。而那些软件都会读取 m2ts 或 clpi 文件，所以显示有两条音轨。真正遵守 mpls 规则的是 PowerDVD，用 PowerDVD 播放就不会显示隐藏音轨。
-通常来说，剩下的一条音轨的有效部分会在原盘某个 mpls 中出现，不用担心，原盘 remux 和原盘压制都会处理，保证不会丢失原盘的有效信息。
 
 ### 程序可靠吗？ai 写的代码有保证吗？
 
