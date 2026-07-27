@@ -2,6 +2,8 @@
 
 [English](./README.md) | [简体中文](README.zh-Hans.md)
 
+项目文档：[Wiki／媒体概念与开发者指南](docs/wiki/Home.zh-Hans.md)
+
 开发文档：[强制代码修改规范](docs/development/code-standards.zh-Hans.md) | [媒体处理方案与工具选型](docs/development/media-pipeline-and-tool-selection.zh-Hans.md) | [重构历史](docs/refactoring/refactoring-history.zh-Hans.md)
 
 Windows x64 版本使用目录包发布。请完整解压发布压缩包，然后运行

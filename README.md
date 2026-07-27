@@ -2,6 +2,8 @@
 
 [English](./README.md) | [简体中文](README.zh-Hans.md)
 
+Documentation: [project wiki](docs/wiki/Home.md)
+
 Development: [mandatory code modification standards](docs/development/code-standards.md) | [media pipeline and tool selection](docs/development/media-pipeline-and-tool-selection.md) | [refactoring history](docs/refactoring/refactoring-history.md)
 
 The Windows x64 release is a one-folder package. Extract the complete archive,
