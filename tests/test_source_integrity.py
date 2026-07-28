@@ -5,8 +5,11 @@ from __future__ import annotations
 import ast
 import importlib
 import os
+import runpy
+import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -57,6 +60,19 @@ class SourceIntegrityTests(unittest.TestCase):
                 occurrences.append(str(path.relative_to(REPOSITORY_ROOT)))
 
         self.assertEqual(occurrences, [])
+
+    def test_linux_vsedit_path_matches_setup_install_target(self) -> None:
+        settings_file = REPOSITORY_ROOT / "src" / "core" / "settings.py"
+        setup_script = REPOSITORY_ROOT / "setup_linux_environment.sh"
+
+        with patch.object(sys, "platform", "linux"):
+            settings = runpy.run_path(str(settings_file))
+
+        self.assertEqual(settings["VSEDIT_PATH"], "/usr/local/bin/vsedit")
+        self.assertIn(
+            "sudo tee /usr/local/bin/vsedit",
+            setup_script.read_text(encoding="utf-8"),
+        )
 
 
 if __name__ == "__main__":
