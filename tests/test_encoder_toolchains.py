@@ -9,6 +9,7 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 X264_REPOSITORY = "https://code.videolan.org/videolan/x264.git"
 X265_REPOSITORY = "https://github.com/Multicorewareinc/x265.git"
+HDR10PLUS_REPOSITORY = "https://github.com/quietvoid/hdr10plus_tool"
 
 
 class EncoderToolchainTests(unittest.TestCase):
@@ -43,10 +44,20 @@ class EncoderToolchainTests(unittest.TestCase):
             'latest_stable_tag "$X265_SOURCE_REPOSITORY"',
             'git clone --depth 1 "$X264_SOURCE_REPOSITORY" x264',
             'git clone --depth 1 --branch "$x265_version"',
+            "__patch_x265_hdr10plus_json11",
+            "#include <cstdint>",
+            "make || return $?",
+            "mv libx265.a libx265_main.a || return $?",
             'version_file="/usr/bin/x264-version.txt"',
             "--bit-depth=all",
             "--chroma-format=all",
             "-DENABLE_HDR10_PLUS=OFF",
+            "-DENABLE_HDR10_PLUS=ON",
+            "--dhdr10-info",
+            'installed_help="$(/usr/bin/x265 --help 2>&1 || true)"',
+            "install_hdr10plus_tool",
+            HDR10PLUS_REPOSITORY,
+            "unknown-linux-musl.tar.gz",
             "8bit+10bit+12bit",
             "bluray_sudo cp x264 /usr/bin/x264",
             'cp "$_x265_out" /usr/bin/',
@@ -73,7 +84,14 @@ class EncoderToolchainTests(unittest.TestCase):
             "api.github.com/repos/Multicorewareinc/x265/tags?per_page=100",
             "videolan%2Fx264/repository/commits?ref_name=master&per_page=1",
             "-DCMAKE_POLICY_VERSION_MINIMUM=3.10",
+            'json11_source="$source_root/dynamicHDR10/json11/json11.cpp"',
+            "sed -i '/^#include <limits>$/a #include <cstdint>'",
             "-DENABLE_HDR10_PLUS=OFF",
+            "-DENABLE_HDR10_PLUS=ON",
+            "--dhdr10-info",
+            'x265_help="$(/usr/bin/x265 --help 2>&1 || true)"',
+            HDR10PLUS_REPOSITORY,
+            "unknown-linux-musl.tar.gz",
             "--bit-depth=all",
             "--chroma-format=all",
             "8bit+10bit+12bit",
@@ -82,6 +100,9 @@ class EncoderToolchainTests(unittest.TestCase):
                 self.assertIn(fragment, self.dockerfile)
         x265_cache_key = self.dockerfile.index("api.github.com/repos/Multicorewareinc/x265/tags")
         x264_cache_key = self.dockerfile.index("videolan%2Fx264/repository/commits")
+        hdr10plus_cache_key = self.dockerfile.index(
+            "api.github.com/repos/quietvoid/hdr10plus_tool/releases/latest"
+        )
         x265_position = self.dockerfile.index(X265_REPOSITORY)
         x264_position = self.dockerfile.index(X264_REPOSITORY)
         self.assertLess(self.dockerfile.index("LSMASH_TAG="), x265_cache_key)
@@ -90,6 +111,11 @@ class EncoderToolchainTests(unittest.TestCase):
         self.assertLess(self.dockerfile.index("vapoursynth_portable.7z"), x264_cache_key)
         self.assertLess(x264_cache_key, x264_position)
         self.assertLess(x264_position, self.dockerfile.index("TSMUXER_TAG="))
+        self.assertLess(self.dockerfile.index("TSMUXER_TAG="), hdr10plus_cache_key)
+        self.assertLess(
+            hdr10plus_cache_key,
+            self.dockerfile.index("RUN test -x /usr/bin/dovi_tool"),
+        )
         for removed in (
             "ubuntu:22.04",
             "encoder-builder",
@@ -105,10 +131,16 @@ class EncoderToolchainTests(unittest.TestCase):
         for fragment in (
             r'C:\Software\x264.exe',
             r'C:\Software\x265.exe',
+            r'C:\Software\hdr10plus_tool.exe',
             X264_REPOSITORY,
             "code.videolan.org/api/v4/projects/videolan%2Fx264/repository/commits",
             '-Repository "Multicorewareinc/x265"',
+            '-Repository "quietvoid/hdr10plus_tool"',
             "Get-GitHubLatestTaggedSource",
+            "Update-X265Hdr10PlusSource",
+            "#include <cstdint>",
+            "-DENABLE_HDR10_PLUS=ON",
+            "--dhdr10-info",
         ):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, self.windows_setup)
@@ -126,6 +158,7 @@ class EncoderToolchainTests(unittest.TestCase):
                 self.assertIn("x265", readme)
                 self.assertIn(r"C:\Software\x264.exe", readme)
                 self.assertIn(r"C:\Software\x265.exe", readme)
+                self.assertIn("hdr10plus_tool", readme)
                 self.assertNotIn("r3223", readme)
                 self.assertNotIn("0480cb05", readme)
                 self.assertNotIn("e444744c", readme)
@@ -134,8 +167,23 @@ class EncoderToolchainTests(unittest.TestCase):
         self.assertIn("最新", self.readme_zh)
         self.assertIn(X264_REPOSITORY, self.notices)
         self.assertIn(X265_REPOSITORY, self.notices)
-        self.assertGreaterEqual(self.notices.count("latest official"), 2)
+        self.assertIn(HDR10PLUS_REPOSITORY, self.notices)
+        self.assertGreaterEqual(self.notices.count("latest official"), 3)
         self.assertNotIn("r3223", self.notices)
+
+    def test_hdr10plus_linux_install_uses_official_prebuilt_release(self) -> None:
+        install_function = self.linux_setup.split(
+            "install_hdr10plus_tool()", 1
+        )[1].split("# ---------------------------------------------------------------------------", 1)[0]
+        self.assertIn("latest_stable_tag", install_function)
+        self.assertIn(
+            "x86_64-unknown-linux-musl",
+            install_function.replace("${arch}", "x86_64"),
+        )
+        self.assertIn("aarch64", install_function)
+        self.assertIn("/usr/bin/hdr10plus_tool", install_function)
+        self.assertIn("--version", install_function)
+        self.assertNotIn("cargo", install_function)
 
     def test_bilingual_standards_define_version_and_docker_rules(self) -> None:
         for fragment in (

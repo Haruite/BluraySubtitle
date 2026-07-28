@@ -808,7 +808,7 @@ tool paths, and a manual GitHub Release update check.
 ## Encoder Toolchain Migration — Official x264/x265
 
 Date: 2026-07-28
-Commit: uncommitted (current change)
+Commit: 26dc5fe
 
 ### Scope
 
@@ -819,7 +819,7 @@ Commit: uncommitted (current change)
 ### Removed Paths and Behavior Changes
 
 - Removed the Windows jpsdr/t_mod prebuilt x264 download and the Yuuki-Asuna x265 fork checkout.
-- Removed the x265 source-rewriting workaround. The unmodified official source is configured with `CMAKE_POLICY_VERSION_MINIMUM=3.10`; unused integrations, including HDR10+, are disabled explicitly.
+- Removed the x265 source-rewriting workaround. The unmodified official source is configured with `CMAKE_POLICY_VERSION_MINIMUM=3.10`; integrations unused by that migration are disabled explicitly.
 - Removed the fork-only `--pme` and `--pmode` options from the x265 Extreme preset. No compatibility path remains for those old options.
 - Windows compiles official x264 with the MSYS2 UCRT64 toolchain, all supported bit depths/chroma formats, LTO, and the upstream `fprofiled` target. Its post-install capability probe uses the official `--colormatrix` spelling so a valid build is not rejected. Windows x265 remains a static 8/10/12-bit MSVC multilib build.
 - Linux builds the dynamically resolved official sources. Docker remains a single Ubuntu 26.04 image and replaces the x265 and x264 build steps at their original corresponding locations. Remote official metadata at each position forms the Docker cache key, so a new encoder revision invalidates only that encoder layer and the layers after it.
@@ -834,3 +834,25 @@ Commit: uncommitted (current change)
 - PowerShell parsing and `bash -n` validate the setup scripts; focused regression tests cover dynamic official-source resolution, multilib builds, Docker layer placement, unchanged executable paths, and removed fork-only options.
 - Docker is not installed on the verification host, so the image was not built locally. Build it on a Docker host and inspect both version banners and the x265 `8bit+10bit+12bit` output.
 - Run each setup script on a disposable supported host, then encode short 8/10-bit x264 and 8/10/12-bit x265 samples, including an HDR10 sample, before publishing binaries.
+
+## HDR10+ Build Environment Preparation
+
+Date: 2026-07-28
+Commit: uncommitted (current change)
+
+### Scope
+
+- Enabled x265's native HDR10+ JSON parser in the final 8-bit multilib CLI while keeping it disabled in the linked 10-bit and 12-bit core libraries to avoid duplicate parser objects.
+- Added the latest official `hdr10plus_tool` release to both setup scripts and Docker without adding a local Rust build. Windows uses the official x86_64 MSVC archive; Linux and Docker select the official x86_64 or AArch64 musl archive.
+- Added `HDR10PLUS_TOOL_PATH` to shared settings, the External Tools page, the Windows one-folder package, and the existing fixed system layouts: `C:\Software\hdr10plus_tool.exe` and `/usr/bin/hdr10plus_tool`.
+- Kept the x265 flag changes in the existing x265 Docker layer and placed the new tool's release layer near the end of the Dockerfile.
+- Added the same narrowly scoped compatibility edit to all managed x265 builds: insert the missing `<cstdint>` include in upstream `dynamicHDR10/json11/json11.cpp` before compiling the native HDR10+ parser.
+- This change prepares the managed environment only; automatic HDR10+ extraction and x265 command planning remain a separate follow-up.
+
+### Compatibility and Verification
+
+- Upstream release automation builds Linux artifacts for the musl targets with the internal-font feature and no system fontconfig dependency. The official 1.7.1 x86_64 artifact was additionally inspected as a stripped static PIE, so it can run directly on Ubuntu 22.04 without a glibc-version dependency.
+- x265 setup verification now requires both the 8/10/12-bit build banner and the native `--dhdr10-info` help entry, causing an older same-version managed build without HDR10+ to be rebuilt. Help text is captured independently because x265 returns a non-zero status after printing it.
+- Linux x265 configuration, compilation, linking, library merging, and installation now return immediately on the first failed command instead of continuing with secondary missing-file errors.
+- Verification uses the current official x265 4.2 tag and includes a complete 12/10/8-bit multilib CLI build with native HDR10+ enabled.
+- PowerShell parsing, `bash -n`, 60 focused build-environment tests, three External Tools settings tests, `git diff --check`, and line-ending checks passed. Docker was unavailable on the verification host, so a complete image build remains a manual check.

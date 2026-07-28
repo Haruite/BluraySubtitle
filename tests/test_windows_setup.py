@@ -136,6 +136,7 @@ class WindowsSetupTests(unittest.TestCase):
             r"C:\Program Files\MKVToolNix\mkvpropedit.exe",
             r"C:\Software\tsMuxeR.exe",
             r"C:\Software\dovi_tool.exe",
+            r"C:\Software\hdr10plus_tool.exe",
             r"C:\Software\truehdd.exe",
             r"C:\Software\x264.exe",
             r"C:\Software\x265.exe",
@@ -172,6 +173,7 @@ class WindowsSetupTests(unittest.TestCase):
             "xiph/flac",
             "justdan96/tsMuxer",
             "quietvoid/dovi_tool",
+            "quietvoid/hdr10plus_tool",
             "truehdd/truehdd",
             "code.videolan.org/videolan/x264.git",
             "Multicorewareinc/x265",
@@ -198,6 +200,20 @@ class WindowsSetupTests(unittest.TestCase):
         for source in sources:
             with self.subTest(source=source):
                 self.assertIn(source, self.source)
+
+    def test_hdr10plus_tool_uses_the_latest_official_windows_release(self) -> None:
+        release_function = self.source.split(
+            "function Get-Hdr10PlusToolRelease", 1
+        )[1].split("function Get-InstalledHdr10PlusToolVersion", 1)[0]
+        install_function = self.source.split(
+            "function Install-Hdr10PlusTool", 1
+        )[1].split("function Test-Hdr10PlusTool", 1)[0]
+        self.assertIn('-Repository "quietvoid/hdr10plus_tool"', release_function)
+        self.assertIn("x86_64-pc-windows-msvc", release_function)
+        self.assertIn('-Filter "hdr10plus_tool.exe"', install_function)
+        self.assertIn("Invoke-SetupDownload", install_function)
+        self.assertIn("Expand-SetupZip", install_function)
+        self.assertNotIn("cargo", install_function)
 
     def test_all_stage_two_components_are_registered(self) -> None:
         components = (
@@ -227,6 +243,7 @@ class WindowsSetupTests(unittest.TestCase):
             "mkvtoolnix",
             "tsmuxer",
             "dovi-tool",
+            "hdr10plus-tool",
             "truehdd",
         )
         for component in components:
@@ -410,6 +427,7 @@ class WindowsSetupTests(unittest.TestCase):
             "-DLINKED_10BIT=ON",
             "-DLINKED_12BIT=ON",
             "-DENABLE_HDR10_PLUS=OFF",
+            "-DENABLE_HDR10_PLUS=ON",
             "-DENABLE_AVISYNTH=OFF",
             "-DNASM_EXECUTABLE=$nasmPath",
             '"--target", "cli"',
@@ -418,6 +436,25 @@ class WindowsSetupTests(unittest.TestCase):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, install_function)
         self.assertIn("8bit+10bit+12bit", self.source)
+
+    def test_x265_hdr10plus_json11_patch_is_scoped(self) -> None:
+        patch_function = self.source.split(
+            "function Update-X265Hdr10PlusSource", 1
+        )[1].split("function Get-X265Release", 1)[0]
+        for fragment in (
+            r"dynamicHDR10\json11\json11.cpp",
+            "#include <limits>",
+            "#include <cstdint>",
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, patch_function)
+        install_function = self.source.split("function Install-X265", 1)[1].split(
+            "function Test-X265", 1
+        )[0]
+        self.assertIn(
+            "Update-X265Hdr10PlusSource -SourceRoot $sourceRoot",
+            install_function,
+        )
 
     def test_x265_uses_latest_official_stable_source(self) -> None:
         release_function = self.source.split("function Get-X265Release", 1)[1].split(
@@ -448,6 +485,7 @@ class WindowsSetupTests(unittest.TestCase):
             "$release.Version",
             "-DCMAKE_POLICY_VERSION_MINIMUM=3.10",
             "-DENABLE_HDR10_PLUS=OFF",
+            "-DENABLE_HDR10_PLUS=ON",
         ):
             self.assertIn(fragment, install_function)
         self.assertNotIn("Update-X265SourceForCMake4", self.source)
@@ -457,6 +495,9 @@ class WindowsSetupTests(unittest.TestCase):
             "function Get-SvtAv1Release", 1
         )[0]
         self.assertIn('IndexOf("8bit+10bit+12bit"', verify_function)
+        self.assertIn('Arguments @("--help")', verify_function)
+        self.assertIn("-AcceptedExitCodes @(0, 1)", verify_function)
+        self.assertIn('IndexOf("--dhdr10-info"', verify_function)
         self.assertNotIn("Get-InstalledX265Version", verify_function)
         self.assertNotIn("[regex]", verify_function)
     def test_validation_simplicity_rule_is_synchronized(self) -> None:
@@ -607,6 +648,7 @@ class WindowsSetupTests(unittest.TestCase):
             r'C:\Software\x265.exe',
             r'C:\Software\SvtAv1EncApp.exe',
             r'C:\Software\fdkaac.exe',
+            r'C:\Software\hdr10plus_tool.exe',
             r'C:\Software\vapoursynth\vsedit.exe',
             r'C:\Software\vapoursynth\vspipe.exe',
         )
@@ -655,6 +697,7 @@ class WindowsSetupTests(unittest.TestCase):
             "FFPROBE_PATH": bundle_root + r"\ffprobe.exe",
             "FDK_AAC_PATH": bundle_root + r"\fdkaac.exe",
             "DOVI_TOOL_PATH": bundle_root + r"\dovi_tool.exe",
+            "HDR10PLUS_TOOL_PATH": bundle_root + r"\hdr10plus_tool.exe",
             "TRUEHDD_PATH": bundle_root + r"\truehdd.exe",
             "VSEDIT_PATH": bundle_root + r"\vs_pkg\vsedit.exe",
             "LIBASS_PATH": bundle_root + r"\libass-9.dll",
@@ -686,6 +729,7 @@ class WindowsSetupTests(unittest.TestCase):
         self.assertIn('PROJECT_ROOT / "config.default.json"', self.spec_source)
         self.assertIn('(str(SETTINGS_PATH), "src/core")', self.spec_source)
         self.assertIn('(str(default_config), ".")', self.spec_source)
+        self.assertIn('("HDR10PLUS_TOOL_PATH", "hdr10plus_tool")', self.spec_source)
         self.assertNotIn('collect_all("librosa")', self.spec_source)
         self.assertNotIn("librosa_hiddenimports", self.spec_source)
         self.assertNotIn("metaflac.exe", self.spec_source)

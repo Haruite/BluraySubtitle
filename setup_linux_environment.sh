@@ -749,6 +749,67 @@ install_dovi_tool() {
 }
 
 # ---------------------------------------------------------------------------
+# hdr10plus_tool (official prebuilt musl release)
+# ---------------------------------------------------------------------------
+
+install_hdr10plus_tool() {
+  local version
+  version="$(latest_stable_tag https://github.com/quietvoid/hdr10plus_tool.git)"
+  log "$(msg "Installing hdr10plus_tool ${version} (prebuilt)" "安装 hdr10plus_tool ${version}（预编译包）")"
+
+  local installed_output=""
+  if [[ -x /usr/bin/hdr10plus_tool ]]; then
+    installed_output="$(/usr/bin/hdr10plus_tool --version 2>&1 || true)"
+  fi
+  if [[ "$installed_output" == *"hdr10plus_tool ${version#v}"* ]]; then
+    log "$(msg "Latest official hdr10plus_tool ${version} is already installed; skipping." "已安装最新官方 hdr10plus_tool ${version}，跳过。")"
+    return 0
+  fi
+
+  local arch tarball
+  case "$(uname -m)" in
+    x86_64 | amd64)
+      arch=x86_64
+      ;;
+    aarch64 | arm64)
+      arch=aarch64
+      ;;
+    *)
+      die "$(msg "Unsupported CPU architecture for hdr10plus_tool prebuilt: $(uname -m)" "当前 CPU 架构不支持预编译 hdr10plus_tool：$(uname -m)")"
+      ;;
+  esac
+  tarball="hdr10plus_tool-${version#v}-${arch}-unknown-linux-musl.tar.gz"
+
+  local deps=(git wget tar)
+  local missing_deps=()
+  local dep
+  for dep in "${deps[@]}"; do
+    if ! dpkg-query -W -f='${Status}' "$dep" 2>/dev/null | grep -q "install ok installed"; then
+      missing_deps+=("$dep")
+    fi
+  done
+  if (( ${#missing_deps[@]} > 0 )); then
+    apt_update
+    apt_install "${missing_deps[@]}" || die "$(msg 'Failed to install hdr10plus_tool dependencies' 'hdr10plus_tool 依赖安装失败')"
+  fi
+
+  local install_dir
+  install_dir="$(mktemp -d)"
+  (
+    cd "$install_dir" || exit 1
+    tmux_run "$(msg "Download ${tarball}" "下载 ${tarball}")" \
+      wget "https://github.com/quietvoid/hdr10plus_tool/releases/download/${version}/${tarball}" || exit 1
+    tmux_run "$(msg 'Extract hdr10plus_tool tarball' '解压 hdr10plus_tool 压缩包')" tar zxf "$tarball" || exit 1
+    bluray_sudo install -m 0755 hdr10plus_tool /usr/bin/hdr10plus_tool || exit 1
+  ) || die "$(msg 'hdr10plus_tool install failed' 'hdr10plus_tool 安装失败')"
+
+  rm -rf "$install_dir"
+  /usr/bin/hdr10plus_tool --version 2>&1 | grep -F "hdr10plus_tool ${version#v}" >/dev/null || \
+    die "$(msg 'Installed hdr10plus_tool verification failed' '安装后的 hdr10plus_tool 验证失败')"
+  log "$(msg 'hdr10plus_tool installation complete' 'hdr10plus_tool 安装完成')"
+}
+
+# ---------------------------------------------------------------------------
 # truehdd (prebuilt release binary for TrueHD+Atmos decode)
 # ---------------------------------------------------------------------------
 
@@ -1077,6 +1138,20 @@ install_lsmash() {
 # x265 (latest official stable release)
 # ---------------------------------------------------------------------------
 
+__patch_x265_hdr10plus_json11() {
+  local source_file="$1/source/dynamicHDR10/json11/json11.cpp"
+  [[ -f "$source_file" ]] || \
+    die "$(msg 'x265 HDR10+ json11 source file is missing' 'x265 HDR10+ json11 源文件不存在')"
+  if grep -Fxq '#include <cstdint>' "$source_file"; then
+    return 0
+  fi
+  grep -Fxq '#include <limits>' "$source_file" || \
+    die "$(msg 'x265 HDR10+ json11 compatibility patch context is missing' 'x265 HDR10+ json11 兼容补丁上下文不存在')"
+  sed -i '/^#include <limits>$/a #include <cstdint>' "$source_file"
+  grep -Fxq '#include <cstdint>' "$source_file" || \
+    die "$(msg 'x265 HDR10+ json11 compatibility patch failed' 'x265 HDR10+ json11 兼容补丁失败')"
+}
+
 # $1 = absolute path to the official x265 repository root.
 __build_x265_official_multilib() {
   local x265_repo="$1"
@@ -1085,6 +1160,7 @@ __build_x265_official_multilib() {
 
   [[ -f "${SRCROOT}/CMakeLists.txt" ]] || \
     die "$(msg 'x265 source tree has no CMakeLists.txt' 'x265 源码目录中找不到 CMakeLists.txt')"
+  __patch_x265_hdr10plus_json11 "$x265_repo" || return $?
 
   case ${MAKEFLAGS-} in
   '')
@@ -1098,7 +1174,6 @@ __build_x265_official_multilib() {
   local -a _x265_cmake_args=(
     "-DCMAKE_POLICY_VERSION_MINIMUM=3.10"
     "-DENABLE_SHARED=OFF"
-    "-DENABLE_HDR10_PLUS=OFF"
     "-DENABLE_LIBNUMA=OFF"
     "-DENABLE_LSMASH=OFF"
     "-DENABLE_LAVF=OFF"
@@ -1164,10 +1239,11 @@ __build_x265_official_multilib() {
       -DHIGH_BIT_DEPTH=ON \
       -DEXPORT_C_API=OFF \
       -DENABLE_SHARED=OFF \
+      -DENABLE_HDR10_PLUS=OFF \
       -DENABLE_CLI=OFF \
       -DMAIN12=ON \
-      -DENABLE_LIBNUMA=OFF
-  tmux_run "$(msg 'x265 12-bit: make' 'x265 12-bit：make')" make
+      -DENABLE_LIBNUMA=OFF || return $?
+  tmux_run "$(msg 'x265 12-bit: make' 'x265 12-bit：make')" make || return $?
 
   log "$(msg 'x265: configuring 10-bit core (static, no CLI)' 'x265：配置 10-bit 核心（静态库，无 CLI）')"
   cd "${MULTIBUILD}/10bit" || die "$(msg 'Cannot cd to x265 10-bit build dir' '无法进入 x265 10-bit 构建目录')"
@@ -1176,40 +1252,43 @@ __build_x265_official_multilib() {
       -DHIGH_BIT_DEPTH=ON \
       -DEXPORT_C_API=OFF \
       -DENABLE_SHARED=OFF \
+      -DENABLE_HDR10_PLUS=OFF \
       -DENABLE_CLI=OFF \
-      -DENABLE_LIBNUMA=OFF
-  tmux_run "$(msg 'x265 10-bit: make' 'x265 10-bit：make')" make
+      -DENABLE_LIBNUMA=OFF || return $?
+  tmux_run "$(msg 'x265 10-bit: make' 'x265 10-bit：make')" make || return $?
 
   log "$(msg 'x265: configuring 8-bit multilib CLI' 'x265：配置 8-bit multilib 可执行文件')"
   cd "${MULTIBUILD}/8bit" || die "$(msg 'Cannot cd to x265 8-bit build dir' '无法进入 x265 8-bit 构建目录')"
-  ln -sf ../10bit/libx265.a libx265_main10.a
-  ln -sf ../12bit/libx265.a libx265_main12.a
+  ln -sf ../10bit/libx265.a libx265_main10.a || return $?
+  ln -sf ../12bit/libx265.a libx265_main12.a || return $?
   if [[ -n "$X265_CMAKE_EXE_LINKER_FLAGS" ]]; then
     tmux_run "$(msg 'x265 8-bit: cmake (with linker flags)' 'x265 8-bit：cmake（含链接器参数）')" \
       cmake "${_x265_cmake_args[@]}" "$SRCROOT" \
         -DENABLE_SHARED=OFF \
         -DENABLE_LIBNUMA=OFF \
+        -DENABLE_HDR10_PLUS=ON \
         -DCMAKE_EXE_LINKER_FLAGS="$X265_CMAKE_EXE_LINKER_FLAGS" \
         -DEXTRA_LIB="x265_main10.a;x265_main12.a" \
         -DEXTRA_LINK_FLAGS=-L. \
         -DLINKED_10BIT=ON \
-        -DLINKED_12BIT=ON
+        -DLINKED_12BIT=ON || return $?
   else
     tmux_run "$(msg 'x265 8-bit: cmake' 'x265 8-bit：cmake')" \
       cmake "${_x265_cmake_args[@]}" "$SRCROOT" \
         -DENABLE_SHARED=OFF \
         -DENABLE_LIBNUMA=OFF \
+        -DENABLE_HDR10_PLUS=ON \
         -DEXTRA_LIB="x265_main10.a;x265_main12.a" \
         -DEXTRA_LINK_FLAGS=-L. \
         -DLINKED_10BIT=ON \
-        -DLINKED_12BIT=ON
+        -DLINKED_12BIT=ON || return $?
   fi
-  tmux_run "$(msg 'x265 8-bit: make' 'x265 8-bit：make')" make
+  tmux_run "$(msg 'x265 8-bit: make' 'x265 8-bit：make')" make || return $?
 
   log "$(msg 'x265: merging static libraries (ar)' 'x265：合并静态库（ar）')"
-  mv libx265.a libx265_main.a
+  mv libx265.a libx265_main.a || return $?
   if [[ "$(uname)" == "Linux" ]]; then
-    ar -M <<EOF
+    ar -M <<EOF || return $?
 CREATE libx265.a
 ADDLIB libx265_main.a
 ADDLIB libx265_main10.a
@@ -1218,7 +1297,7 @@ SAVE
 END
 EOF
   else
-    libtool -static -o libx265.a libx265_main.a libx265_main10.a libx265_main12.a 2>/dev/null
+    libtool -static -o libx265.a libx265_main.a libx265_main10.a libx265_main12.a 2>/dev/null || return $?
   fi
 
   if command -v strip >/dev/null 2>&1; then
@@ -1229,11 +1308,11 @@ EOF
   [[ -f "$_x265_out" ]] || die "$(msg 'x265 binary missing after build' '编译完成后未找到 x265 可执行文件')"
   log "$(msg 'Installing x265 to /usr/bin' '正在将 x265 安装到 /usr/bin')"
   if command -v sudo >/dev/null 2>&1 && [[ "$(id -u)" -ne 0 ]]; then
-    sudo cp "$_x265_out" /usr/bin/
-    sudo chmod +x /usr/bin/x265
+    sudo cp "$_x265_out" /usr/bin/ || return $?
+    sudo chmod +x /usr/bin/x265 || return $?
   else
-    cp "$_x265_out" /usr/bin/
-    chmod +x /usr/bin/x265
+    cp "$_x265_out" /usr/bin/ || return $?
+    chmod +x /usr/bin/x265 || return $?
   fi
 }
 
@@ -1242,12 +1321,14 @@ install_x265() {
   x265_version="$(latest_stable_tag "$X265_SOURCE_REPOSITORY" '^[0-9]+([.][0-9]+)+$' '[0-9]*')"
   log "$(msg "Installing official x265 ${x265_version}" "安装官方 x265 ${x265_version}")"
 
-  local installed_output=""
+  local installed_output="" installed_help=""
   if [[ -x /usr/bin/x265 ]]; then
     installed_output="$(/usr/bin/x265 --version 2>&1 || true)"
+    installed_help="$(/usr/bin/x265 --help 2>&1 || true)"
   fi
   if [[ "$installed_output" == *"encoder version ${x265_version}"* &&
-        "$installed_output" == *"8bit+10bit+12bit"* ]]; then
+        "$installed_output" == *"8bit+10bit+12bit"* &&
+        "$installed_help" == *"--dhdr10-info"* ]]; then
     log "$(msg "Latest official x265 ${x265_version} is already installed; skipping build." "已安装最新官方 x265 ${x265_version}，跳过编译。")"
     return 0
   fi
@@ -1271,6 +1352,9 @@ install_x265() {
     die "$(msg 'Installed x265 version verification failed' '安装后的 x265 版本验证失败')"
   /usr/bin/x265 --version 2>&1 | grep -F '8bit+10bit+12bit' >/dev/null || \
     die "$(msg 'Installed x265 multilib verification failed' '安装后的 x265 多位深验证失败')"
+  installed_help="$(/usr/bin/x265 --help 2>&1 || true)"
+  [[ "$installed_help" == *"--dhdr10-info"* ]] || \
+    die "$(msg 'Installed x265 native HDR10+ verification failed' '安装后的 x265 原生 HDR10+ 验证失败')"
   log "$(msg 'x265 installation successful!' 'x265 安装成功！')"
 }
 
@@ -2759,6 +2843,7 @@ install_x265
 install_svt_av1
 install_tsmuxer
 install_dovi_tool
+install_hdr10plus_tool
 install_truehdd
 install_fdk_aac
 install_flac

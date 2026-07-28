@@ -788,7 +788,7 @@ Blu-ray DIY 压制及“编辑轨道”中的通用视频转换仍不在本阶�
 ## 编码器工具链迁移——官方 x264/x265
 
 日期：2026-07-28
-提交：未提交（当前修改）
+提交：26dc5fe
 
 ### 范围
 
@@ -799,7 +799,7 @@ Blu-ray DIY 压制及“编辑轨道”中的通用视频转换仍不在本阶�
 ### 删除的路径与行为变化
 
 - 移除 Windows jpsdr/t_mod 预编译 x264 下载路径和 Yuuki-Asuna x265 fork 拉取路径。
-- 移除 x265 源码重写兼容补丁。现在直接配置未经修改的官方源码，并传入 `CMAKE_POLICY_VERSION_MINIMUM=3.10`；HDR10+ 等未使用集成均明确关闭。
+- 移除 x265 源码重写兼容补丁。现在直接配置未经修改的官方源码，并传入 `CMAKE_POLICY_VERSION_MINIMUM=3.10`；该次迁移未使用的集成均明确关闭。
 - 从 x265 Extreme 预设移除 fork 专用的 `--pme` 和 `--pmode`；不再保留这些旧参数的兼容路径。
 - Windows 改为使用 MSYS2 UCRT64 编译官方 x264，启用全部受支持位深/色度格式、LTO 和上游 `fprofiled` 目标；安装后能力检查使用官方参数名 `--colormatrix`，不会再误判有效构建；Windows x265 继续构建静态 8/10/12 位 MSVC multilib。
 - Linux 编译动态解析到的官方源码。Docker 保持单一 Ubuntu 26.04 镜像，并在 x265 与 x264 原有的对应位置替换构建步骤；各位置的官方远程元数据作为 Docker 缓存键，使新编码器版本只令对应编码器层及其后续层失效。
@@ -814,3 +814,25 @@ Blu-ray DIY 压制及“编辑轨道”中的通用视频转换仍不在本阶�
 - PowerShell 解析和 `bash -n` 验证 setup 脚本；专项回归测试覆盖动态官方源码解析、多位深构建、Docker 构建层位置、可执行文件路径不变以及 fork 专用参数移除。
 - 验证主机未安装 Docker，因此未在本机实际构建镜像。应在具备 Docker 的主机上构建，并检查两个版本横幅以及 x265 的 `8bit+10bit+12bit` 输出。
 - 应在可丢弃的受支持主机上分别运行两个 setup 脚本，再使用短素材测试 x264 8/10 位、x265 8/10/12 位以及 HDR10 压制，之后再发布二进制。
+
+## HDR10+ 构建环境准备
+
+日期：2026-07-28
+提交：未提交（当前修改）
+
+### 范围
+
+- 在最终 8 位 multilib CLI 中启用 x265 原生 HDR10+ JSON 解析器；链接进去的 10 位与 12 位核心库继续关闭该解析器，避免重复带入解析器对象。
+- 两个 setup 脚本和 Docker 均新增官方最新 `hdr10plus_tool` release，且不增加本地 Rust 编译。Windows 使用官方 x86_64 MSVC 压缩包；Linux 与 Docker 根据架构选择官方 x86_64 或 AArch64 musl 压缩包。
+- 在共享设置、“外部工具”页和 Windows one-folder 打包中增加 `HDR10PLUS_TOOL_PATH`，并保持固定系统路径：`C:\Software\hdr10plus_tool.exe` 与 `/usr/bin/hdr10plus_tool`。
+- x265 参数仍修改在 Dockerfile 原有 x265 层；新增工具的 release 层放在 Dockerfile 末段。
+- 所有受管理的 x265 构建都增加同一项严格限定的兼容修改：编译原生 HDR10+ 解析器前，为上游 `dynamicHDR10/json11/json11.cpp` 补入缺失的 `<cstdint>`。
+- 本次只准备受管理的构建环境；HDR10+ 自动提取和 x265 命令规划留待后续单独实现。
+
+### 兼容性与验证
+
+- 上游 release 自动化以 internal-font 特性构建 Linux musl 目标，不依赖系统 fontconfig；另外检查了官方 1.7.1 x86_64 产物，确认为已裁剪的静态 PIE，因此不依赖 glibc 版本，可直接用于 Ubuntu 22.04。
+- x265 setup 验证现在同时要求 8/10/12 位构建标识和原生 `--dhdr10-info` 帮助项；同版本但未启用 HDR10+ 的旧受管理构建会被自动重编。由于 x265 打印帮助后会返回非零状态，脚本会单独捕获帮助文本再检查内容。
+- Linux x265 配置、编译、链接、静态库合并和安装现在会在第一条失败命令处立即返回，不再继续产生次生的文件缺失错误。
+- 验证使用当前官方 x265 4.2 标签，并包含启用原生 HDR10+ 的完整 12/10/8 位 multilib CLI 编译。
+- PowerShell 解析、`bash -n`、60 项构建环境专项测试、3 项“外部工具”设置测试、`git diff --check` 和行尾检查均通过。验证主机未提供 Docker，因此完整镜像构建仍需手动检查。

@@ -60,6 +60,10 @@ X264_PATH = r"C:\Software\x264.exe"
 SVT_AV1_PATH = r'C:\Software\SvtAv1EncApp.exe'
 FDK_AAC_PATH = _bundled_path("fdkaac.exe", r"C:\Software\fdkaac.exe")
 DOVI_TOOL_PATH = _bundled_path("dovi_tool.exe", r"C:\Software\dovi_tool.exe")
+HDR10PLUS_TOOL_PATH = _bundled_path(
+    "hdr10plus_tool.exe",
+    r"C:\Software\hdr10plus_tool.exe",
+)
 TRUEHDD_PATH = _bundled_path("truehdd.exe", r"C:\Software\truehdd.exe")
 VSEDIT_PATH = _bundled_path(
     os.path.join("vs_pkg", "vsedit.exe"),
@@ -95,6 +99,7 @@ if sys.platform != "win32":
     SVT_AV1_PATH = "/usr/bin/SvtAv1EncApp"
     FDK_AAC_PATH = "/usr/local/bin/fdkaac"
     DOVI_TOOL_PATH = "/usr/bin/dovi_tool"
+    HDR10PLUS_TOOL_PATH = "/usr/bin/hdr10plus_tool"
     TRUEHDD_PATH = '/usr/bin/truehdd'
     PLUGIN_PATH = os.path.expanduser("~/plugins")
     VSEDIT_PATH = "/usr/bin/vsedit"

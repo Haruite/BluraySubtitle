@@ -13,6 +13,7 @@ from .settings import ENCODE_SP_LABELS
 from .settings import DIY_SP_LABELS
 from .settings import FDK_AAC_PATH
 from .settings import DOVI_TOOL_PATH
+from .settings import HDR10PLUS_TOOL_PATH
 from .settings import FFMPEG_PATH
 from .settings import FFPROBE_PATH
 from .settings import FLAC_PATH
@@ -37,6 +38,7 @@ __all__ = [
     "find_mkvtoolnix",
     "FDK_AAC_PATH",
     "DOVI_TOOL_PATH",
+    "HDR10PLUS_TOOL_PATH",
     "FFMPEG_PATH",
     "FFPROBE_PATH",
     "X265_PATH",

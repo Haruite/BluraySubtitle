@@ -160,11 +160,13 @@ Encode options include:
 The setup scripts and Docker image resolve the current official upstream source when they run or build:
 
 - **[x264](https://code.videolan.org/videolan/x264)** uses the latest official `master` revision, built as one 8/10-bit-capable CLI. The Windows setup uses the MSYS2 UCRT64 toolchain and profile-guided optimization.
-- **[x265](https://github.com/Multicorewareinc/x265)** uses the latest official stable numeric release tag, built as one statically linked 8/10/12-bit multilib CLI.
+- **[x265](https://github.com/Multicorewareinc/x265)** uses the latest official stable numeric release tag, built as one statically linked 8/10/12-bit multilib CLI with native HDR10+ JSON input support (`--dhdr10-info`).
 
-The managed paths remain `C:\Software\x264.exe` and `C:\Software\x265.exe` on Windows, and `/usr/bin/x264` and `/usr/bin/x265` on Linux and in Docker. To use another build, replace the corresponding executable at the same path; no encoder-version parameter needs to be entered in the application. A replacement must support the bit depths and CLI options used by this project, including the HDR static-metadata options for the selected codec. Re-running a setup script checks the latest official upstream source and may replace a custom build that is not recognized as the current managed build.
+The managed paths remain `C:\Software\x264.exe` and `C:\Software\x265.exe` on Windows, and `/usr/bin/x264` and `/usr/bin/x265` on Linux and in Docker. To use another build, replace the corresponding executable at the same path; no encoder-version parameter needs to be entered in the application. A replacement must support the bit depths and CLI options used by this project, including the HDR static-metadata options for the selected codec and x265's native HDR10+ input option. Re-running a setup script checks the latest official upstream source and may replace a custom build that is not recognized as the current managed build.
 
-For custom x265 builds, use the official multilib steps in `setup_windows_environment.ps1`, `setup_linux_environment.sh`, or `Dockerfile` as references. `Dockerfile` is the Ubuntu 26.04 adaptation of the Linux setup flow, and its x265 and x264 build layers remain at their corresponding existing positions. Official upstream metadata is used as the cache key at each position, so unchanged encoder versions retain their layers while a new upstream version invalidates the corresponding encoder layer and the layers after it.
+The setup scripts also install the latest official [hdr10plus_tool](https://github.com/quietvoid/hdr10plus_tool) release at `C:\Software\hdr10plus_tool.exe` on Windows and `/usr/bin/hdr10plus_tool` on Linux and in Docker. Linux uses the upstream musl release binary and does not compile the tool locally.
+
+For custom x265 builds, use the official multilib steps in `setup_windows_environment.ps1`, `setup_linux_environment.sh`, or `Dockerfile` as references. The managed x265 build applies one source compatibility fix: it adds the missing `<cstdint>` include to upstream `dynamicHDR10/json11/json11.cpp`, which is required by current C++ compilers when native HDR10+ is enabled. `Dockerfile` is the Ubuntu 26.04 adaptation of the Linux setup flow, and its x265 and x264 build layers remain at their corresponding existing positions. Official upstream metadata is used as the cache key at each position, so unchanged encoder versions retain their layers while a new upstream version invalidates the corresponding encoder layer and the layers after it.
 
 Encode follows the visible row order and applies the displayed output names, per-row VPy scripts, subtitles,
 languages, track choices, and encoder settings. For Blu-ray input, its temporary Remux preserves the selected source
@@ -309,6 +311,7 @@ pip install PyQt6 numpy soundfile pycountry pillow matplotlib
 - `vsedit`
 - `x264`
 - `x265`
+- `hdr10plus_tool`
 - `SvtAv1EncApp`
 - `fdkaac`
 

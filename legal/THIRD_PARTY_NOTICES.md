@@ -70,7 +70,7 @@ These are **two separate upstreams**: the `fdkaac` program links against or ship
 - **Version:** latest official stable numeric release tag resolved when setup or Docker runs
 - **License:** GPL-2.0
 - **Official repository:** https://github.com/Multicorewareinc/x265.git
-- **Build note:** built from the unmodified official source as a statically linked 8/10/12-bit multilib CLI on the target platform, including Ubuntu 26.04 for Docker.
+- **Build note:** built from the official source as a statically linked 8/10/12-bit multilib CLI with native HDR10+ JSON input support on the target platform, including Ubuntu 26.04 for Docker. The managed build adds the missing `<cstdint>` include to upstream `dynamicHDR10/json11/json11.cpp` for compatibility with current C++ compilers.
 
 ---
 
@@ -99,6 +99,16 @@ These are **two separate upstreams**: the `fdkaac` program links against or ship
 - **Version:** 2.3.3
 - **License:** MIT
 - **Source:** https://github.com/quietvoid/dovi_tool/archive/refs/tags/2.3.3.zip
+
+---
+
+## hdr10plus_tool
+
+- **Files:** `hdr10plus_tool.exe`, `/usr/bin/hdr10plus_tool`
+- **Version:** latest official stable release resolved when setup or Docker runs
+- **License:** MIT
+- **Official repository:** https://github.com/quietvoid/hdr10plus_tool
+- **Build note:** Windows setup downloads the official MSVC release; Linux setup and Docker download the official musl release built upstream with its internal font feature. The tool is not compiled locally.
 
 ---
 

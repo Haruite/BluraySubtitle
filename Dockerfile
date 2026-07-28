@@ -224,13 +224,18 @@ mkdir -p /tmp/x265
 cd /tmp/x265
 git clone --depth 1 --branch "$tag" "$repo" x265
 source_root=/tmp/x265/x265/source
+json11_source="$source_root/dynamicHDR10/json11/json11.cpp"
+if ! grep -Fxq '#include <cstdint>' "$json11_source"; then
+    grep -Fxq '#include <limits>' "$json11_source"
+    sed -i '/^#include <limits>$/a #include <cstdint>' "$json11_source"
+fi
+grep -Fxq '#include <cstdint>' "$json11_source"
 build_root=/tmp/x265/build
 jobs="$(nproc)"
 common_args=(
     -DCMAKE_POLICY_VERSION_MINIMUM=3.10
     -DCMAKE_BUILD_TYPE=Release
     -DENABLE_SHARED=OFF
-    -DENABLE_HDR10_PLUS=OFF
     -DENABLE_LIBNUMA=OFF
     -DENABLE_LSMASH=OFF
     -DENABLE_LAVF=OFF
@@ -241,12 +246,14 @@ cmake -S "$source_root" -B "$build_root/12bit" "${common_args[@]}" \
     -DHIGH_BIT_DEPTH=ON \
     -DMAIN12=ON \
     -DEXPORT_C_API=OFF \
+    -DENABLE_HDR10_PLUS=OFF \
     -DENABLE_CLI=OFF
 cmake --build "$build_root/12bit" --parallel "$jobs"
 cmake -S "$source_root" -B "$build_root/10bit" "${common_args[@]}" \
     -DHIGH_BIT_DEPTH=ON \
     -DMAIN12=OFF \
     -DEXPORT_C_API=OFF \
+    -DENABLE_HDR10_PLUS=OFF \
     -DENABLE_CLI=OFF
 cmake --build "$build_root/10bit" --parallel "$jobs"
 mkdir -p "$build_root/8bit"
@@ -258,11 +265,14 @@ cmake -S "$source_root" -B "$build_root/8bit" "${common_args[@]}" \
     -DEXTRA_LINK_FLAGS=-L. \
     -DLINKED_10BIT=ON \
     -DLINKED_12BIT=ON \
+    -DENABLE_HDR10_PLUS=ON \
     -DENABLE_CLI=ON
 cmake --build "$build_root/8bit" --parallel "$jobs"
 install -m 0755 "$build_root/8bit/x265" /usr/bin/x265
 /usr/bin/x265 --version 2>&1 | grep -F "encoder version $tag" >/dev/null
 /usr/bin/x265 --version 2>&1 | grep -F '8bit+10bit+12bit' >/dev/null
+x265_help="$(/usr/bin/x265 --help 2>&1 || true)"
+[[ "$x265_help" == *"--dhdr10-info"* ]]
 rm -rf /tmp/x265 /tmp/x265-tags.json
 X265EOS
 
@@ -751,7 +761,27 @@ RUN set -eux; \
     chmod +x /usr/bin/tsMuxeR; \
     rm -rf /tmp/tsmuxer
 
+ADD ["https://api.github.com/repos/quietvoid/hdr10plus_tool/releases/latest", "/tmp/hdr10plus-tool-release.json"]
+
+RUN set -eux; \
+    HDR10PLUS_TAG="$(python3 -c 'import json; print(json.load(open("/tmp/hdr10plus-tool-release.json", encoding="utf-8"))["tag_name"])')"; \
+    HDR10PLUS_VER="${HDR10PLUS_TAG#v}"; \
+    case "$(uname -m)" in \
+      x86_64|amd64) HDR10PLUS_ARCH=x86_64 ;; \
+      aarch64|arm64) HDR10PLUS_ARCH=aarch64 ;; \
+      *) exit 1 ;; \
+    esac; \
+    HDR10PLUS_ARCHIVE="hdr10plus_tool-${HDR10PLUS_VER}-${HDR10PLUS_ARCH}-unknown-linux-musl.tar.gz"; \
+    mkdir -p /tmp/hdr10plus-tool; \
+    cd /tmp/hdr10plus-tool; \
+    wget "https://github.com/quietvoid/hdr10plus_tool/releases/download/${HDR10PLUS_TAG}/${HDR10PLUS_ARCHIVE}"; \
+    tar zxf "${HDR10PLUS_ARCHIVE}"; \
+    install -m 0755 hdr10plus_tool /usr/bin/hdr10plus_tool; \
+    /usr/bin/hdr10plus_tool --version 2>&1 | grep -F "hdr10plus_tool ${HDR10PLUS_VER}" >/dev/null; \
+    rm -rf /tmp/hdr10plus-tool /tmp/hdr10plus-tool-release.json
+
 RUN test -x /usr/bin/dovi_tool
+RUN test -x /usr/bin/hdr10plus_tool
 RUN test -x /usr/bin/truehdd
 
 ENV LD_PRELOAD=/usr/local/lib/libvapoursynth-script.so

@@ -128,6 +128,7 @@ $script:ToolPaths = [ordered]@{
     MkvPropEdit = "C:\Program Files\MKVToolNix\mkvpropedit.exe"
     TsMuxer = "C:\Software\tsMuxeR.exe"
     DoviTool = "C:\Software\dovi_tool.exe"
+    Hdr10PlusTool = "C:\Software\hdr10plus_tool.exe"
     TrueHdd = "C:\Software\truehdd.exe"
     X264 = "C:\Software\x264.exe"
     X264Version = "C:\Software\x264-version.txt"
@@ -2488,6 +2489,42 @@ function Test-DoviTool {
     return [bool](Get-InstalledDoviToolVersion)
 }
 
+function Get-Hdr10PlusToolRelease {
+    return Get-GitHubLatestReleaseAsset `
+        -Repository "quietvoid/hdr10plus_tool" `
+        -AssetPattern '^hdr10plus_tool-[0-9]+(?:\.[0-9]+){1,3}-x86_64-pc-windows-msvc\.zip$'
+}
+
+function Get-InstalledHdr10PlusToolVersion {
+    if (-not (Test-Path -LiteralPath $script:ToolPaths.Hdr10PlusTool -PathType Leaf)) {
+        return ""
+    }
+    $output = Invoke-SetupCommand -FilePath $script:ToolPaths.Hdr10PlusTool -Arguments @("--version")
+    $match = [regex]::Match($output, 'hdr10plus_tool\s+([0-9]+(?:\.[0-9]+){1,3})', 'IgnoreCase')
+    return $(if ($match.Success) { $match.Groups[1].Value } else { "" })
+}
+
+function Install-Hdr10PlusTool {
+    param([string]$Version)
+
+    $release = Get-Hdr10PlusToolRelease
+    $archive = Join-Path $script:TempRoot $release.Name
+    $extracted = Join-Path $script:TempRoot "hdr10plus-tool-extracted"
+    Invoke-SetupDownload -Uri $release.Uri -Destination $archive -Sha256 $release.Sha256 | Out-Null
+    Expand-SetupZip -Archive $archive -Destination $extracted
+    $executable = Get-ChildItem -LiteralPath $extracted -Filter "hdr10plus_tool.exe" -File -Recurse |
+        Select-Object -First 1
+    if ($null -eq $executable) {
+        throw (Get-SetupText "hdr10plus_tool.exe is missing from the release archive." "发布压缩包中缺少 hdr10plus_tool.exe。")
+    }
+    [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($script:ToolPaths.Hdr10PlusTool)) | Out-Null
+    Copy-Item -LiteralPath $executable.FullName -Destination $script:ToolPaths.Hdr10PlusTool -Force
+}
+
+function Test-Hdr10PlusTool {
+    return [bool](Get-InstalledHdr10PlusToolVersion)
+}
+
 function Get-TrueHddRelease {
     return Get-GitHubLatestReleaseAsset `
         -Repository "truehdd/truehdd" `
@@ -2649,6 +2686,27 @@ function Test-X264 {
         return $false
     }
 }
+function Update-X265Hdr10PlusSource {
+    param([Parameter(Mandatory = $true)][string]$SourceRoot)
+
+    $sourceFile = Join-Path $SourceRoot "dynamicHDR10\json11\json11.cpp"
+    if (-not (Test-Path -LiteralPath $sourceFile -PathType Leaf)) {
+        throw (Get-SetupText "The x265 HDR10+ json11 source file is missing." "x265 HDR10+ json11 源文件不存在。")
+    }
+    $encoding = New-Object Text.UTF8Encoding($false)
+    $source = [IO.File]::ReadAllText($sourceFile, $encoding)
+    if ($source.Contains("#include <cstdint>")) {
+        return
+    }
+    $lineEnding = if ($source.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $context = "#include <limits>$lineEnding"
+    if (-not $source.Contains($context)) {
+        throw (Get-SetupText "The x265 HDR10+ json11 compatibility patch context is missing." "x265 HDR10+ json11 兼容补丁上下文不存在。")
+    }
+    $updated = $source.Replace($context, "${context}#include <cstdint>$lineEnding")
+    [IO.File]::WriteAllText($sourceFile, $updated, $encoding)
+}
+
 function Get-X265Release {
     return Get-GitHubLatestTaggedSource `
         -Repository "Multicorewareinc/x265" `
@@ -2681,6 +2739,7 @@ function Install-X265 {
         throw (Get-SetupText "x265 source directory is missing." "未找到 x265 源码目录。")
     }
     $sourceRoot = $sourceCmake.Directory.FullName
+    Update-X265Hdr10PlusSource -SourceRoot $sourceRoot
 
     $buildRoot = Join-Path $script:TempRoot "x265-build"
     $build12 = Join-Path $buildRoot "12bit"
@@ -2693,7 +2752,6 @@ function Install-X265 {
         "-DCMAKE_POLICY_VERSION_MINIMUM=3.10",
         "-DSTATIC_LINK_CRT=ON",
         "-DENABLE_SHARED=OFF",
-        "-DENABLE_HDR10_PLUS=OFF",
         "-DENABLE_LIBNUMA=OFF",
         "-DENABLE_LSMASH=OFF",
         "-DENABLE_LAVF=OFF",
@@ -2710,6 +2768,7 @@ function Install-X265 {
             "-DHIGH_BIT_DEPTH=ON",
             "-DMAIN12=ON",
             "-DEXPORT_C_API=OFF",
+            "-DENABLE_HDR10_PLUS=OFF",
             "-DENABLE_CLI=OFF"
         ))
     Invoke-SetupBuildCommand `
@@ -2729,6 +2788,7 @@ function Install-X265 {
             "-DHIGH_BIT_DEPTH=ON",
             "-DMAIN12=OFF",
             "-DEXPORT_C_API=OFF",
+            "-DENABLE_HDR10_PLUS=OFF",
             "-DENABLE_CLI=OFF"
         ))
     Invoke-SetupBuildCommand `
@@ -2751,6 +2811,7 @@ function Install-X265 {
             "-DEXTRA_LIB=$library10Path;$library12Path",
             "-DLINKED_10BIT=ON",
             "-DLINKED_12BIT=ON",
+            "-DENABLE_HDR10_PLUS=ON",
             "-DENABLE_CLI=ON"
         ))
     Invoke-SetupBuildCommand `
@@ -2774,7 +2835,11 @@ function Install-X265 {
 function Test-X265 {
     try {
         $output = Invoke-SetupCommand -FilePath $script:ToolPaths.X265 -Arguments @("--version")
-        return $output.IndexOf("8bit+10bit+12bit", [StringComparison]::OrdinalIgnoreCase) -ge 0
+        $help = Invoke-SetupCommand -FilePath $script:ToolPaths.X265 -Arguments @("--help") -AcceptedExitCodes @(0, 1)
+        return (
+            $output.IndexOf("8bit+10bit+12bit", [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+            $help.IndexOf("--dhdr10-info", [StringComparison]::OrdinalIgnoreCase) -ge 0
+        )
     }
     catch {
         return $false
@@ -3922,6 +3987,15 @@ function Register-StageThreeComponents {
         -GetAvailableVersion { (Get-DoviToolRelease).Version } `
         -Install { param($Version) Install-DoviTool $Version } `
         -Verify { Test-DoviTool }
+
+    Register-SetupComponent `
+        -Name "hdr10plus-tool" `
+        -EnglishName "hdr10plus_tool" `
+        -ChineseName "hdr10plus_tool" `
+        -GetInstalledVersion { Get-InstalledHdr10PlusToolVersion } `
+        -GetAvailableVersion { (Get-Hdr10PlusToolRelease).Version } `
+        -Install { param($Version) Install-Hdr10PlusTool $Version } `
+        -Verify { Test-Hdr10PlusTool }
 
     Register-SetupComponent `
         -Name "truehdd" `
