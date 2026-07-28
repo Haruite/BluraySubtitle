@@ -1,4 +1,4 @@
-# BluraySubtitle
+﻿# BluraySubtitle
 
 [English](./README.md) | [简体中文](README.zh-Hans.md)
 
@@ -126,6 +126,17 @@ BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 
 - 字幕封装：外挂 / 内挂 / 内嵌
 - 每一行支持独立 VPy 路径（正片与 SP）。
 - Remux 来源支持更多功能，比如编辑章节/附件等。
+
+### 受管理的 x264 与 x265 版本
+
+setup 脚本运行或 Docker 镜像构建时，会动态解析官方上游的当前版本：
+
+- **[x264](https://code.videolan.org/videolan/x264)** 使用官方 `master` 的最新版本，编译为一个同时支持 8/10 位输出的 CLI；Windows setup 使用 MSYS2 UCRT64 工具链和 PGO（配置文件引导优化）。
+- **[x265](https://github.com/Multicorewareinc/x265)** 使用官方最新的稳定数字版本标签，编译为一个静态链接、同时支持 8/10/12 位输出的 multilib CLI。
+
+受管理的路径保持不变：Windows 为 `C:\Software\x264.exe` 和 `C:\Software\x265.exe`，Linux 与 Docker 为 `/usr/bin/x264` 和 `/usr/bin/x265`。如需使用其他构建，直接替换相同路径下对应的可执行文件即可，程序不要求用户填写编码器版本参数。替代构建必须支持本项目使用的输出位深和 CLI 参数，包括所选编码器对应的 HDR 静态元数据参数。再次运行 setup 脚本时会检查官方上游的最新源码；无法识别为当前受管理版本的自定义构建可能被替换。
+
+自行编译 x265 时，可参考 `setup_windows_environment.ps1`、`setup_linux_environment.sh` 或 `Dockerfile` 中的官方 multilib 步骤。`Dockerfile` 是 Linux setup 流程面向 Ubuntu 26.04 的适配版，x265 与 x264 构建层保留在各自原有的对应位置。每个位置都使用官方上游元数据作为缓存键：编码器版本不变时继续复用该构建层；上游发布新版本时，只使对应编码器层及其后续层失效。
 
 压制会按照界面当前显示的行顺序，应用输出名称、逐行 VPy、字幕、语言、轨道选择和压制参数。原盘输入的暂存 Remux 会保留已选择的源音轨；只有视频压制成功后，才会在最终混流阶段执行无损音频转换。缺少输入、VPy 或所需工具，以及无效路径和重复输出路径等问题，会尽量在压制开始前明确报错。
 

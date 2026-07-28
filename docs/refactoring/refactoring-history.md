@@ -1,4 +1,4 @@
-# Refactoring History
+﻿# Refactoring History
 
 [简体中文](refactoring-history.zh-Hans.md)
 
@@ -804,3 +804,33 @@ tool paths, and a manual GitHub Release update check.
   temporarily lower local version. Confirm the dialogs and external link.
 - Run short disposable Remux/Encode samples with non-default and automatic
   audio values, then inspect terminal commands and final Matroska metadata.
+
+## Encoder Toolchain Migration — Official x264/x265
+
+Date: 2026-07-28
+Commit: uncommitted (current change)
+
+### Scope
+
+- Migrated both setup scripts and Docker from third-party encoder forks to the current official upstream x264 and x265 sources while preserving `C:\Software\x264.exe`, `C:\Software\x265.exe`, `/usr/bin/x264`, and `/usr/bin/x265`.
+- x264 resolves the latest official `master` revision each time; x265 resolves the latest official stable numeric release tag. Neither encoder is pinned to a version or commit.
+- Switched x265 checkout to the official `Multicorewareinc/x265` GitHub repository.
+
+### Removed Paths and Behavior Changes
+
+- Removed the Windows jpsdr/t_mod prebuilt x264 download and the Yuuki-Asuna x265 fork checkout.
+- Removed the x265 source-rewriting workaround. The unmodified official source is configured with `CMAKE_POLICY_VERSION_MINIMUM=3.10`; unused integrations, including HDR10+, are disabled explicitly.
+- Removed the fork-only `--pme` and `--pmode` options from the x265 Extreme preset. No compatibility path remains for those old options.
+- Windows compiles official x264 with the MSYS2 UCRT64 toolchain, all supported bit depths/chroma formats, LTO, and the upstream `fprofiled` target. Its post-install capability probe uses the official `--colormatrix` spelling so a valid build is not rejected. Windows x265 remains a static 8/10/12-bit MSVC multilib build.
+- Linux builds the dynamically resolved official sources. Docker remains a single Ubuntu 26.04 image and replaces the x265 and x264 build steps at their original corresponding locations. Remote official metadata at each position forms the Docker cache key, so a new encoder revision invalidates only that encoder layer and the layers after it.
+
+### Documentation and Standards
+
+- Updated both README versions and `legal/THIRD_PARTY_NOTICES.md` with the dynamic official-version policy, unchanged executable paths, replacement-in-place guidance, and custom x265 build references.
+- Added matching bilingual code standards requiring the latest official software by default, defining Dockerfile as the Ubuntu 26.04 Linux-setup adaptation, and requiring cache-preserving Dockerfile edit placement.
+
+### Verification
+
+- PowerShell parsing and `bash -n` validate the setup scripts; focused regression tests cover dynamic official-source resolution, multilib builds, Docker layer placement, unchanged executable paths, and removed fork-only options.
+- Docker is not installed on the verification host, so the image was not built locally. Build it on a Docker host and inspect both version banners and the x265 `8bit+10bit+12bit` output.
+- Run each setup script on a disposable supported host, then encode short 8/10-bit x264 and 8/10/12-bit x265 samples, including an HDR10 sample, before publishing binaries.

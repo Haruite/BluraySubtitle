@@ -213,201 +213,58 @@ RUN set -eux; \
     ldconfig; \
     rm -rf /tmp/lsmash
 
-RUN bash <<'EOS'
+ADD ["https://api.github.com/repos/Multicorewareinc/x265/tags?per_page=100", "/tmp/x265-tags.json"]
+
+RUN bash <<'X265EOS'
 set -euo pipefail
+repo=https://github.com/Multicorewareinc/x265.git
+tag="$(git ls-remote --refs --tags --sort=-version:refname "$repo" | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[0-9]+([.][0-9]+)+$/ { print $2; exit }')"
+test -n "$tag"
 mkdir -p /tmp/x265
 cd /tmp/x265
-git clone --depth 1 https://github.com/msg7086/x265-Yuuki-Asuna.git
-x265_repo=/tmp/x265/x265-Yuuki-Asuna
-MULTIBUILD=${x265_repo}/build/linux
-SRCROOT=${x265_repo}/source
-test -f "${SRCROOT}/CMakeLists.txt"
-
-case ${MAKEFLAGS-} in
-'')
-	_j="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
-	case "$_j" in ''|*[!0-9]*) _j=4 ;; esac
-	export MAKEFLAGS="-j${_j}"
-	;;
-esac
-
-x265_cmake_extra_args="-DCMAKE_POLICY_VERSION_MINIMUM=3.10"
-
-CXXBIN="${CXX:-c++}"
-LINK_MODE="${X265_LINK:-auto}"
-_libstd=""
-_libc=""
-if command -v "$CXXBIN" >/dev/null 2>&1; then
-	_libstd="$("$CXXBIN" -print-file-name=libstdc++.a 2>/dev/null || true)"
-	_libc="$("$CXXBIN" -print-file-name=libc.a 2>/dev/null || true)"
-fi
-_stdc_ok=0
-_libc_ok=0
-[ -n "$_libstd" ] && [ -f "$_libstd" ] && _stdc_ok=1
-[ -n "$_libc" ] && [ -f "$_libc" ] && _libc_ok=1
-
-X265_CMAKE_EXE_LINKER_FLAGS=""
-case "$LINK_MODE" in
-full)
-	[ "$_stdc_ok" = 1 ] && [ "$_libc_ok" = 1 ] || exit 1
-	X265_CMAKE_EXE_LINKER_FLAGS=-static
-	;;
-mostly)
-	[ "$_stdc_ok" = 1 ] || exit 1
-	X265_CMAKE_EXE_LINKER_FLAGS="-static-libgcc -static-libstdc++"
-	;;
-x265-only)
-	X265_CMAKE_EXE_LINKER_FLAGS=""
-	;;
-auto)
-	if [ "$_stdc_ok" = 1 ]; then
-		X265_CMAKE_EXE_LINKER_FLAGS="-static-libgcc -static-libstdc++"
-	else
-		X265_CMAKE_EXE_LINKER_FLAGS=""
-	fi
-	;;
-*) exit 1 ;;
-esac
-
-command -v python3 >/dev/null 2>&1 || exit 1
-python3 - "$SRCROOT" <<'PY'
-import pathlib, sys
-
-root = pathlib.Path(sys.argv[1])
-marker = "# x265-multilib-fullstatic: cmake4-patched\n"
-main_cm = root / "CMakeLists.txt"
-text = main_cm.read_text(encoding="utf-8", errors="surrogateescape")
-if marker in text:
-    sys.exit(0)
-
-anchor = "option(FPROFILE_GENERATE"
-idx = text.find(anchor)
-if idx < 0:
-    sys.exit("error: x265 CMakeLists.txt missing anchor %r" % (anchor,))
-
-header = (
-    "# vim: syntax=cmake\n"
-    + marker
-    + "cmake_minimum_required(VERSION 3.10)\n\n"
-    + "if(NOT CMAKE_BUILD_TYPE)\n"
-    + "    # default to Release build for GCC builds\n"
-    + "    set(CMAKE_BUILD_TYPE Release CACHE STRING\n"
-    + '        "Choose the type of build, options are: None(CMAKE_CXX_FLAGS or CMAKE_C_FLAGS used) Debug Release RelWithDebInfo MinSizeRel."\n'
-    + "        FORCE)\n"
-    + "endif()\n"
-    + 'message(STATUS "cmake version ${CMAKE_VERSION}")\n'
-    + "if(POLICY CMP0025)\n"
-    + "    cmake_policy(SET CMP0025 NEW)\n"
-    + "endif()\n"
-    + "if(POLICY CMP0042)\n"
-    + "    cmake_policy(SET CMP0042 NEW) # MACOSX_RPATH\n"
-    + "endif()\n"
-    + "if(POLICY CMP0054)\n"
-    + "    cmake_policy(SET CMP0054 NEW)\n"
-    + "endif()\n\n"
-    + "project(x265 LANGUAGES C CXX)\n"
-    + "include(CheckIncludeFiles)\n"
-    + "include(CheckFunctionExists)\n"
-    + "include(CheckSymbolExists)\n"
-    + "include(CheckCXXCompilerFlag)\n\n"
+git clone --depth 1 --branch "$tag" "$repo" x265
+source_root=/tmp/x265/x265/source
+build_root=/tmp/x265/build
+jobs="$(nproc)"
+common_args=(
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.10
+    -DCMAKE_BUILD_TYPE=Release
+    -DENABLE_SHARED=OFF
+    -DENABLE_HDR10_PLUS=OFF
+    -DENABLE_LIBNUMA=OFF
+    -DENABLE_LSMASH=OFF
+    -DENABLE_LAVF=OFF
+    -DENABLE_AVISYNTH=OFF
+    -DENABLE_VPYSYNTH=OFF
 )
-
-rest = text[idx:]
-rest = rest.replace(
-    'if(${CMAKE_CXX_COMPILER_ID} STREQUAL "Clang")',
-    'if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")',
-)
-rest = rest.replace(
-    'if(${CMAKE_CXX_COMPILER_ID} STREQUAL "Intel")',
-    'if(CMAKE_CXX_COMPILER_ID STREQUAL "Intel")',
-)
-rest = rest.replace(
-    'if(${CMAKE_CXX_COMPILER_ID} STREQUAL "GNU")',
-    'if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")',
-)
-rest = rest.replace(
-    "if(IS_ABSOLUTE ${LIB} AND EXISTS ${LIB})",
-    'if(IS_ABSOLUTE "${LIB}" AND EXISTS "${LIB}")',
-)
-
-main_cm.write_text(header + rest, encoding="utf-8", errors="surrogateescape")
-
-hdr = root / "dynamicHDR10" / "CMakeLists.txt"
-if hdr.is_file():
-    ht = hdr.read_text(encoding="utf-8", errors="surrogateescape")
-    old = "cmake_minimum_required (VERSION 2.8.11)"
-    new = "cmake_minimum_required(VERSION 3.10)"
-    if old in ht:
-        hdr.write_text(ht.replace(old, new, 1), encoding="utf-8", errors="surrogateescape")
-sys.exit(0)
-PY
-
-mkdir -p "$MULTIBUILD/8bit" "$MULTIBUILD/10bit" "$MULTIBUILD/12bit"
-
-cd "$MULTIBUILD/12bit"
-cmake "$x265_cmake_extra_args" "$SRCROOT" \
-	-DHIGH_BIT_DEPTH=ON \
-	-DEXPORT_C_API=OFF \
-	-DENABLE_SHARED=OFF \
-	-DENABLE_CLI=OFF \
-	-DMAIN12=ON \
-	-DENABLE_LIBNUMA=OFF
-make
-
-cd "$MULTIBUILD/10bit"
-cmake "$x265_cmake_extra_args" "$SRCROOT" \
-	-DHIGH_BIT_DEPTH=ON \
-	-DEXPORT_C_API=OFF \
-	-DENABLE_SHARED=OFF \
-	-DENABLE_CLI=OFF \
-	-DENABLE_LIBNUMA=OFF
-make
-
-cd "$MULTIBUILD/8bit"
-ln -sf ../10bit/libx265.a libx265_main10.a
-ln -sf ../12bit/libx265.a libx265_main12.a
-if [ -n "$X265_CMAKE_EXE_LINKER_FLAGS" ]; then
-	cmake "$x265_cmake_extra_args" "$SRCROOT" \
-		-DENABLE_SHARED=OFF \
-		-DENABLE_LIBNUMA=OFF \
-		-DCMAKE_EXE_LINKER_FLAGS="$X265_CMAKE_EXE_LINKER_FLAGS" \
-		-DEXTRA_LIB="x265_main10.a;x265_main12.a" \
-		-DEXTRA_LINK_FLAGS=-L. \
-		-DLINKED_10BIT=ON \
-		-DLINKED_12BIT=ON
-else
-	cmake "$x265_cmake_extra_args" "$SRCROOT" \
-		-DENABLE_SHARED=OFF \
-		-DENABLE_LIBNUMA=OFF \
-		-DEXTRA_LIB="x265_main10.a;x265_main12.a" \
-		-DEXTRA_LINK_FLAGS=-L. \
-		-DLINKED_10BIT=ON \
-		-DLINKED_12BIT=ON
-fi
-make
-
-mv libx265.a libx265_main.a
-if [ "$(uname)" = "Linux" ]; then
-	ar -M <<'ARSCRIPT'
-CREATE libx265.a
-ADDLIB libx265_main.a
-ADDLIB libx265_main10.a
-ADDLIB libx265_main12.a
-SAVE
-END
-ARSCRIPT
-else
-	libtool -static -o libx265.a libx265_main.a libx265_main10.a libx265_main12.a 2>/dev/null
-fi
-
-if command -v strip >/dev/null 2>&1; then
-	strip "$MULTIBUILD/8bit/x265" 2>/dev/null || true
-fi
-
-cp "$MULTIBUILD/8bit/x265" /usr/bin/x265
-chmod +x /usr/bin/x265
-rm -rf /tmp/x265
-EOS
+cmake -S "$source_root" -B "$build_root/12bit" "${common_args[@]}" \
+    -DHIGH_BIT_DEPTH=ON \
+    -DMAIN12=ON \
+    -DEXPORT_C_API=OFF \
+    -DENABLE_CLI=OFF
+cmake --build "$build_root/12bit" --parallel "$jobs"
+cmake -S "$source_root" -B "$build_root/10bit" "${common_args[@]}" \
+    -DHIGH_BIT_DEPTH=ON \
+    -DMAIN12=OFF \
+    -DEXPORT_C_API=OFF \
+    -DENABLE_CLI=OFF
+cmake --build "$build_root/10bit" --parallel "$jobs"
+mkdir -p "$build_root/8bit"
+ln -s ../10bit/libx265.a "$build_root/8bit/libx265_main10.a"
+ln -s ../12bit/libx265.a "$build_root/8bit/libx265_main12.a"
+cmake -S "$source_root" -B "$build_root/8bit" "${common_args[@]}" \
+    "-DCMAKE_EXE_LINKER_FLAGS=-static-libgcc -static-libstdc++" \
+    '-DEXTRA_LIB=x265_main10.a;x265_main12.a' \
+    -DEXTRA_LINK_FLAGS=-L. \
+    -DLINKED_10BIT=ON \
+    -DLINKED_12BIT=ON \
+    -DENABLE_CLI=ON
+cmake --build "$build_root/8bit" --parallel "$jobs"
+install -m 0755 "$build_root/8bit/x265" /usr/bin/x265
+/usr/bin/x265 --version 2>&1 | grep -F "encoder version $tag" >/dev/null
+/usr/bin/x265 --version 2>&1 | grep -F '8bit+10bit+12bit' >/dev/null
+rm -rf /tmp/x265 /tmp/x265-tags.json
+X265EOS
 
 RUN bash <<'SVTAV1EOS'
 set -euo pipefail
@@ -871,15 +728,17 @@ RUN set -eux; \
     find "${SCRIPTS_DIR}" -maxdepth 1 -type f -name "*.py" -exec cp -f {} "${DST}/" \; ; \
     rm -rf /tmp/vcbs
 
+ADD ["https://code.videolan.org/api/v4/projects/videolan%2Fx264/repository/commits?ref_name=master&per_page=1", "/tmp/x264-master.json"]
+
 RUN set -eux; \
     mkdir -p /tmp/x264 && cd /tmp/x264; \
-    git clone https://code.videolan.org/videolan/x264.git; \
+    git clone --depth 1 https://code.videolan.org/videolan/x264.git; \
     cd x264; \
-    ./configure --enable-static --bit-depth=all --extra-ldflags="-static"; \
+    ./configure --enable-static --bit-depth=all --chroma-format=all --disable-opencl --enable-lto; \
     make -j"$(nproc)"; \
-    cp x264 /usr/bin/; \
-    chmod +x /usr/bin/x264; \
-    rm -rf /tmp/x264
+    install -m 0755 x264 /usr/bin/x264; \
+    /usr/bin/x264 --version >/dev/null; \
+    rm -rf /tmp/x264 /tmp/x264-master.json
 
 RUN set -eux; \
     TSMUXER_TAG="$(git ls-remote --refs --tags --sort=-version:refname https://github.com/justdan96/tsMuxer.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')"; \

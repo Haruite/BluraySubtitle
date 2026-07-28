@@ -1,4 +1,4 @@
-# 重构历史
+﻿# 重构历史
 
 [English](refactoring-history.md)
 
@@ -784,3 +784,33 @@ Blu-ray DIY 压制及“编辑轨道”中的通用视频转换仍不在本阶�
 - 分别在离线、当前版本和临时降低本地版本时检查更新，确认对话框和外部链接。
 - 使用非默认及自动音频值运行较短的可丢弃 Remux/Encode 样本，检查终端命令和最终
   Matroska 元数据。
+
+## 编码器工具链迁移——官方 x264/x265
+
+日期：2026-07-28
+提交：未提交（当前修改）
+
+### 范围
+
+- 两个 setup 脚本和 Docker 均从第三方编码器 fork 迁移到当前官方上游 x264 与 x265 源码，同时保持 `C:\Software\x264.exe`、`C:\Software\x265.exe`、`/usr/bin/x264` 和 `/usr/bin/x265` 路径不变。
+- x264 每次动态解析官方 `master` 的最新版本；x265 每次动态解析官方最新的稳定数字版本标签。两个编码器均不固定版本或提交。
+- x265 拉取地址迁移到官方 `Multicorewareinc/x265` GitHub 仓库。
+
+### 删除的路径与行为变化
+
+- 移除 Windows jpsdr/t_mod 预编译 x264 下载路径和 Yuuki-Asuna x265 fork 拉取路径。
+- 移除 x265 源码重写兼容补丁。现在直接配置未经修改的官方源码，并传入 `CMAKE_POLICY_VERSION_MINIMUM=3.10`；HDR10+ 等未使用集成均明确关闭。
+- 从 x265 Extreme 预设移除 fork 专用的 `--pme` 和 `--pmode`；不再保留这些旧参数的兼容路径。
+- Windows 改为使用 MSYS2 UCRT64 编译官方 x264，启用全部受支持位深/色度格式、LTO 和上游 `fprofiled` 目标；安装后能力检查使用官方参数名 `--colormatrix`，不会再误判有效构建；Windows x265 继续构建静态 8/10/12 位 MSVC multilib。
+- Linux 编译动态解析到的官方源码。Docker 保持单一 Ubuntu 26.04 镜像，并在 x265 与 x264 原有的对应位置替换构建步骤；各位置的官方远程元数据作为 Docker 缓存键，使新编码器版本只令对应编码器层及其后续层失效。
+
+### 文档与规范
+
+- 双语 README 和 `legal/THIRD_PARTY_NOTICES.md` 已记录动态官方版本策略、原路径直接替换说明、自定义 x265 编译参考以及路径保持不变的约束。
+- 双语代码规范同步新增默认使用官方最新软件、Dockerfile 仅作为 Linux setup 的 Ubuntu 26.04 适配版，以及 Dockerfile 修改位置应保留缓存的明确规则。
+
+### 验证
+
+- PowerShell 解析和 `bash -n` 验证 setup 脚本；专项回归测试覆盖动态官方源码解析、多位深构建、Docker 构建层位置、可执行文件路径不变以及 fork 专用参数移除。
+- 验证主机未安装 Docker，因此未在本机实际构建镜像。应在具备 Docker 的主机上构建，并检查两个版本横幅以及 x265 的 `8bit+10bit+12bit` 输出。
+- 应在可丢弃的受支持主机上分别运行两个 setup 脚本，再使用短素材测试 x264 8/10 位、x265 8/10/12 位以及 HDR10 压制，之后再发布二进制。

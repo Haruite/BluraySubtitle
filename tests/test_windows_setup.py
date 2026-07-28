@@ -1,4 +1,4 @@
-"""Static contract tests for the Windows environment setup script."""
+﻿"""Static contract tests for the Windows environment setup script."""
 
 from __future__ import annotations
 
@@ -173,8 +173,8 @@ class WindowsSetupTests(unittest.TestCase):
             "justdan96/tsMuxer",
             "quietvoid/dovi_tool",
             "truehdd/truehdd",
-            "jpsdr/x264",
-            "msg7086/x265-Yuuki-Asuna",
+            "code.videolan.org/videolan/x264.git",
+            "Multicorewareinc/x265",
             "nu774/fdkaac",
             "mstorsjo/fdk-aac",
             "libass/libass",
@@ -352,18 +352,51 @@ class WindowsSetupTests(unittest.TestCase):
         self.assertIn("$downloadedMiB/$totalMiB MiB", download_function)
         self.assertNotIn("CopyToAsync", download_function)
 
-    def test_x264_uses_prebuilt_jpsdr_release(self) -> None:
+    def test_x264_builds_latest_official_source_with_pgo(self) -> None:
+        release_function = self.source.split("function Get-X264Release", 1)[1].split(
+            "function Get-InstalledX264Version", 1
+        )[0]
         install_function = self.source.split("function Install-X264", 1)[1].split(
             "function Test-X264", 1
         )[0]
-        self.assertIn('-Repository "jpsdr/x264"', self.source)
-        self.assertIn("^x264_tmod_r[0-9]+\\.7z$", self.source)
-        self.assertIn(r'winthread\x264_x64.exe', install_function)
-        self.assertIn("Expand-SetupArchiveWithSevenZip", install_function)
-        self.assertIn("-ExpectedSize $release.Size", install_function)
-        self.assertNotIn("CMake", install_function)
-        self.assertNotIn("git clone", install_function)
-
+        verify_function = self.source.split("function Test-X264", 1)[1].split(
+            "function Get-X265Release", 1
+        )[0]
+        for fragment in (
+            "code.videolan.org/api/v4/projects/videolan%2Fx264/repository/commits",
+            "ref_name=master&per_page=1",
+            "$commit.committed_date",
+            'ToString("yyyy.MM.dd.HHmmss"',
+            'Repository = "https://code.videolan.org/videolan/x264.git"',
+            "Commit = $commitId",
+        ):
+            self.assertIn(fragment, release_function)
+        for fragment in (
+            '"clone", $release.Repository',
+            '"checkout", "--detach", $release.Commit',
+            "$script:ToolPaths.Msys2Bash",
+            "x264-pgo-training.y4m",
+            "--bit-depth=all",
+            "--chroma-format=all",
+            "--disable-opencl",
+            "--enable-lto",
+            'fprofiled VIDS="$training_y4m"',
+            "$script:ToolPaths.X264Version",
+            "$release.Version",
+        ):
+            self.assertIn(fragment, install_function)
+        for option in (
+            "--output-depth",
+            "--mastering-display",
+            "--cll",
+            "--colorprim",
+            "--transfer",
+            "--colormatrix",
+        ):
+            self.assertIn(option, verify_function)
+        self.assertNotIn("jpsdr", self.source.lower())
+        self.assertNotIn("x264_tmod", self.source.lower())
+        self.assertNotIn(r"winthread\x264_x64.exe", self.source)
     def test_x265_build_links_8_10_12_bit_cores(self) -> None:
         install_function = self.source.split("function Install-X265", 1)[1].split(
             "function Test-X265", 1
@@ -376,6 +409,7 @@ class WindowsSetupTests(unittest.TestCase):
             "-DEXTRA_LIB=$library10Path;$library12Path",
             "-DLINKED_10BIT=ON",
             "-DLINKED_12BIT=ON",
+            "-DENABLE_HDR10_PLUS=OFF",
             "-DENABLE_AVISYNTH=OFF",
             "-DNASM_EXECUTABLE=$nasmPath",
             '"--target", "cli"',
@@ -385,28 +419,39 @@ class WindowsSetupTests(unittest.TestCase):
                 self.assertIn(fragment, install_function)
         self.assertIn("8bit+10bit+12bit", self.source)
 
-    def test_x265_uses_stable_branch_and_records_its_source_version(self) -> None:
+    def test_x265_uses_latest_official_stable_source(self) -> None:
         release_function = self.source.split("function Get-X265Release", 1)[1].split(
             "function Get-InstalledX265Version", 1
         )[0]
-        self.assertIn('$branchName = "stable"', release_function)
-        self.assertIn("branches/$branchName", release_function)
-        self.assertIn("x265Version.txt", release_function)
-        self.assertIn('StartsWith("releasetag:"', release_function)
-        self.assertNotIn("TagPattern", release_function)
-        self.assertNotIn("Get-GitHubLatestTaggedSource", release_function)
+        for fragment in (
+            "Get-GitHubLatestTaggedSource",
+            '-Repository "Multicorewareinc/x265"',
+            "(?<version>[0-9]+",
+            '-ArchiveBaseName "x265"',
+        ):
+            self.assertIn(fragment, release_function)
+        self.assertNotIn("bitbucket", release_function.lower())
 
         installed_version = self.source.split(
             "function Get-InstalledX265Version", 1
-        )[1].split("function Update-X265SourceForCMake4", 1)[0]
+        )[1].split("function Install-X265", 1)[0]
         self.assertIn("$script:ToolPaths.X265Version", installed_version)
         self.assertNotIn("encoder version", installed_version)
 
         install_function = self.source.split("function Install-X265", 1)[1].split(
             "function Test-X265", 1
         )[0]
-        self.assertIn("$script:ToolPaths.X265Version", install_function)
-        self.assertIn("$release.Version", install_function)
+        for fragment in (
+            "Invoke-SetupDownload -Uri $release.Uri -Destination $archive",
+            "Expand-SetupZip -Archive $archive -Destination $extracted",
+            "$script:ToolPaths.X265Version",
+            "$release.Version",
+            "-DCMAKE_POLICY_VERSION_MINIMUM=3.10",
+            "-DENABLE_HDR10_PLUS=OFF",
+        ):
+            self.assertIn(fragment, install_function)
+        self.assertNotIn("Update-X265SourceForCMake4", self.source)
+        self.assertNotIn("Yuuki-Asuna", self.source)
 
         verify_function = self.source.split("function Test-X265", 1)[1].split(
             "function Get-SvtAv1Release", 1
@@ -414,7 +459,6 @@ class WindowsSetupTests(unittest.TestCase):
         self.assertIn('IndexOf("8bit+10bit+12bit"', verify_function)
         self.assertNotIn("Get-InstalledX265Version", verify_function)
         self.assertNotIn("[regex]", verify_function)
-
     def test_validation_simplicity_rule_is_synchronized(self) -> None:
         self.assertIn(
             "Avoid any unnecessary validation unrelated to the objective.",
@@ -758,6 +802,7 @@ class WindowsSetupTests(unittest.TestCase):
             "function Test-CompiledToolsReady", 1
         )[1].split("function Register-StageTwoComponents", 1)[0]
         for check in (
+            "Test-X264",
             "Test-X265",
             "Test-SvtAv1",
             "Test-FdkAac",
@@ -765,6 +810,7 @@ class WindowsSetupTests(unittest.TestCase):
         ):
             with self.subTest(check=check):
                 self.assertIn(check, readiness_function)
+        self.assertIn("Get-X264Release", readiness_function)
         self.assertIn("Get-X265Release", readiness_function)
         self.assertIn("Get-SvtAv1Release", readiness_function)
         self.assertIn("Get-FdkAacRelease", readiness_function)

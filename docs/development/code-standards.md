@@ -1,4 +1,4 @@
-# Code Modification Standards
+﻿# Code Modification Standards
 
 [简体中文](code-standards.zh-Hans.md)
 
@@ -94,7 +94,13 @@ When the author establishes a new rule, update this file and its Simplified Chin
 - Shell scripts must use LF line endings so their shebang remains valid.
 - Do not introduce trailing whitespace or malformed encoding.
 
-## 9. Confirmed Product Constraints
+## 9. Tool Versions and Dockerfile Maintenance
+
+- Unless a confirmed compatibility or other technical constraint requires otherwise, dependencies and bundled tools must use the latest version published by the official upstream. Do not pin a version or commit without such a constraint.
+- `Dockerfile` is the Ubuntu 26.04 adaptation of `setup_linux_environment.sh`. Do not add compatibility handling for other operating systems, explanatory output, or comments.
+- Place Dockerfile changes in the corresponding existing build section instead of at the beginning of the file. New software should be added near the end whenever practical so earlier build layers remain cached.
+
+## 10. Confirmed Product Constraints
 
 - Remux-source Encode is resumable. Existing planned main, SP, external-subtitle, and companion outputs are treated as completed and skipped without overwrite; remaining rows continue. Duplicate paths within the current request remain errors.
 - Blu-ray DIY remains visible and its code is retained. Its incomplete execution must not be presented as complete.
@@ -119,7 +125,7 @@ When the author establishes a new rule, update this file and its Simplified Chin
 - The Advanced settings page must visibly warn that higher FFmpeg FLAC compression levels can significantly increase Remux time. It must also show stereo-music starting ranges of 128–256 kbps for FDK-AAC and 64–128 kbps for Opus, with Auto or a higher value recommended for multichannel or mixed channel layouts.
 - Window geometry and current language, theme, font size, and opacity are saved automatically on a clean close. Restored geometry must not be replaced by first-run centering.
 
-## 10. Testing and Change Reporting
+## 11. Testing and Change Reporting
 
 - Add focused automated tests for every changed workflow boundary and every fixed regression that can be tested deterministically.
 - Run the concentrated repository test suite when a workflow or phase is completed.

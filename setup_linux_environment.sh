@@ -10,6 +10,9 @@ if [[ "${BLURAY_NO_CRLF_FIX:-}" != "1" ]]; then
 fi
 set -euo pipefail
 
+X264_SOURCE_REPOSITORY="https://code.videolan.org/videolan/x264.git"
+X265_SOURCE_REPOSITORY="https://github.com/Multicorewareinc/x265.git"
+
 # ---------------------------------------------------------------------------
 # Language selection
 # ---------------------------------------------------------------------------
@@ -1071,11 +1074,11 @@ install_lsmash() {
 }
 
 # ---------------------------------------------------------------------------
-# x265 (Yuuki-Asuna fork)
+# x265 (latest official stable release)
 # ---------------------------------------------------------------------------
 
-# $1 = absolute path to cloned repo root (.../x265-Yuuki-Asuna).
-__build_x265_yuuki_multilib() {
+# $1 = absolute path to the official x265 repository root.
+__build_x265_official_multilib() {
   local x265_repo="$1"
   local MULTIBUILD="${x265_repo}/build/linux"
   local SRCROOT="${x265_repo}/source"
@@ -1092,17 +1095,16 @@ __build_x265_yuuki_multilib() {
     ;;
   esac
 
-  local is_u2604=0
-  local x265_cmake_extra_args=""
-  if [[ -r /etc/os-release ]]; then
-    # shellcheck source=/dev/null
-    source /etc/os-release
-    if [[ "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" == "26.04" ]]; then
-      is_u2604=1
-      x265_cmake_extra_args="-DCMAKE_POLICY_VERSION_MINIMUM=3.10"
-    fi
-  fi
-
+  local -a _x265_cmake_args=(
+    "-DCMAKE_POLICY_VERSION_MINIMUM=3.10"
+    "-DENABLE_SHARED=OFF"
+    "-DENABLE_HDR10_PLUS=OFF"
+    "-DENABLE_LIBNUMA=OFF"
+    "-DENABLE_LSMASH=OFF"
+    "-DENABLE_LAVF=OFF"
+    "-DENABLE_AVISYNTH=OFF"
+    "-DENABLE_VPYSYNTH=OFF"
+  )
   local CXXBIN="${CXX:-c++}"
   local LINK_MODE="${X265_LINK:-auto}"
   local _libstd="" _libc=""
@@ -1153,98 +1155,12 @@ __build_x265_yuuki_multilib() {
     ;;
   esac
 
-  if (( is_u2604 )); then
-    command -v python3 >/dev/null 2>&1 || \
-      die "$(msg 'python3 is required to patch x265 for CMake 4.x on Ubuntu 26.04.' \
-        '在 Ubuntu 26.04 上为 x265 打 CMake 4.x 补丁需要 python3。')"
-    log "$(msg 'Patching x265 CMakeLists for CMake 4.x (Ubuntu 26.04)...' \
-      '正在为 x265 应用 CMake 4.x 兼容补丁（Ubuntu 26.04）…')"
-    python3 - "$SRCROOT" <<'PY' || die "$(msg 'x265 CMakeLists patch failed' 'x265 CMakeLists 补丁失败')"
-import pathlib, sys
-
-root = pathlib.Path(sys.argv[1])
-marker = "# x265-multilib-fullstatic: cmake4-patched\n"
-main_cm = root / "CMakeLists.txt"
-text = main_cm.read_text(encoding="utf-8", errors="surrogateescape")
-if marker in text:
-    sys.exit(0)
-
-anchor = "option(FPROFILE_GENERATE"
-idx = text.find(anchor)
-if idx < 0:
-    sys.exit("error: x265 CMakeLists.txt missing anchor %r" % (anchor,))
-
-header = (
-    "# vim: syntax=cmake\n"
-    + marker
-    + "cmake_minimum_required(VERSION 3.10)\n\n"
-    + "if(NOT CMAKE_BUILD_TYPE)\n"
-    + "    # default to Release build for GCC builds\n"
-    + "    set(CMAKE_BUILD_TYPE Release CACHE STRING\n"
-    + '        "Choose the type of build, options are: None(CMAKE_CXX_FLAGS or CMAKE_C_FLAGS used) Debug Release RelWithDebInfo MinSizeRel."\n'
-    + "        FORCE)\n"
-    + "endif()\n"
-    + 'message(STATUS "cmake version ${CMAKE_VERSION}")\n'
-    + "if(POLICY CMP0025)\n"
-    + "    cmake_policy(SET CMP0025 NEW)\n"
-    + "endif()\n"
-    + "if(POLICY CMP0042)\n"
-    + "    cmake_policy(SET CMP0042 NEW) # MACOSX_RPATH\n"
-    + "endif()\n"
-    + "if(POLICY CMP0054)\n"
-    + "    cmake_policy(SET CMP0054 NEW)\n"
-    + "endif()\n\n"
-    + "project(x265 LANGUAGES C CXX)\n"
-    + "include(CheckIncludeFiles)\n"
-    + "include(CheckFunctionExists)\n"
-    + "include(CheckSymbolExists)\n"
-    + "include(CheckCXXCompilerFlag)\n\n"
-)
-
-rest = text[idx:]
-rest = rest.replace(
-    'if(${CMAKE_CXX_COMPILER_ID} STREQUAL "Clang")',
-    'if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")',
-)
-rest = rest.replace(
-    'if(${CMAKE_CXX_COMPILER_ID} STREQUAL "Intel")',
-    'if(CMAKE_CXX_COMPILER_ID STREQUAL "Intel")',
-)
-rest = rest.replace(
-    'if(${CMAKE_CXX_COMPILER_ID} STREQUAL "GNU")',
-    'if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")',
-)
-rest = rest.replace(
-    "if(IS_ABSOLUTE ${LIB} AND EXISTS ${LIB})",
-    'if(IS_ABSOLUTE "${LIB}" AND EXISTS "${LIB}")',
-)
-
-main_cm.write_text(header + rest, encoding="utf-8", errors="surrogateescape")
-
-hdr = root / "dynamicHDR10" / "CMakeLists.txt"
-if hdr.is_file():
-    ht = hdr.read_text(encoding="utf-8", errors="surrogateescape")
-    old = "cmake_minimum_required (VERSION 2.8.11)"
-    new = "cmake_minimum_required(VERSION 3.10)"
-    if old in ht:
-        hdr.write_text(ht.replace(old, new, 1), encoding="utf-8", errors="surrogateescape")
-sys.exit(0)
-PY
-    log "$(msg 'x265 CMake 4.x patch step finished.' 'x265 CMake 4.x 补丁步骤已完成。')"
-  else
-    log "$(msg 'Skipping x265 CMake 4.x patch (not Ubuntu 26.04).' \
-      '非 Ubuntu 26.04，跳过 x265 的 CMake 4.x 补丁。')"
-  fi
-
   mkdir -p "${MULTIBUILD}/8bit" "${MULTIBUILD}/10bit" "${MULTIBUILD}/12bit"
-
-  local -a _x265_ecmake=()
-  [[ -n "$x265_cmake_extra_args" ]] && _x265_ecmake+=("$x265_cmake_extra_args")
 
   log "$(msg 'x265: configuring 12-bit core (static, no CLI)' 'x265：配置 12-bit 核心（静态库，无 CLI）')"
   cd "${MULTIBUILD}/12bit" || die "$(msg 'Cannot cd to x265 12-bit build dir' '无法进入 x265 12-bit 构建目录')"
   tmux_run "$(msg 'x265 12-bit: cmake' 'x265 12-bit：cmake')" \
-    cmake "${_x265_ecmake[@]}" "$SRCROOT" \
+    cmake "${_x265_cmake_args[@]}" "$SRCROOT" \
       -DHIGH_BIT_DEPTH=ON \
       -DEXPORT_C_API=OFF \
       -DENABLE_SHARED=OFF \
@@ -1256,7 +1172,7 @@ PY
   log "$(msg 'x265: configuring 10-bit core (static, no CLI)' 'x265：配置 10-bit 核心（静态库，无 CLI）')"
   cd "${MULTIBUILD}/10bit" || die "$(msg 'Cannot cd to x265 10-bit build dir' '无法进入 x265 10-bit 构建目录')"
   tmux_run "$(msg 'x265 10-bit: cmake' 'x265 10-bit：cmake')" \
-    cmake "${_x265_ecmake[@]}" "$SRCROOT" \
+    cmake "${_x265_cmake_args[@]}" "$SRCROOT" \
       -DHIGH_BIT_DEPTH=ON \
       -DEXPORT_C_API=OFF \
       -DENABLE_SHARED=OFF \
@@ -1270,7 +1186,7 @@ PY
   ln -sf ../12bit/libx265.a libx265_main12.a
   if [[ -n "$X265_CMAKE_EXE_LINKER_FLAGS" ]]; then
     tmux_run "$(msg 'x265 8-bit: cmake (with linker flags)' 'x265 8-bit：cmake（含链接器参数）')" \
-      cmake "${_x265_ecmake[@]}" "$SRCROOT" \
+      cmake "${_x265_cmake_args[@]}" "$SRCROOT" \
         -DENABLE_SHARED=OFF \
         -DENABLE_LIBNUMA=OFF \
         -DCMAKE_EXE_LINKER_FLAGS="$X265_CMAKE_EXE_LINKER_FLAGS" \
@@ -1280,7 +1196,7 @@ PY
         -DLINKED_12BIT=ON
   else
     tmux_run "$(msg 'x265 8-bit: cmake' 'x265 8-bit：cmake')" \
-      cmake "${_x265_ecmake[@]}" "$SRCROOT" \
+      cmake "${_x265_cmake_args[@]}" "$SRCROOT" \
         -DENABLE_SHARED=OFF \
         -DENABLE_LIBNUMA=OFF \
         -DEXTRA_LIB="x265_main10.a;x265_main12.a" \
@@ -1322,16 +1238,21 @@ EOF
 }
 
 install_x265() {
-  log "$(msg 'Installing x265 (Yuuki-Asuna fork)' '开始安装 x265 (Yuuki-Asuna 版)')"
+  local x265_version
+  x265_version="$(latest_stable_tag "$X265_SOURCE_REPOSITORY" '^[0-9]+([.][0-9]+)+$' '[0-9]*')"
+  log "$(msg "Installing official x265 ${x265_version}" "安装官方 x265 ${x265_version}")"
 
-  if [[ -x "/usr/bin/x265" ]] || command -v x265 >/dev/null 2>&1; then
-    log "$(msg 'x265 already exists, skipping build' '检测到 x265 已存在，跳过编译。')"
+  local installed_output=""
+  if [[ -x /usr/bin/x265 ]]; then
+    installed_output="$(/usr/bin/x265 --version 2>&1 || true)"
+  fi
+  if [[ "$installed_output" == *"encoder version ${x265_version}"* &&
+        "$installed_output" == *"8bit+10bit+12bit"* ]]; then
+    log "$(msg "Latest official x265 ${x265_version} is already installed; skipping build." "已安装最新官方 x265 ${x265_version}，跳过编译。")"
     return 0
   fi
 
-  install_lsmash
-
-  local deps=(build-essential cmake git yasm nasm python3)
+  local deps=(build-essential cmake git nasm python3)
   apt_update
   apt_install "${deps[@]}" || die "$(msg 'Failed to install x265 dependencies' 'x265 依赖安装失败')"
 
@@ -1340,12 +1261,16 @@ install_x265() {
 
   (
     cd "$build_dir" || exit 1
-    tmux_run "$(msg 'Clone x265-Yuuki-Asuna' '克隆 x265-Yuuki-Asuna')" \
-      git clone --depth 1 https://github.com/msg7086/x265-Yuuki-Asuna.git || exit 1
-    __build_x265_yuuki_multilib "${build_dir}/x265-Yuuki-Asuna" || exit 1
+    tmux_run "$(msg "Clone official x265 ${x265_version}" "克隆官方 x265 ${x265_version}")" \
+      git clone --depth 1 --branch "$x265_version" "$X265_SOURCE_REPOSITORY" x265 || exit 1
+    __build_x265_official_multilib "${build_dir}/x265" || exit 1
   ) || die "$(msg 'x265 build or install failed' 'x265 编译或安装过程中出错')"
 
   rm -rf "$build_dir"
+  /usr/bin/x265 --version 2>&1 | grep -F "encoder version ${x265_version}" >/dev/null || \
+    die "$(msg 'Installed x265 version verification failed' '安装后的 x265 版本验证失败')"
+  /usr/bin/x265 --version 2>&1 | grep -F '8bit+10bit+12bit' >/dev/null || \
+    die "$(msg 'Installed x265 multilib verification failed' '安装后的 x265 多位深验证失败')"
   log "$(msg 'x265 installation successful!' 'x265 安装成功！')"
 }
 
@@ -1354,14 +1279,22 @@ install_x265() {
 # ---------------------------------------------------------------------------
 
 install_x264() {
-  log "$(msg 'Installing x264 (build from source)' '安装 x264（从源码编译并安装）')"
+  local x264_commit
+  x264_commit="$(git ls-remote "$X264_SOURCE_REPOSITORY" HEAD | awk 'NR == 1 { print $1 }')"
+  [[ -n "$x264_commit" ]] || die "$(msg 'Failed to resolve the latest official x264 master revision' '无法解析官方 x264 master 的最新版本')"
+  log "$(msg 'Installing the latest official x264 master' '安装最新官方 x264 master')"
 
-  if [[ -x "/usr/bin/x264" ]] || command -v x264 >/dev/null 2>&1; then
-    log "$(msg 'x264 already installed, skipping build' '检测到 x264 已安装，跳过编译')"
+  local version_file="/usr/bin/x264-version.txt"
+  local installed_commit=""
+  if [[ -x /usr/bin/x264 && -f "$version_file" ]]; then
+    installed_commit="$(tr -d '\r\n' < "$version_file")"
+  fi
+  if [[ "$installed_commit" == "$x264_commit" ]]; then
+    log "$(msg 'The latest official x264 master is already installed; skipping build.' '已安装最新官方 x264 master，跳过编译。')"
     return 0
   fi
 
-  local deps=(build-essential git yasm)
+  local deps=(build-essential git nasm)
   local missing_deps=()
   local dep
   for dep in "${deps[@]}"; do
@@ -1379,18 +1312,27 @@ install_x264() {
 
   (
     cd "$build_dir" || exit 1
-    tmux_run "$(msg 'Download x264 source' '下载 x264 源码')" git clone https://code.videolan.org/videolan/x264.git || exit 1
+    tmux_run "$(msg 'Clone the latest official x264 master' '克隆最新官方 x264 master')" \
+      git clone --depth 1 "$X264_SOURCE_REPOSITORY" x264 || exit 1
     cd x264 || exit 1
-    tmux_run "x264 configure" ./configure --enable-static --bit-depth=all --extra-ldflags="-static" || exit 1
+    x264_commit="$(git rev-parse HEAD)"
+    tmux_run "x264 configure" ./configure \
+      --enable-static \
+      --bit-depth=all \
+      --chroma-format=all \
+      --disable-opencl \
+      --enable-lto || exit 1
     tmux_run "x264 make" make -j"$(nproc)" || exit 1
-    sudo cp x264 /usr/bin/ || exit 1
-    sudo chmod +x /usr/bin/x264 || exit 1
+    bluray_sudo cp x264 /usr/bin/x264 || exit 1
+    bluray_sudo chmod +x /usr/bin/x264 || exit 1
+    printf '%s\n' "$x264_commit" | bluray_sudo tee "$version_file" >/dev/null || exit 1
   ) || die "$(msg 'x264 build/install failed' 'x264 编译/安装失败')"
 
   rm -rf "$build_dir"
+  /usr/bin/x264 --version >/dev/null 2>&1 || \
+    die "$(msg 'Installed x264 verification failed' '安装后的 x264 验证失败')"
   log "$(msg 'x264 installation complete' 'x264 安装完成')"
 }
-
 # ---------------------------------------------------------------------------
 # SVT-AV1 (AOMediaCodec + 12-bit patches)
 # ---------------------------------------------------------------------------

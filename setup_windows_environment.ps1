@@ -130,6 +130,7 @@ $script:ToolPaths = [ordered]@{
     DoviTool = "C:\Software\dovi_tool.exe"
     TrueHdd = "C:\Software\truehdd.exe"
     X264 = "C:\Software\x264.exe"
+    X264Version = "C:\Software\x264-version.txt"
     X265 = "C:\Software\x265.exe"
     X265Version = "C:\Software\x265-version.txt"
     SvtAv1 = "C:\Software\SvtAv1EncApp.exe"
@@ -2523,143 +2524,143 @@ function Test-TrueHdd {
     return [bool](Get-InstalledTrueHddVersion)
 }
 function Get-X264Release {
-    $release = Get-GitHubLatestReleaseAsset `
-        -Repository "jpsdr/x264" `
-        -AssetPattern '^x264_tmod_r[0-9]+\.7z$'
-    if ($release.ReleaseBody -notmatch '(?i)x86/x64\s+8bits/10bits') {
-        throw (Get-SetupText `
-            "The x264 release does not confirm x64 8/10-bit support." `
-            "x264 发布信息未确认支持 x64 8/10-bit。")
+    $cacheKey = "gitlab:x264:official-master"
+    if ($script:ReleaseCache.Contains($cacheKey)) {
+        return $script:ReleaseCache[$cacheKey]
     }
-    if ($release.Size -le 0) {
+
+    $commits = @(Get-SetupJsonFromUri `
+        -Uri ([Uri]"https://code.videolan.org/api/v4/projects/videolan%2Fx264/repository/commits?ref_name=master&per_page=1") `
+        -CacheName "x264-master-commit.json")
+    $commit = $commits | Select-Object -First 1
+    $commitId = [string]$commit.id
+    $committedDate = [string]$commit.committed_date
+    if (-not $commitId -or -not $committedDate) {
         throw (Get-SetupText `
-            "The x264 release does not provide an asset size." `
-            "x264 发布信息未提供文件大小。")
+            "The latest official x264 master revision could not be determined." `
+            "无法确定官方 x264 master 的最新版本。")
     }
-    return $release
+    $timestamp = [DateTimeOffset]::Parse(
+        $committedDate,
+        [Globalization.CultureInfo]::InvariantCulture
+    ).UtcDateTime.ToString("yyyy.MM.dd.HHmmss", [Globalization.CultureInfo]::InvariantCulture)
+    $result = [pscustomobject]@{
+        Version = $timestamp
+        Branch = "master"
+        Repository = "https://code.videolan.org/videolan/x264.git"
+        Commit = $commitId
+    }
+    $script:ReleaseCache[$cacheKey] = $result
+    return $result
 }
 
 function Get-InstalledX264Version {
-    if (-not (Test-Path -LiteralPath $script:ToolPaths.X264 -PathType Leaf)) {
+    if (-not (Test-Path -LiteralPath $script:ToolPaths.X264 -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $script:ToolPaths.X264Version -PathType Leaf)) {
         return ""
     }
-    $output = Invoke-SetupCommand -FilePath $script:ToolPaths.X264 -Arguments @("--version")
-    $match = [regex]::Match($output, '\bx264\s+[0-9]+\.[0-9]+\.(?<revision>[0-9]+)\b', 'IgnoreCase')
-    if (-not $match.Success) {
-        $match = [regex]::Match($output, '\br(?<revision>[0-9]+)\b', 'IgnoreCase')
-    }
-    return $(if ($match.Success) { "r$($match.Groups['revision'].Value)" } else { "" })
+    return ([IO.File]::ReadAllText($script:ToolPaths.X264Version)).Trim()
 }
 
 function Install-X264 {
     param([string]$Version)
 
     $release = Get-X264Release
-    $archive = Join-Path $script:TempRoot $release.Name
-    $extracted = Join-Path $script:TempRoot "x264-extracted"
-    Invoke-SetupDownload `
-        -Uri $release.Uri `
-        -Destination $archive `
-        -Sha256 $release.Sha256 `
-        -ExpectedSize $release.Size | Out-Null
-    Expand-SetupArchiveWithSevenZip -Archive $archive -Destination $extracted
-    $executable = Join-Path $extracted "winthread\x264_x64.exe"
+    $sourceRoot = Join-Path $script:TempRoot "x264-source"
+    Invoke-SetupBuildCommand `
+        -DisplayName "latest official x264 source checkout" `
+        -FilePath $script:ToolPaths.Git `
+        -Arguments @("clone", $release.Repository, $sourceRoot)
+    Invoke-SetupBuildCommand `
+        -DisplayName "resolved official x264 master checkout" `
+        -FilePath $script:ToolPaths.Git `
+        -Arguments @("-C", $sourceRoot, "checkout", "--detach", $release.Commit)
+
+    $trainingY4m = Join-Path $script:TempRoot "x264-pgo-training.y4m"
+    Invoke-SetupBuildCommand `
+        -DisplayName "x264 PGO training video generation" `
+        -FilePath $script:ToolPaths.Ffmpeg `
+        -Arguments @(
+            "-hide_banner", "-loglevel", "error",
+            "-f", "lavfi",
+            "-i", "testsrc2=size=1280x720:rate=24000/1001",
+            "-frames:v", "120",
+            "-pix_fmt", "yuv420p",
+            "-f", "yuv4mpegpipe",
+            "-y", $trainingY4m
+        )
+
+    $buildScriptContent = @(
+        'set -euo pipefail',
+        'export PATH=/ucrt64/bin:/usr/bin',
+        'source_root=$1',
+        'training_y4m=$2',
+        'jobs=$3',
+        'cd "$source_root"',
+        './configure --enable-static --bit-depth=all --chroma-format=all --disable-opencl --enable-lto --extra-ldflags="-static -static-libgcc"',
+        'make -j"$jobs" fprofiled VIDS="$training_y4m"'
+    ) -join "`n"
+    $buildScript = Write-SetupTempScript -Name "build-x264.sh" -Content $buildScriptContent
+    Invoke-SetupBuildCommand `
+        -DisplayName "latest official x264 8/10-bit PGO compilation" `
+        -FilePath $script:ToolPaths.Msys2Bash `
+        -Arguments @(
+            (ConvertTo-Msys2Path $buildScript),
+            (ConvertTo-Msys2Path $sourceRoot),
+            (ConvertTo-Msys2Path $trainingY4m),
+            [string]$script:BuildJobs
+        )
+
+    $executable = Join-Path $sourceRoot "x264.exe"
     if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
         throw (Get-SetupText `
-            "The x264 Release archive is missing winthread\x264_x64.exe." `
-            "x264 Release 压缩包中缺少 winthread\x264_x64.exe。")
+            "The official x264 executable is missing after compilation." `
+            "官方 x264 编译完成后未找到可执行文件。")
     }
     [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($script:ToolPaths.X264)) | Out-Null
     Copy-Item -LiteralPath $executable -Destination $script:ToolPaths.X264 -Force
+    [IO.File]::WriteAllText(
+        $script:ToolPaths.X264Version,
+        $release.Version,
+        (New-Object Text.UTF8Encoding($false))
+    )
 }
 
 function Test-X264 {
-    return [bool](Get-InstalledX264Version)
+    try {
+        if (-not (Get-InstalledX264Version)) {
+            return $false
+        }
+        $help = Invoke-SetupCommand -FilePath $script:ToolPaths.X264 -Arguments @("--fullhelp")
+        $requiredOptions = @(
+            "--output-depth",
+            "--mastering-display",
+            "--cll",
+            "--colorprim",
+            "--transfer",
+            "--colormatrix"
+        )
+        $missingOptions = @($requiredOptions | Where-Object {
+            $help.IndexOf($_, [StringComparison]::OrdinalIgnoreCase) -lt 0
+        })
+        return $missingOptions.Count -eq 0
+    }
+    catch {
+        return $false
+    }
 }
-
 function Get-X265Release {
-    $repository = "msg7086/x265-Yuuki-Asuna"
-    $branchName = "stable"
-    $cacheKey = "github-branch-source:${repository}:$branchName"
-    if ($script:ReleaseCache.Contains($cacheKey)) {
-        return $script:ReleaseCache[$cacheKey]
-    }
-
-    $branch = Get-SetupJsonFromUri `
-        -Uri ([Uri]"https://api.github.com/repos/$repository/branches/$branchName") `
-        -CacheName "x265-yuuki-asuna-stable-branch.json"
-    $commit = [string]$branch.commit.sha
-    if (-not $commit) {
-        throw (Get-SetupText "The x265 stable branch has no commit." "x265 stable 分支没有可用提交。")
-    }
-
-    $versionText = Get-SetupTextFromUri `
-        -Uri ([Uri]"https://raw.githubusercontent.com/$repository/$commit/x265Version.txt") `
-        -CacheName "x265-yuuki-asuna-version.txt"
-    $releaseTagLine = $versionText.Replace("`r", "").Split([char]"`n") |
-        Where-Object { $_.TrimStart().StartsWith("releasetag:", [StringComparison]::OrdinalIgnoreCase) } |
-        Select-Object -First 1
-    if (-not $releaseTagLine) {
-        throw (Get-SetupText "The x265 stable branch does not declare its release version." "x265 stable 分支未声明发布版本。")
-    }
-    $version = $releaseTagLine.Substring($releaseTagLine.IndexOf(':') + 1).Trim()
-    if (-not $version) {
-        throw (Get-SetupText "The x265 stable branch release version is empty." "x265 stable 分支的发布版本为空。")
-    }
-
-    $result = [pscustomobject]@{
-        Version = $version
-        Name = "x265-Yuuki-Asuna-$version.zip"
-        Uri = [Uri]"https://codeload.github.com/$repository/zip/$commit"
-        Sha256 = ""
-        Size = 0L
-    }
-    $script:ReleaseCache[$cacheKey] = $result
-    return $result
+    return Get-GitHubLatestTaggedSource `
+        -Repository "Multicorewareinc/x265" `
+        -TagPattern '^(?<version>[0-9]+(?:\.[0-9]+){1,3})$' `
+        -ArchiveBaseName "x265"
 }
-
 function Get-InstalledX265Version {
     if (-not (Test-Path -LiteralPath $script:ToolPaths.X265 -PathType Leaf) -or
         -not (Test-Path -LiteralPath $script:ToolPaths.X265Version -PathType Leaf)) {
         return ""
     }
     return ([IO.File]::ReadAllText($script:ToolPaths.X265Version)).Trim()
-}
-
-function Update-X265SourceForCMake4 {
-    param([Parameter(Mandatory = $true)][string]$SourceRoot)
-
-    $mainCmake = Join-Path $SourceRoot "CMakeLists.txt"
-    Set-SourceTextReplacement `
-        -Path $mainCmake `
-        -OldText "cmake_policy(SET CMP0025 OLD) # report Apple's Clang as just Clang" `
-        -NewText "cmake_policy(SET CMP0025 NEW) # report Apple's Clang as just Clang" `
-        -Description "x265 CMP0025 policy"
-    Set-SourceTextReplacement `
-        -Path $mainCmake `
-        -OldText "cmake_policy(SET CMP0054 OLD) # Only interpret if() arguments as variables or keywords when unquoted" `
-        -NewText "cmake_policy(SET CMP0054 NEW) # Only interpret if() arguments as variables or keywords when unquoted" `
-        -Description "x265 CMP0054 policy"
-    Set-SourceTextReplacement `
-        -Path $mainCmake `
-        -OldText @"
-project (x265)
-cmake_minimum_required (VERSION 2.8.8) # OBJECT libraries require 2.8.8
-"@ `
-        -NewText @"
-cmake_minimum_required(VERSION 3.10)
-project(x265 LANGUAGES C CXX)
-"@ `
-        -Description "x265 minimum CMake version"
-
-    $dynamicHdrCmake = Join-Path $SourceRoot "dynamicHDR10\CMakeLists.txt"
-    if (Test-Path -LiteralPath $dynamicHdrCmake -PathType Leaf) {
-        Set-SourceTextReplacement `
-            -Path $dynamicHdrCmake `
-            -OldText "cmake_minimum_required (VERSION 2.8.11)" `
-            -NewText "cmake_minimum_required(VERSION 3.10)" `
-            -Description "x265 dynamicHDR10 minimum CMake version"
-    }
 }
 
 function Install-X265 {
@@ -2680,7 +2681,6 @@ function Install-X265 {
         throw (Get-SetupText "x265 source directory is missing." "未找到 x265 源码目录。")
     }
     $sourceRoot = $sourceCmake.Directory.FullName
-    Update-X265SourceForCMake4 -SourceRoot $sourceRoot
 
     $buildRoot = Join-Path $script:TempRoot "x265-build"
     $build12 = Join-Path $buildRoot "12bit"
@@ -2693,6 +2693,7 @@ function Install-X265 {
         "-DCMAKE_POLICY_VERSION_MINIMUM=3.10",
         "-DSTATIC_LINK_CRT=ON",
         "-DENABLE_SHARED=OFF",
+        "-DENABLE_HDR10_PLUS=OFF",
         "-DENABLE_LIBNUMA=OFF",
         "-DENABLE_LSMASH=OFF",
         "-DENABLE_LAVF=OFF",
@@ -3685,6 +3686,12 @@ function Test-CompiledToolsReady {
         "Checking compiled tools before deciding whether MSYS2 is needed." `
         "正在检查编译工具，以确定是否需要 MSYS2。"
     $checks = @(
+        [pscustomobject]@{
+            Name = "x264 8/10-bit encoder"
+            GetInstalled = { Get-InstalledX264Version }
+            GetAvailable = { (Get-X264Release).Version }
+            Verify = { Test-X264 }
+        },
         [pscustomobject]@{
             Name = "x265 8/10/12-bit encoder"
             GetInstalled = { Get-InstalledX265Version }

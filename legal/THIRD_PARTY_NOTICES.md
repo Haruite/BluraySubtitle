@@ -1,4 +1,4 @@
-# Third-party notices (bundled binaries)
+﻿# Third-party notices (bundled binaries)
 
 **Product:** BluraySubtitle (Windows, PyInstaller one-folder build)
 
@@ -56,19 +56,21 @@ These are **two separate upstreams**: the `fdkaac` program links against or ship
 
 ## x264
 
-- **Files:** `x264.exe`
-- **Version:** r3214
+- **Files:** `x264.exe`, `/usr/bin/x264`
+- **Version:** latest official upstream `master` revision resolved when setup or Docker runs
 - **License:** GPL-2.0
-- **Source:** https://github.com/jpsdr/x264/archive/refs/tags/r3214.zip
+- **Official repository:** https://code.videolan.org/videolan/x264.git
+- **Build note:** built from the unmodified official source as an 8/10-bit-capable CLI; the Windows setup additionally uses PGO.
 
 ---
 
 ## x265
 
-- **Files:** `x265.exe`
-- **Version:** 3.5
+- **Files:** `x265.exe`, `/usr/bin/x265`
+- **Version:** latest official stable numeric release tag resolved when setup or Docker runs
 - **License:** GPL-2.0
-- **Source:** https://github.com/msg7086/x265-Yuuki-Asuna
+- **Official repository:** https://github.com/Multicorewareinc/x265.git
+- **Build note:** built from the unmodified official source as a statically linked 8/10/12-bit multilib CLI on the target platform, including Ubuntu 26.04 for Docker.
 
 ---
 

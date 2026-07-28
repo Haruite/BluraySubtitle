@@ -1,4 +1,4 @@
-# 视频压制与 VapourSynth
+﻿# 视频压制与 VapourSynth
 
 [English](Video-Encoding-and-VapourSynth.md) | 简体中文
 
@@ -173,7 +173,7 @@ High Quality:
 --deblock -1:-1 --rc-lookahead 60 --ref 6 --subme 5
 
 Extreme:
---preset placebo --crf 14 --pme --pmode --aq-mode 3 --aq-strength 1.0
+--preset placebo --crf 14 --aq-mode 3 --aq-strength 1.0
 --cbqpoffs -2 --crqpoffs -2 --bframes 12 --b-adapt 2 --ref 6
 --rc-lookahead 120 --lookahead-threads 0 --psy-rd 2.5 --psy-rdoq 2.0
 --rdoq-level 2 --deblock -2:-2 --qcomp 0.65 --merange 57
