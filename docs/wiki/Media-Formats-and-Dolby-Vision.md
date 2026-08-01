@@ -426,16 +426,22 @@ For a Dolby Vision encode sourced from MKV, the project conceptually:
 
 1. identifies and extracts the HEVC video track;
 2. uses `dovi_tool` to demux/extract the base representation and RPU metadata;
-3. encodes the processed base video with a supported x265 output depth;
-4. writes the RPU in that x265 run when the actual executable advertises the
+3. when an automatic physical crop is active, exports every L5 active-area
+   preset, subtracts the crop margins, and creates a task-owned edited RPU;
+4. encodes the processed base video with a supported x265 output depth;
+5. writes the prepared RPU in that x265 run when the actual executable advertises the
    native options and the VBV/mastering-display prerequisites are already
    present, otherwise injects it afterward with `dovi_tool`;
-5. falls back to injection if native output verification fails, verifies the
+6. falls back to injection if native output verification fails, verifies the
    encoded HEVC contains RPU metadata, and also verifies HDR10+ when the source
    carried it; and
-6. muxes the final container, then requires profile 8 and an RPU frame count
+7. muxes the final container, then requires profile 8 and an RPU frame count
    matching the VPy output when it verifies that container. Active HDR10+ and
    automatically supplied static fields are also checked again.
+
+Both native x265 writing and fallback injection therefore consume the same
+crop-adjusted RPU. Source HDR10+ metadata is retained when supported, but the
+current workflow does not remeasure its brightness statistics after cropping.
 
 For compatible dual-layer remux input, it uses `dovi_tool` mode 2 to create
 the supported single-layer profile 8.1 result; enhancement-layer picture

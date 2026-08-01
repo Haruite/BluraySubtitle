@@ -428,6 +428,19 @@ conversion.
 Encode’s Blu-ray staging remux preserves source audio. Per-track Encode audio
 conversion occurs only in final muxing after video encode succeeds.
 
+## Automatic black-border cropping
+
+`src/runtime/video_crop.py` owns duration-adaptive sampling, FFmpeg crop-result
+validation, conservative rectangle aggregation, and the managed VPy crop block.
+It uses input-side time seeking rather than exact frame selection and writes no
+screenshots. The one-per-150-second sample count is clamped to 4–24, and the
+union of sampled active areas becomes one even-aligned crop. Existing managed
+blocks are replaced or removed so sequential rows cannot accumulate stale crop
+operations. A script without a known safe `src8`/`res` boundary fails the row
+instead of inserting a crop at an ambiguous point. A non-managed manual
+`Crop`/`CropAbs` call is also rejected when automatic cropping would be nonzero,
+preventing accidental double cropping.
+
 ## Dolby Vision processing
 
 `src/runtime/dolby_vision.py` owns the `dovi_tool` boundary.
@@ -437,6 +450,7 @@ The code:
 - resolves and validates the configured executable;
 - extracts the MKV HEVC track when preparing an encode;
 - demuxes/extracts base-layer and RPU intermediates;
+- exports and adjusts every L5 active-area preset when physical cropping is active;
 - checks that every requested intermediate was created;
 - injects RPU metadata into supported encoded HEVC;
 - converts dual-layer remux input to single-layer profile 8.1 by rewriting RPU
@@ -500,6 +514,7 @@ are a concrete example.
 | `tests/test_sp_workflow.py` | SP planning, exact outputs, append/recovery, PID mapping |
 | `tests/test_remux_workflow.py` | Main remux contracts and fallbacks |
 | `tests/test_encode_workflow.py` | Encode requests, staging, resumability, final mux |
+| `tests/test_video_crop.py` | Adaptive time sampling, crop aggregation, managed VPy insertion |
 | `tests/test_audio_dolby_vision_workflow.py` | Audio conversion/cleanup and Dolby Vision |
 | `tests/test_add_chapters_workflow.py` | Main playlist order and chapter-to-MKV mapping |
 | `tests/test_ass2sup.py` | ASS-to-SUP generation |

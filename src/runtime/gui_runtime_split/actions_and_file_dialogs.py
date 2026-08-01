@@ -989,6 +989,10 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     and self.use_getnative_checkbox.isChecked()
                 ),
                 default_lossless_audio_codec=self._current_encode_lossless_audio_codec(),
+                auto_crop_black_borders=bool(
+                    getattr(self, 'auto_crop_black_borders_checkbox', None)
+                    and self.auto_crop_black_borders_checkbox.isChecked()
+                ),
                 output_comparison_images=bool(
                     getattr(self, 'output_comparison_checkbox', None)
                     and self.output_comparison_checkbox.isChecked()
@@ -1625,6 +1629,15 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         )
         self.use_getnative_checkbox.setChecked(True)
         options_layout.addWidget(self.use_getnative_checkbox)
+        self.auto_crop_black_borders_checkbox = QCheckBox(
+            self.t('Auto-crop black borders (verify result)'),
+            self.encode_options_row,
+        )
+        self.auto_crop_black_borders_checkbox.setChecked(False)
+        self.auto_crop_black_borders_checkbox.setToolTip(self.t(
+            'Automatic black-border detection can be wrong; verify the encoded picture.'
+        ))
+        options_layout.addWidget(self.auto_crop_black_borders_checkbox)
         self.output_comparison_checkbox = QCheckBox(
             self.t('Output comparison images'),
             self.encode_options_row,

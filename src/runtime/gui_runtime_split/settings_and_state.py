@@ -53,6 +53,9 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
             encode.lossless_audio_codec,
         )
         self.use_getnative_checkbox.setChecked(encode.use_getnative)
+        self.auto_crop_black_borders_checkbox.setChecked(
+            encode.auto_crop_black_borders
+        )
         self.output_comparison_checkbox.setChecked(
             encode.output_comparison_images
         )

@@ -34,6 +34,7 @@
     "lossless_audio_codec": "flac",
     "subtitle_mode": "external",
     "use_getnative": true,
+    "auto_crop_black_borders": false,
     "output_comparison_images": true
   }
 }

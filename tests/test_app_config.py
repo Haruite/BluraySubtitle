@@ -140,6 +140,11 @@ class AppConfigTests(unittest.TestCase):
                 "schema_version": 1,
                 "encode": {"output_comparison_images": "yes"},
             })
+        with self.assertRaisesRegex(ValueError, "auto_crop_black_borders"):
+            app_config_from_mapping({
+                "schema_version": 1,
+                "encode": {"auto_crop_black_borders": "yes"},
+            })
 
     def test_frozen_paths_separate_writable_config_from_packaged_template(self) -> None:
         executable = Path(r"C:\Portable\BluraySubtitle\BluraySubtitle_windows_x64.exe")
@@ -234,6 +239,7 @@ class SettingsGuiTests(unittest.TestCase):
             dialog.default_subtitle_mode_combo.findData("softsub")
         )
         dialog.default_getnative_checkbox.setChecked(False)
+        dialog.default_auto_crop_checkbox.setChecked(True)
         dialog.default_output_comparison_checkbox.setChecked(False)
         dialog.remux_flac_default_checkbox.setChecked(False)
 
@@ -274,6 +280,7 @@ class SettingsGuiTests(unittest.TestCase):
                 lossless_audio_codec="opus",
                 subtitle_mode="softsub",
                 use_getnative=False,
+                auto_crop_black_borders=True,
                 output_comparison_images=False,
             ),
         )
@@ -507,6 +514,7 @@ class SettingsGuiTests(unittest.TestCase):
                 lossless_audio_codec="opus",
                 subtitle_mode="softsub",
                 use_getnative=False,
+                auto_crop_black_borders=True,
                 output_comparison_images=False,
             ),
         )
@@ -537,6 +545,7 @@ class SettingsGuiTests(unittest.TestCase):
             self.assertEqual(window.encode_lossless_audio_combo.currentData(), "opus")
             self.assertTrue(window.sub_pack_soft_radio.isChecked())
             self.assertFalse(window.use_getnative_checkbox.isChecked())
+            self.assertTrue(window.auto_crop_black_borders_checkbox.isChecked())
             self.assertFalse(window.output_comparison_checkbox.isChecked())
             self.assertFalse(window.remux_flac_checkbox.isChecked())
             self.assertIs(

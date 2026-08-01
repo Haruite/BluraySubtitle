@@ -74,6 +74,7 @@ class EncodePreferences:
     lossless_audio_codec: str = "flac"
     subtitle_mode: str = "external"
     use_getnative: bool = True
+    auto_crop_black_borders: bool = False
     output_comparison_images: bool = True
 
 
@@ -276,6 +277,11 @@ def app_config_from_mapping(raw: dict[str, Any]) -> AppConfig:
                 encode,
                 "use_getnative",
                 True,
+            ),
+            auto_crop_black_borders=_boolean_value(
+                encode,
+                "auto_crop_black_borders",
+                False,
             ),
             output_comparison_images=_boolean_value(
                 encode,

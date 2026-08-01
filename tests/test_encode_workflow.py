@@ -21,8 +21,12 @@ from src.runtime.encode_results import (
 )
 from src.runtime.encode_source import ActualEncodeSource
 from src.runtime import TaskCancelled
+from src.runtime.video_crop import VideoCropPlan
 from src.runtime.services import BluraySubtitle as _BluraySubtitle
-from src.runtime.services_split.encode_and_audio_tasks import EncodeAudioTasksMixin
+from src.runtime.services_split.encode_and_audio_tasks import (
+    EncodeAudioTasksMixin,
+    _plan_automatic_encoder_metadata,
+)
 from src.runtime.services_split.remux_and_episode_workflows import RemuxEpisodeWorkflowsMixin
 from src.runtime.gui_runtime_classes.bluray_subtitle_gui_entry import BluraySubtitleGUI as _BluraySubtitleGUI
 from src.runtime.gui_runtime_split import actions_and_file_dialogs as encode_gui_module
@@ -62,7 +66,11 @@ class _ThreadCapture:
         pass
 
 
-def _settings(*, output_comparison_images: bool = False) -> EncodeSettings:
+def _settings(
+        *,
+        output_comparison_images: bool = False,
+        auto_crop_black_borders: bool = False,
+) -> EncodeSettings:
     return EncodeSettings(
         vspipe_mode='bundle',
         encoder_mode='bundle',
@@ -72,6 +80,7 @@ def _settings(*, output_comparison_images: bool = False) -> EncodeSettings:
         bit_depth='10',
         use_getnative=False,
         default_lossless_audio_codec='flac',
+        auto_crop_black_borders=auto_crop_black_borders,
         output_comparison_images=output_comparison_images,
     )
 
@@ -221,6 +230,9 @@ class EncodeWorkflowTests(unittest.TestCase):
                 sub_pack_hard_radio=SimpleNamespace(isChecked=lambda: False),
                 sub_pack_soft_radio=SimpleNamespace(isChecked=lambda: False),
                 use_getnative_checkbox=SimpleNamespace(isChecked=lambda: True),
+                auto_crop_black_borders_checkbox=SimpleNamespace(
+                    isChecked=lambda: True
+                ),
                 output_comparison_checkbox=SimpleNamespace(isChecked=lambda: True),
                 trim_copyright_tail_checkbox=SimpleNamespace(isChecked=lambda: False),
                 mux_dolby_vision_checkbox=SimpleNamespace(isChecked=lambda: False),
@@ -269,6 +281,7 @@ class EncodeWorkflowTests(unittest.TestCase):
             self.assertEqual(request.main_rows[0].audio_codec_choices, ('opus',))
             self.assertEqual(request.main_rows[0].track_language_overrides, (('1', 'jpn'),))
             self.assertEqual(request.settings.default_lossless_audio_codec, 'opus')
+            self.assertTrue(request.settings.auto_crop_black_borders)
             self.assertTrue(request.settings.output_comparison_images)
             self.assertEqual(request.settings.audio_encoding, audio_encoding)
             self.assertFalse(request.mux_dolby_vision)
@@ -959,6 +972,15 @@ class EncodeWorkflowTests(unittest.TestCase):
                 str(rpu_path),
                 str(work_folder),
             )
+            crop_plan = VideoCropPlan(
+                1920,
+                1080,
+                7200.0,
+                24,
+                (),
+                top=140,
+                bottom=140,
+            )
             service = _PipelineService()
 
             def encode_video(_vspipe, _vpy, encoder_command, environment):
@@ -1031,6 +1053,10 @@ class EncodeWorkflowTests(unittest.TestCase):
                         return_value=plan,
                     ) as prepare_dolby_vision,
                     patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.detect_black_borders',
+                        return_value=crop_plan,
+                    ),
+                    patch(
                         'src.runtime.services_split.encode_and_audio_tasks.probe_actual_encode_source',
                         side_effect=probe_source,
                     ) as source_probe,
@@ -1058,6 +1084,9 @@ class EncodeWorkflowTests(unittest.TestCase):
                         'src.runtime.services_split.encode_and_audio_tasks._write_vpy_video_source_a',
                         return_value=True,
                     ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.write_vapoursynth_crop',
+                    ) as write_crop,
                     patch(
                         'src.runtime.services_split.encode_and_audio_tasks.get_vspipe_context',
                         return_value=('vspipe', {}),
@@ -1092,9 +1121,16 @@ class EncodeWorkflowTests(unittest.TestCase):
                     audio_codec_choices=(),
                     track_language_overrides=(),
                     source_file=str(source_path),
+                    auto_crop_black_borders=True,
                 )
 
-            prepare_dolby_vision.assert_called_once_with(str(source_path), 0, str(root))
+            prepare_dolby_vision.assert_called_once_with(
+                str(source_path),
+                0,
+                str(root),
+                crop_plan,
+            )
+            write_crop.assert_called_once_with(str(vpy_path), crop_plan)
             source_probe.assert_called_once_with(str(base_layer))
             self.assertEqual(self.vpy_probe.call_args.args[0].path, str(base_layer))
             hdr10plus_extract.assert_called_once()
@@ -1115,6 +1151,57 @@ class EncodeWorkflowTests(unittest.TestCase):
                 'Actual encode source: base-layer.hevc' in message
                 for message in service.progress_messages
             ))
+
+    def test_native_x265_uses_the_preprocessed_dolby_vision_rpu_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_path = root / 'base-layer.hevc'
+            vpy_path = root / 'encode.vpy'
+            processed_rpu = root / 'rpu.bin'
+            source_path.write_bytes(b'hevc')
+            vpy_path.write_text('res = src8\n', encoding='utf-8')
+            processed_rpu.write_bytes(b'processed-rpu')
+            service = _PipelineService()
+
+            with (
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.'
+                        'probe_actual_encode_source',
+                        return_value=_actual_source(str(source_path)),
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.'
+                        'probe_x265_dynamic_metadata_options',
+                        return_value=frozenset({
+                            '--dolby-vision-profile',
+                            '--dolby-vision-rpu',
+                        }),
+                    ),
+            ):
+                result = _plan_automatic_encoder_metadata(
+                    service,
+                    str(root / 'output.mkv'),
+                    str(source_path),
+                    str(vpy_path),
+                    'vspipe',
+                    {},
+                    'x265',
+                    'x265',
+                    '10',
+                    '--vbv-maxrate 30000 --vbv-bufsize 30000 '
+                    '--master-display G(13250,34500)',
+                    str(root / 'hdr10plus.json'),
+                    str(processed_rpu),
+                )
+
+            automatic_arguments = result[1]
+            self.assertTrue(result[4])
+            self.assertEqual(
+                automatic_arguments[
+                    automatic_arguments.index('--dolby-vision-rpu') + 1
+                ],
+                str(processed_rpu),
+            )
 
     def test_source_probe_failure_writes_report_and_encoding_continues(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

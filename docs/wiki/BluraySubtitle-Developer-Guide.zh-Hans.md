@@ -347,6 +347,14 @@ Remux 的无损转 FLAC 由可见复选框控制，启动时默认启用。关�
 
 Encode 的蓝光暂存 Remux 必须保留源音频。只有视频压制成功后，才在最终混流中执行每轨 Encode 音频转换。
 
+## 自动裁剪黑边
+
+`src/runtime/video_crop.py` 负责按时长确定采样数、校验 FFmpeg 裁剪结果、保守合并矩形以及管理 VPy 裁剪块。
+它使用输入端时间定位而不是精确帧选择，并且不写出截图。采样数按每 150 秒一个计算并限制在 4～24 个，
+全部样本有效画面的并集会转换为一组偶数对齐的固定裁剪值。已有受管理裁剪块会被替换或移除，连续任务行不会
+叠加过期操作；脚本不存在已知安全的 `src8`／`res` 边界时，当前行会失败，不会在含义不明的位置插入裁剪。
+自动结果非零时也会拒绝 VPy 中非受管理的手工 `Crop`／`CropAbs` 调用，避免意外重复裁剪。
+
 ## Dolby Vision 处理
 
 `src/runtime/dolby_vision.py` 拥有 `dovi_tool` 边界。
@@ -356,6 +364,7 @@ Encode 的蓝光暂存 Remux 必须保留源音频。只有视频压制成功后
 - 解析并验证配置的可执行文件；
 - 为 Encode 准备过程提取 MKV HEVC 轨；
 - 分离／提取基础层和 RPU 中间文件；
+- 存在物理裁剪时导出并调整全部 L5 有效画面 preset；
 - 检查每个请求的中间文件均已创建；
 - 向受支持的编码 HEVC 注入 RPU；
 - 通过改写 RPU 并丢弃增强层视频，把双层 Remux 输入转换为单层 profile 8.1；
@@ -411,6 +420,7 @@ Encode 的蓝光暂存 Remux 必须保留源音频。只有视频压制成功后
 | `tests/test_sp_workflow.py` | SP 规划、准确输出、追加／恢复和 PID 映射 |
 | `tests/test_remux_workflow.py` | 主 Remux 契约和回退 |
 | `tests/test_encode_workflow.py` | Encode 请求、暂存、恢复执行和最终混流 |
+| `tests/test_video_crop.py` | 时长自适应采样、裁剪合并和受管理 VPy 插入 |
 | `tests/test_audio_dolby_vision_workflow.py` | 音频转换／清理和 Dolby Vision |
 | `tests/test_add_chapters_workflow.py` | 主播放列表顺序和章节到 MKV 的映射 |
 | `tests/test_ass2sup.py` | ASS → SUP 生成 |

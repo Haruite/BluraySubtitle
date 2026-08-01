@@ -1109,6 +1109,12 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         self.sub_files = [row.subtitle_path for row in main_rows]
         self.episode_subtitle_languages = [row.subtitle_language for row in main_rows]
         self.use_getnative = request.settings.use_getnative
+        if request.settings.auto_crop_black_borders:
+            warning = translate_text(
+                'Automatic black-border detection can be wrong; verify the encoded picture.'
+            )
+            self.encode_warnings.append(warning)
+            self._progress(text=warning)
 
         def write_comparison_images(
                 row: EncodeRow,
@@ -1336,6 +1342,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 subtitle_path=row.subtitle_path,
                 subtitle_language=row.subtitle_language,
                 audio_encoding=request.settings.audio_encoding,
+                auto_crop_black_borders=request.settings.auto_crop_black_borders,
             )
             if not os.path.isfile(row.output_path):
                 raise RuntimeError(

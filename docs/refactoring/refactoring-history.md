@@ -939,7 +939,7 @@ Commit: `c2552ad` (`feat(setup): install Linux tools at configured paths`)
 ## Same-Frame Encode Comparison Images
 
 Date: 2026-08-01
-Commit: uncommitted (current change)
+Commit: `f632d85` (`feat(encode): add same-frame comparison images`)
 
 ### Scope and Logic Changes
 
@@ -954,3 +954,28 @@ Commit: uncommitted (current change)
 - Updated both README versions, the Simplified Chinese translation catalog, and both code-standard versions. No obsolete compatibility path was retained.
 - Focused configuration, Encode workflow, worker-boundary, i18n, and split-contract checks passed, as did all 242 repository tests. A live FFmpeg check extracted frame 5 from two losslessly equivalent 10-frame files with the production filter and produced byte-identical PNGs; final diff and line-ending checks also passed.
 - A real-media Encode remains a manual check: use a disposable output directory, verify the two PNGs show the same source/encoded frame, and inspect SDR and HDR screenshot appearance under the generated `Compare` folder.
+
+## Duration-Adaptive Automatic Black-Border Cropping
+
+Date: 2026-08-01
+Commit: uncommitted (current change)
+
+### Detection and VapourSynth Integration
+
+- Added an opt-in Encode checkbox and matching Advanced default. Every enabled batch reports that automatic black-border analysis is heuristic and that the encoded picture must be checked.
+- Each row probes video dimensions and duration, then performs stratified pseudo-random FFmpeg input seeks without writing screenshots. The sample count is one point per 150 seconds, clamped to 4–24, and each point decodes three nearby frames for `cropdetect`.
+- Valid detected active rectangles are combined by union, producing one even-aligned fixed crop that cannot remove pixels used by any sampled frame. Changing borders therefore reduce or eliminate the crop rather than creating time-varying output dimensions.
+- A managed `src8.std.Crop(...)` block is inserted before downstream processing in the row's VPy. Repeated rows replace the block, disabling the option removes it, and scripts without a known safe clip boundary fail explicitly.
+
+### Dynamic HDR Metadata
+
+- Dolby Vision preparation now extracts the converted profile 8.1 RPU to a source artifact, exports its L5 editor configuration, subtracts the physical crop from every active-area preset, writes a task-owned edited RPU, and verifies that it remains profile 8.
+- The same edited RPU path is supplied to native x265 Dolby Vision writing and to the existing verified post-injection fallback. A manual `--dolby-vision-rpu` is rejected when a nonzero automatic crop is active because the program cannot safely rewrite an externally owned RPU.
+- HDR10+ metadata remains on the existing extraction/native-or-injection path without an additional crop-specific prompt.
+
+### Documentation, Verification, and Manual Checks
+
+- Updated both README versions, the Encode/VapourSynth, Dolby Vision, and developer Wiki pages, bilingual i18n, and configuration/GUI contracts.
+- Focused tests cover adaptive counts, deterministic stratified timestamps, fast-seek command construction, conservative rectangle union, managed VPy replacement/removal, saved GUI settings, Dolby Vision L5 preset edits, and the processed RPU path used by native x265.
+- All 252 repository tests passed, together with Python compilation, i18n and split-contract checks. A real FFmpeg smoke test generated a 320x240 source with 30-pixel top/bottom bars and the production detector returned the expected 320x180 active picture.
+- A real-media check remains required: test short and feature-length constant-border, variable-border, dark-scene, HDR10+, and Dolby Vision sources; inspect reported margins and output dimensions; and verify the final Dolby Vision RPU with `dovi_tool`.

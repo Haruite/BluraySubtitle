@@ -268,6 +268,17 @@ The selected output bit depth is synchronized with the final
 `fmtc.bitdepth(..., bits=N)` conversion. Hardsub mode activates the
 `assrender.TextSub` line and supplies the selected subtitle path.
 
+Automatic black-border cropping is opt-in. Before preparing the final VPy,
+BluraySubtitle probes duration and dimensions, then uses FFmpeg input-side seeks
+to analyze one pseudo-random point in each time bucket. It samples one point per
+150 seconds, bounded to 4–24 points, and decodes only three nearby frames at each
+point without writing image files. The fixed crop is derived from the union of
+all detected active rectangles, so a pixel used by any sampled frame is kept.
+The managed `src8.std.Crop(...)` operation is inserted before the rest of the
+filter graph. Automatic analysis is necessarily heuristic: dark scenes, credits,
+overlays, and unusual borders can produce a wrong result, so inspect the reported
+margins and encoded picture.
+
 Before starting the encoder, BluraySubtitle samples output 0's first, middle,
 and last frames. Stable `_ColorRange`, `_Primaries`, `_Transfer`, `_Matrix`, and
 `_ChromaLocation` properties take precedence over source metadata; missing
@@ -286,6 +297,13 @@ when its actual executable advertises both native paths and the row already has
 VBV and mastering-display parameters. Missing or unverified native support uses
 the existing injection tools without changing rate control. The HEVC is checked
 for both metadata sets after the last injection and before final muxing.
+
+If automatic cropping changes the coded dimensions, each Dolby Vision L5
+active-area preset is adjusted by the physical crop before the resulting
+profile 8.1 RPU is supplied to either native x265 or post-injection. A manually
+supplied RPU is therefore incompatible with automatic cropping. HDR10+ does not
+have a corresponding crop-offset edit in this workflow: its source metadata is
+retained without an additional crop-specific prompt.
 
 After the final MKV is published, BluraySubtitle re-probes the static fields it
 added automatically and reruns the active dynamic-metadata checks. Dolby Vision

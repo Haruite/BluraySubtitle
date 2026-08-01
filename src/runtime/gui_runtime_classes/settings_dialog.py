@@ -428,6 +428,14 @@ class SettingsDialog(QDialog):
             encode_group,
         )
         encode_form.addRow(self.default_getnative_checkbox)
+        self.default_auto_crop_checkbox = QCheckBox(
+            self.t("Automatically crop detected black borders by default"),
+            encode_group,
+        )
+        self.default_auto_crop_checkbox.setToolTip(self.t(
+            "Automatic black-border detection can be wrong; verify the encoded picture."
+        ))
+        encode_form.addRow(self.default_auto_crop_checkbox)
         self.default_output_comparison_checkbox = QCheckBox(
             self.t("Output comparison images by default"),
             encode_group,
@@ -718,6 +726,9 @@ class SettingsDialog(QDialog):
             config.encode.subtitle_mode,
         )
         self.default_getnative_checkbox.setChecked(config.encode.use_getnative)
+        self.default_auto_crop_checkbox.setChecked(
+            config.encode.auto_crop_black_borders
+        )
         self.default_output_comparison_checkbox.setChecked(
             config.encode.output_comparison_images
         )
@@ -766,6 +777,9 @@ class SettingsDialog(QDialog):
                     self.default_subtitle_mode_combo.currentData()
                 ),
                 use_getnative=self.default_getnative_checkbox.isChecked(),
+                auto_crop_black_borders=(
+                    self.default_auto_crop_checkbox.isChecked()
+                ),
                 output_comparison_images=(
                     self.default_output_comparison_checkbox.isChecked()
                 ),

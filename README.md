@@ -132,9 +132,8 @@ Encode options include:
 - The startup encoder, bit depth, preset, and preset parameters come from
   **Advanced** settings. After startup, the visible Encode controls remain
   authoritative for every task.
-- The startup lossless-audio target, subtitle packaging mode, getnative, and
-  output-comparison checkboxes also come from **Advanced** settings and remain freely editable
-  before launch.
+- The startup lossless-audio target, subtitle packaging mode, getnative, automatic-crop, and output-comparison checkboxes also come from **Advanced** settings and remain freely editable before launch.
+- With **Auto-crop black borders** enabled, Encode analyzes multiple time points and applies one conservative fixed crop. Pixels used by any sampled active picture are preserved when borders vary over time.
 - With **Output comparison images** enabled, every encoded video saves source and encoded PNGs from the same frame under **`<selected output>/<source folder name>/Compare`**.
 - Lossless PCM, TrueHD/MLP, DTS-family, and FLAC tracks use the per-track FLAC/AAC/Opus choice shown in
   **Edit tracks**. Lossy audio is kept unchanged. TrueHD Atmos is converted only after `truehdd` successfully decodes
@@ -163,10 +162,7 @@ Encode follows the visible row order and applies the displayed output names, per
 languages, track choices, and encoder settings. For Blu-ray input, its temporary Remux preserves the selected source
 audio; lossless-audio conversion runs only during the final mux after video encoding succeeds.
 
-Encode automatically carries compatible source color and HDR metadata into the output, including HDR10+ for x265
-10/12-bit output. Dolby Vision from a selected Blu-ray or Remux source is preserved as profile 8.1 with x265 10/12-bit
-output. x264 and x265 8-bit output cannot preserve Dolby Vision, while SVT-AV1 omits it with an explicit notice.
-Automatic metadata problems are reported as warnings so users can check the output.
+Encode automatically carries compatible source color and HDR metadata into the output, including HDR10+ for x265 10/12-bit output. Dolby Vision from a selected Blu-ray or Remux source is preserved as profile 8.1 with x265 10/12-bit output. x264 and x265 8-bit output cannot preserve Dolby Vision, while SVT-AV1 omits it with an explicit notice. When automatic cropping changes the encoded dimensions, Dolby Vision active-area metadata is adjusted for both native x265 writing and fallback post-injection.
 
 ### mkvtoolnix Compatibility Fixes
 
@@ -491,7 +487,7 @@ docker pull --platform linux/amd64 haruite/bluraysubtitle:latest
 
 ### Does encode auto-crop black borders?
 
-No—automation can’t cover all cases. Add crop logic in your VPy if you need it.
+Yes, as an opt-in Encode setting. It analyzes multiple time points without writing screenshots and uses a conservative fixed crop that is safe for all sampled active areas. This handles many constant or changing-border sources, but dark scenes, credits, overlays, and unusual mastering can still produce a wrong result. Always verify the reported margins and the encoded picture; leave the option disabled and use an explicit VPy crop when exact control is required.
 
 ### How do I run a short encode test?
 

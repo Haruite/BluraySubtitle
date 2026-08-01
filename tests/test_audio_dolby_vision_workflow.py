@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -21,11 +22,13 @@ from src.runtime.audio_conversion import (
 )
 from src.runtime.dolby_vision import (
     DolbyVisionEncodePlan,
+    edit_dolby_vision_rpu_for_crop,
     inject_dolby_vision_rpu,
     mux_dolby_vision_layers,
     prepare_dolby_vision_encode,
     verify_dolby_vision_rpu,
 )
+from src.runtime.video_crop import VideoCropPlan
 from src.runtime.services_split.encode_and_audio_tasks import (
     encode_dovi_preflight_mkv_paths,
     encode_dovi_preservation_supported,
@@ -1008,6 +1011,106 @@ class DolbyVisionTests(unittest.TestCase):
                 Path(str(encoded_stream) + '.dovi.hevc').read_bytes(),
                 b'partial',
             )
+
+    def test_crop_edit_subtracts_physical_margins_from_every_l5_preset(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_rpu = root / 'source-rpu.bin'
+            output_rpu = root / 'cropped-rpu.bin'
+            source_rpu.write_bytes(b'rpu')
+            commands: list[list[str]] = []
+            captured_editor_config: dict = {}
+
+            def run_tool(command, **_kwargs):
+                command = list(command)
+                commands.append(command)
+                if 'export' in command:
+                    level5_path = Path(
+                        command[command.index('-d') + 1].split('=', 1)[1]
+                    )
+                    level5_path.write_text(json.dumps({
+                        'active_area': {
+                            'presets': [
+                                {
+                                    'id': 0,
+                                    'left': 20,
+                                    'right': 24,
+                                    'top': 140,
+                                    'bottom': 142,
+                                },
+                                {
+                                    'id': 1,
+                                    'left': 0,
+                                    'right': 0,
+                                    'top': 200,
+                                    'bottom': 200,
+                                },
+                            ],
+                            'edits': {'all': 0, '100-199': 1},
+                        },
+                    }), encoding='utf-8')
+                    return SimpleNamespace(returncode=0, stdout='', stderr='')
+                if 'editor' in command:
+                    editor_path = Path(command[command.index('-j') + 1])
+                    captured_editor_config.update(json.loads(
+                        editor_path.read_text(encoding='utf-8')
+                    ))
+                    Path(command[command.index('-o') + 1]).write_bytes(b'edited')
+                    return SimpleNamespace(returncode=0, stdout='', stderr='')
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout='Frames: 1000\nProfile: 8\n',
+                    stderr='',
+                )
+
+            crop_plan = VideoCropPlan(
+                1920,
+                1080,
+                7200.0,
+                24,
+                (),
+                left=10,
+                right=12,
+                top=100,
+                bottom=100,
+            )
+            with (
+                    patch(
+                        'src.runtime.dolby_vision.dolby_vision_tool_path',
+                        return_value='dovi_tool',
+                    ),
+                    patch(
+                        'src.runtime.dolby_vision.run_command',
+                        side_effect=run_tool,
+                    ),
+            ):
+                edit_dolby_vision_rpu_for_crop(
+                    str(source_rpu),
+                    str(output_rpu),
+                    crop_plan,
+                    str(root),
+                )
+
+            active_area = captured_editor_config['active_area']
+            self.assertEqual(active_area['edits'], {'all': 0, '100-199': 1})
+            self.assertEqual(active_area['presets'][0], {
+                'id': 0,
+                'left': 10,
+                'right': 12,
+                'top': 40,
+                'bottom': 42,
+            })
+            self.assertEqual(active_area['presets'][1], {
+                'id': 1,
+                'left': 0,
+                'right': 0,
+                'top': 100,
+                'bottom': 100,
+            })
+            self.assertEqual(commands[0][1:3], ['export', '-i'])
+            self.assertIn('editor', commands[1])
+            self.assertEqual(commands[2][1:3], ['info', '-s'])
+            self.assertEqual(output_rpu.read_bytes(), b'edited')
 
     def test_preparation_uses_profile_81_mode_and_task_owned_folders(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

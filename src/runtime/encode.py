@@ -30,6 +30,7 @@ class EncodeSettings:
     bit_depth: str
     use_getnative: bool
     default_lossless_audio_codec: str
+    auto_crop_black_borders: bool = False
     output_comparison_images: bool = True
     audio_encoding: AudioEncodingSettings = AudioEncodingSettings()
 
@@ -333,7 +334,10 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
                 os.path.isfile(mkvpropedit_path) or shutil.which(mkvpropedit_path)
         ):
             raise FileNotFoundError(translate_text('mkvpropedit not found'))
-    if request.settings.output_comparison_images:
+    if (
+            request.settings.output_comparison_images
+            or request.settings.auto_crop_black_borders
+    ):
         for tool_name, configured_path in (
                 ('ffmpeg', core_settings.FFMPEG_PATH),
                 ('ffprobe', core_settings.FFPROBE_PATH),

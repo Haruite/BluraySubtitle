@@ -45,6 +45,11 @@ from src.runtime.encode_source import (
     write_hdr_metadata_error_report,
 )
 from src.runtime.encode_results import EncodeTaskFailure
+from src.runtime.video_crop import (
+    VideoCropPlan,
+    detect_black_borders,
+    write_vapoursynth_crop,
+)
 from src.runtime import TaskCancelled
 from ...core.i18n import translate_text
 from ...exports.utils import (
@@ -1045,6 +1050,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             subtitle_path: str = '',
             subtitle_language: str = '',
             audio_encoding: AudioEncodingSettings = AudioEncodingSettings(),
+            auto_crop_black_borders: bool = False,
     ) -> None:
         vpy_path = os.path.normpath(os.path.abspath(str(vpy_path or '').strip()))
         if not os.path.isfile(vpy_path):
@@ -1081,8 +1087,64 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
         hdr10plus_metadata_active = False
         native_hdr10plus = False
         vpy_video_source = src_mkv
+        crop_plan: VideoCropPlan | None = None
         encode_dovi_plan: Optional[DolbyVisionEncodePlan] = None
         preserve_dovi_work_folder = False
+        if auto_crop_black_borders:
+            try:
+                self._progress(text=translate_text(
+                    'Analyzing black borders: {name}'
+                ).format(name=os.path.basename(src_mkv)))
+                crop_plan = detect_black_borders(src_mkv)
+            except TaskCancelled:
+                raise
+            except Exception as error:
+                raise EncodeTaskFailure(
+                    'Automatic black-border analysis',
+                    str(error),
+                ) from error
+            if crop_plan.has_crop:
+                try:
+                    manual_arguments = shlex.split(
+                        encoder_parameters,
+                        posix=sys.platform != 'win32',
+                    )
+                except ValueError:
+                    manual_arguments = encoder_parameters.split()
+                if arguments_contain_option(
+                        manual_arguments,
+                        '--dolby-vision-rpu',
+                ):
+                    raise EncodeTaskFailure(
+                        'Automatic black-border analysis',
+                        translate_text(
+                            'Automatic cropping cannot be combined with a manually supplied '
+                            'Dolby Vision RPU: {path}'
+                        ).format(path=src_mkv),
+                    )
+                crop_message = translate_text(
+                    'Detected crop for {name}: left {left}, right {right}, top {top}, '
+                    'bottom {bottom}; {width}x{height}, {samples} time points'
+                ).format(
+                    name=os.path.basename(src_mkv),
+                    left=crop_plan.left,
+                    right=crop_plan.right,
+                    top=crop_plan.top,
+                    bottom=crop_plan.bottom,
+                    width=crop_plan.output_width,
+                    height=crop_plan.output_height,
+                    samples=crop_plan.sample_count,
+                )
+            else:
+                crop_message = translate_text(
+                    'No removable black borders were detected for {name} '
+                    '({samples} time points)'
+                ).format(
+                    name=os.path.basename(src_mkv),
+                    samples=crop_plan.sample_count,
+                )
+            _emit_encode_log_line(f'[encode-crop] {crop_message}')
+            self._progress(text=crop_message)
         if str(src_mkv).lower().endswith('.mkv') and os.path.isfile(src_mkv):
             dv_tid = MediaInfoTrackMappingMixin.mkvinfo_dolby_vision_track_id(src_mkv)
             if dv_tid is not None:
@@ -1121,11 +1183,19 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     except Exception:
                         pass
                     try:
-                        encode_dovi_plan = prepare_dolby_vision_encode(
-                            src_mkv,
-                            int(dv_tid),
-                            output_folder,
-                        )
+                        if crop_plan is None:
+                            encode_dovi_plan = prepare_dolby_vision_encode(
+                                src_mkv,
+                                int(dv_tid),
+                                output_folder,
+                            )
+                        else:
+                            encode_dovi_plan = prepare_dolby_vision_encode(
+                                src_mkv,
+                                int(dv_tid),
+                                output_folder,
+                                crop_plan,
+                            )
                     except Exception as error:
                         raise EncodeTaskFailure(
                             'Dolby Vision preparation',
@@ -1272,6 +1342,10 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                         path=vpy_path
                     )
                 )
+            write_vapoursynth_crop(
+                vpy_path,
+                crop_plan if auto_crop_black_borders else None,
+            )
 
             def cleanup_lwi_for_source(source_path: str):
                 for suffix in ('.lwi', '.lwi.lock'):
