@@ -20,7 +20,10 @@ from src.core import MKV_LABELS, REMUX_LABELS, DIY_REMUX_LABELS, ENCODE_LABELS, 
     ENCODE_REMUX_SP_LABELS, CURRENT_UI_LANGUAGE, find_mkvtoolnix, is_docker
 import src.core.settings as core_settings
 from src.core.i18n import translate_text
-from src.core.encode_presets import ENCODE_PRESET_PARAMETERS
+from src.core.encode_presets import (
+    ENCODE_PRESET_NAMES,
+    encode_presets_for_encoder,
+)
 from src.domain import MKV, Ass, SRT, Subtitle
 from src.exports.utils import (
     run_command,
@@ -1477,6 +1480,21 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         except Exception:
             pass
 
+    def _reload_encode_preset_parameters(self) -> None:
+        custom_presets = self._app_config.encode.custom_presets
+        self._x265_preset_params = encode_presets_for_encoder(
+            'x265',
+            custom_presets,
+        )
+        self._x264_preset_params = encode_presets_for_encoder(
+            'x264',
+            custom_presets,
+        )
+        self._svtav1_preset_params = encode_presets_for_encoder(
+            'svtav1',
+            custom_presets,
+        )
+
     def _refresh_encode_tool_dependent_ui(self, apply_preset: bool = True) -> None:
         if getattr(self, 'encode_tool_combo', None) is None:
             return
@@ -1505,6 +1523,27 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             self.x265_params_label.setText(self.t('x265 Params:'))
             self._encode_preset_params = dict(self._x265_preset_params)
         self._refill_encode_bit_depth_combo(tool)
+        if getattr(self, 'x265_preset_combo', None) is not None:
+            selected_preset = str(
+                self.x265_preset_combo.currentData()
+                or self.x265_preset_combo.currentText()
+                or 'Balanced'
+            )
+            self.x265_preset_combo.blockSignals(True)
+            try:
+                self.x265_preset_combo.clear()
+                for name in self._encode_preset_params:
+                    self.x265_preset_combo.addItem(
+                        self.t(name) if name in ENCODE_PRESET_NAMES else name,
+                        name,
+                    )
+                preset_index = self.x265_preset_combo.findData(selected_preset)
+                if preset_index < 0:
+                    preset_index = self.x265_preset_combo.findData('Balanced')
+                self.x265_preset_combo.setCurrentIndex(max(0, preset_index))
+            finally:
+                self.x265_preset_combo.blockSignals(False)
+            self._adjust_combo_width_to_contents(self.x265_preset_combo)
         try:
             sync = getattr(self, 'sync_default_vpy_fmtc_with_encode_ui', None)
             if callable(sync):
@@ -1514,8 +1553,6 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         if not apply_preset or getattr(self, 'x265_preset_combo', None) is None:
             return
         preset = str(self.x265_preset_combo.currentData() or self.x265_preset_combo.currentText() or '')
-        if preset == 'Custom':
-            return
         params = self._encode_preset_params.get(preset, '')
         self._encode_setting_updating = True
         try:
@@ -1525,11 +1562,9 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             self._encode_setting_updating = False
 
     def init_encode_box(self):
-        self._x265_preset_params = dict(ENCODE_PRESET_PARAMETERS['x265'])
-        self._x264_preset_params = dict(ENCODE_PRESET_PARAMETERS['x264'])
+        self._reload_encode_preset_parameters()
         # SvtAv1EncApp presets use a different CLI. The encode task supplies
         # the 12-bit profile when needed and normal presets avoid overlay frames.
-        self._svtav1_preset_params = dict(ENCODE_PRESET_PARAMETERS['svtav1'])
         self._encode_preset_params = dict(self._x265_preset_params)
         self._encode_setting_updating = False
 
@@ -1593,14 +1628,6 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         self.x265_params_label = QLabel(self.t('x265 Params:'), tools_row)
         tools_layout.addWidget(self.x265_params_label)
         self.x265_preset_combo = QComboBox(tools_row)
-        self.x265_preset_combo.addItem('Fast', 'Fast')
-        self.x265_preset_combo.addItem('Balanced', 'Balanced')
-        self.x265_preset_combo.addItem('High Quality', 'High Quality')
-        self.x265_preset_combo.addItem('Extreme', 'Extreme')
-        self.x265_preset_combo.addItem('Custom', 'Custom')
-        idx_balanced = self.x265_preset_combo.findData('Balanced')
-        self.x265_preset_combo.setCurrentIndex(0 if idx_balanced < 0 else idx_balanced)
-        self._adjust_combo_width_to_contents(self.x265_preset_combo)
         tools_layout.addWidget(self.x265_preset_combo)
 
         tools_layout.addStretch(1)
@@ -1668,20 +1695,9 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
 
         def on_preset_changed():
             preset = str(self.x265_preset_combo.currentData() or self.x265_preset_combo.currentText() or '')
-            if preset == 'Custom':
-                return
             set_params_for_preset(preset)
 
-        def on_params_edited():
-            if self._encode_setting_updating:
-                return
-            if str(self.x265_preset_combo.currentData() or '') != 'Custom':
-                idx_custom = self.x265_preset_combo.findData('Custom')
-                if idx_custom >= 0:
-                    self.x265_preset_combo.setCurrentIndex(idx_custom)
-
         self.x265_preset_combo.currentIndexChanged.connect(on_preset_changed)
-        self.x265_params_edit.textChanged.connect(on_params_edited)
 
         self.encode_tool_combo.currentIndexChanged.connect(lambda _=None: self._refresh_encode_tool_dependent_ui(True))
 

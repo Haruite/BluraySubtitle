@@ -132,7 +132,8 @@ in one encoder must not be treated as the same quality as 18 in another.
 
 For a strict delivery size, bitrate-based one-pass or multi-pass workflows may
 be more appropriate, but BluraySubtitle's built-in presets are CRF-oriented.
-Custom parameters can use other modes when the selected encoder supports them.
+User-defined presets and direct parameter edits can use other modes when the
+selected encoder supports them.
 
 ### Encoder preset
 
@@ -150,10 +151,13 @@ BluraySubtitle adds a second, project-level preset layer:
 | Balanced | Default starting point |
 | High Quality | More quality and analysis work |
 | Extreme | Very slow, large-quality-budget starting point |
-| Custom | Parameters entered by the user |
 
-Selecting a project preset fills the parameter field. Editing the field switches
-the GUI to `Custom`. The visible parameter string at task launch is
+The four built-in presets are read-only. Advanced settings can add, rename,
+edit, and delete user-defined presets for the encoder currently selected there;
+only those user-defined entries are stored in `config.json`. The Encode page
+shows the built-in and user-defined presets for its current encoder. Selecting
+a preset fills the parameter field, while directly editing that field keeps the
+selected preset name unchanged. The visible parameter string at task launch is
 authoritative.
 
 ## Built-in parameter presets

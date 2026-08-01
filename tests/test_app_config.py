@@ -24,6 +24,7 @@ from src.core.app_config import (
     RemuxPreferences,
     StartupPreferences,
     UiPreferences,
+    UserEncodePreset,
     WindowPreferences,
     app_config_from_mapping,
     app_config_path,
@@ -145,6 +146,62 @@ class AppConfigTests(unittest.TestCase):
                 "schema_version": 1,
                 "encode": {"auto_crop_black_borders": "yes"},
             })
+        with self.assertRaisesRegex(ValueError, "built-in preset"):
+            app_config_from_mapping({
+                "schema_version": 1,
+                "encode": {
+                    "custom_presets": [{
+                        "encoder": "x265",
+                        "name": "Balanced",
+                        "parameters": "--crf 17",
+                    }],
+                },
+            })
+
+    def test_legacy_edited_parameters_migrate_to_a_user_preset(self) -> None:
+        config = app_config_from_mapping({
+            "schema_version": 1,
+            "encode": {
+                "encoder": "x265",
+                "preset": "Balanced",
+                "preset_parameters": "--preset slow --crf 17",
+            },
+        })
+
+        self.assertEqual(config.encode.preset, "Balanced Custom")
+        self.assertEqual(config.encode.custom_presets, (
+            UserEncodePreset(
+                encoder="x265",
+                name="Balanced Custom",
+                parameters="--preset slow --crf 17",
+            ),
+        ))
+
+    def test_saved_config_contains_only_user_defined_encode_presets(self) -> None:
+        config = replace(
+            default_app_config(),
+            encode=replace(
+                default_app_config().encode,
+                preset="Cinema",
+                custom_presets=(UserEncodePreset(
+                    encoder="x265",
+                    name="Cinema",
+                    parameters="--preset slow --crf 17",
+                ),),
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            target = Path(temporary_directory) / "config.json"
+
+            save_app_config(config, target)
+            raw = json.loads(target.read_text(encoding="utf-8"))
+
+        self.assertNotIn("preset_parameters", raw["encode"])
+        self.assertEqual(raw["encode"]["custom_presets"], [{
+            "encoder": "x265",
+            "name": "Cinema",
+            "parameters": "--preset slow --crf 17",
+        }])
 
     def test_frozen_paths_separate_writable_config_from_packaged_template(self) -> None:
         executable = Path(r"C:\Portable\BluraySubtitle\BluraySubtitle_windows_x64.exe")
@@ -231,7 +288,12 @@ class SettingsGuiTests(unittest.TestCase):
         dialog.default_preset_combo.setCurrentIndex(
             dialog.default_preset_combo.findData("High Quality")
         )
-        dialog.default_preset_parameters_edit.setPlainText("--preset slow --crf 17")
+        dialog._add_custom_encode_preset()
+        dialog._edit_custom_preset_name("Archival")
+        dialog._edit_custom_preset_parameters("--preset slow --crf 17")
+        dialog.default_preset_combo.setCurrentIndex(
+            dialog.default_preset_combo.findData("Archival")
+        )
         dialog.default_lossless_audio_combo.setCurrentIndex(
             dialog.default_lossless_audio_combo.findData("opus")
         )
@@ -275,8 +337,12 @@ class SettingsGuiTests(unittest.TestCase):
             EncodePreferences(
                 encoder="x264",
                 bit_depth="10",
-                preset="High Quality",
-                preset_parameters="--preset slow --crf 17",
+                preset="Archival",
+                custom_presets=(UserEncodePreset(
+                    encoder="x264",
+                    name="Archival",
+                    parameters="--preset slow --crf 17",
+                ),),
                 lossless_audio_codec="opus",
                 subtitle_mode="softsub",
                 use_getnative=False,
@@ -292,6 +358,74 @@ class SettingsGuiTests(unittest.TestCase):
         )
         self.assertIn("FDK-AAC 128–256 kbps; Opus 64–128 kbps", labels)
         self.assertIn(f"Current version: {APP_VERSION}", labels)
+        dialog.close()
+
+    def test_custom_encode_preset_editor_filters_and_protects_built_ins(self) -> None:
+        config = replace(
+            default_app_config(),
+            encode=replace(
+                default_app_config().encode,
+                custom_presets=(
+                    UserEncodePreset("x264", "Legacy", "--crf 19"),
+                    UserEncodePreset("x265", "Cinema", "--crf 17"),
+                ),
+            ),
+        )
+        dialog = SettingsDialog(config, lambda text: text)
+
+        visible = [
+            dialog.custom_preset_combo.itemText(index)
+            for index in range(dialog.custom_preset_combo.count())
+        ]
+        self.assertIn("Cinema", visible)
+        self.assertNotIn("Legacy", visible)
+        self.assertTrue(dialog.custom_preset_name_edit.isReadOnly())
+        self.assertTrue(dialog.custom_preset_parameters_edit.isReadOnly())
+        self.assertFalse(dialog.delete_custom_preset_button.isEnabled())
+
+        custom_index = next(
+            index
+            for index in range(dialog.custom_preset_combo.count())
+            if dialog.custom_preset_combo.itemData(index) == ("custom", 1)
+        )
+        dialog.custom_preset_combo.setCurrentIndex(custom_index)
+        self.assertFalse(dialog.custom_preset_name_edit.isReadOnly())
+        self.assertFalse(dialog.custom_preset_parameters_edit.isReadOnly())
+        self.assertTrue(dialog.delete_custom_preset_button.isEnabled())
+
+        dialog.default_encoder_combo.setCurrentIndex(
+            dialog.default_encoder_combo.findData("x264")
+        )
+        visible = [
+            dialog.custom_preset_combo.itemText(index)
+            for index in range(dialog.custom_preset_combo.count())
+        ]
+        self.assertIn("Legacy", visible)
+        self.assertNotIn("Cinema", visible)
+        dialog.close()
+
+    def test_builtin_preset_name_uses_the_dialog_language(self) -> None:
+        dialog = SettingsDialog(
+            default_app_config(),
+            lambda text: translate_text(text, "zh"),
+        )
+        high_quality_index = next(
+            index
+            for index in range(dialog.custom_preset_combo.count())
+            if dialog.custom_preset_combo.itemData(index)
+            == ("built_in", "High Quality")
+        )
+
+        dialog.custom_preset_combo.setCurrentIndex(high_quality_index)
+
+        self.assertEqual(
+            dialog.custom_preset_combo.currentText(),
+            translate_text("High Quality", "zh"),
+        )
+        self.assertEqual(
+            dialog.custom_preset_name_edit.text(),
+            translate_text("High Quality", "zh"),
+        )
         dialog.close()
 
     def test_update_available_message_links_release_and_migration_reminder(
@@ -509,8 +643,12 @@ class SettingsGuiTests(unittest.TestCase):
             encode=EncodePreferences(
                 encoder="x264",
                 bit_depth="10",
-                preset="High Quality",
-                preset_parameters="--preset slow --crf 17",
+                preset="Archival",
+                custom_presets=(UserEncodePreset(
+                    encoder="x264",
+                    name="Archival",
+                    parameters="--preset slow --crf 17",
+                ),),
                 lossless_audio_codec="opus",
                 subtitle_mode="softsub",
                 use_getnative=False,
@@ -537,10 +675,20 @@ class SettingsGuiTests(unittest.TestCase):
             self.assertEqual(window.output_folder_path.text(), r"E:\Encode")
             self.assertEqual(window.encode_tool_combo.currentText(), "x264")
             self.assertEqual(window.encode_bit_depth_combo.currentData(), "10")
-            self.assertEqual(window.x265_preset_combo.currentData(), "High Quality")
+            self.assertEqual(window.x265_preset_combo.currentData(), "Archival")
             self.assertEqual(
                 window.x265_params_edit.toPlainText(),
                 "--preset slow --crf 17",
+            )
+            self.assertEqual(window.x265_preset_combo.findData("Custom"), -1)
+            window.x265_params_edit.setPlainText("--preset slow --crf 16")
+            self.assertEqual(window.x265_preset_combo.currentData(), "Archival")
+            window.encode_tool_combo.setCurrentText("x265")
+            self.assertEqual(window.x265_preset_combo.findData("Archival"), -1)
+            window.encode_tool_combo.setCurrentText("x264")
+            self.assertGreaterEqual(
+                window.x265_preset_combo.findData("Archival"),
+                0,
             )
             self.assertEqual(window.encode_lossless_audio_combo.currentData(), "opus")
             self.assertTrue(window.sub_pack_soft_radio.isChecked())

@@ -361,6 +361,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                 if widget in (
                     getattr(self, 'encode_tool_combo', None),
                     getattr(self, 'encode_bit_depth_combo', None),
+                    getattr(self, 'x265_preset_combo', None),
                 ):
                     continue
                 widget.blockSignals(True)
@@ -399,6 +400,10 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                     getattr(self, '_refill_encode_bit_depth_combo', None)
                 ):
                     self._refill_encode_bit_depth_combo(self.encode_tool_combo.currentText())
+            except Exception:
+                pass
+            try:
+                self._refresh_encode_tool_dependent_ui(False)
             except Exception:
                 pass
         finally:

@@ -48,7 +48,8 @@ from src.core.app_config import (
 )
 from src.core.encode_presets import (
     ENCODE_PRESET_NAMES,
-    encode_preset_parameters,
+    UserEncodePreset,
+    encode_presets_for_encoder,
 )
 from src.core.i18n import translate_text
 from src.core.version import APP_VERSION, is_newer_release, release_version
@@ -89,6 +90,8 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self._config = config
         self.t = translate
+        self._custom_encode_presets = list(config.encode.custom_presets)
+        self._preset_editor_updating = False
         self._settings_source_path = (
             Path(settings_source_path)
             if settings_source_path is not None
@@ -392,20 +395,40 @@ class SettingsDialog(QDialog):
             self.default_bit_depth_combo,
         )
         self.default_preset_combo = QComboBox(encode_group)
-        for preset in ENCODE_PRESET_NAMES:
-            self.default_preset_combo.addItem(self.t(preset), preset)
         encode_form.addRow(
             self.t("Default preset"),
             self.default_preset_combo,
         )
-        self.default_preset_parameters_edit = QPlainTextEdit(encode_group)
-        self.default_preset_parameters_edit.setFixedHeight(96)
-        self.default_preset_parameters_edit.setLineWrapMode(
-            QPlainTextEdit.LineWrapMode.NoWrap
+
+        preset_editor_row = QWidget(encode_group)
+        preset_editor_layout = QHBoxLayout(preset_editor_row)
+        preset_editor_layout.setContentsMargins(0, 0, 0, 0)
+        preset_editor_layout.setSpacing(4)
+        self.custom_preset_combo = QComboBox(preset_editor_row)
+        self.add_custom_preset_button = QPushButton(
+            self.t("Add"),
+            preset_editor_row,
         )
+        self.delete_custom_preset_button = QPushButton(
+            self.t("Delete"),
+            preset_editor_row,
+        )
+        preset_editor_layout.addWidget(self.custom_preset_combo, 1)
+        preset_editor_layout.addWidget(self.add_custom_preset_button)
+        preset_editor_layout.addWidget(self.delete_custom_preset_button)
         encode_form.addRow(
-            self.t("Default preset parameters"),
-            self.default_preset_parameters_edit,
+            self.t("Custom encode presets"),
+            preset_editor_row,
+        )
+        self.custom_preset_name_edit = QLineEdit(encode_group)
+        encode_form.addRow(
+            self.t("Preset name"),
+            self.custom_preset_name_edit,
+        )
+        self.custom_preset_parameters_edit = QLineEdit(encode_group)
+        encode_form.addRow(
+            self.t("Custom encode preset parameters"),
+            self.custom_preset_parameters_edit,
         )
         self.default_lossless_audio_combo = QComboBox(encode_group)
         self.default_lossless_audio_combo.addItem("FLAC", "flac")
@@ -445,7 +468,22 @@ class SettingsDialog(QDialog):
             lambda _=None: self._refresh_advanced_encode_options(True)
         )
         self.default_preset_combo.currentIndexChanged.connect(
-            lambda _=None: self._reset_advanced_preset_parameters()
+            lambda _=None: self._select_default_preset_in_editor()
+        )
+        self.custom_preset_combo.currentIndexChanged.connect(
+            lambda _=None: self._load_custom_preset_editor()
+        )
+        self.add_custom_preset_button.clicked.connect(
+            lambda _=None: self._add_custom_encode_preset()
+        )
+        self.delete_custom_preset_button.clicked.connect(
+            lambda _=None: self._delete_custom_encode_preset()
+        )
+        self.custom_preset_name_edit.textEdited.connect(
+            self._edit_custom_preset_name
+        )
+        self.custom_preset_parameters_edit.textEdited.connect(
+            self._edit_custom_preset_parameters
         )
         layout.addWidget(encode_group)
         layout.addStretch(1)
@@ -453,7 +491,7 @@ class SettingsDialog(QDialog):
         tab_layout.addWidget(scroll)
         return tab
 
-    def _refresh_advanced_encode_options(self, reset_parameters: bool) -> None:
+    def _refresh_advanced_encode_options(self, refresh_presets: bool) -> None:
         encoder = str(self.default_encoder_combo.currentData() or "x265")
         previous_depth = str(self.default_bit_depth_combo.currentData() or "10")
         depths = ("8", "10") if encoder == "x264" else ("8", "10", "12")
@@ -475,14 +513,227 @@ class SettingsDialog(QDialog):
             self.default_bit_depth_combo.setCurrentIndex(max(0, index))
         finally:
             self.default_bit_depth_combo.blockSignals(False)
-        if reset_parameters:
-            self._reset_advanced_preset_parameters()
+        if refresh_presets:
+            self._refill_custom_preset_controls(
+                str(self.default_preset_combo.currentData() or "Balanced")
+            )
 
-    def _reset_advanced_preset_parameters(self) -> None:
+    def _refill_custom_preset_controls(
+            self,
+            preferred_default: str,
+            preferred_editor: tuple[str, object] | None = None,
+    ) -> None:
         encoder = str(self.default_encoder_combo.currentData() or "x265")
-        preset = str(self.default_preset_combo.currentData() or "Balanced")
-        self.default_preset_parameters_edit.setPlainText(
-            encode_preset_parameters(encoder, preset)
+        presets = encode_presets_for_encoder(
+            encoder,
+            self._custom_encode_presets,
+        )
+        self._preset_editor_updating = True
+        self.default_preset_combo.blockSignals(True)
+        self.custom_preset_combo.blockSignals(True)
+        try:
+            self.default_preset_combo.clear()
+            for name in presets:
+                self.default_preset_combo.addItem(
+                    self.t(name) if name in ENCODE_PRESET_NAMES else name,
+                    name,
+                )
+            default_index = self.default_preset_combo.findData(preferred_default)
+            if default_index < 0:
+                default_index = self.default_preset_combo.findData("Balanced")
+            self.default_preset_combo.setCurrentIndex(max(0, default_index))
+
+            self.custom_preset_combo.clear()
+            for name in ENCODE_PRESET_NAMES:
+                self.custom_preset_combo.addItem(
+                    self.t(name),
+                    ("built_in", name),
+                )
+            for index, preset in enumerate(self._custom_encode_presets):
+                if preset.encoder == encoder:
+                    self.custom_preset_combo.addItem(
+                        preset.name,
+                        ("custom", index),
+                    )
+            editor_index = -1
+            if preferred_editor is not None:
+                for index in range(self.custom_preset_combo.count()):
+                    if self.custom_preset_combo.itemData(index) == preferred_editor:
+                        editor_index = index
+                        break
+            if editor_index < 0:
+                selected_name = str(
+                    self.default_preset_combo.currentData() or "Balanced"
+                )
+                for index in range(self.custom_preset_combo.count()):
+                    kind, value = self.custom_preset_combo.itemData(index)
+                    candidate = (
+                        str(value)
+                        if kind == "built_in"
+                        else self._custom_encode_presets[int(value)].name
+                    )
+                    if candidate == selected_name:
+                        editor_index = index
+                        break
+            self.custom_preset_combo.setCurrentIndex(max(0, editor_index))
+        finally:
+            self.custom_preset_combo.blockSignals(False)
+            self.default_preset_combo.blockSignals(False)
+            self._preset_editor_updating = False
+        self._load_custom_preset_editor()
+
+    def _select_default_preset_in_editor(self) -> None:
+        if self._preset_editor_updating:
+            return
+        selected_name = str(self.default_preset_combo.currentData() or "")
+        for index in range(self.custom_preset_combo.count()):
+            kind, value = self.custom_preset_combo.itemData(index)
+            candidate = (
+                str(value)
+                if kind == "built_in"
+                else self._custom_encode_presets[int(value)].name
+            )
+            if candidate == selected_name:
+                self.custom_preset_combo.setCurrentIndex(index)
+                return
+
+    def _load_custom_preset_editor(self) -> None:
+        if self._preset_editor_updating:
+            return
+        data = self.custom_preset_combo.currentData()
+        if not isinstance(data, tuple) or len(data) != 2:
+            return
+        kind, value = data
+        editable = kind == "custom"
+        if editable:
+            preset = self._custom_encode_presets[int(value)]
+            name = preset.name
+            parameters = preset.parameters
+        else:
+            name = self.t(str(value))
+            parameters = encode_presets_for_encoder(
+                str(self.default_encoder_combo.currentData() or "x265")
+            )[str(value)]
+        self._preset_editor_updating = True
+        try:
+            self.custom_preset_name_edit.setText(name)
+            self.custom_preset_parameters_edit.setText(parameters)
+            self.custom_preset_name_edit.setReadOnly(not editable)
+            self.custom_preset_parameters_edit.setReadOnly(not editable)
+            self.delete_custom_preset_button.setEnabled(editable)
+        finally:
+            self._preset_editor_updating = False
+
+    def _edit_custom_preset_name(self, name: str) -> None:
+        if self._preset_editor_updating:
+            return
+        data = self.custom_preset_combo.currentData()
+        if not isinstance(data, tuple) or data[0] != "custom":
+            return
+        index = int(data[1])
+        previous = self._custom_encode_presets[index]
+        self._custom_encode_presets[index] = replace(previous, name=name)
+        self.custom_preset_combo.setItemText(
+            self.custom_preset_combo.currentIndex(),
+            name,
+        )
+        for combo_index in range(self.default_preset_combo.count()):
+            if self.default_preset_combo.itemData(combo_index) == previous.name:
+                self.default_preset_combo.setItemText(combo_index, name)
+                self.default_preset_combo.setItemData(combo_index, name)
+                break
+
+    def _edit_custom_preset_parameters(self, parameters: str) -> None:
+        if self._preset_editor_updating:
+            return
+        data = self.custom_preset_combo.currentData()
+        if not isinstance(data, tuple) or data[0] != "custom":
+            return
+        index = int(data[1])
+        self._custom_encode_presets[index] = replace(
+            self._custom_encode_presets[index],
+            parameters=parameters,
+        )
+
+    def _add_custom_encode_preset(self) -> None:
+        encoder = str(self.default_encoder_combo.currentData() or "x265")
+        base_name = self.t("New Preset")
+        used_names = {
+            name.casefold()
+            for name in ENCODE_PRESET_NAMES
+        } | {
+            preset.name.casefold()
+            for preset in self._custom_encode_presets
+            if preset.encoder == encoder
+        }
+        name = base_name
+        suffix = 2
+        while name.casefold() in used_names:
+            name = f"{base_name} {suffix}"
+            suffix += 1
+        self._custom_encode_presets.append(UserEncodePreset(
+            encoder=encoder,
+            name=name,
+            parameters=self.custom_preset_parameters_edit.text().strip(),
+        ))
+        self._refill_custom_preset_controls(
+            str(self.default_preset_combo.currentData() or "Balanced"),
+            ("custom", len(self._custom_encode_presets) - 1),
+        )
+        self.custom_preset_name_edit.setFocus()
+        self.custom_preset_name_edit.selectAll()
+
+    def _delete_custom_encode_preset(self) -> None:
+        data = self.custom_preset_combo.currentData()
+        if not isinstance(data, tuple) or data[0] != "custom":
+            return
+        deleted = self._custom_encode_presets.pop(int(data[1]))
+        preferred_default = str(
+            self.default_preset_combo.currentData() or "Balanced"
+        )
+        if preferred_default == deleted.name:
+            preferred_default = "Balanced"
+        self._refill_custom_preset_controls(preferred_default)
+
+    def _custom_preset_validation_error(
+            self,
+    ) -> tuple[str, dict[str, str]] | None:
+        names_by_encoder: dict[str, set[str]] = {
+            "x264": set(),
+            "x265": set(),
+            "svtav1": set(),
+        }
+        built_in_names = {name.casefold() for name in ENCODE_PRESET_NAMES}
+        for preset in self._custom_encode_presets:
+            name = preset.name.strip()
+            if not name:
+                return "Custom encode preset name cannot be empty.", {}
+            normalized_name = name.casefold()
+            if normalized_name in built_in_names:
+                return (
+                    "Custom encode preset name conflicts with a built-in preset: {name}",
+                    {"name": name},
+                )
+            if normalized_name in names_by_encoder[preset.encoder]:
+                return (
+                    "Duplicate custom encode preset for {encoder}: {name}",
+                    {"encoder": preset.encoder, "name": name},
+                )
+            names_by_encoder[preset.encoder].add(normalized_name)
+        return None
+
+    def _normalized_custom_encode_presets(self) -> tuple[UserEncodePreset, ...]:
+        error = self._custom_preset_validation_error()
+        if error is not None:
+            template, values = error
+            raise ValueError(template.format(**values))
+        return tuple(
+            replace(
+                preset,
+                name=preset.name.strip(),
+                parameters=preset.parameters.strip(),
+            )
+            for preset in self._custom_encode_presets
         )
 
     def _build_external_tools_tab(self) -> QWidget:
@@ -667,6 +918,15 @@ class SettingsDialog(QDialog):
         return True
 
     def accept(self) -> None:
+        validation_error = self._custom_preset_validation_error()
+        if validation_error is not None:
+            template, values = validation_error
+            QMessageBox.warning(
+                self,
+                self.t("Settings"),
+                self.t(template).format(**values),
+            )
+            return
         if self._save_external_tools_source():
             super().accept()
 
@@ -676,6 +936,7 @@ class SettingsDialog(QDialog):
         combo.setCurrentIndex(index if index >= 0 else 0)
 
     def _set_controls(self, config: AppConfig) -> None:
+        self._custom_encode_presets = list(config.encode.custom_presets)
         self._set_combo_data(self.function_page_combo, config.startup.function_page)
         self._set_combo_data(self.episode_mode_combo, config.startup.episode_mode)
         self._set_combo_data(self.language_combo, config.ui.language)
@@ -706,17 +967,7 @@ class SettingsDialog(QDialog):
             self.default_bit_depth_combo,
             config.encode.bit_depth,
         )
-        self.default_preset_combo.blockSignals(True)
-        try:
-            self._set_combo_data(
-                self.default_preset_combo,
-                config.encode.preset,
-            )
-        finally:
-            self.default_preset_combo.blockSignals(False)
-        self.default_preset_parameters_edit.setPlainText(
-            config.encode.preset_parameters
-        )
+        self._refill_custom_preset_controls(config.encode.preset)
         self._set_combo_data(
             self.default_lossless_audio_combo,
             config.encode.lossless_audio_codec,
@@ -767,9 +1018,7 @@ class SettingsDialog(QDialog):
                 encoder=str(self.default_encoder_combo.currentData()),
                 bit_depth=str(self.default_bit_depth_combo.currentData()),
                 preset=str(self.default_preset_combo.currentData()),
-                preset_parameters=(
-                    self.default_preset_parameters_edit.toPlainText().strip()
-                ),
+                custom_presets=self._normalized_custom_encode_presets(),
                 lossless_audio_codec=str(
                     self.default_lossless_audio_combo.currentData()
                 ),

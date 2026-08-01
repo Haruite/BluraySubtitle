@@ -127,11 +127,9 @@ Encode options include:
   - x264: 8 / 10 bit  
   - x265: 8 / 10 / 12 bit  
   - SvtAv1: 8 / 10 / 12? bit (see in-app notes)
-- Encoder **presets** and **custom** parameters
+- Read-only built-in encoder presets, user-defined presets, and direct per-task parameter editing
 - **Lossless audio recompression**: **FLAC / AAC / Opus**
-- The startup encoder, bit depth, preset, and preset parameters come from
-  **Advanced** settings. After startup, the visible Encode controls remain
-  authoritative for every task.
+- The startup encoder, bit depth, and preset come from **Advanced** settings. User-defined presets can be added, renamed, edited, and deleted there for the currently selected encoder, while built-in presets remain read-only. After startup, the visible Encode preset and parameter controls remain authoritative for every task.
 - The startup lossless-audio target, subtitle packaging mode, getnative, automatic-crop, and output-comparison checkboxes also come from **Advanced** settings and remain freely editable before launch.
 - With **Auto-crop black borders** enabled, Encode analyzes multiple time points and applies one conservative fixed crop. Pixels used by any sampled active picture are preserved when borders vary over time.
 - With **Output comparison images** enabled, every encoded video saves source and encoded PNGs from the same frame under **`<selected output>/<source folder name>/Compare`**.

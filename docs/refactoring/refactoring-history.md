@@ -958,7 +958,7 @@ Commit: `f632d85` (`feat(encode): add same-frame comparison images`)
 ## Duration-Adaptive Automatic Black-Border Cropping
 
 Date: 2026-08-01
-Commit: uncommitted (current change)
+Commit: `7d80a4d` (`feat(encode): add automatic black-border cropping`)
 
 ### Detection and VapourSynth Integration
 
@@ -979,3 +979,28 @@ Commit: uncommitted (current change)
 - Focused tests cover adaptive counts, deterministic stratified timestamps, fast-seek command construction, conservative rectangle union, managed VPy replacement/removal, saved GUI settings, Dolby Vision L5 preset edits, and the processed RPU path used by native x265.
 - All 252 repository tests passed, together with Python compilation, i18n and split-contract checks. A real FFmpeg smoke test generated a 320x240 source with 30-pixel top/bottom bars and the production detector returned the expected 320x180 active picture.
 - A real-media check remains required: test short and feature-length constant-border, variable-border, dark-scene, HDR10+, and Dolby Vision sources; inspect reported margins and output dimensions; and verify the final Dolby Vision RPU with `dovi_tool`.
+
+## Read-Only Built-In and User-Defined Encode Presets
+
+Date: 2026-08-01
+Commit: uncommitted (current change)
+
+### Configuration and Preset Ownership
+
+- Removed the built-in `Custom` entry. `src/core/encode_presets.py` now owns only the four read-only built-in parameter sets for each encoder, while typed user presets carry an encoder, editable name, and editable parameter string.
+- Application configuration no longer stores a separate default parameter string. It stores only the selected preset name and actual user-defined preset entries; built-in names and parameters are never copied into `config.json`.
+- Existing configurations retain meaningful edits: a legacy `Custom` selection or a built-in preset whose saved parameters differ from the current built-in value is migrated into a selected user preset. Matching legacy built-in parameters are discarded as redundant.
+- Configuration validation rejects empty user names, duplicate names within one encoder, built-in-name collisions, unsupported encoder ownership, and a selected default that does not exist for the selected encoder.
+
+### GUI Behavior
+
+- The Encode-page preset combo is rebuilt from the current encoder's built-in and user-defined presets. Changing encoders removes presets owned by other encoders; changing a preset fills the parameter field, but directly editing that field no longer changes the selected preset name.
+- Advanced settings replaces the multi-line default-parameter editor with a compact preset manager: one preset selector, Add/Delete buttons, one name line, and one parameter line. Built-in entries can be inspected but their fields are read-only and Delete is disabled; user entries can be added, renamed, edited, and deleted.
+- The startup preset resolves its current parameters from the selected built-in or user preset. Saving settings refreshes the available Encode-page preset names without overwriting the current session's visible parameter string.
+
+### Redundant Paths Removed, Documentation, and Verification
+
+- Removed automatic switching to `Custom`, the empty `Custom` parameter entries duplicated across three encoders, the editable default-parameter control, and persisted `preset_parameters` from newly saved configuration.
+- Synchronized both README versions, the Encode/VapourSynth Wiki, bilingual code standards, and i18n. Focused configuration and GUI tests cover persistence, legacy migration, encoder filtering, built-in protection, startup resolution, and stable selection during direct parameter edits.
+- All 256 repository tests passed together with Python compilation, i18n, and split-contract checks. An offscreen Advanced-settings render confirmed the compact one-line name/parameter layout and enabled-state distinctions.
+- A short real-media Encode with one built-in and one user-defined preset remains a manual check. It writes normal encoded outputs, so use a disposable output directory and verify the emitted encoder command matches the visible parameter field.

@@ -12,7 +12,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from src.core.encode_presets import ENCODE_PRESET_NAMES, encode_preset_parameters
+from src.core.encode_presets import (
+    ENCODE_PRESET_NAMES,
+    UserEncodePreset,
+    encode_preset_parameters,
+    encode_presets_for_encoder,
+)
 
 
 APP_CONFIG_FILENAME = "config.json"
@@ -70,7 +75,7 @@ class EncodePreferences:
     encoder: str = "x265"
     bit_depth: str = "10"
     preset: str = "Balanced"
-    preset_parameters: str = encode_preset_parameters("x265", "Balanced")
+    custom_presets: tuple[UserEncodePreset, ...] = ()
     lossless_audio_codec: str = "flac"
     subtitle_mode: str = "external"
     use_getnative: bool = True
@@ -146,6 +151,88 @@ def _boolean_value(section: dict[str, Any], name: str, default: bool) -> bool:
     return value
 
 
+def _custom_encode_presets(
+        section: dict[str, Any],
+) -> tuple[UserEncodePreset, ...]:
+    value = section.get("custom_presets", [])
+    if not isinstance(value, list):
+        raise ValueError("Configuration value must be a list: custom_presets")
+    presets: list[UserEncodePreset] = []
+    names_by_encoder: dict[str, set[str]] = {
+        "x264": set(),
+        "x265": set(),
+        "svtav1": set(),
+    }
+    built_in_names = {name.casefold() for name in ENCODE_PRESET_NAMES}
+    for index, item in enumerate(value, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(
+                f"Custom encode preset {index} must be an object"
+            )
+        encoder = _string_value(item, "encoder", "").strip().lower()
+        if encoder not in names_by_encoder:
+            raise ValueError(
+                f"Unsupported custom encode preset encoder: {encoder}"
+            )
+        name = _string_value(item, "name", "").strip()
+        if not name:
+            raise ValueError("Custom encode preset name must not be empty")
+        normalized_name = name.casefold()
+        if normalized_name in built_in_names:
+            raise ValueError(
+                f"Custom encode preset name conflicts with a built-in preset: {name}"
+            )
+        if normalized_name in names_by_encoder[encoder]:
+            raise ValueError(
+                f"Duplicate custom encode preset for {encoder}: {name}"
+            )
+        names_by_encoder[encoder].add(normalized_name)
+        presets.append(UserEncodePreset(
+            encoder=encoder,
+            name=name,
+            parameters=_string_value(item, "parameters", "").strip(),
+        ))
+    return tuple(presets)
+
+
+def _migrate_legacy_encode_parameters(
+        section: dict[str, Any],
+        encoder: str,
+        preset: str,
+        custom_presets: tuple[UserEncodePreset, ...],
+) -> tuple[str, tuple[UserEncodePreset, ...]]:
+    if "preset_parameters" not in section:
+        return preset, custom_presets
+    legacy_parameters = _string_value(
+        section,
+        "preset_parameters",
+        "",
+    ).strip()
+    if preset in ENCODE_PRESET_NAMES:
+        if legacy_parameters == encode_preset_parameters(encoder, preset):
+            return preset, custom_presets
+        base_name = f"{preset} Custom"
+    elif preset == "Custom":
+        base_name = "Custom"
+    else:
+        return preset, custom_presets
+    used_names = {
+        item.name.casefold()
+        for item in custom_presets
+        if item.encoder == encoder
+    } | {name.casefold() for name in ENCODE_PRESET_NAMES}
+    migrated_name = base_name
+    suffix = 2
+    while migrated_name.casefold() in used_names:
+        migrated_name = f"{base_name} {suffix}"
+        suffix += 1
+    return migrated_name, custom_presets + (UserEncodePreset(
+        encoder=encoder,
+        name=migrated_name,
+        parameters=legacy_parameters,
+    ),)
+
+
 def app_config_from_mapping(raw: dict[str, Any]) -> AppConfig:
     if not isinstance(raw, dict):
         raise ValueError("Configuration root must be a JSON object")
@@ -183,8 +270,15 @@ def app_config_from_mapping(raw: dict[str, Any]) -> AppConfig:
         raise ValueError(
             f"Unsupported default bit depth for {encoder}: {bit_depth}"
         )
-    preset = _string_value(encode, "preset", "Balanced")
-    if preset not in ENCODE_PRESET_NAMES:
+    custom_presets = _custom_encode_presets(encode)
+    preset = _string_value(encode, "preset", "Balanced").strip()
+    preset, custom_presets = _migrate_legacy_encode_parameters(
+        encode,
+        encoder,
+        preset,
+        custom_presets,
+    )
+    if preset not in encode_presets_for_encoder(encoder, custom_presets):
         raise ValueError(f"Unsupported default encode preset: {preset}")
     lossless_audio_codec = _string_value(
         encode,
@@ -266,11 +360,7 @@ def app_config_from_mapping(raw: dict[str, Any]) -> AppConfig:
             encoder=encoder,
             bit_depth=bit_depth,
             preset=preset,
-            preset_parameters=_string_value(
-                encode,
-                "preset_parameters",
-                encode_preset_parameters(encoder, preset),
-            ),
+            custom_presets=custom_presets,
             lossless_audio_codec=lossless_audio_codec,
             subtitle_mode=subtitle_mode,
             use_getnative=_boolean_value(
@@ -353,6 +443,7 @@ __all__ = [
     "RemuxPreferences",
     "StartupPreferences",
     "UiPreferences",
+    "UserEncodePreset",
     "WindowPreferences",
     "app_config_from_mapping",
     "app_config_path",

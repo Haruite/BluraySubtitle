@@ -38,6 +38,9 @@ class BluraySubtitleGuiBase(QWidget):
         self._encode_input_mode = None
         self._encode_preset_params = None
         self._encode_setting_updating = None
+        self._svtav1_preset_params = None
+        self._x264_preset_params = None
+        self._x265_preset_params = None
         self._encode_thread = None
         self._encode_worker = None
         self._exe_button_default_text = None
@@ -636,6 +639,9 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _refresh_track_selection_config_for_selected_main(self):
+        raise NotImplementedError
+
+    def _reload_encode_preset_parameters(self) -> None:
         raise NotImplementedError
 
     def _remember_output_folder_for_function(self, function_id: int) -> None:

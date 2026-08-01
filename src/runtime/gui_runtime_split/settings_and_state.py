@@ -45,7 +45,9 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
             self.x265_preset_combo.blockSignals(False)
         self._encode_setting_updating = True
         try:
-            self.x265_params_edit.setPlainText(encode.preset_parameters)
+            self.x265_params_edit.setPlainText(
+                self._encode_preset_params.get(encode.preset, "")
+            )
         finally:
             self._encode_setting_updating = False
         self._set_combo_value(
@@ -158,6 +160,8 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
             return
         self._app_config = selected
         self._app_config_load_failed = False
+        self._reload_encode_preset_parameters()
+        self._refresh_encode_tool_dependent_ui(False)
         self._output_folder_values[3] = selected.paths.remux_output
         self._output_folder_values[4] = selected.paths.encode_output
         self._auto_output_folders[3] = ""
