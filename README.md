@@ -1,4 +1,4 @@
-﻿# BluraySubtitle
+# BluraySubtitle
 
 [English](./README.md) | [简体中文](README.zh-Hans.md)
 
@@ -160,9 +160,9 @@ Encode options include:
 The setup scripts and Docker image resolve the current official upstream source when they run or build:
 
 - **[x264](https://code.videolan.org/videolan/x264)** uses the latest official `master` revision, built as one 8/10-bit-capable CLI. The Windows setup uses the MSYS2 UCRT64 toolchain and profile-guided optimization.
-- **[x265](https://github.com/Multicorewareinc/x265)** uses the latest official stable numeric release tag, built as one statically linked 8/10/12-bit multilib CLI with native HDR10+ JSON input support (`--dhdr10-info`).
+- **[x265](https://github.com/Multicorewareinc/x265)** uses the latest official stable numeric release tag, built as one statically linked 8/10/12-bit multilib CLI whose three linked cores enable native HDR10+ JSON input (`--dhdr10-info`) and Dolby Vision RPU input (`--dolby-vision-profile`, `--dolby-vision-rpu`).
 
-The managed paths remain `C:\Software\x264.exe` and `C:\Software\x265.exe` on Windows, and `/usr/bin/x264` and `/usr/bin/x265` on Linux and in Docker. To use another build, replace the corresponding executable at the same path; no encoder-version parameter needs to be entered in the application. A replacement must support the bit depths and CLI options used by this project, including the HDR static-metadata options for the selected codec and x265's native HDR10+ input option. Re-running a setup script checks the latest official upstream source and may replace a custom build that is not recognized as the current managed build.
+The managed paths remain `C:\Software\x264.exe` and `C:\Software\x265.exe` on Windows, and `/usr/bin/x264` and `/usr/bin/x265` on Linux and in Docker. To use another build, replace the corresponding executable at the same path; no encoder-version parameter needs to be entered in the application. A replacement must support the selected output depth and the ordinary CLI options used by the row, including any required static-HDR options. For automatic dynamic metadata, the application probes the actual x265 executable and uses `hdr10plus_tool` or `dovi_tool` post-injection when native HDR10+ or Dolby Vision input options are unavailable. Re-running a setup script checks the latest official upstream source and may replace a custom build that is not recognized as the current managed build.
 
 The setup scripts also install the latest official [hdr10plus_tool](https://github.com/quietvoid/hdr10plus_tool) release at `C:\Software\hdr10plus_tool.exe` on Windows and `/usr/bin/hdr10plus_tool` on Linux and in Docker. Linux uses the upstream musl release binary and does not compile the tool locally.
 
@@ -173,17 +173,61 @@ languages, track choices, and encoder settings. For Blu-ray input, its temporary
 audio; lossless-audio conversion runs only during the final mux after video encoding succeeds. Missing inputs, VPy
 scripts or required tools, invalid paths, and duplicate output paths are reported before encoding whenever possible.
 
+- Before each row's encoder starts, the program probes the media file actually read by that row's VPy: the selected
+  Remux MKV, the task-owned Blu-ray staging MKV, or the generated Dolby Vision base-layer HEVC. One FFprobe invocation
+  reads both the first video stream and its first frame so static HDR side data is retained even when FFprobe does not
+  expose it at stream level.
+- After the final VPy is prepared, output 0's first, middle, and last frames are sampled for standard VapourSynth color
+  properties. Stable output values override FFprobe values; missing properties fall back to FFprobe. A primaries or
+  transfer change also prevents stale source static HDR and Dolby Vision metadata from being retained. Inconsistent
+  sampled values fail that row; other probe failures keep the source values and use the existing warning-report path.
+- For an actual source carrying HDR10+, x265 10/12-bit output automatically extracts validated JSON with
+  `hdr10plus_tool`, requires its frame count and frame rate to match the VPy output, and verifies the encoded HEVC
+  before muxing. The actual x265 executable supplies native `--dhdr10-info` only when it advertises that option;
+  otherwise, or when native output verification fails, `hdr10plus_tool` injects and verifies a temporary stream before
+  atomically replacing the encoded stream. A changed VPy color transfer/primaries, a timeline
+  mismatch, extraction failure, or missing output metadata falls back to the normal static-HDR encode with a warning;
+  non-empty JSON is retained for diagnosis and removed after verified success. A custom VPy used with this automation
+  must preserve frame order because equal frame count and frame rate cannot prove frame identity. When Dolby Vision is
+  also present, the same x265 run writes both metadata sets only when the actual executable advertises both native paths
+  and the row already supplies VBV plus mastering-display data.
+- The program automatically maps every usable source value for range, color primaries, transfer characteristics,
+  matrix coefficients, chroma location, mastering display, and CLL/MaxFALL into options supported by the selected
+  encoder. x264 uses `--mastering-display` and `--cll`; x265 uses `--master-display` and `--max-cll`; SVT-AV1 uses
+  H.273 numeric color values and converts mastering-display values to the physical units required by its CLI.
+- Visible manual encoder parameters remain authoritative. A manual option suppresses the corresponding automatic
+  option, while x265 `--video-signal-type-preset` suppresses all automatic color and static-HDR options because the
+  encoder gives that preset precedence. The program does not infer `--hdr10-opt`, which changes encoding decisions
+  rather than merely preserving metadata.
+- After the final MKV is published, the program re-probes only the static fields it supplied automatically and reruns
+  the active HDR10+ and Dolby Vision checks. Dolby Vision must report profile 8 and an RPU frame count matching the
+  VPy output. A mismatch retains the final MKV, writes a non-overwriting HDR warning report, completes the row with a
+  warning, and allows later rows to continue.
+- Actual-source probing or automatic parameter-planning failure does not stop a long encode. The program continues
+  the row with the user's parameters, creates a new
+  `<output-name>.hdr-metadata-error.txt` report beside the planned output, adds a numeric suffix rather than
+  overwriting an existing report, and shows the aggregated warnings after the encode task completes.
 - **Blu-ray input** applies the selected playlists, chapter ranges, tracks, and edited track languages before
   encoding. An existing planned output stops the task and is never overwritten.
 - **Remux input** can resume after interruption. Existing non-empty main/SP files, external subtitles, and companion
   files are reported as skipped. Empty main/SP files and paths of the wrong type are rejected; missing outputs continue.
 - For Remux input, non-MKV companion files keep their relative paths, and external subtitles use the corresponding
   video output name.
-- Encoder, Dolby Vision, or final mux failures stop the task; incomplete results are not reported as successful.
+- Once row execution begins, an encoder, Dolby Vision, copy, or final-mux failure is isolated to that row so later
+  rows can continue. The program retains every non-empty elementary stream, partial container, and extracted or
+  injected Dolby Vision artifact under a unique non-final name, writes a non-overwriting
+  `<output-name>.encode-error.txt` report, and deletes those intermediates only after that row's final output succeeds.
+  A cancellation still stops all remaining rows immediately. Request-wide preflight failures still stop before work.
+- Blu-ray staging files are retained when any row fails. After worker cleanup, one summary dialog reports the counts,
+  warnings, error-report paths, and retained artifact paths; failed or partial rows are never reported as successful.
 - Dolby Vision Encode is used when the Blu-ray Dolby Vision option is enabled or a Remux input already contains
-  Dolby Vision. x265 10-bit or 12-bit output retains Dolby Vision as profile 8.1. SVT-AV1 encoding is allowed, but the
-  current toolchain does not author AV1 Dolby Vision profile 10, so Dolby Vision metadata is omitted with an explicit
-  task message. x264 and x265 8-bit output are rejected when Dolby Vision preservation is requested.
+  Dolby Vision. x265 10-bit or 12-bit output retains Dolby Vision as profile 8.1. If the actual x265 advertises both
+  native Dolby Vision options and the row already has both VBV options and mastering-display metadata, x265 writes the
+  RPU during encoding; otherwise `dovi_tool` injects it afterward without inventing rate-control settings. A failed
+  native-output verification also falls back to injection. Both paths verify the resulting RPU before muxing; after
+  HDR10+ post-injection the RPU is verified again. SVT-AV1 encoding is allowed, but the current
+  toolchain does not author AV1 Dolby Vision profile 10, so Dolby Vision metadata is omitted with an explicit task
+  message. x264 and x265 8-bit output are rejected when Dolby Vision preservation is requested.
 
 ### mkvtoolnix Compatibility Fixes
 
@@ -316,6 +360,9 @@ pip install PyQt6 numpy soundfile pycountry pillow matplotlib
 - `fdkaac`
 
 > Bundled vs system paths depend on the current mode and settings.
+> The External Tools path check probes the configured x265 executable. It requires
+> `hdr10plus_tool` only when x265 advertises `--dhdr10-info`, and requires `dovi_tool`
+> only when x265 advertises both Dolby Vision input options.
 
 ---
 

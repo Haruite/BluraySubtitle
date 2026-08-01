@@ -29,6 +29,11 @@ from src.runtime.audio_conversion import (
 from src.runtime.sp import SpEntry, SpJob, media_track_key
 from src.runtime.remux import RemuxMainJob, RemuxRequest
 from src.runtime.encode import EncodeRequest, EncodeRow
+from src.runtime.encode_results import (
+    EncodeBatchResult,
+    EncodeRowResult,
+    write_encode_row_error_report,
+)
 from .service_base import BluraySubtitleServiceBase
 from .. import TaskCancelled
 
@@ -1071,7 +1076,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             companion_root: str = '',
             progress_base: int = 0,
             progress_span: int = 1000,
-    ) -> None:
+    ) -> EncodeBatchResult:
         """Encode every planned row through one shared execution path."""
         from src.runtime.services_split.encode_and_audio_tasks import encode_dovi_preflight_mkv_paths
 
@@ -1099,9 +1104,120 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         if dolby_vision_error:
             raise RuntimeError(dolby_vision_error)
 
+        self.encode_warnings = []
+        row_results: list[EncodeRowResult] = []
         self.sub_files = [row.subtitle_path for row in main_rows]
         self.episode_subtitle_languages = [row.subtitle_language for row in main_rows]
         self.use_getnative = request.settings.use_getnative
+
+        def record_completed_row(
+                row: EncodeRow,
+                row_type: str,
+                warning_start: int,
+        ) -> None:
+            row_warnings = tuple(self.encode_warnings[warning_start:])
+            row_results.append(EncodeRowResult(
+                row_type=row_type,
+                source_path=row.source_path,
+                output_path=row.output_path,
+                status=(
+                    'completed_with_warnings'
+                    if row_warnings
+                    else 'completed'
+                ),
+                warnings=row_warnings,
+            ))
+
+        def record_failed_row(
+                row: EncodeRow,
+                row_type: str,
+                warning_start: int,
+                error: Exception,
+        ) -> None:
+            artifact_paths = tuple(dict.fromkeys(
+                os.path.abspath(os.path.normpath(path))
+                for path in tuple(getattr(error, 'artifact_paths', ()) or ())
+                if (
+                    (os.path.isfile(path) and os.path.getsize(path) > 0)
+                    or os.path.isdir(path)
+                )
+            ))
+            stage = str(getattr(error, 'stage', '') or 'Encode row execution')
+            try:
+                report_path = write_encode_row_error_report(
+                    row_type,
+                    row.source_path,
+                    row.output_path,
+                    stage,
+                    error,
+                    artifact_paths,
+                )
+            except Exception as report_error:
+                report_path = ''
+                print(
+                    translate_text(
+                        'Failed to write Encode row error report: {error}'
+                    ).format(error=report_error),
+                    flush=True,
+                )
+            failure_message = translate_text(
+                'Encode row failed; later rows will continue: {path}. '
+                'Error report: {report}'
+            ).format(
+                path=row.output_path,
+                report=report_path or translate_text('unavailable'),
+            )
+            prior_warnings = tuple(self.encode_warnings[warning_start:])
+            self.encode_warnings.append(failure_message)
+            self._progress(text=failure_message)
+            row_results.append(EncodeRowResult(
+                row_type=row_type,
+                source_path=row.source_path,
+                output_path=row.output_path,
+                status=(
+                    'failed_with_artifacts'
+                    if artifact_paths
+                    else 'failed'
+                ),
+                message=str(error),
+                report_path=report_path,
+                artifact_paths=artifact_paths,
+                warnings=prior_warnings + (failure_message,),
+            ))
+
+        def execute_video_row(row: EncodeRow, source_path: str) -> None:
+            self.encode_task(
+                row.output_path,
+                row.vpy_path,
+                request.settings.vspipe_mode,
+                request.settings.encoder_mode,
+                request.settings.encoder_parameters,
+                request.settings.subtitle_mode,
+                source_file=source_path,
+                encoder=request.settings.encoder,
+                bit_depth=request.settings.bit_depth,
+                selected_audio_tracks=(
+                    row.audio_tracks if request.input_mode == 'remux' else None
+                ),
+                selected_subtitle_tracks=(
+                    row.subtitle_tracks if request.input_mode == 'remux' else None
+                ),
+                audio_codec_choices=row.audio_codec_choices,
+                track_language_overrides=(
+                    row.track_language_overrides
+                    if request.input_mode == 'remux'
+                    else ()
+                ),
+                subtitle_path=row.subtitle_path,
+                subtitle_language=row.subtitle_language,
+                audio_encoding=request.settings.audio_encoding,
+            )
+            if not os.path.isfile(row.output_path):
+                raise RuntimeError(
+                    translate_text('Encode output is missing: {path}').format(
+                        path=row.output_path
+                    )
+                )
 
         planned_output_paths = {
             os.path.normcase(os.path.abspath(row.output_path))
@@ -1174,6 +1290,24 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     planned_output_paths.add(normalized_destination)
                     companion_files.append((source_path, destination_path))
 
+        for row in main_rows + selected_sp_rows:
+            if not os.path.exists(row.output_path):
+                continue
+            source_path = os.path.normpath(row.source_path)
+            valid_checkpoint = (
+                os.path.isdir(row.output_path)
+                if os.path.isdir(source_path)
+                else os.path.isfile(row.output_path)
+                and os.path.getsize(row.output_path) > 0
+            )
+            if not (resume_existing_outputs and valid_checkpoint):
+                raise FileExistsError(
+                    translate_text(
+                        'Existing resumable output is invalid: {path}'
+                        if resume_existing_outputs else 'Output file already exists: {path}'
+                    ).format(path=row.output_path)
+                )
+
         os.makedirs(request.output_folder, exist_ok=True)
         total_rows = max(1, len(main_rows) + len(selected_sp_rows))
         completed_rows = 0
@@ -1181,6 +1315,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         for row in main_rows:
             if cancel_event and cancel_event.is_set():
                 raise TaskCancelled()
+            warning_start = len(self.encode_warnings)
             self._progress(
                 progress_base + int(completed_rows / total_rows * progress_span),
                 self.t('Encoding {current}/{total}').format(
@@ -1189,47 +1324,23 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 ),
             )
             if os.path.exists(row.output_path):
-                if resume_existing_outputs and os.path.isfile(row.output_path) and os.path.getsize(row.output_path) > 0:
-                    self._progress(
-                        text=self.t('Skipping existing output: {path}').format(path=row.output_path)
-                    )
-                    completed_rows += 1
-                    continue
-                raise FileExistsError(
-                    translate_text(
-                        'Existing resumable output is invalid: {path}'
-                        if resume_existing_outputs else 'Output file already exists: {path}'
-                    ).format(path=row.output_path)
-                )
-            os.makedirs(os.path.dirname(row.output_path), exist_ok=True)
-            self.encode_task(
-                row.output_path,
-                row.vpy_path,
-                request.settings.vspipe_mode,
-                request.settings.encoder_mode,
-                request.settings.encoder_parameters,
-                request.settings.subtitle_mode,
-                source_file=row.source_path,
-                encoder=request.settings.encoder,
-                bit_depth=request.settings.bit_depth,
-                selected_audio_tracks=row.audio_tracks if request.input_mode == 'remux' else None,
-                selected_subtitle_tracks=row.subtitle_tracks if request.input_mode == 'remux' else None,
-                audio_codec_choices=row.audio_codec_choices,
-                track_language_overrides=(
-                    row.track_language_overrides
-                    if request.input_mode == 'remux'
-                    else ()
-                ),
-                subtitle_path=row.subtitle_path,
-                subtitle_language=row.subtitle_language,
-                audio_encoding=request.settings.audio_encoding,
-            )
-            if not os.path.isfile(row.output_path):
-                raise RuntimeError(
-                    translate_text('Encode output is missing: {path}').format(
+                self._progress(
+                    text=self.t('Skipping existing output: {path}').format(
                         path=row.output_path
                     )
                 )
+                record_completed_row(row, 'Main row', warning_start)
+                completed_rows += 1
+                continue
+            os.makedirs(os.path.dirname(row.output_path), exist_ok=True)
+            try:
+                execute_video_row(row, row.source_path)
+            except TaskCancelled:
+                raise
+            except Exception as error:
+                record_failed_row(row, 'Main row', warning_start, error)
+            else:
+                record_completed_row(row, 'Main row', warning_start)
             completed_rows += 1
 
         staged_main_sources = {
@@ -1239,6 +1350,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         for row in selected_sp_rows:
             if cancel_event and cancel_event.is_set():
                 raise TaskCancelled()
+            warning_start = len(self.encode_warnings)
             self._progress(
                 progress_base + int(completed_rows / total_rows * progress_span),
                 self.t('Encoding {current}/{total}').format(
@@ -1249,74 +1361,55 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             source_path = os.path.normpath(row.source_path)
             if os.path.normcase(os.path.abspath(source_path)) in staged_main_sources:
                 # Episode-linked SP muxing has already modified this main source in the stage.
+                record_completed_row(row, 'SP row', warning_start)
                 completed_rows += 1
                 continue
             if os.path.exists(row.output_path):
-                valid_checkpoint = (
-                    os.path.isdir(row.output_path)
-                    if os.path.isdir(source_path)
-                    else os.path.isfile(row.output_path) and os.path.getsize(row.output_path) > 0
-                )
-                if resume_existing_outputs and valid_checkpoint:
-                    self._progress(
-                        text=self.t('Skipping existing output: {path}').format(path=row.output_path)
+                self._progress(
+                    text=self.t('Skipping existing output: {path}').format(
+                        path=row.output_path
                     )
-                    completed_rows += 1
-                    continue
-                raise FileExistsError(
-                    translate_text(
-                        'Existing resumable output is invalid: {path}'
-                        if resume_existing_outputs else 'Output file already exists: {path}'
-                    ).format(path=row.output_path)
                 )
+                record_completed_row(row, 'SP row', warning_start)
+                completed_rows += 1
+                continue
             os.makedirs(os.path.dirname(row.output_path), exist_ok=True)
-            if os.path.isdir(source_path):
-                shutil.copytree(source_path, row.output_path)
-            elif source_path.lower().endswith('.mka'):
-                mux_with_audio_conversion(
-                    source_path,
-                    row.output_path,
-                    selected_audio_tracks=row.audio_tracks if request.input_mode == 'remux' else None,
-                    selected_subtitle_tracks=row.subtitle_tracks if request.input_mode == 'remux' else None,
-                    audio_codec_choices=row.audio_codec_choices,
-                    track_language_overrides=(
-                        row.track_language_overrides
-                        if request.input_mode == 'remux'
-                        else ()
-                    ),
-                    audio_encoding=request.settings.audio_encoding,
-                )
-            elif source_path.lower().endswith('.mkv'):
-                self.encode_task(
-                    row.output_path,
-                    row.vpy_path,
-                    request.settings.vspipe_mode,
-                    request.settings.encoder_mode,
-                    request.settings.encoder_parameters,
-                    request.settings.subtitle_mode,
-                    source_file=source_path,
-                    encoder=request.settings.encoder,
-                    bit_depth=request.settings.bit_depth,
-                    selected_audio_tracks=row.audio_tracks if request.input_mode == 'remux' else None,
-                    selected_subtitle_tracks=row.subtitle_tracks if request.input_mode == 'remux' else None,
-                    audio_codec_choices=row.audio_codec_choices,
-                    track_language_overrides=(
-                        row.track_language_overrides
-                        if request.input_mode == 'remux'
-                        else ()
-                    ),
-                    subtitle_path=row.subtitle_path,
-                    subtitle_language=row.subtitle_language,
-                    audio_encoding=request.settings.audio_encoding,
-                )
-                if not os.path.isfile(row.output_path):
-                    raise RuntimeError(
-                        translate_text('Encode output is missing: {path}').format(
-                            path=row.output_path
-                        )
+            try:
+                if os.path.isdir(source_path):
+                    shutil.copytree(source_path, row.output_path)
+                elif source_path.lower().endswith('.mka'):
+                    mux_with_audio_conversion(
+                        source_path,
+                        row.output_path,
+                        selected_audio_tracks=(
+                            row.audio_tracks if request.input_mode == 'remux' else None
+                        ),
+                        selected_subtitle_tracks=(
+                            row.subtitle_tracks if request.input_mode == 'remux' else None
+                        ),
+                        audio_codec_choices=row.audio_codec_choices,
+                        track_language_overrides=(
+                            row.track_language_overrides
+                            if request.input_mode == 'remux'
+                            else ()
+                        ),
+                        audio_encoding=request.settings.audio_encoding,
+                        preserve_failure_artifacts=True,
                     )
+                elif source_path.lower().endswith('.mkv'):
+                    execute_video_row(row, source_path)
+                else:
+                    shutil.copy2(source_path, row.output_path)
+            except TaskCancelled:
+                raise
+            except Exception as error:
+                if os.path.isdir(row.output_path):
+                    shutil.rmtree(row.output_path, ignore_errors=True)
+                elif os.path.isfile(row.output_path):
+                    force_remove_file(row.output_path)
+                record_failed_row(row, 'SP row', warning_start, error)
             else:
-                shutil.copy2(source_path, row.output_path)
+                record_completed_row(row, 'SP row', warning_start)
             completed_rows += 1
 
         if companion_files:
@@ -1357,26 +1450,27 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     )
                 shutil.copy2(source_path, destination_path)
         self._progress(progress_base + progress_span, 'Done')
+        batch_result = EncodeBatchResult(tuple(row_results))
+        return batch_result
 
     def episodes_encode(
             self,
             request: EncodeRequest,
             cancel_event: Optional[threading.Event] = None,
-    ) -> None:
+    ) -> EncodeBatchResult:
         """Run one complete Encode request without consulting GUI state."""
         self.checked = False
         self.movie_mode = request.movie_mode
         self.mux_dolby_vision = request.mux_dolby_vision
 
         if request.input_mode == 'remux':
-            self._encode_mkv_rows(
+            return self._encode_mkv_rows(
                 request,
                 list(request.main_rows),
                 list(request.sp_rows),
                 cancel_event,
                 companion_root=request.source_root,
             )
-            return
 
         configuration = {
             int(row.configuration_key): dict(row.configuration or {})
@@ -1427,6 +1521,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
 
         staging_parent_existed = os.path.isdir(request.staging_folder)
         staging_disc_folder = ''
+        batch_result: Optional[EncodeBatchResult] = None
         try:
             staging_disc_folder, main_jobs = self._prepare_remux_main_jobs(stage_request)
             sp_jobs = self._prepare_sp_jobs(
@@ -1512,7 +1607,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     )
                 resolved_sp_rows.append(replace(row, source_path=staged_path))
 
-            self._encode_mkv_rows(
+            batch_result = self._encode_mkv_rows(
                 request,
                 resolved_main_rows,
                 resolved_sp_rows,
@@ -1520,11 +1615,23 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 progress_base=600,
                 progress_span=400,
             )
+            if batch_result.failed_rows and staging_disc_folder:
+                staging_message = translate_text(
+                    'Blu-ray staging files were retained after Encode row failures: {path}'
+                ).format(path=staging_disc_folder)
+                self.encode_warnings.append(staging_message)
+                self._progress(text=staging_message)
         finally:
-            if staging_disc_folder and os.path.isdir(staging_disc_folder):
+            keep_staging = bool(batch_result and batch_result.failed_rows)
+            if (
+                    not keep_staging
+                    and staging_disc_folder
+                    and os.path.isdir(staging_disc_folder)
+            ):
                 shutil.rmtree(staging_disc_folder, ignore_errors=True)
             if (
-                    not staging_parent_existed
+                    not keep_staging
+                    and not staging_parent_existed
                     and request.staging_folder
                     and os.path.isdir(request.staging_folder)
             ):
@@ -1532,3 +1639,6 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     os.rmdir(request.staging_folder)
                 except OSError:
                     pass
+        if batch_result is None:
+            raise RuntimeError(translate_text('Encode batch did not return a result'))
+        return batch_result

@@ -2718,7 +2718,8 @@ function Get-InstalledX265Version {
         -not (Test-Path -LiteralPath $script:ToolPaths.X265Version -PathType Leaf)) {
         return ""
     }
-    return ([IO.File]::ReadAllText($script:ToolPaths.X265Version)).Trim()
+    $versionFile = [IO.File]::ReadAllText($script:ToolPaths.X265Version)
+    return (($versionFile -split '\r?\n', 2)[0]).Trim()
 }
 
 function Install-X265 {
@@ -2768,7 +2769,7 @@ function Install-X265 {
             "-DHIGH_BIT_DEPTH=ON",
             "-DMAIN12=ON",
             "-DEXPORT_C_API=OFF",
-            "-DENABLE_HDR10_PLUS=OFF",
+            "-DENABLE_HDR10_PLUS=ON",
             "-DENABLE_CLI=OFF"
         ))
     Invoke-SetupBuildCommand `
@@ -2788,7 +2789,7 @@ function Install-X265 {
             "-DHIGH_BIT_DEPTH=ON",
             "-DMAIN12=OFF",
             "-DEXPORT_C_API=OFF",
-            "-DENABLE_HDR10_PLUS=OFF",
+            "-DENABLE_HDR10_PLUS=ON",
             "-DENABLE_CLI=OFF"
         ))
     Invoke-SetupBuildCommand `
@@ -2827,7 +2828,7 @@ function Install-X265 {
     Copy-Item -LiteralPath $executable.FullName -Destination $script:ToolPaths.X265 -Force
     [IO.File]::WriteAllText(
         $script:ToolPaths.X265Version,
-        $release.Version,
+        "$($release.Version)`r`nhdr10plus-all-depths",
         (New-Object Text.UTF8Encoding($false))
     )
 }
@@ -2836,9 +2837,13 @@ function Test-X265 {
     try {
         $output = Invoke-SetupCommand -FilePath $script:ToolPaths.X265 -Arguments @("--version")
         $help = Invoke-SetupCommand -FilePath $script:ToolPaths.X265 -Arguments @("--help") -AcceptedExitCodes @(0, 1)
+        $buildMarker = [IO.File]::ReadAllText($script:ToolPaths.X265Version)
         return (
             $output.IndexOf("8bit+10bit+12bit", [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
-            $help.IndexOf("--dhdr10-info", [StringComparison]::OrdinalIgnoreCase) -ge 0
+            $help.IndexOf("--dhdr10-info", [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+            $help.IndexOf("--dolby-vision-profile", [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+            $help.IndexOf("--dolby-vision-rpu", [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+            $buildMarker.IndexOf("hdr10plus-all-depths", [StringComparison]::OrdinalIgnoreCase) -ge 0
         )
     }
     catch {

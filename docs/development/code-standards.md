@@ -64,6 +64,9 @@ When the author establishes a new rule, update this file and its Simplified Chin
 - External commands must have their return status checked. Tool-specific warning return codes may be accepted only when documented or verified.
 - Prefer argument lists with `shell=False` for external tools. Use a shell only when shell syntax is genuinely required.
 - Cleanup may remove only temporary or partial artifacts created by the current task. It must not delete a pre-existing user file.
+- For a long-running Encode batch, deterministic request-wide safety failures must still stop before the worker starts. After row execution begins, a failure confined to one row must be recorded and must not prevent later rows from running. User cancellation and an unsafe request-wide state still stop the batch.
+- Non-empty encoded elementary streams, partial containers, and extracted or injected dynamic-metadata artifacts created for a failed Encode row must be retained under unique non-final names and listed in the error report. They may be deleted only after that row's final output succeeds.
+- Do not display a modal error dialog while a long-running Encode batch is active. Aggregate row warnings and failures, then present one summary after worker cleanup.
 
 ## 6. Layer Responsibilities
 

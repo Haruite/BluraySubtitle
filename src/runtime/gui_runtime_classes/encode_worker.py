@@ -4,8 +4,13 @@ from typing import Optional
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
+from src.core.i18n import translate_text
 from src.exports.utils import print_tb_string_terminal, print_terminal_line
 from src.runtime.encode import EncodeRequest
+from src.runtime.encode_results import (
+    EncodeBatchResult,
+    format_encode_batch_error_summary,
+)
 from src.runtime import TaskCancelled
 from src.runtime.services import BluraySubtitle
 
@@ -14,6 +19,8 @@ class EncodeWorker(QObject):
     progress = pyqtSignal(int)
     label = pyqtSignal(str)
     finished = pyqtSignal()
+    finished_with_warnings = pyqtSignal(str)
+    finished_with_errors = pyqtSignal(str)
     canceled = pyqtSignal()
     failed = pyqtSignal(str)
 
@@ -55,7 +62,12 @@ class EncodeWorker(QObject):
                 movie_mode=request.movie_mode,
                 mux_dolby_vision=request.mux_dolby_vision,
             )
-            service.episodes_encode(request, cancel_event=self.cancel_event)
+            batch_result = service.episodes_encode(
+                request,
+                cancel_event=self.cancel_event,
+            )
+            if not isinstance(batch_result, EncodeBatchResult):
+                raise RuntimeError(translate_text('Encode batch did not return a result'))
         except TaskCancelled:
             print_terminal_line('[BluraySubtitle] Encode worker: canceled.')
             self.canceled.emit()
@@ -64,5 +76,23 @@ class EncodeWorker(QObject):
             print_tb_string_terminal(traceback_text)
             self.failed.emit(traceback_text)
         else:
-            print_terminal_line('[BluraySubtitle] Encode worker: finished successfully.')
-            self.finished.emit()
+            warnings = tuple(getattr(service, 'encode_warnings', ()) or ())
+            if batch_result.failed_rows:
+                print_terminal_line(
+                    translate_text(
+                        '[BluraySubtitle] Encode worker: completed with row errors.'
+                    )
+                )
+                self.finished_with_errors.emit(
+                    format_encode_batch_error_summary(batch_result, warnings)
+                )
+            elif warnings:
+                print_terminal_line(
+                    translate_text(
+                        '[BluraySubtitle] Encode worker: finished with warnings.'
+                    )
+                )
+                self.finished_with_warnings.emit('\n\n'.join(str(warning) for warning in warnings))
+            else:
+                print_terminal_line('[BluraySubtitle] Encode worker: finished successfully.')
+                self.finished.emit()

@@ -1239,6 +1239,24 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             cleanup()
             self._show_bottom_message('Blu-ray encode completed!')
 
+        def on_finished_with_warnings(message: str):
+            cleanup()
+            self._show_bottom_message('Blu-ray encode completed!')
+            QMessageBox.warning(
+                self,
+                self.t('Encode completed with warnings'),
+                message,
+            )
+
+        def on_finished_with_errors(message: str):
+            cleanup()
+            self._show_bottom_message('Blu-ray encode completed with errors')
+            QMessageBox.warning(
+                self,
+                self.t('Encode completed with errors'),
+                message,
+            )
+
         def on_canceled():
             cleanup()
 
@@ -1247,6 +1265,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             self._show_error_dialog(message)
 
         self._encode_worker.finished.connect(on_finished)
+        self._encode_worker.finished_with_warnings.connect(on_finished_with_warnings)
+        self._encode_worker.finished_with_errors.connect(on_finished_with_errors)
         self._encode_worker.canceled.connect(on_canceled)
         self._encode_worker.failed.connect(on_failed)
         self._encode_thread.start()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -32,6 +33,18 @@ class DolbyVisionEncodePlan:
     def cleanup(self) -> None:
         if self.work_folder and os.path.isdir(self.work_folder):
             shutil.rmtree(self.work_folder, ignore_errors=True)
+
+
+class DolbyVisionPreparationFailure(RuntimeError):
+    """Preparation failure with extracted metadata retained for the caller."""
+
+    def __init__(
+            self,
+            message: str,
+            artifact_paths: tuple[str, ...],
+    ) -> None:
+        super().__init__(message)
+        self.artifact_paths = artifact_paths
 
 
 def prepare_dolby_vision_encode(
@@ -116,13 +129,26 @@ def prepare_dolby_vision_encode(
                 )
             )
         return DolbyVisionEncodePlan(base_layer, rpu_path, work_folder)
-    except Exception:
+    except Exception as error:
+        artifact_paths = tuple(
+            path
+            for path in (rpu_path,)
+            if os.path.isfile(path) and os.path.getsize(path) > 0
+        )
+        if artifact_paths:
+            raise DolbyVisionPreparationFailure(
+                str(error),
+                artifact_paths,
+            ) from error
         shutil.rmtree(work_folder, ignore_errors=True)
         raise
 
 
-def inject_dolby_vision_rpu(encoded_hevc: str, plan: DolbyVisionEncodePlan) -> None:
-    """Inject profile 8.1 RPU metadata and replace the encoded HEVC only after success."""
+def inject_dolby_vision_rpu(
+        encoded_hevc: str,
+        plan: DolbyVisionEncodePlan,
+) -> None:
+    """Inject profile 8.1 RPU metadata, retaining a non-empty partial output on failure."""
     encoded_path = os.path.abspath(os.path.normpath(encoded_hevc))
     if not encoded_path.lower().endswith('.hevc'):
         raise ValueError(
@@ -146,20 +172,85 @@ def inject_dolby_vision_rpu(encoded_hevc: str, plan: DolbyVisionEncodePlan) -> N
         '-o',
         temporary_output,
     ]
-    try:
+    if run_command(command, timeout=7200,
+                   log_template='Dolby Vision command: {command}').returncode != 0 or not (
+            os.path.isfile(temporary_output) and os.path.getsize(temporary_output) > 0
+    ):
+        if os.path.isfile(temporary_output) and os.path.getsize(temporary_output) == 0:
+            os.remove(temporary_output)
+        raise RuntimeError(
+            translate_text('dovi_tool did not create the injected HEVC output: {path}').format(
+                path=encoded_path
+            )
+        )
+    os.replace(temporary_output, encoded_path)
+
+
+def verify_dolby_vision_rpu(
+        encoded_hevc: str,
+        expected_frame_count: int | None = None,
+        expected_profile: int | None = None,
+) -> None:
+    """Require Dolby Vision RPU metadata and optionally verify its summary."""
+    encoded_path = os.path.abspath(os.path.normpath(encoded_hevc))
+    dovi_tool = dolby_vision_tool_path()
+    if not dovi_tool:
+        raise FileNotFoundError(translate_text('dovi_tool executable does not exist'))
+    with tempfile.TemporaryDirectory(
+            prefix='_dovi_verify_',
+            dir=os.path.dirname(encoded_path),
+    ) as verification_folder:
+        rpu_path = os.path.join(verification_folder, 'rpu.bin')
+        command = [dovi_tool, 'extract-rpu', encoded_path, '-o', rpu_path]
         if run_command(command, timeout=7200,
                        log_template='Dolby Vision command: {command}').returncode != 0 or not (
-                os.path.isfile(temporary_output) and os.path.getsize(temporary_output) > 0
+                os.path.isfile(rpu_path) and os.path.getsize(rpu_path) > 0
         ):
             raise RuntimeError(
-                translate_text('dovi_tool did not create the injected HEVC output: {path}').format(
-                    path=encoded_path
-                )
+                translate_text(
+                    'dovi_tool did not find Dolby Vision RPU metadata: {path}'
+                ).format(path=encoded_path)
             )
-        os.replace(temporary_output, encoded_path)
-    finally:
-        if os.path.isfile(temporary_output):
-            os.remove(temporary_output)
+        if expected_frame_count is None and expected_profile is None:
+            return
+        result = run_command(
+            [dovi_tool, 'info', '-s', '-i', rpu_path],
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+            timeout=7200,
+            log_template='Dolby Vision command: {command}',
+        )
+        if result.returncode != 0:
+            detail = str(result.stderr or result.stdout or '').strip()
+            raise RuntimeError(
+                detail or translate_text(
+                    'dovi_tool did not return a Dolby Vision RPU summary: {path}'
+                ).format(path=encoded_path)
+            )
+        summary = f'{result.stdout or ""}\n{result.stderr or ""}'
+        checks = (
+            ('frames', expected_frame_count, r'Frames:\s*(\d+)'),
+            ('profile', expected_profile, r'Profile:\s*(\d+)'),
+        )
+        for field, expected, pattern in checks:
+            if expected is None:
+                continue
+            match = re.search(pattern, summary, flags=re.IGNORECASE)
+            actual = int(match.group(1)) if match else None
+            if actual != expected:
+                raise RuntimeError(
+                    translate_text(
+                        'Dolby Vision RPU summary mismatch for {field}: expected '
+                        '{expected}, got {actual} ({path})'
+                    ).format(
+                        field=field,
+                        expected=expected,
+                        actual=actual if actual is not None else translate_text('unknown'),
+                        path=encoded_path,
+                    )
+                )
 
 
 def mux_dolby_vision_layers(base_layer: str, enhancement_layer: str) -> None:
@@ -212,8 +303,10 @@ def mux_dolby_vision_layers(base_layer: str, enhancement_layer: str) -> None:
 
 __all__ = [
     'DolbyVisionEncodePlan',
+    'DolbyVisionPreparationFailure',
     'dolby_vision_tool_path',
     'inject_dolby_vision_rpu',
     'mux_dolby_vision_layers',
     'prepare_dolby_vision_encode',
+    'verify_dolby_vision_rpu',
 ]

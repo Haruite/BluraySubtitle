@@ -1,4 +1,4 @@
-﻿# BluraySubtitle
+# BluraySubtitle
 
 [English](./README.md) | [简体中文](README.zh-Hans.md)
 
@@ -132,9 +132,9 @@ BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 
 setup 脚本运行或 Docker 镜像构建时，会动态解析官方上游的当前版本：
 
 - **[x264](https://code.videolan.org/videolan/x264)** 使用官方 `master` 的最新版本，编译为一个同时支持 8/10 位输出的 CLI；Windows setup 使用 MSYS2 UCRT64 工具链和 PGO（配置文件引导优化）。
-- **[x265](https://github.com/Multicorewareinc/x265)** 使用官方最新的稳定数字版本标签，编译为一个静态链接、同时支持 8/10/12 位输出并原生支持 HDR10+ JSON 输入（`--dhdr10-info`）的 multilib CLI。
+- **[x265](https://github.com/Multicorewareinc/x265)** 使用官方最新的稳定数字版本标签，编译为一个静态链接的 8/10/12 位 multilib CLI，三个被链接的核心都启用原生 HDR10+ JSON 输入（`--dhdr10-info`）和 Dolby Vision RPU 输入（`--dolby-vision-profile`、`--dolby-vision-rpu`）。
 
-受管理的路径保持不变：Windows 为 `C:\Software\x264.exe` 和 `C:\Software\x265.exe`，Linux 与 Docker 为 `/usr/bin/x264` 和 `/usr/bin/x265`。如需使用其他构建，直接替换相同路径下对应的可执行文件即可，程序不要求用户填写编码器版本参数。替代构建必须支持本项目使用的输出位深和 CLI 参数，包括所选编码器对应的 HDR 静态元数据参数以及 x265 的原生 HDR10+ 输入参数。再次运行 setup 脚本时会检查官方上游的最新源码；无法识别为当前受管理版本的自定义构建可能被替换。
+受管理的路径保持不变：Windows 为 `C:\Software\x264.exe` 和 `C:\Software\x265.exe`，Linux 与 Docker 为 `/usr/bin/x264` 和 `/usr/bin/x265`。如需使用其他构建，直接替换相同路径下对应的可执行文件即可，程序不要求用户填写编码器版本参数。替代构建必须支持所选输出位深及当前行使用的普通 CLI 参数，包括所需的 HDR 静态元数据参数。自动处理动态元数据时，程序会探测实际 x265 可执行文件；缺少原生 HDR10+ 或 Dolby Vision 输入参数时，分别回退到 `hdr10plus_tool` 或 `dovi_tool` 后注入。再次运行 setup 脚本时会检查官方上游的最新源码；无法识别为当前受管理版本的自定义构建可能被替换。
 
 setup 脚本还会安装 [hdr10plus_tool](https://github.com/quietvoid/hdr10plus_tool) 的官方最新 release：Windows 路径为 `C:\Software\hdr10plus_tool.exe`，Linux 与 Docker 路径为 `/usr/bin/hdr10plus_tool`。Linux 直接使用上游发布的 musl 预编译文件，不在本地编译该工具。
 
@@ -142,11 +142,19 @@ setup 脚本还会安装 [hdr10plus_tool](https://github.com/quietvoid/hdr10plus
 
 压制会按照界面当前显示的行顺序，应用输出名称、逐行 VPy、字幕、语言、轨道选择和压制参数。原盘输入的暂存 Remux 会保留已选择的源音轨；只有视频压制成功后，才会在最终混流阶段执行无损音频转换。缺少输入、VPy 或所需工具，以及无效路径和重复输出路径等问题，会尽量在压制开始前明确报错。
 
+- 每一行开始调用编码器之前，程序会自动探测该行 VPy 实际读取的媒体文件：Remux 来源对应当前 MKV，原盘来源对应本任务拥有的暂存 MKV，x265 Dolby Vision 则对应生成后的基础层 HEVC。同一次 FFprobe 调用会同时读取第一条视频流及其首帧，因此即使 FFprobe 未在流级别提供 HDR 静态 side data，也能保留首帧中的信息。
+- 最终 VPy 准备完成后，程序会抽查输出 0 的首帧、中间帧和末帧中的标准 VapourSynth 色彩属性。稳定的输出值优先于 FFprobe；缺失属性回退到 FFprobe。色彩原色或传递特性改变时，不再保留可能过期的来源 HDR 静态元数据和 Dolby Vision 元数据。抽查值不一致会使当前行失败；其他探测失败仍使用来源值，并沿用现有警告报告流程。
+- 实际来源带有 HDR10+ 且选择 x265 10/12 位输出时，程序会用 `hdr10plus_tool` 自动提取并校验 JSON，要求其帧数、帧率与 VPy 输出一致，并在混流前验证编码 HEVC。只有实际 x265 声明支持 `--dhdr10-info` 时才使用原生写入；缺少该参数或原生写入验证失败时，`hdr10plus_tool` 会先注入并验证临时码流，再原子替换编码码流。VPy 改变色彩原色或传递特性、时间轴不匹配、提取失败或最终产物中缺少元数据时，会记录警告并回退到普通 HDR 静态压制；非空 JSON 会保留用于诊断，验证成功后才删除。使用该自动流程的自定义 VPy 必须保持帧顺序，因为帧数和帧率相同不能证明帧身份相同。若同时存在 Dolby Vision，只有实际 x265 声明支持两条原生路径，且当前行已经具备 VBV 与母版显示参数时，同一次 x265 压制才会写入两种动态元数据。
+- 程序会把来源中可用的色彩范围、色彩原色、传递特性、矩阵系数、色度位置、母版显示信息和 CLL/MaxFALL 自动映射为所选编码器支持的参数。x264 使用 `--mastering-display` 与 `--cll`；x265 使用 `--master-display` 与 `--max-cll`；SVT-AV1 使用 H.273 数字色彩值，并把母版显示信息转换为其 CLI 要求的物理单位。
+- 界面中可见的手动编码参数始终优先。手动填写某一参数时只抑制对应的自动参数；x265 的 `--video-signal-type-preset` 因编码器规定其优先级更高，会抑制全部自动色彩与 HDR 静态参数。程序不会自动推导会改变编码决策、而不仅是保留元数据的 `--hdr10-opt`。
+- 最终 MKV 发布后，程序只会反向探测由自己自动补充的静态字段，并再次执行当前启用的 HDR10+ 与 Dolby Vision 检查。Dolby Vision 必须报告 Profile 8，且 RPU 帧数必须与 VPy 输出一致。不匹配时保留最终 MKV，写入不覆盖已有文件的 HDR 警告报告，把当前行记为带警告完成，并继续后续行。
+- 实际来源探测或自动参数规划失败不会中止耗时较长的压制。程序会使用用户参数继续处理当前行，在计划输出旁新建 `<输出名称>.hdr-metadata-error.txt` 报告；已有报告不会被覆盖，而是增加数字后缀。全部此类警告会在压制任务完成后统一弹窗显示。
 - **原盘输入**会在压制前应用已选择的播放列表、章节范围、轨道和编辑后的轨道语言。已有计划输出会中止任务且绝不覆盖。
 - **Remux 输入**支持中断后继续。已有且非空的正片/SP 文件、外挂字幕和附带文件会明确提示跳过；空的正片/SP 文件或类型错误的路径会报错，其余输出继续处理。
 - Remux 输入中的非 MKV 附带文件会保留相对路径，外挂字幕使用对应视频的输出名称。
-- 压制工具、Dolby Vision 或最终混流失败时会中止任务，不会把不完整结果报告为成功。
-- 原盘启用 Dolby Vision 选项，或 Remux 输入本身包含 Dolby Vision 时，x265 10 位或 12 位输出会以 Profile 8.1 保留 Dolby Vision。SVT-AV1 可以压制此类输入，但当前工具链不能制作 AV1 Dolby Vision Profile 10，因此会在任务中明确提示并省略 Dolby Vision 元数据。要求保留 Dolby Vision 时，x264 和 x265 8 位输出会被拒绝。
+- 开始逐行执行后，压制工具、Dolby Vision、复制或最终混流失败只会使当前行失败，后续行仍会继续。程序会用唯一且非最终输出的名称保留所有非空基础码流、部分容器以及已提取或注入的 Dolby Vision 产物，写入不覆盖已有文件的 `<输出名称>.encode-error.txt` 报告，并且只在该行最终输出成功后删除这些中间产物。用户取消仍会立即停止所有后续行；影响整个请求的预检错误仍会在执行前中止任务。
+- 任一行失败时会保留原盘暂存文件。工作线程清理完毕后只显示一次汇总窗口，列出成功与失败数量、警告、错误报告路径及保留产物路径；失败或不完整的行绝不会被报告为成功。
+- 原盘启用 Dolby Vision 选项，或 Remux 输入本身包含 Dolby Vision 时，x265 10 位或 12 位输出会以 Profile 8.1 保留 Dolby Vision。实际 x265 声明支持两项原生 Dolby Vision 参数，且当前行已经具备两个 VBV 参数和母版显示元数据时，RPU 会在压制过程中由 x265 直接写入；否则由 `dovi_tool` 在压制后注入，不会擅自增加码率控制参数。原生产物验证失败时也会回退到注入。两条路径都会在混流前验证 RPU；HDR10+ 后注入完成后还会再次验证 RPU。SVT-AV1 可以压制此类输入，但当前工具链不能制作 AV1 Dolby Vision Profile 10，因此会在任务中明确提示并省略 Dolby Vision 元数据。要求保留 Dolby Vision 时，x264 和 x265 8 位输出会被拒绝。
 
 ### mkvtoolnix 兼容修复
 
@@ -281,6 +289,8 @@ pip install PyQt6 numpy soundfile pycountry pillow matplotlib
 - `fdkaac`
 
 > 具体使用程序自带还是系统路径，取决于当前模式与设置项。
+> “外部工具”路径检查会探测已配置的 x265：只有 x265 声明 `--dhdr10-info` 时才要求
+> `hdr10plus_tool`，只有 x265 同时声明两项 Dolby Vision 输入参数时才要求 `dovi_tool`。
 
 ---
 

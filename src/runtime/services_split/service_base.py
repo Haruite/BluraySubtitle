@@ -14,6 +14,7 @@ from src.bdmv import Chapter
 from src.runtime.audio_conversion import AudioEncodingSettings
 from src.runtime.remux import RemuxMainJob, RemuxRequest
 from src.runtime.encode import EncodeRequest, EncodeRow
+from src.runtime.encode_results import EncodeBatchResult
 from src.runtime.sp import SpEntry, SpJob
 
 
@@ -35,6 +36,7 @@ class BluraySubtitleServiceBase:
         self.checked = None
         self.configuration = None
         self.episode_subtitle_languages = None
+        self.encode_warnings = None
         self.movie_mode = None
         self.progress_dialog = None
         self.sub_files = None
@@ -125,7 +127,7 @@ class BluraySubtitleServiceBase:
     def _disc_paths_for_output_title(bdmv_root: str, selected_mpls_no_ext: str) -> tuple[str, str, str]:
         raise NotImplementedError
 
-    def _encode_mkv_rows(self, request: EncodeRequest, main_rows: list[EncodeRow], sp_rows: list[EncodeRow], cancel_event: Optional[threading.Event], *, companion_root: str='', progress_base: int=0, progress_span: int=1000) -> None:
+    def _encode_mkv_rows(self, request: EncodeRequest, main_rows: list[EncodeRow], sp_rows: list[EncodeRow], cancel_event: Optional[threading.Event], *, companion_root: str='', progress_base: int=0, progress_span: int=1000) -> EncodeBatchResult:
         raise NotImplementedError
 
     @staticmethod
@@ -533,7 +535,7 @@ class BluraySubtitleServiceBase:
     def encode_task(self, output_file: str, vpy_path: str, vspipe_mode: str, encoder_mode: str, encoder_parameters: str, subtitle_mode: str, *, source_file: str, encoder: str, bit_depth: str, selected_audio_tracks: Optional[tuple[str, ...]], selected_subtitle_tracks: Optional[tuple[str, ...]], audio_codec_choices: tuple[str, ...], track_language_overrides: tuple[tuple[str, str], ...], subtitle_path: str='', subtitle_language: str='', audio_encoding: AudioEncodingSettings=AudioEncodingSettings()) -> None:
         raise NotImplementedError
 
-    def episodes_encode(self, request: EncodeRequest, cancel_event: Optional[threading.Event]=None) -> None:
+    def episodes_encode(self, request: EncodeRequest, cancel_event: Optional[threading.Event]=None) -> EncodeBatchResult:
         raise NotImplementedError
 
     def episodes_remux(self, request: RemuxRequest, cancel_event: Optional[threading.Event]=None) -> None:

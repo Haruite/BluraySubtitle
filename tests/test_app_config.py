@@ -384,6 +384,8 @@ class SettingsGuiTests(unittest.TestCase):
             root = Path(temporary_directory)
             target = root / "settings.py"
             missing_tool = root / "ffmpeg.exe"
+            hdr10plus_tool = root / "hdr10plus_tool.exe"
+            dovi_tool = root / "dovi_tool.exe"
             target.write_text('FFMPEG_PATH = "ffmpeg.exe"\n', encoding="utf-8")
             with (
                 patch(
@@ -392,6 +394,21 @@ class SettingsGuiTests(unittest.TestCase):
                     ("FFMPEG_PATH",),
                 ),
                 patch.object(core_settings, "FFMPEG_PATH", str(missing_tool)),
+                patch.object(
+                    core_settings,
+                    "HDR10PLUS_TOOL_PATH",
+                    str(hdr10plus_tool),
+                ),
+                patch.object(core_settings, "DOVI_TOOL_PATH", str(dovi_tool)),
+                patch(
+                    "src.runtime.gui_runtime_classes.settings_dialog."
+                    "probe_x265_dynamic_metadata_options",
+                    return_value=frozenset({
+                        "--dhdr10-info",
+                        "--dolby-vision-profile",
+                        "--dolby-vision-rpu",
+                    }),
+                ) as x265_probe,
             ):
                 dialog = SettingsDialog(
                     default_app_config(),
@@ -406,8 +423,17 @@ class SettingsGuiTests(unittest.TestCase):
                     "setup_windows_environment.ps1",
                     dialog.external_tools_detection_view.toPlainText(),
                 )
+                self.assertIn(
+                    str(hdr10plus_tool),
+                    dialog.external_tools_detection_view.toPlainText(),
+                )
+                self.assertIn(
+                    str(dovi_tool),
+                    dialog.external_tools_detection_view.toPlainText(),
+                )
 
                 missing_tool.write_bytes(b"tool")
+                x265_probe.return_value = frozenset()
                 dialog._refresh_external_tool_detection()
 
                 self.assertEqual(

@@ -246,14 +246,14 @@ cmake -S "$source_root" -B "$build_root/12bit" "${common_args[@]}" \
     -DHIGH_BIT_DEPTH=ON \
     -DMAIN12=ON \
     -DEXPORT_C_API=OFF \
-    -DENABLE_HDR10_PLUS=OFF \
+    -DENABLE_HDR10_PLUS=ON \
     -DENABLE_CLI=OFF
 cmake --build "$build_root/12bit" --parallel "$jobs"
 cmake -S "$source_root" -B "$build_root/10bit" "${common_args[@]}" \
     -DHIGH_BIT_DEPTH=ON \
     -DMAIN12=OFF \
     -DEXPORT_C_API=OFF \
-    -DENABLE_HDR10_PLUS=OFF \
+    -DENABLE_HDR10_PLUS=ON \
     -DENABLE_CLI=OFF
 cmake --build "$build_root/10bit" --parallel "$jobs"
 mkdir -p "$build_root/8bit"
@@ -273,6 +273,8 @@ install -m 0755 "$build_root/8bit/x265" /usr/bin/x265
 /usr/bin/x265 --version 2>&1 | grep -F '8bit+10bit+12bit' >/dev/null
 x265_help="$(/usr/bin/x265 --help 2>&1 || true)"
 [[ "$x265_help" == *"--dhdr10-info"* ]]
+[[ "$x265_help" == *"--dolby-vision-profile"* ]]
+[[ "$x265_help" == *"--dolby-vision-rpu"* ]]
 rm -rf /tmp/x265 /tmp/x265-tags.json
 X265EOS
 

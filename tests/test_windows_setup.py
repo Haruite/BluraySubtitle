@@ -1,4 +1,4 @@
-﻿"""Static contract tests for the Windows environment setup script."""
+"""Static contract tests for the Windows environment setup script."""
 
 from __future__ import annotations
 
@@ -426,7 +426,6 @@ class WindowsSetupTests(unittest.TestCase):
             "-DEXTRA_LIB=$library10Path;$library12Path",
             "-DLINKED_10BIT=ON",
             "-DLINKED_12BIT=ON",
-            "-DENABLE_HDR10_PLUS=OFF",
             "-DENABLE_HDR10_PLUS=ON",
             "-DENABLE_AVISYNTH=OFF",
             "-DNASM_EXECUTABLE=$nasmPath",
@@ -435,6 +434,7 @@ class WindowsSetupTests(unittest.TestCase):
         for fragment in required:
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, install_function)
+        self.assertNotIn("-DENABLE_HDR10_PLUS=OFF", install_function)
         self.assertIn("8bit+10bit+12bit", self.source)
 
     def test_x265_hdr10plus_json11_patch_is_scoped(self) -> None:
@@ -484,8 +484,8 @@ class WindowsSetupTests(unittest.TestCase):
             "$script:ToolPaths.X265Version",
             "$release.Version",
             "-DCMAKE_POLICY_VERSION_MINIMUM=3.10",
-            "-DENABLE_HDR10_PLUS=OFF",
             "-DENABLE_HDR10_PLUS=ON",
+            "hdr10plus-all-depths",
         ):
             self.assertIn(fragment, install_function)
         self.assertNotIn("Update-X265SourceForCMake4", self.source)
@@ -498,6 +498,9 @@ class WindowsSetupTests(unittest.TestCase):
         self.assertIn('Arguments @("--help")', verify_function)
         self.assertIn("-AcceptedExitCodes @(0, 1)", verify_function)
         self.assertIn('IndexOf("--dhdr10-info"', verify_function)
+        self.assertIn('IndexOf("--dolby-vision-profile"', verify_function)
+        self.assertIn('IndexOf("--dolby-vision-rpu"', verify_function)
+        self.assertIn('IndexOf("hdr10plus-all-depths"', verify_function)
         self.assertNotIn("Get-InstalledX265Version", verify_function)
         self.assertNotIn("[regex]", verify_function)
     def test_validation_simplicity_rule_is_synchronized(self) -> None:

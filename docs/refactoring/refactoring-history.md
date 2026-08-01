@@ -1,4 +1,4 @@
-﻿# Refactoring History
+# Refactoring History
 
 [简体中文](refactoring-history.zh-Hans.md)
 
@@ -838,7 +838,7 @@ Commit: 26dc5fe
 ## HDR10+ Build Environment Preparation
 
 Date: 2026-07-28
-Commit: uncommitted (current change)
+Commit: `56ce8bb` (`build(hdr): enable x265 HDR10+ and add hdr10plus_tool`)
 
 ### Scope
 
@@ -856,3 +856,58 @@ Commit: uncommitted (current change)
 - Linux x265 configuration, compilation, linking, library merging, and installation now return immediately on the first failed command instead of continuing with secondary missing-file errors.
 - Verification uses the current official x265 4.2 tag and includes a complete 12/10/8-bit multilib CLI build with native HDR10+ enabled.
 - PowerShell parsing, `bash -n`, 60 focused build-environment tests, three External Tools settings tests, `git diff --check`, and line-ending checks passed. Docker was unavailable on the verification host, so a complete image build remains a manual check.
+
+## Automatic HDR Metadata and Encode Row Reliability
+
+Date: 2026-07-29 to 2026-08-01
+Commit: uncommitted (current change)
+
+### Source Discovery and Static Metadata
+
+- Completed the automatic HDR path from per-row source discovery through final Matroska verification, together with the row-result and artifact rules needed for long Encode batches.
+- Each row probes the media actually loaded by its final VPy: a direct Remux MKV, the task-owned Blu-ray staging MKV, or the Dolby Vision base-layer HEVC prepared for x265. The probe runs after source preparation so it cannot inspect a Blu-ray root, MPLS, or superseded container.
+- One FFprobe call reads the first video stream and first frame. First-frame side data is merged without duplicates because static HDR SEI may be absent at stream level. Missing HDR fields remain valid; the probe records the available stream and codec without premature classification.
+- Source-probe and metadata-planning failures are non-blocking. Encoding continues with the user's arguments, creates a numbered non-overwriting `<output-name>.hdr-metadata-error.txt`, and reports the warning once after Worker cleanup.
+- One parser normalizes range, primaries, transfer, matrix, chroma location, mastering display, and MaxCLL/MaxFALL for all encoders and input types. x264 receives its supported color options plus `--mastering-display` and `--cll`; x265 uses `--master-display` and `--max-cll`; SVT-AV1 receives H.273 values and converted mastering coordinates and physical luminance.
+- Visible manual parameters remain authoritative. A manual option suppresses only its automatic counterpart; x264 `--fullrange` also suppresses range, while x265 `--video-signal-type-preset` suppresses all automatic color/static-HDR options. The program does not infer `--hdr10` or `--hdr10-opt`, and skips malformed or unsupported individual values.
+- After the final VPy is prepared, output 0's first, middle, and last frames are sampled. Stable VapourSynth range, primaries, transfer, matrix, and chroma properties override source values; missing properties fall back to FFprobe. Inconsistent samples fail only that row.
+- A VPy primaries or transfer change drops source mastering-display/CLL data and disables Dolby Vision preservation so stale metadata is not attached to changed pictures. Other VPy probe failures retain the source snapshot through the warning path.
+
+### HDR10+, Dolby Vision, and x265 Capability Compatibility
+
+- ST 2094-40 activates automatic HDR10+ handling for x265 10/12-bit output. `hdr10plus_tool` extracts validated JSON whose frame count and source frame rate must match the VPy timeline. Manual `--dhdr10-info` remains authoritative.
+- The actual configured or bundled x265 is probed for `--dhdr10-info`, `--dolby-vision-profile`, and `--dolby-vision-rpu`. Results are cached by normalized path, size, and modification time, so replacing a custom build invalidates the cache without relying on a version string.
+- The External Tools settings check reuses that probe: `hdr10plus_tool` is required only when x265 advertises `--dhdr10-info`, and `dovi_tool` only when both Dolby Vision input options are present. Builds without the corresponding capability do not produce a missing-helper warning.
+- Native arguments are passed only when advertised. Missing or unverified native HDR10+ uses verified, atomic `hdr10plus_tool` post-injection; Dolby Vision uses checked `dovi_tool` injection. An active RPU is verified again after HDR10+ injection, and a failed HDR10+ replacement leaves the original encoded stream untouched.
+- Native Dolby Vision writing requires x265 10/12-bit output plus both existing VBV options and mastering-display metadata. The program never invents VBV values. Without those prerequisites, the extracted Profile 8.1 RPU is injected after encoding.
+- HDR10+ and Dolby Vision share one x265 encode only when both native paths and all Dolby Vision prerequisites exist. Both metadata sets are checked after the last injection and before muxing. x264 and x265 8-bit reject requested Dolby Vision; SVT-AV1 continues without it because the current toolchain cannot author AV1 Profile 10.
+- Managed x265 enables `ENABLE_HDR10_PLUS` in every linked core and advertises both Dolby Vision inputs. Its marker replaces older same-version managed builds missing those capabilities, while runtime probing preserves compatibility with independently compiled binaries.
+- Extraction, timeline, or verification failure keeps the normal static-HDR encode and retains useful non-empty JSON/RPU artifacts under the row policy. Verified temporary metadata is removed only after successful final muxing.
+
+### Final Verification and Row Reliability
+
+- After the formal MKV is published, FFprobe compares only static fields supplied automatically; manual GUI values are not judged against source metadata. Active HDR10+ is rechecked on the MKV, and active Dolby Vision must report Profile 8 with an RPU frame count matching VPy output.
+- A final-container metadata mismatch retains the MKV, aggregates all failures into one non-overwriting HDR report and row warning, marks the row complete with warnings, and lets later rows continue. Failed encoding, broken intermediates, and failed final muxing remain row failures.
+- Every row records source, planned output, status, warnings, report path, and retained artifacts. After request-wide preflight, encoder, Dolby Vision, copy, audio-conversion, and final-mux failures are isolated to the affected row and create a numbered `<output-name>.encode-error.txt`; later visible rows continue.
+- Elementary streams use collision-resistant `.partial.<id>` names. Non-empty streams, partial containers, audio work files, HDR10+ JSON, RPU data, and partial injected streams survive row failure or cancellation and are listed in the report. Zero-byte files are removed; successful rows clean only their own artifacts.
+- Cancellation still stops all remaining rows and does not become an ordinary failure. Unsafe request-wide conditions still stop before execution. Blu-ray staging remains when any row fails, and the GUI presents one aggregate result only after Worker cleanup.
+
+### Redundant or Conflicting Paths Removed
+
+- Reused one actual-source probe, parser/planner, HDR10+ verifier, Dolby Vision extractor, warning writer, and row outcome model. Separate per-input metadata paths, duplicate dynamic-metadata command paths, and the first draft's reverse CLI-mapping table were removed or not retained.
+- Removed delete-on-encoder-failure and unconditional Dolby Vision cleanup. Row exceptions now use one result/report boundary, while cancellation and request-wide safety remain explicit batch stops.
+- Final static, HDR10+, and Dolby Vision failures share one warning/report. Checks before and after injection or final mux remain separate because they validate different artifacts.
+
+### Documentation and Verification
+
+- Synchronized both README versions, relevant Wiki pages, and bilingual i18n for discovery, planning, dynamic metadata, row outcomes, reports, and final verification.
+- Focused coverage includes source selection and probe failure, encoder mappings and manual precedence, VPy changes, row continuation/cancellation and artifact retention, native and post-injected HDR10+/Dolby Vision, custom-x265 and settings-path capability checks, and final-container warnings. The final repository run passed all 240 tests; Python compilation, i18n and split-contract audits, diff checks, and line-ending checks passed.
+- Real-tool checks wrote BT.2020/PQ metadata with current x264, x265, and SVT-AV1; probed a three-frame VapourSynth R57 script; rejected an older x265 that omitted HDR10+; and confirmed the rebuilt x265 wrote nine HDR10+ and nine Profile 8 RPU frames into one stream.
+- An official 259-frame fixture verified post-injection without losing Profile 8 RPU data. Its final MKV passed static HDR, HDR10+, Dolby Vision Profile 8, and 259-frame RPU verification together.
+
+### Manual Media Checks Still Required
+
+- Run short GUI Encodes from representative Remux, Blu-ray, and Dolby Vision sources; confirm actual-source reporting, final static signaling for each encoder, and manual-parameter precedence.
+- Use disposable VPys that change primaries/transfer and vary sampled properties; confirm stale metadata removal, row-local failure for inconsistent samples, and later-row continuation.
+- Exercise HDR10+, Dolby Vision, and combined output with and without native VBV prerequisites. Repeat with a disposable custom x265 lacking native dynamic-metadata options, then restore the intended binary.
+- Deliberately fail source probing, planning, final verification, encoding, injection, audio/final muxing, and one multi-row cancellation. Inspect retained outputs/artifacts, numbered reports, Blu-ray staging, later-row behavior, and the single post-cleanup summary.

@@ -52,6 +52,7 @@ from src.core.encode_presets import (
 )
 from src.core.i18n import translate_text
 from src.core.version import APP_VERSION, is_newer_release, release_version
+from src.runtime.encode_source import probe_x265_dynamic_metadata_options
 
 
 GITHUB_LATEST_RELEASE_API = (
@@ -66,8 +67,6 @@ EXTERNAL_TOOL_PATH_NAMES = (
     "X264_PATH",
     "SVT_AV1_PATH",
     "FDK_AAC_PATH",
-    "DOVI_TOOL_PATH",
-    "HDR10PLUS_TOOL_PATH",
     "TRUEHDD_PATH",
     "VSEDIT_PATH",
     "VSPIPE_PATH",
@@ -538,7 +537,20 @@ class SettingsDialog(QDialog):
 
     def _refresh_external_tool_detection(self) -> None:
         missing: list[tuple[str, str]] = []
-        for name in EXTERNAL_TOOL_PATH_NAMES:
+        tool_path_names = list(EXTERNAL_TOOL_PATH_NAMES)
+        x265_options = probe_x265_dynamic_metadata_options(
+            str(core_settings.X265_PATH or "")
+        )
+        for name, required_options in (
+                ("HDR10PLUS_TOOL_PATH", {"--dhdr10-info"}),
+                ("DOVI_TOOL_PATH", {
+                    "--dolby-vision-profile",
+                    "--dolby-vision-rpu",
+                }),
+        ):
+            if required_options.issubset(x265_options):
+                tool_path_names.append(name)
+        for name in tool_path_names:
             raw_path = str(getattr(core_settings, name, "") or "").strip()
             expanded_path = os.path.expandvars(os.path.expanduser(raw_path))
             if not expanded_path or not (

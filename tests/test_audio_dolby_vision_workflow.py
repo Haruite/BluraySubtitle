@@ -12,6 +12,7 @@ from unittest.mock import patch
 from src.runtime.services import BluraySubtitle as _BluraySubtitle
 from src.runtime.audio_conversion import (
     AudioEncodingSettings,
+    AudioMuxFailure,
     _analyze_audio_track,
     _extract_selected_audio_tracks,
     mux_with_audio_conversion,
@@ -19,8 +20,11 @@ from src.runtime.audio_conversion import (
     validate_audio_conversion_tools,
 )
 from src.runtime.dolby_vision import (
+    DolbyVisionEncodePlan,
+    inject_dolby_vision_rpu,
     mux_dolby_vision_layers,
     prepare_dolby_vision_encode,
+    verify_dolby_vision_rpu,
 )
 from src.runtime.services_split.encode_and_audio_tasks import (
     encode_dovi_preflight_mkv_paths,
@@ -793,6 +797,49 @@ class AudioConversionTests(unittest.TestCase):
                 with self.assertRaisesRegex(FileNotFoundError, 'fdkaac'):
                     validate_audio_conversion_tools('source.mkv', ('1',), ('aac',))
 
+    def test_encode_mux_failure_retains_nonempty_partial_container(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source = root / 'source.mkv'
+            encoded_video = root / 'encoded.hevc'
+            output = root / 'output.mkv'
+            source.write_bytes(b'source')
+            encoded_video.write_bytes(b'hevc')
+            source_tracks = [_track(0, 'video', 'V_MPEGH/ISO/HEVC')]
+
+            def run_mux(command, **_kwargs):
+                Path(command[command.index('-o') + 1]).write_bytes(b'partial-mkv')
+                return SimpleNamespace(returncode=0)
+
+            with (
+                    patch(
+                        'src.runtime.audio_conversion._identify_tracks',
+                        side_effect=[source_tracks, RuntimeError('verification failed')],
+                    ),
+                    patch('src.runtime.audio_conversion.find_mkvtoolnix'),
+                    patch('src.runtime.audio_conversion.core_settings.MKV_MERGE_PATH', 'mkvmerge'),
+                    patch('src.runtime.audio_conversion.run_command', side_effect=run_mux),
+            ):
+                with self.assertRaisesRegex(
+                        AudioMuxFailure,
+                        'verification failed',
+                ) as failure:
+                    mux_with_audio_conversion(
+                        str(source),
+                        str(output),
+                        selected_audio_tracks=(),
+                        selected_subtitle_tracks=(),
+                        audio_codec_choices=(),
+                        encoded_video_file=str(encoded_video),
+                        preserve_failure_artifacts=True,
+                    )
+
+            self.assertFalse(output.exists())
+            self.assertEqual(len(failure.exception.artifact_paths), 1)
+            partial_output = Path(failure.exception.artifact_paths[0])
+            self.assertEqual(partial_output.read_bytes(), b'partial-mkv')
+            self.assertTrue(partial_output.parent.name.startswith('_audio_convert_'))
+
 
 class AudioAnalysisTests(unittest.TestCase):
     def test_selected_audio_is_extracted_in_one_source_pass(self) -> None:
@@ -904,19 +951,64 @@ class DolbyVisionTests(unittest.TestCase):
 
             def run_dovi(command, **_kwargs):
                 commands.append(list(command))
-                Path(command[command.index('-o') + 1]).write_bytes(b'combined')
-                return SimpleNamespace(returncode=0)
+                if 'mux' in command:
+                    Path(command[command.index('-o') + 1]).write_bytes(b'combined')
+                    return SimpleNamespace(returncode=0)
+                if 'extract-rpu' in command:
+                    Path(command[command.index('-o') + 1]).write_bytes(b'rpu')
+                    return SimpleNamespace(returncode=0)
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout='Frames: 259\nProfile: 8\n',
+                    stderr='',
+                )
 
             with (
                     patch('src.runtime.dolby_vision.dolby_vision_tool_path', return_value='dovi_tool'),
                     patch('src.runtime.dolby_vision.run_command', side_effect=run_dovi),
             ):
                 mux_dolby_vision_layers(str(base_layer), str(enhancement_layer))
+                verify_dolby_vision_rpu(str(base_layer), 259, 8)
+                with self.assertRaisesRegex(RuntimeError, 'profile'):
+                    verify_dolby_vision_rpu(str(base_layer), 259, 7)
 
             self.assertEqual(base_layer.read_bytes(), b'combined')
             self.assertEqual(commands[0][1:4], ['-m', '2', 'mux'])
             self.assertIn('--discard', commands[0])
+            self.assertIn('extract-rpu', commands[1])
+            self.assertEqual(commands[2][1:3], ['info', '-s'])
             self.assertEqual(list(root.glob('*.dovi-temp.hevc')), [])
+
+    def test_failed_rpu_injection_retains_nonempty_partial_stream(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            encoded_stream = root / 'encoded.hevc'
+            rpu_path = root / 'rpu.bin'
+            encoded_stream.write_bytes(b'encoded')
+            rpu_path.write_bytes(b'rpu')
+            plan = DolbyVisionEncodePlan(
+                str(encoded_stream),
+                str(rpu_path),
+                str(root),
+            )
+
+            def fail_injection(command, **_kwargs):
+                Path(command[command.index('-o') + 1]).write_bytes(b'partial')
+                return SimpleNamespace(returncode=1)
+
+            with (
+                    patch('src.runtime.dolby_vision.dolby_vision_tool_path', return_value='dovi_tool'),
+                    patch('src.runtime.dolby_vision.run_command', side_effect=fail_injection),
+            ):
+                with self.assertRaisesRegex(RuntimeError, 'injected HEVC output'):
+                    inject_dolby_vision_rpu(str(encoded_stream), plan)
+
+            self.assertEqual(encoded_stream.read_bytes(), b'encoded')
+            self.assertEqual(
+                Path(str(encoded_stream) + '.dovi.hevc').read_bytes(),
+                b'partial',
+            )
+
     def test_preparation_uses_profile_81_mode_and_task_owned_folders(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

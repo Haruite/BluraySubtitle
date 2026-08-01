@@ -1,4 +1,4 @@
-﻿"""Static contracts for the bundled x264/x265 toolchains and documentation."""
+"""Static contracts for the bundled x264/x265 toolchains and documentation."""
 
 from __future__ import annotations
 
@@ -51,9 +51,11 @@ class EncoderToolchainTests(unittest.TestCase):
             'version_file="/usr/bin/x264-version.txt"',
             "--bit-depth=all",
             "--chroma-format=all",
-            "-DENABLE_HDR10_PLUS=OFF",
             "-DENABLE_HDR10_PLUS=ON",
+            "hdr10plus-all-depths",
             "--dhdr10-info",
+            "--dolby-vision-profile",
+            "--dolby-vision-rpu",
             'installed_help="$(/usr/bin/x265 --help 2>&1 || true)"',
             "install_hdr10plus_tool",
             HDR10PLUS_REPOSITORY,
@@ -73,6 +75,7 @@ class EncoderToolchainTests(unittest.TestCase):
             self.assertNotIn(removed_pin, self.linux_setup)
         self.assertNotIn("Yuuki-Asuna", self.linux_setup)
         self.assertNotIn("cmake4-patched", self.linux_setup)
+        self.assertNotIn("-DENABLE_HDR10_PLUS=OFF", self.linux_setup)
 
     def test_docker_builds_at_original_positions_on_ubuntu_26_04(self) -> None:
         self.assertEqual(self.dockerfile.count("FROM "), 1)
@@ -86,9 +89,10 @@ class EncoderToolchainTests(unittest.TestCase):
             "-DCMAKE_POLICY_VERSION_MINIMUM=3.10",
             'json11_source="$source_root/dynamicHDR10/json11/json11.cpp"',
             "sed -i '/^#include <limits>$/a #include <cstdint>'",
-            "-DENABLE_HDR10_PLUS=OFF",
             "-DENABLE_HDR10_PLUS=ON",
             "--dhdr10-info",
+            "--dolby-vision-profile",
+            "--dolby-vision-rpu",
             'x265_help="$(/usr/bin/x265 --help 2>&1 || true)"',
             HDR10PLUS_REPOSITORY,
             "unknown-linux-musl.tar.gz",
@@ -126,6 +130,7 @@ class EncoderToolchainTests(unittest.TestCase):
             "ARG X265_SOURCE",
         ):
             self.assertNotIn(removed, self.dockerfile)
+        self.assertNotIn("-DENABLE_HDR10_PLUS=OFF", self.dockerfile)
 
     def test_windows_setup_tracks_latest_sources_and_preserves_paths(self) -> None:
         for fragment in (
@@ -141,6 +146,8 @@ class EncoderToolchainTests(unittest.TestCase):
             "#include <cstdint>",
             "-DENABLE_HDR10_PLUS=ON",
             "--dhdr10-info",
+            "--dolby-vision-profile",
+            "--dolby-vision-rpu",
         ):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, self.windows_setup)

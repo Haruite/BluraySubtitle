@@ -1239,7 +1239,7 @@ __build_x265_official_multilib() {
       -DHIGH_BIT_DEPTH=ON \
       -DEXPORT_C_API=OFF \
       -DENABLE_SHARED=OFF \
-      -DENABLE_HDR10_PLUS=OFF \
+      -DENABLE_HDR10_PLUS=ON \
       -DENABLE_CLI=OFF \
       -DMAIN12=ON \
       -DENABLE_LIBNUMA=OFF || return $?
@@ -1252,7 +1252,7 @@ __build_x265_official_multilib() {
       -DHIGH_BIT_DEPTH=ON \
       -DEXPORT_C_API=OFF \
       -DENABLE_SHARED=OFF \
-      -DENABLE_HDR10_PLUS=OFF \
+      -DENABLE_HDR10_PLUS=ON \
       -DENABLE_CLI=OFF \
       -DENABLE_LIBNUMA=OFF || return $?
   tmux_run "$(msg 'x265 10-bit: make' 'x265 10-bit：make')" make || return $?
@@ -1314,6 +1314,7 @@ EOF
     cp "$_x265_out" /usr/bin/ || return $?
     chmod +x /usr/bin/x265 || return $?
   fi
+  printf '%s\n' 'hdr10plus-all-depths' | bluray_sudo tee /usr/bin/x265-build-features.txt >/dev/null || return $?
 }
 
 install_x265() {
@@ -1328,7 +1329,11 @@ install_x265() {
   fi
   if [[ "$installed_output" == *"encoder version ${x265_version}"* &&
         "$installed_output" == *"8bit+10bit+12bit"* &&
-        "$installed_help" == *"--dhdr10-info"* ]]; then
+        "$installed_help" == *"--dhdr10-info"* &&
+        "$installed_help" == *"--dolby-vision-profile"* &&
+        "$installed_help" == *"--dolby-vision-rpu"* &&
+        -f /usr/bin/x265-build-features.txt ]] &&
+        grep -Fxq 'hdr10plus-all-depths' /usr/bin/x265-build-features.txt; then
     log "$(msg "Latest official x265 ${x265_version} is already installed; skipping build." "已安装最新官方 x265 ${x265_version}，跳过编译。")"
     return 0
   fi
@@ -1355,6 +1360,11 @@ install_x265() {
   installed_help="$(/usr/bin/x265 --help 2>&1 || true)"
   [[ "$installed_help" == *"--dhdr10-info"* ]] || \
     die "$(msg 'Installed x265 native HDR10+ verification failed' '安装后的 x265 原生 HDR10+ 验证失败')"
+  [[ "$installed_help" == *"--dolby-vision-profile"* &&
+     "$installed_help" == *"--dolby-vision-rpu"* ]] || \
+    die "$(msg 'Installed x265 native Dolby Vision verification failed' '安装后的 x265 原生 Dolby Vision 验证失败')"
+  grep -Fxq 'hdr10plus-all-depths' /usr/bin/x265-build-features.txt || \
+    die "$(msg 'Installed x265 HDR10+ core verification failed' '安装后的 x265 HDR10+ 核心验证失败')"
   log "$(msg 'x265 installation successful!' 'x265 安装成功！')"
 }
 

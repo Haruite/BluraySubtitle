@@ -36,6 +36,15 @@ class AudioEncodingSettings:
             raise ValueError("Opus bitrate must be from 0 to 1024 kbps")
 
 
+class AudioMuxFailure(RuntimeError):
+    """Final-mux failure whose non-empty task artifacts remain recoverable."""
+
+    def __init__(self, message: str, artifact_paths: tuple[str, ...]) -> None:
+        super().__init__(message)
+        self.stage = 'Final Matroska mux'
+        self.artifact_paths = artifact_paths
+
+
 def _identify_tracks(media_path: str) -> list[dict[str, object]]:
     find_mkvtoolnix()
     mkvmerge = str(core_settings.MKV_MERGE_PATH or '').strip() or shutil.which('mkvmerge') or ''
@@ -369,6 +378,7 @@ def mux_with_audio_conversion(
         subtitle_file: str = '',
         subtitle_language: str = '',
         audio_encoding: AudioEncodingSettings = AudioEncodingSettings(),
+        preserve_failure_artifacts: bool = False,
 ) -> None:
     """Clean selected audio, convert requested lossless tracks, and mux atomically."""
     source_path = os.path.abspath(os.path.normpath(source_file))
@@ -429,6 +439,7 @@ def mux_with_audio_conversion(
     temporary_output = os.path.join(work_folder, f'result{output_extension}')
     replacement_by_track: dict[int, tuple[str, str]] = {}
     expected_audio_codecs: list[str | None] = []
+    keep_work_folder = False
     try:
         find_mkvtoolnix()
         mkvextract = str(core_settings.MKV_EXTRACT_PATH or '').strip() or shutil.which('mkvextract') or ''
@@ -875,12 +886,29 @@ def mux_with_audio_conversion(
                     )
                 )
         os.replace(temporary_output, output_path)
+    except Exception as error:
+        if preserve_failure_artifacts:
+            artifact_paths = tuple(
+                os.path.join(current_folder, filename)
+                for current_folder, _directories, filenames in os.walk(work_folder)
+                for filename in filenames
+                if (
+                    os.path.isfile(os.path.join(current_folder, filename))
+                    and os.path.getsize(os.path.join(current_folder, filename)) > 0
+                )
+            )
+            if artifact_paths:
+                keep_work_folder = True
+                raise AudioMuxFailure(str(error), artifact_paths) from error
+        raise
     finally:
-        shutil.rmtree(work_folder, ignore_errors=True)
+        if not keep_work_folder:
+            shutil.rmtree(work_folder, ignore_errors=True)
 
 
 __all__ = [
     'AudioEncodingSettings',
+    'AudioMuxFailure',
     'mux_with_audio_conversion',
     'validate_audio_cleanup_tools',
     'validate_audio_conversion_tools',

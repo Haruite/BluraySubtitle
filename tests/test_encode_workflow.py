@@ -12,7 +12,15 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from src.runtime.audio_conversion import AudioEncodingSettings
+from src.runtime.dolby_vision import DolbyVisionEncodePlan
 from src.runtime.encode import EncodeRequest, EncodeRow, EncodeSettings, validate_encode_request
+from src.runtime.encode_results import (
+    EncodeBatchResult,
+    EncodeRowResult,
+    EncodeTaskFailure,
+)
+from src.runtime.encode_source import ActualEncodeSource
+from src.runtime import TaskCancelled
 from src.runtime.services import BluraySubtitle as _BluraySubtitle
 from src.runtime.services_split.encode_and_audio_tasks import EncodeAudioTasksMixin
 from src.runtime.services_split.remux_and_episode_workflows import RemuxEpisodeWorkflowsMixin
@@ -34,6 +42,8 @@ class _EncodeWorkerCapture:
         self.progress = _Signal()
         self.label = _Signal()
         self.finished = _Signal()
+        self.finished_with_warnings = _Signal()
+        self.finished_with_errors = _Signal()
         self.canceled = _Signal()
         self.failed = _Signal()
 
@@ -65,9 +75,32 @@ def _settings() -> EncodeSettings:
     )
 
 
+def _actual_source(
+        path: str,
+        codec_name: str = 'hevc',
+        stream_metadata: dict | None = None,
+) -> ActualEncodeSource:
+    normalized_path = os.path.abspath(os.path.normpath(path))
+    stream = {'index': 0, 'codec_name': codec_name}
+    stream.update(stream_metadata or {})
+    return ActualEncodeSource(
+        normalized_path,
+        0,
+        codec_name,
+        stream,
+    )
+
+
 class _RowEncodeService(RemuxEpisodeWorkflowsMixin):
-    def __init__(self, create_outputs: bool = True) -> None:
+    def __init__(
+            self,
+            create_outputs: bool = True,
+            failing_outputs: tuple[str, ...] = (),
+            cancel_outputs: tuple[str, ...] = (),
+    ) -> None:
         self.create_outputs = create_outputs
+        self.failing_outputs = set(failing_outputs)
+        self.cancel_outputs = set(cancel_outputs)
         self.encode_calls: list[tuple[str, str]] = []
         self.progress_messages: list[str] = []
 
@@ -80,13 +113,24 @@ class _RowEncodeService(RemuxEpisodeWorkflowsMixin):
 
     def encode_task(self, output_file, _vpy_path, *_args, source_file=None, **_kwargs):
         self.encode_calls.append((source_file, output_file))
+        if output_file in self.cancel_outputs:
+            raise TaskCancelled()
+        if output_file in self.failing_outputs:
+            artifact_path = output_file + '.partial.test.hevc'
+            Path(artifact_path).write_bytes(b'partial')
+            raise EncodeTaskFailure(
+                'Video encoding',
+                'simulated encoder failure',
+                (artifact_path,),
+            )
         if self.create_outputs:
             Path(output_file).write_bytes(b'encoded')
 
 
 class _BdmvEncodeService(_RowEncodeService):
-    def __init__(self) -> None:
+    def __init__(self, batch_result: EncodeBatchResult = EncodeBatchResult(())) -> None:
         super().__init__()
+        self.batch_result = batch_result
         self.stage_request = None
         self.resolved_rows = None
 
@@ -108,6 +152,8 @@ class _BdmvEncodeService(_RowEncodeService):
 
     def _encode_mkv_rows(self, request, main_rows, sp_rows, cancel_event, **_kwargs):
         self.resolved_rows = (request, main_rows, sp_rows, cancel_event)
+        self.encode_warnings = []
+        return self.batch_result
 
 
 class _PipelineService(EncodeAudioTasksMixin):
@@ -129,6 +175,14 @@ class _PipelineService(EncodeAudioTasksMixin):
 
 
 class EncodeWorkflowTests(unittest.TestCase):
+    def setUp(self) -> None:
+        vpy_probe = patch(
+            'src.runtime.services_split.encode_and_audio_tasks.probe_vapoursynth_output_metadata',
+            side_effect=lambda source, *_args: (source, False, (1, 24, 1)),
+        )
+        self.vpy_probe = vpy_probe.start()
+        self.addCleanup(vpy_probe.stop)
+
     def test_gui_captures_bdmv_rows_in_one_request_without_hidden_checkbox(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -432,13 +486,14 @@ class EncodeWorkflowTests(unittest.TestCase):
             with patch(
                     'src.runtime.services_split.encode_and_audio_tasks.encode_dovi_preflight_mkv_paths',
                     return_value=None):
-                with self.assertRaisesRegex(RuntimeError, 'Encode output is missing'):
-                    service._encode_mkv_rows(
-                        missing_request,
-                        [missing_row],
-                        [],
-                        threading.Event(),
-                    )
+                result = service._encode_mkv_rows(
+                    missing_request,
+                    [missing_row],
+                    [],
+                    threading.Event(),
+                )
+            self.assertEqual(result.rows[0].status, 'failed')
+            self.assertIn('Encode output is missing', result.rows[0].message)
 
     def test_remux_resume_skips_existing_subtitles_and_companion_files(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -506,6 +561,112 @@ class EncodeWorkflowTests(unittest.TestCase):
                 f'Skipping existing output: {companion_destination}',
                 service.progress_messages,
             )
+
+    def test_row_failure_retains_artifacts_and_continues_later_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_folder = root / 'source'
+            output_folder = root / 'output'
+            source_folder.mkdir()
+            output_folder.mkdir()
+            first_source = source_folder / 'first.mkv'
+            second_source = source_folder / 'second.mkv'
+            vpy_path = root / 'encode.vpy'
+            first_source.write_bytes(b'first')
+            second_source.write_bytes(b'second')
+            vpy_path.write_text('a = r""\n', encoding='utf-8')
+            first_output = output_folder / 'First.mkv'
+            second_output = output_folder / 'Second.mkv'
+            rows = (
+                EncodeRow(str(first_source), str(first_output), str(vpy_path)),
+                EncodeRow(str(second_source), str(second_output), str(vpy_path)),
+            )
+            request = EncodeRequest(
+                input_mode='remux',
+                source_root=str(source_folder),
+                output_folder=str(output_folder),
+                staging_folder='',
+                main_rows=rows,
+                sp_rows=(),
+                settings=_settings(),
+            )
+            service = _RowEncodeService(
+                failing_outputs=(str(first_output),),
+            )
+
+            with patch(
+                    'src.runtime.services_split.encode_and_audio_tasks.encode_dovi_preflight_mkv_paths',
+                    return_value=None):
+                result = service._encode_mkv_rows(
+                    request,
+                    list(rows),
+                    [],
+                    threading.Event(),
+                )
+
+            self.assertEqual(
+                [row.status for row in result.rows],
+                ['failed_with_artifacts', 'completed'],
+            )
+            self.assertEqual(len(service.encode_calls), 2)
+            self.assertTrue(second_output.is_file())
+            self.assertTrue(Path(result.rows[0].artifact_paths[0]).is_file())
+            self.assertTrue(Path(result.rows[0].report_path).is_file())
+            report_text = Path(result.rows[0].report_path).read_text(encoding='utf-8')
+            self.assertIn('simulated encoder failure', report_text)
+            self.assertIn(result.rows[0].artifact_paths[0], report_text)
+
+    def test_cancellation_stops_later_rows_without_converting_it_to_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_folder = root / 'source'
+            output_folder = root / 'output'
+            source_folder.mkdir()
+            output_folder.mkdir()
+            first_source = source_folder / 'first.mkv'
+            second_source = source_folder / 'second.mkv'
+            vpy_path = root / 'encode.vpy'
+            first_source.write_bytes(b'first')
+            second_source.write_bytes(b'second')
+            vpy_path.write_text('a = r""\n', encoding='utf-8')
+            first_output = output_folder / 'First.mkv'
+            rows = (
+                EncodeRow(str(first_source), str(first_output), str(vpy_path)),
+                EncodeRow(
+                    str(second_source),
+                    str(output_folder / 'Second.mkv'),
+                    str(vpy_path),
+                ),
+            )
+            request = EncodeRequest(
+                input_mode='remux',
+                source_root=str(source_folder),
+                output_folder=str(output_folder),
+                staging_folder='',
+                main_rows=rows,
+                sp_rows=(),
+                settings=_settings(),
+            )
+            service = _RowEncodeService(
+                cancel_outputs=(str(first_output),),
+            )
+
+            with patch(
+                    'src.runtime.services_split.encode_and_audio_tasks.encode_dovi_preflight_mkv_paths',
+                    return_value=None):
+                with self.assertRaises(TaskCancelled):
+                    service._encode_mkv_rows(
+                        request,
+                        list(rows),
+                        [],
+                        threading.Event(),
+                    )
+
+            self.assertEqual(
+                service.encode_calls,
+                [(str(first_source), str(first_output))],
+            )
+            self.assertEqual(list(output_folder.glob('*.encode-error*.txt')), [])
 
     def test_bdmv_encode_uses_exact_rows_and_never_completes_source_folder(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -581,6 +742,50 @@ class EncodeWorkflowTests(unittest.TestCase):
                 for message in service.progress_messages
             ))
 
+    def test_bdmv_staging_is_retained_when_an_encode_row_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_folder = root / 'Disc'
+            source_folder.mkdir()
+            output_folder = root / 'output' / 'Disc'
+            staging_folder = root / 'output' / '_encode_remux_stage'
+            request = EncodeRequest(
+                input_mode='bdmv',
+                source_root=str(source_folder),
+                output_folder=str(output_folder),
+                staging_folder=str(staging_folder),
+                main_rows=(EncodeRow(
+                    source_path='',
+                    output_path=str(output_folder / 'Episode.mkv'),
+                    vpy_path=str(root / 'encode.vpy'),
+                    configuration_key=0,
+                    configuration={
+                        'bdmv_index': 1,
+                        'selected_mpls': '00001',
+                        'start_at_chapter': 1,
+                    },
+                ),),
+                sp_rows=(),
+                settings=_settings(),
+                selected_mpls=((str(source_folder), '00001'),),
+            )
+            failed_result = EncodeBatchResult((EncodeRowResult(
+                row_type='Main row',
+                source_path='',
+                output_path=str(output_folder / 'Episode.mkv'),
+                status='failed',
+            ),))
+            service = _BdmvEncodeService(failed_result)
+
+            result = service.episodes_encode(request, threading.Event())
+
+            self.assertIs(result, failed_result)
+            self.assertTrue((staging_folder / 'Disc' / 'Episode.mkv').is_file())
+            self.assertTrue(any(
+                'Blu-ray staging files were retained' in message
+                for message in service.encode_warnings
+            ))
+
     def test_remux_svt_encode_omits_dolby_vision_injection_with_a_warning(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -602,11 +807,12 @@ class EncodeWorkflowTests(unittest.TestCase):
                         return_value=0,
                     ),
                     patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.probe_actual_encode_source',
+                        side_effect=_actual_source,
+                    ) as source_probe,
+                    patch(
                         'src.runtime.services_split.encode_and_audio_tasks.prepare_dolby_vision_encode'
                     ) as prepare_dolby_vision,
-                    patch(
-                        'src.runtime.services_split.encode_and_audio_tasks.inject_dolby_vision_rpu'
-                    ) as inject_dolby_vision,
                     patch(
                         'src.runtime.services_split.encode_and_audio_tasks._write_vpy_video_source_a',
                         return_value=True,
@@ -646,26 +852,211 @@ class EncodeWorkflowTests(unittest.TestCase):
                 )
 
             prepare_dolby_vision.assert_not_called()
-            inject_dolby_vision.assert_not_called()
+            source_probe.assert_called_once_with(str(source_path))
             final_mux.assert_called_once()
             self.assertTrue(any(
                 'Dolby Vision metadata will not be retained for SVT-AV1 output' in message
                 for message in service.progress_messages
             ))
 
-    def test_encoder_failure_stops_before_audio_or_mux(self) -> None:
+    def test_custom_x265_without_dynamic_options_uses_post_injection(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_path = root / 'source.mkv'
+            output_path = root / 'output.mkv'
+            vpy_path = root / 'encode.vpy'
+            work_folder = root / 'dovi-work'
+            base_layer = work_folder / 'base-layer.hevc'
+            rpu_path = work_folder / 'rpu.bin'
+            source_path.write_bytes(b'mkv')
+            vpy_path.write_text('a = r""\n', encoding='utf-8')
+            work_folder.mkdir()
+            base_layer.write_bytes(b'hevc')
+            rpu_path.write_bytes(b'rpu')
+            plan = DolbyVisionEncodePlan(
+                str(base_layer),
+                str(rpu_path),
+                str(work_folder),
+            )
+            service = _PipelineService()
+
+            def encode_video(_vspipe, _vpy, encoder_command, environment):
+                self.assertEqual(
+                    environment['BLURAYSUB_VPY_SOURCE'],
+                    os.path.normpath(str(base_layer)),
+                )
+                self.assertEqual(
+                    encoder_command[
+                        encoder_command.index('--colorprim'):
+                        encoder_command.index('--colorprim') + 2
+                    ],
+                    ['--colorprim', 'bt2020'],
+                )
+                self.assertEqual(
+                    encoder_command[
+                        encoder_command.index('--transfer'):
+                        encoder_command.index('--transfer') + 2
+                    ],
+                    ['--transfer', 'smpte2084'],
+                )
+                self.assertNotIn('--dhdr10-info', encoder_command)
+                self.assertNotIn('--dolby-vision-profile', encoder_command)
+                self.assertNotIn('--dolby-vision-rpu', encoder_command)
+                Path(encoder_command[encoder_command.index('-o') + 1]).write_bytes(b'hevc')
+                return 0
+
+            def probe_source(path):
+                return _actual_source(
+                    path,
+                    stream_metadata={
+                        'color_range': 'tv',
+                        'color_primaries': 'bt2020',
+                        'color_transfer': 'smpte2084',
+                        'color_space': 'bt2020nc',
+                        'avg_frame_rate': '24/1',
+                        'side_data_list': [
+                            {
+                                'side_data_type': 'Mastering display metadata',
+                                'green_x': '13250/50000',
+                                'green_y': '34500/50000',
+                                'blue_x': '7500/50000',
+                                'blue_y': '3000/50000',
+                                'red_x': '34000/50000',
+                                'red_y': '16000/50000',
+                                'white_point_x': '15635/50000',
+                                'white_point_y': '16450/50000',
+                                'max_luminance': '10000000/10000',
+                                'min_luminance': '50/10000',
+                            },
+                            {
+                                'side_data_type':
+                                    'HDR Dynamic Metadata SMPTE2094-40 (HDR10+)',
+                            },
+                        ],
+                    },
+                )
+
+            def extract_hdr10plus(_source, path, _timeline):
+                Path(path).write_text('{"SceneInfo": [{}]}', encoding='utf-8')
+                return path
+
+            with (
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.MediaInfoTrackMappingMixin.mkvinfo_dolby_vision_track_id',
+                        return_value=0,
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.prepare_dolby_vision_encode',
+                        return_value=plan,
+                    ) as prepare_dolby_vision,
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.probe_actual_encode_source',
+                        side_effect=probe_source,
+                    ) as source_probe,
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.extract_hdr10plus_metadata',
+                        side_effect=extract_hdr10plus,
+                    ) as hdr10plus_extract,
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.inject_hdr10plus_metadata',
+                    ) as hdr10plus_inject,
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.verify_hdr10plus_metadata',
+                    ) as hdr10plus_verify,
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.verify_final_video_metadata',
+                        side_effect=RuntimeError('final static metadata mismatch'),
+                    ) as final_video_verify,
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.verify_dolby_vision_rpu'
+                    ) as dolby_vision_verify,
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.inject_dolby_vision_rpu'
+                    ) as dolby_vision_inject,
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks._write_vpy_video_source_a',
+                        return_value=True,
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.get_vspipe_context',
+                        return_value=('vspipe', {}),
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.resolve_encoder_executable_path',
+                        return_value='x265',
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.probe_x265_dynamic_metadata_options',
+                        return_value=frozenset(),
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks._run_vspipe_piped_encode',
+                        side_effect=encode_video,
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.mux_with_audio_conversion'
+                    ) as final_mux,
+            ):
+                service.encode_task(
+                    str(output_path),
+                    str(vpy_path),
+                    'bundle',
+                    'bundle',
+                    '--crf 18 --vbv-maxrate 30000 --vbv-bufsize 30000',
+                    'external',
+                    encoder='x265',
+                    bit_depth='10',
+                    selected_audio_tracks=(),
+                    selected_subtitle_tracks=(),
+                    audio_codec_choices=(),
+                    track_language_overrides=(),
+                    source_file=str(source_path),
+                )
+
+            prepare_dolby_vision.assert_called_once_with(str(source_path), 0, str(root))
+            source_probe.assert_called_once_with(str(base_layer))
+            self.assertEqual(self.vpy_probe.call_args.args[0].path, str(base_layer))
+            hdr10plus_extract.assert_called_once()
+            hdr10plus_inject.assert_called_once()
+            hdr10plus_verify.assert_called_once()
+            final_video_verify.assert_called_once()
+            self.assertEqual(dolby_vision_verify.call_count, 3)
+            dolby_vision_inject.assert_called_once()
+            final_mux.assert_called_once()
+            self.assertFalse(work_folder.exists())
+            self.assertEqual(list(root.glob('*.hdr10plus.json')), [])
+            self.assertEqual(len(list(root.glob('output.hdr-metadata-error*.txt'))), 1)
+            self.assertTrue(any(
+                'Final HDR metadata verification failed' in message
+                for message in service.encode_warnings
+            ))
+            self.assertTrue(any(
+                'Actual encode source: base-layer.hevc' in message
+                for message in service.progress_messages
+            ))
+
+    def test_source_probe_failure_writes_report_and_encoding_continues(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             source_path = root / 'source.mkv'
             output_path = root / 'output.mkv'
             vpy_path = root / 'encode.vpy'
             source_path.write_bytes(b'mkv')
-            vpy_path.write_text('a = r""\nres = core.fmtc.bitdepth(src8, bits=10)\n', encoding='utf-8')
+            vpy_path.write_text('a = r""\n', encoding='utf-8')
             service = _PipelineService()
+
+            def encode_video(_vspipe, _vpy, encoder_command, _environment):
+                Path(encoder_command[encoder_command.index('-o') + 1]).write_bytes(b'hevc')
+                return 0
+
             with (
                     patch(
                         'src.runtime.services_split.encode_and_audio_tasks.MediaInfoTrackMappingMixin.mkvinfo_dolby_vision_track_id',
                         return_value=None,
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.probe_actual_encode_source',
+                        side_effect=RuntimeError('ffprobe failed'),
                     ),
                     patch(
                         'src.runtime.services_split.encode_and_audio_tasks._write_vpy_video_source_a',
@@ -681,10 +1072,154 @@ class EncodeWorkflowTests(unittest.TestCase):
                     ),
                     patch(
                         'src.runtime.services_split.encode_and_audio_tasks._run_vspipe_piped_encode',
-                        return_value=7,
+                        side_effect=encode_video,
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.mux_with_audio_conversion'
+                    ) as final_mux,
+            ):
+                service.encode_task(
+                    str(output_path),
+                    str(vpy_path),
+                    'bundle',
+                    'bundle',
+                    '--crf 18',
+                    'external',
+                    encoder='x265',
+                    bit_depth='10',
+                    selected_audio_tracks=(),
+                    selected_subtitle_tracks=(),
+                    audio_codec_choices=(),
+                    track_language_overrides=(),
+                    source_file=str(source_path),
+                )
+
+            final_mux.assert_called_once()
+            reports = list(root.glob('output.hdr-metadata-error*.txt'))
+            self.assertEqual(len(reports), 1)
+            self.assertIn('ffprobe failed', reports[0].read_text(encoding='utf-8'))
+            self.assertEqual(len(service.encode_warnings), 1)
+            self.assertIn('encoding will continue', service.encode_warnings[0])
+
+    def test_metadata_parameter_failure_writes_report_and_encoding_continues(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_path = root / 'source.mkv'
+            output_path = root / 'output.mkv'
+            vpy_path = root / 'encode.vpy'
+            source_path.write_bytes(b'mkv')
+            vpy_path.write_text('a = r""\n', encoding='utf-8')
+            service = _PipelineService()
+
+            def encode_video(_vspipe, _vpy, encoder_command, _environment):
+                self.assertNotIn('--colorprim', encoder_command)
+                Path(encoder_command[encoder_command.index('-o') + 1]).write_bytes(b'hevc')
+                return 0
+
+            with (
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.MediaInfoTrackMappingMixin.mkvinfo_dolby_vision_track_id',
+                        return_value=None,
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.probe_actual_encode_source',
+                        side_effect=_actual_source,
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.build_automatic_encoder_metadata_arguments',
+                        side_effect=RuntimeError('metadata planning failed'),
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks._write_vpy_video_source_a',
+                        return_value=True,
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.get_vspipe_context',
+                        return_value=('vspipe', {}),
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.resolve_encoder_executable_path',
+                        return_value='x265',
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks._run_vspipe_piped_encode',
+                        side_effect=encode_video,
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.mux_with_audio_conversion'
+                    ) as final_mux,
+            ):
+                service.encode_task(
+                    str(output_path),
+                    str(vpy_path),
+                    'bundle',
+                    'bundle',
+                    '--crf 18',
+                    'external',
+                    encoder='x265',
+                    bit_depth='10',
+                    selected_audio_tracks=(),
+                    selected_subtitle_tracks=(),
+                    audio_codec_choices=(),
+                    track_language_overrides=(),
+                    source_file=str(source_path),
+                )
+
+            final_mux.assert_called_once()
+            reports = list(root.glob('output.hdr-metadata-error*.txt'))
+            self.assertEqual(len(reports), 1)
+            report_text = reports[0].read_text(encoding='utf-8')
+            self.assertIn('Automatic encoder metadata parameter generation', report_text)
+            self.assertIn('metadata planning failed', report_text)
+            self.assertEqual(len(service.encode_warnings), 1)
+            self.assertIn(
+                'Automatic encoder metadata parameter generation failed',
+                service.encode_warnings[0],
+            )
+
+    def test_encoder_failure_stops_before_audio_or_mux(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_path = root / 'source.mkv'
+            output_path = root / 'output.mkv'
+            vpy_path = root / 'encode.vpy'
+            source_path.write_bytes(b'mkv')
+            vpy_path.write_text('a = r""\nres = core.fmtc.bitdepth(src8, bits=10)\n', encoding='utf-8')
+            service = _PipelineService()
+
+            def fail_encode(_vspipe, _vpy, encoder_command, _environment):
+                Path(encoder_command[encoder_command.index('-o') + 1]).write_bytes(
+                    b'partial-hevc'
+                )
+                return 7
+
+            with (
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.MediaInfoTrackMappingMixin.mkvinfo_dolby_vision_track_id',
+                        return_value=None,
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.probe_actual_encode_source',
+                        side_effect=_actual_source,
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks._write_vpy_video_source_a',
+                        return_value=True,
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.get_vspipe_context',
+                        return_value=('vspipe', {}),
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.resolve_encoder_executable_path',
+                        return_value='x265',
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks._run_vspipe_piped_encode',
+                        side_effect=fail_encode,
                     )
             ):
-                with self.assertRaisesRegex(RuntimeError, 'exit code 7'):
+                with self.assertRaisesRegex(EncodeTaskFailure, 'exit code 7') as failure:
                     service.encode_task(
                         str(output_path),
                         str(vpy_path),
@@ -703,7 +1238,11 @@ class EncodeWorkflowTests(unittest.TestCase):
                         source_file=str(source_path),
                     )
             self.assertFalse(output_path.exists())
-
+            self.assertEqual(len(failure.exception.artifact_paths), 1)
+            artifact_path = Path(failure.exception.artifact_paths[0])
+            self.assertTrue(artifact_path.name.startswith('output.partial.'))
+            self.assertEqual(artifact_path.suffix, '.hevc')
+            self.assertEqual(artifact_path.read_bytes(), b'partial-hevc')
 
 if __name__ == '__main__':
     unittest.main()

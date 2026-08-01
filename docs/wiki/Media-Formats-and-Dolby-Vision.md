@@ -427,16 +427,27 @@ For a Dolby Vision encode sourced from MKV, the project conceptually:
 1. identifies and extracts the HEVC video track;
 2. uses `dovi_tool` to demux/extract the base representation and RPU metadata;
 3. encodes the processed base video with a supported x265 output depth;
-4. injects the RPU metadata into the encoded HEVC stream; and
-5. muxes and verifies the final container.
+4. writes the RPU in that x265 run when the actual executable advertises the
+   native options and the VBV/mastering-display prerequisites are already
+   present, otherwise injects it afterward with `dovi_tool`;
+5. falls back to injection if native output verification fails, verifies the
+   encoded HEVC contains RPU metadata, and also verifies HDR10+ when the source
+   carried it; and
+6. muxes the final container, then requires profile 8 and an RPU frame count
+   matching the VPy output when it verifies that container. Active HDR10+ and
+   automatically supplied static fields are also checked again.
 
 For compatible dual-layer remux input, it uses `dovi_tool` mode 2 to create
 the supported single-layer profile 8.1 result; enhancement-layer picture
 residuals are not retained.
 
-Every generated intermediate is checked. Missing base-layer, RPU, combined, or
-injected output is treated as a failure rather than silently producing a
-non-Dolby-Vision file under a Dolby Vision request.
+Every generated intermediate is checked. Missing base-layer, RPU, combined,
+injected, or verified output is treated as a failure rather than silently
+producing a non-Dolby-Vision file under a Dolby Vision request.
+
+A final-container verification mismatch is handled differently from a broken
+intermediate: the published MKV is retained, the row completes with a warning,
+and a non-overwriting HDR report records the mismatch for diagnosis.
 
 ## Format identification checklist
 

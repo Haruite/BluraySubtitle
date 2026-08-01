@@ -1,4 +1,4 @@
-﻿# Video Encoding and VapourSynth
+# Video Encoding and VapourSynth
 
 [简体中文](Video-Encoding-and-VapourSynth.zh-Hans.md)
 
@@ -267,6 +267,31 @@ injects the actual source path and, when enabled, native-resolution information.
 The selected output bit depth is synchronized with the final
 `fmtc.bitdepth(..., bits=N)` conversion. Hardsub mode activates the
 `assrender.TextSub` line and supplies the selected subtitle path.
+
+Before starting the encoder, BluraySubtitle samples output 0's first, middle,
+and last frames. Stable `_ColorRange`, `_Primaries`, `_Transfer`, `_Matrix`, and
+`_ChromaLocation` properties take precedence over source metadata; missing
+properties fall back to the source. The row stops if the sampled values differ.
+
+When the actual source exposes HDR10+, x265 10/12-bit encoding extracts its
+validated JSON and checks the metadata frame count and source frame rate against
+the VPy timeline. The actual x265 executable is probed once per binary identity:
+when it advertises `--dhdr10-info`, the metadata is supplied during encoding;
+otherwise, or when native verification fails, `hdr10plus_tool` performs verified
+post-injection. Failures continue without dynamic metadata and retain non-empty
+JSON for diagnosis. Custom scripts using this path must preserve frame order.
+
+For combined HDR10+ and Dolby Vision output, x265 writes both in the same encode
+when its actual executable advertises both native paths and the row already has
+VBV and mastering-display parameters. Missing or unverified native support uses
+the existing injection tools without changing rate control. The HEVC is checked
+for both metadata sets after the last injection and before final muxing.
+
+After the final MKV is published, BluraySubtitle re-probes the static fields it
+added automatically and reruns the active dynamic-metadata checks. Dolby Vision
+must report profile 8 with the same RPU frame count as the VPy output. A mismatch
+retains the MKV, records a non-overwriting warning report, and lets later rows
+continue.
 
 ## Plugins used by the generated script
 
