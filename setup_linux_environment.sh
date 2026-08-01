@@ -1170,42 +1170,21 @@ EOF
 # ---------------------------------------------------------------------------
 
 __lsmash_is_installed() {
-  if pkg-config --exists liblsmash 2>/dev/null || pkg-config --exists lsmash 2>/dev/null; then
-    return 0
-  fi
-  if ldconfig -p 2>/dev/null | grep -qE '\bliblsmash\.so\b'; then
-    return 0
-  fi
-  if sudo ldconfig -p 2>/dev/null | grep -qE '\bliblsmash\.so\b'; then
-    return 0
-  fi
-  local _f
-  shopt -s nullglob
-  for _f in \
-    /usr/local/lib/liblsmash.so* \
-    /usr/lib/x86_64-linux-gnu/liblsmash.so* \
-    /usr/lib/aarch64-linux-gnu/liblsmash.so* \
-    /usr/lib/liblsmash.so* \
-    "${HOME}/.local/lib/liblsmash.so"*; do
-    if [[ -e "$_f" ]]; then
-      shopt -u nullglob
-      return 0
-    fi
-  done
-  shopt -u nullglob
-  return 1
+  command -v pkg-config >/dev/null 2>&1 && pkg-config --exists liblsmash 2>/dev/null
 }
 
 install_lsmash() {
   log "$(msg 'Installing L-SMASH (build from source)' '安装 lsmash（从源码编译并安装）')"
 
+  export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/aarch64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
+
   if __lsmash_is_installed; then
-    log "$(msg 'L-SMASH already installed (liblsmash detected), skipping build' \
-      '检测到 L-SMASH 已安装（liblsmash），跳过编译安装')"
+    log "$(msg 'L-SMASH already installed (liblsmash pkg-config metadata detected), skipping build' \
+      '检测到 L-SMASH 已安装（pkg-config 可识别 liblsmash），跳过编译安装')"
     return 0
   fi
 
-  local deps=(build-essential git)
+  local deps=(build-essential git pkg-config)
   local missing_deps=()
   for dep in "${deps[@]}"; do
     if ! dpkg-query -W -f='${Status}' "$dep" 2>/dev/null | grep -q "install ok installed"; then
@@ -1237,6 +1216,7 @@ install_lsmash() {
   ) || die "$(msg 'L-SMASH build/install failed' 'lsmash 编译/安装失败')"
 
   rm -rf "$build_dir"
+  __lsmash_is_installed || die "$(msg 'L-SMASH installation is missing liblsmash pkg-config metadata' 'L-SMASH 安装后缺少 liblsmash 的 pkg-config 元数据')"
   log "$(msg 'L-SMASH installation complete' 'lsmash 安装完成')"
 }
 
@@ -2402,7 +2382,7 @@ build_vs_plugins() {
 
     if [[ ! -f "$plugins_dir/libvslsmashsource.so" ]]; then
       log "$(msg 'Building L-SMASH-Works (VapourSynth)' '编译 L-SMASH-Works (VapourSynth)')"
-      cd "$HOME" || exit 1
+      cd "$build_dir" || exit 1
       tmux_run "$(msg 'Download L-SMASH-Works' '下载 L-SMASH-Works')" git clone https://github.com/HomeOfAviSynthPlusEvolution/L-SMASH-Works.git || exit 1
       cd L-SMASH-Works/VapourSynth || exit 1
       local need_compat="false"
@@ -2745,7 +2725,7 @@ PY
       ispc-v1.31.0-linux.tar.gz libassrender.so \
       || true
     rm -rf \
-      L-SMASH-Works assrender-0.38.4 VapourSynth-EEDI3-r9 VapourSynth-AddGrain-r10 VapourSynth-Bilateral-r3 \
+      assrender-0.38.4 VapourSynth-EEDI3-r9 VapourSynth-AddGrain-r10 VapourSynth-Bilateral-r3 \
       VapourSynth-DFTTest-r7 VapourSynth-EEDI2-r7.1 fmtconv-r30 vs-removegrain-R1 VapourSynth-SangNomMod-0.1-fix \
       vs-placebo-2.0.4 vs-nlm-ispc-4 vapoursynth-mvtools-26 ispc-v1.31.0-linux \
       || true
@@ -2965,6 +2945,7 @@ install_command_at_configured_path vspipe "$VSPIPE_PATH"
 install_descale
 install_vapoursynth_scripts
 install_vapoursynth_editor
+install_lsmash
 build_vs_plugins
 install_desktop_shortcuts
 

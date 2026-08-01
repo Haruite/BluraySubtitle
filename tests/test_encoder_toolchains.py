@@ -132,6 +132,30 @@ class EncoderToolchainTests(unittest.TestCase):
             with self.subTest(hardcoded_target=hardcoded_target):
                 self.assertNotIn(hardcoded_target, self.linux_setup)
 
+    def test_linux_setup_installs_lsmash_before_dependent_plugin(self) -> None:
+        detector = self.linux_setup.split("__lsmash_is_installed()", 1)[1].split(
+            "install_lsmash()", 1
+        )[0]
+        installer = self.linux_setup.split("install_lsmash()", 1)[1].split(
+            "# ---------------------------------------------------------------------------", 1
+        )[0]
+        plugin_builder = self.linux_setup.split(
+            'if [[ ! -f "$plugins_dir/libvslsmashsource.so" ]]', 1
+        )[1].split(
+            'if [[ ! -f "$plugins_dir/eedi3m.so" ]]', 1
+        )[0]
+        install_call = self.linux_setup.index("\ninstall_lsmash\n")
+        plugin_call = self.linux_setup.index("\nbuild_vs_plugins\n")
+
+        self.assertIn("pkg-config --exists liblsmash", detector)
+        self.assertNotIn("ldconfig -p", detector)
+        self.assertIn("pkg-config", installer)
+        self.assertIn("PKG_CONFIG_PATH", installer)
+        self.assertIn("__lsmash_is_installed || die", installer)
+        self.assertIn('cd "$build_dir"', plugin_builder)
+        self.assertNotIn('cd "$HOME"', plugin_builder)
+        self.assertLess(install_call, plugin_call)
+
     def test_docker_builds_at_original_positions_on_ubuntu_26_04(self) -> None:
         self.assertEqual(self.dockerfile.count("FROM "), 1)
         self.assertIn("FROM ubuntu:26.04", self.dockerfile)
