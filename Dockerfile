@@ -415,7 +415,7 @@ test -n "$FDKAAC_TAG"
 git clone --depth 1 --branch "$FDK_AAC_TAG" https://github.com/mstorsjo/fdk-aac.git fdk-aac
 cd fdk-aac
 ./autogen.sh
-./configure
+./configure --prefix=/usr/local
 make -j"$(nproc)"
 make install
 ldconfig
@@ -423,7 +423,7 @@ cd /tmp/fdk
 git clone --depth 1 --branch "$FDKAAC_TAG" https://github.com/nu774/fdkaac.git
 cd fdkaac
 autoreconf -i
-./configure
+./configure --prefix=/usr/local
 make -j"$(nproc)"
 make install
 ldconfig
@@ -447,6 +447,7 @@ cd flac
 ./configure --enable-static --enable-shared --enable-64-bit-words
 make -j"$(nproc)"
 make install
+install -m 0755 /usr/local/bin/flac /usr/bin/flac
 ldconfig
 rm -rf /tmp/flac
 FLAC
@@ -458,7 +459,7 @@ RUN set -eux; \
     cd vapoursynth-classic-R57.A12; \
     if [ -f src/filters/subtext/image.cpp ]; then sed -i 's/avcodec_close(\(.*\));/avcodec_free_context(\&\(\1\));/g' src/filters/subtext/image.cpp; fi; \
     ./autogen.sh; \
-    ./configure CXXFLAGS="-O3 -fpermissive"; \
+    ./configure --prefix=/usr/local CXXFLAGS="-O3 -fpermissive"; \
     make -j"$(nproc)"; \
     make install; \
     ldconfig; \
@@ -782,9 +783,24 @@ RUN set -eux; \
     /usr/bin/hdr10plus_tool --version 2>&1 | grep -F "hdr10plus_tool ${HDR10PLUS_VER}" >/dev/null; \
     rm -rf /tmp/hdr10plus-tool /tmp/hdr10plus-tool-release.json
 
-RUN test -x /usr/bin/dovi_tool
-RUN test -x /usr/bin/hdr10plus_tool
-RUN test -x /usr/bin/truehdd
+RUN test -x /usr/bin/dovi_tool \
+    && test -x /usr/bin/hdr10plus_tool \
+    && test -x /usr/bin/truehdd \
+    && test -x /usr/bin/flac \
+    && test -x /usr/bin/ffmpeg \
+    && test -x /usr/bin/ffprobe \
+    && test -x /usr/bin/x265 \
+    && test -x /usr/bin/x264 \
+    && test -x /usr/bin/SvtAv1EncApp \
+    && test -x /usr/local/bin/fdkaac \
+    && test -x /usr/local/bin/vsedit \
+    && test -x /usr/local/bin/vspipe \
+    && test -x /usr/bin/tsMuxeR \
+    && test -x /usr/bin/mkvinfo \
+    && test -x /usr/bin/mkvmerge \
+    && test -x /usr/bin/mkvpropedit \
+    && test -x /usr/bin/mkvextract \
+    && test -d /app/plugins
 
 ENV LD_PRELOAD=/usr/local/lib/libvapoursynth-script.so
 

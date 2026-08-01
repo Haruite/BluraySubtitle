@@ -911,3 +911,27 @@ Commit: `bbd8813` (`feat(encode): complete automatic HDR metadata workflow`)
 - Use disposable VPys that change primaries/transfer and vary sampled properties; confirm stale metadata removal, row-local failure for inconsistent samples, and later-row continuation.
 - Exercise HDR10+, Dolby Vision, and combined output with and without native VBV prerequisites. Repeat with a disposable custom x265 lacking native dynamic-metadata options, then restore the intended binary.
 - Deliberately fail source probing, planning, final verification, encoding, injection, audio/final muxing, and one multi-row cancellation. Inspect retained outputs/artifacts, numbered reports, Blu-ray staging, later-row behavior, and the single post-cleanup summary.
+
+## Settings-Driven Linux Setup and Aligned Docker Tool Placement
+
+Date: 2026-08-01
+Commit: uncommitted (current change)
+
+### Scope and Logic Changes
+
+- Linux setup now loads all managed executable and VapourSynth plugin destinations from `src/core/settings.py` after Python is available, validates the complete path set, and verifies every configured tool before reporting success.
+- Source-built and downloaded tools install at their configured destinations. FFmpeg, FFprobe, and MKVToolNix executables supplied by packages are copied to their configured destinations after installation.
+- Docker installs every managed tool directly at the default Docker path declared by the Linux branch of `settings.py`. Existing build sections remain authoritative; FLAC is now copied from its `/usr/local` build prefix to the configured `/usr/bin/flac` destination within the FLAC section.
+- Corrected the Linux tsMuxer setting name from the unused `TSMUXER_PATH` variant to `TS_MUXER_PATH`; the settings page and runtime fallback now use the single canonical name.
+
+### Redundant or Conflicting Paths Removed
+
+- Removed hard-coded destinations from Linux setup for x264, x265, SVT-AV1, fdkaac, FLAC, tsMuxer, dovi_tool, hdr10plus_tool, truehdd, vspipe, vsedit, and the VapourSynth plugin directory.
+- Removed the Linux-only tsMuxer setting-name branch and the service compatibility lookup for the misspelled variable.
+- Removed obsolete environment-variable examples that repeated the old fixed Linux paths at the end of the setup script.
+
+### Documentation, Verification, and Deferred Work
+
+- README behavior remains unchanged because the documented paths were already the defaults. Updated both code-standard versions; no user-visible application text or i18n catalog entry changed.
+- `bash -n setup_linux_environment.sh`, 11 focused setup/source-integrity tests, and all 241 repository tests passed. `git diff --check` and final line-ending checks are part of this change's final verification.
+- A real Linux setup run with temporary custom paths and a complete Docker image build remain manual checks; both write installed tools to the configured destinations and should be run only on a disposable host or image. No implementation work is deferred.

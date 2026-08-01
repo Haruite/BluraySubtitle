@@ -48,7 +48,9 @@ class EncoderToolchainTests(unittest.TestCase):
             "#include <cstdint>",
             "make || return $?",
             "mv libx265.a libx265_main.a || return $?",
-            'version_file="/usr/bin/x264-version.txt"',
+            'SETTINGS_FILE="${BLURAY_SETTINGS_FILE:-',
+            "load_configured_tool_paths",
+            'version_file="$X264_VERSION_FILE"',
             "--bit-depth=all",
             "--chroma-format=all",
             "-DENABLE_HDR10_PLUS=ON",
@@ -56,13 +58,13 @@ class EncoderToolchainTests(unittest.TestCase):
             "--dhdr10-info",
             "--dolby-vision-profile",
             "--dolby-vision-rpu",
-            'installed_help="$(/usr/bin/x265 --help 2>&1 || true)"',
+            'installed_help="$("$X265_PATH" --help 2>&1 || true)"',
             "install_hdr10plus_tool",
             HDR10PLUS_REPOSITORY,
             "unknown-linux-musl.tar.gz",
             "8bit+10bit+12bit",
-            "bluray_sudo cp x264 /usr/bin/x264",
-            'cp "$_x265_out" /usr/bin/',
+            'install_configured_executable x264 "$X264_PATH"',
+            'install_configured_executable "$_x265_out" "$X265_PATH"',
         ):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, self.linux_setup)
@@ -76,6 +78,59 @@ class EncoderToolchainTests(unittest.TestCase):
         self.assertNotIn("Yuuki-Asuna", self.linux_setup)
         self.assertNotIn("cmake4-patched", self.linux_setup)
         self.assertNotIn("-DENABLE_HDR10_PLUS=OFF", self.linux_setup)
+
+    def test_linux_setup_uses_settings_paths_for_installed_tools(self) -> None:
+        setting_names = (
+            "FLAC_PATH",
+            "FFMPEG_PATH",
+            "FFPROBE_PATH",
+            "X265_PATH",
+            "X264_PATH",
+            "SVT_AV1_PATH",
+            "FDK_AAC_PATH",
+            "DOVI_TOOL_PATH",
+            "HDR10PLUS_TOOL_PATH",
+            "TRUEHDD_PATH",
+            "VSEDIT_PATH",
+            "VSPIPE_PATH",
+            "PLUGIN_PATH",
+            "TS_MUXER_PATH",
+            "MKV_INFO_PATH",
+            "MKV_MERGE_PATH",
+            "MKV_PROP_EDIT_PATH",
+            "MKV_EXTRACT_PATH",
+        )
+        loader = self.linux_setup.split("load_configured_tool_paths()", 1)[1].split(
+            "install_configured_executable()", 1
+        )[0]
+        for name in setting_names:
+            with self.subTest(name=name):
+                self.assertIn(f'"{name}"', loader)
+
+        for fragment in (
+            'install_configured_executable dovi_tool "$DOVI_TOOL_PATH"',
+            'install_configured_executable hdr10plus_tool "$HDR10PLUS_TOOL_PATH"',
+            'install_configured_executable truehdd "$TRUEHDD_PATH"',
+            'install_configured_executable "$_svt_bin" "$SVT_AV1_PATH"',
+            'install_configured_executable tsMuxeR "$TS_MUXER_PATH"',
+            'install_command_at_configured_path fdkaac "$FDK_AAC_PATH"',
+            'install_configured_executable /usr/local/bin/flac "$FLAC_PATH"',
+            'install_command_at_configured_path vspipe "$VSPIPE_PATH"',
+            'local plugins_dir="$PLUGIN_PATH"',
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, self.linux_setup)
+
+        for hardcoded_target in (
+            "sudo cp dovi_tool /usr/bin/dovi_tool",
+            "sudo cp truehdd /usr/bin/truehdd",
+            "bluray_sudo cp x264 /usr/bin/x264",
+            'cp "$_x265_out" /usr/bin/',
+            "sudo cp tsMuxeR /usr/bin/tsMuxeR",
+            'local plugins_dir="$HOME/plugins"',
+        ):
+            with self.subTest(hardcoded_target=hardcoded_target):
+                self.assertNotIn(hardcoded_target, self.linux_setup)
 
     def test_docker_builds_at_original_positions_on_ubuntu_26_04(self) -> None:
         self.assertEqual(self.dockerfile.count("FROM "), 1)
@@ -99,6 +154,17 @@ class EncoderToolchainTests(unittest.TestCase):
             "--bit-depth=all",
             "--chroma-format=all",
             "8bit+10bit+12bit",
+            "install -m 0755 dovi_tool /usr/bin/dovi_tool",
+            "install -m 0755 truehdd /usr/bin/truehdd",
+            'install -m 0755 "$build_root/8bit/x265" /usr/bin/x265',
+            'cp "$svt_root/Bin/Release/SvtAv1EncApp" /usr/bin/SvtAv1EncApp',
+            "./configure --prefix=/usr/local",
+            "install -m 0755 /usr/local/bin/flac /usr/bin/flac",
+            "cp tsMuxeR /usr/bin/tsMuxeR",
+            "install -m 0755 x264 /usr/bin/x264",
+            "install -m 0755 hdr10plus_tool /usr/bin/hdr10plus_tool",
+            "mkdir -p /app/plugins",
+            "cp \"${BIN_PATH}\" /usr/local/bin/vsedit-bin",
         ):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, self.dockerfile)
@@ -131,6 +197,8 @@ class EncoderToolchainTests(unittest.TestCase):
         ):
             self.assertNotIn(removed, self.dockerfile)
         self.assertNotIn("-DENABLE_HDR10_PLUS=OFF", self.dockerfile)
+        self.assertNotIn("TOOLPATHS", self.dockerfile)
+        self.assertNotIn("place_tool", self.dockerfile)
 
     def test_windows_setup_tracks_latest_sources_and_preserves_paths(self) -> None:
         for fragment in (
@@ -163,8 +231,7 @@ class EncoderToolchainTests(unittest.TestCase):
             with self.subTest(readme=readme[:20]):
                 self.assertIn("x264", readme)
                 self.assertIn("x265", readme)
-                self.assertIn(r"C:\Software\x264.exe", readme)
-                self.assertIn(r"C:\Software\x265.exe", readme)
+                self.assertIn("[settings.py](src/core/settings.py)", readme)
                 self.assertIn("hdr10plus_tool", readme)
                 self.assertNotIn("r3223", readme)
                 self.assertNotIn("0480cb05", readme)
@@ -188,7 +255,7 @@ class EncoderToolchainTests(unittest.TestCase):
             install_function.replace("${arch}", "x86_64"),
         )
         self.assertIn("aarch64", install_function)
-        self.assertIn("/usr/bin/hdr10plus_tool", install_function)
+        self.assertIn('"$HDR10PLUS_TOOL_PATH"', install_function)
         self.assertIn("--version", install_function)
         self.assertNotIn("cargo", install_function)
 
@@ -196,16 +263,20 @@ class EncoderToolchainTests(unittest.TestCase):
         for fragment in (
             "latest version published by the official upstream",
             "Ubuntu 26.04 adaptation",
-            "corresponding existing build section",
-            "added near the end",
+            "within each tool's existing build section",
+            "invalidates later layers",
+            "genuinely new software near the end",
+            "do not add a final relocation layer",
         ):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, self.standards_en)
         for fragment in (
             "官方上游发布的最新版本",
             "面向 Ubuntu 26.04 的适配版",
-            "已有的对应构建位置",
-            "尽量放到最后",
+            "各工具原有构建段内",
+            "后续层缓存失效",
+            "确实新增的软件",
+            "不得增加末尾统一搬运层",
         ):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, self.standards_zh)

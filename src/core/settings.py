@@ -105,7 +105,7 @@ if sys.platform != "win32":
     VSEDIT_PATH = "/usr/local/bin/vsedit"
     VSPIPE_PATH = "/usr/local/bin/vspipe"
     LIBASS_PATH = ''
-    TSMUXER_PATH = '/usr/bin/tsMuxeR'
+    TS_MUXER_PATH = '/usr/bin/tsMuxeR'
     if is_docker():
         PLUGIN_PATH = "/app/plugins"
     MKV_INFO_PATH = '/usr/bin/mkvinfo'

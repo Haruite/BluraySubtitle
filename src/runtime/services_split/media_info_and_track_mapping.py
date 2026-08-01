@@ -2417,13 +2417,9 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
 
     @staticmethod
     def _tsmuxer_exe() -> str:
-        for attr in ('TS_MUXER_PATH', 'TSMUXER_PATH'):
-            try:
-                p = str(getattr(core_settings, attr, '') or '').strip()
-            except Exception:
-                p = ''
-            if p and os.path.isfile(p):
-                return p
+        p = str(core_settings.TS_MUXER_PATH or '').strip()
+        if p and os.path.isfile(p):
+            return p
         return shutil.which('tsMuxeR') or shutil.which('tsmuxer') or ''
 
     @staticmethod

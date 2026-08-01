@@ -891,3 +891,27 @@ Blu-ray DIY 压制及“编辑轨道”中的通用视频转换仍不在本阶�
 - 使用会改变原色／传递特性以及抽查帧属性会变化的可丢弃 VPy，确认过期元数据移除、抽查不一致只使当前行失败且后续行继续。
 - 覆盖 HDR10+、Dolby Vision 和组合流程具备／缺少原生 VBV 前提的情况；再临时使用不声明原生动态元数据参数的自编译 x265，完成后恢复预期二进制。
 - 分别制造来源探测、规划、最终验证、编码、注入、音频／最终混流失败及一次多行取消；检查保留输出／产物、带数字后缀的报告、原盘暂存、后续行行为和清理后的单次汇总。
+
+## 由设置驱动的 Linux setup 与对齐的 Docker 工具路径
+
+日期：2026-08-01
+提交：未提交（当前修改）
+
+### 范围与逻辑变化
+
+- Linux setup 在 Python 可用后从 `src/core/settings.py` 读取全部受管理可执行文件及 VapourSynth 插件目标，校验完整路径集合，并在报告成功前确认每个配置工具均可执行。
+- 源码编译和下载的工具直接安装到配置目标；由软件包提供的 FFmpeg、FFprobe 与 MKVToolNix 可执行文件在安装后复制到配置目标。
+- Docker 把每个受管理工具直接安装到 `settings.py` Linux 分支声明的默认 Docker 路径，各工具的原有构建段仍是唯一安装位置；FLAC 现在会在 FLAC 构建段从 `/usr/local` 编译前缀复制到配置的 `/usr/bin/flac`。
+- 把 Linux tsMuxer 设置名从未生效的 `TSMUXER_PATH` 修正为 `TS_MUXER_PATH`；设置页与运行时 fallback 现在只使用这一个正式名称。
+
+### 删除的冗余或冲突路径
+
+- 删除 Linux setup 中 x264、x265、SVT-AV1、fdkaac、FLAC、tsMuxer、dovi_tool、hdr10plus_tool、truehdd、vspipe、vsedit 及 VapourSynth 插件目录的硬编码目标。
+- 删除 Linux 专用的 tsMuxer 设置名分支，以及 Service 对错误变量名的兼容查找。
+- 删除 setup 脚本末尾重复旧固定 Linux 路径的过期环境变量示例。
+
+### 文档、验证与推迟内容
+
+- README 记录的路径本来就是默认行为，因此保持不变；同步更新中英文代码规范，没有修改应用程序用户可见文本或 i18n 目录。
+- `bash -n setup_linux_environment.sh`、11 项 setup／源码完整性专项测试及全仓库 241 项测试均通过；`git diff --check` 与最终行尾检查属于本次修改的最终验证。
+- 仍需在可丢弃主机或镜像中，使用临时自定义路径完整运行一次 Linux setup 并构建完整 Docker 镜像；两项检查都会向配置目标写入工具。没有推迟的实现工作。

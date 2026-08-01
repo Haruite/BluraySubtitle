@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
+if [[ -z "${BLURAY_SETUP_SOURCE:-}" ]]; then
+  BLURAY_SETUP_SOURCE="$(cd -- "$(dirname -- "$0")" && pwd)/$(basename -- "$0")"
+fi
 if [[ "${BLURAY_NO_CRLF_FIX:-}" != "1" ]]; then
   if LC_ALL=C grep -q $'\r' "$0"; then
     tmp="$(mktemp)"
     trap 'rm -f "$tmp"' EXIT
     tr -d '\r' < "$0" > "$tmp"
     chmod +x "$tmp" || true
-    exec env BLURAY_NO_CRLF_FIX=1 bash "$tmp" "$@"
+    exec env BLURAY_NO_CRLF_FIX=1 BLURAY_SETUP_SOURCE="$BLURAY_SETUP_SOURCE" bash "$tmp" "$@"
   fi
 fi
 set -euo pipefail
 
 X264_SOURCE_REPOSITORY="https://code.videolan.org/videolan/x264.git"
 X265_SOURCE_REPOSITORY="https://github.com/Multicorewareinc/x265.git"
+SETTINGS_FILE="${BLURAY_SETTINGS_FILE:-$(dirname -- "$BLURAY_SETUP_SOURCE")/src/core/settings.py}"
 
 # ---------------------------------------------------------------------------
 # Language selection
@@ -126,6 +130,110 @@ bluray_sudo() {
   else
     sudo "$@"
   fi
+}
+
+load_configured_tool_paths() {
+  [[ -f "$SETTINGS_FILE" ]] || die "$(msg "Settings file not found: ${SETTINGS_FILE}" "找不到设置文件：${SETTINGS_FILE}")"
+  command -v python3 >/dev/null 2>&1 || die "$(msg 'python3 is required to read settings.py' '读取 settings.py 需要 python3')"
+
+  local output name value count=0
+  output="$(python3 - "$SETTINGS_FILE" <<'PY'
+import os
+import runpy
+import sys
+
+names = (
+    "FLAC_PATH",
+    "FFMPEG_PATH",
+    "FFPROBE_PATH",
+    "X265_PATH",
+    "X264_PATH",
+    "SVT_AV1_PATH",
+    "FDK_AAC_PATH",
+    "DOVI_TOOL_PATH",
+    "HDR10PLUS_TOOL_PATH",
+    "TRUEHDD_PATH",
+    "VSEDIT_PATH",
+    "VSPIPE_PATH",
+    "PLUGIN_PATH",
+    "TS_MUXER_PATH",
+    "MKV_INFO_PATH",
+    "MKV_MERGE_PATH",
+    "MKV_PROP_EDIT_PATH",
+    "MKV_EXTRACT_PATH",
+)
+settings = runpy.run_path(sys.argv[1])
+for name in names:
+    value = settings.get(name)
+    if not isinstance(value, str) or not value:
+        raise SystemExit(f"{name} must be a non-empty string")
+    value = os.path.abspath(os.path.expanduser(value))
+    if any(character in value for character in "\r\n\t"):
+        raise SystemExit(f"{name} contains an unsupported control character")
+    print(f"{name}\t{value}")
+PY
+)" || die "$(msg 'Failed to load configured Linux tool paths from settings.py' '无法从 settings.py 读取 Linux 工具路径')"
+
+  while IFS=$'\t' read -r name value; do
+    [[ -n "$name" && -n "$value" ]] || continue
+    printf -v "$name" '%s' "$value"
+    count=$((count + 1))
+  done <<< "$output"
+  [[ "$count" -eq 18 ]] || die "$(msg 'settings.py did not provide every required Linux tool path' 'settings.py 未提供全部必需的 Linux 工具路径')"
+
+  X264_VERSION_FILE="$(dirname -- "$X264_PATH")/x264-version.txt"
+  X265_FEATURE_FILE="$(dirname -- "$X265_PATH")/x265-build-features.txt"
+  VSEDIT_BINARY_PATH="${VSEDIT_PATH}-bin"
+}
+
+install_configured_executable() {
+  local source="$1"
+  local destination="$2"
+  [[ -f "$source" ]] || die "$(msg "Executable source not found: ${source}" "找不到可执行文件来源：${source}")"
+  if [[ "$source" == "$destination" ]]; then
+    bluray_sudo chmod 0755 "$destination"
+    return 0
+  fi
+  bluray_sudo install -D -m 0755 "$source" "$destination"
+}
+
+install_command_at_configured_path() {
+  local command_name="$1"
+  local destination="$2"
+  local source
+  source="$(command -v "$command_name" 2>/dev/null || true)"
+  [[ -n "$source" ]] || die "$(msg "Installed command not found: ${command_name}" "找不到已安装命令：${command_name}")"
+  install_configured_executable "$source" "$destination"
+}
+
+ensure_configured_directory() {
+  local directory="$1"
+  if mkdir -p "$directory" 2>/dev/null; then
+    return 0
+  fi
+  bluray_sudo install -d -m 0755 -o "$(id -u)" -g "$(id -g)" "$directory"
+}
+
+sync_package_tool_paths() {
+  install_command_at_configured_path ffmpeg "$FFMPEG_PATH"
+  install_command_at_configured_path ffprobe "$FFPROBE_PATH"
+  install_command_at_configured_path mkvinfo "$MKV_INFO_PATH"
+  install_command_at_configured_path mkvmerge "$MKV_MERGE_PATH"
+  install_command_at_configured_path mkvpropedit "$MKV_PROP_EDIT_PATH"
+  install_command_at_configured_path mkvextract "$MKV_EXTRACT_PATH"
+}
+
+verify_configured_tool_paths() {
+  local path
+  for path in \
+    "$FLAC_PATH" "$FFMPEG_PATH" "$FFPROBE_PATH" \
+    "$X265_PATH" "$X264_PATH" "$SVT_AV1_PATH" "$FDK_AAC_PATH" \
+    "$DOVI_TOOL_PATH" "$HDR10PLUS_TOOL_PATH" "$TRUEHDD_PATH" \
+    "$VSEDIT_PATH" "$VSPIPE_PATH" "$TS_MUXER_PATH" \
+    "$MKV_INFO_PATH" "$MKV_MERGE_PATH" "$MKV_PROP_EDIT_PATH" "$MKV_EXTRACT_PATH"; do
+    [[ -x "$path" ]] || die "$(msg "Configured tool is missing or not executable: ${path}" "配置的工具不存在或不可执行：${path}")"
+  done
+  [[ -d "$PLUGIN_PATH" ]] || die "$(msg "Configured plugin directory is missing: ${PLUGIN_PATH}" "配置的插件目录不存在：${PLUGIN_PATH}")"
 }
 
 bluray_quarantine_local_boost() {
@@ -700,8 +808,8 @@ install_dovi_tool() {
   fi
   log "$(msg "Installing dovi_tool ${DOVI_TOOL_VERSION} (prebuilt)" "安装 dovi_tool ${DOVI_TOOL_VERSION}（预编译包）")"
 
-  if [[ -x /usr/bin/dovi_tool ]]; then
-    log "$(msg 'dovi_tool already installed (/usr/bin/dovi_tool), skipping' '检测到 dovi_tool 已安装（/usr/bin/dovi_tool），跳过')"
+  if [[ -x "$DOVI_TOOL_PATH" ]]; then
+    log "$(msg "dovi_tool already installed (${DOVI_TOOL_PATH}), skipping" "检测到 dovi_tool 已安装（${DOVI_TOOL_PATH}），跳过")"
     return 0
   fi
 
@@ -740,8 +848,7 @@ install_dovi_tool() {
     tmux_run "$(msg "Download ${tarball}" "下载 ${tarball}")" \
       wget "https://github.com/quietvoid/dovi_tool/releases/download/${DOVI_TOOL_VERSION}/${tarball}" || exit 1
     tmux_run "$(msg 'Extract dovi_tool tarball' '解压 dovi_tool 压缩包')" tar zxvf "$tarball" || exit 1
-    sudo cp dovi_tool /usr/bin/dovi_tool || exit 1
-    sudo chmod +x /usr/bin/dovi_tool || exit 1
+    install_configured_executable dovi_tool "$DOVI_TOOL_PATH" || exit 1
   ) || die "$(msg 'dovi_tool install failed' 'dovi_tool 安装失败')"
 
   rm -rf "$build_dir"
@@ -758,8 +865,8 @@ install_hdr10plus_tool() {
   log "$(msg "Installing hdr10plus_tool ${version} (prebuilt)" "安装 hdr10plus_tool ${version}（预编译包）")"
 
   local installed_output=""
-  if [[ -x /usr/bin/hdr10plus_tool ]]; then
-    installed_output="$(/usr/bin/hdr10plus_tool --version 2>&1 || true)"
+  if [[ -x "$HDR10PLUS_TOOL_PATH" ]]; then
+    installed_output="$("$HDR10PLUS_TOOL_PATH" --version 2>&1 || true)"
   fi
   if [[ "$installed_output" == *"hdr10plus_tool ${version#v}"* ]]; then
     log "$(msg "Latest official hdr10plus_tool ${version} is already installed; skipping." "已安装最新官方 hdr10plus_tool ${version}，跳过。")"
@@ -800,11 +907,11 @@ install_hdr10plus_tool() {
     tmux_run "$(msg "Download ${tarball}" "下载 ${tarball}")" \
       wget "https://github.com/quietvoid/hdr10plus_tool/releases/download/${version}/${tarball}" || exit 1
     tmux_run "$(msg 'Extract hdr10plus_tool tarball' '解压 hdr10plus_tool 压缩包')" tar zxf "$tarball" || exit 1
-    bluray_sudo install -m 0755 hdr10plus_tool /usr/bin/hdr10plus_tool || exit 1
+    install_configured_executable hdr10plus_tool "$HDR10PLUS_TOOL_PATH" || exit 1
   ) || die "$(msg 'hdr10plus_tool install failed' 'hdr10plus_tool 安装失败')"
 
   rm -rf "$install_dir"
-  /usr/bin/hdr10plus_tool --version 2>&1 | grep -F "hdr10plus_tool ${version#v}" >/dev/null || \
+  "$HDR10PLUS_TOOL_PATH" --version 2>&1 | grep -F "hdr10plus_tool ${version#v}" >/dev/null || \
     die "$(msg 'Installed hdr10plus_tool verification failed' '安装后的 hdr10plus_tool 验证失败')"
   log "$(msg 'hdr10plus_tool installation complete' 'hdr10plus_tool 安装完成')"
 }
@@ -822,8 +929,8 @@ install_truehdd() {
   fi
   log "$(msg "Installing truehdd ${TRUEHDD_VERSION} (prebuilt)" "安装 truehdd ${TRUEHDD_VERSION}（预编译包）")"
 
-  if [[ -x /usr/bin/truehdd ]]; then
-    log "$(msg 'truehdd already installed (/usr/bin/truehdd), skipping' '检测到 truehdd 已安装（/usr/bin/truehdd），跳过')"
+  if [[ -x "$TRUEHDD_PATH" ]]; then
+    log "$(msg "truehdd already installed (${TRUEHDD_PATH}), skipping" "检测到 truehdd 已安装（${TRUEHDD_PATH}），跳过")"
     return 0
   fi
 
@@ -862,8 +969,7 @@ install_truehdd() {
     tmux_run "$(msg "Download ${tarball}" "下载 ${tarball}")" \
       wget "https://github.com/truehdd/truehdd/releases/download/${TRUEHDD_VERSION}/${tarball}" || exit 1
     tmux_run "$(msg 'Extract truehdd tarball' '解压 truehdd 压缩包')" tar zxvf "$tarball" || exit 1
-    sudo cp truehdd /usr/bin/truehdd || exit 1
-    sudo chmod +x /usr/bin/truehdd || exit 1
+    install_configured_executable truehdd "$TRUEHDD_PATH" || exit 1
   ) || die "$(msg 'truehdd install failed' 'truehdd 安装失败')"
 
   rm -rf "$build_dir"
@@ -1306,15 +1412,10 @@ EOF
 
   local _x265_out="${MULTIBUILD}/8bit/x265"
   [[ -f "$_x265_out" ]] || die "$(msg 'x265 binary missing after build' '编译完成后未找到 x265 可执行文件')"
-  log "$(msg 'Installing x265 to /usr/bin' '正在将 x265 安装到 /usr/bin')"
-  if command -v sudo >/dev/null 2>&1 && [[ "$(id -u)" -ne 0 ]]; then
-    sudo cp "$_x265_out" /usr/bin/ || return $?
-    sudo chmod +x /usr/bin/x265 || return $?
-  else
-    cp "$_x265_out" /usr/bin/ || return $?
-    chmod +x /usr/bin/x265 || return $?
-  fi
-  printf '%s\n' 'hdr10plus-all-depths' | bluray_sudo tee /usr/bin/x265-build-features.txt >/dev/null || return $?
+  log "$(msg "Installing x265 to ${X265_PATH}" "正在将 x265 安装到 ${X265_PATH}")"
+  install_configured_executable "$_x265_out" "$X265_PATH" || return $?
+  bluray_sudo mkdir -p "$(dirname -- "$X265_FEATURE_FILE")" || return $?
+  printf '%s\n' 'hdr10plus-all-depths' | bluray_sudo tee "$X265_FEATURE_FILE" >/dev/null || return $?
 }
 
 install_x265() {
@@ -1323,17 +1424,17 @@ install_x265() {
   log "$(msg "Installing official x265 ${x265_version}" "安装官方 x265 ${x265_version}")"
 
   local installed_output="" installed_help=""
-  if [[ -x /usr/bin/x265 ]]; then
-    installed_output="$(/usr/bin/x265 --version 2>&1 || true)"
-    installed_help="$(/usr/bin/x265 --help 2>&1 || true)"
+  if [[ -x "$X265_PATH" ]]; then
+    installed_output="$("$X265_PATH" --version 2>&1 || true)"
+    installed_help="$("$X265_PATH" --help 2>&1 || true)"
   fi
   if [[ "$installed_output" == *"encoder version ${x265_version}"* &&
         "$installed_output" == *"8bit+10bit+12bit"* &&
         "$installed_help" == *"--dhdr10-info"* &&
         "$installed_help" == *"--dolby-vision-profile"* &&
         "$installed_help" == *"--dolby-vision-rpu"* &&
-        -f /usr/bin/x265-build-features.txt ]] &&
-        grep -Fxq 'hdr10plus-all-depths' /usr/bin/x265-build-features.txt; then
+        -f "$X265_FEATURE_FILE" ]] &&
+        grep -Fxq 'hdr10plus-all-depths' "$X265_FEATURE_FILE"; then
     log "$(msg "Latest official x265 ${x265_version} is already installed; skipping build." "已安装最新官方 x265 ${x265_version}，跳过编译。")"
     return 0
   fi
@@ -1353,17 +1454,17 @@ install_x265() {
   ) || die "$(msg 'x265 build or install failed' 'x265 编译或安装过程中出错')"
 
   rm -rf "$build_dir"
-  /usr/bin/x265 --version 2>&1 | grep -F "encoder version ${x265_version}" >/dev/null || \
+  "$X265_PATH" --version 2>&1 | grep -F "encoder version ${x265_version}" >/dev/null || \
     die "$(msg 'Installed x265 version verification failed' '安装后的 x265 版本验证失败')"
-  /usr/bin/x265 --version 2>&1 | grep -F '8bit+10bit+12bit' >/dev/null || \
+  "$X265_PATH" --version 2>&1 | grep -F '8bit+10bit+12bit' >/dev/null || \
     die "$(msg 'Installed x265 multilib verification failed' '安装后的 x265 多位深验证失败')"
-  installed_help="$(/usr/bin/x265 --help 2>&1 || true)"
+  installed_help="$("$X265_PATH" --help 2>&1 || true)"
   [[ "$installed_help" == *"--dhdr10-info"* ]] || \
     die "$(msg 'Installed x265 native HDR10+ verification failed' '安装后的 x265 原生 HDR10+ 验证失败')"
   [[ "$installed_help" == *"--dolby-vision-profile"* &&
      "$installed_help" == *"--dolby-vision-rpu"* ]] || \
     die "$(msg 'Installed x265 native Dolby Vision verification failed' '安装后的 x265 原生 Dolby Vision 验证失败')"
-  grep -Fxq 'hdr10plus-all-depths' /usr/bin/x265-build-features.txt || \
+  grep -Fxq 'hdr10plus-all-depths' "$X265_FEATURE_FILE" || \
     die "$(msg 'Installed x265 HDR10+ core verification failed' '安装后的 x265 HDR10+ 核心验证失败')"
   log "$(msg 'x265 installation successful!' 'x265 安装成功！')"
 }
@@ -1378,9 +1479,9 @@ install_x264() {
   [[ -n "$x264_commit" ]] || die "$(msg 'Failed to resolve the latest official x264 master revision' '无法解析官方 x264 master 的最新版本')"
   log "$(msg 'Installing the latest official x264 master' '安装最新官方 x264 master')"
 
-  local version_file="/usr/bin/x264-version.txt"
+  local version_file="$X264_VERSION_FILE"
   local installed_commit=""
-  if [[ -x /usr/bin/x264 && -f "$version_file" ]]; then
+  if [[ -x "$X264_PATH" && -f "$version_file" ]]; then
     installed_commit="$(tr -d '\r\n' < "$version_file")"
   fi
   if [[ "$installed_commit" == "$x264_commit" ]]; then
@@ -1417,13 +1518,13 @@ install_x264() {
       --disable-opencl \
       --enable-lto || exit 1
     tmux_run "x264 make" make -j"$(nproc)" || exit 1
-    bluray_sudo cp x264 /usr/bin/x264 || exit 1
-    bluray_sudo chmod +x /usr/bin/x264 || exit 1
+    install_configured_executable x264 "$X264_PATH" || exit 1
+    bluray_sudo mkdir -p "$(dirname -- "$version_file")" || exit 1
     printf '%s\n' "$x264_commit" | bluray_sudo tee "$version_file" >/dev/null || exit 1
   ) || die "$(msg 'x264 build/install failed' 'x264 编译/安装失败')"
 
   rm -rf "$build_dir"
-  /usr/bin/x264 --version >/dev/null 2>&1 || \
+  "$X264_PATH" --version >/dev/null 2>&1 || \
     die "$(msg 'Installed x264 verification failed' '安装后的 x264 验证失败')"
   log "$(msg 'x264 installation complete' 'x264 安装完成')"
 }
@@ -1541,7 +1642,7 @@ SVTAV1PY
 install_svt_av1() {
   log "$(msg 'Installing SVT-AV1 (with 12-bit patches)' '正在安装 SVT-AV1（含 12-bit 补丁）')"
 
-  if [[ -x "/usr/bin/SvtAv1EncApp" ]] || command -v SvtAv1EncApp >/dev/null 2>&1; then
+  if [[ -x "$SVT_AV1_PATH" ]]; then
     log "$(msg 'SvtAv1EncApp already installed, skipping build' '检测到 SvtAv1EncApp 已安装，跳过编译')"
     return 0
   fi
@@ -1562,9 +1663,8 @@ install_svt_av1() {
       bash -c "set -e; cd '${build_dir}/SVT-AV1/Build/linux' && ./build.sh release static" || exit 1
     _svt_bin="${build_dir}/SVT-AV1/Bin/Release/SvtAv1EncApp"
     [[ -f "$_svt_bin" ]] || exit 1
-    log "$(msg 'Installing SvtAv1EncApp to /usr/bin' '正在安装 SvtAv1EncApp 到 /usr/bin')"
-    sudo cp "$_svt_bin" /usr/bin/SvtAv1EncApp || exit 1
-    sudo chmod +x /usr/bin/SvtAv1EncApp || exit 1
+    log "$(msg "Installing SvtAv1EncApp to ${SVT_AV1_PATH}" "正在安装 SvtAv1EncApp 到 ${SVT_AV1_PATH}")"
+    install_configured_executable "$_svt_bin" "$SVT_AV1_PATH" || exit 1
   ) || die "$(msg 'SVT-AV1 build or install failed' 'SVT-AV1 编译或安装失败')"
 
   rm -rf "$build_dir"
@@ -1583,7 +1683,7 @@ install_tsmuxer() {
   tsmuxer_version="${tsmuxer_tag#v}"
   log "$(msg "Installing tsMuxer ${tsmuxer_version}" "安装 tsMuxer ${tsmuxer_version}")"
 
-  if [[ -x "/usr/bin/tsMuxeR" ]] || command -v tsMuxeR >/dev/null 2>&1; then
+  if [[ -x "$TS_MUXER_PATH" ]]; then
     log "$(msg 'tsMuxeR already installed, skipping' '检测到 tsMuxeR 已安装，跳过')"
     return 0
   fi
@@ -1610,8 +1710,7 @@ install_tsmuxer() {
     tmux_run "$(msg "Download ${archive}" "下载 ${archive}")" \
       wget "https://github.com/justdan96/tsMuxer/releases/download/${tsmuxer_tag}/${archive}" || exit 1
     tmux_run "$(msg 'Extract tsMuxer zip package' '解压 tsMuxer 压缩包')" unzip "$archive" || exit 1
-    sudo cp tsMuxeR /usr/bin/tsMuxeR || exit 1
-    sudo chmod +x /usr/bin/tsMuxeR || exit 1
+    install_configured_executable tsMuxeR "$TS_MUXER_PATH" || exit 1
   ) || die "$(msg 'tsMuxer install failed' 'tsMuxer 安装失败')"
 
   rm -rf "$build_dir"
@@ -1625,7 +1724,7 @@ install_tsmuxer() {
 install_fdk_aac() {
   log "$(msg 'Installing FDK-AAC library and fdkaac CLI' '正在安装 FDK-AAC 库与 fdkaac 命令行工具')"
 
-  if command -v fdkaac >/dev/null 2>&1; then
+  if [[ -x "$FDK_AAC_PATH" ]]; then
     log "$(msg 'fdkaac already installed, skipping build' '检测到 fdkaac 已安装，跳过编译')"
     return 0
   fi
@@ -1670,6 +1769,7 @@ install_fdk_aac() {
     tmux_run "$(msg 'fdkaac: make' 'fdkaac：make')" make -j"$(nproc)" || exit 1
     tmux_run "$(msg 'fdkaac: make install' 'fdkaac：make install')" sudo make install || exit 1
     sudo ldconfig || true
+    install_command_at_configured_path fdkaac "$FDK_AAC_PATH" || exit 1
   ) || die "$(msg 'FDK-AAC / fdkaac build or install failed' 'FDK-AAC / fdkaac 编译或安装失败')"
 
   rm -rf "$build_dir"
@@ -1686,9 +1786,8 @@ install_flac() {
   latest_flac_version="${flac_tag#v}"
   log "$(msg "Installing latest flac (${latest_flac_version}, build from source)" "安装最新 flac（${latest_flac_version}，从源码编译并安装）")"
 
-  if [[ -x "/usr/bin/flac" ]] || command -v flac >/dev/null 2>&1; then
-    local flac_bin
-    flac_bin=$(command -v flac || echo "/usr/bin/flac")
+  if [[ -x "$FLAC_PATH" ]]; then
+    local flac_bin="$FLAC_PATH"
     local flac_version
     flac_version=$("$flac_bin" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
 
@@ -1699,11 +1798,11 @@ install_flac() {
       fi
       log "$(msg "flac is outdated (${flac_version} < ${latest_flac_version}), removing it before rebuilding" "检测到 flac 版本过旧（${flac_version} < ${latest_flac_version}），卸载后重新编译")"
       sudo apt-get remove -y flac >/dev/null 2>&1 || true
-      sudo rm -f "$flac_bin"
+      bluray_sudo rm -f "$flac_bin"
     else
       log "$(msg 'Cannot parse installed flac version, attempting to rebuild' '无法解析已安装的 flac 版本，尝试重新编译安装')"
       sudo apt-get remove -y flac >/dev/null 2>&1 || true
-      sudo rm -f "$flac_bin"
+      bluray_sudo rm -f "$flac_bin"
     fi
   fi
 
@@ -1734,7 +1833,7 @@ install_flac() {
     tmux_run "flac make" make -j"$(nproc)" || exit 1
     tmux_run "flac install" sudo make install || exit 1
     sudo ldconfig || exit 1
-    sudo ln -sf /usr/local/bin/flac /usr/bin/flac || exit 1
+    install_configured_executable /usr/local/bin/flac "$FLAC_PATH" || exit 1
   ) || die "$(msg 'flac build/install failed' 'flac 编译/安装失败')"
 
   rm -rf "$build_dir"
@@ -1895,10 +1994,10 @@ install_vapoursynth() {
 install_descale() {
   log "$(msg 'Installing VapourSynth descale plugin' '安装 VapourSynth descale 插件')"
 
-  local plugins_dir="$HOME/plugins"
-  mkdir -p "$plugins_dir"
+  local plugins_dir="$PLUGIN_PATH"
+  ensure_configured_directory "$plugins_dir"
   if [[ -f "$plugins_dir/libdescale.so" ]]; then
-    log "$(msg 'descale plugin already exists in ~/plugins, skipping' '检测到 ~/plugins 已存在 descale 插件，跳过')"
+    log "$(msg "descale plugin already exists in ${plugins_dir}, skipping" "检测到 ${plugins_dir} 已存在 descale 插件，跳过")"
     return 0
   fi
 
@@ -1934,10 +2033,10 @@ install_descale() {
     descale_src="/usr/lib/vapoursynth/libdescale.so"
   fi
   [[ -n "$descale_src" ]] || die "$(msg 'descale installed but libdescale.so not found in system vapoursynth paths' 'descale 安装完成但未在系统 vapoursynth 路径找到 libdescale.so')"
-  cp "$descale_src" "$plugins_dir/libdescale.so" || die "$(msg 'Failed to copy libdescale.so to ~/plugins' '复制 libdescale.so 到 ~/plugins 失败')"
+  cp "$descale_src" "$plugins_dir/libdescale.so" || die "$(msg "Failed to copy libdescale.so to ${plugins_dir}" "复制 libdescale.so 到 ${plugins_dir} 失败")"
 
   rm -rf "$build_dir"
-  log "$(msg 'descale plugin installation complete (copied to ~/plugins)' 'descale 插件安装完成（已复制到 ~/plugins）')"
+  log "$(msg "descale plugin installation complete (copied to ${plugins_dir})" "descale 插件安装完成（已复制到 ${plugins_dir}）")"
 }
 
 # ---------------------------------------------------------------------------
@@ -2110,7 +2209,7 @@ install_vapoursynth_scripts() {
 install_vapoursynth_editor() {
   log "$(msg 'Installing VapourSynth Editor (vsedit, build from source)' '安装 vapoursynth-editor (vsedit)（从源码编译并安装）')"
 
-  if [[ -x "/usr/local/bin/vsedit-bin" ]] || command -v vsedit-bin >/dev/null 2>&1; then
+  if [[ -x "$VSEDIT_PATH" && -x "$VSEDIT_BINARY_PATH" ]]; then
     log "$(msg 'vsedit already installed (vsedit-bin found), skipping' '检测到 vsedit 已安装（存在 vsedit-bin），跳过编译安装')"
     return 0
   fi
@@ -2176,8 +2275,7 @@ install_vapoursynth_editor() {
     fi
 
     # Copy the real binary as vsedit-bin
-    sudo cp "$bin_path" /usr/local/bin/vsedit-bin || exit 1
-    sudo chmod +x /usr/local/bin/vsedit-bin
+    install_configured_executable "$bin_path" "$VSEDIT_BINARY_PATH" || exit 1
 
     local py_ver
     py_ver=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
@@ -2185,14 +2283,15 @@ install_vapoursynth_editor() {
     # Create a vsedit wrapper script that injects the required environment variables
     # (fixes "Failed to get VSScript API" at startup)
     log "$(msg 'Creating vsedit wrapper launch script' '创建 vsedit 包装器启动脚本')"
-    sudo tee /usr/local/bin/vsedit > /dev/null <<EOF
+    bluray_sudo mkdir -p "$(dirname -- "$VSEDIT_PATH")" || exit 1
+    bluray_sudo tee "$VSEDIT_PATH" > /dev/null <<EOF
 #!/bin/bash
 export VAPOURSYNTH_PYTHON_PATH=/usr/lib/python${py_ver}
 export LD_LIBRARY_PATH=/usr/local/lib:\$LD_LIBRARY_PATH
 export LD_PRELOAD=/usr/local/lib/libvapoursynth-script.so
-exec /usr/local/bin/vsedit-bin "\$@"
+exec "${VSEDIT_BINARY_PATH}" "\$@"
 EOF
-    sudo chmod +x /usr/local/bin/vsedit
+    bluray_sudo chmod +x "$VSEDIT_PATH"
 
     log "$(msg 'vsedit wrapper created. You can now run vsedit directly.' 'vsedit 包装器创建成功。你现在可以直接运行 vsedit 了。')"
   ) || die "$(msg 'vsedit build/install failed' 'vsedit 编译/安装失败')"
@@ -2269,10 +2368,10 @@ install_libplacebo_latest() {
 # ---------------------------------------------------------------------------
 
 build_vs_plugins() {
-  log "$(msg 'Building/installing VapourSynth plugins to ~/plugins' '编译/安装 VapourSynth 插件到 ~/plugins')"
+  log "$(msg "Building/installing VapourSynth plugins to ${PLUGIN_PATH}" "编译/安装 VapourSynth 插件到 ${PLUGIN_PATH}")"
 
-  local plugins_dir="$HOME/plugins"
-  mkdir -p "$plugins_dir"
+  local plugins_dir="$PLUGIN_PATH"
+  ensure_configured_directory "$plugins_dir"
 
   ensure_meson_version
   export PATH="$HOME/.local/bin:$PATH"
@@ -2693,14 +2792,14 @@ install_desktop_shortcuts() {
     log "$(msg 'No mpv/mkvtoolnix desktop files found in /usr/local/share/applications or /usr/share/applications' '未在 /usr/local/share/applications 或 /usr/share/applications 中找到 mpv/mkvtoolnix 的 desktop 文件')"
   fi
 
-  if [[ -x "/usr/local/bin/vsedit" ]]; then
+  if [[ -x "$VSEDIT_PATH" ]]; then
     local vsedit_desktop="$desktop_dir/vsedit.desktop"
-    cat > "$vsedit_desktop" <<'EOF'
+    cat > "$vsedit_desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=vsedit
 Comment=VapourSynth Editor
-Exec=/usr/local/bin/vsedit %F
+Exec=${VSEDIT_PATH} %F
 Terminal=false
 Categories=AudioVideo;Video;
 Icon=vsedit
@@ -2845,8 +2944,12 @@ else
   log "$(msg 'All system dependencies already installed, skipping' '系统依赖已全部安装，跳过')"
 fi
 
+load_configured_tool_paths
+log "$(msg "Using tool paths from ${SETTINGS_FILE}" "使用 ${SETTINGS_FILE} 中配置的工具路径")"
+
 install_shaderc_fix
 install_mkvtoolnix
+sync_package_tool_paths
 install_mpv
 install_x264
 install_x265
@@ -2858,6 +2961,7 @@ install_truehdd
 install_fdk_aac
 install_flac
 install_vapoursynth
+install_command_at_configured_path vspipe "$VSPIPE_PATH"
 install_descale
 install_vapoursynth_scripts
 install_vapoursynth_editor
@@ -2865,12 +2969,8 @@ build_vs_plugins
 install_desktop_shortcuts
 
 install_bluray_python_deps
+verify_configured_tool_paths
 
 
 log "$(msg 'Done. Recommended way to run:' '完成。推荐的运行方式：')"
-#echo "export FFMPEG_PATH=/usr/bin/ffmpeg"
-#echo "export FFPROBE_PATH=/usr/bin/ffprobe"
-#echo "export FLAC_PATH=/usr/bin/flac"
-#echo "export PLUGIN_PATH=\"\$HOME/plugins/\""
-#echo "export LD_PRELOAD=/usr/local/lib/libvapoursynth-script.so"
 echo "python3 -m src.main"

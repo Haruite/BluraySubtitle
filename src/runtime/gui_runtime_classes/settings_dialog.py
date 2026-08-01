@@ -70,7 +70,7 @@ EXTERNAL_TOOL_PATH_NAMES = (
     "TRUEHDD_PATH",
     "VSEDIT_PATH",
     "VSPIPE_PATH",
-    "TS_MUXER_PATH" if sys.platform == "win32" else "TSMUXER_PATH",
+    "TS_MUXER_PATH",
     "MKV_INFO_PATH",
     "MKV_MERGE_PATH",
     "MKV_PROP_EDIT_PATH",

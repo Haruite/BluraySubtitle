@@ -61,18 +61,35 @@ class SourceIntegrityTests(unittest.TestCase):
 
         self.assertEqual(occurrences, [])
 
-    def test_linux_vsedit_path_matches_setup_install_target(self) -> None:
+    def test_linux_tool_paths_are_loaded_by_setup(self) -> None:
         settings_file = REPOSITORY_ROOT / "src" / "core" / "settings.py"
         setup_script = REPOSITORY_ROOT / "setup_linux_environment.sh"
 
         with patch.object(sys, "platform", "linux"):
             settings = runpy.run_path(str(settings_file))
 
-        self.assertEqual(settings["VSEDIT_PATH"], "/usr/local/bin/vsedit")
-        self.assertIn(
-            "sudo tee /usr/local/bin/vsedit",
-            setup_script.read_text(encoding="utf-8"),
+        setup_source = setup_script.read_text(encoding="utf-8")
+        expected_paths = {
+            "VSEDIT_PATH": "/usr/local/bin/vsedit",
+            "VSPIPE_PATH": "/usr/local/bin/vspipe",
+            "X264_PATH": "/usr/bin/x264",
+            "X265_PATH": "/usr/bin/x265",
+            "SVT_AV1_PATH": "/usr/bin/SvtAv1EncApp",
+            "TS_MUXER_PATH": "/usr/bin/tsMuxeR",
+        }
+        for name, expected in expected_paths.items():
+            with self.subTest(name=name):
+                self.assertEqual(settings[name], expected)
+                self.assertIn(f'"{name}"', setup_source)
+        self.assertNotIn("TSMUXER_PATH", settings)
+        self.assertNotIn(
+            "TSMUXER_PATH",
+            "\n".join(
+                path.read_text(encoding="utf-8-sig")
+                for path in (REPOSITORY_ROOT / "src").rglob("*.py")
+            ),
         )
+        self.assertIn('bluray_sudo tee "$VSEDIT_PATH"', setup_source)
 
 
 if __name__ == "__main__":
