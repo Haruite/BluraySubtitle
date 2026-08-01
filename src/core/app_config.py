@@ -74,6 +74,7 @@ class EncodePreferences:
     lossless_audio_codec: str = "flac"
     subtitle_mode: str = "external"
     use_getnative: bool = True
+    output_comparison_images: bool = True
 
 
 @dataclass(frozen=True)
@@ -274,6 +275,11 @@ def app_config_from_mapping(raw: dict[str, Any]) -> AppConfig:
             use_getnative=_boolean_value(
                 encode,
                 "use_getnative",
+                True,
+            ),
+            output_comparison_images=_boolean_value(
+                encode,
+                "output_comparison_images",
                 True,
             ),
         ),

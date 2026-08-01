@@ -915,7 +915,7 @@ Commit: `bbd8813` (`feat(encode): complete automatic HDR metadata workflow`)
 ## Settings-Driven Linux Setup and Aligned Docker Tool Placement
 
 Date: 2026-08-01
-Commit: uncommitted (current change)
+Commit: `c2552ad` (`feat(setup): install Linux tools at configured paths`)
 
 ### Scope and Logic Changes
 
@@ -935,3 +935,22 @@ Commit: uncommitted (current change)
 - README behavior remains unchanged because the documented paths were already the defaults. Updated both code-standard versions; no user-visible application text or i18n catalog entry changed.
 - `bash -n setup_linux_environment.sh`, 11 focused setup/source-integrity tests, and all 241 repository tests passed. `git diff --check` and final line-ending checks are part of this change's final verification.
 - A real Linux setup run with temporary custom paths and a complete Docker image build remain manual checks; both write installed tools to the configured destinations and should be run only on a disposable host or image. No implementation work is deferred.
+
+## Same-Frame Encode Comparison Images
+
+Date: 2026-08-01
+Commit: uncommitted (current change)
+
+### Scope and Logic Changes
+
+- Swapped the Encode-page positions of the lossless-audio selector and getnative checkbox while keeping them on separate rows. Added a default-enabled **Output comparison images** checkbox immediately after getnative and a matching Advanced-setting preference.
+- The current checkbox value is captured in `EncodeSettings`. After each video output succeeds, Encode determines the midpoint of the frame range shared by the source and encoded files, then invokes FFmpeg twice with the same zero-based frame-selection expression.
+- Each pair is written under `<selected output>/<source folder name>/Compare` as `NNN-output-fNNNNNN-source.png` and `NNN-output-fNNNNNN-encoded.png`. Output stems are limited to 40 characters and row prefixes keep names distinct without creating per-file folders.
+- Valid comparison pairs are reusable for resumable Remux-source Encode. A media-specific screenshot failure is reported as a row warning and does not delete the successfully encoded video.
+
+### Validation and Documentation
+
+- Comparison-image preflight requires both configured FFmpeg and FFprobe executables. Automated coverage verifies saved defaults, GUI row placement, request capture, actual output-directory placement, paired filenames, and identical frame-number filters without timestamp seeking.
+- Updated both README versions, the Simplified Chinese translation catalog, and both code-standard versions. No obsolete compatibility path was retained.
+- Focused configuration, Encode workflow, worker-boundary, i18n, and split-contract checks passed, as did all 242 repository tests. A live FFmpeg check extracted frame 5 from two losslessly equivalent 10-frame files with the production filter and produced byte-identical PNGs; final diff and line-ending checks also passed.
+- A real-media Encode remains a manual check: use a disposable output directory, verify the two PNGs show the same source/encoded frame, and inspect SDR and HDR screenshot appearance under the generated `Compare` folder.

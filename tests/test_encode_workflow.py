@@ -62,7 +62,7 @@ class _ThreadCapture:
         pass
 
 
-def _settings() -> EncodeSettings:
+def _settings(*, output_comparison_images: bool = False) -> EncodeSettings:
     return EncodeSettings(
         vspipe_mode='bundle',
         encoder_mode='bundle',
@@ -72,6 +72,7 @@ def _settings() -> EncodeSettings:
         bit_depth='10',
         use_getnative=False,
         default_lossless_audio_codec='flac',
+        output_comparison_images=output_comparison_images,
     )
 
 
@@ -220,6 +221,7 @@ class EncodeWorkflowTests(unittest.TestCase):
                 sub_pack_hard_radio=SimpleNamespace(isChecked=lambda: False),
                 sub_pack_soft_radio=SimpleNamespace(isChecked=lambda: False),
                 use_getnative_checkbox=SimpleNamespace(isChecked=lambda: True),
+                output_comparison_checkbox=SimpleNamespace(isChecked=lambda: True),
                 trim_copyright_tail_checkbox=SimpleNamespace(isChecked=lambda: False),
                 mux_dolby_vision_checkbox=SimpleNamespace(isChecked=lambda: False),
                 table2=SimpleNamespace(rowCount=lambda: 1, item=lambda _row, _column: None),
@@ -267,6 +269,7 @@ class EncodeWorkflowTests(unittest.TestCase):
             self.assertEqual(request.main_rows[0].audio_codec_choices, ('opus',))
             self.assertEqual(request.main_rows[0].track_language_overrides, (('1', 'jpn'),))
             self.assertEqual(request.settings.default_lossless_audio_codec, 'opus')
+            self.assertTrue(request.settings.output_comparison_images)
             self.assertEqual(request.settings.audio_encoding, audio_encoding)
             self.assertFalse(request.mux_dolby_vision)
             self.assertFalse(hasattr(owner, 'checkbox1'))
@@ -560,6 +563,84 @@ class EncodeWorkflowTests(unittest.TestCase):
             self.assertIn(
                 f'Skipping existing output: {companion_destination}',
                 service.progress_messages,
+            )
+
+    def test_comparison_images_use_the_same_frame_number_under_actual_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_folder = root / 'source'
+            output_folder = root / 'output' / 'Disc'
+            source_folder.mkdir()
+            output_folder.mkdir(parents=True)
+            source_path = source_folder / 'source.mkv'
+            output_path = output_folder / '第一集.mkv'
+            vpy_path = root / 'encode.vpy'
+            source_path.write_bytes(b'source')
+            vpy_path.write_text('a = r""\n', encoding='utf-8')
+            row = EncodeRow(
+                str(source_path),
+                str(output_path),
+                str(vpy_path),
+            )
+            request = EncodeRequest(
+                input_mode='remux',
+                source_root=str(source_folder),
+                output_folder=str(output_folder),
+                staging_folder='',
+                main_rows=(row,),
+                sp_rows=(),
+                settings=_settings(output_comparison_images=True),
+            )
+            ffmpeg_commands: list[list[str]] = []
+
+            def fake_ffmpeg(command, **_kwargs):
+                ffmpeg_commands.append(list(command))
+                Path(command[-1]).write_bytes(b'png')
+                return SimpleNamespace(returncode=0, stdout='', stderr='')
+
+            service = _RowEncodeService()
+            with (
+                patch(
+                    'src.runtime.services_split.encode_and_audio_tasks.encode_dovi_preflight_mkv_paths',
+                    return_value=None,
+                ),
+                patch.object(
+                    service,
+                    '_video_frame_count_static',
+                    return_value=120,
+                ),
+                patch(
+                    'src.runtime.services_split.remux_and_episode_workflows.run_command',
+                    side_effect=fake_ffmpeg,
+                ),
+            ):
+                result = service._encode_mkv_rows(
+                    request,
+                    [row],
+                    [],
+                    threading.Event(),
+                )
+
+            self.assertEqual(result.rows[0].status, 'completed')
+            self.assertEqual(len(ffmpeg_commands), 2)
+            self.assertEqual(
+                [command[command.index('-i') + 1] for command in ffmpeg_commands],
+                [str(source_path), str(output_path)],
+            )
+            self.assertEqual(
+                [command[command.index('-vf') + 1] for command in ffmpeg_commands],
+                ['select=eq(n\\,60)', 'select=eq(n\\,60)'],
+            )
+            self.assertTrue(all('-ss' not in command for command in ffmpeg_commands))
+            comparison_files = sorted(
+                path.name for path in (output_folder / 'Compare').glob('*.png')
+            )
+            self.assertEqual(
+                comparison_files,
+                [
+                    '001-第一集-f000060-encoded.png',
+                    '001-第一集-f000060-source.png',
+                ],
             )
 
     def test_row_failure_retains_artifacts_and_continues_later_rows(self) -> None:

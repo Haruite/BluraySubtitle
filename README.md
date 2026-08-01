@@ -132,9 +132,10 @@ Encode options include:
 - The startup encoder, bit depth, preset, and preset parameters come from
   **Advanced** settings. After startup, the visible Encode controls remain
   authoritative for every task.
-- The startup lossless-audio target, subtitle packaging mode, and getnative
-  checkbox also come from **Advanced** settings and remain freely editable
+- The startup lossless-audio target, subtitle packaging mode, getnative, and
+  output-comparison checkboxes also come from **Advanced** settings and remain freely editable
   before launch.
+- With **Output comparison images** enabled, every encoded video saves source and encoded PNGs from the same frame under **`<selected output>/<source folder name>/Compare`**.
 - Lossless PCM, TrueHD/MLP, DTS-family, and FLAC tracks use the per-track FLAC/AAC/Opus choice shown in
   **Edit tracks**. Lossy audio is kept unchanged. TrueHD Atmos is converted only after `truehdd` successfully decodes
   presentation 2; if `truehdd` is unavailable or fails, the original TrueHD track is kept. Other selected conversion

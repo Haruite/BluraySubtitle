@@ -1110,6 +1110,131 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         self.episode_subtitle_languages = [row.subtitle_language for row in main_rows]
         self.use_getnative = request.settings.use_getnative
 
+        def write_comparison_images(
+                row: EncodeRow,
+                source_path: str,
+                row_number: int,
+        ) -> None:
+            source_frames = self._video_frame_count_static(source_path)
+            encoded_frames = self._video_frame_count_static(row.output_path)
+            shared_frames = min(source_frames, encoded_frames)
+            if shared_frames <= 0:
+                raise RuntimeError(
+                    translate_text(
+                        'Could not determine a shared comparison frame for: {path}'
+                    ).format(path=row.output_path)
+                )
+            frame_number = shared_frames // 2
+            output_stem = os.path.splitext(os.path.basename(row.output_path))[0]
+            short_stem = re.sub(
+                r'[<>:"/\\|?*\x00-\x1f]+',
+                '_',
+                output_stem,
+            )
+            short_stem = re.sub(r'\s+', '_', short_stem).strip(' ._')[:40]
+            if not short_stem:
+                short_stem = 'output'
+            comparison_folder = os.path.join(request.output_folder, 'Compare')
+            image_base = (
+                f'{row_number:03d}-{short_stem}-f{frame_number:06d}'
+            )
+            image_pairs = (
+                (source_path, os.path.join(
+                    comparison_folder,
+                    image_base + '-source.png',
+                )),
+                (row.output_path, os.path.join(
+                    comparison_folder,
+                    image_base + '-encoded.png',
+                )),
+            )
+            if all(
+                    os.path.isfile(image_path)
+                    and os.path.getsize(image_path) > 0
+                    for _media_path, image_path in image_pairs
+            ):
+                return
+            os.makedirs(comparison_folder, exist_ok=True)
+            ffmpeg_path = str(core_settings.FFMPEG_PATH or 'ffmpeg')
+            for media_path, image_path in image_pairs:
+                if os.path.exists(image_path):
+                    if os.path.isfile(image_path) and os.path.getsize(image_path) > 0:
+                        continue
+                    raise FileExistsError(
+                        translate_text(
+                            'Comparison image output is invalid: {path}'
+                        ).format(path=image_path)
+                    )
+                command = [
+                    ffmpeg_path,
+                    '-hide_banner',
+                    '-loglevel',
+                    'error',
+                    '-nostdin',
+                    '-n',
+                    '-i',
+                    media_path,
+                    '-map',
+                    '0:v:0',
+                    '-vf',
+                    f'select=eq(n\\,{frame_number})',
+                    '-vsync',
+                    '0',
+                    '-frames:v',
+                    '1',
+                    '-update',
+                    '1',
+                    image_path,
+                ]
+                result = run_command(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    encoding='utf-8',
+                    errors='ignore',
+                )
+                if result.returncode != 0 or not (
+                        os.path.isfile(image_path)
+                        and os.path.getsize(image_path) > 0
+                ):
+                    if os.path.isfile(image_path) and os.path.getsize(image_path) == 0:
+                        force_remove_file(image_path)
+                    detail = str(result.stderr or result.stdout or '').strip()
+                    raise RuntimeError(
+                        translate_text(
+                            'Could not create comparison image: {path}. {error}'
+                        ).format(
+                            path=image_path,
+                            error=detail or translate_text('unknown error'),
+                        )
+                    )
+            self._progress(
+                text=self.t('Comparison images saved: {path}').format(
+                    path=comparison_folder
+                )
+            )
+
+        def write_comparison_images_or_warn(
+                row: EncodeRow,
+                source_path: str,
+                row_number: int,
+        ) -> None:
+            if not request.settings.output_comparison_images:
+                return
+            try:
+                write_comparison_images(row, source_path, row_number)
+            except TaskCancelled:
+                raise
+            except Exception as error:
+                message = translate_text(
+                    'Comparison images could not be created for {name}: {error}'
+                ).format(
+                    name=os.path.basename(row.output_path),
+                    error=str(error),
+                )
+                self.encode_warnings.append(message)
+                self._progress(text=message)
+
         def record_completed_row(
                 row: EncodeRow,
                 row_type: str,
@@ -1329,6 +1454,11 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                         path=row.output_path
                     )
                 )
+                write_comparison_images_or_warn(
+                    row,
+                    row.source_path,
+                    completed_rows + 1,
+                )
                 record_completed_row(row, 'Main row', warning_start)
                 completed_rows += 1
                 continue
@@ -1340,6 +1470,11 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             except Exception as error:
                 record_failed_row(row, 'Main row', warning_start, error)
             else:
+                write_comparison_images_or_warn(
+                    row,
+                    row.source_path,
+                    completed_rows + 1,
+                )
                 record_completed_row(row, 'Main row', warning_start)
             completed_rows += 1
 
@@ -1370,6 +1505,12 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                         path=row.output_path
                     )
                 )
+                if source_path.lower().endswith('.mkv'):
+                    write_comparison_images_or_warn(
+                        row,
+                        source_path,
+                        completed_rows + 1,
+                    )
                 record_completed_row(row, 'SP row', warning_start)
                 completed_rows += 1
                 continue
@@ -1409,6 +1550,12 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     force_remove_file(row.output_path)
                 record_failed_row(row, 'SP row', warning_start, error)
             else:
+                if source_path.lower().endswith('.mkv'):
+                    write_comparison_images_or_warn(
+                        row,
+                        source_path,
+                        completed_rows + 1,
+                    )
                 record_completed_row(row, 'SP row', warning_start)
             completed_rows += 1
 

@@ -53,6 +53,9 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
             encode.lossless_audio_codec,
         )
         self.use_getnative_checkbox.setChecked(encode.use_getnative)
+        self.output_comparison_checkbox.setChecked(
+            encode.output_comparison_images
+        )
         subtitle_radio = {
             "external": self.sub_pack_external_radio,
             "softsub": self.sub_pack_soft_radio,

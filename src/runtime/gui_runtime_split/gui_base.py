@@ -163,6 +163,7 @@ class BluraySubtitleGuiBase(QWidget):
         self.theme_label = None
         self.vspipe_mode_combo = None
         self.use_getnative_checkbox = None
+        self.output_comparison_checkbox = None
         self.encode_tool_combo = None
         self.encode_tool_label = None
         self.encode_source_label = None

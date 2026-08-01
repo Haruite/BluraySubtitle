@@ -195,12 +195,11 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             getattr(self, 'encode_tool_combo', None),
             getattr(self, 'encode_bit_depth_label', None),
             getattr(self, 'encode_bit_depth_combo', None),
+            getattr(self, 'lossless_audio_compression_label', None),
+            getattr(self, 'encode_lossless_audio_combo', None),
         ):
             if w is not None:
                 w.setVisible(show_full_codec)
-        row_la = getattr(self, 'lossless_audio_preset_row', None)
-        if row_la is not None:
-            row_la.setVisible(show_full_codec)
         if hint is not None:
             hint.setVisible(show_diy_hint)
 
@@ -990,6 +989,10 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     and self.use_getnative_checkbox.isChecked()
                 ),
                 default_lossless_audio_codec=self._current_encode_lossless_audio_codec(),
+                output_comparison_images=bool(
+                    getattr(self, 'output_comparison_checkbox', None)
+                    and self.output_comparison_checkbox.isChecked()
+                ),
                 audio_encoding=self._captured_audio_encoding_settings(),
             )
             track_selection_snapshot = copy.deepcopy(
@@ -1597,31 +1600,45 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         tools_layout.addWidget(self.x265_preset_combo)
 
         tools_layout.addStretch(1)
-        self.use_getnative_checkbox = QCheckBox(self.t('Use getnative for native resolution'), tools_row)
-        self.use_getnative_checkbox.setChecked(True)
-        tools_layout.addWidget(self.use_getnative_checkbox)
-        self.use_bluray_compat_params_checkbox = QCheckBox(self.t('Use Blu-ray compatible params'), tools_row)
-        self.use_bluray_compat_params_checkbox.setChecked(False)
-        tools_layout.addWidget(self.use_bluray_compat_params_checkbox)
-        layout.addWidget(tools_row)
-
-        self.lossless_audio_preset_row = QWidget(self.encode_box)
-        la_layout = QHBoxLayout()
-        la_layout.setContentsMargins(0, 0, 0, 0)
-        la_layout.setSpacing(4)
-        self.lossless_audio_preset_row.setLayout(la_layout)
-        self.lossless_audio_compression_label = QLabel(self.t('Lossless audio compression'), self.lossless_audio_preset_row)
-        la_layout.addWidget(self.lossless_audio_compression_label)
-        self.encode_lossless_audio_combo = QComboBox(self.lossless_audio_preset_row)
+        self.lossless_audio_compression_label = QLabel(
+            self.t('Lossless audio compression'),
+            tools_row,
+        )
+        tools_layout.addWidget(self.lossless_audio_compression_label)
+        self.encode_lossless_audio_combo = QComboBox(tools_row)
         self.encode_lossless_audio_combo.addItem('FLAC', 'flac')
         self.encode_lossless_audio_combo.addItem('AAC', 'aac')
         self.encode_lossless_audio_combo.addItem('Opus', 'opus')
         self.encode_lossless_audio_combo.setCurrentIndex(0)
         self._encode_lossless_preset_updating = False
         self.encode_lossless_audio_combo.currentIndexChanged.connect(self._on_encode_lossless_audio_preset_changed)
-        la_layout.addWidget(self.encode_lossless_audio_combo)
-        la_layout.addStretch(1)
-        layout.addWidget(self.lossless_audio_preset_row)
+        tools_layout.addWidget(self.encode_lossless_audio_combo)
+        layout.addWidget(tools_row)
+
+        self.encode_options_row = QWidget(self.encode_box)
+        options_layout = QHBoxLayout(self.encode_options_row)
+        options_layout.setContentsMargins(0, 0, 0, 0)
+        options_layout.setSpacing(4)
+        self.use_getnative_checkbox = QCheckBox(
+            self.t('Use getnative for native resolution'),
+            self.encode_options_row,
+        )
+        self.use_getnative_checkbox.setChecked(True)
+        options_layout.addWidget(self.use_getnative_checkbox)
+        self.output_comparison_checkbox = QCheckBox(
+            self.t('Output comparison images'),
+            self.encode_options_row,
+        )
+        self.output_comparison_checkbox.setChecked(True)
+        options_layout.addWidget(self.output_comparison_checkbox)
+        options_layout.addStretch(1)
+        self.use_bluray_compat_params_checkbox = QCheckBox(
+            self.t('Use Blu-ray compatible params'),
+            self.encode_options_row,
+        )
+        self.use_bluray_compat_params_checkbox.setChecked(False)
+        options_layout.addWidget(self.use_bluray_compat_params_checkbox)
+        layout.addWidget(self.encode_options_row)
 
         self.x265_params_edit = QPlainTextEdit(self.encode_box)
         self.x265_params_edit.setFixedHeight(46)

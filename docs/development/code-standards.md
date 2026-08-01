@@ -112,6 +112,7 @@ When the author establishes a new rule, update this file and its Simplified Chin
 - A successful DTS-family-to-FLAC conversion replaces the source only when the FLAC is no larger than the extracted DTS; otherwise the FLAC is discarded and the original DTS is retained. Successful PCM and TrueHD/MLP FLAC conversions are retained regardless of size.
 - Final Remux and Encode outputs automatically remove selected audio whose decoded maximum volume is below -60 dB and exact decoded duplicates within the same source codec family and channel count. Different known languages are never deduplicated, the earliest source-order track is retained, and every removal is reported. This documented cleanup is an intentional exception to retaining every selected track.
 - Blu-ray Encode staging Remux must preserve source audio. Encode audio conversion runs only in the final mux after video encoding succeeds.
+- When Encode comparison images are enabled, each encoded video must save one source/encoded PNG pair selected by the same zero-based video frame number under `Compare` in the actual per-source output folder. Timestamp-based matching is not equivalent.
 - Generic video conversion is not supported by Blu-ray Remux or Blu-ray Encode. Future DIY video conversion requires a separately confirmed design.
 - Every selected main MPLS corresponds to exactly one non-empty main Remux command.
 - Add Chapters matches current visible MKV order to selected main playlists sequentially and does not require `BD_Vol_NNN` in external MKV filenames.

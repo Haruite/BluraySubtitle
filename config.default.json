@@ -33,6 +33,7 @@
     "preset_parameters": "--preset slower --crf 18 --aq-mode 3 --bframes 8 --ref 5 --me 3 --subme 4",
     "lossless_audio_codec": "flac",
     "subtitle_mode": "external",
-    "use_getnative": true
+    "use_getnative": true,
+    "output_comparison_images": true
   }
 }

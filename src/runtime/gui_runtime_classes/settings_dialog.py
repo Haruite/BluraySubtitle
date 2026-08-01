@@ -428,6 +428,11 @@ class SettingsDialog(QDialog):
             encode_group,
         )
         encode_form.addRow(self.default_getnative_checkbox)
+        self.default_output_comparison_checkbox = QCheckBox(
+            self.t("Output comparison images by default"),
+            encode_group,
+        )
+        encode_form.addRow(self.default_output_comparison_checkbox)
         self.default_encoder_combo.currentIndexChanged.connect(
             lambda _=None: self._refresh_advanced_encode_options(True)
         )
@@ -713,6 +718,9 @@ class SettingsDialog(QDialog):
             config.encode.subtitle_mode,
         )
         self.default_getnative_checkbox.setChecked(config.encode.use_getnative)
+        self.default_output_comparison_checkbox.setChecked(
+            config.encode.output_comparison_images
+        )
 
     def selected_config(self) -> AppConfig:
         return replace(
@@ -758,6 +766,9 @@ class SettingsDialog(QDialog):
                     self.default_subtitle_mode_combo.currentData()
                 ),
                 use_getnative=self.default_getnative_checkbox.isChecked(),
+                output_comparison_images=(
+                    self.default_output_comparison_checkbox.isChecked()
+                ),
             ),
         )
 

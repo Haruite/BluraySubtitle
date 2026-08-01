@@ -135,6 +135,11 @@ class AppConfigTests(unittest.TestCase):
                 "schema_version": 1,
                 "encode": {"use_getnative": "yes"},
             })
+        with self.assertRaisesRegex(ValueError, "output_comparison_images"):
+            app_config_from_mapping({
+                "schema_version": 1,
+                "encode": {"output_comparison_images": "yes"},
+            })
 
     def test_frozen_paths_separate_writable_config_from_packaged_template(self) -> None:
         executable = Path(r"C:\Portable\BluraySubtitle\BluraySubtitle_windows_x64.exe")
@@ -229,6 +234,7 @@ class SettingsGuiTests(unittest.TestCase):
             dialog.default_subtitle_mode_combo.findData("softsub")
         )
         dialog.default_getnative_checkbox.setChecked(False)
+        dialog.default_output_comparison_checkbox.setChecked(False)
         dialog.remux_flac_default_checkbox.setChecked(False)
 
         selected = dialog.selected_config()
@@ -268,6 +274,7 @@ class SettingsGuiTests(unittest.TestCase):
                 lossless_audio_codec="opus",
                 subtitle_mode="softsub",
                 use_getnative=False,
+                output_comparison_images=False,
             ),
         )
         labels = " ".join(label.text() for label in dialog.findChildren(QLabel))
@@ -500,6 +507,7 @@ class SettingsGuiTests(unittest.TestCase):
                 lossless_audio_codec="opus",
                 subtitle_mode="softsub",
                 use_getnative=False,
+                output_comparison_images=False,
             ),
         )
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -529,7 +537,25 @@ class SettingsGuiTests(unittest.TestCase):
             self.assertEqual(window.encode_lossless_audio_combo.currentData(), "opus")
             self.assertTrue(window.sub_pack_soft_radio.isChecked())
             self.assertFalse(window.use_getnative_checkbox.isChecked())
+            self.assertFalse(window.output_comparison_checkbox.isChecked())
             self.assertFalse(window.remux_flac_checkbox.isChecked())
+            self.assertIs(
+                window.lossless_audio_compression_label.parentWidget(),
+                window.vspipe_mode_combo.parentWidget(),
+            )
+            self.assertIs(
+                window.use_getnative_checkbox.parentWidget(),
+                window.output_comparison_checkbox.parentWidget(),
+            )
+            options_layout = window.use_getnative_checkbox.parentWidget().layout()
+            self.assertLess(
+                options_layout.indexOf(window.use_getnative_checkbox),
+                options_layout.indexOf(window.output_comparison_checkbox),
+            )
+            self.assertIsNot(
+                window.use_getnative_checkbox.parentWidget(),
+                window.encode_lossless_audio_combo.parentWidget(),
+            )
 
             window.output_folder_path.setText(r"E:\Session")
             window.function_tabbar.setCurrentIndex(0)
