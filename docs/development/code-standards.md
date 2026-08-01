@@ -1,4 +1,4 @@
-﻿# Code Modification Standards
+# Code Modification Standards
 
 [简体中文](code-standards.zh-Hans.md)
 
@@ -12,7 +12,7 @@ The authority order is:
 2. the product behavior described by `README.md` and `README.zh-Hans.md`;
 3. implementation details that do not conflict with the items above.
 
-The implementation may contain more detail than the README, but it must not contradict the README. When verified implementation behavior is retained, both README versions must be synchronized.
+The implementation may contain more detail than the README, but it must not contradict the README. When verified product behavior is documented, both README versions must be synchronized.
 
 When the author establishes a new rule, update this file and its Simplified Chinese counterpart before or in the same change as the code that relies on it. Every refactoring or major change must also update both [Refactoring History](../refactoring/refactoring-history.md) files. Ordinary changes do not require a history entry.
 
@@ -87,8 +87,8 @@ When the author establishes a new rule, update this file and its Simplified Chin
 - Add the English mapping to `src/core/i18n.py:I18N_ZH_TO_EN` in the same change.
 - Route user-visible text through `self.t(...)` or `translate_text(...)` at the appropriate presentation boundary.
 - Dynamic messages should translate a stable template and then substitute values.
-- Update `README.md` and `README.zh-Hans.md` together whenever product behavior or retained implementation detail is documented.
-- README files describe current functionality, retained implementation behavior, and operational cautions. Historical comparisons, removed behavior, refactoring rationale, and future cleanup plans belong in refactoring history or development documents, not in README.
+- Update `README.md` and `README.zh-Hans.md` together whenever product behavior or a user-relevant operational caution is documented.
+- Except in dedicated implementation-notes or implementation-details paragraphs and sections, README files must not describe program implementation details. Keep them concise and include only current functionality, operational cautions, and other information useful to users. Historical comparisons, removed behavior, refactoring rationale, and future cleanup plans belong in refactoring history or development documents.
 
 ## 8. File Format
 
@@ -107,23 +107,17 @@ When the author establishes a new rule, update this file and its Simplified Chin
 
 - Remux-source Encode is resumable. Existing planned main, SP, external-subtitle, and companion outputs are treated as completed and skipped without overwrite; remaining rows continue. Duplicate paths within the current request remain errors.
 - Blu-ray DIY remains visible and its code is retained. Its incomplete execution must not be presented as complete.
-- Configured track-language changes must be applied to the output.
 - Blu-ray Remux exposes a default-enabled option that converts selected lossless audio to FLAC after main and SP muxing. Disabled preserves source audio; Remux must not use AAC or Opus for this conversion.
-- FLAC output must prefer the configured standalone `flac` encoder and automatically use the detected number of logical CPU threads. Compressed lossless sources may be decoded to PCM by `ffmpeg` first; an unavailable or failed standalone encoder falls back to `ffmpeg` for FLAC encoding. Standalone and FFmpeg FLAC compression levels default to 8 and may be configured independently; FFmpeg output for actual audio decoding or encoding remains visible.
 - A successful DTS-family-to-FLAC conversion replaces the source only when the FLAC is no larger than the extracted DTS; otherwise the FLAC is discarded and the original DTS is retained. Successful PCM and TrueHD/MLP FLAC conversions are retained regardless of size.
 - Final Remux and Encode outputs automatically remove selected audio whose decoded maximum volume is below -60 dB and exact decoded duplicates within the same source codec family and channel count. Different known languages are never deduplicated, the earliest source-order track is retained, and every removal is reported. This documented cleanup is an intentional exception to retaining every selected track.
-- Automatic final-audio cleanup must extract all selected audio tracks in one `mkvextract` invocation and reuse those extracted files for analysis and conversion. It must not reopen a large source Matroska once per selected audio track.
 - Blu-ray Encode staging Remux must preserve source audio. Encode audio conversion runs only in the final mux after video encoding succeeds.
 - Generic video conversion is not supported by Blu-ray Remux or Blu-ray Encode. Future DIY video conversion requires a separately confirmed design.
 - Every selected main MPLS corresponds to exactly one non-empty main Remux command.
-- README-documented technical fallback may change the method used, but it must preserve explicit GUI intent such as selected tracks, languages, chapter ranges, names, and output paths.
 - Add Chapters matches current visible MKV order to selected main playlists sequentially and does not require `BD_Vol_NNN` in external MKV filenames.
 - Application preferences use a versioned `config.json` beside the executable, or in the repository root for source runs. Frozen builds package `config.default.json` as the first-run template; the bundled `_MEIPASS` directory is never the writable configuration target.
 - Update checks must be manual and asynchronous. They may query only the latest published full GitHub Release tag, compare its numeric version with the application-owned version, and must not download an update. A newer-version result must provide the GitHub Releases link and explicitly remind the user to copy `config.json` from the current program directory to the new program directory.
 - Invalid application configuration must be reported and left untouched. Configuration writes must replace the complete file atomically.
-- The External Tools settings page edits the effective `src/core/settings.py` source, validates Python syntax before atomic replacement, and applies changes on the next launch. Frozen builds must seed an editable source copy outside `_MEIPASS`. The page must check currently active configured tool paths, list missing tools, and direct users to the platform setup script in the repository root.
-- Startup page, default Series/Movie mode, and configured Remux/Encode output folders provide initial GUI values only. Page-specific edits must be retained during the current session, and task execution must continue to capture the current visible output folder rather than rereading the configuration file.
-- Default Encode encoder, bit depth, preset, preset parameters, lossless-audio target, subtitle packaging, and getnative state initialize the visible Encode controls at startup only. The configured Remux lossless-to-FLAC default likewise initializes its visible checkbox. Launched tasks must continue to capture those visible controls. Audio compression levels and bitrates must be captured into each immutable Remux/Encode request before worker launch; workers must not reread live GUI or configuration state.
+- Configured defaults only initialize visible GUI controls. Edits made in the current session must be retained, and launched tasks use the current visible values rather than rereading configuration defaults.
 - FDK-AAC and Opus bitrate value `0` means automatic behavior: FDK-AAC uses VBR mode 5, while Opus uses 128 kbps for up to two channels and 256 kbps for more channels. Positive values are explicit kbps targets.
 - The Advanced settings page must visibly warn that higher FFmpeg FLAC compression levels can significantly increase Remux time. It must also show stereo-music starting ranges of 128–256 kbps for FDK-AAC and 64–128 kbps for Opus, with Auto or a higher value recommended for multichannel or mixed channel layouts.
 - Window geometry and current language, theme, font size, and opacity are saved automatically on a clean close. Restored geometry must not be replaced by first-run centering.

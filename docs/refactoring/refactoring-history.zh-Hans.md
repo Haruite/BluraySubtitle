@@ -840,7 +840,7 @@ Blu-ray DIY 压制及“编辑轨道”中的通用视频转换仍不在本阶�
 ## HDR 元数据自动处理与 Encode 逐行可靠性
 
 日期：2026-07-29 至 2026-08-01
-提交：未提交（当前修改）
+提交：`bbd8813`（`feat(encode): complete automatic HDR metadata workflow`）
 
 ### 来源探测与静态元数据
 

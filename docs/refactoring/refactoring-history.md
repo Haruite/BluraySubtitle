@@ -860,7 +860,7 @@ Commit: `56ce8bb` (`build(hdr): enable x265 HDR10+ and add hdr10plus_tool`)
 ## Automatic HDR Metadata and Encode Row Reliability
 
 Date: 2026-07-29 to 2026-08-01
-Commit: uncommitted (current change)
+Commit: `bbd8813` (`feat(encode): complete automatic HDR metadata workflow`)
 
 ### Source Discovery and Static Metadata
 
