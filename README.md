@@ -131,6 +131,7 @@ Encode options include:
 - **Lossless audio recompression**: **FLAC / AAC / Opus**
 - The startup encoder, bit depth, and preset come from **Advanced** settings. User-defined presets can be added, renamed, edited, and deleted there for the currently selected encoder, while built-in presets remain read-only. After startup, the visible Encode preset and parameter controls remain authoritative for every task.
 - The startup lossless-audio target, subtitle packaging mode, getnative, automatic-crop, and output-comparison checkboxes also come from **Advanced** settings and remain freely editable before launch.
+- The VPy row below those options exposes denoise, dehalo, dering, deband, and anti-aliasing strengths for the generated default script. `0` disables an individual stage; defect-specific dehalo and dering start disabled, while deband and anti-aliasing use a moderate `0.5` blend by default. All values can also be changed under **Advanced** settings.
 - Automatic getnative can take substantial time and memory because it analyzes multiple frames and kernels. The common false-positive band from 535p through 545p is excluded, so genuinely native 540p material must be configured manually in the VPy.
 - With **Auto-crop black borders** enabled, Encode analyzes multiple time points and applies one conservative fixed crop. Pixels used by any sampled active picture are preserved when borders vary over time.
 - With **Output comparison images** enabled, every encoded video saves source and encoded PNGs from the same frame under **`<selected output>/<source folder name>/Compare`**.
@@ -391,6 +392,7 @@ with the remaining work. Empty main/SP files and paths of the wrong type are rej
 - **Edit script (`edit_vpy`)**: opened with the **system default editor** for the file type.  
 - **Preview script (`preview_script`)**: opened with **`vsedit`**, with row-aware preview context.  
 - Default script path: **`vpy.vpy`**.
+- The generated default script intentionally does not auto-process interlaced video because true interlace, telecine, and mixed cadence require different treatment; use a custom VPy as described in the [Encode/VapourSynth Wiki](docs/wiki/Video-Encoding-and-VapourSynth.md#interlaced-telecined-and-mixed-cadence-sources).
 
 ---
 
@@ -529,4 +531,5 @@ Use your own judgment.
 - [ass2bdnxml](https://github.com/Masaiki/ass2bdnxml)
 - [BDSup2Sub](https://github.com/mjuhasz/BDSup2Sub)
 - [Spp2Pgs](https://github.com/subelf/Spp2Pgs)
-- [Infiziert90/getnative](https://github.com/Infiziert90/getnative)
+- [getnative](https://github.com/Infiziert90/getnative)
+- [my-vapoursynth-script](https://github.com/xyx98/my-vapoursynth-script)

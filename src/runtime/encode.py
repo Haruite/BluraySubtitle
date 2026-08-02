@@ -32,6 +32,11 @@ class EncodeSettings:
     default_lossless_audio_codec: str
     auto_crop_black_borders: bool = False
     output_comparison_images: bool = True
+    vpy_denoise_strength: float = 0.6
+    vpy_dehalo_strength: float = 0.0
+    vpy_dering_strength: float = 0.0
+    vpy_deband_strength: float = 0.5
+    vpy_antialiasing_strength: float = 0.5
     audio_encoding: AudioEncodingSettings = AudioEncodingSettings()
 
 
@@ -97,6 +102,29 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
                 setting_name == 'bit_depth'
                 and request.settings.encoder == 'x264'
                 and setting_value == '12'
+        ):
+            raise ValueError(
+                translate_text('Invalid encode setting: {name}={value}').format(
+                    name=setting_name,
+                    value=setting_value,
+                )
+            )
+    for setting_name, setting_value, minimum, maximum in (
+            ('vpy_denoise_strength', request.settings.vpy_denoise_strength, 0.0, 3.0),
+            ('vpy_dehalo_strength', request.settings.vpy_dehalo_strength, 0.0, 1.0),
+            ('vpy_dering_strength', request.settings.vpy_dering_strength, 0.0, 1.0),
+            ('vpy_deband_strength', request.settings.vpy_deband_strength, 0.0, 1.0),
+            (
+                'vpy_antialiasing_strength',
+                request.settings.vpy_antialiasing_strength,
+                0.0,
+                1.0,
+            ),
+    ):
+        if (
+                isinstance(setting_value, bool)
+                or not isinstance(setting_value, (int, float))
+                or not minimum <= float(setting_value) <= maximum
         ):
             raise ValueError(
                 translate_text('Invalid encode setting: {name}={value}').format(

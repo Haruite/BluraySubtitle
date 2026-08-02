@@ -81,6 +81,11 @@ class EncodePreferences:
     use_getnative: bool = True
     auto_crop_black_borders: bool = False
     output_comparison_images: bool = True
+    vpy_denoise_strength: float = 0.6
+    vpy_dehalo_strength: float = 0.0
+    vpy_dering_strength: float = 0.0
+    vpy_deband_strength: float = 0.5
+    vpy_antialiasing_strength: float = 0.5
 
 
 @dataclass(frozen=True)
@@ -142,6 +147,26 @@ def _integer_value(
             f"Configuration value must be an integer from {minimum} to {maximum}: {name}"
         )
     return value
+
+
+def _number_value(
+        section: dict[str, Any],
+        name: str,
+        default: float,
+        minimum: float,
+        maximum: float,
+) -> float:
+    value = section.get(name, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(
+            f"Configuration value must be a number from {minimum} to {maximum}: {name}"
+        )
+    result = float(value)
+    if not minimum <= result <= maximum:
+        raise ValueError(
+            f"Configuration value must be a number from {minimum} to {maximum}: {name}"
+        )
+    return result
 
 
 def _boolean_value(section: dict[str, Any], name: str, default: bool) -> bool:
@@ -377,6 +402,41 @@ def app_config_from_mapping(raw: dict[str, Any]) -> AppConfig:
                 encode,
                 "output_comparison_images",
                 True,
+            ),
+            vpy_denoise_strength=_number_value(
+                encode,
+                "vpy_denoise_strength",
+                0.6,
+                0.0,
+                3.0,
+            ),
+            vpy_dehalo_strength=_number_value(
+                encode,
+                "vpy_dehalo_strength",
+                0.0,
+                0.0,
+                1.0,
+            ),
+            vpy_dering_strength=_number_value(
+                encode,
+                "vpy_dering_strength",
+                0.0,
+                0.0,
+                1.0,
+            ),
+            vpy_deband_strength=_number_value(
+                encode,
+                "vpy_deband_strength",
+                0.5,
+                0.0,
+                1.0,
+            ),
+            vpy_antialiasing_strength=_number_value(
+                encode,
+                "vpy_antialiasing_strength",
+                0.5,
+                0.0,
+                1.0,
             ),
         ),
     )

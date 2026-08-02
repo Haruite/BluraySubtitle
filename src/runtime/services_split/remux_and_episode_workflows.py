@@ -1343,6 +1343,13 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 subtitle_language=row.subtitle_language,
                 audio_encoding=request.settings.audio_encoding,
                 auto_crop_black_borders=request.settings.auto_crop_black_borders,
+                vpy_denoise_strength=request.settings.vpy_denoise_strength,
+                vpy_dehalo_strength=request.settings.vpy_dehalo_strength,
+                vpy_dering_strength=request.settings.vpy_dering_strength,
+                vpy_deband_strength=request.settings.vpy_deband_strength,
+                vpy_antialiasing_strength=(
+                    request.settings.vpy_antialiasing_strength
+                ),
             )
             if not os.path.isfile(row.output_path):
                 raise RuntimeError(

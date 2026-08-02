@@ -26,6 +26,7 @@ from src.runtime.services import BluraySubtitle as _BluraySubtitle
 from src.runtime.services_split.encode_and_audio_tasks import (
     EncodeAudioTasksMixin,
     _plan_automatic_encoder_metadata,
+    _write_vpy_video_source_a,
 )
 from src.runtime.services_split.remux_and_episode_workflows import RemuxEpisodeWorkflowsMixin
 from src.runtime.gui_runtime_classes.bluray_subtitle_gui_entry import BluraySubtitleGUI as _BluraySubtitleGUI
@@ -185,6 +186,59 @@ class _PipelineService(EncodeAudioTasksMixin):
 
 
 class EncodeWorkflowTests(unittest.TestCase):
+    def test_vpy_source_patch_changes_only_the_top_level_source_assignment(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            vpy_path = Path(temporary_directory) / 'encode.vpy'
+            vpy_path.write_text(
+                'a = r"old.mkv"\n'
+                'def helper():\n'
+                '    a = 8\n'
+                '    return a\n',
+                encoding='utf-8',
+            )
+
+            self.assertTrue(_write_vpy_video_source_a(str(vpy_path), r'E:\video.mkv'))
+
+            content = vpy_path.read_text(encoding='utf-8')
+            self.assertIn('a = r"E:\\video.mkv"', content)
+            self.assertIn('    a = 8', content)
+
+    def test_preflight_rejects_invalid_vpy_processing_strengths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_folder = root / 'source'
+            output_folder = root / 'output'
+            source_folder.mkdir()
+            output_folder.mkdir()
+            source_path = source_folder / 'source.mkv'
+            vpy_path = root / 'encode.vpy'
+            source_path.write_bytes(b'mkv')
+            vpy_path.write_text('a = r""\n', encoding='utf-8')
+
+            for name, value in (
+                    ('vpy_denoise_strength', float('nan')),
+                    ('vpy_dehalo_strength', 1.1),
+                    ('vpy_dering_strength', True),
+                    ('vpy_deband_strength', -0.1),
+                    ('vpy_antialiasing_strength', 1.1),
+            ):
+                request = EncodeRequest(
+                    input_mode='remux',
+                    source_root=str(source_folder),
+                    output_folder=str(output_folder),
+                    staging_folder='',
+                    main_rows=(EncodeRow(
+                        str(source_path),
+                        str(output_folder / f'{name}.mkv'),
+                        str(vpy_path),
+                    ),),
+                    sp_rows=(),
+                    settings=replace(_settings(), **{name: value}),
+                )
+                with self.subTest(name=name, value=value):
+                    with self.assertRaisesRegex(ValueError, name):
+                        validate_encode_request(request)
+
     def setUp(self) -> None:
         vpy_probe = patch(
             'src.runtime.services_split.encode_and_audio_tasks.probe_vapoursynth_output_metadata',
@@ -234,6 +288,11 @@ class EncodeWorkflowTests(unittest.TestCase):
                     isChecked=lambda: True
                 ),
                 output_comparison_checkbox=SimpleNamespace(isChecked=lambda: True),
+                vpy_denoise_strength_spin=SimpleNamespace(value=lambda: 0.7),
+                vpy_dehalo_strength_spin=SimpleNamespace(value=lambda: 0.2),
+                vpy_dering_strength_spin=SimpleNamespace(value=lambda: 0.3),
+                vpy_deband_strength_spin=SimpleNamespace(value=lambda: 0.4),
+                vpy_antialiasing_strength_spin=SimpleNamespace(value=lambda: 0.5),
                 trim_copyright_tail_checkbox=SimpleNamespace(isChecked=lambda: False),
                 mux_dolby_vision_checkbox=SimpleNamespace(isChecked=lambda: False),
                 table2=SimpleNamespace(rowCount=lambda: 1, item=lambda _row, _column: None),
@@ -283,6 +342,11 @@ class EncodeWorkflowTests(unittest.TestCase):
             self.assertEqual(request.settings.default_lossless_audio_codec, 'opus')
             self.assertTrue(request.settings.auto_crop_black_borders)
             self.assertTrue(request.settings.output_comparison_images)
+            self.assertEqual(request.settings.vpy_denoise_strength, 0.7)
+            self.assertEqual(request.settings.vpy_dehalo_strength, 0.2)
+            self.assertEqual(request.settings.vpy_dering_strength, 0.3)
+            self.assertEqual(request.settings.vpy_deband_strength, 0.4)
+            self.assertEqual(request.settings.vpy_antialiasing_strength, 0.5)
             self.assertEqual(request.settings.audio_encoding, audio_encoding)
             self.assertFalse(request.mux_dolby_vision)
             self.assertFalse(hasattr(owner, 'checkbox1'))
@@ -887,11 +951,29 @@ class EncodeWorkflowTests(unittest.TestCase):
             output_path = root / 'output.mkv'
             vpy_path = root / 'encode.vpy'
             source_path.write_bytes(b'mkv')
-            vpy_path.write_text('a = r""\nres = core.fmtc.bitdepth(src8, bits=10)\n', encoding='utf-8')
+            vpy_path.write_text(
+                'a = r""\n'
+                'denoise_strength=6e-1  # keep\n'
+                'dehalo_strength = 0.25\n'
+                'dering_strength = 0.25\n'
+                'deband_strength = 1.0\n'
+                'antialiasing_strength = 1.0\n'
+                'def helper():\n'
+                '    denoise_strength = 9\n'
+                'res = core.fmtc.bitdepth(src8, bits=10)\n',
+                encoding='utf-8',
+            )
             service = _PipelineService()
 
             def encode_video(_vspipe, _vpy, encoder_command, _environment):
                 self.assertEqual(encoder_command[encoder_command.index('--preset') + 1], '6')
+                content = Path(_vpy).read_text(encoding='utf-8')
+                self.assertIn('denoise_strength=0  # keep', content)
+                self.assertIn('dehalo_strength = 0.4', content)
+                self.assertIn('dering_strength = 0.5', content)
+                self.assertIn('deband_strength = 0.6', content)
+                self.assertIn('antialiasing_strength = 0.7', content)
+                self.assertIn('    denoise_strength = 9', content)
                 Path(encoder_command[encoder_command.index('-b') + 1]).write_bytes(b'av1')
                 return 0
 
@@ -943,6 +1025,11 @@ class EncodeWorkflowTests(unittest.TestCase):
                     subtitle_path='',
                     subtitle_language='',
                     source_file=str(source_path),
+                    vpy_denoise_strength=0.0,
+                    vpy_dehalo_strength=0.4,
+                    vpy_dering_strength=0.5,
+                    vpy_deband_strength=0.6,
+                    vpy_antialiasing_strength=0.7,
                 )
 
             prepare_dolby_vision.assert_not_called()
@@ -987,6 +1074,10 @@ class EncodeWorkflowTests(unittest.TestCase):
                 self.assertEqual(
                     environment['BLURAYSUB_VPY_SOURCE'],
                     os.path.normpath(str(base_layer)),
+                )
+                self.assertEqual(
+                    environment['BLURAYSUB_PLUGIN_PATH'],
+                    '/custom/vapoursynth/plugins',
                 )
                 self.assertEqual(
                     encoder_command[
@@ -1090,6 +1181,10 @@ class EncodeWorkflowTests(unittest.TestCase):
                     patch(
                         'src.runtime.services_split.encode_and_audio_tasks.get_vspipe_context',
                         return_value=('vspipe', {}),
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.PLUGIN_PATH',
+                        '/custom/vapoursynth/plugins',
                     ),
                     patch(
                         'src.runtime.services_split.encode_and_audio_tasks.resolve_encoder_executable_path',

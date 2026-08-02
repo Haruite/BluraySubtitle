@@ -13,7 +13,8 @@ from typing import Optional
 from PyQt6.QtCore import Qt, QTimer, QThread, QCoreApplication, QPoint, QEventLoop
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPlainTextEdit, QWidget, QHBoxLayout, QPushButton, \
     QApplication, QProgressDialog, QProgressBar, QTableWidgetItem, QTableWidget, QToolButton, QComboBox, \
-    QAbstractItemView, QMenu, QMessageBox, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, QFileDialog, QCheckBox
+    QAbstractItemView, QMenu, QMessageBox, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, QFileDialog, QCheckBox, \
+    QDoubleSpinBox
 
 from src.bdmv import Chapter
 from src.core import MKV_LABELS, REMUX_LABELS, DIY_REMUX_LABELS, ENCODE_LABELS, SUBTITLE_LABELS, ENCODE_REMUX_LABELS, \
@@ -1000,6 +1001,13 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     getattr(self, 'output_comparison_checkbox', None)
                     and self.output_comparison_checkbox.isChecked()
                 ),
+                vpy_denoise_strength=float(self.vpy_denoise_strength_spin.value()),
+                vpy_dehalo_strength=float(self.vpy_dehalo_strength_spin.value()),
+                vpy_dering_strength=float(self.vpy_dering_strength_spin.value()),
+                vpy_deband_strength=float(self.vpy_deband_strength_spin.value()),
+                vpy_antialiasing_strength=float(
+                    self.vpy_antialiasing_strength_spin.value()
+                ),
                 audio_encoding=self._captured_audio_encoding_settings(),
             )
             track_selection_snapshot = copy.deepcopy(
@@ -1679,6 +1687,62 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         self.use_bluray_compat_params_checkbox.setChecked(False)
         options_layout.addWidget(self.use_bluray_compat_params_checkbox)
         layout.addWidget(self.encode_options_row)
+
+        self.vpy_processing_row = QWidget(self.encode_box)
+        processing_layout = QHBoxLayout(self.vpy_processing_row)
+        processing_layout.setContentsMargins(0, 0, 0, 0)
+        processing_layout.setSpacing(4)
+        processing_layout.addWidget(QLabel(self.t('VPy processing:'), self.vpy_processing_row))
+
+        def add_processing_strength(
+                label_text: str,
+                maximum: float,
+                default: float,
+                tooltip: str,
+        ) -> QDoubleSpinBox:
+            processing_layout.addWidget(QLabel(self.t(label_text), self.vpy_processing_row))
+            spin = QDoubleSpinBox(self.vpy_processing_row)
+            spin.setRange(0.0, maximum)
+            spin.setDecimals(2)
+            spin.setSingleStep(0.1)
+            spin.setValue(default)
+            spin.setKeyboardTracking(False)
+            spin.setToolTip(self.t(tooltip))
+            processing_layout.addWidget(spin)
+            return spin
+
+        self.vpy_denoise_strength_spin = add_processing_strength(
+            'Denoise',
+            3.0,
+            0.6,
+            'Default VPy denoise strength; 0 disables it. Lower values preserve more grain and texture.',
+        )
+        self.vpy_dehalo_strength_spin = add_processing_strength(
+            'Dehalo',
+            1.0,
+            0.0,
+            'Default VPy dehalo starts disabled. For visible sharpening halos, start around 0.15-0.25.',
+        )
+        self.vpy_dering_strength_spin = add_processing_strength(
+            'Dering',
+            1.0,
+            0.0,
+            'Default VPy dering starts disabled. For visible ringing, start around 0.15-0.25.',
+        )
+        self.vpy_deband_strength_spin = add_processing_strength(
+            'Deband',
+            1.0,
+            0.5,
+            'Default VPy deband blend; 0 disables it, 0.5 is the moderate default, and 1 applies the full adaptively masked result.',
+        )
+        self.vpy_antialiasing_strength_spin = add_processing_strength(
+            'Anti-aliasing',
+            1.0,
+            0.5,
+            'Default VPy anti-aliasing blend; 0 disables it, 0.5 is the moderate default, and 1 applies the full limited EEDI2 result.',
+        )
+        processing_layout.addStretch(1)
+        layout.addWidget(self.vpy_processing_row)
 
         self.x265_params_edit = QPlainTextEdit(self.encode_box)
         self.x265_params_edit.setFixedHeight(46)

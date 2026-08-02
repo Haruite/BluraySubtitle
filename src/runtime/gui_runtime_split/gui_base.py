@@ -168,6 +168,12 @@ class BluraySubtitleGuiBase(QWidget):
         self.use_getnative_checkbox = None
         self.auto_crop_black_borders_checkbox = None
         self.output_comparison_checkbox = None
+        self.vpy_processing_row = None
+        self.vpy_denoise_strength_spin = None
+        self.vpy_dehalo_strength_spin = None
+        self.vpy_dering_strength_spin = None
+        self.vpy_deband_strength_spin = None
+        self.vpy_antialiasing_strength_spin = None
         self.encode_tool_combo = None
         self.encode_tool_label = None
         self.encode_source_label = None
@@ -318,6 +324,9 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _current_encode_tool_and_depth(self) -> tuple[str, str]:
+        raise NotImplementedError
+
+    def _current_vpy_processing_values(self) -> dict[str, float]:
         raise NotImplementedError
 
     def _default_track_lists_for_mkv_path(self, mkv_path: str) -> Optional[tuple[list[str], list[str]]]:
@@ -546,6 +555,10 @@ class BluraySubtitleGuiBase(QWidget):
 
     @staticmethod
     def _patch_fmtc_output_bits_in_text(raw_line: str, bits: int) -> str:
+        raise NotImplementedError
+
+    @staticmethod
+    def _patch_vpy_processing_value_in_text(text: str, values: dict[str, float]) -> str:
         raise NotImplementedError
 
     def _pid_lang_from_m2ts_track_info(self, tracks: list[dict[str, object]]) -> dict[int, str]:

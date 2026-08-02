@@ -1008,7 +1008,7 @@ Commit: `d41ac01`
 ## Automatic Getnative Analysis and Kernel Fidelity
 
 Date: 2026-08-02
-Commit: Included in this change
+Commit: a5fa237
 
 ### Execution and Detection Corrections
 
@@ -1035,3 +1035,29 @@ Commit: Included in this change
 - All 272 repository tests passed together with Python compilation, i18n and split-contract checks. Portable Python 3.13/VSPipe smoke tests returned all 16 unique kernels, streamed per-kernel progress, and reproduced the expected 892p adjacent-error notch from an FFmpeg-generated RGB PNG through the production split boundary.
 - Three complete 20-sample runs used `Cyberpunk Edgerunners` Disc 1 `00000.m2ts`. The first full-frame-coarse pass took 1661.14 seconds and exposed the smoothed-valley 887p defect; the half-size coarse pass took 946.78 seconds, reducing wall time by 42.99%, and retained 19 usable samples with about 17.3 GiB peak total worker memory in the worst full-frame phase. The final upstream-ratio run took 963.26 seconds; replaying its unchanged 19 final curves through the finalized saturated multi-frame weight selected the eight-sample 892p group, Bilinear, and confidence 3.556979. Five remains only the minimum required before skipping another round: every usable result from the already-launched 20-sample round is retained.
 - A complete 20-sample run on `2.5 Dimensional Seduction` Vol.1 `00003.m2ts` finished in 731.79 seconds and selected the expected 900p with Spline16. All 320 kernel events were emitted, eight clearly weaker kernels skipped their fine scan, and 19 curves were usable: 15 resolved exactly to 900p, with no systematic 5p offset. Peak combined Python/VSPipe working set was 15.33 GiB; the single-VSPipe transient maximum was 1014.8 MiB, while observed final-verification processes stayed near 380–400 MiB. Isolated measurements put the 16-kernel and final-verification peaks at 494.1 MiB and 412.6 MiB respectively.
+
+## Cross-Platform Default VPy Source and Rescale Safety
+
+Date: 2026-08-02
+Commit: Included in this change
+
+### Source and Plugin Corrections
+
+- Linux setup now captures the complete `ldd -r` report before checking unresolved symbols. The previous `pipefail` plus `grep -q` pipeline could turn a successful match into SIGPIPE status and incorrectly skip the L-SMASH-Works rebuild. FFmpeg 4.x index-access compatibility remains version-gated.
+- Linux FLAC setup now checks the source-owned `/usr/local/bin/flac` before the configured runtime path and synchronizes a current source build to that configured path. A stale distribution binary can no longer cause a redundant rebuild or hide the installed source version.
+- Generated default scripts load configured plugins before importing `mvsfunc`, use only L-SMASH with a hashed index in the system temporary directory, and contain no source-reader `try`/`except` fallback. The obsolete FFMS2 path was removed from both the generated script and getnative image loading.
+- Both Windows and Linux now use `placebo.Deband`. The Windows installer copies `libvs_placebo.dll` from the same verified AmusementClub/tools archive as VSEdit, scripts, and the other required plugins, and verifies the `placebo` namespace in that shared component.
+
+### Default Processing and Preset Changes
+
+- The generated script rejects field-based input explicitly instead of applying a progressive restoration chain to interlaced video. Native inverse scaling now descales only luma, resizes chroma with explicit Blu-ray left chroma location, and uses a reconstruction-difference mask to restore all original YUV planes over credits and other final-resolution composites.
+- Advanced settings initialize a new Encode VPy-processing row, while task launch snapshots its visible denoise (`0.0`–`3.0`, default `0.6`), dehalo (`0.0`–`1.0`, default `0.0`), dering (`0.0`–`1.0`, default `0.0`), deband (`0.0`–`1.0`, default `0.5`), and anti-aliasing (`0.0`–`1.0`, default `0.5`) values through configuration, request, service, preview, and the generated script. Defect-specific dehalo and dering start disabled; deband and EEDI2 anti-aliasing now start at the literal blend midpoint and skip their work at `0`. Deband restores multi-plane edge/detail regions through a softened Prewitt mask, and the EEDI2 result is now limited in the correct direction toward the source luma. Custom scripts are changed only when they expose the corresponding top-level numeric assignment.
+- The old fixed whole-chain `NLMeans h=3` reference was replaced by spatial luma-only NLMeans with a strong-edge mask and pixel-change limiting. Conservative abcxyz-derived dehalo and MinBlur/HQDering-derived ring-band processing use only the already-required `std`, `rgvs`, `nlm_ispc`, and `mvsfunc` components, so no additional plugin was introduced.
+- x264 built-in presets no longer force Level 4.1, allowing their configured reference-frame counts to select a conforming level. SVT-AV1 presets no longer request synthetic film grain by default.
+
+### Documentation and Verification
+
+- Synchronized both README versions, the Encode/VapourSynth Wiki, both code-standard versions, and focused setup/default-VPy regression tests. The Wiki now documents the adjustable restoration stages, distinguishes true interlace, telecine, and mixed cadence, records custom QTGMC/IVTC starting points, and explains that final-resolution text protection is a reconstruction-difference mask rather than OCR.
+- Windows, Ubuntu 22.04, and Ubuntu 26.04 each rendered a generated 900p Bicubic default VPy frame using L-SMASH and placebo with no generated `try`/`except`, FFMS2, or neo_f3kdb path. Ubuntu 22.04 also rebuilt and loaded the formerly broken L-SMASH-Works plugin with no unresolved symbols.
+- The FLAC selector chose `/usr/local/bin/flac` 1.5.0 on Ubuntu 22.04 and correctly fell back to `/usr/bin/flac` 1.5.0 on Ubuntu 26.04. The installed Windows `libvs_placebo.dll` matched the extracted AmusementClub/tools file byte-for-byte (SHA-256 `A001EC26EFF87E5261E9438B9CBA0ADB176C2B6E210F7CBCD2E6D0F1A8F6F80E`) and evaluated the generated script's exact 16-bit Deband call successfully.
+- All 283 repository tests passed together with Python compilation, i18n, split-contract, PowerShell-parser, shell-syntax, diff, and line-ending checks. Windows additionally rendered all 16 getnative kernels and verified the field-based rejection path; the revised adaptive deband and anti-aliasing post-filter also produced a YUV420P16 smoke frame in the managed VapourSynth environment.

@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QDoubleSpinBox,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
@@ -464,6 +465,56 @@ class SettingsDialog(QDialog):
             encode_group,
         )
         encode_form.addRow(self.default_output_comparison_checkbox)
+
+        def create_vpy_strength_spin(maximum: float, tooltip: str) -> QDoubleSpinBox:
+            spin = QDoubleSpinBox(encode_group)
+            spin.setRange(0.0, maximum)
+            spin.setDecimals(2)
+            spin.setSingleStep(0.1)
+            spin.setKeyboardTracking(False)
+            spin.setToolTip(self.t(tooltip))
+            return spin
+
+        self.default_vpy_denoise_strength_spin = create_vpy_strength_spin(
+            3.0,
+            "Default VPy denoise strength; 0 disables it. Lower values preserve more grain and texture.",
+        )
+        encode_form.addRow(
+            self.t("Default VPy denoise strength"),
+            self.default_vpy_denoise_strength_spin,
+        )
+        self.default_vpy_dehalo_strength_spin = create_vpy_strength_spin(
+            1.0,
+            "Default VPy dehalo starts disabled. For visible sharpening halos, start around 0.15-0.25.",
+        )
+        encode_form.addRow(
+            self.t("Default VPy dehalo strength"),
+            self.default_vpy_dehalo_strength_spin,
+        )
+        self.default_vpy_dering_strength_spin = create_vpy_strength_spin(
+            1.0,
+            "Default VPy dering starts disabled. For visible ringing, start around 0.15-0.25.",
+        )
+        encode_form.addRow(
+            self.t("Default VPy dering strength"),
+            self.default_vpy_dering_strength_spin,
+        )
+        self.default_vpy_deband_strength_spin = create_vpy_strength_spin(
+            1.0,
+            "Default VPy deband blend; 0 disables it, 0.5 is the moderate default, and 1 applies the full adaptively masked result.",
+        )
+        encode_form.addRow(
+            self.t("Default VPy deband strength"),
+            self.default_vpy_deband_strength_spin,
+        )
+        self.default_vpy_antialiasing_strength_spin = create_vpy_strength_spin(
+            1.0,
+            "Default VPy anti-aliasing blend; 0 disables it, 0.5 is the moderate default, and 1 applies the full limited EEDI2 result.",
+        )
+        encode_form.addRow(
+            self.t("Default VPy anti-aliasing strength"),
+            self.default_vpy_antialiasing_strength_spin,
+        )
         self.default_encoder_combo.currentIndexChanged.connect(
             lambda _=None: self._refresh_advanced_encode_options(True)
         )
@@ -983,6 +1034,21 @@ class SettingsDialog(QDialog):
         self.default_output_comparison_checkbox.setChecked(
             config.encode.output_comparison_images
         )
+        self.default_vpy_denoise_strength_spin.setValue(
+            config.encode.vpy_denoise_strength
+        )
+        self.default_vpy_dehalo_strength_spin.setValue(
+            config.encode.vpy_dehalo_strength
+        )
+        self.default_vpy_dering_strength_spin.setValue(
+            config.encode.vpy_dering_strength
+        )
+        self.default_vpy_deband_strength_spin.setValue(
+            config.encode.vpy_deband_strength
+        )
+        self.default_vpy_antialiasing_strength_spin.setValue(
+            config.encode.vpy_antialiasing_strength
+        )
 
     def selected_config(self) -> AppConfig:
         return replace(
@@ -1031,6 +1097,21 @@ class SettingsDialog(QDialog):
                 ),
                 output_comparison_images=(
                     self.default_output_comparison_checkbox.isChecked()
+                ),
+                vpy_denoise_strength=(
+                    self.default_vpy_denoise_strength_spin.value()
+                ),
+                vpy_dehalo_strength=(
+                    self.default_vpy_dehalo_strength_spin.value()
+                ),
+                vpy_dering_strength=(
+                    self.default_vpy_dering_strength_spin.value()
+                ),
+                vpy_deband_strength=(
+                    self.default_vpy_deband_strength_spin.value()
+                ),
+                vpy_antialiasing_strength=(
+                    self.default_vpy_antialiasing_strength_spin.value()
                 ),
             ),
         )

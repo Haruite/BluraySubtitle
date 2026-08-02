@@ -170,16 +170,16 @@ starting points rather than promises of a particular size or visual quality.
 
 ```text
 Fast:
---preset fast --crf 20 --profile high --level 4.1 --bframes 4 --ref 4
+--preset fast --crf 20 --profile high --bframes 4 --ref 4
 
 Balanced:
---preset medium --crf 18 --profile high --level 4.1 --bframes 6 --ref 5 --deblock -1:-1
+--preset medium --crf 18 --profile high --bframes 6 --ref 5 --deblock -1:-1
 
 High Quality:
---preset slow --crf 16 --profile high --level 4.1 --bframes 8 --ref 6 --deblock -1:-1 --aq-mode 2
+--preset slow --crf 16 --profile high --bframes 8 --ref 6 --deblock -1:-1 --aq-mode 2
 
 Extreme:
---preset veryslow --crf 14 --profile high --level 4.1 --bframes 10 --ref 8 --aq-mode 2 --trellis 2
+--preset veryslow --crf 14 --profile high --bframes 10 --ref 8 --aq-mode 2 --trellis 2
 ```
 
 The application changes the x264 profile to match the selected 8- or 10-bit
@@ -220,10 +220,10 @@ Balanced:
 --preset 6 --crf 24 --keyint 240 --tune 0
 
 High Quality:
---preset 4 --crf 20 --keyint 240 --tune 0 --film-grain 4
+--preset 4 --crf 20 --keyint 240 --tune 0
 
 Extreme:
---preset 2 --crf 16 --keyint 240 --tune 0 --film-grain 0 --aq-mode 2
+--preset 2 --crf 16 --keyint 240 --tune 0 --aq-mode 2
 ```
 
 Unlike x264/x265's named preset scale, a higher SVT-AV1 preset number means a
@@ -298,6 +298,66 @@ Usable samples are grouped by rounded height. Each sample is weighted as `min(sc
 
 Automatic getnative remains a heuristic and can consume substantial time and memory. Clean line art with visible detail usually gives the clearest curves; dark scenes, credits, soft photography, noise, mixed animation pipelines, and later resizes may not. Review the per-kernel output and compare several episodes when results vary. To test one file outside the GUI, edit `video_file` in `src/scripts/getnative_file.py` and run that script.
 
+### Generated VPy restoration controls
+
+The Encode page exposes five numeric strengths immediately below the getnative,
+automatic-crop, and comparison-image options. Their values are captured when the
+task starts and replace the generated script's top-level `denoise_strength`,
+`dehalo_strength`, `dering_strength`, `deband_strength`, and
+`antialiasing_strength` assignments. A custom VPy that does not define those names
+is left unchanged. The same startup defaults can be saved under **Advanced**
+settings.
+
+| Control | Range / default | Recommended use | Generated-script behavior |
+| --- | --- | --- | --- |
+| Denoise | `0.0`–`3.0` / `0.6` | Keep `0.6` as a conservative starting point; reduce it when intentional grain or paper texture changes, and raise it only after inspecting the extracted noise layer. | `nlm_ispc.NLMeans` processes luma only, spatially (`d=0`), with a small search. A Prewitt mask restores strong edges and `mvsfunc.LimitFilter` caps every remaining change. This replaces the old fixed `h=3` reference that could erase grain and texture before later filters. |
+| Dehalo | `0.0`–`1.0` / `0.0` | Leave it at `0` unless a sharpening halo is visible. Start at `0.15`–`0.25`; values around `0.25`–`0.35` are for clear halos after representative-frame checks. Avoid more than `0.4` for a full title unless the affected shots are isolated and inspected. | A conservative luma-only variant of the `abcxyz` idea from [xyx98/my-vapoursynth-script](https://github.com/xyx98/my-vapoursynth-script) builds a broad downscale/upscale halo estimate, constrains it with `rgvs.Repair`, and blends only the requested fraction. Strength is a blend amount, not the halo radius. |
+| Dering | `0.0`–`1.0` / `0.0` | Leave it at `0` without visible ringing. Start at `0.15`–`0.25`; `0.25`–`0.35` is reserved for clear DCT/rescale ringing. Avoid more than `0.4` as a title-wide setting because line art and fine texture can soften. | A `MinBlur`/`HQDering`-style path builds a narrow band around strong edges, excludes the edge itself, and applies repaired, tightly limited smoothing only through that mask. Strength blends the masked result; it does not widen the ring mask. |
+| Deband | `0.0`–`1.0` / `0.5` | Keep the moderate `0.5` starting point for ordinary animation; use `0` when no banding is present or delicate gradients/effects are harmed, and approach `1` only after checking flat gradients. | A limited `placebo.Deband` candidate processes YUV. A softened multi-plane Prewitt mask restores edges and texture before blending: `0` skips the stage, `0.5` applies half of the adaptively protected result, and `1` applies it fully. |
+| Anti-aliasing | `0.0`–`1.0` / `0.5` | Keep the moderate `0.5` starting point when aliasing is plausible. Use `0` for high-detail or intentionally pixel-sharp material without visible aliasing, and approach `1` only after checking line sharpness. | The repaired EEDI2 result is limited toward the debanded source luma. `0` skips it, intermediate values blend it with the debanded luma, and `1` applies the full limited result. |
+
+Every stage can be disabled independently with `0`. Denoise, dehalo, dering,
+and anti-aliasing affect luma only; deband processes YUV. Deband and anti-aliasing
+start at the literal blend midpoint `0.5`, while defect-specific dehalo and dering
+remain off. Grain, paper texture, rain, intentional glow, thin line art,
+and high-resolution artwork can all resemble defects, so inspect representative
+bright, dark, textured, and effects-heavy frames before committing to a full
+encode. Do not enable dehalo and dering together merely because both controls are
+available: first identify whether the visible artifact is a broad sharpening halo,
+a narrow ringing band, or intentional artwork.
+
+The high-level blend controls are the useful generic boundary. Internal parameters
+such as halo radius, ring-mask width, placebo threshold/radius, EEDI2 thresholds,
+and reconstruction-mask threshold interact with source scale and defect shape, so
+they remain script details rather than additional GUI settings. Use a custom VPy
+when those internals require shot-specific tuning.
+
+#### Ideas adapted from xyx98/my-vapoursynth-script
+
+Parts of the generated chain adapt ideas from
+[xyx98/my-vapoursynth-script](https://github.com/xyx98/my-vapoursynth-script)
+without importing that package at runtime:
+
+| Upstream component | Adapted in the generated VPy | Deliberately not copied |
+| --- | --- | --- |
+| [`xvs.scale.rescale` / `MRcore`](https://github.com/xyx98/my-vapoursynth-script/blob/master/xvs/scale.py) | Luma-only native descale, a reconstruction-difference mask using the same 2/255 starting threshold, and restoration of final-resolution composites. Chroma is resized separately with an explicit Blu-ray chroma location. | NNEDI3 upscaling, fractional/selective rescale modes, and per-shot postfilters; automatic getnative already supplies the detected height and exact resize kernel. |
+| [`xvs.dehalo.abcxyz`](https://github.com/xyx98/my-vapoursynth-script/blob/master/xvs/dehalo.py) | The 8/24/32-level broad halo estimate and `Repair` constraint, applied to luma with an explicit blend strength. | Supersampling and a user-exposed radius; they increase cost and make one generic strength ambiguous. |
+| [`MinBlur` / `HQDering` techniques](https://github.com/xyx98/my-vapoursynth-script/blob/master/xvs/dehalo.py) | MinBlur-style candidate selection, `Repair`/`LimitFilter`, and a narrow edge-adjacent ring mask that excludes the edge itself. | Deprecated warp-based `LazyDering`/`SADering`, which can move edge geometry and require additional masks/plugins. |
+| [NLMeans guidance](https://github.com/xyx98/my-vapoursynth-script/blob/master/xvs/denoise.py) | Spatial (`d=0`) luma denoise with `wmode=3`, now at a conservative adjustable `h` plus edge protection and change limiting. | Temporal or motion-compensated denoise as a generic default; motion mistakes, scene changes, speed, and hardware backends require source-specific decisions. |
+| [`mwdbmask` adaptive-deband idea](https://github.com/xyx98/my-vapoursynth-script/blob/master/xvs/mask.py) | Multi-plane edge/detail protection around the limited placebo candidate, implemented with built-in Prewitt and morphology so the generated VPy needs no TCanny dependency. | Its source-specific TCanny thresholds, alternate luma mask input, and chroma-placement controls. |
+| existing EEDI2/masked-AA practice | The pre-existing repaired and limited two-direction EEDI2 stage is now adjustable and can be skipped. | `XSAA`, `drAA`, line darkening, sharpening, and chroma AA; these are more aggressive and need artifact-specific masks and dependencies. |
+
+Other candidates in that repository are not suitable as automatic defaults. The BM3D
+wrapper depends on separately installed CPU/CUDA/CUDA-RTC/HIP namespaces and a
+source-specific sigma; no BM3D namespace is part of the managed portable plugin
+set, and silently falling back after a user selects a backend would violate the
+Encode execution contract. BM3D therefore remains a custom-VPy option until a
+hardware-specific preset can install and preflight one exact backend. In addition,
+`STPresso`, `SPresso`, `STPressoMC`, `FluxsmoothTMC`, `SAdeband`, and `lbdeband`
+are marked deprecated or not maintained by that project, while non-credit
+credit masks need additional inputs or per-title tuning. These paths should not
+silently replace the portable default chain.
+
 Automatic black-border cropping is opt-in. Before preparing the final VPy,
 BluraySubtitle probes duration and dimensions, then uses FFmpeg input-side seeks
 to analyze one pseudo-random point in each time bucket. It samples one point per
@@ -341,19 +401,82 @@ must report profile 8 with the same RPU frame count as the VPy output. A mismatc
 retains the MKV, records a non-overwriting warning report, and lets later rows
 continue.
 
+## Interlaced, telecined, and mixed-cadence sources
+
+The generated VPy cannot safely choose one automatic treatment for every source.
+`_FieldBased` can report whether a frame is progressive (`0`), bottom-field-first
+(`1`), or top-field-first (`2`), but it does not say why the fields exist. True
+interlaced camera or video material needs deinterlacing; 3:2 telecined film or
+animation normally needs field matching plus decimation (IVTC); mixed progressive,
+telecined, and interlaced sections may need range-specific handling. Blindly using
+QTGMC can create an unnecessary doubled frame rate or preserve telecine judder,
+while blindly applying IVTC can discard real motion fields. Container metadata can
+also be wrong, so confirm the field order and cadence by frame-stepping representative
+motion, pans, and credits instead of trusting one metadata label.
+
+Create a row-specific custom VPy and replace the progressive-only guard immediately
+after `LWLibavSource`. For genuinely interlaced material, a typical QTGMC starting
+point is:
+
+```python
+import havsfunc as haf
+
+# TFF=True for top-field-first; use False for bottom-field-first.
+# FPSDivisor=1 preserves both temporal field samples as double-rate progressive video.
+src8 = haf.QTGMC(src8, TFF=True, Preset="Slower", FPSDivisor=1)
+src8 = src8.std.SetFrameProps(_FieldBased=0)
+```
+
+Use `FPSDivisor=2` only when a single-rate progressive result is intentional and its
+motion has been checked. For regular 3:2 telecine, install a field-matching plugin
+such as VIVTC and start from its field match and decimation path instead:
+
+```python
+matched = core.vivtc.VFM(src8, order=1)  # order=1 TFF; order=0 BFF
+src8 = core.vivtc.VDecimate(matched)
+src8 = src8.std.SetFrameProps(_FieldBased=0)
+```
+
+Do not merely clear `_FieldBased`; that changes metadata without reconstructing a
+progressive picture. Put deinterlacing or IVTC before bit-depth conversion,
+getnative/descale, denoising, and other restoration. For mixed cadence, split or
+conditionally replace the affected ranges rather than forcing one filter over the
+whole title. Preview combing, motion cadence, fades, and scrolling credits, then
+verify the resulting frame rate, duration, and audio synchronization before a full
+encode. QTGMC/VIVTC and their dependencies must be present in the VapourSynth runtime
+used for the encode; custom scripts own those additional dependencies.
+
 ## Plugins used by the generated script
 
 The default script is a usable starting point, not a universal restoration
-recipe. Its current plugin chain includes:
+recipe. It accepts progressive video only and rejects field-based input instead
+of processing it incorrectly. L-SMASH indexes are stored under the system
+temporary directory rather than beside a potentially read-only disc source.
+When native inverse scaling is active, only luma uses the detected descale
+kernel; chroma follows Blu-ray's left chroma location, and a reconstruction mask
+restores the original YUV planes over credits and other final-resolution
+composites. Its current plugin chain includes:
+
+Credits, on-picture text, and already-burned subtitles are not recognized by OCR or
+by their meaning. When native inverse scaling is active, the script compares the
+original 16-bit luma with luma that was descaled to the detected native height and
+then reconstructed to the output size. It binarizes absolute differences above two
+8-bit code values (scaled to 16-bit), expands the mask twice, and inflates it once.
+After filtering and resizing, white mask regions receive the original YUV planes.
+Text composited at the final master resolution normally differs strongly from the
+native-height reconstruction, which is why Staff rolls and burned subtitles are
+usually protected. Fine texture, sharpening, line art, or noise can also trigger the
+same mask; this is an intentional source-preserving false positive, not semantic text
+detection. Optional external ASS/SSA hardsubs are separate and are rendered directly
+by `assrender.TextSub` from the selected subtitle file.
 
 | Namespace/package | Role in the generated script |
 | --- | --- |
-| `lsmas.LWLibavSource` | Primary indexed source reader |
-| `ffms2.Source` | Source-reader fallback |
+| `lsmas.LWLibavSource` | Indexed source reader |
 | `fmtc` | Bit-depth conversion and resampling |
 | `descale` | Optional inverse scaling from detected native resolution |
 | `nlm_ispc` | Denoising |
-| `neo_f3kdb` on Windows / `placebo` elsewhere | Debanding |
+| `placebo` | Debanding on every supported platform |
 | `mvsfunc.LimitFilter` | Limit filtered changes against reference clips |
 | `eedi2` | Edge-directed antialiasing |
 | `rgvs.Repair` | Constrain repaired planes |

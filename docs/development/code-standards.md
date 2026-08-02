@@ -107,6 +107,8 @@ When the author establishes a new rule, update this file and its Simplified Chin
 ## 10. Confirmed Product Constraints
 
 - Automatic getnative keeps its permissive high-height/high-score ranking, admits up to 20 samples at an 800 MiB memory budget each, streams completed results, and excludes 535p–545p plus heights above 1040p.
+- The generated default VPy is progressive-only, uses L-SMASH with a temporary index and placebo on every platform, and protects luma-only native descale with a reconstruction mask.
+- Encode snapshots the visible default-VPy denoise, dehalo, dering, deband, and anti-aliasing strengths. Every stage is independently disabled by zero; defect-specific dehalo and dering default to zero, while deband and anti-aliasing default to the moderate blend value `0.5`. Deband protects edge/detail planes with an adaptive mask before applying that blend.
 - Remux-source Encode is resumable. Existing planned main, SP, external-subtitle, and companion outputs are treated as completed and skipped without overwrite; remaining rows continue. Duplicate paths within the current request remain errors.
 - Blu-ray DIY remains visible and its code is retained. Its incomplete execution must not be presented as complete.
 - Blu-ray Remux exposes a default-enabled option that converts selected lossless audio to FLAC after main and SP muxing. Disabled preserves source audio; Remux must not use AAC or Opus for this conversion.

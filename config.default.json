@@ -35,6 +35,11 @@
     "subtitle_mode": "external",
     "use_getnative": true,
     "auto_crop_black_borders": false,
-    "output_comparison_images": true
+    "output_comparison_images": true,
+    "vpy_denoise_strength": 0.6,
+    "vpy_dehalo_strength": 0.0,
+    "vpy_dering_strength": 0.0,
+    "vpy_deband_strength": 0.5,
+    "vpy_antialiasing_strength": 0.5
   }
 }

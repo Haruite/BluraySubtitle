@@ -16,7 +16,7 @@ import uuid
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, ThreadPoolExecutor, wait
 from typing import Optional
 
-from ...core.settings import VSPIPE_PATH
+from ...core.settings import PLUGIN_PATH, VSPIPE_PATH
 from ...core import FFMPEG_PATH
 from .service_base import BluraySubtitleServiceBase
 from .media_info_and_track_mapping import MediaInfoTrackMappingMixin
@@ -616,7 +616,7 @@ def _write_vpy_video_source_a(vpy_path: str, video_path: str) -> bool:
     for line in lines:
         raw = line.rstrip('\r\n')
         m = _VPY_A_LINE_RE.match(raw)
-        if not m or m.group(2):
+        if not m or m.group(1) or m.group(2):
             new_lines.append(line)
             continue
         indent, expr, suffix = m.group(1), m.group(3), m.group(5) or ''
@@ -1160,6 +1160,11 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             subtitle_language: str = '',
             audio_encoding: AudioEncodingSettings = AudioEncodingSettings(),
             auto_crop_black_borders: bool = False,
+            vpy_denoise_strength: float = 0.6,
+            vpy_dehalo_strength: float = 0.0,
+            vpy_dering_strength: float = 0.0,
+            vpy_deband_strength: float = 0.5,
+            vpy_antialiasing_strength: float = 0.5,
     ) -> None:
         vpy_path = os.path.normpath(os.path.abspath(str(vpy_path or '').strip()))
         if not os.path.isfile(vpy_path):
@@ -1380,8 +1385,38 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
 
                 updated = False
                 new_lines = []
+                processing_values = {
+                    'denoise_strength': float(vpy_denoise_strength),
+                    'dehalo_strength': float(vpy_dehalo_strength),
+                    'dering_strength': float(vpy_dering_strength),
+                    'deband_strength': float(vpy_deband_strength),
+                    'antialiasing_strength': float(vpy_antialiasing_strength),
+                }
                 for line in lines:
+                    raw = line.rstrip('\r\n')
                     stripped = line.lstrip()
+
+                    processing_match = None
+                    for processing_name, processing_value in processing_values.items():
+                        match = re.match(
+                            rf'^({re.escape(processing_name)}\s*=\s*)'
+                            rf'[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?'
+                            rf'(\s*(#.*)?)$',
+                            raw,
+                        )
+                        if match:
+                            processing_match = (
+                                match,
+                                format(processing_value, '.6g'),
+                            )
+                            break
+                    if processing_match is not None:
+                        match, value = processing_match
+                        new_lines.append(
+                            f'{match.group(1)}{value}{match.group(2)}\n'
+                        )
+                        updated = True
+                        continue
 
                     if stripped.startswith('native_h ='):
                         if not native_info:
@@ -1469,6 +1504,8 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 vspipe_exe, vspipe_env = VSPIPE_PATH, None
             vspipe_env = dict(vspipe_env) if vspipe_env else dict(os.environ)
             vspipe_env['BLURAYSUB_VPY_SOURCE'] = os.path.normpath(vpy_video_source)
+            if str(PLUGIN_PATH or '').strip():
+                vspipe_env['BLURAYSUB_PLUGIN_PATH'] = str(PLUGIN_PATH)
             enc_exe = resolve_encoder_executable_path(encoder, encoder_mode)
 
             failure_stage = 'Actual encode source and metadata planning'

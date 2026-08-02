@@ -5,6 +5,8 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
+from src.core.encode_presets import ENCODE_PRESET_PARAMETERS
+
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 X264_REPOSITORY = "https://code.videolan.org/videolan/x264.git"
@@ -68,6 +70,20 @@ class EncoderToolchainTests(unittest.TestCase):
         ):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, self.linux_setup)
+
+        flac_function = self.linux_setup.split("install_flac()", 1)[1].split(
+            "install_zimg_latest()", 1
+        )[0]
+        self.assertIn('local flac_source_path="/usr/local/bin/flac"', flac_function)
+        self.assertLess(
+            flac_function.index('[[ -x "$flac_source_path" ]]'),
+            flac_function.index('[[ -x "$FLAC_PATH" ]]'),
+        )
+        self.assertIn(
+            'install_configured_executable "$flac_bin" "$FLAC_PATH"',
+            flac_function,
+        )
+        self.assertEqual(flac_function.count("head -n 1 || true"), 2)
         for removed_pin in (
             "X264_SOURCE_REVISION=",
             "X264_SOURCE_COMMIT=",
@@ -78,6 +94,14 @@ class EncoderToolchainTests(unittest.TestCase):
         self.assertNotIn("Yuuki-Asuna", self.linux_setup)
         self.assertNotIn("cmake4-patched", self.linux_setup)
         self.assertNotIn("-DENABLE_HDR10_PLUS=OFF", self.linux_setup)
+
+    def test_built_in_presets_do_not_force_x264_level_or_synthetic_grain(self) -> None:
+        for name, parameters in ENCODE_PRESET_PARAMETERS["x264"].items():
+            with self.subTest(encoder="x264", preset=name):
+                self.assertNotIn("--level", parameters)
+        for name, parameters in ENCODE_PRESET_PARAMETERS["svtav1"].items():
+            with self.subTest(encoder="svtav1", preset=name):
+                self.assertNotIn("--film-grain", parameters)
 
     def test_linux_setup_uses_settings_paths_for_installed_tools(self) -> None:
         setting_names = (
@@ -140,7 +164,7 @@ class EncoderToolchainTests(unittest.TestCase):
             "# ---------------------------------------------------------------------------", 1
         )[0]
         plugin_builder = self.linux_setup.split(
-            'if [[ ! -f "$plugins_dir/libvslsmashsource.so" ]]', 1
+            'if [[ ! -f "$lsmash_plugin" ]]', 1
         )[1].split(
             'if [[ ! -f "$plugins_dir/eedi3m.so" ]]', 1
         )[0]
@@ -154,6 +178,21 @@ class EncoderToolchainTests(unittest.TestCase):
         self.assertIn("__lsmash_is_installed || die", installer)
         self.assertIn('cd "$build_dir"', plugin_builder)
         self.assertNotIn('cd "$HOME"', plugin_builder)
+        self.assertIn('ldd -r "$lsmash_plugin"', self.linux_setup)
+        self.assertGreaterEqual(
+            self.linux_setup.count(
+                'lsmash_linker_report="$(LC_ALL=C ldd -r "$lsmash_plugin" 2>&1 || true)"'
+            ),
+            2,
+        )
+        self.assertNotIn('ldd -r "$lsmash_plugin" 2>&1 | grep -qF', self.linux_setup)
+        self.assertIn(
+            'Rebuilt L-SMASH-Works plugin still has unresolved dependencies',
+            plugin_builder,
+        )
+        self.assertIn("LIBAVFORMAT_VERSION_MAJOR < 59", plugin_builder)
+        self.assertIn("avformat_index_get_entries_count", plugin_builder)
+        self.assertIn("avformat_index_get_entry", plugin_builder)
         self.assertLess(install_call, plugin_call)
 
     def test_docker_builds_at_original_positions_on_ubuntu_26_04(self) -> None:

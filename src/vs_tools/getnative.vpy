@@ -1,7 +1,7 @@
 """Portable VapourSynth execution half of the Infiziert90/getnative adaptation."""
 
 import functools
-import hashlib
+import importlib
 import math
 import json
 import os
@@ -9,7 +9,8 @@ import time
 
 import numpy as np
 import vapoursynth as vs
-from muvsfunc import core, measurediff, rescale
+
+core = vs.core
 
 try:
     core.num_threads = max(1, int(os.getenv("BLURAYSUB_GETNATIVE_VS_THREADS", "1")))
@@ -27,6 +28,12 @@ except (AttributeError, TypeError, ValueError):
 _bluraysub_plugin_path = str(os.getenv("BLURAYSUB_PLUGIN_PATH", "") or "").strip()
 if _bluraysub_plugin_path and os.path.isdir(_bluraysub_plugin_path):
     vs.core.std.LoadAllPlugins(_bluraysub_plugin_path)
+
+# muvsfunc probes optional plugin namespaces while importing. Import it only after
+# Linux/macOS plugins are loaded so available implementations are not disabled.
+_muvsfunc = importlib.import_module("muvsfunc")
+measurediff = _muvsfunc.measurediff
+rescale = _muvsfunc.rescale
 
 
 def _write(payload):
@@ -669,17 +676,6 @@ def _load_source_png(path):
             src = imwri.Read(path)
         except Exception:
             src = None
-    if src is None and hasattr(core, "ffms2"):
-        try:
-            _t = os.environ.get("TEMP") or os.environ.get("TMP") or os.path.expandvars("%TEMP%") or "."
-            _k = hashlib.sha1(os.path.normcase(os.path.normpath(path)).encode("utf-8")).hexdigest()
-            _ffidx = os.path.join(_t, "bluraysub_gn_ffms2_" + _k + ".ffindex")
-            try:
-                src = core.ffms2.Source(path, cachefile=_ffidx)
-            except TypeError:
-                src = core.ffms2.Source(path)
-        except BaseException:
-            src = None
     if src is None and hasattr(core, "lsmas"):
         try:
             try:
@@ -689,7 +685,7 @@ def _load_source_png(path):
         except Exception:
             src = None
     if src is None:
-        raise RuntimeError("failed to load image source: need imwri/imwrif Read or ffms2/lsmas")
+        raise RuntimeError("failed to load image source: need imwri/imwrif Read or lsmas")
 
     if src.format is None:
         raise RuntimeError("image source has a variable format")

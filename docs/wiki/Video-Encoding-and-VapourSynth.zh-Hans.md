@@ -146,16 +146,16 @@ BluraySubtitle 又在编码器参数之上提供了一层项目预设：
 
 ```text
 Fast:
---preset fast --crf 20 --profile high --level 4.1 --bframes 4 --ref 4
+--preset fast --crf 20 --profile high --bframes 4 --ref 4
 
 Balanced:
---preset medium --crf 18 --profile high --level 4.1 --bframes 6 --ref 5 --deblock -1:-1
+--preset medium --crf 18 --profile high --bframes 6 --ref 5 --deblock -1:-1
 
 High Quality:
---preset slow --crf 16 --profile high --level 4.1 --bframes 8 --ref 6 --deblock -1:-1 --aq-mode 2
+--preset slow --crf 16 --profile high --bframes 8 --ref 6 --deblock -1:-1 --aq-mode 2
 
 Extreme:
---preset veryslow --crf 14 --profile high --level 4.1 --bframes 10 --ref 8 --aq-mode 2 --trellis 2
+--preset veryslow --crf 14 --profile high --bframes 10 --ref 8 --aq-mode 2 --trellis 2
 ```
 
 必要时，应用会根据所选 8-bit 或 10-bit 输出调整 x264 profile。
@@ -194,10 +194,10 @@ Balanced:
 --preset 6 --crf 24 --keyint 240 --tune 0
 
 High Quality:
---preset 4 --crf 20 --keyint 240 --tune 0 --film-grain 4
+--preset 4 --crf 20 --keyint 240 --tune 0
 
 Extreme:
---preset 2 --crf 16 --keyint 240 --tune 0 --film-grain 0 --aq-mode 2
+--preset 2 --crf 16 --keyint 240 --tune 0 --aq-mode 2
 ```
 
 与 x264/x265 的命名 preset 不同，SVT-AV1 的 preset 数字越大，压制越快，但压缩
@@ -252,7 +252,7 @@ BluraySubtitle 的自动 getnative 移植自 [Infiziert90/getnative](https://git
 
 #### 单个样本分析什么
 
-本机安装的 Python 负责抽帧、进程调度与最终排名；便携版 Python 3.13 VapourSynth 环境运行 `getnative.vpy`，先把 PNG 样本从 RGB 按 BT.709 转成灰度，再检测全部 16 种逆缩放候选：bilinear、8 组不同参数的 bicubic、2/3/4/5 taps 的 Lanczos，以及 Spline16、Spline36、Spline64。每个候选会把画面逆缩放到待测高度，再放大回源尺寸并测量重建误差。纵向搜索范围通常是源高度的 40%～98%。
+系统 Python 负责抽帧、进程调度与最终排名；便携版 Python 3.13 VapourSynth 环境运行 `getnative.vpy`，先把 PNG 样本从 RGB 按 BT.709 转成灰度，再检测全部 16 种逆缩放候选：bilinear、8 组不同参数的 bicubic、2/3/4/5 taps 的 Lanczos，以及 Spline16、Spline36、Spline64。每个候选会把画面逆缩放到待测高度，再放大回源尺寸并测量重建误差。纵向搜索范围通常是源高度的 40%～98%。
 
 为了缩短耗时，每个核先对居中的半尺寸画面进行步长 4 粗扫，再在粗扫最佳高度附近执行全帧 1p 细扫。前三种优先核必定进入细扫；此后的核如果同条件粗扫得分不足当前最佳粗扫得分的 45%，可以跳过细扫，但仍会报告粗扫结果。全部核报告完毕后，获胜核还会执行一次全帧步长 4 复核，再在其 ±20p 范围内执行全帧 1p 精扫，避免保留第二套全范围 1p 图。每个 VSPipe 进程只使用一个 VapourSynth 帧线程，并把帧缓存上限设为 256 MiB，以控制并发时的内存增长。
 
@@ -265,6 +265,55 @@ BluraySubtitle 的自动 getnative 移植自 [Infiziert90/getnative](https://git
 可用样本按四舍五入后的高度分组。每个样本的权重是 `min(得分, 2) * (高度 / 搜索范围上限)^4`；每组最强的 3 个权重之和决定获胜组，完全同分时选择更高的高度。这样既保留实测中有效的“尽量选择高分辨率且高分”倾向，也不会要求稠密共识，因为部分片源本来就只能产生很少的可用帧。最后用获胜组内的加权高度和缩放核票数生成 VPy 参数。
 
 自动 getnative 始终是启发式检测，可能消耗大量时间与内存。具有清晰线条和可见细节的画面通常能给出最明确的曲线；暗场、片头片尾、柔焦摄影、噪点、混合动画制作流程和后续二次缩放都可能影响结果。结果不稳定时应查看逐核输出，并比较多集结果。若要脱离 GUI 单独测试文件，可修改 `src/scripts/getnative_file.py` 中的 `video_file` 后直接运行该脚本。
+
+### 自动生成 VPy 的画面修复设置
+
+Encode 页在 getnative、自动裁黑边和输出对比图选项的正下方提供五个数值强度。
+任务启动时会捕获当前值，并替换自动生成脚本顶层的 `denoise_strength`、
+`dehalo_strength`、`dering_strength`、`deband_strength` 和
+`antialiasing_strength` 赋值。没有定义这些名称的自定义 VPy 不会被修改；
+启动默认值也可在“高级”设置中保存。
+
+| 设置 | 范围／默认值 | 推荐用法 | 自动生成脚本中的行为 |
+| --- | --- | --- | --- |
+| 降噪 | `0.0`～`3.0`／`0.6` | 保守起点保持 `0.6`；刻意颗粒或纸张纹理发生变化时调低，只在检查噪点层后再调高。 | `nlm_ispc.NLMeans` 仅对亮度执行小范围纯空间降噪（`d=0`），再用 Prewitt 遮罩恢复强边缘，并由 `mvsfunc.LimitFilter` 限制其余像素的最大变化。它取代旧的固定 `h=3` 参考，避免纹理和颗粒在后续滤镜前已经丢失。 |
+| 去光晕 | `0.0`～`1.0`／`0.0` | 没有可见锐化光晕时保持 `0`。建议从 `0.15`～`0.25` 开始；确认存在明显光晕并检查代表帧后可用约 `0.25`～`0.35`。除非只处理并检查特定镜头，不建议整片超过 `0.4`。 | 采用 [xyx98/my-vapoursynth-script](https://github.com/xyx98/my-vapoursynth-script) 中 `abcxyz` 思路的保守亮度版本，通过缩小／放大建立宽光晕估计，经 `rgvs.Repair` 约束后只按设定比例混合。强度是混合比例，不是光晕半径。 |
+| 去振铃 | `0.0`～`1.0`／`0.0` | 没有可见振铃时保持 `0`。建议从 `0.15`～`0.25` 开始；`0.25`～`0.35` 只用于明显的 DCT／缩放振铃。整片超过 `0.4` 容易让线稿和细纹理变软。 | 采用 `MinBlur`／`HQDering` 思路，在强边缘周围建立窄环带并排除边缘本身，只通过该遮罩应用经过 Repair 和严格限幅的平滑。强度只混合遮罩结果，不会扩大环带。 |
+| 去色带 | `0.0`～`1.0`／`0.5` | 普通动画可从适中的 `0.5` 开始；没有色带或精细渐变／特效被损伤时使用 `0`，只有检查平坦渐变后才逐步接近 `1`。 | 限幅 `placebo.Deband` 候选处理 YUV，再用柔化的多平面 Prewitt 遮罩恢复边缘与纹理；`0` 跳过，`0.5` 混合一半自适应保护结果，`1` 完整应用。 |
+| 抗锯齿 | `0.0`～`1.0`／`0.5` | 可能存在锯齿时可从适中的 `0.5` 开始。没有可见锯齿的高细节或刻意像素锐利素材使用 `0`，只有检查线条锐度后才逐步接近 `1`。 | Repair 后的 EEDI2 结果会向去色带后的源亮度限幅；`0` 跳过，中间值与源亮度混合，`1` 完整应用限幅结果。 |
+
+所有阶段均可单独设为 `0` 关闭。降噪、去光晕、去振铃和抗锯齿只改变亮度，
+去色带处理 YUV。去色带与抗锯齿默认使用字面上的混合中点 `0.5`，只针对特定瑕疵的
+去光晕与去振铃仍保持关闭。颗粒、纸张纹理、雨丝、刻意柔光、细线稿和高原生精度作画都可能被
+自动滤镜误认为缺陷；正式压制前应检查具有代表性的明亮、暗场、纹理丰富和特效较多画面。
+不能只因为两个控件同时存在就盲目同时开启去光晕和去振铃，应先判断瑕疵属于宽锐化光晕、
+窄振铃环带还是刻意画面元素。
+
+通用界面只公开这些高层混合强度。光晕半径、振铃遮罩宽度、placebo 阈值／半径、
+EEDI2 阈值和重建遮罩阈值会随来源尺度与瑕疵形态互相影响，因此仍属于脚本内部参数，
+不继续增加到 GUI；需要逐镜头调整这些内部值时应使用自定义 VPy。
+
+#### 从 xyx98/my-vapoursynth-script 采用的思路
+
+自动生成脚本吸收了
+[xyx98/my-vapoursynth-script](https://github.com/xyx98/my-vapoursynth-script)
+中的部分思路，但运行时不导入该包：
+
+| 上游组件 | 自动生成 VPy 已采用 | 有意没有照搬 |
+| --- | --- | --- |
+| [`xvs.scale.rescale`／`MRcore`](https://github.com/xyx98/my-vapoursynth-script/blob/master/xvs/scale.py) | 仅亮度参与原生逆缩放、使用相同的 2/255 起始阈值建立重建差异遮罩，并恢复最终分辨率合成元素；色度按明确的蓝光采样位置单独缩放。 | NNEDI3 放大、分数／选择性逆缩放和逐镜头后处理；自动 getnative 已提供检测高度与准确缩放核。 |
+| [`xvs.dehalo.abcxyz`](https://github.com/xyx98/my-vapoursynth-script/blob/master/xvs/dehalo.py) | 8／24／32 级宽光晕估计和 `Repair` 约束，以显式强度只混合亮度。 | 超采样和用户可调半径；它们会增加耗时，也会让单一通用强度失去清晰含义。 |
+| [`MinBlur`／`HQDering` 技法](https://github.com/xyx98/my-vapoursynth-script/blob/master/xvs/dehalo.py) | MinBlur 思路候选选择、`Repair`／`LimitFilter`，以及排除边缘本身的窄邻边振铃遮罩。 | 已弃用且无人维护的 warp 类 `LazyDering`／`SADering`；它们可能移动边缘几何，还需要更多遮罩／插件。 |
+| [NLMeans 指南](https://github.com/xyx98/my-vapoursynth-script/blob/master/xvs/denoise.py) | 亮度纯空间（`d=0`）、`wmode=3` 降噪，改为保守可调 `h`，并增加边缘保护与变化限幅。 | 把时域或运动补偿降噪作为通用默认；运动估计错误、切镜、速度和硬件后端均需按来源决定。 |
+| [`mwdbmask` 自适应去色带思路](https://github.com/xyx98/my-vapoursynth-script/blob/master/xvs/mask.py) | 对限幅 placebo 候选增加多平面边缘／细节保护；使用内置 Prewitt 和形态学运算实现，因此生成 VPy 不需要新增 TCanny 依赖。 | 按来源调整的 TCanny 阈值、额外亮度遮罩输入与色度位置控件。 |
+| 既有 EEDI2／遮罩 AA 用法 | 原先已有的双方向 EEDI2 继续使用 Repair 和限幅，现在可调并可跳过。 | `XSAA`、`drAA`、压线、锐化和色度 AA；它们更激进，需要瑕疵专用遮罩与额外依赖。 |
+
+该仓库中的其他候选不适合作为自动默认。BM3D 封装依赖另行安装的 CPU／CUDA／CUDA-RTC／HIP
+namespace 以及按来源确定的 sigma；项目管理的便携插件集目前不含任何 BM3D namespace，
+而在用户选定后静默回退到其他后端会违反 Encode 执行契约。因此在硬件专用预设能够安装并
+预检一个确定后端之前，BM3D 仍只适合自定义 VPy。`STPresso`、`SPresso`、`STPressoMC`、
+`FluxsmoothTMC`、`SAdeband` 和 `lbdeband` 已被该项目标为弃用或无人维护；NCOP／NCED
+文字遮罩还需要额外输入或逐片调整。这些路径不应静默替换可移植的默认处理链。
 
 自动裁黑边默认关闭。启用后，BluraySubtitle 会先探测时长与尺寸，再用 FFmpeg 输入端
 快速定位，在每个时间分桶中分析一个伪随机时间点。采样数按每 150 秒一个计算，并限制
@@ -297,18 +346,63 @@ preset，再把所得 Profile 8.1 RPU 交给 x265 原生写入或后注入。因
 当前启用的动态元数据。Dolby Vision 必须报告 Profile 8，且 RPU 帧数必须与 VPy 输出
 一致。不匹配时保留 MKV，记录一份不覆盖已有文件的警告报告，并继续处理后续行。
 
+## 隔行、胶转磁与混合 cadence 来源
+
+自动生成的 VPy 无法为所有来源安全地选择同一种自动处理。`_FieldBased` 可以说明某帧
+是逐行（`0`）、下场优先（`1`）或上场优先（`2`），却不能说明场结构为什么存在。真隔行
+摄像或视频素材需要反交错；3:2 胶转磁的电影或动画通常需要场匹配后抽帧（IVTC）；逐行、
+胶转磁和隔行片段混合时，还可能需要按范围分别处理。盲目使用 QTGMC 可能产生不必要的
+双倍帧率或保留胶转磁顿挫，盲目 IVTC 则可能丢掉真实运动场。容器元数据也可能错误，
+因此应逐帧检查有代表性的运动、摇镜和片尾，确认场序与 cadence，而不能只相信一个
+元数据标签。
+
+请为对应行建立自定义 VPy，并替换 `LWLibavSource` 后面的“只允许逐行”检查。对确实为
+真隔行的素材，可以从以下 QTGMC 配置开始：
+
+```python
+import havsfunc as haf
+
+# 上场优先使用 TFF=True；下场优先使用 False。
+# FPSDivisor=1 把两个时间场都保留为双倍帧率逐行视频。
+src8 = haf.QTGMC(src8, TFF=True, Preset="Slower", FPSDivisor=1)
+src8 = src8.std.SetFrameProps(_FieldBased=0)
+```
+
+只有明确需要单倍帧率逐行结果并检查过运动后，才改用 `FPSDivisor=2`。对规则的 3:2
+胶转磁，请安装 VIVTC 等场匹配插件，改用场匹配与抽帧路径，例如：
+
+```python
+matched = core.vivtc.VFM(src8, order=1)  # order=1 为 TFF，order=0 为 BFF
+src8 = core.vivtc.VDecimate(matched)
+src8 = src8.std.SetFrameProps(_FieldBased=0)
+```
+
+不能只清除 `_FieldBased`；那只会改元数据，不会重建逐行画面。反交错或 IVTC 应放在
+位深转换、getnative／descale、降噪和其他修复之前。混合 cadence 应拆分或按条件替换
+受影响范围，而不是把一种滤镜强制用于整段。完整压制前要预览梳齿、运动 cadence、
+淡入淡出和滚动 Staff，并核对输出帧率、时长与音画同步。实际压制使用的 VapourSynth
+运行时必须具备 QTGMC／VIVTC 及其依赖；自定义脚本自行负责这些额外依赖。
+
 ## 默认脚本使用的插件
 
-默认脚本是可用起点，不是适合所有片源的通用修复方案。当前滤镜链包括：
+默认脚本是可用起点，不是适合所有片源的通用修复方案。它只接受逐行视频，遇到隔行来源会明确报错，而不会按逐行素材错误处理。L-SMASH 索引保存在系统临时目录，不会尝试写入可能只读的原盘来源旁边。启用原生逆缩放时，只有亮度使用检测到的 descale 核；色度按蓝光左侧采样位置缩放，并用重建差异遮罩在片尾文字等最终分辨率合成区域恢复原始 YUV 平面。当前滤镜链包括：
+
+片尾 Staff、画内文字和已经烧录在来源中的字幕并不是通过 OCR 或语义识别。启用原生
+逆缩放后，脚本会比较原始 16 位亮度与“先逆缩放到检测出的原生高度、再重建到输出尺寸”
+的亮度，二值化绝对差超过 2 个 8 位码值（换算到 16 位）的区域，再执行两次扩张和一次
+Inflate。滤镜与缩放完成后，遮罩白区会恢复原始 YUV 平面。最终母版分辨率才合成的文字
+通常无法通过原生高度路径准确重建，所以滚动 Staff 和内封硬字幕通常会被保护。细纹理、
+锐化、线稿或噪点也可能触发同一遮罩；这是有意保留来源的误报，并不是文字分类。可选的
+外挂 ASS／SSA 内嵌字幕属于另一条路径，会由 `assrender.TextSub` 直接读取所选字幕文件
+渲染，不需要识别画面文字。
 
 | namespace／包 | 默认脚本中的作用 |
 | --- | --- |
-| `lsmas.LWLibavSource` | 首选索引式源滤镜 |
-| `ffms2.Source` | 源滤镜回退 |
+| `lsmas.LWLibavSource` | 索引式源滤镜 |
 | `fmtc` | 位深转换和重采样 |
 | `descale` | 按检测到的原生分辨率执行可选逆向缩放 |
 | `nlm_ispc` | 降噪 |
-| Windows 上的 `neo_f3kdb`／其他平台的 `placebo` | 去色带 |
+| `placebo` | 所有受支持平台上的去色带 |
 | `mvsfunc.LimitFilter` | 参照原始 clip 限制滤镜改动 |
 | `eedi2` | 边缘导向抗锯齿 |
 | `rgvs.Repair` | 约束修复后的平面 |

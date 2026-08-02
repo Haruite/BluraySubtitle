@@ -342,6 +342,7 @@ class WindowsSetupTests(unittest.TestCase):
             "fmtconv.dll",
             "libsangnom.dll",
             "libvslsmashsource.dll",
+            "libvs_placebo.dll",
             "mvtools.dll",
             "neo-f3kdb.dll",
             "vsnlm_ispc.dll",
@@ -359,7 +360,22 @@ class WindowsSetupTests(unittest.TestCase):
         self.assertIn("'rgvs'", self.source)
         self.assertIn("'grain'", self.source)
         self.assertIn("'mv'", self.source)
+        self.assertIn("'placebo'", self.source)
         self.assertIn("'zsmooth'", self.source)
+
+    def test_vapoursynth_placebo_is_managed_by_the_tools_component(self) -> None:
+        tools_function = self.source.split(
+            "function Install-VapourSynthTools", 1
+        )[1].split("function Test-VapourSynthTools", 1)[0]
+        self.assertIn('"libvs_placebo.dll"', self.source)
+        self.assertIn(
+            "foreach ($plugin in $script:RequiredVapourSynthPlugins)",
+            tools_function,
+        )
+        self.assertIn("'placebo'", self.source)
+        self.assertNotIn("Lypheo/vs-placebo", self.source)
+        self.assertNotIn("VapourSynthPlaceboVersion", self.source)
+        self.assertNotIn('-Name "vapoursynth-placebo"', self.source)
 
     def test_large_downloads_report_periodic_progress(self) -> None:
         download_function = self.source.split("function Invoke-SetupDownload", 1)[1].split(

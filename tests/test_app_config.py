@@ -65,7 +65,10 @@ class AppConfigTests(unittest.TestCase):
         raw = json.loads(
             (REPOSITORY_ROOT / "config.default.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(app_config_from_mapping(raw), default_app_config())
+        config = app_config_from_mapping(raw)
+        self.assertEqual(config, default_app_config())
+        self.assertEqual(config.encode.vpy_deband_strength, 0.5)
+        self.assertEqual(config.encode.vpy_antialiasing_strength, 0.5)
 
     def test_missing_config_is_created_from_packaged_template(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -146,6 +149,18 @@ class AppConfigTests(unittest.TestCase):
                 "schema_version": 1,
                 "encode": {"auto_crop_black_borders": "yes"},
             })
+        for name, value in (
+                ("vpy_denoise_strength", 3.1),
+                ("vpy_dehalo_strength", -0.1),
+                ("vpy_dering_strength", "medium"),
+                ("vpy_deband_strength", 1.1),
+                ("vpy_antialiasing_strength", True),
+        ):
+            with self.assertRaisesRegex(ValueError, name):
+                app_config_from_mapping({
+                    "schema_version": 1,
+                    "encode": {name: value},
+                })
         with self.assertRaisesRegex(ValueError, "built-in preset"):
             app_config_from_mapping({
                 "schema_version": 1,
@@ -303,6 +318,11 @@ class SettingsGuiTests(unittest.TestCase):
         dialog.default_getnative_checkbox.setChecked(False)
         dialog.default_auto_crop_checkbox.setChecked(True)
         dialog.default_output_comparison_checkbox.setChecked(False)
+        dialog.default_vpy_denoise_strength_spin.setValue(0.8)
+        dialog.default_vpy_dehalo_strength_spin.setValue(0.3)
+        dialog.default_vpy_dering_strength_spin.setValue(0.4)
+        dialog.default_vpy_deband_strength_spin.setValue(0.5)
+        dialog.default_vpy_antialiasing_strength_spin.setValue(0.6)
         dialog.remux_flac_default_checkbox.setChecked(False)
 
         selected = dialog.selected_config()
@@ -348,6 +368,11 @@ class SettingsGuiTests(unittest.TestCase):
                 use_getnative=False,
                 auto_crop_black_borders=True,
                 output_comparison_images=False,
+                vpy_denoise_strength=0.8,
+                vpy_dehalo_strength=0.3,
+                vpy_dering_strength=0.4,
+                vpy_deband_strength=0.5,
+                vpy_antialiasing_strength=0.6,
             ),
         )
         labels = " ".join(label.text() for label in dialog.findChildren(QLabel))
@@ -654,6 +679,11 @@ class SettingsGuiTests(unittest.TestCase):
                 use_getnative=False,
                 auto_crop_black_borders=True,
                 output_comparison_images=False,
+                vpy_denoise_strength=0.8,
+                vpy_dehalo_strength=0.3,
+                vpy_dering_strength=0.4,
+                vpy_deband_strength=0.5,
+                vpy_antialiasing_strength=0.6,
             ),
         )
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -695,6 +725,11 @@ class SettingsGuiTests(unittest.TestCase):
             self.assertFalse(window.use_getnative_checkbox.isChecked())
             self.assertTrue(window.auto_crop_black_borders_checkbox.isChecked())
             self.assertFalse(window.output_comparison_checkbox.isChecked())
+            self.assertEqual(window.vpy_denoise_strength_spin.value(), 0.8)
+            self.assertEqual(window.vpy_dehalo_strength_spin.value(), 0.3)
+            self.assertEqual(window.vpy_dering_strength_spin.value(), 0.4)
+            self.assertEqual(window.vpy_deband_strength_spin.value(), 0.5)
+            self.assertEqual(window.vpy_antialiasing_strength_spin.value(), 0.6)
             self.assertFalse(window.remux_flac_checkbox.isChecked())
             self.assertIs(
                 window.lossless_audio_compression_label.parentWidget(),
@@ -712,6 +747,15 @@ class SettingsGuiTests(unittest.TestCase):
             self.assertIsNot(
                 window.use_getnative_checkbox.parentWidget(),
                 window.encode_lossless_audio_combo.parentWidget(),
+            )
+            encode_layout = window.encode_options_row.parentWidget().layout()
+            self.assertLess(
+                encode_layout.indexOf(window.encode_options_row),
+                encode_layout.indexOf(window.vpy_processing_row),
+            )
+            self.assertLess(
+                encode_layout.indexOf(window.vpy_processing_row),
+                encode_layout.indexOf(window.x265_params_edit),
             )
 
             window.output_folder_path.setText(r"E:\Session")

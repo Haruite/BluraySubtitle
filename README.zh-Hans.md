@@ -110,6 +110,7 @@ BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 
   - 无损音频转换（flac / aac / opus）
   - 启动时的编码器、位深和预设来自“高级”设置；其中可按当前选择的压制工具新增、重命名、修改和删除用户预设，内置预设保持只读；启动后每个任务仍以 Encode 页面当前可见的预设和参数为准
   - 启动时的无损音频目标、字幕封装方式、getnative、自动裁黑边和输出对比图复选框同样来自“高级”设置，并可在启动任务前继续修改
+  - 上述选项下一行可调整自动生成默认 VPy 的降噪、去光晕、去振铃、去色带和抗锯齿强度；单项设为 `0` 即可关闭。只针对特定瑕疵的去光晕与去振铃默认关闭，去色带与抗锯齿默认采用适中的 `0.5` 混合；所有值也可在“高级”设置中修改
   - 自动 getnative 会分析多个帧和多种核，可能消耗大量时间与内存；程序会排除经常误报的 535p 至 545p 区间，确实为原生 540p 的素材需要在 VPy 中手动设置
   - 勾选“自动裁剪黑边”时，Encode 会分析多个时间点并应用一组保守的固定裁剪值。黑边随时间变化时会优先保留任一样本用到的像素
   - 勾选“输出对比图”时，每个压制视频都会把源和压制成品的同一帧保存为 PNG，路径为 **`<所选输出目录>/<来源文件夹名>/Compare`**
@@ -360,6 +361,7 @@ Remux 使用界面当前显示的播放列表顺序、命令、章节范围、�
 - **编辑脚本（edit_vpy）**：使用系统关联编辑器打开。
 - **预览脚本（preview_script）**：使用 `vsedit` 打开，并按当前行上下文准备预览参数。
 - 默认脚本路径为 `vpy.vpy`。
+- 自动生成的默认脚本不会自动处理隔行视频，因为真隔行、胶转磁和混合 cadence 需要不同方案；请按 [Encode／VapourSynth Wiki](docs/wiki/Video-Encoding-and-VapourSynth.zh-Hans.md#隔行胶转磁与混合-cadence-来源) 说明使用自定义 VPy。
 
 ---
 
@@ -498,4 +500,5 @@ res = res.std.Trim(first=0, length=720)
 - [ass2bdnxml](https://github.com/Masaiki/ass2bdnxml)
 - [BDSup2Sub](https://github.com/mjuhasz/BDSup2Sub)
 - [Spp2Pgs](https://github.com/subelf/Spp2Pgs)
-- [Infiziert90/getnative](https://github.com/Infiziert90/getnative)
+- [getnative](https://github.com/Infiziert90/getnative)
+- [my-vapoursynth-script](https://github.com/xyx98/my-vapoursynth-script)

@@ -1761,18 +1761,27 @@ install_fdk_aac() {
 # ---------------------------------------------------------------------------
 
 install_flac() {
-  local flac_tag latest_flac_version
+  local flac_tag latest_flac_version flac_bin=""
+  local flac_source_path="/usr/local/bin/flac"
   flac_tag="${FLAC_VERSION:-$(latest_stable_tag https://github.com/xiph/flac.git)}"
   latest_flac_version="${flac_tag#v}"
   log "$(msg "Installing latest flac (${latest_flac_version}, build from source)" "安装最新 flac（${latest_flac_version}，从源码编译并安装）")"
 
-  if [[ -x "$FLAC_PATH" ]]; then
-    local flac_bin="$FLAC_PATH"
+  # A source build is owned by /usr/local; the configured runtime path may
+  # still contain an older distribution package from an earlier setup run.
+  if [[ -x "$flac_source_path" ]]; then
+    flac_bin="$flac_source_path"
+  elif [[ -x "$FLAC_PATH" ]]; then
+    flac_bin="$FLAC_PATH"
+  fi
+
+  if [[ -n "$flac_bin" ]]; then
     local flac_version
-    flac_version=$("$flac_bin" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
+    flac_version=$("$flac_bin" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)
 
     if [[ -n "$flac_version" ]]; then
       if dpkg --compare-versions "$flac_version" ge "$latest_flac_version"; then
+        install_configured_executable "$flac_bin" "$FLAC_PATH"
         log "$(msg "flac already installed and current (${flac_version} >= ${latest_flac_version}), skipping" "检测到 flac 已安装且为当前版本（${flac_version} >= ${latest_flac_version}），跳过编译安装")"
         return 0
       fi
@@ -1817,6 +1826,11 @@ install_flac() {
   ) || die "$(msg 'flac build/install failed' 'flac 编译/安装失败')"
 
   rm -rf "$build_dir"
+  local installed_flac_version
+  installed_flac_version=$("$FLAC_PATH" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)
+  if [[ -z "$installed_flac_version" ]] || ! dpkg --compare-versions "$installed_flac_version" ge "$latest_flac_version"; then
+    die "$(msg "Installed flac verification failed at ${FLAC_PATH}" "安装后的 flac 在 ${FLAC_PATH} 验证失败")"
+  fi
   log "$(msg 'flac installation complete' 'flac 安装完成')"
 }
 
@@ -2380,7 +2394,17 @@ build_vs_plugins() {
   (
     cd "$build_dir" || exit 1
 
-    if [[ ! -f "$plugins_dir/libvslsmashsource.so" ]]; then
+    local lsmash_plugin="$plugins_dir/libvslsmashsource.so"
+    local lsmash_linker_report=""
+    if [[ -f "$lsmash_plugin" ]] && command -v ldd >/dev/null 2>&1; then
+      lsmash_linker_report="$(LC_ALL=C ldd -r "$lsmash_plugin" 2>&1 || true)"
+    fi
+    if [[ "$lsmash_linker_report" == *"undefined symbol:"* || "$lsmash_linker_report" == *"not found"* ]]; then
+      log "$(msg 'Existing L-SMASH-Works plugin has unresolved symbols; rebuilding it' '现有 L-SMASH-Works 插件包含未解析符号，将重新编译')"
+      rm -f "$lsmash_plugin" || exit 1
+    fi
+
+    if [[ ! -f "$lsmash_plugin" ]]; then
       log "$(msg 'Building L-SMASH-Works (VapourSynth)' '编译 L-SMASH-Works (VapourSynth)')"
       cd "$build_dir" || exit 1
       tmux_run "$(msg 'Download L-SMASH-Works' '下载 L-SMASH-Works')" git clone https://github.com/HomeOfAviSynthPlusEvolution/L-SMASH-Works.git || exit 1
@@ -2411,7 +2435,7 @@ build_vs_plugins() {
         tmux_run "L-SMASH-Works git checkout" bash -lc "git checkout . && git -c advice.detachedHead=false checkout -q ae51313" || log "$(msg 'Warning: git checkout ae51313 failed, trying to continue with current version' '警告：切换到 ae51313 失败，尝试继续使用当前版本')"
       fi
 
-      # Apply FFmpeg compatibility patches (D3D12 shim, remove removed codec IDs).
+      # Apply FFmpeg compatibility patches (index accessors, D3D12 shim, removed codec IDs).
       local decode_file="../common/decode.c"
       if [[ -f "$decode_file" ]]; then
           python3 - <<'PY' || exit 1
@@ -2451,6 +2475,23 @@ if libav_path.is_file():
     if v410_line in libav_data:
         libav_data = libav_data.replace(v410_line, "")
     libav_path.write_text(libav_data, encoding="utf-8")
+
+lwindex_path = Path("../common/lwindex.c")
+if lwindex_path.is_file():
+    lwindex_data = lwindex_path.read_text(encoding="utf-8", errors="replace")
+    compat_block = """/* FFmpeg 4.x exposes index entries directly on AVStream. */
+#if LIBAVFORMAT_VERSION_MAJOR < 59
+#define avformat_index_get_entries_count(stream) ((stream)->nb_index_entries)
+#define avformat_index_get_entry(stream, index) (&(stream)->index_entries[(index)])
+#endif
+
+"""
+    anchor = '#include "osdep.h"\n'
+    if "LIBAVFORMAT_VERSION_MAJOR < 59" not in lwindex_data:
+        if anchor not in lwindex_data:
+            raise RuntimeError("L-SMASH-Works lwindex.c compatibility anchor not found")
+        lwindex_data = lwindex_data.replace(anchor, compat_block + anchor, 1)
+    lwindex_path.write_text(lwindex_data, encoding="utf-8")
 PY
       fi
       rm -rf build
@@ -2460,6 +2501,11 @@ PY
       out="$(find "$PWD" -maxdepth 3 -name "libvslsmashsource.so" -type f | head -n 1)"
       [[ -n "${out:-}" ]] || exit 1
       cp "$out" "$plugins_dir/" || exit 1
+      lsmash_linker_report="$(LC_ALL=C ldd -r "$lsmash_plugin" 2>&1 || true)"
+      if [[ "$lsmash_linker_report" == *"undefined symbol:"* || "$lsmash_linker_report" == *"not found"* ]]; then
+        log "$(msg 'Rebuilt L-SMASH-Works plugin still has unresolved dependencies' '重编后的 L-SMASH-Works 插件仍包含未解析依赖')"
+        exit 1
+      fi
       cd "$build_dir" || exit 1
     else
       log "$(msg 'libvslsmashsource.so already exists, skipping' '已存在 libvslsmashsource.so，跳过')"

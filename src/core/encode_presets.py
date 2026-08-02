@@ -21,16 +21,16 @@ ENCODE_PRESET_PARAMETERS = {
         "Extreme": "--preset placebo --crf 14 --aq-mode 3 --aq-strength 1.0 --cbqpoffs -2 --crqpoffs -2 --bframes 12 --b-adapt 2 --ref 6 --rc-lookahead 120 --lookahead-threads 0 --psy-rd 2.5 --psy-rdoq 2.0 --rdoq-level 2 --deblock -2:-2 --qcomp 0.65 --merange 57 --no-sao --no-strong-intra-smoothing",
     },
     "x264": {
-        "Fast": "--preset fast --crf 20 --profile high --level 4.1 --bframes 4 --ref 4",
-        "Balanced": "--preset medium --crf 18 --profile high --level 4.1 --bframes 6 --ref 5 --deblock -1:-1",
-        "High Quality": "--preset slow --crf 16 --profile high --level 4.1 --bframes 8 --ref 6 --deblock -1:-1 --aq-mode 2",
-        "Extreme": "--preset veryslow --crf 14 --profile high --level 4.1 --bframes 10 --ref 8 --aq-mode 2 --trellis 2",
+        "Fast": "--preset fast --crf 20 --profile high --bframes 4 --ref 4",
+        "Balanced": "--preset medium --crf 18 --profile high --bframes 6 --ref 5 --deblock -1:-1",
+        "High Quality": "--preset slow --crf 16 --profile high --bframes 8 --ref 6 --deblock -1:-1 --aq-mode 2",
+        "Extreme": "--preset veryslow --crf 14 --profile high --bframes 10 --ref 8 --aq-mode 2 --trellis 2",
     },
     "svtav1": {
         "Fast": "--preset 10 --crf 32 --keyint 240 --tune 0",
         "Balanced": "--preset 6 --crf 24 --keyint 240 --tune 0",
-        "High Quality": "--preset 4 --crf 20 --keyint 240 --tune 0 --film-grain 4",
-        "Extreme": "--preset 2 --crf 16 --keyint 240 --tune 0 --film-grain 0 --aq-mode 2",
+        "High Quality": "--preset 4 --crf 20 --keyint 240 --tune 0",
+        "Extreme": "--preset 2 --crf 16 --keyint 240 --tune 0 --aq-mode 2",
     },
 }
 

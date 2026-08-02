@@ -7,16 +7,16 @@ import sys
 import tempfile
 from typing import Optional
 
-from PyQt6.QtCore import QProcess
+from PyQt6.QtCore import QProcess, QProcessEnvironment
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLineEdit, QPushButton, QFileDialog, QMessageBox
 
-from src.core.settings import ENCODE_REMUX_LABELS, ENCODE_LABELS, VSEDIT_PATH, ENCODE_SP_LABELS, \
+from src.core.settings import ENCODE_REMUX_LABELS, ENCODE_LABELS, PLUGIN_PATH, VSEDIT_PATH, ENCODE_SP_LABELS, \
     ENCODE_REMUX_SP_LABELS
 from src.exports.utils import print_exc_terminal, run_command
 from .gui_base import BluraySubtitleGuiBase
 
 
-_GETNATIVE_KERNEL_HELPER = (
+_PREVIOUS_GETNATIVE_KERNEL_HELPER = (
     '_NATIVE_BICUBIC = {\n'
     '    "bicubic_0.333_0.333": (1/3, 1/3),\n'
     '    "bicubic_0.5_0.0": (0.5, 0.0),\n'
@@ -60,6 +60,36 @@ _GETNATIVE_KERNEL_HELPER = (
     '    raise ValueError(f"Unsupported getnative kernel: {kernel_name}")\n'
     '\n'
 )
+
+_GETNATIVE_KERNEL_HELPER = (
+    _PREVIOUS_GETNATIVE_KERNEL_HELPER
+    + 'def _resize_native(clip, width, height, kernel_name):\n'
+    '    name = str(kernel_name or "").strip().lower()\n'
+    '    if name == "bilinear":\n'
+    '        return core.resize.Bilinear(clip, width, height)\n'
+    '    if name in _NATIVE_BICUBIC or name == "bicubic":\n'
+    '        b, c = _NATIVE_BICUBIC.get(name, (1/3, 1/3))\n'
+    '        return core.resize.Bicubic(\n'
+    '            clip, width, height, filter_param_a=b, filter_param_b=c\n'
+    '        )\n'
+    '    if name.startswith("lanczos"):\n'
+    '        taps = int(name[len("lanczos"):])\n'
+    '        return core.resize.Lanczos(clip, width, height, filter_param_a=taps)\n'
+    '    spline_filters = {\n'
+    '        "spline16": core.resize.Spline16,\n'
+    '        "spline36": core.resize.Spline36,\n'
+    '        "spline64": core.resize.Spline64,\n'
+    '    }\n'
+    '    if name in spline_filters:\n'
+    '        return spline_filters[name](clip, width, height)\n'
+    '    raise ValueError(f"Unsupported getnative kernel: {kernel_name}")\n'
+    '\n'
+    'def _rescale_protection_mask(original, reconstructed):\n'
+    '    mask = core.std.Expr([original, reconstructed], "x y - abs")\n'
+    '    mask = core.std.Binarize(mask, threshold=2 * 256)\n'
+    '    return mask.std.Maximum().std.Maximum().std.Inflate()\n'
+    '\n'
+)
 _LEGACY_GETNATIVE_DESCALE_BLOCK = (
     '        kl = (native_kernel or "").lower()\n'
     '        if "lanczos" in kl and hasattr(core.descale, "Delanczos"):\n'
@@ -72,13 +102,286 @@ _LEGACY_GETNATIVE_DESCALE_BLOCK = (
     '            low = core.resize.Bicubic(src16, native_w, nh)\n'
     '        proc16 = low\n'
 )
-_GETNATIVE_DESCALE_BLOCK = (
+_PREVIOUS_GETNATIVE_DESCALE_BLOCK = (
     '        low = _descale_native(src16, native_w, nh, native_kernel)\n'
     '        proc16 = low\n'
+)
+_GETNATIVE_DESCALE_BLOCK = (
+    '        src16Y = core.std.ShufflePlanes(src16, 0, GRAY_CF)\n'
+    '        lowY = _descale_native(src16Y, native_w, nh, native_kernel)\n'
+    '        reconstructedY = _resize_native(lowY, target_w, target_h, native_kernel)\n'
+    '        rescale_mask = _rescale_protection_mask(src16Y, reconstructedY)\n'
+    '        native_chroma = core.resize.Spline64(\n'
+    '            src16, native_w, nh, chromaloc_in_s="left", chromaloc_s="left"\n'
+    '        )\n'
+    '        proc16 = core.std.ShufflePlanes([lowY, native_chroma], [0, 1, 2], YUV_CF)\n'
+)
+
+_PREVIOUS_VPY_PROCESSING_SETTINGS = (
+    'denoise_strength = 0.6  # 0.0-3.0; 0 disables denoise\n'
+    'dehalo_strength = 0.25  # 0.0-1.0; 0 disables dehalo\n'
+    'dering_strength = 0.25  # 0.0-1.0; 0 disables dering\n'
+    '\n'
+)
+
+_PREVIOUS_VPY_PROCESSING_SETTINGS_V2 = (
+    'denoise_strength = 0.6  # 0.0-3.0; 0 disables denoise\n'
+    'dehalo_strength = 0.0  # 0.0-1.0; enable only for visible sharpening halos\n'
+    'dering_strength = 0.0  # 0.0-1.0; enable only for visible ringing\n'
+    'deband_strength = 1.0  # 0.0-1.0; 0 disables deband\n'
+    'antialiasing_strength = 1.0  # 0.0-1.0; 0 disables anti-aliasing\n'
+    '\n'
+)
+
+_VPY_PROCESSING_SETTINGS = (
+    'denoise_strength = 0.6  # 0.0-3.0; 0 disables denoise\n'
+    'dehalo_strength = 0.0  # 0.0-1.0; enable only for visible sharpening halos\n'
+    'dering_strength = 0.0  # 0.0-1.0; enable only for visible ringing\n'
+    'deband_strength = 0.5  # 0.0-1.0; 0 disables deband\n'
+    'antialiasing_strength = 0.5  # 0.0-1.0; 0 disables anti-aliasing\n'
+    '\n'
+)
+
+_VPY_PROCESSING_HELPERS = (
+    'def _merge_luma(clip, luma):\n'
+    '    return core.std.ShufflePlanes([luma, clip], [0, 1, 2], YUV_CF)\n'
+    '\n'
+    'def _m4(value):\n'
+    '    return max(16, int(round(value / 4.0)) * 4)\n'
+    '\n'
+    'def _scale_8bit(value, clip):\n'
+    '    return value * (1 << (clip.format.bits_per_sample - 8))\n'
+    '\n'
+    'def _denoise_luma_protected(clip, strength):\n'
+    '    strength = max(0.0, min(float(strength), 3.0))\n'
+    '    if strength == 0.0:\n'
+    '        return clip\n'
+    '    filtered = core.nlm_ispc.NLMeans(\n'
+    '        clip, d=0, a=2, s=2, h=strength, channels="Y", wmode=3\n'
+    '    )\n'
+    '    source_y = core.std.ShufflePlanes(clip, 0, GRAY_CF)\n'
+    '    filtered_y = core.std.ShufflePlanes(filtered, 0, GRAY_CF)\n'
+    '    # Preserve line art and other strong spatial detail before limiting pixel changes.\n'
+    '    edge_mask = source_y.std.Prewitt().std.Binarize(_scale_8bit(5, source_y))\n'
+    '    edge_mask = edge_mask.std.Maximum().std.Inflate()\n'
+    '    protected_y = core.std.MaskedMerge(filtered_y, source_y, edge_mask)\n'
+    '    limited_y = mvf.LimitFilter(\n'
+    '        protected_y, source_y, thr=max(0.45, strength * 0.65), elast=2.0\n'
+    '    )\n'
+    '    return _merge_luma(clip, limited_y)\n'
+    '\n'
+    'def _dehalo_luma(clip, strength):\n'
+    '    strength = max(0.0, min(float(strength), 1.0))\n'
+    '    if strength == 0.0:\n'
+    '        return clip\n'
+    '    source_y = core.std.ShufflePlanes(clip, 0, GRAY_CF)\n'
+    '    halo = core.resize.Bicubic(\n'
+    '        source_y, _m4(source_y.width / 2.4), _m4(source_y.height / 2.4),\n'
+    '        filter_param_a=1/3, filter_param_b=1/3\n'
+    '    )\n'
+    '    halo = core.resize.Bicubic(\n'
+    '        halo, source_y.width, source_y.height, filter_param_a=1, filter_param_b=0\n'
+    '    )\n'
+    '    halo_low = _scale_8bit(8, source_y)\n'
+    '    halo_high = _scale_8bit(24, source_y)\n'
+    '    halo_blend = _scale_8bit(32, source_y)\n'
+    '    # Conservative abcxyz-style halo estimate, repaired and blended on luma only.\n'
+    '    candidate = core.std.Expr(\n'
+    '        [source_y, halo],\n'
+    '        f"x {halo_low} + y < x {halo_low} + "\n'
+    '        f"x {halo_high} - y > x {halo_high} - y ? ? "\n'
+    '        f"x y - abs * x {halo_blend} x y - abs - * + {halo_blend} /"\n'
+    '    )\n'
+    '    repaired = core.rgvs.Repair(source_y, candidate, 1)\n'
+    '    return _merge_luma(\n'
+    '        clip, core.std.Merge(source_y, repaired, weight=strength)\n'
+    '    )\n'
+    '\n'
+    'def _min_blur_luma(clip):\n'
+    '    rg11 = core.rgvs.RemoveGrain(clip, 11)\n'
+    '    rg4 = core.rgvs.RemoveGrain(clip, 4)\n'
+    '    return core.std.Expr(\n'
+    '        [clip, rg11, rg4],\n'
+    '        "x y - x z - * 0 < x x y - abs x z - abs < y z ? ?"\n'
+    '    )\n'
+    '\n'
+    'def _dering_luma(clip, strength):\n'
+    '    strength = max(0.0, min(float(strength), 1.0))\n'
+    '    if strength == 0.0:\n'
+    '        return clip\n'
+    '    source_y = core.std.ShufflePlanes(clip, 0, GRAY_CF)\n'
+    '    smoothed_y = _min_blur_luma(source_y)\n'
+    '    smoothed_y = core.rgvs.Repair(smoothed_y, source_y, 1)\n'
+    '    smoothed_y = mvf.LimitFilter(\n'
+    '        smoothed_y, source_y, thr=1.2, brighten_thr=0.6, elast=2.0\n'
+    '    )\n'
+    '    # HQDering-style ring mask: process the narrow band around strong edges, not the edge.\n'
+    '    edge = source_y.std.Prewitt().std.Binarize(_scale_8bit(10, source_y))\n'
+    '    outer = edge.std.Maximum().std.Maximum()\n'
+    '    ring_mask = core.std.Expr([outer, edge], "x y -")\n'
+    '    ring_mask = ring_mask.std.Inflate().std.Convolution(\n'
+    '        matrix=[1, 1, 1, 1, 1, 1, 1, 1, 1], divisor=9\n'
+    '    )\n'
+    '    ringed_y = core.std.MaskedMerge(source_y, smoothed_y, ring_mask)\n'
+    '    return _merge_luma(\n'
+    '        clip, core.std.Merge(source_y, ringed_y, weight=strength)\n'
+    '    )\n'
+    '\n'
+)
+
+_LEGACY_VPY_FILTER_BLOCK = (
+    'nr16 = core.nlm_ispc.NLMeans(proc16, d=0, wmode=3, h=3)\n'
+)
+
+_VPY_FILTER_BLOCK = (
+    'nr16 = _denoise_luma_protected(proc16, denoise_strength)\n'
+    'nr16 = _dehalo_luma(nr16, dehalo_strength)\n'
+    'nr16 = _dering_luma(nr16, dering_strength)\n'
+)
+
+_PREVIOUS_VPY_POST_FILTER_BLOCK = (
+    '_nr_pl = core.fmtc.bitdepth(nr16, bits=16)\n'
+    'dbed = core.placebo.Deband(_nr_pl, planes=7, iterations=2, threshold=4.5, radius=16.0, grain=0.0)\n'
+    'dbed = mvf.LimitFilter(dbed, _nr_pl, thr=0.55, elast=1.5, planes=[0, 1, 2])\n'
+    'nr16Y = core.std.ShufflePlanes(_nr_pl, 0, GRAY_CF)\n'
+    'aa_nr16Y = core.eedi2.EEDI2(nr16Y, field=1, mthresh=10, lthresh=20, vthresh=20, maxd=24, nt=50)\n'
+    'aa_nr16Y = core.fmtc.resample(aa_nr16Y, proc_w, proc_h, 0, -0.5).std.Transpose()\n'
+    'aa_nr16Y = core.eedi2.EEDI2(aa_nr16Y, field=1, mthresh=10, lthresh=20, vthresh=20, maxd=24, nt=50)\n'
+    'aa_nr16Y = core.fmtc.resample(aa_nr16Y, proc_h, proc_w, 0, -0.5).std.Transpose()\n'
+    'if (\n'
+    '    aa_nr16Y.width != nr16Y.width\n'
+    '    or aa_nr16Y.height != nr16Y.height\n'
+    '    or aa_nr16Y.format.id != nr16Y.format.id\n'
+    '):\n'
+    '    aa_nr16Y = core.resize.Bicubic(\n'
+    '        aa_nr16Y, nr16Y.width, nr16Y.height, format=nr16Y.format\n'
+    '    )\n'
+    'aaedY = core.rgvs.Repair(aa_nr16Y, nr16Y, 2)\n'
+    'dbedY = core.std.ShufflePlanes(dbed, 0, GRAY_CF)\n'
+    'mergedY = mvf.LimitFilter(dbedY, aaedY, thr=1.0, elast=1.5)\n'
+    'merged = core.std.ShufflePlanes([mergedY, dbed], [0,1,2], YUV_CF)\n'
+)
+
+_LEGACY_WINDOWS_VPY_POST_FILTER_BLOCK = _PREVIOUS_VPY_POST_FILTER_BLOCK.replace(
+    'dbed = core.placebo.Deband(_nr_pl, planes=7, iterations=2, threshold=4.5, radius=16.0, grain=0.0)\n',
+    'dbed = core.neo_f3kdb.Deband(_nr_pl, 12, 72, 48, 48, 0, 0, output_depth=16)'
+    '.neo_f3kdb.Deband(24, 56, 32, 32, 0, 0, output_depth=16)\n',
+)
+
+_PREVIOUS_VPY_POST_FILTER_BLOCK_V2 = (
+    '# placebo.Deband accepts only 8/16-bit integer or 32-bit float.\n'
+    '_nr_pl = core.fmtc.bitdepth(nr16, bits=16)\n'
+    'deband_strength = max(0.0, min(float(deband_strength), 1.0))\n'
+    'if deband_strength == 0.0:\n'
+    '    dbed = _nr_pl\n'
+    'else:\n'
+    '    dbed_candidate = core.placebo.Deband(\n'
+    '        _nr_pl, planes=7, iterations=2, threshold=4.5, radius=16.0, grain=0.0\n'
+    '    )\n'
+    '    dbed_candidate = mvf.LimitFilter(\n'
+    '        dbed_candidate, _nr_pl, thr=0.55, elast=1.5, planes=[0, 1, 2]\n'
+    '    )\n'
+    '    dbed = dbed_candidate if deband_strength == 1.0 else core.std.Merge(\n'
+    '        _nr_pl, dbed_candidate, weight=deband_strength\n'
+    '    )\n'
+    'dbedY = core.std.ShufflePlanes(dbed, 0, GRAY_CF)\n'
+    'antialiasing_strength = max(\n'
+    '    0.0, min(float(antialiasing_strength), 1.0)\n'
+    ')\n'
+    'if antialiasing_strength == 0.0:\n'
+    '    mergedY = dbedY\n'
+    'else:\n'
+    '    nr16Y = core.std.ShufflePlanes(_nr_pl, 0, GRAY_CF)\n'
+    '    aa_nr16Y = core.eedi2.EEDI2(\n'
+    '        nr16Y, field=1, mthresh=10, lthresh=20, vthresh=20, maxd=24, nt=50\n'
+    '    )\n'
+    '    aa_nr16Y = core.fmtc.resample(\n'
+    '        aa_nr16Y, proc_w, proc_h, 0, -0.5\n'
+    '    ).std.Transpose()\n'
+    '    aa_nr16Y = core.eedi2.EEDI2(\n'
+    '        aa_nr16Y, field=1, mthresh=10, lthresh=20, vthresh=20, maxd=24, nt=50\n'
+    '    )\n'
+    '    aa_nr16Y = core.fmtc.resample(\n'
+    '        aa_nr16Y, proc_h, proc_w, 0, -0.5\n'
+    '    ).std.Transpose()\n'
+    '    if (\n'
+    '        aa_nr16Y.width != nr16Y.width\n'
+    '        or aa_nr16Y.height != nr16Y.height\n'
+    '        or aa_nr16Y.format.id != nr16Y.format.id\n'
+    '    ):\n'
+    '        aa_nr16Y = core.resize.Bicubic(\n'
+    '            aa_nr16Y, nr16Y.width, nr16Y.height, format=nr16Y.format\n'
+    '        )\n'
+    '    aaedY = core.rgvs.Repair(aa_nr16Y, nr16Y, 2)\n'
+    '    antialiasedY = mvf.LimitFilter(dbedY, aaedY, thr=1.0, elast=1.5)\n'
+    '    mergedY = (\n'
+    '        antialiasedY\n'
+    '        if antialiasing_strength == 1.0\n'
+    '        else core.std.Merge(dbedY, antialiasedY, weight=antialiasing_strength)\n'
+    '    )\n'
+    'merged = core.std.ShufflePlanes([mergedY, dbed], [0,1,2], YUV_CF)\n'
+)
+
+_VPY_POST_FILTER_BLOCK = _PREVIOUS_VPY_POST_FILTER_BLOCK_V2.replace(
+    '    dbed_candidate = mvf.LimitFilter(\n'
+    '        dbed_candidate, _nr_pl, thr=0.55, elast=1.5, planes=[0, 1, 2]\n'
+    '    )\n',
+    '    dbed_candidate = mvf.LimitFilter(\n'
+    '        dbed_candidate, _nr_pl, thr=0.55, elast=1.5, planes=[0, 1, 2]\n'
+    '    )\n'
+    '    # Protect edge and texture planes while debanding flatter regions.\n'
+    '    detail_mask = _nr_pl.std.Prewitt().std.Binarize(\n'
+    '        threshold=_scale_8bit(3, _nr_pl)\n'
+    '    )\n'
+    '    detail_mask = (\n'
+    '        detail_mask.std.Maximum().std.Maximum().std.Inflate().std.Convolution(\n'
+    '            matrix=[1, 1, 1, 1, 1, 1, 1, 1, 1], divisor=9\n'
+    '        )\n'
+    '    )\n'
+    '    dbed_candidate = core.std.MaskedMerge(\n'
+    '        dbed_candidate, _nr_pl, detail_mask\n'
+    '    )\n',
+).replace(
+    '    antialiasedY = mvf.LimitFilter(dbedY, aaedY, thr=1.0, elast=1.5)\n',
+    '    antialiasedY = mvf.LimitFilter(aaedY, dbedY, thr=1.0, elast=1.5)\n',
 )
 
 
 class VpyEditPreviewMixin(BluraySubtitleGuiBase):
+    def _current_vpy_processing_values(self) -> dict[str, float]:
+        controls = (
+            ('denoise_strength', 'vpy_denoise_strength_spin', 0.6),
+            ('dehalo_strength', 'vpy_dehalo_strength_spin', 0.0),
+            ('dering_strength', 'vpy_dering_strength_spin', 0.0),
+            ('deband_strength', 'vpy_deband_strength_spin', 0.5),
+            (
+                'antialiasing_strength',
+                'vpy_antialiasing_strength_spin',
+                0.5,
+            ),
+        )
+        values: dict[str, float] = {}
+        for script_name, attribute_name, default in controls:
+            control = getattr(self, attribute_name, None)
+            values[script_name] = float(control.value()) if control is not None else default
+        return values
+
+    @staticmethod
+    def _patch_vpy_processing_value_in_text(
+            text: str,
+            values: dict[str, float],
+    ) -> str:
+        for name, value in values.items():
+            match = re.match(
+                rf'^({re.escape(name)}\s*=\s*)'
+                rf'[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?'
+                rf'(\s*(#.*)?)$',
+                text,
+            )
+            if match:
+                return f'{match.group(1)}{format(value, ".6g")}{match.group(2)}'
+        return text
+
     def _selected_output_bits_for_vpy(self) -> int:
         """Bits for ``fmtc.bitdepth(..., bits=N)``: follows Encode UI / BD encode constraints."""
         try:
@@ -162,8 +465,22 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                 with open(path, 'r', encoding='utf-8') as fp:
                     existing = fp.read()
                 marker = 'native_kernel = ""  # optional, auto-generated by app\n\n'
+                upgraded = existing
+                if (
+                        _PREVIOUS_GETNATIVE_KERNEL_HELPER in upgraded
+                        and _PREVIOUS_GETNATIVE_DESCALE_BLOCK in upgraded
+                ):
+                    upgraded = upgraded.replace(
+                        _PREVIOUS_GETNATIVE_KERNEL_HELPER,
+                        _GETNATIVE_KERNEL_HELPER,
+                        1,
+                    ).replace(
+                        _PREVIOUS_GETNATIVE_DESCALE_BLOCK,
+                        _GETNATIVE_DESCALE_BLOCK,
+                        1,
+                    )
                 if _LEGACY_GETNATIVE_DESCALE_BLOCK in existing and marker in existing:
-                    upgraded = existing.replace(
+                    upgraded = upgraded.replace(
                         marker,
                         marker + _GETNATIVE_KERNEL_HELPER,
                         1,
@@ -172,83 +489,158 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                         _GETNATIVE_DESCALE_BLOCK,
                         1,
                     )
+                can_upgrade_filter = (
+                    marker in upgraded
+                    and _GETNATIVE_KERNEL_HELPER in upgraded
+                    and _GETNATIVE_DESCALE_BLOCK in upgraded
+                )
+                if _LEGACY_VPY_FILTER_BLOCK in upgraded and can_upgrade_filter:
+                    filter_upgrade_base = upgraded
+                    missing_settings = []
+                    for setting_line in _VPY_PROCESSING_SETTINGS.splitlines(keepends=True):
+                        setting_name = setting_line.split('=', 1)[0].strip()
+                        if not setting_name:
+                            continue
+                        if not re.search(
+                                rf'^{re.escape(setting_name)}\s*=',
+                                upgraded,
+                                re.MULTILINE,
+                        ):
+                            missing_settings.append(setting_line)
+                    if missing_settings:
+                        upgraded = upgraded.replace(
+                            marker,
+                            marker + ''.join(missing_settings) + '\n',
+                            1,
+                        )
+                    if 'def _denoise_luma_protected(' not in upgraded:
+                        upgraded = upgraded.replace(
+                            _GETNATIVE_KERNEL_HELPER,
+                            _GETNATIVE_KERNEL_HELPER + _VPY_PROCESSING_HELPERS,
+                            1,
+                        )
+                    required_helpers = (
+                        'def _denoise_luma_protected(',
+                        'def _dehalo_luma(',
+                        'def _dering_luma(',
+                    )
+                    required_settings = (
+                        'denoise_strength',
+                        'dehalo_strength',
+                        'dering_strength',
+                        'deband_strength',
+                        'antialiasing_strength',
+                    )
+                    if (
+                            all(helper in upgraded for helper in required_helpers)
+                            and all(
+                                re.search(
+                                    rf'^{re.escape(name)}\s*=',
+                                    upgraded,
+                                    re.MULTILINE,
+                                )
+                                for name in required_settings
+                            )
+                    ):
+                        upgraded = upgraded.replace(
+                            _LEGACY_VPY_FILTER_BLOCK,
+                            _VPY_FILTER_BLOCK,
+                            1,
+                        )
+                    else:
+                        upgraded = filter_upgrade_base
+                if (
+                        _PREVIOUS_VPY_PROCESSING_SETTINGS_V2 in upgraded
+                        and _PREVIOUS_VPY_POST_FILTER_BLOCK_V2 in upgraded
+                ):
+                    upgraded = upgraded.replace(
+                        _PREVIOUS_VPY_PROCESSING_SETTINGS_V2,
+                        _VPY_PROCESSING_SETTINGS,
+                        1,
+                    ).replace(
+                        _PREVIOUS_VPY_POST_FILTER_BLOCK_V2,
+                        _VPY_POST_FILTER_BLOCK,
+                        1,
+                    )
+                previous_post_filter = next((
+                    block
+                    for block in (
+                        _PREVIOUS_VPY_POST_FILTER_BLOCK,
+                        _LEGACY_WINDOWS_VPY_POST_FILTER_BLOCK,
+                    )
+                    if block in upgraded
+                ), None)
+                if (
+                        previous_post_filter is not None
+                        and _PREVIOUS_VPY_PROCESSING_SETTINGS in upgraded
+                ):
+                    upgraded = upgraded.replace(
+                        _PREVIOUS_VPY_PROCESSING_SETTINGS,
+                        _VPY_PROCESSING_SETTINGS,
+                        1,
+                    ).replace(
+                        previous_post_filter,
+                        _VPY_POST_FILTER_BLOCK,
+                        1,
+                    )
+                elif (
+                        previous_post_filter is not None
+                        and _VPY_PROCESSING_SETTINGS in upgraded
+                ):
+                    upgraded = upgraded.replace(
+                        previous_post_filter,
+                        _VPY_POST_FILTER_BLOCK,
+                        1,
+                    )
+                if upgraded != existing:
                     with open(path, 'w', encoding='utf-8') as fp:
                         fp.write(upgraded)
             except Exception:
                 print_exc_terminal()
             return
-        # placebo.Deband accepts only 8 / 16-bit integer or 32-bit float; normalize before deband.
-        work_pl = '_nr_pl = core.fmtc.bitdepth(nr16, bits=16)\n'
-        deband_line = (
-            work_pl
-            + 'dbed = core.neo_f3kdb.Deband(_nr_pl, 12, 72, 48, 48, 0, 0, output_depth=16)'
-            + '.neo_f3kdb.Deband(24, 56, 32, 32, 0, 0, output_depth=16)\n'
-        )
-        if sys.platform != 'win32':
-            deband_line = (
-                work_pl
-                + 'dbed = core.placebo.Deband(_nr_pl, planes=7, iterations=2, threshold=4.5, radius=16.0, grain=0.0)\n'
-            )
         plugin_line = (
             '' if sys.platform == 'win32' else
-            'PLUGIN_PATH = "/app/plugins" if os.path.exists("/.dockerenv") else os.path.expanduser("~/plugins")\n'
-            'core.std.LoadAllPlugins(PLUGIN_PATH)\n'
+            'DEFAULT_PLUGIN_PATH = "/app/plugins" if os.path.exists("/.dockerenv") else os.path.expanduser("~/plugins")\n'
+            'PLUGIN_PATH = os.environ.get("BLURAYSUB_PLUGIN_PATH") or DEFAULT_PLUGIN_PATH\n'
+            'if os.path.isdir(PLUGIN_PATH):\n'
+            '    core.std.LoadAllPlugins(PLUGIN_PATH)\n'
         )
         content = (
                 'import os\n'
                 'import hashlib\n'
+                'import tempfile\n'
                 'import vapoursynth as vs\n'
                 'from vapoursynth import core\n'
-                'import mvsfunc as mvf\n'
                 + plugin_line +
+                'import mvsfunc as mvf\n'
                 '\n'
                 '\n'
                 'GRAY_CF = getattr(vs, "GRAY", None)\n'
                 'if GRAY_CF is None:\n'
                 '    GRAY_CF = getattr(vs.ColorFamily, "GRAY", 1)\n'
-                '    try:\n'
-                '        setattr(vs, "GRAY", GRAY_CF)\n'
-                '    except Exception:\n'
-                '        pass\n'
+                '    setattr(vs, "GRAY", GRAY_CF)\n'
                 'YUV_CF = getattr(vs, "YUV", None)\n'
                 'if YUV_CF is None:\n'
                 '    YUV_CF = getattr(vs.ColorFamily, "YUV", 2)\n'
-                '    try:\n'
-                '        setattr(vs, "YUV", YUV_CF)\n'
-                '    except Exception:\n'
-                '        pass\n'
+                '    setattr(vs, "YUV", YUV_CF)\n'
                 'if not hasattr(vs, "INTEGER"):\n'
-                '    try:\n'
-                '        setattr(vs, "INTEGER", getattr(vs.SampleType, "INTEGER", 0))\n'
-                '    except Exception:\n'
-                '        pass\n'
+                '    setattr(vs, "INTEGER", getattr(vs.SampleType, "INTEGER", 0))\n'
                 'if not hasattr(vs, "FLOAT"):\n'
-                '    try:\n'
-                '        setattr(vs, "FLOAT", getattr(vs.SampleType, "FLOAT", 1))\n'
-                '    except Exception:\n'
-                '        pass\n'
+                '    setattr(vs, "FLOAT", getattr(vs.SampleType, "FLOAT", 1))\n'
                 'a = r""  # optional, auto-generated by app\n'
                 'native_h = 0  # optional, auto-generated by app\n'
                 'native_kernel = ""  # optional, auto-generated by app\n'
                 '\n'
-                + _GETNATIVE_KERNEL_HELPER +
-                'try:\n'
-                '    src8 = core.lsmas.LWLibavSource(a)\n'
-                'except BaseException as _e:\n'
-                '    if _e.__class__ in (KeyboardInterrupt, SystemExit):\n'
-                '        raise\n'
-                '    if type(_e).__name__ in ("KeyboardInterrupt", "SystemExit"):\n'
-                '        raise\n'
-                '    if hasattr(core, "ffms2"):\n'
-                '        _t = os.environ.get("TEMP") or os.environ.get("TMP") or os.path.expandvars("%TEMP%") or "."\n'
-                '        _k = hashlib.sha1(os.path.normcase(os.path.normpath(a)).encode("utf-8")).hexdigest()\n'
-                '        _ffidx = os.path.join(_t, "bluraysub_ffms2_" + _k + ".ffindex")\n'
-                '        try:\n'
-                '            src8 = core.ffms2.Source(a, cachefile=_ffidx)\n'
-                '        except TypeError:\n'
-                '            src8 = core.ffms2.Source(a)\n'
-                '    else:\n'
-                '        raise\n'
+                + _VPY_PROCESSING_SETTINGS
+                + _GETNATIVE_KERNEL_HELPER
+                + _VPY_PROCESSING_HELPERS
+                + '_source_key = hashlib.sha1(\n'
+                '    os.path.normcase(os.path.abspath(a)).encode("utf-8")\n'
+                ').hexdigest()\n'
+                '_lwi = os.path.join(tempfile.gettempdir(), "bluraysub_lwlibav_" + _source_key + ".lwi")\n'
+                'src8 = core.lsmas.LWLibavSource(a, cache=1, cachefile=_lwi)\n'
+                'if int(src8.get_frame(0).props.get("_FieldBased", 0)) != 0:\n'
+                '    raise ValueError("The default VPy supports progressive video only; deinterlace the source first.")\n'
                 'src16 = core.fmtc.bitdepth(src8, bits=16)\n'
                 'target_w = src16.width\n'
                 'target_h = src16.height\n'
@@ -265,29 +657,16 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                 '    if native_w > 0:\n'
                 '        proc_w = native_w\n'
                 '        proc_h = nh\n'
-                + _GETNATIVE_DESCALE_BLOCK +
-                'nr16 = core.nlm_ispc.NLMeans(proc16, d=0, wmode=3, h=3)\n'
-                + deband_line +
-                'dbed = mvf.LimitFilter(dbed, _nr_pl, thr=0.55, elast=1.5, planes=[0, 1, 2])\n'
-                'nr16Y = core.std.ShufflePlanes(_nr_pl, 0, GRAY_CF)\n'
-                'aa_nr16Y = core.eedi2.EEDI2(nr16Y, field=1, mthresh=10, lthresh=20, vthresh=20, maxd=24, nt=50)\n'
-                'aa_nr16Y = core.fmtc.resample(aa_nr16Y, proc_w, proc_h, 0, -0.5).std.Transpose()\n'
-                'aa_nr16Y = core.eedi2.EEDI2(aa_nr16Y, field=1, mthresh=10, lthresh=20, vthresh=20, maxd=24, nt=50)\n'
-                'aa_nr16Y = core.fmtc.resample(aa_nr16Y, proc_h, proc_w, 0, -0.5).std.Transpose()\n'
-                'if (\n'
-                '    aa_nr16Y.width != nr16Y.width\n'
-                '    or aa_nr16Y.height != nr16Y.height\n'
-                '    or aa_nr16Y.format.id != nr16Y.format.id\n'
-                '):\n'
-                '    aa_nr16Y = core.resize.Bicubic(\n'
-                '        aa_nr16Y, nr16Y.width, nr16Y.height, format=nr16Y.format\n'
+                + _GETNATIVE_DESCALE_BLOCK
+                + _VPY_FILTER_BLOCK
+                + _VPY_POST_FILTER_BLOCK
+                + 'if proc_w != target_w or proc_h != target_h:\n'
+                '    merged = core.resize.Spline64(\n'
+                '        merged, target_w, target_h, chromaloc_in_s="left", chromaloc_s="left"\n'
                 '    )\n'
-                'aaedY = core.rgvs.Repair(aa_nr16Y, nr16Y, 2)\n'
-                'dbedY = core.std.ShufflePlanes(dbed, 0, GRAY_CF)\n'
-                'mergedY = mvf.LimitFilter(dbedY, aaedY, thr=1.0, elast=1.5)\n'
-                'merged = core.std.ShufflePlanes([mergedY, dbed], [0,1,2], YUV_CF)\n'
-                'if proc_w != target_w or proc_h != target_h:\n'
-                '    merged = core.resize.Spline64(merged, target_w, target_h)\n'
+                '    merged = core.std.MaskedMerge(\n'
+                '        merged, src16, rescale_mask, planes=[0, 1, 2], first_plane=True\n'
+                '    )\n'
                 'res = merged\n'
                 'Debug = False\n'
                 'if Debug:\n'
@@ -428,6 +807,10 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
 
         try:
             proc = QProcess(self)
+            environment = QProcessEnvironment.systemEnvironment()
+            if str(PLUGIN_PATH or '').strip():
+                environment.insert('BLURAYSUB_PLUGIN_PATH', str(PLUGIN_PATH))
+            proc.setProcessEnvironment(environment)
             proc.setProgram(vsedit_exe)
             proc.setArguments([os.path.normpath(path)])
             proc.start()
@@ -489,12 +872,18 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
             return s.rstrip('\r\n')
 
         bits = self._selected_output_bits_for_vpy()
+        processing_values = self._current_vpy_processing_values()
         changed = False
         for idx, line in enumerate(lines):
             raw = norm(line)
             pb = self._patch_fmtc_output_bits_in_text(raw, bits)
             if pb != raw:
                 raw = pb
+                lines[idx] = raw + '\n'
+                changed = True
+            pp = self._patch_vpy_processing_value_in_text(raw, processing_values)
+            if pp != raw:
+                raw = pp
                 lines[idx] = raw + '\n'
                 changed = True
             m_a = re.match(r'^(\s*)(#\s*)?(a\s*=\s*)r?[\'"].*?[\'"](\s*(#.*)?)$', raw)
@@ -613,6 +1002,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
             return ''
         try:
             bits = self._selected_output_bits_for_vpy()
+            processing_values = self._current_vpy_processing_values()
             with open(default_vpy, 'r', encoding='utf-8') as fp:
                 lines = fp.readlines()
 
@@ -620,6 +1010,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
             for line in lines:
                 raw = line.rstrip('\r\n')
                 raw = self._patch_fmtc_output_bits_in_text(raw, bits)
+                raw = self._patch_vpy_processing_value_in_text(raw, processing_values)
 
                 if not raw.lstrip().startswith('#'):
                     m_a = re.match(r'^(\s*a\s*=\s*)r?[\'"].*?[\'"](\s*(#.*)?)$', raw)
@@ -647,7 +1038,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                     out.append(f'{indent}{comment}{expr}{suffix}\n')
                     continue
 
-                out.append(line if line.endswith('\n') else line + '\n')
+                out.append(raw + '\n')
 
             fd, temp_vpy = tempfile.mkstemp(prefix='bluraysubtitle_preview_', suffix='.vpy')
             os.close(fd)
@@ -666,6 +1057,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
             return ''
         try:
             bits = self._selected_output_bits_for_vpy()
+            processing_values = self._current_vpy_processing_values()
             with open(default_vpy, 'r', encoding='utf-8') as fp:
                 lines = fp.readlines()
 
@@ -673,6 +1065,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
             for line in lines:
                 raw = line.rstrip('\r\n')
                 raw = self._patch_fmtc_output_bits_in_text(raw, bits)
+                raw = self._patch_vpy_processing_value_in_text(raw, processing_values)
 
                 m_a = re.match(r'^(\s*)(#\s*)?(a\s*=\s*)r?[\'"].*?[\'"](\s*(#.*)?)$', raw)
                 if m_a:
@@ -691,7 +1084,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                     out.append(f'{indent}{comment}{expr}{self._vpy_raw_string(subtitle_path or "")}{suffix}\n')
                     continue
 
-                out.append(line if line.endswith('\n') else line + '\n')
+                out.append(raw + '\n')
 
             fd, temp_vpy = tempfile.mkstemp(prefix='bluraysubtitle_edit_', suffix='.vpy')
             os.close(fd)

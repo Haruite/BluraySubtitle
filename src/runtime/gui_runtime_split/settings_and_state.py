@@ -61,6 +61,13 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
         self.output_comparison_checkbox.setChecked(
             encode.output_comparison_images
         )
+        self.vpy_denoise_strength_spin.setValue(encode.vpy_denoise_strength)
+        self.vpy_dehalo_strength_spin.setValue(encode.vpy_dehalo_strength)
+        self.vpy_dering_strength_spin.setValue(encode.vpy_dering_strength)
+        self.vpy_deband_strength_spin.setValue(encode.vpy_deband_strength)
+        self.vpy_antialiasing_strength_spin.setValue(
+            encode.vpy_antialiasing_strength
+        )
         subtitle_radio = {
             "external": self.sub_pack_external_radio,
             "softsub": self.sub_pack_soft_radio,

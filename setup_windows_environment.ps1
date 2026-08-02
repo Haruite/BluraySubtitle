@@ -156,6 +156,7 @@ $script:RequiredVapourSynthPlugins = @(
     "fmtconv.dll",
     "libsangnom.dll",
     "libvslsmashsource.dll",
+    "libvs_placebo.dll",
     "mvtools.dll",
     "neo-f3kdb.dll",
     "vsnlm_ispc.dll",
@@ -3741,7 +3742,7 @@ function Test-VapourSynthTools {
         return $false
     }
     try {
-        $pythonCode = "import numpy, vapoursynth as vs; required=('grain','assrender','bilateral','descale','dfttest','eedi2','eedi3m','f3kdb','fmtc','sangnom','lsmas','mv','neo_f3kdb','nlm_ispc','zsmooth','rgvs'); missing=[name for name in required if not hasattr(vs.core,name)]; assert not missing, 'missing plugins: ' + ', '.join(missing)"
+        $pythonCode = "import numpy, vapoursynth as vs; required=('grain','assrender','bilateral','descale','dfttest','eedi2','eedi3m','f3kdb','fmtc','sangnom','lsmas','placebo','mv','neo_f3kdb','nlm_ispc','zsmooth','rgvs'); missing=[name for name in required if not hasattr(vs.core,name)]; assert not missing, 'missing plugins: ' + ', '.join(missing)"
         Invoke-SetupCommand `
             -FilePath $script:ToolPaths.VapourSynthPython `
             -Arguments @("-c", $pythonCode) | Out-Null
@@ -3751,6 +3752,7 @@ function Test-VapourSynthTools {
         return $false
     }
 }
+
 function Test-CompiledToolsReady {
     Write-SetupInfo `
         "Checking compiled tools before deciding whether MSYS2 is needed." `
