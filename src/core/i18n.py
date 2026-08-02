@@ -571,6 +571,10 @@ I18N_ZH_TO_EN = {
     '正在复制外挂字幕': 'Copying external subtitles',
     '正在混流 SP {current}/{total}：{name}': 'Muxing SP {current}/{total}: {name}',
     'getnative 帧筛选轮次 ': '[BluraySubtitle] getnative frame-screen round ',
+    'getnative 并发容量：': '[BluraySubtitle] getnative capacity: ',
+    '可用内存=': 'available_memory=',
+    '单样本预算=': 'sample_budget=',
+    '并发样本数=': 'parallel_samples=',
     '候选=': 'candidates=',
     '，已选=': ', selected=',
     'getnative 轮次 ': '[BluraySubtitle] getnative round ',
@@ -592,13 +596,35 @@ I18N_ZH_TO_EN = {
     '单调比例=': 'dec_ratio=',
     'getnative 样本剔除（曲线形态）：': '[BluraySubtitle] getnative sample rejected by curve-shape: ',
     '单调比例原始=': 'decreasing_ratio=',
+    'getnative 轮次完成：': '[BluraySubtitle] getnative round complete: ',
+    '已评估总数=': 'evaluated_total=',
+    '有效总数=': 'valid_total=',
+    '停止最低数=': 'minimum_to_stop=',
+    (
+        '[BluraySubtitle] getnative 核 {index}/{total}：{image} - '
+        '{kernel} -> {height:.2f}p 得分={score:.6f} 有效={valid} 跳过={skipped} '
+        '核耗时={kernel_seconds:.1f}s 已用={elapsed_seconds:.1f}s '
+        '预计剩余={eta_seconds:.1f}s'
+    ): (
+        '[BluraySubtitle] getnative kernel {index}/{total}: {image} - '
+        '{kernel} -> {height:.2f}p score={score:.6f} valid={valid} skipped={skipped} '
+        'kernel_time={kernel_seconds:.1f}s elapsed={elapsed_seconds:.1f}s '
+        'eta={eta_seconds:.1f}s'
+    ),
+    (
+        '[BluraySubtitle] getnative 最终曲线：{image} - '
+        '{kernel} -> {height:.2f}p 得分={score:.6f} 有效={valid} '
+        '耗时={elapsed_seconds:.1f}s'
+    ): (
+        '[BluraySubtitle] getnative final curve: {image} - '
+        '{kernel} -> {height:.2f}p score={score:.6f} valid={valid} '
+        'elapsed={elapsed_seconds:.1f}s'
+    ),
     'getnative：开始分析 ': '[BluraySubtitle] getnative - start analyzing ',
     'getnative：': '[BluraySubtitle] getnative - ',
     'Getnative 分析中：': 'Getnative analyzing: ',
     'score>=': 'score>=',
     '未找到可信原生分辨率': 'no confident native resolution',
-    'getnative - sample spread too large ': '[BluraySubtitle] getnative - sample spread too large ',
-    ', no consensus': ', no consensus',
     '章节': 'Chapters',
     '编辑字幕': 'Edit Subtitle',
     '查看章节': 'view chapters',

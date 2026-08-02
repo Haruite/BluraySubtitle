@@ -131,6 +131,7 @@ Encode options include:
 - **Lossless audio recompression**: **FLAC / AAC / Opus**
 - The startup encoder, bit depth, and preset come from **Advanced** settings. User-defined presets can be added, renamed, edited, and deleted there for the currently selected encoder, while built-in presets remain read-only. After startup, the visible Encode preset and parameter controls remain authoritative for every task.
 - The startup lossless-audio target, subtitle packaging mode, getnative, automatic-crop, and output-comparison checkboxes also come from **Advanced** settings and remain freely editable before launch.
+- Automatic getnative can take substantial time and memory because it analyzes multiple frames and kernels. The common false-positive band from 535p through 545p is excluded, so genuinely native 540p material must be configured manually in the VPy.
 - With **Auto-crop black borders** enabled, Encode analyzes multiple time points and applies one conservative fixed crop. Pixels used by any sampled active picture are preserved when borders vary over time.
 - With **Output comparison images** enabled, every encoded video saves source and encoded PNGs from the same frame under **`<selected output>/<source folder name>/Compare`**.
 - Lossless PCM, TrueHD/MLP, DTS-family, and FLAC tracks use the per-track FLAC/AAC/Opus choice shown in
@@ -393,6 +394,13 @@ with the remaining work. Empty main/SP files and paths of the wrong type are rej
 
 ---
 
+## Repository helper scripts
+
+- [`src/scripts/batch_remux_movie.py`](src/scripts/batch_remux_movie.py): edit its paths or pass them on the command line to batch-remux every BDMV under one movie folder.
+- [`src/scripts/getnative_file.py`](src/scripts/getnative_file.py): edit `video_file` and run it directly to print one video's automatic getnative result and elapsed seconds.
+
+---
+
 ## `setup_windows_environment.ps1` (Windows environment setup)
 
 `setup_windows_environment.ps1` configures the complete local runtime and build environment. It supports only **Windows 10 / Windows 11 x64 workstation editions**.
@@ -521,3 +529,4 @@ Use your own judgment.
 - [ass2bdnxml](https://github.com/Masaiki/ass2bdnxml)
 - [BDSup2Sub](https://github.com/mjuhasz/BDSup2Sub)
 - [Spp2Pgs](https://github.com/subelf/Spp2Pgs)
+- [Infiziert90/getnative](https://github.com/Infiziert90/getnative)

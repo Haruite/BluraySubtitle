@@ -110,6 +110,7 @@ BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 
   - 无损音频转换（flac / aac / opus）
   - 启动时的编码器、位深和预设来自“高级”设置；其中可按当前选择的压制工具新增、重命名、修改和删除用户预设，内置预设保持只读；启动后每个任务仍以 Encode 页面当前可见的预设和参数为准
   - 启动时的无损音频目标、字幕封装方式、getnative、自动裁黑边和输出对比图复选框同样来自“高级”设置，并可在启动任务前继续修改
+  - 自动 getnative 会分析多个帧和多种核，可能消耗大量时间与内存；程序会排除经常误报的 535p 至 545p 区间，确实为原生 540p 的素材需要在 VPy 中手动设置
   - 勾选“自动裁剪黑边”时，Encode 会分析多个时间点并应用一组保守的固定裁剪值。黑边随时间变化时会优先保留任一样本用到的像素
   - 勾选“输出对比图”时，每个压制视频都会把源和压制成品的同一帧保存为 PNG，路径为 **`<所选输出目录>/<来源文件夹名>/Compare`**
 - PCM、TrueHD/MLP、DTS 系列和 FLAC 等无损音轨使用“编辑轨道”中逐轨显示的 FLAC/AAC/Opus 选项；
@@ -362,6 +363,13 @@ Remux 使用界面当前显示的播放列表顺序、命令、章节范围、�
 
 ---
 
+## 仓库辅助脚本
+
+- [`src/scripts/batch_remux_movie.py`](src/scripts/batch_remux_movie.py)：修改脚本内路径或通过命令行传入路径，可批量 Remux 一个电影目录下的全部 BDMV。
+- [`src/scripts/getnative_file.py`](src/scripts/getnative_file.py)：修改 `video_file` 后直接运行，可输出单个视频的自动 getnative 结果与耗时秒数。
+
+---
+
 ## setup_windows_environment.ps1（Windows 环境配置脚本）
 
 `setup_windows_environment.ps1` 用于配置完整的本地运行与编译环境，仅支持 **Windows 10 / Windows 11 x64 工作站版本**。
@@ -490,3 +498,4 @@ res = res.std.Trim(first=0, length=720)
 - [ass2bdnxml](https://github.com/Masaiki/ass2bdnxml)
 - [BDSup2Sub](https://github.com/mjuhasz/BDSup2Sub)
 - [Spp2Pgs](https://github.com/subelf/Spp2Pgs)
+- [Infiziert90/getnative](https://github.com/Infiziert90/getnative)

@@ -1,4 +1,4 @@
-"""Getnative split-mode orchestrator (py: algorithm, vpy: VS execution)."""
+"""Getnative split-mode orchestrator adapted from Infiziert90/getnative."""
 
 from __future__ import annotations
 
@@ -9,12 +9,14 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
-from src.exports.utils import run_command
+from src.core.i18n import translate_text
+from src.exports.utils import print_terminal_line, run_command
 from ..core.settings import VSPIPE_PATH
 
 
@@ -72,8 +74,13 @@ def _resolve_vspipe():
             if os.path.isfile(p):
                 return (p, env)
 
-    return (VSPIPE_PATH, env)
-
+    configured = str(VSPIPE_PATH or "").strip()
+    if configured:
+        if os.path.isfile(configured):
+            return (configured, env)
+        found_configured = shutil.which(configured)
+        if found_configured:
+            return (found_configured, env)
     raise FileNotFoundError(
         "vspipe executable not found. Set BLURAYSUB_VSPIPE to full path "
         "(example: C:/Software/release-x64/vspipe.exe) or add vspipe to PATH."
@@ -122,13 +129,103 @@ def _resolve_getnative_vpy_path() -> str:
     )
 
 
+def format_getnative_progress(event: Dict) -> Optional[str]:
+    phase = str(event.get("phase", "") or "").strip().lower()
+    image = str(event.get("image", "") or "")
+    kernel = str(event.get("kernel", "") or "")
+    height = float(event.get("height", 0.0) or 0.0)
+    score = float(event.get("score", 0.0) or 0.0)
+    valid = int(bool(event.get("curve_valid", False)))
+    skipped = int(bool(event.get("skipped", False)))
+    if phase == "kernel":
+        template = translate_text(
+            "[BluraySubtitle] getnative kernel {index}/{total}: {image} - "
+            "{kernel} -> {height:.2f}p score={score:.6f} valid={valid} skipped={skipped} "
+            "kernel_time={kernel_seconds:.1f}s elapsed={elapsed_seconds:.1f}s "
+            "eta={eta_seconds:.1f}s"
+        )
+        message = template.format(
+            index=int(event.get("index", 0) or 0),
+            total=int(event.get("total", 0) or 0),
+            image=image,
+            kernel=kernel,
+            height=height,
+            score=score,
+            valid=valid,
+            skipped=skipped,
+            kernel_seconds=float(event.get("kernel_seconds", 0.0) or 0.0),
+            elapsed_seconds=float(event.get("elapsed_seconds", 0.0) or 0.0),
+            eta_seconds=float(event.get("eta_seconds", 0.0) or 0.0),
+        )
+    elif phase == "final":
+        template = translate_text(
+            "[BluraySubtitle] getnative final curve: {image} - "
+            "{kernel} -> {height:.2f}p score={score:.6f} valid={valid} "
+            "elapsed={elapsed_seconds:.1f}s"
+        )
+        message = template.format(
+            image=image,
+            kernel=kernel,
+            height=height,
+            score=score,
+            valid=valid,
+            elapsed_seconds=float(event.get("elapsed_seconds", 0.0) or 0.0),
+        )
+    else:
+        return None
+    return message
+
+
+def _emit_getnative_progress(event: Dict) -> None:
+    message = format_getnative_progress(event)
+    if message:
+        print_terminal_line(message)
+
+
 def _vpy_call(input_png: str, params: Dict) -> Dict:
     vpy_path = _resolve_getnative_vpy_path()
     if not os.path.exists(input_png):
         raise FileNotFoundError(f"input PNG not found: {input_png}")
+    input_png = os.path.abspath(input_png)
 
     fd_out, output_json = tempfile.mkstemp(prefix="bluraysub_getnative_", suffix=".json")
     os.close(fd_out)
+    progress_jsonl = str(os.getenv("BLURAYSUB_GETNATIVE_PROGRESS_JSONL", "") or "").strip()
+    owns_progress_file = not bool(progress_jsonl)
+    if owns_progress_file:
+        fd_progress, progress_jsonl = tempfile.mkstemp(
+            prefix="bluraysub_getnative_progress_",
+            suffix=".jsonl",
+        )
+        os.close(fd_progress)
+    else:
+        progress_jsonl = os.path.abspath(progress_jsonl)
+    stderr_file = tempfile.TemporaryFile(mode="w+b")
+    progress_position = 0
+
+    def drain_progress() -> None:
+        nonlocal progress_position
+        try:
+            with open(progress_jsonl, "r", encoding="utf-8") as progress_file:
+                progress_file.seek(progress_position)
+                while True:
+                    line_start = progress_file.tell()
+                    line = progress_file.readline()
+                    if not line:
+                        break
+                    if not line.endswith("\n"):
+                        progress_file.seek(line_start)
+                        break
+                    progress_position = progress_file.tell()
+                    try:
+                        event = json.loads(line)
+                    except (TypeError, ValueError):
+                        continue
+                    if isinstance(event, dict):
+                        _emit_getnative_progress(event)
+        except OSError:
+            return
+
     try:
         vspipe_exe, vspipe_env = _resolve_vspipe()
         env = dict(vspipe_env or os.environ.copy())
@@ -139,20 +236,37 @@ def _vpy_call(input_png: str, params: Dict) -> Dict:
         _pp = str(_plugin_path or "").strip()
         if _pp:
             env["BLURAYSUB_PLUGIN_PATH"] = _pp
+        for thread_env_name in (
+            "OMP_NUM_THREADS",
+            "OPENBLAS_NUM_THREADS",
+            "MKL_NUM_THREADS",
+            "NUMEXPR_NUM_THREADS",
+            "VECLIB_MAXIMUM_THREADS",
+        ):
+            env[thread_env_name] = "1"
         env["BLURAYSUB_GETNATIVE_INPUT_PNG"] = input_png
         env["BLURAYSUB_GETNATIVE_OUTPUT_JSON"] = output_json
+        env["BLURAYSUB_GETNATIVE_PROGRESS_JSONL"] = progress_jsonl
         env["BLURAYSUB_GETNATIVE_PARAMS_JSON"] = json.dumps(params, ensure_ascii=False)
         run_kwargs = {
             "env": env,
-            "capture_output": True,
-            "text": True,
-            "check": False,
+            "stdout": subprocess.DEVNULL,
+            "stderr": stderr_file,
         }
         if os.name == "nt":
             run_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        proc = run_command([vspipe_exe, vpy_path, "-"], **run_kwargs)
-        if proc.returncode != 0:
-            raise RuntimeError(f"vspipe failed ({proc.returncode}): {(proc.stderr or proc.stdout or '').strip()}")
+        proc = run_command([vspipe_exe, vpy_path, "-"], wait=False, **run_kwargs)
+        while proc.poll() is None:
+            if owns_progress_file:
+                drain_progress()
+            time.sleep(0.2)
+        if owns_progress_file:
+            drain_progress()
+        return_code = int(proc.wait())
+        stderr_file.seek(0)
+        stderr_text = stderr_file.read().decode("utf-8", errors="replace").strip()
+        if return_code != 0:
+            raise RuntimeError(f"vspipe failed ({return_code}): {stderr_text}")
         with open(output_json, "r", encoding="utf-8") as f:
             payload = json.load(f)
         if not isinstance(payload, dict) or not payload.get("ok"):
@@ -162,9 +276,15 @@ def _vpy_call(input_png: str, params: Dict) -> Dict:
             raise RuntimeError("invalid getnative.vpy result payload")
         return result
     finally:
+        stderr_file.close()
         try:
             if os.path.exists(output_json):
                 os.remove(output_json)
+        except Exception:
+            pass
+        try:
+            if owns_progress_file and os.path.exists(progress_jsonl):
+                os.remove(progress_jsonl)
         except Exception:
             pass
 
@@ -179,49 +299,13 @@ def _mad(vals: Sequence[float]) -> float:
     return float(np.median(np.abs(arr - med)))
 
 
-def _valley_score(vals: Sequence[float], idx: int) -> float:
-    if idx <= 0 or idx >= len(vals) - 1:
-        return 0.0
-    a = max(vals[idx - 1], 1e-12)
-    b = max(vals[idx], 1e-12)
-    c = max(vals[idx + 1], 1e-12)
-    return math.log10(a) + math.log10(c) - 2.0 * math.log10(b)
-
-
-def _valley_prominence(log_vals: Sequence[float], idx: int, window: int) -> float:
-    if idx <= 0 or idx >= len(log_vals) - 1:
-        return 0.0
-    n = len(log_vals)
-    w = max(2, int(window))
-    left = log_vals[max(0, idx - w) : idx]
-    right = log_vals[idx + 1 : min(n, idx + w + 1)]
-    if not left or not right:
-        return 0.0
-    ref = min(max(left), max(right))
-    return max(0.0, float(ref - log_vals[idx]))
-
-
-def _smooth_curve(vals: Sequence[float]) -> List[float]:
-    n = len(vals)
-    if n < 5:
-        return [float(v) for v in vals]
-    w = max(5, min(21, (n // 60) * 2 + 5))
-    if w % 2 == 0:
-        w += 1
-    half = w // 2
-    arr = np.asarray(vals, dtype=np.float64)
-    kernel = np.ones(w, dtype=np.float64) / float(w)
-    padded = np.pad(arr, (half, half), mode="edge")
-    smoothed = np.convolve(padded, kernel, mode="valid")
-    return smoothed.astype(np.float64).tolist()
+def _is_banned_height(height: float) -> bool:
+    # Empirical false positives: the pervasive 540p notch and the unstable 1080p search tail.
+    value = float(height)
+    return abs(value - 540.0) <= 5.0 or value > 1040.0
 
 
 def _best_height_from_curve(heights: Sequence[float], vals: Sequence[float]) -> Tuple[float, float, int, bool]:
-    def _is_banned_height(h: float) -> bool:
-        hh = float(h)
-        if abs(hh - 540.0) <= 5.0:
-            return True
-        return False
 
     if len(vals) < 5:
         order = sorted(range(len(vals)), key=lambda n: float(vals[n]))
@@ -324,6 +408,47 @@ def _best_height_from_curve(heights: Sequence[float], vals: Sequence[float]) -> 
         rate = float(changes) / float(max(sgn.size - 1, 1))
         return bool(rate >= 0.35 and d1_mad >= body_d1_mad * 2.0)
 
+    # Upstream getnative identifies the native-height notch from the error drop between
+    # adjacent heights. Preserve that sharp signal before the broad-valley fallback below.
+    raw_log = np.log10(np.maximum(arr, 1e-12))
+    raw_delta = np.diff(raw_log)
+    drop_noise = max(1e-9, _mad(raw_delta.tolist()))
+    sharp_candidates: List[Tuple[int, float, float]] = []
+    full_range_tail = max_hv - float(min(float(x) for x in heights)) >= 160.0
+    for i in range(1, len(heights)):
+        hh = float(heights[i])
+        if _is_banned_height(hh):
+            continue
+        if full_range_tail and tail_osc and hh >= tail_start:
+            continue
+        if hh >= 1000.0 and _local_bad_osc(i):
+            continue
+        drop = -float(raw_delta[i - 1])
+        if drop < 3.0 * drop_noise:
+            continue
+        sharp_candidates.append((i, drop / drop_noise, drop))
+    if sharp_candidates:
+        sharp_max_drop = max(drop for _, _, drop in sharp_candidates)
+        sharp_filtered = [
+            (i, normalized_score, drop)
+            for i, normalized_score, drop in sharp_candidates
+            if drop >= sharp_max_drop * 0.33
+        ]
+        alpha = 1.2
+        best_i, _, best_drop = max(
+            sharp_filtered,
+            key=lambda item: (
+                float(item[2])
+                * (max(0.0, min(1.0, float(heights[item[0]]) / max_hv)) ** alpha),
+                float(item[2]),
+                float(heights[item[0]]),
+            ),
+        )
+        upstream_ratio = math.pow(10.0, float(best_drop))
+        # The adjacent drop belongs to heights[i]. crop_size=5 only trims metric
+        # borders and must never be applied as a fixed five-pixel height offset.
+        return float(heights[best_i]), float(upstream_ratio), len(sharp_candidates), True
+
     def _half_width(idx: int) -> int:
         d = float(dip[idx])
         if d <= 0:
@@ -343,7 +468,7 @@ def _best_height_from_curve(heights: Sequence[float], vals: Sequence[float]) -> 
         hh = float(heights[i])
         if _is_banned_height(hh):
             continue
-        if tail_osc and hh >= tail_start:
+        if full_range_tail and tail_osc and hh >= tail_start:
             continue
         if hh >= 1000.0 and _local_bad_osc(i):
             continue
@@ -428,20 +553,47 @@ def _best_height_from_curve(heights: Sequence[float], vals: Sequence[float]) -> 
     local_jitter = max(1e-9, _mad(np.diff(log_arr[lo:hi]).tolist()))
     local_factor = 1.0 / (1.0 + float(local_jitter / jitter))
     best_s = (float(dip[best_i]) / float(noise)) * math.sqrt(float(max(1, w0))) * float(smooth_factor) * float(local_factor)
-    return float(best_h), float(best_s), len(segments), True
+    upstream_ratio = (
+        max(1.0, float(vals[best_i - 1]) / max(float(vals[best_i]), 1e-12))
+        if best_i > 0
+        else 1.0
+    )
+    return float(best_h), float(upstream_ratio), len(segments), bool(best_s > 0.0)
 
 
-def _kernel_consensus(results: Sequence[_KernelResult], tol: float = 2.0) -> Optional[float]:
-    if len(results) < 2:
+def _kernel_consensus(
+    results: Sequence[_KernelResult],
+    tol: float = 2.0,
+    min_count: int = 2,
+) -> Optional[float]:
+    eligible = sorted(
+        (r for r in results if r.curve_valid and r.evaluated_all),
+        key=lambda r: r.best_height,
+    )
+    required = max(2, int(min_count))
+    if len(eligible) < required:
         return None
-    buckets: Dict[int, List[float]] = {}
-    for r in results:
-        key = int(round(r.best_height))
-        buckets.setdefault(key, []).append(r.best_height)
-    best_key, best_vals = max(buckets.items(), key=lambda kv: len(kv[1]))
-    if len(best_vals) >= 2 and max(abs(v - best_key) for v in best_vals) <= tol:
-        return float(sum(best_vals) / len(best_vals))
-    return None
+
+    left = 0
+    clusters: List[List[_KernelResult]] = []
+    for right, result in enumerate(eligible):
+        while result.best_height - eligible[left].best_height > float(tol):
+            left += 1
+        cluster = eligible[left : right + 1]
+        if len(cluster) >= required:
+            clusters.append(cluster)
+    if not clusters:
+        return None
+
+    winner = max(
+        clusters,
+        key=lambda cluster: (
+            len(cluster),
+            sum(max(0.0, result.best_score) for result in cluster),
+            max(result.best_height for result in cluster),
+        ),
+    )
+    return float(sum(result.best_height for result in winner) / len(winner))
 
 
 def _curve_decreasing_ratio(vals: Sequence[float]) -> float:
@@ -499,35 +651,68 @@ def getnative(
     if not height_list:
         raise ValueError("src_heights cannot be empty.")
 
-    kernel_resp = _vpy_call(input_png, {"mode": "list_kernels", "fast_mode": bool(fast_mode)})
-    kernel_names = list(kernel_resp.get("kernels") or [])
-    if not kernel_names:
-        raise RuntimeError("no kernels returned by vpy")
-
     full_scan = bool(debug_dir) and bool(debug_full_scan)
     consensus_min = int(consensus_min_kernels)
     if fast_mode and consensus_min_kernels == 3:
         consensus_min = 2
 
-    results: List[_KernelResult] = []
-    global_best = -1.0
-    for kernel_name in kernel_names:
-        curve = _vpy_call(
+    batch_all_kernels = bool(
+        fast_mode
+        and not full_scan
+        and not score_quit
+        and not consensus_quit
+        and int(max_kernels) > 0
+        and int(min_kernels) >= int(max_kernels)
+    )
+    batched_curves = None
+    if batch_all_kernels:
+        curve_response = _vpy_call(
             input_png,
             {
-                "mode": "collect_curve",
-                "kernel_name": kernel_name,
+                "mode": "collect_curves",
+                "fast_mode": True,
+                "max_kernels": int(max_kernels),
                 "src_heights": list(height_list),
                 "base_height": base_height,
                 "vertical_only": bool(vertical_only),
                 "ex_thr": float(ex_thr),
                 "crop_size": int(crop_size),
                 "stats_prop": str(stats_prop),
-                "early_stop_patience": int(10**9 if full_scan else early_stop_patience),
-                "global_best_score": float(0.0 if full_scan else global_best),
-                "two_stage": bool(not full_scan),
+                "early_stop_patience": int(early_stop_patience),
+                "global_best_score": 0.0,
+                "two_stage": True,
             },
         )
+        batched_curves = list(curve_response.get("curves") or [])
+        kernel_names = [str(curve.get("kernel", "") or "") for curve in batched_curves]
+    else:
+        kernel_resp = _vpy_call(input_png, {"mode": "list_kernels", "fast_mode": bool(fast_mode)})
+        kernel_names = list(kernel_resp.get("kernels") or [])
+    if not kernel_names:
+        raise RuntimeError("no kernels returned by vpy")
+
+    results: List[_KernelResult] = []
+    global_best = -1.0
+    for kernel_index, kernel_name in enumerate(kernel_names):
+        if batched_curves is not None:
+            curve = batched_curves[kernel_index]
+        else:
+            curve = _vpy_call(
+                input_png,
+                {
+                    "mode": "collect_curve",
+                    "kernel_name": kernel_name,
+                    "src_heights": list(height_list),
+                    "base_height": base_height,
+                    "vertical_only": bool(vertical_only),
+                    "ex_thr": float(ex_thr),
+                    "crop_size": int(crop_size),
+                    "stats_prop": str(stats_prop),
+                    "early_stop_patience": int(10**9 if full_scan else early_stop_patience),
+                    "global_best_score": float(0.0 if full_scan else global_best),
+                    "two_stage": bool(not full_scan),
+                },
+            )
         heights = [float(x) for x in curve.get("heights", [])]
         errors = [float(x) for x in curve.get("errors", [])]
         if not heights or not errors:
@@ -544,21 +729,27 @@ def getnative(
             curve_valid=bool(curve_valid),
         )
         results.append(kr)
-        global_best = max(global_best, kr.best_score)
+        if kr.curve_valid and kr.evaluated_all:
+            global_best = max(global_best, kr.best_score)
         if max_kernels and len(results) >= int(max_kernels):
             break
         if not full_scan and len(results) >= max(1, int(min_kernels)):
-            best = max(results, key=lambda r: float(r.best_score)).best_score
-            second = max([float(r.best_score) for r in results if float(r.best_score) < best] or [0.0])
+            eligible = [r for r in results if r.curve_valid and r.evaluated_all]
+            best = max((float(r.best_score) for r in eligible), default=0.0)
+            second = max([float(r.best_score) for r in eligible if float(r.best_score) < best] or [0.0])
             if score_quit and best >= float(score_quit) and (second <= 0.0 or best >= second * float(score_margin)):
                 break
-        if (not full_scan) and consensus_quit and len(results) >= consensus_min:
-            if _kernel_consensus(results) is not None:
+        if (
+            (not full_scan)
+            and consensus_quit
+            and len(results) >= max(max(1, int(min_kernels)), consensus_min)
+        ):
+            if _kernel_consensus(results, min_count=consensus_min) is not None:
                 break
 
     if not results:
         raise RuntimeError("no getnative curve data collected")
-    valid_results = [r for r in results if r.curve_valid]
+    valid_results = [r for r in results if r.curve_valid and r.evaluated_all]
     winner0 = max(valid_results, key=lambda r: (r.best_score, r.best_height)) if valid_results else min(
         results, key=lambda r: (min(r.errors), r.best_height)
     )
@@ -576,11 +767,18 @@ def getnative(
             "stats_prop": str(stats_prop),
             "early_stop_patience": int(10**9),
             "global_best_score": 0.0,
-            "two_stage": False,
+            # Recheck the winning kernel on a full-frame step-4 curve, then retain
+            # its full-frame 1p ±20 neighborhood. This preserves exact heights while
+            # avoiding a second 627-point full-resolution pass and its cache peak.
+            "two_stage": True,
+            "coarse_half_size": False,
+            "progress_phase": "final",
         },
     )
     wh = [float(x) for x in final_curve.get("heights", [])]
     we = [float(x) for x in final_curve.get("errors", [])]
+    if not wh or not we or len(wh) != len(we):
+        raise RuntimeError("winner getnative curve is empty or malformed")
     w_best_h, w_best_s, w_valley_count, w_curve_valid = _best_height_from_curve(wh, we)
     best_idx = min(range(len(wh)), key=lambda i: abs(float(wh[i]) - float(w_best_h)))
     edge_hit = int(best_idx <= 1 or best_idx >= len(wh) - 2)

@@ -78,9 +78,6 @@ class BluraySubtitleServiceBase:
     def _chapter_split_bounds_from_multi_line_remux_cmd(cmd0: str, confs: list[dict[str, object]]) -> list[tuple[int, int]]:
         raise NotImplementedError
 
-    def _cleanup_getnative_artifacts(self):
-        raise NotImplementedError
-
     @staticmethod
     def _clip_ref_slots_for_m2ts(ref_slots: list[dict[str, object]], m2ts_path: str, dovi_plan: Optional[dict[str, object]]=None) -> Optional[list[dict[str, object]]]:
         raise NotImplementedError
@@ -142,7 +139,7 @@ class BluraySubtitleServiceBase:
     def _expected_mkvmerge_split_output_paths(output_norm: str, n_segments: int) -> list[str]:
         raise NotImplementedError
 
-    def _extract_sample_images(self, video_path: str, temp_dir: str, max_total: int=100) -> list[str]:
+    def _extract_sample_images(self, video_path: str, temp_dir: str, max_total: int=100, score_map: Optional[dict[str, float]]=None) -> list[str]:
         raise NotImplementedError
 
     @staticmethod

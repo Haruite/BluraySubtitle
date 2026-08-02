@@ -1,12 +1,26 @@
+"""Portable VapourSynth execution half of the Infiziert90/getnative adaptation."""
+
 import functools
 import hashlib
 import math
 import json
 import os
+import time
 
 import numpy as np
 import vapoursynth as vs
 from muvsfunc import core, measurediff, rescale
+
+try:
+    core.num_threads = max(1, int(os.getenv("BLURAYSUB_GETNATIVE_VS_THREADS", "1")))
+except (TypeError, ValueError):
+    core.num_threads = 1
+try:
+    # A scan constructs many short-lived descale graphs. Bound the VS frame cache to
+    # control concurrent growth; the 800 MiB per-process value is a scheduling estimate.
+    core.max_cache_size = min(int(core.max_cache_size), 256)
+except (AttributeError, TypeError, ValueError):
+    pass
 
 # Linux/macOS: VS does not auto-scan a plugin dir like some Windows installs. The app sets
 # BLURAYSUB_PLUGIN_PATH from settings.PLUGIN_PATH when invoking vspipe (see getnative.py _vpy_call).
@@ -23,12 +37,26 @@ def _write(payload):
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
 
-def _blank():
-    fmt = getattr(vs, "GRAY8", None)
+def _write_progress(payload):
+    progress_jsonl = str(os.getenv("BLURAYSUB_GETNATIVE_PROGRESS_JSONL", "") or "").strip()
+    if not progress_jsonl:
+        return
+    with open(progress_jsonl, "a", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
+        f.write("\n")
+        f.flush()
+
+
+def _preset_format(name):
+    fmt = getattr(vs, name, None)
     if fmt is None:
-        # Newer VS exposes preset formats under PresetFormat instead of module-level constants.
         preset = getattr(vs, "PresetFormat", None)
-        fmt = getattr(preset, "GRAY8", None) if preset is not None else None
+        fmt = getattr(preset, name, None) if preset is not None else None
+    return fmt
+
+
+def _blank():
+    fmt = _preset_format("GRAY8")
     if fmt is None:
         # Last-resort fallback for API variants that only expose query_video_format.
         try:
@@ -120,7 +148,7 @@ def _find_kernel_by_name(kernels, name):
     for k in kernels:
         if _kernel_key(k) == target:
             return k
-    return kernels[0]
+    raise ValueError(f"unknown getnative kernel: {name}")
 
 
 def _measurediff_compat(clip1, clip2, ex_thr=0.015, crop_size=5):
@@ -191,12 +219,13 @@ def _mad(vals):
     return float(np.median(np.abs(arr - med)))
 
 
+def _is_banned_height(height):
+    # Empirical false positives: the pervasive 540p notch and the unstable 1080p search tail.
+    value = float(height)
+    return abs(value - 540.0) <= 5.0 or value > 1040.0
+
+
 def _best_height_from_curve(heights, vals):
-    def _is_banned_height(h):
-        hh = float(h)
-        if abs(hh - 540.0) <= 5.0:
-            return True
-        return False
 
     if len(vals) < 5:
         order = sorted(range(len(vals)), key=lambda n: float(vals[n]))
@@ -297,6 +326,47 @@ def _best_height_from_curve(heights, vals):
         rate = float(changes) / float(max(sgn.size - 1, 1))
         return bool(rate >= 0.35 and d1_mad >= body_d1_mad * 2.0)
 
+    # Upstream getnative identifies the native-height notch from the error drop between
+    # adjacent heights. Preserve that sharp signal before the broad-valley fallback below.
+    raw_log = np.log10(np.maximum(arr, 1e-12))
+    raw_delta = np.diff(raw_log)
+    drop_noise = max(1e-9, _mad(raw_delta.tolist()))
+    sharp_candidates = []
+    full_range_tail = max_hv - float(min(float(x) for x in heights)) >= 160.0
+    for i in range(1, len(heights)):
+        hh = float(heights[i])
+        if _is_banned_height(hh):
+            continue
+        if full_range_tail and tail_osc and hh >= tail_start:
+            continue
+        if hh >= 1000.0 and _local_bad_osc(i):
+            continue
+        drop = -float(raw_delta[i - 1])
+        if drop < 3.0 * drop_noise:
+            continue
+        sharp_candidates.append((i, drop / drop_noise, drop))
+    if sharp_candidates:
+        sharp_max_drop = max(drop for _, _, drop in sharp_candidates)
+        sharp_filtered = [
+            (i, normalized_score, drop)
+            for i, normalized_score, drop in sharp_candidates
+            if drop >= sharp_max_drop * 0.33
+        ]
+        alpha = 1.2
+        best_i, _, best_drop = max(
+            sharp_filtered,
+            key=lambda item: (
+                float(item[2])
+                * (max(0.0, min(1.0, float(heights[item[0]]) / max_hv)) ** alpha),
+                float(item[2]),
+                float(heights[item[0]]),
+            ),
+        )
+        upstream_ratio = math.pow(10.0, float(best_drop))
+        # The adjacent drop belongs to heights[i]. crop_size=5 only trims metric
+        # borders and must never be applied as a fixed five-pixel height offset.
+        return float(heights[best_i]), float(upstream_ratio), len(sharp_candidates), True
+
     def _half_width(idx):
         d = float(dip[idx])
         if d <= 0:
@@ -316,7 +386,7 @@ def _best_height_from_curve(heights, vals):
         hh = float(heights[i])
         if _is_banned_height(hh):
             continue
-        if tail_osc and hh >= tail_start:
+        if full_range_tail and tail_osc and hh >= tail_start:
             continue
         if hh >= 1000.0 and _local_bad_osc(i):
             continue
@@ -403,7 +473,12 @@ def _best_height_from_curve(heights, vals):
     local_jitter = max(1e-9, _mad(np.diff(log_arr[lo:hi]).tolist()))
     local_factor = 1.0 / (1.0 + float(local_jitter / jitter))
     best_s = (float(dip[best_i]) / float(noise)) * math.sqrt(float(max(1, w0))) * float(smooth_factor) * float(local_factor)
-    return float(best_h), float(best_s), len(segments), True
+    upstream_ratio = (
+        max(1.0, float(vals[best_i - 1]) / max(float(vals[best_i]), 1e-12))
+        if best_i > 0
+        else 1.0
+    )
+    return float(best_h), float(upstream_ratio), len(segments), bool(best_s > 0.0)
 
 
 def _collect_curve_for_kernel(
@@ -417,6 +492,7 @@ def _collect_curve_for_kernel(
     early_stop_patience,
     global_best_score,
     two_stage=False,
+    coarse_half_size=True,
 ):
     if two_stage:
         hs = [float(x) for x in src_heights]
@@ -435,32 +511,77 @@ def _collect_curve_for_kernel(
                 if coarse[-1] != hi:
                     coarse.append(hi)
 
+                # Kernel screening only needs a centered half-size crop. The winning
+                # kernel is later verified with a full-frame coarse pass before its 1p scan.
+                if coarse_half_size:
+                    coarse_width = max(64, (int(clip.width) // 2) // 2 * 2)
+                    coarse_height = max(64, (int(clip.height) // 2) // 2 * 2)
+                    coarse_left = max(0, (int(clip.width) - coarse_width) // 2)
+                    coarse_top = max(0, (int(clip.height) - coarse_height) // 2)
+                    coarse_clip = core.std.CropAbs(
+                        clip,
+                        width=coarse_width,
+                        height=coarse_height,
+                        left=coarse_left,
+                        top=coarse_top,
+                    )
+                else:
+                    coarse_clip = clip
+                    coarse_height = int(clip.height)
+                coarse_scale = float(coarse_height) / float(max(1, int(clip.height)))
+                coarse_base_height = (
+                    float(base_height) * coarse_scale
+                    if base_height is not None
+                    else None
+                )
+
                 ch = []
                 ce = []
                 for h in coarse:
+                    scaled_h = float(h) * coarse_scale
                     try:
                         if not vertical_only:
-                            rescaled = kernel.rescale(clip, h, base_height)
+                            rescaled = kernel.rescale(
+                                coarse_clip,
+                                scaled_h,
+                                coarse_base_height,
+                            )
                         else:
-                            rescaled = kernel.rescale_pro(clip, src_height=h, base_height=base_height)
+                            rescaled = kernel.rescale_pro(
+                                coarse_clip,
+                                src_height=scaled_h,
+                                base_height=coarse_base_height,
+                            )
                     except Exception as e:
                         if "blur" in str(e).lower():
-                            rescaled = _rescale_without_blur_arg(clip, kernel, h, base_height)
+                            rescaled = _rescale_without_blur_arg(
+                                coarse_clip,
+                                kernel,
+                                scaled_h,
+                                coarse_base_height,
+                            )
                         else:
                             raise
-                    stats = stats_func(clip, rescaled)
+                    stats = stats_func(coarse_clip, rescaled)
                     fr = stats.get_frame(0)
                     val = float(fr.props[stats_prop]) + 1e-9
                     ch.append(float(h))
                     ce.append(val)
 
-                coarse_best_h, coarse_best_s, coarse_vc, _ = _best_height_from_curve(ch, ce)
-                if global_best_score > 0 and coarse_best_s < global_best_score * 0.60:
+                coarse_best_h, coarse_best_s, _, coarse_valid = _best_height_from_curve(ch, ce)
+                if (
+                    global_best_score > 0.0
+                    and coarse_valid
+                    and coarse_best_s < global_best_score * 0.45
+                ):
                     return {
                         "kernel": str(getattr(kernel, "name", "") or ""),
                         "heights": ch,
                         "errors": ce,
                         "evaluated_all": False,
+                        "screen_score": float(coarse_best_s),
+                        "screen_valid": bool(coarse_valid),
+                        "skipped": True,
                     }
                 center = int(round(float(coarse_best_h)))
                 radius = 20
@@ -491,6 +612,9 @@ def _collect_curve_for_kernel(
                     "heights": fh,
                     "errors": fe,
                     "evaluated_all": True,
+                    "screen_score": float(coarse_best_s),
+                    "screen_valid": bool(coarse_valid),
+                    "skipped": False,
                 }
 
     heights = []
@@ -498,6 +622,7 @@ def _collect_curve_for_kernel(
     best_local_score = -1.0
     stagnation = 0
     evaluated_all = True
+    early_stop_enabled = int(early_stop_patience) < len(src_heights)
 
     for h in src_heights:
         try:
@@ -516,14 +641,14 @@ def _collect_curve_for_kernel(
         heights.append(float(h))
         errors.append(float(val))
 
-        if len(errors) >= 3:
+        if early_stop_enabled and len(errors) >= 3:
             _, cand_s, _, _ = _best_height_from_curve(heights, errors)
             if cand_s > best_local_score:
                 best_local_score = cand_s
                 stagnation = 0
             else:
                 stagnation += 1
-        if len(errors) >= 20 and stagnation >= int(early_stop_patience):
+        if early_stop_enabled and len(errors) >= 20 and stagnation >= int(early_stop_patience):
             if global_best_score > 0 and best_local_score < global_best_score * 0.60:
                 evaluated_all = False
                 break
@@ -557,18 +682,34 @@ def _load_source_png(path):
             src = None
     if src is None and hasattr(core, "lsmas"):
         try:
-            src = core.lsmas.LWLibavSource(path)
+            try:
+                src = core.lsmas.LWLibavSource(path, cache=0)
+            except TypeError:
+                src = core.lsmas.LWLibavSource(path)
         except Exception:
             src = None
     if src is None:
         raise RuntimeError("failed to load image source: need imwri/imwrif Read or ffms2/lsmas")
+
+    if src.format is None:
+        raise RuntimeError("image source has a variable format")
+    rgb_cf = getattr(vs, "RGB", None)
+    if rgb_cf is None:
+        rgb_cf = getattr(getattr(vs, "ColorFamily", object), "RGB", 2)
+    if src.format.color_family == rgb_cf:
+        yuv444ps = _preset_format("YUV444PS")
+        if yuv444ps is None:
+            raise RuntimeError("Could not resolve YUV444PS format for RGB-to-luma conversion")
+        src = core.resize.Point(src, format=yuv444ps, matrix_s="709")
+
     gray_cf = getattr(vs, "GRAY", None)
     if gray_cf is None:
         gray_cf = getattr(getattr(vs, "ColorFamily", object), "GRAY", 1)
     clip = core.std.ShufflePlanes(src, 0, gray_cf)
-    gray_fmt = getattr(vs, "GRAYS", None)
-    if gray_fmt is not None:
-        clip = clip.resize.Point(format=gray_fmt)
+    gray_fmt = _preset_format("GRAYS")
+    if gray_fmt is None:
+        raise RuntimeError("Could not resolve GRAYS format for getnative")
+    clip = clip.resize.Point(format=gray_fmt)
     return clip[0]
 
 
@@ -604,7 +745,62 @@ def _collect_curve_mode(clip, params):
         early_stop_patience=int(params.get("early_stop_patience", 30)),
         global_best_score=float(params.get("global_best_score", 0.0)),
         two_stage=bool(params.get("two_stage", False)),
+        coarse_half_size=bool(params.get("coarse_half_size", True)),
     )
+
+
+def _collect_curves_mode(clip, params):
+    fast_mode = bool(params.get("fast_mode", False))
+    kernels = _default_rescalers() if not fast_mode else _ordered_rescalers()
+    limit = int(params.get("max_kernels", 0))
+    if limit > 0:
+        kernels = kernels[:limit]
+    curves = []
+    total = len(kernels)
+    scan_started = time.perf_counter()
+    best_screen_score = 0.0
+    completed_screens = 0
+    for index, kernel in enumerate(kernels, start=1):
+        kernel_started = time.perf_counter()
+        kernel_params = dict(params)
+        kernel_params["kernel_name"] = str(getattr(kernel, "name", "") or "")
+        # Compare only like-for-like coarse curves. The first three priority kernels
+        # always receive their full fine scan before obvious later mismatches may skip it.
+        kernel_params["global_best_score"] = (
+            float(best_screen_score) if completed_screens >= 3 else 0.0
+        )
+        curve = _collect_curve_mode(clip, kernel_params)
+        curves.append(curve)
+        if bool(curve.get("screen_valid", False)):
+            completed_screens += 1
+            best_screen_score = max(
+                best_screen_score,
+                float(curve.get("screen_score", 0.0) or 0.0),
+            )
+        best_h, best_s, _, curve_valid = _best_height_from_curve(
+            curve.get("heights", []),
+            curve.get("errors", []),
+        )
+        elapsed_seconds = time.perf_counter() - scan_started
+        _write_progress(
+            {
+                "phase": "kernel",
+                "index": index,
+                "total": total,
+                "image": os.path.basename(
+                    str(os.getenv("BLURAYSUB_GETNATIVE_INPUT_PNG", "") or "")
+                ),
+                "kernel": str(curve.get("kernel", "") or ""),
+                "height": float(best_h),
+                "score": float(best_s),
+                "curve_valid": bool(curve_valid and curve.get("evaluated_all", True)),
+                "skipped": bool(curve.get("skipped", False)),
+                "kernel_seconds": float(time.perf_counter() - kernel_started),
+                "elapsed_seconds": float(elapsed_seconds),
+                "eta_seconds": float((elapsed_seconds / index) * (total - index)),
+            }
+        )
+    return {"curves": curves}
 
 
 try:
@@ -620,7 +816,27 @@ try:
         result = _list_kernels_mode(params)
     elif mode == "collect_curve":
         src = _load_source_png(input_png)
+        final_started = time.perf_counter()
         result = _collect_curve_mode(src, params)
+        if str(params.get("progress_phase", "") or "").strip().lower() == "final":
+            best_h, best_s, _, curve_valid = _best_height_from_curve(
+                result.get("heights", []),
+                result.get("errors", []),
+            )
+            _write_progress(
+                {
+                    "phase": "final",
+                    "image": os.path.basename(input_png),
+                    "kernel": str(result.get("kernel", "") or ""),
+                    "height": float(best_h),
+                    "score": float(best_s),
+                    "curve_valid": bool(curve_valid),
+                    "elapsed_seconds": float(time.perf_counter() - final_started),
+                }
+            )
+    elif mode == "collect_curves":
+        src = _load_source_png(input_png)
+        result = _collect_curves_mode(src, params)
     else:
         raise ValueError(f"unsupported mode: {mode}")
     _write({"ok": True, "result": result})

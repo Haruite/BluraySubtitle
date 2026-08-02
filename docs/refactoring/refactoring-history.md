@@ -983,7 +983,7 @@ Commit: `7d80a4d` (`feat(encode): add automatic black-border cropping`)
 ## Read-Only Built-In and User-Defined Encode Presets
 
 Date: 2026-08-01
-Commit: uncommitted (current change)
+Commit: `d41ac01`
 
 ### Configuration and Preset Ownership
 
@@ -1004,3 +1004,34 @@ Commit: uncommitted (current change)
 - Synchronized both README versions, the Encode/VapourSynth Wiki, bilingual code standards, and i18n. Focused configuration and GUI tests cover persistence, legacy migration, encoder filtering, built-in protection, startup resolution, and stable selection during direct parameter edits.
 - All 256 repository tests passed together with Python compilation, i18n, and split-contract checks. An offscreen Advanced-settings render confirmed the compact one-line name/parameter layout and enabled-state distinctions.
 - A short real-media Encode with one built-in and one user-defined preset remains a manual check. It writes normal encoded outputs, so use a disposable output directory and verify the emitted encoder command matches the visible parameter field.
+
+## Automatic Getnative Analysis and Kernel Fidelity
+
+Date: 2026-08-02
+Commit: Included in this change
+
+### Execution and Detection Corrections
+
+- Retained the split runtime required by the application's system Python and portable Python 3.13 VapourSynth: the system-side module owns curve and multi-frame ranking, while `getnative.vpy` owns image loading, descale/rescale evaluation, and metric collection under `vspipe`.
+- RGB sample PNGs now follow the upstream BT.709 RGB-to-luma conversion before becoming 32-bit `GRAYS`. The previous path selected RGB plane 0 directly, so it measured the red channel rather than image luminance when L-SMASH loaded FFmpeg PNGs as `RGB24`.
+- The prioritized scan still reports all 16 configured kernels. The first three priority kernels always receive a fine scan; later kernels skip that scan only when their comparable half-size coarse score is clearly weaker. Invalid or incomplete curves cannot win a kernel or affect the global best.
+- Kernel consensus requires the configured number of complete, valid curves within a real 2-pixel window and cannot stop before `min_kernels`. The automatic Encode caller attempts all 16 kernels and streams even the explicitly skipped screen results.
+- Winner verification still exposes the strict decreasing-ratio diagnostic, but automatic ranking uses the established permissive curve-valid flag so scarce usable samples are not discarded. Multi-frame aggregation groups rounded heights and ranks each group by the top three `min(score, 2) × normalized_height⁴` weights. The score saturation keeps a low-noise false notch from overwhelming an otherwise strong group while still allowing a high-resolution singleton to win when usable samples are sparse.
+- Curve selection once again uses Infiziert90/getnative's adjacent-height error drop as its primary notch signal and returns the directly comparable `previous_error / current_error` ratio as the cross-frame score. The prior smoothed-valley floor remains only as a broad-notch fallback; 540p, post-1040p, local-oscillation, and unstable-tail exclusions apply before either result can win.
+- The confirmed 535p-through-545p exclusion remains mandatory across primary, fallback, and segment-refinement selection, and candidates above 1040p are now unconditionally rejected. The existing oscillating-tail suppression remains active below that boundary; genuinely native 540p material remains a manual VPy case.
+
+### Runtime Application, Performance, and Ownership
+
+- Generated Encode VPy files now apply the exact detected kernel: all eight Bicubic parameter pairs, Lanczos taps 2–5, Bilinear, and Spline16/36/64. The previous template fixed every Lanczos result to taps 3, fixed every Bicubic result to b/c 1/3, and sent Spline results through the Bicubic branch.
+- Each sample's VapourSynth executor uses one frame worker. Each incremental analysis round may launch up to 20 sample processes, capped by the logical CPU count and available physical memory at a fixed 800 MiB budget per sample after a system reserve. Extraction starts with only the current round rather than 100 frames up front, and expands toward the 100-sample safety ceiling only while the usable-curve target is unmet.
+- All 16 two-stage kernel scans for one sample now share one VSPipe lifecycle. A JSONL progress sidecar reports every completed kernel immediately, while the parent consumes completed sample futures as they arrive rather than buffering them until every process in the round exits.
+- The broad step-4 kernel screen uses a centered half-size crop before a full-frame ±20p fine scan. The winner is then rechecked by a full-frame step-4 curve and another full-frame ±20p 1p scan instead of a 627-point full-resolution curve; VapourSynth's frame cache is capped at 256 MiB and numerical-library worker pools stay at one thread.
+- FFmpeg sample extraction now uses checked argument-list commands and round-specific filenames. L-SMASH image loading disables persistent indexes, while task-owned sample and debug directories are removed by exact path.
+- Removed the unused runtime VPy creator and the broad cleanup routine that recursively deleted configured debug roots and matching current-directory files regardless of task ownership.
+
+### Documentation, Verification, and Manual Checks
+
+- Updated both README versions, the Encode/VapourSynth Wiki, both code-standard versions, and the Simplified Chinese i18n catalog. Added focused regression coverage for kernel minimums, complete-curve consensus, permissive frame acceptance, empirical multi-frame ranking, the 540p and post-1040p exclusions, the 20-process cap, exact debug cleanup, RGB-luma loading, and exact VPy kernel application.
+- All 272 repository tests passed together with Python compilation, i18n and split-contract checks. Portable Python 3.13/VSPipe smoke tests returned all 16 unique kernels, streamed per-kernel progress, and reproduced the expected 892p adjacent-error notch from an FFmpeg-generated RGB PNG through the production split boundary.
+- Three complete 20-sample runs used `Cyberpunk Edgerunners` Disc 1 `00000.m2ts`. The first full-frame-coarse pass took 1661.14 seconds and exposed the smoothed-valley 887p defect; the half-size coarse pass took 946.78 seconds, reducing wall time by 42.99%, and retained 19 usable samples with about 17.3 GiB peak total worker memory in the worst full-frame phase. The final upstream-ratio run took 963.26 seconds; replaying its unchanged 19 final curves through the finalized saturated multi-frame weight selected the eight-sample 892p group, Bilinear, and confidence 3.556979. Five remains only the minimum required before skipping another round: every usable result from the already-launched 20-sample round is retained.
+- A complete 20-sample run on `2.5 Dimensional Seduction` Vol.1 `00003.m2ts` finished in 731.79 seconds and selected the expected 900p with Spline16. All 320 kernel events were emitted, eight clearly weaker kernels skipped their fine scan, and 19 curves were usable: 15 resolved exactly to 900p, with no systematic 5p offset. Peak combined Python/VSPipe working set was 15.33 GiB; the single-VSPipe transient maximum was 1014.8 MiB, while observed final-verification processes stayed near 380–400 MiB. Isolated measurements put the 16-kernel and final-verification peaks at 494.1 MiB and 412.6 MiB respectively.

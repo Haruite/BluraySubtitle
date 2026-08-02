@@ -272,6 +272,32 @@ The selected output bit depth is synchronized with the final
 `fmtc.bitdepth(..., bits=N)` conversion. Hardsub mode activates the
 `assrender.TextSub` line and supplies the selected subtitle path.
 
+### Automatic getnative
+
+BluraySubtitle's automatic getnative is adapted from [Infiziert90/getnative](https://github.com/Infiziert90/getnative). It estimates the vertical resolution at which a 1080p source was rendered before mastering and the scaling kernel most likely used to enlarge it. When automatic getnative is enabled, the result becomes the generated VPy's native height and inverse-scaling kernel. This can remove the master's upscale before subsequent filtering or resizing, but it neither changes the source file nor restores detail that was never present. Sources produced directly at 1080p, mixed-resolution material, live action, heavy grain, composited text, and post-processing can all make the estimate inconclusive.
+
+#### Frame selection and scheduling
+
+FFmpeg extracts candidate frames in incremental rounds instead of preparing 100 images in advance. Frames are ranked by edge energy, luminance variance, and entropy so that detailed, high-contrast pictures are tried first. A round can launch at most 20 samples, further limited by the logical CPU count and currently available physical memory. The memory calculation reserves 2 GiB for the system and budgets 800 MiB for every sample process. The 800 MiB value is a scheduling estimate, not a hard process limit: a complex frame or a short-lived final scan may use more.
+
+Every sample already launched is allowed to finish, and every kernel and sample result is printed as soon as it becomes available. Five valid curves are only the threshold for deciding whether another round is necessary; all valid results from the completed round still participate in the final decision. If fewer than five are found, extraction continues incrementally, up to a 100-sample safety ceiling. A final result still requires at least two usable curves.
+
+#### What one sample analyzes
+
+The installed system Python coordinates extraction, processes, and final ranking. The portable Python 3.13 VapourSynth environment runs `getnative.vpy`, which converts the PNG sample from RGB to BT.709 grayscale and evaluates all 16 inverse-scaling candidates: bilinear; eight bicubic parameter sets; Lanczos with 2, 3, 4, and 5 taps; and Spline16, Spline36, and Spline64. Each candidate descales the frame to a trial height, scales it back to the source dimensions, and measures the reconstruction error. The vertical search range is normally 40% through 98% of the source height.
+
+For speed, every kernel first receives a centered half-size, step-4 coarse scan and then a full-frame 1p scan around the best coarse height. The first three priority kernels always reach the fine scan. After that, a kernel whose like-for-like coarse score is below 45% of the best coarse score may skip its fine scan, while still reporting the coarse result. After all kernels have reported, the winning kernel is checked again with a full-frame step-4 pass followed by a full-frame ±20p, 1p scan. This avoids retaining a second full-range 1p graph. Each VSPipe process uses one VapourSynth frame worker and a 256 MiB frame-cache ceiling to control concurrent memory growth.
+
+#### Curve and multi-frame selection
+
+For each reconstruction-error curve, getnative looks for the sharp adjacent-height error drop described by the upstream method. The candidate height is the current height at that drop, and its primary score is the previous height's error divided by the current height's error. The metric's five-pixel border crop only excludes unreliable edge pixels; it is not a five-pixel correction to the detected height. Broad valleys are used only as a fallback when no credible sharp drop exists.
+
+Unstable or oscillating tails are rejected before ranking. Heights from 535p through 545p are deliberately excluded because this band produces pervasive false positives in practical material, and candidates above 1040p are removed as implausible curve-tail results. Consequently, genuinely native 540p material cannot be detected automatically and must be configured manually.
+
+Usable samples are grouped by rounded height. Each sample is weighted as `min(score, 2) * (height / search-range maximum)^4`; the three strongest weights in a height group determine which group wins, with the higher height breaking an exact tie. This preserves the empirically useful preference for a high resolution with a strong score without requiring dense consensus, since some titles yield very few usable frames. The selected group's weighted height and kernel votes produce the final VPy values.
+
+Automatic getnative remains a heuristic and can consume substantial time and memory. Clean line art with visible detail usually gives the clearest curves; dark scenes, credits, soft photography, noise, mixed animation pipelines, and later resizes may not. Review the per-kernel output and compare several episodes when results vary. To test one file outside the GUI, edit `video_file` in `src/scripts/getnative_file.py` and run that script.
+
 Automatic black-border cropping is opt-in. Before preparing the final VPy,
 BluraySubtitle probes duration and dimensions, then uses FFmpeg input-side seeks
 to analyze one pseudo-random point in each time bucket. It samples one point per
