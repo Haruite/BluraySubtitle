@@ -299,17 +299,41 @@ def _mad(vals: Sequence[float]) -> float:
     return float(np.median(np.abs(arr - med)))
 
 
-def _is_banned_height(height: float) -> bool:
-    # Empirical false positives: the pervasive 540p notch and the unstable 1080p search tail.
+_REFERENCE_SOURCE_HEIGHT = 1080.0
+
+
+def _height_scale(source_height: float) -> float:
+    """Return a positive scale relative to the original 1080p heuristics."""
+    return max(1.0, float(source_height)) / _REFERENCE_SOURCE_HEIGHT
+
+
+def _is_banned_height(height: float, source_height: float = 1080.0) -> bool:
+    """Reject the fixed 540p interference band and scaled unstable tail."""
+    scale = _height_scale(source_height)
     value = float(height)
-    return abs(value - 540.0) <= 5.0 or value > 1040.0
+    # Keep this band fixed: 1080p is a common valid result for 2160p sources.
+    false_positive_center = 540.0
+    false_positive_radius = 5.0
+    stable_curve_limit = 1040.0 * scale
+    return (
+        abs(value - false_positive_center) <= false_positive_radius
+        or value > stable_curve_limit
+    )
 
 
-def _best_height_from_curve(heights: Sequence[float], vals: Sequence[float]) -> Tuple[float, float, int, bool]:
+def _best_height_from_curve(
+        heights: Sequence[float],
+        vals: Sequence[float],
+        source_height: float = 1080.0,
+) -> Tuple[float, float, int, bool]:
 
     if len(vals) < 5:
         order = sorted(range(len(vals)), key=lambda n: float(vals[n]))
-        i = next((j for j in order if not _is_banned_height(float(heights[j]))), order[0])
+        i = next((
+            j
+            for j in order
+            if not _is_banned_height(float(heights[j]), source_height)
+        ), order[0])
         return float(heights[i]), 0.0, 0, False
 
     n_raw = len(vals)
@@ -347,7 +371,11 @@ def _best_height_from_curve(heights: Sequence[float], vals: Sequence[float]) -> 
     ]
     if not valley_idx:
         order = sorted(range(len(vals)), key=lambda n: float(vals[n]))
-        i = next((j for j in order if not _is_banned_height(float(heights[j]))), order[0])
+        i = next((
+            j
+            for j in order
+            if not _is_banned_height(float(heights[j]), source_height)
+        ), order[0])
         return float(heights[i]), 0.0, 0, False
 
     n = len(smoothed)
@@ -367,8 +395,9 @@ def _best_height_from_curve(heights: Sequence[float], vals: Sequence[float]) -> 
     jitter = max(1e-9, _mad(np.diff(log_arr).tolist()))
     smooth_factor = 1.0 / (1.0 + float(jitter / noise))
 
+    height_scale = _height_scale(source_height)
     max_hv = float(max(float(x) for x in heights) or 1.0)
-    tail_start = max_hv - 80.0
+    tail_start = max_hv - 80.0 * height_scale
     tail_idx = [j for j, hh in enumerate(heights) if float(hh) >= tail_start]
     tail_osc = False
 
@@ -414,14 +443,18 @@ def _best_height_from_curve(heights: Sequence[float], vals: Sequence[float]) -> 
     raw_delta = np.diff(raw_log)
     drop_noise = max(1e-9, _mad(raw_delta.tolist()))
     sharp_candidates: List[Tuple[int, float, float]] = []
-    full_range_tail = max_hv - float(min(float(x) for x in heights)) >= 160.0
+    full_range_tail = (
+        max_hv - float(min(float(x) for x in heights))
+        >= 160.0 * height_scale
+    )
+    oscillation_floor = 1000.0 * height_scale
     for i in range(1, len(heights)):
         hh = float(heights[i])
-        if _is_banned_height(hh):
+        if _is_banned_height(hh, source_height):
             continue
         if full_range_tail and tail_osc and hh >= tail_start:
             continue
-        if hh >= 1000.0 and _local_bad_osc(i):
+        if hh >= oscillation_floor and _local_bad_osc(i):
             continue
         drop = -float(raw_delta[i - 1])
         if drop < 3.0 * drop_noise:
@@ -466,11 +499,11 @@ def _best_height_from_curve(heights: Sequence[float], vals: Sequence[float]) -> 
     cand: List[Tuple[int, float]] = []
     for i in valley_idx:
         hh = float(heights[i])
-        if _is_banned_height(hh):
+        if _is_banned_height(hh, source_height):
             continue
         if full_range_tail and tail_osc and hh >= tail_start:
             continue
-        if hh >= 1000.0 and _local_bad_osc(i):
+        if hh >= oscillation_floor and _local_bad_osc(i):
             continue
         d = float(dip[i])
         if d < noise_gate:
@@ -486,14 +519,22 @@ def _best_height_from_curve(heights: Sequence[float], vals: Sequence[float]) -> 
             cand.append((i, s))
     if not cand:
         order = sorted(range(len(vals)), key=lambda n: float(vals[n]))
-        i = next((j for j in order if not _is_banned_height(float(heights[j]))), order[0])
+        i = next((
+            j
+            for j in order
+            if not _is_banned_height(float(heights[j]), source_height)
+        ), order[0])
         return float(heights[i]), 0.0, 0, False
     max_s = max(s for _, s in cand)
     rel_min = 0.25
     filtered = [(i, s) for i, s in cand if s >= max_s * rel_min]
     if not filtered:
         order = sorted(range(len(vals)), key=lambda n: float(vals[n]))
-        i = next((j for j in order if not _is_banned_height(float(heights[j]))), order[0])
+        i = next((
+            j
+            for j in order
+            if not _is_banned_height(float(heights[j]), source_height)
+        ), order[0])
         return float(heights[i]), 0.0, 0, False
 
     alpha = 1.2
@@ -535,11 +576,19 @@ def _best_height_from_curve(heights: Sequence[float], vals: Sequence[float]) -> 
         l = min(seg_r, max(seg_l, l + 1))
         r = min(seg_r, max(seg_l, r - 1))
         if r >= l:
-            allowed = [j for j in range(l, r + 1) if not _is_banned_height(float(heights[j]))]
+            allowed = [
+                j
+                for j in range(l, r + 1)
+                if not _is_banned_height(float(heights[j]), source_height)
+            ]
             if allowed:
                 best_i = min(allowed, key=lambda j: float(vals[j]))
             else:
-                allowed2 = [j for j in range(seg_l, seg_r + 1) if not _is_banned_height(float(heights[j]))]
+                allowed2 = [
+                    j
+                    for j in range(seg_l, seg_r + 1)
+                    if not _is_banned_height(float(heights[j]), source_height)
+                ]
                 if allowed2:
                     best_i = min(allowed2, key=lambda j: float(vals[j]))
                 else:
@@ -615,10 +664,28 @@ def _curve_decreasing_ratio(vals: Sequence[float]) -> float:
     return float(dec) / float(max(arr.size - 1, 1))
 
 
+def _default_src_heights(input_png: str) -> tuple[float, ...]:
+    """Build the default proportional search range from the actual source image."""
+    from PIL import Image
+
+    with Image.open(input_png) as image:
+        source_height = int(image.height)
+    minimum = max(240, int(source_height * 0.40))
+    maximum = min(source_height - 2, int(source_height * 0.98))
+    if minimum >= maximum:
+        raise ValueError(
+            f"invalid source height search range: {minimum}..{maximum} "
+            f"for {source_height}p"
+        )
+    return tuple(float(height) for height in range(minimum, maximum + 1))
+
+
 def getnative(
     clip,
     rescalers=None,
-    src_heights: Union[int, float, Sequence[int], Sequence[float]] = tuple(range(500, 1001)),
+    src_heights: Optional[
+        Union[int, float, Sequence[int], Sequence[float]]
+    ] = None,
     base_height: Optional[int] = None,
     crop_size: int = 5,
     dark: bool = True,
@@ -647,7 +714,12 @@ def getnative(
         raise TypeError("split mode expects PNG path as `clip` argument")
 
     input_png = str(clip)
-    height_list = (float(src_heights),) if isinstance(src_heights, (int, float)) else tuple(float(h) for h in src_heights)
+    if src_heights is None:
+        height_list = _default_src_heights(input_png)
+    elif isinstance(src_heights, (int, float)):
+        height_list = (float(src_heights),)
+    else:
+        height_list = tuple(float(h) for h in src_heights)
     if not height_list:
         raise ValueError("src_heights cannot be empty.")
 
@@ -717,7 +789,14 @@ def getnative(
         errors = [float(x) for x in curve.get("errors", [])]
         if not heights or not errors:
             continue
-        best_h, best_s, valley_count, curve_valid = _best_height_from_curve(heights, errors)
+        curve_source_height = float(
+            curve.get("source_height") or _REFERENCE_SOURCE_HEIGHT
+        )
+        best_h, best_s, valley_count, curve_valid = _best_height_from_curve(
+            heights,
+            errors,
+            curve_source_height,
+        )
         kr = _KernelResult(
             name=str(kernel_name),
             heights=heights,
@@ -779,7 +858,14 @@ def getnative(
     we = [float(x) for x in final_curve.get("errors", [])]
     if not wh or not we or len(wh) != len(we):
         raise RuntimeError("winner getnative curve is empty or malformed")
-    w_best_h, w_best_s, w_valley_count, w_curve_valid = _best_height_from_curve(wh, we)
+    final_source_height = float(
+        final_curve.get("source_height") or _REFERENCE_SOURCE_HEIGHT
+    )
+    w_best_h, w_best_s, w_valley_count, w_curve_valid = _best_height_from_curve(
+        wh,
+        we,
+        final_source_height,
+    )
     best_idx = min(range(len(wh)), key=lambda i: abs(float(wh[i]) - float(w_best_h)))
     edge_hit = int(best_idx <= 1 or best_idx >= len(wh) - 2)
     dec_ratio = _curve_decreasing_ratio(we)
@@ -795,6 +881,7 @@ def getnative(
         "getnative_edge_hit": int(edge_hit),
         "getnative_decreasing_ratio": float(dec_ratio),
         "getnative_valley_count": int(w_valley_count),
+        "getnative_source_height": int(round(final_source_height)),
         "debug_dir": debug_dir,
         "filename": filename,
         "dark": dark,

@@ -121,6 +121,43 @@ def _emit_encode_log_line(message: str) -> None:
         print(message, flush=True)
 
 
+def _probe_video_dimensions(video_path: str) -> tuple[int, int]:
+    """Return the first video stream dimensions without decoding the full source."""
+    result = run_command(
+        [
+            str(FFPROBE_PATH or 'ffprobe'),
+            '-v',
+            'error',
+            '-select_streams',
+            'v:0',
+            '-show_entries',
+            'stream=width,height',
+            '-of',
+            'json',
+            video_path,
+        ],
+        capture_output=True,
+        text=True,
+        encoding='utf-8',
+        errors='replace',
+    )
+    if result.returncode != 0:
+        detail = str(result.stderr or result.stdout or '').strip()
+        raise RuntimeError(
+            detail or f'ffprobe exited with code {result.returncode}'
+        )
+    try:
+        payload = json.loads(result.stdout or '{}')
+        stream = (payload.get('streams') or [])[0]
+        width = int(stream['width'])
+        height = int(stream['height'])
+    except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+        raise RuntimeError('ffprobe returned invalid video dimensions') from error
+    if width <= 0 or height <= 0:
+        raise RuntimeError('ffprobe returned invalid video dimensions')
+    return width, height
+
+
 def _read_getnative_progress_messages(
     progress_files: dict[str, str],
     progress_positions: dict[str, int],
@@ -1330,25 +1367,50 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             use_getnative = bool(getattr(self, "use_getnative", True))
             native_info = None
             if use_getnative:
-                _emit_encode_log_line(
-                    f'{self.t("[BluraySubtitle] getnative - start analyzing ")}{os.path.basename(vpy_video_source)}')
+                automatic_getnative_allowed = True
                 try:
-                    self._progress(text=f'{self.t("Getnative analyzing: ")}{os.path.basename(vpy_video_source)}')
-                except TaskCancelled:
-                    raise
-                except Exception:
-                    pass
-                native_info = self._infer_native_resolution(vpy_video_source)
-                if native_info:
+                    source_width, source_height = _probe_video_dimensions(
+                        vpy_video_source
+                    )
+                except Exception as error:
+                    message = translate_text(
+                        'Could not probe source resolution for getnative; '
+                        'automatic analysis will continue: {error}'
+                    ).format(error=f'{type(error).__name__}: {error}')
                     _emit_encode_log_line(
-                        f'{self.t("[BluraySubtitle] getnative - ")}{os.path.basename(src_mkv)} -> '
-                        f'{native_info["height"]}p ({native_info["kernel"]}, {self.t("score>=")}{native_info["confidence"]:.4f})'
+                        f'[encode-getnative] {message}'
                     )
                 else:
+                    # Confirmed GUI-contract exception: UHD getnative is manual-only.
+                    if source_height > 1080:
+                        automatic_getnative_allowed = False
+                        message = translate_text(
+                            'Automatic getnative was skipped for {width}x{height} source. '
+                            'Run src/scripts/getnative_file.py manually and write the '
+                            'detected parameters into the VPy if needed.'
+                        ).format(width=source_width, height=source_height)
+                        _emit_encode_log_line(f'[encode-getnative] {message}')
+                        self._progress(text=message)
+                if automatic_getnative_allowed:
                     _emit_encode_log_line(
-                        f'{self.t("[BluraySubtitle] getnative - ")}{os.path.basename(vpy_video_source)} -> '
-                        f'{self.t("no confident native resolution")}'
-                    )
+                        f'{self.t("[BluraySubtitle] getnative - start analyzing ")}{os.path.basename(vpy_video_source)}')
+                    try:
+                        self._progress(text=f'{self.t("Getnative analyzing: ")}{os.path.basename(vpy_video_source)}')
+                    except TaskCancelled:
+                        raise
+                    except Exception:
+                        pass
+                    native_info = self._infer_native_resolution(vpy_video_source)
+                    if native_info:
+                        _emit_encode_log_line(
+                            f'{self.t("[BluraySubtitle] getnative - ")}{os.path.basename(src_mkv)} -> '
+                            f'{native_info["height"]}p ({native_info["kernel"]}, {self.t("score>=")}{native_info["confidence"]:.4f})'
+                        )
+                    else:
+                        _emit_encode_log_line(
+                            f'{self.t("[BluraySubtitle] getnative - ")}{os.path.basename(vpy_video_source)} -> '
+                            f'{self.t("no confident native resolution")}'
+                        )
 
             def update_vpy_script():
                 if not os.path.exists(vpy_path):

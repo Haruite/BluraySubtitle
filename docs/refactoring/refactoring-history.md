@@ -1002,7 +1002,7 @@ Date: 2026-08-02 Commit: e221b28
 
 ## Full-Frame Encode Corruption Detection
 
-Date: 2026-08-03 Commit: this change (`feat(encode): add full-frame corruption detection`)
+Date: 2026-08-03 Commit: deaa198 (`feat(encode): add full-frame corruption detection`)
 
 ### Scope and Logic Changes
 

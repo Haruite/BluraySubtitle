@@ -133,13 +133,35 @@ class GetnativeCurveTests(unittest.TestCase):
         self.assertTrue(calls[-1]["two_stage"])
         self.assertFalse(calls[-1]["coarse_half_size"])
 
-    def test_540_interference_band_and_curve_tail_are_excluded(self) -> None:
+    def test_fixed_540_band_and_scaled_curve_tail_are_excluded(self) -> None:
         for height in (535.0, 540.0, 545.0, 1040.01, 1058.0):
             with self.subTest(height=height):
                 self.assertTrue(getnative_module._is_banned_height(height))
         for height in (534.99, 545.01, 1040.0):
             with self.subTest(height=height):
                 self.assertFalse(getnative_module._is_banned_height(height))
+
+        for height in (535.0, 540.0, 545.0, 2080.01, 2116.0):
+            with self.subTest(source_height=2160, height=height):
+                self.assertTrue(
+                    getnative_module._is_banned_height(height, source_height=2160)
+                )
+        for height in (534.99, 545.01, 1070.0, 1080.0, 1090.0, 2080.0):
+            with self.subTest(source_height=2160, height=height):
+                self.assertFalse(
+                    getnative_module._is_banned_height(height, source_height=2160)
+                )
+
+    def test_default_search_range_scales_with_source_height(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            image_path = Path(temporary_directory) / "uhd.png"
+            Image.new("RGB", (32, 2160), color=(128, 128, 128)).save(image_path)
+
+            heights = getnative_module._default_src_heights(str(image_path))
+
+        self.assertEqual(heights[0], 864.0)
+        self.assertEqual(heights[-1], 2116.0)
+        self.assertEqual(len(heights), 1253)
 
     def test_upstream_adjacent_drop_wins_over_smoothed_valley_floor(self) -> None:
         heights = [float(height) for height in range(875, 901)]
@@ -383,6 +405,14 @@ class GetnativeWorkflowTests(unittest.TestCase):
             self.assertEqual(mocked_getnative.call_args.kwargs["min_kernels"], 16)
             self.assertEqual(mocked_getnative.call_args.kwargs["max_kernels"], 16)
             self.assertFalse(mocked_getnative.call_args.kwargs["consensus_quit"])
+            self.assertEqual(
+                mocked_getnative.call_args.kwargs["src_heights"][0],
+                432,
+            )
+            self.assertEqual(
+                mocked_getnative.call_args.kwargs["src_heights"][-1],
+                1058,
+            )
 
     def test_default_vpy_applies_every_detected_kernel_parameter(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -651,7 +681,10 @@ class GetnativeWorkflowTests(unittest.TestCase):
         self.assertIn('matrix_s="709"', source)
         self.assertIn('LWLibavSource(path, cache=0)', source)
         self.assertIn('clip = clip.resize.Point(format=gray_fmt)', source)
-        self.assertIn('abs(value - 540.0) <= 5.0 or value > 1040.0', source)
+        self.assertIn('stable_curve_limit = 1040.0 * scale', source)
+        self.assertIn('false_positive_center = 540.0', source)
+        self.assertIn('source_height = int(clip.height)', source)
+        self.assertIn('"source_height": int(source_height)', source)
         self.assertIn('elif mode == "collect_curves":', source)
         self.assertIn('"phase": "kernel"', source)
         self.assertIn('BLURAYSUB_GETNATIVE_PROGRESS_JSONL', source)

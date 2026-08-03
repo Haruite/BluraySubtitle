@@ -150,7 +150,9 @@ The GUI can generate, edit, and preview a `.vpy` script. Before encoding it inje
 
 ### Automatic getnative
 
-BluraySubtitle's automatic getnative is adapted from [Infiziert90/getnative](https://github.com/Infiziert90/getnative). It estimates the vertical resolution at which a 1080p source was rendered before mastering and the scaling kernel most likely used to enlarge it. When automatic getnative is enabled, the result becomes the generated VPy's native height and inverse-scaling kernel. This can remove the master's upscale before subsequent filtering or resizing, but it neither changes the source file nor restores detail that was never present.
+BluraySubtitle's getnative implementation is adapted from [Infiziert90/getnative](https://github.com/Infiziert90/getnative). It estimates the vertical resolution at which a source was rendered before mastering and the scaling kernel most likely used to enlarge it. When automatic getnative is enabled for a source no taller than 1080p, the result becomes the generated VPy's native height and inverse-scaling kernel. This can remove the master's upscale before subsequent filtering or resizing, but it neither changes the source file nor restores detail that was never present.
+
+Before sample extraction, Encode probes the actual video stream dimensions. A source taller than 1080p skips automatic getnative immediately even if the option is selected; this avoids adding a potentially very long high-resolution analysis to the normal encode workflow. Higher-resolution analysis remains available through `src/scripts/getnative_file.py`. Write the returned `height` and `kernel` into the VPy as `native_h` and `native_kernel` before encoding.
 
 #### Frame selection and scheduling
 
@@ -169,11 +171,11 @@ Each VSPipe process uses one VapourSynth frame worker and a 256 MiB frame-cache 
 
 For each reconstruction-error curve, getnative looks for the sharp adjacent-height error drop described by the upstream method. The candidate height is the current height at that drop, and its primary score is the previous height's error divided by the current height's error. The metric's five-pixel border crop only excludes unreliable edge pixels; it is not a five-pixel correction to the detected height. Broad valleys are used only as a fallback when no credible sharp drop exists.
 
-Unstable or oscillating tails are rejected before ranking. Heights from 535p through 545p are deliberately excluded because this band produces pervasive false positives in practical material, and candidates above 1040p are removed as implausible curve-tail results. Consequently, genuinely native 540p material cannot be detected automatically and must be configured manually.
+Unstable or oscillating tails are rejected before ranking. The 535p-through-545p false-positive band remains fixed because genuinely 540p material is uncommon. It is not scaled to 1070p through 1090p for a 2160p source: 1080p-to-2160p upscales are common, and no equivalent UHD interference band has been confirmed. The stable-curve upper limit is `source height × 1040 / 1080`; curve-tail spans and the high-resolution oscillation boundary use the same source-height scale. A 1080p source therefore rejects values above 1040p, while a 2160p source rejects values above 2080p and keeps 1080p-area candidates eligible.
 
 Usable samples are grouped by rounded height. Each sample is weighted as `min(score, 2) * (height / search-range maximum)^4`; the three strongest weights in a height group determine which group wins, with the higher height breaking an exact tie. This preserves the empirically useful preference for a high resolution with a strong score without requiring dense consensus, since some titles yield very few usable frames. The selected group's weighted height and kernel votes produce the final VPy values.
 
-Automatic getnative remains a heuristic and can consume substantial time and memory. Clean line art with visible detail usually gives the clearest curves; dark scenes, credits, soft photography, noise, mixed animation pipelines, and later resizes may not. Review the per-kernel output and compare several episodes when results vary. To test one file outside the GUI, edit `video_file` in `src/scripts/getnative_file.py` and run that script.
+Getnative remains a heuristic and can consume substantial time and memory. Clean line art with visible detail usually gives the clearest curves; dark scenes, credits, soft photography, noise, mixed animation pipelines, and later resizes may not. Review the per-kernel output and compare several episodes when results vary. To test one file outside the GUI, edit `video_file` in `src/scripts/getnative_file.py` and run that script; unlike the automatic Encode integration, the standalone path also analyzes sources taller than 1080p.
 
 ### Generated VPy restoration controls
 

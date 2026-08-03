@@ -999,7 +999,7 @@ Blu-ray DIY 压制及“编辑轨道”中的通用视频转换仍不在本阶�
 
 ## Encode 全帧花屏／坏帧检测
 
-日期：2026-08-03　提交：本次修改（`feat(encode): add full-frame corruption detection`）
+日期：2026-08-03　提交：deaa198（`feat(encode): add full-frame corruption detection`）
 
 ### 范围与逻辑变化
 

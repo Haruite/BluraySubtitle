@@ -1,4 +1,4 @@
-"""Print the project's automatic getnative result for one configured video file."""
+"""Print getnative results for one file, including sources taller than 1080p."""
 
 from __future__ import annotations
 

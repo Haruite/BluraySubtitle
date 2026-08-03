@@ -226,17 +226,35 @@ def _mad(vals):
     return float(np.median(np.abs(arr - med)))
 
 
-def _is_banned_height(height):
-    # Empirical false positives: the pervasive 540p notch and the unstable 1080p search tail.
+_REFERENCE_SOURCE_HEIGHT = 1080.0
+
+
+def _height_scale(source_height):
+    return max(1.0, float(source_height)) / _REFERENCE_SOURCE_HEIGHT
+
+
+def _is_banned_height(height, source_height=1080.0):
+    scale = _height_scale(source_height)
     value = float(height)
-    return abs(value - 540.0) <= 5.0 or value > 1040.0
+    # Keep this band fixed: 1080p is a common valid result for 2160p sources.
+    false_positive_center = 540.0
+    false_positive_radius = 5.0
+    stable_curve_limit = 1040.0 * scale
+    return (
+        abs(value - false_positive_center) <= false_positive_radius
+        or value > stable_curve_limit
+    )
 
 
-def _best_height_from_curve(heights, vals):
+def _best_height_from_curve(heights, vals, source_height=1080.0):
 
     if len(vals) < 5:
         order = sorted(range(len(vals)), key=lambda n: float(vals[n]))
-        i = next((j for j in order if not _is_banned_height(float(heights[j]))), order[0])
+        i = next((
+            j
+            for j in order
+            if not _is_banned_height(float(heights[j]), source_height)
+        ), order[0])
         return float(heights[i]), 0.0, 0, False
 
     n_raw = len(vals)
@@ -274,7 +292,11 @@ def _best_height_from_curve(heights, vals):
     ]
     if not valley_idx:
         order = sorted(range(len(vals)), key=lambda n: float(vals[n]))
-        i = next((j for j in order if not _is_banned_height(float(heights[j]))), order[0])
+        i = next((
+            j
+            for j in order
+            if not _is_banned_height(float(heights[j]), source_height)
+        ), order[0])
         return float(heights[i]), 0.0, 0, False
 
     log_smoothed = [math.log10(max(v, 1e-12)) for v in smoothed]
@@ -294,8 +316,9 @@ def _best_height_from_curve(heights, vals):
     jitter = max(1e-9, _mad(np.diff(log_arr).tolist()))
     smooth_factor = 1.0 / (1.0 + float(jitter / noise))
 
+    height_scale = _height_scale(source_height)
     max_hv = float(max(float(x) for x in heights) or 1.0)
-    tail_start = max_hv - 80.0
+    tail_start = max_hv - 80.0 * height_scale
     tail_idx = [j for j, hh in enumerate(heights) if float(hh) >= tail_start]
     tail_osc = False
     body_d1_mad = max(1e-9, _mad(np.diff(resid).tolist()))
@@ -339,14 +362,18 @@ def _best_height_from_curve(heights, vals):
     raw_delta = np.diff(raw_log)
     drop_noise = max(1e-9, _mad(raw_delta.tolist()))
     sharp_candidates = []
-    full_range_tail = max_hv - float(min(float(x) for x in heights)) >= 160.0
+    full_range_tail = (
+        max_hv - float(min(float(x) for x in heights))
+        >= 160.0 * height_scale
+    )
+    oscillation_floor = 1000.0 * height_scale
     for i in range(1, len(heights)):
         hh = float(heights[i])
-        if _is_banned_height(hh):
+        if _is_banned_height(hh, source_height):
             continue
         if full_range_tail and tail_osc and hh >= tail_start:
             continue
-        if hh >= 1000.0 and _local_bad_osc(i):
+        if hh >= oscillation_floor and _local_bad_osc(i):
             continue
         drop = -float(raw_delta[i - 1])
         if drop < 3.0 * drop_noise:
@@ -391,11 +418,11 @@ def _best_height_from_curve(heights, vals):
     cand = []
     for i in valley_idx:
         hh = float(heights[i])
-        if _is_banned_height(hh):
+        if _is_banned_height(hh, source_height):
             continue
         if full_range_tail and tail_osc and hh >= tail_start:
             continue
-        if hh >= 1000.0 and _local_bad_osc(i):
+        if hh >= oscillation_floor and _local_bad_osc(i):
             continue
         d = float(dip[i])
         if d < noise_gate:
@@ -412,7 +439,11 @@ def _best_height_from_curve(heights, vals):
 
     if not cand:
         order = sorted(range(len(vals)), key=lambda n: float(vals[n]))
-        i = next((j for j in order if not _is_banned_height(float(heights[j]))), order[0])
+        i = next((
+            j
+            for j in order
+            if not _is_banned_height(float(heights[j]), source_height)
+        ), order[0])
         return float(heights[i]), 0.0, 0, False
 
     max_s = max(s for _, s in cand)
@@ -420,7 +451,11 @@ def _best_height_from_curve(heights, vals):
     filtered = [(i, s) for i, s in cand if s >= max_s * rel_min]
     if not filtered:
         order = sorted(range(len(vals)), key=lambda n: float(vals[n]))
-        i = next((j for j in order if not _is_banned_height(float(heights[j]))), order[0])
+        i = next((
+            j
+            for j in order
+            if not _is_banned_height(float(heights[j]), source_height)
+        ), order[0])
         return float(heights[i]), 0.0, 0, False
 
     alpha = 1.2
@@ -462,11 +497,19 @@ def _best_height_from_curve(heights, vals):
         l = min(seg_r, max(seg_l, l + 1))
         r = min(seg_r, max(seg_l, r - 1))
         if r >= l:
-            allowed = [j for j in range(l, r + 1) if not _is_banned_height(float(heights[j]))]
+            allowed = [
+                j
+                for j in range(l, r + 1)
+                if not _is_banned_height(float(heights[j]), source_height)
+            ]
             if allowed:
                 best_i = min(allowed, key=lambda j: float(vals[j]))
             else:
-                allowed2 = [j for j in range(seg_l, seg_r + 1) if not _is_banned_height(float(heights[j]))]
+                allowed2 = [
+                    j
+                    for j in range(seg_l, seg_r + 1)
+                    if not _is_banned_height(float(heights[j]), source_height)
+                ]
                 if allowed2:
                     best_i = min(allowed2, key=lambda j: float(vals[j]))
                 else:
@@ -490,6 +533,7 @@ def _best_height_from_curve(heights, vals):
 
 def _collect_curve_for_kernel(
     clip,
+    source_height,
     kernel,
     src_heights,
     base_height,
@@ -575,7 +619,9 @@ def _collect_curve_for_kernel(
                     ch.append(float(h))
                     ce.append(val)
 
-                coarse_best_h, coarse_best_s, _, coarse_valid = _best_height_from_curve(ch, ce)
+                coarse_best_h, coarse_best_s, _, coarse_valid = (
+                    _best_height_from_curve(ch, ce, source_height)
+                )
                 if (
                     global_best_score > 0.0
                     and coarse_valid
@@ -589,6 +635,7 @@ def _collect_curve_for_kernel(
                         "screen_score": float(coarse_best_s),
                         "screen_valid": bool(coarse_valid),
                         "skipped": True,
+                        "source_height": int(source_height),
                     }
                 center = int(round(float(coarse_best_h)))
                 radius = 20
@@ -622,6 +669,7 @@ def _collect_curve_for_kernel(
                     "screen_score": float(coarse_best_s),
                     "screen_valid": bool(coarse_valid),
                     "skipped": False,
+                    "source_height": int(source_height),
                 }
 
     heights = []
@@ -649,7 +697,11 @@ def _collect_curve_for_kernel(
         errors.append(float(val))
 
         if early_stop_enabled and len(errors) >= 3:
-            _, cand_s, _, _ = _best_height_from_curve(heights, errors)
+            _, cand_s, _, _ = _best_height_from_curve(
+                heights,
+                errors,
+                source_height,
+            )
             if cand_s > best_local_score:
                 best_local_score = cand_s
                 stagnation = 0
@@ -665,6 +717,7 @@ def _collect_curve_for_kernel(
         "heights": heights,
         "errors": errors,
         "evaluated_all": bool(evaluated_all),
+        "source_height": int(source_height),
     }
 
 
@@ -720,7 +773,17 @@ def _collect_curve_mode(clip, params):
     kernels = _default_rescalers() if not fast_mode else _ordered_rescalers()
     kernel_name = str(params.get("kernel_name", "") or "").strip()
     kernel = _find_kernel_by_name(kernels, kernel_name) if kernel_name else kernels[0]
-    src_heights = params.get("src_heights") or list(range(500, 1001))
+    source_height = int(clip.height)
+    src_heights = params.get("src_heights")
+    if not src_heights:
+        minimum = max(240, int(source_height * 0.40))
+        maximum = min(source_height - 2, int(source_height * 0.98))
+        if minimum >= maximum:
+            raise ValueError(
+                f"invalid source height search range: {minimum}..{maximum} "
+                f"for {source_height}p"
+            )
+        src_heights = list(range(minimum, maximum + 1))
     if isinstance(src_heights, (int, float)):
         height_list = (float(src_heights),)
     else:
@@ -732,6 +795,7 @@ def _collect_curve_mode(clip, params):
     )
     return _collect_curve_for_kernel(
         clip=clip,
+        source_height=source_height,
         kernel=kernel,
         src_heights=height_list,
         base_height=params.get("base_height", None),
@@ -776,6 +840,7 @@ def _collect_curves_mode(clip, params):
         best_h, best_s, _, curve_valid = _best_height_from_curve(
             curve.get("heights", []),
             curve.get("errors", []),
+            float(curve.get("source_height") or clip.height),
         )
         elapsed_seconds = time.perf_counter() - scan_started
         _write_progress(
@@ -818,6 +883,7 @@ try:
             best_h, best_s, _, curve_valid = _best_height_from_curve(
                 result.get("heights", []),
                 result.get("errors", []),
+                float(result.get("source_height") or src.height),
             )
             _write_progress(
                 {

@@ -48,6 +48,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 class AppConfigTests(unittest.TestCase):
     def test_release_version_comparison_uses_numeric_tag_only(self) -> None:
+        self.assertEqual(APP_VERSION, "4.3")
         self.assertEqual(APP_TITLE, f"BluraySubtitle v{APP_VERSION}")
         self.assertEqual(
             release_version({

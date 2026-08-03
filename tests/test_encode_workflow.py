@@ -27,6 +27,7 @@ from src.runtime.services import BluraySubtitle as _BluraySubtitle
 from src.runtime.services_split.encode_and_audio_tasks import (
     EncodeAudioTasksMixin,
     _plan_automatic_encoder_metadata,
+    _probe_video_dimensions,
     _write_vpy_video_source_a,
 )
 from src.runtime.services_split.remux_and_episode_workflows import RemuxEpisodeWorkflowsMixin
@@ -171,6 +172,23 @@ class _PipelineService(EncodeAudioTasksMixin):
 
 
 class EncodeWorkflowTests(unittest.TestCase):
+    def test_getnative_dimension_probe_reads_first_video_stream(self) -> None:
+        completed = SimpleNamespace(
+            returncode=0,
+            stdout='{"streams": [{"width": 3840, "height": 2160}]}',
+            stderr='',
+        )
+        with patch(
+                'src.runtime.services_split.encode_and_audio_tasks.run_command',
+                return_value=completed,
+        ) as run_command:
+            dimensions = _probe_video_dimensions('source.mkv')
+
+        self.assertEqual(dimensions, (3840, 2160))
+        command = run_command.call_args.args[0]
+        self.assertIn('stream=width,height', command)
+        self.assertEqual(command[-1], 'source.mkv')
+
     def test_vpy_source_patch_changes_only_the_top_level_source_assignment(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             vpy_path = Path(temporary_directory) / 'encode.vpy'
@@ -187,6 +205,105 @@ class EncodeWorkflowTests(unittest.TestCase):
             content = vpy_path.read_text(encoding='utf-8')
             self.assertIn('a = r"E:\\video.mkv"', content)
             self.assertIn('    a = 8', content)
+
+    def test_encode_skips_automatic_getnative_above_1080p(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_path = root / 'source.mkv'
+            output_path = root / 'output.mkv'
+            vpy_path = root / 'encode.vpy'
+            source_path.write_bytes(b'mkv')
+            vpy_path.write_text(
+                'a = r""\n'
+                'native_h = 1440\n'
+                'native_kernel = "spline36"\n'
+                'res = core.fmtc.bitdepth(src8, bits=10)\n',
+                encoding='utf-8',
+            )
+            service = _PipelineService()
+            service.use_getnative = True
+
+            def encode_video(_vspipe, _vpy, encoder_command, _environment):
+                Path(encoder_command[encoder_command.index('-o') + 1]).write_bytes(
+                    b'hevc'
+                )
+                return 0
+
+            with (
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.'
+                        'MediaInfoTrackMappingMixin.mkvinfo_dolby_vision_track_id',
+                        return_value=None,
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.'
+                        '_probe_video_dimensions',
+                        return_value=(3840, 2160),
+                    ) as dimension_probe,
+                    patch.object(
+                        service,
+                        '_infer_native_resolution',
+                    ) as infer_native,
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.'
+                        'probe_actual_encode_source',
+                        side_effect=_actual_source,
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.'
+                        '_write_vpy_video_source_a',
+                        return_value=True,
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.'
+                        'get_vspipe_context',
+                        return_value=('vspipe', {}),
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.'
+                        'resolve_encoder_executable_path',
+                        return_value='x265',
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.'
+                        '_run_vspipe_piped_encode',
+                        side_effect=encode_video,
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.'
+                        'mux_with_audio_conversion'
+                    ) as final_mux,
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.'
+                        'verify_final_video_metadata',
+                    ),
+            ):
+                service.encode_task(
+                    str(output_path),
+                    str(vpy_path),
+                    'bundle',
+                    'bundle',
+                    '--crf 18',
+                    'external',
+                    encoder='x265',
+                    bit_depth='10',
+                    selected_audio_tracks=(),
+                    selected_subtitle_tracks=(),
+                    audio_codec_choices=(),
+                    track_language_overrides=(),
+                    source_file=str(source_path),
+                )
+
+            dimension_probe.assert_called_once_with(str(source_path))
+            infer_native.assert_not_called()
+            final_mux.assert_called_once()
+            self.assertTrue(any(
+                'getnative_file.py' in message
+                for message in service.progress_messages
+            ))
+            vpy_source = vpy_path.read_text(encoding='utf-8')
+            self.assertIn('native_h = 1440', vpy_source)
+            self.assertIn('native_kernel = "spline36"', vpy_source)
 
     def test_preflight_rejects_invalid_vpy_processing_strengths(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
