@@ -999,3 +999,29 @@ Date: 2026-08-02 Commit: e221b28
 - Windows, Ubuntu 22.04, and Ubuntu 26.04 each rendered a generated 900p Bicubic default VPy frame using L-SMASH and placebo with no generated `try`/`except`, FFMS2, or neo_f3kdb path. Ubuntu 22.04 also rebuilt and loaded the formerly broken L-SMASH-Works plugin with no unresolved symbols.
 - The FLAC selector chose `/usr/local/bin/flac` 1.5.0 on Ubuntu 22.04 and correctly fell back to `/usr/bin/flac` 1.5.0 on Ubuntu 26.04. The installed Windows `libvs_placebo.dll` matched the extracted AmusementClub/tools file byte-for-byte (SHA-256 `A001EC26EFF87E5261E9438B9CBA0ADB176C2B6E210F7CBCD2E6D0F1A8F6F80E`) and evaluated the generated script's exact 16-bit Deband call successfully.
 - All 283 repository tests passed together with Python compilation, i18n, split-contract, PowerShell-parser, shell-syntax, diff, and line-ending checks. Windows additionally rendered all 16 getnative kernels and verified the field-based rejection path; the revised adaptive deband and anti-aliasing post-filter also produced a YUV420P16 smoke frame in the managed VapourSynth environment.
+
+## Full-Frame Encode Corruption Detection
+
+Date: 2026-08-03 Commit: this change (`feat(encode): add full-frame corruption detection`)
+
+### Scope and Logic Changes
+
+- Added the opt-in **Check corrupted frames** control immediately after comparison-image output, including its Advanced-page default. Each encode task snapshots the selected value so batch jobs do not observe later GUI changes.
+- After the final MKV passes metadata verification, the workflow reruns the exact encode VPy source and compares every common frame against the completed video with FFmpeg PSNR. It also checks source, packet, and compared-frame counts plus decoder error markers, then writes a deterministic JSON report under `FrameCheck` with a `pass`, `suspect`, `fail`, or `error` status. A non-passing check retains the completed output, reports a warning, and allows the remaining batch to continue.
+- Added the configuration parameters `encode.frame_check_luma_psnr_threshold_db` (default `30.0`) and `encode.frame_check_chroma_psnr_threshold_db` (default `40.0`), each limited to `0.0`–`100.0`. U and V use the shared chroma threshold. Both values are editable under Settings > Advanced > Default encode settings, remain absent from the Encode page, participate in Restore Defaults, and are recorded in each report.
+
+### Redundant or Conflicting Paths Removed
+
+- Kept a single full-frame implementation: no sampled or quick-check mode, duplicate UI-only detector, or separately generated reference pipeline was added.
+- PSNR classification no longer relies on an implicit chroma offset from one threshold; the task carries the independently configured luma and chroma values through request, service, workflow, detector, and report boundaries.
+- Detector scratch files remain task-local and temporary; only the final JSON report is retained beside the output artifacts.
+
+### Documentation and Verification
+
+- Updated both README versions with measured comparison-image timing and both Encode/VapourSynth Wiki versions with the full-check sequence, report interpretation, Settings-page thresholds, limitations, and measured runtime guidance.
+- The 1080p sample checked 1,248 frames in about 127 seconds (`2.4×` its 52-second duration). The cropped 2160p Dolby Vision sample checked 816 frames in about 248 seconds (`7.3×` its 34-second duration). Both reports passed. Their comparison-image stages took about 36 seconds (`0.7×`) and 80 seconds (`2.4×`) respectively.
+- Focused configuration, workflow, and detector coverage verifies independent threshold transport, report classification, count mismatches, decode failures, and deterministic report output. The full repository suite, Python compilation, i18n, split-contract, diff, and line-ending checks were also run before the feature commit.
+
+### Deferred Items
+
+- The detector is intentionally based on complete decode, frame counts, decoder diagnostics, and per-plane PSNR. It does not attempt semantic artifact recognition, add per-task threshold controls to the Encode page, or provide a quick/sample mode.

@@ -61,6 +61,9 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
         self.output_comparison_checkbox.setChecked(
             encode.output_comparison_images
         )
+        self.frame_check_checkbox.setChecked(
+            encode.check_corrupted_frames
+        )
         self.vpy_denoise_strength_spin.setValue(encode.vpy_denoise_strength)
         self.vpy_dehalo_strength_spin.setValue(encode.vpy_dehalo_strength)
         self.vpy_dering_strength_spin.setValue(encode.vpy_dering_strength)

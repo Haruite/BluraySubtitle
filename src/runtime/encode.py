@@ -15,12 +15,13 @@ from src.runtime.audio_conversion import (
     validate_audio_cleanup_tools,
     validate_audio_conversion_tools,
 )
+from src.runtime.frame_check import frame_check_report_path
 from src.runtime.sp import SpEntry
 
 
 @dataclass(frozen=True)
 class EncodeSettings:
-    """Encode controls captured from the visible GUI at task launch."""
+    """Encode controls captured at task launch."""
 
     vspipe_mode: str
     encoder_mode: str
@@ -32,6 +33,9 @@ class EncodeSettings:
     default_lossless_audio_codec: str
     auto_crop_black_borders: bool = False
     output_comparison_images: bool = True
+    check_corrupted_frames: bool = False
+    frame_check_luma_psnr_threshold_db: float = 30.0
+    frame_check_chroma_psnr_threshold_db: float = 40.0
     vpy_denoise_strength: float = 0.6
     vpy_dehalo_strength: float = 0.0
     vpy_dering_strength: float = 0.0
@@ -110,6 +114,18 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
                 )
             )
     for setting_name, setting_value, minimum, maximum in (
+            (
+                'frame_check_luma_psnr_threshold_db',
+                request.settings.frame_check_luma_psnr_threshold_db,
+                0.0,
+                100.0,
+            ),
+            (
+                'frame_check_chroma_psnr_threshold_db',
+                request.settings.frame_check_chroma_psnr_threshold_db,
+                0.0,
+                100.0,
+            ),
             ('vpy_denoise_strength', request.settings.vpy_denoise_strength, 0.0, 3.0),
             ('vpy_dehalo_strength', request.settings.vpy_dehalo_strength, 0.0, 1.0),
             ('vpy_dering_strength', request.settings.vpy_dering_strength, 0.0, 1.0),
@@ -321,6 +337,20 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
                 raise FileExistsError(
                     translate_text('Existing resumable output is invalid: {path}').format(path=output_path)
                 )
+        elif request.settings.check_corrupted_frames and (
+                not is_sp_row
+                or (
+                    output_name.lower().endswith('.mkv')
+                    and not row.uses_main_output
+                )
+        ):
+            report_path = frame_check_report_path(output_path)
+            if os.path.exists(report_path):
+                raise FileExistsError(
+                    translate_text('Frame check report already exists: {path}').format(
+                        path=report_path
+                    )
+                )
 
     if not check_tools:
         return
@@ -365,6 +395,7 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
     if (
             request.settings.output_comparison_images
             or request.settings.auto_crop_black_borders
+            or request.settings.check_corrupted_frames
     ):
         for tool_name, configured_path in (
                 ('ffmpeg', core_settings.FFMPEG_PATH),

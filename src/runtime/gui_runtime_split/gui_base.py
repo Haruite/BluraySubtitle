@@ -168,6 +168,7 @@ class BluraySubtitleGuiBase(QWidget):
         self.use_getnative_checkbox = None
         self.auto_crop_black_borders_checkbox = None
         self.output_comparison_checkbox = None
+        self.frame_check_checkbox = None
         self.vpy_processing_row = None
         self.vpy_denoise_strength_spin = None
         self.vpy_dehalo_strength_spin = None

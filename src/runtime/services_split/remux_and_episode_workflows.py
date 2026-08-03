@@ -1402,6 +1402,14 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 vpy_antialiasing_strength=(
                     request.settings.vpy_antialiasing_strength
                 ),
+                check_corrupted_frames=request.settings.check_corrupted_frames,
+                frame_check_luma_psnr_threshold_db=(
+                    request.settings.frame_check_luma_psnr_threshold_db
+                ),
+                frame_check_chroma_psnr_threshold_db=(
+                    request.settings.frame_check_chroma_psnr_threshold_db
+                ),
+                cancel_event=cancel_event,
             )
             if not os.path.isfile(row.output_path):
                 raise RuntimeError(

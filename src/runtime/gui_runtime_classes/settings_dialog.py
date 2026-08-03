@@ -465,6 +465,46 @@ class SettingsDialog(QDialog):
             encode_group,
         )
         encode_form.addRow(self.default_output_comparison_checkbox)
+        self.default_frame_check_checkbox = QCheckBox(
+            self.t("Check corrupted frames by default"),
+            encode_group,
+        )
+        self.default_frame_check_checkbox.setToolTip(self.t(
+            "After encoding, rerun the VPy and check the output frame by frame; "
+            "this significantly increases processing time."
+        ))
+        encode_form.addRow(self.default_frame_check_checkbox)
+
+        def create_frame_check_threshold_spin(tooltip: str) -> QDoubleSpinBox:
+            spin = QDoubleSpinBox(encode_group)
+            spin.setRange(0.0, 100.0)
+            spin.setDecimals(2)
+            spin.setSingleStep(1.0)
+            spin.setSuffix(" dB")
+            spin.setKeyboardTracking(False)
+            spin.setToolTip(self.t(tooltip))
+            return spin
+
+        self.frame_check_luma_psnr_threshold_spin = (
+            create_frame_check_threshold_spin(
+                "Frames below this luma PSNR threshold are suspicious; "
+                "raising it increases sensitivity."
+            )
+        )
+        encode_form.addRow(
+            self.t("Frame check luma PSNR threshold"),
+            self.frame_check_luma_psnr_threshold_spin,
+        )
+        self.frame_check_chroma_psnr_threshold_spin = (
+            create_frame_check_threshold_spin(
+                "Frames below this chroma PSNR threshold on U or V are suspicious; "
+                "raising it increases sensitivity."
+            )
+        )
+        encode_form.addRow(
+            self.t("Frame check chroma PSNR threshold"),
+            self.frame_check_chroma_psnr_threshold_spin,
+        )
 
         def create_vpy_strength_spin(maximum: float, tooltip: str) -> QDoubleSpinBox:
             spin = QDoubleSpinBox(encode_group)
@@ -1034,6 +1074,15 @@ class SettingsDialog(QDialog):
         self.default_output_comparison_checkbox.setChecked(
             config.encode.output_comparison_images
         )
+        self.default_frame_check_checkbox.setChecked(
+            config.encode.check_corrupted_frames
+        )
+        self.frame_check_luma_psnr_threshold_spin.setValue(
+            config.encode.frame_check_luma_psnr_threshold_db
+        )
+        self.frame_check_chroma_psnr_threshold_spin.setValue(
+            config.encode.frame_check_chroma_psnr_threshold_db
+        )
         self.default_vpy_denoise_strength_spin.setValue(
             config.encode.vpy_denoise_strength
         )
@@ -1097,6 +1146,15 @@ class SettingsDialog(QDialog):
                 ),
                 output_comparison_images=(
                     self.default_output_comparison_checkbox.isChecked()
+                ),
+                check_corrupted_frames=(
+                    self.default_frame_check_checkbox.isChecked()
+                ),
+                frame_check_luma_psnr_threshold_db=(
+                    self.frame_check_luma_psnr_threshold_spin.value()
+                ),
+                frame_check_chroma_psnr_threshold_db=(
+                    self.frame_check_chroma_psnr_threshold_spin.value()
                 ),
                 vpy_denoise_strength=(
                     self.default_vpy_denoise_strength_spin.value()

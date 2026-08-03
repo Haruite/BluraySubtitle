@@ -19,6 +19,7 @@ from src.runtime.encode_results import (
     EncodeRowResult,
     EncodeTaskFailure,
 )
+from src.runtime.frame_check import FrameCheckResult, frame_check_report_path
 from src.runtime.encode_source import ActualEncodeSource
 from src.runtime import TaskCancelled
 from src.runtime.video_crop import VideoCropPlan
@@ -47,6 +48,9 @@ def _settings(
         *,
         output_comparison_images: bool = False,
         auto_crop_black_borders: bool = False,
+        check_corrupted_frames: bool = False,
+        frame_check_luma_psnr_threshold_db: float = 30.0,
+        frame_check_chroma_psnr_threshold_db: float = 40.0,
 ) -> EncodeSettings:
     return EncodeSettings(
         vspipe_mode='bundle',
@@ -59,6 +63,9 @@ def _settings(
         default_lossless_audio_codec='flac',
         auto_crop_black_borders=auto_crop_black_borders,
         output_comparison_images=output_comparison_images,
+        check_corrupted_frames=check_corrupted_frames,
+        frame_check_luma_psnr_threshold_db=frame_check_luma_psnr_threshold_db,
+        frame_check_chroma_psnr_threshold_db=frame_check_chroma_psnr_threshold_db,
     )
 
 
@@ -89,6 +96,7 @@ class _RowEncodeService(RemuxEpisodeWorkflowsMixin):
         self.failing_outputs = set(failing_outputs)
         self.cancel_outputs = set(cancel_outputs)
         self.encode_calls: list[tuple[str, str]] = []
+        self.encode_keyword_calls: list[dict[str, object]] = []
         self.progress_messages: list[str] = []
 
     def t(self, text: str) -> str:
@@ -100,6 +108,7 @@ class _RowEncodeService(RemuxEpisodeWorkflowsMixin):
 
     def encode_task(self, output_file, _vpy_path, *_args, source_file=None, **_kwargs):
         self.encode_calls.append((source_file, output_file))
+        self.encode_keyword_calls.append(_kwargs)
         if output_file in self.cancel_outputs:
             raise TaskCancelled()
         if output_file in self.failing_outputs:
@@ -251,6 +260,10 @@ class EncodeWorkflowTests(unittest.TestCase):
                 opus_bitrate_kbps=192,
             )
             owner = SimpleNamespace(
+                _app_config=SimpleNamespace(encode=SimpleNamespace(
+                    frame_check_luma_psnr_threshold_db=27.5,
+                    frame_check_chroma_psnr_threshold_db=38.5,
+                )),
                 output_folder_path=SimpleNamespace(text=lambda: str(output_base)),
                 bdmv_folder_path=SimpleNamespace(text=lambda: str(source_folder)),
                 _encode_input_mode='bdmv',
@@ -264,6 +277,7 @@ class EncodeWorkflowTests(unittest.TestCase):
                     isChecked=lambda: True
                 ),
                 output_comparison_checkbox=SimpleNamespace(isChecked=lambda: True),
+                frame_check_checkbox=SimpleNamespace(isChecked=lambda: True),
                 vpy_denoise_strength_spin=SimpleNamespace(value=lambda: 0.7),
                 vpy_dehalo_strength_spin=SimpleNamespace(value=lambda: 0.2),
                 vpy_dering_strength_spin=SimpleNamespace(value=lambda: 0.3),
@@ -318,6 +332,9 @@ class EncodeWorkflowTests(unittest.TestCase):
             self.assertEqual(request.settings.default_lossless_audio_codec, 'opus')
             self.assertTrue(request.settings.auto_crop_black_borders)
             self.assertTrue(request.settings.output_comparison_images)
+            self.assertTrue(request.settings.check_corrupted_frames)
+            self.assertEqual(request.settings.frame_check_luma_psnr_threshold_db, 27.5)
+            self.assertEqual(request.settings.frame_check_chroma_psnr_threshold_db, 38.5)
             self.assertEqual(request.settings.vpy_denoise_strength, 0.7)
             self.assertEqual(request.settings.vpy_dehalo_strength, 0.2)
             self.assertEqual(request.settings.vpy_dering_strength, 0.3)
@@ -403,6 +420,38 @@ class EncodeWorkflowTests(unittest.TestCase):
             with self.assertRaisesRegex(FileExistsError, 'Output file already exists'):
                 validate_encode_request(bdmv_request)
 
+    def test_preflight_rejects_existing_frame_check_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_folder = root / 'source'
+            output_folder = root / 'output'
+            source_folder.mkdir()
+            output_folder.mkdir()
+            source_path = source_folder / 'source.mkv'
+            output_path = output_folder / 'Episode.mkv'
+            vpy_path = root / 'encode.vpy'
+            source_path.write_bytes(b'mkv')
+            vpy_path.write_text('clip.set_output()\n', encoding='utf-8')
+            report_path = Path(frame_check_report_path(str(output_path)))
+            report_path.parent.mkdir()
+            report_path.write_text('{}\n', encoding='utf-8')
+            request = EncodeRequest(
+                input_mode='remux',
+                source_root=str(source_folder),
+                output_folder=str(output_folder),
+                staging_folder='',
+                main_rows=(EncodeRow(
+                    str(source_path),
+                    str(output_path),
+                    str(vpy_path),
+                ),),
+                sp_rows=(),
+                settings=_settings(check_corrupted_frames=True),
+            )
+
+            with self.assertRaisesRegex(FileExistsError, 'Frame check report already exists'):
+                validate_encode_request(request)
+
     def test_preflight_rejects_output_inside_source_and_missing_vpy(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -472,7 +521,10 @@ class EncodeWorkflowTests(unittest.TestCase):
                 staging_folder='',
                 main_rows=(row, second_row),
                 sp_rows=(),
-                settings=_settings(),
+                settings=_settings(
+                    frame_check_luma_psnr_threshold_db=27.5,
+                    frame_check_chroma_psnr_threshold_db=38.5,
+                ),
             )
 
             output_path.write_bytes(b'existing')
@@ -486,6 +538,14 @@ class EncodeWorkflowTests(unittest.TestCase):
             self.assertEqual(
                 service.encode_calls,
                 [(str(second_source_path), str(second_output_path))],
+            )
+            self.assertEqual(
+                service.encode_keyword_calls[0]['frame_check_luma_psnr_threshold_db'],
+                27.5,
+            )
+            self.assertEqual(
+                service.encode_keyword_calls[0]['frame_check_chroma_psnr_threshold_db'],
+                38.5,
             )
             dovi_preflight.assert_called_once_with(
                 [str(second_source_path)],
@@ -1110,6 +1170,21 @@ class EncodeWorkflowTests(unittest.TestCase):
                 Path(path).write_text('{"SceneInfo": [{}]}', encoding='utf-8')
                 return path
 
+            def check_frames(**arguments):
+                self.assertTrue(work_folder.is_dir())
+                self.assertTrue(base_layer.is_file())
+                self.assertEqual(
+                    arguments['vspipe_environment']['BLURAYSUB_VPY_SOURCE'],
+                    os.path.normpath(str(base_layer)),
+                )
+                self.assertEqual(arguments['expected_reference_frames'], 1)
+                return FrameCheckResult(
+                    str(root / 'FrameCheck' / 'output.frame-check.json'),
+                    'suspect',
+                    1,
+                    1,
+                )
+
             with (
                     patch(
                         'src.runtime.services_split.encode_and_audio_tasks.MediaInfoTrackMappingMixin.mkvinfo_dolby_vision_track_id',
@@ -1177,6 +1252,10 @@ class EncodeWorkflowTests(unittest.TestCase):
                     patch(
                         'src.runtime.services_split.encode_and_audio_tasks.mux_with_audio_conversion'
                     ) as final_mux,
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.run_full_frame_check',
+                        side_effect=check_frames,
+                    ) as frame_check,
             ):
                 service.encode_task(
                     str(output_path),
@@ -1193,6 +1272,10 @@ class EncodeWorkflowTests(unittest.TestCase):
                     track_language_overrides=(),
                     source_file=str(source_path),
                     auto_crop_black_borders=True,
+                    check_corrupted_frames=True,
+                    frame_check_luma_psnr_threshold_db=27.5,
+                    frame_check_chroma_psnr_threshold_db=38.5,
+                    cancel_event=threading.Event(),
                 )
 
             prepare_dolby_vision.assert_called_once_with(
@@ -1211,11 +1294,24 @@ class EncodeWorkflowTests(unittest.TestCase):
             self.assertEqual(dolby_vision_verify.call_count, 3)
             dolby_vision_inject.assert_called_once()
             final_mux.assert_called_once()
+            frame_check.assert_called_once()
+            self.assertEqual(
+                frame_check.call_args.kwargs['luma_psnr_threshold_db'],
+                27.5,
+            )
+            self.assertEqual(
+                frame_check.call_args.kwargs['chroma_psnr_threshold_db'],
+                38.5,
+            )
             self.assertFalse(work_folder.exists())
             self.assertEqual(list(root.glob('*.hdr10plus.json')), [])
             self.assertEqual(len(list(root.glob('output.hdr-metadata-error*.txt'))), 1)
             self.assertTrue(any(
                 'Final HDR metadata verification failed' in message
+                for message in service.encode_warnings
+            ))
+            self.assertTrue(any(
+                'Frame check found potential corrupted frames' in message
                 for message in service.encode_warnings
             ))
             self.assertTrue(any(

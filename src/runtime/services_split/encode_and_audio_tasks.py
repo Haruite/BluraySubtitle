@@ -17,7 +17,7 @@ from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, ThreadPoolE
 from typing import Optional
 
 from ...core.settings import PLUGIN_PATH, VSPIPE_PATH
-from ...core import FFMPEG_PATH
+from ...core import FFMPEG_PATH, FFPROBE_PATH
 from .service_base import BluraySubtitleServiceBase
 from .media_info_and_track_mapping import MediaInfoTrackMappingMixin
 from src.runtime.audio_conversion import AudioEncodingSettings, mux_with_audio_conversion
@@ -45,6 +45,7 @@ from src.runtime.encode_source import (
     write_hdr_metadata_error_report,
 )
 from src.runtime.encode_results import EncodeTaskFailure
+from src.runtime.frame_check import run_full_frame_check
 from src.runtime.video_crop import (
     VideoCropPlan,
     detect_black_borders,
@@ -1167,6 +1168,10 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             vpy_dering_strength: float = 0.0,
             vpy_deband_strength: float = 0.5,
             vpy_antialiasing_strength: float = 0.5,
+            check_corrupted_frames: bool = False,
+            frame_check_luma_psnr_threshold_db: float = 30.0,
+            frame_check_chroma_psnr_threshold_db: float = 40.0,
+            cancel_event: Optional[threading.Event] = None,
     ) -> None:
         vpy_path = os.path.normpath(os.path.abspath(str(vpy_path or '').strip()))
         if not os.path.isfile(vpy_path):
@@ -1735,6 +1740,56 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                         str(error) for error in final_verification_errors
                     )),
                 )
+            if check_corrupted_frames:
+                self._progress(text=translate_text(
+                    'Checking encoded frames: {name}'
+                ).format(name=os.path.basename(output_file)))
+                try:
+                    frame_check = run_full_frame_check(
+                        vspipe_executable=str(vspipe_exe),
+                        vpy_path=vpy_path,
+                        vspipe_environment=vspipe_env,
+                        ffmpeg_executable=str(FFMPEG_PATH or 'ffmpeg'),
+                        ffprobe_executable=str(FFPROBE_PATH or 'ffprobe'),
+                        encoded_path=output_file,
+                        expected_reference_frames=expected_dynamic_metadata_frames,
+                        luma_psnr_threshold_db=(
+                            frame_check_luma_psnr_threshold_db
+                        ),
+                        chroma_psnr_threshold_db=(
+                            frame_check_chroma_psnr_threshold_db
+                        ),
+                        cancel_event=cancel_event,
+                    )
+                except TaskCancelled:
+                    raise
+                except Exception as error:
+                    message = translate_text(
+                        'Frame check could not be completed for {name}: {error}'
+                    ).format(
+                        name=os.path.basename(output_file),
+                        error=error,
+                    )
+                    self.encode_warnings.append(message)
+                    self._progress(text=message)
+                else:
+                    if frame_check.status == 'pass':
+                        self._progress(text=translate_text(
+                            'Frame check passed: {path}'
+                        ).format(path=frame_check.report_path))
+                    else:
+                        message_template = (
+                            'Frame check did not complete for {name}. Report: {report}'
+                            if frame_check.status == 'error'
+                            else 'Frame check found potential corrupted frames in {name}. '
+                                 'Report: {report}'
+                        )
+                        message = translate_text(message_template).format(
+                            name=os.path.basename(output_file),
+                            report=frame_check.report_path,
+                        )
+                        self.encode_warnings.append(message)
+                        self._progress(text=message)
             cleanup_lwi_for_source(src_mkv)
         except TaskCancelled:
             retained_artifacts = []

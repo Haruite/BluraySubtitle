@@ -74,6 +74,16 @@ The staging remux preserves source audio. Audio conversion and final audio clean
 
 `vspipe` supplies Y4M frames to the encoder through a pipe, so a normal encode does not need a full uncompressed intermediate video file. The encoder's elementary-stream result is temporary; the user-facing result is the final MKV.
 
+## Comparison images and full-frame corruption checks
+
+**Output comparison images** writes one source/encoded PNG pair under `<actual output folder>/Compare`. Both images use the same zero-based video frame number. BluraySubtitle first determines the exact frame counts shared by the VPy reference and completed video, then decodes both sides to the selected frame; timestamp-only matching is not used. On the tested machine, this stage took about 36 seconds for a 52-second 1080p sample and about 80 seconds for a 34-second cropped 4K Dolby Vision sample, approximately 0.7 and 2.4 times the respective video durations. Treat these measurements as scale examples rather than promises: source decoding, VPy filters, resolution, storage, and runtime versions can change the ratio.
+
+**Check corrupted frames** is a separate full check after the final MKV exists. It reruns the exact VPy used for encoding, decodes the completed video, compares every corresponding frame with FFmpeg PSNR, verifies the frame counts, and records decoder errors. Reports are written to `<actual output folder>/FrameCheck/<name>.frame-check.json`; statuses are `pass`, `suspect` for low-PSNR frames, `fail` for count mismatches or decode errors, and `error` when the checker itself cannot complete. A non-pass result retains the completed MKV and adds a row warning. This check does not replace visual review and cannot classify every possible content defect.
+
+The enable checkbox remains on the Encode page. Its luma and chroma PSNR thresholds are shown under **Settings > Advanced > Default encode settings**, not on the Encode page. They are stored as `encode.frame_check_luma_psnr_threshold_db` and `encode.frame_check_chroma_psnr_threshold_db`, accept `0.0` through `100.0`, and default to `30.0` and `40.0`, respectively; U and V share the chroma value. A frame is suspicious when any applicable plane is below its threshold. Raising either value increases that plane's sensitivity and false positives; lowering it ignores progressively larger differences.
+
+The full check is usually slower than comparison-image output because it renders every VPy frame. The same test run took about 127 seconds for the 52-second 1080p sample and 248 seconds for the 34-second cropped 4K sample, approximately 2.4 and 7.3 times their video durations. Heavy filters and full-length 4K sources can therefore add minutes or substantially longer.
+
 ## Rate control and the meaning of presets
 
 ### CRF

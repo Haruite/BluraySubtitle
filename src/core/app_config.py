@@ -81,6 +81,9 @@ class EncodePreferences:
     use_getnative: bool = True
     auto_crop_black_borders: bool = False
     output_comparison_images: bool = True
+    check_corrupted_frames: bool = False
+    frame_check_luma_psnr_threshold_db: float = 30.0
+    frame_check_chroma_psnr_threshold_db: float = 40.0
     vpy_denoise_strength: float = 0.6
     vpy_dehalo_strength: float = 0.0
     vpy_dering_strength: float = 0.0
@@ -402,6 +405,25 @@ def app_config_from_mapping(raw: dict[str, Any]) -> AppConfig:
                 encode,
                 "output_comparison_images",
                 True,
+            ),
+            check_corrupted_frames=_boolean_value(
+                encode,
+                "check_corrupted_frames",
+                False,
+            ),
+            frame_check_luma_psnr_threshold_db=_number_value(
+                encode,
+                "frame_check_luma_psnr_threshold_db",
+                30.0,
+                0.0,
+                100.0,
+            ),
+            frame_check_chroma_psnr_threshold_db=_number_value(
+                encode,
+                "frame_check_chroma_psnr_threshold_db",
+                40.0,
+                0.0,
+                100.0,
             ),
             vpy_denoise_strength=_number_value(
                 encode,

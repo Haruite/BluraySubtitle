@@ -1001,6 +1001,16 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     getattr(self, 'output_comparison_checkbox', None)
                     and self.output_comparison_checkbox.isChecked()
                 ),
+                check_corrupted_frames=bool(
+                    getattr(self, 'frame_check_checkbox', None)
+                    and self.frame_check_checkbox.isChecked()
+                ),
+                frame_check_luma_psnr_threshold_db=float(
+                    self._app_config.encode.frame_check_luma_psnr_threshold_db
+                ),
+                frame_check_chroma_psnr_threshold_db=float(
+                    self._app_config.encode.frame_check_chroma_psnr_threshold_db
+                ),
                 vpy_denoise_strength=float(self.vpy_denoise_strength_spin.value()),
                 vpy_dehalo_strength=float(self.vpy_dehalo_strength_spin.value()),
                 vpy_dering_strength=float(self.vpy_dering_strength_spin.value()),
@@ -1679,6 +1689,16 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         )
         self.output_comparison_checkbox.setChecked(True)
         options_layout.addWidget(self.output_comparison_checkbox)
+        self.frame_check_checkbox = QCheckBox(
+            self.t('Check corrupted frames'),
+            self.encode_options_row,
+        )
+        self.frame_check_checkbox.setChecked(False)
+        self.frame_check_checkbox.setToolTip(self.t(
+            'After encoding, rerun the VPy and check the output frame by frame; '
+            'this significantly increases processing time.'
+        ))
+        options_layout.addWidget(self.frame_check_checkbox)
         options_layout.addStretch(1)
         self.use_bluray_compat_params_checkbox = QCheckBox(
             self.t('Use Blu-ray compatible params'),

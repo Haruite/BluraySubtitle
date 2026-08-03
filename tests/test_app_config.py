@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication, QDialog, QLabel
+from PyQt6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QLabel
 
 import src.core.settings as core_settings
 from src.core.app_config import (
@@ -67,6 +67,9 @@ class AppConfigTests(unittest.TestCase):
         )
         config = app_config_from_mapping(raw)
         self.assertEqual(config, default_app_config())
+        self.assertFalse(config.encode.check_corrupted_frames)
+        self.assertEqual(config.encode.frame_check_luma_psnr_threshold_db, 30.0)
+        self.assertEqual(config.encode.frame_check_chroma_psnr_threshold_db, 40.0)
         self.assertEqual(config.encode.vpy_deband_strength, 0.5)
         self.assertEqual(config.encode.vpy_antialiasing_strength, 0.5)
 
@@ -144,12 +147,19 @@ class AppConfigTests(unittest.TestCase):
                 "schema_version": 1,
                 "encode": {"output_comparison_images": "yes"},
             })
+        with self.assertRaisesRegex(ValueError, "check_corrupted_frames"):
+            app_config_from_mapping({
+                "schema_version": 1,
+                "encode": {"check_corrupted_frames": "yes"},
+            })
         with self.assertRaisesRegex(ValueError, "auto_crop_black_borders"):
             app_config_from_mapping({
                 "schema_version": 1,
                 "encode": {"auto_crop_black_borders": "yes"},
             })
         for name, value in (
+                ("frame_check_luma_psnr_threshold_db", 100.1),
+                ("frame_check_chroma_psnr_threshold_db", -0.1),
                 ("vpy_denoise_strength", 3.1),
                 ("vpy_dehalo_strength", -0.1),
                 ("vpy_dering_strength", "medium"),
@@ -272,7 +282,14 @@ class SettingsGuiTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def test_dialog_edits_general_path_and_advanced_defaults(self) -> None:
-        config = default_app_config()
+        config = replace(
+            default_app_config(),
+            encode=replace(
+                default_app_config().encode,
+                frame_check_luma_psnr_threshold_db=27.5,
+                frame_check_chroma_psnr_threshold_db=38.5,
+            ),
+        )
         dialog = SettingsDialog(config, lambda text: text)
         self.assertEqual(
             dialog.language_combo.itemText(dialog.language_combo.findData("zh")),
@@ -318,6 +335,11 @@ class SettingsGuiTests(unittest.TestCase):
         dialog.default_getnative_checkbox.setChecked(False)
         dialog.default_auto_crop_checkbox.setChecked(True)
         dialog.default_output_comparison_checkbox.setChecked(False)
+        dialog.default_frame_check_checkbox.setChecked(True)
+        self.assertEqual(dialog.frame_check_luma_psnr_threshold_spin.value(), 27.5)
+        self.assertEqual(dialog.frame_check_chroma_psnr_threshold_spin.value(), 38.5)
+        dialog.frame_check_luma_psnr_threshold_spin.setValue(29.5)
+        dialog.frame_check_chroma_psnr_threshold_spin.setValue(41.5)
         dialog.default_vpy_denoise_strength_spin.setValue(0.8)
         dialog.default_vpy_dehalo_strength_spin.setValue(0.3)
         dialog.default_vpy_dering_strength_spin.setValue(0.4)
@@ -368,6 +390,9 @@ class SettingsGuiTests(unittest.TestCase):
                 use_getnative=False,
                 auto_crop_black_borders=True,
                 output_comparison_images=False,
+                check_corrupted_frames=True,
+                frame_check_luma_psnr_threshold_db=29.5,
+                frame_check_chroma_psnr_threshold_db=41.5,
                 vpy_denoise_strength=0.8,
                 vpy_dehalo_strength=0.3,
                 vpy_dering_strength=0.4,
@@ -382,7 +407,14 @@ class SettingsGuiTests(unittest.TestCase):
             labels,
         )
         self.assertIn("FDK-AAC 128–256 kbps; Opus 64–128 kbps", labels)
+        self.assertIn("Frame check luma PSNR threshold", labels)
+        self.assertIn("Frame check chroma PSNR threshold", labels)
         self.assertIn(f"Current version: {APP_VERSION}", labels)
+        dialog.buttons.button(
+            QDialogButtonBox.StandardButton.RestoreDefaults
+        ).click()
+        self.assertEqual(dialog.frame_check_luma_psnr_threshold_spin.value(), 30.0)
+        self.assertEqual(dialog.frame_check_chroma_psnr_threshold_spin.value(), 40.0)
         dialog.close()
 
     def test_custom_encode_preset_editor_filters_and_protects_built_ins(self) -> None:
@@ -679,6 +711,7 @@ class SettingsGuiTests(unittest.TestCase):
                 use_getnative=False,
                 auto_crop_black_borders=True,
                 output_comparison_images=False,
+                check_corrupted_frames=True,
                 vpy_denoise_strength=0.8,
                 vpy_dehalo_strength=0.3,
                 vpy_dering_strength=0.4,
@@ -725,6 +758,14 @@ class SettingsGuiTests(unittest.TestCase):
             self.assertFalse(window.use_getnative_checkbox.isChecked())
             self.assertTrue(window.auto_crop_black_borders_checkbox.isChecked())
             self.assertFalse(window.output_comparison_checkbox.isChecked())
+            self.assertTrue(window.frame_check_checkbox.isChecked())
+            self.assertFalse(hasattr(window, "frame_check_luma_psnr_threshold_spin"))
+            self.assertFalse(hasattr(window, "frame_check_chroma_psnr_threshold_spin"))
+            options_layout = window.encode_options_row.layout()
+            self.assertLess(
+                options_layout.indexOf(window.output_comparison_checkbox),
+                options_layout.indexOf(window.frame_check_checkbox),
+            )
             self.assertEqual(window.vpy_denoise_strength_spin.value(), 0.8)
             self.assertEqual(window.vpy_dehalo_strength_spin.value(), 0.3)
             self.assertEqual(window.vpy_dering_strength_spin.value(), 0.4)
