@@ -112,6 +112,7 @@ Keep this section limited to confirmed product behavior that is easy to misunder
 - The generated default VPy supports progressive sources only. Interlaced, telecined, or mixed-cadence material requires an explicitly suitable custom script.
 - Remux-source Encode is resumable. Existing planned main, SP, external-subtitle, and companion outputs are treated as completed and skipped without overwrite; remaining rows continue. Duplicate paths within the current request remain errors.
 - Blu-ray DIY remains visible and its code is retained. Its incomplete execution must not be presented as complete.
+- Blu-ray Remux always soft-muxes each selected subtitle file into the corresponding main MKV. It does not burn subtitles into the video or write external subtitle outputs.
 - Blu-ray Remux exposes a default-enabled option that converts selected lossless audio to FLAC. Disabled preserves source audio; Remux must not use AAC or Opus for this conversion.
 - A successful DTS-family-to-FLAC conversion replaces the source only when the FLAC is no larger than the extracted DTS; otherwise the FLAC is discarded and the original DTS is retained. Successful PCM and TrueHD/MLP FLAC conversions are retained regardless of size.
 - Final Remux and Encode outputs may automatically remove selected silent audio and exact decoded duplicates. Different known languages are never deduplicated, source order determines which duplicate is retained, and every removal is reported. This is an intentional exception to retaining every selected track.

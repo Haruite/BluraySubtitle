@@ -373,6 +373,7 @@ def mux_with_audio_conversion(
         selected_subtitle_tracks: Optional[tuple[str, ...]],
         audio_codec_choices: tuple[str, ...],
         convert_all_lossless_to_flac: bool = False,
+        clean_audio_tracks: bool = True,
         track_language_overrides: tuple[tuple[str, str], ...] = (),
         encoded_video_file: str = '',
         subtitle_file: str = '',
@@ -380,7 +381,7 @@ def mux_with_audio_conversion(
         audio_encoding: AudioEncodingSettings = AudioEncodingSettings(),
         preserve_failure_artifacts: bool = False,
 ) -> None:
-    """Clean selected audio, convert requested lossless tracks, and mux atomically."""
+    """Optionally clean audio, convert requested lossless tracks, and mux atomically."""
     source_path = os.path.abspath(os.path.normpath(source_file))
     output_path = os.path.abspath(os.path.normpath(output_file))
     if not os.path.isfile(source_path):
@@ -451,7 +452,8 @@ def mux_with_audio_conversion(
             else shutil.which('flac') or shutil.which('flac.exe') or ''
         )
 
-        if selected_audio and not ffmpeg:
+        process_audio = clean_audio_tracks or bool(codec_by_track)
+        if process_audio and selected_audio and not ffmpeg:
             raise FileNotFoundError(translate_text('ffmpeg executable does not exist'))
         audio_tracks = [track for track in tracks if track.get('type') == 'audio']
         unsupported_codec = next(
@@ -471,20 +473,26 @@ def mux_with_audio_conversion(
         # The source MKV can be hundreds of gigabytes. Extract selected audio in
         # one mkvextract invocation, then reuse the elementary streams for both
         # cleanup analysis and conversion instead of reopening the MKV per track.
-        extracted_audio_by_track = _extract_selected_audio_tracks(
-            mkvextract,
-            source_path,
-            work_folder,
-            audio_tracks,
-            selected_audio,
+        extracted_audio_by_track = (
+            _extract_selected_audio_tracks(
+                mkvextract,
+                source_path,
+                work_folder,
+                audio_tracks,
+                selected_audio,
+            )
+            if process_audio else {}
         )
-        kept_audio = _selected_audio_after_cleanup(
-            ffmpeg,
-            source_path,
-            audio_tracks,
-            selected_audio,
-            language_by_track,
-            extracted_audio_by_track,
+        kept_audio = (
+            _selected_audio_after_cleanup(
+                ffmpeg,
+                source_path,
+                audio_tracks,
+                selected_audio,
+                language_by_track,
+                extracted_audio_by_track,
+            )
+            if clean_audio_tracks else list(selected_audio)
         )
         for track in audio_tracks:
             track_id = int(track['id'])
@@ -693,6 +701,7 @@ def mux_with_audio_conversion(
                 and not replacement_by_track
                 and len(kept_audio) == len(selected_audio)
                 and not language_by_track
+                and not subtitle_file
         ):
             return
         mkvmerge = str(core_settings.MKV_MERGE_PATH or '').strip() or shutil.which('mkvmerge') or ''

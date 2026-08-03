@@ -169,11 +169,14 @@ class RemuxWorkflowTests(unittest.TestCase):
             root = Path(temporary_directory)
             main_output = root / 'Episode.mkv'
             sp_output = root / 'SP.mka'
+            subtitle = root / 'Episode.ass'
+            subtitle.write_text('subtitle', encoding='utf-8')
             request = replace(
                 self._request(root, {0: {}}, [], ['Episode.mkv']),
+                subtitle_files=(str(subtitle),),
+                episode_subtitle_languages=('jpn',),
                 convert_lossless_audio_to_flac=True,
             )
-            conversion_calls = []
             owner = SimpleNamespace(
                 _prepare_remux_main_jobs=lambda _request: (str(root), []),
                 _prepare_sp_jobs=lambda *_args: [],
@@ -197,11 +200,17 @@ class RemuxWorkflowTests(unittest.TestCase):
             ) as validate_tools, patch.object(
                     remux_service_module,
                     'mux_with_audio_conversion',
-                    side_effect=lambda source, *_args, **_kwargs: conversion_calls.append(source),
-            ):
+            ) as convert_audio:
                 RemuxEpisodeWorkflowsMixin.episodes_remux(owner, request)
 
-            self.assertEqual(conversion_calls, [str(main_output), str(sp_output)])
+            self.assertEqual(
+                [call.args[0] for call in convert_audio.call_args_list],
+                [str(main_output), str(sp_output)],
+            )
+            self.assertEqual(convert_audio.call_args_list[0].kwargs['subtitle_file'], str(subtitle))
+            self.assertEqual(convert_audio.call_args_list[0].kwargs['subtitle_language'], 'jpn')
+            self.assertEqual(convert_audio.call_args_list[1].kwargs['subtitle_file'], '')
+            self.assertEqual(convert_audio.call_args_list[1].kwargs['subtitle_language'], '')
             self.assertEqual(validate_tools.call_count, 2)
             for call in validate_tools.call_args_list:
                 self.assertTrue(call.kwargs['convert_all_lossless_to_flac'])
@@ -249,6 +258,9 @@ class RemuxWorkflowTests(unittest.TestCase):
             selected_subtitle_tracks=None,
             audio_codec_choices=(),
             convert_all_lossless_to_flac=False,
+            clean_audio_tracks=True,
+            subtitle_file='',
+            subtitle_language='',
             audio_encoding=request.audio_encoding,
         )
         owner.completion.assert_called_once_with()
@@ -529,6 +541,39 @@ class RemuxWorkflowTests(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ValueError, 'End chapter must be greater'):
+                RemuxEpisodeWorkflowsMixin._prepare_remux_main_jobs(
+                    self._planning_owner(root), request
+                )
+
+            self.assertFalse((root / 'Output' / 'Disc').exists())
+
+    def test_missing_selected_subtitle_fails_during_planning(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / 'Output').mkdir()
+            playlist_directory = root / 'Disc' / 'BDMV' / 'PLAYLIST'
+            playlist_directory.mkdir(parents=True)
+            playlist = playlist_directory / '00001.mpls'
+            playlist.write_bytes(b'mpls')
+            configuration = {
+                0: {
+                    'folder': str(root / 'Disc'),
+                    'selected_mpls': str(playlist.with_suffix('')),
+                    'bdmv_index': 1,
+                }
+            }
+            missing_subtitle = root / 'missing.ass'
+            request = replace(
+                self._request(
+                    root,
+                    configuration,
+                    [(str(root / 'Disc'), str(playlist.with_suffix('')))],
+                    ['Episode.mkv'],
+                ),
+                subtitle_files=(str(missing_subtitle),),
+            )
+
+            with self.assertRaisesRegex(FileNotFoundError, 'Subtitle file does not exist'):
                 RemuxEpisodeWorkflowsMixin._prepare_remux_main_jobs(
                     self._planning_owner(root), request
                 )

@@ -251,6 +251,62 @@ class AudioConversionTests(unittest.TestCase):
             self.assertEqual(mux_command[mux_command.index('-a') + 1], '1')
             self.assertIn('0:0,0:1,1:0', mux_command)
 
+    def test_in_place_remux_adds_selected_subtitle_when_audio_is_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source = root / 'source.mkv'
+            subtitle = root / 'episode.ass'
+            source.write_bytes(b'source')
+            subtitle.write_text('subtitle', encoding='utf-8')
+            source_tracks = [
+                _track(0, 'video', 'V_MPEGH/ISO/HEVC'),
+                _track(1, 'audio', 'A_AC3', codec='AC-3', language='eng'),
+            ]
+            output_tracks = [
+                _track(0, 'video', 'V_MPEGH/ISO/HEVC'),
+                _track(1, 'audio', 'A_AC3', codec='AC-3', language='eng'),
+                _track(2, 'subtitles', 'S_TEXT/ASS', language='jpn'),
+            ]
+            commands: list[list[str]] = []
+
+            def run_command(command, **_kwargs):
+                command = list(command)
+                commands.append(command)
+                if 'tracks' in command:
+                    _write_extracted_tracks(command)
+                else:
+                    Path(command[command.index('-o') + 1]).write_bytes(b'muxed')
+                return SimpleNamespace(returncode=0)
+
+            with (
+                    patch('src.runtime.audio_conversion._identify_tracks', side_effect=[source_tracks, output_tracks]),
+                    patch('src.runtime.audio_conversion.find_mkvtoolnix'),
+                    patch('src.runtime.audio_conversion.core_settings.MKV_EXTRACT_PATH', 'mkvextract'),
+                    patch('src.runtime.audio_conversion.core_settings.MKV_MERGE_PATH', 'mkvmerge'),
+                    patch('src.runtime.audio_conversion.core_settings.FFMPEG_PATH', 'ffmpeg'),
+                    patch('src.runtime.audio_conversion.run_command', side_effect=run_command),
+            ):
+                mux_with_audio_conversion(
+                    str(source),
+                    str(source),
+                    selected_audio_tracks=None,
+                    selected_subtitle_tracks=None,
+                    audio_codec_choices=(),
+                    clean_audio_tracks=False,
+                    subtitle_file=str(subtitle),
+                    subtitle_language='jpn',
+                )
+
+            self.assertEqual(source.read_bytes(), b'muxed')
+            self.assertEqual([command[0] for command in commands], ['mkvmerge'])
+            mux_command = commands[-1]
+            self.assertIn(str(subtitle), mux_command)
+            self.assertIn('0:jpn', mux_command)
+            self.assertEqual(
+                mux_command[mux_command.index('--track-order') + 1],
+                '0:0,0:1,1:0',
+            )
+
     def test_remux_dts_uses_flac_only_when_the_converted_track_is_not_larger(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

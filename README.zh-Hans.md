@@ -81,6 +81,7 @@ BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 
 - 最终分集名称严格使用界面中显示的名称，无效文件名直接报错。
 - 主命令及 README 记录的 fallback 无法生成全部计划输出时，Remux 会报错停止，不会使用输出目录中的无关文件代替。
 - Remux 保持已选择的有损音轨不变。“将无损音轨转换为 FLAC”默认启用（可在“高级”中配置启动状态）。所有 FLAC 输出都会优先使用支持多线程的独立 `flac` 编码器，并自动使用检测到的逻辑 CPU 线程数；编码器不可用或失败时才回退到 `ffmpeg`。两种 FLAC 编码默认级别都是 8，可在“高级”设置中分别修改。DTS 系列音轨仅在 FLAC 不大于提取出的 DTS 时才替换源音轨；如果 FLAC 更大，则删除 FLAC 并保留原 DTS。PCM 和 TrueHD/MLP 成功转换出的 FLAC 即使更大也仍然保留。TrueHD Atmos 只有在 `truehdd` 成功解码 presentation 2 后才会转换。MKVToolNix 不会修复损坏的 TrueHD 帧，部分 DIY 原盘即使 MKV 时长看起来正常，仍可能在 `truehdd` 中产生大量错误，并使解码后的 FLAC 比视频短；删除源音轨前应比较解码音频和视频时长。详细原理见 [媒体处理方案与工具选型](docs/development/media-pipeline-and-tool-selection.zh-Hans.md)。
+- 原盘 Remux 中选择的字幕始终作为软字幕轨内封到对应的正片 MKV，不会内嵌到画面，也不会输出为外挂字幕文件。
 - 启用“混流 Dolby Vision”时，Remux 会将兼容的基础层和增强层合并为 Profile 8.1；关闭时不包含增强层。
 - 混流完成后，程序会把“编辑轨道”保存的语言应用到实际包含的视频、音频和字幕轨道并验证结果；映射、工具或验证失败时会中止当前任务并删除该任务新建的主输出。
 

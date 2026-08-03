@@ -86,6 +86,8 @@ Remux keeps selected lossy audio unchanged. Its **Convert lossless audio to FLAC
 A DTS-family track is replaced only when its FLAC output is no larger than the extracted DTS; otherwise the original DTS track is retained. Successful PCM and TrueHD/MLP conversions remain FLAC even when the FLAC is larger. TrueHD Atmos is converted only after `truehdd` successfully decodes presentation 2. MKVToolNix does not repair damaged TrueHD frames. Affected DIY discs may produce many `truehdd` errors and a decoded FLAC track that is shorter than the video even when the MKV duration looks plausible; compare decoded audio/video durations before discarding the source track.
 See [Media Pipeline Design and Tool Selection](docs/development/media-pipeline-and-tool-selection.md) for details.
 
+Subtitles selected for Blu-ray Remux are always soft-muxed into the corresponding main MKV. Remux does not burn subtitles into the video or write them as external subtitle files.
+
 With **Mux Dolby Vision** enabled, Remux combines compatible base and enhancement layers as profile 8.1; when it is disabled, the enhancement layer is not included.
 
 Selected audio is also checked automatically even when **Convert lossless audio to FLAC** is disabled. A track whose decoded maximum volume is below -60 dB is removed as silent. Decoded fingerprints are compared only for tracks in the same source codec family with the same channel count; tracks with different known languages are kept, and an exact duplicate keeps the earliest track in source order.

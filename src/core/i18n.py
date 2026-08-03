@@ -68,6 +68,7 @@ I18N_ZH_TO_EN = {
     'FLAC 音频转换选项不可用': 'FLAC audio conversion option is unavailable',
     '正在将无损音轨转换为 FLAC：{name}': 'Converting lossless audio to FLAC: {name}',
     '正在检查静音和重复音轨：{name}': 'Checking silent and duplicate audio: {name}',
+    '正在内封字幕：{name}': 'Muxing subtitle: {name}',
     'MPLS Dolby Vision 轨道对 BL={base_pid} EL={enhancement_pid}；启用混流：{enabled}': 'MPLS Dolby Vision pair BL={base_pid} EL={enhancement_pid}; mux enabled: {enabled}',
     '不支持的无损音频编码：{codec}': 'Unsupported lossless audio codec: {codec}',
     'Remux {path} 已完成：BDMV 大小 {bd_size} GiB，Remux 大小 {remux_size} GiB，减少 {reduced_size:.3f} GiB。': 'Remux {path} completed: BDMV size {bd_size} GiB, remux size {remux_size} GiB, reduced size {reduced_size:.3f} GiB.',
