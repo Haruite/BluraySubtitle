@@ -21,41 +21,12 @@ from src.runtime.services_split import remux_and_episode_workflows as remux_serv
 from src.runtime.services_split import media_info_and_track_mapping as track_mapping_module
 from src.runtime.services_split.media_info_and_track_mapping import MediaInfoTrackMappingMixin
 from src.runtime.services_split.remux_and_episode_workflows import RemuxEpisodeWorkflowsMixin
+from tests._gui_worker_fakes import FakeThread as _FakeThread
+from tests._gui_worker_fakes import RequestWorkerCapture
 
 
-class _Signal:
-    def __init__(self) -> None:
-        self.callbacks = []
-
-    def connect(self, callback) -> None:
-        self.callbacks.append(callback)
-
-
-class _FakeThread:
-    def __init__(self, parent) -> None:
-        self.started = _Signal()
-        self.was_started = False
-
-    def start(self) -> None:
-        self.was_started = True
-
-
-class _FakeWorker:
-    last_request = None
-
-    def __init__(self, request, cancel_event) -> None:
-        type(self).last_request = request
-        self.progress = _Signal()
-        self.label = _Signal()
-        self.finished = _Signal()
-        self.canceled = _Signal()
-        self.failed = _Signal()
-
-    def moveToThread(self, thread) -> None:
-        self.thread = thread
-
-    def run(self) -> None:
-        pass
+class _FakeWorker(RequestWorkerCapture):
+    pass
 
 
 class _FakeChapter:

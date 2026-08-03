@@ -39,8 +39,7 @@ Phase 1 的详细分析仍保存在 [第一阶段重构契约与配置矩阵](ph
 
 ## Phase 1——契约与安全基线
 
-日期：2026-07-20
-提交：`d0262d5`（`chore: establish phase 1 refactoring baseline`）
+日期：2026-07-20 提交：`d0262d5`（`chore: establish phase 1 refactoring baseline`）
 
 ### 范围
 
@@ -83,8 +82,7 @@ Phase 1 的详细分析仍保存在 [第一阶段重构契约与配置矩阵](ph
 
 ## Phase 2——显式 GUI 与运行时配置
 
-日期：2026-07-20
-提交：`ceb2927`（`refactor: unify GUI and runtime task configuration`）
+日期：2026-07-20 提交：`ceb2927`（`refactor: unify GUI and runtime task configuration`）
 
 ### 范围
 
@@ -126,8 +124,7 @@ Phase 1 的详细分析仍保存在 [第一阶段重构契约与配置矩阵](ph
 
 ## Phase 3.1——合并字幕工作流
 
-日期：2026-07-20
-提交：`7def4df`（`refactor: unify subtitle merge workflow`）
+日期：2026-07-20 提交：`7def4df`（`refactor: unify subtitle merge workflow`）
 
 ### 范围
 
@@ -167,8 +164,7 @@ Phase 1 的详细分析仍保存在 [第一阶段重构契约与配置矩阵](ph
 
 ## Phase 3.2——添加章节工作流
 
-日期：2026-07-20
-提交：`107cea1`（`refactor: unify add chapters workflow`）
+日期：2026-07-20 提交：`107cea1`（`refactor: unify add chapters workflow`）
 
 ### 范围
 
@@ -238,8 +234,7 @@ Remux/Encode 内部仍在使用的旧章节入口暂时保留，等待对应工�
 
 ## Phase 3.3——原盘 Remux 工作流
 
-日期：2026-07-22
-提交：`b89f995`（`refactor(remux): rebuild main playlist workflow`）
+日期：2026-07-22 提交：`b89f995`（`refactor(remux): rebuild main playlist workflow`）
 
 ### 范围
 
@@ -293,8 +288,7 @@ Remux/Encode 内部仍在使用的旧章节入口暂时保留，等待对应工�
 
 ## Phase 3.4——原盘 Encode 主流程
 
-日期：2026-07-22
-提交：`d4adee2`（`refactor(encode): unify Blu-ray and Remux encode workflows`）
+日期：2026-07-22 提交：`d4adee2`（`refactor(encode): unify Blu-ray and Remux encode workflows`）
 
 ### 范围
 
@@ -350,8 +344,7 @@ Remux/Encode 内部仍在使用的旧章节入口暂时保留，等待对应工�
 
 ## Phase 3.5——SP、轨道对齐与缺轨修复
 
-日期：2026-07-24
-提交：`51fbbea`（`refactor(sp): rebuild SP and track-alignment workflow`）
+日期：2026-07-24 提交：`51fbbea`（`refactor(sp): rebuild SP and track-alignment workflow`）
 
 ### 范围
 
@@ -400,8 +393,7 @@ Remux/Encode 内部仍在使用的旧章节入口暂时保留，等待对应工�
 
 ## Phase 3.6——音频转换和 Dolby Vision
 
-日期：2026-07-24
-提交：`3f74ca0`（`refactor: simplify audio conversion and Dolby Vision handling`）
+日期：2026-07-24 提交：`3f74ca0`（`refactor: simplify audio conversion and Dolby Vision handling`）
 
 ### 范围
 
@@ -451,8 +443,7 @@ Remux/Encode 内部仍在使用的旧章节入口暂时保留，等待对应工�
 在项目具备经过验证的兼容编码器和封装流程前，AV1 Dolby Vision Profile 10 制作继续推迟。“编辑轨道”中的视频转换以及尚未完成的 Blu-ray DIY 压制流程也不在本阶段范围内。
 ## Phase 4——公共逻辑与执行边界
 
-日期：2026-07-24 至 2026-07-25
-提交：`c50f4e9`（`refactor: consolidate shared logic and execution boundaries`）
+日期：2026-07-24 至 2026-07-25 提交：`c50f4e9`（`refactor: consolidate shared logic and execution boundaries`）
 
 ### 范围
 
@@ -510,8 +501,7 @@ Remux/Encode 内部仍在使用的旧章节入口暂时保留，等待对应工�
 
 ## 第五阶段——Base 契约、i18n、命名与算法注释
 
-日期：2026-07-25
-提交：`b26803b`（`refactor: complete phase 5 contracts and workflow cleanup`）
+日期：2026-07-25 提交：`b26803b`（`refactor: complete phase 5 contracts and workflow cleanup`）
 
 ### 范围
 
@@ -573,8 +563,7 @@ Blu-ray DIY 压制及“编辑轨道”中的通用视频转换仍不在本阶�
 
 ## 第六阶段——传输流与字幕解析器
 
-日期：2026-07-25
-提交：`ef9ea71`（`refactor: complete phase 6 transport and subtitle parsers`）
+日期：2026-07-25 提交：`ef9ea71`（`refactor: complete phase 6 transport and subtitle parsers`）
 
 ### 范围
 
@@ -629,8 +618,7 @@ Blu-ray DIY 压制及“编辑轨道”中的通用视频转换仍不在本阶�
 
 ## 第六阶段后——稳定性修正与结构清理
 
-日期：2026-07-25
-提交：包含在本次修改中
+日期：2026-07-25 提交：包含在本次修改中
 
 ### 范围
 
@@ -678,8 +666,7 @@ Blu-ray DIY 压制及“编辑轨道”中的通用视频转换仍不在本阶�
 
 ## 第六阶段后——恢复确定性的音轨清理
 
-日期：2026-07-25
-提交：包含在本次修改中
+日期：2026-07-25 提交：包含在本次修改中
 
 ### 范围
 
@@ -714,81 +701,57 @@ Blu-ray DIY 压制及“编辑轨道”中的通用视频转换仍不在本阶�
 
 ## 新增功能 — 应用设置
 
-日期：2026-07-26
-提交：包含在本次修改中
+日期：2026-07-26 提交：包含在本次修改中
 
 ### 范围
 
-增加完整的应用设置系统，包括带版本的配置、窗口和界面状态持久化、启动及编码
-默认值、可编辑的外部工具路径，以及手动检查 GitHub Release 更新。
+增加完整的应用设置系统，包括带版本的配置、窗口和界面状态持久化、启动及编码默认值、可编辑的外部工具路径，以及手动检查 GitHub Release 更新。
 
 ### 结构调整
 
-- 增加 `src/core/app_config.py`，使用不可变偏好记录实现 schema 校验、源码/冻结
-  路径解析、首次运行模板加载和同目录临时文件原子替换。
-- 增加受版本控制的 `config.default.json`，并忽略根目录下的可写 `config.json`。
-  冻结版本把默认模板打包到 `_MEIPASS`，运行中的程序则在可执行文件旁创建和更新
-  `config.json`。
-- 增加独立设置窗口，包含“常规”“路径”“高级”“外部工具”页面。“外部工具”页
-  编辑实际生效的 `src/core/settings.py`，校验 Python 语法并原子保存。
-- 冻结版本把设置源码作为模板打包，在可执行文件旁生成可编辑副本，并在下次启动时
-  作为覆盖配置加载。
-- 扩展配置，增加经过校验的音频、Remux 和 Encode 偏好。缺少新分区的现有 schema
-  version 1 文件仍使用向后兼容默认值加载。
+- 增加 `src/core/app_config.py`，使用不可变偏好记录实现 schema 校验、源码/冻结路径解析、首次运行模板加载和同目录临时文件原子替换。
+- 增加受版本控制的 `config.default.json`，并忽略根目录下的可写 `config.json`。冻结版本把默认模板打包到 `_MEIPASS`，运行中的程序则在可执行文件旁创建和更新 `config.json`。
+- 增加独立设置窗口，包含“常规”“路径”“高级”“外部工具”页面。“外部工具”页编辑实际生效的 `src/core/settings.py`，校验 Python 语法并原子保存。
+- 冻结版本把设置源码作为模板打包，在可执行文件旁生成可编辑副本，并在下次启动时作为覆盖配置加载。
+- 扩展配置，增加经过校验的音频、Remux 和 Encode 偏好。缺少新分区的现有 schema version 1 文件仍使用向后兼容默认值加载。
 - 集中管理 x264、x265 和 SVT-AV1 内置预设，以及程序自身的版本号和标题。
-- 增加设置/状态 GUI mixin，重新生成 GUI 基类契约，并删除无法区分 Remux、Encode
-  和 DIY 输出页的旧状态。
-- 在 Remux/Encode 请求中增加不可变 `AudioEncodingSettings`，并贯穿正片、SP、
-  直接音频和最终混流流程。
+- 增加设置/状态 GUI mixin，重新生成 GUI 基类契约，并删除无法区分 Remux、Encode 和 DIY 输出页的旧状态。
+- 在 Remux/Encode 请求中增加不可变 `AudioEncodingSettings`，并贯穿正片、SP、直接音频和最终混流流程。
 - 增加异步 Qt 请求，用于查询 GitHub 最新正式 Release。
 
 ### 行为变化
 
-- 正常关闭时保存 Qt 窗口位置和大小、语言、主题、字号和透明度。成功恢复后跳过
-  首次运行适配和居中。
-- 配置的启动页、剧集/电影模式、Remux/Encode 输出目录以及 Encode/Remux 默认值
-  用于初始化可见控件。任务仍捕获当前可见值，不会重新读取配置。
+- 正常关闭时保存 Qt 窗口位置和大小、语言、主题、字号和透明度。成功恢复后跳过首次运行适配和居中。
+- 配置的启动页、剧集/电影模式、Remux/Encode 输出目录以及 Encode/Remux 默认值用于初始化可见控件。任务仍捕获当前可见值，不会重新读取配置。
 - 程序运行期间，Remux、Encode 和 DIY 分别保留自己的输出目录。
-- 无效配置会明确报错并保持原文件不变。明确保存成功后可以替换；普通关闭不能覆盖
-  加载失败的配置。
+- 无效配置会明确报错并保持原文件不变。明确保存成功后可以替换；普通关闭不能覆盖加载失败的配置。
 - 语言选择器使用本地名称；深色标签页具有清晰文字以及不同的悬停和选中背景。
-- 独立 FLAC 和 FFmpeg FLAC 压缩等级均默认为 8，可分别在 0–8 和 0–12 范围内
-  配置；独立 FLAC 自动检测逻辑 CPU 线程数。
-- FDK-AAC 和 Opus 值 0 保持自动行为，正数作为明确的 kbps 目标；设置页提供码率
-  建议。
+- 独立 FLAC 和 FFmpeg FLAC 压缩等级均默认为 8，可分别在 0–8 和 0–12 范围内配置；独立 FLAC 自动检测逻辑 CPU 线程数。
+- FDK-AAC 和 Opus 值 0 保持自动行为，正数作为明确的 kbps 目标；设置页提供码率建议。
 - “外部工具”页检查当前生效路径、列出缺失工具，并提示运行对应平台的 setup 脚本。
-- 手动更新检查只读取 GitHub Release 的 `tag_name`，异步比较数值版本并设置 15 秒
-  超时，不会下载文件。发现新版时给出 GitHub Releases 链接，并提醒把
-  `config.json` 复制到新程序目录。
+- 手动更新检查只读取 GitHub Release 的 `tag_name`，异步比较数值版本并设置 15 秒超时，不会下载文件。发现新版时给出 GitHub Releases 链接，并提醒把 `config.json` 复制到新程序目录。
 
 ### 文档与 i18n
 
-- 中英文 README 和代码规范同步记录配置位置、首次运行行为、设置边界、音频默认值、
-  更新检查以及当前可见 GUI 继续具有最高权威。
+- 中英文 README 和代码规范同步记录配置位置、首次运行行为、设置边界、音频默认值、更新检查以及当前可见 GUI 继续具有最高权威。
 - 增加全部设置控件、说明、校验、持久化、外部工具和更新状态的英文/简体中文文本。
 
 ### 验证
 
-- 增加配置创建/加载/校验、持久化与冻结路径、设置窗口编辑、启动初始化、音频命令值、
-  外部工具检测、版本比较、手动请求启动、Release 链接及 `config.json` 迁移提醒测试。
-- 全仓库 208 项测试全部通过；Python 编译、i18n 和 split 契约审计、
-  `git diff --check` 及 CRLF 检查均通过。
+- 增加配置创建/加载/校验、持久化与冻结路径、设置窗口编辑、启动初始化、音频命令值、外部工具检测、版本比较、手动请求启动、Release 链接及 `config.json` 迁移提醒测试。
+- 全仓库 208 项测试全部通过；Python 编译、i18n 和 split 契约审计、`git diff --check` 及 CRLF 检查均通过。
 
 ### 仍需手动检查
 
-- 从可写的可丢弃目录构建并启动 Windows one-folder 包，确认打包模板会在可执行文件
-  旁生成 `config.json` 和可编辑的 `src/core/settings.py`。
-- 检查单屏/多屏窗口位置、两种语言下的全部设置、无效/不可写配置处理，以及每组启动
-  编码器、位深和默认值组合。
+- 从可写的可丢弃目录构建并启动 Windows one-folder 包，确认打包模板会在可执行文件旁生成 `config.json` 和可编辑的 `src/core/settings.py`。
+- 检查单屏/多屏窗口位置、两种语言下的全部设置、无效/不可写配置处理，以及每组启动编码器、位深和默认值组合。
 - 临时配置缺失的外部工具，确认给出正确的 setup 脚本提示，然后恢复路径。
 - 分别在离线、当前版本和临时降低本地版本时检查更新，确认对话框和外部链接。
-- 使用非默认及自动音频值运行较短的可丢弃 Remux/Encode 样本，检查终端命令和最终
-  Matroska 元数据。
+- 使用非默认及自动音频值运行较短的可丢弃 Remux/Encode 样本，检查终端命令和最终 Matroska 元数据。
 
 ## 编码器工具链迁移——官方 x264/x265
 
-日期：2026-07-28
-提交：26dc5fe
+日期：2026-07-28 提交：26dc5fe
 
 ### 范围
 
@@ -817,8 +780,7 @@ Blu-ray DIY 压制及“编辑轨道”中的通用视频转换仍不在本阶�
 
 ## HDR10+ 构建环境准备
 
-日期：2026-07-28
-提交：`56ce8bb`（`build(hdr): enable x265 HDR10+ and add hdr10plus_tool`）
+日期：2026-07-28 提交：`56ce8bb`（`build(hdr): enable x265 HDR10+ and add hdr10plus_tool`）
 
 ### 范围
 
@@ -839,8 +801,7 @@ Blu-ray DIY 压制及“编辑轨道”中的通用视频转换仍不在本阶�
 
 ## HDR 元数据自动处理与 Encode 逐行可靠性
 
-日期：2026-07-29 至 2026-08-01
-提交：`bbd8813`（`feat(encode): complete automatic HDR metadata workflow`）
+日期：2026-07-29 至 2026-08-01 提交：`bbd8813`（`feat(encode): complete automatic HDR metadata workflow`）
 
 ### 来源探测与静态元数据
 
@@ -894,8 +855,7 @@ Blu-ray DIY 压制及“编辑轨道”中的通用视频转换仍不在本阶�
 
 ## 由设置驱动的 Linux setup 与对齐的 Docker 工具路径
 
-日期：2026-08-01
-提交：`c2552ad`（`feat(setup): install Linux tools at configured paths`）
+日期：2026-08-01 提交：`c2552ad`（`feat(setup): install Linux tools at configured paths`）
 
 ### 范围与逻辑变化
 
@@ -918,8 +878,7 @@ Blu-ray DIY 压制及“编辑轨道”中的通用视频转换仍不在本阶�
 
 ## Encode 同帧对比图
 
-日期：2026-08-01
-提交：`f632d85`（`feat(encode): add same-frame comparison images`）
+日期：2026-08-01 提交：`f632d85`（`feat(encode): add same-frame comparison images`）
 
 ### 范围与逻辑变化
 
@@ -937,8 +896,7 @@ Blu-ray DIY 压制及“编辑轨道”中的通用视频转换仍不在本阶�
 
 ## 按时长自适应的自动黑边裁剪
 
-日期：2026-08-01
-提交：`7d80a4d`（`feat(encode): add automatic black-border cropping`）
+日期：2026-08-01 提交：`7d80a4d`（`feat(encode): add automatic black-border cropping`）
 
 ### 检测与 VapourSynth 集成
 
@@ -962,8 +920,7 @@ Blu-ray DIY 压制及“编辑轨道”中的通用视频转换仍不在本阶�
 
 ## 只读内置预设与用户新增 Encode 预设
 
-日期：2026-08-01
-提交：`d41ac01`
+日期：2026-08-01 提交：`d41ac01`
 
 ### 配置与预设归属
 
@@ -987,8 +944,7 @@ Blu-ray DIY 压制及“编辑轨道”中的通用视频转换仍不在本阶�
 
 ## 自动 getnative 分析与缩放核一致性
 
-日期：2026-08-02
-提交：a5fa237
+日期：2026-08-02 提交：a5fa237
 
 ### 执行与检测修正
 
@@ -1018,8 +974,7 @@ Blu-ray DIY 压制及“编辑轨道”中的通用视频转换仍不在本阶�
 
 ## 跨平台默认 VPy 源读取与逆缩放安全性
 
-日期：2026-08-02
-提交：包含在本次修改中
+日期：2026-08-02 提交：e221b28
 
 ### 源读取与插件修正
 

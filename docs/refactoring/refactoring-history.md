@@ -39,8 +39,7 @@ History entries must reflect the author's documented intent. Unresolved behavior
 
 ## Phase 1 — Contract and Safety Baseline
 
-Date: 2026-07-20
-Commit: `d0262d5` (`chore: establish phase 1 refactoring baseline`)
+Date: 2026-07-20 Commit: `d0262d5` (`chore: establish phase 1 refactoring baseline`)
 
 ### Scope
 
@@ -83,8 +82,7 @@ No production workflow was rewritten. The configuration boundary and each workfl
 
 ## Phase 2 — Explicit GUI and Runtime Configuration
 
-Date: 2026-07-20
-Commit: `ceb2927` (`refactor: unify GUI and runtime task configuration`)
+Date: 2026-07-20 Commit: `ceb2927` (`refactor: unify GUI and runtime task configuration`)
 
 ### Scope
 
@@ -126,8 +124,7 @@ This phase unified ownership but did not yet rewrite the individual Remux, Encod
 
 ## Phase 3.1 — Merge Subtitles Workflow
 
-Date: 2026-07-20
-Commit: `7def4df` (`refactor: unify subtitle merge workflow`)
+Date: 2026-07-20 Commit: `7def4df` (`refactor: unify subtitle merge workflow`)
 
 ### Scope
 
@@ -167,8 +164,7 @@ Merge-only changes did not redesign Add Chapters, Remux, Encode, SP, audio conve
 
 ## Phase 3.2 — Add Chapters Workflow
 
-Date: 2026-07-20
-Commit: `107cea1` (`refactor: unify add chapters workflow`)
+Date: 2026-07-20 Commit: `107cea1` (`refactor: unify add chapters workflow`)
 
 ### Scope
 
@@ -238,8 +234,7 @@ Date: 2026-07-23
 
 ## Phase 3.3 — Blu-ray Remux Workflow
 
-Date: 2026-07-22
-Commit: `b89f995` (`refactor(remux): rebuild main playlist workflow`)
+Date: 2026-07-22 Commit: `b89f995` (`refactor(remux): rebuild main playlist workflow`)
 
 ### Scope
 
@@ -293,8 +288,7 @@ SP, including its own output-language mapping, track alignment and missing-track
 
 ## Phase 3.4 — Blu-ray Encode Main Workflow
 
-Date: 2026-07-22
-Commit: `d4adee2` (`refactor(encode): unify Blu-ray and Remux encode workflows`)
+Date: 2026-07-22 Commit: `d4adee2` (`refactor(encode): unify Blu-ray and Remux encode workflows`)
 
 ### Scope
 
@@ -350,8 +344,7 @@ SP muxing and special-output algorithms, track alignment and missing-track repai
 
 ## Phase 3.5 — SP, Track Alignment, and Missing-Track Repair
 
-Date: 2026-07-24
-Commit: `51fbbea` (`refactor(sp): rebuild SP and track-alignment workflow`)
+Date: 2026-07-24 Commit: `51fbbea` (`refactor(sp): rebuild SP and track-alignment workflow`)
 
 ### Scope
 
@@ -400,8 +393,7 @@ Audio-conversion algorithms and Dolby Vision preparation/injection remain Phase 
 
 ## Phase 3.6 — Audio Conversion and Dolby Vision
 
-Date: 2026-07-24
-Commit: `3f74ca0` (`refactor: simplify audio conversion and Dolby Vision handling`)
+Date: 2026-07-24 Commit: `3f74ca0` (`refactor: simplify audio conversion and Dolby Vision handling`)
 
 ### Scope
 
@@ -451,8 +443,7 @@ Rebuilt the Encode audio-conversion and Dolby Vision paths around the immutable 
 AV1 Dolby Vision profile 10 authoring remains deferred until the project has a verified compatible encoder and packaging path. Video transcoding from **Edit Tracks** and the unfinished Blu-ray DIY encode path also remain outside this phase.
 ## Phase 4 — Shared Logic and Execution Boundaries
 
-Date: 2026-07-24 to 2026-07-25
-Commit: `c50f4e9` (`refactor: consolidate shared logic and execution boundaries`)
+Date: 2026-07-24 to 2026-07-25 Commit: `c50f4e9` (`refactor: consolidate shared logic and execution boundaries`)
 
 ### Scope
 
@@ -510,8 +501,7 @@ The remaining very long functions represent existing independent GUI constructio
 
 ## Phase 5 — Base Contracts, i18n, Naming, and Algorithm Notes
 
-Date: 2026-07-25
-Commit: `b26803b` (`refactor: complete phase 5 contracts and workflow cleanup`)
+Date: 2026-07-25 Commit: `b26803b` (`refactor: complete phase 5 contracts and workflow cleanup`)
 
 ### Scope
 
@@ -573,8 +563,7 @@ Blu-ray DIY encoding and generic video conversion in Edit Tracks remain outside 
 
 ## Phase 6 — Transport and Subtitle Parsers
 
-Date: 2026-07-25
-Commit: `ef9ea71` (`refactor: complete phase 6 transport and subtitle parsers`)
+Date: 2026-07-25 Commit: `ef9ea71` (`refactor: complete phase 6 transport and subtitle parsers`)
 
 ### Scope
 
@@ -629,8 +618,7 @@ Refactored the M2TS transport parser, the shared media-information bridge, and t
 
 ## Post-Phase 6 — Stabilization and Structural Cleanup
 
-Date: 2026-07-25
-Commit: Included in this change
+Date: 2026-07-25 Commit: Included in this change
 
 ### Scope
 
@@ -678,8 +666,7 @@ Corrected failures found while validating the completed refactor, made SP scan r
 
 ## Post-Phase 6 — Deterministic Audio Cleanup Restoration
 
-Date: 2026-07-25
-Commit: Included in this change
+Date: 2026-07-25 Commit: Included in this change
 
 ### Scope
 
@@ -714,101 +701,57 @@ Restored the required silent-track, duplicate-track, and DTS/FLAC size decisions
 
 ## New Feature — Application Settings
 
-Date: 2026-07-26
-Commit: Included in this change
+Date: 2026-07-26 Commit: Included in this change
 
 ### Scope
 
-Added a complete application-settings system: versioned configuration,
-window/UI-state persistence, startup and encoding defaults, editable external
-tool paths, and a manual GitHub Release update check.
+Added a complete application-settings system: versioned configuration, window/UI-state persistence, startup and encoding defaults, editable external tool paths, and a manual GitHub Release update check.
 
 ### Structural Changes
 
-- Added `src/core/app_config.py` with frozen preference records, schema
-  validation, source/frozen path resolution, first-run template loading, and
-  atomic sibling-file replacement.
-- Added tracked `config.default.json` and ignored the writable root-level
-  `config.json`. Frozen builds package the default template under `_MEIPASS`,
-  while the running application creates and updates `config.json` beside the
-  executable.
-- Added a standalone settings dialog with General, Paths, Advanced, and
-  External Tools pages. The External Tools page edits the effective
-  `src/core/settings.py`, validates Python syntax, and saves it atomically.
-- Frozen builds package the settings source as a template, seed an editable
-  copy beside the executable, and load it as an override on the next launch.
-- Extended the configuration with validated audio, Remux, and Encode
-  preferences. Existing schema-version-1 files without the new sections load
-  with backward-compatible defaults.
-- Centralized the built-in x264, x265, and SVT-AV1 preset maps, plus the
-  application-owned version and title.
-- Added a settings/state GUI mixin, regenerated the GUI base contract, and
-  removed state that could not distinguish Remux, Encode, and DIY output pages.
-- Added immutable `AudioEncodingSettings` to Remux/Encode requests and threaded
-  it through main, SP, direct-audio, and final-mux workflows.
+- Added `src/core/app_config.py` with frozen preference records, schema validation, source/frozen path resolution, first-run template loading, and atomic sibling-file replacement.
+- Added tracked `config.default.json` and ignored the writable root-level `config.json`. Frozen builds package the default template under `_MEIPASS`, while the running application creates and updates `config.json` beside the executable.
+- Added a standalone settings dialog with General, Paths, Advanced, and External Tools pages. The External Tools page edits the effective `src/core/settings.py`, validates Python syntax, and saves it atomically.
+- Frozen builds package the settings source as a template, seed an editable copy beside the executable, and load it as an override on the next launch.
+- Extended the configuration with validated audio, Remux, and Encode preferences. Existing schema-version-1 files without the new sections load with backward-compatible defaults.
+- Centralized the built-in x264, x265, and SVT-AV1 preset maps, plus the application-owned version and title.
+- Added a settings/state GUI mixin, regenerated the GUI base contract, and removed state that could not distinguish Remux, Encode, and DIY output pages.
+- Added immutable `AudioEncodingSettings` to Remux/Encode requests and threaded it through main, SP, direct-audio, and final-mux workflows.
 - Added an asynchronous Qt request for GitHub's latest published full Release.
 
 ### Behavior Changes
 
-- Clean window close stores Qt window geometry, language, theme, font size, and
-  opacity. Successfully restored geometry bypasses first-run fitting and
-  centering.
-- Configured startup page, Series/Movie mode, Remux/Encode output folders, and
-  Encode/Remux defaults initialize visible controls. Tasks continue to capture
-  current visible values instead of rereading configuration.
-- Remux, Encode, and DIY retain independent output-folder values during the
-  current session.
-- Invalid configuration is reported and kept unchanged. A successful explicit
-  save can replace it; an ordinary close cannot overwrite a failed load.
-- Language selectors use native names, and dark-mode tabs have readable text
-  with distinct hover and selected backgrounds.
-- Standalone and FFmpeg FLAC levels default to 8 and are independently
-  configurable from 0–8 and 0–12. Standalone FLAC detects logical CPU threads.
-- FDK-AAC and Opus value 0 keeps automatic behavior; positive values are
-  explicit kbps targets. The settings page includes bitrate guidance.
-- The External Tools page checks active paths, lists missing tools, and points
-  users to the platform setup script.
-- Manual update checks read only the GitHub Release `tag_name`, compare numeric
-  versions asynchronously with a 15-second timeout, and never download files.
-  A newer result links to GitHub Releases and reminds the user to copy
-  `config.json` to the new program directory.
+- Clean window close stores Qt window geometry, language, theme, font size, and opacity. Successfully restored geometry bypasses first-run fitting and centering.
+- Configured startup page, Series/Movie mode, Remux/Encode output folders, and Encode/Remux defaults initialize visible controls. Tasks continue to capture current visible values instead of rereading configuration.
+- Remux, Encode, and DIY retain independent output-folder values during the current session.
+- Invalid configuration is reported and kept unchanged. A successful explicit save can replace it; an ordinary close cannot overwrite a failed load.
+- Language selectors use native names, and dark-mode tabs have readable text with distinct hover and selected backgrounds.
+- Standalone and FFmpeg FLAC levels default to 8 and are independently configurable from 0–8 and 0–12. Standalone FLAC detects logical CPU threads.
+- FDK-AAC and Opus value 0 keeps automatic behavior; positive values are explicit kbps targets. The settings page includes bitrate guidance.
+- The External Tools page checks active paths, lists missing tools, and points users to the platform setup script.
+- Manual update checks read only the GitHub Release `tag_name`, compare numeric versions asynchronously with a 15-second timeout, and never download files. A newer result links to GitHub Releases and reminds the user to copy `config.json` to the new program directory.
 
 ### Documentation and i18n
 
-- Updated both README and code-standard versions with configuration placement,
-  first-run behavior, settings boundaries, audio defaults, update checking, and
-  continued visible-GUI authority.
-- Added English/Simplified Chinese text for all settings controls, guidance,
-  validation, persistence, external-tool, and update states.
+- Updated both README and code-standard versions with configuration placement, first-run behavior, settings boundaries, audio defaults, update checking, and continued visible-GUI authority.
+- Added English/Simplified Chinese text for all settings controls, guidance, validation, persistence, external-tool, and update states.
 
 ### Verification
 
-- Added focused coverage for configuration creation/loading/validation,
-  persistence and frozen paths, settings-dialog editing, startup initialization,
-  audio command values, external-tool detection, version comparison, manual
-  request start, release linking, and the `config.json` migration reminder.
-- The complete repository run passed all 208 tests. Python compilation, i18n
-  and split-contract audits, `git diff --check`, and CRLF verification passed.
+- Added focused coverage for configuration creation/loading/validation, persistence and frozen paths, settings-dialog editing, startup initialization, audio command values, external-tool detection, version comparison, manual request start, release linking, and the `config.json` migration reminder.
+- The complete repository run passed all 208 tests. Python compilation, i18n and split-contract audits, `git diff --check`, and CRLF verification passed.
 
 ### Manual Checks Still Required
 
-- Build and launch the Windows one-folder package from a writable disposable
-  directory. Confirm packaged templates seed `config.json` and editable
-  `src/core/settings.py` files beside the executable.
-- Check window geometry on single- and multi-monitor layouts, all settings in
-  both languages, invalid/unwritable configuration handling, and every startup
-  encoder/bit-depth/default combination.
-- Temporarily configure a missing external tool and confirm the correct setup
-  script guidance, then restore the path.
-- Check updates once offline, once at the current version, and once against a
-  temporarily lower local version. Confirm the dialogs and external link.
-- Run short disposable Remux/Encode samples with non-default and automatic
-  audio values, then inspect terminal commands and final Matroska metadata.
+- Build and launch the Windows one-folder package from a writable disposable directory. Confirm packaged templates seed `config.json` and editable `src/core/settings.py` files beside the executable.
+- Check window geometry on single- and multi-monitor layouts, all settings in both languages, invalid/unwritable configuration handling, and every startup encoder/bit-depth/default combination.
+- Temporarily configure a missing external tool and confirm the correct setup script guidance, then restore the path.
+- Check updates once offline, once at the current version, and once against a temporarily lower local version. Confirm the dialogs and external link.
+- Run short disposable Remux/Encode samples with non-default and automatic audio values, then inspect terminal commands and final Matroska metadata.
 
 ## Encoder Toolchain Migration — Official x264/x265
 
-Date: 2026-07-28
-Commit: 26dc5fe
+Date: 2026-07-28 Commit: 26dc5fe
 
 ### Scope
 
@@ -837,8 +780,7 @@ Commit: 26dc5fe
 
 ## HDR10+ Build Environment Preparation
 
-Date: 2026-07-28
-Commit: `56ce8bb` (`build(hdr): enable x265 HDR10+ and add hdr10plus_tool`)
+Date: 2026-07-28 Commit: `56ce8bb` (`build(hdr): enable x265 HDR10+ and add hdr10plus_tool`)
 
 ### Scope
 
@@ -859,8 +801,7 @@ Commit: `56ce8bb` (`build(hdr): enable x265 HDR10+ and add hdr10plus_tool`)
 
 ## Automatic HDR Metadata and Encode Row Reliability
 
-Date: 2026-07-29 to 2026-08-01
-Commit: `bbd8813` (`feat(encode): complete automatic HDR metadata workflow`)
+Date: 2026-07-29 to 2026-08-01 Commit: `bbd8813` (`feat(encode): complete automatic HDR metadata workflow`)
 
 ### Source Discovery and Static Metadata
 
@@ -914,8 +855,7 @@ Commit: `bbd8813` (`feat(encode): complete automatic HDR metadata workflow`)
 
 ## Settings-Driven Linux Setup and Aligned Docker Tool Placement
 
-Date: 2026-08-01
-Commit: `c2552ad` (`feat(setup): install Linux tools at configured paths`)
+Date: 2026-08-01 Commit: `c2552ad` (`feat(setup): install Linux tools at configured paths`)
 
 ### Scope and Logic Changes
 
@@ -938,8 +878,7 @@ Commit: `c2552ad` (`feat(setup): install Linux tools at configured paths`)
 
 ## Same-Frame Encode Comparison Images
 
-Date: 2026-08-01
-Commit: `f632d85` (`feat(encode): add same-frame comparison images`)
+Date: 2026-08-01 Commit: `f632d85` (`feat(encode): add same-frame comparison images`)
 
 ### Scope and Logic Changes
 
@@ -957,8 +896,7 @@ Commit: `f632d85` (`feat(encode): add same-frame comparison images`)
 
 ## Duration-Adaptive Automatic Black-Border Cropping
 
-Date: 2026-08-01
-Commit: `7d80a4d` (`feat(encode): add automatic black-border cropping`)
+Date: 2026-08-01 Commit: `7d80a4d` (`feat(encode): add automatic black-border cropping`)
 
 ### Detection and VapourSynth Integration
 
@@ -982,8 +920,7 @@ Commit: `7d80a4d` (`feat(encode): add automatic black-border cropping`)
 
 ## Read-Only Built-In and User-Defined Encode Presets
 
-Date: 2026-08-01
-Commit: `d41ac01`
+Date: 2026-08-01 Commit: `d41ac01`
 
 ### Configuration and Preset Ownership
 
@@ -1007,8 +944,7 @@ Commit: `d41ac01`
 
 ## Automatic Getnative Analysis and Kernel Fidelity
 
-Date: 2026-08-02
-Commit: a5fa237
+Date: 2026-08-02 Commit: a5fa237
 
 ### Execution and Detection Corrections
 
@@ -1033,13 +969,14 @@ Commit: a5fa237
 
 - Updated both README versions, the Encode/VapourSynth Wiki, both code-standard versions, and the Simplified Chinese i18n catalog. Added focused regression coverage for kernel minimums, complete-curve consensus, permissive frame acceptance, empirical multi-frame ranking, the 540p and post-1040p exclusions, the 20-process cap, exact debug cleanup, RGB-luma loading, and exact VPy kernel application.
 - All 272 repository tests passed together with Python compilation, i18n and split-contract checks. Portable Python 3.13/VSPipe smoke tests returned all 16 unique kernels, streamed per-kernel progress, and reproduced the expected 892p adjacent-error notch from an FFmpeg-generated RGB PNG through the production split boundary.
-- Three complete 20-sample runs used `Cyberpunk Edgerunners` Disc 1 `00000.m2ts`. The first full-frame-coarse pass took 1661.14 seconds and exposed the smoothed-valley 887p defect; the half-size coarse pass took 946.78 seconds, reducing wall time by 42.99%, and retained 19 usable samples with about 17.3 GiB peak total worker memory in the worst full-frame phase. The final upstream-ratio run took 963.26 seconds; replaying its unchanged 19 final curves through the finalized saturated multi-frame weight selected the eight-sample 892p group, Bilinear, and confidence 3.556979. Five remains only the minimum required before skipping another round: every usable result from the already-launched 20-sample round is retained.
-- A complete 20-sample run on `2.5 Dimensional Seduction` Vol.1 `00003.m2ts` finished in 731.79 seconds and selected the expected 900p with Spline16. All 320 kernel events were emitted, eight clearly weaker kernels skipped their fine scan, and 19 curves were usable: 15 resolved exactly to 900p, with no systematic 5p offset. Peak combined Python/VSPipe working set was 15.33 GiB; the single-VSPipe transient maximum was 1014.8 MiB, while observed final-verification processes stayed near 380–400 MiB. Isolated measurements put the 16-kernel and final-verification peaks at 494.1 MiB and 412.6 MiB respectively.
+- Three complete 20-sample runs used `Cyberpunk Edgerunners` Disc 1 `00000.m2ts`. The first full-frame-coarse pass took 1661.14 seconds and exposed the smoothed-valley 887p defect; the half-size coarse pass took 946.78 seconds, reducing wall time by 42.99%, and retained 19 usable samples with about 17.3 GiB peak total worker memory in the worst full-frame phase. The final upstream-ratio run took 963.26 seconds; replaying its unchanged 19 final curves through the finalized saturated multi-frame weight selected the eight-sample 892p group, Bilinear, and confidence 3.556979.
+  Five remains only the minimum required before skipping another round: every usable result from the already-launched 20-sample round is retained.
+- A complete 20-sample run on `2.5 Dimensional Seduction` Vol.1 `00003.m2ts` finished in 731.79 seconds and selected the expected 900p with Spline16. All 320 kernel events were emitted, eight clearly weaker kernels skipped their fine scan, and 19 curves were usable: 15 resolved exactly to 900p, with no systematic 5p offset. Peak combined Python/VSPipe working set was 15.33 GiB; the single-VSPipe transient maximum was 1014.8 MiB, while observed final-verification processes stayed near 380–400 MiB.
+  Isolated measurements put the 16-kernel and final-verification peaks at 494.1 MiB and 412.6 MiB respectively.
 
 ## Cross-Platform Default VPy Source and Rescale Safety
 
-Date: 2026-08-02
-Commit: Included in this change
+Date: 2026-08-02 Commit: e221b28
 
 ### Source and Plugin Corrections
 
@@ -1051,7 +988,8 @@ Commit: Included in this change
 ### Default Processing and Preset Changes
 
 - The generated script rejects field-based input explicitly instead of applying a progressive restoration chain to interlaced video. Native inverse scaling now descales only luma, resizes chroma with explicit Blu-ray left chroma location, and uses a reconstruction-difference mask to restore all original YUV planes over credits and other final-resolution composites.
-- Advanced settings initialize a new Encode VPy-processing row, while task launch snapshots its visible denoise (`0.0`–`3.0`, default `0.6`), dehalo (`0.0`–`1.0`, default `0.0`), dering (`0.0`–`1.0`, default `0.0`), deband (`0.0`–`1.0`, default `0.5`), and anti-aliasing (`0.0`–`1.0`, default `0.5`) values through configuration, request, service, preview, and the generated script. Defect-specific dehalo and dering start disabled; deband and EEDI2 anti-aliasing now start at the literal blend midpoint and skip their work at `0`. Deband restores multi-plane edge/detail regions through a softened Prewitt mask, and the EEDI2 result is now limited in the correct direction toward the source luma. Custom scripts are changed only when they expose the corresponding top-level numeric assignment.
+- Advanced settings initialize a new Encode VPy-processing row, while task launch snapshots its visible denoise (`0.0`–`3.0`, default `0.6`), dehalo (`0.0`–`1.0`, default `0.0`), dering (`0.0`–`1.0`, default `0.0`), deband (`0.0`–`1.0`, default `0.5`), and anti-aliasing (`0.0`–`1.0`, default `0.5`) values through configuration, request, service, preview, and the generated script. Defect-specific dehalo and dering start disabled; deband and EEDI2 anti-aliasing now start at the literal blend midpoint and skip their work at `0`.
+  Deband restores multi-plane edge/detail regions through a softened Prewitt mask, and the EEDI2 result is now limited in the correct direction toward the source luma. Custom scripts are changed only when they expose the corresponding top-level numeric assignment.
 - The old fixed whole-chain `NLMeans h=3` reference was replaced by spatial luma-only NLMeans with a strong-edge mask and pixel-change limiting. Conservative abcxyz-derived dehalo and MinBlur/HQDering-derived ring-band processing use only the already-required `std`, `rgvs`, `nlm_ispc`, and `mvsfunc` components, so no additional plugin was introduced.
 - x264 built-in presets no longer force Level 4.1, allowing their configured reference-frame counts to select a conforming level. SVT-AV1 presets no longer request synthetic film grain by default.
 

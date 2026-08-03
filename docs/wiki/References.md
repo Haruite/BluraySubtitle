@@ -1,8 +1,6 @@
 # References and Further Reading
 
-The wiki is an explanatory layer over the project’s source and verified
-behavior. When a public summary, a tool, and a real disc disagree, inspect the
-actual bytes and the code path used by the application.
+The wiki is an explanatory layer over the project’s source and verified behavior. When a public summary, a tool, and a real disc disagree, inspect the actual bytes and the code path used by the application.
 
 ## Project sources
 
@@ -17,34 +15,20 @@ actual bytes and the code path used by the application.
 
 ## Blu-ray application format
 
-- [lw/BluRay wiki](https://github.com/lw/BluRay/wiki), especially Application
-  Format, MPLS, PlayItem, PlayList, PlayListMark, STNTable, CLPI, SequenceInfo,
-  ProgramInfo, and M2TS.
+- [lw/BluRay wiki](https://github.com/lw/BluRay/wiki), especially Application Format, MPLS, PlayItem, PlayList, PlayListMark, STNTable, CLPI, SequenceInfo, ProgramInfo, and M2TS.
 - [Blu-ray Disc Association format specification overview](https://blu-raydisc.info/format-spec/rom3-spec.php).
-- [VideoLAN libbluray](https://code.videolan.org/videolan/libbluray), an
-  open-source Blu-ray playback and navigation implementation.
+- [VideoLAN libbluray](https://code.videolan.org/videolan/libbluray), an open-source Blu-ray playback and navigation implementation.
 
-The lw/BluRay wiki states that its content is available under the
-[Creative Commons Attribution-ShareAlike license](https://creativecommons.org/licenses/by-sa/3.0/).
-The binary field names and structural relationships in this documentation were
-checked against that wiki, the project source, and cited open-source
-implementations. The explanations here are newly written and project-specific.
+The lw/BluRay wiki states that its content is available under the [Creative Commons Attribution-ShareAlike license](https://creativecommons.org/licenses/by-sa/3.0/). The binary field names and structural relationships in this documentation were checked against that wiki, the project source, and cited open-source implementations. The explanations here are newly written and project-specific.
 
-The complete Blu-ray specification books are licensed by the Blu-ray Disc
-Association and are not reproduced here. Public reverse-engineering
-documentation and open-source implementations can be incomplete; reserved
-fields and later-format extensions require particular care.
+The complete Blu-ray specification books are licensed by the Blu-ray Disc Association and are not reproduced here. Public reverse-engineering documentation and open-source implementations can be incomplete; reserved fields and later-format extensions require particular care.
 
 ## MPEG transport streams
 
-- [ISO/IEC 13818-1 overview](https://www.iso.org/standard/87619.html) for MPEG
-  systems/transport streams.
-- [FFmpeg MPEG-TS implementation](https://github.com/FFmpeg/FFmpeg/blob/master/libavformat/mpegts.c)
-  for an additional open-source parser reference.
-- [tsMuxer](https://github.com/justdan96/tsMuxer) for M2TS demux/mux, Blu-ray
-  structures, stream readers, and PGS handling.
-- [mpv manual: Blu-ray input](https://mpv.io/manual/stable/#blu-ray)
-  for `bd://mpls/<number>` and `--bluray-device`.
+- [ISO/IEC 13818-1 overview](https://www.iso.org/standard/87619.html) for MPEG systems/transport streams.
+- [FFmpeg MPEG-TS implementation](https://github.com/FFmpeg/FFmpeg/blob/master/libavformat/mpegts.c) for an additional open-source parser reference.
+- [tsMuxer](https://github.com/justdan96/tsMuxer) for M2TS demux/mux, Blu-ray structures, stream readers, and PGS handling.
+- [mpv manual: Blu-ray input](https://mpv.io/manual/stable/#blu-ray) for `bd://mpls/<number>` and `--bluray-device`.
 
 ## Matroska and MKVToolNix
 
@@ -63,8 +47,7 @@ fields and later-format extensions require particular care.
 - [ITU-R BT.709](https://www.itu.int/rec/R-REC-BT.709)
 - [ITU-R BT.2020](https://www.itu.int/rec/R-REC-BT.2020)
 - [ITU-R BT.2100](https://www.itu.int/rec/R-REC-BT.2100)
-- [VCB-Studio public guides](https://github.com/vcb-s/guides), particularly
-  the introductory video, Blu-ray, workflow/tools, and encoder chapters.
+- [VCB-Studio public guides](https://github.com/vcb-s/guides), particularly the introductory video, Blu-ray, workflow/tools, and encoder chapters.
 
 ## Encoding and frame processing
 
@@ -87,18 +70,13 @@ fields and later-format extensions require particular care.
 - [FFmpeg codec documentation](https://ffmpeg.org/ffmpeg-codecs.html)
 - [Dolby technologies](https://professional.dolby.com/technologies/)
 
-Codec trademarks identify their respective technologies and owners. The tables
-in this wiki describe interoperability and project behavior; they are not
-licensing statements.
+Codec trademarks identify their respective technologies and owners. The tables in this wiki describe interoperability and project behavior; they are not licensing statements.
 
 ## Subtitles
 
-- [Matroska codec specifications](https://www.matroska.org/technical/codec_specs.html)
-  for Matroska subtitle codec identifiers and storage.
-- [tsMuxer PGS reader](https://github.com/justdan96/tsMuxer/blob/master/tsMuxer/pgsStreamReader.cpp)
-  as an open-source Presentation Graphics implementation reference.
-- [Aegisub ASS tags](https://aegisub.org/docs/latest/ass_tags/) for ASS styling
-  and override tags.
+- [Matroska codec specifications](https://www.matroska.org/technical/codec_specs.html) for Matroska subtitle codec identifiers and storage.
+- [tsMuxer PGS reader](https://github.com/justdan96/tsMuxer/blob/master/tsMuxer/pgsStreamReader.cpp) as an open-source Presentation Graphics implementation reference.
+- [Aegisub ASS tags](https://aegisub.org/docs/latest/ass_tags/) for ASS styling and override tags.
 
 ## Dolby Vision
 
@@ -106,7 +84,4 @@ licensing statements.
 - [Dolby Vision streams within the ISO Base Media File Format](https://professionalsupport.dolby.com/s/article/Dolby-Vision-streams-within-the-ISO-Base-Media-File-Format)
 - [dovi_tool](https://github.com/quietvoid/dovi_tool)
 
-Profile and device support can evolve. The project behavior documented here is
-the behavior implemented and tested by the current repository, not a general
-promise that all Dolby Vision profiles can be converted without loss of profile
-features.
+Profile and device support can evolve. The project behavior documented here is the behavior implemented and tested by the current repository, not a general promise that all Dolby Vision profiles can be converted without loss of profile features.

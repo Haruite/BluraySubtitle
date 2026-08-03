@@ -32,39 +32,15 @@ from src.runtime.services_split.remux_and_episode_workflows import RemuxEpisodeW
 from src.runtime.gui_runtime_classes.bluray_subtitle_gui_entry import BluraySubtitleGUI as _BluraySubtitleGUI
 from src.runtime.gui_runtime_split import actions_and_file_dialogs as encode_gui_module
 from src.runtime.gui_runtime_split.actions_and_file_dialogs import ActionsAndDialogsMixin
+from tests._gui_worker_fakes import FakeThread as _ThreadCapture
+from tests._gui_worker_fakes import RequestWorkerCapture
 
 
-class _Signal:
-    def connect(self, _callback) -> None:
-        pass
-
-
-class _EncodeWorkerCapture:
-    last_request = None
-
-    def __init__(self, request, _cancel_event) -> None:
-        type(self).last_request = request
-        self.progress = _Signal()
-        self.label = _Signal()
-        self.finished = _Signal()
-        self.finished_with_warnings = _Signal()
-        self.finished_with_errors = _Signal()
-        self.canceled = _Signal()
-        self.failed = _Signal()
-
-    def moveToThread(self, _thread) -> None:
-        pass
-
-    def run(self) -> None:
-        pass
-
-
-class _ThreadCapture:
-    def __init__(self, _owner) -> None:
-        self.started = _Signal()
-
-    def start(self) -> None:
-        pass
+class _EncodeWorkerCapture(RequestWorkerCapture):
+    signal_names = RequestWorkerCapture.signal_names + (
+        'finished_with_warnings',
+        'finished_with_errors',
+    )
 
 
 def _settings(

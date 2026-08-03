@@ -162,18 +162,13 @@ SubRip（`.srt`）由多个字幕块组成，块之间用空行分隔。一个�
 下一条字幕
 ```
 
-惯用时间格式为 `HH:MM:SS,mmm`，其中 `mmm` 是毫秒。序号表示文件顺序，不是呈现
-时间；裁切或拼接后，工具通常会重新编号。SRT 没有统一的复杂样式系统。部分渲染器
-接受少量类似 HTML 的标签，但支持并不一致，不能用它保证精确排版。
+惯用时间格式为 `HH:MM:SS,mmm`，其中 `mmm` 是毫秒。序号表示文件顺序，不是呈现时间；裁切或拼接后，工具通常会重新编号。SRT 没有统一的复杂样式系统。部分渲染器接受少量类似 HTML 的标签，但支持并不一致，不能用它保证精确排版。
 
-SRT 文件内部通常也不能可靠声明字符编码，交换时最安全的选择是 UTF-8。BluraySubtitle
-的转换路径会尝试多种 Unicode 与旧式编码来读取已有文件，但新建文本应尽量使用 UTF-8。
+SRT 文件内部通常也不能可靠声明字符编码，交换时最安全的选择是 UTF-8。BluraySubtitle 的转换路径会尝试多种 Unicode 与旧式编码来读取已有文件，但新建文本应尽量使用 UTF-8。
 
-项目的 `SRT` 模型读取带编号字幕块，保存开始／结束时间和多行正文；追加时平移时间，
-裁切时为保留条目重新编号。当前裁切操作只保留开始与结束都完整落在所选区间内的字幕。
+项目的 `SRT` 模型读取带编号字幕块，保存开始／结束时间和多行正文；追加时平移时间，裁切时为保留条目重新编号。当前裁切操作只保留开始与结束都完整落在所选区间内的字幕。
 
-SRT 作为 `S_TEXT/UTF8` 存入 Matroska 后，时间由容器 block 的时间戳和时长表示，
-block payload 只保存 UTF-8 字幕正文，而不是把完整 `.srt` 文件原样塞进轨道。
+SRT 作为 `S_TEXT/UTF8` 存入 Matroska 后，时间由容器 block 的时间戳和时长表示，block payload 只保存 UTF-8 字幕正文，而不是把完整 `.srt` 文件原样塞进轨道。
 
 ### ASS 与 SSA
 
@@ -205,20 +200,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 Dialogue: 0,0:00:01.00,0:00:04.50,Default,,0,0,0,,第一行\N第二行
 ```
 
-`Format:` 声明字段顺序，所以解析器应按它读取，不能假设所有文件使用同一固定布局。
-最后一个 `Text` 字段本身可以包含逗号。ASS 时间通常使用 `h:mm:ss.cc`，精度是百分之一
-秒，而不是 SRT 的毫秒。`\N` 表示强制换行。花括号中的 override tag，例如
-`{\i1}`、`{\pos(960,900)}` 或 `{\fad(200,200)}`，可以只对某段事件改变样式、
-位置、动画、绘图和卡拉 OK 效果。
+`Format:` 声明字段顺序，所以解析器应按它读取，不能假设所有文件使用同一固定布局。最后一个 `Text` 字段本身可以包含逗号。ASS 时间通常使用 `h:mm:ss.cc`，精度是百分之一秒，而不是 SRT 的毫秒。`\N` 表示强制换行。花括号中的 override tag，例如 `{\i1}`、`{\pos(960,900)}` 或 `{\fad(200,200)}`，可以只对某段事件改变样式、位置、动画、绘图和卡拉 OK 效果。
 
-`PlayResX` 与 `PlayResY` 定义脚本坐标系；只修改它们而不同比例调整样式和位置，会
-改变最终排版。样式的 `Fontname` 引用字体内部家族名称，它可能与字体文件名不同，
-因此分发所引用字体也是保留 ASS 呈现的一部分。
+`PlayResX` 与 `PlayResY` 定义脚本坐标系；只修改它们而不同比例调整样式和位置，会改变最终排版。样式的 `Fontname` 引用字体内部家族名称，它可能与字体文件名不同，因此分发所引用字体也是保留 ASS 呈现的一部分。
 
-BluraySubtitle 的 `Ass` 模型会识别 SSA v4 或 ASS v4+ 样式 section，按已声明的
-`Format:` 属性读取字段，把事件时间转换为可运算值，并保留正文中的逗号。模型支持
-平移、追加、裁切和重新写出事件。SRT → ASS 路径会创建 v4+ 头，并把基本粗体、
-下划线、斜体和字体颜色标记转换成 ASS override tag。
+BluraySubtitle 的 `Ass` 模型会识别 SSA v4 或 ASS v4+ 样式 section，按已声明的 `Format:` 属性读取字段，把事件时间转换为可运算值，并保留正文中的逗号。模型支持平移、追加、裁切和重新写出事件。SRT → ASS 路径会创建 v4+ 头，并把基本粗体、下划线、斜体和字体颜色标记转换成 ASS override tag。
 
 ASS/SSA 可以：
 
@@ -226,9 +212,7 @@ ASS/SSA 可以：
 - 作为外挂字幕发布；
 - 渲染到视频，或转换为位图字幕格式。
 
-在 Matroska 中，`S_TEXT/ASS`／`S_TEXT/SSA` 的全局脚本和样式 section 保存在
-codec private data 中，每个事件则存入带时间的 block。字体应作为普通 Matroska
-附件保存，而不是使用旧式 uuencode `[Fonts]` 数据。
+在 Matroska 中，`S_TEXT/ASS`／`S_TEXT/SSA` 的全局脚本和样式 section 保存在 codec private data 中，每个事件则存入带时间的 block。字体应作为普通 Matroska 附件保存，而不是使用旧式 uuencode `[Fonts]` 数据。
 
 ### PGS / Presentation Graphics
 

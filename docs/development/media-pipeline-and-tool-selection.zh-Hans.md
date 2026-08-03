@@ -21,10 +21,8 @@
 
 本文中的实现细节于 2026-07-26 根据以下本地源码版本和命令行程序进行了检查：
 
-- MKVToolNix 源码 `release-100.0-15-gbfc791cca`
-  （`bfc791cca9763b494f66379953b9509b5187bc9a`）及 `mkvmerge` 100.0；
-- tsMuxer 源码 `nightly-2024-06-06-02-00-53-1-gc6b1186`
-  （`c6b1186209e42c877052e762c9185f3226ef8ea2`）及 tsMuxeR 2.7.0；
+- MKVToolNix 源码 `release-100.0-15-gbfc791cca` （`bfc791cca9763b494f66379953b9509b5187bc9a`）及 `mkvmerge` 100.0；
+- tsMuxer 源码 `nightly-2024-06-06-02-00-53-1-gc6b1186` （`c6b1186209e42c877052e762c9185f3226ef8ea2`）及 tsMuxeR 2.7.0；
 - 当前 BluraySubtitle 源码。
 
 文中列出函数名，方便上游版本更新后重新核对。没有写死行号，因为行号比相关控制流程更容易变化。
@@ -50,23 +48,18 @@ BluraySubtitle 自行解析 MPLS，并维护每个 PlayItem 的片段名称、`i
 这并不是 MKVToolNix 简单读错了 PMT。在 `src/input/r_mpeg_ts.cpp` 中，`track_c::determine_codec_from_stream_type()` 确实会把 PMT 流类型 `0x24` 映射为 HEVC，但音视频轨道不能只根据这项声明就视为识别成功：
 
 1. `reader_c::determine_track_parameters()` 调用对应编码的基本流解析器。
-2. 对 HEVC，`track_c::new_stream_v_hevc()` 将 PES 负载交给
-   `mtx::hevc::es_parser_c`，在 `headers_parsed()` 成功前持续返回
-   `FILE_STATUS_MOREDATA`。
-3. 只有编码专用探测成功后，`reader_c::probe_packet_complete()` 才会设置
-   `probed_ok`。
+2. 对 HEVC，`track_c::new_stream_v_hevc()` 将 PES 负载交给 `mtx::hevc::es_parser_c`，在 `headers_parsed()` 成功前持续返回 `FILE_STATUS_MOREDATA`。
+3. 只有编码专用探测成功后，`reader_c::probe_packet_complete()` 才会设置 `probed_ok`。
 4. 最后的轨道创建循环会跳过 `probed_ok` 为 false 或未能确定编码的轨道。
 
 这种设计可以避免仅凭 PMT 声明就创建一个无法验证基本流参数的输出轨道，因此比单纯信任传输流元数据更严格。
 
-tsMuxer 使用另一套两阶段流程。`tsMuxer/tsDemuxer.cpp` 中的
-`TSDemuxer::getTrackList()` 会把 PMT 中的每个 PID 放入候选集合；
-`METADemuxer::DetectStreamReader()` 随后为这些 PID 解复用一段有限长度的样本，并尝试对应的编码读取器。`HEVCStreamReader::checkStream()` 使用 tsMuxer 自己的 VPS/SPS/PPS 和 NAL 解析器验证 HEVC。因此，tsMuxer 并非完全不检查负载，只是它的解析器和接受边界与 MKVToolNix 不同。
+tsMuxer 使用另一套两阶段流程。`tsMuxer/tsDemuxer.cpp` 中的 `TSDemuxer::getTrackList()` 会把 PMT 中的每个 PID 放入候选集合；`METADemuxer::DetectStreamReader()` 随后为这些 PID 解复用一段有限长度的样本，并尝试对应的编码读取器。`HEVCStreamReader::checkStream()` 使用 tsMuxer 自己的 VPS/SPS/PPS 和 NAL 解析器验证 HEVC。因此，tsMuxer 并非完全不检查负载，只是它的解析器和接受边界与 MKVToolNix 不同。
 
 对 Avatar UHD 中触发回退的两个 PlayItem 文件进行只读比较，结果如下：
 
-| M2TS | PMT 视频 PID | `mkvmerge -J` | tsMuxeR 2.7.0 |
-| --- | ---: | --- | --- |
+| M2TS | PMT 视频 PID | mkvmerge | tsMuxeR 2.7.0 |
+| --- | ---: |----------------| --- |
 | `00073.m2ts` | 4113（`0x1011`） | 未列出视频轨道 | 识别为 HEVC Main10、3840x2160p、23.976 |
 | `00096.m2ts` | 4113（`0x1011`） | 未列出视频轨道 | 识别为 HEVC Main10、3840x2160p、23.976 |
 
@@ -76,16 +69,12 @@ tsMuxer 使用另一套两阶段流程。`tsMuxer/tsDemuxer.cpp` 中的
 
 MKVToolNix 不会把多片段 MPLS 当作一组不加限制的完整文件：
 
-1. `src/common/mm_mpls_multi_file_io.cpp` 中的
-   `mm_mpls_multi_file_io_c::open_multi()` 按顺序遍历 MPLS PlayItem，并为每一项解析一个 M2TS 路径。同一片段被重复引用时仍保留为独立的有序项。
+1. `src/common/mm_mpls_multi_file_io.cpp` 中的 `mm_mpls_multi_file_io_c::open_multi()` 按顺序遍历 MPLS PlayItem，并为每一项解析一个 M2TS 路径。同一片段被重复引用时仍保留为独立的有序项。
 2. `src/merge/mkvmerge.cpp` 中的 `add_filelists_for_playlists()` 断言 M2TS 数量与 PlayItem 数量相同。它把第一个 PlayItem 的 `in_time` 和 `out_time` 分配给原始输入，并为后续每一项创建附加文件列表，分别保存该项自己的时间限制。
 3. `create_append_mappings_for_playlists()` 把每个后续输入的轨道映射到前一 PlayItem 的对应轨道，以播放列表顺序连接分别裁切后的片段。
-4. `read_file_headers()` 通过
-   `generic_reader_c::set_timestamp_restrictions()` 将每项时间限制传给基本流读取器。
-5. 对 MPEG-TS，`src/input/r_mpeg_ts.cpp` 中的
-   `reader_c::determine_start_source_packet_number()` 使用对应 CLPI 的 Entry Point Map，定位到 PTS 不晚于 `in_time` 的最后一个源包附近。
-6. CLPI 定位只是优化。真正的下限由 `track_c::send_to_packetizer()` 执行，它拒绝 `in_time` 之前的 PES 负载；上限由
-   `reader_c::parse_pes()` 执行，PES PTS 达到或超过 `out_time` 时将当前 M2TS 标记为读取结束。
+4. `read_file_headers()` 通过 `generic_reader_c::set_timestamp_restrictions()` 将每项时间限制传给基本流读取器。
+5. 对 MPEG-TS，`src/input/r_mpeg_ts.cpp` 中的 `reader_c::determine_start_source_packet_number()` 使用对应 CLPI 的 Entry Point Map，定位到 PTS 不晚于 `in_time` 的最后一个源包附近。
+6. CLPI 定位只是优化。真正的下限由 `track_c::send_to_packetizer()` 执行，它拒绝 `in_time` 之前的 PES 负载；上限由 `reader_c::parse_pes()` 执行，PES PTS 达到或超过 `out_time` 时将当前 M2TS 标记为读取结束。
 
 因此，MKVToolNix 是在传输流/PES 时间戳边界执行裁切，而不是盲目拼接完整 M2TS。它并非任意采样级音频编辑，但交给 Matroska packetizer 的数据确实遵守原盘制作的 PlayItem 时间窗口。
 
@@ -156,13 +145,9 @@ tsMuxer 源码解释了这个限制：它为每个 MPLS PlayItem 创建一个完
 具体来说：
 
 - `tsMuxer/metaDemuxer.cpp` 中的 `METADemuxer::addStream()` 为每个 MPLS PlayItem 向 `fileList` 添加一个完整 M2TS 路径。因为播放列表索引属于已处理轨道键的一部分，所以重复片段引用仍然保留为重复条目。
-- `tsMuxer/bufferedFileReader.h` 中的 `FileListIterator` 只保存文件名。
-  `BufferedReader::thread_main()` 在前一个文件到达 EOF 后打开下一个文件，没有接收 PlayItem 字节偏移或时间终点。
-- `TSDemuxer::setMPLSInfo()` 只保存 PlayItem 向量。在文件边界，
-  `TSDemuxer::simpleDemuxBlock()` 使用 `OUT_time - IN_time` 更新前一文件的预期时长并重置时间戳状态。
-- `SimplePacketizerReader::setMPLSInfo()` 和 `doMplsCorrection()` 同样使用
-  `OUT_time - IN_time` 修正时间线，不会 seek 到 `IN_time`，也不会在
-  `OUT_time` 停止读取。
+- `tsMuxer/bufferedFileReader.h` 中的 `FileListIterator` 只保存文件名。`BufferedReader::thread_main()` 在前一个文件到达 EOF 后打开下一个文件，没有接收 PlayItem 字节偏移或时间终点。
+- `TSDemuxer::setMPLSInfo()` 只保存 PlayItem 向量。在文件边界，`TSDemuxer::simpleDemuxBlock()` 使用 `OUT_time - IN_time` 更新前一文件的预期时长并重置时间戳状态。
+- `SimplePacketizerReader::setMPLSInfo()` 和 `doMplsCorrection()` 同样使用 `OUT_time - IN_time` 修正时间线，不会 seek 到 `IN_time`，也不会在 `OUT_time` 停止读取。
 
 也就是说，MPLS 时间会影响重建的时间线，但不会决定实际读取哪些源包。同一 M2TS 出现在两个 PlayItem 中时，tsMuxer 会打开并完整读取它两次。这个控制流程与实测的“完整文件重复”结果相符，因此不是只根据输出时长作出的推测。
 
@@ -175,8 +160,7 @@ tsMuxer 源码解释了这个限制：它为每个 MPLS PlayItem 创建一个完
 | 应用 `out_time` | PES PTS 达到上限时停止当前 M2TS | 只用 `OUT_time - IN_time` 计算预期时间线长度 |
 | 重复引用 M2TS | 重新打开，但只输出该项受限的 PTS 窗口 | 重新打开并再次读取完整文件 |
 
-`mkvmerge` 直接处理 MPLS 时没有这个问题。BluraySubtitle 回退也不会触发它，因为每个 PlayItem 在拼接前都会显式转换为 M2TS 相对的
-`--split parts:start-end` 范围。
+`mkvmerge` 直接处理 MPLS 时没有这个问题。BluraySubtitle 回退也不会触发它，因为每个 PlayItem 在拼接前都会显式转换为 M2TS 相对的 `--split parts:start-end` 范围。
 
 ### BluraySubtitle 已覆盖的相关功能
 
@@ -202,26 +186,14 @@ tsMuxer 的流检测在部分异常 M2TS 上比 MKVToolNix 更宽松，因此适
 
 tsMuxer 对相关蓝光 TrueHD 布局使用两种不同的读取器。两条路径都没有损坏帧修复，并且失败处理方式值得注意：
 
-- TrueHD-only PID 由 `MLPStreamReader` 处理。
-  `MLPCodec::decodeFrame()` 将帧头或 major/minor-sync 验证失败报告为 Boolean `false`，`MLPStreamReader::decodeFrame()` 再把它转换为零，而不是独立的错误类型。
-  `SimplePacketizerReader::readPacket()` 因此将其当作坏帧并进入重新同步；
-  `MLPCodec::findFrame()` 只寻找下一个 TrueHD/MLP major sync。中间所有字节，包括原本可能可用的 minor-sync 帧，都会被跳过。普通输入块边界短于
-  `getHeaderLen()` 时，`SimplePacketizerReader` 会先缓存数据再调用解码，所以源码并不支持把问题简单归因于普通分块边界。
-- 包含交错 AC-3 core 和 TrueHD 扩展数据的蓝光 PID 由
-  `AC3StreamReader` 处理。`AC3Codec::decodeFrame()` 在检测模式时验证首个 TrueHD major-sync 帧。`m_true_hd_mode` 变为 true 后，后续扩展帧主要按照声明长度前进；该状态下，嵌套的 `if (!m_true_hd_mode)` 验证分支不可能执行。失去帧边界后，`AC3Codec::findFrame()` 只搜索下一个 AC-3 `0x0b77` 同步字，因此该 core 帧之前的 TrueHD 字节可能被丢弃。
-- 如果 `NOT_ENOUGH_BUFFER` 状态持续超过一个完整输入块，
-  `SimplePacketizerReader` 可以抛出 `invalid stream`。其他异常帧会输出
-  `bad frame detected ... Resync stream` 后继续处理，因此返回码为零并不能证明提取出的基本流完整。
-- 两条 TrueHD 路径都根据成功接受的帧样本数生成输出时间戳。
-  `AC3StreamReader::readPacketTHD()` 使用 `m_totalTHDSamples` 重写 PTS，
-  `AC3StreamReader::needMPLSCorrection()` 在 TrueHD 模式中明确返回 false。缺帧会缩短生成的时间线，原始 PTS 间隙或 MPLS 区间不会保留在裸流输出中。
+- TrueHD-only PID 由 `MLPStreamReader` 处理。`MLPCodec::decodeFrame()` 将帧头或 major/minor-sync 验证失败报告为 Boolean `false`，`MLPStreamReader::decodeFrame()` 再把它转换为零，而不是独立的错误类型。`SimplePacketizerReader::readPacket()` 因此将其当作坏帧并进入重新同步；`MLPCodec::findFrame()` 只寻找下一个 TrueHD/MLP major sync。中间所有字节，包括原本可能可用的 minor-sync 帧，都会被跳过。普通输入块边界短于 `getHeaderLen()` 时，`SimplePacketizerReader` 会先缓存数据再调用解码，所以源码并不支持把问题简单归因于普通分块边界。
+- 包含交错 AC-3 core 和 TrueHD 扩展数据的蓝光 PID 由 `AC3StreamReader` 处理。`AC3Codec::decodeFrame()` 在检测模式时验证首个 TrueHD major-sync 帧。`m_true_hd_mode` 变为 true 后，后续扩展帧主要按照声明长度前进；该状态下，嵌套的 `if (!m_true_hd_mode)` 验证分支不可能执行。失去帧边界后，`AC3Codec::findFrame()` 只搜索下一个 AC-3 `0x0b77` 同步字，因此该 core 帧之前的 TrueHD 字节可能被丢弃。
+- 如果 `NOT_ENOUGH_BUFFER` 状态持续超过一个完整输入块，`SimplePacketizerReader` 可以抛出 `invalid stream`。其他异常帧会输出 `bad frame detected ... Resync stream` 后继续处理，因此返回码为零并不能证明提取出的基本流完整。
+- 两条 TrueHD 路径都根据成功接受的帧样本数生成输出时间戳。`AC3StreamReader::readPacketTHD()` 使用 `m_totalTHDSamples` 重写 PTS，`AC3StreamReader::needMPLSCorrection()` 在 TrueHD 模式中明确返回 false。缺帧会缩短生成的时间线，原始 PTS 间隙或 MPLS 区间不会保留在裸流输出中。
 
 两条路径都没有合成替换 access unit、把损坏区间保留为空隙或填充静音。因此，tsMuxer 适合恢复 MKVToolNix 未暴露的视频或字幕 PID，但不能代替专门修复损坏 TrueHD 的 demux 工具。
 
-一次短素材测试可以说明实际影响。tsMuxeR 2.7.0 从时长 50.053 秒的 Avatar `00096.m2ts` 中 demux 两个 TrueHD PID，并返回
-`Demux complete`。PID 4352 被识别为交错的 `A_AC3`，PID 4356 被识别为 TrueHD-only `A_MLP`。提取第二条轨道时反复出现
-`bad frame detected ... Resync stream`。随后使用 `truehdd` 0.4.0
-`info` 检查：
+一次短素材测试可以说明实际影响。tsMuxeR 2.7.0 从时长 50.053 秒的 Avatar `00096.m2ts` 中 demux 两个 TrueHD PID，并返回 `Demux complete`。PID 4352 被识别为交错的 `A_AC3`，PID 4356 被识别为 TrueHD-only `A_MLP`。提取第二条轨道时反复出现 `bad frame detected ... Resync stream`。随后使用 `truehdd` 0.4.0 `info` 检查：
 
 | PID | tsMuxer 输出 | 输出大小 | `truehdd` 时长 |
 | ---: | --- | ---: | ---: |
@@ -242,12 +214,9 @@ MKVToolNix 会解析并混流 TrueHD 帧，但不会执行解码器式错误隐�
 
 - `src/input/r_mpeg_ts.cpp` 中的 `reader_c::handle_transport_errors()` 把 TS transport-error 标志或意外的 continuity counter 都视为错误，清除已累计负载并记录丢弃当前 PES 包；它不会为丢弃区间生成替换音频。
 - `src/common/truehd.cpp` 中的 `frame_t::parse_header()` 从首个 word 取得普通 TrueHD access unit 长度，并且普通 TrueHD 帧通过时不会检查负载校验和。相比之下，AC-3 分支会显式调用 `mtx::ac3::verify_checksums()`。因此，某个 TrueHD 帧可能在结构上能够分离，但仍包含随后被解码器报告的损坏。
-- `parser_c::parse()` 复制每个接受帧的原始字节。失去帧边界后，
-  `resync()` 向前搜索下一个 TrueHD/MLP major sync 或 AC-3 帧；跳过的字节不会转换成静音或替换 TrueHD 帧。
-- `truehd_ac3_splitting_packet_converter_c::process_frames()` 把 PES 时间戳交给其中第一帧 TrueHD。后续帧由
-  `truehd_packetizer_c::process_framed()` 根据样本数确定时间。该 packetizer 把原始 `frame->m_data` 放入 Matroska 包；除可选的 dialog normalization 帧头修改外，不会重写或解码负载。
-- `xtr_base_c::create_extractor()` 将 `MKV_A_TRUEHD` 映射到通用
-  `xtr_base_c` 提取器，后者的 `handle_frame()` 直接把每个 Matroska 帧写入输出文件。Matroska 时间戳及其中的间隙不会序列化到裸 `.thd` 基本流。
+- `parser_c::parse()` 复制每个接受帧的原始字节。失去帧边界后，`resync()` 向前搜索下一个 TrueHD/MLP major sync 或 AC-3 帧；跳过的字节不会转换成静音或替换 TrueHD 帧。
+- `truehd_ac3_splitting_packet_converter_c::process_frames()` 把 PES 时间戳交给其中第一帧 TrueHD。后续帧由 `truehd_packetizer_c::process_framed()` 根据样本数确定时间。该 packetizer 把原始 `frame->m_data` 放入 Matroska 包；除可选的 dialog normalization 帧头修改外，不会重写或解码负载。
+- `xtr_base_c::create_extractor()` 将 `MKV_A_TRUEHD` 映射到通用 `xtr_base_c` 提取器，后者的 `handle_frame()` 直接把每个 Matroska 帧写入输出文件。Matroska 时间戳及其中的间隙不会序列化到裸 `.thd` 基本流。
 
 Matroska 时间戳能够表示丢帧后留下的时间间隙，但随后提取出的裸 `.thd` 无法表示：`mkvextract` 会连续写入基本流帧字节，裸 TrueHD 中没有 Matroska 时间戳间隙。因此，损坏来源可能具有看似合理的 MKV 时长，却在 `truehdd` 中产生大量错误，最终解码出的 PCM/FLAC 比视频短一到两秒。改变 MKV append mode 只能对齐文件边界，不会修复 TrueHD 负载，也不会增加裸流中的有效帧数。
 

@@ -95,6 +95,7 @@ When the author establishes a new rule, update this file and its Simplified Chin
 - Use UTF-8 for source and documentation files.
 - Every new or modified non-`.sh` text file must use CRLF line endings.
 - Shell scripts must use LF line endings so their shebang remains valid.
+- Do not hard-wrap Markdown prose in the middle of a sentence. Keep a paragraph on one line when practical; if it is split, every resulting line must end at a complete sentence boundary. Preserve structural line breaks in lists, tables, code blocks, diagrams, and similar Markdown constructs; every list item must remain on its own line.
 - Do not introduce trailing whitespace or malformed encoding.
 
 ## 9. Tool Versions and Dockerfile Maintenance
@@ -106,32 +107,30 @@ When the author establishes a new rule, update this file and its Simplified Chin
 
 ## 10. Confirmed Product Constraints
 
-- Automatic getnative keeps its permissive high-height/high-score ranking, admits up to 20 samples at an 800 MiB memory budget each, streams completed results, and excludes 535p–545p plus heights above 1040p.
-- The generated default VPy is progressive-only, uses L-SMASH with a temporary index and placebo on every platform, and protects luma-only native descale with a reconstruction mask.
-- Encode snapshots the visible default-VPy denoise, dehalo, dering, deband, and anti-aliasing strengths. Every stage is independently disabled by zero; defect-specific dehalo and dering default to zero, while deband and anti-aliasing default to the moderate blend value `0.5`. Deband protects edge/detail planes with an adaptive mask before applying that blend.
+Keep this section limited to confirmed product behavior that is easy to misunderstand or materially constrains future changes. Algorithm parameters, performance budgets, internal module or file ownership, and other implementation details belong in nearby code comments or refactoring history.
+
+- The generated default VPy supports progressive sources only. Interlaced, telecined, or mixed-cadence material requires an explicitly suitable custom script.
 - Remux-source Encode is resumable. Existing planned main, SP, external-subtitle, and companion outputs are treated as completed and skipped without overwrite; remaining rows continue. Duplicate paths within the current request remain errors.
 - Blu-ray DIY remains visible and its code is retained. Its incomplete execution must not be presented as complete.
-- Blu-ray Remux exposes a default-enabled option that converts selected lossless audio to FLAC after main and SP muxing. Disabled preserves source audio; Remux must not use AAC or Opus for this conversion.
+- Blu-ray Remux exposes a default-enabled option that converts selected lossless audio to FLAC. Disabled preserves source audio; Remux must not use AAC or Opus for this conversion.
 - A successful DTS-family-to-FLAC conversion replaces the source only when the FLAC is no larger than the extracted DTS; otherwise the FLAC is discarded and the original DTS is retained. Successful PCM and TrueHD/MLP FLAC conversions are retained regardless of size.
-- Final Remux and Encode outputs automatically remove selected audio whose decoded maximum volume is below -60 dB and exact decoded duplicates within the same source codec family and channel count. Different known languages are never deduplicated, the earliest source-order track is retained, and every removal is reported. This documented cleanup is an intentional exception to retaining every selected track.
+- Final Remux and Encode outputs may automatically remove selected silent audio and exact decoded duplicates. Different known languages are never deduplicated, source order determines which duplicate is retained, and every removal is reported. This is an intentional exception to retaining every selected track.
 - Blu-ray Encode staging Remux must preserve source audio. Encode audio conversion runs only in the final mux after video encoding succeeds.
 - When Encode comparison images are enabled, each encoded video must save one source/encoded PNG pair selected by the same zero-based video frame number under `Compare` in the actual per-source output folder. Timestamp-based matching is not equivalent.
 - Generic video conversion is not supported by Blu-ray Remux or Blu-ray Encode. Future DIY video conversion requires a separately confirmed design.
-- Every selected main MPLS corresponds to exactly one non-empty main Remux command.
 - Add Chapters matches current visible MKV order to selected main playlists sequentially and does not require `BD_Vol_NNN` in external MKV filenames.
 - Application preferences use a versioned `config.json` beside the executable, or in the repository root for source runs. Frozen builds package `config.default.json` as the first-run template; the bundled `_MEIPASS` directory is never the writable configuration target.
 - Update checks must be manual and asynchronous. They may query only the latest published full GitHub Release tag, compare its numeric version with the application-owned version, and must not download an update. A newer-version result must provide the GitHub Releases link and explicitly remind the user to copy `config.json` from the current program directory to the new program directory.
-- Invalid application configuration must be reported and left untouched. Configuration writes must replace the complete file atomically.
-- Configured defaults only initialize visible GUI controls. Edits made in the current session must be retained, and launched tasks use the current visible values rather than rereading configuration defaults.
-- Built-in Encode presets are read-only and remain defined in `src/core/encode_presets.py`. Application configuration stores only user-defined presets, each owned by one encoder. The Encode page shows the built-in and user-defined presets for its current encoder, and directly editing the visible parameter field must not change the selected preset name.
-- FDK-AAC and Opus bitrate value `0` means automatic behavior: FDK-AAC uses VBR mode 5, while Opus uses 128 kbps for up to two channels and 256 kbps for more channels. Positive values are explicit kbps targets.
+- Invalid application configuration must be reported and left untouched.
+- Built-in Encode presets are read-only. Application configuration stores only user-defined presets, each owned by one encoder. The Encode page shows the built-in and user-defined presets for its current encoder, and directly editing the visible parameter field must not change the selected preset name.
+- FDK-AAC and Opus bitrate value `0` means Auto rather than disabled or zero bitrate. Positive values are explicit kbps targets.
 - The Advanced settings page must visibly warn that higher FFmpeg FLAC compression levels can significantly increase Remux time. It must also show stereo-music starting ranges of 128–256 kbps for FDK-AAC and 64–128 kbps for Opus, with Auto or a higher value recommended for multichannel or mixed channel layouts.
 - Window geometry and current language, theme, font size, and opacity are saved automatically on a clean close. Restored geometry must not be replaced by first-run centering.
 
 ## 11. Testing and Change Reporting
 
 - Add focused automated tests for every changed workflow boundary and every fixed regression that can be tested deterministically.
-- Run the concentrated repository test suite when a workflow or phase is completed.
+- For ordinary changes, run only the automated tests directly related to the modified behavior. Run the full repository test suite only for a major refactoring, a broad functional change, or when focused results reveal a credible wider regression risk.
 - At minimum, run checks appropriate to the change from this set:
   - Python compilation and import smoke tests;
   - repository unit tests;
@@ -160,7 +159,7 @@ Before considering a change complete:
 - [ ] Every user-visible string has English/Simplified Chinese i18n.
 - [ ] GUI/service split base declarations are synchronized.
 - [ ] New and modified files have the required line endings.
-- [ ] Focused and concentrated tests have been run as appropriate.
+- [ ] Tests appropriate to the change scope have been run; the full suite was reserved for a major or broad change unless wider risk required it.
 - [ ] Both README versions are synchronized if behavior changed.
 - [ ] Both standards files are updated if a new rule was confirmed.
 - [ ] Both refactoring-history files are updated if the change is a refactoring or major change.

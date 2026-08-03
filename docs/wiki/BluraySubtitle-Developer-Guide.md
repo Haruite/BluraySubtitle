@@ -1,16 +1,12 @@
 # BluraySubtitle Developer Guide
 
-This page connects the media model to the source tree. It describes current
-behavior, not a proposed rewrite. The mandatory
-[Code Modification Standards](../development/code-standards.md) remain the
-authority for changes.
+This page connects the media model to the source tree. It describes current behavior, not a proposed rewrite. The mandatory [Code Modification Standards](../development/code-standards.md) remain the authority for changes.
 
 ## Domain definitions
 
 ### Main MPLS
 
-In BluraySubtitle, a **main MPLS** is a selected playlist whose authored
-playback content represents the principal movie or episode material.
+In BluraySubtitle, a **main MPLS** is a selected playlist whose authored playback content represents the principal movie or episode material.
 
 This is a semantic selection. It must not be reduced to:
 
@@ -20,34 +16,25 @@ This is a semantic selection. It must not be reduced to:
 - the first playlist returned by a library; or
 - one playlist per disc.
 
-One disc can have any number of selected main playlists. A selected main MPLS
-must have exactly one non-empty main remux command, and selected playlists are
-processed in current GUI order.
+One disc can have any number of selected main playlists. A selected main MPLS must have exactly one non-empty main remux command, and selected playlists are processed in current GUI order.
 
 ### SP
 
-**SP** is the project’s category for additional disc content outside the
-selected main-playlist content. It includes:
+**SP** is the project’s category for additional disc content outside the selected main-playlist content. It includes:
 
 - other MPLS playlists;
 - unchecked segments of a selected main MPLS;
 - useful M2TS files not covered by any MPLS;
 - extras that share an M2TS with main content but use a different interval;
-- video, audio-only, subtitle-only, audio-plus-subtitle, IGS-menu, and
-  single-frame layouts that the application can process deterministically.
+- video, audio-only, subtitle-only, audio-plus-subtitle, IGS-menu, and single-frame layouts that the application can process deterministically.
 
-SP is not a Blu-ray standard acronym in this context and is not a codec or
-container. UI and code comments should preserve this project definition.
+SP is not a Blu-ray standard acronym in this context and is not a codec or container. UI and code comments should preserve this project definition.
 
 ### Segment
 
-In the main-playlist UI, a **segment** is a user-visible chapter/file interval
-derived from playlist structure. Checked segments contribute to main episode
-configuration. Unchecked segments are excluded from main output and become SP
-candidates.
+In the main-playlist UI, a **segment** is a user-visible chapter/file interval derived from playlist structure. Checked segments contribute to main episode configuration. Unchecked segments are excluded from main output and become SP candidates.
 
-This UI segment is not the same as a Matroska `Segment`, a PGS segment, or an
-MPEG-TS packet.
+This UI segment is not the same as a Matroska `Segment`, a PGS segment, or an MPEG-TS packet.
 
 ## Source-code map
 
@@ -66,10 +53,7 @@ MPEG-TS packet.
 | `src/bdmv/structures/sub_path.py` | Secondary synchronized paths |
 | `src/bdmv/mpls.py` | Load/save MPLS and patch STN tables from CLPI |
 
-The structured parser uses `InfoDict` records and explicit big-endian byte
-packing/unpacking. Variable-sized structures use their declared length fields.
-`update_counts()`, `update_constants()`, and `update_addresses()` must run
-before serialization when structure sizes change.
+The structured parser uses `InfoDict` records and explicit big-endian byte packing/unpacking. Variable-sized structures use their declared length fields. `update_counts()`, `update_constants()`, and `update_addresses()` must run before serialization when structure sizes change.
 
 ### Playlist timing and chapters
 
@@ -88,14 +72,8 @@ mark_info: dict[int, list[int]]
 
 `get_total_time()` sums `(out_time - in_time) / 45000`.
 
-The module also contains the optional short-tail trim registry used by episode
-mode. This is a workflow override, not a mutation of the source MPLS on disk.
-`chapter_tail_trim_register_path()` requires at least two play items and removes
-the last one only when its window is shorter than the default 15-second
-threshold. Marks belonging to the removed tail play item are excluded from the
-registered view. Encode and remux workers clear the registry, register selected
-episode-mode playlists when **Trim copyright bumper** is enabled, and then clear
-playlist caches so all downstream timeline consumers see the same view.
+The module also contains the optional short-tail trim registry used by episode mode. This is a workflow override, not a mutation of the source MPLS on disk. `chapter_tail_trim_register_path()` requires at least two play items and removes the last one only when its window is shorter than the default 15-second threshold. Marks belonging to the removed tail play item are excluded from the registered view.
+Encode and remux workers clear the registry, register selected episode-mode playlists when **Trim copyright bumper** is enabled, and then clear playlist caches so all downstream timeline consumers see the same view.
 
 ### CLPI
 
@@ -108,13 +86,9 @@ playlist caches so all downstream timeline consumers see the same view.
 - elementary PIDs; and
 - stream coding metadata and language.
 
-It also maps an M2TS path to the same-numbered CLPI and builds PID-to-language
-mappings. Chinese language variants are normalized to `zho` for selection
-parity.
+It also maps an M2TS path to the same-numbered CLPI and builds PID-to-language mappings. Chinese language variants are normalized to `zho` for selection parity.
 
-The parser does not currently implement the complete CLPI CPI index. Do not
-claim packet-accurate CPI seeking in code or documentation unless that support
-is added and tested.
+The parser does not currently implement the complete CLPI CPI index. Do not claim packet-accurate CPI seeking in code or documentation unless that support is added and tested.
 
 ### M2TS
 
@@ -126,8 +100,7 @@ is added and tested.
 - assembles PES headers to find first and last PTS;
 - reads PCR for duration, with PTS fallback;
 - handles finite timestamp wrap;
-- reads AVC/HEVC parameter sets for native frame rate, with targeted ffprobe
-  fallback;
+- reads AVC/HEVC parameter sets for native frame rate, with targeted ffprobe fallback;
 - assembles multi-packet PAT/PMT sections;
 - reports stream PID, type, codec, and language descriptors;
 - classifies clip layouts;
@@ -142,23 +115,15 @@ _TS_PACKET = 188
 _SYNC = 0x47
 ```
 
-PAT/PMT assembly must remain stateful across packets. UHD PMTs can exceed one
-TS payload. PUSI pointer bytes and declared PSI section length must be honored.
+PAT/PMT assembly must remain stateful across packets. UHD PMTs can exceed one TS payload. PUSI pointer bytes and declared PSI section length must be honored.
 
-Duration prefers PCR because it represents the transport program clock. PTS is
-a fallback when suitable PCR cannot be found. A single-frame stream can have
-the same first and last PTS and is handled separately by frame-count logic.
+Duration prefers PCR because it represents the transport program clock. PTS is a fallback when suitable PCR cannot be found. A single-frame stream can have the same first and last PTS and is handled separately by frame-count logic.
 
 ### Matroska
 
-`src/domain/media/mkv_container.py` includes a small EBML reader used to obtain
-duration directly from `Segment/Info`, avoiding a full `mkvinfo` scan for this
-common query. It also exposes chapter operations through configured
-MKVToolNix tools.
+`src/domain/media/mkv_container.py` includes a small EBML reader used to obtain duration directly from `Segment/Info`, avoiding a full `mkvinfo` scan for this common query. It also exposes chapter operations through configured MKVToolNix tools.
 
-This reader is deliberately narrow. General Matroska identification, remuxing,
-track extraction, metadata editing, append, and split behavior remain
-MKVToolNix responsibilities.
+This reader is deliberately narrow. General Matroska identification, remuxing, track extraction, metadata editing, append, and split behavior remain MKVToolNix responsibilities.
 
 ### Subtitles
 
@@ -170,11 +135,9 @@ MKVToolNix responsibilities.
 - two-byte segment length; and
 - segment payload.
 
-It computes subtitle end time, iterates timestamps, writes packets, appends a
-second PGS with a 90 kHz shift, and cuts/rebases a time interval.
+It computes subtitle end time, iterates timestamps, writes packets, appends a second PGS with a 90 kHz shift, and cuts/rebases a time interval.
 
-Other files under `src/domain/subtitles` implement SRT, ASS/SSA models, time
-conversion, style/event handling, and ASS-to-SUP conversion.
+Other files under `src/domain/subtitles` implement SRT, ASS/SSA models, time conversion, style/event handling, and ASS-to-SUP conversion.
 
 ### Workflow and tool integration
 
@@ -192,10 +155,7 @@ conversion, style/event handling, and ASS-to-SUP conversion.
 | `src/runtime/gui_runtime_split/sp_chapter_segment_logic.py` | Main segment/SP GUI relationship |
 | `src/runtime/gui_runtime_split/scan_and_worker_hooks.py` | Scan launch and worker integration |
 
-The GUI is the execution contract. The workflow captures visible selection,
-order, output names, chapter ranges, commands, track choices, languages, audio
-policies, subtitle mode, and Dolby Vision setting into plain request data
-before launching a worker.
+The GUI is the execution contract. The workflow captures visible selection, order, output names, chapter ranges, commands, track choices, languages, audio policies, subtitle mode, and Dolby Vision setting into plain request data before launching a worker.
 
 ## Discovery model
 
@@ -219,22 +179,11 @@ Read STN/CLPI plus native PAT/PMT/PCR/PTS information
 Populate track selection and output planning
 ```
 
-Automatic main-playlist selection is a convenience, not an authority. Manual
-selection remains necessary for branching, obfuscated, compilation, and unusual
-multi-title discs.
+Automatic main-playlist selection is a convenience, not an authority. Manual selection remains necessary for branching, obfuscated, compilation, and unusual multi-title discs.
 
-`get_main_mpls()` in
-`src/runtime/services_split/lifecycle_and_configuration.py` implements the
-default estimate described in [Blu-ray Disc Structure](Blu-ray-Disc-Structure.md).
-It sums distinct referenced M2TS sizes before multiplying that total into the
-score. With `checked=True`, the M2TS-size factor is replaced by `1`. Candidate
-replacement uses strict `>`, so an exact tie retains the first path returned by
-`os.listdir()`; do not treat that order as a stable numeric sort.
+`get_main_mpls()` in `src/runtime/services_split/lifecycle_and_configuration.py` implements the default estimate described in [Blu-ray Disc Structure](Blu-ray-Disc-Structure.md). It sums distinct referenced M2TS sizes before multiplying that total into the score. With `checked=True`, the M2TS-size factor is replaced by `1`. Candidate replacement uses strict `>`, so an exact tie retains the first path returned by `os.listdir()`; do not treat that order as a stable numeric sort.
 
-SP rows are ordered by BDMV volume, then MPLS name, then uncovered M2TS name.
-The scanner shows content that is completely covered by main content but leaves
-it unchecked by default. Short content remains visible but is normally
-unchecked unless other usefulness rules apply.
+SP rows are ordered by BDMV volume, then MPLS name, then uncovered M2TS name. The scanner shows content that is completely covered by main content but leaves it unchecked by default. Short content remains visible but is normally unchecked unless other usefulness rules apply.
 
 ## Timing model
 
@@ -251,8 +200,7 @@ Developers must keep these domains explicit:
 | Matroska timestamps | `TimestampScale` nanoseconds per tick |
 | PGS SUP PTS/DTS | 90,000 ticks/s |
 
-Name variables with their domain or convert at a clear boundary. Avoid passing
-an unqualified integer named `time` through multiple layers.
+Name variables with their domain or convert at a clear boundary. Avoid passing an unqualified integer named `time` through multiple layers.
 
 ### Play-item window conversion
 
@@ -263,20 +211,15 @@ start = (in_time * 2 - first_m2ts_pts) / 90000
 end = start + (out_time - in_time) / 45000
 ```
 
-This is the project’s effective file-relative window for per-clip fallback.
-It accounts for non-zero transport timestamps.
+This is the project’s effective file-relative window for per-clip fallback. It accounts for non-zero transport timestamps.
 
 ### Timestamp wrap
 
-PTS/PCR bases are finite-width counters. Compute elapsed time modulo the clock
-range. A simple signed subtraction can produce a negative or enormous duration
-when the source crosses the wrap point.
+PTS/PCR bases are finite-width counters. Compute elapsed time modulo the clock range. A simple signed subtraction can produce a negative or enormous duration when the source crosses the wrap point.
 
 ### Boundary behavior
 
-Video, audio, PG, and IG do not necessarily share identical access-unit
-boundaries. Do not infer that a stream-copy cut is frame/sample exact merely
-because its requested timestamp has millisecond precision.
+Video, audio, PG, and IG do not necessarily share identical access-unit boundaries. Do not infer that a stream-copy cut is frame/sample exact merely because its requested timestamp has millisecond precision.
 
 ## Track identity model
 
@@ -292,13 +235,9 @@ At minimum, the workflow deals with:
 | Matroska track number/UID | final container |
 | GUI row and selection order | user contract |
 
-`properties.number` from MKVToolNix is not a transport PID. SP append/recovery
-requires a real `stream_id` or `original_transport_stream_id`. If no valid PID
-can be mapped, the selected job fails instead of guessing.
+`properties.number` from MKVToolNix is not a transport PID. SP append/recovery requires a real `stream_id` or `original_transport_stream_id`. If no valid PID can be mapped, the selected job fails instead of guessing.
 
-The selected MPLS STN layout is the reference. A PAT/PMT stream that physically
-exists but is hidden by MPLS is excluded from normal main title mapping unless
-an SP or recovery workflow explicitly selects it.
+The selected MPLS STN layout is the reference. A PAT/PMT stream that physically exists but is hidden by MPLS is excluded from normal main title mapping unless an SP or recovery workflow explicitly selects it.
 
 ## Main remux pipeline
 
@@ -328,35 +267,29 @@ Convert compatible Dolby Vision input to the supported profile 8.1 result
 Verify final outputs
 ```
 
-Existing planned outputs are errors for Blu-ray Remux. They are not overwritten
-or renamed. Cleanup may remove only task-created partial artifacts.
+Existing planned outputs are errors for Blu-ray Remux. They are not overwritten or renamed. Cleanup may remove only task-created partial artifacts.
 
 ### Direct MPLS mux
 
-MKVToolNix is the primary remuxer because it understands MPLS play items,
-clip-relative timing, Matroska track metadata, chapters, splitting, and append.
+MKVToolNix is the primary remuxer because it understands MPLS play items, clip-relative timing, Matroska track metadata, chapters, splitting, and append.
 
-Direct mux is attempted first. Success requires the planned output to exist and
-later metadata checks to match.
+Direct mux is attempted first. Success requires the planned output to exist and later metadata checks to match.
 
 ### Track-aligned fallback
 
-Direct MPLS mux can fail when adjacent clips have different track layouts. The
-fallback:
+Direct MPLS mux can fail when adjacent clips have different track layouts. The fallback:
 
 1. obtains `Chapter(mpls_path).in_out_time`;
 2. processes every play item with its exact interval;
 3. identifies only GUI-selected/MPLS-visible tracks;
 4. maps every clip to the selected reference layout;
-5. asks tsMuxer to recover missing selected video/subtitle PIDs and, when
-   possible, audio PIDs;
+5. asks tsMuxer to recover missing selected video/subtitle PIDs and, when possible, audio PIDs;
 6. synthesizes matching-duration PCM silence only for audio still unavailable;
 7. requires the repaired PID set to exactly match the reference layout;
 8. appends aligned per-clip MKVs in playlist order with MKVToolNix; and
 9. applies/verifies chapters and track languages.
 
-A missing selected video or subtitle stream is fatal. Silence is an explicit
-missing-audio alignment mechanism, not general error concealment.
+A missing selected video or subtitle stream is fatal. Silence is an explicit missing-audio alignment mechanism, not general error concealment.
 
 ### Why physical M2TS concatenation is insufficient
 
@@ -370,8 +303,7 @@ Concatenating source files ignores:
 - authored stream visibility; and
 - chapter timing.
 
-Any optimization that collapses play items must prove that all of those
-properties remain equivalent.
+Any optimization that collapses play items must prove that all of those properties remain equivalent.
 
 ## SP pipeline
 
@@ -380,9 +312,7 @@ The row source determines the path:
 - an MPLS-backed row always uses playlist logic;
 - raw M2TS logic is used only when no MPLS belongs to the row.
 
-Selected rows with non-empty outputs are required to complete. An empty output
-name with no selected audio or subtitle track is the documented intentional
-skip.
+Selected rows with non-empty outputs are required to complete. An empty output name with no selected audio or subtitle track is the documented intentional skip.
 
 Output type follows selected content:
 
@@ -393,14 +323,9 @@ Output type follows selected content:
 - one frame → `.png`;
 - multiple one-frame clips → a numbered image directory.
 
-Raw streams and PNG files cannot store Matroska track-language metadata.
-Configuring such metadata for an incompatible output is rejected before
-execution.
+Raw streams and PNG files cannot store Matroska track-language metadata. Configuring such metadata for an incompatible output is rejected before execution.
 
-When an SP interval exactly matches a main episode’s M2TS detail, selected SP
-audio or subtitle PIDs can be appended to the planned episode output. The
-episode is replaced only after the append result has completed and passed
-verification.
+When an SP interval exactly matches a main episode’s M2TS detail, selected SP audio or subtitle PIDs can be appended to the planned episode output. The episode is replaced only after the append result has completed and passed verification.
 
 ## Audio processing
 
@@ -410,36 +335,21 @@ Final Remux and Encode audio processing:
 2. reuses those files for analysis and conversion;
 3. decodes tracks for maximum-volume and fingerprint checks;
 4. removes decoded maximum volume below `-60 dB`;
-5. compares exact decoded fingerprints only within the same source codec family
-   and channel count;
+5. compares exact decoded fingerprints only within the same source codec family and channel count;
 6. never deduplicates tracks with different known languages;
 7. keeps the earliest source-order duplicate; and
 8. reports every removal.
 
-The one-extraction invariant avoids reopening a very large MKV once per track.
-It also means the output volume must have enough temporary space for all
-selected audio streams.
+The one-extraction invariant avoids reopening a very large MKV once per track. It also means the output volume must have enough temporary space for all selected audio streams.
 
-Remux lossless-to-FLAC conversion is controlled by its visible checkbox and is
-enabled by default at startup. Disabling it preserves selected source audio,
-apart from the documented cleanup. Remux does not use AAC or Opus for this
-conversion.
+Remux lossless-to-FLAC conversion is controlled by its visible checkbox and is enabled by default at startup. Disabling it preserves selected source audio, apart from the documented cleanup. Remux does not use AAC or Opus for this conversion.
 
-Encode’s Blu-ray staging remux preserves source audio. Per-track Encode audio
-conversion occurs only in final muxing after video encode succeeds.
+Encode’s Blu-ray staging remux preserves source audio. Per-track Encode audio conversion occurs only in final muxing after video encode succeeds.
 
 ## Automatic black-border cropping
 
-`src/runtime/video_crop.py` owns duration-adaptive sampling, FFmpeg crop-result
-validation, conservative rectangle aggregation, and the managed VPy crop block.
-It uses input-side time seeking rather than exact frame selection and writes no
-screenshots. The one-per-150-second sample count is clamped to 4–24, and the
-union of sampled active areas becomes one even-aligned crop. Existing managed
-blocks are replaced or removed so sequential rows cannot accumulate stale crop
-operations. A script without a known safe `src8`/`res` boundary fails the row
-instead of inserting a crop at an ambiguous point. A non-managed manual
-`Crop`/`CropAbs` call is also rejected when automatic cropping would be nonzero,
-preventing accidental double cropping.
+`src/runtime/video_crop.py` owns duration-adaptive sampling, FFmpeg crop-result validation, conservative rectangle aggregation, and the managed VPy crop block. It uses input-side time seeking rather than exact frame selection and writes no screenshots. The one-per-150-second sample count is clamped to 4–24, and the union of sampled active areas becomes one even-aligned crop. Existing managed blocks are replaced or removed so sequential rows cannot accumulate stale crop operations.
+A script without a known safe `src8`/`res` boundary fails the row instead of inserting a crop at an ambiguous point. A non-managed manual `Crop`/`CropAbs` call is also rejected when automatic cropping would be nonzero, preventing accidental double cropping.
 
 ## Dolby Vision processing
 
@@ -453,15 +363,11 @@ The code:
 - exports and adjusts every L5 active-area preset when physical cropping is active;
 - checks that every requested intermediate was created;
 - injects RPU metadata into supported encoded HEVC;
-- converts dual-layer remux input to single-layer profile 8.1 by rewriting RPU
-  metadata and discarding enhancement-layer video;
+- converts dual-layer remux input to single-layer profile 8.1 by rewriting RPU metadata and discarding enhancement-layer video;
 - uses temporary paths owned by the current job; and
 - removes only those owned temporary artifacts during cleanup.
 
-Do not silently fall back to SDR or HDR10 under a request that requires Dolby
-Vision preservation. Unsupported x264/x265 bit-depth combinations fail
-preflight. SVT-AV1 is the documented exception: encoding is allowed, Dolby
-Vision metadata is omitted, and the task reports that decision.
+Do not silently fall back to SDR or HDR10 under a request that requires Dolby Vision preservation. Unsupported x264/x265 bit-depth combinations fail preflight. SVT-AV1 is the documented exception: encoding is allowed, Dolby Vision metadata is omitted, and the task reports that decision.
 
 ## Subtitle processing
 
@@ -475,8 +381,7 @@ Subtitles can affect both content and episode mapping:
 - hardsub inputs become part of the encoded picture; and
 - external subtitles are copied/named alongside the corresponding output.
 
-An impossible subtitle duration is treated as source data to fix, not as a
-reason to silently reorder or truncate rows.
+An impossible subtitle duration is treated as source data to fix, not as a reason to silently reorder or truncate rows.
 
 ## Error and verification rules
 
@@ -501,10 +406,7 @@ After execution, it verifies:
 - required Dolby Vision intermediates/final stream; and
 - completion of every selected non-skipped row.
 
-A successful external-tool exit code alone is not proof that all selected
-streams or their full duration survived. The TrueHD limitations documented in
-[Media Pipeline Design and Tool Selection](../development/media-pipeline-and-tool-selection.md)
-are a concrete example.
+A successful external-tool exit code alone is not proof that all selected streams or their full duration survived. The TrueHD limitations documented in [Media Pipeline Design and Tool Selection](../development/media-pipeline-and-tool-selection.md) are a concrete example.
 
 ## Tests to consult
 
@@ -520,6 +422,4 @@ are a concrete example.
 | `tests/test_ass2sup.py` | ASS-to-SUP generation |
 | `tests/test_worker_configuration_boundaries.py` | Immutable captured GUI configuration |
 
-When changing parser or workflow behavior, add a focused deterministic test at
-the owning boundary and run the concentrated suite required by the code
-standards.
+When changing parser or workflow behavior, add a focused deterministic test at the owning boundary and run the concentrated suite required by the code standards.

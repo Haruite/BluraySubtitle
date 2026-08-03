@@ -64,6 +64,8 @@ from ...vs_tools.getnative import format_getnative_progress, getnative as auto_g
 
 MIGRATE_METHODS = ['encode_task']
 KEEP_GETNATIVE_ARTIFACTS = bool(str(os.getenv("BLURAYSUB_KEEP_GETNATIVE_ARTIFACTS", "") or "").strip() == "1")
+# Each sample owns a memory-heavy VSPipe process, so concurrency is bounded by both a hard cap and
+# a conservative working-set estimate after reserving memory for the operating system and GUI.
 GETNATIVE_MAX_PARALLEL_SAMPLES = 20
 GETNATIVE_ESTIMATED_SAMPLE_MEMORY_BYTES = 800 * 1024**2
 GETNATIVE_MEMORY_RESERVE_BYTES = 2 * 1024**3

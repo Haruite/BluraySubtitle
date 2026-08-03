@@ -6,20 +6,14 @@
 
 开发文档：[强制代码修改规范](docs/development/code-standards.zh-Hans.md) | [媒体处理方案与工具选型](docs/development/media-pipeline-and-tool-selection.zh-Hans.md) | [重构历史](docs/refactoring/refactoring-history.zh-Hans.md)
 
-Windows x64 版本使用目录包发布。请完整解压发布压缩包，然后运行
-`BluraySubtitle_windows_x64.exe`；不要将它与旁边的 `_internal` 目录分离。
-首次启动时，打包的 `config.default.json` 会在可执行文件旁创建可写的
-`config.json`；源码运行时则使用仓库根目录。程序目录必须可写；配置无效时程序会
-明确报错并保留原文件，不会覆盖。
+Windows x64 版本使用目录包发布。请完整解压发布压缩包，然后运行 `BluraySubtitle_windows_x64.exe`；不要将它与旁边的 `_internal` 目录分离。首次启动时，打包的 `config.default.json` 会在可执行文件旁创建可写的 `config.json`；源码运行时则使用仓库根目录。程序目录必须可写；配置无效时程序会明确报错并保留原文件，不会覆盖。
 
 Windows x64 下载：
 
-- [持续更新包](https://sbx.mysmy.top/tools/BluraySubtitle_windows_x64.7z)：
-  独立于 GitHub Release 的发布周期及时更新。
+- [持续更新包](https://sbx.mysmy.top/tools/BluraySubtitle_windows_x64.7z)：独立于 GitHub Release 的发布周期及时更新。
 - [GitHub Releases](https://github.com/Haruite/BluraySubtitle/releases)：随每个版本发布的归档包。
 
-BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 工具。  
-它将以下五类功能整合在一个应用中：
+BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 工具。它将以下五类功能整合在一个应用中：
 
 1. **原盘 Remux**
 2. **原盘压制**
@@ -86,26 +80,17 @@ BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 
 - 写入前，程序会推导全部命令输出和最终分集文件名。输出数量必须与可见分集行一致；路径重复或文件已经存在都会报错。
 - 最终分集名称严格使用界面中显示的名称，无效文件名直接报错。
 - 主命令及 README 记录的 fallback 无法生成全部计划输出时，Remux 会报错停止，不会使用输出目录中的无关文件代替。
-- Remux 保持已选择的有损音轨不变。“将无损音轨转换为 FLAC”默认启用（可在“高级”中配置启动状态）。所有 FLAC 输出都会优先使用支持多线程的独立 `flac` 编码器，并自动使用检测到的逻辑 CPU 线程数；
-  编码器不可用或失败时才回退到 `ffmpeg`。两种 FLAC 编码默认级别都是 8，可在“高级”设置中分别修改。
-  DTS 系列音轨仅在 FLAC 不大于提取出的 DTS 时才替换源音轨；
-  如果 FLAC 更大，则删除 FLAC 并保留原 DTS。PCM 和 TrueHD/MLP 成功转换出的 FLAC 即使更大也仍然保留。
-  TrueHD Atmos 只有在 `truehdd` 成功解码 presentation 2 后才会转换。MKVToolNix 不会修复损坏的 TrueHD 帧，部分 DIY
-  原盘即使 MKV 时长看起来正常，仍可能在 `truehdd` 中产生大量错误，并使解码后的 FLAC 比视频短；
-  删除源音轨前应比较解码音频和视频时长。详细原理见
-  [媒体处理方案与工具选型](docs/development/media-pipeline-and-tool-selection.zh-Hans.md)。
+- Remux 保持已选择的有损音轨不变。“将无损音轨转换为 FLAC”默认启用（可在“高级”中配置启动状态）。所有 FLAC 输出都会优先使用支持多线程的独立 `flac` 编码器，并自动使用检测到的逻辑 CPU 线程数；编码器不可用或失败时才回退到 `ffmpeg`。两种 FLAC 编码默认级别都是 8，可在“高级”设置中分别修改。DTS 系列音轨仅在 FLAC 不大于提取出的 DTS 时才替换源音轨；如果 FLAC 更大，则删除 FLAC 并保留原 DTS。PCM 和 TrueHD/MLP 成功转换出的 FLAC 即使更大也仍然保留。TrueHD Atmos 只有在 `truehdd` 成功解码 presentation 2 后才会转换。MKVToolNix 不会修复损坏的 TrueHD 帧，部分 DIY 原盘即使 MKV 时长看起来正常，仍可能在 `truehdd` 中产生大量错误，并使解码后的 FLAC 比视频短；删除源音轨前应比较解码音频和视频时长。详细原理见 [媒体处理方案与工具选型](docs/development/media-pipeline-and-tool-selection.zh-Hans.md)。
 - 启用“混流 Dolby Vision”时，Remux 会将兼容的基础层和增强层合并为 Profile 8.1；关闭时不包含增强层。
 - 混流完成后，程序会把“编辑轨道”保存的语言应用到实际包含的视频、音频和字幕轨道并验证结果；映射、工具或验证失败时会中止当前任务并删除该任务新建的主输出。
 
-即使关闭“将无损音轨转换为 FLAC”，程序也会自动检查已选择的音轨。解码后的最大音量低于 -60 dB
-时，该音轨会作为静音轨移除。只有源编码家族和声道数相同的音轨才比较解码指纹；已知语言不同的音轨
-不会互相去重，完全重复时保留源顺序中最早的一条。
+即使关闭“将无损音轨转换为 FLAC”，程序也会自动检查已选择的音轨。解码后的最大音量低于 -60 dB 时，该音轨会作为静音轨移除。只有源编码家族和声道数相同的音轨才比较解码指纹；已知语言不同的音轨不会互相去重，完全重复时保留源顺序中最早的一条。
 
 - 压制参数支持：
   - `vspipe` 来源（程序自带 / 系统）
   - 压制工具（x264 / x265 / SvtAv1EncApp）
   - 压制工具来源（程序自带 / 系统）
-  - 输出视频位深（x264 - 8 / 10 bit, x265 - 8 / 10 / 12 bit, SvtAv1 - 8 / 10 / 12? bit）
+  - 输出视频位深（x264 - 8 / 10 bit，x265 - 8 / 10 / 12 bit；SvtAv1 正常输出仅使用 8 / 10 bit，界面中的 12-bit 路径属于实验功能，setup 脚本产物无法生成有效视频）
   - 只读的内置压制预设、用户新增预设，以及当前任务参数的直接编辑
   - 无损音频转换（flac / aac / opus）
   - 启动时的编码器、位深和预设来自“高级”设置；其中可按当前选择的压制工具新增、重命名、修改和删除用户预设，内置预设保持只读；启动后每个任务仍以 Encode 页面当前可见的预设和参数为准
@@ -114,8 +99,7 @@ BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 
   - 自动 getnative 会分析多个帧和多种核，可能消耗大量时间与内存；程序会排除经常误报的 535p 至 545p 区间，确实为原生 540p 的素材需要在 VPy 中手动设置
   - 勾选“自动裁剪黑边”时，Encode 会分析多个时间点并应用一组保守的固定裁剪值。黑边随时间变化时会优先保留任一样本用到的像素
   - 勾选“输出对比图”时，每个压制视频都会把源和压制成品的同一帧保存为 PNG，路径为 **`<所选输出目录>/<来源文件夹名>/Compare`**
-- PCM、TrueHD/MLP、DTS 系列和 FLAC 等无损音轨使用“编辑轨道”中逐轨显示的 FLAC/AAC/Opus 选项；
-  有损音轨保持不变。TrueHD Atmos 只有在 `truehdd` 成功解码 presentation 2 后才会转换；`truehdd` 不可用或解码失败时保留原 TrueHD 音轨。选择 FLAC 时同样应用上述 DTS/FLAC 体积规则。最终 Encode 混流同样执行上述静音/重复音轨清理；原盘暂存 Remux 不处理音频。其他已选择的音频转换失败时会中止当前行。Remux 来源中实际转换缺少必需工具时，会在任务启动前提示。
+- PCM、TrueHD/MLP、DTS 系列和 FLAC 等无损音轨使用“编辑轨道”中逐轨显示的 FLAC/AAC/Opus 选项；有损音轨保持不变。TrueHD Atmos 只有在 `truehdd` 成功解码 presentation 2 后才会转换；`truehdd` 不可用或解码失败时保留原 TrueHD 音轨。选择 FLAC 时同样应用上述 DTS/FLAC 体积规则。最终 Encode 混流同样执行上述静音/重复音轨清理；原盘暂存 Remux 不处理音频。其他已选择的音频转换失败时会中止当前行。Remux 来源中实际转换缺少必需工具时，会在任务启动前提示。
 - 字幕封装：外挂 / 内挂 / 内嵌
 - 每一行支持独立 VPy 路径（正片与 SP）。
 - Remux 来源支持更多功能，比如编辑章节/附件等。
@@ -192,48 +176,48 @@ setup 脚本还会安装 [hdr10plus_tool](https://github.com/quietvoid/hdr10plus
 
 以下 3 组输入中的任意一项变化时，分集配置都会重新计算：
 
-1. `table1 -> view chapters` 中 MPLS 各段勾选状态  
-2. `table2` 各行 `start_at_chapter`  
-3. `table2` 各行 `end_at_chapter`  
+1. `table1 -> view chapters` 中 MPLS 各段勾选状态
+2. `table2` 各行 `start_at_chapter`
+3. `table2` 各行 `end_at_chapter`
 
 处理优先级（按变化源判断）：
 
 **第一优先：view chapters 勾选变化（全量重算）**
 
-1. 从第一个“被勾选区间”开始作为第一集 `start_at_chapter`。  
-2. 一旦遇到“未勾选区间起点”，当前集立即结束，`end_at_chapter` 设在该处；下一集从该区间末端重新开始。  
-3. 每集目标时长：有字幕时取该集字幕 `max_end_time`，无字幕时取 `approx episode length`。  
-4. 对每一集取两个候选终点：  
-   - 候选 A：最接近目标时长的“文件结束点”（从 view chapters 中判断该节点与上一个节点 m2ts 是否变化），且该节点距离整个 mpls 结束的剩余时间大于预估的一集时间 -300 秒；  
-   - 候选 B：最接近目标时长的“章节点”。  
-5. 终点选择规则：  
-   - 若候选 A 的偏差在 `[-1/4*目标时长, +1/2*目标时长]`，优先选候选 A；  
-   - 否则将负偏差乘以 `-2` 后再比较 A/B，取偏差更小者作为 `end_at_chapter`。  
+1. 从第一个“被勾选区间”开始作为第一集 `start_at_chapter`。
+2. 一旦遇到“未勾选区间起点”，当前集立即结束，`end_at_chapter` 设在该处；下一集从该区间末端重新开始。
+3. 每集目标时长：有字幕时取该集字幕 `max_end_time`，无字幕时取 `approx episode length`。
+4. 对每一集取两个候选终点：
+   - 候选 A：最接近目标时长的“文件结束点”（从 view chapters 中判断该节点与上一个节点 m2ts 是否变化），且该节点距离整个 mpls 结束的剩余时间大于预估的一集时间 -300 秒；
+   - 候选 B：最接近目标时长的“章节点”。
+5. 终点选择规则：
+   - 若候选 A 的偏差在 `[-1/4*目标时长, +1/2*目标时长]`，优先选候选 A；
+   - 否则将负偏差乘以 `-2` 后再比较 A/B，取偏差更小者作为 `end_at_chapter`。
 
 **第二优先：start_at_chapter 变化（从首个变化集向后重算）**
 
-1. 与上一次配置比较，从“最先发生变化”的那一集开始重算后续。  
-2. 该集之前的 `start_at_chapter/end_at_chapter` 保持不变。  
-3. 从变化集开始，后续按上面同一套规则重算（不依赖后面旧的 start 值）。  
-4. 同步取消勾选：将“上一集 end”和“当前新 start”之间的节点置为不勾选。  
+1. 与上一次配置比较，从“最先发生变化”的那一集开始重算后续。
+2. 该集之前的 `start_at_chapter/end_at_chapter` 保持不变。
+3. 从变化集开始，后续按上面同一套规则重算（不依赖后面旧的 start 值）。
+4. 同步取消勾选：将“上一集 end”和“当前新 start”之间的节点置为不勾选。
 
 **第三优先：end_at_chapter 变化（按扩大/缩小分支处理）**
 
-1. 变化集之前保持不变。  
-2. 若 `end_at_chapter` 改小：后续集重算。  
-3. 若 `end_at_chapter` 改大：下一集从其后“第一个仍被勾选节点”开始，重算后续各集 `start/end`。  
+1. 变化集之前保持不变。
+2. 若 `end_at_chapter` 改小：后续集重算。
+3. 若 `end_at_chapter` 改大：下一集从其后“第一个仍被勾选节点”开始，重算后续各集 `start/end`。
 
 下拉可选性约束：
 
-- 对于 view chapters 里未勾选的节点，`start_at_chapter` 和 `end_at_chapter` 下拉中对应项必须置灰不可选。  
-- 仍需满足基本约束：`end_at_chapter > start_at_chapter`。  
+- 对于 view chapters 里未勾选的节点，`start_at_chapter` 和 `end_at_chapter` 下拉中对应项必须置灰不可选。
+- 仍需满足基本约束：`end_at_chapter > start_at_chapter`。
 
 #### D）补充说明
 
-- 主混流命令支持占位符：`{output_file}`、`{audio_opts}`、`{sub_opts}`、`{parts_split}`。  
+- 主混流命令支持占位符：`{output_file}`、`{audio_opts}`、`{sub_opts}`、`{parts_split}`。
 - 主命令结果不符合预期时，fallback 会使用已解析参数并保留明确选择的轨道；只有没有明确选择时才使用默认轨道。
 - 回退完成后，全部计划输出都必须存在；主播放列表输出不完整时任务失败。
-- 章节重写和语言修正放在混流后执行，主要是为了规避 mkvmerge 的边缘元数据问题。  
+- 章节重写和语言修正放在混流后执行，主要是为了规避 mkvmerge 的边缘元数据问题。
 
 ---
 
@@ -245,6 +229,8 @@ setup 脚本还会安装 [hdr10plus_tool](https://github.com/quietvoid/hdr10plus
 - `numpy`
 - `soundfile`
 - `pycountry`
+- `Pillow`（代码中以 `PIL` 导入）
+- `matplotlib`
 
 示例：
 
@@ -269,9 +255,7 @@ pip install PyQt6 numpy soundfile pycountry pillow matplotlib
 - `SvtAv1EncApp`
 - `fdkaac`
 
-> 具体使用程序自带还是系统路径，取决于当前模式与设置项。
-> “外部工具”路径检查会探测已配置的 x265：只有 x265 声明 `--dhdr10-info` 时才要求
-> `hdr10plus_tool`，只有 x265 同时声明两项 Dolby Vision 输入参数时才要求 `dovi_tool`。
+> 具体使用程序自带还是系统路径，取决于当前模式与设置项。“外部工具”路径检查会探测已配置的 x265：只有 x265 声明 `--dhdr10-info` 时才要求 `hdr10plus_tool`，只有 x265 同时声明两项 Dolby Vision 输入参数时才要求 `dovi_tool`。
 
 ---
 
@@ -335,9 +319,9 @@ python src/main.py
 典型流程：
 
 1. 加载原盘目录；
-2.（可选）加载字幕目录；
+2. （可选）加载字幕目录；
 3. 校验主播放列表与章节区间；
-4.（可选）编辑 remux 命令；
+4. （可选）编辑 remux 命令；
 5. 选择输出目录并执行。
 
 Remux 使用界面当前显示的播放列表顺序、命令、章节范围、输出名称、字幕语言、轨道设置、Dolby Vision 选项和“补全蓝光目录”设置。写入前会规划全部主输出；已有输出或重复输出会中止任务，不覆盖也不自动改名。
@@ -348,8 +332,8 @@ Remux 使用界面当前显示的播放列表顺序、命令、章节范围、�
 
 1. 选择输入源（原盘 / Remux）；
 2. 配置 VPy、x265、字幕封装等选项；
-3.（可选）编辑轨道或一键全选轨道；
-4.（可选）设置起始/结束章节；
+3. （可选）编辑轨道或一键全选轨道；
+4. （可选）设置起始/结束章节；
 5. 执行压制。
 
 压制使用界面当前显示的行顺序、输出名称、VPy、字幕、语言、轨道选择、逐轨音频转换选项和压制参数，且绝不覆盖已有文件。原盘输入遇到已有输出时会报错；Remux 输入会逐项提示并跳过已有且非空的正片/SP 文件、外挂字幕和附带文件，然后继续处理其余内容。空的正片/SP 文件或类型错误的路径不会被视为断点，因此耗时较长的压制可以安全地在中断后继续。
@@ -374,7 +358,7 @@ Remux 使用界面当前显示的播放列表顺序、命令、章节范围、�
 
 ## setup_windows_environment.ps1（Windows 环境配置脚本）
 
-`setup_windows_environment.ps1` 用于配置完整的本地运行与编译环境，仅支持 **Windows 10 / Windows 11 x64 工作站版本**。
+`setup_windows_environment.ps1` 用于为 **Windows 客户端和 Windows Server x64 系统**配置完整的本地运行与编译环境。
 
 首次运行前，先允许当前用户执行本地 PowerShell 脚本，再从仓库根目录启动：
 
@@ -389,10 +373,10 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
 
 ## setup_linux_environment.sh（Linux 运行环境脚本）
 
-`setup_linux_environment.sh` 是用于构建特定 Linux 系统程序运行环境的脚本，当前支持：
+`setup_linux_environment.sh` 用于构建 Linux 程序运行环境，仅支持 **x64** 系统。当前支持的发行版：
 
-- Ubuntu 22.04 / 24.04 / 25.10 / 26.04
-- Debian 12 / 13
+- Ubuntu 22.04 或更高版本
+- Debian 12 或更高版本
 
 首次运行前先授予脚本执行权限，再从仓库根目录启动：
 

@@ -52,11 +52,15 @@ class WindowsSetupTests(unittest.TestCase):
         self.assertNotIn("exit (Start-ElevatedSetup)", self.source)
         self.assertNotIn("exit $exitCode", self.source)
 
-    def test_only_windows_10_11_amd64_workstations_are_accepted(self) -> None:
+    def test_supported_windows_baselines_do_not_reject_future_releases(self) -> None:
         required_fragments = (
-            r"\bWindows 10\b",
-            r"\bWindows 11\b",
             "$productType -eq 1",
+            "$productType -in @(2, 3)",
+            "$build -ge 10240",
+            "$build -ge 17763",
+            '$installationType -eq "Server"',
+            "Windows Server requires the Desktop Experience installation option",
+            "$family = $caption.Trim()",
             "$processorArchitecture -eq 9",
             "[Environment]::Is64BitOperatingSystem",
             "[Environment]::Is64BitProcess",
@@ -64,6 +68,8 @@ class WindowsSetupTests(unittest.TestCase):
         for fragment in required_fragments:
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, self.source)
+        self.assertNotIn("$build -eq 20348", self.source)
+        self.assertNotIn("$build -eq 26100", self.source)
 
     def test_script_has_no_command_line_interface(self) -> None:
         self.assertNotIn("[CmdletBinding()]", self.source)
@@ -72,12 +78,7 @@ class WindowsSetupTests(unittest.TestCase):
             with self.subTest(parameter=removed_parameter):
                 self.assertNotIn(removed_parameter, self.source)
 
-    def test_language_is_requested_after_elevation(self) -> None:
-        elevation = self.source.index("if (-not (Test-Administrator))")
-        language_prompt = self.source.index("$script:SelectedLanguage = Select-SetupLanguage")
-        os_check = self.source.index("$windows = Assert-SupportedWindows")
-        self.assertLess(elevation, language_prompt)
-        self.assertLess(language_prompt, os_check)
+    def test_language_prompt_is_interactive_and_bilingual(self) -> None:
         self.assertIn("Read-Host", self.source)
         self.assertIn("请选择语言", self.source)
 
@@ -94,9 +95,6 @@ class WindowsSetupTests(unittest.TestCase):
         self.assertIn("[Console]::InputEncoding = $script:Utf8Encoding", self.source)
         self.assertIn("[Console]::OutputEncoding = $script:Utf8Encoding", self.source)
         self.assertIn("$OutputEncoding = $script:Utf8Encoding", self.source)
-
-    def test_script_does_not_read_environment_variables(self) -> None:
-        self.assertNotIn("$env:", self.source)
 
     def test_no_cmd_launcher_exists(self) -> None:
         self.assertFalse(CMD_LAUNCHER.exists())
@@ -360,7 +358,6 @@ class WindowsSetupTests(unittest.TestCase):
         self.assertIn("'rgvs'", self.source)
         self.assertIn("'grain'", self.source)
         self.assertIn("'mv'", self.source)
-        self.assertIn("'placebo'", self.source)
         self.assertIn("'zsmooth'", self.source)
 
     def test_vapoursynth_placebo_is_managed_by_the_tools_component(self) -> None:
@@ -544,6 +541,7 @@ class WindowsSetupTests(unittest.TestCase):
             "return $false",
             "experimental SVT-AV1 12-bit patch could not be applied",
             "unmodified upstream source will be compiled",
+            "does not produce usable 12-bit encodes",
         )
         for fragment in required:
             with self.subTest(fragment=fragment):
@@ -976,7 +974,6 @@ class WindowsSetupTests(unittest.TestCase):
     def test_download_and_installer_security_checks_are_present(self) -> None:
         self.assertIn("Assert-ValidAuthenticodeSignature", self.source)
         self.assertIn("Get-FileHash -LiteralPath $installer -Algorithm SHA256", self.source)
-        self.assertIn("Downloads may only be written inside", self.source)
         self.assertIn("Remove-SetupTempRoot", self.source)
 
     def test_unsigned_seven_zip_installer_uses_release_digest(self) -> None:

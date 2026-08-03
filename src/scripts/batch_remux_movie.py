@@ -71,7 +71,8 @@ def _progress_cb(value: int | None = None, text: str | None = None) -> None:
 
 
 def remux_one_disc(bdmv_folder: str, movie_root: str, output_root: str) -> None:
-    from src.core import find_mkvtoolnix, translate_text
+    from src.core import find_mkvtoolnix
+    from src.core.i18n import translate_text
     from src.runtime.remux import RemuxRequest
     from src.runtime.services import BluraySubtitle
     from src.runtime.sp import SpEntry

@@ -19,41 +19,12 @@ from src.runtime.gui_runtime_classes.bluray_subtitle_gui_entry import BluraySubt
 from src.runtime.gui_runtime_split import actions_and_file_dialogs as actions_module
 from src.runtime.gui_runtime_split.actions_and_file_dialogs import ActionsAndDialogsMixin
 from src.runtime.services_split.subtitle_and_chapter_pipeline import SubtitleChapterPipelineMixin
+from tests._gui_worker_fakes import FakeThread as _FakeThread
+from tests._gui_worker_fakes import RequestWorkerCapture
 
 
-class _Signal:
-    def __init__(self) -> None:
-        self.callbacks = []
-
-    def connect(self, callback) -> None:
-        self.callbacks.append(callback)
-
-
-class _FakeThread:
-    def __init__(self, parent) -> None:
-        self.started = _Signal()
-        self.was_started = False
-
-    def start(self) -> None:
-        self.was_started = True
-
-
-class _FakeWorker:
-    last_request = None
-
-    def __init__(self, request, cancel_event) -> None:
-        type(self).last_request = request
-        self.progress = _Signal()
-        self.label = _Signal()
-        self.finished = _Signal()
-        self.canceled = _Signal()
-        self.failed = _Signal()
-
-    def moveToThread(self, thread) -> None:
-        self.thread = thread
-
-    def run(self) -> None:
-        pass
+class _FakeWorker(RequestWorkerCapture):
+    pass
 
 
 class _SubtitleTable:

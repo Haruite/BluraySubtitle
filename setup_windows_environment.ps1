@@ -266,16 +266,28 @@ function Assert-SupportedWindows {
     $build = [int]$operatingSystem.BuildNumber
     $productType = [int]$operatingSystem.ProductType
     $processorArchitecture = [int]$processor.Architecture
+    $installationType = [string](Get-ItemPropertyValue `
+        -LiteralPath "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" `
+        -Name "InstallationType")
 
-    $isWindows10 = $caption -match '(?i)\bWindows 10\b' -and $build -ge 10240 -and $build -lt 22000
-    $isWindows11 = $caption -match '(?i)\bWindows 11\b' -and $build -ge 22000
-    $isWorkstation = $productType -eq 1
+    # Minimum build checks keep known-incompatible legacy systems out without rejecting future Windows releases.
+    $isSupportedWindowsClient = $productType -eq 1 -and $build -ge 10240
+    $isWindowsServer = $productType -in @(2, 3)
+    # "Server" means Desktop Experience; "Server Core" has no desktop shell for the PyQt GUI.
+    $isSupportedWindowsServer = `
+        $isWindowsServer -and $build -ge 17763 -and `
+        $installationType -eq "Server"
     $isAmd64 = [Environment]::Is64BitOperatingSystem -and $processorArchitecture -eq 9
 
-    if (-not $isWorkstation -or (-not $isWindows10 -and -not $isWindows11)) {
+    if ($isWindowsServer -and $installationType -eq "Server Core") {
         throw (Get-SetupText `
-            "Only Windows 10 and Windows 11 workstation editions are supported. Detected: $caption (build $build)." `
-            "仅支持 Windows 10 和 Windows 11 工作站版本。检测到：$caption（内部版本 $build）。")
+            "Windows Server requires the Desktop Experience installation option. Server Core cannot run the BluraySubtitle desktop GUI." `
+            "Windows Server 必须安装桌面体验。Server Core 无法运行 BluraySubtitle 桌面 GUI。")
+    }
+    if (-not $isSupportedWindowsClient -and -not $isSupportedWindowsServer) {
+        throw (Get-SetupText `
+            "Supported systems are x64 Windows client releases based on Windows 10 or later and Windows Server 2019 or later with Desktop Experience. Detected: $caption (build $build)." `
+            "支持 Windows 10 或更高版本的 x64 Windows 客户端，以及带桌面体验的 Windows Server 2019 或更高版本。检测到：$caption（内部版本 $build）。")
     }
     if (-not $isAmd64) {
         throw (Get-SetupText `
@@ -288,12 +300,13 @@ function Assert-SupportedWindows {
             "必须使用 64 位 PowerShell 进程。")
     }
 
-    $family = if ($isWindows11) { "Windows 11" } else { "Windows 10" }
+    $family = $caption.Trim()
     return [pscustomobject]@{
         Family = $family
         Caption = $caption
         Build = $build
         Version = [string]$operatingSystem.Version
+        InstallationType = $installationType
         Architecture = "AMD64"
     }
 }
@@ -2967,8 +2980,8 @@ function Try-Update-SvtAv1SourceFor12Bit {
 "@ `
         -Description "SVT-AV1 Professional profile 12-bit signaling"
         Write-SetupWarning `
-            "The experimental SVT-AV1 12-bit patch was applied. Upstream 12-bit support is incomplete or may be buggy; use it only for experiments." `
-            "已应用 SVT-AV1 实验性 12-bit 补丁。上游底层的 12-bit 支持并不完整或可能存在错误，仅供实验使用。"
+            "The experimental SVT-AV1 12-bit patch was applied only to bypass upstream validation. It does not produce usable 12-bit encodes; tested output is grey. A working 12-bit encode requires user-maintained source changes." `
+            "已应用 SVT-AV1 实验性 12-bit 补丁，但它只绕过上游校验，无法生成可用的 12-bit 压制结果；实测输出为灰屏。正常 12-bit 压制需要用户自行维护源码修改。"
         return $true
     }
     catch {
@@ -4117,6 +4130,7 @@ function Invoke-WindowsSetup {
         caption = $windows.Caption
         build = $windows.Build
         version = $windows.Version
+        installationType = $windows.InstallationType
         architecture = $windows.Architecture
         proxy = $proxyDescription
     }

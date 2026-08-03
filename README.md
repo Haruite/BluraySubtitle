@@ -6,22 +6,14 @@ Documentation: [project wiki](docs/wiki/Home.md)
 
 Development: [mandatory code modification standards](docs/development/code-standards.md) | [media pipeline and tool selection](docs/development/media-pipeline-and-tool-selection.md) | [refactoring history](docs/refactoring/refactoring-history.md)
 
-The Windows x64 release is a one-folder package. Extract the complete archive,
-then run `BluraySubtitle_windows_x64.exe` without moving it away from the
-adjacent `_internal` directory.
-On first launch, the packaged `config.default.json` creates a writable
-`config.json` beside the executable. Source runs use the repository root instead.
-The program directory must therefore be writable; an invalid configuration is
-reported and left untouched.
+The Windows x64 release is a one-folder package. Extract the complete archive, then run `BluraySubtitle_windows_x64.exe` without moving it away from the adjacent `_internal` directory. On first launch, the packaged `config.default.json` creates a writable `config.json` beside the executable. Source runs use the repository root instead. The program directory must therefore be writable; an invalid configuration is reported and left untouched.
 
 Windows x64 downloads:
 
-- [Continuously updated package](https://sbx.mysmy.top/tools/BluraySubtitle_windows_x64.7z):
-  kept current independently of the GitHub release schedule.
+- [Continuously updated package](https://sbx.mysmy.top/tools/BluraySubtitle_windows_x64.7z): kept current independently of the GitHub release schedule.
 - [GitHub Releases](https://github.com/Haruite/BluraySubtitle/releases): versioned packages published with each release.
 
-BluraySubtitle is a GUI tool for Blu-ray workflows on **Windows / Linux** (including **Docker**).  
-It brings the following five areas of functionality together in one application:
+BluraySubtitle is a GUI tool for Blu-ray workflows on **Windows / Linux** (including **Docker**). It brings the following five areas of functionality together in one application:
 
 1. **Blu-ray Remux**
 2. **Blu-ray Encode**
@@ -47,8 +39,7 @@ It brings the following five areas of functionality together in one application:
 
 - **Language**: English / 简体中文 (native language names).
 - **Themes**: Light / Dark / Colorful (with opacity).
-- The top-right **Settings** dialog contains General, Paths, Advanced, External
-  tools, and manual update options.
+- The top-right **Settings** dialog contains General, Paths, Advanced, External tools, and manual update options.
 - Application settings and window size/position are remembered in `config.json`.
 - **Table-centered compact** workflow.
 - Press the **bottom** button to start work; the UI **stays responsive** while jobs run.
@@ -87,46 +78,27 @@ Encode mode supports two input sources:
 - Blu-ray (original disc layout)
 - Remux (MKV)
 
-The **main playlist** supports editing the mux command (`remux_cmd`). Each selected main playlist must have exactly
-one non-empty command and is processed in the current visible order, including multiple main playlists from the same
-disc. Before writing, Remux derives every command output and final episode filename. The output count must match the
-visible episode rows; duplicate paths and existing outputs are errors. Episode names are applied exactly as shown,
-and invalid filenames are rejected.
+The **main playlist** supports editing the mux command (`remux_cmd`). Each selected main playlist must have exactly one non-empty command and is processed in the current visible order, including multiple main playlists from the same disc. Before writing, Remux derives every command output and final episode filename. The output count must match the visible episode rows; duplicate paths and existing outputs are errors. Episode names are applied exactly as shown, and invalid filenames are rejected.
 
-If the primary command and its documented fallback paths cannot create every planned output, Remux stops with an
-error and does not substitute unrelated files found in the output folder. After muxing, the language values saved by
-**Edit tracks** are applied to the included video, audio, and subtitle tracks and then verified. A mapping, tool, or
-verification failure stops that job and removes its newly created main outputs.
+If the primary command and its documented fallback paths cannot create every planned output, Remux stops with an error and does not substitute unrelated files found in the output folder. After muxing, the language values saved by **Edit tracks** are applied to the included video, audio, and subtitle tracks and then verified. A mapping, tool, or verification failure stops that job and removes its newly created main outputs.
 
-Remux keeps selected lossy audio unchanged. Its **Convert lossless audio to FLAC** option is enabled by default
-(the startup state is configurable under **Advanced**). All FLAC output prefers the standalone multithreaded `flac`
-encoder, which automatically uses the detected number of logical CPU threads, and falls back to `ffmpeg` if that
-encoder is unavailable or fails. Both FLAC encoders default to level 8 and can be configured independently on the
-**Advanced** settings page. A DTS-family track is replaced only when its FLAC output is no larger than the extracted
-DTS; otherwise the original DTS track is retained. Successful PCM and TrueHD/MLP conversions remain FLAC even when
-the FLAC is larger. TrueHD Atmos is converted only after `truehdd` successfully decodes presentation 2. MKVToolNix
-does not repair damaged TrueHD frames. Affected DIY discs may produce many `truehdd` errors and a decoded FLAC track
-that is shorter than the video even when the MKV duration looks plausible; compare decoded audio/video durations
-before discarding the source track. See
-[Media Pipeline Design and Tool Selection](docs/development/media-pipeline-and-tool-selection.md) for details.
+Remux keeps selected lossy audio unchanged. Its **Convert lossless audio to FLAC** option is enabled by default (the startup state is configurable under **Advanced**). All FLAC output prefers the standalone multithreaded `flac` encoder, which automatically uses the detected number of logical CPU threads, and falls back to `ffmpeg` if that encoder is unavailable or fails. Both FLAC encoders default to level 8 and can be configured independently on the **Advanced** settings page.
+A DTS-family track is replaced only when its FLAC output is no larger than the extracted DTS; otherwise the original DTS track is retained. Successful PCM and TrueHD/MLP conversions remain FLAC even when the FLAC is larger. TrueHD Atmos is converted only after `truehdd` successfully decodes presentation 2. MKVToolNix does not repair damaged TrueHD frames. Affected DIY discs may produce many `truehdd` errors and a decoded FLAC track that is shorter than the video even when the MKV duration looks plausible; compare decoded audio/video durations before discarding the source track.
+See [Media Pipeline Design and Tool Selection](docs/development/media-pipeline-and-tool-selection.md) for details.
 
-With **Mux Dolby Vision** enabled, Remux combines compatible base and enhancement layers as profile 8.1; when it is
-disabled, the enhancement layer is not included.
+With **Mux Dolby Vision** enabled, Remux combines compatible base and enhancement layers as profile 8.1; when it is disabled, the enhancement layer is not included.
 
-Selected audio is also checked automatically even when **Convert lossless audio to FLAC** is disabled. A track whose
-decoded maximum volume is below -60 dB is removed as silent. Decoded fingerprints are compared only for tracks in the
-same source codec family with the same channel count; tracks with different known languages are kept, and an exact
-duplicate keeps the earliest track in source order.
+Selected audio is also checked automatically even when **Convert lossless audio to FLAC** is disabled. A track whose decoded maximum volume is below -60 dB is removed as silent. Decoded fingerprints are compared only for tracks in the same source codec family with the same channel count; tracks with different known languages are kept, and an exact duplicate keeps the earliest track in source order.
 
 Encode options include:
 
 - **`vspipe` source**: bundled / system
 - **Encoder**: **x264 / x265 / SvtAv1EncApp**
 - **Encoder binary source**: bundled / system
-- **Output video bit depth**  
-  - x264: 8 / 10 bit  
-  - x265: 8 / 10 / 12 bit  
-  - SvtAv1: 8 / 10 / 12? bit (see in-app notes)
+- **Output video bit depth**
+  - x264: 8 / 10 bit
+  - x265: 8 / 10 / 12 bit
+  - SvtAv1: 8 / 10 bit for normal output; the exposed 12-bit path is experimental and the setup-script build does not produce valid video
 - Read-only built-in encoder presets, user-defined presets, and direct per-task parameter editing
 - **Lossless audio recompression**: **FLAC / AAC / Opus**
 - The startup encoder, bit depth, and preset come from **Advanced** settings. User-defined presets can be added, renamed, edited, and deleted there for the currently selected encoder, while built-in presets remain read-only. After startup, the visible Encode preset and parameter controls remain authoritative for every task.
@@ -135,12 +107,8 @@ Encode options include:
 - Automatic getnative can take substantial time and memory because it analyzes multiple frames and kernels. The common false-positive band from 535p through 545p is excluded, so genuinely native 540p material must be configured manually in the VPy.
 - With **Auto-crop black borders** enabled, Encode analyzes multiple time points and applies one conservative fixed crop. Pixels used by any sampled active picture are preserved when borders vary over time.
 - With **Output comparison images** enabled, every encoded video saves source and encoded PNGs from the same frame under **`<selected output>/<source folder name>/Compare`**.
-- Lossless PCM, TrueHD/MLP, DTS-family, and FLAC tracks use the per-track FLAC/AAC/Opus choice shown in
-  **Edit tracks**. Lossy audio is kept unchanged. TrueHD Atmos is converted only after `truehdd` successfully decodes
-  presentation 2; if `truehdd` is unavailable or fails, the original TrueHD track is kept. Other selected conversion
-  failures stop the row. When FLAC is selected, the same DTS/FLAC size rule described above applies. For Remux input,
-  a missing tool required by an actual conversion is reported before launch. Final Encode muxing applies the same
-  automatic silent/duplicate cleanup; Blu-ray staging Remux does not process audio.
+- Lossless PCM, TrueHD/MLP, DTS-family, and FLAC tracks use the per-track FLAC/AAC/Opus choice shown in **Edit tracks**. Lossy audio is kept unchanged. TrueHD Atmos is converted only after `truehdd` successfully decodes presentation 2; if `truehdd` is unavailable or fails, the original TrueHD track is kept. Other selected conversion failures stop the row. When FLAC is selected, the same DTS/FLAC size rule described above applies. For Remux input, a missing tool required by an actual conversion is reported before launch.
+  Final Encode muxing applies the same automatic silent/duplicate cleanup; Blu-ray staging Remux does not process audio.
 - **Subtitle packaging**: external / softsub / hardsub
 - **Per-row VPy path** for main episodes and SP rows
 - **Remux-as-source** unlocks more actions, such as **editing chapters / attachments**.
@@ -158,9 +126,7 @@ The setup scripts also install the latest official [hdr10plus_tool](https://gith
 
 For custom x265 builds, use the official multilib steps in `setup_windows_environment.ps1` or `setup_linux_environment.sh` as references.
 
-Encode follows the visible row order and applies the displayed output names, per-row VPy scripts, subtitles,
-languages, track choices, and encoder settings. For Blu-ray input, its temporary Remux preserves the selected source
-audio; lossless-audio conversion runs only during the final mux after video encoding succeeds.
+Encode follows the visible row order and applies the displayed output names, per-row VPy scripts, subtitles, languages, track choices, and encoder settings. For Blu-ray input, its temporary Remux preserves the selected source audio; lossless-audio conversion runs only during the final mux after video encoding succeeds.
 
 Encode automatically carries compatible source color and HDR metadata into the output, including HDR10+ for x265 10/12-bit output. Dolby Vision from a selected Blu-ray or Remux source is preserved as profile 8.1 with x265 10/12-bit output. x264 and x265 8-bit output cannot preserve Dolby Vision, while SVT-AV1 omits it with an explicit notice. When automatic cropping changes the encoded dimensions, Dolby Vision active-area metadata is adjusted for both native x265 writing and fallback post-injection.
 
@@ -219,43 +185,43 @@ The separate multi-output fallback used when one main MPLS is split into several
 
 Episode configuration is recalculated when any of these **three** inputs changes:
 
-1. MPLS segment check states in **`table1 → view chapters`**  
-2. Per-row **`start_at_chapter`** in **`table2`**  
+1. MPLS segment check states in **`table1 → view chapters`**
+2. Per-row **`start_at_chapter`** in **`table2`**
 3. Per-row **`end_at_chapter`** in **`table2`**
 
 **Priority 1: `view chapters` checkbox changes → full recompute**
 
-1. First **checked** segment starts episode 1’s `start_at_chapter`.  
-2. On an **unchecked** segment start, the current episode **ends** there; `end_at_chapter` is set; the next episode starts after that segment.  
-3. Target length per episode: if subtitles exist, use subtitle **`max_end_time`**; else **`approx episode length`**.  
-4. Two end candidates:  
-   - **A**: nearest **file boundary** (from chapter view: this node vs previous node **changes m2ts**), and remaining time from this node to **end of MPLS** is **greater than** (estimated one-episode length **− 300 seconds**);  
-   - **B**: nearest **chapter** node.  
-5. Pick end:  
-   - if A’s error is in **`[-¼ × target, +½ × target]`**, prefer **A**;  
+1. First **checked** segment starts episode 1’s `start_at_chapter`.
+2. On an **unchecked** segment start, the current episode **ends** there; `end_at_chapter` is set; the next episode starts after that segment.
+3. Target length per episode: if subtitles exist, use subtitle **`max_end_time`**; else **`approx episode length`**.
+4. Two end candidates:
+   - **A**: nearest **file boundary** (from chapter view: this node vs previous node **changes m2ts**), and remaining time from this node to **end of MPLS** is **greater than** (estimated one-episode length **− 300 seconds**);
+   - **B**: nearest **chapter** node.
+5. Pick end:
+   - if A’s error is in **`[-¼ × target, +½ × target]`**, prefer **A**;
    - else multiply **negative** error by **−2**, compare A vs B, take the smaller adjusted error as `end_at_chapter`.
 
 **Priority 2: `start_at_chapter` changes → recompute from first changed episode**
 
-1. Diff vs previous config; find the **earliest** episode whose start changed.  
-2. Episodes **before** that stay unchanged.  
-3. From the changed episode onward, recompute with the **same rules** (do not rely on old later starts).  
+1. Diff vs previous config; find the **earliest** episode whose start changed.
+2. Episodes **before** that stay unchanged.
+3. From the changed episode onward, recompute with the **same rules** (do not rely on old later starts).
 4. Sync uncheck: nodes between **previous episode end** and the **new start** are unchecked.
 
 **Priority 3: `end_at_chapter` changes → expand / shrink**
 
-1. Episodes before the changed one stay unchanged.  
-2. If `end_at_chapter` is **moved earlier**: recompute **following** episodes.  
+1. Episodes before the changed one stay unchanged.
+2. If `end_at_chapter` is **moved earlier**: recompute **following** episodes.
 3. If `end_at_chapter` is **moved later**: next episode starts at the **first still-checked** node after the new end; recompute **following** episodes.
 
 **Dropdown constraints**
 
-- Nodes **unchecked** in `view chapters` must be **disabled** in both `start_at_chapter` and `end_at_chapter` combos.  
+- Nodes **unchecked** in `view chapters` must be **disabled** in both `start_at_chapter` and `end_at_chapter` combos.
 - Still require **`end_at_chapter > start_at_chapter`**.
 
 #### D) Additional notes
 
-- Main remux command placeholders: **`{output_file}`**, **`{audio_opts}`**, **`{sub_opts}`**, **`{parts_split}`**.  
+- Main remux command placeholders: **`{output_file}`**, **`{audio_opts}`**, **`{sub_opts}`**, **`{parts_split}`**.
 - If the primary command output is wrong, fallbacks use parsed arguments and preserve explicit track choices; default tracks are used only when no explicit choice exists.
 - After fallback, every planned output must exist; incomplete main-playlist output fails the task.
 - Chapter rewrite and language correction run **after mux** mainly to work around mkvtoolnix edge cases in metadata handling.
@@ -270,6 +236,8 @@ Episode configuration is recalculated when any of these **three** inputs changes
 - `numpy`
 - `soundfile`
 - `pycountry`
+- `Pillow` (imported as `PIL`)
+- `matplotlib`
 
 Example:
 
@@ -294,10 +262,7 @@ pip install PyQt6 numpy soundfile pycountry pillow matplotlib
 - `SvtAv1EncApp`
 - `fdkaac`
 
-> Bundled vs system paths depend on the current mode and settings.
-> The External Tools path check probes the configured x265 executable. It requires
-> `hdr10plus_tool` only when x265 advertises `--dhdr10-info`, and requires `dovi_tool`
-> only when x265 advertises both Dolby Vision input options.
+> Bundled vs system paths depend on the current mode and settings. The External Tools path check probes the configured x265 executable. It requires `hdr10plus_tool` only when x265 advertises `--dhdr10-info`, and requires `dovi_tool` only when x265 advertises both Dolby Vision input options.
 
 ---
 
@@ -307,11 +272,11 @@ pip install PyQt6 numpy soundfile pycountry pillow matplotlib
 python src/main.py
 ```
 
-1. Pick language and theme at the top.  
-2. Open the target **function** tab.  
-3. Load source folder/file for the current mode.  
-4. Confirm **main MPLS** and table mapping.  
-5. Adjust tracks, chapter range, or encode options if needed.  
+1. Pick language and theme at the top.
+2. Open the target **function** tab.
+3. Load source folder/file for the current mode.
+4. Confirm **main MPLS** and table mapping.
+5. Adjust tracks, chapter range, or encode options if needed.
 6. Click the bottom **Run** button to start the task.
 
 ---
@@ -322,16 +287,16 @@ python src/main.py
 
 Typical flow:
 
-1. Load Blu-ray folder.  
-2. Load subtitle folder.  
-3. Check paths / duration / chapter mapping.  
-4. Reorder rows if needed.  
+1. Load Blu-ray folder.
+2. Load subtitle folder.
+3. Check paths / duration / chapter mapping.
+4. Reorder rows if needed.
 5. Run merge.
 
 Tips:
 
-- If mapping fails, check **main MPLS** first.  
-- If subtitle order is wrong, **click the filename column header** to sort, or drag rows to reorder.  
+- If mapping fails, check **main MPLS** first.
+- If subtitle order is wrong, **click the filename column header** to sort, or drag rows to reorder.
 - If a subtitle duration looks impossible, fix the subtitle file first (right-click **edit** prioritizes lines with the latest end times; fix ends or delete bad lines).
 - Only rows selected in the current table when the task starts participate in the merge.
 - SRT, ASS, SSA, and SUP are supported. Subtitle formats cannot be mixed within one merged output.
@@ -343,9 +308,9 @@ Tips:
 
 Typical flow:
 
-1. Load Blu-ray chapter source (playlist/chapter info).  
-2. Load target MKV folder.  
-3. Verify main MPLS.  
+1. Load Blu-ray chapter source (playlist/chapter info).
+2. Load target MKV folder.
+3. Verify main MPLS.
 4. Run chapter write.
 
 Behavior:
@@ -360,37 +325,32 @@ Behavior:
 
 Typical flow:
 
-1. Load Blu-ray folder.  
-2. (Optional) Load subtitle folder.  
-3. Verify main MPLS and chapter span.  
-4. (Optional) Edit remux command.  
+1. Load Blu-ray folder.
+2. (Optional) Load subtitle folder.
+3. Verify main MPLS and chapter span.
+4. (Optional) Edit remux command.
 5. Choose output folder and run.
 
-Remux uses the currently displayed playlist order, commands, chapter ranges, output names, subtitle languages, track
-settings, Dolby Vision option, and **Complete Blu-ray Folder** setting. All main outputs are planned before writing;
-existing or duplicate outputs stop the task without overwrite or automatic renaming.
+Remux uses the currently displayed playlist order, commands, chapter ranges, output names, subtitle languages, track settings, Dolby Vision option, and **Complete Blu-ray Folder** setting. All main outputs are planned before writing; existing or duplicate outputs stop the task without overwrite or automatic renaming.
 
 ## 4) Blu-ray Encode
 
 Typical flow:
 
-1. Choose input source (**Blu-ray / Remux**).  
-2. Configure VPy, encoder, subtitle packaging, etc.  
-3. (Optional) Edit tracks / **select all tracks**.  
-4. (Optional) Set **start / end chapter** per row.  
+1. Choose input source (**Blu-ray / Remux**).
+2. Configure VPy, encoder, subtitle packaging, etc.
+3. (Optional) Edit tracks / **select all tracks**.
+4. (Optional) Set **start / end chapter** per row.
 5. Run encode.
 
-Encode uses the current row order, output names, VPy scripts, subtitles, languages, track choices, per-track audio
-conversion choices, and encoder settings. Planned outputs are never overwritten. Blu-ray input rejects existing outputs.
-Remux input reports and skips existing non-empty main/SP files, external subtitles, and companion files, then continues
-with the remaining work. Empty main/SP files and paths of the wrong type are rejected instead of treated as checkpoints.
+Encode uses the current row order, output names, VPy scripts, subtitles, languages, track choices, per-track audio conversion choices, and encoder settings. Planned outputs are never overwritten. Blu-ray input rejects existing outputs. Remux input reports and skips existing non-empty main/SP files, external subtitles, and companion files, then continues with the remaining work. Empty main/SP files and paths of the wrong type are rejected instead of treated as checkpoints.
 
 ---
 
 ## VPy Editing and Preview
 
-- **Edit script (`edit_vpy`)**: opened with the **system default editor** for the file type.  
-- **Preview script (`preview_script`)**: opened with **`vsedit`**, with row-aware preview context.  
+- **Edit script (`edit_vpy`)**: opened with the **system default editor** for the file type.
+- **Preview script (`preview_script`)**: opened with **`vsedit`**, with row-aware preview context.
 - Default script path: **`vpy.vpy`**.
 - The generated default script intentionally does not auto-process interlaced video because true interlace, telecine, and mixed cadence require different treatment; use a custom VPy as described in the [Encode/VapourSynth Wiki](docs/wiki/Video-Encoding-and-VapourSynth.md#interlaced-telecined-and-mixed-cadence-sources).
 
@@ -405,7 +365,7 @@ with the remaining work. Empty main/SP files and paths of the wrong type are rej
 
 ## `setup_windows_environment.ps1` (Windows environment setup)
 
-`setup_windows_environment.ps1` configures the complete local runtime and build environment. It supports only **Windows 10 / Windows 11 x64 workstation editions**.
+`setup_windows_environment.ps1` configures the complete local runtime and build environment for **x64 Windows client and Windows Server systems**.
 
 Before the first run, allow locally created PowerShell scripts for the current user, then start the setup from the repository root:
 
@@ -420,10 +380,10 @@ The script requests administrator permission, asks for the display language, and
 
 ## `setup_linux_environment.sh` (Linux runtime environment)
 
-`setup_linux_environment.sh` builds the program’s Linux runtime environment. Currently supported:
+`setup_linux_environment.sh` builds the program’s Linux runtime environment. Only **x64** systems are supported. Current distributions:
 
-- Ubuntu 22.04 / 24.04 / 25.10 / 26.04  
-- Debian 12 / 13  
+- Ubuntu 22.04 or later
+- Debian 12 or later
 
 Make the script executable before the first run, then start it from the repository root:
 
@@ -476,17 +436,17 @@ docker pull --platform linux/amd64 haruite/bluraysubtitle:latest
 
 ## Troubleshooting
 
-- **Wrong episode mapping**  
-  - Check **main MPLS**; play the MPLS and pick the correct one.  
-  - Check chapter ends. 
-  - Check subtitle row order (sort by filename column).  
+- **Wrong episode mapping**
+  - Check **main MPLS**; play the MPLS and pick the correct one.
+  - Check chapter ends.
+  - Check subtitle row order (sort by filename column).
   - Check subtitle duration; abnormally long files are often broken subtitles—use right-click **edit** / delete as needed.
-- **Bonus / extra disc**  
+- **Bonus / extra disc**
   - Uncheck **main MPLS** for that bonus-disc volume.
-- **Preview won’t start**  
-  - Check **`vsedit`** path.  
+- **Preview won’t start**
+  - Check **`vsedit`** path.
   - Check VPy file and plugins.
-- **Docker / Linux playback issues**  
+- **Docker / Linux playback issues**
   - Check `DISPLAY`, audio forwarding, and **mpv** availability.
 
 ---
