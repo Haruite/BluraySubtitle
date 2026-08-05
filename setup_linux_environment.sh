@@ -15,6 +15,10 @@ set -euo pipefail
 
 X264_SOURCE_REPOSITORY="https://code.videolan.org/videolan/x264.git"
 X265_SOURCE_REPOSITORY="https://github.com/Multicorewareinc/x265.git"
+FFMPEG_SOURCE_REPOSITORY="https://github.com/FFmpeg/FFmpeg.git"
+SVT_AV1_SOURCE_REPOSITORY="https://gitlab.com/AOMediaCodec/SVT-AV1.git"
+FDK_AAC_SOURCE_REPOSITORY="https://github.com/mstorsjo/fdk-aac.git"
+FDKAAC_SOURCE_REPOSITORY="https://github.com/nu774/fdkaac.git"
 SETTINGS_FILE="${BLURAY_SETTINGS_FILE:-$(dirname -- "$BLURAY_SETUP_SOURCE")/src/core/settings.py}"
 
 # ---------------------------------------------------------------------------
@@ -214,9 +218,7 @@ ensure_configured_directory() {
   bluray_sudo install -d -m 0755 -o "$(id -u)" -g "$(id -g)" "$directory"
 }
 
-sync_package_tool_paths() {
-  install_command_at_configured_path ffmpeg "$FFMPEG_PATH"
-  install_command_at_configured_path ffprobe "$FFPROBE_PATH"
+sync_mkvtoolnix_paths() {
   install_command_at_configured_path mkvinfo "$MKV_INFO_PATH"
   install_command_at_configured_path mkvmerge "$MKV_MERGE_PATH"
   install_command_at_configured_path mkvpropedit "$MKV_PROP_EDIT_PATH"
@@ -1025,13 +1027,32 @@ ensure_dav1d_for_mpv() {
 }
 
 # ---------------------------------------------------------------------------
-# mpv
+# mpv + FFmpeg / FFprobe
 # ---------------------------------------------------------------------------
 
+__installed_ffmpeg_version() {
+  local executable="$1"
+  [[ -x "$executable" ]] || return 0
+  "$executable" -version 2>/dev/null \
+    | head -n 1 \
+    | sed -nE 's/^ff(mpeg|probe) version n?([0-9]+([.][0-9]+){1,3}).*/\2/p'
+}
+
 install_mpv() {
-  log "$(msg 'Installing mpv (build mpv-build with dovi_tool)' '安装 mpv（编译并安装 mpv-build 及 dovi_tool）')"
+  log "$(msg 'Installing mpv with stable FFmpeg / FFprobe (mpv-build with dovi_tool)' '安装 mpv 与稳定版 FFmpeg / FFprobe（使用包含 dovi_tool 的 mpv-build）')"
 
   local required_mpv_version="0.41.0"
+  local ffmpeg_tag target_ffmpeg_version installed_ffmpeg_version installed_ffprobe_version ffmpeg_is_current="false"
+  ffmpeg_tag="$(latest_stable_tag "$FFMPEG_SOURCE_REPOSITORY" '^n[0-9]+([.][0-9]+)+$' 'n*')"
+  target_ffmpeg_version="${ffmpeg_tag#n}"
+  installed_ffmpeg_version="$(__installed_ffmpeg_version "$FFMPEG_PATH" | head -n 1 || true)"
+  installed_ffprobe_version="$(__installed_ffmpeg_version "$FFPROBE_PATH" | head -n 1 || true)"
+  if [[ -n "$installed_ffmpeg_version" && -n "$installed_ffprobe_version" ]] \
+    && dpkg --compare-versions "$installed_ffmpeg_version" ge "$target_ffmpeg_version" \
+    && dpkg --compare-versions "$installed_ffprobe_version" ge "$target_ffmpeg_version"; then
+    ffmpeg_is_current="true"
+  fi
+
   local is_ubuntu_2204="false"
   local is_debian_12="false"
   local needs_meson_prebuild="false"
@@ -1053,15 +1074,18 @@ install_mpv() {
     local current_mpv_version
     current_mpv_version="$(mpv --version 2>/dev/null | head -n 1 | grep -oP 'mpv\s+v?\K[0-9]+(\.[0-9]+){1,2}' || true)"
     if [[ -n "${current_mpv_version:-}" ]] && dpkg --compare-versions "$current_mpv_version" ge "$required_mpv_version"; then
-      if has_libdovi_runtime; then
-        log "$(msg "mpv already installed and version satisfied (${current_mpv_version} >= ${required_mpv_version}), skipping" "检测到 mpv 已安装且版本满足要求（${current_mpv_version} >= ${required_mpv_version}），跳过编译安装")"
+      if ! has_libdovi_runtime; then
+        log "$(msg 'mpv installed but libdovi.so is missing, installing libdovi' '检测到 mpv 已安装但缺少 libdovi.so，尝试安装 libdovi')"
+        install_libdovi
+      fi
+      if [[ "$ffmpeg_is_current" == "true" ]]; then
+        log "$(msg "mpv, FFmpeg, and FFprobe already satisfy the required versions (${current_mpv_version}; ${installed_ffmpeg_version}/${installed_ffprobe_version}), skipping" "mpv、FFmpeg 与 FFprobe 均已满足版本要求（${current_mpv_version}；${installed_ffmpeg_version}/${installed_ffprobe_version}），跳过编译安装")"
         return 0
       fi
-      log "$(msg 'mpv installed but libdovi.so is missing, installing libdovi' '检测到 mpv 已安装但缺少 libdovi.so，尝试安装 libdovi')"
-      install_libdovi
-      return 0
+      log "$(msg "mpv is current, but FFmpeg / FFprobe must be updated to ${target_ffmpeg_version}; rebuilding them together with mpv" "mpv 已满足要求，但 FFmpeg / FFprobe 需要更新到 ${target_ffmpeg_version}；将与 mpv 一并重新编译")"
+    else
+      log "$(msg "System mpv version is too old (${current_mpv_version:-unknown} < ${required_mpv_version}), rebuilding from source" "检测到系统 mpv 版本较旧（${current_mpv_version:-unknown} < ${required_mpv_version}），将从源码编译升级")"
     fi
-    log "$(msg "System mpv version is too old (${current_mpv_version:-unknown} < ${required_mpv_version}), rebuilding from source" "检测到系统 mpv 版本较旧（${current_mpv_version:-unknown} < ${required_mpv_version}），将从源码编译升级")"
   fi
 
   install_libdovi
@@ -1139,10 +1163,15 @@ install_mpv() {
     cd mpv-build || exit 1
 
     rm -rf mpv/build ffmpeg/build libass/build 2>/dev/null || true
+    tmux_run "$(msg 'Select the latest stable FFmpeg release' '选择最新稳定版 FFmpeg')" ./use-ffmpeg-release || exit 1
 
     echo "--enable-libbluray" > ffmpeg_options || exit 1
     echo "--enable-libdav1d" >> ffmpeg_options || exit 1
     echo "-Dlibbluray=enabled" > mpv_options || exit 1
+    if [[ "$is_ubuntu_2204" == "true" ]]; then
+      # Ubuntu 22.04's rst2man rejects the --output option used by current mpv.
+      echo "-Dmanpage-build=disabled" >> mpv_options || exit 1
+    fi
     if [[ "$is_ubuntu_2204" == "true" || "$is_debian_12" == "true" ]]; then
       log "$(msg 'Compatibility mode detected (Ubuntu 22.04/Debian 12): disabling Vulkan/Shaderc in mpv-build libplacebo to ensure mpv compiles' '检测到系统需要兼容模式（Ubuntu 22.04/Debian 12），禁用 mpv-build 内置 libplacebo 的 Vulkan/Shaderc 构建以保证 mpv 可编译')"
       cat > libplacebo_options <<'EOF'
@@ -1156,10 +1185,19 @@ EOF
 
     tmux_run "mpv-build rebuild" ./rebuild -j"$(nproc)" || exit 1
     tmux_run "mpv-build install" sudo env "PATH=$PATH" "PKG_CONFIG_PATH=${PKG_CONFIG_PATH:-}" ./install || exit 1
+    install_configured_executable build_libs/bin/ffmpeg "$FFMPEG_PATH" || exit 1
+    install_configured_executable build_libs/bin/ffprobe "$FFPROBE_PATH" || exit 1
   ) || die "$(msg 'mpv build/install failed' 'mpv 编译/安装失败')"
 
   rm -rf "$build_dir"
-  log "$(msg 'mpv installation complete' 'mpv 安装完成')"
+  installed_ffmpeg_version="$(__installed_ffmpeg_version "$FFMPEG_PATH" | head -n 1 || true)"
+  installed_ffprobe_version="$(__installed_ffmpeg_version "$FFPROBE_PATH" | head -n 1 || true)"
+  if [[ -z "$installed_ffmpeg_version" || -z "$installed_ffprobe_version" ]] \
+    || ! dpkg --compare-versions "$installed_ffmpeg_version" ge "$target_ffmpeg_version" \
+    || ! dpkg --compare-versions "$installed_ffprobe_version" ge "$target_ffmpeg_version"; then
+    die "$(msg 'Installed FFmpeg / FFprobe version verification failed' '安装后的 FFmpeg / FFprobe 版本校验失败')"
+  fi
+  log "$(msg "mpv, FFmpeg, and FFprobe installation complete (${installed_ffmpeg_version}/${installed_ffprobe_version})" "mpv、FFmpeg 与 FFprobe 安装完成（${installed_ffmpeg_version}/${installed_ffprobe_version}）")"
   if [[ "$needs_meson_prebuild" != "true" ]]; then
     ensure_meson_version
   fi
@@ -1599,6 +1637,7 @@ APPLY = [
 
 
 def run_apply():
+    updated = {}
     for rel, old, new in APPLY:
         path = root / rel
         text = path.read_text(encoding="utf-8")
@@ -1608,24 +1647,41 @@ def run_apply():
             if new in text:
                 continue
             sys.exit(1)
-        path.write_text(text.replace(old, new, 1), encoding="utf-8")
+        updated[path] = text.replace(old, new, 1)
+    for path, text in updated.items():
+        path.write_text(text, encoding="utf-8")
 
 
 
 run_apply()
 sys.exit(0)
 SVTAV1PY
+  local patch_status=$?
+  if [[ "$patch_status" -ne 0 ]]; then
+    return "$patch_status"
+  fi
   log "$(msg 'SVT-AV1: source patch step finished.' 'SVT-AV1：源码补丁步骤已完成。')"
 }
 
-# Build the tested v4.2.0 tag; the patch helper above enables 8/10/12-bit input.
-install_svt_av1() {
-  log "$(msg 'Installing SVT-AV1 (with 12-bit patches)' '正在安装 SVT-AV1（含 12-bit 补丁）')"
+__installed_svt_av1_version() {
+  [[ -x "$SVT_AV1_PATH" ]] || return 0
+  { "$SVT_AV1_PATH" --version 2>&1 || true; } \
+    | grep -oE '[vV]?[0-9]+([.][0-9]+){1,3}' \
+    | head -n 1 \
+    | sed -E 's/^[vV]//'
+}
 
-  if [[ -x "$SVT_AV1_PATH" ]]; then
-    log "$(msg 'SvtAv1EncApp already installed, skipping build' '检测到 SvtAv1EncApp 已安装，跳过编译')"
+install_svt_av1() {
+  local svt_tag target_version installed_version
+  svt_tag="${SVT_AV1_VERSION:-$(latest_stable_tag "$SVT_AV1_SOURCE_REPOSITORY")}"
+  target_version="${svt_tag#v}"
+  installed_version="$(__installed_svt_av1_version | head -n 1 || true)"
+
+  if [[ -n "$installed_version" ]] && dpkg --compare-versions "$installed_version" ge "$target_version"; then
+    log "$(msg "SvtAv1EncApp is current (${installed_version} >= ${target_version}), skipping build" "SvtAv1EncApp 已是当前版本（${installed_version} >= ${target_version}），跳过编译")"
     return 0
   fi
+  log "$(msg "Installing SVT-AV1 ${target_version} (attempting experimental 12-bit patches)" "正在安装 SVT-AV1 ${target_version}（尝试应用实验性 12-bit 补丁）")"
 
   local deps=(build-essential cmake git python3 nasm)
   apt_update
@@ -1637,10 +1693,23 @@ install_svt_av1() {
   (
     cd "$build_dir" || exit 1
     tmux_run "$(msg 'Clone SVT-AV1' '克隆 SVT-AV1')" \
-      git clone --depth 1 --branch v4.2.0 https://gitlab.com/AOMediaCodec/SVT-AV1.git || exit 1
-    __apply_svt_av1_source_patches "${build_dir}/SVT-AV1" || exit 1
-    tmux_run "$(msg 'SVT-AV1: build release static' 'SVT-AV1：release static 编译')" \
-      bash -c "set -e; cd '${build_dir}/SVT-AV1/Build/linux' && ./build.sh release static" || exit 1
+      git clone --depth 1 --branch "$svt_tag" "$SVT_AV1_SOURCE_REPOSITORY" SVT-AV1 || exit 1
+    local patch_applied="false"
+    if __apply_svt_av1_source_patches "${build_dir}/SVT-AV1"; then
+      patch_applied="true"
+    else
+      log "$(msg 'The experimental SVT-AV1 12-bit patch does not match this release; building the unmodified upstream source with 8/10-bit support' 'SVT-AV1 实验性 12-bit 补丁不适用于此版本；将编译未修改的上游源码，支持 8/10-bit')"
+    fi
+    if ! tmux_run "$(msg 'SVT-AV1: build release static' 'SVT-AV1：release static 编译')" \
+      bash -c "set -e; cd '${build_dir}/SVT-AV1/Build/linux' && ./build.sh release static"; then
+      [[ "$patch_applied" == "true" ]] || exit 1
+      log "$(msg 'The experimental SVT-AV1 build failed; retrying with the unmodified upstream source' 'SVT-AV1 实验性版本编译失败；正在使用未修改的上游源码重试')"
+      rm -rf "${build_dir}/SVT-AV1"
+      tmux_run "$(msg 'Clone unmodified SVT-AV1 fallback' '克隆未修改的 SVT-AV1 回退源码')" \
+        git clone --depth 1 --branch "$svt_tag" "$SVT_AV1_SOURCE_REPOSITORY" SVT-AV1 || exit 1
+      tmux_run "$(msg 'SVT-AV1: build upstream release static' 'SVT-AV1：编译上游 release static 版本')" \
+        bash -c "set -e; cd '${build_dir}/SVT-AV1/Build/linux' && ./build.sh release static" || exit 1
+    fi
     _svt_bin="${build_dir}/SVT-AV1/Bin/Release/SvtAv1EncApp"
     [[ -f "$_svt_bin" ]] || exit 1
     log "$(msg "Installing SvtAv1EncApp to ${SVT_AV1_PATH}" "正在安装 SvtAv1EncApp 到 ${SVT_AV1_PATH}")"
@@ -1648,7 +1717,11 @@ install_svt_av1() {
   ) || die "$(msg 'SVT-AV1 build or install failed' 'SVT-AV1 编译或安装失败')"
 
   rm -rf "$build_dir"
-  log "$(msg 'SVT-AV1 installation complete' 'SVT-AV1 安装完成')"
+  installed_version="$(__installed_svt_av1_version | head -n 1 || true)"
+  if [[ -z "$installed_version" ]] || ! dpkg --compare-versions "$installed_version" ge "$target_version"; then
+    die "$(msg 'Installed SVT-AV1 version verification failed' '安装后的 SVT-AV1 版本校验失败')"
+  fi
+  log "$(msg "SVT-AV1 installation complete (${installed_version})" "SVT-AV1 安装完成（${installed_version}）")"
 }
 
 # ---------------------------------------------------------------------------
@@ -1701,13 +1774,25 @@ install_tsmuxer() {
 # FDK-AAC + fdkaac CLI (nu774)
 # ---------------------------------------------------------------------------
 
-install_fdk_aac() {
-  log "$(msg 'Installing FDK-AAC library and fdkaac CLI' '正在安装 FDK-AAC 库与 fdkaac 命令行工具')"
+__installed_fdkaac_version() {
+  [[ -x "$FDK_AAC_PATH" ]] || return 0
+  { "$FDK_AAC_PATH" -h 2>&1 || true; } \
+    | sed -nE 's/^[[:space:]]*fdkaac[[:space:]]+[vV]?([0-9]+([.][0-9]+){1,3}).*/\1/p' \
+    | head -n 1
+}
 
-  if [[ -x "$FDK_AAC_PATH" ]]; then
-    log "$(msg 'fdkaac already installed, skipping build' '检测到 fdkaac 已安装，跳过编译')"
+install_fdk_aac() {
+  local fdk_aac_tag fdkaac_tag target_version installed_version
+  fdk_aac_tag="${FDK_AAC_VERSION:-$(latest_stable_tag "$FDK_AAC_SOURCE_REPOSITORY")}"
+  fdkaac_tag="${FDKAAC_VERSION:-$(latest_stable_tag "$FDKAAC_SOURCE_REPOSITORY")}"
+  target_version="${fdkaac_tag#v}"
+  installed_version="$(__installed_fdkaac_version || true)"
+
+  if [[ -n "$installed_version" ]] && dpkg --compare-versions "$installed_version" ge "$target_version"; then
+    log "$(msg "fdkaac is current (${installed_version} >= ${target_version}), skipping build" "fdkaac 已是当前版本（${installed_version} >= ${target_version}），跳过编译")"
     return 0
   fi
+  log "$(msg "Installing FDK-AAC ${fdk_aac_tag#v} and fdkaac ${target_version}" "正在安装 FDK-AAC ${fdk_aac_tag#v} 和 fdkaac ${target_version}")"
 
   local deps=(
     build-essential wget tar git autoconf automake libtool pkg-config
@@ -1729,11 +1814,8 @@ install_fdk_aac() {
 
   (
     cd "$build_dir" || exit 1
-    local fdk_aac_tag fdkaac_tag
-    fdk_aac_tag="${FDK_AAC_VERSION:-$(latest_stable_tag https://github.com/mstorsjo/fdk-aac.git)}"
-    fdkaac_tag="${FDKAAC_VERSION:-$(latest_stable_tag https://github.com/nu774/fdkaac.git)}"
     tmux_run "$(msg "Clone fdk-aac ${fdk_aac_tag}" "克隆 fdk-aac ${fdk_aac_tag}")" \
-      git clone --depth 1 --branch "$fdk_aac_tag" https://github.com/mstorsjo/fdk-aac.git fdk-aac || exit 1
+      git clone --depth 1 --branch "$fdk_aac_tag" "$FDK_AAC_SOURCE_REPOSITORY" fdk-aac || exit 1
     cd fdk-aac || exit 1
     tmux_run "$(msg 'fdk-aac: autogen.sh' 'fdk-aac：autogen.sh')" ./autogen.sh || exit 1
     tmux_run "$(msg 'fdk-aac: configure' 'fdk-aac：configure')" ./configure || exit 1
@@ -1742,9 +1824,9 @@ install_fdk_aac() {
     sudo ldconfig || true
     cd "$build_dir" || exit 1
     tmux_run "$(msg "Clone fdkaac ${fdkaac_tag} (nu774)" "克隆 fdkaac ${fdkaac_tag}（nu774）")" \
-      git clone --depth 1 --branch "$fdkaac_tag" https://github.com/nu774/fdkaac.git || exit 1
+      git clone --depth 1 --branch "$fdkaac_tag" "$FDKAAC_SOURCE_REPOSITORY" fdkaac || exit 1
     cd fdkaac || exit 1
-    tmux_run "$(msg 'fdkaac: autoreconf -i' 'fdkaac：autoreconf -i')" autoreconf -i || exit 1
+    tmux_run "$(msg 'fdkaac: autoreconf -fi' 'fdkaac：autoreconf -fi')" autoreconf -fi || exit 1
     tmux_run "$(msg 'fdkaac: configure' 'fdkaac：configure')" ./configure || exit 1
     tmux_run "$(msg 'fdkaac: make' 'fdkaac：make')" make -j"$(nproc)" || exit 1
     tmux_run "$(msg 'fdkaac: make install' 'fdkaac：make install')" sudo make install || exit 1
@@ -1753,7 +1835,11 @@ install_fdk_aac() {
   ) || die "$(msg 'FDK-AAC / fdkaac build or install failed' 'FDK-AAC / fdkaac 编译或安装失败')"
 
   rm -rf "$build_dir"
-  log "$(msg 'FDK-AAC and fdkaac installation complete' 'FDK-AAC 与 fdkaac 安装完成')"
+  installed_version="$(__installed_fdkaac_version || true)"
+  if [[ -z "$installed_version" ]] || ! dpkg --compare-versions "$installed_version" ge "$target_version"; then
+    die "$(msg 'Installed fdkaac version verification failed' '安装后的 fdkaac 版本校验失败')"
+  fi
+  log "$(msg "FDK-AAC and fdkaac installation complete (${installed_version})" "FDK-AAC 与 fdkaac 安装完成（${installed_version}）")"
 }
 
 # ---------------------------------------------------------------------------
@@ -2900,12 +2986,7 @@ __pip_supports_break_system_packages() {
 }
 
 install_bluray_python_deps() {
-  log "$(msg 'Installing Python dependencies (python3 -m pip: numpy pycountry PyQt6 soundfile pillow matplotlib)' '安装 Python 依赖（python3 -m pip：numpy pycountry PyQt6 soundfile pillow matplotlib）')"
-
-  if __bluray_python_imports_ok; then
-    log "$(msg 'Python app dependencies already importable, skipping pip' 'Python 应用依赖已可导入，跳过 pip')"
-    return 0
-  fi
+  log "$(msg 'Installing or upgrading Python dependencies (python3 -m pip: pip numpy pycountry PyQt6 soundfile pillow matplotlib)' '安装或升级 Python 依赖（python3 -m pip：pip numpy pycountry PyQt6 soundfile pillow matplotlib）')"
 
   if ! python3 -m pip --version >/dev/null 2>&1; then
     apt_update
@@ -2916,18 +2997,18 @@ install_bluray_python_deps() {
   local pip_mode_msg_en pip_mode_msg_zh
   if __pip_supports_break_system_packages; then
     pip_extra=(--break-system-packages)
-    pip_mode_msg_en='Install Python dependencies (python3 -m pip --break-system-packages)'
-    pip_mode_msg_zh='安装 Python 依赖（python3 -m pip --break-system-packages）'
+    pip_mode_msg_en='Install or upgrade Python dependencies (python3 -m pip --break-system-packages)'
+    pip_mode_msg_zh='安装或升级 Python 依赖（python3 -m pip --break-system-packages）'
   else
     pip_extra=(--user)
-    pip_mode_msg_en='Install Python dependencies (python3 -m pip --user; pip too old for --break-system-packages)'
-    pip_mode_msg_zh='安装 Python 依赖（python3 -m pip --user；当前 pip 过旧不支持 --break-system-packages，需要时可自行 python3 -m pip install -U pip）'
+    pip_mode_msg_en='Install or upgrade Python dependencies (python3 -m pip --user; current pip does not support --break-system-packages)'
+    pip_mode_msg_zh='安装或升级 Python 依赖（python3 -m pip --user；当前 pip 不支持 --break-system-packages）'
   fi
 
   tmux_run "$(msg "$pip_mode_msg_en" "$pip_mode_msg_zh")" \
-    env PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade "${pip_extra[@]}" numpy pycountry PyQt6 soundfile pillow matplotlib \
-    || tmux_run "$(msg 'Install Python dependencies (retry)' '安装 Python 依赖(重试)')" \
-      env PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade "${pip_extra[@]}" numpy pycountry PyQt6 soundfile pillow matplotlib \
+    env PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade "${pip_extra[@]}" pip numpy pycountry PyQt6 soundfile pillow matplotlib \
+    || tmux_run "$(msg 'Install or upgrade Python dependencies (retry)' '安装或升级 Python 依赖（重试）')" \
+      env PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade "${pip_extra[@]}" pip numpy pycountry PyQt6 soundfile pillow matplotlib \
     || die "$(msg 'Failed to install Python dependencies with python3 -m pip' '使用 python3 -m pip 安装依赖失败')"
 
   __bluray_python_imports_ok || die "$(msg 'Python deps installed but import check failed. Note: Pillow is imported as PIL (e.g. from PIL import Image), not import pillow' '依赖已安装但仍无法通过导入检查。说明：Pillow 的安装包名为 pillow，代码中应使用 from PIL import Image，不要写 import pillow')"
@@ -2945,7 +3026,7 @@ repair_broken_apt_state
 
 sys_deps=(
   python3 python3-pip python3-venv cmake ninja-build git
-  ffmpeg wget fonts-wqy-microhei flac gedit
+  wget fonts-wqy-microhei flac gedit
   libegl1 libopengl0 libglib2.0-0 libxkbcommon0 libdbus-1-3
   libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0
   libxcb-xinerama0 libxcb-xinput0 libxcb-render-util0
@@ -2975,7 +3056,7 @@ log "$(msg "Using tool paths from ${SETTINGS_FILE}" "使用 ${SETTINGS_FILE} 中
 
 install_shaderc_fix
 install_mkvtoolnix
-sync_package_tool_paths
+sync_mkvtoolnix_paths
 install_mpv
 install_x264
 install_x265

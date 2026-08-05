@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl git wget unzip xz-utils tar sed pkg-config \
     build-essential cmake ninja-build autoconf automake libtool \
     python3 python3-pip python3-venv python3-dev python3-sphinx \
-    ffmpeg fonts-wqy-microhei flac gedit nautilus \
+    fonts-wqy-microhei flac gedit nautilus \
     libegl1 libopengl0 libglib2.0-0 libxkbcommon0 libdbus-1-3 \
     libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 \
     libxcb-xinerama0 libxcb-xinput0 libxcb-render-util0 \
@@ -187,19 +187,26 @@ RUN set -eux; \
     install -m 0755 truehdd /usr/bin/truehdd; \
     rm -rf /tmp/truehdd_bin
 
+ADD ["https://api.github.com/repos/FFmpeg/FFmpeg/tags?per_page=100", "/tmp/ffmpeg-tags.json"]
+
 RUN set -eux; \
     mkdir -p /tmp/mpv && cd /tmp/mpv; \
     git clone https://github.com/mpv-player/mpv-build.git; \
     cd mpv-build; \
     rm -rf mpv/build ffmpeg/build libass/build || true; \
+    ./use-ffmpeg-release; \
     echo "--enable-libbluray" > ffmpeg_options; \
     echo "--enable-libdav1d" >> ffmpeg_options; \
     echo "-Dlibbluray=enabled" > mpv_options; \
     export PKG_CONFIG_PATH="/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     ./rebuild -j"$(nproc)"; \
     ./install; \
+    install -m 0755 build_libs/bin/ffmpeg /usr/bin/ffmpeg; \
+    install -m 0755 build_libs/bin/ffprobe /usr/bin/ffprobe; \
+    /usr/bin/ffmpeg -version >/dev/null; \
+    /usr/bin/ffprobe -version >/dev/null; \
     ldconfig; \
-    rm -rf /tmp/mpv
+    rm -rf /tmp/mpv /tmp/ffmpeg-tags.json
 
 RUN set -eux; \
     LSMASH_TAG="$(git ls-remote --refs --tags --sort=-version:refname https://github.com/l-smash/l-smash.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')"; \
@@ -278,11 +285,15 @@ x265_help="$(/usr/bin/x265 --help 2>&1 || true)"
 rm -rf /tmp/x265 /tmp/x265-tags.json
 X265EOS
 
+ADD ["https://gitlab.com/api/v4/projects/AOMediaCodec%2FSVT-AV1/releases?per_page=1", "/tmp/svt-av1-releases.json"]
+
 RUN bash <<'SVTAV1EOS'
 set -euo pipefail
 mkdir -p /tmp/svtav1
 cd /tmp/svtav1
-git clone --depth 1 --branch v4.2.0 https://gitlab.com/AOMediaCodec/SVT-AV1.git
+SVT_TAG="$(git ls-remote --refs --tags --sort=-version:refname https://gitlab.com/AOMediaCodec/SVT-AV1.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')"
+test -n "$SVT_TAG"
+git clone --depth 1 --branch "$SVT_TAG" https://gitlab.com/AOMediaCodec/SVT-AV1.git
 svt_root=/tmp/svtav1/SVT-AV1
 test -f "$svt_root/Source/Lib/Globals/enc_settings.c"
 
@@ -294,7 +305,8 @@ case ${MAKEFLAGS-} in
 	;;
 esac
 command -v python3 >/dev/null 2>&1 || exit 1
-python3 - "$svt_root" <<'SVTAV1PATCH'
+svt_patched=0
+if python3 - "$svt_root" <<'SVTAV1PATCH'
 import sys
 from pathlib import Path
 
@@ -374,6 +386,7 @@ APPLY = [
 
 
 def run_apply():
+    updated = {}
     for rel, old, new in APPLY:
         path = root / rel
         text = path.read_text(encoding="utf-8")
@@ -383,22 +396,37 @@ def run_apply():
             if new in text:
                 continue
             sys.exit(1)
-        path.write_text(text.replace(old, new, 1), encoding="utf-8")
+        updated[path] = text.replace(old, new, 1)
+    for path, text in updated.items():
+        path.write_text(text, encoding="utf-8")
 
 
 
 run_apply()
 sys.exit(0)
 SVTAV1PATCH
+then
+  svt_patched=1
+fi
 
 cd "$svt_root/Build/linux"
-./build.sh release static
+if ! ./build.sh release static; then
+  test "$svt_patched" -eq 1
+  rm -rf "$svt_root"
+  cd /tmp/svtav1
+  git clone --depth 1 --branch "$SVT_TAG" https://gitlab.com/AOMediaCodec/SVT-AV1.git
+  cd "$svt_root/Build/linux"
+  ./build.sh release static
+fi
 
 test -f "$svt_root/Bin/Release/SvtAv1EncApp"
 cp "$svt_root/Bin/Release/SvtAv1EncApp" /usr/bin/SvtAv1EncApp
 chmod +x /usr/bin/SvtAv1EncApp
-rm -rf /tmp/svtav1
+rm -rf /tmp/svtav1 /tmp/svt-av1-releases.json
 SVTAV1EOS
+
+ADD ["https://api.github.com/repos/mstorsjo/fdk-aac/tags?per_page=100", "/tmp/fdk-aac-tags.json"]
+ADD ["https://api.github.com/repos/nu774/fdkaac/tags?per_page=100", "/tmp/fdkaac-tags.json"]
 
 RUN bash <<'FDKAAC'
 set -euo pipefail
@@ -422,12 +450,12 @@ ldconfig
 cd /tmp/fdk
 git clone --depth 1 --branch "$FDKAAC_TAG" https://github.com/nu774/fdkaac.git
 cd fdkaac
-autoreconf -i
+autoreconf -fi
 ./configure --prefix=/usr/local
 make -j"$(nproc)"
 make install
 ldconfig
-rm -rf /tmp/fdk
+rm -rf /tmp/fdk /tmp/fdk-aac-tags.json /tmp/fdkaac-tags.json
 FDKAAC
 
 RUN bash <<'FLAC'
@@ -710,7 +738,7 @@ RUN set -eux; \
     cp "$(find "$PWD" -maxdepth 2 -name libvsnlm_ispc.so -type f | head -n1)" /app/plugins/; \
     rm -rf /tmp/vsplugins /tmp/ispc.tar.gz /tmp/ispc-v1.31.0-linux
 
-RUN python3 -m pip install --break-system-packages --upgrade numpy pycountry PyQt6 soundfile pillow matplotlib
+RUN python3 -m pip install --break-system-packages --upgrade pip numpy pycountry PyQt6 soundfile pillow matplotlib
 
 RUN set -eux; \
     SEVENZIP_RELEASE="$(git ls-remote --refs --tags --sort=-version:refname https://github.com/ip7z/7zip.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[0-9]+[.][0-9]+$/ { print $2; exit }')"; \

@@ -11,6 +11,9 @@ from src.core.encode_presets import ENCODE_PRESET_PARAMETERS
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 X264_REPOSITORY = "https://code.videolan.org/videolan/x264.git"
 X265_REPOSITORY = "https://github.com/Multicorewareinc/x265.git"
+FFMPEG_REPOSITORY = "https://github.com/FFmpeg/FFmpeg.git"
+SVT_AV1_REPOSITORY = "https://gitlab.com/AOMediaCodec/SVT-AV1.git"
+FDKAAC_REPOSITORY = "https://github.com/nu774/fdkaac.git"
 HDR10PLUS_REPOSITORY = "https://github.com/quietvoid/hdr10plus_tool"
 
 
@@ -102,6 +105,106 @@ class EncoderToolchainTests(unittest.TestCase):
         for name, parameters in ENCODE_PRESET_PARAMETERS["svtav1"].items():
             with self.subTest(encoder="svtav1", preset=name):
                 self.assertNotIn("--film-grain", parameters)
+
+    def test_linux_setup_updates_managed_media_tools_and_python_packages(self) -> None:
+        mpv_function = self.linux_setup.split("install_mpv()", 1)[1].split(
+            "# L-SMASH", 1
+        )[0]
+        for fragment in (
+            f'FFMPEG_SOURCE_REPOSITORY="{FFMPEG_REPOSITORY}"',
+            'latest_stable_tag "$FFMPEG_SOURCE_REPOSITORY"',
+            '__installed_ffmpeg_version "$FFMPEG_PATH"',
+            '__installed_ffmpeg_version "$FFPROBE_PATH"',
+            'dpkg --compare-versions "$installed_ffmpeg_version" ge "$target_ffmpeg_version"',
+            "./use-ffmpeg-release",
+            'echo "--enable-libbluray" > ffmpeg_options',
+            'echo "--enable-libdav1d" >> ffmpeg_options',
+            'install_configured_executable build_libs/bin/ffmpeg "$FFMPEG_PATH"',
+            'install_configured_executable build_libs/bin/ffprobe "$FFPROBE_PATH"',
+        ):
+            with self.subTest(tool="ffmpeg", fragment=fragment):
+                source = (
+                    self.linux_setup
+                    if "REPOSITORY=" in fragment
+                    else mpv_function
+                )
+                self.assertIn(fragment, source)
+        self.assertLess(
+            mpv_function.index("./use-ffmpeg-release"),
+            mpv_function.index("./rebuild"),
+        )
+        self.assertNotIn("install_ffmpeg()", self.linux_setup)
+        self.assertNotIn("FFMPEG_VERSION_FILE", self.linux_setup)
+
+        package_sync = self.linux_setup.split("sync_mkvtoolnix_paths()", 1)[1].split(
+            "verify_configured_tool_paths()", 1
+        )[0]
+        system_dependencies = self.linux_setup.split("sys_deps=(", 1)[1].split(
+            ")", 1
+        )[0]
+        self.assertNotIn("ffmpeg", package_sync)
+        self.assertNotIn("ffprobe", package_sync)
+        self.assertNotIn("ffmpeg", system_dependencies)
+
+        svt_function = self.linux_setup.split("install_svt_av1()", 1)[1].split(
+            "# tsMuxer", 1
+        )[0]
+        for fragment in (
+            f'SVT_AV1_SOURCE_REPOSITORY="{SVT_AV1_REPOSITORY}"',
+            'latest_stable_tag "$SVT_AV1_SOURCE_REPOSITORY"',
+            "__installed_svt_av1_version",
+            'dpkg --compare-versions "$installed_version" ge "$target_version"',
+            'git clone --depth 1 --branch "$svt_tag"',
+            "building the unmodified upstream source with 8/10-bit support",
+        ):
+            with self.subTest(tool="svt-av1", fragment=fragment):
+                source = (
+                    self.linux_setup
+                    if "REPOSITORY=" in fragment
+                    else svt_function
+                )
+                self.assertIn(fragment, source)
+        self.assertIn("local patch_status=$?", self.linux_setup)
+        self.assertNotIn("v4.2.0", self.linux_setup)
+
+        fdkaac_function = self.linux_setup.split("install_fdk_aac()", 1)[1].split(
+            "# FLAC", 1
+        )[0]
+        for fragment in (
+            f'FDKAAC_SOURCE_REPOSITORY="{FDKAAC_REPOSITORY}"',
+            'latest_stable_tag "$FDKAAC_SOURCE_REPOSITORY"',
+            "__installed_fdkaac_version",
+            'dpkg --compare-versions "$installed_version" ge "$target_version"',
+            "autoreconf -fi",
+        ):
+            with self.subTest(tool="fdkaac", fragment=fragment):
+                source = (
+                    self.linux_setup
+                    if "REPOSITORY=" in fragment
+                    else fdkaac_function
+                )
+                self.assertIn(fragment, source)
+
+        python_function = self.linux_setup.split(
+            "install_bluray_python_deps()", 1
+        )[1].split("# Main execution", 1)[0]
+        self.assertNotIn("already importable, skipping pip", python_function)
+        self.assertIn(
+            "python3 -m pip install --upgrade \"${pip_extra[@]}\" pip numpy "
+            "pycountry PyQt6 soundfile pillow matplotlib",
+            python_function,
+        )
+        self.assertIn("__bluray_python_imports_ok || die", python_function)
+
+    def test_linux_setup_disables_mpv_manpage_build_on_ubuntu_22_04(self) -> None:
+        mpv_options = self.linux_setup.split(
+            'echo "-Dlibbluray=enabled" > mpv_options', 1
+        )[1].split('tmux_run "mpv-build rebuild"', 1)[0]
+
+        self.assertIn('if [[ "$is_ubuntu_2204" == "true" ]]; then', mpv_options)
+        self.assertIn(
+            'echo "-Dmanpage-build=disabled" >> mpv_options', mpv_options
+        )
 
     def test_linux_setup_uses_settings_paths_for_installed_tools(self) -> None:
         setting_names = (
@@ -262,6 +365,58 @@ class EncoderToolchainTests(unittest.TestCase):
         self.assertNotIn("-DENABLE_HDR10_PLUS=OFF", self.dockerfile)
         self.assertNotIn("TOOLPATHS", self.dockerfile)
         self.assertNotIn("place_tool", self.dockerfile)
+
+    def test_docker_tracks_updated_linux_tools_and_python_packages(self) -> None:
+        apt_dependencies = self.dockerfile.split("apt-get install", 1)[1].split(
+            "rm -rf /var/lib/apt/lists", 1
+        )[0]
+        self.assertNotIn("ffmpeg", apt_dependencies)
+
+        ffmpeg_build = self.dockerfile.split("mkdir -p /tmp/mpv", 1)[1].split(
+            "\n\nRUN set -eux;", 1
+        )[0]
+        for fragment in (
+            "./use-ffmpeg-release",
+            'echo "--enable-libbluray" > ffmpeg_options',
+            'echo "--enable-libdav1d" >> ffmpeg_options',
+            "install -m 0755 build_libs/bin/ffmpeg /usr/bin/ffmpeg",
+            "install -m 0755 build_libs/bin/ffprobe /usr/bin/ffprobe",
+            "/usr/bin/ffmpeg -version",
+            "/usr/bin/ffprobe -version",
+        ):
+            with self.subTest(tool="ffmpeg", fragment=fragment):
+                self.assertIn(fragment, ffmpeg_build)
+        self.assertLess(
+            ffmpeg_build.index("./use-ffmpeg-release"),
+            ffmpeg_build.index("./rebuild"),
+        )
+        self.assertNotIn("RUN bash <<'FFMPEG'", self.dockerfile)
+
+        svt_build = self.dockerfile.split("RUN bash <<'SVTAV1EOS'", 1)[1].split(
+            "\nSVTAV1EOS\n", 1
+        )[0]
+        self.assertIn(
+            "AOMediaCodec%2FSVT-AV1/releases?per_page=1", self.dockerfile
+        )
+        self.assertIn(SVT_AV1_REPOSITORY, svt_build)
+        self.assertIn("SVT_TAG=", svt_build)
+        self.assertIn('git clone --depth 1 --branch "$SVT_TAG"', svt_build)
+        self.assertNotIn("v4.2.0", svt_build)
+        self.assertIn("svt_patched=0", svt_build)
+
+        fdkaac_build = self.dockerfile.split("RUN bash <<'FDKAAC'", 1)[1].split(
+            "\nFDKAAC\n", 1
+        )[0]
+        self.assertIn("repos/mstorsjo/fdk-aac/tags?per_page=100", self.dockerfile)
+        self.assertIn("repos/nu774/fdkaac/tags?per_page=100", self.dockerfile)
+        self.assertIn(FDKAAC_REPOSITORY, fdkaac_build)
+        self.assertIn("latest_stable_tag", fdkaac_build)
+        self.assertIn("autoreconf -fi", fdkaac_build)
+        self.assertIn(
+            "--upgrade pip numpy pycountry PyQt6 soundfile pillow matplotlib",
+            self.dockerfile,
+        )
+        self.assertIn("repos/FFmpeg/FFmpeg/tags?per_page=100", self.dockerfile)
 
     def test_windows_setup_tracks_latest_sources_and_preserves_paths(self) -> None:
         for fragment in (
