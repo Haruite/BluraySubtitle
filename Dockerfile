@@ -738,7 +738,7 @@ RUN set -eux; \
     cp "$(find "$PWD" -maxdepth 2 -name libvsnlm_ispc.so -type f | head -n1)" /app/plugins/; \
     rm -rf /tmp/vsplugins /tmp/ispc.tar.gz /tmp/ispc-v1.31.0-linux
 
-RUN python3 -m pip install --break-system-packages --upgrade pip numpy pycountry PyQt6 soundfile pillow matplotlib
+RUN python3 -m pip install --break-system-packages --upgrade numpy pycountry PyQt6 soundfile pillow matplotlib
 
 RUN set -eux; \
     SEVENZIP_RELEASE="$(git ls-remote --refs --tags --sort=-version:refname https://github.com/ip7z/7zip.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[0-9]+[.][0-9]+$/ { print $2; exit }')"; \

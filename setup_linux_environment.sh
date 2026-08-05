@@ -2986,7 +2986,7 @@ __pip_supports_break_system_packages() {
 }
 
 install_bluray_python_deps() {
-  log "$(msg 'Installing or upgrading Python dependencies (python3 -m pip: pip numpy pycountry PyQt6 soundfile pillow matplotlib)' '安装或升级 Python 依赖（python3 -m pip：pip numpy pycountry PyQt6 soundfile pillow matplotlib）')"
+  log "$(msg 'Installing or upgrading Python dependencies (python3 -m pip: numpy pycountry PyQt6 soundfile pillow matplotlib)' '安装或升级 Python 依赖（python3 -m pip：numpy pycountry PyQt6 soundfile pillow matplotlib）')"
 
   if ! python3 -m pip --version >/dev/null 2>&1; then
     apt_update
@@ -3006,9 +3006,9 @@ install_bluray_python_deps() {
   fi
 
   tmux_run "$(msg "$pip_mode_msg_en" "$pip_mode_msg_zh")" \
-    env PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade "${pip_extra[@]}" pip numpy pycountry PyQt6 soundfile pillow matplotlib \
+    env PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade "${pip_extra[@]}" numpy pycountry PyQt6 soundfile pillow matplotlib \
     || tmux_run "$(msg 'Install or upgrade Python dependencies (retry)' '安装或升级 Python 依赖（重试）')" \
-      env PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade "${pip_extra[@]}" pip numpy pycountry PyQt6 soundfile pillow matplotlib \
+      env PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade "${pip_extra[@]}" numpy pycountry PyQt6 soundfile pillow matplotlib \
     || die "$(msg 'Failed to install Python dependencies with python3 -m pip' '使用 python3 -m pip 安装依赖失败')"
 
   __bluray_python_imports_ok || die "$(msg 'Python deps installed but import check failed. Note: Pillow is imported as PIL (e.g. from PIL import Image), not import pillow' '依赖已安装但仍无法通过导入检查。说明：Pillow 的安装包名为 pillow，代码中应使用 from PIL import Image，不要写 import pillow')"

@@ -190,8 +190,12 @@ class EncoderToolchainTests(unittest.TestCase):
         )[1].split("# Main execution", 1)[0]
         self.assertNotIn("already importable, skipping pip", python_function)
         self.assertIn(
-            "python3 -m pip install --upgrade \"${pip_extra[@]}\" pip numpy "
+            "python3 -m pip install --upgrade \"${pip_extra[@]}\" numpy "
             "pycountry PyQt6 soundfile pillow matplotlib",
+            python_function,
+        )
+        self.assertNotIn(
+            'python3 -m pip install --upgrade "${pip_extra[@]}" pip ',
             python_function,
         )
         self.assertIn("__bluray_python_imports_ok || die", python_function)
@@ -413,9 +417,10 @@ class EncoderToolchainTests(unittest.TestCase):
         self.assertIn("latest_stable_tag", fdkaac_build)
         self.assertIn("autoreconf -fi", fdkaac_build)
         self.assertIn(
-            "--upgrade pip numpy pycountry PyQt6 soundfile pillow matplotlib",
+            "--upgrade numpy pycountry PyQt6 soundfile pillow matplotlib",
             self.dockerfile,
         )
+        self.assertNotIn("--upgrade pip numpy", self.dockerfile)
         self.assertIn("repos/FFmpeg/FFmpeg/tags?per_page=100", self.dockerfile)
 
     def test_windows_setup_tracks_latest_sources_and_preserves_paths(self) -> None:
