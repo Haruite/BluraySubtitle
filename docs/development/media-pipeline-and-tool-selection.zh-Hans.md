@@ -1,6 +1,6 @@
 # 媒体处理流程设计与工具选型
 
-[English](media-pipeline-and-tool-selection.md)
+[English](media-pipeline-and-tool-selection.md) | 简体中文
 
 本文说明 BluraySubtitle 当前的蓝光媒体处理方案，以及选择、限制或不使用特定外部工具的依据。文中记录的是项目有意依赖的行为，并非对所有工具和版本进行通用性能比较。
 
@@ -270,10 +270,10 @@ FLAC 是首选无损输出。首先尝试独立编码器，因为 FLAC 1.5.0 支
 | MKVToolNix | 主要 Remux、Matroska 提取、元数据编辑、逐片段裁切和拼接 | 跨平台，可靠处理 MPLS 范围和 Matroska |
 | tsMuxer | 从单个 M2TS 恢复明确缺少的 PID | 检测较宽松，但不适合作为主要 MPLS demux 工具 |
 | FFmpeg/ffprobe | 定向解码、分析、回退探测和编码 | 编码支持广泛；在批量发现之外可以接受进程开销 |
-| `truehdd` | 解码 TrueHD Atmos presentation 2 | 当前 Atmos presentation 处理所需 |
+| truehdd | 解码 TrueHD Atmos presentation 2 | 当前 Atmos presentation 处理所需 |
 | FLAC 1.5.0+ | 使用全部逻辑 CPU 线程进行首选 FLAC 编码 | 快速的多线程无损编码 |
 | FFmpeg FLAC 编码器 | 独立 FLAC 不可用或失败时回退 | 容错更高的恢复路径 |
-| `fdkaac` | AAC 编码 | qaac 的跨平台替代方案 |
+| fdkaac | AAC 编码 | qaac 的跨平台替代方案 |
 | eac3to | 不使用 | 仅 Windows，并存在已确认的播放列表/时间兼容性问题 |
 | DGDemux | 暂不集成 | 修复损坏 TrueHD 效果好，但第三方使用需要书面许可，并会增加流程复杂度 |
 

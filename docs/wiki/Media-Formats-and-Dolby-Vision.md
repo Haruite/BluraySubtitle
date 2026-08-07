@@ -1,5 +1,7 @@
 # Media Formats, Subtitles, and Dolby Vision
 
+English | [简体中文](Media-Formats-and-Dolby-Vision.zh-Hans.md)
+
 This page summarizes the formats encountered in Blu-ray and BluraySubtitle. “Format” can mean a container, codec, elementary-stream representation, or subtitle model, so each section states which layer it describes.
 
 ## Video formats

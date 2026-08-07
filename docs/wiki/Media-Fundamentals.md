@@ -1,5 +1,7 @@
 # Media Fundamentals
 
+English | [简体中文](Media-Fundamentals.zh-Hans.md)
+
 This page introduces the concepts used throughout BluraySubtitle. The most important distinction is this:
 
 > A container organizes tracks. A codec defines how the samples in a track are represented.

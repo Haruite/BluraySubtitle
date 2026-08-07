@@ -1,6 +1,6 @@
 # Media Pipeline Design and Tool Selection
 
-[简体中文](media-pipeline-and-tool-selection.zh-Hans.md)
+English | [简体中文](media-pipeline-and-tool-selection.zh-Hans.md)
 
 This document describes the current Blu-ray media-processing design in BluraySubtitle and the reasons for selecting, limiting, or rejecting particular external tools. It records the behavior that the project intentionally relies on; it is not a general benchmark of every tool or version.
 
@@ -272,10 +272,10 @@ This preserves the performance advantage of FLAC 1.5.0 without making its succes
 | MKVToolNix | Primary remux, Matroska extraction, metadata edits, per-part trimming and append | Cross-platform and reliable with MPLS ranges and Matroska |
 | tsMuxer | Recover explicitly missing PIDs from individual M2TS files | More permissive detection, but unsuitable as the primary MPLS demuxer |
 | FFmpeg/ffprobe | Targeted decode, analysis, fallback probing and encoding | Broad codec support; process cost is acceptable outside bulk discovery |
-| `truehdd` | Decode TrueHD Atmos presentation 2 | Required Atmos presentation handling |
+| truehdd | Decode TrueHD Atmos presentation 2 | Required Atmos presentation handling |
 | FLAC 1.5.0+ | Preferred FLAC encoding with all logical CPU threads | Fast multithreaded lossless encoding |
 | FFmpeg FLAC encoder | Fallback when standalone FLAC is unavailable or fails | More tolerant recovery path |
-| `fdkaac` | AAC encoding | Cross-platform replacement for qaac |
+| fdkaac | AAC encoding | Cross-platform replacement for qaac |
 | eac3to | Not used | Windows-only and confirmed playlist/timing compatibility problems |
 | DGDemux | Not integrated | Good damaged-TrueHD recovery, but third-party use requires written permission and adds workflow complexity |
 

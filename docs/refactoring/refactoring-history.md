@@ -1,6 +1,6 @@
 # Refactoring History
 
-[简体中文](refactoring-history.zh-Hans.md)
+English | [简体中文](refactoring-history.zh-Hans.md)
 
 ## Purpose
 

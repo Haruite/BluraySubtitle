@@ -1,5 +1,7 @@
 # BluraySubtitle Developer Guide
 
+English | [简体中文](BluraySubtitle-Developer-Guide.zh-Hans.md)
+
 This page connects the media model to the source tree. It describes current behavior, not a proposed rewrite. The mandatory [Code Modification Standards](../development/code-standards.md) remain the authority for changes.
 
 ## Domain definitions

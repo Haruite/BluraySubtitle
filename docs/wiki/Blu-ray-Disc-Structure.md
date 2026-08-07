@@ -1,5 +1,7 @@
 # Blu-ray Disc Structure
 
+English | [简体中文](Blu-ray-Disc-Structure.zh-Hans.md)
+
 This page follows a Blu-ray title from the directory tree down to transport packets. It focuses on the structures that BluraySubtitle reads and the timing rules that determine what a playlist actually plays.
 
 ## The disc root

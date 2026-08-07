@@ -1,6 +1,6 @@
 # BluraySubtitle
 
-[English](./README.md) | [简体中文](README.zh-Hans.md)
+English | [简体中文](README.zh-Hans.md)
 
 Documentation: [project wiki](docs/wiki/Home.md)
 
@@ -107,11 +107,11 @@ Encode options include:
 - The startup lossless-audio target, subtitle packaging mode, getnative, automatic-crop, output-comparison, and corrupted-frame-check checkboxes also come from **Advanced** settings and remain freely editable before launch.
 - The VPy row below those options exposes denoise, dehalo, dering, deband, and anti-aliasing strengths for the generated default script. `0` disables an individual stage; defect-specific dehalo and dering start disabled, while deband and anti-aliasing use a moderate `0.5` blend by default. All values can also be changed under **Advanced** settings.
 - Automatic getnative can take substantial time and memory because it analyzes multiple frames and kernels. Encode runs it only when the source height is at most 1080; a taller source is skipped even when the option is selected. To analyze such a source, run `src/scripts/getnative_file.py` manually and write its `height` and `kernel` result into the VPy as `native_h` and `native_kernel`.
-- The standalone algorithm scales its search and curve-tail boundaries with the source height. It always excludes the uncommon 535p through 545p false-positive band and excludes candidates above `source height × 1040 / 1080`. For a 2160p source, 1080p-area candidates remain eligible because 1080p-to-2160p upscales are common and no equivalent UHD interference band has been confirmed.
+- The standalone algorithm scales its search and curve-tail boundaries with the source height. It always excludes the uncommon 535p through 545p false-positive band and excludes candidates above `source height × 1040 / 1080`.
 - With **Auto-crop black borders** enabled, Encode analyzes multiple time points and applies one conservative fixed crop. Pixels used by any sampled active picture are preserved when borders vary over time.
-- With **Output comparison images** enabled, every encoded video saves source and encoded PNGs from the same frame under **`<selected output>/<source folder name>/Compare`**. On the tested machine, a 52-second 1080p sample took about 36 seconds and a 34-second cropped 4K Dolby Vision sample took about 80 seconds, or roughly 0.7 and 2.4 times their video durations. These are scale examples rather than guarantees; source decoding, VPy filters, resolution, and storage speed affect the result.
-- With **Check corrupted frames** enabled, Encode reruns the exact VPy used for the completed video and compares every output frame with the encoded MKV by PSNR. The JSON report is saved under **`<selected output>/<source folder name>/FrameCheck`**. This is an additional full VPy render after encoding, so heavy filters and 4K sources can add minutes or longer; a suspicious result or checker error retains the encoded video and completes the row with a warning.
-- Lossless PCM, TrueHD/MLP, DTS-family, and FLAC tracks use the per-track FLAC/AAC/Opus choice shown in **Edit tracks**. Lossy audio is kept unchanged. TrueHD Atmos is converted only after `truehdd` successfully decodes presentation 2; if `truehdd` is unavailable or fails, the original TrueHD track is kept. Other selected conversion failures stop the row. When FLAC is selected, the same DTS/FLAC size rule described above applies. For Remux input, a missing tool required by an actual conversion is reported before launch.
+- With **Output comparison images** enabled, every encoded video saves source and encoded PNGs from the same frame under **`<selected output>/<source folder name>/Compare`**.
+- With **Check corrupted frames** enabled, Encode reruns the exact VPy used for the completed video and compares every output frame with the encoded MKV by PSNR. The JSON report is saved under **`<selected output>/<source folder name>/FrameCheck`**. This is an additional full VPy render after encoding and may take several times the video's duration.
+- Lossless PCM, TrueHD/MLP, DTS-family, and FLAC tracks use the per-track FLAC/AAC/Opus choice shown in **Edit tracks**. Lossy audio is kept unchanged. TrueHD Atmos is converted only after `truehdd` successfully decodes presentation 2; if `truehdd` is unavailable or fails, the original TrueHD track is kept. When FLAC is selected, the same DTS/FLAC size rule described above applies.
   Final Encode muxing applies the same automatic silent/duplicate cleanup; Blu-ray staging Remux does not process audio.
 - **Subtitle packaging**: external / softsub / hardsub
 - **Per-row VPy path** for main episodes and SP rows

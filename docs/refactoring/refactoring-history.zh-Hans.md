@@ -1,6 +1,6 @@
 # 重构历史
 
-[English](refactoring-history.md)
+[English](refactoring-history.md) | 简体中文
 
 ## 用途
 

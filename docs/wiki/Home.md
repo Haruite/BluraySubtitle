@@ -1,5 +1,7 @@
 # BluraySubtitle Wiki
 
+English | [简体中文](Home.zh-Hans.md)
+
 This wiki explains the media concepts behind BluraySubtitle and connects them to the project's implementation. It is intended for two audiences:
 
 - users who need a reliable mental model of Blu-ray, Matroska, tracks, remuxing, encoding, subtitles, audio, video, and Dolby Vision; and

@@ -1,5 +1,7 @@
 # References and Further Reading
 
+English | [简体中文](References.zh-Hans.md)
+
 The wiki is an explanatory layer over the project’s source and verified behavior. When a public summary, a tool, and a real disc disagree, inspect the actual bytes and the code path used by the application.
 
 ## Project sources

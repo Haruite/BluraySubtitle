@@ -1,6 +1,6 @@
 # Code Modification Standards
 
-[简体中文](code-standards.zh-Hans.md)
+English | [简体中文](code-standards.zh-Hans.md)
 
 ## 1. Authority and Applicability
 
@@ -108,26 +108,12 @@ When the author establishes a new rule, update this file and its Simplified Chin
 
 ## 10. Confirmed Product Constraints
 
-Keep this section limited to confirmed product behavior that is easy to misunderstand or materially constrains future changes. Algorithm parameters, performance budgets, internal module or file ownership, and other implementation details belong in nearby code comments or refactoring history.
+Keep this section limited to confirmed exceptions to the general rules above and product semantics that would otherwise be easy to misinterpret. Implementation details belong in nearby code comments or refactoring history.
 
-- The generated default VPy supports progressive sources only. Interlaced, telecined, or mixed-cadence material requires an explicitly suitable custom script.
 - Remux-source Encode is resumable. Existing planned main, SP, external-subtitle, and companion outputs are treated as completed and skipped without overwrite; remaining rows continue. Duplicate paths within the current request remain errors.
 - Blu-ray DIY remains visible and its code is retained. Its incomplete execution must not be presented as complete.
-- Blu-ray Remux always soft-muxes each selected subtitle file into the corresponding main MKV. It does not burn subtitles into the video or write external subtitle outputs.
-- Blu-ray Remux exposes a default-enabled option that converts selected lossless audio to FLAC. Disabled preserves source audio; Remux must not use AAC or Opus for this conversion.
-- A successful DTS-family-to-FLAC conversion replaces the source only when the FLAC is no larger than the extracted DTS; otherwise the FLAC is discarded and the original DTS is retained. Successful PCM and TrueHD/MLP FLAC conversions are retained regardless of size.
-- Final Remux and Encode outputs may automatically remove selected silent audio and exact decoded duplicates. Different known languages are never deduplicated, source order determines which duplicate is retained, and every removal is reported. This is an intentional exception to retaining every selected track.
-- Blu-ray Encode staging Remux must preserve source audio. Encode audio conversion runs only in the final mux after video encoding succeeds.
-- When Encode comparison images are enabled, each encoded video must save one source/encoded PNG pair selected by the same zero-based video frame number under `Compare` in the actual per-source output folder. Timestamp-based matching is not equivalent.
-- Generic video conversion is not supported by Blu-ray Remux or Blu-ray Encode. Future DIY video conversion requires a separately confirmed design.
-- Add Chapters matches current visible MKV order to selected main playlists sequentially and does not require `BD_Vol_NNN` in external MKV filenames.
-- Application preferences use a versioned `config.json` beside the executable, or in the repository root for source runs. Frozen builds package `config.default.json` as the first-run template; the bundled `_MEIPASS` directory is never the writable configuration target.
-- Update checks must be manual and asynchronous. They may query only the latest published full GitHub Release tag, compare its numeric version with the application-owned version, and must not download an update. A newer-version result must provide the GitHub Releases link and explicitly remind the user to copy `config.json` from the current program directory to the new program directory.
-- Invalid application configuration must be reported and left untouched.
-- Built-in Encode presets are read-only. Application configuration stores only user-defined presets, each owned by one encoder. The Encode page shows the built-in and user-defined presets for its current encoder, and directly editing the visible parameter field must not change the selected preset name.
+- Final Remux and Encode outputs may automatically remove selected silent audio and exact decoded duplicates, with every removal reported. This is an intentional exception to retaining every selected track.
 - FDK-AAC and Opus bitrate value `0` means Auto rather than disabled or zero bitrate. Positive values are explicit kbps targets.
-- The Advanced settings page must visibly warn that higher FFmpeg FLAC compression levels can significantly increase Remux time. It must also show stereo-music starting ranges of 128–256 kbps for FDK-AAC and 64–128 kbps for Opus, with Auto or a higher value recommended for multichannel or mixed channel layouts.
-- Window geometry and current language, theme, font size, and opacity are saved automatically on a clean close. Restored geometry must not be replaced by first-run centering.
 
 ## 11. Testing and Change Reporting
 
