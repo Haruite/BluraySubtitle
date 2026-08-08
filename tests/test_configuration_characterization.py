@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, mock_open, patch
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QTableWidgetItem
 
 from src.core import ENCODE_SP_LABELS
 from src.runtime.gui_runtime_classes.bluray_subtitle_gui_entry import BluraySubtitleGUI
+from src.runtime.gui_runtime_split import actions_and_file_dialogs as actions_dialogs
 from src.runtime.gui_runtime_split import configuration_and_modes as configuration_modes
 from src.runtime.gui_runtime_split import remux_and_episode_layout as remux_layout
 from src.runtime.gui_runtime_split.actions_and_file_dialogs import ActionsAndDialogsMixin
@@ -88,6 +89,35 @@ class _MainPlaylistTable:
         if row != 0:
             return None
         return self._playlist_table if column == 2 else self._command_editor
+
+
+class ThirdPartyNoticesDialogTests(unittest.TestCase):
+    def test_bundled_notices_are_rendered_as_markdown(self) -> None:
+        dialog = Mock()
+        editor = Mock()
+        button = Mock()
+        owner = SimpleNamespace(t=lambda text: text)
+
+        with (
+            patch.object(actions_dialogs, "_is_pyinstaller_frozen_bundle", return_value=True),
+            patch.object(
+                actions_dialogs,
+                "third_party_notices_markdown_path",
+                return_value="THIRD_PARTY_NOTICES.md",
+            ),
+            patch("builtins.open", mock_open(read_data="# Third-party notices")),
+            patch.object(actions_dialogs, "QDialog", return_value=dialog),
+            patch.object(actions_dialogs, "QVBoxLayout", return_value=Mock()),
+            patch.object(actions_dialogs, "QTextBrowser", return_value=editor),
+            patch.object(actions_dialogs, "QWidget", return_value=Mock()),
+            patch.object(actions_dialogs, "QHBoxLayout", return_value=Mock()),
+            patch.object(actions_dialogs, "QPushButton", return_value=button),
+        ):
+            ActionsAndDialogsMixin._open_third_party_notices_dialog(owner)
+
+        editor.setMarkdown.assert_called_once_with("# Third-party notices")
+        editor.setOpenExternalLinks.assert_called_once_with(True)
+        editor.setPlainText.assert_not_called()
 
 
 class ServiceRunConfigurationTests(unittest.TestCase):

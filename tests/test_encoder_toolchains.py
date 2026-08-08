@@ -462,10 +462,9 @@ class EncoderToolchainTests(unittest.TestCase):
         self.assertIn("latest official", self.readme_en)
         self.assertIn("官方", self.readme_zh)
         self.assertIn("最新", self.readme_zh)
-        self.assertIn(X264_REPOSITORY, self.notices)
-        self.assertIn(X265_REPOSITORY, self.notices)
-        self.assertIn(HDR10PLUS_REPOSITORY, self.notices)
-        self.assertGreaterEqual(self.notices.count("latest official"), 3)
+        for repository in (X264_REPOSITORY, X265_REPOSITORY, HDR10PLUS_REPOSITORY):
+            with self.subTest(repository=repository):
+                self.assertIn(repository.removesuffix(".git"), self.notices)
         self.assertNotIn("r3223", self.notices)
 
     def test_hdr10plus_linux_install_uses_official_prebuilt_release(self) -> None:

@@ -15,6 +15,7 @@ spec and the application configuration cannot silently drift apart.
 from pathlib import Path
 import runpy
 
+from PyInstaller import __version__ as PYINSTALLER_VERSION
 from PyInstaller.utils.hooks import collect_data_files
 
 
@@ -45,8 +46,24 @@ default_config = required_path(
     PROJECT_ROOT / "config.default.json",
     "default application configuration",
 )
-third_party_notices = required_path(
+third_party_notices_template = required_path(
     PROJECT_ROOT / "legal" / "THIRD_PARTY_NOTICES.md",
+    "third-party notices template",
+)
+third_party_notices_path = Path(workpath) / "legal" / "THIRD_PARTY_NOTICES.md"
+notices_updater_path = required_path(
+    PROJECT_ROOT / "tools" / "update_third_party_notices.py",
+    "third-party notices updater",
+)
+notices_updater = runpy.run_path(str(notices_updater_path))
+notices_updater["generate_third_party_notices"](
+    third_party_notices_template,
+    third_party_notices_path,
+    SETTINGS,
+    PYINSTALLER_VERSION,
+)
+third_party_notices = required_path(
+    third_party_notices_path,
     "third-party notices",
 )
 

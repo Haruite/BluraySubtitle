@@ -17,6 +17,8 @@ SETUP_SCRIPT = REPOSITORY_ROOT / "setup_windows_environment.ps1"
 CMD_LAUNCHER = REPOSITORY_ROOT / "setup_windows_environment.cmd"
 SETTINGS_FILE = REPOSITORY_ROOT / "src" / "core" / "settings.py"
 SPEC_FILE = REPOSITORY_ROOT / "BluraySubtitle_windows_x64.spec"
+NOTICES_TEMPLATE = REPOSITORY_ROOT / "legal" / "THIRD_PARTY_NOTICES.md"
+NOTICES_UPDATER = REPOSITORY_ROOT / "tools" / "update_third_party_notices.py"
 CODE_STANDARDS_EN = REPOSITORY_ROOT / "docs" / "development" / "code-standards.md"
 CODE_STANDARDS_ZH = (
     REPOSITORY_ROOT / "docs" / "development" / "code-standards.zh-Hans.md"
@@ -30,6 +32,8 @@ class WindowsSetupTests(unittest.TestCase):
         cls.source = cls.raw.decode("utf-8-sig")
         cls.settings_source = SETTINGS_FILE.read_text(encoding="utf-8")
         cls.spec_source = SPEC_FILE.read_text(encoding="utf-8")
+        cls.notices_template = NOTICES_TEMPLATE.read_text(encoding="utf-8")
+        cls.notices_updater = NOTICES_UPDATER.read_text(encoding="utf-8")
         cls.code_standards_en = CODE_STANDARDS_EN.read_text(encoding="utf-8")
         cls.code_standards_zh = CODE_STANDARDS_ZH.read_text(encoding="utf-8")
 
@@ -752,6 +756,20 @@ class WindowsSetupTests(unittest.TestCase):
         self.assertNotIn("metaflac.exe", self.spec_source)
         self.assertNotIn("libFLAC++.dll", self.spec_source)
         self.assertNotIn("fdk-aac.lib", self.spec_source)
+
+    def test_pyinstaller_generates_notices_from_placeholders_in_workpath(self) -> None:
+        for placeholder in (
+            "{{FFMPEG_VERSION}}",
+            "{{X264_VERSION}}",
+            "{{X265_VERSION}}",
+            "{{PYINSTALLER_VERSION}}",
+        ):
+            with self.subTest(placeholder=placeholder):
+                self.assertIn(placeholder, self.notices_template)
+        self.assertIn('Path(workpath) / "legal"', self.spec_source)
+        self.assertIn('notices_updater["generate_third_party_notices"]', self.spec_source)
+        self.assertIn("missing declarations", self.notices_updater)
+        self.assertNotIn("_replace_section_fields", self.notices_updater)
 
     def test_python_and_pip_are_added_to_machine_path(self) -> None:
         self.assertIn("function Add-PythonToMachinePath", self.source)

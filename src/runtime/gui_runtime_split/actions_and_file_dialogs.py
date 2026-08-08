@@ -11,7 +11,7 @@ from functools import partial
 from typing import Optional
 
 from PyQt6.QtCore import Qt, QTimer, QThread, QCoreApplication, QPoint, QEventLoop
-from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPlainTextEdit, QWidget, QHBoxLayout, QPushButton, \
+from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPlainTextEdit, QTextBrowser, QWidget, QHBoxLayout, QPushButton, \
     QApplication, QProgressDialog, QProgressBar, QTableWidgetItem, QTableWidget, QToolButton, QComboBox, \
     QAbstractItemView, QMenu, QMessageBox, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, QFileDialog, QCheckBox, \
     QDoubleSpinBox
@@ -78,9 +78,9 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         dlg.setWindowTitle(self.t('Third-party notices'))
         layout = QVBoxLayout()
         dlg.setLayout(layout)
-        editor = QPlainTextEdit(dlg)
-        editor.setReadOnly(True)
-        editor.setPlainText(body)
+        editor = QTextBrowser(dlg)
+        editor.setMarkdown(body)
+        editor.setOpenExternalLinks(True)
         editor.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
         layout.addWidget(editor)
         btn_row = QWidget(dlg)
