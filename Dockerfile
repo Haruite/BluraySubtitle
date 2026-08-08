@@ -781,6 +781,8 @@ RUN set -eux; \
     /usr/bin/x264 --version >/dev/null; \
     rm -rf /tmp/x264 /tmp/x264-master.json
 
+ADD ["https://api.github.com/repos/justdan96/tsMuxer/tags?per_page=100", "/tmp/tsmuxer-tags.json"]
+
 RUN set -eux; \
     TSMUXER_TAG="$(git ls-remote --refs --tags --sort=-version:refname https://github.com/justdan96/tsMuxer.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')"; \
     test -n "$TSMUXER_TAG"; \
@@ -790,12 +792,13 @@ RUN set -eux; \
     unzip "tsMuxer-${TSMUXER_VER}-linux.zip"; \
     cp tsMuxeR /usr/bin/tsMuxeR; \
     chmod +x /usr/bin/tsMuxeR; \
-    rm -rf /tmp/tsmuxer
+    rm -rf /tmp/tsmuxer /tmp/tsmuxer-tags.json
 
-ADD ["https://api.github.com/repos/quietvoid/hdr10plus_tool/releases/latest", "/tmp/hdr10plus-tool-release.json"]
+ADD ["https://api.github.com/repos/quietvoid/hdr10plus_tool/tags?per_page=100", "/tmp/hdr10plus-tool-tags.json"]
 
 RUN set -eux; \
-    HDR10PLUS_TAG="$(python3 -c 'import json; print(json.load(open("/tmp/hdr10plus-tool-release.json", encoding="utf-8"))["tag_name"])')"; \
+    HDR10PLUS_TAG="$(git ls-remote --refs --tags --sort=-version:refname https://github.com/quietvoid/hdr10plus_tool.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')"; \
+    test -n "$HDR10PLUS_TAG"; \
     HDR10PLUS_VER="${HDR10PLUS_TAG#v}"; \
     case "$(uname -m)" in \
       x86_64|amd64) HDR10PLUS_ARCH=x86_64 ;; \
@@ -809,7 +812,7 @@ RUN set -eux; \
     tar zxf "${HDR10PLUS_ARCHIVE}"; \
     install -m 0755 hdr10plus_tool /usr/bin/hdr10plus_tool; \
     /usr/bin/hdr10plus_tool --version 2>&1 | grep -F "hdr10plus_tool ${HDR10PLUS_VER}" >/dev/null; \
-    rm -rf /tmp/hdr10plus-tool /tmp/hdr10plus-tool-release.json
+    rm -rf /tmp/hdr10plus-tool /tmp/hdr10plus-tool-tags.json
 
 RUN test -x /usr/bin/dovi_tool \
     && test -x /usr/bin/hdr10plus_tool \
