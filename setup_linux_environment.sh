@@ -2034,18 +2034,10 @@ install_vapoursynth() {
     tmux_run "$(msg 'Extract VapourSynth R57.A12' '解压 VapourSynth R57.A12')" tar zxvf R57.A12.tar.gz || exit 1
     cd vapoursynth-classic-R57.A12 || exit 1
 
-    # --- Patch detection for Ubuntu 26.04 (newer FFmpeg) ---
-    if grep -q "26.04" /etc/os-release; then
-      log "$(msg 'Ubuntu 26.04 detected, applying FFmpeg 7.0+ API compatibility patch...' '检测到 Ubuntu 26.04，正在应用 FFmpeg 7.0+ API 兼容性补丁...')"
-
-      # 1. Fix removal of avcodec_close:
-      #    Replace avcodec_close(d->avctx); with avcodec_free_context(&(d->avctx));
-      if [ -f "src/filters/subtext/image.cpp" ]; then
-        sed -i 's/avcodec_close(\(.*\));/avcodec_free_context(\&\(\1\));/g' src/filters/subtext/image.cpp
-      fi
-
-      # 2. Strengthen CXXFLAGS for potential strict C++ warnings under GCC 15
-      export CXXFLAGS="${CXXFLAGS:-} -fpermissive -Wno-error=narrowing"
+    # VapourSynth-classic R57.A12 uses an API removed in FFmpeg 8; the replacement also supports older FFmpeg.
+    if [[ -f "src/filters/subtext/image.cpp" ]] && grep -Fq 'avcodec_close(' src/filters/subtext/image.cpp; then
+      log "$(msg 'Applying the FFmpeg 8.0+ API compatibility patch to VapourSynth...' '正在为 VapourSynth 应用 FFmpeg 8.0+ API 兼容性补丁...')"
+      sed -i 's/avcodec_close(\(.*\));/avcodec_free_context(\&\(\1\));/g' src/filters/subtext/image.cpp
     fi
 
     log "$(msg 'Configuring and building VapourSynth' '配置与编译 VapourSynth')"

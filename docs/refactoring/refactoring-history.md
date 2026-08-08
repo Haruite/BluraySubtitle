@@ -1028,7 +1028,7 @@ Date: 2026-08-03 Commit: deaa198 (`feat(encode): add full-frame corruption detec
 
 ## Post-Refactor Test Suite Consolidation
 
-Date: 2026-08-08 Commit: Included in this change
+Date: 2026-08-08 Commit: `8e5551a`
 
 ### Scope and Removal Criteria
 
