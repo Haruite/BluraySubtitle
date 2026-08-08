@@ -299,12 +299,14 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
         sp_key = ''
         tracks_payload = {}
         m2ts_type = ''
+        video_only = False
         allow_tracks_when_disabled = False
         if isinstance(payload, dict):
             select_override = payload.get('select_override')
             sp_key = str(payload.get('sp_key') or '').strip()
             tracks_payload = payload.get('tracks') or {}
             m2ts_type = str(payload.get('m2ts_type') or '').strip()
+            video_only = bool(payload.get('video_only') or False)
             allow_tracks_when_disabled = bool(payload.get('allow_tracks_when_disabled') or False)
         try:
             self._updating_sp_table = True
@@ -330,6 +332,7 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
                 type_item = QTableWidgetItem('')
                 self.table3.setItem(row, type_col, type_item)
             type_item.setText(m2ts_type)
+            type_item.setData(Qt.ItemDataRole.UserRole, video_only)
             try:
                 labels_sp = DIY_SP_LABELS if self.get_selected_function_id() == 5 else ENCODE_SP_LABELS
                 if 'm2ts_file_detail' in labels_sp and 'm2ts_file' in labels_sp:

@@ -713,7 +713,9 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                 name_suffix = str(out_item.data(Qt.ItemDataRole.UserRole + 3) or '')
                 mpls_file = self.table3.item(r, mpls_col).text().strip() if self.table3.item(r, mpls_col) else ''
                 m2ts_text = self.table3.item(r, m2ts_col).text().strip() if self.table3.item(r, m2ts_col) else ''
-                m2ts_type = self.table3.item(r, type_col).text().strip() if self.table3.item(r, type_col) else ''
+                type_item = self.table3.item(r, type_col)
+                m2ts_type = type_item.text().strip() if type_item else ''
+                video_only = bool(type_item and type_item.data(Qt.ItemDataRole.UserRole))
                 if not selected:
                     out_item.setText('')
                     continue
@@ -804,9 +806,10 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                 sel_audio = list(tr.get('audio') or [])
                 sel_sub = list(tr.get('subtitle') or [])
                 if (not sel_audio) and (not sel_sub):
-                    # README: no tracks → skip mux; exception: multi-clip MPLS (3+ distinct STREAM files)
-                    # still shows default .mkv name so short bonus playlists are not stuck blank.
-                    if mpls_file and len(m2ts_files_unique) >= 3:
+                    # A video-only source has no optional audio/subtitle selection but still has
+                    # its implicit video track to mux. Explicitly deselecting available optional
+                    # tracks keeps the documented empty-name/skip behavior.
+                    if video_only or (mpls_file and len(m2ts_files_unique) >= 3):
                         _set_sp_out(f'{base_with_suffix}.mkv')
                     else:
                         out_item.setText('')

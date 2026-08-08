@@ -89,6 +89,7 @@ class SpTableScanWorker(QObject):
                 select_override = None
                 tracks_payload: dict[str, list[str]] = {}
                 m2ts_type = ''
+                video_only = False
                 allow_tracks_when_disabled = False
 
                 if force_disabled:
@@ -108,12 +109,21 @@ class SpTableScanWorker(QObject):
 
                 if not disabled:
                     try:
-                        if (not mpls_path) and m2ts_paths:
-                            try:
-                                streams_first = _streams(m2ts_paths[0])
-                                m2ts_type = str(M2TS.classify_tracks_type(streams_first) or '').strip()
-                            except Exception:
-                                m2ts_type = ''
+                        streams_first = _streams(m2ts_paths[0]) if m2ts_paths else []
+                        try:
+                            classified_type = str(M2TS.classify_tracks_type(streams_first) or '').strip()
+                            video_only = bool(
+                                classified_type == 'video'
+                                and not any(
+                                    str(stream.get('codec_type') or '') in ('audio', 'subtitle', 'subtitles')
+                                    for stream in streams_first
+                                )
+                            )
+                        except Exception:
+                            classified_type = ''
+                            video_only = False
+                        if not mpls_path:
+                            m2ts_type = classified_type
                             if m2ts_type in ('private_or_other', 'mixed_non_video'):
                                 disabled = True
                                 allow_tracks_when_disabled = True
@@ -202,6 +212,7 @@ class SpTableScanWorker(QObject):
                     'tracks': tracks_payload,
                     'mpls_path': mpls_path,
                     'm2ts_type': m2ts_type,
+                    'video_only': bool(video_only),
                     'allow_tracks_when_disabled': bool(allow_tracks_when_disabled),
                 })
 

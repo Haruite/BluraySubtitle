@@ -51,6 +51,7 @@ class BluraySubtitleGuiBase(QWidget):
         self._app_config_load_failed = None
         self._app_config_path = None
         self._auto_output_folders = None
+        self._bdmv_source_state_path = None
         self._language_code = None
         self._language_updating = None
         self._last_config_inputs = None

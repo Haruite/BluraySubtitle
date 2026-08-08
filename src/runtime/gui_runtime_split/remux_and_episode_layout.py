@@ -1066,6 +1066,23 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 self.bdmv_folder_path.setText(bdmv_path)
             finally:
                 self.bdmv_folder_path.blockSignals(False)
+        source_state_path = os.path.normcase(os.path.abspath(bdmv_path)) if bdmv_path else ''
+        if source_state_path != str(getattr(self, '_bdmv_source_state_path', '') or ''):
+            self._bdmv_source_state_path = source_state_path
+            self._track_selection_config = {}
+            self._track_convert_config = {}
+            self._track_lossless_audio_config = {}
+            self._track_language_config = {}
+            try:
+                cancel_event = getattr(self, '_sp_scan_cancel_event', None)
+                if isinstance(cancel_event, threading.Event):
+                    cancel_event.set()
+            except Exception:
+                pass
+            # Reject queued results from the previous source while the new table is rebuilt.
+            self._sp_scan_worker = None
+            self._sp_scan_completed = False
+            self._sp_scan_error = ''
         try:
             if hasattr(self, 'output_folder_path') and self.output_folder_path:
                 auto_output = os.path.normpath(os.path.dirname(bdmv_path)) if bdmv_path else ''

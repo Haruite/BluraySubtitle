@@ -48,6 +48,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             5: '',
         }
         self._auto_output_folders = {3: '', 4: '', 5: ''}
+        self._bdmv_source_state_path = ''
         self._window_geometry_restored = False
         self.altered = False
         self._sp_index_by_bdmv: dict[int, int] = {}
