@@ -1,6 +1,5 @@
 """Target module for output naming and track methods of `BluraySubtitleGUI`."""
 
-import json
 import os
 import re
 from typing import Optional
@@ -8,11 +7,11 @@ from typing import Optional
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QComboBox, QTableWidgetItem, QTableWidget, QToolButton
 
-from src.bdmv import M2TS, Chapter, pid_to_lang_from_m2ts_path
-from src.core import REMUX_LABELS, DIY_REMUX_LABELS, ENCODE_LABELS, CURRENT_UI_LANGUAGE, FFPROBE_PATH, ENCODE_SP_LABELS, \
+from src.bdmv import Chapter, pid_to_lang_from_m2ts_path
+from src.core import REMUX_LABELS, DIY_REMUX_LABELS, ENCODE_LABELS, CURRENT_UI_LANGUAGE, ENCODE_SP_LABELS, \
     DIY_SP_LABELS
 from src.runtime.services import BluraySubtitle
-from src.exports.utils import parse_time_to_seconds, run_command
+from src.exports.utils import parse_time_to_seconds
 from src.runtime.services_split.lifecycle_and_configuration import LifecycleConfigurationMixin
 from src.runtime.sp import (
     SpEntry, media_track_key, filter_m2ts_file_detail_by_basenames,
@@ -119,36 +118,6 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                 v = it.text().strip() if it and it.text() else ''
             langs.append(v or default_lang)
         return langs
-
-    def _video_frame_count(self, media_path: str) -> int:
-        if not media_path or not os.path.exists(media_path):
-            return -1
-        if str(media_path).lower().endswith('.m2ts'):
-            try:
-                return int(M2TS(media_path).get_total_frames())
-            except Exception:
-                return -1
-        cmd = (f'"{FFPROBE_PATH}" -v error -count_frames -select_streams v:0 '
-               f'-show_entries stream=nb_read_frames,nb_frames -of json "{media_path}"')
-        try:
-            p = run_command(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore')
-            if p.returncode != 0:
-                return -1
-            data = json.loads(p.stdout or '{}')
-            streams = data.get('streams') or []
-            if not streams:
-                return 0
-            s0 = streams[0] if isinstance(streams[0], dict) else {}
-            for k in ('nb_read_frames', 'nb_frames'):
-                try:
-                    v = int(str(s0.get(k) or '').strip())
-                    if v >= 0:
-                        return v
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        return -1
 
     def _table3_get_sp_entry_for_row(self, row: int) -> dict[str, int | str]:
         bdmv_col = ENCODE_SP_LABELS.index('bdmv_index')
@@ -651,6 +620,10 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
         m2ts_col = labels.index('m2ts_file')
         type_col = labels.index('m2ts_type')
         dur_col = labels.index('duration')
+        try:
+            single_output_movie = bool(self._is_movie_mode() and self.table2.rowCount() == 1)
+        except Exception:
+            single_output_movie = False
         rows_by_vol: dict[int, list[int]] = {}
         for r in range(self.table3.rowCount()):
             try:
@@ -735,9 +708,12 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                     ))
 
                 sp_no = str(seq).zfill(digits)
-                base_name = f'BD_Vol_{bdmv_vol}_SP{sp_no}'
+                base_name = (
+                    f'SP{sp_no}' if single_output_movie else f'BD_Vol_{bdmv_vol}_SP{sp_no}'
+                )
                 if not mpls_file and m2ts_files:
-                    base_name = f'BD_Vol_{bdmv_vol}_{os.path.splitext(os.path.basename(m2ts_files[0]))[0]}'
+                    m2ts_stem = os.path.splitext(os.path.basename(m2ts_files[0]))[0]
+                    base_name = m2ts_stem if single_output_movie else f'BD_Vol_{bdmv_vol}_{m2ts_stem}'
                 # Preserve custom suffix (e.g. chapter range suffix) across track edits and recompute.
                 if (not name_suffix) and mpls_file:
                     try:
@@ -745,7 +721,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                         cur_stem = os.path.splitext(cur_name)[0]
                         if cur_stem.lower().startswith('sps/'):
                             cur_stem = cur_stem[4:]
-                        m = re.match(r'^BD_Vol_\d+_SP\d+(.*)$', cur_stem)
+                        m = re.match(r'^(?:BD_Vol_\d+_)?SP\d+(.*)$', cur_stem)
                         if m and m.group(1):
                             name_suffix = m.group(1)
                             out_item.setData(Qt.ItemDataRole.UserRole + 3, name_suffix)

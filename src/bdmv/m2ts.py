@@ -644,6 +644,131 @@ class M2TS:
         self._total_frames_cache = frames if frames > 0 else -1
         return self._total_frames_cache
 
+    def count_video_frames_up_to(
+        self,
+        limit: int,
+        *,
+        m2ts: Optional[bool] = None,
+        video_pid: Optional[int] = None,
+        codec_name: Optional[str] = None,
+    ) -> int:
+        """Count compressed video access units, stopping as soon as ``limit`` is reached.
+
+        AVC and HEVC use the same first-slice boundaries as tsMuxer. MPEG-1/2
+        and VC-1 use their picture/frame start codes. The bounded scan is used
+        to reject normal video before the SP still-image check starts a decoder.
+        ``-1`` means that the video codec or stream could not be identified.
+        """
+        if limit <= 0:
+            raise ValueError('Frame count limit must be positive')
+
+        try:
+            if video_pid is None or not codec_name:
+                video_track = next(
+                    (track for track in self.get_tracks_info(m2ts=m2ts) if track.get('codec_type') == 'video'),
+                    None,
+                )
+                if video_track is None:
+                    return -1
+                video_pid = int(video_track['pid'])
+                codec_name = str(video_track.get('codec_name') or '')
+            else:
+                video_pid = int(video_pid)
+                codec_name = str(codec_name)
+        except (KeyError, TypeError, ValueError):
+            return -1
+
+        codec = codec_name.lower()
+        if codec not in {'h264', 'mvc', 'hevc', 'mpeg1video', 'mpeg2video', 'vc1'}:
+            return -1
+
+        frame_count = 0
+        elementary_stream = bytearray()
+        start_code = b'\x00\x00\x01'
+        pending_nal_start: Optional[int] = None
+        required_nal_bytes = 16 if codec in {'h264', 'mvc'} else 3 if codec == 'hevc' else 1
+
+        def _count_nal_unit(nal: bytes) -> None:
+            nonlocal frame_count
+            if not nal:
+                return
+            if codec == 'hevc':
+                nal_type = (nal[0] >> 1) & 0x3F
+                if nal_type <= 31 and len(nal) >= 3 and nal[2] & 0x80:
+                    frame_count += 1
+                return
+            if codec in {'h264', 'mvc'}:
+                if (nal[0] & 0x1F) not in {1, 2, 5} or len(nal) < 2:
+                    return
+                try:
+                    bits = _BitReader(nal[1:].replace(b'\x00\x00\x03', b'\x00\x00'))
+                    if bits.unsigned_golomb() == 0:
+                        frame_count += 1
+                except ValueError:
+                    return
+                return
+            if codec in {'mpeg1video', 'mpeg2video'} and nal[0] == 0x00:
+                frame_count += 1
+            elif codec == 'vc1' and nal[0] == 0x0D:
+                frame_count += 1
+
+        def _scan_nal_units(*, final: bool = False) -> None:
+            nonlocal pending_nal_start
+            while frame_count < limit:
+                if pending_nal_start is None:
+                    pending_nal_start = elementary_stream.find(start_code)
+                if pending_nal_start < 0:
+                    if final:
+                        elementary_stream.clear()
+                    elif len(elementary_stream) >= len(start_code):
+                        del elementary_stream[:-(len(start_code) - 1)]
+                    pending_nal_start = None
+                    return
+
+                nal_start = pending_nal_start + len(start_code)
+                next_start = elementary_stream.find(start_code, nal_start)
+                nal_end = next_start if next_start >= 0 else len(elementary_stream)
+                if nal_end - nal_start < required_nal_bytes and next_start < 0 and not final:
+                    if pending_nal_start:
+                        del elementary_stream[:pending_nal_start]
+                        pending_nal_start = 0
+                    return
+
+                _count_nal_unit(bytes(elementary_stream[nal_start:min(nal_end, nal_start + required_nal_bytes)]))
+                if next_start >= 0:
+                    del elementary_stream[:next_start]
+                    pending_nal_start = 0
+                    continue
+
+                if len(elementary_stream) >= len(start_code):
+                    del elementary_stream[:-(len(start_code) - 1)]
+                pending_nal_start = None
+                return
+
+        try:
+            with open(self.filename, 'rb') as stream:
+                for packet in M2TS._iter_transport_packets(stream, m2ts=m2ts):
+                    payload, pid, payload_unit_start = M2TS._ts_payload(packet)
+                    if payload is None or pid != video_pid:
+                        continue
+                    if payload_unit_start:
+                        pes = M2TS._pes_payload_after_pointer(payload)
+                        if len(pes) < 9 or pes[:3] != start_code:
+                            continue
+                        header_end = 9 + pes[8]
+                        if header_end > len(pes):
+                            continue
+                        elementary_stream.extend(pes[header_end:])
+                    else:
+                        elementary_stream.extend(payload)
+                    _scan_nal_units()
+                    if frame_count >= limit:
+                        return frame_count
+            _scan_nal_units(final=True)
+            return frame_count
+        except OSError:
+            return -1
+
     @staticmethod
     def _ycbcr_to_rgba(y: int, cb: int, cr: int, alpha: int) -> tuple[int, int, int, int]:
         r = int(round(y + 1.402 * (cr - 128)))

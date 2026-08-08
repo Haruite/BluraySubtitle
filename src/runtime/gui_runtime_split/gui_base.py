@@ -883,9 +883,6 @@ class BluraySubtitleGuiBase(QWidget):
     def _update_vpy_paths_in_file(self, vpy_path: str, video_path: str, subtitle_path: str) -> bool:
         raise NotImplementedError
 
-    def _video_frame_count(self, media_path: str) -> int:
-        raise NotImplementedError
-
     def _vpy_raw_string(self, path: str) -> str:
         raise NotImplementedError
 

@@ -118,7 +118,7 @@ Keep this section limited to confirmed exceptions to the general rules above and
 
 ## 11. Testing and Change Reporting
 
-- Add focused automated tests for every changed workflow boundary and every fixed regression that can be tested deterministically.
+- Add focused automated tests for critical changes and error-prone behavior. Other changes do not require new tests when existing coverage and proportionate verification are sufficient.
 - For ordinary changes, run only the automated tests directly related to the modified behavior. Run the full repository test suite only for a major refactoring, a broad functional change, or when focused results reveal a credible wider regression risk.
 - At minimum, run checks appropriate to the change from this set:
   - Python compilation and import smoke tests;

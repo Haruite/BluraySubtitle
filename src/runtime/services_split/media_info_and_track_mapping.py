@@ -610,15 +610,6 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             return 0
 
     @staticmethod
-    def _m2ts_frame_count(m2ts_path: str) -> int:
-        parser = _cached_m2ts_parser(m2ts_path)
-        if parser is None:
-            return -1
-        try:
-            return int(parser.get_total_frames())
-        except (OSError, TypeError, ValueError):
-            return -1
-    @staticmethod
     def _video_frame_count_static(media_path: str) -> int:
         if not media_path or not os.path.exists(media_path):
             return -1

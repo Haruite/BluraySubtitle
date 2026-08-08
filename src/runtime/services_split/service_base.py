@@ -213,10 +213,6 @@ class BluraySubtitleServiceBase:
         raise NotImplementedError
 
     @staticmethod
-    def _m2ts_frame_count(m2ts_path: str) -> int:
-        raise NotImplementedError
-
-    @staticmethod
     def _m2ts_track_streams(m2ts_path: str) -> list[dict[str, object]]:
         raise NotImplementedError
 

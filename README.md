@@ -153,16 +153,21 @@ This section explains, in plain language, how the program behaves internally.
 1. The **`select`** column decides whether an SP row participates in muxing. The task waits for the SP scan to finish, then captures the visible row order, source, output name, selected tracks, and edited languages together.
 2. MPLS rows always use MPLS logic; **M2TS** logic is used only when a row has no MPLS.
 3. SP rows are ordered by **BDMV volume**, then **MPLS name**, followed by uncovered **M2TS names**.
-4. The default MPLS output name is **`BD_Vol_{bdmv_vol}_SP{n}.mkv`**. The number is based on selected MPLS rows on the same disc and uses a consistent zero-padded width.
+4. The default MPLS output basename is **`BD_Vol_{bdmv_vol}_SP{n}`**. The number follows the selected MPLS rows on the same disc and uses a consistent zero-padded width. In movie mode, when table2 has exactly one row, the volume prefix is omitted and the basename is **`SP{n}`**.
 5. An MPLS already covered completely by the main MPLS is shown but unchecked by default.
-6. MPLS and M2TS shorter than **30 seconds** remain visible but are unchecked by default. An MPLS containing at least three distinct files is checked by default.
-7. A single-frame SP is written as PNG. Multiple single-frame files are written to a folder as **`{n}-{m2ts_name}.png`**.
-8. No selected audio or subtitle track leaves the output name empty and intentionally skips that row. A single audio or subtitle track uses its elementary-stream extension; multiple audio tracks use `.mka`, multiple subtitle tracks use `.mks`, and normal video/container output uses `.mkv`.
-9. Editing tracks recalculates the output name immediately. The runtime uses the exact visible output name and does not silently rename it or rediscover another file.
-10. MPLS container outputs receive the MPLS chapters after muxing; a single zero-time chapter is omitted.
-11. Unreadable or unsupported rows are disabled during scanning. If a selected source or its captured track configuration becomes unavailable, the task reports an error instead of silently skipping it.
-12. Languages saved in **Edit Tracks** are applied and verified for `.mkv`, `.mka`, and `.mks` SP outputs, including tracks appended to an episode output. Raw streams and images cannot store this metadata, so such a language configuration is rejected before execution.
-13. M2TS files not covered by any MPLS are also listed. Video, audio-only, IGS menu, subtitle-only, and audio-with-subtitle layouts are supported where a deterministic output can be produced; unsupported or zero-duration rows are disabled.
+6. MPLS and M2TS shorter than **30 seconds** remain visible but are unchecked by default; MPLS duration counts duplicate files only once.
+7. An MPLS containing at least three distinct files is checked by default.
+8. An uncovered M2TS containing at most 12 decoded frames where every frame has the same image, including a short clip made of repeated identical frames, and an MPLS containing one such M2TS are checked by default and written as PNG. Detection stops and rejects the source as soon as a 13th frame is found.
+9. An MPLS containing multiple M2TS files where every file has at most 12 decoded frames and every frame in each file has the same image is checked by default. Its output is a folder, with files named **`{n}-{m2ts_name}.png`**.
+10. No selected audio or subtitle track normally leaves the output name empty and intentionally skips that row. A source detected as video-only still uses `.mkv` because its video track is implicit.
+11. One selected audio track from an audio-only source is extracted with its stream-specific extension; PCM, DTS, TrueHD, and MLP use `.flac`.
+12. Multiple selected audio tracks from an audio-only source use `.mka`; an uncovered audio-with-subtitle M2TS also uses `.mka`, while remaining video/container layouts use `.mkv`.
+13. A subtitle-only source with one selected subtitle uses its elementary-stream extension; multiple selected subtitles use `.mks`.
+14. Editing tracks recalculates the output name immediately. The runtime uses the exact visible output name and does not silently rename it or rediscover another file.
+15. MPLS container outputs first clear existing chapters, then receive chapters generated from the playlist with the tail marker removed; a single zero-time chapter is omitted.
+16. Unreadable or unsupported rows are disabled during scanning. If a selected source or its captured track configuration becomes unavailable later, the task reports an error instead of silently skipping it.
+17. Languages saved in **Edit Tracks** are applied and verified for `.mkv`, `.mka`, and `.mks` SP outputs, including tracks appended to an episode output. Raw streams and images cannot store this metadata, so such a language configuration is rejected before execution.
+18. M2TS files not covered by any MPLS are also listed and classified as video, audio-only, IGS menu, subtitle-only, audio-with-subtitle, private/other, mixed non-video, or unknown. Unsupported layouts are disabled; IGS menu rows remain available but unchecked, including zero-duration menus. Short rows are unchecked unless the single-frame rule applies. Their normal basename is **`BD_Vol_{bdmv_vol}_{m2ts_name}`**, or just **`{m2ts_name}`** for a one-row movie; output type follows the single-frame, audio, subtitle, menu, and container rules above.
 
 **When SP mux fails**
 

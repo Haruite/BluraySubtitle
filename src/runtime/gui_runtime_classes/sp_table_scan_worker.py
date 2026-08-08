@@ -5,7 +5,8 @@ import traceback
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from src.bdmv import M2TS, Chapter, pid_to_lang_from_m2ts_path
-from src.exports.utils import print_tb_string_terminal
+from src.core import FFMPEG_PATH
+from src.exports.utils import print_tb_string_terminal, run_command
 from src.runtime.services import BluraySubtitle
 
 
@@ -35,7 +36,7 @@ class SpTableScanWorker(QObject):
             # These caches belong to one table snapshot. They must not survive a
             # refresh because source files and visible selection policy can change.
             streams_cache: dict[str, list[dict[str, object]]] = {}
-            frame_count_cache: dict[str, int] = {}
+            still_image_cache: dict[str, bool] = {}
             audio_only_cache: dict[str, bool] = {}
 
             def _streams(path: str) -> list[dict[str, object]]:
@@ -52,17 +53,6 @@ class SpTableScanWorker(QObject):
                 streams_cache[key] = v or []
                 return streams_cache[key]
 
-            def _frame_count(path: str) -> int:
-                key = os.path.normpath(path or '')
-                if key in frame_count_cache:
-                    return frame_count_cache[key]
-                try:
-                    c = BluraySubtitle._m2ts_frame_count(key)
-                except Exception:
-                    c = -1
-                frame_count_cache[key] = int(c)
-                return frame_count_cache[key]
-
             def _is_audio_only(path: str) -> bool:
                 key = os.path.normpath(path or '')
                 if key in audio_only_cache:
@@ -73,6 +63,47 @@ class SpTableScanWorker(QObject):
                     b = False
                 audio_only_cache[key] = b
                 return b
+
+            def _is_still_image(path: str) -> bool:
+                key = os.path.normpath(path or '')
+                if key in still_image_cache:
+                    return still_image_cache[key]
+                try:
+                    video_track = next(
+                        (stream for stream in _streams(key) if stream.get('codec_type') == 'video'),
+                        None,
+                    )
+                    if video_track is None:
+                        still_image_cache[key] = False
+                        return False
+                    frame_count = M2TS(key).count_video_frames_up_to(
+                        13,
+                        video_pid=int(video_track['pid']),
+                        codec_name=str(video_track.get('codec_name') or ''),
+                    )
+                    if frame_count < 1 or frame_count > 12:
+                        still_image_cache[key] = False
+                        return False
+
+                    # Only a source with at most 12 compressed access units reaches
+                    # the decoder. Zero-threshold mpdecimate emits a second checksum
+                    # as soon as any decoded frame differs from the first one.
+                    result = run_command([
+                        FFMPEG_PATH or 'ffmpeg', '-v', 'error', '-nostdin', '-i', key,
+                        '-map', '0:v:0', '-an', '-sn', '-dn',
+                        '-vf', 'trim=end_frame=12,mpdecimate=hi=0:lo=0:frac=1',
+                        '-frames:v', '2', '-f', 'framemd5', '-',
+                    ], capture_output=True, text=True, encoding='utf-8', errors='ignore', timeout=15)
+                    decoded_images = [
+                        line
+                        for line in str(result.stdout or '').splitlines()
+                        if line and not line.startswith('#') and ',' in line
+                    ]
+                    is_still = bool(result.returncode == 0 and len(decoded_images) == 1)
+                except Exception:
+                    is_still = False
+                still_image_cache[key] = is_still
+                return is_still
 
             for r in self._rows:
                 if self._cancel_event.is_set():
@@ -167,40 +198,35 @@ class SpTableScanWorker(QObject):
                             except Exception:
                                 tracks_payload = {}
                         uniq_m2ts_paths = list(dict.fromkeys([p for p in m2ts_paths if p]))
-                        sizes_ok = True
+                        still_candidate = bool(uniq_m2ts_paths)
                         for p in uniq_m2ts_paths:
-                            if (not p) or (not os.path.exists(p)):
-                                sizes_ok = False
+                            if not os.path.exists(p):
+                                still_candidate = False
                                 break
-                            # >1MB means not a one-frame menu clip: stop menu-png classification immediately.
-                            if os.path.getsize(p) > 1 * 1024 * 1024:
-                                sizes_ok = False
+                            # A lone large clip is normal video in this workflow. Multi-clip
+                            # playlists keep their historical exemption because menu stills
+                            # may be stored in larger individual files.
+                            if len(uniq_m2ts_paths) == 1 and os.path.getsize(p) > 10 * 1024 * 1024:
+                                still_candidate = False
                                 break
-                        if sizes_ok:
-                            frame_counts: list[int] = []
-                            any_video = False
+                        if still_candidate:
+                            still_images: list[bool] = []
                             for p in uniq_m2ts_paths:
                                 if _is_audio_only(p):
-                                    frame_counts = []
-                                    any_video = False
+                                    still_images = []
                                     break
-                                c = _frame_count(p)
-                                if c == -2:
-                                    frame_counts = []
-                                    any_video = False
+                                still_images.append(_is_still_image(p))
+                                if not still_images[-1]:
                                     break
-                                if c < 0:
-                                    # For multi-m2ts playlists, unknown frame count on a subset of clips
-                                    # should not invalidate one-frame menu classification entirely.
-                                    # Keep this clip as unknown and continue using known clips.
-                                    continue
-                                any_video = True
-                                frame_counts.append(c)
-                            if (not disabled) and any_video and frame_counts:
-                                if len(uniq_m2ts_paths) == 1 and frame_counts[0] <= 1:
+                            if not disabled:
+                                if len(uniq_m2ts_paths) == 1 and still_images == [True]:
                                     special = 'single_frame'
                                     select_override = True
-                                elif len(uniq_m2ts_paths) > 1 and all(x <= 1 for x in frame_counts):
+                                elif (
+                                        len(uniq_m2ts_paths) > 1
+                                        and len(still_images) == len(uniq_m2ts_paths)
+                                        and all(still_images)
+                                ):
                                     special = 'multi_frame'
                                     select_override = True
                     except Exception:
