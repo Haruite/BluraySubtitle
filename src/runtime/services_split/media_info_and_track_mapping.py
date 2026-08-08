@@ -968,9 +968,9 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             selected_sub_track_indexes: list[str],
     ) -> tuple[list[str], list[str]]:
         """
-        Convert selected first-m2ts stream indexes to mkvmerge MPLS track ids.
+        Convert selected first-play-item M2TS stream indexes to mkvmerge MPLS track ids.
 
-        ``selected_*_track_indexes`` are GUI selections based on first m2ts ``index``.
+        ``selected_*_track_indexes`` are GUI selections based on the first play-item M2TS ``index``.
         For MPLS muxing, mkvmerge expects ``tracks[].id`` from
         ``mkvmerge --identify --identification-format json <mpls>``.
         """
@@ -1260,7 +1260,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
     ) -> list[dict[str, object]]:
         """Build ordered track slots from the tracks visible and selected in Edit Tracks.
 
-        The GUI hides first-M2TS streams whose PID is absent from the MPLS stream table. Apply the same
+        The GUI hides first-play-item M2TS streams whose PID is absent from the MPLS stream table. Apply the same
         filter here so fallback never restores a hidden stream. Video is always selected in the GUI;
         audio and subtitle order comes from the captured selection lists. The source stream index is kept
         so a selected video slot can be mapped to the corresponding stream on later playlist clips.
@@ -1485,7 +1485,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
 
     @staticmethod
     def _probe_m2ts_for_remux_source(source_path: str) -> tuple[str, str]:
-        """Return ``(first_playlist_m2ts, mpls_path_or_empty)`` for remux identify checks."""
+        """Return ``(first_play_item_m2ts, mpls_path_or_empty)`` for remux identify checks."""
         src = os.path.normpath(str(source_path or ''))
         if not src or not os.path.isfile(src):
             return '', ''
@@ -1505,12 +1505,6 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                     name = f'{name}.m2ts'
                 return os.path.normpath(os.path.join(stream_dir, name))
 
-            idx_to_m2ts, _ = get_index_to_m2ts_and_offset(ch)
-            if idx_to_m2ts:
-                first_key = sorted(idx_to_m2ts.keys())[0]
-                probe = _stream_m2ts_path(idx_to_m2ts[first_key])
-                if probe and os.path.isfile(probe):
-                    return probe, src
             play_rows = list(ch.in_out_time or [])
             if play_rows:
                 first_name = str(play_rows[0][0] or '').strip()
@@ -1656,7 +1650,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         if not probe_m2ts or not os.path.isfile(probe_m2ts):
             _svc_cls()._log_mkvmerge_identify_slot_gap(
                 ident_target, '', [], None,
-                'cannot resolve first playlist m2ts for probe (no chapter marks and no play items?)',
+                'cannot resolve first play-item M2TS for probe (no play items or STREAM file missing)',
             )
             return False
         dovi_plan = getattr(self, '_dovi_mux_plan', None)
@@ -2845,7 +2839,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
     ) -> Optional[list[int]]:
         """Append PCM silence for audio PIDs that tsMuxer could not recover.
 
-        The first playlist M2TS supplies sample rate, channel count, and bit depth for each missing PID. Every
+        The first play-item M2TS supplies sample rate, channel count, and bit depth for each missing PID. Every
         placeholder spans the current clip window. Existing and synthesized tracks are reordered to the captured
         reference slots; non-audio tracks are never synthesized.
         """
@@ -2930,7 +2924,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
     ) -> bool:
         """Remux one playlist clip while preserving the reference transport-stream layout.
 
-        The GUI-visible first-M2TS rows define the selected video indexes and audio/subtitle PIDs. Each
+        The GUI-visible first-play-item M2TS rows define the selected video indexes and audio/subtitle PIDs. Each
         selected video index is mapped to the corresponding PID on the current clip; tracks hidden by the MPLS
         never enter the fallback. The recovery order is:
 
@@ -2940,7 +2934,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         3. Recover every missing video or subtitle PID with tsMuxer. These tracks cannot be synthesized, so
            an incomplete probe or demux is a hard failure.
         4. Recover missing audio with tsMuxer; only audio still unavailable may be replaced by layout-matched
-           silence derived from the same PID in the first playlist M2TS.
+           silence derived from the same PID in the first play-item M2TS.
 
         The clip succeeds only when its final PID set exactly matches the expected set and the requested part
         output exists. No unrelated intermediate MKV may stand in for that output.
@@ -3343,7 +3337,8 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         reference_clip_name = play_items[0][0]
         reference_m2ts = os.path.join(stream_folder, f'{reference_clip_name}.m2ts')
         if not os.path.isfile(reference_m2ts):
-            print(f'[remux-fallback] missing first m2ts: {reference_m2ts}')
+            message = translate_text('[remux-fallback] missing first play-item M2TS: ')
+            print(f'{message}{reference_m2ts}')
             return False
         self._set_dovi_mux_plan_for_mpls(mpls_path)
         dovi_plan = getattr(self, '_dovi_mux_plan', None)
@@ -3357,7 +3352,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             mpls_path=mpls_path,
         )
         if not reference_slots:
-            print('[remux-fallback] no track slots from edit-tracks selection')
+            print(translate_text('[remux-fallback] no track slots from edit-tracks selection'))
             return False
         try:
             ui_language_argument = (mkvtoolnix_ui_language_arg() or '').strip()
@@ -3485,7 +3480,8 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         reference_clip_name = play_items[0][0]
         reference_m2ts = os.path.join(stream_folder, f'{reference_clip_name}.m2ts')
         if not os.path.isfile(reference_m2ts):
-            print(f'[remux-fallback-split] missing first m2ts: {reference_m2ts}')
+            message = translate_text('[remux-fallback-split] missing first play-item M2TS: ')
+            print(f'{message}{reference_m2ts}')
             return False
         self._set_dovi_mux_plan_for_mpls(mpls_path)
         dovi_plan = getattr(self, '_dovi_mux_plan', None)
@@ -3499,7 +3495,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             mpls_path=mpls_path,
         )
         if not reference_slots:
-            print('[remux-fallback-split] no track slots from edit-tracks selection')
+            print(translate_text('[remux-fallback-split] no track slots from edit-tracks selection'))
             return False
         try:
             ui_language_argument = (mkvtoolnix_ui_language_arg() or '').strip()

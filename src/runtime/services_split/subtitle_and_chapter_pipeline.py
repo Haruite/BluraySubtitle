@@ -565,16 +565,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
         selected_subtitle_indices = [str(index) for index in (track_configuration.get('subtitle') or [])]
         configured_video = track_configuration.get('video')
         selected_video_indices = [str(index) for index in configured_video] if isinstance(configured_video, list) else []
-        try:
-            chapter = Chapter(mpls_path)
-            index_to_m2ts, _ = get_index_to_m2ts_and_offset(chapter)
-            if not index_to_m2ts:
-                return {}
-            first_play_item_index = min(index_to_m2ts)
-            stream_folder = os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(mpls_path)), 'STREAM'))
-            reference_m2ts = os.path.join(stream_folder, index_to_m2ts[first_play_item_index])
-        except Exception:
-            return {}
+        reference_m2ts, _ = _svc_cls()._probe_m2ts_for_remux_source(mpls_path)
         if not os.path.isfile(reference_m2ts):
             return {}
 
@@ -618,7 +609,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
         return track_id_to_pid
 
     def _compute_mkv_id_to_m2ts_pid_for_main_mpls(self, mpls_path: str) -> dict[int, int]:
-        """Map episode-main Matroska track IDs to reference M2TS PIDs using captured GUI selection."""
+        """Map episode-main Matroska track IDs to first-play-item M2TS PIDs using captured GUI selection."""
         normalized_mpls_path = os.path.normpath(str(mpls_path or '').strip())
         if not normalized_mpls_path.lower().endswith('.mpls'):
             normalized_mpls_path += '.mpls'
@@ -679,19 +670,6 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
         the already extended episode rather than the original main-only layout.
         """
         normalized_main_mpls = os.path.normpath(episode_main_mpls)
-        try:
-            main_chapter = Chapter(episode_main_mpls)
-            main_play_items, _ = get_index_to_m2ts_and_offset(main_chapter)
-            if not main_play_items:
-                return False
-            first_play_item_index = min(main_play_items)
-            playlist_folder = os.path.dirname(episode_main_mpls)
-            stream_folder = os.path.normpath(os.path.join(os.path.dirname(playlist_folder), 'STREAM'))
-            reference_m2ts = os.path.join(stream_folder, main_play_items[first_play_item_index])
-        except Exception:
-            return False
-        if not os.path.isfile(reference_m2ts):
-            return False
 
         episode_identification = _svc_cls()._mkvmerge_identify_json(episode_mkv)
         episode_track_type_by_id: dict[int, str] = {}

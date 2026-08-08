@@ -1449,7 +1449,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
         return out
 
     def _default_track_lists_for_mpls_path(self, mpls_path: str) -> Optional[tuple[list[str], list[str]]]:
-        """Same pipeline as `_ensure_default_track_config_for_main`: MPLS → first m2ts → default track ids."""
+        """Same pipeline as `_ensure_default_track_config_for_main`: MPLS → first play-item M2TS → default track ids."""
         m2ts_path = self._get_first_m2ts_for_mpls(mpls_path)
         if not m2ts_path:
             return None

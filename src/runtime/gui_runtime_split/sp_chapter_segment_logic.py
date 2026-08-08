@@ -765,36 +765,8 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
         return self.table3.rowCount()
 
     def _get_first_m2ts_for_mpls(self, mpls_path: str) -> str:
-        try:
-            chapter = Chapter(mpls_path)
-            playlist_dir = os.path.dirname(mpls_path)
-            bdmv_dir = os.path.dirname(playlist_dir)
-            stream_dir = os.path.join(bdmv_dir, 'STREAM')
-            index_to_m2ts, _ = get_index_to_m2ts_and_offset(chapter)
-            m2ts_name = ''
-            if index_to_m2ts:
-                first_key = sorted(index_to_m2ts.keys())[0]
-                m2ts_name = index_to_m2ts.get(first_key) or ''
-            if not m2ts_name:
-                play_rows = list(chapter.in_out_time or [])
-                if play_rows:
-                    m2ts_name = str(play_rows[0][0] or '').strip()
-            if not m2ts_name:
-                print_terminal_line(
-                    f'[_get_first_m2ts_for_mpls] no play items mpls={mpls_path!s}'
-                )
-                return ''
-            out = os.path.normpath(os.path.join(stream_dir, f'{m2ts_name}.m2ts' if not str(m2ts_name).lower().endswith('.m2ts') else str(m2ts_name)))
-            if not os.path.isfile(out):
-                print_terminal_line(
-                    f'[_get_first_m2ts_for_mpls] STREAM file missing expected_path={out!s} mpls={mpls_path!s}'
-                )
-            return out
-        except Exception as ex:
-            print_terminal_line(
-                f'[_get_first_m2ts_for_mpls] exception mpls={mpls_path!s} {type(ex).__name__}: {ex}'
-            )
-            return ''
+        first_m2ts, _ = BluraySubtitle._probe_m2ts_for_remux_source(mpls_path)
+        return first_m2ts
 
     def _has_subtitle_in_table2(self) -> bool:
         try:

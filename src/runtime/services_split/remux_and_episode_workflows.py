@@ -555,7 +555,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                         f'[{os.path.basename(job.mpls_path)}]'
                     )
                 if job.m2ts_file:
-                    msg += f' {self.t("(reference M2TS: ")}{os.path.basename(job.m2ts_file)})'
+                    msg += f' {self.t("(first play-item M2TS: ")}{os.path.basename(job.m2ts_file)})'
                 print(msg)
                 self._progress(text=msg)
 
