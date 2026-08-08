@@ -184,29 +184,6 @@ class GetnativeCurveTests(unittest.TestCase):
         self.assertGreater(score, 0.0)
         self.assertTrue(valid)
 
-    def test_kernel_progress_message_includes_detection_result(self) -> None:
-        with patch.object(getnative_module, "print_terminal_line") as emit:
-            getnative_module._emit_getnative_progress(
-                {
-                    "phase": "kernel",
-                    "index": 3,
-                    "total": 16,
-                    "image": "frame.png",
-                    "kernel": "lanczos_3",
-                    "height": 893.0,
-                    "score": 12.5,
-                    "curve_valid": True,
-                    "skipped": True,
-                }
-            )
-
-        message = emit.call_args.args[0]
-        self.assertIn("3/16", message)
-        self.assertIn("frame.png", message)
-        self.assertIn("lanczos_3", message)
-        self.assertIn("893.00p", message)
-        self.assertIn("skipped=1", message)
-
     def test_parent_reads_each_external_progress_event_once(self) -> None:
         event = {
             "phase": "kernel",

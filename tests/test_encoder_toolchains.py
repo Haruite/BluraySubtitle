@@ -27,19 +27,6 @@ class EncoderToolchainTests(unittest.TestCase):
             REPOSITORY_ROOT / "setup_windows_environment.ps1"
         ).read_text(encoding="utf-8-sig")
         cls.dockerfile = (REPOSITORY_ROOT / "Dockerfile").read_text(encoding="utf-8")
-        cls.readme_en = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
-        cls.readme_zh = (REPOSITORY_ROOT / "README.zh-Hans.md").read_text(
-            encoding="utf-8"
-        )
-        cls.notices = (
-            REPOSITORY_ROOT / "legal" / "THIRD_PARTY_NOTICES.md"
-        ).read_text(encoding="utf-8")
-        cls.standards_en = (
-            REPOSITORY_ROOT / "docs" / "development" / "code-standards.md"
-        ).read_text(encoding="utf-8")
-        cls.standards_zh = (
-            REPOSITORY_ROOT / "docs" / "development" / "code-standards.zh-Hans.md"
-        ).read_text(encoding="utf-8")
 
     def test_linux_setup_tracks_latest_official_encoders(self) -> None:
         for fragment in (
@@ -341,7 +328,7 @@ class EncoderToolchainTests(unittest.TestCase):
         x265_cache_key = self.dockerfile.index("api.github.com/repos/Multicorewareinc/x265/tags")
         x264_cache_key = self.dockerfile.index("videolan%2Fx264/repository/commits")
         hdr10plus_cache_key = self.dockerfile.index(
-            "api.github.com/repos/quietvoid/hdr10plus_tool/releases/latest"
+            "api.github.com/repos/quietvoid/hdr10plus_tool/tags"
         )
         x265_position = self.dockerfile.index(X265_REPOSITORY)
         x264_position = self.dockerfile.index(X264_REPOSITORY)
@@ -449,24 +436,6 @@ class EncoderToolchainTests(unittest.TestCase):
         ):
             self.assertNotIn(removed_pin, self.windows_setup)
 
-    def test_latest_version_and_replacement_policy_are_documented(self) -> None:
-        for readme in (self.readme_en, self.readme_zh):
-            with self.subTest(readme=readme[:20]):
-                self.assertIn("x264", readme)
-                self.assertIn("x265", readme)
-                self.assertIn("[settings.py](src/core/settings.py)", readme)
-                self.assertIn("hdr10plus_tool", readme)
-                self.assertNotIn("r3223", readme)
-                self.assertNotIn("0480cb05", readme)
-                self.assertNotIn("e444744c", readme)
-        self.assertIn("latest official", self.readme_en)
-        self.assertIn("官方", self.readme_zh)
-        self.assertIn("最新", self.readme_zh)
-        for repository in (X264_REPOSITORY, X265_REPOSITORY, HDR10PLUS_REPOSITORY):
-            with self.subTest(repository=repository):
-                self.assertIn(repository.removesuffix(".git"), self.notices)
-        self.assertNotIn("r3223", self.notices)
-
     def test_hdr10plus_linux_install_uses_official_prebuilt_release(self) -> None:
         install_function = self.linux_setup.split(
             "install_hdr10plus_tool()", 1
@@ -480,29 +449,6 @@ class EncoderToolchainTests(unittest.TestCase):
         self.assertIn('"$HDR10PLUS_TOOL_PATH"', install_function)
         self.assertIn("--version", install_function)
         self.assertNotIn("cargo", install_function)
-
-    def test_bilingual_standards_define_version_and_docker_rules(self) -> None:
-        for fragment in (
-            "latest version published by the official upstream",
-            "Ubuntu 26.04 adaptation",
-            "within each tool's existing build section",
-            "invalidates later layers",
-            "genuinely new software near the end",
-            "do not add a final relocation layer",
-        ):
-            with self.subTest(fragment=fragment):
-                self.assertIn(fragment, self.standards_en)
-        for fragment in (
-            "官方上游发布的最新版本",
-            "面向 Ubuntu 26.04 的适配版",
-            "各工具原有构建段内",
-            "后续层缓存失效",
-            "确实新增的软件",
-            "不得增加末尾统一搬运层",
-        ):
-            with self.subTest(fragment=fragment):
-                self.assertIn(fragment, self.standards_zh)
-
 
 if __name__ == "__main__":
     unittest.main()

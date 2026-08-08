@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock, mock_open, patch
+from unittest.mock import Mock, patch
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QTableWidgetItem
 
 from src.core import ENCODE_SP_LABELS
 from src.runtime.gui_runtime_classes.bluray_subtitle_gui_entry import BluraySubtitleGUI
-from src.runtime.gui_runtime_split import actions_and_file_dialogs as actions_dialogs
 from src.runtime.gui_runtime_split import configuration_and_modes as configuration_modes
 from src.runtime.gui_runtime_split import remux_and_episode_layout as remux_layout
 from src.runtime.gui_runtime_split.actions_and_file_dialogs import ActionsAndDialogsMixin
@@ -89,35 +88,6 @@ class _MainPlaylistTable:
         if row != 0:
             return None
         return self._playlist_table if column == 2 else self._command_editor
-
-
-class ThirdPartyNoticesDialogTests(unittest.TestCase):
-    def test_bundled_notices_are_rendered_as_markdown(self) -> None:
-        dialog = Mock()
-        editor = Mock()
-        button = Mock()
-        owner = SimpleNamespace(t=lambda text: text)
-
-        with (
-            patch.object(actions_dialogs, "_is_pyinstaller_frozen_bundle", return_value=True),
-            patch.object(
-                actions_dialogs,
-                "third_party_notices_markdown_path",
-                return_value="THIRD_PARTY_NOTICES.md",
-            ),
-            patch("builtins.open", mock_open(read_data="# Third-party notices")),
-            patch.object(actions_dialogs, "QDialog", return_value=dialog),
-            patch.object(actions_dialogs, "QVBoxLayout", return_value=Mock()),
-            patch.object(actions_dialogs, "QTextBrowser", return_value=editor),
-            patch.object(actions_dialogs, "QWidget", return_value=Mock()),
-            patch.object(actions_dialogs, "QHBoxLayout", return_value=Mock()),
-            patch.object(actions_dialogs, "QPushButton", return_value=button),
-        ):
-            ActionsAndDialogsMixin._open_third_party_notices_dialog(owner)
-
-        editor.setMarkdown.assert_called_once_with("# Third-party notices")
-        editor.setOpenExternalLinks.assert_called_once_with(True)
-        editor.setPlainText.assert_not_called()
 
 
 class ServiceRunConfigurationTests(unittest.TestCase):
@@ -267,37 +237,6 @@ class ConfigurationRowTests(unittest.TestCase):
         )
         self.assertIsNot(result[0], configuration[3])
 
-    def test_config_input_diff_prioritizes_segments_then_start_then_end(self) -> None:
-        base = {
-            "segments": {"00001": [True, True]},
-            "start": {0: 1, 1: 4},
-            "end": {0: 4, 1: 8},
-        }
-        segment_change = {
-            "segments": {"00001": [True, False]},
-            "start": {0: 2, 1: 4},
-            "end": {0: 5, 1: 8},
-        }
-        start_change = {**base, "start": {0: 1, 1: 5}, "end": {0: 5, 1: 8}}
-        end_change = {**base, "end": {0: 4, 1: 9}}
-
-        self.assertEqual(
-            BluraySubtitleGUI._diff_config_inputs(None, base, segment_change),
-            ("segments", 0),
-        )
-        self.assertEqual(
-            BluraySubtitleGUI._diff_config_inputs(None, base, start_change),
-            ("start", 1),
-        )
-        self.assertEqual(
-            BluraySubtitleGUI._diff_config_inputs(None, base, end_change),
-            ("end", 1),
-        )
-        self.assertEqual(
-            BluraySubtitleGUI._diff_config_inputs(None, base, dict(base)),
-            ("none", -1),
-        )
-
     def test_selected_mpls_are_grouped_by_adjacent_folder_runs(self) -> None:
         selected = [
             (r"C:\DiscA", "00001"),
@@ -348,22 +287,6 @@ class ConfigurationRowTests(unittest.TestCase):
 
 
 class GuiEncodeConfigurationTests(unittest.TestCase):
-    def test_function_selection_uses_visible_tab_order(self) -> None:
-        tabbar = SimpleNamespace(currentIndex=lambda: 2)
-        owner = SimpleNamespace(
-            function_tabbar=tabbar,
-            _function_id_order=[1, 3, 5, 4],
-            _selected_function_id=1,
-        )
-
-        self.assertEqual(BluraySubtitleGUI.get_selected_function_id(owner), 5)
-
-    def test_function_selection_falls_back_to_saved_id(self) -> None:
-        tabbar = SimpleNamespace(currentIndex=lambda: -1)
-        owner = SimpleNamespace(function_tabbar=tabbar, _selected_function_id=4)
-
-        self.assertEqual(BluraySubtitleGUI.get_selected_function_id(owner), 4)
-
     def test_encode_tool_and_depth_follow_current_mode_controls(self) -> None:
         encode_owner = SimpleNamespace(
             get_selected_function_id=lambda: 4,

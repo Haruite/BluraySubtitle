@@ -648,41 +648,6 @@ class SettingsGuiTests(unittest.TestCase):
                 )
                 dialog.close()
 
-    def test_dark_theme_styles_all_tab_bars_for_legibility(self) -> None:
-        config = replace(
-            default_app_config(),
-            ui=UiPreferences(language="en", theme="dark", font_size=10, opacity=94),
-        )
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            target = Path(temporary_directory) / "config.json"
-            with (
-                patch(
-                    "src.runtime.gui_runtime_split.lifecycle_and_bootstrap.app_config_path",
-                    return_value=target,
-                ),
-                patch(
-                    "src.runtime.gui_runtime_split.lifecycle_and_bootstrap.load_app_config",
-                    return_value=config,
-                ),
-            ):
-                window = BluraySubtitleGUI()
-
-            stylesheet = self.app.styleSheet()
-            self.assertIn(
-                "QTabBar::tab{background:#2a2a2a;color:#e6e6e6",
-                stylesheet,
-            )
-            self.assertIn(
-                "QTabBar::tab:selected{background:#3a5fcd;color:#ffffff",
-                stylesheet,
-            )
-            self.assertEqual(
-                window.language_combo.itemText(window.language_combo.findData("zh")),
-                translate_text("Simplified Chinese", "zh"),
-            )
-            window.close()
-            self.app.setStyleSheet("")
-
     def test_startup_defaults_and_page_specific_output_paths_are_applied(self) -> None:
         config = AppConfig(
             window=WindowPreferences(),

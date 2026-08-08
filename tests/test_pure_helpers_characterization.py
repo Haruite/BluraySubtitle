@@ -16,7 +16,6 @@ from src.runtime.sp import (
 )
 from src.runtime.audio_conversion import _is_lossless_audio_track
 from src.runtime.services_split.encode_and_audio_tasks import (
-    _format_encoder_cmd_for_echo,
     _normalize_x264_extra_for_bit_depth,
 )
 from src.runtime.services_split.media_info_and_track_mapping import (
@@ -78,23 +77,6 @@ class EncoderOptionTests(unittest.TestCase):
         self.assertEqual(
             _normalize_x264_extra_for_bit_depth(["--profile=high"], "10"),
             ["--profile=high10"],
-        )
-
-    def test_encoder_echo_quotes_executable_outputs_and_spaced_values(self) -> None:
-        command = [
-            r"C:\Program Files\x265.exe",
-            "--preset",
-            "slow",
-            "-o",
-            r"C:\Output Folder\video.hevc",
-            "-b",
-            "10",
-            "input value",
-        ]
-        self.assertEqual(
-            _format_encoder_cmd_for_echo(command),
-            '"C:\\Program Files\\x265.exe" --preset slow '
-            '-o "C:\\Output Folder\\video.hevc" -b "10" "input value"',
         )
 
     def test_audio_conversion_only_targets_the_supported_lossless_families(self) -> None:

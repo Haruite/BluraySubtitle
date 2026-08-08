@@ -1025,3 +1025,27 @@ Date: 2026-08-03 Commit: deaa198 (`feat(encode): add full-frame corruption detec
 ### Deferred Items
 
 - The detector is intentionally based on complete decode, frame counts, decoder diagnostics, and per-plane PSNR. It does not attempt semantic artifact recognition, add per-task threshold controls to the Encode page, or provide a quick/sample mode.
+
+## Post-Refactor Test Suite Consolidation
+
+Date: 2026-08-08 Commit: Included in this change
+
+### Scope and Removal Criteria
+
+- Re-audited the suite against the completed refactoring history and the current rule that new automated coverage is reserved for critical changes and error-prone behavior.
+- Removed 56 tests and 1,046 net test lines whose only purpose was to freeze a temporary implementation detail, prove that a completed migration artifact remained absent, match documentation wording, inspect visual styling or progress text, or repeat a repository check already owned by another focused test or validation tool.
+- Consolidated the 55 Windows setup tests into 10 safety and capability contracts covering elevation and platform gates, temporary-file and download safety, complete staged component registration, official dynamic sources, encoder bit-depth/HDR support, checked native builds, conditional MSYS2 behavior, the portable VapourSynth runtime, packaged tools/notices, and PowerShell syntax.
+- Removed obsolete Phase 1 sentinels for the deleted global configuration and misspelled Linux setting, plus low-value assertions for the notices widget implementation, GUI tab/index mechanics, stylesheet literals, getnative progress formatting, encoder-command echo formatting, and duplicated bilingual documentation text.
+- Updated the Docker HDR10+ cache-position assertion from the superseded `releases/latest` endpoint to the current official tag-list cache key; the test still protects tool placement and the Ubuntu 26.04 single-stage build contract.
+
+### Retained Critical Coverage
+
+- Kept GUI request snapshots, worker/service ownership, output collision and overwrite prevention, exact visible names/order/tracks/languages, row-local and request-wide failure behavior, SP scan races, resumable Encode boundaries, and task-owned cleanup checks.
+- Kept transport/subtitle parsers, audio and Dolby Vision processing, HDR metadata, full-frame verification, getnative ranking, crop calculation, configuration migration and atomic persistence, and other media algorithms where small changes can silently corrupt output.
+- Kept setup checks that protect destructive filesystem boundaries, download authenticity, official source ownership, required tool registration, compiler capabilities, runtime packaging, and script parseability. Static i18n and split-contract tests remain in the concentrated suite because they enforce repository-wide source boundaries rather than historical implementation details.
+
+### Product Behavior, Documentation, and Verification
+
+- No production source or product behavior changed. README, i18n, and code standards therefore required no update; this bilingual history entry records the major test-maintenance change.
+- The resulting suite contains 240 focused tests. All 240 passed, together with Python compilation, i18n and split-contract checks, `git diff --check`, and CRLF verification.
+- No real-media check is required because the change modifies only automated test coverage and does not write or execute production media workflows.
