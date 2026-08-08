@@ -1081,6 +1081,23 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                         self.output_folder_path.clear()
         except Exception:
             pass
+        if not bdmv_path or not os.path.isdir(bdmv_path):
+            for table_name in ('table1', 'table2', 'table3'):
+                table = getattr(self, table_name, None)
+                if isinstance(table, QTableWidget):
+                    table.setRowCount(0)
+            self._last_configuration_34 = {}
+            self._movie_configuration = {}
+            self._selected_main_mpls_prev = set()
+            self._sp_index_by_bdmv = {}
+            try:
+                cancel_event = getattr(self, '_sp_scan_cancel_event', None)
+                if isinstance(cancel_event, threading.Event):
+                    cancel_event.set()
+            except Exception:
+                pass
+            self.altered = True
+            return
         table_ok = False
         if bdmv_path:
             try:
