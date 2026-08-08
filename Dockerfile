@@ -187,9 +187,9 @@ RUN set -eux; \
     install -m 0755 truehdd /usr/bin/truehdd; \
     rm -rf /tmp/truehdd_bin
 
-ADD ["https://api.github.com/repos/FFmpeg/FFmpeg/tags?per_page=100", "/tmp/ffmpeg-tags.json"]
-
+ARG FFMPEG_TAG
 RUN set -eux; \
+    test -n "$FFMPEG_TAG"; \
     mkdir -p /tmp/mpv && cd /tmp/mpv; \
     git clone https://github.com/mpv-player/mpv-build.git; \
     cd mpv-build; \
@@ -206,7 +206,7 @@ RUN set -eux; \
     /usr/bin/ffmpeg -version >/dev/null; \
     /usr/bin/ffprobe -version >/dev/null; \
     ldconfig; \
-    rm -rf /tmp/mpv /tmp/ffmpeg-tags.json
+    rm -rf /tmp/mpv
 
 RUN set -eux; \
     LSMASH_TAG="$(git ls-remote --refs --tags --sort=-version:refname https://github.com/l-smash/l-smash.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')"; \
@@ -220,12 +220,11 @@ RUN set -eux; \
     ldconfig; \
     rm -rf /tmp/lsmash
 
-ADD ["https://api.github.com/repos/Multicorewareinc/x265/tags?per_page=100", "/tmp/x265-tags.json"]
-
+ARG X265_TAG
 RUN bash <<'X265EOS'
 set -euo pipefail
 repo=https://github.com/Multicorewareinc/x265.git
-tag="$(git ls-remote --refs --tags --sort=-version:refname "$repo" | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[0-9]+([.][0-9]+)+$/ { print $2; exit }')"
+tag="$X265_TAG"
 test -n "$tag"
 mkdir -p /tmp/x265
 cd /tmp/x265
@@ -282,16 +281,15 @@ x265_help="$(/usr/bin/x265 --help 2>&1 || true)"
 [[ "$x265_help" == *"--dhdr10-info"* ]]
 [[ "$x265_help" == *"--dolby-vision-profile"* ]]
 [[ "$x265_help" == *"--dolby-vision-rpu"* ]]
-rm -rf /tmp/x265 /tmp/x265-tags.json
+rm -rf /tmp/x265
 X265EOS
 
-ADD ["https://gitlab.com/api/v4/projects/AOMediaCodec%2FSVT-AV1/releases?per_page=1", "/tmp/svt-av1-releases.json"]
-
+ARG SVT_AV1_TAG
 RUN bash <<'SVTAV1EOS'
 set -euo pipefail
 mkdir -p /tmp/svtav1
 cd /tmp/svtav1
-SVT_TAG="$(git ls-remote --refs --tags --sort=-version:refname https://gitlab.com/AOMediaCodec/SVT-AV1.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')"
+SVT_TAG="$SVT_AV1_TAG"
 test -n "$SVT_TAG"
 git clone --depth 1 --branch "$SVT_TAG" https://gitlab.com/AOMediaCodec/SVT-AV1.git
 svt_root=/tmp/svtav1/SVT-AV1
@@ -422,22 +420,15 @@ fi
 test -f "$svt_root/Bin/Release/SvtAv1EncApp"
 cp "$svt_root/Bin/Release/SvtAv1EncApp" /usr/bin/SvtAv1EncApp
 chmod +x /usr/bin/SvtAv1EncApp
-rm -rf /tmp/svtav1 /tmp/svt-av1-releases.json
+rm -rf /tmp/svtav1
 SVTAV1EOS
 
-ADD ["https://api.github.com/repos/mstorsjo/fdk-aac/tags?per_page=100", "/tmp/fdk-aac-tags.json"]
-ADD ["https://api.github.com/repos/nu774/fdkaac/tags?per_page=100", "/tmp/fdkaac-tags.json"]
-
+ARG FDK_AAC_TAG
+ARG FDKAAC_TAG
 RUN bash <<'FDKAAC'
 set -euo pipefail
-latest_stable_tag() {
-  git ls-remote --refs --tags --sort=-version:refname "$1" |
-    awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }'
-}
 mkdir -p /tmp/fdk
 cd /tmp/fdk
-FDK_AAC_TAG="$(latest_stable_tag https://github.com/mstorsjo/fdk-aac.git)"
-FDKAAC_TAG="$(latest_stable_tag https://github.com/nu774/fdkaac.git)"
 test -n "$FDK_AAC_TAG"
 test -n "$FDKAAC_TAG"
 git clone --depth 1 --branch "$FDK_AAC_TAG" https://github.com/mstorsjo/fdk-aac.git fdk-aac
@@ -455,7 +446,7 @@ autoreconf -fi
 make -j"$(nproc)"
 make install
 ldconfig
-rm -rf /tmp/fdk /tmp/fdk-aac-tags.json /tmp/fdkaac-tags.json
+rm -rf /tmp/fdk
 FDKAAC
 
 RUN bash <<'FLAC'
@@ -769,22 +760,28 @@ RUN set -eux; \
     find "${SCRIPTS_DIR}" -maxdepth 1 -type f -name "*.py" -exec cp -f {} "${DST}/" \; ; \
     rm -rf /tmp/vcbs
 
-ADD ["https://code.videolan.org/api/v4/projects/videolan%2Fx264/repository/commits?ref_name=master&per_page=1", "/tmp/x264-master.json"]
-
+ARG X264_COMMIT
 RUN set -eux; \
+    test -n "$X264_COMMIT"; \
     mkdir -p /tmp/x264 && cd /tmp/x264; \
-    git clone --depth 1 https://code.videolan.org/videolan/x264.git; \
+    git init x264; \
     cd x264; \
+    git remote add origin https://code.videolan.org/videolan/x264.git; \
+    fetched=0; \
+    for attempt in 1 2 3 4 5; do \
+      if git fetch --depth 1 origin "$X264_COMMIT"; then fetched=1; break; fi; \
+      if [ "$attempt" -lt 5 ]; then sleep "$((attempt * 5))"; fi; \
+    done; \
+    test "$fetched" -eq 1; \
+    git checkout --detach FETCH_HEAD; \
     ./configure --enable-static --bit-depth=all --chroma-format=all --disable-opencl --enable-lto; \
     make -j"$(nproc)"; \
     install -m 0755 x264 /usr/bin/x264; \
     /usr/bin/x264 --version >/dev/null; \
-    rm -rf /tmp/x264 /tmp/x264-master.json
+    rm -rf /tmp/x264
 
-ADD ["https://api.github.com/repos/justdan96/tsMuxer/tags?per_page=100", "/tmp/tsmuxer-tags.json"]
-
+ARG TSMUXER_TAG
 RUN set -eux; \
-    TSMUXER_TAG="$(git ls-remote --refs --tags --sort=-version:refname https://github.com/justdan96/tsMuxer.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')"; \
     test -n "$TSMUXER_TAG"; \
     TSMUXER_VER="${TSMUXER_TAG#v}"; \
     mkdir -p /tmp/tsmuxer && cd /tmp/tsmuxer; \
@@ -792,12 +789,10 @@ RUN set -eux; \
     unzip "tsMuxer-${TSMUXER_VER}-linux.zip"; \
     cp tsMuxeR /usr/bin/tsMuxeR; \
     chmod +x /usr/bin/tsMuxeR; \
-    rm -rf /tmp/tsmuxer /tmp/tsmuxer-tags.json
+    rm -rf /tmp/tsmuxer
 
-ADD ["https://api.github.com/repos/quietvoid/hdr10plus_tool/tags?per_page=100", "/tmp/hdr10plus-tool-tags.json"]
-
+ARG HDR10PLUS_TAG
 RUN set -eux; \
-    HDR10PLUS_TAG="$(git ls-remote --refs --tags --sort=-version:refname https://github.com/quietvoid/hdr10plus_tool.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')"; \
     test -n "$HDR10PLUS_TAG"; \
     HDR10PLUS_VER="${HDR10PLUS_TAG#v}"; \
     case "$(uname -m)" in \
@@ -812,7 +807,7 @@ RUN set -eux; \
     tar zxf "${HDR10PLUS_ARCHIVE}"; \
     install -m 0755 hdr10plus_tool /usr/bin/hdr10plus_tool; \
     /usr/bin/hdr10plus_tool --version 2>&1 | grep -F "hdr10plus_tool ${HDR10PLUS_VER}" >/dev/null; \
-    rm -rf /tmp/hdr10plus-tool /tmp/hdr10plus-tool-tags.json
+    rm -rf /tmp/hdr10plus-tool
 
 RUN test -x /usr/bin/dovi_tool \
     && test -x /usr/bin/hdr10plus_tool \

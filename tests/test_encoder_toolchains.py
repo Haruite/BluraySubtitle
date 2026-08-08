@@ -27,6 +27,9 @@ class EncoderToolchainTests(unittest.TestCase):
             REPOSITORY_ROOT / "setup_windows_environment.ps1"
         ).read_text(encoding="utf-8-sig")
         cls.dockerfile = (REPOSITORY_ROOT / "Dockerfile").read_text(encoding="utf-8")
+        cls.docker_workflow = (
+            REPOSITORY_ROOT / ".github" / "workflows" / "docker-image.yml"
+        ).read_text(encoding="utf-8")
 
     def test_linux_setup_tracks_latest_official_encoders(self) -> None:
         for fragment in (
@@ -296,8 +299,14 @@ class EncoderToolchainTests(unittest.TestCase):
             X264_REPOSITORY,
             X265_REPOSITORY,
             "git ls-remote --refs --tags --sort=-version:refname",
-            "api.github.com/repos/Multicorewareinc/x265/tags?per_page=100",
-            "videolan%2Fx264/repository/commits?ref_name=master&per_page=1",
+            "ARG FFMPEG_TAG",
+            "ARG X265_TAG",
+            "ARG SVT_AV1_TAG",
+            "ARG FDK_AAC_TAG",
+            "ARG FDKAAC_TAG",
+            "ARG X264_COMMIT",
+            "ARG TSMUXER_TAG",
+            "ARG HDR10PLUS_TAG",
             "-DCMAKE_POLICY_VERSION_MINIMUM=3.10",
             'json11_source="$source_root/dynamicHDR10/json11/json11.cpp"',
             "sed -i '/^#include <limits>$/a #include <cstdint>'",
@@ -325,11 +334,9 @@ class EncoderToolchainTests(unittest.TestCase):
         ):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, self.dockerfile)
-        x265_cache_key = self.dockerfile.index("api.github.com/repos/Multicorewareinc/x265/tags")
-        x264_cache_key = self.dockerfile.index("videolan%2Fx264/repository/commits")
-        hdr10plus_cache_key = self.dockerfile.index(
-            "api.github.com/repos/quietvoid/hdr10plus_tool/tags"
-        )
+        x265_cache_key = self.dockerfile.index("ARG X265_TAG")
+        x264_cache_key = self.dockerfile.index("ARG X264_COMMIT")
+        hdr10plus_cache_key = self.dockerfile.index("ARG HDR10PLUS_TAG")
         x265_position = self.dockerfile.index(X265_REPOSITORY)
         x264_position = self.dockerfile.index(X264_REPOSITORY)
         self.assertLess(self.dockerfile.index("LSMASH_TAG="), x265_cache_key)
@@ -337,8 +344,8 @@ class EncoderToolchainTests(unittest.TestCase):
         self.assertLess(x265_position, self.dockerfile.index("SVTAV1EOS"))
         self.assertLess(self.dockerfile.index("vapoursynth_portable.7z"), x264_cache_key)
         self.assertLess(x264_cache_key, x264_position)
-        self.assertLess(x264_position, self.dockerfile.index("TSMUXER_TAG="))
-        self.assertLess(self.dockerfile.index("TSMUXER_TAG="), hdr10plus_cache_key)
+        self.assertLess(x264_position, self.dockerfile.index("ARG TSMUXER_TAG"))
+        self.assertLess(self.dockerfile.index("ARG TSMUXER_TAG"), hdr10plus_cache_key)
         self.assertLess(
             hdr10plus_cache_key,
             self.dockerfile.index("RUN test -x /usr/bin/dovi_tool"),
@@ -356,6 +363,40 @@ class EncoderToolchainTests(unittest.TestCase):
         self.assertNotIn("-DENABLE_HDR10_PLUS=OFF", self.dockerfile)
         self.assertNotIn("TOOLPATHS", self.dockerfile)
         self.assertNotIn("place_tool", self.dockerfile)
+        self.assertNotIn('ADD ["http', self.dockerfile)
+
+    def test_docker_version_cache_keys_are_resolved_with_retries(self) -> None:
+        self.assertIn("retry_ls_remote()", self.docker_workflow)
+        self.assertIn("for attempt in 1 2 3 4 5; do", self.docker_workflow)
+        self.assertIn("timeout 45s git ls-remote", self.docker_workflow)
+        for command in (
+            "resolve_latest_tag ffmpeg_tag https://github.com/FFmpeg/FFmpeg.git",
+            "resolve_latest_tag x265_tag https://github.com/Multicorewareinc/x265.git",
+            "resolve_latest_tag svt_av1_tag https://gitlab.com/AOMediaCodec/SVT-AV1.git",
+            "resolve_latest_tag fdk_aac_tag https://github.com/mstorsjo/fdk-aac.git",
+            "resolve_latest_tag fdkaac_tag https://github.com/nu774/fdkaac.git",
+            "resolve_branch_commit x264_commit https://code.videolan.org/videolan/x264.git master",
+            "resolve_latest_tag tsmuxer_tag https://github.com/justdan96/tsMuxer.git",
+            "resolve_latest_tag hdr10plus_tag https://github.com/quietvoid/hdr10plus_tool.git",
+        ):
+            with self.subTest(command=command):
+                self.assertIn(command, self.docker_workflow)
+        for argument, output_name in (
+            ("FFMPEG_TAG", "ffmpeg_tag"),
+            ("X265_TAG", "x265_tag"),
+            ("SVT_AV1_TAG", "svt_av1_tag"),
+            ("FDK_AAC_TAG", "fdk_aac_tag"),
+            ("FDKAAC_TAG", "fdkaac_tag"),
+            ("X264_COMMIT", "x264_commit"),
+            ("TSMUXER_TAG", "tsmuxer_tag"),
+            ("HDR10PLUS_TAG", "hdr10plus_tag"),
+        ):
+            with self.subTest(argument=argument):
+                self.assertIn(f"ARG {argument}", self.dockerfile)
+                self.assertIn(
+                    f"{argument}=${{{{ steps.versions.outputs.{output_name} }}}}",
+                    self.docker_workflow,
+                )
 
     def test_docker_tracks_updated_linux_tools_and_python_packages(self) -> None:
         apt_dependencies = self.dockerfile.split("apt-get install", 1)[1].split(
@@ -386,9 +427,7 @@ class EncoderToolchainTests(unittest.TestCase):
         svt_build = self.dockerfile.split("RUN bash <<'SVTAV1EOS'", 1)[1].split(
             "\nSVTAV1EOS\n", 1
         )[0]
-        self.assertIn(
-            "AOMediaCodec%2FSVT-AV1/releases?per_page=1", self.dockerfile
-        )
+        self.assertIn('SVT_TAG="$SVT_AV1_TAG"', svt_build)
         self.assertIn(SVT_AV1_REPOSITORY, svt_build)
         self.assertIn("SVT_TAG=", svt_build)
         self.assertIn('git clone --depth 1 --branch "$SVT_TAG"', svt_build)
@@ -398,17 +437,15 @@ class EncoderToolchainTests(unittest.TestCase):
         fdkaac_build = self.dockerfile.split("RUN bash <<'FDKAAC'", 1)[1].split(
             "\nFDKAAC\n", 1
         )[0]
-        self.assertIn("repos/mstorsjo/fdk-aac/tags?per_page=100", self.dockerfile)
-        self.assertIn("repos/nu774/fdkaac/tags?per_page=100", self.dockerfile)
         self.assertIn(FDKAAC_REPOSITORY, fdkaac_build)
-        self.assertIn("latest_stable_tag", fdkaac_build)
+        self.assertNotIn("latest_stable_tag", fdkaac_build)
         self.assertIn("autoreconf -fi", fdkaac_build)
         self.assertIn(
             "--upgrade numpy pycountry PyQt6 soundfile pillow matplotlib",
             self.dockerfile,
         )
         self.assertNotIn("--upgrade pip numpy", self.dockerfile)
-        self.assertIn("repos/FFmpeg/FFmpeg/tags?per_page=100", self.dockerfile)
+        self.assertIn('test -n "$FFMPEG_TAG"', self.dockerfile)
 
     def test_windows_setup_tracks_latest_sources_and_preserves_paths(self) -> None:
         for fragment in (
