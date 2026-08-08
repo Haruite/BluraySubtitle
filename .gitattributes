@@ -1,4 +1,6 @@
 * text=auto eol=crlf
 
-# Avoid CRLF in shell scripts (Linux: shebang becomes "bash\r" and /usr/bin/env fails).
+# Keep POSIX shell entry points and Dockerfile heredocs on LF.
 *.sh text eol=lf
+Dockerfile text eol=lf
+*.dockerfile text eol=lf

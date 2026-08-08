@@ -94,8 +94,9 @@ When the author establishes a new rule, update this file and its Simplified Chin
 ## 8. File Format
 
 - Use UTF-8 for source and documentation files.
-- Every new or modified non-`.sh` text file must use CRLF line endings.
+- Every new or modified text file other than shell scripts and Dockerfiles must use CRLF line endings.
 - Shell scripts must use LF line endings so their shebang remains valid.
+- Dockerfiles (`Dockerfile` and `*.dockerfile`) must use LF line endings so shell heredocs do not pass carriage returns to commands.
 - Do not hard-wrap Markdown prose in the middle of a sentence. Keep a paragraph on one line when practical; if it is split, every resulting line must end at a complete sentence boundary. Preserve structural line breaks in lists, tables, code blocks, diagrams, and similar Markdown constructs; every list item must remain on its own line.
 - Do not introduce trailing whitespace or malformed encoding.
 

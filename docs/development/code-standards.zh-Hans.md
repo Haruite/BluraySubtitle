@@ -94,8 +94,9 @@
 ## 8. 文件格式
 
 - 源码和文档使用 UTF-8。
-- 所有新增或修改的非 `.sh` 文本文件必须使用 CRLF。
+- 所有新增或修改的文本文件，除 shell 脚本和 Dockerfile 外，必须使用 CRLF。
 - shell 脚本必须使用 LF，避免 shebang 失效。
+- Dockerfile（`Dockerfile` 和 `*.dockerfile`）必须使用 LF，避免 shell heredoc 把回车符传给命令。
 - Markdown 正文不能在句子中间硬换行。可行时一个段落写在一行；确需拆行时，每一行都必须在完整句子的边界结束。列表、表格、代码块、图示及类似 Markdown 结构所需的换行保持不变；每个列表项必须独占一行。
 - 不引入行尾空格或错误编码。
 
