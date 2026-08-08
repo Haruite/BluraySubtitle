@@ -1491,6 +1491,7 @@ class M2TS:
             states = (("normal", "start"), ("normal", "stop"),
                       ("selected", "start"), ("selected", "stop"),
                       ("activated", "start"), ("activated", "stop"))
+            first_composed_image = True
 
             for pid in sorted(igs_pids):
                 model = menu_model_by_pid.get(pid)
@@ -1538,6 +1539,16 @@ class M2TS:
                                 overlay_rgba(canvas, width, height, bytes(rgba), pw, ph, int(btn.get("x") or 0), int(btn.get("y") or 0))
                         if len(out_files) >= max_frames:
                             return out_files
+                        if first_composed_image:
+                            # Some IGS streams begin with a placeholder black state; omit only that first composition.
+                            first_composed_image = False
+                            is_fully_black = True
+                            for pixel_offset in range(0, len(canvas), 4):
+                                if canvas[pixel_offset] or canvas[pixel_offset + 1] or canvas[pixel_offset + 2]:
+                                    is_fully_black = False
+                                    break
+                            if is_fully_black:
+                                continue
                         name = f"igs_pid{pid:04x}_page{page_id:03d}_{state1}_{state2}.png"
                         out_path = os.path.join(output_dir, name)
                         M2TS._write_rgba_png(out_path, width, height, bytes(canvas))
