@@ -74,8 +74,7 @@ mark_info: dict[int, list[int]]
 
 `get_total_time()` sums `(out_time - in_time) / 45000`.
 
-The module also contains the optional short-tail trim registry used by episode mode. This is a workflow override, not a mutation of the source MPLS on disk. `chapter_tail_trim_register_path()` requires at least two play items and removes the last one only when its window is shorter than the default 30-second threshold. Marks belonging to the removed tail play item are excluded from the registered view.
-Encode and remux workers clear the registry, register selected episode-mode playlists when **Trim copyright bumper** is enabled, and then clear playlist caches so all downstream timeline consumers see the same view.
+`chapter_play_item_file_ranges()` combines these immutable play-item rows with the corresponding CLPI presentation range. `episode_tail_trim_plan()` uses that structure to derive a per-episode parts end and affected M2TS names; it never replaces `in_out_time` or `mark_info`. The GUI captures the derived end in the row configuration, removes affected names only from the visible M2TS column, and generates the executable `--split parts` range before worker launch.
 
 ### CLPI
 

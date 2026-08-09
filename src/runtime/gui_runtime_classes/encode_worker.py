@@ -31,19 +31,9 @@ class EncodeWorker(QObject):
 
     def run(self):
         try:
-            from src.bdmv.chapter import chapter_tail_trim_clear, chapter_tail_trim_register_path
             from src.runtime.services_split.media_info_and_track_mapping import mpls_playlist_caches_clear
 
             request = self.request
-            chapter_tail_trim_clear()
-            if (not request.movie_mode) and request.episode_trim_copyright_tail:
-                for _folder, selected_mpls in request.selected_mpls:
-                    playlist_path = str(selected_mpls or '').strip()
-                    if not playlist_path:
-                        continue
-                    if not playlist_path.lower().endswith('.mpls'):
-                        playlist_path += '.mpls'
-                    chapter_tail_trim_register_path(playlist_path)
             mpls_playlist_caches_clear()
 
             def progress_callback(value: Optional[int] = None, text: Optional[str] = None):

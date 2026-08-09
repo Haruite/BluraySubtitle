@@ -78,7 +78,7 @@ Encode mode supports two input sources:
 - Blu-ray (original disc layout)
 - Remux (MKV)
 
-In series mode, **Trim copyright bumper** removes only a distinct final MPLS play item shorter than 30 seconds. It cannot trim a copyright screen embedded inside a longer play item; inspect unusual discs manually. See [Blu-ray Disc Structure](docs/wiki/Blu-ray-Disc-Structure.md#short-copyright-bumpers-at-the-end).
+In series mode, **Trim copyright bumper** checks each episode's final 30 seconds only when the episode ends at the underlying M2TS file end. Complete trailing M2TS play items inside that window are excluded with `--split parts`; MPLS timing and chapters remain unchanged. This structural guess can be wrong, so inspect unusual discs and edit the mux command's parts range when necessary. See [Blu-ray Disc Structure](docs/wiki/Blu-ray-Disc-Structure.md#short-copyright-bumpers-at-the-end).
 
 The **main playlist** supports editing the mux command (`remux_cmd`). Each selected main playlist must have exactly one non-empty command and is processed in the current visible order, including multiple main playlists from the same disc. Before writing, Remux derives every command output and final episode filename. The output count must match the visible episode rows; duplicate paths and existing outputs are errors. Episode names are applied exactly as shown, and invalid filenames are rejected.
 

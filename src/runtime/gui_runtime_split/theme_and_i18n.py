@@ -457,6 +457,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
             'preview_script': 'preview',
             'edit_tracks': 'edit tracks',
             'chapters': 'Chapters',
+            'm2ts_timing': 'M2TS timing',
             'play': 'play',
         }
         return [self.t(header_text.get(key, key.replace('_', ' '))) for key in keys]
@@ -467,9 +468,9 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
             if hasattr(self, 'table1') and self.table1:
                 function_id = self.get_selected_function_id() if hasattr(self, 'get_selected_function_id') else 0
                 if function_id in (3, 4, 5):
-                    self.table1.setColumnWidth(2, 620 if lang == 'zh' else 560)
+                    self.table1.setColumnWidth(2, 740 if lang == 'zh' else 680)
                 else:
-                    self.table1.setColumnWidth(2, 420 if lang == 'zh' else 370)
+                    self.table1.setColumnWidth(2, 540 if lang == 'zh' else 490)
                 for r in range(self.table1.rowCount()):
                     info_table = self.table1.cellWidget(r, 2)
                     if isinstance(info_table, QTableWidget):

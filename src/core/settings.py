@@ -116,6 +116,8 @@ if sys.platform != "win32":
 
 BDMV_LABELS = ["path", "size", "info", "remux_cmd"]
 DIY_BDMV_LABELS = ["path", "size", "info"]
+MPLS_INFO_LABELS = ["mpls_file", "duration", "chapters", "m2ts_timing", "main", "play"]
+MPLS_INFO_TRACKS_LABELS = MPLS_INFO_LABELS + ["tracks"]
 SUBTITLE_LABELS = ["select", "path", "sub_duration", "ep_duration", "bdmv_index", "chapter_index", "offset", "warning"]
 MKV_LABELS = ["path", "duration"]
 REMUX_LABELS = ["sub_path", "language", "ep_duration", "bdmv_index", "start_at_chapter", "end_at_chapter", "m2ts_file", "m2ts_file_detail", "output_name", "play"]

@@ -24,18 +24,9 @@ class RemuxWorker(QObject):
 
     def run(self):
         try:
-            from src.bdmv.chapter import chapter_tail_trim_clear, chapter_tail_trim_register_path
             from src.runtime.services_split.media_info_and_track_mapping import mpls_playlist_caches_clear
 
             request = self.request
-            chapter_tail_trim_clear()
-            if (not request.movie_mode) and request.episode_trim_copyright_tail:
-                for _folder, mpls_ne in request.selected_mpls:
-                    stem = str(mpls_ne or '').strip()
-                    if not stem:
-                        continue
-                    path = stem if stem.lower().endswith('.mpls') else stem + '.mpls'
-                    chapter_tail_trim_register_path(path)
             mpls_playlist_caches_clear()
 
             def progress_cb(value: Optional[int] = None, text: Optional[str] = None):

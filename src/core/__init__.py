@@ -21,6 +21,8 @@ from .settings import find_mkvtoolnix
 from .settings import MKV_EXTRACT_PATH
 from .settings import MKV_INFO_PATH
 from .settings import MKV_LABELS
+from .settings import MPLS_INFO_LABELS
+from .settings import MPLS_INFO_TRACKS_LABELS
 from .settings import MKV_MERGE_PATH
 from .settings import MKV_PROP_EDIT_PATH
 from .settings import REMUX_LABELS
@@ -51,6 +53,8 @@ __all__ = [
     "DIY_BDMV_LABELS",
     "SUBTITLE_LABELS",
     "MKV_LABELS",
+    "MPLS_INFO_LABELS",
+    "MPLS_INFO_TRACKS_LABELS",
     "REMUX_LABELS",
     "DIY_REMUX_LABELS",
     "ENCODE_LABELS",

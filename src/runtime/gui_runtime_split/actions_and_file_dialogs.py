@@ -16,9 +16,10 @@ from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPlainTextEdit, QTextB
     QAbstractItemView, QMenu, QMessageBox, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, QFileDialog, QCheckBox, \
     QDoubleSpinBox
 
-from src.bdmv import Chapter
+from src.bdmv import Chapter, chapter_play_item_file_ranges
 from src.core import MKV_LABELS, REMUX_LABELS, DIY_REMUX_LABELS, ENCODE_LABELS, SUBTITLE_LABELS, ENCODE_REMUX_LABELS, \
-    ENCODE_REMUX_SP_LABELS, CURRENT_UI_LANGUAGE, find_mkvtoolnix, is_docker
+    ENCODE_REMUX_SP_LABELS, CURRENT_UI_LANGUAGE, find_mkvtoolnix, is_docker, MPLS_INFO_LABELS, \
+    MPLS_INFO_TRACKS_LABELS
 import src.core.settings as core_settings
 from src.core.i18n import translate_text
 from src.core.encode_presets import (
@@ -1196,13 +1197,6 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                             **captured_track_options(sp_entry.track_key),
                         ))
 
-            trim_checkbox = getattr(self, 'trim_copyright_tail_checkbox', None)
-            episode_trim_copyright_tail = bool(
-                trim_checkbox
-                and trim_checkbox.isChecked()
-                and not self._is_movie_mode()
-                and self.get_selected_function_id() in (3, 4)
-            )
             dolby_vision_checkbox = getattr(self, 'mux_dolby_vision_checkbox', None)
             request = EncodeRequest(
                 input_mode=input_mode,
@@ -1214,7 +1208,6 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 settings=encode_settings,
                 selected_mpls=selected_mpls,
                 movie_mode=self._is_movie_mode(),
-                episode_trim_copyright_tail=episode_trim_copyright_tail,
                 mux_dolby_vision=bool(
                     dolby_vision_checkbox is None or dolby_vision_checkbox.isChecked()
                 ),
@@ -2061,6 +2054,58 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 progress.close()
                 progress.deleteLater()
 
+    def on_view_mpls_play_items(self, mpls_path: str) -> None:
+        chapter = Chapter(mpls_path)
+        rows = chapter_play_item_file_ranges(chapter)
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"{self.t('MPLS play items')}: {mpls_path}")
+        layout = QVBoxLayout(dialog)
+        table = QTableWidget(dialog)
+        self._set_compact_table(table, row_height=20, header_height=20)
+        headers = [
+            'index',
+            'M2TS file',
+            'INTime (45 kHz)',
+            'OUTTime (45 kHz)',
+            'duration',
+            'MPLS timeline start',
+            'MPLS timeline end',
+            'ends at file end',
+        ]
+        table.setColumnCount(len(headers))
+        self._set_table_headers(table, headers)
+        table.setRowCount(len(rows))
+
+        def timeline_text(value: int) -> str:
+            return '00:00:00.000' if value == 0 else get_time_str(value / 45000.0)
+
+        timeline_ticks = 0
+        for index, (clip_name, in_time, out_time, _file_start, file_end) in enumerate(rows):
+            timeline_start = timeline_ticks
+            timeline_ticks += max(0, out_time - in_time)
+            values = [
+                str(index + 1),
+                f'{clip_name}.m2ts',
+                str(in_time),
+                str(out_time),
+                get_time_str((out_time - in_time) / 45000.0),
+                timeline_text(timeline_start),
+                timeline_text(timeline_ticks),
+                self.t('Yes') if file_end is not None and out_time == file_end else self.t('No'),
+            ]
+            for column, value in enumerate(values):
+                table.setItem(index, column, QTableWidgetItem(value))
+        table.resizeColumnsToContents()
+        layout.addWidget(table)
+        close_button = QPushButton(self.t('Close'), dialog)
+        close_button.clicked.connect(dialog.accept)
+        button_layout = QHBoxLayout()
+        button_layout.addStretch(1)
+        button_layout.addWidget(close_button)
+        layout.addLayout(button_layout)
+        dialog.resize(max(900, table.horizontalHeader().length() + 40), min(800, 120 + len(rows) * 24))
+        dialog.exec()
+
     def on_button_main(self, mpls_path: str, clicked_checked: Optional[bool] = None):
         subtitle = self._has_subtitle_in_table2()
 
@@ -2080,17 +2125,18 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 row_mpls = os.path.normpath(os.path.join(root, 'BDMV', 'PLAYLIST', mpls_file))
                 if row_mpls != os.path.normpath(mpls_path):
                     continue
-                main_btn = info.cellWidget(mpls_index, 3)
+                main_btn = info.cellWidget(mpls_index, MPLS_INFO_LABELS.index('main'))
                 checked = bool(clicked_checked) if clicked_checked is not None else bool(
                     isinstance(main_btn, QToolButton) and main_btn.isChecked())
                 if isinstance(main_btn, QToolButton):
                     main_btn.setChecked(checked)
 
-                play_btn = info.cellWidget(mpls_index, 4)
+                play_btn = info.cellWidget(mpls_index, MPLS_INFO_LABELS.index('play'))
                 if play_btn:
                     play_btn.setProperty('action', 'preview' if (checked and subtitle) else 'play')
                     play_btn.setText(self.t('preview') if (checked and subtitle) else self.t('play'))
-                if self.get_selected_function_id() in (3, 4, 5) and info.columnCount() > 5:
+                if (self.get_selected_function_id() in (3, 4, 5)
+                        and info.columnCount() > MPLS_INFO_TRACKS_LABELS.index('tracks')):
                     btn_tracks = QToolButton()
                     btn_tracks.setText(self.t('edit tracks'))
                     can_edit_tracks = True
@@ -2101,7 +2147,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                         btn_tracks.clicked.connect(partial(self.on_edit_tracks_from_mpls, row_mpls))
                     else:
                         btn_tracks.setEnabled(False)
-                    info.setCellWidget(mpls_index, 5, btn_tracks)
+                    info.setCellWidget(mpls_index, MPLS_INFO_TRACKS_LABELS.index('tracks'), btn_tracks)
                 break
         if self.get_selected_function_id() in (3, 4, 5):
             self._refresh_track_selection_config_for_selected_main()

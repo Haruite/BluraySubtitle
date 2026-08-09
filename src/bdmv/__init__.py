@@ -4,7 +4,7 @@ from .clpi import CLPI
 from .clpi import clpi_path_from_m2ts_path
 from .clpi import pid_to_lang_from_clpi_path
 from .clpi import pid_to_lang_from_m2ts_path
-from .chapter import Chapter
+from .chapter import Chapter, chapter_play_item_file_ranges, episode_tail_trim_plan
 from .core import InfoDict
 from .core import pack_bytes
 from .core import unpack_bytes
@@ -48,5 +48,7 @@ __all__ = [
     "pid_to_lang_from_clpi_path",
     "pid_to_lang_from_m2ts_path",
     "Chapter",
+    "chapter_play_item_file_ranges",
+    "episode_tail_trim_plan",
 ]
 

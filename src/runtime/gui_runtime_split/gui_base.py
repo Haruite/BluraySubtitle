@@ -233,6 +233,9 @@ class BluraySubtitleGuiBase(QWidget):
     def _apply_end_combo_min_constraint(self, combo: QComboBox, min_allowed: int):
         raise NotImplementedError
 
+    def _apply_episode_copyright_trim_to_configuration(self, configuration: dict[int, dict[str, int | str]], enabled: bool) -> None:
+        raise NotImplementedError
+
     def _apply_episode_mode_to_table2(self):
         raise NotImplementedError
 
@@ -821,9 +824,6 @@ class BluraySubtitleGuiBase(QWidget):
     def _sync_chapter_checkbox_sp_rows_all_volumes(self, configuration: dict[int, dict[str, int | str]]):
         raise NotImplementedError
 
-    def _sync_chapter_tail_trim_episode(self) -> None:
-        raise NotImplementedError
-
     def _sync_end_chapter_min_constraints(self, labels: list[str]):
         raise NotImplementedError
 
@@ -1023,6 +1023,9 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def on_subtitle_table_sorted(self, logicalIndex: int, order: Qt.SortOrder):
+        raise NotImplementedError
+
+    def on_view_mpls_play_items(self, mpls_path: str) -> None:
         raise NotImplementedError
 
     def open_file_path(self, path: str):

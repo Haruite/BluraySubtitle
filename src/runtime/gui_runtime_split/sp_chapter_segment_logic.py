@@ -8,8 +8,8 @@ from typing import Optional
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import QTableWidgetItem, QToolButton, QComboBox, QTableWidget, QHeaderView
 
-from src.bdmv import Chapter
-from src.core import ENCODE_SP_LABELS, SUBTITLE_LABELS, MKV_LABELS, ENCODE_LABELS, REMUX_LABELS
+from src.bdmv import Chapter, episode_tail_trim_plan
+from src.core import ENCODE_SP_LABELS, SUBTITLE_LABELS, MKV_LABELS, ENCODE_LABELS, REMUX_LABELS, MPLS_INFO_LABELS
 from src.exports.utils import (
     get_index_to_m2ts_and_offset,
     get_time_str,
@@ -518,6 +518,15 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             else:
                 new_m2_str, new_detail_str, new_dur_str = self._table2_m2ts_detail_duration_from_chapter_bounds(
                     mpls_no_ext, j1, j2)
+                trim_checkbox = getattr(self, 'trim_copyright_tail_checkbox', None)
+                if trim_checkbox and trim_checkbox.isChecked() and self.get_selected_function_id() in (3, 4):
+                    _trimmed_end, removed_m2ts = episode_tail_trim_plan(chapter, start_off, end_off)
+                    if removed_m2ts:
+                        removed_set = set(removed_m2ts)
+                        new_m2_str = ', '.join(
+                            name for name in self._split_m2ts_files(new_m2_str)
+                            if name not in removed_set
+                        )
             self.table2.setItem(r, m2ts_col, QTableWidgetItem(new_m2_str))
             self.table2.setItem(r, duration_col, QTableWidgetItem(new_dur_str))
             if m2ts_detail_col >= 0:
@@ -826,7 +835,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                 row_mpls = os.path.normpath(os.path.join(root, 'BDMV', 'PLAYLIST', it0.text().strip()))
                 if row_mpls != norm_target:
                     continue
-                main_btn = info.cellWidget(mpls_i, 3)
+                main_btn = info.cellWidget(mpls_i, MPLS_INFO_LABELS.index('main'))
                 return isinstance(main_btn, QToolButton) and main_btn.isChecked()
         return False
 
@@ -1349,7 +1358,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                         continue
                     paths: list[str] = []
                     for i in range(info.rowCount()):
-                        btn = info.cellWidget(i, 3)
+                        btn = info.cellWidget(i, MPLS_INFO_LABELS.index('main'))
                         if not (isinstance(btn, QToolButton) and btn.isChecked()):
                             continue
                         it = info.item(i, 0)

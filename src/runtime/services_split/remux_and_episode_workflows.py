@@ -861,10 +861,26 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 cafter = [s for s in cstarts[1:] if 1 < s <= rows]
                 csplit = ','.join(map(str, cafter))
                 use_parts = not bool(sub_confs[0].get('chapter_segments_fully_checked', True))
+                trim_end_by_start: dict[int, float] = {}
+                for sub_conf in sub_confs:
+                    raw_trim_end = str(sub_conf.get('copyright_trim_end_offset') or '').strip()
+                    if not raw_trim_end:
+                        continue
+                    try:
+                        trim_start = int(sub_conf.get('start_at_chapter') or sub_conf.get('chapter_index') or 1)
+                        trim_end_by_start[trim_start] = float(raw_trim_end)
+                    except (TypeError, ValueError):
+                        continue
                 pl: list[str] = []
                 for s, e in segl:
-                    st = get_time_str(_off(s))
-                    ed = get_time_str(_off(e))
+                    start_offset = _off(s)
+                    end_offset = _off(e)
+                    trimmed_end = trim_end_by_start.get(int(s))
+                    if trimmed_end is not None and start_offset < trimmed_end < end_offset:
+                        end_offset = trimmed_end
+                        use_parts = True
+                    st = get_time_str(start_offset)
+                    ed = get_time_str(end_offset)
                     if st == '0':
                         st = '00:00:00.000'
                     if ed == '0':

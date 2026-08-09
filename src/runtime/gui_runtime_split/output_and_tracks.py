@@ -8,7 +8,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QComboBox, QTableWidgetItem, QTableWidget, QToolButton
 
 from src.core import REMUX_LABELS, DIY_REMUX_LABELS, ENCODE_LABELS, CURRENT_UI_LANGUAGE, ENCODE_SP_LABELS, \
-    DIY_SP_LABELS
+    DIY_SP_LABELS, MPLS_INFO_LABELS
 from src.runtime.services import BluraySubtitle
 from src.exports.utils import parse_time_to_seconds
 from src.runtime.services_split.lifecycle_and_configuration import LifecycleConfigurationMixin
@@ -395,7 +395,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                     continue
                 paths: list[str] = []
                 for i in range(info.rowCount()):
-                    btn = info.cellWidget(i, 3)
+                    btn = info.cellWidget(i, MPLS_INFO_LABELS.index('main'))
                     if not (isinstance(btn, QToolButton) and btn.isChecked()):
                         continue
                     it = info.item(i, 0)

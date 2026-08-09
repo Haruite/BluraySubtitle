@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import QTableWidget, QToolButton, QPlainTextEdit, QWidget, 
 from src.bdmv import Chapter
 from src.core import BDMV_LABELS, DIY_BDMV_LABELS, DIY_REMUX_LABELS, find_mkvtoolnix, \
     ENCODE_REMUX_LABELS, ENCODE_REMUX_SP_LABELS, SUBTITLE_LABELS, ENCODE_LABELS, \
-    REMUX_LABELS, CURRENT_UI_LANGUAGE, ENCODE_SP_LABELS
+    REMUX_LABELS, CURRENT_UI_LANGUAGE, ENCODE_SP_LABELS, MPLS_INFO_LABELS, MPLS_INFO_TRACKS_LABELS
 from src.domain import Subtitle
 from src.exports.utils import get_time_str, get_index_to_m2ts_and_offset, print_exc_terminal, get_folder_size, parse_time_to_seconds
 from src.runtime.gui_runtime_classes.file_path_table_widget_item import FilePathTableWidgetItem
@@ -107,7 +107,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 continue
             selected_paths: list[str] = []
             for i in range(info.rowCount()):
-                btn = info.cellWidget(i, 3)
+                btn = info.cellWidget(i, MPLS_INFO_LABELS.index('main'))
                 if isinstance(btn, QToolButton) and btn.isChecked():
                     item = info.item(i, 0)
                     if item and item.text().strip():
@@ -299,7 +299,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         if not root:
             return ''
         for mpls_index in range(info.rowCount()):
-            main_btn = info.cellWidget(mpls_index, 3)
+            main_btn = info.cellWidget(mpls_index, MPLS_INFO_LABELS.index('main'))
             if isinstance(main_btn, QToolButton) and main_btn.isChecked():
                 mpls_item = info.item(mpls_index, 0)
                 if mpls_item and mpls_item.text():
@@ -360,7 +360,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             if not root:
                 continue
             for mpls_index in range(info.rowCount()):
-                main_btn = info.cellWidget(mpls_index, 3)
+                main_btn = info.cellWidget(mpls_index, MPLS_INFO_LABELS.index('main'))
                 if isinstance(main_btn, QToolButton) and main_btn.isChecked():
                     mpls_item = info.item(mpls_index, 0)
                     if mpls_item and mpls_item.text():
@@ -739,7 +739,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 continue
             selected_mpls_paths: list[str] = []
             for i in range(info.rowCount()):
-                main_btn = info.cellWidget(i, 3)
+                main_btn = info.cellWidget(i, MPLS_INFO_LABELS.index('main'))
                 if isinstance(main_btn, QToolButton) and main_btn.isChecked():
                     mpls_item = info.item(i, 0)
                     if mpls_item and mpls_item.text().strip():
@@ -1039,9 +1039,9 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             if not info:
                 continue
             for mpls_index in range(info.rowCount()):
-                main_btn: QToolButton = info.cellWidget(mpls_index, 3)
+                main_btn: QToolButton = info.cellWidget(mpls_index, MPLS_INFO_LABELS.index('main'))
                 if main_btn and main_btn.isChecked():
-                    play_btn = info.cellWidget(mpls_index, 4)
+                    play_btn = info.cellWidget(mpls_index, MPLS_INFO_LABELS.index('play'))
                     if play_btn:
                         play_btn.setProperty('action', 'preview' if subtitle else 'play')
                         play_btn.setText(self.t('preview') if subtitle else self.t('play'))
@@ -1161,9 +1161,11 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                     if 'BDMV' in dirs and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV')):
                         table_widget = QTableWidget()
                         self._set_compact_table(table_widget, row_height=20, header_height=20)
-                        info_headers = ['mpls_file', 'duration', 'chapters', 'main', 'play']
-                        if self.get_selected_function_id() in (3, 4, 5):
-                            info_headers.append('tracks')
+                        info_headers = list(
+                            MPLS_INFO_TRACKS_LABELS
+                            if self.get_selected_function_id() in (3, 4, 5)
+                            else MPLS_INFO_LABELS
+                        )
                         table_widget.setColumnCount(len(info_headers))
                         self._set_table_headers(table_widget, info_headers)
                         mpls_files = sorted(
@@ -1194,18 +1196,23 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                             btn1.setFocusPolicy(Qt.FocusPolicy.NoFocus)
                             btn1.clicked.connect(
                                 partial(self.on_button_click, mpls_path, mpls_path == selected_mpls, i + 1))
-                            table_widget.setCellWidget(mpls_n, 2, btn1)
+                            table_widget.setCellWidget(mpls_n, info_headers.index('chapters'), btn1)
+                            timing_button = QToolButton()
+                            timing_button.setText(self.t('view timing'))
+                            timing_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+                            timing_button.clicked.connect(partial(self.on_view_mpls_play_items, mpls_path))
+                            table_widget.setCellWidget(mpls_n, info_headers.index('m2ts_timing'), timing_button)
                             btn2 = QToolButton()
                             btn2.setCheckable(True)
                             btn2.setChecked(mpls_path == selected_mpls)
                             btn2.clicked.connect(partial(self.on_button_main, mpls_path))
-                            table_widget.setCellWidget(mpls_n, 3, btn2)
+                            table_widget.setCellWidget(mpls_n, info_headers.index('main'), btn2)
                             btn3 = QToolButton()
                             btn3.setText(self.t('play'))
                             btn3.setFocusPolicy(Qt.FocusPolicy.NoFocus)
                             btn3.setProperty('action', 'play')
                             btn3.clicked.connect(partial(self.on_button_play, mpls_path, btn3))
-                            table_widget.setCellWidget(mpls_n, 4, btn3)
+                            table_widget.setCellWidget(mpls_n, info_headers.index('play'), btn3)
                             if self.get_selected_function_id() in (3, 4, 5):
                                 show_tracks = True
                                 if self.get_selected_function_id() == 5:
@@ -1217,7 +1224,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                                     btn4.clicked.connect(partial(self.on_edit_tracks_from_mpls, mpls_path))
                                 else:
                                     btn4.setEnabled(False)
-                                table_widget.setCellWidget(mpls_n, 5, btn4)
+                                table_widget.setCellWidget(mpls_n, info_headers.index('tracks'), btn4)
                             table_widget.resizeColumnsToContents()
                             mpls_n += 1
                             if (time.time() - start_ts) >= 2.0:
@@ -1238,16 +1245,16 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                             QCoreApplication.processEvents()
                 self.table1.resizeColumnsToContents()
                 if self.get_selected_function_id() in (3, 4):
-                    self.table1.setColumnWidth(2, 620 if getattr(self, '_language_code',
-                                                                 CURRENT_UI_LANGUAGE) == 'zh' else 560)
+                    self.table1.setColumnWidth(2, 740 if getattr(self, '_language_code',
+                                                                 CURRENT_UI_LANGUAGE) == 'zh' else 680)
                     self.table1.setColumnWidth(3, 420 if getattr(self, '_language_code',
                                                                  CURRENT_UI_LANGUAGE) == 'zh' else 380)
                 elif self.get_selected_function_id() == 5:
-                    self.table1.setColumnWidth(2, 620 if getattr(self, '_language_code',
-                                                                 CURRENT_UI_LANGUAGE) == 'zh' else 560)
+                    self.table1.setColumnWidth(2, 740 if getattr(self, '_language_code',
+                                                                 CURRENT_UI_LANGUAGE) == 'zh' else 680)
                 else:
-                    self.table1.setColumnWidth(2, 420 if getattr(self, '_language_code',
-                                                                 CURRENT_UI_LANGUAGE) == 'zh' else 370)
+                    self.table1.setColumnWidth(2, 540 if getattr(self, '_language_code',
+                                                                 CURRENT_UI_LANGUAGE) == 'zh' else 490)
                     self.table1.setColumnWidth(3, 0)
                 self._scroll_table_h_to_right(self.table1)
                 table_ok = True
@@ -1344,7 +1351,6 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                         self.t('Episode output name is empty in row {row}').format(row=row_number)
                     )
 
-            trim_checkbox = getattr(self, 'trim_copyright_tail_checkbox', None)
             dovi_checkbox = getattr(self, 'mux_dolby_vision_checkbox', None)
             flac_checkbox = getattr(self, 'remux_flac_checkbox', None)
             if dovi_checkbox is None:
@@ -1365,12 +1371,6 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                     getattr(self, '_language_code', CURRENT_UI_LANGUAGE) or CURRENT_UI_LANGUAGE
                 ),
                 movie_mode=bool(self._is_movie_mode()),
-                episode_trim_copyright_tail=bool(
-                    trim_checkbox
-                    and trim_checkbox.isChecked()
-                    and not self._is_movie_mode()
-                    and self.get_selected_function_id() in (3, 4)
-                ),
                 mux_dolby_vision=bool(dovi_checkbox.isChecked()),
                 convert_lossless_audio_to_flac=bool(flac_checkbox.isChecked()),
                 audio_encoding=self._captured_audio_encoding_settings(),

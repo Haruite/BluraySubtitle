@@ -77,7 +77,6 @@ class EncodeRequest:
     settings: EncodeSettings
     selected_mpls: tuple[tuple[str, str], ...] = ()
     movie_mode: bool = False
-    episode_trim_copyright_tail: bool = False
     mux_dolby_vision: bool = True
     track_selection_config: dict[str, dict[str, list[str]]] | None = None
     track_language_config: dict[str, dict[str, str]] | None = None

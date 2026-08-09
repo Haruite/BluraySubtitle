@@ -1,83 +1,94 @@
 import os
 from typing import Optional
 
+from .clpi import CLPI
 from .core import unpack_bytes
 
-# Episode-mode optional trim: drop last MPLS play item if shorter than threshold (copyright bumper).
-# Registered entries replace ``in_out_time`` / ``mark_info`` on subsequent ``Chapter(path)`` loads in-process.
-_CHAPTER_TAIL_TRIM: dict[str, tuple[list[tuple[str, int, int]], dict[int, list[int]]]] = {}
 
-
-def chapter_norm_mpls_key(path: str) -> str:
-    try:
-        return os.path.normcase(os.path.normpath(os.path.abspath(str(path or ''))))
-    except Exception:
-        return os.path.normcase(os.path.normpath(str(path or '')))
-
-
-def chapter_tail_trim_clear() -> None:
-    _CHAPTER_TAIL_TRIM.clear()
-
-
-def chapter_tail_trim_active_for_path(mpls_path: str) -> bool:
-    mp = str(mpls_path or '').strip()
-    if not mp.lower().endswith('.mpls'):
-        mp = f'{mp}.mpls'
-    return chapter_norm_mpls_key(mp) in _CHAPTER_TAIL_TRIM
-
-
-def _chapter_tail_trim_build(ch: 'Chapter', max_tail_sec: float) -> Optional[tuple[list[tuple[str, int, int]], dict[int, list[int]]]]:
-    ios = list(ch.in_out_time or [])
-    if len(ios) < 2:
-        return None
-    last = ios[-1]
-    dur = (last[2] - last[1]) / 45000.0
-    if dur + 1e-9 >= float(max_tail_sec):
-        return None
-    last_idx0 = len(ios) - 1
-    new_ios = ios[:-1]
-    # MPLS mark ref may be 0-based play-item index or 1-based id; drop marks on the removed tail item.
-    rm_refs = {last_idx0, last_idx0 + 1}
-    new_marks: dict[int, list[int]] = {}
-    for k, v in (ch.mark_info or {}).items():
+def chapter_play_item_file_ranges(
+        chapter: 'Chapter',
+) -> list[tuple[str, int, int, Optional[int], Optional[int]]]:
+    """Return MPLS play-item timing with the corresponding CLPI file range."""
+    cached = getattr(chapter, '_play_item_file_ranges_cache', None)
+    if cached is not None:
+        return list(cached)
+    bdmv_dir = os.path.dirname(os.path.dirname(os.path.normpath(chapter.file_path)))
+    ranges: list[tuple[str, int, int, Optional[int], Optional[int]]] = []
+    for clip_name, in_time, out_time in chapter.in_out_time:
+        file_start: Optional[int] = None
+        file_end: Optional[int] = None
+        clpi_path = os.path.join(bdmv_dir, 'CLIPINF', f'{clip_name}.clpi')
+        if not os.path.isfile(clpi_path):
+            clpi_path = os.path.join(bdmv_dir, 'BACKUP', 'CLIPINF', f'{clip_name}.clpi')
         try:
-            ki = int(k)
-        except (TypeError, ValueError):
-            continue
-        if ki in rm_refs:
-            continue
-        new_marks[ki] = list(v)
-    return (new_ios, new_marks)
+            sequence_info = CLPI(clpi_path).data.get('SequenceInfo') or {}
+            atc_sequences = sequence_info.get('ATCSequences') or []
+            stc_sequences = (atc_sequences[0].get('STCSequences') or []) if atc_sequences else []
+            if stc_sequences:
+                file_start = int(stc_sequences[0].get('PresentationStartTime'))
+                file_end = int(stc_sequences[0].get('PresentationEndTime'))
+        except (AttributeError, OSError, IndexError, KeyError, TypeError, ValueError):
+            file_start = None
+            file_end = None
+        ranges.append((str(clip_name), int(in_time), int(out_time), file_start, file_end))
+    chapter._play_item_file_ranges_cache = tuple(ranges)
+    return ranges
 
 
-def chapter_tail_trim_register_path(mpls_path: str, max_tail_sec: float = 30.0) -> bool:
-    """Load MPLS from disk, then if the last play item is shorter than ``max_tail_sec`` register a trim override.
+def episode_tail_trim_plan(
+        chapter: 'Chapter',
+        episode_start: float,
+        episode_end: float,
+        max_tail_seconds: float = 30.0,
+) -> tuple[float, tuple[str, ...]]:
+    """Trim complete trailing play items only when the episode ends at the current clip's file end."""
+    start = max(0.0, float(episode_start))
+    end = max(start, float(episode_end))
+    window_start = max(start, end - max(0.0, float(max_tail_seconds)))
+    epsilon = 1.0 / 45000.0
+    timeline: list[tuple[float, float, str, int, Optional[int]]] = []
+    offset = 0.0
+    for clip_name, in_time, out_time, _file_start, file_end in chapter_play_item_file_ranges(chapter):
+        item_start = offset
+        item_end = item_start + max(0.0, (out_time - in_time) / 45000.0)
+        timeline.append((item_start, item_end, clip_name, out_time, file_end))
+        offset = item_end
 
-    Returns True when a trim override is active for this path (including re-register of same trim).
-    """
-    mp = str(mpls_path or '').strip()
-    if not mp.lower().endswith('.mpls'):
-        mp = f'{mp}.mpls'
-    if not mp or not os.path.isfile(mp):
-        return False
-    norm = chapter_norm_mpls_key(mp)
-    _CHAPTER_TAIL_TRIM.pop(norm, None)
-    ch = Chapter(mp)
-    built = _chapter_tail_trim_build(ch, max_tail_sec)
-    if built is None:
-        return False
-    _CHAPTER_TAIL_TRIM[norm] = built
-    return True
+    last_index = next(
+        (index for index in range(len(timeline) - 1, -1, -1)
+         if abs(timeline[index][1] - end) <= epsilon),
+        -1,
+    )
+    if last_index < 0:
+        return end, ()
+    _item_start, _item_end, _clip_name, item_out_time, file_end = timeline[last_index]
+    if file_end is None or item_out_time != file_end:
+        return end, ()
 
+    trim_end = end
+    removed_indexes: list[int] = []
+    index = last_index
+    while index >= 0:
+        item_start, item_end, _clip_name, _item_out_time, _file_end = timeline[index]
+        if abs(item_end - trim_end) > epsilon or item_start < window_start - epsilon:
+            break
+        if not any(previous_end > start + epsilon for _, previous_end, *_ in timeline[:index]):
+            break
+        removed_indexes.append(index)
+        trim_end = item_start
+        index -= 1
 
-def _apply_chapter_tail_trim_override(ch: 'Chapter') -> None:
-    norm = chapter_norm_mpls_key(ch.file_path)
-    tup = _CHAPTER_TAIL_TRIM.get(norm)
-    if not tup:
-        return
-    ios, mi = tup
-    ch.in_out_time = list(ios)
-    ch.mark_info = {int(k): list(v) for k, v in mi.items()}
+    retained_names = {
+        clip_name
+        for item_start, item_end, clip_name, _item_out_time, _file_end in timeline
+        if item_end > start + epsilon and item_start < trim_end - epsilon
+    }
+    removed_names = tuple(dict.fromkeys(
+        f'{timeline[index][2]}.m2ts'
+        for index in reversed(removed_indexes)
+        if timeline[index][2] not in retained_names
+    ))
+    return trim_end, removed_names
 
 
 class Chapter:
@@ -87,6 +98,9 @@ class Chapter:
         self.mark_info: dict[int, list[int]] = {}
         self.file_path: str = file_path
         self.pid_to_lang = {}
+        self._play_item_file_ranges_cache: Optional[
+            tuple[tuple[str, int, int, Optional[int], Optional[int]], ...]
+        ] = None
 
         with open(file_path, 'rb') as mpls_file:
             mpls_file.seek(8)
@@ -120,8 +134,6 @@ class Chapter:
                     self.mark_info[ref_to_play_item_id].append(mark_timestamp)
                 else:
                     self.mark_info[ref_to_play_item_id] = [mark_timestamp]
-
-        _apply_chapter_tail_trim_override(self)
 
     def get_total_time(self):
         return sum(map(lambda x: (x[2] - x[1]) / 45000, self.in_out_time))
@@ -182,8 +194,6 @@ class Chapter:
 
 __all__ = [
     'Chapter',
-    'chapter_norm_mpls_key',
-    'chapter_tail_trim_clear',
-    'chapter_tail_trim_active_for_path',
-    'chapter_tail_trim_register_path',
+    'chapter_play_item_file_ranges',
+    'episode_tail_trim_plan',
 ]

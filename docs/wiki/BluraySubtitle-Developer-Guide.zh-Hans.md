@@ -74,7 +74,7 @@ mark_info: dict[int, list[int]]
 
 `get_total_time()` 对 `(out_time - in_time) / 45000` 求和。
 
-该模块还包含剧集模式使用的可选短尾片段裁切注册表。这是工作流内存中的覆盖，不会修改磁盘上的源 MPLS。`chapter_tail_trim_register_path()` 要求播放列表至少包含两个播放项，并且只在最后一个播放项的窗口短于默认的 30 秒阈值时将其移除。注册后的视图会排除属于该尾播放项的标记。启用**裁剪版权片段**时，压制和重混流 Worker 会先清空注册表，为所选剧集模式播放列表注册裁剪，再清空播放列表缓存，确保下游时间线读取者看到同一视图。
+`chapter_play_item_file_ranges()` 会把这些不可变的播放项行与对应 CLPI 呈现范围组合起来；`episode_tail_trim_plan()` 根据该结构推导每集的 parts 结束时间和受影响的 M2TS 名称，但不会替换 `in_out_time` 或 `mark_info`。GUI 会把推导出的结束时间捕获到行配置中，只从可见 M2TS 列移除受影响的名称，并在启动 Worker 前生成可执行的 `--split parts` 区间。
 
 ### CLPI
 

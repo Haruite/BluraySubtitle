@@ -4,7 +4,8 @@ from PyQt6.QtGui import QFontMetrics
 from PyQt6.QtWidgets import QTableWidget, QComboBox, QHeaderView
 
 from src.core import BDMV_LABELS, SUBTITLE_LABELS, MKV_LABELS, REMUX_LABELS, ENCODE_REMUX_LABELS, ENCODE_LABELS, \
-    ENCODE_REMUX_SP_LABELS, ENCODE_SP_LABELS, DIY_BDMV_LABELS, DIY_SP_LABELS, DIY_REMUX_LABELS, CURRENT_UI_LANGUAGE
+    ENCODE_REMUX_SP_LABELS, ENCODE_SP_LABELS, DIY_BDMV_LABELS, DIY_SP_LABELS, DIY_REMUX_LABELS, CURRENT_UI_LANGUAGE, \
+    MPLS_INFO_LABELS, MPLS_INFO_TRACKS_LABELS
 from .gui_base import BluraySubtitleGuiBase
 
 
@@ -147,12 +148,11 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
                 for r in range(self.table1.rowCount()):
                     info_table = self.table1.cellWidget(r, 2)
                     if isinstance(info_table, QTableWidget):
-                        info_keys = ['mpls_file', 'duration', 'chapters', 'main', 'play']
-                        try:
-                            if info_table.columnCount() > len(info_keys):
-                                info_keys.append('tracks')
-                        except Exception:
-                            pass
+                        info_keys = (
+                            MPLS_INFO_TRACKS_LABELS
+                            if info_table.columnCount() == len(MPLS_INFO_TRACKS_LABELS)
+                            else MPLS_INFO_LABELS
+                        )
                         self._set_table_headers(info_table, info_keys)
                         self._resize_table_columns_for_language(info_table)
         except Exception:

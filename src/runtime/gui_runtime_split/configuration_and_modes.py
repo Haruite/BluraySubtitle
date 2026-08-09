@@ -9,10 +9,10 @@ from typing import Optional
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import QSizePolicy, QComboBox, QTableWidgetItem, QToolButton, QTableWidget
 
-from src.bdmv.chapter import Chapter, chapter_tail_trim_active_for_path, chapter_tail_trim_clear, chapter_tail_trim_register_path
+from src.bdmv.chapter import Chapter, episode_tail_trim_plan
 from src.core import ENCODE_REMUX_LABELS, ENCODE_REMUX_SP_LABELS, ENCODE_LABELS, ENCODE_SP_LABELS, REMUX_LABELS, \
     DEFAULT_APPROX_EPISODE_DURATION_SECONDS, CURRENT_UI_LANGUAGE, SUBTITLE_LABELS, BDMV_LABELS, MKV_LABELS, \
-    DIY_BDMV_LABELS, DIY_SP_LABELS, DIY_REMUX_LABELS
+    DIY_BDMV_LABELS, DIY_SP_LABELS, DIY_REMUX_LABELS, MPLS_INFO_LABELS
 from src.core.i18n import translate_text
 from src.domain import Subtitle
 from src.exports.utils import get_time_str, print_exc_terminal, get_index_to_m2ts_and_offset
@@ -310,50 +310,6 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             'segments': segment_states,
         }
 
-    def _sync_chapter_tail_trim_episode(self) -> None:
-        """Register in-process Chapter tail trim (copyright bumper) for series remux/encode (fid 3/4)."""
-        from src.runtime.services_split.media_info_and_track_mapping import mpls_playlist_caches_clear
-
-        chapter_tail_trim_clear()
-        try:
-            fid = int(self.get_selected_function_id() or 0)
-        except Exception:
-            fid = 0
-        if self._is_movie_mode() or fid not in (3, 4):
-            mpls_playlist_caches_clear()
-            return
-        cb = getattr(self, 'trim_copyright_tail_checkbox', None)
-        want = bool(cb and cb.isChecked())
-        try:
-            selected = list(self.get_selected_mpls_no_ext() or [])
-        except Exception:
-            selected = []
-        if not want:
-            for _folder, mpls_ne in selected:
-                stem = str(mpls_ne or '').strip()
-                if not stem:
-                    continue
-                if stem.lower().endswith('.mpls'):
-                    stem = stem[:-5]
-                try:
-                    rows = int(self._chapter_node_data(stem).get('rows') or 0)
-                    self._chapter_checkbox_states[stem + '.mpls'] = [True] * max(rows, 0)
-                except Exception:
-                    pass
-            mpls_playlist_caches_clear()
-            return
-        for _folder, mpls_ne in selected:
-            stem = str(mpls_ne or '').strip()
-            if not stem:
-                continue
-            path = stem if stem.lower().endswith('.mpls') else stem + '.mpls'
-            try:
-                if os.path.isfile(path):
-                    chapter_tail_trim_register_path(path)
-            except Exception:
-                pass
-        mpls_playlist_caches_clear()
-
     def _on_trim_copyright_tail_toggled(self, _checked: bool = False) -> None:
         try:
             cb = getattr(self, 'trim_copyright_tail_checkbox', None)
@@ -362,7 +318,6 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
         except Exception:
             pass
         try:
-            self._sync_chapter_tail_trim_episode()
             self._full_refresh_remux_encode_tables_for_mode()
             self._refresh_table1_remux_cmds()
         except Exception:
@@ -395,10 +350,52 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 out.add(str(m))
         return out
 
+    def _apply_episode_copyright_trim_to_configuration(
+            self,
+            configuration: dict[int, dict[str, int | str]],
+            enabled: bool,
+    ) -> None:
+        """Attach per-episode tail cuts without changing authored chapter or play-item data."""
+        for row in configuration.values():
+            row.pop('copyright_trim_end_offset', None)
+        if not enabled:
+            return
+
+        chapter_cache: dict[str, tuple[Chapter, dict[int, float], int]] = {}
+        for row in configuration.values():
+            mpls_path = self._main_mpls_abs_path_for_remux_cmd_lookup(row)
+            if not mpls_path or not os.path.isfile(mpls_path):
+                continue
+            if mpls_path not in chapter_cache:
+                chapter = Chapter(mpls_path)
+                _index_to_m2ts, index_to_offset = get_index_to_m2ts_and_offset(chapter)
+                total_end = sum(map(len, chapter.mark_info.values())) + 1
+                chapter_cache[mpls_path] = (chapter, index_to_offset, total_end)
+            chapter, index_to_offset, total_end = chapter_cache[mpls_path]
+            start_chapter = int(row.get('start_at_chapter') or row.get('chapter_index') or 1)
+            end_chapter = int(row.get('end_at_chapter') or total_end)
+            start_offset = (
+                chapter.get_total_time()
+                if start_chapter >= total_end
+                else float(index_to_offset.get(start_chapter, 0.0))
+            )
+            end_offset = (
+                chapter.get_total_time()
+                if end_chapter >= total_end
+                else float(index_to_offset.get(end_chapter, chapter.get_total_time()))
+            )
+            trimmed_end, _removed_m2ts = episode_tail_trim_plan(
+                chapter,
+                start_offset,
+                end_offset,
+            )
+            if trimmed_end >= end_offset - (1.0 / 45000.0):
+                continue
+            row['copyright_trim_end_offset'] = f'{trimmed_end:.6f}'
+
     def _generate_configuration_from_ui_inputs(self) -> dict[int, dict[str, int | str]]:
         busy = self._begin_delayed_busy(self.t('Regenerating configuration...'))
         try:
-            self._sync_chapter_tail_trim_episode()
             inputs = self._collect_config_inputs()
             old_inputs = getattr(self, '_last_config_inputs', {}) or {}
             mode, changed_row = self._diff_config_inputs(old_inputs, inputs)
@@ -422,21 +419,10 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 and self.get_selected_function_id() in (3, 4)
             )
 
-            def _chapter_seg_fully_checked(mpls_key: str, checked_list: list[bool], total: int) -> bool:
+            def _chapter_seg_fully_checked(_mpls_key: str, checked_list: list[bool], total: int) -> bool:
                 if total <= 0:
                     return True
-                base = all(checked_list[:total])
-                if not want_tail_trim:
-                    return base
-                mp = str(mpls_key or '').strip()
-                if not mp.lower().endswith('.mpls'):
-                    mp = mp + '.mpls'
-                try:
-                    if chapter_tail_trim_active_for_path(mp):
-                        return False
-                except Exception:
-                    pass
-                return base
+                return all(checked_list[:total])
             selected_mpls = list(inputs.get('selected_mpls') or [])
             if not selected_mpls:
                 return {}
@@ -785,6 +771,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     fallback_order,
                 ))
                 conf = {i: dict(v) for i, (_, v) in enumerate(items)}
+            self._apply_episode_copyright_trim_to_configuration(conf, want_tail_trim)
             return conf
         finally:
             self._end_delayed_busy(busy)
@@ -838,10 +825,6 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
         """
         if self.get_selected_function_id() not in (3, 4, 5):
             return
-        try:
-            self._sync_chapter_tail_trim_episode()
-        except Exception:
-            print_exc_terminal()
         if not self.bdmv_folder_path.text().strip() or self.table1.rowCount() == 0:
             return
         if self._is_movie_mode():
@@ -890,7 +873,6 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             self._refresh_movie_table2()
             return
         try:
-            self._sync_chapter_tail_trim_episode()
             if self.table2.rowCount() > 0:
                 configuration = self._generate_configuration_from_ui_inputs()
             else:
@@ -1654,7 +1636,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             if not info:
                 continue
             for mpls_index in range(info.rowCount()):
-                main_btn: QToolButton = info.cellWidget(mpls_index, 3)
+                main_btn: QToolButton = info.cellWidget(mpls_index, MPLS_INFO_LABELS.index('main'))
                 if main_btn and main_btn.isChecked():
                     mpls_item = info.item(mpls_index, 0)
                     if not mpls_item:
