@@ -7,7 +7,6 @@ from typing import Optional
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QComboBox, QTableWidgetItem, QTableWidget, QToolButton
 
-from src.bdmv import Chapter, pid_to_lang_from_m2ts_path
 from src.core import REMUX_LABELS, DIY_REMUX_LABELS, ENCODE_LABELS, CURRENT_UI_LANGUAGE, ENCODE_SP_LABELS, \
     DIY_SP_LABELS
 from src.runtime.services import BluraySubtitle
@@ -886,124 +885,61 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                 subtitle.append(idx)
         return audio, subtitle
 
+    def _cache_available_track_ids(
+            self, key: str, streams: list[dict[str, object]],
+    ) -> dict[str, list[str]]:
+        audio, subtitle = self._all_track_ids_from_streams(streams)
+        available = getattr(self, '_available_track_selection_config', None)
+        if not isinstance(available, dict):
+            available = {}
+            self._available_track_selection_config = available
+        snapshot = {'audio': list(audio), 'subtitle': list(subtitle)}
+        available[str(key)] = snapshot
+        return snapshot
+
     def _apply_select_all_tracks_to_main_and_sp(self):
-        if not hasattr(self, '_track_selection_config') or not isinstance(
-                getattr(self, '_track_selection_config', None), dict):
+        if not isinstance(getattr(self, '_track_selection_config', None), dict):
             self._track_selection_config = {}
         if not getattr(self, 'select_all_tracks_checkbox', None) or (not self.select_all_tracks_checkbox.isChecked()):
             return
-        if self.get_selected_function_id() == 4 and getattr(self, '_encode_input_mode', 'bdmv') == 'remux':
-            try:
-                for r in range(self.table2.rowCount()):
-                    src = self._get_remux_source_path_from_table2_row(r)
-                    if not src or not os.path.exists(src):
-                        continue
-                    streams = self._read_mkvinfo_tracks(src)
-                    a, s = self._all_track_ids_from_streams(streams)
-                    self._track_selection_config[media_track_key('mkv', src)] = {'audio': a, 'subtitle': s}
-            except Exception:
-                pass
-            try:
-                if hasattr(self, 'table3') and self.table3:
-                    for r in range(self.table3.rowCount()):
-                        src = self._get_remux_source_path_from_table3_row(r)
-                        if not src or not os.path.exists(src):
-                            continue
-                        streams = self._read_mkvinfo_tracks(src)
-                        a, s = self._all_track_ids_from_streams(streams)
-                        self._track_selection_config[media_track_key('mkvsp', src)] = {'audio': a, 'subtitle': s}
-            except Exception:
-                pass
+        available = getattr(self, '_available_track_selection_config', None)
+        if not isinstance(available, dict):
             return
-        try:
-            for row in range(self.table1.rowCount()):
-                root_item = self.table1.item(row, 0)
-                root = root_item.text().strip() if root_item and root_item.text() else ''
-                if not root:
-                    continue
-                info = self.table1.cellWidget(row, 2)
-                if not isinstance(info, QTableWidget):
-                    continue
-                selected_mpls_path = ''
-                for i in range(info.rowCount()):
-                    main_btn = info.cellWidget(i, 3)
-                    if isinstance(main_btn, QToolButton) and main_btn.isChecked():
-                        mpls_item = info.item(i, 0)
-                        if mpls_item and mpls_item.text().strip():
-                            selected_mpls_path = os.path.normpath(
-                                os.path.join(root, 'BDMV', 'PLAYLIST', mpls_item.text().strip()))
-                        break
-                if not selected_mpls_path:
-                    continue
-                m2ts_path = self._get_first_m2ts_for_mpls(selected_mpls_path)
-                if not m2ts_path:
-                    continue
-                streams = self._read_m2ts_track_info(m2ts_path)
-                try:
-                    ch = Chapter(selected_mpls_path)
-                    ch.get_pid_to_language()
-                    streams = self._filter_streams_by_pid_lang(streams, ch.pid_to_lang)
-                except Exception:
-                    pass
-                a, s = self._all_track_ids_from_streams(streams)
-                self._track_selection_config[media_track_key('main', selected_mpls_path)] = {'audio': a,
-                                                                                                 'subtitle': s}
-        except Exception:
-            pass
+        visible_keys: set[str] = set()
+        if self.get_selected_function_id() == 4 and getattr(self, '_encode_input_mode', 'bdmv') == 'remux':
+            for row in range(self.table2.rowCount()):
+                source = self._get_remux_source_path_from_table2_row(row)
+                if source:
+                    visible_keys.add(media_track_key('mkv', source))
+            if hasattr(self, 'table3') and self.table3:
+                for row in range(self.table3.rowCount()):
+                    source = self._get_remux_source_path_from_table3_row(row)
+                    if source:
+                        visible_keys.add(media_track_key('mkvsp', source))
+        else:
+            for mpls_path in self._get_selected_main_mpls_paths():
+                visible_keys.add(media_track_key('main', mpls_path))
+            if hasattr(self, 'table3') and self.table3 and self.table3.isVisible():
+                select_column = ENCODE_SP_LABELS.index('select')
+                for row in range(self.table3.rowCount()):
+                    select_item = self.table3.item(row, select_column)
+                    if not (
+                            select_item
+                            and select_item.flags() & Qt.ItemFlag.ItemIsEnabled
+                            and select_item.checkState() == Qt.CheckState.Checked
+                    ):
+                        continue
+                    entry = self._table3_get_sp_entry_for_row(row)
+                    visible_keys.add(SpEntry.from_mapping(entry).track_key)
 
-        try:
-            if hasattr(self, 'table3') and self.table3 and self.table3.isVisible() and ('select' in ENCODE_SP_LABELS):
-                sel_col = ENCODE_SP_LABELS.index('select')
-                bdmv_col = ENCODE_SP_LABELS.index('bdmv_index')
-                m2ts_col = ENCODE_SP_LABELS.index('m2ts_file')
-                mpls_col = ENCODE_SP_LABELS.index('mpls_file')
-                for r in range(self.table3.rowCount()):
-                    it = self.table3.item(r, sel_col)
-                    if not (it and it.flags() & Qt.ItemFlag.ItemIsEnabled and it.checkState() == Qt.CheckState.Checked):
-                        continue
-                    try:
-                        bdmv_index = int(self.table3.item(r, bdmv_col).text().strip())
-                    except Exception:
-                        continue
-                    streams: list[dict[str, object]] = []
-                    mpls_file = self.table3.item(r, mpls_col).text().strip() if self.table3.item(r, mpls_col) else ''
-                    if mpls_file:
-                        playlist_dir = self._get_playlist_dir_for_bdmv_index(bdmv_index)
-                        if not playlist_dir:
-                            continue
-                        mpls_path = os.path.normpath(os.path.join(playlist_dir, mpls_file))
-                        if not os.path.isfile(mpls_path):
-                            continue
-                        first_m2ts = self._get_first_m2ts_for_mpls(mpls_path)
-                        if not first_m2ts:
-                            continue
-                        streams = self._read_m2ts_track_info(first_m2ts)
-                        try:
-                            ch = Chapter(mpls_path)
-                            ch.get_pid_to_language()
-                            streams = self._filter_streams_by_pid_lang(streams, ch.pid_to_lang)
-                        except Exception:
-                            pass
-                    else:
-                        stream_dir = self._get_stream_dir_for_bdmv_index(bdmv_index)
-                        m2ts_text = self.table3.item(r, m2ts_col).text().strip() if self.table3.item(r, m2ts_col) else ''
-                        m2ts_files = self._split_m2ts_files(m2ts_text)
-                        if not (stream_dir and m2ts_files):
-                            continue
-                        first_m2ts = os.path.normpath(os.path.join(stream_dir, m2ts_files[0]))
-                        streams = self._read_m2ts_track_info(first_m2ts)
-                        try:
-                            pl = pid_to_lang_from_m2ts_path(first_m2ts)
-                            if pl:
-                                streams = self._filter_streams_by_pid_lang(streams, pl)
-                        except Exception:
-                            pass
-                    a, s = self._all_track_ids_from_streams(streams)
-                    entry = self._table3_get_sp_entry_for_row(r)
-                    key = SpEntry.from_mapping(entry).track_key
-                    self._track_selection_config[key] = {'audio': a, 'subtitle': s}
-        except Exception:
-            pass
+        for key in visible_keys:
+            track_ids = available.get(key)
+            if not isinstance(track_ids, dict):
+                continue
+            self._track_selection_config[key] = {
+                'audio': list(track_ids.get('audio') or []),
+                'subtitle': list(track_ids.get('subtitle') or []),
+            }
 
         try:
             self._refresh_table1_remux_cmds()

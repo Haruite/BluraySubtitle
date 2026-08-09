@@ -103,7 +103,7 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
         self._update_exe_button_progress(value=value)
 
     def _on_exe_button_progress_text(self, text: str):
-        self._update_exe_button_progress(text=self.t(text))
+        self._update_exe_button_progress(text=text)
 
     def _reset_exe_button(self):
         if not hasattr(self, 'exe_button') or not self.exe_button:
@@ -148,7 +148,7 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
 
         The synchronous refresh must finish adding, removing, and ordering rows
         before this method is called. The worker receives only paths, row
-        indexes, stable track keys, and selection policy captured here. Starting
+        indexes, stable track keys, and row state captured here. Starting
         a task must never call this method because that would invalidate the GUI
         snapshot that the task is about to execute.
         """
@@ -170,8 +170,6 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
         mpls_col = ENCODE_SP_LABELS.index('mpls_file')
         m2ts_col = ENCODE_SP_LABELS.index('m2ts_file')
         rows: list[dict[str, object]] = []
-        select_all = bool(
-            getattr(self, 'select_all_tracks_checkbox', None) and self.select_all_tracks_checkbox.isChecked())
         for r in range(self.table3.rowCount()):
             try:
                 bdmv_index = int(self.table3.item(r, bdmv_col).text().strip())
@@ -195,7 +193,7 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
             if (not force_disabled) and (not mpls_path) and (not m2ts_paths):
                 continue
             rows.append({'row': r, 'm2ts_paths': m2ts_paths, 'mpls_path': mpls_path, 'sp_key': sp_key,
-                         'force_disabled': force_disabled, 'select_all': select_all})
+                         'force_disabled': force_disabled})
 
         if not rows:
             self._sp_scan_worker = None
@@ -298,6 +296,7 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
         select_override = None
         sp_key = ''
         tracks_payload = {}
+        available_tracks = {}
         m2ts_type = ''
         video_only = False
         allow_tracks_when_disabled = False
@@ -305,6 +304,7 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
             select_override = payload.get('select_override')
             sp_key = str(payload.get('sp_key') or '').strip()
             tracks_payload = payload.get('tracks') or {}
+            available_tracks = payload.get('available_tracks') or {}
             m2ts_type = str(payload.get('m2ts_type') or '').strip()
             video_only = bool(payload.get('video_only') or False)
             allow_tracks_when_disabled = bool(payload.get('allow_tracks_when_disabled') or False)
@@ -358,9 +358,19 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
                     if not isinstance(cfg, dict):
                         self._track_selection_config = {}
                         cfg = self._track_selection_config
+                    available_config = getattr(self, '_available_track_selection_config', None)
+                    if not isinstance(available_config, dict):
+                        available_config = {}
+                        self._available_track_selection_config = available_config
+                    available_config[sp_key] = {
+                        'audio': list(available_tracks.get('audio') or []),
+                        'subtitle': list(available_tracks.get('subtitle') or []),
+                    }
                     if select_all:
-                        cfg[sp_key] = {'audio': list(tracks_payload.get('audio') or []),
-                                       'subtitle': list(tracks_payload.get('subtitle') or [])}
+                        cfg[sp_key] = {
+                            'audio': list(available_config[sp_key]['audio']),
+                            'subtitle': list(available_config[sp_key]['subtitle']),
+                        }
                     elif sp_key not in cfg:
                         cfg[sp_key] = {'audio': list(tracks_payload.get('audio') or []),
                                        'subtitle': list(tracks_payload.get('subtitle') or [])}

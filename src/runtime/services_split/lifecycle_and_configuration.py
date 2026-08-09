@@ -422,9 +422,13 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
             return rows_cache[k]
 
         items = sorted(configuration.items(), key=lambda kv: int(kv[0]))
+        invalid_keys: list[int] = []
         for i, (_key, con) in enumerate(items):
             mpls = str(con.get('selected_mpls') or '')
             rows = _rows_for_mpls(mpls)
+            if rows <= 0:
+                invalid_keys.append(_key)
+                continue
             j1 = int(con.get('chapter_index') or 1)
             next_con = items[i + 1][1] if i + 1 < len(items) else None
             if con.get('end_at_chapter'):
@@ -433,11 +437,13 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
                 j2 = int(next_con.get('chapter_index') or 0)
             else:
                 j2 = rows + 1
-            j1 = max(1, min(j1, rows + 1))
-            j2 = max(j1 + 1, min(j2, rows + 1))
+            j1 = max(1, min(j1, rows))
+            j2 = min(rows + 1, max(j1 + 1, j2))
             con['chapter_index'] = j1
             con['start_at_chapter'] = j1
             con['end_at_chapter'] = j2
+        for key in invalid_keys:
+            configuration.pop(key, None)
 
     def generate_configuration_from_selected_mpls(self, selected_mpls: list[tuple[str, str]],
                                                   sub_combo_index: Optional[dict[int, int]] = None,

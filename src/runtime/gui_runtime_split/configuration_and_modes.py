@@ -450,36 +450,65 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             approx_end_time = float(
                 getattr(self, 'approx_episode_duration_seconds', DEFAULT_APPROX_EPISODE_DURATION_SECONDS)
                 or DEFAULT_APPROX_EPISODE_DURATION_SECONDS)
-            gui_sub_files: list[str] = []
-            try:
-                for i in range(self.table2.rowCount()):
-                    it = self.table2.item(i, 0)
-                    p = it.text().strip() if it and it.text() else ''
-                    if p and (p.endswith('.ass') or p.endswith('.ssa') or p.endswith('.srt') or p.endswith('.sup')):
-                        gui_sub_files.append(p)
-            except Exception:
-                gui_sub_files = []
-            if gui_sub_files:
-                missing = [p for p in gui_sub_files if p and p not in self._subtitle_cache]
-                for p in missing:
+            target_seconds_by_row: dict[int, float] = {}
+            for row_index in range(self.table2.rowCount()):
+                target_seconds_by_row[row_index] = approx_end_time
+                try:
+                    subtitle_item = self.table2.item(row_index, 0)
+                    subtitle_path = (
+                        subtitle_item.text().strip()
+                        if subtitle_item and subtitle_item.text()
+                        else ''
+                    )
+                except Exception:
+                    subtitle_path = ''
+                if not subtitle_path.lower().endswith(('.ass', '.ssa', '.srt', '.sup')):
+                    continue
+                if subtitle_path not in self._subtitle_cache:
                     try:
-                        self._subtitle_cache[p] = Subtitle(p)
+                        self._subtitle_cache[subtitle_path] = Subtitle(subtitle_path)
                     except Exception:
-                        pass
-                sub_max_end = [self._subtitle_cache[p].max_end_time() if p in self._subtitle_cache else approx_end_time
-                               for p in gui_sub_files]
-            else:
-                sub_max_end = []
+                        continue
+                try:
+                    target_seconds_by_row[row_index] = float(
+                        self._subtitle_cache[subtitle_path].max_end_time()
+                    )
+                except Exception:
+                    target_seconds_by_row[row_index] = approx_end_time
+            changed_mpls = ''
+            if mode in ('start', 'end') and changed_row >= 0:
+                changed_mpls = str(row_mpls.get(changed_row, '') or '').strip()
+                if not changed_mpls and changed_row in prev_conf:
+                    changed_mpls = str(
+                        prev_conf[changed_row].get('selected_mpls') or ''
+                    ).strip()
+                if not changed_mpls:
+                    changed_bdmv = int(row_bdmv.get(changed_row, 0) or 0)
+                    changed_mpls = str(bdmv_to_mpls.get(changed_bdmv, '') or '').strip()
             conf: dict[int, dict[str, int | str]] = {}
             rows = self.table2.rowCount()
             node_cache: dict[str, dict[str, object]] = {}
             last_end_by_mpls: dict[str, int] = {}
-            remove_row = int(getattr(self, '_chapter_pending_remove_row', -1) or -1)
+            pending_remove_rows = getattr(self, '_chapter_pending_remove_row', -1)
+            remove_rows: set[int] = set()
+            if isinstance(pending_remove_rows, (list, tuple, set, frozenset)):
+                for pending_row in pending_remove_rows:
+                    try:
+                        remove_rows.add(int(pending_row))
+                    except (TypeError, ValueError):
+                        continue
+            else:
+                try:
+                    pending_row = int(pending_remove_rows or -1)
+                    if pending_row >= 0:
+                        remove_rows.add(pending_row)
+                except (TypeError, ValueError):
+                    pass
             self._chapter_pending_remove_row = -1
             for r in range(rows):
                 if r % 2 == 0:
                     self._tick_delayed_busy(busy, self.t('Regenerating configuration...'))
-                if remove_row >= 0 and int(r) == int(remove_row):
+                if int(r) in remove_rows:
                     continue
                 bdmv_index = int(row_bdmv.get(r, 0) or 0)
                 mpls_no_ext = str(row_mpls.get(r, '') or '').strip()
@@ -501,9 +530,22 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 checked = list(segments.get(mpls_no_ext, [True] * total_rows))
                 if len(checked) < total_rows:
                     checked += [True] * (total_rows - len(checked))
-                if r < changed_row and mode in ('start', 'end') and r in prev_conf:
+                previous_matches_mpls = bool(
+                    r in prev_conf
+                    and str(prev_conf[r].get('selected_mpls') or '').strip() == mpls_no_ext
+                )
+                freeze_chapter_edit_row = bool(
+                    mode in ('start', 'end')
+                    and previous_matches_mpls
+                    and (
+                        r < changed_row
+                        or (changed_mpls and mpls_no_ext != changed_mpls)
+                    )
+                )
+                if freeze_chapter_edit_row:
                     conf[r] = dict(prev_conf[r])
                     conf[r]['chapter_segments_fully_checked'] = _chapter_seg_fully_checked(mpls_no_ext, checked, total_rows)
+                    last_end_by_mpls[mpls_no_ext] = int(conf[r].get('end_at_chapter') or 0)
                     continue
                 if (
                         mode == 'segments'
@@ -519,14 +561,18 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     continue
                 raw_start = int(starts.get(r, 1) or 1)
                 raw_end = int(ends.get(r, 0) or 0)
-                start_idx = raw_start
-                start_idx = max(1, min(total_rows, start_idx))
+                start_idx = max(1, min(total_rows, raw_start))
                 while start_idx <= total_rows and not checked[start_idx - 1]:
                     start_idx += 1
                 if start_idx > total_rows:
-                    start_idx = total_rows
+                    continue
                 if mode == 'segments':
-                    first_checked = next((i for i in range(1, total_rows + 1) if checked[i - 1]), 1)
+                    first_checked = next(
+                        (i for i in range(1, total_rows + 1) if checked[i - 1]),
+                        None,
+                    )
+                    if first_checked is None:
+                        continue
                     inherited_end = int(last_end_by_mpls.get(mpls_no_ext, 0) or 0)
                     if inherited_end <= 0:
                         start_idx = first_checked
@@ -539,31 +585,38 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                             if nxt_checked is None:
                                 continue
                             start_idx = nxt_checked
-                if mode == 'end' and r > changed_row and changed_row in conf:
-                    changed_mpls = str(row_mpls.get(changed_row, '') or '').strip()
-                    if not changed_mpls:
-                        changed_bdmv = int(row_bdmv.get(changed_row, 0) or 0)
-                        changed_mpls = str(bdmv_to_mpls.get(changed_bdmv, '') or '').strip()
-                    if changed_mpls != mpls_no_ext:
-                        # End change in another mpls should not affect this row.
-                        if r in prev_conf:
-                            conf[r] = dict(prev_conf[r])
-                            conf[r]['chapter_segments_fully_checked'] = _chapter_seg_fully_checked(mpls_no_ext, checked, total_rows)
+                chapter_edit_row = bool(
+                    mode in ('start', 'end')
+                    and changed_mpls
+                    and mpls_no_ext == changed_mpls
+                    and r >= changed_row
+                )
+                if chapter_edit_row and r > changed_row:
+                    inherited_end = int(last_end_by_mpls.get(mpls_no_ext, 0) or 0)
+                    if inherited_end > total_rows:
+                        continue
+                    if inherited_end > 0:
+                        start_idx = inherited_end
+                        while start_idx <= total_rows and not checked[start_idx - 1]:
+                            start_idx += 1
+                        if start_idx > total_rows:
                             continue
-                target_sec = float(sub_max_end[r] if r < len(sub_max_end) else approx_end_time)
+                target_sec = float(target_seconds_by_row.get(r, approx_end_time))
+                recompute_end = bool(
+                    mode == 'segments'
+                    or (mode == 'start' and chapter_edit_row)
+                    or (mode == 'end' and chapter_edit_row and r > changed_row)
+                )
                 chosen_end = raw_end
-                if mode == 'segments':
-                    # On view-chapters state changes, always recompute episode end from
-                    # current checked segments instead of keeping stale table2 end value.
+                if recompute_end:
                     chosen_end = 0
                 if chosen_end <= start_idx:
                     chosen_end = self._closest_endpoint(
                         start_idx, target_sec, total_rows, offsets, m2ts, checked, approx_end_time)
                 if chosen_end > total_rows + 1:
                     chosen_end = total_rows + 1
-                # If unchecked region starts before chosen end, cut here.
-                # Keep explicit table2 start/end selections authoritative for start/end edits.
-                if mode not in ('start', 'end'):
+                # Default-generated ranges stop at the first unchecked segment.
+                if recompute_end:
                     for k in range(start_idx, min(chosen_end, total_rows + 1)):
                         if k <= total_rows and not checked[k - 1]:
                             chosen_end = k
@@ -621,6 +674,8 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 for mpls_no_ext, node in list(node_cache.items()):
                     if mode == 'segments' and segment_changed_mpls and mpls_no_ext not in segment_changed_mpls:
                         continue
+                    if mode in ('start', 'end') and changed_mpls and mpls_no_ext != changed_mpls:
+                        continue
                     total_rows = int(node['rows'])
                     offsets = dict(node['offsets'])
                     m2ts = dict(node['m2ts'])
@@ -636,7 +691,8 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     while start_idx <= total_rows and not checked[start_idx - 1]:
                         start_idx += 1
                     if start_idx > total_rows:
-                        start_idx = total_rows
+                        last_end_by_mpls[mpls_no_ext] = total_rows + 1
+                        continue
                     bdmv_index = 0
                     folder = ''
                     disc_output_name = ''
@@ -648,15 +704,13 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                             break
                     if bdmv_index <= 0:
                         continue
-                    target_sec = float(
-                        sub_max_end[len(conf)] if len(conf) < len(sub_max_end) else approx_end_time)
+                    target_sec = approx_end_time
                     chosen_end = self._closest_endpoint(
                         start_idx, target_sec, total_rows, offsets, m2ts, checked, approx_end_time)
-                    if mode not in ('start', 'end'):
-                        for k in range(start_idx, min(chosen_end, total_rows + 1)):
-                            if k <= total_rows and not checked[k - 1]:
-                                chosen_end = k
-                                break
+                    for k in range(start_idx, min(chosen_end, total_rows + 1)):
+                        if k <= total_rows and not checked[k - 1]:
+                            chosen_end = k
+                            break
                     if chosen_end <= start_idx:
                         last_end_by_mpls[mpls_no_ext] = total_rows + 1
                         continue
@@ -691,79 +745,45 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     break
                 if not _expanded:
                     break
-            append_req = getattr(self, '_chapter_pending_append_episode', None)
             self._chapter_pending_append_episode = None
-            append_new_key: Optional[int] = None
-            append_after_row = -1
-            if isinstance(append_req, dict):
+            bounded_conf: dict[int, dict[str, int | str]] = {}
+            for conf_key, conf_row in conf.items():
+                conf_mpls = str(conf_row.get('selected_mpls') or '').strip()
+                conf_node = node_cache.get(conf_mpls)
+                if not conf_node:
+                    continue
                 try:
-                    append_after_row = int(append_req.get('row') or -1)
-                    req_mpls = str(append_req.get('mpls_no_ext') or '').strip()
-                    req_bdmv = int(append_req.get('bdmv_index') or 0)
-                    req_start = int(append_req.get('start_at_chapter') or 1)
-                except Exception:
-                    req_mpls, req_bdmv, req_start = '', 0, 1
-                    append_after_row = -1
-                if req_mpls and req_bdmv > 0:
-                    node = node_cache.get(req_mpls) or self._chapter_node_data(req_mpls)
-                    node_cache[req_mpls] = node
-                    total_rows = int(node.get('rows') or 0)
-                    offsets = dict(node.get('offsets') or {})
-                    m2ts = dict(node.get('m2ts') or {})
-                    checked = list(segments.get(req_mpls, [True] * total_rows))
-                    if len(checked) < total_rows:
-                        checked += [True] * (total_rows - len(checked))
-                    if total_rows > 0:
-                        start_idx = max(1, min(req_start, total_rows))
-                        if checked and not checked[start_idx - 1]:
-                            start_idx = next((i for i in range(start_idx, total_rows + 1) if checked[i - 1]), start_idx)
-                        target_sec = float(sub_max_end[len(conf)] if len(conf) < len(sub_max_end) else approx_end_time)
-                        chosen_end = self._closest_endpoint(
-                            start_idx, target_sec, total_rows, offsets, m2ts, checked, approx_end_time)
-                        for k in range(start_idx, min(chosen_end, total_rows + 1)):
-                            if k <= total_rows and not checked[k - 1]:
-                                chosen_end = k
-                                break
-                        if chosen_end > start_idx:
-                            dur = max(
-                                0.0,
-                                float(offsets.get(chosen_end, offsets.get(total_rows + 1, 0.0))) - float(
-                                    offsets.get(start_idx, 0.0))
-                            )
-                            folder = self._folder_path_for_bdmv_index_from_table1(req_bdmv)
-                            if not folder and selected_mpls:
-                                try:
-                                    folder = os.path.normpath(str(selected_mpls[0][0] or ''))
-                                except Exception:
-                                    folder = ''
-                            disc_output_name = self._resolve_output_name_from_mpls(req_mpls)
-                            new_key = (max(conf.keys()) + 1) if conf else 0
-                            append_new_key = int(new_key)
-                            conf[new_key] = {
-                                'folder': folder,
-                                'selected_mpls': req_mpls,
-                                'bdmv_index': req_bdmv,
-                                'chapter_index': int(start_idx),
-                                'start_at_chapter': int(start_idx),
-                                'end_at_chapter': int(chosen_end),
-                                'offset': get_time_str(float(offsets.get(start_idx, 0.0))),
-                                'ep_duration': get_time_str(dur),
-                                'disc_output_name': disc_output_name,
-                                'chapter_segments_fully_checked': _chapter_seg_fully_checked(req_mpls, checked, total_rows),
-                            }
-            # Keep UI order stable: when split from ending, insert new row right after source row.
+                    conf_rows = int(conf_node.get('rows') or 0)
+                    conf_start = int(
+                        conf_row.get('start_at_chapter')
+                        or conf_row.get('chapter_index')
+                        or 0
+                    )
+                    conf_end = int(conf_row.get('end_at_chapter') or 0)
+                except (TypeError, ValueError):
+                    continue
+                if not (1 <= conf_start < conf_end <= conf_rows + 1):
+                    continue
+                bounded_conf[int(conf_key)] = conf_row
+            conf = bounded_conf
             if conf:
                 conf = BluraySubtitle._configuration_drop_invalid_episode_rows(conf)
             if conf:
                 items = sorted(conf.items(), key=lambda kv: int(kv[0]))
-                if (append_new_key is not None) and (append_after_row >= 0):
-                    idx_new = next((i for i, (k, _) in enumerate(items) if int(k) == int(append_new_key)), -1)
-                    idx_after = next((i for i, (k, _) in enumerate(items) if int(k) == int(append_after_row)), -1)
-                    if idx_new >= 0 and idx_after >= 0 and idx_new != idx_after + 1:
-                        one = items.pop(idx_new)
-                        if idx_new < idx_after:
-                            idx_after -= 1
-                        items.insert(idx_after + 1, one)
+                playlist_order: dict[str, int] = {}
+                for _, selected_mpls_no_ext in selected_mpls:
+                    normalized_mpls = os.path.normcase(os.path.normpath(
+                        str(selected_mpls_no_ext or '').strip()
+                    ))
+                    if normalized_mpls:
+                        playlist_order.setdefault(normalized_mpls, len(playlist_order))
+                fallback_order = len(playlist_order)
+                items.sort(key=lambda item: playlist_order.get(
+                    os.path.normcase(os.path.normpath(
+                        str(item[1].get('selected_mpls') or '').strip()
+                    )),
+                    fallback_order,
+                ))
                 conf = {i: dict(v) for i, (_, v) in enumerate(items)}
             return conf
         finally:
@@ -1103,9 +1123,9 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                             j2 = int(next_con.get('chapter_index') or 0)
                         else:
                             j2 = rows + 1
-                        # Clamp bounds to avoid invalid chapter indices (e.g. rows+1 start).
-                        j1 = max(1, min(j1, rows + 1))
-                        j2 = max(j1 + 1, min(j2, rows + 1))
+                        # A start must be a real chapter node; ending is end-only.
+                        j1 = max(1, min(j1, max(1, rows)))
+                        j2 = min(rows + 1, max(j1 + 1, j2))
                         sm = str(con.get('selected_mpls') or '').strip()
                         m2ts_joined, detail_txt, duration = self._table2_m2ts_detail_duration_from_chapter_bounds(
                             sm, j1, j2)

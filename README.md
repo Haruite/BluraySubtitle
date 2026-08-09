@@ -165,11 +165,11 @@ This section explains, in plain language, how the program behaves internally.
 11. One selected audio track from an audio-only source is extracted with its stream-specific extension; PCM, DTS, TrueHD, and MLP use `.flac`.
 12. Multiple selected audio tracks from an audio-only source use `.mka`; an uncovered audio-with-subtitle M2TS also uses `.mka`, while remaining video/container layouts use `.mkv`.
 13. A subtitle-only source with one selected subtitle uses its elementary-stream extension; multiple selected subtitles use `.mks`.
-14. Editing tracks recalculates the output name immediately. The runtime uses the exact visible output name and does not silently rename it or rediscover another file.
+14. Editing tracks recalculates the output name immediately. When episode splitting changes, SP rows linked to episode outputs are also renamed immediately to match the current episode rows. The runtime uses the exact visible output name and does not silently rename it or rediscover another file.
 15. MPLS container outputs first clear existing chapters, then receive chapters generated from the playlist with the tail marker removed; a single zero-time chapter is omitted.
 16. Unreadable or unsupported rows are disabled during scanning. If a selected source or its captured track configuration becomes unavailable later, the task reports an error instead of silently skipping it.
 17. Languages saved in **Edit Tracks** are applied and verified for `.mkv`, `.mka`, and `.mks` SP outputs, including tracks appended to an episode output. Raw streams and images cannot store this metadata, so such a language configuration is rejected before execution.
-18. M2TS files not covered by any MPLS are also listed and classified as video, audio-only, IGS menu, subtitle-only, audio-with-subtitle, private/other, mixed non-video, or unknown. Unsupported layouts are disabled; IGS menu rows remain available but unchecked, including zero-duration menus. Short rows are unchecked unless the single-frame rule applies. Their normal basename is **`BD_Vol_{bdmv_vol}_{m2ts_name}`**, or just **`{m2ts_name}`** for a one-row movie; output type follows the single-frame, audio, subtitle, menu, and container rules above.
+18. M2TS files not covered by any MPLS are also listed and classified as video, audio-only, IGS menu, subtitle-only, audio-with-subtitle, private/other, mixed non-video, or unknown. Unsupported layouts are disabled; IGS menu rows remain available but unchecked, including zero-duration menus. Extracted IGS menu states that are fully black are omitted. Short rows are unchecked unless the single-frame rule applies. Their normal basename is **`BD_Vol_{bdmv_vol}_{m2ts_name}`**, or just **`{m2ts_name}`** for a one-row movie; output type follows the single-frame, audio, subtitle, menu, and container rules above.
 
 **When SP mux fails**
 
@@ -204,31 +204,38 @@ Episode configuration is recalculated when any of these **three** inputs changes
 
 1. First **checked** segment starts episode 1’s `start_at_chapter`.
 2. On an **unchecked** segment start, the current episode **ends** there; `end_at_chapter` is set; the next episode starts after that segment.
-3. Target length per episode: if subtitles exist, use subtitle **`max_end_time`**; else **`approx episode length`**.
-4. Two end candidates:
-   - **A**: nearest **file boundary** (from chapter view: this node vs previous node **changes m2ts**), and remaining time from this node to **end of MPLS** is **greater than** (estimated one-episode length **− 300 seconds**);
+3. Target length is row-aligned: if that episode row has a subtitle, use its **`max_end_time`**; otherwise use **`approx episode length`**.
+4. To avoid creating a short tail episode, define minimum useful tail length as **`max(0, approx episode length − 300 seconds)`**. Before comparing endpoints, discard every non-ending candidate whose remaining time to the MPLS end is shorter than this threshold. This filter applies to both file-boundary and chapter candidates; **`ending`** is always eligible.
+5. Two end candidates are selected from the eligible checked nodes:
+   - **A**: nearest **file boundary** (from chapter view: this node vs previous node **changes m2ts**);
    - **B**: nearest **chapter** node.
-5. Pick end:
+6. Pick end:
    - if A’s error is in **`[-¼ × target, +½ × target]`**, prefer **A**;
    - else multiply **negative** error by **−2**, compare A vs B, take the smaller adjusted error as `end_at_chapter`.
+   - If no useful non-ending candidate remains, use **`ending`** and absorb the tail into the current episode.
 
 **Priority 2: `start_at_chapter` changes → recompute from first changed episode**
 
-1. Diff vs previous config; find the **earliest** episode whose start changed.
-2. Episodes **before** that stay unchanged.
-3. From the changed episode onward, recompute with the **same rules** (do not rely on old later starts).
-4. Sync uncheck: nodes between **previous episode end** and the **new start** are unchecked.
+1. Compare with the previous configuration and locate the changed MPLS and its earliest changed episode.
+2. Episodes before that row and episodes belonging to other MPLS playlists stay unchanged.
+3. The edited start is authoritative. From that episode onward on the same MPLS, recompute every end and every later start/end with the same rules; do not reuse stale later bounds.
+4. Sync uncheck: checked nodes between the previous episode end and the new start are unchecked; for the first episode on an MPLS, nodes before the new start are unchecked. The next generated range starts at the first still-checked node.
+5. Remove invalid or fully consumed rows and add continuation rows as needed until the checked MPLS tail is covered.
 
 **Priority 3: `end_at_chapter` changes → expand / shrink**
 
-1. Episodes before the changed one stay unchanged.
-2. If `end_at_chapter` is **moved earlier**: recompute **following** episodes.
-3. If `end_at_chapter` is **moved later**: next episode starts at the **first still-checked** node after the new end; recompute **following** episodes.
+1. The edited episode’s start and explicit end are authoritative. Episodes before it and episodes belonging to other MPLS playlists stay unchanged.
+2. If `end_at_chapter` is **moved earlier**, recompute all following ranges on the same MPLS and add continuation rows until its checked tail is covered.
+3. If `end_at_chapter` is **moved later**, remove every following row fully covered by the new end. The first remaining range starts at the first still-checked node at or after the new end, then all following ranges are recomputed with the same endpoint rules.
+4. Automatically generated continuation rows never reuse old later bounds, and zero-length rows are discarded.
+
+**Playlist isolation without subtitles:** each MPLS uses `approx episode length` independently. Recomputing an earlier volume may change the global episode numbering because its row count changed, but it must not change any retained `start_at_chapter/end_at_chapter` bounds in later MPLS playlists.
 
 **Dropdown constraints**
 
 - Nodes **unchecked** in `view chapters` must be **disabled** in both `start_at_chapter` and `end_at_chapter` combos.
 - Still require **`end_at_chapter > start_at_chapter`**.
+- Every emitted series row must satisfy **`1 ≤ start_at_chapter < end_at_chapter ≤ ending`**. Invalid, reversed, zero-length, and `ending`-as-start rows are removed before rebuilding the GUI.
 
 #### D) Additional notes
 

@@ -21,6 +21,7 @@ class RemuxRequest:
     sp_entries: tuple[SpEntry, ...]
     episode_output_names: tuple[str, ...]
     episode_subtitle_languages: tuple[str, ...]
+    language_code: str = 'en'
     movie_mode: bool = False
     episode_trim_copyright_tail: bool = False
     mux_dolby_vision: bool = True

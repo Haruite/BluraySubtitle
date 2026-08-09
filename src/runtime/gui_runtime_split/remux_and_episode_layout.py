@@ -1069,6 +1069,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         source_state_path = os.path.normcase(os.path.abspath(bdmv_path)) if bdmv_path else ''
         if source_state_path != str(getattr(self, '_bdmv_source_state_path', '') or ''):
             self._bdmv_source_state_path = source_state_path
+            self._available_track_selection_config = {}
             self._track_selection_config = {}
             self._track_convert_config = {}
             self._track_lossless_audio_config = {}
@@ -1360,6 +1361,9 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 sp_entries=tuple(sp_entries),
                 episode_output_names=tuple(episode_output_names),
                 episode_subtitle_languages=tuple(episode_subtitle_languages),
+                language_code=str(
+                    getattr(self, '_language_code', CURRENT_UI_LANGUAGE) or CURRENT_UI_LANGUAGE
+                ),
                 movie_mode=bool(self._is_movie_mode()),
                 episode_trim_copyright_tail=bool(
                     trim_checkbox

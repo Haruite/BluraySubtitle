@@ -18,7 +18,7 @@ from src.exports.utils import (
     print_terminal_line,
 )
 from src.runtime.services import BluraySubtitle
-from src.runtime.sp import SpEntry
+from src.runtime.sp import SpEntry, media_track_key, mpls_video_timeline_signature
 from src.runtime.services_split.misc_workflows import (
     _movie_main_duration_by_bdmv_from_mpls_paths,
     _movie_sp_duration_matches_main,
@@ -667,9 +667,22 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
     def _closest_endpoint(self, start_idx: int, target_sec: float, rows: int, offsets: dict[int, float],
                           m2ts: dict[int, str], checked: list[bool],
                           approx_episode_sec: Optional[float] = None) -> int:
-        candidates = [i for i in range(start_idx + 1, rows + 2) if (i == rows + 1) or checked[i - 1]]
+        playlist_end = float(offsets.get(rows + 1, 0.0))
+        min_tail_sec = 0.0
+        if approx_episode_sec is not None:
+            try:
+                min_tail_sec = max(0.0, float(approx_episode_sec) - 300.0)
+            except (TypeError, ValueError):
+                min_tail_sec = 0.0
+        candidates = []
+        for endpoint in range(start_idx + 1, rows + 2):
+            if endpoint != rows + 1 and not checked[endpoint - 1]:
+                continue
+            remaining = playlist_end - float(offsets.get(endpoint, playlist_end))
+            if endpoint == rows + 1 or remaining >= min_tail_sec:
+                candidates.append(endpoint)
         if not candidates:
-            return min(rows + 1, start_idx + 1)
+            return rows + 1
         chapter_end = min(candidates, key=lambda e: abs(
             (offsets.get(e, offsets[rows + 1]) - offsets.get(start_idx, 0.0)) - target_sec))
         file_candidates = []
@@ -694,18 +707,6 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                 score_file = diff_file if diff_file >= 0 else (-2.0 * diff_file)
                 score_ch = diff_ch if diff_ch >= 0 else (-2.0 * diff_ch)
                 result = file_end if score_file <= score_ch else chapter_end
-        # Match generate_configuration: if playlist tail after this end is too short for another episode,
-        # absorb it into this segment (avoid splitting off a ~copyright bumper as a fake episode).
-        if approx_episode_sec is not None and result < rows + 1:
-            try:
-                thr = max(0.0, float(approx_episode_sec) - 300.0)
-                playlist_end = float(offsets.get(rows + 1, 0.0))
-                end_off = float(offsets.get(result, playlist_end))
-                remaining = playlist_end - end_off
-                if remaining >= 0.0 and remaining < thr:
-                    return rows + 1
-            except Exception:
-                pass
         return result
 
     def _filtered_chapter_visible_layout(self, mpls_path: str) -> tuple[list[int], dict[int, str]]:
@@ -876,8 +877,10 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                 mpls_no_ext = str(b_item.data(Qt.ItemDataRole.UserRole) or '').strip() if b_item else ''
                 if not mpls_no_ext:
                     mpls_no_ext = bdmv_to_mpls.get(bdmv_index, '')
-                # Next episode start must be on the same main MPLS.
-                next_row_same_mpls = -1
+                self._chapter_pending_remove_row = -1
+                self._chapter_pending_append_episode = None
+                # Following episode rows must be matched on the same main MPLS.
+                following_rows_same_mpls: list[int] = []
                 for r2 in range(row + 1, self.table2.rowCount()):
                     b2 = self.table2.item(r2, bdmv_col)
                     try:
@@ -889,8 +892,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                         m2 = bdmv_to_mpls.get(b2i, '')
                     if m2 != mpls_no_ext:
                         continue
-                    next_row_same_mpls = r2
-                    break
+                    following_rows_same_mpls.append(r2)
                 if mpls_no_ext:
                     mpls_path = mpls_no_ext + '.mpls'
                     checked_states = list(self._chapter_checkbox_states.get(mpls_path, []))
@@ -905,16 +907,32 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                         found = next((i for i in range(next_start, total_rows + 1) if checked_states[i - 1]), None)
                         if found is not None:
                             next_start = int(found)
-                    if (new_v > old_v) and next_row_same_mpls >= 0 and total_rows > 0 and int(new_v) >= (
-                            total_rows + 1):
-                        # Expanded back to ending: collapse split row.
-                        self._chapter_pending_remove_row = int(next_row_same_mpls)
+                    consumed_rows: list[int] = []
+                    next_row_same_mpls = following_rows_same_mpls[0] if following_rows_same_mpls else -1
+                    if new_v > old_v:
+                        next_row_same_mpls = -1
+                        for r2 in following_rows_same_mpls:
+                            if total_rows > 0 and int(new_v) >= (total_rows + 1):
+                                consumed_rows.append(r2)
+                                continue
+                            following_end_combo = self.table2.cellWidget(r2, end_col)
+                            if isinstance(following_end_combo, QComboBox):
+                                following_end = int(
+                                    following_end_combo.currentData()
+                                    or (following_end_combo.currentIndex() + 1)
+                                )
+                                if following_end <= new_v:
+                                    consumed_rows.append(r2)
+                                    continue
+                            next_row_same_mpls = r2
+                            break
+                    if consumed_rows:
+                        self._chapter_pending_remove_row = tuple(consumed_rows)
+                        self._chapter_pending_append_episode = None
+                    if total_rows > 0 and int(new_v) >= (total_rows + 1):
                         self._chapter_pending_append_episode = None
                     elif next_row_same_mpls >= 0:
                         # Keep following row start synced to the current end.
-                        if total_rows > 0 and int(new_v) >= (total_rows + 1):
-                            self._chapter_pending_remove_row = int(next_row_same_mpls)
-                            self._chapter_pending_append_episode = None
                         nxc = self.table2.cellWidget(next_row_same_mpls, start_col)
                         if isinstance(nxc, QComboBox):
                             for i in range(nxc.count()):
@@ -924,25 +942,6 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                                     nxc.blockSignals(False)
                                     nxc._prev_start_value = int(next_start)
                                     break
-                    else:
-                        was_ending = bool(total_rows > 0 and int(old_v) >= (total_rows + 1))
-                        # Fallback: if previous value tracking was lost, infer by tail state.
-                        if (not was_ending) and total_rows > 0:
-                            try:
-                                was_ending = int(new_v) <= total_rows and bool(int(old_v) == int(new_v))
-                            except Exception:
-                                was_ending = False
-                        if (old_v > new_v) and was_ending:
-                            # Special case: end changed from ending to earlier chapter on the tail episode.
-                            # Request one extra episode starting at the current end.
-                            self._chapter_pending_append_episode = {
-                                'row': int(row),
-                                'bdmv_index': int(bdmv_index),
-                                'mpls_no_ext': str(mpls_no_ext),
-                                'start_at_chapter': int(next_start),
-                            }
-                        else:
-                            self._chapter_pending_append_episode = None
                 self._chapter_combo_force_mode = ('end', int(row))
             end_combo._prev_end_value = int(end_combo.currentData() or (end_combo.currentIndex() + 1))
         self._chapter_change_reason = 'end'
@@ -1018,7 +1017,11 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     pass
             configuration = self._generate_configuration_from_ui_inputs()
             # Only view-chapters (segment checkbox) changes should refresh SP table.
-            self.on_configuration(configuration, update_sp_table=(mode == 'segments'))
+            update_sp_table = mode == 'segments'
+            self.on_configuration(configuration, update_sp_table=update_sp_table)
+            if not update_sp_table:
+                # Start/end edits avoid an SP rescan, but linked SP paths still depend on the rebuilt episode rows.
+                self._recompute_sp_output_names()
         except Exception:
             self._show_error_dialog(traceback.format_exc())
 
@@ -1210,27 +1213,41 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                 if isinstance(start_combo, QComboBox):
                     new_start = int(start_combo.currentData() or (start_combo.currentIndex() + 1))
                     old_start = int(getattr(start_combo, '_prev_start_value', new_start))
-                    if (new_start > old_start) and (row > 0):
-                        prev_end_combo = self.table2.cellWidget(row - 1, end_col)
-                        prev_end = int(
-                            prev_end_combo.currentData() or (prev_end_combo.currentIndex() + 1)) if isinstance(
-                            prev_end_combo, QComboBox) else 0
+                    if new_start > old_start:
                         b_cur = self.table2.item(row, bdmv_col)
-                        b_prev = self.table2.item(row - 1, bdmv_col)
                         try:
                             bdmv_cur = int(b_cur.text().strip()) if b_cur and b_cur.text() else 0
                         except Exception:
                             bdmv_cur = 0
-                        try:
-                            bdmv_prev = int(b_prev.text().strip()) if b_prev and b_prev.text() else 0
-                        except Exception:
-                            bdmv_prev = 0
-                        b_item = self.table2.item(row, bdmv_col)
-                        p_item = self.table2.item(row - 1, bdmv_col)
-                        mpls_cur = str(b_item.data(Qt.ItemDataRole.UserRole) or '').strip() if b_item else ''
-                        mpls_prev = str(p_item.data(Qt.ItemDataRole.UserRole) or '').strip() if p_item else ''
-                        if (bdmv_cur == bdmv_prev) and mpls_cur and (mpls_cur == mpls_prev) and prev_end > 0 and new_start > prev_end:
-                            self._set_segment_states_for_range(mpls_cur, prev_end, new_start - 1, False)
+                        mpls_cur = str(b_cur.data(Qt.ItemDataRole.UserRole) or '').strip() if b_cur else ''
+                        gap_start = old_start
+                        if row > 0:
+                            prev_end_combo = self.table2.cellWidget(row - 1, end_col)
+                            prev_end = int(
+                                prev_end_combo.currentData()
+                                or (prev_end_combo.currentIndex() + 1)
+                            ) if isinstance(prev_end_combo, QComboBox) else 0
+                            b_prev = self.table2.item(row - 1, bdmv_col)
+                            try:
+                                bdmv_prev = int(
+                                    b_prev.text().strip()
+                                ) if b_prev and b_prev.text() else 0
+                            except Exception:
+                                bdmv_prev = 0
+                            mpls_prev = str(
+                                b_prev.data(Qt.ItemDataRole.UserRole) or ''
+                            ).strip() if b_prev else ''
+                            if (
+                                    bdmv_cur == bdmv_prev
+                                    and mpls_cur
+                                    and mpls_cur == mpls_prev
+                                    and prev_end > 0
+                            ):
+                                gap_start = prev_end
+                        if mpls_cur and new_start > gap_start:
+                            self._set_segment_states_for_range(
+                                mpls_cur, gap_start, new_start - 1, False
+                            )
                     start_combo._prev_start_value = new_start
             self._sync_end_chapter_min_constraints(labels)
             self._pending_chapter_combo_index = int(subtitle_index)
@@ -1367,6 +1384,44 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             if self._is_movie_mode():
                 main_duration_by_bdmv = _movie_main_duration_by_bdmv_from_mpls_paths(
                     selected_main_by_bdmv)
+            attachment_main_by_timeline: dict[
+                int, dict[tuple[tuple[str, int, int], ...], list[str]]
+            ] = {}
+            attachment_track_info_by_main: dict[str, dict[str, object]] = {}
+            timeline_attachment_keys: set[tuple[int, str, str]] = set()
+            self._episode_attachment_track_info_by_main = attachment_track_info_by_main
+            if function_id == 3 and not self._is_movie_mode():
+                for bdmv_index, main_paths in selected_main_by_bdmv.items():
+                    for main_path in main_paths:
+                        timeline = mpls_video_timeline_signature(main_path)
+                        if timeline:
+                            attachment_main_by_timeline.setdefault(bdmv_index, {}).setdefault(
+                                timeline, []
+                            ).append(main_path)
+
+            def _register_episode_attachment_tracks(
+                    main_path: str, attachment_chapter: Chapter) -> None:
+                main_norm = os.path.normcase(os.path.abspath(main_path))
+                main_chapter = Chapter(main_path)
+                main_chapter.get_pid_to_language()
+                attachment_chapter.get_pid_to_language()
+                main_pid_lang = {
+                    int(pid): str(language or 'und')
+                    for pid, language in main_chapter.pid_to_lang.items()
+                }
+                attachment_pid_lang = {
+                    int(pid): str(language or 'und')
+                    for pid, language in attachment_chapter.pid_to_lang.items()
+                }
+                info = attachment_track_info_by_main.setdefault(main_norm, {
+                    'main_path': os.path.normpath(main_path),
+                    'pids': set(),
+                    'pid_lang': dict(main_pid_lang),
+                })
+                aggregate_pid_lang = info['pid_lang']
+                for pid, language in attachment_pid_lang.items():
+                    aggregate_pid_lang.setdefault(pid, language)
+                info['pids'].update(set(attachment_pid_lang) - set(main_pid_lang))
             for bdmv_index in sorted(disc_root_by_bdmv.keys()):
                 root = disc_root_by_bdmv.get(bdmv_index, '')
                 if not root:
@@ -1404,6 +1459,25 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     m2ts_set = set(m2ts_files)
                     default_selected = True
                     dur = ch.get_total_time()
+                    matching_main_path = ''
+                    candidate_timeline = mpls_video_timeline_signature(mpls_file_path)
+                    matching_main_paths = attachment_main_by_timeline.get(
+                        bdmv_index, {}
+                    ).get(candidate_timeline, []) if candidate_timeline else []
+                    if len(matching_main_paths) == 1:
+                        matching_main_path = matching_main_paths[0]
+                        default_selected = False
+                        timeline_attachment_keys.add((
+                            bdmv_index,
+                            os.path.basename(mpls_file_path),
+                            ','.join(m2ts_files),
+                        ))
+                        try:
+                            _register_episode_attachment_tracks(
+                                matching_main_path, ch
+                            )
+                        except Exception:
+                            print_exc_terminal()
                     try:
                         dur_for_select = float(ch.get_total_time_no_repeat())
                     except Exception:
@@ -1516,6 +1590,50 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                         })
 
 
+            manual_main_keys = getattr(self, '_manual_main_track_selection_keys', None)
+            if not isinstance(manual_main_keys, set):
+                manual_main_keys = set()
+                self._manual_main_track_selection_keys = manual_main_keys
+            track_config = getattr(self, '_track_selection_config', None)
+            if not isinstance(track_config, dict):
+                track_config = {}
+                self._track_selection_config = track_config
+            for info in attachment_track_info_by_main.values():
+                main_path = str(info.get('main_path') or '').strip()
+                pid_lang = dict(info.get('pid_lang') or {})
+                if not main_path or not pid_lang:
+                    continue
+                first_m2ts = self._get_first_m2ts_for_mpls(main_path)
+                if not first_m2ts:
+                    continue
+                streams = self._read_m2ts_track_info(first_m2ts)
+                visible_streams = self._filter_streams_by_pid_lang(streams, pid_lang)
+                if not visible_streams:
+                    continue
+                main_key = media_track_key('main', main_path)
+                available_tracks = self._cache_available_track_ids(
+                    main_key, visible_streams,
+                )
+                if main_key in manual_main_keys and main_key in track_config:
+                    continue
+                select_all_tracks = bool(
+                    getattr(self, 'select_all_tracks_checkbox', None)
+                    and self.select_all_tracks_checkbox.isChecked()
+                )
+                if select_all_tracks:
+                    audio = list(available_tracks.get('audio') or [])
+                    subtitle = list(available_tracks.get('subtitle') or [])
+                else:
+                    audio, subtitle = BluraySubtitle._default_track_selection_from_streams(
+                        visible_streams,
+                        pid_lang,
+                    )
+                track_config[main_key] = {
+                    'audio': list(audio),
+                    'subtitle': list(subtitle),
+                }
+
+
             def _sp_entry_sort_key(e: dict[str, object]):
                 return (
                     int(e.get('bdmv_index') or 0),
@@ -1614,6 +1732,9 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     sel_item.setData(Qt.ItemDataRole.UserRole, 'auto')
                     self.table3.setItem(i, sel_col, sel_item)
                     self.table3.setItem(i, bdmv_col, QTableWidgetItem(str(bdmv_index)))
+                    is_timeline_attachment = (
+                        bdmv_index, mpls_file, ','.join(m2ts_files)
+                    ) in timeline_attachment_keys
                     self.table3.setItem(i, mpls_col, QTableWidgetItem(mpls_file))
                     self.table3.setItem(i, m2ts_col, QTableWidgetItem(','.join(m2ts_files)))
                     self.table3.setItem(
@@ -1645,7 +1766,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                                             sp_det = ''
                                     if not self._sp_covered_by_table2_movie_row(bdmv_index, sp_det):
                                         sel_item.setCheckState(Qt.CheckState.Checked)
-                                else:
+                                elif not is_timeline_attachment:
                                     sel_item.setCheckState(Qt.CheckState.Checked)
                             if user_mark:
                                 sel_item.setData(Qt.ItemDataRole.UserRole, str(cache_hit.get('user_mark') or ''))

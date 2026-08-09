@@ -196,6 +196,11 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             cfg_conv[target_key] = t_convert
             cfg_lang[target_key] = t_language
             cfg_la[target_key] = t_lossless
+            manual_main_keys = getattr(self, '_manual_main_track_selection_keys', None)
+            if not isinstance(manual_main_keys, set):
+                manual_main_keys = set()
+                self._manual_main_track_selection_keys = manual_main_keys
+            manual_main_keys.add(target_key)
 
         self._track_selection_config = cfg_sel
         self._track_convert_config = cfg_conv
@@ -1254,6 +1259,14 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 else:
                     v = s.get(key, '')
                 table.setItem(r, c, QTableWidgetItem('' if v is None else str(v)))
+        attachment_color = QColor('#edf6ff')
+        for row in range(table.rowCount()):
+            if not bool(streams[row].get('_attached_track')):
+                continue
+            for column in range(table.columnCount()):
+                item = table.item(row, column)
+                if item is not None:
+                    item.setBackground(attachment_color)
         table.resizeColumnsToContents()
         if not is_mkvinfo:
             try:
@@ -1460,6 +1473,9 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
         for pid, language in list(pid_lang.items()):
             pid_lang[int(pid)] = BluraySubtitle._norm_lang_for_track_selection(language)
         visible_streams = self._filter_streams_by_pid_lang(streams, pid_lang)
+        self._cache_available_track_ids(
+            media_track_key('main', mpls_path), visible_streams,
+        )
         copy_audio_track, copy_sub_track = BluraySubtitle._default_track_selection_from_streams(
             visible_streams,
             pid_lang,
@@ -1476,6 +1492,15 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             return None
         pid_lang = BluraySubtitle._pid_lang_from_media_streams(streams)
         ui_streams = self._streams_for_track_selection_dialog(streams)
+        available_tracks = self._cache_available_track_ids(
+            media_track_key('mkv', mkv_path), ui_streams,
+        )
+        available = getattr(self, '_available_track_selection_config', None)
+        if isinstance(available, dict):
+            available[media_track_key('mkvsp', mkv_path)] = {
+                'audio': list(available_tracks.get('audio') or []),
+                'subtitle': list(available_tracks.get('subtitle') or []),
+            }
         return BluraySubtitle._default_track_selection_from_streams(ui_streams, pid_lang)
 
     def _ensure_default_track_config_for_main(self, mpls_path: str):
@@ -1484,13 +1509,19 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             self._track_selection_config = {}
             cfg = self._track_selection_config
         key = media_track_key('main', mpls_path)
-        if key in cfg:
+        available = getattr(self, '_available_track_selection_config', None)
+        if key in cfg and isinstance(available, dict) and key in available:
             return
+        had_config = key in cfg
         pair = self._default_track_lists_for_mpls_path(mpls_path)
         if not pair:
             return
         copy_audio_track, copy_sub_track = pair
-        cfg[key] = {'audio': copy_audio_track, 'subtitle': copy_sub_track}
+        if not had_config:
+            cfg[key] = {'audio': copy_audio_track, 'subtitle': copy_sub_track}
+        manual_main_keys = getattr(self, '_manual_main_track_selection_keys', None)
+        if not had_config and isinstance(manual_main_keys, set):
+            manual_main_keys.discard(key)
 
     def _ensure_default_track_config_for_mkv(self, mkv_path: str, *, sp: bool = False) -> None:
         cfg = getattr(self, '_track_selection_config', None)
@@ -1499,14 +1530,15 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             cfg = self._track_selection_config
         mkv_path = os.path.normpath(str(mkv_path or ''))
         key = media_track_key('mkvsp' if sp else 'mkv', mkv_path)
-        if key in cfg:
-            tr = cfg.get(key) or {}
-            if (tr.get('audio') or tr.get('subtitle')):
-                return
+        available = getattr(self, '_available_track_selection_config', None)
+        if key in cfg and isinstance(available, dict) and key in available:
+            return
+        had_config = key in cfg
         pair = self._default_track_lists_for_mkv_path(mkv_path)
         if not pair:
             return
-        cfg[key] = {'audio': list(pair[0]), 'subtitle': list(pair[1])}
+        if not had_config:
+            cfg[key] = {'audio': list(pair[0]), 'subtitle': list(pair[1])}
 
     def _inherit_main_track_config_for_sp_key(self, bdmv_index: int, mpls_file: str, sp_key: str):
         if not sp_key:
@@ -1515,8 +1547,10 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
         if not isinstance(cfg, dict):
             self._track_selection_config = {}
             cfg = self._track_selection_config
-        if sp_key in cfg:
+        available = getattr(self, '_available_track_selection_config', None)
+        if sp_key in cfg and isinstance(available, dict) and sp_key in available:
             return
+        had_config = sp_key in cfg
         mpls_name = str(mpls_file or '').strip()
         if not mpls_name:
             return
@@ -1527,7 +1561,15 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
         pair = self._default_track_lists_for_mpls_path(mpls_path)
         if not pair:
             return
-        cfg[sp_key] = {'audio': list(pair[0]), 'subtitle': list(pair[1])}
+        if not had_config:
+            cfg[sp_key] = {'audio': list(pair[0]), 'subtitle': list(pair[1])}
+        main_key = media_track_key('main', mpls_path)
+        if isinstance(available, dict) and isinstance(available.get(main_key), dict):
+            track_ids = available[main_key]
+            available[sp_key] = {
+                'audio': list(track_ids.get('audio') or []),
+                'subtitle': list(track_ids.get('subtitle') or []),
+            }
 
     def on_edit_attachments_from_mkv_row(self, table: QTableWidget, row_index: int):
         try:
@@ -1639,8 +1681,26 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             chapter.get_pid_to_language()
             streams = self._read_m2ts_track_info(m2ts_path)
             n_raw = len(streams)
-            pid_lang = chapter.pid_to_lang
+            attachment_info = dict(
+                (getattr(self, '_episode_attachment_track_info_by_main', {}) or {}).get(
+                    os.path.normcase(os.path.abspath(mpls_path)),
+                    {},
+                ) or {}
+            )
+            attached_pids = {
+                int(pid) for pid in attachment_info.get('pids', set())
+            }
+            pid_lang = dict(chapter.pid_to_lang)
+            pid_lang.update(dict(attachment_info.get('pid_lang', {}) or {}))
             streams = self._filter_streams_by_pid_lang(streams, pid_lang)
+            marked_streams: list[dict[str, object]] = []
+            for stream in streams:
+                row = dict(stream)
+                pid = self._parse_stream_pid(row.get('pid'))
+                if pid is not None and pid in attached_pids:
+                    row['_attached_track'] = True
+                marked_streams.append(row)
+            streams = marked_streams
             n_filt = len(streams)
             if not streams:
                 print_terminal_line(
@@ -1648,6 +1708,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                     f'(raw={n_raw} filtered={n_filt}) m2ts={m2ts_path!s} mpls={mpls_path!s}'
                 )
             key = media_track_key('main', mpls_path)
+            self._cache_available_track_ids(key, streams)
             cfg = getattr(self, '_track_selection_config', {}).get(key, {})
             selected = set((cfg.get('audio') or []) + (cfg.get('subtitle') or []))
             convert_map = dict((getattr(self, '_track_convert_config', {}).get(key) or {}))
@@ -1675,6 +1736,11 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 elif ctype in ('subtitle', 'subtitles'):
                     subtitle.append(idx)
             self._track_selection_config[key] = {'audio': audio, 'subtitle': subtitle}
+            manual_main_keys = getattr(self, '_manual_main_track_selection_keys', None)
+            if not isinstance(manual_main_keys, set):
+                manual_main_keys = set()
+                self._manual_main_track_selection_keys = manual_main_keys
+            manual_main_keys.add(key)
             conv_cfg = getattr(self, '_track_convert_config', {})
             conv_cfg[key] = dict(getattr(self, '_last_track_convert_map', {}) or {})
             self._track_convert_config = conv_cfg

@@ -53,6 +53,22 @@ class SpTableScanWorker(QObject):
                 streams_cache[key] = v or []
                 return streams_cache[key]
 
+            def _available_tracks(streams: list[dict[str, object]]) -> dict[str, list[str]]:
+                return {
+                    'audio': [
+                        str(stream.get('index', '')).strip()
+                        for stream in streams
+                        if str(stream.get('codec_type') or '') == 'audio'
+                        and str(stream.get('index', '')).strip()
+                    ],
+                    'subtitle': [
+                        str(stream.get('index', '')).strip()
+                        for stream in streams
+                        if str(stream.get('codec_type') or '') in ('subtitle', 'subtitles')
+                        and str(stream.get('index', '')).strip()
+                    ],
+                }
+
             def _is_audio_only(path: str) -> bool:
                 key = os.path.normpath(path or '')
                 if key in audio_only_cache:
@@ -114,11 +130,11 @@ class SpTableScanWorker(QObject):
                 mpls_path = str(r.get('mpls_path') or '').strip()
                 sp_key = str(r.get('sp_key') or '').strip()
                 force_disabled = bool(r.get('force_disabled') or False)
-                select_all = bool(r.get('select_all') or False)
                 disabled = False
                 special = ''
                 select_override = None
                 tracks_payload: dict[str, list[str]] = {}
+                available_tracks: dict[str, list[str]] = {}
                 m2ts_type = ''
                 video_only = False
                 allow_tracks_when_disabled = False
@@ -169,12 +185,15 @@ class SpTableScanWorker(QObject):
                                 streams = _streams(m2ts_paths[0])
                             except Exception:
                                 streams = []
+                            if pid_to_lang:
+                                streams = [
+                                    stream
+                                    for stream in streams
+                                    if BluraySubtitle._stream_service_id(stream) in pid_to_lang
+                                ]
                             try:
-                                if select_all:
-                                    a = [str(x.get('index', '')).strip() for x in streams if str(x.get('codec_type') or '') == 'audio' and str(x.get('index', '')).strip() != '']
-                                    s = [str(x.get('index', '')).strip() for x in streams if str(x.get('codec_type') or '') in ('subtitle', 'subtitles') and str(x.get('index', '')).strip() != '']
-                                else:
-                                    a, s = BluraySubtitle._default_track_selection_from_streams(streams, pid_to_lang)
+                                available_tracks = _available_tracks(streams)
+                                a, s = BluraySubtitle._default_track_selection_from_streams(streams, pid_to_lang)
                                 tracks_payload = {'audio': a, 'subtitle': s}
                             except Exception:
                                 tracks_payload = {}
@@ -189,11 +208,8 @@ class SpTableScanWorker(QObject):
                                     pid_to_lang = pid_to_lang_from_m2ts_path(m2ts_paths[0])
                                 except Exception:
                                     pid_to_lang = {}
-                                if select_all:
-                                    a = [str(x.get('index', '')).strip() for x in streams if str(x.get('codec_type') or '') == 'audio' and str(x.get('index', '')).strip() != '']
-                                    s = [str(x.get('index', '')).strip() for x in streams if str(x.get('codec_type') or '') in ('subtitle', 'subtitles') and str(x.get('index', '')).strip() != '']
-                                else:
-                                    a, s = BluraySubtitle._default_track_selection_from_streams(streams, pid_to_lang)
+                                available_tracks = _available_tracks(streams)
+                                a, s = BluraySubtitle._default_track_selection_from_streams(streams, pid_to_lang)
                                 tracks_payload = {'audio': a, 'subtitle': s}
                             except Exception:
                                 tracks_payload = {}
@@ -236,6 +252,7 @@ class SpTableScanWorker(QObject):
                     'select_override': select_override,
                     'sp_key': sp_key,
                     'tracks': tracks_payload,
+                    'available_tracks': available_tracks,
                     'mpls_path': mpls_path,
                     'm2ts_type': m2ts_type,
                     'video_only': bool(video_only),

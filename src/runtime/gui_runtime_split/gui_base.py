@@ -93,6 +93,7 @@ class BluraySubtitleGuiBase(QWidget):
         self._subtitle_scan_thread = None
         self._subtitle_scan_worker = None
         self._theme_mode = None
+        self._available_track_selection_config = None
         self._track_selection_config = None
         self._track_convert_config = None
         self._track_lossless_audio_config = None
@@ -287,6 +288,9 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _build_main_remux_cmd_template(self, mpls_path: str, bdmv_index: int, root: str, *, name_seq_index: int=0, name_seq_total: int=1) -> str:
+        raise NotImplementedError
+
+    def _cache_available_track_ids(self, key: str, streams: list[dict[str, object]]) -> dict[str, list[str]]:
         raise NotImplementedError
 
     def _captured_audio_encoding_settings(self) -> AudioEncodingSettings:
