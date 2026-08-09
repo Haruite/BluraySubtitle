@@ -74,7 +74,7 @@ mark_info: dict[int, list[int]]
 
 `get_total_time()` sums `(out_time - in_time) / 45000`.
 
-The module also contains the optional short-tail trim registry used by episode mode. This is a workflow override, not a mutation of the source MPLS on disk. `chapter_tail_trim_register_path()` requires at least two play items and removes the last one only when its window is shorter than the default 15-second threshold. Marks belonging to the removed tail play item are excluded from the registered view.
+The module also contains the optional short-tail trim registry used by episode mode. This is a workflow override, not a mutation of the source MPLS on disk. `chapter_tail_trim_register_path()` requires at least two play items and removes the last one only when its window is shorter than the default 30-second threshold. Marks belonging to the removed tail play item are excluded from the registered view.
 Encode and remux workers clear the registry, register selected episode-mode playlists when **Trim copyright bumper** is enabled, and then clear playlist caches so all downstream timeline consumers see the same view.
 
 ### CLPI

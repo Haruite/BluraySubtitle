@@ -50,7 +50,7 @@ def _chapter_tail_trim_build(ch: 'Chapter', max_tail_sec: float) -> Optional[tup
     return (new_ios, new_marks)
 
 
-def chapter_tail_trim_register_path(mpls_path: str, max_tail_sec: float = 15.0) -> bool:
+def chapter_tail_trim_register_path(mpls_path: str, max_tail_sec: float = 30.0) -> bool:
     """Load MPLS from disk, then if the last play item is shorter than ``max_tail_sec`` register a trim override.
 
     Returns True when a trim override is active for this path (including re-register of same trim).

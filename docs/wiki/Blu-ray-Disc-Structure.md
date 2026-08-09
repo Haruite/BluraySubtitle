@@ -501,7 +501,11 @@ Anime discs commonly have one main MPLS that concatenates every episode. Some di
 
 Many anime playlists end with a separate copyright-information M2TS, often about eight seconds long. Removing it normally does not affect the episode. The **View Chapters** dialog can uncheck displayed segments, but the episode start/end selectors use authored chapter marks. The final M2TS often begins between chapter marks, so chapter-only selection cannot isolate that boundary.
 
-For this case, episode-mode remux and encode workflows provide **Trim copyright bumper**. The option works at the playlist model rather than requiring a chapter mark: when the playlist contains at least two play items, it removes the final play item if its window is shorter than 15 seconds and discards marks that belong to that item. The source MPLS is not modified. Because a legitimate short tail can satisfy the same rule, verify unusual discs before leaving the option enabled.
+For this case, episode-mode remux and encode workflows provide **Trim copyright bumper**. The option works at the playlist model rather than requiring a chapter mark: when the playlist contains at least two play items, it removes the final play item if its window is shorter than 30 seconds and discards marks that belong to that item. A tail of exactly 30 seconds is retained, and the source MPLS is not modified. Because a legitimate short tail can satisfy the same rule, verify unusual discs before leaving the option enabled.
+
+This option cannot remove a copyright screen embedded in the time window of a longer play item. It does not decode the picture to discover a visual boundary, and no independent file or chapter means there is no safe structural cut point. A release can still obtain a shorter result by selecting an authored playlist with an earlier `OUTTime`, or by manually cutting at a verified timestamp or frame, but BluraySubtitle intentionally does not infer such a cut.
+
+The first-season discs of *Horizon in the Middle of Nowhere* are a representative special case. Volume 1 has no single master playlist that concatenates its episodes. It includes several episode playlists, and two playlists reuse `00004.m2ts` with different durations, so their `m2ts_detail` values differ. On the other volumes, some SP or commentary playlists similarly overlap main content but use a different effective source window. Their copyright notice is part of a longer play-item window rather than a separate final play item. Consequently, neither automatic commentary attachment nor automatic copyright-bumper trimming applies to these entries; inspect the MPLS track selection and exact `INTime`/`OUTTime` manually.
 
 ## Main content and SP in this project
 
@@ -522,6 +526,16 @@ disc content
 ```
 
 “SP” can include ordinary video extras, menus, audio-only material, subtitle-only material, IGS assets, and single-frame images. It does not imply one codec or container.
+
+### SP tracks and MPLS-hidden tracks
+
+An M2TS or CLPI can advertise more physical tracks than the MPLS Stream Number Table makes available for playback. PotPlayer, mpv, eac3to, and mkvmerge may therefore list two audio streams while BluraySubtitle displays only the one that the MPLS exposes. PowerDVD is a useful reference for the authored playback behavior: a track hidden by the MPLS is not offered during normal title playback.
+
+BluraySubtitle does not blindly discard potentially useful material. In series mode it maintains an internal `m2ts_detail` value containing every M2TS name and its effective source window. When an SP entry has exactly the same `m2ts_detail` as a main episode, that SP entry is linked to the planned episode output. Selected SP audio or subtitle PIDs that are not already in the episode are appended to that MKV; a PID already present is not duplicated.
+
+This exact match is a safety condition, not an approximate duration comparison. Reusing the same M2TS is insufficient when the playlist has a different `INTime`, `OUTTime`, or clip sequence. In that situation—including the *Horizon in the Middle of Nowhere* case above—the commentary entry remains SP and is not automatically attached to the main episode.
+
+Other main episodes that do not contain the additional track remain unchanged. In typical authored discs such unexposed tracks are silent or duplicate audio. Even when their bytes are not silent, they are not addressable through normal MPLS playback and are not treated as valid title audio unless a matching SP timeline exposes them.
 
 ## Validation checklist for a playlist
 

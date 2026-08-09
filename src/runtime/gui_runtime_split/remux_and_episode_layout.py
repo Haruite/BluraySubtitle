@@ -1190,6 +1190,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                             table_widget.setItem(mpls_n, 1, QTableWidgetItem(total_time_str))
                             btn1 = QToolButton()
                             btn1.setText(self.t('view chapters'))
+                            btn1.setFocusPolicy(Qt.FocusPolicy.NoFocus)
                             btn1.clicked.connect(
                                 partial(self.on_button_click, mpls_path, mpls_path == selected_mpls, i + 1))
                             table_widget.setCellWidget(mpls_n, 2, btn1)
@@ -1200,6 +1201,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                             table_widget.setCellWidget(mpls_n, 3, btn2)
                             btn3 = QToolButton()
                             btn3.setText(self.t('play'))
+                            btn3.setFocusPolicy(Qt.FocusPolicy.NoFocus)
                             btn3.setProperty('action', 'play')
                             btn3.clicked.connect(partial(self.on_button_play, mpls_path, btn3))
                             table_widget.setCellWidget(mpls_n, 4, btn3)

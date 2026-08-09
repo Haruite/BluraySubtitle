@@ -303,20 +303,14 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
         table.horizontalHeader().setFixedHeight(header_height)
 
     def _scroll_table_h_to_right(self, table: QTableWidget):
-        token = int(getattr(table, '_auto_scroll_token', 0) or 0) + 1
-        table._auto_scroll_token = token
-
-        def scroll(expected_token: int = token):
-            if int(getattr(table, '_auto_scroll_token', 0) or 0) != int(expected_token):
-                return
+        def scroll():
             bar = table.horizontalScrollBar()
             if bar.isSliderDown():
                 return
             bar.setValue(bar.maximum())
 
+        # Delayed retries make an already painted table visibly jump after chapter or playback actions.
         QTimer.singleShot(0, scroll)
-        QTimer.singleShot(80, scroll)
-        QTimer.singleShot(200, scroll)
 
     def _set_table_column_visual_order(self, table: QTableWidget, order: list[int]):
         header = table.horizontalHeader()

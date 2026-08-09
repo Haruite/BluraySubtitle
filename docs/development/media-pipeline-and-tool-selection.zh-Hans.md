@@ -102,14 +102,6 @@ MKVToolNix 对 M2TS 结构的验证通常比 tsMuxer 严格。这有利于发现
 
 当一个 MPLS 被拆分成多个分集 MKV 时，独立的多输出回退会把每集范围投影到相同的 PlayItem 窗口，并使用同样的恢复规则。
 
-### 4. SP 轨道和被 MPLS 隐藏的轨道
-
-M2TS 或 CLPI 可以声明比 MPLS Stream Number Table 实际允许播放的轨道更多。因此，PotPlayer、mpv、eac3to 和 mkvmerge 可能列出两条音轨，而 BluraySubtitle 只显示 MPLS 暴露的一条。PowerDVD 可以作为原盘制作行为的参考：被 MPLS 隐藏的轨道不会出现在正常标题播放中。
-
-BluraySubtitle 不会盲目丢弃可能有用的内容。在剧集模式下，程序维护内部 `m2ts_detail`，其中包含每个 M2TS 名称及其有效源时间窗口。如果某个 SP 条目的 `m2ts_detail` 与主分集完全一致，该 SP 会关联到计划的分集输出。SP 中已选择、但分集中尚未存在的音频或字幕 PID 会附加到对应 MKV；已经存在的 PID 不会重复添加。
-
-其他不包含额外轨道的正片保持不变。通常，这种未暴露轨道是静音或重复音频。即使它实际包含非静音数据，只要正常 MPLS 播放无法选择它，并且没有时间线匹配的 SP 将它暴露出来，就不视为有效标题音频。
-
 ## 为什么不使用 eac3to 作为主要 demux 工具
 
 ### 平台支持

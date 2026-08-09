@@ -102,14 +102,6 @@ The [track-aligned fallback](../../src/runtime/services_split/media_info_and_tra
 
 The multi-output fallback used to split one MPLS into several episode MKVs projects every episode range onto the same play-item windows and applies the same recovery rules.
 
-### 4. SP tracks and MPLS-hidden tracks
-
-An M2TS or CLPI can advertise more physical tracks than the MPLS Stream Number Table makes available for playback. PotPlayer, mpv, eac3to, and mkvmerge may therefore list two audio streams while BluraySubtitle displays only the one that the MPLS exposes. PowerDVD is a useful reference for the authored playback behavior: a track hidden by the MPLS is not offered during normal title playback.
-
-BluraySubtitle does not blindly discard potentially useful material. In series mode it maintains an internal `m2ts_detail` value containing every M2TS name and its effective source window. When an SP entry has exactly the same `m2ts_detail` as a main episode, that SP entry is linked to the planned episode output. Selected SP audio or subtitle PIDs that are not already in the episode are appended to that MKV; a PID already present is not duplicated.
-
-Other main episodes that do not contain the additional track remain unchanged. In typical authored discs such unexposed tracks are silent or duplicate audio. Even when their bytes are not silent, they are not addressable through normal MPLS playback and are not treated as valid title audio unless a matching SP timeline exposes them.
-
 ## Why eac3to is not the primary demuxer
 
 ### Platform support

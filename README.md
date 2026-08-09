@@ -78,6 +78,8 @@ Encode mode supports two input sources:
 - Blu-ray (original disc layout)
 - Remux (MKV)
 
+In series mode, **Trim copyright bumper** removes only a distinct final MPLS play item shorter than 30 seconds. It cannot trim a copyright screen embedded inside a longer play item; inspect unusual discs manually. See [Blu-ray Disc Structure](docs/wiki/Blu-ray-Disc-Structure.md#short-copyright-bumpers-at-the-end).
+
 The **main playlist** supports editing the mux command (`remux_cmd`). Each selected main playlist must have exactly one non-empty command and is processed in the current visible order, including multiple main playlists from the same disc. Before writing, Remux derives every command output and final episode filename. The output count must match the visible episode rows; duplicate paths and existing outputs are errors. Episode names are applied exactly as shown, and invalid filenames are rejected.
 
 If the primary command and its documented fallback paths cannot create every planned output, Remux stops with an error and does not substitute unrelated files found in the output folder. After muxing, the language values saved by **Edit tracks** are applied to the included video, audio, and subtitle tracks and then verified. A mapping, tool, or verification failure stops that job and removes its newly created main outputs.
