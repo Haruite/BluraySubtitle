@@ -2516,9 +2516,12 @@ build_vs_plugins() {
       # Apply FFmpeg compatibility patches (index accessors, D3D12 shim, removed codec IDs).
       local decode_file="../common/decode.c"
       if [[ -f "$decode_file" ]]; then
-          python3 - <<'PY' || exit 1
+          python3 - "$need_compat" <<'PY' || exit 1
 import re
+import sys
 from pathlib import Path
+
+needs_old_ffmpeg_compat = sys.argv[1] == "true"
 
 decode_path = Path("../common/decode.c")
 data = decode_path.read_text(encoding="utf-8", errors="replace")
@@ -2555,7 +2558,7 @@ if libav_path.is_file():
     libav_path.write_text(libav_data, encoding="utf-8")
 
 lwindex_path = Path("../common/lwindex.c")
-if lwindex_path.is_file():
+if needs_old_ffmpeg_compat and lwindex_path.is_file():
     lwindex_data = lwindex_path.read_text(encoding="utf-8", errors="replace")
     compat_block = """/* FFmpeg 4.x exposes index entries directly on AVStream. */
 #if LIBAVFORMAT_VERSION_MAJOR < 59
