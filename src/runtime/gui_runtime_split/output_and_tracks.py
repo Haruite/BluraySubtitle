@@ -485,6 +485,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
         except Exception:
             return ''
         bi = int(bdmv_index)
+        matches: list[str] = []
         for r in range(self.table2.rowCount()):
             try:
                 it_b = self.table2.item(r, bdmv_col)
@@ -498,8 +499,8 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
             if det_t2 != d_sp:
                 continue
             it_out = self.table2.item(r, out_col)
-            return (it_out.text() if it_out and it_out.text() else '').strip()
-        return ''
+            matches.append((it_out.text() if it_out and it_out.text() else '').strip())
+        return matches[0] if len(matches) == 1 else ''
 
     def _sp_output_display_path(
         self,
@@ -517,10 +518,12 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
             detail = (detail_override or '').strip()
         else:
             detail = self._m2ts_file_detail_for_sp_table_row(row_r, ENCODE_SP_LABELS).strip()
-        if table2_detail_out_map is not None:
-            linked = (table2_detail_out_map.get(detail) or '').strip()
-        else:
-            linked = self._table2_output_name_if_same_m2ts_detail(bdmv_index, detail)
+        linked = ''
+        if not self._is_movie_mode():
+            if table2_detail_out_map is not None:
+                linked = (table2_detail_out_map.get(detail) or '').strip()
+            else:
+                linked = self._table2_output_name_if_same_m2ts_detail(bdmv_index, detail)
         if linked:
             return linked.replace('\\', '/')
         low = cand.lower()
@@ -655,7 +658,12 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                     det_txt = (it_det.text() if it_det and it_det.text() else '').strip()
                     out_txt = (it_out.text() if it_out and it_out.text() else '').strip()
                     if det_txt:
-                        t2_by_bdmv.setdefault(bi, {})[det_txt] = out_txt
+                        volume_map = t2_by_bdmv.setdefault(bi, {})
+                        if det_txt in volume_map:
+                            # The detail does not identify one episode when duplicate rows exist.
+                            volume_map[det_txt] = ''
+                        else:
+                            volume_map[det_txt] = out_txt
         except Exception:
             t2_by_bdmv = {}
 

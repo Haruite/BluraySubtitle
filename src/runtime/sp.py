@@ -66,29 +66,6 @@ def m2ts_file_detail_segments_contained_in(
     return True
 
 
-def mpls_video_timeline_signature(mpls_path: str) -> tuple[tuple[str, int, int], ...]:
-    """Return the exact ordered clip/in/out timeline that defines playlist video content."""
-    try:
-        from src.bdmv import Chapter
-
-        rows = Chapter(os.path.normpath(str(mpls_path or '').strip())).in_out_time or []
-    except Exception:
-        return ()
-    signature: list[tuple[str, int, int]] = []
-    for row in rows:
-        try:
-            clip_name, in_time, out_time = row[:3]
-            clip_name = os.path.splitext(os.path.basename(str(clip_name).strip()))[0]
-            in_time = int(in_time)
-            out_time = int(out_time)
-        except Exception:
-            return ()
-        if not clip_name or out_time <= in_time:
-            return ()
-        signature.append((clip_name.lower(), in_time, out_time))
-    return tuple(signature)
-
-
 @dataclass(frozen=True)
 class SpEntry:
     """One visible SP row captured at task launch."""
@@ -154,5 +131,4 @@ __all__ = [
     'SpEntry', 'SpJob', 'media_track_key',
     'parse_m2ts_file_detail_segments', 'm2ts_file_detail_segments_contained_in',
     'filter_m2ts_file_detail_by_basenames',
-    'mpls_video_timeline_signature',
 ]

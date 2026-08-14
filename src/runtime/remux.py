@@ -48,6 +48,7 @@ class RemuxMainJob:
     subtitle_tracks: tuple[str, ...]
     expected_outputs: tuple[str, ...]
     final_outputs: tuple[str, ...]
+    m2ts_file_details: tuple[str, ...] = ()
     track_language_overrides: tuple[tuple[str, str], ...] = ()
 
 

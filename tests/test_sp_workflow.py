@@ -6,6 +6,7 @@ import os
 import re
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -48,7 +49,13 @@ def _entry(root: Path, **changes) -> SpEntry:
     return SpEntry(**values)
 
 
-def _main_job(root: Path, destination: Path) -> RemuxMainJob:
+def _main_job(
+        root: Path,
+        destination: Path,
+        *,
+        detail: str = '',
+        output_name: str = 'EP01.mkv',
+) -> RemuxMainJob:
     playlist = root / 'BDMV' / 'PLAYLIST' / '00001.mpls'
     return RemuxMainJob(
         configuration_keys=(0,),
@@ -62,7 +69,8 @@ def _main_job(root: Path, destination: Path) -> RemuxMainJob:
         audio_tracks=('1',),
         subtitle_tracks=(),
         expected_outputs=(str(destination / 'temporary.mkv'),),
-        final_outputs=(str(destination / 'EP01.mkv'),),
+        final_outputs=(str(destination / output_name),),
+        m2ts_file_details=(detail,),
     )
 
 
@@ -78,6 +86,32 @@ class _SpExecutionService(SubtitleChapterPipelineMixin):
     @staticmethod
     def _mkvmerge_das_flag_strings_for_m2ts(*_args, **_kwargs):
         return '0', '', ''
+
+
+def _plan_sp_jobs(
+        root: Path,
+        destination: Path,
+        entries: tuple[SpEntry, ...],
+        main_jobs: list[RemuxMainJob],
+        *,
+        movie_mode: bool = False,
+) -> list[SpJob]:
+    fake_service_class = SimpleNamespace(
+        _probe_m2ts_for_remux_source=lambda _path: (
+            str(root / 'BDMV' / 'STREAM' / '00002.m2ts'),
+            {},
+        )
+    )
+    service = _PlanningService()
+    service.movie_mode = movie_mode
+    track_selection = {
+        entry.track_key: {'audio': ['1'], 'subtitle': []}
+        for entry in entries
+    }
+    with patch.object(remux_module, '_svc_cls', return_value=fake_service_class):
+        return service._prepare_sp_jobs(
+            entries, str(destination), main_jobs, track_selection, {},
+        )
 
 
 class SpPlanningTests(unittest.TestCase):
@@ -160,27 +194,177 @@ class SpPlanningTests(unittest.TestCase):
             root = Path(temporary_directory) / 'Disc'
             _disc(root)
             destination = Path(temporary_directory) / 'Output'
-            entry = _entry(root, output_name='EP01.mkv')
-            main_job = _main_job(root, destination)
-            fake_service_class = SimpleNamespace(
-                _probe_m2ts_for_remux_source=lambda _path: (
-                    str(root / 'BDMV' / 'STREAM' / '00002.m2ts'),
-                    {},
-                )
+            detail = '00002.m2ts(00:00:00.000-00:24:00.000)'
+            entry = _entry(
+                root,
+                output_name='Custom Episode.mkv',
+                m2ts_file_detail=detail,
             )
-            with patch.object(remux_module, '_svc_cls', return_value=fake_service_class):
-                jobs = _PlanningService()._prepare_sp_jobs(
-                    (entry,),
-                    str(destination),
-                    [main_job],
-                    {entry.track_key: {'audio': ['1'], 'subtitle': []}},
-                    {},
-                )
+            main_job = _main_job(
+                root,
+                destination,
+                detail=detail,
+                output_name='Custom Episode.mkv',
+            )
+            jobs = _plan_sp_jobs(root, destination, (entry,), [main_job])
             self.assertEqual(jobs[0].output_path, main_job.final_outputs[0])
             self.assertEqual(jobs[0].episode_main_mpls_path, main_job.mpls_path)
 
+    def test_same_m2ts_with_different_window_remains_independent_sp(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory) / 'Disc'
+            _disc(root)
+            destination = Path(temporary_directory) / 'Output'
+            entry = _entry(
+                root,
+                m2ts_file_detail='00002.m2ts(00:00:10.000-00:24:00.000)',
+            )
+            main_job = _main_job(
+                root,
+                destination,
+                detail='00002.m2ts(00:00:00.000-00:24:00.000)',
+            )
+            jobs = _plan_sp_jobs(root, destination, (entry,), [main_job])
+
+            self.assertEqual(jobs[0].output_path, str(destination / 'SPs' / 'Visible Name.mkv'))
+            self.assertEqual(jobs[0].episode_main_mpls_path, '')
+
+    def test_duplicate_episode_detail_is_not_an_attachment_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory) / 'Disc'
+            _disc(root)
+            destination = Path(temporary_directory) / 'Output'
+            detail = '00002.m2ts(00:00:00.000-00:24:00.000)'
+            entry = _entry(root, m2ts_file_detail=detail)
+            single_job = _main_job(root, destination, detail=detail)
+            main_job = replace(
+                single_job,
+                expected_outputs=(
+                    str(destination / 'temporary-001.mkv'),
+                    str(destination / 'temporary-002.mkv'),
+                ),
+                final_outputs=(
+                    str(destination / 'EP01.mkv'),
+                    str(destination / 'EP02.mkv'),
+                ),
+                m2ts_file_details=(detail, detail),
+            )
+            jobs = _plan_sp_jobs(root, destination, (entry,), [main_job])
+
+            self.assertEqual(jobs[0].episode_main_mpls_path, '')
+
+    def test_movie_mode_never_links_an_exact_sp_detail(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory) / 'Disc'
+            _disc(root)
+            destination = Path(temporary_directory) / 'Output'
+            detail = '00002.m2ts(00:00:00.000-00:24:00.000)'
+            entry = _entry(root, m2ts_file_detail=detail)
+            main_job = _main_job(root, destination, detail=detail)
+            jobs = _plan_sp_jobs(
+                root, destination, (entry,), [main_job], movie_mode=True,
+            )
+
+            self.assertEqual(jobs[0].episode_main_mpls_path, '')
+
 
 class SpExecutionTests(unittest.TestCase):
+    def test_multiple_episode_sp_rows_deduplicate_and_sort_transport_pids(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            playlist = root / 'BDMV' / 'PLAYLIST'
+            playlist.mkdir(parents=True)
+            episode = root / 'EP01.mkv'
+            main_mpls = playlist / '00001.mpls'
+            sp_paths = [playlist / f'0000{index}.mpls' for index in range(2, 5)]
+            for path in (episode, main_mpls, *sp_paths):
+                path.write_bytes(b'source')
+
+            main_tracks = [
+                {'id': 0, 'type': 'video', 'properties': {}},
+                {'id': 1, 'type': 'audio', 'properties': {}},
+            ]
+            episode_identify_calls = 0
+            sp_tracks = {
+                str(sp_paths[0]): [
+                    {'id': 1, 'type': 'audio', 'properties': {'stream_id': 0x1103}},
+                    {'id': 2, 'type': 'audio', 'properties': {'stream_id': 0x1101}},
+                ],
+                str(sp_paths[1]): [
+                    {'id': 1, 'type': 'audio', 'properties': {'stream_id': 0x1101}},
+                    {'id': 2, 'type': 'audio', 'properties': {'stream_id': 0x1102}},
+                ],
+                str(sp_paths[2]): [
+                    {'id': 1, 'type': 'audio', 'properties': {'stream_id': 0x1102}},
+                ],
+            }
+
+            def identify(path):
+                nonlocal episode_identify_calls
+                normalized = os.path.normpath(path)
+                if normalized == os.path.normpath(str(episode)):
+                    episode_identify_calls += 1
+                    track_count = 2 if episode_identify_calls == 1 else 4 + (
+                        1 if episode_identify_calls >= 3 else 0
+                    )
+                    tracks = [dict(track) for track in main_tracks]
+                    tracks.extend(
+                        {'id': track_id, 'type': 'audio', 'properties': {}}
+                        for track_id in range(2, track_count)
+                    )
+                    return {'tracks': tracks}
+                return {'tracks': sp_tracks.get(normalized, [])}
+
+            fake_service_class = SimpleNamespace(
+                _int_from_mkvmerge_prop=lambda value: int(value) if value is not None else None,
+                _mkvmerge_identify_json=identify,
+            )
+            commands: list[list[str]] = []
+
+            def run(command, **_kwargs):
+                commands.append(list(command))
+                if command[0] == 'mkvmerge':
+                    Path(command[command.index('-o') + 1]).write_bytes(b'muxed')
+                    return SimpleNamespace(returncode=0)
+                return SimpleNamespace(returncode=1)
+
+            service = _SpExecutionService()
+            service._compute_mkv_id_to_m2ts_pid_for_main_mpls = lambda _path: {
+                0: 0x1011,
+                1: 0x1100,
+            }
+            with patch.object(sp_module, '_svc_cls', return_value=fake_service_class), patch.object(
+                    sp_module, 'MKV_MERGE_PATH', 'mkvmerge'), patch.object(
+                    sp_module, 'mkvtoolnix_ui_language_arg', return_value=''), patch.object(
+                    sp_module, 'run_command', side_effect=run):
+                for sp_path, selected_ids in zip(sp_paths, (['1', '2'], ['1', '2'], ['1'])):
+                    self.assertTrue(service._mux_episode_linked_sp_mkvmerge(
+                        episode_mkv=str(episode),
+                        sp_mpls_path=str(sp_path),
+                        episode_main_mpls=str(main_mpls),
+                        selected_sp_audio_track_ids=selected_ids,
+                        selected_sp_subtitle_track_ids=[],
+                        language_by_sp_track_id={},
+                        cancel_event=None,
+                    ))
+
+            mux_commands = [command for command in commands if command[0] == 'mkvmerge']
+            self.assertEqual(len(mux_commands), 2)
+            self.assertEqual(
+                mux_commands[0][mux_commands[0].index('--track-order') + 1],
+                '0:0,0:1,1:2,1:1',
+            )
+            self.assertEqual(
+                mux_commands[1][mux_commands[1].index('--track-order') + 1],
+                '0:0,0:1,0:2,1:2,0:3',
+            )
+            self.assertEqual(
+                service._episode_sp_mux_last_after_mux_map[
+                    os.path.normcase(os.path.abspath(episode))
+                ],
+                {0: 0x1011, 1: 0x1100, 2: 0x1101, 3: 0x1102, 4: 0x1103},
+            )
+
     def test_video_only_sp_disables_unselected_audio_and_subtitles(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

@@ -630,22 +630,6 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                 return int(transport_pid)
         return None
 
-    @staticmethod
-    def _merged_mkv_id_to_m2ts_pid_episode_sp(
-            main_track_id_to_pid: dict[int, int],
-            selected_sp_pids: list[int],
-    ) -> dict[int, int]:
-        """Describe the EP+SP output layout: existing tracks first, then every selected SP track."""
-        merged_track_id_to_pid = {
-            output_track_id: main_track_id_to_pid[output_track_id]
-            for output_track_id in sorted(main_track_id_to_pid)
-        }
-        next_track_id = len(merged_track_id_to_pid)
-        for transport_pid in selected_sp_pids:
-            merged_track_id_to_pid[next_track_id] = int(transport_pid)
-            next_track_id += 1
-        return merged_track_id_to_pid
-
     def _mux_episode_linked_sp_mkvmerge(
             self,
             *,
@@ -657,14 +641,14 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
             language_by_sp_track_id: dict[str, str],
             cancel_event: Optional[threading.Event],
     ) -> bool:
-        """Attach every selected SP track while preserving all tracks from earlier merges.
+        """Attach new SP PIDs while preserving the main tracks and earlier SP providers.
 
         mkvmerge track IDs (TIDs) are local to each input and cannot be compared directly. The main MPLS first
         maps the existing episode MKV track IDs to MPEG transport PIDs; the SP MPLS identify result independently
-        maps SP track IDs to PIDs. Every existing episode track remains first and every explicitly selected SP track
-        is appended in GUI order, even when different SP playlists reuse the same PID. The resulting output
-        track-ID-to-PID map is cached because a later SP merge identifies the already extended episode rather than
-        the original main-only layout.
+        maps SP track IDs to PIDs. Calls follow visible SP row order, so an existing PID keeps the provider from the
+        first selected row. Newly claimed PIDs are merged with earlier SP PIDs in ascending PID order after the
+        original main tracks. The resulting output map is cached because a later SP merge identifies the already
+        extended episode rather than the original main-only layout.
         """
         normalized_main_mpls = os.path.normpath(episode_main_mpls)
 
@@ -689,6 +673,10 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
         if not isinstance(sp_mux_cache, dict):
             sp_mux_cache = {}
             self._episode_sp_mux_last_after_mux_map = sp_mux_cache
+        original_main_map_cache = getattr(self, '_episode_sp_mux_original_main_map', None)
+        if not isinstance(original_main_map_cache, dict):
+            original_main_map_cache = {}
+            self._episode_sp_mux_original_main_map = original_main_map_cache
         previous_track_id_to_pid = sp_mux_cache.get(cache_key)
         cached_episode_baseline: Optional[dict[int, int]] = None
         if previous_track_id_to_pid and muxable_track_count == len(previous_track_id_to_pid):
@@ -714,8 +702,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
             sp_track_id_to_pid[track_id] = int(transport_pid)
             sp_track_type_by_id[track_id] = track_type
 
-        selected_sp_track_ids: list[int] = []
-        selected_sp_pids: list[int] = []
+        selected_sp_track_pid_pairs: list[tuple[int, int]] = []
         for track_id_text in selected_sp_audio_track_ids + selected_sp_subtitle_track_ids:
             try:
                 track_id = int(str(track_id_text).strip())
@@ -729,31 +716,68 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                         path=sp_mpls_path,
                     )
                 )
-            selected_sp_track_ids.append(track_id)
-            selected_sp_pids.append(transport_pid)
+            selected_sp_track_pid_pairs.append((track_id, transport_pid))
 
         if cached_episode_baseline is not None:
-            main_track_id_to_pid = dict(cached_episode_baseline)
+            current_track_id_to_pid = dict(cached_episode_baseline)
         else:
-            main_track_id_to_pid = self._compute_mkv_id_to_m2ts_pid_for_main_mpls(
+            current_track_id_to_pid = self._compute_mkv_id_to_m2ts_pid_for_main_mpls(
                 normalized_main_mpls
             )
-        if set(main_track_id_to_pid) != set(episode_track_type_by_id):
+        if set(current_track_id_to_pid) != set(episode_track_type_by_id):
             return False
+        original_main_track_id_to_pid = original_main_map_cache.get(cache_key)
+        if not isinstance(original_main_track_id_to_pid, dict):
+            original_main_track_id_to_pid = dict(current_track_id_to_pid)
+        original_main_track_ids = sorted(original_main_track_id_to_pid)
+        if (
+                not set(original_main_track_ids).issubset(current_track_id_to_pid)
+                or any(
+                    current_track_id_to_pid[track_id] != original_main_track_id_to_pid[track_id]
+                    for track_id in original_main_track_ids
+                )
+        ):
+            return False
+
+        existing_pids = set(current_track_id_to_pid.values())
+        new_track_id_by_pid: dict[int, int] = {}
+        for track_id, transport_pid in selected_sp_track_pid_pairs:
+            if transport_pid not in existing_pids:
+                new_track_id_by_pid.setdefault(transport_pid, track_id)
+        selected_sp_pids = sorted(new_track_id_by_pid)
+        selected_sp_track_ids = [new_track_id_by_pid[pid] for pid in selected_sp_pids]
+        if selected_sp_track_pid_pairs and not selected_sp_track_ids:
+            original_main_map_cache[cache_key] = dict(original_main_track_id_to_pid)
+            sp_mux_cache[cache_key] = dict(current_track_id_to_pid)
+            return True
+
+        attachment_track_order: list[tuple[int, int, int]] = [
+            (current_track_id_to_pid[track_id], 0, track_id)
+            for track_id in current_track_id_to_pid
+            if track_id not in original_main_track_id_to_pid
+        ]
+        attachment_track_order.extend(
+            (transport_pid, 1, new_track_id_by_pid[transport_pid])
+            for transport_pid in selected_sp_pids
+        )
+        attachment_track_order.sort(key=lambda row: row[0])
+
         track_order_parts: list[str] = []
         episode_audio_track_ids: list[str] = []
         episode_subtitle_track_ids: list[str] = []
         sp_audio_track_ids: list[str] = []
         sp_subtitle_track_ids: list[str] = []
-        for track_id in sorted(main_track_id_to_pid):
+        for track_id in original_main_track_ids:
             track_order_parts.append(f'0:{track_id}')
+        for _transport_pid, input_index, track_id in attachment_track_order:
+            track_order_parts.append(f'{input_index}:{track_id}')
+        for track_id in sorted(current_track_id_to_pid):
             track_type = episode_track_type_by_id.get(track_id, '')
             if track_type == 'audio':
                 episode_audio_track_ids.append(str(track_id))
             elif track_type in ('subtitles', 'subtitle'):
                 episode_subtitle_track_ids.append(str(track_id))
         for track_id in selected_sp_track_ids:
-            track_order_parts.append(f'1:{track_id}')
             track_type = sp_track_type_by_id.get(track_id, '')
             if track_type == 'audio':
                 sp_audio_track_ids.append(str(track_id))
@@ -794,8 +818,10 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
             command_parts.extend(['-s', ','.join(sp_subtitle_track_ids)])
         else:
             command_parts.append('-S')
-        for track_id, language in language_by_sp_track_id.items():
-            command_parts.extend(['--language', f'{track_id}:{language}'])
+        for track_id in selected_sp_track_ids:
+            language = str(language_by_sp_track_id.get(str(track_id)) or '').strip()
+            if language:
+                command_parts.extend(['--language', f'{track_id}:{language}'])
         command_parts.append(sp_mpls_path)
         command_parts.extend(['--track-order', track_order_argument])
         print(f'[episode-sp-mux] mkvmerge: {subprocess.list2cmdline(command_parts)}')
@@ -839,7 +865,18 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                 force_remove_file(chapter_backup)
             return False
 
-        merged_track_id_to_pid = self._merged_mkv_id_to_m2ts_pid_episode_sp(main_track_id_to_pid, selected_sp_pids)
+        merged_track_id_to_pid = {
+            output_track_id: transport_pid
+            for output_track_id, transport_pid in enumerate(
+                [
+                    original_main_track_id_to_pid[track_id]
+                    for track_id in original_main_track_ids
+                ] + [
+                    transport_pid
+                    for transport_pid, _input_index, _track_id in attachment_track_order
+                ]
+            )
+        }
         try:
             if chapters_saved and chapter_backup and os.path.isfile(chapter_backup):
                 propedit_command = [MKV_PROP_EDIT_PATH or 'mkvpropedit']
@@ -851,14 +888,19 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                     return False
 
             appended_output_id_by_sp_track_id = {
-                track_id: len(main_track_id_to_pid) + output_offset
-                for output_offset, track_id in enumerate(selected_sp_track_ids)
+                track_id: len(original_main_track_ids) + output_offset
+                for output_offset, (_pid, input_index, track_id) in enumerate(attachment_track_order)
+                if input_index == 1
             }
-            desired_language_by_output_id = {
-                appended_output_id_by_sp_track_id[int(track_id)]: language
-                for track_id, language in language_by_sp_track_id.items()
-                if int(track_id) in appended_output_id_by_sp_track_id
-            }
+            desired_language_by_output_id: dict[int, str] = {}
+            for track_id_text, language in language_by_sp_track_id.items():
+                try:
+                    track_id = int(track_id_text)
+                except Exception:
+                    continue
+                output_track_id = appended_output_id_by_sp_track_id.get(track_id)
+                if output_track_id is not None:
+                    desired_language_by_output_id[output_track_id] = language
             if desired_language_by_output_id:
                 identified_tracks = _svc_cls()._mkvmerge_identify_json(temporary_output).get('tracks') or []
                 identified_by_id = {
@@ -887,6 +929,10 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
             if chapter_backup and os.path.isfile(chapter_backup):
                 force_remove_file(chapter_backup)
 
+        original_main_map_cache[cache_key] = {
+            output_track_id: original_main_track_id_to_pid[input_track_id]
+            for output_track_id, input_track_id in enumerate(original_main_track_ids)
+        }
         sp_mux_cache[cache_key] = dict(merged_track_id_to_pid)
         return True
 
@@ -936,6 +982,16 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                             subtitle_tracks,
                         )
                     )
+                    if (
+                            len(mapped_audio_tracks) != len(audio_tracks)
+                            or len(mapped_subtitle_tracks) != len(subtitle_tracks)
+                    ):
+                        raise RuntimeError(
+                            translate_text('SP processing failed in row {row}: {path}').format(
+                                row=job.entry_index,
+                                path=job.source_path,
+                            )
+                        )
 
                 if output_is_episode:
                     language_by_track_id: dict[str, str] = {}

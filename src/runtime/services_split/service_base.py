@@ -228,10 +228,6 @@ class BluraySubtitleServiceBase:
         raise NotImplementedError
 
     @staticmethod
-    def _merged_mkv_id_to_m2ts_pid_episode_sp(main_track_id_to_pid: dict[int, int], selected_sp_pids: list[int]) -> dict[int, int]:
-        raise NotImplementedError
-
-    @staticmethod
     def _mkvmerge_das_flag_strings_for_m2ts(m2ts_path: str, copy_audio_track: list[str], copy_sub_track: list[str], dovi_plan: Optional[dict[str, object]]=None) -> tuple[str, str, str]:
         raise NotImplementedError
 

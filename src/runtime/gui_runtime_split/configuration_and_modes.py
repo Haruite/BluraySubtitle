@@ -808,6 +808,19 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
         )
         if not isinstance(configuration, dict) or not configuration:
             raise ValueError(self.t('Task configuration is empty'))
+        labels = self._table2_labels_for_current_mode()
+        if labels and 'm2ts_file_detail' in labels:
+            detail_col = labels.index('m2ts_file_detail')
+            for table_row, configuration_key in enumerate(
+                    sorted(configuration, key=lambda key: int(key))):
+                if table_row >= self.table2.rowCount():
+                    break
+                detail_item = self.table2.item(table_row, detail_col)
+                configuration[configuration_key]['m2ts_file_detail'] = (
+                    detail_item.text().strip()
+                    if detail_item and detail_item.text()
+                    else ''
+                )
         self._apply_main_remux_cmds_to_configuration(configuration)
         return copy.deepcopy(configuration)
 

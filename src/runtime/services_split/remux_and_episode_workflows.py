@@ -256,6 +256,10 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 subtitle_tracks=tuple(subtitle_tracks),
                 expected_outputs=tuple(os.path.normpath(path) for path in expected_outputs),
                 final_outputs=tuple(os.path.normpath(path) for path in final_outputs),
+                m2ts_file_details=tuple(
+                    str(conf.get('m2ts_file_detail') or '').strip()
+                    for conf in configurations
+                ),
                 track_language_overrides=tuple(
                     (str(track_index), str(language).strip())
                     for track_index, language in (
@@ -312,7 +316,9 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
     ) -> list[SpJob]:
         """Resolve selected SP rows and all exact outputs before the first write."""
         destination_root = os.path.abspath(os.path.normpath(destination_folder))
-        main_output_to_mpls: dict[str, str] = {}
+        episode_targets_by_detail: dict[
+            tuple[int, str], list[tuple[str, str]]
+        ] = {}
         occupied_outputs: dict[str, str] = {}
         first_main_mpls_by_disc: dict[int, str] = {}
         for main_job in main_jobs:
@@ -322,7 +328,16 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             for output_path in main_job.final_outputs:
                 normalized_output = os.path.normcase(os.path.abspath(output_path))
                 occupied_outputs[normalized_output] = 'main'
-                main_output_to_mpls[normalized_output] = main_job.mpls_path
+            for detail, output_path in zip(
+                    main_job.m2ts_file_details, main_job.final_outputs):
+                detail = str(detail or '').strip()
+                if detail:
+                    episode_targets_by_detail.setdefault(
+                        (main_job.bdmv_index, detail), []
+                    ).append((
+                        os.path.normcase(os.path.abspath(output_path)),
+                        main_job.mpls_path,
+                    ))
 
         planned_jobs: list[SpJob] = []
         for entry_index, entry in enumerate(entries, start=1):
@@ -420,14 +435,18 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
 
             normalized_output = os.path.normcase(output_path)
             episode_main_mpls_path = ''
-            normalized_output_name = entry.output_name.replace('\\', '/')
-            episode_linked = (
-                not normalized_output_name.lower().startswith('sps/')
-                and os.path.basename(normalized_output_name).upper().startswith('EP')
+            matching_episode_targets = (
+                episode_targets_by_detail.get(
+                    (entry.bdmv_index, entry.m2ts_file_detail.strip()), []
+                )
+                if not bool(getattr(self, 'movie_mode', False))
+                and entry.m2ts_file_detail.strip()
+                else []
             )
+            episode_linked = len(matching_episode_targets) == 1
             if episode_linked:
-                episode_main_mpls_path = main_output_to_mpls.get(normalized_output, '')
-                if not episode_main_mpls_path:
+                target_output, episode_main_mpls_path = matching_episode_targets[0]
+                if normalized_output != target_output:
                     raise ValueError(
                         translate_text('SP row {row} does not match a planned episode output: {path}').format(
                             row=entry_index,
@@ -1825,23 +1844,70 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     staged_main_files,
                 )
             }
-            linked_sp_audio_codecs: dict[str, list[str]] = {}
+            linked_sp_audio_codec_by_pid: dict[str, dict[int, str]] = {}
             for sp_row in request.sp_rows:
-                if sp_row.selected and sp_row.uses_main_output:
-                    output_key = os.path.normcase(os.path.abspath(sp_row.output_path))
-                    linked_sp_audio_codecs.setdefault(output_key, []).extend(
-                        sp_row.audio_codec_choices
+                if not (sp_row.selected and sp_row.uses_main_output and sp_row.sp_entry):
+                    continue
+                entry = sp_row.sp_entry
+                sp_mpls_path = os.path.normpath(os.path.join(
+                    entry.bdmv_root, 'BDMV', 'PLAYLIST', entry.mpls_file,
+                ))
+                mapped_audio_tracks, _mapped_subtitle_tracks = (
+                    self._map_selected_tracks_to_mpls_track_ids(
+                        sp_mpls_path,
+                        list(sp_row.audio_tracks),
+                        list(sp_row.subtitle_tracks),
                     )
+                )
+                sp_identification = _svc_cls()._mkvmerge_identify_json(sp_mpls_path)
+                pid_by_track_id: dict[int, int] = {}
+                for track in sp_identification.get('tracks') or []:
+                    if not isinstance(track, dict):
+                        continue
+                    try:
+                        track_id = int(track.get('id'))
+                    except Exception:
+                        continue
+                    transport_pid = self._mkvmerge_ident_transport_pid(
+                        track.get('properties') or {}
+                    )
+                    if transport_pid is not None:
+                        pid_by_track_id[track_id] = transport_pid
+                output_key = os.path.normcase(os.path.abspath(sp_row.output_path))
+                provider_by_pid = linked_sp_audio_codec_by_pid.setdefault(output_key, {})
+                for track_id_text, codec in zip(
+                        mapped_audio_tracks, sp_row.audio_codec_choices):
+                    try:
+                        transport_pid = pid_by_track_id[int(track_id_text)]
+                    except Exception:
+                        continue
+                    provider_by_pid.setdefault(transport_pid, codec)
+
+            linked_sp_audio_codecs: dict[str, tuple[str, ...]] = {}
+            for row in request.main_rows:
+                output_key = os.path.normcase(os.path.abspath(row.output_path))
+                staged_path = staged_main_by_key[int(row.configuration_key)]
+                staged_key = os.path.normcase(os.path.abspath(staged_path))
+                original_pid_map = (
+                    getattr(self, '_episode_sp_mux_original_main_map', {}) or {}
+                ).get(staged_key, {})
+                original_pids = set(original_pid_map.values())
+                provider_by_pid = linked_sp_audio_codec_by_pid.get(output_key, {})
+                linked_sp_audio_codecs[output_key] = tuple(
+                    provider_by_pid[transport_pid]
+                    for transport_pid in sorted(provider_by_pid)
+                    if transport_pid not in original_pids
+                )
             resolved_main_rows = [
                 replace(
                     row,
                     source_path=staged_main_by_key[int(row.configuration_key)],
                     audio_codec_choices=(
                         row.audio_codec_choices
-                        + tuple(linked_sp_audio_codecs.get(
+                        + linked_sp_audio_codecs.get(
                             os.path.normcase(os.path.abspath(row.output_path)),
                             (),
-                        ))
+                        )
                     ),
                 )
                 for row in request.main_rows

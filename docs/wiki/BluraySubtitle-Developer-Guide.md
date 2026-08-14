@@ -326,7 +326,7 @@ Output type follows selected content:
 
 Raw streams and PNG files cannot store Matroska track-language metadata. Configuring such metadata for an incompatible output is rejected before execution.
 
-When an SP interval exactly matches a main episode’s M2TS detail, selected SP audio or subtitle PIDs can be appended to the planned episode output. The episode is replaced only after the append result has completed and passed verification.
+When an SP interval exactly and uniquely matches one main episode’s M2TS detail in series mode, selected SP audio or subtitle PIDs can be appended to the planned episode output. Multiple selected SP rows are consumed in visible order: the first row owns a repeated PID, already present PIDs are skipped, and appended SP PIDs are kept in ascending order after the original main tracks. Movie-mode SP rows never use this attachment path. The episode is replaced only after the append result has completed and passed verification.
 
 ## Audio processing
 

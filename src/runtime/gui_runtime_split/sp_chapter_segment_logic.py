@@ -18,7 +18,7 @@ from src.exports.utils import (
     print_terminal_line,
 )
 from src.runtime.services import BluraySubtitle
-from src.runtime.sp import SpEntry, media_track_key, mpls_video_timeline_signature
+from src.runtime.sp import SpEntry, media_track_key
 from src.runtime.services_split.misc_workflows import (
     _movie_main_duration_by_bdmv_from_mpls_paths,
     _movie_sp_duration_matches_main,
@@ -529,13 +529,24 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     mpls_no_ext, j1, j2)
                 trim_checkbox = getattr(self, 'trim_copyright_tail_checkbox', None)
                 if trim_checkbox and trim_checkbox.isChecked() and self.get_selected_function_id() in (3, 4):
-                    _trimmed_end, removed_m2ts = episode_tail_trim_plan(chapter, start_off, end_off)
+                    trimmed_end, removed_m2ts = episode_tail_trim_plan(chapter, start_off, end_off)
                     if removed_m2ts:
                         removed_set = set(removed_m2ts)
                         new_m2_str = ', '.join(
                             name for name in self._split_m2ts_files(new_m2_str)
                             if name not in removed_set
                         )
+                        try:
+                            mpl_full = (
+                                mpls_no_ext
+                                if mpls_no_ext.lower().endswith('.mpls')
+                                else f'{mpls_no_ext}.mpls'
+                            )
+                            new_detail_str = BluraySubtitle.m2ts_file_detail_for_mpls_timeline_window(
+                                os.path.normpath(mpl_full), start_off, trimmed_end,
+                            )
+                        except Exception:
+                            new_detail_str = ''
             self.table2.setItem(r, m2ts_col, QTableWidgetItem(new_m2_str))
             self.table2.setItem(r, duration_col, QTableWidgetItem(new_dur_str))
             if m2ts_detail_col >= 0:
@@ -1406,23 +1417,21 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             if self._is_movie_mode():
                 main_duration_by_bdmv = _movie_main_duration_by_bdmv_from_mpls_paths(
                     selected_main_by_bdmv)
-            attachment_main_by_timeline: dict[
-                int, dict[tuple[tuple[str, int, int], ...], list[str]]
-            ] = {}
+            attachment_main_by_detail: dict[int, dict[str, list[str]]] = {}
             attachment_track_info_by_main: dict[str, dict[str, object]] = {}
-            timeline_attachment_keys: set[tuple[int, str, str]] = set()
+            exact_attachment_keys: set[tuple[int, str, str]] = set()
             self._episode_attachment_track_info_by_main = attachment_track_info_by_main
             if function_id == 3 and not self._is_movie_mode():
-                for bdmv_index, main_paths in selected_main_by_bdmv.items():
-                    for main_path in main_paths:
-                        timeline = mpls_video_timeline_signature(main_path)
-                        if timeline:
-                            attachment_main_by_timeline.setdefault(bdmv_index, {}).setdefault(
-                                timeline, []
+                for bdmv_index in selected_main_by_bdmv:
+                    for detail, main_path in self._iter_table2_episode_m2ts_details(bdmv_index):
+                        detail = str(detail or '').strip()
+                        if detail:
+                            attachment_main_by_detail.setdefault(bdmv_index, {}).setdefault(
+                                detail, []
                             ).append(main_path)
 
             def _register_episode_attachment_tracks(
-                    main_path: str, attachment_chapter: Chapter) -> None:
+                    main_path: str, attachment_chapter: Chapter) -> set[int]:
                 main_norm = os.path.normcase(os.path.abspath(main_path))
                 main_chapter = Chapter(main_path)
                 main_chapter.get_pid_to_language()
@@ -1443,7 +1452,29 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                 aggregate_pid_lang = info['pid_lang']
                 for pid, language in attachment_pid_lang.items():
                     aggregate_pid_lang.setdefault(pid, language)
-                info['pids'].update(set(attachment_pid_lang) - set(main_pid_lang))
+                new_pids = set(attachment_pid_lang) - set(main_pid_lang)
+                info['pids'].update(new_pids)
+                return new_pids
+
+            def _selectable_attachment_pids(
+                    attachment_mpls: str, candidate_pids: set[int]) -> set[int]:
+                if not candidate_pids:
+                    return set()
+                try:
+                    first_m2ts = self._get_first_m2ts_for_mpls(attachment_mpls)
+                    streams = self._read_m2ts_track_info(first_m2ts) if first_m2ts else []
+                    if streams:
+                        return {
+                            pid
+                            for stream in streams
+                            if str(stream.get('codec_type') or '').strip().lower()
+                            in ('audio', 'subtitle', 'subtitles')
+                            and (pid := self._parse_stream_pid(stream.get('pid'))) in candidate_pids
+                        }
+                except Exception:
+                    pass
+                # Blu-ray audio and presentation-graphics subtitle PIDs use these ranges.
+                return {pid for pid in candidate_pids if 0x1100 <= pid < 0x1300}
             for bdmv_index in sorted(disc_root_by_bdmv.keys()):
                 root = disc_root_by_bdmv.get(bdmv_index, '')
                 if not root:
@@ -1482,39 +1513,51 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     default_selected = True
                     dur = ch.get_total_time()
                     matching_main_path = ''
-                    candidate_timeline = mpls_video_timeline_signature(mpls_file_path)
-                    matching_main_paths = attachment_main_by_timeline.get(
+                    try:
+                        sp_detail_saved = self._sp_m2ts_detail_for_entry(
+                            bdmv_index, os.path.basename(mpls_file_path), m2ts_files)
+                    except Exception:
+                        sp_detail_saved = ''
+                    matching_main_paths = attachment_main_by_detail.get(
                         bdmv_index, {}
-                    ).get(candidate_timeline, []) if candidate_timeline else []
+                    ).get(sp_detail_saved, []) if sp_detail_saved else []
+                    exact_attachment_has_new_tracks = False
                     if len(matching_main_paths) == 1:
                         matching_main_path = matching_main_paths[0]
-                        default_selected = False
-                        timeline_attachment_keys.add((
+                        exact_attachment_keys.add((
                             bdmv_index,
                             os.path.basename(mpls_file_path),
                             ','.join(m2ts_files),
                         ))
                         try:
-                            _register_episode_attachment_tracks(
+                            new_attachment_pids = _register_episode_attachment_tracks(
                                 matching_main_path, ch
+                            )
+                            exact_attachment_has_new_tracks = bool(
+                                _selectable_attachment_pids(
+                                    mpls_file_path, new_attachment_pids,
+                                )
                             )
                         except Exception:
                             print_exc_terminal()
+                        # An exact SP row is useful only when it can append a new audio or subtitle PID.
+                        default_selected = exact_attachment_has_new_tracks
                     try:
                         dur_for_select = float(ch.get_total_time_no_repeat())
                     except Exception:
                         dur_for_select = float(dur)
-                    if len(m2ts_set) < 3 and dur_for_select < 30:
+                    if (
+                            not exact_attachment_has_new_tracks
+                            and len(m2ts_set) < 3
+                            and dur_for_select < 30
+                    ):
                         default_selected = False
                     main_dur = main_duration_by_bdmv.get(bdmv_index)
                     if (default_selected and self._is_movie_mode() and main_dur is not None
                             and _movie_sp_duration_matches_main(float(dur), main_dur)):
                         default_selected = False
-                    sp_detail_saved = ''
-                    if default_selected:
+                    if default_selected and not exact_attachment_has_new_tracks:
                         try:
-                            sp_detail_saved = self._sp_m2ts_detail_for_entry(
-                                bdmv_index, os.path.basename(mpls_file_path), m2ts_files)
                             sp_entry = {
                                 'bdmv_index': bdmv_index,
                                 'mpls_file': os.path.basename(mpls_file_path),
@@ -1754,9 +1797,9 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     sel_item.setData(Qt.ItemDataRole.UserRole, 'auto')
                     self.table3.setItem(i, sel_col, sel_item)
                     self.table3.setItem(i, bdmv_col, QTableWidgetItem(str(bdmv_index)))
-                    is_timeline_attachment = (
+                    is_exact_attachment = (
                         bdmv_index, mpls_file, ','.join(m2ts_files)
-                    ) in timeline_attachment_keys
+                    ) in exact_attachment_keys
                     self.table3.setItem(i, mpls_col, QTableWidgetItem(mpls_file))
                     self.table3.setItem(i, m2ts_col, QTableWidgetItem(','.join(m2ts_files)))
                     self.table3.setItem(
@@ -1788,7 +1831,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                                             sp_det = ''
                                     if not self._sp_covered_by_table2_movie_row(bdmv_index, sp_det):
                                         sel_item.setCheckState(Qt.CheckState.Checked)
-                                elif not is_timeline_attachment:
+                                elif not is_exact_attachment:
                                     sel_item.setCheckState(Qt.CheckState.Checked)
                             if user_mark:
                                 sel_item.setData(Qt.ItemDataRole.UserRole, str(cache_hit.get('user_mark') or ''))
