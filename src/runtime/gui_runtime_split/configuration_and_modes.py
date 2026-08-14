@@ -873,6 +873,9 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             # The first pass creates all table2 widgets. Their visible values are
             # authoritative, so read them back before the only table3 refresh.
             self.on_configuration(configuration, update_sp_table=False)
+            # A full source refresh must classify the second pass as a segment rebuild. The first-pass widgets
+            # are only inputs to that rebuild, not the comparison baseline for a later user edit.
+            self._last_config_inputs = {}
             current_configuration = self._generate_configuration_from_ui_inputs() if self.table2.rowCount() > 0 else {}
             self.on_configuration(current_configuration or configuration, update_sp_table=True)
         except Exception:
@@ -1218,6 +1221,9 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     self._finalize_movie_mode_table2_layout(labels)
                 else:
                     self._scroll_table_h_to_right(self.table2)
+                    # Continuation rows may have been regenerated from the edited bound. Compare the next user
+                    # action with these visible rows, not with the pre-regeneration snapshot.
+                    self._last_config_inputs = self._collect_config_inputs()
                 if function_id in (3, 4, 5):
                     if update_sp_table:
                         self._tick_delayed_busy(busy, self.t('Refreshing SP table...'))

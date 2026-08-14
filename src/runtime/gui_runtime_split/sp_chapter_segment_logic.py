@@ -1231,6 +1231,10 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                 if isinstance(start_combo, QComboBox):
                     new_start = int(start_combo.currentData() or (start_combo.currentIndex() + 1))
                     old_start = int(getattr(start_combo, '_prev_start_value', new_start))
+                    if new_start != old_start:
+                        # A later start also unchecks the skipped nodes. Force the owning start-edit rule so
+                        # the resulting segment-state change cannot be mistaken for a view-chapters edit.
+                        self._chapter_combo_force_mode = ('start', int(row))
                     if new_start > old_start:
                         b_cur = self.table2.item(row, bdmv_col)
                         try:
