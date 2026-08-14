@@ -318,7 +318,23 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
         except Exception:
             pass
         try:
-            self._full_refresh_remux_encode_tables_for_mode()
+            function_id = self.get_selected_function_id()
+            configuration = getattr(self, '_last_configuration_34', None)
+            if function_id in (3, 4) and isinstance(configuration, dict) and configuration:
+                # Tail trimming is a post-split operation. Keep every visible episode bound intact and
+                # update only the per-episode cut plan and its M2TS preview.
+                updated_configuration = {
+                    int(key): dict(row)
+                    for key, row in configuration.items()
+                    if isinstance(row, dict)
+                }
+                self._apply_episode_copyright_trim_to_configuration(
+                    updated_configuration,
+                    bool(cb and cb.isChecked() and (not self._is_movie_mode())),
+                )
+                self._last_configuration_34 = updated_configuration
+                labels = ENCODE_LABELS if function_id == 4 else REMUX_LABELS
+                self._refresh_table2_m2ts_duration_from_widgets(labels)
             self._refresh_table1_remux_cmds()
         except Exception:
             print_exc_terminal()

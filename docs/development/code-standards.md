@@ -54,20 +54,12 @@ When the author establishes a new rule, update this file and its Simplified Chin
 
 ## 5. Preflight and Failure Handling
 
-- Check deterministic, actionable failures as early as practical, preferably before starting the worker.
-- Preflight should focus on facts already known from the request: required paths, selected inputs, required tools, invalid ranges, incomplete row mappings, command structure, output paths, and deterministic collisions.
-- Do not duplicate expensive media probing or add restrictive checks that reject valid inputs without a confirmed rule.
+- Before starting a worker or writing output, check only deterministic, actionable facts already known from the request: paths, selections, required tools, ranges, mappings, command structure, and the complete planned output set and its collisions. Do not repeat expensive media probing or add restrictions without a confirmed rule.
 - Media-dependent failures discovered during execution must identify the affected source or row and fail clearly.
-- An existing planned output is an error unless a confirmed product rule defines the workflow as resumable. Existing outputs must never be overwritten, renamed, or reused as a different result.
-- A resumable workflow must document which output types count as completed and report every skipped output in task progress.
-- When output paths can be derived before execution, derive and check the complete set before the first write.
-- When mapping can be planned before execution, complete the plan before mutating source files or creating final outputs.
-- External commands must have their return status checked. Tool-specific warning return codes may be accepted only when documented or verified.
-- Prefer argument lists with `shell=False` for external tools. Use a shell only when shell syntax is genuinely required.
-- Cleanup may remove only temporary or partial artifacts created by the current task. It must not delete a pre-existing user file.
-- For a long-running Encode batch, deterministic request-wide safety failures must still stop before the worker starts. After row execution begins, a failure confined to one row must be recorded and must not prevent later rows from running. User cancellation and an unsafe request-wide state still stop the batch.
-- Non-empty encoded elementary streams, partial containers, and extracted or injected dynamic-metadata artifacts created for a failed Encode row must be retained under unique non-final names and listed in the error report. They may be deleted only after that row's final output succeeds.
-- Do not display a modal error dialog while a long-running Encode batch is active. Aggregate row warnings and failures, then present one summary after worker cleanup.
+- An existing planned output is an error unless a confirmed resumable workflow defines it as completed; never overwrite, rename, or reuse it. Such workflows must document completed output types and report each skip.
+- Check every external command's return status. Prefer argument lists with `shell=False`; use a shell only when its syntax is required. Accept warning return codes only when documented or verified.
+- Cleanup may remove only temporary or partial artifacts created by the current task, never pre-existing files. Preserve non-empty artifacts from a failed Encode row under unique non-final names, list them in the error report, and delete them only after that row's final output succeeds.
+- In a long-running Encode batch, request-wide safety failures, cancellation, and unsafe state stop the batch; an isolated row failure is recorded and later rows continue. Present one summary after worker cleanup instead of modal errors during the batch.
 
 ## 6. Layer Responsibilities
 
@@ -118,7 +110,7 @@ Keep this section limited to confirmed exceptions to the general rules above and
 
 ## 11. Testing and Change Reporting
 
-- Add focused automated tests for critical changes and error-prone behavior. Other changes do not require new tests when existing coverage and proportionate verification are sufficient.
+- Do not add or modify test files for a bug fix unless the fix is both major and important. When test changes are warranted for a major feature or refactoring, keep them focused on critical, error-prone behavior.
 - For ordinary changes, run only the automated tests directly related to the modified behavior. Run the full repository test suite only for a major refactoring, a broad functional change, or when focused results reveal a credible wider regression risk.
 - At minimum, run checks appropriate to the change from this set:
   - Python compilation and import smoke tests;
