@@ -1056,6 +1056,7 @@ install_mpv() {
   local is_ubuntu_2204="false"
   local is_debian_12="false"
   local needs_meson_prebuild="false"
+  local mpv_build_env=()
   if [[ -f /etc/os-release ]]; then
     . /etc/os-release || true
     if [[ "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" == "22.04" ]]; then
@@ -1147,6 +1148,8 @@ install_mpv() {
       sudo env PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade -q --progress-bar off meson >/dev/null 2>&1 || die "$(msg 'Failed to upgrade meson in root environment' 'root 环境升级 meson 失败')"
     fi
     export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"
+    # Prevent stale user-site Meson packages from shadowing the root-installed version across the build and install.
+    mpv_build_env=(env PYTHONNOUSERSITE=1)
   fi
 
   export PATH="/usr/local/bin:${HOME}/.local/bin:${PATH:-}"
@@ -1183,8 +1186,8 @@ EOF
     export PKG_CONFIG_PATH="/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/aarch64-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:${HOME}/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
     export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"
 
-    tmux_run "mpv-build rebuild" ./rebuild -j"$(nproc)" || exit 1
-    tmux_run "mpv-build install" sudo env "PATH=$PATH" "PKG_CONFIG_PATH=${PKG_CONFIG_PATH:-}" ./install || exit 1
+    tmux_run "mpv-build rebuild" "${mpv_build_env[@]}" ./rebuild -j"$(nproc)" || exit 1
+    tmux_run "mpv-build install" sudo env PYTHONNOUSERSITE=1 "PATH=$PATH" "PKG_CONFIG_PATH=${PKG_CONFIG_PATH:-}" ./install || exit 1
     install_configured_executable build_libs/bin/ffmpeg "$FFMPEG_PATH" || exit 1
     install_configured_executable build_libs/bin/ffprobe "$FFPROBE_PATH" || exit 1
   ) || die "$(msg 'mpv build/install failed' 'mpv 编译/安装失败')"
