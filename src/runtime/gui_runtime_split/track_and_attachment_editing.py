@@ -1548,9 +1548,6 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             self._track_selection_config = {}
             cfg = self._track_selection_config
         available = getattr(self, '_available_track_selection_config', None)
-        if sp_key in cfg and isinstance(available, dict) and sp_key in available:
-            return
-        had_config = sp_key in cfg
         mpls_name = str(mpls_file or '').strip()
         if not mpls_name:
             return
@@ -1558,18 +1555,45 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
         if not playlist_dir:
             return
         mpls_path = os.path.normpath(os.path.join(playlist_dir, mpls_name))
-        pair = self._default_track_lists_for_mpls_path(mpls_path)
-        if not pair:
-            return
-        if not had_config:
-            cfg[sp_key] = {'audio': list(pair[0]), 'subtitle': list(pair[1])}
         main_key = media_track_key('main', mpls_path)
+        main_selection = cfg.get(main_key)
+        if sp_key not in cfg and isinstance(main_selection, dict):
+            cfg[sp_key] = {
+                'audio': list(main_selection.get('audio') or []),
+                'subtitle': list(main_selection.get('subtitle') or []),
+            }
         if isinstance(available, dict) and isinstance(available.get(main_key), dict):
             track_ids = available[main_key]
             available[sp_key] = {
                 'audio': list(track_ids.get('audio') or []),
                 'subtitle': list(track_ids.get('subtitle') or []),
             }
+        if sp_key in cfg and isinstance(available, dict) and sp_key in available:
+            return
+
+        pair = self._default_track_lists_for_mpls_path(mpls_path)
+        if not pair:
+            return
+        available = getattr(self, '_available_track_selection_config', None)
+        if isinstance(available, dict) and isinstance(available.get(main_key), dict):
+            track_ids = available[main_key]
+            available[sp_key] = {
+                'audio': list(track_ids.get('audio') or []),
+                'subtitle': list(track_ids.get('subtitle') or []),
+            }
+        if sp_key not in cfg:
+            select_all = bool(
+                getattr(self, 'select_all_tracks_checkbox', None)
+                and self.select_all_tracks_checkbox.isChecked()
+            )
+            selected_tracks = available.get(sp_key) if select_all and isinstance(available, dict) else None
+            if isinstance(selected_tracks, dict):
+                cfg[sp_key] = {
+                    'audio': list(selected_tracks.get('audio') or []),
+                    'subtitle': list(selected_tracks.get('subtitle') or []),
+                }
+            else:
+                cfg[sp_key] = {'audio': list(pair[0]), 'subtitle': list(pair[1])}
 
     def on_edit_attachments_from_mkv_row(self, table: QTableWidget, row_index: int):
         try:

@@ -103,6 +103,15 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
         finally:
             self._updating_sp_table = False
 
+        sp_entry = {
+            'bdmv_index': int(bdmv_index),
+            'mpls_file': mpls_file,
+            'm2ts_file': ','.join(m2ts_files),
+            'output_name': '',
+        }
+        self._inherit_main_track_config_for_sp_key(
+            int(bdmv_index), mpls_file, SpEntry.from_mapping(sp_entry).track_key,
+        )
         self._recompute_sp_output_names(only_bdmv_index=bdmv_index)
 
     def _add_sp_entries_for_unchecked_segments(self, mpls_path: str, segments: list[tuple[int, int]], bdmv_index: int,
