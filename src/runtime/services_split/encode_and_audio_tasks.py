@@ -61,6 +61,7 @@ from ...exports.utils import (
     print_exc_terminal,
     get_vspipe_context,
     force_remove_file,
+    get_time_str,
     print_terminal_line,
     resolve_encoder_executable_path,
 )
@@ -256,6 +257,7 @@ def _plan_automatic_encoder_metadata(
         encoder_parameters: str,
         hdr10plus_json_path: str,
         dolby_vision_rpu_path: str,
+        progress_name: str = '',
 ) -> tuple[
     list[str],
     tuple[str, ...],
@@ -266,6 +268,10 @@ def _plan_automatic_encoder_metadata(
     int | None,
 ]:
     """Probe one actual source and add only metadata options absent from the GUI."""
+    progress_name = str(
+        progress_name
+        or os.path.splitext(os.path.basename(output_file))[0]
+    ).strip()
     try:
         manual_arguments = shlex.split(
             encoder_parameters,
@@ -300,7 +306,7 @@ def _plan_automatic_encoder_metadata(
         )
 
     source_message = translate_text(
-        'Actual encode source: {name} (stream {stream}, codec {codec})'
+        'Actual encode source: {name} (stream {stream}, codec {codec}); output: {output}'
     ).format(
         name=os.path.basename(actual_source.path),
         stream=actual_source.stream_index,
@@ -309,9 +315,13 @@ def _plan_automatic_encoder_metadata(
             if actual_source.codec_name == 'unknown'
             else actual_source.codec_name
         ),
+        output=progress_name,
     )
     _emit_encode_log_line(f'[encode-source] {source_message}')
     service._progress(text=source_message)
+    service._progress(text=translate_text(
+        'Analyzing VapourSynth output metadata: {name}'
+    ).format(name=progress_name))
     try:
         actual_source, vpy_color_changed, vpy_timeline = probe_vapoursynth_output_metadata(
             actual_source,
@@ -331,6 +341,9 @@ def _plan_automatic_encoder_metadata(
             'encoding will continue: {path}. Error report: {report}',
             error,
         )
+    service._progress(text=translate_text(
+        'Planning automatic encoder metadata parameters: {name}'
+    ).format(name=progress_name))
     try:
         automatic_arguments = build_automatic_encoder_metadata_arguments(
             actual_source,
@@ -426,8 +439,10 @@ def _plan_automatic_encoder_metadata(
             automatic_arguments += ('--dolby-vision-rpu', dolby_vision_rpu_path)
     if automatic_arguments:
         metadata_message = translate_text(
-            'Automatic encoder metadata parameters ({encoder}): {parameters}'
+            'Automatic encoder metadata parameters for {name} '
+            '({encoder}): {parameters}'
         ).format(
+            name=progress_name,
             encoder=encoder,
             parameters=' '.join(automatic_arguments),
         )
@@ -1336,6 +1351,8 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             check_corrupted_frames: bool = False,
             frame_check_luma_psnr_threshold_db: float = 30.0,
             frame_check_chroma_psnr_threshold_db: float = 40.0,
+            progress_name: str = '',
+            video_progress_name: str = '',
             cancel_event: Optional[threading.Event] = None,
     ) -> None:
         vpy_path = os.path.normpath(os.path.abspath(str(vpy_path or '').strip()))
@@ -1349,6 +1366,8 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
         bd = bit_depth
         bits_int = int(bd)
         output_stem = os.path.splitext(os.path.basename(output_file))[0]
+        progress_name = str(progress_name or output_stem).strip()
+        video_progress_name = str(video_progress_name or progress_name).strip()
         encoded_extension = {
             'x264': '.h264',
             'x265': '.hevc',
@@ -1381,7 +1400,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             try:
                 self._progress(text=translate_text(
                     'Analyzing black borders: {name}'
-                ).format(name=os.path.basename(src_mkv)))
+                ).format(name=progress_name))
                 crop_plan = detect_black_borders(src_mkv)
             except TaskCancelled:
                 raise
@@ -1413,7 +1432,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     'Detected crop for {name}: left {left}, right {right}, top {top}, '
                     'bottom {bottom}; {width}x{height}, {samples} time points'
                 ).format(
-                    name=os.path.basename(src_mkv),
+                    name=progress_name,
                     left=crop_plan.left,
                     right=crop_plan.right,
                     top=crop_plan.top,
@@ -1427,7 +1446,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     'No removable black borders were detected for {name} '
                     '({samples} time points)'
                 ).format(
-                    name=os.path.basename(src_mkv),
+                    name=progress_name,
                     samples=crop_plan.sample_count,
                 )
             _emit_encode_log_line(f'[encode-crop] {crop_message}')
@@ -1462,7 +1481,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     try:
                         self._progress(
                             text=translate_text('Dolby Vision: preparing {name}').format(
-                                name=os.path.basename(src_mkv)
+                                name=progress_name
                             )
                         )
                     except TaskCancelled:
@@ -1526,7 +1545,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     _emit_encode_log_line(
                         f'{self.t("[BluraySubtitle] getnative - start analyzing ")}{os.path.basename(vpy_video_source)}')
                     try:
-                        self._progress(text=f'{self.t("Getnative analyzing: ")}{os.path.basename(vpy_video_source)}')
+                        self._progress(text=f'{self.t("Getnative analyzing: ")}{progress_name}')
                     except TaskCancelled:
                         raise
                     except Exception:
@@ -1729,6 +1748,9 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             enc_exe = resolve_encoder_executable_path(encoder, encoder_mode)
 
             failure_stage = 'Actual encode source and metadata planning'
+            self._progress(text=translate_text(
+                'Analyzing video source metadata: {name}'
+            ).format(name=progress_name))
             (
                 manual_encoder_arguments,
                 automatic_metadata_arguments,
@@ -1750,6 +1772,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 encoder_parameters,
                 hdr10plus_json_path,
                 encode_dovi_plan.rpu_path if encode_dovi_plan else '',
+                progress_name,
             )
             native_hdr10plus = arguments_contain_option(
                 automatic_metadata_arguments,
@@ -1812,6 +1835,9 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 cmd_echo = f'"{vspipe_exe}" --y4m "{vpy_path}" - | {_format_encoder_cmd_for_echo(enc_cmd)}'
             print(f'{translate_text("Encode command:")}{cmd_echo}')
             failure_stage = 'Video encoding'
+            self._progress(text=translate_text(
+                'Encoding video: {name}'
+            ).format(name=video_progress_name))
             cancel_token = _ENCODE_CANCEL_EVENT.set(cancel_event)
             try:
                 if use_svt_win_temp_y4m:
@@ -1865,7 +1891,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     self._progress(
                         text=translate_text(
                             'Dolby Vision: injecting RPU into {name}'
-                        ).format(name=os.path.basename(encoded_path))
+                        ).format(name=progress_name)
                     )
                     inject_dolby_vision_rpu(encoded_path, encode_dovi_plan)
                     failure_stage = 'Dolby Vision RPU verification'
@@ -1910,6 +1936,15 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                             )
             soft_subtitle = subtitle_path if subtitle_mode == 'soft' else ''
             failure_stage = 'Final Matroska mux'
+
+            def report_audio_progress(operation: str) -> None:
+                self._progress(text=translate_text(
+                    '{operation}: {name}'
+                ).format(
+                    operation=operation,
+                    name=progress_name,
+                ))
+
             mux_with_audio_conversion(
                 src_mkv,
                 output_file,
@@ -1922,7 +1957,11 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 subtitle_language=subtitle_language,
                 audio_encoding=audio_encoding,
                 preserve_failure_artifacts=True,
+                progress_callback=report_audio_progress,
             )
+            self._progress(text=translate_text(
+                'Verifying final video metadata: {name}'
+            ).format(name=progress_name))
             final_verification_errors = []
             try:
                 verify_final_video_metadata(
@@ -1962,7 +2001,36 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             if check_corrupted_frames:
                 self._progress(text=translate_text(
                     'Checking encoded frames: {name}'
-                ).format(name=os.path.basename(output_file)))
+                ).format(name=progress_name))
+
+                def report_frame_check_progress(
+                        frames: int,
+                        fps: float,
+                        fraction: Optional[float],
+                        remaining_seconds: Optional[float],
+                ) -> None:
+                    if fraction is None or remaining_seconds is None:
+                        message = translate_text(
+                            'Frame check progress: {name}; {frames} frames, '
+                            '{fps:.1f} fps'
+                        ).format(
+                            name=progress_name,
+                            frames=frames,
+                            fps=fps,
+                        )
+                    else:
+                        message = translate_text(
+                            'Frame check progress: {name}; {percent:.1f}%, '
+                            '{frames} frames, {fps:.1f} fps, ETA {eta}'
+                        ).format(
+                            name=progress_name,
+                            percent=fraction * 100.0,
+                            frames=frames,
+                            fps=fps,
+                            eta=get_time_str(remaining_seconds),
+                        )
+                    print_terminal_line(message)
+
                 try:
                     frame_check = run_full_frame_check(
                         vspipe_executable=str(vspipe_exe),
@@ -1979,6 +2047,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                             frame_check_chroma_psnr_threshold_db
                         ),
                         cancel_event=cancel_event,
+                        progress_callback=report_frame_check_progress,
                     )
                 except TaskCancelled:
                     raise

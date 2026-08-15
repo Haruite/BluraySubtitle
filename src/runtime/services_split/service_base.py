@@ -120,7 +120,7 @@ class BluraySubtitleServiceBase:
     def _disc_paths_for_output_title(bdmv_root: str, selected_mpls_no_ext: str) -> tuple[str, str, str]:
         raise NotImplementedError
 
-    def _encode_mkv_rows(self, request: EncodeRequest, main_rows: list[EncodeRow], sp_rows: list[EncodeRow], cancel_event: Optional[threading.Event], *, companion_root: str='', progress_base: int=0, progress_span: int=1000) -> EncodeBatchResult:
+    def _encode_mkv_rows(self, request: EncodeRequest, main_rows: list[EncodeRow], sp_rows: list[EncodeRow], cancel_event: Optional[threading.Event], *, companion_root: str='', progress_base: int=0, progress_span: int=1000, main_progress_span: Optional[int]=None, sp_progress_span: Optional[int]=None) -> EncodeBatchResult:
         raise NotImplementedError
 
     @staticmethod
@@ -467,7 +467,7 @@ class BluraySubtitleServiceBase:
         raise NotImplementedError
 
     @staticmethod
-    def _video_frame_count_static(media_path: str) -> int:
+    def _video_frame_count_static(media_path: str, progress_callback: Optional[Callable[[int, float, Optional[float], Optional[float]], None]]=None, cancel_event: Optional[threading.Event]=None, max_frames: Optional[int]=None) -> int:
         raise NotImplementedError
 
     @staticmethod
@@ -506,7 +506,7 @@ class BluraySubtitleServiceBase:
     def detect_dovi_mux_pair(mpls_path: str, probe_m2ts: str, mux_dolby_vision: bool) -> Optional[dict[str, object]]:
         raise NotImplementedError
 
-    def encode_task(self, output_file: str, vpy_path: str, vspipe_mode: str, encoder_mode: str, encoder_parameters: str, subtitle_mode: str, *, source_file: str, encoder: str, bit_depth: str, selected_audio_tracks: Optional[tuple[str, ...]], selected_subtitle_tracks: Optional[tuple[str, ...]], audio_codec_choices: tuple[str, ...], track_language_overrides: tuple[tuple[str, str], ...], subtitle_path: str='', subtitle_language: str='', audio_encoding: AudioEncodingSettings=AudioEncodingSettings(), auto_crop_black_borders: bool=False, vpy_denoise_strength: float=0.6, vpy_dehalo_strength: float=0.0, vpy_dering_strength: float=0.0, vpy_deband_strength: float=0.5, vpy_antialiasing_strength: float=0.5, check_corrupted_frames: bool=False, frame_check_luma_psnr_threshold_db: float=30.0, frame_check_chroma_psnr_threshold_db: float=40.0, cancel_event: Optional[threading.Event]=None) -> None:
+    def encode_task(self, output_file: str, vpy_path: str, vspipe_mode: str, encoder_mode: str, encoder_parameters: str, subtitle_mode: str, *, source_file: str, encoder: str, bit_depth: str, selected_audio_tracks: Optional[tuple[str, ...]], selected_subtitle_tracks: Optional[tuple[str, ...]], audio_codec_choices: tuple[str, ...], track_language_overrides: tuple[tuple[str, str], ...], subtitle_path: str='', subtitle_language: str='', audio_encoding: AudioEncodingSettings=AudioEncodingSettings(), auto_crop_black_borders: bool=False, vpy_denoise_strength: float=0.6, vpy_dehalo_strength: float=0.0, vpy_dering_strength: float=0.0, vpy_deband_strength: float=0.5, vpy_antialiasing_strength: float=0.5, check_corrupted_frames: bool=False, frame_check_luma_psnr_threshold_db: float=30.0, frame_check_chroma_psnr_threshold_db: float=40.0, progress_name: str='', video_progress_name: str='', cancel_event: Optional[threading.Event]=None) -> None:
         raise NotImplementedError
 
     def episodes_encode(self, request: EncodeRequest, cancel_event: Optional[threading.Event]=None) -> EncodeBatchResult:

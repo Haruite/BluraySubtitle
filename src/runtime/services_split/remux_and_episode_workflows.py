@@ -19,6 +19,7 @@ from src.exports.utils import (
     get_index_to_m2ts_and_offset,
     get_time_str,
     force_remove_file,
+    print_terminal_line,
     run_command,
 )
 from src.runtime.audio_conversion import (
@@ -1236,6 +1237,8 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             companion_root: str = '',
             progress_base: int = 0,
             progress_span: int = 1000,
+            main_progress_span: Optional[int] = None,
+            sp_progress_span: Optional[int] = None,
     ) -> EncodeBatchResult:
         """Encode every planned row through one shared execution path."""
         from src.runtime.services_split.encode_and_audio_tasks import encode_dovi_preflight_mkv_paths
@@ -1280,9 +1283,56 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 row: EncodeRow,
                 source_path: str,
                 row_number: int,
+                progress_name: str,
         ) -> None:
-            source_frames = self._video_frame_count_static(source_path)
-            encoded_frames = self._video_frame_count_static(row.output_path)
+            self._progress(text=self.t(
+                'Generating comparison images: {name}'
+            ).format(name=progress_name))
+            frame_counts: list[int] = []
+            # The encoded clip owns the comparison length. Decode it first, then stop
+            # the source scan as soon as it reaches the same number of frames.
+            scan_paths = (row.output_path, source_path)
+            for scan_index, scan_path in enumerate(scan_paths, start=1):
+                def report_frame_scan(
+                        frames: int,
+                        fps: float,
+                        fraction: Optional[float],
+                        remaining_seconds: Optional[float],
+                ) -> None:
+                    if fraction is None or remaining_seconds is None:
+                        message = self.t(
+                            'Comparison frame scan {current}/{total}: {name}; '
+                            '{frames} frames, {fps:.1f} fps'
+                        ).format(
+                            current=scan_index,
+                            total=len(scan_paths),
+                            name=progress_name,
+                            frames=frames,
+                            fps=fps,
+                        )
+                    else:
+                        message = self.t(
+                            'Comparison frame scan {current}/{total}: {name}; '
+                            '{percent:.1f}%, {frames} frames, {fps:.1f} fps, '
+                            'ETA {eta}'
+                        ).format(
+                            current=scan_index,
+                            total=len(scan_paths),
+                            name=progress_name,
+                            percent=fraction * 100.0,
+                            frames=frames,
+                            fps=fps,
+                            eta=get_time_str(remaining_seconds),
+                        )
+                    print_terminal_line(message)
+
+                frame_counts.append(self._video_frame_count_static(
+                    scan_path,
+                    progress_callback=report_frame_scan,
+                    cancel_event=cancel_event,
+                    max_frames=(frame_counts[0] if frame_counts else None),
+                ))
+            encoded_frames, source_frames = frame_counts
             shared_frames = min(source_frames, encoded_frames)
             if shared_frames <= 0:
                 raise RuntimeError(
@@ -1300,7 +1350,10 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             short_stem = re.sub(r'\s+', '_', short_stem).strip(' ._')[:40]
             if not short_stem:
                 short_stem = 'output'
-            comparison_folder = os.path.join(request.output_folder, 'Compare')
+            comparison_folder = os.path.join(
+                os.path.dirname(row.output_path),
+                'Compare',
+            )
             image_base = (
                 f'{row_number:03d}-{short_stem}-f{frame_number:06d}'
             )
@@ -1344,8 +1397,8 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     '0:v:0',
                     '-vf',
                     f'select=eq(n\\,{frame_number})',
-                    '-vsync',
-                    '0',
+                    '-fps_mode',
+                    'passthrough',
                     '-frames:v',
                     '1',
                     '-update',
@@ -1384,11 +1437,17 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 row: EncodeRow,
                 source_path: str,
                 row_number: int,
+                progress_name: str,
         ) -> None:
             if not request.settings.output_comparison_images:
                 return
             try:
-                write_comparison_images(row, source_path, row_number)
+                write_comparison_images(
+                    row,
+                    source_path,
+                    row_number,
+                    progress_name,
+                )
             except TaskCancelled:
                 raise
             except Exception as error:
@@ -1476,7 +1535,15 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 warnings=prior_warnings + (failure_message,),
             ))
 
-        def execute_video_row(row: EncodeRow, source_path: str) -> None:
+        def execute_video_row(
+                row: EncodeRow,
+                source_path: str,
+                progress_name: str,
+                video_progress_name: str = '',
+        ) -> None:
+            video_progress_name = str(
+                video_progress_name or os.path.basename(row.output_path)
+            ).strip()
             self.encode_task(
                 row.output_path,
                 row.vpy_path,
@@ -1517,6 +1584,8 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 frame_check_chroma_psnr_threshold_db=(
                     request.settings.frame_check_chroma_psnr_threshold_db
                 ),
+                progress_name=progress_name,
+                video_progress_name=video_progress_name,
                 cancel_event=cancel_event,
             )
             if not os.path.isfile(row.output_path):
@@ -1627,16 +1696,41 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         os.makedirs(request.output_folder, exist_ok=True)
         total_rows = max(1, len(main_rows) + len(selected_sp_rows))
         completed_rows = 0
+        completed_main_rows = 0
+        completed_sp_rows = 0
+        weighted_progress = (
+            main_progress_span is not None
+            and sp_progress_span is not None
+        )
+
+        def row_progress(category: str) -> int:
+            if not weighted_progress:
+                return progress_base + int(
+                    completed_rows / total_rows * progress_span
+                )
+            if category == 'main':
+                return progress_base + int(
+                    completed_main_rows
+                    / max(len(main_rows), 1)
+                    * main_progress_span
+                )
+            return progress_base + main_progress_span + int(
+                completed_sp_rows
+                / max(len(selected_sp_rows), 1)
+                * sp_progress_span
+            )
 
         for row in main_rows:
             if cancel_event and cancel_event.is_set():
                 raise TaskCancelled()
             warning_start = len(self.encode_warnings)
+            progress_name = f'EP{completed_main_rows + 1:02d}'
             self._progress(
-                progress_base + int(completed_rows / total_rows * progress_span),
-                self.t('Encoding {current}/{total}').format(
-                    current=completed_rows + 1,
-                    total=total_rows,
+                row_progress('main'),
+                self.t('Preparing episode {current}/{total}: {name}').format(
+                    current=completed_main_rows + 1,
+                    total=len(main_rows),
+                    name=progress_name,
                 ),
             )
             if os.path.exists(row.output_path):
@@ -1649,13 +1743,15 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     row,
                     row.source_path,
                     completed_rows + 1,
+                    progress_name,
                 )
                 record_completed_row(row, 'Main row', warning_start)
                 completed_rows += 1
+                completed_main_rows += 1
                 continue
             os.makedirs(os.path.dirname(row.output_path), exist_ok=True)
             try:
-                execute_video_row(row, row.source_path)
+                execute_video_row(row, row.source_path, progress_name)
             except TaskCancelled:
                 raise
             except Exception as error:
@@ -1665,23 +1761,29 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     row,
                     row.source_path,
                     completed_rows + 1,
+                    progress_name,
                 )
                 record_completed_row(row, 'Main row', warning_start)
             completed_rows += 1
+            completed_main_rows += 1
 
         staged_main_sources = {
             os.path.normcase(os.path.abspath(row.source_path))
             for row in main_rows
         }
-        for row in selected_sp_rows:
+        # Copy-only image folders and extracted assets are still selected table3
+        # rows, so they consume the same visible SP sequence as encoded videos.
+        for sp_sequence_number, row in enumerate(selected_sp_rows, start=1):
             if cancel_event and cancel_event.is_set():
                 raise TaskCancelled()
             warning_start = len(self.encode_warnings)
+            progress_name = f'SP{sp_sequence_number:02d}'
             self._progress(
-                progress_base + int(completed_rows / total_rows * progress_span),
-                self.t('Encoding {current}/{total}').format(
-                    current=completed_rows + 1,
-                    total=total_rows,
+                row_progress('sp'),
+                self.t('Preparing SP {current}/{total}: {name}').format(
+                    current=sp_sequence_number,
+                    total=len(selected_sp_rows),
+                    name=progress_name,
                 ),
             )
             source_path = os.path.normpath(row.source_path)
@@ -1689,6 +1791,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 # Episode-linked SP muxing has already modified this main source in the stage.
                 record_completed_row(row, 'SP row', warning_start)
                 completed_rows += 1
+                completed_sp_rows += 1
                 continue
             if os.path.exists(row.output_path):
                 self._progress(
@@ -1701,9 +1804,11 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                         row,
                         source_path,
                         completed_rows + 1,
+                        progress_name,
                     )
                 record_completed_row(row, 'SP row', warning_start)
                 completed_rows += 1
+                completed_sp_rows += 1
                 continue
             os.makedirs(os.path.dirname(row.output_path), exist_ok=True)
             try:
@@ -1727,9 +1832,25 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                         ),
                         audio_encoding=request.settings.audio_encoding,
                         preserve_failure_artifacts=True,
+                        progress_callback=lambda operation, name=progress_name: self._progress(
+                            text=self.t('{operation}: {name}').format(
+                                operation=operation,
+                                name=name,
+                            )
+                        ),
                     )
                 elif source_path.lower().endswith('.mkv'):
-                    execute_video_row(row, source_path)
+                    original_name = os.path.basename(
+                        row.sp_entry.output_name
+                        if row.sp_entry is not None
+                        else row.output_path
+                    )
+                    execute_video_row(
+                        row,
+                        source_path,
+                        progress_name,
+                        video_progress_name=original_name,
+                    )
                 else:
                     _copy_path_atomically(source_path, row.output_path)
             except TaskCancelled:
@@ -1746,9 +1867,11 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                         row,
                         source_path,
                         completed_rows + 1,
+                        progress_name,
                     )
                 record_completed_row(row, 'SP row', warning_start)
             completed_rows += 1
+            completed_sp_rows += 1
 
         if companion_files:
             self._progress(text=self.t('Copying companion files'))
@@ -1788,7 +1911,12 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                         ).format(path=destination_path)
                     )
                 _copy_path_atomically(source_path, destination_path)
-        self._progress(progress_base + progress_span, 'Done')
+        final_progress = (
+            progress_base + main_progress_span + sp_progress_span
+            if weighted_progress
+            else progress_base + progress_span
+        )
+        self._progress(final_progress, 'Done')
         batch_result = EncodeBatchResult(tuple(row_results))
         return batch_result
 
@@ -1898,28 +2026,36 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 request.track_selection_config,
                 request.track_language_config or {},
             )
+            sp_original_name_by_entry_index = {
+                job.entry_index: os.path.basename(job.entry.output_name)
+                for job in sp_jobs
+            }
             os.makedirs(staging_disc_folder, exist_ok=True)
             main_stage_started = True
             self._build_main_episode_mkvs(
                 main_jobs,
                 cancel_event=cancel_event,
                 mux_progress_base=0,
-                mux_progress_span=400,
+                mux_progress_span=160,
             )
-            self._progress(420, 'Writing Chapters')
+            self._progress(160, 'Writing Chapters')
             staged_main_files = self._post_remux_finalize_episodes(main_jobs, cancel_event)
+            self._progress(160)
 
             completed_sp_mux = 0
 
-            def report_sp_mux(_entry_index: int, path: str) -> None:
+            def report_sp_mux(entry_index: int, path: str) -> None:
                 nonlocal completed_sp_mux
                 completed_sp_mux += 1
                 self._progress(
-                    450 + int(completed_sp_mux / max(len(sp_jobs), 1) * 140),
+                    160 + int(completed_sp_mux / max(len(sp_jobs), 1) * 40),
                     self.t('Muxing SP {current}/{total}: {name}').format(
                         current=completed_sp_mux,
                         total=len(sp_jobs),
-                        name=os.path.basename(path),
+                        name=sp_original_name_by_entry_index.get(
+                            entry_index,
+                            os.path.basename(path),
+                        ),
                     ),
                 )
 
@@ -1944,6 +2080,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     )
                 },
             )
+            self._progress(200)
             staged_main_by_key = {
                 configuration_key: staged_path
                 for configuration_key, staged_path in zip(
@@ -2042,8 +2179,9 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 resolved_main_rows,
                 resolved_sp_rows,
                 cancel_event,
-                progress_base=600,
-                progress_span=400,
+                progress_base=200,
+                main_progress_span=640,
+                sp_progress_span=160,
             )
             if batch_result.failed_rows:
                 retained_stage_folders = list(dict.fromkeys(

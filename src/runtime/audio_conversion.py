@@ -8,7 +8,7 @@ import re
 import shutil
 import tempfile
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 from src.core import find_mkvtoolnix, mkvtoolnix_ui_language_arg
 from src.core import settings as core_settings
@@ -381,8 +381,13 @@ def mux_with_audio_conversion(
         subtitle_language: str = '',
         audio_encoding: AudioEncodingSettings = AudioEncodingSettings(),
         preserve_failure_artifacts: bool = False,
+        progress_callback: Optional[Callable[[str], None]] = None,
 ) -> None:
     """Optionally clean audio, convert requested lossless tracks, and mux atomically."""
+    def report_progress(message_source: str, **values: object) -> None:
+        if progress_callback is not None:
+            progress_callback(translate_text(message_source).format(**values))
+
     source_path = os.path.abspath(os.path.normpath(source_file))
     output_path = os.path.abspath(os.path.normpath(output_file))
     if not os.path.isfile(source_path):
@@ -393,6 +398,7 @@ def mux_with_audio_conversion(
             translate_text('Output file already exists: {path}').format(path=output_path)
         )
 
+    report_progress('Inspecting media tracks')
     tracks = _identify_tracks(source_path)
     track_by_id = {int(track['id']): track for track in tracks if 'id' in track}
     source_audio = [int(track['id']) for track in tracks if track.get('type') == 'audio']
@@ -474,18 +480,19 @@ def mux_with_audio_conversion(
         # The source MKV can be hundreds of gigabytes. Extract selected audio in
         # one mkvextract invocation, then reuse the elementary streams for both
         # cleanup analysis and conversion instead of reopening the MKV per track.
-        extracted_audio_by_track = (
-            _extract_selected_audio_tracks(
+        extracted_audio_by_track = {}
+        if process_audio:
+            report_progress('Extracting selected audio tracks')
+            extracted_audio_by_track = _extract_selected_audio_tracks(
                 mkvextract,
                 source_path,
                 work_folder,
                 audio_tracks,
                 selected_audio,
             )
-            if process_audio else {}
-        )
-        kept_audio = (
-            _selected_audio_after_cleanup(
+        if clean_audio_tracks:
+            report_progress('Analyzing silent and duplicate audio')
+            kept_audio = _selected_audio_after_cleanup(
                 ffmpeg,
                 source_path,
                 audio_tracks,
@@ -493,8 +500,8 @@ def mux_with_audio_conversion(
                 language_by_track,
                 extracted_audio_by_track,
             )
-            if clean_audio_tracks else list(selected_audio)
-        )
+        else:
+            kept_audio = list(selected_audio)
         for track in audio_tracks:
             track_id = int(track['id'])
             if track_id not in kept_audio:
@@ -521,6 +528,11 @@ def mux_with_audio_conversion(
                 continue
             extracted_audio = extracted_audio_by_track[track_id]
             conversion_input = extracted_audio
+            report_progress(
+                'Converting audio track {track} to {codec}',
+                track=track_id,
+                codec=target_codec.upper(),
+            )
             if truehd_atmos:
                 decoded_base = os.path.join(work_folder, f'track-{track_id}-decoded')
                 decode_command = [
@@ -861,6 +873,7 @@ def mux_with_audio_conversion(
             temporary_output,
         ])
         mux_command.extend(input_arguments)
+        report_progress('Muxing final Matroska output')
         mux_result = run_command(mux_command, log_template='Mux command: {command}')
 
         if mux_result.returncode not in (0, 1) or not (

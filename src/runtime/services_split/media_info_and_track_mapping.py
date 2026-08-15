@@ -2,13 +2,15 @@
 
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import threading
-from typing import Optional
+import time
+from typing import Callable, Optional
 
 import numpy as np
 import pycountry
@@ -19,7 +21,7 @@ from src.core import FFPROBE_PATH, FFMPEG_PATH, FLAC_PATH, MKV_MERGE_PATH, \
     find_mkvtoolnix, get_mkvtoolnix_ui_language, mkvtoolnix_ui_language_arg
 from src.core import settings as core_settings
 from src.core.i18n import translate_text
-from src.exports.utils import get_effective_bit_depth, get_time_str, print_exc_terminal, get_index_to_m2ts_and_offset, run_command
+from src.exports.utils import get_effective_bit_depth, get_time_str, parse_time_to_seconds, print_exc_terminal, get_index_to_m2ts_and_offset, run_command
 from src.runtime.audio_conversion import AudioEncodingSettings
 from .service_base import BluraySubtitleServiceBase
 from src.runtime.dolby_vision import mux_dolby_vision_layers
@@ -609,34 +611,246 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             return 0
 
     @staticmethod
-    def _video_frame_count_static(media_path: str) -> int:
+    def _video_frame_count_static(
+            media_path: str,
+            progress_callback: Optional[
+                Callable[[int, float, Optional[float], Optional[float]], None]
+            ] = None,
+            cancel_event: Optional[threading.Event] = None,
+            max_frames: Optional[int] = None,
+    ) -> int:
         if not media_path or not os.path.exists(media_path):
             return -1
         exe = FFPROBE_PATH if FFPROBE_PATH else 'ffprobe'
-        cmd = [exe, "-v", "error", "-count_frames", "-select_streams", "v:0",
-               "-show_entries", "stream=nb_read_frames,nb_frames", "-of", "json", media_path]
-        try:
-            p = run_command(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore')
-        except Exception:
-            return -1
-        if p.returncode != 0:
-            return -1
-        try:
-            data = json.loads(p.stdout or "{}")
-        except Exception:
-            return -1
-        streams = data.get('streams') or []
-        if not streams:
-            return -2
-        s0 = streams[0] if isinstance(streams[0], dict) else {}
-        for k in ('nb_read_frames', 'nb_frames'):
+        if progress_callback is None and cancel_event is None and max_frames is None:
+            cmd = [exe, "-v", "error", "-count_frames", "-select_streams", "v:0",
+                   "-show_entries", "stream=nb_read_frames,nb_frames", "-of", "json", media_path]
             try:
-                v = int(str(s0.get(k) or '').strip())
-                if v >= 0:
-                    return v
+                p = run_command(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore')
             except Exception:
+                return -1
+            if p.returncode != 0:
+                return -1
+            try:
+                data = json.loads(p.stdout or "{}")
+            except Exception:
+                return -1
+            streams = data.get('streams') or []
+            if not streams:
+                return -2
+            s0 = streams[0] if isinstance(streams[0], dict) else {}
+            for k in ('nb_read_frames', 'nb_frames'):
+                try:
+                    v = int(str(s0.get(k) or '').strip())
+                    if v >= 0:
+                        return v
+                except Exception:
+                    pass
+            return -1
+
+        if cancel_event is not None and cancel_event.is_set():
+            raise TaskCancelled()
+        duration_seconds: Optional[float] = None
+        duration_cmd = [
+            exe,
+            '-v',
+            'error',
+            '-select_streams',
+            'v:0',
+            '-show_entries',
+            'stream=duration:stream_tags=DURATION',
+            '-of',
+            'json',
+            media_path,
+        ]
+        try:
+            duration_result = run_command(
+                duration_cmd,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='ignore',
+                timeout=30,
+            )
+        except Exception:
+            duration_result = None
+        if duration_result is not None and duration_result.returncode == 0:
+            try:
+                duration_document = json.loads(duration_result.stdout or '{}')
+                duration_streams = duration_document.get('streams') or []
+                duration_stream = (
+                    duration_streams[0]
+                    if duration_streams and isinstance(duration_streams[0], dict)
+                    else {}
+                )
+                duration_values = (
+                    duration_stream.get('duration'),
+                    (duration_stream.get('tags') or {}).get('DURATION'),
+                )
+                for duration_value in duration_values:
+                    parsed_duration = parse_time_to_seconds(
+                        duration_value,
+                        default=None,
+                    )
+                    if parsed_duration is not None and parsed_duration > 0:
+                        duration_seconds = parsed_duration
+                        break
+            except (AttributeError, TypeError, ValueError):
                 pass
-        return -1
+
+        cmd = [exe, "-v", "error", "-select_streams", "v:0",
+               "-show_frames", "-show_entries", "frame=best_effort_timestamp_time",
+               "-of", "csv=p=0", media_path]
+        output_queue: queue.Queue[Optional[str]] = queue.Queue(maxsize=64)
+        reader_stop_event = threading.Event()
+        emit_progress = progress_callback or (
+            lambda _frames, _fps, _fraction, _remaining: None
+        )
+        with tempfile.TemporaryFile() as stderr_file:
+            process = run_command(
+                cmd,
+                wait=False,
+                stdout=subprocess.PIPE,
+                stderr=stderr_file,
+                text=True,
+                encoding='utf-8',
+                errors='ignore',
+                bufsize=1,
+            )
+            if process.stdout is None:
+                process.terminate()
+                process.wait()
+                return -1
+
+            def read_output() -> None:
+                try:
+                    for output_line in process.stdout:
+                        while not reader_stop_event.is_set():
+                            try:
+                                output_queue.put(output_line, timeout=0.2)
+                                break
+                            except queue.Full:
+                                continue
+                        if reader_stop_event.is_set():
+                            break
+                except (OSError, ValueError):
+                    pass
+                finally:
+                    while not reader_stop_event.is_set():
+                        try:
+                            output_queue.put(None, timeout=0.2)
+                            break
+                        except queue.Full:
+                            continue
+
+            reader = threading.Thread(target=read_output, daemon=True)
+            reader.start()
+            frame_count = 0
+            frame_limit = None if max_frames is None else max(int(max_frames), 0)
+            reached_frame_limit = frame_limit == 0
+            latest_media_seconds: Optional[float] = None
+            first_media_seconds: Optional[float] = None
+            started_at = time.monotonic()
+            last_progress_at = started_at
+            try:
+                emit_progress(0, 0.0, None, None)
+                while not reached_frame_limit:
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise TaskCancelled()
+                    try:
+                        output_line = output_queue.get(timeout=0.2)
+                    except queue.Empty:
+                        if process.poll() is not None and not reader.is_alive():
+                            break
+                        continue
+                    if output_line is None:
+                        break
+                    timestamp_text = output_line.strip().split(',', 1)[0]
+                    if not timestamp_text:
+                        continue
+                    frame_count += 1
+                    try:
+                        latest_media_seconds = float(timestamp_text)
+                    except ValueError:
+                        latest_media_seconds = None
+                    if first_media_seconds is None and latest_media_seconds is not None:
+                        first_media_seconds = latest_media_seconds
+                    current_time = time.monotonic()
+                    if frame_limit is not None and frame_count >= frame_limit:
+                        reached_frame_limit = True
+                        break
+                    # Terminal progress is emitted as complete lines, so keep long
+                    # scans readable instead of appending one line every second.
+                    if current_time - last_progress_at < 15.0:
+                        continue
+                    elapsed_seconds = max(current_time - started_at, 0.001)
+                    frames_per_second = frame_count / elapsed_seconds
+                    progress_fraction: Optional[float] = None
+                    remaining_seconds: Optional[float] = None
+                    if frame_limit is not None:
+                        progress_fraction = min(frame_count / frame_limit, 1.0)
+                        if frames_per_second > 0:
+                            remaining_seconds = max(
+                                frame_limit - frame_count,
+                                0,
+                            ) / frames_per_second
+                    elif (
+                            duration_seconds is not None
+                            and latest_media_seconds is not None
+                            and first_media_seconds is not None
+                    ):
+                        decoded_seconds = max(
+                            latest_media_seconds - first_media_seconds,
+                            0.0,
+                        )
+                        progress_fraction = min(
+                            max(decoded_seconds / duration_seconds, 0.0),
+                            1.0,
+                        )
+                        if decoded_seconds > 0:
+                            media_seconds_per_second = decoded_seconds / elapsed_seconds
+                            remaining_seconds = max(
+                                duration_seconds - decoded_seconds,
+                                0.0,
+                            ) / media_seconds_per_second
+                    emit_progress(
+                        frame_count,
+                        frames_per_second,
+                        progress_fraction,
+                        remaining_seconds,
+                    )
+                    last_progress_at = current_time
+                if reached_frame_limit and process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=2.0)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+                return_code = process.wait()
+            except BaseException:
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=2.0)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+                raise
+            finally:
+                reader_stop_event.set()
+                process.stdout.close()
+                reader.join(timeout=1.0)
+            if return_code != 0 and not reached_frame_limit:
+                return -1
+        elapsed_seconds = max(time.monotonic() - started_at, 0.001)
+        emit_progress(
+            frame_count,
+            frame_count / elapsed_seconds,
+            1.0 if duration_seconds is not None or frame_limit is not None else None,
+            0.0 if duration_seconds is not None or frame_limit is not None else None,
+        )
+        return frame_count
 
     @staticmethod
     def _is_audio_only_media(media_path: str) -> bool:

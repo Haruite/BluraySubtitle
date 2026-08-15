@@ -14,7 +14,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from fractions import Fraction
 from pathlib import Path
-from threading import Event
+from threading import Event, Thread
+from typing import Callable
 
 from src.exports.utils import run_command
 from src.runtime import TaskCancelled
@@ -131,6 +132,10 @@ def _run_full_frame_check_process(
         encoded_path: str,
         stats_path: str,
         cancel_event: Event | None,
+        progress_callback: Callable[
+            [int, float, float | None, float | None], None
+        ] | None = None,
+        total_frames: int | None = None,
 ) -> _ProcessOutcome:
     process_options: dict[str, object] = {
         "env": dict(vspipe_environment),
@@ -163,6 +168,8 @@ def _run_full_frame_check_process(
     ]
     vspipe_process = None
     ffmpeg_process = None
+    stats_reader = None
+    compared_frames = 0
     with (
             open(stats_path, "wb") as stats_stream,
             tempfile.TemporaryFile(mode="w+b") as vspipe_log_stream,
@@ -180,12 +187,36 @@ def _run_full_frame_check_process(
                 ffmpeg_command,
                 wait=False,
                 stdin=vspipe_process.stdout,
-                stdout=stats_stream,
+                stdout=subprocess.PIPE,
                 stderr=ffmpeg_log_stream,
                 **process_options,
             )
             if vspipe_process.stdout is not None:
                 vspipe_process.stdout.close()
+            if ffmpeg_process.stdout is None:
+                raise RuntimeError("FFmpeg frame-check output pipe is unavailable")
+
+            def copy_stats() -> None:
+                nonlocal compared_frames
+                try:
+                    for stats_line in iter(ffmpeg_process.stdout.readline, b""):
+                        stats_stream.write(stats_line)
+                        if b"n:" in stats_line and b"psnr_avg:" in stats_line:
+                            compared_frames += 1
+                except (OSError, ValueError):
+                    pass
+                finally:
+                    try:
+                        ffmpeg_process.stdout.close()
+                    except OSError:
+                        pass
+
+            stats_reader = Thread(target=copy_stats, daemon=True)
+            stats_reader.start()
+            started_at = time.monotonic()
+            last_progress_at = started_at
+            if progress_callback is not None:
+                progress_callback(0, 0.0, None, None)
             while vspipe_process.poll() is None or ffmpeg_process.poll() is None:
                 if cancel_event is not None and cancel_event.is_set():
                     _stop_process(ffmpeg_process)
@@ -195,7 +226,54 @@ def _run_full_frame_check_process(
                     raise TaskCancelled()
                 if ffmpeg_process.poll() not in (None, 0):
                     _stop_process(vspipe_process)
+                current_time = time.monotonic()
+                if (
+                        progress_callback is not None
+                        and current_time - last_progress_at >= 15.0
+                ):
+                    elapsed_seconds = max(current_time - started_at, 0.001)
+                    frames_per_second = compared_frames / elapsed_seconds
+                    progress_fraction = (
+                        min(compared_frames / total_frames, 1.0)
+                        if total_frames is not None and total_frames > 0
+                        else None
+                    )
+                    remaining_seconds = (
+                        max(total_frames - compared_frames, 0) / frames_per_second
+                        if total_frames is not None
+                        and total_frames > 0
+                        and frames_per_second > 0
+                        else None
+                    )
+                    progress_callback(
+                        compared_frames,
+                        frames_per_second,
+                        progress_fraction,
+                        remaining_seconds,
+                    )
+                    last_progress_at = current_time
                 time.sleep(0.1)
+            stats_reader.join()
+            stats_stream.flush()
+            if progress_callback is not None:
+                elapsed_seconds = max(time.monotonic() - started_at, 0.001)
+                frames_per_second = compared_frames / elapsed_seconds
+                progress_fraction = (
+                    min(compared_frames / total_frames, 1.0)
+                    if total_frames is not None and total_frames > 0
+                    else None
+                )
+                progress_callback(
+                    compared_frames,
+                    frames_per_second,
+                    progress_fraction,
+                    (
+                        0.0
+                        if progress_fraction is not None
+                        and progress_fraction >= 1.0
+                        else None
+                    ),
+                )
             return _ProcessOutcome(
                 int(vspipe_process.returncode),
                 int(ffmpeg_process.returncode),
@@ -209,6 +287,8 @@ def _run_full_frame_check_process(
                 ffmpeg_process.wait()
             if vspipe_process is not None:
                 vspipe_process.wait()
+            if stats_reader is not None:
+                stats_reader.join(timeout=1.0)
             raise
 
 
@@ -379,6 +459,9 @@ def run_full_frame_check(
         luma_psnr_threshold_db: float = DEFAULT_LUMA_PSNR_THRESHOLD_DB,
         chroma_psnr_threshold_db: float = DEFAULT_CHROMA_PSNR_THRESHOLD_DB,
         cancel_event: Event | None = None,
+        progress_callback: Callable[
+            [int, float, float | None, float | None], None
+        ] | None = None,
 ) -> FrameCheckResult:
     """Compare the exact Encode VPy output with the completed encoded video."""
     normalized_vpy = os.path.abspath(os.path.normpath(vpy_path))
@@ -390,6 +473,12 @@ def run_full_frame_check(
     created_at = datetime.now(timezone.utc).isoformat()
     try:
         encoded_video = _probe_encoded_video(ffprobe_executable, normalized_encoded)
+        packet_count = encoded_video.get("packet_count")
+        progress_total_frames = next((
+            count
+            for count in (packet_count, expected_reference_frames)
+            if isinstance(count, int) and count > 0
+        ), None)
         with tempfile.TemporaryDirectory(prefix="bluraysub_frame_check_") as temporary_directory:
             stats_path = os.path.join(temporary_directory, "psnr.log")
             outcome = _run_full_frame_check_process(
@@ -400,6 +489,8 @@ def run_full_frame_check(
                 normalized_encoded,
                 stats_path,
                 cancel_event,
+                progress_callback=progress_callback,
+                total_frames=progress_total_frames,
             )
             summary = _summarize_psnr(
                 stats_path,
@@ -407,7 +498,6 @@ def run_full_frame_check(
                 luma_psnr_threshold_db,
                 chroma_psnr_threshold_db,
             )
-        packet_count = encoded_video.get("packet_count")
         compared_frames = int(summary["compared_frames"])
         frame_counts = [
             count
