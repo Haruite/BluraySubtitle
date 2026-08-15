@@ -491,6 +491,7 @@ I18N_ZH_TO_EN = {
     'MKV 文件不存在：{path}': 'MKV file does not exist: {path}',
     '字幕文件不存在：{path}': 'Subtitle file does not exist: {path}',
     '不支持的字幕格式：{path}': 'Unsupported subtitle format: {path}',
+    '内嵌字幕仅支持 ASS/SSA/SRT：{path}': 'Hardsub supports only ASS/SSA/SRT: {path}',
     '第 {row} 行字幕没有对应所选蓝光原盘': 'Subtitle row {row} does not match a selected Blu-ray disc',
     '无法加载字幕文件：{path}': 'Failed to load subtitle file: {path}',
     '无法将全部所选字幕文件映射到所选主播放列表': 'Could not map all selected subtitle files to the selected main playlists',

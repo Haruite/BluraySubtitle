@@ -271,6 +271,16 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
             raise FileNotFoundError(
                 translate_text('Subtitle file does not exist: {path}').format(path=subtitle_path)
             )
+        if (
+                subtitle_path
+                and request.settings.subtitle_mode == 'hard'
+                and os.path.splitext(subtitle_path)[1].lower() not in ('.ass', '.ssa', '.srt')
+        ):
+            raise ValueError(
+                translate_text('Hardsub supports only ASS/SSA/SRT: {path}').format(
+                    path=subtitle_path
+                )
+            )
         if not is_sp_row or (
                 str(row.output_path).lower().endswith('.mkv')
                 and not row.uses_main_output

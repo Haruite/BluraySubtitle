@@ -1477,7 +1477,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             os.path.normcase(os.path.abspath(row.output_path))
             for row in main_rows + selected_sp_rows
         }
-        external_subtitles: list[tuple[str, str]] = []
+        external_subtitles: list[tuple[str, str, str]] = []
         if request.settings.subtitle_mode == 'external':
             for row in main_rows:
                 if not row.subtitle_path:
@@ -1502,14 +1502,18 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                         ).format(path=subtitle_destination)
                     )
                 planned_output_paths.add(normalized_destination)
-                external_subtitles.append((row.subtitle_path, subtitle_destination))
+                external_subtitles.append((
+                    row.subtitle_path,
+                    subtitle_destination,
+                    row.output_path,
+                ))
 
         companion_files: list[tuple[str, str]] = []
         if companion_root and os.path.isdir(companion_root):
             root_path = os.path.abspath(os.path.normpath(companion_root))
             external_by_destination = {
                 os.path.normcase(os.path.abspath(destination)): os.path.normcase(os.path.abspath(source))
-                for source, destination in external_subtitles
+                for source, destination, _video_output in external_subtitles
             }
             for current_folder, _directories, filenames in os.walk(root_path):
                 if cancel_event and cancel_event.is_set():
@@ -1709,9 +1713,11 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 shutil.copy2(source_path, destination_path)
         if external_subtitles:
             self._progress(text=self.t('Copying external subtitles'))
-            for source_path, destination_path in external_subtitles:
+            for source_path, destination_path, video_output_path in external_subtitles:
                 if cancel_event and cancel_event.is_set():
                     raise TaskCancelled()
+                if not os.path.isfile(video_output_path):
+                    continue
                 if os.path.exists(destination_path):
                     if resume_existing_outputs and os.path.isfile(destination_path):
                         self._progress(

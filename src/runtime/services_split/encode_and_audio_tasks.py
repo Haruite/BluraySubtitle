@@ -1423,6 +1423,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     return
 
                 subtitle_real_path = os.path.normpath(subtitle_path) if subtitle_path else None
+                hardsub_enabled = subtitle_mode == 'hard' and bool(subtitle_real_path)
 
                 def _patch_output_fmtc_bitdepth_line(line: str) -> tuple[str, bool]:
                     """
@@ -1516,13 +1517,39 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                         updated = True
                         continue
 
-                    if subtitle_real_path and stripped.startswith('sub_file =') and not stripped.startswith('#'):
-                        indent = line[:len(line) - len(stripped)]
-                        comment = ''
-                        if '#' in stripped:
-                            comment = ' #' + stripped.split('#', 1)[1].rstrip('\n')
-                        new_lines.append(f'{indent}sub_file = {_to_vpy_raw_string(subtitle_real_path)}{comment}\n')
-                        updated = True
+                    subtitle_match = re.match(
+                        r'^(\s*)(#\s*)?(sub_file\s*=\s*)r?[\'"].*?[\'"]'
+                        r'(\s*(#.*)?)$',
+                        raw,
+                    )
+                    if subtitle_match:
+                        subtitle_value = _to_vpy_raw_string(subtitle_real_path or '')
+                        comment_prefix = '' if hardsub_enabled else '# '
+                        new_line = (
+                            f'{subtitle_match.group(1)}{comment_prefix}'
+                            f'{subtitle_match.group(3)}{subtitle_value}'
+                            f'{subtitle_match.group(4) or ""}\n'
+                        )
+                        new_lines.append(new_line)
+                        updated = updated or new_line != line
+                        continue
+
+                    textsub_match = re.match(
+                        r'^(\s*)(#\s*)?'
+                        r'(res\s*=\s*core\.assrender\.TextSub\('
+                        r'\s*res\s*,\s*file\s*=\s*sub_file\s*\))'
+                        r'(\s*(#.*)?)$',
+                        raw,
+                    )
+                    if textsub_match:
+                        comment_prefix = '' if hardsub_enabled else '# '
+                        new_line = (
+                            f'{textsub_match.group(1)}{comment_prefix}'
+                            f'{textsub_match.group(3)}'
+                            f'{textsub_match.group(4) or ""}\n'
+                        )
+                        new_lines.append(new_line)
+                        updated = updated or new_line != line
                         continue
 
                     nl, ch = _patch_output_fmtc_bitdepth_line(line)

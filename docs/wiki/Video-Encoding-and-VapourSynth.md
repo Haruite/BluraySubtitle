@@ -136,7 +136,7 @@ VapourSynth is a Python-driven frame server. A `.vpy` script:
 
 It does not encode video by itself. In this project, `vspipe` evaluates the selected output and writes Y4M frames to x264, x265, or SVT-AV1.
 
-The GUI can generate, edit, and preview a `.vpy` script. Before encoding it injects the actual source path and, when enabled, native-resolution information. The selected output bit depth is synchronized with the final `fmtc.bitdepth(..., bits=N)` conversion. Hardsub mode activates the `assrender.TextSub` line and supplies the selected subtitle path.
+The GUI can generate, edit, and preview a `.vpy` script. Before encoding it injects the actual source path and, when enabled, native-resolution information. The selected output bit depth is synchronized with the final `fmtc.bitdepth(..., bits=N)` conversion. Hardsub mode activates the `assrender.TextSub` line and supplies the selected ASS, SSA, or SRT subtitle path. SUP hardsubs are not supported by this text-rendering path.
 
 ### Automatic getnative
 
@@ -243,7 +243,7 @@ QTGMC/VIVTC and their dependencies must be present in the VapourSynth runtime us
 The default script is a usable starting point, not a universal restoration recipe. It accepts progressive video only and rejects field-based input instead of processing it incorrectly. L-SMASH indexes are stored under the system temporary directory rather than beside a potentially read-only disc source. When native inverse scaling is active, only luma uses the detected descale kernel; chroma follows Blu-ray's left chroma location, and a reconstruction mask restores the original YUV planes over credits and other final-resolution composites. Its current plugin chain includes:
 
 Credits, on-picture text, and already-burned subtitles are not recognized by OCR or by their meaning. When native inverse scaling is active, the script compares the original 16-bit luma with luma that was descaled to the detected native height and then reconstructed to the output size. It binarizes absolute differences above two 8-bit code values (scaled to 16-bit), expands the mask twice, and inflates it once. After filtering and resizing, white mask regions receive the original YUV planes.
-Text composited at the final master resolution normally differs strongly from the native-height reconstruction, which is why Staff rolls and burned subtitles are usually protected. Fine texture, sharpening, line art, or noise can also trigger the same mask; this is an intentional source-preserving false positive, not semantic text detection. Optional external ASS/SSA hardsubs are separate and are rendered directly by `assrender.TextSub` from the selected subtitle file.
+Text composited at the final master resolution normally differs strongly from the native-height reconstruction, which is why Staff rolls and burned subtitles are usually protected. Fine texture, sharpening, line art, or noise can also trigger the same mask; this is an intentional source-preserving false positive, not semantic text detection. Optional external ASS/SSA/SRT hardsubs are separate and are rendered directly by `assrender.TextSub` from the selected subtitle file.
 
 | Namespace/package | Role in the generated script |
 | --- | --- |
@@ -256,7 +256,7 @@ Text composited at the final master resolution normally differs strongly from th
 | `eedi2` | Edge-directed antialiasing |
 | `rgvs.Repair` | Constrain repaired planes |
 | built-in `std` and `resize` | Plane operations, format-safe resizing, output construction |
-| `assrender.TextSub` | Optional ASS/SSA rendering for hardsubs |
+| `assrender.TextSub` | Optional ASS/SSA/SRT rendering for hardsubs |
 
 Availability is environment-dependent. A script fails at evaluation time if a required plugin or Python module is missing; the setup scripts and External Tools settings determine which runtime is used.
 
