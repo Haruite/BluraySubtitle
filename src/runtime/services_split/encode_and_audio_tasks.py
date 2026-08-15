@@ -1373,13 +1373,15 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                         vpy_video_source
                     )
                 except Exception as error:
+                    automatic_getnative_allowed = False
                     message = translate_text(
                         'Could not probe source resolution for getnative; '
-                        'automatic analysis will continue: {error}'
+                        'automatic analysis was skipped: {error}'
                     ).format(error=f'{type(error).__name__}: {error}')
                     _emit_encode_log_line(
                         f'[encode-getnative] {message}'
                     )
+                    self._progress(text=message)
                 else:
                     # Confirmed GUI-contract exception: UHD getnative is manual-only.
                     if source_height > 1080:

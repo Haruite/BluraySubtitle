@@ -255,7 +255,7 @@ I18N_ZH_TO_EN = {
     '输出对比图': 'Output comparison images',
     '检测花屏/坏帧': 'Check corrupted frames',
     '已跳过 {width}x{height} 源的自动 getnative。如有需要，请手动运行 src/scripts/getnative_file.py，并把检测参数写入 VPy。': 'Automatic getnative was skipped for {width}x{height} source. Run src/scripts/getnative_file.py manually and write the detected parameters into the VPy if needed.',
-    '无法为 getnative 探测源分辨率；将继续自动分析：{error}': 'Could not probe source resolution for getnative; automatic analysis will continue: {error}',
+    '无法为 getnative 探测源分辨率；已跳过自动分析：{error}': 'Could not probe source resolution for getnative; automatic analysis was skipped: {error}',
     '压制完成后会重新运行 VPy 并逐帧检查成品；这会显著增加处理时间。': 'After encoding, rerun the VPy and check the output frame by frame; this significantly increases processing time.',
     'VPy 处理：': 'VPy processing:',
     '降噪': 'Denoise',
