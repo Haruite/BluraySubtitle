@@ -332,7 +332,7 @@ Only when the whole-main rule does not apply may an SP detail that exactly and u
 
 ## Audio processing
 
-Final Remux and Encode audio processing:
+Final Matroska Remux and Encode audio processing:
 
 1. extracts all selected audio tracks in one `mkvextract` invocation;
 2. reuses those files for analysis and conversion;
@@ -344,6 +344,8 @@ Final Remux and Encode audio processing:
 8. reports every removal.
 
 The one-extraction invariant avoids reopening a very large MKV once per track. It also means the output volume must have enough temporary space for all selected audio streams.
+
+Standalone single-track audio outputs retain their only selected track and do not run the silence/duplicate removal pass.
 
 Remux lossless-to-FLAC conversion is controlled by its visible checkbox and is enabled by default at startup. Disabling it preserves selected source audio, apart from the documented cleanup. Remux does not use AAC or Opus for this conversion.
 

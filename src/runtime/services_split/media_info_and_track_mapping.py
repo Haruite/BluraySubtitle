@@ -774,17 +774,8 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 ])
                 if decode_result.returncode != 0 or not os.path.isfile(tmp_wav) or os.path.getsize(tmp_wav) <= 0:
                     return False
-            try:
-                silent, _ = _svc_cls()._is_silent_audio_file(tmp_wav, -60.0)
-            except Exception:
-                silent = False
-            if silent:
-                if owns_tmp:
-                    try:
-                        os.remove(tmp_wav)
-                    except Exception:
-                        pass
-                return False
+            # A standalone audio output cannot drop its only track. Automatic
+            # silence/duplicate removal belongs to the final Matroska pipeline.
             try:
                 effective_bits = get_effective_bit_depth(tmp_wav)
             except Exception:

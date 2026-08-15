@@ -903,7 +903,12 @@ def mux_with_audio_conversion(
                 continue
             output_properties = output_track.get('properties') \
                 if isinstance(output_track.get('properties'), dict) else {}
-            if normalized_language(output_properties.get('language')) != normalized_language(expected_language):
+            actual_languages = {
+                normalized_language(output_properties.get(property_name))
+                for property_name in ('language', 'language_ietf')
+                if output_properties.get(property_name)
+            }
+            if normalized_language(expected_language) not in actual_languages:
                 raise RuntimeError(
                     translate_text('Final track language verification failed: {path}').format(
                         path=output_path

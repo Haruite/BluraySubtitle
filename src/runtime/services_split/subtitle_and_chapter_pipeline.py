@@ -1124,18 +1124,42 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                 output_extension = os.path.splitext(output_path)[1].lower()
                 if output_extension not in ('.mkv', '.mka', '.mks'):
                     if len(audio_tracks) == 1 and not subtitle_tracks:
-                        target_codec = (standalone_audio_targets or {}).get(
-                            job.entry_index, ''
-                        )
-                        if target_codec == 'aac':
+                        audio_source = source_path
+                        audio_track = audio_tracks[0]
+                        extraction_ok = True
+                        if source_path.lower().endswith('.mpls'):
+                            # FFmpeg cannot read MPLS. Preserve its authored timeline and
+                            # mapped track by muxing the selected audio before conversion.
                             os.makedirs(os.path.dirname(output_path), exist_ok=True)
                             temporary_folder = tempfile.mkdtemp(
                                 prefix='_sp_audio_', dir=os.path.dirname(output_path)
                             )
+                            audio_source = os.path.join(temporary_folder, 'source.mka')
+                            command = [MKV_MERGE_PATH or 'mkvmerge']
+                            ui_language = mkvtoolnix_ui_language_arg().strip()
+                            if ui_language:
+                                command.extend(ui_language.split())
+                            command.extend([
+                                '-o', audio_source,
+                                '-D', '-S', '-a', mapped_audio_tracks[0], source_path,
+                            ])
+                            extraction_ok = run_command(command).returncode in (0, 1) and (
+                                os.path.isfile(audio_source) and os.path.getsize(audio_source) > 0
+                            )
+                            audio_track = '0'
+                        target_codec = (standalone_audio_targets or {}).get(
+                            job.entry_index, ''
+                        )
+                        if extraction_ok and target_codec == 'aac':
+                            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+                            if not temporary_folder:
+                                temporary_folder = tempfile.mkdtemp(
+                                    prefix='_sp_audio_', dir=os.path.dirname(output_path)
+                                )
                             wave_path = os.path.join(temporary_folder, 'source.wav')
                             extraction_ok = run_command([
-                                FFMPEG_PATH or 'ffmpeg', '-y', '-i', source_path,
-                                '-map', f'0:{audio_tracks[0]}', '-c:a', 'pcm_s24le',
+                                FFMPEG_PATH or 'ffmpeg', '-y', '-i', audio_source,
+                                '-map', f'0:{audio_track}', '-c:a', 'pcm_s24le',
                                 wave_path,
                             ]).returncode == 0
                             if extraction_ok:
@@ -1147,7 +1171,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                                     FDK_AAC_PATH or 'fdkaac', *rate_control,
                                     '-o', output_path, wave_path,
                                 ]).returncode == 0
-                        elif target_codec == 'opus':
+                        elif extraction_ok and target_codec == 'opus':
                             os.makedirs(os.path.dirname(output_path), exist_ok=True)
                             track_info = next((
                                 row for row in self._read_m2ts_track_info(job.first_m2ts_path)
@@ -1157,23 +1181,26 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                             bitrate = audio_encoding.opus_bitrate_kbps or (
                                 128 if channels <= 2 else 256
                             )
-                            extraction_ok = run_command([
-                                FFMPEG_PATH or 'ffmpeg', '-y', '-i', source_path,
-                                '-map', f'0:{audio_tracks[0]}', '-c:a', 'libopus',
-                                '-b:a', f'{bitrate}k', output_path,
-                            ]).returncode == 0
-                        elif output_extension == '.flac':
+                            command = [
+                                FFMPEG_PATH or 'ffmpeg', '-y', '-i', audio_source,
+                                '-map', f'0:{audio_track}', '-c:a', 'libopus',
+                            ]
+                            if channels > 2:
+                                command.extend(['-mapping_family', '1'])
+                            command.extend(['-b:a', f'{bitrate}k', output_path])
+                            extraction_ok = run_command(command).returncode == 0
+                        elif extraction_ok and output_extension == '.flac':
                             extraction_ok = _svc_cls()._compress_audio_stream_to_flac(
-                                job.first_m2ts_path,
-                                audio_tracks[0],
+                                audio_source,
+                                audio_track,
                                 output_path,
                                 audio_encoding,
                             )
-                        else:
+                        elif extraction_ok:
                             os.makedirs(os.path.dirname(output_path), exist_ok=True)
                             extraction_ok = run_command([
-                                FFMPEG_PATH or 'ffmpeg', '-y', '-i', source_path,
-                                '-map', f'0:{audio_tracks[0]}', '-c', 'copy', output_path,
+                                FFMPEG_PATH or 'ffmpeg', '-y', '-i', audio_source,
+                                '-map', f'0:{audio_track}', '-c', 'copy', output_path,
                             ]).returncode == 0
                     elif len(subtitle_tracks) == 1 and not audio_tracks:
                         os.makedirs(os.path.dirname(output_path), exist_ok=True)

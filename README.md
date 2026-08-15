@@ -92,7 +92,7 @@ Subtitles selected for Blu-ray Remux are always soft-muxed into the correspondin
 
 With **Mux Dolby Vision** enabled, Remux combines compatible base and enhancement layers as profile 8.1; when it is disabled, the enhancement layer is not included.
 
-Selected audio is also checked automatically even when **Convert lossless audio to FLAC** is disabled. A track whose decoded maximum volume is below -60 dB is removed as silent. Decoded fingerprints are compared only for tracks in the same source codec family with the same channel count; tracks with different known languages are kept, and an exact duplicate keeps the earliest track in source order.
+Selected audio in final Matroska outputs is also checked automatically even when **Convert lossless audio to FLAC** is disabled. A track whose decoded maximum volume is below -60 dB is removed as silent. Decoded fingerprints are compared only for tracks in the same source codec family with the same channel count; tracks with different known languages are kept, and an exact duplicate keeps the earliest track in source order. A standalone single-track audio output is generated as selected and does not run this removal pass.
 
 Encode options include:
 
