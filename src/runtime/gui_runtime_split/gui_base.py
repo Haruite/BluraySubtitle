@@ -681,6 +681,9 @@ class BluraySubtitleGuiBase(QWidget):
     def _remux_dst_folder_for_cmd_template(self, root: str) -> str:
         raise NotImplementedError
 
+    def _remux_mkv_source_for_edit(self, table: QTableWidget, row_or_source: int | str) -> str:
+        raise NotImplementedError
+
     def _reposition_subtitle_path_box(self):
         raise NotImplementedError
 
@@ -977,16 +980,16 @@ class BluraySubtitleGuiBase(QWidget):
     def on_configuration(self, configuration: dict[int, dict[str, int | str]], update_sp_table: bool=True):
         raise NotImplementedError
 
-    def on_edit_attachments_from_mkv_row(self, table: QTableWidget, row_index: int):
+    def on_edit_attachments_from_mkv_row(self, table: QTableWidget, row_index: int | str):
         raise NotImplementedError
 
-    def on_edit_chapters_from_mkv_row(self, table: QTableWidget, row_index: int):
+    def on_edit_chapters_from_mkv_row(self, table: QTableWidget, row_index: int | str):
         raise NotImplementedError
 
     def on_edit_sp_vpy_clicked(self):
         raise NotImplementedError
 
-    def on_edit_tracks_from_mkv_row(self, table: QTableWidget, row_index: int):
+    def on_edit_tracks_from_mkv_row(self, table: QTableWidget, row_index: int | str):
         raise NotImplementedError
 
     def on_edit_tracks_from_mpls(self, mpls_path: str):

@@ -250,7 +250,16 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
     planned_outputs: set[str] = set()
     selected_rows = [(row, False) for row in request.main_rows]
     selected_rows.extend((row, True) for row in request.sp_rows if row.selected)
+
+    def is_valid_remux_checkpoint(row: EncodeRow) -> bool:
+        if request.input_mode != 'remux' or not os.path.exists(row.output_path):
+            return False
+        if os.path.isdir(row.source_path):
+            return os.path.isdir(row.output_path)
+        return os.path.isfile(row.output_path) and os.path.getsize(row.output_path) > 0
+
     for row_number, (row, is_sp_row) in enumerate(selected_rows, 1):
+        row_is_checkpoint = is_valid_remux_checkpoint(row)
         if len(row.audio_tracks) != len(row.audio_codec_choices):
             raise ValueError(
                 translate_text('Audio codec choices do not match selected tracks in row {row}').format(
@@ -267,12 +276,35 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
                 else 'Encode source does not exist in row {row}'
             raise FileNotFoundError(translate_text(message).format(row=row_number))
         subtitle_path = os.path.abspath(os.path.normpath(row.subtitle_path)) if row.subtitle_path else ''
-        if subtitle_path and not os.path.isfile(subtitle_path):
+        external_subtitle_is_checkpoint = False
+        if (
+                row_is_checkpoint
+                and subtitle_path
+                and request.settings.subtitle_mode == 'external'
+        ):
+            subtitle_extension = os.path.splitext(subtitle_path)[1]
+            external_subtitle_path = (
+                os.path.splitext(os.path.abspath(row.output_path))[0]
+                + subtitle_extension
+            )
+            external_subtitle_is_checkpoint = os.path.isfile(
+                external_subtitle_path
+            )
+        subtitle_source_is_required = not row_is_checkpoint or (
+            request.settings.subtitle_mode == 'external'
+            and not external_subtitle_is_checkpoint
+        )
+        if (
+                subtitle_path
+                and subtitle_source_is_required
+                and not os.path.isfile(subtitle_path)
+        ):
             raise FileNotFoundError(
                 translate_text('Subtitle file does not exist: {path}').format(path=subtitle_path)
             )
         if (
                 subtitle_path
+                and not row_is_checkpoint
                 and request.settings.subtitle_mode == 'hard'
                 and os.path.splitext(subtitle_path)[1].lower() not in ('.ass', '.ssa', '.srt')
         ):
@@ -281,10 +313,10 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
                     path=subtitle_path
                 )
             )
-        if not is_sp_row or (
+        if (not row_is_checkpoint) and (not is_sp_row or (
                 str(row.output_path).lower().endswith('.mkv')
                 and not row.uses_main_output
-        ):
+        )):
             vpy_path = os.path.abspath(os.path.normpath(row.vpy_path)) if row.vpy_path else ''
             if not os.path.isfile(vpy_path):
                 raise FileNotFoundError(
@@ -338,11 +370,7 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
                 raise FileExistsError(
                     translate_text('Output file already exists: {path}').format(path=output_path)
                 )
-            if os.path.isdir(source_path):
-                valid_checkpoint = os.path.isdir(output_path)
-            else:
-                valid_checkpoint = os.path.isfile(output_path) and os.path.getsize(output_path) > 0
-            if not valid_checkpoint:
+            if not row_is_checkpoint:
                 raise FileExistsError(
                     translate_text('Existing resumable output is invalid: {path}').format(path=output_path)
                 )
@@ -363,39 +391,67 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
 
     if not check_tools:
         return
-    if request.settings.vspipe_mode == 'bundle':
-        vspipe_path, _environment = get_vspipe_context()
-    else:
-        vspipe_path = core_settings.VSPIPE_PATH
-    if not (os.path.isfile(vspipe_path) or shutil.which(vspipe_path)):
-        raise FileNotFoundError(
-            translate_text('vspipe executable does not exist: {path}').format(path=vspipe_path)
+    pending_rows = [
+        (row, is_sp_row)
+        for row, is_sp_row in selected_rows
+        if not is_valid_remux_checkpoint(row)
+    ]
+    pending_video_rows = [
+        (row, is_sp_row)
+        for row, is_sp_row in pending_rows
+        if not is_sp_row or (
+            str(row.output_path).lower().endswith('.mkv')
+            and not row.uses_main_output
         )
-    encoder_path = resolve_encoder_executable_path(
-        request.settings.encoder,
-        request.settings.encoder_mode,
-    )
-    if not (os.path.isfile(encoder_path) or shutil.which(encoder_path)):
-        raise FileNotFoundError(
-            translate_text('Encoder executable does not exist: {path}').format(path=encoder_path)
+    ]
+    pending_matroska_rows = [
+        (row, is_sp_row)
+        for row, is_sp_row in pending_rows
+        if os.path.splitext(row.output_path)[1].lower() in ('.mkv', '.mka', '.mks')
+    ]
+    if pending_video_rows:
+        if request.settings.vspipe_mode == 'bundle':
+            vspipe_path, _environment = get_vspipe_context()
+        else:
+            vspipe_path = core_settings.VSPIPE_PATH
+        if not (os.path.isfile(vspipe_path) or shutil.which(vspipe_path)):
+            raise FileNotFoundError(
+                translate_text('vspipe executable does not exist: {path}').format(path=vspipe_path)
+            )
+        encoder_path = resolve_encoder_executable_path(
+            request.settings.encoder,
+            request.settings.encoder_mode,
         )
-    find_mkvtoolnix()
-    mkvmerge_path = core_settings.MKV_MERGE_PATH or shutil.which('mkvmerge')
-    if not mkvmerge_path or not (os.path.isfile(mkvmerge_path) or shutil.which(mkvmerge_path)):
-        raise FileNotFoundError(translate_text('mkvmerge not found'))
-    if any(row.audio_tracks or row.audio_codec_choices for row, _is_sp_row in selected_rows):
+        if not (os.path.isfile(encoder_path) or shutil.which(encoder_path)):
+            raise FileNotFoundError(
+                translate_text('Encoder executable does not exist: {path}').format(path=encoder_path)
+            )
+    if pending_matroska_rows:
+        find_mkvtoolnix()
+        mkvmerge_path = core_settings.MKV_MERGE_PATH or shutil.which('mkvmerge')
+        if not mkvmerge_path or not (
+                os.path.isfile(mkvmerge_path) or shutil.which(mkvmerge_path)
+        ):
+            raise FileNotFoundError(translate_text('mkvmerge not found'))
+    if request.input_mode == 'bdmv' and any(
+            row.audio_tracks or row.audio_codec_choices
+            for row, _is_sp_row in pending_rows
+    ):
         validate_audio_cleanup_tools()
     if request.input_mode == 'remux':
-        for row, _is_sp_row in selected_rows:
+        for row, _is_sp_row in pending_rows:
             source_extension = os.path.splitext(row.source_path)[1].lower()
-            if os.path.exists(row.output_path) or source_extension not in ('.mkv', '.mka'):
+            if source_extension not in ('.mkv', '.mka'):
                 continue
             validate_audio_conversion_tools(
                 row.source_path,
                 row.audio_tracks,
                 row.audio_codec_choices,
             )
-    if any((languages or {}) for languages in (request.track_language_config or {}).values()):
+    if request.input_mode == 'bdmv' and pending_rows and any(
+            (languages or {})
+            for languages in (request.track_language_config or {}).values()
+    ):
         mkvpropedit_path = core_settings.MKV_PROP_EDIT_PATH or shutil.which('mkvpropedit')
         if not mkvpropedit_path or not (
                 os.path.isfile(mkvpropedit_path) or shutil.which(mkvpropedit_path)
@@ -403,8 +459,13 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
             raise FileNotFoundError(translate_text('mkvpropedit not found'))
     if (
             request.settings.output_comparison_images
-            or request.settings.auto_crop_black_borders
-            or request.settings.check_corrupted_frames
+            or (
+                pending_video_rows
+                and (
+                    request.settings.auto_crop_black_borders
+                    or request.settings.check_corrupted_frames
+                )
+            )
     ):
         for tool_name, configured_path in (
                 ('ffmpeg', core_settings.FFMPEG_PATH),

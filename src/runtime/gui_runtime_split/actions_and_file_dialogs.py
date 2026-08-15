@@ -597,15 +597,15 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             self.table2.setCellWidget(r, play_col, btn_play)
             btn_tracks = QToolButton(self.table2)
             btn_tracks.setText(self.t('edit tracks'))
-            btn_tracks.clicked.connect(partial(self.on_edit_tracks_from_mkv_row, self.table2, r))
+            btn_tracks.clicked.connect(partial(self.on_edit_tracks_from_mkv_row, self.table2, src))
             self.table2.setCellWidget(r, tracks_col, btn_tracks)
             btn_chapters = QToolButton(self.table2)
             btn_chapters.setText(self.t('edit'))
-            btn_chapters.clicked.connect(partial(self.on_edit_chapters_from_mkv_row, self.table2, r))
+            btn_chapters.clicked.connect(partial(self.on_edit_chapters_from_mkv_row, self.table2, src))
             self.table2.setCellWidget(r, chapters_col, btn_chapters)
             btn_attachments = QToolButton(self.table2)
             btn_attachments.setText(self.t('edit'))
-            btn_attachments.clicked.connect(partial(self.on_edit_attachments_from_mkv_row, self.table2, r))
+            btn_attachments.clicked.connect(partial(self.on_edit_attachments_from_mkv_row, self.table2, src))
             self.table2.setCellWidget(r, attachments_col, btn_attachments)
             self.ensure_encode_row_widgets(r)
             try:
@@ -663,12 +663,18 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
 
         show_timer.timeout.connect(show_if_needed)
         show_timer.start()
-        mkvs = [f for f in os.listdir(sp_folder) if
-                f.lower().endswith('.mkv') and os.path.isfile(os.path.join(sp_folder, f))]
-        mkvs.sort(key=lambda x: x.lower())
+        media_files = [
+            filename
+            for filename in os.listdir(sp_folder)
+            if (
+                filename.lower().endswith(('.mkv', '.mka'))
+                and os.path.isfile(os.path.join(sp_folder, filename))
+            )
+        ]
+        media_files.sort(key=lambda filename: filename.lower())
         self.table3.setSortingEnabled(False)
-        self.table3.setRowCount(len(mkvs))
-        for r, name in enumerate(mkvs):
+        self.table3.setRowCount(len(media_files))
+        for r, name in enumerate(media_files):
             src = os.path.normpath(os.path.join(sp_folder, name))
             dur_col = ENCODE_REMUX_SP_LABELS.index('duration')
             out_col = ENCODE_REMUX_SP_LABELS.index('output_name')
@@ -690,15 +696,15 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             self.table3.setCellWidget(r, play_col, btn_play)
             btn_tracks = QToolButton(self.table3)
             btn_tracks.setText(self.t('edit tracks'))
-            btn_tracks.clicked.connect(partial(self.on_edit_tracks_from_mkv_row, self.table3, r))
+            btn_tracks.clicked.connect(partial(self.on_edit_tracks_from_mkv_row, self.table3, src))
             self.table3.setCellWidget(r, tracks_col, btn_tracks)
             btn_chapters = QToolButton(self.table3)
             btn_chapters.setText(self.t('edit'))
-            btn_chapters.clicked.connect(partial(self.on_edit_chapters_from_mkv_row, self.table3, r))
+            btn_chapters.clicked.connect(partial(self.on_edit_chapters_from_mkv_row, self.table3, src))
             self.table3.setCellWidget(r, chapters_col, btn_chapters)
             btn_attachments = QToolButton(self.table3)
             btn_attachments.setText(self.t('edit'))
-            btn_attachments.clicked.connect(partial(self.on_edit_attachments_from_mkv_row, self.table3, r))
+            btn_attachments.clicked.connect(partial(self.on_edit_attachments_from_mkv_row, self.table3, src))
             self.table3.setCellWidget(r, attachments_col, btn_attachments)
             vpy_col = ENCODE_REMUX_SP_LABELS.index('vpy_path')
             edit_col = ENCODE_REMUX_SP_LABELS.index('edit_vpy')
@@ -721,7 +727,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 pass
             if (time.time() - start_ts) >= 2.0:
                 try:
-                    bar.setValue(int((r + 1) / max(1, len(mkvs)) * 1000))
+                    bar.setValue(int((r + 1) / max(1, len(media_files)) * 1000))
                 except Exception:
                     pass
                 QCoreApplication.processEvents()
@@ -1056,8 +1062,24 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 getattr(self, '_track_lossless_audio_config', {}) or {}
             )
 
-            def captured_track_options(track_key: str) -> dict[str, tuple]:
-                selection = track_selection_snapshot.get(track_key) or {}
+            def captured_track_options(
+                    track_key: str,
+                    row_number: int,
+                    *,
+                    is_sp_row: bool = False,
+                    required: bool = True,
+            ) -> dict[str, tuple]:
+                if track_key not in track_selection_snapshot:
+                    if required:
+                        message = (
+                            'SP row {row} has no captured track selection'
+                            if is_sp_row
+                            else 'Encode row {row} has no captured track selection'
+                        )
+                        raise ValueError(self.t(message).format(row=row_number))
+                    selection = {}
+                else:
+                    selection = track_selection_snapshot[track_key] or {}
                 audio_tracks = tuple(str(track_id) for track_id in selection.get('audio') or ())
                 subtitle_tracks = tuple(str(track_id) for track_id in selection.get('subtitle') or ())
                 configured_codecs = audio_codec_snapshot.get(track_key) or {}
@@ -1106,6 +1128,11 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                         if subtitle_item and subtitle_item.text()
                         else ''
                     )
+                    output_path = os.path.join(output_folder, output_name)
+                    output_is_checkpoint = (
+                        os.path.isfile(output_path)
+                        and os.path.getsize(output_path) > 0
+                    )
                     language = ''
                     language_combo = self.table2.cellWidget(row_index, language_column)
                     if isinstance(language_combo, QComboBox):
@@ -1116,11 +1143,15 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                         ).strip()
                     main_rows.append(EncodeRow(
                         source_path=os.path.normpath(source_path),
-                        output_path=os.path.join(output_folder, output_name),
+                        output_path=output_path,
                         vpy_path=self.get_vpy_path_from_row(row_index) or self.get_default_vpy_path(),
                         subtitle_path=os.path.normpath(subtitle_path) if subtitle_path else '',
                         subtitle_language=language,
-                        **captured_track_options(media_track_key('mkv', source_path)),
+                        **captured_track_options(
+                            media_track_key('mkv', source_path),
+                            row_index + 1,
+                            required=not output_is_checkpoint,
+                        ),
                     ))
 
                 if hasattr(self, 'table3'):
@@ -1133,13 +1164,26 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                             if output_item and output_item.text()
                             else os.path.basename(source_path)
                         )
-                        if not source_path.lower().endswith('.mka') and not output_name.lower().endswith('.mkv'):
-                            output_name += '.mkv'
+                        output_extension = (
+                            '.mka' if source_path.lower().endswith('.mka') else '.mkv'
+                        )
+                        if not output_name.lower().endswith(output_extension):
+                            output_name += output_extension
+                        output_path = os.path.join(output_folder, 'SPs', output_name)
+                        output_is_checkpoint = (
+                            os.path.isfile(output_path)
+                            and os.path.getsize(output_path) > 0
+                        )
                         sp_rows.append(EncodeRow(
                             source_path=os.path.normpath(source_path),
-                            output_path=os.path.join(output_folder, 'SPs', output_name),
+                            output_path=output_path,
                             vpy_path=self.get_sp_vpy_path_from_row(row_index) or self.get_default_vpy_path(),
-                            **captured_track_options(media_track_key('mkvsp', source_path)),
+                            **captured_track_options(
+                                media_track_key('mkvsp', source_path),
+                                row_index + 1,
+                                is_sp_row=True,
+                                required=not output_is_checkpoint,
+                            ),
                         ))
             else:
                 source_root = os.path.normpath(self.bdmv_folder_path.text().strip())
@@ -1190,7 +1234,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                         subtitle_language=subtitle_languages[row_index],
                         configuration_key=configuration_key,
                         configuration=row_configuration,
-                        **captured_track_options(main_track_key),
+                        **captured_track_options(main_track_key, row_index + 1),
                     ))
 
                 if hasattr(self, 'table3'):
@@ -1219,7 +1263,12 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                                 and os.path.normcase(os.path.abspath(sp_output_path))
                                 in main_output_paths
                             ),
-                            **captured_track_options(sp_entry.track_key),
+                            **captured_track_options(
+                                sp_entry.track_key,
+                                row_index + 1,
+                                is_sp_row=True,
+                                required=bool(sp_entry.selected and output_name),
+                            ),
                         ))
 
             dolby_vision_checkbox = getattr(self, 'mux_dolby_vision_checkbox', None)
@@ -1244,10 +1293,26 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             if request.input_mode == 'remux':
                 from src.runtime.services_split.encode_and_audio_tasks import encode_dovi_preflight_mkv_paths
 
-                dolby_vision_error = encode_dovi_preflight_mkv_paths(
-                    [row.source_path for row in request.main_rows],
-                    request.settings.encoder,
-                    request.settings.bit_depth,
+                pending_video_sources = [
+                    row.source_path
+                    for row in (*request.main_rows, *request.sp_rows)
+                    if (
+                        row.selected
+                        and row.source_path.lower().endswith('.mkv')
+                        and not (
+                            os.path.isfile(row.output_path)
+                            and os.path.getsize(row.output_path) > 0
+                        )
+                    )
+                ]
+                dolby_vision_error = (
+                    encode_dovi_preflight_mkv_paths(
+                        pending_video_sources,
+                        request.settings.encoder,
+                        request.settings.bit_depth,
+                    )
+                    if pending_video_sources
+                    else None
                 )
                 if dolby_vision_error:
                     QMessageBox.warning(self, ' ', dolby_vision_error)

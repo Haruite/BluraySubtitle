@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import QMessageBox, QDialog, QVBoxLayout, QPlainTextEdit, Q
     QLabel, QTableWidget, QLineEdit, QTableWidgetItem, QToolButton, QFileDialog, QHeaderView, QComboBox
 
 from src.bdmv import Chapter, pid_to_lang_from_m2ts_path
-from src.core import find_mkvtoolnix, MKV_EXTRACT_PATH, MKV_PROP_EDIT_PATH, mkvtoolnix_ui_language_arg, \
+from src.core import find_mkvtoolnix, MKV_EXTRACT_PATH, MKV_PROP_EDIT_PATH, \
     MKV_INFO_PATH, MKV_MERGE_PATH, get_mkvtoolnix_ui_language, ENCODE_SP_LABELS, REMUX_LABELS, DIY_REMUX_LABELS
 from src.exports.utils import run_command, mkv_codec_id_is_dts_family, print_terminal_line
 from src.runtime.services import BluraySubtitle
@@ -1009,14 +1009,25 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
         def run_propedit(args: list[str]) -> tuple[bool, str]:
             if not MKV_PROP_EDIT_PATH:
                 return False, self.t('mkvpropedit not found')
-            cmd = f'"{MKV_PROP_EDIT_PATH}" {mkvtoolnix_ui_language_arg()} "{mkv_path}" ' + ' '.join(args)
+            command = [
+                MKV_PROP_EDIT_PATH,
+                '--ui-language',
+                get_mkvtoolnix_ui_language(),
+                mkv_path,
+                *args,
+            ]
             try:
-                p = run_command(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore')
+                p = run_command(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    encoding='utf-8',
+                    errors='ignore',
+                )
                 out = (p.stdout or '') + '\n' + (p.stderr or '')
             except Exception:
                 return False, traceback.format_exc()
-            is_error = ('Error' in out) or ('error' in out.lower()) or (p.returncode != 0)
-            return (not is_error), out.strip()
+            return p.returncode in (0, 1), out.strip()
 
         def apply_replace():
             r = table.currentRow()
@@ -1032,12 +1043,12 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 return
             args = []
             if name_edit.text().strip():
-                args.append(f'--attachment-name "{name_edit.text().strip()}"')
+                args.extend(['--attachment-name', name_edit.text().strip()])
             if mime_edit.text().strip():
-                args.append(f'--attachment-mime-type "{mime_edit.text().strip()}"')
+                args.extend(['--attachment-mime-type', mime_edit.text().strip()])
             if uid_edit.text().strip():
-                args.append(f'--attachment-uid "{uid_edit.text().strip()}"')
-            args.append(f'--replace-attachment {sel}:"{src_file}"')
+                args.extend(['--attachment-uid', uid_edit.text().strip()])
+            args.extend(['--replace-attachment', f'{sel}:{src_file}'])
             ok, details = run_propedit(args)
             set_status(ok, details if not ok else '')
             if ok:
@@ -1053,12 +1064,12 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 return
             args = []
             if name_edit.text().strip():
-                args.append(f'--attachment-name "{name_edit.text().strip()}"')
+                args.extend(['--attachment-name', name_edit.text().strip()])
             if mime_edit.text().strip():
-                args.append(f'--attachment-mime-type "{mime_edit.text().strip()}"')
+                args.extend(['--attachment-mime-type', mime_edit.text().strip()])
             if uid_edit.text().strip():
-                args.append(f'--attachment-uid "{uid_edit.text().strip()}"')
-            args.append(f'--update-attachment {sel}')
+                args.extend(['--attachment-uid', uid_edit.text().strip()])
+            args.extend(['--update-attachment', sel])
             ok, details = run_propedit(args)
             set_status(ok, details if not ok else '')
             if ok:
@@ -1072,7 +1083,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             sel = selector_for_row(row)
             if not sel:
                 return
-            ok, details = run_propedit([f'--delete-attachment {sel}'])
+            ok, details = run_propedit(['--delete-attachment', sel])
             set_status(ok, details if not ok else '')
             if ok:
                 refresh()
@@ -1086,12 +1097,12 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             before_set = {(str(x.get('id') or ''), str(x.get('filename') or '')) for x in before_rows}
             args = []
             if name_edit.text().strip():
-                args.append(f'--attachment-name "{name_edit.text().strip()}"')
+                args.extend(['--attachment-name', name_edit.text().strip()])
             if mime_edit.text().strip():
-                args.append(f'--attachment-mime-type "{mime_edit.text().strip()}"')
+                args.extend(['--attachment-mime-type', mime_edit.text().strip()])
             if uid_edit.text().strip():
-                args.append(f'--attachment-uid "{uid_edit.text().strip()}"')
-            args.append(f'--add-attachment "{src_file}"')
+                args.extend(['--attachment-uid', uid_edit.text().strip()])
+            args.extend(['--add-attachment', src_file])
             ok, details = run_propedit(args)
             if ok:
                 refresh()
@@ -1367,7 +1378,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                             try:
                                 p = run_command(args, capture_output=True, text=True, encoding='utf-8',
                                                    errors='ignore')
-                                if p.returncode == 0:
+                                if p.returncode in (0, 1):
                                     try:
                                         updated_streams = self._read_mkvinfo_tracks(source_mkv)
                                         for r, s in enumerate(streams):
@@ -1595,12 +1606,24 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             else:
                 cfg[sp_key] = {'audio': list(pair[0]), 'subtitle': list(pair[1])}
 
-    def on_edit_attachments_from_mkv_row(self, table: QTableWidget, row_index: int):
+    def _remux_mkv_source_for_edit(
+            self,
+            table: QTableWidget,
+            row_or_source: int | str,
+    ) -> str:
+        if isinstance(row_or_source, str):
+            return os.path.normpath(row_or_source)
+        if table is self.table2:
+            return self._get_remux_source_path_from_table2_row(row_or_source)
+        return self._get_remux_source_path_from_table3_row(row_or_source)
+
+    def on_edit_attachments_from_mkv_row(
+            self,
+            table: QTableWidget,
+            row_index: int | str,
+    ):
         try:
-            if table is self.table2:
-                src = self._get_remux_source_path_from_table2_row(row_index)
-            else:
-                src = self._get_remux_source_path_from_table3_row(row_index)
+            src = self._remux_mkv_source_for_edit(table, row_index)
             if not src or not os.path.exists(src):
                 QMessageBox.information(self, " ", "MKV file not found")
                 return
@@ -1608,12 +1631,13 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
         except Exception:
             self._show_error_dialog(traceback.format_exc())
 
-    def on_edit_chapters_from_mkv_row(self, table: QTableWidget, row_index: int):
+    def on_edit_chapters_from_mkv_row(
+            self,
+            table: QTableWidget,
+            row_index: int | str,
+    ):
         try:
-            if table is self.table2:
-                src = self._get_remux_source_path_from_table2_row(row_index)
-            else:
-                src = self._get_remux_source_path_from_table3_row(row_index)
+            src = self._remux_mkv_source_for_edit(table, row_index)
             if not src or not os.path.exists(src):
                 QMessageBox.information(self, " ", "MKV file not found")
                 return
@@ -1621,14 +1645,17 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
         except Exception:
             self._show_error_dialog(traceback.format_exc())
 
-    def on_edit_tracks_from_mkv_row(self, table: QTableWidget, row_index: int):
+    def on_edit_tracks_from_mkv_row(
+            self,
+            table: QTableWidget,
+            row_index: int | str,
+    ):
         try:
+            src = self._remux_mkv_source_for_edit(table, row_index)
             if table is self.table2:
-                src = self._get_remux_source_path_from_table2_row(row_index)
                 key = media_track_key('mkv', src)
                 is_sp = False
             else:
-                src = self._get_remux_source_path_from_table3_row(row_index)
                 key = media_track_key('mkvsp', src)
                 is_sp = True
             if not src or not os.path.exists(src):

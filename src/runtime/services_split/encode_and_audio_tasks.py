@@ -4,6 +4,7 @@ import ctypes
 import json
 import os
 import re
+import signal
 import shlex
 import shutil
 import subprocess
@@ -14,6 +15,7 @@ import traceback
 import multiprocessing
 import uuid
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, ThreadPoolExecutor, wait
+from contextvars import ContextVar
 from typing import Optional
 
 from ...core.settings import PLUGIN_PATH, VSPIPE_PATH
@@ -70,6 +72,10 @@ KEEP_GETNATIVE_ARTIFACTS = bool(str(os.getenv("BLURAYSUB_KEEP_GETNATIVE_ARTIFACT
 GETNATIVE_MAX_PARALLEL_SAMPLES = 20
 GETNATIVE_ESTIMATED_SAMPLE_MEMORY_BYTES = 800 * 1024**2
 GETNATIVE_MEMORY_RESERVE_BYTES = 2 * 1024**3
+_ENCODE_CANCEL_EVENT: ContextVar[Optional[threading.Event]] = ContextVar(
+    '_ENCODE_CANCEL_EVENT',
+    default=None,
+)
 
 _GETNATIVE_DEBUG_DIR_ENV = str(os.getenv("BLURAYSUB_GETNATIVE_DEBUG_DIR", "") or "").strip()
 GETNATIVE_DEBUG_DIR = os.path.abspath(_GETNATIVE_DEBUG_DIR_ENV) if _GETNATIVE_DEBUG_DIR_ENV else None
@@ -476,6 +482,51 @@ def _pump_subprocess_stderr_raw(stream) -> None:
             pass
 
 
+def _terminate_encode_processes(processes: tuple[object, ...]) -> None:
+    active = []
+    for process in processes:
+        if process is None or process in active:
+            continue
+        try:
+            if process.poll() is None:
+                if sys.platform == 'win32':
+                    process.terminate()
+                else:
+                    os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                active.append(process)
+        except Exception:
+            continue
+    for process in active:
+        try:
+            process.wait(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            try:
+                if sys.platform == 'win32':
+                    process.kill()
+                else:
+                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                process.wait(timeout=2.0)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+
+def _wait_encode_process(
+        process,
+        cancel_event: Optional[threading.Event],
+        process_group: tuple[object, ...],
+) -> int:
+    while True:
+        if cancel_event is not None and cancel_event.is_set():
+            _terminate_encode_processes(process_group)
+            raise TaskCancelled()
+        try:
+            return int(process.wait(timeout=0.2))
+        except subprocess.TimeoutExpired:
+            continue
+
+
 def _run_vspipe_piped_encode(
     vspipe_exe: str,
     vpy_path: str,
@@ -496,13 +547,22 @@ def _run_vspipe_piped_encode(
         stderr_is_tty = False
     use_encoder_stderr_inherit = bool(inherit_err and stderr_is_tty)
     popen_kw: dict = {"env": env_use, "bufsize": 0}
-    if sys.platform == "win32" and not inherit_err:
-        popen_kw["creationflags"] = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if sys.platform == "win32" else 0
+    if sys.platform == "win32":
+        popen_kw["creationflags"] = int(
+            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        )
+        if not inherit_err:
+            popen_kw["creationflags"] |= int(
+                getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            )
+    else:
+        popen_kw['start_new_session'] = True
     stderr_v = None if inherit_err else subprocess.PIPE
     stderr_e = None if use_encoder_stderr_inherit else subprocess.PIPE
 
     vspipe_cmd = [str(vspipe_exe), "--y4m", str(vpy_path), "-"]
     enc_cmd = [str(x) for x in encoder_cmd]
+    cancel_event = _ENCODE_CANCEL_EVENT.get()
 
     p_v = run_command(
         vspipe_cmd,
@@ -511,14 +571,18 @@ def _run_vspipe_piped_encode(
         stderr=stderr_v,
         **popen_kw,
     )
-    p_e = run_command(
-        enc_cmd,
-        wait=False,
-        stdin=p_v.stdout,
-        stdout=subprocess.DEVNULL,
-        stderr=stderr_e,
-        **popen_kw,
-    )
+    try:
+        p_e = run_command(
+            enc_cmd,
+            wait=False,
+            stdin=p_v.stdout,
+            stdout=subprocess.DEVNULL,
+            stderr=stderr_e,
+            **popen_kw,
+        )
+    except Exception:
+        _terminate_encode_processes((p_v,))
+        raise
     if p_v.stdout is not None:
         p_v.stdout.close()
 
@@ -532,10 +596,16 @@ def _run_vspipe_piped_encode(
         t_e.start()
         pump_threads.append(t_e)
 
-    rc_e = int(p_e.wait())
-    rc_v = int(p_v.wait())
-    for t in pump_threads:
-        t.join(timeout=5.0)
+    process_group = (p_e, p_v)
+    try:
+        rc_e = _wait_encode_process(p_e, cancel_event, process_group)
+        rc_v = _wait_encode_process(p_v, cancel_event, process_group)
+    except Exception:
+        _terminate_encode_processes(process_group)
+        raise
+    finally:
+        for thread in pump_threads:
+            thread.join(timeout=1.0)
     if rc_e != 0:
         return rc_e
     return rc_v
@@ -556,7 +626,11 @@ def _run_vspipe_svt_win_tempfile_encode(
     env_use = dict(env) if env else os.environ.copy()
     popen_kw: dict = {"env": env_use}
     if sys.platform == "win32":
-        popen_kw["creationflags"] = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if sys.platform == "win32" else 0
+        popen_kw["creationflags"] = int(
+            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        ) | int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    else:
+        popen_kw['start_new_session'] = True
     td = temp_dir
     if td:
         try:
@@ -569,26 +643,65 @@ def _run_vspipe_svt_win_tempfile_encode(
     os.close(fd)
     vspipe_cmd = [str(vspipe_exe), "--y4m", str(vpy_path), "-"]
     enc_cmd = [str(x) for x in encoder_cmd]
+    cancel_event = _ENCODE_CANCEL_EVENT.get()
     try:
-        with open(y4m_path, "wb") as y4m_f:
-            p_v = run_command(vspipe_cmd, stdout=y4m_f, stderr=subprocess.PIPE, **popen_kw)
-        if p_v.returncode != 0:
+        with open(y4m_path, "wb") as y4m_f, tempfile.TemporaryFile() as stderr_file:
+            p_v = run_command(
+                vspipe_cmd,
+                wait=False,
+                stdout=y4m_f,
+                stderr=stderr_file,
+                **popen_kw,
+            )
             try:
-                tail = (p_v.stderr or b"").decode("utf-8", errors="replace")[-600:]
-                _emit_encode_log_line(f"[BluraySubtitle] vspipe temp-y4m failed rc={p_v.returncode}\n{tail}")
+                vspipe_returncode = _wait_encode_process(
+                    p_v,
+                    cancel_event,
+                    (p_v,),
+                )
+            except Exception:
+                _terminate_encode_processes((p_v,))
+                raise
+            stderr_file.seek(0)
+            vspipe_stderr = stderr_file.read()
+        if vspipe_returncode != 0:
+            try:
+                tail = vspipe_stderr.decode("utf-8", errors="replace")[-600:]
+                _emit_encode_log_line(
+                    f"[BluraySubtitle] vspipe temp-y4m failed "
+                    f"rc={vspipe_returncode}\n{tail}"
+                )
             except Exception:
                 pass
-            return int(p_v.returncode)
+            return vspipe_returncode
         enc_fs = [y4m_path if a.lower() == "stdin" else a for a in enc_cmd]
-        p_e = run_command(enc_fs, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, **popen_kw)
-        if p_e.returncode != 0:
+        with tempfile.TemporaryFile() as stderr_file:
+            p_e = run_command(
+                enc_fs,
+                wait=False,
+                stdout=subprocess.DEVNULL,
+                stderr=stderr_file,
+                **popen_kw,
+            )
             try:
-                tail = (p_e.stderr or b"").decode("utf-8", errors="replace")[-800:]
+                encoder_returncode = _wait_encode_process(
+                    p_e,
+                    cancel_event,
+                    (p_e,),
+                )
+            except Exception:
+                _terminate_encode_processes((p_e,))
+                raise
+            stderr_file.seek(0)
+            encoder_stderr = stderr_file.read()
+        if encoder_returncode != 0:
+            try:
+                tail = encoder_stderr.decode("utf-8", errors="replace")[-800:]
                 if tail.strip():
                     _emit_encode_log_line(f"[BluraySubtitle] SvtAv1EncApp stderr (tail):\n{tail}")
             except Exception:
                 pass
-        return int(p_e.returncode)
+        return encoder_returncode
     finally:
         try:
             os.remove(y4m_path)
@@ -1690,16 +1803,25 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 cmd_echo = f'"{vspipe_exe}" --y4m "{vpy_path}" - | {_format_encoder_cmd_for_echo(enc_cmd)}'
             print(f'{translate_text("Encode command:")}{cmd_echo}')
             failure_stage = 'Video encoding'
-            if use_svt_win_temp_y4m:
-                enc_rc = _run_vspipe_svt_win_tempfile_encode(
-                    str(vspipe_exe),
-                    vpy_path,
-                    enc_cmd,
-                    vspipe_env,
-                    temp_dir=os.path.dirname(encoded_path) or None,
-                )
-            else:
-                enc_rc = _run_vspipe_piped_encode(str(vspipe_exe), vpy_path, enc_cmd, vspipe_env)
+            cancel_token = _ENCODE_CANCEL_EVENT.set(cancel_event)
+            try:
+                if use_svt_win_temp_y4m:
+                    enc_rc = _run_vspipe_svt_win_tempfile_encode(
+                        str(vspipe_exe),
+                        vpy_path,
+                        enc_cmd,
+                        vspipe_env,
+                        temp_dir=os.path.dirname(encoded_path) or None,
+                    )
+                else:
+                    enc_rc = _run_vspipe_piped_encode(
+                        str(vspipe_exe),
+                        vpy_path,
+                        enc_cmd,
+                        vspipe_env,
+                    )
+            finally:
+                _ENCODE_CANCEL_EVENT.reset(cancel_token)
             if enc_rc != 0:
                 _emit_encode_log_line(f"[BluraySubtitle] encode pipeline exited with code {enc_rc}")
             cleanup_lwi_for_source(vpy_video_source)

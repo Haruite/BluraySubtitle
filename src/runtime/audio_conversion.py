@@ -776,6 +776,21 @@ def mux_with_audio_conversion(
                 video_name = str(video_properties.get('track_name') or '')
                 if video_name:
                     input_arguments.extend(['--track-name', f'0:{video_name}'])
+                input_arguments.extend([
+                    '--default-track-flag',
+                    f'0:{"yes" if video_properties.get("default_track") else "no"}',
+                    '--forced-display-flag',
+                    f'0:{"yes" if video_properties.get("forced_track") else "no"}',
+                ])
+                try:
+                    video_delay_ms = int(round(
+                        int(video_properties.get('minimum_timestamp') or 0)
+                        / 1_000_000
+                    ))
+                except (TypeError, ValueError):
+                    video_delay_ms = 0
+                if video_delay_ms:
+                    input_arguments.extend(['--sync', f'0:{video_delay_ms}'])
             input_arguments.append(encoded_path)
 
         external_subtitle_input = -1

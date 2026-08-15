@@ -51,6 +51,7 @@ I18N_ZH_TO_EN = {
     '第 {row} 行 SP 源不存在：{path}': 'SP source does not exist in row {row}: {path}',
     '第 {row} 行 SP 没有源文件': 'SP row {row} has no source file',
     '第 {row} 行 SP 没有捕获到轨道选择': 'SP row {row} has no captured track selection',
+    '第 {row} 行压制来源没有捕获到轨道选择': 'Encode row {row} has no captured track selection',
     'SP 输出位于所选输出文件夹之外：{path}': 'SP output is outside the selected output folder: {path}',
     '第 {row} 行 SP 没有匹配到计划中的分集输出：{path}': 'SP row {row} does not match a planned episode output: {path}',
     '无法对第 {row} 行 SP 输出应用轨道语言：{path}': 'Track languages cannot be applied to SP output in row {row}: {path}',

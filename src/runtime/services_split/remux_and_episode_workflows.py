@@ -43,6 +43,28 @@ def _svc_cls():
     return BluraySubtitle
 
 
+def _copy_file_atomically(source_path: str, destination_path: str) -> None:
+    destination_folder = os.path.dirname(destination_path)
+    os.makedirs(destination_folder, exist_ok=True)
+    file_descriptor, temporary_path = tempfile.mkstemp(
+        prefix=f'.{os.path.basename(destination_path)}.partial-',
+        dir=destination_folder,
+    )
+    os.close(file_descriptor)
+    try:
+        shutil.copy2(source_path, temporary_path)
+        if os.path.exists(destination_path):
+            raise FileExistsError(
+                translate_text('Output file already exists: {path}').format(
+                    path=destination_path
+                )
+            )
+        os.replace(temporary_path, destination_path)
+    finally:
+        if os.path.isfile(temporary_path):
+            force_remove_file(temporary_path)
+
+
 class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
 
     def _prepare_remux_main_jobs(self, request: RemuxRequest) -> tuple[str, list[RemuxMainJob]]:
@@ -1511,6 +1533,11 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         companion_files: list[tuple[str, str]] = []
         if companion_root and os.path.isdir(companion_root):
             root_path = os.path.abspath(os.path.normpath(companion_root))
+            encoded_source_paths = {
+                os.path.normcase(os.path.abspath(row.source_path))
+                for row in main_rows + selected_sp_rows
+                if row.source_path
+            }
             external_by_destination = {
                 os.path.normcase(os.path.abspath(destination)): os.path.normcase(os.path.abspath(source))
                 for source, destination, _video_output in external_subtitles
@@ -1520,9 +1547,9 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     raise TaskCancelled()
                 relative_folder = os.path.relpath(current_folder, root_path)
                 for filename in filenames:
-                    if filename.lower().endswith('.mkv'):
-                        continue
                     source_path = os.path.join(current_folder, filename)
+                    if os.path.normcase(os.path.abspath(source_path)) in encoded_source_paths:
+                        continue
                     relative_path = filename if relative_folder == '.' else os.path.join(relative_folder, filename)
                     destination_path = os.path.join(request.output_folder, relative_path)
                     normalized_destination = os.path.normcase(os.path.abspath(destination_path))
@@ -1709,8 +1736,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                             if resume_existing_outputs else 'Output file already exists: {path}'
                         ).format(path=destination_path)
                     )
-                os.makedirs(os.path.dirname(destination_path), exist_ok=True)
-                shutil.copy2(source_path, destination_path)
+                _copy_file_atomically(source_path, destination_path)
         if external_subtitles:
             self._progress(text=self.t('Copying external subtitles'))
             for source_path, destination_path, video_output_path in external_subtitles:
@@ -1730,7 +1756,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                             if resume_existing_outputs else 'Output file already exists: {path}'
                         ).format(path=destination_path)
                     )
-                shutil.copy2(source_path, destination_path)
+                _copy_file_atomically(source_path, destination_path)
         self._progress(progress_base + progress_span, 'Done')
         batch_result = EncodeBatchResult(tuple(row_results))
         return batch_result
