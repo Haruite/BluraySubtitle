@@ -1259,14 +1259,14 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 else:
                     v = s.get(key, '')
                 table.setItem(r, c, QTableWidgetItem('' if v is None else str(v)))
-        attachment_color = QColor('#edf6ff')
+        alternate_mpls_color = QColor('#edf6ff')
         for row in range(table.rowCount()):
-            if not bool(streams[row].get('_attached_track')):
+            if not bool(streams[row].get('_whole_main_alternate_track')):
                 continue
             for column in range(table.columnCount()):
                 item = table.item(row, column)
                 if item is not None:
-                    item.setBackground(attachment_color)
+                    item.setBackground(alternate_mpls_color)
         table.resizeColumnsToContents()
         if not is_mkvinfo:
             try:
@@ -1705,24 +1705,26 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             chapter.get_pid_to_language()
             streams = self._read_m2ts_track_info(m2ts_path)
             n_raw = len(streams)
-            attachment_info = dict(
-                (getattr(self, '_episode_attachment_track_info_by_main', {}) or {}).get(
+            # Only an alternate MPLS whose complete m2ts_detail equals this selected main may expose
+            # additional PIDs in the shared main dialog. Single-episode SP append tracks stay separate.
+            alternate_info = dict(
+                (getattr(self, '_whole_main_match_track_info_by_main', {}) or {}).get(
                     os.path.normcase(os.path.abspath(mpls_path)),
                     {},
                 ) or {}
             )
-            attached_pids = {
-                int(pid) for pid in attachment_info.get('pids', set())
+            alternate_pids = {
+                int(pid) for pid in alternate_info.get('pids', set())
             }
             pid_lang = dict(chapter.pid_to_lang)
-            pid_lang.update(dict(attachment_info.get('pid_lang', {}) or {}))
+            pid_lang.update(dict(alternate_info.get('pid_lang', {}) or {}))
             streams = self._filter_streams_by_pid_lang(streams, pid_lang)
             marked_streams: list[dict[str, object]] = []
             for stream in streams:
                 row = dict(stream)
                 pid = self._parse_stream_pid(row.get('pid'))
-                if pid is not None and pid in attached_pids:
-                    row['_attached_track'] = True
+                if pid is not None and pid in alternate_pids:
+                    row['_whole_main_alternate_track'] = True
                 marked_streams.append(row)
             streams = marked_streams
             n_filt = len(streams)

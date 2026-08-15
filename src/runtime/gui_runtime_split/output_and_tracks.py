@@ -224,13 +224,60 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
 
     def _track_selection_contained_in(self, sub_key: str, sup_key: str, *,
                                     sub_mpls_fallback: str = '', sup_mpls_fallback: str = '') -> bool:
-        sa, ss = self._track_id_sets_for_config_key(sub_key, mpls_path_fallback=sub_mpls_fallback)
-        ma, ms = self._track_id_sets_for_config_key(sup_key, mpls_path_fallback=sup_mpls_fallback)
+        sub_pids = self._track_pid_sets_for_config_key(
+            sub_key, mpls_path_fallback=sub_mpls_fallback,
+        )
+        sup_pids = self._track_pid_sets_for_config_key(
+            sup_key, mpls_path_fallback=sup_mpls_fallback,
+        )
+        # Track indexes belong to one first-play-item M2TS and are not stable
+        # identities across playlists. If either side cannot be mapped to real
+        # transport PIDs, keep the SP instead of declaring it redundant.
+        if sub_pids is None or sup_pids is None:
+            return False
+        sa, ss = sub_pids
+        ma, ms = sup_pids
         if sa and not sa.issubset(ma):
             return False
         if ss and not ss.issubset(ms):
             return False
         return True
+
+    def _track_pid_sets_for_config_key(
+        self, key: str, *, mpls_path_fallback: str = '',
+    ) -> Optional[tuple[set[int], set[int]]]:
+        """Map the captured first-M2TS track indexes to audio/subtitle transport PIDs."""
+        mpls_path = os.path.normpath(str(mpls_path_fallback or '').strip())
+        if not mpls_path or not os.path.isfile(mpls_path):
+            return None
+        selected_audio, selected_subtitles = self._track_id_sets_for_config_key(
+            key, mpls_path_fallback=mpls_path,
+        )
+        first_m2ts = self._get_first_m2ts_for_mpls(mpls_path)
+        if not first_m2ts:
+            return None
+        streams = self._read_m2ts_track_info(first_m2ts)
+        pid_by_audio_index: dict[str, int] = {}
+        pid_by_subtitle_index: dict[str, int] = {}
+        for stream in streams:
+            index = str(stream.get('index') or '').strip()
+            pid = self._parse_stream_pid(stream.get('pid'))
+            stream_type = str(stream.get('codec_type') or '').strip().lower()
+            if not index or pid is None:
+                continue
+            if stream_type == 'audio':
+                pid_by_audio_index[index] = pid
+            elif stream_type in ('subtitle', 'subtitles'):
+                pid_by_subtitle_index[index] = pid
+        if (
+                not selected_audio.issubset(pid_by_audio_index)
+                or not selected_subtitles.issubset(pid_by_subtitle_index)
+        ):
+            return None
+        return (
+            {pid_by_audio_index[index] for index in selected_audio},
+            {pid_by_subtitle_index[index] for index in selected_subtitles},
+        )
 
     def _iter_table2_episode_m2ts_details(self, bdmv_index: int):
         """Yield (m2ts_file_detail, main_mpls_full_path) for table2 rows on this disc."""

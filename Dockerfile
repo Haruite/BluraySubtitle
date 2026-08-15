@@ -174,7 +174,7 @@ RUN set -eux; \
     rm -rf /tmp/dovi /tmp/dovi_bin
 
 RUN set -eux; \
-    TRUEHDD_VER="$(git ls-remote --refs --tags --sort=-version:refname https://github.com/truehdd/truehdd.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')"; \
+    TRUEHDD_VER="$(curl -fsSL https://api.github.com/repos/truehdd/truehdd/releases/latest | python3 -c 'import json, sys; print(json.load(sys.stdin)["tag_name"])')"; \
     test -n "$TRUEHDD_VER"; \
     case "$(uname -m)" in \
       x86_64|amd64) TRUEHDD_ARCH=x86_64 ;; \

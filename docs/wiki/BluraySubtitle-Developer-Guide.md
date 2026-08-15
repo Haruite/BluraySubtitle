@@ -326,7 +326,9 @@ Output type follows selected content:
 
 Raw streams and PNG files cannot store Matroska track-language metadata. Configuring such metadata for an incompatible output is rejected before execution.
 
-When an SP interval exactly and uniquely matches one main episode’s M2TS detail in series mode, selected SP audio or subtitle PIDs can be appended to the planned episode output. Multiple selected SP rows are consumed in visible order: the first row owns a repeated PID, already present PIDs are skipped, and appended SP PIDs are kept in ascending order after the original main tracks. Movie-mode SP rows never use this attachment path. The episode is replaced only after the append result has completed and passed verification.
+Series mode keeps two exact-detail mechanisms separate. A non-main MPLS whose complete ordered M2TS detail equals one complete selected main MPLS contributes its exposed audio and subtitle PIDs to that main MPLS's shared GUI track configuration; its SP row is unchecked by default to avoid a duplicate remux. This mechanism never derives a match from individual table2 episode rows.
+
+Only when the whole-main rule does not apply may an SP detail that exactly and uniquely matches one table2 episode be appended after splitting. Multiple selected SP rows are consumed in visible order: the first row owns a repeated PID, already present PIDs are skipped, and appended SP PIDs are kept in ascending order after the original main tracks. A detail spanning several episode rows is not associated with multiple outputs and remains ordinary SP. Movie-mode SP rows never use either attachment path. An episode is replaced only after the append result has completed and passed verification.
 
 ## Audio processing
 

@@ -857,6 +857,9 @@ class BluraySubtitleGuiBase(QWidget):
     def _track_id_sets_for_config_key(self, key: str, *, mpls_path_fallback: str='') -> tuple[set[str], set[str]]:
         raise NotImplementedError
 
+    def _track_pid_sets_for_config_key(self, key: str, *, mpls_path_fallback: str='') -> Optional[tuple[set[int], set[int]]]:
+        raise NotImplementedError
+
     def _track_selection_contained_in(self, sub_key: str, sup_key: str, *, sub_mpls_fallback: str='', sup_mpls_fallback: str='') -> bool:
         raise NotImplementedError
 

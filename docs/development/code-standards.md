@@ -108,6 +108,7 @@ Keep this section limited to confirmed exceptions to the general rules above and
 - Blu-ray DIY remains visible and its code is retained. Its incomplete execution must not be presented as complete.
 - Final Remux and Encode outputs may automatically remove selected silent audio and exact decoded duplicates, with every removal reported. This is an intentional exception to retaining every selected track.
 - FDK-AAC and Opus bitrate value `0` means Auto rather than disabled or zero bitrate. Positive values are explicit kbps targets.
+- Series-mode SP handling has two independent exact-detail rules: a non-main MPLS matching one complete selected main MPLS contributes track choices to that shared main remux, while a non-whole SP matching one unique episode is appended only after splitting. A partial match spanning several episodes remains an ordinary SP. Movie mode uses neither attachment path.
 
 ## 11. Testing and Change Reporting
 

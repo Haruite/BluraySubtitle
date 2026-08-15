@@ -922,12 +922,17 @@ install_hdr10plus_tool() {
 # truehdd (prebuilt release binary for TrueHD+Atmos decode)
 # ---------------------------------------------------------------------------
 
-# Set TRUEHDD_VERSION to pin a release; otherwise resolve the latest stable tag.
+# Set TRUEHDD_VERSION to pin a release; otherwise resolve the latest published release.
 TRUEHDD_VERSION="${TRUEHDD_VERSION:-}"
 
 install_truehdd() {
   if [[ -z "$TRUEHDD_VERSION" ]]; then
-    TRUEHDD_VERSION="$(latest_stable_tag https://github.com/truehdd/truehdd.git)"
+    if ! TRUEHDD_VERSION="$(
+      curl -fsSL https://api.github.com/repos/truehdd/truehdd/releases/latest \
+        | python3 -c 'import json, sys; print(json.load(sys.stdin)["tag_name"])'
+    )"; then
+      die "$(msg 'Failed to resolve the latest published truehdd release' '无法获取 truehdd 最新正式发布版本')"
+    fi
   fi
   log "$(msg "Installing truehdd ${TRUEHDD_VERSION} (prebuilt)" "安装 truehdd ${TRUEHDD_VERSION}（预编译包）")"
 

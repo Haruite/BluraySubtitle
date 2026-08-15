@@ -1417,44 +1417,71 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             if self._is_movie_mode():
                 main_duration_by_bdmv = _movie_main_duration_by_bdmv_from_mpls_paths(
                     selected_main_by_bdmv)
-            attachment_main_by_detail: dict[int, dict[str, list[str]]] = {}
-            attachment_track_info_by_main: dict[str, dict[str, object]] = {}
-            exact_attachment_keys: set[tuple[int, str, str]] = set()
-            self._episode_attachment_track_info_by_main = attachment_track_info_by_main
+            whole_main_by_detail: dict[int, dict[str, list[str]]] = {}
+            episode_main_by_detail: dict[int, dict[str, list[str]]] = {}
+            whole_main_track_info: dict[str, dict[str, object]] = {}
+            whole_main_match_keys: set[tuple[int, str, str]] = set()
+            exact_episode_match_keys: set[tuple[int, str, str]] = set()
+            self._whole_main_match_track_info_by_main = whole_main_track_info
             if function_id == 3 and not self._is_movie_mode():
-                for bdmv_index in selected_main_by_bdmv:
+                for bdmv_index, main_paths in selected_main_by_bdmv.items():
+                    for main_path in main_paths:
+                        try:
+                            detail = BluraySubtitle.m2ts_file_detail_from_mpls_playlist(
+                                main_path
+                            ).strip()
+                        except Exception:
+                            detail = ''
+                        if detail:
+                            whole_main_by_detail.setdefault(bdmv_index, {}).setdefault(
+                                detail, []
+                            ).append(main_path)
                     for detail, main_path in self._iter_table2_episode_m2ts_details(bdmv_index):
                         detail = str(detail or '').strip()
                         if detail:
-                            attachment_main_by_detail.setdefault(bdmv_index, {}).setdefault(
+                            episode_main_by_detail.setdefault(bdmv_index, {}).setdefault(
                                 detail, []
                             ).append(main_path)
 
-            def _register_episode_attachment_tracks(
-                    main_path: str, attachment_chapter: Chapter) -> set[int]:
+            def _register_whole_main_match_tracks(
+                    main_path: str, alternate_chapter: Chapter) -> None:
+                """Expose PIDs authored by an alternate MPLS with the same complete main detail."""
                 main_norm = os.path.normcase(os.path.abspath(main_path))
                 main_chapter = Chapter(main_path)
                 main_chapter.get_pid_to_language()
-                attachment_chapter.get_pid_to_language()
+                alternate_chapter.get_pid_to_language()
                 main_pid_lang = {
                     int(pid): str(language or 'und')
                     for pid, language in main_chapter.pid_to_lang.items()
                 }
-                attachment_pid_lang = {
+                alternate_pid_lang = {
                     int(pid): str(language or 'und')
-                    for pid, language in attachment_chapter.pid_to_lang.items()
+                    for pid, language in alternate_chapter.pid_to_lang.items()
                 }
-                info = attachment_track_info_by_main.setdefault(main_norm, {
+                info = whole_main_track_info.setdefault(main_norm, {
                     'main_path': os.path.normpath(main_path),
                     'pids': set(),
                     'pid_lang': dict(main_pid_lang),
                 })
                 aggregate_pid_lang = info['pid_lang']
-                for pid, language in attachment_pid_lang.items():
+                for pid, language in alternate_pid_lang.items():
                     aggregate_pid_lang.setdefault(pid, language)
-                new_pids = set(attachment_pid_lang) - set(main_pid_lang)
-                info['pids'].update(new_pids)
-                return new_pids
+                info['pids'].update(set(alternate_pid_lang) - set(main_pid_lang))
+
+            def _episode_attachment_new_pids(
+                    main_path: str, attachment_chapter: Chapter) -> set[int]:
+                """Find PIDs for a single-episode append without changing the main selection.
+
+                Only a complete whole-main match may extend the shared main-track configuration. An episode
+                match is appended after splitting and must affect only its uniquely matched output.
+                """
+                main_chapter = Chapter(main_path)
+                main_chapter.get_pid_to_language()
+                attachment_chapter.get_pid_to_language()
+                return (
+                    {int(pid) for pid in attachment_chapter.pid_to_lang}
+                    - {int(pid) for pid in main_chapter.pid_to_lang}
+                )
 
             def _selectable_attachment_pids(
                     attachment_mpls: str, candidate_pids: set[int]) -> set[int]:
@@ -1512,28 +1539,47 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     m2ts_set = set(m2ts_files)
                     default_selected = True
                     dur = ch.get_total_time()
-                    matching_main_path = ''
                     try:
                         sp_detail_saved = self._sp_m2ts_detail_for_entry(
                             bdmv_index, os.path.basename(mpls_file_path), m2ts_files)
                     except Exception:
                         sp_detail_saved = ''
-                    matching_main_paths = attachment_main_by_detail.get(
+                    matching_whole_main_paths = whole_main_by_detail.get(
                         bdmv_index, {}
                     ).get(sp_detail_saved, []) if sp_detail_saved else []
-                    exact_attachment_has_new_tracks = False
-                    if len(matching_main_paths) == 1:
-                        matching_main_path = matching_main_paths[0]
-                        exact_attachment_keys.add((
+                    matching_episode_main_paths = episode_main_by_detail.get(
+                        bdmv_index, {}
+                    ).get(sp_detail_saved, []) if sp_detail_saved else []
+                    exact_episode_has_new_tracks = False
+                    entry_key = (
+                        bdmv_index,
+                        os.path.basename(mpls_file_path),
+                        ','.join(m2ts_files),
+                    )
+                    # These are independent rules. A complete match reuses the one main remux and exposes
+                    # the alternate MPLS PIDs there. Only a non-whole match may use the post-split,
+                    # single-episode append path. A range spanning several episodes matches neither rule.
+                    if len(matching_whole_main_paths) == 1:
+                        whole_main_match_keys.add(entry_key)
+                        default_selected = False
+                        try:
+                            _register_whole_main_match_tracks(
+                                matching_whole_main_paths[0], ch,
+                            )
+                        except Exception:
+                            print_exc_terminal()
+                    elif len(matching_episode_main_paths) == 1:
+                        matching_main_path = matching_episode_main_paths[0]
+                        exact_episode_match_keys.add((
                             bdmv_index,
                             os.path.basename(mpls_file_path),
                             ','.join(m2ts_files),
                         ))
                         try:
-                            new_attachment_pids = _register_episode_attachment_tracks(
+                            new_attachment_pids = _episode_attachment_new_pids(
                                 matching_main_path, ch
                             )
-                            exact_attachment_has_new_tracks = bool(
+                            exact_episode_has_new_tracks = bool(
                                 _selectable_attachment_pids(
                                     mpls_file_path, new_attachment_pids,
                                 )
@@ -1541,13 +1587,13 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                         except Exception:
                             print_exc_terminal()
                         # An exact SP row is useful only when it can append a new audio or subtitle PID.
-                        default_selected = exact_attachment_has_new_tracks
+                        default_selected = exact_episode_has_new_tracks
                     try:
                         dur_for_select = float(ch.get_total_time_no_repeat())
                     except Exception:
                         dur_for_select = float(dur)
                     if (
-                            not exact_attachment_has_new_tracks
+                            not exact_episode_has_new_tracks
                             and len(m2ts_set) < 3
                             and dur_for_select < 30
                     ):
@@ -1556,7 +1602,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     if (default_selected and self._is_movie_mode() and main_dur is not None
                             and _movie_sp_duration_matches_main(float(dur), main_dur)):
                         default_selected = False
-                    if default_selected and not exact_attachment_has_new_tracks:
+                    if default_selected and not exact_episode_has_new_tracks:
                         try:
                             sp_entry = {
                                 'bdmv_index': bdmv_index,
@@ -1654,7 +1700,6 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                             'special': '',
                         })
 
-
             manual_main_keys = getattr(self, '_manual_main_track_selection_keys', None)
             if not isinstance(manual_main_keys, set):
                 manual_main_keys = set()
@@ -1663,7 +1708,9 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             if not isinstance(track_config, dict):
                 track_config = {}
                 self._track_selection_config = track_config
-            for info in attachment_track_info_by_main.values():
+            # A complete alternate MPLS describes the same main output, so its exposed PIDs belong in the
+            # shared main selection. Single-episode SP matches are deliberately excluded from this block.
+            for info in whole_main_track_info.values():
                 main_path = str(info.get('main_path') or '').strip()
                 pid_lang = dict(info.get('pid_lang') or {})
                 if not main_path or not pid_lang:
@@ -1697,7 +1744,6 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     'audio': list(audio),
                     'subtitle': list(subtitle),
                 }
-
 
             def _sp_entry_sort_key(e: dict[str, object]):
                 return (
@@ -1797,9 +1843,11 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     sel_item.setData(Qt.ItemDataRole.UserRole, 'auto')
                     self.table3.setItem(i, sel_col, sel_item)
                     self.table3.setItem(i, bdmv_col, QTableWidgetItem(str(bdmv_index)))
-                    is_exact_attachment = (
-                        bdmv_index, mpls_file, ','.join(m2ts_files)
-                    ) in exact_attachment_keys
+                    entry_key = (bdmv_index, mpls_file, ','.join(m2ts_files))
+                    is_automatic_attachment = (
+                        entry_key in whole_main_match_keys
+                        or entry_key in exact_episode_match_keys
+                    )
                     self.table3.setItem(i, mpls_col, QTableWidgetItem(mpls_file))
                     self.table3.setItem(i, m2ts_col, QTableWidgetItem(','.join(m2ts_files)))
                     self.table3.setItem(
@@ -1831,7 +1879,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                                             sp_det = ''
                                     if not self._sp_covered_by_table2_movie_row(bdmv_index, sp_det):
                                         sel_item.setCheckState(Qt.CheckState.Checked)
-                                elif not is_exact_attachment:
+                                elif not is_automatic_attachment:
                                     sel_item.setCheckState(Qt.CheckState.Checked)
                             if user_mark:
                                 sel_item.setData(Qt.ItemDataRole.UserRole, str(cache_hit.get('user_mark') or ''))
