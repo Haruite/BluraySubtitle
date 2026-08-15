@@ -18,6 +18,7 @@ class MergeSubtitleRequest:
     selected_mpls: tuple[tuple[str, str], ...]
     subtitle_suffix: str = ''
     movie_tasks: tuple[tuple[str, str, str], ...] = ()
+    series_configuration: tuple[tuple[str, str, int, str], ...] = ()
 
 
 class MergeWorker(QObject):
@@ -54,6 +55,7 @@ class MergeWorker(QObject):
             service.merge_subtitles(
                 list(request.selected_mpls),
                 movie_tasks=list(request.movie_tasks),
+                series_configuration=list(request.series_configuration),
                 subtitle_suffix=request.subtitle_suffix,
                 cancel_event=self.cancel_event,
             )

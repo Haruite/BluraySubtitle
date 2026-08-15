@@ -517,7 +517,9 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                     self.table2.setItem(i, ep_duration_col, QTableWidgetItem('Unknown'))
                     total_time = None
 
-                self.table2.setItem(i, bdmv_col, QTableWidgetItem(str(bdmv_index)))
+                bdmv_item = QTableWidgetItem(str(bdmv_index))
+                bdmv_item.setData(Qt.ItemDataRole.UserRole, str(mpls_no_ext))
+                self.table2.setItem(i, bdmv_col, bdmv_item)
 
                 chapter_combo = QComboBox(self.table2)
                 chapter_combo.addItems(['1'])

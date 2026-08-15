@@ -1289,15 +1289,17 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             else:
                 self._run_chapter_combo_update()
         else:
-            sub_files = [self.table2.item(sub_index, 1).text() for sub_index in range(self.table2.rowCount()) if
-                         self.sub_check_state[sub_index] == 2]
+            selected_rows = [
+                row for row in range(self.table2.rowCount())
+                if self.sub_check_state[row] == 2
+            ]
+            sub_files = [self.table2.item(row, 1).text() for row in selected_rows]
             sub_combo_index = {}
-            for sub_index in range(self.table2.rowCount()):
-                if self.sub_check_state[sub_index] == 2:
-                    chapter_col = SUBTITLE_LABELS.index('chapter_index')
-                    w = self.table2.cellWidget(sub_index, chapter_col)
-                    if isinstance(w, QComboBox) and w.isEnabled():
-                        sub_combo_index[sub_index] = w.currentIndex() + 1
+            chapter_col = SUBTITLE_LABELS.index('chapter_index')
+            for selected_index, row in enumerate(selected_rows):
+                w = self.table2.cellWidget(row, chapter_col)
+                if isinstance(w, QComboBox) and w.isEnabled():
+                    sub_combo_index[selected_index] = w.currentIndex() + 1
             bs = BluraySubtitle(
                 self.bdmv_folder_path.text(),
                 sub_files,

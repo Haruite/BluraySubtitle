@@ -320,6 +320,7 @@ Tips:
 - SRT, ASS, SSA, and SUP are supported. Subtitle formats cannot be mixed within one merged output.
 - The suffix is applied exactly as displayed. Presets include the leading dot, such as `.en` and `.zh-Hans`.
 - Each result is written beside the Blu-ray disc folder and beside its main playlist. If any planned output already exists, the task stops before writing and does not overwrite it.
+- Multiple main playlists selected from one disc are merged independently. Their disc-folder-adjacent files append the MPLS stem to avoid filename collisions.
 - **Complete Blu-ray Folder** applies in both series and movie mode.
 
 ## 2) Add Chapters To MKV

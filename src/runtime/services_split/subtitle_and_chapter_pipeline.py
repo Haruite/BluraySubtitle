@@ -69,11 +69,13 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
             self,
             selected_mpls: list[tuple[str, str]],
             movie_tasks: Optional[list[tuple[str, str, str]]] = None,
+            series_configuration: Optional[list[tuple[str, str, int, str]]] = None,
             subtitle_suffix: str = '',
             cancel_event: Optional[threading.Event] = None,
     ) -> list[str]:
         """Merge the selected subtitle rows and write every planned output without overwriting files."""
         movie_tasks = list(movie_tasks or [])
+        series_configuration = list(series_configuration or [])
         subtitle_files = [task[0] for task in movie_tasks] if movie_tasks else list(self.sub_files or [])
         if not subtitle_files:
             raise ValueError(translate_text('Subtitle file is not selected'))
@@ -83,29 +85,58 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
         suffix = str(subtitle_suffix or '')
         output_jobs: list[tuple[Subtitle, str, str]] = []
 
+        def folder_output_base(folder: str, selected_mpls_no_ext: str,
+                               playlist_rows: list[tuple[str, str]]) -> str:
+            folder_key = os.path.normcase(os.path.normpath(folder))
+            folder_playlists = {
+                os.path.normcase(os.path.normpath(mpls_no_ext))
+                for row_folder, mpls_no_ext in playlist_rows
+                if os.path.normcase(os.path.normpath(row_folder)) == folder_key
+            }
+            if len(folder_playlists) > 1:
+                return f'{folder}_{os.path.basename(selected_mpls_no_ext)}{suffix}'
+            return folder + suffix
+
         if movie_tasks:
+            playlist_rows = [(folder, selected_mpls_no_ext) for _, folder, selected_mpls_no_ext in movie_tasks]
             for subtitle_path, folder, selected_mpls_no_ext in movie_tasks:
                 output_jobs.append((
                     self._subtitle_cache[subtitle_path].clone(),
-                    folder + suffix,
+                    folder_output_base(folder, selected_mpls_no_ext, playlist_rows),
                     selected_mpls_no_ext + suffix,
                 ))
         else:
-            self._progress(text='Generating Configuration')
-            configuration = self.generate_configuration_from_selected_mpls(
-                selected_mpls,
-                cancel_event=cancel_event,
-            )
-            if not configuration:
-                raise ValueError(translate_text('Task configuration is empty'))
-            configuration_rows = [configuration[key] for key in sorted(configuration, key=int)]
+            if series_configuration:
+                configuration_rows = [
+                    {
+                        'folder': folder,
+                        'selected_mpls': selected_mpls_no_ext,
+                        'bdmv_index': bdmv_index,
+                        'offset': offset,
+                    }
+                    for folder, selected_mpls_no_ext, bdmv_index, offset in series_configuration
+                ]
+                configuration = {index: row for index, row in enumerate(configuration_rows)}
+            else:
+                self._progress(text='Generating Configuration')
+                configuration = self.generate_configuration_from_selected_mpls(
+                    selected_mpls,
+                    cancel_event=cancel_event,
+                )
+                if not configuration:
+                    raise ValueError(translate_text('Task configuration is empty'))
+                configuration_rows = [configuration[key] for key in sorted(configuration, key=int)]
             if len(configuration_rows) != len(subtitle_files):
                 raise ValueError(translate_text(
                     'Could not map all selected subtitle files to the selected main playlists'
                 ))
 
+            playlist_rows = [
+                (str(row['folder']), str(row['selected_mpls']))
+                for row in configuration_rows
+            ]
             merged_subtitle = None
-            current_bdmv_index = None
+            current_playlist = ''
             output_folder_base = ''
             output_mpls_base = ''
             for subtitle_index, (subtitle_path, row) in enumerate(zip(subtitle_files, configuration_rows)):
@@ -116,21 +147,24 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                     f'Merging {subtitle_index + 1}/{len(subtitle_files)}',
                 )
                 parsed_subtitle = self._subtitle_cache[subtitle_path]
-                bdmv_index = int(row['bdmv_index'])
-                if current_bdmv_index != bdmv_index:
+                selected_mpls_no_ext = str(row['selected_mpls'])
+                playlist_key = os.path.normcase(os.path.normpath(selected_mpls_no_ext))
+                offset_seconds = float(parse_time_to_seconds(row['offset']))
+                if current_playlist != playlist_key:
                     if merged_subtitle is not None:
                         output_jobs.append((merged_subtitle, output_folder_base, output_mpls_base))
-                    merged_subtitle = parsed_subtitle.clone()
-                    current_bdmv_index = bdmv_index
+                    merged_subtitle = parsed_subtitle.clone().shift(offset_seconds)
+                    current_playlist = playlist_key
                 else:
                     if merged_subtitle.output_extension() != parsed_subtitle.output_extension():
                         raise ValueError(translate_text(
                             'Subtitle formats cannot be mixed within one merged output'
                         ))
-                    offset_seconds = float(parse_time_to_seconds(row['offset']))
                     merged_subtitle.append_subtitle(parsed_subtitle, offset_seconds)
-                output_folder_base = str(row['folder']) + suffix
-                output_mpls_base = str(row['selected_mpls']) + suffix
+                output_folder_base = folder_output_base(
+                    str(row['folder']), selected_mpls_no_ext, playlist_rows,
+                )
+                output_mpls_base = selected_mpls_no_ext + suffix
             if merged_subtitle is not None:
                 output_jobs.append((merged_subtitle, output_folder_base, output_mpls_base))
             self.configuration = configuration

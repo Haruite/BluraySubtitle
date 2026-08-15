@@ -1262,7 +1262,9 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 for subtitle_index, row in enumerate(index_table):
                     con = configuration.get(subtitle_index)
                     if con:
-                        self.table2.setItem(row, bdmv_col, QTableWidgetItem(str(con['bdmv_index'])))
+                        bdmv_item = QTableWidgetItem(str(con['bdmv_index']))
+                        bdmv_item.setData(Qt.ItemDataRole.UserRole, str(con['selected_mpls']))
+                        self.table2.setItem(row, bdmv_col, bdmv_item)
 
                         chapter = Chapter(str(con['selected_mpls']) + '.mpls')
                         rows = sum(map(len, chapter.mark_info.values()))

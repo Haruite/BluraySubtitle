@@ -168,7 +168,7 @@ RUN set -eux; \
       *) echo "unsupported arch for dovi_tool: $(uname -m)" >&2; exit 1 ;; \
     esac; \
     mkdir -p /tmp/dovi_bin && cd /tmp/dovi_bin; \
-    wget -q "https://github.com/quietvoid/dovi_tool/releases/download/${DOVI_VER}/dovi_tool-${DOVI_VER}-${DOVI_ARCH}-unknown-linux-musl.tar.gz"; \
+    wget -nv "https://github.com/quietvoid/dovi_tool/releases/download/${DOVI_VER}/dovi_tool-${DOVI_VER}-${DOVI_ARCH}-unknown-linux-musl.tar.gz"; \
     tar zxf "dovi_tool-${DOVI_VER}-${DOVI_ARCH}-unknown-linux-musl.tar.gz"; \
     install -m 0755 dovi_tool /usr/bin/dovi_tool; \
     rm -rf /tmp/dovi /tmp/dovi_bin
@@ -182,13 +182,14 @@ RUN set -eux; \
       *) echo "unsupported arch for truehdd: $(uname -m)" >&2; exit 1 ;; \
     esac; \
     mkdir -p /tmp/truehdd_bin && cd /tmp/truehdd_bin; \
-    wget -q "https://github.com/truehdd/truehdd/releases/download/${TRUEHDD_VER}/truehdd-${TRUEHDD_VER}-${TRUEHDD_ARCH}-unknown-linux-gnu.tar.gz"; \
+    wget -nv "https://github.com/truehdd/truehdd/releases/download/${TRUEHDD_VER}/truehdd-${TRUEHDD_VER}-${TRUEHDD_ARCH}-unknown-linux-gnu.tar.gz"; \
     tar zxf "truehdd-${TRUEHDD_VER}-${TRUEHDD_ARCH}-unknown-linux-gnu.tar.gz"; \
     install -m 0755 truehdd /usr/bin/truehdd; \
     rm -rf /tmp/truehdd_bin
 
 ARG FFMPEG_TAG
 RUN set -eux; \
+    FFMPEG_TAG="${FFMPEG_TAG:-$(git ls-remote --refs --tags --sort=-version:refname https://github.com/FFmpeg/FFmpeg.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[nN]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')}"; \
     test -n "$FFMPEG_TAG"; \
     mkdir -p /tmp/mpv && cd /tmp/mpv; \
     git clone https://github.com/mpv-player/mpv-build.git; \
@@ -226,7 +227,7 @@ ARG X265_TAG
 RUN bash <<'X265EOS'
 set -euo pipefail
 repo=https://github.com/Multicorewareinc/x265.git
-tag="$X265_TAG"
+tag="${X265_TAG:-$(git ls-remote --refs --tags --sort=-version:refname "$repo" | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[0-9]+([.][0-9]+)+$/ { print $2; exit }')}"
 test -n "$tag"
 mkdir -p /tmp/x265
 cd /tmp/x265
@@ -291,7 +292,7 @@ RUN bash <<'SVTAV1EOS'
 set -euo pipefail
 mkdir -p /tmp/svtav1
 cd /tmp/svtav1
-SVT_TAG="$SVT_AV1_TAG"
+SVT_TAG="${SVT_AV1_TAG:-$(git ls-remote --refs --tags --sort=-version:refname https://gitlab.com/AOMediaCodec/SVT-AV1.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')}"
 test -n "$SVT_TAG"
 git clone --depth 1 --branch "$SVT_TAG" https://gitlab.com/AOMediaCodec/SVT-AV1.git
 svt_root=/tmp/svtav1/SVT-AV1
@@ -431,6 +432,8 @@ RUN bash <<'FDKAAC'
 set -euo pipefail
 mkdir -p /tmp/fdk
 cd /tmp/fdk
+FDK_AAC_TAG="${FDK_AAC_TAG:-$(git ls-remote --refs --tags --sort=-version:refname https://github.com/mstorsjo/fdk-aac.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')}"
+FDKAAC_TAG="${FDKAAC_TAG:-$(git ls-remote --refs --tags --sort=-version:refname https://github.com/nu774/fdkaac.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')}"
 test -n "$FDK_AAC_TAG"
 test -n "$FDKAAC_TAG"
 git clone --depth 1 --branch "$FDK_AAC_TAG" https://github.com/mstorsjo/fdk-aac.git fdk-aac
@@ -475,7 +478,7 @@ FLAC
 
 RUN set -eux; \
     mkdir -p /tmp/vs && cd /tmp/vs; \
-    wget -O R57.A12.tar.gz https://github.com/AmusementClub/vapoursynth-classic/archive/refs/tags/R57.A12.tar.gz; \
+    wget -nv -O R57.A12.tar.gz https://github.com/AmusementClub/vapoursynth-classic/archive/refs/tags/R57.A12.tar.gz; \
     tar zxvf R57.A12.tar.gz; \
     cd vapoursynth-classic-R57.A12; \
     if [ -f src/filters/subtext/image.cpp ]; then sed -i 's/avcodec_close(\(.*\));/avcodec_free_context(\&\(\1\));/g' src/filters/subtext/image.cpp; fi; \
@@ -505,7 +508,7 @@ RUN set -eux; \
 
 RUN set -eux; \
     mkdir -p /tmp/vsedit/vsedit_build && cd /tmp/vsedit/vsedit_build; \
-    wget -O R19-mod-6.10.tar.gz https://github.com/YomikoR/VapourSynth-Editor/archive/refs/tags/R19-mod-6.10.tar.gz; \
+    wget -nv -O R19-mod-6.10.tar.gz https://github.com/YomikoR/VapourSynth-Editor/archive/refs/tags/R19-mod-6.10.tar.gz; \
     tar -zxvf R19-mod-6.10.tar.gz --strip-components=1; \
     ldconfig; \
     cd pro; \
@@ -593,7 +596,7 @@ RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     cd /tmp/vsplugins; \
-    wget -O r9.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI3/archive/refs/tags/r9.tar.gz; \
+    wget -nv -O r9.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI3/archive/refs/tags/r9.tar.gz; \
     tar zxvf r9.tar.gz; \
     cd VapourSynth-EEDI3-r9; \
     find . -type f -name EEDI3.cpp -exec sed -i 's/std::max_align_t/max_align_t/g' {} +; \
@@ -604,7 +607,7 @@ RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     cd /tmp/vsplugins; \
-    wget -O r10.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-AddGrain/archive/refs/tags/r10.tar.gz; \
+    wget -nv -O r10.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-AddGrain/archive/refs/tags/r10.tar.gz; \
     tar zxvf r10.tar.gz; \
     cd VapourSynth-AddGrain-r10; \
     meson setup build; ninja -C build; \
@@ -623,7 +626,7 @@ RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     cd /tmp/vsplugins; \
-    wget -O r3.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-Bilateral/archive/refs/tags/r3.tar.gz; \
+    wget -nv -O r3.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-Bilateral/archive/refs/tags/r3.tar.gz; \
     tar zxvf r3.tar.gz; \
     cd VapourSynth-Bilateral-r3; \
     chmod +x configure; \
@@ -635,7 +638,7 @@ RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     cd /tmp/vsplugins; \
-    wget -O r7.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-DFTTest/archive/refs/tags/r7.tar.gz; \
+    wget -nv -O r7.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-DFTTest/archive/refs/tags/r7.tar.gz; \
     tar zxvf r7.tar.gz; \
     cd VapourSynth-DFTTest-r7; \
     meson setup build; ninja -C build; \
@@ -645,7 +648,7 @@ RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     cd /tmp/vsplugins; \
-    wget -O r7.1.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI2/archive/refs/tags/r7.1.tar.gz; \
+    wget -nv -O r7.1.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI2/archive/refs/tags/r7.1.tar.gz; \
     tar zxvf r7.1.tar.gz; \
     cd VapourSynth-EEDI2-r7.1; \
     meson setup build; ninja -C build; \
@@ -655,7 +658,7 @@ RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     cd /tmp/vsplugins; \
-    wget -O r30.tar.gz https://github.com/EleonoreMizo/fmtconv/archive/refs/tags/r30.tar.gz; \
+    wget -nv -O r30.tar.gz https://github.com/EleonoreMizo/fmtconv/archive/refs/tags/r30.tar.gz; \
     tar zxvf r30.tar.gz; \
     cd fmtconv-r30/build/unix; \
     ./autogen.sh; \
@@ -667,7 +670,7 @@ RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     cd /tmp/vsplugins; \
-    wget -O R1.tar.gz https://github.com/vapoursynth/vs-removegrain/archive/refs/tags/R1.tar.gz; \
+    wget -nv -O R1.tar.gz https://github.com/vapoursynth/vs-removegrain/archive/refs/tags/R1.tar.gz; \
     tar zxvf R1.tar.gz; \
     cd vs-removegrain-R1/src; \
     g++ -shared -fPIC -O3 -Wall $(pkg-config --cflags vapoursynth) clense.cpp removegrainvs.cpp repairvs.cpp shared.cpp verticalcleaner.cpp -o libremovegrain.so; \
@@ -677,7 +680,7 @@ RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     cd /tmp/vsplugins; \
-    wget -O v0.1-fix.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-SangNomMod/archive/refs/tags/v0.1-fix.tar.gz; \
+    wget -nv -O v0.1-fix.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-SangNomMod/archive/refs/tags/v0.1-fix.tar.gz; \
     tar zxvf v0.1-fix.tar.gz; \
     cd VapourSynth-SangNomMod-0.1-fix; \
     ./configure; \
@@ -688,7 +691,7 @@ RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     cd /tmp/vsplugins; \
-    wget -O 2.0.4.tar.gz https://github.com/Lypheo/vs-placebo/archive/refs/tags/2.0.4.tar.gz; \
+    wget -nv -O 2.0.4.tar.gz https://github.com/Lypheo/vs-placebo/archive/refs/tags/2.0.4.tar.gz; \
     tar zxvf 2.0.4.tar.gz; \
     cd vs-placebo-2.0.4; \
     meson setup build -Dr73-compat=true; ninja -C build; \
@@ -698,7 +701,7 @@ RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     cd /tmp/vsplugins; \
-    wget -O zsmooth.zip https://github.com/adworacz/zsmooth/releases/download/0.7/libzsmooth.x86_64-gnu.so.zip; \
+    wget -nv -O zsmooth.zip https://github.com/adworacz/zsmooth/releases/download/0.7/libzsmooth.x86_64-gnu.so.zip; \
     unzip -o zsmooth.zip; \
     mv libzsmooth.x86_64-gnu.so /app/plugins/
 
@@ -706,7 +709,7 @@ RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     cd /tmp/vsplugins; \
-    wget -O v26.tar.gz https://github.com/dubhatervapoursynth/vapoursynth-mvtools/archive/refs/tags/v26.tar.gz; \
+    wget -nv -O v26.tar.gz https://github.com/dubhatervapoursynth/vapoursynth-mvtools/archive/refs/tags/v26.tar.gz; \
     tar zxvf v26.tar.gz; \
     cd vapoursynth-mvtools-26; \
     python3 -c "import re; c=open('meson.build',encoding='utf-8',errors='replace').read(); c=re.sub(r\"incdir\\s*=\\s*include_directories\\s*\\(\\s*'vapoursynth/include'\\s*\\)\",\"incdir = '/usr/local/include/vapoursynth'\",c,flags=re.DOTALL); open('meson.build','w',encoding='utf-8').write(c)"; \
@@ -716,7 +719,7 @@ RUN set -eux; \
 RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
-    wget -O /tmp/ispc.tar.gz https://github.com/ispc/ispc/releases/download/v1.31.0/ispc-v1.31.0-linux.tar.gz; \
+    wget -nv -O /tmp/ispc.tar.gz https://github.com/ispc/ispc/releases/download/v1.31.0/ispc-v1.31.0-linux.tar.gz; \
     cd /tmp; tar -xvf ispc.tar.gz; \
     mv ispc-v1.31.0-linux/bin/ispc /usr/local/bin/; chmod +x /usr/local/bin/ispc
 
@@ -724,7 +727,7 @@ RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     cd /tmp/vsplugins; \
-    wget -O v4.tar.gz https://github.com/AmusementClub/vs-nlm-ispc/archive/refs/tags/v4.tar.gz; \
+    wget -nv -O v4.tar.gz https://github.com/AmusementClub/vs-nlm-ispc/archive/refs/tags/v4.tar.gz; \
     tar zxvf v4.tar.gz; \
     cd vs-nlm-ispc-4; mkdir -p build && cd build; \
     cmake ..; make -j"$(nproc)"; \
@@ -745,14 +748,14 @@ RUN set -eux; \
       *) echo "unsupported arch for 7-Zip: $(uname -m)" >&2; exit 1 ;; \
     esac; \
     mkdir -p /tmp/7zip && cd /tmp/7zip; \
-    wget -q "https://github.com/ip7z/7zip/releases/download/${SEVENZIP_RELEASE}/7z${SEVENZIP_ASSET_VERSION}-linux-${SEVENZIP_ARCH}.tar.xz"; \
+    wget -nv "https://github.com/ip7z/7zip/releases/download/${SEVENZIP_RELEASE}/7z${SEVENZIP_ASSET_VERSION}-linux-${SEVENZIP_ARCH}.tar.xz"; \
     tar -xJf "7z${SEVENZIP_ASSET_VERSION}-linux-${SEVENZIP_ARCH}.tar.xz"; \
     install -m 0755 7zz /usr/local/bin/7zz; \
     rm -rf /tmp/7zip
 
 RUN set -eux; \
     mkdir -p /tmp/vcbs && cd /tmp/vcbs; \
-    wget -O vapoursynth_portable.7z "https://github.com/AmusementClub/tools/releases/download/2025H1p/vapoursynth_portable_25H1.1p_cpu.7z"; \
+    wget -nv -O vapoursynth_portable.7z "https://github.com/AmusementClub/tools/releases/download/2025H1p/vapoursynth_portable_25H1.1p_cpu.7z"; \
     7zz x vapoursynth_portable.7z -o./extracted; \
     PYV="$(python3 -c 'import sys; print("%d.%d" % (sys.version_info.major, sys.version_info.minor))')"; \
     DST="/usr/local/lib/python${PYV}/dist-packages"; \
@@ -764,6 +767,7 @@ RUN set -eux; \
 
 ARG X264_COMMIT
 RUN set -eux; \
+    X264_COMMIT="${X264_COMMIT:-$(git ls-remote https://code.videolan.org/videolan/x264.git refs/heads/master | awk 'NR == 1 { print $1 }')}"; \
     test -n "$X264_COMMIT"; \
     mkdir -p /tmp/x264 && cd /tmp/x264; \
     git init x264; \
@@ -784,10 +788,11 @@ RUN set -eux; \
 
 ARG TSMUXER_TAG
 RUN set -eux; \
+    TSMUXER_TAG="${TSMUXER_TAG:-$(git ls-remote --refs --tags --sort=-version:refname https://github.com/justdan96/tsMuxer.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')}"; \
     test -n "$TSMUXER_TAG"; \
     TSMUXER_VER="${TSMUXER_TAG#v}"; \
     mkdir -p /tmp/tsmuxer && cd /tmp/tsmuxer; \
-    wget "https://github.com/justdan96/tsMuxer/releases/download/${TSMUXER_TAG}/tsMuxer-${TSMUXER_VER}-linux.zip"; \
+    wget -nv "https://github.com/justdan96/tsMuxer/releases/download/${TSMUXER_TAG}/tsMuxer-${TSMUXER_VER}-linux.zip"; \
     unzip "tsMuxer-${TSMUXER_VER}-linux.zip"; \
     cp tsMuxeR /usr/bin/tsMuxeR; \
     chmod +x /usr/bin/tsMuxeR; \
@@ -795,6 +800,7 @@ RUN set -eux; \
 
 ARG HDR10PLUS_TAG
 RUN set -eux; \
+    HDR10PLUS_TAG="${HDR10PLUS_TAG:-$(git ls-remote --refs --tags --sort=-version:refname https://github.com/quietvoid/hdr10plus_tool.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')}"; \
     test -n "$HDR10PLUS_TAG"; \
     HDR10PLUS_VER="${HDR10PLUS_TAG#v}"; \
     case "$(uname -m)" in \
@@ -805,7 +811,7 @@ RUN set -eux; \
     HDR10PLUS_ARCHIVE="hdr10plus_tool-${HDR10PLUS_VER}-${HDR10PLUS_ARCH}-unknown-linux-musl.tar.gz"; \
     mkdir -p /tmp/hdr10plus-tool; \
     cd /tmp/hdr10plus-tool; \
-    wget "https://github.com/quietvoid/hdr10plus_tool/releases/download/${HDR10PLUS_TAG}/${HDR10PLUS_ARCHIVE}"; \
+    wget -nv "https://github.com/quietvoid/hdr10plus_tool/releases/download/${HDR10PLUS_TAG}/${HDR10PLUS_ARCHIVE}"; \
     tar zxf "${HDR10PLUS_ARCHIVE}"; \
     install -m 0755 hdr10plus_tool /usr/bin/hdr10plus_tool; \
     /usr/bin/hdr10plus_tool --version 2>&1 | grep -F "hdr10plus_tool ${HDR10PLUS_VER}" >/dev/null; \

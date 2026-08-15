@@ -43,6 +43,28 @@ class Subtitle:
             return Subtitle.from_parsed(copy.deepcopy(self.content), self.max_end)
         return Subtitle.from_parsed(None, self.max_end)
 
+    def shift(self, time_shift: float):
+        if not time_shift or not hasattr(self, 'content'):
+            return self
+        if hasattr(self.content, 'lines'):
+            for line in self.content.lines:
+                line[1] = get_time_str(parse_hhmmss_ms_to_seconds(line[1]) + time_shift)
+                line[2] = get_time_str(parse_hhmmss_ms_to_seconds(line[2]) + time_shift)
+            return self
+        if hasattr(self.content, 'packets'):
+            shift_pts = int(round(time_shift * 90000))
+            for packet in self.content.packets:
+                packet['pts'] = (packet['pts'] + shift_pts) & 0xFFFFFFFF
+                packet['dts'] = (packet['dts'] + shift_pts) & 0xFFFFFFFF
+            self.content.max_end = self.content._compute_max_end()
+            self.max_end = self.content.max_end
+            return self
+        delta = datetime.timedelta(seconds=time_shift)
+        for event in self.content.events:
+            event.Start += delta
+            event.End += delta
+        return self
+
     def append_subtitle(self, other: 'Subtitle', time_shift: float):
         if not hasattr(other, 'content'):
             return

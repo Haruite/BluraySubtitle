@@ -568,7 +568,7 @@ class BluraySubtitleServiceBase:
     def m2ts_sp_custom_segment_time_window_sec(mpls_path: str, output_name: str) -> Optional[tuple[float, float]]:
         raise NotImplementedError
 
-    def merge_subtitles(self, selected_mpls: list[tuple[str, str]], movie_tasks: Optional[list[tuple[str, str, str]]]=None, subtitle_suffix: str='', cancel_event: Optional[threading.Event]=None) -> list[str]:
+    def merge_subtitles(self, selected_mpls: list[tuple[str, str]], movie_tasks: Optional[list[tuple[str, str, str]]]=None, series_configuration: Optional[list[tuple[str, str, int, str]]]=None, subtitle_suffix: str='', cancel_event: Optional[threading.Event]=None) -> list[str]:
         raise NotImplementedError
 
     @staticmethod

@@ -1301,6 +1301,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
 
         subtitle_suffix = self._get_subtitle_suffix()
         movie_tasks: list[tuple[str, str, str]] = []
+        series_configuration: list[tuple[str, str, int, str]] = []
         subtitle_files: list[str] = []
         try:
             if '/' in subtitle_suffix or '\\' in subtitle_suffix:
@@ -1334,11 +1335,16 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
 
             if self._is_movie_mode():
                 folder_to_bdmv: dict[str, int] = {}
-                bdmv_to_info: dict[int, tuple[str, str]] = {}
+                bdmv_to_info: dict[int, list[tuple[str, str]]] = {}
+                selected_mpls_by_path: dict[str, tuple[str, str]] = {}
                 for folder, selected_mpls_no_ext in selected_mpls:
                     if folder not in folder_to_bdmv:
                         folder_to_bdmv[folder] = len(folder_to_bdmv) + 1
-                    bdmv_to_info[folder_to_bdmv[folder]] = (folder, selected_mpls_no_ext)
+                    bdmv_index = folder_to_bdmv[folder]
+                    bdmv_to_info.setdefault(bdmv_index, []).append((folder, selected_mpls_no_ext))
+                    selected_mpls_by_path[
+                        os.path.normcase(os.path.normpath(selected_mpls_no_ext))
+                    ] = (folder, selected_mpls_no_ext)
 
                 bdmv_column = SUBTITLE_LABELS.index('bdmv_index')
                 for row, subtitle_path in selected_subtitle_rows:
@@ -1347,13 +1353,50 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                         bdmv_index = int(bdmv_item.text().strip()) if bdmv_item else 0
                     except (TypeError, ValueError):
                         bdmv_index = 0
-                    disc_info = bdmv_to_info.get(bdmv_index)
+                    try:
+                        row_mpls = str(bdmv_item.data(Qt.ItemDataRole.UserRole) or '').strip() if bdmv_item else ''
+                    except (AttributeError, TypeError):
+                        row_mpls = ''
+                    disc_info = selected_mpls_by_path.get(os.path.normcase(os.path.normpath(row_mpls)))
+                    candidates = bdmv_to_info.get(bdmv_index, [])
+                    if not disc_info and len(candidates) == 1:
+                        disc_info = candidates[0]
                     if not disc_info:
                         raise ValueError(
                             self.t('Subtitle row {row} does not match a selected Blu-ray disc').format(row=row + 1)
                         )
                     folder, selected_mpls_no_ext = disc_info
                     movie_tasks.append((subtitle_path, folder, selected_mpls_no_ext))
+            else:
+                selected_mpls_by_path = {
+                    os.path.normcase(os.path.normpath(mpls_no_ext)): (folder, mpls_no_ext)
+                    for folder, mpls_no_ext in selected_mpls
+                }
+                bdmv_column = SUBTITLE_LABELS.index('bdmv_index')
+                offset_column = SUBTITLE_LABELS.index('offset')
+                for row, _subtitle_path in selected_subtitle_rows:
+                    bdmv_item = self.table2.item(row, bdmv_column)
+                    try:
+                        bdmv_index = int(bdmv_item.text().strip()) if bdmv_item else 0
+                    except (TypeError, ValueError):
+                        bdmv_index = 0
+                    try:
+                        row_mpls = str(bdmv_item.data(Qt.ItemDataRole.UserRole) or '').strip() if bdmv_item else ''
+                    except (AttributeError, TypeError):
+                        row_mpls = ''
+                    disc_info = selected_mpls_by_path.get(os.path.normcase(os.path.normpath(row_mpls)))
+                    if not disc_info and len(selected_mpls) == 1:
+                        disc_info = selected_mpls[0]
+                        if bdmv_index <= 0:
+                            bdmv_index = 1
+                    if not disc_info or bdmv_index <= 0:
+                        raise ValueError(
+                            self.t('Subtitle row {row} does not match a selected Blu-ray disc').format(row=row + 1)
+                        )
+                    offset_item = self.table2.item(row, offset_column)
+                    offset = offset_item.text().strip() if offset_item and offset_item.text() else '0'
+                    folder, selected_mpls_no_ext = disc_info
+                    series_configuration.append((folder, selected_mpls_no_ext, bdmv_index, offset))
         except (OSError, ValueError) as error:
             if not silent_mode:
                 self._show_error_dialog(str(error))
@@ -1371,6 +1414,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             selected_mpls=tuple(selected_mpls),
             subtitle_suffix=subtitle_suffix,
             movie_tasks=tuple(movie_tasks),
+            series_configuration=tuple(series_configuration),
         )
 
         cancel_event = threading.Event()
