@@ -1,12 +1,12 @@
 import copy
 import datetime
+import os
 
 from .ass_model import Ass
 from .pgs import PGS
 from .srt import SRT
-from .timecode import parse_hhmmss_ms_to_seconds
+from .timecode import format_srt_timestamp, parse_hhmmss_ms_to_seconds
 from src.core.i18n import translate_text
-from src.exports.utils import get_time_str
 
 
 class Subtitle:
@@ -48,8 +48,8 @@ class Subtitle:
             return self
         if hasattr(self.content, 'lines'):
             for line in self.content.lines:
-                line[1] = get_time_str(parse_hhmmss_ms_to_seconds(line[1]) + time_shift)
-                line[2] = get_time_str(parse_hhmmss_ms_to_seconds(line[2]) + time_shift)
+                line[1] = format_srt_timestamp(parse_hhmmss_ms_to_seconds(line[1]) + time_shift)
+                line[2] = format_srt_timestamp(parse_hhmmss_ms_to_seconds(line[2]) + time_shift)
             return self
         if hasattr(self.content, 'packets'):
             shift_pts = int(round(time_shift * 90000))
@@ -80,8 +80,8 @@ class Subtitle:
                 new_line = [line[0] + index]
                 start_time = parse_hhmmss_ms_to_seconds(line[1])
                 end_time = parse_hhmmss_ms_to_seconds(line[2])
-                new_line.append(get_time_str(start_time + time_shift))
-                new_line.append(get_time_str(end_time + time_shift))
+                new_line.append(format_srt_timestamp(start_time + time_shift))
+                new_line.append(format_srt_timestamp(end_time + time_shift))
                 new_line.append(line[3])
                 shifted_lines.append(new_line)
             self.content.lines.extend(shifted_lines)
@@ -98,39 +98,41 @@ class Subtitle:
         if hasattr(other.content, 'packets'):
             return
 
+        if not getattr(self.content, 'style_attrs', None) and getattr(other.content, 'style_attrs', None):
+            self.content.style_attrs = copy.deepcopy(other.content.style_attrs)
+        if not getattr(self.content, 'event_attrs', None) and getattr(other.content, 'event_attrs', None):
+            self.content.event_attrs = copy.deepcopy(other.content.event_attrs)
         style_attrs = getattr(self.content, 'style_attrs', None)
-        if not style_attrs:
-            self.content.styles.extend(copy.deepcopy(other.content.styles))
-            self.content.events.extend(copy.deepcopy(other.content.events))
-            return
 
         def style_key(style) -> tuple:
             return tuple(getattr(style, attr, '') for attr in style_attrs)
 
-        existing_style_keys = {style_key(s): s for s in self.content.styles}
-        existing_names = {getattr(s, 'Name', '') for s in self.content.styles}
         style_name_map = {}
-
-        for style in other.content.styles:
-            k = style_key(style)
-            if k in existing_style_keys:
-                continue
-            style_copy = copy.deepcopy(style)
-            old_name = getattr(style_copy, 'Name', '')
-            new_name = old_name
-            while new_name in existing_names:
-                new_name += '1'
-                setattr(style_copy, 'Name', new_name)
-                k = style_key(style_copy)
+        if style_attrs:
+            existing_style_keys = {style_key(s): s for s in self.content.styles}
+            existing_names = {getattr(s, 'Name', '') for s in self.content.styles}
+            for style in other.content.styles:
+                k = style_key(style)
                 if k in existing_style_keys:
-                    new_name = ''
-                    break
-            if not new_name:
-                continue
-            style_name_map[old_name] = new_name
-            existing_names.add(new_name)
-            existing_style_keys[k] = style_copy
-            self.content.styles.append(style_copy)
+                    continue
+                style_copy = copy.deepcopy(style)
+                old_name = getattr(style_copy, 'Name', '')
+                new_name = old_name
+                while new_name in existing_names:
+                    new_name += '1'
+                    setattr(style_copy, 'Name', new_name)
+                    k = style_key(style_copy)
+                    if k in existing_style_keys:
+                        new_name = ''
+                        break
+                if not new_name:
+                    continue
+                style_name_map[old_name] = new_name
+                existing_names.add(new_name)
+                existing_style_keys[k] = style_copy
+                self.content.styles.append(style_copy)
+        else:
+            self.content.styles.extend(copy.deepcopy(other.content.styles))
 
         delta = datetime.timedelta(seconds=time_shift)
         for event in other.content.events:
@@ -169,13 +171,24 @@ class Subtitle:
 
     def dump(self, file_path: str, selected_mpls: str):
         extension = self.output_extension()
-        for output_path in (file_path + extension, selected_mpls + extension):
-            if extension == '.sup':
-                with open(output_path, 'xb') as file:
-                    self.content.dump_file(file)
-            else:
-                with open(output_path, 'x', encoding='utf-8-sig') as file:
-                    self.content.dump_file(file)
+        created_paths = []
+        try:
+            for output_path in (file_path + extension, selected_mpls + extension):
+                if extension == '.sup':
+                    with open(output_path, 'xb') as file:
+                        created_paths.append(output_path)
+                        self.content.dump_file(file)
+                else:
+                    with open(output_path, 'x', encoding='utf-8-sig') as file:
+                        created_paths.append(output_path)
+                        self.content.dump_file(file)
+        except Exception:
+            for output_path in reversed(created_paths):
+                try:
+                    os.remove(output_path)
+                except OSError:
+                    pass
+            raise
 
     def max_end_time(self):
         try:

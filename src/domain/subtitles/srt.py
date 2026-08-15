@@ -1,8 +1,7 @@
 import _io
 import re
 
-from .timecode import parse_hhmmss_ms_to_seconds
-from src.exports.utils import get_time_str
+from .timecode import format_srt_timestamp, parse_hhmmss_ms_to_seconds
 
 
 class SRT:
@@ -16,7 +15,7 @@ class SRT:
                 new_line = [int(line)]
                 added = False
             elif (re.match(r'^(\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3})$', line)
-                    or re.match(r'^(\d{2}:\d{2}:\d{2}.\d{3} --> \d{2}:\d{2}:\d{2}.\d{3})$', line)):
+                    or re.match(r'^(\d{2}:\d{2}:\d{2}\.\d{3} --> \d{2}:\d{2}:\d{2}\.\d{3})$', line)):
                 new_line.append(line[0: 12])
                 new_line.append(line[17: 29])
             elif line.strip():
@@ -28,6 +27,8 @@ class SRT:
                 if not added:
                     self.lines.append(new_line)
                     added = True
+        if not added:
+            self.lines.append(new_line)
 
     def dump_file(self, fp: _io.TextIOWrapper):
         for line in self.lines:
@@ -46,8 +47,8 @@ class SRT:
             end_time = parse_hhmmss_ms_to_seconds(line[2])
             self.lines.append([
                 line[0] + index,
-                get_time_str(start_time + shift_time),
-                get_time_str(end_time + shift_time),
+                format_srt_timestamp(start_time + shift_time),
+                format_srt_timestamp(end_time + shift_time),
                 line[3]
             ])
         return self
@@ -61,8 +62,8 @@ class SRT:
                 continue
             cut_lines.append([
                 len(cut_lines) + 1,
-                get_time_str(line_start - start_time),
-                get_time_str(line_end - start_time),
+                format_srt_timestamp(line_start - start_time),
+                format_srt_timestamp(line_end - start_time),
                 line[3],
             ])
         self.lines = cut_lines

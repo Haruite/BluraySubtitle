@@ -82,7 +82,7 @@ class Ass:
         fp.write('\n[V4+ Styles]\n' if self.script_type == 'v4.00+' else '\n[V4 Styles]\n')
         fp.write('Format: ' + ', '.join(self.style_attrs) + '\n')
         for style in self.styles:
-            fp.write('Style: ' + ','.join(style.__dict__.values()) + '\n')
+            fp.write('Style: ' + ','.join(str(getattr(style, attr, '')) for attr in self.style_attrs) + '\n')
 
         fp.write('\n[Events]\n')
         fp.write(self.event_attrs[0] + ': ' + ', '.join(self.event_attrs[1:]) + '\n')
@@ -90,22 +90,19 @@ class Ass:
             if i in self.delete_lines:
                 continue
             elements = []
-            values = list(event.__dict__.values())
-            keys = list(event.__dict__.keys())
-            for j, value in enumerate(values):
-                if j == 0:
-                    _start = value + ': '
-                else:
-                    if keys[j].lower() in ('start', 'end'):
-                        d_len = len(str(value).split(':')[-1])
-                        if d_len > 5:
-                            elements.append(str(value)[:5 - d_len])
-                        elif d_len == 5:
-                            elements.append(str(value))
-                        else:
-                            elements.append(str(value) + '.00')
+            _start = str(getattr(event, self.event_attrs[0], 'Dialogue')) + ': '
+            for key in self.event_attrs[1:]:
+                value = getattr(event, key, '')
+                if key.lower() in ('start', 'end'):
+                    d_len = len(str(value).split(':')[-1])
+                    if d_len > 5:
+                        elements.append(str(value)[:5 - d_len])
+                    elif d_len == 5:
+                        elements.append(str(value))
                     else:
-                        elements.append(value)
+                        elements.append(str(value) + '.00')
+                else:
+                    elements.append(str(value))
             fp.write(_start + ','.join(elements) + '\n')
 
 
