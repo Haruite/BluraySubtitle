@@ -7,7 +7,7 @@ import traceback
 from functools import partial
 from typing import Optional
 
-from PyQt6.QtCore import Qt, QTimer, QCoreApplication, QThread
+from PyQt6.QtCore import Qt, QTimer, QCoreApplication, QThread, QObject
 from PyQt6.QtWidgets import QTableWidget, QToolButton, QPlainTextEdit, QWidget, QTableWidgetItem, QComboBox, \
     QProgressDialog, QProgressBar
 
@@ -1299,6 +1299,11 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         visible values, performs deterministic preflight, and gives the immutable
         request to the worker.
         """
+        if (
+                bool(getattr(self, '_close_pending', False))
+                or getattr(self, '_current_cancel_event', None) is not None
+        ):
+            return False
         try:
             output_folder = os.path.normpath(
                 self.output_folder_path.text().strip()
@@ -1399,18 +1404,22 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         self._remux_worker.progress.connect(self._on_exe_button_progress_value)
         self._remux_worker.label.connect(self._on_exe_button_progress_text)
 
+        if isinstance(self._remux_worker, QObject):
+            for terminal_signal in (
+                    self._remux_worker.finished,
+                    self._remux_worker.canceled,
+                    self._remux_worker.failed,
+            ):
+                terminal_signal.connect(self._remux_worker.deleteLater)
+                terminal_signal.connect(self._remux_thread.quit)
+            self._remux_thread.finished.connect(self._remux_thread.deleteLater)
+
         def cleanup():
             self._current_cancel_event = None
             self._reset_exe_button()
             self.exe_button.setEnabled(True)
-            if hasattr(self, '_remux_thread') and self._remux_thread:
-                self._remux_thread.quit()
-                self._remux_thread.wait()
-                self._remux_thread.deleteLater()
-                self._remux_thread = None
-            if hasattr(self, '_remux_worker') and self._remux_worker:
-                self._remux_worker.deleteLater()
-                self._remux_worker = None
+            self._remux_thread = None
+            self._remux_worker = None
 
         def on_finished():
             cleanup()

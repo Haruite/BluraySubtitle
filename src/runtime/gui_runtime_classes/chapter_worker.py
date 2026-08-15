@@ -6,7 +6,7 @@ from typing import Optional
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from src.core.i18n import translate_text
-from src.exports.utils import print_terminal_line, print_tb_string_terminal
+from src.exports.utils import mkvmerge_cancellation_scope, print_terminal_line, print_tb_string_terminal
 from src.runtime import TaskCancelled
 from src.runtime.services import BluraySubtitle
 
@@ -49,12 +49,15 @@ class ChapterWorker(QObject):
                 request.edit_original,
                 progress_cb,
             )
-            service.add_chapters_to_mkv(
-                list(request.mkv_targets),
-                list(request.selected_mpls),
-                request.edit_original,
-                cancel_event=self.cancel_event,
-            )
+            with mkvmerge_cancellation_scope(self.cancel_event):
+                service.add_chapters_to_mkv(
+                    list(request.mkv_targets),
+                    list(request.selected_mpls),
+                    request.edit_original,
+                    cancel_event=self.cancel_event,
+                )
+            if self.cancel_event.is_set():
+                raise TaskCancelled()
             print_terminal_line(translate_text('[BluraySubtitle] Add-chapters worker: finished successfully.'))
         except TaskCancelled:
             print_terminal_line(translate_text('[BluraySubtitle] Add-chapters worker: canceled.'))

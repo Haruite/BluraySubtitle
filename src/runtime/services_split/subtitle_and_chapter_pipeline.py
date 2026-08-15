@@ -532,11 +532,16 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                 )
                 with open(chapter_path, 'w', encoding='utf-8-sig') as chapter_file:
                     chapter_file.write(chapter_text)
-                MKV(source_path).add_chapter(
-                    edit_original,
-                    chapter_path,
-                    None if edit_original else output_path,
-                )
+                try:
+                    MKV(source_path).add_chapter(
+                        edit_original,
+                        chapter_path,
+                        None if edit_original else output_path,
+                    )
+                except TaskCancelled:
+                    if not edit_original and os.path.isfile(output_path):
+                        force_remove_file(output_path)
+                    raise
                 self._progress(250 + int(document_index / total * 750), 'Writing Chapters')
         self._progress(1000, 'Done')
 
@@ -891,7 +896,14 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                 except Exception:
                     pass
             raise TaskCancelled()
-        return_code = run_command(command_parts).returncode
+        try:
+            return_code = run_command(command_parts).returncode
+        except TaskCancelled:
+            if os.path.isfile(temporary_output):
+                force_remove_file(temporary_output)
+            if chapter_backup and os.path.isfile(chapter_backup):
+                force_remove_file(chapter_backup)
+            raise
         if return_code not in (0, 1) or not os.path.isfile(temporary_output):
             if os.path.isfile(temporary_output):
                 force_remove_file(temporary_output)

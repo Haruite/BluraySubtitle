@@ -5,7 +5,7 @@ from typing import Optional
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from src.core.i18n import translate_text
-from src.exports.utils import print_tb_string_terminal, print_terminal_line
+from src.exports.utils import mkvmerge_cancellation_scope, print_tb_string_terminal, print_terminal_line
 from src.runtime.encode import EncodeRequest
 from src.runtime.encode_results import (
     EncodeBatchResult,
@@ -52,12 +52,15 @@ class EncodeWorker(QObject):
                 movie_mode=request.movie_mode,
                 mux_dolby_vision=request.mux_dolby_vision,
             )
-            batch_result = service.episodes_encode(
-                request,
-                cancel_event=self.cancel_event,
-            )
+            with mkvmerge_cancellation_scope(self.cancel_event):
+                batch_result = service.episodes_encode(
+                    request,
+                    cancel_event=self.cancel_event,
+                )
             if not isinstance(batch_result, EncodeBatchResult):
                 raise RuntimeError(translate_text('Encode batch did not return a result'))
+            if self.cancel_event.is_set():
+                raise TaskCancelled()
         except TaskCancelled:
             print_terminal_line('[BluraySubtitle] Encode worker: canceled.')
             self.canceled.emit()

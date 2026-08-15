@@ -14,6 +14,7 @@ from src.core import find_mkvtoolnix, mkvtoolnix_ui_language_arg
 from src.core import settings as core_settings
 from src.core.i18n import translate_text
 from src.exports.utils import mkv_codec_id_is_dts_family, run_command
+from src.runtime import TaskCancelled
 
 
 @dataclass(frozen=True)
@@ -915,6 +916,8 @@ def mux_with_audio_conversion(
                     )
                 )
         os.replace(temporary_output, output_path)
+    except TaskCancelled:
+        raise
     except Exception as error:
         if preserve_failure_artifacts:
             artifact_paths = tuple(

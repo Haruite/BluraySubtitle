@@ -2,11 +2,16 @@
 import ctypes
 import json
 import os
+import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Optional
 
 import numpy as np
@@ -18,6 +23,76 @@ if sys.platform == 'win32':
     import winreg
 
 from ..core import FFMPEG_PATH, FFPROBE_PATH
+
+_MKVMERGE_CANCEL_EVENT: ContextVar[object | None] = ContextVar(
+    '_MKVMERGE_CANCEL_EVENT',
+    default=None,
+)
+
+
+@contextmanager
+def mkvmerge_cancellation_scope(cancel_event):
+    """Make mkvmerge processes started in this task observe its cancel event."""
+    token = _MKVMERGE_CANCEL_EVENT.set(cancel_event)
+    try:
+        yield
+    finally:
+        _MKVMERGE_CANCEL_EVENT.reset(token)
+
+
+def _is_mkvmerge_mux_command(command) -> bool:
+    if isinstance(command, str):
+        try:
+            arguments = shlex.split(command, posix=sys.platform != 'win32')
+        except ValueError:
+            return False
+    else:
+        arguments = list(command or [])
+    if not arguments:
+        return False
+    executable = os.path.basename(str(arguments[0]).strip('"')).lower()
+    return executable.startswith('mkvmerge') and any(
+        str(argument) in ('-o', '--output') for argument in arguments[1:]
+    )
+
+
+def _terminate_process_tree(process) -> None:
+    if process.poll() is not None:
+        return
+    if sys.platform == 'win32':
+        try:
+            subprocess.run(
+                ['taskkill', '/PID', str(process.pid), '/T', '/F'],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError:
+            pass
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        except OSError:
+            pass
+    try:
+        process.wait(timeout=0.5)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    if sys.platform != 'win32':
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except OSError:
+            pass
+    try:
+        process.kill()
+    except OSError:
+        pass
+    try:
+        process.wait(timeout=0.5)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def mkv_codec_id_is_dts_family(codec_id: str) -> bool:
@@ -423,7 +498,62 @@ def run_command(command, *, wait: bool = True, log_template: str = '', **kwargs)
     if log_template:
         command_text = command if isinstance(command, str) else subprocess.list2cmdline(command)
         print(translate_text(log_template).format(command=command_text), flush=True)
-    return (subprocess.run if wait else subprocess.Popen)(command, **kwargs)
+    cancel_event = _MKVMERGE_CANCEL_EVENT.get()
+    if not wait or cancel_event is None or not _is_mkvmerge_mux_command(command):
+        return (subprocess.run if wait else subprocess.Popen)(command, **kwargs)
+    if cancel_event.is_set():
+        from src.runtime import TaskCancelled
+        raise TaskCancelled()
+    if sys.platform == 'win32':
+        kwargs.setdefault('creationflags', subprocess.CREATE_NEW_PROCESS_GROUP)
+    else:
+        kwargs.setdefault('start_new_session', True)
+    input_data = kwargs.pop('input', None)
+    capture_output = kwargs.pop('capture_output', False)
+    check = kwargs.pop('check', False)
+    timeout = kwargs.pop('timeout', None)
+    if input_data is not None:
+        if kwargs.get('stdin') is not None:
+            raise ValueError('stdin and input arguments may not both be used.')
+        kwargs['stdin'] = subprocess.PIPE
+    if capture_output:
+        if kwargs.get('stdout') is not None or kwargs.get('stderr') is not None:
+            raise ValueError('stdout and stderr arguments may not be used with capture_output.')
+        kwargs['stdout'] = subprocess.PIPE
+        kwargs['stderr'] = subprocess.PIPE
+    process = subprocess.Popen(command, **kwargs)
+    started_at = time.monotonic()
+    stdout = None
+    stderr = None
+    try:
+        while True:
+            if cancel_event.is_set():
+                _terminate_process_tree(process)
+                from src.runtime import TaskCancelled
+                raise TaskCancelled()
+            poll_timeout = 0.1
+            if timeout is not None:
+                remaining = float(timeout) - (time.monotonic() - started_at)
+                if remaining <= 0:
+                    _terminate_process_tree(process)
+                    stdout, stderr = process.communicate()
+                    raise subprocess.TimeoutExpired(command, timeout, output=stdout, stderr=stderr)
+                poll_timeout = min(poll_timeout, remaining)
+            try:
+                stdout, stderr = process.communicate(input=input_data, timeout=poll_timeout)
+                break
+            except subprocess.TimeoutExpired:
+                input_data = None
+        if cancel_event.is_set():
+            from src.runtime import TaskCancelled
+            raise TaskCancelled()
+        result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+        if check:
+            result.check_returncode()
+        return result
+    except BaseException:
+        _terminate_process_tree(process)
+        raise
 
 
 def print_terminal_line(message: str) -> None:
@@ -465,6 +595,7 @@ __all__ = [
     "resolve_encoder_executable_path",
     "get_vspipe_context",
     "mkv_codec_id_is_dts_family",
+    "mkvmerge_cancellation_scope",
     "run_command",
     "print_terminal_line",
     "print_exc_terminal",

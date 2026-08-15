@@ -14,7 +14,7 @@ import sys
 import time
 from typing import Optional
 
-from PyQt6.QtCore import Qt, QTimer, QCoreApplication
+from PyQt6.QtCore import Qt, QTimer, QCoreApplication, QThread
 from PyQt6.QtWidgets import QApplication, QVBoxLayout, QWidget, QHBoxLayout, QLabel, QComboBox, QSlider, QGroupBox, \
     QLineEdit, QTabBar, QRadioButton, QButtonGroup, QPushButton, QCheckBox, QTableWidget, QSizePolicy, QSplitter, \
     QProgressDialog, QProgressBar, QFileDialog
@@ -57,6 +57,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self._sp_scan_completed = True
         self._sp_scan_pending_function_id = None
         self._sp_scan_error = ''
+        self._close_pending = False
         self.init_ui()
 
     def init_ui(self):
@@ -878,6 +879,28 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             pass
 
     def closeEvent(self, event):
+        active_threads = [
+            thread for thread in self.findChildren(QThread)
+            if thread.isRunning()
+        ]
+        if active_threads:
+            self._close_pending = True
+            self.setEnabled(False)
+            for name in (
+                    '_current_cancel_event',
+                    '_sp_scan_cancel_event',
+                    '_subtitle_scan_cancel_event',
+            ):
+                cancel_event = getattr(self, name, None)
+                if cancel_event is not None:
+                    cancel_event.set()
+            for thread in active_threads:
+                thread.requestInterruption()
+                thread.quit()
+            event.ignore()
+            QTimer.singleShot(100, self.close)
+            return
+
         if not self._app_config_load_failed:
             try:
                 self._save_application_state()

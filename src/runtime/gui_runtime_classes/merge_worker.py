@@ -60,6 +60,8 @@ class MergeWorker(QObject):
                 cancel_event=self.cancel_event,
             )
             service.completion()
+            if self.cancel_event.is_set():
+                raise TaskCancelled()
             if request.movie_tasks:
                 print_terminal_line('[BluraySubtitle] Merge worker (movie mode): finished successfully.')
             else:

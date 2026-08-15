@@ -34,6 +34,7 @@ class BluraySubtitleGuiBase(QWidget):
         self._chapter_thread = None
         self._chapter_worker = None
         self._colorful_opacity = None
+        self._close_pending = None
         self._current_cancel_event = None
         self._encode_input_mode = None
         self._encode_preset_params = None

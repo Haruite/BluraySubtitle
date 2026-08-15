@@ -11,7 +11,7 @@ import traceback
 from functools import partial
 from typing import Optional
 
-from PyQt6.QtCore import Qt, QTimer, QThread, QCoreApplication, QPoint, QEventLoop
+from PyQt6.QtCore import Qt, QTimer, QThread, QCoreApplication, QPoint, QEventLoop, QObject
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPlainTextEdit, QTextBrowser, QWidget, QHBoxLayout, QPushButton, \
     QApplication, QProgressDialog, QProgressBar, QTableWidgetItem, QTableWidget, QToolButton, QComboBox, \
     QAbstractItemView, QMenu, QMessageBox, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, QFileDialog, QCheckBox, \
@@ -231,6 +231,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 print_tb_string_terminal(s, with_header=False)
         except Exception:
             pass
+        if bool(getattr(self, '_close_pending', False)):
+            return
         dlg = QDialog(self)
         dlg.setWindowTitle(translate_text('Error'))
         layout = QVBoxLayout()
@@ -263,6 +265,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         dlg.exec()
 
     def _start_subtitle_folder_scan(self):
+        if bool(getattr(self, '_close_pending', False)):
+            return
         folder = (self._pending_subtitle_folder or '').strip()
         if not folder or not os.path.isdir(folder):
             return
@@ -282,21 +286,15 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 pass
             self._subtitle_scan_progress_dialog = None
 
-        if hasattr(self, '_subtitle_scan_cancel_event') and self._subtitle_scan_cancel_event:
-            self._subtitle_scan_cancel_event.set()
-        if hasattr(self, '_subtitle_scan_thread') and self._subtitle_scan_thread:
+        previous_cancel_event = getattr(self, '_subtitle_scan_cancel_event', None)
+        if isinstance(previous_cancel_event, threading.Event):
+            previous_cancel_event.set()
+        previous_thread = getattr(self, '_subtitle_scan_thread', None)
+        if isinstance(previous_thread, QThread):
             try:
-                self._subtitle_scan_thread.quit()
-                self._subtitle_scan_thread.finished.connect(self._subtitle_scan_thread.deleteLater)
+                previous_thread.quit()
             except Exception:
                 pass
-            self._subtitle_scan_thread = None
-        if hasattr(self, '_subtitle_scan_worker') and self._subtitle_scan_worker:
-            try:
-                self._subtitle_scan_worker.deleteLater()
-            except Exception:
-                pass
-            self._subtitle_scan_worker = None
 
         function_id = self.get_selected_function_id()
         if function_id == 1:
@@ -312,9 +310,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             mode = 4
             title = 'Reading Subtitles'
 
-        if not hasattr(self, '_subtitle_scan_seq'):
-            self._subtitle_scan_seq = 0
-        self._subtitle_scan_seq += 1
+        self._subtitle_scan_seq = int(getattr(self, '_subtitle_scan_seq', 0) or 0) + 1
         seq = self._subtitle_scan_seq
         cancel_event = threading.Event()
         self._subtitle_scan_cancel_event = cancel_event
@@ -346,15 +342,14 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         self._subtitle_scan_show_timer = show_timer
 
         def show_if_still_running():
-            if getattr(self, '_subtitle_scan_thread', None) and self._subtitle_scan_thread.isRunning():
-                if getattr(self, '_subtitle_scan_progress_dialog', None):
-                    self._subtitle_scan_progress_dialog.show()
+            if getattr(self, '_subtitle_scan_thread', None) is thread and thread.isRunning():
+                progress_dialog.show()
 
         show_timer.timeout.connect(show_if_still_running)
         show_timer.start()
 
-        self._subtitle_scan_thread = QThread(self)
-        self._subtitle_scan_worker = SubtitleFolderScanWorker(
+        thread = QThread(self)
+        worker = SubtitleFolderScanWorker(
             seq,
             mode,
             folder,
@@ -364,48 +359,53 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             cancel_event,
             movie_mode=self._is_movie_mode()
         )
-        self._subtitle_scan_worker.moveToThread(self._subtitle_scan_thread)
-        self._subtitle_scan_thread.started.connect(self._subtitle_scan_worker.run)
-        self._subtitle_scan_worker.progress.connect(progress_dialog.setValue)
-        self._subtitle_scan_worker.label.connect(lambda text: progress_dialog.setLabelText(self.t(text)))
+        self._subtitle_scan_thread = thread
+        self._subtitle_scan_worker = worker
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(progress_dialog.setValue)
+
+        def update_label(text: str):
+            if getattr(self, '_subtitle_scan_thread', None) is not thread:
+                return
+            progress_dialog.setLabelText(self.t(text))
+
+        worker.label.connect(update_label)
 
         def cleanup():
-            if getattr(self, '_subtitle_scan_show_timer', None):
-                try:
-                    self._subtitle_scan_show_timer.stop()
-                except Exception:
-                    pass
+            # A replaced worker may finish after its successor starts. It may
+            # dispose only the thread and widgets captured by this invocation.
+            owns_current_scan = (
+                getattr(self, '_subtitle_scan_thread', None) is thread
+                and getattr(self, '_subtitle_scan_worker', None) is worker
+            )
+            try:
+                show_timer.stop()
+            except Exception:
+                pass
+            try:
+                progress_dialog.close()
+                progress_dialog.deleteLater()
+            except Exception:
+                pass
+            if owns_current_scan:
                 self._subtitle_scan_show_timer = None
-            if getattr(self, '_subtitle_scan_progress_dialog', None):
-                try:
-                    self._subtitle_scan_progress_dialog.close()
-                    self._subtitle_scan_progress_dialog.deleteLater()
-                except Exception:
-                    pass
                 self._subtitle_scan_progress_dialog = None
-            if getattr(self, '_subtitle_scan_thread', None):
-                try:
-                    t_wait = time.perf_counter()
-                    print('[ShutdownDebug] subtitle_scan_thread.quit()')
-                    self._subtitle_scan_thread.quit()
-                    self._subtitle_scan_thread.wait()
-                    print(f"[ShutdownDebug] subtitle_scan_thread.wait() done in {(time.perf_counter() - t_wait) * 1000:.1f} ms")
-                    self._subtitle_scan_thread.deleteLater()
-                except Exception:
-                    pass
                 self._subtitle_scan_thread = None
-            if getattr(self, '_subtitle_scan_worker', None):
-                try:
-                    self._subtitle_scan_worker.deleteLater()
-                except Exception:
-                    pass
                 self._subtitle_scan_worker = None
-            self._subtitle_scan_cancel_event = None
+                self._subtitle_scan_cancel_event = None
 
         def on_result(payload: object):
             if not isinstance(payload, dict) or payload.get('seq') != seq:
+                cleanup()
                 return
+            owns_current_scan = (
+                getattr(self, '_subtitle_scan_thread', None) is thread
+                and getattr(self, '_subtitle_scan_worker', None) is worker
+            )
             cleanup()
+            if not owns_current_scan:
+                return
             if payload.get('mode') == 1 and self._is_movie_mode():
                 self._refresh_movie_subtitle_table2(payload.get('rows') or [])
                 self._update_main_row_play_button()
@@ -526,13 +526,25 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             cleanup()
 
         def on_failed(message: str):
+            owns_current_scan = (
+                getattr(self, '_subtitle_scan_thread', None) is thread
+                and getattr(self, '_subtitle_scan_worker', None) is worker
+            )
             cleanup()
-            self._show_error_dialog(message)
+            if owns_current_scan:
+                self._show_error_dialog(message)
 
-        self._subtitle_scan_worker.result.connect(on_result)
-        self._subtitle_scan_worker.canceled.connect(on_canceled)
-        self._subtitle_scan_worker.failed.connect(on_failed)
-        self._subtitle_scan_thread.start()
+        worker.result.connect(on_result)
+        worker.result.connect(worker.deleteLater)
+        worker.result.connect(thread.quit)
+        worker.canceled.connect(on_canceled)
+        worker.canceled.connect(worker.deleteLater)
+        worker.canceled.connect(thread.quit)
+        worker.failed.connect(on_failed)
+        worker.failed.connect(worker.deleteLater)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
 
     def _populate_encode_from_remux_folder(self):
         if self.get_selected_function_id() != 4 or getattr(self, '_encode_input_mode', 'bdmv') != 'remux':
@@ -743,6 +755,11 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             pass
 
     def add_chapters(self):
+        if (
+                bool(getattr(self, '_close_pending', False))
+                or getattr(self, '_current_cancel_event', None) is not None
+        ):
+            return False
         try:
             selected_mpls = self.get_selected_mpls_no_ext()
             if not selected_mpls:
@@ -813,17 +830,21 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         self._chapter_worker.progress.connect(self._on_exe_button_progress_value)
         self._chapter_worker.label.connect(self._on_exe_button_progress_text)
 
+        if isinstance(self._chapter_worker, QObject):
+            for terminal_signal in (
+                    self._chapter_worker.finished,
+                    self._chapter_worker.canceled,
+                    self._chapter_worker.failed,
+            ):
+                terminal_signal.connect(self._chapter_worker.deleteLater)
+                terminal_signal.connect(self._chapter_thread.quit)
+            self._chapter_thread.finished.connect(self._chapter_thread.deleteLater)
+
         def cleanup():
             self._current_cancel_event = None
             self._reset_exe_button()
-            if self._chapter_thread:
-                self._chapter_thread.quit()
-                self._chapter_thread.wait()
-                self._chapter_thread.deleteLater()
-                self._chapter_thread = None
-            if self._chapter_worker:
-                self._chapter_worker.deleteLater()
-                self._chapter_worker = None
+            self._chapter_thread = None
+            self._chapter_worker = None
 
         def on_finished():
             cleanup()
@@ -990,6 +1011,11 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         Remux input has no BDMV SP dependency. Neither path may rebuild GUI
         tables while creating the request.
         """
+        if (
+                bool(getattr(self, '_close_pending', False))
+                or getattr(self, '_current_cancel_event', None) is not None
+        ):
+            return False
         output_base = os.path.normpath(
             self.output_folder_path.text().strip()
         ) if hasattr(self, 'output_folder_path') else ''
@@ -1333,18 +1359,24 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         self._encode_worker.progress.connect(self._on_exe_button_progress_value)
         self._encode_worker.label.connect(self._on_exe_button_progress_text)
 
+        if isinstance(self._encode_worker, QObject):
+            for terminal_signal in (
+                    self._encode_worker.finished,
+                    self._encode_worker.finished_with_warnings,
+                    self._encode_worker.finished_with_errors,
+                    self._encode_worker.canceled,
+                    self._encode_worker.failed,
+            ):
+                terminal_signal.connect(self._encode_worker.deleteLater)
+                terminal_signal.connect(self._encode_thread.quit)
+            self._encode_thread.finished.connect(self._encode_thread.deleteLater)
+
         def cleanup():
             self._current_cancel_event = None
             self._reset_exe_button()
             self.exe_button.setEnabled(True)
-            if getattr(self, '_encode_thread', None):
-                self._encode_thread.quit()
-                self._encode_thread.wait()
-                self._encode_thread.deleteLater()
-                self._encode_thread = None
-            if getattr(self, '_encode_worker', None):
-                self._encode_worker.deleteLater()
-                self._encode_worker = None
+            self._encode_thread = None
+            self._encode_worker = None
 
         def on_finished():
             cleanup()
@@ -1353,20 +1385,22 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         def on_finished_with_warnings(message: str):
             cleanup()
             self._show_bottom_message('Blu-ray encode completed!')
-            QMessageBox.warning(
-                self,
-                self.t('Encode completed with warnings'),
-                message,
-            )
+            if not bool(getattr(self, '_close_pending', False)):
+                QMessageBox.warning(
+                    self,
+                    self.t('Encode completed with warnings'),
+                    message,
+                )
 
         def on_finished_with_errors(message: str):
             cleanup()
             self._show_bottom_message('Blu-ray encode completed with errors')
-            QMessageBox.warning(
-                self,
-                self.t('Encode completed with errors'),
-                message,
-            )
+            if not bool(getattr(self, '_close_pending', False)):
+                QMessageBox.warning(
+                    self,
+                    self.t('Encode completed with errors'),
+                    message,
+                )
 
         def on_canceled():
             cleanup()
@@ -1383,6 +1417,11 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         self._encode_thread.start()
 
     def generate_subtitle(self, silent_mode: bool = False):
+        if (
+                bool(getattr(self, '_close_pending', False))
+                or getattr(self, '_current_cancel_event', None) is not None
+        ):
+            return False
         selected_mpls = self.get_selected_mpls_no_ext()
         if not selected_mpls:
             if not silent_mode:
@@ -1520,25 +1559,29 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         self._merge_worker.progress.connect(self._on_exe_button_progress_value)
         self._merge_worker.label.connect(self._on_exe_button_progress_text)
 
+        if isinstance(self._merge_worker, QObject):
+            for terminal_signal in (
+                    self._merge_worker.finished,
+                    self._merge_worker.canceled,
+                    self._merge_worker.failed,
+            ):
+                terminal_signal.connect(self._merge_worker.deleteLater)
+                terminal_signal.connect(self._merge_thread.quit)
+            self._merge_thread.finished.connect(self._merge_thread.deleteLater)
+
         success = False
 
         def cleanup():
             self._current_cancel_event = None
             self._reset_exe_button()
-            if hasattr(self, '_merge_thread') and self._merge_thread:
-                self._merge_thread.quit()
-                self._merge_thread.wait()
-                self._merge_thread.deleteLater()
-                self._merge_thread = None
-            if hasattr(self, '_merge_worker') and self._merge_worker:
-                self._merge_worker.deleteLater()
-                self._merge_worker = None
-            self.altered = False
+            self._merge_thread = None
+            self._merge_worker = None
 
         def on_finished():
             nonlocal success
             success = True
             cleanup()
+            self.altered = False
             if not silent_mode:
                 self._show_bottom_message("Subtitle generation completed!", 10000)
 
@@ -1989,6 +2032,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         repaired by starting another hidden full-table scan. Once this gate
         passes, the selected workflow captures the current visible controls once.
         """
+        if bool(getattr(self, '_close_pending', False)):
+            return
         if getattr(self, '_current_cancel_event', None) is not None:
             self._current_cancel_event.set()
             self.exe_button.setEnabled(False)
@@ -2362,6 +2407,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                             os.path.exists(mpls_name + '.sup'))
             if not has_subtitle:
                 success = self.generate_subtitle(silent_mode=True)
+                if bool(getattr(self, '_close_pending', False)):
+                    return
                 if success:
                     # Re-check subtitle existence after generation.
                     has_subtitle = (os.path.exists(mpls_name + '.ass') or

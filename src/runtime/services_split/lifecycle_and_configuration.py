@@ -129,6 +129,8 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
 
     def _preload_subtitles_multiprocess(self, file_paths: list[str], cancel_event: Optional[threading.Event] = None):
         """Parse subtitles in multiprocessing mode."""
+        if cancel_event and cancel_event.is_set():
+            raise TaskCancelled()
         if len(file_paths) == 1:
             p = file_paths[0]
             try:
@@ -168,6 +170,10 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
                             print(f'Failed to load subtitle file ｢{p}｣: {str(e)}')
                         else:
                             print(f'Failed to load subtitle file: {str(e)}')
+            if cancel_event and cancel_event.is_set():
+                raise TaskCancelled()
+        except TaskCancelled:
+            raise
         except Exception as e:
             # Propagate exception so caller can decide fallback behavior.
             raise Exception(f'Multiprocessing parse failed: {str(e)}')

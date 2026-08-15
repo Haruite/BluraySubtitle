@@ -4,7 +4,7 @@ from typing import Optional
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
-from src.exports.utils import print_tb_string_terminal, print_terminal_line
+from src.exports.utils import mkvmerge_cancellation_scope, print_tb_string_terminal, print_terminal_line
 from src.runtime.remux import RemuxRequest
 from src.runtime import TaskCancelled
 from src.runtime.services import BluraySubtitle
@@ -45,7 +45,10 @@ class RemuxWorker(QObject):
                 movie_mode=request.movie_mode,
                 mux_dolby_vision=request.mux_dolby_vision,
             )
-            bs.episodes_remux(request, cancel_event=self.cancel_event)
+            with mkvmerge_cancellation_scope(self.cancel_event):
+                bs.episodes_remux(request, cancel_event=self.cancel_event)
+            if self.cancel_event.is_set():
+                raise TaskCancelled()
         except TaskCancelled:
             print_terminal_line('[BluraySubtitle] Remux worker: canceled.')
             self.canceled.emit()

@@ -65,7 +65,11 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
         if pending_function_id in (3, 4):
             self._sp_scan_pending_function_id = None
             self._reset_exe_button()
-            if scan_completed and self.get_selected_function_id() == pending_function_id:
+            if (
+                    scan_completed
+                    and not bool(getattr(self, '_close_pending', False))
+                    and self.get_selected_function_id() == pending_function_id
+            ):
                 QTimer.singleShot(0, self.main)
 
     def _update_exe_button_progress(self, value: Optional[int] = None, text: Optional[str] = None):
@@ -152,6 +156,16 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
         a task must never call this method because that would invalidate the GUI
         snapshot that the task is about to execute.
         """
+        if bool(getattr(self, '_close_pending', False)):
+            return
+        if (
+                getattr(self, '_sp_scan_thread', None) is not None
+                and getattr(self, '_sp_scan_pending_function_id', None) in (3, 4)
+        ):
+            # The click applied to the table snapshot being replaced. Do not
+            # execute a newly edited source automatically after its scan ends.
+            self._sp_scan_pending_function_id = None
+            self._reset_exe_button()
         try:
             if hasattr(self, '_sp_scan_cancel_event') and isinstance(self._sp_scan_cancel_event, threading.Event):
                 self._sp_scan_cancel_event.set()

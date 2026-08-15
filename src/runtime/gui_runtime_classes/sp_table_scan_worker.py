@@ -259,7 +259,10 @@ class SpTableScanWorker(QObject):
                     'allow_tracks_when_disabled': bool(allow_tracks_when_disabled),
                 })
 
-            self.finished.emit()
+            if self._cancel_event.is_set():
+                self.canceled.emit()
+            else:
+                self.finished.emit()
         except Exception:
             tb = traceback.format_exc()
             print_tb_string_terminal(tb)

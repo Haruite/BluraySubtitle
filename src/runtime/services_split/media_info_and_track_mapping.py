@@ -3241,6 +3241,8 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 return False
             return os.path.isfile(output_file)
         except TaskCancelled:
+            if os.path.isfile(output_file):
+                force_remove_file(output_file)
             raise
         except Exception:
             print_exc_terminal()
@@ -3459,6 +3461,9 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                     return False
             return all(os.path.isfile(path) for path in expected_outputs)
         except TaskCancelled:
+            for expected_output in expected_outputs:
+                if os.path.isfile(expected_output):
+                    force_remove_file(expected_output)
             raise
         except Exception:
             print_exc_terminal()

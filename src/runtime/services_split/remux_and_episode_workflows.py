@@ -625,7 +625,13 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             print(f'{self.t("Mux command: ")}{job.command}')
             self._progress(text=f'{self.t("Muxing: ")}BD_Vol_{job.volume}')
             if identify_ok:
-                return_code, _line_return_codes = self._run_shell_command_detailed(job.command)
+                try:
+                    return_code, _line_return_codes = self._run_shell_command_detailed(job.command)
+                except TaskCancelled:
+                    for output_path in job.expected_outputs:
+                        if os.path.isfile(output_path):
+                            force_remove_file(output_path)
+                    raise
             else:
                 return_code = -1
 

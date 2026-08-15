@@ -37,6 +37,8 @@ class SubtitleFolderScanWorker(QObject):
 
     def run(self):
         try:
+            if self.cancel_event.is_set():
+                raise TaskCancelled()
             if self.mode == 2:
                 root = self.subtitle_folder.strip()
                 mkv_paths = [
@@ -53,6 +55,8 @@ class SubtitleFolderScanWorker(QObject):
                     self.label.emit(f'Reading MKV {i + 1}/{len(mkv_paths)}')
                     rows.append((p, get_time_str(MKV(p).get_duration())))
                     self.progress.emit(int((i + 1) / total * 1000))
+                if self.cancel_event.is_set():
+                    raise TaskCancelled()
                 self.result.emit({'seq': self.seq, 'mode': self.mode, 'rows': rows})
                 print_terminal_line('[BluraySubtitle] Subtitle-folder scan worker: finished successfully (MKV list).')
                 return
@@ -64,6 +68,8 @@ class SubtitleFolderScanWorker(QObject):
                     files.append(os.path.normpath(os.path.join(folder, f)))
             files.sort()
             if not files:
+                if self.cancel_event.is_set():
+                    raise TaskCancelled()
                 self.result.emit({'seq': self.seq, 'mode': self.mode, 'rows': [], 'configuration': {}})
                 print_terminal_line(
                     '[BluraySubtitle] Subtitle-folder scan worker: finished successfully (no subtitle files).')
@@ -80,12 +86,16 @@ class SubtitleFolderScanWorker(QObject):
                 # Linux: try multiprocessing, then fallback to single process on failure.
                 try:
                     subtitle_cache = self._parse_subtitles_multiprocess(files)
+                except TaskCancelled:
+                    raise
                 except Exception as e:
                     print(
                         f'{translate_text("Multiprocessing parse failed, switching to single-process mode: ")}{str(e)}')
                     subtitle_cache = self._parse_subtitles_single(files)
 
             if not subtitle_cache:
+                if self.cancel_event.is_set():
+                    raise TaskCancelled()
                 print(translate_text('Failed to load all subtitle files'))
                 self.result.emit({'seq': self.seq, 'mode': self.mode, 'rows': [], 'configuration': {}})
                 print_terminal_line(
@@ -113,11 +123,15 @@ class SubtitleFolderScanWorker(QObject):
                         self.selected_mpls,
                         cancel_event=self.cancel_event
                     )
+                except TaskCancelled:
+                    raise
                 except Exception as e:
                     print(f'{translate_text("Failed to generate configuration: ")}{str(e)}')
                     print_exc_terminal()
                     configuration = {}
 
+            if self.cancel_event.is_set():
+                raise TaskCancelled()
             self.progress.emit(1000)
             self.result.emit({'seq': self.seq, 'mode': self.mode, 'rows': rows, 'configuration': configuration,
                               'files': successful_files})
@@ -135,6 +149,8 @@ class SubtitleFolderScanWorker(QObject):
         subtitle_cache: dict[str, Subtitle] = {}
         try:
             return self._parse_subtitles_multiprocess(files)
+        except TaskCancelled:
+            raise
         except Exception as e:
             print(f'{translate_text("Multiprocessing parse failed, switching to single-process mode: ")}{str(e)}')
             return self._parse_subtitles_single(files)
@@ -196,6 +212,8 @@ class SubtitleFolderScanWorker(QObject):
                     done += 1
                     self.label.emit(f'Parsing Subtitles {done}/{total}')
                     self.progress.emit(int(done / total * 700))
+        except TaskCancelled:
+            raise
         except Exception as e:
             # Propagate exception so the caller can handle fallback.
             raise Exception(f'Multiprocessing parse failed: {str(e)}')
