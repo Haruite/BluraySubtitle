@@ -1329,30 +1329,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
         function_id = self.get_selected_function_id()
         if function_id == 5:
             # DIY mode keeps remux-like table1/table2 only; no SP/table3 workflow.
-            try:
-                if hasattr(self, '_sp_scan_cancel_event') and self._sp_scan_cancel_event:
-                    self._sp_scan_cancel_event.set()
-            except Exception:
-                pass
-            try:
-                if hasattr(self, '_sp_scan_progress_show_timer') and self._sp_scan_progress_show_timer:
-                    self._sp_scan_progress_show_timer.stop()
-            except Exception:
-                pass
-            try:
-                if hasattr(self, '_sp_scan_progress_dialog') and self._sp_scan_progress_dialog:
-                    self._sp_scan_progress_dialog.close()
-                    self._sp_scan_progress_dialog.deleteLater()
-            except Exception:
-                pass
-            self._sp_scan_progress_dialog = None
-            self._sp_scan_progress_bar = None
-            self._sp_scan_progress_show_timer = None
-            self._sp_scan_progress_rows_seen = set()
-            self._sp_scan_progress_total = 0
-            self._sp_scan_progress_done = 0
-            self._sp_scan_worker = None
-            self._sp_scan_in_progress = False
+            self._retire_sp_table_scan()
             self._sp_scan_completed = True
             self._sp_scan_error = ''
             if hasattr(self, 'table3'):

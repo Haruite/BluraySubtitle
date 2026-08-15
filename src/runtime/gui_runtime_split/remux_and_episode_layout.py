@@ -1076,14 +1076,8 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             self._track_convert_config = {}
             self._track_lossless_audio_config = {}
             self._track_language_config = {}
-            try:
-                cancel_event = getattr(self, '_sp_scan_cancel_event', None)
-                if isinstance(cancel_event, threading.Event):
-                    cancel_event.set()
-            except Exception:
-                pass
-            # Reject queued results from the previous source while the new table is rebuilt.
-            self._sp_scan_worker = None
+            # Reject queued results immediately, but retain a running worker until its thread exits.
+            self._retire_sp_table_scan()
             self._sp_scan_completed = False
             self._sp_scan_error = ''
         try:
@@ -1110,12 +1104,6 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             self._movie_configuration = {}
             self._selected_main_mpls_prev = set()
             self._sp_index_by_bdmv = {}
-            try:
-                cancel_event = getattr(self, '_sp_scan_cancel_event', None)
-                if isinstance(cancel_event, threading.Event):
-                    cancel_event.set()
-            except Exception:
-                pass
             self.altered = True
             return
         table_ok = False

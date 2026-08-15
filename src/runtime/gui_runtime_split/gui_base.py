@@ -82,6 +82,7 @@ class BluraySubtitleGuiBase(QWidget):
         self._sp_scan_progress_rows_seen = None
         self._sp_scan_progress_show_timer = None
         self._sp_scan_progress_total = None
+        self._retired_sp_scans = None
         self._sp_scan_thread = None
         self._sp_scan_worker = None
         self._sub_pack_group = None
@@ -533,6 +534,9 @@ class BluraySubtitleGuiBase(QWidget):
     def _on_play_sp_table_row_clicked(self):
         raise NotImplementedError
 
+    def _on_retired_sp_scan_thread_finished(self):
+        raise NotImplementedError
+
     def _on_select_all_tracks_toggled(self, checked: bool):
         raise NotImplementedError
 
@@ -722,6 +726,9 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _resync_episode_tables_from_main_mpls_selection(self) -> None:
+        raise NotImplementedError
+
+    def _retire_sp_table_scan(self):
         raise NotImplementedError
 
     def _run_chapter_combo_update(self):

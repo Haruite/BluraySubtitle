@@ -373,7 +373,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     episode_targets_by_detail.setdefault(
                         (main_job.bdmv_index, detail), []
                     ).append((
-                        os.path.normcase(os.path.abspath(output_path)),
+                        os.path.abspath(output_path),
                         main_job.mpls_path,
                     ))
 
@@ -484,13 +484,22 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             episode_linked = len(matching_episode_targets) == 1
             if episode_linked:
                 target_output, episode_main_mpls_path = matching_episode_targets[0]
-                if normalized_output != target_output:
+                visible_output_name = os.path.normcase(os.path.normpath(
+                    entry.output_name.replace('/', os.sep)
+                ))
+                target_output_name = os.path.normcase(os.path.basename(target_output))
+                if visible_output_name != target_output_name:
                     raise ValueError(
                         translate_text('SP row {row} does not match a planned episode output: {path}').format(
                             row=entry_index,
                             path=output_path,
                         )
                     )
+                # A user-edited main remux command owns the actual staging directory.
+                # The linked SP row names the episode, so append to that command-derived
+                # output instead of the default stage.
+                output_path = os.path.abspath(os.path.normpath(target_output))
+                normalized_output = os.path.normcase(output_path)
             else:
                 if normalized_output in occupied_outputs:
                     raise ValueError(
@@ -1851,9 +1860,37 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
 
         staging_parent_existed = os.path.isdir(request.staging_folder)
         staging_disc_folder = ''
+        planned_main_stage_files: list[str] = []
+        staged_main_files: list[str] = []
+        created_sp_files: list[tuple[int, str]] = []
+        main_stage_started = False
         batch_result: Optional[EncodeBatchResult] = None
         try:
             staging_disc_folder, main_jobs = self._prepare_remux_main_jobs(stage_request)
+            planned_main_stage_files = list(dict.fromkeys(
+                output_path
+                for job in main_jobs
+                for output_path in (*job.expected_outputs, *job.final_outputs)
+            ))
+            final_encode_outputs = {
+                os.path.normcase(os.path.abspath(row.output_path))
+                for row in request.main_rows + tuple(
+                    row for row in request.sp_rows if row.selected
+                )
+                if row.output_path
+            }
+            staging_collision = next((
+                output_path
+                for job in main_jobs
+                for output_path in (*job.expected_outputs, *job.final_outputs)
+                if os.path.normcase(os.path.abspath(output_path)) in final_encode_outputs
+            ), '')
+            if staging_collision:
+                raise ValueError(
+                    translate_text('Duplicate output path: {path}').format(
+                        path=staging_collision
+                    )
+                )
             sp_jobs = self._prepare_sp_jobs(
                 sp_entries,
                 staging_disc_folder,
@@ -1862,6 +1899,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 request.track_language_config or {},
             )
             os.makedirs(staging_disc_folder, exist_ok=True)
+            main_stage_started = True
             self._build_main_episode_mkvs(
                 main_jobs,
                 cancel_event=cancel_event,
@@ -2007,14 +2045,34 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 progress_base=600,
                 progress_span=400,
             )
-            if batch_result.failed_rows and staging_disc_folder:
-                staging_message = translate_text(
-                    'Blu-ray staging files were retained after Encode row failures: {path}'
-                ).format(path=staging_disc_folder)
-                self.encode_warnings.append(staging_message)
-                self._progress(text=staging_message)
+            if batch_result.failed_rows:
+                retained_stage_folders = list(dict.fromkeys(
+                    os.path.dirname(path)
+                    for path in staged_main_files + [
+                        path for _entry_index, path in created_sp_files
+                    ]
+                    if path
+                ))
+                for retained_stage_folder in retained_stage_folders:
+                    staging_message = translate_text(
+                        'Blu-ray staging files were retained after Encode row failures: {path}'
+                    ).format(path=retained_stage_folder)
+                    self.encode_warnings.append(staging_message)
+                    self._progress(text=staging_message)
         finally:
             keep_staging = bool(batch_result and batch_result.failed_rows)
+            if not keep_staging and main_stage_started and request.staging_folder:
+                managed_stage_root = os.path.abspath(os.path.normpath(request.staging_folder))
+                for staged_main_file in planned_main_stage_files:
+                    staged_path = os.path.abspath(os.path.normpath(staged_main_file))
+                    try:
+                        is_managed_stage = os.path.commonpath(
+                            (managed_stage_root, staged_path)
+                        ) == managed_stage_root
+                    except ValueError:
+                        is_managed_stage = False
+                    if not is_managed_stage and os.path.isfile(staged_path):
+                        force_remove_file(staged_path)
             if (
                     not keep_staging
                     and staging_disc_folder

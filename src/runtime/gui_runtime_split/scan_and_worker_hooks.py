@@ -72,6 +72,46 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
             ):
                 QTimer.singleShot(0, self.main)
 
+    def _on_retired_sp_scan_thread_finished(self):
+        """Release a canceled scan only after its worker thread has actually stopped."""
+        finished_thread = self.sender()
+        retired_scans = getattr(self, '_retired_sp_scans', None)
+        if not isinstance(retired_scans, list):
+            return
+        self._retired_sp_scans = [
+            (thread, worker)
+            for thread, worker in retired_scans
+            if thread is not finished_thread
+        ]
+
+    def _retire_sp_table_scan(self):
+        """Invalidate and cancel the current scan while retaining its QObjects until thread exit."""
+        cancel_event = getattr(self, '_sp_scan_cancel_event', None)
+        if isinstance(cancel_event, threading.Event):
+            cancel_event.set()
+
+        thread = getattr(self, '_sp_scan_thread', None)
+        worker = getattr(self, '_sp_scan_worker', None)
+        self._sp_scan_cancel_event = None
+        self._sp_scan_thread = None
+        self._sp_scan_worker = None
+        self._sp_scan_in_progress = False
+        self._dismiss_sp_scan_progress_ui()
+
+        if isinstance(thread, QThread) and thread.isRunning():
+            retired_scans = getattr(self, '_retired_sp_scans', None)
+            if not isinstance(retired_scans, list):
+                retired_scans = []
+                self._retired_sp_scans = retired_scans
+            retired_scans.append((thread, worker))
+            thread.finished.connect(self._on_retired_sp_scan_thread_finished)
+            thread.requestInterruption()
+            thread.quit()
+
+        if getattr(self, '_sp_scan_pending_function_id', None) in (3, 4):
+            self._sp_scan_pending_function_id = None
+            self._reset_exe_button()
+
     def _update_exe_button_progress(self, value: Optional[int] = None, text: Optional[str] = None):
         if not hasattr(self, 'exe_button') or not self.exe_button:
             return
@@ -158,27 +198,10 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
         """
         if bool(getattr(self, '_close_pending', False)):
             return
-        if (
-                getattr(self, '_sp_scan_thread', None) is not None
-                and getattr(self, '_sp_scan_pending_function_id', None) in (3, 4)
-        ):
-            # The click applied to the table snapshot being replaced. Do not
-            # execute a newly edited source automatically after its scan ends.
-            self._sp_scan_pending_function_id = None
-            self._reset_exe_button()
-        try:
-            if hasattr(self, '_sp_scan_cancel_event') and isinstance(self._sp_scan_cancel_event, threading.Event):
-                self._sp_scan_cancel_event.set()
-        except Exception:
-            pass
-        try:
-            if hasattr(self, '_sp_scan_thread') and isinstance(self._sp_scan_thread,
-                                                               QThread) and self._sp_scan_thread.isRunning():
-                self._sp_scan_thread.quit()
-                self._sp_scan_thread.wait(200)
-        except Exception:
-            pass
-        self._dismiss_sp_scan_progress_ui()
+        # The click applied to a replaced table snapshot must not resume after
+        # its old scan finishes. Retaining the old worker prevents PyQt from
+        # deleting a QObject whose run() method is still executing.
+        self._retire_sp_table_scan()
 
         bdmv_col = ENCODE_SP_LABELS.index('bdmv_index')
         mpls_col = ENCODE_SP_LABELS.index('mpls_file')

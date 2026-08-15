@@ -633,25 +633,33 @@ def mux_with_audio_conversion(
                 fdkaac = str(core_settings.FDK_AAC_PATH or '').strip() or shutil.which('fdkaac') or shutil.which('fdkaac.exe') or ''
                 if not fdkaac:
                     raise FileNotFoundError(translate_text('fdkaac executable does not exist'))
-                wave_path = os.path.join(work_folder, f'track-{track_id}.wav')
-                wave_command = [
-                    ffmpeg,
-                    '-y',
-                    '-i',
-                    conversion_input,
-                    '-map',
-                    '0:a:0',
-                    '-c:a',
-                    'pcm_s24le',
-                    wave_path,
-                ]
-                if run_command(wave_command, log_template='Audio command: {command}').returncode != 0 or not os.path.isfile(wave_path):
-                    raise RuntimeError(
-                        translate_text('Audio decode failed for track {track}: {path}').format(
-                            track=track_id,
-                            path=source_path,
-                        )
+                wave_path = conversion_input
+                # mkvextract already writes PCM tracks as fdkaac-readable WAV/RF64.
+                # Other lossless codecs still need a PCM WAV intermediary.
+                if codec_id not in ('A_PCM/INT/LIT', 'A_PCM/INT/BIG'):
+                    wave_path = os.path.join(work_folder, f'track-{track_id}-aac-input.wav')
+                    wave_command = [
+                        ffmpeg,
+                        '-y',
+                        '-i',
+                        conversion_input,
+                        '-map',
+                        '0:a:0',
+                        '-c:a',
+                        'pcm_s24le',
+                        wave_path,
+                    ]
+                    decode_result = run_command(
+                        wave_command,
+                        log_template='Audio command: {command}',
                     )
+                    if decode_result.returncode != 0 or not os.path.isfile(wave_path):
+                        raise RuntimeError(
+                            translate_text('Audio decode failed for track {track}: {path}').format(
+                                track=track_id,
+                                path=source_path,
+                            )
+                        )
                 converted_audio = os.path.join(work_folder, f'track-{track_id}.m4a')
                 fdkaac_rate_control = (
                     ['-b', str(audio_encoding.fdkaac_bitrate_kbps * 1000)]

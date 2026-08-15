@@ -1323,6 +1323,8 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
         last_function_id = int(getattr(self, '_selected_function_id', 0) or 0)
         if (not force) and function_id and last_function_id == function_id:
             return
+        if last_function_id in (3, 4) and last_function_id != function_id:
+            self._retire_sp_table_scan()
         self._remember_output_folder_for_function(last_function_id)
         # Keep previous behavior: remove temporary default vpy when leaving encode mode.
         if last_function_id == 4 and function_id != 4:

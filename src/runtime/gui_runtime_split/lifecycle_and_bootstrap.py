@@ -57,6 +57,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self._sp_scan_completed = True
         self._sp_scan_pending_function_id = None
         self._sp_scan_error = ''
+        self._retired_sp_scans: list[tuple[QThread, object]] = []
         self._close_pending = False
         self.init_ui()
 
