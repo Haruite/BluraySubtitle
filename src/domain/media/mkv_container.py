@@ -185,7 +185,11 @@ class MKV:
             command = [executable, '--ui-language', ui_language]
             if has_meaningful_chapters:
                 command.extend(['--chapters', chapter_path])
-            command.extend(['-o', new_path, self.path])
+            command.extend(['-o', new_path])
+            if has_meaningful_chapters:
+                # The generated chapter document replaces chapters already present in the input MKV.
+                command.append('--no-chapters')
+            command.append(self.path)
             failed_message = translate_text('mkvmerge failed for: {path}').format(path=self.path)
             failed_output = new_path
 
