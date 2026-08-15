@@ -1836,6 +1836,21 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 cancel_event=cancel_event,
                 progress_cb=report_sp_mux,
                 audio_encoding=request.settings.audio_encoding,
+                standalone_audio_targets={
+                    index: row.audio_codec_choices[0]
+                    for index, row in enumerate(request.sp_rows, start=1)
+                    if (
+                        row.selected
+                        and not row.uses_main_output
+                        and len(row.audio_tracks) == 1
+                        and not row.subtitle_tracks
+                        and len(row.audio_codec_choices) == 1
+                        and os.path.splitext(row.output_path)[1].lower()
+                        == {'flac': '.flac', 'aac': '.m4a', 'opus': '.opus'}.get(
+                            row.audio_codec_choices[0], ''
+                        )
+                    )
+                },
             )
             staged_main_by_key = {
                 configuration_key: staged_path

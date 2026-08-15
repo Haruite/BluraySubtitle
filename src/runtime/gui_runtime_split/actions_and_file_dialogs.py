@@ -1836,6 +1836,11 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             if not enabled:
                 self.sub_pack_external_radio.setChecked(True)
                 self.set_vpy_hardsub_enabled(False)
+            else:
+                # The saved hardsub choice can already be selected before a subtitle
+                # folder is supplied, so no radio toggle occurs when the folder later
+                # enables these controls. Apply the current choice at that boundary too.
+                self.set_vpy_hardsub_enabled(self.sub_pack_hard_radio.isChecked())
 
         self.subtitle_folder_path.textChanged.connect(lambda _=None: update_sub_pack_enabled_state())
         update_sub_pack_enabled_state()

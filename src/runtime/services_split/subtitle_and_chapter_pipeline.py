@@ -10,8 +10,8 @@ import threading
 from typing import Any, Callable, Optional
 
 from src.bdmv import Chapter, M2TS
-from src.core import FFMPEG_PATH, MKV_MERGE_PATH, MKV_EXTRACT_PATH, find_mkvtoolnix, \
-    mkvtoolnix_ui_language_arg, MKV_PROP_EDIT_PATH
+from src.core import FDK_AAC_PATH, FFMPEG_PATH, MKV_MERGE_PATH, MKV_EXTRACT_PATH, \
+    find_mkvtoolnix, mkvtoolnix_ui_language_arg, MKV_PROP_EDIT_PATH
 from src.core.i18n import translate_text
 from src.domain import MKV, Subtitle
 from src.exports.utils import get_index_to_m2ts_and_offset, append_ogm_chapter_lines, force_remove_folder, \
@@ -942,6 +942,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
             cancel_event: Optional[threading.Event] = None,
             progress_cb: Optional[Callable[[int, str], None]] = None,
             audio_encoding: AudioEncodingSettings = AudioEncodingSettings(),
+            standalone_audio_targets: Optional[dict[int, str]] = None,
     ) -> list[tuple[int, str]]:
         """Execute the preflighted SP rows in visible order and require every planned output."""
         created_outputs: list[tuple[int, str]] = []
@@ -1089,7 +1090,45 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                 output_extension = os.path.splitext(output_path)[1].lower()
                 if output_extension not in ('.mkv', '.mka', '.mks'):
                     if len(audio_tracks) == 1 and not subtitle_tracks:
-                        if output_extension == '.flac':
+                        target_codec = (standalone_audio_targets or {}).get(
+                            job.entry_index, ''
+                        )
+                        if target_codec == 'aac':
+                            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+                            temporary_folder = tempfile.mkdtemp(
+                                prefix='_sp_audio_', dir=os.path.dirname(output_path)
+                            )
+                            wave_path = os.path.join(temporary_folder, 'source.wav')
+                            extraction_ok = run_command([
+                                FFMPEG_PATH or 'ffmpeg', '-y', '-i', source_path,
+                                '-map', f'0:{audio_tracks[0]}', '-c:a', 'pcm_s24le',
+                                wave_path,
+                            ]).returncode == 0
+                            if extraction_ok:
+                                rate_control = (
+                                    ['-b', str(audio_encoding.fdkaac_bitrate_kbps * 1000)]
+                                    if audio_encoding.fdkaac_bitrate_kbps else ['-m', '5']
+                                )
+                                extraction_ok = run_command([
+                                    FDK_AAC_PATH or 'fdkaac', *rate_control,
+                                    '-o', output_path, wave_path,
+                                ]).returncode == 0
+                        elif target_codec == 'opus':
+                            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+                            track_info = next((
+                                row for row in self._read_m2ts_track_info(job.first_m2ts_path)
+                                if str(row.get('index', '')) == str(audio_tracks[0])
+                            ), {})
+                            channels = int(track_info.get('channels') or 2)
+                            bitrate = audio_encoding.opus_bitrate_kbps or (
+                                128 if channels <= 2 else 256
+                            )
+                            extraction_ok = run_command([
+                                FFMPEG_PATH or 'ffmpeg', '-y', '-i', source_path,
+                                '-map', f'0:{audio_tracks[0]}', '-c:a', 'libopus',
+                                '-b:a', f'{bitrate}k', output_path,
+                            ]).returncode == 0
+                        elif output_extension == '.flac':
                             extraction_ok = _svc_cls()._compress_audio_stream_to_flac(
                                 job.first_m2ts_path,
                                 audio_tracks[0],

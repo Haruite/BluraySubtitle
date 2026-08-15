@@ -1038,6 +1038,12 @@ __installed_ffmpeg_version() {
     | sed -nE 's/^ff(mpeg|probe) version n?([0-9]+([.][0-9]+){1,3}).*/\2/p'
 }
 
+__ffmpeg_has_libopus() {
+  local executable="$1"
+  [[ -x "$executable" ]] || return 1
+  "$executable" -hide_banner -h encoder=libopus 2>&1 | grep '^Encoder libopus' >/dev/null
+}
+
 install_mpv() {
   log "$(msg 'Installing mpv with stable FFmpeg / FFprobe (mpv-build with dovi_tool)' '安装 mpv 与稳定版 FFmpeg / FFprobe（使用包含 dovi_tool 的 mpv-build）')"
 
@@ -1049,7 +1055,8 @@ install_mpv() {
   installed_ffprobe_version="$(__installed_ffmpeg_version "$FFPROBE_PATH" | head -n 1 || true)"
   if [[ -n "$installed_ffmpeg_version" && -n "$installed_ffprobe_version" ]] \
     && dpkg --compare-versions "$installed_ffmpeg_version" ge "$target_ffmpeg_version" \
-    && dpkg --compare-versions "$installed_ffprobe_version" ge "$target_ffmpeg_version"; then
+    && dpkg --compare-versions "$installed_ffprobe_version" ge "$target_ffmpeg_version" \
+    && __ffmpeg_has_libopus "$FFMPEG_PATH"; then
     ffmpeg_is_current="true"
   fi
 
@@ -1080,10 +1087,10 @@ install_mpv() {
         install_libdovi
       fi
       if [[ "$ffmpeg_is_current" == "true" ]]; then
-        log "$(msg "mpv, FFmpeg, and FFprobe already satisfy the required versions (${current_mpv_version}; ${installed_ffmpeg_version}/${installed_ffprobe_version}), skipping" "mpv、FFmpeg 与 FFprobe 均已满足版本要求（${current_mpv_version}；${installed_ffmpeg_version}/${installed_ffprobe_version}），跳过编译安装")"
+        log "$(msg "mpv, FFmpeg, FFprobe, and libopus support already satisfy the requirements (${current_mpv_version}; ${installed_ffmpeg_version}/${installed_ffprobe_version}), skipping" "mpv、FFmpeg、FFprobe 与 libopus 支持均已满足要求（${current_mpv_version}；${installed_ffmpeg_version}/${installed_ffprobe_version}），跳过编译安装")"
         return 0
       fi
-      log "$(msg "mpv is current, but FFmpeg / FFprobe must be updated to ${target_ffmpeg_version}; rebuilding them together with mpv" "mpv 已满足要求，但 FFmpeg / FFprobe 需要更新到 ${target_ffmpeg_version}；将与 mpv 一并重新编译")"
+      log "$(msg "mpv is current, but FFmpeg / FFprobe ${target_ffmpeg_version} with libopus support is required; rebuilding them together with mpv" "mpv 已满足要求，但需要带 libopus 支持的 FFmpeg / FFprobe ${target_ffmpeg_version}；将与 mpv 一并重新编译")"
     else
       log "$(msg "System mpv version is too old (${current_mpv_version:-unknown} < ${required_mpv_version}), rebuilding from source" "检测到系统 mpv 版本较旧（${current_mpv_version:-unknown} < ${required_mpv_version}），将从源码编译升级")"
     fi
@@ -1094,7 +1101,7 @@ install_mpv() {
   log "$(msg 'Installing mpv build dependencies' '安装 mpv 编译所需系统依赖')"
   local mpv_deps=(
     build-essential cmake meson ninja-build git pkg-config yasm nasm
-    libdav1d-dev
+    libdav1d-dev libopus-dev
     libssl-dev libjpeg-dev zlib1g-dev libavcodec-dev libavformat-dev
     libavutil-dev libswscale-dev libswresample-dev libavfilter-dev
     libass-dev libfribidi-dev libfreetype-dev libfontconfig1-dev
@@ -1170,6 +1177,7 @@ install_mpv() {
 
     echo "--enable-libbluray" > ffmpeg_options || exit 1
     echo "--enable-libdav1d" >> ffmpeg_options || exit 1
+    echo "--enable-libopus" >> ffmpeg_options || exit 1
     echo "-Dlibbluray=enabled" > mpv_options || exit 1
     if [[ "$is_ubuntu_2204" == "true" ]]; then
       # Ubuntu 22.04's rst2man rejects the --output option used by current mpv.
@@ -1197,10 +1205,11 @@ EOF
   installed_ffprobe_version="$(__installed_ffmpeg_version "$FFPROBE_PATH" | head -n 1 || true)"
   if [[ -z "$installed_ffmpeg_version" || -z "$installed_ffprobe_version" ]] \
     || ! dpkg --compare-versions "$installed_ffmpeg_version" ge "$target_ffmpeg_version" \
-    || ! dpkg --compare-versions "$installed_ffprobe_version" ge "$target_ffmpeg_version"; then
-    die "$(msg 'Installed FFmpeg / FFprobe version verification failed' '安装后的 FFmpeg / FFprobe 版本校验失败')"
+    || ! dpkg --compare-versions "$installed_ffprobe_version" ge "$target_ffmpeg_version" \
+    || ! __ffmpeg_has_libopus "$FFMPEG_PATH"; then
+    die "$(msg 'Installed FFmpeg / FFprobe version or libopus support verification failed' '安装后的 FFmpeg / FFprobe 版本或 libopus 支持校验失败')"
   fi
-  log "$(msg "mpv, FFmpeg, and FFprobe installation complete (${installed_ffmpeg_version}/${installed_ffprobe_version})" "mpv、FFmpeg 与 FFprobe 安装完成（${installed_ffmpeg_version}/${installed_ffprobe_version}）")"
+  log "$(msg "mpv, FFmpeg, FFprobe, and libopus support installation complete (${installed_ffmpeg_version}/${installed_ffprobe_version})" "mpv、FFmpeg、FFprobe 与 libopus 支持安装完成（${installed_ffmpeg_version}/${installed_ffprobe_version}）")"
   if [[ "$needs_meson_prebuild" != "true" ]]; then
     ensure_meson_version
   fi

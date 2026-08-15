@@ -26,7 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev \
     libmujs-dev libbluray-dev libxrandr-dev libxpresent-dev libxss-dev libdvdnav-dev libdvdread-dev \
     libzimg-dev libarchive-dev librubberband-dev libsdl2-dev libdrm-dev libgbm-dev \
-    libssl-dev libjpeg-dev zlib1g-dev libogg-dev libtool-bin gettext \
+    libssl-dev libjpeg-dev zlib1g-dev libogg-dev libopus-dev libtool-bin gettext \
     libmagick++-dev libtesseract-dev cython3 \
     qt6-base-dev qt6-base-dev-tools qt6-5compat-dev qt6-websockets-dev qt6-declarative-dev qt6-multimedia-dev libqt6svg6-dev libgl-dev \
     libboost-date-time-dev libboost-dev libboost-filesystem-dev libboost-math-dev libboost-regex-dev libboost-system-dev libx11-xcb-dev libglu1-mesa-dev \
@@ -197,6 +197,7 @@ RUN set -eux; \
     ./use-ffmpeg-release; \
     echo "--enable-libbluray" > ffmpeg_options; \
     echo "--enable-libdav1d" >> ffmpeg_options; \
+    echo "--enable-libopus" >> ffmpeg_options; \
     echo "-Dlibbluray=enabled" > mpv_options; \
     export PKG_CONFIG_PATH="/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     ./rebuild -j"$(nproc)"; \
@@ -205,6 +206,7 @@ RUN set -eux; \
     install -m 0755 build_libs/bin/ffprobe /usr/bin/ffprobe; \
     /usr/bin/ffmpeg -version >/dev/null; \
     /usr/bin/ffprobe -version >/dev/null; \
+    /usr/bin/ffmpeg -hide_banner -h encoder=libopus 2>&1 | grep '^Encoder libopus' >/dev/null; \
     ldconfig; \
     rm -rf /tmp/mpv
 
@@ -809,7 +811,8 @@ RUN set -eux; \
     /usr/bin/hdr10plus_tool --version 2>&1 | grep -F "hdr10plus_tool ${HDR10PLUS_VER}" >/dev/null; \
     rm -rf /tmp/hdr10plus-tool
 
-RUN test -x /usr/bin/dovi_tool \
+RUN /usr/bin/ffmpeg -hide_banner -h encoder=libopus 2>&1 | grep '^Encoder libopus' >/dev/null \
+    && test -x /usr/bin/dovi_tool \
     && test -x /usr/bin/hdr10plus_tool \
     && test -x /usr/bin/truehdd \
     && test -x /usr/bin/flac \

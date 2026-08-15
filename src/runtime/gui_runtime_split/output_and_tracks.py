@@ -824,8 +824,22 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                                     continue
                                 if str(s.get('index', '')) == str(sel_audio[0]):
                                     c = str(s.get('codec_name') or '').lower()
-                                    if c in ('pcm_bluray', 'pcm_s16le', 'pcm_s24le', 'pcm_s32le', 'dts', 'truehd',
-                                             'mlp'):
+                                    if (
+                                            self.get_selected_function_id() == 4
+                                            and self._is_lossless_audio_stream_dict(s)
+                                    ):
+                                        configured_targets = (
+                                            getattr(self, '_track_lossless_audio_config', {}) or {}
+                                        ).get(key, {}) or {}
+                                        target_codec = str(
+                                            configured_targets.get(str(sel_audio[0]))
+                                            or self._current_encode_lossless_audio_codec()
+                                        ).strip().lower()
+                                        ext = {'aac': 'm4a'}.get(target_codec, target_codec)
+                                    elif c in (
+                                            'pcm_bluray', 'pcm_s16le', 'pcm_s24le',
+                                            'pcm_s32le', 'dts', 'truehd', 'mlp',
+                                    ):
                                         ext = 'flac'
                                     else:
                                         ext = {'aac': 'm4a'}.get(c, c or 'audio')

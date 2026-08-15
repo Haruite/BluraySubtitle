@@ -67,7 +67,7 @@ class BluraySubtitleServiceBase:
     def _build_main_episode_mkvs(self, jobs: list[RemuxMainJob], cancel_event: Optional[threading.Event]=None, *, mux_progress_base: int=0, mux_progress_span: int=380) -> list[str]:
         raise NotImplementedError
 
-    def _build_sp_outputs(self, jobs: list[SpJob], cancel_event: Optional[threading.Event]=None, progress_cb: Optional[Callable[[int, str], None]]=None, audio_encoding: AudioEncodingSettings=AudioEncodingSettings()) -> list[tuple[int, str]]:
+    def _build_sp_outputs(self, jobs: list[SpJob], cancel_event: Optional[threading.Event]=None, progress_cb: Optional[Callable[[int, str], None]]=None, audio_encoding: AudioEncodingSettings=AudioEncodingSettings(), standalone_audio_targets: Optional[dict[int, str]]=None) -> list[tuple[int, str]]:
         raise NotImplementedError
 
     @staticmethod
