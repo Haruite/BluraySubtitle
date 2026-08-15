@@ -1425,7 +1425,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             whole_main_match_keys: set[tuple[int, str, str]] = set()
             exact_episode_match_keys: set[tuple[int, str, str]] = set()
             self._whole_main_match_track_info_by_main = whole_main_track_info
-            if function_id == 3 and not self._is_movie_mode():
+            if function_id in (3, 4) and not self._is_movie_mode():
                 for bdmv_index, main_paths in selected_main_by_bdmv.items():
                     for main_path in main_paths:
                         try:
@@ -1746,6 +1746,11 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     'audio': list(audio),
                     'subtitle': list(subtitle),
                 }
+
+            if whole_main_track_info:
+                # Encode stages through the same main remux command, so alternate-MPLS PIDs must be
+                # reflected in that automatic command before either workflow captures the GUI state.
+                self._refresh_table1_remux_cmds()
 
             def _sp_entry_sort_key(e: dict[str, object]):
                 return (
