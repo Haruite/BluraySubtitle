@@ -361,6 +361,7 @@ Remux 使用界面当前显示的播放列表顺序、命令、章节范围、�
 
 - **编辑脚本（edit_vpy）**：使用系统关联编辑器打开。
 - **预览脚本（preview_script）**：使用 `vsedit` 打开，并按当前行上下文准备预览参数。
+- 自动生成的默认 VPy 把处理后的 `res` 设为输出索引 `0`，把原始 `src8` 设为输出索引 `1`。在 VSEdit 预览窗口中按帧号同步，并通过 **Output index** 在 `0` 和 `1` 之间切换，即可查看同一帧处理前后的画面；这项实时预览不同于压制完成后由“输出对比图”生成的 PNG 文件。
 - 默认脚本路径为 `vpy.vpy`。
 - 自动生成的默认脚本不会自动处理隔行视频，因为真隔行、胶转磁和混合 cadence 需要不同方案；请按 [Encode／VapourSynth Wiki](docs/wiki/Video-Encoding-and-VapourSynth.zh-Hans.md#隔行胶转磁与混合-cadence-来源) 说明使用自定义 VPy。
 
@@ -469,11 +470,13 @@ docker pull --platform linux/amd64 haruite/bluraysubtitle:latest
 
 ### 如何快速测试压制，不跑完整片？
 
-可在 VPy 输出前(最后两行前)加一段裁剪，例如：
+如需快速测试视频侧流程，可在 VPy 最后两行输出语句前截取开头一段：
 
 ```python
 res = res.std.Trim(first=0, length=720)
 ```
+
+必须保持 `first=0`，这样“输出对比图”使用的来源与成品帧号才仍然对应。该写法只会缩短处理后的视频：getnative 和已选择的音轨转换仍会检查或处理完整来源，最终 MKV 中的来源音轨、软字幕和章节也不会同步截短；HDR10+ 会因完整来源时间轴与 VPy 输出不一致而被省略，这也不能作为可靠的完整 Dolby Vision 测试。若要测试全部压制流程，应使用视频、音频、字幕、章节和动态元数据已经同步截短的短 MKV。
 
 ### 为什么 remux 出来的体积比原盘大？
 
