@@ -1,6 +1,7 @@
 """Auto-generated split target: encode_and_audio_tasks."""
 
 import ctypes
+import hashlib
 import json
 import os
 import re
@@ -81,6 +82,20 @@ _GETNATIVE_DEBUG_DIR_ENV = str(os.getenv("BLURAYSUB_GETNATIVE_DEBUG_DIR", "") or
 GETNATIVE_DEBUG_DIR = os.path.abspath(_GETNATIVE_DEBUG_DIR_ENV) if _GETNATIVE_DEBUG_DIR_ENV else None
 
 
+def _remove_managed_lwlibav_cache(source_path: str) -> None:
+    """Prevent a reused source path from inheriting the default VPy's old index."""
+    if not str(source_path or '').strip():
+        return
+    source_key = hashlib.sha1(
+        os.path.normcase(os.path.abspath(source_path)).encode('utf-8')
+    ).hexdigest()
+    cache_path = os.path.join(
+        tempfile.gettempdir(),
+        f'bluraysub_lwlibav_{source_key}.lwi',
+    )
+    for path in (cache_path, cache_path + '.lock'):
+        if os.path.isfile(path):
+            force_remove_file(path)
 
 
 def _normalize_x264_extra_for_bit_depth(extra: list[str], bd: str) -> list[str]:
@@ -1358,6 +1373,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
         hdr10plus_metadata_active = False
         native_hdr10plus = False
         vpy_video_source = src_mkv
+        managed_lwi_source = ''
         crop_plan: VideoCropPlan | None = None
         encode_dovi_plan: Optional[DolbyVisionEncodePlan] = None
         preserve_dovi_work_folder = False
@@ -1685,6 +1701,8 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     print_exc_terminal()
 
             update_vpy_script()
+            managed_lwi_source = vpy_video_source
+            _remove_managed_lwlibav_cache(managed_lwi_source)
             if not _write_vpy_video_source_a(vpy_path, vpy_video_source):
                 print(
                     f'[encode] failed to set vpy source (a) in {vpy_path}',
@@ -1699,15 +1717,6 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 vpy_path,
                 crop_plan if auto_crop_black_borders else None,
             )
-
-            def cleanup_lwi_for_source(source_path: str):
-                for suffix in ('.lwi', '.lwi.lock'):
-                    try:
-                        p = source_path + suffix
-                        if os.path.exists(p) and os.path.isfile(p):
-                            os.remove(p)
-                    except Exception:
-                        print_exc_terminal()
 
             if vspipe_mode == 'bundle':
                 vspipe_exe, vspipe_env = get_vspipe_context()
@@ -1824,7 +1833,6 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 _ENCODE_CANCEL_EVENT.reset(cancel_token)
             if enc_rc != 0:
                 _emit_encode_log_line(f"[BluraySubtitle] encode pipeline exited with code {enc_rc}")
-            cleanup_lwi_for_source(vpy_video_source)
             if enc_rc != 0:
                 raise RuntimeError(
                     translate_text('Encode pipeline failed with exit code {code}: {path}').format(
@@ -1900,8 +1908,6 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                                 expected_dynamic_metadata_frames,
                                 8,
                             )
-
-            cleanup_lwi_for_source(src_mkv)
             soft_subtitle = subtitle_path if subtitle_mode == 'soft' else ''
             failure_stage = 'Final Matroska mux'
             mux_with_audio_conversion(
@@ -2003,7 +2009,6 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                         )
                         self.encode_warnings.append(message)
                         self._progress(text=message)
-            cleanup_lwi_for_source(src_mkv)
         except TaskCancelled:
             retained_artifacts = []
             for path in (
@@ -2067,5 +2072,6 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             ):
                 force_remove_file(hdr10plus_json_path)
         finally:
+            _remove_managed_lwlibav_cache(managed_lwi_source)
             if encode_dovi_plan and not preserve_dovi_work_folder:
                 encode_dovi_plan.cleanup()
