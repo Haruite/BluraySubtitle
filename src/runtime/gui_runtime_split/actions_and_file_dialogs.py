@@ -4,6 +4,7 @@ import datetime
 import os
 import re
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -866,8 +867,10 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     this.table_widget.setHorizontalHeaderLabels(['index'] + this.keys)
                     this.table_widget.setRowCount(len(this.subtitle.events))
                     for i in range(len(this.subtitle.events)):
-                        this.table_widget.setItem(i, 0, QTableWidgetItem(
-                            ((len(str(len(this.subtitle.events)))) - len(str(i + 1))) * '0' + str(i + 1)))
+                        index_item = QTableWidgetItem(
+                            ((len(str(len(this.subtitle.events)))) - len(str(i + 1))) * '0' + str(i + 1))
+                        index_item.setFlags(index_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                        this.table_widget.setItem(i, 0, index_item)
                         for j in range(len(this.keys)):
                             item = getattr(this.subtitle.events[i], this.keys[j])
                             if isinstance(item, datetime.timedelta):
@@ -892,8 +895,9 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     this.table_widget.setRowCount(len(this.subtitle.lines))
                     m_len = len(str(this.subtitle.lines[-1][0]))
                     for i, line in enumerate(this.subtitle.lines):
-                        this.table_widget.setItem(i, 0,
-                                                  QTableWidgetItem((m_len - len(str(line[0]))) * '0' + str(line[0])))
+                        index_item = QTableWidgetItem((m_len - len(str(line[0]))) * '0' + str(line[0]))
+                        index_item.setFlags(index_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                        this.table_widget.setItem(i, 0, index_item)
                         this.table_widget.setItem(i, 1, QTableWidgetItem(line[1]))
                         this.table_widget.setItem(i, 2, QTableWidgetItem(line[2]))
                         this.table_widget.setItem(i, 3, QTableWidgetItem(line[3]))
@@ -932,20 +936,41 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                         this.table_widget.removeRow(row_index - i)
 
             def on_subtitle_changed(this, item: QTableWidgetItem):
+                if item.column() == 0:
+                    return
                 if path.endswith('.ass') or path.endswith('.ssa'):
                     setattr(this.subtitle.events[int(this.table_widget.item(item.row(), 0).text()) - 1],
                             this.keys[item.column() - 1], item.text())
                     this.altered = True
                 if path.endswith('.srt'):
-                    this.subtitle.lines[item.row()][item.column()] = item.text()
-                    this.altered = True
+                    cue_number = int(this.table_widget.item(item.row(), 0).text())
+                    for line in this.subtitle.lines:
+                        if int(line[0]) == cue_number:
+                            line[item.column()] = item.text()
+                            this.altered = True
+                            break
 
             def save_subtitle(this):
                 if this.altered:
-                    with open(path + '.bak', 'a', encoding='utf-8-sig') as fp:
-                        this.subtitle.dump_file(fp)
-                    os.remove(path)
-                    os.rename(path + '.bak', path)
+                    temporary_file = tempfile.NamedTemporaryFile(
+                        mode='w',
+                        encoding='utf-8-sig',
+                        prefix=f'.{os.path.basename(path)}.',
+                        suffix='.tmp',
+                        dir=os.path.dirname(os.path.abspath(path)),
+                        delete=False,
+                    )
+                    temporary_path = temporary_file.name
+                    try:
+                        with temporary_file as fp:
+                            this.subtitle.dump_file(fp)
+                        os.replace(temporary_path, path)
+                    except Exception:
+                        try:
+                            os.remove(temporary_path)
+                        except OSError:
+                            pass
+                        raise
                 self.on_subtitle_folder_path_change()
                 this.altered = False
 
