@@ -1529,7 +1529,18 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             return
         copy_audio_track, copy_sub_track = pair
         if not had_config:
-            cfg[key] = {'audio': copy_audio_track, 'subtitle': copy_sub_track}
+            select_all = bool(
+                getattr(self, 'select_all_tracks_checkbox', None)
+                and self.select_all_tracks_checkbox.isChecked()
+            )
+            selected_tracks = available.get(key) if select_all and isinstance(available, dict) else None
+            if isinstance(selected_tracks, dict):
+                cfg[key] = {
+                    'audio': list(selected_tracks.get('audio') or []),
+                    'subtitle': list(selected_tracks.get('subtitle') or []),
+                }
+            else:
+                cfg[key] = {'audio': copy_audio_track, 'subtitle': copy_sub_track}
         manual_main_keys = getattr(self, '_manual_main_track_selection_keys', None)
         if not had_config and isinstance(manual_main_keys, set):
             manual_main_keys.discard(key)
