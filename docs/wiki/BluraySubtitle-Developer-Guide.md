@@ -284,13 +284,13 @@ Direct MPLS mux can fail when adjacent clips have different track layouts. The f
 2. processes every play item with its exact interval;
 3. identifies only GUI-selected/MPLS-visible tracks;
 4. maps every clip to the selected reference layout;
-5. asks tsMuxer to recover missing selected video/subtitle PIDs and, when possible, audio PIDs;
-6. synthesizes matching-duration PCM silence only for audio still unavailable;
+5. asks tsMuxer to recover every missing selected PID, including audio;
+6. fails if tsMuxer cannot recover the complete selected layout instead of synthesizing a replacement track;
 7. requires the repaired PID set to exactly match the reference layout;
 8. appends aligned per-clip MKVs in playlist order with MKVToolNix; and
 9. applies/verifies chapters and track languages.
 
-A missing selected video or subtitle stream is fatal. Silence is an explicit missing-audio alignment mechanism, not general error concealment.
+Any selected stream that tsMuxer cannot recover is fatal.
 
 ### Why physical M2TS concatenation is insufficient
 

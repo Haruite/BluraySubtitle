@@ -96,7 +96,7 @@ MKVToolNix 对 M2TS 结构的验证通常比 tsMuxer 严格。这有利于发现
 4. 非完整 PlayItem 使用 `mkvmerge --split parts:start-end` 裁切，明确保留非零的 MPLS 起止范围，而不是附加整个 M2TS。
 5. `mkvmerge` 提供它能够识别的所有轨道。
 6. 仅对仍然缺少的已选择 PID 调用 tsMuxer。需要恢复 Dolby Vision 增强层时也使用这一路径，随后由项目调用 `dovi_tool` 与基础层合并。
-7. 缺少视频或字幕 PID 时明确失败。缺少音频时先请求 tsMuxer；只有仍然无法恢复的音频，才允许使用时长、采样率、声道数和位深匹配的 PCM 静音表示。
+7. tsMuxer 无法恢复任何缺失的已选 PID（包括音频）时明确失败，不合成替代轨道。
 8. 检查最终 PID 集合是否与要求的布局完全一致。
 9. 多个修复片段使用 `--append-mode file` 拼接，使所有轨道采用同一个前序文件时间戳边界。使用 track append 时，较短或损坏的音轨可能早于视频开始下一片段。
 
@@ -183,7 +183,7 @@ tsMuxer 对相关蓝光 TrueHD 布局使用两种不同的读取器。两条路�
 - 如果 `NOT_ENOUGH_BUFFER` 状态持续超过一个完整输入块，`SimplePacketizerReader` 可以抛出 `invalid stream`。其他异常帧会输出 `bad frame detected ... Resync stream` 后继续处理，因此返回码为零并不能证明提取出的基本流完整。
 - 两条 TrueHD 路径都根据成功接受的帧样本数生成输出时间戳。`AC3StreamReader::readPacketTHD()` 使用 `m_totalTHDSamples` 重写 PTS，`AC3StreamReader::needMPLSCorrection()` 在 TrueHD 模式中明确返回 false。缺帧会缩短生成的时间线，原始 PTS 间隙或 MPLS 区间不会保留在裸流输出中。
 
-两条路径都没有合成替换 access unit、把损坏区间保留为空隙或填充静音。因此，tsMuxer 适合恢复 MKVToolNix 未暴露的视频或字幕 PID，但不能代替专门修复损坏 TrueHD 的 demux 工具。
+两条路径都没有合成替换 access unit、把损坏区间保留为空隙或填充静音。因此，tsMuxer 适合恢复 MKVToolNix 未暴露的已选 PID，但不能代替专门修复损坏 TrueHD 的 demux 工具。
 
 一次短素材测试可以说明实际影响。tsMuxeR 2.7.0 从时长 50.053 秒的 Avatar `00096.m2ts` 中 demux 两个 TrueHD PID，并返回 `Demux complete`。PID 4352 被识别为交错的 `A_AC3`，PID 4356 被识别为 TrueHD-only `A_MLP`。提取第二条轨道时反复出现 `bad frame detected ... Resync stream`。随后使用 `truehdd` 0.4.0 `info` 检查：
 
@@ -268,4 +268,3 @@ FLAC 是首选无损输出。首先尝试独立编码器，因为 FLAC 1.5.0 支
 | fdkaac | AAC 编码 | qaac 的跨平台替代方案 |
 | eac3to | 不使用 | 仅 Windows，并存在已确认的播放列表/时间兼容性问题 |
 | DGDemux | 暂不集成 | 修复损坏 TrueHD 效果好，但第三方使用需要书面许可，并会增加流程复杂度 |
-

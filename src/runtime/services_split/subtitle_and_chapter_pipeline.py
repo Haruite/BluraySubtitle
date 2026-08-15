@@ -1257,12 +1257,23 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
 
                 if source_path.lower().endswith('.mpls'):
                     self._set_dovi_mux_plan_for_mpls(source_path)
+                else:
+                    self._dovi_mux_plan = None
                 identify_ok = (
                     not source_path.lower().endswith('.mpls')
                     or self._mkvmerge_identify_covers_remux_slots(
                         source_path, audio_tracks, subtitle_tracks,
                     )
                 )
+                m2ts_selectors: Optional[tuple[str, str, str]] = None
+                if source_path.lower().endswith('.m2ts'):
+                    m2ts_selectors = _svc_cls()._mkvmerge_das_flag_strings_for_m2ts(
+                        source_path,
+                        audio_tracks,
+                        subtitle_tracks,
+                        dovi_plan=None,
+                    )
+                    identify_ok = m2ts_selectors is not None
                 primary_ok = False
                 if identify_ok:
                     find_mkvtoolnix()
@@ -1280,15 +1291,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                         )
                     command.extend(['-o', primary_output])
                     if source_path.lower().endswith('.m2ts'):
-                        dovi_plan = getattr(self, '_dovi_mux_plan', None)
-                        if not (isinstance(dovi_plan, dict) and dovi_plan.get('active')):
-                            dovi_plan = None
-                        video_ids, audio_ids, subtitle_ids = (
-                            _svc_cls()._mkvmerge_das_flag_strings_for_m2ts(
-                                source_path, audio_tracks, subtitle_tracks,
-                                dovi_plan=dovi_plan,
-                            )
-                        )
+                        video_ids, audio_ids, subtitle_ids = m2ts_selectors or ('', '', '')
                         if output_extension != '.mkv':
                             command.append('-D')
                         elif video_ids:

@@ -101,10 +101,6 @@ class BluraySubtitleServiceBase:
         raise NotImplementedError
 
     @staticmethod
-    def _create_silence_track_for_audio_slot(reference_audio_stream: dict[str, object], duration_seconds: float, output_path: str) -> bool:
-        raise NotImplementedError
-
-    @staticmethod
     def _dedupe_remux_shell_lines(cmd: str) -> str:
         raise NotImplementedError
 
@@ -148,10 +144,6 @@ class BluraySubtitleServiceBase:
 
     @staticmethod
     def _fallback_track_lists(remux_cmd: str, copy_audio_track: list[str], copy_sub_track: list[str]) -> tuple[list[str], list[str]]:
-        raise NotImplementedError
-
-    @staticmethod
-    def _filter_ref_slots_common_across_playlist(ref_slots: list[dict[str, object]], stream_dir: str, rows: list[tuple[str, int, int]]) -> Optional[list[dict[str, object]]]:
         raise NotImplementedError
 
     @staticmethod
@@ -228,7 +220,7 @@ class BluraySubtitleServiceBase:
         raise NotImplementedError
 
     @staticmethod
-    def _mkvmerge_das_flag_strings_for_m2ts(m2ts_path: str, copy_audio_track: list[str], copy_sub_track: list[str], dovi_plan: Optional[dict[str, object]]=None) -> tuple[str, str, str]:
+    def _mkvmerge_das_flag_strings_for_m2ts(m2ts_path: str, copy_audio_track: list[str], copy_sub_track: list[str], dovi_plan: Optional[dict[str, object]]=None) -> Optional[tuple[str, str, str]]:
         raise NotImplementedError
 
     @staticmethod
@@ -248,10 +240,6 @@ class BluraySubtitleServiceBase:
 
     @staticmethod
     def _mkvmerge_identify_json(media_path: str) -> dict[str, object]:
-        raise NotImplementedError
-
-    @staticmethod
-    def _mkvmerge_identify_tid_for_pid_file(media_path: str, pid: int) -> Optional[int]:
         raise NotImplementedError
 
     @staticmethod
@@ -364,10 +352,7 @@ class BluraySubtitleServiceBase:
     def _remux_cmd_shell_lines(cmd: str) -> list[str]:
         raise NotImplementedError
 
-    def _remux_fallback_append_silence_pid_order(self, mkvmerge_executable: str, ui_language_argument: str, base_mkv: str, existing_pids: list[int], missing_audio_slots: list[dict[str, object]], reference_m2ts: str, clip_duration_sec: float, work_dir: str, part_tag: str, pid_to_lang: dict[int, str], output_mkv: str, *, selected_pid_order: list[int]) -> Optional[list[int]]:
-        raise NotImplementedError
-
-    def _remux_fallback_merge_demux_with_base(self, mkvmerge_executable: str, ui_language_argument: str, base_mkv: Optional[str], base_pid_list: list[int], demux_by_pid: dict[int, str], pid_to_lang: dict[int, str], output_mkv: str, split_argument: Optional[str]=None, *, base_track_by_pid: Optional[dict[int, int]]=None, selected_pid_order: list[int]) -> bool:
+    def _remux_fallback_merge_demux_with_base(self, mkvmerge_executable: str, ui_language_argument: str, base_mkv: Optional[str], base_pid_list: list[int], demux_by_pid: dict[int, str], pid_to_lang: dict[int, str], output_mkv: str, *, base_track_by_pid: Optional[dict[int, int]]=None, selected_pid_order: list[int]) -> bool:
         raise NotImplementedError
 
     @staticmethod

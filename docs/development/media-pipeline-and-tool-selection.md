@@ -96,7 +96,7 @@ The [track-aligned fallback](../../src/runtime/services_split/media_info_and_tra
 4. A partial play item is trimmed with `mkvmerge --split parts:start-end`. This explicitly preserves non-zero MPLS in/out boundaries instead of appending the complete M2TS.
 5. `mkvmerge` supplies every track it can identify.
 6. tsMuxer is invoked only for selected PIDs that are still missing. This also supports recovery of a required Dolby Vision layer before the project combines it with `dovi_tool`.
-7. A missing video or subtitle PID is fatal. Missing audio is first requested from tsMuxer; only audio that still cannot be recovered may be represented by duration-, sample-rate-, channel-, and bit-depth-matched PCM silence.
+7. If tsMuxer cannot recover every missing selected PID, including audio, the fallback fails instead of synthesizing a replacement track.
 8. The resulting PID set is checked against the required layout.
 9. Multiple repaired parts are concatenated with `--append-mode file`, so every track uses the same preceding-file timestamp boundary. Track-based appending could allow a short or damaged audio track to start the next part earlier than the video.
 
@@ -184,7 +184,7 @@ tsMuxer uses two different readers for the relevant Blu-ray TrueHD layouts. Both
 - `SimplePacketizerReader` can throw an `invalid stream` error when a `NOT_ENOUGH_BUFFER` condition persists beyond one full input block. Other malformed frames instead produce `bad frame detected ... Resync stream` and processing continues, so a zero exit status does not prove that the extracted elementary stream is complete.
 - Both TrueHD paths generate output timestamps from accepted frame sample counts. `AC3StreamReader::readPacketTHD()` overwrites PTS from `m_totalTHDSamples`, and `AC3StreamReader::needMPLSCorrection()` explicitly returns false in TrueHD mode. Missing frames therefore shorten the generated timeline; no original PTS gap or MPLS interval is represented in the raw output.
 
-There is no code in either path that synthesizes a replacement access unit, preserves a damaged interval as a gap, or fills it with silence. This makes tsMuxer useful for recovering a video or subtitle PID that MKVToolNix did not expose, but not a substitute for a dedicated damaged-TrueHD repair demuxer.
+There is no code in either path that synthesizes a replacement access unit, preserves a damaged interval as a gap, or fills it with silence. This makes tsMuxer useful for recovering a selected PID that MKVToolNix did not expose, but not a substitute for a dedicated damaged-TrueHD repair demuxer.
 
 A short real-media check makes the impact concrete. tsMuxeR 2.7.0 demuxed both TrueHD PIDs from the 50.053-second Avatar `00096.m2ts` and returned `Demux complete`. It identified PID 4352 as interleaved `A_AC3` and PID 4356 as TrueHD-only `A_MLP`. The second track produced repeated `bad frame detected ... Resync stream` messages during demux. `truehdd` 0.4.0 `info` then reported:
 
@@ -270,4 +270,3 @@ This preserves the performance advantage of FLAC 1.5.0 without making its succes
 | fdkaac | AAC encoding | Cross-platform replacement for qaac |
 | eac3to | Not used | Windows-only and confirmed playlist/timing compatibility problems |
 | DGDemux | Not integrated | Good damaged-TrueHD recovery, but third-party use requires written permission and adds workflow complexity |
-

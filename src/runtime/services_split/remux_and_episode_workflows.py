@@ -639,37 +639,36 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                         primary_ok = True
                         break
 
-            try:
-                clip_count = len(Chapter(job.mpls_path).in_out_time or [])
-            except Exception:
-                clip_count = 0
             cover = ''
-            if clip_count > 1:
-                try:
-                    bdmv_dir = os.path.normpath(os.path.join(os.path.dirname(job.mpls_path), '..'))
-                    meta_folder = os.path.join(bdmv_dir, 'META', 'DL')
-                    cover_size = 0
-                    if os.path.exists(meta_folder):
-                        for filename in os.listdir(meta_folder):
-                            if filename.endswith(('.jpg', '.JPG', '.JPEG', '.jpeg', '.png', '.PNG')):
-                                fp = os.path.join(meta_folder, filename)
-                                sz = os.path.getsize(fp)
-                                if sz > cover_size:
-                                    cover = fp
-                                    cover_size = sz
-                except Exception:
-                    cover = ''
+            try:
+                bdmv_dir = os.path.normpath(os.path.join(os.path.dirname(job.mpls_path), '..'))
+                meta_folder = os.path.join(bdmv_dir, 'META', 'DL')
+                cover_size = 0
+                if os.path.exists(meta_folder):
+                    for filename in os.listdir(meta_folder):
+                        if filename.endswith(('.jpg', '.JPG', '.JPEG', '.jpeg', '.png', '.PNG')):
+                            fp = os.path.join(meta_folder, filename)
+                            sz = os.path.getsize(fp)
+                            if sz > cover_size:
+                                cover = fp
+                                cover_size = sz
+            except Exception:
+                cover = ''
 
             fallback_audio, fallback_subtitle = _svc_cls()._fallback_track_lists(
                 job.command, list(job.audio_tracks), list(job.subtitle_tracks)
             )
             split_output = len(job.expected_outputs) > 1
             if not primary_ok:
-                if split_output and clip_count > 1:
+                for output_path in job.expected_outputs:
+                    if os.path.isfile(output_path):
+                        force_remove_file(output_path)
+                fallback_ok = False
+                if split_output:
                     self._progress(text=self.t(
                         'Multi-output track-aligned fallback: {name}'
                     ).format(name=f'BD_Vol_{job.volume}'))
-                    self._try_remux_mpls_split_outputs_track_aligned(
+                    fallback_ok = self._try_remux_mpls_split_outputs_track_aligned(
                         job.mpls_path,
                         job.primary_output,
                         configurations,
@@ -682,7 +681,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     self._progress(text=self.t(
                         'Track-aligned fallback: {name}'
                     ).format(name=f'BD_Vol_{job.volume}'))
-                    self._try_remux_mpls_track_aligned(
+                    fallback_ok = self._try_remux_mpls_track_aligned(
                         job.mpls_path,
                         job.primary_output,
                         fallback_audio,
@@ -690,7 +689,9 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                         cover,
                         cancel_event=cancel_event,
                     )
-                primary_ok = all(os.path.isfile(path) for path in job.expected_outputs)
+                primary_ok = fallback_ok and all(
+                    os.path.isfile(path) for path in job.expected_outputs
+                )
             if not primary_ok:
                 missing_outputs = [path for path in job.expected_outputs if not os.path.isfile(path)]
                 for output_path in job.expected_outputs:
@@ -880,8 +881,8 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 out_base = re.sub(rf'(?i)^BD_Vol_{bdmv_vol}_', '', out_base)
                 out_base = re.sub(rf'(?i)_BD_Vol_{bdmv_vol}(?=\.mkv$)', '', out_base)
                 output_file = os.path.join(out_dir, out_base)
-            default_audio_opts = (f'-a {",".join(cmd_audio_track)}' if cmd_audio_track else '')
-            default_sub_opts = (f'-s {",".join(cmd_sub_track)}' if cmd_sub_track else '')
+            default_audio_opts = (f'-a {",".join(cmd_audio_track)}' if cmd_audio_track else '-A')
+            default_sub_opts = (f'-s {",".join(cmd_sub_track)}' if cmd_sub_track else '-S')
             default_cover_opts = (f'--attachment-name Cover.jpg --attach-file "{cover}"' if cover else '')
             default_cmd = (
                 f'"{mkvmerge_exe}" {mkvtoolnix_ui_language_arg()} {dovi_video_opts} '
@@ -947,8 +948,8 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
 
             parts_split, chapter_split, use_split_parts = _parts_chapter_for_sub_confs(confs)
             output_file = f'{os.path.join(disc_out_dir or dst_folder, output_name)}_BD_Vol_{bdmv_vol}.mkv'
-            default_audio_opts = (f'-a {",".join(cmd_audio_track)}' if cmd_audio_track else '')
-            default_sub_opts = (f'-s {",".join(cmd_sub_track)}' if cmd_sub_track else '')
+            default_audio_opts = (f'-a {",".join(cmd_audio_track)}' if cmd_audio_track else '-A')
+            default_sub_opts = (f'-s {",".join(cmd_sub_track)}' if cmd_sub_track else '-S')
             default_cover_opts = (f'--attachment-name Cover.jpg --attach-file "{cover}"' if cover else '')
             if use_split_parts:
                 split_arg = (f'--split parts:{parts_split}' if parts_split else '')

@@ -174,8 +174,8 @@ setup 脚本还会安装 [hdr10plus_tool](https://github.com/quietvoid/hdr10plus
 
 1. 播放范围来自 `Chapter(mpls_path).in_out_time`；只使用片段的一部分时通过 `--split parts:start-end` 裁切。
 2. `mkvmerge --identify` 只映射“编辑轨道”中可见且已选择的轨道；被 MPLS 隐藏的轨道不会加入，恢复后的轨道保持 GUI 选择顺序。
-3. 缺少的非音频轨道使用 tsMuxer 恢复；tsMuxer 无法补齐时明确失败。
-4. 缺少的音轨也会优先尝试用 tsMuxer 恢复；只有仍然无法取得的音轨，才按参考采样率、声道数和位深补充等时长 PCM 静音。
+3. 缺少的已选轨道使用 tsMuxer 恢复。
+4. tsMuxer 无法补齐任何缺失的已选轨道（包括音轨）时明确失败，不生成合成替代轨道。
 5. 修复后的 PID 集合必须与参考布局完全一致。只有一个片段时直接移动到计划输出；多个片段使用 `--append-mode file` 顺序拼接，使所有轨道使用同一个前序文件时间戳边界。
 6. 主输出和独立 SP 输出随后写入已配置的轨道语言与章节，并检查命令结果和最终元数据。
 

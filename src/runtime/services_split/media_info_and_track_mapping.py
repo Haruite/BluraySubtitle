@@ -8,7 +8,6 @@ import subprocess
 import sys
 import tempfile
 import threading
-import time
 from typing import Optional
 
 import numpy as np
@@ -1018,8 +1017,6 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 props = {}
             pid = _svc_cls()._int_from_mkvmerge_prop(props.get('stream_id'))
             if pid is None:
-                pid = _svc_cls()._int_from_mkvmerge_prop(props.get('number'))
-            if pid is None:
                 continue
             if t_type == 'audio':
                 pid_to_ids_audio.setdefault(pid, []).append(tid)
@@ -1326,6 +1323,25 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 if pid is not None and (visible_pids is None or int(pid) in visible_pids):
                     selected_slots.append({'type': 'subtitles', 'pid': int(pid), 'index': str(selected_index)})
                 break
+        def _selected_indexes_exist(
+                selected_indexes: list[str],
+                stream_types: tuple[str, ...],
+        ) -> bool:
+            available_indexes = {
+                str(stream.get('index', ''))
+                for stream in streams
+                if str(stream.get('codec_type') or '') in stream_types
+            }
+            return all(
+                str(index).strip() in available_indexes
+                for index in (selected_indexes or [])
+            )
+
+        if not _selected_indexes_exist(copy_audio_track, ('audio',)):
+            return []
+        if not _selected_indexes_exist(
+                copy_sub_track, ('subtitle', 'subtitles')):
+            return []
         return selected_slots
 
     @staticmethod
@@ -1436,6 +1452,8 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             for track in identification.get('tracks') or []
             if isinstance(track, dict) and str(track.get('type') or '').strip().lower() == identify_track_type
         ]
+        if len(identified_tracks) != len(source_streams):
+            return None
         if source_position >= len(identified_tracks):
             return None
         try:
@@ -1522,8 +1540,6 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         if typ == 'subtitle':
             typ = 'subtitles'
         tracks = [t for t in (ident.get('tracks') or []) if isinstance(t, dict)]
-        if typ == 'video':
-            return any(str(t.get('type') or '').strip().lower() == 'video' for t in tracks)
         try:
             want_pid = int(slot.get('pid'))
         except Exception:
@@ -1533,8 +1549,6 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 continue
             props = t.get('properties') if isinstance(t.get('properties'), dict) else {}
             spid = _svc_cls()._int_from_mkvmerge_prop(props.get('stream_id'))
-            if spid is None:
-                spid = _svc_cls()._int_from_mkvmerge_prop(props.get('number'))
             if spid == want_pid:
                 return True
         return False
@@ -1552,8 +1566,6 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 continue
             props = t.get('properties') if isinstance(t.get('properties'), dict) else {}
             spid = _svc_cls()._int_from_mkvmerge_prop(props.get('stream_id'))
-            if spid is None:
-                spid = _svc_cls()._int_from_mkvmerge_prop(props.get('number'))
             if spid is not None:
                 out[typ].append(int(spid))
         return out
@@ -1688,16 +1700,28 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         if missing_slots:
             _svc_cls()._log_mkvmerge_identify_slot_gap(
                 ident_target, probe_m2ts, ref_slots, ident,
-                'remux slot PID not found on identify (stream_id / number)',
+                'remux slot PID not found on identify (stream_id)',
                 missing_slots=missing_slots,
             )
             return False
-        if isinstance(dovi_plan, dict) and dovi_plan.get('active') and dovi_plan.get('mux_enabled'):
-            _svc_cls()._log_mkvmerge_identify_slot_gap(
-                ident_target, probe_m2ts, ref_slots, ident,
-                'Dolby Vision mux enabled (primary MPLS mkvmerge skipped; use remux-fallback with dovi_tool)',
-            )
-            return False
+        if isinstance(dovi_plan, dict) and dovi_plan.get('active'):
+            if dovi_plan.get('mux_enabled'):
+                _svc_cls()._log_mkvmerge_identify_slot_gap(
+                    ident_target, probe_m2ts, ref_slots, ident,
+                    'Dolby Vision mux enabled (primary MPLS mkvmerge skipped; use remux-fallback with dovi_tool)',
+                )
+                return False
+            try:
+                enhancement_pid = int(dovi_plan['el_pid'])
+            except Exception:
+                return False
+            if _svc_cls()._mkvmerge_tid_for_pid(
+                    ident_target, enhancement_pid, 'video') is None:
+                _svc_cls()._log_mkvmerge_identify_slot_gap(
+                    ident_target, probe_m2ts, ref_slots, ident,
+                    'Dolby Vision enhancement layer cannot be excluded by track ID',
+                )
+                return False
         return True
 
     @staticmethod
@@ -2156,20 +2180,17 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             copy_audio_track: list[str],
             copy_sub_track: list[str],
             dovi_plan: Optional[dict[str, object]] = None,
-    ) -> tuple[str, str, str]:
+    ) -> Optional[tuple[str, str, str]]:
         """
         mkvmerge ``-d`` / ``-a`` / ``-s`` values for one ``.m2ts`` (track ids, not stream row indices).
 
-        Maps edit-tracks stream indices → PID → mkvmerge id; falls back to raw index strings when mapping fails.
+        Maps edit-tracks stream indices → PID → mkvmerge ID. Mapping failure returns ``None`` because ffprobe
+        stream indexes are not mkvmerge track IDs and must never be used as a guess. A video-only selection may
+        still omit ``-d`` to copy all video tracks while explicitly disabling audio and subtitles.
         """
         path = os.path.normpath(str(m2ts_path or ''))
         if not path or not os.path.isfile(path):
-            return '', '', ''
-
-        def _index_fallback() -> tuple[str, str, str]:
-            a_f = ','.join(str(x).strip() for x in (copy_audio_track or []) if str(x).strip())
-            s_f = ','.join(str(x).strip() for x in (copy_sub_track or []) if str(x).strip())
-            return '', a_f, s_f
+            return None
 
         ref_slots = _svc_cls()._ordered_track_slots_for_remux(
             path,
@@ -2178,10 +2199,14 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             dovi_plan=dovi_plan if isinstance(dovi_plan, dict) else None,
         )
         if not ref_slots:
-            return _index_fallback()
+            if not copy_audio_track and not copy_sub_track and not dovi_plan:
+                return '', '', ''
+            return None
         mapped = _svc_cls()._map_slots_to_mkvmerge_track_ids(ref_slots, path)
         if not mapped:
-            return _index_fallback()
+            if not copy_audio_track and not copy_sub_track and not dovi_plan:
+                return '', '', ''
+            return None
         ident = _svc_cls()._mkvmerge_identify_json(path)
         video_ids, audio_ids, subtitle_ids = _svc_cls()._mkvmerge_select_flags_from_mapped(mapped, ident)
         if dovi_plan and dovi_plan.get('active') and dovi_plan.get('mux_enabled'):
@@ -2340,67 +2365,6 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         return [os.path.join(d, f'{stem}-{k + 1:03d}{ex}') for k in range(n_segments)]
 
     @staticmethod
-    def _filter_ref_slots_common_across_playlist(
-            ref_slots: list[dict[str, object]],
-            stream_dir: str,
-            rows: list[tuple[str, int, int]],
-    ) -> Optional[list[dict[str, object]]]:
-        """
-        Keep only slots whose PID exists (same codec_type) in every m2ts of this playlist.
-        This implements "drop extra / keep common" to avoid aborting concat on missing optional tracks.
-        """
-        if not ref_slots:
-            return []
-        clip_pid_sets: list[dict[str, set[int]]] = []
-        for fname, _in_time, _out_time in rows:
-            m2ts_path = os.path.join(stream_dir, f'{fname}.m2ts')
-            if not os.path.isfile(m2ts_path):
-                return None
-            by_type: dict[str, set[int]] = {'video': set(), 'audio': set(), 'subtitles': set()}
-            for s in _svc_cls()._m2ts_track_streams(m2ts_path):
-                if not isinstance(s, dict):
-                    continue
-                ct = str(s.get('codec_type') or '')
-                if ct == 'video':
-                    typ = 'video'
-                elif ct == 'audio':
-                    typ = 'audio'
-                elif ct in ('subtitle', 'subtitles'):
-                    typ = 'subtitles'
-                else:
-                    continue
-                pid = _svc_cls()._stream_service_id(s)
-                if pid is not None:
-                    by_type[typ].add(pid)
-            clip_pid_sets.append(by_type)
-        kept: list[dict[str, object]] = []
-        dropped: list[tuple[str, int]] = []
-        for slot in ref_slots:
-            typ = str(slot.get('type') or '')
-            try:
-                pid = int(slot.get('pid'))
-            except Exception:
-                dropped.append((typ, -1))
-                continue
-            ok = True
-            for ps in clip_pid_sets:
-                if pid not in ps.get(typ, set()):
-                    ok = False
-                    break
-            if ok:
-                kept.append(slot)
-            else:
-                dropped.append((typ, pid))
-        if dropped:
-            msg = ', '.join(f'{t}:{("0x%X" % p) if p >= 0 else "?"}' for t, p in dropped)
-            print(f'[remux-fallback] drop non-common slots: {msg}')
-        has_video = any(str(x.get('type') or '') == 'video' for x in kept)
-        if not has_video:
-            return None
-        return kept
-
-
-    @staticmethod
     def _tsmuxer_exe() -> str:
         p = str(core_settings.TS_MUXER_PATH or '').strip()
         if p and os.path.isfile(p):
@@ -2455,7 +2419,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                     cur['fps'] = mf.group(1).strip()
                 continue
             if line.startswith('Stream delay:'):
-                md = re.search(r'Stream delay:\s*(\d+)', line, re.I)
+                md = re.search(r'Stream delay:\s*(-?\d+)', line, re.I)
                 if md:
                     cur['delay_ms'] = int(md.group(1))
                 continue
@@ -2599,25 +2563,6 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         ) > 1
 
     @staticmethod
-    def _mkvmerge_identify_tid_for_pid_file(media_path: str, pid: int) -> Optional[int]:
-        """Return the mkvmerge track ID whose MPEG transport PID equals ``pid``."""
-        identification = _svc_cls()._mkvmerge_identify_json(media_path)
-        for track in identification.get('tracks') or []:
-            if not isinstance(track, dict):
-                continue
-            properties = track.get('properties') if isinstance(track.get('properties'), dict) else {}
-            stream_pid = _svc_cls()._int_from_mkvmerge_prop(properties.get('stream_id'))
-            if stream_pid is None:
-                stream_pid = _svc_cls()._int_from_mkvmerge_prop(properties.get('number'))
-            if stream_pid != pid:
-                continue
-            try:
-                return int(track.get('id'))
-            except Exception:
-                return None
-        return None
-
-    @staticmethod
     def _tsmuxer_mpeg_pid(track: dict[str, object]) -> Optional[int]:
         """Return the MPEG transport PID represented by one tsMuxer probe track."""
         try:
@@ -2744,7 +2689,6 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             demux_by_pid: dict[int, str],
             pid_to_lang: dict[int, str],
             output_mkv: str,
-            split_argument: Optional[str] = None,
             *,
             base_track_by_pid: Optional[dict[int, int]] = None,
             selected_pid_order: list[int],
@@ -2779,8 +2723,6 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         command_parts: list[str] = [f'"{mkvmerge_executable}"']
         if ui_language_argument:
             command_parts.append(ui_language_argument)
-        if split_argument:
-            command_parts.append(split_argument)
         first_demux_input_index = 0
         if base_mkv and os.path.isfile(base_mkv):
             command_parts.append(f'"{base_mkv}"')
@@ -2821,93 +2763,6 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         print(f'[remux-fallback] merge-append {command}')
         return self._run_single_command(command) in (0, 1) and os.path.isfile(output_mkv)
 
-    def _remux_fallback_append_silence_pid_order(
-            self,
-            mkvmerge_executable: str,
-            ui_language_argument: str,
-            base_mkv: str,
-            existing_pids: list[int],
-            missing_audio_slots: list[dict[str, object]],
-            reference_m2ts: str,
-            clip_duration_sec: float,
-            work_dir: str,
-            part_tag: str,
-            pid_to_lang: dict[int, str],
-            output_mkv: str,
-            *,
-            selected_pid_order: list[int],
-    ) -> Optional[list[int]]:
-        """Append PCM silence for audio PIDs that tsMuxer could not recover.
-
-        The first play-item M2TS supplies sample rate, channel count, and bit depth for each missing PID. Every
-        placeholder spans the current clip window. Existing and synthesized tracks are reordered to the captured
-        reference slots; non-audio tracks are never synthesized.
-        """
-        silence_path_by_pid: dict[int, str] = {}
-        missing_audio_pids: list[int] = []
-        reference_streams = _svc_cls()._m2ts_track_streams(reference_m2ts)
-        for slot in missing_audio_slots:
-            try:
-                pid = int(slot.get('pid'))
-            except Exception:
-                continue
-            template_stream = next(
-                (
-                    stream
-                    for stream in reference_streams
-                    if isinstance(stream, dict)
-                    and str(stream.get('codec_type') or '') == 'audio'
-                    and _svc_cls()._stream_service_id(stream) == pid
-                ),
-                None,
-            )
-            if not isinstance(template_stream, dict):
-                print(f'[remux-fallback] silence: no template for PID 0x{pid:04x}')
-                return None
-            silence_path = os.path.join(work_dir, f'{part_tag}_sil_{pid:04x}.mka')
-            if not _svc_cls()._create_silence_track_for_audio_slot(
-                    template_stream, clip_duration_sec, silence_path
-            ):
-                print(f'[remux-fallback] silence: ffmpeg failed for PID 0x{pid:04x}')
-                return None
-            silence_path_by_pid[pid] = silence_path
-            missing_audio_pids.append(pid)
-        missing_audio_pids.sort()
-        existing_pid_set = set(existing_pids)
-        output_pid_set = existing_pid_set | set(missing_audio_pids)
-        unexpected_pids = output_pid_set - set(selected_pid_order)
-        if unexpected_pids:
-            print(translate_text('Fallback produced tracks outside the GUI selection: {pids}').format(
-                pids=', '.join(f'0x{pid:04X}' for pid in sorted(unexpected_pids)),
-            ))
-            return None
-        output_pids = [pid for pid in selected_pid_order if pid in output_pid_set]
-
-        command_parts: list[str] = [f'"{mkvmerge_executable}"']
-        if ui_language_argument:
-            command_parts.append(ui_language_argument)
-        command_parts.append(f'"{base_mkv}"')
-        for pid in missing_audio_pids:
-            language = _svc_cls()._norm_lang_mkv(str(pid_to_lang.get(pid) or 'und'))
-            command_parts += ['--language', f'0:{language}', f'"{silence_path_by_pid[pid]}"']
-        silence_input_by_pid = {
-            pid: input_index
-            for input_index, pid in enumerate(missing_audio_pids, start=1)
-        }
-        track_order_parts: list[str] = []
-        for pid in output_pids:
-            if pid in existing_pid_set:
-                track_order_parts.append(f'0:{existing_pids.index(pid)}')
-            else:
-                track_order_parts.append(f'{silence_input_by_pid[pid]}:0')
-        command_parts.append(f'--track-order {",".join(track_order_parts)}')
-        command_parts += ['-o', f'"{output_mkv}"']
-        command = ' '.join(command_parts)
-        print(f'[remux-fallback] silence-merge {command}')
-        if self._run_single_command(command) not in (0, 1) or not os.path.isfile(output_mkv):
-            return None
-        return output_pids
-
     def _remux_aligned_clip(
             self,
             m2ts_path: str,
@@ -2931,10 +2786,8 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         1. Mux every selected PID that mkvmerge can identify directly.
         2. For a selected dual-layer Dolby Vision pair, let tsMuxer extract BL/EL, combine them as profile
            8.1 with dovi_tool, and append the resulting BL.
-        3. Recover every missing video or subtitle PID with tsMuxer. These tracks cannot be synthesized, so
-           an incomplete probe or demux is a hard failure.
-        4. Recover missing audio with tsMuxer; only audio still unavailable may be replaced by layout-matched
-           silence derived from the same PID in the first play-item M2TS.
+        3. Recover every missing selected PID with tsMuxer. An incomplete probe, demux, or merge is a hard
+           failure; missing audio is never replaced with a synthetic track.
 
         The clip succeeds only when its final PID set exactly matches the expected set and the requested part
         output exists. No unrelated intermediate MKV may stand in for that output.
@@ -2978,10 +2831,21 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             track_id = _svc_cls()._mkvmerge_tid_for_pid(m2ts_path, pid, track_type)
             if track_id is not None:
                 mappable_slots.append((slot, track_id))
-        # First mkvmerge writes directly to ``part_output``: later merge/silence steps use other paths
-        # (``*_tsmux_merge.mkv`` / ``*_sil_merge.mkv``), so we avoid an extra ``*_mkvmerge.mkv`` file and
-        # a redundant copy when no fallback runs.
-        step_mkv = part_output
+        directly_expected_slots = [
+            slot for slot in clip_slots
+            if not (dovi_mux_video and str(slot.get('type') or '') == 'video')
+        ]
+        defer_split = bool(
+            split_argument
+            and (dovi_mux_video or len(mappable_slots) != len(directly_expected_slots))
+        )
+        # Recovered elementary streams still use the original M2TS timeline. When recovery is needed,
+        # build the complete track set first and apply the PlayItem window exactly once at the end.
+        step_mkv = (
+            os.path.join(work_dir, f'{part_tag}_full.mkv')
+            if defer_split else part_output
+        )
+        initial_split_argument = '' if defer_split else split_argument
         m2ts_pid_list: list[int] = []
         # This map must describe the current MKV and is rebuilt after every merge that changes track order.
         base_track_by_pid: dict[int, int] = {}
@@ -3001,17 +2865,21 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             command_parts: list[str] = [f'"{mkvmerge_executable}"']
             if ui_language_argument:
                 command_parts.append(ui_language_argument)
-            if split_argument:
-                command_parts.append(split_argument)
+            if initial_split_argument:
+                command_parts.append(initial_split_argument)
             command_parts += [f'--track-order {track_order_argument}', '-o', f'"{step_mkv}"']
-            if dovi_mux_video:
+            if dovi_mux_video or not selected_video_ids:
                 command_parts += ['-D']
-            elif selected_video_ids:
+            else:
                 command_parts += ['-d', selected_video_ids]
             if selected_audio_ids:
                 command_parts += ['-a', selected_audio_ids]
+            else:
+                command_parts += ['-A']
             if selected_subtitle_ids:
                 command_parts += ['-s', selected_subtitle_ids]
+            else:
+                command_parts += ['-S']
             command_parts.append(f'"{m2ts_path}"')
             command = ' '.join(command_parts)
             print(f'[remux-fallback] {command}')
@@ -3076,14 +2944,13 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                     demuxed_paths,
                     pid_to_lang,
                     merged_mkv,
-                    split_argument=split_argument,
                     base_track_by_pid=base_track_by_pid,
                     selected_pid_order=dolby_vision_selected_pid_order,
             ):
                 return False
-            if not _svc_cls()._remux_fallback_promote_merge_to_part_out(part_output, merged_mkv):
+            if not _svc_cls()._remux_fallback_promote_merge_to_part_out(step_mkv, merged_mkv):
                 return False
-            current_mkv = part_output
+            current_mkv = step_mkv
             current_pid_set = set(m2ts_pid_list) | {bl_pid}
             m2ts_pid_list = [pid for pid in dolby_vision_selected_pid_order if pid in current_pid_set]
             base_track_by_pid = {pid: track_id for track_id, pid in enumerate(m2ts_pid_list)}
@@ -3150,14 +3017,13 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             merged_mkv = os.path.join(work_dir, f'{part_tag}_tsmux_merge.mkv')
             if not self._remux_fallback_merge_demux_with_base(
                     mkvmerge_executable, ui_language_argument, current_mkv, m2ts_pid_list, demuxed_paths, pid_to_lang, merged_mkv,
-                    split_argument=split_argument,
                     base_track_by_pid=base_track_by_pid,
                     selected_pid_order=selected_pid_order,
             ):
                 return False
-            if not _svc_cls()._remux_fallback_promote_merge_to_part_out(part_output, merged_mkv):
+            if not _svc_cls()._remux_fallback_promote_merge_to_part_out(step_mkv, merged_mkv):
                 return False
-            current_mkv = part_output
+            current_mkv = step_mkv
             current_pid_set = set(m2ts_pid_list) | required_pids
             m2ts_pid_list = [pid for pid in selected_pid_order if pid in current_pid_set]
             base_track_by_pid = {pid: track_id for track_id, pid in enumerate(m2ts_pid_list)}
@@ -3167,7 +3033,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             slot for slot in clip_slots
             if str(slot.get('type') or '') == 'audio' and int(slot.get('pid')) not in available_pid_set
         ]
-        if missing_audio_slots and current_mkv:
+        if missing_audio_slots:
             required_audio_pids = {int(slot['pid']) for slot in missing_audio_slots}
             audio_probe_output = _svc_cls()._run_tsmuxer_probe(m2ts_path)
             audio_tsmuxer_tracks = _svc_cls()._parse_tsmuxer_probe_output(audio_probe_output)
@@ -3177,58 +3043,39 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 for transport_pid in (_svc_cls()._tsmuxer_mpeg_pid(track),)
                 if transport_pid is not None
             }
-            if required_audio_pids <= probed_audio_pids:
-                audio_recovery_tag = f'{part_tag}_audrec'
-                demuxed_audio_paths = self._remux_fallback_run_tsmuxer_demux_subset(
-                    m2ts_path, work_dir, part_tag, pid_to_lang, required_audio_pids, audio_tsmuxer_tracks,
-                    path_tag=audio_recovery_tag,
-                )
-                if demuxed_audio_paths is not None:
-                    merged_audio_mkv = os.path.join(work_dir, f'{audio_recovery_tag}_merge.mkv')
-                    if self._remux_fallback_merge_demux_with_base(
-                            mkvmerge_executable, ui_language_argument, current_mkv, m2ts_pid_list, demuxed_audio_paths, pid_to_lang, merged_audio_mkv,
-                            split_argument=split_argument,
-                            base_track_by_pid=base_track_by_pid,
-                            selected_pid_order=selected_pid_order,
-                    ):
-                        if not _svc_cls()._remux_fallback_promote_merge_to_part_out(part_output, merged_audio_mkv):
-                            return False
-                        current_mkv = part_output
-                        current_pid_set = set(m2ts_pid_list) | required_audio_pids
-                        m2ts_pid_list = [pid for pid in selected_pid_order if pid in current_pid_set]
-                        base_track_by_pid = {pid: track_id for track_id, pid in enumerate(m2ts_pid_list)}
-                        print(
-                            f'[remux-fallback] m2ts_pid_list(after tsMuxer audio recovery)={m2ts_pid_list}'
-                        )
-                    else:
-                        print('[remux-fallback] tsMuxer audio recovery merge failed; may try silence')
-                else:
-                    print('[remux-fallback] tsMuxer audio demux failed; may try silence')
-            else:
-                print(
-                    f'[remux-fallback] tsMuxer probe missing some audio PIDs {sorted(required_audio_pids)}; '
-                    f'will try silence if needed'
-                )
-        available_pid_set = set(m2ts_pid_list)
-        missing_audio_slots = [
-            slot for slot in clip_slots
-            if str(slot.get('type') or '') == 'audio' and int(slot.get('pid')) not in available_pid_set
-        ]
-        if missing_audio_slots:
-            if not current_mkv:
-                print('[remux-fallback] no base MKV to append silence audio')
+            if not required_audio_pids <= probed_audio_pids:
+                print(translate_text(
+                    '[remux-fallback] tsMuxer cannot supply all missing audio PIDs; '
+                    'need {required}, probed {probed}; abort'
+                ).format(
+                    required=sorted(required_audio_pids),
+                    probed=sorted(probed_audio_pids),
+                ))
                 return False
-            silence_merged_mkv = os.path.join(work_dir, f'{part_tag}_sil_merge.mkv')
-            updated_pids = self._remux_fallback_append_silence_pid_order(
-                mkvmerge_executable, ui_language_argument, current_mkv, m2ts_pid_list, missing_audio_slots, reference_m2ts,
-                clip_duration_sec, work_dir, part_tag, pid_to_lang, silence_merged_mkv,
-                selected_pid_order=selected_pid_order,
+            audio_recovery_tag = f'{part_tag}_audrec'
+            demuxed_audio_paths = self._remux_fallback_run_tsmuxer_demux_subset(
+                m2ts_path, work_dir, part_tag, pid_to_lang, required_audio_pids, audio_tsmuxer_tracks,
+                path_tag=audio_recovery_tag,
             )
-            if updated_pids is None:
+            if demuxed_audio_paths is None:
                 return False
-            current_mkv = silence_merged_mkv
-            m2ts_pid_list = updated_pids
-            print(f'[remux-fallback] m2ts_pid_list(after silence)={m2ts_pid_list}')
+            merged_audio_mkv = os.path.join(work_dir, f'{audio_recovery_tag}_merge.mkv')
+            if not self._remux_fallback_merge_demux_with_base(
+                    mkvmerge_executable, ui_language_argument, current_mkv, m2ts_pid_list,
+                    demuxed_audio_paths, pid_to_lang, merged_audio_mkv,
+                    base_track_by_pid=base_track_by_pid,
+                    selected_pid_order=selected_pid_order,
+            ):
+                return False
+            if not _svc_cls()._remux_fallback_promote_merge_to_part_out(step_mkv, merged_audio_mkv):
+                return False
+            current_mkv = step_mkv
+            current_pid_set = set(m2ts_pid_list) | required_audio_pids
+            m2ts_pid_list = [pid for pid in selected_pid_order if pid in current_pid_set]
+            base_track_by_pid = {pid: track_id for track_id, pid in enumerate(m2ts_pid_list)}
+            print(
+                f'[remux-fallback] m2ts_pid_list(after tsMuxer audio recovery)={m2ts_pid_list}'
+            )
         if not current_mkv or not os.path.isfile(current_mkv):
             print('[remux-fallback] no MKV output')
             return False
@@ -3237,6 +3084,21 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 f'[remux-fallback] PID set mismatch: expected {sorted(expected_pid_set)} got {m2ts_pid_list}'
             )
             return False
+        if defer_split:
+            trim_command_parts = [f'"{mkvmerge_executable}"']
+            if ui_language_argument:
+                trim_command_parts.append(ui_language_argument)
+            trim_command_parts += [
+                split_argument,
+                '-o',
+                f'"{part_output}"',
+                f'"{current_mkv}"',
+            ]
+            trim_command = ' '.join(trim_command_parts)
+            print(f'[remux-fallback] {trim_command}')
+            if self._run_single_command(trim_command) not in (0, 1) or not os.path.isfile(part_output):
+                return False
+            current_mkv = part_output
         try:
             if os.path.normpath(current_mkv) != os.path.normpath(part_output):
                 shutil.copy2(current_mkv, part_output)
@@ -3247,49 +3109,6 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             return False
         return True
 
-
-    @staticmethod
-    def _create_silence_track_for_audio_slot(
-            reference_audio_stream: dict[str, object],
-            duration_seconds: float,
-            output_path: str,
-    ) -> bool:
-        """Create PCM silence with the reference PID's sample rate, channels, and effective bit depth.
-
-        The original codec is intentionally not reproduced: this placeholder is used only after the selected
-        audio PID is absent from the current clip and tsMuxer cannot recover it. The surrounding fallback keeps
-        the PID slot and language while this function supplies a continuous timeline of the required length.
-        """
-        if duration_seconds <= 0.0:
-            return False
-        try:
-            sample_rate = int(float(reference_audio_stream.get('sample_rate') or 48000))
-        except Exception:
-            sample_rate = 48000
-        try:
-            channel_count = int(reference_audio_stream.get('channels') or 2)
-        except Exception:
-            channel_count = 2
-        try:
-            bit_depth = int(reference_audio_stream.get('bits_per_raw_sample') or 0) or 16
-        except Exception:
-            bit_depth = 16
-        channel_layout = {0: 'mono', 1: 'mono', 2: 'stereo', 6: '5.1', 8: '7.1'}.get(channel_count, 'stereo')
-        pcm_codec = 'pcm_s24be' if bit_depth >= 20 else 'pcm_s16be'
-        command = [
-            FFMPEG_PATH or 'ffmpeg',
-            '-y',
-            '-f', 'lavfi',
-            '-i', f'anullsrc=r={sample_rate}:cl={channel_layout}',
-            '-t', f'{max(0.001, duration_seconds):.6f}',
-            '-c:a', pcm_codec,
-            output_path,
-        ]
-        try:
-            result = run_command(command)
-        except Exception:
-            return False
-        return result.returncode == 0 and os.path.isfile(output_path)
 
     def _try_remux_mpls_track_aligned(
             self,
@@ -3307,8 +3126,8 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         The first play item converts only GUI-visible selected stream indices into required PID slots. For every
         retained play item, ``_remux_aligned_clip`` maps the selected video indices to that clip and requires the
         selected audio/subtitle PIDs. mkvmerge is attempted first; tsMuxer may recover any selected PID that mkvmerge
-        cannot expose. Missing video or subtitle is fatal, while missing audio may become layout-matched PCM
-        silence only after tsMuxer recovery fails. Each clip is trimmed to its MPLS in/out window, and successful
+        cannot expose. If tsMuxer cannot restore every selected missing PID, the clip fails. Each clip is trimmed
+        to its MPLS in/out window, and successful
         parts are concatenated in playlist order with file append mode. Configured languages are applied by the
         caller after the complete fallback succeeds.
 
@@ -3360,11 +3179,10 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             ui_language_argument = ''
         output_folder = os.path.dirname(os.path.normpath(output_file)) or '.'
         os.makedirs(output_folder, exist_ok=True)
-        work_folder = os.path.join(
-            output_folder,
-            f'_remux_align_{os.getpid()}_{int(time.time() * 1000) & 0xFFFFFF}',
+        work_folder = tempfile.mkdtemp(
+            prefix='_remux_align_',
+            dir=output_folder,
         )
-        os.makedirs(work_folder, exist_ok=True)
         part_outputs: list[str] = []
         try:
             for play_item_index, (clip_name, in_time, out_time) in enumerate(play_items):
@@ -3408,16 +3226,21 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 return False
             if cancel_event and cancel_event.is_set():
                 raise TaskCancelled()
-            if len(part_outputs) == 1:
+            if len(part_outputs) == 1 and not (
+                    cover_path and os.path.isfile(cover_path)
+            ):
                 os.replace(part_outputs[0], output_file)
                 return os.path.isfile(output_file)
 
             command = [mkvmerge_executable]
             if ui_language_argument:
                 command.extend(ui_language_argument.split())
-            command.extend(['--append-mode', 'file', '-o', output_file, part_outputs[0]])
-            for part_output in part_outputs[1:]:
-                command.extend(['+', part_output])
+            if len(part_outputs) == 1:
+                command.extend(['-o', output_file, part_outputs[0]])
+            else:
+                command.extend(['--append-mode', 'file', '-o', output_file, part_outputs[0]])
+                for part_output in part_outputs[1:]:
+                    command.extend(['+', part_output])
             if cover_path and os.path.isfile(cover_path):
                 command.extend(['--attachment-name', 'Cover.jpg', '--attach-file', cover_path])
             print(f'[remux-fallback] concat: {subprocess.list2cmdline(command)}')
@@ -3450,7 +3273,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         order while tracking each play item's cumulative offset. Every overlap is projected onto that M2TS file's
         effective in/out window, remuxed through ``_remux_aligned_clip``, and concatenated into the corresponding
         episode output. Track completion follows the same rules as the single-output fallback: tsMuxer may recover
-        selected PIDs, non-audio gaps fail, and only unrecoverable audio may receive PCM silence. Each requested
+        selected PIDs, and any selected PID that cannot be recovered fails the clip. Each requested
         part and final episode path must exist exactly; similarly named intermediate files are never substituted.
         """
         normalized_output = os.path.normpath(output_file) if output_file else ''
@@ -3474,7 +3297,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         playlist_folder = os.path.dirname(os.path.normpath(mpls_path))
         stream_folder = os.path.normpath(os.path.join(playlist_folder, '..', 'STREAM'))
         play_items = list(chapter.in_out_time or [])
-        if len(play_items) < 2:
+        if not play_items:
             print(f'[remux-fallback-split] skip: playlist has only {len(play_items)} clip(s)')
             return False
         reference_clip_name = play_items[0][0]
@@ -3503,11 +3326,10 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             ui_language_argument = ''
         output_folder = os.path.dirname(normalized_output) or '.'
         os.makedirs(output_folder, exist_ok=True)
-        work_folder = os.path.join(
-            output_folder,
-            f'_remux_split_align_{os.getpid()}_{int(time.time() * 1000) & 0xFFFFFF}',
+        work_folder = tempfile.mkdtemp(
+            prefix='_remux_split_align_',
+            dir=output_folder,
         )
-        os.makedirs(work_folder, exist_ok=True)
         chapter_count = sum(map(len, chapter.mark_info.values()))
         exclusive_playlist_end = chapter_count + 1
         _, index_to_offset = get_index_to_m2ts_and_offset(chapter)

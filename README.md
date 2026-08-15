@@ -185,8 +185,8 @@ Direct MPLS muxing can fail when playlist clips have different track layouts. Th
 
 1. Playback ranges come from `Chapter(mpls_path).in_out_time`; partial clips use `--split parts:start-end`.
 2. `mkvmerge --identify` maps only the tracks visible and selected in **Edit Tracks**. Tracks hidden by the MPLS are excluded, and recovered tracks keep the GUI selection order.
-3. Missing non-audio tracks are recovered with tsMuxer. If tsMuxer cannot supply all of them, the fallback fails explicitly.
-4. Missing audio is also recovered with tsMuxer when possible. Only audio still unavailable afterward is replaced with matching-duration PCM silence using the reference sample rate, channel count, and bit depth.
+3. Missing selected tracks are recovered with tsMuxer.
+4. If tsMuxer cannot recover every missing selected track, including audio, the fallback fails explicitly instead of creating a synthetic replacement.
 5. The repaired PID set must exactly match the reference layout. One repaired clip is moved directly to the planned output; multiple clips are concatenated with `--append-mode file` so every track uses the same preceding-file timestamp boundary.
 6. Main and standalone SP outputs then receive their configured track languages and chapters, with command results and final metadata checked.
 
