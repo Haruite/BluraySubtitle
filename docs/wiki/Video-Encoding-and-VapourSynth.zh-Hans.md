@@ -137,6 +137,10 @@ VapourSynth 本身不编码视频。本项目由 `vspipe` 计算所选输出，�
 
 GUI 可以生成、编辑和预览 `.vpy`。压制前会把真实源路径以及可选的原生分辨率信息写入脚本；所选输出位深会同步到最终的 `fmtc.bitdepth(..., bits=N)`。选择内嵌字幕时，程序会启用 `assrender.TextSub` 行并传入 ASS、SSA 或 SRT 字幕路径。这条文本渲染路径不支持 SUP 内嵌。
 
+### 在 VSEdit 中对比处理后画面与原画
+
+自动生成的默认 VPy 把处理后的 `res` 设为输出索引 `0`，把原始 `src8` 设为输出索引 `1`。点击“预览脚本”后，在 VSEdit 中选择 **Script > Preview** 或按 `F5` 打开预览窗口。保持同一个帧号，按 `0` 查看处理后画面，按 `1` 查看原画；预览窗口标题会显示当前索引。需要保存当前显示帧时，在预览窗口按 `S` 执行 **Save snapshot**。这些默认按键可在 VSEdit 的 **Settings > Hotkeys** 中查看或修改。
+
 ### 自动 getnative
 
 BluraySubtitle 的 getnative 实现移植自 [Infiziert90/getnative](https://github.com/Infiziert90/getnative)，用于估算片源在母版放大前的纵向制作分辨率，以及最可能使用的缩放核。对源高度不超过 1080p 的素材启用自动 getnative 后，检测结果会成为生成 VPy 中的原生高度与逆缩放核，从而在后续滤镜或缩放前移除母版已有的放大；它不会修改源文件，也无法恢复原本不存在的细节。

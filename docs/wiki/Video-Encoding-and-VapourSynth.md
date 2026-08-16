@@ -138,6 +138,10 @@ It does not encode video by itself. In this project, `vspipe` evaluates the sele
 
 The GUI can generate, edit, and preview a `.vpy` script. Before encoding it injects the actual source path and, when enabled, native-resolution information. The selected output bit depth is synchronized with the final `fmtc.bitdepth(..., bits=N)` conversion. Hardsub mode activates the `assrender.TextSub` line and supplies the selected ASS, SSA, or SRT subtitle path. SUP hardsubs are not supported by this text-rendering path.
 
+### Previewing processed and source frames in VSEdit
+
+The generated default VPy exposes the processed `res` as output index `0` and the original `src8` as output index `1`. Click **Preview script**, then choose **Script > Preview** in VSEdit or press `F5` to open the preview window. Keep the same frame selected and press `0` for the processed frame or `1` for the source frame; the preview window title confirms the active index. Press `S` in the preview window to run **Save snapshot** for the displayed frame. These default keys can be reviewed or changed under **Settings > Hotkeys** in VSEdit.
+
 ### Automatic getnative
 
 BluraySubtitle's getnative implementation is adapted from [Infiziert90/getnative](https://github.com/Infiziert90/getnative). It estimates the vertical resolution at which a source was rendered before mastering and the scaling kernel most likely used to enlarge it. When automatic getnative is enabled for a source no taller than 1080p, the result becomes the generated VPy's native height and inverse-scaling kernel. This can remove the master's upscale before subsequent filtering or resizing, but it neither changes the source file nor restores detail that was never present.
