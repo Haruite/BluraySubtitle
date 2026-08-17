@@ -192,7 +192,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         except Exception:
             fid = 0
         box = getattr(self, 'encode_box', None)
-        encode_visible = box is not None and box.isVisible()
+        encode_visible = box is not None and not box.isHidden()
         show_full_codec = fid == 4 and encode_visible
         show_diy_hint = fid == 5 and encode_visible
         hint = getattr(self, 'diy_bd_encode_hint_label', None)
