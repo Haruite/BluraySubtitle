@@ -970,6 +970,15 @@ def _getnative_available_memory_bytes() -> int:
         if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
             return int(status.available_physical)
         return 0
+    # MemAvailable includes reclaimable caches, unlike SC_AVPHYS_PAGES.
+    if sys.platform.startswith("linux"):
+        try:
+            with open("/proc/meminfo", encoding="ascii") as meminfo:
+                for line in meminfo:
+                    if line.startswith("MemAvailable:"):
+                        return int(line.split()[1]) * 1024
+        except (OSError, IndexError, TypeError, ValueError):
+            pass
     try:
         return int(os.sysconf("SC_AVPHYS_PAGES")) * int(os.sysconf("SC_PAGE_SIZE"))
     except (AttributeError, OSError, TypeError, ValueError):
@@ -1079,8 +1088,8 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                         video_path,
                         "-vf",
                         vfexpr,
-                        "-vsync",
-                        "0",
+                        "-fps_mode",
+                        "passthrough",
                         "-frames:v",
                         str(target),
                         "-frame_pts",
