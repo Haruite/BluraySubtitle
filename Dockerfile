@@ -8,11 +8,17 @@ ENV PATH=/root/.local/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 WORKDIR /app
 
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates wget \
+    && install -d -m 0755 /etc/apt/keyrings \
+    && wget -q -O /etc/apt/keyrings/gpg-pub-moritzbunkus.gpg https://mkvtoolnix.download/gpg-pub-moritzbunkus.gpg \
+    && printf 'deb [arch=%s signed-by=/etc/apt/keyrings/gpg-pub-moritzbunkus.gpg] https://mkvtoolnix.download/ubuntu/ resolute main\n' "$(dpkg --print-architecture)" > /etc/apt/sources.list.d/mkvtoolnix.download.list \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl git wget unzip xz-utils tar sed pkg-config \
     build-essential cmake ninja-build autoconf automake libtool \
     python3 python3-pip python3-venv python3-dev python3-sphinx \
-    fonts-wqy-microhei flac gedit nautilus \
+    fonts-wqy-microhei flac gedit nautilus mkvtoolnix mkvtoolnix-gui \
     libegl1 libopengl0 libglib2.0-0 libxkbcommon0 libdbus-1-3 \
     libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 \
     libxcb-xinerama0 libxcb-xinput0 libxcb-render-util0 \
@@ -22,17 +28,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1-mesa-dev libvdpau-dev libva-dev libx11-dev libxext-dev libxv-dev libxinerama-dev \
     libwayland-dev libxkbcommon-dev libegl1-mesa-dev libplacebo-dev libspirv-cross-c-shared-dev libshaderc-dev \
     libasound2-dev libpulse-dev libjack-dev libpipewire-0.3-dev \
-    libdav1d-dev \
+    libdav1d-dev libdovi-dev \
     libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev \
     libmujs-dev libbluray-dev libxrandr-dev libxpresent-dev libxss-dev libdvdnav-dev libdvdread-dev \
     libzimg-dev libarchive-dev librubberband-dev libsdl2-dev libdrm-dev libgbm-dev \
     libssl-dev libjpeg-dev zlib1g-dev libogg-dev libopus-dev libtool-bin gettext \
     libmagick++-dev libtesseract-dev cython3 \
     qt6-base-dev qt6-base-dev-tools qt6-5compat-dev qt6-websockets-dev qt6-declarative-dev qt6-multimedia-dev libqt6svg6-dev libgl-dev \
-    libboost-date-time-dev libboost-dev libboost-filesystem-dev libboost-math-dev libboost-regex-dev libboost-system-dev libx11-xcb-dev libglu1-mesa-dev \
-    libbz2-dev libcmark-dev libflac-dev libfmt-dev libgmp-dev libgtest-dev liblzo2-dev libmagic-dev \
-    libvorbis-dev libpcre2-8-0 libpcre2-dev \
-    nlohmann-json3-dev po4a rake ruby xsltproc docbook-xsl \
     libxxhash-dev libfftw3-dev p7zip-full \
     && rm -rf /var/lib/apt/lists/*
 
@@ -46,81 +48,19 @@ RUN set -eux; \
     ensure_meson_version; \
     python3 -m pip install --break-system-packages --upgrade cython || python3 -m pip install --upgrade cython
 
-RUN bash <<'MKVTOOLNIX'
-set -euo pipefail
-XML="$(curl -fsSL https://mkvtoolnix.download/latest-release.xml)"
-VERSION="$(printf '%s' "$XML" | python3 -c "import re,sys; x=sys.stdin.read(); m=re.search(r'<latest-source>.*?<version>([^<]+)</version>', x, re.S); print((m.group(1) if m else '').strip())")"
-test -n "$VERSION"
-CURRENT=""
-if command -v mkvmerge >/dev/null 2>&1; then
-  CURRENT="$(dpkg-query -W -f='${Version}' mkvtoolnix 2>/dev/null | sed 's/-.*//' || true)"
-  if [ -z "$CURRENT" ]; then
-    CURRENT="$(mkvmerge --version 2>/dev/null | head -n 1 | grep -oE 'v[0-9]+(\.[0-9]+)+' | head -n 1 | tr -d v || true)"
-  fi
-fi
-if [ -n "$CURRENT" ] && dpkg --compare-versions "$CURRENT" ge "$VERSION"; then
-  exit 0
-fi
-mkdir -p /tmp/mkv && cd /tmp/mkv
-curl -fsSL -o "mkvtoolnix_${VERSION}.orig.tar.xz" "https://mkvtoolnix.download/sources/mkvtoolnix-${VERSION}.tar.xz"
-tar xJf "mkvtoolnix_${VERSION}.orig.tar.xz"
-cd "mkvtoolnix-${VERSION}"
-BOOST_QUARANTINE=""
-if compgen -G "/usr/local/lib/libboost_*.so*" >/dev/null; then
-  BOOST_QUARANTINE="$(mktemp -d)"
-  mv /usr/local/lib/libboost_*.so* "$BOOST_QUARANTINE/"
-  ldconfig
-fi
-restore_boost() {
-  if [ -n "${BOOST_QUARANTINE:-}" ] && [ -d "$BOOST_QUARANTINE" ]; then
-    mv "$BOOST_QUARANTINE"/libboost_*.so* /usr/local/lib/ 2>/dev/null || true
-    ldconfig
-    rm -rf "$BOOST_QUARANTINE"
-  fi
-}
-trap restore_boost EXIT
-./drake clean 2>/dev/null || true
-export LD_LIBRARY_PATH=""
-export LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:/usr/lib"
-export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
-export LDFLAGS="-L/usr/lib/x86_64-linux-gnu -Wl,-rpath-link,/usr/lib/x86_64-linux-gnu"
-./configure \
-  --prefix=/usr \
-  --docdir='${datarootdir}/doc/mkvtoolnix-gui' \
-  --enable-gui \
-  --enable-optimization
-./drake -j"$(nproc)"
-./drake apps:strip
-rake install
-restore_boost
-trap - EXIT
-rm -rf /tmp/mkv
-MKVTOOLNIX
-
 RUN set -eux; \
     DOVI_VER="$(git ls-remote --refs --tags --sort=-version:refname https://github.com/quietvoid/dovi_tool.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')"; \
     test -n "$DOVI_VER"; \
-    mkdir -p /tmp/dovi && cd /tmp/dovi; \
-    if ! command -v rustup >/dev/null 2>&1; then curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y; fi; \
-    . /root/.cargo/env; \
-    rustup update stable; \
-    cargo install cargo-c; \
-    git clone --depth 1 --branch "$DOVI_VER" https://github.com/quietvoid/dovi_tool.git; \
-    cd dovi_tool/dolby_vision; \
-    cargo cinstall --release --prefix=/root/.local; \
-    test "$(find /root/.local -name 'libdovi.so*' 2>/dev/null | wc -l)" -ge 1; \
-    find /root/.local -name 'libdovi.so*' -exec cp -a {} /usr/local/lib/ \; ; \
-    ldconfig; \
     case "$(uname -m)" in \
       x86_64|amd64) DOVI_ARCH=x86_64 ;; \
       aarch64|arm64) DOVI_ARCH=aarch64 ;; \
       *) echo "unsupported arch for dovi_tool: $(uname -m)" >&2; exit 1 ;; \
     esac; \
-    mkdir -p /tmp/dovi_bin && cd /tmp/dovi_bin; \
+    mkdir -p /tmp/dovi && cd /tmp/dovi; \
     wget -nv "https://github.com/quietvoid/dovi_tool/releases/download/${DOVI_VER}/dovi_tool-${DOVI_VER}-${DOVI_ARCH}-unknown-linux-musl.tar.gz"; \
     tar zxf "dovi_tool-${DOVI_VER}-${DOVI_ARCH}-unknown-linux-musl.tar.gz"; \
     install -m 0755 dovi_tool /usr/bin/dovi_tool; \
-    rm -rf /tmp/dovi /tmp/dovi_bin
+    rm -rf /tmp/dovi
 
 RUN set -eux; \
     TRUEHDD_VER="$(curl -fsSL https://api.github.com/repos/truehdd/truehdd/releases/latest | python3 -c 'import json, sys; print(json.load(sys.stdin)["tag_name"])')"; \
@@ -149,7 +89,6 @@ RUN set -eux; \
     echo "--enable-libdav1d" >> ffmpeg_options; \
     echo "--enable-libopus" >> ffmpeg_options; \
     echo "-Dlibbluray=enabled" > mpv_options; \
-    export PKG_CONFIG_PATH="/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     ./rebuild -j"$(nproc)"; \
     ./install; \
     install -m 0755 build_libs/bin/ffmpeg /usr/bin/ffmpeg; \
@@ -716,12 +655,12 @@ RUN set -eux; \
 
 ARG X264_COMMIT
 RUN set -eux; \
-    X264_COMMIT="${X264_COMMIT:-$(git ls-remote https://code.videolan.org/videolan/x264.git refs/heads/master | awk 'NR == 1 { print $1 }')}"; \
+    X264_COMMIT="${X264_COMMIT:-$(git ls-remote https://github.com/mirror/x264.git refs/heads/master | awk 'NR == 1 { print $1 }')}"; \
     test -n "$X264_COMMIT"; \
     mkdir -p /tmp/x264 && cd /tmp/x264; \
     git init x264; \
     cd x264; \
-    git remote add origin https://code.videolan.org/videolan/x264.git; \
+    git remote add origin https://github.com/mirror/x264.git; \
     fetched=0; \
     for attempt in 1 2 3 4 5; do \
       if git fetch --depth 1 origin "$X264_COMMIT"; then fetched=1; break; fi; \
@@ -766,7 +705,8 @@ RUN set -eux; \
     /usr/bin/hdr10plus_tool --version 2>&1 | grep -F "hdr10plus_tool ${HDR10PLUS_VER}" >/dev/null; \
     rm -rf /tmp/hdr10plus-tool
 
-RUN /usr/bin/ffmpeg -hide_banner -h encoder=libopus 2>&1 | grep '^Encoder libopus' >/dev/null \
+RUN pkg-config --exists dovi \
+    && /usr/bin/ffmpeg -hide_banner -h encoder=libopus 2>&1 | grep '^Encoder libopus' >/dev/null \
     && test -x /usr/bin/dovi_tool \
     && test -x /usr/bin/hdr10plus_tool \
     && test -x /usr/bin/truehdd \

@@ -14,6 +14,7 @@ fi
 set -euo pipefail
 
 X264_SOURCE_REPOSITORY="https://code.videolan.org/videolan/x264.git"
+X264_SOURCE_MIRROR="https://github.com/mirror/x264.git"
 X265_SOURCE_REPOSITORY="https://github.com/Multicorewareinc/x265.git"
 FFMPEG_SOURCE_REPOSITORY="https://github.com/FFmpeg/FFmpeg.git"
 SVT_AV1_SOURCE_REPOSITORY="https://gitlab.com/AOMediaCodec/SVT-AV1.git"
@@ -527,10 +528,47 @@ ensure_meson_version() {
 # ---------------------------------------------------------------------------
 
 install_mkvtoolnix() {
-  log "$(msg 'Installing mkvtoolnix / mkvtoolnix-gui from source with Rake' '使用 Rake 从源码安装 mkvtoolnix / mkvtoolnix-gui')"
+  log "$(msg 'Installing mkvtoolnix / mkvtoolnix-gui' '安装 mkvtoolnix / mkvtoolnix-gui')"
 
   command -v apt-get >/dev/null 2>&1 || die "$(msg 'apt-get is missing' '缺少 apt-get')"
   command -v dpkg >/dev/null 2>&1 || die "$(msg 'dpkg is missing; cannot manage mkvtoolnix packages or compare versions' '缺少 dpkg，无法管理 mkvtoolnix 软件包或比较版本')"
+
+  local mkvtoolnix_codename=""
+  if [[ "${ID:-}" == "ubuntu" ]]; then
+    case "${VERSION_ID:-}" in
+      24.04) mkvtoolnix_codename="noble" ;;
+      26.04) mkvtoolnix_codename="resolute" ;;
+    esac
+  fi
+
+  if [[ -n "$mkvtoolnix_codename" ]]; then
+    local architecture
+    architecture="$(dpkg --print-architecture)"
+    case "$architecture" in
+      amd64 | arm64) ;;
+      *) mkvtoolnix_codename="" ;;
+    esac
+  fi
+
+  if [[ -n "$mkvtoolnix_codename" ]]; then
+    local keyring_path="/etc/apt/keyrings/gpg-pub-moritzbunkus.gpg"
+    local source_list_path="/etc/apt/sources.list.d/mkvtoolnix.download.list"
+    log "$(msg "Installing MKVToolNix from its official Ubuntu repository (${mkvtoolnix_codename})" "从 MKVToolNix 官方 Ubuntu 软件源安装（${mkvtoolnix_codename}）")"
+    bluray_sudo install -d -m 0755 /etc/apt/keyrings || die "$(msg 'Failed to create the APT keyring directory' '创建 APT 密钥目录失败')"
+    tmux_run "$(msg 'Download the MKVToolNix repository signing key' '下载 MKVToolNix 软件源签名密钥')" \
+      bluray_sudo wget -q -O "$keyring_path" https://mkvtoolnix.download/gpg-pub-moritzbunkus.gpg \
+      || die "$(msg 'Failed to download the MKVToolNix repository signing key' '下载 MKVToolNix 软件源签名密钥失败')"
+    printf 'deb [arch=%s signed-by=%s] https://mkvtoolnix.download/ubuntu/ %s main\n' \
+      "$architecture" "$keyring_path" "$mkvtoolnix_codename" \
+      | bluray_sudo tee "$source_list_path" >/dev/null \
+      || die "$(msg 'Failed to configure the MKVToolNix repository' '配置 MKVToolNix 软件源失败')"
+    apt_update || die "$(msg 'Failed to refresh the MKVToolNix repository' '刷新 MKVToolNix 软件源失败')"
+    apt_install mkvtoolnix mkvtoolnix-gui || die "$(msg 'Failed to install MKVToolNix packages' 'MKVToolNix 软件包安装失败')"
+    hash -r
+    log "$(msg 'mkvtoolnix installation complete' 'mkvtoolnix 安装完成')"
+    return 0
+  fi
+
   if ! command -v curl >/dev/null 2>&1; then
     apt_update
     apt_install curl
@@ -649,31 +687,54 @@ install_mkvtoolnix() {
 # libdovi
 # ---------------------------------------------------------------------------
 
-has_libdovi_runtime() {
+has_libdovi_development() {
+  local runtime_found="false"
   if sudo ldconfig -p 2>/dev/null | grep -qE '\blibdovi\.so(\.[0-9]+)*\b'; then
-    return 0
+    runtime_found="true"
+  else
+    local any_file
+    any_file="$(
+      ls -1 \
+        /usr/local/lib/libdovi.so* \
+        /usr/local/lib64/libdovi.so* \
+        /usr/local/lib/*/libdovi.so* \
+        /usr/lib/libdovi.so* \
+        /usr/lib64/libdovi.so* \
+        /usr/lib/*/libdovi.so* \
+        2>/dev/null | head -n 1 || true
+    )"
+    if [[ -n "${any_file:-}" ]]; then
+      runtime_found="true"
+    fi
   fi
-  local any_file
-  any_file="$(
-    ls -1 \
-      /usr/local/lib/libdovi.so* \
-      /usr/local/lib64/libdovi.so* \
-      /usr/local/lib/*/libdovi.so* \
-      /usr/lib/libdovi.so* \
-      /usr/lib64/libdovi.so* \
-      /usr/lib/*/libdovi.so* \
-      2>/dev/null | head -n 1 || true
-  )"
-  [[ -n "${any_file:-}" ]]
+
+  [[ "$runtime_found" == "true" ]] || return 1
+
+  local libdovi_pkg_config_path
+  libdovi_pkg_config_path="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/aarch64-linux-gnu/pkgconfig:${HOME}/.local/lib/pkgconfig:${HOME}/.local/lib/x86_64-linux-gnu/pkgconfig:${HOME}/.local/lib/aarch64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
+  PKG_CONFIG_PATH="$libdovi_pkg_config_path" pkg-config --exists dovi 2>/dev/null
 }
 
 install_libdovi() {
   log "$(msg 'Installing libdovi (dovi_tool/dolby_vision)' '安装 libdovi（dovi_tool/dolby_vision）')"
 
-  if has_libdovi_runtime; then
-    log "$(msg 'libdovi already installed (libdovi.so found in ldconfig), skipping' '检测到 libdovi 已安装（ldconfig 已包含 libdovi.so），跳过')"
+  if has_libdovi_development; then
+    log "$(msg 'libdovi development files already installed, skipping' '检测到 libdovi 开发文件已安装，跳过')"
     return 0
   fi
+
+  apt_update || die "$(msg 'Failed to refresh package metadata for libdovi' '刷新 libdovi 软件包信息失败')"
+  if apt-cache show libdovi-dev >/dev/null 2>&1; then
+    log "$(msg 'Installing libdovi-dev from the system package repository' '从系统软件源安装 libdovi-dev')"
+    apt_install pkg-config libdovi-dev || die "$(msg 'Failed to install libdovi-dev' 'libdovi-dev 安装失败')"
+    if ! has_libdovi_development; then
+      die "$(msg 'libdovi-dev installed but its library or pkg-config metadata was not found' 'libdovi-dev 安装完成，但未找到运行库或 pkg-config 元数据')"
+    fi
+    log "$(msg 'libdovi installation complete' 'libdovi 安装完成')"
+    return 0
+  fi
+
+  log "$(msg 'libdovi-dev is unavailable; falling back to a cargo-c source build' '软件源不提供 libdovi-dev，回退到 cargo-c 源码编译')"
 
   if [[ -z "$DOVI_TOOL_VERSION" ]]; then
     DOVI_TOOL_VERSION="$(latest_stable_tag https://github.com/quietvoid/dovi_tool.git)"
@@ -691,7 +752,6 @@ install_libdovi() {
     fi
   done
   if (( ${#missing_deps[@]} > 0 )); then
-    apt_update
     apt_install "${missing_deps[@]}" || die "$(msg 'Failed to install libdovi dependencies' 'libdovi 依赖安装失败，请检查网络或包名')"
   fi
 
@@ -733,8 +793,8 @@ install_libdovi() {
 
   rm -rf "$build_dir"
 
-  if ! has_libdovi_runtime; then
-    die "$(msg 'libdovi installed but not recognized by the system (libdovi.so* not found)' 'libdovi 安装完成但仍未被系统识别（未找到 libdovi.so*）')"
+  if ! has_libdovi_development; then
+    die "$(msg 'libdovi installed but its library or pkg-config metadata was not found' 'libdovi 安装完成，但未找到运行库或 pkg-config 元数据')"
   fi
 
   log "$(msg 'libdovi installation complete' 'libdovi 安装完成')"
@@ -744,7 +804,7 @@ install_libdovi() {
 # dovi_tool (prebuilt release binary for BluraySubtitle remux)
 # ---------------------------------------------------------------------------
 
-# Set DOVI_TOOL_VERSION to pin a release; by default both libdovi and the CLI use latest stable.
+# Set DOVI_TOOL_VERSION to pin a release; source-built libdovi and the CLI otherwise use latest stable.
 DOVI_TOOL_VERSION="${DOVI_TOOL_VERSION:-}"
 
 install_dovi_tool() {
@@ -1030,8 +1090,8 @@ install_mpv() {
     local current_mpv_version
     current_mpv_version="$(mpv --version 2>/dev/null | head -n 1 | grep -oP 'mpv\s+v?\K[0-9]+(\.[0-9]+){1,2}' || true)"
     if [[ -n "${current_mpv_version:-}" ]] && dpkg --compare-versions "$current_mpv_version" ge "$required_mpv_version"; then
-      if ! has_libdovi_runtime; then
-        log "$(msg 'mpv installed but libdovi.so is missing, installing libdovi' '检测到 mpv 已安装但缺少 libdovi.so，尝试安装 libdovi')"
+      if ! has_libdovi_development; then
+        log "$(msg 'mpv installed but libdovi development files are missing, installing libdovi' '检测到 mpv 已安装但缺少 libdovi 开发文件，尝试安装 libdovi')"
         install_libdovi
       fi
       if [[ "$ffmpeg_is_current" == "true" ]]; then
@@ -1139,7 +1199,7 @@ install_mpv() {
 EOF
     fi
 
-    export PKG_CONFIG_PATH="/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/aarch64-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:${HOME}/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
+    export PKG_CONFIG_PATH="/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/aarch64-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:${HOME}/.local/lib/pkgconfig:${HOME}/.local/lib/x86_64-linux-gnu/pkgconfig:${HOME}/.local/lib/aarch64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
     export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"
 
     tmux_run "mpv-build rebuild" "${mpv_build_env[@]}" ./rebuild -j"$(nproc)" || exit 1
@@ -1452,10 +1512,25 @@ install_x265() {
 # ---------------------------------------------------------------------------
 
 install_x264() {
-  local x264_commit
-  x264_commit="$(git ls-remote "$X264_SOURCE_REPOSITORY" HEAD | awk 'NR == 1 { print $1 }')"
-  [[ -n "$x264_commit" ]] || die "$(msg 'Failed to resolve the latest official x264 master revision' '无法解析官方 x264 master 的最新版本')"
-  log "$(msg 'Installing the latest official x264 master' '安装最新官方 x264 master')"
+  local x264_repository=""
+  local x264_commit=""
+  local repository
+  for repository in "$X264_SOURCE_REPOSITORY" "$X264_SOURCE_MIRROR"; do
+    x264_commit="$(
+      git ls-remote "$repository" refs/heads/master 2>/dev/null \
+        | awk 'NR == 1 { print $1 }' || true
+    )"
+    if [[ -n "$x264_commit" ]]; then
+      x264_repository="$repository"
+      break
+    fi
+    if [[ "$repository" == "$X264_SOURCE_REPOSITORY" ]]; then
+      log "$(msg 'The official x264 repository is unavailable; trying the GitHub mirror' 'x264 官方仓库不可用，尝试 GitHub 镜像')"
+    fi
+  done
+  [[ -n "$x264_repository" && -n "$x264_commit" ]] || \
+    die "$(msg 'Failed to resolve the latest x264 master revision from the official repository or mirror' '无法从 x264 官方仓库或镜像解析 master 的最新版本')"
+  log "$(msg "Installing the latest x264 master from ${x264_repository}" "从 ${x264_repository} 安装最新 x264 master")"
 
   local version_file="$X264_VERSION_FILE"
   local installed_commit=""
@@ -1463,7 +1538,7 @@ install_x264() {
     installed_commit="$(tr -d '\r\n' < "$version_file")"
   fi
   if [[ "$installed_commit" == "$x264_commit" ]]; then
-    log "$(msg 'The latest official x264 master is already installed; skipping build.' '已安装最新官方 x264 master，跳过编译。')"
+    log "$(msg 'The latest x264 master is already installed; skipping build.' '已安装最新 x264 master，跳过编译。')"
     return 0
   fi
 
@@ -1485,8 +1560,8 @@ install_x264() {
 
   (
     cd "$build_dir" || exit 1
-    tmux_run "$(msg 'Clone the latest official x264 master' '克隆最新官方 x264 master')" \
-      git clone --depth 1 "$X264_SOURCE_REPOSITORY" x264 || exit 1
+    tmux_run "$(msg 'Clone the latest x264 master' '克隆最新 x264 master')" \
+      git clone --depth 1 --branch master "$x264_repository" x264 || exit 1
     cd x264 || exit 1
     x264_commit="$(git rev-parse HEAD)"
     tmux_run "x264 configure" ./configure \

@@ -10,6 +10,7 @@ from src.core.encode_presets import ENCODE_PRESET_PARAMETERS
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 X264_REPOSITORY = "https://code.videolan.org/videolan/x264.git"
+X264_MIRROR_REPOSITORY = "https://github.com/mirror/x264.git"
 X265_REPOSITORY = "https://github.com/Multicorewareinc/x265.git"
 FFMPEG_REPOSITORY = "https://github.com/FFmpeg/FFmpeg.git"
 SVT_AV1_REPOSITORY = "https://gitlab.com/AOMediaCodec/SVT-AV1.git"
@@ -34,10 +35,12 @@ class EncoderToolchainTests(unittest.TestCase):
     def test_linux_setup_tracks_latest_official_encoders(self) -> None:
         for fragment in (
             f'X264_SOURCE_REPOSITORY="{X264_REPOSITORY}"',
+            f'X264_SOURCE_MIRROR="{X264_MIRROR_REPOSITORY}"',
             f'X265_SOURCE_REPOSITORY="{X265_REPOSITORY}"',
-            'git ls-remote "$X264_SOURCE_REPOSITORY" HEAD',
+            'for repository in "$X264_SOURCE_REPOSITORY" "$X264_SOURCE_MIRROR"; do',
+            'git ls-remote "$repository" refs/heads/master',
             'latest_stable_tag "$X265_SOURCE_REPOSITORY"',
-            'git clone --depth 1 "$X264_SOURCE_REPOSITORY" x264',
+            'git clone --depth 1 --branch master "$x264_repository" x264',
             'git clone --depth 1 --branch "$x265_version"',
             "__patch_x265_hdr10plus_json11",
             "#include <cstdint>",
@@ -190,6 +193,35 @@ class EncoderToolchainTests(unittest.TestCase):
         )
         self.assertIn("__bluray_python_imports_ok || die", python_function)
 
+    def test_mkvtoolnix_uses_official_apt_repository_on_supported_ubuntu(self) -> None:
+        installer = self.linux_setup.split("install_mkvtoolnix()", 1)[1].split(
+            "# libdovi", 1
+        )[0]
+        for fragment in (
+            '24.04) mkvtoolnix_codename="noble"',
+            '26.04) mkvtoolnix_codename="resolute"',
+            "https://mkvtoolnix.download/gpg-pub-moritzbunkus.gpg",
+            "https://mkvtoolnix.download/ubuntu/",
+            "apt_install mkvtoolnix mkvtoolnix-gui",
+        ):
+            with self.subTest(target="linux setup", fragment=fragment):
+                self.assertIn(fragment, installer)
+        self.assertLess(
+            installer.index("apt_install mkvtoolnix mkvtoolnix-gui"),
+            installer.index("https://mkvtoolnix.download/latest-release.xml"),
+        )
+        self.assertIn("rake install", installer)
+
+        for fragment in (
+            "/etc/apt/keyrings/gpg-pub-moritzbunkus.gpg",
+            "https://mkvtoolnix.download/ubuntu/ resolute main",
+            "mkvtoolnix mkvtoolnix-gui",
+        ):
+            with self.subTest(target="Dockerfile", fragment=fragment):
+                self.assertIn(fragment, self.dockerfile)
+        self.assertNotIn("https://mkvtoolnix.download/latest-release.xml", self.dockerfile)
+        self.assertNotIn("rake install", self.dockerfile)
+
     def test_linux_setup_disables_mpv_manpage_build_on_ubuntu_22_04(self) -> None:
         mpv_options = self.linux_setup.split(
             'echo "-Dlibbluray=enabled" > mpv_options', 1
@@ -296,7 +328,7 @@ class EncoderToolchainTests(unittest.TestCase):
         self.assertEqual(self.dockerfile.count("FROM "), 1)
         self.assertIn("FROM ubuntu:26.04", self.dockerfile)
         for fragment in (
-            X264_REPOSITORY,
+            X264_MIRROR_REPOSITORY,
             X265_REPOSITORY,
             "git ls-remote --refs --tags --sort=-version:refname",
             "ARG FFMPEG_TAG",
@@ -338,7 +370,7 @@ class EncoderToolchainTests(unittest.TestCase):
         x264_cache_key = self.dockerfile.index("ARG X264_COMMIT")
         hdr10plus_cache_key = self.dockerfile.index("ARG HDR10PLUS_TAG")
         x265_position = self.dockerfile.index(X265_REPOSITORY)
-        x264_position = self.dockerfile.index(X264_REPOSITORY)
+        x264_position = self.dockerfile.index(X264_MIRROR_REPOSITORY)
         self.assertLess(self.dockerfile.index("LSMASH_TAG="), x265_cache_key)
         self.assertLess(x265_cache_key, x265_position)
         self.assertLess(x265_position, self.dockerfile.index("SVTAV1EOS"))
@@ -375,7 +407,7 @@ class EncoderToolchainTests(unittest.TestCase):
             "resolve_latest_tag svt_av1_tag https://gitlab.com/AOMediaCodec/SVT-AV1.git",
             "resolve_latest_tag fdk_aac_tag https://github.com/mstorsjo/fdk-aac.git",
             "resolve_latest_tag fdkaac_tag https://github.com/nu774/fdkaac.git",
-            "resolve_branch_commit x264_commit https://code.videolan.org/videolan/x264.git master",
+            "resolve_branch_commit x264_commit https://github.com/mirror/x264.git master",
             "resolve_latest_tag tsmuxer_tag https://github.com/justdan96/tsMuxer.git",
             "resolve_latest_tag hdr10plus_tag https://github.com/quietvoid/hdr10plus_tool.git",
         ):

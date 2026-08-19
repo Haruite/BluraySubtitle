@@ -83,7 +83,7 @@ jobs:
           resolve_latest_tag svt_av1_tag https://gitlab.com/AOMediaCodec/SVT-AV1.git '^[vV]?[0-9]+([.][0-9]+)+$'
           resolve_latest_tag fdk_aac_tag https://github.com/mstorsjo/fdk-aac.git '^[vV]?[0-9]+([.][0-9]+)+$'
           resolve_latest_tag fdkaac_tag https://github.com/nu774/fdkaac.git '^[vV]?[0-9]+([.][0-9]+)+$'
-          resolve_branch_commit x264_commit https://code.videolan.org/videolan/x264.git master
+          resolve_branch_commit x264_commit https://github.com/mirror/x264.git master
           resolve_latest_tag tsmuxer_tag https://github.com/justdan96/tsMuxer.git '^[vV]?[0-9]+([.][0-9]+)+$'
           resolve_latest_tag hdr10plus_tag https://github.com/quietvoid/hdr10plus_tool.git '^[vV]?[0-9]+([.][0-9]+)+$'
 
