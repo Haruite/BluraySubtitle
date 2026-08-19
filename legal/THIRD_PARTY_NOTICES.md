@@ -188,6 +188,6 @@ The `vs_pkg/` directory in the PyInstaller bundle mirrors a **Windows x64 portab
 - **Files:** Bootloader and frozen Python runtime in the one-folder bundle.
 - **Version:** {{PYINSTALLER_VERSION}}
 - **License:** PyInstaller is **GPL-2.0-or-later** with a runtime exception for the bootloader’s effect on your app — read current PyInstaller `COPYING.txt`: https://github.com/pyinstaller/pyinstaller
-- **Source:** https://github.com/pyinstaller/pyinstaller/releases/{{PYINSTALLER_VERSION}}
+- **Source:** https://github.com/pyinstaller/pyinstaller/releases/tag/v{{PYINSTALLER_VERSION}}
 
 ---

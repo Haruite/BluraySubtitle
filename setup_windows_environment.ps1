@@ -173,7 +173,8 @@ $script:PythonPackages = @(
     [pscustomobject]@{ Distribution = "PyQt6"; Import = "from PyQt6 import QtCore" },
     [pscustomobject]@{ Distribution = "soundfile"; Import = "import soundfile" },
     [pscustomobject]@{ Distribution = "pillow"; Import = "from PIL import Image" },
-    [pscustomobject]@{ Distribution = "matplotlib"; Import = "import matplotlib" }
+    [pscustomobject]@{ Distribution = "matplotlib"; Import = "import matplotlib" },
+    [pscustomobject]@{ Distribution = "PyInstaller"; Import = "import PyInstaller" }
 )
 $script:Msys2Packages = @(
     "base-devel",
