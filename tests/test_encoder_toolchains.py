@@ -348,7 +348,7 @@ class EncoderToolchainTests(unittest.TestCase):
         self.assertLess(self.dockerfile.index("ARG TSMUXER_TAG"), hdr10plus_cache_key)
         self.assertLess(
             hdr10plus_cache_key,
-            self.dockerfile.index("RUN test -x /usr/bin/dovi_tool"),
+            self.dockerfile.index("test -x /usr/bin/dovi_tool"),
         )
         for removed in (
             "ubuntu:22.04",
@@ -427,7 +427,11 @@ class EncoderToolchainTests(unittest.TestCase):
         svt_build = self.dockerfile.split("RUN bash <<'SVTAV1EOS'", 1)[1].split(
             "\nSVTAV1EOS\n", 1
         )[0]
-        self.assertIn('SVT_TAG="$SVT_AV1_TAG"', svt_build)
+        self.assertIn('SVT_TAG="${SVT_AV1_TAG:-', svt_build)
+        self.assertIn(
+            "git ls-remote --refs --tags --sort=-version:refname",
+            svt_build,
+        )
         self.assertIn(SVT_AV1_REPOSITORY, svt_build)
         self.assertIn("SVT_TAG=", svt_build)
         self.assertIn('git clone --depth 1 --branch "$SVT_TAG"', svt_build)

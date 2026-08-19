@@ -527,10 +527,10 @@ ensure_meson_version() {
 # ---------------------------------------------------------------------------
 
 install_mkvtoolnix() {
-  log "$(msg 'Installing mkvtoolnix / mkvtoolnix-gui (build deb from source)' '安装 mkvtoolnix / mkvtoolnix-gui（从源码编译 deb 并安装）')"
+  log "$(msg 'Installing mkvtoolnix / mkvtoolnix-gui from source with Rake' '使用 Rake 从源码安装 mkvtoolnix / mkvtoolnix-gui')"
 
   command -v apt-get >/dev/null 2>&1 || die "$(msg 'apt-get is missing' '缺少 apt-get')"
-  command -v dpkg >/dev/null 2>&1 || die "$(msg 'dpkg is missing; cannot compare mkvtoolnix versions' '缺少 dpkg，无法比较 mkvtoolnix 版本')"
+  command -v dpkg >/dev/null 2>&1 || die "$(msg 'dpkg is missing; cannot manage mkvtoolnix packages or compare versions' '缺少 dpkg，无法管理 mkvtoolnix 软件包或比较版本')"
   if ! command -v curl >/dev/null 2>&1; then
     apt_update
     apt_install curl
@@ -557,39 +557,41 @@ install_mkvtoolnix() {
     log "$(msg "Selected mkvtoolnix version: ${version} (latest upstream: ${latest_version})" "选择 mkvtoolnix 版本：${version}（上游最新：${latest_version}）")"
   fi
 
+  local package_name
+  local installed_deb_packages=()
+  for package_name in mkvtoolnix-gui-dbg mkvtoolnix-dbg mkvtoolnix-gui mkvtoolnix; do
+    if [[ "$(dpkg-query -W -f='${Status}' "$package_name" 2>/dev/null || true)" == "install ok installed" ]]; then
+      installed_deb_packages+=("$package_name")
+    fi
+  done
+
   local current_version=""
   if command -v mkvmerge >/dev/null 2>&1; then
-    if command -v dpkg-query >/dev/null 2>&1; then
-      current_version="$(dpkg-query -W -f='${Version}' mkvtoolnix 2>/dev/null | sed 's/-.*//' || true)"
-    fi
-    if [[ -z "${current_version:-}" ]]; then
-      current_version="$(mkvmerge --version 2>/dev/null | head -n 1 | grep -oE 'v[0-9]+(\.[0-9]+)+' | head -n 1 | tr -d 'v' || true)"
-    fi
+    current_version="$(mkvmerge --version 2>/dev/null | head -n 1 | grep -oE 'v[0-9]+(\.[0-9]+)+' | head -n 1 | tr -d 'v' || true)"
     if [[ -n "${current_version:-}" ]]; then
       log "$(msg "Installed mkvtoolnix version: ${current_version}" "检测到已安装 mkvtoolnix 版本：${current_version}")"
-      if dpkg --compare-versions "$current_version" ge "$version"; then
+      if (( ${#installed_deb_packages[@]} == 0 )) && dpkg --compare-versions "$current_version" ge "$version"; then
         log "$(msg "mkvtoolnix version satisfied (${current_version} >= ${version}), skipping build" "mkvtoolnix 版本已满足要求（${current_version} >= ${version}），跳过编译安装")"
         return 0
       fi
-      log "$(msg "mkvtoolnix version is outdated (${current_version} < ${version}), rebuilding from source" "检测到 mkvtoolnix 版本较旧（${current_version} < ${version}），将从源码编译升级")"
+      if (( ${#installed_deb_packages[@]} > 0 )); then
+        log "$(msg 'The installed mkvtoolnix deb packages will be replaced by a direct source installation' '已安装的 mkvtoolnix deb 软件包将替换为源码直接安装')"
+      else
+        log "$(msg "mkvtoolnix version is outdated (${current_version} < ${version}), rebuilding from source" "检测到 mkvtoolnix 版本较旧（${current_version} < ${version}），将从源码编译升级")"
+      fi
     else
       log "$(msg 'mkvmerge found but version could not be determined, rebuilding from source' '检测到 mkvmerge 但无法解析版本号，将从源码编译安装')"
     fi
   fi
 
-  if ! command -v dpkg-buildpackage >/dev/null 2>&1; then
-    apt_update
-    apt_install dpkg-dev
-  fi
-
   log "$(msg 'Installing build dependencies' '安装编译所需基础工具')"
   apt_update
-  apt_install build-essential debhelper docbook-xsl fakeroot libx11-xcb-dev libglu1-mesa-dev \
+  apt_install build-essential docbook-xsl libx11-xcb-dev libglu1-mesa-dev \
   libboost-date-time-dev libboost-dev libboost-filesystem-dev libboost-math-dev libboost-regex-dev libboost-system-dev \
   libbz2-dev libcmark-dev libdvdread-dev libflac-dev libfmt-dev libgmp-dev libgtest-dev liblzo2-dev libmagic-dev \
   libogg-dev libpcre2-8-0 libpcre2-dev libqt6svg6-dev libvorbis-dev \
   nlohmann-json3-dev pkg-config po4a qt6-base-dev qt6-base-dev-tools qt6-multimedia-dev \
-  rake ruby xsltproc zlib1g-dev unzip pkg-config libtool autoconf
+  rake ruby xsltproc zlib1g-dev unzip libtool autoconf
 
   local build_dir
   build_dir="$(bluray_mktemp_dir)"
@@ -602,98 +604,39 @@ install_mkvtoolnix() {
     tar xJf "mkvtoolnix_${version}.orig.tar.xz" || exit 1
 
     cd "mkvtoolnix-${version}" || exit 1
-    log "$(msg 'Preparing debian packaging files' '准备 debian 打包文件')"
-    cp -R packaging/debian debian || exit 1
-    ./debian/create_files.rb 2>&1 | sed -E '/^Creating files for ubuntu /d;/ handling .*debian\/(control|rules)\.erb$/d' || exit 1
-
-    log "$(msg 'Patching debian/rules (parallel build + system Boost + shlibdeps)' '修改 debian/rules（并行编译、优先系统 Boost、shlibdeps 容错）')"
-    python3 - <<'PY' || exit 1
-from __future__ import annotations
-
-import re
-from pathlib import Path
-
-rules_path = Path("debian/rules")
-text = rules_path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
-
-start = None
-for i, line in enumerate(text):
-    if line.startswith("override_dh_auto_build:"):
-        start = i
-        break
-if start is None:
-    raise SystemExit("debian/rules: override_dh_auto_build not found")
-
-end = start + 1
-while end < len(text):
-    line = text[end]
-    if line.startswith("\t") or line.strip() == "":
-        end += 1
-        continue
-    if re.match(r"^[^\t\s].+?:\s*(#.*)?$", line):
-        break
-    end += 1
-
-replacement = [
-    "override_dh_auto_build:\n",
-    "\texport LD_LIBRARY_PATH=\n",
-    "\texport LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib\n",
-    "\texport PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig\n",
-    "\texport LDFLAGS=\"-L/usr/lib/x86_64-linux-gnu -Wl,-rpath-link,/usr/lib/x86_64-linux-gnu\"\n",
-    "ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))\n",
-    "\tLC_ALL=C ./drake -j$(shell nproc) tests:run_unit\n",
-    "endif\n",
-    "\n",
-    "\t./drake -j$(shell nproc)\n",
-]
-
-text[start:end] = replacement
-new_end = start + len(replacement)
-
-if not any(line.startswith("override_dh_shlibdeps:") for line in text):
-    text[new_end:new_end] = [
-        "\n",
-        "override_dh_shlibdeps:\n",
-        "\tdh_shlibdeps --dpkg-shlibdeps-params=--ignore-missing-info\n",
-    ]
-
-rules_path.write_text("".join(text), encoding="utf-8")
-PY
-
     bluray_quarantine_local_boost
     trap bluray_restore_local_boost EXIT
 
     log "$(msg 'Cleaning previous mkvtoolnix build artifacts' '清理 mkvtoolnix 旧的编译产物')"
-    rm -rf debian/mkvtoolnix debian/mkvtoolnix-gui 2>/dev/null || true
     ./drake clean 2>/dev/null || true
 
-    log "$(msg 'Building deb package (dpkg-buildpackage)' '开始编译 deb（dpkg-buildpackage）')"
     export LD_LIBRARY_PATH=""
     export LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:/usr/lib"
     export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
     export LDFLAGS="-L/usr/lib/x86_64-linux-gnu -Wl,-rpath-link,/usr/lib/x86_64-linux-gnu"
-    export DEB_BUILD_OPTIONS="${DEB_BUILD_OPTIONS:-nocheck}"
-    tmux_run "dpkg-buildpackage" dpkg-buildpackage -b --no-sign || exit 1
+
+    log "$(msg 'Configuring mkvtoolnix with GUI support' '配置启用 GUI 的 mkvtoolnix')"
+    ./configure \
+      --prefix=/usr \
+      --docdir='${datarootdir}/doc/mkvtoolnix-gui' \
+      --enable-gui \
+      --enable-optimization || exit 1
+
+    log "$(msg 'Building mkvtoolnix with Rake' '使用 Rake 编译 mkvtoolnix')"
+    tmux_run "mkvtoolnix build" ./drake -j"$(nproc)" || exit 1
+    ./drake apps:strip || exit 1
+
+    if (( ${#installed_deb_packages[@]} > 0 )); then
+      log "$(msg "Removing installed mkvtoolnix deb packages: ${installed_deb_packages[*]}" "正在卸载已安装的 mkvtoolnix deb 软件包：${installed_deb_packages[*]}")"
+      tmux_run "apt-get remove ${installed_deb_packages[*]}" \
+        sudo env DEBIAN_FRONTEND=noninteractive apt-get remove -y "${installed_deb_packages[@]}" || exit 1
+      hash -r
+    fi
+
+    log "$(msg 'Installing mkvtoolnix with rake install' '使用 rake install 安装 mkvtoolnix')"
+    tmux_run "rake install" bluray_sudo rake install || exit 1
     bluray_restore_local_boost
     trap - EXIT
-
-    log "$(msg 'Installing built deb packages' '安装编译产物（源码上级目录的 mkvtoolnix*.deb）')"
-    mapfile -t debs < <(find "$build_dir" -maxdepth 1 -type f -name "mkvtoolnix*.deb" -print | sort)
-    if (( ${#debs[@]} == 0 )); then
-      die "$(msg 'No mkvtoolnix*.deb found (build may have failed)' '未找到 mkvtoolnix*.deb（编译可能失败）')"
-    fi
-
-    log "$(msg 'Removing mkvtoolnix build tree to free disk space before installing debs' '安装 deb 前清理 mkvtoolnix 编译目录以释放磁盘空间')"
-    rm -rf "$build_dir/mkvtoolnix-${version}" "$build_dir/mkvtoolnix_${version}.orig.tar.xz" || true
-    find "$build_dir" -maxdepth 1 -type f \( -name "*.changes" -o -name "*.buildinfo" -o -name "*.ddeb" -o -name "*.dsc" \) -delete 2>/dev/null || true
-    apt_clean
-
-    log "$(msg 'Installing all mkvtoolnix debs in one pass (auto-resolves dependency order)' '一次性安装全部 mkvtoolnix deb（自动处理依赖顺序）')"
-    if ! apt_install "${debs[@]}"; then
-      log "$(msg 'apt local deb install failed, falling back to dpkg + fix-broken' 'apt 本地 deb 安装失败，回退到 dpkg + 修复依赖')"
-      sudo dpkg -i "${debs[@]}" || true
-      apt_fix_broken || exit 1
-    fi
     apt_clean
   ) || die "$(msg 'mkvtoolnix build/install failed (if missing deps, install them manually and retry)' 'mkvtoolnix 编译/安装失败（如提示缺依赖，可手动补齐后重试）')"
 

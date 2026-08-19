@@ -32,7 +32,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libboost-date-time-dev libboost-dev libboost-filesystem-dev libboost-math-dev libboost-regex-dev libboost-system-dev libx11-xcb-dev libglu1-mesa-dev \
     libbz2-dev libcmark-dev libflac-dev libfmt-dev libgmp-dev libgtest-dev liblzo2-dev libmagic-dev \
     libvorbis-dev libpcre2-8-0 libpcre2-dev \
-    nlohmann-json3-dev po4a rake ruby xsltproc debhelper fakeroot dpkg-dev docbook-xsl \
+    nlohmann-json3-dev po4a rake ruby xsltproc docbook-xsl \
     libxxhash-dev libfftw3-dev p7zip-full \
     && rm -rf /var/lib/apt/lists/*
 
@@ -65,60 +65,6 @@ mkdir -p /tmp/mkv && cd /tmp/mkv
 curl -fsSL -o "mkvtoolnix_${VERSION}.orig.tar.xz" "https://mkvtoolnix.download/sources/mkvtoolnix-${VERSION}.tar.xz"
 tar xJf "mkvtoolnix_${VERSION}.orig.tar.xz"
 cd "mkvtoolnix-${VERSION}"
-cp -R packaging/debian debian
-./debian/create_files.rb
-python3 - <<'PY'
-from __future__ import annotations
-
-import re
-from pathlib import Path
-
-rules_path = Path("debian/rules")
-text = rules_path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
-
-start = None
-for i, line in enumerate(text):
-    if line.startswith("override_dh_auto_build:"):
-        start = i
-        break
-if start is None:
-    raise SystemExit("debian/rules: override_dh_auto_build not found")
-
-end = start + 1
-while end < len(text):
-    line = text[end]
-    if line.startswith("\t") or line.strip() == "":
-        end += 1
-        continue
-    if re.match(r"^[^\t\s].+?:\s*(#.*)?$", line):
-        break
-    end += 1
-
-replacement = [
-    "override_dh_auto_build:\n",
-    "\texport LD_LIBRARY_PATH=\n",
-    "\texport LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib\n",
-    "\texport PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig\n",
-    "\texport LDFLAGS=\"-L/usr/lib/x86_64-linux-gnu -Wl,-rpath-link,/usr/lib/x86_64-linux-gnu\"\n",
-    "ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))\n",
-    "\tLC_ALL=C ./drake -j$(shell nproc) tests:run_unit\n",
-    "endif\n",
-    "\n",
-    "\t./drake -j$(shell nproc)\n",
-]
-
-text[start:end] = replacement
-new_end = start + len(replacement)
-
-if not any(line.startswith("override_dh_shlibdeps:") for line in text):
-    text[new_end:new_end] = [
-        "\n",
-        "override_dh_shlibdeps:\n",
-        "\tdh_shlibdeps --dpkg-shlibdeps-params=--ignore-missing-info\n",
-    ]
-
-rules_path.write_text("".join(text), encoding="utf-8")
-PY
 BOOST_QUARANTINE=""
 if compgen -G "/usr/local/lib/libboost_*.so*" >/dev/null; then
   BOOST_QUARANTINE="$(mktemp -d)"
@@ -133,18 +79,21 @@ restore_boost() {
   fi
 }
 trap restore_boost EXIT
-rm -rf debian/mkvtoolnix debian/mkvtoolnix-gui 2>/dev/null || true
 ./drake clean 2>/dev/null || true
 export LD_LIBRARY_PATH=""
 export LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:/usr/lib"
 export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
 export LDFLAGS="-L/usr/lib/x86_64-linux-gnu -Wl,-rpath-link,/usr/lib/x86_64-linux-gnu"
-export DEB_BUILD_OPTIONS="${DEB_BUILD_OPTIONS:-nocheck}"
-dpkg-buildpackage -b --no-sign
+./configure \
+  --prefix=/usr \
+  --docdir='${datarootdir}/doc/mkvtoolnix-gui' \
+  --enable-gui \
+  --enable-optimization
+./drake -j"$(nproc)"
+./drake apps:strip
+rake install
 restore_boost
 trap - EXIT
-apt-get update
-apt-get install -y ../mkvtoolnix*.deb || (dpkg -i ../mkvtoolnix*.deb || true; apt-get -f install -y)
 rm -rf /tmp/mkv
 MKVTOOLNIX
 
