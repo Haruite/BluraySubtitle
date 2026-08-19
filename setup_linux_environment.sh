@@ -687,6 +687,68 @@ install_mkvtoolnix() {
 # libdovi
 # ---------------------------------------------------------------------------
 
+libdovi_header_is_complete() {
+  local header
+  for header in \
+    /usr/local/include/libdovi/rpu_parser.h \
+    "$HOME/.local/include/libdovi/rpu_parser.h" \
+    /usr/include/libdovi/rpu_parser.h; do
+    if [[ -f "$header" ]] \
+        && grep -qF 'void dovi_rpu_free(' "$header" \
+        && grep -qF 'void dovi_rpu_free_header(' "$header"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+repair_packaged_libdovi_header() {
+  # Ubuntu 26.04 inherited the truncated generated header described in
+  # https://bugs.debian.org/1124682. Use Debian's rebuilt header from the
+  # same upstream 3.3.2 release without replacing Ubuntu's runtime library.
+  [[ "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" == "26.04" ]] || return 1
+
+  local package_version
+  package_version="$(dpkg-query -W -f='${Version}' libdovi-dev 2>/dev/null || true)"
+  case "$package_version" in
+    3.3.2-3*) ;;
+    *) return 1 ;;
+  esac
+
+  local architecture checksum
+  architecture="$(dpkg --print-architecture)"
+  case "$architecture" in
+    amd64) checksum="517d9a81e904d0b337e04b4f9fef0c4a1939fddc49237612547fd8ae033f3ad1" ;;
+    arm64) checksum="27c6b2a66ab2de4ddd2f5b87ecb0826cb504f7218fc1cf73a649fdbc4b2c760b" ;;
+    *) return 1 ;;
+  esac
+
+  local repair_version="3.3.2-3+b1"
+  local repair_dir archive extracted_header
+  repair_dir="$(bluray_mktemp_dir)"
+  archive="$repair_dir/libdovi-dev.deb"
+  extracted_header="$repair_dir/extracted/usr/include/libdovi/rpu_parser.h"
+
+  log "$(msg "Repairing the truncated Ubuntu libdovi header with Debian's rebuilt 3.3.2 header" '使用 Debian 重新生成的 3.3.2 头文件修复 Ubuntu 中被截断的 libdovi 头文件')"
+  if ! (
+    tmux_run "$(msg 'Download the rebuilt libdovi development header' '下载重新生成的 libdovi 开发头文件')" \
+      wget -q -O "$archive" \
+        "https://deb.debian.org/debian/pool/main/r/rust-dolby-vision/libdovi-dev_${repair_version}_${architecture}.deb" \
+      || exit 1
+    printf '%s  %s\n' "$checksum" "$archive" | sha256sum -c - >/dev/null \
+      || exit 1
+    dpkg-deb -x "$archive" "$repair_dir/extracted" || exit 1
+    [[ -f "$extracted_header" ]] || exit 1
+    bluray_sudo install -m 0644 "$extracted_header" /usr/include/libdovi/rpu_parser.h \
+      || exit 1
+  ); then
+    rm -rf "$repair_dir"
+    return 1
+  fi
+  rm -rf "$repair_dir"
+  libdovi_header_is_complete
+}
+
 has_libdovi_development() {
   local runtime_found="false"
   if sudo ldconfig -p 2>/dev/null | grep -qE '\blibdovi\.so(\.[0-9]+)*\b'; then
@@ -709,6 +771,7 @@ has_libdovi_development() {
   fi
 
   [[ "$runtime_found" == "true" ]] || return 1
+  libdovi_header_is_complete || return 1
 
   local libdovi_pkg_config_path
   libdovi_pkg_config_path="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/aarch64-linux-gnu/pkgconfig:${HOME}/.local/lib/pkgconfig:${HOME}/.local/lib/x86_64-linux-gnu/pkgconfig:${HOME}/.local/lib/aarch64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
@@ -727,14 +790,17 @@ install_libdovi() {
   if apt-cache show libdovi-dev >/dev/null 2>&1; then
     log "$(msg 'Installing libdovi-dev from the system package repository' '从系统软件源安装 libdovi-dev')"
     apt_install pkg-config libdovi-dev || die "$(msg 'Failed to install libdovi-dev' 'libdovi-dev 安装失败')"
-    if ! has_libdovi_development; then
-      die "$(msg 'libdovi-dev installed but its library or pkg-config metadata was not found' 'libdovi-dev 安装完成，但未找到运行库或 pkg-config 元数据')"
+    if ! libdovi_header_is_complete; then
+      repair_packaged_libdovi_header || true
     fi
-    log "$(msg 'libdovi installation complete' 'libdovi 安装完成')"
-    return 0
+    if has_libdovi_development; then
+      log "$(msg 'libdovi installation complete' 'libdovi 安装完成')"
+      return 0
+    fi
+    log "$(msg 'The packaged libdovi development files are incomplete; falling back to a cargo-c source build' '软件包中的 libdovi 开发文件不完整，回退到 cargo-c 源码编译')"
+  else
+    log "$(msg 'libdovi-dev is unavailable; falling back to a cargo-c source build' '软件源不提供 libdovi-dev，回退到 cargo-c 源码编译')"
   fi
-
-  log "$(msg 'libdovi-dev is unavailable; falling back to a cargo-c source build' '软件源不提供 libdovi-dev，回退到 cargo-c 源码编译')"
 
   if [[ -z "$DOVI_TOOL_VERSION" ]]; then
     DOVI_TOOL_VERSION="$(latest_stable_tag https://github.com/quietvoid/dovi_tool.git)"

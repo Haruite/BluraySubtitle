@@ -222,6 +222,37 @@ class EncoderToolchainTests(unittest.TestCase):
         self.assertNotIn("https://mkvtoolnix.download/latest-release.xml", self.dockerfile)
         self.assertNotIn("rake install", self.dockerfile)
 
+    def test_libdovi_repairs_the_truncated_ubuntu_header_without_docker_cargo(
+        self,
+    ) -> None:
+        linux_libdovi = self.linux_setup.split("# libdovi", 1)[1].split(
+            "# dovi_tool", 1
+        )[0]
+        for fragment in (
+            "libdovi_header_is_complete()",
+            "repair_packaged_libdovi_header()",
+            "https://bugs.debian.org/1124682",
+            "libdovi-dev_${repair_version}_${architecture}.deb",
+            "dpkg-deb -x",
+            "sha256sum -c -",
+            "falling back to a cargo-c source build",
+        ):
+            with self.subTest(target="linux setup", fragment=fragment):
+                self.assertIn(fragment, linux_libdovi)
+
+        for fragment in (
+            "libdovi-dev_${DOVI_REPAIR_VERSION}_${DOVI_ARCH}.deb",
+            "517d9a81e904d0b337e04b4f9fef0c4a1939fddc49237612547fd8ae033f3ad1",
+            "27c6b2a66ab2de4ddd2f5b87ecb0826cb504f7218fc1cf73a649fdbc4b2c760b",
+            "dpkg-deb -x",
+            "sha256sum -c -",
+            "void dovi_rpu_free_header(",
+        ):
+            with self.subTest(target="Dockerfile", fragment=fragment):
+                self.assertIn(fragment, self.dockerfile)
+        self.assertNotIn("cargo install cargo-c", self.dockerfile)
+        self.assertNotIn("cargo cinstall", self.dockerfile)
+
     def test_linux_setup_disables_mpv_manpage_build_on_ubuntu_22_04(self) -> None:
         mpv_options = self.linux_setup.split(
             'echo "-Dlibbluray=enabled" > mpv_options', 1

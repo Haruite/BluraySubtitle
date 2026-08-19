@@ -38,6 +38,32 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxxhash-dev libfftw3-dev p7zip-full \
     && rm -rf /var/lib/apt/lists/*
 
+RUN set -eux; \
+    DOVI_HEADER=/usr/include/libdovi/rpu_parser.h; \
+    if ! grep -qF 'void dovi_rpu_free(' "$DOVI_HEADER" \
+        || ! grep -qF 'void dovi_rpu_free_header(' "$DOVI_HEADER"; then \
+      DOVI_PACKAGE_VERSION="$(dpkg-query -W -f='${Version}' libdovi-dev)"; \
+      case "$DOVI_PACKAGE_VERSION" in 3.3.2-3*) ;; *) exit 1 ;; esac; \
+      DOVI_ARCH="$(dpkg --print-architecture)"; \
+      case "$DOVI_ARCH" in \
+        amd64) DOVI_HEADER_SHA256=517d9a81e904d0b337e04b4f9fef0c4a1939fddc49237612547fd8ae033f3ad1 ;; \
+        arm64) DOVI_HEADER_SHA256=27c6b2a66ab2de4ddd2f5b87ecb0826cb504f7218fc1cf73a649fdbc4b2c760b ;; \
+        *) exit 1 ;; \
+      esac; \
+      DOVI_REPAIR_VERSION=3.3.2-3+b1; \
+      DOVI_REPAIR_PACKAGE=/tmp/libdovi-dev.deb; \
+      wget -nv -O "$DOVI_REPAIR_PACKAGE" \
+        "https://deb.debian.org/debian/pool/main/r/rust-dolby-vision/libdovi-dev_${DOVI_REPAIR_VERSION}_${DOVI_ARCH}.deb"; \
+      printf '%s  %s\n' "$DOVI_HEADER_SHA256" "$DOVI_REPAIR_PACKAGE" | sha256sum -c -; \
+      mkdir -p /tmp/libdovi-dev-fixed; \
+      dpkg-deb -x "$DOVI_REPAIR_PACKAGE" /tmp/libdovi-dev-fixed; \
+      install -m 0644 /tmp/libdovi-dev-fixed/usr/include/libdovi/rpu_parser.h "$DOVI_HEADER"; \
+      rm -f "$DOVI_REPAIR_PACKAGE"; \
+      rm -rf /tmp/libdovi-dev-fixed; \
+    fi; \
+    grep -qF 'void dovi_rpu_free(' "$DOVI_HEADER"; \
+    grep -qF 'void dovi_rpu_free_header(' "$DOVI_HEADER"
+
 RUN fc-cache -f >/dev/null 2>&1 || true
 
 RUN set -eux; \
