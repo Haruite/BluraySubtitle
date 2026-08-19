@@ -1630,12 +1630,22 @@ install_x264() {
       git clone --depth 1 --branch master "$x264_repository" x264 || exit 1
     cd x264 || exit 1
     x264_commit="$(git rev-parse HEAD)"
-    tmux_run "x264 configure" ./configure \
-      --enable-static \
-      --bit-depth=all \
-      --chroma-format=all \
-      --disable-opencl \
-      --enable-lto || exit 1
+    local x264_configure_args=(
+      --enable-static
+      --bit-depth=all
+      --chroma-format=all
+      --disable-opencl
+      --enable-lto
+    )
+    local libavutil_major=""
+    libavutil_major="$(pkg-config --modversion libavutil 2>/dev/null | cut -d. -f1 || true)"
+    if [[ "$libavutil_major" =~ ^[0-9]+$ ]] \
+        && (( libavutil_major >= 60 )) \
+        && { ! grep -Fq AV_FRAME_FLAG_INTERLACED input/lavf.c \
+             || ! grep -Fq AV_FRAME_FLAG_TOP_FIELD_FIRST input/lavf.c; }; then
+      x264_configure_args+=(--disable-lavf)
+    fi
+    tmux_run "x264 configure" ./configure "${x264_configure_args[@]}" || exit 1
     tmux_run "x264 make" make -j"$(nproc)" || exit 1
     install_configured_executable x264 "$X264_PATH" || exit 1
     bluray_sudo mkdir -p "$(dirname -- "$version_file")" || exit 1

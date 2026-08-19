@@ -681,20 +681,37 @@ RUN set -eux; \
 
 ARG X264_COMMIT
 RUN set -eux; \
-    X264_COMMIT="${X264_COMMIT:-$(git ls-remote https://github.com/mirror/x264.git refs/heads/master | awk 'NR == 1 { print $1 }')}"; \
+    X264_OFFICIAL=https://code.videolan.org/videolan/x264.git; \
+    X264_MIRROR=https://github.com/mirror/x264.git; \
+    if [ -z "${X264_COMMIT:-}" ]; then \
+      for repository in "$X264_OFFICIAL" "$X264_MIRROR"; do \
+        X264_COMMIT="$(git ls-remote "$repository" refs/heads/master | awk 'NR == 1 { print $1 }')"; \
+        if [ -n "$X264_COMMIT" ]; then break; fi; \
+      done; \
+    fi; \
     test -n "$X264_COMMIT"; \
     mkdir -p /tmp/x264 && cd /tmp/x264; \
     git init x264; \
     cd x264; \
-    git remote add origin https://github.com/mirror/x264.git; \
     fetched=0; \
-    for attempt in 1 2 3 4 5; do \
-      if git fetch --depth 1 origin "$X264_COMMIT"; then fetched=1; break; fi; \
-      if [ "$attempt" -lt 5 ]; then sleep "$((attempt * 5))"; fi; \
+    for repository in "$X264_OFFICIAL" "$X264_MIRROR"; do \
+      git remote remove origin 2>/dev/null || true; \
+      git remote add origin "$repository"; \
+      for attempt in 1 2 3 4 5; do \
+        if git fetch --depth 1 origin "$X264_COMMIT"; then fetched=1; break; fi; \
+        if [ "$attempt" -lt 5 ]; then sleep "$((attempt * 5))"; fi; \
+      done; \
+      if [ "$fetched" -eq 1 ]; then break; fi; \
     done; \
     test "$fetched" -eq 1; \
     git checkout --detach FETCH_HEAD; \
-    ./configure --enable-static --bit-depth=all --chroma-format=all --disable-opencl --enable-lto; \
+    X264_LAVF_OPTION=; \
+    LIBAVUTIL_MAJOR="$(pkg-config --modversion libavutil 2>/dev/null | cut -d. -f1 || true)"; \
+    case "$LIBAVUTIL_MAJOR" in \
+      ''|*[!0-9]*) ;; \
+      *) if [ "$LIBAVUTIL_MAJOR" -ge 60 ] && { ! grep -Fq AV_FRAME_FLAG_INTERLACED input/lavf.c || ! grep -Fq AV_FRAME_FLAG_TOP_FIELD_FIRST input/lavf.c; }; then X264_LAVF_OPTION=--disable-lavf; fi ;; \
+    esac; \
+    ./configure --enable-static --bit-depth=all --chroma-format=all --disable-opencl $X264_LAVF_OPTION --enable-lto; \
     make -j"$(nproc)"; \
     install -m 0755 x264 /usr/bin/x264; \
     /usr/bin/x264 --version >/dev/null; \

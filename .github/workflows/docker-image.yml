@@ -44,7 +44,6 @@ jobs:
                 sleep $((attempt * 5))
               fi
             done
-            echo "::error::Failed to query ${source} after 5 attempts." >&2
             return 1
           }
 
@@ -54,7 +53,10 @@ jobs:
             local pattern="$3"
             local refs
             local tag
-            refs="$(retry_ls_remote "$source" --refs --tags --sort=-version:refname "$source")"
+            if ! refs="$(retry_ls_remote "$source" --refs --tags --sort=-version:refname "$source")"; then
+              echo "::error::Failed to query ${source} after 5 attempts." >&2
+              return 1
+            fi
             tag="$(awk -F 'refs/tags/' -v pattern="$pattern" 'NF == 2 && $2 ~ pattern { print $2; exit }' <<<"$refs")"
             if [[ -z "$tag" ]]; then
               echo "::error::No matching release tag found for ${source}." >&2
@@ -67,12 +69,16 @@ jobs:
             local output_name="$1"
             local source="$2"
             local branch="$3"
+            local failure_level="${4:-error}"
             local refs
             local commit
-            refs="$(retry_ls_remote "$source" --exit-code "$source" "refs/heads/${branch}")"
+            if ! refs="$(retry_ls_remote "$source" --exit-code "$source" "refs/heads/${branch}")"; then
+              echo "::${failure_level}::Failed to query ${source} after 5 attempts." >&2
+              return 1
+            fi
             commit="$(awk 'NR == 1 { print $1 }' <<<"$refs")"
             if [[ -z "$commit" ]]; then
-              echo "::error::Branch ${branch} was not found for ${source}." >&2
+              echo "::${failure_level}::Branch ${branch} was not found for ${source}." >&2
               return 1
             fi
             printf '%s=%s\n' "$output_name" "$commit" >> "$GITHUB_OUTPUT"
@@ -83,7 +89,9 @@ jobs:
           resolve_latest_tag svt_av1_tag https://gitlab.com/AOMediaCodec/SVT-AV1.git '^[vV]?[0-9]+([.][0-9]+)+$'
           resolve_latest_tag fdk_aac_tag https://github.com/mstorsjo/fdk-aac.git '^[vV]?[0-9]+([.][0-9]+)+$'
           resolve_latest_tag fdkaac_tag https://github.com/nu774/fdkaac.git '^[vV]?[0-9]+([.][0-9]+)+$'
-          resolve_branch_commit x264_commit https://github.com/mirror/x264.git master
+          if ! resolve_branch_commit x264_commit https://code.videolan.org/videolan/x264.git master warning; then
+            resolve_branch_commit x264_commit https://github.com/mirror/x264.git master
+          fi
           resolve_latest_tag tsmuxer_tag https://github.com/justdan96/tsMuxer.git '^[vV]?[0-9]+([.][0-9]+)+$'
           resolve_latest_tag hdr10plus_tag https://github.com/quietvoid/hdr10plus_tool.git '^[vV]?[0-9]+([.][0-9]+)+$'
 
