@@ -617,7 +617,6 @@ I18N_ZH_TO_EN = {
     '写入压制行错误报告失败：{error}': 'Failed to write Encode row error report: {error}',
     '取消压制后已保留产物：{paths}': 'Encode cancellation preserved artifacts: {paths}',
     '压制批处理未返回结果': 'Encode batch did not return a result',
-    '压制行失败后已保留原盘暂存文件：{path}': 'Blu-ray staging files were retained after Encode row failures: {path}',
     '正在压制 {current}/{total}': 'Encoding {current}/{total}',
     '正在复制附带文件': 'Copying companion files',
     '正在复制外挂字幕': 'Copying external subtitles',

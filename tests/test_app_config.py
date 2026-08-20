@@ -70,7 +70,7 @@ class AppConfigTests(unittest.TestCase):
         self.assertEqual(config, default_app_config())
         self.assertFalse(config.encode.check_corrupted_frames)
         self.assertEqual(config.encode.frame_check_luma_psnr_threshold_db, 30.0)
-        self.assertEqual(config.encode.frame_check_chroma_psnr_threshold_db, 40.0)
+        self.assertEqual(config.encode.frame_check_chroma_psnr_threshold_db, 30.0)
         self.assertEqual(config.encode.vpy_deband_strength, 0.5)
         self.assertEqual(config.encode.vpy_antialiasing_strength, 0.5)
 
@@ -230,19 +230,21 @@ class AppConfigTests(unittest.TestCase):
         }])
 
     def test_frozen_paths_separate_writable_config_from_packaged_template(self) -> None:
-        executable = Path(r"C:\Portable\BluraySubtitle\BluraySubtitle_windows_x64.exe")
-        bundle_root = Path(r"C:\Portable\BluraySubtitle\_internal")
-        with (
-            patch.object(sys, "frozen", True, create=True),
-            patch.object(sys, "executable", str(executable)),
-            patch.object(sys, "_MEIPASS", str(bundle_root), create=True),
-        ):
-            self.assertEqual(application_directory(), executable.parent)
-            self.assertEqual(app_config_path(), executable.parent / "config.json")
-            self.assertEqual(
-                default_config_path(),
-                bundle_root / "config.default.json",
-            )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            executable = root / "BluraySubtitle_windows_x64.exe"
+            bundle_root = root / "_internal"
+            with (
+                patch.object(sys, "frozen", True, create=True),
+                patch.object(sys, "executable", str(executable)),
+                patch.object(sys, "_MEIPASS", str(bundle_root), create=True),
+            ):
+                self.assertEqual(application_directory(), executable.parent)
+                self.assertEqual(app_config_path(), executable.parent / "config.json")
+                self.assertEqual(
+                    default_config_path(),
+                    bundle_root / "config.default.json",
+                )
 
     def test_frozen_settings_source_is_seeded_and_loaded_as_an_override(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -415,7 +417,7 @@ class SettingsGuiTests(unittest.TestCase):
             QDialogButtonBox.StandardButton.RestoreDefaults
         ).click()
         self.assertEqual(dialog.frame_check_luma_psnr_threshold_spin.value(), 30.0)
-        self.assertEqual(dialog.frame_check_chroma_psnr_threshold_spin.value(), 40.0)
+        self.assertEqual(dialog.frame_check_chroma_psnr_threshold_spin.value(), 30.0)
         dialog.close()
 
     def test_custom_encode_preset_editor_filters_and_protects_built_ins(self) -> None:
@@ -615,6 +617,7 @@ class SettingsGuiTests(unittest.TestCase):
                         "--dolby-vision-rpu",
                     }),
                 ) as x265_probe,
+                patch.object(sys, "platform", "win32"),
             ):
                 dialog = SettingsDialog(
                     default_app_config(),

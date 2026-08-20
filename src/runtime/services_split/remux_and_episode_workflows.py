@@ -1276,7 +1276,6 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             warning = translate_text(
                 'Automatic black-border detection can be wrong; verify the encoded picture.'
             )
-            self.encode_warnings.append(warning)
             self._progress(text=warning)
 
         def write_comparison_images(
@@ -2183,23 +2182,8 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 main_progress_span=640,
                 sp_progress_span=160,
             )
-            if batch_result.failed_rows:
-                retained_stage_folders = list(dict.fromkeys(
-                    os.path.dirname(path)
-                    for path in staged_main_files + [
-                        path for _entry_index, path in created_sp_files
-                    ]
-                    if path
-                ))
-                for retained_stage_folder in retained_stage_folders:
-                    staging_message = translate_text(
-                        'Blu-ray staging files were retained after Encode row failures: {path}'
-                    ).format(path=retained_stage_folder)
-                    self.encode_warnings.append(staging_message)
-                    self._progress(text=staging_message)
         finally:
-            keep_staging = bool(batch_result and batch_result.failed_rows)
-            if not keep_staging and main_stage_started and request.staging_folder:
+            if main_stage_started and request.staging_folder:
                 managed_stage_root = os.path.abspath(os.path.normpath(request.staging_folder))
                 for staged_main_file in planned_main_stage_files:
                     staged_path = os.path.abspath(os.path.normpath(staged_main_file))
@@ -2212,14 +2196,12 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     if not is_managed_stage and os.path.isfile(staged_path):
                         force_remove_file(staged_path)
             if (
-                    not keep_staging
-                    and staging_disc_folder
+                    staging_disc_folder
                     and os.path.isdir(staging_disc_folder)
             ):
                 shutil.rmtree(staging_disc_folder, ignore_errors=True)
             if (
-                    not keep_staging
-                    and not staging_parent_existed
+                    not staging_parent_existed
                     and request.staging_folder
                     and os.path.isdir(request.staging_folder)
             ):

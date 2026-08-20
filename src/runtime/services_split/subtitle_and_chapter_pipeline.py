@@ -693,6 +693,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
 
         episode_identification = _svc_cls()._mkvmerge_identify_json(episode_mkv)
         episode_track_type_by_id: dict[int, str] = {}
+        episode_timeline_origin_by_type: dict[str, int] = {}
         muxable_track_count = 0
         for track in episode_identification.get('tracks') or []:
             if not isinstance(track, dict):
@@ -702,6 +703,15 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
             if track_type not in ('video', 'audio', 'subtitles'):
                 continue
             muxable_track_count += 1
+            properties = track.get('properties') or {}
+            if isinstance(properties, dict) and track_type in ('video', 'audio'):
+                try:
+                    episode_timeline_origin_by_type.setdefault(
+                        track_type,
+                        int(properties['minimum_timestamp']),
+                    )
+                except (KeyError, TypeError, ValueError):
+                    pass
             try:
                 episode_track_type_by_id[int(track.get('id'))] = track_type
             except Exception:
@@ -724,6 +734,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
         sp_identification = _svc_cls()._mkvmerge_identify_json(sp_mpls_path)
         sp_track_id_to_pid: dict[int, int] = {}
         sp_track_type_by_id: dict[int, str] = {}
+        sp_timeline_origin_by_type: dict[str, int] = {}
         for track in sp_identification.get('tracks') or []:
             if not isinstance(track, dict):
                 continue
@@ -735,6 +746,14 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
             properties = track.get('properties') or {}
             if not isinstance(properties, dict):
                 properties = {}
+            if track_type in ('video', 'audio'):
+                try:
+                    sp_timeline_origin_by_type.setdefault(
+                        track_type,
+                        int(properties['minimum_timestamp']),
+                    )
+                except (KeyError, TypeError, ValueError):
+                    pass
             transport_pid = SubtitleChapterPipelineMixin._mkvmerge_ident_transport_pid(properties)
             if transport_pid is None or track_type not in ('audio', 'subtitles', 'video'):
                 continue
@@ -825,6 +844,21 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
         if not track_order_parts:
             return False
         track_order_argument = ','.join(track_order_parts)
+        episode_timeline_origin = episode_timeline_origin_by_type.get('video')
+        if episode_timeline_origin is None:
+            episode_timeline_origin = episode_timeline_origin_by_type.get('audio')
+        sp_timeline_origin = sp_timeline_origin_by_type.get('video')
+        if sp_timeline_origin is None:
+            sp_timeline_origin = sp_timeline_origin_by_type.get('audio')
+        if sp_timeline_origin is None:
+            # mkvmerge identifies Blu-ray playlists without minimum timestamps,
+            # but packetizes their input timeline from zero.
+            sp_timeline_origin = 0
+        sp_timeline_sync_ms = (
+            int(round((episode_timeline_origin - sp_timeline_origin) / 1_000_000))
+            if episode_timeline_origin is not None
+            else 0
+        )
         output_stem, output_extension = os.path.splitext(episode_mkv)
         temporary_output = f'{output_stem}.tmp{output_extension}'
         try:
@@ -858,6 +892,10 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
         else:
             command_parts.append('-S')
         for track_id in selected_sp_track_ids:
+            # Shift the whole SP input timeline once; per-track normalization would
+            # destroy intentional audio offsets and subtitle event timing.
+            if sp_timeline_sync_ms:
+                command_parts.extend(['--sync', f'{track_id}:{sp_timeline_sync_ms}'])
             language = str(language_by_sp_track_id.get(str(track_id)) or '').strip()
             if language:
                 command_parts.extend(['--language', f'{track_id}:{language}'])

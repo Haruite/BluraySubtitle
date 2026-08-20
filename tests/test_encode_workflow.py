@@ -51,7 +51,7 @@ def _settings(
         auto_crop_black_borders: bool = False,
         check_corrupted_frames: bool = False,
         frame_check_luma_psnr_threshold_db: float = 30.0,
-        frame_check_chroma_psnr_threshold_db: float = 40.0,
+        frame_check_chroma_psnr_threshold_db: float = 30.0,
 ) -> EncodeSettings:
     return EncodeSettings(
         vspipe_mode='bundle',
@@ -1053,7 +1053,7 @@ class EncodeWorkflowTests(unittest.TestCase):
                 for message in service.progress_messages
             ))
 
-    def test_bdmv_staging_is_retained_when_an_encode_row_fails(self) -> None:
+    def test_bdmv_staging_is_removed_when_an_encode_row_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             source_folder = root / 'Disc'
@@ -1091,11 +1091,7 @@ class EncodeWorkflowTests(unittest.TestCase):
             result = service.episodes_encode(request, threading.Event())
 
             self.assertIs(result, failed_result)
-            self.assertTrue((staging_folder / 'Disc' / 'Episode.mkv').is_file())
-            self.assertTrue(any(
-                'Blu-ray staging files were retained' in message
-                for message in service.encode_warnings
-            ))
+            self.assertFalse(staging_folder.exists())
 
     def test_remux_svt_encode_omits_dolby_vision_injection_with_a_warning(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

@@ -22,7 +22,7 @@ from src.runtime import TaskCancelled
 
 
 DEFAULT_LUMA_PSNR_THRESHOLD_DB = 30.0
-DEFAULT_CHROMA_PSNR_THRESHOLD_DB = 40.0
+DEFAULT_CHROMA_PSNR_THRESHOLD_DB = 30.0
 _PSNR_FIELD_RE = re.compile(r"([a-z_]+):([^\s]+)")
 _DECODE_ERROR_MARKERS = (
     "corrupt decoded frame",

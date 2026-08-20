@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -9,7 +10,7 @@ from unittest.mock import Mock, patch
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QTableWidgetItem
 
-from src.core import ENCODE_SP_LABELS
+from src.core import ENCODE_SP_LABELS, MPLS_INFO_LABELS
 from src.runtime.gui_runtime_classes.bluray_subtitle_gui_entry import BluraySubtitleGUI
 from src.runtime.gui_runtime_split import configuration_and_modes as configuration_modes
 from src.runtime.gui_runtime_split import remux_and_episode_layout as remux_layout
@@ -67,7 +68,7 @@ class _PlaylistTable:
         return len(self._playlist_names)
 
     def cellWidget(self, row: int, column: int) -> _CheckBox | None:
-        return _CheckBox(True) if column == 3 else None
+        return _CheckBox(True) if column == MPLS_INFO_LABELS.index("main") else None
 
     def item(self, row: int, column: int) -> _TableItem | None:
         return _TableItem(self._playlist_names[row]) if column == 0 else None
@@ -104,6 +105,7 @@ class ServiceRunConfigurationTests(unittest.TestCase):
             _last_configuration_34={0: {"selected_mpls": "stale"}},
             _is_movie_mode=lambda: False,
             _generate_configuration_from_ui_inputs=lambda: current,
+            _table2_labels_for_current_mode=lambda: (),
             on_configuration=Mock(),
             _apply_main_remux_cmds_to_configuration=lambda value: applied.append(value),
             t=lambda text: text,
@@ -125,6 +127,7 @@ class ServiceRunConfigurationTests(unittest.TestCase):
         owner = SimpleNamespace(
             _movie_configuration=current,
             _is_movie_mode=lambda: True,
+            _table2_labels_for_current_mode=lambda: (),
             _refresh_movie_table2=Mock(),
             _apply_main_remux_cmds_to_configuration=lambda value: None,
             t=lambda text: text,
@@ -390,7 +393,10 @@ class ManualChapterEditingTests(unittest.TestCase):
 
         error_dialog.assert_called_once_with('attachment extract failed')
         open_folder.assert_not_called()
-        self.assertEqual(run.call_args.args[0][-2:], ['attachments', '3:tmp\\cover.jpg'])
+        self.assertEqual(
+            run.call_args.args[0][-2:],
+            ['attachments', f'3:{os.path.join("tmp", "cover.jpg")}'],
+        )
 
     def test_track_extract_opens_only_the_created_output(self) -> None:
         error_dialog = Mock()
@@ -409,7 +415,10 @@ class ManualChapterEditingTests(unittest.TestCase):
 
         error_dialog.assert_not_called()
         open_folder.assert_called_once_with('tmp')
-        self.assertEqual(run.call_args.args[0][-2:], ['tracks', '2:tmp\\track2.flac'])
+        self.assertEqual(
+            run.call_args.args[0][-2:],
+            ['tracks', f'2:{os.path.join("tmp", "track2.flac")}'],
+        )
 
 
 class SpScanLifecycleTests(unittest.TestCase):

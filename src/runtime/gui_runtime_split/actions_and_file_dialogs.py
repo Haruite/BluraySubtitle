@@ -1378,6 +1378,31 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             self._encode_thread = None
             self._encode_worker = None
 
+        def show_encode_summary(title: str, message: str) -> None:
+            dialog = QDialog(self)
+            dialog.setWindowTitle(title)
+            layout = QVBoxLayout(dialog)
+            editor = QPlainTextEdit(dialog)
+            editor.setReadOnly(True)
+            editor.setPlainText(message)
+            editor.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextEditorInteraction
+            )
+            layout.addWidget(editor)
+            close_button = QPushButton(self.t('Close'), dialog)
+            close_button.clicked.connect(dialog.accept)
+            button_row = QHBoxLayout()
+            button_row.addStretch(1)
+            button_row.addWidget(close_button)
+            layout.addLayout(button_row)
+            available = dialog.screen().availableGeometry()
+            dialog.resize(
+                min(860, max(1, available.width() - 80)),
+                min(620, max(1, available.height() - 80)),
+            )
+            editor.setFocus()
+            dialog.exec()
+
         def on_finished():
             cleanup()
             self._show_bottom_message('Blu-ray encode completed!')
@@ -1386,8 +1411,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             cleanup()
             self._show_bottom_message('Blu-ray encode completed!')
             if not bool(getattr(self, '_close_pending', False)):
-                QMessageBox.warning(
-                    self,
+                show_encode_summary(
                     self.t('Encode completed with warnings'),
                     message,
                 )
@@ -1396,8 +1420,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             cleanup()
             self._show_bottom_message('Blu-ray encode completed with errors')
             if not bool(getattr(self, '_close_pending', False)):
-                QMessageBox.warning(
-                    self,
+                show_encode_summary(
                     self.t('Encode completed with errors'),
                     message,
                 )

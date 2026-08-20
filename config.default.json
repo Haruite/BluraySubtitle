@@ -38,7 +38,7 @@
     "output_comparison_images": true,
     "check_corrupted_frames": false,
     "frame_check_luma_psnr_threshold_db": 30.0,
-    "frame_check_chroma_psnr_threshold_db": 40.0,
+    "frame_check_chroma_psnr_threshold_db": 30.0,
     "vpy_denoise_strength": 0.6,
     "vpy_dehalo_strength": 0.0,
     "vpy_dering_strength": 0.0,

@@ -1359,7 +1359,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             vpy_antialiasing_strength: float = 0.5,
             check_corrupted_frames: bool = False,
             frame_check_luma_psnr_threshold_db: float = 30.0,
-            frame_check_chroma_psnr_threshold_db: float = 40.0,
+            frame_check_chroma_psnr_threshold_db: float = 30.0,
             progress_name: str = '',
             video_progress_name: str = '',
             cancel_event: Optional[threading.Event] = None,
