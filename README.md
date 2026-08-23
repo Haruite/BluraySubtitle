@@ -430,20 +430,47 @@ Pull prebuilt:
 docker pull haruite/bluraysubtitle:latest
 ```
 
-Example run:
+PulseAudio or PipeWire-Pulse run example (recommended for most Linux desktops and remote desktop sessions):
 
 ```bash
 xhost +local:docker
 sudo docker run -it --rm \
-  --device /dev/snd \
   -e DISPLAY=$DISPLAY \
   -e LIBGL_ALWAYS_SOFTWARE=1 \
+  -e BLURAY_SUBTITLE_MPV_AUDIO_OUTPUT=pulse \
+  -e PULSE_SERVER=unix:/tmp/pulse/native \
   -v /tmp/.X11-unix:/tmp/.X11-unix \
+  -v /run/user/$(id -u)/pulse/native:/tmp/pulse/native \
+  -v bluray-subtitle-config:/config \
   -v /path/to/media:/data \
   --ipc=host \
   --shm-size=2gb \
   bluray-subtitle-ubuntu
 ```
+
+The named `bluray-subtitle-config` volume stores `config.json` and the generated `vpy.vpy`. Reuse the same volume name on later runs so settings changed in the application are loaded even when the container uses `--rm`.
+
+The container runs desktop applications as the non-root user `ubuntu` with UID/GID `1000`; mounted media must be accessible to that user.
+
+Choose exactly one of these Docker audio methods:
+
+- **PulseAudio or PipeWire-Pulse (recommended):** use the three `BLURAY_SUBTITLE_MPV_AUDIO_OUTPUT=pulse`, `PULSE_SERVER`, and `/pulse/native` options in the complete example above.
+- **Native PipeWire without PipeWire-Pulse:** replace those three Pulse options with:
+
+  ```bash
+  -e BLURAY_SUBTITLE_MPV_AUDIO_OUTPUT=pipewire \
+  -v /run/user/$(id -u)/pipewire-0:/tmp/runtime-ubuntu/pipewire-0
+  ```
+
+- **ALSA-only host:** replace the three Pulse options with the following. `controlC0` must exist, and the group option grants the non-root container user access when the host audio-group GID differs from the image:
+
+  ```bash
+  --device /dev/snd \
+  --group-add "$(stat -c '%g' /dev/snd/controlC0)" \
+  -e BLURAY_SUBTITLE_MPV_AUDIO_OUTPUT=alsa
+  ```
+
+Use `pactl info`, `wpctl status`, and `aplay -l` on the host to identify the available API. Do not expose `/dev/snd` as a fallback when the desktop PipeWire or PulseAudio server is already managing it. A non-Docker Linux source run does not need any of these forwarding options; the host mpv selects its audio output normally.
 
 Apple Silicon (amd64 container):
 
@@ -467,7 +494,7 @@ docker pull --platform linux/amd64 haruite/bluraysubtitle:latest
   - Check **`vsedit`** path.
   - Check VPy file and plugins.
 - **Docker / Linux playback issues**
-  - Check `DISPLAY`, audio forwarding, and **mpv** availability.
+  - Check `DISPLAY` and **mpv** availability. For Docker sound, verify that the selected PulseAudio/PipeWire/ALSA host endpoint exists and use the matching option set from the Docker section.
 
 ---
 

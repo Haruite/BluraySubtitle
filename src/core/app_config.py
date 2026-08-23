@@ -114,6 +114,9 @@ def application_directory() -> Path:
 
 
 def app_config_path() -> Path:
+    configured_directory = os.environ.get("BLURAY_SUBTITLE_CONFIG_DIR")
+    if configured_directory:
+        return Path(configured_directory).expanduser().resolve() / APP_CONFIG_FILENAME
     return application_directory() / APP_CONFIG_FILENAME
 
 

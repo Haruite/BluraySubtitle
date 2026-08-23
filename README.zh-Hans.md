@@ -421,20 +421,47 @@ docker build -t bluray-subtitle-ubuntu .
 docker pull haruite/bluraysubtitle:latest
 ```
 
-运行示例：
+PulseAudio 或 PipeWire-Pulse 运行示例（推荐用于大多数 Linux 桌面和远程桌面会话）：
 
 ```bash
 xhost +local:docker
 sudo docker run -it --rm \
-  --device /dev/snd \
   -e DISPLAY=$DISPLAY \
   -e LIBGL_ALWAYS_SOFTWARE=1 \
+  -e BLURAY_SUBTITLE_MPV_AUDIO_OUTPUT=pulse \
+  -e PULSE_SERVER=unix:/tmp/pulse/native \
   -v /tmp/.X11-unix:/tmp/.X11-unix \
+  -v /run/user/$(id -u)/pulse/native:/tmp/pulse/native \
+  -v bluray-subtitle-config:/config \
   -v /path/to/media:/data \
   --ipc=host \
   --shm-size=2gb \
   bluray-subtitle-ubuntu
 ```
+
+命名卷 `bluray-subtitle-config` 用于保存 `config.json` 和生成的 `vpy.vpy`。后续运行时复用同一个卷名，即使容器使用 `--rm`，程序内修改的设置也会被重新加载。
+
+容器以非 root 用户 `ubuntu`（UID/GID `1000`）运行桌面程序；挂载的媒体必须允许该用户访问。
+
+Docker 音频方式只能选择以下一种：
+
+- **PulseAudio 或 PipeWire-Pulse（推荐）：**使用上方完整示例中的 `BLURAY_SUBTITLE_MPV_AUDIO_OUTPUT=pulse`、`PULSE_SERVER` 和 `/pulse/native` 三个选项。
+- **不使用 PipeWire-Pulse 的原生 PipeWire：**将上述三个 Pulse 选项替换为：
+
+  ```bash
+  -e BLURAY_SUBTITLE_MPV_AUDIO_OUTPUT=pipewire \
+  -v /run/user/$(id -u)/pipewire-0:/tmp/runtime-ubuntu/pipewire-0
+  ```
+
+- **仅使用 ALSA 的宿主机：**将三个 Pulse 选项替换为以下内容。宿主机必须存在 `controlC0`；当宿主音频组 GID 与镜像不同时，group 选项会授予非 root 容器用户设备访问权：
+
+  ```bash
+  --device /dev/snd \
+  --group-add "$(stat -c '%g' /dev/snd/controlC0)" \
+  -e BLURAY_SUBTITLE_MPV_AUDIO_OUTPUT=alsa
+  ```
+
+可在宿主机运行 `pactl info`、`wpctl status` 和 `aplay -l` 判断可用接口。桌面的 PipeWire 或 PulseAudio 已经管理声卡时，不要再把 `/dev/snd` 作为回退暴露给容器。非 Docker 的 Linux 源码运行不需要这些转发选项，宿主机 mpv 会照常自动选择音频输出。
 
 Apple Silicon（amd64 容器）示例：
 
@@ -458,7 +485,7 @@ docker pull --platform linux/amd64 haruite/bluraysubtitle:latest
   - 检查 `vsedit` 路径；
   - 检查 VPy 文件与插件可用性。
 - Docker/Linux 播放异常：
-  - 检查 DISPLAY、音频转发、mpv 可用性。
+  - 检查 DISPLAY 和 mpv 可用性。Docker 无声时，确认所选的 PulseAudio、PipeWire 或 ALSA 宿主端点存在，并使用 Docker 章节中对应的一组选项。
 
 ---
 

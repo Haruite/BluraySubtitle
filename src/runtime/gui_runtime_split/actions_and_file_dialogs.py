@@ -2475,17 +2475,28 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     pass
             if in_docker:
                 try:
-                    my_env = os.environ.copy()
-                    my_env["LD_LIBRARY_PATH"] = "/usr/local/lib/mpv-bundle:" + my_env.get("LD_LIBRARY_PATH", "")
                     sub_file = _select_subtitle_file_for_mpls(mpls_path)
+                    command = [
+                        'mpv',
+                        '--vo=x11',
+                        '--profile=sw-fast',
+                        '--hwdec=no',
+                        '--framedrop=vo',
+                        '--osc=yes',
+                        f'--bluray-device={mpls_path[:-25]}',
+                    ]
+                    audio_output = os.environ.get(
+                        'BLURAY_SUBTITLE_MPV_AUDIO_OUTPUT',
+                        '',
+                    ).strip().lower()
+                    if audio_output in {'alsa', 'pipewire', 'pulse'}:
+                        command.append(f'--ao={audio_output}')
+                    elif os.environ.get('PULSE_SERVER'):
+                        command.append('--ao=pulse')
                     if sub_file:
-                        run_command(
-                            f'mpv --vo=x11 --profile=sw-fast --hwdec=no --framedrop=vo --sub-file="{sub_file}" bd://mpls/{mpls_path[-10:-5]} --bluray-device="{mpls_path[:-25]}"',
-                            env=my_env)
-                    else:
-                        run_command(
-                            f'mpv --vo=x11 --profile=sw-fast --hwdec=no --framedrop=vo bd://mpls/{mpls_path[-10:-5]} --bluray-device="{mpls_path[:-25]}"',
-                            env=my_env)
+                        command.append(f'--sub-file={sub_file}')
+                    command.append(f'bd://mpls/{mpls_path[-10:-5]}')
+                    run_command(command)
                     return
                 except Exception:
                     pass

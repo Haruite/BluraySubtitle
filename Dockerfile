@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl git wget unzip xz-utils tar sed pkg-config \
     build-essential cmake ninja-build autoconf automake libtool \
     python3 python3-pip python3-venv python3-dev python3-sphinx \
-    fonts-wqy-microhei flac gedit nautilus mkvtoolnix mkvtoolnix-gui \
+    fonts-wqy-microhei flac gedit nautilus mkvtoolnix mkvtoolnix-gui pipewire-bin \
     libegl1 libopengl0 libglib2.0-0 libxkbcommon0 libdbus-1-3 \
     libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 \
     libxcb-xinerama0 libxcb-xinput0 libxcb-render-util0 \
@@ -27,7 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libass-dev libfribidi-dev libfreetype-dev libfontconfig1-dev libharfbuzz-dev libuchardet-dev \
     libgl1-mesa-dev libvdpau-dev libva-dev libx11-dev libxext-dev libxv-dev libxinerama-dev \
     libwayland-dev libxkbcommon-dev libegl1-mesa-dev libplacebo-dev libspirv-cross-c-shared-dev libshaderc-dev \
-    libasound2-dev libpulse-dev libjack-dev libpipewire-0.3-dev \
+    libasound2-dev libpulse-dev libjack-dev libpipewire-0.3-dev libluajit-5.1-dev \
     libdav1d-dev libdovi-dev \
     libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev \
     libmujs-dev libbluray-dev libxrandr-dev libxpresent-dev libxss-dev libdvdnav-dev libdvdread-dev \
@@ -115,6 +115,7 @@ RUN set -eux; \
     echo "--enable-libdav1d" >> ffmpeg_options; \
     echo "--enable-libopus" >> ffmpeg_options; \
     echo "-Dlibbluray=enabled" > mpv_options; \
+    echo "-Dlua=luajit" >> mpv_options; \
     ./rebuild -j"$(nproc)"; \
     ./install; \
     install -m 0755 build_libs/bin/ffmpeg /usr/bin/ffmpeg; \
@@ -762,6 +763,7 @@ RUN pkg-config --exists dovi \
     && test -x /usr/local/bin/fdkaac \
     && test -x /usr/local/bin/vsedit \
     && test -x /usr/local/bin/vspipe \
+    && /usr/local/bin/mpv --list-options | grep -F ' --osc ' >/dev/null \
     && test -x /usr/bin/tsMuxeR \
     && test -x /usr/bin/mkvinfo \
     && test -x /usr/bin/mkvmerge \
@@ -773,4 +775,12 @@ ENV LD_PRELOAD=/usr/local/lib/libvapoursynth-script.so
 
 WORKDIR /app
 COPY src/ /app/src/
-CMD ["python3", "-m", "src.main"]
+COPY config.default.json /app/config.default.json
+RUN install -d -m 0755 -o ubuntu -g ubuntu /config \
+    && install -d -m 0700 -o ubuntu -g ubuntu /tmp/runtime-ubuntu
+ENV BLURAY_SUBTITLE_CONFIG_DIR=/config
+ENV HOME=/home/ubuntu
+ENV XDG_RUNTIME_DIR=/tmp/runtime-ubuntu
+VOLUME ["/config"]
+USER ubuntu
+CMD ["dbus-run-session", "--", "python3", "-m", "src.main"]

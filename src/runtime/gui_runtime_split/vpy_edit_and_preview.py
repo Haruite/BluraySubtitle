@@ -456,6 +456,11 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
             print_exc_terminal()
 
     def get_default_vpy_path(self) -> str:
+        config_directory = os.environ.get('BLURAY_SUBTITLE_CONFIG_DIR')
+        if config_directory:
+            return os.path.normpath(
+                os.path.abspath(os.path.join(config_directory, 'vpy.vpy'))
+            )
         return os.path.normpath(os.path.abspath('vpy.vpy'))
 
     def ensure_default_vpy_file(self):
