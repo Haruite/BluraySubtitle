@@ -9,7 +9,7 @@ from typing import Optional
 
 from PyQt6.QtCore import Qt, QTimer, QCoreApplication, QThread, QObject
 from PyQt6.QtWidgets import QTableWidget, QToolButton, QPlainTextEdit, QWidget, QTableWidgetItem, QComboBox, \
-    QProgressDialog, QProgressBar
+    QProgressDialog, QProgressBar, QMessageBox
 
 from src.bdmv import Chapter
 from src.core import BDMV_LABELS, DIY_BDMV_LABELS, DIY_REMUX_LABELS, find_mkvtoolnix, \
@@ -1395,6 +1395,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         if isinstance(self._remux_worker, QObject):
             for terminal_signal in (
                     self._remux_worker.finished,
+                    self._remux_worker.finished_with_warnings,
                     self._remux_worker.canceled,
                     self._remux_worker.failed,
             ):
@@ -1416,11 +1417,18 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         def on_canceled():
             cleanup()
 
+        def on_finished_with_warnings(message: str):
+            cleanup()
+            title = self.t('Blu-ray remux completed with warnings')
+            self._show_bottom_message('Blu-ray remux completed with warnings')
+            QMessageBox.warning(self, title, message)
+
         def on_failed(message: str):
             cleanup()
             self._show_error_dialog(message)
 
         self._remux_worker.finished.connect(on_finished)
+        self._remux_worker.finished_with_warnings.connect(on_finished_with_warnings)
         self._remux_worker.canceled.connect(on_canceled)
         self._remux_worker.failed.connect(on_failed)
         self._remux_thread.start()

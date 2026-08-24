@@ -4,6 +4,7 @@ from typing import Optional
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
+from src.core.i18n import translate_text
 from src.exports.utils import mkvmerge_cancellation_scope, print_tb_string_terminal, print_terminal_line
 from src.runtime.remux import RemuxRequest
 from src.runtime import TaskCancelled
@@ -14,6 +15,7 @@ class RemuxWorker(QObject):
     progress = pyqtSignal(int)
     label = pyqtSignal(str)
     finished = pyqtSignal()
+    finished_with_warnings = pyqtSignal(str)
     canceled = pyqtSignal()
     failed = pyqtSignal(str)
 
@@ -57,5 +59,12 @@ class RemuxWorker(QObject):
             print_tb_string_terminal(tb)
             self.failed.emit(tb)
         else:
-            print_terminal_line('[BluraySubtitle] Remux worker: finished successfully.')
-            self.finished.emit()
+            warnings = tuple(getattr(bs, 'remux_warnings', ()) or ())
+            if warnings:
+                print_terminal_line(translate_text(
+                    '[BluraySubtitle] Remux worker: finished with warnings.'
+                ))
+                self.finished_with_warnings.emit('\n\n'.join(str(warning) for warning in warnings))
+            else:
+                print_terminal_line('[BluraySubtitle] Remux worker: finished successfully.')
+                self.finished.emit()

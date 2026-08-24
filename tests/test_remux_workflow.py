@@ -26,7 +26,9 @@ from tests._gui_worker_fakes import RequestWorkerCapture
 
 
 class _FakeWorker(RequestWorkerCapture):
-    pass
+    signal_names = (
+        'progress', 'label', 'finished', 'finished_with_warnings', 'canceled', 'failed',
+    )
 
 
 class _FakeChapter:
@@ -620,6 +622,147 @@ class RemuxWorkflowTests(unittest.TestCase):
             )
             self.assertFalse(expected_output.exists())
 
+    def test_mpls_track_id_change_enters_track_aligned_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            playlist_dir = root / 'BDMV' / 'PLAYLIST'
+            stream_dir = root / 'BDMV' / 'STREAM'
+            playlist_dir.mkdir(parents=True)
+            stream_dir.mkdir(parents=True)
+            mpls_path = playlist_dir / '00002.mpls'
+            first_m2ts = stream_dir / '00002.m2ts'
+            second_m2ts = stream_dir / '00003.m2ts'
+            for path in (mpls_path, first_m2ts, second_m2ts):
+                path.write_bytes(b'media')
+            reference_slots = [
+                {'type': 'video', 'pid': 0x1011, 'index': '0'},
+                {'type': 'audio', 'pid': 0x1100, 'index': '1'},
+                {'type': 'subtitles', 'pid': 0x1200, 'index': '4'},
+            ]
+            identification = {'tracks': [
+                {'id': 0, 'type': 'video', 'properties': {'stream_id': 0x1011}},
+                {'id': 1, 'type': 'audio', 'properties': {'stream_id': 0x1100}},
+                {'id': 4, 'type': 'subtitles', 'properties': {'stream_id': 0x1200}},
+            ]}
+            chapter = SimpleNamespace(in_out_time=[
+                ('00002', 0, 45000),
+                ('00003', 0, 45000),
+            ])
+            owner = SimpleNamespace(_dovi_mux_plan=None)
+
+            def mapped_ids(_slots, path):
+                return [0, 1, 4] if os.path.normpath(path) == os.path.normpath(first_m2ts) else [0, 1, 2]
+
+            with patch.object(track_mapping_module, '_svc_cls', return_value=MediaInfoTrackMappingMixin), patch.object(
+                    track_mapping_module, 'Chapter', return_value=chapter), patch.object(
+                    MediaInfoTrackMappingMixin, '_probe_m2ts_for_remux_source',
+                    return_value=(str(first_m2ts), str(mpls_path))), patch.object(
+                    MediaInfoTrackMappingMixin, '_ordered_track_slots_for_remux',
+                    return_value=reference_slots), patch.object(
+                    MediaInfoTrackMappingMixin, '_mkvmerge_identify_json',
+                    return_value=identification), patch.object(
+                    MediaInfoTrackMappingMixin, '_clip_ref_slots_for_m2ts',
+                    return_value=reference_slots), patch.object(
+                    MediaInfoTrackMappingMixin, '_map_slots_to_mkvmerge_track_ids',
+                    side_effect=mapped_ids):
+                result = MediaInfoTrackMappingMixin._mkvmerge_identify_covers_remux_slots(
+                    owner, str(mpls_path), ['1'], ['4']
+                )
+
+            self.assertFalse(result)
+
+    def test_empty_output_track_is_reported_from_statistics(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source = root / '00002.mpls'
+            probe = root / '00002.m2ts'
+            output = root / 'Episode.mkv'
+            for path in (source, probe, output):
+                path.write_bytes(b'media')
+            slots = [
+                {'type': 'video', 'pid': 0x1011, 'index': '0'},
+                {'type': 'audio', 'pid': 0x1100, 'index': '1'},
+                {'type': 'subtitles', 'pid': 0x1200, 'index': '4'},
+            ]
+            identification = {'tracks': [
+                {'id': 0, 'type': 'video', 'properties': {'uid': 10}},
+                {'id': 1, 'type': 'audio', 'properties': {'uid': 11}},
+                {'id': 2, 'type': 'subtitles', 'properties': {'uid': 12}},
+            ]}
+            tags = '''<?xml version="1.0"?>
+<Tags>
+  <Tag><Targets><TrackUID>10</TrackUID></Targets><Simple><Name>NUMBER_OF_FRAMES</Name><String>100</String></Simple><Simple><Name>NUMBER_OF_BYTES</Name><String>1000</String></Simple></Tag>
+  <Tag><Targets><TrackUID>11</TrackUID></Targets><Simple><Name>NUMBER_OF_FRAMES</Name><String>100</String></Simple><Simple><Name>NUMBER_OF_BYTES</Name><String>1000</String></Simple></Tag>
+  <Tag><Targets><TrackUID>12</TrackUID></Targets><Simple><Name>NUMBER_OF_FRAMES</Name><String>0</String></Simple><Simple><Name>NUMBER_OF_BYTES</Name><String>0</String></Simple></Tag>
+</Tags>'''
+
+            with patch.object(track_mapping_module, '_svc_cls', return_value=MediaInfoTrackMappingMixin), patch.object(
+                    track_mapping_module, 'find_mkvtoolnix'), patch.object(
+                    track_mapping_module, 'run_command', return_value=SimpleNamespace(
+                        returncode=0, stdout=tags, stderr=''
+                    )), patch.object(
+                    MediaInfoTrackMappingMixin, '_probe_m2ts_for_remux_source',
+                    return_value=(str(probe), str(source))), patch.object(
+                    MediaInfoTrackMappingMixin, '_ordered_track_slots_for_remux',
+                    return_value=slots), patch.object(
+                    MediaInfoTrackMappingMixin, '_mkvmerge_identify_json',
+                    return_value=identification):
+                warnings = MediaInfoTrackMappingMixin._remux_output_track_warnings(
+                    str(source), ['1'], ['4'], str(output)
+                )
+
+            self.assertEqual(len(warnings), 1)
+            self.assertIn('track ID 2', warnings[0])
+
+    def test_track_validation_failure_is_collected_without_failing_remux(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            mpls_path = root / '00001.mpls'
+            expected_output = root / 'expected.mkv'
+            mpls_path.write_bytes(b'mpls')
+            job = RemuxMainJob(
+                configuration_keys=(0,),
+                configurations=({'selected_mpls': str(mpls_path.with_suffix('')), 'bdmv_index': 1},),
+                bdmv_index=1,
+                command='mkvmerge -o expected.mkv 00001.mpls',
+                m2ts_file='',
+                volume='001',
+                primary_output=str(expected_output),
+                mpls_path=str(mpls_path),
+                audio_tracks=(),
+                subtitle_tracks=(),
+                expected_outputs=(str(expected_output),),
+                final_outputs=(str(root / 'Final.mkv'),),
+            )
+
+            def primary(_command):
+                expected_output.write_bytes(b'mkv')
+                return 0, [0]
+
+            owner = SimpleNamespace(
+                track_selection_config={},
+                remux_warnings=[],
+                t=lambda text: text,
+                _progress=lambda *args, **kwargs: None,
+                _set_dovi_mux_plan_for_mpls=lambda _path, **_kwargs: None,
+                _dovi_mux_plan=None,
+                _mkvmerge_identify_covers_remux_slots=lambda *args: True,
+                _run_shell_command_detailed=primary,
+                _try_remux_mpls_split_outputs_track_aligned=lambda *args, **kwargs: False,
+                _try_remux_mpls_track_aligned=lambda *args, **kwargs: False,
+                _remux_output_track_warnings=Mock(side_effect=RuntimeError('probe failed')),
+            )
+            fake_service_class = SimpleNamespace(
+                _fallback_track_lists=lambda command, audio, subtitle: (audio, subtitle),
+            )
+
+            with patch.object(remux_service_module, '_svc_cls', return_value=fake_service_class):
+                result = RemuxEpisodeWorkflowsMixin._build_main_episode_mkvs(owner, [job])
+
+            self.assertEqual(result, [str(expected_output)])
+            self.assertEqual(len(owner.remux_warnings), 1)
+            self.assertIn('probe failed', owner.remux_warnings[0])
+
     def test_fallback_output_receives_the_captured_track_languages(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -663,6 +806,7 @@ class RemuxWorkflowTests(unittest.TestCase):
                 _run_shell_command_detailed=lambda command: (2, [2]),
                 _try_remux_mpls_split_outputs_track_aligned=lambda *args, **kwargs: False,
                 _try_remux_mpls_track_aligned=fallback,
+                _remux_output_track_warnings=lambda *args, **kwargs: [],
             )
 
             chapter = SimpleNamespace(in_out_time=[('00001', 0, 45000)])

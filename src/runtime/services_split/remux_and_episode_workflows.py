@@ -603,6 +603,12 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         for job_index, job in enumerate(jobs, start=1):
             if cancel_event and cancel_event.is_set():
                 raise TaskCancelled()
+            job_progress_base = mux_progress_base + int(
+                (job_index - 1) / max(len(jobs), 1) * mux_progress_span
+            )
+            job_progress_end = mux_progress_base + int(
+                job_index / max(len(jobs), 1) * mux_progress_span
+            )
             configurations = [dict(conf) for conf in job.configurations]
             if job.mpls_path:
                 config_key = media_track_key('main', job.mpls_path)
@@ -692,6 +698,8 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                         fallback_subtitle,
                         cover,
                         cancel_event=cancel_event,
+                        progress_base=job_progress_base,
+                        progress_span=job_progress_end - job_progress_base,
                     )
                 elif not split_output:
                     self._progress(text=self.t(
@@ -741,10 +749,33 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                             force_remove_file(output_path)
                     raise
 
+            warning_list = getattr(self, 'remux_warnings', None)
+            if not isinstance(warning_list, list):
+                warning_list = getattr(self, 'encode_warnings', None)
+            if not isinstance(warning_list, list):
+                warning_list = []
+                self.remux_warnings = warning_list
+            for output_path in job.expected_outputs:
+                try:
+                    output_warnings = self._remux_output_track_warnings(
+                        job.mpls_path,
+                        list(job.audio_tracks),
+                        list(job.subtitle_tracks),
+                        output_path,
+                        getattr(self, '_dovi_mux_plan', None),
+                    )
+                except TaskCancelled:
+                    raise
+                except Exception as error:
+                    output_warnings = [translate_text(
+                        'Remux output track validation failed: {path}. {error}'
+                    ).format(path=output_path, error=error)]
+                warning_list.extend(output_warnings)
+                for warning in output_warnings:
+                    print(f'{translate_text("[remux-verify] ")}{warning}')
+
             completed_outputs.extend(job.expected_outputs)
-            self._progress(
-                mux_progress_base + int(job_index / max(len(jobs), 1) * mux_progress_span)
-            )
+            self._progress(job_progress_end)
         return completed_outputs
 
     @staticmethod
@@ -1079,6 +1110,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             cancel_event: Optional[threading.Event] = None,
     ) -> None:
         """Run one complete Remux request without consulting GUI or directory contents."""
+        self.remux_warnings = []
         self.checked = request.complete_bluray_folder
         self.movie_mode = request.movie_mode
         self.sub_files = list(request.subtitle_files)

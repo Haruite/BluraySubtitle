@@ -129,8 +129,9 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
         stop2 = f"{min(1.0, ratio + 0.001):.3f}"
         percent = ratio * 100
 
-        cancel_suffix = self.t("(click to cancel)") if getattr(self, '_current_cancel_event',
-                                                        None) is not None and t != self.t('Canceling...') else ""
+        cancel_suffix = f" {self.t('(click to cancel)')}" if getattr(
+            self, '_current_cancel_event', None
+        ) is not None and t != self.t('Canceling...') else ""
         if t:
             self.exe_button.setText(f"{t}{cancel_suffix} {percent:.1f}%")
         else:

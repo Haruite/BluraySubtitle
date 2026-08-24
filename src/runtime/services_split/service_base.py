@@ -39,6 +39,7 @@ class BluraySubtitleServiceBase:
         self.encode_warnings = None
         self.movie_mode = None
         self.progress_dialog = None
+        self.remux_warnings = None
         self.sub_files = None
         self.tmp_folders = None
 
@@ -58,6 +59,10 @@ class BluraySubtitleServiceBase:
                 setattr(_fn, "__service_base_stub__", True)
 
     # BEGIN GENERATED MIXIN CONTRACTS
+    @staticmethod
+    def _add_cover_attachment_with_mkvpropedit(mkv_path: str, cover_path: str, ui_language_argument: str) -> bool:
+        raise NotImplementedError
+
     def _apply_episode_output_names(self, mkv_files: list[str], output_names: Optional[list[str]]=None) -> list[str]:
         raise NotImplementedError
 
@@ -364,6 +369,10 @@ class BluraySubtitleServiceBase:
         raise NotImplementedError
 
     @staticmethod
+    def _remux_output_track_warnings(source_path: str, copy_audio_track: list[str], copy_sub_track: list[str], output_path: str, dovi_plan: Optional[dict[str, object]]=None) -> list[str]:
+        raise NotImplementedError
+
+    @staticmethod
     def _remux_parsed_chapter_bounds_for_theory_count(cmd: str, confs: list[dict[str, int | str]], mpls_path0: str, n_expect: int) -> Optional[list[tuple[int, int]]]:
         raise NotImplementedError
 
@@ -440,7 +449,7 @@ class BluraySubtitleServiceBase:
     def _track_lists_from_mkvmerge_cmd(cmd: str) -> tuple[Optional[list[str]], Optional[list[str]]]:
         raise NotImplementedError
 
-    def _try_remux_mpls_split_outputs_track_aligned(self, mpls_path: str, output_file: str, episode_configurations: list[dict[str, int | str]], selected_audio_indices: list[str], selected_subtitle_indices: list[str], cover_path: str, cancel_event: Optional[threading.Event]=None) -> bool:
+    def _try_remux_mpls_split_outputs_track_aligned(self, mpls_path: str, output_file: str, episode_configurations: list[dict[str, int | str]], selected_audio_indices: list[str], selected_subtitle_indices: list[str], cover_path: str, cancel_event: Optional[threading.Event]=None, *, progress_base: int=0, progress_span: int=380) -> bool:
         raise NotImplementedError
 
     def _try_remux_mpls_track_aligned(self, mpls_path: str, output_file: str, selected_audio_indices: list[str], selected_subtitle_indices: list[str], cover_path: str, cancel_event: Optional[threading.Event]=None, *, max_play_items: Optional[int]=None) -> bool:

@@ -10,6 +10,7 @@ import sys
 import tempfile
 import threading
 import time
+import xml.etree.ElementTree as ET
 from typing import Callable, Optional
 
 import numpy as np
@@ -21,7 +22,7 @@ from src.core import FFPROBE_PATH, FFMPEG_PATH, FLAC_PATH, MKV_MERGE_PATH, \
     find_mkvtoolnix, get_mkvtoolnix_ui_language, mkvtoolnix_ui_language_arg
 from src.core import settings as core_settings
 from src.core.i18n import translate_text
-from src.exports.utils import get_effective_bit_depth, get_time_str, parse_time_to_seconds, print_exc_terminal, get_index_to_m2ts_and_offset, run_command
+from src.exports.utils import force_remove_file, get_effective_bit_depth, get_time_str, parse_time_to_seconds, print_exc_terminal, get_index_to_m2ts_and_offset, run_command
 from src.runtime.audio_conversion import AudioEncodingSettings
 from .service_base import BluraySubtitleServiceBase
 from src.runtime.dolby_vision import mux_dolby_vision_layers
@@ -1686,6 +1687,133 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         return mapped_track_ids
 
     @staticmethod
+    def _remux_output_track_warnings(
+            source_path: str,
+            copy_audio_track: list[str],
+            copy_sub_track: list[str],
+            output_path: str,
+            dovi_plan: Optional[dict[str, object]] = None,
+    ) -> list[str]:
+        """Return non-blocking warnings for missing or empty selected Remux output tracks."""
+        probe_m2ts, mpls_path = _svc_cls()._probe_m2ts_for_remux_source(source_path)
+        expected_slots = _svc_cls()._ordered_track_slots_for_remux(
+            probe_m2ts,
+            list(copy_audio_track or []),
+            list(copy_sub_track or []),
+            dovi_plan=dovi_plan,
+            mpls_path=mpls_path,
+        )
+        identification = _svc_cls()._mkvmerge_identify_json(output_path)
+        tracks = [track for track in identification.get('tracks') or [] if isinstance(track, dict)]
+        if not tracks:
+            return [translate_text(
+                'Remux output track validation could not identify: {path}'
+            ).format(path=output_path)]
+
+        expected_counts = {'video': 0, 'audio': 0, 'subtitles': 0}
+        for slot in expected_slots:
+            slot_type = str(slot.get('type') or '').strip().lower()
+            if slot_type == 'subtitle':
+                slot_type = 'subtitles'
+            if slot_type in expected_counts:
+                expected_counts[slot_type] += 1
+        actual_tracks: dict[str, list[dict[str, object]]] = {
+            'video': [], 'audio': [], 'subtitles': [],
+        }
+        for track in tracks:
+            track_type = str(track.get('type') or '').strip().lower()
+            if track_type == 'subtitle':
+                track_type = 'subtitles'
+            if track_type in actual_tracks:
+                actual_tracks[track_type].append(track)
+
+        warnings: list[str] = []
+        for track_type, expected_count in expected_counts.items():
+            actual_count = len(actual_tracks[track_type])
+            if actual_count != expected_count:
+                warnings.append(translate_text(
+                    'Remux output track count mismatch: {path}; {type} expected {expected}, got {actual}'
+                ).format(
+                    path=output_path,
+                    type=track_type,
+                    expected=expected_count,
+                    actual=actual_count,
+                ))
+
+        try:
+            find_mkvtoolnix()
+        except Exception:
+            pass
+        mkvextract_executable = (
+            core_settings.MKV_EXTRACT_PATH or shutil.which('mkvextract') or 'mkvextract'
+        )
+        try:
+            result = run_command(
+                [mkvextract_executable, output_path, 'tags'],
+                capture_output=True,
+                text=True,
+                encoding='utf-8-sig',
+                errors='replace',
+            )
+            if result.returncode != 0:
+                raise RuntimeError(str(result.stderr or result.stdout or result.returncode))
+            root = ET.fromstring(result.stdout or '')
+        except TaskCancelled:
+            raise
+        except Exception:
+            warnings.append(translate_text(
+                'Remux output track statistics could not be read: {path}'
+            ).format(path=output_path))
+            return warnings
+
+        statistics_by_uid: dict[int, dict[str, int]] = {}
+        for tag in root.findall('./Tag'):
+            try:
+                track_uid = int(tag.findtext('./Targets/TrackUID') or '')
+            except ValueError:
+                continue
+            values: dict[str, int] = {}
+            for simple in tag.findall('./Simple'):
+                name = str(simple.findtext('./Name') or '').strip()
+                if name not in ('NUMBER_OF_FRAMES', 'NUMBER_OF_BYTES'):
+                    continue
+                try:
+                    values[name] = int(simple.findtext('./String') or '')
+                except ValueError:
+                    continue
+            if values:
+                statistics_by_uid[track_uid] = values
+
+        found_track_statistics = False
+        for track_type, typed_tracks in actual_tracks.items():
+            for track in typed_tracks:
+                properties = track.get('properties') if isinstance(track.get('properties'), dict) else {}
+                try:
+                    track_uid = int(properties.get('uid'))
+                except (TypeError, ValueError):
+                    continue
+                statistics = statistics_by_uid.get(track_uid)
+                if not statistics:
+                    continue
+                found_track_statistics = True
+                if (
+                        statistics.get('NUMBER_OF_FRAMES', 1) == 0
+                        or statistics.get('NUMBER_OF_BYTES', 1) == 0
+                ):
+                    warnings.append(translate_text(
+                        'Remux output track contains no data: {path}; track ID {track_id} ({type})'
+                    ).format(
+                        path=output_path,
+                        track_id=track.get('id'),
+                        type=track_type,
+                    ))
+        if not found_track_statistics:
+            warnings.append(translate_text(
+                'Remux output track statistics could not be read: {path}'
+            ).format(path=output_path))
+        return warnings
+
+    @staticmethod
     def _resolve_mpls_path_from_conf(conf: dict[str, int | str], bdmv_root: str = '') -> str:
         """Absolute ``.mpls`` path from configuration row (``folder`` + ``selected_mpls`` stem or rel path)."""
         folder = os.path.normpath(str(conf.get('folder') or bdmv_root or '')).rstrip(os.sep)
@@ -1908,6 +2036,42 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 'remux slot PID not found on identify (stream_id)',
                 missing_slots=missing_slots,
             )
+            return False
+        reference_track_ids = _svc_cls()._map_slots_to_mkvmerge_track_ids(
+            ref_slots, probe_m2ts
+        )
+        playlist_dir = os.path.dirname(os.path.normpath(mpls_path or src))
+        stream_dir = os.path.normpath(os.path.join(playlist_dir, '..', 'STREAM'))
+        try:
+            play_items = list(Chapter(mpls_path or src).in_out_time or [])
+        except Exception:
+            play_items = []
+        for clip_name, _in_time, _out_time in play_items:
+            clip_filename = str(clip_name or '').strip()
+            if not clip_filename:
+                continue
+            if not clip_filename.lower().endswith('.m2ts'):
+                clip_filename += '.m2ts'
+            clip_path = os.path.normpath(os.path.join(stream_dir, clip_filename))
+            clip_slots = _svc_cls()._clip_ref_slots_for_m2ts(
+                ref_slots, clip_path, dovi_plan if isinstance(dovi_plan, dict) else None
+            )
+            clip_track_ids = (
+                _svc_cls()._map_slots_to_mkvmerge_track_ids(clip_slots, clip_path)
+                if clip_slots is not None and os.path.isfile(clip_path)
+                else None
+            )
+            if clip_track_ids == reference_track_ids and clip_track_ids is not None:
+                continue
+            message = translate_text(
+                "[remux-fallback] Playlist clip track IDs differ from the first play item; "
+                "using track-aligned fallback: {path} (first: {expected}; clip: {actual})"
+            ).format(
+                path=clip_path,
+                expected=reference_track_ids if reference_track_ids is not None else '?',
+                actual=clip_track_ids if clip_track_ids is not None else '?',
+            )
+            print(message)
             return False
         if isinstance(dovi_plan, dict) and dovi_plan.get('active'):
             if dovi_plan.get('mux_enabled'):
@@ -2845,6 +3009,8 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 errors='replace',
                 timeout=7200,
             ).returncode
+        except TaskCancelled:
+            raise
         except Exception:
             return None
         if return_code != 0:
@@ -2874,6 +3040,40 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         except OSError:
             return False
         return os.path.isfile(part_path)
+
+    @staticmethod
+    def _add_cover_attachment_with_mkvpropedit(
+            mkv_path: str,
+            cover_path: str,
+            ui_language_argument: str,
+    ) -> bool:
+        """Add the selected cover in place without rewriting the Matroska media payload."""
+        if not cover_path or not os.path.isfile(cover_path):
+            return True
+        mkvpropedit_executable = (
+            core_settings.MKV_PROP_EDIT_PATH or shutil.which('mkvpropedit') or ''
+        )
+        if not mkvpropedit_executable:
+            print(translate_text('mkvpropedit not found'))
+            return False
+        command = [mkvpropedit_executable]
+        if ui_language_argument:
+            command.extend(ui_language_argument.split())
+        command.extend([
+            mkv_path,
+            '--attachment-name', 'Cover.jpg',
+            '--add-attachment', cover_path,
+        ])
+        print(translate_text('[remux-fallback] adding cover in place: {command}').format(
+            command=subprocess.list2cmdline(command)
+        ))
+        result = run_command(command)
+        if result.returncode not in (0, 1):
+            print(translate_text(
+                '[remux-fallback] adding cover failed with exit code {code}: {path}'
+            ).format(code=result.returncode, path=mkv_path))
+            return False
+        return os.path.isfile(mkv_path)
 
     @staticmethod
     def _slot_pids_in_order(slots: list[dict[str, object]]) -> list[int]:
@@ -3130,6 +3330,8 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 return False
             try:
                 mux_dolby_vision_layers(base_layer_path, enhancement_layer_path)
+            except TaskCancelled:
+                raise
             except Exception as error:
                 print(
                     translate_text('Dolby Vision mux failed: {error}').format(error=error)
@@ -3431,21 +3633,23 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 return False
             if cancel_event and cancel_event.is_set():
                 raise TaskCancelled()
-            if len(part_outputs) == 1 and not (
-                    cover_path and os.path.isfile(cover_path)
-            ):
+            if len(part_outputs) == 1:
+                if (
+                        cover_path and os.path.isfile(cover_path)
+                        and not _svc_cls()._add_cover_attachment_with_mkvpropedit(
+                            part_outputs[0], cover_path, ui_language_argument
+                        )
+                ):
+                    return False
                 os.replace(part_outputs[0], output_file)
                 return os.path.isfile(output_file)
 
             command = [mkvmerge_executable]
             if ui_language_argument:
                 command.extend(ui_language_argument.split())
-            if len(part_outputs) == 1:
-                command.extend(['-o', output_file, part_outputs[0]])
-            else:
-                command.extend(['--append-mode', 'file', '-o', output_file, part_outputs[0]])
-                for part_output in part_outputs[1:]:
-                    command.extend(['+', part_output])
+            command.extend(['--append-mode', 'file', '-o', output_file, part_outputs[0]])
+            for part_output in part_outputs[1:]:
+                command.extend(['+', part_output])
             if cover_path and os.path.isfile(cover_path):
                 command.extend(['--attachment-name', 'Cover.jpg', '--attach-file', cover_path])
             print(f'[remux-fallback] concat: {subprocess.list2cmdline(command)}')
@@ -3473,6 +3677,9 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             selected_subtitle_indices: list[str],
             cover_path: str,
             cancel_event: Optional[threading.Event] = None,
+            *,
+            progress_base: int = 0,
+            progress_span: int = 380,
     ) -> bool:
         """Create multiple PID-aligned episode outputs after direct MPLS splitting fails.
 
@@ -3542,19 +3749,35 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         _, index_to_offset = get_index_to_m2ts_and_offset(chapter)
         tolerance_seconds = 1e-5
         try:
+            bdmv_index = int(episode_configurations[0].get('bdmv_index') or 0)
+        except (IndexError, TypeError, ValueError):
+            bdmv_index = 0
+        volume_label = f'{bdmv_index:03d}' if bdmv_index > 0 else '?'
+        mpls_label = os.path.basename(mpls_path) or mpls_path
+        try:
             print(
                 f'[remux-fallback-split] start: {len(episode_bounds)} episodes -> '
                 f'{", ".join(os.path.basename(path) for path in expected_outputs)}'
             )
-            try:
-                self._progress(text=f'Multi-episode split fallback: {len(episode_bounds)} MKV...')
-            except Exception:
-                pass
             for episode_index, ((start_chapter, end_chapter), episode_output) in enumerate(
                     zip(episode_bounds, expected_outputs)
             ):
                 if cancel_event and cancel_event.is_set():
                     raise TaskCancelled()
+                progress_text = translate_text(
+                    'BD Vol {volume} / {mpls} · Fallback episode {current}/{total}'
+                ).format(
+                    volume=volume_label,
+                    mpls=mpls_label,
+                    current=episode_index + 1,
+                    total=len(episode_bounds),
+                )
+                self._progress(
+                    value=progress_base + int(
+                        episode_index / max(len(episode_bounds), 1) * progress_span
+                    ),
+                    text=progress_text,
+                )
                 episode_start = (
                     chapter.get_total_time()
                     if start_chapter >= exclusive_playlist_end
@@ -3645,34 +3868,47 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                     return False
                 if cancel_event and cancel_event.is_set():
                     raise TaskCancelled()
-                cover_argument = ''
-                if cover_path and os.path.isfile(cover_path):
-                    cover_argument = f'--attachment-name Cover.jpg --attach-file "{cover_path}"'
-                command_parts = [f'"{mkvmerge_executable}"']
-                if ui_language_argument:
-                    command_parts.append(ui_language_argument)
                 if len(clip_outputs) == 1:
-                    command_parts += ['-o', f'"{episode_output}"', f'"{clip_outputs[0]}"']
+                    if (
+                            cover_path and os.path.isfile(cover_path)
+                            and not _svc_cls()._add_cover_attachment_with_mkvpropedit(
+                                clip_outputs[0], cover_path, ui_language_argument
+                            )
+                    ):
+                        return False
+                    os.replace(clip_outputs[0], episode_output)
                 else:
+                    cover_argument = ''
+                    if cover_path and os.path.isfile(cover_path):
+                        cover_argument = f'--attachment-name Cover.jpg --attach-file "{cover_path}"'
+                    command_parts = [f'"{mkvmerge_executable}"']
+                    if ui_language_argument:
+                        command_parts.append(ui_language_argument)
                     command_parts += [
                         '--append-mode', 'file', '-o', f'"{episode_output}"', f'"{clip_outputs[0]}"',
                     ]
                     for clip_output in clip_outputs[1:]:
                         command_parts += ['+', f'"{clip_output}"']
-                if cover_argument:
-                    command_parts.append(cover_argument)
-                command = ' '.join(command_parts)
-                print(f'[remux-fallback-split] segment {episode_index + 1}: {command}')
-                return_code = self._run_single_command(command)
-                if return_code not in (0, 1):
-                    print(
-                        f'[remux-fallback-split] segment concat failed '
-                        f'rc={return_code} seg={episode_index}'
-                    )
-                    return False
+                    if cover_argument:
+                        command_parts.append(cover_argument)
+                    command = ' '.join(command_parts)
+                    print(f'[remux-fallback-split] segment {episode_index + 1}: {command}')
+                    return_code = self._run_single_command(command)
+                    if return_code not in (0, 1):
+                        print(
+                            f'[remux-fallback-split] segment concat failed '
+                            f'rc={return_code} seg={episode_index}'
+                        )
+                        return False
                 if not os.path.isfile(episode_output):
                     print(f'[remux-fallback-split] missing output: {episode_output}')
                     return False
+                self._progress(
+                    value=progress_base + int(
+                        (episode_index + 1) / max(len(episode_bounds), 1) * progress_span
+                    ),
+                    text=progress_text,
+                )
             return all(os.path.isfile(path) for path in expected_outputs)
         except TaskCancelled:
             for expected_output in expected_outputs:
