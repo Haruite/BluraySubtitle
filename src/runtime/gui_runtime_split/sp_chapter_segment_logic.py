@@ -696,7 +696,13 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
     def _closest_endpoint(self, start_idx: int, target_sec: float, rows: int, offsets: dict[int, float],
                           m2ts: dict[int, str], checked: list[bool],
                           approx_episode_sec: Optional[float] = None) -> int:
-        playlist_end = float(offsets.get(rows + 1, 0.0))
+        # An unchecked chapter segment ends the current selectable run. Its start node is still the
+        # valid exclusive endpoint for the preceding checked segment, even when it is inside one M2TS.
+        checked_run_end = next(
+            (endpoint for endpoint in range(start_idx + 1, rows + 1) if not checked[endpoint - 1]),
+            rows + 1,
+        )
+        checked_run_end_offset = float(offsets.get(checked_run_end, offsets.get(rows + 1, 0.0)))
         min_tail_sec = 0.0
         if approx_episode_sec is not None:
             try:
@@ -704,19 +710,17 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             except (TypeError, ValueError):
                 min_tail_sec = 0.0
         candidates = []
-        for endpoint in range(start_idx + 1, rows + 2):
-            if endpoint != rows + 1 and not checked[endpoint - 1]:
-                continue
-            remaining = playlist_end - float(offsets.get(endpoint, playlist_end))
-            if endpoint == rows + 1 or remaining >= min_tail_sec:
+        for endpoint in range(start_idx + 1, checked_run_end + 1):
+            remaining = checked_run_end_offset - float(offsets.get(endpoint, checked_run_end_offset))
+            if endpoint == checked_run_end or remaining >= min_tail_sec:
                 candidates.append(endpoint)
         if not candidates:
-            return rows + 1
+            return checked_run_end
         chapter_end = min(candidates, key=lambda e: abs(
             (offsets.get(e, offsets[rows + 1]) - offsets.get(start_idx, 0.0)) - target_sec))
         file_candidates = []
         for e in candidates:
-            if e == rows + 1:
+            if e == checked_run_end:
                 file_candidates.append(e)
                 continue
             prev_f = m2ts.get(e - 1, '')
@@ -1192,8 +1196,8 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                             continue
                         if v == ending_value:
                             item.setEnabled(bool(last_chapter_checked))
-                        elif 1 <= v <= len(checked_states):
-                            item.setEnabled(item.isEnabled() and bool(checked_states[v - 1]))
+                        elif 2 <= v <= len(checked_states) + 1:
+                            item.setEnabled(item.isEnabled() and bool(checked_states[v - 2]))
 
     def _unchecked_segments_from_checkbox_states(self, mpls_path: str) -> tuple[list[tuple[int, int]], dict[int, str]]:
         """Filtered table row indices (same as ChapterWindow.get_unchecked_segments) from _chapter_checkbox_states."""

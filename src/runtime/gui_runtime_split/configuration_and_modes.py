@@ -490,6 +490,20 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             conf: dict[int, dict[str, int | str]] = {}
             rows = self.table2.rowCount()
             node_cache: dict[str, dict[str, object]] = {}
+            selected_context: dict[str, tuple[str, int]] = {}
+            for selected_folder, selected_mpls_no_ext in selected_mpls:
+                mpls_key = str(selected_mpls_no_ext or '').strip()
+                if not mpls_key:
+                    continue
+                folder_key = os.path.normpath(str(selected_folder or '').strip())
+                bdmv_index = self._bdmv_index_for_table1_folder_norm(folder_key)
+                if bdmv_index <= 0:
+                    for previous_row in prev_conf.values():
+                        if str(previous_row.get('selected_mpls') or '').strip() == mpls_key:
+                            bdmv_index = int(previous_row.get('bdmv_index') or 0)
+                            break
+                selected_context[mpls_key] = (folder_key, bdmv_index)
+                node_cache[mpls_key] = self._chapter_node_data(mpls_key)
             last_end_by_mpls: dict[str, int] = {}
             pending_remove_rows = getattr(self, '_chapter_pending_remove_row', -1)
             remove_rows: set[int] = set()
@@ -670,7 +684,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     last_end_by_mpls[_m] = int(_row.get('end_at_chapter') or 0)
             # Add episode rows until each MPLS playlist tail is covered (table2 row count must not cap segments).
             _exp_guard = 0
-            while conf and _exp_guard < 512:
+            while node_cache and _exp_guard < 512:
                 _exp_guard += 1
                 _expanded = False
                 for mpls_no_ext, node in list(node_cache.items()):
@@ -687,7 +701,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     le = int(last_end_by_mpls.get(mpls_no_ext, 0) or 0)
                     if le >= total_rows + 1:
                         continue
-                    start_idx = le
+                    start_idx = max(1, le)
                     if start_idx > total_rows:
                         continue
                     while start_idx <= total_rows and not checked[start_idx - 1]:
@@ -704,6 +718,8 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                             folder = str(_row.get('folder') or '')
                             disc_output_name = str(_row.get('disc_output_name') or '')
                             break
+                    if bdmv_index <= 0 and mpls_no_ext in selected_context:
+                        folder, bdmv_index = selected_context[mpls_no_ext]
                     if bdmv_index <= 0:
                         continue
                     target_sec = approx_end_time

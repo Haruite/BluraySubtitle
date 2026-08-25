@@ -33,29 +33,32 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
             return {}
         total = len(configuration)
         width = len(str(total))
-        by_bdmv: dict[int, list[int]] = {}
-        for sub_index, con in configuration.items():
-            try:
-                bdmv_index = int(con.get('bdmv_index') or 0)
-            except Exception:
-                bdmv_index = 0
-            by_bdmv.setdefault(bdmv_index, []).append(sub_index)
-        for bdmv_index in by_bdmv:
-            by_bdmv[bdmv_index].sort(key=lambda i: int(configuration[i].get('chapter_index') or 0))
-
-        result: dict[int, str] = {}
-        for sub_index in sorted(configuration.keys()):
+        ordered_indices = sorted(configuration.keys())
+        rows_by_volume: dict[int, list[int]] = {}
+        volume_by_row: dict[int, int] = {}
+        for sub_index in ordered_indices:
             con = configuration[sub_index]
             try:
                 bdmv_index = int(con.get('bdmv_index') or 0)
             except Exception:
                 bdmv_index = 0
+            rows_by_volume.setdefault(bdmv_index, []).append(sub_index)
+            volume_by_row[sub_index] = bdmv_index
+
+        sequence_by_row: dict[int, int] = {}
+        for rows in rows_by_volume.values():
+            sequence_rows = rows
+            if not all(str(configuration[i].get('selected_mpls') or '').strip() for i in rows):
+                sequence_rows = sorted(rows, key=lambda i: int(configuration[i].get('chapter_index') or 0))
+            for sequence, sub_index in enumerate(sequence_rows, 1):
+                sequence_by_row[sub_index] = sequence
+
+        result: dict[int, str] = {}
+        for sub_index in ordered_indices:
+            con = configuration[sub_index]
+            bdmv_index = volume_by_row[sub_index]
             bdmv_vol = f'{bdmv_index:03d}'
-            rows_in_vol = by_bdmv.get(bdmv_index, [])
-            try:
-                seq_in_vol = rows_in_vol.index(sub_index) + 1
-            except Exception:
-                seq_in_vol = 1
+            seq_in_vol = sequence_by_row[sub_index]
             output_name = str(con.get('disc_output_name') or '').strip()
             if not output_name:
                 output_name = self._resolve_output_name_from_mpls(str(con.get('selected_mpls') or ''))
