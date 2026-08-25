@@ -1046,3 +1046,24 @@ Blu-ray DIY 压制及“编辑轨道”中的通用视频转换仍不在本阶�
 - 没有修改生产源码或产品行为，因此 README、i18n 和代码规范无需更新；本双语历史条目用于记录这次较大的测试维护。
 - 精简后的套件包含 240 项专项测试；240 项全部通过，Python 编译、i18n、split contract、`git diff --check` 和 CRLF 检查也通过。
 - 本次只修改自动测试覆盖，不写入或执行生产媒体工作流，因此不需要真实媒体检查。
+
+## 主 MPLS PID 选择契约
+
+日期：2026-08-25
+
+### 契约与命令规划
+
+- 主播放列表与有 MPLS 的 SP GUI 契约由“首个 PlayItem 流索引”改为直接读取 `mkvmerge` MPLS 分析结果并保存“轨道类型 + MPEG PID”；GUI 行顺序和界面显示的 mkvmerge 轨道 ID 不再作为执行输入持久化。
+- MPLS PID 选择通过 `RemuxRequest` 快照以及规范化的 `RemuxMainJob.track_pids`／`SpJob.track_pids` 字段传递。Service 按 identify 顺序解析并缓存 MPLS PID→轨道 ID 参考，以此生成 `-a`、`-s`；MKV 与无 MPLS 的单 M2TS SP 继续使用各自的源文件本地轨道 ID，并从对应 CLPI 读取语言。
+- 主轨／SP 语言修正、输出轨道校验、分集 SP PID 归属及回退路径统一消费同一组 PID 槽位，不再从首个 M2TS 反推选择。图片抽取不进入混流轨道契约。
+
+### 预检与回退路由
+
+- 任意主轨或 SP 直接 MPLS 混流开始前，先把命令的 `--split parts:` 区间投影到 MPLS 时间线，只分析重叠的 M2TS；边界采用与 mkvmerge 毫秒时间码一致的容差。
+- 每个已选 `(轨道类型, PID)` 都必须在 MPLS 和每个纳入命令的 M2TS 上具有 mkvmerge 直接映射，而且每个 M2TS 本地 ID 必须等于 MPLS 参考 ID。映射缺失或变化时在长时间直接混流开始前进入现有 PID 对齐回退。命令区间外片段不参与检查；未选择轨道的缺失只有在不导致已选 PID 本地 ID 前移时才不会触发回退。
+- 集中复用 MPLS identify 行、PID 映射、命令区间 PlayItem 筛选和 Dolby Vision PID 槽位过滤。identify 结果按规范化路径、文件大小和修改时间缓存，使 GUI 显示、命令规划和预检共享稳定参考而不重复扫描。
+
+### 验证
+
+- 未修改测试文件；现有 Remux、SP、Encode 边界、配置、纯函数与静态契约测试均通过，同时通过 Python 编译、i18n、split contract、差异和 CRLF 检查。
+- 真实媒体只读检查使用《葬送的芙莉莲 Season 2》Vol.1 与 Vol.3 的 `00002.mpls`。Vol.1 单集 parts 区间只选中 `00002.m2ts` 并保留直接混流；完整播放列表中的 `00003.m2ts` 至 `00005.m2ts` 缺少未选评论 PID `0x1101`，使已选 PGS PID `0x1200` 从 MPLS 轨道 ID 3 前移为 M2TS 轨道 ID 2，因此进入回退。Vol.3 同样在混流前检出已选 PGS PID `0x1200` 从 MPLS 轨道 ID 4 变为 M2TS 轨道 ID 2。

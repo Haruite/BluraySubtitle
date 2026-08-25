@@ -27,6 +27,8 @@ class RemuxRequest:
     convert_lossless_audio_to_flac: bool = True
     clean_audio_tracks: bool = True
     audio_encoding: AudioEncodingSettings = AudioEncodingSettings()
+    # ``main::`` and MPLS-backed ``sp::`` values are MPEG PIDs grouped by type.
+    # MKV and no-MPLS single-M2TS SP keys retain source-local track IDs.
     track_selection_config: dict[str, dict[str, list[str]]] | None = None
     track_language_config: dict[str, dict[str, str]] | None = None
     ensure_tools: bool = False
@@ -34,7 +36,7 @@ class RemuxRequest:
 
 @dataclass(frozen=True)
 class RemuxMainJob:
-    """One selected main playlist, its one command, and all planned outputs."""
+    """One selected main playlist, its PID selection, command, and planned outputs."""
 
     configuration_keys: tuple[int, ...]
     configurations: tuple[dict[str, int | str], ...]
@@ -44,12 +46,16 @@ class RemuxMainJob:
     volume: str
     primary_output: str
     mpls_path: str
+    # Main-job values are decimal PID strings retained for command placeholders and logs.
     audio_tracks: tuple[str, ...]
     subtitle_tracks: tuple[str, ...]
     expected_outputs: tuple[str, ...]
     final_outputs: tuple[str, ...]
     m2ts_file_details: tuple[str, ...] = ()
     track_language_overrides: tuple[tuple[str, str], ...] = ()
+    # Canonical main-track contract: (``video`` | ``audio`` | ``subtitles``, MPEG PID).
+    # Tuple order follows MPLS identify only; GUI row order has no runtime meaning.
+    track_pids: tuple[tuple[str, int], ...] = ()
 
 
 __all__ = ['RemuxMainJob', 'RemuxRequest']

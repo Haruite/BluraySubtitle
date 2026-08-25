@@ -63,6 +63,10 @@ class BluraySubtitleServiceBase:
     def _add_cover_attachment_with_mkvpropedit(mkv_path: str, cover_path: str, ui_language_argument: str) -> bool:
         raise NotImplementedError
 
+    @staticmethod
+    def _aligned_output_track_ids_for_pid_slots(media_path: str, selected_pid_slots: list[tuple[str, int]]) -> Optional[tuple[list[str], list[str], dict[int, int]]]:
+        raise NotImplementedError
+
     def _apply_episode_output_names(self, mkv_files: list[str], output_names: Optional[list[str]]=None) -> list[str]:
         raise NotImplementedError
 
@@ -152,6 +156,10 @@ class BluraySubtitleServiceBase:
         raise NotImplementedError
 
     @staticmethod
+    def _filter_pid_slots_for_dovi_plan(slots: list[dict[str, object]], dovi_plan: Optional[dict[str, object]]) -> list[dict[str, object]]:
+        raise NotImplementedError
+
+    @staticmethod
     def _filter_video_pids_for_dovi_plan(video_pids: list[int], dovi_plan: Optional[dict[str, object]]) -> list[int]:
         raise NotImplementedError
 
@@ -160,7 +168,7 @@ class BluraySubtitleServiceBase:
         raise NotImplementedError
 
     @staticmethod
-    def _fix_output_track_languages_with_mkvpropedit(output_mkv_path: str, input_m2ts_path: str, selected_audio_ids: list[str], selected_sub_ids: list[str], override_lang_by_source_index: Optional[dict[str, str]]=None, dovi_plan: Optional[dict[str, object]]=None) -> None:
+    def _fix_output_track_languages_with_mkvpropedit(output_mkv_path: str, input_source_path: str, selected_audio_ids: list[str], selected_sub_ids: list[str], override_lang_by_source_index: Optional[dict[str, str]]=None, dovi_plan: Optional[dict[str, object]]=None, selected_pid_slots: Optional[list[tuple[str, int]]]=None) -> None:
         raise NotImplementedError
 
     @staticmethod
@@ -217,7 +225,7 @@ class BluraySubtitleServiceBase:
         raise NotImplementedError
 
     @staticmethod
-    def _map_selected_tracks_to_mpls_track_ids(mpls_path: str, selected_audio_track_indexes: list[str], selected_sub_track_indexes: list[str]) -> tuple[list[str], list[str]]:
+    def _map_selected_pids_to_mpls_track_ids(mpls_path: str, selected_audio_pids: list[str], selected_subtitle_pids: list[str]) -> tuple[list[str], list[str]]:
         raise NotImplementedError
 
     @staticmethod
@@ -240,7 +248,10 @@ class BluraySubtitleServiceBase:
     def _mkvmerge_ident_transport_pid(properties: object) -> Optional[int]:
         raise NotImplementedError
 
-    def _mkvmerge_identify_covers_remux_slots(self, source_path: str, copy_audio_track: list[str], copy_sub_track: list[str]) -> bool:
+    def _mkvmerge_identify_covers_mpls_pid_slots(self, mpls_path: str, selected_pid_slots: list[tuple[str, int]], remux_command: str) -> bool:
+        raise NotImplementedError
+
+    def _mkvmerge_identify_covers_remux_slots(self, source_path: str, copy_audio_track: list[str], copy_sub_track: list[str], remux_command: str='', selected_pid_slots: Optional[list[tuple[str, int]]]=None) -> bool:
         raise NotImplementedError
 
     @staticmethod
@@ -256,6 +267,10 @@ class BluraySubtitleServiceBase:
         raise NotImplementedError
 
     @staticmethod
+    def _mkvmerge_pid_id_map(media_path: str, identification: Optional[dict[str, object]]=None) -> dict[tuple[str, int], int]:
+        raise NotImplementedError
+
+    @staticmethod
     def _mkvmerge_select_flags_from_mapped(mapped_track_ids: list[int], identification: dict[str, object]) -> tuple[str, str, str]:
         raise NotImplementedError
 
@@ -265,6 +280,10 @@ class BluraySubtitleServiceBase:
 
     @staticmethod
     def _mkvmerge_track_ids_by_type(media_path: str, track_type: str) -> list[int]:
+        raise NotImplementedError
+
+    @staticmethod
+    def _mkvmerge_track_streams_for_mpls(mpls_path: str) -> list[dict[str, object]]:
         raise NotImplementedError
 
     def _movie_sp_covered_by_table2(self, bdmv_index: int, sp_detail: str, table2_details: list[str]) -> bool:
@@ -282,7 +301,11 @@ class BluraySubtitleServiceBase:
     def _mpls_identify_pids_by_type(ident: dict[str, object]) -> dict[str, list[int]]:
         raise NotImplementedError
 
-    def _mux_episode_linked_sp_mkvmerge(self, *, episode_mkv: str, sp_mpls_path: str, episode_main_mpls: str, selected_sp_audio_track_ids: list[str], selected_sp_subtitle_track_ids: list[str], language_by_sp_track_id: dict[str, str], cancel_event: Optional[threading.Event]) -> bool:
+    @staticmethod
+    def _mpls_play_items_for_remux_command(mpls_path: str, remux_command: str) -> list[tuple[str, int, int]]:
+        raise NotImplementedError
+
+    def _mux_episode_linked_sp_mkvmerge(self, *, episode_mkv: str, sp_mpls_path: str, episode_main_mpls: str, selected_sp_audio_track_ids: list[str], selected_sp_subtitle_track_ids: list[str], language_by_sp_track_id: dict[str, str], cancel_event: Optional[threading.Event], source_pid_by_track_id: Optional[dict[int, int]]=None) -> bool:
         raise NotImplementedError
 
     @staticmethod
@@ -369,7 +392,7 @@ class BluraySubtitleServiceBase:
         raise NotImplementedError
 
     @staticmethod
-    def _remux_output_track_warnings(source_path: str, copy_audio_track: list[str], copy_sub_track: list[str], output_path: str, dovi_plan: Optional[dict[str, object]]=None) -> list[str]:
+    def _remux_output_track_warnings(source_path: str, copy_audio_track: list[str], copy_sub_track: list[str], output_path: str, dovi_plan: Optional[dict[str, object]]=None, selected_pid_slots: Optional[list[tuple[str, int]]]=None) -> list[str]:
         raise NotImplementedError
 
     @staticmethod
@@ -397,6 +420,10 @@ class BluraySubtitleServiceBase:
         raise NotImplementedError
 
     def _select_tracks_for_source(self, source_path: str, pid_to_lang: Optional[dict[int, str]]=None, config_key: Optional[str]=None) -> tuple[list[str], list[str]]:
+        raise NotImplementedError
+
+    @staticmethod
+    def _selected_pid_slots_for_mpls(mpls_path: str, track_configuration: dict[str, object]) -> list[dict[str, object]]:
         raise NotImplementedError
 
     @staticmethod
@@ -449,10 +476,10 @@ class BluraySubtitleServiceBase:
     def _track_lists_from_mkvmerge_cmd(cmd: str) -> tuple[Optional[list[str]], Optional[list[str]]]:
         raise NotImplementedError
 
-    def _try_remux_mpls_split_outputs_track_aligned(self, mpls_path: str, output_file: str, episode_configurations: list[dict[str, int | str]], selected_audio_indices: list[str], selected_subtitle_indices: list[str], cover_path: str, cancel_event: Optional[threading.Event]=None, *, progress_base: int=0, progress_span: int=380) -> bool:
+    def _try_remux_mpls_split_outputs_track_aligned(self, mpls_path: str, output_file: str, episode_configurations: list[dict[str, int | str]], selected_audio_indices: list[str], selected_subtitle_indices: list[str], cover_path: str, cancel_event: Optional[threading.Event]=None, *, progress_base: int=0, progress_span: int=380, selected_pid_slots: Optional[list[tuple[str, int]]]=None) -> bool:
         raise NotImplementedError
 
-    def _try_remux_mpls_track_aligned(self, mpls_path: str, output_file: str, selected_audio_indices: list[str], selected_subtitle_indices: list[str], cover_path: str, cancel_event: Optional[threading.Event]=None, *, max_play_items: Optional[int]=None) -> bool:
+    def _try_remux_mpls_track_aligned(self, mpls_path: str, output_file: str, selected_audio_indices: list[str], selected_subtitle_indices: list[str], cover_path: str, cancel_event: Optional[threading.Event]=None, *, max_play_items: Optional[int]=None, selected_pid_slots: Optional[list[tuple[str, int]]]=None) -> bool:
         raise NotImplementedError
 
     @staticmethod

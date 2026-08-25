@@ -46,6 +46,8 @@ class SpTableScanWorker(QObject):
                 try:
                     if str(key).lower().endswith('.m2ts'):
                         v = BluraySubtitle._m2ts_track_streams(key)
+                    elif str(key).lower().endswith('.mpls'):
+                        v = BluraySubtitle._mkvmerge_track_streams_for_mpls(key)
                     else:
                         v = BluraySubtitle._read_media_streams(key)
                 except Exception:
@@ -55,6 +57,12 @@ class SpTableScanWorker(QObject):
 
             def _available_tracks(streams: list[dict[str, object]]) -> dict[str, list[str]]:
                 return {
+                    'video': [
+                        str(stream.get('index', '')).strip()
+                        for stream in streams
+                        if str(stream.get('codec_type') or '') == 'video'
+                        and str(stream.get('index', '')).strip()
+                    ],
                     'audio': [
                         str(stream.get('index', '')).strip()
                         for stream in streams
@@ -141,6 +149,9 @@ class SpTableScanWorker(QObject):
 
                 if force_disabled:
                     disabled = True
+                elif mpls_path:
+                    if not os.path.isfile(mpls_path) or not _streams(mpls_path):
+                        disabled = True
                 elif not m2ts_paths:
                     disabled = True
                 else:
@@ -174,7 +185,7 @@ class SpTableScanWorker(QObject):
                             if m2ts_type in ('private_or_other', 'mixed_non_video'):
                                 disabled = True
                                 allow_tracks_when_disabled = True
-                        if mpls_path and os.path.exists(mpls_path) and m2ts_paths:
+                        if mpls_path and os.path.exists(mpls_path):
                             try:
                                 ch = Chapter(mpls_path)
                                 ch.get_pid_to_language()
@@ -182,7 +193,7 @@ class SpTableScanWorker(QObject):
                             except Exception:
                                 pid_to_lang = {}
                             try:
-                                streams = _streams(m2ts_paths[0])
+                                streams = _streams(mpls_path)
                             except Exception:
                                 streams = []
                             if pid_to_lang:
@@ -194,7 +205,11 @@ class SpTableScanWorker(QObject):
                             try:
                                 available_tracks = _available_tracks(streams)
                                 a, s = BluraySubtitle._default_track_selection_from_streams(streams, pid_to_lang)
-                                tracks_payload = {'audio': a, 'subtitle': s}
+                                tracks_payload = {
+                                    'video': list(available_tracks.get('video') or []),
+                                    'audio': a,
+                                    'subtitle': s,
+                                }
                             except Exception:
                                 tracks_payload = {}
                         elif m2ts_paths:
@@ -208,9 +223,20 @@ class SpTableScanWorker(QObject):
                                     pid_to_lang = pid_to_lang_from_m2ts_path(m2ts_paths[0])
                                 except Exception:
                                     pid_to_lang = {}
+                                pid_to_lang = {
+                                    int(pid): pid_to_lang.get(int(pid), 'und')
+                                    for stream in streams
+                                    if (
+                                        pid := BluraySubtitle._stream_service_id(stream)
+                                    ) is not None
+                                }
                                 available_tracks = _available_tracks(streams)
                                 a, s = BluraySubtitle._default_track_selection_from_streams(streams, pid_to_lang)
-                                tracks_payload = {'audio': a, 'subtitle': s}
+                                tracks_payload = {
+                                    'video': list(available_tracks.get('video') or []),
+                                    'audio': a,
+                                    'subtitle': s,
+                                }
                             except Exception:
                                 tracks_payload = {}
                         uniq_m2ts_paths = list(dict.fromkeys([p for p in m2ts_paths if p]))

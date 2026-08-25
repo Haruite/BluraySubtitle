@@ -1049,3 +1049,24 @@ Date: 2026-08-08 Commit: `8e5551a`
 - No production source or product behavior changed. README, i18n, and code standards therefore required no update; this bilingual history entry records the major test-maintenance change.
 - The resulting suite contains 240 focused tests. All 240 passed, together with Python compilation, i18n and split-contract checks, `git diff --check`, and CRLF verification.
 - No real-media check is required because the change modifies only automated test coverage and does not write or execute production media workflows.
+
+## Main MPLS PID Selection Contract
+
+Date: 2026-08-25
+
+### Contract and Command Planning
+
+- Replaced the main-playlist and MPLS-backed SP GUI contracts based on first-play-item stream indexes with track-type/MPEG-PID selections read directly from `mkvmerge` MPLS identification. GUI row order and displayed mkvmerge track IDs are no longer persisted as execution inputs.
+- MPLS PID selections now travel in the `RemuxRequest` snapshot and the canonical `RemuxMainJob.track_pids` / `SpJob.track_pids` fields. The Service resolves the cached MPLS PID-to-track-ID reference in identify order and uses that reference to build `-a` and `-s`; MKV and no-MPLS single-M2TS SP selections keep their source-local track-ID contract, with languages read from the matching CLPI.
+- Main/SP language correction, output-track verification, linked-SP PID ownership, and fallback variants consume the same PID slots instead of reconstructing selections from the first M2TS. Image extraction remains outside the mux-track contract.
+
+### Preflight and Fallback Routing
+
+- Before any direct main or SP MPLS muxing starts, the command's `--split parts:` ranges are projected onto the MPLS timeline. Only overlapping M2TS files are identified, with millisecond boundary tolerance matching mkvmerge timecodes.
+- Every selected `(track type, PID)` must have a direct mkvmerge mapping on the MPLS and each included M2TS, and every M2TS-local ID must equal the MPLS reference ID. Missing or changed mappings enter the existing PID-aligned fallback before the long direct mux runs. Clips outside the command ranges are ignored; an absent unselected track is harmless only while it does not renumber a selected PID's local ID.
+- Centralized reusable MPLS identify rows, PID maps, command-scoped play-item selection, and Dolby Vision PID-slot filtering. Identify results are cached by normalized path, size, and modification time so GUI display, command planning, and preflight share one stable reference without repeated scans.
+
+### Verification
+
+- Existing Remux, SP, Encode-boundary, configuration, helper, and static-contract suites passed without modifying test files, together with Python compilation, i18n, split-contract, diff, and CRLF checks.
+- Real-media read-only checks used `Frieren Beyond Journeys End S02` Vol.1 and Vol.3 `00002.mpls`. A Vol.1 single-episode parts range selected only `00002.m2ts` and stayed on direct mux; over the complete playlist, the absent unselected commentary PID `0x1101` on `00003.m2ts` through `00005.m2ts` shifts the selected PGS PID `0x1200` from MPLS track ID 3 to M2TS track ID 2 and therefore enters fallback. Vol.3 likewise detected selected PGS PID `0x1200` changing from MPLS track ID 4 to M2TS track ID 2 before muxing.

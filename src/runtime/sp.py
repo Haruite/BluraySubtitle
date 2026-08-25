@@ -125,6 +125,10 @@ class SpJob:
     audio_tracks: tuple[str, ...]
     subtitle_tracks: tuple[str, ...]
     track_language_overrides: tuple[tuple[str, str], ...]
+    # MPLS-backed SP jobs use the same canonical (track type, MPEG PID)
+    # contract as main-playlist jobs. A no-MPLS single-M2TS job leaves this
+    # empty and keeps its source-local track IDs in audio/subtitle_tracks.
+    track_pids: tuple[tuple[str, int], ...] = ()
 
 
 __all__ = [

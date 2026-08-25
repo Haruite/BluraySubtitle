@@ -34,6 +34,10 @@ _M2TS_PARSER_CACHE: dict[str, tuple[tuple[int, int], M2TS]] = {}
 _M2TS_PARSER_CACHE_LOCK = threading.RLock()
 _MPLS_PLAY_ROWS_CACHE: dict[str, list] = {}
 _MPLS_TIMELINE_DETAIL_CACHE: dict[tuple[str, float, float], str] = {}
+_MKVMERGE_IDENTIFY_CACHE: dict[
+    str, tuple[tuple[int, int], dict[str, object]]
+] = {}
+_MKVMERGE_IDENTIFY_CACHE_LOCK = threading.RLock()
 
 
 def mpls_playlist_caches_clear() -> None:
@@ -272,6 +276,33 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         if dovi_plan.get('mux_enabled'):
             return []
         return [p for p in video_pids if int(p) != el_pid]
+
+    @staticmethod
+    def _filter_pid_slots_for_dovi_plan(
+            slots: list[dict[str, object]],
+            dovi_plan: Optional[dict[str, object]],
+    ) -> list[dict[str, object]]:
+        """Apply the main-output Dolby Vision choice without changing PID-slot order."""
+        copied_slots = [dict(slot) for slot in slots]
+        if not isinstance(dovi_plan, dict) or not dovi_plan.get('active'):
+            return copied_slots
+        try:
+            enhancement_pid = int(dovi_plan.get('el_pid'))
+        except (TypeError, ValueError):
+            enhancement_pid = -1
+        try:
+            base_pid = int(dovi_plan.get('bl_pid'))
+        except (TypeError, ValueError):
+            base_pid = -1
+        return [
+            slot for slot in copied_slots
+            if str(slot.get('type')) != 'video'
+            or (
+                int(slot.get('pid')) == base_pid
+                if dovi_plan.get('mux_enabled')
+                else int(slot.get('pid')) != enhancement_pid
+            )
+        ]
 
     @staticmethod
     def mkvinfo_dolby_vision_track_id(mkv_path: str) -> Optional[int]:
@@ -545,10 +576,12 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
 
     @staticmethod
     def _stream_service_id(stream: dict) -> Optional[int]:
-        """MPEG-TS elementary stream id from stream metadata field ``id`` (e.g. ``0x1011``)."""
+        """MPEG-TS elementary-stream PID from normalized ``pid`` or ffprobe ``id`` metadata."""
         if not isinstance(stream, dict):
             return None
-        raw = stream.get('id')
+        raw = stream.get('pid')
+        if raw is None:
+            raw = stream.get('id')
         if raw is None:
             return None
         try:
@@ -1109,10 +1142,21 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
     def _mkvmerge_identify_json(media_path: str) -> dict[str, object]:
         if not media_path or not os.path.exists(media_path):
             return {}
+        normalized_path = _normalized_media_path(media_path)
         try:
-            find_mkvtoolnix()
-        except Exception:
-            pass
+            stat = os.stat(normalized_path)
+            signature = (int(stat.st_size), int(stat.st_mtime_ns))
+        except OSError:
+            return {}
+        with _MKVMERGE_IDENTIFY_CACHE_LOCK:
+            cached = _MKVMERGE_IDENTIFY_CACHE.get(normalized_path)
+            if cached and cached[0] == signature:
+                return cached[1]
+        if not MKV_MERGE_PATH:
+            try:
+                find_mkvtoolnix()
+            except Exception:
+                pass
         exe = MKV_MERGE_PATH if MKV_MERGE_PATH else 'mkvmerge'
         try:
             p = run_command(
@@ -1130,7 +1174,11 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             data = json.loads(p.stdout or "{}")
         except Exception:
             return {}
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            return {}
+        with _MKVMERGE_IDENTIFY_CACHE_LOCK:
+            _MKVMERGE_IDENTIFY_CACHE[normalized_path] = (signature, data)
+        return data
 
     @staticmethod
     def _mkvmerge_track_ids_by_type(media_path: str, track_type: str) -> list[int]:
@@ -1167,106 +1215,187 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 return None
 
     @staticmethod
-    def _map_selected_tracks_to_mpls_track_ids(
-            mpls_path: str,
-            selected_audio_track_indexes: list[str],
-            selected_sub_track_indexes: list[str],
-    ) -> tuple[list[str], list[str]]:
+    def _mkvmerge_pid_id_map(
+            media_path: str,
+            identification: Optional[dict[str, object]] = None,
+    ) -> dict[tuple[str, int], int]:
+        """Return the direct ``(track type, PID) -> mkvmerge track ID`` mapping.
+
+        Only ``mkvmerge`` identify data is used. In particular, a missing ``stream_id`` is not
+        reconstructed from ffprobe order: absence of a direct mapping is exactly the condition
+        that must send a main-playlist remux through the PID-aligned fallback.
         """
-        Convert selected first-play-item M2TS stream indexes to mkvmerge MPLS track ids.
+        ident = identification if isinstance(identification, dict) else (
+            _svc_cls()._mkvmerge_identify_json(media_path)
+        )
+        mapping: dict[tuple[str, int], int] = {}
+        for track in ident.get('tracks') or []:
+            if not isinstance(track, dict):
+                continue
+            track_type = str(track.get('type') or '').strip().lower()
+            if track_type == 'subtitle':
+                track_type = 'subtitles'
+            if track_type not in ('video', 'audio', 'subtitles'):
+                continue
+            properties = track.get('properties') or {}
+            if not isinstance(properties, dict):
+                continue
+            pid = _svc_cls()._int_from_mkvmerge_prop(properties.get('stream_id'))
+            try:
+                track_id = int(track.get('id'))
+            except (TypeError, ValueError):
+                continue
+            if pid is not None:
+                mapping.setdefault((track_type, int(pid)), track_id)
+        return mapping
 
-        ``selected_*_track_indexes`` are GUI selections based on the first play-item M2TS ``index``.
-        For MPLS muxing, mkvmerge expects ``tracks[].id`` from
-        ``mkvmerge --identify --identification-format json <mpls>``.
+    @staticmethod
+    def _mkvmerge_track_streams_for_mpls(mpls_path: str) -> list[dict[str, object]]:
+        """Build Edit Tracks rows from an MPLS identify result, keyed by transport PID.
+
+        ``index`` intentionally contains the PID because the dialog uses that field as its
+        internal selection key. ``mkvmerge_track_id`` is display-only and is recomputed by the
+        Service when a command is built; it is never persisted as GUI selection state.
         """
-        if not mpls_path or (not str(mpls_path).lower().endswith('.mpls')) or (not os.path.isfile(mpls_path)):
-            return list(selected_audio_track_indexes or []), list(selected_sub_track_indexes or [])
-        first_m2ts, _ = _svc_cls()._probe_m2ts_for_remux_source(mpls_path)
-        if not first_m2ts or not os.path.isfile(first_m2ts):
-            return list(selected_audio_track_indexes or []), list(selected_sub_track_indexes or [])
-
-        streams = [s for s in _svc_cls()._m2ts_track_streams(first_m2ts) if isinstance(s, dict)]
-        idx_to_pid_audio: dict[int, int] = {}
-        idx_to_pid_sub: dict[int, int] = {}
-        for s in streams:
-            ctype = str(s.get('codec_type') or '').strip().lower()
-            try:
-                sidx = int(str(s.get('index') or '').strip())
-            except Exception:
+        identification = _svc_cls()._mkvmerge_identify_json(mpls_path)
+        rows: list[dict[str, object]] = []
+        for track in identification.get('tracks') or []:
+            if not isinstance(track, dict):
                 continue
-            pid = _svc_cls()._stream_service_id(s)
-            if pid is None:
-                continue
-            if ctype == 'audio':
-                idx_to_pid_audio[sidx] = pid
-            elif ctype in ('subtitle', 'subtitles'):
-                idx_to_pid_sub[sidx] = pid
-
-        ident = _svc_cls()._mkvmerge_identify_json(mpls_path)
-        tracks = ident.get('tracks') or []
-        if not isinstance(tracks, list) or not tracks:
-            return list(selected_audio_track_indexes or []), list(selected_sub_track_indexes or [])
-        pid_to_ids_audio: dict[int, list[int]] = {}
-        pid_to_ids_sub: dict[int, list[int]] = {}
-        for t in tracks:
-            if not isinstance(t, dict):
-                continue
-            t_type = str(t.get('type') or '').strip().lower()
-            if t_type not in ('audio', 'subtitles'):
-                continue
-            try:
-                tid = int(t.get('id'))
-            except Exception:
-                continue
-            props = t.get('properties') or {}
-            if not isinstance(props, dict):
-                props = {}
-            pid = _svc_cls()._int_from_mkvmerge_prop(props.get('stream_id'))
-            if pid is None:
-                continue
-            if t_type == 'audio':
-                pid_to_ids_audio.setdefault(pid, []).append(tid)
+            track_type = str(track.get('type') or '').strip().lower()
+            if track_type == 'subtitles':
+                codec_type = 'subtitle'
+            elif track_type in ('video', 'audio'):
+                codec_type = track_type
             else:
-                pid_to_ids_sub.setdefault(pid, []).append(tid)
+                continue
+            properties = track.get('properties') or {}
+            if not isinstance(properties, dict):
+                properties = {}
+            pid = _svc_cls()._int_from_mkvmerge_prop(properties.get('stream_id'))
+            if pid is None:
+                continue
+            try:
+                track_id = int(track.get('id'))
+            except (TypeError, ValueError):
+                continue
+            codec = str(track.get('codec') or properties.get('codec_id') or '').strip()
+            language = _svc_cls()._norm_lang_for_track_selection(
+                properties.get('language') or properties.get('language_ietf') or 'und'
+            )
+            rows.append({
+                'index': str(int(pid)),
+                'pid': int(pid),
+                'mkvmerge_track_id': track_id,
+                'codec_type': codec_type,
+                'codec_name': codec.lower(),
+                'language': language,
+                'lang': language,
+                'stream_type': codec,
+                '_mpls_pid_row': True,
+            })
+        return rows
 
-        def _map_selected(selected_indexes: list[str], idx_to_pid: dict[int, int], pid_to_ids: dict[int, list[int]]) -> list[str]:
-            out: list[str] = []
-            used: dict[int, int] = {}
-            for raw_idx in selected_indexes or []:
+    @staticmethod
+    def _selected_pid_slots_for_mpls(
+            mpls_path: str,
+            track_configuration: dict[str, object],
+    ) -> list[dict[str, object]]:
+        """Normalize captured main-MPLS PID selections without preserving GUI row order."""
+        selected_by_type: dict[str, set[int]] = {
+            'video': set(),
+            'audio': set(),
+            'subtitles': set(),
+        }
+        for config_name, track_type in (
+                ('video', 'video'),
+                ('audio', 'audio'),
+                ('subtitle', 'subtitles')):
+            for raw_pid in track_configuration.get(config_name) or []:
                 try:
-                    idx = int(str(raw_idx).strip())
-                except Exception:
+                    selected_by_type[track_type].add(int(str(raw_pid).strip(), 0))
+                except (TypeError, ValueError):
                     continue
-                pid = idx_to_pid.get(idx)
-                if pid is None:
-                    continue
-                tids = pid_to_ids.get(pid) or []
-                if not tids:
-                    continue
-                pos = used.get(pid, 0)
-                if pos >= len(tids):
-                    pos = len(tids) - 1
-                used[pid] = pos + 1
-                out.append(str(tids[pos]))
-            return out
 
-        mapped_audio = _map_selected(selected_audio_track_indexes, idx_to_pid_audio, pid_to_ids_audio)
-        mapped_sub = _map_selected(selected_sub_track_indexes, idx_to_pid_sub, pid_to_ids_sub)
-        # If mapping failed completely, keep previous behavior as fallback.
-        if selected_audio_track_indexes and (not mapped_audio):
-            mapped_audio = list(selected_audio_track_indexes)
-        if selected_sub_track_indexes and (not mapped_sub):
-            mapped_sub = list(selected_sub_track_indexes)
-        return mapped_audio, mapped_sub
+        identified_rows = _svc_cls()._mkvmerge_track_streams_for_mpls(mpls_path)
+        if not selected_by_type['video']:
+            selected_by_type['video'] = {
+                int(row['pid'])
+                for row in identified_rows
+                if str(row.get('codec_type') or '') == 'video'
+            }
+
+        # MPLS identify order is the sole ordering reference. Selected PIDs missing from the
+        # identify result are appended deterministically so preflight can report and recover them.
+        slots: list[dict[str, object]] = []
+        consumed: set[tuple[str, int]] = set()
+        for row in identified_rows:
+            track_type = str(row.get('codec_type') or '').strip().lower()
+            if track_type == 'subtitle':
+                track_type = 'subtitles'
+            try:
+                pid = int(row.get('pid'))
+            except (TypeError, ValueError):
+                continue
+            key = (track_type, pid)
+            if pid in selected_by_type.get(track_type, set()) and key not in consumed:
+                slots.append({'type': track_type, 'pid': pid})
+                consumed.add(key)
+        for track_type in ('video', 'audio', 'subtitles'):
+            for pid in sorted(selected_by_type[track_type]):
+                key = (track_type, pid)
+                if key not in consumed:
+                    slots.append({'type': track_type, 'pid': pid})
+                    consumed.add(key)
+        return slots
+
+    @staticmethod
+    def _map_selected_pids_to_mpls_track_ids(
+            mpls_path: str,
+            selected_audio_pids: list[str],
+            selected_subtitle_pids: list[str],
+    ) -> tuple[list[str], list[str]]:
+        """Map selected MPLS PIDs to source-local mkvmerge IDs in identify order."""
+        ident = _svc_cls()._mkvmerge_identify_json(mpls_path)
+        selected: dict[str, set[int]] = {'audio': set(), 'subtitles': set()}
+        for track_type, raw_values in (
+                ('audio', selected_audio_pids),
+                ('subtitles', selected_subtitle_pids)):
+            for raw_pid in raw_values or []:
+                try:
+                    selected[track_type].add(int(str(raw_pid).strip(), 0))
+                except (TypeError, ValueError):
+                    continue
+
+        def _mapped(track_type: str) -> list[str]:
+            out: list[str] = []
+            for track in ident.get('tracks') or []:
+                if not isinstance(track, dict):
+                    continue
+                if str(track.get('type') or '').strip().lower() != track_type:
+                    continue
+                properties = track.get('properties') or {}
+                if not isinstance(properties, dict):
+                    continue
+                pid = _svc_cls()._int_from_mkvmerge_prop(properties.get('stream_id'))
+                if pid not in selected[track_type]:
+                    continue
+                try:
+                    out.append(str(int(track.get('id'))))
+                except (TypeError, ValueError):
+                    continue
+            return out
+        return _mapped('audio'), _mapped('subtitles')
 
     @staticmethod
     def _fix_output_track_languages_with_mkvpropedit(
             output_mkv_path: str,
-            input_m2ts_path: str,
+            input_source_path: str,
             selected_audio_ids: list[str],
             selected_sub_ids: list[str],
             override_lang_by_source_index: Optional[dict[str, str]] = None,
             dovi_plan: Optional[dict[str, object]] = None,
+            selected_pid_slots: Optional[list[tuple[str, int]]] = None,
     ) -> None:
         """Apply only the languages captured by Edit Tracks to one completed Remux output."""
         language_overrides = {
@@ -1280,7 +1409,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             raise FileNotFoundError(
                 translate_text('Main remux output is missing: {path}').format(path=output_mkv_path)
             )
-        if not input_m2ts_path or not os.path.isfile(input_m2ts_path):
+        if not input_source_path or not os.path.isfile(input_source_path):
             raise RuntimeError(
                 translate_text('Configured track languages could not be mapped to: {path}').format(
                     path=output_mkv_path
@@ -1292,45 +1421,58 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             'audio': [],
             'subtitles': [],
         }
-        source_streams = [
-            stream for stream in _svc_cls()._m2ts_track_streams(input_m2ts_path)
-            if isinstance(stream, dict)
-        ]
-        streams_by_index = {
-            str(stream.get('index', '')).strip(): stream
-            for stream in source_streams
-        }
-        for source_order, stream in enumerate(source_streams):
-            source_index = str(stream.get('index', '')).strip()
-            track_type = str(stream.get('codec_type') or '').strip().lower()
-            if track_type != 'video':
-                continue
-            pid = _svc_cls()._stream_service_id(stream)
-            source_slots['video'].append((
-                int(pid) if pid is not None else 0x7FFFFFFF,
-                source_order,
-                source_index,
-            ))
-        for track_type, selected_ids in (
-                ('audio', selected_audio_ids),
-                ('subtitles', selected_sub_ids),
-        ):
-            for selected_order, selected_id in enumerate(selected_ids):
-                source_index = str(selected_id)
-                stream = streams_by_index.get(source_index)
-                if not stream:
+        if selected_pid_slots is not None:
+            for source_order, (raw_type, raw_pid) in enumerate(selected_pid_slots):
+                track_type = str(raw_type or '').strip().lower()
+                if track_type == 'subtitle':
+                    track_type = 'subtitles'
+                if track_type not in source_slots:
                     continue
-                source_type = str(stream.get('codec_type') or '').strip().lower()
-                if source_type in ('subtitle', 'subtitles'):
-                    source_type = 'subtitles'
-                if source_type != track_type:
+                try:
+                    pid = int(raw_pid)
+                except (TypeError, ValueError):
+                    continue
+                source_slots[track_type].append((pid, source_order, str(pid)))
+        else:
+            source_streams = [
+                stream for stream in _svc_cls()._m2ts_track_streams(input_source_path)
+                if isinstance(stream, dict)
+            ]
+            streams_by_index = {
+                str(stream.get('index', '')).strip(): stream
+                for stream in source_streams
+            }
+            for source_order, stream in enumerate(source_streams):
+                source_index = str(stream.get('index', '')).strip()
+                track_type = str(stream.get('codec_type') or '').strip().lower()
+                if track_type != 'video':
                     continue
                 pid = _svc_cls()._stream_service_id(stream)
-                source_slots[track_type].append((
+                source_slots['video'].append((
                     int(pid) if pid is not None else 0x7FFFFFFF,
-                    selected_order,
+                    source_order,
                     source_index,
                 ))
+            for track_type, selected_ids in (
+                    ('audio', selected_audio_ids),
+                    ('subtitles', selected_sub_ids),
+            ):
+                for selected_order, selected_id in enumerate(selected_ids):
+                    source_index = str(selected_id)
+                    stream = streams_by_index.get(source_index)
+                    if not stream:
+                        continue
+                    source_type = str(stream.get('codec_type') or '').strip().lower()
+                    if source_type in ('subtitle', 'subtitles'):
+                        source_type = 'subtitles'
+                    if source_type != track_type:
+                        continue
+                    pid = _svc_cls()._stream_service_id(stream)
+                    source_slots[track_type].append((
+                        int(pid) if pid is not None else 0x7FFFFFFF,
+                        selected_order,
+                        source_index,
+                    ))
 
         if isinstance(dovi_plan, dict) and dovi_plan.get('active'):
             try:
@@ -1461,12 +1603,10 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             dovi_plan: Optional[dict[str, object]] = None,
             mpls_path: str = '',
     ) -> list[dict[str, object]]:
-        """Build ordered track slots from the tracks visible and selected in Edit Tracks.
+        """Build source-local PID slots for a no-MPLS M2TS selection.
 
-        The GUI hides first-play-item M2TS streams whose PID is absent from the MPLS stream table. Apply the same
-        filter here so fallback never restores a hidden stream. Video is always selected in the GUI;
-        audio and subtitle order comes from the captured selection lists. The source stream index is kept
-        so a selected video slot can be mapped to the corresponding stream on later playlist clips.
+        MPLS jobs bypass this adapter and pass their canonical PID slots directly. The
+        source index is retained for direct M2TS selectors and low-level compatibility calls.
         """
         streams = [stream for stream in _svc_cls()._m2ts_track_streams(m2ts_path) if isinstance(stream, dict)]
         visible_pids: Optional[set[int]] = None
@@ -1573,7 +1713,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             m2ts_path: str,
             dovi_plan: Optional[dict[str, object]] = None,
     ) -> Optional[list[dict[str, object]]]:
-        """Map GUI-selected video indexes to this clip and retain selected audio/subtitle PID slots."""
+        """Resolve legacy video-index slots or retain canonical main-playlist PID slots."""
         streams = [stream for stream in _svc_cls()._m2ts_track_streams(m2ts_path) if isinstance(stream, dict)]
         clip_video_pids = _svc_cls()._video_pids_on_m2ts(m2ts_path)
         allowed_video_pids = (
@@ -1584,6 +1724,15 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         clip_slots: list[dict[str, object]] = []
         for reference_slot in ref_slots or []:
             if str(reference_slot.get('type') or '') != 'video':
+                clip_slots.append(dict(reference_slot))
+                continue
+            if 'index' not in reference_slot:
+                try:
+                    selected_pid = int(reference_slot.get('pid'))
+                except (TypeError, ValueError):
+                    return None
+                if selected_pid not in allowed_video_pids:
+                    return None
                 clip_slots.append(dict(reference_slot))
                 continue
             selected_index = str(reference_slot.get('index') or '')
@@ -1693,16 +1842,26 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             copy_sub_track: list[str],
             output_path: str,
             dovi_plan: Optional[dict[str, object]] = None,
+            selected_pid_slots: Optional[list[tuple[str, int]]] = None,
     ) -> list[str]:
         """Return non-blocking warnings for missing or empty selected Remux output tracks."""
-        probe_m2ts, mpls_path = _svc_cls()._probe_m2ts_for_remux_source(source_path)
-        expected_slots = _svc_cls()._ordered_track_slots_for_remux(
-            probe_m2ts,
-            list(copy_audio_track or []),
-            list(copy_sub_track or []),
-            dovi_plan=dovi_plan,
-            mpls_path=mpls_path,
-        )
+        if selected_pid_slots is not None:
+            expected_slots = _svc_cls()._filter_pid_slots_for_dovi_plan(
+                [
+                    {'type': str(track_type), 'pid': int(pid)}
+                    for track_type, pid in selected_pid_slots
+                ],
+                dovi_plan,
+            )
+        else:
+            probe_m2ts, mpls_path = _svc_cls()._probe_m2ts_for_remux_source(source_path)
+            expected_slots = _svc_cls()._ordered_track_slots_for_remux(
+                probe_m2ts,
+                list(copy_audio_track or []),
+                list(copy_sub_track or []),
+                dovi_plan=dovi_plan,
+                mpls_path=mpls_path,
+            )
         identification = _svc_cls()._mkvmerge_identify_json(output_path)
         tracks = [track for track in identification.get('tracks') or [] if isinstance(track, dict)]
         if not tracks:
@@ -1978,116 +2137,212 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             source_path: str,
             copy_audio_track: list[str],
             copy_sub_track: list[str],
+            remux_command: str = '',
+            selected_pid_slots: Optional[list[tuple[str, int]]] = None,
     ) -> bool:
         """
-        True when ``mkvmerge --identify`` on ``source_path`` exposes every remux slot
-        (video + selected audio/subtitle indices). Extra identify tracks are allowed.
+        True when ``mkvmerge --identify`` exposes every requested remux slot. Every production
+        MPLS caller passes ``selected_pid_slots`` and uses the MPLS PID→ID reference. The
+        source-index adapter remains only for a no-MPLS M2TS source. ``--split parts:`` limits
+        validation to overlapping clips.
         """
         src = os.path.normpath(str(source_path or ''))
+        if selected_pid_slots is not None:
+            return self._mkvmerge_identify_covers_mpls_pid_slots(
+                src,
+                selected_pid_slots,
+                remux_command,
+            )
         if not src or not os.path.isfile(src):
             _svc_cls()._log_mkvmerge_identify_slot_gap(
                 src, '', [], None,
                 'remux source path missing or not a file',
             )
             return False
-        probe_m2ts, mpls_path = _svc_cls()._probe_m2ts_for_remux_source(src)
-        ident_target = os.path.normpath(mpls_path or src)
-        if not probe_m2ts or not os.path.isfile(probe_m2ts):
+        if not src.lower().endswith('.m2ts'):
             _svc_cls()._log_mkvmerge_identify_slot_gap(
-                ident_target, '', [], None,
-                'cannot resolve first play-item M2TS for probe (no play items or STREAM file missing)',
+                src, '', [], None,
+                'MPLS caller did not provide canonical selected PID slots',
             )
             return False
         dovi_plan = getattr(self, '_dovi_mux_plan', None)
         ref_slots = _svc_cls()._ordered_track_slots_for_remux(
-            probe_m2ts, list(copy_audio_track or []), list(copy_sub_track or []),
+            src, list(copy_audio_track or []), list(copy_sub_track or []),
             dovi_plan=dovi_plan if isinstance(dovi_plan, dict) else None,
-            mpls_path=mpls_path,
         )
         if not ref_slots:
             _svc_cls()._log_mkvmerge_identify_slot_gap(
-                ident_target, probe_m2ts, [], None,
-                'no remux slots from edit-tracks selection (check -a/-s stream indices on probe m2ts)',
+                src, src, [], None,
+                'no remux slots from edit-tracks selection (check -a/-s source track IDs)',
             )
             return False
-        if src.lower().endswith('.m2ts'):
-            if _svc_cls()._map_slots_to_mkvmerge_track_ids(ref_slots, src) is None:
-                _svc_cls()._log_mkvmerge_identify_slot_gap(
-                    ident_target, probe_m2ts, ref_slots, None,
-                    'm2ts: cannot map remux slot PID to mkvmerge track id',
-                    missing_slots=ref_slots,
-                )
-                return False
-            return True
-        ident = _svc_cls()._mkvmerge_identify_json(mpls_path or src)
-        if not isinstance(ident, dict) or not ident.get('tracks'):
+        if _svc_cls()._map_slots_to_mkvmerge_track_ids(ref_slots, src) is None:
             _svc_cls()._log_mkvmerge_identify_slot_gap(
-                ident_target, probe_m2ts, ref_slots, ident if isinstance(ident, dict) else None,
-                'mkvmerge --identify returned no tracks',
+                src, src, ref_slots, None,
+                'm2ts: cannot map remux slot PID to mkvmerge track id',
+                missing_slots=ref_slots,
             )
             return False
-        missing_slots = [
-            slot for slot in ref_slots
-            if not _svc_cls()._mpls_identify_has_slot(ident, slot)
-        ]
-        if missing_slots:
-            _svc_cls()._log_mkvmerge_identify_slot_gap(
-                ident_target, probe_m2ts, ref_slots, ident,
-                'remux slot PID not found on identify (stream_id)',
-                missing_slots=missing_slots,
-            )
-            return False
-        reference_track_ids = _svc_cls()._map_slots_to_mkvmerge_track_ids(
-            ref_slots, probe_m2ts
-        )
-        playlist_dir = os.path.dirname(os.path.normpath(mpls_path or src))
-        stream_dir = os.path.normpath(os.path.join(playlist_dir, '..', 'STREAM'))
+        return True
+
+    @staticmethod
+    def _mpls_play_items_for_remux_command(
+            mpls_path: str,
+            remux_command: str,
+    ) -> list[tuple[str, int, int]]:
+        """Return only the MPLS play items whose timeline overlaps the command input."""
         try:
-            play_items = list(Chapter(mpls_path or src).in_out_time or [])
+            play_items = list(Chapter(mpls_path).in_out_time or [])
         except Exception:
-            play_items = []
-        for clip_name, _in_time, _out_time in play_items:
-            clip_filename = str(clip_name or '').strip()
-            if not clip_filename:
-                continue
-            if not clip_filename.lower().endswith('.m2ts'):
-                clip_filename += '.m2ts'
-            clip_path = os.path.normpath(os.path.join(stream_dir, clip_filename))
-            clip_slots = _svc_cls()._clip_ref_slots_for_m2ts(
-                ref_slots, clip_path, dovi_plan if isinstance(dovi_plan, dict) else None
+            return []
+        command_text = str(remux_command or '').strip()
+        if not command_text:
+            return play_items
+        parts_windows = _svc_cls()._split_parts_windows_from_mkvmerge_cmd(
+            command_text,
+            mpls_stem=os.path.splitext(os.path.basename(mpls_path))[0] or None,
+        )
+        if not parts_windows:
+            if '--split' in command_text.lower() and 'parts:' in command_text.lower():
+                print(translate_text(
+                    '[remux-check] Could not parse --split parts; checking all playlist clips: {mpls}'
+                ).format(mpls=os.path.basename(mpls_path)))
+            return play_items
+        selected_clip_names: list[str] = []
+        for window_start, window_end in parts_windows:
+            for clip_name in _svc_cls().m2ts_basenames_from_mpls_timeline_window(
+                    mpls_path, window_start, window_end):
+                if clip_name not in selected_clip_names:
+                    selected_clip_names.append(clip_name)
+        selected_clip_name_set = set(selected_clip_names)
+        return [
+            play_item for play_item in play_items
+            if f'{str(play_item[0]).strip()}.m2ts' in selected_clip_name_set
+        ]
+
+    def _mkvmerge_identify_covers_mpls_pid_slots(
+            self,
+            mpls_path: str,
+            selected_pid_slots: list[tuple[str, int]],
+            remux_command: str,
+    ) -> bool:
+        """Validate one MPLS command against its PID→ID reference before muxing.
+
+        The reference is produced by identifying the MPLS itself. Every M2TS overlapping a
+        ``--split parts:`` interval is then identified independently. A selected PID must exist
+        and resolve to the same input-local mkvmerge ID as the MPLS reference; otherwise direct
+        MPLS muxing is skipped before the long-running command starts.
+        """
+        if not mpls_path or not os.path.isfile(mpls_path):
+            _svc_cls()._log_mkvmerge_identify_slot_gap(
+                mpls_path, '', [], None, 'MPLS path missing or not a file'
             )
-            clip_track_ids = (
-                _svc_cls()._map_slots_to_mkvmerge_track_ids(clip_slots, clip_path)
-                if clip_slots is not None and os.path.isfile(clip_path)
-                else None
-            )
-            if clip_track_ids == reference_track_ids and clip_track_ids is not None:
-                continue
-            message = translate_text(
-                "[remux-fallback] Playlist clip track IDs differ from the first play item; "
-                "using track-aligned fallback: {path} (first: {expected}; clip: {actual})"
-            ).format(
-                path=clip_path,
-                expected=reference_track_ids if reference_track_ids is not None else '?',
-                actual=clip_track_ids if clip_track_ids is not None else '?',
-            )
-            print(message)
             return False
+
+        normalized_slots: list[dict[str, object]] = []
+        seen: set[tuple[str, int]] = set()
+        for raw_type, raw_pid in selected_pid_slots:
+            track_type = str(raw_type or '').strip().lower()
+            if track_type == 'subtitle':
+                track_type = 'subtitles'
+            if track_type not in ('video', 'audio', 'subtitles'):
+                continue
+            try:
+                pid = int(raw_pid)
+            except (TypeError, ValueError):
+                continue
+            key = (track_type, pid)
+            if key not in seen:
+                normalized_slots.append({'type': track_type, 'pid': pid})
+                seen.add(key)
+
+        dovi_plan = getattr(self, '_dovi_mux_plan', None)
+        normalized_slots = _svc_cls()._filter_pid_slots_for_dovi_plan(
+            normalized_slots,
+            dovi_plan if isinstance(dovi_plan, dict) else None,
+        )
+
+        identification = _svc_cls()._mkvmerge_identify_json(mpls_path)
+        reference_map = _svc_cls()._mkvmerge_pid_id_map(mpls_path, identification)
+        missing_slots = [
+            slot for slot in normalized_slots
+            if (str(slot['type']), int(slot['pid'])) not in reference_map
+        ]
+        if not normalized_slots or missing_slots:
+            _svc_cls()._log_mkvmerge_identify_slot_gap(
+                mpls_path,
+                '',
+                normalized_slots,
+                identification,
+                'selected PID has no direct MPLS PID-to-track-ID mapping',
+                missing_slots=missing_slots or normalized_slots,
+            )
+            return False
+
+        play_items = _svc_cls()._mpls_play_items_for_remux_command(
+            mpls_path, remux_command
+        )
+
+        clip_names = list(dict.fromkeys(
+            f'{str(play_item[0]).strip()}.m2ts' for play_item in play_items
+        ))
+        print(translate_text(
+            '[remux-check] M2TS selected by command for {mpls}: {clips}'
+        ).format(
+            mpls=os.path.basename(mpls_path),
+            clips=', '.join(clip_names) or '(none)',
+        ))
+        if not clip_names:
+            _svc_cls()._log_mkvmerge_identify_slot_gap(
+                mpls_path,
+                '',
+                normalized_slots,
+                identification,
+                'command time ranges contain no identifiable M2TS play items',
+            )
+            return False
+
+        stream_folder = os.path.normpath(os.path.join(os.path.dirname(mpls_path), '..', 'STREAM'))
+        for clip_name in clip_names:
+            clip_path = os.path.normpath(os.path.join(stream_folder, clip_name))
+            clip_identification = _svc_cls()._mkvmerge_identify_json(clip_path)
+            clip_map = _svc_cls()._mkvmerge_pid_id_map(clip_path, clip_identification)
+            mismatches: list[str] = []
+            for slot in normalized_slots:
+                key = (str(slot['type']), int(slot['pid']))
+                reference_id = reference_map.get(key)
+                clip_id = clip_map.get(key)
+                if clip_id != reference_id:
+                    mismatches.append(
+                        f'{key[0]} PID=0x{key[1]:04X}: MPLS={reference_id}, M2TS={clip_id}'
+                    )
+            if mismatches:
+                print(translate_text(
+                    '[remux-fallback] Selected PID mapping differs from the MPLS reference; '
+                    'using track-aligned fallback: {path} ({details})'
+                ).format(path=clip_path, details='; '.join(mismatches)))
+                return False
+
         if isinstance(dovi_plan, dict) and dovi_plan.get('active'):
             if dovi_plan.get('mux_enabled'):
                 _svc_cls()._log_mkvmerge_identify_slot_gap(
-                    ident_target, probe_m2ts, ref_slots, ident,
+                    mpls_path,
+                    '',
+                    normalized_slots,
+                    identification,
                     'Dolby Vision mux enabled (primary MPLS mkvmerge skipped; use remux-fallback with dovi_tool)',
                 )
                 return False
             try:
-                enhancement_pid = int(dovi_plan['el_pid'])
-            except Exception:
+                enhancement_key = ('video', int(dovi_plan['el_pid']))
+            except (TypeError, ValueError):
                 return False
-            if _svc_cls()._mkvmerge_tid_for_pid(
-                    ident_target, enhancement_pid, 'video') is None:
+            if enhancement_key not in reference_map:
                 _svc_cls()._log_mkvmerge_identify_slot_gap(
-                    ident_target, probe_m2ts, ref_slots, ident,
+                    mpls_path,
+                    '',
+                    normalized_slots,
+                    identification,
                     'Dolby Vision enhancement layer cannot be excluded by track ID',
                 )
                 return False
@@ -2448,7 +2703,10 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         ``name.m2ts(start-end),...`` for the overlap of [w0,w1) with each playlist clip.
         Slice math matches ``_try_remux_mpls_split_outputs_track_aligned`` (multi-output fallback).
         """
-        if w1 <= w0 + 1e-5:
+        # mkvmerge split timecodes have millisecond precision, while MPLS ticks do not. Treat a
+        # boundary-only overlap of at most one millisecond as rounding, not as an included clip.
+        overlap_tolerance = 0.0011
+        if w1 <= w0 + overlap_tolerance:
             return ''
         mp = str(mpls_path or '').strip()
         if not mp or not mp.lower().endswith('.mpls') or not os.path.isfile(mp):
@@ -2462,7 +2720,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         if not play_rows:
             _MPLS_TIMELINE_DETAIL_CACHE[ck] = ''
             return ''
-        eps = 1e-5
+        eps = overlap_tolerance
         parts: list[str] = []
         acc = 0.0
         for fname, in_time, out_time in play_rows:
@@ -3098,11 +3356,11 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             base_track_by_pid: Optional[dict[int, int]] = None,
             selected_pid_order: list[int],
     ) -> bool:
-        """Merge recovered streams into the current clip in the GUI-selected track order.
+        """Merge recovered streams into the current clip in the reference-slot order.
 
         ``base_track_by_pid`` maps transport PIDs to track IDs in the current MKV. Every tsMuxer output is a
-        separate mkvmerge input whose elementary stream is track 0. ``selected_pid_order`` is the GUI-selected slot
-        order captured from the GUI selection; it determines the final ``--track-order`` even when a recovered
+        separate mkvmerge input whose elementary stream is track 0. ``selected_pid_order`` follows the MPLS
+        identify reference for every MPLS output; it determines ``--track-order`` when a recovered
         PID belongs before an already muxed track. A PID outside that selection is an error because fallback
         must not restore a track hidden by the MPLS or unselected in the GUI.
         """
@@ -3184,9 +3442,8 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
     ) -> bool:
         """Remux one playlist clip while preserving the reference transport-stream layout.
 
-        The GUI-visible first-play-item M2TS rows define the selected video indexes and audio/subtitle PIDs. Each
-        selected video index is mapped to the corresponding PID on the current clip; tracks hidden by the MPLS
-        never enter the fallback. The recovery order is:
+        Main and SP MPLS outputs provide exact PID slots ordered by the MPLS identify reference. Tracks
+        outside the captured selection never enter the fallback. The recovery order is:
 
         1. Mux every selected PID that mkvmerge can identify directly.
         2. For a selected dual-layer Dolby Vision pair, let tsMuxer extract BL/EL, combine them as profile
@@ -3216,13 +3473,19 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 )
         if not (isinstance(dovi_plan, dict) and dovi_plan.get('active')):
             dovi_plan = None
-        dovi_mux_video = bool(
-            dovi_plan and dovi_plan.get('mux_enabled')
-        )
         clip_slots = _svc_cls()._clip_ref_slots_for_m2ts(reference_slots, m2ts_path, dovi_plan)
         if clip_slots is None:
             print(translate_text('Selected video track is missing from playlist clip: {path}').format(path=m2ts_path))
             return False
+        dovi_mux_video = bool(
+            dovi_plan
+            and dovi_plan.get('mux_enabled')
+            and any(
+                str(slot.get('type') or '') == 'video'
+                and int(slot.get('pid') or -1) == int(dovi_plan.get('bl_pid') or -2)
+                for slot in clip_slots
+            )
+        )
         m2ts_identification = _svc_cls()._mkvmerge_identify_json(m2ts_path)
         mappable_slots: list[tuple[dict[str, object], int]] = []
         for slot in clip_slots:
@@ -3527,12 +3790,13 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             cancel_event: Optional[threading.Event] = None,
             *,
             max_play_items: Optional[int] = None,
+            selected_pid_slots: Optional[list[tuple[str, int]]] = None,
     ) -> bool:
         """Fallback from direct MPLS input to PID-aligned per-clip remuxing.
 
-        The first play item converts only GUI-visible selected stream indices into required PID slots. For every
-        retained play item, ``_remux_aligned_clip`` maps the selected video indices to that clip and requires the
-        selected audio/subtitle PIDs. mkvmerge is attempted first; tsMuxer may recover any selected PID that mkvmerge
+        Main and SP jobs pass the GUI-captured MPLS PIDs directly.
+        For every retained play item, ``_remux_aligned_clip`` requires the selected PIDs. mkvmerge is attempted
+        first; tsMuxer may recover any selected PID that mkvmerge
         cannot expose. If tsMuxer cannot restore every selected missing PID, the clip fails. Each clip is trimmed
         to its MPLS in/out window, and successful
         parts are concatenated in playlist order with file append mode. Configured languages are applied by the
@@ -3570,13 +3834,22 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         dovi_plan = getattr(self, '_dovi_mux_plan', None)
         if not (isinstance(dovi_plan, dict) and dovi_plan.get('active')):
             dovi_plan = None
-        reference_slots = _svc_cls()._ordered_track_slots_for_remux(
-            reference_m2ts,
-            selected_audio_indices,
-            selected_subtitle_indices,
-            dovi_plan=dovi_plan,
-            mpls_path=mpls_path,
-        )
+        if selected_pid_slots is not None:
+            reference_slots = _svc_cls()._filter_pid_slots_for_dovi_plan(
+                [
+                    {'type': str(track_type), 'pid': int(pid)}
+                    for track_type, pid in selected_pid_slots
+                ],
+                dovi_plan,
+            )
+        else:
+            reference_slots = _svc_cls()._ordered_track_slots_for_remux(
+                reference_m2ts,
+                selected_audio_indices,
+                selected_subtitle_indices,
+                dovi_plan=dovi_plan,
+                mpls_path=mpls_path,
+            )
         if not reference_slots:
             print(translate_text('[remux-fallback] no track slots from edit-tracks selection'))
             return False
@@ -3680,6 +3953,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             *,
             progress_base: int = 0,
             progress_span: int = 380,
+            selected_pid_slots: Optional[list[tuple[str, int]]] = None,
     ) -> bool:
         """Create multiple PID-aligned episode outputs after direct MPLS splitting fails.
 
@@ -3724,13 +3998,22 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         dovi_plan = getattr(self, '_dovi_mux_plan', None)
         if not (isinstance(dovi_plan, dict) and dovi_plan.get('active')):
             dovi_plan = None
-        reference_slots = _svc_cls()._ordered_track_slots_for_remux(
-            reference_m2ts,
-            selected_audio_indices,
-            selected_subtitle_indices,
-            dovi_plan=dovi_plan,
-            mpls_path=mpls_path,
-        )
+        if selected_pid_slots is not None:
+            reference_slots = _svc_cls()._filter_pid_slots_for_dovi_plan(
+                [
+                    {'type': str(track_type), 'pid': int(pid)}
+                    for track_type, pid in selected_pid_slots
+                ],
+                dovi_plan,
+            )
+        else:
+            reference_slots = _svc_cls()._ordered_track_slots_for_remux(
+                reference_m2ts,
+                selected_audio_indices,
+                selected_subtitle_indices,
+                dovi_plan=dovi_plan,
+                mpls_path=mpls_path,
+            )
         if not reference_slots:
             print(translate_text('[remux-fallback-split] no track slots from edit-tracks selection'))
             return False
@@ -3950,6 +4233,12 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 pid_lang = pid_to_lang_from_m2ts_path(probe_path)
             except Exception:
                 pid_lang = {}
-        if not pid_lang:
+        if str(probe_path).lower().endswith('.m2ts'):
+            pid_lang = {
+                int(pid): pid_lang.get(int(pid), 'und')
+                for stream in streams
+                if (pid := _svc_cls()._stream_service_id(stream)) is not None
+            }
+        elif not pid_lang:
             pid_lang = _svc_cls()._pid_lang_from_media_streams(streams)
         return _svc_cls()._default_track_selection_from_streams(streams, pid_lang)

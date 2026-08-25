@@ -611,6 +611,10 @@ class BluraySubtitleGuiBase(QWidget):
     def _read_mkvmerge_attachment_rows(self, mkv_path: str) -> list[dict[str, str]]:
         raise NotImplementedError
 
+    @staticmethod
+    def _read_mpls_track_info(mpls_path: str) -> list[dict[str, object]]:
+        raise NotImplementedError
+
     def _rebuild_configuration_for_function_34(self):
         raise NotImplementedError
 

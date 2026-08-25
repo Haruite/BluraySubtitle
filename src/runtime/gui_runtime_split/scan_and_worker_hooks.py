@@ -400,18 +400,35 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
                     if not isinstance(available_config, dict):
                         available_config = {}
                         self._available_track_selection_config = available_config
-                    available_config[sp_key] = {
+                    available_snapshot = {
                         'audio': list(available_tracks.get('audio') or []),
                         'subtitle': list(available_tracks.get('subtitle') or []),
                     }
+                    if 'video' in available_tracks:
+                        available_snapshot['video'] = list(
+                            available_tracks.get('video') or []
+                        )
+                    available_config[sp_key] = available_snapshot
                     if select_all:
-                        cfg[sp_key] = {
+                        selected_snapshot = {
                             'audio': list(available_config[sp_key]['audio']),
                             'subtitle': list(available_config[sp_key]['subtitle']),
                         }
+                        if 'video' in available_config[sp_key]:
+                            selected_snapshot['video'] = list(
+                                available_config[sp_key]['video']
+                            )
+                        cfg[sp_key] = selected_snapshot
                     elif sp_key not in cfg:
-                        cfg[sp_key] = {'audio': list(tracks_payload.get('audio') or []),
-                                       'subtitle': list(tracks_payload.get('subtitle') or [])}
+                        selected_snapshot = {
+                            'audio': list(tracks_payload.get('audio') or []),
+                            'subtitle': list(tracks_payload.get('subtitle') or []),
+                        }
+                        if 'video' in tracks_payload:
+                            selected_snapshot['video'] = list(
+                                tracks_payload.get('video') or []
+                            )
+                        cfg[sp_key] = selected_snapshot
             except Exception:
                 pass
         finally:

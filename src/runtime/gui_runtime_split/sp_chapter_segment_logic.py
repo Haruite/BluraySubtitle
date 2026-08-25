@@ -1443,9 +1443,13 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                 }
                 info = whole_main_track_info.setdefault(main_norm, {
                     'main_path': os.path.normpath(main_path),
+                    'mpls_paths': [],
                     'pids': set(),
                     'pid_lang': dict(main_pid_lang),
                 })
+                alternate_path = os.path.normpath(str(alternate_chapter.file_path))
+                if alternate_path not in info['mpls_paths']:
+                    info['mpls_paths'].append(alternate_path)
                 aggregate_pid_lang = info['pid_lang']
                 for pid, language in alternate_pid_lang.items():
                     aggregate_pid_lang.setdefault(pid, language)
@@ -1471,8 +1475,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                 if not candidate_pids:
                     return set()
                 try:
-                    first_m2ts = self._get_first_m2ts_for_mpls(attachment_mpls)
-                    streams = self._read_m2ts_track_info(first_m2ts) if first_m2ts else []
+                    streams = self._read_mpls_track_info(attachment_mpls)
                     if streams:
                         return {
                             pid
@@ -1698,10 +1701,20 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                 pid_lang = dict(info.get('pid_lang') or {})
                 if not main_path or not pid_lang:
                     continue
-                first_m2ts = self._get_first_m2ts_for_mpls(main_path)
-                if not first_m2ts:
-                    continue
-                streams = self._read_m2ts_track_info(first_m2ts)
+                streams = self._read_mpls_track_info(main_path)
+                known_pid_types = {
+                    (str(stream.get('codec_type') or ''), self._parse_stream_pid(stream.get('pid')))
+                    for stream in streams
+                }
+                for alternate_path in info.get('mpls_paths', ()) or ():
+                    for stream in self._read_mpls_track_info(str(alternate_path)):
+                        key = (
+                            str(stream.get('codec_type') or ''),
+                            self._parse_stream_pid(stream.get('pid')),
+                        )
+                        if key not in known_pid_types:
+                            streams.append(stream)
+                            known_pid_types.add(key)
                 visible_streams = self._filter_streams_by_pid_lang(streams, pid_lang)
                 if not visible_streams:
                     continue
@@ -1724,6 +1737,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                         pid_lang,
                     )
                 track_config[main_key] = {
+                    'video': list(available_tracks.get('video') or []),
                     'audio': list(audio),
                     'subtitle': list(subtitle),
                 }

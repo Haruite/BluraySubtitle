@@ -233,9 +233,9 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
         sup_pids = self._track_pid_sets_for_config_key(
             sup_key, mpls_path_fallback=sup_mpls_fallback,
         )
-        # Track indexes belong to one first-play-item M2TS and are not stable
-        # identities across playlists. If either side cannot be mapped to real
-        # transport PIDs, keep the SP instead of declaring it redundant.
+        # No-MPLS single-M2TS indexes are source-local. If either side cannot
+        # be resolved to real transport PIDs, keep the SP instead of declaring
+        # it redundant.
         if sub_pids is None or sup_pids is None:
             return False
         sa, ss = sub_pids
@@ -249,13 +249,21 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
     def _track_pid_sets_for_config_key(
         self, key: str, *, mpls_path_fallback: str = '',
     ) -> Optional[tuple[set[int], set[int]]]:
-        """Map the captured first-M2TS track indexes to audio/subtitle transport PIDs."""
+        """Resolve captured selections to audio/subtitle transport PIDs."""
         mpls_path = os.path.normpath(str(mpls_path_fallback or '').strip())
         if not mpls_path or not os.path.isfile(mpls_path):
             return None
         selected_audio, selected_subtitles = self._track_id_sets_for_config_key(
             key, mpls_path_fallback=mpls_path,
         )
+        if str(key or '').startswith('main::') or '::mpls::' in str(key or ''):
+            try:
+                return (
+                    {int(str(pid).strip(), 0) for pid in selected_audio},
+                    {int(str(pid).strip(), 0) for pid in selected_subtitles},
+                )
+            except (TypeError, ValueError):
+                return None
         first_m2ts = self._get_first_m2ts_for_mpls(mpls_path)
         if not first_m2ts:
             return None
@@ -865,7 +873,13 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                         if ext_cache_key in single_audio_ext_cache:
                             ext = str(single_audio_ext_cache[ext_cache_key] or 'audio')
                         else:
-                            if str(src).lower().endswith('.m2ts'):
+                            if mpls_file:
+                                playlist_dir = self._get_playlist_dir_for_bdmv_index(
+                                    bdmv_index
+                                )
+                                mpls_path = os.path.join(playlist_dir, mpls_file)
+                                streams = self._read_mpls_track_info(mpls_path)
+                            elif str(src).lower().endswith('.m2ts'):
                                 streams = self._read_m2ts_track_info(src)
                             else:
                                 streams = BluraySubtitle._read_media_streams(src)
@@ -961,11 +975,21 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
             self, key: str, streams: list[dict[str, object]],
     ) -> dict[str, list[str]]:
         audio, subtitle = self._all_track_ids_from_streams(streams)
+        video = [
+            str(stream.get('index', '')).strip()
+            for stream in streams or []
+            if str(stream.get('codec_type') or '').strip().lower() == 'video'
+            and str(stream.get('index', '')).strip()
+        ]
         available = getattr(self, '_available_track_selection_config', None)
         if not isinstance(available, dict):
             available = {}
             self._available_track_selection_config = available
-        snapshot = {'audio': list(audio), 'subtitle': list(subtitle)}
+        snapshot = {
+            'video': video,
+            'audio': list(audio),
+            'subtitle': list(subtitle),
+        }
         available[str(key)] = snapshot
         return snapshot
 
@@ -1009,6 +1033,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
             if not isinstance(track_ids, dict):
                 continue
             self._track_selection_config[key] = {
+                'video': list(track_ids.get('video') or []),
                 'audio': list(track_ids.get('audio') or []),
                 'subtitle': list(track_ids.get('subtitle') or []),
             }

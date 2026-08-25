@@ -1235,13 +1235,13 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                             QCoreApplication.processEvents()
                 self.table1.resizeColumnsToContents()
                 if self.get_selected_function_id() in (3, 4):
-                    self.table1.setColumnWidth(2, 740 if getattr(self, '_language_code',
-                                                                 CURRENT_UI_LANGUAGE) == 'zh' else 680)
+                    self.table1.setColumnWidth(2, 560 if getattr(self, '_language_code',
+                                                                 CURRENT_UI_LANGUAGE) == 'zh' else 540)
                     self.table1.setColumnWidth(3, 420 if getattr(self, '_language_code',
                                                                  CURRENT_UI_LANGUAGE) == 'zh' else 380)
                 elif self.get_selected_function_id() == 5:
-                    self.table1.setColumnWidth(2, 740 if getattr(self, '_language_code',
-                                                                 CURRENT_UI_LANGUAGE) == 'zh' else 680)
+                    self.table1.setColumnWidth(2, 560 if getattr(self, '_language_code',
+                                                                 CURRENT_UI_LANGUAGE) == 'zh' else 540)
                 else:
                     self.table1.setColumnWidth(2, 540 if getattr(self, '_language_code',
                                                                  CURRENT_UI_LANGUAGE) == 'zh' else 490)
