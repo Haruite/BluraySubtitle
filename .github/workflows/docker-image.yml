@@ -84,6 +84,34 @@ jobs:
             printf '%s=%s\n' "$output_name" "$commit" >> "$GITHUB_OUTPUT"
           }
 
+          resolve_latest_mkvtoolnix() {
+            local output_name="$1"
+            local source="$2"
+            local attempt
+            local packages
+            local version
+            for attempt in 1 2 3 4 5; do
+              if packages="$(timeout 45s curl -fsSL "$source")"; then
+                break
+              fi
+              if [[ "$attempt" -lt 5 ]]; then
+                echo "::warning::Failed to query ${source} (attempt ${attempt}/5); retrying." >&2
+                sleep $((attempt * 5))
+              fi
+            done
+            if [[ -z "${packages:-}" ]]; then
+              echo "::error::Failed to query ${source} after 5 attempts." >&2
+              return 1
+            fi
+            version="$(awk '$1 == "Package:" { package = $2 } package == "mkvtoolnix" && $1 == "Version:" { print $2 }' <<<"$packages" | sort -V | tail -n 1 | sed 's/-.*//')"
+            if [[ ! "$version" =~ ^[0-9]+([.][0-9]+)+$ ]]; then
+              echo "::error::No valid MKVToolNix package version found at ${source}." >&2
+              return 1
+            fi
+            printf '%s=%s\n' "$output_name" "$version" >> "$GITHUB_OUTPUT"
+          }
+
+          resolve_latest_mkvtoolnix mkvtoolnix_version https://mkvtoolnix.download/ubuntu/dists/resolute/main/binary-amd64/Packages
           resolve_latest_tag ffmpeg_tag https://github.com/FFmpeg/FFmpeg.git '^[nN]?[0-9]+([.][0-9]+)+$'
           resolve_latest_tag x265_tag https://github.com/Multicorewareinc/x265.git '^[0-9]+([.][0-9]+)+$'
           resolve_latest_tag svt_av1_tag https://gitlab.com/AOMediaCodec/SVT-AV1.git '^[vV]?[0-9]+([.][0-9]+)+$'
@@ -105,6 +133,7 @@ jobs:
             ${{ secrets.DOCKERHUB_USERNAME }}/bluraysubtitle:latest
             ${{ secrets.DOCKERHUB_USERNAME }}/bluraysubtitle:26.04
           build-args: |
+            MKVTOOLNIX_VERSION=${{ steps.versions.outputs.mkvtoolnix_version }}
             FFMPEG_TAG=${{ steps.versions.outputs.ffmpeg_tag }}
             X265_TAG=${{ steps.versions.outputs.x265_tag }}
             SVT_AV1_TAG=${{ steps.versions.outputs.svt_av1_tag }}

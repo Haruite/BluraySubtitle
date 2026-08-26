@@ -38,6 +38,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxxhash-dev libfftw3-dev p7zip-full \
     && rm -rf /var/lib/apt/lists/*
 
+ARG MKVTOOLNIX_VERSION
+RUN set -eux; \
+    TARGET_MKVTOOLNIX_VERSION="${MKVTOOLNIX_VERSION:-$(curl -fsSL https://mkvtoolnix.download/latest-release.xml | python3 -c 'import sys, xml.etree.ElementTree as ET; print(ET.parse(sys.stdin).findtext("./latest-source/version") or "")')}"; \
+    INSTALLED_MKVTOOLNIX_VERSION="$(mkvmerge --version | grep -oE 'v[0-9]+([.][0-9]+)+' | head -n 1 | tr -d 'v')"; \
+    test -n "$TARGET_MKVTOOLNIX_VERSION"; \
+    test -n "$INSTALLED_MKVTOOLNIX_VERSION"; \
+    if dpkg --compare-versions "$INSTALLED_MKVTOOLNIX_VERSION" lt "$TARGET_MKVTOOLNIX_VERSION"; then \
+      apt-get update; \
+      AVAILABLE_MKVTOOLNIX_VERSION="$(apt-cache policy mkvtoolnix | awk '$1 == "Candidate:" { print $2; exit }' | sed 's/-.*//')"; \
+      test -n "$AVAILABLE_MKVTOOLNIX_VERSION"; \
+      if dpkg --compare-versions "$AVAILABLE_MKVTOOLNIX_VERSION" ge "$TARGET_MKVTOOLNIX_VERSION"; then \
+        apt-get install -y --no-install-recommends --only-upgrade mkvtoolnix mkvtoolnix-gui; \
+      fi; \
+    fi; \
+    rm -rf /var/lib/apt/lists/*
+
 RUN set -eux; \
     DOVI_HEADER=/usr/include/libdovi/rpu_parser.h; \
     if ! grep -qF 'void dovi_rpu_free(' "$DOVI_HEADER" \

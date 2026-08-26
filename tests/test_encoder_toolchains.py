@@ -216,10 +216,13 @@ class EncoderToolchainTests(unittest.TestCase):
             "/etc/apt/keyrings/gpg-pub-moritzbunkus.gpg",
             "https://mkvtoolnix.download/ubuntu/ resolute main",
             "mkvtoolnix mkvtoolnix-gui",
+            "ARG MKVTOOLNIX_VERSION",
+            "https://mkvtoolnix.download/latest-release.xml",
+            'TARGET_MKVTOOLNIX_VERSION="${MKVTOOLNIX_VERSION:-',
+            "--only-upgrade mkvtoolnix mkvtoolnix-gui",
         ):
             with self.subTest(target="Dockerfile", fragment=fragment):
                 self.assertIn(fragment, self.dockerfile)
-        self.assertNotIn("https://mkvtoolnix.download/latest-release.xml", self.dockerfile)
         self.assertNotIn("rake install", self.dockerfile)
 
     def test_libdovi_repairs_the_truncated_ubuntu_header_without_docker_cargo(
@@ -427,12 +430,14 @@ class EncoderToolchainTests(unittest.TestCase):
         self.assertNotIn("TOOLPATHS", self.dockerfile)
         self.assertNotIn("place_tool", self.dockerfile)
         self.assertNotIn('ADD ["http', self.dockerfile)
+        self.assertNotIn("\nADD http", self.dockerfile)
 
     def test_docker_version_cache_keys_are_resolved_with_retries(self) -> None:
         self.assertIn("retry_ls_remote()", self.docker_workflow)
         self.assertIn("for attempt in 1 2 3 4 5; do", self.docker_workflow)
         self.assertIn("timeout 45s git ls-remote", self.docker_workflow)
         for command in (
+            "resolve_latest_mkvtoolnix mkvtoolnix_version https://mkvtoolnix.download/ubuntu/dists/resolute/main/binary-amd64/Packages",
             "resolve_latest_tag ffmpeg_tag https://github.com/FFmpeg/FFmpeg.git",
             "resolve_latest_tag x265_tag https://github.com/Multicorewareinc/x265.git",
             "resolve_latest_tag svt_av1_tag https://gitlab.com/AOMediaCodec/SVT-AV1.git",
@@ -445,6 +450,7 @@ class EncoderToolchainTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertIn(command, self.docker_workflow)
         for argument, output_name in (
+            ("MKVTOOLNIX_VERSION", "mkvtoolnix_version"),
             ("FFMPEG_TAG", "ffmpeg_tag"),
             ("X265_TAG", "x265_tag"),
             ("SVT_AV1_TAG", "svt_av1_tag"),
