@@ -330,6 +330,8 @@ Series mode keeps two exact-detail mechanisms separate. A non-main MPLS whose co
 
 Only when the whole-main rule does not apply may an SP detail that exactly and uniquely matches one table2 episode be appended after splitting. Multiple selected SP rows are consumed in visible order: the first row owns a repeated PID, already present PIDs are skipped, and appended SP PIDs are kept in ascending order after the original main tracks. A detail spanning several episode rows is not associated with multiple outputs and remains ordinary SP. Movie-mode SP rows never use either attachment path. An episode is replaced only after the append result has completed and passed verification.
 
+An authored interval exception occurs on *Witch Craft Works Blu-ray BOX* DISC3. `00002.mpls` uses `00006.m2ts` from `00:00:00.000`, but uses `00007.m2ts` through `00011.m2ts` from `00:00:02.002`; their standalone `00004.mpls` through `00008.mpls` playlists start the same clips at `00:00:00.000`. Likewise, `00010.mpls` starts `00013.m2ts` at zero but starts `00014.m2ts` through `00024.m2ts` at `00:00:02.002`, while the standalone playlists start at zero. SP coverage follows exact clip intervals, not M2TS-basename membership or containment between table3 rows. A standalone row with this additional leading `2.002` seconds therefore remains an ordinary selected SP and must not be unchecked merely because an aggregate SP references the same M2TS file.
+
 ## Audio processing
 
 Final Matroska Remux and Encode audio processing:
