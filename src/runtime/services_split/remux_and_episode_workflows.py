@@ -716,7 +716,9 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             if not identify_ok:
                 print('[remux-fallback] skipping primary mkvmerge (see identify check lines above)')
             print(f'{self.t("Mux command: ")}{job.command}')
-            self._progress(text=f'{self.t("Muxing: ")}BD_Vol_{job.volume}')
+            self._progress(
+                text=f'{self.t("Muxing: ")}BD_Vol_{job.volume} [{os.path.basename(job.mpls_path)}]'
+            )
             if identify_ok:
                 try:
                     return_code, _line_return_codes = self._run_shell_command_detailed(job.command)
