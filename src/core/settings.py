@@ -7,8 +7,20 @@ from pathlib import Path
 
 
 def is_docker() -> bool:
-    path = "/proc/self/cgroup"
-    return os.path.exists("/.dockerenv") or (os.path.isfile(path) and any("docker" in line for line in open(path)))
+    if os.path.exists("/.dockerenv"):
+        return True
+    for path in ("/proc/self/cgroup", "/proc/1/cgroup"):
+        try:
+            with open(path, encoding="utf-8", errors="ignore") as cgroup_file:
+                if any(
+                    container_name in line
+                    for line in cgroup_file
+                    for container_name in ("docker", "kubepods", "containerd")
+                ):
+                    return True
+        except OSError:
+            pass
+    return False
 
 
 _BUNDLE_ROOT = (
