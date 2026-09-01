@@ -542,6 +542,8 @@ An SP that covers two or more episode outputs but does not equal the complete se
 
 Exact detail equality is a safety condition, not an approximate duration comparison. Reusing the same M2TS is insufficient when the playlist has a different `INTime`, `OUTTime`, or clip sequence. In that situation—including the *Horizon in the Middle of Nowhere* case above—the commentary entry remains SP and is not automatically attached to the main episode. Movie mode has neither of these SP-to-main paths; its SP rows always remain independent outputs.
 
+A cross-disc commentary exception occurs on *The Seven Deadly Sins: Four Knights of the Apocalypse*. Bonus-disc volume 11 (BOX II) uses `00008.mpls` through `00012.mpls` for the commentary editions of episodes 1, 8, 11, 16, and 20 respectively; `00001.mpls` is a byte-identical duplicate of the episode 20 commentary program stored under another M2TS basename. Bonus-disc volume 12 (BOX III) uses `00002.mpls` and `00003.mpls` for the commentary editions of episodes 26 and 30. Because these commentary editions and the corresponding main episodes are on different discs, they cannot be attached automatically and remain standalone SP outputs.
+
 Other main episodes that do not contain the additional track remain unchanged. In typical authored discs such unexposed tracks are silent or duplicate audio. Even when their bytes are not silent, they are not addressable through normal MPLS playback and are not treated as valid title audio unless a matching SP timeline exposes them.
 
 ## Validation checklist for a playlist
