@@ -14,7 +14,10 @@ from src.runtime.sp import (
     m2ts_file_detail_segments_contained_in,
     parse_m2ts_file_detail_segments,
 )
-from src.runtime.audio_conversion import _is_lossless_audio_track
+from src.runtime.audio_conversion import (
+    _is_lossless_audio_track,
+    is_immersive_audio_codec,
+)
 from src.runtime.services_split.encode_and_audio_tasks import (
     _normalize_x264_extra_for_bit_depth,
 )
@@ -84,13 +87,21 @@ class EncoderOptionTests(unittest.TestCase):
             return {'codec': codec, 'properties': {'codec_id': codec_id}}
 
         self.assertTrue(_is_lossless_audio_track(track('A_TRUEHD')))
-        self.assertTrue(_is_lossless_audio_track(track('A_DTS')))
+        self.assertTrue(
+            _is_lossless_audio_track(track('A_DTS', 'DTS-HD Master Audio'))
+        )
+        self.assertFalse(_is_lossless_audio_track(track('A_DTS', 'DTS')))
+        self.assertFalse(
+            _is_lossless_audio_track(track('A_DTS', 'DTS-HD High Resolution Audio'))
+        )
         self.assertTrue(_is_lossless_audio_track(track('A_FLAC')))
         self.assertTrue(_is_lossless_audio_track(track('A_PCM/INT/LIT')))
         self.assertFalse(_is_lossless_audio_track(track('A_AC3')))
         self.assertFalse(_is_lossless_audio_track(track('A_EAC3')))
         self.assertFalse(_is_lossless_audio_track(track('A_AAC/MPEG4/LC')))
         self.assertFalse(_is_lossless_audio_track(track('A_OPUS')))
+        self.assertTrue(is_immersive_audio_codec('dts', 'DTS-HD MA + DTS:X'))
+        self.assertTrue(is_immersive_audio_codec('truehd', 'TrueHD', 'Atmos'))
 
 
 class SilentAudioAnalysisTests(unittest.TestCase):

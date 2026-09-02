@@ -65,7 +65,7 @@ class WindowsSetupTests(unittest.TestCase):
             "7zip", "python", "python-dependencies", "python-system-path", "git",
             "git-system-path", "visual-studio-build-tools", "cmake", "ninja", "nasm",
             "msys2", "msys2-packages", "ffmpeg", "flac", "mkvtoolnix", "tsmuxer",
-            "dovi-tool", "hdr10plus-tool", "truehdd", "x264", "x265", "svt-av1",
+            "dovi-tool", "hdr10plus-tool", "x264", "x265", "svt-av1",
             "fdkaac", "libass", "vapoursynth-classic", "vapoursynth-python",
             "vapoursynth-tools",
         )
@@ -89,7 +89,6 @@ class WindowsSetupTests(unittest.TestCase):
             "justdan96/tsMuxer",
             "quietvoid/dovi_tool",
             "quietvoid/hdr10plus_tool",
-            "truehdd/truehdd",
             "code.videolan.org/videolan/x264.git",
             "Multicorewareinc/x265",
             "nu774/fdkaac",

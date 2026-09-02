@@ -1,13 +1,11 @@
 """Utility/helper exports used across workflows."""
 import ctypes
-import json
 import os
 import shlex
 import shutil
 import signal
 import subprocess
 import sys
-import tempfile
 import time
 import traceback
 from contextlib import contextmanager
@@ -22,7 +20,7 @@ from ..core.i18n import translate_text, _terminal_err_stream
 if sys.platform == 'win32':
     import winreg
 
-from ..core import FFMPEG_PATH, FFPROBE_PATH
+from ..core import FFMPEG_PATH
 
 _MKVMERGE_CANCEL_EVENT: ContextVar[object | None] = ContextVar(
     '_MKVMERGE_CANCEL_EVENT',
@@ -332,64 +330,26 @@ def fix_audio_delay_to_lossless(input_file, delay_ms, output_file, track_index=0
         print(f"FFmpeg error: {e}")
 
 
-def get_effective_bit_depth(file_path):
+def get_effective_bit_depth(file_path, fallback_depth=24):
+    """Estimate whether integer PCM effectively uses 16, 24, or 32 bits."""
     if soundfile is None:
-        return 24
+        return fallback_depth
     info = soundfile.info(file_path)
     frames = min(int(info.frames), int(info.samplerate) * 10)
     start = int(info.frames) // 2 if int(info.frames) > (frames * 2) else 0
-    data, sr = soundfile.read(file_path, start=start, frames=frames, dtype='int32')
-    return 16 if np.all(data % 65536 == 0) else 24
-
-
-def get_audio_duration(file_path):
-    """Return total audio duration in seconds using probed metadata."""
-    cmd = f'"{FFPROBE_PATH}" -v error -show_entries format=duration:stream=duration -of json "{file_path}"'
-    try:
-        proc = run_command(cmd, capture_output=True, text=True, encoding='utf-8')
-    except Exception:
-        return 0.0
-    if proc.returncode != 0 or not (proc.stdout or '').strip():
-        return 0.0
-    try:
-        data = json.loads(proc.stdout)
-    except Exception:
-        return 0.0
-    try:
-        duration = (data.get('format') or {}).get('duration')
-        if duration not in (None, '', 'N/A'):
-            return float(duration)
-    except Exception:
-        pass
-    try:
-        streams = data.get('streams') or []
-        if streams:
-            duration = (streams[0] or {}).get('duration')
-            if duration not in (None, '', 'N/A'):
-                return float(duration)
-    except Exception:
-        pass
-    return 0.0
-
-
-def get_compressed_effective_depth(file_path, check_duration=10):
-    """Estimate effective bit depth from a middle sample window of compressed audio."""
-    if soundfile is None:
+    data, _sample_rate = soundfile.read(
+        file_path,
+        start=start,
+        frames=frames,
+        dtype='int32',
+    )
+    if not data.size:
+        return fallback_depth
+    if np.all(data % 65536 == 0):
+        return 16
+    if np.all(data % 256 == 0):
         return 24
-    total_duration = get_audio_duration(file_path)
-    start_time = total_duration / 2 if total_duration > (check_duration * 2) else 0.0
-    fd, temp_wav = tempfile.mkstemp(prefix=f"temp_depth_check_{os.getpid()}_", suffix=".wav")
-    os.close(fd)
-
-    try:
-        cmd = f'"{FFMPEG_PATH}" -hide_banner -loglevel error -ss {start_time} -i "{file_path}" -t {check_duration} -map 0:a:0 -c:a pcm_s24le "{temp_wav}" -y'
-        run_command(cmd, check=True)
-        data, sr = soundfile.read(temp_wav, dtype='int32')
-        is_16bit = np.all(data % 65536 == 0)
-        return 16 if is_16bit else 24
-    finally:
-        if os.path.exists(temp_wav):
-            os.remove(temp_wav)
+    return 32
 
 
 def bundle_application_root() -> str:
@@ -589,8 +549,6 @@ __all__ = [
     "get_mpv_safe_path",
     "fix_audio_delay_to_lossless",
     "get_effective_bit_depth",
-    "get_audio_duration",
-    "get_compressed_effective_depth",
     "bundle_application_root",
     "resolve_encoder_executable_path",
     "get_vspipe_context",

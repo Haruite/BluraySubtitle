@@ -11,6 +11,7 @@ from src.core import REMUX_LABELS, DIY_REMUX_LABELS, ENCODE_LABELS, CURRENT_UI_L
     DIY_SP_LABELS, MPLS_INFO_LABELS
 from src.runtime.services import BluraySubtitle
 from src.exports.utils import parse_time_to_seconds
+from src.runtime.audio_conversion import is_immersive_audio_codec
 from src.runtime.services_split.lifecycle_and_configuration import LifecycleConfigurationMixin
 from src.runtime.sp import (
     SpEntry, media_track_key, filter_m2ts_file_detail_by_basenames,
@@ -900,10 +901,22 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                                             or self._current_encode_lossless_audio_codec()
                                         ).strip().lower()
                                         ext = {'aac': 'm4a'}.get(target_codec, target_codec)
-                                    elif c in (
-                                            'pcm_bluray', 'pcm_s16le', 'pcm_s24le',
-                                            'pcm_s32le', 'dts', 'truehd', 'mlp',
-                                    ):
+                                    elif self._is_lossless_audio_stream_dict(s):
+                                        immersive_audio = is_immersive_audio_codec(
+                                            c,
+                                            s.get('profile'),
+                                            s.get('track_name'),
+                                        )
+                                        convert_immersive = bool(
+                                            self._app_config.remux.convert_immersive_audio_to_flac
+                                        )
+                                        if immersive_audio and not convert_immersive:
+                                            ext = 'dts' if 'dts' in c else 'thd'
+                                        else:
+                                            ext = 'flac'
+                                    elif c in ('dts', 'dts_hd'):
+                                        ext = 'dts'
+                                    elif c in ('truehd', 'mlp'):
                                         ext = 'flac'
                                     else:
                                         ext = {'aac': 'm4a'}.get(c, c or 'audio')

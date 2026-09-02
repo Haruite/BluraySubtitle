@@ -4,7 +4,7 @@ import traceback
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
-from src.bdmv import M2TS, Chapter, pid_to_lang_from_m2ts_path
+from src.bdmv import M2TS, pid_to_lang_from_m2ts_path
 from src.core import FFMPEG_PATH
 from src.exports.utils import print_tb_string_terminal, run_command
 from src.runtime.services import BluraySubtitle
@@ -47,7 +47,7 @@ class SpTableScanWorker(QObject):
                     if str(key).lower().endswith('.m2ts'):
                         v = BluraySubtitle._m2ts_track_streams(key)
                     elif str(key).lower().endswith('.mpls'):
-                        v = BluraySubtitle._mkvmerge_track_streams_for_mpls(key)
+                        v = BluraySubtitle._mpls_track_streams(key)
                     else:
                         v = BluraySubtitle._read_media_streams(key)
                 except Exception:
@@ -187,21 +187,16 @@ class SpTableScanWorker(QObject):
                                 allow_tracks_when_disabled = True
                         if mpls_path and os.path.exists(mpls_path):
                             try:
-                                ch = Chapter(mpls_path)
-                                ch.get_pid_to_language()
-                                pid_to_lang = ch.pid_to_lang
-                            except Exception:
-                                pid_to_lang = {}
-                            try:
                                 streams = _streams(mpls_path)
                             except Exception:
                                 streams = []
-                            if pid_to_lang:
-                                streams = [
-                                    stream
-                                    for stream in streams
-                                    if BluraySubtitle._stream_service_id(stream) in pid_to_lang
-                                ]
+                            pid_to_lang = {
+                                int(stream['pid']): str(
+                                    stream.get('language') or stream.get('lang') or 'und'
+                                )
+                                for stream in streams
+                                if stream.get('pid') is not None
+                            }
                             try:
                                 available_tracks = _available_tracks(streams)
                                 a, s = BluraySubtitle._default_track_selection_from_streams(streams, pid_to_lang)

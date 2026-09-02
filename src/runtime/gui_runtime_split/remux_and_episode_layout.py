@@ -1368,6 +1368,9 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 movie_mode=bool(self._is_movie_mode()),
                 mux_dolby_vision=bool(dovi_checkbox.isChecked()),
                 convert_lossless_audio_to_flac=bool(flac_checkbox.isChecked()),
+                convert_immersive_audio_to_flac=(
+                    self._app_config.remux.convert_immersive_audio_to_flac
+                ),
                 audio_encoding=self._captured_audio_encoding_settings(),
                 track_selection_config=copy.deepcopy(getattr(self, '_track_selection_config', {}) or {}),
                 track_language_config=copy.deepcopy(getattr(self, '_track_language_config', {}) or {}),

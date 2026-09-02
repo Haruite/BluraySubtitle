@@ -157,7 +157,6 @@ names = (
     "FDK_AAC_PATH",
     "DOVI_TOOL_PATH",
     "HDR10PLUS_TOOL_PATH",
-    "TRUEHDD_PATH",
     "VSEDIT_PATH",
     "VSPIPE_PATH",
     "PLUGIN_PATH",
@@ -184,7 +183,7 @@ PY
     printf -v "$name" '%s' "$value"
     count=$((count + 1))
   done <<< "$output"
-  [[ "$count" -eq 18 ]] || die "$(msg 'settings.py did not provide every required Linux tool path' 'settings.py 未提供全部必需的 Linux 工具路径')"
+  [[ "$count" -eq 17 ]] || die "$(msg 'settings.py did not provide every required Linux tool path' 'settings.py 未提供全部必需的 Linux 工具路径')"
 
   X264_VERSION_FILE="$(dirname -- "$X264_PATH")/x264-version.txt"
   X265_FEATURE_FILE="$(dirname -- "$X265_PATH")/x265-build-features.txt"
@@ -231,7 +230,7 @@ verify_configured_tool_paths() {
   for path in \
     "$FLAC_PATH" "$FFMPEG_PATH" "$FFPROBE_PATH" \
     "$X265_PATH" "$X264_PATH" "$SVT_AV1_PATH" "$FDK_AAC_PATH" \
-    "$DOVI_TOOL_PATH" "$HDR10PLUS_TOOL_PATH" "$TRUEHDD_PATH" \
+    "$DOVI_TOOL_PATH" "$HDR10PLUS_TOOL_PATH" \
     "$VSEDIT_PATH" "$VSPIPE_PATH" "$TS_MUXER_PATH" \
     "$MKV_INFO_PATH" "$MKV_MERGE_PATH" "$MKV_PROP_EDIT_PATH" "$MKV_EXTRACT_PATH"; do
     [[ -x "$path" ]] || die "$(msg "Configured tool is missing or not executable: ${path}" "配置的工具不存在或不可执行：${path}")"
@@ -985,71 +984,6 @@ install_hdr10plus_tool() {
   "$HDR10PLUS_TOOL_PATH" --version 2>&1 | grep -F "hdr10plus_tool ${version#v}" >/dev/null || \
     die "$(msg 'Installed hdr10plus_tool verification failed' '安装后的 hdr10plus_tool 验证失败')"
   log "$(msg 'hdr10plus_tool installation complete' 'hdr10plus_tool 安装完成')"
-}
-
-# ---------------------------------------------------------------------------
-# truehdd (prebuilt release binary for TrueHD+Atmos decode)
-# ---------------------------------------------------------------------------
-
-# Set TRUEHDD_VERSION to pin a release; otherwise resolve the latest published release.
-TRUEHDD_VERSION="${TRUEHDD_VERSION:-}"
-
-install_truehdd() {
-  if [[ -z "$TRUEHDD_VERSION" ]]; then
-    if ! TRUEHDD_VERSION="$(
-      curl -fsSL https://api.github.com/repos/truehdd/truehdd/releases/latest \
-        | python3 -c 'import json, sys; print(json.load(sys.stdin)["tag_name"])'
-    )"; then
-      die "$(msg 'Failed to resolve the latest published truehdd release' '无法获取 truehdd 最新正式发布版本')"
-    fi
-  fi
-  log "$(msg "Installing truehdd ${TRUEHDD_VERSION} (prebuilt)" "安装 truehdd ${TRUEHDD_VERSION}（预编译包）")"
-
-  if [[ -x "$TRUEHDD_PATH" ]]; then
-    log "$(msg "truehdd already installed (${TRUEHDD_PATH}), skipping" "检测到 truehdd 已安装（${TRUEHDD_PATH}），跳过")"
-    return 0
-  fi
-
-  local arch tarball
-  case "$(uname -m)" in
-    x86_64 | amd64)
-      arch=x86_64
-      ;;
-    aarch64 | arm64)
-      arch=aarch64
-      ;;
-    *)
-      die "$(msg "Unsupported CPU architecture for truehdd prebuilt: $(uname -m)" "当前 CPU 架构不支持预编译 truehdd：$(uname -m)")"
-      ;;
-  esac
-  tarball="truehdd-${TRUEHDD_VERSION}-${arch}-unknown-linux-gnu.tar.gz"
-
-  local deps=(git wget tar)
-  local missing_deps=()
-  local dep
-  for dep in "${deps[@]}"; do
-    if ! dpkg-query -W -f='${Status}' "$dep" 2>/dev/null | grep -q "install ok installed"; then
-      missing_deps+=("$dep")
-    fi
-  done
-  if (( ${#missing_deps[@]} > 0 )); then
-    apt_update
-    apt_install "${missing_deps[@]}" || die "$(msg 'Failed to install truehdd dependencies' 'truehdd 依赖安装失败')"
-  fi
-
-  local build_dir
-  build_dir="$(mktemp -d)"
-
-  (
-    cd "$build_dir" || exit 1
-    tmux_run "$(msg "Download ${tarball}" "下载 ${tarball}")" \
-      wget "https://github.com/truehdd/truehdd/releases/download/${TRUEHDD_VERSION}/${tarball}" || exit 1
-    tmux_run "$(msg 'Extract truehdd tarball' '解压 truehdd 压缩包')" tar zxvf "$tarball" || exit 1
-    install_configured_executable truehdd "$TRUEHDD_PATH" || exit 1
-  ) || die "$(msg 'truehdd install failed' 'truehdd 安装失败')"
-
-  rm -rf "$build_dir"
-  log "$(msg 'truehdd installation complete' 'truehdd 安装完成')"
 }
 
 # ---------------------------------------------------------------------------
@@ -3170,7 +3104,6 @@ install_svt_av1
 install_tsmuxer
 install_dovi_tool
 install_hdr10plus_tool
-install_truehdd
 install_fdk_aac
 install_flac
 install_vapoursynth

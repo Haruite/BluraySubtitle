@@ -69,7 +69,6 @@ EXTERNAL_TOOL_PATH_NAMES = (
     "X264_PATH",
     "SVT_AV1_PATH",
     "FDK_AAC_PATH",
-    "TRUEHDD_PATH",
     "VSEDIT_PATH",
     "VSPIPE_PATH",
     "TS_MUXER_PATH",
@@ -362,6 +361,15 @@ class SettingsDialog(QDialog):
             self.t("Opus bitrate"),
             self.opus_bitrate_spin,
         )
+        self.audio_duration_loss_threshold_spin = QDoubleSpinBox(audio_group)
+        self.audio_duration_loss_threshold_spin.setRange(0.1, 60.0)
+        self.audio_duration_loss_threshold_spin.setDecimals(1)
+        self.audio_duration_loss_threshold_spin.setSingleStep(0.1)
+        self.audio_duration_loss_threshold_spin.setSuffix(self.t(" seconds"))
+        audio_form.addRow(
+            self.t("Audio duration-loss fallback threshold"),
+            self.audio_duration_loss_threshold_spin,
+        )
         bitrate_hint = QLabel(
             self.t(
                 "Auto keeps FDK-AAC VBR mode 5 and Opus 128/256 kbps "
@@ -378,6 +386,20 @@ class SettingsDialog(QDialog):
             audio_group,
         )
         audio_form.addRow(self.remux_flac_default_checkbox)
+        self.remux_immersive_flac_checkbox = QCheckBox(
+            self.t("Convert DTS:X and TrueHD Atmos to FLAC during Remux"),
+            audio_group,
+        )
+        audio_form.addRow(self.remux_immersive_flac_checkbox)
+        immersive_audio_hint = QLabel(
+            self.t(
+                "Converting DTS:X or TrueHD Atmos to FLAC permanently removes "
+                "immersive object metadata and keeps only decoded channels."
+            ),
+            audio_group,
+        )
+        immersive_audio_hint.setWordWrap(True)
+        audio_form.addRow(immersive_audio_hint)
         layout.addWidget(audio_group)
 
         encode_group = QGroupBox(self.t("Default encode settings"), tab)
@@ -1042,8 +1064,14 @@ class SettingsDialog(QDialog):
         )
         self.fdkaac_bitrate_spin.setValue(config.audio.fdkaac_bitrate_kbps)
         self.opus_bitrate_spin.setValue(config.audio.opus_bitrate_kbps)
+        self.audio_duration_loss_threshold_spin.setValue(
+            config.audio.duration_loss_fallback_threshold_seconds
+        )
         self.remux_flac_default_checkbox.setChecked(
             config.remux.convert_lossless_audio_to_flac
+        )
+        self.remux_immersive_flac_checkbox.setChecked(
+            config.remux.convert_immersive_audio_to_flac
         )
         self.default_encoder_combo.blockSignals(True)
         try:
@@ -1123,10 +1151,16 @@ class SettingsDialog(QDialog):
                 ),
                 fdkaac_bitrate_kbps=self.fdkaac_bitrate_spin.value(),
                 opus_bitrate_kbps=self.opus_bitrate_spin.value(),
+                duration_loss_fallback_threshold_seconds=(
+                    self.audio_duration_loss_threshold_spin.value()
+                ),
             ),
             remux=RemuxPreferences(
                 convert_lossless_audio_to_flac=(
                     self.remux_flac_default_checkbox.isChecked()
+                ),
+                convert_immersive_audio_to_flac=(
+                    self.remux_immersive_flac_checkbox.isChecked()
                 ),
             ),
             encode=EncodePreferences(

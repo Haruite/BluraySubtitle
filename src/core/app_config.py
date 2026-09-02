@@ -63,11 +63,13 @@ class AudioPreferences:
     ffmpeg_flac_compression_level: int = 8
     fdkaac_bitrate_kbps: int = 0
     opus_bitrate_kbps: int = 0
+    duration_loss_fallback_threshold_seconds: float = 1.0
 
 
 @dataclass(frozen=True)
 class RemuxPreferences:
     convert_lossless_audio_to_flac: bool = True
+    convert_immersive_audio_to_flac: bool = False
 
 
 @dataclass(frozen=True)
@@ -379,12 +381,24 @@ def app_config_from_mapping(raw: dict[str, Any]) -> AppConfig:
                 0,
                 1024,
             ),
+            duration_loss_fallback_threshold_seconds=_number_value(
+                audio,
+                "duration_loss_fallback_threshold_seconds",
+                1.0,
+                0.1,
+                60.0,
+            ),
         ),
         remux=RemuxPreferences(
             convert_lossless_audio_to_flac=_boolean_value(
                 remux,
                 "convert_lossless_audio_to_flac",
                 True,
+            ),
+            convert_immersive_audio_to_flac=_boolean_value(
+                remux,
+                "convert_immersive_audio_to_flac",
+                False,
             ),
         ),
         encode=EncodePreferences(

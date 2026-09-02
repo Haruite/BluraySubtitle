@@ -114,15 +114,6 @@ These are **two separate upstreams**: the `fdkaac` program links against or ship
 
 ---
 
-## truehdd
-
-- **Files:** `truehdd.exe`
-- **Version:** {{TRUEHDD_VERSION}}
-- **License:** Apache 2.0
-- **Source:** https://github.com/truehdd/truehdd/archive/refs/tags/{{TRUEHDD_VERSION}}.zip
-
----
-
 ## libass
 
 - **Files:** `libass-9.dll`

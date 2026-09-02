@@ -82,6 +82,8 @@ The trim is therefore enforced at transport/PES timestamp boundaries rather than
 
 MKVToolNix validates M2TS structure more strictly than tsMuxer. This is useful for detecting malformed input, but some authored discs expose a track through tsMuxer while `mkvmerge --identify` omits it. Direct MPLS remuxing may also fail when different play items expose different track layouts.
 
+Disc loading and **Edit Tracks** read the MPLS STN directly, sort its track rows by PID, and do not identify the MPLS or inspect its first M2TS for track selection. At execution, the MPLS is identified once. If any selected PID is absent, direct muxing is skipped immediately; otherwise the command placeholders are resolved and the relevant M2TS mappings are checked before the direct mux.
+
 The [track-aligned fallback](../../src/runtime/services_split/media_info_and_track_mapping.py) handles those cases:
 
 1. The tracks selected in **Edit Tracks** define the required PID layout and output order.
@@ -186,14 +188,14 @@ tsMuxer uses two different readers for the relevant Blu-ray TrueHD layouts. Both
 
 There is no code in either path that synthesizes a replacement access unit, preserves a damaged interval as a gap, or fills it with silence. This makes tsMuxer useful for recovering a selected PID that MKVToolNix did not expose, but not a substitute for a dedicated damaged-TrueHD repair demuxer.
 
-A short real-media check makes the impact concrete. tsMuxeR 2.7.0 demuxed both TrueHD PIDs from the 50.053-second Avatar `00096.m2ts` and returned `Demux complete`. It identified PID 4352 as interleaved `A_AC3` and PID 4356 as TrueHD-only `A_MLP`. The second track produced repeated `bad frame detected ... Resync stream` messages during demux. `truehdd` 0.4.0 `info` then reported:
+A short real-media check makes the impact concrete. tsMuxeR 2.7.0 demuxed both TrueHD PIDs from the 50.053-second Avatar `00096.m2ts` and returned `Demux complete`. It identified PID 4352 as interleaved `A_AC3` and PID 4356 as TrueHD-only `A_MLP`. The second track produced repeated `bad frame detected ... Resync stream` messages during demux. A decoder check then reported:
 
-| PID | tsMuxer output | Output size | `truehdd` duration |
+| PID | tsMuxer output | Output size | Decoded duration |
 | ---: | --- | ---: | ---: |
 | 4352 | AC-3 core + TrueHD | 34.27 MB | 00:00:06.587 |
 | 4356 | TrueHD | 7.33 MB | 00:00:10.047 |
 
-Both are far shorter than the 50.053-second M2TS interval, and `truehdd` reported extensive parity and restart/seamless-branch errors when warnings were enabled. Duration alone does not prove that each PID was authored to cover the whole clip, but the error log confirms that the extracted elementary streams are not clean. The check used only this short M2TS, not the complete playlist.
+Both are far shorter than the 50.053-second M2TS interval, and the decoder reported extensive parity and restart/seamless-branch errors when warnings were enabled. Duration alone does not prove that each PID was authored to cover the whole clip, but the error log confirms that the extracted elementary streams are not clean. The check used only this short M2TS, not the complete playlist.
 The source explains the resynchronization and frame-loss behavior; it does not prove whether each individual bad-frame report was triggered by original payload damage, an unsupported framing pattern, or an earlier loss of framing.
 
 Restricting tsMuxer to per-file, per-PID recovery also makes its output verifiable: BluraySubtitle knows exactly which tracks are missing and rejects a result that does not restore the required layout.
@@ -212,9 +214,9 @@ The relevant MKVToolNix paths make the limitation explicit:
 - `truehd_ac3_splitting_packet_converter_c::process_frames()` gives the PES timestamp to the first TrueHD frame in that PES. Subsequent frames are timed from their sample counts by `truehd_packetizer_c::process_framed()`. That packetizer places the original `frame->m_data` in the Matroska packet; apart from the optional dialog-normalization header edit, it does not rewrite or decode the payload.
 - `xtr_base_c::create_extractor()` maps `MKV_A_TRUEHD` to the generic `xtr_base_c` extractor, whose `handle_frame()` writes each Matroska frame directly to the output file. Matroska timestamps and gaps are not serialized into a raw `.thd` elementary stream.
 
-Matroska timestamps can represent a gap left by missing frames. A subsequently extracted raw `.thd` stream cannot: `mkvextract` writes the elementary frame bytes consecutively and raw TrueHD has no Matroska timestamp gap. Consequently a damaged source can have a plausible MKV duration but produce many `truehdd` errors and a decoded PCM/FLAC track that is one or two seconds shorter than the video. Changing MKV append mode aligns file boundaries but does not repair the TrueHD payload or increase the number of valid raw frames.
+Matroska timestamps can represent a gap left by missing frames. A subsequently extracted raw `.thd` stream cannot: `mkvextract` writes the elementary frame bytes consecutively and raw TrueHD has no Matroska timestamp gap. Consequently a damaged source can have a plausible MKV duration but produce decoder errors and a decoded PCM/FLAC track that is one or two seconds shorter than the video. Changing MKV append mode aligns file boundaries but does not repair the TrueHD payload or increase the number of valid raw frames.
 
-The observed `truehdd` errors and short decoded duration are therefore consistent with two source-backed mechanisms: damaged but structurally accepted TrueHD frames can reach the decoder unchanged, and transport/framing loss can remove frame bytes without replacement. Without a byte-level trace of the affected PIDs, it would be too strong to claim that every reported error or the entire one-to-two-second deficit comes from only one of those mechanisms.
+The observed decoder errors and short decoded duration are therefore consistent with two source-backed mechanisms: damaged but structurally accepted TrueHD frames can reach the decoder unchanged, and transport/framing loss can remove frame bytes without replacement. Without a byte-level trace of the affected PIDs, it would be too strong to claim that every reported error or the entire one-to-two-second deficit comes from only one of those mechanisms.
 
 Local tests show that eac3to has broadly similar results on this class of damaged TrueHD.
 
@@ -226,13 +228,11 @@ However, the license distributed with DGDemux states that end users may invoke t
 
 Even if permission were obtained, adding DGDemux would introduce another full-disc demux stage, lengthen remux processing, add platform-specific packaging and command handling, and create a second track-order mapping path. The maintenance cost is not currently justified.
 
-### Why `truehdd` is used instead of FFmpeg for Atmos conversion
+### Lossless conversion policy
 
-Within the supported decoder set, `truehdd` is used because it can fully interpret the TrueHD Atmos presentation required by this workflow. BluraySubtitle decodes presentation 2 before FLAC encoding and does not treat FFmpeg's TrueHD decoding as an equivalent Atmos conversion path. If `truehdd` is unavailable or fails, the source TrueHD Atmos track is retained.
+FFmpeg decodes TrueHD and DTS. Because FLAC cannot represent DTS:X or TrueHD Atmos object metadata, Remux converts those streams only when its separate Advanced option is enabled. A decode or encode failure keeps the original track. Post-conversion validation compares duration only: a loss over 0.1 seconds is reported, and a loss over the configurable threshold discards the FLAC. The default threshold is 1 second.
 
-FLAC is used to improve playback compatibility across devices. For TrueHD/MLP, a successfully decoded FLAC is therefore retained even when it is larger than the original TrueHD stream: compatibility, not size reduction, is the reason for this conversion. DTS is handled differently; a DTS-family source is kept when its replacement FLAC would be larger.
-
-Known DIY discs with damaged TrueHD should be validated by comparing decoded audio duration with video duration and reviewing `truehdd` errors before the source stream is discarded.
+Known DIY discs with damaged TrueHD still require care because neither MKVToolNix nor this conversion path repairs missing frames. The automatic duration fallback prevents a materially shortened FLAC from replacing its source.
 
 ## Audio encoder selection
 
@@ -242,18 +242,13 @@ qaac is not a native cross-platform option and normally depends on Apple's Windo
 
 BluraySubtitle therefore uses the `fdkaac` command-line frontend for AAC. A configured positive value is an explicit bitrate; automatic mode uses FDK-AAC VBR mode 5.
 
-### Standalone FLAC first, FFmpeg fallback
+### FLAC and intermediate PCM
 
-FLAC is the preferred lossless output. The standalone encoder is tried first because FLAC 1.5.0 supports multithreaded encoding; BluraySubtitle passes `-j` with the detected logical CPU count.
+Final Matroska audio processing probes the source once, then uses one multi-output FFmpeg process to decode the tracks required by cleanup or conversion. Each track is stored as Wave64 to avoid RIFF WAV's 4 GiB limit. BDMV-derived workflows use 24-bit PCM; workflows accepting arbitrary Matroska inputs use 32-bit PCM. If batch extraction fails, the partial files are removed and each track is retried separately; a track that still fails remains unchanged.
 
-The standalone encoder is less tolerant of some generated inputs and runtime environments and may fail. Compressed sources also have to be decoded to PCM before the standalone encoder can read them. The pipeline therefore:
+Analysis and encoding reuse the decoded files. FLAC output follows the detected 16-, 24-, or 32-bit effective depth rather than the intermediate container width. The standalone multithreaded encoder handles matching-width input; FFmpeg removes zero padding and provides 16/24-bit fallback. True 32-bit output requires the standalone encoder because FFmpeg's FLAC encoder is limited to 24 bits.
 
-1. reuses an already decoded WAV/W64 when available;
-2. otherwise decodes compressed input to PCM;
-3. runs the standalone `flac` encoder with multithreading; and
-4. removes a failed partial output and falls back to FFmpeg's FLAC encoder.
-
-This preserves the performance advantage of FLAC 1.5.0 without making its successful execution a single point of failure.
+Final Matroska AAC and Opus conversions reuse the same PCM. `fdkaac` receives PCM through a pipe. Standalone FLAC SP output shares the FLAC encoding and validation path; standalone AAC can decode directly to its encoder.
 
 ## Tool responsibility summary
 
@@ -263,10 +258,9 @@ This preserves the performance advantage of FLAC 1.5.0 without making its succes
 | Internal Matroska reader | Read duration from EBML Segment Info | Avoid slow `mkvinfo` scans for duration-only queries |
 | MKVToolNix | Primary remux, Matroska extraction, metadata edits, per-part trimming and append | Cross-platform and reliable with MPLS ranges and Matroska |
 | tsMuxer | Recover explicitly missing PIDs from individual M2TS files | More permissive detection, but unsuitable as the primary MPLS demuxer |
-| FFmpeg/ffprobe | Targeted decode, analysis, fallback probing and encoding | Broad codec support; process cost is acceptable outside bulk discovery |
-| truehdd | Decode TrueHD Atmos presentation 2 | Required Atmos presentation handling |
+| FFmpeg/ffprobe | Audio probing, batch Wave64 decoding, per-track extraction fallback, analysis, conversion, and piped PCM | Broad codec support while avoiding repeated source reads in the normal path |
 | FLAC 1.5.0+ | Preferred FLAC encoding with all logical CPU threads | Fast multithreaded lossless encoding |
-| FFmpeg FLAC encoder | Fallback when standalone FLAC is unavailable or fails | More tolerant recovery path |
+| FFmpeg FLAC encoder | 16/24-bit output and fallback | More tolerant recovery path; not used for true 32-bit output |
 | fdkaac | AAC encoding | Cross-platform replacement for qaac |
 | eac3to | Not used | Windows-only and confirmed playlist/timing compatibility problems |
 | DGDemux | Not integrated | Good damaged-TrueHD recovery, but third-party use requires written permission and adds workflow complexity |

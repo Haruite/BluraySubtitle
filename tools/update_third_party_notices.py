@@ -114,11 +114,6 @@ def generate_third_party_notices(
             ("--version",),
             rf"^hdr10plus_tool\s+({VERSION})",
         ),
-        "TRUEHDD_VERSION": _command_version(
-            settings["TRUEHDD_PATH"],
-            ("--version",),
-            rf"^truehdd\s+({VERSION})",
-        ),
         "LIBASS_VERSION": _marker(software_root / "libass-version.txt"),
         "MKVTOOLNIX_VERSION": _command_version(
             settings["MKV_MERGE_PATH"],

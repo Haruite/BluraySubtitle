@@ -277,7 +277,6 @@ class EncoderToolchainTests(unittest.TestCase):
             "FDK_AAC_PATH",
             "DOVI_TOOL_PATH",
             "HDR10PLUS_TOOL_PATH",
-            "TRUEHDD_PATH",
             "VSEDIT_PATH",
             "VSPIPE_PATH",
             "PLUGIN_PATH",
@@ -297,7 +296,6 @@ class EncoderToolchainTests(unittest.TestCase):
         for fragment in (
             'install_configured_executable dovi_tool "$DOVI_TOOL_PATH"',
             'install_configured_executable hdr10plus_tool "$HDR10PLUS_TOOL_PATH"',
-            'install_configured_executable truehdd "$TRUEHDD_PATH"',
             'install_configured_executable "$_svt_bin" "$SVT_AV1_PATH"',
             'install_configured_executable tsMuxeR "$TS_MUXER_PATH"',
             'install_command_at_configured_path fdkaac "$FDK_AAC_PATH"',
@@ -310,7 +308,6 @@ class EncoderToolchainTests(unittest.TestCase):
 
         for hardcoded_target in (
             "sudo cp dovi_tool /usr/bin/dovi_tool",
-            "sudo cp truehdd /usr/bin/truehdd",
             "bluray_sudo cp x264 /usr/bin/x264",
             'cp "$_x265_out" /usr/bin/',
             "sudo cp tsMuxeR /usr/bin/tsMuxeR",
@@ -387,7 +384,6 @@ class EncoderToolchainTests(unittest.TestCase):
             "--chroma-format=all",
             "8bit+10bit+12bit",
             "install -m 0755 dovi_tool /usr/bin/dovi_tool",
-            "install -m 0755 truehdd /usr/bin/truehdd",
             'install -m 0755 "$build_root/8bit/x265" /usr/bin/x265',
             'cp "$svt_root/Bin/Release/SvtAv1EncApp" /usr/bin/SvtAv1EncApp',
             "./configure --prefix=/usr/local",

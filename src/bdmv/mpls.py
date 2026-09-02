@@ -32,6 +32,52 @@ class MPLS:
         with open(destination, "wb") as f:
             f.write(self.data.to_bytes())
 
+    def get_tracks_info(self) -> list[dict[str, object]]:
+        """Return the first PlayItem STN tracks in ascending PID order.
+
+        Track selection for an MPLS is defined by its stream table. Reading it does not
+        inspect a referenced M2TS and does not require an external media tool.
+        """
+        try:
+            play_items = list(self.data["PlayList"]["PlayItems"] or [])
+            stn = play_items[0]["STNTable"] if play_items else None
+        except (KeyError, TypeError):
+            return []
+        if not stn:
+            return []
+
+        tracks: list[dict[str, object]] = []
+        seen: set[tuple[str, int]] = set()
+        for bucket_name in STNTable.stream_names:
+            for pair in stn.get(bucket_name) or []:
+                try:
+                    stream_entry = pair["StreamEntry"]
+                    attributes = pair["StreamAttributes"]
+                    pid = int(stream_entry["RefToStreamPID"])
+                    stream_type = int(attributes["StreamCodingType"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                codec_type, codec_name = M2TS._codec_from_stream_type(stream_type)
+                if codec_type not in {"video", "audio", "subtitle"}:
+                    continue
+                slot = (codec_type, pid)
+                if slot in seen:
+                    continue
+                seen.add(slot)
+                language = str(attributes.get("LanguageCode") or "und").strip() or "und"
+                tracks.append({
+                    "index": str(pid),
+                    "pid": pid,
+                    "codec_type": codec_type,
+                    "codec_name": codec_name,
+                    "language": language,
+                    "lang": language,
+                    "stream_type": stream_type,
+                    "_mpls_pid_row": True,
+                })
+        tracks.sort(key=lambda track: int(track["pid"]))
+        return tracks
+
     def patch_playlist_stream_tables_from_clpi(
         self,
         *,

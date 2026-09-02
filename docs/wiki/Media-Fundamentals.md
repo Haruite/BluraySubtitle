@@ -118,7 +118,7 @@ In BluraySubtitle, “Blu-ray Remux” names a product workflow. Video is not re
 - trim to MPLS play-item windows and selected chapters;
 - join clips;
 - apply track languages and chapters;
-- convert selected lossless audio to FLAC when that option is enabled;
+- convert selected lossless audio according to the audio options;
 - remove documented silent or exact duplicate audio; and
 - combine compatible Dolby Vision layers.
 
@@ -169,14 +169,14 @@ A lossy codec intentionally discards information to reduce bitrate. Examples inc
 
 - AVC/H.264 and HEVC/H.265 in their normal Blu-ray usage;
 - MPEG-2 Video and VC-1 in normal disc usage;
-- AC-3, E-AC-3, AAC, DTS core, and Opus.
+- AC-3, E-AC-3, AAC, DTS core, DTS-HD High Resolution Audio, and Opus.
 
 Loss can be perceptually small, but the decoded output is not identical to the encoder input.
 
 ### Important qualifications
 
 - **A lossless container operation is not a codec.** Remuxing can preserve encoded tracks exactly even when those tracks were originally encoded with a lossy codec.
-- **Lossless-to-lossless conversion preserves decoded samples, not necessarily ancillary metadata.** TrueHD to FLAC can preserve decoded PCM but cannot preserve Atmos object metadata as Atmos metadata in FLAC.
+- **Lossless-to-lossless conversion preserves decoded samples, not necessarily ancillary metadata.** TrueHD Atmos or DTS:X to FLAC can preserve the decoder's fixed-channel PCM presentation but cannot preserve immersive object metadata in FLAC.
 - **A lossless source does not make a lossy encode lossless.** LPCM → AAC is lossy.
 - **Repeated lossy encoding causes generation loss.** AVC → raw frames → HEVC introduces another lossy generation even if the new bitrate is high.
 - **Bit depth is not the same as losslessness.** A 24-bit container can carry only 16 effective bits, and reducing bit depth can be lossy unless the discarded bits contain no information.

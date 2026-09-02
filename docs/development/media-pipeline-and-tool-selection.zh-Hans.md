@@ -82,6 +82,8 @@ MKVToolNix 不会把多片段 MPLS 当作一组不加限制的完整文件：
 
 MKVToolNix 对 M2TS 结构的验证通常比 tsMuxer 严格。这有利于发现异常输入，但部分原盘会出现 tsMuxer 能识别某条轨道而 `mkvmerge --identify` 不列出的情况。当不同 PlayItem 暴露不同轨道布局时，直接 Remux MPLS 也可能失败。
 
+加载原盘及“编辑轨道”时直接读取 MPLS STN，并按 PID 排列轨道行；不为选轨分析 MPLS，也不检查首个 M2TS。实际执行时只分析一次 MPLS；任一已选 PID 缺失时立即跳过直接混流，否则解析命令占位符，并在直接混流前检查相关 M2TS 的映射。
+
 [轨道对齐回退](../../src/runtime/services_split/media_info_and_track_mapping.py)按以下方式处理：
 
 1. “编辑轨道”中选择的轨道确定必需 PID 布局和输出顺序。
@@ -185,14 +187,14 @@ tsMuxer 对相关蓝光 TrueHD 布局使用两种不同的读取器。两条路�
 
 两条路径都没有合成替换 access unit、把损坏区间保留为空隙或填充静音。因此，tsMuxer 适合恢复 MKVToolNix 未暴露的已选 PID，但不能代替专门修复损坏 TrueHD 的 demux 工具。
 
-一次短素材测试可以说明实际影响。tsMuxeR 2.7.0 从时长 50.053 秒的 Avatar `00096.m2ts` 中 demux 两个 TrueHD PID，并返回 `Demux complete`。PID 4352 被识别为交错的 `A_AC3`，PID 4356 被识别为 TrueHD-only `A_MLP`。提取第二条轨道时反复出现 `bad frame detected ... Resync stream`。随后使用 `truehdd` 0.4.0 `info` 检查：
+一次短素材测试可以说明实际影响。tsMuxeR 2.7.0 从时长 50.053 秒的 Avatar `00096.m2ts` 中 demux 两个 TrueHD PID，并返回 `Demux complete`。PID 4352 被识别为交错的 `A_AC3`，PID 4356 被识别为 TrueHD-only `A_MLP`。提取第二条轨道时反复出现 `bad frame detected ... Resync stream`。随后进行的解码器检查得到：
 
-| PID | tsMuxer 输出 | 输出大小 | `truehdd` 时长 |
+| PID | tsMuxer 输出 | 输出大小 | 解码后时长 |
 | ---: | --- | ---: | ---: |
 | 4352 | AC-3 core + TrueHD | 34.27 MB | 00:00:06.587 |
 | 4356 | TrueHD | 7.33 MB | 00:00:10.047 |
 
-两个输出都明显短于 50.053 秒的 M2TS 区间，并且启用警告后，`truehdd` 报告了大量 parity 和 restart/seamless-branch 错误。单凭时长不能证明每个 PID 在制作时都应覆盖整个片段，但错误日志可以确认提取出的基本流并不干净。本次检查只使用了这个短 M2TS，没有 demux 完整播放列表。源码可以解释重新同步和丢帧行为，但无法仅凭这些结果确定每条坏帧报告分别来自原始负载损坏、不受支持的帧结构还是之前已经丢失同步。
+两个输出都明显短于 50.053 秒的 M2TS 区间，并且启用警告后，解码器报告了大量 parity 和 restart/seamless-branch 错误。单凭时长不能证明每个 PID 在制作时都应覆盖整个片段，但错误日志可以确认提取出的基本流并不干净。本次检查只使用了这个短 M2TS，没有 demux 完整播放列表。源码可以解释重新同步和丢帧行为，但无法仅凭这些结果确定每条坏帧报告分别来自原始负载损坏、不受支持的帧结构还是之前已经丢失同步。
 
 把 tsMuxer 限制为按文件、按 PID 恢复，也使输出能够验证：BluraySubtitle 明确知道缺少哪些轨道，并会拒绝未能恢复要求布局的结果。
 
@@ -210,9 +212,9 @@ MKVToolNix 会解析并混流 TrueHD 帧，但不会执行解码器式错误隐�
 - `truehd_ac3_splitting_packet_converter_c::process_frames()` 把 PES 时间戳交给其中第一帧 TrueHD。后续帧由 `truehd_packetizer_c::process_framed()` 根据样本数确定时间。该 packetizer 把原始 `frame->m_data` 放入 Matroska 包；除可选的 dialog normalization 帧头修改外，不会重写或解码负载。
 - `xtr_base_c::create_extractor()` 将 `MKV_A_TRUEHD` 映射到通用 `xtr_base_c` 提取器，后者的 `handle_frame()` 直接把每个 Matroska 帧写入输出文件。Matroska 时间戳及其中的间隙不会序列化到裸 `.thd` 基本流。
 
-Matroska 时间戳能够表示丢帧后留下的时间间隙，但随后提取出的裸 `.thd` 无法表示：`mkvextract` 会连续写入基本流帧字节，裸 TrueHD 中没有 Matroska 时间戳间隙。因此，损坏来源可能具有看似合理的 MKV 时长，却在 `truehdd` 中产生大量错误，最终解码出的 PCM/FLAC 比视频短一到两秒。改变 MKV append mode 只能对齐文件边界，不会修复 TrueHD 负载，也不会增加裸流中的有效帧数。
+Matroska 时间戳能够表示丢帧后留下的时间间隙，但随后提取出的裸 `.thd` 无法表示：`mkvextract` 会连续写入基本流帧字节，裸 TrueHD 中没有 Matroska 时间戳间隙。因此，损坏来源可能具有看似合理的 MKV 时长，却在解码时产生错误，最终解码出的 PCM/FLAC 比视频短一到两秒。改变 MKV append mode 只能对齐文件边界，不会修复 TrueHD 负载，也不会增加裸流中的有效帧数。
 
-因此，实测中的 `truehdd` 错误和解码时长不足，与两种有源码依据的机制相符：结构仍可接受但已经损坏的 TrueHD 帧会原样到达解码器；传输流或帧边界丢失也会在没有替换的情况下删除帧字节。在没有对受影响 PID 进行逐字节跟踪前，不能断言所有错误或完整的一到两秒差值只来自其中一种机制。
+因此，实测中的解码错误和解码时长不足，与两种有源码依据的机制相符：结构仍可接受但已经损坏的 TrueHD 帧会原样到达解码器；传输流或帧边界丢失也会在没有替换的情况下删除帧字节。在没有对受影响 PID 进行逐字节跟踪前，不能断言所有错误或完整的一到两秒差值只来自其中一种机制。
 
 本地测试表明，eac3to 对这类损坏 TrueHD 的结果大体相似。
 
@@ -224,13 +226,11 @@ Matroska 时间戳能够表示丢帧后留下的时间间隙，但随后提取�
 
 即使取得许可，引入 DGDemux 也会增加一次完整原盘 demux 阶段、延长 Remux 时间、增加平台专用打包和命令处理，还需要维护第二套轨道顺序映射流程。目前这些维护成本并不合理。
 
-### 为什么 Atmos 转换使用 `truehdd` 而不是 FFmpeg
+### 无损转换规则
 
-在项目支持的解码器中，使用 `truehdd` 是因为它能完整解释当前流程所需的 TrueHD Atmos presentation。BluraySubtitle 在编码 FLAC 前解码 presentation 2，不把 FFmpeg 的 TrueHD 解码视为等价的 Atmos 转换路径。`truehdd` 不可用或失败时保留源 TrueHD Atmos 音轨。
+FFmpeg 负责解码 TrueHD 与 DTS。FLAC 不能表示 DTS:X 或 TrueHD Atmos 的对象元数据，因此 Remux 只有在单独启用高级选项时才转换这些码流。解码或编码失败时保留原音轨。转换后只比较时长：缩短超过 0.1 秒会提示，超过可配置阈值时删除 FLAC；默认阈值为 1 秒。
 
-使用 FLAC 是为了改善不同设备的播放兼容性。因此，对 TrueHD/MLP，只要成功解码，生成的 FLAC 即使大于原始 TrueHD 也会保留：转换目标是兼容性，而不是减小体积。DTS 的处理不同；DTS 系列来源在替换 FLAC 更大时保留原始 DTS。
-
-处理已知 TrueHD 损坏的 DIY 原盘时，在丢弃源流前应比较解码音频和视频时长，并检查 `truehdd` 错误。
+已知 TrueHD 损坏的 DIY 原盘仍需谨慎，因为 MKVToolNix 和此转换路径都不会修复缺帧；自动时长回退可以避免明显缩短的 FLAC 替换源轨。
 
 ## 音频编码器选择
 
@@ -240,18 +240,13 @@ qaac 不是原生跨平台方案，通常依赖 Apple 的 Windows 编码组件�
 
 因此，BluraySubtitle 使用 `fdkaac` 命令行前端进行 AAC 编码。配置正数时表示明确码率；自动模式使用 FDK-AAC VBR 5。
 
-### 优先独立 FLAC，失败时回退 FFmpeg
+### FLAC 与中间 PCM
 
-FLAC 是首选无损输出。首先尝试独立编码器，因为 FLAC 1.5.0 支持多线程编码；BluraySubtitle 使用 `-j` 传入检测到的逻辑 CPU 数量。
+最终 Matroska 音频处理会先统一探测来源，再用一个多输出 FFmpeg 进程解码清理或转换需要的音轨。每条音轨使用 Wave64，以避开 RIFF WAV 的 4 GiB 限制。来自 BDMV 的流程使用 24-bit PCM；允许任意 Matroska 输入的流程使用 32-bit PCM。批量提取失败时删除不完整文件并逐轨重试，仍失败的音轨保持不变。
 
-独立编码器对部分生成输入和运行环境的容错较低，可能执行失败。压缩来源也必须先解码为 PCM，独立编码器才能读取。因此，流程按以下顺序执行：
+分析与编码复用这些解码文件。FLAC 输出采用检测到的 16、24 或 32-bit 有效位深，而不是中间容器位深。输入位深匹配时使用独立多线程编码器；FFmpeg 负责移除零填充并提供 16/24-bit 回退。真正的 32-bit 输出必须使用独立编码器，因为 FFmpeg 的 FLAC 编码器最多支持 24 bit。
 
-1. 已有解码后的 WAV/W64 时直接复用；
-2. 否则先把压缩输入解码为 PCM；
-3. 使用多线程运行独立 `flac` 编码器；
-4. 删除失败产生的不完整输出，并回退到 FFmpeg FLAC 编码器。
-
-这样既保留 FLAC 1.5.0 的性能优势，也不会让独立编码器成为单一失败点。
+最终 Matroska AAC 与 Opus 转换复用同一份 PCM，`fdkaac` 通过管道接收 PCM。独立 FLAC SP 输出共用 FLAC 编码与验证路径；独立 AAC 可以直接解码并送入编码器。
 
 ## 工具职责汇总
 
@@ -261,10 +256,9 @@ FLAC 是首选无损输出。首先尝试独立编码器，因为 FLAC 1.5.0 支
 | 内部 Matroska 读取器 | 从 EBML Segment Info 读取时长 | 避免只查询时长时使用缓慢的 `mkvinfo` 扫描 |
 | MKVToolNix | 主要 Remux、Matroska 提取、元数据编辑、逐片段裁切和拼接 | 跨平台，可靠处理 MPLS 范围和 Matroska |
 | tsMuxer | 从单个 M2TS 恢复明确缺少的 PID | 检测较宽松，但不适合作为主要 MPLS demux 工具 |
-| FFmpeg/ffprobe | 定向解码、分析、回退探测和编码 | 编码支持广泛；在批量发现之外可以接受进程开销 |
-| truehdd | 解码 TrueHD Atmos presentation 2 | 当前 Atmos presentation 处理所需 |
+| FFmpeg/ffprobe | 音频探测、批量 Wave64 解码、逐轨提取回退、分析、转换和管道传递 PCM | 编解码支持广泛，同时在正常路径避免反复读取来源 |
 | FLAC 1.5.0+ | 使用全部逻辑 CPU 线程进行首选 FLAC 编码 | 快速的多线程无损编码 |
-| FFmpeg FLAC 编码器 | 独立 FLAC 不可用或失败时回退 | 容错更高的恢复路径 |
+| FFmpeg FLAC 编码器 | 16/24-bit 输出与回退 | 容错更高的恢复路径；不用于真正的 32-bit 输出 |
 | fdkaac | AAC 编码 | qaac 的跨平台替代方案 |
 | eac3to | 不使用 | 仅 Windows，并存在已确认的播放列表/时间兼容性问题 |
 | DGDemux | 暂不集成 | 修复损坏 TrueHD 效果好，但第三方使用需要书面许可，并会增加流程复杂度 |

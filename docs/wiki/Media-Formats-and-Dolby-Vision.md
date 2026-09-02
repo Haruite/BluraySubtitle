@@ -61,7 +61,7 @@ Common properties are:
 - bit depth, such as 16 or 24 bits;
 - channel count and channel layout.
 
-A nominal 24-bit track may contain only 16 bits of effective signal precision. Container metadata alone does not prove effective bit depth.
+A nominal 24-bit track may contain only 16 bits of effective signal precision. Effective depth must be determined from decoded samples rather than container metadata alone.
 
 ### FLAC
 
@@ -69,7 +69,7 @@ FLAC is a lossless codec for PCM samples. It normally reduces the size of LPCM w
 
 FLAC does not preserve immersive metadata models from TrueHD Atmos or DTS:X. Converting those formats to FLAC preserves only the decoded channel presentation produced by the chosen decoder.
 
-BluraySubtitle prefers the standalone multithreaded FLAC encoder and falls back to FFmpeg when necessary. Its default compression level is 8.
+BluraySubtitle preserves the detected effective PCM depth when writing FLAC. Its configurable FLAC compression levels default to 8.
 
 ### Dolby Digital / AC-3
 
@@ -87,8 +87,6 @@ Dolby Atmos metadata can be carried with TrueHD. Atmos describes objects, beds, 
 
 Damaged TrueHD requires special caution. A container may retain a plausible overall duration even when transport loss or invalid frames cause an extracted or decoded stream to be shorter. MKVToolNix and the project’s normal demux path do not synthesize replacement TrueHD frames. Review decoder errors and compare decoded audio duration against video before discarding the source.
 
-BluraySubtitle uses `truehdd` presentation 2 for its supported TrueHD Atmos to FLAC conversion. If that decoder is unavailable or fails, the source TrueHD is retained.
-
 ### DTS core
 
 DTS core is a lossy codec and compatibility layer. A DTS-HD stream can include this core so older decoders can play a reduced representation.
@@ -100,8 +98,6 @@ DTS-HD HR is a lossy extension that improves capability and quality over the cor
 ### DTS-HD Master Audio
 
 DTS-HD MA adds a lossless residual to a compatible DTS core. A capable decoder reconstructs the lossless master; a core-only decoder can play the lossy DTS representation.
-
-In BluraySubtitle, a successful DTS-family to FLAC conversion replaces the source only when the FLAC is no larger than the extracted DTS-family stream. Otherwise the original DTS stream is retained. This is a file-size policy, not a statement that one codec is more or less lossless.
 
 ### AAC
 
@@ -127,11 +123,10 @@ The project’s conversion policy can be summarized as:
 
 | Source family | Possible target | Loss model | Project note |
 | --- | --- | --- | --- |
-| LPCM | FLAC | Lossless PCM-to-PCM representation | Keep successful FLAC |
+| LPCM | FLAC | Lossless PCM-to-PCM representation | Controlled by the lossless-audio option |
 | FLAC | FLAC | Lossless | Usually copy unless processing requires re-encode |
-| TrueHD/MLP | FLAC | Lossless for chosen decoded PCM presentation | Atmos metadata is not retained; keep successful FLAC |
-| DTS-HD MA | FLAC | Lossless when the full lossless stream decodes correctly | Retain source if FLAC is larger |
-| DTS core / DTS-HD HR | FLAC | Decoded samples can be stored losslessly, but the source was already lossy | Retain source if FLAC is larger |
+| TrueHD/MLP or DTS-HD MA | FLAC | Lossless for a correctly decoded channel presentation | Immersive variants require explicit opt-in |
+| DTS core / DTS-HD HR | unchanged | Source is lossy | Excluded from automatic lossless conversion |
 | Lossless source | AAC/Opus | Lossy | Encode workflow only, per selected policy |
 | AC-3/E-AC-3/AAC/Opus | unchanged | No new codec generation | Selected lossy audio is normally preserved |
 

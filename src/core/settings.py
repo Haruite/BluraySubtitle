@@ -76,7 +76,6 @@ HDR10PLUS_TOOL_PATH = _bundled_path(
     "hdr10plus_tool.exe",
     r"C:\Software\hdr10plus_tool.exe",
 )
-TRUEHDD_PATH = _bundled_path("truehdd.exe", r"C:\Software\truehdd.exe")
 VSEDIT_PATH = _bundled_path(
     os.path.join("vs_pkg", "vsedit.exe"),
     r"C:\Software\vapoursynth\vsedit.exe",
@@ -112,7 +111,6 @@ if sys.platform != "win32":
     FDK_AAC_PATH = "/usr/local/bin/fdkaac"
     DOVI_TOOL_PATH = "/usr/bin/dovi_tool"
     HDR10PLUS_TOOL_PATH = "/usr/bin/hdr10plus_tool"
-    TRUEHDD_PATH = '/usr/bin/truehdd'
     PLUGIN_PATH = os.path.expanduser("~/plugins")
     VSEDIT_PATH = "/usr/local/bin/vsedit"
     VSPIPE_PATH = "/usr/local/bin/vspipe"

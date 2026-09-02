@@ -17,7 +17,11 @@ from src.domain import MKV, Subtitle
 from src.exports.utils import get_index_to_m2ts_and_offset, append_ogm_chapter_lines, force_remove_folder, \
     force_remove_file, print_terminal_line, print_exc_terminal, get_time_str, parse_time_to_seconds, run_command
 from .service_base import BluraySubtitleServiceBase
-from src.runtime.audio_conversion import AudioEncodingSettings
+from src.runtime.audio_conversion import (
+    AudioEncodingSettings,
+    convert_audio_stream_to_flac,
+    encode_fdkaac_from_ffmpeg,
+)
 from src.runtime.sp import SpJob, media_track_key
 from .. import TaskCancelled
 
@@ -1156,8 +1160,6 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                         aligned_ok = self._try_remux_mpls_track_aligned(
                             job.source_path,
                             aligned_sp_path,
-                            audio_tracks,
-                            subtitle_tracks,
                             '',
                             cancel_event=cancel_event,
                             max_play_items=max_play_items or None,
@@ -1306,8 +1308,6 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                                 extraction_ok = self._try_remux_mpls_track_aligned(
                                     source_path,
                                     audio_source,
-                                    audio_tracks,
-                                    [],
                                     '',
                                     cancel_event=cancel_event,
                                     max_play_items=max_play_items or None,
@@ -1319,25 +1319,18 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                         )
                         if extraction_ok and target_codec == 'aac':
                             os.makedirs(os.path.dirname(output_path), exist_ok=True)
-                            if not temporary_folder:
-                                temporary_folder = tempfile.mkdtemp(
-                                    prefix='_sp_audio_', dir=os.path.dirname(output_path)
-                                )
-                            wave_path = os.path.join(temporary_folder, 'source.wav')
-                            extraction_ok = run_command([
-                                FFMPEG_PATH or 'ffmpeg', '-y', '-i', audio_source,
-                                '-map', f'0:{audio_track}', '-c:a', 'pcm_s24le',
-                                wave_path,
-                            ]).returncode == 0
-                            if extraction_ok:
-                                rate_control = (
-                                    ['-b', str(audio_encoding.fdkaac_bitrate_kbps * 1000)]
-                                    if audio_encoding.fdkaac_bitrate_kbps else ['-m', '5']
-                                )
-                                extraction_ok = run_command([
-                                    FDK_AAC_PATH or 'fdkaac', *rate_control,
-                                    '-o', output_path, wave_path,
-                                ]).returncode == 0
+                            rate_control = (
+                                ['-b', str(audio_encoding.fdkaac_bitrate_kbps * 1000)]
+                                if audio_encoding.fdkaac_bitrate_kbps else ['-m', '5']
+                            )
+                            extraction_ok = encode_fdkaac_from_ffmpeg(
+                                FFMPEG_PATH or 'ffmpeg',
+                                FDK_AAC_PATH or 'fdkaac',
+                                audio_source,
+                                f'0:{audio_track}',
+                                output_path,
+                                rate_control,
+                            )
                         elif extraction_ok and target_codec == 'opus':
                             os.makedirs(os.path.dirname(output_path), exist_ok=True)
                             track_info = next((
@@ -1361,11 +1354,12 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                             command.extend(['-b:a', f'{bitrate}k', output_path])
                             extraction_ok = run_command(command).returncode == 0
                         elif extraction_ok and output_extension == '.flac':
-                            extraction_ok = _svc_cls()._compress_audio_stream_to_flac(
+                            extraction_ok = convert_audio_stream_to_flac(
                                 audio_source,
-                                audio_track,
+                                f'0:{audio_track}',
                                 output_path,
-                                audio_encoding,
+                                wave64_bit_depth=24,
+                                audio_encoding=audio_encoding,
                             )
                         elif extraction_ok:
                             os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -1445,7 +1439,11 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                         f'{"00:00:00.000" if end_time == "0" else end_time}'
                     )
                 elif use_mpls_chapters:
-                    chapter_offsets = self._write_chapter_txt_from_mpls(source_path, chapter_path)
+                    chapter_offsets = self._write_chapter_txt_from_mpls(
+                        source_path,
+                        chapter_path,
+                        max_play_items=int((looping_playlist or {}).get('max_clips') or 0) or None,
+                    )
                     if not chapter_offsets or (
                             len(chapter_offsets) == 1 and chapter_offsets[0] == 0.0
                     ):
@@ -1531,8 +1529,6 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                     primary_ok = self._try_remux_mpls_track_aligned(
                             source_path,
                             fallback_output,
-                            audio_tracks,
-                            subtitle_tracks,
                             '',
                             cancel_event=cancel_event,
                             max_play_items=max_play_items or None,
@@ -1621,15 +1617,27 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                     shutil.rmtree(temporary_folder, ignore_errors=True)
         return created_outputs
 
-    def _write_chapter_txt_from_mpls(self, mpls_path: str, chapter_txt_path: str) -> list[float]:
+    def _write_chapter_txt_from_mpls(
+            self,
+            mpls_path: str,
+            chapter_txt_path: str,
+            *,
+            max_play_items: Optional[int] = None,
+    ) -> list[float]:
         chapter = Chapter(mpls_path)
         mark_info = chapter.mark_info
         in_out_time = chapter.in_out_time
-        mpls_duration = chapter.get_total_time()
+        play_item_count = len(in_out_time)
+        if max_play_items is not None and max_play_items > 0:
+            play_item_count = min(play_item_count, max_play_items)
+        mpls_duration = sum(
+            (in_out_time[index][2] - in_out_time[index][1]) / 45000
+            for index in range(play_item_count)
+        )
 
         offsets = []
         offset = 0
-        for ref_to_play_item_id in range(len(in_out_time)):
+        for ref_to_play_item_id in range(play_item_count):
             mark_timestamps = mark_info.get(ref_to_play_item_id) or []
             for mark_timestamp in mark_timestamps:
                 off = offset + (mark_timestamp - in_out_time[ref_to_play_item_id][1]) / 45000

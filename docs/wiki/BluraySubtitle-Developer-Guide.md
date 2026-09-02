@@ -240,6 +240,8 @@ At minimum, the workflow deals with:
 
 The selected MPLS STN layout is the reference. A PAT/PMT stream that physically exists but is hidden by MPLS is excluded from normal main title mapping unless an SP or recovery workflow explicitly selects it.
 
+MPLS-backed **Edit Tracks** rows are built directly from the first PlayItem STN and sorted by PID, without `mkvmerge --identify` or a first-M2TS probe during loading. A main Remux command stores `{video_opts}`, `{audio_opts}`, and `{sub_opts}` instead of track IDs. Execution identifies the MPLS once, enters the PID-aligned fallback if any selected PID is missing, or resolves the placeholders and continues with per-M2TS mapping checks when the mapping is complete.
+
 ## Main remux pipeline
 
 A simplified successful path is:
@@ -334,22 +336,17 @@ An authored interval exception occurs on *Witch Craft Works Blu-ray BOX* DISC3. 
 
 ## Audio processing
 
-Final Matroska Remux and Encode audio processing:
+Final Matroska Remux and Encode share the audio preparation and encoding pipeline described in [Media Pipeline Design and Tool Selection](../development/media-pipeline-and-tool-selection.md). Automatic cleanup:
 
-1. extracts all selected audio tracks in one `mkvextract` invocation;
-2. reuses those files for analysis and conversion;
-3. decodes tracks for maximum-volume and fingerprint checks;
-4. removes decoded maximum volume below `-60 dB`;
-5. compares exact decoded fingerprints only within the same source codec family and channel count;
-6. never deduplicates tracks with different known languages;
-7. keeps the earliest source-order duplicate; and
-8. reports every removal.
-
-The one-extraction invariant avoids reopening a very large MKV once per track. It also means the output volume must have enough temporary space for all selected audio streams.
+1. removes tracks whose decoded maximum volume is below `-60 dB`;
+2. compares exact decoded fingerprints only within the same source codec family and channel count;
+3. never deduplicates tracks with different known languages;
+4. keeps the earliest source-order duplicate; and
+5. reports every removal.
 
 Standalone single-track audio outputs retain their only selected track and do not run the silence/duplicate removal pass.
 
-Remux lossless-to-FLAC conversion is controlled by its visible checkbox and is enabled by default at startup. Disabling it preserves selected source audio, apart from the documented cleanup. Remux does not use AAC or Opus for this conversion.
+Remux lossless-to-FLAC conversion is controlled by its visible checkbox and is enabled by default at startup. DTS:X and TrueHD Atmos require a separate, disabled-by-default Advanced option because FLAC cannot retain object metadata. A failed conversion keeps the source track.
 
 Encode’s Blu-ray staging remux preserves source audio. Per-track Encode audio conversion occurs only in final muxing after video encode succeeds.
 

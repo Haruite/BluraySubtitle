@@ -80,12 +80,12 @@ Encode mode supports two input sources:
 
 In series mode, **Trim copyright bumper** checks each episode's final 30 seconds only when the episode ends at the underlying M2TS file end. Complete trailing M2TS play items inside that window are excluded with `--split parts`; MPLS timing and chapters remain unchanged. This structural guess can be wrong, so inspect unusual discs and edit the mux command's parts range when necessary. See [Blu-ray Disc Structure](docs/wiki/Blu-ray-Disc-Structure.md#short-copyright-bumpers-at-the-end).
 
-The **main playlist** supports editing the mux command (`remux_cmd`). Each selected main playlist must have exactly one non-empty command and is processed in the current visible order, including multiple main playlists from the same disc. Before writing, Remux derives every command output and final episode filename. The output count must match the visible episode rows; duplicate paths and existing outputs are errors. Episode names are applied exactly as shown, and invalid filenames are rejected.
+The **main playlist** supports editing the mux command (`remux_cmd`). Each selected main playlist must have exactly one non-empty command and is processed in the current visible order, including multiple main playlists from the same disc. Video, audio, and subtitle selection always comes from **Edit Tracks**; the command shows placeholders for those choices, and manually entered track-selection flags are ignored. Before writing, Remux derives every command output and final episode filename. The output count must match the visible episode rows; duplicate paths and existing outputs are errors. Episode names are applied exactly as shown, and invalid filenames are rejected.
 
 Before a direct multi-clip MPLS mux, Remux derives the M2TS clips covered by the command's effective time ranges and compares the selected PID-to-local-track-ID mapping only across those clips. A missing selected PID or inconsistent local track ID enters the track-aligned fallback immediately. Clips excluded by `--split parts` do not participate, and an absent unselected track does not itself trigger fallback; if that absence renumbers a selected PID's local ID, the selected mapping mismatch still triggers fallback. If the primary command and its documented fallback paths cannot create every planned output, Remux stops with an error and does not substitute unrelated files found in the output folder. After muxing, the language values saved by **Edit tracks** are applied to the included video, audio, and subtitle tracks and then verified. A mapping, tool, or language-verification failure stops that job and removes its newly created main outputs. Output track counts and MKVToolNix packet statistics are also checked; those findings do not interrupt the remaining Remux work and are shown together after the task completes.
 
-Remux keeps selected lossy audio unchanged. Its **Convert lossless audio to FLAC** option is enabled by default (the startup state is configurable under **Advanced**). All FLAC output prefers the standalone multithreaded `flac` encoder, which automatically uses the detected number of logical CPU threads, and falls back to `ffmpeg` if that encoder is unavailable or fails. Both FLAC encoders default to level 8 and can be configured independently on the **Advanced** settings page.
-A DTS-family track is replaced only when its FLAC output is no larger than the extracted DTS; otherwise the original DTS track is retained. Successful PCM and TrueHD/MLP conversions remain FLAC even when the FLAC is larger. TrueHD Atmos is converted only after `truehdd` successfully decodes presentation 2. MKVToolNix does not repair damaged TrueHD frames. Affected DIY discs may produce many `truehdd` errors and a decoded FLAC track that is shorter than the video even when the MKV duration looks plausible; compare decoded audio/video durations before discarding the source track.
+Remux keeps selected lossy audio unchanged. Its **Convert lossless audio to FLAC** option is enabled by default, and its startup state is configurable under **Advanced**. The standalone `flac` and FFmpeg compression levels are also configurable there and both default to 8.
+FLAC cannot store DTS:X or TrueHD Atmos object metadata, so **Convert DTS:X and TrueHD Atmos to FLAC during Remux** is a separate Advanced option and is disabled by default. A failed conversion keeps the original track. A duration loss over 0.1 seconds is reported; a loss over the configurable threshold discards the FLAC and keeps the original. The threshold defaults to 1 second.
 See [Media Pipeline Design and Tool Selection](docs/development/media-pipeline-and-tool-selection.md) for details.
 
 Subtitles selected for Blu-ray Remux are always soft-muxed into the corresponding main MKV. Remux does not burn subtitles into the video or write them as external subtitle files.
@@ -113,8 +113,7 @@ Encode options include:
 - With **Auto-crop black borders** enabled, Encode analyzes multiple time points and applies one conservative fixed crop. Pixels used by any sampled active picture are preserved when borders vary over time.
 - With **Output comparison images** enabled, every encoded video saves source and encoded PNGs from the same frame under **`<selected output>/<source folder name>/Compare`**.
 - With **Check corrupted frames** enabled, Encode reruns the exact VPy used for the completed video and compares every output frame with the encoded MKV by PSNR. Frame count, speed, percentage, and ETA are reported to the terminal at 15-second intervals. The JSON report is saved under **`<selected output>/<source folder name>/FrameCheck`**. This is an additional full VPy render after encoding and may take several times the video's duration.
-- Lossless PCM, TrueHD/MLP, DTS-family, and FLAC tracks use the per-track FLAC/AAC/Opus choice shown in **Edit tracks**. Lossy audio is kept unchanged. TrueHD Atmos is converted only after `truehdd` successfully decodes presentation 2; if `truehdd` is unavailable or fails, the original TrueHD track is kept. When FLAC is selected, the same DTS/FLAC size rule described above applies.
-  Final Encode muxing applies the same automatic silent/duplicate cleanup; Blu-ray staging Remux does not process audio.
+- Lossless audio tracks use the per-track FLAC/AAC/Opus choice shown in **Edit tracks**.
 - **Subtitle packaging**: external / softsub / hardsub
 - **Per-row VPy path** for main episodes and SP rows
 - **Remux-as-source** unlocks more actions, such as **editing chapters / attachments**.
@@ -162,7 +161,7 @@ This section explains, in plain language, how the program behaves internally.
 8. An uncovered M2TS containing at most 12 decoded frames where every frame has the same image, including a short clip made of repeated identical frames, and an MPLS containing one such M2TS are checked by default and written as PNG. Detection stops and rejects the source as soon as a 13th frame is found.
 9. An MPLS containing multiple M2TS files where every file has at most 12 decoded frames and every frame in each file has the same image is checked by default. Its output is a folder, with files named **`{n}-{m2ts_name}.png`**.
 10. No selected audio or subtitle track normally leaves the output name empty and intentionally skips that row. A source detected as video-only still uses `.mkv` because its video track is implicit.
-11. One selected audio track from an audio-only source is extracted with its stream-specific extension; PCM, DTS, TrueHD, and MLP use `.flac`.
+11. One selected audio track from an audio-only source uses the extension for its selected output format.
 12. Multiple selected audio tracks from an audio-only source use `.mka`; an uncovered audio-with-subtitle M2TS also uses `.mka`, while remaining video/container layouts use `.mkv`.
 13. A subtitle-only source with one selected subtitle uses its elementary-stream extension; multiple selected subtitles use `.mks`.
 14. Editing tracks recalculates the output name immediately. The whole-main reuse rule above is resolved before the separate single-episode append rule. For a single-episode match, linked rows are renamed immediately when episode splitting changes. Movie-mode SP rows always keep independent SP output paths and are never attached to the main output. The runtime uses the exact visible output name and does not silently rename it or rediscover another file.
@@ -183,10 +182,10 @@ This section explains, in plain language, how the program behaves internally.
 
 Direct MPLS muxing can fail when playlist clips have different track layouts. Main-playlist and MPLS-backed SP selections are stored as track type + MPEG PID; GUI row order and first-clip stream indexes are not part of the contract. A no-MPLS SP row backed by one M2TS keeps source-local track IDs and reads its track languages from the matching CLPI file:
 
-1. **Edit Tracks** reads the MPLS itself for both main and SP rows. The Service identifies that MPLS again to produce the selected PID → mkvmerge track-ID reference used by the command.
+1. **Edit Tracks** reads the MPLS stream table directly for both main and SP rows. When execution begins, the Service identifies the MPLS to map the selected PIDs to mkvmerge track IDs; if any selected PID is absent, it enters the fallback before checking individual M2TS files.
 2. Playback ranges come from `Chapter(mpls_path).in_out_time`; for `--split parts:start-end`, only overlapping M2TS files are checked.
 3. Before the long mux starts, each included M2TS is identified directly with mkvmerge. A missing selected PID or a PID whose local track ID differs from the MPLS reference enters the PID-aligned fallback immediately.
-4. Missing selected tracks are recovered with tsMuxer, and recovered tracks follow the MPLS identify reference order.
+4. Missing selected tracks are recovered with tsMuxer, and recovered tracks follow the required MPLS PID order.
 5. If tsMuxer cannot recover every missing selected track, including audio, the fallback fails explicitly instead of creating a synthetic replacement.
 6. The repaired PID set must exactly match the reference layout. One repaired clip receives its cover in place through `mkvpropedit` and is moved directly to the planned output without a second full mux; multiple clips are concatenated with `--append-mode file` so every track uses the same preceding-file timestamp boundary.
 7. Main, standalone SP, SP audio-intermediate, and episode-linked SP mux commands share this preflight/fallback contract. Image extraction is excluded because it does not select or mux media tracks. Configured track languages and chapters are applied afterward, with command results and final metadata checked.
@@ -237,13 +236,6 @@ Episode configuration is recalculated when any of these **three** inputs changes
 - Nodes **unchecked** in `view chapters` must be **disabled** in both `start_at_chapter` and `end_at_chapter` combos.
 - Still require **`end_at_chapter > start_at_chapter`**.
 - Every emitted series row must satisfy **`1 ≤ start_at_chapter < end_at_chapter ≤ ending`**. Invalid, reversed, zero-length, and `ending`-as-start rows are removed before rebuilding the GUI.
-
-#### D) Additional notes
-
-- Main remux command placeholders: **`{output_file}`**, **`{audio_opts}`**, **`{sub_opts}`**, **`{parts_split}`**.
-- If the primary command output is wrong, fallbacks use parsed arguments and preserve explicit track choices; default tracks are used only when no explicit choice exists.
-- After fallback, every planned output must exist; incomplete main-playlist output fails the task.
-- Chapter rewrite and language correction run **after mux** mainly to work around mkvtoolnix edge cases in metadata handling.
 
 ---
 

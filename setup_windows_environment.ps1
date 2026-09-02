@@ -129,7 +129,6 @@ $script:ToolPaths = [ordered]@{
     TsMuxer = "C:\Software\tsMuxeR.exe"
     DoviTool = "C:\Software\dovi_tool.exe"
     Hdr10PlusTool = "C:\Software\hdr10plus_tool.exe"
-    TrueHdd = "C:\Software\truehdd.exe"
     X264 = "C:\Software\x264.exe"
     X264Version = "C:\Software\x264-version.txt"
     X265 = "C:\Software\x265.exe"
@@ -2540,41 +2539,6 @@ function Test-Hdr10PlusTool {
     return [bool](Get-InstalledHdr10PlusToolVersion)
 }
 
-function Get-TrueHddRelease {
-    return Get-GitHubLatestReleaseAsset `
-        -Repository "truehdd/truehdd" `
-        -AssetPattern '^truehdd-[0-9]+(?:\.[0-9]+){1,3}-x86_64-pc-windows-msvc\.zip$'
-}
-
-function Get-InstalledTrueHddVersion {
-    if (-not (Test-Path -LiteralPath $script:ToolPaths.TrueHdd -PathType Leaf)) {
-        return ""
-    }
-    $output = Invoke-SetupCommand -FilePath $script:ToolPaths.TrueHdd -Arguments @("--version")
-    $match = [regex]::Match($output, 'truehdd\s+([0-9]+(?:\.[0-9]+){1,3})', 'IgnoreCase')
-    return $(if ($match.Success) { $match.Groups[1].Value } else { "" })
-}
-
-function Install-TrueHdd {
-    param([string]$Version)
-
-    $release = Get-TrueHddRelease
-    $archive = Join-Path $script:TempRoot $release.Name
-    $extracted = Join-Path $script:TempRoot "truehdd-extracted"
-    Invoke-SetupDownload -Uri $release.Uri -Destination $archive -Sha256 $release.Sha256 | Out-Null
-    Expand-SetupZip -Archive $archive -Destination $extracted
-    $executable = Get-ChildItem -LiteralPath $extracted -Filter "truehdd.exe" -File -Recurse |
-        Select-Object -First 1
-    if ($null -eq $executable) {
-        throw (Get-SetupText "truehdd.exe is missing from the release archive." "发布压缩包中缺少 truehdd.exe。")
-    }
-    [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($script:ToolPaths.TrueHdd)) | Out-Null
-    Copy-Item -LiteralPath $executable.FullName -Destination $script:ToolPaths.TrueHdd -Force
-}
-
-function Test-TrueHdd {
-    return [bool](Get-InstalledTrueHddVersion)
-}
 function Get-X264Release {
     $cacheKey = "gitlab:x264:official-master"
     if ($script:ReleaseCache.Contains($cacheKey)) {
@@ -4018,14 +3982,6 @@ function Register-StageThreeComponents {
         -Install { param($Version) Install-Hdr10PlusTool $Version } `
         -Verify { Test-Hdr10PlusTool }
 
-    Register-SetupComponent `
-        -Name "truehdd" `
-        -EnglishName "truehdd" `
-        -ChineseName "truehdd" `
-        -GetInstalledVersion { Get-InstalledTrueHddVersion } `
-        -GetAvailableVersion { (Get-TrueHddRelease).Version } `
-        -Install { param($Version) Install-TrueHdd $Version } `
-        -Verify { Test-TrueHdd }
 }
 function Register-StageFourComponents {
     Register-SetupComponent `

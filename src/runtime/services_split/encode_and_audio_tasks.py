@@ -1351,6 +1351,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             subtitle_path: str = '',
             subtitle_language: str = '',
             audio_encoding: AudioEncodingSettings = AudioEncodingSettings(),
+            wave64_bit_depth: int = 32,
             auto_crop_black_borders: bool = False,
             vpy_denoise_strength: float = 0.6,
             vpy_dehalo_strength: float = 0.0,
@@ -1965,6 +1966,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 subtitle_file=soft_subtitle,
                 subtitle_language=subtitle_language,
                 audio_encoding=audio_encoding,
+                wave64_bit_depth=wave64_bit_depth,
                 preserve_failure_artifacts=True,
                 progress_callback=report_audio_progress,
             )

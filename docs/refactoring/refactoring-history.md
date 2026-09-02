@@ -1070,3 +1070,48 @@ Date: 2026-08-25
 
 - Existing Remux, SP, Encode-boundary, configuration, helper, and static-contract suites passed without modifying test files, together with Python compilation, i18n, split-contract, diff, and CRLF checks.
 - Real-media read-only checks used `Frieren Beyond Journeys End S02` Vol.1 and Vol.3 `00002.mpls`. A Vol.1 single-episode parts range selected only `00002.m2ts` and stayed on direct mux; over the complete playlist, the absent unselected commentary PID `0x1101` on `00003.m2ts` through `00005.m2ts` shifts the selected PGS PID `0x1200` from MPLS track ID 3 to M2TS track ID 2 and therefore enters fallback. Vol.3 likewise detected selected PGS PID `0x1200` changing from MPLS track ID 4 to M2TS track ID 2 before muxing.
+
+## Lossless Audio Conversion Contract
+
+Date: 2026-09-02
+
+### Classification and User Controls
+
+- Centralized the lossless classifier around PCM, TrueHD/MLP, FLAC, and DTS-HD Master Audio. DTS core and DTS-HD High Resolution Audio are now explicitly excluded even when they share the DTS codec-ID family.
+- Added a disabled-by-default Advanced preference for converting DTS:X and TrueHD Atmos during Remux because FLAC cannot store their object metadata.
+- Added a configurable audio duration-loss fallback threshold under Advanced, from 0.1 to 60 seconds and defaulting to 1 second.
+
+### Conversion and Fallback Changes
+
+- Removed the separate TrueHD decoder dependency from runtime configuration, Windows and Linux setup, Docker packaging, frozen-build tool checks, and third-party notice generation. FFmpeg now owns TrueHD and DTS decoding.
+- Removed the DTS/FLAC size fallback. Decode or encode failure keeps the source; successful FLAC is checked only for duration, using the configured threshold.
+- Replaced per-track Matroska extraction with one FFprobe snapshot and one multi-output FFmpeg decode to Wave64. BDMV-derived workflows use 24-bit PCM, while arbitrary Matroska inputs use 32-bit PCM. Analysis and conversion reuse these files.
+- FLAC output follows detected 16-, 24-, or 32-bit effective depth. FFmpeg handles 16/24-bit output; true 32-bit output requires the standalone encoder.
+- Failed batch extraction retries each track separately. A track that still fails remains selected and is excluded from analysis and conversion. Standalone FLAC SP output now shares the mux conversion and validation implementation; the redundant path and service stub were removed.
+
+### Documentation and Verification
+
+- Updated bilingual user, design, format, development, configuration, translation, setup, and legal documentation.
+- Reused existing test modules and added only focused extraction-recovery and effective-depth cases. All 251 tests and static checks passed; local smoke tests produced matching FLAC depths for `[16, 24, 32]` inputs.
+
+## MPLS Track Selection and Execution-Time Mapping
+
+Date: 2026-09-02
+
+### Contract and Removed Paths
+
+- Replaced the MPLS **Edit Tracks** source with the playlist's first-PlayItem STN. Loading no longer runs `mkvmerge --identify`, supplements missing rows from the first M2TS, or exposes transient mkvmerge track IDs in that dialog; disc-title language preference also comes from STN instead of identifying the first M2TS twice.
+- Consolidated STN track metadata in `MPLS.get_tracks_info()`, sorted the returned rows by PID, and removed `Chapter.get_pid_to_language()` so `Chapter` remains focused on timing and chapter marks.
+- Main Remux commands now retain `{video_opts}`, `{audio_opts}`, and `{sub_opts}`. Explicit `-d`/`-a`/`-s` and corresponding no-track flags in an edited main command are removed; the captured **Edit Tracks** PID selection is the sole source for those selectors.
+- Removed the fallback path that parsed audio or subtitle IDs back out of the editable command, together with the legacy MPLS fallback adapter that reconstructed a selection from first-M2TS track indexes. Main and fallback muxing now require the same captured PID selection.
+
+### Execution and Fallback Routing
+
+- Main Remux identifies the MPLS only after execution begins and reuses that result to resolve all three selector placeholders. If any selected PID is missing from the MPLS identification, direct muxing is skipped before per-M2TS checks; a complete mapping continues through the existing command-range and per-M2TS consistency checks.
+- Single-M2TS SP discovery and selection retain their source-local track-ID behavior. MPLS-backed SP selection now uses the same direct STN rows as main-playlist selection.
+
+### Documentation and Verification
+
+- Synchronized both README versions, both code-standard versions, the media-pipeline design notes, and the bilingual developer guide. The code standards record the confirmed main-command selector exception to the otherwise authoritative editable-command rule.
+- Added focused coverage for direct STN track rows, placeholder normalization without identify, execution-time PID-to-track-ID resolution, and STN-based disc-title language selection. After removing the obsolete first-M2TS visibility test, all 254 repository tests passed together with the static checks.
+- A read-only check of the reported `00054.mpls` returned both HEVC PIDs, all six audio PIDs, and all seven PGS PIDs directly from STN, including the two PGS rows omitted by the observed mkvmerge identification. A full real-media Remux remains the final manual check.

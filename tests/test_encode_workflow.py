@@ -664,6 +664,10 @@ class EncodeWorkflowTests(unittest.TestCase):
                 service.encode_keyword_calls[0]['frame_check_chroma_psnr_threshold_db'],
                 38.5,
             )
+            self.assertEqual(
+                service.encode_keyword_calls[0]['wave64_bit_depth'],
+                32,
+            )
             dovi_preflight.assert_called_once_with(
                 [str(second_source_path)],
                 request.settings.encoder,
@@ -672,6 +676,36 @@ class EncodeWorkflowTests(unittest.TestCase):
             self.assertIn(
                 f'Skipping existing output: {output_path}',
                 service.progress_messages,
+            )
+
+            bdmv_output_path = output_folder / 'BDMV Episode.mkv'
+            bdmv_row = EncodeRow(
+                str(source_path),
+                str(bdmv_output_path),
+                str(vpy_path),
+            )
+            bdmv_request = EncodeRequest(
+                input_mode='bdmv',
+                source_root=str(source_folder),
+                output_folder=str(output_folder),
+                staging_folder='',
+                main_rows=(bdmv_row,),
+                sp_rows=(),
+                settings=_settings(),
+            )
+            service = _RowEncodeService()
+            with patch(
+                    'src.runtime.services_split.encode_and_audio_tasks.encode_dovi_preflight_mkv_paths',
+                    return_value=None):
+                service._encode_mkv_rows(
+                    bdmv_request,
+                    [bdmv_row],
+                    [],
+                    threading.Event(),
+                )
+            self.assertEqual(
+                service.encode_keyword_calls[0]['wave64_bit_depth'],
+                24,
             )
 
             output_path.write_bytes(b'')

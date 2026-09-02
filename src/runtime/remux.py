@@ -25,6 +25,7 @@ class RemuxRequest:
     movie_mode: bool = False
     mux_dolby_vision: bool = True
     convert_lossless_audio_to_flac: bool = True
+    convert_immersive_audio_to_flac: bool = False
     clean_audio_tracks: bool = True
     audio_encoding: AudioEncodingSettings = AudioEncodingSettings()
     # ``main::`` and MPLS-backed ``sp::`` values are MPEG PIDs grouped by type.
@@ -46,7 +47,7 @@ class RemuxMainJob:
     volume: str
     primary_output: str
     mpls_path: str
-    # Main-job values are decimal PID strings retained for command placeholders and logs.
+    # Main-job values are decimal PID strings retained for fallback and logs.
     audio_tracks: tuple[str, ...]
     subtitle_tracks: tuple[str, ...]
     expected_outputs: tuple[str, ...]
@@ -54,7 +55,7 @@ class RemuxMainJob:
     m2ts_file_details: tuple[str, ...] = ()
     track_language_overrides: tuple[tuple[str, str], ...] = ()
     # Canonical main-track contract: (``video`` | ``audio`` | ``subtitles``, MPEG PID).
-    # Tuple order follows MPLS identify only; GUI row order has no runtime meaning.
+    # Tuple order follows ascending MPLS PID; GUI row order has no runtime meaning.
     track_pids: tuple[tuple[str, int], ...] = ()
 
 

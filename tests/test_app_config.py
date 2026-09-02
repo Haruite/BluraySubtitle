@@ -314,6 +314,7 @@ class SettingsGuiTests(unittest.TestCase):
         dialog.ffmpeg_flac_compression_spin.setValue(11)
         dialog.fdkaac_bitrate_spin.setValue(320)
         dialog.opus_bitrate_spin.setValue(192)
+        dialog.audio_duration_loss_threshold_spin.setValue(1.7)
         dialog.default_encoder_combo.setCurrentIndex(
             dialog.default_encoder_combo.findData("x264")
         )
@@ -349,6 +350,7 @@ class SettingsGuiTests(unittest.TestCase):
         dialog.default_vpy_deband_strength_spin.setValue(0.5)
         dialog.default_vpy_antialiasing_strength_spin.setValue(0.6)
         dialog.remux_flac_default_checkbox.setChecked(False)
+        dialog.remux_immersive_flac_checkbox.setChecked(True)
 
         selected = dialog.selected_config()
 
@@ -371,11 +373,15 @@ class SettingsGuiTests(unittest.TestCase):
                 ffmpeg_flac_compression_level=11,
                 fdkaac_bitrate_kbps=320,
                 opus_bitrate_kbps=192,
+                duration_loss_fallback_threshold_seconds=1.7,
             ),
         )
         self.assertEqual(
             selected.remux,
-            RemuxPreferences(convert_lossless_audio_to_flac=False),
+            RemuxPreferences(
+                convert_lossless_audio_to_flac=False,
+                convert_immersive_audio_to_flac=True,
+            ),
         )
         self.assertEqual(
             selected.encode,

@@ -17,8 +17,10 @@ from src.runtime.services import BluraySubtitle  # Import the composed service b
 from src.runtime.gui_runtime_classes.bluray_subtitle_gui_entry import BluraySubtitleGUI  # noqa: F401
 from src.runtime.gui_runtime_split import remux_and_episode_layout as remux_gui_module
 from src.runtime.gui_runtime_split.remux_and_episode_layout import RemuxEpisodeLayoutMixin
+from src.runtime.services_split import lifecycle_and_configuration as lifecycle_module
 from src.runtime.services_split import remux_and_episode_workflows as remux_service_module
 from src.runtime.services_split import media_info_and_track_mapping as track_mapping_module
+from src.runtime.services_split.lifecycle_and_configuration import LifecycleConfigurationMixin
 from src.runtime.services_split.media_info_and_track_mapping import MediaInfoTrackMappingMixin
 from src.runtime.services_split.remux_and_episode_workflows import RemuxEpisodeWorkflowsMixin
 from tests._gui_worker_fakes import FakeThread as _FakeThread
@@ -129,6 +131,9 @@ class RemuxWorkflowTests(unittest.TestCase):
                 trim_copyright_tail_checkbox=SimpleNamespace(isChecked=lambda: True),
                 mux_dolby_vision_checkbox=SimpleNamespace(isChecked=lambda: False),
                 remux_flac_checkbox=SimpleNamespace(isChecked=lambda: True),
+                _app_config=SimpleNamespace(
+                    remux=SimpleNamespace(convert_immersive_audio_to_flac=True),
+                ),
                 _sp_scan_in_progress=True,
                 _current_encode_lossless_audio_codec=lambda: 'opus',
                 _captured_audio_encoding_settings=lambda: audio_encoding,
@@ -160,6 +165,7 @@ class RemuxWorkflowTests(unittest.TestCase):
             self.assertFalse(request.complete_bluray_folder)
             self.assertFalse(request.mux_dolby_vision)
             self.assertTrue(request.convert_lossless_audio_to_flac)
+            self.assertTrue(request.convert_immersive_audio_to_flac)
             self.assertTrue(request.clean_audio_tracks)
             self.assertTrue(request.movie_mode)
             self.assertEqual(request.audio_encoding, audio_encoding)
@@ -178,6 +184,7 @@ class RemuxWorkflowTests(unittest.TestCase):
                 subtitle_files=(str(subtitle),),
                 episode_subtitle_languages=('jpn',),
                 convert_lossless_audio_to_flac=True,
+                convert_immersive_audio_to_flac=True,
             )
             owner = SimpleNamespace(
                 _prepare_remux_main_jobs=lambda _request: (str(root), []),
@@ -216,6 +223,10 @@ class RemuxWorkflowTests(unittest.TestCase):
             self.assertEqual(validate_tools.call_count, 2)
             for call in validate_tools.call_args_list:
                 self.assertTrue(call.kwargs['convert_all_lossless_to_flac'])
+                self.assertTrue(call.kwargs['convert_immersive_audio_to_flac'])
+            for call in convert_audio.call_args_list:
+                self.assertTrue(call.kwargs['convert_immersive_audio_to_flac'])
+                self.assertEqual(call.kwargs['wave64_bit_depth'], 24)
             owner.completion.assert_called_once_with()
 
     def test_remux_flac_disabled_still_runs_automatic_audio_cleanup(self) -> None:
@@ -252,6 +263,7 @@ class RemuxWorkflowTests(unittest.TestCase):
             None,
             (),
             convert_all_lossless_to_flac=False,
+            convert_immersive_audio_to_flac=False,
         )
         convert_audio.assert_called_once_with(
             'Episode.mkv',
@@ -260,10 +272,12 @@ class RemuxWorkflowTests(unittest.TestCase):
             selected_subtitle_tracks=None,
             audio_codec_choices=(),
             convert_all_lossless_to_flac=False,
+            convert_immersive_audio_to_flac=False,
             clean_audio_tracks=True,
             subtitle_file='',
             subtitle_language='',
             audio_encoding=request.audio_encoding,
+            wave64_bit_depth=24,
         )
         owner.completion.assert_called_once_with()
 
@@ -405,6 +419,94 @@ class RemuxWorkflowTests(unittest.TestCase):
         self.assertIs(owner._dovi_mux_plan, detected_plan)
         print_mock.assert_called_once_with(
             'MPLS Dolby Vision pair BL=0x1011 EL=0x1015; mux enabled: True'
+        )
+
+    def test_main_command_preview_uses_track_placeholders_without_identify(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            mpls_path = root / 'Disc' / 'BDMV' / 'PLAYLIST' / '00001.mpls'
+            mpls_path.parent.mkdir(parents=True)
+            mpls_path.write_bytes(b'mpls')
+            service = object.__new__(BluraySubtitle)
+            service.bdmv_path = str(root / 'Disc')
+            service.movie_mode = True
+            service.track_selection_config = {
+                f'main::{os.path.normpath(str(mpls_path))}': {
+                    'video': ['4113'],
+                    'audio': ['4352'],
+                    'subtitle': ['4768'],
+                },
+            }
+            service._resolve_disc_output_name = lambda _stem: 'Movie'
+            configuration = [{
+                'selected_mpls': str(mpls_path),
+                'main_remux_cmd': (
+                    'mkvmerge -d 9 --audio-tracks=8 -S -o "{output_file}" '
+                    '"{mpls_path}"'
+                ),
+            }]
+            chapter = SimpleNamespace(in_out_time=[('00001', 0, 45000)])
+
+            with patch.object(remux_service_module, 'Chapter', return_value=chapter), patch.object(
+                    remux_service_module, 'find_mkvtoolnix'), patch.object(
+                    MediaInfoTrackMappingMixin, '_mkvmerge_identify_json',
+                    side_effect=AssertionError('identify must not run while building the preview')):
+                command, *_rest = service._make_main_mpls_remux_cmd(
+                    configuration,
+                    str(root / 'Output'),
+                    1,
+                    1,
+                )
+
+            self.assertIn('{video_opts} {audio_opts} {sub_opts}', command)
+            self.assertNotIn('-d 9', command)
+            self.assertNotIn('--audio-tracks=8', command)
+            self.assertNotIn(' -S ', command)
+
+    def test_disc_title_language_comes_from_mpls_without_first_m2ts_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory) / 'Disc'
+            mpls_path = root / 'BDMV' / 'PLAYLIST' / '00001.mpls'
+            meta_folder = root / 'BDMV' / 'META' / 'DL'
+            mpls_path.parent.mkdir(parents=True)
+            meta_folder.mkdir(parents=True)
+            mpls_path.write_bytes(b'mpls')
+            xml_template = '<discinfo xmlns="urn:BDA:bdmv;discinfo"><name>{}</name></discinfo>'
+            (meta_folder / 'bdmt_jpn.xml').write_text(
+                xml_template.format('Japanese title'), encoding='utf-8'
+            )
+            (meta_folder / 'bdmt_eng.xml').write_text(
+                xml_template.format('English title'), encoding='utf-8'
+            )
+            parser = SimpleNamespace(get_tracks_info=lambda: [
+                {'codec_type': 'audio', 'language': 'jpn'},
+            ])
+
+            with patch.object(lifecycle_module, 'MPLS', return_value=parser):
+                title = LifecycleConfigurationMixin.resolve_disc_output_title(
+                    str(root), '00001'
+                )
+
+            self.assertEqual(title, 'Japanese title')
+
+    def test_main_track_placeholders_resolve_from_selected_pids(self) -> None:
+        identification = {'tracks': [
+            {'id': 0, 'type': 'video', 'properties': {'stream_id': 0x1011}},
+            {'id': 2, 'type': 'audio', 'properties': {'stream_id': 0x1100}},
+            {'id': 7, 'type': 'subtitles', 'properties': {'stream_id': 0x12A2}},
+        ]}
+        command = 'mkvmerge {video_opts} {audio_opts} {sub_opts} -o output.mkv input.mpls'
+
+        with patch.object(track_mapping_module, '_svc_cls', return_value=MediaInfoTrackMappingMixin):
+            resolved = MediaInfoTrackMappingMixin._resolve_main_remux_track_placeholders(
+                command,
+                [('video', 0x1011), ('audio', 0x1100), ('subtitles', 0x12A2)],
+                identification,
+            )
+
+        self.assertEqual(
+            resolved,
+            'mkvmerge -d 0 -a 2 -s 7 -o output.mkv input.mpls',
         )
 
     def test_same_disc_main_playlists_each_get_one_job_in_selected_order(self) -> None:
@@ -601,19 +703,25 @@ class RemuxWorkflowTests(unittest.TestCase):
                 subtitle_tracks=(),
                 expected_outputs=(str(expected_output),),
                 final_outputs=(str(root / 'Final.mkv'),),
+                track_pids=(('video', 0x1011),),
             )
             owner = SimpleNamespace(
                 track_selection_config={},
                 t=lambda text: text,
                 _progress=lambda *args, **kwargs: None,
                 _set_dovi_mux_plan_for_mpls=Mock(),
-                _mkvmerge_identify_covers_remux_slots=lambda *args: True,
+                _mkvmerge_identify_covers_remux_slots=lambda *args, **kwargs: True,
                 _run_shell_command_detailed=lambda command: (2, [2]),
                 _try_remux_mpls_split_outputs_track_aligned=lambda *args, **kwargs: False,
                 _try_remux_mpls_track_aligned=lambda *args, **kwargs: False,
             )
+            fake_service_class = SimpleNamespace(
+                _mkvmerge_identify_json=lambda _path: {'tracks': []},
+                _mkvmerge_pid_id_map=lambda *_args: {('video', 0x1011): 0},
+                _resolve_main_remux_track_placeholders=lambda command, *_args: command,
+            )
 
-            with patch.object(remux_service_module, 'Chapter', return_value=_FakeChapter()):
+            with patch.object(remux_service_module, '_svc_cls', return_value=fake_service_class):
                 with self.assertRaisesRegex(RuntimeError, 'Main remux failed'):
                     RemuxEpisodeWorkflowsMixin._build_main_episode_mkvs(owner, [job])
 
@@ -674,11 +782,8 @@ class RemuxWorkflowTests(unittest.TestCase):
     def test_empty_output_track_is_reported_from_statistics(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            source = root / '00002.mpls'
-            probe = root / '00002.m2ts'
             output = root / 'Episode.mkv'
-            for path in (source, probe, output):
-                path.write_bytes(b'media')
+            output.write_bytes(b'media')
             slots = [
                 {'type': 'video', 'pid': 0x1011, 'index': '0'},
                 {'type': 'audio', 'pid': 0x1100, 'index': '1'},
@@ -701,14 +806,12 @@ class RemuxWorkflowTests(unittest.TestCase):
                     track_mapping_module, 'run_command', return_value=SimpleNamespace(
                         returncode=0, stdout=tags, stderr=''
                     )), patch.object(
-                    MediaInfoTrackMappingMixin, '_probe_m2ts_for_remux_source',
-                    return_value=(str(probe), str(source))), patch.object(
-                    MediaInfoTrackMappingMixin, '_ordered_track_slots_for_remux',
-                    return_value=slots), patch.object(
                     MediaInfoTrackMappingMixin, '_mkvmerge_identify_json',
                     return_value=identification):
                 warnings = MediaInfoTrackMappingMixin._remux_output_track_warnings(
-                    str(source), ['1'], ['4'], str(output)
+                    str(output),
+                    None,
+                    [(str(slot['type']), int(slot['pid'])) for slot in slots],
                 )
 
             self.assertEqual(len(warnings), 1)
@@ -733,6 +836,7 @@ class RemuxWorkflowTests(unittest.TestCase):
                 subtitle_tracks=(),
                 expected_outputs=(str(expected_output),),
                 final_outputs=(str(root / 'Final.mkv'),),
+                track_pids=(('video', 0x1011),),
             )
 
             def primary(_command):
@@ -746,14 +850,16 @@ class RemuxWorkflowTests(unittest.TestCase):
                 _progress=lambda *args, **kwargs: None,
                 _set_dovi_mux_plan_for_mpls=lambda _path, **_kwargs: None,
                 _dovi_mux_plan=None,
-                _mkvmerge_identify_covers_remux_slots=lambda *args: True,
+                _mkvmerge_identify_covers_remux_slots=lambda *args, **kwargs: True,
                 _run_shell_command_detailed=primary,
                 _try_remux_mpls_split_outputs_track_aligned=lambda *args, **kwargs: False,
                 _try_remux_mpls_track_aligned=lambda *args, **kwargs: False,
                 _remux_output_track_warnings=Mock(side_effect=RuntimeError('probe failed')),
             )
             fake_service_class = SimpleNamespace(
-                _fallback_track_lists=lambda command, audio, subtitle: (audio, subtitle),
+                _mkvmerge_identify_json=lambda _path: {'tracks': []},
+                _mkvmerge_pid_id_map=lambda *_args: {('video', 0x1011): 0},
+                _resolve_main_remux_track_placeholders=lambda command, *_args: command,
             )
 
             with patch.object(remux_service_module, '_svc_cls', return_value=fake_service_class):
@@ -785,6 +891,7 @@ class RemuxWorkflowTests(unittest.TestCase):
                 expected_outputs=(str(expected_output),),
                 final_outputs=(str(root / 'Final.mkv'),),
                 track_language_overrides=(('1', 'jpn'),),
+                track_pids=(('video', 0x1011), ('audio', 0x1100)),
             )
             language_calls = []
 
@@ -793,8 +900,15 @@ class RemuxWorkflowTests(unittest.TestCase):
                 return True
 
             fake_service_class = SimpleNamespace(
-                _fallback_track_lists=lambda command, audio, subtitle: (audio, subtitle),
-                _fix_output_track_languages_with_mkvpropedit=lambda *args: language_calls.append(args),
+                _mkvmerge_identify_json=lambda _path: {'tracks': []},
+                _mkvmerge_pid_id_map=lambda *_args: {
+                    ('video', 0x1011): 0,
+                    ('audio', 0x1100): 1,
+                },
+                _resolve_main_remux_track_placeholders=lambda command, *_args: command,
+                _fix_output_track_languages_with_mkvpropedit=(
+                    lambda *args, **_kwargs: language_calls.append(args)
+                ),
             )
             owner = SimpleNamespace(
                 track_selection_config={},
@@ -802,7 +916,7 @@ class RemuxWorkflowTests(unittest.TestCase):
                 _progress=lambda *args, **kwargs: None,
                 _set_dovi_mux_plan_for_mpls=lambda _path, **_kwargs: None,
                 _dovi_mux_plan=None,
-                _mkvmerge_identify_covers_remux_slots=lambda *args: True,
+                _mkvmerge_identify_covers_remux_slots=lambda *args, **kwargs: True,
                 _run_shell_command_detailed=lambda command: (2, [2]),
                 _try_remux_mpls_split_outputs_track_aligned=lambda *args, **kwargs: False,
                 _try_remux_mpls_track_aligned=fallback,

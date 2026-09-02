@@ -1,7 +1,6 @@
 """Auto-generated split target: lifecycle_and_configuration."""
 
 import ctypes
-import json
 import locale
 import multiprocessing
 import os
@@ -14,10 +13,8 @@ from typing import Optional
 
 from PyQt6.QtCore import QCoreApplication, QThread
 
-from src.bdmv import Chapter
-from src.core import MKV_MERGE_PATH
-from src.exports.utils import get_time_str, run_command
-from .media_info_and_track_mapping import MediaInfoTrackMappingMixin
+from src.bdmv import Chapter, MPLS
+from src.exports.utils import get_time_str
 from .service_base import BluraySubtitleServiceBase
 from .. import TaskCancelled
 from ...core import DEFAULT_APPROX_EPISODE_DURATION_SECONDS, CURRENT_UI_LANGUAGE
@@ -274,32 +271,15 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
     @staticmethod
     def resolve_disc_output_title(bdmv_root: str, selected_mpls_no_ext: str) -> str:
         """Disc / volume title for remux ``-o`` and table2 ``output_name`` (same rules as ``_resolve_disc_output_name``)."""
-        mpls_path, meta_folder, stream_dir = LifecycleConfigurationMixin._disc_paths_for_output_title(
+        mpls_path, meta_folder, _stream_dir = LifecycleConfigurationMixin._disc_paths_for_output_title(
             bdmv_root, selected_mpls_no_ext)
         output_name = ''
         first_audio_lang = ''
         try:
-            chapter = Chapter(mpls_path)
-            if chapter.in_out_time:
-                first_m2ts = os.path.join(stream_dir, chapter.in_out_time[0][0] + '.m2ts')
-                mkvmerge_info = MediaInfoTrackMappingMixin._pid_lang_from_mkvmerge_json(first_m2ts)
-                if mkvmerge_info:
-                    exe = MKV_MERGE_PATH if MKV_MERGE_PATH else 'mkvmerge'
-                    p = run_command(
-                        [exe, "--identify", "--identification-format", "json", first_m2ts],
-                        capture_output=True,
-                        text=True,
-                        encoding='utf-8',
-                        errors='ignore',
-                    )
-                    data = json.loads(p.stdout or "{}")
-                    tracks = data.get('tracks') or []
-                    for tr in tracks:
-                        if isinstance(tr, dict) and str(tr.get('type') or '') == 'audio':
-                            props = tr.get('properties') or {}
-                            if isinstance(props, dict):
-                                first_audio_lang = str(props.get('language') or '').strip().lower()
-                            break
+            for track in MPLS(mpls_path, strict=False).get_tracks_info():
+                if str(track.get('codec_type') or '') == 'audio':
+                    first_audio_lang = str(track.get('language') or '').strip().lower()
+                    break
         except Exception:
             first_audio_lang = ''
 

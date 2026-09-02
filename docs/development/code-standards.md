@@ -46,6 +46,7 @@ When the author establishes a new rule, update this file and its Simplified Chin
 - A worker or service must not silently replace an explicit GUI value with a stale snapshot, global value, default, regenerated value, or inferred alternative.
 - Do not silently skip a selected GUI row or option. If the selected value cannot be executed, report an error.
 - Intentional exception: Encode skips automatic getnative with user-visible progress when the actual source height exceeds 1080p, even if the GUI option is selected. Higher-resolution getnative remains a manual `src/scripts/getnative_file.py` and VPy configuration workflow.
+- Intentional exception: for a main-playlist Remux, **Edit Tracks** is authoritative for video, audio, and subtitle selection. The editable mux command carries `{video_opts}`, `{audio_opts}`, and `{sub_opts}` placeholders; manually written track-selection flags in that command are ignored and replaced from the captured PID selection at execution.
 - Automatic inference is allowed only when the user has not supplied an explicit value.
 - Table order used by execution must match the visible order captured at launch unless the GUI explicitly documents another ordering rule.
 - A worker owns the captured request. It must not read live GUI widgets after launch.

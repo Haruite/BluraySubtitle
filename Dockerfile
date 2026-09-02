@@ -104,20 +104,6 @@ RUN set -eux; \
     install -m 0755 dovi_tool /usr/bin/dovi_tool; \
     rm -rf /tmp/dovi
 
-RUN set -eux; \
-    TRUEHDD_VER="$(curl -fsSL https://api.github.com/repos/truehdd/truehdd/releases/latest | python3 -c 'import json, sys; print(json.load(sys.stdin)["tag_name"])')"; \
-    test -n "$TRUEHDD_VER"; \
-    case "$(uname -m)" in \
-      x86_64|amd64) TRUEHDD_ARCH=x86_64 ;; \
-      aarch64|arm64) TRUEHDD_ARCH=aarch64 ;; \
-      *) echo "unsupported arch for truehdd: $(uname -m)" >&2; exit 1 ;; \
-    esac; \
-    mkdir -p /tmp/truehdd_bin && cd /tmp/truehdd_bin; \
-    wget -nv "https://github.com/truehdd/truehdd/releases/download/${TRUEHDD_VER}/truehdd-${TRUEHDD_VER}-${TRUEHDD_ARCH}-unknown-linux-gnu.tar.gz"; \
-    tar zxf "truehdd-${TRUEHDD_VER}-${TRUEHDD_ARCH}-unknown-linux-gnu.tar.gz"; \
-    install -m 0755 truehdd /usr/bin/truehdd; \
-    rm -rf /tmp/truehdd_bin
-
 ARG FFMPEG_TAG
 RUN set -eux; \
     FFMPEG_TAG="${FFMPEG_TAG:-$(git ls-remote --refs --tags --sort=-version:refname https://github.com/FFmpeg/FFmpeg.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[nN]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')}"; \
@@ -769,7 +755,6 @@ RUN pkg-config --exists dovi \
     && /usr/bin/ffmpeg -hide_banner -h encoder=libopus 2>&1 | grep '^Encoder libopus' >/dev/null \
     && test -x /usr/bin/dovi_tool \
     && test -x /usr/bin/hdr10plus_tool \
-    && test -x /usr/bin/truehdd \
     && test -x /usr/bin/flac \
     && test -x /usr/bin/ffmpeg \
     && test -x /usr/bin/ffprobe \

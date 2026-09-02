@@ -21,6 +21,9 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
             ffmpeg_flac_compression_level=audio.ffmpeg_flac_compression_level,
             fdkaac_bitrate_kbps=audio.fdkaac_bitrate_kbps,
             opus_bitrate_kbps=audio.opus_bitrate_kbps,
+            duration_loss_fallback_threshold_seconds=(
+                audio.duration_loss_fallback_threshold_seconds
+            ),
         )
 
     def _apply_saved_encode_defaults(self) -> None:

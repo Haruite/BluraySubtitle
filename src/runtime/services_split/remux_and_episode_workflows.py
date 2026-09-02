@@ -480,12 +480,16 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 }
             elif track_selection_config is None:
                 if entry.mpls_file:
-                    chapter = Chapter(source_path)
-                    chapter.get_pid_to_language()
+                    mpls_streams = _svc_cls()._mpls_track_streams(source_path)
+                    pid_to_lang = {
+                        int(stream['pid']): str(stream.get('language') or 'und')
+                        for stream in mpls_streams
+                        if stream.get('pid') is not None
+                    }
                     selected_audio, selected_subtitles = (
                         _svc_cls()._default_track_selection_from_streams(
-                            _svc_cls()._mkvmerge_track_streams_for_mpls(source_path),
-                            dict(chapter.pid_to_lang or {}),
+                            mpls_streams,
+                            pid_to_lang,
                         )
                     )
                 else:
@@ -694,34 +698,70 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 print(msg)
                 self._progress(text=msg)
 
-            self._set_dovi_mux_plan_for_mpls(job.mpls_path, report_detected_pair=True)
             main_pid_slots = list(job.track_pids)
-            if main_pid_slots:
-                identify_ok = self._mkvmerge_identify_covers_remux_slots(
+            mpls_identification: Optional[dict[str, object]] = None
+            if not main_pid_slots:
+                _svc_cls()._log_mkvmerge_identify_slot_gap(
                     job.mpls_path,
-                    list(job.audio_tracks),
-                    list(job.subtitle_tracks),
-                    job.command,
-                    selected_pid_slots=main_pid_slots,
+                    '',
+                    [],
+                    None,
+                    'main MPLS job has no captured PID selection',
                 )
+                identify_ok = False
             else:
-                # Compatibility for directly constructed pre-contract jobs. GUI-planned
-                # jobs always carry track_pids and never enter this branch.
-                identify_ok = self._mkvmerge_identify_covers_remux_slots(
-                    job.mpls_path,
-                    list(job.audio_tracks),
-                    list(job.subtitle_tracks),
-                    job.command,
+                mpls_identification = _svc_cls()._mkvmerge_identify_json(job.mpls_path)
+                reference_map = _svc_cls()._mkvmerge_pid_id_map(
+                    job.mpls_path, mpls_identification
                 )
+                selected_slots = [
+                    {'type': str(track_type), 'pid': int(pid)}
+                    for track_type, pid in main_pid_slots
+                ]
+                missing_slots = [
+                    slot for slot in selected_slots
+                    if (str(slot['type']), int(slot['pid'])) not in reference_map
+                ]
+                if missing_slots:
+                    _svc_cls()._log_mkvmerge_identify_slot_gap(
+                        job.mpls_path,
+                        '',
+                        selected_slots,
+                        mpls_identification,
+                        'selected PID has no direct MPLS PID-to-track-ID mapping',
+                        missing_slots=missing_slots,
+                    )
+                    identify_ok = False
+                else:
+                    self._set_dovi_mux_plan_for_mpls(
+                        job.mpls_path, report_detected_pair=True
+                    )
+                    identify_ok = self._mkvmerge_identify_covers_remux_slots(
+                        job.mpls_path,
+                        list(job.audio_tracks),
+                        list(job.subtitle_tracks),
+                        job.command,
+                        selected_pid_slots=main_pid_slots,
+                        identification=mpls_identification,
+                    )
             if not identify_ok:
                 print('[remux-fallback] skipping primary mkvmerge (see identify check lines above)')
-            print(f'{self.t("Mux command: ")}{job.command}')
-            self._progress(
-                text=f'{self.t("Muxing: ")}BD_Vol_{job.volume} [{os.path.basename(job.mpls_path)}]'
+            resolved_command = job.command
+            if identify_ok and main_pid_slots and mpls_identification is not None:
+                resolved_command = _svc_cls()._resolve_main_remux_track_placeholders(
+                    job.command,
+                    main_pid_slots,
+                    mpls_identification,
+                    getattr(self, '_dovi_mux_plan', None),
+                )
+            print(f'{self.t("Mux command: ")}{resolved_command}')
+            job_progress_name = (
+                f'BD_Vol_{job.volume} [{os.path.basename(job.mpls_path)}]'
             )
+            self._progress(text=f'{self.t("Muxing: ")}{job_progress_name}')
             if identify_ok:
                 try:
-                    return_code, _line_return_codes = self._run_shell_command_detailed(job.command)
+                    return_code, _line_return_codes = self._run_shell_command_detailed(resolved_command)
                 except TaskCancelled:
                     for output_path in job.expected_outputs:
                         if os.path.isfile(output_path):
@@ -756,47 +796,40 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             except Exception:
                 cover = ''
 
-            fallback_audio, fallback_subtitle = _svc_cls()._fallback_track_lists(
-                job.command, list(job.audio_tracks), list(job.subtitle_tracks)
-            )
             split_output = len(job.expected_outputs) > 1
             if not primary_ok:
                 for output_path in job.expected_outputs:
                     if os.path.isfile(output_path):
                         force_remove_file(output_path)
                 fallback_ok = False
-                if split_output:
+                if split_output and main_pid_slots:
                     self._progress(text=self.t(
                         'Multi-output track-aligned fallback: {name}'
-                    ).format(name=f'BD_Vol_{job.volume}'))
+                    ).format(name=job_progress_name))
                     fallback_kwargs = {
                         'cancel_event': cancel_event,
                         'progress_base': job_progress_base,
                         'progress_span': job_progress_end - job_progress_base,
                     }
-                    if main_pid_slots:
-                        fallback_kwargs['selected_pid_slots'] = main_pid_slots
+                    fallback_kwargs['selected_pid_slots'] = main_pid_slots
                     fallback_ok = self._try_remux_mpls_split_outputs_track_aligned(
                         job.mpls_path,
                         job.primary_output,
                         configurations,
-                        fallback_audio,
-                        fallback_subtitle,
                         cover,
                         **fallback_kwargs,
                     )
-                elif not split_output:
+                elif main_pid_slots:
                     self._progress(text=self.t(
                         'Track-aligned fallback: {name}'
-                    ).format(name=f'BD_Vol_{job.volume}'))
-                    fallback_kwargs = {'cancel_event': cancel_event}
-                    if main_pid_slots:
-                        fallback_kwargs['selected_pid_slots'] = main_pid_slots
+                    ).format(name=job_progress_name))
+                    fallback_kwargs = {
+                        'cancel_event': cancel_event,
+                        'selected_pid_slots': main_pid_slots,
+                    }
                     fallback_ok = self._try_remux_mpls_track_aligned(
                         job.mpls_path,
                         job.primary_output,
-                        fallback_audio,
-                        fallback_subtitle,
                         cover,
                         **fallback_kwargs,
                     )
@@ -851,20 +884,11 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 self.remux_warnings = warning_list
             for output_path in job.expected_outputs:
                 try:
-                    warning_args = [
-                        job.mpls_path,
-                        list(job.audio_tracks),
-                        list(job.subtitle_tracks),
+                    output_warnings = self._remux_output_track_warnings(
                         output_path,
                         getattr(self, '_dovi_mux_plan', None),
-                    ]
-                    if main_pid_slots:
-                        output_warnings = self._remux_output_track_warnings(
-                            *warning_args,
-                            selected_pid_slots=main_pid_slots,
-                        )
-                    else:
-                        output_warnings = self._remux_output_track_warnings(*warning_args)
+                        main_pid_slots,
+                    )
                 except TaskCancelled:
                     raise
                 except Exception as error:
@@ -943,9 +967,6 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             conf0, str(getattr(self, 'bdmv_path', '') or ''))
         if not mpls_path or not os.path.isfile(mpls_path):
             raise FileNotFoundError(mpls_path or str(conf0.get('selected_mpls') or ''))
-        self._set_dovi_mux_plan_for_mpls(mpls_path)
-        dovi_video_opts = _svc_cls()._mkvmerge_dovi_primary_video_opts(
-            mpls_path, getattr(self, '_dovi_mux_plan', None))
         try:
             disc_name = os.path.basename(os.path.normpath(str(getattr(self, 'bdmv_path', '') or '')).rstrip(os.sep))
         except Exception:
@@ -967,9 +988,12 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 disc_out_dir = dst_folder
 
         chapter = Chapter(mpls_path)
-        chapter.get_pid_to_language()
-        probe_m2ts, _mpls = _svc_cls()._probe_m2ts_for_remux_source(mpls_path)
-        m2ts_file = probe_m2ts or ''
+        m2ts_file = ''
+        if chapter.in_out_time:
+            m2ts_file = os.path.normpath(os.path.join(
+                os.path.dirname(mpls_path), '..', 'STREAM',
+                f'{chapter.in_out_time[0][0]}.m2ts',
+            ))
         config_key = media_track_key('main', mpls_path)
         tracks_cfg = getattr(self, 'track_selection_config', {}) or {}
         if isinstance(tracks_cfg, dict) and config_key in tracks_cfg:
@@ -977,14 +1001,16 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             copy_audio_track = list(selected_track_pids.get('audio') or [])
             copy_sub_track = list(selected_track_pids.get('subtitle') or [])
         else:
-            mpls_streams = _svc_cls()._mkvmerge_track_streams_for_mpls(mpls_path)
+            mpls_streams = _svc_cls()._mpls_track_streams(mpls_path)
+            pid_to_lang = {
+                int(stream['pid']): str(stream.get('language') or 'und')
+                for stream in mpls_streams
+                if stream.get('pid') is not None
+            }
             copy_audio_track, copy_sub_track = _svc_cls()._default_track_selection_from_streams(
                 mpls_streams,
-                chapter.pid_to_lang,
+                pid_to_lang,
             )
-        cmd_audio_track, cmd_sub_track = _svc_cls()._map_selected_pids_to_mpls_track_ids(
-            mpls_path, copy_audio_track, copy_sub_track
-        )
         bdmv_dir = os.path.normpath(os.path.join(os.path.dirname(mpls_path), '..'))
         meta_folder = os.path.join(bdmv_dir, 'META', 'DL')
         cover = ''
@@ -1035,20 +1061,16 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 out_base = re.sub(rf'(?i)^BD_Vol_{bdmv_vol}_', '', out_base)
                 out_base = re.sub(rf'(?i)_BD_Vol_{bdmv_vol}(?=\.mkv$)', '', out_base)
                 output_file = os.path.join(out_dir, out_base)
-            default_audio_opts = (f'-a {",".join(cmd_audio_track)}' if cmd_audio_track else '-A')
-            default_sub_opts = (f'-s {",".join(cmd_sub_track)}' if cmd_sub_track else '-S')
             default_cover_opts = (f'--attachment-name Cover.jpg --attach-file "{cover}"' if cover else '')
             default_cmd = (
-                f'"{mkvmerge_exe}" {mkvtoolnix_ui_language_arg()} {dovi_video_opts} '
+                f'"{mkvmerge_exe}" {mkvtoolnix_ui_language_arg()} '
                 f'--chapter-language eng -o "{output_file}" '
-                f'{default_audio_opts} {default_sub_opts} {default_cover_opts} "{mpls_path}"').strip()
+                f'{default_cover_opts} "{mpls_path}"').strip()
             # A main playlist owns one command; placeholders cover all output ranges for that playlist.
             custom_cmd = str(conf0.get('main_remux_cmd') or '').strip()
             remux_cmd = (
                 custom_cmd.replace('{output_file}', output_file)
                 .replace('{mpls_path}', mpls_path)
-                .replace('{audio_opts}', default_audio_opts)
-                .replace('{sub_opts}', default_sub_opts)
                 .replace('{cover_opts}', default_cover_opts)
                 .replace('{chapter_split}', '')
                 .replace('{parts_split}', '')
@@ -1102,31 +1124,30 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
 
             parts_split, chapter_split, use_split_parts = _parts_chapter_for_sub_confs(confs)
             output_file = f'{os.path.join(disc_out_dir or dst_folder, output_name)}_BD_Vol_{bdmv_vol}.mkv'
-            default_audio_opts = (f'-a {",".join(cmd_audio_track)}' if cmd_audio_track else '-A')
-            default_sub_opts = (f'-s {",".join(cmd_sub_track)}' if cmd_sub_track else '-S')
             default_cover_opts = (f'--attachment-name Cover.jpg --attach-file "{cover}"' if cover else '')
             if use_split_parts:
                 split_arg = (f'--split parts:{parts_split}' if parts_split else '')
             else:
                 split_arg = (f'--split chapters:{chapter_split}' if chapter_split else '')
             default_cmd = (
-                f'"{mkvmerge_exe}" {mkvtoolnix_ui_language_arg()} {dovi_video_opts} {split_arg} '
-                f'-o "{output_file}" {default_audio_opts} {default_sub_opts} {default_cover_opts} '
+                f'"{mkvmerge_exe}" {mkvtoolnix_ui_language_arg()} {split_arg} '
+                f'-o "{output_file}" {default_cover_opts} '
                 f'"{mpls_path}"').strip()
             # A main playlist owns one command; split placeholders describe every selected episode range.
             custom_cmd = str(conf0.get('main_remux_cmd') or '').strip()
             remux_cmd = (
                 custom_cmd.replace('{output_file}', output_file)
                 .replace('{mpls_path}', mpls_path)
-                .replace('{audio_opts}', default_audio_opts)
-                .replace('{sub_opts}', default_sub_opts)
                 .replace('{cover_opts}', default_cover_opts)
                 .replace('{chapter_split}', chapter_split)
                 .replace('{parts_split}', parts_split)
                 if custom_cmd
                 else default_cmd
             )
-        remux_cmd = self._dedupe_remux_shell_lines(remux_cmd)
+        remux_cmd = _svc_cls()._main_remux_command_with_track_placeholders(
+            self._dedupe_remux_shell_lines(remux_cmd),
+            mpls_path,
+        )
         return remux_cmd, m2ts_file, bdmv_vol, output_file, mpls_path, copy_audio_track, copy_sub_track
 
     def _remux_remap_chapter_skip_after_rename(self, mkv_files: list[str]) -> None:
@@ -1314,6 +1335,9 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                             None,
                             (),
                             convert_all_lossless_to_flac=request.convert_lossless_audio_to_flac,
+                            convert_immersive_audio_to_flac=(
+                                request.convert_immersive_audio_to_flac
+                            ),
                         )
                 for output_group, progress_start, progress_span in (
                         (main_matroska_outputs, 500, 400),
@@ -1346,10 +1370,14 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                             selected_subtitle_tracks=None,
                             audio_codec_choices=(),
                             convert_all_lossless_to_flac=request.convert_lossless_audio_to_flac,
+                            convert_immersive_audio_to_flac=(
+                                request.convert_immersive_audio_to_flac
+                            ),
                             clean_audio_tracks=request.clean_audio_tracks,
                             subtitle_file=subtitle_path,
                             subtitle_language=subtitle_language,
                             audio_encoding=request.audio_encoding,
+                            wave64_bit_depth=24,
                         )
                         self._progress(
                             progress_start + int(
@@ -1707,6 +1735,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 subtitle_path=row.subtitle_path,
                 subtitle_language=row.subtitle_language,
                 audio_encoding=request.settings.audio_encoding,
+                wave64_bit_depth=(24 if request.input_mode == 'bdmv' else 32),
                 auto_crop_black_borders=request.settings.auto_crop_black_borders,
                 vpy_denoise_strength=request.settings.vpy_denoise_strength,
                 vpy_dehalo_strength=request.settings.vpy_dehalo_strength,
@@ -1969,6 +1998,9 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                             else ()
                         ),
                         audio_encoding=request.settings.audio_encoding,
+                        wave64_bit_depth=(
+                            24 if request.input_mode == 'bdmv' else 32
+                        ),
                         preserve_failure_artifacts=True,
                         progress_callback=lambda operation, name=progress_name: self._progress(
                             text=self.t('{operation}: {name}').format(

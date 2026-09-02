@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 
+from src.bdmv import MPLS
 from src.bdmv.m2ts import M2TS
 
 
@@ -74,6 +75,37 @@ class M2TSParserTest(unittest.TestCase):
         skipped = {0x1200}
         M2TS(self._write_stream()).get_first_pts(skip_pids=skipped)
         self.assertEqual(skipped, {0x1200})
+
+    def test_mpls_tracks_come_directly_from_the_first_play_item_stn(self) -> None:
+        def pair(pid: int, stream_type: int, language: str = '') -> dict[str, object]:
+            attributes: dict[str, object] = {'StreamCodingType': stream_type}
+            if language:
+                attributes['LanguageCode'] = language
+            return {
+                'StreamEntry': {'RefToStreamPID': pid},
+                'StreamAttributes': attributes,
+            }
+
+        parser = MPLS()
+        parser.data = {'PlayList': {'PlayItems': [{'STNTable': {
+            'PrimaryVideoStreamEntries': [pair(0x1011, 0x24)],
+            'PrimaryAudioStreamEntries': [pair(0x1100, 0x83, 'eng')],
+            'PrimaryPGStreamEntries': [pair(0x12A2, 0x90, 'jpn')],
+            'DVStreamEntries': [pair(0x1015, 0x24)],
+        }}]}}
+
+        self.assertEqual(
+            [
+                (track['pid'], track['codec_type'], track['codec_name'], track['language'])
+                for track in parser.get_tracks_info()
+            ],
+            [
+                (0x1011, 'video', 'hevc', 'und'),
+                (0x1015, 'video', 'hevc', 'und'),
+                (0x1100, 'audio', 'truehd', 'eng'),
+                (0x12A2, 'subtitle', 'pgs', 'jpn'),
+            ],
+        )
 
 
 if __name__ == '__main__':

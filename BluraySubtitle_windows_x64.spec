@@ -100,7 +100,6 @@ for setting_name, description in (
     ("FDK_AAC_PATH", "FDK-AAC encoder"),
     ("DOVI_TOOL_PATH", "dovi_tool"),
     ("HDR10PLUS_TOOL_PATH", "hdr10plus_tool"),
-    ("TRUEHDD_PATH", "truehdd"),
     ("LIBASS_PATH", "libass DLL"),
     ("TS_MUXER_PATH", "tsMuxeR"),
     ("MKV_INFO_PATH", "mkvinfo"),

@@ -610,10 +610,6 @@ class TrackAlignmentTests(unittest.TestCase):
             {'index': 0, 'codec_type': 'video', 'pid': base_layer_pid},
             {'index': 1, 'codec_type': 'video', 'pid': enhancement_layer_pid},
         ]
-        chapter = SimpleNamespace(
-            pid_to_lang={base_layer_pid: 'und', enhancement_layer_pid: 'und'},
-            get_pid_to_language=lambda: None,
-        )
         fake_service_class = SimpleNamespace(
             _m2ts_track_streams=lambda _path: streams,
             _stream_service_id=lambda stream: stream.get('pid'),
@@ -626,52 +622,16 @@ class TrackAlignmentTests(unittest.TestCase):
             'el_pid': enhancement_layer_pid,
         }
 
-        with patch.object(track_module, '_svc_cls', return_value=fake_service_class), patch.object(
-                track_module, 'Chapter', return_value=chapter):
+        with patch.object(track_module, '_svc_cls', return_value=fake_service_class):
             selected_slots = MediaInfoTrackMappingMixin._ordered_track_slots_for_remux(
                 '00304.m2ts',
                 [],
                 [],
                 dovi_plan=dolby_vision_plan,
-                mpls_path='01478.mpls',
             )
 
         self.assertEqual(selected_slots, [
             {'type': 'video', 'pid': base_layer_pid, 'index': '0'},
-        ])
-
-    def test_fallback_slots_follow_gui_visibility_and_selected_order(self) -> None:
-        streams = [
-            {'index': '0', 'codec_type': 'video', 'pid': 0x1011},
-            {'index': '1', 'codec_type': 'video', 'pid': 0x1012},
-            {'index': '2', 'codec_type': 'audio', 'pid': 0x1100},
-            {'index': '3', 'codec_type': 'audio', 'pid': 0x1101},
-            {'index': '4', 'codec_type': 'subtitle', 'pid': 0x1200},
-        ]
-        chapter = SimpleNamespace(pid_to_lang={})
-
-        def read_mpls_tracks():
-            chapter.pid_to_lang = {0x1011: 'und', 0x1100: 'eng', 0x1200: 'eng'}
-
-        chapter.get_pid_to_language = read_mpls_tracks
-        fake_service_class = SimpleNamespace(
-            _m2ts_track_streams=lambda _path: streams,
-            _stream_service_id=lambda stream: stream.get('pid'),
-            _filter_video_pids_for_dovi_plan=lambda pids, _plan: list(pids),
-        )
-        with patch.object(track_module, '_svc_cls', return_value=fake_service_class), patch.object(
-                track_module, 'Chapter', return_value=chapter):
-            selected_slots = MediaInfoTrackMappingMixin._ordered_track_slots_for_remux(
-                '00001.m2ts',
-                ['3', '2'],
-                ['4'],
-                mpls_path='00003.mpls',
-            )
-
-        self.assertEqual(selected_slots, [
-            {'type': 'video', 'pid': 0x1011, 'index': '0'},
-            {'type': 'audio', 'pid': 0x1100, 'index': '2'},
-            {'type': 'subtitles', 'pid': 0x1200, 'index': '4'},
         ])
 
     def test_selected_video_index_maps_to_each_clip_without_hidden_video(self) -> None:
@@ -744,15 +704,11 @@ class TrackAlignmentTests(unittest.TestCase):
             )
             fake_service_class = SimpleNamespace(
                 _detect_sp_looping_mpls=lambda _path: None,
-                _ordered_track_slots_for_remux=lambda *_args, **_kwargs: [
-                    {'type': 'video', 'pid': 0x1011}
-                ],
+                _filter_pid_slots_for_dovi_plan=lambda slots, _plan: list(slots),
                 _m2ts_clip_time_window_sec=lambda *_args: (True, 0.0, 1.0),
             )
             chapter = SimpleNamespace(
                 in_out_time=[('00001', 0, 45000), ('00002', 0, 45000)],
-                pid_to_lang={},
-                get_pid_to_language=lambda: None,
             )
             with patch.object(track_module, '_svc_cls', return_value=fake_service_class), patch.object(
                     track_module, 'Chapter', return_value=chapter), patch.object(
@@ -761,7 +717,11 @@ class TrackAlignmentTests(unittest.TestCase):
                     track_module, 'mkvtoolnix_ui_language_arg', return_value=''), patch.object(
                     track_module, 'run_command', side_effect=run_concat):
                 result = MediaInfoTrackMappingMixin._try_remux_mpls_track_aligned(
-                    owner, str(mpls), str(output), [], [], ''
+                    owner,
+                    str(mpls),
+                    str(output),
+                    '',
+                    selected_pid_slots=[('video', 0x1011)],
                 )
 
             self.assertTrue(result)
@@ -817,9 +777,7 @@ class TrackAlignmentTests(unittest.TestCase):
                 _expected_mkvmerge_split_output_paths=lambda *_args: [
                     str(path) for path in expected_outputs
                 ],
-                _ordered_track_slots_for_remux=lambda *_args, **_kwargs: [
-                    {'type': 'video', 'pid': 0x1011}
-                ],
+                _filter_pid_slots_for_dovi_plan=lambda slots, _plan: list(slots),
                 _m2ts_clip_time_window_sec=lambda *_args: (True, 0.0, 1.0),
             )
             chapter = SimpleNamespace(
@@ -838,9 +796,8 @@ class TrackAlignmentTests(unittest.TestCase):
                     str(mpls),
                     str(output),
                     [{}, {}],
-                    [],
-                    [],
                     '',
+                    selected_pid_slots=[('video', 0x1011)],
                 )
 
             self.assertTrue(result)
@@ -892,6 +849,10 @@ class TrackAlignmentTests(unittest.TestCase):
                 _remux_fallback_merge_demux_with_base=merge_without_base,
             )
             fake_service_class = SimpleNamespace(
+                _mpls_track_streams=lambda _path: [
+                    {'pid': base_layer_pid, 'language': 'und'},
+                    {'pid': enhancement_layer_pid, 'language': 'und'},
+                ],
                 _clip_ref_slots_for_m2ts=lambda slots, *_args: list(slots),
                 _mkvmerge_identify_json=lambda _path: {'tracks': []},
                 _slot_pids_in_order=lambda slots: [int(slot['pid']) for slot in slots],
@@ -905,13 +866,7 @@ class TrackAlignmentTests(unittest.TestCase):
                     os.replace(merged, part) is None
                 ),
             )
-            chapter = SimpleNamespace(
-                pid_to_lang={base_layer_pid: 'und', enhancement_layer_pid: 'und'},
-                get_pid_to_language=lambda: None,
-            )
-
             with patch.object(track_module, '_svc_cls', return_value=fake_service_class), patch.object(
-                    track_module, 'Chapter', return_value=chapter), patch.object(
                     track_module, 'mux_dolby_vision_layers'):
                 result = MediaInfoTrackMappingMixin._remux_aligned_clip(
                     owner,
@@ -993,9 +948,7 @@ class TrackAlignmentTests(unittest.TestCase):
             )
             fake_service_class = SimpleNamespace(
                 _detect_sp_looping_mpls=lambda _path: None,
-                _ordered_track_slots_for_remux=lambda *_args, **_kwargs: [
-                    {'type': 'video', 'pid': 0x1011}
-                ],
+                _filter_pid_slots_for_dovi_plan=lambda slots, _plan: list(slots),
                 _m2ts_clip_time_window_sec=lambda *_args: (False, 0.0, 1.0),
             )
             chapter = SimpleNamespace(in_out_time=[('00001', 0, 45000)])
@@ -1005,7 +958,11 @@ class TrackAlignmentTests(unittest.TestCase):
                     track_module, 'MKV_MERGE_PATH', 'mkvmerge'), patch.object(
                     track_module, 'mkvtoolnix_ui_language_arg', return_value=''):
                 result = MediaInfoTrackMappingMixin._try_remux_mpls_track_aligned(
-                    owner, str(mpls), str(output), [], [], ''
+                    owner,
+                    str(mpls),
+                    str(output),
+                    '',
+                    selected_pid_slots=[('video', 0x1011)],
                 )
 
             self.assertFalse(result)
@@ -1032,6 +989,7 @@ class TrackAlignmentTests(unittest.TestCase):
                 _run_single_command=run_command,
             )
             fake_service_class = SimpleNamespace(
+                _mpls_track_streams=lambda _path: [],
                 detect_dovi_mux_pair=lambda *_args: None,
                 _clip_ref_slots_for_m2ts=lambda slots, *_args: list(slots),
                 _mkvmerge_identify_json=lambda _path: {},
@@ -1043,13 +1001,11 @@ class TrackAlignmentTests(unittest.TestCase):
                 _parse_tsmuxer_probe_output=lambda _text: [],
                 _tsmuxer_mpeg_pid=lambda _track: None,
             )
-            chapter = SimpleNamespace(pid_to_lang={}, get_pid_to_language=lambda: None)
             reference_slots = [
                 {'type': 'video', 'pid': 0x1011},
                 {'type': 'subtitles', 'pid': 0x1200},
             ]
-            with patch.object(track_module, '_svc_cls', return_value=fake_service_class), patch.object(
-                    track_module, 'Chapter', return_value=chapter):
+            with patch.object(track_module, '_svc_cls', return_value=fake_service_class):
                 result = MediaInfoTrackMappingMixin._remux_aligned_clip(
                     owner, str(m2ts), str(mpls), str(m2ts), reference_slots,
                     str(output), '', 1.0, str(work), 'part', 'mkvmerge', '',

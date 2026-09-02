@@ -21,10 +21,12 @@
     "flac_compression_level": 8,
     "ffmpeg_flac_compression_level": 8,
     "fdkaac_bitrate_kbps": 0,
-    "opus_bitrate_kbps": 0
+    "opus_bitrate_kbps": 0,
+    "duration_loss_fallback_threshold_seconds": 1.0
   },
   "remux": {
-    "convert_lossless_audio_to_flac": true
+    "convert_lossless_audio_to_flac": true,
+    "convert_immersive_audio_to_flac": false
   },
   "encode": {
     "encoder": "x265",

@@ -61,7 +61,7 @@ PCM 直接保存采样后的幅度值。蓝光 LPCM 则增加蓝光专用的帧�
 - 位深，例如 16 或 24 bit；
 - 声道数和声道布局。
 
-标称 24-bit 的轨道可能只有 16 位有效信号精度。仅凭容器元数据不能证明有效位深。
+标称 24-bit 的轨道可能只有 16 位有效信号精度。有效位深必须根据解码样本判断，不能只看容器元数据。
 
 ### FLAC
 
@@ -69,7 +69,7 @@ FLAC 是用于 PCM 样本的无损编解码格式，通常可以在不改变解�
 
 FLAC 无法保留 TrueHD Atmos 或 DTS:X 的沉浸式元数据模型。将这些格式转换为 FLAC，只能保留所选解码器产生的声道呈现结果。
 
-BluraySubtitle 优先使用独立的多线程 FLAC 编码器，必要时回退到 FFmpeg，默认压缩等级为 8。
+BluraySubtitle 写入 FLAC 时会保留检测到的 PCM 有效位深；可配置的 FLAC 压缩等级默认为 8。
 
 ### Dolby Digital / AC-3
 
@@ -87,8 +87,6 @@ TrueHD 可以携带 Dolby Atmos 元数据。Atmos 描述超出固定声道流的
 
 损坏的 TrueHD 需要特别谨慎。即使传输丢失或无效帧使提取／解码后的音频变短，容器仍可能显示看似合理的总时长。MKVToolNix 和项目的普通抽流路径不会合成替代 TrueHD 帧。丢弃源轨前，应检查解码器错误，并比较解码后音频与视频时长。
 
-BluraySubtitle 使用 `truehdd` 的 presentation 2 完成受支持的 TrueHD Atmos → FLAC 转换。如果该解码器不可用或失败，则保留源 TrueHD。
-
 ### DTS core
 
 DTS core 是有损编解码格式和兼容层。DTS-HD 流可以包含该 core，使旧解码器能够播放功能较少的版本。
@@ -100,8 +98,6 @@ DTS-HD HR 是有损扩展，能力和质量高于 core，但不是无损格式�
 ### DTS-HD Master Audio
 
 DTS-HD MA 在兼容的 DTS core 上增加无损残差。完整解码器能够重建无损母版，只支持 core 的解码器仍可播放有损 DTS 表示。
-
-在 BluraySubtitle 中，DTS 系列成功转换为 FLAC 后，只有当 FLAC 不大于提取出的 DTS 系列流时才替换源轨，否则保留原 DTS。这是文件体积策略，不是对两种格式是否无损的重新定义。
 
 ### AAC
 
@@ -127,11 +123,10 @@ Opus 是面向语音和音乐的现代有损编解码格式。它可以作为 En
 
 | 源系列 | 可能目标 | 损失模型 | 项目说明 |
 | --- | --- | --- | --- |
-| LPCM | FLAC | PCM 表示间无损转换 | 成功后保留 FLAC |
+| LPCM | FLAC | PCM 表示间无损转换 | 由无损音频选项控制 |
 | FLAC | FLAC | 无损 | 通常直接复制，除非处理过程要求重编码 |
-| TrueHD/MLP | FLAC | 对所选解码 PCM 呈现无损 | 不保留 Atmos 元数据；成功后保留 FLAC |
-| DTS-HD MA | FLAC | 完整无损流正确解码时无损 | FLAC 更大时保留源轨 |
-| DTS core / DTS-HD HR | FLAC | 解码样本可无损保存，但源本来有损 | FLAC 更大时保留源轨 |
+| TrueHD/MLP 或 DTS-HD MA | FLAC | 对正确解码后的声道呈现无损 | 沉浸式变体需要明确启用 |
+| DTS core / DTS-HD HR | 不变 | 源本来有损 | 排除在自动无损转换之外 |
 | 无损源 | AAC/Opus | 有损 | 仅用于 Encode，并按所选策略执行 |
 | AC-3/E-AC-3/AAC/Opus | 不变 | 不产生新的编解码世代 | 所选有损音频通常原样保留 |
 

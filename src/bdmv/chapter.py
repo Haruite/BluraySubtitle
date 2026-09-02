@@ -97,7 +97,6 @@ class Chapter:
         self.in_out_time: list[tuple[str, int, int]] = []
         self.mark_info: dict[int, list[int]] = {}
         self.file_path: str = file_path
-        self.pid_to_lang = {}
         self._play_item_file_ranges_cache: Optional[
             tuple[tuple[str, int, int, Optional[int], Optional[int]], ...]
         ] = None
@@ -140,57 +139,6 @@ class Chapter:
 
     def get_total_time_no_repeat(self):
         return sum({x[0]: (x[2] - x[1]) / 45000 for x in self.in_out_time}.values())
-
-    def get_pid_to_language(self):
-        with open(self.file_path, 'rb') as mpls_file:
-            mpls_file.seek(8)
-            playlist_start_address = unpack_bytes(mpls_file.read(4), 0, 4)
-            mpls_file.seek(playlist_start_address)
-            mpls_file.read(6)
-            nb_of_play_items = unpack_bytes(mpls_file.read(2), 0, 2)
-            mpls_file.read(2)
-            for _ in range(nb_of_play_items):
-                mpls_file.read(12)
-                is_multi_angle = (unpack_bytes(mpls_file.read(1), 0, 1) >> 4) % 2
-                mpls_file.read(21)
-                if is_multi_angle:
-                    nb_of_angles = unpack_bytes(mpls_file.read(1), 0, 1)
-                    mpls_file.read(1)
-                    for _ in range(nb_of_angles - 1):
-                        mpls_file.read(10)
-                mpls_file.read(4)
-                nb = []
-                for _ in range(8):
-                    nb.append(unpack_bytes(mpls_file.read(1), 0, 1))
-                mpls_file.read(4)
-                for _ in range(sum(nb)):
-                    stream_entry_length = unpack_bytes(mpls_file.read(1), 0, 1)
-                    stream_type = unpack_bytes(mpls_file.read(1), 0, 1)
-                    if stream_type == 1:
-                        stream_pid = unpack_bytes(mpls_file.read(2), 0, 2)
-                        mpls_file.read(stream_entry_length - 3)
-                    elif stream_type == 2:
-                        mpls_file.read(2)
-                        stream_pid = unpack_bytes(mpls_file.read(2), 0, 2)
-                        mpls_file.read(stream_entry_length - 5)
-                    elif stream_type == 3 or stream_type == 4:
-                        mpls_file.read(1)
-                        stream_pid = unpack_bytes(mpls_file.read(2), 0, 2)
-                        mpls_file.read(stream_entry_length - 4)
-                    stream_attributes_length = unpack_bytes(mpls_file.read(1), 0, 1)
-                    stream_coding_type = unpack_bytes(mpls_file.read(1), 0, 1)
-                    if stream_coding_type in (1, 2, 27, 36, 234):
-                        self.pid_to_lang[stream_pid] = 'und'
-                        mpls_file.read(stream_attributes_length - 1)
-                    elif stream_coding_type in (3, 4, 128, 129, 130, 131, 132, 133, 134, 146, 161, 162):
-                        mpls_file.read(1)
-                        self.pid_to_lang[stream_pid] = mpls_file.read(3).decode()
-                        mpls_file.read(stream_attributes_length - 5)
-                    elif stream_coding_type in (144, 145):
-                        self.pid_to_lang[stream_pid] = mpls_file.read(3).decode()
-                        mpls_file.read(stream_attributes_length - 4)
-                break
-
 
 __all__ = [
     'Chapter',

@@ -8,7 +8,7 @@ from typing import Optional
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import QTableWidgetItem, QToolButton, QComboBox, QTableWidget, QHeaderView
 
-from src.bdmv import Chapter, episode_tail_trim_plan
+from src.bdmv import Chapter, MPLS, episode_tail_trim_plan
 from src.core import ENCODE_SP_LABELS, SUBTITLE_LABELS, MKV_LABELS, ENCODE_LABELS, REMUX_LABELS, MPLS_INFO_LABELS
 from src.exports.utils import (
     get_index_to_m2ts_and_offset,
@@ -1426,21 +1426,19 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                                 detail, []
                             ).append(main_path)
 
+            def _mpls_pid_languages(mpls_path: str) -> dict[int, str]:
+                return {
+                    int(track['pid']): str(track.get('language') or 'und')
+                    for track in MPLS(mpls_path, strict=False).get_tracks_info()
+                    if track.get('pid') is not None
+                }
+
             def _register_whole_main_match_tracks(
                     main_path: str, alternate_chapter: Chapter) -> None:
                 """Expose PIDs authored by an alternate MPLS with the same complete main detail."""
                 main_norm = os.path.normcase(os.path.abspath(main_path))
-                main_chapter = Chapter(main_path)
-                main_chapter.get_pid_to_language()
-                alternate_chapter.get_pid_to_language()
-                main_pid_lang = {
-                    int(pid): str(language or 'und')
-                    for pid, language in main_chapter.pid_to_lang.items()
-                }
-                alternate_pid_lang = {
-                    int(pid): str(language or 'und')
-                    for pid, language in alternate_chapter.pid_to_lang.items()
-                }
+                main_pid_lang = _mpls_pid_languages(main_path)
+                alternate_pid_lang = _mpls_pid_languages(alternate_chapter.file_path)
                 info = whole_main_track_info.setdefault(main_norm, {
                     'main_path': os.path.normpath(main_path),
                     'mpls_paths': [],
@@ -1462,12 +1460,10 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                 Only a complete whole-main match may extend the shared main-track configuration. An episode
                 match is appended after splitting and must affect only its uniquely matched output.
                 """
-                main_chapter = Chapter(main_path)
-                main_chapter.get_pid_to_language()
-                attachment_chapter.get_pid_to_language()
+                main_pids = set(_mpls_pid_languages(main_path))
+                attachment_pids = set(_mpls_pid_languages(attachment_chapter.file_path))
                 return (
-                    {int(pid) for pid in attachment_chapter.pid_to_lang}
-                    - {int(pid) for pid in main_chapter.pid_to_lang}
+                    attachment_pids - main_pids
                 )
 
             def _selectable_attachment_pids(

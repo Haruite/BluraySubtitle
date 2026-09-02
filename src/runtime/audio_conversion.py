@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -13,7 +15,11 @@ from typing import Callable, Optional
 from src.core import find_mkvtoolnix, mkvtoolnix_ui_language_arg
 from src.core import settings as core_settings
 from src.core.i18n import translate_text
-from src.exports.utils import mkv_codec_id_is_dts_family, run_command
+from src.exports.utils import (
+    get_effective_bit_depth,
+    mkv_codec_id_is_dts_family,
+    run_command,
+)
 from src.runtime import TaskCancelled
 
 
@@ -25,6 +31,7 @@ class AudioEncodingSettings:
     ffmpeg_flac_compression_level: int = 8
     fdkaac_bitrate_kbps: int = 0
     opus_bitrate_kbps: int = 0
+    duration_loss_fallback_threshold_seconds: float = 1.0
 
     def __post_init__(self) -> None:
         if not 0 <= self.flac_compression_level <= 8:
@@ -35,6 +42,19 @@ class AudioEncodingSettings:
             raise ValueError("FDK-AAC bitrate must be from 0 to 1024 kbps")
         if not 0 <= self.opus_bitrate_kbps <= 1024:
             raise ValueError("Opus bitrate must be from 0 to 1024 kbps")
+        if (
+                isinstance(self.duration_loss_fallback_threshold_seconds, bool)
+                or not isinstance(
+                    self.duration_loss_fallback_threshold_seconds,
+                    (int, float),
+                )
+                or not 0.1 <= float(
+                    self.duration_loss_fallback_threshold_seconds
+                ) <= 60.0
+        ):
+            raise ValueError(
+                "Audio duration-loss fallback threshold must be from 0.1 to 60 seconds"
+            )
 
 
 class AudioMuxFailure(RuntimeError):
@@ -71,104 +91,585 @@ def _identify_tracks(media_path: str) -> list[dict[str, object]]:
     return [track for track in tracks if isinstance(track, dict)]
 
 
-def _is_lossless_audio_track(track: dict[str, object]) -> bool:
-    properties = track.get('properties') if isinstance(track.get('properties'), dict) else {}
-    codec_id = str(properties.get('codec_id') or '').strip().upper()
-    codec_name = str(track.get('codec') or '').strip().lower()
+def is_lossless_audio_codec(
+        codec_id: object,
+        codec_name: object,
+        profile: object = '',
+) -> bool:
+    """Return whether a codec is a supported lossless source."""
+    normalized_codec_id = str(codec_id or '').strip().upper()
+    normalized_codec_name = str(codec_name or '').strip().lower()
+    description = f'{normalized_codec_name} {str(profile or "").strip().lower()}'
+    dts_hd_ma = (
+        mkv_codec_id_is_dts_family(normalized_codec_id)
+        or normalized_codec_name.startswith('dts')
+    ) and (
+        'dts-hd master audio' in description
+        or 'dts-hd ma' in description
+        or normalized_codec_name == 'dts_hd_ma'
+        or normalized_codec_name.startswith('dts_hd_ma_')
+    )
     return bool(
-        codec_id in ('A_PCM/INT/LIT', 'A_PCM/INT/BIG', 'A_TRUEHD', 'A_MLP', 'A_FLAC')
-        or mkv_codec_id_is_dts_family(codec_id)
-        or codec_name.startswith('pcm')
-        or 'truehd' in codec_name
-        or 'dts-hd' in codec_name
-        or codec_name == 'flac'
+        normalized_codec_id in (
+            'A_PCM/INT/LIT',
+            'A_PCM/INT/BIG',
+            'A_TRUEHD',
+            'A_MLP',
+            'A_FLAC',
+        )
+        or normalized_codec_name.startswith('pcm')
+        or normalized_codec_name in ('lpcm', 'truehd', 'mlp', 'flac')
+        or 'truehd' in normalized_codec_name
+        or dts_hd_ma
     )
 
 
-def _truehdd_path() -> str:
-    """Return a usable truehdd executable or an empty string."""
-    configured_path = str(core_settings.TRUEHDD_PATH or '').strip()
-    if configured_path and (
-            os.path.isfile(configured_path) or shutil.which(configured_path)
-    ):
-        return configured_path
-    return shutil.which('truehdd') or shutil.which('truehdd.exe') or ''
+def _is_lossless_audio_track(
+        track: dict[str, object],
+        profile: object = '',
+) -> bool:
+    properties = track.get('properties') if isinstance(track.get('properties'), dict) else {}
+    return is_lossless_audio_codec(
+        properties.get('codec_id'),
+        track.get('codec'),
+        profile,
+    )
+
+
+def is_immersive_audio_codec(
+        codec_name: object,
+        profile: object = '',
+        track_name: object = '',
+) -> bool:
+    """Return whether decoded FLAC would discard immersive object metadata."""
+    description = ' '.join((
+        str(codec_name or ''),
+        str(profile or ''),
+        str(track_name or ''),
+    )).strip().lower()
+    return bool(
+        'atmos' in description
+        or 'dts:x' in description
+        or 'dts-x' in description
+        or 'dts_hd_ma_x' in description
+    )
+
+
+def _is_immersive_audio_track(
+        track: dict[str, object],
+        profile: object = '',
+) -> bool:
+    properties = track.get('properties') if isinstance(track.get('properties'), dict) else {}
+    return is_immersive_audio_codec(
+        track.get('codec'),
+        profile,
+        properties.get('track_name'),
+    )
+
+
+def probe_audio_streams(
+        ffprobe: str,
+        media_path: str,
+) -> list[tuple[str, float]]:
+    """Return every audio stream profile and duration in one probe."""
+    result = run_command(
+        [
+            ffprobe,
+            '-v',
+            'error',
+            '-select_streams',
+            'a',
+            '-show_entries',
+            'stream=profile,duration:format=duration',
+            '-of',
+            'json',
+            media_path,
+        ],
+        capture_output=True,
+        text=True,
+        encoding='utf-8',
+        errors='ignore',
+    )
+    try:
+        payload = json.loads(result.stdout or '{}')
+        streams = payload.get('streams') or []
+    except (TypeError, json.JSONDecodeError, AttributeError):
+        streams = []
+        payload = {}
+    try:
+        raw_format_duration = (payload.get('format') or {}).get('duration')
+        format_duration = float(raw_format_duration)
+        if not math.isfinite(format_duration) or format_duration <= 0:
+            format_duration = 0.0
+    except (TypeError, ValueError, AttributeError):
+        format_duration = 0.0
+    if result.returncode != 0 or not isinstance(streams, list):
+        raise RuntimeError(
+            translate_text('Could not probe audio duration: {path}').format(path=media_path)
+        )
+
+    audio_streams: list[tuple[str, float]] = []
+    for stream in streams:
+        if not isinstance(stream, dict):
+            continue
+        profile = str(stream.get('profile') or '')
+        raw_duration = stream.get('duration')
+        try:
+            duration = float(raw_duration)
+        except (TypeError, ValueError):
+            duration = format_duration
+        if not math.isfinite(duration) or duration <= 0:
+            duration = format_duration
+        audio_streams.append((profile, duration))
+    if not audio_streams:
+        raise RuntimeError(
+            translate_text('Could not probe audio duration: {path}').format(path=media_path)
+        )
+    return audio_streams
+
+
+def probe_audio_stream(
+        ffprobe: str,
+        media_path: str,
+        stream_selector: str = 'a:0',
+) -> tuple[str, float]:
+    """Return the selected audio profile and duration in seconds."""
+    result = run_command(
+        [
+            ffprobe,
+            '-v',
+            'error',
+            '-select_streams',
+            stream_selector,
+            '-show_entries',
+            'stream=profile,duration:format=duration',
+            '-of',
+            'json',
+            media_path,
+        ],
+        capture_output=True,
+        text=True,
+        encoding='utf-8',
+        errors='ignore',
+    )
+    try:
+        payload = json.loads(result.stdout or '{}')
+        streams = payload.get('streams') or []
+        stream = streams[0] if streams and isinstance(streams[0], dict) else {}
+        profile = str(stream.get('profile') or '')
+        raw_duration = stream.get('duration')
+        if raw_duration in (None, '', 'N/A'):
+            raw_duration = (payload.get('format') or {}).get('duration')
+        duration = float(raw_duration)
+    except (TypeError, ValueError, json.JSONDecodeError, AttributeError, IndexError):
+        duration = 0.0
+        profile = ''
+    if result.returncode != 0 or not math.isfinite(duration) or duration <= 0:
+        raise RuntimeError(
+            translate_text('Could not probe audio duration: {path}').format(path=media_path)
+        )
+    return profile, duration
+
+
+def converted_flac_duration_is_acceptable(
+        ffprobe: str,
+        source_duration: float,
+        converted_path: str,
+        track: object,
+        source_path: str,
+        fallback_threshold_seconds: float,
+) -> bool:
+    """Report meaningful duration loss and return whether the FLAC may replace its source."""
+    _profile, converted_duration = probe_audio_stream(ffprobe, converted_path)
+    duration_loss = round(source_duration - converted_duration, 6)
+    threshold = float(fallback_threshold_seconds)
+    if duration_loss > threshold:
+        print(
+            translate_text(
+                'Converted audio track {track} is {loss:.3f} seconds shorter than the source, exceeding the {threshold:.3f}-second fallback threshold; keeping the original: {path}'
+            ).format(
+                track=track,
+                loss=duration_loss,
+                threshold=threshold,
+                path=source_path,
+            ),
+            flush=True,
+        )
+        return False
+    if duration_loss > 0.1:
+        print(
+            translate_text(
+                'Converted audio track {track} is {loss:.3f} seconds shorter than the source: {path}'
+            ).format(track=track, loss=duration_loss, path=source_path),
+            flush=True,
+        )
+    return True
+
+
+def encode_fdkaac_from_ffmpeg(
+        ffmpeg: str,
+        fdkaac: str,
+        input_media: str,
+        stream_selector: str,
+        output_path: str,
+        rate_control: list[str],
+) -> bool:
+    """Decode PCM through a pipe and encode it with fdkaac without a WAV file."""
+    decode_command = [
+        ffmpeg,
+        '-y',
+        '-i',
+        input_media,
+        '-map',
+        stream_selector,
+        '-c:a',
+        'pcm_s24le',
+        '-f',
+        'wav',
+        '-',
+    ]
+    encode_command = [
+        fdkaac,
+        *rate_control,
+        '-I',
+        '-o',
+        output_path,
+        '-',
+    ]
+    decoder = run_command(
+        decode_command,
+        wait=False,
+        stdout=subprocess.PIPE,
+        log_template='Audio command: {command}',
+    )
+    try:
+        encoder = run_command(
+            encode_command,
+            wait=False,
+            stdin=decoder.stdout,
+            log_template='Audio command: {command}',
+        )
+    except Exception:
+        decoder.terminate()
+        decoder.wait()
+        raise
+    if decoder.stdout is not None:
+        decoder.stdout.close()
+    encoder_return_code = encoder.wait()
+    decoder_return_code = decoder.wait()
+    return bool(
+        decoder_return_code == 0
+        and encoder_return_code == 0
+        and os.path.isfile(output_path)
+        and os.path.getsize(output_path) > 0
+    )
 
 
 def validate_audio_cleanup_tools() -> None:
-    """Require the extractor and decoder used by automatic audio cleanup."""
+    """Require the decoder used by automatic audio cleanup."""
     find_mkvtoolnix()
     ffmpeg = str(core_settings.FFMPEG_PATH or '').strip() or shutil.which('ffmpeg') or ''
     if not ffmpeg or not (os.path.isfile(ffmpeg) or shutil.which(ffmpeg)):
         raise FileNotFoundError(translate_text('ffmpeg executable does not exist'))
-    mkvextract = str(core_settings.MKV_EXTRACT_PATH or '').strip() or shutil.which('mkvextract') or ''
-    if not mkvextract or not (os.path.isfile(mkvextract) or shutil.which(mkvextract)):
-        raise FileNotFoundError(translate_text('mkvextract not found'))
 
 
 def _extract_selected_audio_tracks(
-        mkvextract: str,
+        ffmpeg: str,
         source_path: str,
         work_folder: str,
-        audio_tracks: list[dict[str, object]],
+        audio_index_by_track: dict[int, int],
         selected_audio: tuple[int, ...],
+        wave64_bit_depth: int = 32,
 ) -> dict[int, str]:
-    """Extract every selected audio track in one source-container pass."""
+    """Decode selected tracks together, then retry failed batches one track at a time."""
     if not selected_audio:
         return {}
-    if not mkvextract:
-        raise FileNotFoundError(translate_text('mkvextract not found'))
+    if not ffmpeg:
+        raise FileNotFoundError(translate_text('ffmpeg executable does not exist'))
+    if wave64_bit_depth not in (24, 32):
+        raise ValueError(f'Unsupported Wave64 bit depth: {wave64_bit_depth}')
 
     extracted_audio_by_track: dict[int, str] = {}
-    extract_command = [mkvextract]
-    ui_language = mkvtoolnix_ui_language_arg().strip()
-    if ui_language:
-        extract_command.extend(ui_language.split())
-    extract_command.extend(['tracks', source_path])
-    extension_by_codec = {
-        'A_PCM/INT/LIT': '.wav',
-        'A_PCM/INT/BIG': '.wav',
-        'A_TRUEHD': '.thd',
-        'A_MLP': '.thd',
-        'A_FLAC': '.flac',
-        'A_AC3': '.ac3',
-        'A_EAC3': '.eac3',
-        'A_AAC': '.aac',
-        'A_MPEG/L3': '.mp3',
-        'A_MPEG/L2': '.mp2',
-        'A_OPUS': '.opus',
-        'A_VORBIS': '.ogg',
-    }
-    for track in audio_tracks:
-        track_id = int(track['id'])
-        if track_id not in selected_audio:
-            continue
-        properties = track.get('properties') if isinstance(track.get('properties'), dict) else {}
-        codec_id = str(properties.get('codec_id') or '').strip().upper()
-        extension = (
-            '.dts'
-            if mkv_codec_id_is_dts_family(codec_id)
-            else extension_by_codec.get(codec_id, '.audio')
-        )
-        extracted_audio = os.path.join(work_folder, f'track-{track_id}{extension}')
+    extract_command = [ffmpeg, '-y', '-i', source_path]
+    for track_id in selected_audio:
+        if track_id not in audio_index_by_track:
+            raise ValueError(
+                translate_text('Selected audio track is missing from: {path}').format(
+                    path=source_path
+                )
+            )
+        extracted_audio = os.path.join(work_folder, f'track-{track_id}.w64')
         extracted_audio_by_track[track_id] = extracted_audio
-        extract_command.append(f'{track_id}:{extracted_audio}')
+        extract_command.extend([
+            '-map',
+            f'0:a:{audio_index_by_track[track_id]}',
+            '-c:a',
+            f'pcm_s{wave64_bit_depth}le',
+            '-f',
+            'w64',
+            extracted_audio,
+        ])
 
-    extract_result = run_command(
-        extract_command,
-        log_template='Audio extraction command: {command}',
+    batch_error: Exception | None = None
+    try:
+        extract_result = run_command(
+            extract_command,
+            log_template='Audio extraction command: {command}',
+        )
+        batch_succeeded = extract_result.returncode == 0 and all(
+            os.path.isfile(extracted_audio) and os.path.getsize(extracted_audio) > 0
+            for extracted_audio in extracted_audio_by_track.values()
+        )
+        if batch_succeeded:
+            return extracted_audio_by_track
+        batch_error = RuntimeError(
+            translate_text('Audio extraction failed for track {track}: {path}').format(
+                track=','.join(str(track_id) for track_id in selected_audio),
+                path=source_path,
+            )
+        )
+    except (OSError, RuntimeError, ValueError) as error:
+        batch_error = error
+
+    print(
+        translate_text(
+            'Batch audio extraction failed; retrying each track: {path} ({error})'
+        ).format(path=source_path, error=batch_error),
+        flush=True,
     )
+    for extracted_audio in extracted_audio_by_track.values():
+        if os.path.isfile(extracted_audio):
+            os.remove(extracted_audio)
+
+    recovered_audio_by_track: dict[int, str] = {}
     for track_id, extracted_audio in extracted_audio_by_track.items():
-        if extract_result.returncode not in (0, 1) or not (
-                os.path.isfile(extracted_audio) and os.path.getsize(extracted_audio) > 0
-        ):
-            raise RuntimeError(
+        track_error: Exception | None = None
+        try:
+            track_result = run_command(
+                [
+                    ffmpeg,
+                    '-y',
+                    '-i',
+                    source_path,
+                    '-map',
+                    f'0:a:{audio_index_by_track[track_id]}',
+                    '-c:a',
+                    f'pcm_s{wave64_bit_depth}le',
+                    '-f',
+                    'w64',
+                    extracted_audio,
+                ],
+                log_template='Audio extraction command: {command}',
+            )
+            if track_result.returncode == 0 and (
+                    os.path.isfile(extracted_audio)
+                    and os.path.getsize(extracted_audio) > 0
+            ):
+                recovered_audio_by_track[track_id] = extracted_audio
+                continue
+            track_error = RuntimeError(
                 translate_text('Audio extraction failed for track {track}: {path}').format(
                     track=track_id,
                     path=source_path,
                 )
             )
-    return extracted_audio_by_track
+        except (OSError, RuntimeError, ValueError) as error:
+            track_error = error
+        if os.path.isfile(extracted_audio):
+            os.remove(extracted_audio)
+        print(
+            translate_text(
+                'Audio extraction failed for track {track}; keeping the original: {path} ({error})'
+            ).format(track=track_id, path=source_path, error=track_error),
+            flush=True,
+        )
+    return recovered_audio_by_track
+
+
+def _flac_encoder_path() -> str:
+    configured_flac = str(core_settings.FLAC_PATH or '').strip()
+    if configured_flac and (
+            os.path.isfile(configured_flac) or shutil.which(configured_flac)
+    ):
+        return configured_flac
+    return shutil.which('flac') or shutil.which('flac.exe') or ''
+
+
+def _encode_wave64_to_flac(
+        ffmpeg: str,
+        flac_encoder: str,
+        wave64_path: str,
+        output_path: str,
+        wave64_bit_depth: int,
+        audio_encoding: AudioEncodingSettings,
+) -> bool:
+    """Encode one Wave64 file at its detected effective integer depth."""
+    try:
+        effective_bit_depth = get_effective_bit_depth(
+            wave64_path,
+            wave64_bit_depth,
+        )
+    except (OSError, RuntimeError, ValueError):
+        effective_bit_depth = wave64_bit_depth
+    if effective_bit_depth <= 16:
+        effective_bit_depth = 16
+    elif effective_bit_depth <= 24:
+        effective_bit_depth = 24
+    else:
+        effective_bit_depth = 32
+
+    # A direct FLAC input keeps the configured reference-encoder path when the
+    # Wave64 container already has the desired nominal depth. When down-packing
+    # zero padding, FFmpeg writes the intended 16- or 24-bit FLAC directly.
+    if flac_encoder and effective_bit_depth == wave64_bit_depth:
+        try:
+            flac_succeeded = run_command([
+                flac_encoder,
+                f'-{audio_encoding.flac_compression_level}',
+                '-j',
+                str(os.cpu_count() or 1),
+                '-f',
+                '-o',
+                output_path,
+                wave64_path,
+            ], log_template='Audio command: {command}').returncode == 0 and (
+                os.path.isfile(output_path) and os.path.getsize(output_path) > 0
+            )
+        except OSError:
+            flac_succeeded = False
+        if flac_succeeded:
+            return True
+        if os.path.isfile(output_path):
+            os.remove(output_path)
+
+    # This FFmpeg build writes s32 FLAC as 24-bit. A genuinely effective
+    # 32-bit stream therefore requires the reference FLAC encoder.
+    if effective_bit_depth == 32:
+        return False
+    conversion_command = [
+        ffmpeg,
+        '-y',
+        '-i',
+        wave64_path,
+        '-map',
+        '0:a:0',
+        '-c:a',
+        'flac',
+    ]
+    if effective_bit_depth == 16:
+        conversion_command.extend(['-sample_fmt', 's16'])
+    else:
+        conversion_command.extend([
+            '-sample_fmt',
+            's32',
+            '-bits_per_raw_sample',
+            '24',
+        ])
+    conversion_command.extend([
+        '-compression_level',
+        str(audio_encoding.ffmpeg_flac_compression_level),
+        output_path,
+    ])
+    try:
+        return run_command(
+            conversion_command,
+            log_template='Audio command: {command}',
+        ).returncode == 0 and (
+            os.path.isfile(output_path) and os.path.getsize(output_path) > 0
+        )
+    except OSError:
+        return False
+
+
+def convert_audio_stream_to_flac(
+        input_media: str,
+        stream_selector: str,
+        output_path: str,
+        *,
+        wave64_bit_depth: int = 24,
+        audio_encoding: AudioEncodingSettings = AudioEncodingSettings(),
+) -> bool:
+    """Convert one selected stream to FLAC through the shared Wave64 path."""
+    if not input_media or not os.path.isfile(input_media) or not output_path:
+        return False
+    if wave64_bit_depth not in (24, 32):
+        raise ValueError(f'Unsupported Wave64 bit depth: {wave64_bit_depth}')
+    ffmpeg = str(core_settings.FFMPEG_PATH or '').strip() or shutil.which('ffmpeg') or ''
+    ffprobe = str(core_settings.FFPROBE_PATH or '').strip() or shutil.which('ffprobe') or ''
+    if not ffmpeg or not ffprobe:
+        return False
+    normalized_selector = str(stream_selector or 'a:0').strip()
+    ffmpeg_selector = (
+        normalized_selector
+        if normalized_selector.startswith('0:')
+        else f'0:{normalized_selector}'
+    )
+    ffprobe_selector = (
+        normalized_selector[2:]
+        if normalized_selector.startswith('0:')
+        else normalized_selector
+    )
+    normalized_output = os.path.abspath(os.path.normpath(output_path))
+    output_parent = os.path.dirname(normalized_output)
+    os.makedirs(output_parent, exist_ok=True)
+    work_folder = tempfile.mkdtemp(prefix='_audio_convert_', dir=output_parent)
+    wave64_path = os.path.join(work_folder, 'track.w64')
+    try:
+        _profile, source_duration = probe_audio_stream(
+            ffprobe,
+            input_media,
+            ffprobe_selector,
+        )
+        decode_result = run_command(
+            [
+                ffmpeg,
+                '-y',
+                '-i',
+                input_media,
+                '-map',
+                ffmpeg_selector,
+                '-c:a',
+                f'pcm_s{wave64_bit_depth}le',
+                '-f',
+                'w64',
+                wave64_path,
+            ],
+            log_template='Audio extraction command: {command}',
+        )
+        if decode_result.returncode != 0 or not (
+                os.path.isfile(wave64_path) and os.path.getsize(wave64_path) > 0
+        ):
+            return False
+        if not _encode_wave64_to_flac(
+                ffmpeg,
+                _flac_encoder_path(),
+                wave64_path,
+                normalized_output,
+                wave64_bit_depth,
+                audio_encoding,
+        ):
+            if os.path.isfile(normalized_output):
+                os.remove(normalized_output)
+            return False
+        if not converted_flac_duration_is_acceptable(
+                ffprobe,
+                source_duration,
+                normalized_output,
+                ffprobe_selector,
+                input_media,
+                audio_encoding.duration_loss_fallback_threshold_seconds,
+        ):
+            os.remove(normalized_output)
+            return False
+        return True
+    except TaskCancelled:
+        raise
+    except (OSError, RuntimeError, ValueError):
+        if os.path.isfile(normalized_output):
+            os.remove(normalized_output)
+        return False
+    finally:
+        shutil.rmtree(work_folder, ignore_errors=True)
 
 
 def _analyze_audio_track(
@@ -221,6 +722,9 @@ def _selected_audio_after_cleanup(
     for track in audio_tracks:
         track_id = int(track['id'])
         if track_id not in selected_audio:
+            continue
+        if track_id not in extracted_audio_by_track:
+            kept_audio.append(track_id)
             continue
         properties = track.get('properties') if isinstance(track.get('properties'), dict) else {}
         codec_id = str(properties.get('codec_id') or '').strip().upper()
@@ -289,6 +793,7 @@ def validate_audio_conversion_tools(
         audio_codec_choices: tuple[str, ...],
         *,
         convert_all_lossless_to_flac: bool = False,
+        convert_immersive_audio_to_flac: bool = False,
 ) -> None:
     """Check tools required by automatic cleanup and requested conversions."""
     cleanup_only = (
@@ -328,8 +833,8 @@ def validate_audio_conversion_tools(
     validate_audio_cleanup_tools()
     if cleanup_only:
         return
-
     requires_fdkaac = False
+    requires_duration_probe = False
     for raw_track_id, raw_target_codec in zip(selected_audio_tracks, audio_codec_choices):
         track_id = int(raw_track_id)
         track = audio_by_id.get(track_id)
@@ -342,19 +847,30 @@ def validate_audio_conversion_tools(
             )
         properties = track.get('properties') if isinstance(track.get('properties'), dict) else {}
         codec_id = str(properties.get('codec_id') or '').strip().upper()
-        codec_name = str(track.get('codec') or '').strip().lower()
-        if not _is_lossless_audio_track(track) or (
+        conversion_candidate = (
+            _is_lossless_audio_track(track)
+            or mkv_codec_id_is_dts_family(codec_id)
+        )
+        if not conversion_candidate or (
                 codec_id == 'A_FLAC' and target_codec == 'flac'
         ):
             continue
         if (
-                codec_id in ('A_TRUEHD', 'A_MLP')
-                and 'atmos' in codec_name
-                and not _truehdd_path()
+                _is_immersive_audio_track(track)
+                and not convert_immersive_audio_to_flac
         ):
             continue
+        requires_duration_probe = True
         if target_codec == 'aac':
             requires_fdkaac = True
+    if requires_duration_probe:
+        ffprobe = (
+            str(core_settings.FFPROBE_PATH or '').strip()
+            or shutil.which('ffprobe')
+            or ''
+        )
+        if not ffprobe or not (os.path.isfile(ffprobe) or shutil.which(ffprobe)):
+            raise FileNotFoundError(translate_text('ffprobe executable does not exist'))
     if requires_fdkaac:
         fdkaac = (
             str(core_settings.FDK_AAC_PATH or '').strip()
@@ -374,12 +890,14 @@ def mux_with_audio_conversion(
         selected_subtitle_tracks: Optional[tuple[str, ...]],
         audio_codec_choices: tuple[str, ...],
         convert_all_lossless_to_flac: bool = False,
+        convert_immersive_audio_to_flac: bool = False,
         clean_audio_tracks: bool = True,
         track_language_overrides: tuple[tuple[str, str], ...] = (),
         encoded_video_file: str = '',
         subtitle_file: str = '',
         subtitle_language: str = '',
         audio_encoding: AudioEncodingSettings = AudioEncodingSettings(),
+        wave64_bit_depth: int = 32,
         preserve_failure_artifacts: bool = False,
         progress_callback: Optional[Callable[[str], None]] = None,
 ) -> None:
@@ -392,6 +910,8 @@ def mux_with_audio_conversion(
     output_path = os.path.abspath(os.path.normpath(output_file))
     if not os.path.isfile(source_path):
         raise FileNotFoundError(source_path)
+    if wave64_bit_depth not in (24, 32):
+        raise ValueError(f'Unsupported Wave64 bit depth: {wave64_bit_depth}')
     same_path = os.path.normcase(source_path) == os.path.normcase(output_path)
     if os.path.exists(output_path) and not same_path:
         raise FileExistsError(
@@ -446,23 +966,18 @@ def mux_with_audio_conversion(
     output_extension = os.path.splitext(output_path)[1] or '.mkv'
     temporary_output = os.path.join(work_folder, f'result{output_extension}')
     replacement_by_track: dict[int, tuple[str, str]] = {}
-    expected_audio_codecs: list[str | None] = []
     keep_work_folder = False
     try:
         find_mkvtoolnix()
-        mkvextract = str(core_settings.MKV_EXTRACT_PATH or '').strip() or shutil.which('mkvextract') or ''
         ffmpeg = str(core_settings.FFMPEG_PATH or '').strip() or shutil.which('ffmpeg') or ''
-        configured_flac = str(core_settings.FLAC_PATH or '').strip()
-        flac_encoder = (
-            configured_flac
-            if configured_flac and (os.path.isfile(configured_flac) or shutil.which(configured_flac))
-            else shutil.which('flac') or shutil.which('flac.exe') or ''
-        )
+        ffprobe = str(core_settings.FFPROBE_PATH or '').strip() or shutil.which('ffprobe') or ''
+        flac_encoder = _flac_encoder_path()
 
-        process_audio = clean_audio_tracks or bool(codec_by_track)
-        if process_audio and selected_audio and not ffmpeg:
-            raise FileNotFoundError(translate_text('ffmpeg executable does not exist'))
         audio_tracks = [track for track in tracks if track.get('type') == 'audio']
+        audio_index_by_track = {
+            int(track['id']): audio_index
+            for audio_index, track in enumerate(audio_tracks)
+        }
         unsupported_codec = next(
             (
                 str(codec).strip().lower()
@@ -477,19 +992,103 @@ def mux_with_audio_conversion(
                     codec=unsupported_codec
                 )
             )
-        # The source MKV can be hundreds of gigabytes. Extract selected audio in
-        # one mkvextract invocation, then reuse the elementary streams for both
-        # cleanup analysis and conversion instead of reopening the MKV per track.
-        extracted_audio_by_track = {}
-        if process_audio:
-            report_progress('Extracting selected audio tracks')
+
+        potential_conversion_tracks: list[int] = []
+        for track in audio_tracks:
+            track_id = int(track['id'])
+            if track_id not in selected_audio:
+                continue
+            target_codec = str(codec_by_track.get(track_id) or '').strip().lower()
+            if not target_codec:
+                continue
+            properties = track.get('properties') \
+                if isinstance(track.get('properties'), dict) else {}
+            codec_id = str(properties.get('codec_id') or '').strip().upper()
+            if codec_id == 'A_FLAC' and target_codec == 'flac':
+                continue
+            if (
+                    _is_lossless_audio_track(track)
+                    or mkv_codec_id_is_dts_family(codec_id)
+            ):
+                potential_conversion_tracks.append(track_id)
+
+        audio_probe_by_track: dict[int, tuple[str, float]] = {}
+        if potential_conversion_tracks:
+            try:
+                if not ffprobe:
+                    raise FileNotFoundError(
+                        translate_text('ffprobe executable does not exist')
+                    )
+                source_audio_probes = probe_audio_streams(ffprobe, source_path)
+                if len(source_audio_probes) < len(audio_tracks):
+                    raise RuntimeError(
+                        translate_text('Could not probe audio duration: {path}').format(
+                            path=source_path
+                        )
+                    )
+                audio_probe_by_track = {
+                    int(track['id']): source_audio_probes[audio_index]
+                    for audio_index, track in enumerate(audio_tracks)
+                }
+            except (OSError, RuntimeError, ValueError) as error:
+                print(
+                    translate_text(
+                        'Audio probing failed; skipping audio conversion: {path} ({error})'
+                    ).format(path=source_path, error=error),
+                    flush=True,
+                )
+
+        conversion_tracks: set[int] = set()
+        for track in audio_tracks:
+            track_id = int(track['id'])
+            if track_id not in potential_conversion_tracks:
+                continue
+            profile, source_duration = audio_probe_by_track.get(track_id, ('', 0.0))
+            if source_duration <= 0:
+                print(
+                    translate_text(
+                        'Audio conversion failed for track {track}; keeping the original: {path} ({error})'
+                    ).format(
+                        track=track_id,
+                        path=source_path,
+                        error=translate_text(
+                            'Could not probe audio duration: {path}'
+                        ).format(path=source_path),
+                    ),
+                    flush=True,
+                )
+                continue
+            if not _is_lossless_audio_track(track, profile):
+                continue
+            if (
+                    _is_immersive_audio_track(track, profile)
+                    and not convert_immersive_audio_to_flac
+            ):
+                continue
+            conversion_tracks.add(track_id)
+
+        extracted_track_ids = tuple(
+            int(track['id'])
+            for track in audio_tracks
+            if int(track['id']) in selected_audio and (
+                clean_audio_tracks or int(track['id']) in conversion_tracks
+            )
+        )
+        extracted_audio_by_track: dict[int, str] = {}
+        if extracted_track_ids:
+            if not ffmpeg:
+                raise FileNotFoundError(translate_text('ffmpeg executable does not exist'))
+            report_progress('Decoding selected audio tracks to Wave64')
             extracted_audio_by_track = _extract_selected_audio_tracks(
-                mkvextract,
+                ffmpeg,
                 source_path,
                 work_folder,
-                audio_tracks,
-                selected_audio,
+                audio_index_by_track,
+                extracted_track_ids,
+                wave64_bit_depth,
             )
+        conversion_tracks.intersection_update(extracted_audio_by_track)
+
         if clean_audio_tracks:
             report_progress('Analyzing silent and duplicate audio')
             kept_audio = _selected_audio_after_cleanup(
@@ -504,153 +1103,43 @@ def mux_with_audio_conversion(
             kept_audio = list(selected_audio)
         for track in audio_tracks:
             track_id = int(track['id'])
-            if track_id not in kept_audio:
+            if track_id not in kept_audio or track_id not in conversion_tracks:
                 continue
             target_codec = str(codec_by_track.get(track_id) or '').strip().lower()
-            expected_audio_codecs.append(None)
             properties = track.get('properties') if isinstance(track.get('properties'), dict) else {}
-            codec_id = str(properties.get('codec_id') or '').strip().upper()
-            codec_name = str(track.get('codec') or '').strip().lower()
-            if not target_codec or not _is_lossless_audio_track(track):
-                continue
-            if codec_id == 'A_FLAC' and target_codec == 'flac':
-                expected_audio_codecs[-1] = target_codec
-                continue
-            truehd_atmos = codec_id in ('A_TRUEHD', 'A_MLP') and 'atmos' in codec_name
-            truehdd = _truehdd_path() if truehd_atmos else ''
-            if truehd_atmos and not truehdd:
-                print(
-                    translate_text(
-                        'TrueHD Atmos track {track} will be kept because truehdd is unavailable or failed'
-                    ).format(track=track_id),
-                    flush=True,
+            conversion_input = extracted_audio_by_track[track_id]
+            converted_audio = ''
+            try:
+                _profile, source_duration = audio_probe_by_track[track_id]
+                report_progress(
+                    'Converting audio track {track} to {codec}',
+                    track=track_id,
+                    codec=target_codec.upper(),
                 )
-                continue
-            extracted_audio = extracted_audio_by_track[track_id]
-            conversion_input = extracted_audio
-            report_progress(
-                'Converting audio track {track} to {codec}',
-                track=track_id,
-                codec=target_codec.upper(),
-            )
-            if truehd_atmos:
-                decoded_base = os.path.join(work_folder, f'track-{track_id}-decoded')
-                decode_command = [
-                    truehdd,
-                    '--progress',
-                    'decode',
-                    '--format',
-                    'w64',
-                    '--presentation',
-                    '2',
-                    '--output-path',
-                    decoded_base,
-                    extracted_audio,
-                ]
-                decoded_wave = decoded_base + '.wav'
-                try:
-                    decode_succeeded = run_command(decode_command, log_template='Audio command: {command}').returncode == 0
-                except OSError:
-                    decode_succeeded = False
-                if decode_succeeded and (
-                        os.path.isfile(decoded_wave) and os.path.getsize(decoded_wave) > 0
-                ):
-                    conversion_input = decoded_wave
-                else:
-                    print(
-                        translate_text(
-                            'TrueHD Atmos track {track} will be kept because truehdd is unavailable or failed'
-                        ).format(track=track_id),
-                        flush=True,
-                    )
-                    continue
 
-            if target_codec == 'flac':
-                converted_audio = os.path.join(work_folder, f'track-{track_id}.flac')
-                flac_input = conversion_input
-                # Compressed lossless streams must be decoded before the standalone FLAC encoder can read them.
-                if flac_encoder and os.path.splitext(flac_input)[1].lower() not in ('.wav', '.w64'):
-                    if not ffmpeg:
-                        raise FileNotFoundError(translate_text('ffmpeg executable does not exist'))
-                    flac_input = os.path.join(work_folder, f'track-{track_id}-decoded.wav')
-                    decode_command = [
-                        ffmpeg, '-y', '-i', conversion_input,
-                        '-map', '0:a:0', '-c:a', 'pcm_s24le', flac_input,
-                    ]
-                    if run_command(decode_command, log_template='Audio command: {command}').returncode != 0 or not (
-                            os.path.isfile(flac_input) and os.path.getsize(flac_input) > 0
+                if target_codec == 'flac':
+                    converted_audio = os.path.join(work_folder, f'track-{track_id}.flac')
+                    if not _encode_wave64_to_flac(
+                            ffmpeg,
+                            flac_encoder,
+                            conversion_input,
+                            converted_audio,
+                            wave64_bit_depth,
+                            audio_encoding,
                     ):
                         raise RuntimeError(
-                            translate_text('Audio decode failed for track {track}: {path}').format(
-                                track=track_id, path=source_path,
-                            )
+                            translate_text(
+                                'Audio conversion failed for track {track}: {path}'
+                            ).format(track=track_id, path=source_path)
                         )
-                flac_succeeded = False
-                if flac_encoder:
+                    conversion_command = None
+                elif target_codec == 'opus':
+                    converted_audio = os.path.join(work_folder, f'track-{track_id}.opus')
                     try:
-                        flac_succeeded = run_command([
-                            flac_encoder,
-                            f'-{audio_encoding.flac_compression_level}',
-                            '-j',
-                            str(os.cpu_count() or 1),
-                            '-f',
-                            '-o', converted_audio, flac_input,
-                        ], log_template='Audio command: {command}').returncode == 0 and (
-                            os.path.isfile(converted_audio) and os.path.getsize(converted_audio) > 0
-                        )
-                    except OSError:
-                        flac_succeeded = False
-                conversion_command = None
-                if not flac_succeeded:
-                    # Reuse the decoded wave when the standalone FLAC encode fails.
-                    if os.path.isfile(converted_audio):
-                        os.remove(converted_audio)
-                    if not ffmpeg:
-                        raise FileNotFoundError(translate_text('ffmpeg executable does not exist'))
+                        channels = int(properties.get('audio_channels') or 2)
+                    except (TypeError, ValueError):
+                        channels = 2
                     conversion_command = [
-                        ffmpeg, '-y', '-i', flac_input, '-map', '0:a:0', '-c:a', 'flac',
-                        '-compression_level',
-                        str(audio_encoding.ffmpeg_flac_compression_level),
-                        converted_audio,
-                    ]
-            elif target_codec == 'opus':
-                if not ffmpeg:
-                    raise FileNotFoundError(translate_text('ffmpeg executable does not exist'))
-                converted_audio = os.path.join(work_folder, f'track-{track_id}.opus')
-                try:
-                    channels = int(properties.get('audio_channels') or 2)
-                except Exception:
-                    channels = 2
-                conversion_command = [
-                    ffmpeg,
-                    '-y',
-                    '-i',
-                    conversion_input,
-                    '-map',
-                    '0:a:0',
-                    '-c:a',
-                    'libopus',
-                ]
-                if channels > 2:
-                    conversion_command.extend(['-mapping_family', '1'])
-                opus_bitrate = (
-                    f'{audio_encoding.opus_bitrate_kbps}k'
-                    if audio_encoding.opus_bitrate_kbps
-                    else ('128k' if channels <= 2 else '256k')
-                )
-                conversion_command.extend(['-b:a', opus_bitrate, converted_audio])
-            else:
-                if not ffmpeg:
-                    raise FileNotFoundError(translate_text('ffmpeg executable does not exist'))
-                fdkaac = str(core_settings.FDK_AAC_PATH or '').strip() or shutil.which('fdkaac') or shutil.which('fdkaac.exe') or ''
-                if not fdkaac:
-                    raise FileNotFoundError(translate_text('fdkaac executable does not exist'))
-                wave_path = conversion_input
-                # mkvextract already writes PCM tracks as fdkaac-readable WAV/RF64.
-                # Other lossless codecs still need a PCM WAV intermediary.
-                if codec_id not in ('A_PCM/INT/LIT', 'A_PCM/INT/BIG'):
-                    wave_path = os.path.join(work_folder, f'track-{track_id}-aac-input.wav')
-                    wave_command = [
                         ffmpeg,
                         '-y',
                         '-i',
@@ -658,64 +1147,86 @@ def mux_with_audio_conversion(
                         '-map',
                         '0:a:0',
                         '-c:a',
-                        'pcm_s24le',
-                        wave_path,
+                        'libopus',
                     ]
-                    decode_result = run_command(
-                        wave_command,
-                        log_template='Audio command: {command}',
+                    if channels > 2:
+                        conversion_command.extend(['-mapping_family', '1'])
+                    opus_bitrate = (
+                        f'{audio_encoding.opus_bitrate_kbps}k'
+                        if audio_encoding.opus_bitrate_kbps
+                        else ('128k' if channels <= 2 else '256k')
                     )
-                    if decode_result.returncode != 0 or not os.path.isfile(wave_path):
-                        raise RuntimeError(
-                            translate_text('Audio decode failed for track {track}: {path}').format(
-                                track=track_id,
-                                path=source_path,
-                            )
+                    conversion_command.extend(['-b:a', opus_bitrate, converted_audio])
+                else:
+                    fdkaac = (
+                        str(core_settings.FDK_AAC_PATH or '').strip()
+                        or shutil.which('fdkaac')
+                        or shutil.which('fdkaac.exe')
+                        or ''
+                    )
+                    if not fdkaac:
+                        raise FileNotFoundError(
+                            translate_text('fdkaac executable does not exist')
                         )
-                converted_audio = os.path.join(work_folder, f'track-{track_id}.m4a')
-                fdkaac_rate_control = (
-                    ['-b', str(audio_encoding.fdkaac_bitrate_kbps * 1000)]
-                    if audio_encoding.fdkaac_bitrate_kbps
-                    else ['-m', '5']
-                )
-                conversion_command = [
-                    fdkaac,
-                    *fdkaac_rate_control,
-                    '-o',
-                    converted_audio,
-                    wave_path,
-                ]
-
-            if conversion_command is not None and (
-                    run_command(conversion_command, log_template='Audio command: {command}').returncode != 0
-                    or not (os.path.isfile(converted_audio) and os.path.getsize(converted_audio) > 0)
-            ):
-                raise RuntimeError(
-                    translate_text('Audio conversion failed for track {track}: {path}').format(
-                        track=track_id,
-                        path=source_path,
+                    converted_audio = os.path.join(work_folder, f'track-{track_id}.m4a')
+                    fdkaac_rate_control = (
+                        ['-b', str(audio_encoding.fdkaac_bitrate_kbps * 1000)]
+                        if audio_encoding.fdkaac_bitrate_kbps
+                        else ['-m', '5']
                     )
-                )
-            # DTS is already a compact lossless source in this workflow. Replacing
-            # it with a larger FLAC defeats the conversion's size-saving purpose,
-            # so keep the original container track. PCM and TrueHD/MLP retain a
-            # successfully encoded FLAC even when it is larger, matching the
-            # established behavior for those formats.
-            if (
-                    target_codec == 'flac'
-                    and mkv_codec_id_is_dts_family(codec_id)
-                    and os.path.getsize(converted_audio) > os.path.getsize(extracted_audio)
-            ):
+                    if not encode_fdkaac_from_ffmpeg(
+                            ffmpeg,
+                            fdkaac,
+                            conversion_input,
+                            '0:a:0',
+                            converted_audio,
+                            fdkaac_rate_control,
+                    ):
+                        raise RuntimeError(
+                            translate_text(
+                                'Audio conversion failed for track {track}: {path}'
+                            ).format(track=track_id, path=source_path)
+                        )
+                    conversion_command = None
+
+                if conversion_command is not None and (
+                        run_command(
+                            conversion_command,
+                            log_template='Audio command: {command}',
+                        ).returncode != 0
+                        or not (
+                            os.path.isfile(converted_audio)
+                            and os.path.getsize(converted_audio) > 0
+                        )
+                ):
+                    raise RuntimeError(
+                        translate_text(
+                            'Audio conversion failed for track {track}: {path}'
+                        ).format(track=track_id, path=source_path)
+                    )
+                if target_codec == 'flac' and not converted_flac_duration_is_acceptable(
+                        ffprobe,
+                        source_duration,
+                        converted_audio,
+                        track_id,
+                        source_path,
+                        audio_encoding.duration_loss_fallback_threshold_seconds,
+                ):
+                    os.remove(converted_audio)
+                    continue
+                replacement_by_track[track_id] = (converted_audio, target_codec)
+            except TaskCancelled:
+                raise
+            except (OSError, RuntimeError, ValueError) as error:
+                if converted_audio and os.path.isfile(converted_audio):
+                    os.remove(converted_audio)
                 print(
                     translate_text(
-                        'FLAC is larger than the DTS source; keeping the original track: {path}'
-                    ).format(path=extracted_audio),
+                        'Audio conversion failed for track {track}; keeping the original: {path} ({error})'
+                    ).format(track=track_id, path=source_path, error=error),
                     flush=True,
                 )
-                os.remove(converted_audio)
                 continue
-            replacement_by_track[track_id] = (converted_audio, target_codec)
-            expected_audio_codecs[-1] = target_codec
 
         if (
                 same_path
@@ -893,27 +1404,6 @@ def mux_with_audio_conversion(
             raise RuntimeError(
                 translate_text('Final audio track verification failed: {path}').format(path=output_path)
             )
-        expected_codec_ids = {
-            'flac': 'A_FLAC',
-            'opus': 'A_OPUS',
-            'aac': 'A_AAC',
-        }
-        for output_track, expected_codec in zip(output_audio, expected_audio_codecs):
-            if not expected_codec:
-                continue
-            output_properties = output_track.get('properties') \
-                if isinstance(output_track.get('properties'), dict) else {}
-            output_codec_id = str(output_properties.get('codec_id') or '').upper()
-            wanted_codec_id = expected_codec_ids[expected_codec]
-            if not (
-                    output_codec_id == wanted_codec_id
-                    or (wanted_codec_id == 'A_AAC' and output_codec_id.startswith('A_AAC'))
-            ):
-                raise RuntimeError(
-                    translate_text('Final audio codec verification failed: {path}').format(
-                        path=output_path
-                    )
-                )
 
         def normalized_language(language: object) -> str:
             normalized = str(language or 'und').strip().lower().replace('_', '-')
@@ -962,7 +1452,14 @@ def mux_with_audio_conversion(
 __all__ = [
     'AudioEncodingSettings',
     'AudioMuxFailure',
+    'convert_audio_stream_to_flac',
+    'converted_flac_duration_is_acceptable',
+    'encode_fdkaac_from_ffmpeg',
+    'is_immersive_audio_codec',
+    'is_lossless_audio_codec',
     'mux_with_audio_conversion',
+    'probe_audio_stream',
+    'probe_audio_streams',
     'validate_audio_cleanup_tools',
     'validate_audio_conversion_tools',
 ]
