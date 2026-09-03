@@ -1115,3 +1115,71 @@ Date: 2026-09-02
 - Synchronized both README versions, both code-standard versions, the media-pipeline design notes, and the bilingual developer guide. The code standards record the confirmed main-command selector exception to the otherwise authoritative editable-command rule.
 - Added focused coverage for direct STN track rows, placeholder normalization without identify, execution-time PID-to-track-ID resolution, and STN-based disc-title language selection. After removing the obsolete first-M2TS visibility test, all 254 repository tests passed together with the static checks.
 - A read-only check of the reported `00054.mpls` returned both HEVC PIDs, all six audio PIDs, and all seven PGS PIDs directly from STN, including the two PGS rows omitted by the observed mkvmerge identification. A full real-media Remux remains the final manual check.
+
+## PlayItem Logical Tracks and Sparse Matroska Remux
+
+Date: 2026-09-03
+
+### Selection and Compatibility Contract
+
+- Replaced the first-PlayItem-only STN model with logical tracks aggregated from every PlayItem. The same STN category and ordinal Stream Number is one logical track; each occurrence may use another PID, and a missing occurrence is a timeline gap rather than a missing stream to synthesize.
+- **Edit Tracks** remains MPLS-only during disc loading and sorts rows by the first occurrence PID. It now presents the logical-track name, all distinct PIDs, and a concise state with a per-PlayItem PID/language tooltip. It uses the first explicit non-`und` language, reports later language transitions without changing identity or defaults, and disables the entire row when MPLS codec or presentation parameters change in a way that cannot be represented by one stable Matroska track.
+- At execution, the internal M2TS parser checks every declared occurrence against its PlayItem M2TS PAT/PMT. By default, a missing declared PID or conflicting transport stream type aborts that output because the GUI-selected logical track cannot be retained; the job never continues with a silently reduced selection. An STN gap remains selected as a sparse interval and does not trigger replacement-track generation.
+
+### Direct Mux and Fallback Changes
+
+- MKVToolNix identification remains deferred until execution. Direct MPLS muxing is used only when the MPLS and every PlayItem M2TS expose a consistent local track-ID mapping for all retained logical-track occurrences; a PID change is valid when it preserves that mapping, while a gap or omitted mapping enters fallback.
+- Rebuilt fallback around per-PlayItem occurrences instead of one reference PID layout. Each part contains only the selected occurrences declared for that PlayItem; MKVToolNix is tried first, and tsMuxer recovers only a declared PID omitted by MKVToolNix. No silent or empty track is generated.
+- Replaced repeated file-level concatenation with one final `mkvmerge` write. First occurrences are normal inputs at absolute playlist offsets; later occurrences use chained `--append-to` mappings and per-track gap offsets. This retains leading and intermediate gaps without rewriting the growing final output for every logical track.
+- Track-aligned fallback itself remains stream-copy-only and never performs audio conversion internally. Its completed Matroska output still enters the shared post-Remux audio stage, so selected conversion behaves the same after direct and fallback Remux. A standalone audio output with a sparse playlist timeline now fails visibly because a raw audio stream cannot preserve that gap without inserted samples.
+
+### Sparse Audio Post-processing
+
+- Propagated every fallback logical-audio interval into the shared final Remux and Encode audio path. FLAC, AAC, and Opus now process the actual continuous PCM intervals and rebuild leading or intermediate Matroska gaps without synthesized silence; the same interval layout is also part of silence and duplicate analysis.
+- Kept one source-media read for normal batch extraction. A failed batch retries all intervals of one logical track together, and extraction, effective-depth detection, encoding, timeline rebuilding, or validation failure in any interval rolls back the complete logical track to its original stream.
+- Changed duration validation from a whole-track comparison to interval windows that exclude authored gaps. Warning and fallback use the greatest positive shortening of any one interval rather than summing losses, keeping the threshold tied to maximum possible audible delay.
+- Encoded sparse AAC and Opus intervals independently, normalized each to a single-track Matroska input, and rebuilt the logical track in one append operation. Sparse FLAC uses one FFmpeg encoder stream with explicit timestamp discontinuities because MKVToolNix rejects appending independently encoded FLAC streams. Sparse true-32-bit FLAC remains original rather than being down-packed through FFmpeg's 24-bit limit.
+
+### Optional Physically Missing Non-video Occurrences
+
+- Added the disabled-by-default Advanced preference **Allow partially missing non-video tracks** and captured it in both Remux and Encode requests. A BDMV-source Encode forwards the value to its staging Remux; Remux-source Encode does not need playlist recovery.
+- With the option disabled, execution remains strict. With it enabled, only a selected audio or subtitle occurrence that the internal PAT/PMT parser confirms absent may continue to fallback. tsMuxer is still probed first; if it also cannot expose that PID, the occurrence is removed from that PlayItem's expected layout and recorded as a timeline gap. Missing video, format conflicts, parser uncertainty, and a tsMuxer demux or merge failure remain fatal.
+- Final fallback concatenation requires every selected logical track to have at least one actual occurrence in the output window. The resulting audio interval map therefore contains the physical continuous runs and reaches the existing post-Remux FLAC/AAC/Opus and cleanup path without moving audio conversion into fallback.
+
+### Removed Paths and Deliberate Boundary
+
+- Removed the command-range PlayItem selection helper and the obsolete first-M2TS/reference-layout fallback assumptions. Single-M2TS SP keeps its source-local track-ID path because it is not an MPLS logical-track workflow.
+- Kept compatibility checks within metadata exposed by MPLS and PAT/PMT. Payload-only changes such as PCM parameters or codec-private data cannot be proven by that metadata and are intentionally not pre-parsed or normalized. If MKVToolNix rejects such an append, the fallback fails and no partial part is promoted.
+
+### Documentation and Verification
+
+- Updated both README versions, the Blu-ray structure and media-format Wikis, developer guide, media-pipeline design document, code standards, i18n catalog, and focused audio/MPLS/M2TS/Remux/SP tests. The Wiki now distinguishes Blu-ray's per-PlayItem stream-selection model from Matroska's stable-track requirement and documents sparse audio conversion.
+- Full-disc regression exposed and fixed three integration boundaries: Matroska language verification now compares normalized aliases such as `zho`, `chi`, and `zh`; duration fallback includes PCM lost while decoding the source interval instead of comparing only the already-short Wave64 file; and a multi-output FFmpeg extraction that mixes continuous and sparse tracks resets timestamps for continuous outputs, validates every Wave64 duration, and falls back per logical track when the batch result is unusable. Analysis failure after extraction likewise keeps that complete original track.
+- The movie batch helper now loads the saved application configuration and forwards the same Remux audio settings and partial-missing preference as the GUI before calling the existing `episodes_remux()` workflow.
+- Three requested UHD Blu-ray Remux regressions completed through that helper. *Avatar: The Way of Water* exercised a selected TrueHD occurrence physically absent from one M2TS with partial-missing enabled; both damaged/short TrueHD conversions exceeded the duration threshold and correctly retained their original tracks. Edited copies of the equal-duration *Avatar* playlists preserved leading and intermediate STN audio gaps; English TrueHD became FLAC, while the Chinese conversion's 1.480-second maximum interval loss retained the original TrueHD Atmos track. Edited copies of all four equal-duration *Zootopia 2* candidates preserved a 768.195-second DTS gap and a 163.121-second PGS gap; English TrueHD became 24-bit FLAC, the first explicit English language remained authoritative despite isolated STN language changes, and the lossy DTS track remained unchanged. After the continuous-track duration fix, a second complete *Zootopia 2* run from the restored playlists passed with a 6,464.833-second source timeline and a 6,464.814-second FLAC track, below the 0.1-second notice boundary.
+- All test MPLS files were restored byte-for-byte from retained backups after validation. Remux products were retained under `C:\Backup`; all task-owned Wave64, aligned-part, tsMuxer metadata, and intermediate full-MKV files were cleaned after successful completion.
+- All 261 repository tests, source compilation/import, split-interface synchronization, i18n auditing, diff checks, and CRLF verification passed. The focused offscreen dialog and real-tool sparse-timeline checks remain part of the automated coverage.
+
+## Remux Gap Handoff and Cross-MPLS Physical Track Identity
+
+Date: 2026-09-03
+
+### Audio Timeline Handoff
+
+- Remux now writes one adjacent `.audio-gaps.json` after audio-gap analysis. The file stores gap intervals rather than PCM runs and is bound to the exact output size and relevant track UIDs; continuous outputs keep a valid empty marker so later Encode work can distinguish them from sources that still require detection.
+- Remux-source Encode validates and consumes that file before audio processing. If it is absent or invalid, the existing multi-output FFmpeg Wave64 extraction records packet timestamps with named `ashowinfo` filters. Detected discontinuities are materialized from the already decoded Wave64, so fallback discovery does not read the source MKV a second time.
+- Fallback interval caches now follow every main-output rename into the final filename, drive post-Remux cleanup/conversion, and are written only after the final atomic mux. Failed task output cleanup also removes a sidecar owned by that output.
+
+### Playlist-provider Aggregation
+
+- Replaced cross-file PID and STN-slot comparisons with physical track signatures made from absolute `(M2TS path, PID)` relations. Persisted MPLS selections use source-qualified MPLS/bucket/slot keys, so equal PID or slot numbers from different playlists no longer collide by themselves.
+- A complete-main MPLS match contributes only tracks whose physical relations do not overlap tracks already supplied by the main or an earlier provider. The combined **Edit Tracks** rows show their source MPLS and slot, are sorted by representative PID, and use the common default-selection algorithm once.
+- A selected track exposed by a complete matching MPLS no longer forces track-aligned fallback merely because its GUI row belongs to that alternate provider. When the primary MPLS input identifies the PID and its referenced M2TS occurrences map consistently, the normal one-pass mux is used; fallback remains limited to layouts the primary input cannot express.
+- A single-episode SP match applies the common default-selection algorithm independently to the main and SP MPLS. Runtime append deduplicates their physical signatures again, preserves original episode-track order, and appends accepted SP tracks in selection order. Obsolete helpers that reconstructed SP identity from one transport PID were removed.
+- Interactive graphics remain visible as MPLS metadata but are disabled in **Edit Tracks**, because IGS has no Matroska subtitle-track representation. This prevents the normal subtitle fallback from treating authored menu state as an ordinary PGS track.
+
+### Verification
+
+- A real 41.625-second Avatar playlist with a final audio-free PlayItem produced a sidecar gap of `41.374667–41.624911`. Independent packet-timestamp detection found audio through `41.376`, a 1.33 ms frame-boundary difference. An additional edited 5.005-second playlist removed the middle PlayItem audio STN entries and produced `1.001–3.003` as the sidecar gap. Detection without the sidecar recovered the same two runs within 5.67 ms after fixing false splits caused by Matroska millisecond timestamp quantization. Both original MPLS files were restored byte-for-byte, and the Remux and comparison Wave64 products were retained under `C:\Backup`.
+- Series Remuxes of Re:Zero season 3 Vol.1 through Vol.5 exercised both attachment modes with FLAC conversion disabled. Vol.1 aggregated the complete matching `00002.mpls` into one output with PCM PIDs 4352 and 4353. Vol.2 attached `00002.mpls` and `00003.mpls` only to episodes 1 and 2. The final Vol.3-Vol.5 run created 11 episodes and attached four alternate PCM tracks only to Vol.3 episode 2, Vol.4 episodes 1 and 3, and Vol.5 episode 2. All other episodes retained one PCM track; every requested attachment retained two. The run also exposed and fixed duplicate physical relations entering complete-match selection when two providers referenced the same video. All outputs completed audio cleanup without FLAC conversion, empty gap sidecars, or task temporary files, and the products were retained under `C:\Backup`.
+- The repository suite contains 265 tests after adding focused IGS-selection, complete-match physical-deduplication, and MPLS-hidden direct-input cases; the complete suite and static checks pass.

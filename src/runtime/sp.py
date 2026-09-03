@@ -129,6 +129,7 @@ class SpJob:
     # contract as main-playlist jobs. A no-MPLS single-M2TS job leaves this
     # empty and keeps its source-local track IDs in audio/subtitle_tracks.
     track_pids: tuple[tuple[str, int], ...] = ()
+    track_source_slots: tuple[tuple[str, str, int], ...] = ()
 
 
 __all__ = [

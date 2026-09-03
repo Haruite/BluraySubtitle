@@ -26,7 +26,8 @@
   },
   "remux": {
     "convert_lossless_audio_to_flac": true,
-    "convert_immersive_audio_to_flac": false
+    "convert_immersive_audio_to_flac": false,
+    "allow_partial_missing_non_video_tracks": false
   },
   "encode": {
     "encoder": "x265",

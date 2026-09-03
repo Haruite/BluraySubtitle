@@ -7,7 +7,7 @@
 - 希望可靠理解蓝光原盘、Matroska、轨道、重混流、压制、字幕、音频、视频和 Dolby Vision 的用户；
 - 需要了解二进制结构、时间规则、源码位置和工作流约束的开发者。
 
-如果你还不熟悉“容器”“轨道”“抽流”“无损”等术语，请先阅读[媒体基础概念](Media-Fundamentals.zh-Hans.md)。随后可通过[蓝光原盘结构](Blu-ray-Disc-Structure.zh-Hans.md)了解 BDMV、MPLS、CLPI、M2TS、播放列表时间和章节。编解码器、音频与字幕的细节集中在[媒体格式、字幕与 Dolby Vision](Media-Formats-and-Dolby-Vision.zh-Hans.md)；[视频压制与 VapourSynth](Video-Encoding-and-VapourSynth.zh-Hans.md)则介绍编码选择、参数预设、帧处理和项目压制管线。
+如需通过截图了解主要表格和几种真实原盘的选择方法，可先阅读[界面展示及说明](Interface-Guide.zh-Hans.md)。如果你还不熟悉“容器”“轨道”“抽流”“无损”等术语，请继续阅读[媒体基础概念](Media-Fundamentals.zh-Hans.md)。随后可通过[蓝光原盘结构](Blu-ray-Disc-Structure.zh-Hans.md)了解 BDMV、MPLS、CLPI、M2TS、播放列表时间和章节。编解码器、音频与字幕的细节集中在[媒体格式、字幕与 Dolby Vision](Media-Formats-and-Dolby-Vision.zh-Hans.md)；[视频压制与 VapourSynth](Video-Encoding-and-VapourSynth.zh-Hans.md)则介绍编码选择、参数预设、帧处理和项目压制管线。
 
 开发者还应阅读 [BluraySubtitle 开发者指南](BluraySubtitle-Developer-Guide.zh-Hans.md)。该文档定义项目中 **主 MPLS** 和 **SP** 的含义，介绍扫描与重混流管线，并指向相关源码。
 
@@ -25,11 +25,12 @@
 
 ### 仅使用应用
 
-1. [媒体基础概念](Media-Fundamentals.zh-Hans.md)
-2. [蓝光原盘结构](Blu-ray-Disc-Structure.zh-Hans.md)，至少读到“MPLS、M2TS 与 CLPI 如何协作”
-3. [媒体格式、字幕与 Dolby Vision](Media-Formats-and-Dolby-Vision.zh-Hans.md)
-4. [视频压制与 VapourSynth](Video-Encoding-and-VapourSynth.zh-Hans.md)，适合使用压制功能的用户
-5. 项目[简体中文 README](../../README.zh-Hans.md)
+1. [界面展示及说明](Interface-Guide.zh-Hans.md)
+2. [媒体基础概念](Media-Fundamentals.zh-Hans.md)
+3. [蓝光原盘结构](Blu-ray-Disc-Structure.zh-Hans.md)，至少读到“MPLS、M2TS 与 CLPI 如何协作”
+4. [媒体格式、字幕与 Dolby Vision](Media-Formats-and-Dolby-Vision.zh-Hans.md)
+5. [视频压制与 VapourSynth](Video-Encoding-and-VapourSynth.zh-Hans.md)，适合使用压制功能的用户
+6. 项目[简体中文 README](../../README.zh-Hans.md)
 
 ### 理解或修改项目实现
 

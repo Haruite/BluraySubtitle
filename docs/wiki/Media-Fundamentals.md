@@ -100,6 +100,8 @@ Demuxing does not inherently decode or re-encode the stream. A correct stream-co
 
 Demuxing an MPLS is more than concatenating files. Each playlist `PlayItem` selects a clip and an `INTime`/`OUTTime` window. The same M2TS can be reused with different windows, and different play items can have different track layouts.
 
+A Blu-ray logical track may use another PID in a later PlayItem or be absent for an interval. Matroska can preserve an absence as a timestamp gap: the track simply has no packets during that interval. It does not need silent audio. The opposite limit is that one Matroska track has stable track-level codec parameters; Blu-ray occurrences with incompatible parameters cannot be forced into it merely because they occupy the same playlist stream-number position.
+
 ## Mux and remux
 
 **Multiplexing**, or **muxing**, combines tracks and metadata into a container. **Remuxing** reads tracks from an existing container or disc structure and muxes them into a new container without re-encoding the streams being copied.

@@ -10,6 +10,20 @@ from .structures.stn_table import STNTable
 
 
 class MPLS:
+    _TRACK_PARAMETER_FIELDS = {
+        "video": (
+            "StreamCodingType",
+            "VideoFormat",
+            "FrameRate",
+            "DynamicRangeType",
+            "ColorSpace",
+            "CRFlag",
+            "HDRPlusFlag",
+        ),
+        "audio": ("StreamCodingType", "AudioFormat", "SampleRate"),
+        "subtitle": ("StreamCodingType", "CharacterCode"),
+    }
+
     def __init__(self, filename=None, strict=True):
         self.filename: Optional[str] = None
         self.strict = strict
@@ -33,48 +47,129 @@ class MPLS:
             f.write(self.data.to_bytes())
 
     def get_tracks_info(self) -> list[dict[str, object]]:
-        """Return the first PlayItem STN tracks in ascending PID order.
+        """Return logical playlist tracks assembled from every PlayItem STN table.
 
-        Track selection for an MPLS is defined by its stream table. Reading it does not
-        inspect a referenced M2TS and does not require an external media tool.
+        A logical track is identified by its STN bucket and position within that bucket.
+        Its transport PID may therefore change between PlayItems, and an absent occurrence
+        represents a timeline gap rather than a different track. Loading remains MPLS-only:
+        transport streams are deliberately not opened here.
         """
         try:
             play_items = list(self.data["PlayList"]["PlayItems"] or [])
-            stn = play_items[0]["STNTable"] if play_items else None
         except (KeyError, TypeError):
             return []
-        if not stn:
+        if not play_items:
             return []
 
+        logical_slots: dict[tuple[str, int], list[Optional[dict[str, object]]]] = {}
+        clip_names = [
+            str(play_item.get("ClipInformationFileName") or '').strip()
+            for play_item in play_items
+        ]
+        for play_item_index, play_item in enumerate(play_items):
+            try:
+                stn = play_item["STNTable"]
+            except (KeyError, TypeError):
+                stn = None
+            if not stn:
+                continue
+            for bucket_name in STNTable.stream_names:
+                for slot_index, pair in enumerate(stn.get(bucket_name) or []):
+                    try:
+                        stream_entry = pair["StreamEntry"]
+                        attributes = pair["StreamAttributes"]
+                        pid = int(stream_entry["RefToStreamPID"])
+                        stream_type = int(attributes["StreamCodingType"])
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    codec_type, codec_name = M2TS._codec_from_stream_type(stream_type)
+                    if codec_type not in {"video", "audio", "subtitle"}:
+                        if "Video" in bucket_name or bucket_name == "DVStreamEntries":
+                            codec_type = "video"
+                        elif "Audio" in bucket_name:
+                            codec_type = "audio"
+                        elif "PG" in bucket_name or "IG" in bucket_name:
+                            codec_type = "subtitle"
+                        else:
+                            continue
+                    key = (bucket_name, slot_index)
+                    occurrences = logical_slots.setdefault(key, [None] * len(play_items))
+                    language = str(attributes.get("LanguageCode") or "und").strip() or "und"
+                    occurrence: dict[str, object] = {
+                        "play_item_index": play_item_index,
+                        "bucket": bucket_name,
+                        "slot_index": slot_index,
+                        "pid": pid,
+                        "codec_type": codec_type,
+                        "codec_name": codec_name,
+                        "language": language,
+                        "stream_type": stream_type,
+                    }
+                    for field in self._TRACK_PARAMETER_FIELDS[codec_type]:
+                        if field in attributes:
+                            occurrence[field] = attributes[field]
+                    occurrences[play_item_index] = occurrence
+
         tracks: list[dict[str, object]] = []
-        seen: set[tuple[str, int]] = set()
-        for bucket_name in STNTable.stream_names:
-            for pair in stn.get(bucket_name) or []:
-                try:
-                    stream_entry = pair["StreamEntry"]
-                    attributes = pair["StreamAttributes"]
-                    pid = int(stream_entry["RefToStreamPID"])
-                    stream_type = int(attributes["StreamCodingType"])
-                except (KeyError, TypeError, ValueError):
-                    continue
-                codec_type, codec_name = M2TS._codec_from_stream_type(stream_type)
-                if codec_type not in {"video", "audio", "subtitle"}:
-                    continue
-                slot = (codec_type, pid)
-                if slot in seen:
-                    continue
-                seen.add(slot)
-                language = str(attributes.get("LanguageCode") or "und").strip() or "und"
-                tracks.append({
-                    "index": str(pid),
-                    "pid": pid,
-                    "codec_type": codec_type,
-                    "codec_name": codec_name,
-                    "language": language,
-                    "lang": language,
-                    "stream_type": stream_type,
-                    "_mpls_pid_row": True,
-                })
+        for (bucket_name, slot_index), occurrences in logical_slots.items():
+            present = [occurrence for occurrence in occurrences if occurrence is not None]
+            if not present:
+                continue
+            first = present[0]
+            codec_type = str(first["codec_type"])
+            language = next(
+                (
+                    str(occurrence.get("language") or "und").strip()
+                    for occurrence in present
+                    if str(occurrence.get("language") or "und").strip().lower() != "und"
+                ),
+                "und",
+            )
+            incompatible_fields: list[str] = []
+            for field in self._TRACK_PARAMETER_FIELDS.get(codec_type, ("StreamCodingType",)):
+                values = {
+                    occurrence[field]
+                    for occurrence in present
+                    if field in occurrence and occurrence[field] is not None
+                }
+                if len(values) > 1:
+                    incompatible_fields.append(field)
+            codec_types = {str(occurrence["codec_type"]) for occurrence in present}
+            if len(codec_types) > 1 and "StreamCodingType" not in incompatible_fields:
+                incompatible_fields.insert(0, "StreamCodingType")
+            unsupported_reason = (
+                "Interactive graphics cannot be muxed as a Matroska subtitle track."
+                if str(first["codec_name"]) == "igs"
+                else ""
+            )
+            pid = int(first["pid"])
+            tracks.append({
+                "index": str(pid),
+                "pid": pid,
+                "codec_type": codec_type,
+                "codec_name": str(first["codec_name"]),
+                "language": language,
+                "lang": language,
+                "stream_type": int(first["stream_type"]),
+                "_mpls_pid_row": True,
+                "_mpls_bucket": bucket_name,
+                "_mpls_slot_index": slot_index,
+                "_mpls_slot_key": (bucket_name, slot_index),
+                "_mpls_occurrences": tuple(occurrences),
+                "_mpls_pid_by_play_item": tuple(
+                    int(occurrence["pid"]) if occurrence is not None else None
+                    for occurrence in occurrences
+                ),
+                "_mpls_m2ts_pid_pairs": tuple(
+                    (clip_names[index], int(occurrence["pid"]))
+                    for index, occurrence in enumerate(occurrences)
+                    if occurrence is not None and clip_names[index]
+                ),
+                "_mpls_source_path": os.path.normpath(self.filename or ''),
+                "_mpls_append_compatible": not incompatible_fields and not unsupported_reason,
+                "_mpls_incompatible_fields": tuple(incompatible_fields),
+                "_mpls_unsupported_reason": unsupported_reason,
+            })
         tracks.sort(key=lambda track: int(track["pid"]))
         return tracks
 

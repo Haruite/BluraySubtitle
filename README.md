@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-Hans.md)
 
-Documentation: [project wiki](docs/wiki/Home.md)
+Documentation: [project wiki](docs/wiki/Home.md) | [interface guide and examples](docs/wiki/Interface-Guide.md)
 
 Development: [mandatory code modification standards](docs/development/code-standards.md) | [media pipeline and tool selection](docs/development/media-pipeline-and-tool-selection.md) | [refactoring history](docs/refactoring/refactoring-history.md)
 
@@ -82,10 +82,12 @@ In series mode, **Trim copyright bumper** checks each episode's final 30 seconds
 
 The **main playlist** supports editing the mux command (`remux_cmd`). Each selected main playlist must have exactly one non-empty command and is processed in the current visible order, including multiple main playlists from the same disc. Video, audio, and subtitle selection always comes from **Edit Tracks**; the command shows placeholders for those choices, and manually entered track-selection flags are ignored. Before writing, Remux derives every command output and final episode filename. The output count must match the visible episode rows; duplicate paths and existing outputs are errors. Episode names are applied exactly as shown, and invalid filenames are rejected.
 
-Before a direct multi-clip MPLS mux, Remux derives the M2TS clips covered by the command's effective time ranges and compares the selected PID-to-local-track-ID mapping only across those clips. A missing selected PID or inconsistent local track ID enters the track-aligned fallback immediately. Clips excluded by `--split parts` do not participate, and an absent unselected track does not itself trigger fallback; if that absence renumbers a selected PID's local ID, the selected mapping mismatch still triggers fallback. If the primary command and its documented fallback paths cannot create every planned output, Remux stops with an error and does not substitute unrelated files found in the output folder. After muxing, the language values saved by **Edit tracks** are applied to the included video, audio, and subtitle tracks and then verified. A mapping, tool, or language-verification failure stops that job and removes its newly created main outputs. Output track counts and MKVToolNix packet statistics are also checked; those findings do not interrupt the remaining Remux work and are shown together after the task completes.
+**Edit Tracks** presents one row for each logical track authored across the whole playlist, including its PIDs and a status summary; hover over the row for per-PlayItem details. A track whose MPLS parameters change incompatibly between clips is disabled. A logical track may use different PIDs or be absent for part of the playlist; its first explicit language is used by default, while later language changes are shown for reference.
+
+The disabled-by-default Advanced option **Allow partially missing non-video tracks** permits a selected audio or subtitle track that is physically absent from only some M2TS clips and cannot be recovered by tsMuxer to continue with those intervals as timeline gaps. It does not permit a missing video track or a selected track that is absent from the whole output.
 
 Remux keeps selected lossy audio unchanged. Its **Convert lossless audio to FLAC** option is enabled by default, and its startup state is configurable under **Advanced**. The standalone `flac` and FFmpeg compression levels are also configurable there and both default to 8.
-FLAC cannot store DTS:X or TrueHD Atmos object metadata, so **Convert DTS:X and TrueHD Atmos to FLAC during Remux** is a separate Advanced option and is disabled by default. A failed conversion keeps the original track. A duration loss over 0.1 seconds is reported; a loss over the configurable threshold discards the FLAC and keeps the original. The threshold defaults to 1 second.
+FLAC cannot store DTS:X or TrueHD Atmos object metadata, so **Convert DTS:X and TrueHD Atmos to FLAC during Remux** is a separate Advanced option and is disabled by default. Audio conversion preserves playlist gaps in Matroska without filling them with silence; a standalone audio output that contains such gaps is rejected. After gap analysis, every Remux writes a matching `.audio-gaps.json` file beside the MKV so a later Remux-source Encode can reuse the result; gaps are recorded in the file, while continuous audio produces a valid empty marker. A failed conversion keeps the original track. If a continuous section is shortened by more than 0.1 seconds, the program reports it; if the greatest section loss exceeds the configurable threshold, the converted track is discarded. The threshold defaults to 1 second.
 See [Media Pipeline Design and Tool Selection](docs/development/media-pipeline-and-tool-selection.md) for details.
 
 Subtitles selected for Blu-ray Remux are always soft-muxed into the corresponding main MKV. Remux does not burn subtitles into the video or write them as external subtitle files.
@@ -155,7 +157,7 @@ This section explains, in plain language, how the program behaves internally.
 2. MPLS rows always use MPLS logic; **M2TS** logic is used only when a row has no MPLS.
 3. SP rows are ordered by **BDMV volume**, then **MPLS name**, followed by uncovered **M2TS names**.
 4. The default MPLS output basename is **`BD_Vol_{bdmv_vol}_SP{n}`**. The number follows the selected MPLS rows on the same disc and uses a consistent zero-padded width. In movie mode, when table2 has exactly one row, the volume prefix is omitted and the basename is **`SP{n}`**.
-5. Series mode has two independent exact-match rules. When a non-main MPLS has the same complete M2TS detail as exactly one selected main MPLS, its exposed audio and subtitle PIDs become track choices for that main remux and the duplicate SP row is unchecked by default. Otherwise, an SP whose complete detail equals exactly one episode and exposes a new PID is checked by default and linked only to that episode. An SP spanning several episode outputs without matching the complete main MPLS remains an ordinary SP; it is not attached to several outputs.
+5. Series mode has two independent exact-match rules. When a non-main MPLS has the same complete M2TS detail as exactly one selected main MPLS, its non-duplicate audio and subtitle tracks become choices for that main remux and the duplicate SP row is unchecked by default. Otherwise, an SP whose complete detail equals exactly one episode and exposes a new physical track is checked by default and linked only to that episode. Tracks from different playlists are compared by their M2TS/PID mappings, not by PID or slot alone. An SP spanning several episode outputs without matching the complete main MPLS remains an ordinary SP; it is not attached to several outputs.
 6. MPLS and M2TS shorter than **30 seconds** remain visible but are unchecked by default; MPLS duration counts duplicate files only once.
 7. An MPLS containing at least three distinct files is checked by default.
 8. An uncovered M2TS containing at most 12 decoded frames where every frame has the same image, including a short clip made of repeated identical frames, and an MPLS containing one such M2TS are checked by default and written as PNG. Detection stops and rejects the source as soon as a 13th frame is found.
@@ -180,15 +182,7 @@ This section explains, in plain language, how the program behaves internally.
 
 #### B) How track alignment and missing-track repair work
 
-Direct MPLS muxing can fail when playlist clips have different track layouts. Main-playlist and MPLS-backed SP selections are stored as track type + MPEG PID; GUI row order and first-clip stream indexes are not part of the contract. A no-MPLS SP row backed by one M2TS keeps source-local track IDs and reads its track languages from the matching CLPI file:
-
-1. **Edit Tracks** reads the MPLS stream table directly for both main and SP rows. When execution begins, the Service identifies the MPLS to map the selected PIDs to mkvmerge track IDs; if any selected PID is absent, it enters the fallback before checking individual M2TS files.
-2. Playback ranges come from `Chapter(mpls_path).in_out_time`; for `--split parts:start-end`, only overlapping M2TS files are checked.
-3. Before the long mux starts, each included M2TS is identified directly with mkvmerge. A missing selected PID or a PID whose local track ID differs from the MPLS reference enters the PID-aligned fallback immediately.
-4. Missing selected tracks are recovered with tsMuxer, and recovered tracks follow the required MPLS PID order.
-5. If tsMuxer cannot recover every missing selected track, including audio, the fallback fails explicitly instead of creating a synthetic replacement.
-6. The repaired PID set must exactly match the reference layout. One repaired clip receives its cover in place through `mkvpropedit` and is moved directly to the planned output without a second full mux; multiple clips are concatenated with `--append-mode file` so every track uses the same preceding-file timestamp boundary.
-7. Main, standalone SP, SP audio-intermediate, and episode-linked SP mux commands share this preflight/fallback contract. Image extraction is excluded because it does not select or mux media tracks. Configured track languages and chapters are applied afterward, with command results and final metadata checked.
+Track-aligned fallback preserves a logical track through PID changes and temporary gaps without creating silent replacements. Audio conversion, when selected, remains a separate post-processing step after Remux succeeds.
 
 The separate multi-output fallback used when one main MPLS is split into several episode files keeps the same per-clip alignment and missing-track rules, then validates every expected split output before finalization.
 
@@ -509,7 +503,7 @@ Keep `first=0` so output-comparison images still use corresponding source and en
 
 ### Why is remux larger than the original disc?
 
-Usually **duplicated bonus clips** across playlists. Check each MPLS and **View chapters**; if a playlist overlaps the main one, set that MPLS as **main MPLS**, open **View chapters**, uncheck overlapping segments, then **uncheck** the matching rows in the **SP** table below.
+Usually **duplicated bonus clips** across playlists. Check each MPLS and **View chapters**; if a playlist overlaps the main one, set that MPLS as **main MPLS**, open **View chapters**, uncheck overlapping segments, then **uncheck** the matching rows in the **SP** table below. See the illustrated [Hana-Kimi example](docs/wiki/Interface-Guide.md#example-avoiding-remux-growth-from-duplicated-clips).
 
 ### Does encode tag chapters as OP/ED?
 

@@ -109,7 +109,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             'm2ts_file': ','.join(m2ts_files),
             'output_name': '',
         }
-        self._inherit_main_track_config_for_sp_key(
+        self._ensure_default_track_config_for_sp_mpls(
             int(bdmv_index), mpls_file, SpEntry.from_mapping(sp_entry).track_key,
         )
         self._recompute_sp_output_names(only_bdmv_index=bdmv_index)
@@ -281,8 +281,9 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                         if not isinstance(cfg, dict):
                             self._track_selection_config = {}
                             cfg = self._track_selection_config
-                        self._inherit_main_track_config_for_sp_key(int(bdmv_index), os.path.basename(mpls_path),
-                                                                   sp_key)
+                        self._ensure_default_track_config_for_sp_mpls(
+                            int(bdmv_index), os.path.basename(mpls_path), sp_key
+                        )
                     except Exception:
                         pass
 
@@ -1426,64 +1427,81 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                                 detail, []
                             ).append(main_path)
 
-            def _mpls_pid_languages(mpls_path: str) -> dict[int, str]:
-                return {
-                    int(track['pid']): str(track.get('language') or 'und')
-                    for track in MPLS(mpls_path, strict=False).get_tracks_info()
-                    if track.get('pid') is not None
-                }
+            def _provider_streams(mpls_path: str) -> list[dict[str, object]]:
+                rows: list[dict[str, object]] = []
+                for source_row in self._read_mpls_track_info(mpls_path):
+                    row = dict(source_row)
+                    row['_mpls_source_path'] = os.path.normpath(mpls_path)
+                    row['_mpls_selection_key'] = BluraySubtitle._mpls_track_selection_key(
+                        mpls_path,
+                        str(row.get('_mpls_bucket') or row.get('codec_type') or ''),
+                        int(row.get('_mpls_slot_index') or 0),
+                    )
+                    row['index'] = row['_mpls_selection_key']
+                    rows.append(row)
+                return rows
+
+            def _physical_track_signature(row: dict[str, object]) -> tuple[tuple[str, int], ...]:
+                return BluraySubtitle._mpls_track_mapping_signature(row)
+
+            def _has_relation_collision(
+                    signature: tuple[tuple[str, int], ...],
+                    existing: list[tuple[tuple[str, int], ...]],
+            ) -> bool:
+                relations = set(signature)
+                return bool(relations) and any(relations.intersection(other) for other in existing)
 
             def _register_whole_main_match_tracks(
                     main_path: str, alternate_chapter: Chapter) -> None:
-                """Expose PIDs authored by an alternate MPLS with the same complete main detail."""
+                """Expose non-duplicate logical tracks from a full-timeline MPLS provider."""
                 main_norm = os.path.normcase(os.path.abspath(main_path))
-                main_pid_lang = _mpls_pid_languages(main_path)
-                alternate_pid_lang = _mpls_pid_languages(alternate_chapter.file_path)
+                main_streams = _provider_streams(main_path)
                 info = whole_main_track_info.setdefault(main_norm, {
                     'main_path': os.path.normpath(main_path),
                     'mpls_paths': [],
-                    'pids': set(),
-                    'pid_lang': dict(main_pid_lang),
+                    'streams': list(main_streams),
                 })
                 alternate_path = os.path.normpath(str(alternate_chapter.file_path))
                 if alternate_path not in info['mpls_paths']:
                     info['mpls_paths'].append(alternate_path)
-                aggregate_pid_lang = info['pid_lang']
-                for pid, language in alternate_pid_lang.items():
-                    aggregate_pid_lang.setdefault(pid, language)
-                info['pids'].update(set(alternate_pid_lang) - set(main_pid_lang))
+                signatures = [
+                    _physical_track_signature(row)
+                    for row in info['streams']
+                    if _physical_track_signature(row)
+                ]
+                for row in _provider_streams(alternate_chapter.file_path):
+                    signature = _physical_track_signature(row)
+                    if _has_relation_collision(signature, signatures):
+                        continue
+                    row['_whole_main_alternate_track'] = True
+                    info['streams'].append(row)
+                    if signature:
+                        signatures.append(signature)
 
-            def _episode_attachment_new_pids(
-                    main_path: str, attachment_chapter: Chapter) -> set[int]:
-                """Find PIDs for a single-episode append without changing the main selection.
+            def _episode_attachment_has_new_tracks(
+                    main_path: str, attachment_chapter: Chapter) -> bool:
+                """Find a physical M2TS/PID relation not already exposed by the episode MPLS.
 
                 Only a complete whole-main match may extend the shared main-track configuration. An episode
                 match is appended after splitting and must affect only its uniquely matched output.
                 """
-                main_pids = set(_mpls_pid_languages(main_path))
-                attachment_pids = set(_mpls_pid_languages(attachment_chapter.file_path))
-                return (
-                    attachment_pids - main_pids
-                )
-
-            def _selectable_attachment_pids(
-                    attachment_mpls: str, candidate_pids: set[int]) -> set[int]:
-                if not candidate_pids:
-                    return set()
-                try:
-                    streams = self._read_mpls_track_info(attachment_mpls)
-                    if streams:
-                        return {
-                            pid
-                            for stream in streams
-                            if str(stream.get('codec_type') or '').strip().lower()
-                            in ('audio', 'subtitle', 'subtitles')
-                            and (pid := self._parse_stream_pid(stream.get('pid'))) in candidate_pids
-                        }
-                except Exception:
-                    pass
-                # Blu-ray audio and presentation-graphics subtitle PIDs use these ranges.
-                return {pid for pid in candidate_pids if 0x1100 <= pid < 0x1300}
+                main_signatures = [
+                    _physical_track_signature(row)
+                    for row in _provider_streams(main_path)
+                    if str(row.get('codec_type') or '').strip().lower()
+                    in ('audio', 'subtitle', 'subtitles')
+                ]
+                for row in _provider_streams(attachment_chapter.file_path):
+                    if (
+                            str(row.get('codec_type') or '').strip().lower()
+                            not in ('audio', 'subtitle', 'subtitles')
+                            or row.get('_mpls_append_compatible') is False
+                    ):
+                        continue
+                    signature = _physical_track_signature(row)
+                    if signature and not _has_relation_collision(signature, main_signatures):
+                        return True
+                return False
             for bdmv_index in sorted(disc_root_by_bdmv.keys()):
                 root = disc_root_by_bdmv.get(bdmv_index, '')
                 if not root:
@@ -1538,9 +1556,10 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                         os.path.basename(mpls_file_path),
                         ','.join(m2ts_files),
                     )
-                    # These are independent rules. A complete match reuses the one main remux and exposes
-                    # the alternate MPLS PIDs there. Only a non-whole match may use the post-split,
-                    # single-episode append path. A range spanning several episodes matches neither rule.
+                    # These are independent rules. A complete match reuses the one main remux.
+                    # It exposes non-colliding logical tracks from the alternate MPLS there.
+                    # Only a non-whole match may use the post-split, single-episode append path.
+                    # A range spanning several episodes matches neither rule.
                     if len(matching_whole_main_paths) == 1:
                         whole_main_match_keys.add(entry_key)
                         default_selected = False
@@ -1558,17 +1577,14 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                             ','.join(m2ts_files),
                         ))
                         try:
-                            new_attachment_pids = _episode_attachment_new_pids(
-                                matching_main_path, ch
-                            )
-                            exact_episode_has_new_tracks = bool(
-                                _selectable_attachment_pids(
-                                    mpls_file_path, new_attachment_pids,
+                            exact_episode_has_new_tracks = (
+                                _episode_attachment_has_new_tracks(
+                                    matching_main_path, ch
                                 )
                             )
                         except Exception:
                             print_exc_terminal()
-                        # An exact SP row is useful only when it can append a new audio or subtitle PID.
+                        # An exact SP row is useful only when it can append a new physical audio or subtitle track.
                         default_selected = exact_episode_has_new_tracks
                     try:
                         dur_for_select = float(ch.get_total_time_no_repeat())
@@ -1690,28 +1706,16 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             if not isinstance(track_config, dict):
                 track_config = {}
                 self._track_selection_config = track_config
-            # A complete alternate MPLS describes the same main output, so its exposed PIDs belong in the
+            # A complete alternate MPLS describes the same main output, so its exposed tracks belong in the
             # shared main selection. Single-episode SP matches are deliberately excluded from this block.
             for info in whole_main_track_info.values():
                 main_path = str(info.get('main_path') or '').strip()
-                pid_lang = dict(info.get('pid_lang') or {})
-                if not main_path or not pid_lang:
+                streams = [dict(row) for row in info.get('streams') or ()]
+                if not main_path or not streams:
                     continue
-                streams = self._read_mpls_track_info(main_path)
-                known_pid_types = {
-                    (str(stream.get('codec_type') or ''), self._parse_stream_pid(stream.get('pid')))
-                    for stream in streams
-                }
-                for alternate_path in info.get('mpls_paths', ()) or ():
-                    for stream in self._read_mpls_track_info(str(alternate_path)):
-                        key = (
-                            str(stream.get('codec_type') or ''),
-                            self._parse_stream_pid(stream.get('pid')),
-                        )
-                        if key not in known_pid_types:
-                            streams.append(stream)
-                            known_pid_types.add(key)
-                visible_streams = self._filter_streams_by_pid_lang(streams, pid_lang)
+                streams.sort(key=lambda row: int(row.get('pid') or 0))
+                pid_lang = self._pid_lang_from_streams(streams)
+                visible_streams = list(streams)
                 if not visible_streams:
                     continue
                 main_key = media_track_key('main', main_path)

@@ -351,6 +351,7 @@ class SettingsGuiTests(unittest.TestCase):
         dialog.default_vpy_antialiasing_strength_spin.setValue(0.6)
         dialog.remux_flac_default_checkbox.setChecked(False)
         dialog.remux_immersive_flac_checkbox.setChecked(True)
+        dialog.allow_partial_missing_non_video_tracks_checkbox.setChecked(True)
 
         selected = dialog.selected_config()
 
@@ -381,6 +382,7 @@ class SettingsGuiTests(unittest.TestCase):
             RemuxPreferences(
                 convert_lossless_audio_to_flac=False,
                 convert_immersive_audio_to_flac=True,
+                allow_partial_missing_non_video_tracks=True,
             ),
         )
         self.assertEqual(

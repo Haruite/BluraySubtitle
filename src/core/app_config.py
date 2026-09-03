@@ -70,6 +70,7 @@ class AudioPreferences:
 class RemuxPreferences:
     convert_lossless_audio_to_flac: bool = True
     convert_immersive_audio_to_flac: bool = False
+    allow_partial_missing_non_video_tracks: bool = False
 
 
 @dataclass(frozen=True)
@@ -398,6 +399,11 @@ def app_config_from_mapping(raw: dict[str, Any]) -> AppConfig:
             convert_immersive_audio_to_flac=_boolean_value(
                 remux,
                 "convert_immersive_audio_to_flac",
+                False,
+            ),
+            allow_partial_missing_non_video_tracks=_boolean_value(
+                remux,
+                "allow_partial_missing_non_video_tracks",
                 False,
             ),
         ),

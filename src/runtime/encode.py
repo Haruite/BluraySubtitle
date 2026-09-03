@@ -78,8 +78,10 @@ class EncodeRequest:
     selected_mpls: tuple[tuple[str, str], ...] = ()
     movie_mode: bool = False
     mux_dolby_vision: bool = True
+    allow_partial_missing_non_video_tracks: bool = False
     track_selection_config: dict[str, dict[str, list[str]]] | None = None
     track_language_config: dict[str, dict[str, str]] | None = None
+    main_alternate_mpls: dict[str, tuple[str, ...]] | None = None
 
 
 def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -> None:

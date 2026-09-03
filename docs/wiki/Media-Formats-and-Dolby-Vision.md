@@ -130,6 +130,8 @@ The project’s conversion policy can be summarized as:
 | Lossless source | AAC/Opus | Lossy | Encode workflow only, per selected policy |
 | AC-3/E-AC-3/AAC/Opus | unchanged | No new codec generation | Selected lossy audio is normally preserved |
 
+For every conversion target, playlist gaps remain timestamp gaps in the Matroska track rather than silent PCM. Validation compares each continuous audio interval and uses the greatest interval shortening for warning and fallback; the losses are not added together.
+
 ## Subtitle models
 
 Subtitles fall into two broad models:

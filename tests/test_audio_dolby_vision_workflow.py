@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,12 +14,19 @@ from unittest.mock import patch
 from src.runtime.audio_conversion import (
     AudioEncodingSettings,
     AudioMuxFailure,
+    _ExtractedAudioRun,
     _analyze_audio_track,
     _extract_selected_audio_tracks,
-    convert_audio_stream_to_flac,
+    _mux_converted_audio_runs,
+    _selected_audio_after_cleanup,
+    convert_audio_stream,
+    converted_audio_runs_are_acceptable,
+    audio_gap_sidecar_path,
+    load_audio_gap_sidecar,
     mux_with_audio_conversion,
     validate_audio_cleanup_tools,
     validate_audio_conversion_tools,
+    write_audio_gap_sidecar,
 )
 from src.runtime.dolby_vision import (
     DolbyVisionEncodePlan,
@@ -72,7 +80,10 @@ def _write_extracted_tracks(command: list[str], payload=b'audio') -> None:
         if argument != 'w64':
             continue
         extracted_path = command[index + 1]
-        track_id = int(Path(extracted_path).stem.rsplit('-', 1)[-1])
+        track_match = re.search(r'track-(\d+)', Path(extracted_path).stem)
+        if not track_match:
+            continue
+        track_id = int(track_match.group(1))
         Path(extracted_path).write_bytes(
             payload(track_id) if callable(payload) else payload
         )
@@ -101,6 +112,12 @@ class AudioConversionTests(unittest.TestCase):
         self.batch_audio_duration_probe = batch_duration_patcher.start()
         self.addCleanup(duration_patcher.stop)
         self.addCleanup(batch_duration_patcher.stop)
+        bit_depth_patcher = patch(
+            'src.runtime.audio_conversion.get_effective_bit_depth',
+            side_effect=lambda _path, fallback_depth: fallback_depth,
+        )
+        self.bit_depth_probe = bit_depth_patcher.start()
+        self.addCleanup(bit_depth_patcher.stop)
 
     def test_lossy_audio_is_preserved_with_exact_tracks_and_languages(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -443,6 +460,8 @@ class AudioConversionTests(unittest.TestCase):
                         'src.runtime.audio_conversion.probe_audio_stream',
                         side_effect=[
                             ('', 60.0),
+                            ('', 60.0),
+                            ('', 60.0),
                             ('', 58.9),
                         ],
                     ),
@@ -463,8 +482,8 @@ class AudioConversionTests(unittest.TestCase):
                 mux_command[mux_command.index('--track-order') + 1],
                 '0:0,1:0,0:2',
             )
-            self.assertTrue(any('track-1.flac' in argument for argument in mux_command))
-            self.assertFalse(any('track-2.flac' in argument for argument in mux_command))
+            self.assertTrue(any('track-1-run-000.flac' in argument for argument in mux_command))
+            self.assertFalse(any('track-2-run-000.flac' in argument for argument in mux_command))
 
     def test_silent_and_duplicate_audio_are_removed_without_reordering_kept_tracks(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -630,10 +649,11 @@ class AudioConversionTests(unittest.TestCase):
                     patch('src.runtime.audio_conversion.shutil.which', return_value='flac'),
                     patch('src.runtime.audio_conversion.run_command', side_effect=run_command),
             ):
-                succeeded = convert_audio_stream_to_flac(
+                succeeded = convert_audio_stream(
                     str(input_wave),
                     '0:0',
                     str(output_flac),
+                    target_codec='flac',
                     audio_encoding=AudioEncodingSettings(
                         flac_compression_level=4,
                         ffmpeg_flac_compression_level=12,
@@ -770,8 +790,8 @@ class AudioConversionTests(unittest.TestCase):
                     patch('src.runtime.audio_conversion.shutil.which', return_value='flac'),
                     patch('src.runtime.audio_conversion.run_command', side_effect=run_command),
             ):
-                succeeded = convert_audio_stream_to_flac(
-                    str(input_wave), '0:0', str(output_flac)
+                succeeded = convert_audio_stream(
+                    str(input_wave), '0:0', str(output_flac), target_codec='flac'
                 )
 
             self.assertFalse(succeeded)
@@ -1049,6 +1069,248 @@ class AudioConversionTests(unittest.TestCase):
 
 
 class AudioAnalysisTests(unittest.TestCase):
+    def test_audio_gap_sidecar_round_trip_and_continuous_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / 'source.mkv'
+            source.write_bytes(b'matroska')
+            tracks = [
+                _track(1, 'audio', 'A_TRUEHD'),
+                _track(2, 'audio', 'A_AC3'),
+            ]
+            tracks[0]['properties']['uid'] = 101
+            tracks[1]['properties']['uid'] = 102
+
+            write_audio_gap_sidecar(
+                str(source),
+                {1: ((0.0, 4.0), (6.0, 4.0)), 2: ((0.0, 10.0),)},
+                10.0,
+                tracks,
+            )
+
+            sidecar = Path(audio_gap_sidecar_path(str(source)))
+            self.assertTrue(sidecar.is_file())
+            payload = json.loads(sidecar.read_text(encoding='utf-8'))
+            self.assertEqual(payload['tracks'], [
+                {'track_id': 1, 'track_uid': '101', 'gaps': [[4.0, 6.0]]},
+            ])
+            self.assertEqual(
+                load_audio_gap_sidecar(str(source), tracks),
+                {1: ((0.0, 4.0), (6.0, 4.0))},
+            )
+
+            write_audio_gap_sidecar(
+                str(source), {1: ((0.0, 10.0),)}, 10.0, tracks
+            )
+            self.assertTrue(sidecar.is_file())
+            payload = json.loads(sidecar.read_text(encoding='utf-8'))
+            self.assertEqual(payload['tracks'], [])
+            self.assertEqual(load_audio_gap_sidecar(str(source), tracks), {})
+            sidecar.unlink()
+            self.assertIsNone(load_audio_gap_sidecar(str(source), tracks))
+
+    def test_timestamp_gap_detection_reuses_one_batch_decode(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source = root / 'source.mkv'
+            source.write_bytes(b'mkv')
+            commands: list[list[str]] = []
+
+            def extract_tracks(command, **kwargs):
+                command = list(command)
+                commands.append(command)
+                _write_extracted_tracks(command)
+                log_stream = kwargs.get('stderr')
+                if log_stream is not None:
+                    log_stream.write(
+                        '[Parsed_ashowinfo@track_1_0] n:0 pts:0 pts_time:0 '
+                        'rate:48000 nb_samples:256\n'
+                        '[Parsed_ashowinfo@track_1_0] n:1 pts:312 pts_time:0.0065 '
+                        'rate:48000 nb_samples:256\n'
+                        '[Parsed_ashowinfo@track_1_0] n:2 pts:144000 pts_time:3 '
+                        'rate:48000 nb_samples:48000\n'
+                    )
+                    log_stream.flush()
+                return SimpleNamespace(returncode=0)
+
+            with patch(
+                    'src.runtime.audio_conversion.run_command',
+                    side_effect=extract_tracks,
+            ):
+                extracted = _extract_selected_audio_tracks(
+                    'ffmpeg', str(source), str(root), {1: 0}, (1,), 24,
+                    detect_timeline_gaps=True,
+                )
+
+            self.assertEqual(len(commands), 2)
+            self.assertEqual(commands[0][commands[0].index('-i') + 1], str(source))
+            self.assertTrue(commands[1][commands[1].index('-i') + 1].endswith('track-1.w64'))
+            self.assertEqual(
+                tuple(
+                    (run.timeline_start_seconds, run.timeline_duration_seconds)
+                    for run in extracted[1]
+                ),
+                ((0.0, 512 / 48000), (3.0, 1.0)),
+            )
+
+    def test_sparse_audio_runs_are_extracted_in_one_source_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source = root / 'source.mkv'
+            source.write_bytes(b'mkv')
+
+            def extract_tracks(command, **_kwargs):
+                _write_extracted_tracks(list(command))
+                return SimpleNamespace(returncode=0)
+
+            with patch(
+                    'src.runtime.audio_conversion.run_command',
+                    side_effect=extract_tracks,
+            ) as run:
+                extracted_audio = _extract_selected_audio_tracks(
+                    'ffmpeg',
+                    str(source),
+                    str(root),
+                    {1: 0, 2: 1},
+                    (1, 2),
+                    24,
+                    {1: ((0.0, 10.0), (12.0, 8.0))},
+                )
+
+            self.assertEqual(run.call_count, 1)
+            command = run.call_args.args[0]
+            self.assertIn('-copyts', command)
+            self.assertEqual(command.count('-map'), 3)
+            self.assertEqual(command.count('-af'), 3)
+            self.assertEqual(command.count('asetpts=N/SR/TB'), 1)
+            self.assertEqual(len(extracted_audio[1]), 2)
+            self.assertEqual(len(extracted_audio[2]), 1)
+            self.assertEqual(
+                extracted_audio[1][1].timeline_start_seconds,
+                12.0,
+            )
+
+    def test_duration_fallback_uses_largest_run_loss_instead_of_sum(self) -> None:
+        extracted_runs = (
+            _ExtractedAudioRun(0.0, 10.0, 'run-0.w64'),
+            _ExtractedAudioRun(12.0, 10.0, 'run-1.w64'),
+        )
+        with patch(
+                'src.runtime.audio_conversion.probe_audio_stream',
+                side_effect=[
+                    ('', 9.4),
+                    ('', 9.4),
+                ],
+        ):
+            accepted = converted_audio_runs_are_acceptable(
+                'ffprobe',
+                extracted_runs,
+                ('run-0.opus', 'run-1.opus'),
+                1,
+                'source.mkv',
+                1.0,
+            )
+
+        self.assertTrue(accepted)
+
+    def test_duration_fallback_includes_loss_during_source_decode(self) -> None:
+        extracted_runs = (
+            _ExtractedAudioRun(0.0, None, 'run-0.w64'),
+        )
+        with patch(
+                'src.runtime.audio_conversion.probe_audio_stream',
+                return_value=('', 7.5),
+        ) as probe:
+            accepted = converted_audio_runs_are_acceptable(
+                'ffprobe',
+                extracted_runs,
+                ('run-0.flac',),
+                1,
+                'source.mkv',
+                1.0,
+                10.0,
+            )
+
+        self.assertFalse(accepted)
+        probe.assert_called_once_with('ffprobe', 'run-0.flac')
+
+    def test_sparse_converted_runs_restore_leading_and_middle_gaps(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            converted_paths = (root / 'run-0.opus', root / 'run-1.opus')
+            for path in converted_paths:
+                path.write_bytes(b'opus')
+            output = root / 'timeline.mka'
+            extracted_runs = (
+                _ExtractedAudioRun(3.0, 10.0, 'run-0.w64'),
+                _ExtractedAudioRun(15.0, 8.0, 'run-1.w64'),
+            )
+
+            def mux_runs(command, **_kwargs):
+                Path(command[command.index('-o') + 1]).write_bytes(b'mka')
+                return SimpleNamespace(returncode=0)
+
+            with (
+                    patch(
+                        'src.runtime.audio_conversion.mkvtoolnix_ui_language_arg',
+                        return_value='',
+                    ),
+                    patch(
+                        'src.runtime.audio_conversion.run_command',
+                        side_effect=mux_runs,
+                    ) as run,
+                    patch(
+                        'src.runtime.audio_conversion._probe_audio_packet_end',
+                        side_effect=(9.9, 8.0),
+                    ),
+            ):
+                replacement, initial_delay_ms = _mux_converted_audio_runs(
+                    'mkvmerge',
+                    'ffprobe',
+                    1,
+                    extracted_runs,
+                    tuple(str(path) for path in converted_paths),
+                    str(output),
+                )
+
+            command = run.call_args_list[-1].args[0]
+            self.assertEqual(replacement, str(output))
+            self.assertEqual(initial_delay_ms, 3000)
+            self.assertEqual(
+                command[command.index('--append-to') + 1],
+                '1:0:0:0',
+            )
+            self.assertIn('0:2100', command)
+
+    def test_duplicate_fingerprint_includes_sparse_gap_positions(self) -> None:
+        audio_tracks = [
+            _track(1, 'audio', 'A_AC3', language='eng'),
+            _track(2, 'audio', 'A_AC3', language='eng'),
+        ]
+        extracted = {
+            1: (
+                _ExtractedAudioRun(0.0, 10.0, '1-0.w64'),
+                _ExtractedAudioRun(12.0, 8.0, '1-1.w64'),
+            ),
+            2: (
+                _ExtractedAudioRun(0.0, 10.0, '2-0.w64'),
+                _ExtractedAudioRun(13.0, 8.0, '2-1.w64'),
+            ),
+        }
+        with patch(
+                'src.runtime.audio_conversion._analyze_audio_track',
+                return_value=(-20.0, 'same-pcm'),
+        ):
+            kept = _selected_audio_after_cleanup(
+                'ffmpeg',
+                'source.mkv',
+                audio_tracks,
+                (1, 2),
+                {},
+                extracted,
+            )
+
+        self.assertEqual(kept, [1, 2])
+
     def test_selected_audio_is_extracted_in_one_source_pass(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -1077,8 +1339,8 @@ class AudioAnalysisTests(unittest.TestCase):
             self.assertEqual(command.count('-map'), 2)
             self.assertEqual(command.count('w64'), 2)
             self.assertEqual(command.count('pcm_s24le'), 2)
-            self.assertEqual(Path(extracted_audio[1]).suffix, '.w64')
-            self.assertEqual(Path(extracted_audio[3]).suffix, '.w64')
+            self.assertEqual(Path(extracted_audio[1][0].wave64_path).suffix, '.w64')
+            self.assertEqual(Path(extracted_audio[3][0].wave64_path).suffix, '.w64')
             self.assertNotIn(2, extracted_audio)
 
     def test_failed_batch_extraction_retries_each_track_and_skips_failures(self) -> None:

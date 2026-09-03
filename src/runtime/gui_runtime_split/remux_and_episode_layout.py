@@ -1371,9 +1371,26 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 convert_immersive_audio_to_flac=(
                     self._app_config.remux.convert_immersive_audio_to_flac
                 ),
+                allow_partial_missing_non_video_tracks=(
+                    bool(getattr(
+                        getattr(self._app_config, 'remux', None),
+                        'allow_partial_missing_non_video_tracks',
+                        False,
+                    ))
+                ),
                 audio_encoding=self._captured_audio_encoding_settings(),
                 track_selection_config=copy.deepcopy(getattr(self, '_track_selection_config', {}) or {}),
                 track_language_config=copy.deepcopy(getattr(self, '_track_language_config', {}) or {}),
+                main_alternate_mpls={
+                    str(main_path): tuple(
+                        os.path.normpath(str(path))
+                        for path in (info.get('mpls_paths') or ())
+                        if str(path).strip()
+                    )
+                    for main_path, info in (
+                        getattr(self, '_whole_main_match_track_info_by_main', {}) or {}
+                    ).items()
+                },
                 ensure_tools=False,
             )
         except Exception:

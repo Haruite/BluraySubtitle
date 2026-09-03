@@ -23,6 +23,7 @@ from src.exports.utils import (
     run_command,
 )
 from src.runtime.audio_conversion import (
+    audio_gap_sidecar_path,
     mux_with_audio_conversion,
     validate_audio_cleanup_tools,
     validate_audio_conversion_tools,
@@ -88,6 +89,12 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         self.track_selection_config = copy.deepcopy(
             request.track_selection_config or {}
         )
+        alternate_mpls_by_main = {
+            os.path.normcase(os.path.abspath(main_path)): tuple(paths or ())
+            for main_path, paths in (request.main_alternate_mpls or {}).items()
+            if str(main_path).strip()
+        }
+        self.main_alternate_mpls = dict(alternate_mpls_by_main)
         output_parent = os.path.dirname(os.path.normpath(request.output_folder))
         if os.path.exists(request.output_folder) and not os.path.isdir(request.output_folder):
             raise NotADirectoryError(translate_text('Output folder does not exist'))
@@ -286,8 +293,35 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             )
             main_track_configuration.setdefault('audio', list(audio_tracks))
             main_track_configuration.setdefault('subtitle', list(subtitle_tracks))
+            alternate_mpls_paths = tuple(
+                os.path.normpath(path)
+                for path in alternate_mpls_by_main.get(selected_norm, ())
+                if str(path).strip()
+            )
             selected_pid_slots = _svc_cls()._selected_pid_slots_for_mpls(
-                mpls_path, main_track_configuration
+                mpls_path,
+                main_track_configuration,
+                alternate_mpls_paths=alternate_mpls_paths,
+            )
+            selected_pid_tuples = [
+                (str(slot['type']), int(slot['pid'])) for slot in selected_pid_slots
+            ]
+            selected_source_slots = tuple(
+                (
+                    os.path.normpath(str(slot.get('_mpls_source_path') or mpls_path)),
+                    str(slot.get('_mpls_bucket') or slot.get('type') or ''),
+                    int(slot.get('_mpls_slot_index') or 0),
+                )
+                for slot in selected_pid_slots
+            )
+            language_overrides = _svc_cls()._mpls_default_language_map(
+                mpls_path,
+                selected_pid_tuples,
+                (request.track_language_config or {}).get(
+                    media_track_key('main', mpls_path), {}
+                ) or {},
+                alternate_mpls_paths=alternate_mpls_paths,
+                selected_source_slots=selected_source_slots,
             )
             jobs.append(RemuxMainJob(
                 configuration_keys=tuple(matching_keys),
@@ -309,17 +343,12 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 ),
                 track_language_overrides=tuple(
                     (str(track_index), str(language).strip())
-                    for track_index, language in (
-                        (request.track_language_config or {}).get(
-                            media_track_key('main', mpls_path), {}
-                        ) or {}
-                    ).items()
+                    for track_index, language in language_overrides.items()
                     if str(language).strip()
                 ),
-                track_pids=tuple(
-                    (str(slot['type']), int(slot['pid']))
-                    for slot in selected_pid_slots
-                ),
+                track_pids=tuple(selected_pid_tuples),
+                alternate_mpls_paths=alternate_mpls_paths,
+                track_source_slots=selected_source_slots,
             ))
 
         if unmatched_keys:
@@ -512,29 +541,19 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
 
             selected_pid_slots: list[dict[str, object]] = []
             if entry.mpls_file and not is_image_output:
-                service_class = _svc_cls()
-                selected_pid_builder = getattr(
-                    service_class, '_selected_pid_slots_for_mpls', None
+                selected_pid_slots = _svc_cls()._selected_pid_slots_for_mpls(
+                    source_path, selected_tracks
                 )
-                if callable(selected_pid_builder):
-                    selected_pid_slots = selected_pid_builder(
-                        source_path, selected_tracks
-                    )
-                else:
-                    # Compatibility for a minimal injected planning service. Product
-                    # services always provide the canonical MPLS identify builder.
-                    for config_name, track_type in (
-                            ('video', 'video'),
-                            ('audio', 'audio'),
-                            ('subtitle', 'subtitles')):
-                        for raw_pid in selected_tracks.get(config_name) or []:
-                            try:
-                                selected_pid_slots.append({
-                                    'type': track_type,
-                                    'pid': int(str(raw_pid).strip(), 0),
-                                })
-                            except (TypeError, ValueError):
-                                continue
+                selected_tracks = {
+                    'audio': [
+                        str(int(slot['pid'])) for slot in selected_pid_slots
+                        if str(slot.get('type') or '') == 'audio'
+                    ],
+                    'subtitle': [
+                        str(int(slot['pid'])) for slot in selected_pid_slots
+                        if str(slot.get('type') or '') in ('subtitle', 'subtitles')
+                    ],
+                }
 
             normalized_output = os.path.normcase(output_path)
             episode_main_mpls_path = ''
@@ -577,6 +596,26 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 occupied_outputs[normalized_output] = 'sp'
 
             language_overrides = track_language_config.get(entry.track_key) or {}
+            if entry.mpls_file and not is_image_output:
+                selected_source_slots = tuple(
+                    (
+                        os.path.normpath(str(slot.get('_mpls_source_path') or source_path)),
+                        str(slot.get('_mpls_bucket') or slot.get('type') or ''),
+                        int(slot.get('_mpls_slot_index') or 0),
+                    )
+                    for slot in selected_pid_slots
+                )
+                language_overrides = _svc_cls()._mpls_default_language_map(
+                    source_path,
+                    [
+                        (str(slot['type']), int(slot['pid']))
+                        for slot in selected_pid_slots
+                    ],
+                    language_overrides,
+                    selected_source_slots=selected_source_slots,
+                )
+            else:
+                selected_source_slots = ()
             output_extension = os.path.splitext(output_path)[1].lower()
             if language_overrides and output_extension not in ('.mkv', '.mka', '.mks'):
                 raise ValueError(
@@ -607,6 +646,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     (str(slot['type']), int(slot['pid']))
                     for slot in selected_pid_slots
                 ),
+                track_source_slots=selected_source_slots,
             ))
 
         if any(job.track_language_overrides for job in planned_jobs):
@@ -667,6 +707,11 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
     ) -> list[str]:
         """Execute each planned main-playlist command and require every planned output."""
         self._remux_chapter_skip_paths = set()
+        self._remux_fallback_track_slots = {}
+        self._remux_fallback_track_source_slots = {}
+        self._remux_fallback_track_signatures = {}
+        self._remux_fallback_audio_timelines = {}
+        self._remux_fallback_audio_timeline_durations = {}
         completed_outputs: list[str] = []
         for job_index, job in enumerate(jobs, start=1):
             if cancel_event and cancel_event.is_set():
@@ -699,6 +744,13 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 self._progress(text=msg)
 
             main_pid_slots = list(job.track_pids)
+            if job.mpls_path and main_pid_slots:
+                main_pid_slots = self._validate_mpls_tracks_for_execution(
+                    job.mpls_path,
+                    main_pid_slots,
+                    alternate_mpls_paths=job.alternate_mpls_paths,
+                    selected_source_slots=job.track_source_slots,
+                )
             mpls_identification: Optional[dict[str, object]] = None
             if not main_pid_slots:
                 _svc_cls()._log_mkvmerge_identify_slot_gap(
@@ -711,39 +763,18 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 identify_ok = False
             else:
                 mpls_identification = _svc_cls()._mkvmerge_identify_json(job.mpls_path)
-                reference_map = _svc_cls()._mkvmerge_pid_id_map(
-                    job.mpls_path, mpls_identification
+                self._set_dovi_mux_plan_for_mpls(
+                    job.mpls_path, report_detected_pair=True
                 )
-                selected_slots = [
-                    {'type': str(track_type), 'pid': int(pid)}
-                    for track_type, pid in main_pid_slots
-                ]
-                missing_slots = [
-                    slot for slot in selected_slots
-                    if (str(slot['type']), int(slot['pid'])) not in reference_map
-                ]
-                if missing_slots:
-                    _svc_cls()._log_mkvmerge_identify_slot_gap(
-                        job.mpls_path,
-                        '',
-                        selected_slots,
-                        mpls_identification,
-                        'selected PID has no direct MPLS PID-to-track-ID mapping',
-                        missing_slots=missing_slots,
-                    )
-                    identify_ok = False
-                else:
-                    self._set_dovi_mux_plan_for_mpls(
-                        job.mpls_path, report_detected_pair=True
-                    )
-                    identify_ok = self._mkvmerge_identify_covers_remux_slots(
-                        job.mpls_path,
-                        list(job.audio_tracks),
-                        list(job.subtitle_tracks),
-                        job.command,
-                        selected_pid_slots=main_pid_slots,
-                        identification=mpls_identification,
-                    )
+                identify_ok = self._mkvmerge_identify_covers_remux_slots(
+                    job.mpls_path,
+                    list(job.audio_tracks),
+                    list(job.subtitle_tracks),
+                    selected_pid_slots=main_pid_slots,
+                    identification=mpls_identification,
+                    alternate_mpls_paths=job.alternate_mpls_paths,
+                    selected_source_slots=job.track_source_slots,
+                )
             if not identify_ok:
                 print('[remux-fallback] skipping primary mkvmerge (see identify check lines above)')
             resolved_command = job.command
@@ -810,6 +841,8 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                         'cancel_event': cancel_event,
                         'progress_base': job_progress_base,
                         'progress_span': job_progress_end - job_progress_base,
+                        'alternate_mpls_paths': job.alternate_mpls_paths,
+                        'selected_source_slots': job.track_source_slots,
                     }
                     fallback_kwargs['selected_pid_slots'] = main_pid_slots
                     fallback_ok = self._try_remux_mpls_split_outputs_track_aligned(
@@ -826,6 +859,8 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     fallback_kwargs = {
                         'cancel_event': cancel_event,
                         'selected_pid_slots': main_pid_slots,
+                        'alternate_mpls_paths': job.alternate_mpls_paths,
+                        'selected_source_slots': job.track_source_slots,
                     }
                     fallback_ok = self._try_remux_mpls_track_aligned(
                         job.mpls_path,
@@ -851,6 +886,18 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             if job.track_language_overrides:
                 try:
                     for output_path in job.expected_outputs:
+                        output_pid_slots = list(
+                            self._remux_fallback_track_slots.get(
+                                os.path.normcase(os.path.abspath(output_path)),
+                                main_pid_slots,
+                            )
+                        )
+                        output_source_slots = tuple(
+                            self._remux_fallback_track_source_slots.get(
+                                os.path.normcase(os.path.abspath(output_path)),
+                                job.track_source_slots,
+                            )
+                        )
                         self._progress(
                             text=f'{self.t("Correcting track languages: ")}'
                                  f'{os.path.basename(output_path)}'
@@ -866,7 +913,8 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                         if main_pid_slots:
                             _svc_cls()._fix_output_track_languages_with_mkvpropedit(
                                 *language_args,
-                                selected_pid_slots=main_pid_slots,
+                                selected_pid_slots=output_pid_slots,
+                                selected_source_slots=output_source_slots,
                             )
                         else:
                             _svc_cls()._fix_output_track_languages_with_mkvpropedit(*language_args)
@@ -883,11 +931,17 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 warning_list = []
                 self.remux_warnings = warning_list
             for output_path in job.expected_outputs:
+                output_pid_slots = list(
+                    self._remux_fallback_track_slots.get(
+                        os.path.normcase(os.path.abspath(output_path)),
+                        main_pid_slots,
+                    )
+                )
                 try:
                     output_warnings = self._remux_output_track_warnings(
                         output_path,
                         getattr(self, '_dovi_mux_plan', None),
-                        main_pid_slots,
+                        output_pid_slots,
                     )
                 except TaskCancelled:
                     raise
@@ -1224,7 +1278,21 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     )
                     MKV(expected_output).add_chapter(True, chapter_path)
                     if os.path.normcase(expected_output) != os.path.normcase(final_output):
+                        source_key = os.path.normcase(os.path.abspath(expected_output))
+                        destination_key = os.path.normcase(os.path.abspath(final_output))
                         os.rename(expected_output, final_output)
+                        for cache_name in (
+                                '_remux_fallback_track_slots',
+                                '_remux_fallback_track_source_slots',
+                                '_remux_fallback_track_signatures',
+                                '_remux_fallback_audio_timelines',
+                                '_remux_fallback_audio_timeline_durations'):
+                            cache = getattr(self, cache_name, None)
+                            if not isinstance(cache, dict):
+                                continue
+                            cached_value = cache.pop(source_key, None)
+                            if cached_value is not None:
+                                cache[destination_key] = cached_value
                     final_by_configuration_key[configuration_key] = final_output
 
         ordered_keys = sorted(self.configuration)
@@ -1244,6 +1312,9 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         self.sub_files = list(request.subtitle_files)
         self.episode_subtitle_languages = list(request.episode_subtitle_languages)
         self._language_code = request.language_code
+        self.allow_partial_missing_non_video_tracks = bool(
+            request.allow_partial_missing_non_video_tracks
+        )
         if request.clean_audio_tracks:
             validate_audio_cleanup_tools()
         dst_folder, jobs = self._prepare_remux_main_jobs(request)
@@ -1307,6 +1378,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 request.clean_audio_tracks
                 or request.convert_lossless_audio_to_flac
                 or subtitle_by_output
+                or bool(getattr(self, '_remux_fallback_audio_timelines', {}))
         ):
             main_matroska_outputs = []
             sp_matroska_outputs = []
@@ -1319,6 +1391,9 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                             request.clean_audio_tracks
                             or request.convert_lossless_audio_to_flac
                             or subtitle_input[0]
+                            or normalized_output_path in getattr(
+                                self, '_remux_fallback_audio_timelines', {}
+                            )
                         )
                 ):
                     output_entry = (output_path, *subtitle_input)
@@ -1335,9 +1410,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                             None,
                             (),
                             convert_all_lossless_to_flac=request.convert_lossless_audio_to_flac,
-                            convert_immersive_audio_to_flac=(
-                                request.convert_immersive_audio_to_flac
-                            ),
+                            convert_immersive_audio_to_flac=request.convert_immersive_audio_to_flac,
                         )
                 for output_group, progress_start, progress_span in (
                         (main_matroska_outputs, 500, 400),
@@ -1370,14 +1443,28 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                             selected_subtitle_tracks=None,
                             audio_codec_choices=(),
                             convert_all_lossless_to_flac=request.convert_lossless_audio_to_flac,
-                            convert_immersive_audio_to_flac=(
-                                request.convert_immersive_audio_to_flac
-                            ),
+                            convert_immersive_audio_to_flac=request.convert_immersive_audio_to_flac,
                             clean_audio_tracks=request.clean_audio_tracks,
                             subtitle_file=subtitle_path,
                             subtitle_language=subtitle_language,
                             audio_encoding=request.audio_encoding,
                             wave64_bit_depth=24,
+                            audio_timeline_by_track=dict(
+                                getattr(
+                                    self, '_remux_fallback_audio_timelines', {}
+                                ).get(
+                                    os.path.normcase(os.path.abspath(output_path)),
+                                    {},
+                                )
+                            ),
+                            audio_timeline_duration_seconds=(
+                                getattr(
+                                    self,
+                                    '_remux_fallback_audio_timeline_durations',
+                                    {},
+                                ).get(os.path.normcase(os.path.abspath(output_path)))
+                            ),
+                            write_audio_gaps=True,
                         )
                         self._progress(
                             progress_start + int(
@@ -1390,6 +1477,9 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                         shutil.rmtree(output_path, ignore_errors=True)
                     elif os.path.isfile(output_path):
                         force_remove_file(output_path)
+                    sidecar_path = audio_gap_sidecar_path(output_path)
+                    if os.path.isfile(sidecar_path):
+                        force_remove_file(sidecar_path)
                 raise
         self.completion()
         self._progress(1000, 'Done')
@@ -1736,6 +1826,13 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 subtitle_language=row.subtitle_language,
                 audio_encoding=request.settings.audio_encoding,
                 wave64_bit_depth=(24 if request.input_mode == 'bdmv' else 32),
+                audio_timeline_by_track=dict(
+                    getattr(self, '_remux_fallback_audio_timelines', {}).get(
+                        os.path.normcase(os.path.abspath(source_path)),
+                        {},
+                    )
+                ),
+                detect_audio_gaps=(request.input_mode == 'remux'),
                 auto_crop_black_borders=request.settings.auto_crop_black_borders,
                 vpy_denoise_strength=request.settings.vpy_denoise_strength,
                 vpy_dehalo_strength=request.settings.vpy_dehalo_strength,
@@ -1817,6 +1914,11 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     source_path = os.path.join(current_folder, filename)
                     if os.path.normcase(os.path.abspath(source_path)) in encoded_source_paths:
                         continue
+                    if filename.lower().endswith('.mkv.audio-gaps.json') or (
+                            filename.lower().endswith('.mka.audio-gaps.json')):
+                        owner_path = source_path[:-len('.audio-gaps.json')]
+                        if os.path.normcase(os.path.abspath(owner_path)) in encoded_source_paths:
+                            continue
                     relative_path = filename if relative_folder == '.' else os.path.join(relative_folder, filename)
                     destination_path = os.path.join(request.output_folder, relative_path)
                     normalized_destination = os.path.normcase(os.path.abspath(destination_path))
@@ -2001,6 +2103,15 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                         wave64_bit_depth=(
                             24 if request.input_mode == 'bdmv' else 32
                         ),
+                        audio_timeline_by_track=dict(
+                            getattr(
+                                self, '_remux_fallback_audio_timelines', {}
+                            ).get(
+                                os.path.normcase(os.path.abspath(source_path)),
+                                {},
+                            )
+                        ),
+                        detect_audio_gaps=(request.input_mode == 'remux'),
                         preserve_failure_artifacts=True,
                         progress_callback=lambda operation, name=progress_name: self._progress(
                             text=self.t('{operation}: {name}').format(
@@ -2099,6 +2210,9 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         self.checked = False
         self.movie_mode = request.movie_mode
         self.mux_dolby_vision = request.mux_dolby_vision
+        self.allow_partial_missing_non_video_tracks = bool(
+            request.allow_partial_missing_non_video_tracks
+        )
 
         if request.input_mode == 'remux':
             return self._encode_mkv_rows(
@@ -2150,9 +2264,13 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             movie_mode=request.movie_mode,
             mux_dolby_vision=preserve_dolby_vision,
             convert_lossless_audio_to_flac=False,
+            allow_partial_missing_non_video_tracks=(
+                request.allow_partial_missing_non_video_tracks
+            ),
             clean_audio_tracks=False,
             track_selection_config=copy.deepcopy(request.track_selection_config or {}),
             track_language_config=copy.deepcopy(request.track_language_config or {}),
+            main_alternate_mpls=copy.deepcopy(request.main_alternate_mpls or {}),
             ensure_tools=False,
         )
 
@@ -2258,7 +2376,9 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                     staged_main_files,
                 )
             }
-            linked_sp_audio_codec_by_pid: dict[str, dict[int, str]] = {}
+            linked_sp_audio_codec_by_signature: dict[
+                str, dict[tuple[tuple[str, int], ...], str]
+            ] = {}
             for sp_row in request.sp_rows:
                 if not (sp_row.selected and sp_row.uses_main_output and sp_row.sp_entry):
                     continue
@@ -2266,29 +2386,50 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 if not entry.mpls_file:
                     continue
                 output_key = os.path.normcase(os.path.abspath(sp_row.output_path))
-                provider_by_pid = linked_sp_audio_codec_by_pid.setdefault(output_key, {})
-                for pid_text, codec in zip(
+                provider_by_signature = linked_sp_audio_codec_by_signature.setdefault(
+                    output_key, {}
+                )
+                source_mpls = os.path.abspath(os.path.join(
+                    entry.bdmv_root, 'BDMV', 'PLAYLIST', entry.mpls_file
+                ))
+                for selection_key, codec in zip(
                         sp_row.audio_tracks, sp_row.audio_codec_choices):
-                    try:
-                        transport_pid = int(str(pid_text).strip(), 0)
-                    except (TypeError, ValueError):
+                    selected_slots = _svc_cls()._selected_pid_slots_for_mpls(
+                        source_mpls,
+                        {'audio': [str(selection_key)]},
+                    )
+                    audio_slot = next(
+                        (
+                            slot for slot in selected_slots
+                            if str(slot.get('type') or '') == 'audio'
+                        ),
+                        None,
+                    )
+                    if audio_slot is None:
                         continue
-                    provider_by_pid.setdefault(transport_pid, codec)
+                    signature = _svc_cls()._mpls_track_mapping_signature(audio_slot)
+                    if signature:
+                        provider_by_signature.setdefault(signature, codec)
 
             linked_sp_audio_codecs: dict[str, tuple[str, ...]] = {}
             for row in request.main_rows:
                 output_key = os.path.normcase(os.path.abspath(row.output_path))
                 staged_path = staged_main_by_key[int(row.configuration_key)]
                 staged_key = os.path.normcase(os.path.abspath(staged_path))
-                original_pid_map = (
-                    getattr(self, '_episode_sp_mux_original_main_map', {}) or {}
+                original_signature_map = (
+                    getattr(self, '_episode_sp_mux_original_main_signatures', {}) or {}
                 ).get(staged_key, {})
-                original_pids = set(original_pid_map.values())
-                provider_by_pid = linked_sp_audio_codec_by_pid.get(output_key, {})
+                final_signature_map = (
+                    getattr(self, '_episode_sp_mux_last_after_mux_signatures', {}) or {}
+                ).get(staged_key, {})
+                provider_by_signature = linked_sp_audio_codec_by_signature.get(
+                    output_key, {}
+                )
                 linked_sp_audio_codecs[output_key] = tuple(
-                    provider_by_pid[transport_pid]
-                    for transport_pid in sorted(provider_by_pid)
-                    if transport_pid not in original_pids
+                    provider_by_signature[signature]
+                    for track_id, signature in sorted(final_signature_map.items())
+                    if track_id not in original_signature_map
+                    and signature in provider_by_signature
                 )
             resolved_main_rows = [
                 replace(

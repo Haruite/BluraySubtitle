@@ -88,6 +88,48 @@ class _SpExecutionService(SubtitleChapterPipelineMixin):
         return '0', '', ''
 
 
+def _selected_pid_slots_for_test(path, selected_tracks):
+    return [
+        {
+            'type': track_type,
+            'pid': int(pid),
+            '_mpls_source_path': os.path.normpath(path),
+            '_mpls_bucket': track_type,
+            '_mpls_slot_index': slot_index,
+        }
+        for config_name, track_type in (
+            ('video', 'video'), ('audio', 'audio'), ('subtitle', 'subtitles')
+        )
+        for slot_index, pid in enumerate(selected_tracks.get(config_name) or [])
+    ]
+
+
+def _language_map_for_test(_path, _slots, configured=None, **_kwargs):
+    return dict(configured or {})
+
+
+def _logical_slots_for_selection_test(_path, selected_slots, **_kwargs):
+    rows = []
+    for track_type, pid in selected_slots:
+        codec_type = 'subtitle' if track_type == 'subtitles' else track_type
+        occurrence = {
+            'pid': int(pid),
+            'codec_type': codec_type,
+            'codec_name': 'hevc' if track_type == 'video' else 'ac3',
+            'stream_type': 0x24 if track_type == 'video' else 0x81,
+        }
+        rows.append({
+            'pid': int(pid),
+            'language': 'und',
+            '_logical_type': track_type,
+            '_logical_pid': int(pid),
+            '_mpls_slot_key': (track_type, int(pid)),
+            '_mpls_occurrences': (dict(occurrence), dict(occurrence)),
+            '_mpls_append_compatible': True,
+        })
+    return rows, []
+
+
 def _plan_sp_jobs(
         root: Path,
         destination: Path,
@@ -100,7 +142,9 @@ def _plan_sp_jobs(
         _probe_m2ts_for_remux_source=lambda _path: (
             str(root / 'BDMV' / 'STREAM' / '00002.m2ts'),
             {},
-        )
+        ),
+        _selected_pid_slots_for_mpls=_selected_pid_slots_for_test,
+        _mpls_default_language_map=_language_map_for_test,
     )
     service = _PlanningService()
     service.movie_mode = movie_mode
@@ -127,7 +171,9 @@ class SpPlanningTests(unittest.TestCase):
                 _probe_m2ts_for_remux_source=lambda _path: (
                     str(root / 'BDMV' / 'STREAM' / '00002.m2ts'),
                     {},
-                )
+                ),
+                _selected_pid_slots_for_mpls=_selected_pid_slots_for_test,
+                _mpls_default_language_map=_language_map_for_test,
             )
             with patch.object(remux_module, '_svc_cls', return_value=fake_service_class):
                 jobs = _PlanningService()._prepare_sp_jobs(
@@ -154,7 +200,9 @@ class SpPlanningTests(unittest.TestCase):
                 _probe_m2ts_for_remux_source=lambda _path: (
                     str(root / 'BDMV' / 'STREAM' / '00002.m2ts'),
                     {},
-                )
+                ),
+                _selected_pid_slots_for_mpls=_selected_pid_slots_for_test,
+                _mpls_default_language_map=_language_map_for_test,
             )
             with patch.object(remux_module, '_svc_cls', return_value=fake_service_class):
                 with self.assertRaisesRegex(ValueError, 'no captured track selection'):
@@ -176,7 +224,9 @@ class SpPlanningTests(unittest.TestCase):
                 _probe_m2ts_for_remux_source=lambda _path: (
                     str(root / 'BDMV' / 'STREAM' / '00002.m2ts'),
                     {},
-                )
+                ),
+                _selected_pid_slots_for_mpls=_selected_pid_slots_for_test,
+                _mpls_default_language_map=_language_map_for_test,
             )
             with patch.object(remux_module, '_svc_cls', return_value=fake_service_class):
                 with self.assertRaisesRegex(FileExistsError, 'already exists'):
@@ -269,7 +319,7 @@ class SpPlanningTests(unittest.TestCase):
 
 
 class SpExecutionTests(unittest.TestCase):
-    def test_multiple_episode_sp_rows_deduplicate_and_sort_transport_pids(self) -> None:
+    def test_multiple_episode_sp_rows_deduplicate_physical_track_relations(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             playlist = root / 'BDMV' / 'PLAYLIST'
@@ -329,15 +379,27 @@ class SpExecutionTests(unittest.TestCase):
                 return SimpleNamespace(returncode=1)
 
             service = _SpExecutionService()
-            service._compute_mkv_id_to_m2ts_pid_for_main_mpls = lambda _path: {
-                0: 0x1011,
-                1: 0x1100,
+            service._compute_mkv_id_to_mpls_track_signature_for_main_mpls = lambda _path: {
+                0: (('main.m2ts', 0x1011),),
+                1: (('main.m2ts', 0x1100),),
             }
+            source_signatures = (
+                {
+                    1: (('episode.m2ts', 0x1103),),
+                    2: (('episode.m2ts', 0x1101),),
+                },
+                {
+                    1: (('episode.m2ts', 0x1101),),
+                    2: (('episode.m2ts', 0x1102),),
+                },
+                {1: (('episode.m2ts', 0x1102),)},
+            )
             with patch.object(sp_module, '_svc_cls', return_value=fake_service_class), patch.object(
                     sp_module, 'MKV_MERGE_PATH', 'mkvmerge'), patch.object(
                     sp_module, 'mkvtoolnix_ui_language_arg', return_value=''), patch.object(
                     sp_module, 'run_command', side_effect=run):
-                for sp_path, selected_ids in zip(sp_paths, (['1', '2'], ['1', '2'], ['1'])):
+                for sp_path, selected_ids, signatures in zip(
+                        sp_paths, (['1', '2'], ['1', '2'], ['1']), source_signatures):
                     self.assertTrue(service._mux_episode_linked_sp_mkvmerge(
                         episode_mkv=str(episode),
                         sp_mpls_path=str(sp_path),
@@ -346,23 +408,30 @@ class SpExecutionTests(unittest.TestCase):
                         selected_sp_subtitle_track_ids=[],
                         language_by_sp_track_id={},
                         cancel_event=None,
+                        source_signature_by_track_id=signatures,
                     ))
 
             mux_commands = [command for command in commands if command[0] == 'mkvmerge']
             self.assertEqual(len(mux_commands), 2)
             self.assertEqual(
                 mux_commands[0][mux_commands[0].index('--track-order') + 1],
-                '0:0,0:1,1:2,1:1',
+                '0:0,0:1,1:1,1:2',
             )
             self.assertEqual(
                 mux_commands[1][mux_commands[1].index('--track-order') + 1],
-                '0:0,0:1,0:2,1:2,0:3',
+                '0:0,0:1,0:2,0:3,1:2',
             )
             self.assertEqual(
-                service._episode_sp_mux_last_after_mux_map[
+                service._episode_sp_mux_last_after_mux_signatures[
                     os.path.normcase(os.path.abspath(episode))
                 ],
-                {0: 0x1011, 1: 0x1100, 2: 0x1101, 3: 0x1102, 4: 0x1103},
+                {
+                    0: (('main.m2ts', 0x1011),),
+                    1: (('main.m2ts', 0x1100),),
+                    2: (('episode.m2ts', 0x1103),),
+                    3: (('episode.m2ts', 0x1101),),
+                    4: (('episode.m2ts', 0x1102),),
+                },
             )
 
     def test_video_only_sp_disables_unselected_audio_and_subtitles(self) -> None:
@@ -487,9 +556,9 @@ class SpExecutionTests(unittest.TestCase):
                 return SimpleNamespace(returncode=1)
 
             service = _SpExecutionService()
-            service._compute_mkv_id_to_m2ts_pid_for_main_mpls = lambda _path: {
-                0: 0x1011,
-                1: 0x1100,
+            service._compute_mkv_id_to_mpls_track_signature_for_main_mpls = lambda _path: {
+                0: (('main.m2ts', 0x1011),),
+                1: (('main.m2ts', 0x1100),),
             }
             with patch.object(sp_module, '_svc_cls', return_value=fake_service_class), patch.object(
                     sp_module, 'Chapter', return_value=SimpleNamespace()), patch.object(
@@ -516,26 +585,7 @@ class SpExecutionTests(unittest.TestCase):
             self.assertIn('-S', sp_options)
             self.assertEqual(episode.read_bytes(), b'muxed')
 
-    def test_episode_sp_transport_pid_uses_only_identify_pid_fields(self) -> None:
-        fake_service_class = SimpleNamespace(
-            _int_from_mkvmerge_prop=lambda value: int(value) if value is not None else None,
-        )
-        with patch.object(sp_module, '_svc_cls', return_value=fake_service_class):
-            self.assertEqual(
-                SubtitleChapterPipelineMixin._mkvmerge_ident_transport_pid({'stream_id': 0x1100}),
-                0x1100,
-            )
-            self.assertEqual(
-                SubtitleChapterPipelineMixin._mkvmerge_ident_transport_pid(
-                    {'original_transport_stream_id': 0x1200}
-                ),
-                0x1200,
-            )
-            self.assertIsNone(
-                SubtitleChapterPipelineMixin._mkvmerge_ident_transport_pid({'number': 0x1300})
-            )
-
-    def test_selected_episode_sp_track_without_transport_pid_fails(self) -> None:
+    def test_selected_episode_sp_track_without_physical_mapping_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             playlist = root / 'BDMV' / 'PLAYLIST'
@@ -565,7 +615,7 @@ class SpExecutionTests(unittest.TestCase):
             with patch.object(sp_module, '_svc_cls', return_value=fake_service_class), patch.object(
                     sp_module, 'Chapter', return_value=SimpleNamespace()), patch.object(
                     sp_module, 'get_index_to_m2ts_and_offset', return_value=({1: '00001.m2ts'}, {})):
-                with self.assertRaisesRegex(RuntimeError, 'transport PID'):
+                with self.assertRaisesRegex(RuntimeError, 'M2TS/PID mapping'):
                     _SpExecutionService()._mux_episode_linked_sp_mkvmerge(
                         episode_mkv=str(episode),
                         sp_mpls_path=str(sp_mpls),
@@ -603,6 +653,235 @@ class SpExecutionTests(unittest.TestCase):
 
 
 class TrackAlignmentTests(unittest.TestCase):
+    def test_full_match_selection_deduplicates_shared_physical_relations(self) -> None:
+        main_mpls = os.path.normpath(r'C:\disc\BDMV\PLAYLIST\00001.mpls')
+        alternate_mpls = os.path.normpath(r'C:\disc\BDMV\PLAYLIST\00002.mpls')
+
+        def row(path, track_type, pid, bucket):
+            return {
+                'pid': pid,
+                'codec_type': track_type,
+                '_mpls_source_path': path,
+                '_mpls_bucket': bucket,
+                '_mpls_slot_index': 0,
+                '_mpls_m2ts_pid_pairs': (('00001', pid),),
+                '_mpls_append_compatible': True,
+            }
+
+        streams_by_path = {
+            main_mpls: [
+                row(main_mpls, 'video', 0x1011, 'PrimaryVideoStreamEntries'),
+                row(main_mpls, 'audio', 0x1100, 'PrimaryAudioStreamEntries'),
+            ],
+            alternate_mpls: [
+                row(alternate_mpls, 'video', 0x1011, 'PrimaryVideoStreamEntries'),
+                row(alternate_mpls, 'audio', 0x1101, 'PrimaryAudioStreamEntries'),
+            ],
+        }
+        fake_service_class = SimpleNamespace(
+            _mpls_track_streams=lambda path: streams_by_path[os.path.normpath(path)],
+            _mpls_track_selection_key=MediaInfoTrackMappingMixin._mpls_track_selection_key,
+            _mpls_track_mapping_signature=MediaInfoTrackMappingMixin._mpls_track_mapping_signature,
+        )
+        configuration = {
+            'video': [],
+            'audio': [
+                'mpls-slot::00001.mpls::PrimaryAudioStreamEntries::0',
+                'mpls-slot::00002.mpls::PrimaryAudioStreamEntries::0',
+            ],
+            'subtitle': [],
+        }
+
+        with patch.object(track_module, '_svc_cls', return_value=fake_service_class):
+            selected = MediaInfoTrackMappingMixin._selected_pid_slots_for_mpls(
+                main_mpls,
+                configuration,
+                alternate_mpls_paths=(alternate_mpls,),
+            )
+
+        self.assertEqual(
+            [(slot['type'], slot['pid']) for slot in selected],
+            [('video', 0x1011), ('audio', 0x1100), ('audio', 0x1101)],
+        )
+        self.assertEqual(
+            os.path.normpath(selected[-1]['_mpls_source_path']),
+            alternate_mpls,
+        )
+
+    def test_execution_check_allows_stn_gap_and_rejects_missing_declared_pid(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            playlist = root / 'BDMV' / 'PLAYLIST'
+            stream = root / 'BDMV' / 'STREAM'
+            playlist.mkdir(parents=True)
+            stream.mkdir(parents=True)
+            mpls = playlist / '00001.mpls'
+            mpls.write_bytes(b'mpls')
+            for clip in ('00001', '00002', '00003'):
+                (stream / f'{clip}.m2ts').write_bytes(b'm2ts')
+            video_occurrence = {
+                'pid': 0x1011, 'codec_type': 'video',
+                'codec_name': 'hevc', 'stream_type': 0x24,
+            }
+            audio_first = {
+                'pid': 0x1100, 'codec_type': 'audio',
+                'codec_name': 'truehd', 'stream_type': 0x83,
+            }
+            audio_last = dict(audio_first, pid=0x1101)
+            logical_rows = [
+                {
+                    'pid': 0x1011,
+                    '_logical_type': 'video',
+                    '_logical_pid': 0x1011,
+                    '_mpls_occurrences': tuple(dict(video_occurrence) for _ in range(3)),
+                    '_mpls_append_compatible': True,
+                },
+                {
+                    'pid': 0x1100,
+                    '_logical_type': 'audio',
+                    '_logical_pid': 0x1100,
+                    '_mpls_occurrences': (audio_first, None, audio_last),
+                    '_mpls_append_compatible': True,
+                },
+            ]
+
+            def streams_for(path):
+                rows = [{
+                    'pid': 0x1011, 'codec_type': 'video',
+                    'codec_name': 'hevc', 'stream_type_id': 0x24,
+                }]
+                if not str(path).endswith('00002.m2ts'):
+                    rows.append({
+                        'pid': 0x1101 if str(path).endswith('00003.m2ts') else 0x1100,
+                        'codec_type': 'audio',
+                        'codec_name': 'truehd', 'stream_type_id': 0x83,
+                    })
+                return rows
+
+            fake_service_class = SimpleNamespace(
+                _mpls_logical_slots_for_selection=lambda *_args, **_kwargs: (logical_rows, []),
+                _m2ts_track_streams=streams_for,
+                _stream_service_id=lambda row: int(row['pid']),
+            )
+            owner = SimpleNamespace()
+            chapter = SimpleNamespace(in_out_time=[
+                ('00001', 0, 45000), ('00002', 0, 45000), ('00003', 0, 45000),
+            ])
+            with patch.object(track_module, '_svc_cls', return_value=fake_service_class), patch.object(
+                    track_module, 'Chapter', return_value=chapter):
+                retained = MediaInfoTrackMappingMixin._validate_mpls_tracks_for_execution(
+                    owner,
+                    str(mpls),
+                    [('video', 0x1011), ('audio', 0x1100)],
+                )
+
+            self.assertEqual(retained, [('video', 0x1011), ('audio', 0x1100)])
+
+            def streams_with_missing_declared_pid(path):
+                rows = streams_for(path)
+                if str(path).endswith('00003.m2ts'):
+                    return [row for row in rows if row['codec_type'] != 'audio']
+                return rows
+
+            owner = SimpleNamespace()
+            fake_service_class._m2ts_track_streams = streams_with_missing_declared_pid
+            with patch.object(track_module, '_svc_cls', return_value=fake_service_class), patch.object(
+                    track_module, 'Chapter', return_value=chapter):
+                with self.assertRaisesRegex(RuntimeError, '00003.m2ts'):
+                    MediaInfoTrackMappingMixin._validate_mpls_tracks_for_execution(
+                        owner,
+                        str(mpls),
+                        [('video', 0x1011), ('audio', 0x1100)],
+                    )
+
+            owner.allow_partial_missing_non_video_tracks = True
+            with patch.object(track_module, '_svc_cls', return_value=fake_service_class), patch.object(
+                    track_module, 'Chapter', return_value=chapter):
+                retained_with_partial_missing = (
+                    MediaInfoTrackMappingMixin._validate_mpls_tracks_for_execution(
+                        owner,
+                        str(mpls),
+                        [('video', 0x1011), ('audio', 0x1100)],
+                    )
+                )
+            self.assertEqual(
+                retained_with_partial_missing,
+                [('video', 0x1011), ('audio', 0x1100)],
+            )
+
+    def test_sparse_logical_track_concat_uses_one_chained_append_command(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            parts = [root / f'part-{index}.mkv' for index in range(3)]
+            for part in parts:
+                part.write_bytes(b'part')
+            output = root / 'output.mkv'
+            video = {
+                'type': 'video', 'pid': 0x1011,
+                '_logical_type': 'video', '_logical_pid': 0x1011,
+                '_mpls_slot_key': ('PrimaryVideoStreamEntries', 0),
+            }
+            audio = {
+                'type': 'audio', 'pid': 0x1100,
+                '_logical_type': 'audio', '_logical_pid': 0x1100,
+                '_mpls_slot_key': ('PrimaryAudioStreamEntries', 0),
+            }
+            descriptors = [
+                {'path': str(parts[0]), 'duration': 1.0, 'slots': [video, audio]},
+                {'path': str(parts[1]), 'duration': 1.0, 'slots': [video]},
+                {'path': str(parts[2]), 'duration': 1.0, 'slots': [video, audio]},
+            ]
+            commands = []
+
+            def run(command):
+                commands.append(command)
+                output.write_bytes(b'joined')
+                return SimpleNamespace(returncode=0)
+
+            owner = SimpleNamespace()
+            with patch.object(track_module, 'run_command', side_effect=run):
+                result = MediaInfoTrackMappingMixin._concat_mpls_logical_parts(
+                    owner,
+                    descriptors,
+                    [video, audio],
+                    str(output),
+                    '',
+                    'mkvmerge',
+                    '',
+                )
+
+            self.assertTrue(result)
+            self.assertEqual(len(commands), 1)
+            command = commands[0]
+            self.assertEqual(command[command.index('--append-mode') + 1], 'track')
+            self.assertEqual(
+                command[command.index('--append-to') + 1],
+                '1:0:0:0,2:0:1:0,2:1:0:1',
+            )
+            self.assertIn('1:1000', command)
+            self.assertEqual(
+                owner._remux_fallback_audio_timelines[
+                    os.path.normcase(os.path.abspath(output))
+                ],
+                {1: ((0.0, 1.0), (2.0, 1.0))},
+            )
+
+            all_audio_missing = [
+                {'path': str(part), 'duration': 1.0, 'slots': [video]}
+                for part in parts
+            ]
+            missing_track_result = MediaInfoTrackMappingMixin._concat_mpls_logical_parts(
+                owner,
+                all_audio_missing,
+                [video, audio],
+                str(root / 'missing-audio.mkv'),
+                '',
+                'mkvmerge',
+                '',
+            )
+            self.assertFalse(missing_track_result)
+            self.assertEqual(len(commands), 1)
+
     def test_dolby_vision_only_sp_retains_one_combined_video_slot(self) -> None:
         base_layer_pid = 0x1011
         enhancement_layer_pid = 0x1015
@@ -634,32 +913,6 @@ class TrackAlignmentTests(unittest.TestCase):
             {'type': 'video', 'pid': base_layer_pid, 'index': '0'},
         ])
 
-    def test_selected_video_index_maps_to_each_clip_without_hidden_video(self) -> None:
-        current_streams = [
-            {'index': '0', 'codec_type': 'video', 'pid': 0x2011},
-            {'index': '1', 'codec_type': 'video', 'pid': 0x2012},
-        ]
-        fake_service_class = SimpleNamespace(
-            _m2ts_track_streams=lambda _path: current_streams,
-            _video_pids_on_m2ts=lambda _path: [0x2011, 0x2012],
-            _stream_service_id=lambda stream: stream.get('pid'),
-            _filter_video_pids_for_dovi_plan=lambda pids, _plan: list(pids),
-        )
-        reference_slots = [
-            {'type': 'video', 'pid': 0x1011, 'index': '0'},
-            {'type': 'audio', 'pid': 0x1100, 'index': '2'},
-        ]
-        with patch.object(track_module, '_svc_cls', return_value=fake_service_class):
-            clip_slots = MediaInfoTrackMappingMixin._clip_ref_slots_for_m2ts(
-                reference_slots,
-                '00002.m2ts',
-            )
-
-        self.assertEqual(clip_slots, [
-            {'type': 'video', 'pid': 0x2011, 'index': '0'},
-            {'type': 'audio', 'pid': 0x1100, 'index': '2'},
-        ])
-
     def test_multi_clip_fallback_cleans_each_tsmuxer_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -681,15 +934,15 @@ class TrackAlignmentTests(unittest.TestCase):
 
             def remux_clip(*args, **_kwargs):
                 calls.append(args[0])
-                split_arguments.append(args[5])
-                work_folder = Path(args[7])
-                part_tag = args[8]
+                split_arguments.append(args[4])
+                work_folder = Path(args[6])
+                part_tag = args[7]
                 for suffix in ('tsmux_out', 'audrec_tsmux_out'):
                     temporary_directory = work_folder / f'{part_tag}_{suffix}'
                     temporary_directory.mkdir()
                     (temporary_directory / 'temporary.bin').write_bytes(b'temporary')
                     temporary_directories.append(temporary_directory)
-                Path(args[4]).write_bytes(b'part')
+                Path(args[3]).write_bytes(b'part')
                 return True
 
             def run_concat(command):
@@ -702,9 +955,14 @@ class TrackAlignmentTests(unittest.TestCase):
                 _set_dovi_mux_plan_for_mpls=lambda _path: None,
                 _remux_aligned_clip=remux_clip,
             )
+            owner._concat_mpls_logical_parts = lambda *args: (
+                MediaInfoTrackMappingMixin._concat_mpls_logical_parts(owner, *args)
+            )
             fake_service_class = SimpleNamespace(
                 _detect_sp_looping_mpls=lambda _path: None,
                 _filter_pid_slots_for_dovi_plan=lambda slots, _plan: list(slots),
+                _mpls_logical_slots_for_selection=_logical_slots_for_selection_test,
+                _mpls_clip_slots=MediaInfoTrackMappingMixin._mpls_clip_slots,
                 _m2ts_clip_time_window_sec=lambda *_args: (True, 0.0, 1.0),
             )
             chapter = SimpleNamespace(
@@ -730,12 +988,13 @@ class TrackAlignmentTests(unittest.TestCase):
                 split_arguments,
                 ['--split parts:00:00:00.000-00:00:01.000'] * 2,
             )
-            self.assertEqual(concat_commands[0][1:3], ['--append-mode', 'file'])
+            self.assertEqual(concat_commands[0][1:3], ['--append-mode', 'track'])
+            self.assertIn('--append-to', concat_commands[0])
             self.assertEqual(output.read_bytes(), b'joined')
             self.assertTrue(temporary_directories)
             self.assertTrue(all(not path.exists() for path in temporary_directories))
 
-    def test_multi_output_fallback_uses_file_append_and_normalized_zero_start(self) -> None:
+    def test_multi_output_fallback_uses_track_append_and_normalized_zero_start(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             playlist = root / 'BDMV' / 'PLAYLIST'
@@ -753,16 +1012,14 @@ class TrackAlignmentTests(unittest.TestCase):
             concat_commands = []
 
             def remux_clip(*args, **_kwargs):
-                split_arguments.append(args[5])
-                Path(args[4]).write_bytes(b'part')
+                split_arguments.append(args[4])
+                Path(args[3]).write_bytes(b'part')
                 return True
 
             def run_concat(command):
                 concat_commands.append(command)
-                match = re.search(r'-o "([^"]+)"', command)
-                self.assertIsNotNone(match)
-                Path(match.group(1)).write_bytes(b'joined')
-                return 0
+                Path(command[command.index('-o') + 1]).write_bytes(b'joined')
+                return SimpleNamespace(returncode=0)
 
             owner = SimpleNamespace(
                 movie_mode=False,
@@ -772,12 +1029,17 @@ class TrackAlignmentTests(unittest.TestCase):
                 _progress=lambda **_kwargs: None,
                 _run_single_command=run_concat,
             )
+            owner._concat_mpls_logical_parts = lambda *args: (
+                MediaInfoTrackMappingMixin._concat_mpls_logical_parts(owner, *args)
+            )
             fake_service_class = SimpleNamespace(
                 _series_episode_segments_bounds=lambda *_args: [(1, 2), (1, 2)],
                 _expected_mkvmerge_split_output_paths=lambda *_args: [
                     str(path) for path in expected_outputs
                 ],
                 _filter_pid_slots_for_dovi_plan=lambda slots, _plan: list(slots),
+                _mpls_logical_slots_for_selection=_logical_slots_for_selection_test,
+                _mpls_clip_slots=MediaInfoTrackMappingMixin._mpls_clip_slots,
                 _m2ts_clip_time_window_sec=lambda *_args: (True, 0.0, 1.0),
             )
             chapter = SimpleNamespace(
@@ -790,7 +1052,8 @@ class TrackAlignmentTests(unittest.TestCase):
                     track_module, 'find_mkvtoolnix'), patch.object(
                     track_module, 'MKV_MERGE_PATH', 'mkvmerge'), patch.object(
                     track_module, 'mkvtoolnix_ui_language_arg', return_value=''), patch.object(
-                    track_module, 'get_index_to_m2ts_and_offset', return_value=({}, {1: 0.0})):
+                    track_module, 'get_index_to_m2ts_and_offset', return_value=({}, {1: 0.0})), patch.object(
+                    track_module, 'run_command', side_effect=run_concat):
                 result = MediaInfoTrackMappingMixin._try_remux_mpls_split_outputs_track_aligned(
                     owner,
                     str(mpls),
@@ -806,8 +1069,8 @@ class TrackAlignmentTests(unittest.TestCase):
                 ['--split parts:00:00:00.000-00:00:01.000'] * 4,
             )
             self.assertEqual(len(concat_commands), 2)
-            self.assertTrue(all('--append-mode file' in command for command in concat_commands))
-            self.assertTrue(all('--append-mode track' not in command for command in concat_commands))
+            self.assertTrue(all('--append-mode' in command for command in concat_commands))
+            self.assertTrue(all(command[command.index('--append-mode') + 1] == 'track' for command in concat_commands))
             self.assertTrue(all(path.read_bytes() == b'joined' for path in expected_outputs))
 
     def test_dolby_vision_only_clip_can_mux_without_a_base_mkv(self) -> None:
@@ -849,11 +1112,6 @@ class TrackAlignmentTests(unittest.TestCase):
                 _remux_fallback_merge_demux_with_base=merge_without_base,
             )
             fake_service_class = SimpleNamespace(
-                _mpls_track_streams=lambda _path: [
-                    {'pid': base_layer_pid, 'language': 'und'},
-                    {'pid': enhancement_layer_pid, 'language': 'und'},
-                ],
-                _clip_ref_slots_for_m2ts=lambda slots, *_args: list(slots),
                 _mkvmerge_identify_json=lambda _path: {'tracks': []},
                 _slot_pids_in_order=lambda slots: [int(slot['pid']) for slot in slots],
                 _run_tsmuxer_probe=lambda _path: 'probe',
@@ -872,7 +1130,6 @@ class TrackAlignmentTests(unittest.TestCase):
                     owner,
                     str(m2ts),
                     str(mpls),
-                    str(m2ts),
                     [{'type': 'video', 'pid': base_layer_pid, 'index': '0'}],
                     str(output),
                     '',
@@ -938,7 +1195,7 @@ class TrackAlignmentTests(unittest.TestCase):
             m2ts.write_bytes(b'm2ts')
 
             def remux_clip(*args, **_kwargs):
-                Path(args[4]).with_name('part_000_intermediate.mkv').write_bytes(b'wrong part')
+                Path(args[3]).with_name('part_000_intermediate.mkv').write_bytes(b'wrong part')
                 return True
 
             owner = SimpleNamespace(
@@ -949,6 +1206,8 @@ class TrackAlignmentTests(unittest.TestCase):
             fake_service_class = SimpleNamespace(
                 _detect_sp_looping_mpls=lambda _path: None,
                 _filter_pid_slots_for_dovi_plan=lambda slots, _plan: list(slots),
+                _mpls_logical_slots_for_selection=_logical_slots_for_selection_test,
+                _mpls_clip_slots=MediaInfoTrackMappingMixin._mpls_clip_slots,
                 _m2ts_clip_time_window_sec=lambda *_args: (False, 0.0, 1.0),
             )
             chapter = SimpleNamespace(in_out_time=[('00001', 0, 45000)])
@@ -989,10 +1248,12 @@ class TrackAlignmentTests(unittest.TestCase):
                 _run_single_command=run_command,
             )
             fake_service_class = SimpleNamespace(
-                _mpls_track_streams=lambda _path: [],
                 detect_dovi_mux_pair=lambda *_args: None,
-                _clip_ref_slots_for_m2ts=lambda slots, *_args: list(slots),
                 _mkvmerge_identify_json=lambda _path: {},
+                _m2ts_track_streams=lambda _path: [
+                    {'pid': 0x1011, 'codec_type': 'video'}
+                ],
+                _stream_service_id=lambda row: int(row['pid']),
                 _mkvmerge_tid_for_pid=lambda _path, pid, _type: 0 if pid == 0x1011 else None,
                 _mkvmerge_select_flags_from_mapped=lambda _ids, _ident: ('0', '', ''),
                 _slot_pids_in_order=lambda slots: [int(slot['pid']) for slot in slots],
@@ -1007,11 +1268,23 @@ class TrackAlignmentTests(unittest.TestCase):
             ]
             with patch.object(track_module, '_svc_cls', return_value=fake_service_class):
                 result = MediaInfoTrackMappingMixin._remux_aligned_clip(
-                    owner, str(m2ts), str(mpls), str(m2ts), reference_slots,
+                    owner, str(m2ts), str(mpls), reference_slots,
                     str(output), '', 1.0, str(work), 'part', 'mkvmerge', '',
                 )
 
             self.assertFalse(result)
+
+            owner.allow_partial_missing_non_video_tracks = True
+            with patch.object(track_module, '_svc_cls', return_value=fake_service_class):
+                allowed_result = MediaInfoTrackMappingMixin._remux_aligned_clip(
+                    owner, str(m2ts), str(mpls), reference_slots,
+                    str(output), '', 1.0, str(work), 'part', 'mkvmerge', '',
+                )
+
+            self.assertTrue(allowed_result)
+            self.assertEqual(reference_slots, [
+                {'type': 'video', 'pid': 0x1011},
+            ])
 
 
 if __name__ == '__main__':

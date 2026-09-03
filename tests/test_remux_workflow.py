@@ -132,7 +132,10 @@ class RemuxWorkflowTests(unittest.TestCase):
                 mux_dolby_vision_checkbox=SimpleNamespace(isChecked=lambda: False),
                 remux_flac_checkbox=SimpleNamespace(isChecked=lambda: True),
                 _app_config=SimpleNamespace(
-                    remux=SimpleNamespace(convert_immersive_audio_to_flac=True),
+                    remux=SimpleNamespace(
+                        convert_immersive_audio_to_flac=True,
+                        allow_partial_missing_non_video_tracks=True,
+                    ),
                 ),
                 _sp_scan_in_progress=True,
                 _current_encode_lossless_audio_codec=lambda: 'opus',
@@ -166,6 +169,7 @@ class RemuxWorkflowTests(unittest.TestCase):
             self.assertFalse(request.mux_dolby_vision)
             self.assertTrue(request.convert_lossless_audio_to_flac)
             self.assertTrue(request.convert_immersive_audio_to_flac)
+            self.assertTrue(request.allow_partial_missing_non_video_tracks)
             self.assertTrue(request.clean_audio_tracks)
             self.assertTrue(request.movie_mode)
             self.assertEqual(request.audio_encoding, audio_encoding)
@@ -278,6 +282,9 @@ class RemuxWorkflowTests(unittest.TestCase):
             subtitle_language='',
             audio_encoding=request.audio_encoding,
             wave64_bit_depth=24,
+            audio_timeline_by_track={},
+            audio_timeline_duration_seconds=None,
+            write_audio_gaps=True,
         )
         owner.completion.assert_called_once_with()
 
@@ -532,12 +539,22 @@ class RemuxWorkflowTests(unittest.TestCase):
             )
             request = replace(
                 request,
+                track_selection_config={
+                    f'main::{os.path.normpath(str(first))}': {'audio': ['1']},
+                },
                 track_language_config={
                     f'main::{os.path.normpath(str(first))}': {'1': 'jpn'},
                 },
             )
 
-            with patch.object(remux_service_module, 'find_mkvtoolnix'), patch.object(
+            track_row = {
+                'index': '1', 'pid': 1, 'codec_type': 'audio', 'language': 'eng',
+                '_mpls_source_path': os.path.normpath(str(first)),
+                '_mpls_bucket': 'PrimaryAudioStreamEntries', '_mpls_slot_index': 0,
+                '_mpls_append_compatible': True,
+            }
+            with patch.object(BluraySubtitle, '_mpls_track_streams', return_value=[track_row]), patch.object(
+                    remux_service_module, 'find_mkvtoolnix'), patch.object(
                     remux_service_module.core_settings, 'MKV_PROP_EDIT_PATH', str(first)):
                 _destination, jobs = RemuxEpisodeWorkflowsMixin._prepare_remux_main_jobs(
                     self._planning_owner(root), request
@@ -546,7 +563,10 @@ class RemuxWorkflowTests(unittest.TestCase):
             self.assertEqual([Path(job.mpls_path).name for job in jobs], ['00001.mpls', '00002.mpls'])
             self.assertEqual([job.configuration_keys for job in jobs], [(0,), (1,)])
             self.assertEqual([Path(job.final_outputs[0]).name for job in jobs], ['First.mkv', 'Second.mkv'])
-            self.assertEqual(jobs[0].track_language_overrides, (('1', 'jpn'),))
+            self.assertEqual(
+                jobs[0].track_language_overrides,
+                (('mpls-slot::00001.mpls::PrimaryAudioStreamEntries::0', 'jpn'),),
+            )
             self.assertEqual(jobs[1].track_language_overrides, ())
 
     def test_language_correction_requires_mkvpropedit_before_output_creation(self) -> None:
@@ -571,12 +591,22 @@ class RemuxWorkflowTests(unittest.TestCase):
                     [(str(root / 'Disc'), str(playlist.with_suffix('')))],
                     ['Episode.mkv'],
                 ),
+                track_selection_config={
+                    f'main::{os.path.normpath(str(playlist))}': {'audio': ['1']},
+                },
                 track_language_config={
                     f'main::{os.path.normpath(str(playlist))}': {'1': 'jpn'},
                 },
             )
 
-            with patch.object(remux_service_module, 'find_mkvtoolnix'), patch.object(
+            track_row = {
+                'index': '1', 'pid': 1, 'codec_type': 'audio', 'language': 'eng',
+                '_mpls_source_path': os.path.normpath(str(playlist)),
+                '_mpls_bucket': 'PrimaryAudioStreamEntries', '_mpls_slot_index': 0,
+                '_mpls_append_compatible': True,
+            }
+            with patch.object(BluraySubtitle, '_mpls_track_streams', return_value=[track_row]), patch.object(
+                    remux_service_module, 'find_mkvtoolnix'), patch.object(
                     remux_service_module.core_settings, 'MKV_PROP_EDIT_PATH', ''), patch.object(
                     remux_service_module.shutil, 'which', return_value=None):
                 with self.assertRaisesRegex(FileNotFoundError, 'mkvpropedit not found'):
@@ -707,6 +737,7 @@ class RemuxWorkflowTests(unittest.TestCase):
             )
             owner = SimpleNamespace(
                 track_selection_config={},
+                _validate_mpls_tracks_for_execution=lambda _path, slots, **_kwargs: list(slots),
                 t=lambda text: text,
                 _progress=lambda *args, **kwargs: None,
                 _set_dovi_mux_plan_for_mpls=Mock(),
@@ -730,7 +761,7 @@ class RemuxWorkflowTests(unittest.TestCase):
             )
             self.assertFalse(expected_output.exists())
 
-    def test_mpls_track_id_change_enters_track_aligned_fallback(self) -> None:
+    def test_mpls_pid_change_uses_logical_slot_and_stn_gap_enters_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             playlist_dir = root / 'BDMV' / 'PLAYLIST'
@@ -742,42 +773,137 @@ class RemuxWorkflowTests(unittest.TestCase):
             second_m2ts = stream_dir / '00003.m2ts'
             for path in (mpls_path, first_m2ts, second_m2ts):
                 path.write_bytes(b'media')
-            reference_slots = [
-                {'type': 'video', 'pid': 0x1011, 'index': '0'},
-                {'type': 'audio', 'pid': 0x1100, 'index': '1'},
-                {'type': 'subtitles', 'pid': 0x1200, 'index': '4'},
-            ]
-            identification = {'tracks': [
+            mpls_identification = {'tracks': [
                 {'id': 0, 'type': 'video', 'properties': {'stream_id': 0x1011}},
                 {'id': 1, 'type': 'audio', 'properties': {'stream_id': 0x1100}},
-                {'id': 4, 'type': 'subtitles', 'properties': {'stream_id': 0x1200}},
             ]}
             chapter = SimpleNamespace(in_out_time=[
                 ('00002', 0, 45000),
                 ('00003', 0, 45000),
             ])
             owner = SimpleNamespace(_dovi_mux_plan=None)
+            logical_rows = [
+                {
+                    'pid': 0x1011,
+                    '_logical_type': 'video',
+                    '_logical_pid': 0x1011,
+                    '_mpls_occurrences': (
+                        {'pid': 0x1011, 'codec_type': 'video'},
+                        {'pid': 0x1011, 'codec_type': 'video'},
+                    ),
+                },
+                {
+                    'pid': 0x1100,
+                    '_logical_type': 'audio',
+                    '_logical_pid': 0x1100,
+                    '_mpls_occurrences': (
+                        {'pid': 0x1100, 'codec_type': 'audio'},
+                        {'pid': 0x1101, 'codec_type': 'audio'},
+                    ),
+                },
+            ]
 
-            def mapped_ids(_slots, path):
-                return [0, 1, 4] if os.path.normpath(path) == os.path.normpath(first_m2ts) else [0, 1, 2]
+            def identify(path):
+                if os.path.normpath(path) == os.path.normpath(mpls_path):
+                    return mpls_identification
+                audio_pid = 0x1100 if os.path.normpath(path) == os.path.normpath(first_m2ts) else 0x1101
+                return {'tracks': [
+                    {'id': 0, 'type': 'video', 'properties': {'stream_id': 0x1011}},
+                    {'id': 1, 'type': 'audio', 'properties': {'stream_id': audio_pid}},
+                ]}
 
             with patch.object(track_mapping_module, '_svc_cls', return_value=MediaInfoTrackMappingMixin), patch.object(
                     track_mapping_module, 'Chapter', return_value=chapter), patch.object(
-                    MediaInfoTrackMappingMixin, '_probe_m2ts_for_remux_source',
-                    return_value=(str(first_m2ts), str(mpls_path))), patch.object(
-                    MediaInfoTrackMappingMixin, '_ordered_track_slots_for_remux',
-                    return_value=reference_slots), patch.object(
-                    MediaInfoTrackMappingMixin, '_mkvmerge_identify_json',
-                    return_value=identification), patch.object(
-                    MediaInfoTrackMappingMixin, '_clip_ref_slots_for_m2ts',
-                    return_value=reference_slots), patch.object(
-                    MediaInfoTrackMappingMixin, '_map_slots_to_mkvmerge_track_ids',
-                    side_effect=mapped_ids):
-                result = MediaInfoTrackMappingMixin._mkvmerge_identify_covers_remux_slots(
-                    owner, str(mpls_path), ['1'], ['4']
+                    MediaInfoTrackMappingMixin, '_mpls_logical_slots_for_selection',
+                    return_value=(logical_rows, [])), patch.object(
+                    MediaInfoTrackMappingMixin, '_mkvmerge_identify_json', side_effect=identify):
+                result = MediaInfoTrackMappingMixin._mkvmerge_identify_covers_mpls_pid_slots(
+                    owner,
+                    str(mpls_path),
+                    [('video', 0x1011), ('audio', 0x1100)],
                 )
 
-            self.assertFalse(result)
+                self.assertTrue(result)
+                logical_rows[1]['_mpls_occurrences'] = (
+                    {'pid': 0x1100, 'codec_type': 'audio'}, None,
+                )
+                result_with_gap = MediaInfoTrackMappingMixin._mkvmerge_identify_covers_mpls_pid_slots(
+                    owner,
+                    str(mpls_path),
+                    [('video', 0x1011), ('audio', 0x1100)],
+                )
+
+            self.assertFalse(result_with_gap)
+
+    def test_alternate_mpls_track_uses_direct_input_when_identify_exposes_it(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            playlist_dir = root / 'BDMV' / 'PLAYLIST'
+            stream_dir = root / 'BDMV' / 'STREAM'
+            playlist_dir.mkdir(parents=True)
+            stream_dir.mkdir(parents=True)
+            main_mpls = playlist_dir / '00001.mpls'
+            alternate_mpls = playlist_dir / '00002.mpls'
+            m2ts = stream_dir / '00001.m2ts'
+            for path in (main_mpls, alternate_mpls, m2ts):
+                path.write_bytes(b'media')
+
+            identification = {'tracks': [
+                {'id': 0, 'type': 'video', 'properties': {'stream_id': 0x1011}},
+                {'id': 1, 'type': 'audio', 'properties': {'stream_id': 0x1100}},
+                {'id': 2, 'type': 'audio', 'properties': {'stream_id': 0x1101}},
+            ]}
+            logical_rows = [
+                {
+                    '_logical_type': 'video',
+                    '_logical_pid': 0x1011,
+                    '_mpls_source_path': str(main_mpls),
+                    '_mpls_occurrences': (
+                        {'pid': 0x1011, 'codec_type': 'video'},
+                    ),
+                },
+                {
+                    '_logical_type': 'audio',
+                    '_logical_pid': 0x1100,
+                    '_mpls_source_path': str(main_mpls),
+                    '_mpls_occurrences': (
+                        {'pid': 0x1100, 'codec_type': 'audio'},
+                    ),
+                },
+                {
+                    '_logical_type': 'audio',
+                    '_logical_pid': 0x1101,
+                    '_mpls_source_path': str(alternate_mpls),
+                    '_mpls_occurrences': (
+                        {'pid': 0x1101, 'codec_type': 'audio'},
+                    ),
+                },
+            ]
+            owner = SimpleNamespace(_dovi_mux_plan=None)
+            chapter = SimpleNamespace(in_out_time=[('00001', 0, 45000)])
+
+            with patch.object(
+                    track_mapping_module, '_svc_cls', return_value=MediaInfoTrackMappingMixin
+            ), patch.object(
+                    track_mapping_module, 'Chapter', return_value=chapter
+            ), patch.object(
+                    MediaInfoTrackMappingMixin,
+                    '_mpls_logical_slots_for_selection',
+                    return_value=(logical_rows, []),
+            ), patch.object(
+                    MediaInfoTrackMappingMixin,
+                    '_mkvmerge_identify_json',
+                    return_value=identification,
+            ):
+                result = MediaInfoTrackMappingMixin._mkvmerge_identify_covers_mpls_pid_slots(
+                    owner,
+                    str(main_mpls),
+                    [('video', 0x1011), ('audio', 0x1100), ('audio', 0x1101)],
+                    identification=identification,
+                    alternate_mpls_paths=(str(alternate_mpls),),
+                )
+
+            self.assertTrue(result)
 
     def test_empty_output_track_is_reported_from_statistics(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -846,6 +972,7 @@ class RemuxWorkflowTests(unittest.TestCase):
             owner = SimpleNamespace(
                 track_selection_config={},
                 remux_warnings=[],
+                _validate_mpls_tracks_for_execution=lambda _path, slots, **_kwargs: list(slots),
                 t=lambda text: text,
                 _progress=lambda *args, **kwargs: None,
                 _set_dovi_mux_plan_for_mpls=lambda _path, **_kwargs: None,
@@ -912,6 +1039,7 @@ class RemuxWorkflowTests(unittest.TestCase):
             )
             owner = SimpleNamespace(
                 track_selection_config={},
+                _validate_mpls_tracks_for_execution=lambda _path, slots, **_kwargs: list(slots),
                 t=lambda text: text,
                 _progress=lambda *args, **kwargs: None,
                 _set_dovi_mux_plan_for_mpls=lambda _path, **_kwargs: None,
@@ -958,7 +1086,11 @@ class RemuxWorkflowTests(unittest.TestCase):
                 {'id': 0, 'type': 'video', 'properties': {'language': 'eng'}},
                 {'id': 1, 'type': 'audio', 'properties': {'language': 'jpn'}},
                 {'id': 2, 'type': 'audio', 'properties': {'language': 'eng'}},
-                {'id': 3, 'type': 'subtitles', 'properties': {'language': 'chi'}},
+                {
+                    'id': 3,
+                    'type': 'subtitles',
+                    'properties': {'language': 'chi', 'language_ietf': 'zh'},
+                },
             ]
             identify = Mock(side_effect=[
                 {'tracks': before_tracks},
@@ -981,7 +1113,7 @@ class RemuxWorkflowTests(unittest.TestCase):
                     str(m2ts_path),
                     ['1', '2'],
                     ['3'],
-                    {'0': 'eng', '1': 'jpn', '2': 'eng', '3': 'chi'},
+                    {'0': 'eng', '1': 'jpn', '2': 'eng', '3': 'zho'},
                 )
 
             command = run.call_args.args[0]
@@ -992,7 +1124,7 @@ class RemuxWorkflowTests(unittest.TestCase):
             self.assertIn(['--edit', 'track:2', '--set', 'language=jpn'], [
                 command[index:index + 4] for index in range(len(command) - 3)
             ])
-            self.assertIn(['--edit', 'track:4', '--set', 'language=chi'], [
+            self.assertIn(['--edit', 'track:4', '--set', 'language=zho'], [
                 command[index:index + 4] for index in range(len(command) - 3)
             ])
             self.assertEqual(identify.call_count, 2)

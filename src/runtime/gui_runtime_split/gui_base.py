@@ -370,6 +370,9 @@ class BluraySubtitleGuiBase(QWidget):
     def _ensure_default_track_config_for_mkv(self, mkv_path: str, *, sp: bool=False) -> None:
         raise NotImplementedError
 
+    def _ensure_default_track_config_for_sp_mpls(self, bdmv_index: int, mpls_file: str, sp_key: str) -> None:
+        raise NotImplementedError
+
     def _extract_attachment_to_temp_and_open(self, mkv_path: str, attachment_id: str, filename: str):
         raise NotImplementedError
 
@@ -451,9 +454,6 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _has_subtitle_in_table2(self) -> bool:
-        raise NotImplementedError
-
-    def _inherit_main_track_config_for_sp_key(self, bdmv_index: int, mpls_file: str, sp_key: str):
         raise NotImplementedError
 
     @staticmethod

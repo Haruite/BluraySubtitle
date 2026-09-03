@@ -7,7 +7,7 @@ This wiki explains the media concepts behind BluraySubtitle and connects them to
 - users who need a reliable mental model of Blu-ray, Matroska, tracks, remuxing, encoding, subtitles, audio, video, and Dolby Vision; and
 - developers who need the binary structures, timing rules, source-code map, and workflow invariants used by the application.
 
-Start with [Media Fundamentals](Media-Fundamentals.md) if terms such as *container*, *track*, *demux*, or *lossless* are new. Continue with [Blu-ray Disc Structure](Blu-ray-Disc-Structure.md) for BDMV, MPLS, CLPI, M2TS, playlist timing, and chapters. Codec and subtitle details are collected in [Media Formats and Dolby Vision](Media-Formats-and-Dolby-Vision.md). [Video Encoding and VapourSynth](Video-Encoding-and-VapourSynth.md) explains codec selection, encoder presets, frame processing, and the project's encode path.
+For a visual walkthrough of the main tables and several real-disc selection examples, start with [Interface Guide and Examples](Interface-Guide.md). Read [Media Fundamentals](Media-Fundamentals.md) if terms such as *container*, *track*, *demux*, or *lossless* are new. Continue with [Blu-ray Disc Structure](Blu-ray-Disc-Structure.md) for BDMV, MPLS, CLPI, M2TS, playlist timing, and chapters. Codec and subtitle details are collected in [Media Formats and Dolby Vision](Media-Formats-and-Dolby-Vision.md). [Video Encoding and VapourSynth](Video-Encoding-and-VapourSynth.md) explains codec selection, encoder presets, frame processing, and the project's encode path.
 
 Developers should then read [BluraySubtitle Developer Guide](BluraySubtitle-Developer-Guide.md), which defines the project's meaning of **main MPLS** and **SP**, describes the discovery and remux pipeline, and points to the relevant source files.
 
@@ -25,11 +25,12 @@ The following definitions are project-specific and must not be confused with ter
 
 ### I only want to use the application
 
-1. [Media Fundamentals](Media-Fundamentals.md)
-2. [Blu-ray Disc Structure](Blu-ray-Disc-Structure.md), through “MPLS, M2TS, and CLPI: how they work together”
-3. [Media Formats and Dolby Vision](Media-Formats-and-Dolby-Vision.md)
-4. [Video Encoding and VapourSynth](Video-Encoding-and-VapourSynth.md), for Encode users
-5. The main project [README](../../README.md)
+1. [Interface Guide and Examples](Interface-Guide.md)
+2. [Media Fundamentals](Media-Fundamentals.md)
+3. [Blu-ray Disc Structure](Blu-ray-Disc-Structure.md), through “MPLS, M2TS, and CLPI: how they work together”
+4. [Media Formats and Dolby Vision](Media-Formats-and-Dolby-Vision.md)
+5. [Video Encoding and VapourSynth](Video-Encoding-and-VapourSynth.md), for Encode users
+6. The main project [README](../../README.md)
 
 ### I want to understand or modify the implementation
 

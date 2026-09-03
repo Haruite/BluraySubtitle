@@ -1312,8 +1312,25 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 mux_dolby_vision=bool(
                     dolby_vision_checkbox is None or dolby_vision_checkbox.isChecked()
                 ),
+                allow_partial_missing_non_video_tracks=(
+                    bool(getattr(
+                        getattr(self._app_config, 'remux', None),
+                        'allow_partial_missing_non_video_tracks',
+                        False,
+                    ))
+                ),
                 track_selection_config=track_selection_snapshot,
                 track_language_config=track_language_snapshot,
+                main_alternate_mpls={
+                    str(main_path): tuple(
+                        os.path.normpath(str(path))
+                        for path in (info.get('mpls_paths') or ())
+                        if str(path).strip()
+                    )
+                    for main_path, info in (
+                        getattr(self, '_whole_main_match_track_info_by_main', {}) or {}
+                    ).items()
+                },
             )
             validate_encode_request(request, check_tools=True)
 

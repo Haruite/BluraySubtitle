@@ -974,6 +974,8 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
         audio: list[str] = []
         subtitle: list[str] = []
         for s in streams or []:
+            if s.get('_mpls_append_compatible') is False:
+                continue
             idx = str(s.get('index', '')).strip()
             if idx == '':
                 continue
@@ -992,6 +994,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
             str(stream.get('index', '')).strip()
             for stream in streams or []
             if str(stream.get('codec_type') or '').strip().lower() == 'video'
+            and stream.get('_mpls_append_compatible') is not False
             and str(stream.get('index', '')).strip()
         ]
         available = getattr(self, '_available_track_selection_config', None)

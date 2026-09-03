@@ -60,6 +60,7 @@ class M2TSParserTest(unittest.TestCase):
         parser = M2TS(self._write_stream())
         tracks = parser.get_tracks_info()
         self.assertEqual([(track['pid'], track['codec_type'], track['codec_name']) for track in tracks], [(0x1011, 'video', 'hevc')])
+        self.assertEqual(tracks[0]['stream_type_id'], 0x24)
         self.assertEqual(parser.get_first_pts(), 90_000)
         self.assertEqual(parser.get_last_pts(), 180_000)
         self.assertEqual(parser.get_duration(prefer_pcr=False), 90_000)
@@ -76,36 +77,88 @@ class M2TSParserTest(unittest.TestCase):
         M2TS(self._write_stream()).get_first_pts(skip_pids=skipped)
         self.assertEqual(skipped, {0x1200})
 
-    def test_mpls_tracks_come_directly_from_the_first_play_item_stn(self) -> None:
-        def pair(pid: int, stream_type: int, language: str = '') -> dict[str, object]:
+    def test_mpls_logical_tracks_follow_stn_position_across_play_items(self) -> None:
+        def pair(
+                pid: int,
+                stream_type: int,
+                language: str = '',
+                **parameters: object,
+        ) -> dict[str, object]:
             attributes: dict[str, object] = {'StreamCodingType': stream_type}
             if language:
                 attributes['LanguageCode'] = language
+            attributes.update(parameters)
             return {
                 'StreamEntry': {'RefToStreamPID': pid},
                 'StreamAttributes': attributes,
             }
 
         parser = MPLS()
-        parser.data = {'PlayList': {'PlayItems': [{'STNTable': {
-            'PrimaryVideoStreamEntries': [pair(0x1011, 0x24)],
-            'PrimaryAudioStreamEntries': [pair(0x1100, 0x83, 'eng')],
-            'PrimaryPGStreamEntries': [pair(0x12A2, 0x90, 'jpn')],
-            'DVStreamEntries': [pair(0x1015, 0x24)],
-        }}]}}
+        parser.data = {'PlayList': {'PlayItems': [
+            {'STNTable': {
+                'PrimaryVideoStreamEntries': [pair(
+                    0x1011, 0x24, VideoFormat=6, FrameRate=1,
+                    DynamicRangeType=1, ColorSpace=1, CRFlag=0, HDRPlusFlag=0,
+                )],
+                'PrimaryAudioStreamEntries': [
+                    pair(0x1100, 0x83, 'und', AudioFormat=6, SampleRate=1),
+                    pair(0x1101, 0x81, 'jpn', AudioFormat=3, SampleRate=1),
+                ],
+                'PrimaryPGStreamEntries': [pair(0x12A2, 0x90, 'jpn')],
+            }},
+            {'STNTable': {
+                'PrimaryVideoStreamEntries': [pair(
+                    0x1013, 0x24, VideoFormat=6, FrameRate=1,
+                    DynamicRangeType=1, ColorSpace=1, CRFlag=0, HDRPlusFlag=0,
+                )],
+                'PrimaryAudioStreamEntries': [],
+                'PrimaryPGStreamEntries': [pair(0x12A3, 0x90, 'eng')],
+            }},
+            {'STNTable': {
+                'PrimaryVideoStreamEntries': [pair(
+                    0x1013, 0x24, VideoFormat=6, FrameRate=1,
+                    DynamicRangeType=1, ColorSpace=1, CRFlag=0, HDRPlusFlag=0,
+                )],
+                'PrimaryAudioStreamEntries': [
+                    pair(0x1102, 0x83, 'eng', AudioFormat=6, SampleRate=1),
+                    pair(0x1103, 0x81, 'jpn', AudioFormat=6, SampleRate=1),
+                ],
+                'PrimaryPGStreamEntries': [pair(0x12A3, 0x90, 'eng')],
+            }},
+        ]}}
 
-        self.assertEqual(
-            [
-                (track['pid'], track['codec_type'], track['codec_name'], track['language'])
-                for track in parser.get_tracks_info()
-            ],
-            [
-                (0x1011, 'video', 'hevc', 'und'),
-                (0x1015, 'video', 'hevc', 'und'),
-                (0x1100, 'audio', 'truehd', 'eng'),
-                (0x12A2, 'subtitle', 'pgs', 'jpn'),
-            ],
-        )
+        tracks = parser.get_tracks_info()
+        self.assertEqual([track['pid'] for track in tracks], [
+            0x1011, 0x1100, 0x1101, 0x12A2,
+        ])
+        self.assertEqual(tracks[0]['_mpls_pid_by_play_item'], (0x1011, 0x1013, 0x1013))
+        self.assertEqual(tracks[1]['language'], 'eng')
+        self.assertEqual(tracks[1]['_mpls_pid_by_play_item'], (0x1100, None, 0x1102))
+        self.assertTrue(tracks[1]['_mpls_append_compatible'])
+        self.assertFalse(tracks[2]['_mpls_append_compatible'])
+        self.assertEqual(tracks[2]['_mpls_incompatible_fields'], ('AudioFormat',))
+        self.assertEqual(tracks[3]['language'], 'jpn')
+
+    def test_mpls_interactive_graphics_is_not_matroska_selectable(self) -> None:
+        parser = MPLS()
+        parser.data = {'PlayList': {'PlayItems': [{
+            'ClipInformationFileName': '00001',
+            'STNTable': {
+                'PrimaryIGStreamEntries': [{
+                    'StreamEntry': {'RefToStreamPID': 0x1400},
+                    'StreamAttributes': {
+                        'StreamCodingType': 0x91,
+                        'LanguageCode': 'jpn',
+                    },
+                }],
+            },
+        }]}}
+
+        track = parser.get_tracks_info()[0]
+
+        self.assertEqual(track['codec_name'], 'igs')
+        self.assertFalse(track['_mpls_append_compatible'])
+        self.assertTrue(track['_mpls_unsupported_reason'])
 
 
 if __name__ == '__main__':

@@ -19,7 +19,10 @@ from src.runtime.gui_runtime_split.configuration_and_modes import ConfigurationM
 from src.runtime.gui_runtime_split.remux_and_episode_layout import RemuxEpisodeLayoutMixin
 from src.runtime.gui_runtime_split.scan_and_worker_hooks import ScanWorkerHooksMixin
 from src.runtime.gui_runtime_split.sp_chapter_segment_logic import SpChapterSegmentLogicMixin
-from src.runtime.gui_runtime_split.track_and_attachment_editing import TrackAttachmentEditingMixin
+from src.runtime.gui_runtime_split.track_and_attachment_editing import (
+    TrackAttachmentEditingMixin,
+    _mpls_logical_track_presentation,
+)
 from src.runtime.services_split.lifecycle_and_configuration import LifecycleConfigurationMixin
 from src.runtime.services_split.misc_workflows import MiscWorkflowsMixin
 
@@ -210,6 +213,34 @@ class MainRemuxCommandMappingTests(unittest.TestCase):
 
 
 class ConfigurationRowTests(unittest.TestCase):
+    def test_mpls_logical_track_presentation_exposes_pid_gap_and_language_changes(self) -> None:
+        presentation = _mpls_logical_track_presentation({
+            '_mpls_bucket': 'PrimaryAudioStreamEntries',
+            '_mpls_slot_index': 1,
+            '_mpls_occurrences': (
+                {'pid': 4353, 'language': 'zho'},
+                {'pid': 4353, 'language': 'zho'},
+                None,
+                {'pid': 4354, 'language': 'eng'},
+            ),
+            '_mpls_append_compatible': True,
+        }, lambda text: text)
+
+        self.assertEqual(presentation['track'], 'Main audio #2')
+        self.assertEqual(presentation['pid'], '4353 / 4354')
+        self.assertEqual(
+            presentation['status'],
+            'Missing in some clips; PID changes; Language changes: zho → eng',
+        )
+        self.assertEqual(
+            presentation['tooltip'].splitlines(),
+            [
+                'PlayItem 1–2: PID 4353, language zho',
+                'PlayItem 3: missing',
+                'PlayItem 4: PID 4354, language eng',
+            ],
+        )
+
     def test_chapter_segment_default_preserves_explicit_false(self) -> None:
         configuration = {
             0: {"start_at_chapter": 1, "end_at_chapter": 2},

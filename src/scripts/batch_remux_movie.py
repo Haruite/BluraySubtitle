@@ -72,7 +72,9 @@ def _progress_cb(value: int | None = None, text: str | None = None) -> None:
 
 def remux_one_disc(bdmv_folder: str, movie_root: str, output_root: str) -> None:
     from src.core import find_mkvtoolnix
+    from src.core.app_config import load_app_config
     from src.core.i18n import translate_text
+    from src.runtime.audio_conversion import AudioEncodingSettings
     from src.runtime.remux import RemuxRequest
     from src.runtime.services import BluraySubtitle
     from src.runtime.sp import SpEntry
@@ -88,6 +90,7 @@ def remux_one_disc(bdmv_folder: str, movie_root: str, output_root: str) -> None:
 
     try:
         find_mkvtoolnix()
+        app_config = load_app_config()
         bs = BluraySubtitle(bdmv_folder, [], False, _progress_cb, movie_mode=True, mux_dolby_vision=True)
         main_mpls_path = bs.get_main_mpls(bdmv_folder, checked=False)
         if not main_mpls_path or not os.path.isfile(main_mpls_path):
@@ -115,7 +118,7 @@ def remux_one_disc(bdmv_folder: str, movie_root: str, output_root: str) -> None:
         remux_parent = os.path.dirname(dst_folder)
         request = RemuxRequest(
             bdmv_path=bdmv_folder,
-            subtitle_files=(),
+            subtitle_files=tuple('' for _ in configuration),
             complete_bluray_folder=False,
             output_folder=os.path.normpath(remux_parent),
             configuration=configuration,
@@ -125,6 +128,26 @@ def remux_one_disc(bdmv_folder: str, movie_root: str, output_root: str) -> None:
             episode_subtitle_languages=tuple('' for _ in configuration),
             movie_mode=True,
             mux_dolby_vision=True,
+            convert_lossless_audio_to_flac=(
+                app_config.remux.convert_lossless_audio_to_flac
+            ),
+            convert_immersive_audio_to_flac=(
+                app_config.remux.convert_immersive_audio_to_flac
+            ),
+            allow_partial_missing_non_video_tracks=(
+                app_config.remux.allow_partial_missing_non_video_tracks
+            ),
+            audio_encoding=AudioEncodingSettings(
+                flac_compression_level=app_config.audio.flac_compression_level,
+                ffmpeg_flac_compression_level=(
+                    app_config.audio.ffmpeg_flac_compression_level
+                ),
+                fdkaac_bitrate_kbps=app_config.audio.fdkaac_bitrate_kbps,
+                opus_bitrate_kbps=app_config.audio.opus_bitrate_kbps,
+                duration_loss_fallback_threshold_seconds=(
+                    app_config.audio.duration_loss_fallback_threshold_seconds
+                ),
+            ),
             ensure_tools=True,
         )
         bs.episodes_remux(

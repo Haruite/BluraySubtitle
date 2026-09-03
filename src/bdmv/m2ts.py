@@ -1036,6 +1036,7 @@ class M2TS:
                     "program_number": program_number,
                     "pmt_pid": stream_pid,
                     "is_pcr_pid": es_pid == pcr_pid,
+                    "stream_type_id": stream_type,
                     "stream_type": M2TS._stream_type_text(stream_type),
                     "codec_type": codec_type,
                     "codec_name": codec_name,

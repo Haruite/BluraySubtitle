@@ -288,6 +288,20 @@ Each entry combines:
 
 This distinction matters in BluraySubtitle. PAT/PMT parsing can reveal streams physically present in an M2TS, while the MPLS STN table defines the streams authored as visible for that playback path. A physically present stream hidden by the playlist must not automatically be treated as selected title content.
 
+Every PlayItem owns its own STN table. The entry counts, PIDs, and attributes are therefore allowed to differ between PlayItems in one playlist. A player-facing stream selection is a stream number within a category, not a promise that the same PID exists in every M2TS. BluraySubtitle consequently treats the same ordinal position in the same STN category as one logical track. Its PID may change, and the position may be absent from one PlayItem and return later. Such an absence is a valid gap on the playlist timeline; it is not evidence that another PID should be substituted.
+
+Language is descriptive metadata rather than the identity of the logical track. The application displays the first explicit language other than `und` and does not split or reject a track merely because a later PlayItem declares another language. **Edit Tracks** reports that transition in the row state (for example, `zho → eng`) and exposes the per-PlayItem PID/language timeline in its tooltip. Coding and presentation parameters are different: if the MPLS itself changes a parameter that prevents the occurrences from sharing one Matroska track, **Edit Tracks** disables the whole logical-track row.
+
+### Blu-ray playback model and Matroska track limits
+
+Blu-ray playback can switch the elementary stream selected for a stream number at a PlayItem boundary because each PlayItem supplies a new STN table. Matroska has a different model: one `TrackEntry` describes one codec and one stable set of track-level parameters. Matroska timestamps can represent a track that starts late or has no packets for an interval, so a Blu-ray gap does not require a silent audio replacement or an empty video/subtitle stream. However, occurrences whose codec or required track parameters change cannot safely be appended to that same Matroska track.
+
+Disc loading therefore uses MPLS metadata only. It does not open M2TS files or run `mkvmerge --identify`. When Remux or a BDMV-source Encode actually starts, every selected logical-track occurrence is checked against the PAT/PMT of its PlayItem M2TS. A declared occurrence that is missing or has a conflicting transport stream type normally makes the output fail because the GUI-selected logical track cannot be retained; an STN-declared gap remains a gap. The disabled-by-default **Allow partially missing non-video tracks** option changes only one case: after a selected audio or subtitle occurrence is confirmed physically absent and tsMuxer also cannot recover it, that interval is treated like an STN gap. Every selected logical track must still occur elsewhere in the output, and missing video always fails. The direct MPLS path is used only when MKVToolNix exposes a consistent mapping for every occurrence. Otherwise the fallback remuxes the occurrences that exist and joins them on one Matroska timeline without manufacturing packets for gaps.
+
+If that sparse logical track is later converted to FLAC, AAC, or Opus, BluraySubtitle converts its actual audio intervals and restores the same gap timestamps in Matroska. The gap is excluded from silence, duplicate, and duration-content calculations. A raw standalone audio stream has no container timeline for this purpose, so the application rejects sparse standalone output instead of inserting silent samples.
+
+This validation has a deliberate boundary. MPLS attributes and M2TS PAT/PMT identify the declared codec family and Blu-ray-level format fields, but they do not expose every payload-level property that a Matroska packetizer may require to remain stable. Examples include PCM effective bit depth or channel layout derived only from payload headers, and codec-private changes discovered only while parsing elementary-stream data. BluraySubtitle does not add speculative full-payload parsing for those cases. If a later MKVToolNix append rejects such a change, the fallback fails explicitly and preserves no partial final output.
+
 ### Playlist marks and chapters
 
 The `PlayListMark` section contains entries with:
@@ -453,7 +467,7 @@ Different editions or cuts can share most clips but choose different branches. T
 
 ### Different track layouts
 
-Adjacent clips may not contain identical PIDs. A direct append can lose tracks, change track order, or fail. BluraySubtitle’s fallback aligns each clip to the selected reference layout before appending.
+Adjacent clips may use different PIDs or omit one logical track temporarily. Treating PID as the track identity can therefore lose, swap, or duplicate tracks. BluraySubtitle follows the per-PlayItem STN stream number, preserves legitimate gaps with Matroska timestamps, and rejects known incompatible parameter changes instead of inventing replacement packets.
 
 ### Playlist obfuscation
 
@@ -535,8 +549,8 @@ An M2TS or CLPI can advertise more physical tracks than the MPLS Stream Number T
 
 BluraySubtitle does not blindly discard potentially useful material. In series mode it maintains an internal `m2ts_detail` value containing every M2TS name and its effective source window. Two independent rules use exact equality of this complete ordered detail:
 
-1. **Whole-main MPLS reuse.** If a non-main MPLS has the same complete detail as exactly one selected main MPLS, both playlists describe the same output timeline. Audio and subtitle PIDs exposed by the alternate MPLS are added to that main MPLS's track choices, and the alternate row is unchecked by default so the identical content is not remuxed twice. The GUI main-track selection remains authoritative.
-2. **Single-episode SP append.** If the first rule does not apply and an SP detail equals exactly one episode detail, the SP is linked only to that planned episode output. Such a row is checked by default when it exposes a new audio or subtitle PID. Selected PIDs absent from the episode are appended after splitting; an existing PID is not duplicated. If several selected SP rows expose the same PID, the first row in visible order supplies it, and appended SP PIDs remain in ascending order after the original main tracks.
+1. **Whole-main MPLS reuse.** If a non-main MPLS has the same complete detail as exactly one selected main MPLS, both playlists describe the same output timeline. Its audio and subtitle logical tracks are added when their physical `(M2TS path, PID)` relations do not overlap tracks already supplied by the main or an earlier playlist. The combined choices show the source MPLS and STN slot, are sorted by representative PID, and run through the common default-selection algorithm once. The alternate SP row is unchecked by default so the identical content is not remuxed twice; the GUI selection remains authoritative.
+2. **Single-episode SP append.** If the first rule does not apply and an SP detail equals exactly one episode detail, the SP is linked only to that planned episode output. The main and SP MPLS each run the common default-selection algorithm independently. After splitting, selected tracks are aggregated again by their physical relations; the original episode order is retained and accepted SP tracks follow in selection order. Equal PID or STN slot numbers from different playlists do not by themselves identify the same track.
 
 An SP that covers two or more episode outputs but does not equal the complete selected main MPLS is not attached to several files; it remains an ordinary SP. Supporting that case would require one table row to represent several output associations, so it is intentionally outside the current rule.
 

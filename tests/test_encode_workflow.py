@@ -1036,6 +1036,7 @@ class EncodeWorkflowTests(unittest.TestCase):
                 sp_rows=(),
                 settings=_settings(),
                 selected_mpls=((str(source_folder), '00001'),),
+                allow_partial_missing_non_video_tracks=True,
             )
             service = _BdmvEncodeService()
             service.episodes_encode(request, threading.Event())
@@ -1044,6 +1045,9 @@ class EncodeWorkflowTests(unittest.TestCase):
             self.assertFalse(service.stage_request.complete_bluray_folder)
             self.assertTrue(service.stage_request.mux_dolby_vision)
             self.assertFalse(service.stage_request.convert_lossless_audio_to_flac)
+            self.assertTrue(
+                service.stage_request.allow_partial_missing_non_video_tracks
+            )
             self.assertFalse(service.stage_request.clean_audio_tracks)
             self.assertEqual(service.stage_request.episode_output_names, ('Episode.mkv',))
             resolved_main = service.resolved_rows[1][0]

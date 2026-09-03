@@ -26,12 +26,15 @@ class RemuxRequest:
     mux_dolby_vision: bool = True
     convert_lossless_audio_to_flac: bool = True
     convert_immersive_audio_to_flac: bool = False
+    allow_partial_missing_non_video_tracks: bool = False
     clean_audio_tracks: bool = True
     audio_encoding: AudioEncodingSettings = AudioEncodingSettings()
-    # ``main::`` and MPLS-backed ``sp::`` values are MPEG PIDs grouped by type.
-    # MKV and no-MPLS single-M2TS SP keys retain source-local track IDs.
+    # ``main::`` and MPLS-backed ``sp::`` values use provider-qualified MPLS slot keys.
+    # Legacy decimal PIDs are accepted while normalizing a captured request. MKV and
+    # no-MPLS single-M2TS SP keys retain source-local track IDs.
     track_selection_config: dict[str, dict[str, list[str]]] | None = None
     track_language_config: dict[str, dict[str, str]] | None = None
+    main_alternate_mpls: dict[str, tuple[str, ...]] | None = None
     ensure_tools: bool = False
 
 
@@ -57,6 +60,11 @@ class RemuxMainJob:
     # Canonical main-track contract: (``video`` | ``audio`` | ``subtitles``, MPEG PID).
     # Tuple order follows ascending MPLS PID; GUI row order has no runtime meaning.
     track_pids: tuple[tuple[str, int], ...] = ()
+    # Whole-main alternate playlists may expose additional logical tracks over the
+    # exact same PlayItem timeline.
+    alternate_mpls_paths: tuple[str, ...] = ()
+    # Provider-qualified logical selections: (MPLS path, STN bucket, slot index).
+    track_source_slots: tuple[tuple[str, str, int], ...] = ()
 
 
 __all__ = ['RemuxMainJob', 'RemuxRequest']

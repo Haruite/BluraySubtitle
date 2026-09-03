@@ -400,6 +400,19 @@ class SettingsDialog(QDialog):
         )
         immersive_audio_hint.setWordWrap(True)
         audio_form.addRow(immersive_audio_hint)
+        self.allow_partial_missing_non_video_tracks_checkbox = QCheckBox(
+            self.t("Allow partially missing non-video tracks"),
+            audio_group,
+        )
+        self.allow_partial_missing_non_video_tracks_checkbox.setToolTip(
+            self.t(
+                "If a selected audio or subtitle track is missing from only some "
+                "M2TS clips and tsMuxer cannot recover it, preserve those clips as "
+                "timeline gaps. A completely missing selected track or any missing "
+                "video track still stops the task."
+            )
+        )
+        audio_form.addRow(self.allow_partial_missing_non_video_tracks_checkbox)
         layout.addWidget(audio_group)
 
         encode_group = QGroupBox(self.t("Default encode settings"), tab)
@@ -1073,6 +1086,9 @@ class SettingsDialog(QDialog):
         self.remux_immersive_flac_checkbox.setChecked(
             config.remux.convert_immersive_audio_to_flac
         )
+        self.allow_partial_missing_non_video_tracks_checkbox.setChecked(
+            config.remux.allow_partial_missing_non_video_tracks
+        )
         self.default_encoder_combo.blockSignals(True)
         try:
             self._set_combo_data(
@@ -1161,6 +1177,9 @@ class SettingsDialog(QDialog):
                 ),
                 convert_immersive_audio_to_flac=(
                     self.remux_immersive_flac_checkbox.isChecked()
+                ),
+                allow_partial_missing_non_video_tracks=(
+                    self.allow_partial_missing_non_video_tracks_checkbox.isChecked()
                 ),
             ),
             encode=EncodePreferences(

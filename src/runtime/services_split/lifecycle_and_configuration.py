@@ -65,6 +65,7 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
         self._subtitle_cache: dict[str, Subtitle] = {}
         self.movie_mode = bool(movie_mode)
         self.mux_dolby_vision = bool(mux_dolby_vision)
+        self.allow_partial_missing_non_video_tracks = False
         self._dovi_mux_plan: Optional[dict[str, object]] = None
         self._sp_index_by_bdmv: dict[int, int] = {}
         try:

@@ -82,12 +82,14 @@ The trim is therefore enforced at transport/PES timestamp boundaries rather than
 
 MKVToolNix validates M2TS structure more strictly than tsMuxer. This is useful for detecting malformed input, but some authored discs expose a track through tsMuxer while `mkvmerge --identify` omits it. Direct MPLS remuxing may also fail when different play items expose different track layouts.
 
-Disc loading and **Edit Tracks** read the MPLS STN directly, sort its track rows by PID, and do not identify the MPLS or inspect its first M2TS for track selection. At execution, the MPLS is identified once. If any selected PID is absent, direct muxing is skipped immediately; otherwise the command placeholders are resolved and the relevant M2TS mappings are checked before the direct mux.
+Disc loading and **Edit Tracks** aggregate every PlayItem STN directly and sort logical-track rows by their first PID. They do not identify the MPLS or inspect any M2TS. A logical track is the same ordinal stream number in the same STN category; its PID may change or its occurrence may be absent in one PlayItem. The dialog shows all distinct PIDs and a state summary, with the per-PlayItem PID/language timeline in a tooltip. The first explicit non-`und` language is the default; later language changes are displayed but do not redefine the track. MPLS-declared codec and presentation fields must remain append-compatible or the GUI disables the whole row. IGS rows are also disabled because interactive graphics have no Matroska subtitle-track representation.
+
+At execution, the internal M2TS parser checks every declared occurrence against the corresponding M2TS PAT/PMT. An absent STN occurrence is a valid gap. By default, a missing declared PID or a conflicting transport stream type means a GUI-selected logical track cannot be retained, so the output fails instead of continuing with a reduced track set. The disabled-by-default partial-missing option lets only a physically absent audio or subtitle occurrence continue to fallback so tsMuxer can attempt recovery. MKVToolNix then identifies the MPLS and every M2TS only to decide whether the direct path can preserve the logical mapping. A gap, MKVToolNix-omitted track, or changed local track ID selects fallback before the long direct mux starts.
 
 The [track-aligned fallback](../../src/runtime/services_split/media_info_and_track_mapping.py) handles those cases:
 
-1. The tracks selected in **Edit Tracks** define the required PID layout and output order.
-2. Each MPLS play item is processed separately.
+1. The compatible logical tracks selected in **Edit Tracks** define the output order. Each PlayItem occurrence supplies its own PID.
+2. Each MPLS PlayItem is processed separately. Only logical-track occurrences declared for that PlayItem enter its part; an absent occurrence remains a gap.
 3. Its M2TS-relative range is calculated as:
 
    ```text
@@ -96,13 +98,18 @@ The [track-aligned fallback](../../src/runtime/services_split/media_info_and_tra
    ```
 
 4. A partial play item is trimmed with `mkvmerge --split parts:start-end`. This explicitly preserves non-zero MPLS in/out boundaries instead of appending the complete M2TS.
-5. `mkvmerge` supplies every track it can identify.
-6. tsMuxer is invoked only for selected PIDs that are still missing. This also supports recovery of a required Dolby Vision layer before the project combines it with `dovi_tool`.
-7. If tsMuxer cannot recover every missing selected PID, including audio, the fallback fails instead of synthesizing a replacement track.
-8. The resulting PID set is checked against the required layout.
-9. Multiple repaired parts are concatenated with `--append-mode file`, so every track uses the same preceding-file timestamp boundary. Track-based appending could allow a short or damaged audio track to start the next part earlier than the video.
+5. `mkvmerge` supplies every declared occurrence it can identify.
+6. tsMuxer is invoked only for declared PIDs that MKVToolNix omits. This also supports recovery of a required Dolby Vision layer before the project combines it with `dovi_tool`.
+7. If tsMuxer cannot recover a missing declared occurrence, fallback normally fails. With the partial-missing option enabled, an audio or subtitle PID also confirmed absent by PAT/PMT is removed from that PlayItem's expected occurrences and becomes a timeline gap. Missing video, format conflicts, or a PID that tsMuxer exposes but cannot successfully demux remain hard failures.
+8. Each repaired part's PID set must exactly match its remaining expected occurrences.
+9. Before writing, every selected logical track must occur at least once in the output window. The final output is then written once. Every logical track's first occurrence is a normal input with its absolute playlist offset; later occurrences are chained to the preceding occurrence with `--append-to`, and `--sync` retains any leading or intermediate gap. Matroska timestamps represent the gap without dummy packets.
+10. The fallback itself remains a stream-copy Remux. After it succeeds, the resulting Matroska file enters the same separate audio post-processing stage as a direct Remux, including FLAC conversion when selected.
 
-The multi-output fallback used to split one MPLS into several episode MKVs projects every episode range onto the same play-item windows and applies the same recovery rules.
+The multi-output fallback used to split one MPLS into several episode MKVs projects every episode range onto the same PlayItem windows and applies the same occurrence, gap, recovery, and single-final-write rules.
+
+After final Remux naming and audio cleanup/conversion, every analyzed output receives one adjacent `<output>.audio-gaps.json`. It records only gap-bearing tracks and contains an empty track list when all audio is continuous. Remux-source Encode validates the sidecar against the source file size and Matroska track UID before using it; a valid empty sidecar confirms continuity without another detection pass. If the file is absent or invalid, FFmpeg records packet timestamps during the same multi-output Wave64 decode already required for audio processing and derives the continuous intervals from those timestamps. Millisecond-scale Matroska timestamp quantization is merged within a small tolerance so it is not mistaken for authored silence between intervals.
+
+The precheck boundary is intentionally limited to fields available from MPLS and PAT/PMT. Those structures cannot expose every payload-derived append constraint, such as PCM bit depth or channel layout found only in payload headers, or codec-private changes discovered by an elementary-stream parser. The project does not perform a speculative full-payload scan for this unconfirmed edge case. If MKVToolNix rejects such an append during fallback, the operation fails explicitly and no partial part becomes the final output.
 
 ## Why eac3to is not the primary demuxer
 
@@ -228,11 +235,13 @@ However, the license distributed with DGDemux states that end users may invoke t
 
 Even if permission were obtained, adding DGDemux would introduce another full-disc demux stage, lengthen remux processing, add platform-specific packaging and command handling, and create a second track-order mapping path. The maintenance cost is not currently justified.
 
-### Lossless conversion policy
+### Audio conversion policy
 
-FFmpeg decodes TrueHD and DTS. Because FLAC cannot represent DTS:X or TrueHD Atmos object metadata, Remux converts those streams only when its separate Advanced option is enabled. A decode or encode failure keeps the original track. Post-conversion validation compares duration only: a loss over 0.1 seconds is reported, and a loss over the configurable threshold discards the FLAC. The default threshold is 1 second.
+FFmpeg decodes TrueHD and DTS. Because FLAC cannot represent DTS:X or TrueHD Atmos object metadata, Remux converts those streams only when its separate Advanced option is enabled. The shared conversion transaction applies to FLAC, AAC, and Opus targets: a decode, analysis, encode, timeline-rebuild, or duration-validation failure in any continuous interval keeps the complete original track.
 
-Known DIY discs with damaged TrueHD still require care because neither MKVToolNix nor this conversion path repairs missing frames. The automatic duration fallback prevents a materially shortened FLAC from replacing its source.
+An authored leading or intermediate gap is container timing, not PCM. Conversion processes only the intervals that actually contain audio and recreates their Matroska timestamps without generating silence. Duration validation compares those intervals individually, reports a greatest positive shortening over 0.1 seconds, and discards the converted logical track when that greatest single-interval loss exceeds the configured threshold. Losses are not summed because the check protects against audible delay rather than measuring cumulative program length. The default threshold is 1 second.
+
+Known DIY discs with damaged TrueHD still require care because neither MKVToolNix nor this conversion path repairs missing frames. The automatic duration fallback prevents a materially shortened conversion from replacing its source.
 
 ## Audio encoder selection
 
@@ -244,11 +253,13 @@ BluraySubtitle therefore uses the `fdkaac` command-line frontend for AAC. A conf
 
 ### FLAC and intermediate PCM
 
-Final Matroska audio processing probes the source once, then uses one multi-output FFmpeg process to decode the tracks required by cleanup or conversion. Each track is stored as Wave64 to avoid RIFF WAV's 4 GiB limit. BDMV-derived workflows use 24-bit PCM; workflows accepting arbitrary Matroska inputs use 32-bit PCM. If batch extraction fails, the partial files are removed and each track is retried separately; a track that still fails remains unchanged.
+Final Matroska audio processing probes the source once, then uses one multi-output FFmpeg process to decode the tracks required by cleanup or conversion. A sparse logical track produces one Wave64 file per continuous interval; ordinary tracks produce one. Wave64 avoids RIFF WAV's 4 GiB limit. BDMV-derived workflows use 24-bit PCM; workflows accepting arbitrary Matroska inputs use 32-bit PCM. If batch extraction fails, partial files are removed and each logical track, including all of its intervals, is retried once; a track that still fails remains unchanged.
 
-Analysis and encoding reuse the decoded files. FLAC output follows the detected 16-, 24-, or 32-bit effective depth rather than the intermediate container width. The standalone multithreaded encoder handles matching-width input; FFmpeg removes zero padding and provides 16/24-bit fallback. True 32-bit output requires the standalone encoder because FFmpeg's FLAC encoder is limited to 24 bits.
+For a BDMV-derived Remux, the fallback's known interval map is used directly and written to the output sidecar. For a Remux-source Encode, a matching sidecar avoids rediscovery; without one, packet timestamps are collected while the same source decode writes Wave64, so detecting gaps does not add another full read of the MKV.
 
-Final Matroska AAC and Opus conversions reuse the same PCM. `fdkaac` receives PCM through a pipe. Standalone FLAC SP output shares the FLAC encoding and validation path; standalone AAC can decode directly to its encoder.
+Analysis and encoding reuse the decoded files. FLAC output follows the greatest detected 16-, 24-, or 32-bit effective depth across the complete logical track rather than the intermediate container width. The standalone multithreaded encoder handles matching-width continuous input; FFmpeg removes zero padding and provides 16/24-bit fallback. True 32-bit output requires the standalone encoder because FFmpeg's FLAC encoder is limited to 24 bits, so a sparse true-32-bit track remains unchanged rather than being down-packed.
+
+For sparse AAC and Opus, each interval is encoded independently and one track-append command rebuilds the Matroska timeline. Sparse FLAC uses one FFmpeg encoder stream with retained timestamp discontinuities because MKVToolNix cannot safely append independently encoded FLAC streams. The rebuilt result is decoded over all authored windows in one pass and the duration rule above is applied per interval. Standalone audio formats cannot represent a playlist gap without inserted samples, so a sparse standalone audio job fails instead of hiding the gap or adding silence.
 
 ## Tool responsibility summary
 

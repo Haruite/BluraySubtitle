@@ -10,7 +10,7 @@ import threading
 from typing import Any, Callable, Optional
 
 from src.bdmv import Chapter, M2TS
-from src.core import FDK_AAC_PATH, FFMPEG_PATH, MKV_MERGE_PATH, MKV_EXTRACT_PATH, \
+from src.core import FFMPEG_PATH, MKV_MERGE_PATH, MKV_EXTRACT_PATH, \
     find_mkvtoolnix, mkvtoolnix_ui_language_arg, MKV_PROP_EDIT_PATH
 from src.core.i18n import translate_text
 from src.domain import MKV, Subtitle
@@ -19,8 +19,7 @@ from src.exports.utils import get_index_to_m2ts_and_offset, append_ogm_chapter_l
 from .service_base import BluraySubtitleServiceBase
 from src.runtime.audio_conversion import (
     AudioEncodingSettings,
-    convert_audio_stream_to_flac,
-    encode_fdkaac_from_ffmpeg,
+    convert_audio_stream,
 )
 from src.runtime.sp import SpJob, media_track_key
 from .. import TaskCancelled
@@ -592,14 +591,32 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                 pass
         print_terminal_line('[BluraySubtitle] completion(): cleanup finished.')
 
-    def _compute_mkv_id_to_m2ts_pid_core(
+    def _compute_mkv_id_to_mpls_track_signature_for_main_mpls(
             self,
             mpls_path: str,
-            track_configuration: dict[str, object],
-    ) -> dict[int, int]:
-        """Map planned output IDs to selected PIDs using the MPLS identify reference."""
+    ) -> dict[int, tuple[tuple[str, int], ...]]:
+        """Map planned episode output IDs to physical M2TS/PID relations."""
+        normalized_mpls_path = os.path.normpath(str(mpls_path or '').strip())
+        if not normalized_mpls_path.lower().endswith('.mpls'):
+            normalized_mpls_path += '.mpls'
+        track_configurations = getattr(self, 'track_selection_config', {}) or {}
+        if not isinstance(track_configurations, dict):
+            track_configurations = {}
+        track_configuration = track_configurations.get(
+            media_track_key('main', normalized_mpls_path)
+        ) or {}
+        alternate_by_main = getattr(self, 'main_alternate_mpls', {}) or {}
+        alternate_paths = tuple(
+            os.path.normpath(path)
+            for path in alternate_by_main.get(
+                os.path.normcase(os.path.abspath(normalized_mpls_path)), ()
+            )
+            if str(path).strip()
+        ) if isinstance(alternate_by_main, dict) else ()
         selected_slots = _svc_cls()._selected_pid_slots_for_mpls(
-            mpls_path, track_configuration
+            normalized_mpls_path,
+            track_configuration,
+            alternate_mpls_paths=alternate_paths,
         )
         dovi_plan = getattr(self, '_dovi_mux_plan', None)
         selected_slots = _svc_cls()._filter_pid_slots_for_dovi_plan(
@@ -607,31 +624,9 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
             dovi_plan if isinstance(dovi_plan, dict) else None,
         )
         return {
-            output_track_id: int(slot['pid'])
+            output_track_id: _svc_cls()._mpls_track_mapping_signature(slot)
             for output_track_id, slot in enumerate(selected_slots)
         }
-
-    def _compute_mkv_id_to_m2ts_pid_for_main_mpls(self, mpls_path: str) -> dict[int, int]:
-        """Map episode-main Matroska track IDs to captured GUI PIDs via MPLS identify."""
-        normalized_mpls_path = os.path.normpath(str(mpls_path or '').strip())
-        if not normalized_mpls_path.lower().endswith('.mpls'):
-            normalized_mpls_path += '.mpls'
-        track_configurations = getattr(self, 'track_selection_config', {}) or {}
-        if not isinstance(track_configurations, dict):
-            track_configurations = {}
-        track_configuration = track_configurations.get(media_track_key('main', normalized_mpls_path)) or {}
-        return self._compute_mkv_id_to_m2ts_pid_core(normalized_mpls_path, track_configuration)
-
-    @staticmethod
-    def _mkvmerge_ident_transport_pid(properties: object) -> Optional[int]:
-        """Read an MPEG-TS PID from identify JSON without mistaking a Matroska track ordinal for a PID."""
-        if not isinstance(properties, dict):
-            return None
-        for key in ('stream_id', 'original_transport_stream_id'):
-            transport_pid = _svc_cls()._int_from_mkvmerge_prop(properties.get(key))
-            if transport_pid is not None and 1 <= int(transport_pid) <= 0x1FFF:
-                return int(transport_pid)
-        return None
 
     def _mux_episode_linked_sp_mkvmerge(
             self,
@@ -643,17 +638,11 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
             selected_sp_subtitle_track_ids: list[str],
             language_by_sp_track_id: dict[str, str],
             cancel_event: Optional[threading.Event],
-            source_pid_by_track_id: Optional[dict[int, int]] = None,
+            source_signature_by_track_id: Optional[
+                dict[int, tuple[tuple[str, int], ...]]
+            ] = None,
     ) -> bool:
-        """Attach new SP PIDs while preserving the main tracks and earlier SP providers.
-
-        mkvmerge track IDs (TIDs) are local to each input and cannot be compared directly. The main MPLS first
-        maps the existing episode MKV track IDs to MPEG transport PIDs; the SP MPLS identify result independently
-        maps SP track IDs to PIDs. Calls follow visible SP row order, so an existing PID keeps the provider from the
-        first selected row. Newly claimed PIDs are merged with earlier SP PIDs in ascending PID order after the
-        original main tracks. The resulting output map is cached because a later SP merge identifies the already
-        extended episode rather than the original main-only layout.
-        """
+        """Attach selected SP tracks using physical M2TS/PID relations as identity."""
         normalized_main_mpls = os.path.normpath(episode_main_mpls)
 
         episode_identification = _svc_cls()._mkvmerge_identify_json(episode_mkv)
@@ -683,21 +672,27 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                 continue
 
         cache_key = os.path.normcase(os.path.normpath(os.path.abspath(episode_mkv)))
-        sp_mux_cache = getattr(self, '_episode_sp_mux_last_after_mux_map', None)
+        sp_mux_cache = getattr(self, '_episode_sp_mux_last_after_mux_signatures', None)
         if not isinstance(sp_mux_cache, dict):
             sp_mux_cache = {}
-            self._episode_sp_mux_last_after_mux_map = sp_mux_cache
-        original_main_map_cache = getattr(self, '_episode_sp_mux_original_main_map', None)
+            self._episode_sp_mux_last_after_mux_signatures = sp_mux_cache
+        original_main_map_cache = getattr(
+            self, '_episode_sp_mux_original_main_signatures', None
+        )
         if not isinstance(original_main_map_cache, dict):
             original_main_map_cache = {}
-            self._episode_sp_mux_original_main_map = original_main_map_cache
-        previous_track_id_to_pid = sp_mux_cache.get(cache_key)
-        cached_episode_baseline: Optional[dict[int, int]] = None
-        if previous_track_id_to_pid and muxable_track_count == len(previous_track_id_to_pid):
-            cached_episode_baseline = dict(previous_track_id_to_pid)
+            self._episode_sp_mux_original_main_signatures = original_main_map_cache
+        previous_track_id_to_signature = sp_mux_cache.get(cache_key)
+        cached_episode_baseline: Optional[
+            dict[int, tuple[tuple[str, int], ...]]
+        ] = None
+        if (
+                previous_track_id_to_signature
+                and muxable_track_count == len(previous_track_id_to_signature)
+        ):
+            cached_episode_baseline = dict(previous_track_id_to_signature)
 
         sp_identification = _svc_cls()._mkvmerge_identify_json(sp_mpls_path)
-        sp_track_id_to_pid: dict[int, int] = {}
         sp_track_type_by_id: dict[int, str] = {}
         sp_timeline_origin_by_type: dict[str, int] = {}
         for track in sp_identification.get('tracks') or []:
@@ -719,78 +714,91 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                     )
                 except (KeyError, TypeError, ValueError):
                     pass
-            transport_pid = SubtitleChapterPipelineMixin._mkvmerge_ident_transport_pid(properties)
             if track_type not in ('audio', 'subtitles', 'video'):
                 continue
             sp_track_type_by_id[track_id] = track_type
-            if transport_pid is not None:
-                sp_track_id_to_pid[track_id] = int(transport_pid)
-        if source_pid_by_track_id is not None:
-            sp_track_id_to_pid = {
-                int(track_id): int(pid)
-                for track_id, pid in source_pid_by_track_id.items()
-                if int(track_id) in sp_track_type_by_id
-            }
 
-        selected_sp_track_pid_pairs: list[tuple[int, int]] = []
+        normalized_source_signatures = {
+            int(track_id): tuple(signature)
+            for track_id, signature in (source_signature_by_track_id or {}).items()
+            if int(track_id) in sp_track_type_by_id and tuple(signature)
+        }
+        selected_sp_track_signatures: list[
+            tuple[int, tuple[tuple[str, int], ...]]
+        ] = []
         for track_id_text in selected_sp_audio_track_ids + selected_sp_subtitle_track_ids:
             try:
                 track_id = int(str(track_id_text).strip())
             except Exception:
                 track_id = -1
-            transport_pid = sp_track_id_to_pid.get(track_id)
-            if transport_pid is None:
+            signature = normalized_source_signatures.get(track_id)
+            if not signature:
                 raise RuntimeError(
-                    translate_text('Selected SP track has no transport PID: {track} ({path})').format(
+                    translate_text(
+                        'Selected SP track has no M2TS/PID mapping: {track} ({path})'
+                    ).format(
                         track=track_id_text,
                         path=sp_mpls_path,
                     )
                 )
-            selected_sp_track_pid_pairs.append((track_id, transport_pid))
+            selected_sp_track_signatures.append((track_id, signature))
 
         if cached_episode_baseline is not None:
-            current_track_id_to_pid = dict(cached_episode_baseline)
+            current_track_id_to_signature = dict(cached_episode_baseline)
         else:
-            current_track_id_to_pid = self._compute_mkv_id_to_m2ts_pid_for_main_mpls(
-                normalized_main_mpls
+            fallback_signatures = getattr(
+                self, '_remux_fallback_track_signatures', {}
+            ) or {}
+            current_track_id_to_signature = dict(
+                fallback_signatures.get(cache_key, {})
+            ) or self._compute_mkv_id_to_mpls_track_signature_for_main_mpls(
+                normalized_main_mpls,
             )
-        if set(current_track_id_to_pid) != set(episode_track_type_by_id):
+        if set(current_track_id_to_signature) != set(episode_track_type_by_id):
             return False
-        original_main_track_id_to_pid = original_main_map_cache.get(cache_key)
-        if not isinstance(original_main_track_id_to_pid, dict):
-            original_main_track_id_to_pid = dict(current_track_id_to_pid)
-        original_main_track_ids = sorted(original_main_track_id_to_pid)
+        original_main_track_id_to_signature = original_main_map_cache.get(cache_key)
+        if not isinstance(original_main_track_id_to_signature, dict):
+            original_main_track_id_to_signature = dict(current_track_id_to_signature)
+        original_main_track_ids = sorted(original_main_track_id_to_signature)
         if (
-                not set(original_main_track_ids).issubset(current_track_id_to_pid)
+                not set(original_main_track_ids).issubset(current_track_id_to_signature)
                 or any(
-                    current_track_id_to_pid[track_id] != original_main_track_id_to_pid[track_id]
+                    current_track_id_to_signature[track_id]
+                    != original_main_track_id_to_signature[track_id]
                     for track_id in original_main_track_ids
                 )
         ):
             return False
 
-        existing_pids = set(current_track_id_to_pid.values())
-        new_track_id_by_pid: dict[int, int] = {}
-        for track_id, transport_pid in selected_sp_track_pid_pairs:
-            if transport_pid not in existing_pids:
-                new_track_id_by_pid.setdefault(transport_pid, track_id)
-        selected_sp_pids = sorted(new_track_id_by_pid)
-        selected_sp_track_ids = [new_track_id_by_pid[pid] for pid in selected_sp_pids]
-        if selected_sp_track_pid_pairs and not selected_sp_track_ids:
-            original_main_map_cache[cache_key] = dict(original_main_track_id_to_pid)
-            sp_mux_cache[cache_key] = dict(current_track_id_to_pid)
+        claimed_relations = {
+            relation
+            for signature in current_track_id_to_signature.values()
+            for relation in signature
+        }
+        new_tracks: list[tuple[int, tuple[tuple[str, int], ...]]] = []
+        for track_id, signature in selected_sp_track_signatures:
+            signature_relations = set(signature)
+            if signature_relations.intersection(claimed_relations):
+                continue
+            new_tracks.append((track_id, signature))
+            claimed_relations.update(signature_relations)
+        selected_sp_track_ids = [track_id for track_id, _signature in new_tracks]
+        if selected_sp_track_signatures and not selected_sp_track_ids:
+            original_main_map_cache[cache_key] = dict(original_main_track_id_to_signature)
+            sp_mux_cache[cache_key] = dict(current_track_id_to_signature)
             return True
 
-        attachment_track_order: list[tuple[int, int, int]] = [
-            (current_track_id_to_pid[track_id], 0, track_id)
-            for track_id in current_track_id_to_pid
-            if track_id not in original_main_track_id_to_pid
+        attachment_track_order: list[
+            tuple[tuple[tuple[str, int], ...], int, int]
+        ] = [
+            (current_track_id_to_signature[track_id], 0, track_id)
+            for track_id in sorted(current_track_id_to_signature)
+            if track_id not in original_main_track_id_to_signature
         ]
         attachment_track_order.extend(
-            (transport_pid, 1, new_track_id_by_pid[transport_pid])
-            for transport_pid in selected_sp_pids
+            (signature, 1, track_id)
+            for track_id, signature in new_tracks
         )
-        attachment_track_order.sort(key=lambda row: row[0])
 
         track_order_parts: list[str] = []
         episode_audio_track_ids: list[str] = []
@@ -799,9 +807,9 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
         sp_subtitle_track_ids: list[str] = []
         for track_id in original_main_track_ids:
             track_order_parts.append(f'0:{track_id}')
-        for _transport_pid, input_index, track_id in attachment_track_order:
+        for _signature, input_index, track_id in attachment_track_order:
             track_order_parts.append(f'{input_index}:{track_id}')
-        for track_id in sorted(current_track_id_to_pid):
+        for track_id in sorted(current_track_id_to_signature):
             track_type = episode_track_type_by_id.get(track_id, '')
             if track_type == 'audio':
                 episode_audio_track_ids.append(str(track_id))
@@ -921,18 +929,50 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                 force_remove_file(chapter_backup)
             return False
 
-        merged_track_id_to_pid = {
-            output_track_id: transport_pid
-            for output_track_id, transport_pid in enumerate(
+        merged_track_id_to_signature = {
+            output_track_id: signature
+            for output_track_id, signature in enumerate(
                 [
-                    original_main_track_id_to_pid[track_id]
+                    original_main_track_id_to_signature[track_id]
                     for track_id in original_main_track_ids
                 ] + [
-                    transport_pid
-                    for transport_pid, _input_index, _track_id in attachment_track_order
+                    signature
+                    for signature, _input_index, _track_id in attachment_track_order
                 ]
             )
         }
+        audio_timeline_cache = getattr(
+            self, '_remux_fallback_audio_timelines', None
+        )
+        if not isinstance(audio_timeline_cache, dict):
+            audio_timeline_cache = {}
+            self._remux_fallback_audio_timelines = audio_timeline_cache
+        episode_audio_timelines = dict(audio_timeline_cache.get(cache_key, {}))
+        sp_audio_timelines = dict(audio_timeline_cache.get(
+            os.path.normcase(os.path.abspath(sp_mpls_path)), {}
+        ))
+        merged_audio_timelines: dict[int, tuple[tuple[float, float], ...]] = {}
+        for output_track_id, input_track_id in enumerate(original_main_track_ids):
+            if input_track_id in episode_audio_timelines:
+                merged_audio_timelines[output_track_id] = tuple(
+                    episode_audio_timelines[input_track_id]
+                )
+        for output_offset, (_signature, input_index, input_track_id) in enumerate(
+                attachment_track_order):
+            output_track_id = len(original_main_track_ids) + output_offset
+            source_timelines = (
+                episode_audio_timelines
+                if input_index == 0 else sp_audio_timelines
+            )
+            if input_track_id not in source_timelines:
+                continue
+            timeline_shift_seconds = (
+                sp_timeline_sync_ms / 1000.0 if input_index == 1 else 0.0
+            )
+            merged_audio_timelines[output_track_id] = tuple(
+                (start + timeline_shift_seconds, duration)
+                for start, duration in source_timelines[input_track_id]
+            )
         try:
             if chapters_saved and chapter_backup and os.path.isfile(chapter_backup):
                 propedit_command = [MKV_PROP_EDIT_PATH or 'mkvpropedit']
@@ -945,7 +985,9 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
 
             appended_output_id_by_sp_track_id = {
                 track_id: len(original_main_track_ids) + output_offset
-                for output_offset, (_pid, input_index, track_id) in enumerate(attachment_track_order)
+                for output_offset, (_signature, input_index, track_id) in enumerate(
+                    attachment_track_order
+                )
                 if input_index == 1
             }
             desired_language_by_output_id: dict[int, str] = {}
@@ -986,10 +1028,14 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                 force_remove_file(chapter_backup)
 
         original_main_map_cache[cache_key] = {
-            output_track_id: original_main_track_id_to_pid[input_track_id]
+            output_track_id: original_main_track_id_to_signature[input_track_id]
             for output_track_id, input_track_id in enumerate(original_main_track_ids)
         }
-        sp_mux_cache[cache_key] = dict(merged_track_id_to_pid)
+        sp_mux_cache[cache_key] = dict(merged_track_id_to_signature)
+        if merged_audio_timelines:
+            audio_timeline_cache[cache_key] = merged_audio_timelines
+        else:
+            audio_timeline_cache.pop(cache_key, None)
         return True
 
     @staticmethod
@@ -1082,6 +1128,28 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                 audio_tracks = list(job.audio_tracks)
                 subtitle_tracks = list(job.subtitle_tracks)
                 all_pid_slots = list(job.track_pids)
+                if source_path.lower().endswith('.mpls') and not is_image_output:
+                    max_play_items = int((looping_playlist or {}).get('max_clips') or 0)
+                    all_pid_slots = self._validate_mpls_tracks_for_execution(
+                        source_path,
+                        all_pid_slots,
+                        max_play_items=max_play_items or None,
+                        selected_source_slots=job.track_source_slots,
+                    )
+                    retained_audio = {
+                        str(pid) for track_type, pid in all_pid_slots
+                        if track_type == 'audio'
+                    }
+                    retained_subtitles = {
+                        str(pid) for track_type, pid in all_pid_slots
+                        if track_type in ('subtitle', 'subtitles')
+                    }
+                    audio_tracks = [
+                        track for track in audio_tracks if str(track) in retained_audio
+                    ]
+                    subtitle_tracks = [
+                        track for track in subtitle_tracks if str(track) in retained_subtitles
+                    ]
 
                 def command_pid_slots(*, include_video: bool) -> list[tuple[str, int]]:
                     return [
@@ -1089,6 +1157,17 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                         for track_type, pid in all_pid_slots
                         if include_video or track_type != 'video'
                     ]
+
+                def command_source_slots(*, include_video: bool) -> tuple[tuple[str, str, int], ...]:
+                    retained = list(all_pid_slots)
+                    selected: list[tuple[str, str, int]] = []
+                    for pid_slot, source_slot in zip(job.track_pids, job.track_source_slots):
+                        if pid_slot not in retained:
+                            continue
+                        retained.remove(pid_slot)
+                        if include_video or pid_slot[0] != 'video':
+                            selected.append(source_slot)
+                    return tuple(selected)
 
                 mapped_audio_tracks = list(audio_tracks)
                 mapped_subtitle_tracks = list(subtitle_tracks)
@@ -1107,46 +1186,70 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                 if output_is_episode:
                     language_overrides = dict(job.track_language_overrides)
                     episode_pid_slots = command_pid_slots(include_video=False)
+                    episode_source_slots = command_source_slots(include_video=False)
 
-                    def language_by_track_id(
-                            pid_by_track_id: dict[int, int],
+                    def language_by_output_source_slots(
+                            source_slots: tuple[tuple[str, str, int], ...],
                     ) -> dict[str, str]:
-                        return {
-                            str(track_id): language_overrides[str(pid)]
-                            for track_id, pid in pid_by_track_id.items()
-                            if str(pid) in language_overrides
-                        }
+                        languages: dict[str, str] = {}
+                        for track_id, (source_mpls, bucket, slot_index) in enumerate(
+                                source_slots):
+                            selection_key = _svc_cls()._mpls_track_selection_key(
+                                source_mpls, bucket, slot_index
+                            )
+                            language = str(language_overrides.get(selection_key) or '').strip()
+                            if language:
+                                languages[str(track_id)] = language
+                        return languages
 
-                    selected_episode_pid_set = {
-                        (track_type, pid) for track_type, pid in episode_pid_slots
-                    }
-                    direct_pid_by_track_id = {
-                        track_id: pid
-                        for (track_type, pid), track_id in (
-                            _svc_cls()._mkvmerge_pid_id_map(job.source_path).items()
+                    logical_slots, unresolved_slots = (
+                        _svc_cls()._mpls_logical_slots_for_selection(
+                            job.source_path,
+                            episode_pid_slots,
+                            selected_source_slots=episode_source_slots,
                         )
-                        if (track_type, pid) in selected_episode_pid_set
-                    }
+                    )
+                    direct_reference_map = _svc_cls()._mkvmerge_pid_id_map(job.source_path)
+                    direct_signatures: dict[int, tuple[tuple[str, int], ...]] = {}
+                    direct_languages: dict[str, str] = {}
+                    for logical_slot in logical_slots:
+                        logical_type = str(logical_slot.get('_logical_type') or '')
+                        logical_pid = int(logical_slot.get('_logical_pid') or 0)
+                        track_id = direct_reference_map.get((logical_type, logical_pid))
+                        if track_id is None:
+                            continue
+                        direct_signatures[int(track_id)] = (
+                            _svc_cls()._mpls_track_mapping_signature(logical_slot)
+                        )
+                        selection_key = _svc_cls()._mpls_track_selection_key(
+                            str(logical_slot.get('_mpls_source_path') or job.source_path),
+                            str(logical_slot.get('_mpls_bucket') or logical_type),
+                            int(logical_slot.get('_mpls_slot_index') or 0),
+                        )
+                        language = str(language_overrides.get(selection_key) or '').strip()
+                        if language:
+                            direct_languages[str(track_id)] = language
 
-                    direct_identify_ok = not job.track_pids or (
+                    direct_identify_ok = not unresolved_slots and (
+                        not job.track_pids or (
                         not looping_playlist
                         and self._mkvmerge_identify_covers_remux_slots(
                             job.source_path,
                             audio_tracks,
                             subtitle_tracks,
                             selected_pid_slots=episode_pid_slots,
+                            selected_source_slots=episode_source_slots,
                         )
-                    )
+                    ))
                     mux_ok = direct_identify_ok and self._mux_episode_linked_sp_mkvmerge(
                             episode_mkv=output_path,
                             sp_mpls_path=job.source_path,
                             episode_main_mpls=job.episode_main_mpls_path,
                             selected_sp_audio_track_ids=mapped_audio_tracks,
                             selected_sp_subtitle_track_ids=mapped_subtitle_tracks,
-                            language_by_sp_track_id=language_by_track_id(
-                                direct_pid_by_track_id
-                            ),
+                            language_by_sp_track_id=direct_languages,
                             cancel_event=cancel_event,
+                            source_signature_by_track_id=direct_signatures,
                     )
                     if not mux_ok and job.source_path.lower().endswith('.mpls'):
                         temporary_folder = tempfile.mkdtemp(
@@ -1164,26 +1267,44 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                             cancel_event=cancel_event,
                             max_play_items=max_play_items or None,
                             selected_pid_slots=episode_pid_slots,
+                            selected_source_slots=episode_source_slots,
+                        )
+                        aligned_pid_slots = list(
+                            getattr(self, '_remux_fallback_track_slots', {}).get(
+                                os.path.normcase(os.path.abspath(aligned_sp_path)),
+                                episode_pid_slots,
+                            )
                         )
                         aligned_mapping = (
                             self._aligned_output_track_ids_for_pid_slots(
-                                aligned_sp_path, episode_pid_slots
+                                aligned_sp_path, aligned_pid_slots
                             )
                             if aligned_ok else None
                         )
                         if aligned_mapping is not None:
-                            aligned_audio, aligned_subtitle, pid_by_track_id = aligned_mapping
+                            aligned_audio, aligned_subtitle, _pid_by_track_id = aligned_mapping
+                            aligned_key = os.path.normcase(os.path.abspath(aligned_sp_path))
+                            aligned_signatures = dict(
+                                getattr(self, '_remux_fallback_track_signatures', {}).get(
+                                    aligned_key, {}
+                                )
+                            )
+                            aligned_source_slots = tuple(
+                                getattr(self, '_remux_fallback_track_source_slots', {}).get(
+                                    aligned_key, ()
+                                )
+                            )
                             mux_ok = self._mux_episode_linked_sp_mkvmerge(
                                 episode_mkv=output_path,
                                 sp_mpls_path=aligned_sp_path,
                                 episode_main_mpls=job.episode_main_mpls_path,
                                 selected_sp_audio_track_ids=aligned_audio,
                                 selected_sp_subtitle_track_ids=aligned_subtitle,
-                                language_by_sp_track_id=language_by_track_id(
-                                    pid_by_track_id
+                                language_by_sp_track_id=language_by_output_source_slots(
+                                    aligned_source_slots
                                 ),
                                 cancel_event=cancel_event,
-                                source_pid_by_track_id=pid_by_track_id,
+                                source_signature_by_track_id=aligned_signatures,
                             )
                     if not mux_ok:
                         raise RuntimeError(
@@ -1295,8 +1416,14 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                                 source_path,
                                 audio_tracks,
                                 [],
-                                subprocess.list2cmdline(command),
                                 selected_pid_slots=audio_pid_slots,
+                                selected_source_slots=tuple(
+                                    source_slot
+                                    for (track_type, _pid), source_slot in zip(
+                                        job.track_pids, job.track_source_slots
+                                    )
+                                    if track_type == 'audio'
+                                ),
                             )
                             extraction_ok = identify_ok and run_command(command).returncode in (0, 1) and (
                                 os.path.isfile(audio_source) and os.path.getsize(audio_source) > 0
@@ -1312,27 +1439,36 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                                     cancel_event=cancel_event,
                                     max_play_items=max_play_items or None,
                                     selected_pid_slots=audio_pid_slots,
+                                    selected_source_slots=tuple(
+                                        source_slot
+                                        for (track_type, _pid), source_slot in zip(
+                                            job.track_pids, job.track_source_slots
+                                        )
+                                        if track_type == 'audio'
+                                    ),
                                 )
                             audio_track = '0'
                         target_codec = (standalone_audio_targets or {}).get(
                             job.entry_index, ''
                         )
-                        if extraction_ok and target_codec == 'aac':
-                            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-                            rate_control = (
-                                ['-b', str(audio_encoding.fdkaac_bitrate_kbps * 1000)]
-                                if audio_encoding.fdkaac_bitrate_kbps else ['-m', '5']
+                        audio_source_timelines = dict(
+                            getattr(
+                                self, '_remux_fallback_audio_timelines', {}
+                            ).get(
+                                os.path.normcase(os.path.abspath(audio_source)),
+                                {},
                             )
-                            extraction_ok = encode_fdkaac_from_ffmpeg(
-                                FFMPEG_PATH or 'ffmpeg',
-                                FDK_AAC_PATH or 'fdkaac',
-                                audio_source,
-                                f'0:{audio_track}',
-                                output_path,
-                                rate_control,
-                            )
-                        elif extraction_ok and target_codec == 'opus':
-                            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+                        )
+                        sparse_timeline = any(
+                            len(runs) > 1
+                            or bool(runs and float(runs[0][0]) > 0.0005)
+                            for runs in audio_source_timelines.values()
+                        )
+                        if extraction_ok and sparse_timeline:
+                            raise RuntimeError(translate_text(
+                                'Standalone audio output cannot preserve playlist gaps: {path}'
+                            ).format(path=output_path))
+                        if extraction_ok and target_codec in ('flac', 'aac', 'opus'):
                             track_info = next((
                                 row for row in self._read_m2ts_track_info(job.first_m2ts_path)
                                 if (
@@ -1341,23 +1477,12 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                                     else str(row.get('index', '')) == str(audio_tracks[0])
                                 )
                             ), {})
-                            channels = int(track_info.get('channels') or 2)
-                            bitrate = audio_encoding.opus_bitrate_kbps or (
-                                128 if channels <= 2 else 256
-                            )
-                            command = [
-                                FFMPEG_PATH or 'ffmpeg', '-y', '-i', audio_source,
-                                '-map', f'0:{audio_track}', '-c:a', 'libopus',
-                            ]
-                            if channels > 2:
-                                command.extend(['-mapping_family', '1'])
-                            command.extend(['-b:a', f'{bitrate}k', output_path])
-                            extraction_ok = run_command(command).returncode == 0
-                        elif extraction_ok and output_extension == '.flac':
-                            extraction_ok = convert_audio_stream_to_flac(
+                            extraction_ok = convert_audio_stream(
                                 audio_source,
                                 f'0:{audio_track}',
                                 output_path,
+                                target_codec=target_codec,
+                                channel_count=int(track_info.get('channels') or 2),
                                 wave64_bit_depth=24,
                                 audio_encoding=audio_encoding,
                             )
@@ -1505,8 +1630,10 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                             source_path,
                             audio_tracks,
                             subtitle_tracks,
-                            subprocess.list2cmdline(command),
                             selected_pid_slots=selected_command_pid_slots,
+                            selected_source_slots=command_source_slots(
+                                include_video=output_extension == '.mkv'
+                            ),
                         )
                     print(f'{self.t("Mux command: ")}{subprocess.list2cmdline(command)}')
                     result = run_command(command) if identify_ok else None
@@ -1533,6 +1660,9 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                             cancel_event=cancel_event,
                             max_play_items=max_play_items or None,
                             selected_pid_slots=selected_command_pid_slots,
+                            selected_source_slots=command_source_slots(
+                                include_video=output_extension == '.mkv'
+                            ),
                         )
                     if primary_ok and custom_chapter_match:
                         aligned_segment = os.path.join(
@@ -1561,6 +1691,56 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                         )
                         if primary_ok:
                             os.replace(segment_candidates[0], output_path)
+                            fallback_slots = getattr(
+                                self, '_remux_fallback_track_slots', {}
+                            ).get(os.path.normcase(os.path.abspath(fallback_output)))
+                            if fallback_slots:
+                                self._remux_fallback_track_slots[
+                                    os.path.normcase(os.path.abspath(output_path))
+                                ] = tuple(fallback_slots)
+                            fallback_key = os.path.normcase(
+                                os.path.abspath(fallback_output)
+                            )
+                            output_key = os.path.normcase(
+                                os.path.abspath(output_path)
+                            )
+                            timeline_cache = getattr(
+                                self, '_remux_fallback_audio_timelines', {}
+                            )
+                            fallback_timelines = timeline_cache.pop(
+                                fallback_key, None
+                            )
+                            if isinstance(fallback_timelines, dict):
+                                split_start_text, split_end_text = split_parts.split(
+                                    '-', 1
+                                )
+                                split_start_seconds = parse_time_to_seconds(
+                                    split_start_text
+                                )
+                                split_end_seconds = parse_time_to_seconds(
+                                    split_end_text
+                                )
+                                timeline_cache[output_key] = {
+                                    int(track_id): tuple(
+                                        (
+                                            max(run_start, split_start_seconds)
+                                            - split_start_seconds,
+                                            min(
+                                                run_start + run_duration,
+                                                split_end_seconds,
+                                            ) - max(run_start, split_start_seconds),
+                                        )
+                                        for run_start, run_duration in runs
+                                        if (
+                                            max(run_start, split_start_seconds)
+                                            < min(
+                                                run_start + run_duration,
+                                                split_end_seconds,
+                                            )
+                                        )
+                                    )
+                                    for track_id, runs in fallback_timelines.items()
+                                }
                 if not primary_ok or not os.path.isfile(output_path):
                     raise RuntimeError(
                         translate_text('SP processing failed in row {row}: {path}').format(
@@ -1586,14 +1766,28 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                             )
 
                 if job.track_language_overrides:
+                    output_key = os.path.normcase(os.path.abspath(output_path))
+                    output_pid_slots = list(
+                        getattr(self, '_remux_fallback_track_slots', {}).get(
+                            output_key,
+                            selected_command_pid_slots,
+                        )
+                    )
+                    output_source_slots = tuple(
+                        getattr(self, '_remux_fallback_track_source_slots', {}).get(
+                            output_key,
+                            command_source_slots(include_video=output_extension == '.mkv'),
+                        )
+                    )
                     self._fix_output_track_languages_with_mkvpropedit(
                         output_path, job.first_m2ts_path, audio_tracks, subtitle_tracks,
                         dict(job.track_language_overrides),
                         getattr(self, '_dovi_mux_plan', None),
                         selected_pid_slots=(
-                            selected_command_pid_slots
+                            output_pid_slots
                             if job.track_pids else None
                         ),
+                        selected_source_slots=output_source_slots,
                     )
                 created_outputs.append((job.entry_index, output_path))
                 if progress_cb:
