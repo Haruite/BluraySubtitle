@@ -46,25 +46,23 @@ default_config = required_path(
     PROJECT_ROOT / "config.default.json",
     "default application configuration",
 )
-third_party_notices_template = required_path(
-    PROJECT_ROOT / "legal" / "THIRD_PARTY_NOTICES.md",
-    "third-party notices template",
-)
-third_party_notices_path = Path(workpath) / "legal" / "THIRD_PARTY_NOTICES.md"
+third_party_notices_paths = {
+    required_path(PROJECT_ROOT / "legal" / name, "third-party notices template"):
+        Path(workpath) / "legal" / name
+    for name in (
+        "THIRD_PARTY_NOTICES.md",
+        "THIRD_PARTY_NOTICES.zh-Hans.md",
+    )
+}
 notices_updater_path = required_path(
     PROJECT_ROOT / "tools" / "update_third_party_notices.py",
     "third-party notices updater",
 )
 notices_updater = runpy.run_path(str(notices_updater_path))
 notices_updater["generate_third_party_notices"](
-    third_party_notices_template,
-    third_party_notices_path,
+    third_party_notices_paths,
     SETTINGS,
     PYINSTALLER_VERSION,
-)
-third_party_notices = required_path(
-    third_party_notices_path,
-    "third-party notices",
 )
 
 # The application expects this exact bundled layout:
@@ -118,7 +116,7 @@ datas = [
     (str(default_config), "."),
     (str(SETTINGS_PATH), "src/core"),
     (str(getnative_vpy), "src/vs_tools"),
-    (str(third_party_notices), "legal"),
+    *((str(path), "legal") for path in third_party_notices_paths.values()),
     # A directory source copies all of its contents beneath this destination.
     (str(vapoursynth_dir), "vs_pkg"),
 ]

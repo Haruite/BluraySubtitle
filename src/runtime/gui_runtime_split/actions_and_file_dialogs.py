@@ -56,15 +56,15 @@ def _is_pyinstaller_frozen_bundle() -> bool:
 
 class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
     def _open_third_party_notices_dialog(self):
-        """Show bundled ``THIRD_PARTY_NOTICES.md`` (PyInstaller build only)."""
+        """Show bundled notices in the current UI language (PyInstaller build only)."""
         if not _is_pyinstaller_frozen_bundle():
             return
-        path = third_party_notices_markdown_path()
+        path = third_party_notices_markdown_path(self._language_code)
         if not path:
             QMessageBox.information(
                 self,
                 self.t('Third-party notices'),
-                self.t('THIRD_PARTY_NOTICES.md was not found in this bundle.'),
+                self.t('Third-party notices were not found in this bundle.'),
             )
             return
         try:
@@ -74,7 +74,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             QMessageBox.warning(
                 self,
                 self.t('Third-party notices'),
-                self.t('Could not read THIRD_PARTY_NOTICES.md:') + f' {exc}',
+                self.t('Could not read third-party notices:') + f' {exc}',
             )
             return
         dlg = QDialog(self)

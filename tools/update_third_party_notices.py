@@ -49,11 +49,11 @@ def _marker(path: Path) -> str:
 
 
 def generate_third_party_notices(
-    template_path: Path,
-    output_path: Path,
+    template_outputs: Mapping[Path, Path],
     settings: Mapping[str, object],
     pyinstaller_version: str,
 ) -> None:
+    """Render all language templates using one set of bundled component versions."""
     ffmpeg_build = _command_version(
         settings["FFMPEG_PATH"],
         ("-version",),
@@ -129,18 +129,19 @@ def generate_third_party_notices(
         "PYINSTALLER_VERSION": pyinstaller_version,
     }
 
-    template = template_path.read_text(encoding="utf-8-sig")
-    declared = set(PLACEHOLDER.findall(template))
-    missing_values = declared - versions.keys()
-    missing_declarations = versions.keys() - declared
-    if missing_values or missing_declarations:
-        raise RuntimeError(
-            "THIRD_PARTY_NOTICES.md software declarations do not match the updater: "
-            f"missing values={sorted(missing_values)}, "
-            f"missing declarations={sorted(missing_declarations)}"
-        )
-    for name, value in versions.items():
-        template = template.replace("{{" + name + "}}", value)
+    for template_path, output_path in template_outputs.items():
+        template = template_path.read_text(encoding="utf-8-sig")
+        declared = set(PLACEHOLDER.findall(template))
+        missing_values = declared - versions.keys()
+        missing_declarations = versions.keys() - declared
+        if missing_values or missing_declarations:
+            raise RuntimeError(
+                f"{template_path.name} software declarations do not match the updater: "
+                f"missing values={sorted(missing_values)}, "
+                f"missing declarations={sorted(missing_declarations)}"
+            )
+        for name, value in versions.items():
+            template = template.replace("{{" + name + "}}", value)
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_bytes(template.replace("\n", "\r\n").encode("utf-8"))
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(template.replace("\n", "\r\n").encode("utf-8"))

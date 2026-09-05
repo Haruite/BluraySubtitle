@@ -357,14 +357,12 @@ def bundle_application_root() -> str:
     return getattr(sys, '_MEIPASS', os.path.abspath('.'))
 
 
-def third_party_notices_markdown_path() -> Optional[str]:
-    """
-    Resolve ``THIRD_PARTY_NOTICES.md`` for the PyInstaller bundle (``legal/`` subfolder)
-    or for a source checkout / cwd.
-    """
+def third_party_notices_markdown_path(language: str) -> Optional[str]:
+    """Resolve the selected UI language's notices in the bundle or source checkout."""
+    filename = 'THIRD_PARTY_NOTICES.zh-Hans.md' if language == 'zh' else 'THIRD_PARTY_NOTICES.md'
     rel_candidates = (
-        os.path.join('legal', 'THIRD_PARTY_NOTICES.md'),
-        'THIRD_PARTY_NOTICES.md',
+        os.path.join('legal', filename),
+        filename,
     )
     seen: set[str] = set()
     roots: list[str] = []
