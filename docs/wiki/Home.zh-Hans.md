@@ -2,45 +2,20 @@
 
 [English](Home.md) | 简体中文
 
-本文档解释 BluraySubtitle 涉及的媒体概念，并将这些概念与项目实现对应起来。主要面向两类读者：
+安装和基本操作从 [README](../../README.zh-Hans.md) 开始，详细说明按主题查阅下表。
 
-- 希望可靠理解蓝光原盘、Matroska、轨道、重混流、压制、字幕、音频、视频和 Dolby Vision 的用户；
-- 需要了解二进制结构、时间规则、源码位置和工作流约束的开发者。
+| 主题 | 主要文档 |
+| --- | --- |
+| 表格、轨道对话框及真实原盘选择示例 | [界面展示及说明](Interface-Guide.zh-Hans.md) |
+| 容器、轨道、抽流／重混流、编码与无损音频 | [媒体基础概念](Media-Fundamentals.zh-Hans.md) |
+| BDMV 结构、播放列表时间、主 MPLS 与 SP 规则 | [蓝光原盘结构](Blu-ray-Disc-Structure.zh-Hans.md) |
+| 视频／音频编码、字幕格式及 Dolby Vision 分层 | [媒体格式、字幕与 Dolby Vision](Media-Formats-and-Dolby-Vision.zh-Hans.md) |
+| 编码器设置、VPy 滤镜、预览、getnative 与 HDR 处理 | [视频压制与 VapourSynth](Video-Encoding-and-VapourSynth.zh-Hans.md) |
+| 源码导航、标识符及分集配置 | [开发者指南](BluraySubtitle-Developer-Guide.zh-Hans.md) |
+| Remux 回退、音频处理及外部工具选型依据 | [媒体处理流程与工具选型](../development/media-pipeline-and-tool-selection.zh-Hans.md) |
+| 修改要求 | [代码修改规范](../development/code-standards.zh-Hans.md) |
+| 格式规范及上游手册 | [参考资料](References.zh-Hans.md) |
 
-如需通过截图了解主要表格和几种真实原盘的选择方法，可先阅读[界面展示及说明](Interface-Guide.zh-Hans.md)。如果你还不熟悉“容器”“轨道”“抽流”“无损”等术语，请继续阅读[媒体基础概念](Media-Fundamentals.zh-Hans.md)。随后可通过[蓝光原盘结构](Blu-ray-Disc-Structure.zh-Hans.md)了解 BDMV、MPLS、CLPI、M2TS、播放列表时间和章节。编解码器、音频与字幕的细节集中在[媒体格式、字幕与 Dolby Vision](Media-Formats-and-Dolby-Vision.zh-Hans.md)；[视频压制与 VapourSynth](Video-Encoding-and-VapourSynth.zh-Hans.md)则介绍编码选择、参数预设、帧处理和项目压制管线。
+新用户可先看界面示例，再按需查阅概念。开发者应先读代码规范，再看开发者指南及相关处理流程。
 
-开发者还应阅读 [BluraySubtitle 开发者指南](BluraySubtitle-Developer-Guide.zh-Hans.md)。该文档定义项目中 **主 MPLS** 和 **SP** 的含义，介绍扫描与重混流管线，并指向相关源码。
-
-## 项目术语速览
-
-以下定义属于本项目，不应与蓝光规范中的术语混淆：
-
-- **主 MPLS**：所选原盘播放列表，其编排的播放内容属于正片、电影主体或剧集主体。主 MPLS 不一定是编号最小、体积最大或时长最长的播放列表。
-- **SP**：所选主播放列表内容之外的所有附加原盘内容，包括其他播放列表、主 MPLS 中未勾选的片段，以及没有被播放列表覆盖但有用的 M2TS。这里的 `SP` 是 BluraySubtitle 的内容分类，不是蓝光文件格式或规范术语。
-- **原盘／蓝光源**：在项目的一般语境中，指能够读取并呈现 BDMV 结构的蓝光目录或已挂载镜像。应用本身不负责解密无法读取的扇区。
-- **Remux／重混流**：不重新编码视频，将所选编码流写入新容器。BluraySubtitle 的 Remux 任务仍可能执行用户明确选择或项目明确记录的音频转换与清理，因此最终文件不一定逐字节保留每条源流。
-- **Encode／压制**：解码并重新编码视频，可在编码前执行预处理，最后将结果与所选音频、字幕、章节和元数据混流。
-
-## 推荐阅读顺序
-
-### 仅使用应用
-
-1. [界面展示及说明](Interface-Guide.zh-Hans.md)
-2. [媒体基础概念](Media-Fundamentals.zh-Hans.md)
-3. [蓝光原盘结构](Blu-ray-Disc-Structure.zh-Hans.md)，至少读到“MPLS、M2TS 与 CLPI 如何协作”
-4. [媒体格式、字幕与 Dolby Vision](Media-Formats-and-Dolby-Vision.zh-Hans.md)
-5. [视频压制与 VapourSynth](Video-Encoding-and-VapourSynth.zh-Hans.md)，适合使用压制功能的用户
-6. 项目[简体中文 README](../../README.zh-Hans.md)
-
-### 理解或修改项目实现
-
-1. 上述全部用户文档
-2. [BluraySubtitle 开发者指南](BluraySubtitle-Developer-Guide.zh-Hans.md)
-3. [媒体管线设计与工具选择](../development/media-pipeline-and-tool-selection.zh-Hans.md)
-4. [代码修改规范](../development/code-standards.zh-Hans.md)
-
-## 内容范围
-
-本文档重点介绍影响蓝光内容识别、提取、重混流、压制和保留的部分。导航文件只解释到足以定位编排播放路径的程度；本文并非 HDMV 虚拟机、BD-J、AACS、BD+、区域控制或蓝光制作的完整实现指南。
-
-二进制细节以项目解析器、公开的 [lw/BluRay Wiki](https://github.com/lw/BluRay/wiki)，以及[参考资料](References.zh-Hans.md)列出的规范和开源实现为依据。
+Wiki 覆盖媒体识别、提取、重混流和压制，不实现完整的 HDMV／BD-J 导航、原盘解密或原盘制作。二进制结构说明以项目解析器和参考资料中列出的来源为依据。

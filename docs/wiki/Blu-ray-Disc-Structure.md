@@ -6,92 +6,37 @@ This page follows a Blu-ray title from the directory tree down to transport pack
 
 ## The disc root
 
-A movie Blu-ray normally exposes two directories at the filesystem root:
+BluraySubtitle expects readable files in a disc directory or mounted image; it does not decrypt AACS/BD+ content or emulate the complete navigation application.
 
 ```text
 BDROM/
 ├── BDMV/
+│   ├── index.bdmv
+│   ├── MovieObject.bdmv
+│   ├── PLAYLIST/xxxxx.mpls
+│   ├── CLIPINF/xxxxx.clpi
+│   ├── STREAM/xxxxx.m2ts
+│   ├── BACKUP/
+│   ├── AUXDATA/             (optional)
+│   ├── META/                (optional)
+│   ├── BDJO/                (BD-J, optional)
+│   └── JAR/                 (BD-J, optional)
 └── CERTIFICATE/
 ```
 
-`CERTIFICATE` participates in disc/application authenticity and is not part of the media extraction path described here. `BDMV` holds the playback application and audiovisual content.
+| Entry | Purpose |
+| --- | --- |
+| `index.bdmv` | Title, first-playback, and menu entry points referring to HDMV objects or BD-J applications |
+| `MovieObject.bdmv` | HDMV navigation commands that start playlists, jump between objects, and update player registers |
+| `PLAYLIST` | Ordered clip windows, stream selection, subpaths, angles, and marks |
+| `CLIPINF` | Timing, program/stream metadata, and seek indexes for the same-numbered M2TS |
+| `STREAM` | Multiplexed audiovisual packets; filenames do not identify the content's role |
+| `BACKUP` | Copies of navigation and clip metadata, without duplicating the large STREAM directory |
+| `AUXDATA`, `META` | Auxiliary sounds/fonts and XML metadata/images |
+| `BDJO`, `JAR` | BD-J applications |
+| `CERTIFICATE` | Disc/application authenticity data outside this media-extraction path |
 
-Commercial discs may also contain encryption or protection-related data. AACS and BD+ operate below or beside the playlist/container concerns described on this page. BluraySubtitle expects the operating system to expose readable files; it is not an AACS or BD+ decrypter.
-
-## The BDMV directory
-
-A representative tree is:
-
-```text
-BDMV/
-├── index.bdmv
-├── MovieObject.bdmv
-├── PLAYLIST/
-│   ├── 00000.mpls
-│   └── ...
-├── CLIPINF/
-│   ├── 00000.clpi
-│   └── ...
-├── STREAM/
-│   ├── 00000.m2ts
-│   └── ...
-├── BACKUP/
-│   ├── index.bdmv
-│   ├── MovieObject.bdmv
-│   ├── PLAYLIST/
-│   └── CLIPINF/
-├── AUXDATA/          (optional)
-├── META/             (optional)
-├── BDJO/             (BD-J, optional)
-└── JAR/              (BD-J, optional)
-```
-
-The important relationships are:
-
-```text
-index.bdmv
-    └─ title entry
-       └─ MovieObject.bdmv or BD-J object
-          └─ starts a playlist
-             └─ PLAYLIST/xxxxx.mpls
-                ├─ selects one or more clip windows
-                │  ├─ CLIPINF/yyyyy.clpi
-                │  └─ STREAM/yyyyy.m2ts
-                └─ defines playlist marks and stream entries
-```
-
-### `index.bdmv`
-
-The index table defines top-level title entry points, first playback, and menu entry behavior. A title refers to HDMV movie objects or BD-J applications.
-
-### `MovieObject.bdmv`
-
-Movie objects contain navigation commands interpreted by the HDMV virtual machine. Commands can start playlists, jump between objects, update player registers, and react to navigation events.
-
-BluraySubtitle does not emulate the full navigation application. Its task is to identify and process authored playlists and clips.
-
-### `PLAYLIST`
-
-Each `xxxxx.mpls` is a **Movie PlayList**. It defines an ordered virtual timeline made from one or more clip intervals. It can also contain stream selection metadata, subpaths, multi-angle references, and playlist marks.
-
-### `CLIPINF`
-
-Each `xxxxx.clpi` describes the corresponding `STREAM/xxxxx.m2ts`. CLPI contains clip timing, program and stream metadata, and indexes that allow a player to map presentation time to transport-stream packet positions.
-
-### `STREAM`
-
-Each `xxxxx.m2ts` stores multiplexed audiovisual packets. The filename alone does not identify whether the file is main content, an extra, a menu, a still, audio-only material, or a reusable branch.
-
-### `BACKUP`
-
-The important navigation and clip-information structures are duplicated under `BACKUP`. The large `STREAM` directory is not duplicated. Software may consult backup copies when primary metadata is missing or damaged.
-
-### Optional content
-
-- `AUXDATA` can hold auxiliary sound and font data.
-- `META` can hold XML metadata and images.
-- `BDJO` and `JAR` support BD-J applications.
-- Interactive menu graphics usually live as streams inside M2TS rather than as ordinary image files.
+A title entry starts an HDMV or BD-J object, which selects a playlist; each playlist then references clip information and media. Menu graphics usually reside inside M2TS streams.
 
 ## Special authored content
 
@@ -128,7 +73,7 @@ MPLS `PlayItem` also has authored still-playback fields:
 
 The physical one-frame stream and the playlist still instruction are related but distinct. Counting frames in the M2TS does not reveal how long a disc player will keep it on screen; `StillMode`, `StillTime`, and navigation behavior must also be considered.
 
-During SP scanning, BluraySubtitle treats very small video sources (currently no more than 1 MiB per involved M2TS) with at most one known frame per source as single-frame or multi-clip still content. The size check is an early classification guard, not a Blu-ray specification limit. Unknown frame count, audio-only content, and larger streams follow other classification paths.
+For the application’s still-image classification and output rules, see [SP selection and outputs](#sp-selection-and-outputs).
 
 ### Other non-feature layouts
 
@@ -296,11 +241,7 @@ Language is descriptive metadata rather than the identity of the logical track. 
 
 Blu-ray playback can switch the elementary stream selected for a stream number at a PlayItem boundary because each PlayItem supplies a new STN table. Matroska has a different model: one `TrackEntry` describes one codec and one stable set of track-level parameters. Matroska timestamps can represent a track that starts late or has no packets for an interval, so a Blu-ray gap does not require a silent audio replacement or an empty video/subtitle stream. However, occurrences whose codec or required track parameters change cannot safely be appended to that same Matroska track.
 
-Disc loading therefore uses MPLS metadata only. It does not open M2TS files or run `mkvmerge --identify`. When Remux or a BDMV-source Encode actually starts, every selected logical-track occurrence is checked against the PAT/PMT of its PlayItem M2TS. A declared occurrence that is missing or has a conflicting transport stream type normally makes the output fail because the GUI-selected logical track cannot be retained; an STN-declared gap remains a gap. The disabled-by-default **Allow partially missing non-video tracks** option changes only one case: after a selected audio or subtitle occurrence is confirmed physically absent and tsMuxer also cannot recover it, that interval is treated like an STN gap. Every selected logical track must still occur elsewhere in the output, and missing video always fails. The direct MPLS path is used only when MKVToolNix exposes a consistent mapping for every occurrence. Otherwise the fallback remuxes the occurrences that exist and joins them on one Matroska timeline without manufacturing packets for gaps.
-
-If that sparse logical track is later converted to FLAC, AAC, or Opus, BluraySubtitle converts its actual audio intervals and restores the same gap timestamps in Matroska. The gap is excluded from silence, duplicate, and duration-content calculations. A raw standalone audio stream has no container timeline for this purpose, so the application rejects sparse standalone output instead of inserting silent samples.
-
-This validation has a deliberate boundary. MPLS attributes and M2TS PAT/PMT identify the declared codec family and Blu-ray-level format fields, but they do not expose every payload-level property that a Matroska packetizer may require to remain stable. Examples include PCM effective bit depth or channel layout derived only from payload headers, and codec-private changes discovered only while parsing elementary-stream data. BluraySubtitle does not add speculative full-payload parsing for those cases. If a later MKVToolNix append rejects such a change, the fallback fails explicitly and preserves no partial final output.
+Execution checks, the partial-missing option, sparse audio, and payload-level compatibility limits are covered by the [track-aligned fallback](../development/media-pipeline-and-tool-selection.md#3-track-aligned-remux-fallback).
 
 ### Playlist marks and chapters
 
@@ -453,25 +394,14 @@ Descriptors and Blu-ray extensions can refine the meaning. A stream type code al
 
 ## Why playlist-aware processing is required
 
-### Interior clip windows
+| Disc layout | Consequence |
+| --- | --- |
+| Interior clip window | Copying an entire M2TS includes unselected content |
+| Reused clip or seamless branch | One file can contribute different intervals to several titles |
+| Changing track layout | Follow logical STN tracks across PID changes and gaps |
+| Obfuscated playlist order | Duration and filenames cannot establish the intended cut |
 
-If a play item selects only 10:00–20:00 of a one-hour M2TS, concatenating the whole M2TS produces the wrong title. A demuxer must apply both boundaries in the correct STC/PTS timebase.
-
-### Reused clips
-
-One M2TS can appear in multiple playlists or multiple times in one playlist. The same physical bytes can therefore contribute to main content, SP content, or both, depending on the selected interval.
-
-### Seamless branching
-
-Different editions or cuts can share most clips but choose different branches. The playlist, not file size or filename order, expresses the desired cut.
-
-### Different track layouts
-
-Adjacent clips may use different PIDs or omit one logical track temporarily. Treating PID as the track identity can therefore lose, swap, or duplicate tracks. BluraySubtitle follows the per-PlayItem STN stream number, preserves legitimate gaps with Matroska timestamps, and rejects known incompatible parameter changes instead of inventing replacement packets.
-
-### Playlist obfuscation
-
-Some discs contain many plausible playlists with deliberately permuted clip orders. “Longest playlist” is then a weak heuristic. Playback inspection or external knowledge may be necessary to choose the correct main MPLS.
+The [interface examples](Interface-Guide.md) show how to inspect these cases using chapters, M2TS timing, and track selection.
 
 ## How the automatic main-playlist estimate works
 
@@ -525,23 +455,41 @@ The first-season discs of *Horizon in the Middle of Nowhere* are a representativ
 
 ## Main content and SP in this project
 
-The Blu-ray specification does not define “main MPLS” or “SP” as used here. BluraySubtitle applies a content model on top of the disc:
+**Main MPLS** means a selected playlist for the movie or episodes; a disc may have several. **SP** is the project's category for additional content: other MPLS files, unchecked main-playlist intervals, and useful M2TS files not covered by any playlist. Neither term is a Blu-ray format. SP may contain video, audio, subtitles, menus, or still images.
 
-- A **main MPLS** is a selected playlist whose authored playback content is the main movie or episodes.
-- Selected chapter/segment ranges inside it form main outputs.
-- Unchecked ranges inside the main playlist are SP candidates.
-- Other playlists are SP candidates.
-- M2TS files not covered by any playlist can also become SP rows when their content can be handled deterministically.
+### SP selection and outputs
 
-Therefore:
+The task waits for SP scanning, then captures the visible selection, order, source, name, tracks, and languages. MPLS-backed rows always use playlist logic; raw M2TS logic applies only when no MPLS belongs to the row. Rows are ordered by volume, then MPLS name, then uncovered M2TS name.
 
-```text
-disc content
-├── selected main-playlist intervals → main outputs
-└── remaining useful authored or uncovered content → SP
-```
+| Source condition | Default selection |
+| --- | --- |
+| MPLS/M2TS shorter than 30 seconds | Visible but unchecked; repeated MPLS clip names count once toward duration |
+| MPLS with at least three distinct files | Checked |
+| Each involved M2TS has 1–12 decoded frames, all identical within that file | Checked as still content; finding frame 13 stops and rejects that classification |
+| IGS menu, including zero-duration menus | Available but unchecked; fully black extracted states are omitted |
+| Unreadable or unsupported layout | Disabled |
 
-“SP” can include ordinary video extras, menus, audio-only material, subtitle-only material, IGS assets, and single-frame images. It does not imply one codec or container.
+Still content and MPLS files with at least three distinct clips are exempt from the short-content rule. Exact main/episode matches use the attachment rules below. Content fully covered by the main selection remains visible but is unchecked by default unless it contributes new tracks through those rules.
+
+| Selected content | Output |
+| --- | --- |
+| Video, including implicit video-only content | `.mkv` |
+| One audio track from audio-only content | Elementary extension of its selected output format |
+| Multiple audio tracks, or uncovered audio-with-subtitle M2TS | `.mka` |
+| One subtitle from subtitle-only content | Elementary subtitle extension |
+| Multiple subtitle tracks | `.mks` |
+| IGS menu | Extracted state images |
+| One still clip | `.png` |
+| Several still clips in one MPLS | Directory containing `{n}-{m2ts_name}.png` |
+| No selected audio/subtitle and no implicit video | Empty name; intentional skip |
+
+Other supported container layouts use `.mkv`. Uncovered M2TS discovery distinguishes video, audio-only, subtitle-only, audio-with-subtitle, IGS, private/other, mixed non-video, and unknown layouts before choosing or disabling output.
+
+MPLS basenames use `BD_Vol_{bdmv_vol}_SP{n}`, with consistent zero padding among selected MPLS rows on that disc. Uncovered M2TS uses `BD_Vol_{bdmv_vol}_{m2ts_name}`. A movie with only one table2 row omits the volume prefix, using `SP{n}` or `{m2ts_name}`. Track edits update names immediately; linked episode names also follow splitting changes. Execution uses the resulting visible name.
+
+MPLS container outputs replace existing chapters with playlist-generated chapters, removing the tail marker and omitting a lone zero-time chapter. Edited languages are applied and verified for `.mkv`, `.mka`, and `.mks`, including appended tracks. Raw streams and images cannot store those language settings, so such a configuration is rejected.
+
+Every selected row with a non-empty output must complete. A source or captured selection that becomes unavailable after scanning is an error. Remux failure and append verification are described in the [developer guide](BluraySubtitle-Developer-Guide.md#sp-pipeline).
 
 ### SP tracks and MPLS-hidden tracks
 
@@ -560,15 +508,8 @@ A cross-disc commentary exception occurs on *The Seven Deadly Sins: Four Knights
 
 Other main episodes that do not contain the additional track remain unchanged. In typical authored discs such unexposed tracks are silent or duplicate audio. Even when their bytes are not silent, they are not addressable through normal MPLS playback and are not treated as valid title audio unless a matching SP timeline exposes them.
 
+An authored interval exception occurs on *Witch Craft Works Blu-ray BOX* DISC3. `00002.mpls` uses `00006.m2ts` from `00:00:00.000`, but uses `00007.m2ts` through `00011.m2ts` from `00:00:02.002`; their standalone `00004.mpls` through `00008.mpls` playlists start the same clips at `00:00:00.000`. Likewise, `00010.mpls` starts `00013.m2ts` at zero but starts `00014.m2ts` through `00024.m2ts` at `00:00:02.002`, while the standalone playlists start at zero. SP coverage follows exact clip intervals, not M2TS-basename membership or containment between table3 rows. A standalone row with this additional leading `2.002` seconds therefore remains an ordinary selected SP and must not be unchecked merely because an aggregate SP references the same M2TS file.
+
 ## Validation checklist for a playlist
 
-When deciding whether an MPLS is main content:
-
-1. Play or inspect the playlist, not only its filename.
-2. Check the ordered clip list and every `INTime`/`OUTTime` window.
-3. Compare duration with the expected movie or episode duration.
-4. Inspect chapters and branch points.
-5. Confirm video, audio, and subtitle streams exposed by the STN table.
-6. Look for repeated or permuted playlists.
-7. Check whether part of the playlist is a bumper, warning, menu, or unrelated material that should be unchecked and treated as SP.
-8. Confirm that multiple legitimate main playlists are not being collapsed into one assumption.
+Use the [interface workflow](Interface-Guide.md#suggested-workflow) to check the intended MPLS, chapter windows, tracks, and remaining SP content.

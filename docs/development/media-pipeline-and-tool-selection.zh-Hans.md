@@ -6,16 +6,7 @@
 
 ## 设计目标
 
-媒体处理流程需要满足以下要求：
-
-- 原生支持 Windows、Linux 和 Docker，不要求安装 Windows 兼容层；
-- 将 MPLS PlayItem 的顺序、`in_time` 和 `out_time` 视为权威播放时间线；
-- 保留 GUI 中选择的轨道、顺序、语言、章节范围和输出名称；
-- 能从真实原盘的制作异常和流检测问题中恢复，同时不能静默改变用户要求的输出；
-- 尽量减少外部进程启动次数和对大量媒体文件的重复扫描；
-- 无法恢复已选择的非音频轨道时必须明确失败。
-
-没有一种工具能够同时满足所有要求，因此项目使用一个主流程，并仅在必要位置使用范围明确、结果可验证的回退流程。
+处理流程支持 Windows、Linux 和 Docker，保留 MPLS 编排时间线与已捕获的 GUI 选择，并避免重复扫描来源。请求和失败处理的通用要求见[代码规范](code-standards.zh-Hans.md)，本页解释工具选型及已验证的限制。
 
 ## 源码验证基线
 
@@ -31,11 +22,9 @@
 
 ### 1. 程序内解析媒体信息
 
-BluraySubtitle 自行解析 MPLS，并维护每个 PlayItem 的片段名称、`in_time` 和 `out_time`。[M2TS 解析器](../../src/bdmv/m2ts.py)直接读取传输流布局、PAT/PMT 流信息、PTS/PCR 时间以及需要的视频时间信息，并缓存未发生变化的文件的解析结果。
+原生 MPLS 解析器保留每个 PlayItem 的片段和 `in_time`／`out_time`；[M2TS 解析器](../../src/bdmv/m2ts.py)读取传输布局、PAT/PMT、PTS/PCR 及所需视频时间字段，并缓存未改变的文件。这样无需对数百个片段逐一启动 ffprobe／tsMuxer，外部探测只用于针对性操作和回退。
 
-这与为每个 M2TS 分别启动一次 `ffprobe` 或 tsMuxer 不同。大型原盘可能包含数百个流文件，外部进程启动和重复探测会明显拖慢读取速度。外部探测仍用于特定操作和回退，但不作为批量发现 M2TS 信息的主要方式。
-
-读取 MKV 时长采用相同原则。[Matroska 时长读取器](../../src/domain/media/mkv_container.py)直接读取 EBML Segment Info 中的 TimecodeScale 和 Duration，而不是等待 `mkvinfo` 遍历大型文件。这个实现显著加快了章节匹配流程中的时长收集。
+MKV 时长由 [Matroska 读取器](../../src/domain/media/mkv_container.py)直接读取 EBML Segment Info 的 TimecodeScale 和 Duration，避免完整运行 `mkvinfo` 遍历文件。
 
 ### 2. 使用 MKVToolNix 作为主要 Remux 实现
 
@@ -82,7 +71,7 @@ MKVToolNix 不会把多片段 MPLS 当作一组不加限制的完整文件：
 
 MKVToolNix 对 M2TS 结构的验证通常比 tsMuxer 严格。这有利于发现异常输入，但部分原盘会出现 tsMuxer 能识别某条轨道而 `mkvmerge --identify` 不列出的情况。当不同 PlayItem 暴露不同轨道布局时，直接 Remux MPLS 也可能失败。
 
-加载原盘及“编辑轨道”时直接汇总每个 PlayItem 的 MPLS STN，并按逻辑轨道第一次出现的 PID 排列；既不分析 MPLS，也不检查任何 M2TS。逻辑轨道由同一 STN 类别中的同一 Stream Number 序号定义，其 PID 可以变化，也可以在某个 PlayItem 中没有对应片段。界面列出所有不同 PID 及状态摘要，提示中按 PlayItem 展开 PID／语言时间线。默认语言取第一次出现的非 `und` 明确语言；后续语言变化会显示，但不重新定义轨道。MPLS 声明的编码与呈现字段必须保持可以追加，否则 GUI 会禁用整行。IGS 没有对应的 Matroska 字幕轨道表示，因此也会显示为禁用。
+MPLS 选轨只根据 STN 元数据构建，不调用 MKVToolNix 分析，也不检查 M2TS。逻辑身份、语言变化及 GUI 可选性遵循 [STN 模型](../wiki/Blu-ray-Disc-Structure.zh-Hans.md#stn-表)。
 
 实际执行时，内部 M2TS 解析器先把每个已声明片段与对应 M2TS 的 PAT/PMT 核对；STN 中没有片段表示合法空档。默认情况下，已声明 PID 缺失或传输流类型冲突意味着 GUI 已选逻辑轨道无法保留，因此该输出会失败，不会缩减轨道集合后继续。默认关闭的“允许非视频轨道部分缺失”只允许物理缺失的音频或字幕片段继续进入回退，让 tsMuxer 尝试恢复。随后 MKVToolNix 才分析 MPLS 和每个 M2TS，只用于判断直接路径能否维持逻辑映射。出现空档、MKVToolNix 漏轨或本地轨道 ID 变化时，会在长时间直接混流开始前选择回退。
 
@@ -90,12 +79,7 @@ MKVToolNix 对 M2TS 结构的验证通常比 tsMuxer 严格。这有利于发现
 
 1. “编辑轨道”中选择的兼容逻辑轨道确定输出顺序，每个 PlayItem 片段分别提供本段 PID。
 2. 分别处理 MPLS 中的每个 PlayItem；只有该 PlayItem 已声明的逻辑轨道片段进入当前分段，没有声明的片段保持为空档。
-3. 片段在对应 M2TS 中的相对范围按以下公式计算：
-
-   ```text
-   start = (in_time * 2 - first_m2ts_pts) / 90000
-   end   = start + (out_time - in_time) / 45000
-   ```
+3. 按 [MPLS 到 M2TS 的窗口公式](../wiki/Blu-ray-Disc-Structure.zh-Hans.md#intime-与-outtime)换算编排边界。
 
 4. 非完整 PlayItem 使用 `mkvmerge --split parts:start-end` 裁切，明确保留非零的 MPLS 起止范围，而不是附加整个 M2TS。
 5. `mkvmerge` 提供它能够识别的所有已声明片段。
@@ -107,7 +91,7 @@ MKVToolNix 对 M2TS 结构的验证通常比 tsMuxer 严格。这有利于发现
 
 当一个 MPLS 被拆分成多个分集 MKV 时，独立的多输出回退会把每集范围投影到相同的 PlayItem 窗口，并使用相同的片段、空档、恢复及单次最终写入规则。
 
-最终命名和音频清理／转换完成后，每个完成检测的成品都会在旁边生成一个 `<输出>.audio-gaps.json`。文件只记录有空档的轨道；全部音轨连续时，轨道列表为空。Remux 来源 Encode 会先用来源大小和 Matroska 轨道 UID 验证该文件；有效的空记录文件可以直接确认音轨连续，不再执行检测。文件缺失或无效时，FFmpeg 在原本就要执行的多输出 Wave64 解码中同时记录数据包时间戳，并据此恢复连续区间。Matroska 毫秒级时间戳量化造成的微小边界抖动会在容差内合并，不会被误判为编排空档。
+BDMV Remux 复用回退已知的区间映射。最终命名和音频清理／转换完成后，每个完成检测的成品都会在旁边生成一个 `<输出>.audio-gaps.json`。文件只记录有空档的轨道；全部音轨连续时，轨道列表为空。Remux 来源 Encode 会先用来源大小和 Matroska 轨道 UID 验证该文件；有效的空记录文件可以直接确认音轨连续，不再执行检测。文件缺失或无效时，FFmpeg 在原本就要执行的多输出 Wave64 解码中同时记录数据包时间戳，并据此恢复连续区间。Matroska 毫秒级时间戳量化造成的微小边界抖动会在容差内合并，不会被误判为编排空档。
 
 预检查边界有意限制在 MPLS 和 PAT/PMT 可提供的字段内。这些结构无法暴露全部从载荷推导出的追加约束，例如只能从载荷头取得的 PCM 位深或声道布局，以及只有基本流解析器才能发现的 codec-private 变化。项目不会为这个尚未确认的边缘情况执行推测性的全载荷扫描。如果 MKVToolNix 在回退时拒绝这种追加，操作会明确失败，任何不完整分段都不会成为最终输出。
 
@@ -252,8 +236,6 @@ qaac 不是原生跨平台方案，通常依赖 Apple 的 Windows 编码组件�
 ### FLAC 与中间 PCM
 
 最终 Matroska 音频处理会先统一探测来源，再用一个多输出 FFmpeg 进程解码清理或转换需要的音轨。稀疏逻辑轨道的每个连续区间各使用一个 Wave64，普通轨道只使用一个。Wave64 可以避开 RIFF WAV 的 4 GiB 限制。来自 BDMV 的流程使用 24-bit PCM；允许任意 Matroska 输入的流程使用 32-bit PCM。批量提取失败时删除不完整文件，并以包含全部区间的逻辑轨道为单位重试一次；仍失败的音轨保持不变。
-
-来自 BDMV 的 Remux 直接使用回退已经得到的区间映射，并把它写入成品伴随文件。Remux 来源 Encode 如果找到匹配的伴随文件就无需重新发现；没有时在同一次来源 Wave64 解码中采集数据包时间戳，因此间隙检测不会额外完整读取一次 MKV。
 
 分析与编码复用这些解码文件。FLAC 输出采用整条逻辑轨道所有区间中最大的 16、24 或 32-bit 有效位深，而不是中间容器位深。连续输入位深匹配时使用独立多线程编码器；FFmpeg 负责移除零填充并提供 16/24-bit 回退。真正的 32-bit 输出必须使用独立编码器，因为 FFmpeg 的 FLAC 编码器最多支持 24 bit；因此真正 32-bit 的稀疏轨道会保持原样，不会降位深转换。
 

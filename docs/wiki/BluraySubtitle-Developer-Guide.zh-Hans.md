@@ -6,37 +6,7 @@
 
 ## 领域定义
 
-### 主 MPLS
-
-在 BluraySubtitle 中，**主 MPLS** 是所选播放列表，其编排的播放内容属于正片电影或剧集主体。
-
-这是语义选择，不能简化为：
-
-- 编号最小或最大的播放列表；
-- 最大的 M2TS；
-- 最长的 MPLS；
-- 某个库返回的第一个播放列表；
-- 每卷原盘只能选择一个播放列表。
-
-一卷原盘可以选择任意数量的主播放列表。每个所选主 MPLS 必须且只能对应一条非空主重混流命令，并按照当前 GUI 可见顺序处理。
-
-### SP
-
-**SP** 是项目对所选主播放列表内容之外的附加原盘内容的分类，包括：
-
-- 其他 MPLS 播放列表；
-- 所选主 MPLS 中未勾选的片段；
-- 没有被任何 MPLS 覆盖但有用的 M2TS；
-- 与主内容共用 M2TS、但使用不同时间区间的特典；
-- 应用能够确定性处理的视频、纯音频、纯字幕、音频加字幕、IGS 菜单和单帧布局。
-
-这里的 SP 不是蓝光规范缩写，也不是编解码格式或容器。UI 和代码注释必须保持这一定义。
-
-### Segment／片段
-
-在主播放列表 UI 中，**片段**是根据播放列表结构派生出的、用户可见的章节／文件区间。已勾选片段用于配置主剧集，未勾选片段排除在主输出之外并成为 SP 候选。
-
-这里的 UI 片段与 Matroska `Segment`、PGS segment 或 MPEG-TS 数据包并不是同一概念。
+代码与界面统一使用[主 MPLS 和 SP 定义](Blu-ray-Disc-Structure.zh-Hans.md#本项目中的正片与-sp)。GUI **片段**是章节／文件区间：勾选区间进入正片，未勾选区间成为 SP 候选。它不同于 Matroska `Segment`、PGS segment 或 TS 数据包。
 
 ## 源码导航
 
@@ -78,47 +48,13 @@ mark_info: dict[int, list[int]]
 
 ### CLPI
 
-`src/bdmv/clpi.py` 当前读取：
-
-- SequenceInfo 中的 ATC/STC 条目；
-- 呈现起止时间；
-- ProgramInfo 中的节目；
-- Program Map PID；
-- 基本流 PID；
-- 流编码元数据和语言。
-
-它还会把 M2TS 路径映射到同编号 CLPI，并构建 PID → 语言映射。为保证选轨一致性，中文语言变体会规范化为 `zho`。
-
-该解析器当前没有实现完整的 CLPI CPI 索引。除非以后增加并测试相关支持，否则代码和文档不能宣称项目实现了基于 CPI 的精确数据包跳转。
+`src/bdmv/clpi.py` 读取序列／节目元数据和呈现区间，将 M2TS 映射到同编号 CLPI，并建立 PID 语言映射；中文语言变体统一为 `zho`。解析器未实现完整 CPI 跳转索引，字段说明见 [CLPI 结构](Blu-ray-Disc-Structure.zh-Hans.md#clpi-二进制结构)。
 
 ### M2TS
 
-`src/bdmv/m2ts.py` 实现项目的原生传输流检查：
+`src/bdmv/m2ts.py` 负责传输包对齐、有状态 PAT/PMT 与 PES 拼装、PTS/PCR 时间及回绕、AVC/HEVC 帧率解析和针对性 ffprobe 回退、布局分类、IGS 图像解码，以及基于 CLPI 的 STN 修复。常量为 `frame_size = 192`、`_TS_PACKET = 188`、`_SYNC = 0x47`，字段见[二进制结构](Blu-ray-Disc-Structure.zh-Hans.md#m2ts-二进制结构)。
 
-- 识别 192 字节 M2TS 和 188 字节 TS 布局；
-- 按大块读取并迭代对齐后的 188 字节数据包；
-- 从 TS 头提取 PID 和 PUSI；
-- 组装 PES 头以获取第一个和最后一个 PTS；
-- 优先使用 PCR 计算时长，并以 PTS 回退；
-- 处理有限宽度时间戳回绕；
-- 从 AVC/HEVC 参数集读取原生帧率，必要时定向回退到 ffprobe；
-- 组装跨多个数据包的 PAT/PMT 区段；
-- 报告流 PID、类型、编解码格式和语言 descriptor；
-- 分类片段布局；
-- 把受支持的 IGS 调色板／对象／按钮状态解码为 PNG；
-- 在修复过程中根据 CLPI 构建 MPLS 流条目和属性。
-
-重要常量：
-
-```python
-frame_size = 192
-_TS_PACKET = 188
-_SYNC = 0x47
-```
-
-PAT/PMT 组装必须跨数据包保持状态。UHD PMT 可能大于一个 TS payload，必须处理 PUSI pointer byte 和声明的 PSI section length。
-
-时长优先采用 PCR，因为它表示传输流的节目时钟。找不到适用 PCR 时才使用 PTS。单帧流的第一个和最后一个 PTS 可能相同，帧数逻辑会单独处理这种情况。
+时长优先使用 PCR，缺失时回退 PTS；单帧输入的首尾 PTS 可能相同，需单独处理帧数。读取范围有界，PAT/PMT 拼装跨包保持状态。
 
 ### Matroska
 
@@ -128,17 +64,9 @@ PAT/PMT 组装必须跨数据包保持状态。UHD PMT 可能大于一个 TS pay
 
 ### 字幕
 
-`src/domain/subtitles/pgs.py` 按以下结构解析裸 SUP 数据包：
+`src/domain/subtitles/pgs.py` 读写 SUP 包、计算结束时间，追加时以 90 kHz 单位平移时间戳，裁切时选择数据包并重定位。包头与显示集见 [PGS](Media-Formats-and-Dolby-Vision.zh-Hans.md#pgs--presentation-graphics)。
 
-- 两字节 `PG` magic；
-- 32 位 PTS 和 DTS；
-- 一字节 segment type；
-- 两字节 segment length；
-- segment payload。
-
-它能够计算字幕结束时间、迭代时间戳、写出数据包、按 90 kHz 偏移追加另一条 PGS，以及选择并重置某个时间区间。
-
-`src/domain/subtitles` 下的其他文件实现 SRT、ASS/SSA 模型、时间换算、样式／事件处理和 ASS → SUP 转换。
+同目录还包含 SRT/ASS/SSA 模型、时间／样式／事件处理和 ASS-to-SUP 转换。SRT 裁切只保留完整位于区间内的字幕并重新编号。ASS 按声明的 `Format:` 解析，保留末尾文本字段中的逗号；SRT-to-ASS 将基本粗体、下划线、斜体和字体颜色标记转成覆盖标签。
 
 ### 工作流与工具集成
 
@@ -175,16 +103,14 @@ GUI 是执行契约。工作流会在启动 Worker 前，把当前可见选择�
     ↓
 把其他 MPLS、排除区间和未覆盖 M2TS 统计为 SP
     ↓
-读取 STN/CLPI 及原生 PAT/PMT/PCR/PTS 信息
+根据 STN 构建 MPLS 选轨；检查原始 M2TS SP 元数据
     ↓
 填充选轨与输出规划
 ```
 
 自动主播放列表选择只是便利功能，不是最终权威。对于分支、混淆、合集和多标题等异常原盘，仍需人工选择。
 
-默认估算由 `src/runtime/services_split/lifecycle_and_configuration.py` 中的 `get_main_mpls()` 实现，评分含义参见[蓝光原盘结构](Blu-ray-Disc-Structure.zh-Hans.md)。该函数先对不同引用 M2TS 的体积求和，再将总量乘入评分；`checked=True` 时会把 M2TS 体积因子替换为 `1`。候选替换使用严格的 `>`，因此完全同分时会保留 `os.listdir()` 返回的第一条路径；不能把该顺序当成稳定的数字文件名排序。
-
-SP 行按 BDMV 卷序号、MPLS 名称、未覆盖 M2TS 名称排序。扫描器仍会显示已被主内容完整覆盖的条目，但默认不勾选。短内容也保持可见，除非满足其他有效性规则，否则通常不勾选。
+默认估算由 `src/runtime/services_split/lifecycle_and_configuration.py` 中的 `get_main_mpls()` 实现，评分规则见[主播放列表估算](Blu-ray-Disc-Structure.zh-Hans.md#自动估算主播放列表的方式)；`checked=True` 时将 M2TS 体积因子替换为 `1`。
 
 ## 时间模型
 
@@ -205,22 +131,54 @@ SP 行按 BDMV 卷序号、MPLS 名称、未覆盖 M2TS 名称排序。扫描器
 
 ### 播放项窗口换算
 
-设 M2TS 的第一条相关 PTS 为 `first_m2ts_pts`：
+使用[MPLS 到 M2TS 的窗口公式](Blu-ray-Disc-Structure.zh-Hans.md#intime-与-outtime)，计入初始传输 PTS。该页也说明时钟回绕和访问单元边界限制；时间戳精度不代表流复制能逐帧／逐样本精确切割。
 
-```python
-start = (in_time * 2 - first_m2ts_pts) / 90000
-end = start + (out_time - in_time) / 45000
-```
+## 分集配置
 
-这是项目逐片段回退使用的有效文件相对窗口，能够考虑非零传输时间戳。
+以下 3 组输入中的任意一项变化时，分集配置都会重新计算：
 
-### 时间戳回绕
+1. `table1 -> view chapters` 中 MPLS 各段勾选状态
+2. `table2` 各行 `start_at_chapter`
+3. `table2` 各行 `end_at_chapter`
 
-PTS/PCR base 是有限位宽计数器。计算经过时间时必须按时钟范围取模。直接使用有符号减法，会在源跨越回绕点时得到负数或异常巨大的时长。
+处理优先级（按变化源判断）：
 
-### 边界行为
+**第一优先：view chapters 勾选变化（全量重算）**
 
-视频、音频、PG 和 IG 不一定具有相同的访问单元边界。请求时间具有毫秒精度，并不代表复制式裁切就能达到帧／采样级精确。
+1. 从第一个“被勾选区间”开始作为第一集 `start_at_chapter`。
+2. 一旦遇到“未勾选区间起点”，当前集立即结束，`end_at_chapter` 设在该处；下一集从该区间末端重新开始。
+3. 目标时长与分集行一一对应：该行有字幕时取其 `max_end_time`，否则取 `approx episode length`。
+4. 为尽量避免产生短尾集，定义最短有效尾段为 `max(0, approx episode length - 300 秒)`。比较终点前，排除所有“到 MPLS 结尾的剩余时长小于该阈值”的非结尾候选；文件边界和章节点都执行此过滤，`ending` 始终可选。
+5. 从仍被勾选且符合尾段条件的节点中选择两个候选终点：
+   - 候选 A：最接近目标时长的“文件结束点”（从 view chapters 中判断该节点与上一个节点 m2ts 是否变化）；
+   - 候选 B：最接近目标时长的“章节点”。
+6. 终点选择规则：
+   - 若候选 A 的偏差在 `[-1/4*目标时长, +1/2*目标时长]`，优先选候选 A；
+   - 否则将负偏差乘以 `-2` 后再比较 A/B，取偏差更小者作为 `end_at_chapter`。
+   - 若没有有效的非结尾候选，则使用 `ending`，将尾段并入当前集。
+
+**第二优先：start_at_chapter 变化（从首个变化集向后重算）**
+
+1. 与上一次配置比较，确定发生变化的 MPLS 及其中最先变化的分集。
+2. 变化行之前的分集以及其他 MPLS 的分集保持不变。
+3. 用户选择的新起点保持不变；从该集开始，在同一 MPLS 上按相同规则重新计算当前集终点以及后续所有起止点，不复用后续旧边界。
+4. 同步取消勾选：将上一集结束点与新起点之间原本勾选的节点置为不勾选；若修改的是该 MPLS 第一集，则将新起点之前的节点置为不勾选。下一段从此后第一个仍被勾选的节点开始。
+5. 删除无效或被完全覆盖的行，并按需补充分集，直到覆盖该 MPLS 被勾选的尾部。
+
+**第三优先：end_at_chapter 变化（按扩大/缩小分支处理）**
+
+1. 当前集的起点和用户选择的终点保持不变；变化集之前以及其他 MPLS 的分集保持不变。
+2. 若 `end_at_chapter` 改小：重新计算同一 MPLS 的所有后续区间，并按需补充分集，直到覆盖被勾选的尾部。
+3. 若 `end_at_chapter` 改大：删除被新终点完全覆盖的后续行；第一条剩余区间从新终点处或其后第一个仍被勾选的节点开始，然后按相同终点规则重算全部后续区间。
+4. 自动生成的后续区间不复用旧边界，零长度行直接丢弃。
+
+**无字幕时的 MPLS 隔离：**每条 MPLS 独立使用 `approx episode length` 切割。前面卷重算后，其分集行数变化可以导致后续全局集数编号顺延，但不得改变后面 MPLS 已保留的 `start_at_chapter/end_at_chapter` 边界。
+
+下拉可选性约束：
+
+- 对于 view chapters 里未勾选的节点，`start_at_chapter` 和 `end_at_chapter` 下拉中对应项必须置灰不可选。
+- 仍需满足基本约束：`end_at_chapter > start_at_chapter`。
+- 最终生成的每条剧集配置必须满足 `1 ≤ start_at_chapter < end_at_chapter ≤ ending`；在 GUI 重建前删除无效、反向、零长度以及以 `ending` 为起点的行。
 
 ## 轨道标识模型
 
@@ -238,184 +196,41 @@ PTS/PCR base 是有限位宽计数器。计算经过时间时必须按时钟范�
 
 MKVToolNix 的 `properties.number` 不是传输 PID。SP 追加／恢复需要真正的 `stream_id` 或 `original_transport_stream_id`。无法映射有效 PID 时，所选任务必须失败，不能猜测。
 
-完整的 MPLS STN 布局是编排参考。逻辑轨道按跨 PlayItem 的 STN 类别和 Stream Number 序号标识，不要求 PID 固定不变。某个 STN 片段为对应 PlayItem 提供 PID 和格式属性；没有片段表示合法的时间线空档。PAT/PMT 中物理存在、但被该 PlayItem STN 隐藏的流，不能进入普通标题映射，除非独立 SP 工作流明确选择它。
+逻辑轨道身份及编排可见性遵循 [STN 模型](Blu-ray-Disc-Structure.zh-Hans.md#stn-表)。GUI 兼容检查涵盖编码、视频格式／帧率／动态范围、音频格式／采样率及 TextST 字符编码；已捕获的来源 MPLS／STN 槽位须与逐 PlayItem PID 和工具内部 ID 分开。
 
-有 MPLS 的“编辑轨道”行汇总每个 PlayItem 的 STN，并按第一次出现时的 PID 排列。加载期间不执行 `mkvmerge --identify`，也不检查 M2TS。每条逻辑轨道会显示来源 MPLS／槽位、全部不同 PID 和简明状态，提示中会合并 PID 与语言相同的连续 PlayItem。行语言取第一次出现的非 `und` 明确语言，后续语言变化只作信息提示；如果 MPLS 中的编码、视频格式／帧率／动态范围字段、音频格式／采样率字段或文本字幕字符集发生变化，因为这些片段不能安全地组成一条 Matroska 轨道，整行会被禁用。IGS 会显示但不可选择，因为 Matroska 没有交互图形字幕轨道。
-
-主 Remux 命令保存 `{video_opts}`、`{audio_opts}` 和 `{sub_opts}`，而不是轨道 ID。执行时，内部 M2TS 解析器先把每个已声明片段与对应 PAT/PMT 核对；PID 缺失或传输编码冲突通常会使输出失败，因为“编辑轨道”具有最高权威。启用默认关闭的部分缺失选项后，只允许物理缺失的音频或字幕片段进入回退；如果 tsMuxer 也无法提供，该片段改为空档。整条已选逻辑轨道在输出中缺失、任何视频缺失和任何格式冲突仍会报错。完成内部检查后，才使用 MKVToolNix 分析结果选择直接 MPLS 混流或回退。这项检查有意不声称能够发现 MPLS 和 PAT/PMT 没有暴露的载荷级参数变化。
+[Remux 回退](../development/media-pipeline-and-tool-selection.zh-Hans.md#3-轨道对齐的-remux-回退)负责片段校验及直接／回退路径选择。主混流命令使用 `{video_opts}`、`{audio_opts}`、`{sub_opts}`，执行时根据已捕获选择填入。
 
 ## 主 Remux 管线
 
-简化后的成功路径：
-
-```text
-已捕获的不可变请求
-    ↓
-预检查所有播放列表、命令、轨道、工具和输出
-    ↓
-每个所选主 MPLS 执行一条非空主命令
-    ↓
-验证所有预期主输出
-    ↓
-处理所选 SP 任务
-    ↓
-应用章节、语言和元数据
-    ↓
-一次性提取所选音频用于清理／转换
-    ↓
-按策略移除静音／完全重复音频
-    ↓
-启用时转换所选无损音频
-    ↓
-把兼容 Dolby Vision 输入转换为受支持的 profile 8.1
-    ↓
-验证最终输出
-```
-
-蓝光 Remux 中，已存在的计划输出属于错误，不能覆盖或重命名。清理只能删除当前任务创建的不完整文件。
-
-### 直接 MPLS 混流
-
-MKVToolNix 是主重混流器，因为它能够理解 MPLS 播放项、片段相对时间、Matroska 轨道元数据、章节、切割和追加。
-
-首先尝试直接混流。成功不仅要求命令完成，还要求计划输出存在，并在后续元数据检查中匹配。
-
-### 轨道对齐回退
-
-PlayItem 之间的 PID、本地 MKVToolNix 轨道 ID 或轨道存在性发生变化时，直接 MPLS 混流可能失败。回退流程：
-
-1. 获取逻辑 STN 行和 `Chapter(mpls_path).in_out_time`；
-2. 按准确区间处理每个 PlayItem，并且只纳入该 PlayItem 中实际存在的已选逻辑轨道片段；
-3. 先让 MKVToolNix 重混流它能够暴露的已声明 PID，只有 MKVToolNix 遗漏已声明片段时才请求 tsMuxer 恢复；
-4. 要求每个 PlayItem 结果准确包含本段预期存在的轨道，不为 STN 空档生成静音或空轨；
-5. 为每条逻辑轨道第一次出现的片段设置绝对播放列表偏移，再通过显式轨道追加把后续片段逐段接到上一片段，并在需要时加入空档偏移；
-6. 最终只用一次 `mkvmerge` 写入成品，再应用并验证章节与轨道语言；
-7. 回退本身只复制码流；完整 Matroska 产物随后与直接 Remux 一样进入独立的音频后处理阶段。
-
-tsMuxer 无法恢复某个片段时通常会使回退失败。部分缺失选项只允许 PAT/PMT 同样确认物理不存在的非视频片段改为空档：它会从该分段的预期布局中移除，并把对应区间记录为时间线空档。tsMuxer 已识别 PID 后再发生分离失败仍属于致命错误。最终写入前，每条已选逻辑轨道都必须至少实际出现一次。MKVToolNix 因载荷级变化拒绝追加时同样会失败；逐 PlayItem 临时文件不会被提升为最终输出。
-
-### 为什么不能物理拼接 M2TS
-
-物理拼接会忽略：
-
-- 每个播放项的 `INTime` 和 `OUTTime`；
-- STC/PTS 偏移；
-- 重复片段；
-- 分支顺序；
-- 不同轨道布局；
-- 编排后的流可见性；
-- 章节时间。
-
-任何合并播放项的优化都必须证明以上属性仍然等价。
+`remux_and_episode_workflows.py` 执行已捕获请求：预检查、每条主 MPLS 的单条命令、SP、章节／语言、最终音频／Dolby Vision 处理及输出验证。[媒体处理流程](../development/media-pipeline-and-tool-selection.zh-Hans.md#当前处理流程)定义直接 MPLS 混流、逐 PlayItem 恢复及多输出分集；这些路径共用同一请求和最终验证契约。
 
 ## SP 管线
 
-行的源类型决定处理路径：
+`src/runtime/sp.py` 提供条目／任务类型和精确 M2TS detail 区间。[SP 规则](Blu-ray-Disc-Structure.zh-Hans.md#本项目中的正片与-sp)定义发现、默认选择、输出命名及整条正片／单集匹配。
 
-- 有 MPLS 的行必须使用播放列表逻辑；
-- 只有没有 MPLS 的行才使用裸 M2TS 逻辑。
+MPLS 行先直接混流，再使用共用轨道对齐回退。分集关联 SP 优先使用 MPLS `stream_id`；映射缺失或不一致时，先生成 PID 对齐中间输出，再使用其规范映射。原分集轨道顺序保持不变，接受的 SP 轨道按选择顺序追加。
 
-所有已选择且输出名非空的行都必须完成。没有选择音频或字幕时，空输出名表示已记录的有意跳过。
-
-输出类型由所选内容决定：
-
-- 普通视频／容器输出 → `.mkv`；
-- 单条裸音频或字幕 → 对应基本流扩展名；
-- 多条音轨 → `.mka`；
-- 多条字幕 → `.mks`；
-- 单帧 → `.png`；
-- 多个单帧片段 → 带编号的图片目录。
-
-裸流和 PNG 无法保存 Matroska 轨道语言元数据。为不兼容输出配置这类元数据时，应在执行前拒绝。
-
-剧集模式将两种精确 detail 机制分开处理。非主 MPLS 的完整有序 M2TS detail 与一条完整的已选主 MPLS 完全一致时，它提供的不重复音频和字幕轨道会加入该主 MPLS 的共享 GUI 轨道配置；对应 SP 行默认不勾选，避免重复重混流。合并后的行标明来源 MPLS／STN 槽位，按代表 PID 排列，并统一执行一次默认选轨算法。此机制绝不根据 table2 的单个分集行推导整条主 MPLS 匹配。
-
-只有整条主 MPLS 规则不适用时，detail 与唯一一个 table2 分集完全一致的 SP 才能在分集完成后追加。主 MPLS 和 SP MPLS 各自独立执行同一默认选轨算法。实际附加时，每条逻辑轨道用绝对 `(M2TS 路径, PID)` 对应关系表示；只有这些关系都没有被剧集或更早的附加轨道占用时，候选轨道才算新增。PID 或 STN 槽位本身不作为跨文件身份。原剧集轨道保持顺序，接受的 SP 轨道按选择顺序随后排列。跨越多个分集行的 detail 不会关联多个输出，而是保持普通 SP。电影模式 SP 不进入以上任一附加路径。只有追加结果完成并验证后，才替换原剧集文件。
-
-《Witch Craft Works Blu-ray BOX》的 DISC3 存在一种编排时间区间特例：`00002.mpls` 从 `00:00:00.000` 使用 `00006.m2ts`，但从 `00:00:02.002` 才开始使用 `00007.m2ts` 至 `00011.m2ts`；对应的独立 `00004.mpls` 至 `00008.mpls` 都从 `00:00:00.000` 开始使用同名片段。类似地，`00010.mpls` 从零开始使用 `00013.m2ts`，但从 `00:00:02.002` 才开始使用 `00014.m2ts` 至 `00024.m2ts`，而各独立播放列表仍从零开始。SP 覆盖按片段的精确时间区间判断，不按 M2TS 文件名集合判断，也不根据 table3 行之间的包含关系去重。因此，独立行多出的开头 `2.002` 秒会让它保持为普通且默认勾选的 SP，不能仅因为某条聚合 SP 引用了同一 M2TS 就取消勾选。
+可提前确定时，写入前检查所选来源、已捕获轨道、准确输出路径、冲突及所需语言工具。Remux 中已选行失败会停止任务，只清理任务创建的不完整输出；分集须在追加结果完成并验证后才替换。Encode 批处理的失败规则见[代码规范](../development/code-standards.zh-Hans.md#5-预检查与失败处理)。
 
 ## 音频处理
 
-最终 Matroska Remux 与 Encode 共用[媒体处理方案与工具选型](../development/media-pipeline-and-tool-selection.zh-Hans.md)所述的音频准备和编码流程。自动清理会：
-
-1. 移除解码最大音量低于 `-60 dB` 的音轨；
-2. 只在源编码系列和声道数相同的音轨之间比较连续区间的精确解码指纹及时间线位置；
-3. 已知语言不同时绝不去重；
-4. 重复时保留源顺序最早的音轨；
-5. 报告每次移除。
-
-独立的单轨音频输出保留唯一的已选轨道，不执行静音／重复音轨移除。
-
-Remux 的无损转 FLAC 由可见复选框控制，启动时默认启用。DTS:X 和 TrueHD Atmos 需要单独启用默认关闭的高级选项，因为 FLAC 不能保留对象元数据。转换失败时保留源音轨。
-
-共用的 FLAC／AAC／Opus 路径把一条逻辑轨道表示为“按顺序排列的连续 PCM 区间及其播放列表位置”。提取、清理、有效位深选择、编码和验证都复用这些区间，不用静音填充开头或中间空档。稀疏输出会重建为一条 Matroska 轨道；如果裸独立音频必须丢失空档，任务会直接失败。任一区间失败都会回退整条转换。
-
-Remux 完成音轨间隙检测后会生成 `<输出>.audio-gaps.json`。伴随文件记录空档区间；音轨连续时轨道列表为空，并把检测结果与成品大小及相关轨道 UID 绑定。Remux 来源 Encode 会直接使用有效文件；文件缺失或过期时，FFmpeg 在同一次 Wave64 解码中采集数据包时间戳并推导区间，不会再次完整读取来源。
-
-时长验证不计算编排空档，而是分别计算每个区间的正向缩短量，并用其中最大值执行提示或回退，绝不累加各区间损失，使阈值对应可能出现的最大听感延迟。重复检测同样包含区间顺序、位置和长度，因此 PCM 相同但所在时间不同的逻辑轨道不会被判为重复。
-
-Encode 的蓝光暂存 Remux 必须保留源音频。只有视频压制成功后，才在最终混流中执行每轨 Encode 音频转换。
+`src/runtime/audio_conversion.py` 负责提取、清理、有效位深、转换、区间重建及验证。共用事务见[音频转换规则](../development/media-pipeline-and-tool-selection.zh-Hans.md#音频转换规则)和 [FLAC／中间 PCM](../development/media-pipeline-and-tool-selection.zh-Hans.md#flac-与中间-pcm)；暂存与最终音频处理的区别见[压制管线](Video-Encoding-and-VapourSynth.zh-Hans.md#bluraysubtitle-压制管线)。
 
 ## 自动裁剪黑边
 
-`src/runtime/video_crop.py` 负责按时长确定采样数、校验 FFmpeg 裁剪结果、保守合并矩形以及管理 VPy 裁剪块。它使用输入端时间定位而不是精确帧选择，并且不写出截图。采样数按每 150 秒一个计算并限制在 4～24 个，全部样本有效画面的并集会转换为一组偶数对齐的固定裁剪值。已有受管理裁剪块会被替换或移除，连续任务行不会叠加过期操作；脚本不存在已知安全的 `src8`／`res` 边界时，当前行会失败，不会在含义不明的位置插入裁剪。自动结果非零时也会拒绝 VPy 中非受管理的手工 `Crop`／`CropAbs` 调用，避免意外重复裁剪。
+`src/runtime/video_crop.py` 负责采样、矩形汇总，以及受管理 VPy 裁剪块的替换／移除。采样规则和自定义脚本边界见[裁剪说明](Video-Encoding-and-VapourSynth.zh-Hans.md#自动裁剪黑边)。
 
 ## Dolby Vision 处理
 
-`src/runtime/dolby_vision.py` 拥有 `dovi_tool` 边界。
-
-代码会：
-
-- 解析并验证配置的可执行文件；
-- 为 Encode 准备过程提取 MKV HEVC 轨；
-- 分离／提取基础层和 RPU 中间文件；
-- 存在物理裁剪时导出并调整全部 L5 有效画面 preset；
-- 检查每个请求的中间文件均已创建；
-- 向受支持的编码 HEVC 注入 RPU；
-- 通过改写 RPU 并丢弃增强层视频，把双层 Remux 输入转换为单层 profile 8.1；
-- 使用当前任务拥有的临时路径；
-- 清理时只删除这些任务拥有的临时文件。
-
-需要保留 Dolby Vision 时，不能静默回退到 SDR 或普通 HDR10。不支持的 x264/x265 位深组合必须在预检查失败。SVT-AV1 是已记录例外：允许编码，但省略 Dolby Vision 元数据并报告该决定。
+`src/runtime/dolby_vision.py` 负责工具校验、任务自有基础层／RPU 中间文件、L5 裁剪修改、注入与清理。分层语义见 [profile 8.1](Media-Formats-and-Dolby-Vision.zh-Hans.md#本项目中的-profile-81)，编码器适用条件和验证结果见 [HDR 处理](Video-Encoding-and-VapourSynth.zh-Hans.md#自动-hdr-元数据处理)。
 
 ## 字幕处理
 
-字幕会同时影响内容和剧集映射：
-
-- 字幕最大结束时间可用于估算剧集时长；
-- 所选 SRT/ASS/SSA/SUP 必须按可见顺序映射到主输出行；
-- 一个合并字幕输出中不能混用格式；
-- PGS 追加／裁切使用 90 kHz 时间偏移；
-- 软字幕保留可选择轨道；
-- 硬字幕成为编码画面的一部分；
-- 外挂字幕复制到对应输出旁，并使用相应名称。
-
-字幕时长异常属于应修复的源数据问题，不能作为静默重排或截断行的理由。
+字幕最大结束时间参与分集时长估算，所选 SRT/ASS/SSA/SUP 按可见顺序映射到正片输出行；同一合并输出不能混用字幕格式。时长异常属于应修复的源数据问题，不能据此静默重排行或截断区间。输出封装遵循[字幕模式](Media-Formats-and-Dolby-Vision.zh-Hans.md#软字幕硬字幕与外挂字幕)。
 
 ## 错误与验证规则
 
-项目优先执行确定性预检查：
-
-- 源是否存在；
-- 所选主 MPLS 与命令数量是否一一对应；
-- 播放列表与任务行映射；
-- 必需外部工具；
-- 无效章节范围；
-- 轨道／PID 可用性；
-- 准确的计划输出路径；
-- 重复路径；
-- 已存在输出冲突。
-
-执行后验证：
-
-- 命令返回状态；
-- 准确的计划输出是否存在；
-- 预期轨道布局；
-- 受支持输出中的语言和章节是否已应用；
-- 必需 Dolby Vision 中间文件／最终流；
-- 每个已选择且未有意跳过的行是否完成。
-
-外部工具返回成功并不能证明所选流及其完整时长都被保留。[媒体管线设计与工具选择](../development/media-pipeline-and-tool-selection.zh-Hans.md)中记录的 TrueHD 限制就是具体例子。
+遵守[预检查与失败处理要求](../development/code-standards.zh-Hans.md#5-预检查与失败处理)。执行后验证计划文件、所选轨道布局、章节／语言和请求的 HDR 结果。退出成功不能单独证明流和时长完整，[损坏 TrueHD](../development/media-pipeline-and-tool-selection.zh-Hans.md#当前限制不修复损坏的-truehd)就是已记录的例子。
 
 ## 相关测试
 
@@ -431,4 +246,4 @@ Encode 的蓝光暂存 Remux 必须保留源音频。只有视频压制成功后
 | `tests/test_ass2sup.py` | ASS → SUP 生成 |
 | `tests/test_worker_configuration_boundaries.py` | 已捕获 GUI 配置的不可变性 |
 
-修改解析器或工作流行为时，应在拥有该行为的边界补充可确定的针对性测试，并按代码规范运行集中测试。
+按[测试规范](../development/code-standards.zh-Hans.md#11-测试与修改报告)选择运行或修改哪些测试。

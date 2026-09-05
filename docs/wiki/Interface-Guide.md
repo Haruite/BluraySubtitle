@@ -2,7 +2,7 @@
 
 English | [简体中文](Interface-Guide.zh-Hans.md)
 
-> The screenshots on this page explain common operations and several real disc layouts. They are examples from the current version, not a complete list of features. Later versions may change the layout, wording, default selections, or available options; always follow what the current interface displays.
+> These sample-disc screenshots illustrate the controls; layout and defaults can vary by version. Follow the current interface.
 
 ## Main-window content areas
 
@@ -34,13 +34,13 @@ This multi-volume *Spice and Wolf* example shows that every volume has its own m
 
 ### Edit tracks
 
-Each **Edit tracks** row represents one MPLS logical track. The source MPLS/STN slot distinguishes tracks across playlists, the PID column shows a representative PID, and the status summarizes gaps, language changes, or format restrictions. Hover over the status for the per-PlayItem details. The checked video, audio, and subtitle rows are authoritative for the final selection.
+In **Edit tracks**, check the desired rows and hover over status for per-PlayItem details. See the [STN model](Blu-ray-Disc-Structure.md#stn-table) for logical-track identity and format restrictions.
 
 In the *Zootopia 2* example, audio and subtitle status directly shows `eng → zho → eng`, while the tooltip lists the language and PID for each group of PlayItems. A language change is informational and does not split one logical track into several tracks.
 
 [![Zootopia 2 Edit tracks dialog](https://sbx.mysmy.top/pictures/%E7%96%AF%E7%8B%82%E5%8A%A8%E7%89%A9%E5%9F%8E2%20%E7%BC%96%E8%BE%91%E8%BD%A8%E9%81%93.png)](https://sbx.mysmy.top/pictures/%E7%96%AF%E7%8B%82%E5%8A%A8%E7%89%A9%E5%9F%8E2%20%E7%BC%96%E8%BE%91%E8%BD%A8%E9%81%93.png)
 
-The *Avatar* example shows a track whose status is **Missing in some clips**, meaning that the logical track does not occur in every MPLS PlayItem. Whether a corresponding non-video stream may also be absent from the actual M2TS is controlled by the advanced **Allow partially missing non-video tracks** option. A selected track missing from the whole output, or a missing video occurrence, still stops the job.
+The *Avatar* row marked **Missing in some clips** does not cover every PlayItem. Actual M2TS omissions are subject to the [partial-missing option](../../README.md#remux-controls).
 
 [![Avatar track missing in some clips](https://sbx.mysmy.top/pictures/%E9%98%BF%E5%87%A1%E8%BE%BE%2000150.mpls%20%E7%BC%96%E8%BE%91%E8%BD%A8%E9%81%93.png)](https://sbx.mysmy.top/pictures/%E9%98%BF%E5%87%A1%E8%BE%BE%2000150.mpls%20%E7%BC%96%E8%BE%91%E8%BD%A8%E9%81%93.png)
 
@@ -57,8 +57,6 @@ On volume 2, both `00000.mpls` and `00001.mpls` cover three episodes. Their refe
 In `00001.mpls`, uncheck the first 12 duplicated chapter intervals and retain the NC content beginning at Chapter 13. Table 3 row 8 in the main-window screenshot is also unnecessary and should be unchecked. This keeps the three regular episodes and the additional NC edition without writing the regular content twice.
 
 [![Hana-Kimi volume 2 00001.mpls chapter selection](https://sbx.mysmy.top/pictures/%E8%8A%B1%E6%A0%B7%E5%B0%91%E5%B9%B4%E5%B0%91%E5%A5%B3%20%E7%AC%AC%E4%BA%8C%E5%8D%B7%2000001.mpls.png)](https://sbx.mysmy.top/pictures/%E8%8A%B1%E6%A0%B7%E5%B0%91%E5%B9%B4%E5%B0%91%E5%A5%B3%20%E7%AC%AC%E4%BA%8C%E5%8D%B7%2000001.mpls.png)
-
-For similar discs, do not compare only total MPLS duration. Inspect chapters and M2TS time to locate the overlapping PlayItem intervals, then check whether the SP table still retains the same content. See the README FAQ: [Why is remux larger than the original disc?](../../README.md#why-is-remux-larger-than-the-original-disc)
 
 ## Example: why INTime and OUTTime must be honored
 

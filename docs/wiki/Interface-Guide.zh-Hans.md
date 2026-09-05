@@ -2,7 +2,7 @@
 
 [English](Interface-Guide.md) | 简体中文
 
-> 本页截图用于说明常见操作和几种真实原盘结构，只是当前版本的示例，不覆盖程序的全部功能。后续版本可能调整界面布局、文字、默认选择和可用选项；实际操作时应以当前界面显示的内容为准。
+> 截图使用示例原盘说明操作；不同版本的布局和默认值可能不同，实际以当前界面为准。
 
 ## 主窗口的内容分区
 
@@ -34,13 +34,13 @@
 
 ### 编辑轨道
 
-“编辑轨道”每行表示一条 MPLS 逻辑轨道。来源 MPLS／STN 槽位用于区分跨播放列表轨道；PID 列显示代表 PID，状态列概括片段缺失、语言变化或格式限制。把鼠标停在状态上可以查看逐 PlayItem 的详细变化。最终视频、音频和字幕选择以这里的勾选为准。
+在**编辑轨道**中勾选所需行，悬停状态查看逐 PlayItem 明细；逻辑轨道身份及格式限制见 [STN 模型](Blu-ray-Disc-Structure.zh-Hans.md#stn-表)。
 
 《疯狂动物城 2》的示例中，音频和字幕状态会直接显示 `eng → zho → eng`，提示信息进一步列出各 PlayItem 的语言和 PID。语言变化是提示，不会把一条逻辑轨道拆成多条。
 
 [![《疯狂动物城 2》编辑轨道](https://sbx.mysmy.top/pictures/%E7%96%AF%E7%8B%82%E5%8A%A8%E7%89%A9%E5%9F%8E2%20%E7%BC%96%E8%BE%91%E8%BD%A8%E9%81%93.png)](https://sbx.mysmy.top/pictures/%E7%96%AF%E7%8B%82%E5%8A%A8%E7%89%A9%E5%9F%8E2%20%E7%BC%96%E8%BE%91%E8%BD%A8%E9%81%93.png)
 
-《阿凡达》的示例显示一条“部分片段缺失”的音轨，表示该逻辑轨道没有覆盖 MPLS 的全部 PlayItem。是否允许实际 M2TS 中也缺失对应非视频轨道，由高级设置中的“允许非视频轨道部分缺失”决定；已选轨道整条缺失或视频轨道缺失仍会终止任务。
+《阿凡达》中标为**部分片段缺失**的轨道未覆盖全部 PlayItem；实际 M2TS 中的缺轨遵循[部分缺失选项](../../README.zh-Hans.md#remux-控制)。
 
 [![《阿凡达》部分片段缺失轨道](https://sbx.mysmy.top/pictures/%E9%98%BF%E5%87%A1%E8%BE%BE%2000150.mpls%20%E7%BC%96%E8%BE%91%E8%BD%A8%E9%81%93.png)](https://sbx.mysmy.top/pictures/%E9%98%BF%E5%87%A1%E8%BE%BE%2000150.mpls%20%E7%BC%96%E8%BE%91%E8%BD%A8%E9%81%93.png)
 
@@ -57,8 +57,6 @@
 在 `00001.mpls` 中取消前 12 个重复章节区间，只保留从 Chapter 13 开始的 NC 内容。主界面截图中的 Table 3 第 8 行也不需要输出，应再取消该行勾选。这样既保留普通三集和额外 NC 版本，又不会把重复正片再次写入输出。
 
 [![《花样少年少女》第二卷 00001.mpls 章节选择](https://sbx.mysmy.top/pictures/%E8%8A%B1%E6%A0%B7%E5%B0%91%E5%B9%B4%E5%B0%91%E5%A5%B3%20%E7%AC%AC%E4%BA%8C%E5%8D%B7%2000001.mpls.png)](https://sbx.mysmy.top/pictures/%E8%8A%B1%E6%A0%B7%E5%B0%91%E5%B9%B4%E5%B0%91%E5%A5%B3%20%E7%AC%AC%E4%BA%8C%E5%8D%B7%2000001.mpls.png)
-
-遇到类似情况时，不应只比较 MPLS 总时长。应同时查看章节和 M2TS 时间，确认重复的是哪些 PlayItem 区间，再检查下方 SP 表是否仍保留了同一内容。参见 README FAQ：[为什么 remux 出来的体积比原盘大？](../../README.zh-Hans.md#为什么-remux-出来的体积比原盘大)
 
 ## 示例：为什么必须遵守 INTime 和 OUTTime
 

@@ -6,16 +6,7 @@ This document describes the current Blu-ray media-processing design in BluraySub
 
 ## Design goals
 
-The pipeline is designed around the following requirements:
-
-- support Windows, Linux, and Docker without requiring a Windows compatibility layer;
-- treat MPLS play-item order and in/out times as the authoritative playback timeline;
-- preserve the tracks, order, languages, chapter ranges, and output names selected in the GUI;
-- recover from real-world Blu-ray authoring and stream-detection problems without silently changing the requested output;
-- minimize repeated external-process startup and repeated scans of large media files; and
-- fail explicitly when a selected non-audio track cannot be recovered.
-
-No single tool satisfies all of these requirements. The implementation therefore uses a primary path plus narrow, validated fallbacks.
+The pipeline supports Windows, Linux, and Docker, preserves the authored MPLS timeline and captured GUI choices, and avoids repeated source scans. General request and failure requirements are defined in the [code standards](code-standards.md); this document explains the tool-specific decisions and verified limitations.
 
 ## Source-verification baseline
 
@@ -31,11 +22,9 @@ Function names are included so that the conclusions can be rechecked after an up
 
 ### 1. In-process metadata parsing
 
-BluraySubtitle parses MPLS structures itself and maintains each play item's clip name, `in_time`, and `out_time`. Its [M2TS parser](../../src/bdmv/m2ts.py) reads transport layout, PAT/PMT stream metadata, PTS/PCR timing, and selected video timing data directly. Parsed values are cached for unchanged files.
+The native MPLS parser retains each PlayItem's clip and `in_time`/`out_time`. The [M2TS parser](../../src/bdmv/m2ts.py) reads transport layout, PAT/PMT, PTS/PCR, and selected video timing fields, caching unchanged files. This avoids a separate ffprobe/tsMuxer process for each of hundreds of clips; external probing is reserved for targeted operations and fallbacks.
 
-This is intentionally different from starting `ffprobe` or tsMuxer once for every M2TS. A large disc may contain hundreds of stream files, and process startup plus repeated probing is substantially slower than bounded in-process reads. External probing remains available for targeted operations and fallbacks; it is not the bulk M2TS discovery mechanism.
-
-MKV duration follows the same principle. The [Matroska duration reader](../../src/domain/media/mkv_container.py) reads the EBML Segment Info, TimecodeScale, and Duration elements directly instead of waiting for `mkvinfo` to traverse a large file. This change made duration collection much faster in chapter-matching workflows.
+For MKV duration, the [Matroska reader](../../src/domain/media/mkv_container.py) reads EBML Segment Info's TimecodeScale and Duration instead of a full `mkvinfo` traversal.
 
 ### 2. MKVToolNix as the primary remux implementation
 
@@ -82,7 +71,7 @@ The trim is therefore enforced at transport/PES timestamp boundaries rather than
 
 MKVToolNix validates M2TS structure more strictly than tsMuxer. This is useful for detecting malformed input, but some authored discs expose a track through tsMuxer while `mkvmerge --identify` omits it. Direct MPLS remuxing may also fail when different play items expose different track layouts.
 
-Disc loading and **Edit Tracks** aggregate every PlayItem STN directly and sort logical-track rows by their first PID. They do not identify the MPLS or inspect any M2TS. A logical track is the same ordinal stream number in the same STN category; its PID may change or its occurrence may be absent in one PlayItem. The dialog shows all distinct PIDs and a state summary, with the per-PlayItem PID/language timeline in a tooltip. The first explicit non-`und` language is the default; later language changes are displayed but do not redefine the track. MPLS-declared codec and presentation fields must remain append-compatible or the GUI disables the whole row. IGS rows are also disabled because interactive graphics have no Matroska subtitle-track representation.
+MPLS track choices are built from STN metadata without MKVToolNix identification or M2TS inspection. Logical identity, language transitions, and GUI eligibility follow the [STN model](../wiki/Blu-ray-Disc-Structure.md#stn-table).
 
 At execution, the internal M2TS parser checks every declared occurrence against the corresponding M2TS PAT/PMT. An absent STN occurrence is a valid gap. By default, a missing declared PID or a conflicting transport stream type means a GUI-selected logical track cannot be retained, so the output fails instead of continuing with a reduced track set. The disabled-by-default partial-missing option lets only a physically absent audio or subtitle occurrence continue to fallback so tsMuxer can attempt recovery. MKVToolNix then identifies the MPLS and every M2TS only to decide whether the direct path can preserve the logical mapping. A gap, MKVToolNix-omitted track, or changed local track ID selects fallback before the long direct mux starts.
 
@@ -90,12 +79,7 @@ The [track-aligned fallback](../../src/runtime/services_split/media_info_and_tra
 
 1. The compatible logical tracks selected in **Edit Tracks** define the output order. Each PlayItem occurrence supplies its own PID.
 2. Each MPLS PlayItem is processed separately. Only logical-track occurrences declared for that PlayItem enter its part; an absent occurrence remains a gap.
-3. Its M2TS-relative range is calculated as:
-
-   ```text
-   start = (in_time * 2 - first_m2ts_pts) / 90000
-   end   = start + (out_time - in_time) / 45000
-   ```
+3. Convert the authored boundaries with the [MPLS-to-M2TS window formulas](../wiki/Blu-ray-Disc-Structure.md#intime-and-outtime).
 
 4. A partial play item is trimmed with `mkvmerge --split parts:start-end`. This explicitly preserves non-zero MPLS in/out boundaries instead of appending the complete M2TS.
 5. `mkvmerge` supplies every declared occurrence it can identify.
@@ -107,7 +91,7 @@ The [track-aligned fallback](../../src/runtime/services_split/media_info_and_tra
 
 The multi-output fallback used to split one MPLS into several episode MKVs projects every episode range onto the same PlayItem windows and applies the same occurrence, gap, recovery, and single-final-write rules.
 
-After final Remux naming and audio cleanup/conversion, every analyzed output receives one adjacent `<output>.audio-gaps.json`. It records only gap-bearing tracks and contains an empty track list when all audio is continuous. Remux-source Encode validates the sidecar against the source file size and Matroska track UID before using it; a valid empty sidecar confirms continuity without another detection pass. If the file is absent or invalid, FFmpeg records packet timestamps during the same multi-output Wave64 decode already required for audio processing and derives the continuous intervals from those timestamps. Millisecond-scale Matroska timestamp quantization is merged within a small tolerance so it is not mistaken for authored silence between intervals.
+BDMV Remux reuses the fallback’s known interval map. After final Remux naming and audio cleanup/conversion, every analyzed output receives one adjacent `<output>.audio-gaps.json`. It records only gap-bearing tracks and contains an empty track list when all audio is continuous. Remux-source Encode validates the sidecar against the source file size and Matroska track UID before using it; a valid empty sidecar confirms continuity without another detection pass. If the file is absent or invalid, FFmpeg records packet timestamps during the same multi-output Wave64 decode already required for audio processing and derives the continuous intervals from those timestamps. Millisecond-scale Matroska timestamp quantization is merged within a small tolerance so it is not mistaken for authored silence between intervals.
 
 The precheck boundary is intentionally limited to fields available from MPLS and PAT/PMT. Those structures cannot expose every payload-derived append constraint, such as PCM bit depth or channel layout found only in payload headers, or codec-private changes discovered by an elementary-stream parser. The project does not perform a speculative full-payload scan for this unconfirmed edge case. If MKVToolNix rejects such an append during fallback, the operation fails explicitly and no partial part becomes the final output.
 
@@ -254,8 +238,6 @@ BluraySubtitle therefore uses the `fdkaac` command-line frontend for AAC. A conf
 ### FLAC and intermediate PCM
 
 Final Matroska audio processing probes the source once, then uses one multi-output FFmpeg process to decode the tracks required by cleanup or conversion. A sparse logical track produces one Wave64 file per continuous interval; ordinary tracks produce one. Wave64 avoids RIFF WAV's 4 GiB limit. BDMV-derived workflows use 24-bit PCM; workflows accepting arbitrary Matroska inputs use 32-bit PCM. If batch extraction fails, partial files are removed and each logical track, including all of its intervals, is retried once; a track that still fails remains unchanged.
-
-For a BDMV-derived Remux, the fallback's known interval map is used directly and written to the output sidecar. For a Remux-source Encode, a matching sidecar avoids rediscovery; without one, packet timestamps are collected while the same source decode writes Wave64, so detecting gaps does not add another full read of the MKV.
 
 Analysis and encoding reuse the decoded files. FLAC output follows the greatest detected 16-, 24-, or 32-bit effective depth across the complete logical track rather than the intermediate container width. The standalone multithreaded encoder handles matching-width continuous input; FFmpeg removes zero padding and provides 16/24-bit fallback. True 32-bit output requires the standalone encoder because FFmpeg's FLAC encoder is limited to 24 bits, so a sparse true-32-bit track remains unchanged rather than being down-packed.
 

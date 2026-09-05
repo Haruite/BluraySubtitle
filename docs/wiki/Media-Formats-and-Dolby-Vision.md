@@ -6,33 +6,16 @@ This page summarizes the formats encountered in Blu-ray and BluraySubtitle. “F
 
 ## Video formats
 
-### MPEG-2 Video
+| Codec | Typical use and properties |
+| --- | --- |
+| MPEG-2 Video | Lossy video on early Blu-ray; less compression-efficient than AVC/HEVC |
+| VC-1 | Lossy early-Blu-ray video; usually remuxed or decoded rather than chosen for new encodes |
+| AVC / H.264 | Common 1080p Blu-ray video, normally 8-bit 4:2:0; normal disc delivery is lossy |
+| MVC | AVC's stereoscopic extension: a base view plus a dependent view, sometimes addressed through extensions/subpaths |
+| HEVC / H.265 | Primary UHD-Blu-ray codec, commonly 10-bit 4:2:0 with Rec. 2020/HDR signaling |
+| AV1 | An Encode target through SVT-AV1, rather than a BDMV/UHD-BD source codec in this project |
 
-MPEG-2 Video appears on early Blu-ray titles and remains valid in the classic BD-ROM ecosystem. It is lossy and substantially less compression-efficient than AVC or HEVC for comparable visual quality.
-
-### VC-1
-
-VC-1 is a lossy video codec found on some early Blu-ray releases. Tool support is mature for playback and remuxing, but modern encode workflows rarely choose it as a target.
-
-### AVC / H.264
-
-AVC, standardized as H.264, is the most common video codec on 1080p Blu-ray. Typical disc video uses 8-bit 4:2:0 YCbCr. AVC is normally lossy, although the standard and some encoders provide lossless modes outside ordinary Blu-ray delivery practice.
-
-`x264` is an AVC encoder. It is not a container and it does not create an MKV by itself; its elementary output is later muxed.
-
-### MVC
-
-Multiview Video Coding extends AVC for stereoscopic Blu-ray 3D. A base AVC view can be paired with a dependent MVC view. The disc may expose dependent-view relationships through extensions and subpaths rather than as an ordinary second video selected independently.
-
-### HEVC / H.265
-
-HEVC, standardized as H.265, is the primary video codec for Ultra HD Blu-ray. UHD material commonly uses 10-bit 4:2:0 YCbCr, Rec. 2020 signaling, and HDR transfer characteristics. HEVC is normally lossy in delivered media.
-
-`x265` is an HEVC encoder. BluraySubtitle uses x265 10-bit or 12-bit output when preserving Dolby Vision metadata in its supported encode path.
-
-### AV1
-
-AV1 is a modern lossy video codec supported as an encode target by BluraySubtitle through SVT-AV1. AV1 is not the video codec used by the BDMV/UHD-BD sources handled here. The current project toolchain does not author AV1 Dolby Vision profile 10, so SVT-AV1 output omits Dolby Vision metadata with an explicit task message.
+Codec names identify the bitstream; x264, x265, and SVT-AV1 are encoder implementations. See [encoder selection](Video-Encoding-and-VapourSynth.md#choosing-h264-h265-or-av1) for output depth, compatibility, and Dolby Vision constraints.
 
 ### Pixel format is separate from codec
 
@@ -51,61 +34,22 @@ These tags must match the intended signal. Remuxing should preserve correct sign
 
 ## Audio formats
 
-### PCM and Blu-ray LPCM
+| Format | Compression and characteristics |
+| --- | --- |
+| PCM / Blu-ray LPCM | Uncompressed samples; Blu-ray adds framing/channel layout. Common rates are 48/96/192 kHz and depths 16/24 bits. Effective precision can be lower than the declared depth. |
+| FLAC | Losslessly compresses PCM; compression level affects effort/size, not decoded quality. |
+| AC-3 / Dolby Digital | Lossy compatibility audio, often interleaved with TrueHD on Blu-ray. |
+| E-AC-3 / Dolby Digital Plus | Lossy Dolby format with greater capability than AC-3; used by streaming and Blu-ray primary/secondary audio. |
+| TrueHD / MLP | Lossless channel audio based on Meridian Lossless Packing; may be TrueHD-only or interleaved with AC-3. Can carry Atmos objects/beds/rendering metadata. |
+| DTS core | Lossy compatibility layer for older decoders. |
+| DTS-HD High Resolution | Lossy extension to DTS core. |
+| DTS-HD Master Audio | Lossless residual plus a compatible lossy core; a capable decoder reconstructs the master. |
+| AAC | Lossy Encode target via `fdkaac`; bitrate `0` selects FDK-AAC VBR mode 5. |
+| Opus | Lossy Encode target; Auto uses 128 kbps for up to two channels and 256 kbps for more channels. |
 
-PCM stores sampled amplitude values directly. Blu-ray LPCM adds Blu-ray-specific framing and channel layout. PCM is uncompressed and lossless.
+FLAC preserves decoded PCM, not DTS:X or TrueHD Atmos object metadata. The project's FLAC output follows effective sample depth; conversion controls are in the [README](../../README.md#audio-controls).
 
-Common properties are:
-
-- sample rate, such as 48, 96, or 192 kHz;
-- bit depth, such as 16 or 24 bits;
-- channel count and channel layout.
-
-A nominal 24-bit track may contain only 16 bits of effective signal precision. Effective depth must be determined from decoded samples rather than container metadata alone.
-
-### FLAC
-
-FLAC is a lossless codec for PCM samples. It normally reduces the size of LPCM without changing decoded samples. Compression level changes encoding effort and file size, not decoded quality.
-
-FLAC does not preserve immersive metadata models from TrueHD Atmos or DTS:X. Converting those formats to FLAC preserves only the decoded channel presentation produced by the chosen decoder.
-
-BluraySubtitle preserves the detected effective PCM depth when writing FLAC. Its configurable FLAC compression levels default to 8.
-
-### Dolby Digital / AC-3
-
-AC-3 is a lossy perceptual audio codec. It is widely supported and is often embedded as a compatibility core alongside TrueHD on Blu-ray.
-
-### Dolby Digital Plus / E-AC-3
-
-E-AC-3 is a more capable lossy Dolby codec. It can carry more channels and features than AC-3 and is common in streaming; Blu-ray also defines primary and secondary E-AC-3 stream types.
-
-### Dolby TrueHD and MLP
-
-TrueHD is a lossless codec derived from Meridian Lossless Packing. Blu-ray can interleave an AC-3 compatibility core with TrueHD extension data, or carry a TrueHD-only presentation depending on the stream layout.
-
-Dolby Atmos metadata can be carried with TrueHD. Atmos describes objects, beds, and rendering information beyond a fixed decoded channel stream. Decoding a selected presentation to PCM or FLAC does not retain the Atmos object metadata as Atmos.
-
-Damaged TrueHD requires special caution. A container may retain a plausible overall duration even when transport loss or invalid frames cause an extracted or decoded stream to be shorter. MKVToolNix and the project’s normal demux path do not synthesize replacement TrueHD frames. Review decoder errors and compare decoded audio duration against video before discarding the source.
-
-### DTS core
-
-DTS core is a lossy codec and compatibility layer. A DTS-HD stream can include this core so older decoders can play a reduced representation.
-
-### DTS-HD High Resolution Audio
-
-DTS-HD HR is a lossy extension that improves capability and quality over the core but is not lossless.
-
-### DTS-HD Master Audio
-
-DTS-HD MA adds a lossless residual to a compatible DTS core. A capable decoder reconstructs the lossless master; a core-only decoder can play the lossy DTS representation.
-
-### AAC
-
-AAC is a lossy perceptual codec. BluraySubtitle uses the `fdkaac` frontend for AAC encoding. A configured bitrate of zero means automatic mode, implemented as FDK-AAC VBR mode 5.
-
-### Opus
-
-Opus is a modern lossy codec optimized across speech and music use cases. It is supported as an audio target in Encode, not as the Remux workflow’s lossless-audio conversion target. Automatic bitrate uses 128 kbps for up to two channels and 256 kbps for more channels.
+Damaged TrueHD can retain a plausible container duration while decoded audio becomes shorter. The normal tools do not synthesize replacement TrueHD frames; consult the [documented limitation and validation](../development/media-pipeline-and-tool-selection.md#current-limitation-damaged-truehd-is-not-repaired) before discarding a problematic source.
 
 ## Audio core and extension terminology
 
@@ -130,7 +74,7 @@ The project’s conversion policy can be summarized as:
 | Lossless source | AAC/Opus | Lossy | Encode workflow only, per selected policy |
 | AC-3/E-AC-3/AAC/Opus | unchanged | No new codec generation | Selected lossy audio is normally preserved |
 
-For every conversion target, playlist gaps remain timestamp gaps in the Matroska track rather than silent PCM. Validation compares each continuous audio interval and uses the greatest interval shortening for warning and fallback; the losses are not added together.
+Gap preservation, duration checks, and whole-track fallback follow the [audio conversion policy](../development/media-pipeline-and-tool-selection.md#audio-conversion-policy).
 
 ## Subtitle models
 
@@ -162,8 +106,6 @@ Another subtitle
 The conventional timestamp form is `HH:MM:SS,mmm`, where `mmm` is milliseconds. Cue numbers identify file order but are not presentation timestamps; tools commonly renumber them after cutting or joining. SRT does not have a single rich style system. Some renderers accept a small HTML-like subset, but support is inconsistent and should not be relied upon for precise layout.
 
 Character encoding is also not declared reliably inside an SRT file. UTF-8 is the safest exchange choice. BluraySubtitle's conversion path tries several Unicode and legacy encodings for existing files, but newly created text should be UTF-8 whenever possible.
-
-The project's `SRT` model reads numbered blocks, stores start/end time and multiline text, shifts timestamps when appending, and renumbers retained cues when cutting. A cue is retained by the current cut operation only when its whole interval lies inside the selected range.
 
 When SRT is stored in Matroska as `S_TEXT/UTF8`, the container block timestamp and duration replace the numbered-file timing lines. The block payload contains the UTF-8 cue text, not a complete embedded `.srt` file.
 
@@ -201,8 +143,6 @@ Dialogue: 0,0:00:01.00,0:00:04.50,Default,,0,0,0,,First line\NSecond line
 
 `PlayResX` and `PlayResY` define the script coordinate system; changing them without scaling styles and positions changes the rendered layout. A style's `Fontname` refers to the font's internal family name, which may differ from its filename. Distributing the referenced fonts is therefore part of preserving an ASS presentation.
 
-BluraySubtitle's `Ass` model detects SSA v4 or ASS v4+ style sections, reads the declared `Format:` attributes, converts event times to timed values, and preserves commas in the final text field. It can shift, append, cut, and write the structured events. The SRT-to-ASS path creates a v4+ header and translates basic bold, underline, italic, and font-color markup into ASS override tags.
-
 ASS/SSA can be:
 
 - stored as a soft subtitle track in Matroska;
@@ -238,13 +178,9 @@ Important segment types include:
 
 A rendered subtitle event is assembled from a display set rather than one standalone image packet. Composition state can acquire, update, reuse, or clear objects. Cutting or concatenating PGS therefore requires timestamp adjustment and preservation of the definitions needed to render each display set.
 
-BluraySubtitle’s `PGS` class reads SUP packet headers, computes the maximum end time, shifts timestamps when appending, and selects/rebases packets when cutting. The project also contains an ASS-to-SUP path using its bundled conversion components.
-
 ### IGS / Interactive Graphics
 
-IGS is used for interactive menus and button states. It is also bitmap and composition based, but adds pages, button-over groups, states, navigation commands, and interaction timing. Media tools sometimes label an IGS-only M2TS as a subtitle stream, but it is not an ordinary PGS subtitle.
-
-BluraySubtitle can identify IGS stream type `0x91` and extract representative button-state images for supported SP handling.
+IGS is interactive menu graphics, not ordinary PGS subtitles. See [HDMV/BD-J menus](Blu-ray-Disc-Structure.md#hdmvbd-j-menus-and-igs) for composition and the image-extraction limits.
 
 ### TextST
 
@@ -281,33 +217,9 @@ Do not use “two video tracks” as the sole Dolby Vision test. Stream descript
 
 ### Profile 8.1 in this project
 
-BluraySubtitle’s supported remux path takes compatible base and enhancement inputs and runs `dovi_tool -m 2 mux --discard`. This rewrites the RPU for profile 8.1 and discards the enhancement-layer video, leaving a single-layer base-plus-RPU result. In the encode path:
+For compatible dual-layer Remux input, `dovi_tool -m 2 mux --discard` rewrites RPU metadata for profile 8.1 and discards enhancement-layer video, producing one base-plus-RPU HEVC track. A profile 7 FEL's picture residual is therefore not preserved merely because the RPU is retained.
 
-- x265 10-bit or 12-bit output can receive extracted RPU metadata and retain Dolby Vision as profile 8.1;
-- x265 8-bit and x264 are rejected when Dolby Vision preservation is required; and
-- SVT-AV1 encoding proceeds without Dolby Vision metadata because the current toolchain does not author AV1 Dolby Vision profile 10.
-
-Profile conversion is not a promise that every component of a profile 7 FEL is reproduced by a profile 8.1 result. RPU preservation and enhancement-layer residual preservation are different questions.
-
-### Project workflow
-
-For a Dolby Vision encode sourced from MKV, the project conceptually:
-
-1. identifies and extracts the HEVC video track;
-2. uses `dovi_tool` to demux/extract the base representation and RPU metadata;
-3. when an automatic physical crop is active, exports every L5 active-area preset, subtracts the crop margins, and creates a task-owned edited RPU;
-4. encodes the processed base video with a supported x265 output depth;
-5. writes the prepared RPU in that x265 run when the actual executable advertises the native options and the VBV/mastering-display prerequisites are already present, otherwise injects it afterward with `dovi_tool`;
-6. falls back to injection if native output verification fails, verifies the encoded HEVC contains RPU metadata, and also verifies HDR10+ when the source carried it; and
-7. muxes the final container, then requires profile 8 and an RPU frame count matching the VPy output when it verifies that container. Active HDR10+ and automatically supplied static fields are also checked again.
-
-Both native x265 writing and fallback injection therefore consume the same crop-adjusted RPU. Source HDR10+ metadata is retained when supported, but the current workflow does not remeasure its brightness statistics after cropping.
-
-For compatible dual-layer remux input, it uses `dovi_tool` mode 2 to create the supported single-layer profile 8.1 result; enhancement-layer picture residuals are not retained.
-
-Every generated intermediate is checked. Missing base-layer, RPU, combined, injected, or verified output is treated as a failure rather than silently producing a non-Dolby-Vision file under a Dolby Vision request.
-
-A final-container verification mismatch is handled differently from a broken intermediate: the published MKV is retained, the row completes with a warning, and a non-overwriting HDR report records the mismatch for diagnosis.
+Encode has separate bit-depth, crop, native-writing/injection, and verification requirements. These are documented together under [automatic HDR metadata handling](Video-Encoding-and-VapourSynth.md#automatic-hdr-metadata-handling).
 
 ## Format identification checklist
 

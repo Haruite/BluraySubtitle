@@ -23,102 +23,51 @@ BluraySubtitle is a GUI tool for Blu-ray workflows on **Windows / Linux** (inclu
 
 ---
 
-## Highlights
+## Features and controls
 
-- One application covers the common full Blu-ray workflow (Remux, Encode, DIY, merge subtitles, chapters).
-- Features are **auto-configured**—low learning curve; casual users can finish tasks with just a couple of clicks.
-- The UI still offers **high freedom** for advanced users.
-- **Careful operation logic** and **strong error recovery**.
-- Cross-platform: **Windows / Linux / Docker**.
+### Interface and task settings
 
----
+- English/Simplified Chinese UI; Light, Dark, and Colorful themes with opacity control.
+- **Settings** contains General, Paths, Advanced, External tools, and manual update options. Settings and window geometry are saved in `config.json`.
+- Series mode splits along the chapter timeline; movie mode keeps one continuous output. Each disc can have multiple selected main MPLS files. Automatic selections and episode estimates need review. See [chapter-range recalculation](docs/wiki/BluraySubtitle-Developer-Guide.md#episode-configuration) for how segment and chapter edits interact.
+- Tasks use the visible row order, names, ranges, commands, tracks, and languages captured at launch. Invalid settings are reported before execution. See the [interface examples](docs/wiki/Interface-Guide.md) for selection and review.
 
-## More Details
+### Remux controls
 
-### UI / Interaction
+Each selected main MPLS has one non-empty editable mux command. Planned outputs must match the visible episode-row count; invalid filenames are rejected. **Edit Tracks** controls video, audio, and subtitle choices; manual track-selection flags in the command are replaced by those choices. Logical-track rows show PIDs and status, with per-PlayItem details in the tooltip; incompatible tracks are disabled.
 
-- **Language**: English / 简体中文 (native language names).
-- **Themes**: Light / Dark / Colorful (with opacity).
-- The top-right **Settings** dialog contains General, Paths, Advanced, External tools, and manual update options.
-- Application settings and window size/position are remembered in `config.json`.
-- **Table-centered compact** workflow.
-- Press the **bottom** button to start work; the UI **stays responsive** while jobs run.
-- On-screen settings drive internal processing—**what you see is what you get**.
-- Tasks use the settings currently shown in the GUI. If those settings cannot form a valid task, the task does not start and reports an error.
+- **Allow partially missing non-video tracks** is disabled by default. It permits physically absent audio/subtitle intervals only when tsMuxer cannot recover them and the track exists elsewhere in the output. Missing video or a whole missing selected track still fails.
+- **Trim copyright bumper** can remove complete trailing clips in an episode's final 30 seconds when the episode ends at the M2TS file end. Review the result; see the [exact rule and exceptions](docs/wiki/Blu-ray-Disc-Structure.md#short-copyright-bumpers-at-the-end).
+- Selected external subtitles are soft-muxed into the main MKV. Remux does not burn them into video or copy them as external outputs.
+- **Mux Dolby Vision** converts compatible layers to profile 8.1; disabling it excludes the enhancement layer. See [profile 8.1 limitations](docs/wiki/Media-Formats-and-Dolby-Vision.md#profile-81-in-this-project).
 
-### Series / Movie Mode
+Saved track languages are applied and verified after muxing. Mapping/tool/language failures stop the task and remove its newly created main output. Track-count and MKVToolNix packet-statistics checks instead produce a final warning summary while later Remux work continues.
 
-- **Series mode** for per-episode splitting, or **Movie mode** without splitting.
-- Built-in logic splits episodes along the **chapter timeline**; optional **approx. episode length** helps estimation.
-- Per-row **start chapter / end chapter** (chapter span control in remux / encode flows).
+### Audio controls
 
-#### Playlist management
+- Remux does not re-encode lossy tracks. **Convert lossless audio to FLAC** starts enabled; its startup state and the standalone/FFmpeg FLAC levels (both default to 8) are configurable under **Advanced**.
+- **Convert DTS:X and TrueHD Atmos to FLAC during Remux** is separate and starts disabled because FLAC cannot retain object metadata.
+- Final Matroska audio cleanup runs even when FLAC conversion is off: it removes tracks below `-60 dB` decoded maximum volume and exact decoded duplicates within the same codec family and channel count. Different known languages are kept; duplicates retain the earliest source track. Every removal is reported. Standalone single-track audio skips this cleanup.
+- Conversion preserves authored gaps in Matroska without adding silence; sparse standalone audio is rejected. Keep the adjacent `.audio-gaps.json` sidecar for later Remux-source Encode, including its valid empty marker for continuous audio.
+- A failed conversion keeps the original track. The greatest continuous-interval shortening is reported above 0.1 seconds; loss above the configurable threshold (default 1 second) discards the conversion.
 
-- **Main MPLS** is chosen automatically with high accuracy.
-- You can **pick the main MPLS manually**; each disc volume allows **any number** of main playlists.
-- The main playlist supports **chapter-segment selection**, linked with **start / end chapter** splitting.
-- **Unchecked** segments in the main MPLS plus **other playlists** are treated as **bonus SP** material.
+See [audio formats and conversion targets](docs/wiki/Media-Formats-and-Dolby-Vision.md#lossless-audio-conversion-decisions) for format choices, and [media processing](docs/development/media-pipeline-and-tool-selection.md) for validation and recovery details.
 
-### Track Management
+### Encode controls
 
-- Every track **except video** can be selected independently.
-- A built-in default track-selection policy adapts to different disc layouts—**not** “select everything”, but keeps what matters.
-- **Select all tracks** in one click.
+- Choose bundled/system `vspipe` and encoder binaries: x264 supports 8/10-bit, x265 8/10/12-bit, and SVT-AV1 normal output 8/10-bit. The exposed SVT-AV1 12-bit path is experimental and the setup-script build produces invalid video.
+- Built-in presets are read-only. **Advanced** manages user presets and startup defaults; the visible parameter field controls each task.
+- Each main/SP row has its own VPy path and per-track FLAC/AAC/Opus choices. Subtitle modes are external, softsub, and hardsub; Remux-source input also supports chapter/attachment editing.
+- The generated VPy exposes denoise, dehalo, dering, deband, and anti-aliasing strengths. Startup defaults for these controls and the getnative/crop/comparison/frame-check options are stored under **Advanced**.
+- Automatic getnative can use substantial time and memory and skips sources taller than 1080 pixels. Higher-resolution analysis uses `src/scripts/getnative_file.py` manually.
+- Automatic crop is opt-in and needs visual review. Comparison images go to `<selected output>/<source folder name>/Compare`; full-frame PSNR reports go to `FrameCheck`. The full check rerenders the VPy and may take several times the video's duration.
+- Compatible color/HDR metadata is carried forward. Dolby Vision preservation requires x265 10/12-bit; x264 and x265 8-bit cannot preserve it, while SVT-AV1 reports its omission. x265 10/12-bit also supports HDR10+; automatic crop adjusts Dolby Vision active-area metadata.
 
-### Bonus SP Management
+For defaults, parameters, preview keys, and metadata limitations, see [Video Encoding and VapourSynth](docs/wiki/Video-Encoding-and-VapourSynth.md).
 
-- Each **SP row** can be selected independently.
-- SP rows that contain **useful** content are auto-selected.
-- Multiple SP layouts are supported so valid disc extras are covered.
+### SP management
 
-### Remux / Encode Controls
-
-Encode mode supports two input sources:
-
-- Blu-ray (original disc layout)
-- Remux (MKV)
-
-In series mode, **Trim copyright bumper** checks each episode's final 30 seconds only when the episode ends at the underlying M2TS file end. Complete trailing M2TS play items inside that window are excluded with `--split parts`; MPLS timing and chapters remain unchanged. This structural guess can be wrong, so inspect unusual discs and edit the mux command's parts range when necessary. See [Blu-ray Disc Structure](docs/wiki/Blu-ray-Disc-Structure.md#short-copyright-bumpers-at-the-end).
-
-The **main playlist** supports editing the mux command (`remux_cmd`). Each selected main playlist must have exactly one non-empty command and is processed in the current visible order, including multiple main playlists from the same disc. Video, audio, and subtitle selection always comes from **Edit Tracks**; the command shows placeholders for those choices, and manually entered track-selection flags are ignored. Before writing, Remux derives every command output and final episode filename. The output count must match the visible episode rows; duplicate paths and existing outputs are errors. Episode names are applied exactly as shown, and invalid filenames are rejected.
-
-**Edit Tracks** presents one row for each logical track authored across the whole playlist, including its PIDs and a status summary; hover over the row for per-PlayItem details. A track whose MPLS parameters change incompatibly between clips is disabled. A logical track may use different PIDs or be absent for part of the playlist; its first explicit language is used by default, while later language changes are shown for reference.
-
-The disabled-by-default Advanced option **Allow partially missing non-video tracks** permits a selected audio or subtitle track that is physically absent from only some M2TS clips and cannot be recovered by tsMuxer to continue with those intervals as timeline gaps. It does not permit a missing video track or a selected track that is absent from the whole output.
-
-Remux keeps selected lossy audio unchanged. Its **Convert lossless audio to FLAC** option is enabled by default, and its startup state is configurable under **Advanced**. The standalone `flac` and FFmpeg compression levels are also configurable there and both default to 8.
-FLAC cannot store DTS:X or TrueHD Atmos object metadata, so **Convert DTS:X and TrueHD Atmos to FLAC during Remux** is a separate Advanced option and is disabled by default. Audio conversion preserves playlist gaps in Matroska without filling them with silence; a standalone audio output that contains such gaps is rejected. After gap analysis, every Remux writes a matching `.audio-gaps.json` file beside the MKV so a later Remux-source Encode can reuse the result; gaps are recorded in the file, while continuous audio produces a valid empty marker. A failed conversion keeps the original track. If a continuous section is shortened by more than 0.1 seconds, the program reports it; if the greatest section loss exceeds the configurable threshold, the converted track is discarded. The threshold defaults to 1 second.
-See [Media Pipeline Design and Tool Selection](docs/development/media-pipeline-and-tool-selection.md) for details.
-
-Subtitles selected for Blu-ray Remux are always soft-muxed into the corresponding main MKV. Remux does not burn subtitles into the video or write them as external subtitle files.
-
-With **Mux Dolby Vision** enabled, Remux combines compatible base and enhancement layers as profile 8.1; when it is disabled, the enhancement layer is not included.
-
-Selected audio in final Matroska outputs is also checked automatically even when **Convert lossless audio to FLAC** is disabled. A track whose decoded maximum volume is below -60 dB is removed as silent. Decoded fingerprints are compared only for tracks in the same source codec family with the same channel count; tracks with different known languages are kept, and an exact duplicate keeps the earliest track in source order. A standalone single-track audio output is generated as selected and does not run this removal pass.
-
-Encode options include:
-
-- **`vspipe` source**: bundled / system
-- **Encoder**: **x264 / x265 / SvtAv1EncApp**
-- **Encoder binary source**: bundled / system
-- **Output video bit depth**
-  - x264: 8 / 10 bit
-  - x265: 8 / 10 / 12 bit
-  - SvtAv1: 8 / 10 bit for normal output; the exposed 12-bit path is experimental and the setup-script build does not produce valid video
-- Read-only built-in encoder presets, user-defined presets, and direct per-task parameter editing
-- **Lossless audio recompression**: **FLAC / AAC / Opus**
-- The startup encoder, bit depth, and preset come from **Advanced** settings. User-defined presets can be added, renamed, edited, and deleted there for the currently selected encoder, while built-in presets remain read-only. After startup, the visible Encode preset and parameter controls remain authoritative for every task.
-- The startup lossless-audio target, subtitle packaging mode, getnative, automatic-crop, output-comparison, and corrupted-frame-check checkboxes also come from **Advanced** settings and remain freely editable before launch.
-- The VPy row below those options exposes denoise, dehalo, dering, deband, and anti-aliasing strengths for the generated default script. `0` disables an individual stage; defect-specific dehalo and dering start disabled, while deband and anti-aliasing use a moderate `0.5` blend by default. All values can also be changed under **Advanced** settings.
-- Automatic getnative can take substantial time and memory because it analyzes multiple frames and kernels. Encode runs it only when the source height is at most 1080; a taller source is skipped even when the option is selected. To analyze such a source, run `src/scripts/getnative_file.py` manually and write its `height` and `kernel` result into the VPy as `native_h` and `native_kernel`.
-- The standalone algorithm scales its search and curve-tail boundaries with the source height. It always excludes the uncommon 535p through 545p false-positive band and excludes candidates above `source height × 1040 / 1080`.
-- With **Auto-crop black borders** enabled, Encode analyzes multiple time points and applies one conservative fixed crop. Pixels used by any sampled active picture are preserved when borders vary over time.
-- With **Output comparison images** enabled, every encoded video saves source and encoded PNGs from the same frame under **`<selected output>/<source folder name>/Compare`**.
-- With **Check corrupted frames** enabled, Encode reruns the exact VPy used for the completed video and compares every output frame with the encoded MKV by PSNR. Frame count, speed, percentage, and ETA are reported to the terminal at 15-second intervals. The JSON report is saved under **`<selected output>/<source folder name>/FrameCheck`**. This is an additional full VPy render after encoding and may take several times the video's duration.
-- Lossless audio tracks use the per-track FLAC/AAC/Opus choice shown in **Edit tracks**.
-- **Subtitle packaging**: external / softsub / hardsub
-- **Per-row VPy path** for main episodes and SP rows
-- **Remux-as-source** unlocks more actions, such as **editing chapters / attachments**.
+Review the SP table after main-playlist and episode selection. Rows can represent other playlists, excluded main intervals, or uncovered M2TS content. Track edits update the output name and format; matching commentary may share a main output or be appended to one episode. The [SP selection, naming, and attachment rules](docs/wiki/Blu-ray-Disc-Structure.md#main-content-and-sp-in-this-project) cover defaults and special discs.
 
 ### Managed x264 and x265 versions
 
@@ -132,106 +81,6 @@ The managed paths are defined in [settings.py](src/core/settings.py). To use ano
 The setup scripts also install the latest official [hdr10plus_tool](https://github.com/quietvoid/hdr10plus_tool) release.
 
 For custom x265 builds, use the official multilib steps in `setup_windows_environment.ps1` or `setup_linux_environment.sh` as references.
-
-Encode follows the visible row order and applies the displayed output names, per-row VPy scripts, subtitles, languages, track choices, and encoder settings. For Blu-ray input, its temporary Remux preserves the selected source audio; lossless-audio conversion runs only during the final mux after video encoding succeeds.
-
-Encode automatically carries compatible source color and HDR metadata into the output, including HDR10+ for x265 10/12-bit output. Dolby Vision from a selected Blu-ray or Remux source is preserved as profile 8.1 with x265 10/12-bit output. x264 and x265 8-bit output cannot preserve Dolby Vision, while SVT-AV1 omits it with an explicit notice. When automatic cropping changes the encoded dimensions, Dolby Vision active-area metadata is adjusted for both native x265 writing and fallback post-injection.
-
-### mkvtoolnix Compatibility Fixes
-
-Built-in handling for common mkvtoolnix edge cases:
-
-- Rewrite chapters when splitting/segmenting (where needed).
-- When **MPLS direct mux fails**, automatic repair paths:
-  - multi-clip **track-aligned concat** fallback,
-  - **multi-episode split-output** fallback,
-  - higher success rate on complex playlists.
-
-### Implementation Notes (Plain Language)
-
-This section explains, in plain language, how the program behaves internally.
-
-#### A) SP handling rules
-
-1. The **`select`** column decides whether an SP row participates in muxing. The task waits for the SP scan to finish, then captures the visible row order, source, output name, selected tracks, and edited languages together.
-2. MPLS rows always use MPLS logic; **M2TS** logic is used only when a row has no MPLS.
-3. SP rows are ordered by **BDMV volume**, then **MPLS name**, followed by uncovered **M2TS names**.
-4. The default MPLS output basename is **`BD_Vol_{bdmv_vol}_SP{n}`**. The number follows the selected MPLS rows on the same disc and uses a consistent zero-padded width. In movie mode, when table2 has exactly one row, the volume prefix is omitted and the basename is **`SP{n}`**.
-5. Series mode has two independent exact-match rules. When a non-main MPLS has the same complete M2TS detail as exactly one selected main MPLS, its non-duplicate audio and subtitle tracks become choices for that main remux and the duplicate SP row is unchecked by default. Otherwise, an SP whose complete detail equals exactly one episode and exposes a new physical track is checked by default and linked only to that episode. Tracks from different playlists are compared by their M2TS/PID mappings, not by PID or slot alone. An SP spanning several episode outputs without matching the complete main MPLS remains an ordinary SP; it is not attached to several outputs.
-6. MPLS and M2TS shorter than **30 seconds** remain visible but are unchecked by default; MPLS duration counts duplicate files only once.
-7. An MPLS containing at least three distinct files is checked by default.
-8. An uncovered M2TS containing at most 12 decoded frames where every frame has the same image, including a short clip made of repeated identical frames, and an MPLS containing one such M2TS are checked by default and written as PNG. Detection stops and rejects the source as soon as a 13th frame is found.
-9. An MPLS containing multiple M2TS files where every file has at most 12 decoded frames and every frame in each file has the same image is checked by default. Its output is a folder, with files named **`{n}-{m2ts_name}.png`**.
-10. No selected audio or subtitle track normally leaves the output name empty and intentionally skips that row. A source detected as video-only still uses `.mkv` because its video track is implicit.
-11. One selected audio track from an audio-only source uses the extension for its selected output format.
-12. Multiple selected audio tracks from an audio-only source use `.mka`; an uncovered audio-with-subtitle M2TS also uses `.mka`, while remaining video/container layouts use `.mkv`.
-13. A subtitle-only source with one selected subtitle uses its elementary-stream extension; multiple selected subtitles use `.mks`.
-14. Editing tracks recalculates the output name immediately. The whole-main reuse rule above is resolved before the separate single-episode append rule. For a single-episode match, linked rows are renamed immediately when episode splitting changes. Movie-mode SP rows always keep independent SP output paths and are never attached to the main output. The runtime uses the exact visible output name and does not silently rename it or rediscover another file.
-15. MPLS container outputs first clear existing chapters, then receive chapters generated from the playlist with the tail marker removed; a single zero-time chapter is omitted.
-16. Unreadable or unsupported rows are disabled during scanning. If a selected source or its captured track configuration becomes unavailable later, the task reports an error instead of silently skipping it.
-17. Languages saved in **Edit Tracks** are applied and verified for `.mkv`, `.mka`, and `.mks` SP outputs, including tracks appended to an episode output. Raw streams and images cannot store this metadata, so such a language configuration is rejected before execution.
-18. M2TS files not covered by any MPLS are also listed and classified as video, audio-only, IGS menu, subtitle-only, audio-with-subtitle, private/other, mixed non-video, or unknown. Unsupported layouts are disabled; IGS menu rows remain available but unchecked, including zero-duration menus. Extracted IGS menu states that are fully black are omitted. Short rows are unchecked unless the single-frame rule applies. Their normal basename is **`BD_Vol_{bdmv_vol}_{m2ts_name}`**, or just **`{m2ts_name}`** for a one-row movie; output type follows the single-frame, audio, subtitle, menu, and container rules above.
-
-**When SP mux fails**
-
-- Empty output names remain an intentional skip. Every selected row with a non-empty output is required to finish successfully.
-- Sources, captured tracks, exact output paths, collisions, existing files, and required language tools are checked before output creation whenever they can be determined in advance.
-- MPLS rows try the direct mux first, then use the same track-aligned fallback for one or multiple clips.
-- An episode-linked SP first uses the MPLS `stream_id` PID reference. If that direct mapping is missing or inconsistent, the PID-aligned output is materialized first and appended with its canonical PID map; `properties.number` is never treated as a transport PID.
-- Success requires the exact planned output to exist. A failed selected row stops the task and removes only its task-created partial output; an episode file is replaced only after its SP mux has completed and been verified.
-
-#### B) How track alignment and missing-track repair work
-
-Track-aligned fallback preserves a logical track through PID changes and temporary gaps without creating silent replacements. Audio conversion, when selected, remains a separate post-processing step after Remux succeeds.
-
-The separate multi-output fallback used when one main MPLS is split into several episode files keeps the same per-clip alignment and missing-track rules, then validates every expected split output before finalization.
-
-#### C) `view chapters` / `start_at_chapter` / `end_at_chapter` linkage and configuration recalculation
-
-Episode configuration is recalculated when any of these **three** inputs changes:
-
-1. MPLS segment check states in **`table1 → view chapters`**
-2. Per-row **`start_at_chapter`** in **`table2`**
-3. Per-row **`end_at_chapter`** in **`table2`**
-
-**Priority 1: `view chapters` checkbox changes → full recompute**
-
-1. First **checked** segment starts episode 1’s `start_at_chapter`.
-2. On an **unchecked** segment start, the current episode **ends** there; `end_at_chapter` is set; the next episode starts after that segment.
-3. Target length is row-aligned: if that episode row has a subtitle, use its **`max_end_time`**; otherwise use **`approx episode length`**.
-4. To avoid creating a short tail episode, define minimum useful tail length as **`max(0, approx episode length − 300 seconds)`**. Before comparing endpoints, discard every non-ending candidate whose remaining time to the MPLS end is shorter than this threshold. This filter applies to both file-boundary and chapter candidates; **`ending`** is always eligible.
-5. Two end candidates are selected from the eligible checked nodes:
-   - **A**: nearest **file boundary** (from chapter view: this node vs previous node **changes m2ts**);
-   - **B**: nearest **chapter** node.
-6. Pick end:
-   - if A’s error is in **`[-¼ × target, +½ × target]`**, prefer **A**;
-   - else multiply **negative** error by **−2**, compare A vs B, take the smaller adjusted error as `end_at_chapter`.
-   - If no useful non-ending candidate remains, use **`ending`** and absorb the tail into the current episode.
-
-**Priority 2: `start_at_chapter` changes → recompute from first changed episode**
-
-1. Compare with the previous configuration and locate the changed MPLS and its earliest changed episode.
-2. Episodes before that row and episodes belonging to other MPLS playlists stay unchanged.
-3. The edited start is authoritative. From that episode onward on the same MPLS, recompute every end and every later start/end with the same rules; do not reuse stale later bounds.
-4. Sync uncheck: checked nodes between the previous episode end and the new start are unchecked; for the first episode on an MPLS, nodes before the new start are unchecked. The next generated range starts at the first still-checked node.
-5. Remove invalid or fully consumed rows and add continuation rows as needed until the checked MPLS tail is covered.
-
-**Priority 3: `end_at_chapter` changes → expand / shrink**
-
-1. The edited episode’s start and explicit end are authoritative. Episodes before it and episodes belonging to other MPLS playlists stay unchanged.
-2. If `end_at_chapter` is **moved earlier**, recompute all following ranges on the same MPLS and add continuation rows until its checked tail is covered.
-3. If `end_at_chapter` is **moved later**, remove every following row fully covered by the new end. The first remaining range starts at the first still-checked node at or after the new end, then all following ranges are recomputed with the same endpoint rules.
-4. Automatically generated continuation rows never reuse old later bounds, and zero-length rows are discarded.
-
-**Playlist isolation without subtitles:** each MPLS uses `approx episode length` independently. Recomputing an earlier volume may change the global episode numbering because its row count changed, but it must not change any retained `start_at_chapter/end_at_chapter` bounds in later MPLS playlists.
-
-**Dropdown constraints**
-
-- Nodes **unchecked** in `view chapters` must be **disabled** in both `start_at_chapter` and `end_at_chapter` combos.
-- Still require **`end_at_chapter > start_at_chapter`**.
-- Every emitted series row must satisfy **`1 ≤ start_at_chapter < end_at_chapter ≤ ending`**. Invalid, reversed, zero-length, and `ending`-as-start rows are removed before rebuilding the GUI.
-
----
 
 ## Requirements
 
@@ -357,9 +206,9 @@ Encode uses the current row order, output names, VPy scripts, subtitles, languag
 
 - **Edit script (`edit_vpy`)**: opened with the **system default editor** for the file type.
 - **Preview script (`preview_script`)**: opened with **`vsedit`**, with row-aware preview context.
-- The generated default VPy exposes the processed `res` as output index `0` and the original `src8` as output index `1`. See the [Encode/VapourSynth Wiki](docs/wiki/Video-Encoding-and-VapourSynth.md) for VSEdit preview and snapshot hotkeys. This live preview is separate from the PNG files generated by **Output comparison images** after encoding.
+- The generated default VPy exposes the processed `res` as output index `0` and the original `src8` as output index `1`. See the [Encode/VapourSynth Wiki](docs/wiki/Video-Encoding-and-VapourSynth.md#previewing-processed-and-source-frames-in-vsedit) for VSEdit preview and snapshot hotkeys. This live preview is separate from the PNG files generated by **Output comparison images** after encoding.
 - Default script path: **`vpy.vpy`**.
-- The generated default script intentionally does not auto-process interlaced video because true interlace, telecine, and mixed cadence require different treatment; use a custom VPy as described in the [Encode/VapourSynth Wiki](docs/wiki/Video-Encoding-and-VapourSynth.md).
+- The generated default script intentionally does not auto-process interlaced video because true interlace, telecine, and mixed cadence require different treatment; use a custom VPy as described in the [Encode/VapourSynth Wiki](docs/wiki/Video-Encoding-and-VapourSynth.md#interlaced-telecined-and-mixed-cadence-sources).
 
 ---
 
@@ -513,11 +362,7 @@ No. Remux the disc first, then in encode mode choose **Remux** as the source and
 
 Normal: some discs mix resolutions and authoring is messy. Run a test pass; if results are similar, keep **auto getnative**. Otherwise disable it and edit the VPy with the resolution/scaling you trust—or leave those fields empty.
 
-### Is the program reliable? Can AI-written code be trusted?
 
-Use your own judgment.
-
----
 
 ## Credits
 

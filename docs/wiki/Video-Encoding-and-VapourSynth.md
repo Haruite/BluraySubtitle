@@ -2,49 +2,21 @@
 
 English | [简体中文](Video-Encoding-and-VapourSynth.zh-Hans.md)
 
-Encoding is the stage that turns decoded video frames into a new compressed video stream. It is different from remuxing: a remux copies an existing coded stream, while an encode decodes frames, optionally processes them, and makes new codec decisions. This page describes the codecs, encoders, presets, and VapourSynth path used by BluraySubtitle.
-
-See [Media Fundamentals](Media-Fundamentals.md#media-as-layers) for the distinction between codecs, encoder implementations, and containers. This page focuses on choosing and configuring the video encoder; BluraySubtitle places its final encoded stream in MKV.
+This page covers encoder settings and the VPy processing path. For container, codec, remux, and encode terminology, see [Media Fundamentals](Media-Fundamentals.md). Final encoded output is muxed into MKV.
 
 ## Choosing H.264, H.265, or AV1
 
-### H.264 / AVC with x264
+| Encoder | Supported output depth | Practical tradeoff |
+| --- | --- | --- |
+| x264 / AVC | 8-bit default; 10-bit sets `--profile high10` | Mature, generally faster, and broadly compatible with older players; usually needs more data than a well-configured newer codec |
+| x265 / HEVC | 8/10/12-bit; 10-bit default | Project default; better compression efficiency at greater encoding cost. Dolby Vision preservation requires 10/12-bit. |
+| SVT-AV1 | 8/10-bit for normal output | Modern compression and film-grain tools; check decoder support. The current workflow omits Dolby Vision with a task message. |
 
-H.264 is the oldest of the three choices and has the broadest hardware and software playback compatibility. x264 is mature, predictable, and usually faster than the newer-codec alternatives at practical settings. It is a useful choice for older players, low-powered clients, or workflows where compatibility matters more than the smallest possible file.
+Ten-bit SDR output can reduce quantization/banding problems but does not turn SDR into HDR. Codec background belongs in [Media Formats](Media-Formats-and-Dolby-Vision.md#video-formats).
 
-x264 supports only 8-bit and 10-bit output. BluraySubtitle uses 8-bit by default; selecting 10-bit switches the x264 profile to `--profile high10`. H.264 usually needs more data than a carefully configured newer codec for a comparable result, but codec generation alone never determines quality.
+SVT-AV1 12-bit is experimental and unusable in the current setup-script build: its patch bypasses upstream's 8/10-bit restriction and adds Professional-profile signaling, but does not implement valid 12-bit encoding; real tests produce a grey picture. Valid 12-bit support requires maintaining the upstream source, not merely selecting the option.
 
-### H.265 / HEVC with x265
-
-H.265 succeeds H.264 and adds more flexible block partitioning, prediction, and coding tools. x265 can normally achieve better compression efficiency than x264, especially for high-resolution material, at the cost of more encoding work and somewhat narrower compatibility.
-
-x265 is the project's default encoder, with 10-bit output as the default depth. Ten-bit encoding is also useful for SDR sources because the finer internal and output precision can reduce quantization and banding problems; it does not turn SDR into HDR. BluraySubtitle supports 8-, 10-, and 12-bit x265 output.
-
-The project's encoded Dolby Vision preservation path requires x265 with 10- or 12-bit output. That is a project implementation constraint, not a general claim that every x265 encode preserves every Dolby Vision profile.
-
-### AV1 with SVT-AV1
-
-AV1 is an open video coding standard developed by the Alliance for Open Media. It targets high compression efficiency and includes tools such as film-grain synthesis. SVT-AV1 is the standalone AV1 encoder integrated by this project.
-
-AV1 can be attractive when file size and modern playback environments matter, but encoding cost and device support must be checked against the intended audience. Use 8- or 10-bit SVT-AV1 for normal output. BluraySubtitle writes an IVF intermediate before final MKV muxing.
-
-SvtAv1EncApp's 12-bit path is experimental and is not a usable encode path in the current project. Upstream SvtAv1EncApp accepts only 8- and 10-bit encoder depths and rejects 12-bit encoding. The Windows setup script applies a source patch that bypasses that restriction and writes the required Professional-profile signaling, but the patch does not implement the missing 12-bit encoder behavior. Real encode tests produce an unusable grey picture.
-Users who need 12-bit SVT-AV1 must modify and maintain the upstream source themselves so that it produces valid 12-bit output; selecting 12-bit with the executable built by the setup script is not sufficient.
-
-The current project does not retain Dolby Vision metadata when encoding with SVT-AV1. Choose x265 10/12-bit if the documented Dolby Vision encode path is required.
-
-### There is no universal quality ranking
-
-“AV1 is better than H.265, which is better than H.264” is too simple for an actual encode. Results depend on:
-
-- source resolution, grain, animation style, motion, and existing artifacts;
-- encoder implementation and version;
-- rate-control target;
-- preset and individual analysis parameters;
-- filtering before encoding; and
-- the playback device and decoder.
-
-Compare short representative samples at the intended viewing distance. Do not compare codecs by re-encoding one already compressed result into another codec, because the later encode also receives the earlier encode's losses.
+Quality depends on source texture/motion, encoder version, rate control, preset, filters, and playback conditions. Compare representative samples from the same source at the intended viewing distance; transcoding one test result into another codec adds generation loss and biases the comparison.
 
 ## The BluraySubtitle encode pipeline
 
@@ -142,6 +114,8 @@ The GUI can generate, edit, and preview a `.vpy` script. Before encoding it inje
 
 The generated default VPy exposes the processed `res` as output index `0` and the original `src8` as output index `1`. Click **Preview script**, then choose **Script > Preview** in VSEdit or press `F5` to open the preview window. Keep the same frame selected and press `0` for the processed frame or `1` for the source frame; the preview window title confirms the active index. Press `S` in the preview window to run **Save snapshot** for the displayed frame. These default keys can be reviewed or changed under **Settings > Hotkeys** in VSEdit.
 
+Use sufficient intermediate precision and dither when reducing bit depth. Verify output `0`, frame count/rate, scan type, color properties, crop dimensions, and representative motion/gradients before a full encode. The [short-test instructions](../../README.md#how-do-i-run-a-short-encode-test) explain when a VPy-only trim is sufficient and when the whole media timeline must be cut.
+
 ### Automatic getnative
 
 BluraySubtitle's getnative implementation is adapted from [Infiziert90/getnative](https://github.com/Infiziert90/getnative). It estimates the vertical resolution at which a source was rendered before mastering and the scaling kernel most likely used to enlarge it. When automatic getnative is enabled for a source no taller than 1080p, the result becomes the generated VPy's native height and inverse-scaling kernel. This can remove the master's upscale before subsequent filtering or resizing, but it neither changes the source file nor restores detail that was never present.
@@ -169,49 +143,61 @@ Unstable or oscillating tails are rejected before ranking. The 535p-through-545p
 
 Usable samples are grouped by rounded height. Each sample is weighted as `min(score, 2) * (height / search-range maximum)^4`; the three strongest weights in a height group determine which group wins, with the higher height breaking an exact tie. This preserves the empirically useful preference for a high resolution with a strong score without requiring dense consensus, since some titles yield very few usable frames. The selected group's weighted height and kernel votes produce the final VPy values.
 
-Getnative remains a heuristic and can consume substantial time and memory. Clean line art with visible detail usually gives the clearest curves; dark scenes, credits, soft photography, noise, mixed animation pipelines, and later resizes may not. Review the per-kernel output and compare several episodes when results vary. To test one file outside the GUI, edit `video_file` in `src/scripts/getnative_file.py` and run that script; unlike the automatic Encode integration, the standalone path also analyzes sources taller than 1080p.
+Getnative is a heuristic: detailed line art usually gives clearer curves than dark scenes, credits, soft photography, noise, or mixed-resolution material. Compare per-kernel output across representative episodes. For a standalone test, set `video_file` in `src/scripts/getnative_file.py`; the higher-resolution VPy setup is described above.
 
 ### Generated VPy restoration controls
 
-The Encode page exposes five numeric strengths immediately below the getnative, automatic-crop, and comparison-image options. Their values are captured when the task starts and replace the generated script's top-level `denoise_strength`, `dehalo_strength`, `dering_strength`, `deband_strength`, and `antialiasing_strength` assignments. A custom VPy that does not define those names is left unchanged. The same startup defaults can be saved under **Advanced** settings.
+The five Encode controls replace `denoise_strength`, `dehalo_strength`, `dering_strength`, `deband_strength`, and `antialiasing_strength` in the generated VPy at launch. A custom script without these names is unchanged. Startup defaults are saved under **Advanced**.
 
-| Control | Range / default | Recommended use | Generated-script behavior |
-| --- | --- | --- | --- |
-| Denoise | `0.0`–`3.0` / `0.6` | Keep `0.6` as a conservative starting point; reduce it when intentional grain or paper texture changes, and raise it only after inspecting the extracted noise layer. | `nlm_ispc.NLMeans` processes luma only, spatially (`d=0`), with a small search. A Prewitt mask restores strong edges and `mvsfunc.LimitFilter` caps every remaining change. This replaces the old fixed `h=3` reference that could erase grain and texture before later filters. |
-| Dehalo | `0.0`–`1.0` / `0.0` | Leave it at `0` unless a sharpening halo is visible. Start at `0.15`–`0.25`; values around `0.25`–`0.35` are for clear halos after representative-frame checks. Avoid more than `0.4` for a full title unless the affected shots are isolated and inspected. | A conservative luma-only variant of the `abcxyz` idea from [xyx98/my-vapoursynth-script](https://github.com/xyx98/my-vapoursynth-script) builds a broad downscale/upscale halo estimate, constrains it with `rgvs.Repair`, and blends only the requested fraction. Strength is a blend amount, not the halo radius. |
-| Dering | `0.0`–`1.0` / `0.0` | Leave it at `0` without visible ringing. Start at `0.15`–`0.25`; `0.25`–`0.35` is reserved for clear DCT/rescale ringing. Avoid more than `0.4` as a title-wide setting because line art and fine texture can soften. | A `MinBlur`/`HQDering`-style path builds a narrow band around strong edges, excludes the edge itself, and applies repaired, tightly limited smoothing only through that mask. Strength blends the masked result; it does not widen the ring mask. |
-| Deband | `0.0`–`1.0` / `0.5` | Keep the moderate `0.5` starting point for ordinary animation; use `0` when no banding is present or delicate gradients/effects are harmed, and approach `1` only after checking flat gradients. | A limited `placebo.Deband` candidate processes YUV. A softened multi-plane Prewitt mask restores edges and texture before blending: `0` skips the stage, `0.5` applies half of the adaptively protected result, and `1` applies it fully. |
-| Anti-aliasing | `0.0`–`1.0` / `0.5` | Keep the moderate `0.5` starting point when aliasing is plausible. Use `0` for high-detail or intentionally pixel-sharp material without visible aliasing, and approach `1` only after checking line sharpness. | The repaired EEDI2 result is limited toward the debanded source luma. `0` skips it, intermediate values blend it with the debanded luma, and `1` applies the full limited result. |
+| Control | Range / default | Use and processing |
+| --- | --- | --- |
+| Denoise | `0.0`–`3.0` / `0.6` | Conservative spatial luma `nlm_ispc.NLMeans` (`d=0`, small search), protected by a Prewitt mask and `mvsfunc.LimitFilter`. Reduce strength if grain/paper texture changes; inspect the removed noise before increasing it. |
+| Dehalo | `0.0`–`1.0` / `0.0` | Enable for broad sharpening halos. A luma downscale/upscale estimate based on [abcxyz](https://github.com/xyx98/my-vapoursynth-script) is constrained by `rgvs.Repair` and blended by strength. |
+| Dering | `0.0`–`1.0` / `0.0` | Enable for narrow DCT/rescale ringing. A `MinBlur`/`HQDering`-style mask excludes the edge itself and blends repaired, limited smoothing around it. |
+| Deband | `0.0`–`1.0` / `0.5` | YUV `placebo.Deband`, with a softened multi-plane Prewitt mask restoring edges/texture; reduce or disable when gradients/effects are harmed. |
+| Anti-aliasing | `0.0`–`1.0` / `0.5` | Limited EEDI2 luma blended toward the debanded source; disable for detailed or intentionally pixel-sharp material without aliasing. |
 
-Every stage can be disabled independently with `0`. Denoise, dehalo, dering, and anti-aliasing affect luma only; deband processes YUV. Deband and anti-aliasing start at the literal blend midpoint `0.5`, while defect-specific dehalo and dering remain off. Grain, paper texture, rain, intentional glow, thin line art, and high-resolution artwork can all resemble defects, so inspect representative bright, dark, textured, and effects-heavy frames before committing to a full encode.
-Do not enable dehalo and dering together merely because both controls are available: first identify whether the visible artifact is a broad sharpening halo, a narrow ringing band, or intentional artwork.
+`0` disables a stage. Deband/anti-aliasing use a literal half blend at `0.5` and full limited output at `1`. Other restoration stages affect luma only. For dehalo/dering, start at `0.15`–`0.25`; use `0.25`–`0.35` only for clear defects after frame checks, and avoid more than `0.4` across a whole title. Their strength controls blending, not mask width or halo radius.
 
-The high-level blend controls are the useful generic boundary. Internal parameters such as halo radius, ring-mask width, placebo threshold/radius, EEDI2 thresholds, and reconstruction-mask threshold interact with source scale and defect shape, so they remain script details rather than additional GUI settings. Use a custom VPy when those internals require shot-specific tuning.
+Identify the defect before enabling dehalo or dering together. Grain, paper texture, rain, glow, line art, and high-resolution artwork can resemble defects; inspect bright, dark, textured, and effects-heavy scenes. Use a custom VPy for shot-specific tuning of radius, masks, thresholds, or other internal parameters.
 
 ### Comparison images and full-frame corruption checks
 
-**Output comparison images** writes one source/encoded PNG pair under `<actual output folder>/Compare`. Both images use the same zero-based video frame number. BluraySubtitle scans the completed video first to determine its frame count, writing frames, decoding speed, percentage, and ETA to the terminal at 15-second intervals without replacing the Encode button's stage label. It then scans the source media only until the same frame count is reached before decoding both sides to the selected frame; timestamp-only matching is not used. On the tested machine, this stage took about 36 seconds for a 52-second 1080p sample and about 80 seconds for a 34-second cropped 4K Dolby Vision sample, approximately 0.7 and 2.4 times the respective video durations. Treat these measurements as scale examples rather than promises: source decoding, VPy filters, resolution, storage, and runtime versions can change the ratio.
+**Output comparison images** writes one source/encoded PNG pair under `<actual output folder>/Compare`, using the same zero-based frame number. It scans the encoded frame count, scans the source only to that count, then decodes the matching frame on both sides. It does not rely on timestamp-only matching or replace the Encode button's stage label.
 
-**Check corrupted frames** is a separate full check after the final MKV exists. It reruns the exact VPy used for encoding, decodes the completed video, compares every corresponding frame with FFmpeg PSNR, verifies the frame counts, and records decoder errors. During the comparison it writes the completed frame count, speed, percentage, and ETA to the terminal at 15-second intervals. Reports are written to `<actual output folder>/FrameCheck/<name>.frame-check.json`; statuses are `pass`, `suspect` for low-PSNR frames, `fail` for count mismatches or decode errors, and `error` when the checker itself cannot complete. A non-pass result retains the completed MKV and adds a row warning. This check does not replace visual review and cannot classify every possible content defect.
+**Check corrupted frames** reruns the exact encoding VPy and compares every output frame with the final MKV using FFmpeg PSNR, also checking frame counts and decoder errors. `<actual output folder>/FrameCheck/<name>.frame-check.json` records `pass`, `suspect` (low PSNR), `fail` (count/decode error), or `error` (checker failure). Non-pass results retain the MKV and add a row warning; visual review remains necessary.
 
-The enable checkbox remains on the Encode page. Its luma and chroma PSNR thresholds are shown under **Settings > Advanced > Default encode settings**, not on the Encode page. They are stored as `encode.frame_check_luma_psnr_threshold_db` and `encode.frame_check_chroma_psnr_threshold_db`, accept `0.0` through `100.0`, and both default to `30.0`; U and V share the chroma value. A frame is suspicious when any applicable plane is below its threshold. Raising either value increases that plane's sensitivity and false positives; lowering it ignores progressively larger differences.
+Both stages report frames, speed, percentage, and ETA every 15 seconds. The frame-check switch is on Encode; its luma/chroma thresholds are under **Settings > Advanced > Default encode settings**. `encode.frame_check_luma_psnr_threshold_db` and `encode.frame_check_chroma_psnr_threshold_db` accept `0.0`–`100.0` and default to `30.0`; U/V share the chroma value. Any applicable plane below its threshold makes a frame suspicious. Higher thresholds increase sensitivity and false positives.
 
-The full check is usually slower than comparison-image output because it renders every VPy frame. The same test run took about 127 seconds for the 52-second 1080p sample and 248 seconds for the 34-second cropped 4K sample, approximately 2.4 and 7.3 times their video durations. Heavy filters and full-length 4K sources can therefore add minutes or substantially longer.
+Measured examples from one machine illustrate the added cost:
+
+| Sample | Comparison images | Full frame check |
+| --- | --- | --- |
+| 52-second 1080p | 36 seconds (0.7× duration) | 127 seconds (2.4×) |
+| 34-second cropped 4K Dolby Vision | 80 seconds (2.4×) | 248 seconds (7.3×) |
+
+Decoder, filters, resolution, storage, and runtime versions affect these timings. A full check renders every VPy frame and can take substantially longer than the video itself.
 
 ### Automatic black-border cropping
 
 Automatic black-border cropping is opt-in. Before preparing the final VPy, BluraySubtitle probes duration and dimensions, then uses FFmpeg input-side seeks to analyze one pseudo-random point in each time bucket. It samples one point per 150 seconds, bounded to 4–24 points, and decodes only three nearby frames at each point without writing image files. The fixed crop is derived from the union of all detected active rectangles, so a pixel used by any sampled frame is kept. The managed `src8.std.Crop(...)` operation is inserted before the rest of the filter graph.
 Automatic analysis is necessarily heuristic: dark scenes, credits, overlays, and unusual borders can produce a wrong result, so inspect the reported margins and encoded picture.
 
+The crop is even-aligned. Existing managed blocks are replaced or removed between rows. A custom VPy must expose a safe `src8`/`res` insertion boundary; an unknown boundary or a non-managed `Crop`/`CropAbs` call combined with nonzero automatic cropping fails the row to prevent ambiguous or double cropping.
+
 ### Automatic HDR metadata handling
+
+For Dolby Vision MKV input, the workflow extracts HEVC and prepares task-owned base-layer and RPU files before encoding. Missing or invalid required intermediates fail the row rather than silently dropping Dolby Vision.
 
 Before starting the encoder, BluraySubtitle samples output 0's first, middle, and last frames. Stable `_ColorRange`, `_Primaries`, `_Transfer`, `_Matrix`, and `_ChromaLocation` properties take precedence over source metadata; missing properties fall back to the source. The row stops if the sampled values differ.
 
 When the actual source exposes HDR10+, x265 10/12-bit encoding extracts its validated JSON and checks the metadata frame count and source frame rate against the VPy timeline. The actual x265 executable is probed once per binary identity: when it advertises `--dhdr10-info`, the metadata is supplied during encoding; otherwise, or when native verification fails, `hdr10plus_tool` performs verified post-injection. Failures continue without dynamic metadata and retain non-empty JSON for diagnosis. Custom scripts using this path must preserve frame order.
 
-For combined HDR10+ and Dolby Vision output, x265 writes both in the same encode when its actual executable advertises both native paths and the row already has VBV and mastering-display parameters. Missing or unverified native support uses the existing injection tools without changing rate control. The HEVC is checked for both metadata sets after the last injection and before final muxing.
+Dolby Vision uses native x265 RPU input when the executable advertises it and the row already has VBV and mastering-display parameters. Otherwise, or when native verification fails, it uses `dovi_tool` injection without changing rate control.
 
-If automatic cropping changes the coded dimensions, each Dolby Vision L5 active-area preset is adjusted by the physical crop before the resulting profile 8.1 RPU is supplied to either native x265 or post-injection. A manually supplied RPU is therefore incompatible with automatic cropping. HDR10+ does not have a corresponding crop-offset edit in this workflow: its source metadata is retained without an additional crop-specific prompt.
+When both HDR10+ and Dolby Vision are present, x265 writes both in one encode if both native paths qualify. HEVC is checked for both metadata sets after the last injection and before final muxing.
+
+If automatic cropping changes the coded dimensions, each Dolby Vision L5 active-area preset is adjusted by the physical crop before the resulting profile 8.1 RPU is supplied to either native x265 or post-injection. A manually supplied RPU is therefore incompatible with automatic cropping. HDR10+ does not have a corresponding crop-offset edit in this workflow: its source brightness statistics are retained without remeasurement after cropping or an additional crop-specific prompt.
 
 After the final MKV is published, BluraySubtitle re-probes the static fields it added automatically and reruns the active dynamic-metadata checks. Dolby Vision must report profile 8 with the same RPU frame count as the VPy output. A mismatch retains the MKV, records a non-overwriting warning report, and lets later rows continue.
 
@@ -279,17 +265,6 @@ Custom scripts often use a different chain. Common categories include:
 | Subtitle rendering | assrender/libass-based filters | Fonts and script resolution affect layout |
 
 These names describe ecosystem options, not guaranteed BluraySubtitle dependencies. A custom script owns its plugin requirements and output correctness.
-
-## Script-design checklist
-
-- Verify source frame count, frame rate, scan type, and field order.
-- Preserve or deliberately set `_Matrix`, `_Transfer`, `_Primaries`, `_ColorRange`, and chroma-location properties.
-- Perform destructive filtering only after comparing representative frames.
-- Use sufficient intermediate precision, then dither when reducing bit depth.
-- Keep crop and resize dimensions valid for the output chroma subsampling.
-- Preview dark gradients, grain, line art, motion, and credits rather than only clean static scenes.
-- Make exactly the intended clip the primary `set_output()` result.
-- Run a short encode with the final encoder parameters before starting the full title.
 
 ## Further reading
 
