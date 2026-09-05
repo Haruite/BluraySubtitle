@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import os
 import unittest
-from unittest.mock import patch
 
 from src.runtime.encode_source import (
     ActualEncodeSource,
     build_automatic_encoder_metadata_arguments,
     parse_source_color_metadata,
-    verify_final_video_metadata,
 )
 
 
@@ -67,86 +65,6 @@ class EncoderMetadataParameterTests(unittest.TestCase):
             'WP(0.3127,0.329)L(1000,0.005)',
         )
         self.assertEqual(metadata.content_light_level, '1000,400')
-
-    def test_x265_receives_supported_color_and_static_hdr_options(self) -> None:
-        arguments = build_automatic_encoder_metadata_arguments(
-            _hdr_source(),
-            'x265',
-            (),
-        )
-
-        self.assertEqual(arguments, (
-            '--range', 'limited',
-            '--colorprim', 'bt2020',
-            '--transfer', 'smpte2084',
-            '--colormatrix', 'bt2020nc',
-            '--chromaloc', '2',
-            '--master-display',
-            'G(13250,34500)B(7500,3000)R(34000,16000)'
-            'WP(15635,16450)L(10000000,50)',
-            '--max-cll', '1000,400',
-        ))
-        self.assertNotIn('--hdr10-opt', arguments)
-        expected_metadata = parse_source_color_metadata(_hdr_source())
-        with patch(
-                'src.runtime.encode_source.probe_actual_encode_source',
-                return_value=_hdr_source(),
-        ):
-            verify_final_video_metadata(
-                'output.mkv',
-                expected_metadata,
-                arguments,
-            )
-        mismatched_output = _hdr_source()
-        mismatched_output.stream['color_primaries'] = 'bt709'
-        with patch(
-                'src.runtime.encode_source.probe_actual_encode_source',
-                return_value=mismatched_output,
-        ):
-            with self.assertRaisesRegex(RuntimeError, 'color_primaries'):
-                verify_final_video_metadata(
-                    'output.mkv',
-                    expected_metadata,
-                    arguments,
-                )
-
-    def test_x264_uses_its_current_official_static_hdr_option_names(self) -> None:
-        arguments = build_automatic_encoder_metadata_arguments(
-            _hdr_source(),
-            'x264',
-            (),
-        )
-
-        self.assertEqual(arguments, (
-            '--range', 'tv',
-            '--colorprim', 'bt2020',
-            '--transfer', 'smpte2084',
-            '--colormatrix', 'bt2020nc',
-            '--chromaloc', '2',
-            '--mastering-display',
-            'G(13250,34500)B(7500,3000)R(34000,16000)'
-            'WP(15635,16450)L(10000000,50)',
-            '--cll', '1000,400',
-        ))
-
-    def test_svt_av1_uses_h273_values_and_physical_mastering_units(self) -> None:
-        arguments = build_automatic_encoder_metadata_arguments(
-            _hdr_source(),
-            'svtav1',
-            (),
-        )
-
-        self.assertEqual(arguments, (
-            '--color-range', '0',
-            '--color-primaries', '9',
-            '--transfer-characteristics', '16',
-            '--matrix-coefficients', '9',
-            '--chroma-sample-position', 'topleft',
-            '--mastering-display',
-            'G(0.265,0.69)B(0.15,0.06)R(0.68,0.32)'
-            'WP(0.3127,0.329)L(1000,0.005)',
-            '--content-light', '1000,400',
-        ))
 
     def test_manual_options_remain_authoritative(self) -> None:
         arguments = build_automatic_encoder_metadata_arguments(

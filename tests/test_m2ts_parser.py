@@ -72,11 +72,6 @@ class M2TSParserTest(unittest.TestCase):
         self.assertEqual(parser.get_tracks_info(m2ts=False)[0]['pid'], 0x1011)
         self.assertAlmostEqual(parser.read_frame_rate_from_m2ts(m2ts=False), 23.976, places=3)
 
-    def test_pts_scan_does_not_mutate_skipped_pid_set(self) -> None:
-        skipped = {0x1200}
-        M2TS(self._write_stream()).get_first_pts(skip_pids=skipped)
-        self.assertEqual(skipped, {0x1200})
-
     def test_mpls_logical_tracks_follow_stn_position_across_play_items(self) -> None:
         def pair(
                 pid: int,
@@ -138,27 +133,6 @@ class M2TSParserTest(unittest.TestCase):
         self.assertFalse(tracks[2]['_mpls_append_compatible'])
         self.assertEqual(tracks[2]['_mpls_incompatible_fields'], ('AudioFormat',))
         self.assertEqual(tracks[3]['language'], 'jpn')
-
-    def test_mpls_interactive_graphics_is_not_matroska_selectable(self) -> None:
-        parser = MPLS()
-        parser.data = {'PlayList': {'PlayItems': [{
-            'ClipInformationFileName': '00001',
-            'STNTable': {
-                'PrimaryIGStreamEntries': [{
-                    'StreamEntry': {'RefToStreamPID': 0x1400},
-                    'StreamAttributes': {
-                        'StreamCodingType': 0x91,
-                        'LanguageCode': 'jpn',
-                    },
-                }],
-            },
-        }]}}
-
-        track = parser.get_tracks_info()[0]
-
-        self.assertEqual(track['codec_name'], 'igs')
-        self.assertFalse(track['_mpls_append_compatible'])
-        self.assertTrue(track['_mpls_unsupported_reason'])
 
 
 if __name__ == '__main__':

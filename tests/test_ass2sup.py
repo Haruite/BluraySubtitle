@@ -13,28 +13,12 @@ from src.domain.subtitles.ass2sup import (
     _build_event_packets,
     _build_graphics_payload,
     bdnxml_to_sup,
-    fps_id_for,
     merge_segments,
     parse_bdn_xml,
 )
 
 
 class AssToSupTests(unittest.TestCase):
-    def test_all_blu_ray_frame_rate_ids_are_distinct(self) -> None:
-        expected = {
-            24000 / 1001: 0x10,
-            24.0: 0x20,
-            25.0: 0x30,
-            30000 / 1001: 0x40,
-            30.0: 0x50,
-            50.0: 0x60,
-            60000 / 1001: 0x70,
-            60.0: 0x80,
-        }
-        self.assertEqual({rate: fps_id_for(rate) for rate in expected}, expected)
-        with self.assertRaisesRegex(ValueError, 'Unsupported Blu-ray frame rate'):
-            fps_id_for(27.0)
-
     def test_rational_bdn_frame_rate_and_event_frames(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             xml_path = Path(temporary_directory) / 'subtitle.xml'

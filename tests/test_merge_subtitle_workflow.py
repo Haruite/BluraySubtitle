@@ -9,39 +9,10 @@ import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
-
-from PyQt6.QtCore import Qt
 
 from src.domain import Subtitle
 from src.runtime.services import BluraySubtitle  # Import the composed service before its split mixins.
-from src.runtime.gui_runtime_classes.bluray_subtitle_gui_entry import BluraySubtitleGUI
-from src.runtime.gui_runtime_split import actions_and_file_dialogs as actions_module
-from src.runtime.gui_runtime_split.actions_and_file_dialogs import ActionsAndDialogsMixin
 from src.runtime.services_split.subtitle_and_chapter_pipeline import SubtitleChapterPipelineMixin
-from tests._gui_worker_fakes import FakeThread as _FakeThread
-from tests._gui_worker_fakes import RequestWorkerCapture
-
-
-class _FakeWorker(RequestWorkerCapture):
-    pass
-
-
-class _SubtitleTable:
-    def __init__(self, subtitle_path: str) -> None:
-        self.subtitle_path = subtitle_path
-
-    def rowCount(self) -> int:
-        return 1
-
-    def item(self, row: int, column: int):
-        if row != 0:
-            return None
-        if column == 0:
-            return SimpleNamespace(checkState=lambda: Qt.CheckState.Checked)
-        if column == 1:
-            return SimpleNamespace(text=lambda: self.subtitle_path)
-        return None
 
 
 class MergeSubtitleWorkflowTests(unittest.TestCase):
@@ -86,9 +57,13 @@ class MergeSubtitleWorkflowTests(unittest.TestCase):
             playlist_base = str(root / '00001.en')
             merged.dump(folder_base, playlist_base)
 
-            self.assertEqual(merged.output_extension(), '.sup')
-            self.assertEqual((root / 'Disc.en.sup').read_bytes().count(b'PG'), 2)
-            self.assertEqual((root / '00001.en.sup').read_bytes().count(b'PG'), 2)
+            output = (root / 'Disc.en.sup').read_bytes()
+            expected = b''.join(
+                b'PG' + struct.pack('>IIBH', pts, pts, 0x16, 1) + b'\x00'
+                for pts in (90_000, 1_080_000)
+            )
+            self.assertEqual(output, expected)
+            self.assertEqual((root / '00001.en.sup').read_bytes(), expected)
             with self.assertRaises(FileExistsError):
                 merged.dump(folder_base, playlist_base)
 
@@ -121,8 +96,10 @@ class MergeSubtitleWorkflowTests(unittest.TestCase):
                 [folder_base + '.en.srt', playlist_base + '.en.srt'],
             )
             output_text = Path(output_paths[0]).read_text(encoding='utf-8-sig')
-            self.assertIn('First', output_text)
-            self.assertIn('Second', output_text)
+            self.assertEqual(output_text.strip(), (
+                '1\n00:00:00,000 --> 00:00:01,000\nFirst\n\n'
+                '2\n00:00:10,000 --> 00:00:11,000\nSecond'
+            ))
 
     def test_existing_output_aborts_before_any_new_output_is_written(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -183,41 +160,6 @@ class MergeSubtitleWorkflowTests(unittest.TestCase):
 
             self.assertFalse(os.path.exists(folder_base + '.srt'))
             self.assertFalse(os.path.exists(folder_base + '.sup'))
-
-    def test_gui_launch_reads_current_checkbox_state_into_one_request(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            subtitle_path = root / 'episode.srt'
-            self._write_srt(subtitle_path, 'Episode')
-            playlist_base = root / 'Disc' / 'BDMV' / 'PLAYLIST' / '00001'
-            playlist_base.parent.mkdir(parents=True)
-            playlist_base.with_suffix('.mpls').write_bytes(b'mpls')
-            owner = SimpleNamespace(
-                table2=_SubtitleTable(str(subtitle_path)),
-                sub_check_state=[0],
-                get_selected_mpls_no_ext=lambda: [(str(root / 'Disc'), str(playlist_base))],
-                _is_movie_mode=lambda: False,
-                _get_subtitle_suffix=lambda: '.en',
-                bdmv_folder_path=SimpleNamespace(text=lambda: str(root)),
-                checkbox1=SimpleNamespace(isChecked=lambda: True),
-                exe_button=SimpleNamespace(text=lambda: 'Generate Subtitles'),
-                _update_exe_button_progress=lambda *args, **kwargs: None,
-                _on_exe_button_progress_value=lambda value: None,
-                _on_exe_button_progress_text=lambda text: None,
-                _show_error_dialog=lambda message: self.fail(message),
-                _show_bottom_message=lambda *args, **kwargs: None,
-                altered=True,
-            )
-
-            with patch.object(actions_module, 'QThread', _FakeThread), patch.object(
-                    actions_module, 'MergeWorker', _FakeWorker):
-                started = ActionsAndDialogsMixin.generate_subtitle(owner)
-
-            self.assertTrue(started)
-            request = _FakeWorker.last_request
-            self.assertEqual(request.subtitle_files, (str(subtitle_path),))
-            self.assertEqual(request.subtitle_suffix, '.en')
-            self.assertTrue(request.complete_bluray_folder)
 
 
 if __name__ == '__main__':

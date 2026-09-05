@@ -234,14 +234,17 @@ Apply the [preflight and failure requirements](../development/code-standards.md#
 
 | Test file | Main coverage |
 | --- | --- |
-| `tests/test_m2ts_parser.py` | TS/M2TS alignment, PAT/PMT, timing, track classification |
-| `tests/test_sp_workflow.py` | SP planning, exact outputs, append/recovery, PID mapping |
+| `tests/test_m2ts_parser.py` | TS/M2TS timing and MPLS logical tracks across clips |
+| `tests/test_sp_workflow.py` | SP matching, physical track deduplication, missing tracks, sparse append |
 | `tests/test_remux_workflow.py` | Main remux contracts and fallbacks |
-| `tests/test_encode_workflow.py` | Encode requests, staging, resumability, final mux |
-| `tests/test_video_crop.py` | Adaptive time sampling, crop aggregation, managed VPy insertion |
-| `tests/test_audio_dolby_vision_workflow.py` | Audio conversion/cleanup and Dolby Vision |
+| `tests/test_encode_workflow.py` | Encode collisions, resumability, cancellation, retained failure artifacts |
+| `tests/test_video_crop.py` | Crop aggregation and safe VPy edits |
+| `tests/test_audio_dolby_vision_workflow.py` | Audio gaps, duration-loss fallback, deduplication, Dolby Vision crop edits |
 | `tests/test_add_chapters_workflow.py` | Main playlist order and chapter-to-MKV mapping |
 | `tests/test_ass2sup.py` | ASS-to-SUP generation |
-| `tests/test_worker_configuration_boundaries.py` | Immutable captured GUI configuration |
+| `tests/test_configuration_state.py` | Isolated configuration snapshots and scan races |
+| `tests/test_chapter_timeline.py` | Chapter tail-trim windows and content preservation |
+| `tests/test_merge_subtitle_workflow.py` | Subtitle merge offsets and write collisions |
+| `tests/test_getnative.py` | Curve selection and height ranking |
 
-Choose which tests to run or modify under the [testing policy](../development/code-standards.md#11-testing-and-change-reporting).
+Choose which tests to run or modify under the [testing policy](../development/code-standards.md#11-testing-and-change-reporting). Run a module with `python3 -B -m unittest tests.test_sp_workflow`; use `python3 run_tests.py` when a full regression run is warranted.

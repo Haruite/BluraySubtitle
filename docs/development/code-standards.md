@@ -99,6 +99,8 @@ Keep this section limited to confirmed exceptions and product semantics that wou
 ## 11. Testing and Change Reporting
 
 - Do not add or modify test files for a bug fix unless it is both major and important. When a major feature or a refactoring warrants test changes, focus on critical, error-prone behavior.
+- Keep the suite small: retain tests for critical calculations, track/timeline identity, output safety, and consequential failure handling. Do not cover every feature detail or add tests that merely check source strings, GUI layout, default values, or internal call forwarding. Assert behavior and results; consolidate repeated scenarios and remove unused fixtures.
+- Mocked tool results verify application decisions, not media correctness. Audio/video synchronization, stream integrity, and actual encoder/muxer behavior require representative real-media checks.
 - For ordinary changes, run only tests directly related to the changed behavior. Run the full suite only for a major refactoring, a broad functional change, or when focused results reveal a credible wider regression risk.
 - For every change, run `git diff --check` and verify text-file encoding and line endings. Select other checks by scope: Python compilation/import smoke tests, relevant unit tests, `tools/check_i18n.py` for source-language/i18n changes, and `tools/check_split_contracts.py` for mixin/base changes.
 - Full Blu-ray and MKV media are manual regression inputs, not CI fixtures. For any remaining real-media checks, specify what must be checked, what will be written, and whether disposable copies are required.

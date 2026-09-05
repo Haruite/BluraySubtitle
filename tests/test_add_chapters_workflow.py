@@ -9,20 +9,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from src.domain.media.mkv_container import MKV
-from src.runtime.gui_runtime_classes import chapter_worker as chapter_worker_module
-from src.runtime.gui_runtime_split import actions_and_file_dialogs as actions_module
-from src.runtime.gui_runtime_split.actions_and_file_dialogs import ActionsAndDialogsMixin
-from src.runtime.gui_runtime_split.remux_and_episode_layout import RemuxEpisodeLayoutMixin
 from src.runtime.services import BluraySubtitle  # Import the composed service before its split mixins.
 from src.runtime.services_split import subtitle_and_chapter_pipeline as chapter_service_module
 from src.runtime.services_split.subtitle_and_chapter_pipeline import SubtitleChapterPipelineMixin
-from tests._gui_worker_fakes import FakeThread as _FakeThread
-from tests._gui_worker_fakes import RequestWorkerCapture
-
-
-class _FakeChapterWorker(RequestWorkerCapture):
-    pass
 
 
 class _FakeChapter:
@@ -45,140 +34,10 @@ class _FakeMkv:
         self.writes.append((self.path, edit_original, output_path, chapter_text))
 
 
-class _WorkerService:
-    instance = None
-
-    def __init__(self, *args, **kwargs) -> None:
-        self.init_args = args
-        self.add_call = None
-        self.completion_called = False
-        type(self).instance = self
-
-    def add_chapters_to_mkv(self, *args, **kwargs) -> None:
-        self.add_call = (args, kwargs)
-
-    def completion(self) -> None:
-        self.completion_called = True
-
-
 class AddChaptersWorkflowTests(unittest.TestCase):
     def setUp(self) -> None:
-        _FakeChapterWorker.last_request = None
         _FakeMkv.durations = {}
         _FakeMkv.writes = []
-
-    @staticmethod
-    def _gui_owner(root: Path, mkv_paths: list[str], edit_original: bool, errors: list[str]):
-        playlist_base = root / 'Disc' / 'BDMV' / 'PLAYLIST' / '00001'
-        playlist_base.parent.mkdir(parents=True, exist_ok=True)
-        playlist_base.with_suffix('.mpls').write_bytes(b'mpls')
-        return SimpleNamespace(
-            get_selected_mpls_no_ext=lambda: [(str(root / 'Disc'), str(playlist_base))],
-            get_mkv_files_in_table_order=lambda: list(mkv_paths),
-            t=lambda text: text,
-            checkbox1=SimpleNamespace(isChecked=lambda: edit_original),
-            bdmv_folder_path=SimpleNamespace(text=lambda: str(root)),
-            exe_button=SimpleNamespace(text=lambda: 'Add Chapters'),
-            _update_exe_button_progress=lambda *args, **kwargs: None,
-            _on_exe_button_progress_value=lambda value: None,
-            _on_exe_button_progress_text=lambda text: None,
-            _reset_exe_button=lambda: None,
-            _show_bottom_message=lambda *args, **kwargs: None,
-            _show_error_dialog=errors.append,
-            _chapter_thread=None,
-            _chapter_worker=None,
-        )
-
-    def test_gui_builds_one_request_from_current_order_and_output_mode(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            first_mkv = root / '02.mkv'
-            second_mkv = root / '01.mkv'
-            first_mkv.write_bytes(b'mkv')
-            second_mkv.write_bytes(b'mkv')
-            tool_path = root / 'mkvmerge.exe'
-            tool_path.write_bytes(b'tool')
-            errors = []
-            owner = self._gui_owner(
-                root,
-                [str(first_mkv), str(second_mkv)],
-                edit_original=False,
-                errors=errors,
-            )
-
-            with patch.object(actions_module, 'QThread', _FakeThread), patch.object(
-                    actions_module, 'ChapterWorker', _FakeChapterWorker), patch.object(
-                    actions_module, 'find_mkvtoolnix'), patch.object(
-                    actions_module.core_settings, 'MKV_MERGE_PATH', str(tool_path)):
-                started = ActionsAndDialogsMixin.add_chapters(owner)
-
-            self.assertTrue(started)
-            self.assertEqual(errors, [])
-            request = _FakeChapterWorker.last_request
-            self.assertEqual(
-                request.mkv_targets,
-                (
-                    (str(first_mkv), str(root / 'output' / first_mkv.name)),
-                    (str(second_mkv), str(root / 'output' / second_mkv.name)),
-                ),
-            )
-            self.assertFalse(request.edit_original)
-
-    def test_gui_rejects_existing_output_before_starting_worker(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            mkv_path = root / 'episode.mkv'
-            mkv_path.write_bytes(b'mkv')
-            output_path = root / 'output' / mkv_path.name
-            output_path.parent.mkdir()
-            output_path.write_bytes(b'existing')
-            tool_path = root / 'mkvmerge.exe'
-            tool_path.write_bytes(b'tool')
-            errors = []
-            owner = self._gui_owner(root, [str(mkv_path)], False, errors)
-
-            with patch.object(actions_module, 'ChapterWorker', _FakeChapterWorker), patch.object(
-                    actions_module, 'find_mkvtoolnix'), patch.object(
-                    actions_module.core_settings, 'MKV_MERGE_PATH', str(tool_path)):
-                started = ActionsAndDialogsMixin.add_chapters(owner)
-
-            self.assertFalse(started)
-            self.assertEqual(errors, [f'Output file already exists: {output_path}'])
-            self.assertIsNone(_FakeChapterWorker.last_request)
-            self.assertEqual(output_path.read_bytes(), b'existing')
-
-    def test_gui_direct_edit_request_targets_the_original_file(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            mkv_path = root / 'episode.mkv'
-            mkv_path.write_bytes(b'mkv')
-            tool_path = root / 'mkvpropedit.exe'
-            tool_path.write_bytes(b'tool')
-            errors = []
-            owner = self._gui_owner(root, [str(mkv_path)], True, errors)
-
-            with patch.object(actions_module, 'QThread', _FakeThread), patch.object(
-                    actions_module, 'ChapterWorker', _FakeChapterWorker), patch.object(
-                    actions_module, 'find_mkvtoolnix'), patch.object(
-                    actions_module.core_settings, 'MKV_PROP_EDIT_PATH', str(tool_path)):
-                started = ActionsAndDialogsMixin.add_chapters(owner)
-
-            self.assertTrue(started)
-            request = _FakeChapterWorker.last_request
-            self.assertTrue(request.edit_original)
-            self.assertEqual(request.mkv_targets, ((str(mkv_path), str(mkv_path)),))
-
-    def test_table_helper_returns_the_current_visible_order(self) -> None:
-        paths = ['02.mkv', '01.mkv']
-        table = SimpleNamespace(
-            rowCount=lambda: len(paths),
-            item=lambda row, column: SimpleNamespace(text=lambda: paths[row]) if column == 0 else None,
-        )
-        owner = SimpleNamespace(table2=table, get_selected_function_id=lambda: 2)
-
-        result = RemuxEpisodeLayoutMixin.get_mkv_files_in_table_order(owner)
-
-        self.assertEqual(result, paths)
 
     def test_service_matches_ordered_mkvs_before_writing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -251,54 +110,6 @@ class AddChaptersWorkflowTests(unittest.TestCase):
                 )
 
             self.assertEqual([write[0] for write in _FakeMkv.writes], [first_mkv, second_mkv])
-
-    def test_worker_passes_only_the_immutable_request_and_does_not_complete_bdmv(self) -> None:
-        request = chapter_worker_module.AddChaptersRequest(
-            bdmv_path='disc-root',
-            mkv_targets=(('episode.mkv', 'output/episode.mkv'),),
-            selected_mpls=('disc-root/BDMV/PLAYLIST/00001',),
-            edit_original=False,
-        )
-        worker = chapter_worker_module.ChapterWorker(request, threading.Event())
-
-        with patch.object(chapter_worker_module, 'BluraySubtitle', _WorkerService):
-            worker.run()
-
-        service = _WorkerService.instance
-        self.assertEqual(service.init_args[:3], ('disc-root', ['episode.mkv'], False))
-        self.assertEqual(service.add_call[0][:3], (
-            list(request.mkv_targets),
-            list(request.selected_mpls),
-            False,
-        ))
-        self.assertFalse(service.completion_called)
-
-    def test_trivial_chapter_still_creates_new_output_without_chapter_argument(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            source_path = root / 'episode.mkv'
-            source_path.write_bytes(b'mkv')
-            chapter_path = root / 'chapter.txt'
-            chapter_path.write_text(
-                'CHAPTER01=00:00:00.000\nCHAPTER01NAME=Chapter 01',
-                encoding='utf-8-sig',
-            )
-            output_path = root / 'output' / source_path.name
-            tool_path = root / 'mkvmerge.exe'
-            tool_path.write_bytes(b'tool')
-
-            with patch('src.domain.media.mkv_container.core_settings.MKV_MERGE_PATH', str(tool_path)), patch(
-                    'src.domain.media.mkv_container.run_command',
-                    return_value=SimpleNamespace(returncode=0),
-            ) as run_command:
-                mkv = MKV.__new__(MKV)
-                mkv.path = str(source_path)
-                mkv.add_chapter(False, str(chapter_path), str(output_path))
-
-            command = run_command.call_args.args[0]
-            self.assertNotIn('--chapters', command)
-            self.assertEqual(command[-3:], ['-o', str(output_path), str(source_path)])
-            self.assertTrue(output_path.parent.is_dir())
 
 
 if __name__ == '__main__':

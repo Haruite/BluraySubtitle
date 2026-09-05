@@ -236,14 +236,17 @@ MPLS 行先直接混流，再使用共用轨道对齐回退。分集关联 SP �
 
 | 测试文件 | 主要覆盖 |
 | --- | --- |
-| `tests/test_m2ts_parser.py` | TS/M2TS 对齐、PAT/PMT、时钟和轨道分类 |
-| `tests/test_sp_workflow.py` | SP 规划、准确输出、追加／恢复和 PID 映射 |
+| `tests/test_m2ts_parser.py` | TS/M2TS 时钟与 MPLS 跨片段逻辑轨道 |
+| `tests/test_sp_workflow.py` | SP 匹配、物理轨道去重、缺轨与空档追加 |
 | `tests/test_remux_workflow.py` | 主 Remux 契约和回退 |
-| `tests/test_encode_workflow.py` | Encode 请求、暂存、恢复执行和最终混流 |
-| `tests/test_video_crop.py` | 时长自适应采样、裁剪合并和受管理 VPy 插入 |
-| `tests/test_audio_dolby_vision_workflow.py` | 音频转换／清理和 Dolby Vision |
+| `tests/test_encode_workflow.py` | Encode 输出冲突、恢复执行、取消与失败产物保留 |
+| `tests/test_video_crop.py` | 裁剪区域合并与安全修改 VPy |
+| `tests/test_audio_dolby_vision_workflow.py` | 音轨空档、时长损失回退、去重与 Dolby Vision 裁剪 |
 | `tests/test_add_chapters_workflow.py` | 主播放列表顺序和章节到 MKV 的映射 |
 | `tests/test_ass2sup.py` | ASS → SUP 生成 |
-| `tests/test_worker_configuration_boundaries.py` | 已捕获 GUI 配置的不可变性 |
+| `tests/test_configuration_state.py` | 配置快照隔离与扫描任务竞态 |
+| `tests/test_chapter_timeline.py` | 章节尾段裁剪窗口与内容保留 |
+| `tests/test_merge_subtitle_workflow.py` | 字幕合并时间偏移与写入冲突 |
+| `tests/test_getnative.py` | 曲线筛选与高度排序 |
 
-按[测试规范](../development/code-standards.zh-Hans.md#11-测试与修改报告)选择运行或修改哪些测试。
+按[测试规范](../development/code-standards.zh-Hans.md#11-测试与修改报告)选择运行或修改哪些测试。单模块可运行 `python3 -B -m unittest tests.test_sp_workflow`；需要完整回归时运行 `python3 run_tests.py`。
