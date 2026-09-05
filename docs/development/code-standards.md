@@ -4,151 +4,102 @@ English | [简体中文](code-standards.zh-Hans.md)
 
 ## 1. Authority and Applicability
 
-These standards are mandatory for every contributor submitting a pull request or code modification to this repository.
+These standards are mandatory for all repository changes. Resolve conflicts between repository documents and code in this order:
 
-The authority order is:
+1. these standards;
+2. product behavior described by `README.md` and `README.zh-Hans.md`;
+3. implementation details.
 
-1. this standards document;
-2. the product behavior described by `README.md` and `README.zh-Hans.md`;
-3. implementation details that do not conflict with the items above.
+Explicit requirements for a particular file or workflow take precedence over the corresponding general rules; product exceptions are collected in section 10.
 
-The implementation may contain more detail than the README, but it must not contradict the README. When verified product behavior is documented, both README versions must be synchronized.
-
-When the author establishes a new rule, update this file and its Simplified Chinese counterpart before or in the same change as the code that relies on it. Every refactoring or major change must also update both [Refactoring History](../refactoring/refactoring-history.md) files. Ordinary changes do not require a history entry.
+Keep both language versions of these standards synchronized, and record author-confirmed rules before or with code that relies on them. When documenting confirmed product behavior or operational cautions, update both README versions. For refactoring or major changes, also update the [English](../refactoring/refactoring-history.md) and [Simplified Chinese](../refactoring/refactoring-history.zh-Hans.md) histories; ordinary changes need no history entry.
 
 ## 2. Simplicity and Consistency
 
-- Use the simplest correct implementation.
-- Remove duplicated, contradictory, unreachable, and unnecessary logic when it is within the current scope.
-- Do not add speculative checks or abstractions for cases that the product does not require.
-- Avoid any unnecessary validation unrelated to the objective. Prefer simple structural or literal checks, and use strict regular-expression matching only when the format itself is part of the requirement.
-- Validate a fact at its owning boundary instead of repeating the same validation through every layer.
-- Reuse one implementation for genuinely shared behavior. Do not force unrelated workflows through a shared abstraction merely because their code looks similar.
-- Prefer one function for one complete operation. Do not split a straightforward operation into many tiny forwarding or one-line helpers.
-- Keep the function count as low as practical without creating unrelated monolithic functions.
-- Use names that describe the domain value or operation. Avoid meaningless temporary names except for conventional, tightly scoped indexes.
+- Use the simplest correct implementation; remove duplicated, contradictory, unreachable, or unnecessary logic within the change's scope.
+- Add validation or abstractions only when needed for the change's confirmed requirements. Prefer structural or literal checks; use strict regular-expression matching only when the format itself is required.
+- Validate each fact at the boundary responsible for accepting it. Repeat a check only when its inputs or relevant external state may have changed.
+- Share one implementation of common behavior; similar-looking code alone does not justify coupling unrelated workflows.
+- Prefer one function per cohesive operation. Avoid trivial forwarding helpers or arbitrary splits, and do not merge unrelated responsibilities just to reduce the function count.
 - Keep imports, type annotations, exception handling, and formatting consistent with the surrounding module.
-- Do not retain compatibility wrappers or facade APIs unless an in-repository caller or a confirmed requirement needs them.
-- Broad exception handlers must not hide invalid configuration or execution failure. They are acceptable only at a deliberate UI/worker boundary or best-effort cleanup boundary where the failure is still handled appropriately.
+- Retain compatibility wrappers or facade APIs only for in-repository callers or confirmed requirements.
+- Catch broad exceptions only at deliberate GUI/worker or best-effort cleanup boundaries. Handle the failure explicitly without hiding invalid configuration or failed execution.
 
 ## 3. Source Language, Comments, and Names
 
-- All Python source strings are English. The Chinese keys in `I18N_ZH_TO_EN` are the intentional catalog exception.
-- All code comments and docstrings are English.
-- Add comments for important domain rules, non-obvious calculations, ownership boundaries, and intentional exceptions.
-- Do not add comments that only restate an obvious line of code.
-- Use meaningful variable, function, class, and field names.
+- Python string literals and all code comments and docstrings must use English; the Chinese keys in the `I18N_ZH_TO_EN` translation catalog are the explicit exception.
+- Explain important domain rules, non-obvious calculations, ownership boundaries, and intentional exceptions in comments; omit comments that only restate obvious code.
+- Name variables, functions, classes, and fields for the domain values or operations they represent. Conventional short indexes are acceptable in a tight scope.
 
 ## 4. GUI Is the Execution Contract
 
-- The current visible GUI state is authoritative: selected rows, order, paths, names, languages, modes, commands, chapter bounds, codecs, and other options must be applied exactly.
-- Capture GUI state once at task launch and transfer it through one explicit request whenever practical.
-- A worker or service must not silently replace an explicit GUI value with a stale snapshot, global value, default, regenerated value, or inferred alternative.
-- Do not silently skip a selected GUI row or option. If the selected value cannot be executed, report an error.
-- Intentional exception: Encode skips automatic getnative with user-visible progress when the actual source height exceeds 1080p, even if the GUI option is selected. Higher-resolution getnative remains a manual `src/scripts/getnative_file.py` and VPy configuration workflow.
-- Intentional exception: for a main-playlist Remux, **Edit Tracks** is authoritative for video, audio, and subtitle selection. The editable mux command carries `{video_opts}`, `{audio_opts}`, and `{sub_opts}` placeholders; manually written track-selection flags in that command are ignored and replaced from the captured PID selection at execution.
-- Automatic inference is allowed only when the user has not supplied an explicit value.
-- Table order used by execution must match the visible order captured at launch unless the GUI explicitly documents another ordering rule.
-- A worker owns the captured request. It must not read live GUI widgets after launch.
-- Services consume plain Python data. They must not read or reinterpret Qt tables or widgets.
-- Long-running work must run outside the GUI thread and keep progress, cancellation, success, and error behavior consistent.
+- Subject to the exceptions in section 10, execution must apply the visible GUI values captured at launch: selected rows, paths, names, languages, modes, commands, chapter bounds, codecs, and other options.
+- Use the captured visible table order unless the GUI explicitly documents another ordering rule.
+- Do not silently skip a selection or replace an explicit value with stale state, a global value, a default, a regenerated value, or an inference. Report an error if a selected row or option cannot execute. Infer values only when the user has not supplied them.
+- Run long tasks outside the GUI thread, with consistent progress, cancellation, success, and error handling.
 
 ## 5. Preflight and Failure Handling
 
-- Before starting a worker or writing output, check only deterministic, actionable facts already known from the request: paths, selections, required tools, ranges, mappings, command structure, and the complete planned output set and its collisions. Do not repeat expensive media probing or add restrictions without a confirmed rule.
+- Before starting a worker or writing outputs, check the request's paths, selections, required tools, ranges, mappings, command structure, and complete output plan for deterministic errors and collisions. Do not repeat expensive media probing or add restrictions without a confirmed rule.
 - Media-dependent failures discovered during execution must identify the affected source or row and fail clearly.
-- An existing planned output is an error unless a confirmed resumable workflow defines it as completed; never overwrite, rename, or reuse it. Such workflows must document completed output types and report each skip.
-- Check every external command's return status. Prefer argument lists with `shell=False`; use a shell only when its syntax is required. Accept warning return codes only when documented or verified.
+- Existing planned outputs are collisions unless a confirmed resumable workflow documents them as completed outputs. Report each permitted skip. Do not overwrite, rename, or reuse a colliding output, or change the planned path to bypass the collision.
+- Check every external command's exit status. Prefer argument lists with `shell=False`; use a shell only when its syntax is required. Accept warning exit codes only when their meaning is documented or verified for that tool.
 - Cleanup may remove only temporary or partial artifacts created by the current task, never pre-existing files. Preserve non-empty artifacts from a failed Encode row under unique non-final names, list them in the error report, and delete them only after that row's final output succeeds.
-- In a long-running Encode batch, request-wide safety failures, cancellation, and unsafe state stop the batch; an isolated row failure is recorded and later rows continue. Present one summary after worker cleanup instead of modal errors during the batch.
+- In an Encode batch, request-wide safety failures, cancellation, and unsafe state stop the batch; an isolated row failure is recorded and later rows continue. Present one summary after worker cleanup instead of modal errors during the batch.
 
 ## 6. Layer Responsibilities
 
-- GUI/configuration layer: read current controls once, normalize explicit values, perform deterministic preflight, and create the complete request.
-- Worker layer: own one request, progress callback, cancellation state, and terminal success/error signaling.
-- Service layer: execute workflow and domain logic from plain data without consulting GUI or hidden global state.
-- Domain/tool layer: perform reusable media calculations and explicit external-tool operations.
-- Avoid mutable module-level workflow configuration.
-- Do not assign the same setting both as a service attribute and as a method argument.
-- Share domain calculations and writing primitives; do not share stale workflow state.
-- All methods implemented by mixins in `src/runtime/gui_runtime_split` must have matching declarations and signatures in `gui_base.py`.
-- All methods implemented by mixins in `src/runtime/services_split` must have matching declarations and signatures in `service_base.py`.
+- GUI/configuration: read current controls once at launch, normalize their representation without changing their meaning, perform deterministic preflight, and create a complete request. Use one explicit request object whenever practical.
+- Worker: own the captured request, progress callback, cancellation state, and final success/error signaling. Do not read live GUI widgets after launch.
+- Service: execute workflow and domain logic from plain Python data, without reading or reinterpreting Qt tables/widgets or consulting hidden global state.
+- Domain/tool: perform reusable media calculations and explicit external-tool operations.
+- Avoid mutable module-level workflow configuration. Share domain calculations and writing primitives without sharing stale workflow state.
+- Do not supply the same setting through both a service attribute and a method argument.
+- Mixin methods in `src/runtime/gui_runtime_split` and `src/runtime/services_split` must have declarations with matching signatures in `gui_base.py` and `service_base.py`, respectively.
 
-## 7. i18n and User-Visible Text
+## 7. i18n and User Documentation
 
-- Every GUI string, dialog string, progress label, terminal message, and other user-visible output must have English and Simplified Chinese versions.
-- English is the source string used by production code.
-- Add the English mapping to `src/core/i18n.py:I18N_ZH_TO_EN` in the same change.
-- Route user-visible text through `self.t(...)` or `translate_text(...)` at the appropriate presentation boundary.
-- Dynamic messages should translate a stable template and then substitute values.
-- Update `README.md` and `README.zh-Hans.md` together whenever product behavior or a user-relevant operational caution is documented.
-- Except in dedicated implementation-notes or implementation-details paragraphs and sections, README files must not describe program implementation details. Keep them concise and include only current functionality, operational cautions, and other information useful to users. Historical comparisons, removed behavior, refactoring rationale, and future cleanup plans belong in refactoring history or development documents.
+- Application-authored user-visible text, including GUI labels, dialogs, progress, and terminal messages, must support English and Simplified Chinese. Add or update entries in `src/core/i18n.py:I18N_ZH_TO_EN` in the same change: Chinese text is the key, and its English source string is the value.
+- Translate at the presentation boundary through `self.t(...)` or `translate_text(...)`. For dynamic text, translate a stable template before substituting values.
+- Keep README content focused on current functionality, operational cautions, and other information useful to users. Confine implementation details to dedicated implementation-notes or implementation-details paragraphs/sections. Put historical comparisons, removed behavior, refactoring rationale, and future cleanup plans in refactoring history or development documents.
 
 ## 8. File Format
 
-- Use UTF-8 for source and documentation files.
-- Every new or modified text file other than shell scripts and Dockerfiles must use CRLF line endings.
-- Shell scripts must use LF line endings so their shebang remains valid.
-- Dockerfiles (`Dockerfile` and `*.dockerfile`) must use LF line endings so shell heredocs do not pass carriage returns to commands.
-- Do not hard-wrap Markdown prose in the middle of a sentence. Keep a paragraph on one line when practical; if it is split, every resulting line must end at a complete sentence boundary. Preserve structural line breaks in lists, tables, code blocks, diagrams, and similar Markdown constructs; every list item must remain on its own line.
+- Use UTF-8 for source and documentation. New or modified text files must use CRLF, except shell scripts and Dockerfiles (`Dockerfile` and `*.dockerfile`), which require LF to preserve shebang and shell-heredoc behavior.
+- Keep Markdown paragraphs on one line when practical; split prose only at complete sentence boundaries. Preserve structural line breaks in lists, tables, code blocks, diagrams, and similar constructs, with each list item on its own line.
 - Do not introduce trailing whitespace or malformed encoding.
 
 ## 9. Tool Versions and Dockerfile Maintenance
 
-- Unless a confirmed compatibility or other technical constraint requires otherwise, dependencies and bundled tools must use the latest version published by the official upstream. Do not pin a version or commit without such a constraint.
-- The setup script and Dockerfile must install every executable, library, and plugin used by their runtime. Source builds must explicitly enable every optional feature the application uses.
-- `Dockerfile` is the Ubuntu 26.04 adaptation of `setup_linux_environment.sh`. Do not add compatibility handling for other operating systems, explanatory output, or comments.
-- Linux setup must place managed executables and VapourSynth plugins at the Linux paths defined by `src/core/settings.py`. Docker must install them directly at the corresponding Docker paths in that file, within each tool's existing build section; do not add a final relocation layer.
-- Modify existing software in its corresponding Dockerfile build section even when the required change invalidates later layers. Do not put an unrelated small change near the beginning of the file; add genuinely new software near the end whenever practical so earlier layers remain cached.
+- Use the latest version published by the official upstream for dependencies and bundled tools. Pin a version or commit only for a confirmed compatibility or other technical constraint.
+- Setup scripts and the Dockerfile must install every executable, library, and plugin used by their respective runtime. Source builds must explicitly enable every optional feature the application uses.
+- `Dockerfile` adapts `setup_linux_environment.sh` to Ubuntu 26.04. In the Dockerfile, do not add compatibility handling for other operating systems, explanatory output, or comments.
+- Linux setup must install managed executables and VapourSynth plugins at the Linux paths defined by `src/core/settings.py`. Docker must install them directly at that file's corresponding Docker paths within each tool's build section; do not add a final relocation layer.
+- Modify existing software in its corresponding Dockerfile build section even if later layers lose their cache. Do not put unrelated changes near the beginning; add new software near the end when dependencies permit, to preserve earlier cached layers.
 
 ## 10. Confirmed Product Constraints
 
-Keep this section limited to confirmed exceptions to the general rules above and product semantics that would otherwise be easy to misinterpret. Implementation details belong in nearby code comments or refactoring history.
+Keep this section limited to confirmed exceptions and product semantics that would otherwise be ambiguous. Implementation details belong in nearby code comments or refactoring history.
 
-- Remux-source Encode is resumable. Existing planned main, SP, external-subtitle, and companion outputs are treated as completed and skipped without overwrite; remaining rows continue. Duplicate paths within the current request remain errors.
-- Blu-ray DIY remains visible and its code is retained. Its incomplete execution must not be presented as complete.
-- Final Remux and Encode outputs may automatically remove selected silent audio and exact decoded duplicates, with every removal reported. This is an intentional exception to retaining every selected track.
-- MPLS track selection uses the complete playlist STN only during loading. The same STN category and ordinal stream number define one logical track across PlayItems; PID changes and absent occurrences are valid. **Edit Tracks** must show one row per logical track, all of its distinct PIDs, and a concise state whose tooltip exposes the per-PlayItem timeline. Language changes are informational and do not replace the first explicit non-`und` default. **Edit Tracks** is authoritative. By default, a declared occurrence missing from its M2TS PAT/PMT fails the output. The disabled-by-default partial-missing policy may instead turn only an audio or subtitle occurrence confirmed absent by PAT/PMT and unavailable from tsMuxer into a timeline gap, provided that logical track occurs elsewhere in the output. A selected logical track missing from the whole output, any missing video occurrence, or any transport-format conflict must always fail visibly. Never continue by silently removing a complete selected logical track.
-- MPLS and M2TS PAT/PMT compatibility checks must remain limited to parameters those structures actually expose. Do not add speculative full-payload parsing or normalization for a possible Matroska append incompatibility, such as a payload-only PCM bit-depth/channel-layout or codec-private change, until the author confirms a policy. If MKVToolNix encounters such a change, fail explicitly; do not synthesize replacement packets, silently discard another track, or promote a partial file.
-- Audio conversion to FLAC, AAC, or Opus must preserve a logical track's leading and intermediate timeline gaps without synthesizing silence. Process and validate the actual continuous PCM intervals as one logical transaction; failure in any interval keeps the complete original track. Duration fallback excludes authored gaps and uses the greatest positive shortening of any one interval, never the sum of interval losses.
-- After audio-gap analysis, a Remux must always persist one output-owned sidecar. The sidecar records gap-bearing tracks or acts as a valid empty marker when all audio is continuous. Remux-source Encode must prefer a valid matching sidecar, including an empty marker, and otherwise detect the actual packet timeline during its single source-audio decode; it must not infer continuity merely from the absence of metadata.
-- FDK-AAC and Opus bitrate value `0` means Auto rather than disabled or zero bitrate. Positive values are explicit kbps targets.
-- Series-mode SP handling has two independent exact-detail rules: a non-main MPLS matching one complete selected main MPLS contributes track choices to that shared main remux, while a non-whole SP matching one unique episode is appended only after splitting. A partial match spanning several episodes remains an ordinary SP. Movie mode uses neither attachment path.
-- Across MPLS providers, a track is compared by its set of absolute M2TS/PID relations. Persisted selection identity must include the source MPLS and its STN bucket/slot; never deduplicate providers by PID or slot alone. A complete-main match aggregates non-colliding tracks, sorts them by representative PID, and applies the common default-selection algorithm once. A single-episode match applies that algorithm independently to the main and SP MPLS, then deduplicates their physical relations again when attaching.
+- **Main-playlist Remux selection:** **Edit Tracks** controls video, audio, and subtitle selection. The editable mux command uses `{video_opts}`, `{audio_opts}`, and `{sub_opts}` placeholders; manually entered track-selection flags are ignored and replaced at execution from the captured track selection.
+- **Automatic getnative:** When the actual source height exceeds 1080 pixels, Encode reports a skip and omits automatic getnative even if selected. Higher-resolution analysis requires manually running `src/scripts/getnative_file.py` and configuring the VPy.
+- **Resumable Encode:** Remux-source Encode skips completed main, SP, external-subtitle, and companion outputs without overwriting them, then continues the remaining work. Main/SP file outputs must be non-empty; directory-source rows require the expected directory output. Empty main/SP files or paths of the wrong type are errors. Existing external-subtitle and companion files count as completed. Duplicate paths within the current request remain errors.
+- **Blu-ray DIY:** Keep the feature visible and retain its code; do not present incomplete execution as complete.
+- **Automatic audio removal:** Final Remux and Encode outputs may remove selected silent audio and exact decoded duplicates, with every removal reported.
+- **MPLS logical tracks:** At load time, build track choices only from the complete playlist's STN. Within one MPLS, the STN category and ordinal stream number identify a logical track across PlayItems; PID changes and partial presence do not create separate logical tracks. **Edit Tracks** shows one row per logical track, all its distinct PIDs, and a concise status with a per-PlayItem timeline in the tooltip. Language changes are informational; keep the first explicit non-`und` language as the default.
+- **Missing track occurrences:** An STN-declared occurrence missing from its M2TS PAT/PMT fails the output by default. The disabled-by-default partial-missing policy may turn an audio or subtitle occurrence into a timeline gap only when PAT/PMT confirms its absence, tsMuxer cannot provide it, and the same logical track exists elsewhere in the output. A selected track absent from the entire output, any missing video occurrence, or any transport-format conflict must fail visibly.
+- **Transport compatibility:** Limit MPLS and M2TS PAT/PMT checks to parameters those structures expose. Do not add speculative full-payload parsing or normalization for Matroska append incompatibilities, such as payload-only PCM bit-depth/channel-layout or codec-private changes, until the author confirms a policy. If MKVToolNix encounters such a change, fail explicitly; do not synthesize replacement packets, silently discard another track, or promote a partial file to final output.
+- **Cross-MPLS identity:** Compare tracks by their sets of `(absolute M2TS path, PID)` pairs. Persist selection identity with the source MPLS and its STN category/slot; never deduplicate providers by PID or slot alone.
+- **Audio conversion:** FLAC, AAC, and Opus conversion must preserve a logical track's leading and intermediate timeline gaps without synthesizing silence. Process and validate its continuous PCM intervals as one transaction; failure in any interval keeps the complete original track. Duration-loss fallback excludes authored gaps and uses the largest positive shortening of any one interval, never the sum of interval losses.
+- **Audio-gap sidecars:** After audio-gap analysis, Remux must persist one sidecar per output, recording gap-bearing tracks or a valid empty marker when all audio is continuous. Remux-source Encode must prefer a valid matching sidecar, including an empty marker; otherwise, detect the actual packet timeline during the single source-audio decode. Missing metadata does not establish continuity.
+- **Bitrate:** FDK-AAC and Opus bitrate `0` means Auto; positive values are explicit kbps targets.
+- **Series-mode SP matching:** Compare complete M2TS detail: clip names, order, and time ranges. First, a non-main MPLS matching exactly one complete selected main MPLS contributes track choices to that shared main remux. Otherwise, an SP matching exactly one episode is appended only after splitting. A partial match spanning several episodes remains an ordinary SP. Movie mode uses neither attachment path.
+- **SP default selection:** For a complete-main match, aggregate tracks without overlapping physical M2TS/PID relations, sort by representative PID, and apply the common default-selection algorithm once. For a single-episode match, apply that algorithm independently to the main and SP MPLS, then deduplicate physical relations again when attaching.
 
 ## 11. Testing and Change Reporting
 
-- Do not add or modify test files for a bug fix unless the fix is both major and important. When test changes are warranted for a major feature or refactoring, keep them focused on critical, error-prone behavior.
-- For ordinary changes, run only the automated tests directly related to the modified behavior. Run the full repository test suite only for a major refactoring, a broad functional change, or when focused results reveal a credible wider regression risk.
-- At minimum, run checks appropriate to the change from this set:
-  - Python compilation and import smoke tests;
-  - repository unit tests;
-  - `tools/check_i18n.py`;
-  - `tools/check_split_contracts.py`;
-  - `git diff --check`;
-  - CRLF/LF verification for new and modified files.
-- Full Blu-ray and MKV media are manual regression inputs, not CI fixtures. Report exactly which real-media checks remain, what they write, and whether disposable copies are required.
-- At the end of every modification batch, report:
-  - files and areas changed;
-  - redundant or conflicting paths removed;
-  - every business-logic change, with old and new behavior;
-  - tests run and results;
-  - remaining manual media checks;
-  - README, i18n, and standards updates, plus history updates when the change is a refactoring or major change.
-
-## Modification Checklist
-
-Before considering a change complete:
-
-- [ ] Current GUI values reach runtime unchanged.
-- [ ] No selected value is silently skipped or replaced.
-- [ ] Deterministic failures and output collisions are checked early.
-- [ ] Existing files cannot be overwritten implicitly.
-- [ ] Code strings and comments are English.
-- [ ] Every user-visible string has English/Simplified Chinese i18n.
-- [ ] GUI/service split base declarations are synchronized.
-- [ ] New and modified files have the required line endings.
-- [ ] Tests appropriate to the change scope have been run; the full suite was reserved for a major or broad change unless wider risk required it.
-- [ ] Both README versions are synchronized if behavior changed.
-- [ ] Both standards files are updated if a new rule was confirmed.
-- [ ] Both refactoring-history files are updated if the change is a refactoring or major change.
+- Do not add or modify test files for a bug fix unless it is both major and important. When a major feature or a refactoring warrants test changes, focus on critical, error-prone behavior.
+- For ordinary changes, run only tests directly related to the changed behavior. Run the full suite only for a major refactoring, a broad functional change, or when focused results reveal a credible wider regression risk.
+- For every change, run `git diff --check` and verify text-file encoding and line endings. Select other checks by scope: Python compilation/import smoke tests, relevant unit tests, `tools/check_i18n.py` for source-language/i18n changes, and `tools/check_split_contracts.py` for mixin/base changes.
+- Full Blu-ray and MKV media are manual regression inputs, not CI fixtures. For any remaining real-media checks, specify what must be checked, what will be written, and whether disposable copies are required.
+- At the end of each change batch, report changed files/areas, removed redundancy or conflicts, each business-logic change as before/after behavior, checks and results, remaining manual media checks, and applicable README, i18n, standards, and history updates.
