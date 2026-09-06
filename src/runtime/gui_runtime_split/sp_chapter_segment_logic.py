@@ -307,7 +307,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
 
         # Make table3 visible after adding entries
         if self.table3.rowCount() > 0:
-            self.table3.setVisible(True)
+            self.table3_section.setVisible(True)
 
         # Refresh sorting after adding entries (do not auto-scroll).
         if hasattr(self, 'table3') and self.table3:
@@ -654,7 +654,6 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
         except Exception:
             pass
         try:
-            self.table2.resizeColumnsToContents()
             self._resize_table_columns_for_language(self.table2)
         except Exception:
             pass
@@ -1778,6 +1777,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
 
 
             old_sorting = self.table3.isSortingEnabled()
+            had_rows = self.table3.rowCount() > 0
             old_current_row = self.table3.currentRow()
             old_current_col = self.table3.currentColumn()
             old_h_scroll = self.table3.horizontalScrollBar().value() if self.table3.horizontalScrollBar() else 0
@@ -1975,7 +1975,6 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                         self._show_m2ts_file_detail_columns()
                     except Exception:
                         pass
-                self.table3.resizeColumnsToContents()
                 self._resize_table_columns_for_language(self.table3)
                 try:
                     self._reset_table3_column_layout()
@@ -1995,6 +1994,8 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             finally:
                 self._updating_sp_table = False
                 self.table3.setSortingEnabled(old_sorting)
+            if not had_rows:
+                self._scroll_table_to_primary_column(self.table3)
             try:
                 # This is the only scan start for this table rebuild. It must
                 # remain after the final row order and visible values are stable.

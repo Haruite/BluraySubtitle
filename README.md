@@ -28,6 +28,7 @@ BluraySubtitle is a GUI tool for Blu-ray workflows on **Windows / Linux** (inclu
 ### Interface and task settings
 
 - English/Simplified Chinese UI; Light, Dark, and Colorful themes with opacity control.
+- The top language bar and bottom execution button stay fixed while the rest of the page scrolls vertically. Disc sources, main outputs, and SP each have a table section with instructions.
 - **Settings** contains General, Paths, Advanced, External tools, and manual update options. Settings and window geometry are saved in `config.json`.
 - Series mode splits along the chapter timeline; movie mode keeps one continuous output. Each disc can have multiple selected main MPLS files. Automatic selections and episode estimates need review. See [chapter-range recalculation](docs/wiki/BluraySubtitle-Developer-Guide.md#episode-configuration) for how segment and chapter edits interact.
 - Tasks use the visible row order, names, ranges, commands, tracks, and languages captured at launch. Invalid settings are reported before execution. See the [interface examples](docs/wiki/Interface-Guide.md) for selection and review.

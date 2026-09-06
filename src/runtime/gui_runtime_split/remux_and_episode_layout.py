@@ -523,9 +523,8 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         finally:
             self.table2.setSortingEnabled(old_sorting)
 
-        self.table2.resizeColumnsToContents()
         self._resize_table_columns_for_language(self.table2)
-        self._scroll_table_h_to_right(self.table2)
+        self._scroll_table_to_primary_column(self.table2)
         self._update_main_row_play_button()
 
     def _refresh_movie_table2(self):
@@ -716,7 +715,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             if not isinstance(editor, QPlainTextEdit):
                 editor = self._create_main_remux_cmd_editor('', self.table1)
                 self.table1.setCellWidget(row, cmd_col, editor)
-                self.table1.setRowHeight(row, max(self.table1.rowHeight(row), 100))
+                self.table1.setRowHeight(row, max(self.table1.rowHeight(row), 220))
             if not selected_mpls_paths:
                 editor._updating_cmd = True
                 editor._auto_cmd = ''
@@ -1188,10 +1187,10 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                             else:
                                 btn4.setEnabled(False)
                             table_widget.setCellWidget(mpls_n, info_headers.index('tracks'), btn4)
-                        table_widget.resizeColumnsToContents()
                         mpls_n += 1
                         if (time.time() - start_ts) >= 2.0:
                             QCoreApplication.processEvents()
+                    self._resize_table_columns_for_language(table_widget)
                     self.table1.setItem(i, 0, FilePathTableWidgetItem(os.path.normpath(source_path)))
                     size = get_folder_size(root) if root == source_path else f'{os.path.getsize(source_path) / 1024 ** 3:.2f} GiB'
                     self.table1.setItem(i, 1, QTableWidgetItem(size))
@@ -1203,23 +1202,11 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                                                   self._create_main_remux_cmd_editor(cmd_text, self.table1))
                     elif self.get_selected_function_id() not in (3, 4, 5):
                         self.table1.setItem(i, BDMV_LABELS.index('remux_cmd'), QTableWidgetItem(''))
-                    self.table1.setRowHeight(i, 100)
+                    self.table1.setRowHeight(i, 220)
                     if (time.time() - start_ts) >= 2.0:
                         QCoreApplication.processEvents()
-                self.table1.resizeColumnsToContents()
-                if self.get_selected_function_id() in (3, 4):
-                    self.table1.setColumnWidth(2, 560 if getattr(self, '_language_code',
-                                                                 CURRENT_UI_LANGUAGE) == 'zh' else 540)
-                    self.table1.setColumnWidth(3, 420 if getattr(self, '_language_code',
-                                                                 CURRENT_UI_LANGUAGE) == 'zh' else 380)
-                elif self.get_selected_function_id() == 5:
-                    self.table1.setColumnWidth(2, 560 if getattr(self, '_language_code',
-                                                                 CURRENT_UI_LANGUAGE) == 'zh' else 540)
-                else:
-                    self.table1.setColumnWidth(2, 540 if getattr(self, '_language_code',
-                                                                 CURRENT_UI_LANGUAGE) == 'zh' else 490)
-                    self.table1.setColumnWidth(3, 0)
-                self._scroll_table_h_to_right(self.table1)
+                self._resize_table_columns_for_language(self.table1)
+                self._scroll_table_to_primary_column(self.table1)
                 table_ok = True
                 try:
                     show_timer.stop()

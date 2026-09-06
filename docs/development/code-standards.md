@@ -33,6 +33,7 @@ Keep both language versions of these standards synchronized, and record author-c
 
 ## 4. GUI Is the Execution Contract
 
+- Keep only the main window's top language/theme/font/settings bar and bottom execution button fixed. Scroll all other content vertically and preserve readable table heights.
 - Subject to the exceptions in section 10, execution must apply the visible GUI values captured at launch: selected rows, paths, names, languages, modes, commands, chapter bounds, codecs, and other options.
 - Use the captured visible table order unless the GUI explicitly documents another ordering rule.
 - Do not silently skip a selection or replace an explicit value with stale state, a global value, a default, a regenerated value, or an inference. Report an error if a selected row or option cannot execute. Infer values only when the user has not supplied them.

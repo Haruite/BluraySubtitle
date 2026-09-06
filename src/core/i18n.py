@@ -8,6 +8,20 @@ from typing import Optional
 import src.core.settings as _core_settings
 
 I18N_ZH_TO_EN = {
+    '为各原盘选择主播放列表；通过行内按钮查看章节和时间。': 'Select the main playlists for each disc. Use the row buttons to inspect chapters and timing.',
+    '原盘与播放列表': 'Sources and playlists',
+    '为各原盘选择主播放列表；通过行内按钮查看章节、时间和轨道。': 'Select the main playlists for each disc. Inspect chapters, timing and tracks with the row buttons.',
+    '正片输出': 'Main outputs',
+    '每行对应一个正片输出，可调整章节范围、输出文件名及可选字幕。': 'One row per main output. Adjust chapter ranges, output names and optional subtitles.',
+    '特典（SP）': 'Bonus features (SP)',
+    '选择要输出的特典，检查文件名和轨道；压制时还可编辑和预览 VPy。': 'Select the bonus features to output, then review their names and tracks. Encode also offers VPy editing and preview.',
+    '字幕匹配': 'Subtitle alignment',
+    '将字幕与各集对应，再调整章节选择和时间偏移。': 'Match subtitles to episodes, then adjust chapter selection and timing offsets.',
+    'MKV 文件列表': 'MKV files',
+    '所选章节将写入这些文件，请核对来源路径和时长。': 'These files receive the selected chapters. Review the source paths and durations.',
+    '主播放列表设置': 'Main playlists',
+    '检查已选主播放列表的章节范围和轨道设置。': 'Review chapter ranges and track settings for the selected main playlists.',
+    '每行对应一个正片输出，可调整输出文件名、轨道和 VPy 脚本。': 'One row per main output. Adjust output names, tracks and the VPy script.',
     'ISO 输入不支持预览': 'ISO input does not support preview',
     '正在读取 ISO 播放列表：{path}': 'Reading ISO playlists: {path}',
     'ISO 中没有 BDMV 播放列表': 'The ISO contains no BDMV playlists',
@@ -305,7 +319,8 @@ I18N_ZH_TO_EN = {
     'x264参数：': 'x264 Params:',
     'SvtAv1参数：': 'SvtAv1 Params:',
     '压制工具：': 'Encoder tool:',
-    '选择来源：': 'Selection source:',
+    'vspipe来源：': 'vspipe source:',
+    '压制工具来源：': 'Encoder tool source:',
     '输出位深：': 'Output bit depth:',
     'BD压制说明：视频轨道转为「重编码」时按蓝光规格固定为 x264 8bit 或 x265 10bit，此处不可更改编码器与位深。': (
         'BD encode follows Blu-ray rules when re-encoding tracks (x264 8-bit or x265 10-bit); encoder and bit depth are fixed here.'

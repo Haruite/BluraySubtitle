@@ -3,7 +3,7 @@
 import sys
 
 from PyQt6.QtCore import QTimer
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QStyle
 
 from .gui_runtime_classes.bluray_subtitle_gui_entry import BluraySubtitleGUI
 
@@ -26,8 +26,12 @@ def run_src_entry() -> None:
                 return
             avail = screen.availableGeometry()
             fg = window.frameGeometry()
-            chrome_h = max(0, fg.height() - window.height())
-            chrome_w = max(0, fg.width() - window.width())
+            # Native frame margins may not be available on the first event-loop turn.
+            style = window.style()
+            border = style.pixelMetric(QStyle.PixelMetric.PM_DefaultFrameWidth) * 2
+            chrome_h = max(fg.height() - window.height(),
+                           style.pixelMetric(QStyle.PixelMetric.PM_TitleBarHeight) + border)
+            chrome_w = max(fg.width() - window.width(), border)
 
             # Keep previous small-screen fitting behavior.
             if avail.height() <= 1200:
@@ -35,11 +39,10 @@ def run_src_entry() -> None:
                 target_h = max(200, avail.height() - chrome_h)
                 window.resize(target_w, target_h)
 
-            fg2 = window.frameGeometry()
-            centered_x = avail.left() + max(0, (avail.width() - fg2.width()) // 2)
-            centered_y = avail.top() + max(0, (avail.height() - fg2.height()) // 2)
-            x = min(max(centered_x, avail.left()), avail.right() - fg2.width() + 1)
-            y = min(max(centered_y, avail.top()), avail.bottom() - fg2.height() + 1)
+            frame_w = window.width() + chrome_w
+            frame_h = window.height() + chrome_h
+            x = avail.left() + max(0, (avail.width() - frame_w) // 2)
+            y = avail.top() + max(0, (avail.height() - frame_h) // 2)
             window.move(x, y)
 
         QTimer.singleShot(0, fit_window_to_available_screen)

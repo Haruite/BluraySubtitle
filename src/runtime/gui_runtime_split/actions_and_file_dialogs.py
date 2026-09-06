@@ -16,7 +16,7 @@ from PyQt6.QtCore import Qt, QTimer, QThread, QCoreApplication, QPoint, QEventLo
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPlainTextEdit, QTextBrowser, QWidget, QHBoxLayout, QPushButton, \
     QApplication, QProgressDialog, QProgressBar, QTableWidgetItem, QTableWidget, QToolButton, QComboBox, \
     QAbstractItemView, QMenu, QMessageBox, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, QFileDialog, QCheckBox, \
-    QDoubleSpinBox
+    QDoubleSpinBox, QGridLayout
 
 from src.bdmv import Chapter, chapter_play_item_file_ranges
 from src.core import MKV_LABELS, REMUX_LABELS, DIY_REMUX_LABELS, ENCODE_LABELS, SUBTITLE_LABELS, ENCODE_REMUX_LABELS, \
@@ -418,8 +418,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 for i, (path, _dur) in enumerate(rows):
                     if i < self.table2.rowCount():
                         self.table2.setItem(i, 0, FilePathTableWidgetItem(path))
-                self.table2.resizeColumnsToContents()
-                self._scroll_table_h_to_right(self.table2)
+                self._resize_table_columns_for_language(self.table2)
+                self._scroll_table_to_primary_column(self.table2)
                 self._refresh_movie_table2()
                 self._update_main_row_play_button()
                 return
@@ -433,8 +433,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 for i, (path, dur) in enumerate(rows):
                     self.table2.setItem(i, 0, FilePathTableWidgetItem(path))
                     self.table2.setItem(i, 1, QTableWidgetItem(dur))
-                self.table2.resizeColumnsToContents()
-                self._scroll_table_h_to_right(self.table2)
+                self._resize_table_columns_for_language(self.table2)
+                self._scroll_table_to_primary_column(self.table2)
                 return
 
             rows = payload.get('rows') or []
@@ -450,8 +450,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 for i, (path, dur) in enumerate(rows):
                     self.table2.setItem(i, 0, FilePathTableWidgetItem(path))
                     self.table2.setItem(i, 1, QTableWidgetItem(dur))
-                self.table2.resizeColumnsToContents()
-                self._scroll_table_h_to_right(self.table2)
+                self._resize_table_columns_for_language(self.table2)
+                self._scroll_table_to_primary_column(self.table2)
             elif payload.get('mode') == 4:
                 if not rows:
                     # In remux/encode flows subtitle folder is optional; keep current rows.
@@ -465,8 +465,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     self.table2.setItem(i, 0, FilePathTableWidgetItem(path))
                     self.table2.setItem(i, 1, QTableWidgetItem(dur))
                     self.ensure_encode_row_widgets(i)
-                self.table2.resizeColumnsToContents()
-                self._scroll_table_h_to_right(self.table2)
+                self._resize_table_columns_for_language(self.table2)
+                self._scroll_table_to_primary_column(self.table2)
             elif payload.get('mode') == 5:
                 if not rows:
                     # In remux/encode flows subtitle folder is optional; keep current rows.
@@ -479,8 +479,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 for i, (path, dur) in enumerate(rows):
                     self.table2.setItem(i, 0, FilePathTableWidgetItem(path))
                     self.table2.setItem(i, 1, QTableWidgetItem(dur))
-                self.table2.resizeColumnsToContents()
-                self._scroll_table_h_to_right(self.table2)
+                self._resize_table_columns_for_language(self.table2)
+                self._scroll_table_to_primary_column(self.table2)
             else:
                 self.table2.clear()
                 self.table2.setColumnCount(len(SUBTITLE_LABELS))
@@ -513,8 +513,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 except Exception:
                     pass
                 self.table2.customContextMenuRequested.connect(self.on_subtitle_menu)
-                self.table2.resizeColumnsToContents()
-                self._scroll_table_h_to_right(self.table2)
+                self._resize_table_columns_for_language(self.table2)
+                self._scroll_table_to_primary_column(self.table2)
 
             configuration = payload.get('configuration') or {}
             if configuration:
@@ -633,9 +633,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 except Exception:
                     pass
                 QCoreApplication.processEvents()
-        self.table2.resizeColumnsToContents()
         self._resize_table_columns_for_language(self.table2)
-        self._scroll_table_h_to_right(self.table2)
+        self._scroll_table_to_primary_column(self.table2)
         self._update_language_combo_enabled_state()
         self.table2.setSortingEnabled(True)
         try:
@@ -746,9 +745,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 except Exception:
                     pass
                 QCoreApplication.processEvents()
-        self.table3.resizeColumnsToContents()
         self._resize_table_columns_for_language(self.table3)
-        self._scroll_table_h_to_right(self.table3)
+        self._scroll_table_to_primary_column(self.table3)
         self.table3.setSortingEnabled(True)
         try:
             show_timer.stop()
@@ -1789,39 +1787,40 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         self._encode_setting_updating = False
 
         layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
+        layout.setContentsMargins(10, 20, 10, 10)
+        layout.setSpacing(10)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.encode_box.setLayout(layout)
 
         tools_row = QWidget(self.encode_box)
-        tools_layout = QHBoxLayout()
+        tools_layout = QGridLayout()
         tools_layout.setContentsMargins(0, 0, 0, 0)
-        tools_layout.setSpacing(4)
+        tools_layout.setHorizontalSpacing(12)
+        tools_layout.setVerticalSpacing(8)
         tools_row.setLayout(tools_layout)
 
-        tools_layout.addWidget(QLabel('vspipe:', tools_row))
+        tools_layout.addWidget(QLabel(self.t('vspipe source:'), tools_row), 0, 0)
         self.vspipe_mode_combo = QComboBox(tools_row)
         self.vspipe_mode_combo.addItems(['Built-in', 'System'])
-        tools_layout.addWidget(self.vspipe_mode_combo)
+        tools_layout.addWidget(self.vspipe_mode_combo, 0, 1)
 
         self.encode_tool_label = QLabel(self.t('Encoder tool:'), tools_row)
-        tools_layout.addWidget(self.encode_tool_label)
+        tools_layout.addWidget(self.encode_tool_label, 0, 3)
         self.encode_tool_combo = QComboBox(tools_row)
         self.encode_tool_combo.addItems(['x264', 'x265', 'SvtAv1'])
         self.encode_tool_combo.setCurrentText('x265')
-        tools_layout.addWidget(self.encode_tool_combo)
+        tools_layout.addWidget(self.encode_tool_combo, 0, 4)
 
-        self.encode_source_label = QLabel(self.t('Selection source:'), tools_row)
-        tools_layout.addWidget(self.encode_source_label)
+        self.encode_source_label = QLabel(self.t('Encoder tool source:'), tools_row)
+        tools_layout.addWidget(self.encode_source_label, 1, 0)
         self.x265_mode_combo = QComboBox(tools_row)
         self.x265_mode_combo.addItems(['Built-in', 'System'])
-        tools_layout.addWidget(self.x265_mode_combo)
+        tools_layout.addWidget(self.x265_mode_combo, 1, 1)
 
         self.encode_bit_depth_label = QLabel(self.t('Output bit depth:'), tools_row)
-        tools_layout.addWidget(self.encode_bit_depth_label)
+        tools_layout.addWidget(self.encode_bit_depth_label, 1, 3)
         self.encode_bit_depth_combo = QComboBox(tools_row)
-        tools_layout.addWidget(self.encode_bit_depth_combo)
+        tools_layout.addWidget(self.encode_bit_depth_combo, 1, 4)
 
         self.diy_bd_encode_hint_label = QLabel(
             self.t(
@@ -1830,8 +1829,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             tools_row,
         )
         self.diy_bd_encode_hint_label.setVisible(False)
-        self.diy_bd_encode_hint_label.setWordWrap(False)
-        tools_layout.addWidget(self.diy_bd_encode_hint_label)
+        self.diy_bd_encode_hint_label.setWordWrap(True)
+        tools_layout.addWidget(self.diy_bd_encode_hint_label, 3, 0, 1, 6)
 
         self.x265_mode_label = None
 
@@ -1846,16 +1845,15 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             self.x265_mode_combo.setCurrentText('System')
 
         self.x265_params_label = QLabel(self.t('x265 Params:'), tools_row)
-        tools_layout.addWidget(self.x265_params_label)
+        tools_layout.addWidget(self.x265_params_label, 2, 0)
         self.x265_preset_combo = QComboBox(tools_row)
-        tools_layout.addWidget(self.x265_preset_combo)
+        tools_layout.addWidget(self.x265_preset_combo, 2, 1)
 
-        tools_layout.addStretch(1)
         self.lossless_audio_compression_label = QLabel(
             self.t('Lossless audio compression'),
             tools_row,
         )
-        tools_layout.addWidget(self.lossless_audio_compression_label)
+        tools_layout.addWidget(self.lossless_audio_compression_label, 2, 3)
         self.encode_lossless_audio_combo = QComboBox(tools_row)
         self.encode_lossless_audio_combo.addItem('FLAC', 'flac')
         self.encode_lossless_audio_combo.addItem('AAC', 'aac')
@@ -1863,19 +1861,22 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         self.encode_lossless_audio_combo.setCurrentIndex(0)
         self._encode_lossless_preset_updating = False
         self.encode_lossless_audio_combo.currentIndexChanged.connect(self._on_encode_lossless_audio_preset_changed)
-        tools_layout.addWidget(self.encode_lossless_audio_combo)
+        tools_layout.addWidget(self.encode_lossless_audio_combo, 2, 4)
+        tools_layout.setColumnStretch(2, 1)
+        tools_layout.setColumnStretch(5, 1)
         layout.addWidget(tools_row)
 
         self.encode_options_row = QWidget(self.encode_box)
-        options_layout = QHBoxLayout(self.encode_options_row)
+        options_layout = QGridLayout(self.encode_options_row)
         options_layout.setContentsMargins(0, 0, 0, 0)
-        options_layout.setSpacing(4)
+        options_layout.setHorizontalSpacing(16)
+        options_layout.setVerticalSpacing(8)
         self.use_getnative_checkbox = QCheckBox(
             self.t('Use getnative for native resolution'),
             self.encode_options_row,
         )
         self.use_getnative_checkbox.setChecked(True)
-        options_layout.addWidget(self.use_getnative_checkbox)
+        options_layout.addWidget(self.use_getnative_checkbox, 0, 0)
         self.auto_crop_black_borders_checkbox = QCheckBox(
             self.t('Auto-crop black borders (verify result)'),
             self.encode_options_row,
@@ -1884,13 +1885,13 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         self.auto_crop_black_borders_checkbox.setToolTip(self.t(
             'Automatic black-border detection can be wrong; verify the encoded picture.'
         ))
-        options_layout.addWidget(self.auto_crop_black_borders_checkbox)
+        options_layout.addWidget(self.auto_crop_black_borders_checkbox, 0, 1)
         self.output_comparison_checkbox = QCheckBox(
             self.t('Output comparison images'),
             self.encode_options_row,
         )
         self.output_comparison_checkbox.setChecked(True)
-        options_layout.addWidget(self.output_comparison_checkbox)
+        options_layout.addWidget(self.output_comparison_checkbox, 1, 0)
         self.frame_check_checkbox = QCheckBox(
             self.t('Check corrupted frames'),
             self.encode_options_row,
@@ -1900,74 +1901,77 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             'After encoding, rerun the VPy and check the output frame by frame; '
             'this significantly increases processing time.'
         ))
-        options_layout.addWidget(self.frame_check_checkbox)
-        options_layout.addStretch(1)
+        options_layout.addWidget(self.frame_check_checkbox, 1, 1)
         self.use_bluray_compat_params_checkbox = QCheckBox(
             self.t('Use Blu-ray compatible params'),
             self.encode_options_row,
         )
         self.use_bluray_compat_params_checkbox.setChecked(False)
-        options_layout.addWidget(self.use_bluray_compat_params_checkbox)
+        options_layout.addWidget(self.use_bluray_compat_params_checkbox, 2, 0, 1, 2)
         layout.addWidget(self.encode_options_row)
 
         self.vpy_processing_row = QWidget(self.encode_box)
-        processing_layout = QHBoxLayout(self.vpy_processing_row)
+        processing_layout = QGridLayout(self.vpy_processing_row)
         processing_layout.setContentsMargins(0, 0, 0, 0)
-        processing_layout.setSpacing(4)
-        processing_layout.addWidget(QLabel(self.t('VPy processing:'), self.vpy_processing_row))
+        processing_layout.setHorizontalSpacing(12)
+        processing_layout.setVerticalSpacing(8)
+        processing_layout.addWidget(QLabel(self.t('VPy processing:'), self.vpy_processing_row), 0, 0, 1, 6)
 
         def add_processing_strength(
+                position: int,
                 label_text: str,
                 maximum: float,
                 default: float,
                 tooltip: str,
         ) -> QDoubleSpinBox:
-            processing_layout.addWidget(QLabel(self.t(label_text), self.vpy_processing_row))
+            row, column = 1 + position // 3, (position % 3) * 2
+            processing_layout.addWidget(QLabel(self.t(label_text), self.vpy_processing_row), row, column)
             spin = QDoubleSpinBox(self.vpy_processing_row)
+            spin.setFixedWidth(110)
             spin.setRange(0.0, maximum)
             spin.setDecimals(2)
             spin.setSingleStep(0.1)
             spin.setValue(default)
             spin.setKeyboardTracking(False)
             spin.setToolTip(self.t(tooltip))
-            processing_layout.addWidget(spin)
+            processing_layout.addWidget(spin, row, column + 1)
             return spin
 
         self.vpy_denoise_strength_spin = add_processing_strength(
-            'Denoise',
+            0, 'Denoise',
             3.0,
             0.6,
             'Default VPy denoise strength; 0 disables it. Lower values preserve more grain and texture.',
         )
         self.vpy_dehalo_strength_spin = add_processing_strength(
-            'Dehalo',
+            1, 'Dehalo',
             1.0,
             0.0,
             'Default VPy dehalo starts disabled. For visible sharpening halos, start around 0.15-0.25.',
         )
         self.vpy_dering_strength_spin = add_processing_strength(
-            'Dering',
+            2, 'Dering',
             1.0,
             0.0,
             'Default VPy dering starts disabled. For visible ringing, start around 0.15-0.25.',
         )
         self.vpy_deband_strength_spin = add_processing_strength(
-            'Deband',
+            3, 'Deband',
             1.0,
             0.5,
             'Default VPy deband blend; 0 disables it, 0.5 is the moderate default, and 1 applies the full adaptively masked result.',
         )
         self.vpy_antialiasing_strength_spin = add_processing_strength(
-            'Anti-aliasing',
+            4, 'Anti-aliasing',
             1.0,
             0.5,
             'Default VPy anti-aliasing blend; 0 disables it, 0.5 is the moderate default, and 1 applies the full limited EEDI2 result.',
         )
-        processing_layout.addStretch(1)
+        processing_layout.setColumnStretch(6, 1)
         layout.addWidget(self.vpy_processing_row)
 
         self.x265_params_edit = QPlainTextEdit(self.encode_box)
-        self.x265_params_edit.setFixedHeight(46)
+        self.x265_params_edit.setFixedHeight(96)
         self.x265_params_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         layout.addWidget(self.x265_params_edit)
 

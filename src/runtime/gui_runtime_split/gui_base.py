@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from PyQt6.QtCore import QPoint, Qt, QProcess
-from PyQt6.QtWidgets import QWidget, QComboBox, QPlainTextEdit, QTableWidgetItem, QTableWidget, QToolButton
+from PyQt6.QtWidgets import QWidget, QComboBox, QPlainTextEdit, QTableWidgetItem, QTableWidget, QToolButton, QGroupBox, QLabel
 
 
 class BluraySubtitleGuiBase(QWidget):
@@ -151,7 +151,6 @@ class BluraySubtitleGuiBase(QWidget):
         self.subtitle_folder_path = None
         self.subtitle_suffix_combo = None
         self.subtitle_suffix_label = None
-        self.subtitle_tables_splitter = None
         self.simple_diy_sub_lang_combo = None
         self.simple_diy_sub_lang_label = None
         self.simple_diy_add_sub_row_btn = None
@@ -162,10 +161,16 @@ class BluraySubtitleGuiBase(QWidget):
         self.track_scope_row = None
         self.track_scope_main_radio = None
         self.track_scope_all_radio = None
+        self.content_scroll = None
+        self.table1_section = None
+        self.table1_description = None
+        self.table2_section = None
+        self.table2_description = None
+        self.table3_section = None
+        self.table3_description = None
         self.table1 = None
         self.table2 = None
         self.table3 = None
-        self.tables_splitter = None
         self.theme_combo = None
         self.theme_label = None
         self.vspipe_mode_combo = None
@@ -323,6 +328,9 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _create_main_remux_cmd_editor(self, text: str, parent: Optional[QWidget]=None) -> QPlainTextEdit:
+        raise NotImplementedError
+
+    def _create_table_section(self, table: QTableWidget, title: str, description: str, minimum_height: int) -> tuple[QGroupBox, QLabel]:
         raise NotImplementedError
 
     def _create_temp_preview_vpy_from_default(self, video_path: str, subtitle_path: str) -> str:
@@ -648,6 +656,9 @@ class BluraySubtitleGuiBase(QWidget):
     def _refresh_table3_m2ts_file_detail(self, only_bdmv_index: Optional[int]=None):
         raise NotImplementedError
 
+    def _refresh_table_descriptions(self):
+        raise NotImplementedError
+
     def _refresh_theme_combo(self):
         raise NotImplementedError
 
@@ -714,7 +725,7 @@ class BluraySubtitleGuiBase(QWidget):
     def _save_simple_diy_subtitle_config(self):
         raise NotImplementedError
 
-    def _scroll_table_h_to_right(self, table: QTableWidget):
+    def _scroll_table_to_primary_column(self, table: QTableWidget):
         raise NotImplementedError
 
     def _segment_diff_mpls(self, prev: dict[str, object], cur: dict[str, object]) -> set[str]:
@@ -730,7 +741,7 @@ class BluraySubtitleGuiBase(QWidget):
     def _set_combo_value(combo: QComboBox, value: str) -> None:
         raise NotImplementedError
 
-    def _set_compact_table(self, table: QTableWidget, row_height: int=22, header_height: int=22):
+    def _set_compact_table(self, table: QTableWidget, row_height: int=28, header_height: int=28):
         raise NotImplementedError
 
     def _set_segment_states_for_range(self, mpls_no_ext: str, start_idx: int, end_idx: int, checked: bool):

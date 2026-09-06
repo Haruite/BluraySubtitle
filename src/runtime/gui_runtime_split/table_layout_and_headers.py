@@ -1,12 +1,24 @@
 """Target module for table/layout/header methods of `BluraySubtitleGUI`."""
-from PyQt6.QtCore import QTimer
+from html import escape
+
+from PyQt6.QtCore import Qt, QTimer, QEvent
 from PyQt6.QtGui import QFontMetrics
-from PyQt6.QtWidgets import QTableWidget, QComboBox, QHeaderView
+from PyQt6.QtWidgets import QTableWidget, QComboBox, QHeaderView, QGroupBox, QLabel, QVBoxLayout, QSizePolicy, QAbstractItemView, QStyledItemDelegate, QToolTip
 
 from src.core import BDMV_LABELS, SUBTITLE_LABELS, MKV_LABELS, REMUX_LABELS, ENCODE_REMUX_LABELS, ENCODE_LABELS, \
     ENCODE_REMUX_SP_LABELS, ENCODE_SP_LABELS, DIY_BDMV_LABELS, DIY_SP_LABELS, DIY_REMUX_LABELS, CURRENT_UI_LANGUAGE, \
     MPLS_INFO_LABELS, MPLS_INFO_TRACKS_LABELS
 from .gui_base import BluraySubtitleGuiBase
+
+
+class _FullTextDelegate(QStyledItemDelegate):
+    def helpEvent(self, event, view, option, index):
+        if event.type() == QEvent.Type.ToolTip and index.isValid() and not index.data(Qt.ItemDataRole.ToolTipRole):
+            text = index.data(Qt.ItemDataRole.DisplayRole)
+            if isinstance(text, str) and text:
+                QToolTip.showText(event.globalPos(), f'<qt>{escape(text)}</qt>', view)
+                return True
+        return super().helpEvent(event, view, option, index)
 
 
 class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
@@ -87,6 +99,7 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
             pass
 
     def _set_table_headers(self, table: QTableWidget, keys: list[str]):
+        table.setProperty('columnKeys', list(keys))
         try:
             display_keys = list(keys)
             # For table2 (remux/encode views), show the language column as sub_language.
@@ -122,7 +135,7 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
                 elif function_id == 5:
                     self._set_table_headers(self.table2, DIY_REMUX_LABELS)
                 self._resize_table_columns_for_language(self.table2)
-                self._scroll_table_h_to_right(self.table2)
+                self._scroll_table_to_primary_column(self.table2)
         except Exception:
             pass
 
@@ -139,7 +152,7 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
                     labels = ENCODE_REMUX_SP_LABELS if remux_sp else ENCODE_SP_LABELS
                 self._set_table_headers(self.table3, labels)
                 self._resize_table_columns_for_language(self.table3)
-                self._scroll_table_h_to_right(self.table3)
+                self._scroll_table_to_primary_column(self.table3)
         except Exception:
             pass
 
@@ -175,142 +188,121 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
             pass
 
     def _resize_table_columns_for_language(self, table: QTableWidget):
-        if not table:
+        if table is None:
             return
-        try:
-            table.resizeColumnsToContents()
-        except Exception:
-            pass
-        try:
-            header = table.horizontalHeader()
-            fm = QFontMetrics(header.font())
-            for col in range(table.columnCount()):
-                item = table.horizontalHeaderItem(col)
-                txt = item.text() if item else ''
-                if not txt:
-                    continue
-                min_w = int(fm.horizontalAdvance(txt) + 24)
-                if table.columnWidth(col) < min_w:
-                    table.setColumnWidth(col, min_w)
-        except Exception:
-            pass
-        try:
-            if table is getattr(self, 'table2', None):
-                function_id = self.get_selected_function_id()
-                labels: list[str] = []
-                col = -1
-                if function_id == 3:
-                    labels = list(REMUX_LABELS)
-                    col = REMUX_LABELS.index('output_name')
-                elif function_id == 4:
-                    labels = list(
-                        ENCODE_REMUX_LABELS if getattr(self, '_encode_input_mode', 'bdmv') == 'remux' else ENCODE_LABELS
-                    )
-                    col = labels.index('output_name') if 'output_name' in labels else -1
-                elif function_id == 5:
-                    labels = list(DIY_REMUX_LABELS)
-                    col = -1
-                header = table.horizontalHeader()
-                if col >= 0:
-                    header.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
-                    fixed_limit = 280
-                    fm_h = QFontMetrics(header.font())
-                    header_item = table.horizontalHeaderItem(col)
-                    max_w = fm_h.horizontalAdvance(header_item.text()) if header_item and header_item.text() else 0
-                    fm_c = QFontMetrics(table.font())
-                    for r in range(table.rowCount()):
-                        it = table.item(r, col)
-                        if it and it.text():
-                            max_w = max(max_w, fm_c.horizontalAdvance(it.text()))
-                    desired = min(fixed_limit, int(max_w + 24))
-                    table.setColumnWidth(col, max(60, desired))
-                if labels and 'm2ts_file_detail' in labels:
-                    det_col = labels.index('m2ts_file_detail')
-                    header.setSectionResizeMode(det_col, QHeaderView.ResizeMode.Fixed)
-                    table.setColumnWidth(det_col, 280)
-                if labels and 'play' in labels:
-                    play_col = labels.index('play')
-                    header.setSectionResizeMode(play_col, QHeaderView.ResizeMode.Fixed)
-                    table.setColumnWidth(play_col, 68)
-            elif table is getattr(self, 'table3', None):
-                header = table.horizontalHeader()
-                function_id = self.get_selected_function_id() if hasattr(self, 'get_selected_function_id') else 0
-                remux_sp = function_id == 4 and getattr(self, '_encode_input_mode', 'bdmv') == 'remux'
-                if remux_sp:
-                    # table3 uses ENCODE_REMUX_SP_LABELS; do not index with ENCODE_SP_LABELS (would pin wrong columns).
-                    header.setStretchLastSection(True)
-                    labels = ENCODE_REMUX_SP_LABELS
-                    col_output = labels.index('output_name')
-                    header.setSectionResizeMode(col_output, QHeaderView.ResizeMode.Fixed)
-                    fixed_limit = 280
-                    fm_h = QFontMetrics(header.font())
-                    header_item = table.horizontalHeaderItem(col_output)
-                    max_w = fm_h.horizontalAdvance(header_item.text()) if header_item and header_item.text() else 0
-                    fm_c = QFontMetrics(table.font())
-                    for r in range(table.rowCount()):
-                        it = table.item(r, col_output)
-                        if it and it.text():
-                            max_w = max(max_w, fm_c.horizontalAdvance(it.text()))
-                    desired = min(fixed_limit, int(max_w + 24))
-                    table.setColumnWidth(col_output, max(160, desired))
+        if not isinstance(table.itemDelegate(), _FullTextDelegate):
+            table.setItemDelegate(_FullTextDelegate(table))
+        keys = list(table.property('columnKeys') or [])
+        header = table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        table.setWordWrap(False)
+        table.setTextElideMode(Qt.TextElideMode.ElideMiddle)
+        table.resizeColumnsToContents()
+        header_metrics = QFontMetrics(header.font())
+        cell_metrics = QFontMetrics(table.font())
+        for column, key in enumerate(keys):
+            item = table.horizontalHeaderItem(column)
+            minimum = header_metrics.horizontalAdvance(item.text() if item else '') + 28
+            width = max(minimum, table.columnWidth(column))
+            if key == 'output_name':
+                # Give the actual filename its full width; the user can resize it afterwards.
+                text_width = max((
+                    cell_metrics.horizontalAdvance(table.item(row, column).text())
+                    for row in range(table.rowCount()) if table.item(row, column)
+                ), default=0)
+                width = max(320, minimum, text_width + 36)
+            elif key in ('path', 'sub_path'):
+                width = max(minimum, min(360, max(220, width)))
+            elif key == 'vpy_path':
+                width = max(minimum, 300)
+            elif key in ('m2ts_file', 'm2ts_file_detail'):
+                width = max(minimum, min(280, width))
+            elif key == 'remux_cmd':
+                width = max(minimum, 480)
+            elif key == 'info':
+                width = max(620, max((
+                    child.horizontalHeader().length() + child.verticalHeader().width() + 6
+                    for row in range(table.rowCount())
+                    if isinstance((child := table.cellWidget(row, column)), QTableWidget)
+                ), default=0))
+            table.setColumnWidth(column, width)
+        self._apply_hidden_m2ts_file_detail_columns()
 
-                    col_play = labels.index('play')
-                    header.setSectionResizeMode(col_play, QHeaderView.ResizeMode.Fixed)
-                    table.setColumnWidth(col_play, 68)
-                    for key in ('duration', 'vpy_path', 'edit_vpy', 'preview_script', 'edit_tracks', 'edit_chapters'):
-                        header.setSectionResizeMode(labels.index(key), QHeaderView.ResizeMode.Interactive)
-                    table.setWordWrap(False)
-                else:
-                    header.setStretchLastSection(False)
-                    # Keep output name readable but bounded.
-                    col_output = ENCODE_SP_LABELS.index('output_name')
-                    header.setSectionResizeMode(col_output, QHeaderView.ResizeMode.Fixed)
-                    fixed_limit = 280
-                    fm_h = QFontMetrics(header.font())
-                    header_item = table.horizontalHeaderItem(col_output)
-                    max_w = fm_h.horizontalAdvance(header_item.text()) if header_item and header_item.text() else 0
-                    fm_c = QFontMetrics(table.font())
-                    for r in range(table.rowCount()):
-                        it = table.item(r, col_output)
-                        if it and it.text():
-                            max_w = max(max_w, fm_c.horizontalAdvance(it.text()))
-                    desired = min(fixed_limit, int(max_w + 24))
-                    # Minimum width avoids zero/narrow output column (path text painting into tracks on Windows).
-                    table.setColumnWidth(col_output, max(160, desired))
-
-                    # Make m2ts_file column fixed-width and wrap long file lists.
-                    col_m2ts = ENCODE_SP_LABELS.index('m2ts_file')
-                    header.setSectionResizeMode(col_m2ts, QHeaderView.ResizeMode.Fixed)
-                    table.setColumnWidth(col_m2ts, 220)
-                    try:
-                        col_m2ts_d = ENCODE_SP_LABELS.index('m2ts_file_detail')
-                        header.setSectionResizeMode(col_m2ts_d, QHeaderView.ResizeMode.Fixed)
-                        table.setColumnWidth(col_m2ts_d, 280)
-                    except Exception:
-                        pass
-                    table.setWordWrap(False)
-        except Exception:
-            pass
-        try:
-            self._apply_hidden_m2ts_file_detail_columns()
-        except Exception:
-            pass
-
-    def _set_compact_table(self, table: QTableWidget, row_height: int = 22, header_height: int = 22):
+    def _set_compact_table(self, table: QTableWidget, row_height: int = 28, header_height: int = 28):
+        row_height = max(row_height, table.fontMetrics().height() + 10)
+        header_height = max(header_height, table.horizontalHeader().fontMetrics().height() + 10)
         table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
-        table.verticalHeader().setDefaultSectionSize(row_height)
         table.verticalHeader().setMinimumSectionSize(row_height)
+        table.verticalHeader().setDefaultSectionSize(row_height)
         table.horizontalHeader().setFixedHeight(header_height)
 
-    def _scroll_table_h_to_right(self, table: QTableWidget):
+    def _scroll_table_to_primary_column(self, table: QTableWidget):
         def scroll():
             bar = table.horizontalScrollBar()
             if bar.isSliderDown():
                 return
-            bar.setValue(bar.maximum())
+            keys = list(table.property('columnKeys') or [])
+            primary = 'info' if table is getattr(self, 'table1', None) else 'output_name'
+            if table.rowCount() == 0 or primary not in keys:
+                bar.setValue(bar.minimum())
+                return
+            column = keys.index(primary)
+            left = table.columnViewportPosition(column) + bar.value()
+            spare = max(0, table.viewport().width() - table.columnWidth(column))
+            bar.setValue(max(0, left - (spare // 2 if primary == 'output_name' else 0)))
 
-        # Delayed retries make an already painted table visibly jump after chapter or playback actions.
         QTimer.singleShot(0, scroll)
+
+    def _create_table_section(
+            self, table: QTableWidget, title: str, description: str, minimum_height: int,
+    ) -> tuple[QGroupBox, QLabel]:
+        section = QGroupBox(self.t(title), self)
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(10, 20, 10, 10)
+        layout.setSpacing(8)
+        hint = QLabel(self.t(description), section)
+        hint.setWordWrap(True)
+        hint.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        layout.addWidget(hint)
+        table.setMinimumHeight(minimum_height)
+        layout.addWidget(table)
+        if table is self.table1:
+            table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+            table.verticalHeader().setMinimumSectionSize(160)
+            table.verticalHeader().setDefaultSectionSize(220)
+        return section, hint
+
+    def _refresh_table_descriptions(self):
+        if getattr(self, 'table2_section', None) is None:
+            return
+        function_id = self.get_selected_function_id()
+        if function_id in (1, 2):
+            self.table1_description.setText(self.t(
+                'Select the main playlists for each disc. Use the row buttons to inspect chapters and timing.'
+            ))
+        else:
+            self.table1_description.setText(self.t(
+                'Select the main playlists for each disc. Inspect chapters, timing and tracks with the row buttons.'
+            ))
+        if function_id == 1:
+            title = self.t('Subtitle alignment')
+            description = self.t('Match subtitles to episodes, then adjust chapter selection and timing offsets.')
+        elif function_id == 2:
+            title = self.t('MKV files')
+            description = self.t('These files receive the selected chapters. Review the source paths and durations.')
+        elif function_id == 5:
+            title = self.t('Main playlists')
+            description = self.t('Review chapter ranges and track settings for the selected main playlists.')
+        elif function_id == 4 and getattr(self, '_encode_input_mode', 'bdmv') == 'remux':
+            title = self.t('Main outputs')
+            description = self.t('One row per main output. Adjust output names, tracks and the VPy script.')
+        else:
+            title = self.t('Main outputs')
+            description = self.t('One row per main output. Adjust chapter ranges, output names and optional subtitles.')
+        self.table2_section.setTitle(title)
+        self.table2_description.setText(description)
 
     def _set_table_column_visual_order(self, table: QTableWidget, order: list[int]):
         header = table.horizontalHeader()

@@ -749,6 +749,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
         widget.setLayout(layout)
 
         line_edit = QLineEdit(widget)
+        line_edit.textChanged.connect(line_edit.setToolTip)
         line_edit.setText(initial_path or self.get_default_vpy_path())
 
         button = QPushButton(self.t('Select'), widget)

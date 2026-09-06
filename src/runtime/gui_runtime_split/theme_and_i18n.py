@@ -96,6 +96,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                 widget.setFont(f)
             except Exception:
                 pass
+        self._refresh_language_dependent_sizes()
         self.update()
 
     def _on_font_size_changed(self):
@@ -466,51 +467,28 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
         return [self.t(header_text.get(key, key.replace('_', ' '))) for key in keys]
 
     def _refresh_language_dependent_sizes(self):
-        lang = getattr(self, '_language_code', None) or core_settings.CURRENT_UI_LANGUAGE
-        try:
-            if hasattr(self, 'table1') and self.table1:
-                function_id = self.get_selected_function_id() if hasattr(self, 'get_selected_function_id') else 0
-                if function_id in (3, 4, 5):
-                    self.table1.setColumnWidth(2, 740 if lang == 'zh' else 680)
-                else:
-                    self.table1.setColumnWidth(2, 540 if lang == 'zh' else 490)
-                for r in range(self.table1.rowCount()):
-                    info_table = self.table1.cellWidget(r, 2)
-                    if isinstance(info_table, QTableWidget):
-                        info_table.resizeColumnsToContents()
-        except Exception:
-            pass
-
-        try:
-            if hasattr(self, 'x265_preset_combo') and self.x265_preset_combo:
-                self._adjust_combo_width_to_contents(self.x265_preset_combo)
-        except Exception:
-            pass
-
-        try:
-            if hasattr(self, 'approx_episode_minutes_combo') and self.approx_episode_minutes_combo:
-                self._adjust_combo_width_to_contents(self.approx_episode_minutes_combo, padding=54, min_width=120,
-                                                     max_width=220)
-        except Exception:
-            pass
-
-        try:
-            if hasattr(self, 'table2') and self.table2:
-                self._resize_table_columns_for_language(self.table2)
-        except Exception:
-            pass
-
-        try:
-            if hasattr(self, 'table3') and self.table3:
-                self._resize_table_columns_for_language(self.table3)
-        except Exception:
-            pass
-
-        try:
-            if hasattr(self, 'table1') and self.table1:
-                for r in range(self.table1.rowCount()):
-                    info_table = self.table1.cellWidget(r, 2)
-                    if isinstance(info_table, QTableWidget):
-                        self._resize_table_columns_for_language(info_table)
-        except Exception:
-            pass
+        table1 = getattr(self, 'table1', None)
+        tables = [getattr(self, name, None) for name in ('table2', 'table3')]
+        if table1 is not None:
+            tables.extend(
+                table1.cellWidget(row, 2) for row in range(table1.rowCount())
+                if isinstance(table1.cellWidget(row, 2), QTableWidget)
+            )
+        for table in tables:
+            if table is not None:
+                self._set_compact_table(table)
+                self._resize_table_columns_for_language(table)
+                self._scroll_table_to_primary_column(table)
+        if table1 is not None:
+            table1.horizontalHeader().setFixedHeight(table1.fontMetrics().height() + 10)
+            self._resize_table_columns_for_language(table1)
+            self._scroll_table_to_primary_column(table1)
+        preset = getattr(self, 'x265_preset_combo', None)
+        if preset is not None:
+            self._adjust_combo_width_to_contents(preset)
+        duration = getattr(self, 'approx_episode_minutes_combo', None)
+        if duration is not None:
+            self._adjust_combo_width_to_contents(duration, padding=54, min_width=120, max_width=220)
+        params = getattr(self, 'x265_params_edit', None)
+        if params is not None:
+            params.setFixedHeight(max(96, params.fontMetrics().lineSpacing() * 3 + 16))

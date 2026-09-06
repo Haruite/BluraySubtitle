@@ -7,7 +7,7 @@ from functools import partial
 from typing import Optional
 
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtWidgets import QSizePolicy, QComboBox, QTableWidgetItem, QToolButton, QTableWidget
+from PyQt6.QtWidgets import QComboBox, QTableWidgetItem, QToolButton, QTableWidget
 
 from src.bdmv.chapter import Chapter, episode_tail_trim_plan
 from src.core import ENCODE_REMUX_LABELS, ENCODE_REMUX_SP_LABELS, ENCODE_LABELS, ENCODE_SP_LABELS, REMUX_LABELS, \
@@ -36,19 +36,6 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     self.table1.setVisible(True)
                 if hasattr(self, 'label1_container') and self.label1_container:
                     self.label1_container.setVisible(True)
-                    self.label1_container.setMinimumHeight(0)
-                    self.label1_container.setMaximumHeight(16777215)
-                    self.label1_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-                if hasattr(self, 'label2_container') and self.label2_container:
-                    self.label2_container.setMinimumHeight(0)
-                    self.label2_container.setMaximumHeight(16777215)
-                    self.label2_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-                if hasattr(self, 'tables_splitter') and self.tables_splitter:
-                    total_h = max(320, self.tables_splitter.height() or self.height())
-                    half = max(160, int(total_h * 0.5))
-                    self.tables_splitter.setStretchFactor(0, 1)
-                    self.tables_splitter.setStretchFactor(1, 1)
-                    self.tables_splitter.setSizes([half, max(160, total_h - half)])
                 if hasattr(self, 'series_mode_radio') and self.series_mode_radio:
                     self.series_mode_radio.setEnabled(True)
                 if hasattr(self, 'movie_mode_radio') and self.movie_mode_radio:
@@ -92,39 +79,6 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
         except Exception:
             pass
         try:
-            if hasattr(self, 'tables_splitter') and self.tables_splitter:
-                if remux_mode:
-                    total_h = max(320, self.tables_splitter.height() or self.height())
-                    top_h = 0
-                    if hasattr(self, 'label1_container') and self.label1_container:
-                        self.label1_container.setMinimumHeight(0)
-                        self.label1_container.setMaximumHeight(0)
-                        self.label1_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-                    if hasattr(self, 'label2_container') and self.label2_container:
-                        self.label2_container.setMinimumHeight(0)
-                        self.label2_container.setMaximumHeight(16777215)
-                        self.label2_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-                    self.tables_splitter.setStretchFactor(0, 0)
-                    self.tables_splitter.setStretchFactor(1, 1)
-                    self.tables_splitter.setSizes([top_h, max(220, total_h - top_h)])
-                else:
-                    total_h = max(320, self.tables_splitter.height() or self.height())
-                    half = max(160, int(total_h * 0.5))
-                    if hasattr(self, 'label1_container') and self.label1_container:
-                        self.label1_container.setMinimumHeight(0)
-                        self.label1_container.setMaximumHeight(16777215)
-                        self.label1_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-                    if hasattr(self, 'label2_container') and self.label2_container:
-                        self.label2_container.setMinimumHeight(0)
-                        self.label2_container.setMaximumHeight(16777215)
-                        self.label2_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-                    self.tables_splitter.setStretchFactor(0, 1)
-                    self.tables_splitter.setStretchFactor(1, 1)
-                    self.tables_splitter.setSizes([half, max(160, total_h - half)])
-        except Exception:
-            pass
-
-        try:
             if hasattr(self, 'series_mode_radio') and self.series_mode_radio:
                 self.series_mode_radio.setEnabled(not remux_mode)
                 if remux_mode:
@@ -145,20 +99,17 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             self.table3.setColumnCount(len(ENCODE_REMUX_SP_LABELS))
             self._set_table_headers(self.table3, ENCODE_REMUX_SP_LABELS)
             self._update_language_combo_enabled_state()
-            if getattr(self, '_language_updating', False):
-                self.table2.resizeColumnsToContents()
-                self._resize_table_columns_for_language(self.table2)
-                self._scroll_table_h_to_right(self.table2)
-                self.table3.resizeColumnsToContents()
-                self._resize_table_columns_for_language(self.table3)
-                self._scroll_table_h_to_right(self.table3)
-            else:
+            if not getattr(self, '_language_updating', False):
                 self.table2.setRowCount(0)
                 self.table3.setRowCount(0)
                 try:
                     self._populate_encode_from_remux_folder()
                 except Exception:
                     pass
+            self._resize_table_columns_for_language(self.table2)
+            self._scroll_table_to_primary_column(self.table2)
+            self._resize_table_columns_for_language(self.table3)
+            self._scroll_table_to_primary_column(self.table3)
         else:
             # BDMV vs remux use different column counts and semantics (ENCODE_LABELS has bdmv/chapter/m2ts;
             # ENCODE_REMUX has output/vpy earlier + mkv track buttons). If we only resize columns, old
@@ -182,7 +133,6 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             except Exception:
                 print_exc_terminal()
             try:
-                self.table2.resizeColumnsToContents()
                 self._resize_table_columns_for_language(self.table2)
                 if self._is_movie_mode():
                     fid = self.get_selected_function_id()
@@ -194,12 +144,13 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                         t2labels = list(REMUX_LABELS)
                     self._finalize_movie_mode_table2_layout(t2labels)
                 else:
-                    self._scroll_table_h_to_right(self.table2)
-                self.table3.resizeColumnsToContents()
+                    self._scroll_table_to_primary_column(self.table2)
                 self._resize_table_columns_for_language(self.table3)
-                self._scroll_table_h_to_right(self.table3)
+                self._scroll_table_to_primary_column(self.table3)
             except Exception:
                 pass
+
+        self._refresh_table_descriptions()
 
     def _apply_episode_mode_to_table2(self):
         if not hasattr(self, '_subtitle_scan_debounce'):
@@ -1228,7 +1179,6 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                         for i, sub_file in enumerate(sub_files):
                             if (not self._is_movie_mode()) and i < len(configuration) and i < self.table2.rowCount():
                                 self.table2.setItem(i, 0, FilePathTableWidgetItem(sub_file))
-                self.table2.resizeColumnsToContents()
                 self._resize_table_columns_for_language(self.table2)
                 self._update_language_combo_enabled_state()
                 if self._is_movie_mode():
@@ -1241,7 +1191,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 if self._is_movie_mode():
                     self._finalize_movie_mode_table2_layout(labels)
                 else:
-                    self._scroll_table_h_to_right(self.table2)
+                    self._scroll_table_to_primary_column(self.table2)
                     # Continuation rows may have been regenerated from the edited bound. Compare the next user
                     # action with these visible rows, not with the pre-regeneration snapshot.
                     self._last_config_inputs = self._collect_config_inputs()
@@ -1306,7 +1256,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                         self.table2.setItem(row, ep_duration_col, None)
                         self.table2.setCellWidget(row, chapter_col, None)
                         self.table2.setItem(row, offset_col, None)
-                self.table2.resizeColumnsToContents()
+                self._resize_table_columns_for_language(self.table2)
                 self.altered = True
         except Exception:
             self._show_error_dialog(traceback.format_exc())
@@ -1394,7 +1344,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
         if hasattr(self, '_sub_pack_row') and self._sub_pack_row:
             self._sub_pack_row.setVisible(function_id == 4)
         if hasattr(self, 'table3'):
-            self.table3.setVisible(function_id in (3, 4))
+            self.table3_section.setVisible(function_id in (3, 4))
             try:
                 labels = DIY_SP_LABELS if function_id == 5 else ENCODE_SP_LABELS
                 if function_id == 4 and getattr(self, '_encode_input_mode', 'bdmv') == 'remux':
@@ -1413,7 +1363,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     self._apply_hidden_m2ts_file_detail_columns()
                 except Exception:
                     pass
-                self._scroll_table_h_to_right(self.table3)
+                self._scroll_table_to_primary_column(self.table3)
             except Exception:
                 pass
 
@@ -1429,8 +1379,6 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     self._set_table_headers(self.table1, table1_labels)
                 cmd_col = table1_labels.index('remux_cmd') if 'remux_cmd' in table1_labels else -1
                 if cmd_col >= 0:
-                    self.table1.setColumnWidth(cmd_col, 420 if getattr(self, '_language_code',
-                                                                       CURRENT_UI_LANGUAGE) == 'zh' else 380)
                     self._refresh_table1_remux_cmds()
             except Exception:
                 pass
@@ -1583,7 +1531,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     self.table3.setColumnCount(len(DIY_SP_LABELS))
                     self._set_table_headers(self.table3, DIY_SP_LABELS)
             if hasattr(self, 'table3'):
-                self.table3.setVisible(False)
+                self.table3_section.setVisible(False)
             simple_diy = bool(getattr(self, 'diy_simple_radio', None) and self.diy_simple_radio.isChecked())
             if hasattr(self, 'label2'):
                 self.label2.setText(self.t("Select subtitles folder"))
@@ -1645,6 +1593,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             self._reposition_subtitle_path_box()
         except Exception:
             pass
+        self._refresh_table_descriptions()
         self._refresh_function_tabbar_theme()
         # Encode / DIY+encode: update codec row vs DIY hint, then refill bit depth (Blu-ray Encode has full BPP list).
         try:

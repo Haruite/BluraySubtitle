@@ -16,8 +16,8 @@ from typing import Optional
 
 from PyQt6.QtCore import Qt, QTimer, QCoreApplication, QThread
 from PyQt6.QtWidgets import QApplication, QVBoxLayout, QWidget, QHBoxLayout, QLabel, QComboBox, QSlider, QGroupBox, \
-    QLineEdit, QTabBar, QRadioButton, QButtonGroup, QPushButton, QCheckBox, QTableWidget, QSizePolicy, QSplitter, \
-    QProgressDialog, QProgressBar, QFileDialog
+    QLineEdit, QTabBar, QRadioButton, QButtonGroup, QPushButton, QCheckBox, QTableWidget, QSizePolicy, QScrollArea, \
+    QProgressDialog, QProgressBar, QFileDialog, QFrame
 
 from src.core import APP_TITLE, BDMV_LABELS, SUBTITLE_LABELS, ENCODE_SP_LABELS
 from src.core.app_config import FUNCTION_PAGE_IDS, app_config_path, default_app_config, load_app_config
@@ -66,8 +66,8 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
     def init_ui(self):
         self.setWindowTitle(APP_TITLE)
         self.setMinimumWidth(860)
-        self.setMinimumHeight(820)
-        self.resize(1000, 1000)
+        self.setMinimumHeight(600)
+        self.resize(1120, 900)
         self._language_code = self._app_config.ui.language
         self._theme_mode = self._app_config.ui.theme
         self._colorful_opacity = self._app_config.ui.opacity / 100.0
@@ -77,9 +77,21 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         if app:
             app.aboutToQuit.connect(self.delete_default_vpy_file)
 
-        self.layout = QVBoxLayout()
-        self.layout.setContentsMargins(8, 8, 8, 8)
-        self.layout.setSpacing(6)
+        outer_layout = QVBoxLayout()
+        outer_layout.setContentsMargins(8, 8, 8, 8)
+        outer_layout.setSpacing(8)
+        self.content_scroll = QScrollArea(self)
+        self.content_scroll.setObjectName('contentScroll')
+        self.content_scroll.setWidgetResizable(True)
+        self.content_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.content_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.content_scroll.verticalScrollBar().setSingleStep(32)
+        content = QWidget()
+        content.setObjectName('scrollContent')
+        self.layout = QVBoxLayout(content)
+        self.layout.setContentsMargins(0, 0, 4, 0)
+        self.layout.setSpacing(12)
+        self.content_scroll.setWidget(content)
 
         language_row = QWidget(self)
         language_layout = QHBoxLayout()
@@ -146,7 +158,8 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.settings_button = QPushButton(self.t('Settings'), language_row)
         self.settings_button.clicked.connect(lambda _=None: self._show_settings_dialog())
         language_layout.addWidget(self.settings_button)
-        self.layout.addWidget(language_row)
+        outer_layout.addWidget(language_row)
+        outer_layout.addWidget(self.content_scroll, 1)
 
         function_button = QGroupBox(self.t('Function'), self)
         self.function_button = function_button
@@ -265,8 +278,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             lambda _=None: self._rebuild_configuration_for_function_34())
         self.layout.addWidget(self.episode_mode_row)
 
-        bdmv = QGroupBox()
-        bdmv.setProperty("noTitle", True)
+        bdmv = QWidget()
         bdmv_top = QVBoxLayout()
         bdmv_top.setContentsMargins(8, 2, 8, 6)
         bdmv_top.setSpacing(4)
@@ -396,8 +408,12 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.table1.setSortingEnabled(True)
         self.table1.horizontalHeader().setSortIndicatorShown(True)
         self.bdmv_folder_path.textChanged.connect(self.on_bdmv_folder_path_change)
-        v_layout.addWidget(self.table1)
-        v_layout.setStretch(v_layout.indexOf(self.table1), 1)
+        self.table1_section, self.table1_description = self._create_table_section(
+            self.table1, 'Sources and playlists',
+            'Select the main playlists for each disc. Inspect chapters, timing and tracks with the row buttons.',
+            480,
+        )
+        v_layout.addWidget(self.table1_section)
         bdmv_top.addWidget(bdmv_body, 1)
         try:
             idx = self.layout.indexOf(self.episode_mode_row)
@@ -408,11 +424,10 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         except Exception:
             self.layout.insertWidget(1, self.encode_source_row)
 
-        subtitle = QGroupBox()
-        subtitle.setProperty("noTitle", True)
+        subtitle = QWidget()
         subtitle_inner_layout = QVBoxLayout()
         subtitle_inner_layout.setContentsMargins(8, 2, 8, 6)
-        subtitle_inner_layout.setSpacing(4)
+        subtitle_inner_layout.setSpacing(12)
         subtitle.setLayout(subtitle_inner_layout)
 
         label2_container = QWidget(self)
@@ -645,18 +660,19 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.table3.horizontalHeader().setSectionsMovable(False)
         self._updating_sp_table = False
         self.table3.itemChanged.connect(self._on_table3_item_changed)
-        self.table3.setVisible(False)
-        self.subtitle_tables_splitter = QSplitter(Qt.Orientation.Vertical, subtitle)
-        self.subtitle_tables_splitter.setObjectName('subtitleTablesSplitter')
-        self.subtitle_tables_splitter.setChildrenCollapsible(False)
-        self.subtitle_tables_splitter.addWidget(self.table2)
-        self.subtitle_tables_splitter.addWidget(self.table3)
-        self.subtitle_tables_splitter.setStretchFactor(0, 1)
-        self.subtitle_tables_splitter.setStretchFactor(1, 1)
-        self.subtitle_tables_splitter.setSizes([360, 360])
-        subtitle_inner_layout.addWidget(self.subtitle_tables_splitter)
-        subtitle_inner_layout.setStretch(
-            subtitle_inner_layout.indexOf(self.subtitle_tables_splitter), 1)
+        self.table2_section, self.table2_description = self._create_table_section(
+            self.table2, 'Main outputs',
+            'One row per main output. Adjust chapter ranges, output names and optional subtitles.',
+            360,
+        )
+        self.table3_section, self.table3_description = self._create_table_section(
+            self.table3, 'Bonus features (SP)',
+            'Select the bonus features to output, then review their names and tracks. Encode also offers VPy editing and preview.',
+            360,
+        )
+        self.table3_section.setVisible(False)
+        subtitle_inner_layout.addWidget(self.table2_section)
+        subtitle_inner_layout.addWidget(self.table3_section)
 
         self._subtitle_tables_host = subtitle
         self._label2_outer_layout.addWidget(subtitle)
@@ -665,17 +681,8 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         label2_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         bdmv.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         subtitle.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        tables_splitter = QSplitter(Qt.Orientation.Vertical, self)
-        self.tables_splitter = tables_splitter
-        tables_splitter.setObjectName('tablesSplitter')
-        tables_splitter.setChildrenCollapsible(False)
-        tables_splitter.addWidget(label1_container)
-        tables_splitter.addWidget(label2_container)
-        tables_splitter.setStretchFactor(0, 1)
-        tables_splitter.setStretchFactor(1, 1)
-        tables_splitter.setSizes([480, 480])
-        self.layout.addWidget(tables_splitter)
-        self.layout.setStretch(self.layout.indexOf(tables_splitter), 1)
+        self.layout.addWidget(label1_container)
+        self.layout.addWidget(label2_container)
 
         self.encode_box = QGroupBox('Encode', self)
         self.encode_box.setProperty("tightGroup", True)
@@ -737,14 +744,14 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.layout.addWidget(self.output_folder_row)
         self.exe_button = QPushButton("Generate Subtitles")
         self.exe_button.clicked.connect(self.main)
-        self.exe_button.setMinimumHeight(38)
-        self.layout.addWidget(self.exe_button)
+        self.exe_button.setMinimumHeight(42)
+        outer_layout.addWidget(self.exe_button)
         self.bottom_message_label = QLabel('', self)
         self.bottom_message_label.setStyleSheet('color: #007BFF;')
         self.bottom_message_label.setVisible(False)
         self.layout.addWidget(self.bottom_message_label)
 
-        self.setLayout(self.layout)
+        self.setLayout(outer_layout)
         self._available_track_selection_config: dict[str, dict[str, list[str]]] = {}
         self._track_selection_config: dict[str, dict[str, list[str]]] = {}
         self._track_convert_config: dict[str, dict[str, str]] = {}
