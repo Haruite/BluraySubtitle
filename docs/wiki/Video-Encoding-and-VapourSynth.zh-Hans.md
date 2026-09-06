@@ -185,7 +185,7 @@ Encode 的五项控制在启动时替换默认 VPy 的 `denoise_strength`、`deh
 
 ### 自动 HDR 元数据处理
 
-Dolby Vision MKV 输入会在编码前提取 HEVC，并准备任务自有的基础层和 RPU 文件；必需中间产物缺失或无效会使该行失败，不会静默丢弃 Dolby Vision。
+x265 对 Dolby Vision MKV 输入在转换前检查原始 RPU，识别失败按 FEL 处理，准备基础层及 profile 8.1 RPU 供编码使用，并在现有完成弹窗中提示 FEL 图像残差未被利用。SVT-AV1 统一提示不会保留 Dolby Vision，不区分 MEL／FEL。BDMV 中间混流保留 Dolby Vision 信息供这些完成提示使用。必需中间产物缺失或无效仍属于执行失败。
 
 启动编码器前，BluraySubtitle 会抽查输出 0 的首帧、中间帧和末帧。稳定的 `_ColorRange`、`_Primaries`、`_Transfer`、`_Matrix` 和 `_ChromaLocation` 属性优先于来源元数据，缺失属性则回退到来源；抽查值不一致时当前行会停止。
 

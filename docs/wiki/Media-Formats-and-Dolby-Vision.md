@@ -205,7 +205,7 @@ Useful terms are:
 - **BL — Base Layer**: the independently decodable base picture, often compatible with HDR10 on UHD Blu-ray;
 - **EL — Enhancement Layer**: additional coded data used by some Dolby Vision profiles;
 - **RPU — Reference Processing Unit metadata**: dynamic Dolby Vision metadata carried in the HEVC stream;
-- **MEL — Minimum Enhancement Layer**: an enhancement layer with minimal residual contribution;
+- **MEL — Minimum Enhancement Layer**: an enhancement layer whose effective image residual is zero;
 - **FEL — Full Enhancement Layer**: an enhancement layer that can carry additional residual picture information; and
 - **profile**: a defined combination of coding, layer, compatibility, and metadata constraints.
 
@@ -217,7 +217,7 @@ Do not use “two video tracks” as the sole Dolby Vision test. Stream descript
 
 ### Profile 8.1 in this project
 
-For compatible dual-layer Remux input, `dovi_tool -m 2 mux --discard` rewrites RPU metadata for profile 8.1 and discards enhancement-layer video, producing one base-plus-RPU HEVC track. A profile 7 FEL's picture residual is therefore not preserved merely because the RPU is retained.
+Before Remux, the project inspects the original RPU across the playlist and treats identification failure as FEL. Confirmed MEL is converted to profile 8.1 with `dovi_tool -m 2 mux --discard`; FEL or unrecognized layers retain profile 7 with BL, EL, and RPU. All parts of one playlist use the same output profile.
 
 Encode has separate bit-depth, crop, native-writing/injection, and verification requirements. These are documented together under [automatic HDR metadata handling](Video-Encoding-and-VapourSynth.md#automatic-hdr-metadata-handling).
 

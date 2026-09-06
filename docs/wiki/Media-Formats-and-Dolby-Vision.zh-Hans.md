@@ -205,7 +205,7 @@ Dolby Vision 是把编码画面与动态呈现元数据结合起来的 HDR 系�
 - **BL — Base Layer**：可独立解码的基础画面；在 UHD Blu-ray 上通常与 HDR10 兼容；
 - **EL — Enhancement Layer**：部分 Dolby Vision profile 使用的附加编码数据；
 - **RPU — Reference Processing Unit metadata**：携带在 HEVC 流中的动态 Dolby Vision 元数据；
-- **MEL — Minimum Enhancement Layer**：残差贡献最小的增强层；
+- **MEL — Minimum Enhancement Layer**：有效图像残差为零的增强层；
 - **FEL — Full Enhancement Layer**：能够携带额外残差画面信息的增强层；
 - **profile**：对编码、分层、兼容性和元数据约束的规定组合。
 
@@ -217,7 +217,7 @@ UHD Blu-ray Dolby Vision 通常使用 profile 7。原盘可以保存 HEVC 基础
 
 ### 本项目中的 profile 8.1
 
-对兼容的双层 Remux 输入，`dovi_tool -m 2 mux --discard` 将 RPU 改写为 profile 8.1 并丢弃增强层视频，生成单条基础层加 RPU 的 HEVC 轨道。因此，保留 RPU 不代表保留了 profile 7 FEL 的画面残差。
+Remux 前检查播放列表各片段的原始 RPU，识别失败按 FEL 处理。已确认的 MEL 使用 `dovi_tool -m 2 mux --discard` 转换为 profile 8.1；FEL 或无法识别的增强层保留 profile 7 的 BL、EL 和 RPU。同一播放列表的所有片段使用统一输出 profile。
 
 压制还有独立的位深、裁剪、原生写入／注入及验证要求，统一见[自动 HDR 元数据处理](Video-Encoding-and-VapourSynth.zh-Hans.md#自动-hdr-元数据处理)。
 

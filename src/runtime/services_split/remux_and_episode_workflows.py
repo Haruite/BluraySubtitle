@@ -2196,16 +2196,6 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         sp_entries = tuple(
             row.sp_entry for row in request.sp_rows if row.sp_entry is not None
         )
-        preserve_dolby_vision = (
-            request.mux_dolby_vision and request.settings.encoder != 'svtav1'
-        )
-        if request.mux_dolby_vision and not preserve_dolby_vision:
-            message = translate_text(
-                'Dolby Vision metadata will not be retained for SVT-AV1 output: {path}'
-            ).format(path=request.source_root)
-            print(f'[encode-dovi] {message}', flush=True)
-            self._progress(text=message)
-
         stage_request = RemuxRequest(
             bdmv_path=request.source_root,
             subtitle_files=subtitle_files,
@@ -2217,7 +2207,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             episode_output_names=episode_output_names,
             episode_subtitle_languages=episode_subtitle_languages,
             movie_mode=request.movie_mode,
-            mux_dolby_vision=preserve_dolby_vision,
+            mux_dolby_vision=request.mux_dolby_vision,
             convert_lossless_audio_to_flac=False,
             allow_partial_missing_non_video_tracks=(
                 request.allow_partial_missing_non_video_tracks

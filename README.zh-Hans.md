@@ -39,7 +39,7 @@ BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 
 - **允许非视频轨道部分缺失**默认关闭。只有 tsMuxer 无法恢复物理缺失的音频／字幕片段、且该轨道在输出其他位置存在时，才允许保留空档；缺失视频或整条已选轨道仍会失败。
 - **裁剪版权片段**可在分集结束于 M2TS 文件结尾时，移除最后 30 秒内的完整末尾片段。须检查结果，详见[具体规则与例外](docs/wiki/Blu-ray-Disc-Structure.zh-Hans.md#末尾的短版权片段)。
 - 所选外挂字幕作为软字幕轨内封进正片 MKV；Remux 不将其烧录进画面，也不另存为外挂输出。
-- **混流 Dolby Vision**将兼容分层转换为 profile 8.1；关闭时排除增强层。详见 [profile 8.1 的限制](docs/wiki/Media-Formats-and-Dolby-Vision.zh-Hans.md#本项目中的-profile-81)。
+- **混流 Dolby Vision**将已确认的 MEL 转换为 profile 8.1，FEL 或无法识别的增强层保留 profile 7；关闭时排除增强层。详见 [Dolby Vision 分层处理](docs/wiki/Media-Formats-and-Dolby-Vision.zh-Hans.md#本项目中的-profile-81)。
 
 混流后会应用并验证已保存的轨道语言。映射、工具或语言验证失败会停止任务并删除其新建的主输出；轨道数量和 MKVToolNix 数据包统计检查则在结束时汇总警告，后续 Remux 继续。
 
@@ -61,7 +61,7 @@ BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 
 - 默认 VPy 提供降噪、去光晕、去振铃、去色带和抗锯齿强度；这些控制及 getnative／裁剪／对比图／坏帧检测的启动默认值均保存在**高级**设置。
 - 自动 getnative 可能消耗较多时间和内存，并跳过高度超过 1080 像素的源；更高分辨率须手动运行 `src/scripts/getnative_file.py`。
 - 自动裁剪默认关闭，需检查画面。对比图写入 `<所选输出目录>/<来源文件夹名>/Compare`，完整逐帧 PSNR 报告写入 `FrameCheck`；完整检查会重新渲染 VPy，耗时可能为视频时长的数倍。
-- 兼容的色彩／HDR 元数据会写入输出。保留 Dolby Vision 须使用 x265 10/12-bit；x264 和 x265 8-bit 不支持，SVT-AV1 会提示省略。x265 10/12-bit 同时支持 HDR10+；自动裁剪会调整 Dolby Vision 有效画面元数据。
+- 兼容的色彩／HDR 元数据会写入输出。保留 Dolby Vision 须使用 x265 10/12-bit；x264 和 x265 8-bit 不支持。SVT-AV1 在完成弹窗中提示不会保留 Dolby Vision。x265 10/12-bit 同时支持 HDR10+；自动裁剪会调整 Dolby Vision 有效画面元数据。x265 保留 Dolby Vision 时，在同一完成弹窗中提示 FEL 图像残差未被利用，不因此使任务失败。
 
 默认值、参数、预览快捷键和元数据限制见[视频压制与 VapourSynth](docs/wiki/Video-Encoding-and-VapourSynth.zh-Hans.md)。
 

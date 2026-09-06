@@ -39,7 +39,7 @@ Each selected main MPLS has one non-empty editable mux command. Planned outputs 
 - **Allow partially missing non-video tracks** is disabled by default. It permits physically absent audio/subtitle intervals only when tsMuxer cannot recover them and the track exists elsewhere in the output. Missing video or a whole missing selected track still fails.
 - **Trim copyright bumper** can remove complete trailing clips in an episode's final 30 seconds when the episode ends at the M2TS file end. Review the result; see the [exact rule and exceptions](docs/wiki/Blu-ray-Disc-Structure.md#short-copyright-bumpers-at-the-end).
 - Selected external subtitles are soft-muxed into the main MKV. Remux does not burn them into video or copy them as external outputs.
-- **Mux Dolby Vision** converts compatible layers to profile 8.1; disabling it excludes the enhancement layer. See [profile 8.1 limitations](docs/wiki/Media-Formats-and-Dolby-Vision.md#profile-81-in-this-project).
+- **Mux Dolby Vision** converts confirmed MEL to profile 8.1 and retains profile 7 for FEL or unrecognized enhancement layers; disabling it excludes the enhancement layer. See [Dolby Vision layer handling](docs/wiki/Media-Formats-and-Dolby-Vision.md#profile-81-in-this-project).
 
 Saved track languages are applied and verified after muxing. Mapping/tool/language failures stop the task and remove its newly created main output. Track-count and MKVToolNix packet-statistics checks instead produce a final warning summary while later Remux work continues.
 
@@ -61,7 +61,7 @@ See [audio formats and conversion targets](docs/wiki/Media-Formats-and-Dolby-Vis
 - The generated VPy exposes denoise, dehalo, dering, deband, and anti-aliasing strengths. Startup defaults for these controls and the getnative/crop/comparison/frame-check options are stored under **Advanced**.
 - Automatic getnative can use substantial time and memory and skips sources taller than 1080 pixels. Higher-resolution analysis uses `src/scripts/getnative_file.py` manually.
 - Automatic crop is opt-in and needs visual review. Comparison images go to `<selected output>/<source folder name>/Compare`; full-frame PSNR reports go to `FrameCheck`. The full check rerenders the VPy and may take several times the video's duration.
-- Compatible color/HDR metadata is carried forward. Dolby Vision preservation requires x265 10/12-bit; x264 and x265 8-bit cannot preserve it, while SVT-AV1 reports its omission. x265 10/12-bit also supports HDR10+; automatic crop adjusts Dolby Vision active-area metadata.
+- Compatible color/HDR metadata is carried forward. Dolby Vision preservation requires x265 10/12-bit; x264 and x265 8-bit cannot preserve it. SVT-AV1 reports in the completion dialog that Dolby Vision is not retained. x265 10/12-bit also supports HDR10+; automatic crop adjusts Dolby Vision active-area metadata. When x265 preserves Dolby Vision, unused FEL image residuals are reported in the same completion dialog without failing the job.
 
 For defaults, parameters, preview keys, and metadata limitations, see [Video Encoding and VapourSynth](docs/wiki/Video-Encoding-and-VapourSynth.md).
 

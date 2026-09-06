@@ -6,14 +6,18 @@ import json
 import os
 import re
 import shutil
+import subprocess
+import time
 import tempfile
 from dataclasses import dataclass
+from typing import Callable
 
 from src.core import find_mkvtoolnix, mkvtoolnix_ui_language_arg
 from src.core import settings as core_settings
 from src.core.i18n import translate_text
 from src.exports.utils import run_command
 from src.runtime.video_crop import VideoCropPlan
+from src.runtime import TaskCancelled
 
 
 def dolby_vision_tool_path() -> str:
@@ -24,6 +28,96 @@ def dolby_vision_tool_path() -> str:
     return shutil.which('dovi_tool') or shutil.which('dovi_tool.exe') or ''
 
 
+def read_dolby_vision_rpu_info(rpu_path: str) -> tuple[int | None, str]:
+    """Read original metadata; only an explicit all-MEL result permits dropping EL."""
+    try:
+        result = run_command(
+            [dolby_vision_tool_path(), 'info', '-s', '-i', rpu_path],
+            capture_output=True, text=True, encoding='utf-8', errors='replace',
+            timeout=7200,
+        )
+        result.check_returncode()
+        match = re.search(
+            r'^\s*Profile:\s*(\d+)(?:\s+\(([^)]+)\))?\s*$',
+            result.stdout or '', re.MULTILINE,
+        )
+        if match:
+            profile = int(match.group(1))
+            layer_type = ('MEL' if match.group(2) == 'MEL' else 'FEL') if profile == 7 else ''
+            return profile, layer_type
+        raise ValueError(translate_text('Missing or mixed Dolby Vision profile summary'))
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        print(translate_text(
+            'Dolby Vision identification failed; treating the source as FEL: {path} ({error})'
+        ).format(path=rpu_path, error=error))
+        return None, 'FEL'
+
+
+def inspect_dolby_vision(
+        source_path: str,
+        rpu_path: str,
+        *,
+        video_pid: int | None = None,
+        check_cancel: Callable[[], None] | None = None,
+) -> tuple[int | None, str]:
+    """Extract original RPU without decoding video; classification failures use FEL."""
+    processes = []
+    try:
+        with tempfile.TemporaryFile() as demux_errors:
+            producer = None
+            if video_pid is not None:
+                producer = run_command(
+                    [
+                        core_settings.FFMPEG_PATH, '-nostdin', '-v', 'error',
+                        '-i', source_path, '-map', f'0:i:{video_pid}',
+                        '-c:v', 'copy', '-f', 'hevc', '-',
+                    ],
+                    wait=False, stdout=subprocess.PIPE, stderr=demux_errors,
+                )
+                processes.append(producer)
+            extractor = run_command(
+                [
+                    dolby_vision_tool_path(), 'extract-rpu',
+                    '-' if producer else source_path, '-o', rpu_path,
+                ],
+                wait=False, stdin=producer.stdout if producer else subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, encoding='utf-8', errors='replace',
+            )
+            processes.append(extractor)
+            if producer and producer.stdout:
+                producer.stdout.close()
+            deadline = time.monotonic() + 7200
+            while True:
+                if check_cancel:
+                    check_cancel()
+                if time.monotonic() >= deadline:
+                    raise subprocess.TimeoutExpired(extractor.args, 7200)
+                try:
+                    output, _ = extractor.communicate(timeout=0.1)
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+            if extractor.returncode:
+                raise ValueError(output.strip() or translate_text(
+                    'dovi_tool exited with code {code}'
+                ).format(code=extractor.returncode))
+            if producer and producer.wait(timeout=10):
+                demux_errors.seek(0)
+                raise ValueError(demux_errors.read().decode('utf-8', errors='replace').strip())
+            return read_dolby_vision_rpu_info(rpu_path)
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        print(translate_text(
+            'Dolby Vision identification failed; treating the source as FEL: {path} ({error})'
+        ).format(path=source_path, error=error))
+        return None, 'FEL'
+    finally:
+        for process in reversed(processes):
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+
+
 @dataclass(frozen=True)
 class DolbyVisionEncodePlan:
     """Task-owned files used to preserve Dolby Vision through an HEVC encode."""
@@ -31,6 +125,7 @@ class DolbyVisionEncodePlan:
     base_layer_path: str
     rpu_path: str
     work_folder: str
+    fel_residual_discarded: bool = False
 
     def cleanup(self) -> None:
         if self.work_folder and os.path.isdir(self.work_folder):
@@ -54,8 +149,10 @@ def prepare_dolby_vision_encode(
         track_id: int,
         temporary_parent: str,
         crop_plan: VideoCropPlan | None = None,
+        *,
+        check_cancel: Callable[[], None] | None = None,
 ) -> DolbyVisionEncodePlan:
-    """Extract a Dolby Vision track, create a profile 8.1 BL, and extract converted RPU metadata."""
+    """Identify the original layer and prepare base video plus profile 8.1 RPU for Encode."""
     source_path = os.path.abspath(os.path.normpath(mkv_path))
     if not os.path.isfile(source_path):
         raise FileNotFoundError(source_path)
@@ -71,8 +168,8 @@ def prepare_dolby_vision_encode(
     work_folder = tempfile.mkdtemp(prefix='_dovi_encode_', dir=temporary_parent)
     source_hevc = os.path.join(work_folder, 'source.hevc')
     base_layer = os.path.join(work_folder, 'base-layer.hevc')
-    enhancement_layer = os.path.join(work_folder, 'enhancement-layer.hevc')
     rpu_path = os.path.join(work_folder, 'rpu.bin')
+    original_rpu_path = os.path.join(work_folder, 'rpu-original.bin')
     extracted_rpu_path = (
         os.path.join(work_folder, 'rpu-source.bin')
         if crop_plan is not None and crop_plan.has_crop
@@ -96,18 +193,15 @@ def prepare_dolby_vision_encode(
                 )
             )
 
-        demux_command = [
-            dovi_tool,
-            '-m',
-            '2',
-            'demux',
-            '-e',
-            enhancement_layer,
-            '-b',
-            base_layer,
-            source_hevc,
-        ]
-        if run_command(demux_command, cwd=work_folder, timeout=7200,
+        source_profile, layer_type = inspect_dolby_vision(
+            source_hevc, original_rpu_path, check_cancel=check_cancel,
+        )
+        fel_residual_discarded = source_profile is None or (
+            source_profile == 7 and layer_type != 'MEL'
+        )
+        # Removing DV data also works for P8.1 inputs that have no enhancement layer to demux.
+        base_command = [dovi_tool, 'remove', source_hevc, '-o', base_layer]
+        if run_command(base_command, cwd=work_folder, timeout=7200,
                        log_template='Dolby Vision command: {command}').returncode != 0 or not (
                 os.path.isfile(base_layer) and os.path.getsize(base_layer) > 0
         ):
@@ -117,15 +211,13 @@ def prepare_dolby_vision_encode(
                 )
             )
 
-        # The encoded output is single-layer, so its RPU must be converted from profile 7 to profile 8.1.
+        # Convert the already extracted metadata after identifying the original EL.
+        conversion_config = os.path.join(work_folder, 'rpu-conversion.json')
+        with open(conversion_config, 'w', encoding='utf-8', newline='') as stream:
+            stream.write('{"mode": 2}\r\n')
         rpu_command = [
-            dovi_tool,
-            '-m',
-            '2',
-            'extract-rpu',
-            source_hevc,
-            '-o',
-            extracted_rpu_path,
+            dovi_tool, 'editor', '-i', original_rpu_path,
+            '-j', conversion_config, '-o', extracted_rpu_path,
         ]
         if run_command(rpu_command, cwd=work_folder, timeout=7200,
                        log_template='Dolby Vision command: {command}').returncode != 0 or not (
@@ -144,11 +236,16 @@ def prepare_dolby_vision_encode(
                 crop_plan,
                 work_folder,
             )
-        return DolbyVisionEncodePlan(base_layer, rpu_path, work_folder)
+        return DolbyVisionEncodePlan(
+            base_layer, rpu_path, work_folder, fel_residual_discarded,
+        )
+    except TaskCancelled:
+        shutil.rmtree(work_folder, ignore_errors=True)
+        raise
     except Exception as error:
         artifact_paths = tuple(
             path
-            for path in (extracted_rpu_path, rpu_path)
+            for path in (original_rpu_path, extracted_rpu_path, rpu_path)
             if os.path.isfile(path) and os.path.getsize(path) > 0
         )
         if artifact_paths:
@@ -394,12 +491,10 @@ def verify_dolby_vision_rpu(
                 )
 
 
-def mux_dolby_vision_layers(base_layer: str, enhancement_layer: str) -> None:
-    """Convert a dual-layer profile 7 pair to a single-layer profile 8.1 stream.
-
-    dovi_tool mode 2 rewrites the RPU for profile 8.1 while ``--discard`` removes the enhancement-layer video.
-    The result replaces the task-owned BL only after dovi_tool creates a non-empty temporary output.
-    """
+def mux_dolby_vision_layers(
+        base_layer: str, enhancement_layer: str, *, convert_to_p81: bool,
+) -> None:
+    """Convert confirmed MEL to P8.1 or preserve the original P7 BL, EL and RPU."""
     base_path = os.path.abspath(os.path.normpath(base_layer))
     enhancement_path = os.path.abspath(os.path.normpath(enhancement_layer))
     dovi_tool = dolby_vision_tool_path()
@@ -415,14 +510,13 @@ def mux_dolby_vision_layers(base_layer: str, enhancement_layer: str) -> None:
         os.remove(temporary_output)
     command = [
         dovi_tool,
-        '-m',
-        '2',
+        *(['-m', '2'] if convert_to_p81 else []),
         'mux',
         '--bl',
         base_path,
         '--el',
         enhancement_path,
-        '--discard',
+        *(['--discard'] if convert_to_p81 else []),
         '-o',
         temporary_output,
     ]
@@ -448,6 +542,7 @@ __all__ = [
     'dolby_vision_tool_path',
     'edit_dolby_vision_rpu_for_crop',
     'inject_dolby_vision_rpu',
+    'inspect_dolby_vision',
     'mux_dolby_vision_layers',
     'prepare_dolby_vision_encode',
     'verify_dolby_vision_rpu',

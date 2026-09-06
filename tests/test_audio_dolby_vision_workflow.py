@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -28,9 +29,11 @@ from src.runtime.dolby_vision import (
     edit_dolby_vision_rpu_for_crop,
     inject_dolby_vision_rpu,
     mux_dolby_vision_layers,
+    read_dolby_vision_rpu_info,
     verify_dolby_vision_rpu,
 )
 from src.runtime.video_crop import VideoCropPlan
+from src.runtime.services import BluraySubtitle
 
 
 def _track(
@@ -559,6 +562,72 @@ class AudioAnalysisTests(unittest.TestCase):
 
 
 class DolbyVisionTests(unittest.TestCase):
+    def test_explicit_dovi_pair_is_not_skipped_when_both_layers_are_mappable(self) -> None:
+        base = {'StreamEntry': {'RefToStreamPID': 4113},
+                'StreamAttributes': {'StreamCodingType': 0x24}}
+        enhancement = {'StreamEntry': {'RefToStreamPID': 4117},
+                       'StreamAttributes': {'StreamCodingType': 0x24}}
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            playlist, source = root / '00000.mpls', root / '00000.m2ts'
+            playlist.touch()
+            source.touch()
+            for bucket in ('DVStreamEntries', 'SecondaryVideoStreamEntries'):
+                with (
+                        self.subTest(bucket=bucket),
+                        patch('src.bdmv.mpls.MPLS', return_value=SimpleNamespace(data={
+                            'PlayList': {'PlayItems': [{'STNTable': {
+                                'PrimaryVideoStreamEntries': [base], bucket: [enhancement],
+                            }}]},
+                        })),
+                        patch.object(BluraySubtitle, '_video_pids_on_m2ts', return_value=[4113, 4117]),
+                        patch.object(BluraySubtitle, '_mkvmerge_tid_for_pid',
+                                     side_effect=lambda _path, pid, _type: int(pid == 4117)),
+                ):
+                    pair = BluraySubtitle.detect_dovi_mux_pair(str(playlist), str(source), True)
+                    if bucket == 'DVStreamEntries':
+                        self.assertEqual((pair['bl_pid'], pair['el_pid']), (4113, 4117))
+                    else:
+                        self.assertIsNone(pair)
+
+    def test_residuals_are_discarded_only_for_confirmed_mel(self) -> None:
+        cases = (
+            ('Profile: 7 (MEL)', 0, True),
+            ('Profile: 7 (FEL)', 0, False),
+            ('Profile: 7 (FEL, MEL)', 0, False),
+            ('Profile: 7', 0, False),
+            ('invalid', 0, False),
+            ('Profile: 7 (MEL)', 1, False),
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            base, enhancement = root / 'base.hevc', root / 'el.hevc'
+            enhancement.write_bytes(b'residual')
+            for summary, exit_code, discard in cases:
+                with self.subTest(summary=summary, exit_code=exit_code):
+                    base.write_bytes(b'base')
+
+                    def run_tool(command, **_kwargs):
+                        if 'info' in command:
+                            return subprocess.CompletedProcess(command, exit_code, summary, '')
+                        output = Path(command[command.index('-o') + 1])
+                        output.write_bytes(base.read_bytes() + (
+                            b'' if '--discard' in command else enhancement.read_bytes()
+                        ))
+                        return subprocess.CompletedProcess(command, 0)
+
+                    with (
+                            patch('src.runtime.dolby_vision.dolby_vision_tool_path', return_value='dovi_tool'),
+                            patch('src.runtime.dolby_vision.run_command', side_effect=run_tool),
+                    ):
+                        profile, layer_type = read_dolby_vision_rpu_info('original-rpu.bin')
+                        mux_dolby_vision_layers(
+                            str(base), str(enhancement),
+                            convert_to_p81=profile == 7 and layer_type == 'MEL',
+                        )
+                    self.assertEqual(base.read_bytes(), b'base' if discard else b'baseresidual')
+                    self.assertEqual(enhancement.read_bytes(), b'residual')
+
     def test_layer_mux_replaces_only_the_base_layer_after_success(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -586,7 +655,9 @@ class DolbyVisionTests(unittest.TestCase):
                     patch('src.runtime.dolby_vision.dolby_vision_tool_path', return_value='dovi_tool'),
                     patch('src.runtime.dolby_vision.run_command', side_effect=run_dovi),
             ):
-                mux_dolby_vision_layers(str(base_layer), str(enhancement_layer))
+                mux_dolby_vision_layers(
+                    str(base_layer), str(enhancement_layer), convert_to_p81=True,
+                )
                 verify_dolby_vision_rpu(str(base_layer), 259, 8)
                 with self.assertRaisesRegex(RuntimeError, 'profile'):
                     verify_dolby_vision_rpu(str(base_layer), 259, 7)

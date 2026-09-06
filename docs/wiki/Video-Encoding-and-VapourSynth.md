@@ -187,7 +187,7 @@ The crop is even-aligned. Existing managed blocks are replaced or removed betwee
 
 ### Automatic HDR metadata handling
 
-For Dolby Vision MKV input, the workflow extracts HEVC and prepares task-owned base-layer and RPU files before encoding. Missing or invalid required intermediates fail the row rather than silently dropping Dolby Vision.
+With x265, Dolby Vision MKV input is checked using its original RPU before conversion; identification failure is treated as FEL. The workflow prepares base video and profile 8.1 RPU for encoding, then reports unused FEL image residuals in the existing completion dialog. SVT-AV1 uniformly reports that Dolby Vision is not retained, without distinguishing MEL/FEL. BDMV staging retains Dolby Vision information for these completion messages. Missing or invalid required intermediates remain execution failures.
 
 Before starting the encoder, BluraySubtitle samples output 0's first, middle, and last frames. Stable `_ColorRange`, `_Primaries`, `_Transfer`, `_Matrix`, and `_ChromaLocation` properties take precedence over source metadata; missing properties fall back to the source. The row stops if the sampled values differ.
 

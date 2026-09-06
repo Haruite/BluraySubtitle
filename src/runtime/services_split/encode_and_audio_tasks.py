@@ -1409,6 +1409,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
         managed_lwi_source = ''
         crop_plan: VideoCropPlan | None = None
         encode_dovi_plan: Optional[DolbyVisionEncodePlan] = None
+        dovi_completion_warning = ''
         preserve_dovi_work_folder = False
         if auto_crop_black_borders:
             try:
@@ -1469,12 +1470,12 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             dv_tid = MediaInfoTrackMappingMixin.mkvinfo_dolby_vision_track_id(src_mkv)
             if dv_tid is not None:
                 if encoder == 'svtav1':
-                    message = translate_text(
+                    dovi_completion_warning = translate_text(
                         'Dolby Vision metadata will not be retained for SVT-AV1 output: {path}'
-                    ).format(path=src_mkv)
-                    print(f'[encode-dovi] {message}', flush=True)
+                    ).format(path=output_file)
+                    print(f'[encode-dovi] {dovi_completion_warning}', flush=True)
                     try:
-                        self._progress(text=message)
+                        self._progress(text=dovi_completion_warning)
                     except TaskCancelled:
                         raise
                     except Exception:
@@ -1503,19 +1504,18 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     except Exception:
                         pass
                     try:
-                        if crop_plan is None:
-                            encode_dovi_plan = prepare_dolby_vision_encode(
-                                src_mkv,
-                                int(dv_tid),
-                                output_folder,
-                            )
-                        else:
-                            encode_dovi_plan = prepare_dolby_vision_encode(
-                                src_mkv,
-                                int(dv_tid),
-                                output_folder,
-                                crop_plan,
-                            )
+                        encode_dovi_plan = prepare_dolby_vision_encode(
+                            src_mkv, int(dv_tid), output_folder, crop_plan,
+                            check_cancel=self._progress,
+                        )
+                        if encode_dovi_plan.fel_residual_discarded:
+                            dovi_completion_warning = translate_text(
+                                'Encoding completed from the base layer. The source has FEL or an '
+                                'unrecognized enhancement layer; this tool workflow did not use '
+                                'its image residuals: {path}'
+                            ).format(path=output_file)
+                    except TaskCancelled:
+                        raise
                     except Exception as error:
                         raise EncodeTaskFailure(
                             'Dolby Vision preparation',
@@ -2095,6 +2095,9 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                         )
                         self.encode_warnings.append(message)
                         self._progress(text=message)
+            if dovi_completion_warning:
+                self.encode_warnings.append(dovi_completion_warning)
+                _emit_encode_log_line(f'[encode-dovi] {dovi_completion_warning}')
         except TaskCancelled:
             retained_artifacts = []
             for path in (

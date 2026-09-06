@@ -24,7 +24,7 @@ from src.core.i18n import translate_text
 from src.core.media_language import normalize_track_language
 from src.exports.utils import force_remove_file, get_time_str, parse_time_to_seconds, print_exc_terminal, get_index_to_m2ts_and_offset, run_command
 from .service_base import BluraySubtitleServiceBase
-from src.runtime.dolby_vision import mux_dolby_vision_layers
+from src.runtime.dolby_vision import inspect_dolby_vision, mux_dolby_vision_layers
 from .. import TaskCancelled
 
 # SP/detail views repeatedly query the same STREAM files and MPLS playlists. M2TS owns the parsed-value
@@ -130,8 +130,8 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
     @staticmethod
     def _mpls_hevc_dv_video_pids(mpls_path: str) -> list[int]:
         """
-        Dolby Vision BL+EL PIDs from play item 0 STN: HEVC (0x24) in video buckets plus every
-        ``DVStreamEntries`` PID (EL is often listed there with a non-0x24 coding type).
+        Dolby Vision BL+EL PIDs from play item 0's primary HEVC and explicit DV STN entries.
+        Two ordinary HEVC video entries alone do not establish a Dolby Vision pair.
         """
         try:
             from src.bdmv.mpls import MPLS
@@ -156,25 +156,22 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             seen.add(pid)
             pids.append(pid)
 
-        for bucket in (
-                'PrimaryVideoStreamEntries',
-                'SecondaryVideoStreamEntries',
-        ):
-            for entry in stn.get(bucket) or []:
-                if not isinstance(entry, dict):
-                    continue
-                attrs = entry.get('StreamAttributes') or {}
-                try:
-                    ct = int(attrs.get('StreamCodingType'))
-                except Exception:
-                    continue
-                if ct != 0x24:
-                    continue
+        for entry in stn.get('PrimaryVideoStreamEntries') or []:
+            if not isinstance(entry, dict):
+                continue
+            attrs = entry.get('StreamAttributes') or {}
+            try:
+                ct = int(attrs.get('StreamCodingType'))
+            except (TypeError, ValueError):
+                continue
+            if ct == 0x24:
                 _add_pid(entry)
+        if len(pids) != 1:
+            return []
         for entry in stn.get('DVStreamEntries') or []:
             if isinstance(entry, dict):
                 _add_pid(entry)
-        return pids
+        return pids if len(pids) == 2 else []
 
     @staticmethod
     def detect_dovi_mux_pair(
@@ -183,8 +180,8 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             mux_dolby_vision: bool,
     ) -> Optional[dict[str, object]]:
         """
-        Two HEVC-DV MPLS video PIDs where mkvmerge cannot map the second (EL) on ``probe_m2ts``.
-        Falls back to two video PIDs on ``probe_m2ts`` when MPLS STN omits the EL layer entry.
+        Prefer the explicit MPLS Dolby Vision pair even when mkvmerge maps both layers.
+        Fall back to two video PIDs with one unmapped EL when MPLS STN omits the DV entry.
         """
         mp = os.path.normpath(str(mpls_path or ''))
         probe = os.path.normpath(str(probe_m2ts or ''))
@@ -207,8 +204,6 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         if len(pids) != 2:
             return None
         bl_pid, el_pid = int(pids[0]), int(pids[1])
-        if _svc_cls()._mkvmerge_tid_for_pid(probe, el_pid, 'video') is not None:
-            return None
         return {
             'bl_pid': bl_pid,
             'el_pid': el_pid,
@@ -2110,6 +2105,40 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         if not (isinstance(plan, dict) and plan.get('active')):
             self._dovi_mux_plan = None
             return
+        if plan.get('mux_enabled'):
+            # Use one profile for the complete playlist, including mixed/unknown clips.
+            cache = getattr(self, '_dovi_source_info', None)
+            if cache is None:
+                cache = {}
+                self._dovi_source_info = cache
+            stream_folder = os.path.normpath(os.path.join(
+                os.path.dirname(mpls_path), '..', 'STREAM',
+            ))
+            clip_names = list(dict.fromkeys(row[0] for row in _mpls_play_rows_cached(mpls_path)))
+            plan['convert_to_p81'] = bool(clip_names)
+            for clip_name in clip_names:
+                source_path = os.path.join(stream_folder, f'{clip_name}.m2ts')
+                try:
+                    stat = os.stat(source_path)
+                except OSError:
+                    plan['convert_to_p81'] = False
+                    break
+                key = (
+                    _normalized_media_path(source_path), stat.st_size,
+                    stat.st_mtime_ns, int(plan['el_pid']),
+                )
+                if key not in cache:
+                    self._progress(text=self.t(
+                        'Checking Dolby Vision enhancement layer: {path}'
+                    ).format(path=source_path))
+                    with tempfile.TemporaryDirectory(prefix='_dovi_probe_') as probe_folder:
+                        cache[key] = inspect_dolby_vision(
+                            source_path, os.path.join(probe_folder, 'rpu.bin'),
+                            video_pid=int(plan['el_pid']), check_cancel=self._progress,
+                        )
+                if cache[key] != (7, 'MEL'):
+                    plan['convert_to_p81'] = False
+                    break
         if report_detected_pair:
             print(self.t(
                 'MPLS Dolby Vision pair BL={base_pid} EL={enhancement_pid}; mux enabled: {enabled}'
@@ -3362,8 +3391,8 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         part. Tracks outside the captured selection never enter the fallback. Recovery is:
 
         1. Mux every selected PID that mkvmerge can identify directly.
-        2. For a selected dual-layer Dolby Vision pair, let tsMuxer extract BL/EL, combine them as profile
-           8.1 with dovi_tool, and append the resulting BL.
+        2. For a selected Dolby Vision pair, let tsMuxer extract BL/EL and combine them with dovi_tool.
+           Use P8.1 only for confirmed MEL playlists; otherwise retain P7 with its enhancement layer.
         3. Recover every missing selected PID with tsMuxer. An incomplete demux or merge is a hard failure.
            With the advanced partial-missing policy, a non-video PID absent from both PAT/PMT and the tsMuxer
            probe becomes a timeline gap; otherwise an incomplete probe is also a hard failure.
@@ -3558,7 +3587,10 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             if not base_layer_path or not enhancement_layer_path:
                 return False
             try:
-                mux_dolby_vision_layers(base_layer_path, enhancement_layer_path)
+                mux_dolby_vision_layers(
+                    base_layer_path, enhancement_layer_path,
+                    convert_to_p81=bool(dovi_plan.get('convert_to_p81')),
+                )
             except TaskCancelled:
                 raise
             except Exception as error:
