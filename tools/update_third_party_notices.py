@@ -77,6 +77,9 @@ def generate_third_party_notices(
     )
 
     versions = {
+        "SEVEN_ZIP_VERSION": _command_version(
+            settings["SEVEN_ZIP_PATH"], ("i",), rf"^7-Zip\s+({VERSION})"
+        ),
         "FFMPEG_BUILD": ffmpeg_build,
         "FFMPEG_VERSION": ffmpeg_release.group(0),
         "FLAC_VERSION": _command_version(

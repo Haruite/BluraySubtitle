@@ -8,14 +8,13 @@ from typing import Optional
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import QTableWidgetItem, QToolButton, QComboBox, QTableWidget, QHeaderView
 
-from src.bdmv import Chapter, MPLS, episode_tail_trim_plan
+from src.bdmv import Chapter, episode_tail_trim_plan
 from src.core import ENCODE_SP_LABELS, SUBTITLE_LABELS, MKV_LABELS, ENCODE_LABELS, REMUX_LABELS, MPLS_INFO_LABELS
 from src.exports.utils import (
     get_index_to_m2ts_and_offset,
     get_time_str,
     parse_time_to_seconds,
     print_exc_terminal,
-    print_terminal_line,
 )
 from src.runtime.services import BluraySubtitle
 from src.runtime.sp import SpEntry, media_track_key
@@ -857,7 +856,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                 it0 = info.item(mpls_i, 0)
                 if not it0 or not str(it0.text() or '').strip():
                     continue
-                row_mpls = os.path.normpath(os.path.join(root, 'BDMV', 'PLAYLIST', it0.text().strip()))
+                row_mpls = os.path.normpath(it0.data(Qt.ItemDataRole.UserRole) or os.path.join(root, 'BDMV', 'PLAYLIST', it0.text().strip()))
                 if row_mpls != norm_target:
                     continue
                 main_btn = info.cellWidget(mpls_i, MPLS_INFO_LABELS.index('main'))
@@ -1201,7 +1200,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                             item.setEnabled(item.isEnabled() and bool(checked_states[v - 2]))
 
     def _unchecked_segments_from_checkbox_states(self, mpls_path: str) -> tuple[list[tuple[int, int]], dict[int, str]]:
-        """Filtered table row indices (same as ChapterWindow.get_unchecked_segments) from _chapter_checkbox_states."""
+        """Group unchecked chapter rows into consecutive segments."""
         path = mpls_path if str(mpls_path).lower().endswith('.mpls') else f'{mpls_path}.mpls'
         filtered_map, chapter_to_m2ts = self._filtered_chapter_visible_layout(path)
         if not filtered_map:
@@ -1312,6 +1311,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                 None,
                 approx_episode_duration_seconds=self._get_approx_episode_duration_seconds()
             )
+            bs.bluray_folders = self._table1_bluray_folder_order()
             configuration = bs.generate_configuration_from_selected_mpls(
                 self.get_selected_mpls_no_ext(), sub_combo_index, subtitle_index,
             )

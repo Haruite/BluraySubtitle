@@ -104,6 +104,7 @@ pip install PyQt6 numpy soundfile pycountry pillow matplotlib
 - mkvtoolnix：`mkvmerge`、`mkvinfo`、`mkvextract`、`mkvpropedit`
 - `ffmpeg`、`ffprobe`
 - `flac`（>= 1.5.0）
+- 7-Zip，用于读取 ISO 镜像中的播放列表
 
 ### 压制模式额外依赖
 
@@ -147,8 +148,9 @@ python src/main.py
 4. 必要时调整顺序或映射；
 5. 执行合并。
 
-建议：
+注意事项：
 
+- 在“生成合并字幕”中加载目录时，也会读取大于 5 GiB 的 `.iso` 文件内的 BDMV 播放列表，扩展名不区分大小写。受支持的 Windows、Linux 和 Docker 均可使用，无需挂载镜像。播放列表保存在程序私有临时目录中，关闭窗口后清理；合并字幕以 ISO 文件主名保存在镜像旁。ISO 输入不支持预览、Remux、Encode 或补全原盘目录。
 - 对不上时先检查 main MPLS；
 - 路径顺序错乱时先排序或拖动行；
 - 个别字幕时长异常时先修字幕再执行。

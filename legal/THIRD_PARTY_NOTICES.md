@@ -6,6 +6,16 @@ Versioned fields are refreshed from the selected bundled artifacts when `BlurayS
 
 ---
 
+## 7-Zip
+
+- **Files:** `7z.exe`, `7z.dll`
+- **Version:** {{SEVEN_ZIP_VERSION}}
+- **License:** GNU LGPL with BSD-3-Clause portions and the unRAR restriction
+- **License text:** bundled at `legal/7zip/License.txt`; upstream: https://www.7-zip.org/license.txt
+- **Source:** https://github.com/ip7z/7zip/tree/{{SEVEN_ZIP_VERSION}}
+
+---
+
 ## FFmpeg / FFprobe
 
 - **Files:** `ffmpeg.exe`, `ffprobe.exe`

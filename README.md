@@ -104,6 +104,7 @@ pip install PyQt6 numpy soundfile pycountry pillow matplotlib
 - mkvtoolnix: `mkvmerge`, `mkvinfo`, `mkvextract`, `mkvpropedit`
 - `ffmpeg`, `ffprobe`
 - `flac` (>= 1.5.0)
+- 7-Zip for reading playlists from ISO images
 
 ### Encode mode extras
 
@@ -147,8 +148,9 @@ Typical flow:
 4. Reorder rows if needed.
 5. Run merge.
 
-Tips:
+Notes:
 
+- In **Merge Subtitles**, loading a folder also reads BDMV playlists from `.iso` files larger than 5 GiB, including uppercase extensions. This works on the supported Windows/Linux systems and in Docker without mounting images. Playlists are stored privately until the window closes; merged subtitles are written beside the ISO using its stem. ISO input does not provide preview, Remux, Encode, or disc-folder completion.
 - If mapping fails, check **main MPLS** first.
 - If subtitle order is wrong, **click the filename column header** to sort, or drag rows to reorder.
 - If a subtitle duration looks impossible, fix the subtitle file first (right-click **edit** prioritizes lines with the latest end times; fix ends or delete bad lines).

@@ -23,7 +23,7 @@ from src.core import APP_TITLE, BDMV_LABELS, SUBTITLE_LABELS, ENCODE_SP_LABELS
 from src.core.app_config import FUNCTION_PAGE_IDS, app_config_path, default_app_config, load_app_config
 from src.core.i18n import translate_text
 import src.core.settings as core_settings
-from src.exports.utils import print_exc_terminal, force_remove_file
+from src.exports.utils import print_exc_terminal
 from src.runtime.gui_runtime_classes.custom_box import CustomBox
 from src.runtime.gui_runtime_classes.custom_table_widget import CustomTableWidget
 from .gui_base import BluraySubtitleGuiBase
@@ -49,6 +49,8 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         }
         self._auto_output_folders = {3: '', 4: '', 5: ''}
         self._bdmv_source_state_path = ''
+        self._iso_playlist_temp = None
+        self._iso_playlist_cache = {}
         self._window_geometry_restored = False
         self.altered = False
         self._sp_index_by_bdmv: dict[int, int] = {}
@@ -891,6 +893,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
                     '_current_cancel_event',
                     '_sp_scan_cancel_event',
                     '_subtitle_scan_cancel_event',
+                    '_iso_scan_cancel_event',
             ):
                 cancel_event = getattr(self, name, None)
                 if cancel_event is not None:
@@ -908,11 +911,10 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             except Exception as error:
                 self._show_app_config_error('save', error)
         self.delete_default_vpy_file()
-        try:
-            if os.path.exists('info.json'):
-                force_remove_file('info.json')
-        except Exception:
-            pass
+        if self._iso_playlist_temp is not None:
+            self._iso_playlist_temp.cleanup()
+            self._iso_playlist_temp = None
+            self._iso_playlist_cache.clear()
         event.accept()
         print('[BluraySubtitle] window close accepted', flush=True)
         return

@@ -89,6 +89,7 @@ binaries = []
 # Executables and DLLs configured in settings.py are placed in the support
 # directory addressed by sys._MEIPASS at runtime.
 for setting_name, description in (
+    ("SEVEN_ZIP_PATH", "7-Zip"),
     ("FLAC_PATH", "FLAC encoder"),
     ("FFMPEG_PATH", "FFmpeg"),
     ("FFPROBE_PATH", "FFprobe"),
@@ -107,12 +108,16 @@ for setting_name, description in (
 ):
     add_binary(binaries, SETTINGS[setting_name], description)
 
+# 7z.exe loads archive handlers from its adjacent DLL.
+add_binary(binaries, Path(SETTINGS["SEVEN_ZIP_PATH"]).parent / "7z.dll", "7-Zip archive library")
+
 # flac.exe requires its adjacent runtime DLL.
 flac_dir = Path(SETTINGS["FLAC_PATH"]).parent
 add_binary(binaries, flac_dir / "libFLAC.dll", "FLAC runtime library")
 
 
 datas = [
+    (str(required_path(Path(SETTINGS["SEVEN_ZIP_PATH"]).parent / "License.txt", "7-Zip license")), "legal/7zip"),
     (str(default_config), "."),
     (str(SETTINGS_PATH), "src/core"),
     (str(getnative_vpy), "src/vs_tools"),

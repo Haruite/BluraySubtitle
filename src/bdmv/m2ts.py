@@ -433,15 +433,16 @@ class M2TS:
                                     last_pcr = value
                             if last_pcr is not None:
                                 break
-                    duration = max(int(last_pcr - first_pcr), 0) if first_pcr is not None and last_pcr is not None else 0
+                    # PCR base and PTS both wrap at 33 bits.
+                    duration = (last_pcr - first_pcr) % (1 << 33) if first_pcr is not None and last_pcr is not None else 0
                 except OSError:
                     duration = 0
             else:
                 first_pts = self.get_first_pts(max_bytes=16 * 1024 * 1024)
                 last_pts = self.get_last_pts()
                 if first_pts is not None and last_pts is not None:
-                    duration = int(last_pts - first_pts)
-                    if duration <= 0:
+                    duration = (last_pts - first_pts) % (1 << 33)
+                    if duration == 0:
                         fps = self.read_frame_rate_from_m2ts(use_ffprobe_fallback=True)
                         duration = int(round(90000.0 / fps)) if fps else 0
             if duration > 0:

@@ -148,6 +148,7 @@ import runpy
 import sys
 
 names = (
+    "SEVEN_ZIP_PATH",
     "FLAC_PATH",
     "FFMPEG_PATH",
     "FFPROBE_PATH",
@@ -183,7 +184,7 @@ PY
     printf -v "$name" '%s' "$value"
     count=$((count + 1))
   done <<< "$output"
-  [[ "$count" -eq 17 ]] || die "$(msg 'settings.py did not provide every required Linux tool path' 'settings.py 未提供全部必需的 Linux 工具路径')"
+  [[ "$count" -eq 18 ]] || die "$(msg 'settings.py did not provide every required Linux tool path' 'settings.py 未提供全部必需的 Linux 工具路径')"
 
   X264_VERSION_FILE="$(dirname -- "$X264_PATH")/x264-version.txt"
   X265_FEATURE_FILE="$(dirname -- "$X265_PATH")/x265-build-features.txt"
@@ -228,7 +229,7 @@ sync_mkvtoolnix_paths() {
 verify_configured_tool_paths() {
   local path
   for path in \
-    "$FLAC_PATH" "$FFMPEG_PATH" "$FFPROBE_PATH" \
+    "$SEVEN_ZIP_PATH" "$FLAC_PATH" "$FFMPEG_PATH" "$FFPROBE_PATH" \
     "$X265_PATH" "$X264_PATH" "$SVT_AV1_PATH" "$FDK_AAC_PATH" \
     "$DOVI_TOOL_PATH" "$HDR10PLUS_TOOL_PATH" \
     "$VSEDIT_PATH" "$VSPIPE_PATH" "$TS_MUXER_PATH" \
@@ -445,6 +446,10 @@ ensure_sudo_once
 # ---------------------------------------------------------------------------
 
 require_supported_os() {
+  case "$(uname -m)" in
+    x86_64|amd64) ;;
+    *) die "$(msg 'Only x64 Linux is supported' '仅支持 x64 Linux')" ;;
+  esac
   if [[ ! -f /etc/os-release ]]; then
     die "$(msg '/etc/os-release not found; cannot determine OS version' '未检测到 /etc/os-release，无法判断系统版本')"
   fi
@@ -2157,89 +2162,34 @@ install_descale() {
 }
 
 # ---------------------------------------------------------------------------
-# 7-Zip CLI (VapourSynth portable .7z)
+# 7-Zip CLI (ISO playlists and VapourSynth portable archives)
 # ---------------------------------------------------------------------------
 
-# Ubuntu/Debian p7zip-full is often 7-Zip 16.x and fails on newer methods (e.g. Delta + LZMA2 in recent archives).
 ensure_modern_7zip_cli() {
-  BLURAY_7ZZ_BIN=""
-
-  if command -v 7zz >/dev/null 2>&1; then
-    BLURAY_7ZZ_BIN="$(command -v 7zz)"
+  local release version asset_version installed_version=""
+  release="${SEVENZIP_VERSION:-$(latest_stable_tag https://github.com/ip7z/7zip.git '^[0-9]+[.][0-9]+$')}"
+  version="${release#v}"
+  asset_version="${version//./}"
+  BLURAY_7ZZ_BIN="$SEVEN_ZIP_PATH"
+  if [[ -x "$SEVEN_ZIP_PATH" ]]; then
+    installed_version="$("$SEVEN_ZIP_PATH" i | sed -nE 's/^7-Zip[^0-9]*([0-9]+[.][0-9]+).*/\1/p' | head -n 1)"
+  fi
+  if [[ "$installed_version" == "$version" ]]; then
     return 0
   fi
 
-  local p7_ver=""
-  if command -v 7z >/dev/null 2>&1; then
-    p7_ver="$(7z 2>&1 | head -n 1 | grep -oE '([0-9]+\.[0-9]+)' | head -n 1 || true)"
-  fi
-  if [[ -n "${p7_ver:-}" ]] && dpkg --compare-versions "$p7_ver" ge "22.00" 2>/dev/null; then
-    BLURAY_7ZZ_BIN="$(command -v 7z)"
-    return 0
-  fi
-
-  if ! command -v git >/dev/null 2>&1; then
-    apt_update
-    apt_install git || die "$(msg 'Failed to install git (needed to resolve the latest 7-Zip release)' '安装 git 失败（获取最新 7-Zip 版本需要）')"
-  fi
-
-  local seven_release_tag seven_version seven_tag
-  seven_release_tag="${SEVENZIP_VERSION:-$(latest_stable_tag https://github.com/ip7z/7zip.git '^[0-9]+[.][0-9]+$')}"
-  seven_version="${seven_release_tag#v}"
-  seven_tag="${seven_version//./}"
-  local arch_7=""
-  case "$(uname -m)" in
-    x86_64 | amd64) arch_7="x64" ;;
-    aarch64 | arm64) arch_7="arm64" ;;
-    armv7l | armv6l) arch_7="arm" ;;
-    i686 | i386 | x86) arch_7="x86" ;;
-    *)
-      die "$(msg 'Unsupported CPU for 7-Zip bootstrap (install 7zz or p7zip >= 22)' '当前 CPU 无法自动下载 7-Zip CLI，请手动安装 7zz 或 p7zip >= 22')"
-      ;;
-  esac
-
-  if ! dpkg-query -W -f='${Status}' xz-utils 2>/dev/null | grep -q "install ok installed"; then
-    apt_update
-    apt_install xz-utils || die "$(msg 'Failed to install xz-utils (needed to unpack 7-Zip CLI tarball)' '安装 xz-utils 失败（解压 7-Zip 官方包需要）')"
-  fi
-
-  local cache_root="${HOME}/.cache/BluraySubtitle"
-  local dest="${cache_root}/7zip-${seven_tag}-linux-${arch_7}"
-  mkdir -p "$dest"
-
-  local zzpath=""
-  zzpath="$(find "$dest" -maxdepth 2 -type f -name 7zz -print -quit 2>/dev/null || true)"
-  if [[ -n "${zzpath:-}" && -f "$zzpath" ]]; then
-    chmod +x "$zzpath" || true
-    if [[ -x "$zzpath" ]]; then
-      BLURAY_7ZZ_BIN="$zzpath"
-      return 0
-    fi
-  fi
-
-  local url="https://github.com/ip7z/7zip/releases/download/${seven_release_tag}/7z${seven_tag}-linux-${arch_7}.tar.xz"
-  local tball="${dest}/7z${seven_tag}-linux-${arch_7}.tar.xz"
-
-  log "$(msg "Installing official 7-Zip CLI (${seven_version}) under ~/.cache/BluraySubtitle (system p7zip is too old for some .7z files)" "正在安装官方 7-Zip 命令行（${seven_version}）到 ~/.cache/BluraySubtitle（系统 p7zip 过旧，无法解压部分 .7z）")"
-
-  if command -v wget >/dev/null 2>&1; then
-    wget -q -O "$tball" "$url" || die "$(msg 'Failed to download official 7-Zip CLI tarball' '下载官方 7-Zip 命令行包失败')"
-  elif command -v curl >/dev/null 2>&1; then
-    curl -fsSL -o "$tball" "$url" || die "$(msg 'Failed to download official 7-Zip CLI tarball (curl)' '下载官方 7-Zip 命令行包失败（curl）')"
-  else
-    apt_update
-    apt_install wget curl || die "$(msg 'Failed to install wget/curl' '安装 wget/curl 失败')"
-    wget -q -O "$tball" "$url" || die "$(msg 'Failed to download official 7-Zip CLI tarball' '下载官方 7-Zip 命令行包失败')"
-  fi
-
-  tmux_run "$(msg 'Extract official 7-Zip CLI tarball' '解压官方 7-Zip 命令行包')" tar -xJf "$tball" -C "$dest" || die "$(msg 'Failed to extract official 7-Zip CLI tarball' '解压官方 7-Zip 命令行包失败')"
-
-  zzpath="$(find "$dest" -maxdepth 3 -type f -name 7zz -print -quit 2>/dev/null || true)"
-  [[ -n "${zzpath:-}" && -f "$zzpath" ]] || die "$(msg '7zz not found after extracting official 7-Zip tarball' '解压官方 7-Zip 包后未找到 7zz')"
-  chmod +x "$zzpath" || die "$(msg 'chmod 7zz failed' 'chmod 7zz 失败')"
-  [[ -x "$zzpath" ]] || die "$(msg '7zz is not executable' '7zz 不可执行')"
-
-  BLURAY_7ZZ_BIN="$zzpath"
+  local build_dir
+  build_dir="$(bluray_mktemp_dir)"
+  apt_install xz-utils
+  log "$(msg "Installing 7-Zip ${version} at ${SEVEN_ZIP_PATH}" "正在将 7-Zip ${version} 安装到 ${SEVEN_ZIP_PATH}")"
+  wget -q -O "$build_dir/7zip.tar.xz" \
+    "https://github.com/ip7z/7zip/releases/download/${release}/7z${asset_version}-linux-x64.tar.xz" \
+    || die "$(msg 'Failed to download official 7-Zip CLI' '下载官方 7-Zip 命令行程序失败')"
+  tar -xJf "$build_dir/7zip.tar.xz" -C "$build_dir" \
+    || die "$(msg 'Failed to extract official 7-Zip CLI' '解压官方 7-Zip 命令行程序失败')"
+  install_configured_executable "$build_dir/7zz" "$SEVEN_ZIP_PATH"
+  "$SEVEN_ZIP_PATH" i >/dev/null
+  rm -rf "$build_dir"
 }
 
 # ---------------------------------------------------------------------------
@@ -2283,7 +2233,6 @@ install_vapoursynth_scripts() {
 
   local vcbs_url="https://github.com/AmusementClub/tools/releases/download/2025H1p/vapoursynth_portable_25H1.1p_cpu.7z"
 
-  ensure_modern_7zip_cli
   [[ -n "${BLURAY_7ZZ_BIN:-}" ]] || die "$(msg '7-Zip CLI path not set' '未设置 7-Zip 可执行路径')"
 
   if ! command -v wget >/dev/null 2>&1; then
@@ -3109,6 +3058,7 @@ install_flac
 install_vapoursynth
 install_command_at_configured_path vspipe "$VSPIPE_PATH"
 install_descale
+ensure_modern_7zip_cli
 install_vapoursynth_scripts
 install_vapoursynth_editor
 install_lsmash

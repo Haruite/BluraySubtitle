@@ -1188,8 +1188,27 @@ Date: 2026-09-03
 
 Date: 2026-09-06
 
-- Reduced the suite from 265 to 83 test methods and the test directory from 11,083 to 3,791 lines. Removed source-string checks for setup/toolchains, GUI layout/default/preview checks, worker forwarding tests, redundant static-check wrappers, and unused fixtures. The standalone i18n and split-contract audit tools remain available.
-- Retained critical timing, logical/physical track identity, sparse audio, duration-loss fallback, output collisions, resumability, cancellation, and failure-artifact checks. Corrected a Windows-only path fixture in the retained cross-MPLS deduplication test so it also exercises the intended behavior on Linux.
-- Consolidated PSNR and crop scenarios, tested audio cleanup decisions without simulating an entire mux, and strengthened SRT/SUP merge checks to compare actual timestamps. Generated VPy crop code is executed to verify one effective crop and safe removal. Added chapter tail-trim boundaries covering the 30-second window, partial/unverified file ends, repeated clips, and preserving episode content.
-- Renamed the configuration and SP-detail test modules to describe their remaining scope. Updated both testing standards and Wiki test indexes. Application behavior is unchanged.
-- Verification: all 83 tests passed; all 17 test modules imported independently; focused source-probe tests, `git diff --check`, UTF-8, and CRLF checks passed. No real-media regression was run for this test/documentation refactoring; mocked tool results do not establish media correctness.
+- Reduced the suite from 265 tests and 11,083 lines to 83 tests and 3,791 lines, removing checks of source strings, GUI details, and call forwarding, along with unused fixtures.
+- Focused coverage on timing, track identity, audio gaps, and output safety. Consolidated repeated scenarios, strengthened assertions for subtitle timestamps and chapter tail trimming, and corrected cross-platform path fixtures. Updated testing standards and Wiki indexes.
+- Verification: all 83 tests passed, and all 17 test modules imported independently.
+
+## Source Audit Against Current Documentation
+
+Date: 2026-09-06
+
+- Removed unused GUI/Service helpers, obsolete subtitle/track/preview paths, and package re-exports that caused circular imports.
+- Fixed duration calculation across 33-bit PCR/PTS wraparound. ASS/SSA duration now uses the maximum event end; UTF-16 retry is limited to UTF-8 decoding failures, and malformed subtitles fail explicitly.
+- Shared subtitle discovery/parsing and track-language normalization to fix uppercase-extension and language-alias inconsistencies. MPLS caches now follow file size/mtime changes; removed the stale detail cache.
+- Removed obsolete cleanup that could delete pre-existing files. Failed SP copies retain and report task-owned artifacts; collisions fail explicitly. Failed audio-gap metadata publication rolls media back to its temporary path.
+- Fixed translation of error messages for opening files, playback, track locations, and VPy preview.
+- Verification: all 88 tests and static checks passed. FFmpeg/MKVToolNix checks with generated media covered audio deduplication, gap sidecars, and decoded video-frame equality.
+
+## Portable ISO Playlist Input for Subtitle Merging
+
+Date: 2026-09-06
+
+- Replaced Windows ISO mounting with shared 7-Zip playlist extraction for subtitle merging on Windows, Linux, and Docker.
+- Moved discovery into a cancellable background task. Only MPLS files are extracted into private temporary storage, with cache reuse and cleanup on failure, cancellation, and window close.
+- Merged subtitles use the ISO stem and are saved beside the image. ISO rows disable preview and are excluded from Remux/Encode.
+- Linux setup now installs 7-Zip and checks for x64; Windows packaging includes 7-Zip and its license. Updated README, i18n, third-party notices, and the standards defining platform support by the setup scripts.
+- Verification: all 89 tests, offscreen GUI checks, and UDF image extraction checks passed. Unprivileged extraction passed on Ubuntu 22.04 and Debian 12; subtitle merging passed in the repository Docker image.

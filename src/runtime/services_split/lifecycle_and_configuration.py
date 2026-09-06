@@ -1,6 +1,5 @@
 """Auto-generated split target: lifecycle_and_configuration."""
 
-import ctypes
 import locale
 import multiprocessing
 import os
@@ -19,7 +18,7 @@ from .service_base import BluraySubtitleServiceBase
 from .. import TaskCancelled
 from ...core import DEFAULT_APPROX_EPISODE_DURATION_SECONDS, CURRENT_UI_LANGUAGE
 from ...core.i18n import translate_text
-from ...domain import ISO, Subtitle
+from ...domain import Subtitle
 from ...domain.subtitles import parse_subtitle_worker as _parse_subtitle_worker
 
 
@@ -29,28 +28,6 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
                  approx_episode_duration_seconds: float = DEFAULT_APPROX_EPISODE_DURATION_SECONDS,
                  movie_mode: bool = False,
                  mux_dolby_vision: bool = True):
-        self.tmp_folders = []
-        if sys.platform == 'win32':
-            for root, dirs, files in os.walk(bluray_path):
-                dirs.sort()  # Sort dirs to ensure consistent order on all platforms
-                for file in sorted(files):  # Also sort files
-                    if file.endswith(".iso") and os.path.getsize(os.path.join(root, file)) > 5 * 1024 ** 3:
-                        iso_path = os.path.join(root, file)
-                        drivers = self.get_available_drives()
-                        iso = ISO(iso_path)
-                        iso.mount()
-                        drivers_1 = self.get_available_drives()
-                        driver = tuple(drivers_1 - drivers)[0]
-                        tmp_folder = iso_path[:-4]
-                        try:
-                            shutil.copytree(f'{driver}:\\BDMV\\PLAYLIST', f'{tmp_folder}\\BDMV\\PLAYLIST')
-                        except:
-                            pass
-                        else:
-                            self.tmp_folders.append(tmp_folder)
-                        iso.close()
-                        while len(self.get_available_drives()) == len(drivers_1):
-                            pass
         self.sub_files = sub_files
         self.bdmv_path = bluray_path
         bluray_folders = []
@@ -175,16 +152,6 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
         except Exception as e:
             # Propagate exception so caller can decide fallback behavior.
             raise Exception(f'Multiprocessing parse failed: {str(e)}')
-
-    @staticmethod
-    def get_available_drives():
-        drives = []
-        bitmask = ctypes.windll.kernel32.GetLogicalDrives()
-        for letter in range(65, 91):
-            if bitmask & 1:
-                drives.append(chr(letter))
-            bitmask >>= 1
-        return set(drives)
 
     def get_main_mpls(self, bluray_folder: str, checked: bool) -> str:
         mpls_folder = os.path.join(bluray_folder, 'BDMV', 'PLAYLIST')

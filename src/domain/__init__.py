@@ -1,6 +1,5 @@
 """Domain models used by the application workflows."""
 
-from .media import ISO
 from .media import MKV
 from ..bdmv.chapter import Chapter
 from .subtitles import Ass
@@ -18,7 +17,6 @@ __all__ = [
     "SRT",
     "PGS",
     "Subtitle",
-    "ISO",
     "MKV",
 ]
 

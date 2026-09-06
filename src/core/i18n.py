@@ -8,6 +8,10 @@ from typing import Optional
 import src.core.settings as _core_settings
 
 I18N_ZH_TO_EN = {
+    'ISO 输入不支持预览': 'ISO input does not support preview',
+    '正在读取 ISO 播放列表：{path}': 'Reading ISO playlists: {path}',
+    'ISO 中没有 BDMV 播放列表': 'The ISO contains no BDMV playlists',
+    '无法读取 ISO 播放列表：{path}\n{error}': 'Failed to read ISO playlists: {path}\n{error}',
     '简体中文': 'Simplified Chinese',
     '路径': 'path',
     '大小': 'size',
@@ -931,6 +935,25 @@ I18N_ZH_TO_EN = {
     'ASS 转 SUP：输入={input} 视频格式={video_format} 帧率={fps} 蓝光兼容={bd_compat} 任务数={jobs}': 'ASS to SUP: input={input} video_format={video_format} fps={fps} bd_compat={bd_compat} jobs={jobs}',
     '完成：{path}': 'Done: {path}',
     '保留临时文件：{path}': 'Temporary files kept: {path}',
+    '无法确定视频文件路径': 'Cannot determine video file path',
+    '无法打开文件：\n{path}\n\n{error}': 'Cannot open file:\n{path}\n\n{error}',
+    '无法打开文件夹：\n{normalized}\n\n{error}': 'Cannot open folder:\n{normalized}\n\n{error}',
+    '生成预览脚本失败': 'Failed to generate preview script',
+    '打开 vsedit 失败：{error}': 'Failed to open vsedit: {error}',
+    '文件不存在：\n{path}': 'File does not exist:\n{path}',
+    '文件不存在：{path}': 'File does not exist: {path}',
+    '文件路径为空': 'File path is empty',
+    '文件夹不存在：\n{normalized}': 'Folder does not exist:\n{normalized}',
+    '未找到 M2TS 文件': 'M2TS file not found',
+    '未找到 M2TS 文件：\n{m2ts_path}': 'M2TS file not found:\n{m2ts_path}',
+    '未找到 MKV 文件': 'MKV file not found',
+    '未找到 MPLS 文件：\n{mpls_path}': 'MPLS file not found:\n{mpls_path}',
+    '未找到对应的蓝光目录（原盘序号={bdmv_index}），无法定位 M2TS 文件': 'Matching Blu-ray directory not found (bdmv_index={bdmv_index}), cannot locate M2TS file',
+    '未找到对应的蓝光目录（原盘序号={bdmv_index}），无法定位 MPLS 文件': 'Matching Blu-ray directory not found (bdmv_index={bdmv_index}), cannot locate MPLS file',
+    '打开文件失败': 'Open File Failed',
+    '预览脚本失败：{error}': 'Preview script failed: {error}',
+    '字幕文件不存在；将继续无字幕播放': 'Subtitle file does not exist; playback will continue without subtitles',
+    '复制来源': 'Copying source',
 }
 I18N_EN_TO_ZH = {v: k for k, v in I18N_ZH_TO_EN.items()}
 

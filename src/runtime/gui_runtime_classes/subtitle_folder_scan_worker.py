@@ -9,6 +9,7 @@ from PyQt6.QtCore import pyqtSignal, QObject
 
 from src.core.i18n import translate_text
 from src.domain import MKV, Subtitle
+from src.domain.subtitles import list_subtitle_files
 from src.domain.subtitles import parse_subtitle_worker as _parse_subtitle_worker
 from src.exports.utils import get_time_str, print_terminal_line, print_exc_terminal, print_tb_string_terminal
 from src.runtime import TaskCancelled
@@ -24,7 +25,7 @@ class SubtitleFolderScanWorker(QObject):
 
     def __init__(self, seq: int, mode: int, subtitle_folder: str, bdmv_path: str, checked: bool,
                  selected_mpls: list[tuple[str, str]], cancel_event: threading.Event,
-                 movie_mode: bool = False):
+                 movie_mode: bool = False, disc_folders: tuple[str, ...] = ()):
         super().__init__()
         self.seq = seq
         self.mode = mode
@@ -34,6 +35,7 @@ class SubtitleFolderScanWorker(QObject):
         self.selected_mpls = selected_mpls
         self.cancel_event = cancel_event
         self.movie_mode = bool(movie_mode)
+        self.disc_folders = disc_folders
 
     def run(self):
         try:
@@ -62,11 +64,7 @@ class SubtitleFolderScanWorker(QObject):
                 return
 
             folder = self.subtitle_folder.strip()
-            files = []
-            for f in os.listdir(folder):
-                if f.endswith(".ass") or f.endswith(".ssa") or f.endswith('srt') or f.endswith('.sup'):
-                    files.append(os.path.normpath(os.path.join(folder, f)))
-            files.sort()
+            files = list_subtitle_files(folder)
             if not files:
                 if self.cancel_event.is_set():
                     raise TaskCancelled()
@@ -118,6 +116,7 @@ class SubtitleFolderScanWorker(QObject):
                 self.progress.emit(850)
                 try:
                     bs = BluraySubtitle(self.bdmv_path, successful_files, self.checked, None)
+                    bs.bluray_folders = list(self.disc_folders)
                     bs._subtitle_cache = subtitle_cache
                     configuration = bs.generate_configuration_from_selected_mpls(
                         self.selected_mpls,
@@ -143,17 +142,6 @@ class SubtitleFolderScanWorker(QObject):
             tb = traceback.format_exc()
             print_tb_string_terminal(tb)
             self.failed.emit(tb)
-
-    def _parse_subtitles_with_fallback(self, files: list[str]) -> dict[str, Subtitle]:
-        """Try multiprocessing subtitle parsing and fall back to single process on failure."""
-        subtitle_cache: dict[str, Subtitle] = {}
-        try:
-            return self._parse_subtitles_multiprocess(files)
-        except TaskCancelled:
-            raise
-        except Exception as e:
-            print(f'{translate_text("Multiprocessing parse failed, switching to single-process mode: ")}{str(e)}')
-            return self._parse_subtitles_single(files)
 
     def _parse_subtitles_single(self, files: list[str]) -> dict[str, Subtitle]:
         """Parse subtitles in single-process mode."""

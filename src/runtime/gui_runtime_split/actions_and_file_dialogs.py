@@ -29,6 +29,7 @@ from src.core.encode_presets import (
     encode_presets_for_encoder,
 )
 from src.domain import MKV, Ass, SRT, Subtitle
+from src.domain.subtitles import list_subtitle_files
 from src.exports.utils import (
     run_command,
     print_terminal_line,
@@ -358,7 +359,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             self.checkbox1.isChecked(),
             selected_mpls,
             cancel_event,
-            movie_mode=self._is_movie_mode()
+            movie_mode=self._is_movie_mode(),
+            disc_folders=tuple(self._table1_bluray_folder_order()),
         )
         self._subtitle_scan_thread = thread
         self._subtitle_scan_worker = worker
@@ -883,13 +885,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 this.table_widget = QTableWidget()
                 this.table_widget.horizontalHeader().setSortIndicatorShown(True)
                 this.table_widget.setSortingEnabled(True)
-                if path.endswith('.ass') or path.endswith('.ssa'):
-                    try:
-                        with open(path, 'r', encoding='utf-8-sig') as fp:
-                            this.subtitle = Ass(fp)
-                    except Exception as e:
-                        with open(path, 'r', encoding='utf-16') as fp:
-                            this.subtitle = Ass(fp)
+                this.subtitle = Subtitle(path).content
+                if isinstance(this.subtitle, Ass):
                     this.keys = list(this.subtitle.events[0].__dict__.keys())
                     this.table_widget.setColumnCount(len(this.keys) + 1)
                     this.table_widget.setHorizontalHeaderLabels(['index'] + this.keys)
@@ -911,13 +908,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     this.table_widget.horizontalHeader().setSortIndicator(4, Qt.SortOrder.DescendingOrder)
                     this.setMinimumWidth(1000)
                     this.setMinimumHeight(800)
-                elif path.endswith('.srt'):
-                    try:
-                        with open(path, 'r', encoding='utf-8-sig') as fp:
-                            this.subtitle = SRT(fp)
-                    except Exception as e:
-                        with open(path, 'r', encoding='utf-16') as fp:
-                            this.subtitle = SRT(fp)
+                elif isinstance(this.subtitle, SRT):
                     this.table_widget.setColumnCount(4)
                     this.table_widget.setHorizontalHeaderLabels(['index', 'start', 'end', 'text'])
                     this.table_widget.setRowCount(len(this.subtitle.lines))
@@ -937,7 +928,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 this.customContextMenuRequested.connect(this.on_subtitle_edit_menu)
                 this.table_widget.resizeColumnsToContents()
                 layout.addWidget(this.table_widget)
-                this.save_button = QPushButton('save')
+                this.save_button = QPushButton(self.t('Save'))
                 this.save_button.clicked.connect(this.save_subtitle)
                 layout.addWidget(this.save_button)
                 this.setLayout(layout)
@@ -948,7 +939,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             def on_subtitle_edit_menu(this, pos: QPoint):
                 row_indexes = {i.row() for i in this.table_widget.selectionModel().selection().indexes()}
                 menu = QMenu()
-                item = menu.addAction('remove')
+                item = menu.addAction(self.t('Delete'))
                 screen_pos = this.table_widget.mapToGlobal(pos)
                 action = menu.exec(screen_pos)
                 if action == item:
@@ -966,11 +957,11 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             def on_subtitle_changed(this, item: QTableWidgetItem):
                 if item.column() == 0:
                     return
-                if path.endswith('.ass') or path.endswith('.ssa'):
+                if isinstance(this.subtitle, Ass):
                     setattr(this.subtitle.events[int(this.table_widget.item(item.row(), 0).text()) - 1],
                             this.keys[item.column() - 1], item.text())
                     this.altered = True
-                if path.endswith('.srt'):
+                elif isinstance(this.subtitle, SRT):
                     cue_number = int(this.table_widget.item(item.row(), 0).text())
                     for line in this.subtitle.lines:
                         if int(line[0]) == cue_number:
@@ -1466,7 +1457,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         selected_mpls = self.get_selected_mpls_no_ext()
         if not selected_mpls:
             if not silent_mode:
-                QMessageBox.information(self, " ", "Main MPLS is not selected")
+                QMessageBox.information(self, " ", self.t('Main MPLS is not selected'))
             return False
 
         subtitle_suffix = self._get_subtitle_suffix()
@@ -1574,7 +1565,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
 
         if not subtitle_files:
             if not silent_mode:
-                QMessageBox.information(self, " ", "Subtitle file is not selected")
+                QMessageBox.information(self, " ", self.t('Subtitle file is not selected'))
             return False
 
         request = MergeSubtitleRequest(
@@ -2209,27 +2200,6 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 if len(offs) > 1:
                     this.setMinimumHeight(height)
 
-            def get_unchecked_segments(this):
-                unchecked_rows = []
-                for row in range(this.table_widget.rowCount()):
-                    item = this.table_widget.item(row, 0)
-                    if item and item.checkState() == Qt.CheckState.Unchecked:
-                        unchecked_rows.append(row)
-                # Find consecutive segments
-                segments = []
-                if unchecked_rows:
-                    start = unchecked_rows[0]
-                    prev = unchecked_rows[0]
-                    for r in unchecked_rows[1:]:
-                        if r == prev + 1:
-                            prev = r
-                        else:
-                            segments.append((start, prev))
-                            start = r
-                            prev = r
-                    segments.append((start, prev))
-                return segments
-
             def select_all_chapters(this):
                 for row in range(this.table_widget.rowCount()):
                     item = this.table_widget.item(row, 0)
@@ -2347,7 +2317,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 mpls_file = item.text().strip() if item and item.text() else ''
                 if not mpls_file:
                     continue
-                row_mpls = os.path.normpath(os.path.join(root, 'BDMV', 'PLAYLIST', mpls_file))
+                row_mpls = os.path.normpath(item.data(Qt.ItemDataRole.UserRole) or os.path.join(root, 'BDMV', 'PLAYLIST', mpls_file))
                 if row_mpls != os.path.normpath(mpls_path):
                     continue
                 main_btn = info.cellWidget(mpls_index, MPLS_INFO_LABELS.index('main'))
@@ -2393,14 +2363,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 base = os.path.basename(mpls_name)
                 if not folder or not os.path.isdir(folder):
                     return None
-                candidates = []
-                for f in os.listdir(folder):
-                    if not (f.endswith('.ass') or f.endswith('.srt') or f.endswith('.ssa') or f.endswith('.sup')):
-                        continue
-                    if not f.startswith(base):
-                        continue
-                    candidates.append(os.path.normpath(os.path.join(folder, f)))
-                candidates.sort()
+                candidates = [path for path in list_subtitle_files(folder) if os.path.basename(path).startswith(base)]
                 if not candidates:
                     return None
                 if len(candidates) == 1:
@@ -2514,7 +2477,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                                     os.path.exists(mpls_name + '.sup'))
             if not has_subtitle:
                 # Still allow playback even if subtitle generation failed.
-                QMessageBox.information(self, "Prompt", "Subtitle file does not exist; playback will continue without subtitles")
+                QMessageBox.information(self, self.t('Prompt'), self.t('Subtitle file does not exist; playback will continue without subtitles'))
         elif is_preview:
             # Check whether subtitle file exists.
             mpls_name = mpls_path[:-5]
@@ -2523,7 +2486,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                             os.path.exists(mpls_name + '.ssa') or
                             os.path.exists(mpls_name + '.sup'))
             if not has_subtitle:
-                QMessageBox.information(self, "Prompt", "Subtitle file does not exist; playback will continue without subtitles")
+                QMessageBox.information(self, self.t('Prompt'), self.t('Subtitle file does not exist; playback will continue without subtitles'))
         if sys.platform != 'linux':
             if sys.platform == 'win32':
                 mp4_exe_path = get_mpv_safe_path(".mp4")
@@ -2564,6 +2527,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         if self.get_selected_function_id() in (3, 4, 5) and not self._is_movie_mode() and self.table2.rowCount():
             configuration = self._generate_configuration_from_ui_inputs()
         else:
+            service.bluray_folders = self._table1_bluray_folder_order()
             configuration = service.generate_configuration_from_selected_mpls(self.get_selected_mpls_no_ext())
         self.on_configuration(configuration)
 
@@ -2692,10 +2656,10 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
     def open_file_path(self, path: str):
         path = self._normalize_path_input(path)
         if not path:
-            QMessageBox.information(self, " ", "File path is empty")
+            QMessageBox.information(self, " ", self.t('File path is empty'))
             return
         if not os.path.exists(path):
-            QMessageBox.warning(self, "Open File Failed", f"File does not exist:\n{path}")
+            QMessageBox.warning(self, self.t('Open File Failed'), self.t('File does not exist:\n{path}').format(path=path))
             return
         try:
             if sys.platform == 'win32':
@@ -2705,12 +2669,12 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             else:
                 run_command(['xdg-open', path], wait=False)
         except Exception as e:
-            QMessageBox.warning(self, "Open File Failed", f"Cannot open file:\n{path}\n\n{e}")
+            QMessageBox.warning(self, self.t('Open File Failed'), self.t('Cannot open file:\n{path}\n\n{error}').format(path=path, error=e))
 
     def open_folder_path(self, path: str):
         path = self._normalize_path_input(path)
         if not path:
-            QMessageBox.information(self, " ", "Folder path is empty")
+            QMessageBox.information(self, " ", self.t('Folder path is empty'))
             return
 
         normalized = path
@@ -2718,7 +2682,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             normalized = os.path.normpath(os.path.dirname(normalized))
 
         if not os.path.isdir(normalized):
-            QMessageBox.warning(self, "Open Folder Failed", f"Folder does not exist:\n{normalized}")
+            QMessageBox.warning(self, self.t('Open Folder Failed'), self.t('Folder does not exist:\n{normalized}').format(normalized=normalized))
             return
 
         try:
@@ -2729,7 +2693,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             else:
                 run_command(['xdg-open', normalized], wait=False)
         except Exception as e:
-            QMessageBox.warning(self, "Open Folder Failed", f"Cannot open folder:\n{normalized}\n\n{e}")
+            QMessageBox.warning(self, self.t('Open Folder Failed'), self.t('Cannot open folder:\n{normalized}\n\n{error}').format(normalized=normalized, error=e))
 
     def select_bdmv_folder(self):
         folder = QFileDialog.getExistingDirectory(self, self.t("Select folder"))

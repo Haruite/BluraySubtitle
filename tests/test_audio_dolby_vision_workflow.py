@@ -187,10 +187,38 @@ class AudioConversionTests(unittest.TestCase):
             self.assertTrue(any('track-1-run-000.flac' in argument for argument in mux_command))
             self.assertFalse(any('track-2-run-000.flac' in argument for argument in mux_command))
 
+    def test_failed_gap_metadata_keeps_media_temporary_and_preserves_the_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            source = Path(temporary_directory) / 'source.mkv'
+            source.write_bytes(b'original source')
+            output = Path(temporary_directory) / 'output.mkv'
+            tracks = [_track(0, 'video', 'V_MPEGH/ISO/HEVC')]
+
+            def mux(command, **_kwargs):
+                Path(command[command.index('-o') + 1]).write_bytes(b'muxed media')
+                return SimpleNamespace(returncode=0)
+
+            with (
+                    patch('src.runtime.audio_conversion._identify_tracks', return_value=tracks),
+                    patch('src.runtime.audio_conversion.find_mkvtoolnix'),
+                    patch('src.runtime.audio_conversion.core_settings.MKV_MERGE_PATH', 'mkvmerge'),
+                    patch('src.runtime.audio_conversion.run_command', side_effect=mux),
+                    patch('src.runtime.audio_conversion.write_audio_gap_sidecar', side_effect=OSError('metadata failed')),
+                    self.assertRaises(AudioMuxFailure) as caught,
+            ):
+                mux_with_audio_conversion(
+                    str(source), str(output), selected_audio_tracks=(), selected_subtitle_tracks=(),
+                    audio_codec_choices=(), clean_audio_tracks=False,
+                    write_audio_gaps=True, preserve_failure_artifacts=True,
+                )
+            self.assertFalse(output.exists())
+            self.assertEqual(source.read_bytes(), b'original source')
+            self.assertEqual([Path(path).read_bytes() for path in caught.exception.artifact_paths], [b'muxed media'])
+
     def test_silent_and_duplicate_audio_are_removed_without_reordering_kept_tracks(self) -> None:
         tracks = [
             _track(1, 'audio', 'A_AC3', language='eng'),
-            _track(2, 'audio', 'A_AC3', language='eng'),
+            _track(2, 'audio', 'A_AC3', language='en-GB'),
             _track(3, 'audio', 'A_AC3', language='jpn'),
             _track(4, 'audio', 'A_AC3', language='eng'),
             _track(5, 'audio', 'A_AC3', language='eng', channels=6),

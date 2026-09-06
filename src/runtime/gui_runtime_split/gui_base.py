@@ -325,9 +325,6 @@ class BluraySubtitleGuiBase(QWidget):
     def _create_main_remux_cmd_editor(self, text: str, parent: Optional[QWidget]=None) -> QPlainTextEdit:
         raise NotImplementedError
 
-    def _create_temp_edit_vpy_from_default(self, video_path: str, subtitle_path: str) -> str:
-        raise NotImplementedError
-
     def _create_temp_preview_vpy_from_default(self, video_path: str, subtitle_path: str) -> str:
         raise NotImplementedError
 
@@ -355,9 +352,6 @@ class BluraySubtitleGuiBase(QWidget):
     def _edit_chapters_for_mkv(self, mkv_path: str):
         raise NotImplementedError
 
-    def _edit_vpy_with_default_sync(self, video_path: str, subtitle_path: str):
-        raise NotImplementedError
-
     def _effective_encode_params(self) -> str:
         raise NotImplementedError
 
@@ -377,9 +371,6 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _extract_track_to_temp_and_open(self, mkv_path: str, track_id: int, codec_id: str):
-        raise NotImplementedError
-
-    def _filter_streams_by_pid_lang(self, streams: list[dict[str, object]], pid_lang: dict[int, str]) -> list[dict[str, object]]:
         raise NotImplementedError
 
     def _filtered_chapter_visible_layout(self, mpls_path: str) -> tuple[list[int], dict[int, str]]:
@@ -426,12 +417,6 @@ class BluraySubtitleGuiBase(QWidget):
     def _get_first_m2ts_for_mpls(self, mpls_path: str) -> str:
         raise NotImplementedError
 
-    def _get_first_subtitle_path_for_bdmv_index(self, bdmv_index: int) -> str:
-        raise NotImplementedError
-
-    def _get_main_mpls_path_for_bdmv_index(self, bdmv_index: int) -> str:
-        raise NotImplementedError
-
     def _get_playlist_dir_for_bdmv_index(self, bdmv_index: int) -> str:
         raise NotImplementedError
 
@@ -439,9 +424,6 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _get_remux_source_path_from_table3_row(self, row_index: int) -> str:
-        raise NotImplementedError
-
-    def _get_root_for_bdmv_index(self, bdmv_index: int) -> str:
         raise NotImplementedError
 
     def _get_selected_main_mpls_paths(self) -> list[str]:
@@ -474,6 +456,9 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _iter_table2_episode_m2ts_details(self, bdmv_index: int):
+        raise NotImplementedError
+
+    def _load_merge_sources(self, source_folder: str) -> list[tuple[str, str]]:
         raise NotImplementedError
 
     def _localized_headers_for_keys(self, keys: list[str]) -> list[str]:
@@ -573,9 +558,6 @@ class BluraySubtitleGuiBase(QWidget):
 
     @staticmethod
     def _patch_vpy_processing_value_in_text(text: str, values: dict[str, float]) -> str:
-        raise NotImplementedError
-
-    def _pid_lang_from_m2ts_track_info(self, tracks: list[dict[str, object]]) -> dict[int, str]:
         raise NotImplementedError
 
     def _pid_lang_from_streams(self, streams: list[dict[str, object]]) -> dict[int, str]:
@@ -678,9 +660,6 @@ class BluraySubtitleGuiBase(QWidget):
     def _remember_output_folder_for_function(self, function_id: int) -> None:
         raise NotImplementedError
 
-    def _remove_table2_rows_by_bdmv_index(self, bdmv_index: int):
-        raise NotImplementedError
-
     def _remove_table3_auto_chapter_sp_rows(self, bdmv_index: int, mpls_basename: str):
         raise NotImplementedError
 
@@ -712,15 +691,6 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _resolve_remux_output_folder(self, base_folder: str) -> str:
-        raise NotImplementedError
-
-    def _resolve_table2_row_edit_context(self, row_index: int) -> tuple[str, str]:
-        raise NotImplementedError
-
-    def _resolve_table3_row_edit_context(self, row_index: int) -> tuple[str, str]:
-        raise NotImplementedError
-
-    def _restore_default_vpy_after_preview(self, mapping: dict[str, tuple[str, str]]):
         raise NotImplementedError
 
     def _restore_output_folder_for_function(self, function_id: int) -> None:
@@ -860,9 +830,6 @@ class BluraySubtitleGuiBase(QWidget):
     def _table2_output_name_if_same_m2ts_detail(self, bdmv_index: int, detail_sp: str) -> str:
         raise NotImplementedError
 
-    def _table2_row_mpls_path(self, row: int) -> str:
-        raise NotImplementedError
-
     def _table3_get_sp_entry_for_row(self, row: int) -> dict[str, int | str]:
         raise NotImplementedError
 
@@ -882,9 +849,6 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _unchecked_segments_from_checkbox_states(self, mpls_path: str) -> tuple[list[tuple[int, int]], dict[int, str]]:
-        raise NotImplementedError
-
-    def _update_default_vpy_paths(self, video_path: str, subtitle_path: str) -> dict[str, tuple[str, str]]:
         raise NotImplementedError
 
     def _update_encode_bit_depth_combo_tooltip(self) -> None:

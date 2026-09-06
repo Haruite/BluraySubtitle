@@ -6,6 +6,16 @@
 
 ---
 
+## 7-Zip
+
+- **文件：** `7z.exe`、`7z.dll`
+- **版本：** {{SEVEN_ZIP_VERSION}}
+- **许可：** GNU LGPL，部分代码采用 BSD-3-Clause，并包含 unRAR 限制
+- **许可原文：** 随附于 `legal/7zip/License.txt`；上游：https://www.7-zip.org/license.txt
+- **源码：** https://github.com/ip7z/7zip/tree/{{SEVEN_ZIP_VERSION}}
+
+---
+
 ## FFmpeg / FFprobe
 
 - **文件：** `ffmpeg.exe`、`ffprobe.exe`

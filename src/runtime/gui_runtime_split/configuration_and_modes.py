@@ -15,6 +15,7 @@ from src.core import ENCODE_REMUX_LABELS, ENCODE_REMUX_SP_LABELS, ENCODE_LABELS,
     DIY_BDMV_LABELS, DIY_SP_LABELS, DIY_REMUX_LABELS, MPLS_INFO_LABELS
 from src.core.i18n import translate_text
 from src.domain import Subtitle
+from src.domain.subtitles import SUBTITLE_EXTENSIONS, list_subtitle_files
 from src.exports.utils import get_time_str, print_exc_terminal, get_index_to_m2ts_and_offset
 from src.runtime.gui_runtime_classes.file_path_table_widget_item import FilePathTableWidgetItem
 from src.runtime.services import BluraySubtitle
@@ -464,7 +465,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     )
                 except Exception:
                     subtitle_path = ''
-                if not subtitle_path.lower().endswith(('.ass', '.ssa', '.srt', '.sup')):
+                if not subtitle_path.lower().endswith(SUBTITLE_EXTENSIONS):
                     continue
                 if subtitle_path not in self._subtitle_cache:
                     try:
@@ -1035,11 +1036,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     sub_files_in_folder: list[str] = []
                     if self.subtitle_folder_path.text().strip():
                         try:
-                            for file in sorted(os.listdir(self.subtitle_folder_path.text().strip())):
-                                if (file.endswith(".ass") or file.endswith(".ssa") or
-                                        file.endswith('srt') or file.endswith('.sup')):
-                                    sub_files_in_folder.append(
-                                        os.path.normpath(os.path.join(self.subtitle_folder_path.text().strip(), file)))
+                            sub_files_in_folder = list_subtitle_files(self.subtitle_folder_path.text().strip())
                         except Exception:
                             pass
 
@@ -1223,15 +1220,10 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                             self.table2.setItem(sub_index, play_col, None)
                             self.table2.setCellWidget(sub_index, play_col, btn_play)
                 if self.subtitle_folder_path.text().strip():
-                    sub_files = []
                     try:
-                        for file in sorted(os.listdir(self.subtitle_folder_path.text().strip())):
-                            if (file.endswith(".ass") or file.endswith(".ssa") or
-                                    file.endswith('srt') or file.endswith('.sup')):
-                                sub_files.append(
-                                    os.path.normpath(os.path.join(self.subtitle_folder_path.text().strip(), file)))
-                    except Exception:
-                        pass
+                        sub_files = list_subtitle_files(self.subtitle_folder_path.text().strip())
+                    except OSError:
+                        sub_files = []
                     if sub_files:
                         for i, sub_file in enumerate(sub_files):
                             if (not self._is_movie_mode()) and i < len(configuration) and i < self.table2.rowCount():
@@ -1329,13 +1321,6 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             keep_inputs = True
             keep_state = True
         function_id = self.get_selected_function_id()
-        if function_id not in (3, 4, 5):
-            try:
-                if os.path.exists('info.json'):
-                    force_remove_file('info.json')
-            except Exception:
-                pass
-
         last_function_id = int(getattr(self, '_selected_function_id', 0) or 0)
         if (not force) and function_id and last_function_id == function_id:
             return
@@ -1348,6 +1333,12 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 self.delete_default_vpy_file()
             except Exception:
                 pass
+        if last_function_id == 1 and function_id != 1:
+            # ISO playlist snapshots belong only to subtitle merging.
+            for row in range(self.table1.rowCount() - 1, -1, -1):
+                item = self.table1.item(row, 0)
+                if item and item.text().lower().endswith('.iso') and os.path.isfile(item.text()):
+                    self.table1.removeRow(row)
         self._selected_function_id = function_id
         self._restore_output_folder_for_function(function_id)
         self._refresh_function_tabbar_theme()
@@ -1697,7 +1688,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     if not mpls_item:
                         continue
                     mpls_file = mpls_item.text()
-                    selected_mpls = os.path.normpath(os.path.join(folder_item.text(), 'BDMV', 'PLAYLIST', mpls_file))
+                    selected_mpls = os.path.normpath(mpls_item.data(Qt.ItemDataRole.UserRole) or os.path.join(folder_item.text(), 'BDMV', 'PLAYLIST', mpls_file))
                     if selected_mpls.lower().endswith('.mpls'):
                         selected.append((folder_item.text(), selected_mpls[:-5]))
                     else:

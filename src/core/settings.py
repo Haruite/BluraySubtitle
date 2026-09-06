@@ -62,6 +62,7 @@ def _bundled_path(relative_path: str, system_path: str) -> str:
     return os.path.join(_BUNDLE_ROOT, relative_path) if _BUNDLE_ROOT else system_path
 
 
+SEVEN_ZIP_PATH = _bundled_path("7z.exe", r"C:\Program Files\7-Zip\7z.exe")
 FLAC_PATH = _bundled_path("flac.exe", r"C:\Software\flac.exe")
 FFMPEG_PATH = _bundled_path("ffmpeg.exe", r"C:\Software\ffmpeg.exe")
 FFPROBE_PATH = _bundled_path("ffprobe.exe", r"C:\Software\ffprobe.exe")
@@ -102,6 +103,7 @@ MKV_EXTRACT_PATH = _bundled_path(
 )
 
 if sys.platform != "win32":
+    SEVEN_ZIP_PATH = "/usr/local/bin/7zz"
     FLAC_PATH = "/usr/bin/flac"
     FFMPEG_PATH = "/usr/bin/ffmpeg"
     FFPROBE_PATH = "/usr/bin/ffprobe"

@@ -14,15 +14,14 @@ import time
 import xml.etree.ElementTree as ET
 from typing import Callable, Optional
 
-import numpy as np
 import pycountry
-import soundfile
 
 from src.bdmv import M2TS, MPLS, Chapter, pid_to_lang_from_m2ts_path
-from src.core import FFPROBE_PATH, FFMPEG_PATH, MKV_MERGE_PATH, \
+from src.core import FFPROBE_PATH, MKV_MERGE_PATH, \
     find_mkvtoolnix, get_mkvtoolnix_ui_language, mkvtoolnix_ui_language_arg
 from src.core import settings as core_settings
 from src.core.i18n import translate_text
+from src.core.media_language import normalize_track_language
 from src.exports.utils import force_remove_file, get_time_str, parse_time_to_seconds, print_exc_terminal, get_index_to_m2ts_and_offset, run_command
 from .service_base import BluraySubtitleServiceBase
 from src.runtime.dolby_vision import mux_dolby_vision_layers
@@ -32,8 +31,7 @@ from .. import TaskCancelled
 # caches; this process cache only keeps one parser per unchanged file so all callers share those results.
 _M2TS_PARSER_CACHE: dict[str, tuple[tuple[int, int], M2TS]] = {}
 _M2TS_PARSER_CACHE_LOCK = threading.RLock()
-_MPLS_PLAY_ROWS_CACHE: dict[str, list] = {}
-_MPLS_TIMELINE_DETAIL_CACHE: dict[tuple[str, float, float], str] = {}
+_MPLS_PLAY_ROWS_CACHE: dict[str, tuple[tuple[int, int], list]] = {}
 _MKVMERGE_IDENTIFY_CACHE: dict[
     str, tuple[tuple[int, int], dict[str, object]]
 ] = {}
@@ -43,30 +41,10 @@ _MKVMERGE_IDENTIFY_CACHE_LOCK = threading.RLock()
 def mpls_playlist_caches_clear() -> None:
     """Clear MPLS-derived UI caches after playlist interpretation settings change."""
     _MPLS_PLAY_ROWS_CACHE.clear()
-    _MPLS_TIMELINE_DETAIL_CACHE.clear()
 
 
 def _normalized_media_path(path: str) -> str:
     return os.path.normcase(os.path.normpath(os.path.abspath(path)))
-
-
-def _normalize_track_language_tag(raw: object) -> str:
-    """Normalize ISO/BCP47/MKV language aliases used by selection and verification."""
-    value = str(raw or '').strip().lower().replace('_', '-')
-    if not value:
-        return 'und'
-    if value in ('eng', 'en') or value.startswith('en-'):
-        return 'eng'
-    if value in ('zho', 'chi', 'cmn', 'yue', 'nan', 'zh', 'chs', 'cht') \
-            or value.startswith('zh-'):
-        return 'zho'
-    if value in ('jpn', 'ja') or value.startswith('ja-'):
-        return 'jpn'
-    if value in ('kor', 'ko') or value.startswith('ko-'):
-        return 'kor'
-    if len(value) >= 3 and re.match(r'^[a-z]{3}', value):
-        return value[:3]
-    return value
 
 
 def _cached_m2ts_parser(m2ts_path: str) -> Optional[M2TS]:
@@ -95,51 +73,25 @@ def _m2ts_cached_pts_dur(m2ts_path: str) -> tuple[Optional[int], Optional[int]]:
         return None, None
 
 def _mpls_play_rows_cached(mpls_path: str) -> list:
+    """Cache playlist rows for detail views only while the MPLS file is unchanged."""
     key = _normalized_media_path(mpls_path)
-    if key in _MPLS_PLAY_ROWS_CACHE:
-        return _MPLS_PLAY_ROWS_CACHE[key]
-    pr: list = []
     try:
-        mp = str(mpls_path or '').strip()
-        if not mp or not mp.lower().endswith('.mpls') or not os.path.isfile(mp):
-            _MPLS_PLAY_ROWS_CACHE[key] = pr
-            return pr
-        ch = Chapter(mp)
-        pr = list(ch.in_out_time or [])
-    except Exception:
-        pr = []
-    _MPLS_PLAY_ROWS_CACHE[key] = pr
-    return pr
+        stat = os.stat(key)
+        signature = (int(stat.st_size), int(stat.st_mtime_ns))
+        cached = _MPLS_PLAY_ROWS_CACHE.get(key)
+        if cached and cached[0] == signature:
+            return cached[1]
+        rows = list(Chapter(key).in_out_time or [])
+    except (OSError, ValueError, TypeError, KeyError, IndexError, AssertionError):
+        _MPLS_PLAY_ROWS_CACHE.pop(key, None)
+        return []
+    _MPLS_PLAY_ROWS_CACHE[key] = (signature, rows)
+    return rows
 
 
 def _svc_cls():
     from ..services.bluray_subtitle_entry import BluraySubtitle
     return BluraySubtitle
-
-
-def _audio_file_channel_count(path: str) -> int:
-    """Channel count of the first audio stream in a file; 0 if unknown."""
-    if not path or not os.path.isfile(path):
-        return 0
-    try:
-        info = soundfile.info(path)
-        ch = int(info.channels)
-        if ch > 0:
-            return ch
-    except Exception:
-        pass
-    try:
-        proc = run_command(
-            f'"{FFPROBE_PATH}" -v error -select_streams a:0 -show_entries stream=channels '
-            f'-of default=noprint_wrappers=1:nokey=1 "{path}"',
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        ch = int((proc.stdout or '').strip())
-        return ch if ch > 0 else 0
-    except Exception:
-        return 0
 
 
 class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
@@ -402,7 +354,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
     @staticmethod
     def _norm_lang_for_track_selection(raw: object) -> str:
         """Normalize ISO/BCP47/MKV language tags for default eng/zho track picking."""
-        return _normalize_track_language_tag(raw)
+        return normalize_track_language(raw)
 
     @staticmethod
     def _pid_lang_from_media_streams(streams: list[dict[str, object]]) -> dict[int, str]:
@@ -609,24 +561,6 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             return int(s, 0)
         except Exception:
             return None
-
-    @staticmethod
-    def _stream_index_to_service_pid(m2ts_path: str) -> dict[int, int]:
-        """Map stream index (0,1,…) → TS PID from ``streams[].id``. m2ts has no reliable language tags."""
-        out: dict[int, int] = {}
-        for s in _svc_cls()._m2ts_track_streams(m2ts_path):
-            if not isinstance(s, dict):
-                continue
-            if str(s.get('codec_type') or '') not in ('video', 'audio', 'subtitle', 'subtitles'):
-                continue
-            try:
-                idx = int(s.get('index'))
-            except Exception:
-                continue
-            pid = _svc_cls()._stream_service_id(s)
-            if pid is not None:
-                out[idx] = pid
-        return out
 
     @staticmethod
     def _m2ts_track_streams(m2ts_path: str) -> list[dict[str, object]]:
@@ -921,145 +855,6 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         return has_audio and (not has_video)
 
     @staticmethod
-    def _extract_single_audio_from_mka(output_file: str):
-        if not output_file or not os.path.exists(output_file):
-            return
-        if not str(output_file).lower().endswith('.mka'):
-            return
-        streams = _svc_cls()._read_media_streams(output_file)
-        audio_streams = [s for s in streams if str(s.get('codec_type') or '') == 'audio']
-        if len(audio_streams) != 1:
-            return
-        codec = str(audio_streams[0].get('codec_name') or '').lower()
-        ext_map = {
-            'flac': 'flac',
-            'wav': 'wav',
-            'pcm_s16le': 'wav',
-            'pcm_s24le': 'wav',
-            'pcm_s32le': 'wav',
-            'pcm_bluray': 'wav',
-            'dts': 'dts',
-            'truehd': 'thd',
-            'mlp': 'thd',
-            'ac3': 'ac3',
-            'eac3': 'eac3',
-            'aac': 'm4a',
-            'opus': 'opus',
-        }
-        ext = ext_map.get(codec, codec or 'audio')
-        if ext == 'mka':
-            return
-        dst = os.path.splitext(output_file)[0] + f'.{ext}'
-        cmd = f'"{FFMPEG_PATH}" -hide_banner -loglevel error -y -i "{output_file}" -map 0:a:0 -c copy "{dst}"'
-        try:
-            p = run_command(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore')
-            if p.returncode == 0 and os.path.exists(dst):
-                os.remove(output_file)
-        except Exception:
-            pass
-
-    @staticmethod
-    def _is_silent_audio_file(path: str, threshold_db: float = -60.0) -> tuple[bool, float]:
-        y = None
-        try:
-            info = soundfile.info(path)
-            frames = min(int(info.frames), int(info.samplerate) * 30)
-            start = int(info.frames) // 2 if int(info.frames) > (frames * 2) else 0
-            data, _sample_rate = soundfile.read(
-                path,
-                start=start,
-                frames=frames,
-                dtype='float32',
-                always_2d=True,
-            )
-            y = data.mean(axis=1)
-        except Exception:
-            y = None
-        if y is None:
-            fd, tmp = tempfile.mkstemp(prefix=f"temp_sil_{os.getpid()}_", suffix=".w64")
-            os.close(fd)
-            try:
-                run_command(
-                    f'"{FFMPEG_PATH}" -hide_banner -loglevel error -y -i "{path}" -ac 1 -ar 22050 -c:a pcm_s16le -f w64 "{tmp}"',
-                    check=True
-                )
-                data, _sample_rate = soundfile.read(tmp, dtype='float32', always_2d=True)
-                y = data.mean(axis=1)
-            finally:
-                if os.path.exists(tmp):
-                    try:
-                        os.remove(tmp)
-                    except Exception:
-                        pass
-        frame_length = 2048
-        hop_length = 512
-        padded = np.pad(np.asarray(y, dtype=np.float32), frame_length // 2)
-        squared = np.square(padded, dtype=np.float64)
-        cumulative = np.concatenate(([0.0], np.cumsum(squared)))
-        frame_starts = np.arange(0, padded.size - frame_length + 1, hop_length)
-        frame_power = (
-            cumulative[frame_starts + frame_length] - cumulative[frame_starts]
-        ) / frame_length
-        rms = np.sqrt(frame_power)
-        minimum_amplitude = 1e-5
-        reference_amplitude = max(minimum_amplitude, float(np.max(rms)))
-        db = 20.0 * np.log10(np.maximum(minimum_amplitude, rms))
-        db -= 20.0 * np.log10(reference_amplitude)
-        db = np.maximum(db, float(np.max(db)) - 80.0)
-        avg_db = float(np.mean(db))
-        return avg_db < threshold_db, avg_db
-
-    @staticmethod
-    def _pid_lang_from_mkvmerge_json(media_path: str) -> dict[int, str]:
-        if not media_path or not os.path.exists(media_path):
-            return {}
-        try:
-            find_mkvtoolnix()
-        except Exception:
-            pass
-        exe = MKV_MERGE_PATH if MKV_MERGE_PATH else 'mkvmerge'
-        try:
-            p = run_command(
-                [exe, "--identify", "--identification-format", "json", media_path],
-                capture_output=True,
-                text=True,
-                encoding='utf-8',
-                errors='ignore',
-            )
-        except Exception:
-            return {}
-        if p.returncode != 0:
-            return {}
-        try:
-            data = json.loads(p.stdout or "{}")
-        except Exception:
-            return {}
-        out: dict[int, str] = {}
-        tracks = data.get('tracks') or []
-        if not isinstance(tracks, list):
-            return {}
-        for t in tracks:
-            if not isinstance(t, dict):
-                continue
-            props = t.get('properties') or {}
-            if not isinstance(props, dict):
-                props = {}
-            lang = str(props.get('language') or 'und')
-            if not lang:
-                lang = 'und'
-            for key in ('id',):
-                try:
-                    out[int(t.get(key))] = lang
-                except Exception:
-                    pass
-            for key in ('stream_id', 'number'):
-                try:
-                    out[int(props.get(key))] = lang
-                except Exception:
-                    pass
-        return out
-
-    @staticmethod
     def _mkvmerge_identify_json(media_path: str) -> dict[str, object]:
         if not media_path or not os.path.exists(media_path):
             return {}
@@ -1100,25 +895,6 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         with _MKVMERGE_IDENTIFY_CACHE_LOCK:
             _MKVMERGE_IDENTIFY_CACHE[normalized_path] = (signature, data)
         return data
-
-    @staticmethod
-    def _mkvmerge_track_ids_by_type(media_path: str, track_type: str) -> list[int]:
-        """mkvmerge JSON ``tracks[].id`` for *track_type* (``video`` / ``audio`` / ``subtitles``)."""
-        want = str(track_type or '').strip().lower()
-        if want == 'subtitle':
-            want = 'subtitles'
-        out: list[int] = []
-        ident = _svc_cls()._mkvmerge_identify_json(media_path)
-        for t in ident.get('tracks') or []:
-            if not isinstance(t, dict):
-                continue
-            if str(t.get('type') or '').strip().lower() != want:
-                continue
-            try:
-                out.append(int(t['id']))
-            except Exception:
-                continue
-        return out
 
     @staticmethod
     def _int_from_mkvmerge_prop(raw: object) -> Optional[int]:
@@ -1820,11 +1596,11 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 if not isinstance(properties, dict):
                     properties = {}
                 actual_languages = {
-                    _normalize_track_language_tag(properties.get(property_name))
+                    normalize_track_language(properties.get(property_name))
                     for property_name in ('language', 'language_ietf')
                     if str(properties.get(property_name) or '').strip()
                 }
-                if _normalize_track_language_tag(desired_language) in actual_languages:
+                if normalize_track_language(desired_language) in actual_languages:
                     continue
                 # `track:n` uses the one-based order returned by `mkvmerge --identify`.
                 track_number = output_index + 1
@@ -1861,13 +1637,13 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             try:
                 properties = verified_tracks[output_index].get('properties') or {}
                 actual_languages = {
-                    _normalize_track_language_tag(properties.get(property_name))
+                    normalize_track_language(properties.get(property_name))
                     for property_name in ('language', 'language_ietf')
                     if str(properties.get(property_name) or '').strip()
                 }
             except (AttributeError, IndexError, TypeError):
                 actual_languages = set()
-            if _normalize_track_language_tag(desired_language) not in actual_languages:
+            if normalize_track_language(desired_language) not in actual_languages:
                 raise RuntimeError(
                     translate_text('Track language correction did not apply to: {path}').format(
                         path=output_mkv_path
@@ -2707,24 +2483,6 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         return None
 
     @staticmethod
-    def _split_segment_count_from_mkvmerge_cmd(cmd: str) -> Optional[int]:
-        """
-        Best-effort parse of mkvmerge ``--split`` (newline-split: sum counts from each line that has ``--split``).
-        Supports ``--split parts:...`` and ``--split chapters:...``.
-        """
-        lines = _svc_cls()._remux_cmd_shell_lines(cmd)
-        if not lines:
-            return None
-        total = 0
-        found = False
-        for ln in lines:
-            n = _svc_cls()._split_segment_count_from_mkvmerge_one_line(ln)
-            if isinstance(n, int) and n > 0:
-                total += n
-                found = True
-        return total if found else None
-
-    @staticmethod
     def _split_chapters_ints_from_mkvmerge_one_line(line: str) -> Optional[list[int]]:
         """Parse ``--split chapters:n,m,...`` from one command line; None if absent / unexpanded / invalid."""
         raw = (line or '').strip()
@@ -2845,42 +2603,6 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         return True, s, e
 
     @staticmethod
-    def m2ts_sp_custom_segment_time_window_sec(mpls_path: str, output_name: str) -> Optional[tuple[float, float]]:
-        """
-        Time window (seconds on MPLS timeline) for SP ``output_name`` suffix like
-        ``beginning_to_chapter_4`` — same chapter indices as ``_write_custom_chapter_for_segment``.
-        """
-        if not (mpls_path and output_name and str(mpls_path).strip()):
-            return None
-        if not os.path.isfile(mpls_path):
-            return None
-        m = re.search(r'(beginning|chapter_(\d+))_to_(chapter_(\d+)|ending)', output_name, re.IGNORECASE)
-        if not m:
-            return None
-        try:
-            chapter = Chapter(mpls_path)
-            rows = sum(map(len, chapter.mark_info.values()))
-            total_end = rows + 1
-            start_idx = 1 if (m.group(1) or '').lower() == 'beginning' else int(m.group(2) or 1)
-            g3 = (m.group(3) or '').lower()
-            if g3 == 'ending':
-                end_idx = total_end
-            else:
-                end_idx = int(m.group(4) or total_end)
-            start_idx = max(1, min(start_idx, total_end))
-            end_idx = max(start_idx + 1, min(end_idx, total_end))
-            _, index_to_offset = get_index_to_m2ts_and_offset(chapter)
-
-            def _off(idx: int) -> float:
-                if idx >= total_end:
-                    return chapter.get_total_time()
-                return float(index_to_offset.get(idx, 0.0))
-
-            return float(_off(start_idx)), float(_off(end_idx))
-        except Exception:
-            return None
-
-    @staticmethod
     def m2ts_file_detail_whole_stream_file(m2ts_path: str) -> str:
         """``basename(start-end)`` for one .m2ts using container duration (no playlist in/out)."""
         name = os.path.basename(str(m2ts_path or '')) or ''
@@ -2986,14 +2708,10 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         mp = str(mpls_path or '').strip()
         if not mp or not mp.lower().endswith('.mpls') or not os.path.isfile(mp):
             return ''
-        ck = (_normalized_media_path(mp), round(float(w0), 4), round(float(w1), 4))
-        if ck in _MPLS_TIMELINE_DETAIL_CACHE:
-            return _MPLS_TIMELINE_DETAIL_CACHE[ck]
         playlist_dir = os.path.dirname(os.path.normpath(mp))
         stream_dir = os.path.normpath(os.path.join(playlist_dir, '..', 'STREAM'))
         play_rows = _mpls_play_rows_cached(mp)
         if not play_rows:
-            _MPLS_TIMELINE_DETAIL_CACHE[ck] = ''
             return ''
         eps = overlap_tolerance
         parts: list[str] = []
@@ -3033,9 +2751,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             if ed == '0':
                 ed = '00:00:00.000'
             parts.append(f'{base_name}({st}-{ed})')
-        result = ','.join(parts)
-        _MPLS_TIMELINE_DETAIL_CACHE[ck] = result
-        return result
+        return ','.join(parts)
 
     @staticmethod
     def m2ts_basenames_from_mpls_timeline_window(mpls_path: str, w0: float, w1: float) -> list[str]:
@@ -3330,47 +3046,6 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         return [t for t in tracks if t.get('track_id') is not None and str(t.get('stream_id') or '').strip()]
 
     @staticmethod
-    def _tsmuxer_has_video_and_subtitles(tracks: list[dict[str, object]]) -> bool:
-        has_v = False
-        has_s = False
-        for t in tracks:
-            sid = str(t.get('stream_id') or '')
-            st = str(t.get('stream_type') or '')
-            if sid.upper().startswith('V_') or st.upper() in ('HEVC', 'H264', 'AVC', 'MPEG2', 'VC1', 'VVC'):
-                has_v = True
-            if 'PGS' in sid.upper() or 'PGS' in st.upper() or sid.upper().startswith('S_'):
-                has_s = True
-        return has_v and has_s
-
-
-    @staticmethod
-    def _tsmuxer_tracks_ordered_for_ref_slots(
-            tsmuxer_tracks: list[dict[str, object]],
-            ref_slots: list[dict[str, object]],
-    ) -> list[dict[str, object]]:
-        """Probe rows for each ``ref_slots`` PID only, in slot list order (first occurrence per PID)."""
-        by_tid: dict[int, dict[str, object]] = {}
-        for t in tsmuxer_tracks or []:
-            pid = _svc_cls()._tsmuxer_mpeg_pid(t)
-            if pid is None:
-                continue
-            by_tid[pid] = t
-        out: list[dict[str, object]] = []
-        seen: set[int] = set()
-        for slot in ref_slots or []:
-            try:
-                pid = int(slot.get('pid'))
-            except Exception:
-                continue
-            if pid in seen:
-                continue
-            row = by_tid.get(pid)
-            if row is not None:
-                out.append(row)
-                seen.add(pid)
-        return out
-
-    @staticmethod
     def _norm_lang_mkv(lcode: str) -> str:
         s = (lcode or '').strip().lower().replace('_', '-')
         if len(s) >= 3 and re.match(r'^[a-z]{3}', s):
@@ -3573,40 +3248,6 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         except OSError:
             return False
         return os.path.isfile(part_path)
-
-    @staticmethod
-    def _add_cover_attachment_with_mkvpropedit(
-            mkv_path: str,
-            cover_path: str,
-            ui_language_argument: str,
-    ) -> bool:
-        """Add the selected cover in place without rewriting the Matroska media payload."""
-        if not cover_path or not os.path.isfile(cover_path):
-            return True
-        mkvpropedit_executable = (
-            core_settings.MKV_PROP_EDIT_PATH or shutil.which('mkvpropedit') or ''
-        )
-        if not mkvpropedit_executable:
-            print(translate_text('mkvpropedit not found'))
-            return False
-        command = [mkvpropedit_executable]
-        if ui_language_argument:
-            command.extend(ui_language_argument.split())
-        command.extend([
-            mkv_path,
-            '--attachment-name', 'Cover.jpg',
-            '--add-attachment', cover_path,
-        ])
-        print(translate_text('[remux-fallback] adding cover in place: {command}').format(
-            command=subprocess.list2cmdline(command)
-        ))
-        result = run_command(command)
-        if result.returncode not in (0, 1):
-            print(translate_text(
-                '[remux-fallback] adding cover failed with exit code {code}: {path}'
-            ).format(code=result.returncode, path=mkv_path))
-            return False
-        return os.path.isfile(mkv_path)
 
     @staticmethod
     def _slot_pids_in_order(slots: list[dict[str, object]]) -> list[int]:

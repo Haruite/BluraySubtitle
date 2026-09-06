@@ -7,14 +7,14 @@ import shutil
 import subprocess
 import tempfile
 import threading
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
 from src.bdmv import Chapter, M2TS
 from src.core import FFMPEG_PATH, MKV_MERGE_PATH, MKV_EXTRACT_PATH, \
     find_mkvtoolnix, mkvtoolnix_ui_language_arg, MKV_PROP_EDIT_PATH
 from src.core.i18n import translate_text
 from src.domain import MKV, Subtitle
-from src.exports.utils import get_index_to_m2ts_and_offset, append_ogm_chapter_lines, force_remove_folder, \
+from src.exports.utils import get_index_to_m2ts_and_offset, append_ogm_chapter_lines, \
     force_remove_file, print_terminal_line, print_exc_terminal, get_time_str, parse_time_to_seconds, run_command
 from .service_base import BluraySubtitleServiceBase
 from src.runtime.audio_conversion import (
@@ -39,35 +39,6 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
         except Exception:
             return []
 
-    @staticmethod
-    def _pid_lang_from_m2ts_track_info(track_info: list[dict[str, object]]) -> dict[int, str]:
-        """Convert track info list to pid->language mapping."""
-        out: dict[int, str] = {}
-        for row in list(track_info or []):
-            if not isinstance(row, dict):
-                continue
-            pid_raw: Any = (
-                row.get("pid")
-                or row.get("service_id")
-                or row.get("id")
-                or row.get("stream_id")
-            )
-            try:
-                pid = int(str(pid_raw), 0) if isinstance(pid_raw, str) else int(pid_raw)
-            except Exception:
-                continue
-            tags = row.get("tags") if isinstance(row.get("tags"), dict) else {}
-            lang = (
-                row.get("language")
-                or tags.get("language")
-                or tags.get("LANGUAGE")
-                or ""
-            )
-            lang = str(lang).strip().lower()
-            if lang:
-                out[pid] = lang
-        return out
-
     def merge_subtitles(
             self,
             selected_mpls: list[tuple[str, str]],
@@ -86,27 +57,30 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
         self._progress(text='Loading Subtitles')
         self._preload_subtitles(subtitle_files, cancel_event=cancel_event)
         suffix = str(subtitle_suffix or '')
-        output_jobs: list[tuple[Subtitle, str, str]] = []
+        output_jobs: list[tuple[Subtitle, str, Optional[str]]] = []
 
-        def folder_output_base(folder: str, selected_mpls_no_ext: str,
-                               playlist_rows: list[tuple[str, str]]) -> str:
+        def output_bases(folder: str, selected_mpls_no_ext: str,
+                         playlist_rows: list[tuple[str, str]]) -> tuple[str, Optional[str]]:
             folder_key = os.path.normcase(os.path.normpath(folder))
             folder_playlists = {
                 os.path.normcase(os.path.normpath(mpls_no_ext))
                 for row_folder, mpls_no_ext in playlist_rows
                 if os.path.normcase(os.path.normpath(row_folder)) == folder_key
             }
+            iso_source = os.path.isfile(folder) and folder.lower().endswith('.iso')
+            if iso_source:
+                folder = os.path.splitext(folder)[0]
             if len(folder_playlists) > 1:
-                return f'{folder}_{os.path.basename(selected_mpls_no_ext)}{suffix}'
-            return folder + suffix
+                folder += '_' + os.path.basename(selected_mpls_no_ext)
+            # An ISO receives only an adjacent subtitle; extracted MPLS files are private inputs.
+            return folder + suffix, None if iso_source else selected_mpls_no_ext + suffix
 
         if movie_tasks:
             playlist_rows = [(folder, selected_mpls_no_ext) for _, folder, selected_mpls_no_ext in movie_tasks]
             for subtitle_path, folder, selected_mpls_no_ext in movie_tasks:
                 output_jobs.append((
                     self._subtitle_cache[subtitle_path].clone(),
-                    folder_output_base(folder, selected_mpls_no_ext, playlist_rows),
-                    selected_mpls_no_ext + suffix,
+                    *output_bases(folder, selected_mpls_no_ext, playlist_rows),
                 ))
         else:
             if series_configuration:
@@ -164,10 +138,9 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                             'Subtitle formats cannot be mixed within one merged output'
                         ))
                     merged_subtitle.append_subtitle(parsed_subtitle, offset_seconds)
-                output_folder_base = folder_output_base(
+                output_folder_base, output_mpls_base = output_bases(
                     str(row['folder']), selected_mpls_no_ext, playlist_rows,
                 )
-                output_mpls_base = selected_mpls_no_ext + suffix
             if merged_subtitle is not None:
                 output_jobs.append((merged_subtitle, output_folder_base, output_mpls_base))
             self.configuration = configuration
@@ -177,7 +150,10 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
         normalized_paths: set[str] = set()
         for merged_subtitle, folder_base, mpls_base in output_jobs:
             extension = merged_subtitle.output_extension()
-            for output_path in (folder_base + extension, mpls_base + extension):
+            for base in (folder_base, mpls_base):
+                if base is None:
+                    continue
+                output_path = base + extension
                 normalized_path = os.path.normcase(os.path.abspath(output_path))
                 if normalized_path in normalized_paths:
                     raise ValueError(translate_text('Duplicate output path: {path}').format(path=output_path))
@@ -548,8 +524,8 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                 self._progress(250 + int(document_index / total * 750), 'Writing Chapters')
         self._progress(1000, 'Done')
 
-    def completion(self):  # complete Blu-ray folder; remove temporary files
-        """Finalize folder layout after processing and clean temporary artifacts."""
+    def completion(self):
+        """Complete physical Blu-ray directory layouts after successful processing."""
         if self.checked:
             for folder in self.bluray_folders:
                 bdmv = os.path.join(folder, 'BDMV')
@@ -564,31 +540,6 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                 for item in 'AUXDATA', 'BDJO', 'JAR', 'META':
                     if not os.path.exists(os.path.join(bdmv, item)):
                         os.mkdir(os.path.join(bdmv, item))
-        for tmp_folder in self.tmp_folders:
-            try:
-                force_remove_folder(tmp_folder)
-            except:
-                pass
-        if os.path.exists('chapter.txt'):
-            try:
-                force_remove_file('chapter.txt')
-            except:
-                pass
-        if os.path.exists('mkvinfo.txt'):
-            try:
-                force_remove_file('mkvinfo.txt')
-            except:
-                pass
-        if os.path.exists('info.json'):
-            try:
-                force_remove_file('info.json')
-            except:
-                pass
-        if os.path.exists('.meta'):
-            try:
-                force_remove_file('.meta')
-            except:
-                pass
         print_terminal_line('[BluraySubtitle] completion(): cleanup finished.')
 
     def _compute_mkv_id_to_mpls_track_signature_for_main_mpls(
@@ -1854,28 +1805,6 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
             f'{self.t("[chapter-debug] ")}{self.t("full chapter file written: ")}{chapter_txt_path} '
             f'(mpls={os.path.basename(mpls_path)} entries={len(lines) // 2})'
         )
-        return offs
-
-    def _get_chapter_offsets(self, mpls_path: str) -> list[float]:
-        chapter = Chapter(mpls_path)
-        mark_info = chapter.mark_info
-        in_out_time = chapter.in_out_time
-        mpls_duration = chapter.get_total_time()
-
-        offsets = []
-        offset = 0
-        for ref_to_play_item_id in range(len(in_out_time)):
-            mark_timestamps = mark_info.get(ref_to_play_item_id) or []
-            for mark_timestamp in mark_timestamps:
-                off = offset + (mark_timestamp - in_out_time[ref_to_play_item_id][1]) / 45000
-                if mpls_duration - off >= 0.001:
-                    offsets.append(off)
-            offset += (in_out_time[ref_to_play_item_id][2] - in_out_time[ref_to_play_item_id][1]) / 45000
-
-        offs = []
-        for off in offsets:
-            if off not in offs:
-                offs.append(off)
         return offs
 
     def _write_custom_chapter_for_segment(self, mpls_path: str, chapter_txt_path: str, output_name: str):

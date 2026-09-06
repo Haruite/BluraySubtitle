@@ -12,7 +12,7 @@ These standards are mandatory for all repository changes. Resolve conflicts betw
 
 Explicit requirements for a particular file or workflow take precedence over the corresponding general rules; product exceptions are collected in section 10.
 
-Keep both language versions of these standards synchronized, and record author-confirmed rules before or with code that relies on them. When documenting confirmed product behavior or operational cautions, update both README versions. For refactoring or major changes, also update the [English](../refactoring/refactoring-history.md) and [Simplified Chinese](../refactoring/refactoring-history.zh-Hans.md) histories; ordinary changes need no history entry.
+Keep both language versions of these standards synchronized, and record author-confirmed rules before or with code that relies on them. When documenting confirmed product behavior or operational cautions, update both README versions. For refactoring or major changes, also update the [English](../refactoring/refactoring-history.md) and [Simplified Chinese](../refactoring/refactoring-history.zh-Hans.md) histories; ordinary changes need no history entry. Refactoring history records only actual changes and necessary verification results, excluding unchanged areas and discussions that led to no changes; it is not a source of current requirements.
 
 ## 2. Simplicity and Consistency
 
@@ -61,7 +61,7 @@ Keep both language versions of these standards synchronized, and record author-c
 
 - Application-authored user-visible text, including GUI labels, dialogs, progress, and terminal messages, must support English and Simplified Chinese. Add or update entries in `src/core/i18n.py:I18N_ZH_TO_EN` in the same change: Chinese text is the key, and its English source string is the value.
 - Translate at the presentation boundary through `self.t(...)` or `translate_text(...)`. For dynamic text, translate a stable template before substituting values.
-- Keep README content focused on current functionality, operational cautions, and other information useful to users. Confine implementation details to dedicated implementation-notes or implementation-details paragraphs/sections. Put historical comparisons, removed behavior, refactoring rationale, and future cleanup plans in refactoring history or development documents.
+- Keep README content focused on current functionality, operational cautions, and other information useful to users. Confine implementation details to dedicated implementation-notes or implementation-details paragraphs/sections. Put historical comparisons, removed behavior, and refactoring rationale in refactoring history; put future cleanup plans in development documents.
 
 ## 8. File Format
 
@@ -71,6 +71,7 @@ Keep both language versions of these standards synchronized, and record author-c
 
 ## 9. Tool Versions and Dockerfile Maintenance
 
+- The supported operating systems and architectures are exactly those accepted by `setup_windows_environment.ps1` and `setup_linux_environment.sh`: currently x64 Windows 10 or later, Windows Server 2019 or later with Desktop Experience, Ubuntu 22.04 or later, and Debian 12 or later. Check changes against that whole range, not just the development machine; do not add compatibility branches for other systems. Evaluate Linux features in the repository's Docker environment as well; do not present a feature as supported in Docker if it cannot run there.
 - Use the latest version published by the official upstream for dependencies and bundled tools. Pin a version or commit only for a confirmed compatibility or other technical constraint.
 - Setup scripts and the Dockerfile must install every executable, library, and plugin used by their respective runtime. Source builds must explicitly enable every optional feature the application uses.
 - `Dockerfile` adapts `setup_linux_environment.sh` to Ubuntu 26.04. In the Dockerfile, do not add compatibility handling for other operating systems, explanatory output, or comments.
@@ -81,6 +82,7 @@ Keep both language versions of these standards synchronized, and record author-c
 
 Keep this section limited to confirmed exceptions and product semantics that would otherwise be ambiguous. Implementation details belong in nearby code comments or refactoring history.
 
+- **ISO subtitle merging:** ISO input is limited to reading BDMV playlists for subtitle merging, not preview, Remux, or Encode. Release image access as soon as the playlists have been read; do not keep images mounted for the task.
 - **Main-playlist Remux selection:** **Edit Tracks** controls video, audio, and subtitle selection. The editable mux command uses `{video_opts}`, `{audio_opts}`, and `{sub_opts}` placeholders; manually entered track-selection flags are ignored and replaced at execution from the captured track selection.
 - **Automatic getnative:** When the actual source height exceeds 1080 pixels, Encode reports a skip and omits automatic getnative even if selected. Higher-resolution analysis requires manually running `src/scripts/getnative_file.py` and configuring the VPy.
 - **Resumable Encode:** Remux-source Encode skips completed main, SP, external-subtitle, and companion outputs without overwriting them, then continues the remaining work. Main/SP file outputs must be non-empty; directory-source rows require the expected directory output. Empty main/SP files or paths of the wrong type are errors. Existing external-subtitle and companion files count as completed. Duplicate paths within the current request remain errors.

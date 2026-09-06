@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import datetime
 import os
 import struct
 import tempfile
 import threading
 import unittest
+from contextlib import chdir
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -42,6 +44,22 @@ class MergeSubtitleWorkflowTests(unittest.TestCase):
 
         service._preload_subtitles = preload
         return service
+
+    def test_subtitle_duration_keeps_a_distant_final_event(self) -> None:
+        subtitle = Subtitle.from_parsed(SimpleNamespace(events=[
+            SimpleNamespace(End=datetime.timedelta(seconds=20)),
+            SimpleNamespace(End=datetime.timedelta(seconds=600)),
+        ]))
+        self.assertEqual(subtitle.max_end_time(), 600.0)
+
+    def test_completion_preserves_unowned_files_in_the_working_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory, chdir(temporary_directory):
+            paths = [Path(name) for name in ('chapter.txt', 'mkvinfo.txt', 'info.json', '.meta')]
+            for path in paths:
+                path.write_bytes(b'existing user data')
+            service = SimpleNamespace(checked=False)
+            SubtitleChapterPipelineMixin.completion(service)
+            self.assertEqual([path.read_bytes() for path in paths], [b'existing user data'] * len(paths))
 
     def test_sup_subtitles_are_merged_and_dumped_without_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -100,6 +118,33 @@ class MergeSubtitleWorkflowTests(unittest.TestCase):
                 '1\n00:00:00,000 --> 00:00:01,000\nFirst\n\n'
                 '2\n00:00:10,000 --> 00:00:11,000\nSecond'
             ))
+
+    def test_iso_merge_writes_only_beside_the_image_without_overwriting(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            image = root / 'Disc.ISO'
+            image.write_bytes(b'original image')
+            subtitle = root / 'episode.srt'
+            self._write_srt(subtitle, 'Episode')
+            playlists = root / 'private' / 'BDMV' / 'PLAYLIST'
+            playlists.mkdir(parents=True)
+            playlist_base = str(playlists / '00001')
+            configuration = {
+                0: {'folder': str(image), 'selected_mpls': playlist_base, 'bdmv_index': 1, 'offset': '00:00:10'},
+            }
+            service = self._service([str(subtitle)], configuration)
+            outputs = SubtitleChapterPipelineMixin.merge_subtitles(
+                service, [(str(image), playlist_base)], subtitle_suffix='.en',
+            )
+            self.assertEqual(outputs, [str(root / 'Disc.en.srt')])
+            self.assertEqual(Path(outputs[0]).read_text(encoding='utf-8-sig').strip(),
+                             '1\n00:00:10,000 --> 00:00:11,000\nEpisode')
+            self.assertEqual(list(playlists.iterdir()), [])
+            self.assertEqual(image.read_bytes(), b'original image')
+            with self.assertRaises(FileExistsError):
+                SubtitleChapterPipelineMixin.merge_subtitles(
+                    service, [(str(image), playlist_base)], subtitle_suffix='.en',
+                )
 
     def test_existing_output_aborts_before_any_new_output_is_written(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

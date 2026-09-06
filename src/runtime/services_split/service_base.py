@@ -41,7 +41,6 @@ class BluraySubtitleServiceBase:
         self.progress_dialog = None
         self.remux_warnings = None
         self.sub_files = None
-        self.tmp_folders = None
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -60,14 +59,7 @@ class BluraySubtitleServiceBase:
 
     # BEGIN GENERATED MIXIN CONTRACTS
     @staticmethod
-    def _add_cover_attachment_with_mkvpropedit(mkv_path: str, cover_path: str, ui_language_argument: str) -> bool:
-        raise NotImplementedError
-
-    @staticmethod
     def _aligned_output_track_ids_for_pid_slots(media_path: str, selected_pid_slots: list[tuple[str, int]]) -> Optional[tuple[list[str], list[str], dict[int, int]]]:
-        raise NotImplementedError
-
-    def _apply_episode_output_names(self, mkv_files: list[str], output_names: Optional[list[str]]=None) -> list[str]:
         raise NotImplementedError
 
     def _assign_movie_sp_output_names(self, entries: list[dict[str, object]]) -> None:
@@ -140,10 +132,6 @@ class BluraySubtitleServiceBase:
         raise NotImplementedError
 
     @staticmethod
-    def _extract_single_audio_from_mka(output_file: str):
-        raise NotImplementedError
-
-    @staticmethod
     def _filter_pid_slots_for_dovi_plan(slots: list[dict[str, object]], dovi_plan: Optional[dict[str, object]]) -> list[dict[str, object]]:
         raise NotImplementedError
 
@@ -171,9 +159,6 @@ class BluraySubtitleServiceBase:
     def _frame_discriminability_score(image_path: str) -> float:
         raise NotImplementedError
 
-    def _get_chapter_offsets(self, mpls_path: str) -> list[float]:
-        raise NotImplementedError
-
     @staticmethod
     def _group_selected_mpls_by_folder_runs(selected_mpls: list[tuple[str, str]]) -> list[list[tuple[str, str]]]:
         raise NotImplementedError
@@ -187,10 +172,6 @@ class BluraySubtitleServiceBase:
 
     @staticmethod
     def _is_audio_only_media(media_path: str) -> bool:
-        raise NotImplementedError
-
-    @staticmethod
-    def _is_silent_audio_file(path: str, threshold_db: float=-60.0) -> tuple[bool, float]:
         raise NotImplementedError
 
     @staticmethod
@@ -266,10 +247,6 @@ class BluraySubtitleServiceBase:
     def _mkvmerge_tid_for_pid(m2ts_path: str, pid: int, slot_type: str) -> Optional[int]:
         raise NotImplementedError
 
-    @staticmethod
-    def _mkvmerge_track_ids_by_type(media_path: str, track_type: str) -> list[int]:
-        raise NotImplementedError
-
     def _movie_sp_covered_by_table2(self, bdmv_index: int, sp_detail: str, table2_details: list[str]) -> bool:
         raise NotImplementedError
 
@@ -333,15 +310,7 @@ class BluraySubtitleServiceBase:
         raise NotImplementedError
 
     @staticmethod
-    def _pid_lang_from_m2ts_track_info(track_info: list[dict[str, object]]) -> dict[int, str]:
-        raise NotImplementedError
-
-    @staticmethod
     def _pid_lang_from_media_streams(streams: list[dict[str, object]]) -> dict[int, str]:
-        raise NotImplementedError
-
-    @staticmethod
-    def _pid_lang_from_mkvmerge_json(media_path: str) -> dict[int, str]:
         raise NotImplementedError
 
     def _post_remux_finalize_episodes(self, jobs: list[RemuxMainJob], cancel_event: Optional[threading.Event]) -> list[str]:
@@ -403,9 +372,6 @@ class BluraySubtitleServiceBase:
     def _remux_parsed_chapter_bounds_for_theory_count(cmd: str, confs: list[dict[str, int | str]], mpls_path0: str, n_expect: int) -> Optional[list[tuple[int, int]]]:
         raise NotImplementedError
 
-    def _remux_remap_chapter_skip_after_rename(self, mkv_files: list[str]) -> None:
-        raise NotImplementedError
-
     def _resolve_disc_output_name(self, selected_mpls_no_ext: str) -> str:
         raise NotImplementedError
 
@@ -461,15 +427,7 @@ class BluraySubtitleServiceBase:
         raise NotImplementedError
 
     @staticmethod
-    def _split_segment_count_from_mkvmerge_cmd(cmd: str) -> Optional[int]:
-        raise NotImplementedError
-
-    @staticmethod
     def _split_segment_count_from_mkvmerge_one_line(line: str) -> Optional[int]:
-        raise NotImplementedError
-
-    @staticmethod
-    def _stream_index_to_service_pid(m2ts_path: str) -> dict[int, int]:
         raise NotImplementedError
 
     @staticmethod
@@ -495,15 +453,7 @@ class BluraySubtitleServiceBase:
         raise NotImplementedError
 
     @staticmethod
-    def _tsmuxer_has_video_and_subtitles(tracks: list[dict[str, object]]) -> bool:
-        raise NotImplementedError
-
-    @staticmethod
     def _tsmuxer_mpeg_pid(track: dict[str, object]) -> Optional[int]:
-        raise NotImplementedError
-
-    @staticmethod
-    def _tsmuxer_tracks_ordered_for_ref_slots(tsmuxer_tracks: list[dict[str, object]], ref_slots: list[dict[str, object]]) -> list[dict[str, object]]:
         raise NotImplementedError
 
     def _validate_mpls_tracks_for_execution(self, mpls_path: str, selected_pid_slots: list[tuple[str, int]], *, max_play_items: Optional[int]=None, alternate_mpls_paths: tuple[str, ...]=(), selected_source_slots: tuple[tuple[str, str, int], ...]=()) -> list[tuple[str, int]]:
@@ -561,10 +511,6 @@ class BluraySubtitleServiceBase:
     def generate_configuration_from_selected_mpls(self, selected_mpls: list[tuple[str, str]], sub_combo_index: Optional[dict[int, int]]=None, subtitle_index: Optional[int]=None, cancel_event: Optional[threading.Event]=None) -> dict[int, dict[str, int | str]]:
         raise NotImplementedError
 
-    @staticmethod
-    def get_available_drives():
-        raise NotImplementedError
-
     def get_main_mpls(self, bluray_folder: str, checked: bool) -> str:
         raise NotImplementedError
 
@@ -590,10 +536,6 @@ class BluraySubtitleServiceBase:
 
     @staticmethod
     def m2ts_file_detail_whole_stream_file(m2ts_path: str) -> str:
-        raise NotImplementedError
-
-    @staticmethod
-    def m2ts_sp_custom_segment_time_window_sec(mpls_path: str, output_name: str) -> Optional[tuple[float, float]]:
         raise NotImplementedError
 
     def merge_subtitles(self, selected_mpls: list[tuple[str, str]], movie_tasks: Optional[list[tuple[str, str, str]]]=None, series_configuration: Optional[list[tuple[str, str, int, str]]]=None, subtitle_suffix: str='', cancel_event: Optional[threading.Event]=None) -> list[str]:

@@ -62,6 +62,7 @@ GITHUB_LATEST_RELEASE_API = (
 )
 GITHUB_RELEASES_URL = "https://github.com/Haruite/BluraySubtitle/releases/latest"
 EXTERNAL_TOOL_PATH_NAMES = (
+    "SEVEN_ZIP_PATH",
     "FLAC_PATH",
     "FFMPEG_PATH",
     "FFPROBE_PATH",

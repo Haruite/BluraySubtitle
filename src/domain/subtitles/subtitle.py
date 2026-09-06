@@ -9,6 +9,18 @@ from .timecode import format_srt_timestamp, parse_hhmmss_ms_to_seconds
 from src.core.i18n import translate_text
 
 
+SUBTITLE_EXTENSIONS = ('.ass', '.ssa', '.srt', '.sup')
+
+
+def list_subtitle_files(folder: str) -> list[str]:
+    with os.scandir(folder) as entries:
+        return sorted(
+            os.path.normpath(entry.path)
+            for entry in entries
+            if entry.is_file() and entry.name.lower().endswith(SUBTITLE_EXTENSIONS)
+        )
+
+
 class Subtitle:
     def __init__(self, file_path: str):
         self.max_end = 0
@@ -23,7 +35,7 @@ class Subtitle:
                     self.content = SRT(f)
                 else:
                     self.content = Ass(f)
-        except:
+        except UnicodeDecodeError:
             with open(file_path, 'r', encoding='utf-16') as f:
                 if file_extension.endswith('.srt'):
                     self.content = SRT(f)
@@ -143,21 +155,6 @@ class Subtitle:
                 event_copy.Style = style_name_map[event_copy.Style]
             self.content.events.append(event_copy)
 
-    def append_ass(self, new_file_path: str, time_shift: float):
-        try:
-            with open(new_file_path, 'r', encoding='utf-8-sig') as f:
-                if new_file_path.endswith('.srt'):
-                    new_content = SRT(f)
-                else:
-                    new_content = Ass(f)
-        except:
-            with open(new_file_path, 'r', encoding='utf-16') as f:
-                if new_file_path.endswith('.srt'):
-                    new_content = SRT(f)
-                else:
-                    new_content = Ass(f)
-        self.append_subtitle(Subtitle.from_parsed(new_content), time_shift)
-
     def output_extension(self) -> str:
         if hasattr(self.content, 'lines'):
             return '.srt'
@@ -169,11 +166,13 @@ class Subtitle:
             return '.ssa'
         raise ValueError(translate_text('Unsupported subtitle content'))
 
-    def dump(self, file_path: str, selected_mpls: str):
+    def dump(self, file_path: str, selected_mpls: str | None = None):
         extension = self.output_extension()
         created_paths = []
         try:
-            for output_path in (file_path + extension, selected_mpls + extension):
+            output_bases = (file_path, selected_mpls) if selected_mpls is not None else (file_path,)
+            for output_base in output_bases:
+                output_path = output_base + extension
                 if extension == '.sup':
                     with open(output_path, 'xb') as file:
                         created_paths.append(output_path)
@@ -190,27 +189,17 @@ class Subtitle:
                     pass
             raise
 
-    def max_end_time(self):
-        try:
-            if hasattr(self, 'content') and hasattr(self.content, 'lines'):
-                return max(map(lambda line: parse_hhmmss_ms_to_seconds(line[2]), self.content.lines)) if self.content.lines else 0
-            if self.max_end:
-                return self.max_end
-            if hasattr(self, 'content') and hasattr(self.content, 'events') and self.content.events:
-                end_set = set(map(lambda event: event.End.total_seconds(), self.content.events))
-                if not end_set:
-                    return 0
-                max_end = max(end_set)
-                end_set.remove(max_end)
-                if end_set:  # ensure there are still candidate end times
-                    max_end_1 = max(end_set)
-                    if max_end_1 < max_end - 300:
-                        return max_end_1  # cap abnormally long events (e.g., commentary stream exceeding episode end)
-                return max_end
-            return 0
-        except Exception as e:
-            print(f'Failed to get subtitle duration: {str(e)}')
-            return 0
+    def max_end_time(self) -> float:
+        if not hasattr(self, 'content'):
+            return 0.0
+        if hasattr(self.content, 'lines'):
+            return max(
+                (parse_hhmmss_ms_to_seconds(line[2]) for line in self.content.lines),
+                default=0.0,
+            )
+        if hasattr(self.content, 'packets'):
+            return self.max_end
+        return max((event.End.total_seconds() for event in self.content.events), default=0.0)
 
 
-__all__ = ["Subtitle"]
+__all__ = ["SUBTITLE_EXTENSIONS", "Subtitle", "list_subtitle_files"]

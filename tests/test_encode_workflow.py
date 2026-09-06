@@ -124,6 +124,42 @@ class EncodeWorkflowTests(unittest.TestCase):
         self.vpy_probe = vpy_probe.start()
         self.addCleanup(vpy_probe.stop)
 
+    def test_sp_copy_failure_retains_partial_data_and_never_deletes_a_collision(self) -> None:
+        for collision in (False, True):
+            with self.subTest(collision=collision), tempfile.TemporaryDirectory() as temporary_directory:
+                root = Path(temporary_directory)
+                source_folder = root / 'images'
+                source_folder.mkdir()
+                output_folder = root / 'output'
+                output_path = output_folder / 'images'
+                row = EncodeRow(str(source_folder), str(output_path), '')
+                request = EncodeRequest(
+                    input_mode='remux', source_root=str(root), output_folder=str(output_folder),
+                    staging_folder='', main_rows=(), sp_rows=(row,), settings=_settings(),
+                )
+
+                def copy_images(_source, temporary, **_kwargs):
+                    Path(temporary, 'frame.png').write_bytes(b'partial image')
+                    if collision:
+                        output_path.mkdir()
+                        (output_path / 'existing.png').write_bytes(b'existing image')
+                    else:
+                        raise OSError('simulated copy failure')
+
+                service = _RowEncodeService()
+                with patch('src.runtime.services_split.remux_and_episode_workflows.shutil.copytree', side_effect=copy_images):
+                    if collision:
+                        with self.assertRaises(FileExistsError):
+                            service._encode_mkv_rows(request, [], [row], threading.Event())
+                        self.assertEqual((output_path / 'existing.png').read_bytes(), b'existing image')
+                    else:
+                        result = service._encode_mkv_rows(request, [], [row], threading.Event())
+                        self.assertEqual(result.rows[0].status, 'failed_with_artifacts')
+                        artifact = Path(result.rows[0].artifact_paths[0])
+                        self.assertNotEqual(artifact, output_path)
+                        self.assertEqual((artifact / 'frame.png').read_bytes(), b'partial image')
+                        self.assertFalse(output_path.exists())
+
     def test_preflight_rejects_duplicates_and_only_allows_existing_remux_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

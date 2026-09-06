@@ -34,6 +34,7 @@ from src.runtime.encode import EncodeRequest, EncodeRow
 from src.runtime.encode_results import (
     EncodeBatchResult,
     EncodeRowResult,
+    EncodeTaskFailure,
     write_encode_row_error_report,
 )
 from .service_base import BluraySubtitleServiceBase
@@ -45,7 +46,9 @@ def _svc_cls():
     return BluraySubtitle
 
 
-def _copy_path_atomically(source_path: str, destination_path: str) -> None:
+def _copy_path_atomically(
+        source_path: str, destination_path: str, *, preserve_failure_artifacts: bool = False,
+) -> None:
     destination_folder = os.path.dirname(destination_path)
     os.makedirs(destination_folder, exist_ok=True)
     partial_prefix = f'.{os.path.basename(destination_path)}.partial-'
@@ -61,6 +64,7 @@ def _copy_path_atomically(source_path: str, destination_path: str) -> None:
             dir=destination_folder,
         )
         os.close(file_descriptor)
+    keep_partial = False
     try:
         if source_is_directory:
             shutil.copytree(source_path, temporary_path, dirs_exist_ok=True)
@@ -73,11 +77,25 @@ def _copy_path_atomically(source_path: str, destination_path: str) -> None:
                 )
             )
         os.replace(temporary_path, destination_path)
+    except FileExistsError:
+        raise
+    except OSError as error:
+        if preserve_failure_artifacts:
+            keep_partial = (
+                any(files for _root, _directories, files in os.walk(temporary_path))
+                if source_is_directory else os.path.getsize(temporary_path) > 0
+            )
+            if keep_partial:
+                raise EncodeTaskFailure(
+                    'Copying source', str(error), (temporary_path,),
+                ) from error
+        raise
     finally:
-        if os.path.isdir(temporary_path):
-            shutil.rmtree(temporary_path, ignore_errors=True)
-        elif os.path.isfile(temporary_path):
-            force_remove_file(temporary_path)
+        if not keep_partial:
+            if os.path.isdir(temporary_path):
+                shutil.rmtree(temporary_path, ignore_errors=True)
+            elif os.path.isfile(temporary_path):
+                force_remove_file(temporary_path)
 
 
 class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
@@ -656,47 +674,6 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 raise FileNotFoundError(translate_text('mkvpropedit not found'))
         return planned_jobs
 
-    def _apply_episode_output_names(self, mkv_files: list[str], output_names: Optional[list[str]] = None) -> list[str]:
-        total = len(mkv_files)
-        if total <= 0:
-            return mkv_files
-        planned = output_names or []
-        updated: list[str] = []
-        char_map = {
-            '?': '？', '*': '★', '<': '《', '>': '》', ':': '：', '"': "'", '/': '／', '\\': '／', '|': '￨'
-        }
-        for i, p in enumerate(mkv_files, start=1):
-            folder = os.path.dirname(p)
-            base = os.path.basename(p)
-            user_name = planned[i - 1].strip() if i - 1 < len(planned) and isinstance(planned[i - 1], str) else ''
-            new_base = user_name if user_name else base
-            if new_base:
-                new_base = ''.join(char_map.get(char) or char for char in new_base)
-                new_base = new_base.strip().rstrip('.')
-            if not new_base.lower().endswith('.mkv'):
-                new_base += '.mkv'
-            new_path = os.path.join(folder, new_base)
-            if os.path.normcase(p) == os.path.normcase(new_path):
-                updated.append(p)
-                continue
-            if not os.path.exists(p):
-                updated.append(p)
-                continue
-            if os.path.exists(new_path):
-                stem, ext = os.path.splitext(new_base)
-                k = 1
-                candidate = new_path
-                while os.path.exists(candidate):
-                    candidate = os.path.join(folder, f'{stem} ({k}){ext}')
-                    k += 1
-                new_path = candidate
-            try:
-                os.rename(p, new_path)
-                updated.append(new_path)
-            except Exception:
-                updated.append(p)
-        return updated
-
     def _build_main_episode_mkvs(
             self,
             jobs: list[RemuxMainJob],
@@ -1203,24 +1180,6 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             mpls_path,
         )
         return remux_cmd, m2ts_file, bdmv_vol, output_file, mpls_path, copy_audio_track, copy_sub_track
-
-    def _remux_remap_chapter_skip_after_rename(self, mkv_files: list[str]) -> None:
-        """Point ``_remux_chapter_skip_paths`` at post-rename paths when basename is unchanged."""
-        try:
-            old_sk = getattr(self, '_remux_chapter_skip_paths', None) or set()
-            if not old_sk or not mkv_files:
-                return
-            by_bn = {
-                os.path.normcase(os.path.basename(mf)): os.path.normcase(os.path.normpath(mf))
-                for mf in mkv_files
-            }
-            repl: set[str] = set()
-            for s in old_sk:
-                bn = os.path.normcase(os.path.basename(str(s)))
-                repl.add(by_bn.get(bn, os.path.normcase(os.path.normpath(str(s)))))
-            self._remux_chapter_skip_paths = repl
-        except Exception:
-            pass
 
     def _post_remux_finalize_episodes(
             self,
@@ -2082,7 +2041,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             os.makedirs(os.path.dirname(row.output_path), exist_ok=True)
             try:
                 if os.path.isdir(source_path):
-                    _copy_path_atomically(source_path, row.output_path)
+                    _copy_path_atomically(source_path, row.output_path, preserve_failure_artifacts=True)
                 elif source_path.lower().endswith('.mka'):
                     mux_with_audio_conversion(
                         source_path,
@@ -2133,14 +2092,10 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                         video_progress_name=original_name,
                     )
                 else:
-                    _copy_path_atomically(source_path, row.output_path)
-            except TaskCancelled:
+                    _copy_path_atomically(source_path, row.output_path, preserve_failure_artifacts=True)
+            except (TaskCancelled, FileExistsError):
                 raise
             except Exception as error:
-                if os.path.isdir(row.output_path):
-                    shutil.rmtree(row.output_path, ignore_errors=True)
-                elif os.path.isfile(row.output_path):
-                    force_remove_file(row.output_path)
                 record_failed_row(row, 'SP row', warning_start, error)
             else:
                 if source_path.lower().endswith('.mkv'):

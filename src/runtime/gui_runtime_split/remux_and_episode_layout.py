@@ -2,6 +2,7 @@
 import copy
 import os
 import threading
+import tempfile
 import time
 import traceback
 from functools import partial
@@ -16,9 +17,12 @@ from src.core import BDMV_LABELS, DIY_BDMV_LABELS, DIY_REMUX_LABELS, find_mkvtoo
     ENCODE_REMUX_LABELS, ENCODE_REMUX_SP_LABELS, SUBTITLE_LABELS, ENCODE_LABELS, \
     REMUX_LABELS, CURRENT_UI_LANGUAGE, ENCODE_SP_LABELS, MPLS_INFO_LABELS, MPLS_INFO_TRACKS_LABELS
 from src.domain import Subtitle
+from src.domain.subtitles import list_subtitle_files
 from src.exports.utils import get_time_str, get_index_to_m2ts_and_offset, print_exc_terminal, get_folder_size, parse_time_to_seconds
 from src.runtime.gui_runtime_classes.file_path_table_widget_item import FilePathTableWidgetItem
 from src.runtime.gui_runtime_classes.remux_worker import RemuxWorker
+from src.runtime.gui_runtime_classes.merge_source_scan_worker import MergeSourceScanWorker
+from src.runtime import TaskCancelled
 from src.runtime.sp import SpEntry
 from src.runtime.remux import RemuxRequest
 from src.runtime.services import BluraySubtitle
@@ -284,28 +288,6 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         keys = set(cur.keys()) | set(prev.keys())
         return {fn for fn in keys if cur.get(fn, set()) != prev.get(fn, set())}
 
-    def _get_main_mpls_path_for_bdmv_index(self, bdmv_index: int) -> str:
-        try:
-            idx = int(bdmv_index) - 1
-        except Exception:
-            return ''
-        if idx < 0 or idx >= self.table1.rowCount():
-            return ''
-        info = self.table1.cellWidget(idx, 2)
-        if not isinstance(info, QTableWidget):
-            return ''
-        root_item = self.table1.item(idx, 0)
-        root = root_item.text().strip() if root_item and root_item.text() else ''
-        if not root:
-            return ''
-        for mpls_index in range(info.rowCount()):
-            main_btn = info.cellWidget(mpls_index, MPLS_INFO_LABELS.index('main'))
-            if isinstance(main_btn, QToolButton) and main_btn.isChecked():
-                mpls_item = info.item(mpls_index, 0)
-                if mpls_item and mpls_item.text():
-                    return os.path.normpath(os.path.join(root, 'BDMV', 'PLAYLIST', mpls_item.text().strip()))
-        return ''
-
     def _get_remux_source_path_from_table2_row(self, row_index: int) -> str:
         try:
             out_col = ENCODE_REMUX_LABELS.index('output_name')
@@ -338,16 +320,6 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             if sp_folder and item and item.text().strip():
                 return os.path.normpath(os.path.join(sp_folder, item.text().strip()))
         return ''
-
-    def _get_root_for_bdmv_index(self, bdmv_index: int) -> str:
-        try:
-            idx = int(bdmv_index) - 1
-        except Exception:
-            return ''
-        if idx < 0 or idx >= self.table1.rowCount():
-            return ''
-        it = self.table1.item(idx, 0)
-        return it.text().strip() if it and it.text() else ''
 
     def _get_selected_main_mpls_paths(self) -> list[str]:
         out: list[str] = []
@@ -468,10 +440,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         else:
             folder = self.subtitle_folder_path.text().strip()
             if folder and os.path.isdir(folder):
-                paths = []
-                for f in sorted(os.listdir(folder)):
-                    if f.endswith(".ass") or f.endswith(".ssa") or f.endswith('srt') or f.endswith('.sup'):
-                        paths.append(os.path.normpath(os.path.join(folder, f)))
+                paths = list_subtitle_files(folder)
                 for p in paths:
                     try:
                         sec = float(Subtitle(p).max_end_time())
@@ -623,11 +592,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         sub_files_in_folder: list[str] = []
         if self.subtitle_folder_path.text().strip():
             try:
-                for file in sorted(os.listdir(self.subtitle_folder_path.text().strip())):
-                    if (file.endswith(".ass") or file.endswith(".ssa") or
-                            file.endswith('srt') or file.endswith('.sup')):
-                        sub_files_in_folder.append(
-                            os.path.normpath(os.path.join(self.subtitle_folder_path.text().strip(), file)))
+                sub_files_in_folder = list_subtitle_files(self.subtitle_folder_path.text().strip())
             except Exception:
                 pass
 
@@ -780,32 +745,6 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 editor._auto_cmd = auto_cmd
                 editor.setPlainText(auto_cmd)
                 editor._updating_cmd = False
-
-    def _remove_table2_rows_by_bdmv_index(self, bdmv_index: int):
-        if not hasattr(self, 'table2') or not self.table2:
-            return
-        function_id = self.get_selected_function_id()
-        if function_id not in (3, 4, 5):
-            return
-        if function_id == 4:
-            labels = ENCODE_LABELS
-        elif function_id == 5:
-            labels = DIY_REMUX_LABELS
-        else:
-            labels = REMUX_LABELS
-        if 'bdmv_index' not in labels:
-            return
-        col = labels.index('bdmv_index')
-        for r in range(self.table2.rowCount() - 1, -1, -1):
-            it = self.table2.item(r, col)
-            if not it:
-                continue
-            try:
-                b = int(str(it.text() or '').strip())
-            except Exception:
-                continue
-            if b == int(bdmv_index):
-                self.table2.removeRow(r)
 
     def _resolve_bdmv_index_for_main_mpls(self, mpls_path: str, fallback_index: int) -> int:
         """Resolve bdmv_index from latest configuration using selected main mpls path."""
@@ -1059,6 +998,36 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 mkv_files.append(item.text())
         return mkv_files
 
+    def _load_merge_sources(self, source_folder: str) -> list[tuple[str, str]]:
+        """Keep extracted playlists in private storage until the window's workers finish."""
+        if self._iso_playlist_temp is None:
+            self._iso_playlist_temp = tempfile.TemporaryDirectory(prefix='bluraysubtitle-playlists-')
+        cancel_event = threading.Event()
+        self._iso_scan_cancel_event = cancel_event
+        worker = MergeSourceScanWorker(
+            source_folder, self._iso_playlist_temp.name, self._iso_playlist_cache, cancel_event, self,
+        )
+        dialog = QProgressDialog(self.t('Loading...'), self.t('Cancel'), 0, 0, self)
+        dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+        dialog.setMinimumWidth(420)
+        worker.label.connect(dialog.setLabelText)
+        worker.finished.connect(dialog.accept)
+        dialog.canceled.connect(cancel_event.set)
+        worker.start()
+        dialog.exec()
+        was_canceled = dialog.wasCanceled()
+        cancel_event.set()
+        worker.wait()
+        self._iso_scan_cancel_event = None
+        worker.deleteLater()
+        dialog.deleteLater()
+        if worker.error:
+            raise OSError(worker.error)
+        if was_canceled or worker.was_canceled or self._close_pending:
+            raise TaskCancelled()
+        self._iso_playlist_cache = worker.cache
+        return worker.sources
+
     def on_bdmv_folder_path_change(self):
         raw = self.bdmv_folder_path.text()
         bdmv_path = self._normalize_path_input(raw)
@@ -1137,102 +1106,106 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 table1_labels = DIY_BDMV_LABELS if self.get_selected_function_id() == 5 else BDMV_LABELS
                 self.table1.setColumnCount(len(table1_labels))
                 self._set_table_headers(self.table1, table1_labels)
-                i = 0
-                for root, dirs, _files in os.walk(bdmv_path):
-                    dirs.sort()  # Sort dirs to ensure consistent order on all platforms
-                    if 'BDMV' in dirs and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV')):
-                        i += 1
-                    if (time.time() - start_ts) >= 2.0:
-                        QCoreApplication.processEvents()
-                self.table1.setRowCount(i)
-                i = 0
-                for root, dirs, _files in os.walk(bdmv_path):
-                    dirs.sort()  # Sort dirs to ensure consistent order on all platforms
-                    if 'BDMV' in dirs and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV')):
-                        table_widget = QTableWidget()
-                        self._set_compact_table(table_widget, row_height=20, header_height=20)
-                        info_headers = list(
-                            MPLS_INFO_TRACKS_LABELS
-                            if self.get_selected_function_id() in (3, 4, 5)
-                            else MPLS_INFO_LABELS
-                        )
-                        table_widget.setColumnCount(len(info_headers))
-                        self._set_table_headers(table_widget, info_headers)
-                        mpls_files = sorted(
-                            [f for f in os.listdir(os.path.join(root, 'BDMV', 'PLAYLIST')) if f.endswith('.mpls')])
-                        table_widget.setRowCount(len(mpls_files))
-                        mpls_n = 0
-                        checked = False
-                        if self.get_selected_function_id() == 1:
-                            stream_dir = os.path.join(root, 'BDMV', 'STREAM')
-                            if not os.path.isdir(stream_dir):
+                if self.get_selected_function_id() == 1:
+                    show_timer.stop()
+                    sources = self._load_merge_sources(bdmv_path)
+                    show_timer.start()
+                else:
+                    sources = []
+                    for root, dirs, _files in os.walk(bdmv_path):
+                        dirs.sort()
+                        if os.path.isdir(os.path.join(root, 'BDMV', 'PLAYLIST')):
+                            sources.append((root, root))
+                self.table1.setRowCount(len(sources))
+                for i, (root, source_path) in enumerate(sources):
+                    table_widget = QTableWidget()
+                    self._set_compact_table(table_widget, row_height=20, header_height=20)
+                    info_headers = list(
+                        MPLS_INFO_TRACKS_LABELS
+                        if self.get_selected_function_id() in (3, 4, 5)
+                        else MPLS_INFO_LABELS
+                    )
+                    table_widget.setColumnCount(len(info_headers))
+                    self._set_table_headers(table_widget, info_headers)
+                    mpls_files = sorted(
+                        [f for f in os.listdir(os.path.join(root, 'BDMV', 'PLAYLIST')) if f.lower().endswith('.mpls')])
+                    table_widget.setRowCount(len(mpls_files))
+                    mpls_n = 0
+                    checked = False
+                    if self.get_selected_function_id() == 1:
+                        stream_dir = os.path.join(root, 'BDMV', 'STREAM')
+                        if not os.path.isdir(stream_dir):
+                            checked = True
+                        else:
+                            try:
+                                checked = not any(
+                                    f.lower().endswith('.m2ts') for f in os.listdir(stream_dir)
+                                )
+                            except Exception:
                                 checked = True
+                    selected_mpls = os.path.normpath(BluraySubtitle(root).get_main_mpls(root, checked))
+                    for mpls_file in mpls_files:
+                        table_widget.setItem(mpls_n, 0, QTableWidgetItem(mpls_file))
+                        mpls_path = os.path.normpath(os.path.join(root, 'BDMV', 'PLAYLIST', mpls_file))
+                        table_widget.item(mpls_n, 0).setData(Qt.ItemDataRole.UserRole, mpls_path)
+                        total_time = Chapter(mpls_path).get_total_time()
+                        total_time_str = get_time_str(total_time)
+                        table_widget.setItem(mpls_n, 1, QTableWidgetItem(total_time_str))
+                        btn1 = QToolButton()
+                        btn1.setText(self.t('view chapters'))
+                        btn1.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+                        btn1.clicked.connect(
+                            partial(self.on_button_click, mpls_path, mpls_path == selected_mpls, i + 1))
+                        table_widget.setCellWidget(mpls_n, info_headers.index('chapters'), btn1)
+                        timing_button = QToolButton()
+                        timing_button.setText(self.t('view timing'))
+                        timing_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+                        timing_button.clicked.connect(partial(self.on_view_mpls_play_items, mpls_path))
+                        table_widget.setCellWidget(mpls_n, info_headers.index('m2ts_timing'), timing_button)
+                        btn2 = QToolButton()
+                        btn2.setCheckable(True)
+                        btn2.setChecked(mpls_path == selected_mpls)
+                        btn2.clicked.connect(partial(self.on_button_main, mpls_path))
+                        table_widget.setCellWidget(mpls_n, info_headers.index('main'), btn2)
+                        btn3 = QToolButton()
+                        btn3.setText(self.t('play'))
+                        btn3.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+                        btn3.setProperty('action', 'play')
+                        btn3.setEnabled(root == source_path)
+                        if root != source_path:
+                            btn3.setToolTip(self.t('ISO input does not support preview'))
+                        btn3.clicked.connect(partial(self.on_button_play, mpls_path, btn3))
+                        table_widget.setCellWidget(mpls_n, info_headers.index('play'), btn3)
+                        if self.get_selected_function_id() in (3, 4, 5):
+                            show_tracks = True
+                            if self.get_selected_function_id() == 5:
+                                is_simple_diy = bool(getattr(self, 'diy_simple_radio', None) and self.diy_simple_radio.isChecked())
+                                show_tracks = is_simple_diy
+                            btn4 = QToolButton()
+                            btn4.setText(self.t('edit tracks'))
+                            if show_tracks:
+                                btn4.clicked.connect(partial(self.on_edit_tracks_from_mpls, mpls_path))
                             else:
-                                try:
-                                    checked = not any(
-                                        f.lower().endswith('.m2ts') for f in os.listdir(stream_dir)
-                                    )
-                                except Exception:
-                                    checked = True
-                        selected_mpls = os.path.normpath(BluraySubtitle(root).get_main_mpls(root, checked))
-                        for mpls_file in mpls_files:
-                            table_widget.setItem(mpls_n, 0, QTableWidgetItem(mpls_file))
-                            mpls_path = os.path.normpath(os.path.join(root, 'BDMV', 'PLAYLIST', mpls_file))
-                            total_time = Chapter(mpls_path).get_total_time()
-                            total_time_str = get_time_str(total_time)
-                            table_widget.setItem(mpls_n, 1, QTableWidgetItem(total_time_str))
-                            btn1 = QToolButton()
-                            btn1.setText(self.t('view chapters'))
-                            btn1.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-                            btn1.clicked.connect(
-                                partial(self.on_button_click, mpls_path, mpls_path == selected_mpls, i + 1))
-                            table_widget.setCellWidget(mpls_n, info_headers.index('chapters'), btn1)
-                            timing_button = QToolButton()
-                            timing_button.setText(self.t('view timing'))
-                            timing_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-                            timing_button.clicked.connect(partial(self.on_view_mpls_play_items, mpls_path))
-                            table_widget.setCellWidget(mpls_n, info_headers.index('m2ts_timing'), timing_button)
-                            btn2 = QToolButton()
-                            btn2.setCheckable(True)
-                            btn2.setChecked(mpls_path == selected_mpls)
-                            btn2.clicked.connect(partial(self.on_button_main, mpls_path))
-                            table_widget.setCellWidget(mpls_n, info_headers.index('main'), btn2)
-                            btn3 = QToolButton()
-                            btn3.setText(self.t('play'))
-                            btn3.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-                            btn3.setProperty('action', 'play')
-                            btn3.clicked.connect(partial(self.on_button_play, mpls_path, btn3))
-                            table_widget.setCellWidget(mpls_n, info_headers.index('play'), btn3)
-                            if self.get_selected_function_id() in (3, 4, 5):
-                                show_tracks = True
-                                if self.get_selected_function_id() == 5:
-                                    is_simple_diy = bool(getattr(self, 'diy_simple_radio', None) and self.diy_simple_radio.isChecked())
-                                    show_tracks = is_simple_diy
-                                btn4 = QToolButton()
-                                btn4.setText(self.t('edit tracks'))
-                                if show_tracks:
-                                    btn4.clicked.connect(partial(self.on_edit_tracks_from_mpls, mpls_path))
-                                else:
-                                    btn4.setEnabled(False)
-                                table_widget.setCellWidget(mpls_n, info_headers.index('tracks'), btn4)
-                            table_widget.resizeColumnsToContents()
-                            mpls_n += 1
-                            if (time.time() - start_ts) >= 2.0:
-                                QCoreApplication.processEvents()
-                        self.table1.setItem(i, 0, FilePathTableWidgetItem(os.path.normpath(root)))
-                        self.table1.setItem(i, 1, QTableWidgetItem(get_folder_size(root)))
-                        self.table1.setCellWidget(i, 2, table_widget)
-                        if self.get_selected_function_id() in (3, 4):
-                            resolved_bdmv_index = self._resolve_bdmv_index_for_main_mpls(selected_mpls, i + 1)
-                            cmd_text = self._build_main_remux_cmd_template(selected_mpls, resolved_bdmv_index, root)
-                            self.table1.setCellWidget(i, BDMV_LABELS.index('remux_cmd'),
-                                                      self._create_main_remux_cmd_editor(cmd_text, self.table1))
-                        elif self.get_selected_function_id() not in (3, 4, 5):
-                            self.table1.setItem(i, BDMV_LABELS.index('remux_cmd'), QTableWidgetItem(''))
-                        self.table1.setRowHeight(i, 100)
-                        i += 1
+                                btn4.setEnabled(False)
+                            table_widget.setCellWidget(mpls_n, info_headers.index('tracks'), btn4)
+                        table_widget.resizeColumnsToContents()
+                        mpls_n += 1
                         if (time.time() - start_ts) >= 2.0:
                             QCoreApplication.processEvents()
+                    self.table1.setItem(i, 0, FilePathTableWidgetItem(os.path.normpath(source_path)))
+                    size = get_folder_size(root) if root == source_path else f'{os.path.getsize(source_path) / 1024 ** 3:.2f} GiB'
+                    self.table1.setItem(i, 1, QTableWidgetItem(size))
+                    self.table1.setCellWidget(i, 2, table_widget)
+                    if self.get_selected_function_id() in (3, 4):
+                        resolved_bdmv_index = self._resolve_bdmv_index_for_main_mpls(selected_mpls, i + 1)
+                        cmd_text = self._build_main_remux_cmd_template(selected_mpls, resolved_bdmv_index, root)
+                        self.table1.setCellWidget(i, BDMV_LABELS.index('remux_cmd'),
+                                                  self._create_main_remux_cmd_editor(cmd_text, self.table1))
+                    elif self.get_selected_function_id() not in (3, 4, 5):
+                        self.table1.setItem(i, BDMV_LABELS.index('remux_cmd'), QTableWidgetItem(''))
+                    self.table1.setRowHeight(i, 100)
+                    if (time.time() - start_ts) >= 2.0:
+                        QCoreApplication.processEvents()
                 self.table1.resizeColumnsToContents()
                 if self.get_selected_function_id() in (3, 4):
                     self.table1.setColumnWidth(2, 560 if getattr(self, '_language_code',
@@ -1266,6 +1239,8 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 self.table1.setColumnCount(len(table1_labels))
                 self._set_table_headers(self.table1, table1_labels)
                 self.table1.setRowCount(0)
+                if not isinstance(e, TaskCancelled):
+                    QMessageBox.warning(self, self.t('Error'), str(e))
         if bdmv_path and table_ok and self.get_selected_function_id() in (3, 4, 5):
             self._refresh_track_selection_config_for_selected_main()
         self.altered = True

@@ -784,10 +784,10 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
 
     def open_vpy_in_editor(self, path: str):
         if not path:
-            QMessageBox.information(self, "Prompt", "VPy path is empty")
+            QMessageBox.information(self, self.t('Prompt'), self.t('VPy path is empty'))
             return
         if not os.path.exists(path):
-            QMessageBox.information(self, "Prompt", f"File does not exist: {path}")
+            QMessageBox.information(self, self.t('Prompt'), self.t('File does not exist: {path}').format(path=path))
             return
         if sys.platform == 'win32':
             os.startfile(path)
@@ -797,17 +797,17 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
     def open_vpy_in_vsedit(self, path: str) -> Optional[QProcess]:
         path = str(path or '').strip()
         if not path:
-            QMessageBox.information(self, "Prompt", "VPy path is empty")
+            QMessageBox.information(self, self.t('Prompt'), self.t('VPy path is empty'))
             return None
         if not os.path.exists(path):
-            QMessageBox.information(self, "Prompt", f"File does not exist: {path}")
+            QMessageBox.information(self, self.t('Prompt'), self.t('File does not exist: {path}').format(path=path))
             return None
 
         vsedit_exe = VSEDIT_PATH
         if not vsedit_exe or not os.path.exists(vsedit_exe):
             vsedit_exe = shutil.which('vsedit') or ''
         if not vsedit_exe:
-            QMessageBox.information(self, "Prompt", "vsedit not found, check VSEDIT_PATH or system PATH")
+            QMessageBox.information(self, self.t('Prompt'), self.t('vsedit not found, check VSEDIT_PATH or system PATH'))
             return None
 
         try:
@@ -820,7 +820,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
             proc.setArguments([os.path.normpath(path)])
             proc.start()
             if not proc.waitForStarted(2000):
-                QMessageBox.warning(self, "Prompt", "Failed to launch vsedit")
+                QMessageBox.warning(self, self.t('Prompt'), self.t('Failed to launch vsedit'))
                 try:
                     proc.kill()
                 except Exception:
@@ -829,35 +829,8 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                 return None
             return proc
         except Exception as e:
-            QMessageBox.warning(self, "Prompt", f"Failed to open vsedit: {e}")
+            QMessageBox.warning(self, self.t('Prompt'), self.t('Failed to open vsedit: {error}').format(error=e))
             return None
-
-    def _restore_default_vpy_after_preview(self, mapping: dict[str, tuple[str, str]]):
-        try:
-            vpy_path = self.get_default_vpy_path()
-            if not os.path.exists(vpy_path):
-                return
-            with open(vpy_path, 'r', encoding='utf-8') as fp:
-                lines = fp.readlines()
-
-            def norm(s: str) -> str:
-                return s.rstrip('\r\n')
-
-            restore_by_modified = {norm(mod): orig for orig, mod in mapping.values() if
-                                   orig is not None and mod is not None}
-
-            changed = False
-            for idx, line in enumerate(lines):
-                key = norm(line)
-                if key in restore_by_modified:
-                    lines[idx] = restore_by_modified[key] + '\n'
-                    changed = True
-
-            if changed:
-                with open(vpy_path, 'w', encoding='utf-8') as fp:
-                    fp.writelines(lines)
-        except Exception:
-            pass
 
     def _vpy_raw_string(self, path: str) -> str:
         s = str(path or '')
@@ -936,70 +909,6 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                 fp.writelines(lines)
         return changed
 
-    def _update_default_vpy_paths(self, video_path: str, subtitle_path: str) -> dict[str, tuple[str, str]]:
-        self.ensure_default_vpy_file()
-        vpy_path = self.get_default_vpy_path()
-        if not os.path.exists(vpy_path):
-            raise FileNotFoundError(vpy_path)
-
-        with open(vpy_path, 'r', encoding='utf-8') as fp:
-            lines = fp.readlines()
-
-        def norm(s: str) -> str:
-            return s.rstrip('\r\n')
-
-        mapping: dict[str, tuple[str, str]] = {}
-        changed = False
-        for idx, line in enumerate(lines):
-            raw = norm(line)
-            m_a = re.match(r'^(\s*)(#\s*)?(a\s*=\s*)r?[\'"].*?[\'"](\s*(#.*)?)$', raw)
-            if m_a:
-                indent = m_a.group(1)
-                expr = m_a.group(3)
-                suffix = m_a.group(4) or ''
-                new_raw = f'{indent}{expr}{self._vpy_raw_string(video_path)}{suffix}'
-                if new_raw != raw:
-                    lines[idx] = new_raw + '\n'
-                    changed = True
-                mapping['a'] = (raw, new_raw)
-                continue
-
-            m_s = re.match(r'^(\s*)(#\s*)?(sub_file\s*=\s*)r?[\'"].*?[\'"](\s*(#.*)?)$', raw)
-            if m_s:
-                indent = m_s.group(1)
-                expr = m_s.group(3)
-                suffix = m_s.group(4) or ''
-                want_commented = not bool(subtitle_path)
-                comment_prefix = '# ' if want_commented else ''
-                rhs = self._vpy_raw_string(subtitle_path or '')
-                new_raw = f'{indent}{comment_prefix}{expr}{rhs}{suffix}'
-                if new_raw != raw:
-                    lines[idx] = new_raw + '\n'
-                    changed = True
-                mapping['sub_file'] = (raw, new_raw)
-                continue
-
-            m_t = re.match(
-                r'^(\s*)(#\s*)?(res\s*=\s*core\.assrender\.TextSub\(\s*res\s*,\s*file\s*=\s*sub_file\s*\))(\s*(#.*)?)$',
-                raw)
-            if m_t:
-                indent = m_t.group(1)
-                expr = m_t.group(3)
-                suffix = m_t.group(4) or ''
-                want_commented = not bool(subtitle_path)
-                comment_prefix = '# ' if want_commented else ''
-                new_raw = f'{indent}{comment_prefix}{expr}{suffix}'
-                if new_raw != raw:
-                    lines[idx] = new_raw + '\n'
-                    changed = True
-                mapping['textsub'] = (raw, new_raw)
-                continue
-
-        if changed:
-            with open(vpy_path, 'w', encoding='utf-8') as fp:
-                fp.writelines(lines)
-        return mapping
-
     def _create_temp_preview_vpy_from_default(self, video_path: str, subtitle_path: str) -> str:
         self.ensure_default_vpy_file()
         default_vpy = self.get_default_vpy_path()
@@ -1046,52 +955,6 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                 out.append(raw + '\n')
 
             fd, temp_vpy = tempfile.mkstemp(prefix='bluraysubtitle_preview_', suffix='.vpy')
-            os.close(fd)
-            with open(temp_vpy, 'w', encoding='utf-8') as fp:
-                fp.writelines(out)
-            return temp_vpy
-        except Exception:
-            print_exc_terminal()
-            return ''
-
-    def _create_temp_edit_vpy_from_default(self, video_path: str, subtitle_path: str) -> str:
-        """Create a temporary editable copy of default vpy with row-specific a/sub_file values."""
-        self.ensure_default_vpy_file()
-        default_vpy = self.get_default_vpy_path()
-        if not os.path.exists(default_vpy):
-            return ''
-        try:
-            bits = self._selected_output_bits_for_vpy()
-            processing_values = self._current_vpy_processing_values()
-            with open(default_vpy, 'r', encoding='utf-8') as fp:
-                lines = fp.readlines()
-
-            out: list[str] = []
-            for line in lines:
-                raw = line.rstrip('\r\n')
-                raw = self._patch_fmtc_output_bits_in_text(raw, bits)
-                raw = self._patch_vpy_processing_value_in_text(raw, processing_values)
-
-                m_a = re.match(r'^(\s*)(#\s*)?(a\s*=\s*)r?[\'"].*?[\'"](\s*(#.*)?)$', raw)
-                if m_a:
-                    indent = m_a.group(1)
-                    expr = m_a.group(3)
-                    suffix = m_a.group(4) or ''
-                    out.append(f'{indent}{expr}{self._vpy_raw_string(video_path)}{suffix}\n')
-                    continue
-
-                m_s = re.match(r'^(\s*)(#\s*)?(sub_file\s*=\s*)r?[\'"].*?[\'"](\s*(#.*)?)$', raw)
-                if m_s:
-                    indent = m_s.group(1)
-                    expr = m_s.group(3)
-                    suffix = m_s.group(4) or ''
-                    comment = '' if subtitle_path else '# '
-                    out.append(f'{indent}{comment}{expr}{self._vpy_raw_string(subtitle_path or "")}{suffix}\n')
-                    continue
-
-                out.append(raw + '\n')
-
-            fd, temp_vpy = tempfile.mkstemp(prefix='bluraysubtitle_edit_', suffix='.vpy')
             os.close(fd)
             with open(temp_vpy, 'w', encoding='utf-8') as fp:
                 fp.writelines(out)
@@ -1175,105 +1038,9 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
         except Exception:
             print_exc_terminal()
 
-    def _edit_vpy_with_default_sync(self, video_path: str, subtitle_path: str):
-        """Open editable temp script and sync edits back to default vpy (except a=/sub_file=)."""
-        temp_vpy = self._create_temp_edit_vpy_from_default(video_path=video_path or '',
-                                                           subtitle_path=subtitle_path or '')
-        if not temp_vpy:
-            self.open_vpy_in_editor(self.get_default_vpy_path())
-            return
-        proc = self.open_vpy_in_vsedit(temp_vpy)
-        if not proc:
-            try:
-                os.remove(temp_vpy)
-            except Exception:
-                pass
-            self.open_vpy_in_editor(self.get_default_vpy_path())
-            return
-        if not hasattr(self, '_vsedit_edit_sessions'):
-            self._vsedit_edit_sessions = {}
-        self._vsedit_edit_sessions[proc] = temp_vpy
-
-        def sync_and_cleanup(*_):
-            try:
-                sess_temp = self._vsedit_edit_sessions.pop(proc, '')
-            except Exception:
-                sess_temp = ''
-            if sess_temp:
-                self._merge_temp_edit_back_to_default_vpy(sess_temp)
-                try:
-                    os.remove(sess_temp)
-                except Exception:
-                    pass
-            try:
-                proc.deleteLater()
-            except Exception:
-                pass
-
-        proc.finished.connect(sync_and_cleanup)
-        proc.errorOccurred.connect(sync_and_cleanup)
-
-    def _resolve_table2_row_edit_context(self, row_index: int) -> tuple[str, str]:
-        """Return (video_path, subtitle_path) for table2 edit-vpy action."""
-        if getattr(self, '_encode_input_mode', 'bdmv') == 'remux':
-            video_path = self._get_remux_source_path_from_table2_row(row_index)
-            subtitle_path = ''
-            try:
-                should_load_subtitle = bool(
-                    getattr(self, 'sub_pack_hard_radio', None) and self.sub_pack_hard_radio.isChecked())
-            except Exception:
-                should_load_subtitle = False
-            try:
-                sub_col = ENCODE_REMUX_LABELS.index('sub_path')
-                sub_item = self.table2.item(row_index, sub_col)
-                subtitle_path = sub_item.text().strip() if should_load_subtitle and sub_item and sub_item.text().strip() else ''
-            except Exception:
-                subtitle_path = ''
-            return video_path, subtitle_path
-
-        try:
-            bdmv_col = ENCODE_LABELS.index('bdmv_index')
-            m2ts_col = ENCODE_LABELS.index('m2ts_file')
-        except Exception:
-            bdmv_col, m2ts_col = 2, 4
-        bdmv_item = self.table2.item(row_index, bdmv_col)
-        m2ts_item = self.table2.item(row_index, m2ts_col)
-        sub_item = self.table2.item(row_index, 0)
-        try:
-            bdmv_index = int(bdmv_item.text().strip()) if bdmv_item and bdmv_item.text().strip() else -1
-        except Exception:
-            bdmv_index = -1
-        m2ts_files = self._split_m2ts_files(m2ts_item.text() if m2ts_item else '')
-        video_path = self._select_video_path(bdmv_index, m2ts_files)
-        try:
-            should_load_subtitle = bool(
-                getattr(self, 'sub_pack_hard_radio', None) and self.sub_pack_hard_radio.isChecked())
-        except Exception:
-            should_load_subtitle = False
-        subtitle_path = sub_item.text().strip() if should_load_subtitle and sub_item and sub_item.text().strip() else ''
-        return video_path, subtitle_path
-
-    def _resolve_table3_row_edit_context(self, row_index: int) -> tuple[str, str]:
-        """Return (video_path, subtitle_path) for table3 edit-vpy action."""
-        if getattr(self, '_encode_input_mode', 'bdmv') == 'remux':
-            return self._get_remux_source_path_from_table3_row(row_index), ''
-        try:
-            bdmv_col = ENCODE_SP_LABELS.index('bdmv_index')
-            m2ts_col = ENCODE_SP_LABELS.index('m2ts_file')
-        except Exception:
-            bdmv_col, m2ts_col = 0, 2
-        bdmv_item = self.table3.item(row_index, bdmv_col)
-        m2ts_item = self.table3.item(row_index, m2ts_col)
-        try:
-            bdmv_index = int(bdmv_item.text().strip()) if bdmv_item and bdmv_item.text().strip() else -1
-        except Exception:
-            bdmv_index = -1
-        m2ts_files = self._split_m2ts_files(m2ts_item.text() if m2ts_item else '')
-        return self._select_video_path(bdmv_index, m2ts_files), ''
-
     def _preview_script_for_row(self, vpy_path: str, video_path: str, subtitle_path: str):
         if not video_path:
-            QMessageBox.information(self, "Prompt", "Cannot determine video file path")
+            QMessageBox.information(self, self.t('Prompt'), self.t('Cannot determine video file path'))
             return
 
         vpy_path = (vpy_path or '').strip()
@@ -1292,7 +1059,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                 temp_vpy = self._create_temp_preview_vpy_from_default(video_path=video_path,
                                                                       subtitle_path=subtitle_path or '')
                 if not temp_vpy:
-                    QMessageBox.warning(self, "Prompt", "Failed to generate preview script")
+                    QMessageBox.warning(self, self.t('Prompt'), self.t('Failed to generate preview script'))
                     return
                 proc = self.open_vpy_in_vsedit(temp_vpy)
                 if not proc:
@@ -1329,7 +1096,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                                                subtitle_path=subtitle_path or '')
                 self.open_vpy_in_vsedit(vpy_path)
         except Exception as e:
-            QMessageBox.warning(self, "Prompt", f"Preview script failed: {e}")
+            QMessageBox.warning(self, self.t('Prompt'), self.t('Preview script failed: {error}').format(error=e))
 
     def on_edit_vpy_clicked(self):
         if self.get_selected_function_id() != 4:

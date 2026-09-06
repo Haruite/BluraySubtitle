@@ -15,6 +15,7 @@ from typing import Callable, Optional
 from src.core import find_mkvtoolnix, mkvtoolnix_ui_language_arg
 from src.core import settings as core_settings
 from src.core.i18n import translate_text
+from src.core.media_language import normalize_track_language
 from src.exports.utils import (
     get_effective_bit_depth,
     mkv_codec_id_is_dts_family,
@@ -1554,11 +1555,7 @@ def _selected_audio_after_cleanup(
         except (TypeError, ValueError):
             channel_count = 0
         language = language_by_track.get(track_id) or str(properties.get('language') or 'und')
-        normalized_language = language.strip().lower().replace('_', '-').split('-', 1)[0]
-        if normalized_language in ('chi', 'cmn', 'yue', 'nan', 'zh'):
-            normalized_language = 'zho'
-        elif not normalized_language:
-            normalized_language = 'und'
+        normalized_language = normalize_track_language(language)
         if codec_id in ('A_PCM/INT/LIT', 'A_PCM/INT/BIG'):
             codec_family = 'pcm'
         elif codec_id in ('A_TRUEHD', 'A_MLP'):
@@ -2312,28 +2309,22 @@ def mux_with_audio_conversion(
                 translate_text('Final audio track verification failed: {path}').format(path=output_path)
             )
 
-        def normalized_language(language: object) -> str:
-            normalized = str(language or 'und').strip().lower().replace('_', '-')
-            primary = normalized.split('-', 1)[0]
-            return 'zho' if primary in ('chi', 'cmn', 'yue', 'zh') else primary
-
         for output_track, expected_language in zip(output_tracks, expected_languages):
             if not expected_language:
                 continue
             output_properties = output_track.get('properties') \
                 if isinstance(output_track.get('properties'), dict) else {}
             actual_languages = {
-                normalized_language(output_properties.get(property_name))
+                normalize_track_language(output_properties.get(property_name))
                 for property_name in ('language', 'language_ietf')
                 if output_properties.get(property_name)
             }
-            if normalized_language(expected_language) not in actual_languages:
+            if normalize_track_language(expected_language) not in actual_languages:
                 raise RuntimeError(
                     translate_text('Final track language verification failed: {path}').format(
                         path=output_path
                     )
                 )
-        os.replace(temporary_output, output_path)
         if write_audio_gaps:
             source_timeline_by_output_track: dict[
                 int, tuple[tuple[float, float], ...]
@@ -2354,11 +2345,19 @@ def mux_with_audio_conversion(
                     default=0.0,
                 )
             write_audio_gap_sidecar(
-                output_path,
+                temporary_output,
                 source_timeline_by_output_track,
                 duration,
                 output_tracks,
             )
+        os.replace(temporary_output, output_path)
+        if write_audio_gaps:
+            try:
+                os.replace(audio_gap_sidecar_path(temporary_output), audio_gap_sidecar_path(output_path))
+            except OSError:
+                # Keep this task's media under its temporary name if metadata publication fails.
+                os.replace(output_path, temporary_output)
+                raise
     except TaskCancelled:
         raise
     except Exception as error:

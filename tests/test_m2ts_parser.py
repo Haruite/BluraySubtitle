@@ -38,7 +38,7 @@ class M2TSParserTest(unittest.TestCase):
         ])
         return b'\x00\x00\x01\xe0\x00\x00\x80\x80\x05' + pts_bytes + video_payload
 
-    def _write_stream(self, *, m2ts: bool = True) -> str:
+    def _write_stream(self, *, m2ts: bool = True, first_clock: int = 90_000, last_clock: int = 180_000) -> str:
         pat = bytes.fromhex('00b00d0001c100000001e10000000000')
         pmt = bytes.fromhex('02b0120001c10000f011f00024f011f00000000000')
         # Real HEVC VPS bytes from a UHD Blu-ray. Its timing fields are 24000/1001.
@@ -46,8 +46,8 @@ class M2TSParserTest(unittest.TestCase):
         data = b''.join([
             self._transport_packet(0x0000, b'\x00' + pat, payload_unit_start=True, m2ts=m2ts),
             self._transport_packet(0x0100, b'\x00' + pmt, payload_unit_start=True, m2ts=m2ts),
-            self._transport_packet(0x1011, self._pes(b'\x00\x00\x01' + vps, 90_000), payload_unit_start=True, m2ts=m2ts, pcr=90_000),
-            self._transport_packet(0x1011, self._pes(b'\x00\x00\x01' + vps, 180_000), payload_unit_start=True, m2ts=m2ts, pcr=180_000),
+            self._transport_packet(0x1011, self._pes(b'\x00\x00\x01' + vps, first_clock), payload_unit_start=True, m2ts=m2ts, pcr=first_clock),
+            self._transport_packet(0x1011, self._pes(b'\x00\x00\x01' + vps, last_clock), payload_unit_start=True, m2ts=m2ts, pcr=last_clock),
         ])
         handle, path = tempfile.mkstemp(suffix='.m2ts' if m2ts else '.ts')
         os.close(handle)
@@ -66,6 +66,12 @@ class M2TSParserTest(unittest.TestCase):
         self.assertEqual(parser.get_duration(prefer_pcr=False), 90_000)
         self.assertAlmostEqual(parser.read_frame_rate_from_m2ts(), 23.976, places=3)
         self.assertEqual(parser.get_total_frames(), 24)
+
+    def test_duration_across_clock_wrap(self) -> None:
+        parser = M2TS(self._write_stream(first_clock=(1 << 33) - 45_000, last_clock=45_000))
+        for prefer_pcr in (True, False):
+            with self.subTest(prefer_pcr=prefer_pcr):
+                self.assertEqual(parser.get_duration(prefer_pcr=prefer_pcr, use_pts_fallback=False), 90_000)
 
     def test_plain_ts_layout_uses_the_same_parser(self) -> None:
         parser = M2TS(self._write_stream(m2ts=False))
