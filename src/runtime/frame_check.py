@@ -315,6 +315,7 @@ def _summarize_psnr(
         fps: float | None,
         luma_psnr_threshold_db: float,
         chroma_psnr_threshold_db: float,
+        frame_timestamps_ns: tuple[int, ...] | None = None,
 ) -> dict[str, object]:
     totals = {name: 0.0 for name in ("average", "y", "u", "v")}
     finite_counts = {name: 0 for name in totals}
@@ -371,7 +372,11 @@ def _summarize_psnr(
             suspicious_frames += 1
             frame_data = {
                 "frame": frame_number,
-                "timestamp_seconds": round(frame_number / fps, 6) if fps else None,
+                "timestamp_seconds": (
+                    round(frame_timestamps_ns[frame_number] / 1_000_000_000, 6)
+                    if frame_timestamps_ns is not None and frame_number < len(frame_timestamps_ns)
+                    else round(frame_number / fps, 6) if fps else None
+                ),
                 "psnr_average_db": _json_psnr_value(values["average"]),
                 "psnr_y_db": _json_psnr_value(values["y"]),
                 "psnr_u_db": _json_psnr_value(values["u"]),
@@ -456,6 +461,7 @@ def run_full_frame_check(
         ffprobe_executable: str,
         encoded_path: str,
         expected_reference_frames: int | None = None,
+        frame_timestamps_ns: tuple[int, ...] | None = None,
         luma_psnr_threshold_db: float = DEFAULT_LUMA_PSNR_THRESHOLD_DB,
         chroma_psnr_threshold_db: float = DEFAULT_CHROMA_PSNR_THRESHOLD_DB,
         cancel_event: Event | None = None,
@@ -497,6 +503,7 @@ def run_full_frame_check(
                 encoded_video.get("fps"),
                 luma_psnr_threshold_db,
                 chroma_psnr_threshold_db,
+                frame_timestamps_ns,
             )
         compared_frames = int(summary["compared_frames"])
         frame_counts = [

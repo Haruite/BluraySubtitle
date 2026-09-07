@@ -435,6 +435,12 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
                 os.path.isfile(mkvmerge_path) or shutil.which(mkvmerge_path)
         ):
             raise FileNotFoundError(translate_text('mkvmerge not found'))
+        if pending_video_rows:
+            mkvextract_path = core_settings.MKV_EXTRACT_PATH or shutil.which('mkvextract')
+            if not mkvextract_path or not (
+                    os.path.isfile(mkvextract_path) or shutil.which(mkvextract_path)
+            ):
+                raise FileNotFoundError(translate_text('mkvextract not found'))
     if request.input_mode == 'bdmv' and any(
             row.audio_tracks or row.audio_codec_choices
             for row, _is_sp_row in pending_rows

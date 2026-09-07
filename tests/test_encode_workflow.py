@@ -17,6 +17,7 @@ from src.runtime.encode_results import (
     EncodeTaskFailure,
 )
 from src.runtime.encode_source import ActualEncodeSource
+from src.runtime.video_timeline import VideoTimeline
 from src.runtime import TaskCancelled
 from src.runtime.services_split.encode_and_audio_tasks import EncodeAudioTasksMixin
 from src.runtime.services_split.remux_and_episode_workflows import RemuxEpisodeWorkflowsMixin
@@ -484,7 +485,19 @@ class EncodeWorkflowTests(unittest.TestCase):
                 )
                 return 7
 
+            def extract_timeline(_source, _track_id, path, _cancel):
+                timeline = VideoTimeline((125_000_000, 166_708_333))
+                return timeline.write_prefix(path, 1)
+
             with (
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.MediaInfoTrackMappingMixin._mkvmerge_identify_json',
+                        return_value={'tracks': [{'id': 0, 'type': 'video'}]},
+                    ),
+                    patch(
+                        'src.runtime.services_split.encode_and_audio_tasks.extract_video_timeline',
+                        side_effect=extract_timeline,
+                    ),
                     patch(
                         'src.runtime.services_split.encode_and_audio_tasks.MediaInfoTrackMappingMixin.mkvinfo_dolby_vision_track_id',
                         return_value=None,
@@ -529,11 +542,16 @@ class EncodeWorkflowTests(unittest.TestCase):
                         source_file=str(source_path),
                     )
             self.assertFalse(output_path.exists())
-            self.assertEqual(len(failure.exception.artifact_paths), 1)
+            self.assertEqual(len(failure.exception.artifact_paths), 3)
             artifact_path = Path(failure.exception.artifact_paths[0])
             self.assertTrue(artifact_path.name.startswith('output.partial.'))
             self.assertEqual(artifact_path.suffix, '.hevc')
             self.assertEqual(artifact_path.read_bytes(), b'partial-hevc')
+            for timestamp_path in failure.exception.artifact_paths[1:]:
+                self.assertEqual(
+                    VideoTimeline.read(timestamp_path).timestamps_ns,
+                    (125_000_000, 166_708_333),
+                )
 
 if __name__ == '__main__':
     unittest.main()

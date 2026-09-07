@@ -75,7 +75,7 @@ class EncodeSourceProbeTests(unittest.TestCase):
             self.assertTrue(color_changed)
             self.assertEqual(timeline, (3, 24_000, 1_001))
 
-    def test_hdr10plus_extraction_requires_the_same_vpy_timeline(self) -> None:
+    def test_hdr10plus_requires_matching_frames_without_relying_on_nominal_fps(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             source = ActualEncodeSource(
@@ -135,7 +135,7 @@ class EncodeSourceProbeTests(unittest.TestCase):
                     extract_hdr10plus_metadata(
                         source,
                         str(metadata_path),
-                        (3, 24_000, 1_001),
+                        (3, 30, 1),
                     ),
                     str(metadata_path),
                 )

@@ -8,6 +8,14 @@ from typing import Optional
 import src.core.settings as _core_settings
 
 I18N_ZH_TO_EN = {
+    '视频时间戳提取': 'Video timestamp extraction',
+    '视频时间戳准备': 'Video timestamp preparation',
+    '正在读取视频时间戳：{name}': 'Reading video timestamps: {name}',
+    '无效的视频时间戳：{path}': 'Invalid video timestamps: {path}',
+    '视频时间戳覆盖 {source_frames} 帧，但 VPy 输出 {output_frames} 帧': 'Video timestamps cover {source_frames} frames, but VPy outputs {output_frames}',
+    '视频时间戳提取失败：{path}。{error}': 'Video timestamp extraction failed: {path}. {error}',
+    '未找到视频轨道：{path}': 'No video track found: {path}',
+    '无法确定 VPy 输出帧数：{path}': 'Could not determine the VPy output frame count: {path}',
     '拖动以调整表格高度': 'Drag to adjust table height',
     '为各原盘选择主播放列表；通过行内按钮查看章节和时间。': 'Select the main playlists for each disc. Use the row buttons to inspect chapters and timing.',
     '原盘与播放列表': 'Sources and playlists',

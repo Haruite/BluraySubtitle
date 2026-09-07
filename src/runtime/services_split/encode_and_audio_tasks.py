@@ -40,6 +40,7 @@ from src.runtime.encode_source import (
     inject_hdr10plus_metadata,
     parse_source_color_metadata,
     probe_actual_encode_source,
+    probe_vapoursynth_frame_count,
     probe_vapoursynth_output_metadata,
     probe_x265_dynamic_metadata_options,
     source_has_hdr10plus,
@@ -49,6 +50,10 @@ from src.runtime.encode_source import (
 )
 from src.runtime.encode_results import EncodeTaskFailure
 from src.runtime.frame_check import run_full_frame_check
+from src.runtime.video_timeline import (
+    VPY_HARDSUB_CALL,
+    extract_video_timeline,
+)
 from src.runtime.video_crop import (
     VideoCropPlan,
     detect_black_borders,
@@ -1396,11 +1401,15 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             if not any(os.path.exists(path) for path in (
                     artifact_base + encoded_extension,
                     artifact_base + '.hdr10plus.json',
+                    artifact_base + '.source.timestamps.txt',
+                    artifact_base + '.timestamps.txt',
                     artifact_base + encoded_extension + '.dovi.hevc',
                     artifact_base + encoded_extension + '.hdr10plus.hevc',
             )):
                 break
         encoded_path = artifact_base + encoded_extension
+        source_timestamps_path = artifact_base + '.source.timestamps.txt'
+        output_timestamps_path = artifact_base + '.timestamps.txt'
         hdr10plus_json_path = artifact_base + '.hdr10plus.json'
         hdr10plus_injected_path = encoded_path + '.hdr10plus.hevc'
         hdr10plus_metadata_active = False
@@ -1524,8 +1533,27 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                         ) from error
                     vpy_video_source = encode_dovi_plan.base_layer_path
 
-        failure_stage = 'VapourSynth preparation'
+        failure_stage = 'Video timestamp extraction'
         try:
+            self._progress(text=translate_text(
+                'Reading video timestamps: {name}'
+            ).format(name=progress_name))
+            source_tracks = MediaInfoTrackMappingMixin._mkvmerge_identify_json(
+                src_mkv
+            ).get('tracks', [])
+            video_track = next(
+                (track for track in source_tracks if track.get('type') == 'video'),
+                None,
+            )
+            if video_track is None:
+                raise ValueError(translate_text(
+                    'No video track found: {path}'
+                ).format(path=src_mkv))
+            source_timeline = extract_video_timeline(
+                src_mkv, int(video_track['id']), source_timestamps_path,
+                cancel_event,
+            )
+            failure_stage = 'VapourSynth preparation'
             use_getnative = bool(getattr(self, "use_getnative", True))
             native_info = None
             if use_getnative:
@@ -1700,7 +1728,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
 
                     textsub_match = re.match(
                         r'^(\s*)(#\s*)?'
-                        r'(res\s*=\s*core\.assrender\.TextSub\('
+                        rf'({re.escape(VPY_HARDSUB_CALL)}|res\s*=\s*core\.assrender\.TextSub\('
                         r'\s*res\s*,\s*file\s*=\s*sub_file\s*\))'
                         r'(\s*(#.*)?)$',
                         raw,
@@ -1709,7 +1737,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                         comment_prefix = '' if hardsub_enabled else '# '
                         new_line = (
                             f'{textsub_match.group(1)}{comment_prefix}'
-                            f'{textsub_match.group(3)}'
+                            f'{VPY_HARDSUB_CALL}'
                             f'{textsub_match.group(4) or ""}\n'
                         )
                         new_lines.append(new_line)
@@ -1757,6 +1785,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 vspipe_exe, vspipe_env = VSPIPE_PATH, None
             vspipe_env = dict(vspipe_env) if vspipe_env else dict(os.environ)
             vspipe_env['BLURAYSUB_VPY_SOURCE'] = os.path.normpath(vpy_video_source)
+            vspipe_env['BLURAYSUB_VPY_TIMECODES'] = source_timestamps_path
             if str(PLUGIN_PATH or '').strip():
                 vspipe_env['BLURAYSUB_PLUGIN_PATH'] = str(PLUGIN_PATH)
             enc_exe = resolve_encoder_executable_path(encoder, encoder_mode)
@@ -1772,7 +1801,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 hdr10plus_metadata_active,
                 native_dolby_vision,
                 expected_final_video_metadata,
-                expected_dynamic_metadata_frames,
+                expected_output_frames,
             ) = _plan_automatic_encoder_metadata(
                 self,
                 output_file,
@@ -1787,6 +1816,14 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 hdr10plus_json_path,
                 encode_dovi_plan.rpu_path if encode_dovi_plan else '',
                 progress_name,
+            )
+            failure_stage = 'Video timestamp preparation'
+            if expected_output_frames is None:
+                expected_output_frames = probe_vapoursynth_frame_count(
+                    vpy_path, str(vspipe_exe), vspipe_env,
+                )
+            output_timeline = source_timeline.write_prefix(
+                output_timestamps_path, expected_output_frames,
             )
             native_hdr10plus = arguments_contain_option(
                 automatic_metadata_arguments,
@@ -1893,7 +1930,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     try:
                         verify_dolby_vision_rpu(
                             encoded_path,
-                            expected_dynamic_metadata_frames,
+                            expected_output_frames,
                             8,
                         )
                     except Exception:
@@ -1911,7 +1948,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     failure_stage = 'Dolby Vision RPU verification'
                     verify_dolby_vision_rpu(
                         encoded_path,
-                        expected_dynamic_metadata_frames,
+                        expected_output_frames,
                         8,
                     )
             if hdr10plus_metadata_active:
@@ -1945,7 +1982,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                             failure_stage = 'Dolby Vision RPU verification'
                             verify_dolby_vision_rpu(
                                 encoded_path,
-                                expected_dynamic_metadata_frames,
+                                expected_output_frames,
                                 8,
                             )
             soft_subtitle = subtitle_path if subtitle_mode == 'soft' else ''
@@ -1967,6 +2004,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 audio_codec_choices=audio_codec_choices,
                 track_language_overrides=track_language_overrides,
                 encoded_video_file=encoded_path,
+                video_timestamps_file=output_timestamps_path,
                 subtitle_file=soft_subtitle,
                 subtitle_language=subtitle_language,
                 audio_encoding=audio_encoding,
@@ -1998,7 +2036,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 try:
                     verify_dolby_vision_rpu(
                         output_file,
-                        expected_dynamic_metadata_frames,
+                        expected_output_frames,
                         8,
                     )
                 except Exception as error:
@@ -2056,7 +2094,8 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                         ffmpeg_executable=str(FFMPEG_PATH or 'ffmpeg'),
                         ffprobe_executable=str(FFPROBE_PATH or 'ffprobe'),
                         encoded_path=output_file,
-                        expected_reference_frames=expected_dynamic_metadata_frames,
+                        expected_reference_frames=expected_output_frames,
+                        frame_timestamps_ns=output_timeline.timestamps_ns[:-1],
                         luma_psnr_threshold_db=(
                             frame_check_luma_psnr_threshold_db
                         ),
@@ -2102,6 +2141,8 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             retained_artifacts = []
             for path in (
                     encoded_path,
+                    source_timestamps_path,
+                    output_timestamps_path,
                     hdr10plus_json_path,
                     encoded_path + '.dovi.hevc',
                     hdr10plus_injected_path,
@@ -2130,6 +2171,8 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             )
             for path in (
                     encoded_path,
+                    source_timestamps_path,
+                    output_timestamps_path,
                     hdr10plus_json_path,
                     encoded_path + '.dovi.hevc',
                     hdr10plus_injected_path,
@@ -2151,6 +2194,8 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 tuple(dict.fromkeys(retained_artifacts)),
             ) from error
         else:
+            for path in (source_timestamps_path, output_timestamps_path):
+                force_remove_file(path)
             if os.path.isfile(encoded_path):
                 force_remove_file(encoded_path)
             if os.path.isfile(hdr10plus_injected_path):

@@ -57,6 +57,7 @@ See [audio formats and conversion targets](docs/wiki/Media-Formats-and-Dolby-Vis
 ### Encode controls
 
 - Choose bundled/system `vspipe` and encoder binaries: x264 supports 8/10-bit, x265 8/10/12-bit, and SVT-AV1 normal output 8/10-bit. The exposed SVT-AV1 12-bit path is experimental and the setup-script build produces invalid video.
+- Encode preserves source CFR/VFR video timing and the audio/video start offset. Hardsubs in the generated VPy use the same timeline. VPy processing must preserve frame correspondence, except for the [prefix test](#how-do-i-run-a-short-encode-test).
 - Built-in presets are read-only. **Advanced** manages user presets and startup defaults; the visible parameter field controls each task.
 - Each main/SP row has its own VPy path and per-track FLAC/AAC/Opus choices. Subtitle modes are external, softsub, and hardsub; Remux-source input also supports chapter/attachment editing.
 - The generated VPy exposes denoise, dehalo, dering, deband, and anti-aliasing strengths. Startup defaults for these controls and the getnative/crop/comparison/frame-check options are stored under **Advanced**.
@@ -351,7 +352,7 @@ For a quick video-side smoke test, add a prefix trim before the final two output
 res = res.std.Trim(first=0, length=720)
 ```
 
-Keep `first=0` so output-comparison images still use corresponding source and encoded frame numbers. This only shortens the processed video: getnative and selected audio conversion still inspect or process the complete source, while source audio, soft subtitles, and chapters remain untrimmed in the final MKV. HDR10+ is omitted because its full-source timeline no longer matches the VPy output, and this is not a reliable full Dolby Vision test. To test the complete Encode workflow, use a short MKV whose video, audio, subtitles, chapters, and dynamic metadata were cut together.
+Keep `first=0` so output-comparison images still use corresponding source and encoded frame numbers. The test retains the timestamps of the first 720 frames; for VFR, its duration depends on those timestamps. This only shortens the processed video: getnative and selected audio conversion still inspect or process the complete source, while source audio, soft subtitles, and chapters remain untrimmed in the final MKV. HDR10+ is omitted because its full-source timeline no longer matches the VPy output, and this is not a reliable full Dolby Vision test. To test the complete Encode workflow, use a short MKV whose video, audio, subtitles, chapters, and dynamic metadata were cut together.
 
 ### Why is remux larger than the original disc?
 

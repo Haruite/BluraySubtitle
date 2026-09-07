@@ -51,6 +51,7 @@ class FrameCheckTests(unittest.TestCase):
                         vspipe_executable='vspipe', vpy_path=str(vpy_path), vspipe_environment={},
                         ffmpeg_executable='ffmpeg', ffprobe_executable='ffprobe',
                         encoded_path=str(encoded_path), expected_reference_frames=expected_frames,
+                        frame_timestamps_ns=(125_000_000, 166_708_333, 250_000_000),
                         luma_psnr_threshold_db=thresholds[0], chroma_psnr_threshold_db=thresholds[1],
                     )
 
@@ -64,6 +65,10 @@ class FrameCheckTests(unittest.TestCase):
                 self.assertEqual(
                     report['summary']['frame_count_matches'], len(planes) == expected_frames,
                 )
+                for frame in report['worst_frames']:
+                    self.assertEqual(
+                        frame['timestamp_seconds'], (0.125, 0.166708, 0.25)[frame['frame']],
+                    )
 
 
 if __name__ == '__main__':

@@ -46,6 +46,8 @@ The staging remux preserves source audio. Audio conversion and final audio clean
 
 `vspipe` supplies Y4M frames to the encoder through a pipe, so a normal encode does not need a full uncompressed intermediate video file. The encoder's elementary-stream result is temporary; the user-facing result is the final MKV.
 
+Implementation note: Encode extracts the source MKV video presentation timestamps with `mkvextract timestamps_v2` and restores them with `mkvmerge --timestamps`, including the video start offset. Hardsubs in the generated VPy share these timecodes. CFR and VFR use the same path without a separate full-video decode for detection. The default `LWLibavSource` frame-duration properties cannot restore the original VFR timeline. Prefix tests retain the timestamps for the actual output frame count and the last frame's end boundary.
+
 ## Rate control and the meaning of presets
 
 ### CRF
@@ -191,7 +193,7 @@ With x265, Dolby Vision MKV input is checked using its original RPU before conve
 
 Before starting the encoder, BluraySubtitle samples output 0's first, middle, and last frames. Stable `_ColorRange`, `_Primaries`, `_Transfer`, `_Matrix`, and `_ChromaLocation` properties take precedence over source metadata; missing properties fall back to the source. The row stops if the sampled values differ.
 
-When the actual source exposes HDR10+, x265 10/12-bit encoding extracts its validated JSON and checks the metadata frame count and source frame rate against the VPy timeline. The actual x265 executable is probed once per binary identity: when it advertises `--dhdr10-info`, the metadata is supplied during encoding; otherwise, or when native verification fails, `hdr10plus_tool` performs verified post-injection. Failures continue without dynamic metadata and retain non-empty JSON for diagnosis. Custom scripts using this path must preserve frame order.
+When the actual source exposes HDR10+, x265 10/12-bit encoding extracts its validated JSON and checks the metadata frame count against the VPy output. Muxing restores the source timestamps, so nominal frame rates are not used to decide whether VFR timelines match. The actual x265 executable is probed once per binary identity: when it advertises `--dhdr10-info`, the metadata is supplied during encoding; otherwise, or when native verification fails, `hdr10plus_tool` performs verified post-injection. Failures continue without dynamic metadata and retain non-empty JSON for diagnosis. Custom scripts using this path must preserve frame order.
 
 Dolby Vision uses native x265 RPU input when the executable advertises it and the row already has VBV and mastering-display parameters. Otherwise, or when native verification fails, it uses `dovi_tool` injection without changing rate control.
 
@@ -206,7 +208,7 @@ After the final MKV is published, BluraySubtitle re-probes the static fields it 
 The generated VPy cannot safely choose one automatic treatment for every source. `_FieldBased` can report whether a frame is progressive (`0`), bottom-field-first (`1`), or top-field-first (`2`), but it does not say why the fields exist. True interlaced camera or video material needs deinterlacing; 3:2 telecined film or animation normally needs field matching plus decimation (IVTC); mixed progressive, telecined, and interlaced sections may need range-specific handling.
 Blindly using QTGMC can create an unnecessary doubled frame rate or preserve telecine judder, while blindly applying IVTC can discard real motion fields. Container metadata can also be wrong, so confirm the field order and cadence by frame-stepping representative motion, pans, and credits instead of trusting one metadata label.
 
-Create a row-specific custom VPy and replace the progressive-only guard immediately after `LWLibavSource`. For genuinely interlaced material, a typical QTGMC starting point is:
+Perform frame-count-changing deinterlacing, IVTC, and mixed-cadence processing externally first, keeping timestamps and audio synchronized, then use the progressive result as the new Encode source. The following examples are references for that external preparation. For interlaced material, a typical QTGMC starting point is:
 
 ```python
 import havsfunc as haf
@@ -226,7 +228,7 @@ src8 = src8.std.SetFrameProps(_FieldBased=0)
 ```
 
 Do not merely clear `_FieldBased`; that changes metadata without reconstructing a progressive picture. Put deinterlacing or IVTC before bit-depth conversion, getnative/descale, denoising, and other restoration. For mixed cadence, split or conditionally replace the affected ranges rather than forcing one filter over the whole title. Preview combing, motion cadence, fades, and scrolling credits, then verify the resulting frame rate, duration, and audio synchronization before a full encode.
-QTGMC/VIVTC and their dependencies must be present in the VapourSynth runtime used for the encode; custom scripts own those additional dependencies.
+QTGMC/VIVTC and their dependencies must be present in the VapourSynth runtime used for external preparation.
 
 ## Plugins used by the generated script
 

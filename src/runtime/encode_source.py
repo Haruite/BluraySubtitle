@@ -694,6 +694,32 @@ def probe_vapoursynth_output_metadata(
     )
 
 
+def probe_vapoursynth_frame_count(
+        vpy_path: str,
+        vspipe_executable: str,
+        environment: dict[str, str],
+) -> int:
+    """Read clip length when optional color/HDR metadata probing was unavailable."""
+    result = run_command(
+        [vspipe_executable, '--preserve-cwd', '--info', vpy_path],
+        cwd=os.path.dirname(os.path.abspath(vpy_path)), env=environment,
+        capture_output=True, text=True, encoding='utf-8', errors='replace',
+        timeout=600,
+    )
+    if result.returncode == 0:
+        for line in result.stdout.splitlines():
+            label, _, value = line.partition(':')
+            if label.strip() == 'Frames' and value.strip().isdigit():
+                frame_count = int(value)
+                if frame_count > 0:
+                    return frame_count
+    raise RuntimeError(
+        result.stderr.strip() or translate_text(
+            'Could not determine the VPy output frame count: {path}'
+        ).format(path=vpy_path)
+    )
+
+
 def source_has_hdr10plus(source: ActualEncodeSource) -> bool:
     """Return whether FFprobe exposed ST 2094-40 metadata on the source."""
     side_data = source.stream.get('side_data_list')
@@ -750,7 +776,7 @@ def extract_hdr10plus_metadata(
         output_path: str,
         vpy_timeline: tuple[int, int, int] | None,
 ) -> str:
-    """Extract validated HDR10+ JSON and require an unchanged VPy timeline."""
+    """Extract validated HDR10+ JSON and require matching VPy frames."""
     executable = str(core_settings.HDR10PLUS_TOOL_PATH or '').strip()
     if not executable:
         executable = 'hdr10plus_tool'
@@ -801,19 +827,15 @@ def extract_hdr10plus_metadata(
             )
         )
 
-    source_rate = _metadata_fraction(
-        source.stream.get('avg_frame_rate')
-        or source.stream.get('r_frame_rate')
-    )
-    if vpy_timeline is None or source_rate is None or source_rate <= 0:
+    if vpy_timeline is None:
         raise RuntimeError(
             translate_text('HDR10+ timeline could not be verified; metadata was retained: {path}').format(
                 path=metadata_path
             )
         )
-    output_frames, output_fps_num, output_fps_den = vpy_timeline
-    output_rate = Fraction(output_fps_num, output_fps_den)
-    if len(scene_info) != output_frames or source_rate != output_rate:
+    # Encode restores the source timestamps; nominal FPS does not describe VFR.
+    output_frames = vpy_timeline[0]
+    if len(scene_info) != output_frames:
         raise RuntimeError(
             translate_text(
                 'HDR10+ timeline does not match the VapourSynth output; '

@@ -1707,6 +1707,7 @@ def mux_with_audio_conversion(
         clean_audio_tracks: bool = True,
         track_language_overrides: tuple[tuple[str, str], ...] = (),
         encoded_video_file: str = '',
+        video_timestamps_file: str = '',
         subtitle_file: str = '',
         subtitle_language: str = '',
         audio_encoding: AudioEncodingSettings = AudioEncodingSettings(),
@@ -2223,8 +2224,11 @@ def mux_with_audio_conversion(
                     ))
                 except (TypeError, ValueError):
                     video_delay_ms = 0
-                if video_delay_ms:
+                if video_delay_ms and not video_timestamps_file:
                     input_arguments.extend(['--sync', f'0:{video_delay_ms}'])
+            if video_timestamps_file:
+                # These are absolute source timestamps, including the video delay.
+                input_arguments.extend(['--timestamps', f'0:{video_timestamps_file}'])
             input_arguments.append(encoded_path)
 
         external_subtitle_input = -1
