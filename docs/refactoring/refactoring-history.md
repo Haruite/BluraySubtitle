@@ -1212,3 +1212,11 @@ Date: 2026-09-06
 - Merged subtitles use the ISO stem and are saved beside the image. ISO rows disable preview and are excluded from Remux/Encode.
 - Linux setup now installs 7-Zip and checks for x64; Windows packaging includes 7-Zip and its license. Updated README, i18n, third-party notices, and the standards defining platform support by the setup scripts.
 - Verification: all 89 tests, offscreen GUI checks, and UDF image extraction checks passed. Unprivileged extraction passed on Ubuntu 22.04 and Debian 12; subtitle merging passed in the repository Docker image.
+
+## Documentation Scope and Maintenance Skill
+
+Date: 2026-09-07
+
+- Added a project documentation skill referenced by AGENTS and the code standards, guiding updates by readers, purpose, and actual behavior.
+- Simplified the README, product constraints, and wiki; consolidated tool-build and audio-processing explanations and removed repetition and development-process narration.
+- Verification: skill format and documentation link checks passed.

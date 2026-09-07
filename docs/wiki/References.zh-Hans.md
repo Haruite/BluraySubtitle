@@ -72,8 +72,6 @@ lw/BluRay wiki 声明其内容采用 [知识共享署名—相同方式共享许
 - [FFmpeg 编解码器文档](https://ffmpeg.org/ffmpeg-codecs.html)
 - [Dolby 技术](https://professional.dolby.com/technologies/)
 
-各编解码器商标用于标识相应技术及其所有者。本文档中的表格描述互操作性和项目行为，不构成任何许可声明。
-
 ## 字幕
 
 - [Matroska 编解码器规范](https://www.matroska.org/technical/codec_specs.html)，可参考 Matroska 字幕编解码器标识及存储方式。
@@ -85,5 +83,3 @@ lw/BluRay wiki 声明其内容采用 [知识共享署名—相同方式共享许
 - [Dolby Vision 简介](https://professional.dolby.com/siteassets/pdfs/dolby-vision-whitepaper_an-introduction-to-dolby-vision_0916.pdf)
 - [ISO 基础媒体文件格式中的 Dolby Vision 码流](https://professionalsupport.dolby.com/s/article/Dolby-Vision-streams-within-the-ISO-Base-Media-File-Format)
 - [dovi_tool](https://github.com/quietvoid/dovi_tool)
-
-Profile 和设备支持可能随时间演进。本文档描述的是当前仓库已经实现并测试的项目行为，并不承诺所有 Dolby Vision Profile 都能在不损失 Profile 特性的情况下完成转换。

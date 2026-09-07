@@ -6,7 +6,7 @@ Documentation: [project wiki](docs/wiki/Home.md) | [interface guide and examples
 
 Development: [mandatory code modification standards](docs/development/code-standards.md) | [media pipeline and tool selection](docs/development/media-pipeline-and-tool-selection.md) | [refactoring history](docs/refactoring/refactoring-history.md)
 
-The Windows x64 release is a one-folder package. Extract the complete archive, then run `BluraySubtitle_windows_x64.exe` without moving it away from the adjacent `_internal` directory. On first launch, the packaged `config.default.json` creates a writable `config.json` beside the executable. Source runs use the repository root instead. The program directory must therefore be writable; an invalid configuration is reported and left untouched.
+The Windows x64 release is a one-folder package. Extract the complete archive, then run `BluraySubtitle_windows_x64.exe` without separating it from `_internal`. Configuration is stored in `config.json` in the program directory, or the repository root for source runs; ensure that directory is writable.
 
 Windows x64 downloads:
 
@@ -28,61 +28,45 @@ BluraySubtitle is a GUI tool for Blu-ray workflows on **Windows / Linux** (inclu
 ### Interface and task settings
 
 - English/Simplified Chinese UI; Light, Dark, and Colorful themes with opacity control.
-- The top language bar and bottom execution button stay fixed while the rest of the page scrolls vertically. Disc sources, main outputs, and SP each have a table section with instructions; drag the handle below a table to adjust its height.
-- **Settings** contains General, Paths, Advanced, External tools, and manual update options. Settings and window geometry are saved in `config.json`.
-- Series mode splits along the chapter timeline; movie mode keeps one continuous output. Each disc can have multiple selected main MPLS files. Automatic selections and episode estimates need review. See [chapter-range recalculation](docs/wiki/BluraySubtitle-Developer-Guide.md#episode-configuration) for how segment and chapter edits interact.
-- Tasks use the visible row order, names, ranges, commands, tracks, and languages captured at launch. Invalid settings are reported before execution. See the [interface examples](docs/wiki/Interface-Guide.md) for selection and review.
+- Scroll the page vertically and drag the handle below each table to resize it. See the [interface guide](docs/wiki/Interface-Guide.md#main-window-content-areas) for layout and table controls.
+- **Settings** manages general options, paths, startup defaults, external tools, and manual updates.
+- Series mode splits by chapters; movie mode keeps a continuous output. Each disc can have multiple selected main MPLS files. Review automatic selections, episode ranges, and tracks before running.
 
 ### Remux controls
 
-Each selected main MPLS has one non-empty editable mux command. Planned outputs must match the visible episode-row count; invalid filenames are rejected. **Edit Tracks** controls video, audio, and subtitle choices; manual track-selection flags in the command are replaced by those choices. Logical-track rows show PIDs and status, with per-PlayItem details in the tooltip; incompatible tracks are disabled.
+Choose video, audio, and subtitles in **Edit Tracks**. Edit the command for a main MPLS when needed; manually entered track-selection flags are replaced by the UI choices.
 
-- **Allow partially missing non-video tracks** is disabled by default. It permits physically absent audio/subtitle intervals only when tsMuxer cannot recover them and the track exists elsewhere in the output. Missing video or a whole missing selected track still fails.
-- **Trim copyright bumper** can remove complete trailing clips in an episode's final 30 seconds when the episode ends at the M2TS file end. Review the result; see the [exact rule and exceptions](docs/wiki/Blu-ray-Disc-Structure.md#short-copyright-bumpers-at-the-end).
-- Selected external subtitles are soft-muxed into the main MKV. Remux does not burn them into video or copy them as external outputs.
-- **Mux Dolby Vision** converts confirmed MEL to profile 8.1 and retains profile 7 for FEL or unrecognized enhancement layers; disabling it excludes the enhancement layer. See [Dolby Vision layer handling](docs/wiki/Media-Formats-and-Dolby-Vision.md#profile-81-in-this-project).
-
-Saved track languages are applied and verified after muxing. Mapping/tool/language failures stop the task and remove its newly created main output. Track-count and MKVToolNix packet-statistics checks instead produce a final warning summary while later Remux work continues.
+- **Allow partially missing non-video tracks** is disabled by default. It permits gaps from missing audio/subtitle intervals; missing video or a whole selected track still fails. See [missing-track handling](docs/development/media-pipeline-and-tool-selection.md#3-track-aligned-remux-fallback).
+- **Trim copyright bumper** attempts to remove short trailing copyright clips. Review the result; see the [conditions](docs/wiki/Blu-ray-Disc-Structure.md#short-copyright-bumpers-at-the-end).
+- Selected external subtitles are soft-muxed into the main MKV.
+- **Mux Dolby Vision** converts MEL to profile 8.1 and retains profile 7 for FEL or unrecognized enhancement layers; disabling it excludes the enhancement layer. See [Dolby Vision layer handling](docs/wiki/Media-Formats-and-Dolby-Vision.md#profile-81-in-this-project).
 
 ### Audio controls
 
-- Remux does not re-encode lossy tracks. **Convert lossless audio to FLAC** starts enabled; its startup state and the standalone/FFmpeg FLAC levels (both default to 8) are configurable under **Advanced**.
-- **Convert DTS:X and TrueHD Atmos to FLAC during Remux** is separate and starts disabled because FLAC cannot retain object metadata.
-- Final Matroska audio cleanup runs even when FLAC conversion is off: it removes tracks below `-60 dB` decoded maximum volume and exact decoded duplicates within the same codec family and channel count. Different known languages are kept; duplicates retain the earliest source track. Every removal is reported. Standalone single-track audio skips this cleanup.
-- Conversion preserves authored gaps in Matroska without adding silence; sparse standalone audio is rejected. Keep the adjacent `.audio-gaps.json` sidecar for later Remux-source Encode, including its valid empty marker for continuous audio.
-- A failed conversion keeps the original track. The greatest continuous-interval shortening is reported above 0.1 seconds; loss above the configurable threshold (default 1 second) discards the conversion.
+- Remux preserves lossy audio and converts lossless audio to FLAC by default. Configure conversion and compression levels under **Advanced**.
+- **Convert DTS:X and TrueHD Atmos to FLAC during Remux** starts disabled because FLAC cannot retain object metadata.
+- Remux and Encode remove silent and exact duplicate audio tracks, reporting each removal; standalone single-track audio is excluded.
+- Converted tracks with gaps require a Matroska container. Keep the `.audio-gaps.json` beside Remux outputs for subsequent encoding.
+- A failed conversion or duration loss above the configurable threshold (default 1 second) keeps the original track.
 
-See [audio formats and conversion targets](docs/wiki/Media-Formats-and-Dolby-Vision.md#lossless-audio-conversion-decisions) for format choices, and [media processing](docs/development/media-pipeline-and-tool-selection.md) for validation and recovery details.
+See [audio formats and conversion targets](docs/wiki/Media-Formats-and-Dolby-Vision.md#lossless-audio-conversion-decisions) for format choices, and [media processing](docs/development/media-pipeline-and-tool-selection.md#audio-processing) for cleanup and validation rules.
 
 ### Encode controls
 
-- Choose bundled/system `vspipe` and encoder binaries: x264 supports 8/10-bit, x265 8/10/12-bit, and SVT-AV1 normal output 8/10-bit. The exposed SVT-AV1 12-bit path is experimental and the setup-script build produces invalid video.
-- Encode preserves source CFR/VFR video timing and the audio/video start offset. Hardsubs in the generated VPy use the same timeline. VPy processing must preserve frame correspondence, except for the [prefix test](#how-do-i-run-a-short-encode-test).
-- Built-in presets are read-only. **Advanced** manages user presets and startup defaults; the visible parameter field controls each task.
-- Each main/SP row has its own VPy path and per-track FLAC/AAC/Opus choices. Subtitle modes are external, softsub, and hardsub; Remux-source input also supports chapter/attachment editing.
-- The generated VPy exposes denoise, dehalo, dering, deband, and anti-aliasing strengths. Startup defaults for these controls and the getnative/crop/comparison/frame-check options are stored under **Advanced**.
-- Automatic getnative can use substantial time and memory and skips sources taller than 1080 pixels. Higher-resolution analysis uses `src/scripts/getnative_file.py` manually.
-- Automatic crop is opt-in and needs visual review. Comparison images go to `<selected output>/<source folder name>/Compare`; full-frame PSNR reports go to `FrameCheck`. The full check rerenders the VPy and may take several times the video's duration.
-- Compatible color/HDR metadata is carried forward. Dolby Vision preservation requires x265 10/12-bit; x264 and x265 8-bit cannot preserve it. SVT-AV1 reports in the completion dialog that Dolby Vision is not retained. x265 10/12-bit also supports HDR10+; automatic crop adjusts Dolby Vision active-area metadata. When x265 preserves Dolby Vision, unused FEL image residuals are reported in the same completion dialog without failing the job.
+- Choose bundled/system `vspipe` and encoders: x264 supports 8/10-bit, x265 8/10/12-bit, and SVT-AV1 8/10-bit. The experimental SVT-AV1 12-bit option is unusable.
+- Source CFR/VFR timing and audio/video synchronization are preserved. VPy processing must preserve frame correspondence; [prefix tests](#how-do-i-run-a-short-encode-test) are also supported.
+- Built-in presets are read-only. Manage user presets under **Advanced** or edit encoder parameters directly.
+- Each main/SP row can specify a VPy and per-track FLAC/AAC/Opus conversion. Subtitle modes are external, softsub, and hardsub; Remux sources also support chapter/attachment editing.
+- The generated VPy provides denoise, dehalo, dering, deband, and anti-aliasing strength controls.
+- Automatic getnative can use substantial time and memory and skips sources taller than 1080 pixels. Use the [getnative script](src/scripts/getnative_file.py) for higher-resolution analysis.
+- Review automatic cropping visually. Comparison images and frame-check reports are saved under `Compare` and `FrameCheck` in the output folder. Full frame checks may take several times the video's duration.
+- Use x265 10/12-bit to preserve Dolby Vision; it also supports HDR10+. FEL image residuals cannot be used for encoding and are reported at completion; SVT-AV1 reports that Dolby Vision cannot be retained.
 
-For defaults, parameters, preview keys, and metadata limitations, see [Video Encoding and VapourSynth](docs/wiki/Video-Encoding-and-VapourSynth.md).
+For parameters, filters, preview, and metadata limitations, see [Video Encoding and VapourSynth](docs/wiki/Video-Encoding-and-VapourSynth.md).
 
 ### SP management
 
-Review the SP table after main-playlist and episode selection. Rows can represent other playlists, excluded main intervals, or uncovered M2TS content. Track edits update the output name and format; matching commentary may share a main output or be appended to one episode. The [SP selection, naming, and attachment rules](docs/wiki/Blu-ray-Disc-Structure.md#main-content-and-sp-in-this-project) cover defaults and special discs.
-
-### Managed x264 and x265 versions
-
-The setup scripts and Docker image resolve the current official upstream source when they run or build:
-
-- **[x264](https://code.videolan.org/videolan/x264)** uses the latest official `master` revision, built as one 8/10-bit-capable CLI. The Windows setup uses the MSYS2 UCRT64 toolchain and profile-guided optimization.
-- **[x265](https://github.com/Multicorewareinc/x265)** uses the latest official stable numeric release tag, built as one statically linked 8/10/12-bit multilib CLI whose three linked cores enable native HDR10+ JSON input (`--dhdr10-info`) and Dolby Vision RPU input (`--dolby-vision-profile`, `--dolby-vision-rpu`).
-
-The managed paths are defined in [settings.py](src/core/settings.py). To use another build, replace the corresponding executable at the same path.
-
-The setup scripts also install the latest official [hdr10plus_tool](https://github.com/quietvoid/hdr10plus_tool) release.
-
-For custom x265 builds, use the official multilib steps in `setup_windows_environment.ps1` or `setup_linux_environment.sh` as references.
+Review the SP table after selecting main playlists and episodes, and deselect unwanted content. Track edits update output names and formats; matching commentary tracks can join the main content. See [SP selection, naming, and attachment rules](docs/wiki/Blu-ray-Disc-Structure.md#main-content-and-sp-in-this-project).
 
 ## Requirements
 
@@ -92,7 +76,7 @@ For custom x265 builds, use the official multilib steps in `setup_windows_enviro
 - `numpy`
 - `soundfile`
 - `pycountry`
-- `Pillow` (imported as `PIL`)
+- `Pillow`
 - `matplotlib`
 
 Example:
@@ -115,11 +99,12 @@ pip install PyQt6 numpy soundfile pycountry pillow matplotlib
 - `vsedit`
 - `x264`
 - `x265`
-- `hdr10plus_tool`
+- `hdr10plus_tool` (HDR10+)
+- `dovi_tool` (Dolby Vision)
 - `SvtAv1EncApp`
 - `fdkaac`
 
-> Bundled vs system paths depend on the current mode and settings. The External Tools path check probes the configured x265 executable. It requires `hdr10plus_tool` only when x265 advertises `--dhdr10-info`, and requires `dovi_tool` only when x265 advertises both Dolby Vision input options.
+> Configure paths and check tool availability under **Settings > External tools**. Encode can use bundled or system tools.
 
 ---
 
@@ -152,16 +137,13 @@ Typical flow:
 
 Notes:
 
-- In **Merge Subtitles**, loading a folder also reads BDMV playlists from `.iso` files larger than 5 GiB, including uppercase extensions. This works on the supported Windows/Linux systems and in Docker without mounting images. Playlists are stored privately until the window closes; merged subtitles are written beside the ISO using its stem. ISO input does not provide preview, Remux, Encode, or disc-folder completion.
+- Folders can include ISO files larger than 5 GiB; merged subtitles are saved beside each image with the same base name. ISO input is limited to subtitle merging.
 - If mapping fails, check **main MPLS** first.
 - If subtitle order is wrong, **click the filename column header** to sort, or drag rows to reorder.
 - If a subtitle duration looks impossible, fix the subtitle file first (right-click **edit** prioritizes lines with the latest end times; fix ends or delete bad lines).
-- Only rows selected in the current table when the task starts participate in the merge.
 - SRT, ASS, SSA, and SUP are supported. Subtitle formats cannot be mixed within one merged output.
-- The suffix is applied exactly as displayed. Presets include the leading dot, such as `.en` and `.zh-Hans`.
-- Each result is written beside the Blu-ray disc folder and beside its main playlist. If any planned output already exists, the task stops before writing and does not overwrite it.
+- Results are saved beside the disc folder and its main playlist. Existing outputs cause an error and are not overwritten.
 - Multiple main playlists selected from one disc are merged independently. Their disc-folder-adjacent files append the MPLS stem to avoid filename collisions.
-- **Complete Blu-ray Folder** applies in both series and movie mode.
 
 ## 2) Add Chapters To MKV
 
@@ -174,11 +156,9 @@ Typical flow:
 
 Behavior:
 
-- MKVs are initially listed by filename and receive chapters in their current visible table order when the task starts.
-- Selected main playlists are used in order, and MKVs are matched sequentially through their durations and playlist chapter marks. MKV filenames do not need a `BD_Vol_NNN` marker.
-- **Edit Original File Directly** applies chapters with `mkvpropedit`. When it is unchecked, `mkvmerge` writes each result to an `output` subfolder of the source MKV directory.
-- Every main playlist, MKV input, required MKVToolNix executable, and deterministic output collision is checked before writing. Existing outputs are errors and are never overwritten.
-- Chapter matching is planned before any MKV is changed. If the selected playlists cannot cover all listed MKVs, the task stops without writing chapters.
+- MKVs are matched to main-playlist chapters in table order; check the order first.
+- **Edit Original File Directly** writes to the source MKV; otherwise, results go to the source directory's `output` subfolder.
+- Incomplete chapter matching or existing outputs stop the operation before writing.
 
 ## 3) Blu-ray Remux
 
@@ -190,7 +170,7 @@ Typical flow:
 4. (Optional) Edit remux command.
 5. Choose output folder and run.
 
-Remux uses the currently displayed playlist order, commands, chapter ranges, output names, subtitle languages, track settings, Dolby Vision option, and **Complete Blu-ray Folder** setting. All main outputs are planned before writing; existing or duplicate outputs stop the task without overwrite or automatic renaming.
+Check [Remux settings](#remux-controls) and output names before running. Existing or duplicate outputs stop the task without overwriting files.
 
 ## 4) Blu-ray Encode
 
@@ -202,17 +182,15 @@ Typical flow:
 4. (Optional) Set **start / end chapter** per row.
 5. Run encode.
 
-Encode uses the current row order, output names, VPy scripts, subtitles, languages, track choices, per-track audio conversion choices, and encoder settings. Planned outputs are never overwritten. Blu-ray input rejects existing outputs. Remux input reports and skips existing non-empty main/SP files, external subtitles, and companion files, then continues with the remaining work. Empty main/SP files and paths of the wrong type are rejected instead of treated as checkpoints.
+Blu-ray input rejects existing outputs. Remux input skips completed main/SP, external-subtitle, and companion outputs and continues the remaining work, allowing interrupted encodes to resume. Empty main/SP files cause an error and must be addressed first.
 
 ---
 
 ## VPy Editing and Preview
 
-- **Edit script (`edit_vpy`)**: opened with the **system default editor** for the file type.
-- **Preview script (`preview_script`)**: opened with **`vsedit`**, with row-aware preview context.
-- The generated default VPy exposes the processed `res` as output index `0` and the original `src8` as output index `1`. See the [Encode/VapourSynth Wiki](docs/wiki/Video-Encoding-and-VapourSynth.md#previewing-processed-and-source-frames-in-vsedit) for VSEdit preview and snapshot hotkeys. This live preview is separate from the PNG files generated by **Output comparison images** after encoding.
-- Default script path: **`vpy.vpy`**.
-- The generated default script intentionally does not auto-process interlaced video because true interlace, telecine, and mixed cadence require different treatment; use a custom VPy as described in the [Encode/VapourSynth Wiki](docs/wiki/Video-Encoding-and-VapourSynth.md#interlaced-telecined-and-mixed-cadence-sources).
+- **Edit script** uses the system-associated editor; **Preview script** uses `vsedit`. The default script is `vpy.vpy`.
+- The default VPy supports comparing processed and source frames. See [VSEdit preview and snapshots](docs/wiki/Video-Encoding-and-VapourSynth.md#previewing-processed-and-source-frames-in-vsedit).
+- Prepare interlaced, telecined, and mixed-cadence sources using the [preprocessing instructions](docs/wiki/Video-Encoding-and-VapourSynth.md#interlaced-telecined-and-mixed-cadence-sources).
 
 ---
 
@@ -225,9 +203,9 @@ Encode uses the current row order, output names, VPy scripts, subtitles, languag
 
 ## `setup_windows_environment.ps1` (Windows environment setup)
 
-`setup_windows_environment.ps1` configures the complete local runtime and build environment for **x64 Windows client and Windows Server systems**.
+`setup_windows_environment.ps1` configures the runtime and build environment for **x64 Windows client and Windows Server systems**.
 
-Before the first run, allow locally created PowerShell scripts for the current user, then start the setup from the repository root:
+Before the first run, set the current user’s PowerShell execution policy, then start the setup from the repository root:
 
 ```powershell
 Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
@@ -310,7 +288,7 @@ Choose exactly one of these Docker audio methods:
   -e BLURAY_SUBTITLE_MPV_AUDIO_OUTPUT=alsa
   ```
 
-Use `pactl info`, `wpctl status`, and `aplay -l` on the host to identify the available API. Do not expose `/dev/snd` as a fallback when the desktop PipeWire or PulseAudio server is already managing it. A non-Docker Linux source run does not need any of these forwarding options; the host mpv selects its audio output normally.
+Use `pactl info`, `wpctl status`, and `aplay -l` on the host to identify the available API. Do not expose `/dev/snd` as a fallback when the desktop PipeWire or PulseAudio server is already managing it.
 
 Apple Silicon (amd64 container):
 
@@ -342,7 +320,7 @@ docker pull --platform linux/amd64 haruite/bluraysubtitle:latest
 
 ### Does encode auto-crop black borders?
 
-Yes, as an opt-in Encode setting. It analyzes multiple time points without writing screenshots and uses a conservative fixed crop that is safe for all sampled active areas. This handles many constant or changing-border sources, but dark scenes, credits, overlays, and unusual mastering can still produce a wrong result. Always verify the reported margins and the encoded picture; leave the option disabled and use an explicit VPy crop when exact control is required.
+Yes. Enable the option and verify the reported margins and encoded picture. Dark scenes, credits, and unusual borders can produce incorrect results; disable it and specify a VPy crop when exact control is needed. See [automatic cropping](docs/wiki/Video-Encoding-and-VapourSynth.md#automatic-black-border-cropping) for the method.
 
 ### How do I run a short encode test?
 
@@ -352,7 +330,7 @@ For a quick video-side smoke test, add a prefix trim before the final two output
 res = res.std.Trim(first=0, length=720)
 ```
 
-The value `720` is an example; set `length` to the frame count you need. getnative and selected audio conversion still inspect or process the complete source, while source audio, soft subtitles, and chapters remain untrimmed in the final MKV. HDR10+ is omitted because its full-source timeline no longer matches the VPy output, and this is not a reliable full Dolby Vision test. To test the complete Encode workflow, use a short MKV whose video, audio, subtitles, chapters, and dynamic metadata were cut together.
+Set `720` to the frame count you need. This trims only video: getnative and audio conversion still process the complete source, and audio, soft subtitles, and chapters remain untrimmed. HDR10+ is omitted, and this is unsuitable for validating a complete Dolby Vision workflow. To test the whole Encode workflow, use a short MKV with video, audio, subtitles, chapters, and dynamic metadata cut together.
 
 ### Why is remux larger than the original disc?
 
@@ -365,8 +343,6 @@ No. Remux the disc first, then in encode mode choose **Remux** as the source and
 ### Why does getnative report different native resolutions per episode?
 
 Normal: some discs mix resolutions and authoring is messy. Run a test pass; if results are similar, keep **auto getnative**. Otherwise disable it and edit the VPy with the resolution/scaling you trust—or leave those fields empty.
-
-
 
 ## Credits
 

@@ -2,11 +2,20 @@
 
 English | [简体中文](BluraySubtitle-Developer-Guide.zh-Hans.md)
 
-This page connects the media model to the source tree. It describes current behavior, not a proposed rewrite. The mandatory [Code Modification Standards](../development/code-standards.md) remain the authority for changes.
+This page maps the media model to the source tree. See the [Code Modification Standards](../development/code-standards.md) for change requirements.
 
 ## Domain definitions
 
 Use the [main MPLS and SP definitions](Blu-ray-Disc-Structure.md#main-content-and-sp-in-this-project) consistently in code and UI. A GUI **segment** is a chapter/file interval: checked intervals contribute to main output and unchecked intervals become SP candidates. It is distinct from a Matroska `Segment`, a PGS segment, or a TS packet.
+
+## Runtime and tool builds
+
+[Windows setup](../../setup_windows_environment.ps1), [Linux setup](../../setup_linux_environment.sh), and the [Dockerfile](../../Dockerfile) install the required tools. [`settings.py`](../../src/core/settings.py) defines platform paths.
+
+- x264 uses official `master` to build an 8/10-bit CLI; Windows uses MSYS2 UCRT64 and PGO.
+- x265 uses the latest official stable tag to build an 8/10/12-bit multilib CLI, with HDR10+ JSON and Dolby Vision RPU input enabled in each core.
+
+Use the setup scripts as references for custom builds. See [automatic HDR metadata handling](Video-Encoding-and-VapourSynth.md#automatic-hdr-metadata-handling) for parameter requirements and injection fallback.
 
 ## Source-code map
 

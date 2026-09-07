@@ -84,6 +84,6 @@ The [Encode pipeline](Video-Encoding-and-VapourSynth.md#the-bluraysubtitle-encod
 
 ## Original disc, BDMV, and BDRip
 
-An **original disc source** is a readable backup, mounted image, or directory retaining the Blu-ray application structure. **BDMV** is a directory tree, not one media file; its playlists define the clip order and intervals. See [Blu-ray Disc Structure](Blu-ray-Disc-Structure.md) for its layout and the project's main-content/SP categories.
+An **original disc source** is a readable backup preserving the Blu-ray application structure and media files. **BDMV** is a directory tree whose playlists define clip order and ranges. See [Blu-ray Disc Structure](Blu-ray-Disc-Structure.md) for directories and the project’s main/SP classification.
 
 **BDRip** and **BDRemux** are community terms, not precise file formats. BDRip usually describes a Blu-ray-derived encode; BDRemux usually preserves source video while reorganizing selected disc content into a container such as MKV.

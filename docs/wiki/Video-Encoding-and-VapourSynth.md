@@ -77,7 +77,7 @@ The four built-in presets are read-only. Advanced settings can add, rename, edit
 
 ## Built-in parameter presets
 
-The Encode page shows the authoritative current parameter string. Built-in values are defined in [`src/core/encode_presets.py`](../../src/core/encode_presets.py) and are not duplicated here because they may change. They are starting points rather than promises of a particular size or visual quality. In particular, x265's `placebo` preset has sharply diminishing returns, while a higher numeric SVT-AV1 preset means a faster encode with a compression-efficiency tradeoff.
+The built-in parameters in [`src/core/encode_presets.py`](../../src/core/encode_presets.py) provide starting points for tuning. x265's `placebo` preset has sharply diminishing returns; higher numeric SVT-AV1 presets encode faster with lower compression efficiency.
 
 ## Common parameters in plain language
 
@@ -118,13 +118,13 @@ Use sufficient intermediate precision and dither when reducing bit depth. Verify
 
 ### Automatic getnative
 
-BluraySubtitle's getnative implementation is adapted from [Infiziert90/getnative](https://github.com/Infiziert90/getnative). It estimates the vertical resolution at which a source was rendered before mastering and the scaling kernel most likely used to enlarge it. When automatic getnative is enabled for a source no taller than 1080p, the result becomes the generated VPy's native height and inverse-scaling kernel. This can remove the master's upscale before subsequent filtering or resizing, but it neither changes the source file nor restores detail that was never present.
+BluraySubtitle's getnative is adapted from [Infiziert90/getnative](https://github.com/Infiziert90/getnative). It estimates the vertical resolution before mastering upscale and the scaling kernel. The results populate `native_h` and `native_kernel` in VPy for inverse scaling before filtering; this cannot restore detail absent from the source.
 
-Before sample extraction, Encode probes the actual video stream dimensions. A source taller than 1080p skips automatic getnative immediately even if the option is selected; this avoids adding a potentially very long high-resolution analysis to the normal encode workflow. Higher-resolution analysis remains available through `src/scripts/getnative_file.py`. Write the returned `height` and `kernel` into the VPy as `native_h` and `native_kernel` before encoding.
+Automatic getnative handles sources no taller than 1080p. For higher resolutions, run `src/scripts/getnative_file.py` manually and write the returned `height` and `kernel` into the VPy as `native_h` and `native_kernel`.
 
 #### Frame selection and scheduling
 
-FFmpeg extracts candidate frames in incremental rounds instead of preparing 100 images in advance. Frames are ranked by edge energy, luminance variance, and entropy so that detailed, high-contrast pictures are tried first. A round can launch at most 20 samples, further limited by the logical CPU count and currently available physical memory. The memory calculation reserves 2 GiB for the system and budgets 800 MiB for every sample process. The 800 MiB value is a scheduling estimate, not a hard process limit: a complex frame or a short-lived final scan may use more.
+FFmpeg extracts candidate frames in incremental rounds. Frames are ranked by edge energy, luminance variance, and entropy so that detailed, high-contrast pictures are tried first. A round can launch at most 20 samples, further limited by the logical CPU count and currently available physical memory. The memory calculation reserves 2 GiB for the system and budgets 800 MiB for every sample process. The 800 MiB value is a scheduling estimate, not a hard process limit: a complex frame or a short-lived final scan may use more.
 
 Every sample already launched is allowed to finish, and every kernel and sample result is printed as soon as it becomes available. Five valid curves are only the threshold for deciding whether another round is necessary; all valid results from the completed round still participate in the final decision. If fewer than five are found, extraction continues incrementally, up to a 100-sample safety ceiling. A final result still requires at least two usable curves.
 
@@ -132,18 +132,18 @@ Every sample already launched is allowed to finish, and every kernel and sample 
 
 The installed system Python coordinates extraction, processes, and final ranking. The portable Python 3.13 VapourSynth environment runs `getnative.vpy`, which converts the PNG sample from RGB to BT.709 grayscale and evaluates all 16 inverse-scaling candidates: bilinear; eight bicubic parameter sets; Lanczos with 2, 3, 4, and 5 taps; and Spline16, Spline36, and Spline64. Each candidate descales the frame to a trial height, scales it back to the source dimensions, and measures the reconstruction error. The vertical search range is normally 40% through 98% of the source height.
 
-For speed, every kernel first receives a centered half-size, step-4 coarse scan and then a full-frame 1p scan around the best coarse height. The first three priority kernels always reach the fine scan. After that, a kernel whose like-for-like coarse score is below 45% of the best coarse score may skip its fine scan, while still reporting the coarse result. After all kernels have reported, the winning kernel is checked again with a full-frame step-4 pass followed by a full-frame ±20p, 1p scan. This avoids retaining a second full-range 1p graph.
+For speed, every kernel first receives a centered half-size, step-4 coarse scan and then a full-frame 1p scan around the best coarse height. The first three priority kernels always reach the fine scan. After that, a kernel whose like-for-like coarse score is below 45% of the best coarse score may skip its fine scan, while still reporting the coarse result. After all kernels have reported, the winning kernel is checked again with a full-frame step-4 pass followed by a full-frame ±20p, 1p scan.
 Each VSPipe process uses one VapourSynth frame worker and a 256 MiB frame-cache ceiling to control concurrent memory growth.
 
 #### Curve and multi-frame selection
 
 For each reconstruction-error curve, getnative looks for the sharp adjacent-height error drop described by the upstream method. The candidate height is the current height at that drop, and its primary score is the previous height's error divided by the current height's error. The metric's five-pixel border crop only excludes unreliable edge pixels; it is not a five-pixel correction to the detected height. Broad valleys are used only as a fallback when no credible sharp drop exists.
 
-Unstable or oscillating tails are rejected before ranking. The 535p-through-545p false-positive band remains fixed because genuinely 540p material is uncommon. It is not scaled to 1070p through 1090p for a 2160p source: 1080p-to-2160p upscales are common, and no equivalent UHD interference band has been confirmed. The stable-curve upper limit is `source height × 1040 / 1080`; curve-tail spans and the high-resolution oscillation boundary use the same source-height scale. A 1080p source therefore rejects values above 1040p, while a 2160p source rejects values above 2080p and keeps 1080p-area candidates eligible.
+Ranking excludes unstable or oscillating curve tails and a fixed 535p–545p false-positive band. The stable-curve upper limit is `source height × 1040 / 1080`; curve-tail spans and the high-resolution oscillation boundary also scale with source height. A 1080p source rejects values above 1040p; a 2160p source rejects values above 2080p and keeps candidates near 1080p.
 
-Usable samples are grouped by rounded height. Each sample is weighted as `min(score, 2) * (height / search-range maximum)^4`; the three strongest weights in a height group determine which group wins, with the higher height breaking an exact tie. This preserves the empirically useful preference for a high resolution with a strong score without requiring dense consensus, since some titles yield very few usable frames. The selected group's weighted height and kernel votes produce the final VPy values.
+Usable samples are grouped by rounded height. Each sample is weighted as `min(score, 2) * (height / search-range maximum)^4`; the three strongest weights in a height group determine which group wins, with the higher height breaking an exact tie. The selected group's weighted height and kernel votes produce the final VPy values.
 
-Getnative is a heuristic: detailed line art usually gives clearer curves than dark scenes, credits, soft photography, noise, or mixed-resolution material. Compare per-kernel output across representative episodes. For a standalone test, set `video_file` in `src/scripts/getnative_file.py`; the higher-resolution VPy setup is described above.
+Getnative is a heuristic: detailed line art usually gives clearer curves than dark scenes, credits, soft photography, noise, or mixed-resolution material. Compare per-kernel output across representative episodes.
 
 ### Generated VPy restoration controls
 
@@ -163,20 +163,13 @@ Identify the defect before enabling dehalo or dering together. Grain, paper text
 
 ### Comparison images and full-frame corruption checks
 
-**Output comparison images** writes one source/encoded PNG pair under `<actual output folder>/Compare`, using the same zero-based frame number. It scans the encoded frame count, scans the source only to that count, then decodes the matching frame on both sides. It does not rely on timestamp-only matching or replace the Encode button's stage label.
+**Output comparison images** writes a source/encoded PNG pair under `<actual output folder>/Compare`, selecting matching pictures by zero-based video frame number.
 
 **Check corrupted frames** reruns the exact encoding VPy and compares every output frame with the final MKV using FFmpeg PSNR, also checking frame counts and decoder errors. `<actual output folder>/FrameCheck/<name>.frame-check.json` records `pass`, `suspect` (low PSNR), `fail` (count/decode error), or `error` (checker failure). Non-pass results retain the MKV and add a row warning; visual review remains necessary.
 
-Both stages report frames, speed, percentage, and ETA every 15 seconds. The frame-check switch is on Encode; its luma/chroma thresholds are under **Settings > Advanced > Default encode settings**. `encode.frame_check_luma_psnr_threshold_db` and `encode.frame_check_chroma_psnr_threshold_db` accept `0.0`–`100.0` and default to `30.0`; U/V share the chroma value. Any applicable plane below its threshold makes a frame suspicious. Higher thresholds increase sensitivity and false positives.
+The frame-check switch is on Encode; its luma/chroma thresholds are under **Settings > Advanced > Default encode settings**. `encode.frame_check_luma_psnr_threshold_db` and `encode.frame_check_chroma_psnr_threshold_db` accept `0.0`–`100.0` and default to `30.0`; U/V share the chroma value. Any applicable plane below its threshold makes a frame suspicious. Higher thresholds increase sensitivity and false positives.
 
-Measured examples from one machine illustrate the added cost:
-
-| Sample | Comparison images | Full frame check |
-| --- | --- | --- |
-| 52-second 1080p | 36 seconds (0.7× duration) | 127 seconds (2.4×) |
-| 34-second cropped 4K Dolby Vision | 80 seconds (2.4×) | 248 seconds (7.3×) |
-
-Decoder, filters, resolution, storage, and runtime versions affect these timings. A full check renders every VPy frame and can take substantially longer than the video itself.
+A full check renders every VPy frame and can take substantially longer than the video itself. Cost depends on the decoder, filters, resolution, storage, and runtime.
 
 ### Automatic black-border cropping
 
@@ -187,17 +180,17 @@ The crop is even-aligned. Existing managed blocks are replaced or removed betwee
 
 ### Automatic HDR metadata handling
 
-With x265, Dolby Vision MKV input is checked using its original RPU before conversion; identification failure is treated as FEL. The workflow prepares base video and profile 8.1 RPU for encoding, then reports unused FEL image residuals in the existing completion dialog. SVT-AV1 uniformly reports that Dolby Vision is not retained, without distinguishing MEL/FEL. BDMV staging retains Dolby Vision information for these completion messages. Missing or invalid required intermediates remain execution failures.
+For Dolby Vision input, x265 encodes the base layer with profile 8.1 RPU; FEL image residuals cannot be used. See [Dolby Vision layers](Media-Formats-and-Dolby-Vision.md#dolby-vision-fundamentals) for MEL/FEL and conversion conditions, and the [encoder comparison](#choosing-h264-h265-or-av1) for encoder and bit-depth choices.
 
 Before starting the encoder, BluraySubtitle samples output 0's first, middle, and last frames. Stable `_ColorRange`, `_Primaries`, `_Transfer`, `_Matrix`, and `_ChromaLocation` properties take precedence over source metadata; missing properties fall back to the source. The row stops if the sampled values differ.
 
-When the actual source exposes HDR10+, x265 10/12-bit encoding extracts its validated JSON and checks the metadata frame count against the VPy output. The actual x265 executable is probed once per binary identity: when it advertises `--dhdr10-info`, the metadata is supplied during encoding; otherwise, or when native verification fails, `hdr10plus_tool` performs verified post-injection. Failures continue without dynamic metadata and retain non-empty JSON for diagnosis. Custom scripts using this path must preserve frame order.
+When the actual source exposes HDR10+, x265 10/12-bit encoding extracts its validated JSON and checks the metadata frame count against the VPy output. When x265 advertises `--dhdr10-info`, the metadata is supplied during encoding; otherwise, or when native verification fails, `hdr10plus_tool` performs verified post-injection. Failures continue without dynamic metadata and retain non-empty JSON for diagnosis. Custom scripts using this path must preserve frame order.
 
 Dolby Vision uses native x265 RPU input when the executable advertises it and the row already has VBV and mastering-display parameters. Otherwise, or when native verification fails, it uses `dovi_tool` injection without changing rate control.
 
 When both HDR10+ and Dolby Vision are present, x265 writes both in one encode if both native paths qualify. HEVC is checked for both metadata sets after the last injection and before final muxing.
 
-If automatic cropping changes the coded dimensions, each Dolby Vision L5 active-area preset is adjusted by the physical crop before the resulting profile 8.1 RPU is supplied to either native x265 or post-injection. A manually supplied RPU is therefore incompatible with automatic cropping. HDR10+ does not have a corresponding crop-offset edit in this workflow: its source brightness statistics are retained without remeasurement after cropping or an additional crop-specific prompt.
+If automatic cropping changes the coded dimensions, each Dolby Vision L5 active-area preset is adjusted by the physical crop before the resulting profile 8.1 RPU is supplied to either native x265 or post-injection. A manually supplied RPU is therefore incompatible with automatic cropping. HDR10+ does not have a corresponding crop-offset edit in this workflow: its source brightness statistics are retained without remeasurement after cropping.
 
 After the final MKV is published, BluraySubtitle re-probes the static fields it added automatically and reruns the active dynamic-metadata checks. Dolby Vision must report profile 8 with the same RPU frame count as the VPy output. A mismatch retains the MKV, records a non-overwriting warning report, and lets later rows continue.
 
@@ -207,11 +200,9 @@ CFR and VFR encoding both preserve the source MKV presentation timestamps and vi
 
 ### Implementation notes
 
-Encode restores source timing with `mkvmerge --timestamps`. Full encoding extracts video timestamps with `mkvextract timestamps_v2`, without a separate full-video decode to distinguish CFR from VFR. The default `LWLibavSource` frame-duration properties cannot restore the original VFR timeline.
+Encode restores the source video timeline with `mkvmerge --timestamps`; hardsubs use the same timeline. Full encoding extracts video timestamps with `mkvextract timestamps_v2`.
 
-Prefix tests reuse the VPy metadata probe to compare output 0 with the source at output 1. FFprobe reads packet timestamps until the actual output frames and their end boundary are resolved, using decode timestamps to account for B-frame reordering. An unavailable source frame count or timestamps requiring sub-microsecond precision still use full-track extraction.
-
-The generated VPy renders hardsubs only on the required prefix and shares one timestamp file with final muxing.
+[Prefix tests](../../README.md#how-do-i-run-a-short-encode-test) read timestamps for the actual output frame count and its end boundary. An unavailable source frame count or timestamps requiring sub-microsecond precision requires full-track extraction.
 
 ## Interlaced, telecined, and mixed-cadence sources
 

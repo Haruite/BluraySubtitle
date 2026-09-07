@@ -10,13 +10,11 @@ The pipeline supports Windows, Linux, and Docker, preserves the authored MPLS ti
 
 ## Source-verification baseline
 
-The implementation details in this document were checked against the following local source revisions and command-line binaries on 2026-07-26:
+The implementation details in this document were checked against the following source revisions and command-line binaries on 2026-07-26:
 
 - MKVToolNix source `release-100.0-15-gbfc791cca` (`bfc791cca9763b494f66379953b9509b5187bc9a`) and `mkvmerge` 100.0;
 - tsMuxer source `nightly-2024-06-06-02-00-53-1-gc6b1186` (`c6b1186209e42c877052e762c9185f3226ef8ea2`) and tsMuxeR 2.7.0; and
 - the current BluraySubtitle source tree.
-
-Function names are included so that the conclusions can be rechecked after an upstream update. Exact line numbers are intentionally omitted because they change more often than the relevant control flow.
 
 ## Current pipeline
 
@@ -73,7 +71,7 @@ MKVToolNix validates M2TS structure more strictly than tsMuxer. This is useful f
 
 MPLS track choices are built from STN metadata without MKVToolNix identification or M2TS inspection. Logical identity, language transitions, and GUI eligibility follow the [STN model](../wiki/Blu-ray-Disc-Structure.md#stn-table).
 
-At execution, the internal M2TS parser checks every declared occurrence against the corresponding M2TS PAT/PMT. An absent STN occurrence is a valid gap. By default, a missing declared PID or a conflicting transport stream type means a GUI-selected logical track cannot be retained, so the output fails instead of continuing with a reduced track set. The disabled-by-default partial-missing option lets only a physically absent audio or subtitle occurrence continue to fallback so tsMuxer can attempt recovery. MKVToolNix then identifies the MPLS and every M2TS only to decide whether the direct path can preserve the logical mapping. A gap, MKVToolNix-omitted track, or changed local track ID selects fallback before the long direct mux starts.
+At execution, the internal M2TS parser checks every declared occurrence against the corresponding M2TS PAT/PMT. An absent STN occurrence is a valid gap. By default, a missing declared PID or a conflicting transport stream type means a GUI-selected logical track cannot be retained, so the output fails instead of continuing with a reduced track set. The disabled-by-default partial-missing option lets only a physically absent audio or subtitle occurrence continue to fallback so tsMuxer can attempt recovery. MKVToolNix then identifies the MPLS and every M2TS only to decide whether the direct path can preserve the logical mapping. A gap, MKVToolNix-omitted track, or changed input track ID selects fallback before the long direct mux starts.
 
 The [track-aligned fallback](../../src/runtime/services_split/media_info_and_track_mapping.py) handles those cases:
 
@@ -93,7 +91,7 @@ The multi-output fallback used to split one MPLS into several episode MKVs proje
 
 BDMV Remux reuses the fallback’s known interval map. After final Remux naming and audio cleanup/conversion, every analyzed output receives one adjacent `<output>.audio-gaps.json`. It records only gap-bearing tracks and contains an empty track list when all audio is continuous. Remux-source Encode validates the sidecar against the source file size and Matroska track UID before using it; a valid empty sidecar confirms continuity without another detection pass. If the file is absent or invalid, FFmpeg records packet timestamps during the same multi-output Wave64 decode already required for audio processing and derives the continuous intervals from those timestamps. Millisecond-scale Matroska timestamp quantization is merged within a small tolerance so it is not mistaken for authored silence between intervals.
 
-The precheck boundary is intentionally limited to fields available from MPLS and PAT/PMT. Those structures cannot expose every payload-derived append constraint, such as PCM bit depth or channel layout found only in payload headers, or codec-private changes discovered by an elementary-stream parser. The project does not perform a speculative full-payload scan for this unconfirmed edge case. If MKVToolNix rejects such an append during fallback, the operation fails explicitly and no partial part becomes the final output.
+Prechecks use fields exposed by MPLS and PAT/PMT. PCM bit depth/channel layout and some codec-private changes are available only from payload parsing. If MKVToolNix rejects an append, the operation fails explicitly and no partial part becomes the final output.
 
 ## Why eac3to is not the primary demuxer
 
@@ -103,7 +101,7 @@ eac3to is a Windows application. Depending on it would conflict with the project
 
 ### Observed timing error on the Avatar UHD playlist
 
-A read-only local check was performed with eac3to 3.63 on 2026-07-26. No stream was demuxed during this check. Listing title 3 for `00800.mpls` reported:
+On 2026-07-26, eac3to 3.63 reported the following when listing title 3 for `00800.mpls`:
 
 ```text
 M2TS, 1 video track, 8 audio tracks, 8 subtitle tracks, 2:42:03
@@ -113,7 +111,7 @@ DTS-HD Master Audio, [eng], ... -1000ms
 TrueHD/AC3 (Atmos), [zho], 7.1 channels, 48kHz, ... -1000ms
 ```
 
-All audio tracks received an approximately one-second negative delay, while the playlist itself is approximately `2:42:02`. In an earlier full demux of this same source, the extracted video contained exactly 24 fewer frames. At 24000/1001 fps, 24 frames are approximately 1.001 seconds, consistent with the extra delay reported by the analysis. That large demux was not repeated while preparing this document.
+All audio tracks received an approximately one-second negative delay, while the playlist duration is approximately `2:42:02`. A full demux of the same source produced 24 fewer video frames. At 24000/1001 fps, that is approximately 1.001 seconds, matching the additional reported delay.
 
 This is a confirmed compatibility case for this source and eac3to version, not a claim that every eac3to operation has a one-second error.
 
@@ -149,14 +147,7 @@ Direct MPLS processing by `mkvmerge` does not show this bug. The BluraySubtitle 
 
 ### Features covered by BluraySubtitle
 
-eac3to has valuable audio functions, including effective bit-depth detection and audio-delay correction. Those functions alone are not a reason to accept its platform and playlist limitations:
-
-- decoded PCM can be inspected for its effective 16- or 24-bit depth instead of trusting only the container declaration;
-- replacement audio is remuxed with an explicit sync value derived from the source track's minimum timestamp;
-- selected tracks are checked for decoded silence below `-60 dB`; and
-- decoded fingerprints detect exact duplicates within the same source codec family and channel count, while tracks with different known languages are kept.
-
-These checks are part of the current audio workflow rather than optional eac3to preprocessing.
+Effective bit-depth detection, audio synchronization, and silent/duplicate track cleanup are covered by [audio processing](#audio-processing) and [PCM analysis](#flac-and-intermediate-pcm), without depending on eac3to.
 
 ## Why tsMuxer is a fallback instead of the primary demuxer
 
@@ -186,7 +177,7 @@ A short real-media check makes the impact concrete. tsMuxeR 2.7.0 demuxed both T
 | 4352 | AC-3 core + TrueHD | 34.27 MB | 00:00:06.587 |
 | 4356 | TrueHD | 7.33 MB | 00:00:10.047 |
 
-Both are far shorter than the 50.053-second M2TS interval, and the decoder reported extensive parity and restart/seamless-branch errors when warnings were enabled. Duration alone does not prove that each PID was authored to cover the whole clip, but the error log confirms that the extracted elementary streams are not clean. The check used only this short M2TS, not the complete playlist.
+Both are far shorter than the 50.053-second M2TS interval, and the decoder reported extensive parity and restart/seamless-branch errors when warnings were enabled. Duration alone does not prove that each PID was authored to cover the whole clip, but the error log confirms that the extracted elementary streams are not clean.
 The source explains the resynchronization and frame-loss behavior; it does not prove whether each individual bad-frame report was triggered by original payload damage, an unsupported framing pattern, or an earlier loss of framing.
 
 Restricting tsMuxer to per-file, per-PID recovery also makes its output verifiable: BluraySubtitle knows exactly which tracks are missing and rejects a result that does not restore the required layout.
@@ -209,7 +200,7 @@ Matroska timestamps can represent a gap left by missing frames. A subsequently e
 
 The observed decoder errors and short decoded duration are therefore consistent with two source-backed mechanisms: damaged but structurally accepted TrueHD frames can reach the decoder unchanged, and transport/framing loss can remove frame bytes without replacement. Without a byte-level trace of the affected PIDs, it would be too strong to claim that every reported error or the entire one-to-two-second deficit comes from only one of those mechanisms.
 
-Local tests show that eac3to has broadly similar results on this class of damaged TrueHD.
+Tests on the same material show broadly similar damaged-TrueHD results from eac3to.
 
 ### Why DGDemux is not integrated
 
@@ -218,6 +209,12 @@ DGDemux has produced substantially better results on the tested damaged TrueHD t
 However, the license distributed with DGDemux states that end users may invoke the executables directly, while use by or incorporation into third-party software requires explicit written permission from Donald A. Graft. It also prohibits redistribution. BluraySubtitle therefore cannot call, bundle, or integrate DGDemux without that permission.
 
 Even if permission were obtained, adding DGDemux would introduce another full-disc demux stage, lengthen remux processing, add platform-specific packaging and command handling, and create a second track-order mapping path. The maintenance cost is not currently justified.
+
+## Audio processing
+
+### Audio cleanup
+
+Final Matroska outputs remove tracks below `-60 dB` decoded maximum volume and exact decoded duplicates within the same codec family and channel count. Tracks with different known languages are kept; duplicates retain the earliest source track. Every removal is reported. Standalone single-track audio skips this cleanup.
 
 ### Audio conversion policy
 

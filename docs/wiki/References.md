@@ -72,8 +72,6 @@ The complete Blu-ray specification books are licensed by the Blu-ray Disc Associ
 - [FFmpeg codec documentation](https://ffmpeg.org/ffmpeg-codecs.html)
 - [Dolby technologies](https://professional.dolby.com/technologies/)
 
-Codec trademarks identify their respective technologies and owners. The tables in this wiki describe interoperability and project behavior; they are not licensing statements.
-
 ## Subtitles
 
 - [Matroska codec specifications](https://www.matroska.org/technical/codec_specs.html) for Matroska subtitle codec identifiers and storage.
@@ -85,5 +83,3 @@ Codec trademarks identify their respective technologies and owners. The tables i
 - [An Introduction to Dolby Vision](https://professional.dolby.com/siteassets/pdfs/dolby-vision-whitepaper_an-introduction-to-dolby-vision_0916.pdf)
 - [Dolby Vision streams within the ISO Base Media File Format](https://professionalsupport.dolby.com/s/article/Dolby-Vision-streams-within-the-ISO-Base-Media-File-Format)
 - [dovi_tool](https://github.com/quietvoid/dovi_tool)
-
-Profile and device support can evolve. The project behavior documented here is the behavior implemented and tested by the current repository, not a general promise that all Dolby Vision profiles can be converted without loss of profile features.

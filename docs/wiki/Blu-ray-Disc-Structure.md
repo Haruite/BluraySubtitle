@@ -6,7 +6,7 @@ This page follows a Blu-ray title from the directory tree down to transport pack
 
 ## The disc root
 
-BluraySubtitle expects readable files in a disc directory or mounted image; it does not decrypt AACS/BD+ content or emulate the complete navigation application.
+BluraySubtitle requires readable disc files; it does not decrypt AACS/BD+ content or emulate the complete navigation application.
 
 ```text
 BDROM/
@@ -105,7 +105,7 @@ This folder-drag path should not be treated as proof of the authored main MPLS. 
 mpv's Blu-ray input is a URL-style command, not ordinary opening of the `.mpls` file:
 
 ```powershell
-mpv "bd://mpls/00001" --bluray-device="D:\Disc"
+mpv "bd://mpls/00001" --bluray-device="<disc-root>"
 ```
 
 `00001` selects `BDMV/PLAYLIST/00001.mpls`, and `--bluray-device` points to the disc root containing `BDMV`. A general `bd://` command may choose a default title such as `longest` or `first`; use `bd://mpls/<number>` when verifying one specific playlist. The mpv build needs libbluray support, and protected content must already be readable.
@@ -419,9 +419,9 @@ Repeated references to the same clip name contribute only once to the non-repeat
 
 The MPLS file size matters because two playlists can have exactly the same clip list and `INTime`/`OUTTime` windows while exposing different numbers of tracks. This occurs on some large movie discs. The playlist with the fuller STN tables is usually the useful one, and it is commonly the larger MPLS file. File size is only a proxy for playlist metadata and track entries, so manual track inspection remains the definitive check.
 
-The last term is the **sum** of all different referenced M2TS file sizes, multiplied into the score; the individual file sizes are not multiplied by one another. This prevents a menu-like playlist from looking important merely because it repeats the same small M2TS many times. Counting repeated duration without considering the amount of distinct stream data would make such playlists easy to misclassify.
+The M2TS term sums distinct file sizes to avoid overrating menu playlists that repeatedly reference one small clip.
 
-Some movie discs—Disney releases are a common example—contain several same-duration playlists that choose different files but produce little or no visible difference. BluraySubtitle does not decode and compare these variants. When candidates have exactly the same score, the first one encountered remains the default because only a strictly higher score replaces it. This is directory enumeration order, not a guaranteed numeric filename order. Select another playlist manually when a language, localization, branch, or edition difference matters.
+Some movie discs contain same-duration playlists with similar visible content. Equal scores keep the first enumerated candidate, without guaranteed filename ordering; manually select the intended language variant, branch, or edition.
 
 ## Episodic layouts and MPLS-based slicing
 
@@ -447,11 +447,11 @@ Many anime playlists place a separate copyright-information M2TS after each epis
 
 For this case, episode-mode remux and encode workflows provide **Trim copyright bumper**. Each visible episode is evaluated independently. Trimming is considered only when the authored episode end coincides with the current play item's CLPI presentation end, meaning that the range reaches the underlying M2TS file end. The program then looks backward 30 seconds from that episode end, removes complete consecutive M2TS play items wholly contained in the window, and moves the `--split parts` end to the end of the last retained M2TS. This also handles master playlists that insert a short copyright file after every episode and tails made of several consecutive short files.
 
-The source MPLS, `Chapter.in_out_time`, chapter marks, **View Chapters**, and all other chapter calculations remain unchanged. Only the affected names are removed from table 2's **M2TS file** column, while the visible mux command carries the adjusted parts range. Table 1 provides an **M2TS timing** button after **Chapters** to inspect each play item's `INTime`, `OUTTime`, CLPI file range, and whether it ends at the file end.
+The mux command shows the adjusted range, and affected filenames are removed from the main-output table's **M2TS file** column. Use [M2TS timing](Interface-Guide.md#view-m2ts-time) to check play-item boundaries.
 
 This is a structural heuristic and can remove legitimate short material. Verify the M2TS timing and generated command on unusual discs. If the automatic boundary is wrong, disable the option or manually edit the visible mux command and specify the verified `--split parts:start-end` interval. A copyright screen embedded inside a longer play item still cannot be removed automatically because no complete M2TS boundary exists inside the final 30-second window.
 
-The first-season discs of *Horizon in the Middle of Nowhere* are a representative special case. Volume 1 has no single master playlist that concatenates its episodes. It includes several episode playlists, and two playlists reuse `00004.m2ts` with different durations, so their `m2ts_detail` values differ. On the other volumes, some SP or commentary playlists similarly overlap main content but use a different effective source window. Their copyright notice is part of a longer play-item window rather than a separate final play item. Consequently, neither automatic commentary attachment nor automatic copyright-bumper trimming applies to these entries; inspect the MPLS track selection and exact `INTime`/`OUTTime` manually.
+For example, some first-season *Horizon in the Middle of Nowhere* playlists embed copyright notices inside longer play items. Check `INTime`/`OUTTime` manually; automatic tail trimming cannot isolate these notices.
 
 ## Main content and SP in this project
 
@@ -465,7 +465,7 @@ The task waits for SP scanning, then captures the visible selection, order, sour
 | --- | --- |
 | MPLS/M2TS shorter than 30 seconds | Visible but unchecked; repeated MPLS clip names count once toward duration |
 | MPLS with at least three distinct files | Checked |
-| Each involved M2TS has 1–12 decoded frames, all identical within that file | Checked as still content; finding frame 13 stops and rejects that classification |
+| Each involved M2TS has 1–12 decoded frames, all identical within that file | Checked as still content |
 | IGS menu, including zero-duration menus | Available but unchecked; fully black extracted states are omitted |
 | Unreadable or unsupported layout | Disabled |
 
@@ -495,20 +495,18 @@ Every selected row with a non-empty output must complete. A source or captured s
 
 An M2TS or CLPI can advertise more physical tracks than the MPLS Stream Number Table makes available for playback. PotPlayer, mpv, eac3to, and mkvmerge may therefore list two audio streams while BluraySubtitle displays only the one that the MPLS exposes. PowerDVD is a useful reference for the authored playback behavior: a track hidden by the MPLS is not offered during normal title playback.
 
-BluraySubtitle does not blindly discard potentially useful material. In series mode it maintains an internal `m2ts_detail` value containing every M2TS name and its effective source window. Two independent rules use exact equality of this complete ordered detail:
+Series mode compares complete, ordered M2TS names and effective source windows through `m2ts_detail`, reusing tracks under these rules:
 
 1. **Whole-main MPLS reuse.** If a non-main MPLS has the same complete detail as exactly one selected main MPLS, both playlists describe the same output timeline. Its audio and subtitle logical tracks are added when their physical `(M2TS path, PID)` relations do not overlap tracks already supplied by the main or an earlier playlist. The combined choices show the source MPLS and STN slot, are sorted by representative PID, and run through the common default-selection algorithm once. The alternate SP row is unchecked by default so the identical content is not remuxed twice; the GUI selection remains authoritative.
 2. **Single-episode SP append.** If the first rule does not apply and an SP detail equals exactly one episode detail, the SP is linked only to that planned episode output. The main and SP MPLS each run the common default-selection algorithm independently. After splitting, selected tracks are aggregated again by their physical relations; the original episode order is retained and accepted SP tracks follow in selection order. Equal PID or STN slot numbers from different playlists do not by themselves identify the same track.
 
-An SP that covers two or more episode outputs but does not equal the complete selected main MPLS is not attached to several files; it remains an ordinary SP. Supporting that case would require one table row to represent several output associations, so it is intentionally outside the current rule.
+An SP spanning several episodes but not matching a complete selected main MPLS remains an independent output.
 
-Exact detail equality is a safety condition, not an approximate duration comparison. Reusing the same M2TS is insufficient when the playlist has a different `INTime`, `OUTTime`, or clip sequence. In that situation—including the *Horizon in the Middle of Nowhere* case above—the commentary entry remains SP and is not automatically attached to the main episode. Movie mode has neither of these SP-to-main paths; its SP rows always remain independent outputs.
+Matching requires identical clip names, order, and time ranges, not just duration or M2TS names. Movie-mode SP outputs are always independent.
 
-A cross-disc commentary exception occurs on *The Seven Deadly Sins: Four Knights of the Apocalypse*. Bonus-disc volume 11 (BOX II) uses `00008.mpls` through `00012.mpls` for the commentary editions of episodes 1, 8, 11, 16, and 20 respectively; `00001.mpls` is a byte-identical duplicate of the episode 20 commentary program stored under another M2TS basename. Bonus-disc volume 12 (BOX III) uses `00002.mpls` and `00003.mpls` for the commentary editions of episodes 26 and 30. Because these commentary editions and the corresponding main episodes are on different discs, they cannot be attached automatically and remain standalone SP outputs.
+Some commentary editions of *The Seven Deadly Sins: Four Knights of the Apocalypse* are on bonus discs separate from their main episodes, so they remain independent SP outputs.
 
-Other main episodes that do not contain the additional track remain unchanged. In typical authored discs such unexposed tracks are silent or duplicate audio. Even when their bytes are not silent, they are not addressable through normal MPLS playback and are not treated as valid title audio unless a matching SP timeline exposes them.
-
-An authored interval exception occurs on *Witch Craft Works Blu-ray BOX* DISC3. `00002.mpls` uses `00006.m2ts` from `00:00:00.000`, but uses `00007.m2ts` through `00011.m2ts` from `00:00:02.002`; their standalone `00004.mpls` through `00008.mpls` playlists start the same clips at `00:00:00.000`. Likewise, `00010.mpls` starts `00013.m2ts` at zero but starts `00014.m2ts` through `00024.m2ts` at `00:00:02.002`, while the standalone playlists start at zero. SP coverage follows exact clip intervals, not M2TS-basename membership or containment between table3 rows. A standalone row with this additional leading `2.002` seconds therefore remains an ordinary selected SP and must not be unchecked merely because an aggregate SP references the same M2TS file.
+On *Witch Craft Works Blu-ray BOX* DISC3, aggregate playlists use some M2TS clips from `2.002` seconds, while standalone playlists start at zero. The additional opening keeps standalone rows selected as SP. Coverage uses exact time ranges rather than filename sets or containment between SP rows.
 
 ## Validation checklist for a playlist
 

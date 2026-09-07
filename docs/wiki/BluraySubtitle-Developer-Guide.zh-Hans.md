@@ -2,11 +2,20 @@
 
 [English](BluraySubtitle-Developer-Guide.md) | 简体中文
 
-本页把媒体模型与项目源码对应起来，描述的是当前行为而非重写提案。进行修改时仍以强制性的[代码修改规范](../development/code-standards.zh-Hans.md)为准。
+本页说明媒体模型与项目源码的对应关系。修改要求见[代码修改规范](../development/code-standards.zh-Hans.md)。
 
 ## 领域定义
 
 代码与界面统一使用[主 MPLS 和 SP 定义](Blu-ray-Disc-Structure.zh-Hans.md#本项目中的正片与-sp)。GUI **片段**是章节／文件区间：勾选区间进入正片，未勾选区间成为 SP 候选。它不同于 Matroska `Segment`、PGS segment 或 TS 数据包。
+
+## 运行环境与工具构建
+
+[Windows setup](../../setup_windows_environment.ps1)、[Linux setup](../../setup_linux_environment.sh) 和 [Dockerfile](../../Dockerfile) 安装所需工具，平台路径由 [`settings.py`](../../src/core/settings.py) 定义。
+
+- x264 使用官方 `master`，构建支持 8/10-bit 的 CLI；Windows 使用 MSYS2 UCRT64 和 PGO。
+- x265 使用官方最新稳定标签，构建 8/10/12-bit multilib CLI，各核心均启用 HDR10+ JSON 和 Dolby Vision RPU 输入。
+
+自定义构建可参考 setup 脚本。HDR 参数条件与注入回退见[自动 HDR 元数据处理](Video-Encoding-and-VapourSynth.zh-Hans.md#自动-hdr-元数据处理)。
 
 ## 源码导航
 
