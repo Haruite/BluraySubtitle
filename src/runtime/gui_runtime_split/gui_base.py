@@ -330,7 +330,7 @@ class BluraySubtitleGuiBase(QWidget):
     def _create_main_remux_cmd_editor(self, text: str, parent: Optional[QWidget]=None) -> QPlainTextEdit:
         raise NotImplementedError
 
-    def _create_table_section(self, table: QTableWidget, title: str, description: str, minimum_height: int) -> tuple[QGroupBox, QLabel]:
+    def _create_table_section(self, table: QTableWidget, title: str, description: str, initial_height: int) -> tuple[QGroupBox, QLabel]:
         raise NotImplementedError
 
     def _create_temp_preview_vpy_from_default(self, video_path: str, subtitle_path: str) -> str:

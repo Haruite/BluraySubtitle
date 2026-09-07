@@ -333,6 +333,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
     def _on_theme_changed(self):
         mode = self.theme_combo.currentData() if hasattr(self, 'theme_combo') else 'light'
         self._apply_theme(str(mode))
+        self._refresh_language_dependent_sizes()
 
     def _translate_widget_texts(self):
         for widget in self.findChildren(QWidget):
@@ -476,7 +477,6 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
             )
         for table in tables:
             if table is not None:
-                self._set_compact_table(table)
                 self._resize_table_columns_for_language(table)
                 self._scroll_table_to_primary_column(table)
         if table1 is not None:

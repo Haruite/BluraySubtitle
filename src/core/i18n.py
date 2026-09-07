@@ -8,6 +8,7 @@ from typing import Optional
 import src.core.settings as _core_settings
 
 I18N_ZH_TO_EN = {
+    '拖动以调整表格高度': 'Drag to adjust table height',
     '为各原盘选择主播放列表；通过行内按钮查看章节和时间。': 'Select the main playlists for each disc. Use the row buttons to inspect chapters and timing.',
     '原盘与播放列表': 'Sources and playlists',
     '为各原盘选择主播放列表；通过行内按钮查看章节、时间和轨道。': 'Select the main playlists for each disc. Inspect chapters, timing and tracks with the row buttons.',

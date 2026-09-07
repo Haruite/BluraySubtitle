@@ -2122,7 +2122,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
 
         class ChapterWindow(QDialog):
             def __init__(this):
-                super(ChapterWindow, this).__init__()
+                super(ChapterWindow, this).__init__(self)
                 this.setWindowTitle(f"{self.t('Chapters')}: {mpls_path}")
                 layout = QVBoxLayout()
                 this.table_widget = QTableWidget()
@@ -2178,7 +2178,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 if offs:
                     this.table_widget.setItem(len(offs) - 1, 2,
                                               QTableWidgetItem(f'Ending - {get_time_str(mpls_duration)}'))
-                this.table_widget.resizeColumnsToContents()
+                self._resize_table_columns_for_language(this.table_widget)
                 layout.addWidget(this.table_widget)
 
                 # Add OK and Cancel buttons
@@ -2198,11 +2198,11 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 layout.addLayout(button_layout)
 
                 this.setLayout(layout)
-                this.setMinimumWidth(500)
-                height = len(offs) * 30 + 100
-                height = 1000 if height > 1000 else height
-                if len(offs) > 1:
-                    this.setMinimumHeight(height)
+                available = self.screen().availableGeometry()
+                width = this.table_widget.horizontalHeader().length() + 64
+                height = this.table_widget.verticalHeader().length() + 120
+                this.resize(min(max(500, width), available.width() - 40),
+                            min(max(200, height), available.height() - 80))
 
             def select_all_chapters(this):
                 for row in range(this.table_widget.rowCount()):

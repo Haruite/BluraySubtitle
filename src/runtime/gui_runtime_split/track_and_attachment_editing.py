@@ -1432,6 +1432,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 item = table.item(row, column)
                 if item is not None:
                     item.setBackground(alternate_mpls_color)
+        self._set_compact_table(table, header_height=64)
         table.resizeColumnsToContents()
         if not is_mkvinfo:
             try:
@@ -1847,7 +1848,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             convert_map = dict((conv_cfg_all.get(key) or {}))
             la_map = dict((getattr(self, '_track_lossless_audio_config', {}).get(key) or {}))
             selected_after = self._show_tracks_dialog(
-                self.t('edit tracks'),
+                f"{self.t('edit tracks')}: {os.path.basename(src)}",
                 streams,
                 selected,
                 pid_lang,
@@ -1909,7 +1910,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             convert_map = dict((getattr(self, '_track_convert_config', {}).get(key) or {}))
             la_map = dict((getattr(self, '_track_lossless_audio_config', {}).get(key) or {}))
             selected_after = self._show_tracks_dialog(
-                self.t('edit tracks'),
+                f"{self.t('edit tracks')}: {os.path.basename(mpls_path)}",
                 streams,
                 selected,
                 pid_lang,
@@ -2074,7 +2075,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             convert_map = dict((getattr(self, '_track_convert_config', {}).get(key) or {}))
             la_map = dict((getattr(self, '_track_lossless_audio_config', {}).get(key) or {}))
             selected_after = self._show_tracks_dialog(
-                self.t('edit tracks'),
+                f"{self.t('edit tracks')}: {mpls_file or os.path.basename(m2ts_path)}",
                 streams,
                 selected,
                 pid_lang,

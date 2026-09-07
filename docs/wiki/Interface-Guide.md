@@ -6,7 +6,7 @@ English | [简体中文](Interface-Guide.zh-Hans.md)
 
 ## Main-window content areas
 
-The language, theme, font, and settings bar at the top and the execution button at the bottom stay fixed. Use the page scrollbar on the right for the remaining content. Separate table sections describe disc playlists, main outputs, and SP; each table scrolls independently for more rows or columns. Drag column borders to resize them and hover for full text. Disc information rows can also be made taller to show more MPLS entries. Always check automatically generated rows against the actual content.
+The language, theme, font, and settings bar at the top and the execution button at the bottom stay fixed. Use the page scrollbar on the right for the remaining content. Separate table sections describe disc playlists, main outputs, and SP; each table scrolls independently for more rows or columns. Drag the handle below each table to adjust its height; drag column borders to resize them and hover for full text. Disc information rows can also be made taller to show more MPLS entries. Always check automatically generated rows against the actual content.
 
 This joined-disc example from *Witch Craft Works* shows main episode ranges, short SP items, and `igs_menu` entries together. Verify the start and end chapters of each episode row. Menu IGS normally does not become an ordinary Matroska subtitle track.
 

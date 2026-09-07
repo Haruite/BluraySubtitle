@@ -2,8 +2,8 @@
 from html import escape
 
 from PyQt6.QtCore import Qt, QTimer, QEvent
-from PyQt6.QtGui import QFontMetrics
-from PyQt6.QtWidgets import QTableWidget, QComboBox, QHeaderView, QGroupBox, QLabel, QVBoxLayout, QSizePolicy, QAbstractItemView, QStyledItemDelegate, QToolTip
+from PyQt6.QtGui import QFontMetrics, QPainter, QPalette
+from PyQt6.QtWidgets import QTableWidget, QComboBox, QHeaderView, QGroupBox, QLabel, QVBoxLayout, QSizePolicy, QAbstractItemView, QStyledItemDelegate, QToolTip, QWidget
 
 from src.core import BDMV_LABELS, SUBTITLE_LABELS, MKV_LABELS, REMUX_LABELS, ENCODE_REMUX_LABELS, ENCODE_LABELS, \
     ENCODE_REMUX_SP_LABELS, ENCODE_SP_LABELS, DIY_BDMV_LABELS, DIY_SP_LABELS, DIY_REMUX_LABELS, CURRENT_UI_LANGUAGE, \
@@ -19,6 +19,44 @@ class _FullTextDelegate(QStyledItemDelegate):
                 QToolTip.showText(event.globalPos(), f'<qt>{escape(text)}</qt>', view)
                 return True
         return super().helpEvent(event, view, option, index)
+
+
+class _TableHeightHandle(QWidget):
+    def __init__(self, table: QTableWidget, tooltip: str):
+        super().__init__(table.parentWidget())
+        self._table = table
+        self._drag_origin = None
+        self.setFixedHeight(12)
+        self.setCursor(Qt.CursorShape.SizeVerCursor)
+        self.setToolTip(tooltip)
+        self.setAccessibleName(tooltip)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setPen(self.palette().color(QPalette.ColorRole.Mid))
+        for offset in (-2, 2):
+            painter.drawLine(self.width() // 2 - 24, self.height() // 2 + offset,
+                             self.width() // 2 + 24, self.height() // 2 + offset)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_origin = (event.globalPosition().y(), self._table.height())
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_origin is not None:
+            start_y, start_height = self._drag_origin
+            height = round(start_height + event.globalPosition().y() - start_y)
+            self._table.setFixedHeight(max(160, height))
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_origin = None
+        super().mouseReleaseEvent(event)
 
 
 class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
@@ -199,6 +237,9 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
         table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         table.setWordWrap(False)
         table.setTextElideMode(Qt.TextElideMode.ElideMiddle)
+        table.ensurePolished()
+        if table is not getattr(self, 'table1', None):
+            self._set_compact_table(table)
         table.resizeColumnsToContents()
         header_metrics = QFontMetrics(header.font())
         cell_metrics = QFontMetrics(table.font())
@@ -231,6 +272,13 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
         self._apply_hidden_m2ts_file_detail_columns()
 
     def _set_compact_table(self, table: QTableWidget, row_height: int = 28, header_height: int = 28):
+        # Cell widgets include theme padding that font metrics alone do not capture.
+        for row in range(table.rowCount()):
+            for column in range(table.columnCount()):
+                widget = table.cellWidget(row, column)
+                if widget is not None:
+                    widget.ensurePolished()
+                    row_height = max(row_height, widget.sizeHint().height() + 2)
         row_height = max(row_height, table.fontMetrics().height() + 10)
         header_height = max(header_height, table.horizontalHeader().fontMetrics().height() + 10)
         table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
@@ -256,7 +304,7 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
         QTimer.singleShot(0, scroll)
 
     def _create_table_section(
-            self, table: QTableWidget, title: str, description: str, minimum_height: int,
+            self, table: QTableWidget, title: str, description: str, initial_height: int,
     ) -> tuple[QGroupBox, QLabel]:
         section = QGroupBox(self.t(title), self)
         layout = QVBoxLayout(section)
@@ -266,8 +314,10 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
         hint.setWordWrap(True)
         hint.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         layout.addWidget(hint)
-        table.setMinimumHeight(minimum_height)
+        table.setFixedHeight(initial_height)
         layout.addWidget(table)
+        layout.addWidget(_TableHeightHandle(table, self.t('Drag to adjust table height')))
+        section.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         if table is self.table1:
             table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
             table.verticalHeader().setMinimumSectionSize(160)
@@ -277,6 +327,10 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
     def _refresh_table_descriptions(self):
         if getattr(self, 'table2_section', None) is None:
             return
+        for handle in self.findChildren(_TableHeightHandle):
+            tooltip = self.t('Drag to adjust table height')
+            handle.setToolTip(tooltip)
+            handle.setAccessibleName(tooltip)
         function_id = self.get_selected_function_id()
         if function_id in (1, 2):
             self.table1_description.setText(self.t(
