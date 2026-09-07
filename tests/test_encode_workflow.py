@@ -120,7 +120,7 @@ class EncodeWorkflowTests(unittest.TestCase):
     def setUp(self) -> None:
         vpy_probe = patch(
             'src.runtime.services_split.encode_and_audio_tasks.probe_vapoursynth_output_metadata',
-            side_effect=lambda source, *_args: (source, False, (1, 24, 1)),
+            side_effect=lambda source, *_args: (source, False, (1, 24, 1), 1),
         )
         self.vpy_probe = vpy_probe.start()
         self.addCleanup(vpy_probe.stop)
@@ -485,7 +485,7 @@ class EncodeWorkflowTests(unittest.TestCase):
                 )
                 return 7
 
-            def extract_timeline(_source, _track_id, path, _cancel):
+            def extract_timeline(_source, _track_id, path, _cancel, **_options):
                 timeline = VideoTimeline((125_000_000, 166_708_333))
                 return timeline.write_prefix(path, 1)
 
@@ -542,7 +542,7 @@ class EncodeWorkflowTests(unittest.TestCase):
                         source_file=str(source_path),
                     )
             self.assertFalse(output_path.exists())
-            self.assertEqual(len(failure.exception.artifact_paths), 3)
+            self.assertEqual(len(failure.exception.artifact_paths), 2)
             artifact_path = Path(failure.exception.artifact_paths[0])
             self.assertTrue(artifact_path.name.startswith('output.partial.'))
             self.assertEqual(artifact_path.suffix, '.hevc')

@@ -46,8 +46,6 @@ The staging remux preserves source audio. Audio conversion and final audio clean
 
 `vspipe` supplies Y4M frames to the encoder through a pipe, so a normal encode does not need a full uncompressed intermediate video file. The encoder's elementary-stream result is temporary; the user-facing result is the final MKV.
 
-Implementation note: Encode extracts the source MKV video presentation timestamps with `mkvextract timestamps_v2` and restores them with `mkvmerge --timestamps`, including the video start offset. Hardsubs in the generated VPy share these timecodes. CFR and VFR use the same path without a separate full-video decode for detection. The default `LWLibavSource` frame-duration properties cannot restore the original VFR timeline. Prefix tests retain the timestamps for the actual output frame count and the last frame's end boundary.
-
 ## Rate control and the meaning of presets
 
 ### CRF
@@ -193,7 +191,7 @@ With x265, Dolby Vision MKV input is checked using its original RPU before conve
 
 Before starting the encoder, BluraySubtitle samples output 0's first, middle, and last frames. Stable `_ColorRange`, `_Primaries`, `_Transfer`, `_Matrix`, and `_ChromaLocation` properties take precedence over source metadata; missing properties fall back to the source. The row stops if the sampled values differ.
 
-When the actual source exposes HDR10+, x265 10/12-bit encoding extracts its validated JSON and checks the metadata frame count against the VPy output. Muxing restores the source timestamps, so nominal frame rates are not used to decide whether VFR timelines match. The actual x265 executable is probed once per binary identity: when it advertises `--dhdr10-info`, the metadata is supplied during encoding; otherwise, or when native verification fails, `hdr10plus_tool` performs verified post-injection. Failures continue without dynamic metadata and retain non-empty JSON for diagnosis. Custom scripts using this path must preserve frame order.
+When the actual source exposes HDR10+, x265 10/12-bit encoding extracts its validated JSON and checks the metadata frame count against the VPy output. The actual x265 executable is probed once per binary identity: when it advertises `--dhdr10-info`, the metadata is supplied during encoding; otherwise, or when native verification fails, `hdr10plus_tool` performs verified post-injection. Failures continue without dynamic metadata and retain non-empty JSON for diagnosis. Custom scripts using this path must preserve frame order.
 
 Dolby Vision uses native x265 RPU input when the executable advertises it and the row already has VBV and mastering-display parameters. Otherwise, or when native verification fails, it uses `dovi_tool` injection without changing rate control.
 
@@ -202,6 +200,18 @@ When both HDR10+ and Dolby Vision are present, x265 writes both in one encode if
 If automatic cropping changes the coded dimensions, each Dolby Vision L5 active-area preset is adjusted by the physical crop before the resulting profile 8.1 RPU is supplied to either native x265 or post-injection. A manually supplied RPU is therefore incompatible with automatic cropping. HDR10+ does not have a corresponding crop-offset edit in this workflow: its source brightness statistics are retained without remeasurement after cropping or an additional crop-specific prompt.
 
 After the final MKV is published, BluraySubtitle re-probes the static fields it added automatically and reruns the active dynamic-metadata checks. Dolby Vision must report profile 8 with the same RPU frame count as the VPy output. A mismatch retains the MKV, records a non-overwriting warning report, and lets later rows continue.
+
+## VFR video and timing
+
+CFR and VFR encoding both preserve the source MKV presentation timestamps and video start offset. Each VFR frame's presentation time comes from its timestamp; nominal frame rates alone cannot establish whether timelines match.
+
+### Implementation notes
+
+Encode restores source timing with `mkvmerge --timestamps`. Full encoding extracts video timestamps with `mkvextract timestamps_v2`, without a separate full-video decode to distinguish CFR from VFR. The default `LWLibavSource` frame-duration properties cannot restore the original VFR timeline.
+
+Prefix tests reuse the VPy metadata probe to compare output 0 with the source at output 1. FFprobe reads packet timestamps until the actual output frames and their end boundary are resolved, using decode timestamps to account for B-frame reordering. An unavailable source frame count or timestamps requiring sub-microsecond precision still use full-track extraction.
+
+The generated VPy renders hardsubs only on the required prefix and shares one timestamp file with final muxing.
 
 ## Interlaced, telecined, and mixed-cadence sources
 

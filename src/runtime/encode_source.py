@@ -186,6 +186,8 @@ sys.path.insert(0, os.path.dirname(source_path))
 runpy.run_path(source_path, run_name='__vapoursynth__')
 output = vs.get_output(0)
 clip = getattr(output, 'clip', output)
+source_output = vs.get_outputs().get(1)
+source_clip = getattr(source_output, 'clip', source_output)
 indices = sorted({0, clip.num_frames // 2, clip.num_frames - 1})
 names = ('_ColorRange', '_Range', '_Primaries', '_Transfer', '_Matrix', '_ChromaLocation')
 samples = []
@@ -198,6 +200,7 @@ for index in indices:
 with open(os.environ['BLURAYSUB_VPY_PROBE_RESULT'], 'w', encoding='utf-8') as output:
     json.dump({
         'timeline': [clip.num_frames, clip.fps_num, clip.fps_den],
+        'source_frame_count': getattr(source_clip, 'num_frames', None),
         'samples': samples,
     }, output)
 """
@@ -584,7 +587,7 @@ def probe_vapoursynth_output_metadata(
         vpy_path: str,
         vspipe_executable: str,
         environment: dict[str, str],
-) -> tuple[ActualEncodeSource, bool, tuple[int, int, int]]:
+) -> tuple[ActualEncodeSource, bool, tuple[int, int, int], int | None]:
     """Overlay stable final-output frame properties on the source snapshot."""
     script_path = os.path.abspath(os.path.normpath(vpy_path))
     with tempfile.TemporaryDirectory(
@@ -644,6 +647,9 @@ def probe_vapoursynth_output_metadata(
         ) from error
     if any(value <= 0 for value in output_timeline):
         raise RuntimeError(translate_text('VapourSynth output probe returned no frame properties'))
+    source_frame_count = document.get('source_frame_count')
+    if not isinstance(source_frame_count, int) or source_frame_count <= 0:
+        source_frame_count = None
     properties = dict(samples[0])
     if any(sample != properties for sample in samples[1:]):
         raise VapourSynthOutputMetadataMismatch(
@@ -691,6 +697,7 @@ def probe_vapoursynth_output_metadata(
         ),
         color_changed,
         output_timeline,
+        source_frame_count,
     )
 
 

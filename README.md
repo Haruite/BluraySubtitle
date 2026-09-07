@@ -352,7 +352,7 @@ For a quick video-side smoke test, add a prefix trim before the final two output
 res = res.std.Trim(first=0, length=720)
 ```
 
-Keep `first=0` so output-comparison images still use corresponding source and encoded frame numbers. The test retains the timestamps of the first 720 frames; for VFR, its duration depends on those timestamps. This only shortens the processed video: getnative and selected audio conversion still inspect or process the complete source, while source audio, soft subtitles, and chapters remain untrimmed in the final MKV. HDR10+ is omitted because its full-source timeline no longer matches the VPy output, and this is not a reliable full Dolby Vision test. To test the complete Encode workflow, use a short MKV whose video, audio, subtitles, chapters, and dynamic metadata were cut together.
+The value `720` is an example; set `length` to the frame count you need. getnative and selected audio conversion still inspect or process the complete source, while source audio, soft subtitles, and chapters remain untrimmed in the final MKV. HDR10+ is omitted because its full-source timeline no longer matches the VPy output, and this is not a reliable full Dolby Vision test. To test the complete Encode workflow, use a short MKV whose video, audio, subtitles, chapters, and dynamic metadata were cut together.
 
 ### Why is remux larger than the original disc?
 

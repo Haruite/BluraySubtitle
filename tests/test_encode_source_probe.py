@@ -59,7 +59,7 @@ class EncodeSourceProbeTests(unittest.TestCase):
                 return SimpleNamespace(returncode=0, stdout='', stderr='')
 
             with patch('src.runtime.encode_source.run_command', side_effect=run_probe):
-                result, color_changed, timeline = probe_vapoursynth_output_metadata(
+                result, color_changed, timeline, _source_frames = probe_vapoursynth_output_metadata(
                     source,
                     str(vpy_path),
                     'vspipe',

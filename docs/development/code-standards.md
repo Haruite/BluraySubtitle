@@ -19,6 +19,7 @@ Keep both language versions of these standards synchronized, and record author-c
 - Use the simplest correct implementation; remove duplicated, contradictory, unreachable, or unnecessary logic within the change's scope.
 - Add validation or abstractions only when needed for the change's confirmed requirements. Prefer structural or literal checks; use strict regular-expression matching only when the format itself is required.
 - Validate each fact at the boundary responsible for accepting it. Repeat a check only when its inputs or relevant external state may have changed.
+- Account for the size of Blu-ray media when designing operations. Limit reads and processing to the required tracks and ranges, reuse available results, and avoid unnecessary scans, repeated probing, and redundant reads, writes, or temporary copies.
 - Share one implementation of common behavior; similar-looking code alone does not justify coupling unrelated workflows.
 - Prefer one function per cohesive operation. Avoid trivial forwarding helpers or arbitrary splits, and do not merge unrelated responsibilities just to reduce the function count.
 - Keep imports, type annotations, exception handling, and formatting consistent with the surrounding module.

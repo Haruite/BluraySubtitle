@@ -52,6 +52,7 @@ from src.runtime.encode_results import EncodeTaskFailure
 from src.runtime.frame_check import run_full_frame_check
 from src.runtime.video_timeline import (
     VPY_HARDSUB_CALL,
+    VPY_HARDSUB_PATTERN,
     extract_video_timeline,
 )
 from src.runtime.video_crop import (
@@ -271,6 +272,7 @@ def _plan_automatic_encoder_metadata(
     bool,
     SourceColorMetadata | None,
     int | None,
+    int | None,
 ]:
     """Probe one actual source and add only metadata options absent from the GUI."""
     progress_name = str(
@@ -287,6 +289,7 @@ def _plan_automatic_encoder_metadata(
     automatic_arguments: tuple[str, ...] = ()
     vpy_color_changed = False
     vpy_timeline = None
+    source_frame_count = None
     hdr10plus_metadata_prepared = False
     try:
         actual_source = probe_actual_encode_source(source_path)
@@ -306,6 +309,7 @@ def _plan_automatic_encoder_metadata(
             vpy_color_changed,
             False,
             False,
+            None,
             None,
             None,
         )
@@ -328,7 +332,9 @@ def _plan_automatic_encoder_metadata(
         'Analyzing VapourSynth output metadata: {name}'
     ).format(name=progress_name))
     try:
-        actual_source, vpy_color_changed, vpy_timeline = probe_vapoursynth_output_metadata(
+        (
+            actual_source, vpy_color_changed, vpy_timeline, source_frame_count,
+        ) = probe_vapoursynth_output_metadata(
             actual_source,
             vpy_path,
             vspipe_executable,
@@ -461,6 +467,7 @@ def _plan_automatic_encoder_metadata(
         native_dolby_vision,
         parse_source_color_metadata(actual_source),
         vpy_timeline[0] if vpy_timeline is not None else None,
+        source_frame_count,
     )
 
 
@@ -1401,14 +1408,12 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             if not any(os.path.exists(path) for path in (
                     artifact_base + encoded_extension,
                     artifact_base + '.hdr10plus.json',
-                    artifact_base + '.source.timestamps.txt',
                     artifact_base + '.timestamps.txt',
                     artifact_base + encoded_extension + '.dovi.hevc',
                     artifact_base + encoded_extension + '.hdr10plus.hevc',
             )):
                 break
         encoded_path = artifact_base + encoded_extension
-        source_timestamps_path = artifact_base + '.source.timestamps.txt'
         output_timestamps_path = artifact_base + '.timestamps.txt'
         hdr10plus_json_path = artifact_base + '.hdr10plus.json'
         hdr10plus_injected_path = encoded_path + '.hdr10plus.hevc'
@@ -1533,27 +1538,8 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                         ) from error
                     vpy_video_source = encode_dovi_plan.base_layer_path
 
-        failure_stage = 'Video timestamp extraction'
+        failure_stage = 'VapourSynth preparation'
         try:
-            self._progress(text=translate_text(
-                'Reading video timestamps: {name}'
-            ).format(name=progress_name))
-            source_tracks = MediaInfoTrackMappingMixin._mkvmerge_identify_json(
-                src_mkv
-            ).get('tracks', [])
-            video_track = next(
-                (track for track in source_tracks if track.get('type') == 'video'),
-                None,
-            )
-            if video_track is None:
-                raise ValueError(translate_text(
-                    'No video track found: {path}'
-                ).format(path=src_mkv))
-            source_timeline = extract_video_timeline(
-                src_mkv, int(video_track['id']), source_timestamps_path,
-                cancel_event,
-            )
-            failure_stage = 'VapourSynth preparation'
             use_getnative = bool(getattr(self, "use_getnative", True))
             native_info = None
             if use_getnative:
@@ -1726,13 +1712,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                         updated = updated or new_line != line
                         continue
 
-                    textsub_match = re.match(
-                        r'^(\s*)(#\s*)?'
-                        rf'({re.escape(VPY_HARDSUB_CALL)}|res\s*=\s*core\.assrender\.TextSub\('
-                        r'\s*res\s*,\s*file\s*=\s*sub_file\s*\))'
-                        r'(\s*(#.*)?)$',
-                        raw,
-                    )
+                    textsub_match = re.match(VPY_HARDSUB_PATTERN, raw)
                     if textsub_match:
                         comment_prefix = '' if hardsub_enabled else '# '
                         new_line = (
@@ -1785,7 +1765,9 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 vspipe_exe, vspipe_env = VSPIPE_PATH, None
             vspipe_env = dict(vspipe_env) if vspipe_env else dict(os.environ)
             vspipe_env['BLURAYSUB_VPY_SOURCE'] = os.path.normpath(vpy_video_source)
-            vspipe_env['BLURAYSUB_VPY_TIMECODES'] = source_timestamps_path
+            # Metadata probing does not render final subtitles and needs no timecodes.
+            vspipe_env.pop('BLURAYSUB_VPY_TIMECODES', None)
+            vspipe_env.pop('BLURAYSUB_VPY_FRAMES', None)
             if str(PLUGIN_PATH or '').strip():
                 vspipe_env['BLURAYSUB_PLUGIN_PATH'] = str(PLUGIN_PATH)
             enc_exe = resolve_encoder_executable_path(encoder, encoder_mode)
@@ -1802,6 +1784,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 native_dolby_vision,
                 expected_final_video_metadata,
                 expected_output_frames,
+                source_frame_count,
             ) = _plan_automatic_encoder_metadata(
                 self,
                 output_file,
@@ -1822,9 +1805,33 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 expected_output_frames = probe_vapoursynth_frame_count(
                     vpy_path, str(vspipe_exe), vspipe_env,
                 )
-            output_timeline = source_timeline.write_prefix(
-                output_timestamps_path, expected_output_frames,
+            failure_stage = 'Video timestamp extraction'
+            self._progress(text=translate_text(
+                'Reading video timestamps: {name}'
+            ).format(name=progress_name))
+            source_info = MediaInfoTrackMappingMixin._mkvmerge_identify_json(src_mkv)
+            source_tracks = source_info.get('tracks', [])
+            timestamp_scale = source_info.get('container', {}).get(
+                'properties', {}
+            ).get('timestamp_scale', 1_000_000)
+            video_track = next(
+                (track for track in source_tracks if track.get('type') == 'video'),
+                None,
             )
+            if video_track is None:
+                raise ValueError(translate_text(
+                    'No video track found: {path}'
+                ).format(path=src_mkv))
+            output_timeline = extract_video_timeline(
+                src_mkv, int(video_track['id']), output_timestamps_path,
+                cancel_event, frame_count=expected_output_frames,
+                # FFprobe's printed times have microsecond precision.
+                source_frame_count=(
+                    source_frame_count if timestamp_scale % 1_000 == 0 else None
+                ),
+            )
+            vspipe_env['BLURAYSUB_VPY_TIMECODES'] = output_timestamps_path
+            vspipe_env['BLURAYSUB_VPY_FRAMES'] = str(expected_output_frames)
             native_hdr10plus = arguments_contain_option(
                 automatic_metadata_arguments,
                 '--dhdr10-info',
@@ -2141,7 +2148,6 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             retained_artifacts = []
             for path in (
                     encoded_path,
-                    source_timestamps_path,
                     output_timestamps_path,
                     hdr10plus_json_path,
                     encoded_path + '.dovi.hevc',
@@ -2171,7 +2177,6 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             )
             for path in (
                     encoded_path,
-                    source_timestamps_path,
                     output_timestamps_path,
                     hdr10plus_json_path,
                     encoded_path + '.dovi.hevc',
@@ -2194,8 +2199,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 tuple(dict.fromkeys(retained_artifacts)),
             ) from error
         else:
-            for path in (source_timestamps_path, output_timestamps_path):
-                force_remove_file(path)
+            force_remove_file(output_timestamps_path)
             if os.path.isfile(encoded_path):
                 force_remove_file(encoded_path)
             if os.path.isfile(hdr10plus_injected_path):
