@@ -332,14 +332,9 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
             handle.setToolTip(tooltip)
             handle.setAccessibleName(tooltip)
         function_id = self.get_selected_function_id()
-        if function_id in (1, 2):
-            self.table1_description.setText(self.t(
-                'Select the main playlists for each disc. Use the row buttons to inspect chapters and timing.'
-            ))
-        else:
-            self.table1_description.setText(self.t(
-                'Select the main playlists for each disc. Inspect chapters, timing and tracks with the row buttons.'
-            ))
+        self.table1_description.setText(self.t(
+            'Check the discs to process and drag their paths to set episode order. Review regenerated outputs after changing the selection or order.'
+        ))
         if function_id == 1:
             title = self.t('Subtitle alignment')
             description = self.t('Match subtitles to episodes, then adjust chapter selection and timing offsets.')

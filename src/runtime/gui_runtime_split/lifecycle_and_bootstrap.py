@@ -26,6 +26,7 @@ import src.core.settings as core_settings
 from src.exports.utils import print_exc_terminal
 from src.runtime.gui_runtime_classes.custom_box import CustomBox
 from src.runtime.gui_runtime_classes.custom_table_widget import CustomTableWidget
+from src.runtime.gui_runtime_classes.disc_table_widget import DiscTableWidget
 from .gui_base import BluraySubtitleGuiBase
 
 
@@ -400,17 +401,16 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.select_all_tracks_row = select_all_tracks_row
         self.layout.addWidget(select_all_tracks_row)
 
-        self.table1 = QTableWidget()
+        self.table1 = DiscTableWidget()
         self.table1.setObjectName('table1')
         self.table1.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.table1.setColumnCount(len(BDMV_LABELS))
         self._set_table_headers(self.table1, BDMV_LABELS)
-        self.table1.setSortingEnabled(True)
-        self.table1.horizontalHeader().setSortIndicatorShown(True)
+        self.table1.discsChanged.connect(self.on_disc_table_changed)
         self.bdmv_folder_path.textChanged.connect(self.on_bdmv_folder_path_change)
         self.table1_section, self.table1_description = self._create_table_section(
             self.table1, 'Sources and playlists',
-            'Select the main playlists for each disc. Inspect chapters, timing and tracks with the row buttons.',
+            'Check the discs to process and drag their paths to set episode order. Review regenerated outputs after changing the selection or order.',
             480,
         )
         v_layout.addWidget(self.table1_section)

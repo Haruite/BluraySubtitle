@@ -8,7 +8,7 @@ import traceback
 from functools import partial
 from typing import Optional
 
-from PyQt6.QtCore import Qt, QTimer, QCoreApplication, QThread, QObject
+from PyQt6.QtCore import Qt, QTimer, QCoreApplication, QThread, QObject, QModelIndex
 from PyQt6.QtWidgets import QTableWidget, QToolButton, QPlainTextEdit, QWidget, QTableWidgetItem, QComboBox, \
     QProgressDialog, QProgressBar, QMessageBox
 
@@ -103,7 +103,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             return out
         for r in range(self.table1.rowCount()):
             root_item = self.table1.item(r, 0)
-            if not root_item:
+            if not root_item or root_item.checkState() != Qt.CheckState.Checked:
                 continue
             root = root_item.text().strip()
             info = self.table1.cellWidget(r, 2)
@@ -329,7 +329,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 continue
             root_item = self.table1.item(bdmv_index, 0)
             root = root_item.text().strip() if root_item and root_item.text() else ''
-            if not root:
+            if not root or root_item.checkState() != Qt.CheckState.Checked:
                 continue
             for mpls_index in range(info.rowCount()):
                 main_btn = info.cellWidget(mpls_index, MPLS_INFO_LABELS.index('main'))
@@ -422,12 +422,9 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         if not selected_mpls:
             return
 
-        folder_to_bdmv: dict[str, int] = {}
         discs: list[tuple[int, str]] = []
         for folder, mpls_no_ext in selected_mpls:
-            if folder not in folder_to_bdmv:
-                folder_to_bdmv[folder] = len(folder_to_bdmv) + 1
-            discs.append((folder_to_bdmv[folder], mpls_no_ext))
+            discs.append((self._bdmv_index_for_table1_folder_norm(folder), mpls_no_ext))
         discs.sort(key=lambda x: x[0])
 
         file_rows: list[tuple[str, str, Optional[float]]] = []
@@ -554,36 +551,32 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         output_col = labels.index('output_name') if 'output_name' in labels else -1
         play_col = labels.index('play') if 'play' in labels else -1
 
-        prev_lang_by_bdmv: dict[int, str] = {}
-        prev_auto_lang_by_bdmv: dict[int, str] = {}
-        prev_name_by_bdmv: dict[int, tuple[str, str]] = {}
+        prev_lang_by_mpls: dict[str, str] = {}
+        prev_auto_lang_by_mpls: dict[str, str] = {}
+        prev_name_by_mpls: dict[str, tuple[str, str]] = {}
         try:
             for r in range(self.table2.rowCount()):
                 bdmv_item = self.table2.item(r, bdmv_col)
                 if not bdmv_item or not bdmv_item.text().strip():
                     continue
-                try:
-                    bdmv_index = int(bdmv_item.text().strip())
-                except Exception:
+                mpls_key = str(bdmv_item.data(Qt.ItemDataRole.UserRole) or '')
+                if not mpls_key:
                     continue
                 w = self.table2.cellWidget(r, language_col)
                 if isinstance(w, QComboBox):
-                    prev_lang_by_bdmv[bdmv_index] = w.currentText().strip()
-                    prev_auto_lang_by_bdmv[bdmv_index] = str(getattr(w, '_auto_lang', '') or '')
+                    prev_lang_by_mpls[mpls_key] = w.currentText().strip()
+                    prev_auto_lang_by_mpls[mpls_key] = str(getattr(w, '_auto_lang', '') or '')
                 if output_col >= 0:
                     it = self.table2.item(r, output_col)
                     if it and it.text():
                         auto = it.data(Qt.ItemDataRole.UserRole)
-                        prev_name_by_bdmv[bdmv_index] = (it.text().strip(), auto if isinstance(auto, str) else '')
+                        prev_name_by_mpls[mpls_key] = (it.text().strip(), auto if isinstance(auto, str) else '')
         except Exception:
             pass
 
-        folder_to_bdmv: dict[str, int] = {}
         disc_rows: list[tuple[int, str, str]] = []
         for folder, mpls_no_ext in selected_mpls:
-            if folder not in folder_to_bdmv:
-                folder_to_bdmv[folder] = len(folder_to_bdmv) + 1
-            bdmv_index = folder_to_bdmv[folder]
+            bdmv_index = self._bdmv_index_for_table1_folder_norm(folder)
             disc_rows.append((bdmv_index, folder, mpls_no_ext))
         disc_rows.sort(key=lambda x: x[0])
         single_volume = len(disc_rows) == 1
@@ -635,8 +628,8 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                     self.table2.setItem(row_i, m2ts_detail_col, QTableWidgetItem(detail_txt))
                 self.table2.setItem(row_i, duration_col, QTableWidgetItem(get_time_str(total_time)))
 
-                prev_lang = prev_lang_by_bdmv.get(bdmv_index, '').strip()
-                prev_auto_lang = prev_auto_lang_by_bdmv.get(bdmv_index, '').strip()
+                prev_lang = prev_lang_by_mpls.get(mpls_no_ext, '').strip()
+                prev_auto_lang = prev_auto_lang_by_mpls.get(mpls_no_ext, '').strip()
                 if prev_lang and prev_auto_lang and prev_lang != prev_auto_lang:
                     final_lang = prev_lang
                 elif prev_lang and not prev_auto_lang:
@@ -648,7 +641,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 self.table2.setItem(row_i, language_col, None)
                 self.table2.setCellWidget(row_i, language_col, lang_combo)
 
-                prev_name, prev_auto = prev_name_by_bdmv.get(bdmv_index, ('', ''))
+                prev_name, prev_auto = prev_name_by_mpls.get(mpls_no_ext, ('', ''))
                 if prev_name and prev_auto and prev_name != prev_auto:
                     final_text = prev_name
                 else:
@@ -838,6 +831,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 None,
                 approx_episode_duration_seconds=self._get_approx_episode_duration_seconds(),
             )
+            bs.bluray_folders = self._table1_bluray_folder_order()
             prev_folder_mains = self._folder_set_mains_from_configuration(last_cfg)
             cur_folder_mains = self._folder_set_mains_from_selected(selected)
             affected = self._folders_with_changed_main_selection(selected, last_cfg)
@@ -961,6 +955,69 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 continue
             self.table3.removeRow(r)
 
+    def _align_output_rows_to_selected_discs(self) -> None:
+        """Keep edited output cells with their source before regenerating names."""
+        labels = ENCODE_LABELS if self.get_selected_function_id() == 4 else (
+            DIY_REMUX_LABELS if self.get_selected_function_id() == 5 else REMUX_LABELS)
+        bdmv_col = labels.index('bdmv_index')
+        selected = self.get_selected_mpls_no_ext()
+        selected_order = {os.path.normpath(path): index for index, (_, path) in enumerate(selected)}
+        disc_indices = {os.path.normpath(path): self._bdmv_index_for_table1_folder_norm(folder)
+                        for folder, path in selected}
+        was_sorting = self.table2.isSortingEnabled()
+        self.table2.setSortingEnabled(False)
+        try:
+            retained = []
+            for row in reversed(range(self.table2.rowCount())):
+                item = self.table2.item(row, bdmv_col)
+                source = str(item.data(Qt.ItemDataRole.UserRole) or '') if item else ''
+                key = os.path.normpath(source) if source else ''
+                if key not in selected_order:
+                    self.table2.removeRow(row)
+                    continue
+                item.setText(str(disc_indices[key]))
+                retained.append((selected_order[key], row, item))
+            for target, (_, _, item) in enumerate(sorted(retained, key=lambda entry: entry[:2])):
+                source = item.row()
+                if source != target:
+                    self.table2.model().moveRows(QModelIndex(), source, 1, QModelIndex(), target)
+        finally:
+            self.table2.setSortingEnabled(was_sorting)
+
+    def on_disc_table_changed(self) -> None:
+        """Rebuild derived outputs from the visible disc selection and order."""
+        if getattr(self, '_disc_refresh_active', False):
+            self._disc_refresh_pending = True
+            return
+        self._disc_refresh_active = True
+        try:
+            self.altered = True
+            self._retire_sp_table_scan()
+            function_id = self.get_selected_function_id()
+            if function_id in (3, 4, 5):
+                self._align_output_rows_to_selected_discs()
+                self._refresh_track_selection_config_for_selected_main()
+                self._full_refresh_remux_encode_tables_for_mode()
+                self._refresh_table1_remux_cmds()
+            elif function_id == 1 and self.table2.rowCount():
+                if not self.get_selected_mpls_no_ext():
+                    for row in range(self.table2.rowCount()):
+                        for label in ('bdmv_index', 'chapter_index', 'offset', 'ep_duration'):
+                            column = SUBTITLE_LABELS.index(label)
+                            self.table2.removeCellWidget(row, column)
+                            self.table2.setItem(row, column, None)
+                elif self._is_movie_mode():
+                    self._refresh_movie_subtitle_table2()
+                else:
+                    self.on_subtitle_drop()
+        finally:
+            self._disc_refresh_active = False
+            # Busy-dialog updates can deliver another checkbox or sort event.
+            # Rebuild once more from the final state after the outer refresh.
+            if getattr(self, '_disc_refresh_pending', False):
+                self._disc_refresh_pending = False
+                QTimer.singleShot(0, self.on_disc_table_changed)
+
     def _table1_bluray_folder_order(self) -> list[str]:
         out: list[str] = []
         try:
@@ -1037,7 +1094,13 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             finally:
                 self.bdmv_folder_path.blockSignals(False)
         source_state_path = os.path.normcase(os.path.abspath(bdmv_path)) if bdmv_path else ''
-        if source_state_path != str(getattr(self, '_bdmv_source_state_path', '') or ''):
+        source_changed = source_state_path != str(getattr(self, '_bdmv_source_state_path', '') or '')
+        previous_order = [] if source_changed else self._table1_bluray_folder_order()
+        previous_checks = {
+            self.table1.item(row, 0).text(): self.table1.item(row, 0).checkState()
+            for row in range(self.table1.rowCount()) if self.table1.item(row, 0)
+        } if not source_changed else {}
+        if source_changed:
             self._bdmv_source_state_path = source_state_path
             self._available_track_selection_config = {}
             self._track_selection_config = {}
@@ -1115,6 +1178,10 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                         dirs.sort()
                         if os.path.isdir(os.path.join(root, 'BDMV', 'PLAYLIST')):
                             sources.append((root, root))
+                prior_positions = {path: index for index, path in enumerate(previous_order)}
+                sources.sort(key=lambda source: prior_positions.get(os.path.normpath(source[1]), len(prior_positions)))
+                self.table1.blockSignals(True)
+                self.table1.setRowCount(0)
                 self.table1.setRowCount(len(sources))
                 for i, (root, source_path) in enumerate(sources):
                     table_widget = QTableWidget()
@@ -1153,8 +1220,6 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                         btn1 = QToolButton()
                         btn1.setText(self.t('view chapters'))
                         btn1.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-                        btn1.clicked.connect(
-                            partial(self.on_button_click, mpls_path, mpls_path == selected_mpls, i + 1))
                         table_widget.setCellWidget(mpls_n, info_headers.index('chapters'), btn1)
                         timing_button = QToolButton()
                         timing_button.setText(self.t('view timing'))
@@ -1165,6 +1230,10 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                         btn2.setCheckable(True)
                         btn2.setChecked(mpls_path == selected_mpls)
                         btn2.clicked.connect(partial(self.on_button_main, mpls_path))
+                        btn1.clicked.connect(
+                            lambda _checked=False, path=mpls_path, source=source_path, main=btn2:
+                            self.on_button_click(path, main.isChecked(),
+                                                 self._bdmv_index_for_table1_folder_norm(source)))
                         table_widget.setCellWidget(mpls_n, info_headers.index('main'), btn2)
                         btn3 = QToolButton()
                         btn3.setText(self.t('play'))
@@ -1191,7 +1260,11 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                         if (time.time() - start_ts) >= 2.0:
                             QCoreApplication.processEvents()
                     self._resize_table_columns_for_language(table_widget)
-                    self.table1.setItem(i, 0, FilePathTableWidgetItem(os.path.normpath(source_path)))
+                    source_item = FilePathTableWidgetItem(os.path.normpath(source_path))
+                    source_item.setFlags((source_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                                         & ~Qt.ItemFlag.ItemIsEditable)
+                    source_item.setCheckState(previous_checks.get(source_item.text(), Qt.CheckState.Checked))
+                    self.table1.setItem(i, 0, source_item)
                     size = get_folder_size(root) if root == source_path else f'{os.path.getsize(source_path) / 1024 ** 3:.2f} GiB'
                     self.table1.setItem(i, 1, QTableWidgetItem(size))
                     self.table1.setCellWidget(i, 2, table_widget)
@@ -1228,6 +1301,8 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 self.table1.setRowCount(0)
                 if not isinstance(e, TaskCancelled):
                     QMessageBox.warning(self, self.t('Error'), str(e))
+        self.table1.sync_selection()
+        self.table1.blockSignals(False)
         if bdmv_path and table_ok and self.get_selected_function_id() in (3, 4, 5):
             self._refresh_track_selection_config_for_selected_main()
         self.altered = True

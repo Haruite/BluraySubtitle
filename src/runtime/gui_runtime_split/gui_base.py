@@ -221,6 +221,9 @@ class BluraySubtitleGuiBase(QWidget):
     def _adjust_combo_width_to_contents(self, combo: QComboBox, padding: int=44, min_width: int=80, max_width: int=520):
         raise NotImplementedError
 
+    def _align_output_rows_to_selected_discs(self) -> None:
+        raise NotImplementedError
+
     def _all_track_ids_from_streams(self, streams: list[dict[str, object]]) -> tuple[list[str], list[str]]:
         raise NotImplementedError
 
@@ -965,6 +968,9 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def on_configuration(self, configuration: dict[int, dict[str, int | str]], update_sp_table: bool=True):
+        raise NotImplementedError
+
+    def on_disc_table_changed(self) -> None:
         raise NotImplementedError
 
     def on_edit_attachments_from_mkv_row(self, table: QTableWidget, row_index: int | str):

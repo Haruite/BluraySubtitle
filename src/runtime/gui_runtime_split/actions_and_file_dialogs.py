@@ -1493,13 +1493,10 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 selected_subtitle_rows.append((row, subtitle_path))
 
             if self._is_movie_mode():
-                folder_to_bdmv: dict[str, int] = {}
                 bdmv_to_info: dict[int, list[tuple[str, str]]] = {}
                 selected_mpls_by_path: dict[str, tuple[str, str]] = {}
                 for folder, selected_mpls_no_ext in selected_mpls:
-                    if folder not in folder_to_bdmv:
-                        folder_to_bdmv[folder] = len(folder_to_bdmv) + 1
-                    bdmv_index = folder_to_bdmv[folder]
+                    bdmv_index = self._bdmv_index_for_table1_folder_norm(folder)
                     bdmv_to_info.setdefault(bdmv_index, []).append((folder, selected_mpls_no_ext))
                     selected_mpls_by_path[
                         os.path.normcase(os.path.normpath(selected_mpls_no_ext))
@@ -2545,7 +2542,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                              if self.table2.item(sub_index, 0)]
             else:
                 sub_files = [self.table2.item(sub_index, 1).text() for sub_index in range(self.table2.rowCount())
-                             if self.table2.item(sub_index, 0) and self.table2.item(sub_index, 0).checkState() == 2]
+                             if self.table2.item(sub_index, 0) and self.table2.item(sub_index, 0).checkState() == Qt.CheckState.Checked]
             self._apply_configuration_after_subtitle_change(sub_files)
         except Exception as e:
             print(f'{translate_text("Subtitle drag-in failed: ")}{str(e)}')
@@ -2652,7 +2649,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                              if self.table2.item(sub_index, 0) and self.table2.item(sub_index, 0).text()]
             else:
                 sub_files = [self.table2.item(sub_index, 1).text() for sub_index in range(self.table2.rowCount())
-                             if self.table2.item(sub_index, 0) and self.table2.item(sub_index, 0).checkState() == 2]
+                             if self.table2.item(sub_index, 0) and self.table2.item(sub_index, 0).checkState() == Qt.CheckState.Checked]
             self._apply_configuration_after_subtitle_change(sub_files)
         except Exception:
             print_exc_terminal()

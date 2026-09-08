@@ -1220,3 +1220,13 @@ Date: 2026-09-07
 - Added a project documentation skill referenced by AGENTS and the code standards, guiding updates by readers, purpose, and actual behavior.
 - Simplified the README, product constraints, and wiki; consolidated tool-build and audio-processing explanations and removed repetition and development-process narration.
 - Verification: skill format and documentation link checks passed.
+
+## Disc Selection and Reordering
+
+Date: 2026-09-09 Commit: `feat(gui): reorder and select Blu-ray discs`
+
+- Added source-row checkboxes and drag reordering. Model row moves retain nested playlist tables and edited commands; explicit header sorting replaces continuous sorting that conflicts with manual order and row population.
+- Main-playlist selection, episode configuration, movie-mode subtitle merging, and SP generation now respect the chosen discs and visible source order. Movie rows and chapter-derived SP use the actual source-row number after earlier discs are excluded. Source reloads preserve the volume order and check states, and chapter buttons resolve the current disc row when opened.
+- Output rows follow their playlist identities during selection/order changes so edited names and VPy controls stay with their sources. Reentrant checkbox changes request a final refresh from the latest visible state.
+- Added bilingual operation hints and updated README and the interface guide. Added a focused regression for moved editor ownership and excluded playlist selection.
+- Verification: 94 automated tests, i18n, mixin-contract, encoding, and whitespace checks passed. GUI checks with a multi-volume disc verified drag and header ordering, episode/SP exclusion, movie-mode disc identity and durations, edited filenames following their sources, and empty selection clearing outputs and preventing launch. Cross-platform GUI and media-output regression continue in the broader test campaign.

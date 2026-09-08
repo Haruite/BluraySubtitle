@@ -850,6 +850,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 except Exception:
                     pass
                 return
+            bs.bluray_folders = self._table1_bluray_folder_order()
             configuration = bs.generate_configuration_from_selected_mpls(selected_mpls)
             # The first pass creates all table2 widgets. Their visible values are
             # authoritative, so read them back before the only table3 refresh.
@@ -885,6 +886,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     None,
                     approx_episode_duration_seconds=self._get_approx_episode_duration_seconds()
                 )
+                bs.bluray_folders = self._table1_bluray_folder_order()
                 configuration = bs.generate_configuration_from_selected_mpls(self.get_selected_mpls_no_ext())
 
             self.on_configuration(configuration)
@@ -1625,7 +1627,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
         selected = []
         for bdmv_index in range(self.table1.rowCount()):
             folder_item = self.table1.item(bdmv_index, 0)
-            if not folder_item:
+            if not folder_item or folder_item.checkState() != Qt.CheckState.Checked:
                 continue
             info: QTableWidget = self.table1.cellWidget(bdmv_index, 2)
             if not info:

@@ -16,6 +16,12 @@ This multi-volume *Spice and Wolf* example shows that every volume has its own m
 
 [![Spice and Wolf multi-volume interface](https://sbx.mysmy.top/pictures/%E7%8B%BC%E4%B8%8E%E9%A6%99%E8%BE%9B%E6%96%99%20%E8%82%89%E9%85%B1%E7%9B%98.png)](https://sbx.mysmy.top/pictures/%E7%8B%BC%E4%B8%8E%E9%A6%99%E8%BE%9B%E6%96%99%20%E8%82%89%E9%85%B1%E7%9B%98.png)
 
+## Disc selection and order
+
+Use the checkbox beside each disc path to choose which volumes to process. Drag a path row before or after another row to set the disc order; clicking a column heading sorts the rows by that column. Unchecked discs remain visible, but their main outputs and SP are excluded.
+
+Changing the disc selection or order regenerates the dependent output tables. Review episode numbering, output names, chapter ranges, and attached subtitles before starting. The disc-number column refers to the current source row, including unchecked rows; episode numbering follows the selected content.
+
 ## Inspecting MPLS chapters, PlayItems, and tracks
 
 **View chapters**, **View M2TS time**, and **Edit tracks** show different layers of the same MPLS. Chapters are useful for choosing output ranges, M2TS time shows the exact source interval used by each PlayItem, and track editing determines which logical tracks reach the final output.

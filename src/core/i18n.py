@@ -19,6 +19,7 @@ I18N_ZH_TO_EN = {
     '拖动以调整表格高度': 'Drag to adjust table height',
     '为各原盘选择主播放列表；通过行内按钮查看章节和时间。': 'Select the main playlists for each disc. Use the row buttons to inspect chapters and timing.',
     '原盘与播放列表': 'Sources and playlists',
+    '勾选要处理的原盘，拖动路径调整分集顺序；更改选择或顺序后请检查重新生成的输出。': 'Check the discs to process and drag their paths to set episode order. Review regenerated outputs after changing the selection or order.',
     '为各原盘选择主播放列表；通过行内按钮查看章节、时间和轨道。': 'Select the main playlists for each disc. Inspect chapters, timing and tracks with the row buttons.',
     '正片输出': 'Main outputs',
     '每行对应一个正片输出，可调整章节范围、输出文件名及可选字幕。': 'One row per main output. Adjust chapter ranges, output names and optional subtitles.',

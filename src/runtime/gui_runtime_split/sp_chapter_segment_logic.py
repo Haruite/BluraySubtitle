@@ -1149,13 +1149,8 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
         selected_mpls = self.get_selected_mpls_no_ext()
         if not selected_mpls:
             return
-        folder_to_bdmv: dict[str, int] = {}
-        bdmv_to_mpls: dict[int, str] = {}
         for folder, mpls_no_ext in selected_mpls:
-            if folder not in folder_to_bdmv:
-                folder_to_bdmv[folder] = len(folder_to_bdmv) + 1
-            bdmv_to_mpls[folder_to_bdmv[folder]] = mpls_no_ext
-        for bdmv_index, mpls_no_ext in sorted(bdmv_to_mpls.items(), key=lambda x: x[0]):
+            bdmv_index = self._bdmv_index_for_table1_folder_norm(folder)
             self._sync_chapter_checkbox_sp_for_mpls(mpls_no_ext + '.mpls', bdmv_index)
 
     def _sync_end_chapter_min_constraints(self, labels: list[str]):
@@ -1356,7 +1351,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     bdmv_index = int(r + 1)
                     root_item = self.table1.item(r, 0)
                     root = root_item.text().strip() if root_item and root_item.text() else ''
-                    if not root:
+                    if not root or root_item.checkState() != Qt.CheckState.Checked:
                         continue
                     disc_root_by_bdmv[bdmv_index] = root
                     info = self.table1.cellWidget(r, 2)
