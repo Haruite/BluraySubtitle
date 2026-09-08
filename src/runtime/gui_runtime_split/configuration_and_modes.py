@@ -253,6 +253,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 saved += [True] * (rows - len(saved))
             segment_states[mpls_no_ext] = saved[:rows]
         return {
+            'approx_episode_seconds': self._get_approx_episode_duration_seconds(),
             'selected_mpls': selected_mpls,
             'bdmv_to_mpls': bdmv_to_mpls,
             'row_bdmv': row_bdmv,
@@ -292,6 +293,8 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             print_exc_terminal()
 
     def _diff_config_inputs(self, prev: dict[str, object], cur: dict[str, object]) -> tuple[str, int]:
+        if prev.get('approx_episode_seconds') != cur.get('approx_episode_seconds'):
+            return 'segments', 0
         p_seg = prev.get('segments', {}) if isinstance(prev, dict) else {}
         c_seg = cur.get('segments', {})
         if p_seg != c_seg:
@@ -309,9 +312,11 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
         return 'none', -1
 
     def _segment_diff_mpls(self, prev: dict[str, object], cur: dict[str, object]) -> set[str]:
-        """MPLS stems whose view-chapters checkbox states changed."""
+        """MPLS stems whose chapter selection or approximate episode length changed."""
         p_seg = prev.get('segments', {}) if isinstance(prev, dict) else {}
         c_seg = cur.get('segments', {}) if isinstance(cur, dict) else {}
+        if prev.get('approx_episode_seconds') != cur.get('approx_episode_seconds'):
+            return set(c_seg)
         out: set[str] = set()
         for m in set(p_seg.keys()) | set(c_seg.keys()):
             if list(p_seg.get(m, [])) != list(c_seg.get(m, [])):
@@ -401,9 +406,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             ends = dict(inputs.get('end') or {})
             segments = dict(inputs.get('segments') or {})
             prev_conf = dict(getattr(self, '_last_configuration_34', {}) or {})
-            approx_end_time = float(
-                getattr(self, 'approx_episode_duration_seconds', DEFAULT_APPROX_EPISODE_DURATION_SECONDS)
-                or DEFAULT_APPROX_EPISODE_DURATION_SECONDS)
+            approx_end_time = float(inputs['approx_episode_seconds'])
             target_seconds_by_row: dict[int, float] = {}
             for row_index in range(self.table2.rowCount()):
                 target_seconds_by_row[row_index] = approx_end_time

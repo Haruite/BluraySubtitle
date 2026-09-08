@@ -275,8 +275,10 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
 
         self.episode_mode_row = mode_row
         self.episode_mode_row.setVisible(self.get_selected_function_id() in (1, 3, 4, 5))
-        self.approx_episode_minutes_combo.currentTextChanged.connect(
+        self.approx_episode_minutes_combo.activated.connect(
             lambda _=None: self._rebuild_configuration_for_function_34())
+        self.approx_episode_minutes_combo.lineEdit().editingFinished.connect(
+            self._rebuild_configuration_for_function_34)
         self.layout.addWidget(self.episode_mode_row)
 
         bdmv = QWidget()
