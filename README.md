@@ -30,7 +30,7 @@ BluraySubtitle is a GUI tool for Blu-ray workflows on **Windows / Linux** (inclu
 - English/Simplified Chinese UI; Light, Dark, and Colorful themes with opacity control.
 - Scroll the page vertically and drag the handle below each table to resize it. See the [interface guide](docs/wiki/Interface-Guide.md#main-window-content-areas) for layout and table controls.
 - **Settings** manages general options, paths, startup defaults, external tools, and manual updates.
-- Check the discs to process and drag their paths to set the order. Series mode splits by chapters; movie mode keeps a continuous output. Each disc can have multiple selected main MPLS files. Review automatic selections, episode ranges, and tracks before running.
+- Check the discs to process and drag their paths to set the order. Series mode splits by chapters; movie mode keeps a continuous output and can select alternate cuts by default. Each disc can have multiple selected main MPLS files. Review automatic selections, episode ranges, and tracks before running.
 
 ### Remux controls
 

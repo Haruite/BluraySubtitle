@@ -511,7 +511,10 @@ class BluraySubtitleServiceBase:
     def generate_configuration_from_selected_mpls(self, selected_mpls: list[tuple[str, str]], sub_combo_index: Optional[dict[int, int]]=None, subtitle_index: Optional[int]=None, cancel_event: Optional[threading.Event]=None) -> dict[int, dict[str, int | str]]:
         raise NotImplementedError
 
-    def get_main_mpls(self, bluray_folder: str, checked: bool) -> str:
+    def get_default_main_mpls(self, bluray_folder: str, checked: bool, movie_mode: bool=False) -> list[str]:
+        raise NotImplementedError
+
+    def get_main_mpls(self, bluray_folder: str, checked: bool) -> Optional[str]:
         raise NotImplementedError
 
     @staticmethod

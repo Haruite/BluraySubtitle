@@ -153,12 +153,16 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
             # Propagate exception so caller can decide fallback behavior.
             raise Exception(f'Multiprocessing parse failed: {str(e)}')
 
-    def get_main_mpls(self, bluray_folder: str, checked: bool) -> str:
+    def get_main_mpls(self, bluray_folder: str, checked: bool) -> Optional[str]:
+        selected = self.get_default_main_mpls(bluray_folder, checked)
+        return selected[0] if selected else None
+
+    def get_default_main_mpls(self, bluray_folder: str, checked: bool, movie_mode: bool = False) -> list[str]:
+        """Choose a primary playlist and conservatively recognize alternate movie cuts."""
         mpls_folder = os.path.join(bluray_folder, 'BDMV', 'PLAYLIST')
         stream_folder = os.path.join(bluray_folder, 'BDMV', 'STREAM')
-        selected_mpls = None
-        max_indicator = 0
-        for mpls_file_name in os.listdir(mpls_folder):
+        candidates = []
+        for mpls_file_name in sorted(os.listdir(mpls_folder)):
             if mpls_file_name[-5:].lower() != '.mpls':
                 continue
             mpls_file_path = os.path.join(mpls_folder, mpls_file_name)
@@ -178,10 +182,52 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
                     stream_files.add(in_out_time[0])
             indicator = chapter.get_total_time_no_repeat() * (1 + sum(map(len, chapter.mark_info.values())) / 5
                                                               ) * os.path.getsize(mpls_file_path) * total_size
-            if indicator > max_indicator:
-                max_indicator = indicator
-                selected_mpls = mpls_file_path
-        return selected_mpls
+            if indicator <= 0:
+                continue
+            intervals = {}
+            for clip, start, end in chapter.in_out_time:
+                if end > start:
+                    intervals.setdefault(clip, []).append((start, end))
+            for clip, spans in intervals.items():
+                merged = []
+                for start, end in sorted(spans):
+                    if merged and start <= merged[-1][1]:
+                        merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+                    else:
+                        merged.append((start, end))
+                intervals[clip] = merged
+            unique_duration = sum(end - start for spans in intervals.values() for start, end in spans) / 45000
+            candidates.append({
+                'indicator': indicator, 'path': mpls_file_path, 'duration': chapter.get_total_time(),
+                'unique_duration': unique_duration, 'intervals': intervals,
+            })
+        candidates.sort(key=lambda entry: -entry['indicator'])
+        if not candidates:
+            return []
+        primary = candidates[0]
+        selected = [primary]
+        if movie_mode:
+            for candidate in candidates[1:]:
+                if candidate['indicator'] < primary['indicator'] * 0.5:
+                    break
+                # Same-length localized branches and alternate STNs are not separate movie cuts.
+                if any(abs(candidate['duration'] - previous['duration'])
+                       < max(60.0, max(candidate['duration'], previous['duration']) * 0.01)
+                       for previous in selected):
+                    continue
+                if min(candidate['duration'], primary['duration']) < max(candidate['duration'], primary['duration']) * 0.75:
+                    continue
+                shared_duration = sum(
+                    max(0, min(end, other_end) - max(start, other_start))
+                    for clip, spans in candidate['intervals'].items()
+                    for start, end in spans
+                    for other_start, other_end in primary['intervals'].get(clip, [])
+                ) / 45000
+                # Require most of the shorter cut to use the same source video windows.
+                shorter_unique_duration = min(candidate['unique_duration'], primary['unique_duration'])
+                if shorter_unique_duration > 0 and shared_duration >= shorter_unique_duration * 0.75:
+                    selected.append(candidate)
+        return [entry['path'] for entry in selected]
 
     @staticmethod
     def _disc_paths_for_output_title(bdmv_root: str, selected_mpls_no_ext: str) -> tuple[str, str, str]:

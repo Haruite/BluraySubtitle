@@ -421,7 +421,9 @@ The MPLS file size matters because two playlists can have exactly the same clip 
 
 The M2TS term sums distinct file sizes to avoid overrating menu playlists that repeatedly reference one small clip.
 
-Some movie discs contain same-duration playlists with similar visible content. Equal scores keep the first enumerated candidate, without guaranteed filename ordering; manually select the intended language variant, branch, or edition.
+Equal scores prefer the first playlist in filename order. Movie mode can also select an alternate cut when its score is at least half the primary score, the shorter duration is at least 75% of the longer duration, and at least 75% of the shorter cut's distinct video time overlaps the primary playlist's source clips and time windows. Repeated or overlapping references within each clip count only once for this comparison.
+
+An additional cut must differ from every already selected cut by at least 60 seconds and at least 1% of the longer duration. This keeps same-duration localized branches and playlists with alternate STNs from becoming duplicate default outputs. These conditions provide conservative defaults; inspect the intended language, tracks, and edition manually, especially for same-length edits or versions using separate video files.
 
 ## Episodic layouts and MPLS-based slicing
 

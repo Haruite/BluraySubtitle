@@ -14,11 +14,48 @@ from src.runtime.remux import RemuxMainJob, RemuxRequest
 from src.runtime.services import BluraySubtitle  # Import the composed service before its split mixins.
 from src.runtime.services_split import remux_and_episode_workflows as remux_service_module
 from src.runtime.services_split import media_info_and_track_mapping as track_mapping_module
+from src.runtime.services_split import lifecycle_and_configuration as lifecycle_module
 from src.runtime.services_split.media_info_and_track_mapping import MediaInfoTrackMappingMixin
 from src.runtime.services_split.remux_and_episode_workflows import RemuxEpisodeWorkflowsMixin
 
 
 class RemuxWorkflowTests(unittest.TestCase):
+    def test_movie_defaults_distinguish_cuts_from_localized_or_duplicate_playlists(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            playlist = root / 'BDMV' / 'PLAYLIST'
+            stream = root / 'BDMV' / 'STREAM'
+            playlist.mkdir(parents=True)
+            stream.mkdir()
+            definitions = {
+                '00001': (1000, [('common', 7200), ('theatrical', 1200)]),
+                '00002': (800, [('common', 7200), ('theatrical', 1200)]),
+                '00003': (900, [('common', 7200), ('extended', 1800)]),
+                '00004': (850, [('common', 7200), ('extended', 1800)]),
+                '00005': (950, [('common', 7200), ('localized', 1200)]),
+                '00006': (800, [('bonus-a', 7200), ('bonus-b', 2000)]),
+            }
+            chapters = {}
+            for name, (size, clips) in definitions.items():
+                path = playlist / f'{name}.mpls'
+                path.write_bytes(b'\0' * size)
+                duration = sum(seconds for _, seconds in clips)
+                chapters[str(path)] = SimpleNamespace(
+                    in_out_time=[(clip, 0, seconds * 45000) for clip, seconds in clips],
+                    mark_info={'marks': list(range(20))},
+                    get_total_time=lambda value=duration: value,
+                    get_total_time_no_repeat=lambda value=duration: value,
+                )
+                for clip, _ in clips:
+                    (stream / f'{clip}.m2ts').write_bytes(b'\0' * 1000)
+            service = BluraySubtitle.__new__(BluraySubtitle)
+            with patch.object(lifecycle_module, 'Chapter', side_effect=lambda path: chapters[path]):
+                self.assertEqual(
+                    [Path(path).stem for path in service.get_default_main_mpls(str(root), False, movie_mode=True)],
+                    ['00001', '00003'],
+                )
+                self.assertEqual(service.get_default_main_mpls(str(root), False), [str(playlist / '00001.mpls')])
+
     @staticmethod
     def _request(
             root: Path,

@@ -575,11 +575,14 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             pass
 
         disc_rows: list[tuple[int, str, str]] = []
+        playlist_counts_by_disc: dict[int, int] = {}
         for folder, mpls_no_ext in selected_mpls:
             bdmv_index = self._bdmv_index_for_table1_folder_norm(folder)
             disc_rows.append((bdmv_index, folder, mpls_no_ext))
+            playlist_counts_by_disc[bdmv_index] = playlist_counts_by_disc.get(bdmv_index, 0) + 1
         disc_rows.sort(key=lambda x: x[0])
-        single_volume = len(disc_rows) == 1
+        single_volume = len(playlist_counts_by_disc) == 1
+        playlist_sequence_by_disc: dict[int, int] = {}
 
         sub_files_in_folder: list[str] = []
         if self.subtitle_folder_path.text().strip():
@@ -608,7 +611,12 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                     dict.fromkeys([f'{stem}.m2ts' for stem, _, _ in (chapter.in_out_time or [])]))
                 disc_name = self._resolve_output_name_from_mpls(mpls_no_ext)
                 bdmv_vol = f'{bdmv_index:03d}'
-                auto_name = f'{disc_name}.mkv' if single_volume else f'{disc_name}_BD_Vol_{bdmv_vol}.mkv'
+                name_stem = disc_name if single_volume else f'{disc_name}_BD_Vol_{bdmv_vol}'
+                if playlist_counts_by_disc[bdmv_index] > 1:
+                    sequence = playlist_sequence_by_disc.get(bdmv_index, 0) + 1
+                    playlist_sequence_by_disc[bdmv_index] = sequence
+                    name_stem += f'_{sequence}'
+                auto_name = f'{name_stem}.mkv'
 
                 if sub_files_in_folder and row_i < len(sub_files_in_folder):
                     self.table2.setItem(row_i, 0, FilePathTableWidgetItem(sub_files_in_folder[row_i]))
@@ -1209,7 +1217,11 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                                 )
                             except Exception:
                                 checked = True
-                    selected_mpls = os.path.normpath(BluraySubtitle(root).get_main_mpls(root, checked))
+                    selected_mpls_paths = {
+                        os.path.normpath(path)
+                        for path in BluraySubtitle(root).get_default_main_mpls(
+                            root, checked, movie_mode=self._is_movie_mode())
+                    }
                     for mpls_file in mpls_files:
                         table_widget.setItem(mpls_n, 0, QTableWidgetItem(mpls_file))
                         mpls_path = os.path.normpath(os.path.join(root, 'BDMV', 'PLAYLIST', mpls_file))
@@ -1228,7 +1240,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                         table_widget.setCellWidget(mpls_n, info_headers.index('m2ts_timing'), timing_button)
                         btn2 = QToolButton()
                         btn2.setCheckable(True)
-                        btn2.setChecked(mpls_path == selected_mpls)
+                        btn2.setChecked(mpls_path in selected_mpls_paths)
                         btn2.clicked.connect(partial(self.on_button_main, mpls_path))
                         btn1.clicked.connect(
                             lambda _checked=False, path=mpls_path, source=source_path, main=btn2:
@@ -1269,8 +1281,13 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                     self.table1.setItem(i, 1, QTableWidgetItem(size))
                     self.table1.setCellWidget(i, 2, table_widget)
                     if self.get_selected_function_id() in (3, 4):
-                        resolved_bdmv_index = self._resolve_bdmv_index_for_main_mpls(selected_mpls, i + 1)
-                        cmd_text = self._build_main_remux_cmd_template(selected_mpls, resolved_bdmv_index, root)
+                        selected_paths = sorted(selected_mpls_paths)
+                        cmd_text = '\n'.join(
+                            self._build_main_remux_cmd_template(
+                                path, self._resolve_bdmv_index_for_main_mpls(path, i + 1), root,
+                                name_seq_index=index, name_seq_total=len(selected_paths),
+                            ) for index, path in enumerate(selected_paths)
+                        )
                         self.table1.setCellWidget(i, BDMV_LABELS.index('remux_cmd'),
                                                   self._create_main_remux_cmd_editor(cmd_text, self.table1))
                     elif self.get_selected_function_id() not in (3, 4, 5):

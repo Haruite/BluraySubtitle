@@ -1230,3 +1230,12 @@ Date: 2026-09-09 Commit: `feat(gui): reorder and select Blu-ray discs`
 - Output rows follow their playlist identities during selection/order changes so edited names and VPy controls stay with their sources. Reentrant checkbox changes request a final refresh from the latest visible state.
 - Added bilingual operation hints and updated README and the interface guide. Added a focused regression for moved editor ownership and excluded playlist selection.
 - Verification: 94 automated tests, i18n, mixin-contract, encoding, and whitespace checks passed. GUI checks with a multi-volume disc verified drag and header ordering, episode/SP exclusion, movie-mode disc identity and durations, edited filenames following their sources, and empty selection clearing outputs and preventing launch. Cross-platform GUI and media-output regression continue in the broader test campaign.
+
+## Default Selection of Alternate Movie Cuts
+
+Date: 2026-09-09 Commit: `feat(gui): select alternate movie cuts by default`
+
+- Centralized initial playlist ranking with deterministic filename tie-breaking. Movie mode adds high-scoring cuts only when their durations differ materially and most of the shorter cut shares source video time with the primary playlist; repeated intervals are counted once. Same-length localized branches and alternate STNs retain a single default representative.
+- Initial GUI command editors now contain one command per selected main MPLS in visible playlist order. Movie outputs receive a per-disc sequence suffix when multiple main playlists are selected, fixing duplicate automatic filenames within one disc.
+- Updated both README and disc-structure wiki versions and added a focused decision regression for alternate cuts, duplicate STNs, localized branches, and unrelated bonus content.
+- Verification: 9 targeted tests, Python compilation, i18n, mixin-contract, encoding, and whitespace checks passed. GUI regression selected two cuts with distinct names and matching durations for a dual-cut disc, while a same-duration branching disc kept one main output. Media execution and cross-platform regression remain part of the broader test campaign.
