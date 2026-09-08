@@ -141,7 +141,9 @@ For each reconstruction-error curve, getnative looks for the sharp adjacent-heig
 
 Ranking excludes unstable or oscillating curve tails and a fixed 535p–545p false-positive band. The stable-curve upper limit is `source height × 1040 / 1080`; curve-tail spans and the high-resolution oscillation boundary also scale with source height. A 1080p source rejects values above 1040p; a 2160p source rejects values above 2080p and keeps candidates near 1080p.
 
-Usable samples are grouped by rounded height. Each sample is weighted as `min(score, 2) * (height / search-range maximum)^4`; the three strongest weights in a height group determine which group wins, with the higher height breaking an exact tie. The selected group's weighted height and kernel votes produce the final VPy values.
+Uniform-color samples are skipped before kernel analysis, excluding the same five-pixel border used by the error metric. Such frames contain no spatial detail from which to estimate a scaling kernel or native resolution.
+
+Usable samples are grouped by rounded height. Each sample is weighted as `min(score, 2) * (height / search-range maximum)^4`; the sum of all sample weights in a height group determines which group wins, with the higher height breaking an exact tie. The selected group's weighted height and kernel votes produce the final VPy values.
 
 Getnative is a heuristic: detailed line art usually gives clearer curves than dark scenes, credits, soft photography, noise, or mixed-resolution material. Compare per-kernel output across representative episodes.
 

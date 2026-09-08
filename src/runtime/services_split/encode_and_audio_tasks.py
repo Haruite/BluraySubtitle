@@ -850,6 +850,17 @@ def _estimate_native_from_image_worker(
 
         with Image.open(image_path) as img:
             h = int(img.height)
+            sample = img.convert("RGB")
+            # Match the metric's border exclusion before rejecting blank frames.
+            if sample.width > 10 and sample.height > 10:
+                sample = sample.crop((5, 5, sample.width - 5, sample.height - 5))
+            if all(low == high for low, high in sample.getextrema()):
+                return {
+                    "ok": True,
+                    "image": os.path.basename(image_path),
+                    "stage": "sample_quality",
+                    "skip_reason": "uniform_frame",
+                }
         loader = "pil"
         min_h = max(240, int(h * 0.40))
         max_h = min(h - 2, int(h * 0.98))
@@ -1017,14 +1028,14 @@ def _getnative_parallel_sample_count(
 def _select_getnative_ranked_group(results: list[dict]) -> list[dict]:
     if not results:
         return []
-    # Preserve the empirical ranking without rejecting sources that yield only sparse usable frames.
+    # Keep all support for each height instead of capping agreement at three samples.
     height_groups: dict[int, list[dict]] = {}
     for row in results:
         height_groups.setdefault(int(round(float(row.get("height", 0.0)))), []).append(row)
     _, winner = max(
         height_groups.items(),
         key=lambda item: (
-            sum(sorted((_getnative_result_weight(row) for row in item[1]), reverse=True)[:3]),
+            sum(_getnative_result_weight(row) for row in item[1]),
             item[0],
         ),
     )
@@ -1224,6 +1235,12 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
 
                 def record_sample_result(image: str, result: dict) -> None:
                     recorded_images.add(image)
+                    if result.get("skip_reason") == "uniform_frame":
+                        _emit_encode_log_line(
+                            f'{self.t("[BluraySubtitle] getnative sample skipped (uniform frame): ")}'
+                            f'{os.path.basename(image)}'
+                        )
+                        return
                     if not bool(result.get("ok", False)):
                         _emit_encode_log_line(
                             f'{self.t("[BluraySubtitle] getnative sample failed: ")}{os.path.basename(image)} '

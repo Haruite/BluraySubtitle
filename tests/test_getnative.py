@@ -2,6 +2,9 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
+
+from PIL import Image
 
 from src.runtime.gui_runtime_split import vpy_edit_and_preview
 from src.runtime.services_split import encode_and_audio_tasks
@@ -109,6 +112,31 @@ class GetnativeWorkflowTests(unittest.TestCase):
             encode_and_audio_tasks._getnative_result_weight(self._result(892, 2.0)),
             encode_and_audio_tasks._getnative_result_weight(self._result(892, 200.0)),
         )
+
+        for alternatives in (
+            [self._result(1024, 35.48)],
+            [self._result(900, 1.932), self._result(900, 2.0)],
+        ):
+            with self.subTest(alternatives=alternatives):
+                consensus = [self._result(720, 2.0) for _ in range(7)]
+                kept = encode_and_audio_tasks._select_getnative_ranked_group(
+                    consensus + alternatives,
+                )
+                self.assertEqual(kept, consensus)
+
+    def test_uniform_sample_is_skipped_before_kernel_analysis(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            image_path = Path(temp_dir) / "white.png"
+            frame = Image.new("RGB", (512, 288), "white")
+            frame.putpixel((0, 0), (0, 0, 0))
+            frame.save(image_path)
+            with patch.object(encode_and_audio_tasks, "auto_getnative") as analyze:
+                result = encode_and_audio_tasks._estimate_native_from_image_worker(
+                    str(image_path), None,
+                )
+
+        analyze.assert_not_called()
+        self.assertEqual(result.get("skip_reason"), "uniform_frame")
 
     def test_vpy_processing_values_patch_only_top_level_numeric_assignments(self) -> None:
         patch_value = vpy_edit_and_preview.VpyEditPreviewMixin._patch_vpy_processing_value_in_text

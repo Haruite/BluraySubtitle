@@ -693,6 +693,7 @@ I18N_ZH_TO_EN = {
     '贴边=': 'edge_hit=',
     '单调比例=': 'dec_ratio=',
     'getnative 样本剔除（曲线形态）：': '[BluraySubtitle] getnative sample rejected by curve-shape: ',
+    'getnative 样本跳过（纯色画面）：': '[BluraySubtitle] getnative sample skipped (uniform frame): ',
     '单调比例原始=': 'decreasing_ratio=',
     'getnative 轮次完成：': '[BluraySubtitle] getnative round complete: ',
     '已评估总数=': 'evaluated_total=',

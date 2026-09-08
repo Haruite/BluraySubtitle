@@ -1239,3 +1239,12 @@ Date: 2026-09-09 Commit: `feat(gui): select alternate movie cuts by default`
 - Initial GUI command editors now contain one command per selected main MPLS in visible playlist order. Movie outputs receive a per-disc sequence suffix when multiple main playlists are selected, fixing duplicate automatic filenames within one disc.
 - Updated both README and disc-structure wiki versions and added a focused decision regression for alternate cuts, duplicate STNs, localized branches, and unrelated bonus content.
 - Verification: 9 targeted tests, Python compilation, i18n, mixin-contract, encoding, and whitespace checks passed. GUI regression selected two cuts with distinct names and matching durations for a dual-cut disc, while a same-duration branching disc kept one main output. Media execution and cross-platform regression remain part of the broader test campaign.
+
+## getnative Sample Agreement and Uniform Frames
+
+Date: 2026-09-09 Commit: `fix(getnative): retain all sample agreement and skip blank frames`
+
+- Removed the three-sample cap from height-group ranking. Every usable sample now contributes its bounded weight, preventing a larger group of consistent curves from losing its additional support against isolated higher-resolution estimates.
+- Skip spatially uniform RGB samples before kernel analysis, using the metric's five-pixel border exclusion. This prevents numerical noise on blank frames from producing valid-looking native-resolution estimates and avoids unnecessary kernel work.
+- Added a bilingual skip message, updated the encoding wiki, and extended critical regressions for group agreement and uniform-frame rejection.
+- Verification: seven focused tests and static checks passed. Replaying captured real-media results selected the supported height for both representative episodes, and their captured uniform frame was rejected before analysis. Fresh GUI and cross-platform regression continue in the broader test campaign.
