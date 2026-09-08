@@ -897,7 +897,8 @@ def verify_final_video_metadata(
     )
     if not checked_fields:
         return
-    actual_metadata = parse_source_color_metadata(probe_actual_encode_source(output_path))
+    output_source = probe_actual_encode_source(output_path)
+    actual_metadata = parse_source_color_metadata(output_source)
     aliases = {
         'tv': 'limited',
         'pc': 'full',
@@ -911,6 +912,9 @@ def verify_final_video_metadata(
         actual = getattr(actual_metadata, field_name)
         expected = aliases.get(str(expected or '').lower(), expected)
         actual = aliases.get(str(actual or '').lower(), actual)
+        if field_name == 'color_range' and actual is None and output_source.codec_name == 'h264':
+            # H.264 Annex E infers video_full_range_flag = 0 when VUI omits it.
+            actual = 'limited'
         if actual != expected:
             raise RuntimeError(
                 translate_text(
