@@ -2579,7 +2579,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         column_indexes = [i.column() for i in self.table2.selectionModel().selection().indexes()]
         if any(column_index == 1 for column_index in column_indexes):
             menu = QMenu()
-            item = menu.addAction('edit')
+            item = menu.addAction(self.t('Edit Subtitle'))
             screen_pos = self.table2.mapToGlobal(pos)
             action = menu.exec(screen_pos)
             if action == item:

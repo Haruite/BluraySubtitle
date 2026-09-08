@@ -53,17 +53,17 @@ class Ass:
                     if line.startswith(';'):
                         continue
                     try:  # parse each line defensively to avoid failing whole merge on malformed rows
-                        elements = ([line[:line.index(':')]]
-                                    + list(map(lambda _attr: _attr.strip(), line[line.index(':') + 1:].split(','))))
+                        record_type, fields = line.rstrip('\r\n').split(':', 1)
                         if not self.event_attrs:
-                            self.event_attrs += elements
+                            self.event_attrs = [record_type] + [attr.strip() for attr in fields.split(',')]
                         else:
                             event = Event()
-                            if len(elements) > len(self.event_attrs):  # subtitle text itself contains commas
-                                elements = (elements[:len(self.event_attrs) - 1] +
-                                            [','.join(elements[len(self.event_attrs) - 1:])])
+                            # Text is the final field; its commas and whitespace are subtitle content.
+                            elements = [record_type] + fields.split(',', len(self.event_attrs) - 2)
                             for i, attr in enumerate(elements):
                                 key = self.event_attrs[i]
+                                if key.lower() != 'text':
+                                    attr = attr.strip()
                                 if key.lower() in ('start', 'end'):  # convert Start/End timestamp text to timedelta
                                     attr = datetime.timedelta(
                                         seconds=reduce(lambda a, b: a * 60 + b, map(float, attr.split(':'))))
