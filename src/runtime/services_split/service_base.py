@@ -508,7 +508,7 @@ class BluraySubtitleServiceBase:
     def episodes_remux(self, request: RemuxRequest, cancel_event: Optional[threading.Event]=None) -> None:
         raise NotImplementedError
 
-    def generate_configuration_from_selected_mpls(self, selected_mpls: list[tuple[str, str]], sub_combo_index: Optional[dict[int, int]]=None, subtitle_index: Optional[int]=None, cancel_event: Optional[threading.Event]=None) -> dict[int, dict[str, int | str]]:
+    def generate_configuration_from_selected_mpls(self, selected_mpls: list[tuple[str, str]], subtitle_chapters: Optional[dict[int, tuple[str, int]]]=None, subtitle_index: Optional[int]=None, cancel_event: Optional[threading.Event]=None, subtitle_durations: Optional[dict[str, float]]=None) -> dict[int, dict[str, int | str]]:
         raise NotImplementedError
 
     def get_default_main_mpls(self, bluray_folder: str, checked: bool, movie_mode: bool=False) -> list[str]:

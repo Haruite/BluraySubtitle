@@ -817,6 +817,9 @@ class BluraySubtitleGuiBase(QWidget):
     def _streams_for_track_selection_dialog(streams: list[dict[str, object]]) -> list[dict[str, object]]:
         raise NotImplementedError
 
+    def _subtitle_durations_from_table(self) -> dict[str, float]:
+        raise NotImplementedError
+
     def _sync_chapter_checkbox_sp_for_mpls(self, mpls_path: str, bdmv_index: int):
         raise NotImplementedError
 

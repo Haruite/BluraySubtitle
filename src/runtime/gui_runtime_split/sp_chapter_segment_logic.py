@@ -1292,12 +1292,16 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                 if self.sub_check_state[row] == 2
             ]
             sub_files = [self.table2.item(row, 1).text() for row in selected_rows]
-            sub_combo_index = {}
+            subtitle_chapters = {}
+            bdmv_col = SUBTITLE_LABELS.index('bdmv_index')
             chapter_col = SUBTITLE_LABELS.index('chapter_index')
             for selected_index, row in enumerate(selected_rows):
                 w = self.table2.cellWidget(row, chapter_col)
                 if isinstance(w, QComboBox) and w.isEnabled():
-                    sub_combo_index[selected_index] = w.currentIndex() + 1
+                    mpls_item = self.table2.item(row, bdmv_col)
+                    subtitle_chapters[selected_index] = (
+                        str(mpls_item.data(Qt.ItemDataRole.UserRole) or ''), w.currentIndex() + 1,
+                    )
             bs = BluraySubtitle(
                 self.bdmv_folder_path.text(),
                 sub_files,
@@ -1307,7 +1311,8 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             )
             bs.bluray_folders = self._table1_bluray_folder_order()
             configuration = bs.generate_configuration_from_selected_mpls(
-                self.get_selected_mpls_no_ext(), sub_combo_index, subtitle_index,
+                self.get_selected_mpls_no_ext(), subtitle_chapters, subtitle_index,
+                subtitle_durations=self._subtitle_durations_from_table(),
             )
             self.on_configuration(configuration)
 

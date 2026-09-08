@@ -135,6 +135,7 @@ class Subtitle:
                     setattr(style_copy, 'Name', new_name)
                     k = style_key(style_copy)
                     if k in existing_style_keys:
+                        style_name_map[old_name] = new_name
                         new_name = ''
                         break
                 if not new_name:

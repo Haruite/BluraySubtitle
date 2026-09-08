@@ -35,6 +35,7 @@ from src.exports.utils import (
     print_terminal_line,
     print_tb_string_terminal,
     get_time_str,
+    parse_time_to_seconds,
     get_mpv_safe_path,
     print_exc_terminal,
     third_party_notices_markdown_path,
@@ -2520,6 +2521,19 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 pass
             run_command(['xdg-open', mpls_path])
 
+    def _subtitle_durations_from_table(self) -> dict[str, float]:
+        """Capture measured subtitle end times that move with their table rows."""
+        durations = {}
+        duration_column = SUBTITLE_LABELS.index('sub_duration')
+        for row in range(self.table2.rowCount()):
+            path_item = self.table2.item(row, 1)
+            duration_item = self.table2.item(row, duration_column)
+            if path_item and duration_item:
+                duration = parse_time_to_seconds(duration_item.text(), default=None)
+                if duration is not None:
+                    durations[path_item.text()] = float(duration)
+        return durations
+
     def _apply_configuration_after_subtitle_change(self, sub_files: list[str]) -> None:
         service = BluraySubtitle(
             self.bdmv_folder_path.text(), sub_files, self.checkbox1.isChecked(), None,
@@ -2529,7 +2543,11 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             configuration = self._generate_configuration_from_ui_inputs()
         else:
             service.bluray_folders = self._table1_bluray_folder_order()
-            configuration = service.generate_configuration_from_selected_mpls(self.get_selected_mpls_no_ext())
+            configuration = service.generate_configuration_from_selected_mpls(
+                self.get_selected_mpls_no_ext(),
+                subtitle_durations=self._subtitle_durations_from_table()
+                if self.get_selected_function_id() == 1 else None,
+            )
         self.on_configuration(configuration)
 
     def on_subtitle_drop(self):
@@ -2630,15 +2648,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         if self.table2.rowCount() == 0:
             return
         try:
-            # update row-specific computed columns
-            if self.get_selected_function_id() == 1:
-                if self._is_movie_mode():
-                    return
-                for i in range(self.table2.rowCount()):
-                    item = self.table2.item(i, 1)
-                    if item and os.path.exists(item.text()):
-                        self.table2.setItem(i, SUBTITLE_LABELS.index('sub_duration'),
-                                            QTableWidgetItem(get_time_str(Subtitle(item.text()).max_end_time())))
+            if self.get_selected_function_id() == 1 and self._is_movie_mode():
+                return
 
             if self.get_selected_function_id() in (3, 4, 5) and self._is_movie_mode():
                 return

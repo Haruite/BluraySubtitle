@@ -446,9 +446,10 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
             configuration.pop(key, None)
 
     def generate_configuration_from_selected_mpls(self, selected_mpls: list[tuple[str, str]],
-                                                  sub_combo_index: Optional[dict[int, int]] = None,
+                                                  subtitle_chapters: Optional[dict[int, tuple[str, int]]] = None,
                                                   subtitle_index: Optional[int] = None,
-                                                  cancel_event: Optional[threading.Event] = None
+                                                  cancel_event: Optional[threading.Event] = None,
+                                                  subtitle_durations: Optional[dict[str, float]] = None,
                                                   ) -> dict[int, dict[str, int | str]]:
         if not selected_mpls:
             return {}
@@ -459,16 +460,20 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
             or DEFAULT_APPROX_EPISODE_DURATION_SECONDS)
 
         if self.sub_files:
-            # Always use single process in main thread to avoid multiprocessing edge cases.
-            missing = [p for p in self.sub_files if p and p not in self._subtitle_cache]
+            subtitle_durations = subtitle_durations or {}
+            # Reuse captured GUI end times without parsing the subtitle content again.
+            missing = [p for p in self.sub_files
+                       if p and p not in self._subtitle_cache and p not in subtitle_durations]
             if missing:
-                # Use single-process loading directly in main thread.
                 for p in missing:
                     try:
                         self._subtitle_cache[p] = Subtitle(p)
                     except Exception as e:
                         print(f'Failed to load subtitle file ｢{p}｣: {str(e)}')
-            sub_max_end = [self._subtitle_cache[p].max_end_time() for p in self.sub_files]
+            sub_max_end = [
+                float(subtitle_durations[p]) if p in subtitle_durations else self._subtitle_cache[p].max_end_time()
+                for p in self.sub_files
+            ]
         else:
             sub_max_end = []
 
@@ -480,9 +485,12 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
             except Exception:
                 pass
 
-        if sub_combo_index:
-            chapter_index = sub_combo_index[sub_index]
+        if subtitle_chapters:
+            # Chapter numbers restart on each playlist; retain the captured source identity.
+            chapter_mpls, chapter_index = subtitle_chapters[sub_index]
             for folder, selected_mpls_no_ext in selected_mpls:
+                if self.sub_files and sub_index >= len(self.sub_files):
+                    break
                 if cancel_event and cancel_event.is_set():
                     raise TaskCancelled()
                 folder_n = os.path.normpath(str(folder))
@@ -496,21 +504,24 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
                 left_time = chapter.get_total_time()
                 sub_end_time = sub_max_end[sub_index] if self.sub_files else approx_end_time
                 for i, play_item_in_out_time in enumerate(chapter.in_out_time):
+                    if self.sub_files and sub_index >= len(self.sub_files):
+                        break
                     play_item_marks = chapter.mark_info.get(i)
-                    if sub_index <= subtitle_index and j == chapter_index:
+                    if (sub_index <= subtitle_index and j == chapter_index
+                            and selected_mpls_no_ext == chapter_mpls):
                         sub_end_time = offset + (sub_max_end[sub_index] if self.sub_files else approx_end_time)
                         configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls_no_ext,
                                                     'bdmv_index': bdmv_index, 'chapter_index': j,
                                                     'offset': get_time_str(offset),
                                                     'disc_output_name': disc_output_name}
                         sub_index += 1
-                        if sub_combo_index.get(sub_index):
-                            chapter_index = sub_combo_index[sub_index]
+                        if sub_index in subtitle_chapters:
+                            chapter_mpls, chapter_index = subtitle_chapters[sub_index]
                     elif sub_index > subtitle_index:
                         if offset > sub_end_time - 300 or offset == 0:
-                            if (((sub_index + 1 < len(self.sub_files)) if self.sub_files else True)
+                            if (((sub_index < len(self.sub_files)) if self.sub_files else True)
                                     and left_time > (
-                                    sub_max_end[sub_index + 1] if self.sub_files else approx_end_time) - 300):
+                                    sub_max_end[sub_index] if self.sub_files else approx_end_time) - 300):
                                 sub_end_time = offset + (sub_max_end[sub_index] if self.sub_files else approx_end_time)
                                 configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls_no_ext,
                                                             'bdmv_index': bdmv_index, 'chapter_index': j,
@@ -519,8 +530,11 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
                                 sub_index += 1
                     if play_item_marks:
                         for mark in play_item_marks:
+                            if self.sub_files and sub_index >= len(self.sub_files):
+                                break
                             time_shift = offset + (mark - play_item_in_out_time[1]) / 45000
-                            if sub_index <= subtitle_index and j == chapter_index:
+                            if (sub_index <= subtitle_index and j == chapter_index
+                                    and selected_mpls_no_ext == chapter_mpls):
                                 sub_end_time = time_shift + (
                                     sub_max_end[sub_index] if self.sub_files else approx_end_time)
                                 configuration[sub_index] = {'folder': folder, 'selected_mpls': selected_mpls_no_ext,
@@ -528,8 +542,8 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
                                                             'offset': get_time_str(time_shift),
                                                             'disc_output_name': disc_output_name}
                                 sub_index += 1
-                                if sub_combo_index.get(sub_index):
-                                    chapter_index = sub_combo_index[sub_index]
+                                if sub_index in subtitle_chapters:
+                                    chapter_mpls, chapter_index = subtitle_chapters[sub_index]
                             elif sub_index > subtitle_index:
                                 if time_shift > sub_end_time and (
                                         play_item_in_out_time[2] - mark) / 45000 > 1200:
