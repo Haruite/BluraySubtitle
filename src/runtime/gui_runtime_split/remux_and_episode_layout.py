@@ -202,7 +202,8 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 int(bdmv_index),
                 disc_count,
             )
-            if seq_tag:
+            # Captured movie output names already include any playlist suffix.
+            if seq_tag and not (self._is_movie_mode() and str(confs[0].get('output_name') or '').strip()):
                 def _inject_seq_into_output_path(text: str) -> str:
                     marker = '-o "'
                     p0 = text.find(marker)
@@ -1335,6 +1336,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             # start those dependent refreshes while table1 is still changing.
             if self._is_movie_mode():
                 self._refresh_movie_table2()
+                self._refresh_table1_remux_cmds()
             else:
                 self._full_refresh_remux_encode_tables_for_mode()
 
