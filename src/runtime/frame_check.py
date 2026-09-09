@@ -144,9 +144,14 @@ def _run_full_frame_check_process(
     if os.name == "nt":
         process_options["creationflags"] = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
     vspipe_command = [str(vspipe_executable), "--y4m", str(vpy_path), "-"]
+    # Y4M omits color metadata. Keep FFmpeg from converting one input through RGB;
+    # PSNR must compare the coded sample values, including out-of-range values.
+    sample_filter = (
+        "setparams=range=unspecified:colorspace=unknown,settb=AVTB,setpts=N"
+    )
     psnr_filter = (
-        "[0:v:0]settb=AVTB,setpts=N[reference];"
-        "[1:v:0]settb=AVTB,setpts=N[encoded];"
+        f"[0:v:0]{sample_filter}[reference];"
+        f"[1:v:0]{sample_filter}[encoded];"
         "[reference][encoded]psnr="
         "stats_file=-:eof_action=pass:repeatlast=0[checked]"
     )
