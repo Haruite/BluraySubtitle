@@ -44,7 +44,8 @@ def mpls_playlist_caches_clear() -> None:
 
 
 def _normalized_media_path(path: str) -> str:
-    return os.path.normcase(os.path.normpath(os.path.abspath(path)))
+    # Windows shares can be case-sensitive; preserve the spelling used for I/O.
+    return os.path.normpath(os.path.abspath(path))
 
 
 def _cached_m2ts_parser(m2ts_path: str) -> Optional[M2TS]:
