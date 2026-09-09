@@ -30,5 +30,10 @@ except ImportError:
 
 
 if __name__ == "__main__":
+    # Keep redirected Windows logs UTF-8, including frozen multiprocessing workers.
+    if sys.platform == "win32":
+        for stream in (sys.stdout, sys.stderr):
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="backslashreplace")
     multiprocessing.freeze_support()
     main()
