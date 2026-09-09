@@ -1110,6 +1110,12 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         } if not source_changed else {}
         if source_changed:
             self._bdmv_source_state_path = source_state_path
+            if self.get_selected_function_id() in (3, 4, 5):
+                # Output edits belong to the loaded source, not the next row at the same index.
+                self.table2.setRowCount(0)
+                self._last_configuration_34 = {}
+                self._movie_configuration = {}
+                self._selected_main_mpls_prev = set()
             self._available_track_selection_config = {}
             self._track_selection_config = {}
             self._track_convert_config = {}
