@@ -527,6 +527,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
     def completion(self):
         """Complete physical Blu-ray directory layouts after successful processing."""
         if self.checked:
+            self._progress(text='Completing Blu-ray folder layout')
             for folder in self.bluray_folders:
                 bdmv = os.path.join(folder, 'BDMV')
                 backup = os.path.join(bdmv, 'BACKUP')
@@ -540,7 +541,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                 for item in 'AUXDATA', 'BDJO', 'JAR', 'META':
                     if not os.path.exists(os.path.join(bdmv, item)):
                         os.mkdir(os.path.join(bdmv, item))
-        print_terminal_line('[BluraySubtitle] completion(): cleanup finished.')
+            print_terminal_line(self.t('[BluraySubtitle] Blu-ray folder layout completed.'))
 
     def _compute_mkv_id_to_mpls_track_signature_for_main_mpls(
             self,
@@ -1047,11 +1048,19 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
     ) -> list[tuple[int, str]]:
         """Execute the preflighted SP rows in visible order and require every planned output."""
         created_outputs: list[tuple[int, str]] = []
-        for job in jobs:
+        for job_index, job in enumerate(jobs, start=1):
             if cancel_event and cancel_event.is_set():
                 raise TaskCancelled()
             entry = job.entry
             output_path = job.output_path
+            progress_values = {
+                'current': job_index,
+                'total': len(jobs),
+                'name': os.path.basename(entry.output_name),
+            }
+            self._progress(text=self.t('Preparing SP {current}/{total}: {name}').format(
+                **progress_values
+            ))
             output_is_episode = bool(job.episode_main_mpls_path)
             is_image_output = (
                 output_path.lower().endswith('.png')
@@ -1135,6 +1144,9 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                     self._dovi_mux_plan = None
 
                 if output_is_episode:
+                    self._progress(text=self.t('Appending SP tracks {current}/{total}: {name}').format(
+                        **progress_values
+                    ))
                     language_overrides = dict(job.track_language_overrides)
                     episode_pid_slots = command_pid_slots(include_video=False)
                     episode_source_slots = command_source_slots(include_video=False)
@@ -1270,6 +1282,9 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                     continue
 
                 if is_image_output:
+                    self._progress(text=self.t('Exporting SP images {current}/{total}: {name}').format(
+                        **progress_values
+                    ))
                     image_sources = [
                         os.path.join(os.path.dirname(job.first_m2ts_path), filename)
                         for filename in entry.m2ts_files
@@ -1331,6 +1346,9 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
 
                 output_extension = os.path.splitext(output_path)[1].lower()
                 if output_extension not in ('.mkv', '.mka', '.mks'):
+                    self._progress(text=self.t('Extracting SP tracks {current}/{total}: {name}').format(
+                        **progress_values
+                    ))
                     if len(audio_tracks) == 1 and not subtitle_tracks:
                         audio_source = source_path
                         audio_track = audio_tracks[0]
@@ -1420,6 +1438,9 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                                 'Standalone audio output cannot preserve playlist gaps: {path}'
                             ).format(path=output_path))
                         if extraction_ok and target_codec in ('flac', 'aac', 'opus'):
+                            self._progress(text=self.t(
+                                'Converting SP audio {current}/{total} to {codec}: {name}'
+                            ).format(codec=target_codec.upper(), **progress_values))
                             track_info = next((
                                 row for row in self._read_m2ts_track_info(job.first_m2ts_path)
                                 if (
@@ -1462,6 +1483,9 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                         progress_cb(job.entry_index, output_path)
                     continue
 
+                self._progress(text=self.t('Muxing SP {current}/{total}: {name}').format(
+                    **progress_values
+                ))
                 output_folder = os.path.dirname(output_path)
                 os.makedirs(output_folder, exist_ok=True)
                 temporary_folder = tempfile.mkdtemp(prefix='_sp_mux_', dir=output_folder)
@@ -1699,6 +1723,10 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                         )
                     )
 
+                if use_mpls_chapters or job.track_language_overrides:
+                    self._progress(text=self.t('Updating Matroska metadata: {name}').format(
+                        name=progress_values['name']
+                    ))
                 if use_mpls_chapters:
                     propedit_command = [MKV_PROP_EDIT_PATH or 'mkvpropedit']
                     ui_language = mkvtoolnix_ui_language_arg().strip()

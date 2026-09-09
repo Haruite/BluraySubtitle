@@ -1227,6 +1227,9 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                                 path=expected_output
                             )
                         )
+                    self._progress(text=self.t('Writing chapters: {name}').format(
+                        name=os.path.basename(final_output)
+                    ))
                     chapter_index += 1
                     chapter_path = os.path.join(
                         temporary_directory, f'chapter-{chapter_index:04d}.txt'
@@ -1298,16 +1301,11 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         self._progress(400)
         completed_sp_jobs = 0
 
-        def report_sp_output(_entry_index: int, path: str) -> None:
+        def report_sp_output(_entry_index: int, _path: str) -> None:
             nonlocal completed_sp_jobs
             completed_sp_jobs += 1
             self._progress(
-                400 + int(completed_sp_jobs / max(len(sp_jobs), 1) * 100),
-                self.t('Muxing SP {current}/{total}: {name}').format(
-                    current=completed_sp_jobs,
-                    total=len(sp_jobs),
-                    name=os.path.basename(path),
-                ),
+                400 + int(completed_sp_jobs / max(len(sp_jobs), 1) * 100)
             )
 
         sp_outputs = self._build_sp_outputs(
@@ -1375,6 +1373,10 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 if request.clean_audio_tracks or request.convert_lossless_audio_to_flac:
                     for output_path, _subtitle_path, _subtitle_language in (
                             main_matroska_outputs + sp_matroska_outputs):
+                        self._progress(text=self.t('{operation}: {name}').format(
+                            operation=self.t('Inspecting media tracks'),
+                            name=os.path.basename(output_path),
+                        ))
                         validate_audio_conversion_tools(
                             output_path,
                             None,
@@ -1393,18 +1395,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                         self._progress(
                             progress_start + int(
                                 (output_index - 1) / len(output_group) * progress_span
-                            ),
-                            self.t(
-                                'Converting lossless audio to FLAC: {name}'
-                                if request.convert_lossless_audio_to_flac
-                                else (
-                                    'Checking silent and duplicate audio: {name}'
-                                    if request.clean_audio_tracks
-                                    else 'Muxing subtitle: {name}'
-                                )
-                            ).format(
-                                name=os.path.basename(output_path)
-                            ),
+                            )
                         )
                         mux_with_audio_conversion(
                             output_path,
@@ -1435,6 +1426,12 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                                 ).get(os.path.normcase(os.path.abspath(output_path)))
                             ),
                             write_audio_gaps=True,
+                            progress_callback=lambda operation, name=os.path.basename(output_path): self._progress(
+                                text=self.t('{operation}: {name}').format(
+                                    operation=operation,
+                                    name=name,
+                                )
+                            ),
                         )
                         self._progress(
                             progress_start + int(
@@ -2270,10 +2267,6 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 request.track_selection_config,
                 request.track_language_config or {},
             )
-            sp_original_name_by_entry_index = {
-                job.entry_index: os.path.basename(job.entry.output_name)
-                for job in sp_jobs
-            }
             os.makedirs(staging_disc_folder, exist_ok=True)
             main_stage_started = True
             self._build_main_episode_mkvs(
@@ -2288,19 +2281,11 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
 
             completed_sp_mux = 0
 
-            def report_sp_mux(entry_index: int, path: str) -> None:
+            def report_sp_mux(_entry_index: int, _path: str) -> None:
                 nonlocal completed_sp_mux
                 completed_sp_mux += 1
                 self._progress(
-                    160 + int(completed_sp_mux / max(len(sp_jobs), 1) * 40),
-                    self.t('Muxing SP {current}/{total}: {name}').format(
-                        current=completed_sp_mux,
-                        total=len(sp_jobs),
-                        name=sp_original_name_by_entry_index.get(
-                            entry_index,
-                            os.path.basename(path),
-                        ),
-                    ),
+                    160 + int(completed_sp_mux / max(len(sp_jobs), 1) * 40)
                 )
 
             created_sp_files = self._build_sp_outputs(
