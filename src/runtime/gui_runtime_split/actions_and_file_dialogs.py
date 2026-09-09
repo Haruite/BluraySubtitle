@@ -894,6 +894,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                         index_item = QTableWidgetItem(
                             ((len(str(len(this.subtitle.events)))) - len(str(i + 1))) * '0' + str(i + 1))
                         index_item.setFlags(index_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                        index_item.setData(Qt.ItemDataRole.UserRole, i)
                         this.table_widget.setItem(i, 0, index_item)
                         for j in range(len(this.keys)):
                             item = getattr(this.subtitle.events[i], this.keys[j])
@@ -915,6 +916,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     for i, line in enumerate(this.subtitle.lines):
                         index_item = QTableWidgetItem((m_len - len(str(line[0]))) * '0' + str(line[0]))
                         index_item.setFlags(index_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                        index_item.setData(Qt.ItemDataRole.UserRole, i)
                         this.table_widget.setItem(i, 0, index_item)
                         this.table_widget.setItem(i, 1, QTableWidgetItem(line[1]))
                         this.table_widget.setItem(i, 2, QTableWidgetItem(line[2]))
@@ -947,26 +949,22 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     if row_indexes:
                         this.altered = True
                     for i, row_index in enumerate(row_indexes):
-                        if hasattr(this.subtitle, 'lines'):
-                            this.subtitle.delete_lines.add(int(this.table_widget.item(row_index - i, 0).text()))
-                        else:
-                            this.subtitle.delete_lines.add(int(this.table_widget.item(row_index - i, 0).text()) - 1)
+                        source_row = this.table_widget.item(row_index - i, 0).data(Qt.ItemDataRole.UserRole)
+                        this.subtitle.delete_lines.add(int(source_row))
                         this.table_widget.removeRow(row_index - i)
 
             def on_subtitle_changed(this, item: QTableWidgetItem):
                 if item.column() == 0:
                     return
+                # Cue numbers can repeat; sorting and edits must keep the original row identity.
+                source_row = int(this.table_widget.item(item.row(), 0).data(Qt.ItemDataRole.UserRole))
                 if isinstance(this.subtitle, Ass):
-                    setattr(this.subtitle.events[int(this.table_widget.item(item.row(), 0).text()) - 1],
+                    setattr(this.subtitle.events[source_row],
                             this.keys[item.column() - 1], item.text())
                     this.altered = True
                 elif isinstance(this.subtitle, SRT):
-                    cue_number = int(this.table_widget.item(item.row(), 0).text())
-                    for line in this.subtitle.lines:
-                        if int(line[0]) == cue_number:
-                            line[item.column()] = item.text()
-                            this.altered = True
-                            break
+                    this.subtitle.lines[source_row][item.column()] = item.text()
+                    this.altered = True
 
             def save_subtitle(this):
                 if this.altered:

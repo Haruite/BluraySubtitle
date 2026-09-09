@@ -31,11 +31,11 @@ class SRT:
             self.lines.append(new_line)
 
     def dump_file(self, fp: _io.TextIOWrapper):
-        for line in self.lines:
-            if line[0] not in self.delete_lines:
-                fp.write(str(line[0]) + '\n')
-                fp.write(f'{line[1]} --> {line[2]}\n')
-                fp.write(line[3] + '\n\n')
+        output_lines = (line for index, line in enumerate(self.lines) if index not in self.delete_lines)
+        for number, line in enumerate(output_lines, 1):
+            fp.write(str(number) + '\n')
+            fp.write(f'{line[1]} --> {line[2]}\n')
+            fp.write(line[3] + '\n\n')
 
     def append_srt(self, other: 'SRT', shift_time: float):
         if not hasattr(other, 'lines') or not other.lines:
