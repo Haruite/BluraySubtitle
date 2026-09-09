@@ -407,7 +407,11 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             streams: list[dict[str, object]],
             pid_to_lang: Optional[dict[int, str]] = None
     ) -> tuple[list[str], list[str]]:
-        streams = streams or []
+        # Track zero must remain selectable for audio-only and subtitle-only sources.
+        streams = [
+            {**stream, 'index': '' if stream.get('index') is None else str(stream['index'])}
+            for stream in (streams or [])
+        ]
         pid_lang = pid_to_lang or {}
 
         def _parse_pid(raw_id: object) -> Optional[int]:

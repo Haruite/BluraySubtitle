@@ -1315,6 +1315,15 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             cancel_event=cancel_event,
             progress_cb=report_sp_output,
             audio_encoding=request.audio_encoding,
+            standalone_audio_targets={
+                job.entry_index: 'flac'
+                for job in sp_jobs
+                if (
+                    len(job.audio_tracks) == 1
+                    and not job.subtitle_tracks
+                    and os.path.splitext(job.output_path)[1].lower() == '.flac'
+                )
+            },
         )
         task_outputs = list(dict.fromkeys(
             main_outputs + [path for _entry_index, path in sp_outputs]
