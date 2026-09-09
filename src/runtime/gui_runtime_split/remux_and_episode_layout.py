@@ -1206,7 +1206,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                     table_widget.setRowCount(len(mpls_files))
                     mpls_n = 0
                     checked = False
-                    if self.get_selected_function_id() == 1:
+                    if self.get_selected_function_id() in (1, 2):
                         stream_dir = os.path.join(root, 'BDMV', 'STREAM')
                         if not os.path.isdir(stream_dir):
                             checked = True
