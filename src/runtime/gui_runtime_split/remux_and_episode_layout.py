@@ -1194,7 +1194,10 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                         if os.path.isdir(os.path.join(root, 'BDMV', 'PLAYLIST')):
                             sources.append((root, root))
                 prior_positions = {path: index for index, path in enumerate(previous_order)}
-                sources.sort(key=lambda source: prior_positions.get(os.path.normpath(source[1]), len(prior_positions)))
+                sources.sort(key=lambda source: (
+                    prior_positions.get(os.path.normpath(source[1]), len(prior_positions)),
+                    os.path.normpath(source[1]),
+                ))
                 self.table1.blockSignals(True)
                 self.table1.setRowCount(0)
                 self.table1.setRowCount(len(sources))
@@ -1279,7 +1282,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                         if (time.time() - start_ts) >= 2.0:
                             QCoreApplication.processEvents()
                     self._resize_table_columns_for_language(table_widget)
-                    source_item = FilePathTableWidgetItem(os.path.normpath(source_path))
+                    source_item = QTableWidgetItem(os.path.normpath(source_path))
                     source_item.setFlags((source_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                                          & ~Qt.ItemFlag.ItemIsEditable)
                     source_item.setCheckState(previous_checks.get(source_item.text(), Qt.CheckState.Checked))

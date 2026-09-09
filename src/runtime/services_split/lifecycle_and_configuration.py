@@ -605,6 +605,8 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
                         if play_item_duration_time / 45000 > 2600 and sub_end_time - time_shift < 1800:
                             k = j
                             for mark in play_item_marks[1:]:
+                                if sub_index + 1 >= len(self.sub_files):
+                                    break
                                 k += 1
                                 time_shift = (start_time + mark - play_item_in_out_time[1]) / 45000
                                 if time_shift > sub_end_time and (

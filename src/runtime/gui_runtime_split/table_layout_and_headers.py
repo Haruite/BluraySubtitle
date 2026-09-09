@@ -138,6 +138,8 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
 
     def _set_table_headers(self, table: QTableWidget, keys: list[str]):
         table.setProperty('columnKeys', list(keys))
+        if table is getattr(self, 'table1', None) and 'remux_cmd' in keys:
+            table.setColumnHidden(keys.index('remux_cmd'), self.get_selected_function_id() in (1, 2))
         try:
             display_keys = list(keys)
             # For table2 (remux/encode views), show the language column as sub_language.
