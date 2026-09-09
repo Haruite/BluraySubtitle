@@ -1248,3 +1248,10 @@ Date: 2026-09-09 Commit: `fix(getnative): retain all sample agreement and skip b
 - Skip spatially uniform RGB samples before kernel analysis, using the metric's five-pixel border exclusion. This prevents numerical noise on blank frames from producing valid-looking native-resolution estimates and avoids unnecessary kernel work.
 - Added a bilingual skip message, updated the encoding wiki, and extended critical regressions for group agreement and uniform-frame rejection.
 - Verification: seven focused tests and static checks passed. Replaying captured real-media results selected the supported height for both representative episodes, and their captured uniform frame was rejected before analysis. Fresh GUI and cross-platform regression continue in the broader test campaign.
+
+## Cross-platform Regression and Fixes
+
+Date: 2026-09-10 Commit range: `1c7eee0..9afd36d`
+
+- Completed representative GUI and real-media regressions for disc selection and ordering, alternate movie cuts, Remux/Encode, subtitles, chapters, and Windows/Docker. Fixed row-mapping errors during source changes and subtitle imports, standalone audio selection, implicit color conversion in FrameCheck, and misleading mux progress messages.
+- Reproduction details, fix commits, media validation, and the remaining MyGO channel-layout, Vulkan-environment, and mixed-HDR source limitations are documented in the [September 9–10 cross-platform regression record (Simplified Chinese)](../testing/2026-09-09-regression.zh-Hans.md).
