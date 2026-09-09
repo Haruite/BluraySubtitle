@@ -66,7 +66,7 @@ For parameters, filters, preview, and metadata limitations, see [Video Encoding 
 
 ### SP management
 
-Review the SP table after selecting main playlists and episodes, and deselect unwanted content. Track edits update output names and formats; matching commentary tracks can join the main content. See [SP selection, naming, and attachment rules](docs/wiki/Blu-ray-Disc-Structure.md#main-content-and-sp-in-this-project).
+Review the SP table after selecting main playlists and episodes, and deselect unwanted content. To Remux only SPs, deselect all main playlists and keep the desired SP rows selected. Track edits update output names and formats; matching commentary tracks can join the main content. See [SP selection, naming, and attachment rules](docs/wiki/Blu-ray-Disc-Structure.md#main-content-and-sp-in-this-project).
 
 ## Requirements
 

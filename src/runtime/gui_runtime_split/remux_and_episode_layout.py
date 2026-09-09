@@ -1357,8 +1357,6 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             find_mkvtoolnix()
 
             selected_mpls = self.get_selected_mpls_no_ext()
-            if not selected_mpls:
-                raise ValueError(self.t('Main MPLS is not selected'))
             normalized_selected_mpls: list[tuple[str, str]] = []
             for folder, mpls_no_extension in selected_mpls:
                 folder_path = os.path.normpath(str(folder or '').strip())
@@ -1370,7 +1368,11 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                     )
                 normalized_selected_mpls.append((folder_path, os.path.splitext(playlist_file)[0]))
 
-            configuration = self._configuration_for_service_run()
+            configuration = (
+                self._configuration_for_service_run()
+                if selected_mpls or self.table2.rowCount()
+                else {}
+            )
             sub_files = [
                 self.table2.item(row, 0).text() if self.table2.item(row, 0) else ''
                 for row in range(self.table2.rowCount())
@@ -1386,6 +1388,9 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 if hasattr(self, 'table3')
                 else []
             )
+            if not configuration and not any(
+                    entry.selected and entry.output_name for entry in sp_entries):
+                raise ValueError(self.t('Task configuration is empty'))
             if len(episode_output_names) != len(configuration):
                 raise ValueError(self.t(
                     'The number of episode output names ({name_count}) must match the task row count ({row_count})'

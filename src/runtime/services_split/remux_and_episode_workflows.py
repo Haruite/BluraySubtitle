@@ -119,8 +119,10 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
         if not os.path.exists(request.output_folder) and not os.path.isdir(output_parent):
             raise FileNotFoundError(translate_text('Output folder does not exist'))
         if not request.configuration:
-            raise ValueError(translate_text('Task configuration is empty'))
-        if not request.selected_mpls:
+            if request.selected_mpls or not any(
+                    entry.selected and entry.output_name for entry in request.sp_entries):
+                raise ValueError(translate_text('Task configuration is empty'))
+        elif not request.selected_mpls:
             raise ValueError(translate_text('Main MPLS is not selected'))
 
         configuration = {

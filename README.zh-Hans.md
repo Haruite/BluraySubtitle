@@ -66,7 +66,7 @@ BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 
 
 ### SP 管理
 
-完成主播放列表及分集选择后再检查 SP 表，取消不需要的内容。编辑轨道会更新输出名称和格式；匹配的评论音轨可以加入正片。详见 [SP 选择、命名与附加规则](docs/wiki/Blu-ray-Disc-Structure.zh-Hans.md#本项目中的正片与-sp)。
+完成主播放列表及分集选择后再检查 SP 表，取消不需要的内容。仅 Remux SP 时，取消所有主播放列表，只在 SP 表中保留所需行。编辑轨道会更新输出名称和格式；匹配的评论音轨可以加入正片。详见 [SP 选择、命名与附加规则](docs/wiki/Blu-ray-Disc-Structure.zh-Hans.md#本项目中的正片与-sp)。
 
 ## 依赖要求
 
