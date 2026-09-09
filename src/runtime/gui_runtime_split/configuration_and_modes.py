@@ -43,6 +43,10 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 if hasattr(self, 'approx_episode_minutes_combo') and self.approx_episode_minutes_combo:
                     self.approx_episode_minutes_combo.setEnabled(
                         self.series_mode_radio.isChecked() if hasattr(self, 'series_mode_radio') else True)
+                if hasattr(self, 'trim_copyright_tail_checkbox') and self.trim_copyright_tail_checkbox:
+                    self.trim_copyright_tail_checkbox.setVisible(self.get_selected_function_id() == 3)
+                if hasattr(self, 'mux_dolby_vision_checkbox') and self.mux_dolby_vision_checkbox:
+                    self.mux_dolby_vision_checkbox.setVisible(self.get_selected_function_id() == 3)
                 if hasattr(self, 'remux_flac_checkbox') and self.remux_flac_checkbox:
                     self.remux_flac_checkbox.setVisible(self.get_selected_function_id() == 3)
             except Exception:
