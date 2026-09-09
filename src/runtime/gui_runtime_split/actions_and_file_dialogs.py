@@ -300,6 +300,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 pass
 
         function_id = self.get_selected_function_id()
+        input_mode = getattr(self, '_encode_input_mode', 'bdmv')
         if function_id == 1:
             mode = 1
             title = 'Reading Subtitles'
@@ -409,6 +410,31 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             )
             cleanup()
             if not owns_current_scan:
+                return
+            if self.get_selected_function_id() != function_id or (
+                    function_id == 4
+                    and getattr(self, '_encode_input_mode', 'bdmv') != input_mode):
+                return
+            if function_id == 4 and input_mode == 'remux':
+                rows = payload.get('rows') or []
+                if len(rows) > self.table2.rowCount():
+                    self._show_error_dialog(self.t(
+                        'Subtitle file count ({subtitle_count}) exceeds '
+                        'the main output row count ({row_count}).'
+                    ).format(subtitle_count=len(rows), row_count=self.table2.rowCount()))
+                    return
+                # Attach subtitles to the visible source order without rebuilding its rows.
+                sorting_enabled = self.table2.isSortingEnabled()
+                self.table2.setSortingEnabled(False)
+                try:
+                    subtitle_column = ENCODE_REMUX_LABELS.index('sub_path')
+                    for i in range(self.table2.rowCount()):
+                        path = rows[i][0] if i < len(rows) else ''
+                        self.table2.setItem(i, subtitle_column, FilePathTableWidgetItem(path))
+                finally:
+                    self.table2.setSortingEnabled(sorting_enabled)
+                self._resize_table_columns_for_language(self.table2)
+                self._scroll_table_to_primary_column(self.table2)
                 return
             if payload.get('mode') == 1 and self._is_movie_mode():
                 self._refresh_movie_subtitle_table2(payload.get('rows') or [])
@@ -2549,6 +2575,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         self.on_configuration(configuration)
 
     def on_subtitle_drop(self):
+        if self.get_selected_function_id() == 4 and getattr(self, '_encode_input_mode', 'bdmv') == 'remux':
+            return
         try:
             if self.get_selected_function_id() in (3, 4, 5) and self._is_movie_mode():
                 self._refresh_movie_table2()
@@ -2625,6 +2653,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 self.table2.setItem(sub_index, offset_col, None)
 
     def on_subtitle_table_sorted(self, logicalIndex: int, order: Qt.SortOrder):
+        if self.get_selected_function_id() == 4 and getattr(self, '_encode_input_mode', 'bdmv') == 'remux':
+            return
         # Handle path column sorting based on which function is selected
         # For radio2 (mkv chapters), path is at index 0 (MKV_LABELS) - no configuration rebuild needed
         # For radio3/4, path is at index 0 (REMUX_LABELS / ENCODE_LABELS)

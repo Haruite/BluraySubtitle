@@ -57,6 +57,7 @@ See [audio formats and conversion targets](docs/wiki/Media-Formats-and-Dolby-Vis
 - Source CFR/VFR timing and audio/video synchronization are preserved. VPy processing must preserve frame correspondence; [prefix tests](#how-do-i-run-a-short-encode-test) are also supported.
 - Built-in presets are read-only. Manage user presets under **Advanced** or edit encoder parameters directly.
 - Each main/SP row can specify a VPy and per-track FLAC/AAC/Opus conversion. Subtitle modes are external, softsub, and hardsub; Remux sources also support chapter/attachment editing.
+- For Remux sources, subtitles from the selected folder fill the existing main rows in their current order. Check the mapping before encoding.
 - The generated VPy provides denoise, dehalo, dering, deband, and anti-aliasing strength controls.
 - Automatic getnative can use substantial time and memory and skips sources taller than 1080 pixels. Use the [getnative script](src/scripts/getnative_file.py) for higher-resolution analysis.
 - Review automatic cropping visually. Comparison images and frame-check reports are saved under `Compare` and `FrameCheck` in the output folder. Full frame checks may take several times the video's duration.

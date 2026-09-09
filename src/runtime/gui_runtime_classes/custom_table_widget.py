@@ -1,16 +1,19 @@
 from typing import Optional, Callable
 
-from PyQt6.QtGui import QDragMoveEvent, QDropEvent, QPaintEvent, QPainter, QColor
-from PyQt6.QtWidgets import QTableWidget, QWidget
+from PyQt6.QtCore import QModelIndex, Qt
+from PyQt6.QtGui import QDrag, QDragMoveEvent, QDropEvent, QPaintEvent, QPainter, QColor
+from PyQt6.QtWidgets import QAbstractItemView, QTableWidget, QWidget
 
 
 class CustomTableWidget(QTableWidget):
     def __init__(self, parent: Optional[QWidget]=None, on_drop: Optional[Callable]=None):
         super().__init__(parent)
-        self.setAcceptDrops(True)
-        self.setDragEnabled(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.setDragDropOverwriteMode(False)
+        self.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.setSelectionMode(self.selectionMode().MultiSelection)
         self.target_row = -1
+        self._drag_source_row = -1
         self.on_drop = on_drop
 
     def dragMoveEvent(self, event: QDragMoveEvent):
@@ -21,24 +24,46 @@ class CustomTableWidget(QTableWidget):
                 self.viewport().update()
             event.acceptProposedAction()
 
-    def dropEvent(self, event: QDropEvent):
-        if event.source() is self and event.mimeData().hasFormat('application/x-qabstractitemmodeldatalist'):
-            drag_row = self.currentRow()
-            drop_row = self.rowAt(int(event.position().y()))
-            if drop_row < 0:
-                drop_row = self.rowCount()
-            if drag_row != drop_row:
-                items = [self.takeItem(drag_row, col) for col in range(self.columnCount())]
-                self.insertRow(drop_row)
-                [self.setItem(drop_row, col, item) for col, item in enumerate(items) if item]
-                self.removeRow(drag_row if drag_row < drop_row else drag_row + 1)
-                self.target_row = -1
-                self.viewport().update()
-                event.acceptProposedAction()
-            event.accept()
+    def startDrag(self, supported_actions: Qt.DropAction) -> None:
+        self._drag_source_row = self.currentRow()
+        if self._drag_source_row < 0:
+            return
+        drag = QDrag(self)
+        drag.setMimeData(self.model().mimeData(self.selectedIndexes()))
+        try:
+            # The drop handler moves model rows; default drag cleanup would
+            # otherwise clear the items that now belong to the moved row.
+            drag.exec(Qt.DropAction.MoveAction)
+        finally:
+            self._drag_source_row = -1
+            self.target_row = -1
+            self.viewport().update()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        if event.source() is not self:
+            event.ignore()
+            return
+        source = self._drag_source_row if self._drag_source_row >= 0 else self.currentRow()
+        target = self.rowAt(int(event.position().y()))
+        if target < 0:
+            target = self.rowCount()
+        elif event.position().y() > self.rowViewportPosition(target) + self.rowHeight(target) / 2:
+            target += 1
+        if source < 0 or target in (source, source + 1):
+            event.ignore()
+            return
+        # Model moves preserve item data, persistent indexes and cell widgets.
+        if not self.model().moveRows(QModelIndex(), source, 1, QModelIndex(), target):
+            event.ignore()
+            return
+        self.setCurrentCell(target - 1 if source < target else target, 0)
+        self.horizontalHeader().setSortIndicatorShown(False)
+        self.target_row = -1
+        self.viewport().update()
+        event.setDropAction(Qt.DropAction.MoveAction)
+        event.accept()
+        if self.on_drop is not None:
             self.on_drop()
-        else:
-            super().dropEvent(event)
 
     def paintEvent(self, event: QPaintEvent):
         super().paintEvent(event)
