@@ -142,9 +142,9 @@ def _normalize_x264_extra_for_bit_depth(extra: list[str], bd: str) -> list[str]:
     return out
 
 
-def _emit_encode_log_line(message: str) -> None:
+def _emit_encode_log_line(message: str, *, translate: bool = True) -> None:
     try:
-        print_terminal_line(message)
+        print_terminal_line(message, translate=translate)
     except Exception:
         print(message, flush=True)
 
@@ -457,7 +457,8 @@ def _plan_automatic_encoder_metadata(
             encoder=encoder,
             parameters=' '.join(automatic_arguments),
         )
-        _emit_encode_log_line(f'[encode-source] {metadata_message}')
+        # The template is already translated; encoder options and paths are literal data.
+        _emit_encode_log_line(f'[encode-source] {metadata_message}', translate=False)
         service._progress(text=metadata_message)
     return (
         manual_arguments,

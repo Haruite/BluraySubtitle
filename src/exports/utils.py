@@ -514,8 +514,8 @@ def run_command(command, *, wait: bool = True, log_template: str = '', **kwargs)
         raise
 
 
-def print_terminal_line(message: str) -> None:
-    print(translate_text(message), file=_terminal_err_stream(), flush=True)
+def print_terminal_line(message: str, *, translate: bool = True) -> None:
+    print(translate_text(message) if translate else message, file=_terminal_err_stream(), flush=True)
 
 
 def print_exc_terminal() -> None:
