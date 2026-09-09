@@ -879,7 +879,7 @@ I18N_ZH_TO_EN = {
     'dovi_tool 退出，状态码为 {code}': 'dovi_tool exited with code {code}',
     '正在检查 Dolby Vision 增强层：{path}': 'Checking Dolby Vision enhancement layer: {path}',
     '压制已完成，画面由基础层生成。来源为 FEL 或无法识别的增强层，当前工具流程未利用其图像残差：{path}': 'Encoding completed from the base layer. The source has FEL or an unrecognized enhancement layer; this tool workflow did not use its image residuals: {path}',
-    'Dolby Vision 保留要求使用 10 位或 12 位输出的 x265': 'Dolby Vision preservation requires x265 with 10-bit or 12-bit output',
+    'Dolby Vision 保留要求使用 10 位输出的 x265': 'Dolby Vision preservation requires x265 with 10-bit output',
     'SVT-AV1 输出不会保留 Dolby Vision 元数据：{path}': 'Dolby Vision metadata will not be retained for SVT-AV1 output: {path}',
     '由于 VapourSynth 输出改变了色彩原色或传递特性，将不保留 Dolby Vision 元数据：{path}': 'Dolby Vision metadata will not be retained because the VapourSynth output changed color primaries or transfer characteristics: {path}',
     'Dolby Vision 混流失败：{error}': 'Dolby Vision mux failed: {error}',

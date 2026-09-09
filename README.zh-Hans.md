@@ -60,7 +60,7 @@ BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 
 - 默认 VPy 提供降噪、去光晕、去振铃、去色带和抗锯齿强度设置。
 - 自动 getnative 可能消耗较多时间和内存，并跳过高度超过 1080 像素的源；更高分辨率可用 [getnative 脚本](src/scripts/getnative_file.py)手动分析。
 - 自动裁剪需检查画面；对比图和坏帧报告分别保存在输出目录的 `Compare` 和 `FrameCheck` 中。完整坏帧检测耗时可能为视频时长的数倍。
-- 保留 Dolby Vision 须使用 x265 10/12-bit，同时支持 HDR10+。FEL 图像残差无法用于压制，完成后会提示；SVT-AV1 会提示不能保留 Dolby Vision。
+- 保留 Dolby Vision 须使用 x265 10-bit；x265 10/12-bit 支持 HDR10+。FEL 图像残差无法用于压制，完成后会提示；SVT-AV1 会提示不能保留 Dolby Vision。
 
 参数、滤镜、预览和元数据限制见[视频压制与 VapourSynth](docs/wiki/Video-Encoding-and-VapourSynth.zh-Hans.md)。
 

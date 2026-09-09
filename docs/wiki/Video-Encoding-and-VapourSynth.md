@@ -9,7 +9,7 @@ This page covers encoder settings and the VPy processing path. For container, co
 | Encoder | Supported output depth | Practical tradeoff |
 | --- | --- | --- |
 | x264 / AVC | 8-bit default; 10-bit sets `--profile high10` | Mature, generally faster, and broadly compatible with older players; usually needs more data than a well-configured newer codec |
-| x265 / HEVC | 8/10/12-bit; 10-bit default | Project default; better compression efficiency at greater encoding cost. Dolby Vision preservation requires 10/12-bit. |
+| x265 / HEVC | 8/10/12-bit; 10-bit default | Project default; better compression efficiency at greater encoding cost. Dolby Vision preservation requires 10-bit. |
 | SVT-AV1 | 8/10-bit for normal output | Modern compression and film-grain tools; check decoder support. The current workflow omits Dolby Vision with a task message. |
 
 Ten-bit SDR output can reduce quantization/banding problems but does not turn SDR into HDR. Codec background belongs in [Media Formats](Media-Formats-and-Dolby-Vision.md#video-formats).
@@ -182,7 +182,7 @@ The crop is even-aligned. Existing managed blocks are replaced or removed betwee
 
 ### Automatic HDR metadata handling
 
-For Dolby Vision input, x265 encodes the base layer with profile 8.1 RPU; FEL image residuals cannot be used. See [Dolby Vision layers](Media-Formats-and-Dolby-Vision.md#dolby-vision-fundamentals) for MEL/FEL and conversion conditions, and the [encoder comparison](#choosing-h264-h265-or-av1) for encoder and bit-depth choices.
+For Dolby Vision input, x265 10-bit encodes the base layer with profile 8.1 RPU; FEL image residuals cannot be used. Profile 8 requires an HEVC Main10 base layer, as specified in [Dolby's profile table, section 3.1](https://professional.dolby.com/siteassets/content-creation/dolby-vision-for-content-creators/dolbyvisioninmpegdashspecification_v2_0_public_20190107.pdf). See [Dolby Vision layers](Media-Formats-and-Dolby-Vision.md#dolby-vision-fundamentals) for MEL/FEL and conversion conditions, and the [encoder comparison](#choosing-h264-h265-or-av1) for encoder and bit-depth choices.
 
 Before starting the encoder, BluraySubtitle samples output 0's first, middle, and last frames. Stable `_ColorRange`, `_Primaries`, `_Transfer`, `_Matrix`, and `_ChromaLocation` properties take precedence over source metadata; missing properties fall back to the source. The row stops if the sampled values differ.
 

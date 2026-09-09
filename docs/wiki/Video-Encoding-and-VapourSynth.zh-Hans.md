@@ -9,7 +9,7 @@
 | 编码器 | 输出位深 | 实际取舍 |
 | --- | --- | --- |
 | x264 / AVC | 默认 8-bit；10-bit 使用 `--profile high10` | 成熟、通常更快，对旧播放器兼容较广；同等效果通常比合理配置的新编码需要更多数据 |
-| x265 / HEVC | 8/10/12-bit，默认 10-bit | 项目默认；以更多编码计算换取压缩效率，保留 Dolby Vision 须使用 10/12-bit |
+| x265 / HEVC | 8/10/12-bit，默认 10-bit | 项目默认；以更多编码计算换取压缩效率，保留 Dolby Vision 须使用 10-bit |
 | SVT-AV1 | 正常输出使用 8/10-bit | 较新的压缩和胶片颗粒工具，需确认解码支持；当前流程会提示并省略 Dolby Vision |
 
 10-bit SDR 输出可减轻量化／色带问题，但不会把 SDR 变成 HDR。编码背景见[媒体格式](Media-Formats-and-Dolby-Vision.zh-Hans.md#视频格式)。
@@ -180,7 +180,7 @@ Encode 的五项控制在启动时替换默认 VPy 的 `denoise_strength`、`deh
 
 ### 自动 HDR 元数据处理
 
-x265 对 Dolby Vision 输入准备基础层和 profile 8.1 RPU 供编码使用；FEL 图像残差无法利用。MEL／FEL 的含义和转换条件见 [Dolby Vision 分层](Media-Formats-and-Dolby-Vision.zh-Hans.md#dolby-vision-基础)，编码器与位深选择见[本页编码器对照](#选择-h264h265-还是-av1)。
+x265 10-bit 对 Dolby Vision 输入准备基础层和 profile 8.1 RPU 供编码使用；FEL 图像残差无法利用。Profile 8 要求 HEVC Main10 基础层，见 [Dolby 规范第 3.1 节的配置表](https://professional.dolby.com/siteassets/content-creation/dolby-vision-for-content-creators/dolbyvisioninmpegdashspecification_v2_0_public_20190107.pdf)。MEL／FEL 的含义和转换条件见 [Dolby Vision 分层](Media-Formats-and-Dolby-Vision.zh-Hans.md#dolby-vision-基础)，编码器与位深选择见[本页编码器对照](#选择-h264h265-还是-av1)。
 
 启动编码器前，BluraySubtitle 会抽查输出 0 的首帧、中间帧和末帧。稳定的 `_ColorRange`、`_Primaries`、`_Transfer`、`_Matrix` 和 `_ChromaLocation` 属性优先于来源元数据，缺失属性则回退到来源；抽查值不一致时当前行会停止。
 

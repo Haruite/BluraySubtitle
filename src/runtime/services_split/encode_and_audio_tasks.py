@@ -755,8 +755,8 @@ def _run_vspipe_svt_win_tempfile_encode(
 
 
 def encode_dovi_preservation_supported(tool: str, encode_bit_depth: str) -> bool:
-    """Return whether the current tools can inject Dolby Vision into the encoded stream."""
-    return tool == 'x265' and int(encode_bit_depth) >= 10
+    """Return whether the output meets Dolby Vision profile 8.1's Main10 requirement."""
+    return tool == 'x265' and int(encode_bit_depth) == 10
 
 
 def encode_dovi_preflight_mkv_paths(
@@ -778,7 +778,7 @@ def encode_dovi_preflight_mkv_paths(
         return None
     if not encode_dovi_preservation_supported(encoder, bit_depth):
         return translate_text(
-            'Dolby Vision preservation requires x265 with 10-bit or 12-bit output'
+            'Dolby Vision preservation requires x265 with 10-bit output'
         )
     if not dolby_vision_tool_path():
         return translate_text('dovi_tool executable does not exist')
@@ -1515,7 +1515,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                     if not encode_dovi_preservation_supported(encoder, bd):
                         print(
                             f'[encode-dovi] '
-                            f'{translate_text("Dolby Vision preservation requires x265 with 10-bit or 12-bit output")} '
+                            f'{translate_text("Dolby Vision preservation requires x265 with 10-bit output")} '
                             f'({os.path.basename(src_mkv)})',
                             flush=True,
                         )

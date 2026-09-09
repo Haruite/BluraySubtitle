@@ -60,7 +60,7 @@ See [audio formats and conversion targets](docs/wiki/Media-Formats-and-Dolby-Vis
 - The generated VPy provides denoise, dehalo, dering, deband, and anti-aliasing strength controls.
 - Automatic getnative can use substantial time and memory and skips sources taller than 1080 pixels. Use the [getnative script](src/scripts/getnative_file.py) for higher-resolution analysis.
 - Review automatic cropping visually. Comparison images and frame-check reports are saved under `Compare` and `FrameCheck` in the output folder. Full frame checks may take several times the video's duration.
-- Use x265 10/12-bit to preserve Dolby Vision; it also supports HDR10+. FEL image residuals cannot be used for encoding and are reported at completion; SVT-AV1 reports that Dolby Vision cannot be retained.
+- Use x265 10-bit to preserve Dolby Vision; x265 10/12-bit supports HDR10+. FEL image residuals cannot be used for encoding and are reported at completion; SVT-AV1 reports that Dolby Vision cannot be retained.
 
 For parameters, filters, preview, and metadata limitations, see [Video Encoding and VapourSynth](docs/wiki/Video-Encoding-and-VapourSynth.md).
 
