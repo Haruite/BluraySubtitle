@@ -142,7 +142,8 @@ load_configured_tool_paths() {
   command -v python3 >/dev/null 2>&1 || die "$(msg 'python3 is required to read settings.py' '读取 settings.py 需要 python3')"
 
   local output name value count=0
-  output="$(python3 - "$SETTINGS_FILE" <<'PY'
+  # Use -c so shell IDEs can parse this command substitution reliably.
+  output="$(python3 -c '
 import os
 import runpy
 import sys
@@ -176,8 +177,7 @@ for name in names:
     if any(character in value for character in "\r\n\t"):
         raise SystemExit(f"{name} contains an unsupported control character")
     print(f"{name}\t{value}")
-PY
-)" || die "$(msg 'Failed to load configured Linux tool paths from settings.py' '无法从 settings.py 读取 Linux 工具路径')"
+' "$SETTINGS_FILE")" || die "$(msg 'Failed to load configured Linux tool paths from settings.py' '无法从 settings.py 读取 Linux 工具路径')"
 
   while IFS=$'\t' read -r name value; do
     [[ -n "$name" && -n "$value" ]] || continue
