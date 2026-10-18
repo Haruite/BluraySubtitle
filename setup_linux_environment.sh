@@ -628,8 +628,9 @@ install_mkvtoolnix() {
 
   log "$(msg 'Installing build dependencies' '安装编译所需基础工具')"
   apt_update
+  # Boost.System headers are in libboost-dev; Boost >= 1.89 has no separate library.
   apt_install build-essential docbook-xsl libx11-xcb-dev libglu1-mesa-dev \
-  libboost-date-time-dev libboost-dev libboost-filesystem-dev libboost-math-dev libboost-regex-dev libboost-system-dev \
+  libboost-date-time-dev libboost-dev libboost-filesystem-dev libboost-math-dev libboost-regex-dev \
   libbz2-dev libcmark-dev libdvdread-dev libflac-dev libfmt-dev libgmp-dev libgtest-dev liblzo2-dev libmagic-dev \
   libogg-dev libpcre2-8-0 libpcre2-dev libqt6svg6-dev libvorbis-dev \
   nlohmann-json3-dev pkg-config po4a qt6-base-dev qt6-base-dev-tools qt6-multimedia-dev \
