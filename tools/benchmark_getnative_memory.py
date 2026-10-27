@@ -16,8 +16,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
-from src.core.settings import PLUGIN_PATH
-from src.vs_tools.getnative import _resolve_getnative_vpy_path, _resolve_vspipe
+from src.vs_tools.getnative import _VapourSynthAnalysis
 
 
 def _working_set_bytes(process_id: int) -> int:
@@ -62,10 +61,11 @@ def _working_set_bytes(process_id: int) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Measure one getnative VSPipe process peak working set.")
+    parser = argparse.ArgumentParser(description="Measure one getnative Python worker peak working set.")
     parser.add_argument("image", help="Full-resolution PNG sample used by getnative.")
     parser.add_argument("--kernels", type=int, default=1, choices=range(1, 17), metavar="1-16")
     parser.add_argument("--threads", type=int, default=1)
+    parser.add_argument("--worker-output", type=Path, help=argparse.SUPPRESS)
     parser.add_argument(
         "--phase",
         choices=("kernels", "final"),
@@ -80,22 +80,6 @@ def main() -> int:
     min_height = max(240, int(source_height * 0.40))
     max_height = min(source_height - 2, int(source_height * 0.98))
 
-    output_handle, output_json = tempfile.mkstemp(prefix="bluraysub_getnative_memory_", suffix=".json")
-    os.close(output_handle)
-    vspipe_executable, base_environment = _resolve_vspipe()
-    environment = dict(base_environment or os.environ.copy())
-    environment["BLURAYSUB_PLUGIN_PATH"] = str(PLUGIN_PATH or "")
-    for thread_environment_name in (
-        "OMP_NUM_THREADS",
-        "OPENBLAS_NUM_THREADS",
-        "MKL_NUM_THREADS",
-        "NUMEXPR_NUM_THREADS",
-        "VECLIB_MAXIMUM_THREADS",
-    ):
-        environment[thread_environment_name] = "1"
-    environment["BLURAYSUB_GETNATIVE_INPUT_PNG"] = image_path
-    environment["BLURAYSUB_GETNATIVE_OUTPUT_JSON"] = output_json
-    environment["BLURAYSUB_GETNATIVE_VS_THREADS"] = str(max(1, int(args.threads)))
     if args.phase == "final":
         params = {
             "mode": "collect_curve",
@@ -116,13 +100,35 @@ def main() -> int:
             "early_stop_patience": 30,
             "two_stage": True,
         }
-    environment["BLURAYSUB_GETNATIVE_PARAMS_JSON"] = json.dumps(params)
+    if args.worker_output:
+        native = _VapourSynthAnalysis(image_path)
+        if args.phase == "final":
+            payload = native._collect_curve_mode(native.clip, params)
+        else:
+            payload = native._collect_curves_mode(native.clip, params)
+        args.worker_output.write_text(json.dumps(payload), encoding="utf-8")
+        return 0
+
+    output_handle, output_json = tempfile.mkstemp(prefix="bluraysub_getnative_memory_", suffix=".json")
+    os.close(output_handle)
+    environment = os.environ.copy()
+    for thread_environment_name in (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+    ):
+        environment[thread_environment_name] = "1"
+    environment["BLURAYSUB_GETNATIVE_VS_THREADS"] = str(max(1, int(args.threads)))
     creation_flags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if sys.platform == "win32" else 0
     started = time.perf_counter()
     peak_working_set = 0
     try:
         process = subprocess.Popen(
-            [vspipe_executable, _resolve_getnative_vpy_path(), "-"],
+            [sys.executable, str(Path(__file__).resolve()), image_path,
+             "--phase", args.phase, "--kernels", str(args.kernels),
+             "--threads", str(args.threads), "--worker-output", output_json],
             env=environment,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
@@ -135,10 +141,10 @@ def main() -> int:
         _, stderr = process.communicate()
         peak_working_set = max(peak_working_set, _working_set_bytes(process.pid))
         if process.returncode != 0:
-            raise RuntimeError(f"vspipe failed ({process.returncode}): {stderr.strip()}")
+            raise RuntimeError(f"getnative worker failed ({process.returncode}): {stderr.strip()}")
         payload = json.loads(Path(output_json).read_text(encoding="utf-8"))
-        if not payload.get("ok"):
-            raise RuntimeError(f"getnative.vpy failed: {payload}")
+        if not payload:
+            raise RuntimeError("getnative worker returned an empty result")
         measured_mib = peak_working_set / 1024**2
         print(
             json.dumps(

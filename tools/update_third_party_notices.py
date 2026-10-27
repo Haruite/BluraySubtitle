@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from importlib.metadata import version
 import json
 from pathlib import Path
+import platform
 import re
 import subprocess
 from typing import Mapping
@@ -69,12 +71,9 @@ def generate_third_party_notices(
         vapoursynth_root / "vapoursynth-classic-version.txt"
     )
     classic_release, classic_api = classic_version.split(".", 1)
-    python_state_path = vapoursynth_root / "python-embed-version.json"
-    if not python_state_path.is_file():
-        raise FileNotFoundError(f"Missing bundled software version marker: {python_state_path}")
-    python_version = str(
-        json.loads(python_state_path.read_text(encoding="utf-8-sig"))["python_version"]
-    )
+    dependencies = json.loads(
+        (vapoursynth_root / "vapoursynth-build.json").read_text(encoding="utf-8-sig")
+    )["dependencies"]
 
     versions = {
         "SEVEN_ZIP_VERSION": _command_version(
@@ -124,7 +123,12 @@ def generate_third_party_notices(
             rf"\bv({VERSION})",
         ),
         "VAPOURSYNTH_CLASSIC_VERSION": f"R{classic_release}.A{classic_api}",
-        "PYTHON_VERSION": python_version,
+        "PYTHON_VERSION": platform.python_version(),
+        "NUMPY_VERSION": version("numpy"),
+        "ZIMG_REVISION": dependencies["zimg"],
+        "LIBP2P_REVISION": dependencies["libp2p"],
+        "MIMALLOC_VERSION": dependencies["mimalloc"],
+        "AVISYNTHPLUS_VERSION": dependencies["AviSynthPlus"],
         "VAPOURSYNTH_TOOLS_VERSION": _marker(
             vapoursynth_root / "vapoursynth-tools-version.txt"
         ),

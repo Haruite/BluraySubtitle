@@ -130,10 +130,12 @@ Every sample already launched is allowed to finish, and every kernel and sample 
 
 #### What one sample analyzes
 
-The installed system Python coordinates extraction, processes, and final ranking. The portable Python 3.13 VapourSynth environment runs `getnative.vpy`, which converts the PNG sample from RGB to BT.709 grayscale and evaluates all 16 inverse-scaling candidates: bilinear; eight bicubic parameter sets; Lanczos with 2, 3, 4, and 5 taps; and Spline16, Spline36, and Spline64. Each candidate descales the frame to a trial height, scales it back to the source dimensions, and measures the reconstruction error. The vertical search range is normally 40% through 98% of the source height.
+`getnative.py` coordinates extraction, sample workers, native VapourSynth graphs, and final ranking in the application's Python environment. Each worker converts its PNG sample from RGB to BT.709 grayscale and evaluates all 16 inverse-scaling candidates: bilinear; eight bicubic parameter sets; Lanczos with 2, 3, 4, and 5 taps; and Spline16, Spline36, and Spline64. Each candidate descales the frame to a trial height, scales it back to the source dimensions, and measures the reconstruction error. The vertical search range is normally 40% through 98% of the source height.
+
+Windows setup compiles VapourSynth Classic and installs its binding into the selected system Python. The packaged application and VSScript use one bundled CPython runtime and NumPy package. Re-run setup and rebuild the application after changing the system Python minor version.
 
 For speed, every kernel first receives a centered half-size, step-4 coarse scan and then a full-frame 1p scan around the best coarse height. The first three priority kernels always reach the fine scan. After that, a kernel whose like-for-like coarse score is below 45% of the best coarse score may skip its fine scan, while still reporting the coarse result. After all kernels have reported, the winning kernel is checked again with a full-frame step-4 pass followed by a full-frame ±20p, 1p scan.
-Each VSPipe process uses one VapourSynth frame worker and a 256 MiB frame-cache ceiling to control concurrent memory growth.
+Each sample worker uses one VapourSynth frame worker and a 256 MiB frame-cache ceiling to control concurrent memory growth.
 
 #### Curve and multi-frame selection
 

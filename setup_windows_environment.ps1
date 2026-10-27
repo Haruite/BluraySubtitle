@@ -67,6 +67,7 @@ $script:Utf8Encoding = New-Object Text.UTF8Encoding($false)
 [Console]::OutputEncoding = $script:Utf8Encoding
 $OutputEncoding = $script:Utf8Encoding
 
+$script:SetupDirectory = $PSScriptRoot
 $script:SelectedLanguage = "en"
 $script:SystemTempRoot = ""
 $script:TempRoot = ""
@@ -137,7 +138,6 @@ $script:ToolPaths = [ordered]@{
     FdkAac = "C:\Software\fdkaac.exe"
     LibassVersion = "C:\Software\libass-version.txt"
     VapourSynthRoot = "C:\Software\vapoursynth"
-    VapourSynthPython = "C:\Software\vapoursynth\python.exe"
     VapourSynthSitePackages = "C:\Software\vapoursynth\Lib\site-packages"
     VapourSynthPlugins = "C:\Software\vapoursynth\vapoursynth64\plugins"
     VsPipe = "C:\Software\vapoursynth\vspipe.exe"
@@ -163,10 +163,14 @@ $script:RequiredVapourSynthPlugins = @(
 )
 $script:RequiredVapourSynthScripts = @(
     "havsfunc.py",
+    "muvsfunc.py",
     "mvsfunc.py"
 )
 $script:PythonPackages = @(
     [pscustomobject]@{ Distribution = "pip"; Import = "import pip" },
+    [pscustomobject]@{ Distribution = "setuptools"; Import = "import setuptools" },
+    [pscustomobject]@{ Distribution = "wheel"; Import = "import wheel" },
+    [pscustomobject]@{ Distribution = "Cython"; Import = "import Cython" },
     [pscustomobject]@{ Distribution = "numpy"; Import = "import numpy" },
     [pscustomobject]@{ Distribution = "pycountry"; Import = "import pycountry" },
     [pscustomobject]@{ Distribution = "PyQt6"; Import = "from PyQt6 import QtCore" },
@@ -894,13 +898,11 @@ function Get-PythonStableVersions {
 
 function Get-PythonWindowsRelease {
     param(
-        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Versions,
-        [switch]$Embeddable
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Versions
     )
 
-    $suffix = $(if ($Embeddable) { "embed-amd64.zip" } else { "amd64.exe" })
     foreach ($version in $Versions) {
-        $name = "python-$version-$suffix"
+        $name = "python-$version-amd64.exe"
         $releaseUri = [Uri]"https://www.python.org/ftp/python/$version/"
         $files = Get-SetupTextFromUri -Uri $releaseUri -CacheName "python-$version-files.html"
         # Security-only releases can omit Windows binaries.
@@ -3263,7 +3265,7 @@ function Test-Libass {
     }
 }
 function Get-VapourSynthClassicRelease {
-    $cacheKey = "github:vapoursynth-classic:latest-x64"
+    $cacheKey = "github:vapoursynth-classic:latest-source"
     if ($script:ReleaseCache.Contains($cacheKey)) {
         return $script:ReleaseCache[$cacheKey]
     }
@@ -3287,24 +3289,12 @@ function Get-VapourSynthClassicRelease {
                 -not [int]::TryParse($tag.Substring($separatorIndex + 2), [ref]$apiNumber)) {
                 continue
             }
-            $assets = @($release.assets | Where-Object { [string]$_.name -ieq "release-x64.zip" })
-            if ($assets.Count -ne 1) {
-                continue
-            }
-            $asset = $assets[0]
-            $sha256 = ""
-            $digest = [string]$asset.digest
-            if ($digest.StartsWith("sha256:", [StringComparison]::OrdinalIgnoreCase)) {
-                $sha256 = $digest.Substring(7)
-            }
             [pscustomobject]@{
                 Version = "$releaseNumber.$apiNumber"
                 Tag = $tag
                 SortVersion = New-Object Version($releaseNumber, $apiNumber)
-                Name = "vapoursynth-classic-$tag-x64.zip"
-                Uri = [Uri]$asset.browser_download_url
-                Sha256 = $sha256
-                Size = [long]$asset.size
+                Name = "vapoursynth-classic-$tag-source.zip"
+                Uri = [Uri]"https://codeload.github.com/AmusementClub/vapoursynth-classic/zip/refs/tags/$tag"
             }
         }
     )
@@ -3318,19 +3308,47 @@ function Get-VapourSynthClassicRelease {
     return $result
 }
 
+function Get-VapourSynthSourceDependencies {
+    $cacheKey = "vapoursynth-source-dependencies"
+    if ($script:ReleaseCache.Contains($cacheKey)) {
+        return $script:ReleaseCache[$cacheKey]
+    }
+    $dependencies = [ordered]@{}
+    # Classic's resize integration uses the upstream v3.0 compatibility branch.
+    foreach ($dependency in @(
+        @{ Name = "zimg"; Repository = "AmusementClub/zimg"; Ref = "v3.0" },
+        @{ Name = "libp2p"; Repository = "sekrit-twc/libp2p"; Ref = "HEAD" }
+    )) {
+        $repository = $dependency.Repository
+        $commit = Get-SetupJsonFromUri -Uri ([Uri]"https://api.github.com/repos/$repository/commits/$($dependency.Ref)") -CacheName "vapoursynth-$($dependency.Name)-commit.json"
+        $sha = [string]$commit.sha
+        $dependencies[$dependency.Name] = [pscustomobject]@{
+            Version = $sha
+            Name = "vapoursynth-$($dependency.Name)-$sha.zip"
+            Uri = [Uri]"https://codeload.github.com/$repository/zip/$sha"
+        }
+    }
+    foreach ($dependency in @(
+        @{ Name = "mimalloc"; Repository = "microsoft/mimalloc" },
+        @{ Name = "AviSynthPlus"; Repository = "AviSynth/AviSynthPlus" }
+    )) {
+        $dependencies[$dependency.Name] = Get-GitHubLatestTaggedSource -Repository $dependency.Repository -TagPattern '^v(?<version>[0-9]+\.[0-9]+\.[0-9]+)$' -ArchiveBaseName "vapoursynth-$($dependency.Name)"
+    }
+    $script:ReleaseCache[$cacheKey] = $dependencies
+    return $dependencies
+}
+
 function Get-InstalledVapourSynthClassicVersion {
     $marker = Join-Path $script:ToolPaths.VapourSynthRoot "vapoursynth-classic-version.txt"
-    $requiredFiles = @(
+    foreach ($file in @(
+        $marker,
+        (Join-Path $script:ToolPaths.VapourSynthRoot "vapoursynth-build.json"),
+        (Join-Path $script:ToolPaths.VapourSynthRoot "python-runtime.ini"),
         $script:ToolPaths.VsPipe,
         (Join-Path $script:ToolPaths.VapourSynthRoot "VapourSynth.dll"),
         (Join-Path $script:ToolPaths.VapourSynthRoot "VSScript.dll"),
-        (Join-Path $script:ToolPaths.VapourSynthRoot "vapoursynth.cp313-win_amd64.pyd"),
         (Join-Path $script:ToolPaths.VapourSynthRoot "vapoursynth64\coreplugins\RemoveGrainVS.dll")
-    )
-    if (-not (Test-Path -LiteralPath $marker -PathType Leaf)) {
-        return ""
-    }
-    foreach ($file in $requiredFiles) {
+    )) {
         if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
             return ""
         }
@@ -3344,229 +3362,63 @@ function Install-VapourSynthClassic {
     $release = Get-VapourSynthClassicRelease
     $archive = Join-Path $script:TempRoot $release.Name
     $extracted = Join-Path $script:TempRoot "vapoursynth-classic"
-    Invoke-SetupDownload `
-        -Uri $release.Uri `
-        -Destination $archive `
-        -Sha256 $release.Sha256 `
-        -ExpectedSize $release.Size | Out-Null
+    Invoke-SetupDownload -Uri $release.Uri -Destination $archive | Out-Null
     Expand-SetupZip -Archive $archive -Destination $extracted
-    $vspipe = Get-ChildItem -LiteralPath $extracted -Filter "VSPipe.exe" -File -Recurse |
-        Select-Object -First 1
-    if ($null -eq $vspipe) {
-        throw (Get-SetupText `
-            "VSPipe.exe is missing from the vapoursynth-classic archive." `
-            "vapoursynth-classic 压缩包中缺少 VSPipe.exe。")
+    $source = (Get-ChildItem -LiteralPath $extracted -Directory | Select-Object -First 1).FullName
+    $dependencies = Get-VapourSynthSourceDependencies
+    $dependencyVersions = [ordered]@{}
+    foreach ($name in $dependencies.Keys) {
+        $dependency = $dependencies[$name]
+        $dependencyArchive = Join-Path $script:TempRoot $dependency.Name
+        $dependencyExtracted = Join-Path $script:TempRoot "vapoursynth-dependency-$name"
+        Invoke-SetupDownload -Uri $dependency.Uri -Destination $dependencyArchive | Out-Null
+        Expand-SetupZip -Archive $dependencyArchive -Destination $dependencyExtracted
+        $dependencySource = Get-ChildItem -LiteralPath $dependencyExtracted -Directory | Select-Object -First 1
+        Copy-Item -LiteralPath $dependencySource.FullName -Destination (Join-Path $source $name) -Recurse
+        $dependencyVersions[$name] = $dependency.Version
     }
-
-    [IO.Directory]::CreateDirectory($script:ToolPaths.VapourSynthRoot) | Out-Null
-    foreach ($item in Get-ChildItem -LiteralPath $vspipe.Directory.FullName -Force) {
-        Copy-Item -LiteralPath $item.FullName -Destination $script:ToolPaths.VapourSynthRoot -Recurse -Force
-    }
-    $portableMarker = Join-Path $script:ToolPaths.VapourSynthRoot "portable.vs"
-    if (-not (Test-Path -LiteralPath $portableMarker -PathType Leaf)) {
-        [IO.File]::WriteAllText($portableMarker, "", (New-Object Text.UTF8Encoding($false)))
-    }
-    [IO.File]::WriteAllText(
-        (Join-Path $script:ToolPaths.VapourSynthRoot "vapoursynth-classic-version.txt"),
-        $release.Version,
-        (New-Object Text.UTF8Encoding($false))
+    $dependencyState = Join-Path $script:TempRoot "vapoursynth-dependencies.json"
+    [IO.File]::WriteAllText($dependencyState, ($dependencyVersions | ConvertTo-Json), (New-Object Text.UTF8Encoding($false)))
+    $msbuild = Join-Path (Get-VisualStudioInstallationPath) "MSBuild\Current\Bin\MSBuild.exe"
+    $buildArguments = @(
+        (Join-Path $script:SetupDirectory "tools\build_vapoursynth_windows.py"),
+        "--source", $source,
+        "--runtime-root", $script:ToolPaths.VapourSynthRoot,
+        "--version", $release.Version,
+        "--dependencies", $dependencyState,
+        "--msbuild", $msbuild,
+        "--cmake", $script:ToolPaths.CMake,
+        "--jobs", [string]$script:BuildJobs
     )
+    $displayName = Get-SetupText "VapourSynth source and system Python module" "VapourSynth 源码及系统 Python 模块"
+    Invoke-SetupBuildCommand -DisplayName $displayName -FilePath $script:ToolPaths.Python -Arguments $buildArguments
 }
 
 function Test-VapourSynthClassic {
     $installedVersion = Get-InstalledVapourSynthClassicVersion
-    return [bool]$installedVersion -and
-        $installedVersion -eq (Get-VapourSynthClassicRelease).Version
-}
-function Get-VapourSynthPythonRelease {
-    $cacheKey = "python-embed:3.13:latest"
-    if ($script:ReleaseCache.Contains($cacheKey)) {
-        return $script:ReleaseCache[$cacheKey]
-    }
-    $versions = @(
-        Get-PythonStableVersions |
-            Where-Object {
-                $candidate = ConvertTo-ComparableVersion $_
-                $candidate.Major -eq 3 -and $candidate.Minor -eq 13
-            }
-    )
-    if ($versions.Count -eq 0) {
-        throw (Get-SetupText `
-            "Unable to determine the latest Python 3.13 embeddable release." `
-            "无法确定最新的 Python 3.13 嵌入版。")
-    }
-    $result = Get-PythonWindowsRelease -Versions $versions -Embeddable
-    $script:ReleaseCache[$cacheKey] = $result
-    return $result
-}
-
-function Get-VapourSynthNumpyRelease {
-    $cacheKey = "pypi:numpy:cp313-win-amd64"
-    if ($script:ReleaseCache.Contains($cacheKey)) {
-        return $script:ReleaseCache[$cacheKey]
-    }
-    $package = Get-SetupJsonFromUri `
-        -Uri ([Uri]"https://pypi.org/pypi/numpy/json") `
-        -CacheName "numpy-pypi.json"
-    $preferredVersion = [string]$package.info.version
-    $preferredRelease = $package.releases.PSObject.Properties |
-        Where-Object { $_.Name -eq $preferredVersion } |
-        Select-Object -First 1
-    $releaseProperties = @()
-    if ($null -ne $preferredRelease) {
-        $releaseProperties += $preferredRelease
-    }
-    $releaseProperties += @(
-        $package.releases.PSObject.Properties |
-            Where-Object {
-                $_.Name -ne $preferredVersion -and
-                $_.Name -match '^[0-9]+(?:\.[0-9]+){1,3}$'
-            } |
-            Sort-Object { ConvertTo-ComparableVersion $_.Name } -Descending
-    )
-    foreach ($property in $releaseProperties) {
-        $files = @(
-            $property.Value |
-                Where-Object {
-                    [string]$_.packagetype -eq "bdist_wheel" -and
-                    ([string]$_.filename).EndsWith(
-                        "cp313-cp313-win_amd64.whl",
-                        [StringComparison]::OrdinalIgnoreCase
-                    )
-                }
-        )
-        if ($files.Count -eq 1) {
-            $file = $files[0]
-            $result = [pscustomobject]@{
-                Version = $property.Name
-                Name = [string]$file.filename
-                Uri = [Uri]$file.url
-                Sha256 = [string]$file.digests.sha256
-                Size = [long]$file.size
-            }
-            $script:ReleaseCache[$cacheKey] = $result
-            return $result
-        }
-    }
-    throw (Get-SetupText `
-        "No NumPy wheel compatible with CPython 3.13 x64 was found." `
-        "未找到兼容 CPython 3.13 x64 的 NumPy wheel。")
-}
-
-function Get-VapourSynthPythonState {
-    $marker = Join-Path $script:ToolPaths.VapourSynthRoot "python-embed-version.json"
-    if (-not (Test-Path -LiteralPath $marker -PathType Leaf)) {
-        return $null
-    }
-    try {
-        return Get-Content -Raw -Encoding UTF8 -LiteralPath $marker | ConvertFrom-Json
-    }
-    catch {
-        return $null
-    }
-}
-
-function Get-InstalledVapourSynthPythonVersion {
-    $state = Get-VapourSynthPythonState
-    $requiredFiles = @(
-        $script:ToolPaths.VapourSynthPython,
-        (Join-Path $script:ToolPaths.VapourSynthRoot "python313.dll"),
-        (Join-Path $script:ToolPaths.VapourSynthRoot "python313._pth"),
-        (Join-Path $script:ToolPaths.VapourSynthSitePackages "numpy\__init__.py")
-    )
-    if ($null -eq $state) {
-        return ""
-    }
-    foreach ($file in $requiredFiles) {
-        if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
-            return ""
-        }
-    }
-    return [string]$state.python_version
-}
-
-function Install-VapourSynthEmbeddedPython {
-    param([string]$Version)
-
-    $pythonRelease = Get-VapourSynthPythonRelease
-    $numpyRelease = Get-VapourSynthNumpyRelease
-    $pythonArchive = Join-Path $script:TempRoot $pythonRelease.Name
-    $pythonExtracted = Join-Path $script:TempRoot "python-embed"
-    Invoke-SetupDownload -Uri $pythonRelease.Uri -Destination $pythonArchive | Out-Null
-    Expand-SetupZip -Archive $pythonArchive -Destination $pythonExtracted
-
-    [IO.Directory]::CreateDirectory($script:ToolPaths.VapourSynthRoot) | Out-Null
-    foreach ($item in Get-ChildItem -LiteralPath $pythonExtracted -Force) {
-        Copy-Item -LiteralPath $item.FullName -Destination $script:ToolPaths.VapourSynthRoot -Recurse -Force
-    }
-    [IO.Directory]::CreateDirectory($script:ToolPaths.VapourSynthSitePackages) | Out-Null
-    $pthContent = ".`r`npython313.zip`r`nimport site`r`n"
-    [IO.File]::WriteAllText(
-        (Join-Path $script:ToolPaths.VapourSynthRoot "python313._pth"),
-        $pthContent,
-        (New-Object Text.UTF8Encoding($false))
-    )
-
-    $numpyWheel = Join-Path $script:TempRoot $numpyRelease.Name
-    $numpyExtracted = Join-Path $script:TempRoot "numpy-wheel"
-    Invoke-SetupDownload `
-        -Uri $numpyRelease.Uri `
-        -Destination $numpyWheel `
-        -Sha256 $numpyRelease.Sha256 `
-        -ExpectedSize $numpyRelease.Size | Out-Null
-    Expand-SetupZip -Archive $numpyWheel -Destination $numpyExtracted
-
-    foreach ($directoryName in @("numpy", "numpy.libs")) {
-        $existingDirectory = Join-Path $script:ToolPaths.VapourSynthSitePackages $directoryName
-        if (Test-Path -LiteralPath $existingDirectory) {
-            Remove-Item -LiteralPath $existingDirectory -Recurse -Force
-        }
-    }
-    Get-ChildItem -LiteralPath $script:ToolPaths.VapourSynthSitePackages -Directory |
-        Where-Object {
-            $_.Name.StartsWith("numpy-", [StringComparison]::OrdinalIgnoreCase) -and
-            $_.Name.EndsWith(".dist-info", [StringComparison]::OrdinalIgnoreCase)
-        } |
-        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force }
-    foreach ($item in Get-ChildItem -LiteralPath $numpyExtracted -Force) {
-        if (-not $item.Name.EndsWith(".data", [StringComparison]::OrdinalIgnoreCase)) {
-            Copy-Item -LiteralPath $item.FullName -Destination $script:ToolPaths.VapourSynthSitePackages -Recurse -Force
-        }
-    }
-
-    $state = [ordered]@{
-        python_version = $pythonRelease.Version
-        numpy_version = $numpyRelease.Version
-    } | ConvertTo-Json
-    [IO.File]::WriteAllText(
-        (Join-Path $script:ToolPaths.VapourSynthRoot "python-embed-version.json"),
-        $state,
-        (New-Object Text.UTF8Encoding($false))
-    )
-}
-
-function Test-VapourSynthEmbeddedPython {
-    $state = Get-VapourSynthPythonState
-    if ($null -eq $state -or
-        [string]$state.python_version -ne (Get-VapourSynthPythonRelease).Version -or
-        [string]$state.numpy_version -ne (Get-VapourSynthNumpyRelease).Version) {
-        return $false
-    }
-    if (-not (Get-InstalledVapourSynthPythonVersion) -or
-        -not (Test-Path -LiteralPath (Join-Path $script:ToolPaths.VapourSynthSitePackages "numpy.libs") -PathType Container)) {
+    if (-not $installedVersion -or $installedVersion -ne (Get-VapourSynthClassicRelease).Version) {
         return $false
     }
     try {
+        $statePath = Join-Path $script:ToolPaths.VapourSynthRoot "vapoursynth-build.json"
+        $state = Get-Content -Raw -Encoding UTF8 -LiteralPath $statePath | ConvertFrom-Json
+        $dependencies = Get-VapourSynthSourceDependencies
+        foreach ($name in $dependencies.Keys) {
+            if ([string]$state.dependencies.$name -ne [string]$dependencies[$name].Version) {
+                return $false
+            }
+        }
+        $escapedStatePath = $statePath.Replace('\', '\\').Replace("'", "\'")
+        $pythonCode = "import json,sys,vapoursynth as vs; state=json.load(open('$escapedStatePath',encoding='utf-8-sig')); assert state['python_tag']==sys.implementation.cache_tag; assert state['python_executable'].lower()==sys.executable.lower(); assert hasattr(vs.core,'rgvs'); print(vs.core.version())"
+        Invoke-SetupCommand -FilePath $script:ToolPaths.Python -Arguments @("-c", $pythonCode) | Out-Null
         Invoke-SetupCommand -FilePath $script:ToolPaths.VsPipe -Arguments @("--version") | Out-Null
-        $output = Invoke-SetupCommand `
-            -FilePath $script:ToolPaths.VapourSynthPython `
-            -Arguments @("-c", "import numpy, vapoursynth; print(numpy.__version__)")
-        return $output.Trim() -eq [string]$state.numpy_version
+        return $true
     }
     catch {
         return $false
     }
 }
+
 function Get-VapourSynthToolsRelease {
     return Get-GitHubLatestReleaseAsset `
         -Repository "AmusementClub/tools" `
@@ -3735,7 +3587,7 @@ function Test-VapourSynthTools {
     try {
         $pythonCode = "import numpy, vapoursynth as vs; required=('grain','assrender','bilateral','descale','dfttest','eedi2','eedi3m','f3kdb','fmtc','sangnom','lsmas','placebo','mv','neo_f3kdb','nlm_ispc','zsmooth','rgvs'); missing=[name for name in required if not hasattr(vs.core,name)]; assert not missing, 'missing plugins: ' + ', '.join(missing)"
         Invoke-SetupCommand `
-            -FilePath $script:ToolPaths.VapourSynthPython `
+            -FilePath $script:ToolPaths.Python `
             -Arguments @("-c", $pythonCode) | Out-Null
         return $true
     }
@@ -4046,21 +3898,12 @@ function Register-StageFourComponents {
 function Register-StageFiveComponents {
     Register-SetupComponent `
         -Name "vapoursynth-classic" `
-        -EnglishName "VapourSynth Classic portable runtime" `
-        -ChineseName "VapourSynth Classic 便携运行环境" `
+        -EnglishName "VapourSynth Classic and system Python module" `
+        -ChineseName "VapourSynth Classic 和系统 Python 模块" `
         -GetInstalledVersion { Get-InstalledVapourSynthClassicVersion } `
         -GetAvailableVersion { (Get-VapourSynthClassicRelease).Version } `
         -Install { param($Version) Install-VapourSynthClassic $Version } `
         -Verify { Test-VapourSynthClassic }
-
-    Register-SetupComponent `
-        -Name "vapoursynth-python" `
-        -EnglishName "VapourSynth embedded Python 3.13 and NumPy" `
-        -ChineseName "VapourSynth 嵌入式 Python 3.13 和 NumPy" `
-        -GetInstalledVersion { Get-InstalledVapourSynthPythonVersion } `
-        -GetAvailableVersion { (Get-VapourSynthPythonRelease).Version } `
-        -Install { param($Version) Install-VapourSynthEmbeddedPython $Version } `
-        -Verify { Test-VapourSynthEmbeddedPython }
 
     Register-SetupComponent `
         -Name "vapoursynth-tools" `

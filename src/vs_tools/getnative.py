@@ -1,14 +1,11 @@
-"""Getnative split-mode orchestrator adapted from Infiziert90/getnative."""
+"""Native-resolution analysis adapted from Infiziert90/getnative."""
 
 from __future__ import annotations
 
+import functools
 import json
 import math
 import os
-import shutil
-import subprocess
-import sys
-import tempfile
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple, Union
@@ -16,8 +13,7 @@ from typing import Dict, List, Optional, Sequence, Tuple, Union
 import numpy as np
 
 from src.core.i18n import translate_text
-from src.exports.utils import print_terminal_line, run_command
-from ..core.settings import VSPIPE_PATH
+from src.exports.utils import print_terminal_line
 
 
 class _KernelResult:
@@ -40,93 +36,6 @@ class _KernelResult:
         self.evaluated_all = evaluated_all
         self.valley_count = valley_count
         self.curve_valid = curve_valid
-
-
-def _resolve_vspipe():
-    if hasattr(sys, "_MEIPASS"):
-        from src.exports.utils import get_vspipe_context
-
-        return get_vspipe_context()
-    env = os.environ.copy()
-    preferred = str(
-        env.get("BLURAYSUB_VSPIPE")
-        or env.get("VSPIPE_EXE")
-        or ""
-    ).strip()
-    if preferred:
-        if os.path.isfile(preferred):
-            return (preferred, env)
-        found_pref = shutil.which(preferred)
-        if found_pref:
-            return (found_pref, env)
-
-    local_names = ["vspipe.exe", "vspipe"] if os.name == "nt" else ["vspipe", "vspipe.exe"]
-    search_dirs = [
-        os.path.abspath("."),
-        os.path.dirname(os.path.abspath(__file__)),
-        os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")),
-        os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "vs_pkg")),
-        os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "vs_pkg")),
-    ]
-    for d in search_dirs:
-        for n in local_names:
-            p = os.path.join(d, n)
-            if os.path.isfile(p):
-                return (p, env)
-
-    configured = str(VSPIPE_PATH or "").strip()
-    if configured:
-        if os.path.isfile(configured):
-            return (configured, env)
-        found_configured = shutil.which(configured)
-        if found_configured:
-            return (found_configured, env)
-    raise FileNotFoundError(
-        "vspipe executable not found. Set BLURAYSUB_VSPIPE to full path "
-        "(example: C:/Software/release-x64/vspipe.exe) or add vspipe to PATH."
-    )
-
-
-
-def _resolve_getnative_vpy_path() -> str:
-    """Locate getnative.vpy next to this module; PyInstaller must list it in datas (see .spec)."""
-    env = str(os.getenv("BLURAYSUB_GETNATIVE_VPY", "") or "").strip()
-    if env and os.path.isfile(env):
-        return env
-
-    here = Path(__file__).resolve()
-    candidates = [
-        here.with_suffix(".vpy"),
-        here.parent / "getnative.vpy",
-    ]
-    mei = getattr(sys, "_MEIPASS", None)
-    if mei:
-        mei_root = Path(mei)
-        candidates.extend(
-            [
-                mei_root / "src" / "vs_tools" / "getnative.vpy",
-                mei_root / "vs_tools" / "getnative.vpy",
-            ]
-        )
-    exe_dir = Path(getattr(sys, "executable", "") or "").resolve().parent
-    if exe_dir.parts:
-        candidates.extend(
-            [
-                exe_dir / "getnative.vpy",
-                exe_dir / "src" / "vs_tools" / "getnative.vpy",
-            ]
-        )
-
-    for p in candidates:
-        s = str(p)
-        if os.path.isfile(s):
-            return s
-    tried = ", ".join(str(p) for p in candidates[:6])
-    raise FileNotFoundError(
-        "getnative.vpy not found. Add src/vs_tools/getnative.vpy to PyInstaller datas, "
-        "or set BLURAYSUB_GETNATIVE_VPY to its full path. Tried: "
-        + tried
-    )
 
 
 def format_getnative_progress(event: Dict) -> Optional[str]:
@@ -177,116 +86,14 @@ def format_getnative_progress(event: Dict) -> Optional[str]:
 
 
 def _emit_getnative_progress(event: Dict) -> None:
+    progress_jsonl = os.getenv("BLURAYSUB_GETNATIVE_PROGRESS_JSONL", "")
+    if progress_jsonl:
+        with open(progress_jsonl, "a", encoding="utf-8") as progress_file:
+            progress_file.write(json.dumps(event, separators=(",", ":")) + "\n")
+        return
     message = format_getnative_progress(event)
     if message:
         print_terminal_line(message)
-
-
-def _vpy_call(input_png: str, params: Dict) -> Dict:
-    vpy_path = _resolve_getnative_vpy_path()
-    if not os.path.exists(input_png):
-        raise FileNotFoundError(f"input PNG not found: {input_png}")
-    input_png = os.path.abspath(input_png)
-
-    fd_out, output_json = tempfile.mkstemp(prefix="bluraysub_getnative_", suffix=".json")
-    os.close(fd_out)
-    progress_jsonl = str(os.getenv("BLURAYSUB_GETNATIVE_PROGRESS_JSONL", "") or "").strip()
-    owns_progress_file = not bool(progress_jsonl)
-    if owns_progress_file:
-        fd_progress, progress_jsonl = tempfile.mkstemp(
-            prefix="bluraysub_getnative_progress_",
-            suffix=".jsonl",
-        )
-        os.close(fd_progress)
-    else:
-        progress_jsonl = os.path.abspath(progress_jsonl)
-    stderr_file = tempfile.TemporaryFile(mode="w+b")
-    progress_position = 0
-
-    def drain_progress() -> None:
-        nonlocal progress_position
-        try:
-            with open(progress_jsonl, "r", encoding="utf-8") as progress_file:
-                progress_file.seek(progress_position)
-                while True:
-                    line_start = progress_file.tell()
-                    line = progress_file.readline()
-                    if not line:
-                        break
-                    if not line.endswith("\n"):
-                        progress_file.seek(line_start)
-                        break
-                    progress_position = progress_file.tell()
-                    try:
-                        event = json.loads(line)
-                    except (TypeError, ValueError):
-                        continue
-                    if isinstance(event, dict):
-                        _emit_getnative_progress(event)
-        except OSError:
-            return
-
-    try:
-        vspipe_exe, vspipe_env = _resolve_vspipe()
-        env = dict(vspipe_env or os.environ.copy())
-        try:
-            from src.core.settings import PLUGIN_PATH as _plugin_path
-        except Exception:
-            _plugin_path = os.environ.get("BLURAYSUB_PLUGIN_PATH", "")
-        _pp = str(_plugin_path or "").strip()
-        if _pp:
-            env["BLURAYSUB_PLUGIN_PATH"] = _pp
-        for thread_env_name in (
-            "OMP_NUM_THREADS",
-            "OPENBLAS_NUM_THREADS",
-            "MKL_NUM_THREADS",
-            "NUMEXPR_NUM_THREADS",
-            "VECLIB_MAXIMUM_THREADS",
-        ):
-            env[thread_env_name] = "1"
-        env["BLURAYSUB_GETNATIVE_INPUT_PNG"] = input_png
-        env["BLURAYSUB_GETNATIVE_OUTPUT_JSON"] = output_json
-        env["BLURAYSUB_GETNATIVE_PROGRESS_JSONL"] = progress_jsonl
-        env["BLURAYSUB_GETNATIVE_PARAMS_JSON"] = json.dumps(params, ensure_ascii=False)
-        run_kwargs = {
-            "env": env,
-            "stdout": subprocess.DEVNULL,
-            "stderr": stderr_file,
-        }
-        if os.name == "nt":
-            run_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        proc = run_command([vspipe_exe, vpy_path, "-"], wait=False, **run_kwargs)
-        while proc.poll() is None:
-            if owns_progress_file:
-                drain_progress()
-            time.sleep(0.2)
-        if owns_progress_file:
-            drain_progress()
-        return_code = int(proc.wait())
-        stderr_file.seek(0)
-        stderr_text = stderr_file.read().decode("utf-8", errors="replace").strip()
-        if return_code != 0:
-            raise RuntimeError(f"vspipe failed ({return_code}): {stderr_text}")
-        with open(output_json, "r", encoding="utf-8") as f:
-            payload = json.load(f)
-        if not isinstance(payload, dict) or not payload.get("ok"):
-            raise RuntimeError(f"getnative.vpy failed: {payload}")
-        result = payload.get("result")
-        if not isinstance(result, dict):
-            raise RuntimeError("invalid getnative.vpy result payload")
-        return result
-    finally:
-        stderr_file.close()
-        try:
-            if os.path.exists(output_json):
-                os.remove(output_json)
-        except Exception:
-            pass
-        try:
-            if owns_progress_file and os.path.exists(progress_jsonl):
-                os.remove(progress_jsonl)
-        except Exception:
-            pass
 
 
 def _mad(vals: Sequence[float]) -> float:
@@ -664,6 +471,473 @@ def _curve_decreasing_ratio(vals: Sequence[float]) -> float:
     return float(dec) / float(max(arr.size - 1, 1))
 
 
+class _VapourSynthAnalysis:
+    """Own the native graph and filter helpers for one image analysis."""
+
+    def __init__(self, input_png: str):
+        import vapoursynth as vs
+
+        from src.core.settings import PLUGIN_PATH
+
+        self.vs = vs
+        self.core = vs.core
+        self.input_png = input_png
+        self.core.num_threads = max(
+            1, int(os.getenv("BLURAYSUB_GETNATIVE_VS_THREADS", "1"))
+        )
+        self.core.max_cache_size = min(int(self.core.max_cache_size), 256)
+        if PLUGIN_PATH and os.path.isdir(PLUGIN_PATH):
+            self.core.std.LoadAllPlugins(PLUGIN_PATH)
+
+        # Optional filter availability is detected while muvsfunc is imported.
+        from muvsfunc import measurediff, rescale
+
+        self.measurediff = measurediff
+        self.rescale = rescale
+        self.clip = self._load_source_png(input_png)
+
+    def _preset_format(self, name):
+        fmt = getattr(self.vs, name, None)
+        if fmt is None:
+            preset = getattr(self.vs, "PresetFormat", None)
+            fmt = getattr(preset, name, None) if preset is not None else None
+        return fmt
+
+    def _default_rescalers(self):
+        return [
+            self.rescale.Bilinear(),
+            self.rescale.Bicubic(1 / 3, 1 / 3),
+            self.rescale.Bicubic(0.5, 0.0),
+            self.rescale.Bicubic(0.0, 0.5),
+            self.rescale.Bicubic(0.0, 0.75),
+            self.rescale.Bicubic(1.0, 0.0),
+            self.rescale.Bicubic(0.0, 1.0),
+            self.rescale.Bicubic(0.2, 0.5),
+            self.rescale.Bicubic(0.5, 0.5),
+            self.rescale.Lanczos(2),
+            self.rescale.Lanczos(3),
+            self.rescale.Lanczos(4),
+            self.rescale.Lanczos(5),
+            self.rescale.Spline16(),
+            self.rescale.Spline36(),
+            self.rescale.Spline64(),
+        ]
+
+    def _fast_rescalers(self):
+        return [
+            self.rescale.Bilinear(),
+            self.rescale.Bicubic(1 / 3, 1 / 3),
+            self.rescale.Bicubic(0.5, 0.0),
+            self.rescale.Lanczos(3),
+            self.rescale.Spline36(),
+        ]
+
+    def _kernel_key(self, k):
+        return str(getattr(k, "name", "") or "").strip().lower()
+
+    def _ordered_rescalers(self):
+        fast = self._fast_rescalers()
+        all_k = self._default_rescalers()
+        out = []
+        seen = set()
+        for k in fast + all_k:
+            key = self._kernel_key(k) or str(k)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(k)
+        return out
+
+    def _find_kernel_by_name(self, kernels, name):
+        target = str(name or "").strip().lower()
+        for k in kernels:
+            if self._kernel_key(k) == target:
+                return k
+        raise ValueError(f"unknown getnative kernel: {name}")
+
+    def _measurediff_compat(self, clip1, clip2, ex_thr=0.015, crop_size=5):
+        if not hasattr(self.vs, "GRAYS"):
+            try:
+                if clip1.format is not None:
+                    setattr(self.vs, "GRAYS", int(clip1.format.id))
+            except Exception:
+                pass
+        if not hasattr(self.vs, "GRAY"):
+            try:
+                gray_cf = getattr(getattr(self.vs, "ColorFamily", object), "GRAY", None)
+                if gray_cf is not None:
+                    setattr(self.vs, "GRAY", gray_cf)
+            except Exception:
+                pass
+        return self.measurediff(clip1, clip2, ex_thr=ex_thr, crop_size=crop_size)
+
+    def _target_dims(self, clip, target_h, base_height):
+        ref_h = int(base_height or clip.height or 1)
+        th = int(round(target_h))
+        tw = int(round(th * clip.width / ref_h))
+        th = max(2, th)
+        tw = max(2, tw)
+        if tw % 2:
+            tw -= 1
+        if th % 2:
+            th -= 1
+        return max(2, tw), max(2, th)
+
+    def _rescale_without_blur_arg(self, clip, kernel, target_h, base_height):
+        w, h = self._target_dims(clip, target_h, base_height)
+        name = str(getattr(kernel, "name", "") or "").lower()
+        taps = int(getattr(kernel, "taps", 3) or 3)
+        b = float(getattr(kernel, "b", 0.0) or 0.0)
+        c = float(getattr(kernel, "c", 0.5) or 0.5)
+
+        if "lanczos" in name and hasattr(self.core.descale, "Delanczos"):
+            low = self.core.descale.Delanczos(clip, w, h, taps=taps)
+            return self.core.resize.Lanczos(low, clip.width, clip.height, filter_param_a=taps)
+        if "bilinear" in name and hasattr(self.core.descale, "Debilinear"):
+            low = self.core.descale.Debilinear(clip, w, h)
+            return self.core.resize.Bilinear(low, clip.width, clip.height)
+        if "spline16" in name and hasattr(self.core.descale, "Despline16"):
+            low = self.core.descale.Despline16(clip, w, h)
+            return self.core.resize.Spline16(low, clip.width, clip.height)
+        if "spline36" in name and hasattr(self.core.descale, "Despline36"):
+            low = self.core.descale.Despline36(clip, w, h)
+            return self.core.resize.Spline36(low, clip.width, clip.height)
+        if "spline64" in name and hasattr(self.core.descale, "Despline64"):
+            low = self.core.descale.Despline64(clip, w, h)
+            return self.core.resize.Spline64(low, clip.width, clip.height)
+        if hasattr(self.core.descale, "Debicubic"):
+            low = self.core.descale.Debicubic(clip, w, h, b=b, c=c)
+            return self.core.resize.Bicubic(low, clip.width, clip.height, filter_param_a=b, filter_param_b=c)
+        return self.core.resize.Bicubic(clip, clip.width, clip.height)
+
+    def _collect_curve_for_kernel(
+        self,
+        clip,
+        source_height,
+        kernel,
+        src_heights,
+        base_height,
+        vertical_only,
+        stats_func,
+        stats_prop,
+        early_stop_patience,
+        global_best_score,
+        two_stage=False,
+        coarse_half_size=True,
+    ):
+        if two_stage:
+            hs = [float(x) for x in src_heights]
+            if len(hs) >= 200:
+                step_vals = []
+                for a, b in zip(hs[:-1], hs[1:]):
+                    dv = abs(float(b) - float(a))
+                    if dv > 1e-9:
+                        step_vals.append(dv)
+                step = float(np.median(np.asarray(step_vals, dtype=np.float64))) if step_vals else 1.0
+                if abs(step - 1.0) <= 1e-6:
+                    lo = int(round(min(hs)))
+                    hi = int(round(max(hs)))
+                    coarse_step = 4 if (hi - lo) >= 400 else 3
+                    coarse = list(range(lo, hi + 1, coarse_step))
+                    if coarse[-1] != hi:
+                        coarse.append(hi)
+
+                    # Kernel screening only needs a centered half-size crop. The winning
+                    # kernel is later verified with a full-frame coarse pass before its 1p scan.
+                    if coarse_half_size:
+                        coarse_width = max(64, (int(clip.width) // 2) // 2 * 2)
+                        coarse_height = max(64, (int(clip.height) // 2) // 2 * 2)
+                        coarse_left = max(0, (int(clip.width) - coarse_width) // 2)
+                        coarse_top = max(0, (int(clip.height) - coarse_height) // 2)
+                        coarse_clip = self.core.std.CropAbs(
+                            clip,
+                            width=coarse_width,
+                            height=coarse_height,
+                            left=coarse_left,
+                            top=coarse_top,
+                        )
+                    else:
+                        coarse_clip = clip
+                        coarse_height = int(clip.height)
+                    coarse_scale = float(coarse_height) / float(max(1, int(clip.height)))
+                    coarse_base_height = (
+                        float(base_height) * coarse_scale
+                        if base_height is not None
+                        else None
+                    )
+
+                    ch = []
+                    ce = []
+                    for h in coarse:
+                        scaled_h = float(h) * coarse_scale
+                        try:
+                            if not vertical_only:
+                                rescaled = kernel.rescale(
+                                    coarse_clip,
+                                    scaled_h,
+                                    coarse_base_height,
+                                )
+                            else:
+                                rescaled = kernel.rescale_pro(
+                                    coarse_clip,
+                                    src_height=scaled_h,
+                                    base_height=coarse_base_height,
+                                )
+                        except Exception as e:
+                            if "blur" in str(e).lower():
+                                rescaled = self._rescale_without_blur_arg(
+                                    coarse_clip,
+                                    kernel,
+                                    scaled_h,
+                                    coarse_base_height,
+                                )
+                            else:
+                                raise
+                        stats = stats_func(coarse_clip, rescaled)
+                        fr = stats.get_frame(0)
+                        val = float(fr.props[stats_prop]) + 1e-9
+                        ch.append(float(h))
+                        ce.append(val)
+
+                    coarse_best_h, coarse_best_s, _, coarse_valid = (
+                        _best_height_from_curve(ch, ce, source_height)
+                    )
+                    if (
+                        global_best_score > 0.0
+                        and coarse_valid
+                        and coarse_best_s < global_best_score * 0.45
+                    ):
+                        return {
+                            "kernel": str(getattr(kernel, "name", "") or ""),
+                            "heights": ch,
+                            "errors": ce,
+                            "evaluated_all": False,
+                            "screen_score": float(coarse_best_s),
+                            "screen_valid": bool(coarse_valid),
+                            "skipped": True,
+                            "source_height": int(source_height),
+                        }
+                    center = int(round(float(coarse_best_h)))
+                    radius = 20
+                    rlo = max(lo, center - radius)
+                    rhi = min(hi, center + radius)
+                    fine = list(range(rlo, rhi + 1))
+
+                    fh = []
+                    fe = []
+                    for h in fine:
+                        try:
+                            if not vertical_only:
+                                rescaled = kernel.rescale(clip, h, base_height)
+                            else:
+                                rescaled = kernel.rescale_pro(clip, src_height=h, base_height=base_height)
+                        except Exception as e:
+                            if "blur" in str(e).lower():
+                                rescaled = self._rescale_without_blur_arg(clip, kernel, h, base_height)
+                            else:
+                                raise
+                        stats = stats_func(clip, rescaled)
+                        fr = stats.get_frame(0)
+                        val = float(fr.props[stats_prop]) + 1e-9
+                        fh.append(float(h))
+                        fe.append(val)
+                    return {
+                        "kernel": str(getattr(kernel, "name", "") or ""),
+                        "heights": fh,
+                        "errors": fe,
+                        "evaluated_all": True,
+                        "screen_score": float(coarse_best_s),
+                        "screen_valid": bool(coarse_valid),
+                        "skipped": False,
+                        "source_height": int(source_height),
+                    }
+
+        heights = []
+        errors = []
+        best_local_score = -1.0
+        stagnation = 0
+        evaluated_all = True
+        early_stop_enabled = int(early_stop_patience) < len(src_heights)
+
+        for h in src_heights:
+            try:
+                if not vertical_only:
+                    rescaled = kernel.rescale(clip, h, base_height)
+                else:
+                    rescaled = kernel.rescale_pro(clip, src_height=h, base_height=base_height)
+            except Exception as e:
+                if "blur" in str(e).lower():
+                    rescaled = self._rescale_without_blur_arg(clip, kernel, h, base_height)
+                else:
+                    raise
+            stats = stats_func(clip, rescaled)
+            fr = stats.get_frame(0)
+            val = float(fr.props[stats_prop]) + 1e-9
+            heights.append(float(h))
+            errors.append(float(val))
+
+            if early_stop_enabled and len(errors) >= 3:
+                _, cand_s, _, _ = _best_height_from_curve(
+                    heights,
+                    errors,
+                    source_height,
+                )
+                if cand_s > best_local_score:
+                    best_local_score = cand_s
+                    stagnation = 0
+                else:
+                    stagnation += 1
+            if early_stop_enabled and len(errors) >= 20 and stagnation >= int(early_stop_patience):
+                if global_best_score > 0 and best_local_score < global_best_score * 0.60:
+                    evaluated_all = False
+                    break
+
+        return {
+            "kernel": str(getattr(kernel, "name", "") or ""),
+            "heights": heights,
+            "errors": errors,
+            "evaluated_all": bool(evaluated_all),
+            "source_height": int(source_height),
+        }
+
+    def _load_source_png(self, path):
+        src = None
+        imwri = getattr(self.core, "imwri", getattr(self.core, "imwrif", None))
+        if imwri is not None and hasattr(imwri, "Read"):
+            try:
+                src = imwri.Read(path)
+            except Exception:
+                src = None
+        if src is None and hasattr(self.core, "lsmas"):
+            try:
+                try:
+                    src = self.core.lsmas.LWLibavSource(path, cache=0)
+                except TypeError:
+                    src = self.core.lsmas.LWLibavSource(path)
+            except Exception:
+                src = None
+        if src is None:
+            raise RuntimeError("failed to load image source: need imwri/imwrif Read or lsmas")
+
+        if src.format is None:
+            raise RuntimeError("image source has a variable format")
+        rgb_cf = getattr(self.vs, "RGB", None)
+        if rgb_cf is None:
+            rgb_cf = getattr(getattr(self.vs, "ColorFamily", object), "RGB", 2)
+        if src.format.color_family == rgb_cf:
+            yuv444ps = self._preset_format("YUV444PS")
+            if yuv444ps is None:
+                raise RuntimeError("Could not resolve YUV444PS format for RGB-to-luma conversion")
+            src = self.core.resize.Point(src, format=yuv444ps, matrix_s="709")
+
+        gray_cf = getattr(self.vs, "GRAY", None)
+        if gray_cf is None:
+            gray_cf = getattr(getattr(self.vs, "ColorFamily", object), "GRAY", 1)
+        clip = self.core.std.ShufflePlanes(src, 0, gray_cf)
+        gray_fmt = self._preset_format("GRAYS")
+        if gray_fmt is None:
+            raise RuntimeError("Could not resolve GRAYS format for getnative")
+        clip = clip.resize.Point(format=gray_fmt)
+        return clip[0]
+
+    def _list_kernels_mode(self, params):
+        fast_mode = bool(params.get("fast_mode", False))
+        kernels = self._default_rescalers() if not fast_mode else self._ordered_rescalers()
+        return {"kernels": [str(getattr(k, "name", "") or "") for k in kernels]}
+
+    def _collect_curve_mode(self, clip, params):
+        fast_mode = bool(params.get("fast_mode", False))
+        kernels = self._default_rescalers() if not fast_mode else self._ordered_rescalers()
+        kernel_name = str(params.get("kernel_name", "") or "").strip()
+        kernel = self._find_kernel_by_name(kernels, kernel_name) if kernel_name else kernels[0]
+        source_height = int(clip.height)
+        src_heights = params.get("src_heights")
+        if not src_heights:
+            minimum = max(240, int(source_height * 0.40))
+            maximum = min(source_height - 2, int(source_height * 0.98))
+            if minimum >= maximum:
+                raise ValueError(
+                    f"invalid source height search range: {minimum}..{maximum} "
+                    f"for {source_height}p"
+                )
+            src_heights = list(range(minimum, maximum + 1))
+        if isinstance(src_heights, (int, float)):
+            height_list = (float(src_heights),)
+        else:
+            height_list = tuple(float(h) for h in src_heights)
+        stats_func = functools.partial(
+            self._measurediff_compat,
+            ex_thr=float(params.get("ex_thr", 0.015)),
+            crop_size=int(params.get("crop_size", 5)),
+        )
+        return self._collect_curve_for_kernel(
+            clip=clip,
+            source_height=source_height,
+            kernel=kernel,
+            src_heights=height_list,
+            base_height=params.get("base_height", None),
+            vertical_only=bool(params.get("vertical_only", False)),
+            stats_func=stats_func,
+            stats_prop=str(params.get("stats_prop", "PlaneDiffMeasure")),
+            early_stop_patience=int(params.get("early_stop_patience", 30)),
+            global_best_score=float(params.get("global_best_score", 0.0)),
+            two_stage=bool(params.get("two_stage", False)),
+            coarse_half_size=bool(params.get("coarse_half_size", True)),
+        )
+
+    def _collect_curves_mode(self, clip, params):
+        fast_mode = bool(params.get("fast_mode", False))
+        kernels = self._default_rescalers() if not fast_mode else self._ordered_rescalers()
+        limit = int(params.get("max_kernels", 0))
+        if limit > 0:
+            kernels = kernels[:limit]
+        curves = []
+        total = len(kernels)
+        scan_started = time.perf_counter()
+        best_screen_score = 0.0
+        completed_screens = 0
+        for index, kernel in enumerate(kernels, start=1):
+            kernel_started = time.perf_counter()
+            kernel_params = dict(params)
+            kernel_params["kernel_name"] = str(getattr(kernel, "name", "") or "")
+            # Compare only like-for-like coarse curves. The first three priority kernels
+            # always receive their full fine scan before obvious later mismatches may skip it.
+            kernel_params["global_best_score"] = (
+                float(best_screen_score) if completed_screens >= 3 else 0.0
+            )
+            curve = self._collect_curve_mode(clip, kernel_params)
+            curves.append(curve)
+            if bool(curve.get("screen_valid", False)):
+                completed_screens += 1
+                best_screen_score = max(
+                    best_screen_score,
+                    float(curve.get("screen_score", 0.0) or 0.0),
+                )
+            best_h, best_s, _, curve_valid = _best_height_from_curve(
+                curve.get("heights", []),
+                curve.get("errors", []),
+                float(curve.get("source_height") or clip.height),
+            )
+            elapsed_seconds = time.perf_counter() - scan_started
+            _emit_getnative_progress(
+                {
+                    "phase": "kernel",
+                    "index": index,
+                    "total": total,
+                    "image": os.path.basename(self.input_png),
+                    "kernel": str(curve.get("kernel", "") or ""),
+                    "height": float(best_h),
+                    "score": float(best_s),
+                    "curve_valid": bool(curve_valid and curve.get("evaluated_all", True)),
+                    "skipped": bool(curve.get("skipped", False)),
+                    "kernel_seconds": float(time.perf_counter() - kernel_started),
+                    "elapsed_seconds": float(elapsed_seconds),
+                    "eta_seconds": float((elapsed_seconds / index) * (total - index)),
+                }
+            )
+        return {"curves": curves}
+
+
 def _default_src_heights(input_png: str) -> tuple[float, ...]:
     """Build the default proportional search range from the actual source image."""
     from PIL import Image
@@ -707,13 +981,16 @@ def getnative(
     debug_full_scan: bool = False,
 ):
     if stats_func is not None:
-        raise ValueError("stats_func override is not supported in split mode")
+        raise ValueError("stats_func override is not supported")
     if rescalers is not None:
-        raise ValueError("custom rescalers are not supported in split mode")
+        raise ValueError("custom rescalers are not supported")
     if not isinstance(clip, (str, Path)):
-        raise TypeError("split mode expects PNG path as `clip` argument")
+        raise TypeError("getnative expects a PNG path as the clip argument")
 
     input_png = str(clip)
+    if not os.path.isfile(input_png):
+        raise FileNotFoundError(input_png)
+    native = _VapourSynthAnalysis(input_png)
     if src_heights is None:
         height_list = _default_src_heights(input_png)
     elif isinstance(src_heights, (int, float)):
@@ -738,10 +1015,9 @@ def getnative(
     )
     batched_curves = None
     if batch_all_kernels:
-        curve_response = _vpy_call(
-            input_png,
+        curve_response = native._collect_curves_mode(
+            native.clip,
             {
-                "mode": "collect_curves",
                 "fast_mode": True,
                 "max_kernels": int(max_kernels),
                 "src_heights": list(height_list),
@@ -758,10 +1034,10 @@ def getnative(
         batched_curves = list(curve_response.get("curves") or [])
         kernel_names = [str(curve.get("kernel", "") or "") for curve in batched_curves]
     else:
-        kernel_resp = _vpy_call(input_png, {"mode": "list_kernels", "fast_mode": bool(fast_mode)})
+        kernel_resp = native._list_kernels_mode({"fast_mode": bool(fast_mode)})
         kernel_names = list(kernel_resp.get("kernels") or [])
     if not kernel_names:
-        raise RuntimeError("no kernels returned by vpy")
+        raise RuntimeError("no rescaling kernels are available")
 
     results: List[_KernelResult] = []
     global_best = -1.0
@@ -769,10 +1045,9 @@ def getnative(
         if batched_curves is not None:
             curve = batched_curves[kernel_index]
         else:
-            curve = _vpy_call(
-                input_png,
+            curve = native._collect_curve_mode(
+                native.clip,
                 {
-                    "mode": "collect_curve",
                     "kernel_name": kernel_name,
                     "src_heights": list(height_list),
                     "base_height": base_height,
@@ -833,10 +1108,10 @@ def getnative(
         results, key=lambda r: (min(r.errors), r.best_height)
     )
 
-    final_curve = _vpy_call(
-        input_png,
+    final_started = time.perf_counter()
+    final_curve = native._collect_curve_mode(
+        native.clip,
         {
-            "mode": "collect_curve",
             "kernel_name": winner0.name,
             "src_heights": list(height_list),
             "base_height": base_height,
@@ -851,7 +1126,6 @@ def getnative(
             # avoiding a second 627-point full-resolution pass and its cache peak.
             "two_stage": True,
             "coarse_half_size": False,
-            "progress_phase": "final",
         },
     )
     wh = [float(x) for x in final_curve.get("heights", [])]
@@ -872,6 +1146,15 @@ def getnative(
     curve_valid = int(bool(w_curve_valid) and (edge_hit == 0))
     curve_valid_strict = int(bool(curve_valid) and (dec_ratio < 0.80))
 
+    _emit_getnative_progress({
+        "phase": "final",
+        "image": os.path.basename(input_png),
+        "kernel": str(winner0.name),
+        "height": float(w_best_h),
+        "score": float(w_best_s),
+        "curve_valid": bool(w_curve_valid),
+        "elapsed_seconds": time.perf_counter() - final_started,
+    })
     return {
         "getnative_kernel": str(winner0.name),
         "getnative_height": float(w_best_h),

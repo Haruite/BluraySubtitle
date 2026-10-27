@@ -13,14 +13,17 @@ spec and the application configuration cannot silently drift apart.
 """
 
 from fnmatch import fnmatchcase
+from importlib.machinery import EXTENSION_SUFFIXES
 from pathlib import Path
+import json
 import os
 import runpy
 import sys
 import sysconfig
+import zipfile
 
 from PyInstaller import __version__ as PYINSTALLER_VERSION
-from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import collect_data_files, copy_metadata
 
 
 PROJECT_ROOT = Path(SPECPATH).resolve()
@@ -45,7 +48,6 @@ def add_binary(items, path, description):
 
 
 entry_script = required_path(PROJECT_ROOT / "src" / "main.py", "application entry point")
-getnative_vpy = required_path(PROJECT_ROOT / "src" / "vs_tools" / "getnative.vpy", "getnative.vpy")
 default_config = required_path(
     PROJECT_ROOT / "config.default.json",
     "default application configuration",
@@ -69,13 +71,10 @@ notices_updater["generate_third_party_notices"](
     PYINSTALLER_VERSION,
 )
 
-# The application expects this exact bundled layout:
-#     sys._MEIPASS/vs_pkg/vspipe.exe
-# Collect the portable Python, plugins, scripts, and VS Editor together.
-# Runtime filtering below omits tests and development files before COLLECT.
+# Native tools, CPython, and NumPy share the bundle support directory.
 vapoursynth_dir = required_path(
     Path(SETTINGS["VSEDIT_PATH"]).parent,
-    "VapourSynth portable directory",
+    "VapourSynth runtime directory",
 )
 if not vapoursynth_dir.is_dir():
     raise NotADirectoryError(f"VapourSynth path is not a directory: {vapoursynth_dir}")
@@ -88,25 +87,21 @@ if vspipe_path.parent != vapoursynth_dir:
     )
 
 
-portable_python_libraries = [
-    path for path in vapoursynth_dir.glob("python3*.dll")
-    if path.name.lower() != "python3.dll"
-]
-if len(portable_python_libraries) != 1:
-    raise ValueError("VapourSynth must contain exactly one versioned Python DLL")
-portable_python_library = portable_python_libraries[0].name.lower()
-portable_python_abi = "cp" + portable_python_libraries[0].stem.removeprefix("python")
-main_python_library = str(sysconfig.get_config_var("LDLIBRARY")).lower()
+build_state = json.loads(required_path(
+    vapoursynth_dir / "vapoursynth-build.json", "VapourSynth source-build manifest"
+).read_text(encoding="utf-8"))
+if build_state["python_tag"] != sys.implementation.cache_tag:
+    raise RuntimeError("VapourSynth must be built for the Python running PyInstaller")
 
 
 def keep_runtime_file(destination, root_binary_names):
-    """Keep files required by the GUI and the separate portable VPy runtime."""
+    """Keep shared runtime files and resources used by the application."""
     path = Path(destination)
     relative = path.as_posix().lower()
     name = path.name.lower()
     parts = tuple(part.lower() for part in path.parts)
 
-    if parts[0] == "vs_pkg" and "__pycache__" in parts:
+    if "__pycache__" in parts:
         return False
 
     if relative.startswith("pyqt6/qt6/translations/"):
@@ -126,10 +121,6 @@ def keep_runtime_file(destination, root_binary_names):
         "pyqt6/qt6/plugins/platforms/qoffscreen.dll",
         "pil/_avif.*",
         "pil/_imagingtk.*",
-        "vs_pkg/doc/*",
-        "vs_pkg/sdk/*",
-        "vs_pkg/manifest.in",
-        "vs_pkg/setup.py",
     )):
         return False
 
@@ -138,18 +129,7 @@ def keep_runtime_file(destination, root_binary_names):
         if name in {"msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll"}:
             return name not in root_binary_names
 
-    # These dependencies belong beside the portable runtime, not the main EXE.
-    if len(parts) == 1 and name != main_python_library:
-        if name in {
-            portable_python_library, "vapoursynth.dll", "vsscript.dll",
-            "sqlite3.dll", "mimalloc-redirect.dll",
-        }:
-            return False
-
-    if len(parts) == 2 and parts[0] == "vs_pkg" and name.startswith("vapoursynth.cp"):
-        return name.startswith(f"vapoursynth.{portable_python_abi}-")
-
-    if parts[0] == "numpy" or parts[:4] == ("vs_pkg", "lib", "site-packages", "numpy"):
+    if parts[0] == "numpy":
         if any(part in {"test", "tests", "_pyinstaller", "doc"} for part in parts):
             return False
         if path.suffix.lower() in {".pyi", ".h", ".hpp", ".c", ".cpp", ".pxd", ".pyx", ".rst", ".lib"}:
@@ -196,16 +176,66 @@ datas = [
     (str(required_path(Path(SETTINGS["SEVEN_ZIP_PATH"]).parent / "License.txt", "7-Zip license")), "legal/7zip"),
     (str(default_config), "."),
     (str(SETTINGS_PATH), "src/core"),
-    (str(getnative_vpy), "src/vs_tools"),
     *((str(path), "legal") for path in third_party_notices_paths.values()),
+    # Keep CPython's DLLs directory available as its platform-library landmark.
+    (str(required_path(Path(sys.base_prefix) / "LICENSE.txt", "CPython license")), "DLLs"),
+    (str(required_path(vapoursynth_dir / "licenses", "VapourSynth source dependency licenses")), "legal/vapoursynth"),
 ]
+datas += copy_metadata("numpy")
 
-# Avoid analyzing obsolete Python ABI modules and NumPy development binaries.
-datas += [
-    (str(path), str(Path("vs_pkg") / path.relative_to(vapoursynth_dir).parent))
-    for path in vapoursynth_dir.rglob("*")
-    if path.is_file() and keep_runtime_file(Path("vs_pkg") / path.relative_to(vapoursynth_dir), set())
-]
+# Use the selected system Python for both frozen workers and VSScript.
+for name in ("VapourSynth.dll", "VSScript.dll", "VSPipe.exe", "vsedit.exe"):
+    add_binary(binaries, vapoursynth_dir / name, name)
+for directory_name in ("coreplugins", "plugins"):
+    for plugin in (vapoursynth_dir / "vapoursynth64" / directory_name).glob("*.dll"):
+        binaries.append((str(plugin), f"vapoursynth64/{directory_name}"))
+datas.append((str(required_path(vapoursynth_dir / "portable.vs", "portable plugin marker")), "."))
+script_root = vapoursynth_dir / "Lib" / "site-packages"
+for script in script_root.rglob("*"):
+    relative = script.relative_to(script_root)
+    if (
+        script.is_file()
+        and not relative.parts[0].lower().startswith("numpy")
+        and "__pycache__" not in relative.parts
+        and keep_runtime_file(relative, set())
+    ):
+        datas.append((str(script), str(relative.parent)))
+
+# VSScript has a regular CPython importer, so give it a standard-library archive.
+# NumPy and filter scripts are collected once as shared Python files by the hook.
+shared_python = Path(workpath) / "shared-python"
+shared_python.mkdir(parents=True, exist_ok=True)
+python_ini = shared_python / "python-runtime.ini"
+python_ini.write_text("[Python]\nHome=.\nIsolated=1\n", encoding="utf-8", newline="\r\n")
+datas.append((str(python_ini), "."))
+standard_library = Path(sysconfig.get_path("stdlib"))
+standard_archive = shared_python / f"python{sys.version_info.major}{sys.version_info.minor}.zip"
+with zipfile.ZipFile(standard_archive, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+    for directory, folders, files in os.walk(standard_library):
+        folders[:] = [name for name in folders if name not in {
+            "site-packages", "__pycache__", "test", "tests", "idlelib",
+            "tkinter", "turtledemo", "ensurepip",
+        }]
+        for name in files:
+            if name.endswith(".py"):
+                file = Path(directory) / name
+                archive.write(file, file.relative_to(standard_library).as_posix())
+datas.append((str(standard_archive), "."))
+for library in (Path(sys.base_prefix) / "DLLs").iterdir():
+    if library.suffix.lower() == ".pyd":
+        module_name = next((
+            library.name[:-len(suffix)] for suffix in EXTENSION_SUFFIXES
+            if library.name.endswith(suffix) and "." not in library.name[:-len(suffix)]
+        ), "")
+        if (
+            not module_name or module_name.endswith("_d")
+            or module_name.startswith("_test")
+            or module_name in {"_ctypes_test", "_tkinter"}
+        ):
+            continue
+        add_binary(binaries, library, library.name)
+    elif library.suffix.lower() == ".dll" and not library.stem.endswith("_d"):
+        add_binary(binaries, library, library.name)
 
 # pycountry needs its ISO databases and notices; the application translates UI text.
 datas += collect_data_files("pycountry", excludes=["locales"])
@@ -226,11 +256,13 @@ a = Analysis(
     pathex=[str(PROJECT_ROOT)],
     binaries=binaries,
     datas=datas,
-    hiddenimports=[],
-    hookspath=[],
+    hiddenimports=["muvsfunc", "mvsfunc"],
+    hookspath=[str(PROJECT_ROOT / "tools" / "pyinstaller_hooks")],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
+        # muvsfunc's optional plotting helper is not used by the application.
+        "matplotlib",
         "PIL.AvifImagePlugin",
         "PIL._avif",
         "PIL.ImageTk",

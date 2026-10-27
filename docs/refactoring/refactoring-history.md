@@ -1255,3 +1255,12 @@ Date: 2026-09-10 Commit range: `1c7eee0..9afd36d`
 
 - Completed representative GUI and real-media regressions for disc selection and ordering, alternate movie cuts, Remux/Encode, subtitles, chapters, and Windows/Docker. Fixed row-mapping errors during source changes and subtitle imports, standalone audio selection, implicit color conversion in FrameCheck, and misleading mux progress messages.
 - Reproduction details, fix commits, media validation, and the remaining MyGO channel-layout, Vulkan-environment, and mixed-HDR source limitations are documented in the [September 9–10 cross-platform regression record (Simplified Chinese)](../testing/2026-09-09-regression.zh-Hans.md).
+
+## Shared Python Runtime for VapourSynth and getnative
+
+Date: 2026-10-27
+
+- Merged getnative's native graphs and curve collection into its Python module. Sample workers call VapourSynth directly and share the ranking calculations; progress reporting and the memory benchmark follow the same worker path.
+- Windows setup builds VapourSynth Classic and its required core plugins for the selected system CPython, installs the matching binding, and records Python ABI and dependency revisions for upgrade checks. The build adapts Cython enum exports and VSScript's Python loader to the selected interpreter.
+- Windows packaging shares the application support directory with VSScript, includes a standard-library archive, and collects one NumPy package for both importers. Updated runtime paths, dependency license collection, and bilingual documentation.
+- Verification: 96 automated tests and static checks passed. Python 3.14 and 3.15 bindings produced identical 16-kernel reference curves. Windows source and frozen GUI getnative/Encode checks completed with matching video presentation timestamps, unchanged decoded audio, and no decoding errors.

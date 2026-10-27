@@ -146,9 +146,9 @@
 
 ---
 
-## VapourSynth 便携包（`vs_pkg/`）
+## VapourSynth 与 Python 共享运行时
 
-PyInstaller 包内的 `vs_pkg/` 目录采用 **Windows x64 便携布局**，由以下**已记录的上游组件**以及你在本地添加的其他插件 DLL 组成。
+应用与 VSScript 共用 `_internal/` 内的 CPython 运行时和 NumPy 包。VapourSynth Classic 针对该 Python 版本从源码编译，源码依赖的许可证全文随附于 `legal/vapoursynth/`。
 
 ### VapourSynth-Classic（核心运行时、`vspipe` 等）
 
@@ -158,14 +158,28 @@ PyInstaller 包内的 `vs_pkg/` 目录采用 **Windows x64 便携布局**，由�
 - **许可证全文（此标签）：** https://raw.githubusercontent.com/AmusementClub/vapoursynth-classic/{{VAPOURSYNTH_CLASSIC_VERSION}}/COPYING.LESSER
 - **源码归档：** https://github.com/AmusementClub/vapoursynth-classic/archive/refs/tags/{{VAPOURSYNTH_CLASSIC_VERSION}}.zip
 
-### CPython — Windows 可嵌入发行版
+### VapourSynth 源码依赖
 
-- **典型文件：** `vs_pkg/` 下 **embed** 布局中的 `python313.dll`、可嵌入标准库 zip 及相关文件。
-- **版本：** {{PYTHON_VERSION}}（amd64 可嵌入 zip）
-- **下载来源：** https://www.python.org/ftp/python/{{PYTHON_VERSION}}/python-{{PYTHON_VERSION}}-embed-amd64.zip
+- **zimg：** 提交 `{{ZIMG_REVISION}}`，WTFPL v2；https://github.com/AmusementClub/zimg/tree/{{ZIMG_REVISION}}
+- **libp2p：** 提交 `{{LIBP2P_REVISION}}`，WTFPL v2；https://github.com/sekrit-twc/libp2p/tree/{{LIBP2P_REVISION}}
+- **mimalloc：** {{MIMALLOC_VERSION}}，MIT；https://github.com/microsoft/mimalloc/tree/v{{MIMALLOC_VERSION}}
+- **AviSynthPlus 头文件：** {{AVISYNTHPLUS_VERSION}}，许可证与例外条款见随附的 `AviSynthPlus-avisynth.h` 和 `AviSynthPlus-SDKLicense.rst`；https://github.com/AviSynth/AviSynthPlus/tree/v{{AVISYNTHPLUS_VERSION}}
+
+### CPython — Windows 共享运行时
+
+- **文件：** 来自应用构建所用 Python 的 DLL、扩展模块与标准库归档。
+- **版本：** {{PYTHON_VERSION}}（amd64）
+- **上游：** https://www.python.org/ftp/python/{{PYTHON_VERSION}}/
 - **许可证：** **Python Software Foundation License**，SPDX 标识为 **`PSF-2.0`**。
+- **随附许可证全文：** `DLLs/LICENSE.txt`
 - **许可证概览：** https://docs.python.org/3/license.html
 - **对应源码（CPython）：** https://www.python.org/ftp/python/{{PYTHON_VERSION}}/Python-{{PYTHON_VERSION}}.tgz
+
+### NumPy
+
+- **版本：** {{NUMPY_VERSION}}
+- **许可证：** BSD-3-Clause；随附依赖的许可说明位于 `numpy-{{NUMPY_VERSION}}.dist-info/licenses/`。
+- **源码：** https://github.com/numpy/numpy/tree/v{{NUMPY_VERSION}}
 
 ### VapourSynthScripts 与随附滤镜（AmusementClub/tools）
 

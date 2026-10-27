@@ -78,7 +78,7 @@ HDR10PLUS_TOOL_PATH = _bundled_path(
     r"C:\Software\hdr10plus_tool.exe",
 )
 VSEDIT_PATH = _bundled_path(
-    os.path.join("vs_pkg", "vsedit.exe"),
+    "vsedit.exe",
     r"C:\Software\vapoursynth\vsedit.exe",
 )
 VSPIPE_PATH = r"C:\Software\vapoursynth\vspipe.exe"

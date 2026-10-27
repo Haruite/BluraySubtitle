@@ -75,7 +75,7 @@ from ...vs_tools.getnative import format_getnative_progress, getnative as auto_g
 
 MIGRATE_METHODS = ['encode_task']
 KEEP_GETNATIVE_ARTIFACTS = bool(str(os.getenv("BLURAYSUB_KEEP_GETNATIVE_ARTIFACTS", "") or "").strip() == "1")
-# Each sample owns a memory-heavy VSPipe process, so concurrency is bounded by both a hard cap and
+# Each sample owns a memory-heavy VapourSynth analysis process, so concurrency is bounded by both a hard cap and
 # a conservative working-set estimate after reserving memory for the operating system and GUI.
 GETNATIVE_MAX_PARALLEL_SAMPLES = 20
 GETNATIVE_ESTIMATED_SAMPLE_MEMORY_BYTES = 800 * 1024**2
@@ -846,7 +846,7 @@ def _estimate_native_from_image_worker(
     if progress_jsonl:
         os.environ["BLURAYSUB_GETNATIVE_PROGRESS_JSONL"] = os.path.abspath(progress_jsonl)
     try:
-        # Keep worker independent from vapoursynth; VS work happens inside getnative.vpy via vspipe.
+        # Import the native runtime only after rejecting unusable image samples.
         from PIL import Image
 
         with Image.open(image_path) as img:

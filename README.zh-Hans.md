@@ -95,7 +95,7 @@ pip install PyQt6 numpy soundfile pycountry pillow matplotlib
 
 ### 压制模式额外依赖
 
-- VapourSynth 运行时与相关插件
+- VapourSynth Python 模块、运行时与相关插件（由环境配置脚本安装）
 - `vspipe`
 - `vsedit`
 - `x264`

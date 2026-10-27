@@ -146,9 +146,9 @@ These are **two separate upstreams**: the `fdkaac` program links against or ship
 
 ---
 
-## VapourSynth portable bundle (`vs_pkg/`)
+## Shared VapourSynth and Python runtime
 
-The `vs_pkg/` directory in the PyInstaller bundle mirrors a **Windows x64 portable layout**. It is composed of the following **documented upstreams** plus any extra plugin DLLs you add locally.
+The application and VSScript share the CPython runtime and NumPy package in `_internal/`. VapourSynth Classic is built from source for that Python version. Its source dependency license texts are included in `legal/vapoursynth/`.
 
 ### VapourSynth-Classic (core runtime, `vspipe`, etc.)
 
@@ -158,14 +158,28 @@ The `vs_pkg/` directory in the PyInstaller bundle mirrors a **Windows x64 portab
 - **Full license text (this tag):** https://raw.githubusercontent.com/AmusementClub/vapoursynth-classic/{{VAPOURSYNTH_CLASSIC_VERSION}}/COPYING.LESSER
 - **Source archive:** https://github.com/AmusementClub/vapoursynth-classic/archive/refs/tags/{{VAPOURSYNTH_CLASSIC_VERSION}}.zip
 
-### CPython — Windows embeddable distribution
+### VapourSynth source dependencies
 
-- **Files (typical):** `python313.dll`, embeddable stdlib zip, and related files from the **embed** layout under `vs_pkg/`
-- **Version:** {{PYTHON_VERSION}} (amd64 embeddable zip)
-- **Downloaded from:** https://www.python.org/ftp/python/{{PYTHON_VERSION}}/python-{{PYTHON_VERSION}}-embed-amd64.zip
+- **zimg:** revision `{{ZIMG_REVISION}}`, WTFPL v2; https://github.com/AmusementClub/zimg/tree/{{ZIMG_REVISION}}
+- **libp2p:** revision `{{LIBP2P_REVISION}}`, WTFPL v2; https://github.com/sekrit-twc/libp2p/tree/{{LIBP2P_REVISION}}
+- **mimalloc:** {{MIMALLOC_VERSION}}, MIT; https://github.com/microsoft/mimalloc/tree/v{{MIMALLOC_VERSION}}
+- **AviSynthPlus headers:** {{AVISYNTHPLUS_VERSION}}, see the license and exceptions in the included `AviSynthPlus-avisynth.h` and `AviSynthPlus-SDKLicense.rst`; https://github.com/AviSynth/AviSynthPlus/tree/v{{AVISYNTHPLUS_VERSION}}
+
+### CPython — shared Windows runtime
+
+- **Files:** Python DLLs, extension modules, and standard-library archive from the Python used to build the application.
+- **Version:** {{PYTHON_VERSION}} (amd64)
+- **Upstream:** https://www.python.org/ftp/python/{{PYTHON_VERSION}}/
 - **License:** **Python Software Foundation License** — SPDX: **`PSF-2.0`**
+- **Bundled license text:** `DLLs/LICENSE.txt`
 - **License overview:** https://docs.python.org/3/license.html
 - **Corresponding source (CPython):** https://www.python.org/ftp/python/{{PYTHON_VERSION}}/Python-{{PYTHON_VERSION}}.tgz
+
+### NumPy
+
+- **Version:** {{NUMPY_VERSION}}
+- **License:** BSD-3-Clause; bundled dependency notices are included in `numpy-{{NUMPY_VERSION}}.dist-info/licenses/`.
+- **Source:** https://github.com/numpy/numpy/tree/v{{NUMPY_VERSION}}
 
 ### VapourSynthScripts + bundled filters (AmusementClub/tools)
 

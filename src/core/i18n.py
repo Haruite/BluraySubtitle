@@ -8,6 +8,8 @@ from typing import Optional
 import src.core.settings as _core_settings
 
 I18N_ZH_TO_EN = {
+    'VapourSynth 源码及系统 Python 模块': 'VapourSynth source and system Python module',
+    'VapourSynth Classic 和系统 Python 模块': 'VapourSynth Classic and system Python module',
     '未找到匹配的 Python Windows 发行包。': 'No matching Python Windows package was found.',
     '字幕文件夹包含 {subtitle_count} 个文件，但表格只有 {row_count} 个正片输出。': 'Subtitle file count ({subtitle_count}) exceeds the main output row count ({row_count}).',
     '视频时间戳提取': 'Video timestamp extraction',

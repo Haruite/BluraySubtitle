@@ -413,17 +413,9 @@ def resolve_encoder_executable_path(tool: str, mode: str) -> str:
 
 
 def get_vspipe_context():
-    """
-    Resolve bundled vspipe path and runtime environment for nested package layout.
-    """
-    # 1) Resolve extracted bundle root.
+    """Resolve bundled VSPipe and its shared Python runtime environment."""
     bundle_dir = bundle_application_root()
-
-    # 2) Locate nested release folder.
-    # Expected layout: _MEIPASS/vs_pkg/vspipe(.exe)
-    vs_pkg_dir = os.path.join(bundle_dir, "vs_pkg")
-
-    # 3) Build environment.
+    vs_pkg_dir = bundle_dir if sys.platform == "win32" else os.path.join(bundle_dir, "vs_pkg")
     env = os.environ.copy()
 
     # Remove parent-process Python variables to avoid runtime conflicts.
@@ -432,10 +424,11 @@ def get_vspipe_context():
 
     if sys.platform == 'win32':
         vspipe_exe = os.path.join(vs_pkg_dir, "vspipe.exe")
-        # python313.dll is in vs_pkg root; add it to PATH.
+        # The bundled CPython library and native tools share the support root.
         env['PATH'] = f"{vs_pkg_dir};{env.get('PATH', '')}"
-        # Point vspipe to the embedded Python home.
+        # VSScript reads the shared Python home from python-runtime.ini.
         env['PYTHONHOME'] = vs_pkg_dir
+        env['PYTHONNOUSERSITE'] = '1'
         # Plugin directory mirrors original release-x64 structure.
         env['VAPOURSYNTH_PLUGINS'] = os.path.join(vs_pkg_dir, "vapoursynth64", "coreplugins")
 

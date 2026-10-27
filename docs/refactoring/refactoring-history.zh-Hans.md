@@ -1252,3 +1252,12 @@ Blu-ray DIY 压制及“编辑轨道”中的通用视频转换仍不在本阶�
 
 - 完成原盘选择与排序、不同电影剪辑、Remux/Encode、字幕、章节及 Windows/Docker 的代表性 GUI 和实际媒体回归；修复了来源切换和字幕导入造成的行映射错误、独立音轨选择、FrameCheck 隐式色彩转换及混流进度提示等问题。
 - 详细复现过程、修复提交、媒体验证与明确保留的 MyGO 声道布局、Vulkan 环境和混合 HDR 来源限制，见[2026-09-09～10 跨平台回归测试记录](../testing/2026-09-09-regression.zh-Hans.md)。
+
+## VapourSynth 与 getnative 共用 Python 运行时
+
+日期：2026-10-27
+
+- 将 getnative 的原生处理图和曲线采集合并进 Python 模块，样本工作进程直接调用 VapourSynth，并共用排名计算；进度报告和内存基准工具同步采用该工作进程路径。
+- Windows 环境配置针对所选系统 CPython 编译 VapourSynth Classic 及必需核心插件，安装匹配的绑定，并记录 Python ABI 和依赖版本用于升级检查；构建过程适配 Cython 枚举导出和 VSScript 的 Python 加载器。
+- Windows 打包使 VSScript 共用应用支持目录，包含标准库归档，为两种导入器仅收集一份 NumPy；同步运行时路径、依赖许可证收集和中英文文档。
+- 验证：96 项自动测试及静态检查通过；Python 3.14 和 3.15 绑定得到一致的 16 核参考曲线。Windows 源码版和冻结版 GUI 的 getnative／Encode 检查完成，视频显示时间戳一致，解码音频未变化，且无解码错误。

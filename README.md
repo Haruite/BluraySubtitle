@@ -95,7 +95,7 @@ pip install PyQt6 numpy soundfile pycountry pillow matplotlib
 
 ### Encode mode extras
 
-- VapourSynth runtime + required plugins
+- VapourSynth Python module, runtime, and required plugins (installed by the environment setup script)
 - `vspipe`
 - `vsedit`
 - `x264`
