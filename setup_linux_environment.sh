@@ -20,6 +20,7 @@ FFMPEG_SOURCE_REPOSITORY="https://github.com/FFmpeg/FFmpeg.git"
 SVT_AV1_SOURCE_REPOSITORY="https://gitlab.com/AOMediaCodec/SVT-AV1.git"
 FDK_AAC_SOURCE_REPOSITORY="https://github.com/mstorsjo/fdk-aac.git"
 FDKAAC_SOURCE_REPOSITORY="https://github.com/nu774/fdkaac.git"
+DESCALE_SOURCE_REPOSITORY="https://github.com/AmusementClub/descale.git"
 SETTINGS_FILE="${BLURAY_SETTINGS_FILE:-$(dirname -- "$BLURAY_SETUP_SOURCE")/src/core/settings.py}"
 
 # ---------------------------------------------------------------------------
@@ -2114,13 +2115,46 @@ install_vapoursynth() {
 # descale
 # ---------------------------------------------------------------------------
 
+descale_supports_blur() {
+  python3 - "$1" "$2" <<'PY'
+import filecmp
+from pathlib import Path
+import sys
+
+import vapoursynth as vs
+
+plugin_path = Path(sys.argv[1])
+if not plugin_path.is_file():
+    raise SystemExit(1)
+core = vs.core
+if not hasattr(core, "descale"):
+    core.std.LoadPlugin(path=str(plugin_path))
+plugin = core.descale
+if plugin.version.major < int(sys.argv[2]):
+    raise SystemExit(1)
+if not filecmp.cmp(plugin_path, plugin.plugin_path, shallow=False):
+    raise SystemExit(1)
+for name in ("Debilinear", "Debicubic", "Delanczos", "Despline16", "Despline36", "Despline64", "Descale"):
+    if "blur:float:opt;" not in getattr(plugin, name).signature:
+        raise SystemExit(1)
+clip = core.std.BlankClip(width=64, height=48, format=vs.PresetFormat.GRAYS, length=1)
+plugin.Descale(clip, 48, 32, kernel="bilinear", blur=1.0).get_frame(0)
+PY
+}
+
 install_descale() {
   log "$(msg 'Installing VapourSynth descale plugin' '安装 VapourSynth descale 插件')"
 
   local plugins_dir="$PLUGIN_PATH"
   ensure_configured_directory "$plugins_dir"
-  if [[ -f "$plugins_dir/libdescale.so" ]]; then
-    log "$(msg "descale plugin already exists in ${plugins_dir}, skipping" "检测到 ${plugins_dir} 已存在 descale 插件，跳过")"
+  local descale_tag descale_version
+  local version_file="$plugins_dir/descale-version.txt"
+  descale_tag="$(latest_stable_tag "$DESCALE_SOURCE_REPOSITORY" '^r[0-9]+[.]A([0-9]+)?$' 'r*.A*')"
+  descale_version="${descale_tag#r}"
+  descale_version="${descale_version%%.*}"
+  if [[ -f "$version_file" && "$(cat "$version_file")" == "$descale_tag" ]] \
+      && descale_supports_blur "$plugins_dir/libdescale.so" "$descale_version" >/dev/null 2>&1; then
+    log "$(msg "descale ${descale_tag} with blur support is installed, skipping" "已安装支持 blur 的 descale ${descale_tag}，跳过")"
     return 0
   fi
 
@@ -2141,25 +2175,25 @@ install_descale() {
   build_dir="$(mktemp -d)"
   (
     cd "$build_dir" || exit 1
-    tmux_run "$(msg 'Download vapoursynth-descale' '下载 vapoursynth-descale')" git clone https://github.com/Irrational-Encoding-Wizardry/vapoursynth-descale.git || exit 1
+    tmux_run "$(msg "Download vapoursynth-descale ${descale_tag}" "下载 vapoursynth-descale ${descale_tag}")" \
+      git clone --depth 1 --branch "$descale_tag" "$DESCALE_SOURCE_REPOSITORY" vapoursynth-descale || exit 1
     cd vapoursynth-descale || exit 1
+    # The pointee reference remains valid if GCC evaluates data.release() first.
+    sed -i '/vsapi->createVideoFilter/s/data->/d./g' src/vsplugin.cc || exit 1
     tmux_run "descale meson setup" meson setup build --buildtype=release || exit 1
     tmux_run "descale ninja" ninja -C build || exit 1
-    tmux_run "descale install" sudo ninja -C build install || exit 1
+    # Update the autoload copy as well so it cannot shadow the configured plugin.
+    sudo install -D -m 0755 build/libdescale.so /usr/local/lib/vapoursynth/libdescale.so || exit 1
+    bluray_sudo install -D -m 0755 build/libdescale.so "$plugins_dir/libdescale.so" || exit 1
     sudo ldconfig || exit 1
   ) || die "$(msg 'descale build/install failed' 'descale 编译/安装失败')"
 
-  local descale_src=""
-  if [[ -f "/usr/local/lib/vapoursynth/libdescale.so" ]]; then
-    descale_src="/usr/local/lib/vapoursynth/libdescale.so"
-  elif [[ -f "/usr/lib/vapoursynth/libdescale.so" ]]; then
-    descale_src="/usr/lib/vapoursynth/libdescale.so"
-  fi
-  [[ -n "$descale_src" ]] || die "$(msg 'descale installed but libdescale.so not found in system vapoursynth paths' 'descale 安装完成但未在系统 vapoursynth 路径找到 libdescale.so')"
-  cp "$descale_src" "$plugins_dir/libdescale.so" || die "$(msg "Failed to copy libdescale.so to ${plugins_dir}" "复制 libdescale.so 到 ${plugins_dir} 失败")"
+  descale_supports_blur "$plugins_dir/libdescale.so" "$descale_version" \
+    || die "$(msg 'Installed descale failed the blur runtime check' '安装后的 descale 未通过 blur 运行检查')"
+  printf '%s\n' "$descale_tag" > "$version_file"
 
   rm -rf "$build_dir"
-  log "$(msg "descale plugin installation complete (copied to ${plugins_dir})" "descale 插件安装完成（已复制到 ${plugins_dir}）")"
+  log "$(msg "descale ${descale_tag} installation complete with blur support (${plugins_dir})" "支持 blur 的 descale ${descale_tag} 安装完成（${plugins_dir}）")"
 }
 
 # ---------------------------------------------------------------------------

@@ -411,16 +411,19 @@ RUN set -eux; \
 
 RUN set -eux; \
     mkdir -p /tmp/descale && cd /tmp/descale; \
-    git clone https://github.com/Irrational-Encoding-Wizardry/vapoursynth-descale.git; \
+    DESCALE_REPOSITORY=https://github.com/AmusementClub/descale.git; \
+    DESCALE_TAG="$(git ls-remote --refs --tags --sort=-version:refname "$DESCALE_REPOSITORY" 'r*.A*' | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^r[0-9]+[.]A([0-9]+)?$/ { print $2; exit }')"; \
+    test -n "$DESCALE_TAG"; \
+    git clone --depth 1 --branch "$DESCALE_TAG" "$DESCALE_REPOSITORY" vapoursynth-descale; \
     cd vapoursynth-descale; \
+    sed -i '/vsapi->createVideoFilter/s/data->/d./g' src/vsplugin.cc; \
     meson setup build --buildtype=release; \
     ninja -C build; \
-    ninja -C build install; \
+    install -D -m 0755 build/libdescale.so /usr/local/lib/vapoursynth/libdescale.so; \
+    install -D -m 0755 build/libdescale.so /app/plugins/libdescale.so; \
     ldconfig; \
-    mkdir -p /app/plugins; \
-    if [ -f /usr/local/lib/vapoursynth/libdescale.so ]; then cp /usr/local/lib/vapoursynth/libdescale.so /app/plugins/libdescale.so; \
-    elif [ -f /usr/lib/vapoursynth/libdescale.so ]; then cp /usr/lib/vapoursynth/libdescale.so /app/plugins/libdescale.so; \
-    else echo "libdescale.so not found after install" >&2; exit 1; fi; \
+    python3 -c 'import vapoursynth as vs; core = vs.core; assert "blur:float:opt;" in core.descale.Descale.signature; clip = core.std.BlankClip(width=64, height=48, format=vs.PresetFormat.GRAYS, length=1); core.descale.Descale(clip, 48, 32, kernel="bilinear", blur=1.0).get_frame(0)'; \
+    printf '%s\n' "$DESCALE_TAG" > /app/plugins/descale-version.txt; \
     rm -rf /tmp/descale
 
 RUN set -eux; \
