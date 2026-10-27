@@ -892,20 +892,35 @@ function Get-PythonStableVersions {
     return $versions
 }
 
-function Get-PythonReleaseByVersion {
-    param([Parameter(Mandatory = $true)][string]$Version)
+function Get-PythonWindowsRelease {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Versions,
+        [switch]$Embeddable
+    )
 
-    return [pscustomobject]@{
-        Version = $Version
-        Name = "python-$Version-amd64.exe"
-        Uri = [Uri]"https://www.python.org/ftp/python/$Version/python-$Version-amd64.exe"
-        Sha256 = ""
+    $suffix = $(if ($Embeddable) { "embed-amd64.zip" } else { "amd64.exe" })
+    foreach ($version in $Versions) {
+        $name = "python-$version-$suffix"
+        $releaseUri = [Uri]"https://www.python.org/ftp/python/$version/"
+        $files = Get-SetupTextFromUri -Uri $releaseUri -CacheName "python-$version-files.html"
+        # Security-only releases can omit Windows binaries.
+        if (-not $files.Contains("href=`"$name`"")) {
+            continue
+        }
+        return [pscustomobject]@{
+            Version = $version
+            Name = $name
+            Uri = [Uri]::new($releaseUri, $name)
+            Sha256 = ""
+        }
     }
+    throw (Get-SetupText `
+        "No matching Python Windows package was found." `
+        "未找到匹配的 Python Windows 发行包。")
 }
 
 function Get-LatestPythonRelease {
-    $version = Get-PythonStableVersions | Select-Object -First 1
-    return Get-PythonReleaseByVersion $version
+    return Get-PythonWindowsRelease -Versions @(Get-PythonStableVersions)
 }
 
 function Get-PreviousPythonRelease {
@@ -918,19 +933,20 @@ function Get-PreviousPythonRelease {
             "没有可用于回退的 Python 次版本。")
     }
     $targetMinor = $currentVersion.Minor - 1
-    $fallbackVersion = Get-PythonStableVersions |
-        Where-Object {
-            $candidate = ConvertTo-ComparableVersion $_
-            $candidate.Major -eq $currentVersion.Major -and
-            $candidate.Minor -eq $targetMinor
-        } |
-        Select-Object -First 1
-    if (-not $fallbackVersion) {
+    $fallbackVersions = @(
+        Get-PythonStableVersions |
+            Where-Object {
+                $candidate = ConvertTo-ComparableVersion $_
+                $candidate.Major -eq $currentVersion.Major -and
+                $candidate.Minor -eq $targetMinor
+            }
+    )
+    if ($fallbackVersions.Count -eq 0) {
         throw (Get-SetupText `
             "Unable to determine the previous stable Python minor release." `
             "无法确定上一个 Python 稳定次版本。")
     }
-    return Get-PythonReleaseByVersion $fallbackVersion
+    return Get-PythonWindowsRelease -Versions $fallbackVersions
 }
 
 function Set-PythonToolPathsForVersion {
@@ -955,7 +971,7 @@ function Initialize-PythonRuntimeSelection {
             [string]$attemptedProperty.Value -eq $latestRelease.Version -and
             [string]$state.version
         ) {
-            $selectedRelease = Get-PythonReleaseByVersion ([string]$state.version)
+            $selectedRelease = Get-PythonWindowsRelease -Versions @([string]$state.version)
             Write-SetupInfo `
                 "Reusing Python $($selectedRelease.Version) because Python $($latestRelease.Version) previously failed dependency installation." `
                 "继续使用 Python $($selectedRelease.Version)，因为 Python $($latestRelease.Version) 之前未能完成依赖安装。"
@@ -1396,7 +1412,7 @@ function Install-PythonRuntime {
     param([string]$Version)
 
     Set-PythonToolPathsForVersion $Version
-    $release = Get-PythonReleaseByVersion $Version
+    $release = Get-PythonWindowsRelease -Versions @($Version)
     $installer = Join-Path $script:TempRoot $release.Name
     Invoke-SetupDownload -Uri $release.Uri -Destination $installer | Out-Null
     Assert-ValidAuthenticodeSignature $installer
@@ -3367,22 +3383,19 @@ function Get-VapourSynthPythonRelease {
     if ($script:ReleaseCache.Contains($cacheKey)) {
         return $script:ReleaseCache[$cacheKey]
     }
-    $version = Get-PythonStableVersions |
-        Where-Object {
-            $candidate = ConvertTo-ComparableVersion $_
-            $candidate.Major -eq 3 -and $candidate.Minor -eq 13
-        } |
-        Select-Object -First 1
-    if (-not $version) {
+    $versions = @(
+        Get-PythonStableVersions |
+            Where-Object {
+                $candidate = ConvertTo-ComparableVersion $_
+                $candidate.Major -eq 3 -and $candidate.Minor -eq 13
+            }
+    )
+    if ($versions.Count -eq 0) {
         throw (Get-SetupText `
             "Unable to determine the latest Python 3.13 embeddable release." `
             "无法确定最新的 Python 3.13 嵌入版。")
     }
-    $result = [pscustomobject]@{
-        Version = $version
-        Name = "python-$version-embed-amd64.zip"
-        Uri = [Uri]"https://www.python.org/ftp/python/$version/python-$version-embed-amd64.zip"
-    }
+    $result = Get-PythonWindowsRelease -Versions $versions -Embeddable
     $script:ReleaseCache[$cacheKey] = $result
     return $result
 }
