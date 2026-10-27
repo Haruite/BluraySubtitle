@@ -106,6 +106,9 @@ def keep_runtime_file(destination, root_binary_names):
     name = path.name.lower()
     parts = tuple(part.lower() for part in path.parts)
 
+    if parts[0] == "vs_pkg" and "__pycache__" in parts:
+        return False
+
     if relative.startswith("pyqt6/qt6/translations/"):
         return name in {"qt_en.qm", "qtbase_en.qm", "qt_zh_cn.qm", "qtbase_zh_cn.qm"}
 
