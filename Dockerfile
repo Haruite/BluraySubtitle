@@ -676,17 +676,13 @@ RUN set -eux; \
     install -m 0755 7zz /usr/local/bin/7zz; \
     rm -rf /tmp/7zip
 
+COPY third_party/vapoursynth_scripts/*.py third_party/vapoursynth_scripts/COPYRIGHT*.md /tmp/vapoursynth-scripts/third_party/vapoursynth_scripts/
+COPY third_party/vapoursynth_scripts/licenses/ /tmp/vapoursynth-scripts/third_party/vapoursynth_scripts/licenses/
+COPY tools/install_vapoursynth_scripts.py /tmp/vapoursynth-scripts/tools/install_vapoursynth_scripts.py
 RUN set -eux; \
-    mkdir -p /tmp/vcbs && cd /tmp/vcbs; \
-    wget -nv -O vapoursynth_portable.7z "https://github.com/AmusementClub/tools/releases/download/2025H1p/vapoursynth_portable_25H1.1p_cpu.7z"; \
-    7zz x vapoursynth_portable.7z -o./extracted; \
     PYV="$(python3 -c 'import sys; print("%d.%d" % (sys.version_info.major, sys.version_info.minor))')"; \
-    DST="/usr/local/lib/python${PYV}/dist-packages"; \
-    mkdir -p "${DST}"; \
-    SCRIPTS_DIR="$(find ./extracted -maxdepth 2 -type d -name VapourSynthScripts | head -n1)"; \
-    test -n "${SCRIPTS_DIR}"; \
-    find "${SCRIPTS_DIR}" -maxdepth 1 -type f -name "*.py" -exec cp -f {} "${DST}/" \; ; \
-    rm -rf /tmp/vcbs
+    python3 /tmp/vapoursynth-scripts/tools/install_vapoursynth_scripts.py --destination "/usr/local/lib/python${PYV}/dist-packages"; \
+    rm -rf /tmp/vapoursynth-scripts
 
 ARG X264_COMMIT
 RUN set -eux; \

@@ -181,7 +181,14 @@ The application and VSScript share the CPython runtime and NumPy package in `_in
 - **License:** BSD-3-Clause; bundled dependency notices are included in `numpy-{{NUMPY_VERSION}}.dist-info/licenses/`.
 - **Source:** https://github.com/numpy/numpy/tree/v{{NUMPY_VERSION}}
 
-### VapourSynthScripts + bundled filters (AmusementClub/tools)
+### VapourSynth Python filter scripts
+
+- **Source distribution:** the `VapourSynthScripts` directory in `vapoursynth_portable_25H1.1p_cpu.7z` from [AmusementClub/tools 2025H1p](https://github.com/AmusementClub/tools/releases/tag/2025H1p).
+- **Files:** the 11 Python modules maintained in `third_party/vapoursynth_scripts/`.
+- **Copyright, provenance, and licenses:** bundled at `legal/vapoursynth_scripts/COPYRIGHT.md`, with the supplied license texts in `legal/vapoursynth_scripts/licenses/`. Individual scripts retain their upstream attribution and licensing; the application MIT license does not relicense them. See the detailed notice for files without an explicit upstream license declaration.
+- **Corresponding source:** the Python files are included beside the shared runtime.
+
+### Required native filters (AmusementClub/tools)
 
 - **Upstream packages:** assets from **https://github.com/AmusementClub/tools/releases** .
 - **Version:** {{VAPOURSYNTH_TOOLS_VERSION}}

@@ -181,7 +181,14 @@
 - **许可证：** BSD-3-Clause；随附依赖的许可说明位于 `numpy-{{NUMPY_VERSION}}.dist-info/licenses/`。
 - **源码：** https://github.com/numpy/numpy/tree/v{{NUMPY_VERSION}}
 
-### VapourSynthScripts 与随附滤镜（AmusementClub/tools）
+### VapourSynth Python 滤镜脚本
+
+- **来源：** [AmusementClub/tools 2025H1p](https://github.com/AmusementClub/tools/releases/tag/2025H1p) 的 `vapoursynth_portable_25H1.1p_cpu.7z` 中的 `VapourSynthScripts` 目录。
+- **文件：** 在 `third_party/vapoursynth_scripts/` 中管理的 11 个 Python 模块。
+- **版权、来源与许可：** 随附于 `legal/vapoursynth_scripts/COPYRIGHT.md`，已取得的许可文本位于 `legal/vapoursynth_scripts/licenses/`。各脚本保留其上游署名和许可，程序的 MIT 许可证不对其重新许可。部分文件未明确声明上游许可，详情见该说明。
+- **对应源码：** Python 文件随共用运行时一同提供。
+
+### 必需的原生滤镜（AmusementClub/tools）
 
 - **上游包：** 来自 **https://github.com/AmusementClub/tools/releases** 的发布资源。
 - **版本：** {{VAPOURSYNTH_TOOLS_VERSION}}

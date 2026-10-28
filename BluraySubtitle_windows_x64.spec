@@ -190,19 +190,17 @@ for directory_name in ("coreplugins", "plugins"):
     for plugin in (vapoursynth_dir / "vapoursynth64" / directory_name).glob("*.dll"):
         binaries.append((str(plugin), f"vapoursynth64/{directory_name}"))
 datas.append((str(required_path(vapoursynth_dir / "portable.vs", "portable plugin marker")), "."))
-script_root = vapoursynth_dir / "Lib" / "site-packages"
-for script in script_root.rglob("*"):
-    relative = script.relative_to(script_root)
-    if (
-        script.is_file()
-        and not relative.parts[0].lower().startswith("numpy")
-        and "__pycache__" not in relative.parts
-        and keep_runtime_file(relative, set())
-    ):
-        datas.append((str(script), str(relative.parent)))
+script_root = required_path(
+    PROJECT_ROOT / "third_party" / "vapoursynth_scripts",
+    "repository-managed VapourSynth scripts",
+)
+datas.extend((str(script), ".") for script in sorted(script_root.glob("*.py")))
+for name in ("COPYRIGHT.md", "COPYRIGHT.zh-Hans.md"):
+    datas.append((str(required_path(script_root / name, "VapourSynth script notices")), "legal/vapoursynth_scripts"))
+datas.append((str(required_path(script_root / "licenses", "VapourSynth script licenses")), "legal/vapoursynth_scripts/licenses"))
 
 # VSScript has a regular CPython importer, so give it a standard-library archive.
-# NumPy and filter scripts are collected once as shared Python files by the hook.
+# VSScript reads the same NumPy and filter source files as frozen workers.
 shared_python = Path(workpath) / "shared-python"
 shared_python.mkdir(parents=True, exist_ok=True)
 python_ini = shared_python / "python-runtime.ini"
@@ -253,7 +251,7 @@ os.environ["PATH"] = os.pathsep.join(dict.fromkeys([
 
 a = Analysis(
     [str(entry_script)],
-    pathex=[str(PROJECT_ROOT)],
+    pathex=[str(script_root), str(PROJECT_ROOT)],
     binaries=binaries,
     datas=datas,
     hiddenimports=["muvsfunc", "mvsfunc"],

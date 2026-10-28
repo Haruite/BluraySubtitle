@@ -1272,3 +1272,12 @@ Date: 2026-10-28
 - Linux setup inspects each requested plugin file in a dedicated namespace and prefers its exported or registered version. Releases that cannot be identified completely use `plugins/version/version.txt`, with records tied to the installed file's SHA-256.
 - Version comparisons control upgrades for managed plugins, including the compatible L-SMASH-Works revision and descale capability check. Fallback versions are recorded only after successful installation and loading.
 - Plugin archives and source trees use a temporary build directory. L-SMASH-Works dependency checks finish before replacing an existing plugin.
+
+## Repository-managed VapourSynth Python Filters
+
+Date: 2026-10-28
+
+- Added the 11 Python filter scripts with per-file provenance, upstream attribution, available license texts, and explicit records of missing license declarations.
+- Windows and Linux setup synchronize script and notice contents through one installer, so existing files are updated when the repository snapshot changes. Linux and Docker install scripts from the repository instead of extracting the portable tools archive.
+- Windows packaging collects the repository scripts and their notices directly, with its module search path selecting the same snapshot. Third-party notices distinguish Python scripts from the native plugin bundle.
+- Verification: synchronization and repair passed on Windows PowerShell 5.1 and Ubuntu 22.04/26.04. Existing and repository copies produced identical 16-kernel getnative curves; the Windows package loaded the shared scripts and NumPy through its bundled VSPipe. Docker's copied source layout and preloaded imports were checked without building an image.

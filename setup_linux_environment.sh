@@ -2356,75 +2356,15 @@ ensure_modern_7zip_cli() {
 # VapourSynthScripts
 # ---------------------------------------------------------------------------
 
-# Subset of the VCB-S portable bundle's VapourSynthScripts/ used here (same filenames as reference bundle).
 install_vapoursynth_scripts() {
   local py_ver
   py_ver="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
   local dst_dir="/usr/local/lib/python${py_ver}/dist-packages"
 
-  # Reference layout (e.g. .../VapourSynthScripts/*.py); keep in sync when updating the portable package.
-  local -a vs_script_names=(
-    MCDenoise.py
-    adjust.py
-    dfttest2.py
-    havsfunc.py
-    mirvsfunc.py
-    muvsfunc.py
-    muvsfunc_numpy.py
-    mvsfunc.py
-    nnedi3_resample.py
-    vsTAAmbk.py
-    vsmlrt.py
-  )
-
-  local name all_present=1
-  for name in "${vs_script_names[@]}"; do
-    if [[ ! -f "${dst_dir}/${name}" ]]; then
-      all_present=0
-      break
-    fi
-  done
-  if (( all_present )); then
-    log "$(msg "VapourSynthScripts (${#vs_script_names[@]} .py files) already installed at ${dst_dir}, skipping portable 7z" "VapourSynthScripts（${#vs_script_names[@]} 个 .py）已在 ${dst_dir}，跳过便携包下载/解压")"
-    return 0
-  fi
-
-  log "$(msg 'Downloading VCB-S VapourSynth portable package and extracting VapourSynthScripts' '下载 VCB-S VapourSynth 可移植包并提取 VapourSynthScripts')"
-
-  local vcbs_url="https://github.com/AmusementClub/tools/releases/download/2025H1p/vapoursynth_portable_25H1.1p_cpu.7z"
-
-  [[ -n "${BLURAY_7ZZ_BIN:-}" ]] || die "$(msg '7-Zip CLI path not set' '未设置 7-Zip 可执行路径')"
-
-  if ! command -v wget >/dev/null 2>&1; then
-    apt_update
-    apt_install wget || die "$(msg 'Failed to install wget' '安装 wget 失败')"
-  fi
-
-  sudo mkdir -p "$dst_dir"
-
-  local tmp_dir
-  tmp_dir="$(mktemp -d)"
-  trap 'rm -rf "$tmp_dir"' RETURN
-
-  tmux_run "$(msg 'Download vapoursynth_portable_25H1.1p_cpu.7z' '下载 vapoursynth_portable_25H1.1p_cpu.7z')" wget -q -O "$tmp_dir/vapoursynth_portable.7z" "$vcbs_url" || die "$(msg 'Failed to download 7z package' '下载 7z 包失败')"
-  tmux_run "$(msg 'Extract vapoursynth_portable.7z' '解压 vapoursynth_portable.7z')" "$BLURAY_7ZZ_BIN" x "$tmp_dir/vapoursynth_portable.7z" "-o$tmp_dir/extracted" || die "$(msg 'Failed to extract 7z package' '解压 7z 包失败')"
-
-  local scripts_dir
-  scripts_dir="$(find "$tmp_dir/extracted" -maxdepth 2 -type d -name VapourSynthScripts | head -n1)"
-  if [[ -z "${scripts_dir:-}" ]]; then
-    die "$(msg 'VapourSynthScripts subdirectory not found in extracted archive' '未在解压目录中找到 VapourSynthScripts 子目录')"
-  fi
-
-  local copied=0
-  for name in "${vs_script_names[@]}"; do
-    if [[ ! -f "${scripts_dir}/${name}" ]]; then
-      die "$(msg "Expected script missing in archive: ${name}" "压缩包中缺少预期脚本：${name}")"
-    fi
-    sudo cp -f "${scripts_dir}/${name}" "$dst_dir/" || die "$(msg "Failed to copy script: ${name}" "复制脚本失败：${name}")"
-    copied=$((copied + 1))
-  done
-
-  log "$(msg "Copied ${copied} script(s) from VapourSynthScripts to ${dst_dir}" "已从 VapourSynthScripts 复制脚本到 ${dst_dir}（数量：${copied}）")"
+  local installer="$(dirname -- "$BLURAY_SETUP_SOURCE")/tools/install_vapoursynth_scripts.py"
+  log "$(msg 'Synchronizing repository-managed VapourSynth scripts and copyright notices' '同步仓库中的 VapourSynth 脚本和版权说明')"
+  sudo python3 "$installer" --destination "$dst_dir" || die "$(msg 'Failed to install repository-managed VapourSynth scripts' '安装仓库中的 VapourSynth 脚本失败')"
+  log "$(msg "VapourSynth scripts and notices verified at ${dst_dir}" "已校验 ${dst_dir} 中的 VapourSynth 脚本和版权说明")"
 }
 
 # ---------------------------------------------------------------------------

@@ -161,11 +161,6 @@ $script:RequiredVapourSynthPlugins = @(
     "vsnlm_ispc.dll",
     "zsmooth.dll"
 )
-$script:RequiredVapourSynthScripts = @(
-    "havsfunc.py",
-    "muvsfunc.py",
-    "mvsfunc.py"
-)
 $script:PythonPackages = @(
     [pscustomobject]@{ Distribution = "pip"; Import = "import pip" },
     [pscustomobject]@{ Distribution = "setuptools"; Import = "import setuptools" },
@@ -3419,6 +3414,22 @@ function Test-VapourSynthClassic {
     }
 }
 
+function Install-VapourSynthScripts {
+    $installer = Join-Path $script:SetupDirectory "tools\install_vapoursynth_scripts.py"
+    Write-SetupInfo `
+        "Synchronizing repository-managed VapourSynth scripts and copyright notices." `
+        "正在同步仓库中的 VapourSynth 脚本和版权说明。"
+    $result = Invoke-SetupCommand `
+        -FilePath $script:ToolPaths.Python `
+        -Arguments @($installer, "--destination", $script:ToolPaths.VapourSynthSitePackages) |
+        ConvertFrom-Json
+    $status = if ($result.updated -gt 0) { "installed" } else { "satisfied" }
+    Update-ManifestComponent "vapoursynth-scripts" $result.sha256 $status
+    Write-SetupInfo `
+        "Verified $($result.scripts) VapourSynth scripts and their notices; $($result.updated) files updated." `
+        "已校验 $($result.scripts) 个 VapourSynth 脚本及其版权说明；更新了 $($result.updated) 个文件。"
+}
+
 function Get-VapourSynthToolsRelease {
     return Get-GitHubLatestReleaseAsset `
         -Repository "AmusementClub/tools" `
@@ -3433,11 +3444,6 @@ function Get-InstalledVapourSynthToolsVersion {
     }
     foreach ($plugin in $script:RequiredVapourSynthPlugins) {
         if (-not (Test-Path -LiteralPath (Join-Path $script:ToolPaths.VapourSynthPlugins $plugin) -PathType Leaf)) {
-            return ""
-        }
-    }
-    foreach ($scriptFile in $script:RequiredVapourSynthScripts) {
-        if (-not (Test-Path -LiteralPath (Join-Path $script:ToolPaths.VapourSynthSitePackages $scriptFile) -PathType Leaf)) {
             return ""
         }
     }
@@ -3491,21 +3497,7 @@ function Install-VapourSynthTools {
             "AmusementClub tools 压缩包中缺少 vsedit.exe。")
     }
 
-    $scriptEntries = @(
-        $entries |
-            Where-Object {
-                $_.Normalized.StartsWith("VapourSynthScripts\", [StringComparison]::OrdinalIgnoreCase) -or
-                $_.Normalized.IndexOf("\VapourSynthScripts\", [StringComparison]::OrdinalIgnoreCase) -ge 0
-            }
-    )
-    if ($scriptEntries.Count -eq 0) {
-        throw (Get-SetupText `
-            "The VapourSynthScripts directory is missing from the AmusementClub tools archive." `
-            "AmusementClub tools 压缩包中缺少 VapourSynthScripts 目录。")
-    }
-
     $selectedEntries = @($vsEditEntry.Path)
-    $selectedEntries += @($scriptEntries | ForEach-Object { $_.Path })
     foreach ($plugin in $script:RequiredVapourSynthPlugins) {
         $suffix = "\vapoursynth64\plugins\$plugin"
         $pluginEntry = $entries |
@@ -3526,29 +3518,23 @@ function Install-VapourSynthTools {
     $extractArguments = @("x", $archive, "-o$extracted", "-y", "-bso0", "-bsp0")
     $extractArguments += @($selectedEntries | Sort-Object -Unique)
     Write-SetupInfo `
-        "Extracting VSEdit, VapourSynthScripts, and $($script:RequiredVapourSynthPlugins.Count) required plugins." `
-        "正在解压 VSEdit、VapourSynthScripts 和 $($script:RequiredVapourSynthPlugins.Count) 个必需插件。"
+        "Extracting VSEdit and $($script:RequiredVapourSynthPlugins.Count) required plugins." `
+        "正在解压 VSEdit 和 $($script:RequiredVapourSynthPlugins.Count) 个必需插件。"
     Invoke-SetupCommand `
         -FilePath $script:ToolPaths.SevenZip `
         -Arguments $extractArguments | Out-Null
 
     $vsEdit = Get-ChildItem -LiteralPath $extracted -Filter "vsedit.exe" -File -Recurse |
         Select-Object -First 1
-    $scriptsDirectory = Get-ChildItem -LiteralPath $extracted -Filter "VapourSynthScripts" -Directory -Recurse |
-        Select-Object -First 1
-    if ($null -eq $vsEdit -or $null -eq $scriptsDirectory) {
+    if ($null -eq $vsEdit) {
         throw (Get-SetupText `
-            "VSEdit or VapourSynthScripts could not be located after extraction." `
-            "解压后无法定位 VSEdit 或 VapourSynthScripts。")
+            "VSEdit could not be located after extraction." `
+            "解压后无法定位 VSEdit。")
     }
 
     [IO.Directory]::CreateDirectory($script:ToolPaths.VapourSynthRoot) | Out-Null
-    [IO.Directory]::CreateDirectory($script:ToolPaths.VapourSynthSitePackages) | Out-Null
     [IO.Directory]::CreateDirectory($script:ToolPaths.VapourSynthPlugins) | Out-Null
     Copy-Item -LiteralPath $vsEdit.FullName -Destination $script:ToolPaths.VsEdit -Force
-    foreach ($item in Get-ChildItem -LiteralPath $scriptsDirectory.FullName -Force) {
-        Copy-Item -LiteralPath $item.FullName -Destination $script:ToolPaths.VapourSynthSitePackages -Recurse -Force
-    }
     foreach ($plugin in $script:RequiredVapourSynthPlugins) {
         $pluginFile = Get-ChildItem -LiteralPath $extracted -Filter $plugin -File -Recurse |
             Where-Object {
@@ -3907,8 +3893,8 @@ function Register-StageFiveComponents {
 
     Register-SetupComponent `
         -Name "vapoursynth-tools" `
-        -EnglishName "VSEdit, VapourSynth scripts, and required plugins" `
-        -ChineseName "VSEdit、VapourSynth 脚本和必需插件" `
+        -EnglishName "VSEdit and required plugins" `
+        -ChineseName "VSEdit 和必需插件" `
         -GetInstalledVersion { Get-InstalledVapourSynthToolsVersion } `
         -GetAvailableVersion { (Get-VapourSynthToolsRelease).Version } `
         -Install { param($Version) Install-VapourSynthTools $Version } `
@@ -3961,6 +3947,7 @@ function Invoke-WindowsSetup {
     Register-StageFourComponents
     Register-StageFiveComponents
     Invoke-RegisteredSetupComponents
+    Install-VapourSynthScripts
     Save-SetupManifest
 
     if ($script:RestartRequired) {
