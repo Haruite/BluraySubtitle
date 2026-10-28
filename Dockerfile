@@ -426,10 +426,13 @@ RUN set -eux; \
     printf '%s\n' "$DESCALE_TAG" > /app/plugins/descale-version.txt; \
     rm -rf /tmp/descale
 
+ARG VSEDIT_TAG
 RUN set -eux; \
+    VSEDIT_TAG="${VSEDIT_TAG:-$(git ls-remote --refs --tags https://github.com/YomikoR/VapourSynth-Editor.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[rR][0-9]+-mod-[0-9]+([.][0-9]+)*$/ { print tolower($2) "\t" $2 }' | LC_ALL=C sort -k1,1Vr | awk 'NR == 1 { print $2 }')}"; \
+    test -n "$VSEDIT_TAG"; \
     mkdir -p /tmp/vsedit/vsedit_build && cd /tmp/vsedit/vsedit_build; \
-    wget -nv -O R19-mod-6.10.tar.gz https://github.com/YomikoR/VapourSynth-Editor/archive/refs/tags/R19-mod-6.10.tar.gz; \
-    tar -zxvf R19-mod-6.10.tar.gz --strip-components=1; \
+    wget -nv -O vsedit.tar.gz "https://github.com/YomikoR/VapourSynth-Editor/archive/refs/tags/${VSEDIT_TAG}.tar.gz"; \
+    tar -zxvf vsedit.tar.gz --strip-components=1; \
     ldconfig; \
     cd pro; \
     export CPLUS_INCLUDE_PATH=/usr/local/include/vapoursynth; \

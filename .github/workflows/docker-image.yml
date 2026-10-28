@@ -53,11 +53,11 @@ jobs:
             local pattern="$3"
             local refs
             local tag
-            if ! refs="$(retry_ls_remote "$source" --refs --tags --sort=-version:refname "$source")"; then
+            if ! refs="$(retry_ls_remote "$source" --refs --tags "$source")"; then
               echo "::error::Failed to query ${source} after 5 attempts." >&2
               return 1
             fi
-            tag="$(awk -F 'refs/tags/' -v pattern="$pattern" 'NF == 2 && $2 ~ pattern { print $2; exit }' <<<"$refs")"
+            tag="$(awk -F 'refs/tags/' -v pattern="$pattern" 'NF == 2 && $2 ~ pattern { print tolower($2) "\t" $2 }' <<<"$refs" | LC_ALL=C sort -k1,1Vr | awk 'NR == 1 { print $2 }')"
             if [[ -z "$tag" ]]; then
               echo "::error::No matching release tag found for ${source}." >&2
               return 1
@@ -117,6 +117,7 @@ jobs:
           resolve_latest_tag svt_av1_tag https://gitlab.com/AOMediaCodec/SVT-AV1.git '^[vV]?[0-9]+([.][0-9]+)+$'
           resolve_latest_tag fdk_aac_tag https://github.com/mstorsjo/fdk-aac.git '^[vV]?[0-9]+([.][0-9]+)+$'
           resolve_latest_tag fdkaac_tag https://github.com/nu774/fdkaac.git '^[vV]?[0-9]+([.][0-9]+)+$'
+          resolve_latest_tag vsedit_tag https://github.com/YomikoR/VapourSynth-Editor.git '^[rR][0-9]+-mod-[0-9]+([.][0-9]+)*$'
           if ! resolve_branch_commit x264_commit https://code.videolan.org/videolan/x264.git master warning; then
             resolve_branch_commit x264_commit https://github.com/mirror/x264.git master
           fi
@@ -139,6 +140,7 @@ jobs:
             SVT_AV1_TAG=${{ steps.versions.outputs.svt_av1_tag }}
             FDK_AAC_TAG=${{ steps.versions.outputs.fdk_aac_tag }}
             FDKAAC_TAG=${{ steps.versions.outputs.fdkaac_tag }}
+            VSEDIT_TAG=${{ steps.versions.outputs.vsedit_tag }}
             X264_COMMIT=${{ steps.versions.outputs.x264_commit }}
             TSMUXER_TAG=${{ steps.versions.outputs.tsmuxer_tag }}
             HDR10PLUS_TAG=${{ steps.versions.outputs.hdr10plus_tag }}

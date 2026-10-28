@@ -21,6 +21,7 @@ SVT_AV1_SOURCE_REPOSITORY="https://gitlab.com/AOMediaCodec/SVT-AV1.git"
 FDK_AAC_SOURCE_REPOSITORY="https://github.com/mstorsjo/fdk-aac.git"
 FDKAAC_SOURCE_REPOSITORY="https://github.com/nu774/fdkaac.git"
 DESCALE_SOURCE_REPOSITORY="https://github.com/AmusementClub/descale.git"
+VSEDIT_SOURCE_REPOSITORY="https://github.com/YomikoR/VapourSynth-Editor.git"
 SETTINGS_FILE="${BLURAY_SETTINGS_FILE:-$(dirname -- "$BLURAY_SETUP_SOURCE")/src/core/settings.py}"
 
 # ---------------------------------------------------------------------------
@@ -113,11 +114,13 @@ latest_stable_tag() {
   local tag_glob="${3:-*}"
   local tag
 
+  # Upstreams may mix tag case; keep the original spelling for downloads.
   tag="$(
-    git ls-remote --exit-code --refs --tags --sort=-version:refname \
+    git ls-remote --exit-code --refs --tags \
       "$repository_url" "$tag_glob" \
       | awk -F 'refs/tags/' -v stable_pattern="$stable_pattern" \
-        'NF == 2 && $2 ~ stable_pattern { print $2; exit }'
+        'NF == 2 && $2 ~ stable_pattern { print tolower($2) "\t" $2 }' \
+      | LC_ALL=C sort -k1,1Vr | awk 'NR == 1 { print $2 }'
   )" || true
   if [[ -z "${tag:-}" ]]; then
     die "$(msg "Failed to resolve the latest stable tag for ${repository_url}" "无法获取 ${repository_url} 的最新稳定标签")"
@@ -2306,13 +2309,20 @@ install_vapoursynth_scripts() {
 # VapourSynth Editor (vsedit)
 # ---------------------------------------------------------------------------
 
-# R19-mod-6.10 is the latest editor tested against the classic VapourSynth stack.
 install_vapoursynth_editor() {
-  log "$(msg 'Installing VapourSynth Editor (vsedit, build from source)' '安装 vapoursynth-editor (vsedit)（从源码编译并安装）')"
+  local vsedit_tag target_version installed_tag=""
+  vsedit_tag="${VSEDIT_TAG:-$(latest_stable_tag "$VSEDIT_SOURCE_REPOSITORY" '^[rR][0-9]+-mod-[0-9]+([.][0-9]+)*$')}"
+  target_version="${vsedit_tag#[rR]}"
+  log "$(msg "Installing VapourSynth Editor ${vsedit_tag} (build from source)" "安装 VapourSynth Editor ${vsedit_tag}（从源码编译并安装）")"
 
   if [[ -x "$VSEDIT_PATH" && -x "$VSEDIT_BINARY_PATH" ]]; then
-    log "$(msg 'vsedit already installed (vsedit-bin found), skipping' '检测到 vsedit 已安装（存在 vsedit-bin），跳过编译安装')"
-    return 0
+    local installed_output
+    installed_output="$("$VSEDIT_BINARY_PATH" --version 2>&1 || true)"
+    installed_tag="$(sed -nE 's/^VapourSynth Editor ([rR][0-9]+-mod-[0-9]+([.][0-9]+)*).*$/\1/p' <<<"$installed_output")"
+    if [[ -n "$installed_tag" ]] && dpkg --compare-versions "${installed_tag#[rR]}" ge "$target_version"; then
+      log "$(msg "vsedit is current (${installed_tag} >= ${vsedit_tag}), skipping build" "vsedit 已是当前版本（${installed_tag} >= ${vsedit_tag}），跳过编译")"
+      return 0
+    fi
   fi
 
   local deps=(qt6-base-dev qt6-base-dev-tools qt6-5compat-dev qt6-websockets-dev qt6-declarative-dev libgl-dev wget tar)
@@ -2342,10 +2352,11 @@ install_vapoursynth_editor() {
     mkdir -p vsedit_build
     cd vsedit_build || exit 1
 
-    tmux_run "$(msg 'Download vsedit R19-mod-6.10' '下载 vsedit R19-mod-6.10')" wget -O R19-mod-6.10.tar.gz https://github.com/YomikoR/VapourSynth-Editor/archive/refs/tags/R19-mod-6.10.tar.gz || exit 1
+    tmux_run "$(msg "Download vsedit ${vsedit_tag}" "下载 vsedit ${vsedit_tag}")" \
+      wget -O vsedit.tar.gz "https://github.com/YomikoR/VapourSynth-Editor/archive/refs/tags/${vsedit_tag}.tar.gz" || exit 1
 
     log "$(msg 'Extracting vsedit source tarball' '解压 vsedit 源码包')"
-    tmux_run "$(msg 'Extract vsedit source' '解压 vsedit 源码包')" tar -zxvf R19-mod-6.10.tar.gz --strip-components=1 || exit 1
+    tmux_run "$(msg 'Extract vsedit source' '解压 vsedit 源码包')" tar -zxvf vsedit.tar.gz --strip-components=1 || exit 1
     sudo ldconfig
 
     if [[ -f "resources/vsedit.png" ]]; then
