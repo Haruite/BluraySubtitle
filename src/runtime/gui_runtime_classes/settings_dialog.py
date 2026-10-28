@@ -966,6 +966,22 @@ class SettingsDialog(QDialog):
         missing_lines = "\n".join(
             f"- {name}: {path}" for name, path in missing
         )
+        encoder_path_names = {"X264_PATH", "X265_PATH", "SVT_AV1_PATH"}
+        show_bundled_encoder_hint = (
+            sys.platform == "win32"
+            and bool(getattr(sys, "frozen", False))
+            and any(name in encoder_path_names for name, _ in missing)
+        )
+        hints: list[str] = []
+        if show_bundled_encoder_hint:
+            hints.append(self.t(
+                "Only the bundled source can be selected for x264/x265/svtav1 encoders."
+            ))
+        if not show_bundled_encoder_hint or any(name not in encoder_path_names for name, _ in missing):
+            hints.append(self.t(
+                "Run {script} from the repository root, then restart the "
+                "application and check the paths again."
+            ).format(script=setup_script))
         self.external_tools_detection_view.setFixedHeight(120)
         self.external_tools_detection_view.setStyleSheet("color: #d9534f;")
         self.external_tools_detection_view.setPlainText(
@@ -973,10 +989,7 @@ class SettingsDialog(QDialog):
             + "\n"
             + missing_lines
             + "\n"
-            + self.t(
-                "Run {script} from the repository root, then restart the "
-                "application and check the paths again."
-            ).format(script=setup_script)
+            + "\n".join(hints)
         )
 
     def _load_external_tools_source(self, show_error: bool) -> None:

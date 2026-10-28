@@ -211,6 +211,7 @@ I18N_ZH_TO_EN = {
     '未配置': 'not configured',
     'settings.py 中配置的工具路径均有效。': 'All configured tool paths in settings.py were found.',
     'settings.py 中配置的以下工具缺失：': 'Missing tools configured in settings.py:',
+    'x264/x265/svtav1压制工具来源只能选择程序自带': 'Only the bundled source can be selected for x264/x265/svtav1 encoders.',
     '请从仓库根目录运行 {script}，然后重新启动程序并再次检查路径。': 'Run {script} from the repository root, then restart the application and check the paths again.',
     '无法加载外部工具设置：{error}': 'Could not load external tool settings: {error}',
     '无法保存外部工具设置：{error}': 'Could not save external tool settings: {error}',
