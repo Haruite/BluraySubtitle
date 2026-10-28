@@ -885,18 +885,21 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 continue
 
         flush()
-        ffprobe_audio = [
-            stream
-            for stream in BluraySubtitle._read_media_streams(mkv_path)
-            if str(stream.get('codec_type') or '').strip().lower() == 'audio'
-        ]
-        audio_index = 0
-        for track in tracks:
-            if str(track.get('codec_type') or '').strip().lower() != 'audio':
+        probe_streams = BluraySubtitle._read_media_streams(mkv_path)
+        for codec_type in {track['codec_type'] for track in tracks}:
+            matching_tracks = [track for track in tracks if track['codec_type'] == codec_type]
+            matching_streams = [
+                stream for stream in probe_streams
+                if str(stream.get('codec_type') or '').strip().lower() == codec_type
+                and not (stream.get('disposition') or {}).get('attached_pic')
+            ]
+            if len(matching_tracks) != len(matching_streams):
                 continue
-            if audio_index < len(ffprobe_audio):
-                track['profile'] = ffprobe_audio[audio_index].get('profile') or ''
-            audio_index += 1
+            for track, stream in zip(matching_tracks, matching_streams):
+                # Selection uses ffprobe indexes; extraction keeps the Matroska track ID.
+                track['index'] = str(stream['index'])
+                if codec_type == 'audio':
+                    track['profile'] = stream.get('profile') or ''
         return tracks
 
     def _read_mkvmerge_attachment_ids(self, mkv_path: str) -> dict[str, str]:
@@ -1253,7 +1256,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
         is_mpls_pid_rows = any(bool((s or {}).get('_mpls_pid_row')) for s in (streams or []))
         is_mkvinfo = (
             not is_mpls_pid_rows
-            and any(('codec_id' in (s or {})) or ('track_id' in (s or {})) for s in (streams or []))
+            and (bool(source_mkv) or any(('codec_id' in (s or {})) or ('track_id' in (s or {})) for s in (streams or [])))
         )
         show_legacy_convert = (self.get_selected_function_id() == 5)
         show_audio_convert_col = self.get_selected_function_id() in (4, 5)
@@ -1336,11 +1339,11 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                         table.setItem(r, c, QTableWidgetItem(''))
                     continue
                 if key == 'extract':
-                    if source_mkv and is_mkvinfo:
+                    if source_mkv and is_mkvinfo and s.get('track_id') is not None:
                         btn = QToolButton(table)
                         btn.setText(self.t('extract'))
                         try:
-                            tid = int(str(s.get('track_id') or s.get('index') or '').strip())
+                            tid = int(s['track_id'])
                         except Exception:
                             tid = -1
                         cid = str(s.get('codec_id') or '')
@@ -1368,7 +1371,11 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                     table.setCellWidget(r, c, cb)
                     continue
                 if key == 'track_number' and is_mkvinfo:
-                    v = s.get('track_number', s.get('track_id', ''))
+                    v = s.get('track_number', s.get('track_id', s.get('index', '')))
+                elif key == 'track_type' and is_mkvinfo:
+                    v = s.get('track_type', codec_type)
+                elif key == 'codec_id' and is_mkvinfo:
+                    v = s.get('codec_id', s.get('codec_name', ''))
                 elif key == 'language':
                     if is_mkvinfo:
                         v = s.get('language', s.get('lang', 'und'))
@@ -1501,6 +1508,8 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 if lang_col >= 0:
                     changed: list[tuple[int, str]] = []
                     for r, s in enumerate(streams):
+                        if s.get('track_id') is None:
+                            continue
                         item = table.item(r, lang_col)
                         if not item:
                             continue
@@ -1579,6 +1588,8 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                             status_label.setStyleSheet('color:#dc2626;font-weight:bold;')
                             status_label.setVisible(True)
                             QTimer.singleShot(3000, lambda: status_label.setVisible(False))
+                    else:
+                        dlg.accept()
             else:
                 dlg.accept()
 
@@ -1836,12 +1847,10 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 QMessageBox.information(self, " ", self.t('MKV file not found'))
                 return
             self._ensure_default_track_config_for_mkv(src, sp=is_sp)
-            streams_raw = BluraySubtitle._read_media_streams(src)
-            if not streams_raw:
-                streams = self._read_mkvinfo_tracks(src)
-            else:
+            streams = self._read_mkvinfo_tracks(src)
+            if not streams:
+                streams_raw = BluraySubtitle._read_media_streams(src)
                 streams = self._streams_for_track_selection_dialog(streams_raw)
-            pid_lang = BluraySubtitle._pid_lang_from_media_streams(streams_raw or streams)
             cfg = getattr(self, '_track_selection_config', {})
             conv_cfg_all = getattr(self, '_track_convert_config', {})
             selected = set((cfg.get(key, {}).get('audio') or []) + (cfg.get(key, {}).get('subtitle') or []))
@@ -1851,7 +1860,6 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 f"{self.t('edit tracks')}: {os.path.basename(src)}",
                 streams,
                 selected,
-                pid_lang,
                 source_mkv=src,
                 convert_map=convert_map,
                 language_map=dict((getattr(self, '_track_language_config', {}).get(key) or {})),
