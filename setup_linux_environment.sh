@@ -2115,6 +2115,128 @@ install_vapoursynth() {
 }
 
 # ---------------------------------------------------------------------------
+# VapourSynth plugin versions
+# ---------------------------------------------------------------------------
+
+vs_plugin_version() {
+  python3 - "$PLUGIN_PATH" "$1" "$2" "$3" <<'PY'
+import hashlib
+import os
+from pathlib import Path
+import re
+import sys
+import tempfile
+
+import vapoursynth as vs
+
+plugins_dir = Path(sys.argv[1])
+mode, filename, target = sys.argv[2:]
+plugin_path = plugins_dir / filename
+if not plugin_path.is_file():
+    raise SystemExit(1)
+
+# Inspect this file even when another copy of its plugin was auto-loaded.
+core = vs.core
+core.std.LoadPlugin(path=str(plugin_path), forcens="setup_version_probe", forceid="bluraysubtitle.setup.version")
+plugin = core.setup_version_probe
+
+def normalize(value):
+    return re.sub(r"^[rRvV](?=[0-9])", "", value.strip())
+
+def usable_version(value):
+    if isinstance(value, dict):
+        value = value.get("version")
+    if isinstance(value, bytes):
+        value = value.decode("utf-8")
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if target.startswith("commit:"):
+        match = re.search(r"-g([0-9a-f]{7,40})$", value)
+        if match:
+            revision = match.group(1)
+            return target if revision.startswith(target[7:]) else "commit:" + revision
+        return None
+    value = normalize(re.sub(r"-0-g[0-9a-f]+$", "", value))
+    if not re.fullmatch(r"[0-9][0-9A-Za-z.+~-]*", value):
+        return None
+    expected = normalize(target)
+    if re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", value):
+        if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", expected):
+            return None
+        actual_parts = [int(part) for part in value.split(".")]
+        expected_parts = [int(part) for part in expected.split(".")]
+        # A two-field plugin version cannot identify a matching patch release.
+        if len(actual_parts) < len(expected_parts) and actual_parts == expected_parts[:len(actual_parts)]:
+            return None
+    return value
+
+version = None
+for function in plugin.functions():
+    if function.name.lower() == "version" and not function.signature:
+        try:
+            version = usable_version(getattr(plugin, function.name)())
+        except (vs.Error, UnicodeError, TypeError, ValueError):
+            version = None
+        if version is not None:
+            break
+if version is None and plugin.version.major >= 0:
+    version = usable_version(f"{plugin.version.major}.{plugin.version.minor}")
+if version is not None and mode == "read":
+    print(version)
+    raise SystemExit(0)
+
+version_file = plugins_dir / "version" / "version.txt"
+records = {}
+if version_file.is_file():
+    for line in version_file.read_text(encoding="utf-8").splitlines():
+        if line:
+            name, release, digest = line.split("\t")
+            records[name] = (release, digest)
+if mode == "read":
+    record = records.get(filename)
+    if record and record[1] == hashlib.sha256(plugin_path.read_bytes()).hexdigest():
+        print(normalize(record[0]))
+    raise SystemExit(0)
+
+# Only an installed, loadable plugin can create a fallback version record.
+if version is None:
+    records[filename] = (target, hashlib.sha256(plugin_path.read_bytes()).hexdigest())
+else:
+    records.pop(filename, None)
+if records or version_file.is_file():
+    version_file.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=version_file.parent, delete=False) as stream:
+        for name, (release, digest) in sorted(records.items()):
+            stream.write(f"{name}\t{release}\t{digest}\n")
+        temporary = stream.name
+    os.replace(temporary, version_file)
+PY
+}
+
+vs_plugin_needs_upgrade() {
+  local filename="$1" target="$2" installed_version=""
+  if [[ -f "$PLUGIN_PATH/$filename" ]]; then
+    installed_version="$(vs_plugin_version read "$filename" "$target" 2>/dev/null || true)"
+  fi
+  if [[ -z "$installed_version" ]]; then
+    log "$(msg "${filename}: version unavailable, installing ${target}" "${filename}：无法获取版本，将安装 ${target}")"
+    return 0
+  fi
+  if [[ "$target" == commit:* ]]; then
+    if [[ "$installed_version" == "$target" ]]; then
+      log "$(msg "${filename}: installed revision matches ${target}" "${filename}：已安装提交与 ${target} 一致")"
+      return 1
+    fi
+  elif dpkg --compare-versions "$installed_version" ge "${target#[rRvV]}"; then
+    log "$(msg "${filename}: version satisfied (${installed_version} >= ${target})" "${filename}：版本满足要求（${installed_version} >= ${target}）")"
+    return 1
+  fi
+  log "$(msg "${filename}: upgrading ${installed_version} to ${target}" "${filename}：将从 ${installed_version} 升级到 ${target}")"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
 # descale
 # ---------------------------------------------------------------------------
 
@@ -2151,11 +2273,10 @@ install_descale() {
   local plugins_dir="$PLUGIN_PATH"
   ensure_configured_directory "$plugins_dir"
   local descale_tag descale_version
-  local version_file="$plugins_dir/descale-version.txt"
   descale_tag="$(latest_stable_tag "$DESCALE_SOURCE_REPOSITORY" '^r[0-9]+[.]A([0-9]+)?$' 'r*.A*')"
   descale_version="${descale_tag#r}"
   descale_version="${descale_version%%.*}"
-  if [[ -f "$version_file" && "$(cat "$version_file")" == "$descale_tag" ]] \
+  if ! vs_plugin_needs_upgrade "libdescale.so" "$descale_tag" \
       && descale_supports_blur "$plugins_dir/libdescale.so" "$descale_version" >/dev/null 2>&1; then
     log "$(msg "descale ${descale_tag} with blur support is installed, skipping" "已安装支持 blur 的 descale ${descale_tag}，跳过")"
     return 0
@@ -2193,7 +2314,8 @@ install_descale() {
 
   descale_supports_blur "$plugins_dir/libdescale.so" "$descale_version" \
     || die "$(msg 'Installed descale failed the blur runtime check' '安装后的 descale 未通过 blur 运行检查')"
-  printf '%s\n' "$descale_tag" > "$version_file"
+  vs_plugin_version record "libdescale.so" "$descale_tag" \
+    || die "$(msg 'Failed to record the installed descale version' '无法记录已安装 descale 的版本')"
 
   rm -rf "$build_dir"
   log "$(msg "descale ${descale_tag} installation complete with blur support (${plugins_dir})" "支持 blur 的 descale ${descale_tag} 安装完成（${plugins_dir}）")"
@@ -2513,45 +2635,47 @@ build_vs_plugins() {
     cd "$build_dir" || exit 1
 
     local lsmash_plugin="$plugins_dir/libvslsmashsource.so"
+    local need_compat="false" lsmash_commit="ae51313"
+    if [[ -f /etc/os-release ]]; then
+      . /etc/os-release || true
+      if [[ "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" == "22.04" ]] \
+          || [[ "${ID:-}" == "debian" && "${VERSION_ID:-}" == "12" ]]; then
+        need_compat="true"
+      fi
+    fi
+    if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libavcodec; then
+      local avcodec_ver avcodec_major
+      avcodec_ver="$(pkg-config --modversion libavcodec 2>/dev/null | head -n 1 || true)"
+      avcodec_major="${avcodec_ver%%.*}"
+      if [[ "$avcodec_major" =~ ^[0-9]+$ ]] && (( avcodec_major < 60 )); then
+        need_compat="true"
+      fi
+    fi
+    if [[ "$need_compat" == "true" ]]; then
+      lsmash_commit="70e19fb"
+    fi
     local lsmash_linker_report=""
+    local lsmash_dependencies_broken="false"
     if [[ -f "$lsmash_plugin" ]] && command -v ldd >/dev/null 2>&1; then
       lsmash_linker_report="$(LC_ALL=C ldd -r "$lsmash_plugin" 2>&1 || true)"
     fi
     if [[ "$lsmash_linker_report" == *"undefined symbol:"* || "$lsmash_linker_report" == *"not found"* ]]; then
       log "$(msg 'Existing L-SMASH-Works plugin has unresolved symbols; rebuilding it' '现有 L-SMASH-Works 插件包含未解析符号，将重新编译')"
-      rm -f "$lsmash_plugin" || exit 1
+      lsmash_dependencies_broken="true"
     fi
 
-    if [[ ! -f "$lsmash_plugin" ]]; then
+    if [[ "$lsmash_dependencies_broken" == "true" ]] \
+        || vs_plugin_needs_upgrade "libvslsmashsource.so" "commit:$lsmash_commit"; then
       log "$(msg 'Building L-SMASH-Works (VapourSynth)' '编译 L-SMASH-Works (VapourSynth)')"
       cd "$build_dir" || exit 1
       tmux_run "$(msg 'Download L-SMASH-Works' '下载 L-SMASH-Works')" git clone https://github.com/HomeOfAviSynthPlusEvolution/L-SMASH-Works.git || exit 1
       cd L-SMASH-Works/VapourSynth || exit 1
-      local need_compat="false"
-      if [[ -f /etc/os-release ]]; then
-        . /etc/os-release || true
-        if [[ "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" == "22.04" ]]; then
-          need_compat="true"
-        fi
-        if [[ "${ID:-}" == "debian" && "${VERSION_ID:-}" == "12" ]]; then
-          need_compat="true"
-        fi
-      fi
-      if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libavcodec; then
-        local avcodec_ver avcodec_major
-        avcodec_ver="$(pkg-config --modversion libavcodec 2>/dev/null | head -n 1 || true)"
-        avcodec_major="${avcodec_ver%%.*}"
-        if [[ "$avcodec_major" =~ ^[0-9]+$ ]] && (( avcodec_major < 60 )); then
-          need_compat="true"
-        fi
-      fi
       if [[ "$need_compat" == "true" ]]; then
         log "$(msg 'Old FFmpeg API detected (or compatibility mode required), rolling back L-SMASH-Works to compatible commit' '检测到旧版 FFmpeg API（或系统需兼容模式），回退 L-SMASH-Works 到兼容提交')"
-        tmux_run "L-SMASH-Works git checkout" bash -lc "git checkout . && git -c advice.detachedHead=false checkout -q 70e19fb" || log "$(msg 'Warning: git rollback failed, trying to continue with current version' '警告：Git 回退失败，尝试继续使用当前版本')"
       else
         log "$(msg 'Pinning L-SMASH-Works to last VapourSynth API v3 compatible commit' '固定 L-SMASH-Works 到最后一个兼容 VapourSynth API v3 的提交')"
-        tmux_run "L-SMASH-Works git checkout" bash -lc "git checkout . && git -c advice.detachedHead=false checkout -q ae51313" || log "$(msg 'Warning: git checkout ae51313 failed, trying to continue with current version' '警告：切换到 ae51313 失败，尝试继续使用当前版本')"
       fi
+      tmux_run "L-SMASH-Works git checkout" git -c advice.detachedHead=false checkout -q "$lsmash_commit" || exit 1
 
       # Apply FFmpeg compatibility patches (index accessors, D3D12 shim, removed codec IDs).
       local decode_file="../common/decode.c"
@@ -2621,21 +2745,22 @@ PY
       local out
       out="$(find "$PWD" -maxdepth 3 -name "libvslsmashsource.so" -type f | head -n 1)"
       [[ -n "${out:-}" ]] || exit 1
-      cp "$out" "$plugins_dir/" || exit 1
-      lsmash_linker_report="$(LC_ALL=C ldd -r "$lsmash_plugin" 2>&1 || true)"
+      lsmash_linker_report="$(LC_ALL=C ldd -r "$out" 2>&1 || true)"
       if [[ "$lsmash_linker_report" == *"undefined symbol:"* || "$lsmash_linker_report" == *"not found"* ]]; then
         log "$(msg 'Rebuilt L-SMASH-Works plugin still has unresolved dependencies' '重编后的 L-SMASH-Works 插件仍包含未解析依赖')"
         exit 1
       fi
+      install -m 0755 "$out" "$lsmash_plugin" || exit 1
+      vs_plugin_version record "libvslsmashsource.so" "commit:$lsmash_commit" || exit 1
       cd "$build_dir" || exit 1
     else
-      log "$(msg 'libvslsmashsource.so already exists, skipping' '已存在 libvslsmashsource.so，跳过')"
+      log "$(msg 'L-SMASH-Works version is current, skipping' 'L-SMASH-Works 版本已满足要求，跳过')"
     fi
 
     # Keep r9: r10 declares VapourSynth >= R74, but this project uses R57.A12.
-    if [[ ! -f "$plugins_dir/eedi3m.so" ]]; then
+    if vs_plugin_needs_upgrade "eedi3m.so" "r9"; then
       log "$(msg 'Building VapourSynth-EEDI3 (r9)' '编译 VapourSynth-EEDI3 (r9)')"
-      cd "$HOME" || exit 1
+      cd "$build_dir" || exit 1
       tmux_run "$(msg 'Download EEDI3 r9' '下载 EEDI3 r9')" wget -O r9.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI3/archive/refs/tags/r9.tar.gz || exit 1
       tmux_run "$(msg 'Extract EEDI3 r9' '解压 EEDI3 r9')" tar zxvf r9.tar.gz || exit 1
       cd VapourSynth-EEDI3-r9/ || exit 1
@@ -2651,31 +2776,33 @@ PY
       rm -rf build
       tmux_run "EEDI3 meson setup" meson setup build || exit 1
       tmux_run "EEDI3 ninja" ninja -C build || exit 1
-      cp build/eedi3m.so "$plugins_dir/" || exit 1
+      install -m 0755 build/eedi3m.so "$plugins_dir/eedi3m.so" || exit 1
+      vs_plugin_version record "eedi3m.so" "r9" || exit 1
       cd "$build_dir" || exit 1
     else
-      log "$(msg 'eedi3m.so already exists, skipping' '已存在 eedi3m.so，跳过')"
+      log "$(msg 'eedi3m.so version is current, skipping' 'eedi3m.so 版本已满足要求，跳过')"
     fi
 
-    if [[ ! -f "$plugins_dir/libaddgrain.so" ]]; then
+    if vs_plugin_needs_upgrade "libaddgrain.so" "r10"; then
       log "$(msg 'Building VapourSynth-AddGrain (r10)' '编译 VapourSynth-AddGrain (r10)')"
-      cd "$HOME" || exit 1
+      cd "$build_dir" || exit 1
       tmux_run "$(msg 'Download AddGrain r10' '下载 AddGrain r10')" wget -O r10.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-AddGrain/archive/refs/tags/r10.tar.gz || exit 1
       tmux_run "$(msg 'Extract AddGrain r10' '解压 AddGrain r10')" tar zxvf r10.tar.gz || exit 1
       cd VapourSynth-AddGrain-r10/ || exit 1
       tmux_run "AddGrain meson setup" meson setup build || exit 1
       tmux_run "AddGrain ninja" ninja -C build || exit 1
-      cp build/libaddgrain.so "$plugins_dir/" || exit 1
+      install -m 0755 build/libaddgrain.so "$plugins_dir/libaddgrain.so" || exit 1
+      vs_plugin_version record "libaddgrain.so" "r10" || exit 1
       cd "$build_dir" || exit 1
     else
-      log "$(msg 'libaddgrain.so already exists, skipping' '已存在 libaddgrain.so，跳过')"
+      log "$(msg 'libaddgrain.so version is current, skipping' 'libaddgrain.so 版本已满足要求，跳过')"
     fi
 
     # The upstream Linux binary requires GLIBC_2.38, so build from source on the
     # target system to remain loadable on Ubuntu 22.04 and Debian 12.
-    if [[ ! -f "$plugins_dir/libassrender.so" ]]; then
+    if vs_plugin_needs_upgrade "libassrender.so" "0.38.4"; then
       log "$(msg 'Building assrender (0.38.4)' '编译 assrender (0.38.4)')"
-      cd "$HOME" || exit 1
+      cd "$build_dir" || exit 1
       tmux_run "$(msg 'Clone assrender 0.38.4' '克隆 assrender 0.38.4')" git clone --depth 1 --branch 0.38.4 https://github.com/AmusementClub/assrender.git assrender-0.38.4 || exit 1
       cd assrender-0.38.4 || exit 1
       rm -rf build
@@ -2684,15 +2811,16 @@ PY
       local out
       out="$(find "$PWD/build" -name "libassrender.so" -type f | head -n 1)"
       [[ -n "${out:-}" ]] || exit 1
-      cp "$out" "$plugins_dir/" || exit 1
+      install -m 0755 "$out" "$plugins_dir/libassrender.so" || exit 1
+      vs_plugin_version record "libassrender.so" "0.38.4" || exit 1
       cd "$build_dir" || exit 1
     else
-      log "$(msg 'libassrender.so already exists, skipping' '已存在 libassrender.so，跳过')"
+      log "$(msg 'libassrender.so version is current, skipping' 'libassrender.so 版本已满足要求，跳过')"
     fi
 
-    if [[ ! -f "$plugins_dir/libbilateral.so" ]]; then
+    if vs_plugin_needs_upgrade "libbilateral.so" "r3"; then
       log "$(msg 'Building VapourSynth-Bilateral (r3)' '编译 VapourSynth-Bilateral (r3)')"
-      cd "$HOME" || exit 1
+      cd "$build_dir" || exit 1
       tmux_run "$(msg 'Download Bilateral r3' '下载 Bilateral r3')" wget -O r3.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-Bilateral/archive/refs/tags/r3.tar.gz || exit 1
       tmux_run "$(msg 'Extract Bilateral r3' '解压 Bilateral r3')" tar zxvf r3.tar.gz || exit 1
       cd VapourSynth-Bilateral-r3/ || exit 1
@@ -2702,15 +2830,16 @@ PY
       local out
       out="$(find "$PWD" -maxdepth 3 -name "libbilateral.so" -type f | head -n 1)"
       [[ -n "${out:-}" ]] || exit 1
-      cp "$out" "$plugins_dir/" || exit 1
+      install -m 0755 "$out" "$plugins_dir/libbilateral.so" || exit 1
+      vs_plugin_version record "libbilateral.so" "r3" || exit 1
       cd "$build_dir" || exit 1
     else
-      log "$(msg 'libbilateral.so already exists, skipping' '已存在 libbilateral.so，跳过')"
+      log "$(msg 'libbilateral.so version is current, skipping' 'libbilateral.so 版本已满足要求，跳过')"
     fi
 
-    if [[ ! -f "$plugins_dir/libdfttest.so" ]]; then
+    if vs_plugin_needs_upgrade "libdfttest.so" "r7"; then
       log "$(msg 'Building VapourSynth-DFTTest (r7)' '编译 VapourSynth-DFTTest (r7)')"
-      cd "$HOME" || exit 1
+      cd "$build_dir" || exit 1
       tmux_run "$(msg 'Download DFTTest r7' '下载 DFTTest r7')" wget -O r7.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-DFTTest/archive/refs/tags/r7.tar.gz || exit 1
       tmux_run "$(msg 'Extract DFTTest r7' '解压 DFTTest r7')" tar zxvf r7.tar.gz || exit 1
       cd VapourSynth-DFTTest-r7/ || exit 1
@@ -2718,29 +2847,31 @@ PY
       apt_install libfftw3-dev
       tmux_run "DFTTest meson setup" meson setup build || exit 1
       tmux_run "DFTTest ninja" ninja -C build || exit 1
-      cp build/libdfttest.so "$plugins_dir/" || exit 1
+      install -m 0755 build/libdfttest.so "$plugins_dir/libdfttest.so" || exit 1
+      vs_plugin_version record "libdfttest.so" "r7" || exit 1
       cd "$build_dir" || exit 1
     else
-      log "$(msg 'libdfttest.so already exists, skipping' '已存在 libdfttest.so，跳过')"
+      log "$(msg 'libdfttest.so version is current, skipping' 'libdfttest.so 版本已满足要求，跳过')"
     fi
 
-    if [[ ! -f "$plugins_dir/libeedi2.so" ]]; then
+    if vs_plugin_needs_upgrade "libeedi2.so" "r7.1"; then
       log "$(msg 'Building VapourSynth-EEDI2 (r7.1)' '编译 VapourSynth-EEDI2 (r7.1)')"
-      cd "$HOME" || exit 1
+      cd "$build_dir" || exit 1
       tmux_run "$(msg 'Download EEDI2 r7.1' '下载 EEDI2 r7.1')" wget -O r7.1.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI2/archive/refs/tags/r7.1.tar.gz || exit 1
       tmux_run "$(msg 'Extract EEDI2 r7.1' '解压 EEDI2 r7.1')" tar zxvf r7.1.tar.gz || exit 1
       cd VapourSynth-EEDI2-r7.1/ || exit 1
       tmux_run "EEDI2 meson setup" meson setup build || exit 1
       tmux_run "EEDI2 ninja" ninja -C build || exit 1
-      cp build/libeedi2.so "$plugins_dir/" || exit 1
+      install -m 0755 build/libeedi2.so "$plugins_dir/libeedi2.so" || exit 1
+      vs_plugin_version record "libeedi2.so" "r7.1" || exit 1
       cd "$build_dir" || exit 1
     else
-      log "$(msg 'libeedi2.so already exists, skipping' '已存在 libeedi2.so，跳过')"
+      log "$(msg 'libeedi2.so version is current, skipping' 'libeedi2.so 版本已满足要求，跳过')"
     fi
 
-    if [[ ! -f "$plugins_dir/libfmtconv.so" ]]; then
+    if vs_plugin_needs_upgrade "libfmtconv.so" "r30"; then
       log "$(msg 'Building fmtconv (r30)' '编译 fmtconv (r30)')"
-      cd "$HOME" || exit 1
+      cd "$build_dir" || exit 1
       tmux_run "$(msg 'Download fmtconv r30' '下载 fmtconv r30')" wget -O r30.tar.gz https://github.com/EleonoreMizo/fmtconv/archive/refs/tags/r30.tar.gz || exit 1
       tmux_run "$(msg 'Extract fmtconv r30' '解压 fmtconv r30')" tar zxvf r30.tar.gz || exit 1
       cd fmtconv-r30/build/unix || exit 1
@@ -2750,15 +2881,16 @@ PY
       local out
       out="$(find "$PWD/.libs" -maxdepth 1 -name "libfmtconv.so" -type f | head -n 1)"
       [[ -n "${out:-}" ]] || exit 1
-      cp "$out" "$plugins_dir/" || exit 1
+      install -m 0755 "$out" "$plugins_dir/libfmtconv.so" || exit 1
+      vs_plugin_version record "libfmtconv.so" "r30" || exit 1
       cd "$build_dir" || exit 1
     else
-      log "$(msg 'libfmtconv.so already exists, skipping' '已存在 libfmtconv.so，跳过')"
+      log "$(msg 'libfmtconv.so version is current, skipping' 'libfmtconv.so 版本已满足要求，跳过')"
     fi
 
-    if [[ ! -f "$plugins_dir/libremovegrain.so" ]]; then
+    if vs_plugin_needs_upgrade "libremovegrain.so" "R1"; then
       log "$(msg 'Building vs-removegrain (R1)' '编译 vs-removegrain (R1)')"
-      cd "$HOME" || exit 1
+      cd "$build_dir" || exit 1
       tmux_run "$(msg 'Download vs-removegrain R1' '下载 vs-removegrain R1')" wget https://github.com/vapoursynth/vs-removegrain/archive/refs/tags/R1.tar.gz || exit 1
       tmux_run "$(msg 'Extract vs-removegrain R1' '解压 vs-removegrain R1')" tar zxvf R1.tar.gz || exit 1
       cd vs-removegrain-R1/src || exit 1
@@ -2766,15 +2898,16 @@ PY
         $(pkg-config --cflags vapoursynth) \
         clense.cpp removegrainvs.cpp repairvs.cpp shared.cpp verticalcleaner.cpp \
         -o libremovegrain.so || exit 1
-      cp libremovegrain.so "$plugins_dir/" || exit 1
+      install -m 0755 libremovegrain.so "$plugins_dir/libremovegrain.so" || exit 1
+      vs_plugin_version record "libremovegrain.so" "R1" || exit 1
       cd "$build_dir" || exit 1
     else
-      log "$(msg 'libremovegrain.so already exists, skipping' '已存在 libremovegrain.so，跳过')"
+      log "$(msg 'libremovegrain.so version is current, skipping' 'libremovegrain.so 版本已满足要求，跳过')"
     fi
 
-    if [[ ! -f "$plugins_dir/libsangnommod.so" ]]; then
+    if vs_plugin_needs_upgrade "libsangnommod.so" "v0.1-fix"; then
       log "$(msg 'Building VapourSynth-SangNomMod (v0.1-fix)' '编译 VapourSynth-SangNomMod (v0.1-fix)')"
-      cd "$HOME" || exit 1
+      cd "$build_dir" || exit 1
       tmux_run "$(msg 'Download SangNomMod v0.1-fix' '下载 SangNomMod v0.1-fix')" wget -O v0.1-fix.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-SangNomMod/archive/refs/tags/v0.1-fix.tar.gz || exit 1
       tmux_run "$(msg 'Extract SangNomMod v0.1-fix' '解压 SangNomMod v0.1-fix')" tar zxvf v0.1-fix.tar.gz || exit 1
       cd VapourSynth-SangNomMod-0.1-fix/ || exit 1
@@ -2783,16 +2916,17 @@ PY
       local out
       out="$(find "$PWD" -maxdepth 3 -name "libsangnommod.so" -type f | head -n 1)"
       [[ -n "${out:-}" ]] || exit 1
-      cp "$out" "$plugins_dir/" || exit 1
+      install -m 0755 "$out" "$plugins_dir/libsangnommod.so" || exit 1
+      vs_plugin_version record "libsangnommod.so" "v0.1-fix" || exit 1
       cd "$build_dir" || exit 1
     else
-      log "$(msg 'libsangnommod.so already exists, skipping' '已存在 libsangnommod.so，跳过')"
+      log "$(msg 'libsangnommod.so version is current, skipping' 'libsangnommod.so 版本已满足要求，跳过')"
     fi
 
     # 2.0.4 supports the legacy install layout through -Dr73-compat=true.
-    if [[ ! -f "$plugins_dir/libvs_placebo.so" ]]; then
+    if vs_plugin_needs_upgrade "libvs_placebo.so" "2.0.4"; then
       log "$(msg 'Building vs-placebo (2.0.4)' '编译 vs-placebo (2.0.4)')"
-      cd "$HOME" || exit 1
+      cd "$build_dir" || exit 1
       install_libplacebo_latest
       tmux_run "$(msg 'Download vs-placebo 2.0.4' '下载 vs-placebo 2.0.4')" wget -O 2.0.4.tar.gz https://github.com/Lypheo/vs-placebo/archive/refs/tags/2.0.4.tar.gz || exit 1
       tmux_run "$(msg 'Extract vs-placebo 2.0.4' '解压 vs-placebo 2.0.4')" tar zxvf 2.0.4.tar.gz || exit 1
@@ -2807,10 +2941,11 @@ PY
       local out
       out="$(find "$PWD/build" -maxdepth 2 -name "libvs_placebo.so" -type f | head -n 1)"
       [[ -n "${out:-}" ]] || exit 1
-      cp "$out" "$plugins_dir/" || exit 1
+      install -m 0755 "$out" "$plugins_dir/libvs_placebo.so" || exit 1
+      vs_plugin_version record "libvs_placebo.so" "2.0.4" || exit 1
       cd "$build_dir" || exit 1
     else
-      log "$(msg 'libvs_placebo.so already exists, skipping' '已存在 libvs_placebo.so，跳过')"
+      log "$(msg 'libvs_placebo.so version is current, skipping' 'libvs_placebo.so 版本已满足要求，跳过')"
     fi
 
     # Upgrade ISPC when an older binary is present; command existence alone is insufficient.
@@ -2829,9 +2964,9 @@ PY
       log "$(msg "ispc version satisfied (${current_ispc_version} >= ${required_ispc_version}), skipping" "ispc 版本满足要求（${current_ispc_version} >= ${required_ispc_version}），跳过安装")"
     fi
 
-    if [[ ! -f "$plugins_dir/libvsnlm_ispc.so" ]]; then
+    if vs_plugin_needs_upgrade "libvsnlm_ispc.so" "v4"; then
       log "$(msg 'Building vs-nlm-ispc (v4)' '编译 vs-nlm-ispc (v4)')"
-      cd "$HOME" || exit 1
+      cd "$build_dir" || exit 1
       tmux_run "$(msg 'Download vs-nlm-ispc v4' '下载 vs-nlm-ispc v4')" wget -O v4.tar.gz https://github.com/AmusementClub/vs-nlm-ispc/archive/refs/tags/v4.tar.gz || exit 1
       tmux_run "$(msg 'Extract vs-nlm-ispc v4' '解压 vs-nlm-ispc v4')" tar zxvf v4.tar.gz || exit 1
       cd vs-nlm-ispc-4/ || exit 1
@@ -2842,28 +2977,30 @@ PY
       local out
       out="$(find "$PWD" -maxdepth 2 -name "libvsnlm_ispc.so" -type f | head -n 1)"
       [[ -n "${out:-}" ]] || exit 1
-      cp "$out" "$plugins_dir/" || exit 1
+      install -m 0755 "$out" "$plugins_dir/libvsnlm_ispc.so" || exit 1
+      vs_plugin_version record "libvsnlm_ispc.so" "v4" || exit 1
       cd "$build_dir" || exit 1
     else
-      log "$(msg 'libvsnlm_ispc.so already exists, skipping' '已存在 libvsnlm_ispc.so，跳过')"
+      log "$(msg 'libvsnlm_ispc.so version is current, skipping' 'libvsnlm_ispc.so 版本已满足要求，跳过')"
     fi
 
     # Keep zsmooth 0.7 because newer binaries are incompatible with R57.A12.
-    if [[ ! -f "$plugins_dir/libzsmooth.x86_64-gnu.so" ]]; then
+    if vs_plugin_needs_upgrade "libzsmooth.x86_64-gnu.so" "0.7"; then
       log "$(msg 'Installing zsmooth (binary package)' '安装 zsmooth（二进制包）')"
-      cd "$HOME" || exit 1
+      cd "$build_dir" || exit 1
       tmux_run "$(msg 'Download zsmooth 0.7' '下载 zsmooth 0.7')" wget -O libzsmooth.x86_64-gnu.so.zip https://github.com/adworacz/zsmooth/releases/download/0.7/libzsmooth.x86_64-gnu.so.zip || exit 1
       tmux_run "$(msg 'Extract zsmooth 0.7' '解压 zsmooth 0.7')" unzip -o libzsmooth.x86_64-gnu.so.zip || exit 1
-      mv libzsmooth.x86_64-gnu.so "$plugins_dir/" || exit 1
+      install -m 0755 libzsmooth.x86_64-gnu.so "$plugins_dir/libzsmooth.x86_64-gnu.so" || exit 1
+      vs_plugin_version record "libzsmooth.x86_64-gnu.so" "0.7" || exit 1
       cd "$build_dir" || exit 1
     else
-      log "$(msg 'libzsmooth.x86_64-gnu.so already exists, skipping' '已存在 libzsmooth.x86_64-gnu.so，跳过')"
+      log "$(msg 'libzsmooth.x86_64-gnu.so version is current, skipping' 'libzsmooth.x86_64-gnu.so 版本已满足要求，跳过')"
     fi
 
     # Keep mvtools v26: v29_2 declares VapourSynth >= R74.
-    if [[ ! -f "$plugins_dir/mvtools.so" ]]; then
+    if vs_plugin_needs_upgrade "mvtools.so" "v26"; then
       log "$(msg 'Building vapoursynth-mvtools (v26)' '编译 vapoursynth-mvtools (v26)')"
-      cd "$HOME" || exit 1
+      cd "$build_dir" || exit 1
       tmux_run "$(msg 'Download mvtools v26' '下载 mvtools v26')" wget -O v26.tar.gz https://github.com/dubhatervapoursynth/vapoursynth-mvtools/archive/refs/tags/v26.tar.gz || exit 1
       tmux_run "$(msg 'Extract mvtools v26' '解压 mvtools v26')" tar zxvf v26.tar.gz || exit 1
       cd vapoursynth-mvtools-26/ || exit 1
@@ -2878,24 +3015,12 @@ with open('meson.build', 'w', encoding='utf-8') as f:
 PY
       tmux_run "mvtools meson setup" meson setup build || exit 1
       tmux_run "mvtools ninja" ninja -C build || exit 1
-      cp build/mvtools.so "$plugins_dir/" || exit 1
+      install -m 0755 build/mvtools.so "$plugins_dir/mvtools.so" || exit 1
+      vs_plugin_version record "mvtools.so" "v26" || exit 1
       cd "$build_dir" || exit 1
     else
-      log "$(msg 'mvtools.so already exists, skipping' '已存在 mvtools.so，跳过')"
+      log "$(msg 'mvtools.so version is current, skipping' 'mvtools.so 版本已满足要求，跳过')"
     fi
-
-    log "$(msg 'Cleaning up downloaded archives and source directories' '清理下载压缩包与源码目录')"
-    cd "$HOME" || exit 1
-    rm -f \
-      r9.tar.gz r10.tar.gz r3.tar.gz r7.tar.gz r7.1.tar.gz \
-      r30.tar.gz R1.tar.gz v0.1-fix.tar.gz 2.0.4.tar.gz v4.tar.gz libzsmooth.x86_64-gnu.so.zip v26.tar.gz \
-      ispc-v1.31.0-linux.tar.gz libassrender.so \
-      || true
-    rm -rf \
-      assrender-0.38.4 VapourSynth-EEDI3-r9 VapourSynth-AddGrain-r10 VapourSynth-Bilateral-r3 \
-      VapourSynth-DFTTest-r7 VapourSynth-EEDI2-r7.1 fmtconv-r30 vs-removegrain-R1 VapourSynth-SangNomMod-0.1-fix \
-      vs-placebo-2.0.4 vs-nlm-ispc-4 vapoursynth-mvtools-26 ispc-v1.31.0-linux \
-      || true
 
     log "$(msg "VS plugins build complete, output directory: $plugins_dir" "VS 插件编译完成，输出目录：$plugins_dir")"
   ) || die "$(msg 'VS plugin build failed' 'VS 插件编译失败')"

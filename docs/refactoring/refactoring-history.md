@@ -1264,3 +1264,11 @@ Date: 2026-10-27
 - Windows setup builds VapourSynth Classic and its required core plugins for the selected system CPython, installs the matching binding, and records Python ABI and dependency revisions for upgrade checks. The build adapts Cython enum exports and VSScript's Python loader to the selected interpreter.
 - Windows packaging shares the application support directory with VSScript, includes a standard-library archive, and collects one NumPy package for both importers. Updated runtime paths, dependency license collection, and bilingual documentation.
 - Verification: 96 automated tests and static checks passed. Python 3.14 and 3.15 bindings produced identical 16-kernel reference curves. Windows source and frozen GUI getnative/Encode checks completed with matching video presentation timestamps, unchanged decoded audio, and no decoding errors.
+
+## Linux VapourSynth Plugin Upgrade Tracking
+
+Date: 2026-10-28
+
+- Linux setup inspects each requested plugin file in a dedicated namespace and prefers its exported or registered version. Releases that cannot be identified completely use `plugins/version/version.txt`, with records tied to the installed file's SHA-256.
+- Version comparisons control upgrades for managed plugins, including the compatible L-SMASH-Works revision and descale capability check. Fallback versions are recorded only after successful installation and loading.
+- Plugin archives and source trees use a temporary build directory. L-SMASH-Works dependency checks finish before replacing an existing plugin.

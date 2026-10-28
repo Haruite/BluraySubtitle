@@ -1261,3 +1261,11 @@ Blu-ray DIY 压制及“编辑轨道”中的通用视频转换仍不在本阶�
 - Windows 环境配置针对所选系统 CPython 编译 VapourSynth Classic 及必需核心插件，安装匹配的绑定，并记录 Python ABI 和依赖版本用于升级检查；构建过程适配 Cython 枚举导出和 VSScript 的 Python 加载器。
 - Windows 打包使 VSScript 共用应用支持目录，包含标准库归档，为两种导入器仅收集一份 NumPy；同步运行时路径、依赖许可证收集和中英文文档。
 - 验证：96 项自动测试及静态检查通过；Python 3.14 和 3.15 绑定得到一致的 16 核参考曲线。Windows 源码版和冻结版 GUI 的 getnative／Encode 检查完成，视频显示时间戳一致，解码音频未变化，且无解码错误。
+
+## Linux VapourSynth 插件升级版本管理
+
+日期：2026-10-28
+
+- Linux 环境配置通过独立命名空间检查指定插件文件，优先读取插件导出或注册的版本；无法完整识别发行版本时使用 `plugins/version/version.txt`，记录同时关联已安装文件的 SHA-256。
+- 根据版本比较决定受管理插件是否升级，覆盖 L-SMASH-Works 兼容提交和 descale 功能检查；仅在安装成功且插件可加载后记录回退版本。
+- 插件源码归档和源码树统一使用临时构建目录；L-SMASH-Works 依赖检查通过后再替换现有插件。
