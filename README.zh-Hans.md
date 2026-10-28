@@ -319,6 +319,14 @@ docker pull --platform linux/amd64 haruite/bluraysubtitle:latest
 
 ## FAQ
 
+### 为什么不支持更旧的操作系统？
+
+旧系统需要为 Python、Qt 和多媒体依赖增加兼容补丁及测试，维护成本较高，因此不扩展现有支持范围。
+
+### 为什么不提供 Linux 的 PyInstaller 打包文件？
+
+不同发行版的 glibc、图形环境和动态库存在差异，完整打包并验证多媒体工具及 VapourSynth 插件的维护成本较高。请使用 Linux 环境配置脚本配置环境后运行源码，或使用 Docker。
+
 ### 压制会自动裁黑边吗？
 
 可以，需要主动勾选并核对裁剪值及成品画面。暗场、片头片尾和特殊黑边可能使自动结果出错；需要精确控制时关闭该选项，在 VPy 中指定裁剪。原理见[自动裁剪黑边](docs/wiki/Video-Encoding-and-VapourSynth.zh-Hans.md#自动裁剪黑边)。

@@ -319,6 +319,14 @@ docker pull --platform linux/amd64 haruite/bluraysubtitle:latest
 
 ## FAQ
 
+### Why aren't older operating systems supported?
+
+Older systems require extra compatibility patches and testing for Python, Qt, and multimedia dependencies. The maintenance cost is too high to extend the current support range.
+
+### Why aren't Linux PyInstaller packages provided?
+
+Differences in glibc, graphics environments, and shared libraries across distributions make complete multimedia-tool and VapourSynth-plugin bundles costly to maintain and test. Run from source after using the Linux setup script, or use Docker.
+
 ### Does encode auto-crop black borders?
 
 Yes. Enable the option and verify the reported margins and encoded picture. Dark scenes, credits, and unusual borders can produce incorrect results; disable it and specify a VPy crop when exact control is needed. See [automatic cropping](docs/wiki/Video-Encoding-and-VapourSynth.md#automatic-black-border-cropping) for the method.
