@@ -104,15 +104,14 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
         return bytes(self.saveGeometry().toBase64()).decode("ascii")
 
     def _restore_window_geometry(self) -> bool:
+        self._window_geometry_restored = False
         geometry = str(getattr(self._app_config.window, "geometry", "") or "")
         if not geometry:
-            self._window_geometry_restored = False
             return False
         encoded = QByteArray.fromBase64(geometry.encode("ascii"))
-        if encoded.isEmpty() or not self.restoreGeometry(encoded):
-            raise ValueError("Stored window geometry could not be restored")
-        self._window_geometry_restored = True
-        return True
+        # Qt may reject saved geometry after the screen layout or scale changes.
+        self._window_geometry_restored = not encoded.isEmpty() and self.restoreGeometry(encoded)
+        return self._window_geometry_restored
 
     @staticmethod
     def _set_combo_value(combo: QComboBox, value: str) -> None:
