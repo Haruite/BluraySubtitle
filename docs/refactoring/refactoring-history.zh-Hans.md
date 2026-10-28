@@ -1278,3 +1278,14 @@ Blu-ray DIY 压制及“编辑轨道”中的通用视频转换仍不在本阶�
 - Windows 和 Linux 安装脚本通过共用安装器同步脚本与说明文件内容，仓库快照变化时可更新已有文件。Linux 和 Docker 直接从仓库安装脚本，替代从便携工具压缩包提取。
 - Windows 打包直接收集仓库中的脚本及版权说明，模块搜索路径选择同一快照。第三方说明将 Python 脚本与原生插件分发包分开记录。
 - 验证：同步与修复检查在 Windows PowerShell 5.1 和 Ubuntu 22.04／26.04 通过；原有副本与仓库副本得到一致的 16 核 getnative 曲线，Windows 程序包通过包内 VSPipe 加载共用脚本和 NumPy。Docker 的源码复制布局和预加载导入通过等效检查，未构建镜像。
+
+## Windows VapourSynth 组件独立安装
+
+日期：2026-10-28
+
+- 将便携工具合集替换为各组件上游的 release 与源码构建，采用 Linux setup 中的仓库和 VS Classic 兼容版本范围。Windows 源码构建使用 MSYS2 UCRT64、已安装 Classic 的 SDK 和并行任务；DFTTest 使用合并线程功能的 FFTW 库，SangNomMod 导出 Python 滤镜使用的 `SangNom` 名称。
+- 在 `vapoursynth-components.json` 中记录已安装插件、依赖、源码版本和文件哈希。Windows 和 Linux 共用原生版本检测及绑定文件哈希的 `version/version.txt` 回退记录；setup 保留达到要求的版本，安装或更新缺失、无法识别或过旧的插件。共享依赖 DLL 放在核心运行时旁，位于插件扫描目录之外。
+- 将 VSEdit 安装到独立的 `vsedit` 目录，启动时清除继承的 Qt 搜索路径，并选择匹配的 VSScript 库和共享 DLL 目录。打包在主程序依赖分析之后加入编辑器，保留其独立 Qt 发行文件并避免根目录中的重复 Qt 库，移除未使用的 Tcl/Tk，生成便携的编辑器路径配置。
+- 静态链接 vs-placebo 依赖及源码插件的编译器运行库，剥离源码插件符号，并让 MVTools 共用 DFTTest 的 FFTW 库。构建配置变化时更新之前受管理的源码构建，依赖清单只保留仍在使用的库。
+- 按各组件来源整理中英文第三方说明，收集上游许可文本、依赖版权说明和编辑器 Qt 源码信息。Python 滤镜脚本的版权说明保留原压缩包来源。
+- 验证：原生插件导入、重复版本判断、回退记录哈希失效及版本顺序检查通过，不涉及媒体处理。Windows 程序包确认保留编辑器私有 Qt 库、排除 Tcl/Tk，并可通过包内依赖导入插件。Ubuntu 22.04 和 26.04 上的共用版本检测与 Debian 版本顺序检查通过。

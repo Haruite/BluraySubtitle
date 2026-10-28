@@ -66,7 +66,14 @@ def generate_third_party_notices(
         raise RuntimeError(f"Unable to read FFmpeg release from: {ffmpeg_build}")
 
     software_root = Path(str(settings["X265_PATH"])).parent
-    vapoursynth_root = Path(str(settings["VSEDIT_PATH"])).parent
+    vapoursynth_root = Path(str(settings["VSPIPE_PATH"])).parent
+    components = json.loads(
+        (vapoursynth_root / "vapoursynth-components.json").read_text(encoding="utf-8")
+    )["components"]
+    native_rows = "\n".join(
+        f"| {component['name']} | `{component['ref']}` | [source]({component['source_url']}) | `legal/vapoursynth/components/{name}/` |"
+        for name, component in components.items() if "plugin" in component
+    )
     classic_version = _marker(
         vapoursynth_root / "vapoursynth-classic-version.txt"
     )
@@ -129,10 +136,10 @@ def generate_third_party_notices(
         "LIBP2P_REVISION": dependencies["libp2p"],
         "MIMALLOC_VERSION": dependencies["mimalloc"],
         "AVISYNTHPLUS_VERSION": dependencies["AviSynthPlus"],
-        "VAPOURSYNTH_TOOLS_VERSION": _marker(
-            vapoursynth_root / "vapoursynth-tools-version.txt"
-        ),
-        "VSEDIT_VERSION": "R19-mod-6.10",
+        "VAPOURSYNTH_COMPONENTS": native_rows,
+        "VSEDIT_VERSION": components["vsedit"]["ref"],
+        "VSEDIT_QT_VERSION": components["vsedit"]["qt_version"],
+        "VSEDIT_QT_SOURCE": components["vsedit"]["qt_source_url"],
         "PYINSTALLER_VERSION": pyinstaller_version,
     }
 

@@ -78,8 +78,8 @@ HDR10PLUS_TOOL_PATH = _bundled_path(
     r"C:\Software\hdr10plus_tool.exe",
 )
 VSEDIT_PATH = _bundled_path(
-    "vsedit.exe",
-    r"C:\Software\vapoursynth\vsedit.exe",
+    "vsedit/vsedit.exe",
+    r"C:\Software\vapoursynth\vsedit\vsedit.exe",
 )
 VSPIPE_PATH = r"C:\Software\vapoursynth\vspipe.exe"
 PLUGIN_PATH = ""

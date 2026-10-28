@@ -188,20 +188,26 @@ The application and VSScript share the CPython runtime and NumPy package in `_in
 - **Copyright, provenance, and licenses:** bundled at `legal/vapoursynth_scripts/COPYRIGHT.md`, with the supplied license texts in `legal/vapoursynth_scripts/licenses/`. Individual scripts retain their upstream attribution and licensing; the application MIT license does not relicense them. See the detailed notice for files without an explicit upstream license declaration.
 - **Corresponding source:** the Python files are included beside the shared runtime.
 
-### Required native filters (AmusementClub/tools)
+### Native filter plugins
 
-- **Upstream packages:** assets from **https://github.com/AmusementClub/tools/releases** .
-- **Version:** {{VAPOURSYNTH_TOOLS_VERSION}}
-- **License:** the **tools** repository does **not** publish a single root `LICENSE` file on GitHub; components may differ.
+| Component | Release / revision | Upstream | License and copyright texts |
+| --- | --- | --- | --- |
+{{VAPOURSYNTH_COMPONENTS}}
+
+The installation manifest `legal/vapoursynth-components.json` records source revisions, release download URLs, registered plugin versions, and installed file hashes. Dependencies and their available license texts are included with each component.
+
+Source-built Windows plugins statically link compiler runtimes where supported. The vs-placebo build also includes libplacebo, libdovi, Little CMS, shaderc/glslang, SPIRV-Tools, and SPIRV-Cross statically; the Vulkan loader remains a separate DLL. DFTTest and MVTools share one FFTW DLL. Corresponding dependency license texts accompany the component notices.
 
 ---
 
 ### VapourSynth Editor
 
-- **Files:** `vsedit.exe`
+- **Files:** the independent editor distribution in `vsedit/`, including its private Qt libraries.
 - **Version:** {{VSEDIT_VERSION}}
 - **License:** MIT
 - **Source:** https://github.com/YomikoR/VapourSynth-Editor/archive/refs/tags/{{VSEDIT_VERSION}}.zip
+- **Qt version:** {{VSEDIT_QT_VERSION}}; corresponding source: {{VSEDIT_QT_SOURCE}}
+- **Bundled license texts:** `legal/vapoursynth/components/vsedit/`; the dynamically linked Qt libraries use LGPL v3, with the LGPL and GPL texts included in its `Qt/` subdirectory.
 
 ---
 

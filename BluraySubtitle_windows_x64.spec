@@ -24,6 +24,7 @@ import zipfile
 
 from PyInstaller import __version__ as PYINSTALLER_VERSION
 from PyInstaller.utils.hooks import collect_data_files, copy_metadata
+from PyInstaller.depend import bindepend
 
 
 PROJECT_ROOT = Path(SPECPATH).resolve()
@@ -73,18 +74,18 @@ notices_updater["generate_third_party_notices"](
 
 # Native tools, CPython, and NumPy share the bundle support directory.
 vapoursynth_dir = required_path(
-    Path(SETTINGS["VSEDIT_PATH"]).parent,
+    Path(SETTINGS["VSPIPE_PATH"]).parent,
     "VapourSynth runtime directory",
 )
 if not vapoursynth_dir.is_dir():
     raise NotADirectoryError(f"VapourSynth path is not a directory: {vapoursynth_dir}")
 
 vspipe_path = required_path(SETTINGS["VSPIPE_PATH"], "VSPipe executable")
-if vspipe_path.parent != vapoursynth_dir:
-    raise ValueError(
-        "VSEDIT_PATH and VSPIPE_PATH must refer to files in the same "
-        f"VapourSynth directory: {vapoursynth_dir}"
-    )
+upstream_manifest = required_path(vapoursynth_dir / "vapoursynth-components.json", "upstream component manifest")
+upstream_components = json.loads(upstream_manifest.read_text(encoding="utf-8"))
+editor_entrypoint = upstream_components["components"]["vsedit"]["entrypoint"]
+if Path(SETTINGS["VSEDIT_PATH"]).resolve() != (vapoursynth_dir / editor_entrypoint).resolve():
+    raise ValueError("VSEDIT_PATH must match the managed upstream editor entry point")
 
 
 build_state = json.loads(required_path(
@@ -103,6 +104,12 @@ def keep_runtime_file(destination, root_binary_names):
 
     if "__pycache__" in parts:
         return False
+    if fnmatchcase(name, "tcl*.dll") or fnmatchcase(name, "tk*.dll"):
+        return False
+
+    # VSEdit's private Qt runtime must remain separate from PyQt6's DLLs.
+    if parts and parts[0] == "vsedit":
+        return True
 
     if relative.startswith("pyqt6/qt6/translations/"):
         return name in {"qt_en.qm", "qtbase_en.qm", "qt_zh_cn.qm", "qtbase_zh_cn.qm"}
@@ -184,11 +191,25 @@ datas = [
 datas += copy_metadata("numpy")
 
 # Use the selected system Python for both frozen workers and VSScript.
-for name in ("VapourSynth.dll", "VSScript.dll", "VSPipe.exe", "vsedit.exe"):
+for name in ("VapourSynth.dll", "VSScript.dll", "VSPipe.exe"):
     add_binary(binaries, vapoursynth_dir / name, name)
-for directory_name in ("coreplugins", "plugins"):
-    for plugin in (vapoursynth_dir / "vapoursynth64" / directory_name).glob("*.dll"):
-        binaries.append((str(plugin), f"vapoursynth64/{directory_name}"))
+for plugin in (vapoursynth_dir / "vapoursynth64/coreplugins").glob("*.dll"):
+    binaries.append((str(plugin), "vapoursynth64/coreplugins"))
+managed_plugins = set(upstream_components["dependencies"])
+managed_plugins.update(component["plugin"] for component in upstream_components["components"].values() if "plugin" in component)
+for relative in sorted(managed_plugins):
+    binaries.append((str(required_path(vapoursynth_dir / relative, "managed VapourSynth plugin")), str(Path(relative).parent)))
+datas.append((str(upstream_manifest), "legal"))
+editor_datas = []
+for relative in upstream_components["components"]["vsedit"]["files"]:
+    if Path(relative).parts[0] == "vsedit":
+        editor_datas.append((relative, str(required_path(vapoursynth_dir / relative, "VSEdit distribution file")), "DATA"))
+editor_config = Path(workpath) / "vsedit.config"
+editor_config.write_text(
+    "[common]\nprefer_vs_libs_from_list=false\nvapoursynth_library_paths=../\nvapoursynth_plugins_paths=../vapoursynth64/coreplugins, ../vapoursynth64/plugins\n",
+    encoding="utf-8", newline="\r\n",
+)
+datas.append((str(editor_config), "vsedit"))
 datas.append((str(required_path(vapoursynth_dir / "portable.vs", "portable plugin marker")), "."))
 script_root = required_path(
     PROJECT_ROOT / "third_party" / "vapoursynth_scripts",
@@ -232,7 +253,10 @@ for library in (Path(sys.base_prefix) / "DLLs").iterdir():
         ):
             continue
         add_binary(binaries, library, library.name)
-    elif library.suffix.lower() == ".dll" and not library.stem.endswith("_d"):
+    elif (
+        library.suffix.lower() == ".dll" and not library.stem.endswith("_d")
+        and not library.name.lower().startswith(("tcl", "tk"))
+    ):
         add_binary(binaries, library, library.name)
 
 # pycountry needs its ISO databases and notices; the application translates UI text.
@@ -261,6 +285,8 @@ a = Analysis(
     excludes=[
         # muvsfunc's optional plotting helper is not used by the application.
         "matplotlib",
+        "tkinter",
+        "_tkinter",
         "PIL.AvifImagePlugin",
         "PIL._avif",
         "PIL.ImageTk",
@@ -280,6 +306,16 @@ root_binary_names = {
 }
 a.binaries = [entry for entry in a.binaries if keep_runtime_file(entry[0], root_binary_names)]
 a.datas = [entry for entry in a.datas if keep_runtime_file(entry[0], root_binary_names)]
+
+# Analysis reclassifies PE files supplied as datas and flattens their imports.
+# Add the independent editor after Analysis, keeping its Qt DLLs in vsedit/.
+editor_sources = {Path(source).resolve() for _destination, source, _kind in editor_datas}
+editor_binaries = [entry[:2] + ("BINARY",) for entry in editor_datas if Path(entry[0]).suffix.lower() in {".exe", ".dll"}]
+editor_dependencies = bindepend.binary_dependency_analysis(editor_binaries, search_paths=[str(vapoursynth_dir / "vsedit"), str(vapoursynth_dir)])
+for destination, source, _kind in editor_dependencies:
+    if Path(source).resolve() not in editor_sources and Path(destination).name.lower() not in root_binary_names:
+        editor_datas.append((str(Path("vsedit") / Path(destination).name), source, "DATA"))
+a.datas += editor_datas
 
 pyz = PYZ(a.pure)
 

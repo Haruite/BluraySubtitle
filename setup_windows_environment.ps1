@@ -1,4 +1,6 @@
-﻿$ErrorActionPreference = "Stop"
+﻿param([ValidateSet("en", "zh")][string]$Language)
+
+$ErrorActionPreference = "Stop"
 Set-StrictMode -Version 3.0
 
 function Test-Administrator {
@@ -36,7 +38,14 @@ function Start-ElevatedSetup {
         throw "The setup script path cannot be resolved."
     }
 
-    $arguments = @("-NoProfile", "-NoExit", "-File", $PSCommandPath)
+    $arguments = @("-NoProfile")
+    if (-not $Language) {
+        $arguments += "-NoExit"
+    }
+    $arguments += @("-ExecutionPolicy", "Bypass", "-File", $PSCommandPath)
+    if ($Language) {
+        $arguments += @("-Language", $Language)
+    }
 
     $argumentLine = ($arguments | ForEach-Object { ConvertTo-NativeArgument $_ }) -join " "
     $workingDirectory = (Get-Location).Path
@@ -51,14 +60,17 @@ function Start-ElevatedSetup {
         return $process.ExitCode
     }
     catch {
-        [Console]::Error.WriteLine("Administrator permission is required. / 需要管理员权限。")
+        [Console]::Error.WriteLine("Administrator permission is required. / 需要管理员权限。 " + $_.Exception.Message)
         return 1223
     }
 }
 
 # Elevation is the first operation performed by the setup script.
 if (-not (Test-Administrator)) {
-    Start-ElevatedSetup | Out-Null
+    $elevatedExitCode = Start-ElevatedSetup
+    if ($elevatedExitCode -ne 0) {
+        exit $elevatedExitCode
+    }
     return
 }
 
@@ -97,7 +109,7 @@ function Select-SetupLanguage {
     }
 }
 
-$script:SelectedLanguage = Select-SetupLanguage
+$script:SelectedLanguage = if ($Language) { $Language } else { Select-SetupLanguage }
 $script:ProxyAddress = "DIRECT"
 $script:RestartRequired = $false
 $script:ReleaseCache = [ordered]@{}
@@ -141,26 +153,8 @@ $script:ToolPaths = [ordered]@{
     VapourSynthSitePackages = "C:\Software\vapoursynth\Lib\site-packages"
     VapourSynthPlugins = "C:\Software\vapoursynth\vapoursynth64\plugins"
     VsPipe = "C:\Software\vapoursynth\vspipe.exe"
-    VsEdit = "C:\Software\vapoursynth\vsedit.exe"
+    VsEdit = "C:\Software\vapoursynth\vsedit\vsedit.exe"
 }
-$script:RequiredVapourSynthPlugins = @(
-    "addgrain.dll",
-    "assrender.dll",
-    "bilateral.dll",
-    "descale.dll",
-    "dfttest.dll",
-    "eedi2.dll",
-    "eedi3m.dll",
-    "f3kdb.dll",
-    "fmtconv.dll",
-    "libsangnom.dll",
-    "libvslsmashsource.dll",
-    "libvs_placebo.dll",
-    "mvtools.dll",
-    "neo-f3kdb.dll",
-    "vsnlm_ispc.dll",
-    "zsmooth.dll"
-)
 $script:PythonPackages = @(
     [pscustomobject]@{ Distribution = "pip"; Import = "import pip" },
     [pscustomobject]@{ Distribution = "setuptools"; Import = "import setuptools" },
@@ -172,7 +166,8 @@ $script:PythonPackages = @(
     [pscustomobject]@{ Distribution = "soundfile"; Import = "import soundfile" },
     [pscustomobject]@{ Distribution = "pillow"; Import = "from PIL import Image" },
     [pscustomobject]@{ Distribution = "matplotlib"; Import = "import matplotlib" },
-    [pscustomobject]@{ Distribution = "PyInstaller"; Import = "import PyInstaller" }
+    [pscustomobject]@{ Distribution = "PyInstaller"; Import = "import PyInstaller" },
+    [pscustomobject]@{ Distribution = "pefile"; Import = "import pefile" }
 )
 $script:Msys2Packages = @(
     "base-devel",
@@ -3123,8 +3118,9 @@ function Install-FdkAac {
     Invoke-SetupDownload -Uri $cliRelease.Uri -Destination $cliArchive | Out-Null
     Expand-SetupZip -Archive $libraryArchive -Destination $libraryExtracted
     Expand-SetupZip -Archive $cliArchive -Destination $cliExtracted
+    # FDK-AAC 3 moves libFDK under cpp/ while keeping its build files at the root.
     $libraryConfigure = Get-ChildItem -LiteralPath $libraryExtracted -Filter "configure.ac" -File -Recurse |
-        Where-Object { Test-Path -LiteralPath (Join-Path $_.DirectoryName "libFDK") -PathType Container } |
+        Where-Object { Test-Path -LiteralPath (Join-Path $_.DirectoryName "fdk-aac.pc.in") -PathType Leaf } |
         Select-Object -First 1
     $cliConfigure = Get-ChildItem -LiteralPath $cliExtracted -Filter "configure.ac" -File -Recurse |
         Where-Object { Test-Path -LiteralPath (Join-Path $_.DirectoryName "src") -PathType Container } |
@@ -3430,241 +3426,27 @@ function Install-VapourSynthScripts {
         "已校验 $($result.scripts) 个 VapourSynth 脚本及其版权说明；更新了 $($result.updated) 个文件。"
 }
 
-function Get-VapourSynthToolsRelease {
-    return Get-GitHubLatestReleaseAsset `
-        -Repository "AmusementClub/tools" `
-        -AssetPattern '^vapoursynth_portable_.+_cpu\.7z$'
+function Install-VapourSynthUpstreamComponents {
+    $installer = Join-Path $script:SetupDirectory "tools\install_vapoursynth_windows_components.py"
+    Invoke-SetupBuildCommand -DisplayName "VapourSynth upstream components" `
+        -FilePath $script:ToolPaths.Python `
+        -Arguments @(
+            $installer,
+            "--runtime-root", $script:ToolPaths.VapourSynthRoot,
+            "--work-root", (Join-Path $script:TempRoot "vapoursynth-components"),
+            "--msys2-root", $script:ToolPaths.Msys2Root,
+            "--seven-zip", $script:ToolPaths.SevenZip,
+            "--jobs", [string]$script:BuildJobs,
+            "--language", $script:SelectedLanguage
+        )
+    $statePath = Join-Path $script:ToolPaths.VapourSynthRoot "vapoursynth-components.json"
+    $state = [IO.File]::ReadAllText($statePath) | ConvertFrom-Json
+    foreach ($component in $state.components.PSObject.Properties) {
+        Update-ManifestComponent ("vapoursynth-" + $component.Name) $component.Value.ref "satisfied"
+    }
+    $script:Manifest.components.Remove("vapoursynth-tools")
 }
 
-function Get-InstalledVapourSynthToolsVersion {
-    $marker = Join-Path $script:ToolPaths.VapourSynthRoot "vapoursynth-tools-version.txt"
-    if (-not (Test-Path -LiteralPath $marker -PathType Leaf) -or
-        -not (Test-Path -LiteralPath $script:ToolPaths.VsEdit -PathType Leaf)) {
-        return ""
-    }
-    foreach ($plugin in $script:RequiredVapourSynthPlugins) {
-        if (-not (Test-Path -LiteralPath (Join-Path $script:ToolPaths.VapourSynthPlugins $plugin) -PathType Leaf)) {
-            return ""
-        }
-    }
-    return ([IO.File]::ReadAllText($marker)).Trim()
-}
-
-function Install-VapourSynthTools {
-    param([string]$Version)
-
-    $release = Get-VapourSynthToolsRelease
-    if (-not $release.Sha256) {
-        throw (Get-SetupText `
-            "The AmusementClub tools release does not provide a SHA-256 digest." `
-            "AmusementClub tools 发布信息未提供 SHA-256 摘要。")
-    }
-    $archive = Join-Path $script:TempRoot $release.Name
-    $extracted = Join-Path $script:TempRoot "vapoursynth-tools"
-    Invoke-SetupDownload `
-        -Uri $release.Uri `
-        -Destination $archive `
-        -Sha256 $release.Sha256 `
-        -ExpectedSize $release.Size | Out-Null
-
-    Write-SetupInfo `
-        "Reading the AmusementClub tools archive layout." `
-        "正在读取 AmusementClub tools 压缩包结构。"
-    $listing = Invoke-SetupCommand `
-        -FilePath $script:ToolPaths.SevenZip `
-        -Arguments @("l", "-slt", $archive)
-    $entries = @(
-        foreach ($line in ($listing -split "`n")) {
-            $trimmed = $line.Trim()
-            if ($trimmed.StartsWith("Path = ", [StringComparison]::Ordinal)) {
-                $entryPath = $trimmed.Substring(7)
-                [pscustomobject]@{
-                    Path = $entryPath
-                    Normalized = $entryPath.Replace('/', '\')
-                }
-            }
-        }
-    )
-    $vsEditEntry = $entries |
-        Where-Object {
-            $_.Normalized -ieq "vsedit.exe" -or
-            $_.Normalized.EndsWith("\vsedit.exe", [StringComparison]::OrdinalIgnoreCase)
-        } |
-        Select-Object -First 1
-    if ($null -eq $vsEditEntry) {
-        throw (Get-SetupText `
-            "vsedit.exe is missing from the AmusementClub tools archive." `
-            "AmusementClub tools 压缩包中缺少 vsedit.exe。")
-    }
-
-    $selectedEntries = @($vsEditEntry.Path)
-    foreach ($plugin in $script:RequiredVapourSynthPlugins) {
-        $suffix = "\vapoursynth64\plugins\$plugin"
-        $pluginEntry = $entries |
-            Where-Object {
-                $_.Normalized -ieq $suffix.TrimStart('\') -or
-                $_.Normalized.EndsWith($suffix, [StringComparison]::OrdinalIgnoreCase)
-            } |
-            Select-Object -First 1
-        if ($null -eq $pluginEntry) {
-            throw (Get-SetupText `
-                "Required VapourSynth plugin is missing from the tools archive: $plugin" `
-                "tools 压缩包中缺少必需的 VapourSynth 插件：$plugin")
-        }
-        $selectedEntries += $pluginEntry.Path
-    }
-
-    [IO.Directory]::CreateDirectory($extracted) | Out-Null
-    $extractArguments = @("x", $archive, "-o$extracted", "-y", "-bso0", "-bsp0")
-    $extractArguments += @($selectedEntries | Sort-Object -Unique)
-    Write-SetupInfo `
-        "Extracting VSEdit and $($script:RequiredVapourSynthPlugins.Count) required plugins." `
-        "正在解压 VSEdit 和 $($script:RequiredVapourSynthPlugins.Count) 个必需插件。"
-    Invoke-SetupCommand `
-        -FilePath $script:ToolPaths.SevenZip `
-        -Arguments $extractArguments | Out-Null
-
-    $vsEdit = Get-ChildItem -LiteralPath $extracted -Filter "vsedit.exe" -File -Recurse |
-        Select-Object -First 1
-    if ($null -eq $vsEdit) {
-        throw (Get-SetupText `
-            "VSEdit could not be located after extraction." `
-            "解压后无法定位 VSEdit。")
-    }
-
-    [IO.Directory]::CreateDirectory($script:ToolPaths.VapourSynthRoot) | Out-Null
-    [IO.Directory]::CreateDirectory($script:ToolPaths.VapourSynthPlugins) | Out-Null
-    Copy-Item -LiteralPath $vsEdit.FullName -Destination $script:ToolPaths.VsEdit -Force
-    foreach ($plugin in $script:RequiredVapourSynthPlugins) {
-        $pluginFile = Get-ChildItem -LiteralPath $extracted -Filter $plugin -File -Recurse |
-            Where-Object {
-                $_.DirectoryName.Replace('/', '\').EndsWith(
-                    "\vapoursynth64\plugins",
-                    [StringComparison]::OrdinalIgnoreCase
-                )
-            } |
-            Select-Object -First 1
-        if ($null -eq $pluginFile) {
-            throw (Get-SetupText `
-                "Required plugin could not be located after extraction: $plugin" `
-                "解压后无法定位必需插件：$plugin")
-        }
-        Copy-Item -LiteralPath $pluginFile.FullName -Destination (Join-Path $script:ToolPaths.VapourSynthPlugins $plugin) -Force
-    }
-
-    $config = "[common]`r`nvapoursynth_library_paths=./`r`nvapoursynth_plugins_paths=./vapoursynth64/coreplugins, ./vapoursynth64/plugins`r`n"
-    [IO.File]::WriteAllText(
-        (Join-Path $script:ToolPaths.VapourSynthRoot "vsedit.config"),
-        $config,
-        (New-Object Text.UTF8Encoding($false))
-    )
-    [IO.File]::WriteAllText(
-        (Join-Path $script:ToolPaths.VapourSynthRoot "vapoursynth-tools-version.txt"),
-        $release.Version,
-        (New-Object Text.UTF8Encoding($false))
-    )
-}
-
-function Test-VapourSynthTools {
-    $installedVersion = Get-InstalledVapourSynthToolsVersion
-    if (-not $installedVersion -or $installedVersion -ne (Get-VapourSynthToolsRelease).Version) {
-        return $false
-    }
-    try {
-        $pythonCode = "import numpy, vapoursynth as vs; required=('grain','assrender','bilateral','descale','dfttest','eedi2','eedi3m','f3kdb','fmtc','sangnom','lsmas','placebo','mv','neo_f3kdb','nlm_ispc','zsmooth','rgvs'); missing=[name for name in required if not hasattr(vs.core,name)]; assert not missing, 'missing plugins: ' + ', '.join(missing)"
-        Invoke-SetupCommand `
-            -FilePath $script:ToolPaths.Python `
-            -Arguments @("-c", $pythonCode) | Out-Null
-        return $true
-    }
-    catch {
-        return $false
-    }
-}
-
-function Test-CompiledToolsReady {
-    Write-SetupInfo `
-        "Checking compiled tools before deciding whether MSYS2 is needed." `
-        "正在检查编译工具，以确定是否需要 MSYS2。"
-    $checks = @(
-        [pscustomobject]@{
-            Name = "x264 8/10-bit encoder"
-            GetInstalled = { Get-InstalledX264Version }
-            GetAvailable = { (Get-X264Release).Version }
-            Verify = { Test-X264 }
-        },
-        [pscustomobject]@{
-            Name = "x265 8/10/12-bit encoder"
-            GetInstalled = { Get-InstalledX265Version }
-            GetAvailable = { (Get-X265Release).Version }
-            Verify = { Test-X265 }
-        },
-        [pscustomobject]@{
-            Name = "SVT-AV1 encoder"
-            GetInstalled = { Get-InstalledSvtAv1Version }
-            GetAvailable = { (Get-SvtAv1Release).Version }
-            Verify = { Test-SvtAv1 }
-        },
-        [pscustomobject]@{
-            Name = "FDK-AAC and fdkaac"
-            GetInstalled = { Get-InstalledFdkAacVersion }
-            GetAvailable = { (Get-FdkAacRelease).Version }
-            Verify = { Test-FdkAac }
-        },
-        [pscustomobject]@{
-            Name = "libass"
-            GetInstalled = { Get-InstalledLibassVersion }
-            GetAvailable = { (Get-LibassRelease).Version }
-            Verify = {
-                if (-not (Test-Path -LiteralPath $script:ToolPaths.Python -PathType Leaf)) {
-                    return [bool](Get-InstalledLibassVersion)
-                }
-                return Test-Libass
-            }
-        }
-    )
-    $toolsRequiringCompilation = @(
-        foreach ($check in $checks) {
-            $installedVersion = [string](& $check.GetInstalled)
-            $availableVersion = [string](& $check.GetAvailable)
-            $isReady = [bool]$installedVersion
-            if ($isReady) {
-                try {
-                    $isReady = (Compare-SetupVersion $installedVersion $availableVersion) -ge 0
-                }
-                catch {
-                    $isReady = $false
-                }
-            }
-            if ($isReady) {
-                $isReady = [bool](& $check.Verify)
-            }
-            if ($isReady) {
-                Write-SetupInfo `
-                    "$($check.Name) is ready: $installedVersion (target: $availableVersion)." `
-                    "$($check.Name) 已就绪：$installedVersion（目标：$availableVersion）。"
-            }
-            else {
-                $installedDescription = if ($installedVersion) { $installedVersion } else { "not installed" }
-                Write-SetupInfo `
-                    "$($check.Name) requires compilation; installed: $installedDescription, target: $availableVersion." `
-                    "$($check.Name) 需要编译；当前：$installedDescription，目标：$availableVersion。"
-                $check.Name
-            }
-        }
-    )
-    if ($toolsRequiringCompilation.Count -eq 0) {
-        Write-SetupInfo `
-            "All compiled tools are ready; skipping MSYS2 and its build packages." `
-            "所有编译工具均已就绪，跳过 MSYS2 及其编译依赖包。"
-        return $true
-    }
-    $missingDescription = $toolsRequiringCompilation -join ", "
-    Write-SetupInfo `
-        "MSYS2 is required for: $missingDescription" `
-        "以下工具需要使用 MSYS2 编译：$missingDescription"
-    return $false
-}
 function Register-StageTwoComponents {
     Register-SetupComponent `
         -Name "7zip" `
@@ -3754,10 +3536,6 @@ function Register-StageTwoComponents {
         -GetAvailableVersion { (Get-LatestNasmRelease).Version } `
         -Install { param($Version) Install-Nasm $Version } `
         -Verify { Test-Nasm }
-
-    if (Test-CompiledToolsReady) {
-        return
-    }
 
     Register-SetupComponent `
         -Name "msys2" `
@@ -3891,14 +3669,6 @@ function Register-StageFiveComponents {
         -Install { param($Version) Install-VapourSynthClassic $Version } `
         -Verify { Test-VapourSynthClassic }
 
-    Register-SetupComponent `
-        -Name "vapoursynth-tools" `
-        -EnglishName "VSEdit and required plugins" `
-        -ChineseName "VSEdit 和必需插件" `
-        -GetInstalledVersion { Get-InstalledVapourSynthToolsVersion } `
-        -GetAvailableVersion { (Get-VapourSynthToolsRelease).Version } `
-        -Install { param($Version) Install-VapourSynthTools $Version } `
-        -Verify { Test-VapourSynthTools }
 }
 
 function Invoke-WindowsSetup {
@@ -3947,6 +3717,7 @@ function Invoke-WindowsSetup {
     Register-StageFourComponents
     Register-StageFiveComponents
     Invoke-RegisteredSetupComponents
+    Install-VapourSynthUpstreamComponents
     Install-VapourSynthScripts
     Save-SetupManifest
 

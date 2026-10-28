@@ -996,6 +996,16 @@ I18N_ZH_TO_EN = {
     '预览脚本失败：{error}': 'Preview script failed: {error}',
     '字幕文件不存在；将继续无字幕播放': 'Subtitle file does not exist; playback will continue without subtitles',
     '复制来源': 'Copying source',
+    'VapourSynth 组件已是当前版本：{name} {version}': 'VapourSynth component is current: {name} {version}',
+    '已安装的 VapourSynth 插件无法加载：{name}：{detail}': 'Installed VapourSynth plugin cannot be loaded: {name}: {detail}',
+    'VapourSynth 插件已满足版本要求：{name} {installed} >= {target}': 'VapourSynth plugin meets the required version: {name} {installed} >= {target}',
+    '正在使用更新的链接选项重新编译 VapourSynth 插件：{name}': 'Rebuilding VapourSynth plugin with updated link options: {name}',
+    'VapourSynth 插件需要安装或更新：{name} {installed} -> {target}': 'VapourSynth plugin needs installation or update: {name} {installed} -> {target}',
+    '正在安装 VapourSynth 组件：{name} {version}': 'Installing VapourSynth component: {name} {version}',
+    '发布文件不兼容，尝试源码：{name}：{detail}': 'Release binary is incompatible; trying source: {name}: {detail}',
+    '正在从源码编译 VapourSynth 组件：{name} {version}': 'Building VapourSynth component from source: {name} {version}',
+    '已验证独立安装的 VapourSynth 组件：{count} 个': 'Independent VapourSynth components verified: {count}',
+    '另一项 VapourSynth 安装正在运行，正在等待。': 'Another VapourSynth installation is running; waiting.',
 }
 I18N_EN_TO_ZH = {v: k for k, v in I18N_ZH_TO_EN.items()}
 

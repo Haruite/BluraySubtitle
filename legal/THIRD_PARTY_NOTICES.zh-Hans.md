@@ -188,20 +188,26 @@
 - **版权、来源与许可：** 随附于 `legal/vapoursynth_scripts/COPYRIGHT.md`，已取得的许可文本位于 `legal/vapoursynth_scripts/licenses/`。各脚本保留其上游署名和许可，程序的 MIT 许可证不对其重新许可。部分文件未明确声明上游许可，详情见该说明。
 - **对应源码：** Python 文件随共用运行时一同提供。
 
-### 必需的原生滤镜（AmusementClub/tools）
+### 原生滤镜插件
 
-- **上游包：** 来自 **https://github.com/AmusementClub/tools/releases** 的发布资源。
-- **版本：** {{VAPOURSYNTH_TOOLS_VERSION}}
-- **许可证：** **tools** 仓库在 GitHub 上**没有统一的根目录 `LICENSE` 文件**，各组件可能采用不同许可证。
+| 组件 | 版本／修订 | 上游 | 许可与版权文本 |
+| --- | --- | --- | --- |
+{{VAPOURSYNTH_COMPONENTS}}
+
+安装清单 `legal/vapoursynth-components.json` 记录源码修订、发布包下载地址、插件注册版本和已安装文件哈希。各组件同时附有依赖及其已取得的许可文本。
+
+源码构建的 Windows 插件在支持的情况下静态链接编译器运行库。vs-placebo 还静态包含 libplacebo、libdovi、Little CMS、shaderc/glslang、SPIRV-Tools 和 SPIRV-Cross；Vulkan 加载器保留为独立 DLL。DFTTest 和 MVTools 共用一份 FFTW DLL。相应依赖的许可文本随组件说明一并提供。
 
 ---
 
 ### VapourSynth Editor
 
-- **文件：** `vsedit.exe`
+- **文件：** `vsedit/` 中的独立编辑器分发文件，包括其私有 Qt 库。
 - **版本：** {{VSEDIT_VERSION}}
 - **许可证：** MIT
 - **源码：** https://github.com/YomikoR/VapourSynth-Editor/archive/refs/tags/{{VSEDIT_VERSION}}.zip
+- **Qt 版本：** {{VSEDIT_QT_VERSION}}；对应源码：{{VSEDIT_QT_SOURCE}}
+- **随附许可文本：** `legal/vapoursynth/components/vsedit/`；动态链接的 Qt 库采用 LGPL v3，其 `Qt/` 子目录包含 LGPL 和 GPL 文本。
 
 ---
 

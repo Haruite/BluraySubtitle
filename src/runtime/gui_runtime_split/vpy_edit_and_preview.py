@@ -821,6 +821,14 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
         try:
             proc = QProcess(self)
             environment = QProcessEnvironment.systemEnvironment()
+            for variable in ('QT_PLUGIN_PATH', 'QT_QPA_PLATFORM_PLUGIN_PATH', 'QML2_IMPORT_PATH', 'QML_IMPORT_PATH'):
+                environment.remove(variable)
+            if sys.platform == 'win32':
+                runtime_dir = os.path.dirname(os.path.dirname(os.path.abspath(vsedit_exe)))
+                script_library = os.path.join(runtime_dir, 'VSScript.dll')
+                if os.path.isfile(script_library):
+                    environment.insert('VSSCRIPT_PATH', script_library)
+                    environment.insert('PATH', runtime_dir + os.pathsep + environment.value('PATH'))
             if str(PLUGIN_PATH or '').strip():
                 environment.insert('BLURAYSUB_PLUGIN_PATH', str(PLUGIN_PATH))
             proc.setProcessEnvironment(environment)
