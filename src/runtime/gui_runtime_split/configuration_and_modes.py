@@ -24,6 +24,8 @@ from .gui_base import BluraySubtitleGuiBase
 
 class ConfigurationModesMixin(BluraySubtitleGuiBase):
     def _apply_encode_input_mode_ui(self):
+        if getattr(self, '_language_updating', False):
+            return
         if self.get_selected_function_id() != 4:
             try:
                 if hasattr(self, 'bdmv_path_label') and self.bdmv_path_label:
@@ -103,13 +105,12 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             self.table3.setColumnCount(len(ENCODE_REMUX_SP_LABELS))
             self._set_table_headers(self.table3, ENCODE_REMUX_SP_LABELS)
             self._update_language_combo_enabled_state()
-            if not getattr(self, '_language_updating', False):
-                self.table2.setRowCount(0)
-                self.table3.setRowCount(0)
-                try:
-                    self._populate_encode_from_remux_folder()
-                except Exception:
-                    pass
+            self.table2.setRowCount(0)
+            self.table3.setRowCount(0)
+            try:
+                self._populate_encode_from_remux_folder()
+            except Exception:
+                pass
             self._resize_table_columns_for_language(self.table2)
             self._scroll_table_to_primary_column(self.table2)
             self._resize_table_columns_for_language(self.table3)
