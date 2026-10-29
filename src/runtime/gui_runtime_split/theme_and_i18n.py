@@ -1,5 +1,6 @@
 """Target module for theme/language methods of `BluraySubtitleGUI`."""
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor, QFont, QPalette
 from PyQt6.QtWidgets import QApplication, QLabel, QSlider, QTabBar, QWidget, QPlainTextEdit, QLineEdit, QGroupBox, \
     QComboBox, QTableWidget
 
@@ -135,6 +136,25 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
         app = QApplication.instance()
         if not app:
             return
+        dark = self._theme_mode == 'dark'
+        app.styleHints().setColorScheme(Qt.ColorScheme.Dark if dark else Qt.ColorScheme.Light)
+        # Some native themes ignore palette overrides or the color-scheme hint.
+        # Fusion and an explicit palette keep all controls on the selected theme.
+        app.setStyle('Fusion')
+        palette = QPalette(QColor('#2a2a2a' if dark else '#efefef'))
+        accent = QColor({
+            'light': '#2563eb',
+            'dark': '#3a5fcd',
+            'colorful': '#7c3aed',
+        }[self._theme_mode])
+        for role in (QPalette.ColorRole.Highlight, QPalette.ColorRole.Accent, QPalette.ColorRole.Link):
+            palette.setColor(role, accent)
+        palette.setColor(QPalette.ColorRole.HighlightedText, QColor('#ffffff'))
+        palette.setColor(QPalette.ColorRole.LinkVisited, QColor('#c4b5fd' if dark else '#7c3aed'))
+        if dark:
+            for role in (QPalette.ColorRole.WindowText, QPalette.ColorRole.Text, QPalette.ColorRole.ButtonText):
+                palette.setColor(QPalette.ColorGroup.Disabled, role, QColor('#9aa0b3'))
+        app.setPalette(palette)
         if self._theme_mode == 'light':
             self._set_window_opacity_if_supported(1.0)
             app.setStyleSheet(
