@@ -21,6 +21,7 @@ SVT_AV1_SOURCE_REPOSITORY="https://gitlab.com/AOMediaCodec/SVT-AV1.git"
 FDK_AAC_SOURCE_REPOSITORY="https://github.com/mstorsjo/fdk-aac.git"
 FDKAAC_SOURCE_REPOSITORY="https://github.com/nu774/fdkaac.git"
 DESCALE_SOURCE_REPOSITORY="https://github.com/AmusementClub/descale.git"
+VAPOURSYNTH_SOURCE_REPOSITORY="https://github.com/AmusementClub/vapoursynth-classic.git"
 VSEDIT_SOURCE_REPOSITORY="https://github.com/YomikoR/VapourSynth-Editor.git"
 SETTINGS_FILE="${BLURAY_SETTINGS_FILE:-$(dirname -- "$BLURAY_SETUP_SOURCE")/src/core/settings.py}"
 
@@ -2026,8 +2027,14 @@ install_zimg_latest() {
 # VapourSynth
 # ---------------------------------------------------------------------------
 
+# The marker file records the built Classic tag (R57.A*) so later runs can skip rebuilds.
+VAPOURSYNTH_VERSION_FILE="/usr/local/share/vapoursynth-classic-version.txt"
+
 install_vapoursynth() {
   log "$(msg 'Installing VapourSynth (build from source)' '安装 VapourSynth（从源码编译并安装）')"
+
+  local vapoursynth_tag vapoursynth_installed_version=""
+  vapoursynth_tag="$(latest_stable_tag "$VAPOURSYNTH_SOURCE_REPOSITORY" '^R[0-9]+[.]A[0-9]+$' 'R*')"
 
   log "$(msg 'Checking and upgrading Cython for VapourSynth compilation' '检查并升级 Cython 以支持 VapourSynth 编译')"
   if ! python3 -m pip --version >/dev/null 2>&1; then
@@ -2043,8 +2050,12 @@ install_vapoursynth() {
   # VapourSynth-classic may not generate vspipe or may place it under /usr/local/bin.
   # Relax the check: just verify that the library or executable exists.
   if [[ -f "/usr/local/lib/libvapoursynth.so" ]] || sudo ldconfig -p 2>/dev/null | grep -qE '\blibvapoursynth\.so\b'; then
-    log "$(msg 'VapourSynth already installed (libvapoursynth.so found), skipping' '检测到 VapourSynth 已安装（找到 libvapoursynth.so），跳过编译安装')"
-    return 0
+    vapoursynth_installed_version="$(head -n 1 "$VAPOURSYNTH_VERSION_FILE" 2>/dev/null || true)"
+    if [[ "$vapoursynth_installed_version" == "$vapoursynth_tag" ]]; then
+      log "$(msg "VapourSynth ${vapoursynth_tag} already installed, skipping" "检测到已安装最新 VapourSynth ${vapoursynth_tag}，跳过编译安装")"
+      return 0
+    fi
+    log "$(msg "Installed VapourSynth (${vapoursynth_installed_version:-unrecorded version}) is not the latest ${vapoursynth_tag}, upgrading from source" "已安装的 VapourSynth 版本（${vapoursynth_installed_version:-未记录版本}）不是最新版 ${vapoursynth_tag}，将从源码升级")"
   fi
 
   install_zimg_latest
@@ -2083,13 +2094,13 @@ install_vapoursynth() {
 
     # The originally provided URL returns 404; replaced with the GitHub archive link
     # which produces the same directory name after extraction.
-    tmux_run "$(msg 'Download VapourSynth R57.A12' '下载 VapourSynth R57.A12')" wget -O R57.A12.tar.gz https://github.com/AmusementClub/vapoursynth-classic/archive/refs/tags/R57.A12.tar.gz || exit 1
+    tmux_run "$(msg "Download VapourSynth ${vapoursynth_tag}" "下载 VapourSynth ${vapoursynth_tag}")" wget -O "${vapoursynth_tag}.tar.gz" "${VAPOURSYNTH_SOURCE_REPOSITORY%.git}/archive/refs/tags/${vapoursynth_tag}.tar.gz" || exit 1
 
     log "$(msg 'Extracting VapourSynth source tarball' '解压 VapourSynth 源码包')"
-    tmux_run "$(msg 'Extract VapourSynth R57.A12' '解压 VapourSynth R57.A12')" tar zxvf R57.A12.tar.gz || exit 1
-    cd vapoursynth-classic-R57.A12 || exit 1
+    tmux_run "$(msg "Extract VapourSynth ${vapoursynth_tag}" "解压 VapourSynth ${vapoursynth_tag}")" tar zxvf "${vapoursynth_tag}.tar.gz" || exit 1
+    cd "vapoursynth-classic-${vapoursynth_tag}" || exit 1
 
-    # VapourSynth-classic R57.A12 uses an API removed in FFmpeg 8; the replacement also supports older FFmpeg.
+    # VapourSynth-classic R57 uses an API removed in FFmpeg 8; the replacement also supports older FFmpeg.
     if [[ -f "src/filters/subtext/image.cpp" ]] && grep -Fq 'avcodec_close(' src/filters/subtext/image.cpp; then
       log "$(msg 'Applying the FFmpeg 8.0+ API compatibility patch to VapourSynth...' '正在为 VapourSynth 应用 FFmpeg 8.0+ API 兼容性补丁...')"
       sed -i 's/avcodec_close(\(.*\));/avcodec_free_context(\&\(\1\));/g' src/filters/subtext/image.cpp
@@ -2108,6 +2119,8 @@ install_vapoursynth() {
     log "$(msg "Creating vapoursynth.so symlink (for Python ${py_ver})" "创建 vapoursynth.so 软链接 (针对 Python ${py_ver})")"
     sudo mkdir -p /usr/lib/python3/dist-packages
     sudo ln -sf "/usr/local/lib/python${py_ver}/site-packages/vapoursynth.so" "/usr/lib/python3/dist-packages/vapoursynth.so" || exit 1
+
+    printf '%s\n' "$vapoursynth_tag" | bluray_sudo tee "$VAPOURSYNTH_VERSION_FILE" >/dev/null || exit 1
   ) || die "$(msg 'VapourSynth build/install failed' 'VapourSynth 编译/安装失败')"
 
   rm -rf "$build_dir"
@@ -2606,7 +2619,7 @@ PY
       log "$(msg 'L-SMASH-Works version is current, skipping' 'L-SMASH-Works 版本已满足要求，跳过')"
     fi
 
-    # Keep r9: r10 declares VapourSynth >= R74, but this project uses R57.A12.
+    # Keep r9: r10 declares VapourSynth >= R74, but this project uses VapourSynth Classic (R57-based).
     if vs_plugin_needs_upgrade "eedi3m.so" "r9"; then
       log "$(msg 'Building VapourSynth-EEDI3 (r9)' '编译 VapourSynth-EEDI3 (r9)')"
       cd "$build_dir" || exit 1
@@ -2686,7 +2699,18 @@ PY
       log "$(msg 'libbilateral.so version is current, skipping' 'libbilateral.so 版本已满足要求，跳过')"
     fi
 
-    if vs_plugin_needs_upgrade "libdfttest.so" "r7"; then
+    local dfttest_plugin="$plugins_dir/libdfttest.so"
+    local dfttest_linker_report=""
+    local dfttest_dependencies_broken="false"
+    if [[ -f "$dfttest_plugin" ]] && command -v ldd >/dev/null 2>&1; then
+      dfttest_linker_report="$(LC_ALL=C ldd -r "$dfttest_plugin" 2>&1 || true)"
+      if [[ "$dfttest_linker_report" == *"undefined symbol:"* || "$dfttest_linker_report" == *"not found"* ]]; then
+        log "$(msg 'Existing DFTTest plugin has unresolved symbols; rebuilding it' '现有 DFTTest 插件包含未解析符号，将重新编译')"
+        dfttest_dependencies_broken="true"
+      fi
+    fi
+    if [[ "$dfttest_dependencies_broken" == "true" ]] \
+        || vs_plugin_needs_upgrade "libdfttest.so" "r7"; then
       log "$(msg 'Building VapourSynth-DFTTest (r7)' '编译 VapourSynth-DFTTest (r7)')"
       cd "$build_dir" || exit 1
       tmux_run "$(msg 'Download DFTTest r7' '下载 DFTTest r7')" wget -O r7.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-DFTTest/archive/refs/tags/r7.tar.gz || exit 1
@@ -2694,8 +2718,14 @@ PY
       cd VapourSynth-DFTTest-r7/ || exit 1
       log "$(msg 'Installing DFTTest build dependency: libfftw3-dev...' '正在安装 DFTTest 编译依赖: libfftw3-dev...')"
       apt_install libfftw3-dev
-      tmux_run "DFTTest meson setup" meson setup build || exit 1
+      # fftw >= 3.3.9 exports make_planner_thread_safe only from libfftw3f_threads, which fftw3f.pc does not link.
+      tmux_run "DFTTest meson setup" meson setup build -Dcpp_link_args=-lfftw3f_threads || exit 1
       tmux_run "DFTTest ninja" ninja -C build || exit 1
+      dfttest_linker_report="$(LC_ALL=C ldd -r build/libdfttest.so 2>&1 || true)"
+      if [[ "$dfttest_linker_report" == *"undefined symbol:"* || "$dfttest_linker_report" == *"not found"* ]]; then
+        log "$(msg 'Rebuilt DFTTest plugin still has unresolved dependencies' '重编后的 DFTTest 插件仍包含未解析依赖')"
+        exit 1
+      fi
       install -m 0755 build/libdfttest.so "$plugins_dir/libdfttest.so" || exit 1
       vs_plugin_version record "libdfttest.so" "r7" || exit 1
       cd "$build_dir" || exit 1
@@ -2833,7 +2863,7 @@ PY
       log "$(msg 'libvsnlm_ispc.so version is current, skipping' 'libvsnlm_ispc.so 版本已满足要求，跳过')"
     fi
 
-    # Keep zsmooth 0.7 because newer binaries are incompatible with R57.A12.
+    # Keep zsmooth 0.7 because newer binaries are incompatible with VapourSynth Classic (R57-based).
     if vs_plugin_needs_upgrade "libzsmooth.x86_64-gnu.so" "0.7"; then
       log "$(msg 'Installing zsmooth (binary package)' '安装 zsmooth（二进制包）')"
       cd "$build_dir" || exit 1

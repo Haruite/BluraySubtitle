@@ -8,6 +8,18 @@ ENV PATH=/root/.local/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 WORKDIR /app
 
+# Optional apt mirror override (e.g. local builds where archive.ubuntu.com is slow).
+# When APT_MIRROR is empty the official sources stay untouched, which is what CI uses.
+ARG APT_MIRROR
+RUN set -eux; \
+    if [ -n "${APT_MIRROR:-}" ]; then \
+      sed -i \
+        -e "s|http://archive.ubuntu.com/ubuntu/|${APT_MIRROR}|g" \
+        -e "s|http://security.ubuntu.com/ubuntu/|${APT_MIRROR}|g" \
+        /etc/apt/sources.list.d/ubuntu.sources; \
+    fi; \
+    grep -E '^[^#]*URIs:' /etc/apt/sources.list.d/ubuntu.sources
+
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates wget \
     && install -d -m 0755 /etc/apt/keyrings \
     && wget -q -O /etc/apt/keyrings/gpg-pub-moritzbunkus.gpg https://mkvtoolnix.download/gpg-pub-moritzbunkus.gpg \
@@ -393,11 +405,14 @@ ldconfig
 rm -rf /tmp/flac
 FLAC
 
+ARG VAPOURSYNTH_TAG
 RUN set -eux; \
     mkdir -p /tmp/vs && cd /tmp/vs; \
-    wget -nv -O R57.A12.tar.gz https://github.com/AmusementClub/vapoursynth-classic/archive/refs/tags/R57.A12.tar.gz; \
-    tar zxvf R57.A12.tar.gz; \
-    cd vapoursynth-classic-R57.A12; \
+    VAPOURSYNTH_TAG="${VAPOURSYNTH_TAG:-$(git ls-remote --refs --tags --sort=-version:refname https://github.com/AmusementClub/vapoursynth-classic.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^R[0-9]+[.]A[0-9]+$/ { print $2; exit }')}"; \
+    test -n "$VAPOURSYNTH_TAG"; \
+    wget -nv -O "$VAPOURSYNTH_TAG.tar.gz" "https://github.com/AmusementClub/vapoursynth-classic/archive/refs/tags/${VAPOURSYNTH_TAG}.tar.gz"; \
+    tar zxvf "$VAPOURSYNTH_TAG.tar.gz"; \
+    cd "vapoursynth-classic-${VAPOURSYNTH_TAG}"; \
     if [ -f src/filters/subtext/image.cpp ]; then sed -i 's/avcodec_close(\(.*\));/avcodec_free_context(\&\(\1\));/g' src/filters/subtext/image.cpp; fi; \
     ./autogen.sh; \
     ./configure --prefix=/usr/local CXXFLAGS="-O3 -fpermissive"; \
@@ -564,7 +579,7 @@ RUN set -eux; \
     wget -nv -O r7.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-DFTTest/archive/refs/tags/r7.tar.gz; \
     tar zxvf r7.tar.gz; \
     cd VapourSynth-DFTTest-r7; \
-    meson setup build; ninja -C build; \
+    meson setup build -Dcpp_link_args=-lfftw3f_threads; ninja -C build; \
     cp build/libdfttest.so /app/plugins/
 
 RUN set -eux; \
@@ -732,7 +747,7 @@ RUN set -eux; \
     unzip "tsMuxer-${TSMUXER_VER}-linux.zip"; \
     cp tsMuxeR /usr/bin/tsMuxeR; \
     chmod +x /usr/bin/tsMuxeR; \
-    rm -rf /tmp/tsmuxer
+    rm -rf /tmp/tsmuxe
 
 ARG HDR10PLUS_TAG
 RUN set -eux; \
