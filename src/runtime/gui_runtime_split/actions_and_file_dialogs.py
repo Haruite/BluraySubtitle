@@ -39,7 +39,9 @@ from src.exports.utils import (
     get_mpv_safe_path,
     print_exc_terminal,
     third_party_notices_markdown_path,
+    resolve_encoder_executable_path,
 )
+from src.runtime.encode_source import probe_svt_av1_bit_depths
 from src.runtime.sp import SpEntry, media_track_key
 from src.runtime.gui_runtime_classes.encode_worker import EncodeWorker
 from src.runtime.encode import EncodeRequest, EncodeRow, EncodeSettings, validate_encode_request
@@ -1044,8 +1046,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         try:
 
             self.ensure_default_vpy_file()
-            vspipe_mode = 'bundle' if self.vspipe_mode_combo.currentText() == 'Built-in' else 'system'
-            encoder_mode = 'bundle' if self.x265_mode_combo.currentText() == 'Built-in' else 'system'
+            vspipe_mode = str(self.vspipe_mode_combo.currentData())
+            encoder_mode = str(self.x265_mode_combo.currentData())
             encoder, bit_depth = self._current_encode_tool_and_depth()
             encoder = str(encoder or '').strip().lower()
             if self.sub_pack_hard_radio.isChecked():
@@ -1663,41 +1665,23 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             return success
         return True
 
-    def _update_encode_bit_depth_combo_tooltip(self) -> None:
-        """SvtAv1 + 12-bit only: tooltip (x265 12-bit has no warning). Frozen bundle: no SvtAv1 12-bit row."""
-        cb = getattr(self, 'encode_bit_depth_combo', None)
-        if cb is None:
-            return
-        if _is_pyinstaller_frozen_bundle():
-            cb.setToolTip('')
-            return
-        enc = (getattr(self, 'encode_tool_combo', None).currentText() or '').strip().lower()
-        if enc == 'svtav1' and str(cb.currentData() or '') == '12':
-            cb.setToolTip(self.t('Not officially supported'))
-        else:
-            cb.setToolTip('')
-
     def _refill_encode_bit_depth_combo(self, tool: str) -> None:
         # PyQt6: bool(QComboBox()) is False — never use `if not combo` on QWidget subclasses.
         if getattr(self, 'encode_bit_depth_combo', None) is None:
             return
+        t = (tool or '').strip().lower()
+        supports_12_bit = t == 'x265'
+        if t == 'svtav1':
+            mode = str(self.x265_mode_combo.currentData())
+            executable = resolve_encoder_executable_path(t, mode)
+            supports_12_bit = '12' in probe_svt_av1_bit_depths(executable)
         prev = self.encode_bit_depth_combo.currentData()
         self.encode_bit_depth_combo.blockSignals(True)
         self.encode_bit_depth_combo.clear()
-        t = (tool or '').strip().lower()
-        if t == 'x264':
-            self.encode_bit_depth_combo.addItem(self.t('8-bit'), '8')
-            self.encode_bit_depth_combo.addItem(self.t('10-bit'), '10')
-        else:
-            self.encode_bit_depth_combo.addItem(self.t('8-bit'), '8')
-            self.encode_bit_depth_combo.addItem(self.t('10-bit'), '10')
-            # PyInstaller: omit 12-bit for SvtAv1 only (upstream grey-stream risk); x265 keeps 12-bit.
-            omit_12 = _is_pyinstaller_frozen_bundle() and t == 'svtav1'
-            if not omit_12:
-                self.encode_bit_depth_combo.addItem(self.t('12-bit'), '12')
-                i12 = self.encode_bit_depth_combo.count() - 1
-                tip12 = self.t('Not officially supported') if t == 'svtav1' else ''
-                self.encode_bit_depth_combo.setItemData(i12, tip12, Qt.ItemDataRole.ToolTipRole)
+        self.encode_bit_depth_combo.addItem(self.t('8-bit'), '8')
+        self.encode_bit_depth_combo.addItem(self.t('10-bit'), '10')
+        if supports_12_bit:
+            self.encode_bit_depth_combo.addItem(self.t('12-bit'), '12')
         want = str(prev) if prev is not None else ''
         pick = -1
         for i in range(self.encode_bit_depth_combo.count()):
@@ -1713,7 +1697,6 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             pick = 0
         self.encode_bit_depth_combo.setCurrentIndex(pick)
         self.encode_bit_depth_combo.blockSignals(False)
-        self._update_encode_bit_depth_combo_tooltip()
         try:
             if hasattr(self, '_adjust_combo_width_to_contents'):
                 self._adjust_combo_width_to_contents(self.encode_bit_depth_combo)
@@ -1823,7 +1806,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
 
         tools_layout.addWidget(QLabel(self.t('vspipe source:'), tools_row), 0, 0)
         self.vspipe_mode_combo = QComboBox(tools_row)
-        self.vspipe_mode_combo.addItems(['Built-in', 'System'])
+        self.vspipe_mode_combo.addItem(self.t('Built-in'), 'bundle')
+        self.vspipe_mode_combo.addItem(self.t('System'), 'system')
         tools_layout.addWidget(self.vspipe_mode_combo, 0, 1)
 
         self.encode_tool_label = QLabel(self.t('Encoder tool:'), tools_row)
@@ -1836,7 +1820,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         self.encode_source_label = QLabel(self.t('Encoder tool source:'), tools_row)
         tools_layout.addWidget(self.encode_source_label, 1, 0)
         self.x265_mode_combo = QComboBox(tools_row)
-        self.x265_mode_combo.addItems(['Built-in', 'System'])
+        self.x265_mode_combo.addItem(self.t('Built-in'), 'bundle')
+        self.x265_mode_combo.addItem(self.t('System'), 'system')
         tools_layout.addWidget(self.x265_mode_combo, 1, 1)
 
         self.encode_bit_depth_label = QLabel(self.t('Output bit depth:'), tools_row)
@@ -1858,13 +1843,13 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
 
         is_pyinstaller_bundle = _is_pyinstaller_frozen_bundle()
         if not is_pyinstaller_bundle:
-            self.vspipe_mode_combo.setCurrentText('System')
+            self.vspipe_mode_combo.setCurrentIndex(self.vspipe_mode_combo.findData('system'))
             self.vspipe_mode_combo.setEnabled(False)
-            self.x265_mode_combo.setCurrentText('System')
+            self.x265_mode_combo.setCurrentIndex(self.x265_mode_combo.findData('system'))
             self.x265_mode_combo.setEnabled(False)
         elif is_docker():
-            self.vspipe_mode_combo.setCurrentText('System')
-            self.x265_mode_combo.setCurrentText('System')
+            self.vspipe_mode_combo.setCurrentIndex(self.vspipe_mode_combo.findData('system'))
+            self.x265_mode_combo.setCurrentIndex(self.x265_mode_combo.findData('system'))
 
         self.x265_params_label = QLabel(self.t('x265 Params:'), tools_row)
         tools_layout.addWidget(self.x265_params_label, 2, 0)
@@ -2012,16 +1997,15 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         self.x265_preset_combo.currentIndexChanged.connect(on_preset_changed)
 
         self.encode_tool_combo.currentIndexChanged.connect(lambda _=None: self._refresh_encode_tool_dependent_ui(True))
+        self.x265_mode_combo.currentIndexChanged.connect(
+            lambda _=None: self._refresh_encode_tool_dependent_ui(False)
+        )
 
         def _sync_vpy_fmtc_from_encode_controls(*_args) -> None:
             try:
                 sync = getattr(self, 'sync_default_vpy_fmtc_with_encode_ui', None)
                 if callable(sync):
                     sync()
-            except Exception:
-                pass
-            try:
-                self._update_encode_bit_depth_combo_tooltip()
             except Exception:
                 pass
 

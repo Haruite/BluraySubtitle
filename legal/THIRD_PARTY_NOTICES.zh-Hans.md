@@ -92,7 +92,7 @@
 - **版本：** v{{SVT_AV1_VERSION}}
 - **许可证：** BSD 3-Clause
 - **源码：** https://gitlab.com/AOMediaCodec/SVT-AV1/-/archive/v{{SVT_AV1_VERSION}}/SVT-AV1-v{{SVT_AV1_VERSION}}.zip
-- **构建说明：** 随附的 Windows 编码器由此标签源码构建，并使用 `setup_linux_environment.sh` 和 `Dockerfile` 中记录的 12 位应用补丁；已进行 8/10/12 位编码测试。
+- **构建说明：** 随附的 Windows 编码器由此标签的未修改上游源码构建。
 
 ---
 

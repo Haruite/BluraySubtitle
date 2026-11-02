@@ -92,7 +92,7 @@ These are **two separate upstreams**: the `fdkaac` program links against or ship
 - **Version:** v{{SVT_AV1_VERSION}}
 - **License:** BSD 3-Clause
 - **Source:** https://gitlab.com/AOMediaCodec/SVT-AV1/-/archive/v{{SVT_AV1_VERSION}}/SVT-AV1-v{{SVT_AV1_VERSION}}.zip
-- **Build note:** The bundled Windows encoder was built from this tag with the 12-bit application patch documented in `setup_linux_environment.sh` and `Dockerfile`; 8/10/12-bit encoding was tested.
+- **Build note:** The bundled Windows encoder is built from this unmodified upstream tag.
 
 ---
 

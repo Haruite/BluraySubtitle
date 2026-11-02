@@ -53,7 +53,7 @@ See [audio formats and conversion targets](docs/wiki/Media-Formats-and-Dolby-Vis
 
 ### Encode controls
 
-- Choose bundled/system `vspipe` and encoders: x264 supports 8/10-bit, x265 8/10/12-bit, and SVT-AV1 8/10-bit. The experimental SVT-AV1 12-bit option is unusable.
+- Choose bundled/system `vspipe` and encoders: x264 supports 8/10-bit and x265 8/10/12-bit. Standard SVT-AV1 builds support 8/10-bit; the 12-bit choice appears only when the selected encoder supports it.
 - Source CFR/VFR timing and audio/video synchronization are preserved. VPy processing must preserve frame correspondence; [prefix tests](#how-do-i-run-a-short-encode-test) are also supported.
 - Built-in presets are read-only. Manage user presets under **Advanced** or edit encoder parameters directly.
 - Each main/SP row can specify a VPy and per-track FLAC/AAC/Opus conversion. Subtitle modes are external, softsub, and hardsub; Remux sources also support chapter/attachment editing.

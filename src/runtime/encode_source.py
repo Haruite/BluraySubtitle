@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -23,6 +24,7 @@ _X265_DYNAMIC_METADATA_OPTIONS = (
     '--dolby-vision-rpu',
 )
 _X265_OPTION_CACHE: dict[tuple[str, int, int], frozenset[str]] = {}
+_SVT_AV1_BIT_DEPTH_CACHE: dict[tuple[str, int, int], frozenset[str]] = {}
 
 
 @dataclass(frozen=True)
@@ -741,6 +743,46 @@ def source_has_hdr10plus(source: ActualEncodeSource) -> bool:
     return False
 
 
+def probe_svt_av1_bit_depths(executable: str) -> frozenset[str]:
+    """Return input/output depths advertised by this exact SVT-AV1 binary."""
+    executable_path = os.path.abspath(shutil.which(executable) or executable)
+    try:
+        identity = os.stat(executable_path)
+    except OSError:
+        return frozenset()
+    cache_key = (
+        os.path.normcase(executable_path),
+        identity.st_size,
+        identity.st_mtime_ns,
+    )
+    cached = _SVT_AV1_BIT_DEPTH_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        result = run_command(
+            [executable_path, '--help'],
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+            timeout=5,
+            check=True,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return frozenset()
+    help_text = f'{result.stdout or ""}\n{result.stderr or ""}'
+    depths = frozenset()
+    for line in help_text.splitlines():
+        if line.strip().split(maxsplit=1)[:1] != ['--input-depth']:
+            continue
+        values = line.partition('[')[2].partition(']')[0]
+        depths = frozenset(re.findall(r'\b(?:8|10|12)\b', values))
+        break
+    _SVT_AV1_BIT_DEPTH_CACHE[cache_key] = depths
+    return depths
+
+
 def probe_x265_dynamic_metadata_options(executable: str) -> frozenset[str]:
     """Return dynamic-metadata options advertised by this exact x265 binary."""
     executable_path = shutil.which(executable) or executable
@@ -1022,6 +1064,7 @@ __all__ = [
     'inject_hdr10plus_metadata',
     'parse_source_color_metadata',
     'probe_actual_encode_source',
+    'probe_svt_av1_bit_depths',
     'probe_x265_dynamic_metadata_options',
     'probe_vapoursynth_output_metadata',
     'source_has_hdr10plus',

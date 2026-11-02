@@ -868,9 +868,6 @@ class BluraySubtitleGuiBase(QWidget):
     def _unchecked_segments_from_checkbox_states(self, mpls_path: str) -> tuple[list[tuple[int, int]], dict[int, str]]:
         raise NotImplementedError
 
-    def _update_encode_bit_depth_combo_tooltip(self) -> None:
-        raise NotImplementedError
-
     def _update_exe_button_progress(self, value: Optional[int]=None, text: Optional[str]=None):
         raise NotImplementedError
 

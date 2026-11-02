@@ -2851,134 +2851,15 @@ function Get-InstalledSvtAv1Version {
     return $(if ($match.Success) { $match.Groups['version'].Value } else { "" })
 }
 
-function Try-Update-SvtAv1SourceFor12Bit {
-    param([Parameter(Mandatory = $true)][string]$SourceRoot)
-
-    $sourceFiles = @(
-        (Join-Path $SourceRoot "Source\Lib\Globals\enc_settings.c"),
-        (Join-Path $SourceRoot "Source\App\app_config.c"),
-        (Join-Path $SourceRoot "Source\App\app_main.c"),
-        (Join-Path $SourceRoot "Source\App\app_process_cmd.c"),
-        (Join-Path $SourceRoot "Source\Lib\Codec\entropy_coding.c")
-    )
-    $originalFiles = [ordered]@{}
-    foreach ($sourceFile in $sourceFiles) {
-        if (Test-Path -LiteralPath $sourceFile -PathType Leaf) {
-            $originalFiles[$sourceFile] = [IO.File]::ReadAllBytes($sourceFile)
-        }
-    }
-
-    try {
-        Set-SourceTextReplacement `
-        -Path (Join-Path $SourceRoot "Source\Lib\Globals\enc_settings.c") `
-        -OldText @"
-    if ((config->encoder_bit_depth != 8) && (config->encoder_bit_depth != 10)) {
-        SVT_ERROR("Encoder Bit Depth shall be only 8 or 10 \n");
-        return_error = EB_ErrorBadParameter;
-    }
-    // Check if the EncoderBitDepth is conformant with the Profile constraint
-"@ `
-        -NewText @"
-#if CONFIG_ENABLE_HIGH_BIT_DEPTH
-    if (config->encoder_bit_depth != 8 && config->encoder_bit_depth != 10 &&
-        config->encoder_bit_depth != EB_TWELVE_BIT) {
-        SVT_ERROR("Encoder Bit Depth shall be only 8, 10, or 12\n");
-        return_error = EB_ErrorBadParameter;
-    }
-    if (config->encoder_bit_depth == EB_TWELVE_BIT && config->profile != PROFESSIONAL_PROFILE) {
-        SVT_ERROR("12-bit encoding requires Professional profile (seq_profile / --profile 2)\n");
-        return_error = EB_ErrorBadParameter;
-    }
-#else
-    if ((config->encoder_bit_depth != 8) && (config->encoder_bit_depth != 10)) {
-        SVT_ERROR("Encoder Bit Depth shall be only 8 or 10 \n");
-        return_error = EB_ErrorBadParameter;
-    }
-#endif
-    // Check if the EncoderBitDepth is conformant with the Profile constraint
-"@ `
-        -Description "SVT-AV1 12-bit validation"
-
-    $appConfig = Join-Path $SourceRoot "Source\App\app_config.c"
-    Set-SourceTextReplacement `
-        -Path $appConfig `
-        -OldText @"
-#define INPUT_DEPTH_TOKEN "--input-depth"
-#define KEYINT_TOKEN "--keyint"
-"@ `
-        -NewText @"
-#define INPUT_DEPTH_TOKEN "--input-depth"
-#if CONFIG_ENABLE_HIGH_BIT_DEPTH
-#define INPUT_DEPTH_HELP \
-    "Input video file and output bitstream bit-depth, default is 8 [8, 10, 12]. 12-bit requires " \
-    "--profile 2 (Professional)"
-#else
-#define INPUT_DEPTH_HELP "Input video file and output bitstream bit-depth, default is 8 [8, 10]"
-#endif
-#define KEYINT_TOKEN "--keyint"
-"@ `
-        -Description "SVT-AV1 12-bit help text"
-    Set-SourceTextReplacement `
-        -Path $appConfig `
-        -OldText '    {INPUT_DEPTH_TOKEN, "Input video file and output bitstream bit-depth, default is 8 [8, 10]"},' `
-        -NewText '    {INPUT_DEPTH_TOKEN, INPUT_DEPTH_HELP},' `
-        -Description "SVT-AV1 input-depth help entry"
-    Set-SourceTextReplacement `
-        -Path $appConfig `
-        -OldText '    frame_size = frame_size << ((app_cfg->config.encoder_bit_depth == 10) ? 1 : 0);' `
-        -NewText '    frame_size = frame_size << ((app_cfg->config.encoder_bit_depth > 8) ? 1 : 0);' `
-        -Description "SVT-AV1 12-bit input frame size"
-    Set-SourceTextReplacement `
-        -Path (Join-Path $SourceRoot "Source\App\app_main.c") `
-        -OldText '        double max_pix_value  = (cfg->encoder_bit_depth == 8) ? 255 : 1023;' `
-        -NewText '        double max_pix_value = (double)((1u << cfg->encoder_bit_depth) - 1);' `
-        -Description "SVT-AV1 application 12-bit pixel range"
-    Set-SourceTextReplacement `
-        -Path (Join-Path $SourceRoot "Source\App\app_process_cmd.c") `
-        -OldText '    double   max_pix_value = (app_cfg->config.encoder_bit_depth == 8) ? 255 : 1023;' `
-        -NewText '    double max_pix_value = (double)((1u << app_cfg->config.encoder_bit_depth) - 1);' `
-        -Description "SVT-AV1 command 12-bit pixel range"
-    Set-SourceTextReplacement `
-        -Path (Join-Path $SourceRoot "Source\Lib\Codec\entropy_coding.c") `
-        -OldText @"
-    if (scs->static_config.profile == PROFESSIONAL_PROFILE && scs->static_config.encoder_bit_depth != EB_EIGHT_BIT) {
-        SVT_ERROR("Profile 2 Not supported\n");
-        svt_aom_wb_write_bit(wb, scs->static_config.encoder_bit_depth == EB_TEN_BIT ? 0 : 1);
-    }
-"@ `
-        -NewText @"
-    if (scs->static_config.profile == PROFESSIONAL_PROFILE && scs->static_config.encoder_bit_depth != EB_EIGHT_BIT) {
-        svt_aom_wb_write_bit(wb, scs->static_config.encoder_bit_depth == EB_TEN_BIT ? 0 : 1);
-    }
-"@ `
-        -Description "SVT-AV1 Professional profile 12-bit signaling"
-        Write-SetupWarning `
-            "The experimental SVT-AV1 12-bit patch was applied only to bypass upstream validation. It does not produce usable 12-bit encodes; tested output is grey. A working 12-bit encode requires user-maintained source changes." `
-            "已应用 SVT-AV1 实验性 12-bit 补丁，但它只绕过上游校验，无法生成可用的 12-bit 压制结果；实测输出为灰屏。正常 12-bit 压制需要用户自行维护源码修改。"
-        return $true
-    }
-    catch {
-        $patchError = $_.Exception.Message
-        foreach ($sourceFile in $originalFiles.Keys) {
-            [IO.File]::WriteAllBytes($sourceFile, $originalFiles[$sourceFile])
-        }
-        Write-SetupWarning `
-            "The experimental SVT-AV1 12-bit patch could not be applied: $patchError. The unmodified upstream source will be compiled with normal 8/10-bit support." `
-            "无法应用 SVT-AV1 实验性 12-bit 补丁：$patchError。将按上游原始源码编译，正常支持 8/10-bit。"
-        return $false
-    }
-}
-
 function Build-SvtAv1Executable {
     param(
         [Parameter(Mandatory = $true)][string]$SourceRoot,
-        [Parameter(Mandatory = $true)][string]$BuildRoot,
-        [Parameter(Mandatory = $true)][string]$BuildDescription
+        [Parameter(Mandatory = $true)][string]$BuildRoot
     )
 
     $nasmPath = $script:ToolPaths.Nasm.Replace('\', '/')
     Invoke-SetupBuildCommand `
-        -DisplayName "SVT-AV1 $BuildDescription configuration" `
+        -DisplayName "SVT-AV1 configuration" `
         -FilePath $script:ToolPaths.CMake `
         -Arguments @(
             "-S", $SourceRoot,
@@ -2993,7 +2874,7 @@ function Build-SvtAv1Executable {
             "-DCMAKE_ASM_NASM_COMPILER=$nasmPath"
         )
     Invoke-SetupBuildCommand `
-        -DisplayName "SVT-AV1 $BuildDescription compilation" `
+        -DisplayName "SVT-AV1 compilation" `
         -FilePath $script:ToolPaths.CMake `
         -Arguments @("--build", $BuildRoot, "--config", "Release", "--target", "SvtAv1EncApp", "--parallel", $script:BuildJobs)
     $executable = Get-ChildItem -LiteralPath $SourceRoot -Filter "SvtAv1EncApp.exe" -File -Recurse |
@@ -3024,38 +2905,9 @@ function Install-SvtAv1 {
         throw (Get-SetupText "SVT-AV1 source directory is missing." "未找到 SVT-AV1 源码目录。")
     }
     $sourceRoot = $marker.Directory.Parent.Parent.Parent.FullName
-    $patchApplied = Try-Update-SvtAv1SourceFor12Bit -SourceRoot $sourceRoot
-    $buildDescription = $(if ($patchApplied) { "experimental 12-bit" } else { "upstream 8/10-bit" })
-    try {
-        $executable = Build-SvtAv1Executable `
-            -SourceRoot $sourceRoot `
-            -BuildRoot (Join-Path $script:TempRoot "svt-av1-build") `
-            -BuildDescription $buildDescription
-    }
-    catch {
-        if (-not $patchApplied) {
-            throw
-        }
-        $experimentalBuildError = $_.Exception.Message
-        Write-SetupWarning `
-            "The experimental SVT-AV1 12-bit build failed: $experimentalBuildError. Retrying with a fresh copy of the unmodified upstream source." `
-            "SVT-AV1 实验性 12-bit 版本编译失败：$experimentalBuildError。正在使用重新解压的上游原始源码重试。"
-        $fallbackExtracted = Join-Path $script:TempRoot "svt-av1-fallback-extracted"
-        Expand-SetupZip -Archive $archive -Destination $fallbackExtracted
-        $fallbackMarker = Get-ChildItem -LiteralPath $fallbackExtracted -Filter "enc_settings.c" -File -Recurse |
-            Where-Object { $_.FullName -match '[\\/]Source[\\/]Lib[\\/]Globals[\\/]enc_settings\.c$' } |
-            Select-Object -First 1
-        if ($null -eq $fallbackMarker) {
-            throw (Get-SetupText `
-                "The unmodified SVT-AV1 fallback source directory is missing." `
-                "未找到未修改的 SVT-AV1 回退源码目录。")
-        }
-        $fallbackSourceRoot = $fallbackMarker.Directory.Parent.Parent.Parent.FullName
-        $executable = Build-SvtAv1Executable `
-            -SourceRoot $fallbackSourceRoot `
-            -BuildRoot (Join-Path $script:TempRoot "svt-av1-fallback-build") `
-            -BuildDescription "upstream 8/10-bit fallback"
-    }
+    $executable = Build-SvtAv1Executable `
+        -SourceRoot $sourceRoot `
+        -BuildRoot (Join-Path $script:TempRoot "svt-av1-build")
 
     [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($script:ToolPaths.SvtAv1)) | Out-Null
     Copy-Item -LiteralPath $executable -Destination $script:ToolPaths.SvtAv1 -Force
@@ -3633,8 +3485,8 @@ function Register-StageFourComponents {
 
     Register-SetupComponent `
         -Name "svt-av1" `
-        -EnglishName "SVT-AV1 encoder (experimental 12-bit patch)" `
-        -ChineseName "SVT-AV1 编码器（实验性 12-bit 补丁）" `
+        -EnglishName "SVT-AV1 encoder" `
+        -ChineseName "SVT-AV1 编码器" `
         -GetInstalledVersion { Get-InstalledSvtAv1Version } `
         -GetAvailableVersion { (Get-SvtAv1Release).Version } `
         -Install { param($Version) Install-SvtAv1 $Version } `

@@ -54,7 +54,11 @@ from src.core.encode_presets import (
 )
 from src.core.i18n import translate_text
 from src.core.version import APP_VERSION, is_newer_release, release_version
-from src.runtime.encode_source import probe_x265_dynamic_metadata_options
+from src.exports.utils import resolve_encoder_executable_path
+from src.runtime.encode_source import (
+    probe_svt_av1_bit_depths,
+    probe_x265_dynamic_metadata_options,
+)
 
 
 GITHUB_LATEST_RELEASE_API = (
@@ -87,9 +91,11 @@ class SettingsDialog(QDialog):
             translate: Callable[[str], str],
             parent: QWidget | None = None,
             settings_source_path: Path | None = None,
+            encoder_mode: str = "system",
     ) -> None:
         super().__init__(parent)
         self._config = config
+        self._encoder_mode = encoder_mode
         self.t = translate
         self._custom_encode_presets = list(config.encode.custom_presets)
         self._preset_editor_updating = False
@@ -621,7 +627,11 @@ class SettingsDialog(QDialog):
     def _refresh_advanced_encode_options(self, refresh_presets: bool) -> None:
         encoder = str(self.default_encoder_combo.currentData() or "x265")
         previous_depth = str(self.default_bit_depth_combo.currentData() or "10")
-        depths = ("8", "10") if encoder == "x264" else ("8", "10", "12")
+        supports_12_bit = encoder == "x265"
+        if encoder == "svtav1":
+            executable = resolve_encoder_executable_path(encoder, self._encoder_mode)
+            supports_12_bit = "12" in probe_svt_av1_bit_depths(executable)
+        depths = ("8", "10", "12") if supports_12_bit else ("8", "10")
         self.default_bit_depth_combo.blockSignals(True)
         try:
             self.default_bit_depth_combo.clear()

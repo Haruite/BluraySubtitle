@@ -10,11 +10,11 @@ This page covers encoder settings and the VPy processing path. For container, co
 | --- | --- | --- |
 | x264 / AVC | 8-bit default; 10-bit sets `--profile high10` | Mature, generally faster, and broadly compatible with older players; usually needs more data than a well-configured newer codec |
 | x265 / HEVC | 8/10/12-bit; 10-bit default | Project default; better compression efficiency at greater encoding cost. Dolby Vision preservation requires 10-bit. |
-| SVT-AV1 | 8/10-bit for normal output | Modern compression and film-grain tools; check decoder support. The current workflow omits Dolby Vision with a task message. |
+| SVT-AV1 | Depends on the selected build; standard builds support 8/10-bit | Modern compression and film-grain tools; check decoder support. The current workflow omits Dolby Vision with a task message. |
 
 Ten-bit SDR output can reduce quantization/banding problems but does not turn SDR into HDR. Codec background belongs in [Media Formats](Media-Formats-and-Dolby-Vision.md#video-formats).
 
-SVT-AV1 12-bit is experimental and unusable in the current setup-script build: its patch bypasses upstream's 8/10-bit restriction and adds Professional-profile signaling, but does not implement valid 12-bit encoding; real tests produce a grey picture. Valid 12-bit support requires maintaining the upstream source, not merely selecting the option.
+The setup scripts and Docker image build unmodified upstream SVT-AV1. The Encode controls and settings dialog offer 12-bit only when the selected bundled/system executable lists `12` among its `--input-depth` values in `--help`. If this support cannot be confirmed, 12-bit is hidden; changing the tool source refreshes the choices. Other AV1 encoders such as aomenc and rav1e use different command lines and cannot replace `SvtAv1EncApp` in this workflow.
 
 Quality depends on source texture/motion, encoder version, rate control, preset, filters, and playback conditions. Compare representative samples from the same source at the intended viewing distance; transcoding one test result into another codec adds generation loss and biases the comparison.
 

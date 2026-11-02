@@ -158,7 +158,12 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
         )
 
     def _show_settings_dialog(self) -> None:
-        dialog = SettingsDialog(self._app_config, self.t, self)
+        dialog = SettingsDialog(
+            self._app_config,
+            self.t,
+            self,
+            encoder_mode=str(self.x265_mode_combo.currentData()),
+        )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         selected = replace(

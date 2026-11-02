@@ -1603,121 +1603,8 @@ install_x264() {
   log "$(msg 'x264 installation complete' 'x264 安装完成')"
 }
 # ---------------------------------------------------------------------------
-# SVT-AV1 (AOMediaCodec + 12-bit patches)
+# SVT-AV1 (AOMediaCodec)
 # ---------------------------------------------------------------------------
-
-__apply_svt_av1_source_patches() {
-  local svt_root="$1"
-  command -v python3 >/dev/null 2>&1 || \
-    die "$(msg 'python3 is required for SVT-AV1 source patches.' '应用 SVT-AV1 源码补丁需要 python3。')"
-  log "$(msg 'SVT-AV1: applying 12-bit source patches...' 'SVT-AV1：正在应用 12-bit 源码补丁…')"
-  python3 - "$svt_root" <<'SVTAV1PY'
-import sys
-from pathlib import Path
-
-root = Path(sys.argv[1])
-
-APPLY = [
-    (
-        Path("Source/Lib/Globals/enc_settings.c"),
-        """    if ((config->encoder_bit_depth != 8) && (config->encoder_bit_depth != 10)) {
-        SVT_ERROR("Encoder Bit Depth shall be only 8 or 10 \\n");
-        return_error = EB_ErrorBadParameter;
-    }
-    // Check if the EncoderBitDepth is conformant with the Profile constraint""",
-        """#if CONFIG_ENABLE_HIGH_BIT_DEPTH
-    if (config->encoder_bit_depth != 8 && config->encoder_bit_depth != 10 &&
-        config->encoder_bit_depth != EB_TWELVE_BIT) {
-        SVT_ERROR("Encoder Bit Depth shall be only 8, 10, or 12\\n");
-        return_error = EB_ErrorBadParameter;
-    }
-    if (config->encoder_bit_depth == EB_TWELVE_BIT && config->profile != PROFESSIONAL_PROFILE) {
-        SVT_ERROR("12-bit encoding requires Professional profile (seq_profile / --profile 2)\\n");
-        return_error = EB_ErrorBadParameter;
-    }
-#else
-    if ((config->encoder_bit_depth != 8) && (config->encoder_bit_depth != 10)) {
-        SVT_ERROR("Encoder Bit Depth shall be only 8 or 10 \\n");
-        return_error = EB_ErrorBadParameter;
-    }
-#endif
-    // Check if the EncoderBitDepth is conformant with the Profile constraint""",
-    ),
-    (
-        Path("Source/App/app_config.c"),
-        """#define INPUT_DEPTH_TOKEN "--input-depth"
-#define KEYINT_TOKEN "--keyint\"""",
-        """#define INPUT_DEPTH_TOKEN "--input-depth"
-#if CONFIG_ENABLE_HIGH_BIT_DEPTH
-#define INPUT_DEPTH_HELP \\
-    "Input video file and output bitstream bit-depth, default is 8 [8, 10, 12]. 12-bit requires " \\
-    "`--profile 2` (Professional)"
-#else
-#define INPUT_DEPTH_HELP "Input video file and output bitstream bit-depth, default is 8 [8, 10]"
-#endif
-#define KEYINT_TOKEN "--keyint\"""",
-    ),
-    (
-        Path("Source/App/app_config.c"),
-        """    {INPUT_DEPTH_TOKEN, "Input video file and output bitstream bit-depth, default is 8 [8, 10]"},""",
-        """    {INPUT_DEPTH_TOKEN, INPUT_DEPTH_HELP},""",
-    ),
-    (
-        Path("Source/App/app_config.c"),
-        """    frame_size = frame_size << ((app_cfg->config.encoder_bit_depth == 10) ? 1 : 0);""",
-        """    frame_size = frame_size << ((app_cfg->config.encoder_bit_depth > 8) ? 1 : 0);""",
-    ),
-    (
-        Path("Source/App/app_main.c"),
-        """        double max_pix_value  = (cfg->encoder_bit_depth == 8) ? 255 : 1023;""",
-        """        double max_pix_value = (double)((1u << cfg->encoder_bit_depth) - 1);""",
-    ),
-    (
-        Path("Source/App/app_process_cmd.c"),
-        """    double   max_pix_value = (app_cfg->config.encoder_bit_depth == 8) ? 255 : 1023;""",
-        """    double max_pix_value = (double)((1u << app_cfg->config.encoder_bit_depth) - 1);""",
-    ),
-    # Upstream write_bitdepth() logs SVT_ERROR("Profile 2 Not supported") on the *valid* path for
-    # Professional + 10/12-bit; the second bit is still written. Remove the bogus line (see entropy_coding.c).
-    (
-        Path("Source/Lib/Codec/entropy_coding.c"),
-        """    if (scs->static_config.profile == PROFESSIONAL_PROFILE && scs->static_config.encoder_bit_depth != EB_EIGHT_BIT) {
-        SVT_ERROR("Profile 2 Not supported\\n");
-        svt_aom_wb_write_bit(wb, scs->static_config.encoder_bit_depth == EB_TEN_BIT ? 0 : 1);
-    }""",
-        """    if (scs->static_config.profile == PROFESSIONAL_PROFILE && scs->static_config.encoder_bit_depth != EB_EIGHT_BIT) {
-        svt_aom_wb_write_bit(wb, scs->static_config.encoder_bit_depth == EB_TEN_BIT ? 0 : 1);
-    }""",
-    ),
-]
-
-
-def run_apply():
-    updated = {}
-    for rel, old, new in APPLY:
-        path = root / rel
-        text = path.read_text(encoding="utf-8")
-        if "12-bit encoding requires Professional profile" in text and rel.name == "enc_settings.c":
-            continue
-        if old not in text:
-            if new in text:
-                continue
-            sys.exit(1)
-        updated[path] = text.replace(old, new, 1)
-    for path, text in updated.items():
-        path.write_text(text, encoding="utf-8")
-
-
-
-run_apply()
-sys.exit(0)
-SVTAV1PY
-  local patch_status=$?
-  if [[ "$patch_status" -ne 0 ]]; then
-    return "$patch_status"
-  fi
-  log "$(msg 'SVT-AV1: source patch step finished.' 'SVT-AV1：源码补丁步骤已完成。')"
-}
 
 __installed_svt_av1_version() {
   [[ -x "$SVT_AV1_PATH" ]] || return 0
@@ -1737,7 +1624,7 @@ install_svt_av1() {
     log "$(msg "SvtAv1EncApp is current (${installed_version} >= ${target_version}), skipping build" "SvtAv1EncApp 已是当前版本（${installed_version} >= ${target_version}），跳过编译")"
     return 0
   fi
-  log "$(msg "Installing SVT-AV1 ${target_version} (attempting experimental 12-bit patches)" "正在安装 SVT-AV1 ${target_version}（尝试应用实验性 12-bit 补丁）")"
+  log "$(msg "Installing SVT-AV1 ${target_version}" "正在安装 SVT-AV1 ${target_version}")"
 
   local deps=(build-essential cmake git python3 nasm)
   apt_update
@@ -1750,22 +1637,8 @@ install_svt_av1() {
     cd "$build_dir" || exit 1
     tmux_run "$(msg 'Clone SVT-AV1' '克隆 SVT-AV1')" \
       git clone --depth 1 --branch "$svt_tag" "$SVT_AV1_SOURCE_REPOSITORY" SVT-AV1 || exit 1
-    local patch_applied="false"
-    if __apply_svt_av1_source_patches "${build_dir}/SVT-AV1"; then
-      patch_applied="true"
-    else
-      log "$(msg 'The experimental SVT-AV1 12-bit patch does not match this release; building the unmodified upstream source with 8/10-bit support' 'SVT-AV1 实验性 12-bit 补丁不适用于此版本；将编译未修改的上游源码，支持 8/10-bit')"
-    fi
-    if ! tmux_run "$(msg 'SVT-AV1: build release static' 'SVT-AV1：release static 编译')" \
-      bash -c "set -e; cd '${build_dir}/SVT-AV1/Build/linux' && ./build.sh release static"; then
-      [[ "$patch_applied" == "true" ]] || exit 1
-      log "$(msg 'The experimental SVT-AV1 build failed; retrying with the unmodified upstream source' 'SVT-AV1 实验性版本编译失败；正在使用未修改的上游源码重试')"
-      rm -rf "${build_dir}/SVT-AV1"
-      tmux_run "$(msg 'Clone unmodified SVT-AV1 fallback' '克隆未修改的 SVT-AV1 回退源码')" \
-        git clone --depth 1 --branch "$svt_tag" "$SVT_AV1_SOURCE_REPOSITORY" SVT-AV1 || exit 1
-      tmux_run "$(msg 'SVT-AV1: build upstream release static' 'SVT-AV1：编译上游 release static 版本')" \
-        bash -c "set -e; cd '${build_dir}/SVT-AV1/Build/linux' && ./build.sh release static" || exit 1
-    fi
+    tmux_run "$(msg 'SVT-AV1: build release static' 'SVT-AV1：release static 编译')" \
+      bash -c "set -e; cd '${build_dir}/SVT-AV1/Build/linux' && ./build.sh release static" || exit 1
     _svt_bin="${build_dir}/SVT-AV1/Bin/Release/SvtAv1EncApp"
     [[ -f "$_svt_bin" ]] || exit 1
     log "$(msg "Installing SvtAv1EncApp to ${SVT_AV1_PATH}" "正在安装 SvtAv1EncApp 到 ${SVT_AV1_PATH}")"

@@ -16,6 +16,7 @@ from src.runtime.audio_conversion import (
     validate_audio_conversion_tools,
 )
 from src.runtime.frame_check import frame_check_report_path
+from src.runtime.encode_source import probe_svt_av1_bit_depths
 from src.runtime.sp import SpEntry
 
 
@@ -427,6 +428,16 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
         if not (os.path.isfile(encoder_path) or shutil.which(encoder_path)):
             raise FileNotFoundError(
                 translate_text('Encoder executable does not exist: {path}').format(path=encoder_path)
+            )
+        if (
+                request.settings.encoder == 'svtav1'
+                and request.settings.bit_depth == '12'
+                and '12' not in probe_svt_av1_bit_depths(encoder_path)
+        ):
+            raise ValueError(
+                translate_text(
+                    'The selected SVT-AV1 encoder does not advertise 12-bit support: {path}'
+                ).format(path=encoder_path)
             )
     if pending_matroska_rows:
         find_mkvtoolnix()
