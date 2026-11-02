@@ -2889,7 +2889,14 @@ install_shaderc_fix() {
 # ---------------------------------------------------------------------------
 
 __bluray_python_imports_ok() {
-  python3 -c "import numpy; import pycountry; import PyQt6.QtCore; import soundfile; from PIL import Image; import matplotlib" >/dev/null 2>&1
+  local dependency failed=0
+  for dependency in numpy:numpy pycountry:pycountry PyQt6:PyQt6.QtWidgets soundfile:soundfile pillow:PIL.Image matplotlib:matplotlib; do
+    if ! python3 -c 'import importlib, sys; importlib.import_module(sys.argv[1])' "${dependency#*:}" >/dev/null; then
+      printf '%s\n' "${dependency%%:*}"
+      failed=1
+    fi
+  done
+  return "$failed"
 }
 
 # --break-system-packages exists from pip ~23; Ubuntu 22.04's python3-pip is often older.
@@ -2906,6 +2913,7 @@ install_bluray_python_deps() {
   fi
 
   local pip_extra=()
+  local python_packages=(numpy pycountry PyQt6 soundfile pillow matplotlib)
   local pip_mode_msg_en pip_mode_msg_zh
   if __pip_supports_break_system_packages; then
     pip_extra=(--break-system-packages)
@@ -2918,12 +2926,21 @@ install_bluray_python_deps() {
   fi
 
   tmux_run "$(msg "$pip_mode_msg_en" "$pip_mode_msg_zh")" \
-    env PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade "${pip_extra[@]}" numpy pycountry PyQt6 soundfile pillow matplotlib \
+    env PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade "${pip_extra[@]}" "${python_packages[@]}" \
     || tmux_run "$(msg 'Install or upgrade Python dependencies (retry)' '安装或升级 Python 依赖（重试）')" \
-      env PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade "${pip_extra[@]}" numpy pycountry PyQt6 soundfile pillow matplotlib \
+      env PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade "${pip_extra[@]}" "${python_packages[@]}" \
     || die "$(msg 'Failed to install Python dependencies with python3 -m pip' '使用 python3 -m pip 安装依赖失败')"
 
-  __bluray_python_imports_ok || die "$(msg 'Python deps installed but import check failed. Note: Pillow is imported as PIL (e.g. from PIL import Image), not import pillow' '依赖已安装但仍无法通过导入检查。说明：Pillow 的安装包名为 pillow，代码中应使用 from PIL import Image，不要写 import pillow')"
+  local failed_packages
+  if ! failed_packages="$(__bluray_python_imports_ok)"; then
+    local packages_to_reinstall=()
+    mapfile -t packages_to_reinstall <<< "$failed_packages"
+    log "$(msg "Reinstalling Python dependencies that failed to import: ${packages_to_reinstall[*]}" "正在重新安装导入失败的 Python 依赖：${packages_to_reinstall[*]}")"
+    tmux_run "$(msg 'Reinstall Python dependencies without cached wheels' '不使用缓存 wheel 重新安装 Python 依赖')" \
+      env PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade --force-reinstall --no-cache-dir "${pip_extra[@]}" "${packages_to_reinstall[@]}" \
+      || die "$(msg 'Failed to reinstall Python dependencies; see the pip error above' '重新安装 Python 依赖失败，请查看上方 pip 错误')"
+    __bluray_python_imports_ok || die "$(msg 'Python dependencies still fail to import after reinstallation; see the traceback above' '重新安装后 Python 依赖仍无法导入，请查看上方 traceback')"
+  fi
 }
 
 # ---------------------------------------------------------------------------
