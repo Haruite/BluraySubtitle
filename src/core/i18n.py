@@ -8,6 +8,15 @@ from typing import Optional
 import src.core.settings as _core_settings
 
 I18N_ZH_TO_EN = {
+    '检测到现有 MSYS2 核心文件；将复用现有安装并执行完整系统升级。': 'Existing MSYS2 core files detected; reusing the installation for a full system upgrade.',
+    '正在升级 MSYS2 及所有已安装的软件包。': 'Upgrading MSYS2 and all installed packages.',
+    '正在启动新的 pacman 进程以完成 MSYS2 系统升级。': 'Completing the MSYS2 system upgrade with a new pacman process.',
+    '正在安装或升级所需的 MSYS2 编译依赖包。': 'Installing or upgrading required MSYS2 build packages.',
+    '仓库最新版本': 'Latest repository versions',
+    '无法确定 Python 包 {0} 的最新兼容版本。': 'Unable to determine the latest compatible version for Python package {0}.',
+    '{0} 安装后未报告满足要求的版本/状态。': '{0} did not report a satisfied version/status after installation.',
+    'Python 包 {0} {1} 已满足要求，跳过安装。': 'Python package {0} {1} is already satisfied; skipping installation.',
+    '正在安装或修复 Python 包 {0}（已安装：{1}；目标：{2}）。': 'Installing or repairing Python package {0} (installed: {1}; target: {2}).',
     'VapourSynth 源码及系统 Python 模块': 'VapourSynth source and system Python module',
     'VapourSynth Classic 和系统 Python 模块': 'VapourSynth Classic and system Python module',
     '未找到匹配的 Python Windows 发行包。': 'No matching Python Windows package was found.',

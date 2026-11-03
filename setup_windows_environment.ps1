@@ -128,7 +128,6 @@ $script:ToolPaths = [ordered]@{
     Nasm = "C:\Software\nasm.exe"
     Msys2Root = "C:\msys64"
     Msys2Bash = "C:\msys64\usr\bin\bash.exe"
-    Msys2Version = "C:\msys64\bluraysubtitle-installer-version.txt"
     Ffmpeg = "C:\Software\ffmpeg.exe"
     Ffprobe = "C:\Software\ffprobe.exe"
     Flac = "C:\Software\flac.exe"
@@ -224,10 +223,15 @@ function Get-SetupText {
 function Write-SetupInfo {
     param(
         [Parameter(Mandatory = $true)][string]$English,
-        [Parameter(Mandatory = $true)][string]$Chinese
+        [Parameter(Mandatory = $true)][string]$Chinese,
+        [object[]]$FormatArgs = @()
     )
 
-    Write-Host ("[BluraySubtitle][SETUP] " + (Get-SetupText $English $Chinese)) -ForegroundColor Cyan
+    $message = Get-SetupText $English $Chinese
+    if ($FormatArgs.Count -gt 0) {
+        $message = $message -f $FormatArgs
+    }
+    Write-Host ("[BluraySubtitle][SETUP] " + $message) -ForegroundColor Cyan
 }
 
 function Write-SetupWarning {
@@ -1054,21 +1058,29 @@ function Get-LatestVisualStudioRelease {
     return $result
 }
 
-function Get-LatestPyPiVersion {
+function Get-LatestPythonPackageVersion {
     param([Parameter(Mandatory = $true)][string]$Distribution)
 
-    $cacheKey = "pypi:$Distribution"
+    $python = Get-ActivePythonExecutable
+    $cacheKey = "python-package:${python}:$Distribution"
     if ($script:ReleaseCache.Contains($cacheKey)) {
         return [string]$script:ReleaseCache[$cacheKey]
     }
-    $metadata = Get-SetupJsonFromUri `
-        -Uri ([Uri]"https://pypi.org/pypi/$Distribution/json") `
-        -CacheName "pypi-$($Distribution.ToLowerInvariant()).json"
-    $version = [string]$metadata.info.version
+    $arguments = @(
+        "-m", "pip", "index", "versions", $Distribution,
+        "--json",
+        "--only-binary=:all:",
+        "--disable-pip-version-check"
+    )
+    if ($script:ProxyAddress -ne "DIRECT") {
+        $arguments += @("--proxy", $script:ProxyAddress)
+    }
+    $metadata = Invoke-SetupCommand -FilePath $python -Arguments $arguments | ConvertFrom-Json
+    $version = [string]$metadata.latest
     if (-not $version) {
-        throw (Get-SetupText `
-            "Unable to determine the latest PyPI version for $Distribution." `
-            "无法确定 $Distribution 的最新 PyPI 版本。")
+        throw ((Get-SetupText `
+            "Unable to determine the latest compatible version for Python package {0}." `
+            "无法确定 Python 包 {0} 的最新兼容版本。") -f $Distribution)
     }
     $script:ReleaseCache[$cacheKey] = $version
     return $version
@@ -1108,7 +1120,8 @@ function Register-SetupComponent {
         [Parameter(Mandatory = $true)][scriptblock]$GetInstalledVersion,
         [Parameter(Mandatory = $true)][scriptblock]$GetAvailableVersion,
         [Parameter(Mandatory = $true)][scriptblock]$Install,
-        [Parameter(Mandatory = $true)][scriptblock]$Verify
+        [Parameter(Mandatory = $true)][scriptblock]$Verify,
+        [switch]$AlwaysRun
     )
 
     if ($script:RegisteredComponents.Contains($Name)) {
@@ -1122,6 +1135,7 @@ function Register-SetupComponent {
         GetAvailableVersion = $GetAvailableVersion
         Install = $Install
         Verify = $Verify
+        AlwaysRun = [bool]$AlwaysRun
     }
 }
 
@@ -1205,7 +1219,7 @@ function Invoke-SetupComponent {
         "$displayName target version/status: $availableVersion" `
         "$displayName 目标版本/状态：$availableVersion"
 
-    $needsInstall = -not $installedVersion
+    $needsInstall = $Component.AlwaysRun -or -not $installedVersion
     if (-not $needsInstall -and $availableVersion) {
         try {
             if ((Compare-SetupVersion $installedVersion $availableVersion) -lt 0) {
@@ -1242,10 +1256,15 @@ function Invoke-SetupComponent {
                 "$displayName verification failed after installation." `
                 "$displayName 安装后验证失败。")
         }
+        $installedVersion = [string](& $Component.GetInstalledVersion)
+        if (-not $installedVersion) {
+            throw ((Get-SetupText `
+                "{0} did not report a satisfied version/status after installation." `
+                "{0} 安装后未报告满足要求的版本/状态。") -f $displayName)
+        }
         Write-SetupInfo `
             "$displayName verification succeeded." `
             "$displayName 验证成功。"
-        $installedVersion = [string](& $Component.GetInstalledVersion)
         Update-ManifestComponent $Component.Name $installedVersion "installed"
         Write-SetupInfo `
             "$displayName installation/configuration completed: $installedVersion" `
@@ -1393,11 +1412,10 @@ function Get-InstalledPythonVersion {
 }
 
 function Get-ActivePythonExecutable {
-    $installation = Get-DetectedPythonInstallation
-    if ($null -eq $installation) {
+    if (-not (Test-Path -LiteralPath $script:ToolPaths.Python -PathType Leaf)) {
         return ""
     }
-    return $installation.Executable
+    return $script:ToolPaths.Python
 }
 
 function Install-PythonRuntime {
@@ -1588,7 +1606,10 @@ function Get-PythonPackageVersion {
 }
 
 function Install-PythonPackage {
-    param([Parameter(Mandatory = $true)][string]$Distribution)
+    param(
+        [Parameter(Mandatory = $true)][string]$Distribution,
+        [switch]$ForceReinstall
+    )
 
     $python = Get-ActivePythonExecutable
     if (-not $python) {
@@ -1603,6 +1624,9 @@ function Install-PythonPackage {
         "--only-binary=:all:",
         $Distribution
     )
+    if ($ForceReinstall) {
+        $arguments += "--force-reinstall"
+    }
     if ($script:ProxyAddress -ne "DIRECT") {
         $arguments += @("--proxy", $script:ProxyAddress)
     }
@@ -1638,17 +1662,14 @@ function Test-PythonDependencies {
 }
 
 function Get-PythonDependenciesVersion {
-    if (-not (Test-PythonDependencies)) {
-        return ""
-    }
     foreach ($package in $script:PythonPackages) {
         $distribution = [string]$package.Distribution
         $installedVersion = Get-PythonPackageVersion $distribution
-        $availableVersion = Get-LatestPyPiVersion $distribution
-        if (
-            -not $installedVersion -or
-            (Compare-SetupVersion $installedVersion $availableVersion) -lt 0
-        ) {
+        if (-not $installedVersion) {
+            return ""
+        }
+        $availableVersion = Get-LatestPythonPackageVersion $distribution
+        if ((Compare-SetupVersion $installedVersion $availableVersion) -lt 0) {
             return ""
         }
     }
@@ -1659,10 +1680,27 @@ function Install-AllPythonDependencies {
     foreach ($package in $script:PythonPackages) {
         $distribution = [string]$package.Distribution
         $importStatement = [string]$package.Import
+        $installedVersion = Get-PythonPackageVersion $distribution
+        $availableVersion = Get-LatestPythonPackageVersion $distribution
+        $forceReinstall = $false
+        if (
+            $installedVersion -and
+            (Compare-SetupVersion $installedVersion $availableVersion) -ge 0
+        ) {
+            if (Test-PythonPackageImport $importStatement) {
+                Write-SetupInfo `
+                    "Python package {0} {1} is already satisfied; skipping installation." `
+                    "Python 包 {0} {1} 已满足要求，跳过安装。" `
+                    -FormatArgs @($distribution, $installedVersion)
+                continue
+            }
+            $forceReinstall = $true
+        }
         Write-SetupInfo `
-            "Installing Python package $distribution" `
-            "正在安装 Python 包 $distribution"
-        Install-PythonPackage $distribution
+            "Installing or repairing Python package {0} (installed: {1}; target: {2})." `
+            "正在安装或修复 Python 包 {0}（已安装：{1}；目标：{2}）。" `
+            -FormatArgs @($distribution, $installedVersion, $availableVersion)
+        Install-PythonPackage $distribution -ForceReinstall:$forceReinstall
         if (-not (Test-PythonPackageImport $importStatement)) {
             throw (Get-SetupText `
                 "Python package $distribution could not be imported after installation." `
@@ -2063,56 +2101,34 @@ function Test-Nasm {
     return [bool](Get-InstalledNasmVersion)
 }
 
-function Get-Msys2Release {
-    $release = Get-GitHubLatestReleaseAsset `
-        -Repository "msys2/msys2-installer" `
-        -AssetPattern '^msys2-base-x86_64-latest\.sfx\.exe$'
-    try {
-        $assetUpdatedAt = [DateTimeOffset]::Parse(
-            $release.AssetUpdatedAtUtc,
-            [Globalization.CultureInfo]::InvariantCulture
-        )
-    }
-    catch {
-        throw (Get-SetupText `
-            "Unable to parse the MSYS2 asset update time." `
-            "无法解析 MSYS2 发布文件的更新时间。")
-    }
-    return [pscustomobject]@{
-        Version = $assetUpdatedAt.UtcDateTime.ToString(
-            "yyyy.MM.dd.HHmmss",
-            [Globalization.CultureInfo]::InvariantCulture
-        )
-        Name = $release.Name
-        Uri = $release.Uri
-        Sha256 = $release.Sha256
-    }
-}
-
 function Get-InstalledMsys2Version {
-    if (-not (Test-Path -LiteralPath $script:ToolPaths.Msys2Bash -PathType Leaf)) {
+    $pacman = Join-Path $script:ToolPaths.Msys2Root "usr\bin\pacman.exe"
+    if (-not (Test-Path -LiteralPath $script:ToolPaths.Msys2Bash -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $pacman -PathType Leaf)) {
         return ""
     }
-    if (Test-Path -LiteralPath $script:ToolPaths.Msys2Version -PathType Leaf) {
-        return ([IO.File]::ReadAllText($script:ToolPaths.Msys2Version)).Trim()
+    $package = Invoke-Msys2Pacman -Arguments @("-Q", "msys2-runtime")
+    $fields = $package -split '\s+', 2
+    if ($fields.Count -eq 2) {
+        return $fields[1]
     }
     return ""
 }
 
 function Install-Msys2 {
-    param([string]$Version)
-
-    $release = Get-Msys2Release
     $pacman = Join-Path $script:ToolPaths.Msys2Root "usr\bin\pacman.exe"
     $reuseExistingCore =
         (Test-Path -LiteralPath $script:ToolPaths.Msys2Bash -PathType Leaf) -and
         (Test-Path -LiteralPath $pacman -PathType Leaf)
     if ($reuseExistingCore) {
         Write-SetupInfo `
-            "Existing MSYS2 core files detected; skipping the base archive download and resuming initialization." `
-            "检测到现有 MSYS2 核心文件；跳过基础包下载并继续初始化。"
+            "Existing MSYS2 core files detected; reusing the installation for a full system upgrade." `
+            "检测到现有 MSYS2 核心文件；将复用现有安装并执行完整系统升级。"
     }
     else {
+        $release = Get-GitHubLatestReleaseAsset `
+            -Repository "msys2/msys2-installer" `
+            -AssetPattern '^msys2-base-x86_64-latest\.sfx\.exe$'
         $installer = Join-Path $script:TempRoot $release.Name
         Invoke-SetupDownload -Uri $release.Uri -Destination $installer -Sha256 $release.Sha256 | Out-Null
         if (-not $release.Sha256) {
@@ -2154,11 +2170,15 @@ function Install-Msys2 {
     Write-SetupInfo `
         "MSYS2 first-start initialization completed." `
         "MSYS2 首次启动初始化完成。"
-    [IO.File]::WriteAllText(
-        $script:ToolPaths.Msys2Version,
-        $release.Version,
-        (New-Object Text.UTF8Encoding($false))
-    )
+    Write-SetupInfo `
+        "Upgrading MSYS2 and all installed packages." `
+        "正在升级 MSYS2 及所有已安装的软件包。"
+    Invoke-Msys2Pacman -Arguments @("--noconfirm", "-Syu") | Out-Null
+    # A core upgrade exits pacman before other packages; restart it to complete the full upgrade.
+    Write-SetupInfo `
+        "Completing the MSYS2 system upgrade with a new pacman process." `
+        "正在启动新的 pacman 进程以完成 MSYS2 系统升级。"
+    Invoke-Msys2Pacman -Arguments @("--noconfirm", "-Syu") | Out-Null
 }
 function Test-Msys2 {
     if (-not (Test-Path -LiteralPath $script:ToolPaths.Msys2Bash -PathType Leaf)) {
@@ -2234,7 +2254,9 @@ function Get-Msys2PackagesVersion {
 function Install-Msys2Packages {
     param([string]$Version)
 
-    Write-SetupInfo "Installing missing MSYS2 build packages without a full system upgrade." "正在安装缺少的 MSYS2 编译包，不执行完整系统升级。"
+    Write-SetupInfo `
+        "Installing or upgrading required MSYS2 build packages." `
+        "正在安装或升级所需的 MSYS2 编译依赖包。"
     Invoke-Msys2Pacman -Arguments (@("--noconfirm", "--needed", "-S") + $script:Msys2Packages) | Out-Null
 }
 
@@ -3394,18 +3416,20 @@ function Register-StageTwoComponents {
         -EnglishName "MSYS2 UCRT64" `
         -ChineseName "MSYS2 UCRT64" `
         -GetInstalledVersion { Get-InstalledMsys2Version } `
-        -GetAvailableVersion { (Get-Msys2Release).Version } `
-        -Install { param($Version) Install-Msys2 $Version } `
-        -Verify { Test-Msys2 }
+        -GetAvailableVersion { Get-SetupText "Latest repository versions" "仓库最新版本" } `
+        -Install { param($Version) Install-Msys2 } `
+        -Verify { Test-Msys2 } `
+        -AlwaysRun
 
     Register-SetupComponent `
         -Name "msys2-packages" `
         -EnglishName "MSYS2 build packages" `
         -ChineseName "MSYS2 编译依赖包" `
         -GetInstalledVersion { Get-Msys2PackagesVersion } `
-        -GetAvailableVersion { "1.0" } `
+        -GetAvailableVersion { Get-SetupText "Latest repository versions" "仓库最新版本" } `
         -Install { param($Version) Install-Msys2Packages $Version } `
-        -Verify { Test-Msys2Packages }
+        -Verify { Test-Msys2Packages } `
+        -AlwaysRun
 }
 
 function Register-StageThreeComponents {
