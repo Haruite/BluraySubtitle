@@ -115,7 +115,6 @@ $script:RestartRequired = $false
 $script:ReleaseCache = [ordered]@{}
 $script:BuildJobs = [Math]::Max(1, [Environment]::ProcessorCount)
 $script:ToolPaths = [ordered]@{
-    SevenZip = "C:\Program Files\7-Zip\7z.exe"
     PythonRoot = "C:\Program Files\Python314"
     Python = "C:\Program Files\Python314\python.exe"
     PythonScripts = "C:\Program Files\Python314\Scripts"
@@ -128,31 +127,6 @@ $script:ToolPaths = [ordered]@{
     Nasm = "C:\Software\nasm.exe"
     Msys2Root = "C:\msys64"
     Msys2Bash = "C:\msys64\usr\bin\bash.exe"
-    Ffmpeg = "C:\Software\ffmpeg.exe"
-    Ffprobe = "C:\Software\ffprobe.exe"
-    Flac = "C:\Software\flac.exe"
-    FlacLibrary = "C:\Software\libFLAC.dll"
-    Libass = "C:\Software\libass-9.dll"
-    MkvToolNixRoot = "C:\Program Files\MKVToolNix"
-    MkvMerge = "C:\Program Files\MKVToolNix\mkvmerge.exe"
-    MkvInfo = "C:\Program Files\MKVToolNix\mkvinfo.exe"
-    MkvExtract = "C:\Program Files\MKVToolNix\mkvextract.exe"
-    MkvPropEdit = "C:\Program Files\MKVToolNix\mkvpropedit.exe"
-    TsMuxer = "C:\Software\tsMuxeR.exe"
-    DoviTool = "C:\Software\dovi_tool.exe"
-    Hdr10PlusTool = "C:\Software\hdr10plus_tool.exe"
-    X264 = "C:\Software\x264.exe"
-    X264Version = "C:\Software\x264-version.txt"
-    X265 = "C:\Software\x265.exe"
-    X265Version = "C:\Software\x265-version.txt"
-    SvtAv1 = "C:\Software\SvtAv1EncApp.exe"
-    FdkAac = "C:\Software\fdkaac.exe"
-    LibassVersion = "C:\Software\libass-version.txt"
-    VapourSynthRoot = "C:\Software\vapoursynth"
-    VapourSynthSitePackages = "C:\Software\vapoursynth\Lib\site-packages"
-    VapourSynthPlugins = "C:\Software\vapoursynth\vapoursynth64\plugins"
-    VsPipe = "C:\Software\vapoursynth\vspipe.exe"
-    VsEdit = "C:\Software\vapoursynth\vsedit\vsedit.exe"
 }
 $script:PythonPackages = @(
     [pscustomobject]@{ Distribution = "pip"; Import = "import pip" },
@@ -512,7 +486,8 @@ function Invoke-SetupInstaller {
     param(
         [Parameter(Mandatory = $true)][string]$FilePath,
         [string[]]$Arguments = @(),
-        [int[]]$AcceptedExitCodes = @(0, 3010)
+        [int[]]$AcceptedExitCodes = @(0, 3010),
+        [string]$NsisInstallDirectory = ""
     )
 
     if (-not (Test-Path -LiteralPath $FilePath -PathType Leaf)) {
@@ -524,6 +499,10 @@ function Invoke-SetupInstaller {
         "Running installer: $installerName" `
         "正在运行安装程序：$installerName"
     $argumentLine = ($Arguments | ForEach-Object { ConvertTo-NativeArgument $_ }) -join " "
+    if ($NsisInstallDirectory) {
+        # NSIS requires /D to be last and unquoted, including paths with spaces.
+        $argumentLine += " /D=$NsisInstallDirectory"
+    }
     $process = Start-Process -FilePath $FilePath -ArgumentList $argumentLine -Wait -PassThru
     if ($AcceptedExitCodes -notcontains $process.ExitCode) {
         throw (Get-SetupText `
@@ -1277,10 +1256,62 @@ function Invoke-SetupComponent {
         "$displayName is already satisfied; skipping installation." `
         "$displayName 已满足要求，跳过安装。"
 }
-function Invoke-RegisteredSetupComponents {
-    foreach ($component in $script:RegisteredComponents.Values) {
-        Invoke-SetupComponent $component
+function Initialize-ConfiguredToolPaths {
+    $settingsFile = Join-Path $script:SetupDirectory "src\core\settings.py"
+    $pathSettings = [ordered]@{
+        SevenZip = "SEVEN_ZIP_PATH"
+        Flac = "FLAC_PATH"
+        Ffmpeg = "FFMPEG_PATH"
+        Ffprobe = "FFPROBE_PATH"
+        X265 = "X265_PATH"
+        X264 = "X264_PATH"
+        SvtAv1 = "SVT_AV1_PATH"
+        FdkAac = "FDK_AAC_PATH"
+        DoviTool = "DOVI_TOOL_PATH"
+        Hdr10PlusTool = "HDR10PLUS_TOOL_PATH"
+        VsEdit = "VSEDIT_PATH"
+        VsPipe = "VSPIPE_PATH"
+        VapourSynthPlugins = "PLUGIN_PATH"
+        Libass = "LIBASS_PATH"
+        TsMuxer = "TS_MUXER_PATH"
+        MkvInfo = "MKV_INFO_PATH"
+        MkvMerge = "MKV_MERGE_PATH"
+        MkvPropEdit = "MKV_PROP_EDIT_PATH"
+        MkvExtract = "MKV_EXTRACT_PATH"
     }
+    $reader = Join-Path $script:SetupDirectory "tools\windows_tool_paths.py"
+    $arguments = @($reader, $settingsFile) + @($pathSettings.Values)
+    $configured = Invoke-SetupCommand -FilePath $script:ToolPaths.Python -Arguments $arguments | ConvertFrom-Json
+    foreach ($name in $pathSettings.Keys) {
+        $script:ToolPaths[$name] = [string]$configured.PSObject.Properties[$pathSettings[$name]].Value
+    }
+    $script:ToolPaths["FlacLibrary"] = Join-Path (Split-Path -Parent $script:ToolPaths.Flac) "libFLAC.dll"
+    $script:ToolPaths["MkvToolNixRoot"] = Split-Path -Parent $script:ToolPaths.MkvMerge
+    $script:ToolPaths["X264Version"] = Join-Path (Split-Path -Parent $script:ToolPaths.X264) "x264-version.txt"
+    $script:ToolPaths["X265Version"] = Join-Path (Split-Path -Parent $script:ToolPaths.X265) "x265-version.txt"
+    $script:ToolPaths["LibassVersion"] = Join-Path (Split-Path -Parent $script:ToolPaths.Libass) "libass-version.txt"
+    $script:ToolPaths["VapourSynthRoot"] = Split-Path -Parent $script:ToolPaths.VsPipe
+    $script:ToolPaths["VapourSynthSitePackages"] = Join-Path $script:ToolPaths.VapourSynthRoot "Lib\site-packages"
+    if (-not $script:ToolPaths.VapourSynthPlugins) {
+        $script:ToolPaths.VapourSynthPlugins = Join-Path $script:ToolPaths.VapourSynthRoot "vapoursynth64\plugins"
+    }
+    Write-SetupInfo `
+        "Loaded Windows tool paths from {0}." `
+        "已从 {0} 读取 Windows 工具路径。" `
+        -FormatArgs @($settingsFile)
+}
+
+function Install-ConfiguredFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string]$Destination
+    )
+
+    if ([IO.Path]::GetFullPath($Source) -eq [IO.Path]::GetFullPath($Destination)) {
+        return
+    }
+    [IO.Directory]::CreateDirectory((Split-Path -Parent $Destination)) | Out-Null
+    Copy-Item -LiteralPath $Source -Destination $Destination -Force
 }
 
 function Get-SevenZipRelease {
@@ -1307,7 +1338,9 @@ function Install-SevenZip {
     }
     $installer = Join-Path $script:TempRoot $release.Name
     Invoke-SetupDownload -Uri $release.Uri -Destination $installer -Sha256 $release.Sha256 | Out-Null
-    Invoke-SetupInstaller -FilePath $installer -Arguments @("/S")
+    $directory = Split-Path -Parent $script:ToolPaths.SevenZip
+    Invoke-SetupInstaller -FilePath $installer -Arguments @("/S") -NsisInstallDirectory $directory
+    Install-ConfiguredFile -Source (Join-Path $directory "7z.exe") -Destination $script:ToolPaths.SevenZip
 }
 
 function Test-SevenZip {
@@ -2400,9 +2433,8 @@ function Install-Ffmpeg {
     if (-not (Test-Path -LiteralPath $ffprobeExecutable -PathType Leaf)) {
         throw (Get-SetupText "ffprobe.exe is missing from the release archive." "发布压缩包中缺少 ffprobe.exe。")
     }
-    [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($script:ToolPaths.Ffmpeg)) | Out-Null
-    Copy-Item -LiteralPath $ffmpegExecutable.FullName -Destination $script:ToolPaths.Ffmpeg -Force
-    Copy-Item -LiteralPath $ffprobeExecutable -Destination $script:ToolPaths.Ffprobe -Force
+    Install-ConfiguredFile -Source $ffmpegExecutable.FullName -Destination $script:ToolPaths.Ffmpeg
+    Install-ConfiguredFile -Source $ffprobeExecutable -Destination $script:ToolPaths.Ffprobe
 }
 
 function Test-Ffmpeg {
@@ -2519,7 +2551,15 @@ function Install-MkvToolNix {
     $installer = Join-Path $script:TempRoot $release.Name
     Invoke-SetupDownload -Uri $release.Uri -Destination $installer -Sha256 $release.Sha256 | Out-Null
     Assert-ValidAuthenticodeSignature $installer
-    Invoke-SetupInstaller -FilePath $installer -Arguments @("/S")
+    Invoke-SetupInstaller -FilePath $installer -Arguments @("/S") -NsisInstallDirectory $script:ToolPaths.MkvToolNixRoot
+    foreach ($tool in @(
+        @{ Name = "mkvinfo.exe"; Path = $script:ToolPaths.MkvInfo },
+        @{ Name = "mkvmerge.exe"; Path = $script:ToolPaths.MkvMerge },
+        @{ Name = "mkvpropedit.exe"; Path = $script:ToolPaths.MkvPropEdit },
+        @{ Name = "mkvextract.exe"; Path = $script:ToolPaths.MkvExtract }
+    )) {
+        Install-ConfiguredFile -Source (Join-Path $script:ToolPaths.MkvToolNixRoot $tool.Name) -Destination $tool.Path
+    }
 }
 
 function Test-MkvToolNix {
@@ -3329,6 +3369,7 @@ function Install-VapourSynthClassic {
         (Join-Path $script:SetupDirectory "tools\build_vapoursynth_windows.py"),
         "--source", $source,
         "--runtime-root", $script:ToolPaths.VapourSynthRoot,
+        "--vspipe-path", $script:ToolPaths.VsPipe,
         "--version", $release.Version,
         "--dependencies", $dependencyState,
         "--msbuild", $msbuild,
@@ -3387,6 +3428,8 @@ function Install-VapourSynthUpstreamComponents {
         -Arguments @(
             $installer,
             "--runtime-root", $script:ToolPaths.VapourSynthRoot,
+            "--plugins-dir", $script:ToolPaths.VapourSynthPlugins,
+            "--editor-path", $script:ToolPaths.VsEdit,
             "--work-root", (Join-Path $script:TempRoot "vapoursynth-components"),
             "--msys2-root", $script:ToolPaths.Msys2Root,
             "--seven-zip", $script:ToolPaths.SevenZip,
@@ -3403,15 +3446,6 @@ function Install-VapourSynthUpstreamComponents {
 
 function Register-StageTwoComponents {
     Register-SetupComponent `
-        -Name "7zip" `
-        -EnglishName "7-Zip" `
-        -ChineseName "7-Zip" `
-        -GetInstalledVersion { Get-InstalledSevenZipVersion } `
-        -GetAvailableVersion { (Get-SevenZipRelease).Version } `
-        -Install { param($Version) Install-SevenZip $Version } `
-        -Verify { Test-SevenZip }
-
-    Register-SetupComponent `
         -Name "python" `
         -EnglishName "Python runtime" `
         -ChineseName "Python 运行环境" `
@@ -3419,6 +3453,15 @@ function Register-StageTwoComponents {
         -GetAvailableVersion { $script:SelectedPythonRelease.Version } `
         -Install { param($Version) Install-PythonRuntime $Version } `
         -Verify { Test-PythonRuntime }
+
+    Register-SetupComponent `
+        -Name "7zip" `
+        -EnglishName "7-Zip" `
+        -ChineseName "7-Zip" `
+        -GetInstalledVersion { Get-InstalledSevenZipVersion } `
+        -GetAvailableVersion { (Get-SevenZipRelease).Version } `
+        -Install { param($Version) Install-SevenZip $Version } `
+        -Verify { Test-SevenZip }
 
     Register-SetupComponent `
         -Name "python-dependencies" `
@@ -3681,7 +3724,12 @@ function Invoke-WindowsSetup {
     Register-StageThreeComponents
     Register-StageFourComponents
     Register-StageFiveComponents
-    Invoke-RegisteredSetupComponents
+    foreach ($component in $script:RegisteredComponents.Values) {
+        Invoke-SetupComponent $component
+        if ($component.Name -eq "python") {
+            Initialize-ConfiguredToolPaths
+        }
+    }
     Install-VapourSynthUpstreamComponents
     Install-VapourSynthScripts
     Save-SetupManifest

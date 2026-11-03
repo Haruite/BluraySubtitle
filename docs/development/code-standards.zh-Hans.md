@@ -77,7 +77,8 @@
 - 依赖与随附工具使用官方上游发布的最新版本；只有已确认的兼容性问题或其他技术约束才允许固定版本或提交。
 - 安装脚本和 Dockerfile 须安装各自运行环境使用的全部可执行程序、库和插件；源码构建须显式启用程序使用的全部可选功能。
 - `Dockerfile` 是 `setup_linux_environment.sh` 面向 Ubuntu 26.04 的适配版。不得在 Dockerfile 中增加其他操作系统的兼容处理、说明性输出或注释。
-- Linux setup 须将受管理的可执行文件和 VapourSynth 插件安装到 `src/core/settings.py` 定义的 Linux 路径。Docker 须在各工具构建段内直接安装到该文件中对应的 Docker 路径，不得增加末尾统一搬运层。
+- 对于 `src/core/settings.py` 中已声明的工具和 VapourSynth 插件路径，Windows 和 Linux setup 须安装到对应平台的配置路径。Docker 须在各工具构建段内直接安装到该文件中对应的 Docker 路径，不得增加末尾统一搬运层。
+- Windows VSEdit 必须独占名为 `vsedit` 的目录；安装脚本须规范化其安装路径，并将最终的 `VSEDIT_PATH` 写回 `src/core/settings.py`。
 - 已有软件必须在 Dockerfile 对应构建段内修改，即使后续层缓存因此失效。不得把无关改动放到文件前部；新增软件在依赖关系允许时尽量放到末尾，以保留前面构建层的缓存。
 
 ## 10. 已确认的产品约束

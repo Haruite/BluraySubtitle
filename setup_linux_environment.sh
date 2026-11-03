@@ -1903,6 +1903,11 @@ install_zimg_latest() {
 # The marker file records the built Classic tag (R57.A*) so later runs can skip rebuilds.
 VAPOURSYNTH_VERSION_FILE="/usr/local/share/vapoursynth-classic-version.txt"
 
+test_vapoursynth_runtime() {
+  python3 -c 'import vapoursynth as vs; print(vs.core.version())' \
+    && "$VSPIPE_PATH" --version
+}
+
 install_vapoursynth() {
   log "$(msg 'Installing VapourSynth (build from source)' '安装 VapourSynth（从源码编译并安装）')"
 
@@ -1920,15 +1925,20 @@ install_vapoursynth() {
   fi
   export PATH="$HOME/.local/bin:$PATH"
 
-  # VapourSynth-classic may not generate vspipe or may place it under /usr/local/bin.
-  # Relax the check: just verify that the library or executable exists.
   if [[ -f "/usr/local/lib/libvapoursynth.so" ]] || sudo ldconfig -p 2>/dev/null | grep -qE '\blibvapoursynth\.so\b'; then
     vapoursynth_installed_version="$(head -n 1 "$VAPOURSYNTH_VERSION_FILE" 2>/dev/null || true)"
     if [[ "$vapoursynth_installed_version" == "$vapoursynth_tag" ]]; then
-      log "$(msg "VapourSynth ${vapoursynth_tag} already installed, skipping" "检测到已安装最新 VapourSynth ${vapoursynth_tag}，跳过编译安装")"
-      return 0
+      if command -v vspipe >/dev/null 2>&1; then
+        install_command_at_configured_path vspipe "$VSPIPE_PATH"
+      fi
+      if test_vapoursynth_runtime >/dev/null; then
+        log "$(msg "VapourSynth ${vapoursynth_tag} already installed, skipping" "检测到已安装最新 VapourSynth ${vapoursynth_tag}，跳过编译安装")"
+        return 0
+      fi
+      log "$(msg 'Installed VapourSynth failed its runtime checks; rebuilding.' '已安装的 VapourSynth 未通过运行验证，将重新编译。')"
+    else
+      log "$(msg "Installed VapourSynth (${vapoursynth_installed_version:-unrecorded version}) is not the latest ${vapoursynth_tag}, upgrading from source" "已安装的 VapourSynth 版本（${vapoursynth_installed_version:-未记录版本}）不是最新版 ${vapoursynth_tag}，将从源码升级")"
     fi
-    log "$(msg "Installed VapourSynth (${vapoursynth_installed_version:-unrecorded version}) is not the latest ${vapoursynth_tag}, upgrading from source" "已安装的 VapourSynth 版本（${vapoursynth_installed_version:-未记录版本}）不是最新版 ${vapoursynth_tag}，将从源码升级")"
   fi
 
   install_zimg_latest
@@ -1993,6 +2003,8 @@ install_vapoursynth() {
     sudo mkdir -p /usr/lib/python3/dist-packages
     sudo ln -sf "/usr/local/lib/python${py_ver}/site-packages/vapoursynth.so" "/usr/lib/python3/dist-packages/vapoursynth.so" || exit 1
 
+    install_command_at_configured_path vspipe "$VSPIPE_PATH" || exit 1
+    test_vapoursynth_runtime || die "$(msg 'VapourSynth runtime verification failed after installation' 'VapourSynth 安装后的运行验证失败')"
     printf '%s\n' "$vapoursynth_tag" | bluray_sudo tee "$VAPOURSYNTH_VERSION_FILE" >/dev/null || exit 1
   ) || die "$(msg 'VapourSynth build/install failed' 'VapourSynth 编译/安装失败')"
 
@@ -2996,7 +3008,6 @@ install_hdr10plus_tool
 install_fdk_aac
 install_flac
 install_vapoursynth
-install_command_at_configured_path vspipe "$VSPIPE_PATH"
 install_descale
 ensure_modern_7zip_cli
 install_vapoursynth_scripts

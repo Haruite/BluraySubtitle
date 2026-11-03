@@ -77,7 +77,8 @@ Keep both language versions of these standards synchronized, and record confirme
 - Use the latest version published by the official upstream for dependencies and bundled tools. Pin a version or commit only for a confirmed compatibility or other technical constraint.
 - Setup scripts and the Dockerfile must install every executable, library, and plugin used by their respective runtime. Source builds must explicitly enable every optional feature the application uses.
 - `Dockerfile` adapts `setup_linux_environment.sh` to Ubuntu 26.04. In the Dockerfile, do not add compatibility handling for other operating systems, explanatory output, or comments.
-- Linux setup must install managed executables and VapourSynth plugins at the Linux paths defined by `src/core/settings.py`. Docker must install them directly at that file's corresponding Docker paths within each tool's build section; do not add a final relocation layer.
+- Windows and Linux setup must install tools and VapourSynth plugins at their platform paths when declared in `src/core/settings.py`. Docker must install them directly at that file's corresponding Docker paths within each tool's build section; do not add a final relocation layer.
+- Windows VSEdit must have its own directory named `vsedit`; setup must normalize its installation path and write the resulting `VSEDIT_PATH` back to `src/core/settings.py`.
 - Modify existing software in its corresponding Dockerfile build section even if later layers lose their cache. Do not put unrelated changes near the beginning; add new software near the end when dependencies permit, to preserve earlier cached layers.
 
 ## 10. Confirmed Product Constraints

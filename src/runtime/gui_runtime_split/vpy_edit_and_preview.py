@@ -10,7 +10,7 @@ from typing import Optional
 from PyQt6.QtCore import QProcess, QProcessEnvironment
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLineEdit, QPushButton, QFileDialog, QMessageBox
 
-from src.core.settings import ENCODE_REMUX_LABELS, ENCODE_LABELS, PLUGIN_PATH, VSEDIT_PATH, ENCODE_SP_LABELS, \
+from src.core.settings import ENCODE_REMUX_LABELS, ENCODE_LABELS, PLUGIN_PATH, VSEDIT_PATH, VSPIPE_PATH, ENCODE_SP_LABELS, \
     ENCODE_REMUX_SP_LABELS
 from src.exports.utils import print_exc_terminal, run_command
 from src.runtime.video_timeline import (
@@ -823,14 +823,23 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
             environment = QProcessEnvironment.systemEnvironment()
             for variable in ('QT_PLUGIN_PATH', 'QT_QPA_PLATFORM_PLUGIN_PATH', 'QML2_IMPORT_PATH', 'QML_IMPORT_PATH'):
                 environment.remove(variable)
+            plugin_path = str(PLUGIN_PATH or '').strip()
             if sys.platform == 'win32':
-                runtime_dir = os.path.dirname(os.path.dirname(os.path.abspath(vsedit_exe)))
+                bundle_root = str(getattr(sys, '_MEIPASS', ''))
+                bundled_editor = os.path.join(bundle_root, 'vsedit', 'vsedit.exe')
+                use_bundle = (
+                    bool(getattr(sys, 'frozen', False)) and bool(bundle_root)
+                    and os.path.normcase(os.path.abspath(vsedit_exe)) == os.path.normcase(os.path.abspath(bundled_editor))
+                )
+                runtime_dir = bundle_root if use_bundle else os.path.dirname(os.path.abspath(VSPIPE_PATH))
+                if use_bundle:
+                    plugin_path = os.path.join(runtime_dir, 'vapoursynth64', 'plugins')
                 script_library = os.path.join(runtime_dir, 'VSScript.dll')
                 if os.path.isfile(script_library):
                     environment.insert('VSSCRIPT_PATH', script_library)
                     environment.insert('PATH', runtime_dir + os.pathsep + environment.value('PATH'))
-            if str(PLUGIN_PATH or '').strip():
-                environment.insert('BLURAYSUB_PLUGIN_PATH', str(PLUGIN_PATH))
+            if plugin_path:
+                environment.insert('BLURAYSUB_PLUGIN_PATH', plugin_path)
             proc.setProcessEnvironment(environment)
             proc.setProgram(vsedit_exe)
             proc.setArguments([os.path.normpath(path)])

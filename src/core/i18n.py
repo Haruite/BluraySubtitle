@@ -8,6 +8,9 @@ from typing import Optional
 import src.core.settings as _core_settings
 
 I18N_ZH_TO_EN = {
+    '已从 {0} 读取 Windows 工具路径。': 'Loaded Windows tool paths from {0}.',
+    '已安装的 VapourSynth 未通过运行验证，将重新编译。': 'Installed VapourSynth failed its runtime checks; rebuilding.',
+    'VapourSynth 安装后的运行验证失败': 'VapourSynth runtime verification failed after installation',
     'Python 和 Git 开始菜单快捷方式': 'Python and Git Start menu shortcuts',
     '开始菜单快捷方式的目标不存在：{0}': 'Start menu shortcut target not found: {0}',
     '已为所有用户创建 Python 和 Git 开始菜单快捷方式。': 'Created Python and Git Start menu shortcuts for all users.',

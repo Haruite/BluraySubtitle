@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from src.core.i18n import translate_text
 from tools.vapoursynth_plugin_versions import fallback_version, normalize_version, record_version, version_satisfies
+from tools.windows_tool_paths import normalize_vsedit_path
 
 BUILD_PROFILE = "static-runtime-shared-fftw-1"
 
@@ -120,6 +121,8 @@ class Installer:
     def __init__(self, args):
         self.args = args
         self.runtime = args.runtime_root.resolve()
+        self.plugins = (args.plugins_dir or self.runtime / "vapoursynth64/plugins").resolve()
+        self.editor = normalize_vsedit_path(args.editor_path or self.runtime / "vsedit/vsedit.exe")
         self.work = args.work_root.resolve()
         self.work.mkdir(parents=True, exist_ok=True)
         self.state_path = self.runtime / "vapoursynth-components.json"
@@ -133,6 +136,11 @@ class Installer:
         self.http = urllib.request.build_opener()
         self.http.addheaders = [("User-Agent", "BluraySubtitle-Windows-Setup")]
         self.json_cache = {}
+
+    def record_path(self, path):
+        if path.is_relative_to(self.runtime):
+            return path.relative_to(self.runtime).as_posix()
+        return path.as_posix()
 
     def log(self, template, **values):
         print("[BluraySubtitle][SETUP] " + translate_text(template, self.args.language).format(**values), flush=True)
@@ -260,7 +268,7 @@ class Installer:
         return prefix
 
     def probe(self, binary, component, target=None):
-        folders = [binary.parent, self.runtime, self.runtime / "vapoursynth64/plugins",
+        folders = [binary.parent, self.runtime, self.plugins,
                    self.runtime / "vapoursynth64/coreplugins"]
         result = subprocess.run([sys.executable, "-c", PROBE, str(binary), component.key, json.dumps(list(map(str, folders))),
                                  str(Path(__file__).resolve().parent), target or component.ref],
@@ -546,9 +554,9 @@ class Installer:
         previous = self.state["components"].get(component.key)
         release = self.release(component) if not component.ref else None
         target_ref = component.ref or release["tag_name"]
-        folder = self.runtime / "vapoursynth64" / ("coreplugins" if component.key == "removegrain" else "plugins")
+        folder = self.runtime / "vapoursynth64/coreplugins" if component.key == "removegrain" else self.plugins
         target = folder / component.filename
-        relative = target.relative_to(self.runtime).as_posix()
+        relative = self.record_path(target)
         known_file = bool(previous and target.is_file() and previous["files"].get(relative) == sha256(target))
         expected = ("commit:" + component.fallback_ref if previous and previous["method"] == "source" and component.fallback_ref
                     else target_ref)
@@ -656,13 +664,13 @@ class Installer:
             relative = installed.relative_to(self.runtime).as_posix()
             self.state["dependencies"][relative] = sha256(installed)
             dependency_names.append(relative)
-        files = {target.relative_to(self.runtime).as_posix(): sha256(target)}
+        files = {self.record_path(target): sha256(target)}
         files.update(self.licenses(component, source, package))
         self.state["components"][component.key] = {
             "name": component.key, "repository": component.repository, "target_ref": target_ref, "ref": ref, "method": method,
             "source_url": f"https://github.com/{component.repository}/tree/{ref}",
             "artifact_url": artifact["browser_download_url"] if method == "release" else "",
-            "plugin": target.relative_to(self.runtime).as_posix(), "registered_version": probe["version"],
+            "plugin": self.record_path(target), "registered_version": probe["version"],
             "installed_version": probe["native_version"] or normalize_version(expected),
             "build_profile": BUILD_PROFILE if method == "source" else "",
             "files": files, "dependencies": dependency_names,
@@ -675,7 +683,8 @@ class Installer:
         self.used_packages = set()
         release = self.release(EDITOR)
         ref = release["tag_name"]
-        if self.valid(self.state["components"].get("vsedit"), ref):
+        previous = self.state["components"].get("vsedit")
+        if previous and (self.runtime / previous["entrypoint"]).resolve() == self.editor and self.valid(previous, ref):
             self.configure_editor()
             self.editor_metadata(self.state["components"]["vsedit"])
             self.save()
@@ -714,18 +723,18 @@ class Installer:
             executable = next(source.rglob("vsedit.exe"))
             directory = executable.parent
             self.run_msys(["windeployqt6 --release --no-translations " + shlex.quote(executable.as_posix())], directory)
-        destination = self.runtime / "vsedit"
+        destination = self.editor.parent
         destination.mkdir(parents=True, exist_ok=True)
         files = {}
         for path in directory.rglob("*"):
             if not path.is_file() or path.suffix.lower() in (".pdb", ".lib", ".exp") or path.name in ("vsedit.config", ".unpacked"):
                 continue
-            target = destination / path.relative_to(directory)
+            target = self.editor if path == executable else destination / path.relative_to(directory)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(path, target)
-            files[target.relative_to(self.runtime).as_posix()] = sha256(target)
+            files[self.record_path(target)] = sha256(target)
         self.configure_editor()
-        version = subprocess.run([str(destination / "vsedit.exe"), "--version"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, check=True)
+        version = subprocess.run([str(self.editor), "--version"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, check=True)
         if ref not in version.stdout + version.stderr:
             raise RuntimeError("VSEdit release version verification failed")
         files.update(self.licenses(EDITOR, source, package))
@@ -738,13 +747,13 @@ class Installer:
             "name": "VapourSynth Editor", "repository": EDITOR.repository, "ref": ref, "method": method,
             "source_url": f"https://github.com/{EDITOR.repository}/tree/{ref}",
             "artifact_url": artifact["browser_download_url"] if method == "release" else "",
-            "entrypoint": "vsedit/vsedit.exe", "files": files, "dependencies": [],
+            "entrypoint": self.record_path(self.editor), "files": files, "dependencies": [],
         }
         self.editor_metadata(self.state["components"]["vsedit"])
         self.save()
 
     def configure_editor(self):
-        config = self.runtime / "vsedit/vsedit.config"
+        config = self.editor.parent / "vsedit.config"
         if not config.exists() and (self.runtime / "vsedit.config").is_file():
             shutil.copyfile(self.runtime / "vsedit.config", config)
         settings = configparser.ConfigParser(interpolation=None, strict=False)
@@ -754,13 +763,15 @@ class Installer:
         if not settings.has_section("common"):
             settings.add_section("common")
         settings["common"]["prefer_vs_libs_from_list"] = "false"
-        settings["common"]["vapoursynth_library_paths"] = "../"
-        settings["common"]["vapoursynth_plugins_paths"] = "../vapoursynth64/coreplugins, ../vapoursynth64/plugins"
+        settings["common"]["vapoursynth_library_paths"] = self.runtime.as_posix()
+        settings["common"]["vapoursynth_plugins_paths"] = (
+            (self.runtime / "vapoursynth64/coreplugins").as_posix() + ", " + self.plugins.as_posix()
+        )
         with config.open("w", encoding="utf-8", newline="\r\n") as output:
             settings.write(output, space_around_delimiters=False)
 
     def editor_metadata(self, record):
-        version = file_version(self.runtime / "vsedit/Qt6Core.dll")
+        version = file_version(self.editor.parent / "Qt6Core.dll")
         record["qt_version"] = version
         series = ".".join(version.split(".")[:2])
         record["qt_source_url"] = f"https://download.qt.io/official_releases/qt/{series}/{version}/single/qt-everywhere-src-{version}.tar.xz"
@@ -784,6 +795,8 @@ def main():
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runtime-root", required=True, type=Path)
+    parser.add_argument("--plugins-dir", type=Path)
+    parser.add_argument("--editor-path", type=Path)
     parser.add_argument("--work-root", required=True, type=Path)
     parser.add_argument("--msys2-root", type=Path, default=Path(r"C:\msys64"))
     parser.add_argument("--seven-zip", default=r"C:\Program Files\7-Zip\7z.exe")

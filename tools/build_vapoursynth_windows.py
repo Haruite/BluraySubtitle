@@ -189,8 +189,11 @@ def build_binding(source: Path, binaries: Path, wheel_directory: Path, version: 
 def install_runtime(args: argparse.Namespace, binaries: Path, wheel: Path) -> None:
     runtime = args.runtime_root.resolve()
     runtime.mkdir(parents=True, exist_ok=True)
-    for name in ("VapourSynth.dll", "VSScript.dll", "VSPipe.exe"):
+    for name in ("VapourSynth.dll", "VSScript.dll"):
         shutil.copy2(binaries / name, runtime / name)
+    vspipe = args.vspipe_path or runtime / "VSPipe.exe"
+    vspipe.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(binaries / "VSPipe.exe", vspipe)
     core_plugins = runtime / "vapoursynth64/coreplugins"
     core_plugins.mkdir(parents=True, exist_ok=True)
     for name in ("RemoveGrainVS", "Vinverse", "VIVTC", "EEDI3", "AvsCompat", "MiscFilters", "Morpho"):
@@ -251,6 +254,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--runtime-root", type=Path, required=True)
+    parser.add_argument("--vspipe-path", type=Path)
     parser.add_argument("--version", required=True)
     parser.add_argument("--dependencies", type=Path, required=True)
     parser.add_argument("--msbuild", required=True)

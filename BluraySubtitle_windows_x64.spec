@@ -84,8 +84,12 @@ vspipe_path = required_path(SETTINGS["VSPIPE_PATH"], "VSPipe executable")
 upstream_manifest = required_path(vapoursynth_dir / "vapoursynth-components.json", "upstream component manifest")
 upstream_components = json.loads(upstream_manifest.read_text(encoding="utf-8"))
 editor_entrypoint = upstream_components["components"]["vsedit"]["entrypoint"]
-if Path(SETTINGS["VSEDIT_PATH"]).resolve() != (vapoursynth_dir / editor_entrypoint).resolve():
+editor_path = required_path(SETTINGS["VSEDIT_PATH"], "VSEdit executable")
+editor_dir = editor_path.parent
+if editor_path != (vapoursynth_dir / editor_entrypoint).resolve():
     raise ValueError("VSEDIT_PATH must match the managed upstream editor entry point")
+if editor_dir.name.casefold() != "vsedit":
+    raise ValueError("VSEdit must be installed in a vsedit directory; run Windows setup to update VSEDIT_PATH")
 
 
 build_state = json.loads(required_path(
@@ -191,19 +195,28 @@ datas = [
 datas += copy_metadata("numpy")
 
 # Use the selected system Python for both frozen workers and VSScript.
-for name in ("VapourSynth.dll", "VSScript.dll", "VSPipe.exe"):
+for name in ("VapourSynth.dll", "VSScript.dll"):
     add_binary(binaries, vapoursynth_dir / name, name)
+binaries.append((str(vspipe_path), "."))
 for plugin in (vapoursynth_dir / "vapoursynth64/coreplugins").glob("*.dll"):
     binaries.append((str(plugin), "vapoursynth64/coreplugins"))
 managed_plugins = set(upstream_components["dependencies"])
 managed_plugins.update(component["plugin"] for component in upstream_components["components"].values() if "plugin" in component)
+plugins_dir = Path(SETTINGS["PLUGIN_PATH"] or vapoursynth_dir / "vapoursynth64/plugins").resolve()
 for relative in sorted(managed_plugins):
-    binaries.append((str(required_path(vapoursynth_dir / relative, "managed VapourSynth plugin")), str(Path(relative).parent)))
+    source = required_path(vapoursynth_dir / relative, "managed VapourSynth plugin")
+    destination = (
+        Path("vapoursynth64/plugins") / source.relative_to(plugins_dir).parent
+        if source.is_relative_to(plugins_dir) else source.relative_to(vapoursynth_dir).parent
+    )
+    binaries.append((str(source), str(destination)))
 datas.append((str(upstream_manifest), "legal"))
 editor_datas = []
 for relative in upstream_components["components"]["vsedit"]["files"]:
-    if Path(relative).parts[0] == "vsedit":
-        editor_datas.append((relative, str(required_path(vapoursynth_dir / relative, "VSEdit distribution file")), "DATA"))
+    source = (vapoursynth_dir / relative).resolve()
+    if source.is_relative_to(editor_dir):
+        destination = Path("vsedit") / (Path("vsedit.exe") if source == editor_path else source.relative_to(editor_dir))
+        editor_datas.append((str(destination), str(required_path(source, "VSEdit distribution file")), "DATA"))
 editor_config = Path(workpath) / "vsedit.config"
 editor_config.write_text(
     "[common]\nprefer_vs_libs_from_list=false\nvapoursynth_library_paths=../\nvapoursynth_plugins_paths=../vapoursynth64/coreplugins, ../vapoursynth64/plugins\n",
@@ -299,6 +312,10 @@ a = Analysis(
 
 # Hooks can add resources and duplicate DLLs independently of explicit datas.
 # Filter both TOCs after dependency analysis so excluded files never enter dist.
+a.binaries = [
+    ("vspipe.exe", source, kind) if Path(source).resolve() == vspipe_path else (destination, source, kind)
+    for destination, source, kind in a.binaries
+]
 root_binary_names = {
     Path(destination).name.lower()
     for destination, _source, _kind in a.binaries
@@ -311,7 +328,7 @@ a.datas = [entry for entry in a.datas if keep_runtime_file(entry[0], root_binary
 # Add the independent editor after Analysis, keeping its Qt DLLs in vsedit/.
 editor_sources = {Path(source).resolve() for _destination, source, _kind in editor_datas}
 editor_binaries = [entry[:2] + ("BINARY",) for entry in editor_datas if Path(entry[0]).suffix.lower() in {".exe", ".dll"}]
-editor_dependencies = bindepend.binary_dependency_analysis(editor_binaries, search_paths=[str(vapoursynth_dir / "vsedit"), str(vapoursynth_dir)])
+editor_dependencies = bindepend.binary_dependency_analysis(editor_binaries, search_paths=[str(editor_dir), str(vapoursynth_dir)])
 for destination, source, _kind in editor_dependencies:
     if Path(source).resolve() not in editor_sources and Path(destination).name.lower() not in root_binary_names:
         editor_datas.append((str(Path("vsedit") / Path(destination).name), source, "DATA"))
