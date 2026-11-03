@@ -8,6 +8,9 @@ from typing import Optional
 import src.core.settings as _core_settings
 
 I18N_ZH_TO_EN = {
+    'Python 和 Git 开始菜单快捷方式': 'Python and Git Start menu shortcuts',
+    '开始菜单快捷方式的目标不存在：{0}': 'Start menu shortcut target not found: {0}',
+    '已为所有用户创建 Python 和 Git 开始菜单快捷方式。': 'Created Python and Git Start menu shortcuts for all users.',
     '检测到现有 MSYS2 核心文件；将复用现有安装并执行完整系统升级。': 'Existing MSYS2 core files detected; reusing the installation for a full system upgrade.',
     '正在升级 MSYS2 及所有已安装的软件包。': 'Upgrading MSYS2 and all installed packages.',
     '正在启动新的 pacman 进程以完成 MSYS2 系统升级。': 'Completing the MSYS2 system upgrade with a new pacman process.',

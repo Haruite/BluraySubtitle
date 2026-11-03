@@ -1439,7 +1439,7 @@ function Install-PythonRuntime {
         "Include_pip=1",
         "Include_test=0",
         "Include_doc=0",
-        "Shortcuts=0"
+        "Shortcuts=1"
     )
 }
 
@@ -1897,6 +1897,86 @@ function Add-GitToMachinePath {
     Write-SetupInfo `
         "Added Git to the system PATH." `
         "已将 Git 添加到系统 PATH。"
+}
+
+function Get-StartMenuShortcutDefinitions {
+    $programs = [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonPrograms)
+    $pythonVersion = ConvertTo-ComparableVersion $script:SelectedPythonRelease.Version
+    $pythonName = "Python {0}.{1}" -f $pythonVersion.Major, $pythonVersion.Minor
+    $pythonMenu = Join-Path $programs $pythonName
+    $gitMenu = Join-Path $programs "Git"
+    return @(
+        [pscustomobject]@{
+            Path = Join-Path $pythonMenu "$pythonName (64-bit).lnk"
+            TargetPath = $script:ToolPaths.Python
+            Arguments = ""
+            WorkingDirectory = $script:ToolPaths.PythonRoot
+        },
+        [pscustomobject]@{
+            Path = Join-Path $gitMenu "Git Bash.lnk"
+            TargetPath = Join-Path $script:ToolPaths.GitRoot "git-bash.exe"
+            Arguments = "--cd-to-home"
+            WorkingDirectory = "%HOMEDRIVE%%HOMEPATH%"
+        },
+        [pscustomobject]@{
+            Path = Join-Path $gitMenu "Git CMD.lnk"
+            TargetPath = Join-Path $script:ToolPaths.GitRoot "git-cmd.exe"
+            Arguments = "--cd-to-home"
+            WorkingDirectory = "%HOMEDRIVE%%HOMEPATH%"
+        },
+        [pscustomobject]@{
+            Path = Join-Path $gitMenu "Git GUI.lnk"
+            TargetPath = Join-Path $script:ToolPaths.GitRoot "cmd\git-gui.exe"
+            Arguments = ""
+            WorkingDirectory = "%HOMEDRIVE%%HOMEPATH%"
+        }
+    )
+}
+
+function Test-StartMenuShortcuts {
+    $shell = New-Object -ComObject WScript.Shell
+    foreach ($definition in @(Get-StartMenuShortcutDefinitions)) {
+        if (-not (Test-Path -LiteralPath $definition.Path -PathType Leaf) -or
+            -not (Test-Path -LiteralPath $definition.TargetPath -PathType Leaf)) {
+            return $false
+        }
+        try {
+            $shortcut = $shell.CreateShortcut($definition.Path)
+        }
+        catch [Runtime.InteropServices.COMException] {
+            return $false
+        }
+        if ($shortcut.TargetPath -ne $definition.TargetPath -or
+            $shortcut.Arguments -cne $definition.Arguments -or
+            $shortcut.WorkingDirectory -ne $definition.WorkingDirectory) {
+            return $false
+        }
+    }
+    return $true
+}
+
+function Install-StartMenuShortcuts {
+    $definitions = @(Get-StartMenuShortcutDefinitions)
+    foreach ($definition in $definitions) {
+        if (-not (Test-Path -LiteralPath $definition.TargetPath -PathType Leaf)) {
+            throw ((Get-SetupText `
+                "Start menu shortcut target not found: {0}" `
+                "开始菜单快捷方式的目标不存在：{0}") -f $definition.TargetPath)
+        }
+    }
+    $shell = New-Object -ComObject WScript.Shell
+    foreach ($definition in $definitions) {
+        [IO.Directory]::CreateDirectory((Split-Path -Parent $definition.Path)) | Out-Null
+        $shortcut = $shell.CreateShortcut($definition.Path)
+        $shortcut.TargetPath = $definition.TargetPath
+        $shortcut.Arguments = $definition.Arguments
+        $shortcut.WorkingDirectory = $definition.WorkingDirectory
+        $shortcut.IconLocation = $definition.TargetPath + ",0"
+        $shortcut.Save()
+    }
+    Write-SetupInfo `
+        "Created Python and Git Start menu shortcuts for all users." `
+        "已为所有用户创建 Python 和 Git 开始菜单快捷方式。"
 }
 
 function Get-VisualStudioWherePath {
@@ -3374,6 +3454,15 @@ function Register-StageTwoComponents {
         -GetAvailableVersion { "1.0" } `
         -Install { param($Version) Add-GitToMachinePath } `
         -Verify { Test-GitMachinePath }
+
+    Register-SetupComponent `
+        -Name "start-menu-shortcuts" `
+        -EnglishName "Python and Git Start menu shortcuts" `
+        -ChineseName "Python 和 Git 开始菜单快捷方式" `
+        -GetInstalledVersion { if (Test-StartMenuShortcuts) { "1.0" } else { "" } } `
+        -GetAvailableVersion { "1.0" } `
+        -Install { param($Version) Install-StartMenuShortcuts } `
+        -Verify { Test-StartMenuShortcuts }
 
     Register-SetupComponent `
         -Name "visual-studio-build-tools" `
