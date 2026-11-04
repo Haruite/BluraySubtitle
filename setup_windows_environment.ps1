@@ -2283,6 +2283,16 @@ function Install-Msys2 {
     Write-SetupInfo `
         "MSYS2 first-start initialization completed." `
         "MSYS2 首次启动初始化完成。"
+    $certificateBundle = Join-Path $script:ToolPaths.Msys2Root "usr\ssl\certs\ca-bundle.crt"
+    if (-not (Test-Path -LiteralPath $certificateBundle -PathType Leaf) -or
+        (Get-Item -LiteralPath $certificateBundle).Length -eq 0) {
+        Write-SetupInfo `
+            "Repairing the MSYS2 CA certificate bundle." `
+            "正在修复 MSYS2 CA 证书包。"
+        Invoke-SetupCommand `
+            -FilePath $script:ToolPaths.Msys2Bash `
+            -Arguments @("-lc", "/usr/bin/update-ca-trust && test -s /usr/ssl/certs/ca-bundle.crt") | Out-Null
+    }
     Write-SetupInfo `
         "Upgrading MSYS2 and all installed packages." `
         "正在升级 MSYS2 及所有已安装的软件包。"
@@ -2302,7 +2312,9 @@ function Test-Msys2 {
         return $false
     }
     try {
-        Invoke-SetupCommand -FilePath $script:ToolPaths.Msys2Bash -Arguments @("-lc", "true") | Out-Null
+        Invoke-SetupCommand `
+            -FilePath $script:ToolPaths.Msys2Bash `
+            -Arguments @("-lc", "test -s /usr/ssl/certs/ca-bundle.crt") | Out-Null
         return $true
     }
     catch {
@@ -2337,10 +2349,19 @@ function Invoke-Msys2Pacman {
 
     $pacman = Join-Path $script:ToolPaths.Msys2Root "usr\bin\pacman.exe"
     $effectiveArguments = @(Get-Msys2PacmanConfigArguments) + $Arguments
-    return Invoke-SetupCommand `
-        -FilePath $pacman `
-        -Arguments $effectiveArguments `
-        -AcceptedExitCodes $AcceptedExitCodes
+    $previousPath = $env:PATH
+    try {
+        # Package hooks need MSYS2 tools in the pacman process's inherited PATH.
+        $msysBin = Join-Path $script:ToolPaths.Msys2Root "usr\bin"
+        $env:PATH = "$msysBin;$previousPath"
+        return Invoke-SetupCommand `
+            -FilePath $pacman `
+            -Arguments $effectiveArguments `
+            -AcceptedExitCodes $AcceptedExitCodes
+    }
+    finally {
+        $env:PATH = $previousPath
+    }
 }
 
 function Get-Msys2PackagesVersion {
