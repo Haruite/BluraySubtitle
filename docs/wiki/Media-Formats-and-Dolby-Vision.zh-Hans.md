@@ -141,7 +141,7 @@ Dialogue: 0,0:00:01.00,0:00:04.50,Default,,0,0,0,,第一行\N第二行
 
 `Format:` 声明字段顺序，所以解析器应按它读取，不能假设所有文件使用同一固定布局。最后一个 `Text` 字段本身可以包含逗号。ASS 时间通常使用 `h:mm:ss.cc`，精度是百分之一秒，而不是 SRT 的毫秒。`\N` 表示强制换行。花括号中的 override tag，例如 `{\i1}`、`{\pos(960,900)}` 或 `{\fad(200,200)}`，可以只对某段事件改变样式、位置、动画、绘图和卡拉 OK 效果。
 
-`PlayResX` 与 `PlayResY` 定义脚本坐标系；只修改它们而不同比例调整样式和位置，会改变最终排版。样式的 `Fontname` 引用字体内部家族名称，它可能与字体文件名不同，因此分发所引用字体也是保留 ASS 呈现的一部分。
+`PlayResX` 与 `PlayResY` 定义脚本坐标系；只修改它们而不同比例调整样式和位置，会改变最终排版。样式的 `Fontname` 和行内 `\fn` 标签引用字体内部家族名称，它可能与字体文件名不同，因此分发所引用字体也是保留 ASS 呈现的一部分。
 
 ASS/SSA 可以：
 
@@ -150,6 +150,8 @@ ASS/SSA 可以：
 - 渲染到视频，或转换为位图字幕格式。
 
 在 Matroska 中，`S_TEXT/ASS`／`S_TEXT/SSA` 的全局脚本和样式 section 保存在 codec private data 中，每个事件则存入带时间的 block。字体应作为普通 Matroska 附件保存，而不是使用旧式 uuencode `[Fonts]` 数据。
+
+Linux 下播放时可参考[安装字幕字体](#安装字幕字体)。
 
 ### PGS / Presentation Graphics
 
@@ -195,6 +197,37 @@ TextST 是 stream type `0x92` 对应的蓝光文本字幕格式。尽管 SRT、A
 | 硬字幕 | 已编码进视频像素 | 否 | 编码完成后不需要 |
 
 ASS 转 PGS 会保留字幕可选择性，但会按指定分辨率和帧率／时间模型栅格化外观。硬字幕则直接栅格化进视频，再参与视频编码。
+
+## Linux 桌面 mpv 播放
+
+运行 [Linux 安装脚本](../../README.zh-Hans.md#setup_linux_environmentshlinux-运行环境脚本) 后重新打开 mpv。安装时选择的语言应用于 uosc 播放控件和右键菜单，桌面界面根据显示器 DPI 缩放。默认用户配置目录为 `~/.config/mpv/`。
+
+### 画质、字幕与着色器
+
+- 右键打开 **mpv-lazy**，即可应用画质或字幕预设，也可以通过对应的**还原应用前**菜单项恢复。画质预设开启显示同步插值，并将着色器列表设为 QCOM 缩放锐化。字幕预设调整字号、描边、颜色和轨道偏好，沿用播放器当前字体。
+- 在 **mpv-lazy → 着色器** 中，可逐项开关 10 个着色器或清空列表。放大类着色器在满足缩放条件时生效。k7 modernAnime 等计算着色器需要渲染后端和驱动支持对应的 GPU 功能。叠加多个开销较大的着色器可能导致掉帧。[mpv-lazy 着色器说明](https://github.com/hooke007/mpv_PlayKit/wiki/4_GLSL)
+- 选择**保存为默认设置**，即可在下次启动时应用当前的画质、字幕和着色器设置。mpv 从 `bluray-defaults.conf` 读取这些设置。
+
+安装时从固定版本的 mpv-lazy 下载 Ani4Kv2、AniSD 和 QCOM 着色器并校验文件。Ani4Kv2 与 AniSD 的模型权重采用 CC BY-NC 4.0，仅限非商业用途。[着色器来源和许可](../../third_party/mpv_lazy_shaders/COPYRIGHT.zh-Hans.md)
+
+### 安装字幕字体
+
+mpv 默认会读取 Matroska（MKV）中匹配的字体附件。拿到独立字体包后，先解压出 `.ttf`、`.otf` 和 `.ttc` 文件。[mpv 字幕选项](https://mpv.io/manual/stable/#subtitles)
+
+- **仅供 mpv 使用**。把字体文件直接复制到当前 mpv 配置目录的 `fonts/` 子目录，通常为 `~/.config/mpv/fonts/`。目录可自行创建。[mpv 配置目录](https://mpv.io/manual/stable/#files)
+- **供当前桌面用户使用**。把字体文件放到 `~/.local/share/fonts/` 下的子目录（若设置了 `XDG_DATA_HOME`，则使用 `$XDG_DATA_HOME/fonts/`），再运行 `fc-cache -f`。字体包较大时也适合用这个目录，因为 mpv 会把专用目录里的字体预先读入内存。[Fontconfig 用户指南](https://fontconfig.pages.freedesktop.org/fontconfig/fontconfig-user.html)
+
+重新打开 mpv，加载匹配的 ASS 字幕。外挂字幕可以通过 `--sub-file` 指定。若要核对实际选中的字体，加上 `-v` 并在日志中查找 `fontselect`。
+
+```sh
+mpv --sub-file="/path/to/episode.ass" "/path/to/episode.mkv"
+```
+
+### VapourSynth 滤镜
+
+- 在 **VapourSynth 滤镜**中，选择 MVTools 或 RIFE 补帧、CCD 抑制彩噪，或用 BM3D 进行 CPU 亮度降噪。再次选择已开启的滤镜即可关闭，选择另一项可直接切换。
+- **补帧倍率**由 MVTools 和 RIFE 共用，默认 2×。自定义时可输入 `2.5` 或 `5/2` 等小数或分数。倍率须大于 1× 且不超过 10×，约分后分母最多为 100。选定的倍率立即保存，下次启动 mpv 时自动读取。
+- RIFE 按片源原分辨率计算，Vulkan 通过测试帧验证后才会出现在菜单中。Ubuntu 22.04 和 Debian 12 上的兼容构建默认使用 OpenGL 渲染 mpv 画面，部分着色器可能受限。
 
 ## Dolby Vision 基础
 

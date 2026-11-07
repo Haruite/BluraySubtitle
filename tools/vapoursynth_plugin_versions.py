@@ -61,8 +61,12 @@ def reported_version(plugin, target: str) -> str | None:
                 value = None
             if value is not None:
                 return value
-    if plugin.version.major >= 0:
-        return usable_version(f"{plugin.version.major}.{plugin.version.minor}", target)
+    version = plugin.version
+    # vs-ccd registers 0.1 independently of the release tag.
+    if plugin.name == "chroma denoiser" and (version.major, version.minor) == (0, 1):
+        return None
+    if version.major >= 0:
+        return usable_version(f"{version.major}.{version.minor}", target)
     return None
 
 

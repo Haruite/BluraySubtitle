@@ -231,6 +231,8 @@ chmod +x setup_linux_environment.sh
 ./setup_linux_environment.sh
 ```
 
+播放预设和字幕字体见 [Linux 桌面 mpv](docs/wiki/Media-Formats-and-Dolby-Vision.zh-Hans.md#linux-桌面-mpv-播放)。
+
 建议在远程终端中执行 `setup_linux_environment.sh`，因为远程终端会使用 tmux 输出，日志更简洁、更易读。
 
 ---
@@ -363,3 +365,4 @@ res = res.std.Trim(first=0, length=720)
 - [Spp2Pgs](https://github.com/subelf/Spp2Pgs)
 - [getnative](https://github.com/Infiziert90/getnative)
 - [my-vapoursynth-script](https://github.com/xyx98/my-vapoursynth-script)
+- [mpv_PlayKit (mpv-lazy)](https://github.com/hooke007/mpv_PlayKit)

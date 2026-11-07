@@ -231,6 +231,8 @@ chmod +x setup_linux_environment.sh
 ./setup_linux_environment.sh
 ```
 
+See [Linux desktop mpv](docs/wiki/Media-Formats-and-Dolby-Vision.md#linux-desktop-playback-with-mpv) for playback presets and subtitle fonts.
+
 Prefer running `setup_linux_environment.sh` in a **remote terminal**: it uses **tmux** for cleaner, easier-to-read logs.
 
 ---
@@ -363,3 +365,4 @@ Normal: some discs mix resolutions and authoring is messy. Run a test pass; if r
 - [Spp2Pgs](https://github.com/subelf/Spp2Pgs)
 - [getnative](https://github.com/Infiziert90/getnative)
 - [my-vapoursynth-script](https://github.com/xyx98/my-vapoursynth-script)
+- [mpv_PlayKit (mpv-lazy)](https://github.com/hooke007/mpv_PlayKit)

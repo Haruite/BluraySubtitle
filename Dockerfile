@@ -123,14 +123,15 @@ RUN set -eux; \
     mkdir -p /tmp/mpv && cd /tmp/mpv; \
     git clone https://github.com/mpv-player/mpv-build.git; \
     cd mpv-build; \
-    rm -rf mpv/build ffmpeg/build libass/build || true; \
     ./use-ffmpeg-release; \
     echo "--enable-libbluray" > ffmpeg_options; \
     echo "--enable-libdav1d" >> ffmpeg_options; \
     echo "--enable-libopus" >> ffmpeg_options; \
     echo "-Dlibbluray=enabled" > mpv_options; \
     echo "-Dlua=luajit" >> mpv_options; \
-    ./rebuild -j"$(nproc)"; \
+    ./update; \
+    mkdir -p ffmpeg_build/fftools/resources; \
+    ./build -j"$(nproc)"; \
     ./install; \
     install -m 0755 build_libs/bin/ffmpeg /usr/bin/ffmpeg; \
     install -m 0755 build_libs/bin/ffprobe /usr/bin/ffprobe; \

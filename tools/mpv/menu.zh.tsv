@@ -1,0 +1,128 @@
+Pla&y	播放(&Y)
+Pa&use	暂停(&U)
+&Stop	停止(&S)
+Ope&n	打开(&N)
+&Clipboard	从剪贴板打开(&C)
+&History	播放历史(&H)
+&Watch later	续播记录(&W)
+&Playlist	播放列表(&P)
+&Tracks	媒体轨道(&T)
+P&layback	播放控制(&L)
+&Display duration	图片显示时长(&D)
+1 second	1 秒
+2 seconds	2 秒
+5 seconds	5 秒
+10 seconds	10 秒
+Infinite	不限时
+Sp&eed	播放速度(&E)
+Set/clear &A-B loop points	设置或清除 A-B 循环点(&A)
+&Loop file	循环播放当前文件(&L)
+L&oop playlist	循环播放列表(&O)
+Seek &10 seconds forward	快进 10 秒(&1)
+Seek 1&0 seconds backward	后退 10 秒(&0)
+Seek 10 &minutes forward	快进 10 分钟(&M)
+Seek 10 m&inutes backward	后退 10 分钟(&I)
+&Reload	重新加载(&R)
+&Next file	下一个文件(&N)
+&Previous file	上一个文件(&P)
+N&ext sub-playlist	下一个子播放列表(&E)
+P&revious sub-playlist	上一个子播放列表(&R)
+&Shuffle	打乱顺序(&S)
+&Unshuffle	恢复原顺序(&U)
+&Chapters	章节(&C)
+&Editions/Titles	版本／标题(&E)
+&Video	视频(&V)
+&Track	轨道(&T)
+&Fill	填满窗口(&F)
+&Stretch	拉伸画面(&S)
+&Unscaled	原始大小(&U)
+&Zoom	画面缩放(&Z)
+&Aspect ratio	宽高比(&A)
+&Default	默认(&D)
+&Center	画面居中(&C)
+Rotate &clockwise	顺时针旋转(&C)
+Rotate c&ounterclockwise	逆时针旋转(&O)
+&Deband	去色带(&D)
+D&einterlace	反交错(&E)
+&Screenshot	截图(&S)
+Screenshot &without subtitles	截图（不含字幕）(&W)
+&Audio	音频(&A)
+&Devices	输出设备(&D)
+&Channels	声道(&C)
+&Auto	自动(&A)
+&Stereo	立体声(&S)
+&Mono	单声道(&M)
+Increase &volume	提高音量(&V)
+Decrease v&olume	降低音量(&O)
+&Mute	静音(&M)
+Increase d&elay	增加延迟(&E)
+Decrease de&lay	减少延迟(&L)
+&Subtitle	字幕(&S)
+&Visible	显示字幕(&V)
+Increase &delay	增加延迟(&D)
+Decrease d&elay	减少延迟(&E)
+Scale &up	放大字幕(&U)
+Scale d&own	缩小字幕(&O)
+&Lines	字幕行(&L)
+&Secondary subtitle	第二字幕(&S)
+&Window	窗口(&W)
+&Fullscreen	全屏(&F)
+&Border	窗口边框(&B)
+&Title bar	标题栏(&T)
+&Always on top	窗口置顶(&A)
+&Window scale	窗口缩放(&W)
+&Screenshot window	截取窗口(&S)
+V&iew	视图(&I)
+&Playback statistics	播放统计(&P)
+&File information	文件信息(&F)
+&Key bindings	快捷键(&K)
+&Time OSD	显示播放时间(&T)
+&Cycle OSC visibility	切换播放控件显示(&C)
+&OSC layout	播放控件布局(&O)
+&Bottom bar	底部栏(&B)
+&Top bar	顶部栏(&T)
+&Floating	悬浮(&F)
+B&ox	方框(&O)
+&Slimbox	紧凑方框(&S)
+S&lim bottom bar	紧凑底部栏(&L)
+Sl&im top bar	紧凑顶部栏(&I)
+P&rofiles	预设配置(&R)
+T&ools	工具(&O)
+Copy &path	复制文件路径(&P)
+Copy &subtitle	复制当前字幕(&S)
+Copy &title	复制媒体标题(&T)
+&Hardware decoding	硬件解码(&H)
+P&roperties	播放器属性(&R)
+&Console	控制台(&C)
+&Edit config file	编辑配置文件(&E)
+Edit key &bindings	编辑快捷键(&B)
+&Online documentation	在线文档(&O)
+S&upport	获取帮助(&U)
+&Quit	退出(&Q)
+Quit an&d save position	保存进度并退出(&D)
+Apply &Picture Preset	应用画质预设 (&P)
+&Restore Previous Picture Settings	还原应用前画质 (&R)
+Apply &Subtitle Style	应用字幕样式 (&S)
+Restore Previous Sub&title Settings	还原应用前字幕 (&T)
+Shaders (&G)	着色器 (&G)
+Ani4Kv2 Upscaling	Ani4Kv2 放大
+AniSD Upscaling	AniSD 放大
+FSRCNNX Upscaling	FSRCNNX 放大
+NNEDI3 Upscaling	NNEDI3 放大
+Anime4K Restoration	Anime4K 画面重建
+Anime4K Upscaling	Anime4K 放大
+k7 modernAnime Upscaling	k7 modernAnime 放大
+k7 modernAnime DT Upscaling	k7 modernAnime DT 放大
+QCOM Scaling and Sharpening	QCOM 缩放锐化
+Adaptive Sharpen	Adaptive Sharpen 锐化
+&Clear All Shaders	清空全部着色器 (&C)
+Save as Default Settings	保存为默认设置
+Reloading current file...	正在重新加载当前文件…
+VapourSynth Presets	VapourSynth 滤镜
+MVTools Interpolation	MVTools 补帧
+RIFE Vulkan Interpolation	RIFE Vulkan 补帧
+CCD Chroma Denoise	CCD 彩噪抑制
+BM3D CPU Luma Denoise	BM3D CPU 亮度降噪
+Turn Off VapourSynth Preset	关闭 VapourSynth 滤镜
+Interpolation Multiplier	补帧倍率
+Custom Multiplier…	自定义倍率…

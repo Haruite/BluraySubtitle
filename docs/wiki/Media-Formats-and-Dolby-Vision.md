@@ -141,7 +141,7 @@ Dialogue: 0,0:00:01.00,0:00:04.50,Default,,0,0,0,,First line\NSecond line
 
 `Format:` declares the column order, so a parser should use it instead of assuming one fixed layout. The final `Text` field may contain commas. ASS time normally uses `h:mm:ss.cc`, with centiseconds rather than SRT's milliseconds. `\N` is a forced line break. Override tags inside braces, for example `{\i1}`, `{\pos(960,900)}`, or `{\fad(200,200)}`, can change style, position, animation, drawing, and karaoke for part of an event.
 
-`PlayResX` and `PlayResY` define the script coordinate system; changing them without scaling styles and positions changes the rendered layout. A style's `Fontname` refers to the font's internal family name, which may differ from its filename. Distributing the referenced fonts is therefore part of preserving an ASS presentation.
+`PlayResX` and `PlayResY` define the script coordinate system; changing them without scaling styles and positions changes the rendered layout. A style's `Fontname` and the inline `\fn` tag use the font's internal family name, which may differ from its filename. Distributing the referenced fonts is therefore part of preserving an ASS presentation.
 
 ASS/SSA can be:
 
@@ -150,6 +150,8 @@ ASS/SSA can be:
 - rendered to video or converted to a bitmap subtitle format.
 
 Inside Matroska, the global script and style sections are stored as codec private data for `S_TEXT/ASS`/`S_TEXT/SSA`, while each event is stored in a timed block. Fonts should be normal Matroska attachments rather than legacy uuencoded `[Fonts]` data.
+
+See [Installing subtitle fonts](#installing-subtitle-fonts) for Linux playback.
 
 ### PGS / Presentation Graphics
 
@@ -195,6 +197,37 @@ TextST is the Blu-ray text-subtitle format associated with stream type `0x92`. I
 | Hardsub | Pixels encoded into video | No | No, after encoding |
 
 Converting ASS to PGS keeps subtitles selectable but rasterizes their appearance at a chosen resolution and frame/timing model. Hardsubbing rasterizes directly into the video and then subjects the result to video encoding.
+
+## Linux desktop playback with mpv
+
+Run the [Linux setup script](../../README.md#setup_linux_environmentsh-linux-runtime-environment) and reopen mpv. The language selected during setup applies to the uosc playback controls and the right-click menu. The desktop interface uses the display's DPI. The standard user configuration directory is `~/.config/mpv/`.
+
+### Picture, subtitles, and shaders
+
+- Right-click and open **mpv-lazy** to apply the picture or subtitle preset. Each preset has a **Restore Previous** command. The picture preset enables display-synchronized interpolation and sets the shader list to QCOM Scaling and Sharpening. The subtitle preset sets the size, outline, color, and track preferences using the player's current font.
+- Use **mpv-lazy → Shaders** to toggle any of the 10 shaders or clear the list. Upscaling shaders run when their scaling conditions are met. Compute shaders such as k7 modernAnime require a renderer and driver with the relevant GPU features. Applying several expensive shaders can cause dropped frames. [mpv-lazy shader guide](https://github.com/hooke007/mpv_PlayKit/wiki/4_GLSL)
+- Use **Save as Default Settings** to apply the current picture, subtitle, and shader settings at the next launch. mpv reads these choices from `bluray-defaults.conf`.
+
+Setup verifies the downloaded Ani4Kv2, AniSD, and QCOM shaders against the pinned mpv-lazy release. The Ani4Kv2 and AniSD model weights are for noncommercial use under CC BY-NC 4.0. [Shader sources and licenses](../../third_party/mpv_lazy_shaders/COPYRIGHT.md)
+
+### Installing subtitle fonts
+
+mpv loads matching font attachments from Matroska (MKV) by default. For a separate font archive, unpack the `.ttf`, `.otf`, and `.ttc` files. [mpv subtitle options](https://mpv.io/manual/stable/#subtitles)
+
+- **mpv only**. Copy the files directly into the `fonts/` subdirectory of the active mpv configuration directory, usually `~/.config/mpv/fonts/`. Create the folder if needed. [mpv configuration directories](https://mpv.io/manual/stable/#files)
+- **Current desktop user**. Copy the files into a subdirectory of `~/.local/share/fonts/` (or `$XDG_DATA_HOME/fonts/` if set), and run `fc-cache -f`. This also suits large font packs because mpv preloads files in its own font directory into memory. [Fontconfig user guide](https://fontconfig.pages.freedesktop.org/fontconfig/fontconfig-user.html)
+
+Reopen mpv and load the matching ASS track. For an external subtitle, pass `--sub-file`. Add `-v` and look for `fontselect` in the log to see which font libass selected.
+
+```sh
+mpv --sub-file="/path/to/episode.ass" "/path/to/episode.mkv"
+```
+
+### VapourSynth filters
+
+- In **VapourSynth Presets**, select MVTools or RIFE for frame interpolation, CCD for chroma denoising, or BM3D for CPU luma denoising. Select the active filter again to turn it off. Selecting a different filter replaces the active one.
+- **Interpolation Multiplier** applies to both MVTools and RIFE and defaults to 2×. Enter a decimal or a fraction such as `2.5` or `5/2` to use a custom multiplier. Values must be greater than 1× and at most 10×, with a reduced denominator no greater than 100. The choice is saved immediately and reused the next time mpv starts.
+- RIFE uses the source resolution and appears only if Vulkan can render a test frame. The compatibility build on Ubuntu 22.04 and Debian 12 uses OpenGL with the default mpv renderer, which can limit shader compatibility.
 
 ## Dolby Vision fundamentals
 

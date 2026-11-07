@@ -430,6 +430,7 @@ is_remote_ssh() {
 # inherited by the --in-tmux child via the BLURAY_LANG environment variable.
 # ---------------------------------------------------------------------------
 select_language
+export BLURAY_LANG
 
 log "$(msg 'Recommended terminal: Xshell or PuTTY for remote execution' '推荐使用 Xshell 或 PuTTY 远程执行命令')"
 
@@ -437,7 +438,7 @@ if [[ "${1:-}" != "--in-tmux" && -z "${TMUX:-}" && -t 1 ]]; then
   if is_remote_ssh; then
     ensure_tmux_installed
     args_escaped="$(printf '%q ' "$@")"
-    exec tmux new-session -A -s BluraySubtitle "bash -lc \"bash \\\"$0\\\" --in-tmux ${args_escaped}; echo; echo '[BluraySubtitle][SETUP] $(msg 'Script finished (scroll up to review output, press Ctrl+b d to detach from tmux)' '脚本已结束（可滚动查看上方输出，按 Ctrl+b d 退出 tmux）')'; exec bash\"" \; set -g mouse off \; set -g status off \; set -g remain-on-exit off
+    exec tmux new-session -A -s BluraySubtitle -e "BLURAY_LANG=$BLURAY_LANG" "bash -lc \"bash \\\"$0\\\" --in-tmux ${args_escaped}; echo; echo '[BluraySubtitle][SETUP] $(msg 'Script finished (scroll up to review output, press Ctrl+b d to detach from tmux)' '脚本已结束（可滚动查看上方输出，按 Ctrl+b d 退出 tmux）')'; exec bash\"" \; set -g mouse off \; set -g status off \; set -g remain-on-exit off
   fi
 fi
 if [[ "${1:-}" == "--in-tmux" ]]; then
@@ -1063,8 +1064,28 @@ __ffmpeg_has_libopus() {
   "$executable" -hide_banner -h encoder=libopus 2>&1 | grep '^Encoder libopus' >/dev/null
 }
 
+test_mpv_vapoursynth() (
+  local executable="$1" probe_dir probe_file output LC_ALL=C
+  "$executable" --no-config --vf=help 2>/dev/null | grep -E '^[[:space:]]+vapoursynth[[:space:]]' >/dev/null || return 1
+  probe_dir="$(mktemp -d)" || return 1
+  trap 'rm -rf -- "$probe_dir"' EXIT
+  probe_file="$probe_dir/probe.vpy"
+  printf '%s\n' 'assert user_data in ("bluray-probe", b"bluray-probe")' \
+    'video_in.std.AddBorders(left=8, right=8).set_output()' > "$probe_file" || return 1
+
+  # mpv can continue playback after a filter fails. Verify the filtered frame size.
+  if ! output="$(timeout 20s "$executable" --no-config --load-scripts=no --load-select=no \
+      --no-audio --ao=null --vo=null --frames=2 --msg-level=all=warn,cplayer=info \
+      "--vf=vapoursynth=file=%${#probe_file}%$probe_file:user-data=bluray-probe" \
+      'av://lavfi:testsrc2=size=64x48:rate=24' 2>&1)" \
+    || [[ "$output" != *'VO: [null] 80x48 '* ]]; then
+    printf '%s\n' "$output" >&2
+    return 1
+  fi
+)
+
 install_mpv() {
-  log "$(msg 'Installing mpv with stable FFmpeg / FFprobe (mpv-build with dovi_tool)' '安装 mpv 与稳定版 FFmpeg / FFprobe（使用包含 dovi_tool 的 mpv-build）')"
+  log "$(msg 'Installing mpv with VapourSynth and stable FFmpeg / FFprobe' '安装支持 VapourSynth 的 mpv 与稳定版 FFmpeg / FFprobe')"
 
   local required_mpv_version="0.41.0"
   local ffmpeg_tag target_ffmpeg_version installed_ffmpeg_version installed_ffprobe_version ffmpeg_is_current="false"
@@ -1101,15 +1122,17 @@ install_mpv() {
     local current_mpv_version
     current_mpv_version="$(mpv --version 2>/dev/null | head -n 1 | grep -oP 'mpv\s+v?\K[0-9]+(\.[0-9]+){1,2}' || true)"
     if [[ -n "${current_mpv_version:-}" ]] && dpkg --compare-versions "$current_mpv_version" ge "$required_mpv_version"; then
-      if ! has_libdovi_development; then
-        log "$(msg 'mpv installed but libdovi development files are missing, installing libdovi' '检测到 mpv 已安装但缺少 libdovi 开发文件，尝试安装 libdovi')"
-        install_libdovi
-      fi
-      if [[ "$ffmpeg_is_current" == "true" ]]; then
-        log "$(msg "mpv, FFmpeg, FFprobe, and libopus support already satisfy the requirements (${current_mpv_version}; ${installed_ffmpeg_version}/${installed_ffprobe_version}), skipping" "mpv、FFmpeg、FFprobe 与 libopus 支持均已满足要求（${current_mpv_version}；${installed_ffmpeg_version}/${installed_ffprobe_version}），跳过编译安装")"
+      if [[ "$ffmpeg_is_current" == "true" ]] \
+        && mpv --no-config --list-properties | grep -E '^[[:space:]]+default-menu$' >/dev/null \
+        && test_mpv_vapoursynth mpv; then
+        if ! has_libdovi_development; then
+          log "$(msg 'mpv installed but libdovi development files are missing, installing libdovi' '检测到 mpv 已安装但缺少 libdovi 开发文件，尝试安装 libdovi')"
+          install_libdovi
+        fi
+        log "$(msg "mpv with working VapourSynth and FFmpeg / FFprobe with libopus satisfy the requirements, skipping" "mpv 的 VapourSynth 滤镜和 FFmpeg / FFprobe 的 libopus 支持均满足要求，跳过编译安装")"
         return 0
       fi
-      log "$(msg "mpv is current, but FFmpeg / FFprobe ${target_ffmpeg_version} with libopus support is required; rebuilding them together with mpv" "mpv 已满足要求，但需要带 libopus 支持的 FFmpeg / FFprobe ${target_ffmpeg_version}；将与 mpv 一并重新编译")"
+      log "$(msg "Rebuilding mpv with VapourSynth and FFmpeg / FFprobe ${target_ffmpeg_version} with libopus" "重新编译支持 VapourSynth 的 mpv，以及带 libopus 支持的 FFmpeg / FFprobe ${target_ffmpeg_version}")"
     else
       log "$(msg "System mpv version is too old (${current_mpv_version:-unknown} < ${required_mpv_version}), rebuilding from source" "检测到系统 mpv 版本较旧（${current_mpv_version:-unknown} < ${required_mpv_version}），将从源码编译升级")"
     fi
@@ -1191,13 +1214,13 @@ install_mpv() {
     tmux_run "$(msg 'Download mpv-build' '下载 mpv-build')" git clone https://github.com/mpv-player/mpv-build.git || exit 1
     cd mpv-build || exit 1
 
-    rm -rf mpv/build ffmpeg/build libass/build 2>/dev/null || true
     tmux_run "$(msg 'Select the latest stable FFmpeg release' '选择最新稳定版 FFmpeg')" ./use-ffmpeg-release || exit 1
 
     echo "--enable-libbluray" > ffmpeg_options || exit 1
     echo "--enable-libdav1d" >> ffmpeg_options || exit 1
     echo "--enable-libopus" >> ffmpeg_options || exit 1
     echo "-Dlibbluray=enabled" > mpv_options || exit 1
+    echo "-Dvapoursynth=enabled" >> mpv_options || exit 1
     if [[ "$is_ubuntu_2204" == "true" ]]; then
       # Ubuntu 22.04's rst2man rejects the --output option used by current mpv.
       echo "-Dmanpage-build=disabled" >> mpv_options || exit 1
@@ -1212,8 +1235,15 @@ EOF
 
     export PKG_CONFIG_PATH="/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/aarch64-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:${HOME}/.local/lib/pkgconfig:${HOME}/.local/lib/x86_64-linux-gnu/pkgconfig:${HOME}/.local/lib/aarch64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
     export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"
+    pkg-config --atleast-version=56 vapoursynth-script \
+      || die "$(msg 'mpv requires VapourSynth VSScript development files version 56 or later' 'mpv 需要 VapourSynth VSScript 56 或更高版本的开发文件')"
 
-    tmux_run "mpv-build rebuild" "${mpv_build_env[@]}" ./rebuild -j"$(nproc)" || exit 1
+    tmux_run "mpv-build update" "${mpv_build_env[@]}" ./update || exit 1
+    # FFmpeg can write generated resources before make creates their directory.
+    mkdir -p ffmpeg_build/fftools/resources || exit 1
+    tmux_run "mpv-build build" "${mpv_build_env[@]}" ./build -j"$(nproc)" || exit 1
+    test_mpv_vapoursynth "$PWD/mpv/build/mpv" \
+      || die "$(msg 'The rebuilt mpv failed the VapourSynth playback check' '重新编译的 mpv 未通过 VapourSynth 播放验证')"
     tmux_run "mpv-build install" sudo env PYTHONNOUSERSITE=1 "PATH=$PATH" "PKG_CONFIG_PATH=${PKG_CONFIG_PATH:-}" ./install || exit 1
     install_configured_executable build_libs/bin/ffmpeg "$FFMPEG_PATH" || exit 1
     install_configured_executable build_libs/bin/ffprobe "$FFPROBE_PATH" || exit 1
@@ -1228,11 +1258,33 @@ EOF
     || ! __ffmpeg_has_libopus "$FFMPEG_PATH"; then
     die "$(msg 'Installed FFmpeg / FFprobe version or libopus support verification failed' '安装后的 FFmpeg / FFprobe 版本或 libopus 支持校验失败')"
   fi
-  log "$(msg "mpv, FFmpeg, FFprobe, and libopus support installation complete (${installed_ffmpeg_version}/${installed_ffprobe_version})" "mpv、FFmpeg、FFprobe 与 libopus 支持安装完成（${installed_ffmpeg_version}/${installed_ffprobe_version}）")"
+  log "$(msg "mpv with VapourSynth and FFmpeg / FFprobe with libopus installed (${installed_ffmpeg_version}/${installed_ffprobe_version})" "已安装支持 VapourSynth 的 mpv，以及带 libopus 支持的 FFmpeg / FFprobe（${installed_ffmpeg_version}/${installed_ffprobe_version}）")"
   if [[ "$needs_meson_prebuild" != "true" ]]; then
     ensure_meson_version
   fi
 }
+
+install_mpv_desktop() (
+  local build_dir installer status
+  installer="$(dirname -- "$BLURAY_SETUP_SOURCE")/tools/mpv/install.py"
+  status="$(python3 "$installer" --status "$BLURAY_LANG" "$PLUGIN_PATH")" \
+    || die "$(msg 'Could not check the mpv desktop configuration' '无法检查 mpv 桌面配置')"
+  if [[ "$status" == "ready" ]]; then
+    log "$(msg 'mpv desktop configuration is complete, skipping installation' 'mpv 桌面配置已就绪，跳过安装')"
+    return 0
+  fi
+
+  build_dir="$(bluray_mktemp_dir)"
+  trap 'rm -rf -- "$build_dir"' EXIT
+
+  log "$(msg 'Installing uosc, the mpv menu, shaders and playback presets' '安装 uosc、mpv 菜单、着色器和播放预设')"
+  tmux_run "uosc download" wget -q --timeout=30 --tries=3 -O "$build_dir/uosc.zip" \
+    https://github.com/tomasklaen/uosc/releases/latest/download/uosc.zip \
+    || die "$(msg 'Could not download the uosc release' '无法下载 uosc 发布包')"
+  unzip -q "$build_dir/uosc.zip" -d "$build_dir/uosc"
+  python3 "$installer" "$build_dir/uosc" "$BLURAY_LANG" "$PLUGIN_PATH" \
+    || die "$(msg 'Could not configure the mpv desktop' '无法配置 mpv 桌面界面')"
+)
 
 # ---------------------------------------------------------------------------
 # L-SMASH
@@ -1957,7 +2009,9 @@ install_vapoursynth() {
       die "$(msg "Cython version too low ($CYTHON_V); VapourSynth requires >= 3.0.0" "Cython 版本过低 ($CYTHON_V)，编译 VapourSynth 需要 3.0.0 以上版本")"
   fi
 
-  local deps=(build-essential autoconf automake libtool pkg-config python3-dev cython3 libzimg-dev libmagick++-dev libtesseract-dev python3-sphinx wget tar)
+  local deps=(build-essential autoconf automake libtool pkg-config python3-dev cython3 libzimg-dev
+    libmagick++-dev libtesseract-dev libass-dev libavcodec-dev libavformat-dev libavutil-dev
+    libswscale-dev python3-sphinx wget tar)
   local missing_deps=()
   for dep in "${deps[@]}"; do
     if ! dpkg-query -W -f='${Status}' "$dep" 2>/dev/null | grep -q "install ok installed"; then
@@ -2793,6 +2847,130 @@ PY
 }
 
 # ---------------------------------------------------------------------------
+# Desktop VapourSynth plugins
+# ---------------------------------------------------------------------------
+
+test_desktop_vs_plugin() {
+  timeout 45s python3 -I - "$1" "$2" <<'PY'
+import sys
+
+import vapoursynth as vs
+
+def check_frame(name, path):
+    core = vs.core
+    core.std.LoadPlugin(path=path)
+    pixel_format = vs.PresetFormat.GRAY8 if name == "bm3d" else vs.PresetFormat.RGBS
+    clip = core.std.BlankClip(width=96, height=64, format=pixel_format, length=3, fpsnum=24)
+    if name == "ccd":
+        result = core.ccd.CCD(clip, threshold=4.0)
+    elif name == "bm3d":
+        result = core.bm3d.Basic(clip, sigma=[3.0])
+    else:
+        result = core.rife.RIFE(clip, model=23, gpu_thread=1, skip=False)
+        if result.fps != 48:
+            raise RuntimeError("RIFE did not double the frame rate")
+    frame = result.get_frame(1)
+    if (frame.width, frame.height) != (96, 64):
+        raise RuntimeError(f"{name} produced unexpected frame dimensions")
+
+
+check_frame(*sys.argv[1:])
+PY
+}
+
+build_desktop_vs_plugin() (
+  local name="$1" repository="$2" tag="$3" library="$4" build_dir
+  if ! vs_plugin_needs_upgrade "$library" "$tag"; then
+    return 0
+  fi
+
+  if [[ "$name" == "bm3d" ]] && ! pkg-config --exists fftw3f; then
+    apt_update
+    apt_install libfftw3-dev
+  fi
+
+  build_dir="$(bluray_mktemp_dir)"
+  trap 'rm -rf -- "$build_dir"' EXIT
+  cd "$build_dir"
+  log "$(msg "Building VapourSynth ${name} ${tag}" "编译 VapourSynth ${name} ${tag}")"
+  tmux_run "${name} ${tag} download" wget -O source.tar.gz "${repository%.git}/archive/refs/tags/${tag}.tar.gz"
+  tar -xzf source.tar.gz --strip-components=1
+
+  if [[ "$name" == "bm3d" ]]; then
+    # Classic lacks the upstream Python get_include() helper. Use its pkg-config headers.
+    sed -i \
+      -e '/import vapoursynth as vs; print(vs.get_include())/d' \
+      -e "s/dependencies: dependency('fftw3f'),/dependencies: [dependency('fftw3f'), dependency('vapoursynth').partial_dependency(includes: true, compile_args: true)],/" \
+      meson.build
+  fi
+
+  tmux_run "${name} meson setup" meson setup build -Db_lto=false
+  tmux_run "${name} ninja" ninja -C build
+  test_desktop_vs_plugin "$name" "$build_dir/build/$library" \
+    || die "$(msg "${name} failed to render a test frame" "${name} 未通过测试帧渲染验证")"
+  install -m 0755 "build/$library" "$PLUGIN_PATH/$library"
+  vs_plugin_version record "$library" "$tag"
+)
+
+install_desktop_vs_rife() (
+  local repository="https://github.com/styler00dollar/VapourSynth-RIFE-ncnn-Vulkan"
+  local library="librife_linux_x86-64.so"
+  # The upstream release supports Jammy's glibc. Model 23 is RIFE 4.6.
+  local model_dir="models/rife-v4.6_ensembleFalse"
+  local tag version build_dir model_file report
+
+  if ! /sbin/ldconfig -p 2>/dev/null | grep -F 'libvulkan.so.1' >/dev/null; then
+    log "$(msg 'Skipping RIFE: the Vulkan runtime is unavailable' '跳过 RIFE：系统缺少 Vulkan 运行时')"
+    return 0
+  fi
+
+  tag="$(latest_stable_tag "${repository}.git" '^r9_mod_v[0-9]+$' 'r9_mod_v*')"
+  version="9+mod.${tag##*_v}"
+  if ! vs_plugin_needs_upgrade "$library" "$version" \
+    && [[ -s "$PLUGIN_PATH/$model_dir/flownet.bin" && -s "$PLUGIN_PATH/$model_dir/flownet.param" ]]; then
+    return 0
+  fi
+
+  build_dir="$(bluray_mktemp_dir)"
+  trap 'rm -rf -- "$build_dir"' EXIT
+  cd "$build_dir"
+  log "$(msg "Installing RIFE ${tag} with the 4.6 model" "安装 RIFE ${tag} 和 4.6 模型")"
+  tmux_run "RIFE ${tag} download" wget -O "$library" "${repository}/releases/download/${tag}/${library}"
+  if ! report="$(LC_ALL=C ldd -r "./$library" 2>&1)" || [[ "$report" == *'not found'* || "$report" == *'undefined symbol'* ]]; then
+    printf '%s\n' "$report" >&2
+    log "$(msg 'Skipping RIFE: the Linux binary is incompatible with this system' '跳过 RIFE：Linux 二进制包与本机系统不兼容')"
+    return 0
+  fi
+
+  mkdir -p "$model_dir"
+  for model_file in flownet.bin flownet.param; do
+    tmux_run "RIFE model ${model_file} download" wget -O "$model_dir/$model_file" \
+      "https://raw.githubusercontent.com/${repository#https://github.com/}/${tag}/${model_dir}/${model_file}"
+  done
+  if ! report="$(test_desktop_vs_plugin rife "$build_dir/$library" 2>&1)" \
+    || [[ "$report" == *'failed'* ]]; then
+    printf '%s\n' "$report" >&2
+    log "$(msg 'Skipping RIFE: the Vulkan frame test failed' '跳过 RIFE：Vulkan 测试帧渲染失败')"
+    return 0
+  fi
+
+  install -d "$PLUGIN_PATH/$model_dir"
+  install -m 0644 "$model_dir/flownet.bin" "$model_dir/flownet.param" "$PLUGIN_PATH/$model_dir/"
+  install -m 0755 "$library" "$PLUGIN_PATH/$library"
+  vs_plugin_version record "$library" "$version"
+)
+
+install_desktop_vs_plugins() {
+  local ccd_repository="https://github.com/End-of-Eternity/vs-ccd.git" ccd_tag
+  ccd_tag="$(latest_stable_tag "$ccd_repository" '^v[0-9]+([.][0-9]+)+$' 'v*')"
+  build_desktop_vs_plugin ccd "$ccd_repository" "$ccd_tag" libccd.so
+
+  # BM3D r11 and newer require VapourSynth API 4.2; Classic provides API 4.0.
+  build_desktop_vs_plugin bm3d https://github.com/HomeOfVapourSynthEvolution/VapourSynth-BM3D.git r10.1 bm3d.so
+  install_desktop_vs_rife
+}
+
+# ---------------------------------------------------------------------------
 # Desktop shortcuts
 # ---------------------------------------------------------------------------
 
@@ -2967,7 +3145,7 @@ repair_broken_apt_state
 
 sys_deps=(
   python3 python3-pip python3-venv cmake ninja-build git
-  wget fonts-wqy-microhei flac gedit
+  wget unzip fonts-wqy-microhei flac gedit
   libegl1 libopengl0 libglib2.0-0 libxkbcommon0 libdbus-1-3
   libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0
   libxcb-xinerama0 libxcb-xinput0 libxcb-render-util0
@@ -2998,6 +3176,7 @@ log "$(msg "Using tool paths from ${SETTINGS_FILE}" "使用 ${SETTINGS_FILE} 中
 install_shaderc_fix
 install_mkvtoolnix
 sync_mkvtoolnix_paths
+install_vapoursynth
 install_mpv
 install_x264
 install_x265
@@ -3007,13 +3186,14 @@ install_dovi_tool
 install_hdr10plus_tool
 install_fdk_aac
 install_flac
-install_vapoursynth
 install_descale
 ensure_modern_7zip_cli
 install_vapoursynth_scripts
 install_vapoursynth_editor
 install_lsmash
 build_vs_plugins
+install_desktop_vs_plugins
+install_mpv_desktop
 install_desktop_shortcuts
 
 install_bluray_python_deps
