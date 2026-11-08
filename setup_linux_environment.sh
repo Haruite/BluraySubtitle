@@ -1241,7 +1241,7 @@ install_mpv() {
     download_source_archive mpv-build \
       https://github.com/mpv-player/mpv-build/archive/refs/heads/master.tar.gz . || exit 1
     download_source_archive "FFmpeg ${target_ffmpeg_version}" \
-      "https://ffmpeg.org/releases/ffmpeg-${target_ffmpeg_version}.tar.xz" ffmpeg || exit 1
+      "${FFMPEG_SOURCE_REPOSITORY%.git}/archive/refs/tags/${ffmpeg_tag}.tar.gz" ffmpeg || exit 1
     download_source_archive "mpv ${mpv_tag}" \
       "https://github.com/mpv-player/mpv/archive/refs/tags/${mpv_tag}.tar.gz" mpv || exit 1
     download_source_archive "libass ${libass_tag}" \

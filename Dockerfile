@@ -154,7 +154,7 @@ RUN set -eux; \
     bash /tmp/build-tools/download_source_archive.sh \
       https://github.com/mpv-player/mpv-build/archive/refs/heads/master.tar.gz .; \
     bash /tmp/build-tools/download_source_archive.sh \
-      "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_TAG#[nN]}.tar.xz" ffmpeg; \
+      "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n${FFMPEG_TAG#[nN]}.tar.gz" ffmpeg; \
     bash /tmp/build-tools/download_source_archive.sh \
       "https://github.com/mpv-player/mpv/archive/refs/tags/${MPV_TAG}.tar.gz" mpv; \
     bash /tmp/build-tools/download_source_archive.sh \
