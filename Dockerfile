@@ -152,13 +152,13 @@ RUN set -eux; \
     test -n "$LIBPLACEBO_TAG"; \
     mkdir -p /tmp/mpv && cd /tmp/mpv; \
     bash /tmp/build-tools/download_source_archive.sh \
-      https://github.com/mpv-player/mpv-build/archive/refs/heads/master.tar.gz .; \
+      https://codeload.github.com/mpv-player/mpv-build/tar.gz/refs/heads/master .; \
     bash /tmp/build-tools/download_source_archive.sh \
-      "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n${FFMPEG_TAG#[nN]}.tar.gz" ffmpeg; \
+      "https://codeload.github.com/FFmpeg/FFmpeg/tar.gz/refs/tags/n${FFMPEG_TAG#[nN]}" ffmpeg; \
     bash /tmp/build-tools/download_source_archive.sh \
-      "https://github.com/mpv-player/mpv/archive/refs/tags/${MPV_TAG}.tar.gz" mpv; \
+      "https://codeload.github.com/mpv-player/mpv/tar.gz/refs/tags/${MPV_TAG}" mpv; \
     bash /tmp/build-tools/download_source_archive.sh \
-      "https://github.com/libass/libass/archive/refs/tags/${LIBASS_TAG}.tar.gz" libass; \
+      "https://codeload.github.com/libass/libass/tar.gz/refs/tags/${LIBASS_TAG}" libass; \
     git clone --depth 1 --branch "$LIBPLACEBO_TAG" --recurse-submodules=3rdparty --shallow-submodules \
       https://github.com/haasn/libplacebo.git libplacebo; \
     echo "--enable-libbluray" > ffmpeg_options; \

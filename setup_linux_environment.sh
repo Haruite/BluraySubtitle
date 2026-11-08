@@ -1228,7 +1228,8 @@ install_mpv() {
   export PATH="/usr/local/bin:${HOME}/.local/bin:${PATH:-}"
   ensure_dav1d_for_mpv
 
-  local build_dir mpv_tag libass_tag libplacebo_tag
+  local build_dir ffmpeg_repository_path mpv_tag libass_tag libplacebo_tag
+  ffmpeg_repository_path="${FFMPEG_SOURCE_REPOSITORY#https://github.com/}"
   mpv_tag="$(latest_stable_tag https://github.com/mpv-player/mpv.git '^v[0-9]+([.][0-9]+)+$' 'v*')"
   libass_tag="$(latest_stable_tag https://github.com/libass/libass.git '^[0-9]+([.][0-9]+)+$')"
   libplacebo_tag="$(latest_stable_tag https://github.com/haasn/libplacebo.git '^v[0-9]+([.][0-9]+)+$' 'v*')"
@@ -1239,13 +1240,13 @@ install_mpv() {
 
     # Supply the source directories directly because mpv-build's update step clones them.
     download_source_archive mpv-build \
-      https://github.com/mpv-player/mpv-build/archive/refs/heads/master.tar.gz . || exit 1
+      https://codeload.github.com/mpv-player/mpv-build/tar.gz/refs/heads/master . || exit 1
     download_source_archive "FFmpeg ${target_ffmpeg_version}" \
-      "${FFMPEG_SOURCE_REPOSITORY%.git}/archive/refs/tags/${ffmpeg_tag}.tar.gz" ffmpeg || exit 1
+      "https://codeload.github.com/${ffmpeg_repository_path%.git}/tar.gz/refs/tags/${ffmpeg_tag}" ffmpeg || exit 1
     download_source_archive "mpv ${mpv_tag}" \
-      "https://github.com/mpv-player/mpv/archive/refs/tags/${mpv_tag}.tar.gz" mpv || exit 1
+      "https://codeload.github.com/mpv-player/mpv/tar.gz/refs/tags/${mpv_tag}" mpv || exit 1
     download_source_archive "libass ${libass_tag}" \
-      "https://github.com/libass/libass/archive/refs/tags/${libass_tag}.tar.gz" libass || exit 1
+      "https://codeload.github.com/libass/libass/tar.gz/refs/tags/${libass_tag}" libass || exit 1
     # The libplacebo tag archive omits the bundled build dependencies.
     tmux_run "$(msg "Download libplacebo ${libplacebo_tag}" "下载 libplacebo ${libplacebo_tag}")" \
       git clone --depth 1 --branch "$libplacebo_tag" --recurse-submodules=3rdparty --shallow-submodules \
