@@ -336,7 +336,7 @@ function Remove-SetupTempRoot {
 }
 
 function Get-SystemProxyDescription {
-    $testUri = [Uri]"https://github.com/"
+    $testUri = [Uri]"https://api.github.com/"
     $proxy = [Net.WebRequest]::DefaultWebProxy
     if ($null -eq $proxy) {
         return "DIRECT"
@@ -383,8 +383,16 @@ function Invoke-SetupDownload {
     $destinationDirectory = Split-Path -Parent $Destination
     [IO.Directory]::CreateDirectory($destinationDirectory) | Out-Null
     $fileName = [IO.Path]::GetFileName($Destination)
+    $githubReleaseAsset = (
+        $Uri.Scheme -eq "https" -and $Uri.Host -eq "api.github.com" -and
+        $Uri.AbsolutePath -match '^/repos/[^/]+/[^/]+/releases/assets/[0-9]+$'
+    )
     $client = New-SetupHttpClient
     try {
+        if ($githubReleaseAsset) {
+            $client.DefaultRequestHeaders.Accept.ParseAdd("application/octet-stream")
+            $client.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28")
+        }
         for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
             Write-SetupInfo `
                 "Downloading $fileName (attempt $attempt/$Attempts): $Uri" `
@@ -396,6 +404,13 @@ function Invoke-SetupDownload {
                 ).GetAwaiter().GetResult()
                 try {
                     $response.EnsureSuccessStatusCode() | Out-Null
+                    $contentType = $response.Content.Headers.ContentType
+                    if ($githubReleaseAsset -and $null -ne $contentType -and
+                        ($contentType.MediaType -like "*json" -or $contentType.MediaType -eq "text/html")) {
+                        throw (Get-SetupText `
+                            "GitHub returned metadata or HTML for the release asset $fileName." `
+                            "GitHub 为发布附件 $fileName 返回了元数据或网页。")
+                    }
                     $inputStream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
                     try {
                         $outputStream = New-Object IO.FileStream(
@@ -654,7 +669,7 @@ function Get-GitHubLatestReleaseAsset {
     $result = [pscustomobject]@{
         Version = $version
         Name = [string]$asset.name
-        Uri = [Uri]$asset.browser_download_url
+        Uri = [Uri]$asset.url
         Sha256 = $sha256
         Size = [long]$asset.size
         AssetUpdatedAtUtc = [string]$asset.updated_at

@@ -102,6 +102,38 @@ RUN set -eux; \
     ensure_meson_version; \
     python3 -m pip install --break-system-packages --upgrade cython || python3 -m pip install --upgrade cython
 
+COPY <<'DOWNLOAD_GITHUB_RELEASE_ASSET' /tmp/build-tools/download_github_release_asset.sh
+set -euo pipefail
+
+repository="${1#https://github.com/}"
+tag="$2"
+asset_name="$3"
+output="${4:-$asset_name}"
+releases_url="https://api.github.com/repos/${repository%.git}/releases"
+release_url="${releases_url}/latest"
+curl_options=(-fsSL --retry 4 --retry-connrefused --connect-timeout 30 --speed-time 30 --speed-limit 1
+  -H 'X-GitHub-Api-Version: 2022-11-28')
+
+if [[ -n "$tag" ]]; then
+  release_url="${releases_url}/tags/${tag}"
+fi
+release="$(curl "${curl_options[@]}" -H 'Accept: application/vnd.github+json' "$release_url")"
+asset_id="$(python3 -c '
+import json
+import sys
+
+for asset in json.load(sys.stdin)["assets"]:
+    if asset["name"] == sys.argv[1]:
+        print(asset["id"])
+        break
+' "$asset_name" <<< "$release")"
+test -n "$asset_id"
+
+content_type="$(curl "${curl_options[@]}" -H 'Accept: application/octet-stream' \
+  -o "$output" -w '%{content_type}' "${releases_url}/assets/${asset_id}")"
+[[ "$content_type" != *json* && "$content_type" != text/html* ]]
+DOWNLOAD_GITHUB_RELEASE_ASSET
+
 RUN set -eux; \
     DOVI_VER="$(git ls-remote --refs --tags --sort=-version:refname https://github.com/quietvoid/dovi_tool.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')"; \
     test -n "$DOVI_VER"; \
@@ -111,8 +143,9 @@ RUN set -eux; \
       *) echo "unsupported arch for dovi_tool: $(uname -m)" >&2; exit 1 ;; \
     esac; \
     mkdir -p /tmp/dovi && cd /tmp/dovi; \
-    wget -nv "https://github.com/quietvoid/dovi_tool/releases/download/${DOVI_VER}/dovi_tool-${DOVI_VER}-${DOVI_ARCH}-unknown-linux-musl.tar.gz"; \
-    tar zxf "dovi_tool-${DOVI_VER}-${DOVI_ARCH}-unknown-linux-musl.tar.gz"; \
+    DOVI_ARCHIVE="dovi_tool-${DOVI_VER}-${DOVI_ARCH}-unknown-linux-musl.tar.gz"; \
+    bash /tmp/build-tools/download_github_release_asset.sh quietvoid/dovi_tool "$DOVI_VER" "$DOVI_ARCHIVE"; \
+    tar zxf "$DOVI_ARCHIVE"; \
     install -m 0755 dovi_tool /usr/bin/dovi_tool; \
     rm -rf /tmp/dovi
 
@@ -181,7 +214,7 @@ RUN set -eux; \
     LSMASH_TAG="$(git ls-remote --refs --tags --sort=-version:refname https://github.com/l-smash/l-smash.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')"; \
     test -n "$LSMASH_TAG"; \
     mkdir -p /tmp/lsmash && cd /tmp/lsmash; \
-    bash /tmp/build-tools/download_source_archive.sh "https://github.com/l-smash/l-smash/archive/refs/tags/${LSMASH_TAG}.tar.gz" l-smash; \
+    bash /tmp/build-tools/download_source_archive.sh "https://codeload.github.com/l-smash/l-smash/tar.gz/refs/tags/${LSMASH_TAG}" l-smash; \
     cd l-smash; \
     ./configure --enable-shared; \
     make -j"$(nproc)"; \
@@ -197,7 +230,10 @@ tag="${X265_TAG:-$(git ls-remote --refs --tags --sort=-version:refname "$repo" |
 test -n "$tag"
 mkdir -p /tmp/x265
 cd /tmp/x265
-bash /tmp/build-tools/download_source_archive.sh "${repo%.git}/releases/download/${tag}/x265_${tag}.tar.gz" x265
+archive="x265_${tag}.tar.gz"
+bash /tmp/build-tools/download_github_release_asset.sh "$repo" "$tag" "$archive"
+mkdir -p x265
+tar -xf "$archive" --strip-components=1 -C x265
 source_root=/tmp/x265/x265/source
 json11_source="$source_root/dynamicHDR10/json11/json11.cpp"
 if ! grep -Fxq '#include <cstdint>' "$json11_source"; then
@@ -290,7 +326,7 @@ FDK_AAC_TAG="${FDK_AAC_TAG:-$(git ls-remote --refs --tags --sort=-version:refnam
 FDKAAC_TAG="${FDKAAC_TAG:-$(git ls-remote --refs --tags --sort=-version:refname https://github.com/nu774/fdkaac.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')}"
 test -n "$FDK_AAC_TAG"
 test -n "$FDKAAC_TAG"
-bash /tmp/build-tools/download_source_archive.sh "https://github.com/mstorsjo/fdk-aac/archive/refs/tags/${FDK_AAC_TAG}.tar.gz" fdk-aac
+bash /tmp/build-tools/download_source_archive.sh "https://codeload.github.com/mstorsjo/fdk-aac/tar.gz/refs/tags/${FDK_AAC_TAG}" fdk-aac
 cd fdk-aac
 ./autogen.sh
 ./configure --prefix=/usr/local
@@ -298,7 +334,7 @@ make -j"$(nproc)"
 make install
 ldconfig
 cd /tmp/fdk
-bash /tmp/build-tools/download_source_archive.sh "https://github.com/nu774/fdkaac/archive/refs/tags/${FDKAAC_TAG}.tar.gz" fdkaac
+bash /tmp/build-tools/download_source_archive.sh "https://codeload.github.com/nu774/fdkaac/tar.gz/refs/tags/${FDKAAC_TAG}" fdkaac
 cd fdkaac
 autoreconf -fi
 ./configure --prefix=/usr/local
@@ -334,7 +370,7 @@ RUN set -eux; \
     mkdir -p /tmp/vs && cd /tmp/vs; \
     VAPOURSYNTH_TAG="${VAPOURSYNTH_TAG:-$(git ls-remote --refs --tags --sort=-version:refname https://github.com/AmusementClub/vapoursynth-classic.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^R[0-9]+[.]A[0-9]+$/ { print $2; exit }')}"; \
     test -n "$VAPOURSYNTH_TAG"; \
-    wget -nv -O "$VAPOURSYNTH_TAG.tar.gz" "https://github.com/AmusementClub/vapoursynth-classic/archive/refs/tags/${VAPOURSYNTH_TAG}.tar.gz"; \
+    wget -nv -O "$VAPOURSYNTH_TAG.tar.gz" "https://codeload.github.com/AmusementClub/vapoursynth-classic/tar.gz/refs/tags/${VAPOURSYNTH_TAG}"; \
     tar zxvf "$VAPOURSYNTH_TAG.tar.gz"; \
     cd "vapoursynth-classic-${VAPOURSYNTH_TAG}"; \
     if [ -f src/filters/subtext/image.cpp ]; then sed -i 's/avcodec_close(\(.*\));/avcodec_free_context(\&\(\1\));/g' src/filters/subtext/image.cpp; fi; \
@@ -353,7 +389,7 @@ RUN set -eux; \
     DESCALE_REPOSITORY=https://github.com/AmusementClub/descale.git; \
     DESCALE_TAG="$(git ls-remote --refs --tags --sort=-version:refname "$DESCALE_REPOSITORY" 'r*.A*' | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^r[0-9]+[.]A([0-9]+)?$/ { print $2; exit }')"; \
     test -n "$DESCALE_TAG"; \
-    bash /tmp/build-tools/download_source_archive.sh "${DESCALE_REPOSITORY%.git}/archive/refs/tags/${DESCALE_TAG}.tar.gz" vapoursynth-descale; \
+    bash /tmp/build-tools/download_source_archive.sh "https://codeload.github.com/AmusementClub/descale/tar.gz/refs/tags/${DESCALE_TAG}" vapoursynth-descale; \
     cd vapoursynth-descale; \
     sed -i '/vsapi->createVideoFilter/s/data->/d./g' src/vsplugin.cc; \
     meson setup build --buildtype=release; \
@@ -370,7 +406,7 @@ RUN set -eux; \
     VSEDIT_TAG="${VSEDIT_TAG:-$(git ls-remote --refs --tags https://github.com/YomikoR/VapourSynth-Editor.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[rR][0-9]+-mod-[0-9]+([.][0-9]+)*$/ { print tolower($2) "\t" $2 }' | LC_ALL=C sort -k1,1Vr | awk 'NR == 1 { print $2 }')}"; \
     test -n "$VSEDIT_TAG"; \
     mkdir -p /tmp/vsedit/vsedit_build && cd /tmp/vsedit/vsedit_build; \
-    wget -nv -O vsedit.tar.gz "https://github.com/YomikoR/VapourSynth-Editor/archive/refs/tags/${VSEDIT_TAG}.tar.gz"; \
+    wget -nv -O vsedit.tar.gz "https://codeload.github.com/YomikoR/VapourSynth-Editor/tar.gz/refs/tags/${VSEDIT_TAG}"; \
     tar -zxvf vsedit.tar.gz --strip-components=1; \
     ldconfig; \
     cd pro; \
@@ -404,7 +440,7 @@ if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libavcodec; then
   fi
 fi
 bash /tmp/build-tools/download_source_archive.sh \
-  "https://github.com/HomeOfAviSynthPlusEvolution/L-SMASH-Works/archive/${lsmash_commit}.tar.gz" L-SMASH-Works
+  "https://codeload.github.com/HomeOfAviSynthPlusEvolution/L-SMASH-Works/tar.gz/${lsmash_commit}" L-SMASH-Works
 cd L-SMASH-Works/VapourSynth
 python3 - <<'PY'
 import re
@@ -454,7 +490,7 @@ RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     cd /tmp/vsplugins; \
-    wget -nv -O r9.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI3/archive/refs/tags/r9.tar.gz; \
+    wget -nv -O r9.tar.gz https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI3/tar.gz/refs/tags/r9; \
     tar zxvf r9.tar.gz; \
     cd VapourSynth-EEDI3-r9; \
     find . -type f -name EEDI3.cpp -exec sed -i 's/std::max_align_t/max_align_t/g' {} +; \
@@ -465,7 +501,7 @@ RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     cd /tmp/vsplugins; \
-    wget -nv -O r10.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-AddGrain/archive/refs/tags/r10.tar.gz; \
+    wget -nv -O r10.tar.gz https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-AddGrain/tar.gz/refs/tags/r10; \
     tar zxvf r10.tar.gz; \
     cd VapourSynth-AddGrain-r10; \
     meson setup build; ninja -C build; \
@@ -475,7 +511,7 @@ RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     cd /tmp/vsplugins; \
-    bash /tmp/build-tools/download_source_archive.sh https://github.com/AmusementClub/assrender/archive/refs/tags/0.38.4.tar.gz assrender; \
+    bash /tmp/build-tools/download_source_archive.sh https://codeload.github.com/AmusementClub/assrender/tar.gz/refs/tags/0.38.4 assrender; \
     cd assrender; cmake -S . -B build -DCMAKE_BUILD_TYPE=Release; \
     cmake --build build --parallel "$(nproc)"; \
     cp "$(find "$PWD/build" -name libassrender.so -type f | head -n1)" /app/plugins/
@@ -484,7 +520,7 @@ RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     cd /tmp/vsplugins; \
-    wget -nv -O r3.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-Bilateral/archive/refs/tags/r3.tar.gz; \
+    wget -nv -O r3.tar.gz https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-Bilateral/tar.gz/refs/tags/r3; \
     tar zxvf r3.tar.gz; \
     cd VapourSynth-Bilateral-r3; \
     chmod +x configure; \
@@ -496,7 +532,7 @@ RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     cd /tmp/vsplugins; \
-    wget -nv -O r7.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-DFTTest/archive/refs/tags/r7.tar.gz; \
+    wget -nv -O r7.tar.gz https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-DFTTest/tar.gz/refs/tags/r7; \
     tar zxvf r7.tar.gz; \
     cd VapourSynth-DFTTest-r7; \
     meson setup build -Dcpp_link_args=-lfftw3f_threads; ninja -C build; \
@@ -506,7 +542,7 @@ RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     cd /tmp/vsplugins; \
-    wget -nv -O r7.1.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI2/archive/refs/tags/r7.1.tar.gz; \
+    wget -nv -O r7.1.tar.gz https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI2/tar.gz/refs/tags/r7.1; \
     tar zxvf r7.1.tar.gz; \
     cd VapourSynth-EEDI2-r7.1; \
     meson setup build; ninja -C build; \
@@ -516,7 +552,7 @@ RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     cd /tmp/vsplugins; \
-    wget -nv -O r30.tar.gz https://github.com/EleonoreMizo/fmtconv/archive/refs/tags/r30.tar.gz; \
+    wget -nv -O r30.tar.gz https://codeload.github.com/EleonoreMizo/fmtconv/tar.gz/refs/tags/r30; \
     tar zxvf r30.tar.gz; \
     cd fmtconv-r30/build/unix; \
     ./autogen.sh; \
@@ -528,7 +564,7 @@ RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     cd /tmp/vsplugins; \
-    wget -nv -O R1.tar.gz https://github.com/vapoursynth/vs-removegrain/archive/refs/tags/R1.tar.gz; \
+    wget -nv -O R1.tar.gz https://codeload.github.com/vapoursynth/vs-removegrain/tar.gz/refs/tags/R1; \
     tar zxvf R1.tar.gz; \
     cd vs-removegrain-R1/src; \
     g++ -shared -fPIC -O3 -Wall $(pkg-config --cflags vapoursynth) clense.cpp removegrainvs.cpp repairvs.cpp shared.cpp verticalcleaner.cpp -o libremovegrain.so; \
@@ -538,7 +574,7 @@ RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     cd /tmp/vsplugins; \
-    wget -nv -O v0.1-fix.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-SangNomMod/archive/refs/tags/v0.1-fix.tar.gz; \
+    wget -nv -O v0.1-fix.tar.gz https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-SangNomMod/tar.gz/refs/tags/v0.1-fix; \
     tar zxvf v0.1-fix.tar.gz; \
     cd VapourSynth-SangNomMod-0.1-fix; \
     ./configure; \
@@ -549,7 +585,7 @@ RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     cd /tmp/vsplugins; \
-    wget -nv -O 2.0.4.tar.gz https://github.com/Lypheo/vs-placebo/archive/refs/tags/2.0.4.tar.gz; \
+    wget -nv -O 2.0.4.tar.gz https://codeload.github.com/Lypheo/vs-placebo/tar.gz/refs/tags/2.0.4; \
     tar zxvf 2.0.4.tar.gz; \
     cd vs-placebo-2.0.4; \
     meson setup build -Dr73-compat=true; ninja -C build; \
@@ -559,7 +595,7 @@ RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     cd /tmp/vsplugins; \
-    wget -nv -O zsmooth.zip https://github.com/adworacz/zsmooth/releases/download/0.7/libzsmooth.x86_64-gnu.so.zip; \
+    bash /tmp/build-tools/download_github_release_asset.sh adworacz/zsmooth 0.7 libzsmooth.x86_64-gnu.so.zip zsmooth.zip; \
     unzip -o zsmooth.zip; \
     mv libzsmooth.x86_64-gnu.so /app/plugins/
 
@@ -567,7 +603,7 @@ RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     cd /tmp/vsplugins; \
-    wget -nv -O v26.tar.gz https://github.com/dubhatervapoursynth/vapoursynth-mvtools/archive/refs/tags/v26.tar.gz; \
+    wget -nv -O v26.tar.gz https://codeload.github.com/dubhatervapoursynth/vapoursynth-mvtools/tar.gz/refs/tags/v26; \
     tar zxvf v26.tar.gz; \
     cd vapoursynth-mvtools-26; \
     python3 -c "import re; c=open('meson.build',encoding='utf-8',errors='replace').read(); c=re.sub(r\"incdir\\s*=\\s*include_directories\\s*\\(\\s*'vapoursynth/include'\\s*\\)\",\"incdir = '/usr/local/include/vapoursynth'\",c,flags=re.DOTALL); open('meson.build','w',encoding='utf-8').write(c)"; \
@@ -577,7 +613,7 @@ RUN set -eux; \
 RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
-    wget -nv -O /tmp/ispc.tar.gz https://github.com/ispc/ispc/releases/download/v1.31.0/ispc-v1.31.0-linux.tar.gz; \
+    bash /tmp/build-tools/download_github_release_asset.sh ispc/ispc v1.31.0 ispc-v1.31.0-linux.tar.gz /tmp/ispc.tar.gz; \
     cd /tmp; tar -xvf ispc.tar.gz; \
     mv ispc-v1.31.0-linux/bin/ispc /usr/local/bin/; chmod +x /usr/local/bin/ispc
 
@@ -585,7 +621,7 @@ RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     cd /tmp/vsplugins; \
-    wget -nv -O v4.tar.gz https://github.com/AmusementClub/vs-nlm-ispc/archive/refs/tags/v4.tar.gz; \
+    wget -nv -O v4.tar.gz https://codeload.github.com/AmusementClub/vs-nlm-ispc/tar.gz/refs/tags/v4; \
     tar zxvf v4.tar.gz; \
     cd vs-nlm-ispc-4; mkdir -p build && cd build; \
     cmake ..; make -j"$(nproc)"; \
@@ -606,7 +642,7 @@ RUN set -eux; \
       *) echo "unsupported arch for 7-Zip: $(uname -m)" >&2; exit 1 ;; \
     esac; \
     mkdir -p /tmp/7zip && cd /tmp/7zip; \
-    wget -nv "https://github.com/ip7z/7zip/releases/download/${SEVENZIP_RELEASE}/7z${SEVENZIP_ASSET_VERSION}-linux-${SEVENZIP_ARCH}.tar.xz"; \
+    bash /tmp/build-tools/download_github_release_asset.sh ip7z/7zip "$SEVENZIP_RELEASE" "7z${SEVENZIP_ASSET_VERSION}-linux-${SEVENZIP_ARCH}.tar.xz"; \
     tar -xJf "7z${SEVENZIP_ASSET_VERSION}-linux-${SEVENZIP_ARCH}.tar.xz"; \
     install -m 0755 7zz /usr/local/bin/7zz; \
     rm -rf /tmp/7zip
@@ -633,7 +669,7 @@ RUN set -eux; \
     mkdir -p /tmp/x264 && cd /tmp/x264; \
     bash /tmp/build-tools/download_source_archive.sh \
       "${X264_OFFICIAL%.git}/-/archive/${X264_COMMIT}/x264-${X264_COMMIT}.tar.gz" x264 \
-      "${X264_MIRROR%.git}/archive/${X264_COMMIT}.tar.gz"; \
+      "https://codeload.github.com/mirror/x264/tar.gz/${X264_COMMIT}"; \
     cd x264; \
     X264_LAVF_OPTION=; \
     LIBAVUTIL_MAJOR="$(pkg-config --modversion libavutil 2>/dev/null | cut -d. -f1 || true)"; \
@@ -645,7 +681,7 @@ RUN set -eux; \
     make -j"$(nproc)"; \
     install -m 0755 x264 /usr/bin/x264; \
     /usr/bin/x264 --version >/dev/null; \
-    rm -rf /tmp/x264 /tmp/build-tools
+    rm -rf /tmp/x264
 
 ARG TSMUXER_TAG
 RUN set -eux; \
@@ -653,7 +689,7 @@ RUN set -eux; \
     test -n "$TSMUXER_TAG"; \
     TSMUXER_VER="${TSMUXER_TAG#v}"; \
     mkdir -p /tmp/tsmuxer && cd /tmp/tsmuxer; \
-    wget -nv "https://github.com/justdan96/tsMuxer/releases/download/${TSMUXER_TAG}/tsMuxer-${TSMUXER_VER}-linux.zip"; \
+    bash /tmp/build-tools/download_github_release_asset.sh justdan96/tsMuxer "$TSMUXER_TAG" "tsMuxer-${TSMUXER_VER}-linux.zip"; \
     unzip "tsMuxer-${TSMUXER_VER}-linux.zip"; \
     cp tsMuxeR /usr/bin/tsMuxeR; \
     chmod +x /usr/bin/tsMuxeR; \
@@ -672,11 +708,11 @@ RUN set -eux; \
     HDR10PLUS_ARCHIVE="hdr10plus_tool-${HDR10PLUS_VER}-${HDR10PLUS_ARCH}-unknown-linux-musl.tar.gz"; \
     mkdir -p /tmp/hdr10plus-tool; \
     cd /tmp/hdr10plus-tool; \
-    wget -nv "https://github.com/quietvoid/hdr10plus_tool/releases/download/${HDR10PLUS_TAG}/${HDR10PLUS_ARCHIVE}"; \
+    bash /tmp/build-tools/download_github_release_asset.sh quietvoid/hdr10plus_tool "$HDR10PLUS_TAG" "$HDR10PLUS_ARCHIVE"; \
     tar zxf "${HDR10PLUS_ARCHIVE}"; \
     install -m 0755 hdr10plus_tool /usr/bin/hdr10plus_tool; \
     /usr/bin/hdr10plus_tool --version 2>&1 | grep -F "hdr10plus_tool ${HDR10PLUS_VER}" >/dev/null; \
-    rm -rf /tmp/hdr10plus-tool
+    rm -rf /tmp/hdr10plus-tool /tmp/build-tools
 
 RUN pkg-config --exists dovi \
     && /usr/bin/ffmpeg -hide_banner -h encoder=libopus 2>&1 | grep '^Encoder libopus' >/dev/null \

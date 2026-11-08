@@ -151,10 +151,21 @@ class Installer:
             return destination
         destination.parent.mkdir(parents=True, exist_ok=True)
         partial = destination.with_name(destination.name + ".part")
+        uri = urllib.parse.urlsplit(url)
+        github_asset = (
+            uri.scheme == "https" and uri.hostname == "api.github.com"
+            and re.fullmatch(r"/repos/[^/]+/[^/]+/releases/assets/[0-9]+", uri.path) is not None
+        )
+        headers = {"Accept": "application/octet-stream", "X-GitHub-Api-Version": "2022-11-28"} if github_asset else {}
         for attempt in range(3):
             try:
-                with self.http.open(url, timeout=120) as response, partial.open("wb") as output:
-                    shutil.copyfileobj(response, output)
+                request = urllib.request.Request(url, headers=headers)
+                with self.http.open(request, timeout=120) as response:
+                    content_type = response.headers.get_content_type()
+                    if github_asset and (content_type.endswith("json") or content_type == "text/html"):
+                        raise urllib.error.URLError(f"{url} returned {content_type}")
+                    with partial.open("wb") as output:
+                        shutil.copyfileobj(response, output)
                 if expected and sha256(partial) != expected:
                     raise RuntimeError(f"SHA-256 mismatch: {url}")
                 partial.replace(destination)
@@ -193,7 +204,8 @@ class Installer:
 
     def source(self, component, ref):
         parent = self.work / component.key / ("source-" + ref.replace("/", "_"))
-        archive = self.download(f"https://github.com/{component.repository}/archive/{ref}.zip", parent / "source.zip")
+        archive_url = f"https://codeload.github.com/{component.repository}/zip/{urllib.parse.quote(ref, safe='/')}"
+        archive = self.download(archive_url, parent / "source.zip")
         directories = [path for path in self.unpack(archive, parent / "unpacked").iterdir() if path.is_dir()]
         if len(directories) != 1:
             raise RuntimeError(f"Unexpected source archive layout: {archive}")
@@ -476,7 +488,7 @@ class Installer:
         elif component.key == "nlm_ispc":
             release = self.github("https://api.github.com/repos/ispc/ispc/releases/tags/v1.31.0")
             asset = next(item for item in release["assets"] if re.search(r"windows[.]zip$", item["name"]))
-            archive = self.download(asset["browser_download_url"], self.work / "ispc" / asset["name"], asset.get("digest") or "")
+            archive = self.download(asset["url"], self.work / "ispc" / asset["name"], asset.get("digest") or "")
             executable = next(self.unpack(archive, self.work / "ispc/unpacked").rglob("ispc.exe"))
             shutil.copyfile(executable, self.args.msys2_root / "ucrt64/bin/ispc.exe")
         jobs = str(self.args.jobs)
@@ -620,7 +632,7 @@ class Installer:
                     assets = []
             if assets:
                 artifact = assets[0]
-                archive = self.download(artifact["browser_download_url"], self.work / component.key / artifact["name"], artifact.get("digest") or "")
+                archive = self.download(artifact["url"], self.work / component.key / artifact["name"], artifact.get("digest") or "")
                 package = self.unpack(archive, self.work / component.key / ("release-" + archive.stem))
                 names = {component.filename.lower()} | ({"lsmashsource.dll"} if component.key == "lsmas" else set())
                 if component.key == "zsmooth":
@@ -669,7 +681,7 @@ class Installer:
         self.state["components"][component.key] = {
             "name": component.key, "repository": component.repository, "target_ref": target_ref, "ref": ref, "method": method,
             "source_url": f"https://github.com/{component.repository}/tree/{ref}",
-            "artifact_url": artifact["browser_download_url"] if method == "release" else "",
+            "artifact_url": artifact["url"] if method == "release" else "",
             "plugin": self.record_path(target), "registered_version": probe["version"],
             "installed_version": probe["native_version"] or normalize_version(expected),
             "build_profile": BUILD_PROFILE if method == "source" else "",
@@ -695,7 +707,7 @@ class Installer:
         source = self.source(EDITOR, ref)
         package, directory, method = None, None, "source"
         for artifact in assets:
-            archive = self.download(artifact["browser_download_url"], self.work / "vsedit" / artifact["name"], artifact.get("digest") or "")
+            archive = self.download(artifact["url"], self.work / "vsedit" / artifact["name"], artifact.get("digest") or "")
             package = self.unpack(archive, self.work / "vsedit" / ("release-" + archive.stem))
             executable = next((path for path in package.rglob("vsedit.exe") if pe64(path)), None)
             if executable is None:
@@ -746,7 +758,7 @@ class Installer:
         self.state["components"]["vsedit"] = {
             "name": "VapourSynth Editor", "repository": EDITOR.repository, "ref": ref, "method": method,
             "source_url": f"https://github.com/{EDITOR.repository}/tree/{ref}",
-            "artifact_url": artifact["browser_download_url"] if method == "release" else "",
+            "artifact_url": artifact["url"] if method == "release" else "",
             "entrypoint": self.record_path(self.editor), "files": files, "dependencies": [],
         }
         self.editor_metadata(self.state["components"]["vsedit"])

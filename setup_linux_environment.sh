@@ -391,10 +391,45 @@ fetch_source_archive() (
   fi
 )
 
+github_archive_url() {
+  local repository="${1#https://github.com/}"
+  printf 'https://codeload.github.com/%s/tar.gz/%s\n' "${repository%.git}" "$2"
+}
+
 download_source_archive() {
   local name="$1"
   shift
   tmux_run "$(msg "Download ${name} source" "下载 ${name} 源码")" fetch_source_archive "$@"
+}
+
+download_github_release_asset() {
+  local repository="${1#https://github.com/}" tag="$2" asset_name="$3" output="${4:-$3}"
+  local releases_url="https://api.github.com/repos/${repository%.git}/releases"
+  local release_url="${releases_url}/latest" release asset_id content_type
+  local -a curl_options=(-fsSL --retry 4 --retry-connrefused --connect-timeout 30 --speed-time 30 --speed-limit 1
+    -H 'X-GitHub-Api-Version: 2022-11-28')
+
+  if [[ -n "$tag" ]]; then
+    release_url="${releases_url}/tags/${tag}"
+  fi
+  release="$(curl "${curl_options[@]}" -H 'Accept: application/vnd.github+json' "$release_url")" || return $?
+  asset_id="$(python3 -c '
+import json
+import sys
+
+for asset in json.load(sys.stdin)["assets"]:
+    if asset["name"] == sys.argv[1]:
+        print(asset["id"])
+        break
+' "$asset_name" <<< "$release")" || return $?
+  if [[ -z "$asset_id" ]]; then
+    printf '%s\n' "$(msg "GitHub release has no asset named ${asset_name}" "GitHub 发布版本中找不到附件 ${asset_name}")" >&2
+    return 1
+  fi
+
+  content_type="$(curl "${curl_options[@]}" -H 'Accept: application/octet-stream' \
+    -o "$output" -w '%{content_type}' "${releases_url}/assets/${asset_id}")" || return $?
+  [[ "$content_type" != *json* && "$content_type" != text/html* ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -873,7 +908,7 @@ install_libdovi() {
 
     log "$(msg "Building and installing to $HOME/.local" "编译并安装到 $HOME/.local")"
     download_source_archive "dovi_tool ${DOVI_TOOL_VERSION}" \
-      "https://github.com/quietvoid/dovi_tool/archive/refs/tags/${DOVI_TOOL_VERSION}.tar.gz" dovi_tool || exit 1
+      "https://codeload.github.com/quietvoid/dovi_tool/tar.gz/refs/tags/${DOVI_TOOL_VERSION}" dovi_tool || exit 1
     cd dovi_tool/dolby_vision || exit 1
     tmux_run "$(msg 'Build and install dolby_vision' '编译安装 dolby_vision')" cargo cinstall --release --prefix="$HOME/.local" || exit 1
 
@@ -932,7 +967,7 @@ install_dovi_tool() {
   esac
   tarball="dovi_tool-${DOVI_TOOL_VERSION}-${arch}-unknown-linux-musl.tar.gz"
 
-  local deps=(git wget tar)
+  local deps=(git curl tar)
   local missing_deps=()
   local dep
   for dep in "${deps[@]}"; do
@@ -951,7 +986,7 @@ install_dovi_tool() {
   (
     cd "$build_dir" || exit 1
     tmux_run "$(msg "Download ${tarball}" "下载 ${tarball}")" \
-      wget "https://github.com/quietvoid/dovi_tool/releases/download/${DOVI_TOOL_VERSION}/${tarball}" || exit 1
+      download_github_release_asset quietvoid/dovi_tool "$DOVI_TOOL_VERSION" "$tarball" || exit 1
     tmux_run "$(msg 'Extract dovi_tool tarball' '解压 dovi_tool 压缩包')" tar zxvf "$tarball" || exit 1
     install_configured_executable dovi_tool "$DOVI_TOOL_PATH" || exit 1
   ) || die "$(msg 'dovi_tool install failed' 'dovi_tool 安装失败')"
@@ -992,7 +1027,7 @@ install_hdr10plus_tool() {
   esac
   tarball="hdr10plus_tool-${version#v}-${arch}-unknown-linux-musl.tar.gz"
 
-  local deps=(git wget tar)
+  local deps=(git curl tar)
   local missing_deps=()
   local dep
   for dep in "${deps[@]}"; do
@@ -1010,7 +1045,7 @@ install_hdr10plus_tool() {
   (
     cd "$install_dir" || exit 1
     tmux_run "$(msg "Download ${tarball}" "下载 ${tarball}")" \
-      wget "https://github.com/quietvoid/hdr10plus_tool/releases/download/${version}/${tarball}" || exit 1
+      download_github_release_asset quietvoid/hdr10plus_tool "$version" "$tarball" || exit 1
     tmux_run "$(msg 'Extract hdr10plus_tool tarball' '解压 hdr10plus_tool 压缩包')" tar zxf "$tarball" || exit 1
     install_configured_executable hdr10plus_tool "$HDR10PLUS_TOOL_PATH" || exit 1
   ) || die "$(msg 'hdr10plus_tool install failed' 'hdr10plus_tool 安装失败')"
@@ -1228,8 +1263,7 @@ install_mpv() {
   export PATH="/usr/local/bin:${HOME}/.local/bin:${PATH:-}"
   ensure_dav1d_for_mpv
 
-  local build_dir ffmpeg_repository_path mpv_tag libass_tag libplacebo_tag
-  ffmpeg_repository_path="${FFMPEG_SOURCE_REPOSITORY#https://github.com/}"
+  local build_dir mpv_tag libass_tag libplacebo_tag
   mpv_tag="$(latest_stable_tag https://github.com/mpv-player/mpv.git '^v[0-9]+([.][0-9]+)+$' 'v*')"
   libass_tag="$(latest_stable_tag https://github.com/libass/libass.git '^[0-9]+([.][0-9]+)+$')"
   libplacebo_tag="$(latest_stable_tag https://github.com/haasn/libplacebo.git '^v[0-9]+([.][0-9]+)+$' 'v*')"
@@ -1242,7 +1276,7 @@ install_mpv() {
     download_source_archive mpv-build \
       https://codeload.github.com/mpv-player/mpv-build/tar.gz/refs/heads/master . || exit 1
     download_source_archive "FFmpeg ${target_ffmpeg_version}" \
-      "https://codeload.github.com/${ffmpeg_repository_path%.git}/tar.gz/refs/tags/${ffmpeg_tag}" ffmpeg || exit 1
+      "$(github_archive_url "$FFMPEG_SOURCE_REPOSITORY" "refs/tags/$ffmpeg_tag")" ffmpeg || exit 1
     download_source_archive "mpv ${mpv_tag}" \
       "https://codeload.github.com/mpv-player/mpv/tar.gz/refs/tags/${mpv_tag}" mpv || exit 1
     download_source_archive "libass ${libass_tag}" \
@@ -1314,8 +1348,7 @@ install_mpv_desktop() (
   trap 'rm -rf -- "$build_dir"' EXIT
 
   log "$(msg 'Installing uosc, the mpv menu, shaders and playback presets' '安装 uosc、mpv 菜单、着色器和播放预设')"
-  tmux_run "uosc download" wget -q --timeout=30 --tries=3 -O "$build_dir/uosc.zip" \
-    https://github.com/tomasklaen/uosc/releases/latest/download/uosc.zip \
+  tmux_run "uosc download" download_github_release_asset tomasklaen/uosc "" uosc.zip "$build_dir/uosc.zip" \
     || die "$(msg 'Could not download the uosc release' '无法下载 uosc 发布包')"
   unzip -q "$build_dir/uosc.zip" -d "$build_dir/uosc"
   python3 "$installer" "$build_dir/uosc" "$BLURAY_LANG" "$PLUGIN_PATH" \
@@ -1362,7 +1395,7 @@ install_lsmash() {
     local lsmash_tag
     lsmash_tag="${LSMASH_VERSION:-$(latest_stable_tag https://github.com/l-smash/l-smash.git)}"
     download_source_archive "L-SMASH ${lsmash_tag}" \
-      "https://github.com/l-smash/l-smash/archive/refs/tags/${lsmash_tag}.tar.gz" l-smash || exit 1
+      "https://codeload.github.com/l-smash/l-smash/tar.gz/refs/tags/${lsmash_tag}" l-smash || exit 1
     cd l-smash || exit 1
 
     log "$(msg 'Configuring and building L-SMASH' '配置与编译 lsmash')"
@@ -1585,8 +1618,11 @@ install_x265() {
 
   (
     cd "$build_dir" || exit 1
-    download_source_archive "x265 ${x265_version}" \
-      "${X265_SOURCE_REPOSITORY%.git}/releases/download/${x265_version}/x265_${x265_version}.tar.gz" x265 || exit 1
+    local archive="x265_${x265_version}.tar.gz"
+    tmux_run "$(msg "Download x265 ${x265_version} source" "下载 x265 ${x265_version} 源码")" \
+      download_github_release_asset "$X265_SOURCE_REPOSITORY" "$x265_version" "$archive" || exit 1
+    mkdir -p x265 || exit 1
+    tar -xf "$archive" --strip-components=1 -C x265 || exit 1
     __build_x265_official_multilib "${build_dir}/x265" || exit 1
   ) || die "$(msg 'x265 build or install failed' 'x265 编译或安装过程中出错')"
 
@@ -1656,7 +1692,8 @@ install_x264() {
 
   local build_dir
   build_dir="$(mktemp -d)"
-  local archive_url="${X264_SOURCE_MIRROR%.git}/archive/${x264_commit}.tar.gz"
+  local archive_url
+  archive_url="$(github_archive_url "$X264_SOURCE_MIRROR" "$x264_commit")"
   local mirror_url=""
   if [[ "$x264_repository" == "$X264_SOURCE_REPOSITORY" ]]; then
     mirror_url="$archive_url"
@@ -1762,7 +1799,7 @@ install_tsmuxer() {
     return 0
   fi
 
-  local deps=(git wget unzip)
+  local deps=(git curl unzip)
   local missing_deps=()
   local dep
   for dep in "${deps[@]}"; do
@@ -1782,7 +1819,7 @@ install_tsmuxer() {
     cd "$build_dir" || exit 1
     local archive="tsMuxer-${tsmuxer_version}-linux.zip"
     tmux_run "$(msg "Download ${archive}" "下载 ${archive}")" \
-      wget "https://github.com/justdan96/tsMuxer/releases/download/${tsmuxer_tag}/${archive}" || exit 1
+      download_github_release_asset justdan96/tsMuxer "$tsmuxer_tag" "$archive" || exit 1
     tmux_run "$(msg 'Extract tsMuxer zip package' '解压 tsMuxer 压缩包')" unzip "$archive" || exit 1
     install_configured_executable tsMuxeR "$TS_MUXER_PATH" || exit 1
   ) || die "$(msg 'tsMuxer install failed' 'tsMuxer 安装失败')"
@@ -1836,7 +1873,7 @@ install_fdk_aac() {
   (
     cd "$build_dir" || exit 1
     download_source_archive "fdk-aac ${fdk_aac_tag}" \
-      "${FDK_AAC_SOURCE_REPOSITORY%.git}/archive/refs/tags/${fdk_aac_tag}.tar.gz" fdk-aac || exit 1
+      "$(github_archive_url "$FDK_AAC_SOURCE_REPOSITORY" "refs/tags/$fdk_aac_tag")" fdk-aac || exit 1
     cd fdk-aac || exit 1
     tmux_run "$(msg 'fdk-aac: autogen.sh' 'fdk-aac：autogen.sh')" ./autogen.sh || exit 1
     tmux_run "$(msg 'fdk-aac: configure' 'fdk-aac：configure')" ./configure || exit 1
@@ -1845,7 +1882,7 @@ install_fdk_aac() {
     sudo ldconfig || true
     cd "$build_dir" || exit 1
     download_source_archive "fdkaac ${fdkaac_tag}" \
-      "${FDKAAC_SOURCE_REPOSITORY%.git}/archive/refs/tags/${fdkaac_tag}.tar.gz" fdkaac || exit 1
+      "$(github_archive_url "$FDKAAC_SOURCE_REPOSITORY" "refs/tags/$fdkaac_tag")" fdkaac || exit 1
     cd fdkaac || exit 1
     tmux_run "$(msg 'fdkaac: autoreconf -fi' 'fdkaac：autoreconf -fi')" autoreconf -fi || exit 1
     tmux_run "$(msg 'fdkaac: configure' 'fdkaac：configure')" ./configure || exit 1
@@ -1978,7 +2015,7 @@ install_zimg_latest() {
   (
     cd "$build_dir" || exit 1
     download_source_archive "zimg ${zimg_tag#release-}" \
-      "https://github.com/sekrit-twc/zimg/archive/refs/tags/${zimg_tag}.tar.gz" . || exit 1
+      "https://codeload.github.com/sekrit-twc/zimg/tar.gz/refs/tags/${zimg_tag}" . || exit 1
     tmux_run "zimg autogen" ./autogen.sh || exit 1
     tmux_run "zimg configure" ./configure --prefix=/usr/local --disable-unit-test || exit 1
     tmux_run "zimg make" make -j"$(nproc)" || exit 1
@@ -2034,8 +2071,6 @@ install_vapoursynth() {
     fi
   fi
 
-  install_zimg_latest
-
   # Verify Cython version >= 3.0
   local cython_cmd="cython"
   if ! command -v cython >/dev/null 2>&1; then
@@ -2064,6 +2099,8 @@ install_vapoursynth() {
     apt_install "${missing_deps[@]}" || die "$(msg 'Failed to install VapourSynth dependencies' 'VapourSynth 依赖安装失败')"
   fi
 
+  install_zimg_latest
+
   local build_dir
   build_dir="$(mktemp -d)"
 
@@ -2072,7 +2109,8 @@ install_vapoursynth() {
 
     # The originally provided URL returns 404; replaced with the GitHub archive link
     # which produces the same directory name after extraction.
-    tmux_run "$(msg "Download VapourSynth ${vapoursynth_tag}" "下载 VapourSynth ${vapoursynth_tag}")" wget -O "${vapoursynth_tag}.tar.gz" "${VAPOURSYNTH_SOURCE_REPOSITORY%.git}/archive/refs/tags/${vapoursynth_tag}.tar.gz" || exit 1
+    tmux_run "$(msg "Download VapourSynth ${vapoursynth_tag}" "下载 VapourSynth ${vapoursynth_tag}")" \
+      wget -O "${vapoursynth_tag}.tar.gz" "$(github_archive_url "$VAPOURSYNTH_SOURCE_REPOSITORY" "refs/tags/$vapoursynth_tag")" || exit 1
 
     log "$(msg 'Extracting VapourSynth source tarball' '解压 VapourSynth 源码包')"
     tmux_run "$(msg "Extract VapourSynth ${vapoursynth_tag}" "解压 VapourSynth ${vapoursynth_tag}")" tar zxvf "${vapoursynth_tag}.tar.gz" || exit 1
@@ -2202,7 +2240,7 @@ install_descale() {
   (
     cd "$build_dir" || exit 1
     download_source_archive "descale ${descale_tag}" \
-      "${DESCALE_SOURCE_REPOSITORY%.git}/archive/refs/tags/${descale_tag}.tar.gz" vapoursynth-descale || exit 1
+      "$(github_archive_url "$DESCALE_SOURCE_REPOSITORY" "refs/tags/$descale_tag")" vapoursynth-descale || exit 1
     cd vapoursynth-descale || exit 1
     # The pointee reference remains valid if GCC evaluates data.release() first.
     sed -i '/vsapi->createVideoFilter/s/data->/d./g' src/vsplugin.cc || exit 1
@@ -2244,8 +2282,7 @@ ensure_modern_7zip_cli() {
   build_dir="$(bluray_mktemp_dir)"
   apt_install xz-utils
   log "$(msg "Installing 7-Zip ${version} at ${SEVEN_ZIP_PATH}" "正在将 7-Zip ${version} 安装到 ${SEVEN_ZIP_PATH}")"
-  wget -q -O "$build_dir/7zip.tar.xz" \
-    "https://github.com/ip7z/7zip/releases/download/${release}/7z${asset_version}-linux-x64.tar.xz" \
+  download_github_release_asset ip7z/7zip "$release" "7z${asset_version}-linux-x64.tar.xz" "$build_dir/7zip.tar.xz" \
     || die "$(msg 'Failed to download official 7-Zip CLI' '下载官方 7-Zip 命令行程序失败')"
   tar -xJf "$build_dir/7zip.tar.xz" -C "$build_dir" \
     || die "$(msg 'Failed to extract official 7-Zip CLI' '解压官方 7-Zip 命令行程序失败')"
@@ -2317,7 +2354,7 @@ install_vapoursynth_editor() {
     cd vsedit_build || exit 1
 
     tmux_run "$(msg "Download vsedit ${vsedit_tag}" "下载 vsedit ${vsedit_tag}")" \
-      wget -O vsedit.tar.gz "https://github.com/YomikoR/VapourSynth-Editor/archive/refs/tags/${vsedit_tag}.tar.gz" || exit 1
+      wget -O vsedit.tar.gz "$(github_archive_url "$VSEDIT_SOURCE_REPOSITORY" "refs/tags/$vsedit_tag")" || exit 1
 
     log "$(msg 'Extracting vsedit source tarball' '解压 vsedit 源码包')"
     tmux_run "$(msg 'Extract vsedit source' '解压 vsedit 源码包')" tar -zxvf vsedit.tar.gz --strip-components=1 || exit 1
@@ -2514,7 +2551,7 @@ build_vs_plugins() {
       log "$(msg 'Building L-SMASH-Works (VapourSynth)' '编译 L-SMASH-Works (VapourSynth)')"
       cd "$build_dir" || exit 1
       download_source_archive "L-SMASH-Works ${lsmash_commit:0:7}" \
-        "https://github.com/HomeOfAviSynthPlusEvolution/L-SMASH-Works/archive/${lsmash_commit}.tar.gz" L-SMASH-Works || exit 1
+        "https://codeload.github.com/HomeOfAviSynthPlusEvolution/L-SMASH-Works/tar.gz/${lsmash_commit}" L-SMASH-Works || exit 1
       cd L-SMASH-Works/VapourSynth || exit 1
 
       # Apply FFmpeg compatibility patches (index accessors, D3D12 shim, removed codec IDs).
@@ -2601,7 +2638,7 @@ PY
     if vs_plugin_needs_upgrade "eedi3m.so" "r9"; then
       log "$(msg 'Building VapourSynth-EEDI3 (r9)' '编译 VapourSynth-EEDI3 (r9)')"
       cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download EEDI3 r9' '下载 EEDI3 r9')" wget -O r9.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI3/archive/refs/tags/r9.tar.gz || exit 1
+      tmux_run "$(msg 'Download EEDI3 r9' '下载 EEDI3 r9')" wget -O r9.tar.gz https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI3/tar.gz/refs/tags/r9 || exit 1
       tmux_run "$(msg 'Extract EEDI3 r9' '解压 EEDI3 r9')" tar zxvf r9.tar.gz || exit 1
       cd VapourSynth-EEDI3-r9/ || exit 1
       log "$(msg 'Fixing EEDI3 std::max_align_t compilation compatibility issue' '修复 EEDI3 的 std::max_align_t 编译兼容性问题')"
@@ -2626,7 +2663,7 @@ PY
     if vs_plugin_needs_upgrade "libaddgrain.so" "r10"; then
       log "$(msg 'Building VapourSynth-AddGrain (r10)' '编译 VapourSynth-AddGrain (r10)')"
       cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download AddGrain r10' '下载 AddGrain r10')" wget -O r10.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-AddGrain/archive/refs/tags/r10.tar.gz || exit 1
+      tmux_run "$(msg 'Download AddGrain r10' '下载 AddGrain r10')" wget -O r10.tar.gz https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-AddGrain/tar.gz/refs/tags/r10 || exit 1
       tmux_run "$(msg 'Extract AddGrain r10' '解压 AddGrain r10')" tar zxvf r10.tar.gz || exit 1
       cd VapourSynth-AddGrain-r10/ || exit 1
       tmux_run "AddGrain meson setup" meson setup build || exit 1
@@ -2644,7 +2681,7 @@ PY
       log "$(msg 'Building assrender (0.38.4)' '编译 assrender (0.38.4)')"
       cd "$build_dir" || exit 1
       download_source_archive 'assrender 0.38.4' \
-        https://github.com/AmusementClub/assrender/archive/refs/tags/0.38.4.tar.gz assrender-0.38.4 || exit 1
+        https://codeload.github.com/AmusementClub/assrender/tar.gz/refs/tags/0.38.4 assrender-0.38.4 || exit 1
       cd assrender-0.38.4 || exit 1
       rm -rf build
       tmux_run "assrender cmake" cmake -S . -B build -DCMAKE_BUILD_TYPE=Release || exit 1
@@ -2662,7 +2699,7 @@ PY
     if vs_plugin_needs_upgrade "libbilateral.so" "r3"; then
       log "$(msg 'Building VapourSynth-Bilateral (r3)' '编译 VapourSynth-Bilateral (r3)')"
       cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download Bilateral r3' '下载 Bilateral r3')" wget -O r3.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-Bilateral/archive/refs/tags/r3.tar.gz || exit 1
+      tmux_run "$(msg 'Download Bilateral r3' '下载 Bilateral r3')" wget -O r3.tar.gz https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-Bilateral/tar.gz/refs/tags/r3 || exit 1
       tmux_run "$(msg 'Extract Bilateral r3' '解压 Bilateral r3')" tar zxvf r3.tar.gz || exit 1
       cd VapourSynth-Bilateral-r3/ || exit 1
       chmod +x configure || exit 1
@@ -2692,7 +2729,7 @@ PY
         || vs_plugin_needs_upgrade "libdfttest.so" "r7"; then
       log "$(msg 'Building VapourSynth-DFTTest (r7)' '编译 VapourSynth-DFTTest (r7)')"
       cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download DFTTest r7' '下载 DFTTest r7')" wget -O r7.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-DFTTest/archive/refs/tags/r7.tar.gz || exit 1
+      tmux_run "$(msg 'Download DFTTest r7' '下载 DFTTest r7')" wget -O r7.tar.gz https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-DFTTest/tar.gz/refs/tags/r7 || exit 1
       tmux_run "$(msg 'Extract DFTTest r7' '解压 DFTTest r7')" tar zxvf r7.tar.gz || exit 1
       cd VapourSynth-DFTTest-r7/ || exit 1
       log "$(msg 'Installing DFTTest build dependency: libfftw3-dev...' '正在安装 DFTTest 编译依赖: libfftw3-dev...')"
@@ -2715,7 +2752,7 @@ PY
     if vs_plugin_needs_upgrade "libeedi2.so" "r7.1"; then
       log "$(msg 'Building VapourSynth-EEDI2 (r7.1)' '编译 VapourSynth-EEDI2 (r7.1)')"
       cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download EEDI2 r7.1' '下载 EEDI2 r7.1')" wget -O r7.1.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI2/archive/refs/tags/r7.1.tar.gz || exit 1
+      tmux_run "$(msg 'Download EEDI2 r7.1' '下载 EEDI2 r7.1')" wget -O r7.1.tar.gz https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI2/tar.gz/refs/tags/r7.1 || exit 1
       tmux_run "$(msg 'Extract EEDI2 r7.1' '解压 EEDI2 r7.1')" tar zxvf r7.1.tar.gz || exit 1
       cd VapourSynth-EEDI2-r7.1/ || exit 1
       tmux_run "EEDI2 meson setup" meson setup build || exit 1
@@ -2730,7 +2767,7 @@ PY
     if vs_plugin_needs_upgrade "libfmtconv.so" "r30"; then
       log "$(msg 'Building fmtconv (r30)' '编译 fmtconv (r30)')"
       cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download fmtconv r30' '下载 fmtconv r30')" wget -O r30.tar.gz https://github.com/EleonoreMizo/fmtconv/archive/refs/tags/r30.tar.gz || exit 1
+      tmux_run "$(msg 'Download fmtconv r30' '下载 fmtconv r30')" wget -O r30.tar.gz https://codeload.github.com/EleonoreMizo/fmtconv/tar.gz/refs/tags/r30 || exit 1
       tmux_run "$(msg 'Extract fmtconv r30' '解压 fmtconv r30')" tar zxvf r30.tar.gz || exit 1
       cd fmtconv-r30/build/unix || exit 1
       tmux_run "fmtconv autogen" ./autogen.sh || exit 1
@@ -2749,7 +2786,7 @@ PY
     if vs_plugin_needs_upgrade "libremovegrain.so" "R1"; then
       log "$(msg 'Building vs-removegrain (R1)' '编译 vs-removegrain (R1)')"
       cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download vs-removegrain R1' '下载 vs-removegrain R1')" wget https://github.com/vapoursynth/vs-removegrain/archive/refs/tags/R1.tar.gz || exit 1
+      tmux_run "$(msg 'Download vs-removegrain R1' '下载 vs-removegrain R1')" wget -O R1.tar.gz https://codeload.github.com/vapoursynth/vs-removegrain/tar.gz/refs/tags/R1 || exit 1
       tmux_run "$(msg 'Extract vs-removegrain R1' '解压 vs-removegrain R1')" tar zxvf R1.tar.gz || exit 1
       cd vs-removegrain-R1/src || exit 1
       tmux_run "$(msg 'Build vs-removegrain R1' '编译 vs-removegrain R1')" g++ -shared -fPIC -O3 -Wall \
@@ -2766,7 +2803,7 @@ PY
     if vs_plugin_needs_upgrade "libsangnommod.so" "v0.1-fix"; then
       log "$(msg 'Building VapourSynth-SangNomMod (v0.1-fix)' '编译 VapourSynth-SangNomMod (v0.1-fix)')"
       cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download SangNomMod v0.1-fix' '下载 SangNomMod v0.1-fix')" wget -O v0.1-fix.tar.gz https://github.com/HomeOfVapourSynthEvolution/VapourSynth-SangNomMod/archive/refs/tags/v0.1-fix.tar.gz || exit 1
+      tmux_run "$(msg 'Download SangNomMod v0.1-fix' '下载 SangNomMod v0.1-fix')" wget -O v0.1-fix.tar.gz https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-SangNomMod/tar.gz/refs/tags/v0.1-fix || exit 1
       tmux_run "$(msg 'Extract SangNomMod v0.1-fix' '解压 SangNomMod v0.1-fix')" tar zxvf v0.1-fix.tar.gz || exit 1
       cd VapourSynth-SangNomMod-0.1-fix/ || exit 1
       tmux_run "SangNomMod configure" ./configure || exit 1
@@ -2786,7 +2823,7 @@ PY
       log "$(msg 'Building vs-placebo (2.0.4)' '编译 vs-placebo (2.0.4)')"
       cd "$build_dir" || exit 1
       install_libplacebo_latest
-      tmux_run "$(msg 'Download vs-placebo 2.0.4' '下载 vs-placebo 2.0.4')" wget -O 2.0.4.tar.gz https://github.com/Lypheo/vs-placebo/archive/refs/tags/2.0.4.tar.gz || exit 1
+      tmux_run "$(msg 'Download vs-placebo 2.0.4' '下载 vs-placebo 2.0.4')" wget -O 2.0.4.tar.gz https://codeload.github.com/Lypheo/vs-placebo/tar.gz/refs/tags/2.0.4 || exit 1
       tmux_run "$(msg 'Extract vs-placebo 2.0.4' '解压 vs-placebo 2.0.4')" tar zxvf 2.0.4.tar.gz || exit 1
       cd vs-placebo-2.0.4/ || exit 1
       export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:$HOME/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
@@ -2814,7 +2851,8 @@ PY
     fi
     if [[ -z "$current_ispc_version" ]] || dpkg --compare-versions "$current_ispc_version" lt "$required_ispc_version"; then
       log "$(msg 'Installing ispc (v1.31.0)' '安装 ispc (v1.31.0)')"
-      tmux_run "$(msg 'Download ispc v1.31.0' '下载 ispc v1.31.0')" wget -O ispc-v1.31.0-linux.tar.gz https://github.com/ispc/ispc/releases/download/v1.31.0/ispc-v1.31.0-linux.tar.gz || exit 1
+      tmux_run "$(msg 'Download ispc v1.31.0' '下载 ispc v1.31.0')" \
+        download_github_release_asset ispc/ispc v1.31.0 ispc-v1.31.0-linux.tar.gz || exit 1
       tmux_run "$(msg 'Extract ispc v1.31.0' '解压 ispc v1.31.0')" tar -xvf ispc-v1.31.0-linux.tar.gz || exit 1
       sudo mv ispc-v1.31.0-linux/bin/ispc /usr/local/bin/ || exit 1
       sudo chmod +x /usr/local/bin/ispc || exit 1
@@ -2825,7 +2863,7 @@ PY
     if vs_plugin_needs_upgrade "libvsnlm_ispc.so" "v4"; then
       log "$(msg 'Building vs-nlm-ispc (v4)' '编译 vs-nlm-ispc (v4)')"
       cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download vs-nlm-ispc v4' '下载 vs-nlm-ispc v4')" wget -O v4.tar.gz https://github.com/AmusementClub/vs-nlm-ispc/archive/refs/tags/v4.tar.gz || exit 1
+      tmux_run "$(msg 'Download vs-nlm-ispc v4' '下载 vs-nlm-ispc v4')" wget -O v4.tar.gz https://codeload.github.com/AmusementClub/vs-nlm-ispc/tar.gz/refs/tags/v4 || exit 1
       tmux_run "$(msg 'Extract vs-nlm-ispc v4' '解压 vs-nlm-ispc v4')" tar zxvf v4.tar.gz || exit 1
       cd vs-nlm-ispc-4/ || exit 1
       mkdir -p build || exit 1
@@ -2846,7 +2884,8 @@ PY
     if vs_plugin_needs_upgrade "libzsmooth.x86_64-gnu.so" "0.7"; then
       log "$(msg 'Installing zsmooth (binary package)' '安装 zsmooth（二进制包）')"
       cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download zsmooth 0.7' '下载 zsmooth 0.7')" wget -O libzsmooth.x86_64-gnu.so.zip https://github.com/adworacz/zsmooth/releases/download/0.7/libzsmooth.x86_64-gnu.so.zip || exit 1
+      tmux_run "$(msg 'Download zsmooth 0.7' '下载 zsmooth 0.7')" \
+        download_github_release_asset adworacz/zsmooth 0.7 libzsmooth.x86_64-gnu.so.zip || exit 1
       tmux_run "$(msg 'Extract zsmooth 0.7' '解压 zsmooth 0.7')" unzip -o libzsmooth.x86_64-gnu.so.zip || exit 1
       install -m 0755 libzsmooth.x86_64-gnu.so "$plugins_dir/libzsmooth.x86_64-gnu.so" || exit 1
       vs_plugin_version record "libzsmooth.x86_64-gnu.so" "0.7" || exit 1
@@ -2859,7 +2898,7 @@ PY
     if vs_plugin_needs_upgrade "mvtools.so" "v26"; then
       log "$(msg 'Building vapoursynth-mvtools (v26)' '编译 vapoursynth-mvtools (v26)')"
       cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download mvtools v26' '下载 mvtools v26')" wget -O v26.tar.gz https://github.com/dubhatervapoursynth/vapoursynth-mvtools/archive/refs/tags/v26.tar.gz || exit 1
+      tmux_run "$(msg 'Download mvtools v26' '下载 mvtools v26')" wget -O v26.tar.gz https://codeload.github.com/dubhatervapoursynth/vapoursynth-mvtools/tar.gz/refs/tags/v26 || exit 1
       tmux_run "$(msg 'Extract mvtools v26' '解压 mvtools v26')" tar zxvf v26.tar.gz || exit 1
       cd vapoursynth-mvtools-26/ || exit 1
       python3 - <<'PY' || exit 1
@@ -2933,7 +2972,7 @@ build_desktop_vs_plugin() (
   trap 'rm -rf -- "$build_dir"' EXIT
   cd "$build_dir"
   log "$(msg "Building VapourSynth ${name} ${tag}" "编译 VapourSynth ${name} ${tag}")"
-  tmux_run "${name} ${tag} download" wget -O source.tar.gz "${repository%.git}/archive/refs/tags/${tag}.tar.gz"
+  tmux_run "${name} ${tag} download" wget -O source.tar.gz "$(github_archive_url "$repository" "refs/tags/$tag")"
   tar -xzf source.tar.gz --strip-components=1
 
   if [[ "$name" == "bm3d" ]]; then
@@ -2975,7 +3014,7 @@ install_desktop_vs_rife() (
   trap 'rm -rf -- "$build_dir"' EXIT
   cd "$build_dir"
   log "$(msg "Installing RIFE ${tag} with the 4.6 model" "安装 RIFE ${tag} 和 4.6 模型")"
-  tmux_run "RIFE ${tag} download" wget -O "$library" "${repository}/releases/download/${tag}/${library}"
+  tmux_run "RIFE ${tag} download" download_github_release_asset "$repository" "$tag" "$library"
   if ! report="$(LC_ALL=C ldd -r "./$library" 2>&1)" || [[ "$report" == *'not found'* || "$report" == *'undefined symbol'* ]]; then
     printf '%s\n' "$report" >&2
     log "$(msg 'Skipping RIFE: the Linux binary is incompatible with this system' '跳过 RIFE：Linux 二进制包与本机系统不兼容')"
@@ -3092,7 +3131,7 @@ install_shaderc_fix() {
           cd "$build_dir" || exit 1
 
           download_source_archive "Shaderc ${shaderc_tag}" \
-              "https://github.com/google/shaderc/archive/refs/tags/${shaderc_tag}.tar.gz" . || exit 1
+              "https://codeload.github.com/google/shaderc/tar.gz/refs/tags/${shaderc_tag}" . || exit 1
 
           # Use Shaderc's DEPS parser and fetch only the dependencies needed with tests disabled.
           local dependencies path url
@@ -3102,7 +3141,13 @@ from runpy import run_path
 dependencies = run_path("utils/git-sync-deps")["parse_file_to_dict"]("DEPS")["deps"]
 for path in ("third_party/glslang", "third_party/spirv-tools", "third_party/spirv-headers"):
     repository, commit = dependencies[path].rsplit("@", 1)
-    print(path, f"{repository.removesuffix('.git')}/archive/{commit}.tar.gz")
+    repository = repository.removesuffix(".git")
+    if repository.startswith("https://github.com/"):
+        project = repository.removeprefix("https://github.com/")
+        url = f"https://codeload.github.com/{project}/tar.gz/{commit}"
+    else:
+        url = f"{repository}/archive/{commit}.tar.gz"
+    print(path, url)
 PY
           )" || exit 1
           while read -r path url; do
@@ -3196,7 +3241,7 @@ repair_broken_apt_state
 
 sys_deps=(
   python3 python3-pip python3-venv cmake ninja-build git
-  wget unzip fonts-wqy-microhei flac gedit
+  curl wget unzip fonts-wqy-microhei flac gedit
   libegl1 libopengl0 libglib2.0-0 libxkbcommon0 libdbus-1-3
   libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0
   libxcb-xinerama0 libxcb-xinput0 libxcb-render-util0
