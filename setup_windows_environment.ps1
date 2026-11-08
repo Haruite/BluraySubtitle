@@ -371,7 +371,8 @@ function Invoke-SetupDownload {
         [Parameter(Mandatory = $true)][string]$Destination,
         [string]$Sha256 = "",
         [long]$ExpectedSize = 0,
-        [ValidateRange(1, 5)][int]$Attempts = 3
+        [ValidateRange(1, 5)][int]$Attempts = 3,
+        [Uri]$FallbackUri
     )
 
     if (-not $script:TempRoot -or -not (Test-PathIsUnderRoot $Destination $script:TempRoot)) {
@@ -386,6 +387,10 @@ function Invoke-SetupDownload {
     $githubReleaseAsset = (
         $Uri.Scheme -eq "https" -and $Uri.Host -eq "api.github.com" -and
         $Uri.AbsolutePath -match '^/repos/[^/]+/[^/]+/releases/assets/[0-9]+$'
+    )
+    $releaseDownload = $githubReleaseAsset -or (
+        $Uri.Scheme -eq "https" -and $Uri.Host -eq "github.com" -and
+        $Uri.AbsolutePath -match '^/[^/]+/[^/]+/releases/(?:latest/)?download/'
     )
     $client = New-SetupHttpClient
     try {
@@ -405,7 +410,7 @@ function Invoke-SetupDownload {
                 try {
                     $response.EnsureSuccessStatusCode() | Out-Null
                     $contentType = $response.Content.Headers.ContentType
-                    if ($githubReleaseAsset -and $null -ne $contentType -and
+                    if ($releaseDownload -and $null -ne $contentType -and
                         ($contentType.MediaType -like "*json" -or $contentType.MediaType -eq "text/html")) {
                         throw (Get-SetupText `
                             "GitHub returned metadata or HTML for the release asset $fileName." `
@@ -484,6 +489,13 @@ function Invoke-SetupDownload {
                     Remove-Item -LiteralPath $Destination -Force
                 }
                 if ($attempt -eq $Attempts) {
+                    if ($githubReleaseAsset -and $null -ne $FallbackUri) {
+                        Write-SetupWarning `
+                            "GitHub API download failed for $fileName. Trying the official release link." `
+                            "GitHub API 下载 $fileName 失败，改用官方发布链接。"
+                        return (Invoke-SetupDownload -Uri $FallbackUri -Destination $Destination `
+                            -Sha256 $Sha256 -ExpectedSize $ExpectedSize -Attempts $Attempts)
+                    }
                     throw
                 }
                 Write-SetupWarning `
@@ -637,6 +649,50 @@ function Get-SetupJsonFromUri {
     return (Get-SetupTextFromUri -Uri $Uri -CacheName $CacheName | ConvertFrom-Json)
 }
 
+function Get-GitHubWebRelease {
+    param([Parameter(Mandatory = $true)][string]$Repository)
+
+    $safeName = $Repository.Replace('/', '-')
+    $releasePage = Get-SetupTextFromUri `
+        -Uri ([Uri]"https://github.com/$Repository/releases/latest") `
+        -CacheName "$safeName-latest.html"
+    $fragment = [regex]::Match($releasePage,
+        '(?i)<include-fragment\b[^>]*\bsrc="(?:https://github\.com)?(?<path>/(?<repo>[^/"]+/[^/"]+)/releases/expanded_assets/(?<tag>[^"?#]+))"')
+    if (-not $fragment.Success) {
+        throw (Get-SetupText `
+            "Could not find the latest release assets on the GitHub page for $Repository." `
+            "无法在 $Repository 的 GitHub 页面找到最新版附件。")
+    }
+
+    $assetsPath = [Net.WebUtility]::HtmlDecode($fragment.Groups["path"].Value)
+    $assetsPage = Get-SetupTextFromUri -Uri ([Uri]("https://github.com" + $assetsPath)) -CacheName "$safeName-assets.html"
+    $linkPattern = '(?i)\bhref="(?:https://github\.com)?(?<path>/' +
+        [regex]::Escape($fragment.Groups["repo"].Value) + '/releases/download/[^"]+)"'
+    $assets = @(
+        foreach ($row in [regex]::Matches($assetsPage, '(?is)<li\b[^>]*>.*?</li>')) {
+            $link = [regex]::Match($row.Value, $linkPattern)
+            if (-not $link.Success) {
+                continue
+            }
+            $path = [Net.WebUtility]::HtmlDecode($link.Groups["path"].Value)
+            $uri = [Uri]("https://github.com" + $path)
+            [pscustomobject]@{
+                name = [Uri]::UnescapeDataString($uri.Segments[-1])
+                url = $uri.AbsoluteUri
+                browser_download_url = $uri.AbsoluteUri
+                digest = [regex]::Match($row.Value, '(?i)\bsha256:[0-9a-f]{64}\b').Value
+                size = 0L
+                updated_at = [regex]::Match($row.Value, '\bdatetime="([^"]+)"').Groups[1].Value
+            }
+        }
+    )
+    return [pscustomobject]@{
+        tag_name = [Uri]::UnescapeDataString([Net.WebUtility]::HtmlDecode($fragment.Groups["tag"].Value))
+        assets = $assets
+        body = [Net.WebUtility]::HtmlDecode([regex]::Replace($releasePage, '(?s)<[^>]+>', ' '))
+    }
+}
+
 function Get-GitHubLatestReleaseAsset {
     param(
         [Parameter(Mandatory = $true)][string]$Repository,
@@ -649,9 +705,17 @@ function Get-GitHubLatestReleaseAsset {
     }
 
     $safeName = $Repository.Replace('/', '-')
-    $release = Get-SetupJsonFromUri `
-        -Uri ([Uri]"https://api.github.com/repos/$Repository/releases/latest") `
-        -CacheName "$safeName-latest.json"
+    try {
+        $release = Get-SetupJsonFromUri `
+            -Uri ([Uri]"https://api.github.com/repos/$Repository/releases/latest") `
+            -CacheName "$safeName-latest.json"
+    }
+    catch {
+        Write-SetupWarning `
+            "GitHub API release lookup failed for $Repository. Trying the release page." `
+            "GitHub API 查询 $Repository 的发布信息失败，改用官方发布页面。"
+        $release = Get-GitHubWebRelease -Repository $Repository
+    }
     $assets = @($release.assets | Where-Object { [string]$_.name -match $AssetPattern })
     if ($assets.Count -ne 1) {
         throw (Get-SetupText `
@@ -670,6 +734,7 @@ function Get-GitHubLatestReleaseAsset {
         Version = $version
         Name = [string]$asset.name
         Uri = [Uri]$asset.url
+        DirectUri = [Uri]$asset.browser_download_url
         Sha256 = $sha256
         Size = [long]$asset.size
         AssetUpdatedAtUtc = [string]$asset.updated_at
@@ -677,6 +742,18 @@ function Get-GitHubLatestReleaseAsset {
     }
     $script:ReleaseCache[$cacheKey] = $result
     return $result
+}
+
+function Get-GitHubTagsFromGit {
+    param([Parameter(Mandatory = $true)][string]$Repository)
+
+    $refs = Invoke-SetupCommand -FilePath $script:ToolPaths.Git `
+        -Arguments @("ls-remote", "--refs", "--tags", "https://github.com/$Repository.git")
+    foreach ($line in $refs -split '\r?\n') {
+        if ($line -match '^[0-9a-f]{40}\s+refs/tags/(.+)$') {
+            $Matches[1]
+        }
+    }
 }
 
 function Get-GitHubLatestTaggedSource {
@@ -692,12 +769,17 @@ function Get-GitHubLatestTaggedSource {
     }
 
     $safeName = $Repository.Replace('/', '-')
-    $tags = @(Get-SetupJsonFromUri `
-        -Uri ([Uri]"https://api.github.com/repos/$Repository/tags?per_page=100") `
-        -CacheName "$safeName-tags.json")
+    try {
+        $tags = @(Get-SetupJsonFromUri `
+            -Uri ([Uri]"https://api.github.com/repos/$Repository/tags?per_page=100") `
+            -CacheName "$safeName-tags.json")
+        $tagNames = @($tags | ForEach-Object { [string]$_.name })
+    }
+    catch {
+        $tagNames = @(Get-GitHubTagsFromGit -Repository $Repository)
+    }
     $candidates = @(
-        foreach ($tag in $tags) {
-            $tagName = [string]$tag.name
+        foreach ($tagName in $tagNames) {
             $match = [regex]::Match($tagName, $TagPattern)
             if ($match.Success -and $match.Groups["version"].Success) {
                 [pscustomobject]@{
@@ -1352,7 +1434,7 @@ function Install-SevenZip {
             "7-Zip 发布信息未提供 SHA-256 摘要。")
     }
     $installer = Join-Path $script:TempRoot $release.Name
-    Invoke-SetupDownload -Uri $release.Uri -Destination $installer -Sha256 $release.Sha256 | Out-Null
+    Invoke-SetupDownload -Uri $release.Uri -FallbackUri $release.DirectUri -Destination $installer -Sha256 $release.Sha256 | Out-Null
     $directory = Split-Path -Parent $script:ToolPaths.SevenZip
     # The 7-Zip installer splits unquoted /D values at spaces.
     Invoke-SetupInstaller -FilePath $installer -Arguments @("/S", "/D=$directory")
@@ -1872,6 +1954,7 @@ function Install-Git {
     $archive = Join-Path $script:TempRoot $release.Name
     Invoke-SetupDownload `
         -Uri $release.Uri `
+        -FallbackUri $release.DirectUri `
         -Destination $archive `
         -Sha256 $release.Sha256 | Out-Null
 
@@ -2143,7 +2226,7 @@ function Install-CMake {
 
     $release = Get-CMakeRelease
     $installer = Join-Path $script:TempRoot $release.Name
-    Invoke-SetupDownload -Uri $release.Uri -Destination $installer -Sha256 $release.Sha256 | Out-Null
+    Invoke-SetupDownload -Uri $release.Uri -FallbackUri $release.DirectUri -Destination $installer -Sha256 $release.Sha256 | Out-Null
     Assert-ValidAuthenticodeSignature $installer
     $windowsDirectory = [Environment]::GetFolderPath([Environment+SpecialFolder]::Windows)
     $msiexec = Join-Path $windowsDirectory "System32\msiexec.exe"
@@ -2177,7 +2260,7 @@ function Install-Ninja {
     $release = Get-NinjaRelease
     $archive = Join-Path $script:TempRoot $release.Name
     $extracted = Join-Path $script:TempRoot "ninja-extracted"
-    Invoke-SetupDownload -Uri $release.Uri -Destination $archive -Sha256 $release.Sha256 | Out-Null
+    Invoke-SetupDownload -Uri $release.Uri -FallbackUri $release.DirectUri -Destination $archive -Sha256 $release.Sha256 | Out-Null
     Expand-SetupZip -Archive $archive -Destination $extracted
     $source = Join-Path $extracted "ninja.exe"
     if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
@@ -2259,12 +2342,12 @@ function Install-Msys2 {
             -Repository "msys2/msys2-installer" `
             -AssetPattern '^msys2-base-x86_64-latest\.sfx\.exe$'
         $installer = Join-Path $script:TempRoot $release.Name
-        Invoke-SetupDownload -Uri $release.Uri -Destination $installer -Sha256 $release.Sha256 | Out-Null
+        Invoke-SetupDownload -Uri $release.Uri -FallbackUri $release.DirectUri -Destination $installer -Sha256 $release.Sha256 | Out-Null
         if (-not $release.Sha256) {
             $checksumPath = "$installer.sha256"
             try {
                 Invoke-SetupDownload `
-                    -Uri ([Uri]($release.Uri.AbsoluteUri + ".sha256")) `
+                    -Uri ([Uri]($release.DirectUri.AbsoluteUri + ".sha256")) `
                     -Destination $checksumPath | Out-Null
                 $checksumText = [IO.File]::ReadAllText($checksumPath)
                 $checksumMatch = [regex]::Match($checksumText, '\b([0-9a-fA-F]{64})\b')
@@ -2518,7 +2601,7 @@ function Install-Flac {
     $release = Get-FlacRelease
     $archive = Join-Path $script:TempRoot $release.Name
     $extracted = Join-Path $script:TempRoot "flac-extracted"
-    Invoke-SetupDownload -Uri $release.Uri -Destination $archive -Sha256 $release.Sha256 | Out-Null
+    Invoke-SetupDownload -Uri $release.Uri -FallbackUri $release.DirectUri -Destination $archive -Sha256 $release.Sha256 | Out-Null
     Expand-SetupZip -Archive $archive -Destination $extracted
     $flacExecutable = Get-ChildItem -LiteralPath $extracted -Filter "flac.exe" -File -Recurse |
         Where-Object { $_.FullName -match '\\Win64\\flac\.exe$' } |
@@ -2639,7 +2722,7 @@ function Install-TsMuxer {
     $release = Get-TsMuxerRelease
     $archive = Join-Path $script:TempRoot $release.Name
     $extracted = Join-Path $script:TempRoot "tsmuxer-extracted"
-    Invoke-SetupDownload -Uri $release.Uri -Destination $archive -Sha256 $release.Sha256 | Out-Null
+    Invoke-SetupDownload -Uri $release.Uri -FallbackUri $release.DirectUri -Destination $archive -Sha256 $release.Sha256 | Out-Null
     Expand-SetupZip -Archive $archive -Destination $extracted
     $executable = Get-ChildItem -LiteralPath $extracted -Filter "tsMuxeR.exe" -File -Recurse |
         Select-Object -First 1
@@ -2675,7 +2758,7 @@ function Install-DoviTool {
     $release = Get-DoviToolRelease
     $archive = Join-Path $script:TempRoot $release.Name
     $extracted = Join-Path $script:TempRoot "dovi-tool-extracted"
-    Invoke-SetupDownload -Uri $release.Uri -Destination $archive -Sha256 $release.Sha256 | Out-Null
+    Invoke-SetupDownload -Uri $release.Uri -FallbackUri $release.DirectUri -Destination $archive -Sha256 $release.Sha256 | Out-Null
     Expand-SetupZip -Archive $archive -Destination $extracted
     $executable = Get-ChildItem -LiteralPath $extracted -Filter "dovi_tool.exe" -File -Recurse |
         Select-Object -First 1
@@ -2711,7 +2794,7 @@ function Install-Hdr10PlusTool {
     $release = Get-Hdr10PlusToolRelease
     $archive = Join-Path $script:TempRoot $release.Name
     $extracted = Join-Path $script:TempRoot "hdr10plus-tool-extracted"
-    Invoke-SetupDownload -Uri $release.Uri -Destination $archive -Sha256 $release.Sha256 | Out-Null
+    Invoke-SetupDownload -Uri $release.Uri -FallbackUri $release.DirectUri -Destination $archive -Sha256 $release.Sha256 | Out-Null
     Expand-SetupZip -Archive $archive -Destination $extracted
     $executable = Get-ChildItem -LiteralPath $extracted -Filter "hdr10plus_tool.exe" -File -Recurse |
         Select-Object -First 1
@@ -3292,9 +3375,15 @@ function Get-VapourSynthClassicRelease {
         return $script:ReleaseCache[$cacheKey]
     }
 
-    $releases = @(Get-SetupJsonFromUri `
-        -Uri ([Uri]"https://api.github.com/repos/AmusementClub/vapoursynth-classic/releases?per_page=100") `
-        -CacheName "vapoursynth-classic-releases.json")
+    try {
+        $releases = @(Get-SetupJsonFromUri `
+            -Uri ([Uri]"https://api.github.com/repos/AmusementClub/vapoursynth-classic/releases?per_page=100") `
+            -CacheName "vapoursynth-classic-releases.json")
+    }
+    catch {
+        $releases = @(Get-GitHubTagsFromGit -Repository "AmusementClub/vapoursynth-classic" |
+            ForEach-Object { [pscustomobject]@{ draft = $false; tag_name = $_ } })
+    }
     $candidates = @(
         foreach ($release in $releases) {
             if ([bool]$release.draft) {
@@ -3342,8 +3431,20 @@ function Get-VapourSynthSourceDependencies {
         @{ Name = "libp2p"; Repository = "sekrit-twc/libp2p"; Ref = "HEAD" }
     )) {
         $repository = $dependency.Repository
-        $commit = Get-SetupJsonFromUri -Uri ([Uri]"https://api.github.com/repos/$repository/commits/$($dependency.Ref)") -CacheName "vapoursynth-$($dependency.Name)-commit.json"
-        $sha = [string]$commit.sha
+        try {
+            $commit = Get-SetupJsonFromUri -Uri ([Uri]"https://api.github.com/repos/$repository/commits/$($dependency.Ref)") -CacheName "vapoursynth-$($dependency.Name)-commit.json"
+            $sha = [string]$commit.sha
+        }
+        catch {
+            $ref = if ($dependency.Ref -eq "HEAD") { "HEAD" } else { "refs/heads/$($dependency.Ref)" }
+            $refs = Invoke-SetupCommand -FilePath $script:ToolPaths.Git `
+                -Arguments @("ls-remote", "--exit-code", "https://github.com/$repository.git", $ref)
+            $match = [regex]::Match($refs, '(?m)^([0-9a-f]{40})\s')
+            if (-not $match.Success) {
+                throw
+            }
+            $sha = $match.Groups[1].Value
+        }
         $dependencies[$dependency.Name] = [pscustomobject]@{
             Version = $sha
             Name = "vapoursynth-$($dependency.Name)-$sha.zip"

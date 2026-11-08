@@ -402,18 +402,26 @@ download_source_archive() {
   tmux_run "$(msg "Download ${name} source" "下载 ${name} 源码")" fetch_source_archive "$@"
 }
 
-download_github_release_asset() {
+download_github_release_asset() (
   local repository="${1#https://github.com/}" tag="$2" asset_name="$3" output="${4:-$3}"
+  local releases_page="https://github.com/${repository%.git}/releases"
   local releases_url="https://api.github.com/repos/${repository%.git}/releases"
-  local release_url="${releases_url}/latest" release asset_id content_type
-  local -a curl_options=(-fsSL --retry 4 --retry-connrefused --connect-timeout 30 --speed-time 30 --speed-limit 1
-    -H 'X-GitHub-Api-Version: 2022-11-28')
+  local release_url="${releases_url}/latest" direct_url="${releases_page}/latest/download/${asset_name}"
+  local partial content_type
+  local -a curl_options=(-fsSL --retry-connrefused --connect-timeout 30 --speed-time 30 --speed-limit 1)
+  local -a api_options=("${curl_options[@]}" --retry 1 -H 'X-GitHub-Api-Version: 2022-11-28')
 
   if [[ -n "$tag" ]]; then
     release_url="${releases_url}/tags/${tag}"
+    direct_url="${releases_page}/download/${tag}/${asset_name}"
   fi
-  release="$(curl "${curl_options[@]}" -H 'Accept: application/vnd.github+json' "$release_url")" || return $?
-  asset_id="$(python3 -c '
+  partial="$(mktemp -- "${output}.XXXXXX")" || return $?
+  trap 'rm -f -- "$partial"' EXIT
+
+  fetch_api_asset() {
+    local release asset_id content_type
+    release="$(curl "${api_options[@]}" -H 'Accept: application/vnd.github+json' "$release_url")" || return $?
+    asset_id="$(python3 -c '
 import json
 import sys
 
@@ -422,15 +430,19 @@ for asset in json.load(sys.stdin)["assets"]:
         print(asset["id"])
         break
 ' "$asset_name" <<< "$release")" || return $?
-  if [[ -z "$asset_id" ]]; then
-    printf '%s\n' "$(msg "GitHub release has no asset named ${asset_name}" "GitHub 发布版本中找不到附件 ${asset_name}")" >&2
-    return 1
-  fi
+    [[ -n "$asset_id" ]] || return 1
+    content_type="$(curl "${api_options[@]}" -H 'Accept: application/octet-stream' \
+      -o "$partial" -w '%{content_type}' "${releases_url}/assets/${asset_id}")" || return $?
+    [[ "$content_type" != *json* && "$content_type" != text/html* ]]
+  }
 
-  content_type="$(curl "${curl_options[@]}" -H 'Accept: application/octet-stream' \
-    -o "$output" -w '%{content_type}' "${releases_url}/assets/${asset_id}")" || return $?
-  [[ "$content_type" != *json* && "$content_type" != text/html* ]]
-}
+  if ! fetch_api_asset; then
+    log "$(msg "GitHub API download failed for ${asset_name}. Trying the official release link." "GitHub API 下载 ${asset_name} 失败，改用官方发布链接。")"
+    content_type="$(curl "${curl_options[@]}" --retry 4 -o "$partial" -w '%{content_type}' "$direct_url")" || return $?
+    [[ "$content_type" != *json* && "$content_type" != text/html* ]] || return 1
+  fi
+  mv -f -- "$partial" "$output"
+)
 
 # ---------------------------------------------------------------------------
 # APT helpers

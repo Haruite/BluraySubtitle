@@ -103,22 +103,60 @@ RUN set -eux; \
     python3 -m pip install --break-system-packages --upgrade cython || python3 -m pip install --upgrade cython
 
 COPY <<'DOWNLOAD_GITHUB_RELEASE_ASSET' /tmp/build-tools/download_github_release_asset.sh
+set +x
 set -euo pipefail
 
 repository="${1#https://github.com/}"
 tag="$2"
 asset_name="$3"
 output="${4:-$asset_name}"
+releases_page="https://github.com/${repository%.git}/releases"
 releases_url="https://api.github.com/repos/${repository%.git}/releases"
 release_url="${releases_url}/latest"
-curl_options=(-fsSL --retry 4 --retry-connrefused --connect-timeout 30 --speed-time 30 --speed-limit 1
-  -H 'X-GitHub-Api-Version: 2022-11-28')
+direct_url="${releases_page}/latest/download/${asset_name}"
+curl_options=(-q -fsSL --proto '=https' --proto-redir '=https'
+  --retry-connrefused --connect-timeout 30 --speed-time 30 --speed-limit 1)
+api_options=("${curl_options[@]}" --retry 1 -H 'X-GitHub-Api-Version: 2022-11-28')
+
+github_request() {
+  local accept="$1" destination="$2" url="$3"
+  local -a request=(-H "Accept: $accept" -o "$destination")
+  local response status=0
+
+  if [[ -s /run/secrets/github_token ]]; then
+    response="$(curl "${api_options[@]}" "${request[@]}" \
+      -H @<(printf 'Authorization: Bearer %s\n' "$(< /run/secrets/github_token)") \
+      -w '%{http_code}\t%{content_type}' "$url")" || status=$?
+    if (( status == 0 )); then
+      printf '%s\n' "${response#*$'\t'}"
+      return 0
+    fi
+    case "${response%%$'\t'*}" in
+      401|403|404) ;;
+      *) return "$status" ;;
+    esac
+  fi
+
+  curl "${api_options[@]}" "${request[@]}" -w '%{content_type}' "$url"
+}
 
 if [[ -n "$tag" ]]; then
   release_url="${releases_url}/tags/${tag}"
+  direct_url="${releases_page}/download/${tag}/${asset_name}"
 fi
-release="$(curl "${curl_options[@]}" -H 'Accept: application/vnd.github+json' "$release_url")"
-asset_id="$(python3 -c '
+work_dir="$(mktemp -d)"
+trap 'rm -rf -- "$work_dir"' EXIT
+release="$work_dir/release.json"
+partial="$work_dir/asset"
+
+fetch_api_asset() {
+  local asset_id content_type status
+  github_request 'application/vnd.github+json' "$release" "$release_url" >/dev/null || {
+    status=$?
+    printf 'GitHub release metadata request failed for %s\n' "$release_url" >&2
+    return "$status"
+  }
+  asset_id="$(python3 -c '
 import json
 import sys
 
@@ -126,15 +164,24 @@ for asset in json.load(sys.stdin)["assets"]:
     if asset["name"] == sys.argv[1]:
         print(asset["id"])
         break
-' "$asset_name" <<< "$release")"
-test -n "$asset_id"
+' "$asset_name" < "$release")" || return $?
+  [[ -n "$asset_id" ]] || return 1
+  content_type="$(github_request 'application/octet-stream' "$partial" "${releases_url}/assets/${asset_id}")" || {
+    status=$?
+    printf 'GitHub release asset request failed for %s in %s\n' "$asset_name" "$repository" >&2
+    return "$status"
+  }
+  [[ "$content_type" != *json* && "$content_type" != text/html* ]]
+}
 
-content_type="$(curl "${curl_options[@]}" -H 'Accept: application/octet-stream' \
-  -o "$output" -w '%{content_type}' "${releases_url}/assets/${asset_id}")"
-[[ "$content_type" != *json* && "$content_type" != text/html* ]]
+if ! fetch_api_asset; then
+  content_type="$(curl "${curl_options[@]}" --retry 4 -o "$partial" -w '%{content_type}' "$direct_url")"
+  [[ "$content_type" != *json* && "$content_type" != text/html* ]]
+fi
+mv -f -- "$partial" "$output"
 DOWNLOAD_GITHUB_RELEASE_ASSET
 
-RUN set -eux; \
+RUN --mount=type=secret,id=github_token set -eux; \
     DOVI_VER="$(git ls-remote --refs --tags --sort=-version:refname https://github.com/quietvoid/dovi_tool.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')"; \
     test -n "$DOVI_VER"; \
     case "$(uname -m)" in \
@@ -223,7 +270,7 @@ RUN set -eux; \
     rm -rf /tmp/lsmash
 
 ARG X265_TAG
-RUN bash <<'X265EOS'
+RUN --mount=type=secret,id=github_token bash <<'X265DOWNLOAD'
 set -euo pipefail
 repo=https://github.com/Multicorewareinc/x265.git
 tag="${X265_TAG:-$(git ls-remote --refs --tags --sort=-version:refname "$repo" | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[0-9]+([.][0-9]+)+$/ { print $2; exit }')}"
@@ -234,6 +281,14 @@ archive="x265_${tag}.tar.gz"
 bash /tmp/build-tools/download_github_release_asset.sh "$repo" "$tag" "$archive"
 mkdir -p x265
 tar -xf "$archive" --strip-components=1 -C x265
+rm -f -- "$archive"
+printf '%s\n' "$tag" > /tmp/x265/tag
+X265DOWNLOAD
+
+RUN bash <<'X265EOS'
+set -euo pipefail
+cd /tmp/x265
+tag="$(cat tag)"
 source_root=/tmp/x265/x265/source
 json11_source="$source_root/dynamicHDR10/json11/json11.cpp"
 if ! grep -Fxq '#include <cstdint>' "$json11_source"; then
@@ -591,7 +646,7 @@ RUN set -eux; \
     meson setup build -Dr73-compat=true; ninja -C build; \
     cp "$(find "$PWD/build" -maxdepth 2 -name libvs_placebo.so -type f | head -n1)" /app/plugins/
 
-RUN set -eux; \
+RUN --mount=type=secret,id=github_token set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     cd /tmp/vsplugins; \
@@ -610,7 +665,7 @@ RUN set -eux; \
     meson setup build; ninja -C build; \
     cp build/mvtools.so /app/plugins/
 
-RUN set -eux; \
+RUN --mount=type=secret,id=github_token set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     bash /tmp/build-tools/download_github_release_asset.sh ispc/ispc v1.31.0 ispc-v1.31.0-linux.tar.gz /tmp/ispc.tar.gz; \
@@ -630,7 +685,7 @@ RUN set -eux; \
 
 RUN python3 -m pip install --break-system-packages --upgrade numpy pycountry PyQt6 soundfile pillow matplotlib
 
-RUN set -eux; \
+RUN --mount=type=secret,id=github_token set -eux; \
     SEVENZIP_RELEASE="$(git ls-remote --refs --tags --sort=-version:refname https://github.com/ip7z/7zip.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[0-9]+[.][0-9]+$/ { print $2; exit }')"; \
     test -n "$SEVENZIP_RELEASE"; \
     SEVENZIP_ASSET_VERSION="$(printf '%s' "$SEVENZIP_RELEASE" | tr -d '.')"; \
@@ -684,7 +739,7 @@ RUN set -eux; \
     rm -rf /tmp/x264
 
 ARG TSMUXER_TAG
-RUN set -eux; \
+RUN --mount=type=secret,id=github_token set -eux; \
     TSMUXER_TAG="${TSMUXER_TAG:-$(git ls-remote --refs --tags --sort=-version:refname https://github.com/justdan96/tsMuxer.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')}"; \
     test -n "$TSMUXER_TAG"; \
     TSMUXER_VER="${TSMUXER_TAG#v}"; \
@@ -696,7 +751,7 @@ RUN set -eux; \
     rm -rf /tmp/tsmuxe
 
 ARG HDR10PLUS_TAG
-RUN set -eux; \
+RUN --mount=type=secret,id=github_token set -eux; \
     HDR10PLUS_TAG="${HDR10PLUS_TAG:-$(git ls-remote --refs --tags --sort=-version:refname https://github.com/quietvoid/hdr10plus_tool.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')}"; \
     test -n "$HDR10PLUS_TAG"; \
     HDR10PLUS_VER="${HDR10PLUS_TAG#v}"; \
@@ -711,8 +766,12 @@ RUN set -eux; \
     bash /tmp/build-tools/download_github_release_asset.sh quietvoid/hdr10plus_tool "$HDR10PLUS_TAG" "$HDR10PLUS_ARCHIVE"; \
     tar zxf "${HDR10PLUS_ARCHIVE}"; \
     install -m 0755 hdr10plus_tool /usr/bin/hdr10plus_tool; \
-    /usr/bin/hdr10plus_tool --version 2>&1 | grep -F "hdr10plus_tool ${HDR10PLUS_VER}" >/dev/null; \
+    printf '%s\n' "$HDR10PLUS_VER" > /tmp/hdr10plus-tool-version; \
     rm -rf /tmp/hdr10plus-tool /tmp/build-tools
+
+RUN set -eux; \
+    /usr/bin/hdr10plus_tool --version 2>&1 | grep -F "hdr10plus_tool $(cat /tmp/hdr10plus-tool-version)" >/dev/null; \
+    rm -f /tmp/hdr10plus-tool-version
 
 RUN pkg-config --exists dovi \
     && /usr/bin/ffmpeg -hide_banner -h encoder=libopus 2>&1 | grep '^Encoder libopus' >/dev/null \

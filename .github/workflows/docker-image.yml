@@ -4,6 +4,9 @@ on:
   push:
     branches: [ "main" ]
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -134,6 +137,8 @@ jobs:
           context: . 
           platforms: linux/amd64 
           push: true
+          secrets: |
+            "github_token=${{ github.token }}"
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/bluraysubtitle:latest
             ${{ secrets.DOCKERHUB_USERNAME }}/bluraysubtitle:26.04

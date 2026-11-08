@@ -5,6 +5,7 @@ import argparse
 import configparser
 from dataclasses import dataclass
 import hashlib
+import html
 import json
 import os
 from pathlib import Path
@@ -156,13 +157,17 @@ class Installer:
             uri.scheme == "https" and uri.hostname == "api.github.com"
             and re.fullmatch(r"/repos/[^/]+/[^/]+/releases/assets/[0-9]+", uri.path) is not None
         )
+        release_download = github_asset or (
+            uri.scheme == "https" and uri.hostname == "github.com"
+            and re.match(r"/[^/]+/[^/]+/releases/(?:latest/)?download/", uri.path) is not None
+        )
         headers = {"Accept": "application/octet-stream", "X-GitHub-Api-Version": "2022-11-28"} if github_asset else {}
         for attempt in range(3):
             try:
                 request = urllib.request.Request(url, headers=headers)
                 with self.http.open(request, timeout=120) as response:
                     content_type = response.headers.get_content_type()
-                    if github_asset and (content_type.endswith("json") or content_type == "text/html"):
+                    if release_download and (content_type.endswith("json") or content_type == "text/html"):
                         raise urllib.error.URLError(f"{url} returned {content_type}")
                     with partial.open("wb") as output:
                         shutil.copyfileobj(response, output)
@@ -176,20 +181,61 @@ class Installer:
                 time.sleep(attempt + 1)
         raise RuntimeError(f"Unable to download {url}")
 
-    def github(self, url, *, missing_ok=False):
+    def download_release_asset(self, asset, destination):
+        url = asset["url"]
+        digest = asset.get("digest") or ""
+        try:
+            return self.download(url, destination, digest)
+        except (urllib.error.URLError, TimeoutError, ConnectionError):
+            direct_url = asset.get("browser_download_url")
+            if not direct_url or direct_url == url:
+                raise
+            return self.download(direct_url, destination, digest)
+
+    def web_release(self, repository, ref):
+        if not ref:
+            with self.http.open(f"https://github.com/{repository}/releases/latest", timeout=90) as response:
+                location = urllib.parse.urlsplit(response.geturl())
+            match = re.fullmatch(r"/([^/]+/[^/]+)/releases/tag/(.+)", location.path)
+            if location.scheme != "https" or location.hostname != "github.com" or not match:
+                raise RuntimeError(f"Unable to resolve the latest release for {repository}")
+            repository, encoded_ref = match.groups()
+            ref = urllib.parse.unquote(encoded_ref)
+
+        assets_url = f"https://github.com/{repository}/releases/expanded_assets/{urllib.parse.quote(ref, safe='')}"
+        with self.http.open(assets_url, timeout=90) as response:
+            page = response.read().decode("utf-8")
+        link_pattern = rf'\bhref="(?:https://github\.com)?(/{re.escape(repository)}/releases/download/[^"]+)"'
+        assets = []
+        for row in re.findall(r"<li\b[^>]*>.*?</li>", page, re.I | re.S):
+            link = re.search(link_pattern, row, re.I)
+            if not link:
+                continue
+            url = "https://github.com" + html.unescape(link[1])
+            name = urllib.parse.unquote(urllib.parse.urlsplit(url).path.rsplit("/", 1)[-1])
+            digest = re.search(r"\bsha256:[0-9a-f]{64}\b", row, re.I)
+            assets.append({"name": name, "url": url, "digest": digest[0] if digest else ""})
+        return {"tag_name": ref, "assets": assets}
+
+    def release(self, repository, ref="", *, missing_ok=False):
+        suffix = "tags/" + urllib.parse.quote(ref, safe="") if ref else "latest"
+        url = f"https://api.github.com/repos/{repository}/releases/{suffix}"
         if url not in self.json_cache:
             try:
                 with self.http.open(url, timeout=90) as response:
-                    self.json_cache[url] = json.load(response)
-            except urllib.error.HTTPError as error:
-                if not missing_ok or error.code != 404:
-                    raise
-                self.json_cache[url] = None
+                    release = json.load(response)
+            except (OSError, ValueError) as error:
+                if missing_ok and isinstance(error, urllib.error.HTTPError) and error.code == 404:
+                    release = None
+                else:
+                    try:
+                        release = self.web_release(repository, ref)
+                    except urllib.error.HTTPError as page_error:
+                        if not missing_ok or page_error.code != 404:
+                            raise
+                        release = None
+            self.json_cache[url] = release
         return self.json_cache[url]
-
-    def release(self, component):
-        suffix = "tags/" + urllib.parse.quote(component.ref, safe="") if component.ref else "latest"
-        return self.github(f"https://api.github.com/repos/{component.repository}/releases/{suffix}", missing_ok=True)
 
     def unpack(self, archive, destination):
         marker = destination / ".unpacked"
@@ -486,9 +532,9 @@ class Installer:
                 text = text.replace(registration, registration + "\n" + registration.replace('"SangNomMod"', '"SangNom"'))
             path.write_text(text, encoding="utf-8")
         elif component.key == "nlm_ispc":
-            release = self.github("https://api.github.com/repos/ispc/ispc/releases/tags/v1.31.0")
+            release = self.release("ispc/ispc", "v1.31.0")
             asset = next(item for item in release["assets"] if re.search(r"windows[.]zip$", item["name"]))
-            archive = self.download(asset["url"], self.work / "ispc" / asset["name"], asset.get("digest") or "")
+            archive = self.download_release_asset(asset, self.work / "ispc" / asset["name"])
             executable = next(self.unpack(archive, self.work / "ispc/unpacked").rglob("ispc.exe"))
             shutil.copyfile(executable, self.args.msys2_root / "ucrt64/bin/ispc.exe")
         jobs = str(self.args.jobs)
@@ -564,7 +610,7 @@ class Installer:
         self.used_packages = set()
         self.source_dependencies = []
         previous = self.state["components"].get(component.key)
-        release = self.release(component) if not component.ref else None
+        release = self.release(component.repository) if not component.ref else None
         target_ref = component.ref or release["tag_name"]
         folder = self.runtime / "vapoursynth64/coreplugins" if component.key == "removegrain" else self.plugins
         target = folder / component.filename
@@ -619,7 +665,8 @@ class Installer:
         else:
             self.log("VapourSynth plugin needs installation or update: {name} {installed} -> {target}",
                      name=component.key, installed=installed or "?", target=expected)
-        release = release if release is not None else self.release(component)
+        if release is None:
+            release = self.release(component.repository, component.ref, missing_ok=True)
         self.log("Installing VapourSynth component: {name} {version}", name=component.key, version=target_ref)
         if component.key == "dfttest":
             self.prepare_fftw()
@@ -632,7 +679,7 @@ class Installer:
                     assets = []
             if assets:
                 artifact = assets[0]
-                archive = self.download(artifact["url"], self.work / component.key / artifact["name"], artifact.get("digest") or "")
+                archive = self.download_release_asset(artifact, self.work / component.key / artifact["name"])
                 package = self.unpack(archive, self.work / component.key / ("release-" + archive.stem))
                 names = {component.filename.lower()} | ({"lsmashsource.dll"} if component.key == "lsmas" else set())
                 if component.key == "zsmooth":
@@ -693,7 +740,7 @@ class Installer:
 
     def install_editor(self):
         self.used_packages = set()
-        release = self.release(EDITOR)
+        release = self.release(EDITOR.repository, EDITOR.ref)
         ref = release["tag_name"]
         previous = self.state["components"].get("vsedit")
         if previous and (self.runtime / previous["entrypoint"]).resolve() == self.editor and self.valid(previous, ref):
@@ -707,7 +754,7 @@ class Installer:
         source = self.source(EDITOR, ref)
         package, directory, method = None, None, "source"
         for artifact in assets:
-            archive = self.download(artifact["url"], self.work / "vsedit" / artifact["name"], artifact.get("digest") or "")
+            archive = self.download_release_asset(artifact, self.work / "vsedit" / artifact["name"])
             package = self.unpack(archive, self.work / "vsedit" / ("release-" + archive.stem))
             executable = next((path for path in package.rglob("vsedit.exe") if pe64(path)), None)
             if executable is None:
