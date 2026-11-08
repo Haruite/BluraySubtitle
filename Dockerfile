@@ -117,19 +117,55 @@ RUN set -eux; \
     rm -rf /tmp/dovi
 
 ARG FFMPEG_TAG
+ARG MPV_TAG
+ARG LIBASS_TAG
+ARG LIBPLACEBO_TAG
+COPY <<'DOWNLOAD_SOURCE_ARCHIVE' /tmp/build-tools/download_source_archive.sh
+set -euo pipefail
+
+archive_url="$1"
+source_dir="$2"
+mirror_url="${3:-}"
+archive="$(mktemp)"
+trap 'rm -f -- "$archive"' EXIT
+mkdir -p -- "$source_dir"
+
+fetch_and_extract() {
+  wget -nv --timeout=30 --tries=5 -O "$archive" "$1" &&
+    tar -xf "$archive" --strip-components=1 -C "$source_dir"
+}
+
+if ! fetch_and_extract "$archive_url"; then
+  [[ -n "$mirror_url" ]] || exit 1
+  fetch_and_extract "$mirror_url"
+fi
+DOWNLOAD_SOURCE_ARCHIVE
+
 RUN set -eux; \
     FFMPEG_TAG="${FFMPEG_TAG:-$(git ls-remote --refs --tags --sort=-version:refname https://github.com/FFmpeg/FFmpeg.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[nN]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')}"; \
+    MPV_TAG="${MPV_TAG:-$(git ls-remote --refs --tags --sort=-version:refname https://github.com/mpv-player/mpv.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^v[0-9]+([.][0-9]+)+$/ { print $2; exit }')}"; \
+    LIBASS_TAG="${LIBASS_TAG:-$(git ls-remote --refs --tags --sort=-version:refname https://github.com/libass/libass.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[0-9]+([.][0-9]+)+$/ { print $2; exit }')}"; \
+    LIBPLACEBO_TAG="${LIBPLACEBO_TAG:-$(git ls-remote --refs --tags --sort=-version:refname https://github.com/haasn/libplacebo.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^v[0-9]+([.][0-9]+)+$/ { print $2; exit }')}"; \
     test -n "$FFMPEG_TAG"; \
+    test -n "$MPV_TAG"; \
+    test -n "$LIBASS_TAG"; \
+    test -n "$LIBPLACEBO_TAG"; \
     mkdir -p /tmp/mpv && cd /tmp/mpv; \
-    git clone https://github.com/mpv-player/mpv-build.git; \
-    cd mpv-build; \
-    ./use-ffmpeg-release; \
+    bash /tmp/build-tools/download_source_archive.sh \
+      https://github.com/mpv-player/mpv-build/archive/refs/heads/master.tar.gz .; \
+    bash /tmp/build-tools/download_source_archive.sh \
+      "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_TAG#[nN]}.tar.xz" ffmpeg; \
+    bash /tmp/build-tools/download_source_archive.sh \
+      "https://github.com/mpv-player/mpv/archive/refs/tags/${MPV_TAG}.tar.gz" mpv; \
+    bash /tmp/build-tools/download_source_archive.sh \
+      "https://github.com/libass/libass/archive/refs/tags/${LIBASS_TAG}.tar.gz" libass; \
+    git clone --depth 1 --branch "$LIBPLACEBO_TAG" --recurse-submodules=3rdparty --shallow-submodules \
+      https://github.com/haasn/libplacebo.git libplacebo; \
     echo "--enable-libbluray" > ffmpeg_options; \
     echo "--enable-libdav1d" >> ffmpeg_options; \
     echo "--enable-libopus" >> ffmpeg_options; \
     echo "-Dlibbluray=enabled" > mpv_options; \
     echo "-Dlua=luajit" >> mpv_options; \
-    ./update; \
     mkdir -p ffmpeg_build/fftools/resources; \
     ./build -j"$(nproc)"; \
     ./install; \
@@ -145,7 +181,7 @@ RUN set -eux; \
     LSMASH_TAG="$(git ls-remote --refs --tags --sort=-version:refname https://github.com/l-smash/l-smash.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')"; \
     test -n "$LSMASH_TAG"; \
     mkdir -p /tmp/lsmash && cd /tmp/lsmash; \
-    git clone --depth 1 --branch "$LSMASH_TAG" https://github.com/l-smash/l-smash.git l-smash; \
+    bash /tmp/build-tools/download_source_archive.sh "https://github.com/l-smash/l-smash/archive/refs/tags/${LSMASH_TAG}.tar.gz" l-smash; \
     cd l-smash; \
     ./configure --enable-shared; \
     make -j"$(nproc)"; \
@@ -161,7 +197,7 @@ tag="${X265_TAG:-$(git ls-remote --refs --tags --sort=-version:refname "$repo" |
 test -n "$tag"
 mkdir -p /tmp/x265
 cd /tmp/x265
-git clone --depth 1 --branch "$tag" "$repo" x265
+bash /tmp/build-tools/download_source_archive.sh "${repo%.git}/releases/download/${tag}/x265_${tag}.tar.gz" x265
 source_root=/tmp/x265/x265/source
 json11_source="$source_root/dynamicHDR10/json11/json11.cpp"
 if ! grep -Fxq '#include <cstdint>' "$json11_source"; then
@@ -224,7 +260,7 @@ mkdir -p /tmp/svtav1
 cd /tmp/svtav1
 SVT_TAG="${SVT_AV1_TAG:-$(git ls-remote --refs --tags --sort=-version:refname https://gitlab.com/AOMediaCodec/SVT-AV1.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')}"
 test -n "$SVT_TAG"
-git clone --depth 1 --branch "$SVT_TAG" https://gitlab.com/AOMediaCodec/SVT-AV1.git
+bash /tmp/build-tools/download_source_archive.sh "https://gitlab.com/AOMediaCodec/SVT-AV1/-/archive/${SVT_TAG}/SVT-AV1-${SVT_TAG}.tar.gz" SVT-AV1
 svt_root=/tmp/svtav1/SVT-AV1
 test -f "$svt_root/Source/Lib/Globals/enc_settings.c"
 
@@ -254,7 +290,7 @@ FDK_AAC_TAG="${FDK_AAC_TAG:-$(git ls-remote --refs --tags --sort=-version:refnam
 FDKAAC_TAG="${FDKAAC_TAG:-$(git ls-remote --refs --tags --sort=-version:refname https://github.com/nu774/fdkaac.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')}"
 test -n "$FDK_AAC_TAG"
 test -n "$FDKAAC_TAG"
-git clone --depth 1 --branch "$FDK_AAC_TAG" https://github.com/mstorsjo/fdk-aac.git fdk-aac
+bash /tmp/build-tools/download_source_archive.sh "https://github.com/mstorsjo/fdk-aac/archive/refs/tags/${FDK_AAC_TAG}.tar.gz" fdk-aac
 cd fdk-aac
 ./autogen.sh
 ./configure --prefix=/usr/local
@@ -262,7 +298,7 @@ make -j"$(nproc)"
 make install
 ldconfig
 cd /tmp/fdk
-git clone --depth 1 --branch "$FDKAAC_TAG" https://github.com/nu774/fdkaac.git
+bash /tmp/build-tools/download_source_archive.sh "https://github.com/nu774/fdkaac/archive/refs/tags/${FDKAAC_TAG}.tar.gz" fdkaac
 cd fdkaac
 autoreconf -fi
 ./configure --prefix=/usr/local
@@ -276,16 +312,15 @@ RUN bash <<'FLAC'
 set -euo pipefail
 FLAC_TAG="$(git ls-remote --refs --tags --sort=-version:refname https://github.com/xiph/flac.git | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^[vV]?[0-9]+([.][0-9]+)+$/ { print $2; exit }')"
 test -n "$FLAC_TAG"
-FLAC_VERSION="${FLAC_TAG#v}"
+FLAC_VERSION="${FLAC_TAG#[vV]}"
 CURRENT_FLAC_VERSION="$(flac --version 2>/dev/null | grep -oE '[0-9]+[.][0-9]+[.][0-9]+' | head -n 1 || true)"
 if [ -n "$CURRENT_FLAC_VERSION" ] && dpkg --compare-versions "$CURRENT_FLAC_VERSION" ge "$FLAC_VERSION"; then
   exit 0
 fi
 mkdir -p /tmp/flac
 cd /tmp/flac
-git clone --depth 1 --branch "$FLAC_TAG" https://github.com/xiph/flac.git flac
+bash /tmp/build-tools/download_source_archive.sh "https://downloads.xiph.org/releases/flac/flac-${FLAC_VERSION}.tar.xz" flac
 cd flac
-./autogen.sh
 ./configure --enable-static --enable-shared --enable-64-bit-words
 make -j"$(nproc)"
 make install
@@ -318,7 +353,7 @@ RUN set -eux; \
     DESCALE_REPOSITORY=https://github.com/AmusementClub/descale.git; \
     DESCALE_TAG="$(git ls-remote --refs --tags --sort=-version:refname "$DESCALE_REPOSITORY" 'r*.A*' | awk -F 'refs/tags/' 'NF == 2 && $2 ~ /^r[0-9]+[.]A([0-9]+)?$/ { print $2; exit }')"; \
     test -n "$DESCALE_TAG"; \
-    git clone --depth 1 --branch "$DESCALE_TAG" "$DESCALE_REPOSITORY" vapoursynth-descale; \
+    bash /tmp/build-tools/download_source_archive.sh "${DESCALE_REPOSITORY%.git}/archive/refs/tags/${DESCALE_TAG}.tar.gz" vapoursynth-descale; \
     cd vapoursynth-descale; \
     sed -i '/vsapi->createVideoFilter/s/data->/d./g' src/vsplugin.cc; \
     meson setup build --buildtype=release; \
@@ -360,21 +395,17 @@ set -euo pipefail
 export PATH=/root/.local/bin:$PATH
 export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
 cd /tmp/vsplugins
-git clone https://github.com/HomeOfAviSynthPlusEvolution/L-SMASH-Works.git
-cd L-SMASH-Works/VapourSynth
-need_compat=false
+lsmash_commit=ae51313aeb32cb39d2dbf328702c8fa3f5cd212a
 if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libavcodec; then
   avcodec_ver="$(pkg-config --modversion libavcodec 2>/dev/null | head -n 1 || true)"
   avcodec_major="${avcodec_ver%%.*}"
   if [[ "$avcodec_major" =~ ^[0-9]+$ ]] && (( avcodec_major < 60 )); then
-    need_compat=true
+    lsmash_commit=70e19fb19dfd940a9ec9c7e02125b5fe1e2d7f93
   fi
 fi
-if [[ "$need_compat" == "true" ]]; then
-  git checkout . && git -c advice.detachedHead=false checkout -q 70e19fb
-else
-  git checkout . && git -c advice.detachedHead=false checkout -q ae51313
-fi
+bash /tmp/build-tools/download_source_archive.sh \
+  "https://github.com/HomeOfAviSynthPlusEvolution/L-SMASH-Works/archive/${lsmash_commit}.tar.gz" L-SMASH-Works
+cd L-SMASH-Works/VapourSynth
 python3 - <<'PY'
 import re
 from pathlib import Path
@@ -444,7 +475,7 @@ RUN set -eux; \
     export PATH=/root/.local/bin:$PATH; \
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:/root/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"; \
     cd /tmp/vsplugins; \
-    git clone --depth 1 --branch 0.38.4 https://github.com/AmusementClub/assrender.git; \
+    bash /tmp/build-tools/download_source_archive.sh https://github.com/AmusementClub/assrender/archive/refs/tags/0.38.4.tar.gz assrender; \
     cd assrender; cmake -S . -B build -DCMAKE_BUILD_TYPE=Release; \
     cmake --build build --parallel "$(nproc)"; \
     cp "$(find "$PWD/build" -name libassrender.so -type f | head -n1)" /app/plugins/
@@ -600,20 +631,10 @@ RUN set -eux; \
     fi; \
     test -n "$X264_COMMIT"; \
     mkdir -p /tmp/x264 && cd /tmp/x264; \
-    git init x264; \
+    bash /tmp/build-tools/download_source_archive.sh \
+      "${X264_OFFICIAL%.git}/-/archive/${X264_COMMIT}/x264-${X264_COMMIT}.tar.gz" x264 \
+      "${X264_MIRROR%.git}/archive/${X264_COMMIT}.tar.gz"; \
     cd x264; \
-    fetched=0; \
-    for repository in "$X264_OFFICIAL" "$X264_MIRROR"; do \
-      git remote remove origin 2>/dev/null || true; \
-      git remote add origin "$repository"; \
-      for attempt in 1 2 3 4 5; do \
-        if git fetch --depth 1 origin "$X264_COMMIT"; then fetched=1; break; fi; \
-        if [ "$attempt" -lt 5 ]; then sleep "$((attempt * 5))"; fi; \
-      done; \
-      if [ "$fetched" -eq 1 ]; then break; fi; \
-    done; \
-    test "$fetched" -eq 1; \
-    git checkout --detach FETCH_HEAD; \
     X264_LAVF_OPTION=; \
     LIBAVUTIL_MAJOR="$(pkg-config --modversion libavutil 2>/dev/null | cut -d. -f1 || true)"; \
     case "$LIBAVUTIL_MAJOR" in \
@@ -624,7 +645,7 @@ RUN set -eux; \
     make -j"$(nproc)"; \
     install -m 0755 x264 /usr/bin/x264; \
     /usr/bin/x264 --version >/dev/null; \
-    rm -rf /tmp/x264
+    rm -rf /tmp/x264 /tmp/build-tools
 
 ARG TSMUXER_TAG
 RUN set -eux; \

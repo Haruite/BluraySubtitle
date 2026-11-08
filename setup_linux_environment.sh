@@ -374,6 +374,29 @@ tmux_run() {
   return "$ec"
 }
 
+fetch_source_archive() (
+  local archive_url="$1" source_dir="$2" mirror_url="${3:-}" archive
+  archive="$(mktemp)" || return 1
+  trap 'rm -f -- "$archive"' EXIT
+  mkdir -p -- "$source_dir" || return 1
+
+  fetch_and_extract() {
+    wget -nv --timeout=30 --tries=5 -O "$archive" "$1" &&
+      tar -xf "$archive" --strip-components=1 -C "$source_dir"
+  }
+
+  if ! fetch_and_extract "$archive_url"; then
+    [[ -n "$mirror_url" ]] || return 1
+    fetch_and_extract "$mirror_url"
+  fi
+)
+
+download_source_archive() {
+  local name="$1"
+  shift
+  tmux_run "$(msg "Download ${name} source" "下载 ${name} 源码")" fetch_source_archive "$@"
+}
+
 # ---------------------------------------------------------------------------
 # APT helpers
 # ---------------------------------------------------------------------------
@@ -849,8 +872,8 @@ install_libdovi() {
     tmux_run "$(msg 'Install cargo-c' '安装 cargo-c')" cargo install cargo-c || exit 1
 
     log "$(msg "Building and installing to $HOME/.local" "编译并安装到 $HOME/.local")"
-    tmux_run "$(msg "Download dovi_tool ${DOVI_TOOL_VERSION}" "下载 dovi_tool ${DOVI_TOOL_VERSION}")" \
-      git clone --depth 1 --branch "$DOVI_TOOL_VERSION" https://github.com/quietvoid/dovi_tool.git || exit 1
+    download_source_archive "dovi_tool ${DOVI_TOOL_VERSION}" \
+      "https://github.com/quietvoid/dovi_tool/archive/refs/tags/${DOVI_TOOL_VERSION}.tar.gz" dovi_tool || exit 1
     cd dovi_tool/dolby_vision || exit 1
     tmux_run "$(msg 'Build and install dolby_vision' '编译安装 dolby_vision')" cargo cinstall --release --prefix="$HOME/.local" || exit 1
 
@@ -999,12 +1022,11 @@ install_hdr10plus_tool() {
 }
 
 # ---------------------------------------------------------------------------
-# dav1d (for mpv-build / ffmpeg --enable-libdav1d)
+# dav1d (for FFmpeg --enable-libdav1d)
 # ---------------------------------------------------------------------------
 
-# mpv-build's ffmpeg expects dav1d >= 1.0.0; Ubuntu 22.04 / Debian 12 often ship 0.9.x only.
 ensure_dav1d_for_mpv() {
-  log "$(msg 'Checking dav1d (mpv-build ffmpeg requires >= 1.0.0)' '检查 dav1d（mpv-build 内置 ffmpeg 需要 >= 1.0.0）')"
+  log "$(msg 'Checking dav1d (FFmpeg requires >= 1.0.0)' '检查 dav1d（FFmpeg 需要 >= 1.0.0）')"
 
   local pc_extra="/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/aarch64-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig"
   local mod=""
@@ -1016,17 +1038,19 @@ ensure_dav1d_for_mpv() {
     return 0
   fi
 
-  log "$(msg "dav1d missing or too old (${mod:-none} < 1.0.0), building from Videolan git" "dav1d 缺失或版本过低（${mod:-无} < 1.0.0），将从 Videolan 源码编译安装")"
+  log "$(msg "dav1d missing or too old (${mod:-none} < 1.0.0), building from VideoLAN release sources" "dav1d 缺失或版本过低（${mod:-无} < 1.0.0），将从 VideoLAN 发布的源码编译安装")"
 
   command -v meson >/dev/null 2>&1 || die "$(msg 'meson is required to build dav1d' '编译 dav1d 需要 meson')"
   command -v ninja >/dev/null 2>&1 || die "$(msg 'ninja is required to build dav1d' '编译 dav1d 需要 ninja')"
 
-  local build_dir
+  local build_dir dav1d_version
+  dav1d_version="$(latest_stable_tag https://code.videolan.org/videolan/dav1d.git '^[0-9]+([.][0-9]+)+$')"
   build_dir="$(mktemp -d)"
 
   (
     cd "$build_dir" || exit 1
-    tmux_run "$(msg 'Clone dav1d' '克隆 dav1d')" git clone https://code.videolan.org/videolan/dav1d.git || exit 1
+    download_source_archive "dav1d ${dav1d_version}" \
+      "https://download.videolan.org/pub/videolan/dav1d/${dav1d_version}/dav1d-${dav1d_version}.tar.xz" dav1d || exit 1
     cd dav1d || exit 1
     tmux_run "$(msg 'dav1d meson setup' 'dav1d meson 配置')" meson setup build --buildtype release -Ddefault_library=static || exit 1
     tmux_run "$(msg 'dav1d ninja build' 'dav1d ninja 构建')" ninja -C build || exit 1
@@ -1156,7 +1180,7 @@ install_mpv() {
     automake libtool wayland-protocols libmujs-dev libbluray-dev
     libunwind-dev libxrandr-dev libxpresent-dev libxss-dev libdvdnav-dev
     libdvdread-dev libzimg-dev libarchive-dev librubberband-dev libsdl2-dev
-    libdrm-dev libgbm-dev curl
+    libdrm-dev libgbm-dev curl xz-utils
   )
 
   if [[ -f /etc/os-release ]]; then
@@ -1204,22 +1228,34 @@ install_mpv() {
   export PATH="/usr/local/bin:${HOME}/.local/bin:${PATH:-}"
   ensure_dav1d_for_mpv
 
-  local build_dir
+  local build_dir mpv_tag libass_tag libplacebo_tag
+  mpv_tag="$(latest_stable_tag https://github.com/mpv-player/mpv.git '^v[0-9]+([.][0-9]+)+$' 'v*')"
+  libass_tag="$(latest_stable_tag https://github.com/libass/libass.git '^[0-9]+([.][0-9]+)+$')"
+  libplacebo_tag="$(latest_stable_tag https://github.com/haasn/libplacebo.git '^v[0-9]+([.][0-9]+)+$' 'v*')"
   build_dir="$(mktemp -d)"
 
-(
+  (
     cd "$build_dir" || exit 1
 
-    log "$(msg 'Building mpv-build' '编译 mpv-build')"
-    tmux_run "$(msg 'Download mpv-build' '下载 mpv-build')" git clone https://github.com/mpv-player/mpv-build.git || exit 1
-    cd mpv-build || exit 1
-
-    tmux_run "$(msg 'Select the latest stable FFmpeg release' '选择最新稳定版 FFmpeg')" ./use-ffmpeg-release || exit 1
+    # Supply the source directories directly because mpv-build's update step clones them.
+    download_source_archive mpv-build \
+      https://github.com/mpv-player/mpv-build/archive/refs/heads/master.tar.gz . || exit 1
+    download_source_archive "FFmpeg ${target_ffmpeg_version}" \
+      "https://ffmpeg.org/releases/ffmpeg-${target_ffmpeg_version}.tar.xz" ffmpeg || exit 1
+    download_source_archive "mpv ${mpv_tag}" \
+      "https://github.com/mpv-player/mpv/archive/refs/tags/${mpv_tag}.tar.gz" mpv || exit 1
+    download_source_archive "libass ${libass_tag}" \
+      "https://github.com/libass/libass/archive/refs/tags/${libass_tag}.tar.gz" libass || exit 1
+    # The libplacebo tag archive omits the bundled build dependencies.
+    tmux_run "$(msg "Download libplacebo ${libplacebo_tag}" "下载 libplacebo ${libplacebo_tag}")" \
+      git clone --depth 1 --branch "$libplacebo_tag" --recurse-submodules=3rdparty --shallow-submodules \
+      https://github.com/haasn/libplacebo.git libplacebo || exit 1
 
     echo "--enable-libbluray" > ffmpeg_options || exit 1
     echo "--enable-libdav1d" >> ffmpeg_options || exit 1
     echo "--enable-libopus" >> ffmpeg_options || exit 1
     echo "-Dlibbluray=enabled" > mpv_options || exit 1
+    echo "-Dlua=luajit" >> mpv_options || exit 1
     echo "-Dvapoursynth=enabled" >> mpv_options || exit 1
     if [[ "$is_ubuntu_2204" == "true" ]]; then
       # Ubuntu 22.04's rst2man rejects the --output option used by current mpv.
@@ -1238,7 +1274,6 @@ EOF
     pkg-config --atleast-version=56 vapoursynth-script \
       || die "$(msg 'mpv requires VapourSynth VSScript development files version 56 or later' 'mpv 需要 VapourSynth VSScript 56 或更高版本的开发文件')"
 
-    tmux_run "mpv-build update" "${mpv_build_env[@]}" ./update || exit 1
     # FFmpeg can write generated resources before make creates their directory.
     mkdir -p ffmpeg_build/fftools/resources || exit 1
     tmux_run "mpv-build build" "${mpv_build_env[@]}" ./build -j"$(nproc)" || exit 1
@@ -1325,8 +1360,8 @@ install_lsmash() {
 
     local lsmash_tag
     lsmash_tag="${LSMASH_VERSION:-$(latest_stable_tag https://github.com/l-smash/l-smash.git)}"
-    tmux_run "$(msg "Clone L-SMASH ${lsmash_tag}" "克隆 lsmash ${lsmash_tag}")" \
-      git clone --depth 1 --branch "$lsmash_tag" https://github.com/l-smash/l-smash.git l-smash || exit 1
+    download_source_archive "L-SMASH ${lsmash_tag}" \
+      "https://github.com/l-smash/l-smash/archive/refs/tags/${lsmash_tag}.tar.gz" l-smash || exit 1
     cd l-smash || exit 1
 
     log "$(msg 'Configuring and building L-SMASH' '配置与编译 lsmash')"
@@ -1549,8 +1584,8 @@ install_x265() {
 
   (
     cd "$build_dir" || exit 1
-    tmux_run "$(msg "Clone official x265 ${x265_version}" "克隆官方 x265 ${x265_version}")" \
-      git clone --depth 1 --branch "$x265_version" "$X265_SOURCE_REPOSITORY" x265 || exit 1
+    download_source_archive "x265 ${x265_version}" \
+      "${X265_SOURCE_REPOSITORY%.git}/releases/download/${x265_version}/x265_${x265_version}.tar.gz" x265 || exit 1
     __build_x265_official_multilib "${build_dir}/x265" || exit 1
   ) || die "$(msg 'x265 build or install failed' 'x265 编译或安装过程中出错')"
 
@@ -1593,7 +1628,7 @@ install_x264() {
   done
   [[ -n "$x264_repository" && -n "$x264_commit" ]] || \
     die "$(msg 'Failed to resolve the latest x264 master revision from the official repository or mirror' '无法从 x264 官方仓库或镜像解析 master 的最新版本')"
-  log "$(msg "Installing the latest x264 master from ${x264_repository}" "从 ${x264_repository} 安装最新 x264 master")"
+  log "$(msg "Installing x264 master at ${x264_commit}" "安装 x264 master 提交 ${x264_commit}")"
 
   local version_file="$X264_VERSION_FILE"
   local installed_commit=""
@@ -1620,13 +1655,17 @@ install_x264() {
 
   local build_dir
   build_dir="$(mktemp -d)"
+  local archive_url="${X264_SOURCE_MIRROR%.git}/archive/${x264_commit}.tar.gz"
+  local mirror_url=""
+  if [[ "$x264_repository" == "$X264_SOURCE_REPOSITORY" ]]; then
+    mirror_url="$archive_url"
+    archive_url="${X264_SOURCE_REPOSITORY%.git}/-/archive/${x264_commit}/x264-${x264_commit}.tar.gz"
+  fi
 
   (
     cd "$build_dir" || exit 1
-    tmux_run "$(msg 'Clone the latest x264 master' '克隆最新 x264 master')" \
-      git clone --depth 1 --branch master "$x264_repository" x264 || exit 1
+    download_source_archive "x264 ${x264_commit:0:7}" "$archive_url" x264 "$mirror_url" || exit 1
     cd x264 || exit 1
-    x264_commit="$(git rev-parse HEAD)"
     local x264_configure_args=(
       --enable-static
       --bit-depth=all
@@ -1687,8 +1726,8 @@ install_svt_av1() {
 
   (
     cd "$build_dir" || exit 1
-    tmux_run "$(msg 'Clone SVT-AV1' '克隆 SVT-AV1')" \
-      git clone --depth 1 --branch "$svt_tag" "$SVT_AV1_SOURCE_REPOSITORY" SVT-AV1 || exit 1
+    download_source_archive "SVT-AV1 ${svt_tag}" \
+      "${SVT_AV1_SOURCE_REPOSITORY%.git}/-/archive/${svt_tag}/SVT-AV1-${svt_tag}.tar.gz" SVT-AV1 || exit 1
     tmux_run "$(msg 'SVT-AV1: build release static' 'SVT-AV1：release static 编译')" \
       bash -c "set -e; cd '${build_dir}/SVT-AV1/Build/linux' && ./build.sh release static" || exit 1
     _svt_bin="${build_dir}/SVT-AV1/Bin/Release/SvtAv1EncApp"
@@ -1795,8 +1834,8 @@ install_fdk_aac() {
 
   (
     cd "$build_dir" || exit 1
-    tmux_run "$(msg "Clone fdk-aac ${fdk_aac_tag}" "克隆 fdk-aac ${fdk_aac_tag}")" \
-      git clone --depth 1 --branch "$fdk_aac_tag" "$FDK_AAC_SOURCE_REPOSITORY" fdk-aac || exit 1
+    download_source_archive "fdk-aac ${fdk_aac_tag}" \
+      "${FDK_AAC_SOURCE_REPOSITORY%.git}/archive/refs/tags/${fdk_aac_tag}.tar.gz" fdk-aac || exit 1
     cd fdk-aac || exit 1
     tmux_run "$(msg 'fdk-aac: autogen.sh' 'fdk-aac：autogen.sh')" ./autogen.sh || exit 1
     tmux_run "$(msg 'fdk-aac: configure' 'fdk-aac：configure')" ./configure || exit 1
@@ -1804,8 +1843,8 @@ install_fdk_aac() {
     tmux_run "$(msg 'fdk-aac: make install' 'fdk-aac：make install')" sudo make install || exit 1
     sudo ldconfig || true
     cd "$build_dir" || exit 1
-    tmux_run "$(msg "Clone fdkaac ${fdkaac_tag} (nu774)" "克隆 fdkaac ${fdkaac_tag}（nu774）")" \
-      git clone --depth 1 --branch "$fdkaac_tag" "$FDKAAC_SOURCE_REPOSITORY" fdkaac || exit 1
+    download_source_archive "fdkaac ${fdkaac_tag}" \
+      "${FDKAAC_SOURCE_REPOSITORY%.git}/archive/refs/tags/${fdkaac_tag}.tar.gz" fdkaac || exit 1
     cd fdkaac || exit 1
     tmux_run "$(msg 'fdkaac: autoreconf -fi' 'fdkaac：autoreconf -fi')" autoreconf -fi || exit 1
     tmux_run "$(msg 'fdkaac: configure' 'fdkaac：configure')" ./configure || exit 1
@@ -1831,7 +1870,7 @@ install_flac() {
   local flac_tag latest_flac_version flac_bin=""
   local flac_source_path="/usr/local/bin/flac"
   flac_tag="${FLAC_VERSION:-$(latest_stable_tag https://github.com/xiph/flac.git)}"
-  latest_flac_version="${flac_tag#v}"
+  latest_flac_version="${flac_tag#[vV]}"
   log "$(msg "Installing latest flac (${latest_flac_version}, build from source)" "安装最新 flac（${latest_flac_version}，从源码编译并安装）")"
 
   # A source build is owned by /usr/local; the configured runtime path may
@@ -1862,7 +1901,7 @@ install_flac() {
     fi
   fi
 
-  local deps=(libogg-dev libtool-bin gettext git)
+  local deps=(libogg-dev libtool-bin gettext git xz-utils)
   local missing_deps=()
   for dep in "${deps[@]}"; do
     if ! dpkg-query -W -f='${Status}' "$dep" 2>/dev/null | grep -q "install ok installed"; then
@@ -1879,12 +1918,11 @@ install_flac() {
 
   (
     cd "$build_dir" || exit 1
-    tmux_run "$(msg "Clone flac ${flac_tag}" "克隆 flac ${flac_tag}")" \
-      git clone --depth 1 --branch "$flac_tag" https://github.com/xiph/flac.git flac || exit 1
+    download_source_archive "FLAC ${latest_flac_version}" \
+      "https://downloads.xiph.org/releases/flac/flac-${latest_flac_version}.tar.xz" flac || exit 1
     cd flac || exit 1
 
     log "$(msg 'Configuring and building flac' '配置与编译 flac')"
-    tmux_run "flac autogen" ./autogen.sh || exit 1
     tmux_run "flac configure" ./configure --enable-static --enable-shared --enable-64-bit-words || exit 1
     tmux_run "flac make" make -j"$(nproc)" || exit 1
     tmux_run "flac install" sudo make install || exit 1
@@ -1933,13 +1971,15 @@ install_zimg_latest() {
 
   log "$(msg 'Current zimg version is too old (missing ZIMG_TRANSFER_ST428), building latest zimg from source...' '当前 zimg 版本过低（缺少 ZIMG_TRANSFER_ST428），开始编译安装最新版 zimg...')"
 
-  local build_dir
+  local build_dir zimg_tag
+  zimg_tag="$(latest_stable_tag https://github.com/sekrit-twc/zimg.git '^release-[0-9]+([.][0-9]+)+$' 'release-*')"
   build_dir="$(mktemp -d)"
   (
     cd "$build_dir" || exit 1
-    tmux_run "$(msg 'Download zimg' '下载 zimg')" git clone --depth 1 --recursive https://github.com/sekrit-twc/zimg.git . || exit 1
+    download_source_archive "zimg ${zimg_tag#release-}" \
+      "https://github.com/sekrit-twc/zimg/archive/refs/tags/${zimg_tag}.tar.gz" . || exit 1
     tmux_run "zimg autogen" ./autogen.sh || exit 1
-    tmux_run "zimg configure" ./configure --prefix=/usr/local || exit 1
+    tmux_run "zimg configure" ./configure --prefix=/usr/local --disable-unit-test || exit 1
     tmux_run "zimg make" make -j"$(nproc)" || exit 1
     tmux_run "zimg install" sudo make install || exit 1
   ) || die "$(msg 'zimg build/install failed' 'zimg 编译/安装失败')"
@@ -2160,8 +2200,8 @@ install_descale() {
   build_dir="$(mktemp -d)"
   (
     cd "$build_dir" || exit 1
-    tmux_run "$(msg "Download vapoursynth-descale ${descale_tag}" "下载 vapoursynth-descale ${descale_tag}")" \
-      git clone --depth 1 --branch "$descale_tag" "$DESCALE_SOURCE_REPOSITORY" vapoursynth-descale || exit 1
+    download_source_archive "descale ${descale_tag}" \
+      "${DESCALE_SOURCE_REPOSITORY%.git}/archive/refs/tags/${descale_tag}.tar.gz" vapoursynth-descale || exit 1
     cd vapoursynth-descale || exit 1
     # The pointee reference remains valid if GCC evaluates data.release() first.
     sed -i '/vsapi->createVideoFilter/s/data->/d./g' src/vsplugin.cc || exit 1
@@ -2372,7 +2412,9 @@ install_libplacebo_latest() {
     build_dir="$(mktemp -d)"
     (
         cd "$build_dir" || exit 1
-        tmux_run "$(msg 'Download libplacebo v6.338.0' '下载 libplacebo v6.338.0')" git clone --recursive --depth 1 --branch v6.338.0 https://code.videolan.org/videolan/libplacebo.git .
+        tmux_run "$(msg 'Download libplacebo v6.338.0' '下载 libplacebo v6.338.0')" \
+            git clone --depth 1 --branch v6.338.0 --recurse-submodules=3rdparty --shallow-submodules \
+            https://code.videolan.org/videolan/libplacebo.git . || exit 1
 
         rm -rf build
 
@@ -2436,7 +2478,7 @@ build_vs_plugins() {
     cd "$build_dir" || exit 1
 
     local lsmash_plugin="$plugins_dir/libvslsmashsource.so"
-    local need_compat="false" lsmash_commit="ae51313"
+    local need_compat="false" lsmash_commit="ae51313aeb32cb39d2dbf328702c8fa3f5cd212a"
     if [[ -f /etc/os-release ]]; then
       . /etc/os-release || true
       if [[ "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" == "22.04" ]] \
@@ -2453,8 +2495,9 @@ build_vs_plugins() {
       fi
     fi
     if [[ "$need_compat" == "true" ]]; then
-      lsmash_commit="70e19fb"
+      lsmash_commit="70e19fb19dfd940a9ec9c7e02125b5fe1e2d7f93"
     fi
+    local lsmash_version="commit:${lsmash_commit:0:7}"
     local lsmash_linker_report=""
     local lsmash_dependencies_broken="false"
     if [[ -f "$lsmash_plugin" ]] && command -v ldd >/dev/null 2>&1; then
@@ -2466,17 +2509,12 @@ build_vs_plugins() {
     fi
 
     if [[ "$lsmash_dependencies_broken" == "true" ]] \
-        || vs_plugin_needs_upgrade "libvslsmashsource.so" "commit:$lsmash_commit"; then
+        || vs_plugin_needs_upgrade "libvslsmashsource.so" "$lsmash_version"; then
       log "$(msg 'Building L-SMASH-Works (VapourSynth)' '编译 L-SMASH-Works (VapourSynth)')"
       cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download L-SMASH-Works' '下载 L-SMASH-Works')" git clone https://github.com/HomeOfAviSynthPlusEvolution/L-SMASH-Works.git || exit 1
+      download_source_archive "L-SMASH-Works ${lsmash_commit:0:7}" \
+        "https://github.com/HomeOfAviSynthPlusEvolution/L-SMASH-Works/archive/${lsmash_commit}.tar.gz" L-SMASH-Works || exit 1
       cd L-SMASH-Works/VapourSynth || exit 1
-      if [[ "$need_compat" == "true" ]]; then
-        log "$(msg 'Old FFmpeg API detected (or compatibility mode required), rolling back L-SMASH-Works to compatible commit' '检测到旧版 FFmpeg API（或系统需兼容模式），回退 L-SMASH-Works 到兼容提交')"
-      else
-        log "$(msg 'Pinning L-SMASH-Works to last VapourSynth API v3 compatible commit' '固定 L-SMASH-Works 到最后一个兼容 VapourSynth API v3 的提交')"
-      fi
-      tmux_run "L-SMASH-Works git checkout" git -c advice.detachedHead=false checkout -q "$lsmash_commit" || exit 1
 
       # Apply FFmpeg compatibility patches (index accessors, D3D12 shim, removed codec IDs).
       local decode_file="../common/decode.c"
@@ -2552,7 +2590,7 @@ PY
         exit 1
       fi
       install -m 0755 "$out" "$lsmash_plugin" || exit 1
-      vs_plugin_version record "libvslsmashsource.so" "commit:$lsmash_commit" || exit 1
+      vs_plugin_version record "libvslsmashsource.so" "$lsmash_version" || exit 1
       cd "$build_dir" || exit 1
     else
       log "$(msg 'L-SMASH-Works version is current, skipping' 'L-SMASH-Works 版本已满足要求，跳过')"
@@ -2604,7 +2642,8 @@ PY
     if vs_plugin_needs_upgrade "libassrender.so" "0.38.4"; then
       log "$(msg 'Building assrender (0.38.4)' '编译 assrender (0.38.4)')"
       cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Clone assrender 0.38.4' '克隆 assrender 0.38.4')" git clone --depth 1 --branch 0.38.4 https://github.com/AmusementClub/assrender.git assrender-0.38.4 || exit 1
+      download_source_archive 'assrender 0.38.4' \
+        https://github.com/AmusementClub/assrender/archive/refs/tags/0.38.4.tar.gz assrender-0.38.4 || exit 1
       cd assrender-0.38.4 || exit 1
       rm -rf build
       tmux_run "assrender cmake" cmake -S . -B build -DCMAKE_BUILD_TYPE=Release || exit 1
@@ -3045,20 +3084,31 @@ install_shaderc_fix() {
 
       log "$(msg 'Official package version conflict detected, building Shaderc from source (this may take a few minutes)...' '检测到官方包版本冲突，正在从源码编译 Shaderc (这可能需要几分钟)...')"
 
-      local build_dir
+      local build_dir shaderc_tag
+      shaderc_tag="$(latest_stable_tag https://github.com/google/shaderc.git '^v[0-9]+([.][0-9]+)+$' 'v*')"
       build_dir="$(mktemp -d)"
       (
           cd "$build_dir" || exit 1
 
-          # 1. Clone source
-          tmux_run "$(msg 'Download shaderc' '下载 shaderc')" git clone https://github.com/google/shaderc . || exit 1
+          download_source_archive "Shaderc ${shaderc_tag}" \
+              "https://github.com/google/shaderc/archive/refs/tags/${shaderc_tag}.tar.gz" . || exit 1
 
-          # 2. Sync dependencies (glslang, spirv-tools, spirv-headers)
-          #    This step is critical: it automatically fetches all missing low-level components.
-          tmux_run "$(msg 'Sync shaderc dependencies' 'shaderc 同步依赖')" ./utils/git-sync-deps || exit 1
+          # Use Shaderc's DEPS parser and fetch only the dependencies needed with tests disabled.
+          local dependencies path url
+          dependencies="$(python3 - <<'PY'
+from runpy import run_path
 
-          # 3. Configure and build
-          mkdir build && cd build
+dependencies = run_path("utils/git-sync-deps")["parse_file_to_dict"]("DEPS")["deps"]
+for path in ("third_party/glslang", "third_party/spirv-tools", "third_party/spirv-headers"):
+    repository, commit = dependencies[path].rsplit("@", 1)
+    print(path, f"{repository.removesuffix('.git')}/archive/{commit}.tar.gz")
+PY
+          )" || exit 1
+          while read -r path url; do
+              download_source_archive "${path##*/}" "$url" "$path" || exit 1
+          done <<< "$dependencies"
+
+          mkdir build && cd build || exit 1
           tmux_run "shaderc cmake" cmake -GNinja \
               -DCMAKE_BUILD_TYPE=Release \
               -DSHADERC_SKIP_TESTS=ON \

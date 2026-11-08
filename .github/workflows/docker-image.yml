@@ -113,6 +113,9 @@ jobs:
 
           resolve_latest_mkvtoolnix mkvtoolnix_version https://mkvtoolnix.download/ubuntu/dists/resolute/main/binary-amd64/Packages
           resolve_latest_tag ffmpeg_tag https://github.com/FFmpeg/FFmpeg.git '^[nN]?[0-9]+([.][0-9]+)+$'
+          resolve_latest_tag mpv_tag https://github.com/mpv-player/mpv.git '^v[0-9]+([.][0-9]+)+$'
+          resolve_latest_tag libass_tag https://github.com/libass/libass.git '^[0-9]+([.][0-9]+)+$'
+          resolve_latest_tag libplacebo_tag https://github.com/haasn/libplacebo.git '^v[0-9]+([.][0-9]+)+$'
           resolve_latest_tag x265_tag https://github.com/Multicorewareinc/x265.git '^[0-9]+([.][0-9]+)+$'
           resolve_latest_tag svt_av1_tag https://gitlab.com/AOMediaCodec/SVT-AV1.git '^[vV]?[0-9]+([.][0-9]+)+$'
           resolve_latest_tag fdk_aac_tag https://github.com/mstorsjo/fdk-aac.git '^[vV]?[0-9]+([.][0-9]+)+$'
@@ -137,6 +140,9 @@ jobs:
           build-args: |
             MKVTOOLNIX_VERSION=${{ steps.versions.outputs.mkvtoolnix_version }}
             FFMPEG_TAG=${{ steps.versions.outputs.ffmpeg_tag }}
+            MPV_TAG=${{ steps.versions.outputs.mpv_tag }}
+            LIBASS_TAG=${{ steps.versions.outputs.libass_tag }}
+            LIBPLACEBO_TAG=${{ steps.versions.outputs.libplacebo_tag }}
             X265_TAG=${{ steps.versions.outputs.x265_tag }}
             SVT_AV1_TAG=${{ steps.versions.outputs.svt_av1_tag }}
             FDK_AAC_TAG=${{ steps.versions.outputs.fdk_aac_tag }}
