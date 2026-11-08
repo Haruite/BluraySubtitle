@@ -1339,7 +1339,8 @@ function Install-SevenZip {
     $installer = Join-Path $script:TempRoot $release.Name
     Invoke-SetupDownload -Uri $release.Uri -Destination $installer -Sha256 $release.Sha256 | Out-Null
     $directory = Split-Path -Parent $script:ToolPaths.SevenZip
-    Invoke-SetupInstaller -FilePath $installer -Arguments @("/S") -NsisInstallDirectory $directory
+    # The 7-Zip installer splits unquoted /D values at spaces.
+    Invoke-SetupInstaller -FilePath $installer -Arguments @("/S", "/D=$directory")
     Install-ConfiguredFile -Source (Join-Path $directory "7z.exe") -Destination $script:ToolPaths.SevenZip
 }
 
