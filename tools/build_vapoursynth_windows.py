@@ -117,9 +117,11 @@ def build_runtime(args: argparse.Namespace) -> Path:
     environment = os.environ.copy()
     environment.update({key.upper(): value for key, value in _get_vc_env("x64").items()})
     mimalloc_build = source / "mimalloc-build"
+    ninja_option = [f"-DCMAKE_MAKE_PROGRAM={args.ninja}"] if args.ninja else []
     subprocess.run(
         [args.cmake, "-S", str(source / "mimalloc"), "-B", str(mimalloc_build),
-         "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DMI_BUILD_SHARED=OFF",
+         "-G", "Ninja", *ninja_option, "-DCMAKE_BUILD_TYPE=Release",
+         "-DCMAKE_C_COMPILER=cl.exe", "-DCMAKE_CXX_COMPILER=cl.exe", "-DMI_BUILD_SHARED=OFF",
          "-DMI_BUILD_STATIC=ON", "-DMI_BUILD_OBJECT=OFF", "-DMI_BUILD_TESTS=OFF",
          "-DMI_OVERRIDE=OFF"],
         env=environment, check=True,
@@ -134,8 +136,8 @@ def build_runtime(args: argparse.Namespace) -> Path:
 
     # Let the installed Visual Studio select its current C++ toolset and SDK.
     for project in source.rglob("*.vcxproj"):
-        text = project.read_text(encoding="utf-8-sig")
-        text = text.replace("<PlatformToolset>v142</PlatformToolset>",
+        original = project.read_text(encoding="utf-8-sig")
+        text = original.replace("<PlatformToolset>v142</PlatformToolset>",
                             "<PlatformToolset>$(DefaultPlatformToolset)</PlatformToolset>")
         text = text.replace("<PlatformToolset>v143</PlatformToolset>",
                             "<PlatformToolset>$(DefaultPlatformToolset)</PlatformToolset>")
@@ -144,7 +146,7 @@ def build_runtime(args: argparse.Namespace) -> Path:
         text = text.replace("Python39.dll", python_library)
         if "mimalloc-static.lib;bcrypt.lib;psapi.lib;" not in text:
             text = text.replace("mimalloc-static.lib;", "mimalloc-static.lib;bcrypt.lib;psapi.lib;")
-        if text != project.read_text(encoding="utf-8-sig"):
+        if text != original:
             project.write_text(text, encoding="utf-8", newline="\r\n")
     targets = "VapourSynth;VSScript;VSPipe;RemoveGrainVS;Vinverse;VIVTC;EEDI3;AvsCompat;MiscFilters;Morpho"
     subprocess.run(
@@ -186,14 +188,14 @@ def build_binding(source: Path, binaries: Path, wheel_directory: Path, version: 
     return wheels[0]
 
 
-def install_runtime(args: argparse.Namespace, binaries: Path, wheel: Path) -> None:
-    runtime = args.runtime_root.resolve()
+def build_artifacts(args: argparse.Namespace, artifacts: Path) -> None:
+    binaries = build_runtime(args)
+    runtime = artifacts / "runtime"
     runtime.mkdir(parents=True, exist_ok=True)
     for name in ("VapourSynth.dll", "VSScript.dll"):
         shutil.copy2(binaries / name, runtime / name)
-    vspipe = args.vspipe_path or runtime / "VSPipe.exe"
-    vspipe.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(binaries / "VSPipe.exe", vspipe)
+    shutil.copy2(binaries / "VSPipe.exe", artifacts / "VSPipe.exe")
+    shutil.copy2(args.source / "mimalloc-build/mimalloc.lib", artifacts / "mimalloc.lib")
     core_plugins = runtime / "vapoursynth64/coreplugins"
     core_plugins.mkdir(parents=True, exist_ok=True)
     for name in ("RemoveGrainVS", "Vinverse", "VIVTC", "EEDI3", "AvsCompat", "MiscFilters", "Morpho"):
@@ -202,6 +204,10 @@ def install_runtime(args: argparse.Namespace, binaries: Path, wheel: Path) -> No
     sdk.mkdir(parents=True, exist_ok=True)
     for name in ("VapourSynth.lib", "VSScript.lib"):
         shutil.copy2(binaries / name, sdk / name)
+    include = runtime / "sdk/include/vapoursynth"
+    include.mkdir(parents=True, exist_ok=True)
+    for header in (args.source / "include").glob("*.h"):
+        shutil.copy2(header, include / header.name)
     licenses = runtime / "licenses"
     licenses.mkdir(exist_ok=True)
     for source_name, destination_name in (
@@ -214,12 +220,26 @@ def install_runtime(args: argparse.Namespace, binaries: Path, wheel: Path) -> No
          "AviSynthPlus-SDKLicense.rst"),
     ):
         shutil.copy2(args.source / source_name, licenses / destination_name)
+    wheel_directory = artifacts / "wheels"
+    wheel_directory.mkdir(exist_ok=True)
+    build_binding(args.source.resolve(), binaries, wheel_directory, args.version)
+
+
+def install_runtime(args: argparse.Namespace, artifacts: Path) -> None:
+    wheels = list((artifacts / "wheels").glob("*.whl"))
+    if len(wheels) != 1:
+        raise RuntimeError(f"Expected one VapourSynth wheel in {artifacts}")
+    runtime = args.runtime_root.resolve()
+    shutil.copytree(artifacts / "runtime", runtime, dirs_exist_ok=True)
+    vspipe = args.vspipe_path or runtime / "VSPipe.exe"
+    vspipe.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(artifacts / "VSPipe.exe", vspipe)
     (runtime / "portable.vs").touch()
     (runtime / "python-runtime.ini").write_text(
         "[Python]\nHome=" + sys.base_prefix + "\n", encoding="utf-8", newline="\r\n",
     )
     subprocess.run(
-        [sys.executable, "-m", "pip", "install", "--no-deps", "--force-reinstall", str(wheel)],
+        [sys.executable, "-m", "pip", "install", "--no-deps", "--force-reinstall", str(wheels[0])],
         check=True,
     )
     installed_location = subprocess.run(
@@ -252,22 +272,27 @@ def install_runtime(args: argparse.Namespace, binaries: Path, wheel: Path) -> No
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", type=Path, required=True)
+    parser.add_argument("--source", type=Path)
+    parser.add_argument("--artifacts", type=Path)
     parser.add_argument("--runtime-root", type=Path, required=True)
     parser.add_argument("--vspipe-path", type=Path)
     parser.add_argument("--version", required=True)
     parser.add_argument("--dependencies", type=Path, required=True)
-    parser.add_argument("--msbuild", required=True)
-    parser.add_argument("--cmake", required=True)
+    parser.add_argument("--msbuild")
+    parser.add_argument("--cmake")
+    parser.add_argument("--ninja")
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
     args = parser.parse_args()
     if sys.platform != "win32" or sys.maxsize <= 2**32:
         raise RuntimeError("The VapourSynth Windows build requires x64 CPython on Windows")
-    binaries = build_runtime(args)
-    wheel_directory = args.source.resolve() / "wheels"
-    wheel_directory.mkdir(exist_ok=True)
-    wheel = build_binding(args.source.resolve(), binaries, wheel_directory, args.version)
-    install_runtime(args, binaries, wheel)
+    if args.source and (not args.msbuild or not args.cmake):
+        parser.error("--source requires --msbuild and --cmake")
+    if not args.source and not args.artifacts:
+        parser.error("--source or --artifacts is required")
+    artifacts = args.artifacts or args.source.resolve() / "install-artifacts"
+    if args.source:
+        build_artifacts(args, artifacts)
+    install_runtime(args, artifacts)
 
 
 if __name__ == "__main__":

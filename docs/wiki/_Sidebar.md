@@ -5,4 +5,5 @@
 - [Media Formats and Dolby Vision](Media-Formats-and-Dolby-Vision.md)
 - [Video Encoding and VapourSynth](Video-Encoding-and-VapourSynth.md)
 - [BluraySubtitle Developer Guide](BluraySubtitle-Developer-Guide.md)
+- [Build Performance](Build-Performance.md)
 - [References](References.md)

@@ -8,10 +8,10 @@ Development: [mandatory code modification standards](docs/development/code-stand
 
 The Windows x64 release is a one-folder package. Extract the complete archive, then run `BluraySubtitle_windows_x64.exe` without separating it from `_internal`. Configuration is stored in `config.json` in the program directory, or the repository root for source runs; ensure that directory is writable.
 
-Windows x64 downloads:
+Windows x64 downloads
 
-- [Continuously updated package](https://sbx.mysmy.top/tools/BluraySubtitle_windows_x64.7z): kept current independently of the GitHub release schedule.
-- [GitHub Releases](https://github.com/Haruite/BluraySubtitle/releases): versioned packages published with each release.
+- GitHub Actions automatically builds and uploads the server package after each push to `main`. [Download from sbx.mysmy.top](https://sbx.mysmy.top/tools/BluraySubtitle_windows_x64.7z)
+- The Windows x64 `.7z` package is attached automatically to releases after 4.7. [GitHub Releases](https://github.com/Haruite/BluraySubtitle/releases)
 
 BluraySubtitle is a GUI tool for Blu-ray workflows on **Windows / Linux** (including **Docker**). It brings the following five areas of functionality together in one application:
 

@@ -1289,3 +1289,9 @@ Blu-ray DIY 压制及“编辑轨道”中的通用视频转换仍不在本阶�
 - 静态链接 vs-placebo 依赖及源码插件的编译器运行库，剥离源码插件符号，并让 MVTools 共用 DFTTest 的 FFTW 库。构建配置变化时更新之前受管理的源码构建，依赖清单只保留仍在使用的库。
 - 按各组件来源整理中英文第三方说明，收集上游许可文本、依赖版权说明和编辑器 Qt 源码信息。Python 滤镜脚本的版权说明保留原压缩包来源。
 - 验证：原生插件导入、重复版本判断、回退记录哈希失效及版本顺序检查通过，不涉及媒体处理。Windows 程序包确认保留编辑器私有 Qt 库、排除 Tcl/Tk，并可通过包内依赖导入插件。Ubuntu 22.04 和 26.04 上的共用版本检测与 Debian 版本顺序检查通过。
+
+## Windows 构建与自动发布
+
+2026-11-09
+
+Windows setup 新增 `-Mode Build`，缓存编译产物，并用 Ninja 构建 x265 和 SVT-AV1。桌面模式复用符合要求的 Visual Studio Enterprise 2026。推送到 `main` 后，GitHub Actions 通过 SFTP 发布 Windows x64 包及构建记录，发布 Release 时附加与标签提交匹配的包。应用显示构建的提交哈希和时间，并分别检查 Release 版本与服务器包的提交。[构建性能](../wiki/Build-Performance.zh-Hans.md)

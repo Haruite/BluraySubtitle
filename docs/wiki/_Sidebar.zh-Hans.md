@@ -5,4 +5,5 @@
 - [媒体格式、字幕与 Dolby Vision](Media-Formats-and-Dolby-Vision.zh-Hans.md)
 - [视频压制与 VapourSynth](Video-Encoding-and-VapourSynth.zh-Hans.md)
 - [BluraySubtitle 开发者指南](BluraySubtitle-Developer-Guide.zh-Hans.md)
+- [构建性能](Build-Performance.zh-Hans.md)
 - [参考资料与延伸阅读](References.zh-Hans.md)

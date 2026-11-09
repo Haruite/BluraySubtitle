@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from src.core.i18n import translate_text
 from tools.vapoursynth_plugin_versions import fallback_version, normalize_version, record_version, version_satisfies
+from tools.windows_build_cache import files_under, publish as publish_build_cache, restore as restore_build_cache
 from tools.windows_tool_paths import normalize_vsedit_path
 
 BUILD_PROFILE = "static-runtime-shared-fftw-1"
@@ -134,9 +135,79 @@ class Installer:
         self.package_checked = set()
         self.used_packages = set()
         self.source_dependencies = []
+        self.github_api_token = os.environ.pop("BLURAYSUBTITLE_GITHUB_TOKEN", "")
         self.http = urllib.request.build_opener()
         self.http.addheaders = [("User-Agent", "BluraySubtitle-Windows-Setup")]
         self.json_cache = {}
+
+    def component_cache_key(self):
+        import numpy as np
+
+        targets = [(component.key, component.ref or self.release(component.repository)["tag_name"])
+                   for component in (*COMPONENTS, EDITOR)]
+        inputs = [self.args.build_fingerprint, targets, str(self.runtime), str(self.plugins), str(self.editor),
+                  bool(np._core._multiarray_umath.__cpu_features__.get("AVX2"))]
+        return hashlib.sha256(json.dumps(inputs).encode("utf-8")).hexdigest()
+
+    def component_cache_files(self, state):
+        files = {}
+        for name, digest in state["dependencies"].items():
+            target = self.runtime / name
+            if target.parent != self.runtime or target.suffix.lower() != ".dll" or target.name.lower() in (
+                "vapoursynth.dll", "vsscript.dll",
+            ):
+                raise ValueError("Invalid cached VapourSynth dependency path")
+            files[name] = (target, digest)
+        for component in (*COMPONENTS, EDITOR):
+            record = state["components"][component.key]
+            license_root = self.runtime / "licenses/components" / component.key
+            if component == EDITOR:
+                entry = self.editor
+                field = "entrypoint"
+            else:
+                folder = self.runtime / "vapoursynth64/coreplugins" if component.key == "removegrain" else self.plugins
+                entry = folder / component.filename
+                field = "plugin"
+            if (self.runtime / record[field]).resolve() != entry.resolve() or record["repository"] != component.repository:
+                raise ValueError("Invalid cached VapourSynth component entry")
+            if record[field] not in record["files"] or not set(record.get("dependencies", ())) <= state["dependencies"].keys():
+                raise ValueError("Incomplete cached VapourSynth component")
+            for name, digest in record["files"].items():
+                target = (self.runtime / name).resolve()
+                if target != entry.resolve() and not target.is_relative_to(license_root.resolve()) and not (
+                    component == EDITOR and target.is_relative_to(self.editor.parent.resolve())
+                ):
+                    raise ValueError("Invalid cached VapourSynth component file path")
+                files[name] = (target, digest)
+        return {"files/" + hashlib.sha256(name.encode("utf-8")).hexdigest(): value for name, value in files.items()}
+
+    def restore_components(self, archive, key):
+        payload = self.work / "cached-components"
+        if not restore_build_cache(archive, key, payload):
+            return None
+        try:
+            state = json.loads((payload / "components.json").read_text(encoding="utf-8"))
+            if state["schema"] != 1 or state.get("cache_fingerprint") != key:
+                return None
+            files = self.component_cache_files(state)
+            if any(not (payload / name).is_file() or sha256(payload / name) != digest
+                   for name, (_, digest) in files.items()):
+                return None
+        except (KeyError, OSError, TypeError, ValueError):
+            return None
+        # Let the normal installer handle any files already present outside the built-in runtime.
+        for component in (*COMPONENTS, EDITOR):
+            field = "entrypoint" if component == EDITOR else "plugin"
+            target = self.runtime / state["components"][component.key][field]
+            if component.key != "removegrain" and target.exists():
+                return None
+        for name, (target, _) in files.items():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(payload / name, target)
+        self.state = state
+        self.save()
+        self.log("Restored VapourSynth components from the build cache.")
+        return {name: digest for name, (_, digest) in files.items()}
 
     def record_path(self, path):
         if path.is_relative_to(self.runtime):
@@ -145,6 +216,20 @@ class Installer:
 
     def log(self, template, **values):
         print("[BluraySubtitle][SETUP] " + translate_text(template, self.args.language).format(**values), flush=True)
+
+    def open_url(self, url, *, timeout, headers=None):
+        request = urllib.request.Request(url, headers=headers or {})
+        uri = urllib.parse.urlsplit(url)
+        if self.github_api_token and uri.scheme == "https" and uri.netloc == "api.github.com":
+            request.add_unredirected_header("Authorization", f"Bearer {self.github_api_token}")
+            try:
+                return self.http.open(request, timeout=timeout)
+            except urllib.error.HTTPError as error:
+                if error.code not in (401, 403, 404):
+                    raise
+                error.close()
+                request.remove_header("Authorization")
+        return self.http.open(request, timeout=timeout)
 
     def download(self, url, destination, digest=""):
         expected = digest.removeprefix("sha256:")
@@ -164,8 +249,7 @@ class Installer:
         headers = {"Accept": "application/octet-stream", "X-GitHub-Api-Version": "2022-11-28"} if github_asset else {}
         for attempt in range(3):
             try:
-                request = urllib.request.Request(url, headers=headers)
-                with self.http.open(request, timeout=120) as response:
+                with self.open_url(url, timeout=120, headers=headers) as response:
                     content_type = response.headers.get_content_type()
                     if release_download and (content_type.endswith("json") or content_type == "text/html"):
                         raise urllib.error.URLError(f"{url} returned {content_type}")
@@ -222,7 +306,7 @@ class Installer:
         url = f"https://api.github.com/repos/{repository}/releases/{suffix}"
         if url not in self.json_cache:
             try:
-                with self.http.open(url, timeout=90) as response:
+                with self.open_url(url, timeout=90) as response:
                     release = json.load(response)
             except (OSError, ValueError) as error:
                 if missing_ok and isinstance(error, urllib.error.HTTPError) and error.code == 404:
@@ -298,31 +382,47 @@ class Installer:
     def prepare_fftw(self):
         # DFTTest's Windows ABI expects the thread-safe planner in the same DLL.
         prefix = self.work / "fftw/prefix"
-        if not (prefix / "bin/libfftw3f-3.dll").is_file():
-            archive = self.download("https://fftw.org/fftw-3.3.11.tar.gz", self.work / "fftw/fftw.tar.gz")
-            source = self.unpack(archive, self.work / "fftw/source") / "fftw-3.3.11"
-            config = source / "cmake.config.h.in"
-            config.write_text(config.read_text(encoding="utf-8").replace(
-                "/* #undef WITH_OUR_MALLOC */", "#define WITH_OUR_MALLOC 1"), encoding="utf-8")
-            cmake = source / "CMakeLists.txt"
-            text = cmake.read_text(encoding="utf-8").replace("set (FFTW_VERSION 3.3.10)", "set (FFTW_VERSION 3.3.11)")
-            # Upstream CMake overwrites AVX2 flags when enabling FMA.
-            text = text.replace('PROPERTIES COMPILE_FLAGS "${FMA_FLAG}"',
-                                'PROPERTIES COMPILE_FLAGS "${AVX2_FLAG} ${FMA_FLAG}"')
-            naming = '\nset_target_properties(fftw3f PROPERTIES RUNTIME_OUTPUT_NAME "fftw3f-3")\n'
-            if naming not in text:
-                text += naming
-            cmake.write_text(text, encoding="utf-8")
-            # An earlier Autotools cache must not shadow CMake's generated header.
-            (source / "config.h").unlink(missing_ok=True)
-            self.run_msys([
-                "cmake -S . -B cmake-build -G Ninja -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_BUILD_TYPE=Release "
-                + "-DCMAKE_INSTALL_PREFIX=" + shlex.quote(self.posix(prefix))
-                + " -DENABLE_FLOAT=ON -DENABLE_THREADS=ON -DWITH_COMBINED_THREADS=ON -DENABLE_SSE2=ON "
-                + "-DENABLE_AVX=ON -DENABLE_AVX2=ON -DDISABLE_FORTRAN=ON -DBUILD_TESTS=OFF",
-                "cmake --build cmake-build --parallel " + str(self.args.jobs),
-                "cmake --install cmake-build",
-            ], source)
+        if (prefix / "bin/libfftw3f-3.dll").is_file():
+            return prefix
+        cache = self.args.build_cache / "fftw.zip" if self.args.build_cache else None
+        key = hashlib.sha256((self.args.msys_fingerprint + sha256(Path(__file__))).encode("utf-8")).hexdigest()
+        if cache:
+            restored = self.work / "fftw/restored"
+            if restore_build_cache(cache, key, restored) and all((restored / name).is_file() for name in (
+                "bin/libfftw3f-3.dll", "lib/libfftw3f.dll.a", "include/fftw3.h", "share/licenses/fftw/COPYING",
+            )):
+                restored.rename(prefix)
+                self.log("Restored FFTW from the build cache.")
+                return prefix
+        archive = self.download("https://fftw.org/fftw-3.3.11.tar.gz", self.work / "fftw/fftw.tar.gz")
+        source = self.unpack(archive, self.work / "fftw/source") / "fftw-3.3.11"
+        config = source / "cmake.config.h.in"
+        config.write_text(config.read_text(encoding="utf-8").replace(
+            "/* #undef WITH_OUR_MALLOC */", "#define WITH_OUR_MALLOC 1"), encoding="utf-8")
+        cmake = source / "CMakeLists.txt"
+        text = cmake.read_text(encoding="utf-8").replace("set (FFTW_VERSION 3.3.10)", "set (FFTW_VERSION 3.3.11)")
+        # Upstream CMake overwrites AVX2 flags when enabling FMA.
+        text = text.replace('PROPERTIES COMPILE_FLAGS "${FMA_FLAG}"',
+                            'PROPERTIES COMPILE_FLAGS "${AVX2_FLAG} ${FMA_FLAG}"')
+        naming = '\nset_target_properties(fftw3f PROPERTIES RUNTIME_OUTPUT_NAME "fftw3f-3")\n'
+        if naming not in text:
+            text += naming
+        cmake.write_text(text, encoding="utf-8")
+        # An earlier Autotools cache must not shadow CMake's generated header.
+        (source / "config.h").unlink(missing_ok=True)
+        self.run_msys([
+            "cmake -S . -B cmake-build -G Ninja -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_BUILD_TYPE=Release "
+            + "-DCMAKE_INSTALL_PREFIX=" + shlex.quote(self.posix(prefix))
+            + " -DENABLE_FLOAT=ON -DENABLE_THREADS=ON -DWITH_COMBINED_THREADS=ON -DENABLE_SSE2=ON "
+            + "-DENABLE_AVX=ON -DENABLE_AVX2=ON -DDISABLE_FORTRAN=ON -DBUILD_TESTS=OFF",
+            "cmake --build cmake-build --parallel " + str(self.args.jobs),
+            "cmake --install cmake-build",
+        ], source)
+        license_path = prefix / "share/licenses/fftw/COPYING"
+        license_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source / "COPYING", license_path)
+        if cache:
+            publish_build_cache(cache, key, files_under(prefix))
         return prefix
 
     def probe(self, binary, component, target=None):
@@ -429,7 +529,7 @@ class Installer:
                     shutil.copyfile(path, target)
                     collected[target.relative_to(self.runtime).as_posix()] = sha256(target)
         if component.key == "dfttest":
-            source_license = self.work / "fftw/source/fftw-3.3.11/COPYING"
+            source_license = self.work / "fftw/prefix/share/licenses/fftw/COPYING"
             if source_license.is_file():
                 target = destination / "dependencies/fftw/COPYING"
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -836,6 +936,12 @@ class Installer:
         record["qt_source_url"] = f"https://download.qt.io/official_releases/qt/{series}/{version}/single/qt-everywhere-src-{version}.tar.xz"
 
     def install(self):
+        archive = self.args.build_cache / "vapoursynth-components.zip" if self.args.build_cache else None
+        key = self.component_cache_key() if archive else None
+        cacheable = archive and (not self.state_path.is_file() or self.state.get("cache_fingerprint") == key)
+        if self.state.get("cache_fingerprint") != key:
+            self.state.pop("cache_fingerprint", None)
+        restored = self.restore_components(archive, key) if archive and not self.state_path.is_file() else None
         for component in COMPONENTS:
             self.install_plugin(component)
         self.install_editor()
@@ -846,6 +952,14 @@ class Installer:
             record = self.state["components"][component.key]
             self.probe(self.runtime / record["plugin"], component, record.get("target_ref", record["ref"]))
         self.log("Independent VapourSynth components verified: {count}", count=len(self.state["components"]))
+        if cacheable:
+            files = self.component_cache_files(self.state)
+            if restored != {name: digest for name, (_, digest) in files.items()}:
+                self.state["cache_fingerprint"] = key
+                self.save()
+                payload = {name: path for name, (path, _) in files.items()}
+                payload["components.json"] = self.state_path
+                publish_build_cache(archive, key, payload)
 
 
 def main():
@@ -861,7 +975,12 @@ def main():
     parser.add_argument("--seven-zip", default=r"C:\Program Files\7-Zip\7z.exe")
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
     parser.add_argument("--language", choices=("en", "zh"), default="en")
+    parser.add_argument("--build-cache", type=Path)
+    parser.add_argument("--msys-fingerprint", default="")
+    parser.add_argument("--build-fingerprint", default="")
     args = parser.parse_args()
+    if args.build_cache and not (args.build_fingerprint and args.msys_fingerprint):
+        parser.error("--build-cache requires --build-fingerprint and --msys-fingerprint")
     args.runtime_root.mkdir(parents=True, exist_ok=True)
     with (args.runtime_root / ".components.lock").open("a+b") as lock:
         if lock.tell() == 0:

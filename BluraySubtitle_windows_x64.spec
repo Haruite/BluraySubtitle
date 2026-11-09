@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller one-folder build for the Windows x64 release.
 
-Build from the repository root with:
+Build from the root of a Git checkout with:
 
     pyinstaller --clean --noconfirm BluraySubtitle_windows_x64.spec
 
@@ -28,6 +28,13 @@ from PyInstaller.depend import bindepend
 
 
 PROJECT_ROOT = Path(SPECPATH).resolve()
+if not (PROJECT_ROOT / ".git").exists():
+    raise SystemExit(
+        "Windows packaging requires a Git checkout to record the source commit.\n"
+        "Clone the project with the following command and build from the cloned directory.\n"
+        "git clone https://github.com/Haruite/BluraySubtitle.git"
+    )
+
 SETTINGS_PATH = PROJECT_ROOT / "src" / "core" / "settings.py"
 SETTINGS = runpy.run_path(str(SETTINGS_PATH))
 
@@ -193,6 +200,14 @@ datas = [
     (str(required_path(vapoursynth_dir / "licenses", "VapourSynth source dependency licenses")), "legal/vapoursynth"),
 ]
 datas += copy_metadata("numpy")
+version_module = runpy.run_path(str(PROJECT_ROOT / "src" / "core" / "version.py"))
+commit_file = Path(workpath) / version_module["BUILD_COMMIT_FILENAME"]
+commit_file.write_text(
+    version_module["git_commit_record"](PROJECT_ROOT),
+    encoding="utf-8",
+    newline="\r\n",
+)
+datas.append((str(commit_file), "."))
 
 # Use the selected system Python for both frozen workers and VSScript.
 for name in ("VapourSynth.dll", "VSScript.dll"):

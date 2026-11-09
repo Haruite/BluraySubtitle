@@ -8,10 +8,10 @@
 
 Windows x64 版本使用目录包发布。请完整解压后运行 `BluraySubtitle_windows_x64.exe`，不要将它与 `_internal` 目录分离。配置保存在程序目录的 `config.json` 中，源码运行时位于仓库根目录；请确保该目录可写。
 
-Windows x64 下载：
+Windows x64 下载
 
-- [持续更新包](https://sbx.mysmy.top/tools/BluraySubtitle_windows_x64.7z)：独立于 GitHub Release 的发布周期及时更新。
-- [GitHub Releases](https://github.com/Haruite/BluraySubtitle/releases)：随每个版本发布的归档包。
+- 每次推送到 `main` 后，GitHub Actions 自动打包并上传到服务器。[从 sbx.mysmy.top 下载](https://sbx.mysmy.top/tools/BluraySubtitle_windows_x64.7z)
+- 4.7 之后发布的版本会自动附加 Windows x64 `.7z` 包。[GitHub Releases](https://github.com/Haruite/BluraySubtitle/releases)
 
 BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 工具。它将以下五类功能整合在一个应用中：
 

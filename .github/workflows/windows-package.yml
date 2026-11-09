@@ -1,0 +1,192 @@
+name: Publish BluraySubtitle Windows x64
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-package-website
+  queue: max
+
+jobs:
+  publish:
+    runs-on: windows-2025-vs2026
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Restore Dependency Downloads
+        id: downloads
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ${{ runner.temp }}/bluraysubtitle-pip
+            C:/msys64/var/cache/pacman/pkg
+          key: windows-downloads-v1-${{ runner.arch }}-lookup
+          restore-keys: windows-downloads-v1-${{ runner.arch }}-
+
+      - name: Restore Compiled Artifacts
+        id: builds
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/bluraysubtitle-builds/artifacts/*.zip
+          key: windows-builds-v2-${{ runner.arch }}-lookup
+          restore-keys: windows-builds-v2-${{ runner.arch }}-
+
+      - name: Prepare Windows Build Environment
+        id: setup
+        shell: powershell
+        env:
+          BLURAYSUBTITLE_GITHUB_TOKEN: ${{ github.token }}
+          PIP_CACHE_DIR: ${{ runner.temp }}/bluraysubtitle-pip
+        run: |
+          $cacheDirectory = Join-Path $env:RUNNER_TEMP "bluraysubtitle-builds"
+          .\setup_windows_environment.ps1 -Mode Build -Language en -BuildCacheDirectory $cacheDirectory
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $manifestPath = Join-Path $env:ProgramData "BluraySubtitle\environment-manifest.json"
+          $system = (Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json).system
+          $outputs = @(
+            "python=$($system.python_executable)"
+            "seven_zip=$($system.seven_zip_executable)"
+            "download_key=windows-downloads-v1-$env:RUNNER_ARCH-$($system.download_cache_key)"
+          )
+          if ($system.build_cache_key) {
+            $outputs += "build_key=windows-builds-v2-$env:RUNNER_ARCH-$($system.build_cache_key)"
+          }
+          $outputs | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Save Dependency Downloads
+        if: steps.downloads.outputs.cache-matched-key != steps.setup.outputs.download_key
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ${{ runner.temp }}/bluraysubtitle-pip
+            C:/msys64/var/cache/pacman/pkg
+          key: ${{ steps.setup.outputs.download_key }}
+
+      - name: Save Compiled Artifacts
+        if: steps.setup.outputs.build_key != '' && steps.builds.outputs.cache-matched-key != steps.setup.outputs.build_key
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/bluraysubtitle-builds/artifacts/*.zip
+          key: ${{ steps.setup.outputs.build_key }}
+
+      - name: Build and Verify Windows Package
+        shell: powershell
+        env:
+          BUILD_PYTHON: ${{ steps.setup.outputs.python }}
+          BUILD_SEVEN_ZIP: ${{ steps.setup.outputs.seven_zip }}
+          PYTHONUTF8: '1'
+        run: |
+          $package = "BluraySubtitle_windows_x64"
+          $dist = Join-Path $PWD "dist"
+          $archive = Join-Path $dist "$package.7z"
+          if (Test-Path -LiteralPath $archive) {
+            throw "Package archive already exists: $archive"
+          }
+
+          & $env:BUILD_PYTHON -m PyInstaller --clean --noconfirm BluraySubtitle_windows_x64.spec
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $bundle = Join-Path $dist $package
+          $executable = Join-Path $bundle "$package.exe"
+          $vspipe = Join-Path $bundle "_internal\vspipe.exe"
+          $commitRecord = Join-Path $bundle "_internal\build-commit.txt"
+          if (-not (Test-Path -LiteralPath $executable -PathType Leaf) -or
+              -not (Test-Path -LiteralPath $vspipe -PathType Leaf) -or
+              -not (Test-Path -LiteralPath $commitRecord -PathType Leaf)) {
+            throw "The Windows bundle is missing the application executable, VSPipe, or commit record."
+          }
+          & $vspipe --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          Push-Location -LiteralPath $dist
+          try {
+            & $env:BUILD_SEVEN_ZIP a -t7z $archive $package
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & $env:BUILD_SEVEN_ZIP t $archive
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          finally {
+            Pop-Location
+          }
+
+      - name: Upload Package and Build Information
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          SFTP_HOST: ${{ secrets.SFTP_HOST }}
+          SFTP_KNOWN_HOSTS: ${{ secrets.SFTP_KNOWN_HOSTS }}
+          SFTP_PRIVATE_KEY: ${{ secrets.SFTP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          export PATH="/usr/bin:$PATH"
+
+          package_name=BluraySubtitle_windows_x64
+          archive_name="$package_name.7z"
+          archive_path="dist/$archive_name"
+          if [[ ! -f "$archive_path" || ! -s "$archive_path" ]]; then
+            echo "::error::Expected a non-empty package at $archive_path."
+            exit 1
+          fi
+
+          : "${SFTP_HOST:?Missing SFTP_HOST secret}"
+          : "${SFTP_KNOWN_HOSTS:?Missing SFTP_KNOWN_HOSTS secret}"
+          : "${SFTP_PRIVATE_KEY:?Missing SFTP_PRIVATE_KEY secret}"
+
+          publish_temp=$(mktemp -d)
+          unset SSH_AGENT_PID SSH_AUTH_SOCK
+          trap '
+            if [[ -n "${SSH_AGENT_PID:-}" ]]; then
+              ssh-agent -k >/dev/null || true
+            fi
+            rm -rf -- "$publish_temp"
+          ' EXIT
+
+          metadata_name="${archive_name}.txt"
+          metadata_path="$publish_temp/$metadata_name"
+          checksum=$(sha256sum -- "$archive_path")
+          {
+            printf 'sha256=%s\n' "${checksum%% *}"
+            tr -d '\r' < "dist/$package_name/_internal/build-commit.txt"
+          } > "$metadata_path"
+
+          agent_environment=$(ssh-agent -a "$publish_temp/agent" -s)
+          eval "$agent_environment" >/dev/null
+          printf '%s\n' "$SFTP_PRIVATE_KEY" | tr -d '\r' | ssh-add -
+          unset SFTP_PRIVATE_KEY
+          printf '%s\n' "$SFTP_KNOWN_HOSTS" > "$publish_temp/known_hosts"
+
+          remote_dir=/usr/share/nginx/html/tools
+          destination="bluray-deploy@$SFTP_HOST"
+          sftp_options=(
+            -b - -P 22
+            -o StrictHostKeyChecking=yes
+            -o "UserKnownHostsFile=\"$publish_temp/known_hosts\""
+          )
+
+          remote_files=$(printf '@cd "%s"\n@ls -1\n' "$remote_dir" |
+            sftp "${sftp_options[@]}" "$destination" | tr -d '\r')
+
+          # A serialized rerun can reuse the staging names after an interrupted upload.
+          staged_archive=".${archive_name}.part"
+          staged_metadata=".${metadata_name}.part"
+          {
+            printf 'cd "%s"\n' "$remote_dir"
+            printf 'put "%s" "%s"\n' "$archive_path" "$staged_archive"
+            printf 'put "%s" "%s"\n' "$metadata_path" "$staged_metadata"
+            printf 'chmod 644 "%s"\n' "$staged_archive" "$staged_metadata"
+            # Clear the previous record before switching the archive it describes.
+            if grep -Fxq "$metadata_name" <<< "$remote_files"; then
+              printf 'rm "%s"\n' "$metadata_name"
+            fi
+            printf 'rename "%s" "%s"\n' "$staged_archive" "$archive_name"
+            printf 'rename "%s" "%s"\n' "$staged_metadata" "$metadata_name"
+          } | sftp "${sftp_options[@]}" "$destination"

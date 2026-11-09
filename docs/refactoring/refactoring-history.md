@@ -1292,3 +1292,9 @@ Date: 2026-10-28
 - Statically linked vs-placebo dependencies and source-built compiler runtimes, stripped source-built plugin symbols, and shared the DFTTest FFTW library with MVTools. Build profiles refresh previously managed source builds when link options change; the dependency manifest retains only libraries still in use.
 - Reworked bilingual third-party notices around individual component sources and collected upstream license texts, dependency notices, and editor Qt source information. Python filter attribution retains the original archive provenance.
 - Verification: native plugin imports, repeated version checks, fallback hash invalidation, and release ordering passed independently of media processing. Windows bundle checks confirmed private editor Qt libraries, absent Tcl/Tk, and importable plugins with their packaged dependencies. Shared version detection and Debian version ordering checks passed on Ubuntu 22.04 and 26.04.
+
+## Windows Builds and Automated Publishing
+
+2026-11-09
+
+Windows setup adds `-Mode Build`, caches compiled artifacts, and builds x265 and SVT-AV1 with Ninja. Desktop setup reuses eligible Visual Studio Enterprise 2026 installations. GitHub Actions publishes the Windows x64 package and its build record over SFTP on pushes to `main`, then attaches the package matching the tag's commit when a Release is published. The app shows the build's commit hash and time and checks Release versions and server package commits separately. [Build Performance](../wiki/Build-Performance.md)

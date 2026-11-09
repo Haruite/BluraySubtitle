@@ -1,0 +1,105 @@
+name: Attach Windows Package to Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-windows-package-${{ github.event.release.id }}
+
+jobs:
+  attach:
+    runs-on: ubuntu-latest
+    timeout-minutes: 210
+    env:
+      PACKAGE_URL: https://sbx.mysmy.top/tools/BluraySubtitle_windows_x64.7z
+      RELEASE_ID: ${{ github.event.release.id }}
+    steps:
+      - name: Check Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          immutable=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" --jq .immutable)
+          if [[ "$immutable" == true ]]; then
+            echo "::error::This published Release is immutable. Attach the package while the Release is a draft."
+            exit 1
+          fi
+
+      - name: Wait for the Package Record
+        id: package
+        shell: bash
+        timeout-minutes: 180
+        run: |
+          set -euo pipefail
+          record=$(mktemp)
+          trap 'rm -f -- "$record"' EXIT
+
+          echo "Waiting up to 180 minutes for a Windows package for $GITHUB_SHA."
+          while true; do
+            if curl --fail --silent --show-error --location \
+                --connect-timeout 10 --max-time 20 --max-filesize 65536 \
+                --header 'Cache-Control: no-cache' --output "$record" \
+                "${PACKAGE_URL}.txt?poll=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${SECONDS}"; then
+              commit=$(sed -n 's/\r$//;s/^commit=//p' "$record")
+              if [[ "$commit" == "$GITHUB_SHA" ]]; then
+                checksum=$(sed -n 's/\r$//;s/^sha256=//p' "$record")
+                if [[ ! "$checksum" =~ ^[0-9a-fA-F]{64}$ ]]; then
+                  echo "::error::The matching package record has an invalid SHA-256 value."
+                  exit 1
+                fi
+                printf 'sha256=%s\n' "${checksum,,}" >> "$GITHUB_OUTPUT"
+                break
+              fi
+            fi
+            echo "Waiting 60 seconds for the package record to match the Release commit."
+            sleep 60
+          done
+
+      - name: Verify and Attach the Package
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_SHA256: ${{ steps.package.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          archive_name="${PACKAGE_URL##*/}"
+          tag_path=$(jq -rn --arg tag "$GITHUB_REF_NAME" '$tag | @uri')
+          release=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag_path")
+          if [[ "$(jq -r '.id' <<< "$release")" != "$RELEASE_ID" ]]; then
+            echo "::error::The tag now points to a different Release."
+            exit 1
+          fi
+          existing_digest=$(jq -r --arg name "$archive_name" \
+            '.assets[] | select(.name == $name) | .digest // "unknown"' <<< "$release")
+          if [[ "$existing_digest" == "sha256:$PACKAGE_SHA256" ]]; then
+            echo "The verified package is already attached to this Release."
+            exit 0
+          fi
+          if [[ -n "$existing_digest" ]]; then
+            echo "::error::An attachment named $archive_name already exists with a different or unknown digest."
+            exit 1
+          fi
+
+          work_dir=$(mktemp -d)
+          trap 'rm -rf -- "$work_dir"' EXIT
+          archive="$work_dir/$archive_name"
+          curl --fail --silent --show-error --location \
+            --connect-timeout 10 --max-time 900 --retry 2 --retry-max-time 60 \
+            --max-filesize 2147483647 --header 'Cache-Control: no-cache' \
+            --output "$archive" "${PACKAGE_URL}?sha256=$PACKAGE_SHA256"
+          if ! printf '%s  %s\n' "$PACKAGE_SHA256" "$archive" | sha256sum --check --status; then
+            echo "::error::The downloaded Windows package does not match the SHA-256 in the record."
+            exit 1
+          fi
+
+          tag_commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/tags/$tag_path" --jq .sha)
+          if [[ "$tag_commit" != "$GITHUB_SHA" ]]; then
+            echo "::error::The Release tag changed while the Windows package was being prepared."
+            exit 1
+          fi
+          gh release upload --repo "$GITHUB_REPOSITORY" -- "$GITHUB_REF_NAME" "$archive"

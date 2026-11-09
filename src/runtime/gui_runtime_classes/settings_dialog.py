@@ -8,6 +8,7 @@ import shutil
 import sys
 import tempfile
 from dataclasses import replace
+from html import escape
 from pathlib import Path
 from typing import Callable
 
@@ -53,7 +54,14 @@ from src.core.encode_presets import (
     encode_presets_for_encoder,
 )
 from src.core.i18n import translate_text
-from src.core.version import APP_VERSION, is_newer_release, release_version
+from src.core.version import (
+    APP_VERSION,
+    CommitInfo,
+    current_commit,
+    is_newer_release,
+    parse_commit_record,
+    release_version,
+)
 from src.exports.utils import resolve_encoder_executable_path
 from src.runtime.encode_source import (
     probe_svt_av1_bit_depths,
@@ -65,6 +73,7 @@ GITHUB_LATEST_RELEASE_API = (
     "https://api.github.com/repos/Haruite/BluraySubtitle/releases/latest"
 )
 GITHUB_RELEASES_URL = "https://github.com/Haruite/BluraySubtitle/releases/latest"
+SERVER_WINDOWS_PACKAGE_URL = "https://sbx.mysmy.top/tools/BluraySubtitle_windows_x64.7z"
 EXTERNAL_TOOL_PATH_NAMES = (
     "SEVEN_ZIP_PATH",
     "FLAC_PATH",
@@ -105,8 +114,10 @@ class SettingsDialog(QDialog):
             else core_settings.ensure_editable_settings_file()
         )
         self._settings_source_text: str | None = None
+        self._current_commit = current_commit()
         self._update_network_manager = QNetworkAccessManager(self)
-        self._update_reply: QNetworkReply | None = None
+        self._update_replies: tuple[QNetworkReply, QNetworkReply] | None = None
+        self.finished.connect(self._cancel_update_check)
         self.setWindowTitle(self.t("Settings"))
         self.setMinimumWidth(680)
         self.setMinimumHeight(520)
@@ -182,11 +193,11 @@ class SettingsDialog(QDialog):
         form.addRow(self.t("Window opacity"), self.opacity_spin)
 
         update_row = QWidget(tab)
-        update_layout = QHBoxLayout(update_row)
+        update_layout = QVBoxLayout(update_row)
         update_layout.setContentsMargins(0, 0, 0, 0)
-        self.current_version_label = QLabel(
-            self.t("Current version: {version}").format(version=APP_VERSION),
-            update_row,
+        self.current_version_label = QLabel(self._current_build_summary(), update_row)
+        self.current_version_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
         )
         self.check_updates_button = QPushButton(
             self.t("Check for updates"),
@@ -196,93 +207,159 @@ class SettingsDialog(QDialog):
             lambda _=None: self._check_for_updates()
         )
         update_layout.addWidget(self.current_version_label)
-        update_layout.addStretch(1)
-        update_layout.addWidget(self.check_updates_button)
+        update_layout.addWidget(self.check_updates_button, alignment=Qt.AlignmentFlag.AlignLeft)
         form.addRow(self.t("Application updates"), update_row)
         return tab
 
+    def _commit_lines(self, commit: CommitInfo | None) -> tuple[str, str]:
+        if commit is None:
+            commit_hash = commit_time = self.t("unknown")
+        else:
+            commit_hash = commit.commit_hash
+            commit_time = commit.committed_at.isoformat(sep=" ", timespec="seconds")
+        return (
+            self.t("Commit hash: {hash}").format(hash=commit_hash),
+            self.t("Commit time: {time}").format(time=commit_time),
+        )
+
+    def _current_build_summary(self) -> str:
+        return "\n".join((
+            self.t("Current version: {version}").format(version=APP_VERSION),
+            *self._commit_lines(self._current_commit),
+        ))
+
+    def _set_update_check_busy(self, busy: bool) -> None:
+        self.check_updates_button.setEnabled(not busy)
+        text = "Checking for updates..." if busy else "Check for updates"
+        self.check_updates_button.setText(self.t(text))
+
     def _check_for_updates(self) -> None:
-        if self._update_reply is not None:
+        if self._update_replies is not None:
             return
-        self.check_updates_button.setEnabled(False)
-        self.check_updates_button.setText(self.t("Checking for updates..."))
-        request = QNetworkRequest(QUrl(GITHUB_LATEST_RELEASE_API))
-        request.setRawHeader(b"Accept", b"application/vnd.github+json")
+        self._set_update_check_busy(True)
+        self._update_replies = (
+            self._request_update_info(GITHUB_LATEST_RELEASE_API, b"application/vnd.github+json"),
+            self._request_update_info(f"{SERVER_WINDOWS_PACKAGE_URL}.txt", b"text/plain"),
+        )
+        for reply in self._update_replies:
+            reply.finished.connect(self._finish_update_check)
+
+    def _request_update_info(self, url: str, accept: bytes) -> QNetworkReply:
+        request = QNetworkRequest(QUrl(url))
+        request.setRawHeader(b"Accept", accept)
+        request.setRawHeader(b"Cache-Control", b"no-cache")
         request.setRawHeader(
             b"User-Agent",
             f"BluraySubtitle/{APP_VERSION}".encode("ascii"),
         )
         request.setTransferTimeout(15_000)
-        self._update_reply = self._update_network_manager.get(request)
-        self._update_reply.finished.connect(self._finish_update_check)
+        return self._update_network_manager.get(request)
+
+    def _cancel_update_check(self) -> None:
+        replies = self._update_replies
+        if replies is None:
+            return
+        self._update_replies = None
+        for reply in replies:
+            reply.abort()
+            reply.deleteLater()
+        self._set_update_check_busy(False)
 
     def _finish_update_check(self) -> None:
-        reply = self._update_reply
-        if reply is None:
+        replies = self._update_replies
+        if replies is None or not all(reply.isFinished() for reply in replies):
             return
-        self._update_reply = None
-        self.check_updates_button.setEnabled(True)
-        self.check_updates_button.setText(self.t("Check for updates"))
+        self._update_replies = None
+        self._set_update_check_busy(False)
+        release_reply, package_reply = replies
+        release_result, release_link = self._read_update_reply(
+            release_reply,
+            self._release_update_result,
+            "GitHub did not return a valid release version.",
+        )
+        package_result, package_link = self._read_update_reply(
+            package_reply,
+            self._server_package_update_result,
+            "The server did not return valid package commit information.",
+        )
+        self._show_update_results(release_result, package_result, release_link or package_link)
+
+    def _read_update_reply(
+            self,
+            reply: QNetworkReply,
+            render: Callable[[str], tuple[str, bool]],
+            invalid_reply_message: str,
+    ) -> tuple[str, bool]:
         try:
             if reply.error() != QNetworkReply.NetworkError.NoError:
-                QMessageBox.warning(
-                    self,
-                    self.t("Check for updates"),
-                    self.t("Could not check for updates: {error}").format(
-                        error=reply.errorString()
-                    ),
+                message = self.t("Could not check for updates: {error}").format(
+                    error=reply.errorString()
                 )
-                return
-            try:
-                payload = json.loads(bytes(reply.readAll()).decode("utf-8"))
-                self._process_latest_release(payload)
-            except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
-                QMessageBox.warning(
-                    self,
-                    self.t("Check for updates"),
-                    self.t("GitHub did not return a valid release version."),
-                )
+                return escape(message), False
+            return render(bytes(reply.readAll()).decode("utf-8"))
+        except ValueError:
+            return escape(self.t(invalid_reply_message)), False
         finally:
             reply.deleteLater()
 
-    def _process_latest_release(self, payload: object) -> None:
+    def _release_update_result(self, response: str) -> tuple[str, bool]:
+        payload = json.loads(response)
         if not isinstance(payload, dict):
             raise ValueError("GitHub release response must be an object")
         latest_version = release_version(payload)
-        if is_newer_release(latest_version):
-            self._show_update_available(latest_version)
-            return
-        QMessageBox.information(
-            self,
-            self.t("Check for updates"),
-            self.t("You are using the latest version ({version}).").format(
-                version=APP_VERSION
-            ),
-        )
+        if not is_newer_release(latest_version):
+            status = self.t("Latest Release version is {version}. Your version is up to date.")
+            return escape(status.format(version=latest_version)), False
+        status = self.t("Version {version} is available.").format(version=latest_version)
+        link = f'<a href="{GITHUB_RELEASES_URL}">{escape(self.t("Open GitHub Releases"))}</a>'
+        return f"{escape(status)}<br>{link}", True
 
-    def _update_available_message(self, latest_version: str) -> str:
-        return (
-            "<p>"
-            + self.t("Version {version} is available.").format(
-                version=latest_version
-            )
-            + "</p>"
-            + f'<p><a href="{GITHUB_RELEASES_URL}">'
-            + self.t("Open GitHub Releases")
-            + "</a></p><p><b>"
-            + self.t(
+    def _server_package_update_result(self, response: str) -> tuple[str, bool]:
+        server_commit = parse_commit_record(response)
+        installed_commit = self._current_commit
+        offer_package = True
+        if installed_commit is None:
+            status = self.t("Your current commit is unknown. A server package is available.")
+        elif server_commit.commit_hash == installed_commit.commit_hash:
+            status = self.t("The server package matches your current commit.")
+            offer_package = False
+        elif server_commit.committed_at > installed_commit.committed_at:
+            status = self.t("A newer server package is available.")
+        elif server_commit.committed_at < installed_commit.committed_at:
+            status = self.t("The server package is from an older commit.")
+            offer_package = False
+        else:
+            status = self.t("The server package has a different commit with the same commit time.")
+        lines = [escape(line) for line in (*self._commit_lines(server_commit), status)]
+        if offer_package:
+            text = escape(self.t("Download Windows x64 package"))
+            lines.append(f'<a href="{SERVER_WINDOWS_PACKAGE_URL}">{text}</a>')
+        return "<br>".join(lines), offer_package
+
+    def _show_update_results(
+            self,
+            release_result: str,
+            package_result: str,
+            has_download: bool,
+    ) -> None:
+        current_build = "<br>".join(escape(line) for line in self._current_build_summary().splitlines())
+        sections = (
+            (self.t("Current build"), current_build),
+            (self.t("GitHub Release"), release_result),
+            (self.t("Server Windows x64 package"), package_result),
+        )
+        message = "".join(f"<p><b>{escape(title)}</b><br>{body}</p>" for title, body in sections)
+        if has_download:
+            reminder = self.t(
                 "Before running the new version, copy config.json from the "
                 "current program directory to the new program directory."
             )
-            + "</b></p>"
-        )
-
-    def _show_update_available(self, latest_version: str) -> None:
+            message += f"<p><b>{escape(reminder)}</b></p>"
         message_box = QMessageBox(self)
-        message_box.setWindowTitle(self.t("Update available"))
+        message_box.setWindowTitle(self.t("Check for updates"))
         message_box.setIcon(QMessageBox.Icon.Information)
         message_box.setTextFormat(Qt.TextFormat.RichText)
-        message_box.setText(self._update_available_message(latest_version))
+        message_box.setText(message)
         message_box.setStandardButtons(QMessageBox.StandardButton.Ok)
         for label in message_box.findChildren(QLabel):
             label.setOpenExternalLinks(True)

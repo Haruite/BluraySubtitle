@@ -5,10 +5,14 @@ import sys
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication, QStyle
 
+from src.core.version import current_commit
+
 from .gui_runtime_classes.bluray_subtitle_gui_entry import BluraySubtitleGUI
 
 
 def run_src_entry() -> None:
+    # Capture Git metadata before the GUI starts handling events.
+    current_commit()
     app = QApplication.instance() or QApplication(sys.argv)
     window = BluraySubtitleGUI()
     window.show()

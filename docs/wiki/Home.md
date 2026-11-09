@@ -12,6 +12,7 @@ Start with the [README](../../README.md) for installation and basic operation. U
 | Video/audio codecs, subtitle formats, mpv playback, and Dolby Vision layers | [Media Formats and Dolby Vision](Media-Formats-and-Dolby-Vision.md) |
 | Encoder settings, VPy filters, preview, getnative, and HDR processing | [Video Encoding and VapourSynth](Video-Encoding-and-VapourSynth.md) |
 | Source-code map, identifiers, and episode configuration | [Developer Guide](BluraySubtitle-Developer-Guide.md) |
+| Build times and CPU utilization | [Build Performance](Build-Performance.md) |
 | Remux fallback, audio processing, and external-tool rationale | [Media Pipeline and Tool Selection](../development/media-pipeline-and-tool-selection.md) |
 | Modification requirements | [Code Modification Standards](../development/code-standards.md) |
 | Specifications and upstream manuals | [References](References.md) |

@@ -1,4 +1,8 @@
-﻿param([ValidateSet("en", "zh")][string]$Language)
+﻿param(
+    [ValidateSet("en", "zh")][string]$Language,
+    [ValidateSet("Desktop", "Build")][string]$Mode = "Desktop",
+    [string]$BuildCacheDirectory
+)
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 3.0
@@ -30,7 +34,7 @@ function Get-NativePowerShellPath {
         }
     }
 
-    return Join-Path $PSHOME "powershell.exe"
+    return Join-Path $windowsDirectory "System32\WindowsPowerShell\v1.0\powershell.exe"
 }
 
 function Start-ElevatedSetup {
@@ -67,12 +71,20 @@ function Start-ElevatedSetup {
 
 # Elevation is the first operation performed by the setup script.
 if (-not (Test-Administrator)) {
+    if ($Mode -eq "Build") {
+        [Console]::Error.WriteLine("Build mode requires an elevated PowerShell session. / 构建模式需要管理员权限的 PowerShell 会话。")
+        exit 1
+    }
     $elevatedExitCode = Start-ElevatedSetup
     if ($elevatedExitCode -ne 0) {
         exit $elevatedExitCode
     }
     return
 }
+
+# Keep the API token out of the environment inherited by external build tools.
+$script:GitHubApiToken = $env:BLURAYSUBTITLE_GITHUB_TOKEN
+$env:BLURAYSUBTITLE_GITHUB_TOKEN = $null
 
 $script:Utf8Encoding = New-Object Text.UTF8Encoding($false)
 [Console]::InputEncoding = $script:Utf8Encoding
@@ -89,6 +101,11 @@ $script:Manifest = $null
 $script:RegisteredComponents = [ordered]@{}
 $script:LatestPythonRelease = $null
 $script:SelectedPythonRelease = $null
+$script:BuildCacheRoot = ""
+$script:BuildRecipeHash = ""
+$script:MsysBuildPackages = $null
+$script:DesktopVisualStudioEnterprise = $null
+$script:VisualStudioBuildEnvironment = $null
 
 function Select-SetupLanguage {
     Write-Host ""
@@ -109,7 +126,7 @@ function Select-SetupLanguage {
     }
 }
 
-$script:SelectedLanguage = if ($Language) { $Language } else { Select-SetupLanguage }
+$script:SelectedLanguage = if ($Language) { $Language } elseif ($Mode -eq "Build") { "en" } else { Select-SetupLanguage }
 $script:ProxyAddress = "DIRECT"
 $script:RestartRequired = $false
 $script:ReleaseCache = [ordered]@{}
@@ -384,8 +401,8 @@ function Invoke-SetupDownload {
     $destinationDirectory = Split-Path -Parent $Destination
     [IO.Directory]::CreateDirectory($destinationDirectory) | Out-Null
     $fileName = [IO.Path]::GetFileName($Destination)
-    $githubReleaseAsset = (
-        $Uri.Scheme -eq "https" -and $Uri.Host -eq "api.github.com" -and
+    $githubApiRequest = $Uri.Scheme -eq "https" -and $Uri.Host -eq "api.github.com"
+    $githubReleaseAsset = $githubApiRequest -and (
         $Uri.AbsolutePath -match '^/repos/[^/]+/[^/]+/releases/assets/[0-9]+$'
     )
     $releaseDownload = $githubReleaseAsset -or (
@@ -394,19 +411,30 @@ function Invoke-SetupDownload {
     )
     $client = New-SetupHttpClient
     try {
+        if ($githubApiRequest -and $Uri.IsDefaultPort -and $script:GitHubApiToken) {
+            # HttpClientHandler clears Authorization when following redirects.
+            $client.DefaultRequestHeaders.Authorization = [Net.Http.Headers.AuthenticationHeaderValue]::new(
+                "Bearer", $script:GitHubApiToken
+            )
+        }
         if ($githubReleaseAsset) {
             $client.DefaultRequestHeaders.Accept.ParseAdd("application/octet-stream")
             $client.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28")
         }
+        $completionOption = [Net.Http.HttpCompletionOption]::ResponseHeadersRead
         for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
             Write-SetupInfo `
                 "Downloading $fileName (attempt $attempt/$Attempts): $Uri" `
                 "正在下载 $fileName（第 $attempt/$Attempts 次）：$Uri"
             try {
-                $response = $client.GetAsync(
-                    $Uri,
-                    [Net.Http.HttpCompletionOption]::ResponseHeadersRead
-                ).GetAwaiter().GetResult()
+                $response = $client.GetAsync($Uri, $completionOption).GetAwaiter().GetResult()
+                if ($null -ne $client.DefaultRequestHeaders.Authorization -and
+                    [int]$response.StatusCode -in @(401, 403, 404)) {
+                    # A job token may be denied access to an upstream repository.
+                    $response.Dispose()
+                    $client.DefaultRequestHeaders.Authorization = $null
+                    $response = $client.GetAsync($Uri, $completionOption).GetAwaiter().GetResult()
+                }
                 try {
                     $response.EnsureSuccessStatusCode() | Out-Null
                     $contentType = $response.Content.Headers.ContentType
@@ -865,6 +893,7 @@ function Invoke-SetupBuildCommand {
         throw (Get-SetupText "Build executable not found: $FilePath" "未找到编译程序：$FilePath")
     }
     Write-SetupInfo "Running build step: $DisplayName" "正在执行编译步骤：$DisplayName"
+    $timer = [Diagnostics.Stopwatch]::StartNew()
     $previousErrorActionPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = "Continue"
@@ -879,7 +908,8 @@ function Invoke-SetupBuildCommand {
             "Build step failed with exit code ${exitCode}: $DisplayName" `
             "编译步骤执行失败，退出码 ${exitCode}：$DisplayName")
     }
-    Write-SetupInfo "Build step completed: $DisplayName" "编译步骤完成：$DisplayName"
+    $seconds = [Math]::Round($timer.Elapsed.TotalSeconds, 1)
+    Write-SetupInfo "Build step completed in $seconds s: $DisplayName" "编译步骤耗时 $seconds 秒：$DisplayName"
 }
 
 function ConvertTo-Msys2Path {
@@ -1197,7 +1227,8 @@ function Register-SetupComponent {
         [Parameter(Mandatory = $true)][scriptblock]$GetAvailableVersion,
         [Parameter(Mandatory = $true)][scriptblock]$Install,
         [Parameter(Mandatory = $true)][scriptblock]$Verify,
-        [switch]$AlwaysRun
+        [switch]$AlwaysRun,
+        [switch]$ReuseInstalled
     )
 
     if ($script:RegisteredComponents.Contains($Name)) {
@@ -1212,6 +1243,7 @@ function Register-SetupComponent {
         Install = $Install
         Verify = $Verify
         AlwaysRun = [bool]$AlwaysRun
+        ReuseInstalled = [bool]$ReuseInstalled
     }
 }
 
@@ -1269,6 +1301,131 @@ function Update-ManifestComponent {
     }
 }
 
+function Get-BuildFingerprint {
+    param([string[]]$Inputs)
+
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [Text.Encoding]::UTF8.GetBytes(($Inputs -join "`n"))
+        return [BitConverter]::ToString($sha256.ComputeHash($bytes)).Replace("-", "").ToLowerInvariant()
+    }
+    finally {
+        $sha256.Dispose()
+    }
+}
+
+function Get-MsysBuildPackages {
+    if ($null -eq $script:MsysBuildPackages) {
+        $script:MsysBuildPackages = Invoke-Msys2Pacman -Arguments @("-Q")
+    }
+    return $script:MsysBuildPackages
+}
+
+function Get-VisualStudioBuildFingerprintInputs {
+    $visualStudio = Get-VisualStudioProperty "installationPath"
+    return @(
+        $script:Manifest.components["visual-studio-build-tools"].version
+        $script:Manifest.components["cmake"].version
+        $script:Manifest.components["ninja"].version
+        Get-ChildItem -LiteralPath (Join-Path $visualStudio "VC\Tools\MSVC") -Directory -Name | Sort-Object
+        Get-ChildItem -LiteralPath "C:\Program Files (x86)\Windows Kits\10\Include" -Directory -Name | Sort-Object
+    )
+}
+
+function Get-ComponentBuildCache {
+    param([string]$Name, [string]$Version)
+
+    if (-not $script:BuildCacheRoot) {
+        return $null
+    }
+
+    $inputs = @($script:BuildRecipeHash, $Name, $Version)
+    switch ($Name) {
+        "x264" {
+            $files = @($script:ToolPaths.X264, $script:ToolPaths.X264Version)
+            $inputs += @((Get-X264Release).Commit, $script:Manifest.components["ffmpeg"].version, (Get-MsysBuildPackages))
+        }
+        "x265" { $files = @($script:ToolPaths.X265, $script:ToolPaths.X265Version) }
+        "svt-av1" { $files = @($script:ToolPaths.SvtAv1) }
+        "fdkaac" {
+            $files = @($script:ToolPaths.FdkAac)
+            $inputs += @((Get-FdkAacLibraryRelease).Version, (Get-MsysBuildPackages))
+        }
+        "libass" {
+            $files = @($script:ToolPaths.Libass, $script:ToolPaths.LibassVersion)
+            $inputs += @(Get-MsysBuildPackages)
+        }
+        "vapoursynth-classic" {
+            $files = @()
+            $inputs += @(Get-VisualStudioBuildFingerprintInputs)
+            $inputs += @(
+                (Get-FileHash -LiteralPath (Join-Path $script:SetupDirectory "tools\build_vapoursynth_windows.py")).Hash
+                (Get-PythonVersionFromExecutable $script:ToolPaths.Python)
+                Get-PythonPackageVersion "Cython"
+                Get-PythonPackageVersion "setuptools"
+                Get-PythonPackageVersion "wheel"
+                (Get-VapourSynthSourceDependencies).Values | ForEach-Object { $_.Version }
+            )
+        }
+        default { return $null }
+    }
+    if ($Name -in @("x265", "svt-av1")) {
+        $inputs += @(Get-VisualStudioBuildFingerprintInputs)
+        $inputs += $script:Manifest.components["nasm"].version
+    }
+
+    return [pscustomobject]@{
+        Name = $Name
+        Archive = Join-Path $script:BuildCacheRoot "$Name.zip"
+        Key = Get-BuildFingerprint $inputs
+        Files = $files
+        Artifacts = Join-Path $script:TempRoot "artifacts-$Name"
+        Restored = Join-Path $script:TempRoot "restored-$Name"
+    }
+}
+
+function Invoke-BuildArtifactCache {
+    param([string]$Operation, [string]$Archive, [string]$Key, [string]$Directory)
+
+    $helper = Join-Path $script:SetupDirectory "tools\windows_build_cache.py"
+    return Invoke-SetupCommand -FilePath $script:ToolPaths.Python -Arguments @(
+        $helper, $Operation, $Archive, $Key, $Directory
+    )
+}
+
+function Restore-ComponentBuildCache {
+    param($Cache, [string]$Version)
+
+    if ((Invoke-BuildArtifactCache "restore" $Cache.Archive $Cache.Key $Cache.Restored) -ne "hit") {
+        return $false
+    }
+    if ($Cache.Name -eq "vapoursynth-classic") {
+        Install-VapourSynthClassic $Version -Artifacts $Cache.Restored
+        return $true
+    }
+    foreach ($file in $Cache.Files) {
+        $cachedFile = Join-Path $Cache.Restored ([IO.Path]::GetFileName($file))
+        if (-not (Test-Path -LiteralPath $cachedFile -PathType Leaf)) {
+            return $false
+        }
+    }
+    foreach ($file in $Cache.Files) {
+        $cachedFile = Join-Path $Cache.Restored ([IO.Path]::GetFileName($file))
+        Install-ConfiguredFile -Source $cachedFile -Destination $file
+    }
+    return $true
+}
+
+function Save-ComponentBuildCache {
+    param($Cache)
+
+    [IO.Directory]::CreateDirectory($Cache.Artifacts) | Out-Null
+    foreach ($file in $Cache.Files) {
+        Copy-Item -LiteralPath $file -Destination $Cache.Artifacts -Force
+    }
+    Invoke-BuildArtifactCache "save" $Cache.Archive $Cache.Key $Cache.Artifacts | Out-Null
+}
+
 function Invoke-SetupComponent {
     param([Parameter(Mandatory = $true)]$Component)
 
@@ -1285,6 +1442,19 @@ function Invoke-SetupComponent {
         Write-SetupInfo `
             "$displayName is not installed or not configured." `
             "$displayName 未安装或尚未配置。"
+    }
+
+    if ($Component.ReuseInstalled -and $installedVersion) {
+        if (-not [bool](& $Component.Verify)) {
+            throw (Get-SetupText `
+                "The existing $displayName did not pass build verification." `
+                "现有 $displayName 未通过构建验证。")
+        }
+        Update-ManifestComponent $Component.Name $installedVersion "satisfied"
+        Write-SetupInfo `
+            "Reusing $displayName $installedVersion for the build." `
+            "构建将复用 $displayName $installedVersion。"
+        return
     }
 
     Write-SetupInfo `
@@ -1320,6 +1490,33 @@ function Invoke-SetupComponent {
     }
 
     if ($needsInstall) {
+        $cache = Get-ComponentBuildCache $Component.Name $availableVersion
+        if ($null -ne $cache) {
+            $restored = $false
+            $cacheValid = $false
+            try {
+                $restored = Restore-ComponentBuildCache $cache $availableVersion
+                if ($restored) {
+                    $restoredVersion = [string](& $Component.GetInstalledVersion)
+                    $cacheValid = $restoredVersion -eq $availableVersion -and [bool](& $Component.Verify)
+                }
+            }
+            catch {
+                $restored = $true
+            }
+            if ($cacheValid) {
+                Update-ManifestComponent $Component.Name $restoredVersion "cached"
+                Write-SetupInfo `
+                    "Restored and verified $displayName from the build cache." `
+                    "已从构建缓存恢复并验证 $displayName。"
+                return
+            }
+            if ($restored) {
+                Write-SetupWarning `
+                    "The cached $displayName did not pass verification. Rebuilding it." `
+                    "缓存中的 $displayName 未通过验证，将重新编译。"
+            }
+        }
         Write-SetupInfo `
             "Starting installation or configuration of $displayName $availableVersion." `
             "开始安装或配置 $displayName $availableVersion。"
@@ -1337,6 +1534,9 @@ function Invoke-SetupComponent {
             throw ((Get-SetupText `
                 "{0} did not report a satisfied version/status after installation." `
                 "{0} 安装后未报告满足要求的版本/状态。") -f $displayName)
+        }
+        if ($null -ne $cache) {
+            Save-ComponentBuildCache $cache
         }
         Write-SetupInfo `
             "$displayName verification succeeded." `
@@ -1443,10 +1643,15 @@ function Install-SevenZip {
 
 function Test-SevenZip {
     $version = Get-InstalledSevenZipVersion
-    if (-not $version) {
+    if (-not $version -or (Compare-SetupVersion $version "23.00") -lt 0) {
         return $false
     }
-    return (Compare-SetupVersion $version "23.00") -ge 0
+    if ($Mode -eq "Desktop") {
+        return $true
+    }
+    $directory = Split-Path -Parent $script:ToolPaths.SevenZip
+    return (Test-Path -LiteralPath (Join-Path $directory "7z.dll") -PathType Leaf) -and
+        (Test-Path -LiteralPath (Join-Path $directory "License.txt") -PathType Leaf)
 }
 
 function Get-PythonVersionFromExecutable {
@@ -1559,18 +1764,19 @@ function Install-PythonRuntime {
     Assert-ValidAuthenticodeSignature $installer
     [IO.Directory]::CreateDirectory($script:ToolPaths.PythonRoot) | Out-Null
     $installLog = Join-Path $script:TempRoot "python-install.log"
+    $desktopIntegration = [int]($Mode -eq "Desktop")
     Invoke-SetupInstaller -FilePath $installer -Arguments @(
         "/quiet",
         "/log", $installLog,
         "InstallAllUsers=1",
         "TargetDir=$($script:ToolPaths.PythonRoot)",
         "PrependPath=0",
-        "Include_launcher=1",
-        "InstallLauncherAllUsers=1",
+        "Include_launcher=$desktopIntegration",
+        "InstallLauncherAllUsers=$desktopIntegration",
         "Include_pip=1",
         "Include_test=0",
         "Include_doc=0",
-        "Shortcuts=1"
+        "Shortcuts=$desktopIntegration"
     )
 }
 
@@ -2111,52 +2317,40 @@ function Install-StartMenuShortcuts {
         "已为所有用户创建 Python 和 Git 开始菜单快捷方式。"
 }
 
-function Get-VisualStudioWherePath {
-    return Join-Path $script:ToolPaths.VisualStudioInstaller "vswhere.exe"
-}
+function Invoke-VisualStudioWhere {
+    param([string[]]$Arguments)
 
-function Get-VisualStudioInstallationPath {
-    $vswhere = Get-VisualStudioWherePath
+    $vswhere = Join-Path $script:ToolPaths.VisualStudioInstaller "vswhere.exe"
     if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
         return ""
     }
     try {
-        return Invoke-SetupCommand -FilePath $vswhere -Arguments @(
-            "-latest",
-            "-version", "[18.0,19.0)",
-            "-products", "Microsoft.VisualStudio.Product.BuildTools",
-            "-requires", "Microsoft.VisualStudio.Workload.VCTools",
-            "-property", "installationPath"
-        )
+        return Invoke-SetupCommand -FilePath $vswhere -Arguments (@("-version", "[18.0,19.0)") + $Arguments)
     }
     catch {
         return ""
     }
 }
 
-function Get-InstalledVisualStudioVersion {
-    $vswhere = Get-VisualStudioWherePath
-    if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
-        return ""
+function Get-VisualStudioProperty {
+    param([Parameter(Mandatory = $true)][string]$Property)
+
+    if ($script:DesktopVisualStudioEnterprise) {
+        return [string]$script:DesktopVisualStudioEnterprise.$Property
     }
-    try {
-        return Invoke-SetupCommand -FilePath $vswhere -Arguments @(
-            "-latest",
-            "-version", "[18.0,19.0)",
-            "-products", "Microsoft.VisualStudio.Product.BuildTools",
-            "-requires", "Microsoft.VisualStudio.Workload.VCTools",
-            "-property", "installationVersion"
-        )
+    $productArguments = if ($Mode -eq "Build") {
+        @("-products", "*", "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "Microsoft.Component.MSBuild")
     }
-    catch {
-        return ""
+    else {
+        @("-products", "Microsoft.VisualStudio.Product.BuildTools", "-requires", "Microsoft.VisualStudio.Workload.VCTools")
     }
+    return Invoke-VisualStudioWhere (@("-latest") + $productArguments + @("-property", $Property))
 }
 
 function Install-VisualStudioBuildTools {
     param([string]$Version)
 
-    $installationPath = Get-VisualStudioInstallationPath
+    $installationPath = Get-VisualStudioProperty "installationPath"
     if ($installationPath) {
         $clientInstaller = Join-Path $script:ToolPaths.VisualStudioInstaller "setup.exe"
         Write-SetupInfo "Updating the existing Visual Studio Build Tools instance: $installationPath" "正在升级现有 Visual Studio 编译工具实例：$installationPath"
@@ -2188,22 +2382,42 @@ function Install-VisualStudioBuildTools {
 }
 
 function Test-VisualStudioBuildTools {
-    $installationPath = Get-VisualStudioInstallationPath
-    if (-not $installationPath) {
+    param([string]$InstallationPath = (Get-VisualStudioProperty "installationPath"))
+
+    if (-not $InstallationPath) {
+        return $false
+    }
+    $msbuild = Join-Path $InstallationPath "MSBuild\Current\Bin\MSBuild.exe"
+    $vcvars = Join-Path $InstallationPath "VC\Auxiliary\Build\vcvars64.bat"
+    if (-not (Test-Path -LiteralPath $msbuild -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $vcvars -PathType Leaf)) {
         return $false
     }
     $compiler = Get-ChildItem -LiteralPath (Join-Path $installationPath "VC\Tools\MSVC") `
         -Filter "cl.exe" -File -Recurse -ErrorAction SilentlyContinue |
         Where-Object { $_.FullName -match '\\bin\\Hostx64\\x64\\cl\.exe$' } |
         Select-Object -First 1
-    $msbuild = Join-Path $installationPath "MSBuild\Current\Bin\MSBuild.exe"
     $windowsSdkHeaders = Get-ChildItem -LiteralPath "C:\Program Files (x86)\Windows Kits\10\Include" `
         -Filter "Windows.h" -File -Recurse -ErrorAction SilentlyContinue |
         Where-Object { $_.FullName -match '\\um\\Windows\.h$' } |
         Select-Object -First 1
-    return $null -ne $compiler -and
-        (Test-Path -LiteralPath $msbuild -PathType Leaf) -and
-        $null -ne $windowsSdkHeaders
+    return $null -ne $compiler -and $null -ne $windowsSdkHeaders
+}
+
+function Find-VerifiedVisualStudioEnterprise {
+    $installations = Invoke-VisualStudioWhere @(
+        "-products", "Microsoft.VisualStudio.Product.Enterprise",
+        "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "Microsoft.Component.MSBuild",
+        "-sort", "-format", "json", "-utf8"
+    )
+    if (-not $installations) {
+        return $null
+    }
+    foreach ($instance in ($installations | ConvertFrom-Json)) {
+        if ($instance.installationVersion -and (Test-VisualStudioBuildTools $instance.installationPath)) {
+            return $instance
+        }
+    }
 }
 
 function Get-CMakeRelease {
@@ -2238,7 +2452,14 @@ function Install-CMake {
 }
 
 function Test-CMake {
-    return [bool](Get-InstalledCMakeVersion)
+    if (-not (Get-InstalledCMakeVersion)) {
+        return $false
+    }
+    if ($Mode -eq "Build") {
+        $help = Invoke-SetupCommand -FilePath $script:ToolPaths.CMake -Arguments @("--help")
+        return $help.Contains("Visual Studio 18 2026")
+    }
+    return $true
 }
 
 function Get-NinjaRelease {
@@ -2884,6 +3105,7 @@ function Install-X264 {
         'jobs=$3',
         'cd "$source_root"',
         './configure --enable-static --bit-depth=all --chroma-format=all --disable-opencl --enable-lto --extra-ldflags="-static -static-libgcc"',
+        'sed -i -E ''/^LDFLAGS[[:space:]]*=/s/-flto([[:space:]]|$)/-flto=auto\1/g'' config.mak',
         'make -j"$jobs" fprofiled VIDS="$training_y4m"'
     ) -join "`n"
     $buildScript = Write-SetupTempScript -Name "build-x264.sh" -Content $buildScriptContent
@@ -2905,6 +3127,7 @@ function Install-X264 {
     }
     [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($script:ToolPaths.X264)) | Out-Null
     Copy-Item -LiteralPath $executable -Destination $script:ToolPaths.X264 -Force
+    Add-StaticBuildArtifact "x264" (Join-Path $sourceRoot "libx264.a") "libx264.a"
     [IO.File]::WriteAllText(
         $script:ToolPaths.X264Version,
         $release.Version,
@@ -2971,6 +3194,79 @@ function Get-InstalledX265Version {
     return (($versionFile -split '\r?\n', 2)[0]).Trim()
 }
 
+function Get-NinjaCMakeArguments {
+    return @(
+        "-G", "Ninja", "-DCMAKE_MAKE_PROGRAM=$($script:ToolPaths.Ninja)", "-DCMAKE_BUILD_TYPE=Release",
+        "-DCMAKE_C_COMPILER=cl.exe", "-DCMAKE_CXX_COMPILER=cl.exe"
+    )
+}
+
+function Invoke-VisualStudioBuild {
+    param([scriptblock]$Build)
+
+    if ($null -eq $script:VisualStudioBuildEnvironment) {
+        $visualStudio = Get-VisualStudioProperty "installationPath"
+        $vcvars = Join-Path $visualStudio "VC\Auxiliary\Build\vcvars64.bat"
+        $processInfo = New-Object Diagnostics.ProcessStartInfo
+        $processInfo.FileName = Join-Path $env:WINDIR "System32\cmd.exe"
+        $processInfo.Arguments = '/d /u /s /c "call "' + $vcvars + '" >nul && set"'
+        $processInfo.UseShellExecute = $false
+        $processInfo.RedirectStandardOutput = $true
+        $processInfo.StandardOutputEncoding = [Text.Encoding]::Unicode
+        $process = [Diagnostics.Process]::Start($processInfo)
+        try {
+            $output = $process.StandardOutput.ReadToEnd()
+            $process.WaitForExit()
+            if ($process.ExitCode -ne 0) {
+                throw (Get-SetupText "Could not initialize the x64 MSVC build environment." "无法初始化 x64 MSVC 构建环境。")
+            }
+        }
+        finally {
+            $process.Dispose()
+        }
+        $environment = @{}
+        foreach ($line in $output -split '\r?\n') {
+            $separator = $line.IndexOf("=")
+            if ($separator -gt 0) {
+                $name = $line.Substring(0, $separator)
+                if ($name -in @("Path", "Include", "Lib", "LibPath", "VCINSTALLDIR", "VCToolsInstallDir",
+                    "VCToolsVersion", "WindowsSdkDir", "WindowsSDKVersion", "UniversalCRTSdkDir", "UCRTVersion")) {
+                    $environment[$name] = $line.Substring($separator + 1)
+                }
+            }
+        }
+        if (-not $environment["Path"] -or -not $environment["Include"] -or -not $environment["Lib"]) {
+            throw (Get-SetupText "The x64 MSVC build environment is incomplete." "x64 MSVC 构建环境不完整。")
+        }
+        # Setuptools uses this initialized MSVC environment for native extensions.
+        $environment["DISTUTILS_USE_SDK"] = "1"
+        $script:VisualStudioBuildEnvironment = $environment
+    }
+    $previous = @{}
+    try {
+        foreach ($name in $script:VisualStudioBuildEnvironment.Keys) {
+            $previous[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
+            [Environment]::SetEnvironmentVariable($name, $script:VisualStudioBuildEnvironment[$name], "Process")
+        }
+        & $Build
+    }
+    finally {
+        foreach ($name in $previous.Keys) {
+            [Environment]::SetEnvironmentVariable($name, $previous[$name], "Process")
+        }
+    }
+}
+
+function Add-StaticBuildArtifact {
+    param([string]$Component, [string]$Source, [string]$Name)
+
+    if ($script:BuildCacheRoot -and $Source -and (Test-Path -LiteralPath $Source -PathType Leaf)) {
+        $directory = Join-Path $script:TempRoot "artifacts-$Component"
+        [IO.Directory]::CreateDirectory($directory) | Out-Null
+        Copy-Item -LiteralPath $Source -Destination (Join-Path $directory $Name) -Force
+    }
+}
+
 function Install-X265 {
     param([string]$Version)
 
@@ -2996,9 +3292,7 @@ function Install-X265 {
     $build10 = Join-Path $buildRoot "10bit"
     $build8 = Join-Path $buildRoot "8bit"
     $nasmPath = $script:ToolPaths.Nasm.Replace('\', '/')
-    $commonArguments = @(
-        "-G", "Visual Studio 18 2026",
-        "-A", "x64",
+    $commonArguments = @(Get-NinjaCMakeArguments) + @(
         "-DCMAKE_POLICY_VERSION_MINIMUM=3.10",
         "-DSTATIC_LINK_CRT=ON",
         "-DENABLE_SHARED=OFF",
@@ -3075,6 +3369,14 @@ function Install-X265 {
     }
     [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($script:ToolPaths.X265)) | Out-Null
     Copy-Item -LiteralPath $executable.FullName -Destination $script:ToolPaths.X265 -Force
+    Add-StaticBuildArtifact "x265" $library12.FullName "x265-main12.lib"
+    Add-StaticBuildArtifact "x265" $library10.FullName "x265-main10.lib"
+    if ($script:BuildCacheRoot) {
+        $library8 = Get-ChildItem -LiteralPath $build8 -Filter "x265-static.lib" -File -Recurse | Select-Object -First 1
+        if ($library8) {
+            Add-StaticBuildArtifact "x265" $library8.FullName "x265-main.lib"
+        }
+    }
     [IO.File]::WriteAllText(
         $script:ToolPaths.X265Version,
         "$($release.Version)`r`nhdr10plus-all-depths",
@@ -3123,24 +3425,22 @@ function Build-SvtAv1Executable {
     Invoke-SetupBuildCommand `
         -DisplayName "SVT-AV1 configuration" `
         -FilePath $script:ToolPaths.CMake `
-        -Arguments @(
+        -Arguments (@(
             "-S", $SourceRoot,
-            "-B", $BuildRoot,
-            "-G", "Visual Studio 18 2026",
-            "-A", "x64",
+            "-B", $BuildRoot
+        ) + @(Get-NinjaCMakeArguments) + @(
             "-DBUILD_SHARED_LIBS=OFF",
             "-DBUILD_TESTING=OFF",
             "-DBUILD_APPS=ON",
             "-DSVT_AV1_LTO=ON",
             "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded",
             "-DCMAKE_ASM_NASM_COMPILER=$nasmPath"
-        )
+        ))
     Invoke-SetupBuildCommand `
         -DisplayName "SVT-AV1 compilation" `
         -FilePath $script:ToolPaths.CMake `
         -Arguments @("--build", $BuildRoot, "--config", "Release", "--target", "SvtAv1EncApp", "--parallel", $script:BuildJobs)
     $executable = Get-ChildItem -LiteralPath $SourceRoot -Filter "SvtAv1EncApp.exe" -File -Recurse |
-        Where-Object { $_.FullName -match '[\\/]Bin[\\/]Release[\\/]' } |
         Select-Object -First 1
     if ($null -eq $executable) {
         $executable = Get-ChildItem -LiteralPath $BuildRoot -Filter "SvtAv1EncApp.exe" -File -Recurse |
@@ -3148,6 +3448,13 @@ function Build-SvtAv1Executable {
     }
     if ($null -eq $executable) {
         throw (Get-SetupText "The SVT-AV1 executable is missing after compilation." "编译后未找到 SVT-AV1 可执行文件。")
+    }
+    if ($script:BuildCacheRoot) {
+        $library = Get-ChildItem -LiteralPath $SourceRoot, $BuildRoot -Filter "SvtAv1Enc.lib" -File -Recurse |
+            Select-Object -First 1
+        if ($library) {
+            Add-StaticBuildArtifact "svt-av1" $library.FullName $library.Name
+        }
     }
     return $executable.FullName
 }
@@ -3223,51 +3530,89 @@ function Install-FdkAac {
     param([string]$Version)
 
     $libraryRelease = Get-FdkAacLibraryRelease
+    $prefix = Join-Path $script:TempRoot "fdkaac-prefix"
+    $restoredPrefix = Join-Path $script:TempRoot "fdkaac-restored-prefix"
+    $libraryArchive = $null
+    $libraryKey = $null
+    if ($script:BuildCacheRoot) {
+        $libraryArchive = Join-Path $script:BuildCacheRoot "fdkaac-library.zip"
+        $libraryKey = Get-BuildFingerprint @($script:BuildRecipeHash, $libraryRelease.Version, (Get-MsysBuildPackages))
+        if ((Invoke-BuildArtifactCache "restore" $libraryArchive $libraryKey $restoredPrefix) -eq "hit" -and
+            (Test-Path -LiteralPath (Join-Path $restoredPrefix "lib\libfdk-aac.a") -PathType Leaf) -and
+            (Test-Path -LiteralPath (Join-Path $restoredPrefix "lib\libfdk-xhe-aac.a") -PathType Leaf) -and
+            (Test-Path -LiteralPath (Join-Path $restoredPrefix "lib\pkgconfig\fdk-aac.pc") -PathType Leaf)) {
+            $prefix = $restoredPrefix
+            Write-SetupInfo "Restored FDK-AAC static libraries from the build cache." "已从构建缓存恢复 FDK-AAC 静态库。"
+        }
+    }
+
+    if ($prefix -ne $restoredPrefix) {
+        $archive = Join-Path $script:TempRoot $libraryRelease.Name
+        $extracted = Join-Path $script:TempRoot "fdk-aac-extracted"
+        Invoke-SetupDownload -Uri $libraryRelease.Uri -Destination $archive | Out-Null
+        Expand-SetupZip -Archive $archive -Destination $extracted
+        $cmakeFile = Get-ChildItem -LiteralPath $extracted -Filter "CMakeLists.txt" -File -Recurse |
+            Where-Object { Test-Path -LiteralPath (Join-Path $_.DirectoryName "fdk-aac.pc.in") -PathType Leaf } |
+            Select-Object -First 1
+        if ($null -eq $cmakeFile) {
+            throw (Get-SetupText "The FDK-AAC library source directory is missing." "未找到 FDK-AAC 库源码目录。")
+        }
+        $build = Join-Path $script:TempRoot "fdk-aac-build"
+        $buildScriptContent = @(
+            'set -euo pipefail',
+            'export PATH=/ucrt64/bin:/usr/bin',
+            'source=$1',
+            'build=$2',
+            'prefix=$3',
+            'jobs=$4',
+            'cmake -S "$source" -B "$build" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DBUILD_SHARED_LIBS=OFF -DBUILD_PROGRAMS=OFF -DFDK_AAC_INSTALL_CMAKE_CONFIG_MODULE=OFF -DFDK_AAC_INSTALL_PKGCONFIG_MODULE=ON -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_INSTALL_PREFIX="$prefix"',
+            'cmake --build "$build" --parallel "$jobs"',
+            'cmake --install "$build"',
+            'sed -i ''s|^prefix=.*|prefix=${pcfiledir}/../..|'' "$prefix"/lib/pkgconfig/fdk*.pc'
+        ) -join "`n"
+        $buildScript = Write-SetupTempScript -Name "build-fdk-aac-library.sh" -Content $buildScriptContent
+        Invoke-SetupBuildCommand `
+            -DisplayName "FDK-AAC and xHE-AAC static libraries" `
+            -FilePath $script:ToolPaths.Msys2Bash `
+            -Arguments @(
+                (ConvertTo-Msys2Path $buildScript),
+                (ConvertTo-Msys2Path $cmakeFile.Directory.FullName),
+                (ConvertTo-Msys2Path $build),
+                (ConvertTo-Msys2Path $prefix),
+                [string]$script:BuildJobs
+            )
+        if ($libraryArchive) {
+            Invoke-BuildArtifactCache "save" $libraryArchive $libraryKey $prefix | Out-Null
+        }
+    }
+
     $cliRelease = Get-FdkAacRelease
-    $libraryArchive = Join-Path $script:TempRoot $libraryRelease.Name
     $cliArchive = Join-Path $script:TempRoot $cliRelease.Name
-    $libraryExtracted = Join-Path $script:TempRoot "fdk-aac-extracted"
     $cliExtracted = Join-Path $script:TempRoot "fdkaac-extracted"
-    Invoke-SetupDownload -Uri $libraryRelease.Uri -Destination $libraryArchive | Out-Null
     Invoke-SetupDownload -Uri $cliRelease.Uri -Destination $cliArchive | Out-Null
-    Expand-SetupZip -Archive $libraryArchive -Destination $libraryExtracted
     Expand-SetupZip -Archive $cliArchive -Destination $cliExtracted
-    # FDK-AAC 3 moves libFDK under cpp/ while keeping its build files at the root.
-    $libraryConfigure = Get-ChildItem -LiteralPath $libraryExtracted -Filter "configure.ac" -File -Recurse |
-        Where-Object { Test-Path -LiteralPath (Join-Path $_.DirectoryName "fdk-aac.pc.in") -PathType Leaf } |
-        Select-Object -First 1
     $cliConfigure = Get-ChildItem -LiteralPath $cliExtracted -Filter "configure.ac" -File -Recurse |
         Where-Object { Test-Path -LiteralPath (Join-Path $_.DirectoryName "src") -PathType Container } |
         Select-Object -First 1
-    if ($null -eq $libraryConfigure -or $null -eq $cliConfigure) {
-        throw (Get-SetupText "FDK-AAC source directories are missing." "未找到 FDK-AAC 源码目录。")
+    if ($null -eq $cliConfigure) {
+        throw (Get-SetupText "The fdkaac source directory is missing." "未找到 fdkaac 源码目录。")
     }
-
-    $prefix = Join-Path $script:TempRoot "fdkaac-prefix"
-    $buildScriptContent = @(
+    $cliScriptContent = @(
         'set -euo pipefail',
         'export PATH=/ucrt64/bin:/usr/bin',
-        'library_source=$1',
-        'cli_source=$2',
-        'prefix=$3',
-        'jobs=$4',
-        'cd "$library_source"',
-        './autogen.sh',
-        './configure --prefix="$prefix" --disable-shared --enable-static',
-        'make -j"$jobs"',
-        'make install',
-        'cd "$cli_source"',
+        'cd "$1"',
+        'prefix=$2',
+        'jobs=$3',
         'autoreconf -fi',
-        'PKG_CONFIG_PATH="$prefix/lib/pkgconfig" LDFLAGS="-static -static-libgcc" ./configure --host=x86_64-w64-mingw32 --prefix="$prefix" --disable-shared --enable-static',
+        'PKG_CONFIG_PATH="$prefix/lib/pkgconfig" LDFLAGS="-static -static-libgcc" ./configure --host=x86_64-w64-mingw32 --prefix="$prefix" --disable-dependency-tracking --disable-shared --enable-static',
         'make -j"$jobs"'
     ) -join "`n"
-    $buildScript = Write-SetupTempScript -Name "build-fdkaac.sh" -Content $buildScriptContent
+    $cliScript = Write-SetupTempScript -Name "build-fdkaac.sh" -Content $cliScriptContent
     Invoke-SetupBuildCommand `
-        -DisplayName "FDK-AAC and fdkaac static compilation" `
+        -DisplayName "fdkaac static command-line build" `
         -FilePath $script:ToolPaths.Msys2Bash `
         -Arguments @(
-            (ConvertTo-Msys2Path $buildScript),
-            (ConvertTo-Msys2Path $libraryConfigure.Directory.FullName),
+            (ConvertTo-Msys2Path $cliScript),
             (ConvertTo-Msys2Path $cliConfigure.Directory.FullName),
             (ConvertTo-Msys2Path $prefix),
             [string]$script:BuildJobs
@@ -3480,42 +3825,60 @@ function Get-InstalledVapourSynthClassicVersion {
 }
 
 function Install-VapourSynthClassic {
-    param([string]$Version)
+    param([string]$Version, [string]$Artifacts)
 
-    $release = Get-VapourSynthClassicRelease
-    $archive = Join-Path $script:TempRoot $release.Name
-    $extracted = Join-Path $script:TempRoot "vapoursynth-classic"
-    Invoke-SetupDownload -Uri $release.Uri -Destination $archive | Out-Null
-    Expand-SetupZip -Archive $archive -Destination $extracted
-    $source = (Get-ChildItem -LiteralPath $extracted -Directory | Select-Object -First 1).FullName
     $dependencies = Get-VapourSynthSourceDependencies
     $dependencyVersions = [ordered]@{}
     foreach ($name in $dependencies.Keys) {
-        $dependency = $dependencies[$name]
-        $dependencyArchive = Join-Path $script:TempRoot $dependency.Name
-        $dependencyExtracted = Join-Path $script:TempRoot "vapoursynth-dependency-$name"
-        Invoke-SetupDownload -Uri $dependency.Uri -Destination $dependencyArchive | Out-Null
-        Expand-SetupZip -Archive $dependencyArchive -Destination $dependencyExtracted
-        $dependencySource = Get-ChildItem -LiteralPath $dependencyExtracted -Directory | Select-Object -First 1
-        Copy-Item -LiteralPath $dependencySource.FullName -Destination (Join-Path $source $name) -Recurse
-        $dependencyVersions[$name] = $dependency.Version
+        $dependencyVersions[$name] = $dependencies[$name].Version
     }
     $dependencyState = Join-Path $script:TempRoot "vapoursynth-dependencies.json"
-    [IO.File]::WriteAllText($dependencyState, ($dependencyVersions | ConvertTo-Json), (New-Object Text.UTF8Encoding($false)))
-    $msbuild = Join-Path (Get-VisualStudioInstallationPath) "MSBuild\Current\Bin\MSBuild.exe"
+    [IO.File]::WriteAllText($dependencyState, ($dependencyVersions | ConvertTo-Json), $script:Utf8Encoding)
     $buildArguments = @(
         (Join-Path $script:SetupDirectory "tools\build_vapoursynth_windows.py"),
-        "--source", $source,
         "--runtime-root", $script:ToolPaths.VapourSynthRoot,
         "--vspipe-path", $script:ToolPaths.VsPipe,
-        "--version", $release.Version,
-        "--dependencies", $dependencyState,
-        "--msbuild", $msbuild,
-        "--cmake", $script:ToolPaths.CMake,
-        "--jobs", [string]$script:BuildJobs
+        "--version", $Version,
+        "--dependencies", $dependencyState
     )
+    $buildFromSource = -not $Artifacts
+    if ($buildFromSource) {
+        $release = Get-VapourSynthClassicRelease
+        $archive = Join-Path $script:TempRoot $release.Name
+        $extracted = Join-Path $script:TempRoot "vapoursynth-classic"
+        Invoke-SetupDownload -Uri $release.Uri -Destination $archive | Out-Null
+        Expand-SetupZip -Archive $archive -Destination $extracted
+        $source = (Get-ChildItem -LiteralPath $extracted -Directory | Select-Object -First 1).FullName
+        foreach ($name in $dependencies.Keys) {
+            $dependency = $dependencies[$name]
+            $dependencyArchive = Join-Path $script:TempRoot $dependency.Name
+            $dependencyExtracted = Join-Path $script:TempRoot "vapoursynth-dependency-$name"
+            Invoke-SetupDownload -Uri $dependency.Uri -Destination $dependencyArchive | Out-Null
+            Expand-SetupZip -Archive $dependencyArchive -Destination $dependencyExtracted
+            $dependencySource = Get-ChildItem -LiteralPath $dependencyExtracted -Directory | Select-Object -First 1
+            Copy-Item -LiteralPath $dependencySource.FullName -Destination (Join-Path $source $name) -Recurse
+        }
+        $Artifacts = Join-Path $script:TempRoot "artifacts-vapoursynth-classic"
+        $msbuild = Join-Path (Get-VisualStudioProperty "installationPath") "MSBuild\Current\Bin\MSBuild.exe"
+        $buildArguments += @(
+            "--source", $source,
+            "--msbuild", $msbuild,
+            "--cmake", $script:ToolPaths.CMake,
+            "--ninja", $script:ToolPaths.Ninja,
+            "--jobs", [string]$script:BuildJobs
+        )
+    }
+    $buildArguments += @("--artifacts", $Artifacts)
     $displayName = Get-SetupText "VapourSynth source and system Python module" "VapourSynth 源码及系统 Python 模块"
-    Invoke-SetupBuildCommand -DisplayName $displayName -FilePath $script:ToolPaths.Python -Arguments $buildArguments
+    $build = {
+        Invoke-SetupBuildCommand -DisplayName $displayName -FilePath $script:ToolPaths.Python -Arguments $buildArguments
+    }
+    if ($buildFromSource) {
+        Invoke-VisualStudioBuild $build
+    }
+    else {
+        & $build
+    }
 }
 
 function Test-VapourSynthClassic {
@@ -3561,19 +3924,41 @@ function Install-VapourSynthScripts {
 
 function Install-VapourSynthUpstreamComponents {
     $installer = Join-Path $script:SetupDirectory "tools\install_vapoursynth_windows_components.py"
-    Invoke-SetupBuildCommand -DisplayName "VapourSynth upstream components" `
-        -FilePath $script:ToolPaths.Python `
-        -Arguments @(
-            $installer,
-            "--runtime-root", $script:ToolPaths.VapourSynthRoot,
-            "--plugins-dir", $script:ToolPaths.VapourSynthPlugins,
-            "--editor-path", $script:ToolPaths.VsEdit,
-            "--work-root", (Join-Path $script:TempRoot "vapoursynth-components"),
-            "--msys2-root", $script:ToolPaths.Msys2Root,
-            "--seven-zip", $script:ToolPaths.SevenZip,
-            "--jobs", [string]$script:BuildJobs,
-            "--language", $script:SelectedLanguage
+    $arguments = @(
+        $installer,
+        "--runtime-root", $script:ToolPaths.VapourSynthRoot,
+        "--plugins-dir", $script:ToolPaths.VapourSynthPlugins,
+        "--editor-path", $script:ToolPaths.VsEdit,
+        "--work-root", (Join-Path $script:TempRoot "vapoursynth-components"),
+        "--msys2-root", $script:ToolPaths.Msys2Root,
+        "--seven-zip", $script:ToolPaths.SevenZip,
+        "--jobs", [string]$script:BuildJobs,
+        "--language", $script:SelectedLanguage
+    )
+    if ($script:BuildCacheRoot) {
+        $msysKey = Get-BuildFingerprint @($script:BuildRecipeHash, (Get-MsysBuildPackages))
+        $runtimeState = Join-Path $script:ToolPaths.VapourSynthRoot "vapoursynth-build.json"
+        $ucrtDatabase = Join-Path $script:ToolPaths.Msys2Root "var\lib\pacman\sync\ucrt64.db"
+        $keyInputs = @(
+            $msysKey
+            (Get-FileHash -LiteralPath $ucrtDatabase).Hash
+            (Get-FileHash -LiteralPath $installer).Hash
+            (Get-FileHash -LiteralPath (Join-Path $script:SetupDirectory "tools\vapoursynth_plugin_versions.py")).Hash
+            (Get-FileHash -LiteralPath (Join-Path $script:SetupDirectory "tools\windows_tool_paths.py")).Hash
+            (Get-FileHash -LiteralPath $runtimeState).Hash
+            (Get-FileHash -LiteralPath $script:ToolPaths.Libass).Hash
         )
+        $arguments += @("--build-cache", $script:BuildCacheRoot, "--msys-fingerprint", $msysKey,
+            "--build-fingerprint", (Get-BuildFingerprint $keyInputs))
+    }
+    $env:BLURAYSUBTITLE_GITHUB_TOKEN = $script:GitHubApiToken
+    try {
+        Invoke-SetupBuildCommand -DisplayName "VapourSynth upstream components" `
+            -FilePath $script:ToolPaths.Python -Arguments $arguments
+    }
+    finally {
+        $env:BLURAYSUBTITLE_GITHUB_TOKEN = $null
+    }
     $statePath = Join-Path $script:ToolPaths.VapourSynthRoot "vapoursynth-components.json"
     $state = [IO.File]::ReadAllText($statePath) | ConvertFrom-Json
     foreach ($component in $state.components.PSObject.Properties) {
@@ -3611,48 +3996,62 @@ function Register-StageTwoComponents {
         -Verify { Test-PythonDependencies }
 
     Register-SetupComponent `
-        -Name "python-system-path" `
-        -EnglishName "Python and pip system PATH" `
-        -ChineseName "Python 和 pip 系统 PATH" `
-        -GetInstalledVersion { if (Test-PythonMachinePath) { "1.0" } else { "" } } `
-        -GetAvailableVersion { "1.0" } `
-        -Install { param($Version) Add-PythonToMachinePath } `
-        -Verify { Test-PythonMachinePath }
-    Register-SetupComponent `
         -Name "git" `
         -EnglishName "Git for Windows" `
         -ChineseName "Git for Windows" `
         -GetInstalledVersion { Get-InstalledGitVersion } `
         -GetAvailableVersion { (Get-GitRelease).Version } `
         -Install { param($Version) Install-Git $Version } `
-        -Verify { Test-Git }
+        -Verify { Test-Git } `
+        -ReuseInstalled:($Mode -eq "Build")
 
-    Register-SetupComponent `
-        -Name "git-system-path" `
-        -EnglishName "Git system PATH" `
-        -ChineseName "Git 系统 PATH" `
-        -GetInstalledVersion { if (Test-GitMachinePath) { "1.0" } else { "" } } `
-        -GetAvailableVersion { "1.0" } `
-        -Install { param($Version) Add-GitToMachinePath } `
-        -Verify { Test-GitMachinePath }
+    if ($Mode -eq "Desktop") {
+        Register-SetupComponent `
+            -Name "python-system-path" `
+            -EnglishName "Python and pip system PATH" `
+            -ChineseName "Python 和 pip 系统 PATH" `
+            -GetInstalledVersion { if (Test-PythonMachinePath) { "1.0" } else { "" } } `
+            -GetAvailableVersion { "1.0" } `
+            -Install { param($Version) Add-PythonToMachinePath } `
+            -Verify { Test-PythonMachinePath }
 
-    Register-SetupComponent `
-        -Name "start-menu-shortcuts" `
-        -EnglishName "Python and Git Start menu shortcuts" `
-        -ChineseName "Python 和 Git 开始菜单快捷方式" `
-        -GetInstalledVersion { if (Test-StartMenuShortcuts) { "1.0" } else { "" } } `
-        -GetAvailableVersion { "1.0" } `
-        -Install { param($Version) Install-StartMenuShortcuts } `
-        -Verify { Test-StartMenuShortcuts }
+        Register-SetupComponent `
+            -Name "git-system-path" `
+            -EnglishName "Git system PATH" `
+            -ChineseName "Git 系统 PATH" `
+            -GetInstalledVersion { if (Test-GitMachinePath) { "1.0" } else { "" } } `
+            -GetAvailableVersion { "1.0" } `
+            -Install { param($Version) Add-GitToMachinePath } `
+            -Verify { Test-GitMachinePath }
 
+        Register-SetupComponent `
+            -Name "start-menu-shortcuts" `
+            -EnglishName "Python and Git Start menu shortcuts" `
+            -ChineseName "Python 和 Git 开始菜单快捷方式" `
+            -GetInstalledVersion { if (Test-StartMenuShortcuts) { "1.0" } else { "" } } `
+            -GetAvailableVersion { "1.0" } `
+            -Install { param($Version) Install-StartMenuShortcuts } `
+            -Verify { Test-StartMenuShortcuts }
+    }
+
+    $visualStudioEnglishName = "Visual Studio 2026 C++ Build Tools"
+    $visualStudioChineseName = "Visual Studio 2026 C++ 编译工具"
+    if ($Mode -eq "Desktop") {
+        $script:DesktopVisualStudioEnterprise = Find-VerifiedVisualStudioEnterprise
+        if ($script:DesktopVisualStudioEnterprise) {
+            $visualStudioEnglishName = "Visual Studio Enterprise 2026"
+            $visualStudioChineseName = $visualStudioEnglishName
+        }
+    }
     Register-SetupComponent `
         -Name "visual-studio-build-tools" `
-        -EnglishName "Visual Studio 2026 C++ Build Tools" `
-        -ChineseName "Visual Studio 2026 C++ 编译工具" `
-        -GetInstalledVersion { Get-InstalledVisualStudioVersion } `
+        -EnglishName $visualStudioEnglishName `
+        -ChineseName $visualStudioChineseName `
+        -GetInstalledVersion { Get-VisualStudioProperty "installationVersion" } `
         -GetAvailableVersion { (Get-LatestVisualStudioRelease).Version } `
         -Install { param($Version) Install-VisualStudioBuildTools $Version } `
-        -Verify { Test-VisualStudioBuildTools }
+        -Verify { $null -ne $script:DesktopVisualStudioEnterprise -or (Test-VisualStudioBuildTools) } `
+        -ReuseInstalled:($Mode -eq "Build" -or $null -ne $script:DesktopVisualStudioEnterprise)
 
     Register-SetupComponent `
         -Name "cmake" `
@@ -3661,7 +4060,8 @@ function Register-StageTwoComponents {
         -GetInstalledVersion { Get-InstalledCMakeVersion } `
         -GetAvailableVersion { (Get-CMakeRelease).Version } `
         -Install { param($Version) Install-CMake $Version } `
-        -Verify { Test-CMake }
+        -Verify { Test-CMake } `
+        -ReuseInstalled:($Mode -eq "Build")
 
     Register-SetupComponent `
         -Name "ninja" `
@@ -3670,7 +4070,8 @@ function Register-StageTwoComponents {
         -GetInstalledVersion { Get-InstalledNinjaVersion } `
         -GetAvailableVersion { (Get-NinjaRelease).Version } `
         -Install { param($Version) Install-Ninja $Version } `
-        -Verify { Test-Ninja }
+        -Verify { Test-Ninja } `
+        -ReuseInstalled:($Mode -eq "Build")
 
     Register-SetupComponent `
         -Name "nasm" `
@@ -3679,7 +4080,8 @@ function Register-StageTwoComponents {
         -GetInstalledVersion { Get-InstalledNasmVersion } `
         -GetAvailableVersion { (Get-LatestNasmRelease).Version } `
         -Install { param($Version) Install-Nasm $Version } `
-        -Verify { Test-Nasm }
+        -Verify { Test-Nasm } `
+        -ReuseInstalled:($Mode -eq "Build")
 
     Register-SetupComponent `
         -Name "msys2" `
@@ -3774,7 +4176,7 @@ function Register-StageFourComponents {
         -ChineseName "x265 8/10/12-bit 编码器" `
         -GetInstalledVersion { Get-InstalledX265Version } `
         -GetAvailableVersion { (Get-X265Release).Version } `
-        -Install { param($Version) Install-X265 $Version } `
+        -Install { param($Version) Invoke-VisualStudioBuild { Install-X265 $Version } } `
         -Verify { Test-X265 }
 
     Register-SetupComponent `
@@ -3783,7 +4185,7 @@ function Register-StageFourComponents {
         -ChineseName "SVT-AV1 编码器" `
         -GetInstalledVersion { Get-InstalledSvtAv1Version } `
         -GetAvailableVersion { (Get-SvtAv1Release).Version } `
-        -Install { param($Version) Install-SvtAv1 $Version } `
+        -Install { param($Version) Invoke-VisualStudioBuild { Install-SvtAv1 $Version } } `
         -Verify { Test-SvtAv1 }
 
     Register-SetupComponent `
@@ -3839,6 +4241,25 @@ function Invoke-WindowsSetup {
         "系统代理路由：$proxyDescription"
 
     Initialize-SetupManifest
+    if ($Mode -eq "Build") {
+        foreach ($name in @("Git", "CMake", "Ninja", "Nasm")) {
+            if (-not (Test-Path -LiteralPath $script:ToolPaths[$name] -PathType Leaf)) {
+                $command = Get-Command "$name.exe" -CommandType Application -ErrorAction SilentlyContinue |
+                    Select-Object -First 1
+                if ($command) {
+                    $script:ToolPaths[$name] = $command.Source
+                }
+            }
+        }
+        if ($BuildCacheDirectory) {
+            $script:BuildCacheRoot = Join-Path ([IO.Path]::GetFullPath($BuildCacheDirectory)) "artifacts"
+            $cacheHelper = Join-Path $script:SetupDirectory "tools\windows_build_cache.py"
+            $script:BuildRecipeHash = Get-BuildFingerprint @(
+                (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash
+                (Get-FileHash -LiteralPath $cacheHelper -Algorithm SHA256).Hash
+            )
+        }
+    }
     Initialize-PythonRuntimeSelection
     $script:Manifest.system = [ordered]@{
         family = $windows.Family
@@ -3870,6 +4291,25 @@ function Invoke-WindowsSetup {
     }
     Install-VapourSynthUpstreamComponents
     Install-VapourSynthScripts
+    if ($Mode -eq "Build") {
+        $script:Manifest.system.python_executable = $script:ToolPaths.Python
+        $script:Manifest.system.seven_zip_executable = $script:ToolPaths.SevenZip
+        $script:Manifest.system.download_cache_key = Get-BuildFingerprint @(
+            (Get-PythonVersionFromExecutable $script:ToolPaths.Python)
+            (Invoke-SetupCommand -FilePath $script:ToolPaths.Python -Arguments @(
+                "-m", "pip", "list", "--format=freeze", "--disable-pip-version-check"
+            ))
+            (Invoke-Msys2Pacman -Arguments @("-Q"))
+        )
+        if ($script:BuildCacheRoot -and (Test-Path -LiteralPath $script:BuildCacheRoot -PathType Container)) {
+            $archives = @(Get-ChildItem -LiteralPath $script:BuildCacheRoot -Filter "*.zip" -File | Sort-Object Name)
+            if ($archives.Count) {
+                $script:Manifest.system.build_cache_key = Get-BuildFingerprint @(
+                    $archives | ForEach-Object { "$($_.Name)=$((Get-FileHash -LiteralPath $_.FullName).Hash)" }
+                )
+            }
+        }
+    }
     Save-SetupManifest
 
     if ($script:RestartRequired) {
