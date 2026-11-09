@@ -1052,13 +1052,33 @@ function Get-PreviousPythonRelease {
 }
 
 function Set-PythonToolPathsForVersion {
-    param([Parameter(Mandatory = $true)][string]$Version)
+    param(
+        [Parameter(Mandatory = $true)][string]$Version,
+        [switch]$RequireInstalled
+    )
 
     $parsedVersion = ConvertTo-ComparableVersion $Version
     $directoryName = "Python{0}{1}" -f $parsedVersion.Major, $parsedVersion.Minor
     $root = Join-Path "C:\Program Files" $directoryName
+    $python = Join-Path $root "python.exe"
+    $installation = Get-DetectedPythonInstallation -PreferredExecutable $python -ExpectedVersion $Version
+    if ($null -ne $installation) {
+        if ($python -ne $installation.Executable) {
+            Write-SetupInfo `
+                "Using Python $Version at $($installation.Executable)." `
+                "使用位于 $($installation.Executable) 的 Python $Version。"
+        }
+        $root = $installation.Root
+        $python = $installation.Executable
+    }
+    elseif ($RequireInstalled) {
+        throw (Get-SetupText `
+            "Could not locate Python $Version (x64) after installation. Expected $python or a registered installation of that version." `
+            "安装后未找到 Python $Version（x64）。预期路径为 $python，或使用该版本已注册的安装位置。")
+    }
+
     $script:ToolPaths.PythonRoot = $root
-    $script:ToolPaths.Python = Join-Path $root "python.exe"
+    $script:ToolPaths.Python = $python
     $script:ToolPaths.PythonScripts = Join-Path $root "Scripts"
 }
 
@@ -1660,83 +1680,73 @@ function Get-PythonVersionFromExecutable {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         return ""
     }
-    $output = Invoke-SetupCommand -FilePath $Path -Arguments @("--version")
-    $match = [regex]::Match($output, 'Python\s+([0-9]+\.[0-9]+\.[0-9]+)', 'IgnoreCase')
-    return $(if ($match.Success) { $match.Groups[1].Value } else { "" })
+    $version = Invoke-SetupCommand -FilePath $Path -Arguments @(
+        "-I", "-c",
+        "import sys; assert sys.implementation.name == 'cpython' and sys.maxsize > 2**32 and sys.version_info.releaselevel == 'final'; print('.'.join(map(str, sys.version_info[:3])))"
+    )
+    if ($version -match '^[0-9]+\.[0-9]+\.[0-9]+$') {
+        return $version
+    }
+    return ""
 }
 
 function Get-DetectedPythonInstallation {
-    $candidatePaths = @(
-        $script:ToolPaths.Python,
-        "C:\Software\Python\python.exe"
+    param(
+        [string]$PreferredExecutable = $script:ToolPaths.Python,
+        [string]$ExpectedVersion = ""
     )
-    foreach ($registryRoot in @(
-        [Microsoft.Win32.Registry]::LocalMachine,
-        [Microsoft.Win32.Registry]::CurrentUser
-    )) {
-        $pythonCore = $registryRoot.OpenSubKey("Software\Python\PythonCore", $false)
-        if ($null -eq $pythonCore) {
-            continue
-        }
-        try {
-            foreach ($versionKeyName in $pythonCore.GetSubKeyNames()) {
-                $installKey = $pythonCore.OpenSubKey("$versionKeyName\InstallPath", $false)
-                if ($null -eq $installKey) {
-                    continue
-                }
-                try {
-                    $executablePath = [string]$installKey.GetValue(
-                        "ExecutablePath",
-                        "",
-                        [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
-                    )
-                    if (-not $executablePath) {
-                        $installRoot = [string]$installKey.GetValue(
-                            "",
-                            "",
-                            [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
-                        )
-                        if ($installRoot) {
-                            $executablePath = Join-Path $installRoot "python.exe"
-                        }
-                    }
-                    if ($executablePath) {
-                        $candidatePaths += $executablePath
-                    }
-                }
-                finally {
-                    $installKey.Dispose()
-                }
+
+    $candidatePaths = @($PreferredExecutable)
+    if ($ExpectedVersion) {
+        if ($Mode -eq "Build" -and $env:RUNNER_TOOL_CACHE) {
+            $cachedVersion = Join-Path $env:RUNNER_TOOL_CACHE "Python\$ExpectedVersion"
+            if (Test-Path -LiteralPath (Join-Path $cachedVersion "x64.complete") -PathType Leaf) {
+                $candidatePaths += Join-Path $cachedVersion "x64\python.exe"
             }
         }
-        finally {
-            $pythonCore.Dispose()
+
+        # A Python installer can retain the existing path for this minor version.
+        $version = ConvertTo-ComparableVersion $ExpectedVersion
+        $series = "$($version.Major).$($version.Minor)"
+        $installKey = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey("Software\Python\PythonCore\$series\InstallPath", $false)
+        if ($null -ne $installKey) {
+            try {
+                $registeredPython = [string]$installKey.GetValue("ExecutablePath", "")
+                if (-not $registeredPython) {
+                    $registeredRoot = [string]$installKey.GetValue("", "")
+                    if ($registeredRoot) {
+                        $registeredPython = Join-Path $registeredRoot "python.exe"
+                    }
+                }
+                if ($registeredPython) {
+                    $candidatePaths += $registeredPython
+                }
+            }
+            finally {
+                $installKey.Dispose()
+            }
         }
     }
 
-    $installations = @(
-        $candidatePaths |
-            Where-Object { $_ } |
-            Select-Object -Unique |
-            ForEach-Object {
-                $detectedVersion = Get-PythonVersionFromExecutable $_
-                if ($detectedVersion) {
-                    $root = Split-Path -Parent $_
-                    [pscustomobject]@{
-                        Version = $detectedVersion
-                        Executable = $_
-                        Root = $root
-                        Scripts = Join-Path $root "Scripts"
-                    }
-                }
-            }
-    )
-    $targetExecutable = [IO.Path]::GetFullPath($script:ToolPaths.Python)
-    return $installations |
-        Where-Object {
-            [IO.Path]::GetFullPath($_.Executable) -eq $targetExecutable
-        } |
-        Select-Object -First 1
+    foreach ($candidate in ($candidatePaths | Select-Object -Unique)) {
+        try {
+            $detectedVersion = Get-PythonVersionFromExecutable $candidate
+        }
+        catch {
+            continue
+        }
+        if (-not $detectedVersion -or ($ExpectedVersion -and $detectedVersion -ne $ExpectedVersion)) {
+            continue
+        }
+
+        $root = Split-Path -Parent $candidate
+        return [pscustomobject]@{
+            Version = $detectedVersion
+            Executable = $candidate
+            Root = $root
+            Scripts = Join-Path $root "Scripts"
+        }
+    }
 }
 
 function Get-InstalledPythonVersion {
@@ -1757,7 +1767,6 @@ function Get-ActivePythonExecutable {
 function Install-PythonRuntime {
     param([string]$Version)
 
-    Set-PythonToolPathsForVersion $Version
     $release = Get-PythonWindowsRelease -Versions @($Version)
     $installer = Join-Path $script:TempRoot $release.Name
     Invoke-SetupDownload -Uri $release.Uri -Destination $installer | Out-Null
@@ -1778,21 +1787,28 @@ function Install-PythonRuntime {
         "Include_doc=0",
         "Shortcuts=$desktopIntegration"
     )
+    Set-PythonToolPathsForVersion $Version -RequireInstalled
 }
 
 function Test-PythonRuntime {
     $python = Get-ActivePythonExecutable
     if (-not $python) {
+        Write-SetupWarning `
+            "The selected Python executable was not found at $($script:ToolPaths.Python)." `
+            "未在 $($script:ToolPaths.Python) 找到选定的 Python 可执行文件。"
         return $false
     }
     try {
         Invoke-SetupCommand -FilePath $python -Arguments @(
-            "-c",
+            "-I", "-c",
             "import ssl, sqlite3, ctypes, ensurepip; print('ok')"
         ) | Out-Null
         return $true
     }
     catch {
+        Write-SetupWarning `
+            "Could not verify Python at $python. $($_.Exception.Message)" `
+            "无法验证 $python 处的 Python。$($_.Exception.Message)"
         return $false
     }
 }
@@ -2074,11 +2090,13 @@ function Install-PythonDependenciesWithFallback {
         -AttemptedVersion $script:LatestPythonRelease.Version
 
     try {
-        Install-PythonRuntime $fallbackRelease.Version
-        if (-not (Test-PythonRuntime)) {
-            throw (Get-SetupText `
-                "The fallback Python runtime failed verification." `
-                "回退后的 Python 运行环境验证失败。")
+        if ((Get-InstalledPythonVersion) -ne $fallbackRelease.Version -or -not (Test-PythonRuntime)) {
+            Install-PythonRuntime $fallbackRelease.Version
+            if (-not (Test-PythonRuntime)) {
+                throw (Get-SetupText `
+                    "The fallback Python runtime failed verification." `
+                    "回退后的 Python 运行环境验证失败。")
+            }
         }
         Install-AllPythonDependencies
     }
