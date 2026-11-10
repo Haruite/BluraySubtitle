@@ -202,29 +202,47 @@ Blu-ray input rejects existing outputs. Remux input skips completed main/SP, ext
 
 ---
 
-## `setup_windows_environment.ps1` (Windows environment setup)
+## Cross-platform support
 
-`setup_windows_environment.ps1` configures the runtime and build environment for **x64 Windows client and Windows Server systems**.
+### `setup_windows_environment.ps1` (Windows environment setup)
 
-Before the first run, set the current user’s PowerShell execution policy, then start the setup from the repository root:
+The script configures the runtime and build environment on **x64 Windows 10 or later** and **x64 Windows Server 2019 or later with Desktop Experience**.
+
+For the first run, set the current user’s PowerShell execution policy and start setup from the repository root.
 
 ```powershell
 Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
 .\setup_windows_environment.ps1
 ```
 
-The script requests administrator permission, asks for the display language, and can be rerun after interruption. Downloads use the configured **Windows system proxy** automatically; configure the system proxy first when direct access to the download sources is unavailable.
+The script requests administrator permission, asks for the display language, and can be rerun after interruption. Downloads use the configured **Windows system proxy** automatically. Configure it before starting setup if direct access to the download sources is unavailable.
 
----
+After setup completes, open a new PowerShell window and run the following command from the repository root to package the Windows x64 application.
 
-## `setup_linux_environment.sh` (Linux runtime environment)
+```powershell
+pyinstaller BluraySubtitle_windows_x64.spec
+```
 
-`setup_linux_environment.sh` builds the program’s Linux runtime environment. Only **x64** systems are supported. Current distributions:
+### `setup_linux_environment.sh` (Linux runtime environment)
 
-- Ubuntu 22.04 or later
-- Debian 12 or later
+The script builds the runtime environment for **x64 Linux** distributions in either family.
 
-Make the script executable before the first run, then start it from the repository root:
+- Ubuntu 22.04 or later, including distributions based on these Ubuntu releases.
+- Debian 12 or later, including distributions based on these Debian releases.
+
+The script has run successfully in the following 15 x64 WSL 2 environments.
+
+- Ubuntu 22.04, 24.04, 26.04, and 26.10
+- Debian 12 and 13
+- Kali Linux 2022.4 and Kali Rolling
+- Linux Mint 22.3
+- LMDE 7
+- antiX 23.2 and 26.1
+- Devuan 6
+- KDE neon
+- Pop!_OS 24.04
+
+Use a regular account with `sudo` access. Running the script directly as `root` is not guaranteed to succeed. Make the script executable before the first run and start it from the repository root.
 
 ```bash
 chmod +x setup_linux_environment.sh
@@ -233,7 +251,7 @@ chmod +x setup_linux_environment.sh
 
 See [Linux desktop mpv](docs/wiki/Media-Formats-and-Dolby-Vision.md#linux-desktop-playback-with-mpv) for playback presets and subtitle fonts.
 
-Prefer running `setup_linux_environment.sh` in a **remote terminal**: it uses **tmux** for cleaner, easier-to-read logs.
+When run over SSH, `setup_linux_environment.sh` uses **tmux** to display build logs.
 
 ---
 

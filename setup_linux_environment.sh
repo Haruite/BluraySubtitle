@@ -2,14 +2,11 @@
 if [[ -z "${BLURAY_SETUP_SOURCE:-}" ]]; then
   BLURAY_SETUP_SOURCE="$(cd -- "$(dirname -- "$0")" && pwd)/$(basename -- "$0")"
 fi
-if [[ "${BLURAY_NO_CRLF_FIX:-}" != "1" ]]; then
-  if LC_ALL=C grep -q $'\r' "$0"; then
-    tmp="$(mktemp)"
-    trap 'rm -f "$tmp"' EXIT
-    tr -d '\r' < "$0" > "$tmp"
-    chmod +x "$tmp" || true
-    exec env BLURAY_NO_CRLF_FIX=1 BLURAY_SETUP_SOURCE="$BLURAY_SETUP_SOURCE" bash "$tmp" "$@"
-  fi
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  # Load a snapshot before running setup so edits cannot change an active install.
+  setup_snapshot="$(tr -d '\r' < "$0")" || exit 1
+  source <(printf '%s\n' "$setup_snapshot")
+  exit $?
 fi
 set -euo pipefail
 
@@ -23,6 +20,7 @@ FDKAAC_SOURCE_REPOSITORY="https://github.com/nu774/fdkaac.git"
 DESCALE_SOURCE_REPOSITORY="https://github.com/AmusementClub/descale.git"
 VAPOURSYNTH_SOURCE_REPOSITORY="https://github.com/AmusementClub/vapoursynth-classic.git"
 VSEDIT_SOURCE_REPOSITORY="https://github.com/YomikoR/VapourSynth-Editor.git"
+MESON_MIN_VERSION="1.4.0"
 SETTINGS_FILE="${BLURAY_SETTINGS_FILE:-$(dirname -- "$BLURAY_SETUP_SOURCE")/src/core/settings.py}"
 
 # ---------------------------------------------------------------------------
@@ -225,10 +223,10 @@ ensure_configured_directory() {
 }
 
 sync_mkvtoolnix_paths() {
-  install_command_at_configured_path mkvinfo "$MKV_INFO_PATH"
-  install_command_at_configured_path mkvmerge "$MKV_MERGE_PATH"
-  install_command_at_configured_path mkvpropedit "$MKV_PROP_EDIT_PATH"
-  install_command_at_configured_path mkvextract "$MKV_EXTRACT_PATH"
+  install_configured_executable /usr/bin/mkvinfo "$MKV_INFO_PATH"
+  install_configured_executable /usr/bin/mkvmerge "$MKV_MERGE_PATH"
+  install_configured_executable /usr/bin/mkvpropedit "$MKV_PROP_EDIT_PATH"
+  install_configured_executable /usr/bin/mkvextract "$MKV_EXTRACT_PATH"
 }
 
 verify_configured_tool_paths() {
@@ -526,29 +524,63 @@ require_supported_os() {
     x86_64|amd64) ;;
     *) die "$(msg 'Only x64 Linux is supported' '仅支持 x64 Linux')" ;;
   esac
-  if [[ ! -f /etc/os-release ]]; then
-    die "$(msg '/etc/os-release not found; cannot determine OS version' '未检测到 /etc/os-release，无法判断系统版本')"
+  command -v apt-get >/dev/null 2>&1 || die "$(msg 'apt-get is required' '需要 apt-get')"
+  command -v dpkg >/dev/null 2>&1 || die "$(msg 'dpkg is required' '需要 dpkg')"
+  [[ "$(dpkg --print-architecture)" == "amd64" ]] || die "$(msg 'Only an amd64 APT userspace is supported' '仅支持 amd64 APT 用户空间')"
+
+  local ID="" ID_LIKE="" PRETTY_NAME="" VERSION_CODENAME="" UBUNTU_CODENAME="" DEBIAN_CODENAME=""
+  . /etc/os-release || die "$(msg 'Cannot read /etc/os-release' '无法读取 /etc/os-release')"
+
+  # Ubuntu derivatives may report their own release in VERSION_CODENAME.
+  local base_codename="$UBUNTU_CODENAME"
+  if [[ -z "$base_codename" ]]; then
+    case "$VERSION_CODENAME" in
+      jammy | kinetic | lunar | mantic | noble | oracular | plucky | questing | resolute | stonking)
+        base_codename="$VERSION_CODENAME"
+        ;;
+    esac
+    if [[ -z "$base_codename" && ( "$ID" == "ubuntu" || " $ID_LIKE " == *" ubuntu "* ) ]]; then
+      local DISTRIB_CODENAME=""
+      if [[ -r /etc/upstream-release/lsb-release ]]; then
+        . /etc/upstream-release/lsb-release \
+          || die "$(msg 'Cannot read Ubuntu base release metadata' '无法读取 Ubuntu 底座发行信息')"
+      fi
+      base_codename="${DISTRIB_CODENAME:-$VERSION_CODENAME}"
+    fi
   fi
 
-  . /etc/os-release || true
-  log "$(msg "Detected OS: ${PRETTY_NAME:-unknown}" "检测到系统：${PRETTY_NAME:-unknown}")"
-
-  command -v dpkg >/dev/null 2>&1 || die "$(msg 'dpkg is missing; cannot compare OS versions' '缺少 dpkg，无法比较系统版本')"
-
-  local id="${ID:-}"
-  local version_id="${VERSION_ID:-}"
-
-  if [[ "$id" == "ubuntu" ]]; then
-    dpkg --compare-versions "$version_id" ge "22.04" || die "$(msg "Only Ubuntu >= 22.04 is supported (current: $version_id)" "仅支持 Ubuntu >= 22.04（当前：$version_id）")"
-    return 0
+  local minimum_libc="2.35"
+  if [[ -z "$base_codename" ]]; then
+    minimum_libc="2.36"
+    base_codename="${DEBIAN_CODENAME:-$VERSION_CODENAME}"
+    case "$base_codename" in
+      bookworm | daedalus | faye) base_codename="bookworm" ;;
+      trixie | excalibur | gigi) base_codename="trixie" ;;
+      forky | freia) base_codename="forky" ;;
+      kali-rolling | kali-last-snapshot) ;;
+      *)
+        local debian_version=""
+        if [[ -r /etc/debian_version ]]; then
+          IFS= read -r debian_version < /etc/debian_version || true
+        fi
+        case "$debian_version" in
+          12 | 12.* | bookworm/*) base_codename="bookworm" ;;
+          13 | 13.* | trixie/*) base_codename="trixie" ;;
+          *) base_codename="${DEBIAN_CODENAME:-${debian_version%%/*}}" ;;
+        esac
+        ;;
+    esac
   fi
 
-  if [[ "$id" == "debian" ]]; then
-    dpkg --compare-versions "$version_id" ge "12" || die "$(msg "Only Debian >= 12 is supported (current: $version_id)" "仅支持 Debian >= 12（当前：$version_id）")"
-    return 0
+  # Check the installed userspace against the Ubuntu 22.04 / Debian 12 baselines.
+  local libc_version
+  libc_version="$(dpkg-query -W -f='${Version}' libc6:amd64 2>/dev/null || true)"
+  if [[ -z "$base_codename" || -z "$libc_version" ]] || ! dpkg --compare-versions "$libc_version" ge "$minimum_libc"; then
+    die "$(msg "An Ubuntu 22.04+ or Debian 12+ APT base is required (current: ${PRETTY_NAME:-unknown})" "需要 Ubuntu 22.04 或 Debian 12 及以上的 APT 底座（当前：${PRETTY_NAME:-unknown}）")"
   fi
-
-  die "$(msg "Only Ubuntu >= 22.04 or Debian >= 12 is supported (current: ${PRETTY_NAME:-unknown})" "仅支持 Ubuntu >= 22.04 或 Debian >= 12（当前：${PRETTY_NAME:-unknown}）")"
+  readonly APT_BASE_CODENAME="$base_codename"
+  readonly LINUX_DISTRO_ID="$ID"
+  log "$(msg "Detected OS: ${PRETTY_NAME:-unknown} (APT base: ${APT_BASE_CODENAME})" "检测到系统：${PRETTY_NAME:-unknown}（APT 底座：${APT_BASE_CODENAME}）")"
 }
 
 repair_broken_apt_state() {
@@ -562,7 +594,7 @@ repair_broken_apt_state() {
 # ---------------------------------------------------------------------------
 
 ensure_meson_version() {
-  local required_version="1.4.0"
+  local required_version="$MESON_MIN_VERSION"
 
   export PATH="$HOME/.local/bin:$PATH"
 
@@ -607,74 +639,127 @@ ensure_meson_version() {
 # mkvtoolnix
 # ---------------------------------------------------------------------------
 
+mkvtoolnix_apt_version() {
+  local repository="$1" suite="$2" version="$3"
+  LC_ALL=C apt-cache madison mkvtoolnix mkvtoolnix-gui | awk -v repository="$repository" -v suite="$suite/main" -v version="$version" '
+    $NF == "Packages" && (repository == "" || (($5 == repository || $5 == repository "/") && $6 == suite)) {
+      upstream = $3
+      sub(/^[0-9]+:/, "", upstream)
+      sub(/-[^-]+$/, "", upstream)
+      if (upstream == version) {
+        if ($1 == "mkvtoolnix") cli[++count] = $3
+        if ($1 == "mkvtoolnix-gui") gui[$3] = 1
+      }
+    }
+    END {
+      for (i = 1; i <= count; i++) {
+        if (cli[i] in gui) { print cli[i]; break }
+      }
+    }'
+}
+
+mkvtoolnix_installed_version() {
+  local tool
+  for tool in mkvinfo mkvmerge mkvpropedit mkvextract mkvtoolnix-gui; do
+    [[ -x "/usr/bin/$tool" ]] || return 1
+  done
+  LC_ALL=C /usr/bin/mkvmerge --version | sed -nE 's/^mkvmerge v([0-9]+(\.[0-9]+)+) .*/\1/p'
+}
+
 install_mkvtoolnix() {
   log "$(msg 'Installing mkvtoolnix / mkvtoolnix-gui' '安装 mkvtoolnix / mkvtoolnix-gui')"
 
-  command -v apt-get >/dev/null 2>&1 || die "$(msg 'apt-get is missing' '缺少 apt-get')"
-  command -v dpkg >/dev/null 2>&1 || die "$(msg 'dpkg is missing; cannot manage mkvtoolnix packages or compare versions' '缺少 dpkg，无法管理 mkvtoolnix 软件包或比较版本')"
-
-  local mkvtoolnix_codename=""
-  if [[ "${ID:-}" == "ubuntu" ]]; then
-    case "${VERSION_ID:-}" in
-      24.04) mkvtoolnix_codename="noble" ;;
-      26.04) mkvtoolnix_codename="resolute" ;;
-    esac
+  local entry
+  local -a repositories=()
+  if [[ "$LINUX_DISTRO_ID" == "linuxmint" && "$APT_BASE_CODENAME" == "noble" ]]; then
+    # Linux Mint 22.x shares the Wilma repository across point releases.
+    repositories+=("https://mkvtoolnix.download/linuxmint wilma")
   fi
-
-  if [[ -n "$mkvtoolnix_codename" ]]; then
-    local architecture
-    architecture="$(dpkg --print-architecture)"
-    case "$architecture" in
-      amd64 | arm64) ;;
-      *) mkvtoolnix_codename="" ;;
-    esac
-  fi
-
-  if [[ -n "$mkvtoolnix_codename" ]]; then
+  case "$APT_BASE_CODENAME" in
+    jammy | kinetic | lunar | mantic | noble | oracular | plucky | questing | resolute | stonking)
+      repositories+=("https://mkvtoolnix.download/ubuntu $APT_BASE_CODENAME")
+      ;;
+    bookworm | trixie) repositories+=("https://mkvtoolnix.download/debian $APT_BASE_CODENAME") ;;
+  esac
+  if (( ${#repositories[@]} > 0 )); then
     local keyring_path="/etc/apt/keyrings/gpg-pub-moritzbunkus.gpg"
     local source_list_path="/etc/apt/sources.list.d/mkvtoolnix.download.list"
-    log "$(msg "Installing MKVToolNix from its official Ubuntu repository (${mkvtoolnix_codename})" "从 MKVToolNix 官方 Ubuntu 软件源安装（${mkvtoolnix_codename}）")"
-    bluray_sudo install -d -m 0755 /etc/apt/keyrings || die "$(msg 'Failed to create the APT keyring directory' '创建 APT 密钥目录失败')"
-    tmux_run "$(msg 'Download the MKVToolNix repository signing key' '下载 MKVToolNix 软件源签名密钥')" \
-      bluray_sudo wget -q -O "$keyring_path" https://mkvtoolnix.download/gpg-pub-moritzbunkus.gpg \
-      || die "$(msg 'Failed to download the MKVToolNix repository signing key' '下载 MKVToolNix 软件源签名密钥失败')"
-    printf 'deb [arch=%s signed-by=%s] https://mkvtoolnix.download/ubuntu/ %s main\n' \
-      "$architecture" "$keyring_path" "$mkvtoolnix_codename" \
-      | bluray_sudo tee "$source_list_path" >/dev/null \
-      || die "$(msg 'Failed to configure the MKVToolNix repository' '配置 MKVToolNix 软件源失败')"
-    apt_update || die "$(msg 'Failed to refresh the MKVToolNix repository' '刷新 MKVToolNix 软件源失败')"
-    apt_install mkvtoolnix mkvtoolnix-gui || die "$(msg 'Failed to install MKVToolNix packages' 'MKVToolNix 软件包安装失败')"
-    hash -r
-    log "$(msg 'mkvtoolnix installation complete' 'mkvtoolnix 安装完成')"
+    local source_file
+    source_file="$(mktemp)"
+    if ! tmux_run "$(msg 'Download the MKVToolNix repository signing key' '下载 MKVToolNix 软件源签名密钥')" \
+      curl -fsSL --retry 4 --connect-timeout 20 --max-time 45 -o "$source_file" https://mkvtoolnix.download/gpg-pub-moritzbunkus.gpg \
+      || ! bluray_sudo install -D -m 0644 "$source_file" "$keyring_path"; then
+      rm -f -- "$source_file"
+      die "$(msg 'Failed to install the MKVToolNix repository signing key' '安装 MKVToolNix 软件源签名密钥失败')"
+    fi
+    for entry in "${repositories[@]}"; do
+      printf 'deb [arch=amd64 signed-by=%s] %s main\n' "$keyring_path" "$entry"
+    done > "$source_file"
+    if ! bluray_sudo install -D -m 0644 "$source_file" "$source_list_path"; then
+      rm -f -- "$source_file"
+      die "$(msg 'Failed to configure the MKVToolNix repository' '配置 MKVToolNix 软件源失败')"
+    fi
+    rm -f -- "$source_file"
+    tmux_run 'apt-get update' sudo apt-get update --error-on=any \
+      || die "$(msg 'Failed to refresh the MKVToolNix repository' '刷新 MKVToolNix 软件源失败')"
+  else
+    apt_update
+  fi
+
+  # The candidate determines which Qt the setup can install, including on a fresh system.
+  local qt_version
+  if ! qt_version="$(LC_ALL=C apt-cache policy qt6-base-dev | awk '$1 == "Candidate:" && $2 != "(none)" { print $2 }')" \
+    || [[ -z "$qt_version" ]]; then
+    die "$(msg 'Failed to determine the Qt 6 version available from APT' '无法确定 APT 可安装的 Qt 6 版本')"
+  fi
+  qt_version="${qt_version#*:}"
+  qt_version="${qt_version%-*}"
+  dpkg --compare-versions "$qt_version" ge "6.2.0" \
+    || die "$(msg "MKVToolNix requires Qt 6.2.0 or later. APT offers Qt ${qt_version}" "MKVToolNix 需要 Qt 6.2.0 或更高版本。APT 提供 Qt ${qt_version}")"
+  log "$(msg "APT offers Qt ${qt_version} for MKVToolNix" "APT 可为 MKVToolNix 安装 Qt ${qt_version}")"
+
+  # MKVToolNix 99 introduced string literals that require Qt 6.4.
+  local qt_compat_version="" version="${MKVTOOLNIX_VERSION:-}" current_version
+  if dpkg --compare-versions "$qt_version" lt "6.4.0"; then
+    qt_compat_version="98.0"
+    version="$qt_compat_version"
+    log "$(msg "Using MKVToolNix ${version} for compatibility with Qt ${qt_version}" "使用 MKVToolNix ${version} 以兼容 Qt ${qt_version}")"
+  elif [[ -z "$version" ]]; then
+    version="$(curl -fsSL --retry 4 --connect-timeout 20 --max-time 45 https://mkvtoolnix.download/latest-release.xml \
+      | python3 -c 'import sys, xml.etree.ElementTree as ET; print(ET.parse(sys.stdin).findtext("./latest-source/version") or "")')" || version=""
+  fi
+  [[ "$version" =~ ^[0-9]+(\.[0-9]+)+$ ]] \
+    || die "$(msg 'Failed to determine the MKVToolNix release version' '无法确定 MKVToolNix 发布版本')"
+
+  current_version="$(mkvtoolnix_installed_version || true)"
+  if [[ -n "$current_version" ]] && dpkg --compare-versions "$current_version" ge "$version" \
+    && [[ -z "$qt_compat_version" || "$current_version" == "$version" ]]; then
+    log "$(msg "Installed MKVToolNix ${current_version} satisfies the requested version ${version}" "已安装的 MKVToolNix ${current_version} 满足所需版本 ${version}")"
     return 0
   fi
 
-  if ! command -v curl >/dev/null 2>&1; then
-    apt_update
-    apt_install curl
-  fi
+  local repository suite deb_version
+  # An empty entry checks the configured APT sources after the upstream repositories.
+  for entry in "${repositories[@]}" ""; do
+    read -r repository suite <<< "$entry"
+    deb_version="$(mkvtoolnix_apt_version "$repository" "$suite" "$version")" \
+      || die "$(msg 'Failed to query the MKVToolNix repository' '查询 MKVToolNix 软件源失败')"
+    [[ -n "$deb_version" ]] || continue
+    if [[ -n "$suite" ]]; then
+      log "$(msg "Installing MKVToolNix ${version} from its official APT repository (${suite})" "从 MKVToolNix 官方 APT 软件源安装 ${version}（${suite}）")"
+    else
+      log "$(msg "Installing MKVToolNix ${version} from the configured APT sources" "从已配置的 APT 软件源安装 MKVToolNix ${version}")"
+    fi
+    apt_install --reinstall "mkvtoolnix=$deb_version" "mkvtoolnix-gui=$deb_version" \
+      || die "$(msg 'Failed to install MKVToolNix packages' 'MKVToolNix 软件包安装失败')"
+    hash -r
+    [[ "$(mkvtoolnix_installed_version)" == "$version" ]] \
+      || die "$(msg 'Installed MKVToolNix version verification failed' '安装后的 MKVToolNix 版本校验失败')"
+    log "$(msg 'mkvtoolnix installation complete' 'mkvtoolnix 安装完成')"
+    return 0
+  done
 
-  local latest_version version
-  latest_version="$(
-    curl -s "https://mkvtoolnix.download/latest-release.xml" \
-      | grep -oP '(?<=<version>).*?(?=</version>)' \
-      | head -n 1
-  )"
-  if [[ -z "${latest_version:-}" ]]; then
-    die "$(msg 'Failed to fetch latest mkvtoolnix version' '获取 mkvtoolnix 最新版本失败')"
-  fi
-  version="${MKVTOOLNIX_VERSION:-$latest_version}"
-
-  # Qt string literal operators used since MKVToolNix 99 require Qt >= 6.4.
-  # Ubuntu 22.04 ships Qt 6.2, so keep the last compatible release by default.
-  if [[ -z "${MKVTOOLNIX_VERSION:-}" && "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" == "22.04" ]] \
-      && dpkg --compare-versions "$version" gt "98.0"; then
-    version="98.0"
-    log "$(msg "Latest mkvtoolnix is ${latest_version}; using ${version} on Ubuntu 22.04 for Qt 6.2 compatibility" "mkvtoolnix 最新版本为 ${latest_version}；Ubuntu 22.04 使用 ${version} 以兼容 Qt 6.2")"
-  else
-    log "$(msg "Selected mkvtoolnix version: ${version} (latest upstream: ${latest_version})" "选择 mkvtoolnix 版本：${version}（上游最新：${latest_version}）")"
-  fi
-
+  log "$(msg "Building MKVToolNix ${version} from source" "从源码编译 MKVToolNix ${version}")"
   local package_name
   local installed_deb_packages=()
   for package_name in mkvtoolnix-gui-dbg mkvtoolnix-dbg mkvtoolnix-gui mkvtoolnix; do
@@ -683,27 +768,7 @@ install_mkvtoolnix() {
     fi
   done
 
-  local current_version=""
-  if command -v mkvmerge >/dev/null 2>&1; then
-    current_version="$(mkvmerge --version 2>/dev/null | head -n 1 | grep -oE 'v[0-9]+(\.[0-9]+)+' | head -n 1 | tr -d 'v' || true)"
-    if [[ -n "${current_version:-}" ]]; then
-      log "$(msg "Installed mkvtoolnix version: ${current_version}" "检测到已安装 mkvtoolnix 版本：${current_version}")"
-      if (( ${#installed_deb_packages[@]} == 0 )) && dpkg --compare-versions "$current_version" ge "$version"; then
-        log "$(msg "mkvtoolnix version satisfied (${current_version} >= ${version}), skipping build" "mkvtoolnix 版本已满足要求（${current_version} >= ${version}），跳过编译安装")"
-        return 0
-      fi
-      if (( ${#installed_deb_packages[@]} > 0 )); then
-        log "$(msg 'The installed mkvtoolnix deb packages will be replaced by a direct source installation' '已安装的 mkvtoolnix deb 软件包将替换为源码直接安装')"
-      else
-        log "$(msg "mkvtoolnix version is outdated (${current_version} < ${version}), rebuilding from source" "检测到 mkvtoolnix 版本较旧（${current_version} < ${version}），将从源码编译升级")"
-      fi
-    else
-      log "$(msg 'mkvmerge found but version could not be determined, rebuilding from source' '检测到 mkvmerge 但无法解析版本号，将从源码编译安装')"
-    fi
-  fi
-
   log "$(msg 'Installing build dependencies' '安装编译所需基础工具')"
-  apt_update
   # Boost.System headers are in libboost-dev; Boost >= 1.89 has no separate library.
   apt_install build-essential docbook-xsl libx11-xcb-dev libglu1-mesa-dev \
   libboost-date-time-dev libboost-dev libboost-filesystem-dev libboost-math-dev libboost-regex-dev \
@@ -711,6 +776,16 @@ install_mkvtoolnix() {
   libogg-dev libpcre2-8-0 libpcre2-dev libqt6svg6-dev libvorbis-dev \
   nlohmann-json3-dev pkg-config po4a qt6-base-dev qt6-base-dev-tools qt6-multimedia-dev \
   rake ruby xsltproc zlib1g-dev unzip libtool autoconf
+
+  local qmake6_tool="${QMAKE6:-qmake6}" build_qt_version required_qt="6.2.0"
+  if dpkg --compare-versions "$version" ge "99.0"; then
+    required_qt="6.4.0"
+  fi
+  if ! build_qt_version="$(LD_LIBRARY_PATH="" "$qmake6_tool" -query QT_VERSION)" || [[ -z "$build_qt_version" ]]; then
+    die "$(msg 'Failed to determine the Qt version used to build MKVToolNix' '无法确定编译 MKVToolNix 使用的 Qt 版本')"
+  fi
+  dpkg --compare-versions "$build_qt_version" ge "$required_qt" \
+    || die "$(msg "Building MKVToolNix ${version} requires Qt ${required_qt} or later. qmake6 reports Qt ${build_qt_version}" "编译 MKVToolNix ${version} 需要 Qt ${required_qt} 或更高版本。qmake6 检测到 Qt ${build_qt_version}")"
 
   local build_dir
   build_dir="$(bluray_mktemp_dir)"
@@ -738,6 +813,7 @@ install_mkvtoolnix() {
     ./configure \
       --prefix=/usr \
       --docdir='${datarootdir}/doc/mkvtoolnix-gui' \
+      --with-qmake6="$qmake6_tool" \
       --enable-gui \
       --enable-optimization || exit 1
 
@@ -759,8 +835,9 @@ install_mkvtoolnix() {
     apt_clean
   ) || die "$(msg 'mkvtoolnix build/install failed (if missing deps, install them manually and retry)' 'mkvtoolnix 编译/安装失败（如提示缺依赖，可手动补齐后重试）')"
 
+  [[ "$(mkvtoolnix_installed_version)" == "$version" ]] \
+    || die "$(msg 'Installed MKVToolNix version verification failed' '安装后的 MKVToolNix 版本校验失败')"
   rm -rf "$build_dir"
-
   log "$(msg 'mkvtoolnix installation complete' 'mkvtoolnix 安装完成')"
 }
 
@@ -784,15 +861,12 @@ libdovi_header_is_complete() {
 }
 
 repair_packaged_libdovi_header() {
-  # Ubuntu 26.04 inherited the truncated generated header described in
-  # https://bugs.debian.org/1124682. Use Debian's rebuilt header from the
-  # same upstream 3.3.2 release without replacing Ubuntu's runtime library.
-  [[ "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" == "26.04" ]] || return 1
-
+  # Use Debian's rebuilt header for the same upstream release affected by
+  # https://bugs.debian.org/1124682 without replacing the runtime library.
   local package_version
   package_version="$(dpkg-query -W -f='${Version}' libdovi-dev 2>/dev/null || true)"
   case "$package_version" in
-    3.3.2-3*) ;;
+    3.3.2-*) ;;
     *) return 1 ;;
   esac
 
@@ -810,7 +884,7 @@ repair_packaged_libdovi_header() {
   archive="$repair_dir/libdovi-dev.deb"
   extracted_header="$repair_dir/extracted/usr/include/libdovi/rpu_parser.h"
 
-  log "$(msg "Repairing the truncated Ubuntu libdovi header with Debian's rebuilt 3.3.2 header" '使用 Debian 重新生成的 3.3.2 头文件修复 Ubuntu 中被截断的 libdovi 头文件')"
+  log "$(msg "Repairing the truncated libdovi header with Debian's rebuilt 3.3.2 header" '使用 Debian 重新生成的 3.3.2 头文件修复被截断的 libdovi 头文件')"
   if ! (
     tmux_run "$(msg 'Download the rebuilt libdovi development header' '下载重新生成的 libdovi 开发头文件')" \
       wget -q -O "$archive" \
@@ -1171,24 +1245,6 @@ install_mpv() {
     ffmpeg_is_current="true"
   fi
 
-  local is_ubuntu_2204="false"
-  local is_debian_12="false"
-  local needs_meson_prebuild="false"
-  local mpv_build_env=()
-  if [[ -f /etc/os-release ]]; then
-    . /etc/os-release || true
-    if [[ "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" == "22.04" ]]; then
-      is_ubuntu_2204="true"
-      needs_meson_prebuild="true"
-    fi
-    if [[ "${ID:-}" == "debian" ]]; then
-      if dpkg --compare-versions "${VERSION_ID:-0}" ge "12" && dpkg --compare-versions "${VERSION_ID:-0}" lt "13"; then
-        is_debian_12="true"
-        needs_meson_prebuild="true"
-      fi
-    fi
-  fi
-
   if command -v mpv >/dev/null 2>&1; then
     local current_mpv_version
     current_mpv_version="$(mpv --version 2>/dev/null | head -n 1 | grep -oP 'mpv\s+v?\K[0-9]+(\.[0-9]+){1,2}' || true)"
@@ -1223,27 +1279,12 @@ install_mpv() {
     libwayland-dev libxkbcommon-dev libegl1-mesa-dev libplacebo-dev
     libasound2-dev libpulse-dev libjack-dev libpipewire-0.3-dev
     libluajit-5.1-dev yt-dlp glslang-tools glslang-dev
-    libspirv-cross-c-shared-dev libshaderc-dev autoconf
+    libspirv-cross-c-shared-dev autoconf
     automake libtool wayland-protocols libmujs-dev libbluray-dev
     libunwind-dev libxrandr-dev libxpresent-dev libxss-dev libdvdnav-dev
     libdvdread-dev libzimg-dev libarchive-dev librubberband-dev libsdl2-dev
     libdrm-dev libgbm-dev curl xz-utils
   )
-
-  if [[ -f /etc/os-release ]]; then
-    . /etc/os-release || true
-    if [[ "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" == "22.04" ]]; then
-      # libshaderc-dev is not available on Ubuntu 22.04; remove it from the list
-      local filtered_deps=()
-      local dep
-      for dep in "${mpv_deps[@]}"; do
-        if [[ "$dep" != "libshaderc-dev" ]]; then
-          filtered_deps+=("$dep")
-        fi
-      done
-      mpv_deps=("${filtered_deps[@]}")
-    fi
-  fi
 
   local missing_deps=()
   for dep in "${mpv_deps[@]}"; do
@@ -1256,9 +1297,14 @@ install_mpv() {
     apt_update
     apt_install "${missing_deps[@]}" || die "$(msg 'Failed to install mpv dependencies' 'mpv 依赖安装失败，请检查网络或包名')"
   fi
+  local pkg_config_path="/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/aarch64-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:${HOME}/.local/lib/pkgconfig:${HOME}/.local/lib/x86_64-linux-gnu/pkgconfig:${HOME}/.local/lib/aarch64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
+  PKG_CONFIG_PATH="$pkg_config_path" install_shaderc
 
-  if [[ "$needs_meson_prebuild" == "true" ]]; then
-    ensure_meson_version
+  # The build and sudo install must use Meson without user-site packages.
+  export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"
+  local system_meson_version
+  system_meson_version="$(PYTHONNOUSERSITE=1 meson --version 2>/dev/null || true)"
+  if ! dpkg --compare-versions "$system_meson_version" ge "$MESON_MIN_VERSION"; then
     if ! sudo python3 -m pip --version >/dev/null 2>&1; then
       apt_update
       apt_install python3-pip || die "$(msg 'Failed to install python3-pip (root environment)' '安装 python3-pip 失败（root 环境）')"
@@ -1268,18 +1314,19 @@ install_mpv() {
       sudo env PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade -q --progress-bar off meson >/dev/null 2>&1 || die "$(msg 'Failed to upgrade meson in root environment' 'root 环境升级 meson 失败')"
     fi
     export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"
-    # Prevent stale user-site Meson packages from shadowing the root-installed version across the build and install.
-    mpv_build_env=(env PYTHONNOUSERSITE=1)
+    if ! system_meson_version="$(PYTHONNOUSERSITE=1 meson --version)" \
+      || ! dpkg --compare-versions "$system_meson_version" ge "$MESON_MIN_VERSION"; then
+      die "$(msg "System Meson must be at least ${MESON_MIN_VERSION} to build and install mpv" "编译和安装 mpv 需要至少 ${MESON_MIN_VERSION} 版本的系统 Meson")"
+    fi
   fi
 
-  export PATH="/usr/local/bin:${HOME}/.local/bin:${PATH:-}"
-  ensure_dav1d_for_mpv
+  PYTHONNOUSERSITE=1 ensure_dav1d_for_mpv
 
   local build_dir mpv_tag libass_tag libplacebo_tag
   mpv_tag="$(latest_stable_tag https://github.com/mpv-player/mpv.git '^v[0-9]+([.][0-9]+)+$' 'v*')"
   libass_tag="$(latest_stable_tag https://github.com/libass/libass.git '^[0-9]+([.][0-9]+)+$')"
   libplacebo_tag="$(latest_stable_tag https://github.com/haasn/libplacebo.git '^v[0-9]+([.][0-9]+)+$' 'v*')"
-  build_dir="$(mktemp -d)"
+  build_dir="$(bluray_mktemp_dir)"
 
   (
     cd "$build_dir" || exit 1
@@ -1304,46 +1351,47 @@ install_mpv() {
     echo "-Dlibbluray=enabled" > mpv_options || exit 1
     echo "-Dlua=luajit" >> mpv_options || exit 1
     echo "-Dvapoursynth=enabled" >> mpv_options || exit 1
-    if [[ "$is_ubuntu_2204" == "true" ]]; then
-      # Ubuntu 22.04's rst2man rejects the --output option used by current mpv.
+    # Older rst2man versions cannot accept the --output argument used by mpv.
+    local rst2man_path
+    rst2man_path="$(command -v rst2man || command -v rst2man.py || true)"
+    if [[ -n "$rst2man_path" ]] && ! PYTHONNOUSERSITE=1 "$rst2man_path" --help \
+        | grep -E -- '(^|[[:space:]])--output([=[:space:]]|$)' >/dev/null; then
       echo "-Dmanpage-build=disabled" >> mpv_options || exit 1
     fi
-    if [[ "$is_ubuntu_2204" == "true" || "$is_debian_12" == "true" ]]; then
-      log "$(msg 'Compatibility mode detected (Ubuntu 22.04/Debian 12): disabling Vulkan/Shaderc in mpv-build libplacebo to ensure mpv compiles' '检测到系统需要兼容模式（Ubuntu 22.04/Debian 12），禁用 mpv-build 内置 libplacebo 的 Vulkan/Shaderc 构建以保证 mpv 可编译')"
-      cat > libplacebo_options <<'EOF'
--Dvulkan=disabled
--Dshaderc=disabled
-EOF
+    # libplacebo's public FFmpeg helpers expose Vulkan declarations to mpv.
+    if ! cc -std=c11 -I "$PWD/ffmpeg" -x c -fsyntax-only - 2>/dev/null <<'C'; then
+#include <libavutil/hwcontext_vulkan.h>
+C
+      log "$(msg 'System Vulkan headers cannot compile the FFmpeg Vulkan interface. Disabling Vulkan in the libplacebo build for mpv.' '系统 Vulkan 头文件无法编译 FFmpeg 的 Vulkan 接口，将禁用 mpv 内置 libplacebo 的 Vulkan 支持。')"
+      echo "-Dvulkan=disabled" > libplacebo_options || exit 1
     fi
 
-    export PKG_CONFIG_PATH="/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/aarch64-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:${HOME}/.local/lib/pkgconfig:${HOME}/.local/lib/x86_64-linux-gnu/pkgconfig:${HOME}/.local/lib/aarch64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
+    export PKG_CONFIG_PATH="$pkg_config_path"
     export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"
     pkg-config --atleast-version=56 vapoursynth-script \
       || die "$(msg 'mpv requires VapourSynth VSScript development files version 56 or later' 'mpv 需要 VapourSynth VSScript 56 或更高版本的开发文件')"
 
     # FFmpeg can write generated resources before make creates their directory.
     mkdir -p ffmpeg_build/fftools/resources || exit 1
-    tmux_run "mpv-build build" "${mpv_build_env[@]}" ./build -j"$(nproc)" || exit 1
+    log "$(msg "Building mpv and FFmpeg in ${build_dir}. FFmpeg prints its configuration summary after checking the compiler and libraries." "在 ${build_dir} 编译 mpv 和 FFmpeg。FFmpeg 会在检查完编译器和依赖库后输出配置摘要。")"
+    tmux_run "mpv-build build" env PYTHONNOUSERSITE=1 ./build -j"$(nproc)" || exit 1
     test_mpv_vapoursynth "$PWD/mpv/build/mpv" \
       || die "$(msg 'The rebuilt mpv failed the VapourSynth playback check' '重新编译的 mpv 未通过 VapourSynth 播放验证')"
     tmux_run "mpv-build install" sudo env PYTHONNOUSERSITE=1 "PATH=$PATH" "PKG_CONFIG_PATH=${PKG_CONFIG_PATH:-}" ./install || exit 1
     install_configured_executable build_libs/bin/ffmpeg "$FFMPEG_PATH" || exit 1
     install_configured_executable build_libs/bin/ffprobe "$FFPROBE_PATH" || exit 1
-  ) || die "$(msg 'mpv build/install failed' 'mpv 编译/安装失败')"
+  ) || die "$(msg "mpv build/install failed. Build files were kept in ${build_dir}" "mpv 编译/安装失败。构建文件保留在 ${build_dir}")"
 
-  rm -rf "$build_dir"
   installed_ffmpeg_version="$(__installed_ffmpeg_version "$FFMPEG_PATH" | head -n 1 || true)"
   installed_ffprobe_version="$(__installed_ffmpeg_version "$FFPROBE_PATH" | head -n 1 || true)"
   if [[ -z "$installed_ffmpeg_version" || -z "$installed_ffprobe_version" ]] \
     || ! dpkg --compare-versions "$installed_ffmpeg_version" ge "$target_ffmpeg_version" \
     || ! dpkg --compare-versions "$installed_ffprobe_version" ge "$target_ffmpeg_version" \
     || ! __ffmpeg_has_libopus "$FFMPEG_PATH"; then
-    die "$(msg 'Installed FFmpeg / FFprobe version or libopus support verification failed' '安装后的 FFmpeg / FFprobe 版本或 libopus 支持校验失败')"
+    die "$(msg "Installed FFmpeg / FFprobe version or libopus support verification failed. Build files were kept in ${build_dir}" "安装后的 FFmpeg / FFprobe 版本或 libopus 支持校验失败。构建文件保留在 ${build_dir}")"
   fi
+  rm -rf "$build_dir"
   log "$(msg "mpv with VapourSynth and FFmpeg / FFprobe with libopus installed (${installed_ffmpeg_version}/${installed_ffprobe_version})" "已安装支持 VapourSynth 的 mpv，以及带 libopus 支持的 FFmpeg / FFprobe（${installed_ffmpeg_version}/${installed_ffprobe_version}）")"
-  if [[ "$needs_meson_prebuild" != "true" ]]; then
-    ensure_meson_version
-  fi
 }
 
 install_mpv_desktop() (
@@ -2338,13 +2386,14 @@ install_vapoursynth_editor() {
     fi
   fi
 
-  local deps=(qt6-base-dev qt6-base-dev-tools qt6-5compat-dev qt6-websockets-dev qt6-declarative-dev libgl-dev wget tar)
-  if [[ -f /etc/os-release ]]; then
-    . /etc/os-release || true
-    if [[ "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" == "22.04" ]]; then
-      deps=(qt6-base-dev qt6-base-dev-tools libqt6core5compat6-dev libqt6websockets6-dev qt6-declarative-dev libgl-dev wget tar)
-    fi
+  local qt_compat_dev=qt6-5compat-dev qt_websockets_dev=qt6-websockets-dev
+  if ! apt-get -s install "$qt_compat_dev" >/dev/null 2>&1; then
+    qt_compat_dev=libqt6core5compat6-dev
   fi
+  if ! apt-get -s install "$qt_websockets_dev" >/dev/null 2>&1; then
+    qt_websockets_dev=libqt6websockets6-dev
+  fi
+  local deps=(qt6-base-dev qt6-base-dev-tools "$qt_compat_dev" "$qt_websockets_dev" qt6-declarative-dev libgl-dev wget tar)
 
   local missing_deps=()
   for dep in "${deps[@]}"; do
@@ -2449,14 +2498,7 @@ install_libplacebo_latest() {
     local py_ver
     py_ver=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
     local safe_pythonpath="${HOME}/.local/lib/python${py_ver}/site-packages:${PYTHONPATH:-}"
-    local shaderc_opt="-Dshaderc=enabled"
-    if [[ -f /etc/os-release ]]; then
-      . /etc/os-release || true
-      if [[ "${ID:-}" == "debian" ]] && dpkg --compare-versions "${VERSION_ID:-0}" ge "12" && dpkg --compare-versions "${VERSION_ID:-0}" lt "13"; then
-        shaderc_opt="-Dshaderc=disabled"
-        log "$(msg 'Debian 12 detected, enabling libplacebo compatibility flag: disabling shaderc' '检测到 Debian 12，启用 libplacebo 兼容参数：禁用 shaderc')"
-      fi
-    fi
+    install_shaderc
 
     local build_dir
     build_dir="$(mktemp -d)"
@@ -2472,7 +2514,7 @@ install_libplacebo_latest() {
         tmux_run "libplacebo meson setup" env PYTHONPATH="$safe_pythonpath" python3 -m mesonbuild.mesonmain setup build \
             --buildtype release \
             --prefix /usr/local \
-            "$shaderc_opt" \
+            -Dshaderc=enabled \
             -Dvulkan=enabled \
             -Dtests=false \
             -Dbench=false \
@@ -2505,7 +2547,7 @@ build_vs_plugins() {
 
   local deps=(
     build-essential git wget tar unzip sed
-    meson ninja-build cmake libass-dev
+    meson ninja-build cmake patch libass-dev
     autoconf automake libtool pkg-config
     libxxhash-dev
     python3 python3-pip
@@ -2514,6 +2556,12 @@ build_vs_plugins() {
   for dep in "${deps[@]}"; do
     if ! dpkg-query -W -f='${Status}' "$dep" 2>/dev/null | grep -q "install ok installed"; then
       missing_deps+=("$dep")
+    fi
+  done
+  local library
+  for library in libavcodec libavformat libavutil libswscale; do
+    if ! pkg-config --exists "$library" 2>/dev/null; then
+      missing_deps+=("${library}-dev")
     fi
   done
   if (( ${#missing_deps[@]} > 0 )); then
@@ -2529,22 +2577,13 @@ build_vs_plugins() {
 
     local lsmash_plugin="$plugins_dir/libvslsmashsource.so"
     local need_compat="false" lsmash_commit="ae51313aeb32cb39d2dbf328702c8fa3f5cd212a"
-    if [[ -f /etc/os-release ]]; then
-      . /etc/os-release || true
-      if [[ "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" == "22.04" ]] \
-          || [[ "${ID:-}" == "debian" && "${VERSION_ID:-}" == "12" ]]; then
-        need_compat="true"
-      fi
-    fi
-    if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libavcodec; then
-      local avcodec_ver avcodec_major
-      avcodec_ver="$(pkg-config --modversion libavcodec 2>/dev/null | head -n 1 || true)"
-      avcodec_major="${avcodec_ver%%.*}"
-      if [[ "$avcodec_major" =~ ^[0-9]+$ ]] && (( avcodec_major < 60 )); then
-        need_compat="true"
-      fi
-    fi
-    if [[ "$need_compat" == "true" ]]; then
+    local avcodec_ver avcodec_major
+    avcodec_ver="$(pkg-config --modversion libavcodec 2>/dev/null || true)"
+    avcodec_major="${avcodec_ver%%.*}"
+    [[ "$avcodec_major" =~ ^[0-9]+$ ]] \
+      || die "$(msg 'Failed to determine the libavcodec development version for L-SMASH-Works' '无法确定 L-SMASH-Works 所需的 libavcodec 开发库版本')"
+    if (( avcodec_major < 60 )); then
+      need_compat="true"
       lsmash_commit="70e19fb19dfd940a9ec9c7e02125b5fe1e2d7f93"
     fi
     local lsmash_version="commit:${lsmash_commit:0:7}"
@@ -2627,6 +2666,62 @@ if needs_old_ffmpeg_compat and lwindex_path.is_file():
         lwindex_data = lwindex_data.replace(anchor, compat_block + anchor, 1)
     lwindex_path.write_text(lwindex_data, encoding="utf-8")
 PY
+      fi
+      if [[ "$need_compat" != "true" ]]; then
+        # FFmpeg 9 removes AVCodec.pix_fmts and the legacy parser split callback.
+        patch -d .. -p1 --batch --forward --fuzz=0 <<'LSMASH_FFMPEG_PATCH' || exit 1
+diff --git a/common/lwindex.c b/common/lwindex.c
+--- a/common/lwindex.c
++++ b/common/lwindex.c
+@@ -1106,2 +1106,3 @@
+             /* Set up bitstream filter if needed. */
++#if LIBAVCODEC_VERSION_MAJOR < 63
+             if (codecpar->codec_id == AV_CODEC_ID_H264
+@@ -1116,3 +1117,5 @@
+                     return NULL;
+-            } else if (codecpar->codec_id == AV_CODEC_ID_AAC && stream->nb_frames == 0)
++            } else
++#endif
++            if (codecpar->codec_id == AV_CODEC_ID_AAC && stream->nb_frames == 0)
+                 /* To generate and export AudioSpecificConfig as an extradata from ADTS header. */
+@@ -1220,2 +1223,3 @@
+
++#if LIBAVCODEC_VERSION_MAJOR < 63
+ #define IF_START_CODE(ptr) if ((ptr)[0] == 0x00 && (ptr)[1] == 0x00 && (ptr)[2] == 0x01)
+@@ -1270,2 +1274,4 @@
+
++#endif
++
+ static int append_extradata_if_new(lwindex_helper_t* helper, AVCodecContext* ctx, AVPacket* pkt)
+@@ -1290,2 +1296,3 @@
+         if (parser_ctx && parser_ctx->parser) {
++#if LIBAVCODEC_VERSION_MAJOR < 63
+             if (parser_ctx->parser->split) {
+@@ -1307,3 +1314,5 @@
+                     return list->current_index;
+-            } else if (helper->bsf && ctx->codec_id == AV_CODEC_ID_AAC) {
++            } else
++#endif
++            if (helper->bsf && ctx->codec_id == AV_CODEC_ID_AAC) {
+                 /* Try to generate AudioSpecificConfig for each ADTS AAC frame by reopening the bitstream filter.
+diff --git a/common/lwlibav_video.c b/common/lwlibav_video.c
+--- a/common/lwlibav_video.c
++++ b/common/lwlibav_video.c
+@@ -1149,4 +1149,11 @@
+     assert(codecpar && codec);
+-    if (codec->pix_fmts)
+-        codecpar->format = (int)avcodec_find_best_pix_fmt_of_list(codec->pix_fmts, pix_fmt, 1, NULL);
++    const void* pix_fmts = NULL;
++#if LIBAVCODEC_VERSION_MAJOR >= 63
++    if (avcodec_get_supported_config(NULL, codec, AV_CODEC_CONFIG_PIX_FORMAT, 0, &pix_fmts, NULL) < 0)
++        pix_fmts = NULL;
++#else
++    pix_fmts = codec->pix_fmts;
++#endif
++    if (pix_fmts)
++        codecpar->format = (int)avcodec_find_best_pix_fmt_of_list(pix_fmts, pix_fmt, 1, NULL);
+     else
+LSMASH_FFMPEG_PATCH
       fi
       rm -rf build
       tmux_run "L-SMASH-Works meson setup" meson setup build || exit 1
@@ -3117,37 +3212,57 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# Shaderc (Ubuntu 22.04 fix)
+# Shaderc
 # ---------------------------------------------------------------------------
 
-install_shaderc_fix() {
-  # Only applies to Ubuntu 22.04
-  if [[ -f /etc/os-release ]]; then
-    . /etc/os-release
-    if [[ "$ID" == "ubuntu" && "$VERSION_ID" == "22.04" ]]; then
-      if sudo ldconfig -p 2>/dev/null | grep -qE '\blibshaderc(_shared)?\.so\b'; then
-        log "$(msg 'Shaderc already installed (libshaderc found in ldconfig), skipping source build' '检测到 Shaderc 已安装（ldconfig 已包含 libshaderc），跳过源码编译')"
-        return 0
-      fi
-      if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists shaderc; then
-        log "$(msg 'Shaderc already installed (pkg-config found shaderc), skipping source build' '检测到 Shaderc 已安装（pkg-config 可找到 shaderc），跳过源码编译')"
-        return 0
-      fi
+shaderc_is_usable() (
+  local shaderc_flags probe_dir
+  shaderc_flags="$(pkg-config --cflags --libs 'shaderc >= 2019.1' 2>/dev/null)" || return 1
+  probe_dir="$(bluray_mktemp_dir)" || return 1
+  trap 'rm -rf -- "$probe_dir"' EXIT
 
-      log "$(msg 'Official package version conflict detected, building Shaderc from source (this may take a few minutes)...' '检测到官方包版本冲突，正在从源码编译 Shaderc (这可能需要几分钟)...')"
+  local flags=()
+  # pkg-config escapes whitespace in paths with backslashes.
+  read -a flags <<< "$shaderc_flags" || return 1
+  cc -x c - -x none -o "$probe_dir/probe" "${flags[@]}" >/dev/null 2>&1 <<'C' || return 1
+#include <shaderc/shaderc.h>
 
-      local build_dir shaderc_tag
-      shaderc_tag="$(latest_stable_tag https://github.com/google/shaderc.git '^v[0-9]+([.][0-9]+)+$' 'v*')"
-      build_dir="$(mktemp -d)"
-      (
-          cd "$build_dir" || exit 1
+int main(void) {
+    shaderc_compiler_t compiler = shaderc_compiler_initialize();
+    if (!compiler)
+        return 1;
+    shaderc_compiler_release(compiler);
+    return 0;
+}
+C
+  "$probe_dir/probe" >/dev/null 2>&1
+)
 
-          download_source_archive "Shaderc ${shaderc_tag}" \
-              "https://codeload.github.com/google/shaderc/tar.gz/refs/tags/${shaderc_tag}" . || exit 1
+install_shaderc() {
+  if shaderc_is_usable; then
+    log "$(msg 'Existing Shaderc passed the link and initialization check, skipping source build' '现有 Shaderc 通过链接和初始化检查，跳过源码编译')"
+    return 0
+  fi
 
-          # Use Shaderc's DEPS parser and fetch only the dependencies needed with tests disabled.
-          local dependencies path url
-          dependencies="$(python3 - <<'PY'
+  if apt-get -s install --no-remove libshaderc-dev >/dev/null 2>&1; then
+    apt_install --no-remove libshaderc-dev || die "$(msg 'Failed to install the Shaderc development package' '安装 Shaderc 开发包失败')"
+    if shaderc_is_usable; then return 0; fi
+  fi
+
+  log "$(msg 'Shaderc is unavailable or failed its link and initialization check, building from source' 'Shaderc 不可用或未通过链接和初始化检查，将从源码编译')"
+
+  local build_dir shaderc_tag
+  shaderc_tag="$(latest_stable_tag https://github.com/google/shaderc.git '^v[0-9]+([.][0-9]+)+$' 'v*')"
+  build_dir="$(mktemp -d)"
+  (
+      cd "$build_dir" || exit 1
+
+      download_source_archive "Shaderc ${shaderc_tag}" \
+          "https://codeload.github.com/google/shaderc/tar.gz/refs/tags/${shaderc_tag}" . || exit 1
+
+      # Use Shaderc's DEPS parser and fetch only the dependencies needed with tests disabled.
+      local dependencies path url
+      dependencies="$(python3 -c '
 from runpy import run_path
 
 dependencies = run_path("utils/git-sync-deps")["parse_file_to_dict"]("DEPS")["deps"]
@@ -3160,26 +3275,24 @@ for path in ("third_party/glslang", "third_party/spirv-tools", "third_party/spir
     else:
         url = f"{repository}/archive/{commit}.tar.gz"
     print(path, url)
-PY
-          )" || exit 1
-          while read -r path url; do
-              download_source_archive "${path##*/}" "$url" "$path" || exit 1
-          done <<< "$dependencies"
+')" || exit 1
+      while read -r path url; do
+          download_source_archive "${path##*/}" "$url" "$path" || exit 1
+      done <<< "$dependencies"
 
-          mkdir build && cd build || exit 1
-          tmux_run "shaderc cmake" cmake -GNinja \
-              -DCMAKE_BUILD_TYPE=Release \
-              -DSHADERC_SKIP_TESTS=ON \
-              -DCMAKE_INSTALL_PREFIX=/usr/local .. || exit 1
+      mkdir build && cd build || exit 1
+      tmux_run "shaderc cmake" cmake -GNinja \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DSHADERC_SKIP_TESTS=ON \
+          -DCMAKE_INSTALL_PREFIX=/usr/local .. || exit 1
 
-          tmux_run "shaderc ninja" ninja || exit 1
-          tmux_run "shaderc install" sudo ninja install || exit 1
-      )
-      rm -rf "$build_dir"
-      sudo ldconfig
-      log "$(msg 'Shaderc built and installed from source.' 'Shaderc 源码编译并安装完成。')"
-    fi
-  fi
+      tmux_run "shaderc ninja" ninja || exit 1
+      tmux_run "shaderc install" sudo ninja install || exit 1
+  ) || die "$(msg 'Shaderc build/install failed' 'Shaderc 编译/安装失败')"
+  rm -rf "$build_dir"
+  sudo ldconfig || die "$(msg 'Failed to refresh the Shaderc library cache' '刷新 Shaderc 动态库缓存失败')"
+  shaderc_is_usable || die "$(msg 'Installed Shaderc failed the link and initialization check' '安装后的 Shaderc 未通过链接和初始化检查')"
+  log "$(msg 'Shaderc built and installed from source.' 'Shaderc 源码编译并安装完成。')"
 }
 
 # ---------------------------------------------------------------------------
@@ -3281,7 +3394,6 @@ fi
 load_configured_tool_paths
 log "$(msg "Using tool paths from ${SETTINGS_FILE}" "使用 ${SETTINGS_FILE} 中配置的工具路径")"
 
-install_shaderc_fix
 install_mkvtoolnix
 sync_mkvtoolnix_paths
 install_vapoursynth

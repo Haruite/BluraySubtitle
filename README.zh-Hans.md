@@ -202,29 +202,47 @@ python src/main.py
 
 ---
 
-## setup_windows_environment.ps1（Windows 环境配置脚本）
+## 跨平台支持
 
-`setup_windows_environment.ps1` 用于为 **Windows 客户端和 Windows Server x64 系统**配置运行与编译环境。
+### setup_windows_environment.ps1（Windows 环境配置脚本）
 
-首次运行前，先设置当前用户的 PowerShell 执行策略，再从仓库根目录启动：
+脚本为 **x64 Windows 10 及以上版本**和**带桌面体验的 x64 Windows Server 2019 及以上版本**配置运行与编译环境。
+
+首次运行时，先设置当前用户的 PowerShell 执行策略，再从仓库根目录启动脚本。
 
 ```powershell
 Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
 .\setup_windows_environment.ps1
 ```
 
-脚本会申请管理员权限、询问显示语言，并支持中断后重新运行。下载时会自动使用已配置的 **Windows 系统代理**；如果无法直连下载源，请先配置系统代理再启动脚本。
+脚本会申请管理员权限、询问显示语言，并支持中断后重新运行。下载时会自动使用已配置的 **Windows 系统代理**。如果无法直连下载源，请先配置系统代理再启动脚本。
 
----
+环境配置完成后，打开新的 PowerShell 窗口，在仓库根目录执行以下命令即可打包 Windows x64 应用。
 
-## setup_linux_environment.sh（Linux 运行环境脚本）
+```powershell
+pyinstaller BluraySubtitle_windows_x64.spec
+```
 
-`setup_linux_environment.sh` 用于构建 Linux 程序运行环境，仅支持 **x64** 系统。当前支持的发行版：
+### setup_linux_environment.sh（Linux 运行环境脚本）
 
-- Ubuntu 22.04 或更高版本
-- Debian 12 或更高版本
+脚本为以下两类 **x64 Linux** 发行版构建运行环境。
 
-首次运行前先授予脚本执行权限，再从仓库根目录启动：
+- Ubuntu 22.04 及以上版本，包括基于这些 Ubuntu 版本的衍生发行版。
+- Debian 12 及以上版本，包括基于这些 Debian 版本的衍生发行版。
+
+脚本已在以下 15 个 x64 WSL 2 环境中运行通过。
+
+- Ubuntu 22.04、24.04、26.04、26.10
+- Debian 12、13
+- Kali Linux 2022.4、Kali Rolling
+- Linux Mint 22.3
+- LMDE 7
+- antiX 23.2、26.1
+- Devuan 6
+- KDE neon
+- Pop!_OS 24.04
+
+使用具备 `sudo` 权限的普通账户。直接以 `root` 用户运行脚本不保证成功。首次运行前先授予脚本执行权限，再从仓库根目录启动。
 
 ```bash
 chmod +x setup_linux_environment.sh
@@ -233,7 +251,7 @@ chmod +x setup_linux_environment.sh
 
 播放预设和字幕字体见 [Linux 桌面 mpv](docs/wiki/Media-Formats-and-Dolby-Vision.zh-Hans.md#linux-桌面-mpv-播放)。
 
-建议在远程终端中执行 `setup_linux_environment.sh`，因为远程终端会使用 tmux 输出，日志更简洁、更易读。
+通过 SSH 运行 `setup_linux_environment.sh` 时，脚本会使用 **tmux** 显示构建日志。
 
 ---
 
