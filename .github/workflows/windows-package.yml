@@ -21,23 +21,21 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Restore Dependency Downloads
+      - name: Restore Python Package Downloads
         id: downloads
         uses: actions/cache/restore@v6
         with:
-          path: |
-            ${{ runner.temp }}/bluraysubtitle-pip
-            C:/msys64/var/cache/pacman/pkg
-          key: windows-downloads-v1-${{ runner.arch }}-lookup
-          restore-keys: windows-downloads-v1-${{ runner.arch }}-
+          path: ${{ runner.temp }}/bluraysubtitle-pip
+          key: windows-pip-v1-${{ runner.arch }}-lookup
+          restore-keys: windows-pip-v1-${{ runner.arch }}-
 
-      - name: Restore Compiled Artifacts
+      - name: Restore Windows Tool Artifacts
         id: builds
         uses: actions/cache/restore@v6
         with:
           path: ${{ runner.temp }}/bluraysubtitle-builds/artifacts/*.zip
-          key: windows-builds-v2-${{ runner.arch }}-lookup
-          restore-keys: windows-builds-v2-${{ runner.arch }}-
+          key: windows-tools-v3-${{ runner.arch }}-lookup
+          restore-keys: windows-tools-v3-${{ runner.arch }}-
 
       - name: Prepare Windows Build Environment
         id: setup
@@ -55,23 +53,21 @@ jobs:
           $outputs = @(
             "python=$($system.python_executable)"
             "seven_zip=$($system.seven_zip_executable)"
-            "download_key=windows-downloads-v1-$env:RUNNER_ARCH-$($system.download_cache_key)"
+            "download_key=windows-pip-v1-$env:RUNNER_ARCH-$($system.download_cache_key)"
           )
           if ($system.build_cache_key) {
-            $outputs += "build_key=windows-builds-v2-$env:RUNNER_ARCH-$($system.build_cache_key)"
+            $outputs += "build_key=windows-tools-v3-$env:RUNNER_ARCH-$($system.build_cache_key)"
           }
           $outputs | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-      - name: Save Dependency Downloads
+      - name: Save Python Package Downloads
         if: steps.downloads.outputs.cache-matched-key != steps.setup.outputs.download_key
         uses: actions/cache/save@v6
         with:
-          path: |
-            ${{ runner.temp }}/bluraysubtitle-pip
-            C:/msys64/var/cache/pacman/pkg
+          path: ${{ runner.temp }}/bluraysubtitle-pip
           key: ${{ steps.setup.outputs.download_key }}
 
-      - name: Save Compiled Artifacts
+      - name: Save Windows Tool Artifacts
         if: steps.setup.outputs.build_key != '' && steps.builds.outputs.cache-matched-key != steps.setup.outputs.build_key
         uses: actions/cache/save@v6
         with:

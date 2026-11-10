@@ -139,13 +139,13 @@ class Installer:
         self.http = urllib.request.build_opener()
         self.http.addheaders = [("User-Agent", "BluraySubtitle-Windows-Setup")]
         self.json_cache = {}
+        self.cache_archive = args.build_cache / "vapoursynth-components.zip" if args.build_cache else None
+        self.cache_key = self.component_cache_key() if self.cache_archive else None
 
     def component_cache_key(self):
         import numpy as np
 
-        targets = [(component.key, component.ref or self.release(component.repository)["tag_name"])
-                   for component in (*COMPONENTS, EDITOR)]
-        inputs = [self.args.build_fingerprint, targets, str(self.runtime), str(self.plugins), str(self.editor),
+        inputs = [self.args.build_fingerprint, str(self.runtime), str(self.plugins), str(self.editor),
                   bool(np._core._multiarray_umath.__cpu_features__.get("AVX2"))]
         return hashlib.sha256(json.dumps(inputs).encode("utf-8")).hexdigest()
 
@@ -181,33 +181,39 @@ class Installer:
                 files[name] = (target, digest)
         return {"files/" + hashlib.sha256(name.encode("utf-8")).hexdigest(): value for name, value in files.items()}
 
-    def restore_components(self, archive, key):
+    def restore_components(self):
         payload = self.work / "cached-components"
-        if not restore_build_cache(archive, key, payload):
-            return None
+        if not self.cache_archive or not restore_build_cache(self.cache_archive, self.cache_key, payload):
+            return False
         try:
             state = json.loads((payload / "components.json").read_text(encoding="utf-8"))
-            if state["schema"] != 1 or state.get("cache_fingerprint") != key:
-                return None
+            if state["schema"] != 1 or state.get("cache_fingerprint") != self.cache_key:
+                return False
             files = self.component_cache_files(state)
             if any(not (payload / name).is_file() or sha256(payload / name) != digest
                    for name, (_, digest) in files.items()):
-                return None
+                return False
         except (KeyError, OSError, TypeError, ValueError):
-            return None
-        # Let the normal installer handle any files already present outside the built-in runtime.
+            return False
+        # Let normal installation handle existing plugins or editors that differ from the cache.
         for component in (*COMPONENTS, EDITOR):
             field = "entrypoint" if component == EDITOR else "plugin"
-            target = self.runtime / state["components"][component.key][field]
-            if component.key != "removegrain" and target.exists():
-                return None
+            record = state["components"][component.key]
+            target = self.runtime / record[field]
+            if component.key != "removegrain" and target.exists() and sha256(target) != record["files"][record[field]]:
+                return False
         for name, (target, _) in files.items():
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(payload / name, target)
         self.state = state
+        self.verify_plugins(restore_versions=True)
+        self.configure_editor()
+        version = subprocess.run([str(self.editor), "--version"], capture_output=True, text=True,
+                                 encoding="utf-8", errors="replace", timeout=30, check=True)
+        if state["components"]["vsedit"]["ref"] not in version.stdout + version.stderr:
+            return False
         self.save()
-        self.log("Restored VapourSynth components from the build cache.")
-        return {name: digest for name, (_, digest) in files.items()}
+        return True
 
     def record_path(self, path):
         if path.is_relative_to(self.runtime):
@@ -385,7 +391,7 @@ class Installer:
         if (prefix / "bin/libfftw3f-3.dll").is_file():
             return prefix
         cache = self.args.build_cache / "fftw.zip" if self.args.build_cache else None
-        key = hashlib.sha256((self.args.msys_fingerprint + sha256(Path(__file__))).encode("utf-8")).hexdigest()
+        key = sha256(Path(__file__))
         if cache:
             restored = self.work / "fftw/restored"
             if restore_build_cache(cache, key, restored) and all((restored / name).is_file() for name in (
@@ -935,31 +941,37 @@ class Installer:
         series = ".".join(version.split(".")[:2])
         record["qt_source_url"] = f"https://download.qt.io/official_releases/qt/{series}/{version}/single/qt-everywhere-src-{version}.tar.xz"
 
+    def verify_plugins(self, *, restore_versions=False):
+        for component in COMPONENTS:
+            record = self.state["components"][component.key]
+            target = self.runtime / record["plugin"]
+            ref = ("commit:" + record["ref"] if component.fallback_ref and record["method"] == "source"
+                   else record.get("target_ref", record["ref"]))
+            probe = self.probe(target, component, ref)
+            if restore_versions:
+                record_version(target, record.get("installed_version", ref), probe["native_version"])
+
     def install(self):
-        archive = self.args.build_cache / "vapoursynth-components.zip" if self.args.build_cache else None
-        key = self.component_cache_key() if archive else None
-        cacheable = archive and (not self.state_path.is_file() or self.state.get("cache_fingerprint") == key)
-        if self.state.get("cache_fingerprint") != key:
+        cacheable = self.cache_archive and (
+            not self.state_path.is_file() or self.state.get("cache_fingerprint") == self.cache_key
+        )
+        if self.state.get("cache_fingerprint") != self.cache_key:
             self.state.pop("cache_fingerprint", None)
-        restored = self.restore_components(archive, key) if archive and not self.state_path.is_file() else None
         for component in COMPONENTS:
             self.install_plugin(component)
         self.install_editor()
         required = {name for record in self.state["components"].values() for name in record.get("dependencies", ())}
         self.state["dependencies"] = {name: digest for name, digest in self.state["dependencies"].items() if name in required}
         self.save()
-        for component in COMPONENTS:
-            record = self.state["components"][component.key]
-            self.probe(self.runtime / record["plugin"], component, record.get("target_ref", record["ref"]))
+        self.verify_plugins()
         self.log("Independent VapourSynth components verified: {count}", count=len(self.state["components"]))
         if cacheable:
             files = self.component_cache_files(self.state)
-            if restored != {name: digest for name, (_, digest) in files.items()}:
-                self.state["cache_fingerprint"] = key
-                self.save()
-                payload = {name: path for name, (path, _) in files.items()}
-                payload["components.json"] = self.state_path
-                publish_build_cache(archive, key, payload)
+            self.state["cache_fingerprint"] = self.cache_key
+            self.save()
+            payload = {name: path for name, (path, _) in files.items()}
+            payload["components.json"] = self.state_path
+            publish_build_cache(self.cache_archive, self.cache_key, payload)
 
 
 def main():
@@ -976,11 +988,13 @@ def main():
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
     parser.add_argument("--language", choices=("en", "zh"), default="en")
     parser.add_argument("--build-cache", type=Path)
-    parser.add_argument("--msys-fingerprint", default="")
     parser.add_argument("--build-fingerprint", default="")
+    parser.add_argument("--restore-only", action="store_true")
     args = parser.parse_args()
-    if args.build_cache and not (args.build_fingerprint and args.msys_fingerprint):
-        parser.error("--build-cache requires --build-fingerprint and --msys-fingerprint")
+    if args.build_cache and not args.build_fingerprint:
+        parser.error("--build-cache requires --build-fingerprint")
+    if args.restore_only and not args.build_cache:
+        parser.error("--restore-only requires --build-cache")
     args.runtime_root.mkdir(parents=True, exist_ok=True)
     with (args.runtime_root / ".components.lock").open("a+b") as lock:
         if lock.tell() == 0:
@@ -1001,7 +1015,11 @@ def main():
                     waiting = True
                 time.sleep(1)
         try:
-            Installer(args).install()
+            installer = Installer(args)
+            if args.restore_only:
+                print("hit" if installer.restore_components() else "miss")
+            else:
+                installer.install()
         finally:
             lock.seek(0)
             msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
