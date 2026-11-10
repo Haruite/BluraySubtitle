@@ -28,6 +28,13 @@ from tools.windows_build_cache import files_under, publish as publish_build_cach
 from tools.windows_tool_paths import normalize_vsedit_path
 
 BUILD_PROFILE = "static-runtime-shared-fftw-1"
+# Retain the v3 FFTW recipe ID while its source revision and build flags are unchanged.
+FFTW_CACHE_RECIPE = "8e3206eeecb37b7fe3ef3fc7d5723d0f937a6f8d8f51a04e94e87b79d9c192bd"
+MSYS2_REQUIRED_EXIT_CODE = 75
+
+
+class Msys2Required(Exception):
+    """Resume component installation after MSYS2 preparation."""
 
 
 @dataclass(frozen=True)
@@ -181,7 +188,7 @@ class Installer:
                 files[name] = (target, digest)
         return {"files/" + hashlib.sha256(name.encode("utf-8")).hexdigest(): value for name, value in files.items()}
 
-    def restore_components(self):
+    def restore_components(self, editor_ref=None):
         payload = self.work / "cached-components"
         if not self.cache_archive or not restore_build_cache(self.cache_archive, self.cache_key, payload):
             return False
@@ -195,10 +202,19 @@ class Installer:
                 return False
         except (KeyError, OSError, TypeError, ValueError):
             return False
+        if editor_ref is not None and state["components"][EDITOR.key]["ref"] != editor_ref:
+            editor_licenses = (self.runtime / "licenses/components" / EDITOR.key).resolve()
+            files = {
+                name: (target, digest) for name, (target, digest) in files.items()
+                if not target.is_relative_to(self.editor.parent) and not target.is_relative_to(editor_licenses)
+            }
+            del state["components"][EDITOR.key]
         # Let normal installation handle existing plugins or editors that differ from the cache.
         for component in (*COMPONENTS, EDITOR):
             field = "entrypoint" if component == EDITOR else "plugin"
-            record = state["components"][component.key]
+            record = state["components"].get(component.key)
+            if record is None:
+                continue
             target = self.runtime / record[field]
             if component.key != "removegrain" and target.exists() and sha256(target) != record["files"][record[field]]:
                 return False
@@ -207,11 +223,12 @@ class Installer:
             shutil.copyfile(payload / name, target)
         self.state = state
         self.verify_plugins(restore_versions=True)
-        self.configure_editor()
-        version = subprocess.run([str(self.editor), "--version"], capture_output=True, text=True,
-                                 encoding="utf-8", errors="replace", timeout=30, check=True)
-        if state["components"]["vsedit"]["ref"] not in version.stdout + version.stderr:
-            return False
+        if EDITOR.key in state["components"]:
+            self.configure_editor()
+            version = subprocess.run([str(self.editor), "--version"], capture_output=True, text=True,
+                                     encoding="utf-8", errors="replace", timeout=30, check=True)
+            if state["components"][EDITOR.key]["ref"] not in version.stdout + version.stderr:
+                return False
         self.save()
         return True
 
@@ -353,6 +370,7 @@ class Installer:
         return "/" + value[0].lower() + value[2:]
 
     def run_msys(self, commands, directory):
+        self.require_msys2()
         script = "\n".join([
             "set -euo pipefail", "export PATH=/ucrt64/bin:/usr/bin:$PATH",
             "export PKG_CONFIG_PATH=" + shlex.quote(self.posix(self.sdk / "lib/pkgconfig")),
@@ -362,6 +380,10 @@ class Installer:
         path = self.work / "run-build.sh"
         path.write_text(script, encoding="utf-8", newline="\n")
         subprocess.run([str(self.args.msys2_root / "usr/bin/bash.exe"), "--noprofile", "--norc", self.posix(path)], check=True)
+
+    def require_msys2(self):
+        if self.args.defer_msys2:
+            raise Msys2Required
 
     def ensure_packages(self, *names):
         self.used_packages.update(names)
@@ -391,7 +413,7 @@ class Installer:
         if (prefix / "bin/libfftw3f-3.dll").is_file():
             return prefix
         cache = self.args.build_cache / "fftw.zip" if self.args.build_cache else None
-        key = sha256(Path(__file__))
+        key = FFTW_CACHE_RECIPE
         if cache:
             restored = self.work / "fftw/restored"
             if restore_build_cache(cache, key, restored) and all((restored / name).is_file() for name in (
@@ -400,6 +422,7 @@ class Installer:
                 restored.rename(prefix)
                 self.log("Restored FFTW from the build cache.")
                 return prefix
+        self.require_msys2()
         archive = self.download("https://fftw.org/fftw-3.3.11.tar.gz", self.work / "fftw/fftw.tar.gz")
         source = self.unpack(archive, self.work / "fftw/source") / "fftw-3.3.11"
         config = source / "cmake.config.h.in"
@@ -584,6 +607,7 @@ class Installer:
         return directory
 
     def build(self, component, source):
+        self.require_msys2()
         self.prepare_sdk()
         include = self.sdk / "include/vapoursynth"
         build_directory = "build-" + BUILD_PROFILE
@@ -761,7 +785,7 @@ class Installer:
                     "files": files, "dependencies": dependency_names, "source_dependencies": self.source_dependencies,
                 }
                 self.state["components"][component.key] = previous
-            previous.update(installed_version=installed, registered_version=probe["version"])
+            previous.update(target_ref=target_ref, installed_version=installed, registered_version=probe["version"])
             self.save()
             self.log("VapourSynth plugin meets the required version: {name} {installed} >= {target}",
                      name=component.key, installed=installed, target=expected)
@@ -951,24 +975,48 @@ class Installer:
             if restore_versions:
                 record_version(target, record.get("installed_version", ref), probe["native_version"])
 
+    def cached_release_is_current(self, component):
+        record = self.state["components"].get(component.key)
+        if record is None:
+            return False
+        target = component.ref or self.release(component.repository)["tag_name"]
+        return record.get("target_ref", record["ref"]) == target
+
     def install(self):
         cacheable = self.cache_archive and (
             not self.state_path.is_file() or self.state.get("cache_fingerprint") == self.cache_key
         )
-        if self.state.get("cache_fingerprint") != self.cache_key:
+        restored = False
+        if self.cache_archive and self.cache_archive.is_file() and not self.state_path.is_file():
+            editor_ref = self.release(EDITOR.repository, EDITOR.ref)["tag_name"]
+            try:
+                restored = self.restore_components(editor_ref)
+            except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+                pass
+        components = COMPONENTS
+        update_editor = True
+        if restored:
+            self.log("Restored VapourSynth components from the build cache.")
+            components = tuple(component for component in COMPONENTS if not self.cached_release_is_current(component))
+            update_editor = not self.cached_release_is_current(EDITOR)
+            if not components and not update_editor:
+                return
+        if cacheable:
+            self.state["cache_fingerprint"] = self.cache_key
+        elif self.state.get("cache_fingerprint") != self.cache_key:
             self.state.pop("cache_fingerprint", None)
-        for component in COMPONENTS:
+        for component in components:
             self.install_plugin(component)
-        self.install_editor()
+        if update_editor:
+            self.install_editor()
         required = {name for record in self.state["components"].values() for name in record.get("dependencies", ())}
         self.state["dependencies"] = {name: digest for name, digest in self.state["dependencies"].items() if name in required}
         self.save()
-        self.verify_plugins()
+        if not restored or components:
+            self.verify_plugins()
         self.log("Independent VapourSynth components verified: {count}", count=len(self.state["components"]))
         if cacheable:
             files = self.component_cache_files(self.state)
-            self.state["cache_fingerprint"] = self.cache_key
-            self.save()
             payload = {name: path for name, (path, _) in files.items()}
             payload["components.json"] = self.state_path
             publish_build_cache(self.cache_archive, self.cache_key, payload)
@@ -989,12 +1037,10 @@ def main():
     parser.add_argument("--language", choices=("en", "zh"), default="en")
     parser.add_argument("--build-cache", type=Path)
     parser.add_argument("--build-fingerprint", default="")
-    parser.add_argument("--restore-only", action="store_true")
+    parser.add_argument("--defer-msys2", action="store_true")
     args = parser.parse_args()
     if args.build_cache and not args.build_fingerprint:
         parser.error("--build-cache requires --build-fingerprint")
-    if args.restore_only and not args.build_cache:
-        parser.error("--restore-only requires --build-cache")
     args.runtime_root.mkdir(parents=True, exist_ok=True)
     with (args.runtime_root / ".components.lock").open("a+b") as lock:
         if lock.tell() == 0:
@@ -1015,11 +1061,9 @@ def main():
                     waiting = True
                 time.sleep(1)
         try:
-            installer = Installer(args)
-            if args.restore_only:
-                print("hit" if installer.restore_components() else "miss")
-            else:
-                installer.install()
+            Installer(args).install()
+        except Msys2Required:
+            return MSYS2_REQUIRED_EXIT_CODE
         finally:
             lock.seek(0)
             msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
