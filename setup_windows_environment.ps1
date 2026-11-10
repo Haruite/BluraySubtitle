@@ -206,6 +206,32 @@ $script:Msys2Packages = @(
     "mingw-w64-ucrt-x86_64-zlib"
 )
 
+$script:FfmpegConfigureOptions = @(
+    "--target-os=mingw32",
+    "--arch=x86_64",
+    "--enable-gpl",
+    "--enable-version3",
+    "--disable-debug",
+    "--disable-doc",
+    "--disable-ffplay",
+    "--enable-static",
+    "--disable-shared",
+    "--enable-pic",
+    "--disable-autodetect",
+    "--enable-schannel",
+    "--enable-bzlib",
+    "--enable-iconv",
+    "--enable-lzma",
+    "--enable-zlib",
+    "--enable-libdav1d",
+    "--enable-libopus",
+    "--optflags=-O2",
+    "--pkg-config-flags=--static",
+    "--extra-ldflags=-static",
+    # With autodetection disabled, FFmpeg only probes for iconv in libc.
+    "--extra-libs=-liconv"
+)
+
 function Get-SetupText {
     param(
         [Parameter(Mandatory = $true)][string]$English,
@@ -1358,7 +1384,10 @@ function Get-ComponentBuildCache {
             $directory = Split-Path -Parent $script:ToolPaths.SevenZip
             $files = @($script:ToolPaths.SevenZip, (Join-Path $directory "7z.dll"), (Join-Path $directory "License.txt"))
         }
-        "ffmpeg" { $files = @($script:ToolPaths.Ffmpeg, $script:ToolPaths.Ffprobe) }
+        "ffmpeg" {
+            $files = @($script:ToolPaths.Ffmpeg, $script:ToolPaths.Ffprobe, $script:ToolPaths.FfmpegNotices)
+            $inputs += $script:FfmpegConfigureOptions
+        }
         "flac" { $files = @($script:ToolPaths.Flac, $script:ToolPaths.FlacLibrary) }
         "mkvtoolnix" {
             $files = @($script:ToolPaths.MkvInfo, $script:ToolPaths.MkvMerge,
@@ -1631,6 +1660,7 @@ function Initialize-ConfiguredToolPaths {
     foreach ($name in $pathSettings.Keys) {
         $script:ToolPaths[$name] = [string]$configured.PSObject.Properties[$pathSettings[$name]].Value
     }
+    $script:ToolPaths["FfmpegNotices"] = Join-Path (Split-Path -Parent $script:ToolPaths.Ffmpeg) "ffmpeg-licenses.txt"
     $script:ToolPaths["FlacLibrary"] = Join-Path (Split-Path -Parent $script:ToolPaths.Flac) "libFLAC.dll"
     $script:ToolPaths["MkvToolNixRoot"] = Split-Path -Parent $script:ToolPaths.MkvMerge
     $script:ToolPaths["X264Version"] = Join-Path (Split-Path -Parent $script:ToolPaths.X264) "x264-version.txt"
@@ -2767,78 +2797,145 @@ function Test-Msys2Packages {
 }
 
 function Get-FfmpegRelease {
-    $cacheKey = "ffmpeg-gyan-release-essentials"
-    if ($script:ReleaseCache.Contains($cacheKey)) {
-        return $script:ReleaseCache[$cacheKey]
-    }
+    return Get-GitHubLatestTaggedSource `
+        -Repository "FFmpeg/FFmpeg" `
+        -TagPattern '^n(?<version>[0-9]+(?:\.[0-9]+){1,3})$' `
+        -ArchiveBaseName "ffmpeg"
+}
 
-    $version = (Get-SetupTextFromUri `
-        -Uri ([Uri]"https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.7z.ver") `
-        -CacheName "ffmpeg-release-essentials.7z.ver").Trim()
-    if ($version -notmatch '^[0-9]+(?:\.[0-9]+){1,3}$') {
-        throw (Get-SetupText "Unable to parse the latest FFmpeg release version." "无法解析 FFmpeg 最新发布版本。")
+function Get-FfmpegExecutableInfo {
+    param([string]$Path, [string]$Program)
+
+    try {
+        $output = Invoke-SetupCommand -FilePath $Path -Arguments @("-version")
     }
-    $checksumText = Get-SetupTextFromUri `
-        -Uri ([Uri]"https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.7z.sha256") `
-        -CacheName "ffmpeg-release-essentials.7z.sha256"
-    $checksumMatch = [regex]::Match($checksumText, '\b([0-9a-fA-F]{64})\b')
-    if (-not $checksumMatch.Success) {
-        throw (Get-SetupText "Unable to parse the official FFmpeg SHA-256 checksum." "无法解析 FFmpeg 官方 SHA-256。")
+    catch {
+        return $null
     }
-    $result = [pscustomobject]@{
-        Version = $version
-        Name = "ffmpeg-release-essentials.7z"
-        Uri = [Uri]"https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.7z"
-        Sha256 = $checksumMatch.Groups[1].Value
+    $match = [regex]::Match($output, "^$Program version\s+([0-9]+(?:\.[0-9]+){1,3})", "IgnoreCase")
+    if ($match.Success) {
+        return [pscustomobject]@{ Version = $match.Groups[1].Value; Output = $output }
     }
-    $script:ReleaseCache[$cacheKey] = $result
-    return $result
+    return $null
 }
 
 function Get-InstalledFfmpegVersion {
-    if (-not (Test-Path -LiteralPath $script:ToolPaths.Ffmpeg -PathType Leaf) -or
-        -not (Test-Path -LiteralPath $script:ToolPaths.Ffprobe -PathType Leaf)) {
-        return ""
+    if (Test-Path -LiteralPath $script:ToolPaths.Ffprobe -PathType Leaf) {
+        $info = Get-FfmpegExecutableInfo $script:ToolPaths.Ffmpeg "ffmpeg"
+        if ($null -ne $info) {
+            return $info.Version
+        }
     }
-    $output = Invoke-SetupCommand -FilePath $script:ToolPaths.Ffmpeg -Arguments @("-version")
-    $match = [regex]::Match($output, 'ffmpeg version\s+([0-9]+(?:\.[0-9]+){1,3})', 'IgnoreCase')
-    return $(if ($match.Success) { $match.Groups[1].Value } else { "" })
+    return ""
+}
+
+function Test-Ffmpeg {
+    param(
+        [string]$Ffmpeg = $script:ToolPaths.Ffmpeg,
+        [string]$Ffprobe = $script:ToolPaths.Ffprobe,
+        [string]$ExpectedVersion
+    )
+
+    $encoder = Get-FfmpegExecutableInfo $Ffmpeg "ffmpeg"
+    $probe = Get-FfmpegExecutableInfo $Ffprobe "ffprobe"
+    if ($null -eq $encoder -or $null -eq $probe -or
+        (Compare-SetupVersion $encoder.Version $probe.Version) -ne 0 -or
+        ($ExpectedVersion -and (Compare-SetupVersion $encoder.Version $ExpectedVersion) -ne 0)) {
+        return $false
+    }
+    if ($Mode -ne "Build") {
+        return $true
+    }
+
+    # A fixed profile with autodetection disabled rejects both extra and missing features.
+    $configuration = "configuration: $($script:FfmpegConfigureOptions -join ' ')"
+    foreach ($info in @($encoder, $probe)) {
+        if (($info.Output -split '\r?\n').Trim() -cnotcontains $configuration) {
+            Write-SetupInfo "FFmpeg or FFprobe differs from the package build profile." "FFmpeg 或 FFprobe 的构建参数与打包配置不符。"
+            return $false
+        }
+    }
+    $notices = Join-Path (Split-Path -Parent $Ffmpeg) "ffmpeg-licenses.txt"
+    return (Test-Path -LiteralPath $notices -PathType Leaf) -and
+        (Get-Content -LiteralPath $notices -Encoding UTF8 -TotalCount 1) -ceq "FFmpeg $($encoder.Version)"
 }
 
 function Install-Ffmpeg {
     param([string]$Version)
 
+    $packagePrefix = "mingw-w64-ucrt-x86_64-"
+    $packages = @("dav1d", "opus", "bzip2", "libiconv", "xz", "zlib" | ForEach-Object { "$packagePrefix$_" })
+    Invoke-Msys2Pacman -Arguments (@("--noconfirm", "--needed", "-S") + $packages) | Out-Null
+
     $release = Get-FfmpegRelease
     $archive = Join-Path $script:TempRoot $release.Name
-    $extracted = Join-Path $script:TempRoot "ffmpeg-extracted"
-    Invoke-SetupDownload -Uri $release.Uri -Destination $archive -Sha256 $release.Sha256 | Out-Null
-    Expand-SetupArchiveWithSevenZip -Archive $archive -Destination $extracted
-    $ffmpegExecutable = Get-ChildItem -LiteralPath $extracted -Filter "ffmpeg.exe" -File -Recurse |
-        Select-Object -First 1
-    if ($null -eq $ffmpegExecutable) {
-        throw (Get-SetupText "ffmpeg.exe is missing from the release archive." "发布压缩包中缺少 ffmpeg.exe。")
-    }
-    $ffprobeExecutable = Join-Path $ffmpegExecutable.DirectoryName "ffprobe.exe"
-    if (-not (Test-Path -LiteralPath $ffprobeExecutable -PathType Leaf)) {
-        throw (Get-SetupText "ffprobe.exe is missing from the release archive." "发布压缩包中缺少 ffprobe.exe。")
-    }
-    Install-ConfiguredFile -Source $ffmpegExecutable.FullName -Destination $script:ToolPaths.Ffmpeg
-    Install-ConfiguredFile -Source $ffprobeExecutable -Destination $script:ToolPaths.Ffprobe
-}
+    $buildRoot = Join-Path $script:TempRoot "ff"
+    $sourceRoot = Join-Path $buildRoot "src"
+    Invoke-SetupDownload -Uri $release.Uri -Destination $archive | Out-Null
+    Expand-SetupZip -Archive $archive -Destination $buildRoot
+    Rename-Item -LiteralPath (Join-Path $buildRoot "FFmpeg-$($release.Tag)") -NewName "src"
+    # Source tag archives do not carry the release tarball's VERSION file.
+    [IO.File]::WriteAllText((Join-Path $sourceRoot "VERSION"), "$Version`n", $script:Utf8Encoding)
 
-function Test-Ffmpeg {
-    $version = Get-InstalledFfmpegVersion
-    if (-not $version) {
-        return $false
+    $buildScriptContent = @'
+set -eu
+export PATH=/ucrt64/bin:/usr/bin
+unset PKG_CONFIG_PATH
+export PKG_CONFIG_LIBDIR=/ucrt64/lib/pkgconfig
+cd "$1"
+jobs=$2
+shift 2
+export TMPDIR=.
+/usr/bin/dash.exe src/configure "$@" || {
+    if [ -f ffbuild/config.log ]; then tail -n 80 ffbuild/config.log; fi
+    exit 1
+}
+make -j"$jobs" SHELL=/usr/bin/dash.exe ffmpeg.exe ffprobe.exe
+'@
+    $buildScript = Write-SetupTempScript -Name "build-ffmpeg.sh" -Content $buildScriptContent
+    Invoke-SetupBuildCommand `
+        -DisplayName "official FFmpeg and FFprobe source build" `
+        -FilePath (Join-Path $script:ToolPaths.Msys2Root "usr\bin\dash.exe") `
+        -Arguments (@(
+            (ConvertTo-Msys2Path $buildScript),
+            (ConvertTo-Msys2Path $buildRoot),
+            [string]$script:BuildJobs
+        ) + $script:FfmpegConfigureOptions)
+
+    $installedPackages = Invoke-Msys2Pacman -Arguments (@("-Q") + $packages)
+    $notices = @(
+        "FFmpeg $Version"
+        "Source: $($release.Uri.AbsoluteUri)"
+        "Configuration: $($script:FfmpegConfigureOptions -join ' ')"
+        foreach ($file in @("LICENSE.md", "COPYING.GPLv3", "COPYING.LGPLv3")) {
+            ""
+            "FFmpeg $file"
+            [IO.File]::ReadAllText((Join-Path $sourceRoot $file))
+        }
+        foreach ($line in $installedPackages -split '\r?\n') {
+            $package, $packageVersion = $line -split ' ', 2
+            $library = $package.Substring($packagePrefix.Length)
+            ""
+            "$package $packageVersion"
+            "Source: https://mirror.msys2.org/mingw/sources/mingw-w64-$library-$packageVersion.src.tar.zst"
+            $licenseRoot = Join-Path $script:ToolPaths.Msys2Root "ucrt64\share\licenses\$library"
+            foreach ($file in Get-ChildItem -LiteralPath $licenseRoot -File -Recurse | Sort-Object FullName) {
+                $file.Name
+                [IO.File]::ReadAllText($file.FullName)
+            }
+        }
+    )
+    $noticesPath = Join-Path $buildRoot "ffmpeg-licenses.txt"
+    [IO.File]::WriteAllLines($noticesPath, [string[]]$notices, $script:Utf8Encoding)
+
+    $ffmpegExecutable = Join-Path $buildRoot "ffmpeg.exe"
+    $ffprobeExecutable = Join-Path $buildRoot "ffprobe.exe"
+    if (-not (Test-Ffmpeg -Ffmpeg $ffmpegExecutable -Ffprobe $ffprobeExecutable -ExpectedVersion $Version)) {
+        throw (Get-SetupText "The compiled FFmpeg and FFprobe failed verification." "编译生成的 FFmpeg 和 FFprobe 未通过验证。")
     }
-    try {
-        $output = Invoke-SetupCommand -FilePath $script:ToolPaths.Ffprobe -Arguments @("-version")
-        $match = [regex]::Match($output, 'ffprobe version\s+([0-9]+(?:\.[0-9]+){1,3})', 'IgnoreCase')
-        return $match.Success -and (Compare-SetupVersion $match.Groups[1].Value $version) -eq 0
-    }
-    catch {
-        return $false
-    }
+    Install-ConfiguredFile -Source $noticesPath -Destination $script:ToolPaths.FfmpegNotices
+    Install-ConfiguredFile -Source $ffmpegExecutable -Destination $script:ToolPaths.Ffmpeg
+    Install-ConfiguredFile -Source $ffprobeExecutable -Destination $script:ToolPaths.Ffprobe
 }
 
 function Get-FlacRelease {
@@ -4189,7 +4286,8 @@ function Register-StageThreeComponents {
         -GetInstalledVersion { Get-InstalledFfmpegVersion } `
         -GetAvailableVersion { (Get-FfmpegRelease).Version } `
         -Install { param($Version) Install-Ffmpeg $Version } `
-        -Verify { Test-Ffmpeg }
+        -Verify { Test-Ffmpeg } `
+        -BuildToolchain "msys2"
 
     Register-SetupComponent `
         -Name "flac" `

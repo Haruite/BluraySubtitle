@@ -199,6 +199,10 @@ datas = [
     (str(required_path(Path(sys.base_prefix) / "LICENSE.txt", "CPython license")), "DLLs"),
     (str(required_path(vapoursynth_dir / "licenses", "VapourSynth source dependency licenses")), "legal/vapoursynth"),
 ]
+ffmpeg_licenses = Path(SETTINGS["FFMPEG_PATH"]).with_name("ffmpeg-licenses.txt")
+if ffmpeg_licenses.is_file():
+    datas.append((str(ffmpeg_licenses), "legal/ffmpeg"))
+
 datas += copy_metadata("numpy")
 version_module = runpy.run_path(str(PROJECT_ROOT / "src" / "core" / "version.py"))
 commit_file = Path(workpath) / version_module["BUILD_COMMIT_FILENAME"]
