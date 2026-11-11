@@ -198,7 +198,7 @@ The application and VSScript share the CPython runtime and NumPy package in `_in
 
 The installation manifest `legal/vapoursynth-components.json` records source revisions, release download URLs, registered plugin versions, and installed file hashes. Dependencies and their available license texts are included with each component.
 
-Source-built Windows plugins statically link compiler runtimes where supported. The vs-placebo build also includes libplacebo, libdovi, Little CMS, shaderc/glslang, SPIRV-Tools, and SPIRV-Cross statically; the Vulkan loader remains a separate DLL. DFTTest and MVTools share one FFTW DLL. Corresponding dependency license texts accompany the component notices.
+Source-built Windows plugins statically link compiler runtimes where supported. The current vs-placebo build includes libplacebo, libdovi, Little CMS, and SPIRV-Cross statically. It shares `libshaderc_shared.dll` with L-SMASH Works. That plugin includes its FFmpeg libraries statically and provides both VapourSynth and AviSynth entry points. ASSRender uses the bundled libass DLL. The Vulkan loader remains a separate DLL. DFTTest and MVTools share one FFTW DLL. The component notices record the dependencies and license texts of the versions included in the package.
 
 ---
 
@@ -210,6 +210,15 @@ Source-built Windows plugins statically link compiler runtimes where supported. 
 - **Source:** https://github.com/YomikoR/VapourSynth-Editor/archive/refs/tags/{{VSEDIT_VERSION}}.zip
 - **Qt version:** {{VSEDIT_QT_VERSION}}; corresponding source: {{VSEDIT_QT_SOURCE}}
 - **Bundled license texts:** `legal/vsedit/`. The `Qt/` subdirectory includes the LGPL v3 and GPL v3 texts for the dynamically linked Qt libraries.
+
+---
+
+## libsndfile
+
+- **File** `_soundfile_data/libsndfile_x64.dll`, loaded by SoundFile for PCM bit-depth detection.
+- **Version** {{LIBSNDFILE_VERSION}}
+- **License** LGPL-2.1-or-later. The license text accompanies the DLL at `_soundfile_data/COPYING`. The size-optimized build produced by Windows setup includes the built-in audio formats.
+- **Source** [libsndfile release {{LIBSNDFILE_VERSION}}](https://github.com/libsndfile/libsndfile/tree/{{LIBSNDFILE_VERSION}})
 
 ---
 

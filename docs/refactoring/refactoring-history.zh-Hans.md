@@ -1305,3 +1305,12 @@ Windows setup 新增 `-Mode Build`，缓存编译产物，并用 Ninja 构建 x2
 - Windows 发布流程在上传前解压归档，检查运行库布局、工具入口，并测试 FLAC 音轨和 SRT 字幕封装。
 - 101 个单元测试、两套工具的源码构建和缓存恢复、归档解压检查均通过。VSEdit 使用包内 PyQt6 的 Qt 和 VSScript 启动并预览了视频帧。
 - 静态 QtCore 方案通过源码编译、缓存恢复和受管理安装升级验证。打包检查涵盖归档解压，以及 MPEG-2 传输流、Opus、FLAC 和 SRT 的封装与提取。
+
+## Windows 包体积精简
+
+日期为 2026-11-11。
+
+- Windows setup 编译包含 AviSynth、VapourSynth 入口和 FFmpeg 解码库的 L-SMASH Works。L-SMASH Works 与 vs-placebo 共用 Shaderc，ASSRender 与主程序共用 libass。Bilateral 由源码编译并静态链接编译器运行库。精简后的共享 FFTW DLL 保留 SSE2、AVX 和 AVX2。
+- setup 安装时剥离 tsMuxeR、fdkaac、x264 和 libass 的调试数据与符号。打包使用较小的 libsndfile 检测 Wave64 PCM 位深，压紧 pycountry 的 JSON 数据库，并提高 7-Zip 压缩级别。中英文第三方说明记录新的链接方式和 libsndfile 的源码与许可。
+- setup 根据原有版本和缓存规则决定安装与升级。要重新生成同版本的工具，先删除已安装产物和会恢复旧产物的缓存，再运行 setup。
+- 验证涵盖 101 个单元测试、解压和启动器检查、H.264／HEVC／VP9／AV1／MPEG-2 帧一致性、H.264 和 HEVC 的 Vulkan 解码、FFTW 滤镜、ASS 渲染，以及冻结工作进程的 Wave64 位深检测。测试包解压后为 283.15 MiB，归档为 68.45 MiB。VapourSynth 插件及其专用依赖为 53.82 MiB。

@@ -1308,3 +1308,12 @@ Date: 2026-11-11
 - The Windows publishing workflow extracts the archive and checks the runtime layout, tool entry points, and a FLAC and SRT mux before upload.
 - Verification passed for 101 unit tests, both source builds, both cache restorations, and a fresh archive extraction. VSEdit launched and previewed a frame using the bundled PyQt6 Qt and VSScript.
 - The static QtCore build passed source compilation, cache restoration, and upgrade of a managed installation. Package checks covered the extracted archive and MPEG-2 transport, Opus, FLAC, and SRT muxing and extraction.
+
+## Smaller Windows Packages
+
+Date: 2026-11-11
+
+- Windows setup builds L-SMASH Works with the AviSynth and VapourSynth entry points and the FFmpeg decoding libraries. L-SMASH Works shares Shaderc with vs-placebo, and ASSRender shares libass with the application. The source-built Bilateral links its compiler runtime statically. The smaller shared FFTW DLL retains SSE2, AVX, and AVX2.
+- Setup strips tsMuxeR, fdkaac, x264, and libass when installing them. Packaging uses a smaller libsndfile for Wave64 PCM analysis, compacts the pycountry JSON databases, and applies the stronger 7-Zip settings. The bilingual third-party notices record the new link layout and the libsndfile source and license.
+- Setup selects installation and upgrades through the existing version and cache rules. To regenerate a tool at the same version, remove its installed output and any cache that would restore it before running setup.
+- Verification covered 101 unit tests, extraction and launcher checks, matching H.264, HEVC, VP9, AV1, and MPEG-2 frames, H.264 and HEVC Vulkan decoding, FFTW filters, ASS rendering, and Wave64 bit-depth detection in the frozen worker. The test package measured 283.15 MiB extracted and 68.45 MiB archived. The VapourSynth plugins and their dedicated dependencies measured 53.82 MiB.

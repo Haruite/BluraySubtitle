@@ -198,7 +198,7 @@
 
 安装清单 `legal/vapoursynth-components.json` 记录源码修订、发布包下载地址、插件注册版本和已安装文件哈希。各组件同时附有依赖及其已取得的许可文本。
 
-源码构建的 Windows 插件在支持的情况下静态链接编译器运行库。vs-placebo 还静态包含 libplacebo、libdovi、Little CMS、shaderc/glslang、SPIRV-Tools 和 SPIRV-Cross；Vulkan 加载器保留为独立 DLL。DFTTest 和 MVTools 共用一份 FFTW DLL。相应依赖的许可文本随组件说明一并提供。
+源码构建的 Windows 插件在支持的情况下静态链接编译器运行库。当前配方将 libplacebo、libdovi、Little CMS 和 SPIRV-Cross 静态链接到 vs-placebo。vs-placebo 与 L-SMASH Works 共用 `libshaderc_shared.dll`。L-SMASH Works 静态链接所用的 FFmpeg 库，提供 VapourSynth 和 AviSynth 入口。ASSRender 使用包内的 libass DLL。Vulkan 加载器保留为独立 DLL。DFTTest 和 MVTools 共用一份 FFTW DLL。随附的组件说明记录本包实际使用的依赖及许可文本。
 
 ---
 
@@ -210,6 +210,15 @@
 - **源码：** https://github.com/YomikoR/VapourSynth-Editor/archive/refs/tags/{{VSEDIT_VERSION}}.zip
 - **Qt 版本：** {{VSEDIT_QT_VERSION}}；对应源码：{{VSEDIT_QT_SOURCE}}
 - **随附许可文本：** `legal/vsedit/`。其 `Qt/` 子目录收录动态链接的 Qt 库所用的 LGPL v3 和 GPL v3 文本。
+
+---
+
+## libsndfile
+
+- **文件** `_soundfile_data/libsndfile_x64.dll`，由 SoundFile 加载，用于检测 PCM 位深。
+- **版本** {{LIBSNDFILE_VERSION}}
+- **许可证** LGPL-2.1-or-later。随附许可文本位于 `_soundfile_data/COPYING`。Windows setup 编译的精简版保留内置音频格式。
+- **源码** [libsndfile {{LIBSNDFILE_VERSION}}](https://github.com/libsndfile/libsndfile/tree/{{LIBSNDFILE_VERSION}})
 
 ---
 

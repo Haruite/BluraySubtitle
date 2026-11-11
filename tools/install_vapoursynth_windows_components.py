@@ -35,7 +35,7 @@ from tools.windows_native_tools import (
 from tools.windows_tool_paths import normalize_vsedit_path
 
 BUILD_PROFILE = "static-runtime-shared-fftw-1"
-# Retain the v3 FFTW recipe ID while its source revision and build flags are unchanged.
+# The smaller library retains the ABI of the cached FFTW build.
 FFTW_CACHE_RECIPE = "8e3206eeecb37b7fe3ef3fc7d5723d0f937a6f8d8f51a04e94e87b79d9c192bd"
 MSYS2_REQUIRED_EXIT_CODE = 75
 
@@ -60,16 +60,17 @@ class Component:
 COMPONENTS = (
     Component("descale", "AmusementClub/descale", "", "descale.dll", "descale", asset=r"amd64[.]zip$"),
     Component("addgrain", "HomeOfVapourSynthEvolution/VapourSynth-AddGrain", "r10", "addgrain.dll", "grain", asset=r"win64[.]7z$"),
-    Component("assrender", "AmusementClub/assrender", "0.38.4", "assrender.dll", "assrender", "cmake", r"win-x64.*[.]zip$"),
-    Component("bilateral", "HomeOfVapourSynthEvolution/VapourSynth-Bilateral", "r3", "bilateral.dll", "bilateral", "configure", r"[.]7z$"),
+    Component("assrender", "AmusementClub/assrender", "0.38.4", "assrender.dll", "assrender", "assrender"),
+    Component("bilateral", "HomeOfVapourSynthEvolution/VapourSynth-Bilateral", "r3", "bilateral.dll", "bilateral", "configure"),
     Component("dfttest", "HomeOfVapourSynthEvolution/VapourSynth-DFTTest", "r7", "dfttest.dll", "dfttest", asset=r"[.]7z$"),
     Component("eedi2", "HomeOfVapourSynthEvolution/VapourSynth-EEDI2", "r7.1", "eedi2.dll", "eedi2", asset=r"[.]7z$"),
     Component("eedi3m", "HomeOfVapourSynthEvolution/VapourSynth-EEDI3", "r9", "eedi3m.dll", "eedi3m", asset=r"win64.*[.](?:7z|zip)$"),
     Component("fmtconv", "EleonoreMizo/fmtconv", "r30", "fmtconv.dll", "fmtc", "autotools", r"[.]zip$"),
-    # Newer Windows releases use API4.2; this is the last published API3 binary.
-    Component("lsmas", "HomeOfAviSynthPlusEvolution/L-SMASH-Works", "1282", "libvslsmashsource.dll", "lsmas", "lsmash", r"[.]7z$", "ae51313"),
+    # Accept the previous source fallback alongside the API3-compatible release.
+    Component("lsmas", "HomeOfAviSynthPlusEvolution/L-SMASH-Works", "1282", "libvslsmashsource.dll", "lsmas", "lsmash",
+              fallback_ref="ae51313"),
     Component("sangnom", "HomeOfVapourSynthEvolution/VapourSynth-SangNomMod", "v0.1-fix", "vs_sangnommod.dll", "sangnom", "configure", r"[.]zip$"),
-    Component("placebo", "Lypheo/vs-placebo", "2.0.4", "libvs_placebo.dll", "placebo", asset=r"windows.*[.]zip$"),
+    Component("placebo", "Lypheo/vs-placebo", "2.0.4", "libvs_placebo.dll", "placebo"),
     Component("nlm_ispc", "AmusementClub/vs-nlm-ispc", "v4", "vsnlm_ispc.dll", "nlm_ispc", "cmake", r"windows-x64.*[.]7z$"),
     Component("zsmooth", "adworacz/zsmooth", "0.7", "zsmooth.dll", "zsmooth", "zig", r"zsmooth[.]avx2[.]dll[.]zip$"),
     Component("mvtools", "dubhatervapoursynth/vapoursynth-mvtools", "v26", "mvtools.dll", "mv", asset=r"win64[.]7z$"),
@@ -132,6 +133,7 @@ class Installer:
         self.package_checked = set()
         self.used_packages = set()
         self.source_dependencies = []
+        self.source_licenses = []
         self.github_api_token = os.environ.pop("BLURAYSUBTITLE_GITHUB_TOKEN", "")
         self.http = urllib.request.build_opener()
         self.http.addheaders = [("User-Agent", "BluraySubtitle-Windows-Setup")]
@@ -411,10 +413,12 @@ class Installer:
         # An earlier Autotools cache must not shadow CMake's generated header.
         (source / "config.h").unlink(missing_ok=True)
         self.run_msys([
-            "cmake -S . -B cmake-build -G Ninja -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_BUILD_TYPE=Release "
+            "cmake -S . -B cmake-build -G Ninja -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_BUILD_TYPE=MinSizeRel "
             + "-DCMAKE_INSTALL_PREFIX=" + shlex.quote(self.posix(prefix))
             + " -DENABLE_FLOAT=ON -DENABLE_THREADS=ON -DWITH_COMBINED_THREADS=ON -DENABLE_SSE2=ON "
-            + "-DENABLE_AVX=ON -DENABLE_AVX2=ON -DDISABLE_FORTRAN=ON -DBUILD_TESTS=OFF",
+            + "-DENABLE_AVX=ON -DENABLE_AVX2=ON -DDISABLE_FORTRAN=ON -DBUILD_TESTS=OFF "
+            + "'-DCMAKE_C_FLAGS_MINSIZEREL=-Os -DNDEBUG -ffunction-sections -fdata-sections' "
+            + "'-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--gc-sections -s'",
             "cmake --build cmake-build --parallel " + str(self.args.jobs),
             "cmake --install cmake-build",
         ], source)
@@ -444,6 +448,8 @@ class Installer:
                 if key in copied or key.startswith(("api-ms-", "ext-ms-")):
                     continue
                 candidates = [current.parent / name, binary.parent / name]
+                if key == "libass-9.dll":
+                    candidates.append(self.args.libass)
                 if installed:
                     candidates.append(self.runtime / name)
                 candidates += [self.work / "fftw/prefix/bin" / name, self.args.msys2_root / "ucrt64/bin" / name]
@@ -535,7 +541,12 @@ class Installer:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(source_license, target)
                 collected[target.relative_to(self.runtime).as_posix()] = sha256(target)
-        if component.key == "assrender":
+        for name, path in self.source_licenses:
+            target = destination / "dependencies" / name / path.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(path, target)
+            collected[target.relative_to(self.runtime).as_posix()] = sha256(target)
+        if component.key == "assrender" and not self.source_licenses:
             recipe = source / ".github/workflows/build.yml"
             version = re.search(r"ass_ver:\s*([0-9.]+)", recipe.read_text(encoding="utf-8")).group(1)
             dependency = Component("assrender-libass", "libass/libass", version, "", "")
@@ -557,8 +568,8 @@ class Installer:
 
     def prepare_static_placebo(self):
         self.ensure_packages("libplacebo", "shaderc", "spirv-cross", "vulkan-headers", "glslang", "spirv-tools", "lcms2", "libdovi")
-        # MSYS2's static .pc files omit several transitive shader libraries.
-        # Keep these build-local corrections out of the shared toolchain.
+        # Upstream asks for shaderc_combined on Windows. Use the shared import
+        # archive under that name so L-SMASH and vs-placebo load one compiler.
         directory = self.work / "placebo/static-pc"
         directory.mkdir(parents=True, exist_ok=True)
         prefix = self.args.msys2_root / "ucrt64"
@@ -568,7 +579,7 @@ class Installer:
             if name == "libplacebo":
                 text = text.replace("shaderc >=", "shaderc_combined >=").replace("spirv-cross-c-shared >=", "spirv-cross-c >=")
             elif name == "shaderc_combined":
-                text += "\nLibs.private: -lglslang -lSPIRV-Tools-opt -lSPIRV-Tools\n"
+                text = re.sub(r"(?m)^Libs:.*$", "Libs: " + (prefix / "lib/libshaderc_shared.dll.a").as_posix(), text)
             elif name == "spirv-cross-c":
                 text += "\nLibs.private: -lspirv-cross-glsl -lspirv-cross-hlsl -lspirv-cross-msl -lspirv-cross-cpp -lspirv-cross-reflect -lspirv-cross-util -lspirv-cross-core\n"
             else:
@@ -577,8 +588,127 @@ class Installer:
             (directory / (name + ".pc")).write_text(text, encoding="utf-8", newline="\n")
         return directory
 
+    def dependency_source(self, name, repository, ref):
+        source = self.source(Component(name, repository, ref, "", ""), ref)
+        self.source_dependencies.append({
+            "name": name, "version": ref, "source_url": f"https://github.com/{repository}/tree/{ref}",
+        })
+        return source
+
+    def build_lsmash(self, source):
+        self.ensure_packages("dav1d", "libvpx", "libmfx", "libxml2", "libiconv", "zlib",
+                             "shaderc", "glslang", "spirv-tools", "vulkan-headers", "vulkan-loader")
+        # Use the same FFmpeg fork and submodule revisions as L-SMASH Works r1282.
+        ffmpeg = self.dependency_source("FFmpeg", "HomeOfAviSynthPlusEvolution/FFmpeg", "805074e")
+        nvcodec = self.dependency_source("nv-codec-headers", "FFmpeg/nv-codec-headers", "n13.0.19.0")
+        for name, repository, ref, destination in (
+            ("l-smash", "HomeOfAviSynthPlusEvolution/l-smash", "84740c5", "l-smash"),
+            ("obuparse", "HomeOfAviSynthPlusEvolution/obuparse", "ada116e", "obuparse"),
+            ("xxHash", "Cyan4973/xxHash", "v0.8.3", "xxHash"),
+        ):
+            shutil.copytree(self.dependency_source(name, repository, ref), source / destination, dirs_exist_ok=True)
+        self.source_licenses.extend(("ffmpeg", ffmpeg / name) for name in ("LICENSE.md", "COPYING.GPLv3"))
+        # The NVCodec headers carry their copyright and license in their leading comments.
+        nvcodec_license = self.work / "nv-codec-headers/COPYING"
+        notices = dict.fromkeys(
+            path.read_text(encoding="utf-8").split("*/", 1)[0] + "*/"
+            for path in sorted((nvcodec / "include/ffnvcodec").glob("*.h"))
+        )
+        nvcodec_license.write_text("\n\n".join(notices) + "\n", encoding="utf-8")
+        self.source_licenses.append(("nv-codec-headers", nvcodec_license))
+
+        work = self.work / "lsmas"
+        ffmpeg_build = work / "ffmpeg-build"
+        ffmpeg_prefix = work / "ffmpeg-prefix"
+        msys = self.args.msys2_root / "ucrt64"
+        pc = ffmpeg_build / "pc"
+        pc.mkdir(parents=True, exist_ok=True)
+        for name, library in (("dav1d", "dav1d"), ("vpx", "vpx"), ("libmfx", "mfx")):
+            package = (msys / "lib/pkgconfig" / (name + ".pc")).read_text(encoding="utf-8")
+            package = package.replace("prefix=/ucrt64", "prefix=" + msys.as_posix())
+            (pc / (name + ".pc")).write_text(
+                package.replace(f"-l{library}", f"-l:lib{library}.a", 1), encoding="utf-8", newline="\n")
+        nvcodec_pc = (nvcodec / "ffnvcodec.pc.in").read_text(encoding="utf-8")
+        (pc / "ffnvcodec.pc").write_text(nvcodec_pc.replace("@@PREFIX@@", nvcodec.as_posix()), encoding="utf-8", newline="\n")
+        # MinGW places zero-initialized tables in the file with -fdata-sections.
+        ffmpeg_options = [
+            "--arch=x86_64", "--target-os=mingw32", "--disable-autodetect", "--enable-w32threads",
+            "--enable-static", "--disable-shared", "--disable-programs", "--disable-doc", "--disable-debug",
+            "--disable-avdevice", "--disable-avfilter", "--disable-encoders", "--disable-muxers",
+            "--enable-gpl", "--enable-version3", "--enable-small", "--enable-network", "--enable-schannel",
+            "--enable-zlib", "--enable-libxml2", "--enable-libvpx", "--enable-libdav1d", "--enable-libmfx",
+            "--enable-ffnvcodec", "--enable-nvdec", "--enable-cuvid", "--enable-dxva2", "--enable-d3d11va",
+            "--enable-d3d12va", "--enable-vulkan", "--enable-libshaderc", "--pkg-config-flags=--static",
+            "--extra-cflags=-ffunction-sections -DLIBXML_STATIC", f"--prefix={ffmpeg_prefix.as_posix()}",
+        ]
+        self.run_msys([
+            "export PKG_CONFIG_PATH=" + shlex.quote(pc.as_posix()),
+            shlex.join([self.posix(ffmpeg / "configure"), *ffmpeg_options]),
+            f"make -j{self.args.jobs}",
+            "make install",
+        ], ffmpeg_build)
+
+        # Use the real audio helpers when compiling both plugin entry points.
+        wrapper = source / "VapourSynth/lwlibav_source.c"
+        text = wrapper.read_text(encoding="utf-8")
+        wrapper.write_text(text.replace("#ifndef _MSC_VER\n", "#if !defined(_MSC_VER) && !defined(LSMASH_WITH_AVISYNTH)\n", 1),
+                           encoding="utf-8")
+        cmake = source / "CMakeLists.txt"
+        text = cmake.read_text(encoding="utf-8")
+        cmake.write_text(text.replace(
+            "        target_link_libraries(LSMASHSource PRIVATE ws2_32)\n",
+            "        set_target_properties(LSMASHSource PROPERTIES LINKER_LANGUAGE CXX)\n"
+            "        target_link_libraries(LSMASHSource PRIVATE ws2_32 secur32 crypt32 ncrypt "
+            f'\"{msys.as_posix()}/lib/libiconv.a\" \"{msys.as_posix()}/lib/libz.a\")\n',
+        ), encoding="utf-8")
+        build = work / "plugin-build"
+        cmake_options = [
+            "-G", "Ninja", "-DCMAKE_BUILD_TYPE=MinSizeRel", "-DCMAKE_DISABLE_FIND_PACKAGE_Git=ON",
+            "-DBUILD_VS_PLUGIN=ON", "-DBUILD_AVS_PLUGIN=ON", "-DENABLE_VULKAN=ON", "-DENABLE_SSE2=ON",
+            "-DCMAKE_C_FLAGS_MINSIZEREL=-Os -DNDEBUG -ffunction-sections -DLIBXML_STATIC -DLSMASH_WITH_AVISYNTH",
+            "-DCMAKE_CXX_FLAGS_MINSIZEREL=-Os -DNDEBUG -ffunction-sections",
+            "-DCMAKE_MODULE_LINKER_FLAGS=-static -static-libgcc -static-libstdc++ -Wl,--gc-sections -s",
+            f"-DCMAKE_PREFIX_PATH={ffmpeg_prefix.as_posix()};{msys.as_posix()}",
+            f"-DLIBXML2_LIBRARY={msys.as_posix()}/lib/libxml2.a",
+            f"-DZLIB_LIBRARY={msys.as_posix()}/lib/libz.a",
+            f"-DMFX_LIBRARY={msys.as_posix()}/lib/libmfx.a",
+            f"-Ddav1d_LIBRARY={msys.as_posix()}/lib/libdav1d.a",
+            f"-DVPX_LIBRARY={msys.as_posix()}/lib/libvpx.a",
+            f"-DVulkan_shaderc_combined_LIBRARY={msys.as_posix()}/lib/libshaderc_shared.dll.a",
+        ]
+        self.run_msys([
+            shlex.join(["cmake", "-S", ".", "-B", build.as_posix(), *cmake_options]),
+            shlex.join(["cmake", "--build", build.as_posix(), "--target", "LSMASHSource", "--parallel", str(self.args.jobs)]),
+        ], source)
+        return build / "LSMASHSource.dll"
+
+    def build_assrender(self, source):
+        version = self.args.libass_version
+        libass = self.dependency_source("libass", "libass/libass", version)
+        self.source_licenses.append(("libass", libass / "COPYING"))
+        build = self.work / "assrender/build"
+        headers = build / "include/ass"
+        headers.mkdir(parents=True, exist_ok=True)
+        for name in ("ass.h", "ass_types.h"):
+            shutil.copyfile(libass / "libass" / name, headers / name)
+        source = source / "src"
+        resources = build / "ASSRender.res.o"
+        binary = build / "assrender.dll"
+        self.run_msys([
+            shlex.join(["windres", "-i", "ASSRender.rc", "-o", resources.as_posix()]),
+            shlex.join(["gcc", "-std=c99", "-O3", "-s", "-shared", "-static-libgcc",
+                        "-I", headers.parent.as_posix(), "-I", (source / "include").as_posix(),
+                        "-o", binary.as_posix(), *[path.name for path in sorted(source.glob("*.c"))],
+                        "assrender.def", resources.as_posix(), self.args.libass.as_posix(), "-lgdi32", "-luser32"]),
+        ], source)
+        return binary
+
     def build(self, component, source):
         self.require_msys2()
+        if component.recipe == "lsmash":
+            return self.build_lsmash(source)
+        if component.recipe == "assrender":
+            return self.build_assrender(source)
         self.prepare_sdk()
         include = self.sdk / "include/vapoursynth"
         build_directory = "build-" + BUILD_PROFILE
@@ -620,11 +750,17 @@ class Installer:
         elif component.key == "placebo":
             pc = self.prepare_static_placebo()
             commands.append("export PKG_CONFIG_PATH=" + shlex.quote(pc.as_posix() + ";" + (self.sdk / "lib/pkgconfig").as_posix()))
+            # Populate Meson's package cache through the setup downloader.
+            subprojects = source / "subprojects"
+            wrap = configparser.ConfigParser()
+            wrap.read(subprojects / "libp2p.wrap", encoding="utf-8")
+            archive = wrap["wrap-file"]
+            url = archive["source_url"].replace("https://github.com/sekrit-twc/libp2p/archive/",
+                                                "https://codeload.github.com/sekrit-twc/libp2p/tar.gz/").removesuffix(".tar.gz")
+            self.download(url, subprojects / "packagecache" / archive["source_filename"], archive["source_hash"])
             path = source / "meson.build"
             text = path.read_text(encoding="utf-8")
             path.write_text(re.sub(r"^static_deps = .*", "static_deps = true", text, flags=re.M), encoding="utf-8")
-        elif component.key == "assrender":
-            self.ensure_packages("libass")
         elif component.key == "sangnom":
             path = source / "src/SangNom.cpp"
             text = path.read_text(encoding="utf-8")
@@ -668,15 +804,6 @@ class Installer:
             makefile += "%.o: src/%.cpp Makefile\n\t$(CXX) $(CXXFLAGS) -c -o $@ $<\n"
             (source / "Makefile").write_text(makefile, encoding="utf-8", newline="\n")
             self.run_msys(commands + ["make -j" + jobs], source)
-        elif component.recipe == "lsmash":
-            self.ensure_packages("ffmpeg")
-            library = self.source(Component("l-smash-library", "l-smash/l-smash", "", "", ""), "master")
-            self.run_msys(["./configure --prefix=/ucrt64 --disable-shared --enable-static", "make -j" + jobs, "make install"], library)
-            path = source / "common/libavsmash.c"
-            text = path.read_text(encoding="utf-8")
-            text = text.replace("        ELSE_IF_GET_CODEC_ID_FROM_CODEC_TYPE(AV_CODEC_ID_V410, QT_CODEC_TYPE_V410_VIDEO);\n", "")
-            path.write_text(text, encoding="utf-8")
-            self.run_msys(["meson setup build --buildtype=release -Dprefer_static=true", "meson compile -C build -j " + jobs], source / "VapourSynth")
         elif component.recipe == "zig":
             # The 0.7 source uses Zig 0.12's Build API.
             archive = self.download("https://ziglang.org/download/0.12.0/zig-windows-x86_64-0.12.0.zip", self.work / "zig/zig.zip")
@@ -710,6 +837,7 @@ class Installer:
     def install_plugin(self, component):
         self.used_packages = set()
         self.source_dependencies = []
+        self.source_licenses = []
         previous = self.state["components"].get(component.key)
         release = self.release(component.repository) if not component.ref else None
         target_ref = component.ref or release["tag_name"]
@@ -717,8 +845,8 @@ class Installer:
         target = folder / component.filename
         relative = self.record_path(target)
         known_file = bool(previous and target.is_file() and previous["files"].get(relative) == sha256(target))
-        expected = ("commit:" + component.fallback_ref if previous and previous["method"] == "source" and component.fallback_ref
-                    else target_ref)
+        fallback = bool(previous and previous["method"] == "source" and previous["ref"] == component.fallback_ref)
+        expected = "commit:" + component.fallback_ref if fallback else target_ref
         installed, probe = None, None
         if target.is_file():
             try:
@@ -729,7 +857,7 @@ class Installer:
                 installed = probe["native_version"] or fallback_version(target)
                 # Migrate the previous hash-bound component manifest once.
                 if installed is None and known_file:
-                    installed = "commit:" + previous["ref"] if component.fallback_ref and previous["method"] == "source" else normalize_version(previous["ref"])
+                    installed = expected if fallback else normalize_version(previous["ref"])
                 if installed is not None:
                     record_version(target, installed, probe["native_version"])
         rebuild = bool(known_file and previous["method"] == "source" and previous.get("target_ref", previous["ref"]) == target_ref
@@ -747,12 +875,12 @@ class Installer:
                     name = installed_dependency.relative_to(self.runtime).as_posix()
                     self.state["dependencies"][name] = sha256(installed_dependency)
                     dependency_names.append(name)
-                source = self.source(component, component.fallback_ref or target_ref)
+                source = self.source(component, target_ref)
                 files = {relative: sha256(target), **self.licenses(component, source)}
                 previous = {
                     "name": component.key, "repository": component.repository, "target_ref": target_ref,
                     "ref": installed, "method": "existing", "source_url": f"https://github.com/{component.repository}",
-                    "license_source_ref": component.fallback_ref or target_ref, "artifact_url": "", "plugin": relative,
+                    "license_source_ref": target_ref, "artifact_url": "", "plugin": relative,
                     "files": files, "dependencies": dependency_names, "source_dependencies": self.source_dependencies,
                 }
                 self.state["components"][component.key] = previous
@@ -766,7 +894,7 @@ class Installer:
         else:
             self.log("VapourSynth plugin needs installation or update: {name} {installed} -> {target}",
                      name=component.key, installed=installed or "?", target=expected)
-        if release is None:
+        if release is None and component.asset:
             release = self.release(component.repository, component.ref, missing_ok=True)
         self.log("Installing VapourSynth component: {name} {version}", name=component.key, version=target_ref)
         if component.key == "dfttest":
@@ -802,21 +930,19 @@ class Installer:
                         binary = candidate_binary
                         break
         method = "release" if binary else "source"
-        ref = target_ref if binary else component.fallback_ref or target_ref
-        source = self.source(component, ref)
+        source = self.source(component, target_ref)
         if binary is None:
-            self.log("Building VapourSynth component from source: {name} {version}", name=component.key, version=ref)
+            self.log("Building VapourSynth component from source: {name} {version}", name=component.key, version=target_ref)
             binary = self.build(component, source)
         stage = self.work / component.key / "staged"
         stage.mkdir(parents=True, exist_ok=True)
         staged_binary = stage / component.filename
         shutil.copyfile(binary, staged_binary)
         dependencies = self.dependencies(binary, stage)
-        expected = "commit:" + ref if method == "source" and component.fallback_ref else target_ref
-        probe = self.probe(staged_binary, component, expected)
+        probe = self.probe(staged_binary, component, target_ref)
         folder.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(staged_binary, target)
-        record_version(target, expected, probe["native_version"])
+        record_version(target, target_ref, probe["native_version"])
         dependency_names = []
         for dependency in dependencies:
             installed = self.runtime / dependency.name
@@ -827,11 +953,11 @@ class Installer:
         files = {self.record_path(target): sha256(target)}
         files.update(self.licenses(component, source, package))
         self.state["components"][component.key] = {
-            "name": component.key, "repository": component.repository, "target_ref": target_ref, "ref": ref, "method": method,
-            "source_url": f"https://github.com/{component.repository}/tree/{ref}",
+            "name": component.key, "repository": component.repository, "target_ref": target_ref, "ref": target_ref, "method": method,
+            "source_url": f"https://github.com/{component.repository}/tree/{target_ref}",
             "artifact_url": artifact["url"] if method == "release" else "",
             "plugin": self.record_path(target), "registered_version": probe["version"],
-            "installed_version": probe["native_version"] or normalize_version(expected),
+            "installed_version": probe["native_version"] or normalize_version(target_ref),
             "build_profile": BUILD_PROFILE if method == "source" else "",
             "files": files, "dependencies": dependency_names,
             "source_dependencies": self.source_dependencies + ([{"name": "FFTW", "version": "3.3.11", "source_url": "https://fftw.org/fftw-3.3.11.tar.gz"}]
@@ -956,7 +1082,7 @@ class Installer:
         for component in COMPONENTS:
             record = self.state["components"][component.key]
             target = self.runtime / record["plugin"]
-            ref = ("commit:" + record["ref"] if component.fallback_ref and record["method"] == "source"
+            ref = ("commit:" + record["ref"] if record["method"] == "source" and record["ref"] == component.fallback_ref
                    else record.get("target_ref", record["ref"]))
             probe = self.probe(target, component, ref)
             if restore_versions:
@@ -1015,6 +1141,8 @@ def main():
     parser.add_argument("--plugins-dir", type=Path)
     parser.add_argument("--editor-path", type=Path)
     parser.add_argument("--editor-cache", type=Path)
+    parser.add_argument("--libass", required=True, type=Path)
+    parser.add_argument("--libass-version", required=True)
     parser.add_argument("--work-root", required=True, type=Path)
     parser.add_argument("--msys2-root", type=Path, default=Path(r"C:\msys64"))
     parser.add_argument("--seven-zip", default=r"C:\Program Files\7-Zip\7z.exe")

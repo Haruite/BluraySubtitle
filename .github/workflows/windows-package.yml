@@ -105,7 +105,7 @@ jobs:
 
           Push-Location -LiteralPath $dist
           try {
-            & $env:BUILD_SEVEN_ZIP a -t7z $archive $package
+            & $env:BUILD_SEVEN_ZIP a -t7z -mx=9 -md=64m -mmt=4 $archive $package
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             & $env:BUILD_SEVEN_ZIP t $archive
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

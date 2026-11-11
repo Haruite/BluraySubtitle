@@ -29,6 +29,7 @@ if "SPECPATH" not in globals():
 
 from PyInstaller import __version__ as PYINSTALLER_VERSION
 from PyInstaller.utils.hooks import collect_data_files, copy_metadata
+import soundfile
 
 
 PROJECT_ROOT = Path(SPECPATH).resolve()
@@ -85,6 +86,7 @@ notices_updater["generate_third_party_notices"](
     third_party_notices_paths,
     SETTINGS,
     PYINSTALLER_VERSION,
+    soundfile.__libsndfile_version__,
 )
 
 # Native tools, CPython, and NumPy share the bundle support directory.
@@ -326,6 +328,26 @@ root_binary_names = {
 }
 a.binaries = [entry for entry in a.binaries if keep_runtime_file(entry[0], root_binary_names)]
 a.datas = [entry for entry in a.datas if keep_runtime_file(entry[0], root_binary_names)]
+
+pycountry_databases = Path(workpath) / "pycountry-databases"
+pycountry_databases.mkdir(exist_ok=True)
+for index, (destination, source, kind) in enumerate(a.datas):
+    relative = Path(destination)
+    if relative.parent.as_posix() == "pycountry/databases" and relative.suffix == ".json":
+        compact = pycountry_databases / relative.name
+        data = json.loads(Path(source).read_text(encoding="utf-8"))
+        compact.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        a.datas[index] = (destination, str(compact), kind)
+
+sndfile_dir = PROJECT_ROOT / "build/windows-runtime" / f"libsndfile-{soundfile.__libsndfile_version__}"
+sndfile = sndfile_dir / "libsndfile_x64.dll"
+if sndfile.is_file():
+    destination = "_soundfile_data/libsndfile_x64.dll"
+    license_destination = "_soundfile_data/COPYING"
+    a.binaries = [entry for entry in a.binaries if Path(entry[0]).as_posix() != destination]
+    a.datas = [entry for entry in a.datas if Path(entry[0]).as_posix() not in (destination, license_destination)]
+    a.binaries.append((destination, str(sndfile), "BINARY"))
+    a.datas.append((license_destination, str(required_path(sndfile_dir / "COPYING", "libsndfile license")), "DATA"))
 
 # Keep the separate MinGW QtCore and the shared MSVC Qt layout after Analysis.
 a.datas += package_tools(native_tools, Path(workpath) / "native-tools", a.binaries, a.datas)

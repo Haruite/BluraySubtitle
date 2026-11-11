@@ -104,7 +104,7 @@ $script:SelectedPythonRelease = $null
 $script:BuildCacheRoot = ""
 $script:NativeToolCacheRoot = Join-Path $commonApplicationData "BluraySubtitle\build-cache\artifacts"
 $script:BuildRecipeHash = ""
-# Retain the v3 recipe IDs for unchanged build outputs. Update the relevant ID when an artifact recipe changes.
+# Retain the recipe IDs so cached builds of the same versions can be reused.
 $script:WindowsToolRecipeId = "ABE005A17FD8A3E7BE61BC884AC8EB55BC17BFA19F3A1AB25D2574C8ACEF835E"
 $script:WindowsToolPathRecipeId = "7ECAA3E44A008A78519D6A9AE10C2BE6F4F6E50DEE1BC404FBBCC9BF05B6EF8F"
 $script:VapourSynthComponentRecipeId = "8E3206EEECB37B7FE3EF3FC7D5723D0F937A6F8D8F51A04E94E87B79D9C192BD"
@@ -1399,6 +1399,10 @@ function Get-ComponentBuildCache {
         "svt-av1" { $files = @($script:ToolPaths.SvtAv1) }
         "fdkaac" { $files = @($script:ToolPaths.FdkAac) }
         "libass" { $files = @($script:ToolPaths.Libass, $script:ToolPaths.LibassVersion) }
+        "libsndfile" {
+            $files = @($script:ToolPaths.PackagedLibsndfile, (Join-Path $script:LibsndfileDirectory "COPYING"))
+            $inputs += $script:LibsndfileVersion
+        }
         "vapoursynth-classic" {
             $files = @(Join-Path $script:ToolPaths.VapourSynthRoot "vapoursynth-build.json")
             $inputs += @(
@@ -3100,6 +3104,9 @@ function Install-TsMuxer {
     if ($null -eq $executable) {
         throw (Get-SetupText "tsMuxeR.exe is missing from the release archive." "发布压缩包中缺少 tsMuxeR.exe。")
     }
+    Initialize-SetupBuildToolchain "msys2"
+    Invoke-SetupCommand -FilePath (Join-Path $script:ToolPaths.Msys2Root "ucrt64\bin\strip.exe") `
+        -Arguments @("--strip-unneeded", $executable.FullName) | Out-Null
     [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($script:ToolPaths.TsMuxer)) | Out-Null
     Copy-Item -LiteralPath $executable.FullName -Destination $script:ToolPaths.TsMuxer -Force
 }
@@ -3256,7 +3263,8 @@ function Install-X264 {
         'cd "$source_root"',
         './configure --enable-static --bit-depth=all --chroma-format=all --disable-opencl --enable-lto --extra-ldflags="-static -static-libgcc"',
         'sed -i -E ''/^LDFLAGS[[:space:]]*=/s/-flto([[:space:]]|$)/-flto=auto\1/g'' config.mak',
-        'make -j"$jobs" fprofiled VIDS="$training_y4m"'
+        'make -j"$jobs" fprofiled VIDS="$training_y4m"',
+        'strip --strip-unneeded x264.exe'
     ) -join "`n"
     $buildScript = Write-SetupTempScript -Name "build-x264.sh" -Content $buildScriptContent
     Invoke-SetupBuildCommand `
@@ -3774,12 +3782,41 @@ function Install-FdkAac {
     if ($null -eq $executable) {
         throw (Get-SetupText "The fdkaac executable is missing after compilation." "编译后未找到 fdkaac 可执行文件。")
     }
+    Invoke-SetupCommand -FilePath (Join-Path $script:ToolPaths.Msys2Root "ucrt64\bin\strip.exe") `
+        -Arguments @("--strip-unneeded", $executable.FullName) | Out-Null
     [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($script:ToolPaths.FdkAac)) | Out-Null
     Copy-Item -LiteralPath $executable.FullName -Destination $script:ToolPaths.FdkAac -Force
 }
 
 function Test-FdkAac {
     return [bool](Get-InstalledFdkAacVersion)
+}
+
+function Install-PackagedLibsndfile {
+    param([string]$Version)
+
+    $archive = Join-Path $script:TempRoot "libsndfile-$Version.zip"
+    $extracted = Join-Path $script:TempRoot "libsndfile-source"
+    $source = Join-Path $extracted "libsndfile-$Version"
+    $build = Join-Path $script:TempRoot "libsndfile-build"
+    Invoke-SetupDownload -Uri ([Uri]"https://codeload.github.com/libsndfile/libsndfile/zip/refs/tags/$Version") -Destination $archive | Out-Null
+    Expand-SetupZip -Archive $archive -Destination $extracted
+    $buildScript = Write-SetupTempScript -Name "build-libsndfile.sh" -Content (@(
+        'set -euo pipefail',
+        'export PATH=/ucrt64/bin:/usr/bin',
+        'cmake -S "$1" -B "$2" -G Ninja -DCMAKE_POLICY_VERSION_MINIMUM=3.10 -DCMAKE_BUILD_TYPE=MinSizeRel -DBUILD_SHARED_LIBS=ON -DBUILD_PROGRAMS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_TESTING=OFF -DENABLE_EXTERNAL_LIBS=OFF -DENABLE_MPEG=OFF "-DCMAKE_SHARED_LINKER_FLAGS=-static-libgcc -s"',
+        'cmake --build "$2" --parallel "$3"'
+    ) -join "`n")
+    Invoke-SetupBuildCommand `
+        -DisplayName "libsndfile with built-in audio formats" `
+        -FilePath $script:ToolPaths.Msys2Bash `
+        -Arguments @(
+            (ConvertTo-Msys2Path $buildScript), (ConvertTo-Msys2Path $source),
+            (ConvertTo-Msys2Path $build), [string]$script:BuildJobs
+        )
+    [IO.Directory]::CreateDirectory($script:LibsndfileDirectory) | Out-Null
+    Copy-Item -LiteralPath (Join-Path $source "COPYING") -Destination $script:LibsndfileDirectory -Force
+    Copy-Item -LiteralPath (Join-Path $build "libsndfile.dll") -Destination $script:ToolPaths.PackagedLibsndfile -Force
 }
 
 function Get-LibassRelease {
@@ -3837,6 +3874,8 @@ function Install-Libass {
     if ($null -eq $library) {
         throw (Get-SetupText "The libass-9 DLL is missing after compilation." "编译后未找到 libass-9 DLL。")
     }
+    Invoke-SetupCommand -FilePath (Join-Path $script:ToolPaths.Msys2Root "ucrt64\bin\strip.exe") `
+        -Arguments @("--strip-unneeded", $library.FullName) | Out-Null
     [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($script:ToolPaths.Libass)) | Out-Null
     Copy-Item -LiteralPath $library.FullName -Destination $script:ToolPaths.Libass -Force
     [IO.File]::WriteAllText(
@@ -4093,6 +4132,8 @@ function Install-VapourSynthUpstreamComponents {
         "--plugins-dir", $script:ToolPaths.VapourSynthPlugins,
         "--editor-path", $script:ToolPaths.VsEdit,
         "--editor-cache", $script:NativeToolCacheRoot,
+        "--libass", $script:ToolPaths.Libass,
+        "--libass-version", (Get-InstalledLibassVersion),
         "--work-root", (Join-Path $script:TempRoot "vapoursynth-components"),
         "--msys2-root", $script:ToolPaths.Msys2Root,
         "--seven-zip", $script:ToolPaths.SevenZip,
@@ -4466,6 +4507,24 @@ function Invoke-WindowsSetup {
             Initialize-ConfiguredToolPaths
         }
     }
+    # The packaged worker reads Wave64. Leave the installed SoundFile wheel intact.
+    $script:LibsndfileVersion = Invoke-SetupCommand -FilePath $script:ToolPaths.Python -Arguments @(
+        "-c", "import soundfile; print(soundfile.__libsndfile_version__)"
+    )
+    $script:LibsndfileDirectory = Join-Path $script:SetupDirectory "build\windows-runtime\libsndfile-$script:LibsndfileVersion"
+    $script:ToolPaths["PackagedLibsndfile"] = Join-Path $script:LibsndfileDirectory "libsndfile_x64.dll"
+    Register-SetupComponent `
+        -Name "libsndfile" `
+        -EnglishName "Packaged libsndfile" `
+        -ChineseName "打包用 libsndfile" `
+        -GetInstalledVersion {
+            if (Test-Path -LiteralPath $script:ToolPaths.PackagedLibsndfile -PathType Leaf) { $script:LibsndfileVersion }
+        } `
+        -GetAvailableVersion { $script:LibsndfileVersion } `
+        -Install { param($Version) Install-PackagedLibsndfile $Version } `
+        -Verify { Test-Path -LiteralPath $script:ToolPaths.PackagedLibsndfile -PathType Leaf } `
+        -BuildToolchain "msys2"
+    Invoke-SetupComponent $script:RegisteredComponents["libsndfile"]
     Install-VapourSynthUpstreamComponents
     Install-VapourSynthScripts
     if ($Mode -eq "Build") {

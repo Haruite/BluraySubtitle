@@ -54,6 +54,7 @@ def generate_third_party_notices(
     template_outputs: Mapping[Path, Path],
     settings: Mapping[str, object],
     pyinstaller_version: str,
+    libsndfile_version: str,
 ) -> None:
     """Render all language templates using one set of bundled component versions."""
     ffmpeg_build = _command_version(
@@ -138,6 +139,7 @@ def generate_third_party_notices(
         "VAPOURSYNTH_CLASSIC_VERSION": f"R{classic_release}.A{classic_api}",
         "PYTHON_VERSION": platform.python_version(),
         "NUMPY_VERSION": version("numpy"),
+        "LIBSNDFILE_VERSION": libsndfile_version,
         "ZIMG_REVISION": dependencies["zimg"],
         "LIBP2P_REVISION": dependencies["libp2p"],
         "MIMALLOC_VERSION": dependencies["mimalloc"],
