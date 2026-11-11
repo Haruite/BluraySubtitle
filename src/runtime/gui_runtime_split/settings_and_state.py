@@ -140,7 +140,6 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
             self.opacity_slider.setValue(ui.opacity)
         finally:
             self.opacity_slider.blockSignals(False)
-        self._on_opacity_changed(ui.opacity)
         self._apply_ui_font_size(ui.font_size)
         self._apply_theme(ui.theme)
         self._apply_language(ui.language)
@@ -159,11 +158,12 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
 
     def _show_settings_dialog(self) -> None:
         dialog = SettingsDialog(
-            self._app_config,
+            replace(self._app_config, ui=self._current_ui_preferences()),
             self.t,
             self,
             encoder_mode=str(self.x265_mode_combo.currentData()),
         )
+        self._apply_window_opacity(dialog)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         selected = replace(
@@ -188,22 +188,22 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
             self._restore_output_folder_for_function(function_id)
         self._apply_saved_ui_preferences()
 
+    def _current_ui_preferences(self) -> UiPreferences:
+        font_size = int(getattr(self, "_ui_font_point_size", 10) or 10)
+        return UiPreferences(
+            language=str(self.language_combo.currentData() or "en"),
+            theme=str(self.theme_combo.currentData() or "light"),
+            font_size=max(6, min(14, font_size)),
+            opacity=self.opacity_slider.value(),
+        )
+
     def _save_application_state(self) -> None:
         if getattr(self, "_app_config_load_failed", False):
             return
-        language = str(self.language_combo.currentData() or "en")
-        theme = str(self.theme_combo.currentData() or "light")
-        font_size = int(getattr(self, "_ui_font_point_size", 10) or 10)
-        opacity = int(self.opacity_slider.value())
         updated = replace(
             self._app_config,
             window=WindowPreferences(geometry=self._window_geometry_text()),
-            ui=UiPreferences(
-                language=language,
-                theme=theme,
-                font_size=max(6, min(14, font_size)),
-                opacity=max(60, min(100, opacity)),
-            ),
+            ui=self._current_ui_preferences(),
         )
         save_app_config(updated, self._app_config_path)
         self._app_config = updated

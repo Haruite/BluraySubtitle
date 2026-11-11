@@ -356,6 +356,10 @@ class SettingsDialog(QDialog):
             )
             message += f"<p><b>{escape(reminder)}</b></p>"
         message_box = QMessageBox(self)
+        message_box.setOption(QMessageBox.Option.DontUseNativeDialog)
+        opacity = self.windowOpacity()
+        if opacity < 1.0:
+            message_box.setWindowOpacity(opacity)
         message_box.setWindowTitle(self.t("Check for updates"))
         message_box.setIcon(QMessageBox.Icon.Information)
         message_box.setTextFormat(Qt.TextFormat.RichText)
@@ -834,6 +838,7 @@ class SettingsDialog(QDialog):
             self.custom_preset_parameters_edit.setText(parameters)
             self.custom_preset_name_edit.setReadOnly(not editable)
             self.custom_preset_parameters_edit.setReadOnly(not editable)
+            self.custom_preset_parameters_edit.setCursorPosition(0)
             self.delete_custom_preset_button.setEnabled(editable)
         finally:
             self._preset_editor_updating = False
@@ -974,6 +979,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.external_tools_path_label)
 
         self.external_tools_editor = QPlainTextEdit(tab)
+        self.external_tools_editor.setObjectName("externalToolsEditor")
         self.external_tools_editor.setLineWrapMode(
             QPlainTextEdit.LineWrapMode.NoWrap
         )
@@ -987,6 +993,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.external_tools_status_label)
 
         self.external_tools_detection_view = QPlainTextEdit(tab)
+        self.external_tools_detection_view.setObjectName("externalToolsDetectionView")
         self.external_tools_detection_view.setReadOnly(True)
         self.external_tools_detection_view.setFixedHeight(48)
         self.external_tools_detection_view.setLineWrapMode(

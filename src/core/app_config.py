@@ -42,7 +42,7 @@ class UiPreferences:
     language: str = "en"
     theme: str = "light"
     font_size: int = 10
-    opacity: int = 94
+    opacity: int = 100
 
 
 @dataclass(frozen=True)
@@ -343,7 +343,7 @@ def app_config_from_mapping(raw: dict[str, Any]) -> AppConfig:
             language=language,
             theme=theme,
             font_size=_integer_value(ui, "font_size", 10, 6, 14),
-            opacity=_integer_value(ui, "opacity", 94, 60, 100),
+            opacity=_integer_value(ui, "opacity", UiPreferences.opacity, 60, 100),
         ),
         startup=StartupPreferences(
             function_page=function_page,

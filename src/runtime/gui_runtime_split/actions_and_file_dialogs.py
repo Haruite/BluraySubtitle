@@ -12,11 +12,11 @@ import traceback
 from functools import partial
 from typing import Optional
 
-from PyQt6.QtCore import Qt, QTimer, QThread, QCoreApplication, QPoint, QEventLoop, QObject
+from PyQt6.QtCore import Qt, QTimer, QThread, QCoreApplication, QPoint, QEventLoop, QObject, QSize
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPlainTextEdit, QTextBrowser, QWidget, QHBoxLayout, QPushButton, \
     QApplication, QProgressDialog, QProgressBar, QTableWidgetItem, QTableWidget, QToolButton, QComboBox, \
     QAbstractItemView, QMenu, QMessageBox, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, QFileDialog, QCheckBox, \
-    QDoubleSpinBox, QGridLayout
+    QDoubleSpinBox, QGridLayout, QSpacerItem, QStyle, QStyleOptionComboBox
 
 from src.bdmv import Chapter, chapter_play_item_file_ranges
 from src.core import MKV_LABELS, REMUX_LABELS, DIY_REMUX_LABELS, ENCODE_LABELS, SUBTITLE_LABELS, ENCODE_REMUX_LABELS, \
@@ -43,6 +43,7 @@ from src.exports.utils import (
 )
 from src.runtime.encode_source import probe_svt_av1_bit_depths
 from src.runtime.sp import SpEntry, media_track_key
+from src.runtime.gui_runtime_classes.custom_table_widget import SelectionTableWidget
 from src.runtime.gui_runtime_classes.encode_worker import EncodeWorker
 from src.runtime.encode import EncodeRequest, EncodeRow, EncodeSettings, validate_encode_request
 from src.runtime.gui_runtime_classes.file_path_table_widget_item import FilePathTableWidgetItem
@@ -86,6 +87,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         layout = QVBoxLayout()
         dlg.setLayout(layout)
         editor = QTextBrowser(dlg)
+        editor.setObjectName('thirdPartyNoticesBrowser')
         editor.setMarkdown(body)
         editor.setOpenExternalLinks(True)
         editor.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
@@ -100,6 +102,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         layout.addWidget(btn_row)
         btn_close.clicked.connect(dlg.accept)
         dlg.resize(800, 620)
+        self._apply_window_opacity(dlg)
         dlg.exec()
 
     @staticmethod
@@ -267,6 +270,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         btn_close.clicked.connect(dlg.accept)
         dlg.resize(860, 520)
         editor.setFocus()
+        self._apply_window_opacity(dlg)
         dlg.exec()
 
     def _start_subtitle_folder_scan(self):
@@ -909,7 +913,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 this.altered = False
                 this.setWindowTitle(f"{self.t('Edit Subtitle')}: {path}")
                 layout = QVBoxLayout()
-                this.table_widget = QTableWidget()
+                this.table_widget = SelectionTableWidget()
                 this.table_widget.horizontalHeader().setSortIndicatorShown(True)
                 this.table_widget.setSortingEnabled(True)
                 this.subtitle = Subtitle(path).content
@@ -1435,6 +1439,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 min(620, max(1, available.height() - 80)),
             )
             editor.setFocus()
+            self._apply_window_opacity(dialog)
             dialog.exec()
 
         def on_finished():
@@ -1697,11 +1702,34 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             pick = 0
         self.encode_bit_depth_combo.setCurrentIndex(pick)
         self.encode_bit_depth_combo.blockSignals(False)
-        try:
-            if hasattr(self, '_adjust_combo_width_to_contents'):
-                self._adjust_combo_width_to_contents(self.encode_bit_depth_combo)
-        except Exception:
-            pass
+
+    def _resize_encode_tool_combos(self) -> None:
+        if getattr(self, 'encode_tool_combo', None) is None:
+            return
+        combos = (
+            self.vspipe_mode_combo,
+            self.x265_mode_combo,
+            self.x265_preset_combo,
+            self.encode_tool_combo,
+            self.encode_bit_depth_combo,
+            self.encode_lossless_audio_combo,
+        )
+        minimum_width = 80
+        preferred_width = minimum_width
+        for combo in combos:
+            combo.ensurePolished()
+            option = QStyleOptionComboBox()
+            combo.initStyleOption(option)
+            metrics = option.fontMetrics
+            text_width = max((metrics.horizontalAdvance(combo.itemText(i)) for i in range(combo.count())), default=0)
+            preferred_size = combo.style().sizeFromContents(
+                QStyle.ContentsType.CT_ComboBox, option, QSize(text_width, metrics.height()), combo,
+            )
+            preferred_width = max(preferred_width, preferred_size.width())
+        maximum_width = min(520, preferred_width)
+        for combo in combos:
+            combo.setMinimumWidth(minimum_width)
+            combo.setMaximumWidth(maximum_width)
 
     def _reload_encode_preset_parameters(self) -> None:
         custom_presets = self._app_config.encode.custom_presets
@@ -1766,7 +1794,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 self.x265_preset_combo.setCurrentIndex(max(0, preset_index))
             finally:
                 self.x265_preset_combo.blockSignals(False)
-            self._adjust_combo_width_to_contents(self.x265_preset_combo)
+        self._resize_encode_tool_combos()
         try:
             sync = getattr(self, 'sync_default_vpy_fmtc_with_encode_ui', None)
             if callable(sync):
@@ -1869,8 +1897,11 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         self._encode_lossless_preset_updating = False
         self.encode_lossless_audio_combo.currentIndexChanged.connect(self._on_encode_lossless_audio_preset_changed)
         tools_layout.addWidget(self.encode_lossless_audio_combo, 2, 4)
-        tools_layout.setColumnStretch(2, 1)
-        tools_layout.setColumnStretch(5, 1)
+        # Share the available width if both combo columns cannot reach their preferred size.
+        tools_layout.setColumnStretch(1, 1)
+        tools_layout.setColumnStretch(4, 1)
+        tools_layout.addItem(QSpacerItem(0, 0, QSizePolicy.Policy.Expanding), 0, 2)
+        tools_layout.addItem(QSpacerItem(0, 0, QSizePolicy.Policy.Expanding), 0, 5)
         layout.addWidget(tools_row)
 
         self.encode_options_row = QWidget(self.encode_box)
@@ -2131,7 +2162,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 super(ChapterWindow, this).__init__(self)
                 this.setWindowTitle(f"{self.t('Chapters')}: {mpls_path}")
                 layout = QVBoxLayout()
-                this.table_widget = QTableWidget()
+                this.table_widget = SelectionTableWidget(this)
+                this.table_widget.setObjectName('chapterTable')
                 self._set_compact_table(this.table_widget, row_height=20, header_height=20)
                 this.table_widget.setColumnCount(4)
                 self._set_table_headers(this.table_widget, ['select', 'start', 'end', 'file'])
@@ -2184,8 +2216,16 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 if offs:
                     this.table_widget.setItem(len(offs) - 1, 2,
                                               QTableWidgetItem(f'Ending - {get_time_str(mpls_duration)}'))
-                self._resize_table_columns_for_language(this.table_widget)
-                layout.addWidget(this.table_widget)
+                table = this.table_widget
+                self._resize_table_columns_for_language(table)
+                metrics = table.fontMetrics()
+                for column in range(1, table.columnCount()):
+                    text_width = max((
+                        metrics.horizontalAdvance(table.item(row, column).text())
+                        for row in range(table.rowCount())
+                    ), default=0)
+                    table.setColumnWidth(column, max(table.columnWidth(column), text_width + 16))
+                layout.addWidget(table)
 
                 # Add OK and Cancel buttons
                 button_layout = QHBoxLayout()
@@ -2209,6 +2249,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 height = this.table_widget.verticalHeader().length() + 120
                 this.resize(min(max(500, width), available.width() - 40),
                             min(max(200, height), available.height() - 80))
+                table.horizontalHeader().setStretchLastSection(True)
 
             def select_all_chapters(this):
                 for row in range(this.table_widget.rowCount()):
@@ -2219,6 +2260,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                         item.setCheckState(Qt.CheckState.Checked)
 
         chapter_window = ChapterWindow()
+        self._apply_window_opacity(chapter_window)
         result = chapter_window.exec()
         if result == QDialog.DialogCode.Accepted:
             if not self._is_mpls_currently_main(mpls_path):
@@ -2265,7 +2307,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         dialog = QDialog(self)
         dialog.setWindowTitle(f"{self.t('MPLS play items')}: {mpls_path}")
         layout = QVBoxLayout(dialog)
-        table = QTableWidget(dialog)
+        table = SelectionTableWidget(dialog)
+        table.setObjectName('timingTable')
         self._set_compact_table(table, row_height=20, header_height=20)
         headers = [
             'index',
@@ -2309,6 +2352,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         button_layout.addWidget(close_button)
         layout.addLayout(button_layout)
         dialog.resize(max(900, table.horizontalHeader().length() + 40), min(800, 120 + len(rows) * 24))
+        table.horizontalHeader().setStretchLastSection(True)
+        self._apply_window_opacity(dialog)
         dialog.exec()
 
     def on_button_main(self, mpls_path: str, clicked_checked: Optional[bool] = None):

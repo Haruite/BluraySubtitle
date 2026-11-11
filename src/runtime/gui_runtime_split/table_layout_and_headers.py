@@ -2,8 +2,8 @@
 from html import escape
 
 from PyQt6.QtCore import Qt, QTimer, QEvent
-from PyQt6.QtGui import QFontMetrics, QPainter, QPalette
-from PyQt6.QtWidgets import QTableWidget, QComboBox, QHeaderView, QGroupBox, QLabel, QVBoxLayout, QSizePolicy, QAbstractItemView, QStyledItemDelegate, QToolTip, QWidget
+from PyQt6.QtGui import QFontMetrics, QPainter, QPalette, QPen
+from PyQt6.QtWidgets import QTableWidget, QComboBox, QDialog, QHeaderView, QGroupBox, QLabel, QVBoxLayout, QSizePolicy, QAbstractItemView, QStyledItemDelegate, QToolTip, QWidget
 
 from src.core import BDMV_LABELS, SUBTITLE_LABELS, MKV_LABELS, REMUX_LABELS, ENCODE_REMUX_LABELS, ENCODE_LABELS, \
     ENCODE_REMUX_SP_LABELS, ENCODE_SP_LABELS, DIY_BDMV_LABELS, DIY_SP_LABELS, DIY_REMUX_LABELS, CURRENT_UI_LANGUAGE, \
@@ -33,7 +33,10 @@ class _TableHeightHandle(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.setPen(self.palette().color(QPalette.ColorRole.Mid))
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        color = self.palette().color(QPalette.ColorRole.WindowText)
+        color.setAlpha(140)
+        painter.setPen(QPen(color, 2, cap=Qt.PenCapStyle.RoundCap))
         for offset in (-2, 2):
             painter.drawLine(self.width() // 2 - 24, self.height() // 2 + offset,
                              self.width() // 2 + 24, self.height() // 2 + offset)
@@ -138,10 +141,14 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
 
     def _set_table_headers(self, table: QTableWidget, keys: list[str]):
         table.setProperty('columnKeys', list(keys))
-        if table is getattr(self, 'table1', None) and 'remux_cmd' in keys:
+        disc_table = table is getattr(self, 'table1', None)
+        table.setShowGrid(False)
+        if table.objectName() in ('table3', 'playlistTable') or isinstance(table.window(), QDialog):
+            table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        if disc_table and 'remux_cmd' in keys:
             table.setColumnHidden(keys.index('remux_cmd'), self.get_selected_function_id() in (1, 2))
         try:
-            display_keys = list(keys)
+            display_keys = ['disc_volume' if disc_table and key == 'path' else key for key in keys]
             # For table2 (remux/encode views), show the language column as sub_language.
             if table is getattr(self, 'table2', None) and 'language' in display_keys:
                 function_id = self.get_selected_function_id() if hasattr(self, 'get_selected_function_id') else 0
@@ -232,6 +239,8 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
             return
         if not isinstance(table.itemDelegate(), _FullTextDelegate):
             table.setItemDelegate(_FullTextDelegate(table))
+        disc_table = table is getattr(self, 'table1', None)
+        playlist = table.objectName() == 'playlistTable'
         keys = list(table.property('columnKeys') or [])
         header = table.horizontalHeader()
         header.setStretchLastSection(False)
@@ -240,22 +249,27 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
         table.setWordWrap(False)
         table.setTextElideMode(Qt.TextElideMode.ElideMiddle)
         table.ensurePolished()
-        if table is not getattr(self, 'table1', None):
+        if not disc_table:
             self._set_compact_table(table)
         table.resizeColumnsToContents()
         header_metrics = QFontMetrics(header.font())
         cell_metrics = QFontMetrics(table.font())
         for column, key in enumerate(keys):
             item = table.horizontalHeaderItem(column)
-            minimum = header_metrics.horizontalAdvance(item.text() if item else '') + 28
+            minimum = header_metrics.horizontalAdvance(item.text() if item else '') + (18 if playlist else 28)
             width = max(minimum, table.columnWidth(column))
-            if key == 'output_name':
-                # Give the actual filename its full width; the user can resize it afterwards.
+            if key in ('output_name', 'duration'):
                 text_width = max((
-                    cell_metrics.horizontalAdvance(table.item(row, column).text())
-                    for row in range(table.rowCount()) if table.item(row, column)
+                    cell_metrics.horizontalAdvance(cell.text())
+                    for row in range(table.rowCount()) if (cell := table.item(row, column)) is not None
                 ), default=0)
-                width = max(320, minimum, text_width + 36)
+                if key == 'output_name':
+                    width = max(320, minimum, text_width + 36)
+                else:
+                    # Native item painting needs room for its text margins as well as the timestamp.
+                    width = max(width, text_width + 16)
+            elif key == 'path' and disc_table:
+                width = max(minimum, min(260, max(160, width)))
             elif key in ('path', 'sub_path'):
                 width = max(minimum, min(360, max(220, width)))
             elif key == 'vpy_path':
@@ -264,13 +278,19 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
                 width = max(minimum, min(280, width))
             elif key == 'remux_cmd':
                 width = max(minimum, 480)
-            elif key == 'info':
+            elif key == 'info' and disc_table:
                 width = max(620, max((
-                    child.horizontalHeader().length() + child.verticalHeader().width() + 6
+                    (child.property('playlistColumnsWidth') or child.horizontalHeader().length())
+                    + child.verticalHeader().sizeHint().width()
+                    + child.verticalScrollBar().sizeHint().width() + child.frameWidth() * 2
                     for row in range(table.rowCount())
                     if isinstance((child := table.cellWidget(row, column)), QTableWidget)
                 ), default=0))
             table.setColumnWidth(column, width)
+        if playlist:
+            # Size table1 from the content widths before the final column fills any extra space.
+            table.setProperty('playlistColumnsWidth', header.length())
+            header.setStretchLastSection(True)
         self._apply_hidden_m2ts_file_detail_columns()
 
     def _set_compact_table(self, table: QTableWidget, row_height: int = 28, header_height: int = 28):
@@ -309,6 +329,7 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
             self, table: QTableWidget, title: str, description: str, initial_height: int,
     ) -> tuple[QGroupBox, QLabel]:
         section = QGroupBox(self.t(title), self)
+        section.setProperty('workspaceSection', True)
         layout = QVBoxLayout(section)
         layout.setContentsMargins(10, 20, 10, 10)
         layout.setSpacing(8)
@@ -335,7 +356,8 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
             handle.setAccessibleName(tooltip)
         function_id = self.get_selected_function_id()
         self.table1_description.setText(self.t(
-            'Check the discs to process and drag their paths to set episode order. Review regenerated outputs after changing the selection or order.'
+            'Check the discs to process. Drag the row numbers or disc names to set episode order. '
+            'Review regenerated outputs after changing the selection or order.'
         ))
         if function_id == 1:
             title = self.t('Subtitle alignment')

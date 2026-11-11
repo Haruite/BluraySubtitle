@@ -14,12 +14,13 @@ import time
 from typing import Optional
 
 from PyQt6.QtCore import QTimer, QThread, Qt
-from PyQt6.QtWidgets import QProgressDialog, QProgressBar, QTableWidgetItem, QToolButton
+from PyQt6.QtWidgets import QApplication, QProgressDialog, QProgressBar, QTableWidgetItem, QToolButton
 
 from src.core import ENCODE_SP_LABELS, ENCODE_REMUX_LABELS, ENCODE_LABELS, DIY_SP_LABELS
 from src.runtime.gui_runtime_classes.sp_table_scan_worker import SpTableScanWorker
 from src.runtime.sp import SpEntry
 from .gui_base import BluraySubtitleGuiBase
+from .theme_and_i18n import execution_button_stylesheet
 
 
 class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
@@ -122,11 +123,9 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
         if text is not None:
             self._exe_button_progress_text = self.t(str(text))
 
-        v = int(getattr(self, '_exe_button_progress_value', 0))
-        t = str(getattr(self, '_exe_button_progress_text', '')).strip()
+        v = int(getattr(self, '_exe_button_progress_value', 0) or 0)
+        t = str(getattr(self, '_exe_button_progress_text', '') or '').strip()
         ratio = max(0.0, min(1.0, v / 1000.0))
-        stop1 = f"{ratio:.3f}"
-        stop2 = f"{min(1.0, ratio + 0.001):.3f}"
         percent = ratio * 100
 
         cancel_suffix = f" {self.t('(click to cancel)')}" if getattr(
@@ -136,13 +135,7 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
             self.exe_button.setText(f"{t}{cancel_suffix} {percent:.1f}%")
         else:
             self.exe_button.setText(f"{percent:.1f}%")
-        self.exe_button.setStyleSheet(
-            "QPushButton{"
-            f"background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #AAAAAA,stop:{stop1} #AAAAAA,stop:{stop2} #CCCCCC,stop:1 #CCCCCC);"
-            "color:white;border:none;border-radius:5px;padding:2px 6px;"
-            "}"
-            "QPushButton:disabled{color:white;}"
-        )
+        self.exe_button.setStyleSheet(execution_button_stylesheet(QApplication.palette(), self._theme_mode, ratio))
 
     def _on_exe_button_progress_value(self, value: int):
         self._update_exe_button_progress(value=value)

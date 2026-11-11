@@ -9,8 +9,8 @@ from functools import partial
 from typing import Optional
 
 from PyQt6.QtCore import Qt, QTimer, QCoreApplication, QThread, QObject, QModelIndex
-from PyQt6.QtWidgets import QTableWidget, QToolButton, QPlainTextEdit, QWidget, QTableWidgetItem, QComboBox, \
-    QProgressDialog, QProgressBar, QMessageBox
+from PyQt6.QtWidgets import QTableWidget, QToolButton, QPlainTextEdit, QTableWidgetItem, QComboBox, \
+    QProgressDialog, QProgressBar, QMessageBox, QAbstractItemView
 
 from src.bdmv import Chapter
 from src.core import BDMV_LABELS, DIY_BDMV_LABELS, DIY_REMUX_LABELS, find_mkvtoolnix, \
@@ -19,6 +19,8 @@ from src.core import BDMV_LABELS, DIY_BDMV_LABELS, DIY_REMUX_LABELS, find_mkvtoo
 from src.domain import Subtitle
 from src.domain.subtitles import list_subtitle_files
 from src.exports.utils import get_time_str, get_index_to_m2ts_and_offset, print_exc_terminal, get_folder_size, parse_time_to_seconds
+from src.runtime.gui_runtime_classes.custom_table_widget import SelectionTableWidget
+from src.runtime.gui_runtime_classes.disc_table_widget import DiscCommandEdit
 from src.runtime.gui_runtime_classes.file_path_table_widget_item import FilePathTableWidgetItem
 from src.runtime.gui_runtime_classes.remux_worker import RemuxWorker
 from src.runtime.gui_runtime_classes.merge_source_scan_worker import MergeSourceScanWorker
@@ -224,27 +226,6 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             # An empty preview is rejected before execution; never replace a failed build with an incomplete command.
             print_exc_terminal()
             return ''
-
-    def _create_main_remux_cmd_editor(self, text: str, parent: Optional[QWidget] = None) -> QPlainTextEdit:
-        editor = QPlainTextEdit(parent if parent is not None else self.table1)
-        editor._auto_cmd = text or ''
-        editor._user_modified = False
-        editor._updating_cmd = True
-        editor.setPlainText(text or '')
-        editor._updating_cmd = False
-        editor.setReadOnly(False)
-        editor.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
-        editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-
-        def mark_modified():
-            if getattr(editor, '_updating_cmd', False):
-                return
-            editor._user_modified = True
-
-        editor.textChanged.connect(mark_modified)
-        return editor
 
     def _folder_path_for_bdmv_index_from_table1(self, bdmv_index: int) -> str:
         """Bluray root folder for disc column bdmv_index (1-based, same as table1 row + 1)."""
@@ -694,9 +675,9 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
     def _refresh_table1_remux_cmds(self):
         if not hasattr(self, 'table1') or not self.table1:
             return
-        if 'remux_cmd' not in BDMV_LABELS:
-            return
         cmd_col = BDMV_LABELS.index('remux_cmd')
+        if self.table1.columnCount() <= cmd_col:
+            return
         for row in range(self.table1.rowCount()):
             root_item = self.table1.item(row, 0)
             root = root_item.text().strip() if root_item and root_item.text() else ''
@@ -714,16 +695,12 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                         selected_mpls_paths.append(
                             os.path.normpath(os.path.join(root, 'BDMV', 'PLAYLIST', mpls_item.text().strip())))
             editor = self.table1.cellWidget(row, cmd_col)
-            if not isinstance(editor, QPlainTextEdit):
-                editor = self._create_main_remux_cmd_editor('', self.table1)
+            if not isinstance(editor, DiscCommandEdit):
+                editor = DiscCommandEdit('', self.t('remux cmd'), self.table1)
                 self.table1.setCellWidget(row, cmd_col, editor)
                 self.table1.setRowHeight(row, max(self.table1.rowHeight(row), 220))
             if not selected_mpls_paths:
-                editor._updating_cmd = True
-                editor._auto_cmd = ''
-                editor._user_modified = False
-                editor.setPlainText('')
-                editor._updating_cmd = False
+                editor.update_generated_command('', reset=True)
                 continue
             auto_cmd_lines: list[str] = []
             total_paths = len(selected_mpls_paths)
@@ -739,13 +716,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                     )
                 )
             auto_cmd = '\n'.join([x for x in auto_cmd_lines if str(x).strip()])
-            cur_txt = editor.toPlainText()
-            if (not getattr(editor, '_user_modified', False)) or (not cur_txt.strip()) or (
-                    cur_txt == getattr(editor, '_auto_cmd', '')):
-                editor._updating_cmd = True
-                editor._auto_cmd = auto_cmd
-                editor.setPlainText(auto_cmd)
-                editor._updating_cmd = False
+            editor.update_generated_command(auto_cmd)
 
     def _resolve_bdmv_index_for_main_mpls(self, mpls_path: str, fallback_index: int) -> int:
         """Resolve bdmv_index from latest configuration using selected main mpls path."""
@@ -1202,7 +1173,9 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 self.table1.setRowCount(0)
                 self.table1.setRowCount(len(sources))
                 for i, (root, source_path) in enumerate(sources):
-                    table_widget = QTableWidget()
+                    table_widget = SelectionTableWidget()
+                    table_widget.setObjectName('playlistTable')
+                    table_widget.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
                     self._set_compact_table(table_widget, row_height=20, header_height=20)
                     info_headers = list(
                         MPLS_INFO_TRACKS_LABELS
@@ -1249,7 +1222,10 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                         timing_button.clicked.connect(partial(self.on_view_mpls_play_items, mpls_path))
                         table_widget.setCellWidget(mpls_n, info_headers.index('m2ts_timing'), timing_button)
                         btn2 = QToolButton()
+                        btn2.setObjectName('mainPlaylistToggle')
                         btn2.setCheckable(True)
+                        btn2.setToolTip(self.t('main'))
+                        btn2.setAccessibleName(self.t('main'))
                         btn2.setChecked(mpls_path in selected_mpls_paths)
                         btn2.clicked.connect(partial(self.on_button_main, mpls_path))
                         btn1.clicked.connect(
@@ -1281,8 +1257,8 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                         mpls_n += 1
                         if (time.time() - start_ts) >= 2.0:
                             QCoreApplication.processEvents()
-                    self._resize_table_columns_for_language(table_widget)
                     source_item = QTableWidgetItem(os.path.normpath(source_path))
+                    source_item.setToolTip(source_item.text())
                     source_item.setFlags((source_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                                          & ~Qt.ItemFlag.ItemIsEditable)
                     source_item.setCheckState(previous_checks.get(source_item.text(), Qt.CheckState.Checked))
@@ -1290,6 +1266,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                     size = get_folder_size(root) if root == source_path else f'{os.path.getsize(source_path) / 1024 ** 3:.2f} GiB'
                     self.table1.setItem(i, 1, QTableWidgetItem(size))
                     self.table1.setCellWidget(i, 2, table_widget)
+                    self._resize_table_columns_for_language(table_widget)
                     if self.get_selected_function_id() in (3, 4):
                         selected_paths = sorted(selected_mpls_paths)
                         cmd_text = '\n'.join(
@@ -1298,8 +1275,8 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                                 name_seq_index=index, name_seq_total=len(selected_paths),
                             ) for index, path in enumerate(selected_paths)
                         )
-                        self.table1.setCellWidget(i, BDMV_LABELS.index('remux_cmd'),
-                                                  self._create_main_remux_cmd_editor(cmd_text, self.table1))
+                        editor = DiscCommandEdit(cmd_text, self.t('remux cmd'), self.table1)
+                        self.table1.setCellWidget(i, BDMV_LABELS.index('remux_cmd'), editor)
                     elif self.get_selected_function_id() not in (3, 4, 5):
                         self.table1.setItem(i, BDMV_LABELS.index('remux_cmd'), QTableWidgetItem(''))
                     self.table1.setRowHeight(i, 220)

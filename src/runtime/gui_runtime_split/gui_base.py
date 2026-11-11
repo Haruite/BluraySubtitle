@@ -9,7 +9,9 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from PyQt6.QtCore import QPoint, Qt, QProcess
-from PyQt6.QtWidgets import QWidget, QComboBox, QPlainTextEdit, QTableWidgetItem, QTableWidget, QToolButton, QGroupBox, QLabel
+from PyQt6.QtWidgets import QWidget, QComboBox, QTableWidgetItem, QTableWidget, QToolButton, QGroupBox, QLabel
+
+from src.core.app_config import UiPreferences
 
 
 class BluraySubtitleGuiBase(QWidget):
@@ -33,7 +35,6 @@ class BluraySubtitleGuiBase(QWidget):
         self._chapter_pending_remove_row = None
         self._chapter_thread = None
         self._chapter_worker = None
-        self._colorful_opacity = None
         self._close_pending = None
         self._current_cancel_event = None
         self._encode_input_mode = None
@@ -120,7 +121,6 @@ class BluraySubtitleGuiBase(QWidget):
         self.episode_length_container = None
         self.episode_mode_row = None
         self.exe_button = None
-        self.function_button = None
         self.function_tabbar = None
         self.label1 = None
         self.label1_container = None
@@ -282,6 +282,9 @@ class BluraySubtitleGuiBase(QWidget):
     def _apply_ui_font_size(self, point_size: int):
         raise NotImplementedError
 
+    def _apply_window_opacity(self, window: QWidget | None=None):
+        raise NotImplementedError
+
     def _bdmv_index_for_table1_folder_norm(self, folder_norm: str) -> int:
         raise NotImplementedError
 
@@ -330,9 +333,6 @@ class BluraySubtitleGuiBase(QWidget):
     def _conversion_options_for_stream(self, stream: dict[str, object]) -> list[str]:
         raise NotImplementedError
 
-    def _create_main_remux_cmd_editor(self, text: str, parent: Optional[QWidget]=None) -> QPlainTextEdit:
-        raise NotImplementedError
-
     def _create_table_section(self, table: QTableWidget, title: str, description: str, initial_height: int) -> tuple[QGroupBox, QLabel]:
         raise NotImplementedError
 
@@ -343,6 +343,9 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _current_encode_tool_and_depth(self) -> tuple[str, str]:
+        raise NotImplementedError
+
+    def _current_ui_preferences(self) -> UiPreferences:
         raise NotImplementedError
 
     def _current_vpy_processing_values(self) -> dict[str, float]:
@@ -524,9 +527,6 @@ class BluraySubtitleGuiBase(QWidget):
     def _on_language_changed(self):
         raise NotImplementedError
 
-    def _on_opacity_changed(self, value: int):
-        raise NotImplementedError
-
     def _on_play_sp_table_row_clicked(self):
         raise NotImplementedError
 
@@ -626,7 +626,7 @@ class BluraySubtitleGuiBase(QWidget):
     def _refresh_font_size_combo(self):
         raise NotImplementedError
 
-    def _refresh_function_tabbar_theme(self):
+    def _refresh_function_tabbar_theme(self) -> None:
         raise NotImplementedError
 
     def _refresh_language_column_defaults(self):
@@ -642,9 +642,6 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _refresh_movie_table2(self):
-        raise NotImplementedError
-
-    def _refresh_opacity_controls(self):
         raise NotImplementedError
 
     def _refresh_subtitle_suffix_options(self):
@@ -693,6 +690,9 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _reset_table3_column_layout(self):
+        raise NotImplementedError
+
+    def _resize_encode_tool_combos(self) -> None:
         raise NotImplementedError
 
     def _resize_table_columns_for_language(self, table: QTableWidget):
@@ -760,9 +760,6 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _set_table_headers(self, table: QTableWidget, keys: list[str]):
-        raise NotImplementedError
-
-    def _set_window_opacity_if_supported(self, opacity: float):
         raise NotImplementedError
 
     def _show_app_config_error(self, action: str, error: Exception | str) -> None:

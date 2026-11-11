@@ -7,7 +7,7 @@
     "language": "en",
     "theme": "light",
     "font_size": 10,
-    "opacity": 94
+    "opacity": 100
   },
   "startup": {
     "function_page": "bluray_remux",

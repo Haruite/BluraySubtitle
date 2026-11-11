@@ -1300,8 +1300,9 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 if item and item.text().lower().endswith('.iso') and os.path.isfile(item.text()):
                     self.table1.removeRow(row)
         self._selected_function_id = function_id
+        if last_function_id != function_id:
+            self._refresh_function_tabbar_theme()
         self._restore_output_folder_for_function(function_id)
-        self._refresh_function_tabbar_theme()
 
         if hasattr(self, 'output_folder_row') and self.output_folder_row:
             self.output_folder_row.setVisible(function_id in (3, 4, 5))
@@ -1604,7 +1605,6 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
         except Exception:
             pass
         self._refresh_table_descriptions()
-        self._refresh_function_tabbar_theme()
         # Encode / DIY+encode: update codec row vs DIY hint, then refill bit depth (Blu-ray Encode has full BPP list).
         try:
             if hasattr(self, '_apply_encode_codec_slot_visibility'):

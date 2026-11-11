@@ -16,7 +16,7 @@ from typing import Optional
 
 from PyQt6.QtCore import Qt, QTimer, QCoreApplication, QThread
 from PyQt6.QtWidgets import QApplication, QVBoxLayout, QWidget, QHBoxLayout, QLabel, QComboBox, QSlider, QGroupBox, \
-    QLineEdit, QTabBar, QRadioButton, QButtonGroup, QPushButton, QCheckBox, QTableWidget, QSizePolicy, QScrollArea, \
+    QLineEdit, QTabBar, QRadioButton, QButtonGroup, QPushButton, QCheckBox, QSizePolicy, QScrollArea, \
     QProgressDialog, QProgressBar, QFileDialog, QFrame
 
 from src.core import APP_TITLE, BDMV_LABELS, SUBTITLE_LABELS, ENCODE_SP_LABELS
@@ -25,8 +25,9 @@ from src.core.i18n import translate_text
 import src.core.settings as core_settings
 from src.exports.utils import print_exc_terminal
 from src.runtime.gui_runtime_classes.custom_box import CustomBox
-from src.runtime.gui_runtime_classes.custom_table_widget import CustomTableWidget
+from src.runtime.gui_runtime_classes.custom_table_widget import CustomTableWidget, SelectionTableWidget
 from src.runtime.gui_runtime_classes.disc_table_widget import DiscTableWidget
+from src.runtime.gui_runtime_classes.execution_button import ExecutionButton
 from .gui_base import BluraySubtitleGuiBase
 
 
@@ -71,11 +72,11 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.resize(1120, 900)
         self._language_code = self._app_config.ui.language
         self._theme_mode = self._app_config.ui.theme
-        self._colorful_opacity = self._app_config.ui.opacity / 100.0
         core_settings.CURRENT_UI_LANGUAGE = self._language_code
 
         app = QApplication.instance()
         if app:
+            self._default_style_name = app.style().name()
             app.aboutToQuit.connect(self.delete_default_vpy_file)
 
         outer_layout = QVBoxLayout()
@@ -137,16 +138,19 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         language_layout.addWidget(self.font_size_label)
         language_layout.addWidget(self.font_size_combo)
         language_layout.addSpacing(12)
-        self.opacity_label = QLabel('Opacity', language_row)
+        self.opacity_label = QLabel(self.t('Opacity'), language_row)
         self.opacity_slider = QSlider(Qt.Orientation.Horizontal, language_row)
         self.opacity_slider.setRange(60, 100)
         self.opacity_slider.setValue(self._app_config.ui.opacity)
         self.opacity_slider.setFixedWidth(140)
-        self.opacity_slider.valueChanged.connect(self._on_opacity_changed)
+        self.opacity_slider.valueChanged.connect(lambda: self._apply_window_opacity())
         self.opacity_slider.sliderReleased.connect(
             lambda: self.opacity_slider.setValue(
                 100 if self.opacity_slider.value() >= 99 else self.opacity_slider.value())
         )
+        opacity_supported = self._window_opacity_supported()
+        self.opacity_label.setVisible(opacity_supported)
+        self.opacity_slider.setVisible(opacity_supported)
         language_layout.addWidget(self.opacity_label)
         language_layout.addWidget(self.opacity_slider)
         self.third_party_notices_btn = QPushButton(self.t('Third-party notices'), language_row)
@@ -162,17 +166,12 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         outer_layout.addWidget(language_row)
         outer_layout.addWidget(self.content_scroll, 1)
 
-        function_button = QGroupBox(self.t('Function'), self)
-        self.function_button = function_button
-        h_layout = QHBoxLayout()
-        h_layout.setContentsMargins(8, 10, 8, 6)
-        h_layout.setSpacing(12)
-        function_button.setLayout(h_layout)
         self.subtitle_folder_path = QLineEdit()
         self.subtitle_folder_path.setMinimumWidth(200)
 
-        self.function_tabbar = QTabBar(function_button)
+        self.function_tabbar = QTabBar(self)
         self.function_tabbar.setObjectName('functionTabbar')
+        self.function_tabbar.setAccessibleName(self.t('Function'))
         self.function_tabbar.setExpanding(True)
         self.function_tabbar.setMovable(False)
         self.function_tabbar.setDocumentMode(True)
@@ -186,8 +185,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.function_tabbar.setCurrentIndex(self._function_id_order.index(startup_function_id))
         self._selected_function_id = startup_function_id
         self.function_tabbar.currentChanged.connect(lambda _=None: self.on_select_function())
-        h_layout.addWidget(self.function_tabbar)
-        self.layout.addWidget(function_button)
+        self.layout.addWidget(self.function_tabbar)
 
         self.diy_mode_row = QWidget(self)
         self.diy_mode_row.setProperty("noMargin", True)
@@ -288,20 +286,22 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         bdmv.setLayout(bdmv_top)
 
         self.bdmv_path_row = QWidget(self)
+        self.bdmv_path_row.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         bdmv_path_outer = QHBoxLayout(self.bdmv_path_row)
         bdmv_path_outer.setContentsMargins(0, 0, 0, 0)
         bdmv_path_outer.setSpacing(4)
-        self.bdmv_path_label = QLabel('Select the BDMV folder', self)
-        bdmv_path_outer.addWidget(self.bdmv_path_label)
+        self.bdmv_path_label = QLabel('Select the BDMV folder', self.bdmv_path_row)
+        bdmv_path_outer.addWidget(self.bdmv_path_label, alignment=Qt.AlignmentFlag.AlignVCenter)
 
         bluray_path_box = CustomBox('Blu-ray', self)
-        bluray_path_box.setProperty("noMargin", True)
+        bluray_path_box.setProperty('sourcePathBox', True)
         self.bluray_path_box = bluray_path_box
         h_layout = QHBoxLayout()
         h_layout.setContentsMargins(0, 0, 0, 0)
         h_layout.setSpacing(4)
         bluray_path_box.setLayout(h_layout)
         self.bdmv_folder_path = QLineEdit()
+        self.bdmv_folder_path.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.bdmv_folder_path.setMinimumWidth(200)
         self.bdmv_folder_path.setAcceptDrops(False)
         button1 = QPushButton('Select')
@@ -315,12 +315,13 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.layout.addWidget(self.bdmv_path_row)
 
         remux_path_box = CustomBox('Remux', self)
-        remux_path_box.setProperty("noMargin", True)
+        remux_path_box.setProperty('sourcePathBox', True)
         remux_layout = QHBoxLayout()
         remux_layout.setContentsMargins(0, 0, 0, 0)
         remux_layout.setSpacing(4)
         remux_path_box.setLayout(remux_layout)
         self.remux_folder_path = QLineEdit()
+        self.remux_folder_path.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.remux_folder_path.setMinimumWidth(200)
         self.remux_folder_path.setAcceptDrops(False)
         self.remux_folder_path.textChanged.connect(
@@ -412,7 +413,8 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.bdmv_folder_path.textChanged.connect(self.on_bdmv_folder_path_change)
         self.table1_section, self.table1_description = self._create_table_section(
             self.table1, 'Sources and playlists',
-            'Check the discs to process and drag their paths to set episode order. Review regenerated outputs after changing the selection or order.',
+            'Check the discs to process. Drag the row numbers or disc names to set episode order. '
+            'Review regenerated outputs after changing the selection or order.',
             480,
         )
         v_layout.addWidget(self.table1_section)
@@ -651,7 +653,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self._chapter_combo_debounce.setInterval(120)
         self._chapter_combo_debounce.timeout.connect(self._run_chapter_combo_update)
         self._pending_chapter_combo_index = -1
-        self.table3 = QTableWidget(self)
+        self.table3 = SelectionTableWidget(self)
         self.table3.setObjectName('table3')
         self.table3.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._set_compact_table(self.table3, row_height=22, header_height=22)
@@ -687,7 +689,8 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.layout.addWidget(label2_container)
 
         self.encode_box = QGroupBox('Encode', self)
-        self.encode_box.setProperty("tightGroup", True)
+        self.encode_box.setObjectName('encodeBox')
+        self.encode_box.setProperty('workspaceSection', True)
         self.encode_box.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         self.encode_box.setVisible(False)
         self.init_encode_box()
@@ -744,9 +747,9 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.output_folder_row = output_path_row
         self.output_folder_row.setVisible(self.get_selected_function_id() in (3, 4, 5))
         self.layout.addWidget(self.output_folder_row)
-        self.exe_button = QPushButton("Generate Subtitles")
+        self.exe_button = ExecutionButton("Generate Subtitles")
+        self.exe_button.setObjectName('primaryAction')
         self.exe_button.clicked.connect(self.main)
-        self.exe_button.setMinimumHeight(42)
         outer_layout.addWidget(self.exe_button)
         self.bottom_message_label = QLabel('', self)
         self.bottom_message_label.setStyleSheet('color: #007BFF;')
@@ -761,6 +764,8 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self._track_language_config: dict[str, dict[str, str]] = {}
         self._reposition_subtitle_path_box()
         self._apply_saved_ui_preferences()
+        # Qt uses the widget palette when creating the native window frame.
+        self.ensurePolished()
         self._apply_saved_encode_defaults()
         # Table2 is initially constructed for subtitle mode, so initialize the configured startup page explicitly.
         try:

@@ -4,6 +4,9 @@ All external imports should use this module instead of the legacy
 `bluray_subtitle_gui.py` directly. The legacy file is kept for debugging.
 """
 
+from PyQt6.QtCore import QEvent, Qt
+from PyQt6.QtWidgets import QApplication, QAbstractSpinBox, QComboBox, QWidget
+
 from ..gui_runtime_split.lifecycle_and_bootstrap import LifecycleBootstrapMixin
 from ..gui_runtime_split.settings_and_state import SettingsStateMixin
 from ..gui_runtime_split.configuration_and_modes import ConfigurationModesMixin
@@ -37,6 +40,27 @@ class BluraySubtitleGUI(
     BluraySubtitleGuiBase,
 ):
     """Split GUI class composed from all migration mixins."""
+
+    def __init__(self):
+        super().__init__()
+        QApplication.instance().installEventFilter(self)
+
+    def eventFilter(self, watched, event):
+        event_type = event.type()
+        if event_type == QEvent.Type.Wheel and isinstance(watched, (QComboBox, QAbstractSpinBox)):
+            # Pass wheel input to the enclosing scroll area. Popup lists scroll independently.
+            event.ignore()
+            return True
+        if (
+            event_type == QEvent.Type.Show
+            and isinstance(watched, QWidget)
+            and watched.windowType() == Qt.WindowType.Popup
+            and isinstance(combo := watched.parentWidget(), QComboBox)
+            and self._window_opacity_supported()
+        ):
+            # A combo box list is a separate window with its own opacity.
+            watched.setWindowOpacity(combo.window().windowOpacity())
+        return super().eventFilter(watched, event)
 
     def __getattribute__(self, name: str):
         """Hide base stub methods when no parent provides implementation."""
