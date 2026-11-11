@@ -142,6 +142,8 @@ These are **two separate upstreams**: the `fdkaac` program links against or ship
 - **License:** GPL v2
 - **Full license text:** https://codeberg.org/mbunkus/mkvtoolnix/raw/branch/main/COPYING
 - **Source:** https://codeberg.org/mbunkus/mkvtoolnix/archive/release-{{MKVTOOLNIX_VERSION}}.zip
+- **QtCore version:** {{MKVTOOLNIX_QT_VERSION}}. The MinGW build statically links the ICU-free QtCore into `libmtxcommon.dll`. Corresponding source: {{MKVTOOLNIX_QT_SOURCE}}
+- **Bundled license texts:** `legal/mkvtoolnix/`
 - **Notes:** Additional bundled libraries and assets are listed in upstream `README.md` (section “Included third-party components and their licenses”) under `doc/licenses/`.
 
 ---
@@ -202,12 +204,12 @@ Source-built Windows plugins statically link compiler runtimes where supported. 
 
 ### VapourSynth Editor
 
-- **Files:** the independent editor distribution in `vsedit/`, including its private Qt libraries.
+- **Files:** the editor programs and launchers in `vsedit/` share the Qt libraries in `PyQt6/Qt6/`.
 - **Version:** {{VSEDIT_VERSION}}
 - **License:** MIT
 - **Source:** https://github.com/YomikoR/VapourSynth-Editor/archive/refs/tags/{{VSEDIT_VERSION}}.zip
 - **Qt version:** {{VSEDIT_QT_VERSION}}; corresponding source: {{VSEDIT_QT_SOURCE}}
-- **Bundled license texts:** `legal/vapoursynth/components/vsedit/`; the dynamically linked Qt libraries use LGPL v3, with the LGPL and GPL texts included in its `Qt/` subdirectory.
+- **Bundled license texts:** `legal/vsedit/`. The `Qt/` subdirectory includes the LGPL v3 and GPL v3 texts for the dynamically linked Qt libraries.
 
 ---
 

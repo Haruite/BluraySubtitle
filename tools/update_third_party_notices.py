@@ -66,6 +66,10 @@ def generate_third_party_notices(
         raise RuntimeError(f"Unable to read FFmpeg release from: {ffmpeg_build}")
 
     software_root = Path(str(settings["X265_PATH"])).parent
+    mkv_root = Path(str(settings["MKV_MERGE_PATH"])).parent
+    mkv_build = json.loads((mkv_root / "mkvtoolnix-build.json").read_text(encoding="utf-8"))
+    mkv_qt = mkv_build["qt_version"]
+    mkv_qt_series = ".".join(mkv_qt.split(".")[:2])
     vapoursynth_root = Path(str(settings["VSPIPE_PATH"])).parent
     components = json.loads(
         (vapoursynth_root / "vapoursynth-components.json").read_text(encoding="utf-8")
@@ -129,6 +133,8 @@ def generate_third_party_notices(
             ("--version",),
             rf"\bv({VERSION})",
         ),
+        "MKVTOOLNIX_QT_VERSION": mkv_qt,
+        "MKVTOOLNIX_QT_SOURCE": f"https://download.qt.io/archive/qt/{mkv_qt_series}/{mkv_qt}/submodules/qtbase-everywhere-src-{mkv_qt}.tar.xz",
         "VAPOURSYNTH_CLASSIC_VERSION": f"R{classic_release}.A{classic_api}",
         "PYTHON_VERSION": platform.python_version(),
         "NUMPY_VERSION": version("numpy"),

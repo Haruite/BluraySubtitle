@@ -79,6 +79,7 @@
 - `Dockerfile` 是 `setup_linux_environment.sh` 面向 Ubuntu 26.04 的适配版。不得在 Dockerfile 中增加其他操作系统的兼容处理、说明性输出或注释。
 - 对于 `src/core/settings.py` 中已声明的工具和 VapourSynth 插件路径，Windows 和 Linux setup 须安装到对应平台的配置路径。Docker 须在各工具构建段内直接安装到该文件中对应的 Docker 路径，不得增加末尾统一搬运层。
 - Windows VSEdit 必须独占名为 `vsedit` 的目录；安装脚本须规范化其安装路径，并将最终的 `VSEDIT_PATH` 写回 `src/core/settings.py`。
+- Windows MKVToolNix 命令行工具必须共用名为 `mkvtoolnix` 的目录。安装脚本须规范化 `MKV_MERGE_PATH` 配置的目录，并将四个工具的最终路径写回 `src/core/settings.py`。
 - 已有软件必须在 Dockerfile 对应构建段内修改，即使后续层缓存因此失效。不得把无关改动放到文件前部；新增软件在依赖关系允许时尽量放到末尾，以保留前面构建层的缓存。
 
 ## 10. 已确认的产品约束

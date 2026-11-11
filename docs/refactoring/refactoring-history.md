@@ -1298,3 +1298,13 @@ Date: 2026-10-28
 2026-11-09
 
 Windows setup adds `-Mode Build`, caches compiled artifacts, and builds x265 and SVT-AV1 with Ninja. Desktop setup reuses eligible Visual Studio Enterprise 2026 installations. GitHub Actions publishes the Windows x64 package and its build record over SFTP on pushes to `main`, then attaches the package matching the tag's commit when a Release is published. The app shows the build's commit hash and time and checks Release versions and server package commits separately. [Build Performance](../wiki/Build-Performance.md)
+
+## Source-built Windows Qt Tools
+
+Date: 2026-11-11
+
+- Windows setup replaces the upstream MKVToolNix installer and prebuilt VSEdit archive with managed source builds. It installs MKVToolNix under the configured `mkvtoolnix` directory and keeps VSEdit in `vsedit`. Both installs include their private runtime files and use separate verified caches. VSEdit uses the MSVC SDK matching PyQt6's Qt version. MKVToolNix uses MinGW UCRT64 and a separately cached static QtCore without ICU. The four commands share `libmtxcommon.dll`, which links QtCore and exports the symbols the command-line objects reference.
+- Windows packaging generates launchers, shares PyQt6's Qt DLLs and plugins with VSEdit, and reuses compatible MKVToolNix dependencies already in the package. Updated the bilingual path rule, third-party notices, and the VSEdit cache message.
+- The Windows publishing workflow extracts the archive and checks the runtime layout, tool entry points, and a FLAC and SRT mux before upload.
+- Verification passed for 101 unit tests, both source builds, both cache restorations, and a fresh archive extraction. VSEdit launched and previewed a frame using the bundled PyQt6 Qt and VSScript.
+- The static QtCore build passed source compilation, cache restoration, and upgrade of a managed installation. Package checks covered the extracted archive and MPEG-2 transport, Opus, FLAC, and SRT muxing and extraction.

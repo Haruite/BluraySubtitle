@@ -113,6 +113,8 @@ jobs:
           finally {
             Pop-Location
           }
+          & $env:BUILD_PYTHON tools/verify_windows_package.py $archive --seven-zip $env:BUILD_SEVEN_ZIP
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload Package and Build Information
         if: github.ref == 'refs/heads/main'

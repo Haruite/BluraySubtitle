@@ -1295,3 +1295,13 @@ Blu-ray DIY 压制及“编辑轨道”中的通用视频转换仍不在本阶�
 2026-11-09
 
 Windows setup 新增 `-Mode Build`，缓存编译产物，并用 Ninja 构建 x265 和 SVT-AV1。桌面模式复用符合要求的 Visual Studio Enterprise 2026。推送到 `main` 后，GitHub Actions 通过 SFTP 发布 Windows x64 包及构建记录，发布 Release 时附加与标签提交匹配的包。应用显示构建的提交哈希和时间，并分别检查 Release 版本与服务器包的提交。[构建性能](../wiki/Build-Performance.zh-Hans.md)
+
+## Windows Qt 工具源码构建
+
+2026-11-11
+
+- Windows setup 由源码构建 MKVToolNix 和 VSEdit，替代上游 MKVToolNix 安装程序和 VSEdit 预编译包。MKVToolNix 安装到配置的 `mkvtoolnix` 目录，VSEdit 保留在 `vsedit` 目录。两套工具均随安装保留各自的运行库，并使用独立校验的构建缓存。VSEdit 使用与 PyQt6 的 Qt 版本一致的 MSVC SDK。MKVToolNix 使用 MinGW UCRT64 和独立缓存的无 ICU 静态 QtCore。四个命令共用 `libmtxcommon.dll`，该库链接 QtCore 并导出命令行目标文件引用的符号。
+- Windows 打包阶段生成启动器，让 VSEdit 共用 PyQt6 的 Qt DLL 和插件，并让 MKVToolNix 复用包内已有的兼容 DLL。同步更新中英文路径规范、第三方说明和 VSEdit 缓存提示。
+- Windows 发布流程在上传前解压归档，检查运行库布局、工具入口，并测试 FLAC 音轨和 SRT 字幕封装。
+- 101 个单元测试、两套工具的源码构建和缓存恢复、归档解压检查均通过。VSEdit 使用包内 PyQt6 的 Qt 和 VSScript 启动并预览了视频帧。
+- 静态 QtCore 方案通过源码编译、缓存恢复和受管理安装升级验证。打包检查涵盖归档解压，以及 MPEG-2 传输流、Opus、FLAC 和 SRT 的封装与提取。

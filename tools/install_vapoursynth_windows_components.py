@@ -15,6 +15,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -23,8 +24,14 @@ import urllib.request
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from src.core.i18n import translate_text
+from tools import build_vsedit_windows as vsedit_build
 from tools.vapoursynth_plugin_versions import fallback_version, normalize_version, record_version, version_satisfies
 from tools.windows_build_cache import files_under, publish as publish_build_cache, restore as restore_build_cache
+from tools.windows_native_tools import (
+    VSEDIT_PLUGINS, VSEDIT_PROGRAMS, VSEDIT_QT_LIBRARIES, VSEDIT_RECIPE, build_record,
+    editor_runtime_matches, fetch_verified, file_hash, fingerprint, install_build, msvc_environment,
+    pyqt_runtime, record_build,
+)
 from tools.windows_tool_paths import normalize_vsedit_path
 
 BUILD_PROFILE = "static-runtime-shared-fftw-1"
@@ -68,7 +75,7 @@ COMPONENTS = (
     Component("mvtools", "dubhatervapoursynth/vapoursynth-mvtools", "v26", "mvtools.dll", "mv", asset=r"win64[.]7z$"),
     Component("removegrain", "vapoursynth/vs-removegrain", "R1", "RemoveGrainVS.dll", "rgvs", "removegrain", r"win64.*[.](?:zip|7z)$"),
 )
-EDITOR = Component("vsedit", "YomikoR/VapourSynth-Editor", "", "vsedit.exe", "", "editor", r"[.]7z$")
+EDITOR = Component("vsedit", "YomikoR/VapourSynth-Editor", "", "vsedit.exe", "")
 PROBE = r"""
 import json, os, sys
 from pathlib import Path
@@ -109,23 +116,6 @@ def imported_dlls(path: Path) -> list[str]:
         image.close()
 
 
-def file_version(path: Path) -> str:
-    import pefile
-    image = pefile.PE(str(path))
-    try:
-        for group in getattr(image, "FileInfo", ()):
-            for entry in group:
-                if entry.Key == b"StringFileInfo":
-                    for table in entry.StringTable:
-                        value = table.entries.get(b"ProductVersion", b"").decode("utf-8", errors="replace")
-                        match = re.search(r"[0-9]+[.][0-9]+[.][0-9]+", value)
-                        if match:
-                            return match.group(0)
-    finally:
-        image.close()
-    raise RuntimeError(f"Unable to read product version: {path}")
-
-
 class Installer:
     def __init__(self, args):
         self.args = args
@@ -148,6 +138,9 @@ class Installer:
         self.json_cache = {}
         self.cache_archive = args.build_cache / "vapoursynth-components.zip" if args.build_cache else None
         self.cache_key = self.component_cache_key() if self.cache_archive else None
+        self.editor_cache = args.editor_cache or args.build_cache or (
+            Path(os.environ["ProgramData"]) / "BluraySubtitle/build-cache/artifacts"
+        )
 
     def component_cache_key(self):
         import numpy as np
@@ -165,30 +158,23 @@ class Installer:
             ):
                 raise ValueError("Invalid cached VapourSynth dependency path")
             files[name] = (target, digest)
-        for component in (*COMPONENTS, EDITOR):
+        for component in COMPONENTS:
             record = state["components"][component.key]
             license_root = self.runtime / "licenses/components" / component.key
-            if component == EDITOR:
-                entry = self.editor
-                field = "entrypoint"
-            else:
-                folder = self.runtime / "vapoursynth64/coreplugins" if component.key == "removegrain" else self.plugins
-                entry = folder / component.filename
-                field = "plugin"
-            if (self.runtime / record[field]).resolve() != entry.resolve() or record["repository"] != component.repository:
+            folder = self.runtime / "vapoursynth64/coreplugins" if component.key == "removegrain" else self.plugins
+            entry = folder / component.filename
+            if (self.runtime / record["plugin"]).resolve() != entry.resolve() or record["repository"] != component.repository:
                 raise ValueError("Invalid cached VapourSynth component entry")
-            if record[field] not in record["files"] or not set(record.get("dependencies", ())) <= state["dependencies"].keys():
+            if record["plugin"] not in record["files"] or not set(record.get("dependencies", ())) <= state["dependencies"].keys():
                 raise ValueError("Incomplete cached VapourSynth component")
             for name, digest in record["files"].items():
                 target = (self.runtime / name).resolve()
-                if target != entry.resolve() and not target.is_relative_to(license_root.resolve()) and not (
-                    component == EDITOR and target.is_relative_to(self.editor.parent.resolve())
-                ):
+                if target != entry.resolve() and not target.is_relative_to(license_root.resolve()):
                     raise ValueError("Invalid cached VapourSynth component file path")
                 files[name] = (target, digest)
         return {"files/" + hashlib.sha256(name.encode("utf-8")).hexdigest(): value for name, value in files.items()}
 
-    def restore_components(self, editor_ref=None):
+    def restore_components(self):
         payload = self.work / "cached-components"
         if not self.cache_archive or not restore_build_cache(self.cache_archive, self.cache_key, payload):
             return False
@@ -202,33 +188,18 @@ class Installer:
                 return False
         except (KeyError, OSError, TypeError, ValueError):
             return False
-        if editor_ref is not None and state["components"][EDITOR.key]["ref"] != editor_ref:
-            editor_licenses = (self.runtime / "licenses/components" / EDITOR.key).resolve()
-            files = {
-                name: (target, digest) for name, (target, digest) in files.items()
-                if not target.is_relative_to(self.editor.parent) and not target.is_relative_to(editor_licenses)
-            }
-            del state["components"][EDITOR.key]
-        # Let normal installation handle existing plugins or editors that differ from the cache.
-        for component in (*COMPONENTS, EDITOR):
-            field = "entrypoint" if component == EDITOR else "plugin"
-            record = state["components"].get(component.key)
-            if record is None:
-                continue
-            target = self.runtime / record[field]
-            if component.key != "removegrain" and target.exists() and sha256(target) != record["files"][record[field]]:
+        state["components"].pop(EDITOR.key, None)
+        # Let normal installation handle existing plugins that differ from the cache.
+        for component in COMPONENTS:
+            record = state["components"][component.key]
+            target = self.runtime / record["plugin"]
+            if component.key != "removegrain" and target.exists() and sha256(target) != record["files"][record["plugin"]]:
                 return False
         for name, (target, _) in files.items():
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(payload / name, target)
         self.state = state
         self.verify_plugins(restore_versions=True)
-        if EDITOR.key in state["components"]:
-            self.configure_editor()
-            version = subprocess.run([str(self.editor), "--version"], capture_output=True, text=True,
-                                     encoding="utf-8", errors="replace", timeout=30, check=True)
-            if state["components"][EDITOR.key]["ref"] not in version.stdout + version.stderr:
-                return False
         self.save()
         return True
 
@@ -394,7 +365,7 @@ class Installer:
 
     def prepare_sdk(self):
         include = self.sdk / "include/vapoursynth"
-        if not (include / "VSConstants4.h").is_file():
+        if not all((include / name).is_file() for name in ("VSConstants4.h", "VapourSynth4.h", "VSScript4.h", "VSHelper4.h")):
             version = (self.runtime / "vapoursynth-classic-version.txt").read_text(encoding="utf-8-sig").strip()
             major, minor = version.split(".", 1)
             source = self.source(Component("sdk", "AmusementClub/vapoursynth-classic", "", "", ""), f"R{major}.A{minor}")
@@ -869,76 +840,98 @@ class Installer:
         self.save()
 
     def install_editor(self):
-        self.used_packages = set()
-        release = self.release(EDITOR.repository, EDITOR.ref)
-        ref = release["tag_name"]
-        previous = self.state["components"].get("vsedit")
-        if previous and (self.runtime / previous["entrypoint"]).resolve() == self.editor and self.valid(previous, ref):
-            self.configure_editor()
-            self.editor_metadata(self.state["components"]["vsedit"])
-            self.save()
-            self.log("VapourSynth component is current: {name} {version}", name="VSEdit", version=ref)
-            return
-        self.log("Installing VapourSynth component: {name} {version}", name="VSEdit", version=ref)
-        assets = [item for item in release["assets"] if re.search(EDITOR.asset, item["name"], re.I)]
-        source = self.source(EDITOR, ref)
-        package, directory, method = None, None, "source"
-        for artifact in assets:
-            archive = self.download_release_asset(artifact, self.work / "vsedit" / artifact["name"])
-            package = self.unpack(archive, self.work / "vsedit" / ("release-" + archive.stem))
-            executable = next((path for path in package.rglob("vsedit.exe") if pe64(path)), None)
-            if executable is None:
-                continue
-            try:
-                version = subprocess.run([str(executable), "--version"], capture_output=True, text=True,
-                                         encoding="utf-8", errors="replace", timeout=30, check=True)
-                if ref not in version.stdout + version.stderr:
-                    continue
-            except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
-                self.log("Release binary is incompatible; trying source: {name}: {detail}", name="VSEdit", detail=str(error))
-                continue
-            directory, method = executable.parent, "release"
-            break
-        if directory is None:
-            package = None
+        ref = self.release(EDITOR.repository)["tag_name"]
+        qt_version, qt = pyqt_runtime()
+        include = self.sdk / "include/vapoursynth"
+        if not all((include / name).is_file() for name in ("VapourSynth4.h", "VSScript4.h", "VSHelper4.h")):
             self.prepare_sdk()
-            self.ensure_packages("qt6-base", "qt6-5compat", "qt6-websockets", "qt6-multimedia")
-            include = (self.sdk / "include/vapoursynth").as_posix()
-            for project in (source / "pro").rglob("*.pro"):
-                text = project.read_text(encoding="utf-8")
-                text = text.replace("QMAKE_LFLAGS += '/entry:mainCRTStartup'", "win32-msvc: QMAKE_LFLAGS += /entry:mainCRTStartup")
-                project.write_text(text.replace("DEPLOY_COMMAND = windeployqt\n", "DEPLOY_COMMAND = windeployqt6\n"), encoding="utf-8")
-            self.run_msys([f"export VS_INCLUDE_PATH={shlex.quote(include)}", "cd pro", "qmake6 -norecursive pro.pro CONFIG+=release", "make -j" + str(self.args.jobs)], source)
-            executable = next(source.rglob("vsedit.exe"))
-            directory = executable.parent
-            self.run_msys(["windeployqt6 --release --no-translations " + shlex.quote(executable.as_posix())], directory)
+        key = fingerprint(
+            VSEDIT_RECIPE, ref, qt_version,
+            {header.name: file_hash(header) for header in include.glob("*.h")},
+            {name: file_hash(qt / "bin" / name) for name in VSEDIT_QT_LIBRARIES},
+            {name: file_hash(qt / "plugins" / name) for name in VSEDIT_PLUGINS},
+        )
+        entrypoints = {name: self.editor.name if name == "vsedit.exe" else name for name in VSEDIT_PROGRAMS}
+        record = build_record(self.editor.parent, EDITOR.key, installed=True)
+        if record and record["fingerprint"] == key and record["entrypoints"] == entrypoints and editor_runtime_matches(record, qt_version, qt):
+            try:
+                vsedit_build.verify_editor(self.editor.parent, self.editor.name, ref)
+            except (OSError, RuntimeError, subprocess.SubprocessError):
+                pass
+            else:
+                self.update_editor_record(record)
+                self.log("VapourSynth component is current: {name} {version}", name="VSEdit", version=ref)
+                return
+
+        archive = self.editor_cache / "vsedit.zip"
+        with tempfile.TemporaryDirectory(prefix="editor-", dir=self.work) as temporary:
+            work = Path(temporary)
+            payload = work / "cached"
+            record = build_record(payload, EDITOR.key) if restore_build_cache(archive, key, payload) else None
+            if record and record["fingerprint"] == key and editor_runtime_matches(record, qt_version, qt):
+                try:
+                    vsedit_build.verify_editor(payload, record["entrypoints"]["vsedit.exe"], ref)
+                except (OSError, RuntimeError, subprocess.SubprocessError):
+                    record = None
+            else:
+                record = None
+            if record:
+                self.log("Restored VSEdit from the build cache.")
+            else:
+                environment = msvc_environment()
+                self.log("Installing VapourSynth component: {name} {version}", name="VSEdit", version=ref)
+                source = work / "src"
+                # Keep qmake and MSVC's generated paths short within the setup temp directory.
+                shutil.copytree(self.source(EDITOR, ref), source)
+                downloads = self.editor_cache.parent / "downloads" / f"qt-msvc-{qt_version}"
+                sdk = work / "qt"
+                vsedit_build.prepare_qt_sdk(qt_version, downloads, sdk, self.args.seven_zip)
+                jom_archive = fetch_verified(vsedit_build.JOM_URL, downloads.parent / "jom_1_1_7.zip", vsedit_build.JOM_SHA256)
+                vsedit_build.unpack(jom_archive, work / "jom", self.args.seven_zip)
+                programs = vsedit_build.build_programs(
+                    source, sdk, work / "jom/jom.exe", include, environment, self.args.jobs, qt_version,
+                )
+                payload = work / "payload"
+                vsedit_build.stage_editor(source, programs, payload, qt, environment)
+                for name in ("LGPL-3.0-only.txt", "GPL-3.0-only.txt"):
+                    url = f"https://raw.githubusercontent.com/qt/qtbase/v{qt_version}/LICENSES/{name}"
+                    license_file = self.download(url, downloads / "licenses" / name)
+                    shutil.copyfile(license_file, payload / "licenses/Qt" / name)
+                record_build(payload, EDITOR.key, VSEDIT_RECIPE, ref, key, VSEDIT_PROGRAMS, qt_version=qt_version)
+                record = build_record(payload, EDITOR.key)
+                if not record:
+                    raise RuntimeError("Invalid VSEdit build record")
+                vsedit_build.verify_editor(payload, "vsedit.exe", ref)
+                publish_build_cache(archive, key, files_under(payload))
+            install_build(payload, self.editor.parent, EDITOR.key, record, entrypoints)
+        installed = build_record(self.editor.parent, EDITOR.key, installed=True)
+        if not installed:
+            raise RuntimeError("VSEdit installation failed verification")
+        self.update_editor_record(installed)
+
+    def update_editor_record(self, record):
         destination = self.editor.parent
-        destination.mkdir(parents=True, exist_ok=True)
-        files = {}
-        for path in directory.rglob("*"):
-            if not path.is_file() or path.suffix.lower() in (".pdb", ".lib", ".exp") or path.name in ("vsedit.config", ".unpacked"):
-                continue
-            target = self.editor if path == executable else destination / path.relative_to(directory)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(path, target)
-            files[self.record_path(target)] = sha256(target)
+        files = {self.record_path(destination / name): digest for name, digest in record["files"].items()}
+        previous = self.state["components"].get(EDITOR.key)
+        if previous and (self.runtime / previous["entrypoint"]).resolve() == self.editor:
+            old_licenses = (self.runtime / "licenses/components/vsedit").resolve()
+            retained = {name.casefold() for name in files}
+            for name, digest in previous["files"].items():
+                target = (self.runtime / name).resolve()
+                if (name.casefold() not in retained and target.name != "vsedit.config"
+                        and (target.is_relative_to(destination) or target.is_relative_to(old_licenses))
+                        and target.is_file() and file_hash(target) == digest):
+                    target.unlink()
         self.configure_editor()
-        version = subprocess.run([str(self.editor), "--version"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, check=True)
-        if ref not in version.stdout + version.stderr:
-            raise RuntimeError("VSEdit release version verification failed")
-        files.update(self.licenses(EDITOR, source, package))
-        qt_licenses = self.runtime / "licenses/components/vsedit/Qt"
-        qt_licenses.mkdir(parents=True, exist_ok=True)
-        for name in ("LGPL-3.0-only.txt", "GPL-3.0-only.txt"):
-            target = self.download("https://raw.githubusercontent.com/qt/qtbase/dev/LICENSES/" + name, qt_licenses / name)
-            files[target.relative_to(self.runtime).as_posix()] = sha256(target)
-        self.state["components"]["vsedit"] = {
-            "name": "VapourSynth Editor", "repository": EDITOR.repository, "ref": ref, "method": method,
+        ref, version = record["version"], record["qt_version"]
+        series = ".".join(version.split(".")[:2])
+        self.state["components"][EDITOR.key] = {
+            "name": "VapourSynth Editor", "repository": EDITOR.repository, "ref": ref, "method": "source",
+            "recipe": VSEDIT_RECIPE, "qt_version": version,
             "source_url": f"https://github.com/{EDITOR.repository}/tree/{ref}",
-            "artifact_url": artifact["url"] if method == "release" else "",
+            "qt_source_url": f"https://download.qt.io/archive/qt/{series}/{version}/single/qt-everywhere-src-{version}.tar.xz",
             "entrypoint": self.record_path(self.editor), "files": files, "dependencies": [],
         }
-        self.editor_metadata(self.state["components"]["vsedit"])
         self.save()
 
     def configure_editor(self):
@@ -958,12 +951,6 @@ class Installer:
         )
         with config.open("w", encoding="utf-8", newline="\r\n") as output:
             settings.write(output, space_around_delimiters=False)
-
-    def editor_metadata(self, record):
-        version = file_version(self.editor.parent / "Qt6Core.dll")
-        record["qt_version"] = version
-        series = ".".join(version.split(".")[:2])
-        record["qt_source_url"] = f"https://download.qt.io/official_releases/qt/{series}/{version}/single/qt-everywhere-src-{version}.tar.xz"
 
     def verify_plugins(self, *, restore_versions=False):
         for component in COMPONENTS:
@@ -988,38 +975,35 @@ class Installer:
         )
         restored = False
         if self.cache_archive and self.cache_archive.is_file() and not self.state_path.is_file():
-            editor_ref = self.release(EDITOR.repository, EDITOR.ref)["tag_name"]
             try:
-                restored = self.restore_components(editor_ref)
+                restored = self.restore_components()
             except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
                 pass
         components = COMPONENTS
-        update_editor = True
         if restored:
             self.log("Restored VapourSynth components from the build cache.")
             components = tuple(component for component in COMPONENTS if not self.cached_release_is_current(component))
-            update_editor = not self.cached_release_is_current(EDITOR)
-            if not components and not update_editor:
-                return
         if cacheable:
             self.state["cache_fingerprint"] = self.cache_key
         elif self.state.get("cache_fingerprint") != self.cache_key:
             self.state.pop("cache_fingerprint", None)
         for component in components:
             self.install_plugin(component)
-        if update_editor:
-            self.install_editor()
         required = {name for record in self.state["components"].values() for name in record.get("dependencies", ())}
         self.state["dependencies"] = {name: digest for name, digest in self.state["dependencies"].items() if name in required}
         self.save()
         if not restored or components:
             self.verify_plugins()
-        self.log("Independent VapourSynth components verified: {count}", count=len(self.state["components"]))
-        if cacheable:
+        if cacheable and (not restored or components):
             files = self.component_cache_files(self.state)
             payload = {name: path for name, (path, _) in files.items()}
-            payload["components.json"] = self.state_path
+            cache_state = dict(self.state, components={component.key: self.state["components"][component.key] for component in COMPONENTS})
+            state_path = self.work / "plugin-cache-components.json"
+            state_path.write_text(json.dumps(cache_state, indent=2) + "\n", encoding="utf-8")
+            payload["components.json"] = state_path
             publish_build_cache(self.cache_archive, self.cache_key, payload)
+        self.install_editor()
+        self.log("Independent VapourSynth components verified: {count}", count=len(self.state["components"]))
 
 
 def main():
@@ -1030,6 +1014,7 @@ def main():
     parser.add_argument("--runtime-root", required=True, type=Path)
     parser.add_argument("--plugins-dir", type=Path)
     parser.add_argument("--editor-path", type=Path)
+    parser.add_argument("--editor-cache", type=Path)
     parser.add_argument("--work-root", required=True, type=Path)
     parser.add_argument("--msys2-root", type=Path, default=Path(r"C:\msys64"))
     parser.add_argument("--seven-zip", default=r"C:\Program Files\7-Zip\7z.exe")

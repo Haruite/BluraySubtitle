@@ -102,9 +102,11 @@ $script:RegisteredComponents = [ordered]@{}
 $script:LatestPythonRelease = $null
 $script:SelectedPythonRelease = $null
 $script:BuildCacheRoot = ""
+$script:NativeToolCacheRoot = Join-Path $commonApplicationData "BluraySubtitle\build-cache\artifacts"
 $script:BuildRecipeHash = ""
 # Retain the v3 recipe IDs for unchanged build outputs. Update the relevant ID when an artifact recipe changes.
 $script:WindowsToolRecipeId = "ABE005A17FD8A3E7BE61BC884AC8EB55BC17BFA19F3A1AB25D2574C8ACEF835E"
+$script:WindowsToolPathRecipeId = "7ECAA3E44A008A78519D6A9AE10C2BE6F4F6E50DEE1BC404FBBCC9BF05B6EF8F"
 $script:VapourSynthComponentRecipeId = "8E3206EEECB37B7FE3EF3FC7D5723D0F937A6F8D8F51A04E94E87B79D9C192BD"
 $script:BuildToolchains = @{
     msvc = @("git", "visual-studio-build-tools", "cmake", "ninja", "nasm")
@@ -1389,10 +1391,6 @@ function Get-ComponentBuildCache {
             $inputs += $script:FfmpegConfigureOptions
         }
         "flac" { $files = @($script:ToolPaths.Flac, $script:ToolPaths.FlacLibrary) }
-        "mkvtoolnix" {
-            $files = @($script:ToolPaths.MkvInfo, $script:ToolPaths.MkvMerge,
-                $script:ToolPaths.MkvPropEdit, $script:ToolPaths.MkvExtract)
-        }
         "tsmuxer" { $files = @($script:ToolPaths.TsMuxer) }
         "dovi-tool" { $files = @($script:ToolPaths.DoviTool) }
         "hdr10plus-tool" { $files = @($script:ToolPaths.Hdr10PlusTool) }
@@ -3003,74 +3001,73 @@ function Get-MkvToolNixRelease {
     if ($version -notmatch '^[0-9]+(?:\.[0-9]+){1,3}$') {
         throw (Get-SetupText "Unable to parse the latest MKVToolNix version." "无法解析 MKVToolNix 最新版本。")
     }
-    $name = "mkvtoolnix-64-bit-$version-setup.exe"
+    $name = "mkvtoolnix-$version.tar.xz"
+    $sourceUri = [Uri]([string]$releaseMetadata.'mkvtoolnix-releases'.'latest-source'.'source-code-url')
+    if ($sourceUri.Scheme -ne "https" -or $sourceUri.Host -ne "mkvtoolnix.download" -or
+        $sourceUri.AbsolutePath -ne "/sources/$name") {
+        throw (Get-SetupText "Unexpected MKVToolNix source archive URL." "MKVToolNix 源码压缩包地址与预期不符。")
+    }
     $checksumText = Get-SetupTextFromUri `
-        -Uri ([Uri]"https://mkvtoolnix.download/windows/releases/$version/sha256sums.txt") `
-        -CacheName "mkvtoolnix-$version-sha256sums.txt"
+        -Uri ([Uri]($sourceUri.AbsoluteUri + ".sha256")) `
+        -CacheName "$name.sha256"
     $checksumPattern = '(?im)^([0-9a-fA-F]{64})\s+' + [regex]::Escape($name) + '\s*$'
     $checksumMatch = [regex]::Match($checksumText, $checksumPattern)
     if (-not $checksumMatch.Success) {
-        throw (Get-SetupText "Unable to find the MKVToolNix installer SHA-256 checksum." "无法找到 MKVToolNix 安装程序的 SHA-256。")
+        throw (Get-SetupText "Unable to find the MKVToolNix source SHA-256 checksum." "无法找到 MKVToolNix 源码的 SHA-256。")
     }
     $result = [pscustomobject]@{
         Version = $version
-        Name = $name
-        Uri = [Uri]"https://mkvtoolnix.download/windows/releases/$version/$name"
-        Sha256 = $checksumMatch.Groups[1].Value
+        Uri = $sourceUri
+        Sha256 = $checksumMatch.Groups[1].Value.ToLowerInvariant()
     }
     $script:ReleaseCache[$cacheKey] = $result
     return $result
 }
 
+function Get-MkvToolNixBuildArguments {
+    param([string]$Operation)
+
+    return @(
+        (Join-Path $script:SetupDirectory "tools\build_mkvtoolnix_windows.py"),
+        $Operation, $script:ToolPaths.MkvToolNixRoot,
+        [IO.Path]::GetFileName($script:ToolPaths.MkvMerge),
+        [IO.Path]::GetFileName($script:ToolPaths.MkvInfo),
+        [IO.Path]::GetFileName($script:ToolPaths.MkvPropEdit),
+        [IO.Path]::GetFileName($script:ToolPaths.MkvExtract)
+    )
+}
+
 function Get-InstalledMkvToolNixVersion {
-    if (-not (Test-Path -LiteralPath $script:ToolPaths.MkvMerge -PathType Leaf)) {
-        return ""
-    }
-    $output = Invoke-SetupCommand -FilePath $script:ToolPaths.MkvMerge -Arguments @("--version")
-    $match = [regex]::Match($output, 'mkvmerge\s+v([0-9]+(?:\.[0-9]+){1,3})', 'IgnoreCase')
-    return $(if ($match.Success) { $match.Groups[1].Value } else { "" })
+    return Invoke-SetupCommand -FilePath $script:ToolPaths.Python -Arguments (Get-MkvToolNixBuildArguments "version")
 }
 
 function Install-MkvToolNix {
     param([string]$Version)
 
     $release = Get-MkvToolNixRelease
-    $installer = Join-Path $script:TempRoot $release.Name
-    Invoke-SetupDownload -Uri $release.Uri -Destination $installer -Sha256 $release.Sha256 | Out-Null
-    Assert-ValidAuthenticodeSignature $installer
-    Invoke-SetupInstaller -FilePath $installer -Arguments @("/S") -NsisInstallDirectory $script:ToolPaths.MkvToolNixRoot
-    foreach ($tool in @(
-        @{ Name = "mkvinfo.exe"; Path = $script:ToolPaths.MkvInfo },
-        @{ Name = "mkvmerge.exe"; Path = $script:ToolPaths.MkvMerge },
-        @{ Name = "mkvpropedit.exe"; Path = $script:ToolPaths.MkvPropEdit },
-        @{ Name = "mkvextract.exe"; Path = $script:ToolPaths.MkvExtract }
-    )) {
-        Install-ConfiguredFile -Source (Join-Path $script:ToolPaths.MkvToolNixRoot $tool.Name) -Destination $tool.Path
+    $arguments = (Get-MkvToolNixBuildArguments "install") + @(
+        "--version", $Version, "--source", $release.Uri.AbsoluteUri, "--sha256", $release.Sha256,
+        "--cache", $script:NativeToolCacheRoot, "--work", (Join-Path $script:TempRoot "mkvtoolnix"),
+        "--msys2-root", $script:ToolPaths.Msys2Root, "--jobs", [string]$script:BuildJobs
+    )
+    $msysRequired = 75
+    Invoke-SetupBuildCommand -DisplayName "MKVToolNix build cache" -FilePath $script:ToolPaths.Python `
+        -Arguments ($arguments + "--defer-msys2") -AcceptedExitCodes @(0, $msysRequired)
+    if ($LASTEXITCODE -eq $msysRequired) {
+        Initialize-SetupBuildToolchain "msys2"
+        $packages = @("boost", "flac", "libdvdcss", "libdvdread", "libogg", "libvorbis", "libxslt",
+            "docbook-xml", "docbook-xsl", "qt6-base", "ruby", "gettext-tools") |
+            ForEach-Object { "mingw-w64-ucrt-x86_64-$_" }
+        Invoke-Msys2Pacman -Arguments (@("--noconfirm", "--needed", "-S", "dash") + $packages) | Out-Null
+        Invoke-SetupBuildCommand -DisplayName "MKVToolNix (MinGW QtCore)" -FilePath $script:ToolPaths.Python -Arguments $arguments
+    }
+    else {
+        Write-SetupInfo "Restored the MKVToolNix build cache." "已恢复 MKVToolNix 构建缓存。"
     }
 }
 
 function Test-MkvToolNix {
-    $version = Get-InstalledMkvToolNixVersion
-    if (-not $version) {
-        return $false
-    }
-    foreach ($path in @(
-        $script:ToolPaths.MkvInfo,
-        $script:ToolPaths.MkvPropEdit,
-        $script:ToolPaths.MkvExtract
-    )) {
-        try {
-            $output = Invoke-SetupCommand -FilePath $path -Arguments @("--version")
-            $match = [regex]::Match($output, '(?m)^mkv(?:info|propedit|extract)\s+v([0-9]+(?:\.[0-9]+){1,3})')
-            if (-not $match.Success -or (Compare-SetupVersion $match.Groups[1].Value $version) -ne 0) {
-                return $false
-            }
-        }
-        catch {
-            return $false
-        }
-    }
-    return $true
+    return [bool](Get-InstalledMkvToolNixVersion)
 }
 
 function Get-TsMuxerRelease {
@@ -4095,6 +4092,7 @@ function Install-VapourSynthUpstreamComponents {
         "--runtime-root", $script:ToolPaths.VapourSynthRoot,
         "--plugins-dir", $script:ToolPaths.VapourSynthPlugins,
         "--editor-path", $script:ToolPaths.VsEdit,
+        "--editor-cache", $script:NativeToolCacheRoot,
         "--work-root", (Join-Path $script:TempRoot "vapoursynth-components"),
         "--msys2-root", $script:ToolPaths.Msys2Root,
         "--seven-zip", $script:ToolPaths.SevenZip,
@@ -4424,10 +4422,11 @@ function Invoke-WindowsSetup {
     Initialize-SetupManifest
     if ($Mode -eq "Build" -and $BuildCacheDirectory) {
         $script:BuildCacheRoot = Join-Path ([IO.Path]::GetFullPath($BuildCacheDirectory)) "artifacts"
+        $script:NativeToolCacheRoot = $script:BuildCacheRoot
         $script:BuildRecipeHash = Get-BuildFingerprint @(
             $script:WindowsToolRecipeId
             (Get-FileHash -LiteralPath (Join-Path $script:SetupDirectory "tools\windows_build_cache.py")).Hash
-            (Get-FileHash -LiteralPath (Join-Path $script:SetupDirectory "tools\windows_tool_paths.py")).Hash
+            $script:WindowsToolPathRecipeId
         )
     }
     Initialize-PythonRuntimeSelection
@@ -4455,10 +4454,14 @@ function Invoke-WindowsSetup {
     Register-StageFiveComponents
     $buildTools = @($script:BuildToolchains.Values | ForEach-Object { $_ })
     foreach ($component in $script:RegisteredComponents.Values) {
-        if ($script:BuildCacheRoot -and $component.Name -in $buildTools) {
+        # Packaging needs cl.exe to generate the launchers even when all tool artifacts were restored.
+        if ($script:BuildCacheRoot -and $component.Name -in $buildTools -and $component.Name -ne "visual-studio-build-tools") {
             continue
         }
         Invoke-SetupComponent $component
+        if ($component.Name -eq "visual-studio-build-tools") {
+            $script:PreparedBuildTools[$component.Name] = $true
+        }
         if ($component.Name -eq "python") {
             Initialize-ConfiguredToolPaths
         }

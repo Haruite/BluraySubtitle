@@ -3,7 +3,7 @@
 
 Build from the root of a Git checkout with:
 
-    pyinstaller --clean --noconfirm BluraySubtitle_windows_x64.spec
+    python BluraySubtitle_windows_x64.spec
 
 Archive the complete ``dist/BluraySubtitle_windows_x64`` directory for
 distribution; the executable depends on its adjacent ``_internal`` directory.
@@ -22,9 +22,13 @@ import sys
 import sysconfig
 import zipfile
 
+if "SPECPATH" not in globals():
+    from PyInstaller.__main__ import run
+
+    raise SystemExit(run([str(Path(__file__).resolve()), *sys.argv[1:]]))
+
 from PyInstaller import __version__ as PYINSTALLER_VERSION
 from PyInstaller.utils.hooks import collect_data_files, copy_metadata
-from PyInstaller.depend import bindepend
 
 
 PROJECT_ROOT = Path(SPECPATH).resolve()
@@ -35,8 +39,12 @@ if not (PROJECT_ROOT / ".git").exists():
         "git clone https://github.com/Haruite/BluraySubtitle.git"
     )
 
+sys.path.insert(0, str(PROJECT_ROOT))
+from tools.windows_package_tools import installed_tools, package_tools
+
 SETTINGS_PATH = PROJECT_ROOT / "src" / "core" / "settings.py"
 SETTINGS = runpy.run_path(str(SETTINGS_PATH))
+native_tools = installed_tools(SETTINGS)
 
 
 def required_path(path, description):
@@ -90,15 +98,11 @@ if not vapoursynth_dir.is_dir():
 vspipe_path = required_path(SETTINGS["VSPIPE_PATH"], "VSPipe executable")
 upstream_manifest = required_path(vapoursynth_dir / "vapoursynth-components.json", "upstream component manifest")
 upstream_components = json.loads(upstream_manifest.read_text(encoding="utf-8"))
-editor_entrypoint = upstream_components["components"]["vsedit"]["entrypoint"]
-editor_path = required_path(SETTINGS["VSEDIT_PATH"], "VSEdit executable")
-editor_dir = editor_path.parent
-if editor_path != (vapoursynth_dir / editor_entrypoint).resolve():
-    raise ValueError("VSEDIT_PATH must match the managed upstream editor entry point")
-if editor_dir.name.casefold() != "vsedit":
-    raise ValueError("VSEdit must be installed in a vsedit directory; run Windows setup to update VSEDIT_PATH")
-
-
+editor_state = upstream_components["components"]["vsedit"]
+_, _, editor_dir, editor_build = native_tools
+if ((vapoursynth_dir / editor_state["entrypoint"]).resolve() != editor_dir / editor_build["entrypoints"]["vsedit.exe"]
+        or editor_state.get("recipe") != editor_build["recipe"] or editor_state["ref"] != editor_build["version"]):
+    raise RuntimeError("Run Windows setup to update the VSEdit installation record")
 build_state = json.loads(required_path(
     vapoursynth_dir / "vapoursynth-build.json", "VapourSynth source-build manifest"
 ).read_text(encoding="utf-8"))
@@ -117,10 +121,6 @@ def keep_runtime_file(destination, root_binary_names):
         return False
     if fnmatchcase(name, "tcl*.dll") or fnmatchcase(name, "tk*.dll"):
         return False
-
-    # VSEdit's private Qt runtime must remain separate from PyQt6's DLLs.
-    if parts and parts[0] == "vsedit":
-        return True
 
     if relative.startswith("pyqt6/qt6/translations/"):
         return name in {"qt_en.qm", "qtbase_en.qm", "qt_zh_cn.qm", "qtbase_zh_cn.qm"}
@@ -175,10 +175,6 @@ for setting_name, description in (
     ("HDR10PLUS_TOOL_PATH", "hdr10plus_tool"),
     ("LIBASS_PATH", "libass DLL"),
     ("TS_MUXER_PATH", "tsMuxeR"),
-    ("MKV_INFO_PATH", "mkvinfo"),
-    ("MKV_MERGE_PATH", "mkvmerge"),
-    ("MKV_PROP_EDIT_PATH", "mkvpropedit"),
-    ("MKV_EXTRACT_PATH", "mkvextract"),
 ):
     add_binary(binaries, SETTINGS[setting_name], description)
 
@@ -230,18 +226,6 @@ for relative in sorted(managed_plugins):
     )
     binaries.append((str(source), str(destination)))
 datas.append((str(upstream_manifest), "legal"))
-editor_datas = []
-for relative in upstream_components["components"]["vsedit"]["files"]:
-    source = (vapoursynth_dir / relative).resolve()
-    if source.is_relative_to(editor_dir):
-        destination = Path("vsedit") / (Path("vsedit.exe") if source == editor_path else source.relative_to(editor_dir))
-        editor_datas.append((str(destination), str(required_path(source, "VSEdit distribution file")), "DATA"))
-editor_config = Path(workpath) / "vsedit.config"
-editor_config.write_text(
-    "[common]\nprefer_vs_libs_from_list=false\nvapoursynth_library_paths=../\nvapoursynth_plugins_paths=../vapoursynth64/coreplugins, ../vapoursynth64/plugins\n",
-    encoding="utf-8", newline="\r\n",
-)
-datas.append((str(editor_config), "vsedit"))
 datas.append((str(required_path(vapoursynth_dir / "portable.vs", "portable plugin marker")), "."))
 script_root = required_path(
     PROJECT_ROOT / "third_party" / "vapoursynth_scripts",
@@ -343,15 +327,8 @@ root_binary_names = {
 a.binaries = [entry for entry in a.binaries if keep_runtime_file(entry[0], root_binary_names)]
 a.datas = [entry for entry in a.datas if keep_runtime_file(entry[0], root_binary_names)]
 
-# Analysis reclassifies PE files supplied as datas and flattens their imports.
-# Add the independent editor after Analysis, keeping its Qt DLLs in vsedit/.
-editor_sources = {Path(source).resolve() for _destination, source, _kind in editor_datas}
-editor_binaries = [entry[:2] + ("BINARY",) for entry in editor_datas if Path(entry[0]).suffix.lower() in {".exe", ".dll"}]
-editor_dependencies = bindepend.binary_dependency_analysis(editor_binaries, search_paths=[str(editor_dir), str(vapoursynth_dir)])
-for destination, source, _kind in editor_dependencies:
-    if Path(source).resolve() not in editor_sources and Path(destination).name.lower() not in root_binary_names:
-        editor_datas.append((str(Path("vsedit") / Path(destination).name), source, "DATA"))
-a.datas += editor_datas
+# Keep the separate MinGW QtCore and the shared MSVC Qt layout after Analysis.
+a.datas += package_tools(native_tools, Path(workpath) / "native-tools", a.binaries, a.datas)
 
 pyz = PYZ(a.pure)
 

@@ -79,6 +79,7 @@ Keep both language versions of these standards synchronized, and record confirme
 - `Dockerfile` adapts `setup_linux_environment.sh` to Ubuntu 26.04. In the Dockerfile, do not add compatibility handling for other operating systems, explanatory output, or comments.
 - Windows and Linux setup must install tools and VapourSynth plugins at their platform paths when declared in `src/core/settings.py`. Docker must install them directly at that file's corresponding Docker paths within each tool's build section; do not add a final relocation layer.
 - Windows VSEdit must have its own directory named `vsedit`; setup must normalize its installation path and write the resulting `VSEDIT_PATH` back to `src/core/settings.py`.
+- Windows MKVToolNix command-line tools must share a directory named `mkvtoolnix`. Setup normalizes the directory configured for `MKV_MERGE_PATH` and writes all four resulting paths back to `src/core/settings.py`.
 - Modify existing software in its corresponding Dockerfile build section even if later layers lose their cache. Do not put unrelated changes near the beginning; add new software near the end when dependencies permit, to preserve earlier cached layers.
 
 ## 10. Confirmed Product Constraints

@@ -87,19 +87,19 @@ LIBASS_PATH = _bundled_path("libass-9.dll", r"C:\Software\libass-9.dll")
 TS_MUXER_PATH = _bundled_path("tsMuxeR.exe", r"C:\Software\tsMuxeR.exe")
 MKV_INFO_PATH = _bundled_path(
     "mkvinfo.exe",
-    r"C:\Program Files\MKVToolNix\mkvinfo.exe",
+    r"C:\Software\mkvtoolnix\mkvinfo.exe",
 )
 MKV_MERGE_PATH = _bundled_path(
     "mkvmerge.exe",
-    r"C:\Program Files\MKVToolNix\mkvmerge.exe",
+    r"C:\Software\mkvtoolnix\mkvmerge.exe",
 )
 MKV_PROP_EDIT_PATH = _bundled_path(
     "mkvpropedit.exe",
-    r"C:\Program Files\MKVToolNix\mkvpropedit.exe",
+    r"C:\Software\mkvtoolnix\mkvpropedit.exe",
 )
 MKV_EXTRACT_PATH = _bundled_path(
     "mkvextract.exe",
-    r"C:\Program Files\MKVToolNix\mkvextract.exe",
+    r"C:\Software\mkvtoolnix\mkvextract.exe",
 )
 
 if sys.platform != "win32":
@@ -168,19 +168,19 @@ def find_mkvtoolnix() -> None:
     global MKV_EXTRACT_PATH
 
     if not MKV_INFO_PATH:
-        default_mkv_info_path = r"C:\Program Files\MKVToolNix\mkvinfo.exe" if sys.platform == "win32" else "/usr/bin/mkvinfo"
+        default_mkv_info_path = r"C:\Software\mkvtoolnix\mkvinfo.exe" if sys.platform == "win32" else "/usr/bin/mkvinfo"
         MKV_INFO_PATH = _resolve_mkvtoolnix_path(default_mkv_info_path, "mkvinfo")
 
     if not MKV_MERGE_PATH:
-        default_mkv_merge_path = r"C:\Program Files\MKVToolNix\mkvmerge.exe" if sys.platform == "win32" else "/usr/bin/mkvmerge"
+        default_mkv_merge_path = r"C:\Software\mkvtoolnix\mkvmerge.exe" if sys.platform == "win32" else "/usr/bin/mkvmerge"
         MKV_MERGE_PATH = _resolve_mkvtoolnix_path(default_mkv_merge_path, "mkvmerge")
 
     if not MKV_PROP_EDIT_PATH:
-        default_mkv_prop_edit_path = r"C:\Program Files\MKVToolNix\mkvpropedit.exe" if sys.platform == "win32" else "/usr/bin/mkvpropedit"
+        default_mkv_prop_edit_path = r"C:\Software\mkvtoolnix\mkvpropedit.exe" if sys.platform == "win32" else "/usr/bin/mkvpropedit"
         MKV_PROP_EDIT_PATH = _resolve_mkvtoolnix_path(default_mkv_prop_edit_path, "mkvpropedit")
 
     if not MKV_EXTRACT_PATH:
-        default_mkv_extract_path = r"C:\Program Files\MKVToolNix\mkvextract.exe" if sys.platform == "win32" else "/usr/bin/mkvextract"
+        default_mkv_extract_path = r"C:\Software\mkvtoolnix\mkvextract.exe" if sys.platform == "win32" else "/usr/bin/mkvextract"
         MKV_EXTRACT_PATH = _resolve_mkvtoolnix_path(default_mkv_extract_path, "mkvextract")
 
 

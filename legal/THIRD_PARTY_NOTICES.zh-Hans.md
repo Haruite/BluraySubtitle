@@ -142,6 +142,8 @@
 - **许可证：** GPL v2
 - **许可证全文：** https://codeberg.org/mbunkus/mkvtoolnix/raw/branch/main/COPYING
 - **源码：** https://codeberg.org/mbunkus/mkvtoolnix/archive/release-{{MKVTOOLNIX_VERSION}}.zip
+- **QtCore 版本：** {{MKVTOOLNIX_QT_VERSION}}。MinGW 构建将无 ICU 的 QtCore 静态链接进 `libmtxcommon.dll`。对应源码为 {{MKVTOOLNIX_QT_SOURCE}}。
+- **随附许可文本：** `legal/mkvtoolnix/`。
 - **说明：** 其他随附库及资源列在上游 `README.md` 的“Included third-party components and their licenses”一节中，相关许可证位于 `doc/licenses/`。
 
 ---
@@ -202,12 +204,12 @@
 
 ### VapourSynth Editor
 
-- **文件：** `vsedit/` 中的独立编辑器分发文件，包括其私有 Qt 库。
+- **文件：** `vsedit/` 中的编辑器程序和启动器共用 `PyQt6/Qt6/` 下的 Qt 库。
 - **版本：** {{VSEDIT_VERSION}}
 - **许可证：** MIT
 - **源码：** https://github.com/YomikoR/VapourSynth-Editor/archive/refs/tags/{{VSEDIT_VERSION}}.zip
 - **Qt 版本：** {{VSEDIT_QT_VERSION}}；对应源码：{{VSEDIT_QT_SOURCE}}
-- **随附许可文本：** `legal/vapoursynth/components/vsedit/`；动态链接的 Qt 库采用 LGPL v3，其 `Qt/` 子目录包含 LGPL 和 GPL 文本。
+- **随附许可文本：** `legal/vsedit/`。其 `Qt/` 子目录收录动态链接的 Qt 库所用的 LGPL v3 和 GPL v3 文本。
 
 ---
 
