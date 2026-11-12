@@ -51,6 +51,7 @@ Keep both language versions of these standards synchronized, and record confirme
 
 ## 6. Layer Responsibilities
 
+- Keep application code under `src/` and runtime assets in the top-level `resource/` directory. Store the standalone Windows updater in `tools/`.
 - GUI/configuration: read current controls once at launch, normalize their representation without changing their meaning, perform deterministic preflight, and create a complete request. Use one explicit request object whenever practical.
 - Worker: own the captured request, progress callback, cancellation state, and final success/error signaling. Do not read live GUI widgets after launch.
 - Service: execute workflow and domain logic from plain Python data, without reading or reinterpreting Qt tables/widgets or consulting hidden global state.
@@ -99,7 +100,7 @@ Keep this section limited to confirmed exceptions and product semantics that wou
 - **Transport compatibility:** Limit MPLS and M2TS PAT/PMT checks to parameters those structures expose. Do not add speculative full-payload parsing or normalization for Matroska append incompatibilities. If MKVToolNix encounters such a change, fail explicitly; do not synthesize replacement packets, silently discard another track, or promote a partial file to final output.
 - **Cross-MPLS identity:** Compare tracks by their sets of `(absolute M2TS path, PID)` pairs. Persist selection identity with the source MPLS and its STN category/slot; never deduplicate providers by PID or slot alone.
 - **Audio conversion:** FLAC, AAC, and Opus conversion must preserve a logical track's leading and intermediate timeline gaps without synthesizing silence. Process and validate its continuous PCM intervals as one transaction; failure in any interval keeps the complete original track. Duration-loss fallback excludes authored gaps and uses the largest positive shortening of any one interval, never the sum of interval losses.
-- **Audio-gap information:** Remux saves analysis results, including empty records for continuous audio. Encode prefers valid results matching the source. Without a valid record, inspect the actual timeline rather than assuming continuity. See [Remux fallback](media-pipeline-and-tool-selection.md#3-track-aligned-remux-fallback) for file and detection details.
+- Remux saves **audio-gap information** only when the option is enabled, including empty records for continuous audio. The option is off by default. Encode reuses valid results matching the source and inspects the actual timeline when no valid record is available. See [Remux fallback](media-pipeline-and-tool-selection.md#3-track-aligned-remux-fallback) for file and detection details.
 - **Bitrate:** FDK-AAC and Opus bitrate `0` means Auto; positive values are explicit kbps targets.
 - **Series-mode SP matching:** Compare complete M2TS detail: clip names, order, and time ranges. First, a non-main MPLS matching exactly one complete selected main MPLS contributes track choices to that shared main remux. Otherwise, an SP matching exactly one episode is appended only after splitting. A partial match spanning several episodes remains an ordinary SP. Movie mode uses neither attachment path. See [SP rules](../wiki/Blu-ray-Disc-Structure.md#sp-tracks-and-mpls-hidden-tracks) for default selection and deduplication.
 

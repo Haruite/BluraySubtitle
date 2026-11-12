@@ -51,6 +51,7 @@ from src.runtime.gui_runtime_classes.file_path_table_widget_item import FilePath
 from src.runtime.gui_runtime_classes.chapter_worker import AddChaptersRequest, ChapterWorker
 from src.runtime.gui_runtime_classes.merge_worker import MergeSubtitleRequest, MergeWorker
 from src.runtime.gui_runtime_classes.subtitle_folder_scan_worker import SubtitleFolderScanWorker
+from src.runtime.gui_runtime_classes.widget_animations import AnimatedDialog
 from src.runtime.services import BluraySubtitle
 from .gui_base import BluraySubtitleGuiBase
 
@@ -83,7 +84,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 self.t('Could not read third-party notices:') + f' {exc}',
             )
             return
-        dlg = QDialog(self)
+        dlg = AnimatedDialog(self)
         dlg.setWindowTitle(self.t('Third-party notices'))
         layout = QVBoxLayout()
         dlg.setLayout(layout)
@@ -242,7 +243,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             pass
         if bool(getattr(self, '_close_pending', False)):
             return
-        dlg = QDialog(self)
+        dlg = AnimatedDialog(self)
         dlg.setWindowTitle(translate_text('Error'))
         layout = QVBoxLayout()
         dlg.setLayout(layout)
@@ -579,193 +580,95 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         thread.finished.connect(thread.deleteLater)
         thread.start()
 
-    def _populate_encode_from_remux_folder(self):
-        if self.get_selected_function_id() != 4 or getattr(self, '_encode_input_mode', 'bdmv') != 'remux':
+    def _on_remux_folder_path_changed(self) -> None:
+        if self.get_selected_function_id() != 4 or self._encode_input_mode != 'remux':
             return
-        folder = self._normalize_path_input(self.remux_folder_path.text() if hasattr(self, 'remux_folder_path') else '')
+        self._remux_folder_revision += 1
+        self._subtitle_scan_debounce.stop()
+        self._cancel_subtitle_folder_scan()
+        self.table2.setRowCount(0)
+        self.table3.setRowCount(0)
+        self._remux_folder_debounce.start()
+
+    def _populate_encode_from_remux_folder(self):
+        if self.get_selected_function_id() != 4 or self._encode_input_mode != 'remux' or self._close_pending:
+            return
+        folder = self._normalize_path_input(self.remux_folder_path.text())
+        self._remux_folder_revision += 1
+        revision = self._remux_folder_revision
+
+        def is_current() -> bool:
+            return (
+                revision == self._remux_folder_revision and not self._close_pending
+                and self.get_selected_function_id() == 4 and self._encode_input_mode == 'remux'
+            )
+
         if not folder or not os.path.isdir(folder):
             return
-        start_ts = time.time()
-        progress_dialog = QProgressDialog(self.t('Loading...'), '', 0, 1000, self)
-        progress_dialog.setMinimumWidth(420)
-        bar = QProgressBar(progress_dialog)
-        bar.setRange(0, 1000)
-        bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        progress_dialog.setBar(bar)
-        progress_dialog.setCancelButton(None)
-        progress_dialog.setMinimumDuration(0)
-        progress_dialog.setAutoClose(False)
-        progress_dialog.setAutoReset(False)
-        progress_dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-        show_timer = QTimer(self)
-        show_timer.setSingleShot(True)
-        show_timer.setInterval(2000)
-
-        def show_if_needed():
-            try:
-                if (time.time() - start_ts) >= 2.0:
-                    progress_dialog.show()
-            except Exception:
-                pass
-
-        show_timer.timeout.connect(show_if_needed)
-        show_timer.start()
-        mkvs = [f for f in os.listdir(folder) if f.lower().endswith('.mkv') and os.path.isfile(os.path.join(folder, f))]
-        mkvs.sort(key=lambda x: x.lower())
-        self.table2.setRowCount(len(mkvs))
-        for r, name in enumerate(mkvs):
-            src = os.path.normpath(os.path.join(folder, name))
-            sub_col = ENCODE_REMUX_LABELS.index('sub_path')
-            lang_col = ENCODE_REMUX_LABELS.index('language')
-            dur_col = ENCODE_REMUX_LABELS.index('ep_duration')
-            out_col = ENCODE_REMUX_LABELS.index('output_name')
-            play_col = ENCODE_REMUX_LABELS.index('play')
-            tracks_col = ENCODE_REMUX_LABELS.index('edit_tracks')
-            chapters_col = ENCODE_REMUX_LABELS.index('edit_chapters')
-            attachments_col = ENCODE_REMUX_LABELS.index('edit_attachments')
-            self.table2.setItem(r, sub_col, FilePathTableWidgetItem(''))
-            combo = self.create_language_combo(parent=self.table2)
-            self.table2.setItem(r, lang_col, None)
-            self.table2.setCellWidget(r, lang_col, combo)
-            try:
-                dur = MKV(src).get_duration()
-                self.table2.setItem(r, dur_col, QTableWidgetItem(get_time_str(dur)))
-            except Exception:
-                self.table2.setItem(r, dur_col, QTableWidgetItem(''))
-            out_item = QTableWidgetItem(name)
-            out_item.setData(Qt.ItemDataRole.UserRole, src)
-            self.table2.setItem(r, out_col, out_item, editable=True)
-            btn_play = QToolButton(self.table2)
-            btn_play.setText(self.t('play'))
-            btn_play.clicked.connect(partial(self.open_file_path, src))
-            self.table2.setCellWidget(r, play_col, btn_play)
-            btn_tracks = QToolButton(self.table2)
-            btn_tracks.setText(self.t('edit tracks'))
-            btn_tracks.clicked.connect(partial(self.on_edit_tracks_from_mkv_row, self.table2, src))
-            self.table2.setCellWidget(r, tracks_col, btn_tracks)
-            btn_chapters = QToolButton(self.table2)
-            btn_chapters.setText(self.t('edit'))
-            btn_chapters.clicked.connect(partial(self.on_edit_chapters_from_mkv_row, self.table2, src))
-            self.table2.setCellWidget(r, chapters_col, btn_chapters)
-            btn_attachments = QToolButton(self.table2)
-            btn_attachments.setText(self.t('edit'))
-            btn_attachments.clicked.connect(partial(self.on_edit_attachments_from_mkv_row, self.table2, src))
-            self.table2.setCellWidget(r, attachments_col, btn_attachments)
-            self.ensure_encode_row_widgets(r)
-            try:
-                self._ensure_default_track_config_for_mkv(src, sp=False)
-            except Exception:
-                pass
-            if (time.time() - start_ts) >= 2.0:
-                try:
-                    bar.setValue(int((r + 1) / max(1, len(mkvs)) * 1000))
-                except Exception:
-                    pass
-                QCoreApplication.processEvents()
-        self._resize_table_columns_for_language(self.table2)
-        self._scroll_table_to_primary_column(self.table2)
-        self._update_language_combo_enabled_state()
-        try:
-            show_timer.stop()
-            progress_dialog.close()
-            progress_dialog.deleteLater()
-        except Exception:
-            pass
-        self._populate_encode_sps_from_remux_folder(folder)
-
-    def _populate_encode_sps_from_remux_folder(self, folder: str):
-        if self.get_selected_function_id() != 4 or getattr(self, '_encode_input_mode', 'bdmv') != 'remux':
-            return
         sp_folder = os.path.join(folder, 'SPs')
-        if not os.path.isdir(sp_folder):
-            self.table3.setRowCount(0)
-            return
-        start_ts = time.time()
-        progress_dialog = QProgressDialog(self.t('Loading...'), '', 0, 1000, self)
-        progress_dialog.setMinimumWidth(420)
-        bar = QProgressBar(progress_dialog)
-        bar.setRange(0, 1000)
-        bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        progress_dialog.setBar(bar)
-        progress_dialog.setCancelButton(None)
-        progress_dialog.setMinimumDuration(0)
-        progress_dialog.setAutoClose(False)
-        progress_dialog.setAutoReset(False)
-        progress_dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-        show_timer = QTimer(self)
-        show_timer.setSingleShot(True)
-        show_timer.setInterval(2000)
-
-        def show_if_needed():
-            try:
-                if (time.time() - start_ts) >= 2.0:
-                    progress_dialog.show()
-            except Exception:
-                pass
-
-        show_timer.timeout.connect(show_if_needed)
-        show_timer.start()
-        media_files = [
-            filename
-            for filename in os.listdir(sp_folder)
-            if (
-                filename.lower().endswith(('.mkv', '.mka'))
-                and os.path.isfile(os.path.join(sp_folder, filename))
-            )
-        ]
-        media_files.sort(key=lambda filename: filename.lower())
-        self.table3.setRowCount(len(media_files))
-        for r, name in enumerate(media_files):
-            src = os.path.normpath(os.path.join(sp_folder, name))
-            dur_col = ENCODE_REMUX_SP_LABELS.index('duration')
-            out_col = ENCODE_REMUX_SP_LABELS.index('output_name')
-            play_col = ENCODE_REMUX_SP_LABELS.index('play')
-            tracks_col = ENCODE_REMUX_SP_LABELS.index('edit_tracks')
-            chapters_col = ENCODE_REMUX_SP_LABELS.index('edit_chapters')
-            attachments_col = ENCODE_REMUX_SP_LABELS.index('edit_attachments')
-            try:
-                dur = MKV(src).get_duration()
-                self.table3.setItem(r, dur_col, QTableWidgetItem(get_time_str(dur)))
-            except Exception:
-                self.table3.setItem(r, dur_col, QTableWidgetItem(''))
-            out_item = QTableWidgetItem(name)
-            out_item.setData(Qt.ItemDataRole.UserRole, src)
-            self.table3.setItem(r, out_col, out_item, editable=True)
-            btn_play = QToolButton(self.table3)
-            btn_play.setText(self.t('play'))
-            btn_play.clicked.connect(partial(self.open_file_path, src))
-            self.table3.setCellWidget(r, play_col, btn_play)
-            btn_tracks = QToolButton(self.table3)
-            btn_tracks.setText(self.t('edit tracks'))
-            btn_tracks.clicked.connect(partial(self.on_edit_tracks_from_mkv_row, self.table3, src))
-            self.table3.setCellWidget(r, tracks_col, btn_tracks)
-            btn_chapters = QToolButton(self.table3)
-            btn_chapters.setText(self.t('edit'))
-            btn_chapters.clicked.connect(partial(self.on_edit_chapters_from_mkv_row, self.table3, src))
-            self.table3.setCellWidget(r, chapters_col, btn_chapters)
-            btn_attachments = QToolButton(self.table3)
-            btn_attachments.setText(self.t('edit'))
-            btn_attachments.clicked.connect(partial(self.on_edit_attachments_from_mkv_row, self.table3, src))
-            self.table3.setCellWidget(r, attachments_col, btn_attachments)
-            self.ensure_encode_row_widgets(r, self.table3)
-            try:
-                self._ensure_default_track_config_for_mkv(src, sp=True)
-            except Exception:
-                pass
-            if (time.time() - start_ts) >= 2.0:
-                try:
-                    bar.setValue(int((r + 1) / max(1, len(media_files)) * 1000))
-                except Exception:
-                    pass
-                QCoreApplication.processEvents()
-        self._resize_table_columns_for_language(self.table3)
-        self._scroll_table_to_primary_column(self.table3)
+        busy = self._begin_delayed_busy(self.t('Loading...'))
         try:
-            show_timer.stop()
-            progress_dialog.close()
-            progress_dialog.deleteLater()
-        except Exception:
-            pass
+            for table, labels, root, extensions in (
+                (self.table2, ENCODE_REMUX_LABELS, folder, ('.mkv',)),
+                (self.table3, ENCODE_REMUX_SP_LABELS, sp_folder, ('.mkv', '.mka')),
+            ):
+                is_sp = table is self.table3
+                if not os.path.isdir(root):
+                    continue
+                with os.scandir(root) as entries:
+                    paths = sorted(
+                        (entry.path for entry in entries if entry.name.lower().endswith(extensions) and entry.is_file()),
+                        key=str.lower,
+                    )
+                table.setRowCount(len(paths))
+                columns = {key: index for index, key in enumerate(labels)}
+                duration_column = columns['duration' if is_sp else 'ep_duration']
+                for row, source_path in enumerate(paths):
+                    if not is_sp:
+                        table.setItem(row, columns['sub_path'], FilePathTableWidgetItem(''))
+                        table.setCellWidget(row, columns['language'], self.create_language_combo(parent=table))
+                    try:
+                        duration = get_time_str(MKV(source_path).get_duration())
+                    except Exception:
+                        duration = ''
+                    table.setItem(row, duration_column, QTableWidgetItem(duration))
+                    output_item = QTableWidgetItem(os.path.basename(source_path))
+                    output_item.setData(Qt.ItemDataRole.UserRole, source_path)
+                    table.setItem(row, columns['output_name'], output_item, editable=True)
+
+                    play = QToolButton(table)
+                    play.setText(self.t('play'))
+                    play.clicked.connect(partial(self.open_file_path, source_path))
+                    table.setCellWidget(row, columns['play'], play)
+                    for key, label, handler in (
+                        ('edit_tracks', 'edit tracks', self.on_edit_tracks_from_mkv_row),
+                        ('edit_chapters', 'edit', self.on_edit_chapters_from_mkv_row),
+                        ('edit_attachments', 'edit', self.on_edit_attachments_from_mkv_row),
+                    ):
+                        button = QToolButton(table)
+                        button.setText(self.t(label))
+                        button.clicked.connect(partial(handler, table, source_path))
+                        table.setCellWidget(row, columns[key], button)
+                    self.ensure_encode_row_widgets(row, table)
+                    try:
+                        self._ensure_default_track_config_for_mkv(source_path, sp=is_sp)
+                    except Exception:
+                        pass
+                    if time.time() - float(busy['start']) >= float(busy['delay']):
+                        self._tick_delayed_busy(busy, modal=True)
+                        if not is_current():
+                            return
+                self._resize_table_columns_for_language(table)
+                self._scroll_table_to_primary_column(table)
+            if self.table2.rowCount():
+                self.on_subtitle_folder_path_change()
+        except OSError:
+            if is_current():
+                self.table2.setRowCount(0)
+                self.table3.setRowCount(0)
+                self._show_error_dialog(traceback.format_exc())
+        finally:
+            self._end_delayed_busy(busy)
 
     def add_chapters(self):
         if (
@@ -886,7 +789,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         return combo
 
     def edit_subtitle(self, path: str):
-        class SubtitleEditDialog(QDialog):
+        class SubtitleEditDialog(AnimatedDialog):
             def __init__(this):
                 super(SubtitleEditDialog, this).__init__()
                 this.altered = False
@@ -1391,7 +1294,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             self._encode_worker = None
 
         def show_encode_summary(title: str, message: str) -> None:
-            dialog = QDialog(self)
+            dialog = AnimatedDialog(self)
             dialog.setWindowTitle(title)
             layout = QVBoxLayout(dialog)
             editor = QPlainTextEdit(dialog)
@@ -2131,7 +2034,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
     def on_button_click(self, mpls_path: str, is_main_at_build: bool = True, bdmv_index: int = 0):
         is_main = self._is_mpls_currently_main(mpls_path)
 
-        class ChapterWindow(QDialog):
+        class ChapterWindow(AnimatedDialog):
             def __init__(this):
                 super(ChapterWindow, this).__init__(self)
                 this.setWindowTitle(f"{self.t('Chapters')}: {mpls_path}")
@@ -2278,7 +2181,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
     def on_view_mpls_play_items(self, mpls_path: str) -> None:
         chapter = Chapter(mpls_path)
         rows = chapter_play_item_file_ranges(chapter)
-        dialog = QDialog(self)
+        dialog = AnimatedDialog(self)
         dialog.setWindowTitle(f"{self.t('MPLS play items')}: {mpls_path}")
         layout = QVBoxLayout(dialog)
         table = SelectionTableWidget(dialog)

@@ -1,13 +1,31 @@
 {
   "schema_version": 1,
   "window": {
-    "geometry": ""
+    "geometry": "",
+    "log_geometry": ""
   },
   "ui": {
     "language": "en",
     "theme": "light",
     "font_size": 10,
-    "opacity": 100
+    "opacity": 100,
+    "save_log_to_file": false,
+    "log_line_limit": 4000,
+    "log_theme": "follow",
+    "close_to_tray": true,
+    "check_updates_on_startup": true,
+    "main_background_path": "",
+    "main_background_opacity": 20,
+    "main_background_blur": 0,
+    "log_background_path": "",
+    "log_background_opacity": 20,
+    "log_background_blur": 0,
+    "fonts": {
+      "interface": "",
+      "table": "",
+      "log": "",
+      "editor": ""
+    }
   },
   "startup": {
     "function_page": "bluray_remux",
@@ -27,7 +45,8 @@
   "remux": {
     "convert_lossless_audio_to_flac": true,
     "convert_immersive_audio_to_flac": false,
-    "allow_partial_missing_non_video_tracks": false
+    "allow_partial_missing_non_video_tracks": false,
+    "save_audio_gaps": false
   },
   "encode": {
     "encoder": "x265",

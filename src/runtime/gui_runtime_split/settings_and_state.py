@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from PyQt6.QtCore import QByteArray
-from PyQt6.QtWidgets import QComboBox, QDialog, QMessageBox
+from PyQt6.QtCore import QByteArray, QTimer
+from PyQt6.QtWidgets import QComboBox, QMessageBox, QWidget
 
-from src.core.app_config import UiPreferences, WindowPreferences, save_app_config
+from src.core.app_config import AppConfig, UiPreferences, WindowPreferences, save_app_config
 from src.runtime.audio_conversion import AudioEncodingSettings
 from src.runtime.gui_runtime_classes.settings_dialog import SettingsDialog
+from src.runtime.windows_update import WindowsUpdatePackage, start_windows_update
 from .gui_base import BluraySubtitleGuiBase
 
 
@@ -100,26 +101,60 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
         if edit is not None and isinstance(values, dict):
             edit.setText(str(values.get(function_id) or ""))
 
-    def _window_geometry_text(self) -> str:
-        return bytes(self.saveGeometry().toBase64()).decode("ascii")
+    def _window_geometry_text(self, window: QWidget | None = None) -> str:
+        target = self if window is None else window
+        return bytes(target.saveGeometry().toBase64()).decode("ascii")
 
-    def _restore_window_geometry(self) -> bool:
-        self._window_geometry_restored = False
-        geometry = str(getattr(self._app_config.window, "geometry", "") or "")
-        if not geometry:
-            return False
+    @staticmethod
+    def _restore_saved_window_geometry(window: QWidget, geometry: str) -> bool:
         encoded = QByteArray.fromBase64(geometry.encode("ascii"))
         # Qt may reject saved geometry after the screen layout or scale changes.
-        self._window_geometry_restored = not encoded.isEmpty() and self.restoreGeometry(encoded)
+        return not encoded.isEmpty() and window.restoreGeometry(encoded)
+
+    def _restore_window_geometry(self) -> bool:
+        self._window_geometry_restored = self._restore_saved_window_geometry(
+            self, self._app_config.window.geometry,
+        )
         return self._window_geometry_restored
+
+    def _current_window_preferences(self) -> WindowPreferences:
+        log_geometry = self._app_config.window.log_geometry
+        if self._log_dialog is not None:
+            log_geometry = self._window_geometry_text(self._log_dialog)
+        return WindowPreferences(geometry=self._window_geometry_text(), log_geometry=log_geometry)
+
+    def _save_log_window_geometry(self) -> None:
+        if self._close_pending or self._app_config_load_failed or self._log_dialog is None:
+            return
+        geometry = self._window_geometry_text(self._log_dialog)
+        if geometry == self._app_config.window.log_geometry:
+            return
+        updated = replace(
+            self._app_config,
+            window=replace(self._app_config.window, log_geometry=geometry),
+        )
+        try:
+            save_app_config(updated, self._app_config_path)
+        except Exception as error:
+            self._show_app_config_error("save", error)
+        else:
+            self._app_config = updated
 
     @staticmethod
     def _set_combo_value(combo: QComboBox, value: str) -> None:
         index = combo.findData(value)
         combo.setCurrentIndex(index if index >= 0 else 0)
 
-    def _apply_saved_ui_preferences(self) -> None:
+    def _apply_saved_ui_preferences(self, previous: UiPreferences | None = None) -> None:
         ui = self._app_config.ui
+        self._tray_icon.setVisible(ui.close_to_tray)
+        if self._application_log is not None:
+            self._application_log.set_line_limit(ui.log_line_limit)
+            if self._log_dialog is not None:
+                self._log_dialog.set_line_limit(ui.log_line_limit)
+            self._application_log.set_log_directory(
+                self._app_config_path.parent / "logs" if ui.save_log_to_file else None,
+            )
         for combo, value in (
             (self.language_combo, ui.language),
             (self.theme_combo, ui.theme),
@@ -140,9 +175,21 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
             self.opacity_slider.setValue(ui.opacity)
         finally:
             self.opacity_slider.blockSignals(False)
-        self._apply_ui_font_size(ui.font_size)
-        self._apply_theme(ui.theme)
-        self._apply_language(ui.language)
+        if previous is None or ui.font_size != previous.font_size or ui.fonts != previous.fonts:
+            self._apply_ui_font_size(ui.font_size)
+        if previous is None or ui.theme != previous.theme:
+            self._apply_theme(ui.theme)
+        else:
+            if ui.opacity != previous.opacity:
+                self._apply_window_opacity()
+            if ui.log_theme != previous.log_theme:
+                self._apply_log_dialog_theme()
+        if previous is None or ui.language != previous.language:
+            self._apply_language(ui.language)
+        self.set_background_image(ui.main_background_path, ui.main_background_opacity, ui.main_background_blur)
+        if self._log_dialog is not None:
+            self._log_dialog.set_background_image(ui.log_background_path, ui.log_background_opacity, ui.log_background_blur)
+        self._startup_update_notice.set_check_enabled(ui.check_updates_on_startup)
 
     def _show_app_config_error(self, action: str, error: Exception | str) -> None:
         template = (
@@ -156,41 +203,54 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
             self.t(template).format(error=self.t(str(error))),
         )
 
+    def _start_program_update(self, package: WindowsUpdatePackage) -> None:
+        start_windows_update(package)
+        QTimer.singleShot(0, self._exit_application)
+
     def _show_settings_dialog(self) -> None:
+        def apply_config(config: AppConfig) -> bool:
+            previous = self._app_config
+            previous_ui = self._current_ui_preferences()
+            selected = replace(config, window=self._current_window_preferences())
+            try:
+                save_app_config(selected, self._app_config_path)
+            except Exception as error:
+                self._show_app_config_error("save", error)
+                return False
+            self._app_config = selected
+            self._app_config_load_failed = False
+            if selected.encode != previous.encode:
+                self._reload_encode_preset_parameters()
+                self._refresh_encode_tool_dependent_ui(False)
+            for function_id, old_path, new_path in (
+                (3, previous.paths.remux_output, selected.paths.remux_output),
+                (4, previous.paths.encode_output, selected.paths.encode_output),
+            ):
+                if new_path != old_path:
+                    self._output_folder_values[function_id] = new_path
+                    self._auto_output_folders[function_id] = ""
+                    if self.get_selected_function_id() == function_id:
+                        self._restore_output_folder_for_function(function_id)
+            self._apply_saved_ui_preferences(previous_ui)
+            self._apply_window_opacity(dialog)
+            return True
+
         dialog = SettingsDialog(
             replace(self._app_config, ui=self._current_ui_preferences()),
             self.t,
             self,
             encoder_mode=str(self.x265_mode_combo.currentData()),
+            apply_config=apply_config,
+            start_update=self._start_program_update,
         )
         self._apply_window_opacity(dialog)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-        selected = replace(
-            dialog.selected_config(),
-            window=WindowPreferences(geometry=self._window_geometry_text()),
-        )
-        try:
-            save_app_config(selected, self._app_config_path)
-        except Exception as error:
-            self._show_app_config_error("save", error)
-            return
-        self._app_config = selected
-        self._app_config_load_failed = False
-        self._reload_encode_preset_parameters()
-        self._refresh_encode_tool_dependent_ui(False)
-        self._output_folder_values[3] = selected.paths.remux_output
-        self._output_folder_values[4] = selected.paths.encode_output
-        self._auto_output_folders[3] = ""
-        self._auto_output_folders[4] = ""
-        function_id = self.get_selected_function_id()
-        if function_id in (3, 4):
-            self._restore_output_folder_for_function(function_id)
-        self._apply_saved_ui_preferences()
+        dialog.exec()
+        dialog.deleteLater()
 
     def _current_ui_preferences(self) -> UiPreferences:
         font_size = int(getattr(self, "_ui_font_point_size", 10) or 10)
-        return UiPreferences(
+        return replace(
+            self._app_config.ui,
             language=str(self.language_combo.currentData() or "en"),
             theme=str(self.theme_combo.currentData() or "light"),
             font_size=max(6, min(14, font_size)),
@@ -202,7 +262,7 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
             return
         updated = replace(
             self._app_config,
-            window=WindowPreferences(geometry=self._window_geometry_text()),
+            window=self._current_window_preferences(),
             ui=self._current_ui_preferences(),
         )
         save_app_config(updated, self._app_config_path)

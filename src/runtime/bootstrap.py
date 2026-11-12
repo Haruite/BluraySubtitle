@@ -3,18 +3,56 @@
 import sys
 
 from PyQt6.QtCore import QTimer
-from PyQt6.QtWidgets import QApplication, QStyle
+from PyQt6.QtGui import QIcon
+from PyQt6.QtWidgets import QApplication, QMessageBox, QStyle
 
-from src.core.version import current_commit
+from src.core.version import APP_TITLE, current_commit
+from src.core.i18n import translate_text
+from src.exports.utils import print_terminal_line
 
+from .application_log import ApplicationLog
+from .desktop_integration import application_icon_path, desktop_entry_id
 from .gui_runtime_classes.bluray_subtitle_gui_entry import BluraySubtitleGUI
+from .gui_runtime_classes.widget_animations import enable_combo_animation
+from .instance_activation import InstanceActivation
+
+if sys.platform == "win32":
+    import ctypes
+
+    _set_taskbar_app_id = ctypes.WinDLL("shell32").SetCurrentProcessExplicitAppUserModelID
+    _set_taskbar_app_id.argtypes = (ctypes.c_wchar_p,)
+    _set_taskbar_app_id.restype = ctypes.c_long
 
 
-def run_src_entry() -> None:
+def run_src_entry(application_log: ApplicationLog | None = None) -> None:
+    if sys.platform == "win32" and not getattr(sys, "frozen", False):
+        # Keep source launches out of python.exe's taskbar group.
+        _set_taskbar_app_id("Haruite.BluraySubtitle")
+    app = QApplication.instance() or QApplication(sys.argv)
+    if sys.platform.startswith("linux"):
+        app.setDesktopFileName(desktop_entry_id())
+    instance = None
+    try:
+        instance = InstanceActivation(app)
+        if not instance.claim():
+            return
+    except TimeoutError as error:
+        QMessageBox.warning(None, APP_TITLE, str(error))
+        return
+    except OSError as error:
+        instance = None
+        print_terminal_line(
+            translate_text("Could not start local instance detection. {error}").format(error=error),
+            translate=False,
+        )
     # Capture Git metadata before the GUI starts handling events.
     current_commit()
-    app = QApplication.instance() or QApplication(sys.argv)
-    window = BluraySubtitleGUI()
+    enable_combo_animation()
+    app.setWindowIcon(QIcon(str(application_icon_path())))
+    window = BluraySubtitleGUI(application_log)
+    if instance is not None:
+        instance.activation_requested.connect(window._restore_from_tray)
+        app.aboutToQuit.connect(instance.release)
     window.show()
     try:
         # Re-apply current UI font once after show so all widgets are ready.

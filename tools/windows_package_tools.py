@@ -11,6 +11,28 @@ from tools.windows_native_tools import (
 from tools.windows_tool_paths import MKV_SETTINGS
 
 
+def build_executable_icon(source: Path, output: Path) -> None:
+    """Write a multi-resolution Windows icon from the application SVG."""
+    from PIL import Image
+    from PyQt6.QtGui import QImage, QPainter
+    from PyQt6.QtSvg import QSvgRenderer
+
+    renderer = QSvgRenderer(str(source))
+    if not renderer.isValid():
+        raise ValueError(f"Invalid application icon: {source}")
+    image = QImage(256, 256, QImage.Format.Format_RGBA8888)
+    image.fill(0)
+    painter = QPainter(image)
+    renderer.render(painter)
+    painter.end()
+    pixels = image.constBits()
+    pixels.setsize(image.sizeInBytes())
+    output.parent.mkdir(parents=True, exist_ok=True)
+    Image.frombytes("RGBA", (256, 256), bytes(pixels)).save(
+        output, format="ICO", sizes=[(size, size) for size in (16, 20, 24, 32, 40, 48, 64, 128, 256)],
+    )
+
+
 def build_launchers(work: Path) -> dict[bool, Path]:
     try:
         env = msvc_environment()

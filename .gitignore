@@ -8,6 +8,7 @@ __pycache__/
 .Python
 .idea
 /config.json
+/logs/
 build/
 develop-eggs/
 dist/

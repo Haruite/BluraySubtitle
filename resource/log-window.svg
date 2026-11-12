@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>BluraySubtitle Log</title>
+  <defs>
+    <linearGradient id="terminal" x1="5" y1="9" x2="60" y2="55" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1559BB"/>
+      <stop offset="0.56" stop-color="#303DB7"/>
+      <stop offset="1" stop-color="#54239F"/>
+    </linearGradient>
+  </defs>
+  <rect x="3" y="10" width="58" height="44" rx="7" fill="url(#terminal)"/>
+  <rect x="3.75" y="10.75" width="56.5" height="42.5" rx="6.25" fill="none" stroke="#BEE7FF" stroke-opacity="0.32" stroke-width="1.5"/>
+  <path d="m14 24 8 8-8 8" fill="none" stroke="#AFF3FF" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M31 27h18m-18 10h12" fill="none" stroke="#F9FAFF" stroke-width="4.5" stroke-linecap="round"/>
+</svg>

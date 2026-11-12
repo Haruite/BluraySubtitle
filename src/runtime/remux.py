@@ -36,6 +36,7 @@ class RemuxRequest:
     track_language_config: dict[str, dict[str, str]] | None = None
     main_alternate_mpls: dict[str, tuple[str, ...]] | None = None
     ensure_tools: bool = False
+    save_audio_gaps: bool = False
 
 
 @dataclass(frozen=True)

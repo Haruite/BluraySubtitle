@@ -17,24 +17,32 @@ from typing import Optional
 from PyQt6.QtCore import Qt, QTimer, QCoreApplication, QThread
 from PyQt6.QtWidgets import QApplication, QVBoxLayout, QWidget, QHBoxLayout, QLabel, QSlider, QGroupBox, \
     QLineEdit, QTabBar, QRadioButton, QButtonGroup, QPushButton, QCheckBox, QSizePolicy, QScrollArea, \
-    QProgressDialog, QProgressBar, QFileDialog, QFrame
+    QProgressDialog, QProgressBar, QFileDialog, QFrame, QMessageBox, QMenu, QStyle, QSystemTrayIcon
 
 from src.core import APP_TITLE, BDMV_LABELS, SUBTITLE_LABELS, ENCODE_SP_LABELS
 from src.core.app_config import FUNCTION_PAGE_IDS, app_config_path, default_app_config, load_app_config
 from src.core.i18n import translate_text
 import src.core.settings as core_settings
 from src.exports.utils import print_exc_terminal
+from src.runtime.application_log import ApplicationLog
+from src.runtime.gui_runtime_classes.application_log_dialog import ApplicationLogDialog
 from src.runtime.gui_runtime_classes.custom_box import CustomBox
 from src.runtime.gui_runtime_classes.custom_table_widget import CustomTableWidget, SelectionTableWidget, StyledComboBox
 from src.runtime.gui_runtime_classes.disc_table_widget import DiscTableWidget
 from src.runtime.gui_runtime_classes.execution_button import ExecutionButton
+from src.runtime.gui_runtime_classes.startup_update_notice import StartupUpdateNotice
+from src.runtime.gui_runtime_classes.widget_animations import animate_window_close, cancel_window_close
+from src.runtime.gui_runtime_classes.window_background import WindowBackground
 from .gui_base import BluraySubtitleGuiBase
 
 
 class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
-    def __init__(self):
+    def __init__(self, application_log: ApplicationLog | None = None):
         super().__init__()
         self.setObjectName('mainWindow')
+        self._application_log = application_log
+        self._log_dialog = None
+        self._window_background = WindowBackground()
         self._app_config_path = app_config_path()
         self._app_config_load_failed = False
         self._app_config_errors: list[Exception] = []
@@ -78,6 +86,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         app = QApplication.instance()
         if app:
             self._default_style_name = app.style().name()
+            self._default_ui_font = app.font()
             app.aboutToQuit.connect(self.delete_default_vpy_file)
 
         outer_layout = QVBoxLayout()
@@ -97,6 +106,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.content_scroll.setWidget(content)
 
         language_row = QWidget(self)
+        language_row.setObjectName('mainToolbar')
         language_layout = QHBoxLayout()
         language_layout.setContentsMargins(8, 0, 8, 0)
         language_layout.setSpacing(6)
@@ -121,7 +131,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         language_layout.addWidget(self.theme_label)
         language_layout.addWidget(self.theme_combo)
         language_layout.addSpacing(12)
-        self.font_size_label = QLabel('UI Font', language_row)
+        self.font_size_label = QLabel(self.t('UI font size'), language_row)
         self.font_size_combo = StyledComboBox(language_row)
         self.font_size_combo.addItem('6', 6)
         self.font_size_combo.addItem('7', 7)
@@ -161,11 +171,35 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         )
         language_layout.addWidget(self.third_party_notices_btn)
         language_layout.addStretch(1)
+        self.view_log_button = QPushButton(self.t('View Log'), language_row)
+        self.view_log_button.setEnabled(self._application_log is not None)
+        self.view_log_button.clicked.connect(self._show_log_dialog)
+        language_layout.addWidget(self.view_log_button)
         self.settings_button = QPushButton(self.t('Settings'), language_row)
         self.settings_button.clicked.connect(lambda _=None: self._show_settings_dialog())
         language_layout.addWidget(self.settings_button)
+        self.exit_button = QPushButton(self.t('Exit'), language_row)
+        self.exit_button.clicked.connect(self._exit_application)
+        language_layout.addWidget(self.exit_button)
         outer_layout.addWidget(language_row)
+        self._startup_update_notice = StartupUpdateNotice(self._start_program_update, self)
+        outer_layout.addWidget(self._startup_update_notice)
         outer_layout.addWidget(self.content_scroll, 1)
+
+        tray_icon = self.windowIcon()
+        if tray_icon.isNull():
+            tray_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
+        self._tray_icon = QSystemTrayIcon(tray_icon, self)
+        self._tray_icon.setToolTip(APP_TITLE)
+        tray_menu = QMenu(self)
+        self._tray_show_action = tray_menu.addAction(self.t('Show main window'), self._restore_from_tray)
+        self._tray_exit_action = tray_menu.addAction(self.t('Exit'), self._exit_application)
+        self._tray_icon.setContextMenu(tray_menu)
+        self._tray_icon.activated.connect(self._on_tray_activated)
+        if self._application_log is not None:
+            self._log_error_timer = QTimer(self)
+            self._log_error_timer.timeout.connect(self._check_log_file_error)
+            self._log_error_timer.start(500)
 
         self.subtitle_folder_path = QLineEdit()
         self.subtitle_folder_path.setMinimumWidth(200)
@@ -325,11 +359,12 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.remux_folder_path.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.remux_folder_path.setMinimumWidth(200)
         self.remux_folder_path.setAcceptDrops(False)
+        self._remux_folder_revision = 0
         self._remux_folder_debounce = QTimer(self)
         self._remux_folder_debounce.setSingleShot(True)
         self._remux_folder_debounce.setInterval(150)
         self._remux_folder_debounce.timeout.connect(self._populate_encode_from_remux_folder)
-        self.remux_folder_path.textChanged.connect(lambda _=None: self._remux_folder_debounce.start())
+        self.remux_folder_path.textChanged.connect(self._on_remux_folder_path_changed)
         remux_btn = QPushButton('Select')
         remux_btn.clicked.connect(self.select_remux_folder)
         remux_btn_open = QPushButton('Open')
@@ -374,7 +409,8 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             self._cancel_subtitle_folder_scan()
             try:
                 self._apply_encode_input_mode_ui()
-                self.on_subtitle_folder_path_change()
+                if self._encode_input_mode != 'remux':
+                    self.on_subtitle_folder_path_change()
             except Exception:
                 print_exc_terminal()
 
@@ -799,6 +835,64 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             errors = '\n'.join(str(error) for error in self._app_config_errors)
             QTimer.singleShot(0, lambda: self._show_app_config_error('load', errors))
 
+    def _show_log_dialog(self) -> None:
+        if self._application_log is None:
+            return
+        if self._log_dialog is None:
+            self._log_dialog = ApplicationLogDialog(self._application_log)
+            self._log_dialog.setFont(self.font())
+            self._apply_widget_font(self._log_dialog.output)
+            ui = self._app_config.ui
+            self._log_dialog.set_line_limit(ui.log_line_limit)
+            self._apply_log_dialog_theme()
+            self._log_dialog.set_background_image(ui.log_background_path, ui.log_background_opacity, ui.log_background_blur)
+            self._log_dialog.finished.connect(self._save_log_window_geometry)
+        cancel_window_close(self._log_dialog)
+        if not self._log_dialog.isVisible():
+            # Native moves do not suppress QDialog's automatic placement on show.
+            self._restore_saved_window_geometry(self._log_dialog, self._app_config.window.log_geometry)
+        self._apply_window_opacity(self._log_dialog)
+        if self._log_dialog.isMinimized():
+            self._log_dialog.setWindowState(
+                self._log_dialog.windowState() & ~Qt.WindowState.WindowMinimized
+            )
+        self._log_dialog.show()
+        self._log_dialog.raise_()
+        self._log_dialog.activateWindow()
+
+    def _restore_from_tray(self) -> None:
+        if self._close_pending:
+            return
+        cancel_window_close(self)
+        if self.isMinimized():
+            self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick):
+            self._restore_from_tray()
+
+    def _exit_application(self) -> None:
+        if not self._close_pending:
+            self._close_pending = True
+            self.close()
+
+    def _check_log_file_error(self) -> None:
+        error = self._application_log.take_file_error()
+        if error is not None:
+            warning = QMessageBox(
+                QMessageBox.Icon.Warning, self.t('View Log'),
+                self.t('Could not save the log file. {error}').format(error=error), parent=self,
+            )
+            warning.setModal(False)
+            warning.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+            warning.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)
+            warning.setTextFormat(Qt.TextFormat.PlainText)
+            self._apply_window_opacity(warning)
+            warning.show()
+
     def _reposition_subtitle_path_box(self):
         outer = getattr(self, '_label2_outer_layout', None)
         hint_row = getattr(self, 'subtitle_hint_row', None)
@@ -914,40 +1008,62 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             pass
 
     def closeEvent(self, event):
-        active_threads = [
-            thread for thread in self.findChildren(QThread)
-            if thread.isRunning()
-        ]
-        if active_threads:
+        minimize_to_tray = (
+            not self._close_pending
+            and self._tray_icon.isVisible()
+            and QSystemTrayIcon.isSystemTrayAvailable()
+            and not QApplication.instance().isSavingSession()
+        )
+        if not minimize_to_tray:
             self._close_pending = True
-            self.setEnabled(False)
-            for name in (
-                    '_current_cancel_event',
-                    '_sp_scan_cancel_event',
-                    '_subtitle_scan_cancel_event',
-                    '_iso_scan_cancel_event',
-            ):
-                cancel_event = getattr(self, name, None)
-                if cancel_event is not None:
-                    cancel_event.set()
-            for thread in active_threads:
-                thread.requestInterruption()
-                thread.quit()
+            active_threads = [thread for thread in self.findChildren(QThread) if thread.isRunning()]
+            if active_threads:
+                self.setEnabled(False)
+                for name in (
+                        '_current_cancel_event',
+                        '_sp_scan_cancel_event',
+                        '_subtitle_scan_cancel_event',
+                        '_iso_scan_cancel_event',
+                ):
+                    cancel_event = getattr(self, name, None)
+                    if cancel_event is not None:
+                        cancel_event.set()
+                for thread in active_threads:
+                    thread.requestInterruption()
+                    thread.quit()
+                event.ignore()
+                QTimer.singleShot(100, self.close)
+                return
+
+        if animate_window_close(self, self.close):
+            if not minimize_to_tray and self._log_dialog is not None:
+                self._log_dialog.close()
             event.ignore()
-            QTimer.singleShot(100, self.close)
             return
 
-        if not self._app_config_load_failed:
-            try:
-                self._save_application_state()
-            except Exception as error:
-                self._show_app_config_error('save', error)
+        try:
+            self._save_application_state()
+        except Exception as error:
+            self._show_app_config_error('save', error)
+        if minimize_to_tray:
+            event.ignore()
+            self.hide()
+            return
+
+        self._tray_icon.hide()
         self.delete_default_vpy_file()
         if self._iso_playlist_temp is not None:
             self._iso_playlist_temp.cleanup()
             self._iso_playlist_temp = None
             self._iso_playlist_cache.clear()
+        if self._log_dialog is not None:
+            self._log_dialog.close()
         event.accept()
+        if not self.isVisible():
+            if self._log_dialog is not None and self._log_dialog.isVisible():
+                self._log_dialog.finished.connect(QCoreApplication.quit)
+            else:
+                QTimer.singleShot(0, QCoreApplication.quit)
         print('[BluraySubtitle] window close accepted', flush=True)
         return
 
@@ -960,7 +1076,9 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             'dialog': None,
         }
 
-    def _tick_delayed_busy(self, state: Optional[dict[str, object]], text: Optional[str] = None):
+    def _tick_delayed_busy(
+            self, state: Optional[dict[str, object]], text: Optional[str] = None, *, modal: bool = False,
+    ):
         if not isinstance(state, dict):
             return
         if text:
@@ -969,8 +1087,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         if dlg is None and (time.time() - float(state.get('start') or 0.0)) >= float(state.get('delay') or 2.0):
             dlg = QProgressDialog(str(state.get('text') or self.t('Loading...')), '', 0, 0, self)
             dlg.setCancelButton(None)
-            # Non-modal: show progress hint without freezing the whole UI.
-            dlg.setWindowModality(Qt.WindowModality.NonModal)
+            dlg.setWindowModality(Qt.WindowModality.ApplicationModal if modal else Qt.WindowModality.NonModal)
             dlg.setMinimumWidth(420)
             bar = QProgressBar(dlg)
             bar.setRange(0, 0)

@@ -16,6 +16,8 @@ from .gui_base import BluraySubtitleGuiBase
 class PlaybackPathsMixin(BluraySubtitleGuiBase):
     def _normalize_path_input(self, text: str) -> str:
         s = str(text or '').strip()
+        if sys.platform == 'win32' and len(s) >= 2 and s[0] == s[-1] == '"':
+            s = s[1:-1]
         if not s:
             return ''
         if s.startswith('file://'):

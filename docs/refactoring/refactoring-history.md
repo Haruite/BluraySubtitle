@@ -1317,3 +1317,11 @@ Date: 2026-11-11
 - Setup strips tsMuxeR, fdkaac, x264, and libass when installing them. Packaging uses a smaller libsndfile for Wave64 PCM analysis, compacts the pycountry JSON databases, and applies the stronger 7-Zip settings. The bilingual third-party notices record the new link layout and the libsndfile source and license.
 - Setup selects installation and upgrades through the existing version and cache rules. To regenerate a tool at the same version, remove its installed output and any cache that would restore it before running setup.
 - Verification covered 101 unit tests, extraction and launcher checks, matching H.264, HEVC, VP9, AV1, and MPEG-2 frames, H.264 and HEVC Vulkan decoding, FFTW filters, ASS rendering, and Wave64 bit-depth detection in the frozen worker. The test package measured 283.15 MiB extracted and 68.45 MiB archived. The VapourSynth plugins and their dedicated dependencies measured 53.82 MiB.
+
+## Desktop Launch, Logging, and Updates
+
+2026-11-12
+
+- Desktop launches are detached by default, with tray support and window restoration on relaunch from the same directory. The log viewer captures tool output and can save it under `logs/`. Changing the Remux source on the Encode page refreshes the main and SP rows.
+- Settings adds font and background controls. Tools groups update checks and launch shortcuts. The Windows package installs verified updates with rollback. Icons are stored in `resource/` and the updater in `tools/`. Updated the bilingual interface guide.
+- 101 unit tests and Windows launch, logging, and update rollback checks passed. Linux desktop launches and online updates from a published bundle remain to be verified.

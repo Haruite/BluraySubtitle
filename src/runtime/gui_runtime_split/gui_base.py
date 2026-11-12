@@ -9,9 +9,10 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from PyQt6.QtCore import QModelIndex, Qt, QProcess
-from PyQt6.QtWidgets import QWidget, QComboBox, QMenu, QTableWidgetItem, QTableWidget, QToolButton, QGroupBox, QLabel
+from PyQt6.QtWidgets import QWidget, QComboBox, QMenu, QTableWidgetItem, QTableWidget, QToolButton, QGroupBox, QLabel, QSystemTrayIcon
 
-from src.core.app_config import UiPreferences
+from src.core.app_config import UiPreferences, WindowPreferences
+from src.runtime.windows_update import WindowsUpdatePackage
 
 
 class BluraySubtitleGuiBase(QWidget):
@@ -257,6 +258,9 @@ class BluraySubtitleGuiBase(QWidget):
     def _apply_language(self, language_code: str):
         raise NotImplementedError
 
+    def _apply_log_dialog_theme(self) -> None:
+        raise NotImplementedError
+
     def _apply_main_remux_cmds_to_configuration(self, configuration: dict[int, dict[str, int | str]]):
         raise NotImplementedError
 
@@ -266,7 +270,7 @@ class BluraySubtitleGuiBase(QWidget):
     def _apply_saved_encode_defaults(self) -> None:
         raise NotImplementedError
 
-    def _apply_saved_ui_preferences(self) -> None:
+    def _apply_saved_ui_preferences(self, previous: UiPreferences | None=None) -> None:
         raise NotImplementedError
 
     def _apply_select_all_tracks_to_main_and_sp(self):
@@ -282,6 +286,9 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _apply_ui_font_size(self, point_size: int):
+        raise NotImplementedError
+
+    def _apply_widget_font(self, widget: QWidget) -> None:
         raise NotImplementedError
 
     def _apply_window_opacity(self, window: QWidget | None=None):
@@ -323,6 +330,9 @@ class BluraySubtitleGuiBase(QWidget):
     def _chapter_node_data(self, mpls_path_no_ext: str) -> dict[str, object]:
         raise NotImplementedError
 
+    def _check_log_file_error(self) -> None:
+        raise NotImplementedError
+
     def _closest_endpoint(self, start_idx: int, target_sec: float, rows: int, offsets: dict[int, float], m2ts: dict[int, str], checked: list[bool], approx_episode_sec: Optional[float]=None) -> int:
         raise NotImplementedError
 
@@ -356,6 +366,9 @@ class BluraySubtitleGuiBase(QWidget):
     def _current_vpy_processing_values(self) -> dict[str, float]:
         raise NotImplementedError
 
+    def _current_window_preferences(self) -> WindowPreferences:
+        raise NotImplementedError
+
     def _default_track_lists_for_mkv_path(self, mkv_path: str) -> Optional[tuple[list[str], list[str]]]:
         raise NotImplementedError
 
@@ -387,6 +400,9 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _episode_output_names_by_detail(self) -> dict[tuple[int, str], str | None]:
+        raise NotImplementedError
+
+    def _exit_application(self) -> None:
         raise NotImplementedError
 
     def _extract_attachment_to_temp_and_open(self, mkv_path: str, attachment_id: str, filename: str):
@@ -541,6 +557,9 @@ class BluraySubtitleGuiBase(QWidget):
     def _on_play_sp_table_row_clicked(self):
         raise NotImplementedError
 
+    def _on_remux_folder_path_changed(self) -> None:
+        raise NotImplementedError
+
     def _on_retired_sp_scan_thread_finished(self):
         raise NotImplementedError
 
@@ -563,6 +582,9 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _on_theme_changed(self):
+        raise NotImplementedError
+
+    def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         raise NotImplementedError
 
     def _on_trim_copyright_tail_toggled(self, _checked: bool=False) -> None:
@@ -592,9 +614,6 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _populate_encode_from_remux_folder(self):
-        raise NotImplementedError
-
-    def _populate_encode_sps_from_remux_folder(self, folder: str):
         raise NotImplementedError
 
     def _preview_script_for_row(self, vpy_path: str, video_path: str, subtitle_path: str):
@@ -721,7 +740,14 @@ class BluraySubtitleGuiBase(QWidget):
     def _resolve_remux_output_folder(self, base_folder: str) -> str:
         raise NotImplementedError
 
+    def _restore_from_tray(self) -> None:
+        raise NotImplementedError
+
     def _restore_output_folder_for_function(self, function_id: int) -> None:
+        raise NotImplementedError
+
+    @staticmethod
+    def _restore_saved_window_geometry(window: QWidget, geometry: str) -> bool:
         raise NotImplementedError
 
     def _restore_window_geometry(self) -> bool:
@@ -737,6 +763,9 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _save_application_state(self) -> None:
+        raise NotImplementedError
+
+    def _save_log_window_geometry(self) -> None:
         raise NotImplementedError
 
     def _save_simple_diy_subtitle_config(self):
@@ -791,6 +820,9 @@ class BluraySubtitleGuiBase(QWidget):
     def _show_error_dialog(self, err_text: str):
         raise NotImplementedError
 
+    def _show_log_dialog(self) -> None:
+        raise NotImplementedError
+
     def _show_m2ts_file_detail_columns(self) -> None:
         raise NotImplementedError
 
@@ -810,6 +842,9 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _split_m2ts_files(self, text: str) -> list[str]:
+        raise NotImplementedError
+
+    def _start_program_update(self, package: WindowsUpdatePackage) -> None:
         raise NotImplementedError
 
     def _start_sp_table_scan(self):
@@ -855,7 +890,7 @@ class BluraySubtitleGuiBase(QWidget):
     def _table3_get_sp_entry_for_row(self, row: int) -> dict[str, int | str]:
         raise NotImplementedError
 
-    def _tick_delayed_busy(self, state: Optional[dict[str, object]], text: Optional[str]=None):
+    def _tick_delayed_busy(self, state: Optional[dict[str, object]], text: Optional[str]=None, *, modal: bool=False):
         raise NotImplementedError
 
     def _track_id_sets_for_config_key(self, key: str, *, mpls_path_fallback: str='') -> tuple[set[str], set[str]]:
@@ -891,7 +926,7 @@ class BluraySubtitleGuiBase(QWidget):
     def _vpy_raw_string(self, path: str) -> str:
         raise NotImplementedError
 
-    def _window_geometry_text(self) -> str:
+    def _window_geometry_text(self, window: QWidget | None=None) -> str:
         raise NotImplementedError
 
     def _window_opacity_supported(self) -> bool:

@@ -12,13 +12,12 @@ from html import escape
 from pathlib import Path
 from typing import Callable
 
-from PyQt6.QtCore import Qt, QUrl
-from PyQt6.QtGui import QFontDatabase
-from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QFontDatabase, QImageReader
+from PyQt6.QtNetwork import QNetworkReply
 from PyQt6.QtWidgets import (
     QComboBox,
     QCheckBox,
-    QDialog,
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
@@ -38,9 +37,12 @@ from PyQt6.QtWidgets import (
 
 import src.core.settings as core_settings
 from src.core.app_config import (
+    MAX_BACKGROUND_BLUR,
+    MAX_LOG_LINE_LIMIT,
     AppConfig,
     AudioPreferences,
     EncodePreferences,
+    FontPreferences,
     PathPreferences,
     RemuxPreferences,
     StartupPreferences,
@@ -62,20 +64,25 @@ from src.core.version import (
     release_version,
 )
 from src.exports.utils import resolve_encoder_executable_path
+from src.runtime.desktop_integration import create_launch_shortcut
 from src.runtime.encode_source import (
     probe_svt_av1_bit_depths,
     probe_x265_dynamic_metadata_options,
 )
+from src.runtime.update_check import SERVER_PACKAGE_METADATA_URL, request_update_info, update_network_manager
+from src.runtime.windows_update import (
+    GITHUB_LATEST_RELEASE_API,
+    WindowsUpdatePackage,
+    github_windows_package,
+    server_windows_package,
+    windows_update_executable,
+)
 
 from .custom_table_widget import StyledComboBox
 from .spin_box import StyledDoubleSpinBox, StyledSpinBox
+from .widget_animations import AnimatedDialog, AnimatedMessageBox, window_opacity
 
 
-GITHUB_LATEST_RELEASE_API = (
-    "https://api.github.com/repos/Haruite/BluraySubtitle/releases/latest"
-)
-GITHUB_RELEASES_URL = "https://github.com/Haruite/BluraySubtitle/releases/latest"
-SERVER_WINDOWS_PACKAGE_URL = "https://sbx.mysmy.top/tools/BluraySubtitle_windows_x64.7z"
 EXTERNAL_TOOL_PATH_NAMES = (
     "SEVEN_ZIP_PATH",
     "FLAC_PATH",
@@ -95,7 +102,7 @@ EXTERNAL_TOOL_PATH_NAMES = (
 )
 
 
-class SettingsDialog(QDialog):
+class SettingsDialog(AnimatedDialog):
     def __init__(
             self,
             config: AppConfig,
@@ -103,9 +110,14 @@ class SettingsDialog(QDialog):
             parent: QWidget | None = None,
             settings_source_path: Path | None = None,
             encoder_mode: str = "system",
+            *,
+            apply_config: Callable[[AppConfig], bool] | None = None,
+            start_update: Callable[[WindowsUpdatePackage], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self._config = config
+        self._apply_config = apply_config
+        self._start_update = start_update
         self._encoder_mode = encoder_mode
         self.t = translate
         self._custom_encode_presets = list(config.encode.custom_presets)
@@ -117,7 +129,7 @@ class SettingsDialog(QDialog):
         )
         self._settings_source_text: str | None = None
         self._current_commit = current_commit()
-        self._update_network_manager = QNetworkAccessManager(self)
+        self._update_network_manager = update_network_manager(self)
         self._update_replies: tuple[QNetworkReply, QNetworkReply] | None = None
         self.finished.connect(self._cancel_update_check)
         self.setWindowTitle(self.t("Settings"))
@@ -127,18 +139,24 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(self)
         tabs = QTabWidget(self)
         tabs.addTab(self._build_general_tab(), self.t("General"))
+        tabs.addTab(self._build_fonts_tab(), self.t("Fonts"))
         tabs.addTab(self._build_paths_tab(), self.t("Paths"))
         tabs.addTab(self._build_advanced_tab(), self.t("Advanced"))
+        tabs.addTab(self._build_tools_tab(), self.t("Tools"))
         tabs.addTab(self._build_external_tools_tab(), self.t("External tools"))
         layout.addWidget(tabs)
 
         self.buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Apply
             | QDialogButtonBox.StandardButton.Cancel
             | QDialogButtonBox.StandardButton.RestoreDefaults,
             self,
         )
         self.buttons.button(QDialogButtonBox.StandardButton.Save).setText(self.t("Save"))
+        apply_button = self.buttons.button(QDialogButtonBox.StandardButton.Apply)
+        apply_button.setText(self.t("Apply"))
+        apply_button.clicked.connect(self._apply_settings)
         self.buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(self.t("Cancel"))
         self.buttons.button(QDialogButtonBox.StandardButton.RestoreDefaults).setText(
             self.t("Restore defaults")
@@ -185,15 +203,49 @@ class SettingsDialog(QDialog):
         self.theme_combo.addItem(self.t("Colorful"), "colorful")
         form.addRow(self.t("Theme"), self.theme_combo)
 
-        self.font_size_spin = StyledSpinBox(tab)
-        self.font_size_spin.setRange(6, 14)
-        form.addRow(self.t("UI font size"), self.font_size_spin)
-
         self.opacity_spin = StyledSpinBox(tab)
         self.opacity_spin.setRange(60, 100)
         self.opacity_spin.setSuffix("%")
         form.addRow(self.t("Window opacity"), self.opacity_spin)
 
+        self.main_background_opacity_spin = StyledSpinBox(tab)
+        self.main_background_opacity_spin.setRange(0, 100)
+        self.main_background_opacity_spin.setSuffix("%")
+        form.addRow(self.t("Main background image opacity"), self.main_background_opacity_spin)
+        self.main_background_blur_spin = StyledSpinBox(tab)
+        self.main_background_blur_spin.setRange(0, MAX_BACKGROUND_BLUR)
+        form.addRow(self.t("Main background image blur strength"), self.main_background_blur_spin)
+
+        self.log_background_opacity_spin = StyledSpinBox(tab)
+        self.log_background_opacity_spin.setRange(0, 100)
+        self.log_background_opacity_spin.setSuffix("%")
+        form.addRow(self.t("Log background image opacity"), self.log_background_opacity_spin)
+        self.log_background_blur_spin = StyledSpinBox(tab)
+        self.log_background_blur_spin.setRange(0, MAX_BACKGROUND_BLUR)
+        form.addRow(self.t("Log background image blur strength"), self.log_background_blur_spin)
+        blur_hint = QLabel(self.t("Blur strength ranges from 0 to 40. Set it to 0 to keep the background image sharp."), tab)
+        blur_hint.setWordWrap(True)
+        form.addRow(blur_hint)
+
+        self.close_to_tray_checkbox = QCheckBox(
+            self.t("Minimize to the system tray when closing the main window"), tab,
+        )
+        form.addRow(self.close_to_tray_checkbox)
+        self.save_log_checkbox = QCheckBox(self.t("Save log to file"), tab)
+        form.addRow(self.save_log_checkbox)
+        self.log_line_limit_spin = StyledSpinBox(tab)
+        self.log_line_limit_spin.setRange(1, MAX_LOG_LINE_LIMIT)
+        form.addRow(self.t("Log line limit"), self.log_line_limit_spin)
+        self.log_theme_combo = StyledComboBox(tab)
+        self.log_theme_combo.addItem(self.t("Follow main window"), "follow")
+        for index in range(self.theme_combo.count()):
+            self.log_theme_combo.addItem(self.theme_combo.itemText(index), self.theme_combo.itemData(index))
+        form.addRow(self.t("Log window theme"), self.log_theme_combo)
+        return tab
+
+    def _build_tools_tab(self) -> QWidget:
+        tab = QWidget(self)
+        form = QFormLayout(tab)
         update_row = QWidget(tab)
         update_layout = QVBoxLayout(update_row)
         update_layout.setContentsMargins(0, 0, 0, 0)
@@ -201,6 +253,7 @@ class SettingsDialog(QDialog):
         self.current_version_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
+        self.startup_update_checkbox = QCheckBox(self.t("Check for updates at startup"), update_row)
         self.check_updates_button = QPushButton(
             self.t("Check for updates"),
             update_row,
@@ -209,8 +262,61 @@ class SettingsDialog(QDialog):
             lambda _=None: self._check_for_updates()
         )
         update_layout.addWidget(self.current_version_label)
+        update_layout.addWidget(self.startup_update_checkbox)
         update_layout.addWidget(self.check_updates_button, alignment=Qt.AlignmentFlag.AlignLeft)
         form.addRow(self.t("Application updates"), update_row)
+
+        shortcuts = QWidget(tab)
+        shortcut_layout = QHBoxLayout(shortcuts)
+        shortcut_layout.setContentsMargins(0, 0, 0, 0)
+        desktop_button = QPushButton(self.t("Add desktop shortcut"), shortcuts)
+        menu_button = QPushButton(self.t("Add to application menu"), shortcuts)
+        desktop_button.clicked.connect(lambda _=False: self._add_launch_shortcut(menu=False))
+        menu_button.clicked.connect(lambda _=False: self._add_launch_shortcut(menu=True))
+        shortcut_layout.addWidget(desktop_button)
+        shortcut_layout.addWidget(menu_button)
+        shortcut_layout.addStretch()
+        form.addRow(self.t("Launch shortcuts"), shortcuts)
+        self._shortcut_status = QLabel(tab)
+        self._shortcut_status.setTextFormat(Qt.TextFormat.PlainText)
+        self._shortcut_status.setWordWrap(True)
+        self._shortcut_status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._shortcut_status.hide()
+        form.addRow(self._shortcut_status)
+        return tab
+
+    def _add_launch_shortcut(self, *, menu: bool) -> None:
+        try:
+            path = create_launch_shortcut(menu=menu)
+        except (OSError, RuntimeError, ValueError) as error:
+            message = self.t("Could not create the shortcut. {error}").format(error=error)
+        else:
+            message = self.t("Shortcut created at {path}.").format(path=path)
+        self._shortcut_status.setText(message)
+        self._shortcut_status.show()
+
+    def _build_fonts_tab(self) -> QWidget:
+        tab = QWidget(self)
+        form = QFormLayout(tab)
+        self.font_size_spin = StyledSpinBox(tab)
+        self.font_size_spin.setRange(6, 14)
+        form.addRow(self.t("UI font size"), self.font_size_spin)
+
+        families = sorted(QFontDatabase.families(), key=str.casefold)
+        self.font_family_combos: dict[str, QComboBox] = {}
+        for role, label, default_label in (
+            ("interface", "Interface font", "System default font"),
+            ("table", "Table font", "Follow interface font"),
+            ("log", "Log output font", "Follow interface font"),
+            ("editor", "Text editor font", "Default editor font"),
+        ):
+            combo = StyledComboBox(tab)
+            combo.setProperty("fontDefaultLabel", default_label)
+            combo.addItem(self.t(default_label), "")
+            for family in families:
+                combo.addItem(family, family)
+            self.font_family_combos[role] = combo
+            form.addRow(self.t(label), combo)
         return tab
 
     def _commit_lines(self, commit: CommitInfo | None) -> tuple[str, str]:
@@ -239,23 +345,13 @@ class SettingsDialog(QDialog):
         if self._update_replies is not None:
             return
         self._set_update_check_busy(True)
+        manager = self._update_network_manager
         self._update_replies = (
-            self._request_update_info(GITHUB_LATEST_RELEASE_API, b"application/vnd.github+json"),
-            self._request_update_info(f"{SERVER_WINDOWS_PACKAGE_URL}.txt", b"text/plain"),
+            request_update_info(manager, GITHUB_LATEST_RELEASE_API, b"application/vnd.github+json"),
+            request_update_info(manager, SERVER_PACKAGE_METADATA_URL, b"text/plain"),
         )
         for reply in self._update_replies:
             reply.finished.connect(self._finish_update_check)
-
-    def _request_update_info(self, url: str, accept: bytes) -> QNetworkReply:
-        request = QNetworkRequest(QUrl(url))
-        request.setRawHeader(b"Accept", accept)
-        request.setRawHeader(b"Cache-Control", b"no-cache")
-        request.setRawHeader(
-            b"User-Agent",
-            f"BluraySubtitle/{APP_VERSION}".encode("ascii"),
-        )
-        request.setTransferTimeout(15_000)
-        return self._update_network_manager.get(request)
 
     def _cancel_update_check(self) -> None:
         replies = self._update_replies
@@ -274,49 +370,51 @@ class SettingsDialog(QDialog):
         self._update_replies = None
         self._set_update_check_busy(False)
         release_reply, package_reply = replies
-        release_result, release_link = self._read_update_reply(
+        release_result = self._read_update_reply(
             release_reply,
             self._release_update_result,
             "GitHub did not return a valid release version.",
         )
-        package_result, package_link = self._read_update_reply(
+        package_result = self._read_update_reply(
             package_reply,
             self._server_package_update_result,
             "The server did not return valid package commit information.",
         )
-        self._show_update_results(release_result, package_result, release_link or package_link)
+        self._show_update_results(release_result, package_result)
 
     def _read_update_reply(
             self,
             reply: QNetworkReply,
-            render: Callable[[str], tuple[str, bool]],
+            render: Callable[[str], tuple[str, WindowsUpdatePackage | None]],
             invalid_reply_message: str,
-    ) -> tuple[str, bool]:
+    ) -> tuple[str, WindowsUpdatePackage | None]:
         try:
             if reply.error() != QNetworkReply.NetworkError.NoError:
                 message = self.t("Could not check for updates: {error}").format(
                     error=reply.errorString()
                 )
-                return escape(message), False
+                return escape(message), None
             return render(bytes(reply.readAll()).decode("utf-8"))
         except ValueError:
-            return escape(self.t(invalid_reply_message)), False
+            return escape(self.t(invalid_reply_message)), None
         finally:
             reply.deleteLater()
 
-    def _release_update_result(self, response: str) -> tuple[str, bool]:
+    def _release_update_result(self, response: str) -> tuple[str, WindowsUpdatePackage | None]:
         payload = json.loads(response)
         if not isinstance(payload, dict):
             raise ValueError("GitHub release response must be an object")
         latest_version = release_version(payload)
         if not is_newer_release(latest_version):
             status = self.t("Latest Release version is {version}. Your version is up to date.")
-            return escape(status.format(version=latest_version)), False
-        status = self.t("Version {version} is available.").format(version=latest_version)
-        link = f'<a href="{GITHUB_RELEASES_URL}">{escape(self.t("Open GitHub Releases"))}</a>'
-        return f"{escape(status)}<br>{link}", True
+            return escape(status.format(version=latest_version)), None
+        status = escape(self.t("Version {version} is available.").format(version=latest_version))
+        package = github_windows_package(payload)
+        if package is None:
+            status += "<br>" + escape(self.t("The update source did not provide a verified Windows package."))
+        return status, package
 
-    def _server_package_update_result(self, response: str) -> tuple[str, bool]:
+    def _server_package_update_result(self, response: str) -> tuple[str, WindowsUpdatePackage | None]:
         server_commit = parse_commit_record(response)
         installed_commit = self._current_commit
         offer_package = True
@@ -333,33 +431,36 @@ class SettingsDialog(QDialog):
         else:
             status = self.t("The server package has a different commit with the same commit time.")
         lines = [escape(line) for line in (*self._commit_lines(server_commit), status)]
-        if offer_package:
-            text = escape(self.t("Download Windows x64 package"))
-            lines.append(f'<a href="{SERVER_WINDOWS_PACKAGE_URL}">{text}</a>')
-        return "<br>".join(lines), offer_package
+        package = server_windows_package(response) if offer_package else None
+        if offer_package and package is None:
+            lines.append(escape(self.t("The update source did not provide a verified Windows package.")))
+        return "<br>".join(lines), package
 
     def _show_update_results(
             self,
-            release_result: str,
-            package_result: str,
-            has_download: bool,
+            release_result: tuple[str, WindowsUpdatePackage | None],
+            package_result: tuple[str, WindowsUpdatePackage | None],
     ) -> None:
+        release_text, github_package = release_result
+        server_text, server_package = package_result
         current_build = "<br>".join(escape(line) for line in self._current_build_summary().splitlines())
         sections = (
             (self.t("Current build"), current_build),
-            (self.t("GitHub Release"), release_result),
-            (self.t("Server Windows x64 package"), package_result),
+            (self.t("GitHub Release"), release_text),
+            (self.t("Server Windows x64 package"), server_text),
         )
         message = "".join(f"<p><b>{escape(title)}</b><br>{body}</p>" for title, body in sections)
-        if has_download:
-            reminder = self.t(
-                "Before running the new version, copy config.json from the "
-                "current program directory to the new program directory."
+        start_update = self._start_update
+        can_update = start_update is not None and windows_update_executable() is not None
+        if github_package is not None or server_package is not None:
+            reminder = (
+                self.t("The program will close and reopen automatically after the update.") if can_update
+                else self.t("Direct updates require the packaged Windows program and its bundled 7-Zip.")
             )
-            message += f"<p><b>{escape(reminder)}</b></p>"
-        message_box = QMessageBox(self)
+            message += f"<p>{escape(reminder)}</p>"
+        message_box = AnimatedMessageBox(self)
         message_box.setOption(QMessageBox.Option.DontUseNativeDialog)
-        opacity = self.windowOpacity()
+        opacity = window_opacity(self)
         if opacity < 1.0:
             message_box.setWindowOpacity(opacity)
         message_box.setWindowTitle(self.t("Check for updates"))
@@ -367,29 +468,55 @@ class SettingsDialog(QDialog):
         message_box.setTextFormat(Qt.TextFormat.RichText)
         message_box.setText(message)
         message_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        message_box.setDefaultButton(QMessageBox.StandardButton.Ok)
+        updates = {}
+        if can_update:
+            for label, package in (
+                ("Update from GitHub", github_package),
+                ("Update from server", server_package),
+            ):
+                if package is not None:
+                    button = message_box.addButton(self.t(label), QMessageBox.ButtonRole.ActionRole)
+                    updates[button] = package
         for label in message_box.findChildren(QLabel):
-            label.setOpenExternalLinks(True)
-            label.setTextInteractionFlags(
-                Qt.TextInteractionFlag.TextBrowserInteraction
-            )
+            label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         message_box.exec()
+        selected = updates.get(message_box.clickedButton())
+        if selected is None or start_update is None:
+            return
+        try:
+            start_update(selected)
+        except (OSError, RuntimeError, ValueError) as error:
+            QMessageBox.warning(self, self.t("Check for updates"), self.t("Could not start the update. {error}").format(error=error))
+        else:
+            self.reject()
 
-    def _path_row(self, parent: QWidget) -> tuple[QWidget, QLineEdit]:
+    def _path_row(self, parent: QWidget, *, image: bool = False) -> tuple[QWidget, QLineEdit]:
         row = QWidget(parent)
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
         edit = QLineEdit(row)
+        edit.setClearButtonEnabled(image)
         select_button = QPushButton(self.t("Select"), row)
 
-        def select_folder() -> None:
+        def select_path() -> None:
             start = edit.text().strip()
-            if not os.path.isdir(start):
-                start = ""
-            folder = QFileDialog.getExistingDirectory(self, self.t("Select folder"), start)
-            if folder:
-                edit.setText(os.path.normpath(folder))
+            if image:
+                patterns = " ".join(
+                    f"*.{bytes(extension).decode('ascii')}" for extension in QImageReader.supportedImageFormats()
+                )
+                path, _ = QFileDialog.getOpenFileName(
+                    self, self.t("Select background image"), os.path.expanduser(start),
+                    f'{self.t("Image files")} ({patterns})',
+                )
+            else:
+                path = QFileDialog.getExistingDirectory(
+                    self, self.t("Select folder"), start if os.path.isdir(start) else "",
+                )
+            if path:
+                edit.setText(os.path.normpath(path))
 
-        select_button.clicked.connect(lambda _=None: select_folder())
+        select_button.clicked.connect(select_path)
         layout.addWidget(edit, 1)
         layout.addWidget(select_button)
         return row, edit
@@ -401,6 +528,11 @@ class SettingsDialog(QDialog):
         encode_row, self.encode_output_edit = self._path_row(tab)
         form.addRow(self.t("Remux default output folder"), remux_row)
         form.addRow(self.t("Encode default output folder"), encode_row)
+
+        main_background_row, self.main_background_edit = self._path_row(tab, image=True)
+        form.addRow(self.t("Main window background image"), main_background_row)
+        log_background_row, self.log_background_edit = self._path_row(tab, image=True)
+        form.addRow(self.t("Log window background image"), log_background_row)
         return tab
 
     def _build_advanced_tab(self) -> QWidget:
@@ -490,6 +622,20 @@ class SettingsDialog(QDialog):
         )
         immersive_audio_hint.setWordWrap(True)
         audio_form.addRow(immersive_audio_hint)
+        self.save_audio_gaps_checkbox = QCheckBox(
+            self.t("Save .audio-gaps.json during Remux"),
+            audio_group,
+        )
+        audio_form.addRow(self.save_audio_gaps_checkbox)
+        audio_gaps_hint = QLabel(
+            self.t(
+                "Enable this if you plan to encode the Remux output later so Encode "
+                "can reuse the audio gap information."
+            ),
+            audio_group,
+        )
+        audio_gaps_hint.setWordWrap(True)
+        audio_form.addRow(audio_gaps_hint)
         self.allow_partial_missing_non_video_tracks_checkbox = QCheckBox(
             self.t("Allow partially missing non-video tracks"),
             audio_group,
@@ -1150,10 +1296,14 @@ class SettingsDialog(QDialog):
                 ),
             )
             return False
-        self._settings_source_text = normalized
+        self._settings_source_text = text
         return True
 
     def accept(self) -> None:
+        if self._apply_settings():
+            super().accept()
+
+    def _apply_settings(self) -> bool:
         validation_error = self._custom_preset_validation_error()
         if validation_error is not None:
             template, values = validation_error
@@ -1162,9 +1312,36 @@ class SettingsDialog(QDialog):
                 self.t("Settings"),
                 self.t(template).format(**values),
             )
-            return
-        if self._save_external_tools_source():
-            super().accept()
+            return False
+        for edit, saved_path in (
+            (self.main_background_edit, self._config.ui.main_background_path),
+            (self.log_background_edit, self._config.ui.log_background_path),
+        ):
+            path = edit.text().strip()
+            if not path or path == saved_path:
+                continue
+            path = os.path.abspath(os.path.expanduser(path))
+            reader = QImageReader(path)
+            reader.setAutoTransform(True)
+            if reader.read().isNull():
+                QMessageBox.warning(
+                    self,
+                    self.t("Settings"),
+                    self.t("Could not read background image {path}. {error}").format(
+                        path=path, error=reader.errorString(),
+                    ),
+                )
+                edit.setFocus()
+                return False
+            edit.setText(path)
+        selected = self.selected_config()
+        if not self._save_external_tools_source():
+            return False
+        if self._apply_config is not None and not self._apply_config(selected):
+            return False
+        self._config = selected
+        self.setWindowTitle(self.t("Settings"))
+        return True
 
     @staticmethod
     def _set_combo_data(combo: QComboBox, value: str) -> None:
@@ -1178,9 +1355,25 @@ class SettingsDialog(QDialog):
         self._set_combo_data(self.language_combo, config.ui.language)
         self._set_combo_data(self.theme_combo, config.ui.theme)
         self.font_size_spin.setValue(config.ui.font_size)
+        for role, combo in self.font_family_combos.items():
+            family = getattr(config.ui.fonts, role)
+            if family and combo.findData(family) < 0:
+                combo.addItem(family, family)
+            self._set_combo_data(combo, family)
         self.opacity_spin.setValue(config.ui.opacity)
+        self.close_to_tray_checkbox.setChecked(config.ui.close_to_tray)
+        self.startup_update_checkbox.setChecked(config.ui.check_updates_on_startup)
+        self.save_log_checkbox.setChecked(config.ui.save_log_to_file)
+        self.log_line_limit_spin.setValue(config.ui.log_line_limit)
+        self._set_combo_data(self.log_theme_combo, config.ui.log_theme)
         self.remux_output_edit.setText(config.paths.remux_output)
         self.encode_output_edit.setText(config.paths.encode_output)
+        self.main_background_edit.setText(config.ui.main_background_path)
+        self.main_background_opacity_spin.setValue(config.ui.main_background_opacity)
+        self.main_background_blur_spin.setValue(config.ui.main_background_blur)
+        self.log_background_edit.setText(config.ui.log_background_path)
+        self.log_background_opacity_spin.setValue(config.ui.log_background_opacity)
+        self.log_background_blur_spin.setValue(config.ui.log_background_blur)
         self.flac_compression_spin.setValue(config.audio.flac_compression_level)
         self.ffmpeg_flac_compression_spin.setValue(
             config.audio.ffmpeg_flac_compression_level
@@ -1199,6 +1392,7 @@ class SettingsDialog(QDialog):
         self.allow_partial_missing_non_video_tracks_checkbox.setChecked(
             config.remux.allow_partial_missing_non_video_tracks
         )
+        self.save_audio_gaps_checkbox.setChecked(config.remux.save_audio_gaps)
         self.default_encoder_combo.blockSignals(True)
         try:
             self._set_combo_data(
@@ -1261,6 +1455,20 @@ class SettingsDialog(QDialog):
                 theme=str(self.theme_combo.currentData()),
                 font_size=self.font_size_spin.value(),
                 opacity=self.opacity_spin.value(),
+                save_log_to_file=self.save_log_checkbox.isChecked(),
+                log_line_limit=self.log_line_limit_spin.value(),
+                log_theme=str(self.log_theme_combo.currentData()),
+                close_to_tray=self.close_to_tray_checkbox.isChecked(),
+                check_updates_on_startup=self.startup_update_checkbox.isChecked(),
+                main_background_path=self.main_background_edit.text().strip(),
+                main_background_opacity=self.main_background_opacity_spin.value(),
+                main_background_blur=self.main_background_blur_spin.value(),
+                log_background_path=self.log_background_edit.text().strip(),
+                log_background_opacity=self.log_background_opacity_spin.value(),
+                log_background_blur=self.log_background_blur_spin.value(),
+                fonts=FontPreferences(**{
+                    role: str(combo.currentData() or "") for role, combo in self.font_family_combos.items()
+                }),
             ),
             startup=StartupPreferences(
                 function_page=str(self.function_page_combo.currentData()),
@@ -1291,6 +1499,7 @@ class SettingsDialog(QDialog):
                 allow_partial_missing_non_video_tracks=(
                     self.allow_partial_missing_non_video_tracks_checkbox.isChecked()
                 ),
+                save_audio_gaps=self.save_audio_gaps_checkbox.isChecked(),
             ),
             encode=EncodePreferences(
                 encoder=str(self.default_encoder_combo.currentData()),

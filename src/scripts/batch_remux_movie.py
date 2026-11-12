@@ -134,6 +134,7 @@ def remux_one_disc(bdmv_folder: str, movie_root: str, output_root: str) -> None:
             convert_immersive_audio_to_flac=(
                 app_config.remux.convert_immersive_audio_to_flac
             ),
+            save_audio_gaps=app_config.remux.save_audio_gaps,
             allow_partial_missing_non_video_tracks=(
                 app_config.remux.allow_partial_missing_non_video_tracks
             ),

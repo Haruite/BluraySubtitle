@@ -41,7 +41,7 @@ if not (PROJECT_ROOT / ".git").exists():
     )
 
 sys.path.insert(0, str(PROJECT_ROOT))
-from tools.windows_package_tools import installed_tools, package_tools
+from tools.windows_package_tools import build_executable_icon, installed_tools, package_tools
 
 SETTINGS_PATH = PROJECT_ROOT / "src" / "core" / "settings.py"
 SETTINGS = runpy.run_path(str(SETTINGS_PATH))
@@ -69,6 +69,11 @@ default_config = required_path(
     PROJECT_ROOT / "config.default.json",
     "default application configuration",
 )
+app_icon = required_path(PROJECT_ROOT / "resource" / "bluraysubtitle.svg", "application icon")
+log_icon = required_path(PROJECT_ROOT / "resource" / "log-window.svg", "log window icon")
+update_script = required_path(PROJECT_ROOT / "tools" / "windows_update.ps1", "Windows update script")
+exe_icon = Path(workpath) / "bluraysubtitle.ico"
+build_executable_icon(app_icon, exe_icon)
 third_party_notices_paths = {
     required_path(PROJECT_ROOT / "legal" / name, "third-party notices template"):
         Path(workpath) / "legal" / name
@@ -191,6 +196,9 @@ add_binary(binaries, flac_dir / "libFLAC.dll", "FLAC runtime library")
 datas = [
     (str(required_path(Path(SETTINGS["SEVEN_ZIP_PATH"]).parent / "License.txt", "7-Zip license")), "legal/7zip"),
     (str(default_config), "."),
+    (str(app_icon), "resource"),
+    (str(log_icon), "resource"),
+    (str(update_script), "tools"),
     (str(SETTINGS_PATH), "src/core"),
     *((str(path), "legal") for path in third_party_notices_paths.values()),
     # Keep CPython's DLLs directory available as its platform-library landmark.
@@ -360,13 +368,14 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name="BluraySubtitle_windows_x64",
+    icon=str(exe_icon),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

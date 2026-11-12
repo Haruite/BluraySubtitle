@@ -20,6 +20,7 @@ from src.core import find_mkvtoolnix, MKV_EXTRACT_PATH, MKV_PROP_EDIT_PATH, \
 from src.exports.utils import run_command, mkv_codec_id_is_dts_family, print_terminal_line
 from src.runtime.audio_conversion import is_lossless_audio_codec
 from src.runtime.gui_runtime_classes.custom_table_widget import SelectionTableWidget, StyledComboBox
+from src.runtime.gui_runtime_classes.widget_animations import AnimatedDialog
 from src.runtime.services import BluraySubtitle
 from src.runtime.sp import SpEntry, media_track_key
 from .gui_base import BluraySubtitleGuiBase
@@ -511,7 +512,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             shutil.rmtree(tmp_dir, ignore_errors=True)
             return
 
-        dlg = QDialog(self)
+        dlg = AnimatedDialog(self)
         dlg.setWindowTitle(self.t('edit chapters'))
         layout = QVBoxLayout()
         dlg.setLayout(layout)
@@ -971,7 +972,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
         except Exception:
             pass
 
-        dlg = QDialog(self)
+        dlg = AnimatedDialog(self)
         dlg.setWindowTitle(self.t('Edit Attachment'))
         layout = QVBoxLayout()
         dlg.setLayout(layout)
@@ -1251,7 +1252,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             language_map: Optional[dict[str, str]] = None,
             lossless_audio_map: Optional[dict[str, str]] = None,
     ) -> Optional[set[str]]:
-        dlg = QDialog(self)
+        dlg = AnimatedDialog(self)
         dlg.setWindowTitle(title)
         layout = QVBoxLayout()
         dlg.setLayout(layout)

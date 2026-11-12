@@ -1,7 +1,7 @@
 """Target module for theme/language methods of `BluraySubtitleGUI`."""
 from PyQt6.QtCore import QLibraryInfo, QRectF, Qt, QTranslator
-from PyQt6.QtGui import QColor, QFont, QPainter, QPainterPath, QPalette, QPen
-from PyQt6.QtWidgets import QApplication, QLabel, QTabBar, QWidget, QPlainTextEdit, QLineEdit, QGroupBox, \
+from PyQt6.QtGui import QColor, QFont, QFontDatabase, QPainter, QPainterPath, QPalette, QPen
+from PyQt6.QtWidgets import QApplication, QLabel, QTabBar, QWidget, QPlainTextEdit, QTextEdit, QLineEdit, QGroupBox, \
     QAbstractItemView, QComboBox, QTableWidget, QProxyStyle, QStyle
 
 from src.core import APP_TITLE
@@ -9,6 +9,7 @@ import src.core.settings as core_settings
 from src.core.i18n import translate_text
 from src.runtime.gui_runtime_classes.custom_table_widget import editable_table_border_color
 from src.runtime.gui_runtime_classes.disc_table_widget import DiscCommandEdit
+from src.runtime.gui_runtime_classes.widget_animations import set_window_opacity
 from .gui_base import BluraySubtitleGuiBase
 
 
@@ -33,6 +34,7 @@ _SCROLL_CONTROL_GEOMETRY = (
 _COLORFUL_ACCENT = '#7c3aed'
 _COLORFUL_ACCENT_HOVER = '#6d28d9'
 _COLORFUL_GRADIENT = 'qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #fff7d9,stop:0.55 #fffefa,stop:1 #f4f9ff)'
+_LOG_THEME_ACCENTS = {'light': '#356dcc', 'dark': '#3a5fcd', 'colorful': _COLORFUL_ACCENT}
 _COLORFUL_FUNCTION_COLORS = {1: '#0ea5e9', 2: '#14b8a6', 3: '#f59e0b', 4: '#ef4444', 5: '#8b5cf6'}
 _COLORFUL_TABLE_COLORS = (
     (('table1', 'playlistTable', 'chapterTable', 'timingTable', 'subtitleEditorTable'),
@@ -188,6 +190,8 @@ def _shared_stylesheet(palette: QPalette, mode: str) -> str:
     control_edge = editable_table_border_color(dark)
     tab_edge = _blend_color(control_edge, QColor(focus), 0.32)
     styles = [
+        f'QWidget#startupUpdateNotice{{background:{table_selection};border:1px solid {focus};border-radius:6px;}}'
+        f'QWidget#startupUpdateNotice QLabel{{background:transparent;color:{text};font-weight:600;}}'
         f'SelectionTableWidget{{qproperty-editableCellBorderColor:{control_edge};}}'
         f'QComboBox:enabled,QPushButton:enabled,QToolButton:enabled{{border:1px solid {control_edge};}}'
         'QComboBox:enabled:focus,QPushButton:enabled:focus,QToolButton:enabled:focus'
@@ -301,6 +305,37 @@ def _shared_stylesheet(palette: QPalette, mode: str) -> str:
     return ''.join(styles)
 
 
+def _log_window_stylesheet(mode: str) -> str:
+    dark = mode == 'dark'
+    colorful = mode == 'colorful'
+    background = _COLORFUL_GRADIENT if colorful else ('#1f1f1f' if dark else '#f8f8f8')
+    field = '#2a2a2a' if dark else '#ffffff'
+    editor = _COLORFUL_GRADIENT if colorful else field
+    text, muted, edge = ('#e6e6e6', '#9aa0b3', '#3a3a3a') if dark else ('#1f2330', '#666b75', '#dce0e6')
+    accent = _LOG_THEME_ACCENTS[mode]
+    focus = '#5b7fff' if dark else accent
+    hover = _blend_color(field, QColor(accent), 0.22 if dark else 0.12)
+    scroll_handle = '#a78bfa' if colorful else ('#626262' if dark else '#a7aeb8')
+    return (
+        f'QWidget{{background:transparent;color:{text};}}'
+        f'QWidget:disabled{{color:{muted};}}'
+        f'QDialog{{background:{background};}}'
+        f'QLineEdit,QPlainTextEdit{{border:1px solid {edge};border-radius:5px;padding:3px;'
+        f'selection-background-color:{accent};selection-color:#ffffff;}}'
+        f'QLineEdit{{background:{field};placeholder-text-color:{muted};}}'
+        f'QLineEdit:focus{{border-bottom-color:{focus};}}'
+        f'QPlainTextEdit{{background:{editor};}}'
+        f'QPushButton{{background:{field};border:1px solid {edge};border-radius:6px;padding:5px 12px;}}'
+        f'QPushButton:hover:enabled,QPushButton:pressed:enabled{{background:{hover};border-color:{focus};}}'
+        f'QPushButton:focus{{border-color:{focus};}}'
+        f'QMenu{{background:{field};border:1px solid {edge};}}'
+        f'QMenu::item:selected{{background:{accent};color:#ffffff;}}'
+        f'{_SCROLL_CONTROL_GEOMETRY}'
+        f'QScrollBar::handle{{background:{scroll_handle};}}'
+        f'QScrollBar::handle:hover{{background:{focus};}}'
+    )
+
+
 class _ThemeStyle(QProxyStyle):
     def __init__(self, base_style: str, mode: str):
         super().__init__(base_style)
@@ -326,12 +361,16 @@ class _ThemeStyle(QProxyStyle):
             painter.fillRect(marker, QColor('#5b7fff'))
 
     def drawPrimitive(self, element, option, painter, widget=None):
+        checkbox = element == QStyle.PrimitiveElement.PE_IndicatorCheckBox
+        radio = element == QStyle.PrimitiveElement.PE_IndicatorRadioButton
+        window = widget.window() if (checkbox or radio) and widget is not None else None
+        log_mode = window.property('logWindowTheme') if window is not None else None
+        window_background = getattr(window, '_window_background', None)
+        over_image = window_background is not None and window_background.active
         themed_checkbox = (
             element == QStyle.PrimitiveElement.PE_IndicatorItemViewItemCheck and isinstance(widget, QTableWidget)
-        ) or (
-            element == QStyle.PrimitiveElement.PE_IndicatorCheckBox and self._mode == 'colorful'
-        )
-        if not themed_checkbox:
+        ) or (checkbox and (self._mode == 'colorful' or log_mode is not None or over_image))
+        if not (radio or themed_checkbox):
             super().drawPrimitive(element, option, painter, widget)
             return
 
@@ -341,14 +380,29 @@ class _ThemeStyle(QProxyStyle):
         marked = partial or bool(option.state & flags.State_On)
         hovered = bool(option.state & flags.State_MouseOver)
         palette = QApplication.palette()
-        accent = palette.color(QPalette.ColorRole.Accent)
+        dark = (log_mode or self._mode) == 'dark'
+        if log_mode is None:
+            accent = palette.color(QPalette.ColorRole.Accent)
+            base = palette.color(QPalette.ColorRole.Base)
+            checked_text = palette.color(QPalette.ColorRole.HighlightedText)
+        else:
+            accent = QColor(_LOG_THEME_ACCENTS[log_mode])
+            base = QColor('#2a2a2a' if dark else '#ffffff')
+            checked_text = QColor('#ffffff')
+        if radio and dark:
+            accent = QColor('#5b7fff')
         if hovered:
             accent = accent.darker(112)
-        dark = self._mode == 'dark'
+        # The native indicator can inherit a transparent fill from the window stylesheet.
+        outline = '#757983' if dark else '#9399a4'
+        if over_image or radio:
+            base.setAlpha(255)
+            accent.setAlpha(255)
+            outline = '#a6abba' if dark else '#626d80'
         if enabled:
-            border = accent if marked or hovered else QColor('#757983' if dark else '#9399a4')
-            background = accent if marked else palette.color(QPalette.ColorRole.Base)
-            mark = palette.color(QPalette.ColorRole.HighlightedText)
+            border = accent if marked or hovered else QColor(outline)
+            background = accent if marked else base
+            mark = checked_text
         else:
             border = QColor('#555a64' if dark else '#b8bdc8')
             background = QColor('#34373e' if dark else '#e5e7ef')
@@ -358,20 +412,29 @@ class _ThemeStyle(QProxyStyle):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.translate(option.rect.topLeft())
         painter.scale(option.rect.width() / 16, option.rect.height() / 16)
-        painter.setPen(border)
-        painter.setBrush(background)
-        painter.drawRoundedRect(QRectF(0.5, 0.5, 15, 15), 3, 3)
-        if marked:
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.setPen(QPen(mark, 1.8, cap=Qt.PenCapStyle.RoundCap, join=Qt.PenJoinStyle.RoundJoin))
-            if partial:
-                painter.drawLine(4, 8, 12, 8)
-            else:
-                check = QPainterPath()
-                check.moveTo(4, 8)
-                check.lineTo(7, 11)
-                check.lineTo(12, 5)
-                painter.drawPath(check)
+        if radio:
+            painter.setPen(QPen(border, 1.5))
+            painter.setBrush(base if enabled else background)
+            painter.drawEllipse(QRectF(1, 1, 14, 14))
+            if marked:
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(accent if enabled else mark)
+                painter.drawEllipse(QRectF(4, 4, 8, 8))
+        else:
+            painter.setPen(border)
+            painter.setBrush(background)
+            painter.drawRoundedRect(QRectF(0.5, 0.5, 15, 15), 3, 3)
+            if marked:
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setPen(QPen(mark, 1.8, cap=Qt.PenCapStyle.RoundCap, join=Qt.PenJoinStyle.RoundJoin))
+                if partial:
+                    painter.drawLine(4, 8, 12, 8)
+                else:
+                    check = QPainterPath()
+                    check.moveTo(4, 8)
+                    check.lineTo(7, 11)
+                    check.lineTo(12, 5)
+                    painter.drawPath(check)
         painter.restore()
 
 
@@ -391,8 +454,11 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
             return
         # QWidget stores opacity as a byte before the native window is created.
         opacity = round(self.opacity_slider.value() * 255 / 100) / 255
+        targets = (self, self._log_dialog) if window is None else (window,)
         try:
-            (self if window is None else window).setWindowOpacity(opacity)
+            for target in targets:
+                if target is not None:
+                    set_window_opacity(target, opacity)
         except Exception:
             pass
 
@@ -436,7 +502,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
         label = getattr(self, 'font_size_label', None)
         combo = getattr(self, 'font_size_combo', None)
         if isinstance(label, QLabel):
-            label.setText(self.t('UI Font'))
+            label.setText(self.t('UI font size'))
         if not isinstance(combo, QComboBox):
             return
         current_size = int(getattr(self, '_ui_font_point_size', 10) or 10)
@@ -453,20 +519,54 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
             return
         size = max(6, min(24, int(point_size)))
         self._ui_font_point_size = size
-        f = app.font()
-        if not isinstance(f, QFont):
-            return
-        f.setPointSize(size)
-        app.setFont(f)
-        # Apply to the current window tree immediately so existing widgets refresh.
-        self.setFont(f)
+        preferences = self._app_config.ui.fonts
+
+        def choose_font(family: str, default: QFont) -> QFont:
+            font = QFont(default)
+            if family:
+                font.setFamilies([family, *default.families()])
+            font.setPointSize(size)
+            return font
+
+        interface_font = choose_font(preferences.interface, self._default_ui_font)
+        fixed_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        self._content_fonts = {
+            'interface': interface_font,
+            'table': choose_font(preferences.table, interface_font),
+            'log': choose_font(preferences.log, interface_font),
+            'editor': choose_font(preferences.editor, interface_font),
+            'external_tools': choose_font(preferences.editor, interface_font if preferences.editor else fixed_font),
+        }
+        app.setFont(interface_font)
+        self.setFont(interface_font)
         for widget in self.findChildren(QWidget):
-            try:
-                widget.setFont(f)
-            except Exception:
-                pass
+            self._apply_widget_font(widget)
+        if self._log_dialog is not None:
+            self._log_dialog.setFont(interface_font)
+            for widget in self._log_dialog.findChildren(QWidget):
+                self._apply_widget_font(widget)
         self._refresh_language_dependent_sizes()
         self.update()
+
+    def _apply_widget_font(self, widget: QWidget) -> None:
+        if isinstance(widget, QTableWidget):
+            font = self._content_fonts['table']
+            widget.setFont(font)
+            widget.horizontalHeader().setFont(font)
+            widget.verticalHeader().setFont(font)
+            return
+        elif isinstance(widget, (QPlainTextEdit, QTextEdit)):
+            role = {
+                'applicationLogOutput': 'log',
+                'externalToolsEditor': 'external_tools',
+            }.get(widget.objectName(), 'editor')
+        else:
+            parent = widget.parentWidget()
+            if parent is not None and not widget.isWindow():
+                widget.setFont(parent.font())
+                return
+            role = 'interface'
+        widget.setFont(self._content_fonts[role])
 
     def _on_font_size_changed(self):
         combo = getattr(self, 'font_size_combo', None)
@@ -529,16 +629,14 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
             app.setPalette(palette)
         self._apply_window_opacity()
         shared_style = _shared_stylesheet(app.palette(), self._theme_mode)
-        self._refresh_function_tabbar_theme()
         if self.exe_button.styleSheet():
             self._update_exe_button_progress()
-        if self._theme_mode == 'light':
-            app.setStyleSheet(shared_style)
-            return
+        theme_style = ""
         if colorful:
-            app.setStyleSheet(
+            theme_style = (
                 "QWidget{background:transparent;color:#1f2330;}"
                 f"QWidget#mainWindow,QDialog{{background:{_COLORFUL_GRADIENT};}}"
+                f"QPlainTextEdit#applicationLogOutput{{background:{_COLORFUL_GRADIENT};}}"
                 "QWidget:disabled{color:#8b92a8;}"
                 "QLineEdit,QPlainTextEdit,QTextEdit,QAbstractSpinBox{background:rgba(255,255,255,220);color:#1f2330;border:1px solid rgba(214,217,230,220);border-radius:4px;}"
                 "QTextBrowser#thirdPartyNoticesBrowser{background:transparent;}"
@@ -552,12 +650,6 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                 f"QGroupBox::title{{subcontrol-origin:margin;left:8px;padding:0 6px;color:{_COLORFUL_ACCENT};}}"
                 "QRadioButton{color:#1f2330;}"
                 "QRadioButton:disabled{color:#8b92a8;}"
-                f"QRadioButton::indicator{{width:14px;height:14px;border-radius:7px;border:2px solid {_COLORFUL_ACCENT};background:rgba(255,255,255,220);}}"
-                f"QRadioButton::indicator:checked{{background:{_COLORFUL_ACCENT};border-color:{_COLORFUL_ACCENT_HOVER};}}"
-                f"QRadioButton::indicator:checked:hover{{background:{_COLORFUL_ACCENT_HOVER};}}"
-                f"QRadioButton::indicator:unchecked:hover{{border-color:{_COLORFUL_ACCENT_HOVER};}}"
-                "QRadioButton::indicator:disabled{border:2px solid #c7cbe0;background:rgba(243,244,248,220);}"
-                "QRadioButton::indicator:checked:disabled{border:2px solid #c7cbe0;background:rgba(199,203,224,220);}"
                 "QCheckBox{color:#1f2330;}"
                 "QCheckBox:disabled{color:#8b92a8;}"
                 f"{_SCROLL_CONTROL_GEOMETRY}"
@@ -576,44 +668,49 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                 "QProgressBar{background:#ffffff;border:1px solid #d6d9e6;border-radius:6px;text-align:center;color:#1f2330;}"
                 f"QProgressBar::chunk{{background:{_COLORFUL_ACCENT};border-radius:6px;}}"
                 "QToolTip{background:#f6f0ff;color:#302347;border:1px solid #c9b4ec;}"
-                f"{shared_style}"
             )
+        elif dark:
+            theme_style = (
+                "QWidget{background:#1f1f1f;color:#e6e6e6;}"
+                "QLineEdit,QPlainTextEdit,QTextEdit,QAbstractSpinBox{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;}"
+                "QComboBox{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;padding:2px 6px;}"
+                "QComboBox:disabled,QAbstractSpinBox:disabled{background:#242424;color:#9aa0b3;border-color:#343434;}"
+                "QPlainTextEdit:focus:!read-only,QTextEdit:focus:!read-only,"
+                "QComboBox:editable:focus{border-bottom-color:#5b7fff;}"
+                "QComboBox QAbstractItemView{background:#2a2a2a;color:#e6e6e6;selection-background-color:#343d54;}"
+                "QRadioButton{color:#e6e6e6;}"
+                "QRadioButton:disabled{color:#9aa0b3;}"
+                "QPushButton,QToolButton{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;padding:4px 8px;}"
+                "QPushButton:hover,QToolButton:hover{background:#333333;}"
+                "QPushButton:pressed,QToolButton:pressed{background:#3a3a3a;}"
+                "QGroupBox{border:1px solid #3a3a3a;margin-top:10px;}"
+                "QGroupBox::title{subcontrol-origin:margin;left:8px;padding:0 4px;}"
+                f"{_SCROLL_CONTROL_GEOMETRY}"
+                "QSlider::groove:horizontal,QSlider::add-page:horizontal{background:#454545;}"
+                "QSlider::sub-page:horizontal{background:#5b7fff;}"
+                "QSlider::handle:horizontal{background:#2a2a2a;border-color:#5b7fff;}"
+                "QSlider::handle:horizontal:hover{border-color:#8daaff;}"
+                "QScrollBar::handle{background:#626262;}"
+                "QScrollBar::handle:hover{background:#7a7a7a;}"
+                "QMenu{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;}"
+                "QMenu::item:selected{background:#3a5fcd;}"
+                "QProgressBar{background:#2a2a2a;border:1px solid #3a3a3a;text-align:center;color:#e6e6e6;}"
+                "QProgressBar::chunk{background:#3a5fcd;}"
+                "QToolTip{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;}"
+            )
+        app.setStyleSheet(theme_style + shared_style)
+        self._refresh_background_panels()
+        # Install the global tab padding first so the layout measures the styled height.
+        self._refresh_function_tabbar_theme()
+        self._apply_log_dialog_theme()
+
+    def _apply_log_dialog_theme(self) -> None:
+        if self._log_dialog is None:
             return
-        app.setStyleSheet(
-            "QWidget{background:#1f1f1f;color:#e6e6e6;}"
-            "QLineEdit,QPlainTextEdit,QTextEdit,QAbstractSpinBox{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;}"
-            "QComboBox{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;padding:2px 6px;}"
-            "QComboBox:disabled,QAbstractSpinBox:disabled{background:#242424;color:#9aa0b3;border-color:#343434;}"
-            "QPlainTextEdit:focus:!read-only,QTextEdit:focus:!read-only,"
-            "QComboBox:editable:focus{border-bottom-color:#5b7fff;}"
-            "QComboBox QAbstractItemView{background:#2a2a2a;color:#e6e6e6;selection-background-color:#343d54;}"
-            "QRadioButton{color:#e6e6e6;}"
-            "QRadioButton::indicator{width:14px;height:14px;border-radius:7px;border:2px solid #5b7fff;background:#2a2a2a;}"
-            "QRadioButton::indicator:checked{background:#3a5fcd;border:2px solid #5b7fff;}"
-            "QRadioButton::indicator:checked:hover{background:#4a6fe0;}"
-            "QRadioButton::indicator:unchecked:hover{border:2px solid #7a93ff;}"
-            "QRadioButton:disabled{color:#9aa0b3;}"
-            "QRadioButton::indicator:disabled{border:2px solid #555a6b;background:#252525;}"
-            "QRadioButton::indicator:checked:disabled{border:2px solid #555a6b;background:#555a6b;}"
-            "QPushButton,QToolButton{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;padding:4px 8px;}"
-            "QPushButton:hover,QToolButton:hover{background:#333333;}"
-            "QPushButton:pressed,QToolButton:pressed{background:#3a3a3a;}"
-            "QGroupBox{border:1px solid #3a3a3a;margin-top:10px;}"
-            "QGroupBox::title{subcontrol-origin:margin;left:8px;padding:0 4px;}"
-            f"{_SCROLL_CONTROL_GEOMETRY}"
-            "QSlider::groove:horizontal,QSlider::add-page:horizontal{background:#454545;}"
-            "QSlider::sub-page:horizontal{background:#5b7fff;}"
-            "QSlider::handle:horizontal{background:#2a2a2a;border-color:#5b7fff;}"
-            "QSlider::handle:horizontal:hover{border-color:#8daaff;}"
-            "QScrollBar::handle{background:#626262;}"
-            "QScrollBar::handle:hover{background:#7a7a7a;}"
-            "QMenu{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;}"
-            "QMenu::item:selected{background:#3a5fcd;}"
-            "QProgressBar{background:#2a2a2a;border:1px solid #3a3a3a;text-align:center;color:#e6e6e6;}"
-            "QProgressBar::chunk{background:#3a5fcd;}"
-            "QToolTip{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;}"
-            f"{shared_style}"
-        )
+        mode = self._app_config.ui.log_theme
+        fixed_mode = None if mode == 'follow' else mode
+        self._log_dialog.setProperty('logWindowTheme', fixed_mode)
+        self._log_dialog.set_theme(fixed_mode or self._theme_mode, _log_window_stylesheet(fixed_mode) if fixed_mode else '')
 
     def _refresh_function_tabbar_theme(self) -> None:
         style = ''
@@ -663,6 +760,9 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                 finally:
                     widget.blockSignals(False)
             if isinstance(widget, QComboBox):
+                if default_label := widget.property('fontDefaultLabel'):
+                    widget.setItemText(0, self.t(default_label))
+                    continue
                 if widget in (
                     getattr(self, 'encode_tool_combo', None),
                     getattr(self, 'encode_bit_depth_combo', None),
@@ -703,6 +803,10 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                 self._qt_translator = None
             self.setWindowTitle(APP_TITLE)
             self._translate_widget_texts()
+            self._tray_show_action.setText(self.t('Show main window'))
+            self._tray_exit_action.setText(self.t('Exit'))
+            if self._log_dialog is not None:
+                self._log_dialog.retranslate()
             self._refresh_subtitle_suffix_options()
             self._refresh_language_combo()
             self._refresh_theme_combo()

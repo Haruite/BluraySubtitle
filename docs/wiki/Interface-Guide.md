@@ -12,6 +12,18 @@ The *Witch Craft Works* example selects the first two discs for 12 TV episodes a
 
 [![Witch Craft Works joined-disc interface](https://sbx.mysmy.top/pictures/interface-20260910-joined-disc-en.jpg)](https://sbx.mysmy.top/pictures/interface-20260910-joined-disc-en.jpg)
 
+## Window backgrounds
+
+Choose images for the main and log windows under **Settings → Paths**. Adjust image opacity and blur under **Settings → General**. Each image is cropped from the center to fill its window. Clear the image path to restore the default background.
+
+## Application log
+
+Enable **Settings → General → Save log to file** to keep output in `logs/` beside `config.json`. The line limit applies to the viewer and its buffer. In the log window, **Ctrl+F** focuses search. Finding a match pauses scrolling. Turn **Auto-scroll to end** back on to follow new output.
+
+## Updates and launch shortcuts
+
+The Windows x64 package can install updates from **Settings → Tools**. The program restarts after updating and keeps its configuration and saved logs. If your Linux desktop blocks a new desktop shortcut, mark the launcher as trusted. For Docker, create shortcuts on the host desktop.
+
 ## Disc selection and order
 
 Use the checkbox beside each disc path to choose which volumes to process. Drag a path row before or after another row to set the disc order; clicking a column heading sorts the rows by that column. Unchecked discs remain visible, but their main outputs and SP are excluded.

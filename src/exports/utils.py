@@ -63,6 +63,7 @@ def _terminate_process_tree(process) -> None:
                 ['taskkill', '/PID', str(process.pid), '/T', '/F'],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
         except OSError:
             pass
@@ -449,15 +450,39 @@ def run_command(command, *, wait: bool = True, log_template: str = '', **kwargs)
     if log_template:
         command_text = command if isinstance(command, str) else subprocess.list2cmdline(command)
         print(translate_text(log_template).format(command=command_text), flush=True)
+    stderr = kwargs.get('stderr')
+    if (
+            getattr(sys.stderr if stderr is None else stderr, 'accepts_ansi_color', False)
+            and not kwargs.get('capture_output')
+            and isinstance(command, (list, tuple)) and command
+            and os.path.basename(os.fsdecode(command[0])).lower() in ('ffmpeg', 'ffmpeg.exe', 'ffprobe', 'ffprobe.exe')
+    ):
+        configured_environment = kwargs.get('env')
+        environment = dict(os.environ if configured_environment is None else configured_environment)
+        if 'AV_LOG_FORCE_NOCOLOR' not in environment and not environment.get('NO_COLOR'):
+            environment.setdefault('AV_LOG_FORCE_COLOR', '1')
+            if sys.platform == 'win32':
+                # The Windows console palette in FFmpeg lacks 256-color indices.
+                environment['TERM'] = 'ansi'
+                environment.pop('AV_LOG_FORCE_256COLOR', None)
+            kwargs['env'] = environment
     cancel_event = _MKVMERGE_CANCEL_EVENT.get()
-    if not wait or cancel_event is None or not _is_mkvmerge_mux_command(command):
+    cancel_mux = wait and cancel_event is not None and _is_mkvmerge_mux_command(command)
+    if sys.platform == 'win32':
+        flags = kwargs.get('creationflags', subprocess.CREATE_NEW_PROCESS_GROUP if cancel_mux else 0)
+        if getattr(sys, 'frozen', False):
+            flags |= subprocess.CREATE_NO_WINDOW
+            if kwargs.get('stdin') is None and kwargs.get('input') is None:
+                # Explicit standard handles keep child output connected to the windowed application's log.
+                kwargs['stdin'] = subprocess.DEVNULL
+        if flags:
+            kwargs['creationflags'] = flags
+    if not cancel_mux:
         return (subprocess.run if wait else subprocess.Popen)(command, **kwargs)
     if cancel_event.is_set():
         from src.runtime import TaskCancelled
         raise TaskCancelled()
-    if sys.platform == 'win32':
-        kwargs.setdefault('creationflags', subprocess.CREATE_NEW_PROCESS_GROUP)
-    else:
+    if sys.platform != 'win32':
         kwargs.setdefault('start_new_session', True)
     input_data = kwargs.pop('input', None)
     capture_output = kwargs.pop('capture_output', False)

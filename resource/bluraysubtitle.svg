@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>BluraySubtitle</title>
+  <defs>
+    <linearGradient id="disc" x1="8" y1="5" x2="57" y2="61" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1264CD"/>
+      <stop offset="0.56" stop-color="#2C42C5"/>
+      <stop offset="1" stop-color="#5423A8"/>
+    </linearGradient>
+    <linearGradient id="track" x1="16" y1="10" x2="49" y2="39" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#AFF3FF"/>
+      <stop offset="1" stop-color="#D7C9FF"/>
+    </linearGradient>
+  </defs>
+  <circle cx="32" cy="32" r="31" fill="url(#disc)"/>
+  <circle cx="32" cy="32" r="30.25" fill="none" stroke="#BEE7FF" stroke-opacity="0.28" stroke-width="1.5"/>
+  <path d="M16.4 36a18 18 0 1 1 31.2 0" fill="none" stroke="url(#track)" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="32" cy="27" r="4.25" fill="none" stroke="#E4F8FF" stroke-width="3"/>
+  <path d="M17.5 43h29m-23.5 8h18" fill="none" stroke="#F9FAFF" stroke-width="4.5" stroke-linecap="round"/>
+</svg>

@@ -111,7 +111,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             try:
                 self._populate_encode_from_remux_folder()
             except Exception:
-                pass
+                print_exc_terminal()
             self._resize_table_columns_for_language(self.table2)
             self._scroll_table_to_primary_column(self.table2)
             self._resize_table_columns_for_language(self.table3)
@@ -1610,7 +1610,8 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
         if function_changed:
             if function_id != 4:
                 self.on_bdmv_folder_path_change()
-            self.subtitle_folder_path.textChanged.emit(self.subtitle_folder_path.text())
+            if function_id != 4 or self._encode_input_mode != 'remux':
+                self.subtitle_folder_path.textChanged.emit(self.subtitle_folder_path.text())
         try:
             self._reposition_subtitle_path_box()
         except Exception:

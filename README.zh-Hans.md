@@ -29,7 +29,7 @@ BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 
 
 - 支持英文／简体中文，以及浅色、深色、彩色主题和透明度调整。
 - 页面可纵向滚动，拖动表格底部调节条可调整高度；布局和表格操作见[界面指南](docs/wiki/Interface-Guide.zh-Hans.md#主窗口的内容分区)。
-- **设置**管理常规选项、路径、启动默认值、外部工具和手动更新。
+- **设置**管理常规选项、字体、路径、启动默认值和外部工具。在**工具**页可检查更新或创建启动快捷方式。
 - 勾选要处理的原盘，拖动路径调整顺序。剧集模式按章节分集，电影模式保持连续输出，并可默认选中不同剪辑版本；每卷可选择多个主 MPLS。执行前请检查自动选片、分集范围和轨道。
 
 ### Remux 控制
@@ -46,7 +46,8 @@ BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 
 - Remux 保留有损音轨，默认将无损音轨转换为 FLAC；转换开关和压缩等级可在**高级**中配置。
 - **Remux 时将 DTS:X 和 TrueHD Atmos 转换为 FLAC**默认关闭，因为 FLAC 无法保留对象元数据。
 - Remux 和压制会移除静音及完全重复的音轨，并报告移除结果；独立单轨音频除外。
-- 带空档的音轨转换后须保存在 Matroska 容器中。请保留 Remux 输出旁的 `.audio-gaps.json`，供后续压制使用。
+- 带空档的音轨转换后须保存在 Matroska 容器中。
+- **设置 → 高级 → 音频编码**中的 **Remux 时保存 .audio-gaps.json** 默认关闭。如果 Remux 成品要用于后续压制，建议开启，并将 `.audio-gaps.json` 保留在成品旁，供压制时复用音轨间隙检测结果。
 - 转换失败或时长缩短超过阈值（默认 1 秒）时保留原轨，阈值可在设置中调整。
 
 格式选择见[音频格式与转换目标](docs/wiki/Media-Formats-and-Dolby-Vision.zh-Hans.md#无损音频转换决策)，清理和验证规则见[媒体处理流程](docs/development/media-pipeline-and-tool-selection.zh-Hans.md#音频处理)。
@@ -114,6 +115,12 @@ pip install PyQt6 numpy soundfile pycountry pillow matplotlib
 ```bash
 python src/main.py
 ```
+
+桌面版启动后在独立进程中运行，可以关闭启动它的终端。在终端里给启动命令加上 `--foreground`，即可同时在终端中查看输出。界面中实时查看及保存日志的方法见[运行日志](docs/wiki/Interface-Guide.zh-Hans.md#运行日志)。
+
+桌面支持系统托盘时，关闭主窗口默认会将它收起到托盘，任务会继续运行。单击托盘图标或从同一目录再次启动程序可恢复主窗口。要退出程序，点击主窗口或托盘图标右键菜单中的 **退出**。可在 **设置 → 常规 → 关闭主窗口时最小化到托盘** 关闭此行为。
+
+可在 **设置 → 路径** 为主窗口和日志窗口分别设置背景图片。[窗口背景](docs/wiki/Interface-Guide.zh-Hans.md#窗口背景)
 
 1. 在顶部选择语言与主题。
 2. 切换到目标功能标签页。
@@ -287,7 +294,7 @@ sudo docker run -it --rm \
   bluray-subtitle-ubuntu
 ```
 
-命名卷 `bluray-subtitle-config` 用于保存 `config.json` 和生成的 `vpy.vpy`。后续运行时复用同一个卷名，即使容器使用 `--rm`，程序内修改的设置也会被重新加载。
+命名卷 `bluray-subtitle-config` 保存 `config.json`、生成的 `vpy.vpy`，以及开启日志保存后生成的 `logs/` 文件夹。使用 `--rm` 时，复用同一个卷名即可在多次运行间保留这些文件。Docker 中程序在前台运行，输出也可以从容器日志查看。
 
 容器以非 root 用户 `ubuntu`（UID/GID `1000`）运行桌面程序；挂载的媒体必须允许该用户访问。
 

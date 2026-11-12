@@ -1396,6 +1396,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 convert_immersive_audio_to_flac=(
                     self._app_config.remux.convert_immersive_audio_to_flac
                 ),
+                save_audio_gaps=self._app_config.remux.save_audio_gaps,
                 allow_partial_missing_non_video_tracks=(
                     bool(getattr(
                         getattr(self._app_config, 'remux', None),

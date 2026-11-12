@@ -112,6 +112,9 @@ void WINAPI launch_entry(void)
     startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
 
     const DWORD flags = GetConsoleWindow() ? 0 : CREATE_NO_WINDOW;
+    // A shell can pass redirected handles without setting STARTF_USESTDHANDLES.
+    if (flags & CREATE_NO_WINDOW)
+        startup.dwFlags |= STARTF_USESTDHANDLES;
     if (!CreateProcessW(executable_path, command_line, NULL, NULL, TRUE,
                         flags, NULL, NULL, &startup, &child))
         fail(L"Starting the bundled executable", GetLastError());

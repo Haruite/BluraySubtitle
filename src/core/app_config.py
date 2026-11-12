@@ -9,6 +9,7 @@ import tempfile
 from base64 import b64decode
 from binascii import Error as BinasciiError
 from dataclasses import asdict, dataclass
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,8 @@ from src.core.encode_presets import (
 APP_CONFIG_FILENAME = "config.json"
 DEFAULT_CONFIG_FILENAME = "config.default.json"
 CONFIG_SCHEMA_VERSION = 1
+MAX_BACKGROUND_BLUR = 40
+MAX_LOG_LINE_LIMIT = 100_000
 FUNCTION_PAGE_IDS = {
     "bluray_remux": 3,
     "bluray_encode": 4,
@@ -35,6 +38,15 @@ FUNCTION_PAGE_IDS = {
 @dataclass(frozen=True)
 class WindowPreferences:
     geometry: str = ""
+    log_geometry: str = ""
+
+
+@dataclass(frozen=True)
+class FontPreferences:
+    interface: str = ""
+    table: str = ""
+    log: str = ""
+    editor: str = ""
 
 
 @dataclass(frozen=True)
@@ -43,6 +55,18 @@ class UiPreferences:
     theme: str = "light"
     font_size: int = 10
     opacity: int = 100
+    save_log_to_file: bool = False
+    log_line_limit: int = 4000
+    log_theme: str = "follow"
+    close_to_tray: bool = True
+    check_updates_on_startup: bool = True
+    main_background_path: str = ""
+    main_background_opacity: int = 20
+    main_background_blur: int = 0
+    log_background_path: str = ""
+    log_background_opacity: int = 20
+    log_background_blur: int = 0
+    fonts: FontPreferences = FontPreferences()
 
 
 @dataclass(frozen=True)
@@ -71,6 +95,7 @@ class RemuxPreferences:
     convert_lossless_audio_to_flac: bool = True
     convert_immersive_audio_to_flac: bool = False
     allow_partial_missing_non_video_tracks: bool = False
+    save_audio_gaps: bool = False
 
 
 @dataclass(frozen=True)
@@ -116,6 +141,16 @@ def application_directory() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def application_support_directory() -> Path:
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS).resolve()
+    return application_directory()
+
+
+def application_location_id() -> str:
+    return sha256(os.fsencode(os.path.normcase(str(application_directory())))).hexdigest()[:24]
+
+
 def app_config_path() -> Path:
     configured_directory = os.environ.get("BLURAY_SUBTITLE_CONFIG_DIR")
     if configured_directory:
@@ -124,9 +159,7 @@ def app_config_path() -> Path:
 
 
 def default_config_path() -> Path:
-    if bool(getattr(sys, "frozen", False)) and hasattr(sys, "_MEIPASS"):
-        return Path(str(sys._MEIPASS)).resolve() / DEFAULT_CONFIG_FILENAME
-    return application_directory() / DEFAULT_CONFIG_FILENAME
+    return application_support_directory() / DEFAULT_CONFIG_FILENAME
 
 
 def _object_section(raw: dict[str, Any], name: str) -> dict[str, Any]:
@@ -276,6 +309,7 @@ def app_config_from_mapping(raw: dict[str, Any]) -> AppConfig:
 
     window = _object_section(raw, "window")
     ui = _object_section(raw, "ui")
+    fonts = _object_section(ui, "fonts")
     startup = _object_section(raw, "startup")
     paths = _object_section(raw, "paths")
     audio = _object_section(raw, "audio")
@@ -288,6 +322,9 @@ def app_config_from_mapping(raw: dict[str, Any]) -> AppConfig:
     theme = _string_value(ui, "theme", "light")
     if theme not in ("light", "dark", "colorful"):
         raise ValueError(f"Unsupported UI theme: {theme}")
+    log_theme = _string_value(ui, "log_theme", UiPreferences.log_theme)
+    if log_theme not in ("follow", "light", "dark", "colorful"):
+        raise ValueError(f"Unsupported log window theme {log_theme!r}")
     function_page = _string_value(startup, "function_page", "bluray_remux")
     if function_page not in FUNCTION_PAGE_IDS:
         raise ValueError(f"Unsupported startup function page: {function_page}")
@@ -327,8 +364,10 @@ def app_config_from_mapping(raw: dict[str, Any]) -> AppConfig:
     if subtitle_mode not in ("external", "softsub", "hardsub"):
         raise ValueError(f"Unsupported default subtitle packaging: {subtitle_mode}")
 
-    geometry = _string_value(window, "geometry", "")
-    if geometry:
+    window_geometries = {
+        name: _string_value(window, name, "") for name in ("geometry", "log_geometry")
+    }
+    for geometry in window_geometries.values():
         try:
             b64decode(geometry, validate=True)
         except (BinasciiError, ValueError) as error:
@@ -336,14 +375,37 @@ def app_config_from_mapping(raw: dict[str, Any]) -> AppConfig:
 
     return AppConfig(
         schema_version=schema_version,
-        window=WindowPreferences(
-            geometry=geometry,
-        ),
+        window=WindowPreferences(**window_geometries),
         ui=UiPreferences(
             language=language,
             theme=theme,
             font_size=_integer_value(ui, "font_size", 10, 6, 14),
             opacity=_integer_value(ui, "opacity", UiPreferences.opacity, 60, 100),
+            save_log_to_file=_boolean_value(ui, "save_log_to_file", UiPreferences.save_log_to_file),
+            log_line_limit=_integer_value(ui, "log_line_limit", UiPreferences.log_line_limit, 1, MAX_LOG_LINE_LIMIT),
+            log_theme=log_theme,
+            close_to_tray=_boolean_value(ui, "close_to_tray", UiPreferences.close_to_tray),
+            check_updates_on_startup=_boolean_value(ui, "check_updates_on_startup", UiPreferences.check_updates_on_startup),
+            main_background_path=_string_value(ui, "main_background_path", UiPreferences.main_background_path),
+            main_background_opacity=_integer_value(
+                ui, "main_background_opacity", UiPreferences.main_background_opacity, 0, 100,
+            ),
+            main_background_blur=_integer_value(
+                ui, "main_background_blur", UiPreferences.main_background_blur, 0, MAX_BACKGROUND_BLUR,
+            ),
+            log_background_path=_string_value(ui, "log_background_path", UiPreferences.log_background_path),
+            log_background_opacity=_integer_value(
+                ui, "log_background_opacity", UiPreferences.log_background_opacity, 0, 100,
+            ),
+            log_background_blur=_integer_value(
+                ui, "log_background_blur", UiPreferences.log_background_blur, 0, MAX_BACKGROUND_BLUR,
+            ),
+            fonts=FontPreferences(
+                interface=_string_value(fonts, "interface", ""),
+                table=_string_value(fonts, "table", ""),
+                log=_string_value(fonts, "log", ""),
+                editor=_string_value(fonts, "editor", ""),
+            ),
         ),
         startup=StartupPreferences(
             function_page=function_page,
@@ -406,6 +468,7 @@ def app_config_from_mapping(raw: dict[str, Any]) -> AppConfig:
                 "allow_partial_missing_non_video_tracks",
                 False,
             ),
+            save_audio_gaps=_boolean_value(remux, "save_audio_gaps", False),
         ),
         encode=EncodePreferences(
             encoder=encoder,
@@ -544,6 +607,7 @@ __all__ = [
     "AppConfig",
     "AudioPreferences",
     "EncodePreferences",
+    "FontPreferences",
     "PathPreferences",
     "RemuxPreferences",
     "StartupPreferences",
@@ -553,6 +617,8 @@ __all__ = [
     "app_config_from_mapping",
     "app_config_path",
     "application_directory",
+    "application_location_id",
+    "application_support_directory",
     "default_app_config",
     "default_config_path",
     "load_app_config",

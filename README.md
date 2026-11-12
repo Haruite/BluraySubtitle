@@ -29,7 +29,7 @@ BluraySubtitle is a GUI tool for Blu-ray workflows on **Windows / Linux** (inclu
 
 - English/Simplified Chinese UI; Light, Dark, and Colorful themes with opacity control.
 - Scroll the page vertically and drag the handle below each table to resize it. See the [interface guide](docs/wiki/Interface-Guide.md#main-window-content-areas) for layout and table controls.
-- **Settings** manages general options, paths, startup defaults, external tools, and manual updates.
+- **Settings** manages general options, fonts, paths, startup defaults, and external tools. Open **Tools** to check for updates or create launch shortcuts.
 - Check the discs to process and drag their paths to set the order. Series mode splits by chapters; movie mode keeps a continuous output and can select alternate cuts by default. Each disc can have multiple selected main MPLS files. Review automatic selections, episode ranges, and tracks before running.
 
 ### Remux controls
@@ -46,7 +46,8 @@ Choose video, audio, and subtitles in **Edit Tracks**. Edit the command for a ma
 - Remux preserves lossy audio and converts lossless audio to FLAC by default. Configure conversion and compression levels under **Advanced**.
 - **Convert DTS:X and TrueHD Atmos to FLAC during Remux** starts disabled because FLAC cannot retain object metadata.
 - Remux and Encode remove silent and exact duplicate audio tracks, reporting each removal; standalone single-track audio is excluded.
-- Converted tracks with gaps require a Matroska container. Keep the `.audio-gaps.json` beside Remux outputs for subsequent encoding.
+- Converted tracks with gaps require a Matroska container.
+- **Save .audio-gaps.json during Remux** in **Settings → Advanced → Audio encoding** is off by default. If you plan to encode the Remux output later, enable the option and keep the `.audio-gaps.json` file beside the output so Encode can reuse the audio gap information.
 - A failed conversion or duration loss above the configurable threshold (default 1 second) keeps the original track.
 
 See [audio formats and conversion targets](docs/wiki/Media-Formats-and-Dolby-Vision.md#lossless-audio-conversion-decisions) for format choices, and [media processing](docs/development/media-pipeline-and-tool-selection.md#audio-processing) for cleanup and validation rules.
@@ -114,6 +115,12 @@ pip install PyQt6 numpy soundfile pycountry pillow matplotlib
 ```bash
 python src/main.py
 ```
+
+On desktop, BluraySubtitle runs in a separate process so you can close the launching terminal. Add `--foreground` when starting it from a terminal to see output there. For live output in the GUI and optional file saving, see the [application log](docs/wiki/Interface-Guide.md#application-log).
+
+On desktops with a system tray, closing the main window sends it to the tray by default and lets tasks continue. Click the tray icon or launch the same installation again to restore the window. Choose **Exit** in the main window or the tray icon’s context menu to quit. You can turn this off under **Settings → General → Minimize to the system tray when closing the main window**.
+
+Set optional background images for the main and log windows under **Settings → Paths**. [Window backgrounds](docs/wiki/Interface-Guide.md#window-backgrounds)
 
 1. Pick language and theme at the top.
 2. Open the target **function** tab.
@@ -287,7 +294,7 @@ sudo docker run -it --rm \
   bluray-subtitle-ubuntu
 ```
 
-The named `bluray-subtitle-config` volume stores `config.json` and the generated `vpy.vpy`. Reuse the same volume name on later runs so settings changed in the application are loaded even when the container uses `--rm`.
+The named `bluray-subtitle-config` volume stores `config.json`, the generated `vpy.vpy`, and the `logs/` folder when file logging is enabled. Reuse the same volume name to keep these files across runs with `--rm`. Docker runs the app in the foreground so its output is also available in the container log.
 
 The container runs desktop applications as the non-root user `ubuntu` with UID/GID `1000`; mounted media must be accessible to that user.
 

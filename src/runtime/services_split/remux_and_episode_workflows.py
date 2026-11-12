@@ -1425,7 +1425,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                                     {},
                                 ).get(os.path.normcase(os.path.abspath(output_path)))
                             ),
-                            write_audio_gaps=True,
+                            write_audio_gaps=request.save_audio_gaps,
                             progress_callback=lambda operation, name=os.path.basename(output_path): self._progress(
                                 text=self.t('{operation}: {name}').format(
                                     operation=operation,
@@ -1444,9 +1444,10 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                         shutil.rmtree(output_path, ignore_errors=True)
                     elif os.path.isfile(output_path):
                         force_remove_file(output_path)
-                    sidecar_path = audio_gap_sidecar_path(output_path)
-                    if os.path.isfile(sidecar_path):
-                        force_remove_file(sidecar_path)
+                    if request.save_audio_gaps:
+                        sidecar_path = audio_gap_sidecar_path(output_path)
+                        if os.path.isfile(sidecar_path):
+                            force_remove_file(sidecar_path)
                 raise
         self.completion()
         self._progress(1000, 'Done')

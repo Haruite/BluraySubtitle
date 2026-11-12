@@ -798,6 +798,7 @@ ENV LD_PRELOAD=/usr/local/lib/libvapoursynth-script.so
 
 WORKDIR /app
 COPY src/ /app/src/
+COPY resource/ /app/resource/
 COPY config.default.json /app/config.default.json
 RUN install -d -m 0755 -o ubuntu -g ubuntu /config \
     && install -d -m 0700 -o ubuntu -g ubuntu /tmp/runtime-ubuntu
@@ -806,4 +807,4 @@ ENV HOME=/home/ubuntu
 ENV XDG_RUNTIME_DIR=/tmp/runtime-ubuntu
 VOLUME ["/config"]
 USER ubuntu
-CMD ["dbus-run-session", "--", "python3", "-m", "src.main"]
+CMD ["dbus-run-session", "--", "python3", "-m", "src.main", "--foreground"]

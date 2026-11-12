@@ -5,8 +5,10 @@ All external imports should use this module instead of the legacy
 """
 
 from PyQt6.QtCore import QEvent, Qt
+from PyQt6.QtGui import QPaintEvent
 from PyQt6.QtWidgets import QApplication, QAbstractSpinBox, QComboBox, QMenu, QWidget
 
+from ..application_log import ApplicationLog
 from ..gui_runtime_split.lifecycle_and_bootstrap import LifecycleBootstrapMixin
 from ..gui_runtime_split.settings_and_state import SettingsStateMixin
 from ..gui_runtime_split.configuration_and_modes import ConfigurationModesMixin
@@ -21,6 +23,16 @@ from ..gui_runtime_split.theme_and_i18n import ThemeI18nMixin
 from ..gui_runtime_split.track_and_attachment_editing import TrackAttachmentEditingMixin
 from ..gui_runtime_split.vpy_edit_and_preview import VpyEditPreviewMixin
 from ..gui_runtime_split.gui_base import BluraySubtitleGuiBase
+from .widget_animations import animate_window_open, window_opacity
+from .window_background import background_panel_colors
+
+
+_BACKGROUND_CONTENT_STYLE = (
+    'QWidget#mainToolbar QLabel,'
+    'QScrollArea#contentScroll,QScrollArea#contentScroll .QWidget,'
+    'QWidget#scrollContent QTableWidget,QWidget#scrollContent QLabel,'
+    'QWidget#scrollContent QCheckBox,QWidget#scrollContent QRadioButton{background:transparent;}'
+)
 
 
 class BluraySubtitleGUI(
@@ -41,17 +53,41 @@ class BluraySubtitleGUI(
 ):
     """Split GUI class composed from all migration mixins."""
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, application_log: ApplicationLog | None = None):
+        super().__init__(application_log)
         QApplication.instance().installEventFilter(self)
+
+    def set_background_image(self, path: str, opacity: int, blur: int = 0) -> None:
+        self._window_background.set_image(path, opacity, blur)
+        self._refresh_background_panels()
+        self.update()
+
+    def _refresh_background_panels(self) -> None:
+        stylesheet = ''
+        if self._window_background.active:
+            toolbar, panel = background_panel_colors(self._theme_mode == 'dark')
+            stylesheet = _BACKGROUND_CONTENT_STYLE + (
+                f'QWidget#mainToolbar{{background:{toolbar};border-radius:6px;}}'
+                f'QWidget#scrollContent QGroupBox[workspaceSection="true"]{{background:{panel};}}'
+            )
+        if stylesheet != self.styleSheet():
+            self.setStyleSheet(stylesheet)
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        super().paintEvent(event)
+        self._window_background.paint(self)
 
     def eventFilter(self, watched, event):
         event_type = event.type()
+        if event_type in (QEvent.Type.Polish, QEvent.Type.Show) and isinstance(watched, QWidget):
+            self._apply_widget_font(watched)
         if event_type == QEvent.Type.Wheel and isinstance(watched, (QComboBox, QAbstractSpinBox)):
             # Pass wheel input to the enclosing scroll area. Popup lists scroll independently.
             event.ignore()
             return True
         if event_type == QEvent.Type.Show and isinstance(watched, QWidget):
+            if watched.isWindow() and not event.spontaneous():
+                animate_window_open(watched)
             parent = watched.parentWidget()
             window_type = watched.windowType()
             follows_owner_opacity = window_type == Qt.WindowType.ToolTip or (
@@ -60,7 +96,7 @@ class BluraySubtitleGUI(
             )
             if follows_owner_opacity and self._window_opacity_supported():
                 owner = parent.window() if parent is not None else self
-                watched.setWindowOpacity(owner.windowOpacity())
+                watched.setWindowOpacity(window_opacity(owner))
         return super().eventFilter(watched, event)
 
     def __getattribute__(self, name: str):
