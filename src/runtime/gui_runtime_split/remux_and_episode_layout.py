@@ -19,7 +19,7 @@ from src.core import BDMV_LABELS, DIY_BDMV_LABELS, DIY_REMUX_LABELS, find_mkvtoo
 from src.domain import Subtitle
 from src.domain.subtitles import list_subtitle_files
 from src.exports.utils import get_time_str, get_index_to_m2ts_and_offset, print_exc_terminal, get_folder_size, parse_time_to_seconds
-from src.runtime.gui_runtime_classes.custom_table_widget import SelectionTableWidget
+from src.runtime.gui_runtime_classes.custom_table_widget import SelectionTableWidget, StyledComboBox
 from src.runtime.gui_runtime_classes.disc_table_widget import DiscCommandEdit
 from src.runtime.gui_runtime_classes.file_path_table_widget_item import FilePathTableWidgetItem
 from src.runtime.gui_runtime_classes.remux_worker import RemuxWorker
@@ -434,73 +434,62 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         offset_col = SUBTITLE_LABELS.index('offset')
         warn_col = SUBTITLE_LABELS.index('warning')
 
-        old_sorting = self.table2.isSortingEnabled()
-        self.table2.setSortingEnabled(False)
+        self.table2.clear()
+        self.table2.setColumnCount(len(SUBTITLE_LABELS))
+        self._set_table_headers(self.table2, SUBTITLE_LABELS)
+        self._set_table2_subtitle_column_order()
+        self.table2.setRowCount(len(discs))
+
+        for i, (bdmv_index, mpls_no_ext) in enumerate(discs):
+            check_item = QTableWidgetItem()
+            check_item.setFlags(check_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            check_item.setCheckState(Qt.CheckState.Checked)
+            self.table2.setItem(i, 0, check_item)
+
+            if i < len(file_rows):
+                p, dur, sub_sec = file_rows[i]
+                self.table2.setItem(i, 1, FilePathTableWidgetItem(p))
+                self.table2.setItem(i, sub_duration_col, QTableWidgetItem(dur))
+            else:
+                self.table2.setItem(i, 1, FilePathTableWidgetItem(''))
+                self.table2.setItem(i, sub_duration_col, QTableWidgetItem(''))
+                sub_sec = None
+
+            try:
+                total_time = Chapter(mpls_no_ext + '.mpls').get_total_time()
+                self.table2.setItem(i, ep_duration_col, QTableWidgetItem(get_time_str(total_time)))
+            except Exception:
+                self.table2.setItem(i, ep_duration_col, QTableWidgetItem('Unknown'))
+                total_time = None
+
+            bdmv_item = QTableWidgetItem(str(bdmv_index))
+            bdmv_item.setData(Qt.ItemDataRole.UserRole, str(mpls_no_ext))
+            self.table2.setItem(i, bdmv_col, bdmv_item)
+
+            chapter_combo = StyledComboBox(self.table2)
+            chapter_combo.addItems(['1'])
+            chapter_combo.setCurrentIndex(0)
+            chapter_combo.setEnabled(False)
+            self.table2.setCellWidget(i, chapter_col, chapter_combo)
+
+            self.table2.setItem(i, offset_col, QTableWidgetItem('0'), editable=True)
+
+            warn_item = QTableWidgetItem('')
+            try:
+                if isinstance(sub_sec, (int, float)) and isinstance(total_time, (int, float)) and total_time > 0:
+                    if float(sub_sec) <= float(total_time) / 2.0:
+                        warn_item.setText('!')
+                        warn_item.setToolTip(self.t('May require series mode'))
+            except Exception:
+                pass
+            self.table2.setItem(i, warn_col, warn_item)
+
+        self.sub_check_state = [2 for _ in range(self.table2.rowCount())]
         try:
-            self.table2.clear()
-            self.table2.setColumnCount(len(SUBTITLE_LABELS))
-            self._set_table_headers(self.table2, SUBTITLE_LABELS)
-            self._set_table2_subtitle_column_order()
-            self.table2.setRowCount(len(discs))
-
-            for i, (bdmv_index, mpls_no_ext) in enumerate(discs):
-                check_item = QTableWidgetItem()
-                check_item.setFlags(check_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                check_item.setCheckState(Qt.CheckState.Checked)
-                self.table2.setItem(i, 0, check_item)
-
-                if i < len(file_rows):
-                    p, dur, sub_sec = file_rows[i]
-                    self.table2.setItem(i, 1, FilePathTableWidgetItem(p))
-                    self.table2.setItem(i, sub_duration_col, QTableWidgetItem(dur))
-                else:
-                    self.table2.setItem(i, 1, FilePathTableWidgetItem(''))
-                    self.table2.setItem(i, sub_duration_col, QTableWidgetItem(''))
-                    sub_sec = None
-
-                try:
-                    total_time = Chapter(mpls_no_ext + '.mpls').get_total_time()
-                    self.table2.setItem(i, ep_duration_col, QTableWidgetItem(get_time_str(total_time)))
-                except Exception:
-                    self.table2.setItem(i, ep_duration_col, QTableWidgetItem('Unknown'))
-                    total_time = None
-
-                bdmv_item = QTableWidgetItem(str(bdmv_index))
-                bdmv_item.setData(Qt.ItemDataRole.UserRole, str(mpls_no_ext))
-                self.table2.setItem(i, bdmv_col, bdmv_item)
-
-                chapter_combo = QComboBox(self.table2)
-                chapter_combo.addItems(['1'])
-                chapter_combo.setCurrentIndex(0)
-                chapter_combo.setEnabled(False)
-                self.table2.setCellWidget(i, chapter_col, chapter_combo)
-
-                self.table2.setItem(i, offset_col, QTableWidgetItem('0'))
-
-                warn_item = QTableWidgetItem('')
-                try:
-                    if isinstance(sub_sec, (int, float)) and isinstance(total_time, (int, float)) and total_time > 0:
-                        if float(sub_sec) <= float(total_time) / 2.0:
-                            warn_item.setText('!')
-                            warn_item.setToolTip(self.t('May require series mode'))
-                except Exception:
-                    pass
-                self.table2.setItem(i, warn_col, warn_item)
-
-            self.sub_check_state = [2 for _ in range(self.table2.rowCount())]
-            try:
-                self.table2.cellClicked.disconnect(self.on_subtitle_select)
-            except Exception:
-                pass
-            self.table2.cellClicked.connect(self.on_subtitle_select)
-            self.table2.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-            try:
-                self.table2.customContextMenuRequested.disconnect(self.on_subtitle_menu)
-            except Exception:
-                pass
-            self.table2.customContextMenuRequested.connect(self.on_subtitle_menu)
-        finally:
-            self.table2.setSortingEnabled(old_sorting)
+            self.table2.cellClicked.disconnect(self.on_subtitle_select)
+        except Exception:
+            pass
+        self.table2.cellClicked.connect(self.on_subtitle_select)
 
         self._resize_table_columns_for_language(self.table2)
         self._scroll_table_to_primary_column(self.table2)
@@ -576,91 +565,86 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         auto_lang = 'eng' if getattr(self, '_language_code', CURRENT_UI_LANGUAGE) != 'zh' else 'chi'
         configuration: dict[int, dict[str, int | str]] = {}
 
-        old_sorting = self.table2.isSortingEnabled()
-        self.table2.setSortingEnabled(False)
-        try:
-            self.table2.setRowCount(len(disc_rows))
-            for row_i, (bdmv_index, folder, mpls_no_ext) in enumerate(disc_rows):
-                mpls_path = mpls_no_ext + '.mpls'
-                playlist_dir = self._get_playlist_dir_for_bdmv_index(bdmv_index)
-                mpls_full = mpls_path
-                if playlist_dir:
-                    mpls_full = os.path.normpath(
-                        os.path.join(playlist_dir, os.path.basename(mpls_path)))
-                chapter = Chapter(mpls_full if os.path.isfile(mpls_full) else mpls_path)
-                total_time = chapter.get_total_time()
-                m2ts_files = list(
-                    dict.fromkeys([f'{stem}.m2ts' for stem, _, _ in (chapter.in_out_time or [])]))
-                disc_name = self._resolve_output_name_from_mpls(mpls_no_ext)
-                bdmv_vol = f'{bdmv_index:03d}'
-                name_stem = disc_name if single_volume else f'{disc_name}_BD_Vol_{bdmv_vol}'
-                if playlist_counts_by_disc[bdmv_index] > 1:
-                    sequence = playlist_sequence_by_disc.get(bdmv_index, 0) + 1
-                    playlist_sequence_by_disc[bdmv_index] = sequence
-                    name_stem += f'_{sequence}'
-                auto_name = f'{name_stem}.mkv'
+        self.table2.setRowCount(len(disc_rows))
+        for row_i, (bdmv_index, folder, mpls_no_ext) in enumerate(disc_rows):
+            mpls_path = mpls_no_ext + '.mpls'
+            playlist_dir = self._get_playlist_dir_for_bdmv_index(bdmv_index)
+            mpls_full = mpls_path
+            if playlist_dir:
+                mpls_full = os.path.normpath(
+                    os.path.join(playlist_dir, os.path.basename(mpls_path)))
+            chapter = Chapter(mpls_full if os.path.isfile(mpls_full) else mpls_path)
+            total_time = chapter.get_total_time()
+            m2ts_files = list(
+                dict.fromkeys([f'{stem}.m2ts' for stem, _, _ in (chapter.in_out_time or [])]))
+            disc_name = self._resolve_output_name_from_mpls(mpls_no_ext)
+            bdmv_vol = f'{bdmv_index:03d}'
+            name_stem = disc_name if single_volume else f'{disc_name}_BD_Vol_{bdmv_vol}'
+            if playlist_counts_by_disc[bdmv_index] > 1:
+                sequence = playlist_sequence_by_disc.get(bdmv_index, 0) + 1
+                playlist_sequence_by_disc[bdmv_index] = sequence
+                name_stem += f'_{sequence}'
+            auto_name = f'{name_stem}.mkv'
 
-                if sub_files_in_folder and row_i < len(sub_files_in_folder):
-                    self.table2.setItem(row_i, 0, FilePathTableWidgetItem(sub_files_in_folder[row_i]))
+            if sub_files_in_folder and row_i < len(sub_files_in_folder):
+                self.table2.setItem(row_i, 0, FilePathTableWidgetItem(sub_files_in_folder[row_i]))
 
-                bdmv_item = QTableWidgetItem(str(bdmv_index))
-                bdmv_item.setData(Qt.ItemDataRole.UserRole, str(mpls_no_ext or ''))
-                self.table2.setItem(row_i, bdmv_col, bdmv_item)
-                self._apply_movie_mode_table2_chapter_widgets(
-                    row_i, labels, mpls_no_ext, connect_end_handler=True)
-                self.table2.setItem(row_i, m2ts_col, QTableWidgetItem(', '.join(m2ts_files)))
-                if m2ts_detail_col >= 0:
+            bdmv_item = QTableWidgetItem(str(bdmv_index))
+            bdmv_item.setData(Qt.ItemDataRole.UserRole, str(mpls_no_ext or ''))
+            self.table2.setItem(row_i, bdmv_col, bdmv_item)
+            self._apply_movie_mode_table2_chapter_widgets(
+                row_i, labels, mpls_no_ext, connect_end_handler=True)
+            self.table2.setItem(row_i, m2ts_col, QTableWidgetItem(', '.join(m2ts_files)))
+            if m2ts_detail_col >= 0:
+                detail_txt = ''
+                try:
+                    detail_txt = self._m2ts_file_detail_from_mpls_path(mpls_full)
+                except Exception:
                     detail_txt = ''
-                    try:
-                        detail_txt = self._m2ts_file_detail_from_mpls_path(mpls_full)
-                    except Exception:
-                        detail_txt = ''
-                    self.table2.setItem(row_i, m2ts_detail_col, QTableWidgetItem(detail_txt))
-                self.table2.setItem(row_i, duration_col, QTableWidgetItem(get_time_str(total_time)))
+                self.table2.setItem(row_i, m2ts_detail_col, QTableWidgetItem(detail_txt))
+            self.table2.setItem(row_i, duration_col, QTableWidgetItem(get_time_str(total_time)))
 
-                prev_lang = prev_lang_by_mpls.get(mpls_no_ext, '').strip()
-                prev_auto_lang = prev_auto_lang_by_mpls.get(mpls_no_ext, '').strip()
-                if prev_lang and prev_auto_lang and prev_lang != prev_auto_lang:
-                    final_lang = prev_lang
-                elif prev_lang and not prev_auto_lang:
-                    final_lang = prev_lang
-                else:
-                    final_lang = auto_lang
-                lang_combo = self.create_language_combo(final_lang)
-                lang_combo._auto_lang = auto_lang
-                self.table2.setItem(row_i, language_col, None)
-                self.table2.setCellWidget(row_i, language_col, lang_combo)
+            prev_lang = prev_lang_by_mpls.get(mpls_no_ext, '').strip()
+            prev_auto_lang = prev_auto_lang_by_mpls.get(mpls_no_ext, '').strip()
+            if prev_lang and prev_auto_lang and prev_lang != prev_auto_lang:
+                final_lang = prev_lang
+            elif prev_lang and not prev_auto_lang:
+                final_lang = prev_lang
+            else:
+                final_lang = auto_lang
+            lang_combo = self.create_language_combo(final_lang)
+            lang_combo._auto_lang = auto_lang
+            self.table2.setItem(row_i, language_col, None)
+            self.table2.setCellWidget(row_i, language_col, lang_combo)
 
-                prev_name, prev_auto = prev_name_by_mpls.get(mpls_no_ext, ('', ''))
-                if prev_name and prev_auto and prev_name != prev_auto:
-                    final_text = prev_name
-                else:
-                    final_text = auto_name
-                if output_col >= 0:
-                    out_item = QTableWidgetItem(final_text)
-                    out_item.setData(Qt.ItemDataRole.UserRole, auto_name)
-                    self.table2.setItem(row_i, output_col, out_item)
+            prev_name, prev_auto = prev_name_by_mpls.get(mpls_no_ext, ('', ''))
+            if prev_name and prev_auto and prev_name != prev_auto:
+                final_text = prev_name
+            else:
+                final_text = auto_name
+            if output_col >= 0:
+                out_item = QTableWidgetItem(final_text)
+                out_item.setData(Qt.ItemDataRole.UserRole, auto_name)
+                self.table2.setItem(row_i, output_col, out_item, editable=True)
 
-                if function_id == 4:
-                    self.ensure_encode_row_widgets(row_i)
-                if play_col >= 0:
-                    btn_play = QToolButton(self.table2)
-                    btn_play.setText(self.t('play'))
-                    btn_play.clicked.connect(partial(self.on_play_table2_disc_row, row_i, bdmv_col, m2ts_col))
-                    self.table2.setItem(row_i, play_col, None)
-                    self.table2.setCellWidget(row_i, play_col, btn_play)
+            if function_id == 4:
+                self.ensure_encode_row_widgets(row_i)
+            if play_col >= 0:
+                btn_play = QToolButton(self.table2)
+                btn_play.setText(self.t('play'))
+                btn_play.clicked.connect(partial(self.on_play_table2_disc_row, row_i, bdmv_col, m2ts_col))
+                self.table2.setItem(row_i, play_col, None)
+                self.table2.setCellWidget(row_i, play_col, btn_play)
 
-                configuration[row_i] = {
-                    'folder': folder,
-                    'selected_mpls': mpls_no_ext,
-                    'bdmv_index': bdmv_index,
-                    'chapter_index': 1,
-                    'offset': '0',
-                    'disc_output_name': disc_name,
-                    'output_name': final_text,
-                }
-        finally:
-            self.table2.setSortingEnabled(old_sorting)
+            configuration[row_i] = {
+                'folder': folder,
+                'selected_mpls': mpls_no_ext,
+                'bdmv_index': bdmv_index,
+                'chapter_index': 1,
+                'offset': '0',
+                'disc_output_name': disc_name,
+                'output_name': final_text,
+            }
 
         self._movie_configuration = configuration
         try:
@@ -944,25 +928,20 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         selected_order = {os.path.normpath(path): index for index, (_, path) in enumerate(selected)}
         disc_indices = {os.path.normpath(path): self._bdmv_index_for_table1_folder_norm(folder)
                         for folder, path in selected}
-        was_sorting = self.table2.isSortingEnabled()
-        self.table2.setSortingEnabled(False)
-        try:
-            retained = []
-            for row in reversed(range(self.table2.rowCount())):
-                item = self.table2.item(row, bdmv_col)
-                source = str(item.data(Qt.ItemDataRole.UserRole) or '') if item else ''
-                key = os.path.normpath(source) if source else ''
-                if key not in selected_order:
-                    self.table2.removeRow(row)
-                    continue
-                item.setText(str(disc_indices[key]))
-                retained.append((selected_order[key], row, item))
-            for target, (_, _, item) in enumerate(sorted(retained, key=lambda entry: entry[:2])):
-                source = item.row()
-                if source != target:
-                    self.table2.model().moveRows(QModelIndex(), source, 1, QModelIndex(), target)
-        finally:
-            self.table2.setSortingEnabled(was_sorting)
+        retained = []
+        for row in reversed(range(self.table2.rowCount())):
+            item = self.table2.item(row, bdmv_col)
+            source = str(item.data(Qt.ItemDataRole.UserRole) or '') if item else ''
+            key = os.path.normpath(source) if source else ''
+            if key not in selected_order:
+                self.table2.removeRow(row)
+                continue
+            item.setText(str(disc_indices[key]))
+            retained.append((selected_order[key], row, item))
+        for target, (_, _, item) in enumerate(sorted(retained, key=lambda entry: entry[:2])):
+            source = item.row()
+            if source != target:
+                self.table2.model().moveRows(QModelIndex(), source, 1, QModelIndex(), target)
 
     def on_disc_table_changed(self) -> None:
         """Rebuild derived outputs from the visible disc selection and order."""
@@ -1074,7 +1053,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             finally:
                 self.bdmv_folder_path.blockSignals(False)
         source_state_path = os.path.normcase(os.path.abspath(bdmv_path)) if bdmv_path else ''
-        source_changed = source_state_path != str(getattr(self, '_bdmv_source_state_path', '') or '')
+        source_changed = source_state_path != self._bdmv_source_state_path
         previous_order = [] if source_changed else self._table1_bluray_folder_order()
         previous_checks = {
             self.table1.item(row, 0).text(): self.table1.item(row, 0).checkState()
@@ -1259,8 +1238,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                             QCoreApplication.processEvents()
                     source_item = QTableWidgetItem(os.path.normpath(source_path))
                     source_item.setToolTip(source_item.text())
-                    source_item.setFlags((source_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                                         & ~Qt.ItemFlag.ItemIsEditable)
+                    source_item.setFlags(source_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                     source_item.setCheckState(previous_checks.get(source_item.text(), Qt.CheckState.Checked))
                     self.table1.setItem(i, 0, source_item)
                     size = get_folder_size(root) if root == source_path else f'{os.path.getsize(source_path) / 1024 ** 3:.2f} GiB'

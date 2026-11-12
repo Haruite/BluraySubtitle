@@ -31,7 +31,6 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QDoubleSpinBox,
-    QSpinBox,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -67,6 +66,9 @@ from src.runtime.encode_source import (
     probe_svt_av1_bit_depths,
     probe_x265_dynamic_metadata_options,
 )
+
+from .custom_table_widget import StyledComboBox
+from .spin_box import StyledDoubleSpinBox, StyledSpinBox
 
 
 GITHUB_LATEST_RELEASE_API = (
@@ -153,7 +155,7 @@ class SettingsDialog(QDialog):
         tab = QWidget(self)
         form = QFormLayout(tab)
 
-        self.function_page_combo = QComboBox(tab)
+        self.function_page_combo = StyledComboBox(tab)
         for text, value in (
             ("Blu-ray Remux", "bluray_remux"),
             ("Blu-ray Encode", "bluray_encode"),
@@ -164,12 +166,12 @@ class SettingsDialog(QDialog):
             self.function_page_combo.addItem(self.t(text), value)
         form.addRow(self.t("Startup function page"), self.function_page_combo)
 
-        self.episode_mode_combo = QComboBox(tab)
+        self.episode_mode_combo = StyledComboBox(tab)
         self.episode_mode_combo.addItem(self.t("Series mode"), "series")
         self.episode_mode_combo.addItem(self.t("Movie mode"), "movie")
         form.addRow(self.t("Default episode mode"), self.episode_mode_combo)
 
-        self.language_combo = QComboBox(tab)
+        self.language_combo = StyledComboBox(tab)
         self.language_combo.addItem("English", "en")
         self.language_combo.addItem(
             translate_text("Simplified Chinese", "zh"),
@@ -177,17 +179,17 @@ class SettingsDialog(QDialog):
         )
         form.addRow(self.t("UI language"), self.language_combo)
 
-        self.theme_combo = QComboBox(tab)
+        self.theme_combo = StyledComboBox(tab)
         self.theme_combo.addItem(self.t("Light"), "light")
         self.theme_combo.addItem(self.t("Dark"), "dark")
         self.theme_combo.addItem(self.t("Colorful"), "colorful")
         form.addRow(self.t("Theme"), self.theme_combo)
 
-        self.font_size_spin = QSpinBox(tab)
+        self.font_size_spin = StyledSpinBox(tab)
         self.font_size_spin.setRange(6, 14)
         form.addRow(self.t("UI font size"), self.font_size_spin)
 
-        self.opacity_spin = QSpinBox(tab)
+        self.opacity_spin = StyledSpinBox(tab)
         self.opacity_spin.setRange(60, 100)
         self.opacity_spin.setSuffix("%")
         form.addRow(self.t("Window opacity"), self.opacity_spin)
@@ -412,13 +414,13 @@ class SettingsDialog(QDialog):
 
         audio_group = QGroupBox(self.t("Audio encoding"), tab)
         audio_form = QFormLayout(audio_group)
-        self.flac_compression_spin = QSpinBox(audio_group)
+        self.flac_compression_spin = StyledSpinBox(audio_group)
         self.flac_compression_spin.setRange(0, 8)
         audio_form.addRow(
             self.t("FLAC compression level"),
             self.flac_compression_spin,
         )
-        self.ffmpeg_flac_compression_spin = QSpinBox(audio_group)
+        self.ffmpeg_flac_compression_spin = StyledSpinBox(audio_group)
         self.ffmpeg_flac_compression_spin.setRange(0, 12)
         audio_form.addRow(
             self.t("FFmpeg FLAC compression level"),
@@ -433,7 +435,7 @@ class SettingsDialog(QDialog):
         )
         ffmpeg_level_hint.setWordWrap(True)
         audio_form.addRow(ffmpeg_level_hint)
-        self.fdkaac_bitrate_spin = QSpinBox(audio_group)
+        self.fdkaac_bitrate_spin = StyledSpinBox(audio_group)
         self.fdkaac_bitrate_spin.setRange(0, 1024)
         self.fdkaac_bitrate_spin.setSpecialValueText(self.t("Auto"))
         self.fdkaac_bitrate_spin.setSuffix(" kbps")
@@ -441,7 +443,7 @@ class SettingsDialog(QDialog):
             self.t("FDK-AAC bitrate"),
             self.fdkaac_bitrate_spin,
         )
-        self.opus_bitrate_spin = QSpinBox(audio_group)
+        self.opus_bitrate_spin = StyledSpinBox(audio_group)
         self.opus_bitrate_spin.setRange(0, 1024)
         self.opus_bitrate_spin.setSpecialValueText(self.t("Auto"))
         self.opus_bitrate_spin.setSuffix(" kbps")
@@ -449,7 +451,7 @@ class SettingsDialog(QDialog):
             self.t("Opus bitrate"),
             self.opus_bitrate_spin,
         )
-        self.audio_duration_loss_threshold_spin = QDoubleSpinBox(audio_group)
+        self.audio_duration_loss_threshold_spin = StyledDoubleSpinBox(audio_group)
         self.audio_duration_loss_threshold_spin.setRange(0.1, 60.0)
         self.audio_duration_loss_threshold_spin.setDecimals(1)
         self.audio_duration_loss_threshold_spin.setSingleStep(0.1)
@@ -505,7 +507,7 @@ class SettingsDialog(QDialog):
 
         encode_group = QGroupBox(self.t("Default encode settings"), tab)
         encode_form = QFormLayout(encode_group)
-        self.default_encoder_combo = QComboBox(encode_group)
+        self.default_encoder_combo = StyledComboBox(encode_group)
         self.default_encoder_combo.addItem("x264", "x264")
         self.default_encoder_combo.addItem("x265", "x265")
         self.default_encoder_combo.addItem("SVT-AV1", "svtav1")
@@ -513,12 +515,12 @@ class SettingsDialog(QDialog):
             self.t("Default encoder"),
             self.default_encoder_combo,
         )
-        self.default_bit_depth_combo = QComboBox(encode_group)
+        self.default_bit_depth_combo = StyledComboBox(encode_group)
         encode_form.addRow(
             self.t("Default bit depth"),
             self.default_bit_depth_combo,
         )
-        self.default_preset_combo = QComboBox(encode_group)
+        self.default_preset_combo = StyledComboBox(encode_group)
         encode_form.addRow(
             self.t("Default preset"),
             self.default_preset_combo,
@@ -528,7 +530,7 @@ class SettingsDialog(QDialog):
         preset_editor_layout = QHBoxLayout(preset_editor_row)
         preset_editor_layout.setContentsMargins(0, 0, 0, 0)
         preset_editor_layout.setSpacing(4)
-        self.custom_preset_combo = QComboBox(preset_editor_row)
+        self.custom_preset_combo = StyledComboBox(preset_editor_row)
         self.add_custom_preset_button = QPushButton(
             self.t("Add"),
             preset_editor_row,
@@ -554,7 +556,7 @@ class SettingsDialog(QDialog):
             self.t("Custom encode preset parameters"),
             self.custom_preset_parameters_edit,
         )
-        self.default_lossless_audio_combo = QComboBox(encode_group)
+        self.default_lossless_audio_combo = StyledComboBox(encode_group)
         self.default_lossless_audio_combo.addItem("FLAC", "flac")
         self.default_lossless_audio_combo.addItem("AAC", "aac")
         self.default_lossless_audio_combo.addItem("Opus", "opus")
@@ -562,7 +564,7 @@ class SettingsDialog(QDialog):
             self.t("Default lossless audio target"),
             self.default_lossless_audio_combo,
         )
-        self.default_subtitle_mode_combo = QComboBox(encode_group)
+        self.default_subtitle_mode_combo = StyledComboBox(encode_group)
         self.default_subtitle_mode_combo.addItem(self.t("External"), "external")
         self.default_subtitle_mode_combo.addItem(self.t("Softsub"), "softsub")
         self.default_subtitle_mode_combo.addItem(self.t("Hardsub"), "hardsub")
@@ -599,7 +601,7 @@ class SettingsDialog(QDialog):
         encode_form.addRow(self.default_frame_check_checkbox)
 
         def create_frame_check_threshold_spin(tooltip: str) -> QDoubleSpinBox:
-            spin = QDoubleSpinBox(encode_group)
+            spin = StyledDoubleSpinBox(encode_group)
             spin.setRange(0.0, 100.0)
             spin.setDecimals(2)
             spin.setSingleStep(1.0)
@@ -630,7 +632,7 @@ class SettingsDialog(QDialog):
         )
 
         def create_vpy_strength_spin(maximum: float, tooltip: str) -> QDoubleSpinBox:
-            spin = QDoubleSpinBox(encode_group)
+            spin = StyledDoubleSpinBox(encode_group)
             spin.setRange(0.0, maximum)
             spin.setDecimals(2)
             spin.setSingleStep(0.1)

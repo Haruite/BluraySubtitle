@@ -5,7 +5,7 @@ All external imports should use this module instead of the legacy
 """
 
 from PyQt6.QtCore import QEvent, Qt
-from PyQt6.QtWidgets import QApplication, QAbstractSpinBox, QComboBox, QWidget
+from PyQt6.QtWidgets import QApplication, QAbstractSpinBox, QComboBox, QMenu, QWidget
 
 from ..gui_runtime_split.lifecycle_and_bootstrap import LifecycleBootstrapMixin
 from ..gui_runtime_split.settings_and_state import SettingsStateMixin
@@ -51,15 +51,16 @@ class BluraySubtitleGUI(
             # Pass wheel input to the enclosing scroll area. Popup lists scroll independently.
             event.ignore()
             return True
-        if (
-            event_type == QEvent.Type.Show
-            and isinstance(watched, QWidget)
-            and watched.windowType() == Qt.WindowType.Popup
-            and isinstance(combo := watched.parentWidget(), QComboBox)
-            and self._window_opacity_supported()
-        ):
-            # A combo box list is a separate window with its own opacity.
-            watched.setWindowOpacity(combo.window().windowOpacity())
+        if event_type == QEvent.Type.Show and isinstance(watched, QWidget):
+            parent = watched.parentWidget()
+            window_type = watched.windowType()
+            follows_owner_opacity = window_type == Qt.WindowType.ToolTip or (
+                window_type == Qt.WindowType.Popup
+                and (isinstance(parent, QComboBox) or isinstance(watched, QMenu))
+            )
+            if follows_owner_opacity and self._window_opacity_supported():
+                owner = parent.window() if parent is not None else self
+                watched.setWindowOpacity(owner.windowOpacity())
         return super().eventFilter(watched, event)
 
     def __getattribute__(self, name: str):

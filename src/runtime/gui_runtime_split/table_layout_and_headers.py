@@ -1,24 +1,12 @@
 """Target module for table/layout/header methods of `BluraySubtitleGUI`."""
-from html import escape
-
-from PyQt6.QtCore import Qt, QTimer, QEvent
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFontMetrics, QPainter, QPalette, QPen
-from PyQt6.QtWidgets import QTableWidget, QComboBox, QDialog, QHeaderView, QGroupBox, QLabel, QVBoxLayout, QSizePolicy, QAbstractItemView, QStyledItemDelegate, QToolTip, QWidget
+from PyQt6.QtWidgets import QTableWidget, QComboBox, QDialog, QHeaderView, QGroupBox, QLabel, QVBoxLayout, QSizePolicy, QAbstractItemView, QWidget
 
 from src.core import BDMV_LABELS, SUBTITLE_LABELS, MKV_LABELS, REMUX_LABELS, ENCODE_REMUX_LABELS, ENCODE_LABELS, \
     ENCODE_REMUX_SP_LABELS, ENCODE_SP_LABELS, DIY_BDMV_LABELS, DIY_SP_LABELS, DIY_REMUX_LABELS, CURRENT_UI_LANGUAGE, \
     MPLS_INFO_LABELS, MPLS_INFO_TRACKS_LABELS
 from .gui_base import BluraySubtitleGuiBase
-
-
-class _FullTextDelegate(QStyledItemDelegate):
-    def helpEvent(self, event, view, option, index):
-        if event.type() == QEvent.Type.ToolTip and index.isValid() and not index.data(Qt.ItemDataRole.ToolTipRole):
-            text = index.data(Qt.ItemDataRole.DisplayRole)
-            if isinstance(text, str) and text:
-                QToolTip.showText(event.globalPos(), f'<qt>{escape(text)}</qt>', view)
-                return True
-        return super().helpEvent(event, view, option, index)
 
 
 class _TableHeightHandle(QWidget):
@@ -142,6 +130,9 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
     def _set_table_headers(self, table: QTableWidget, keys: list[str]):
         table.setProperty('columnKeys', list(keys))
         disc_table = table is getattr(self, 'table1', None)
+        sp_selection_row = getattr(self, '_sp_selection_row', None)
+        if table is getattr(self, 'table3', None) and sp_selection_row is not None:
+            sp_selection_row.setVisible('select' in keys)
         table.setShowGrid(False)
         if table.objectName() in ('table3', 'playlistTable') or isinstance(table.window(), QDialog):
             table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -237,8 +228,6 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
     def _resize_table_columns_for_language(self, table: QTableWidget):
         if table is None:
             return
-        if not isinstance(table.itemDelegate(), _FullTextDelegate):
-            table.setItemDelegate(_FullTextDelegate(table))
         disc_table = table is getattr(self, 'table1', None)
         playlist = table.objectName() == 'playlistTable'
         keys = list(table.property('columnKeys') or [])

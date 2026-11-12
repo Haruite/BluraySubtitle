@@ -4,11 +4,13 @@ import os
 import re
 from typing import Optional
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QModelIndex, QSignalBlocker, Qt
 from PyQt6.QtWidgets import QComboBox, QTableWidgetItem, QTableWidget, QToolButton
 
-from src.core import REMUX_LABELS, DIY_REMUX_LABELS, ENCODE_LABELS, CURRENT_UI_LANGUAGE, ENCODE_SP_LABELS, \
+from src.core import REMUX_LABELS, DIY_REMUX_LABELS, ENCODE_LABELS, ENCODE_REMUX_LABELS, CURRENT_UI_LANGUAGE, ENCODE_SP_LABELS, \
     DIY_SP_LABELS, MPLS_INFO_LABELS
+from src.runtime.gui_runtime_classes.custom_table_widget import READ_ONLY_HINT_ROLE
+from src.runtime.gui_runtime_classes.sp_table_items import SpOutputNameItem, SpSelectionItem
 from src.runtime.services import BluraySubtitle
 from src.exports.utils import parse_time_to_seconds
 from src.runtime.audio_conversion import is_immersive_audio_codec
@@ -22,6 +24,9 @@ from src.runtime.services_split.misc_workflows import (
     _movie_sp_duration_matches_main,
 )
 from .gui_base import BluraySubtitleGuiBase
+
+
+_SP_EPISODE_OUTPUT_KEY_ROLE = Qt.ItemDataRole.UserRole + 5
 
 
 class OutputTracksMixin(BluraySubtitleGuiBase):
@@ -68,37 +73,28 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
         return result
 
     def _get_episode_output_names_from_table2(self) -> list[str]:
-        names: list[str] = []
         function_id = self.get_selected_function_id()
+        labels = self._table2_labels_for_current_mode()
+        if not labels or 'output_name' not in labels:
+            return []
+        column = labels.index('output_name')
+        names = [
+            item.text() if (item := self.table2.item(row, column)) is not None else ''
+            for row in range(self.table2.rowCount())
+        ]
         if function_id == 3:
-            col = REMUX_LABELS.index('output_name')
-        elif function_id == 5:
             return names
-        elif function_id == 4:
-            col = ENCODE_LABELS.index('output_name')
-        else:
+        names = [name.strip() for name in names]
+        if all(names) or self._is_movie_mode():
             return names
-        auto_name_map: dict[int, str] = {}
+        configuration = getattr(self, '_last_configuration_34', None) or getattr(self, 'configuration', None)
+        if not isinstance(configuration, dict) or not configuration:
+            return names
         try:
-            if function_id in (3, 4, 5) and (not self._is_movie_mode()):
-                conf = (
-                    getattr(self, '_last_configuration_34', None)
-                    or getattr(self, 'configuration', None)
-                )
-                if isinstance(conf, dict) and conf:
-                    auto_name_map = self._build_episode_output_name_map(conf)
+            defaults = self._build_episode_output_name_map(configuration)
         except Exception:
-            auto_name_map = {}
-        exact_remux_name = function_id == 3
-        for i in range(self.table2.rowCount()):
-            item = self.table2.item(i, col)
-            text = item.text() if exact_remux_name and item else (
-                item.text().strip() if item and item.text() else ''
-            )
-            if (not text) and i in auto_name_map and not exact_remux_name:
-                text = auto_name_map.get(i, '')
-            names.append(text)
-        return names
+            return names
+        return [name or defaults.get(row, '') for row, name in enumerate(names)]
 
     def _get_episode_subtitle_languages_from_table2(self) -> list[str]:
         langs: list[str] = []
@@ -201,7 +197,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
         if fid == 3:
             return REMUX_LABELS
         if fid == 4:
-            return ENCODE_LABELS
+            return ENCODE_REMUX_LABELS if getattr(self, '_encode_input_mode', 'bdmv') == 'remux' else ENCODE_LABELS
         if fid == 5:
             return DIY_REMUX_LABELS
         return None
@@ -482,16 +478,11 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
             dur_col = ENCODE_SP_LABELS.index('duration')
         except Exception:
             return
-        main_duration_by_bdmv: dict[int, float] = {}
-        if self._is_movie_mode():
-            main_duration_by_bdmv = self._movie_main_duration_map_from_table1()
+        movie_mode = self._is_movie_mode()
+        main_duration_by_bdmv = self._movie_main_duration_map_from_table1() if movie_mode else {}
         for r in range(self.table3.rowCount()):
             sel_item = self.table3.item(r, sel_col)
-            if not sel_item:
-                continue
-            if not (sel_item.flags() & Qt.ItemFlag.ItemIsEnabled):
-                continue
-            if str(sel_item.data(Qt.ItemDataRole.UserRole) or '').strip() == 'user':
+            if not isinstance(sel_item, SpSelectionItem) or not sel_item.default_selected:
                 continue
             try:
                 bdmv_index = int(self.table3.item(r, bdmv_col).text().strip())
@@ -512,83 +503,64 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                 playlist_dir = self._get_playlist_dir_for_bdmv_index(bdmv_index)
                 if playlist_dir:
                     sp_mpls = os.path.normpath(os.path.join(playlist_dir, mpls_file))
+            reason = ''
             if self._sp_covered_by_table2_episode_row(bdmv_index, sp_detail, sp_key, sp_mpls_path=sp_mpls):
-                sel_item.setCheckState(Qt.CheckState.Unchecked)
-                continue
-            if self._is_movie_mode():
-                main_dur = main_duration_by_bdmv.get(bdmv_index)
-                if main_dur is not None:
-                    dur_item = self.table3.item(r, dur_col)
-                    dur_sec = 0.0
-                    if dur_item and dur_item.text().strip():
-                        try:
-                            parts = [p for p in dur_item.text().strip().split(':') if p != '']
-                            for n in parts:
-                                dur_sec = dur_sec * 60.0 + float(n)
-                        except Exception:
-                            dur_sec = 0.0
-                    if _movie_sp_duration_matches_main(dur_sec, main_dur):
-                        sel_item.setCheckState(Qt.CheckState.Unchecked)
+                reason = ('Its timeline is already covered by the main movie.' if movie_mode
+                          else 'Its timeline and selected tracks are already covered by a main output.')
+            elif (main_dur := main_duration_by_bdmv.get(bdmv_index)) is not None:
+                dur_item = self.table3.item(r, dur_col)
+                dur_sec = parse_time_to_seconds(dur_item.text()) if dur_item else 0.0
+                if _movie_sp_duration_matches_main(dur_sec, main_dur):
+                    reason = 'Its duration is close to the main movie.'
+            if reason:
+                with QSignalBlocker(self.table3):
+                    sel_item.set_default(False, reason)
 
-    def _table2_output_name_if_same_m2ts_detail(self, bdmv_index: int, detail_sp: str) -> str:
+    def _episode_output_names_by_detail(self) -> dict[tuple[int, str], str | None]:
+        """Use the same disc and full-detail identity as the SP attachment planner."""
         labels = self._table2_labels_for_current_mode()
-        if not labels or 'm2ts_file_detail' not in labels or 'output_name' not in labels:
-            return ''
-        d_sp = (detail_sp or '').strip()
-        if not d_sp:
-            return ''
-        try:
-            det_col = labels.index('m2ts_file_detail')
-            out_col = labels.index('output_name')
-            bdmv_col = labels.index('bdmv_index')
-        except Exception:
-            return ''
-        bi = int(bdmv_index)
-        matches: list[str] = []
-        for r in range(self.table2.rowCount()):
+        if not labels or 'm2ts_file_detail' not in labels or 'output_name' not in labels or self._is_movie_mode():
+            return {}
+        detail_col = labels.index('m2ts_file_detail')
+        disc_col = labels.index('bdmv_index')
+        names: dict[tuple[int, str], str | None] = {}
+        for row, output_name in enumerate(self._get_episode_output_names_from_table2()):
+            disc_item = self.table2.item(row, disc_col)
+            detail_item = self.table2.item(row, detail_col)
+            if disc_item is None or detail_item is None:
+                continue
             try:
-                it_b = self.table2.item(r, bdmv_col)
-                row_bdmv = int(it_b.text().strip()) if it_b and it_b.text() else 0
-            except Exception:
-                row_bdmv = 0
-            if row_bdmv != bi:
+                disc = int(disc_item.text())
+            except ValueError:
                 continue
-            it_det = self.table2.item(r, det_col)
-            det_t2 = (it_det.text() if it_det and it_det.text() else '').strip()
-            if det_t2 != d_sp:
-                continue
-            it_out = self.table2.item(r, out_col)
-            matches.append((it_out.text() if it_out and it_out.text() else '').strip())
-        return matches[0] if len(matches) == 1 else ''
+            detail = detail_item.text().strip()
+            if disc > 0 and detail:
+                key = (disc, detail)
+                name = output_name.strip()
+                if name and not name.lower().endswith('.mkv'):
+                    name += '.mkv'
+                # Duplicate episode details have no unique attachment target.
+                names[key] = None if key in names else name
+        return names
 
-    def _sp_output_display_path(
-        self,
-        bdmv_index: int,
-        row_r: int,
-        candidate_rel: str,
-        *,
-        detail_override: Optional[str] = None,
-        table2_detail_out_map: Optional[dict[str, str]] = None,
-    ) -> str:
-        cand = (candidate_rel or '').strip().replace('\\', '/')
-        if not cand:
-            return ''
-        if detail_override is not None:
-            detail = (detail_override or '').strip()
-        else:
-            detail = self._m2ts_file_detail_for_sp_table_row(row_r, ENCODE_SP_LABELS).strip()
-        linked = ''
-        if not self._is_movie_mode():
-            if table2_detail_out_map is not None:
-                linked = (table2_detail_out_map.get(detail) or '').strip()
-            else:
-                linked = self._table2_output_name_if_same_m2ts_detail(bdmv_index, detail)
-        if linked:
-            return linked.replace('\\', '/')
-        low = cand.lower()
-        if low.startswith('sps/'):
-            return cand
-        return f'SPs/{cand}'
+    def _on_main_output_name_changed(self, first: QModelIndex, last: QModelIndex, roles: list[int]) -> None:
+        # Row population emits dataChanged without roles. Its normal refresh handles SP membership.
+        if Qt.ItemDataRole.EditRole not in roles or not getattr(self, 'table3', None):
+            return
+        labels = self._table2_labels_for_current_mode()
+        if not labels or 'output_name' not in labels:
+            return
+        output_col = labels.index('output_name')
+        if not first.column() <= output_col <= last.column():
+            return
+        names = self._episode_output_names_by_detail()
+        if not names:
+            return
+        sp_output_col = ENCODE_SP_LABELS.index('output_name')
+        for row in range(self.table3.rowCount()):
+            item = self.table3.item(row, sp_output_col)
+            if item is not None and (name := names.get(item.data(_SP_EPISODE_OUTPUT_KEY_ROLE))) is not None:
+                item.setText(name)
 
     def _refresh_table3_m2ts_file_detail(self, only_bdmv_index: Optional[int] = None):
         if not hasattr(self, 'table3') or not self.table3:
@@ -663,7 +635,10 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
         """
         if not hasattr(self, 'table3') or not self.table3:
             return
-        labels = DIY_SP_LABELS if self.get_selected_function_id() == 5 else ENCODE_SP_LABELS
+        function_id = self.get_selected_function_id()
+        if function_id not in (3, 4, 5) or (function_id == 4 and self._encode_input_mode == 'remux'):
+            return
+        labels = DIY_SP_LABELS if function_id == 5 else ENCODE_SP_LABELS
         if 'output_name' not in labels:
             try:
                 self._refresh_table3_m2ts_file_detail(only_bdmv_index)
@@ -675,6 +650,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
         except Exception:
             pass
         out_col = labels.index('output_name')
+        detail_col = labels.index('m2ts_file_detail')
         sel_col = labels.index('select')
         bdmv_col = labels.index('bdmv_index')
         mpls_col = labels.index('mpls_file')
@@ -695,38 +671,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
         if only_bdmv_index is not None:
             rows_by_vol = {k: v for k, v in rows_by_vol.items() if int(k) == int(only_bdmv_index)}
 
-        t2_by_bdmv: dict[int, dict[str, str]] = {}
-        labels_t2 = self._table2_labels_for_current_mode()
-        try:
-            if labels_t2 and 'm2ts_file_detail' in labels_t2 and 'output_name' in labels_t2:
-                # Must not reuse names `out_col` / `det_col`: table2 REMUX_LABELS indices differ from table3
-                # ENCODE_SP_LABELS (e.g. output_name is 8 vs 7); overwriting broke SP output → tracks column.
-                det_col_t2 = labels_t2.index('m2ts_file_detail')
-                out_col_t2 = labels_t2.index('output_name')
-                bdmv_col_t2 = labels_t2.index('bdmv_index')
-                for r2 in range(self.table2.rowCount()):
-                    it_b = self.table2.item(r2, bdmv_col_t2)
-                    try:
-                        bi = int(it_b.text().strip()) if it_b and it_b.text() else 0
-                    except Exception:
-                        bi = 0
-                    if bi <= 0:
-                        continue
-                    it_det = self.table2.item(r2, det_col_t2)
-                    it_out = self.table2.item(r2, out_col_t2)
-                    det_txt = (it_det.text() if it_det and it_det.text() else '').strip()
-                    out_txt = (it_out.text() if it_out and it_out.text() else '').strip()
-                    if det_txt:
-                        volume_map = t2_by_bdmv.setdefault(bi, {})
-                        if det_txt in volume_map:
-                            # The detail does not identify one episode when duplicate rows exist.
-                            volume_map[det_txt] = ''
-                        else:
-                            volume_map[det_txt] = out_txt
-        except Exception:
-            t2_by_bdmv = {}
-
-        sp_detail_cache: dict[tuple[int, str, str], str] = {}
+        episode_names = self._episode_output_names_by_detail()
         audio_only_cache: dict[tuple[int, str], bool] = {}
         single_audio_ext_cache: dict[tuple[int, str, str], str] = {}
         single_sub_ext_cache: dict[tuple[int, str, str], str] = {}
@@ -741,12 +686,22 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
             for r in rows:
                 out_item = self.table3.item(r, out_col)
                 if not out_item:
-                    out_item = QTableWidgetItem('')
+                    out_item = SpOutputNameItem('')
                     self.table3.setItem(r, out_col, out_item)
 
                 sel_it = self.table3.item(r, sel_col)
-                selected = bool(
-                    sel_it and sel_it.flags() & Qt.ItemFlag.ItemIsEnabled and sel_it.checkState() == Qt.CheckState.Checked)
+                can_select = bool(sel_it and sel_it.flags() & Qt.ItemFlag.ItemIsEnabled)
+                selected = can_select and sel_it.checkState() == Qt.CheckState.Checked
+                out_item.setData(READ_ONLY_HINT_ROLE, 'Select this item first.' if can_select and not selected else None)
+                detail_item = self.table3.item(r, detail_col)
+                episode_key = (bdmv_index, detail_item.text().strip() if detail_item else '')
+                episode_name = episode_names.get(episode_key)
+                was_linked = out_item.data(_SP_EPISODE_OUTPUT_KEY_ROLE) is not None
+                out_item.setData(_SP_EPISODE_OUTPUT_KEY_ROLE, None)
+                flags = out_item.flags() & ~Qt.ItemFlag.ItemIsEditable
+                if selected and episode_name is None:
+                    flags |= Qt.ItemFlag.ItemIsEditable
+                out_item.setFlags(flags)
                 bdmv_vol = f'{bdmv_index:03d}'
                 special = str(out_item.data(Qt.ItemDataRole.UserRole + 2) or '')
                 name_suffix = str(out_item.data(Qt.ItemDataRole.UserRole + 3) or '')
@@ -761,17 +716,14 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                 m2ts_files = [x.strip() for x in m2ts_text.split(',') if x.strip()]
                 m2ts_files_unique = list(dict.fromkeys(m2ts_files))
                 seq += 1
-                detail_key = (int(bdmv_index), str(mpls_file or ''), str(m2ts_text or ''))
-                if detail_key not in sp_detail_cache:
-                    sp_detail_cache[detail_key] = self._m2ts_file_detail_for_sp_table_row(r, labels).strip()
-                detail_row = sp_detail_cache[detail_key]
-
                 def _set_sp_out(rel: str):
-                    out_item.setText(self._sp_output_display_path(
-                        bdmv_index, r, rel,
-                        detail_override=detail_row,
-                        table2_detail_out_map=t2_by_bdmv.get(int(bdmv_index)),
-                    ))
+                    if episode_name is None:
+                        edited_name = out_item.data(Qt.ItemDataRole.UserRole)
+                        path = f'SPs/{rel}' if edited_name is None else edited_name
+                    else:
+                        out_item.setData(_SP_EPISODE_OUTPUT_KEY_ROLE, episode_key)
+                        path = episode_name
+                    out_item.setText(path)
 
                 sp_no = str(seq).zfill(digits)
                 base_name = (
@@ -781,7 +733,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                     m2ts_stem = os.path.splitext(os.path.basename(m2ts_files[0]))[0]
                     base_name = m2ts_stem if single_output_movie else f'BD_Vol_{bdmv_vol}_{m2ts_stem}'
                 # Preserve custom suffix (e.g. chapter range suffix) across track edits and recompute.
-                if (not name_suffix) and mpls_file:
+                if not name_suffix and mpls_file and episode_name is None and not was_linked:
                     try:
                         cur_name = out_item.text().strip().replace('\\', '/')
                         cur_stem = os.path.splitext(cur_name)[0]
@@ -965,11 +917,6 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                         continue
                 _set_sp_out(f'{base_with_suffix}.mkv')
 
-        try:
-            self._refresh_table3_m2ts_file_detail(only_bdmv_index)
-        except Exception:
-            pass
-
     def _all_track_ids_from_streams(self, streams: list[dict[str, object]]) -> tuple[list[str], list[str]]:
         audio: list[str] = []
         subtitle: list[str] = []
@@ -1070,23 +1017,38 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
         except Exception:
             pass
 
+    def _set_sp_selection(self, selected: bool | None) -> None:
+        labels = self.table3.property('columnKeys') or ()
+        if 'select' not in labels:
+            return
+        column = labels.index('select')
+        changed = False
+        with QSignalBlocker(self.table3):
+            for row in range(self.table3.rowCount()):
+                item = self.table3.item(row, column)
+                if isinstance(item, SpSelectionItem) and item.flags() & Qt.ItemFlag.ItemIsEnabled:
+                    previous = item.checkState()
+                    item.apply_selection(selected)
+                    changed = changed or item.checkState() != previous
+        if changed:
+            self._refresh_sp_outputs_after_selection_change()
+
+    def _refresh_sp_outputs_after_selection_change(self) -> None:
+        try:
+            if self.select_all_tracks_checkbox.isChecked():
+                self._apply_select_all_tracks_to_main_and_sp()
+            else:
+                self._recompute_sp_output_names()
+        except Exception as error:
+            self._show_error_dialog(str(error))
+
     def _on_table3_item_changed(self, item: QTableWidgetItem):
         if getattr(self, '_updating_sp_table', False):
             return
-        if not item:
+        function_id = self.get_selected_function_id()
+        if not item or function_id not in (3, 4, 5) or (function_id == 4 and self._encode_input_mode == 'remux'):
             return
-        try:
-            if item.column() == ENCODE_SP_LABELS.index('select'):
-                try:
-                    item.setData(Qt.ItemDataRole.UserRole, 'user')
-                except Exception:
-                    pass
-                self._recompute_sp_output_names()
-                try:
-                    if getattr(self, 'select_all_tracks_checkbox',
-                               None) and self.select_all_tracks_checkbox.isChecked():
-                        self._apply_select_all_tracks_to_main_and_sp()
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        if item.column() == ENCODE_SP_LABELS.index('select'):
+            with QSignalBlocker(self.table3):
+                item.setData(Qt.ItemDataRole.UserRole, 'user')
+            self._refresh_sp_outputs_after_selection_change()

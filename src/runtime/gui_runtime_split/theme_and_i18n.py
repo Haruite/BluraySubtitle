@@ -1,5 +1,5 @@
 """Target module for theme/language methods of `BluraySubtitleGUI`."""
-from PyQt6.QtCore import QRectF, Qt
+from PyQt6.QtCore import QLibraryInfo, QRectF, Qt, QTranslator
 from PyQt6.QtGui import QColor, QFont, QPainter, QPainterPath, QPalette, QPen
 from PyQt6.QtWidgets import QApplication, QLabel, QTabBar, QWidget, QPlainTextEdit, QLineEdit, QGroupBox, \
     QAbstractItemView, QComboBox, QTableWidget, QProxyStyle, QStyle
@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import QApplication, QLabel, QTabBar, QWidget, QPlainTextEd
 from src.core import APP_TITLE
 import src.core.settings as core_settings
 from src.core.i18n import translate_text
+from src.runtime.gui_runtime_classes.custom_table_widget import editable_table_border_color
 from src.runtime.gui_runtime_classes.disc_table_widget import DiscCommandEdit
 from .gui_base import BluraySubtitleGuiBase
 
@@ -34,7 +35,7 @@ _COLORFUL_ACCENT_HOVER = '#6d28d9'
 _COLORFUL_GRADIENT = 'qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #fff7d9,stop:0.55 #fffefa,stop:1 #f4f9ff)'
 _COLORFUL_FUNCTION_COLORS = {1: '#0ea5e9', 2: '#14b8a6', 3: '#f59e0b', 4: '#ef4444', 5: '#8b5cf6'}
 _COLORFUL_TABLE_COLORS = (
-    (('table1', 'chapterTable', 'timingTable'),
+    (('table1', 'playlistTable', 'chapterTable', 'timingTable', 'subtitleEditorTable'),
      '#f1f7ff', '#e6f0ff', '#e4edfc', '#cdddf1', '#60a5fa', '#2563eb'),
     (('table2', 'trackTable'), '#f0fff6', '#e3f8eb', '#e4f3ea', '#cfe4d8', '#34d399', '#059669'),
     (('table3', 'attachmentTable'), '#fff8ee', '#fff0df', '#fceede', '#ead8c3', '#fb923c', '#ea580c'),
@@ -104,6 +105,43 @@ def _table_stylesheet(selectors: tuple[str, ...], surface: str, alternate: str, 
     )
 
 
+def _table_control_colors(selectors: tuple[str, ...], surface: str, edge: str, accent: QColor,
+                          focus: str, dark: bool) -> str:
+    controls = tuple(
+        f'{table} {control}'
+        for table in selectors
+        for control in (
+            'QWidget#vpyPathCell QLineEdit:enabled',
+            'QPushButton:enabled',
+            'QToolButton[checkable="false"]:enabled',
+            'QToolButton#mainPlaylistToggle:enabled:!checked',
+        )
+    )
+    if 'QTableWidget#table2' in selectors:
+        controls += ('QTableWidget#table2 QComboBox[chapterRange="true"]:enabled',)
+    if 'QTableWidget#trackTable' in selectors:
+        controls += ('QTableWidget#trackTable QComboBox:enabled',)
+    fill = _blend_color(surface, accent, 0.15 if dark else 0.11)
+    hover = _blend_color(surface, accent, 0.24 if dark else 0.20)
+    border = _blend_color(edge, accent, 0.27 if dark else 0.19)
+    style = (
+        f'{",".join(controls)}{{background:{fill};border-color:{border};}}'
+        f'{",".join(f"{control}:hover" for control in controls)}{{background:{hover};}}'
+        f'{",".join(f"{control}:focus" for control in controls)}{{border-bottom-color:{focus};}}'
+    )
+    value_tables = tuple(
+        table for table in selectors if table in ('QTableWidget#table2', 'QTableWidget#table3', 'QTableWidget#trackTable')
+    )
+    if value_tables:
+        editors = tuple(f'{table} QLineEdit[tableValueEditor="true"]' for table in value_tables)
+        style += (
+            f'{",".join(value_tables)}{{qproperty-editableCellBorderColor:{border};}}'
+            f'{",".join(editors)}{{border-color:{border};}}'
+            f'{",".join(f"{editor}:focus" for editor in editors)}{{border-bottom-color:{focus};}}'
+        )
+    return style
+
+
 def _shared_stylesheet(palette: QPalette, mode: str) -> str:
     dark = mode == 'dark'
     colorful = mode == 'colorful'
@@ -137,16 +175,34 @@ def _shared_stylesheet(palette: QPalette, mode: str) -> str:
     )
     checked_disabled = _blend_color(surface, QColor(checked_edge), 0.35)
     section = 'QGroupBox[workspaceSection="true"]'
+    subtitle_box = 'QGroupBox[subtitlePathBox="true"]'
     encode_box = 'QGroupBox#encodeBox'
     command_edit = 'QPlainTextEdit#discCommandEdit'
     encode_params = f'{encode_box} > QPlainTextEdit'
+    tab_bar = 'QTabBar#functionTabbar,QDialog QTabBar'
     tab = 'QTabBar#functionTabbar::tab,QDialog QTabBar::tab'
     toggle = 'QTableWidget QToolButton[checkable="true"]'
+    control_accent = QColor({'light': '#78a7d6', 'dark': '#66788b', 'colorful': _COLORFUL_ACCENT}[mode])
+    field_fill, field_edge = ('#2a2a2a', '#3d3d3d') if dark else ('#f8f9fb', '#dce0e6')
+    combo_fill, combo_hover = ('#30353c', '#353b44') if dark else ('#edf4fc', '#e5effa')
+    control_edge = editable_table_border_color(dark)
+    tab_edge = _blend_color(control_edge, QColor(focus), 0.32)
     styles = [
+        f'SelectionTableWidget{{qproperty-editableCellBorderColor:{control_edge};}}'
+        f'QComboBox:enabled,QPushButton:enabled,QToolButton:enabled{{border:1px solid {control_edge};}}'
+        'QComboBox:enabled:focus,QPushButton:enabled:focus,QToolButton:enabled:focus'
+        f'{{border-bottom-color:{focus};}}'
+        'StyledComboBox::drop-down{width:20px;border:0;background:transparent;}'
+        'QLineEdit:enabled:!read-only,QAbstractSpinBox:enabled:!read-only'
+        f'{{border-color:{control_edge};}}'
+        'QLineEdit:enabled:focus:!read-only,QAbstractSpinBox:enabled:focus:!read-only'
+        f'{{border-bottom-color:{focus};}}',
         _table_stylesheet(('QTableWidget',), *table_colors, table_selection, text),
-        f'{section},QDialog QGroupBox{{border:1px solid {edge};border-radius:8px;margin-top:9px;}}'
-        f'{section}{{background:{section_background};}}'
-        f'{section} > QLabel{{background:transparent;}}'
+        f'{section},{subtitle_box},QDialog QGroupBox{{border:1px solid {edge};border-radius:8px;}}'
+        f'{section},QDialog QGroupBox{{margin-top:9px;}}'
+        f'{subtitle_box}{{margin-top:0;}}'
+        f'{section},{subtitle_box},{subtitle_box} > QLineEdit{{background:{section_background};}}'
+        f'{section} > QLabel,QWidget#spSelectionRow{{background:transparent;}}'
         f'{encode_box} > .QWidget,{encode_box} QLabel{{background:transparent;}}'
         f'{section}::title,QDialog QGroupBox::title{{subcontrol-origin:margin;left:10px;padding:0 5px;'
         f'color:{title_color};font-weight:600;}}'
@@ -164,6 +220,7 @@ def _shared_stylesheet(palette: QPalette, mode: str) -> str:
         f'{command_edit},{encode_params},QDialog QPlainTextEdit{{color:{text};'
         f'border:1px solid {edge};border-radius:5px;padding:3px;}}'
         f'{command_edit},{encode_params}{{background:{tinted_editor_background};border-color:{table_colors[3]};}}'
+        f'{command_edit}:enabled{{border-color:{control_edge};}}'
         f'{command_edit}:disabled,{encode_params}:disabled'
         f'{{background:{tinted_editor_disabled_background};color:{muted_text};}}'
         f'QDialog QPlainTextEdit{{background:{editor};}}'
@@ -173,7 +230,11 @@ def _shared_stylesheet(palette: QPalette, mode: str) -> str:
         f'{{border-bottom-color:{focus};}}'
         f'QDialog QTabWidget::pane{{background:{pane};border:1px solid {edge};border-radius:6px;}}'
         'QDialog QScrollArea{background:transparent;border:0;}'
-        f'{tab}{{background:transparent;color:{text};border:0;border-bottom:2px solid {edge};padding:7px 10px;}}'
+        f'{tab_bar}{{qproperty-drawBase:false;background:{pane};border:1px solid {tab_edge};border-radius:5px;}}'
+        f'{tab}{{background:transparent;color:{text};border:0;border-bottom:2px solid transparent;'
+        'padding:7px 10px;margin:2px 0;}'
+        'QTabBar#functionTabbar::tab:first,QDialog QTabBar::tab:first{margin-left:2px;}'
+        'QTabBar#functionTabbar::tab:last,QDialog QTabBar::tab:last{margin-right:2px;}'
         'QTabBar#functionTabbar::tab:hover:!selected,QDialog QTabBar::tab:hover:!selected'
         f'{{background:{tab_hover};}}'
         'QTabBar#functionTabbar::tab:selected,QDialog QTabBar::tab:selected'
@@ -182,21 +243,61 @@ def _shared_stylesheet(palette: QPalette, mode: str) -> str:
         f'QDialog QPushButton:hover,QDialog QPushButton:pressed{{background:{selection};border-color:{focus};}}'
         f'QDialog QPushButton:default,QDialog QPushButton:focus{{border-color:{focus};}}'
         f'QDialog QPushButton:disabled{{background:{alternate};color:{muted_text};border-color:{edge};}}',
+        'QTableWidget QWidget#vpyPathCell{background:transparent;}'
+        'QTableWidget QComboBox,QTableWidget QLineEdit,QTableWidget QPushButton'
+        f'{{border:1px solid transparent;border-radius:4px;color:{text};}}'
+        'QTableWidget QComboBox{padding:2px 6px;margin:1px 2px;}'
+        f'QTableWidget QComboBox:enabled{{background:{combo_fill};}}'
+        f'QTableWidget QComboBox:enabled:hover{{background:{combo_hover};}}'
+        f'QTableWidget QLineEdit{{background:{field_fill};border-color:{field_edge};padding:1px 4px;}}'
+        f'QTableWidget QLineEdit:enabled:focus{{border-bottom-color:{focus};}}'
+        'QTableWidget QPushButton{padding:2px 7px;}'
+        'QTableWidget QToolButton[checkable="false"]{margin:1px 2px;}'
+        'QTableWidget QComboBox:disabled,QTableWidget QLineEdit:disabled'
+        f'{{background:{field_fill};border-color:{field_edge};color:{muted_text};}}'
+        'StyledComboBox QLineEdit,StyledComboBox QLineEdit:disabled,'
+        'QAbstractSpinBox QLineEdit,QAbstractSpinBox QLineEdit:disabled'
+        '{background:transparent;border:0;padding:0;}'
+        'QTableWidget QPushButton:disabled'
+        f'{{background:transparent;border-color:transparent;color:{muted_text};}}',
+        _table_control_colors(('QTableWidget',), table_colors[0], table_colors[3], control_accent, focus, dark),
         execution_button_stylesheet(palette, mode),
     ]
+    if mode == 'light':
+        styles.insert(0, (
+            f'QComboBox,QPushButton,QToolButton{{border:1px solid {field_edge};border-radius:5px;}}'
+            'QComboBox{padding:3px 6px;}'
+            'QPushButton,QToolButton{padding:4px 9px;}'
+            f'QLineEdit,QAbstractSpinBox{{background:#fcfcfd;border:1px solid {field_edge};'
+            'border-radius:5px;padding:2px 4px;}'
+            'QComboBox:disabled,QPushButton:disabled,QToolButton:disabled,QLineEdit:disabled,QAbstractSpinBox:disabled'
+            f'{{background:{field_fill};color:{muted_text};}}'
+            f'QPushButton:enabled:hover,QToolButton:enabled:hover{{background:{selection};}}'
+            f'QPushButton:enabled:pressed,QToolButton:enabled:pressed{{background:{tint};}}'
+        ))
     if colorful:
         for names, base, stripe, heading, border, scrollbar, scrollbar_hover in _COLORFUL_TABLE_COLORS:
             selectors = tuple(f'QTableWidget#{name}' for name in names)
             highlight = _blend_color(base, QColor(scrollbar_hover), 0.16)
             styles.append(_table_stylesheet(selectors, base, stripe, heading, border, highlight, text))
+            styles.append(_table_control_colors(selectors, base, border, QColor(scrollbar), focus, dark))
             handles = tuple(f'{selector} QScrollBar::handle' for selector in selectors)
             styles.append(f'{",".join(handles)}{{background:{scrollbar};}}')
             styles.append(f'{",".join(f"{handle}:hover" for handle in handles)}{{background:{scrollbar_hover};}}')
-        playlist_colors = ('#fbfdff', '#edf5ff', '#d9e9fc', '#b9d0ed')
+        playlist_colors = ('#fbfdff', '#edf5ff', '#eef5ff', '#b9d0ed')
         playlist_selection = _blend_color(playlist_colors[0], QColor('#2563eb'), 0.16)
-        styles.append(_table_stylesheet(('QTableWidget#playlistTable',), *playlist_colors, playlist_selection, text))
-    elif dark:
-        styles.append(f'{encode_box} QCheckBox,{encode_box} QRadioButton{{background:{section_background};}}')
+    else:
+        base, stripe, _, border = table_colors
+        playlist_colors = (base, stripe, '#404956' if dark else '#edf3fa', border)
+        playlist_selection = table_selection
+    styles.append(_table_stylesheet(('QTableWidget#playlistTable',), *playlist_colors, playlist_selection, text))
+    if dark:
+        # Reserve room for the step arrows inside the field border.
+        styles.append(
+            'QAbstractSpinBox{padding-right:18px;}'
+            'QAbstractSpinBox::up-button,QAbstractSpinBox::down-button{position:relative;right:1px;width:16px;}'
+            f'{encode_box} QCheckBox,{encode_box} QRadioButton{{background:{section_background};}}'
+        )
     return ''.join(styles)
 
 
@@ -275,6 +376,8 @@ class _ThemeStyle(QProxyStyle):
 
 
 class ThemeI18nMixin(BluraySubtitleGuiBase):
+    _qt_translator: QTranslator | None = None
+
     def _window_opacity_supported(self) -> bool:
         app = QApplication.instance()
         if not app:
@@ -441,8 +544,8 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                 "QTextBrowser#thirdPartyNoticesBrowser{background:transparent;}"
                 "QLineEdit:disabled,QPlainTextEdit:disabled,QTextEdit:disabled,QAbstractSpinBox:disabled{background:#f3f4f8;color:#8b92a8;border:1px solid #dde0ea;}"
                 "QComboBox{background:rgba(255,255,255,220);color:#1f2330;border:1px solid rgba(214,217,230,220);border-radius:4px;padding:2px 6px;}"
-                "QLineEdit:focus:!read-only,QPlainTextEdit:focus:!read-only,QTextEdit:focus:!read-only,"
-                f"QAbstractSpinBox:focus:!read-only,QComboBox:editable:focus{{border-bottom-color:{_COLORFUL_ACCENT};}}"
+                "QPlainTextEdit:focus:!read-only,QTextEdit:focus:!read-only,"
+                f"QComboBox:editable:focus{{border-bottom-color:{_COLORFUL_ACCENT};}}"
                 "QComboBox:disabled{background:#f3f4f8;color:#8b92a8;border:1px solid #dde0ea;}"
                 f"QComboBox QAbstractItemView{{background:#ffffff;color:#1f2330;selection-background-color:{_COLORFUL_ACCENT};selection-color:#ffffff;}}"
                 "QGroupBox{background:rgba(255,255,255,190);border:1px solid rgba(214,217,230,220);border-radius:8px;margin-top:10px;}"
@@ -463,7 +566,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                 f"QSlider::handle:horizontal{{background:#ffffff;border-color:{_COLORFUL_ACCENT};}}"
                 f"QSlider::handle:horizontal:hover{{border-color:{_COLORFUL_ACCENT_HOVER};}}"
                 "QPushButton,QToolButton{background:rgba(255,255,255,220);color:#1f2330;border:1px solid rgba(214,217,230,220);border-radius:8px;padding:4px 10px;}"
-                f"QPushButton:hover,QToolButton:hover{{border:1px solid {_COLORFUL_ACCENT};}}"
+                f"QPushButton:enabled:hover,QToolButton:enabled:hover{{border-color:{_COLORFUL_ACCENT};}}"
                 "QPushButton:pressed,QToolButton:pressed{background:#eee8f8;}"
                 "QPushButton:disabled,QToolButton:disabled{background:#f3f4f8;color:#8b92a8;border:1px solid #dde0ea;}"
                 "QScrollBar::handle{background:#a78bfa;}"
@@ -472,7 +575,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                 f"QMenu::item:selected{{background:{_COLORFUL_ACCENT};color:#ffffff;}}"
                 "QProgressBar{background:#ffffff;border:1px solid #d6d9e6;border-radius:6px;text-align:center;color:#1f2330;}"
                 f"QProgressBar::chunk{{background:{_COLORFUL_ACCENT};border-radius:6px;}}"
-                f"QToolTip{{background:#1f2330;color:#ffffff;border:1px solid {_COLORFUL_ACCENT};}}"
+                "QToolTip{background:#f6f0ff;color:#302347;border:1px solid #c9b4ec;}"
                 f"{shared_style}"
             )
             return
@@ -481,8 +584,8 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
             "QLineEdit,QPlainTextEdit,QTextEdit,QAbstractSpinBox{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;}"
             "QComboBox{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;padding:2px 6px;}"
             "QComboBox:disabled,QAbstractSpinBox:disabled{background:#242424;color:#9aa0b3;border-color:#343434;}"
-            "QLineEdit:focus:!read-only,QPlainTextEdit:focus:!read-only,QTextEdit:focus:!read-only,"
-            "QAbstractSpinBox:focus:!read-only,QComboBox:editable:focus{border-bottom-color:#5b7fff;}"
+            "QPlainTextEdit:focus:!read-only,QTextEdit:focus:!read-only,"
+            "QComboBox:editable:focus{border-bottom-color:#5b7fff;}"
             "QComboBox QAbstractItemView{background:#2a2a2a;color:#e6e6e6;selection-background-color:#343d54;}"
             "QRadioButton{color:#e6e6e6;}"
             "QRadioButton::indicator{width:14px;height:14px;border-radius:7px;border:2px solid #5b7fff;background:#2a2a2a;}"
@@ -527,6 +630,8 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
 
     def _translate_widget_texts(self):
         for widget in self.findChildren(QWidget):
+            if tooltip := widget.property('toolTipSource'):
+                widget.setToolTip(self.t(tooltip))
             if isinstance(widget, DiscCommandEdit):
                 widget.setAccessibleName(self.t('remux cmd'))
             if widget.objectName() == 'mainPlaylistToggle':
@@ -584,6 +689,18 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
         core_settings.CURRENT_UI_LANGUAGE = code
         self._language_updating = True
         try:
+            if code == 'zh' and self._qt_translator is None:
+                translator = QTranslator(self)
+                translations = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
+                if translator.load('qtbase_zh_CN', translations):
+                    QApplication.installTranslator(translator)
+                    self._qt_translator = translator
+                else:
+                    translator.deleteLater()
+            elif code == 'en' and self._qt_translator is not None:
+                QApplication.removeTranslator(self._qt_translator)
+                self._qt_translator.deleteLater()
+                self._qt_translator = None
             self.setWindowTitle(APP_TITLE)
             self._translate_widget_texts()
             self._refresh_subtitle_suffix_options()

@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from PyQt6.QtCore import QPoint, Qt, QProcess
-from PyQt6.QtWidgets import QWidget, QComboBox, QTableWidgetItem, QTableWidget, QToolButton, QGroupBox, QLabel
+from PyQt6.QtCore import QModelIndex, Qt, QProcess
+from PyQt6.QtWidgets import QWidget, QComboBox, QMenu, QTableWidgetItem, QTableWidget, QToolButton, QGroupBox, QLabel
 
 from src.core.app_config import UiPreferences
 
@@ -54,6 +54,7 @@ class BluraySubtitleGuiBase(QWidget):
         self._app_config_path = None
         self._auto_output_folders = None
         self._bdmv_source_state_path = None
+        self._input_folder_values = None
         self._language_code = None
         self._language_updating = None
         self._last_config_inputs = None
@@ -65,6 +66,7 @@ class BluraySubtitleGuiBase(QWidget):
         self._pending_chapter_combo_index = None
         self._pending_subtitle_folder = None
         self._remux_cmd_refresh_timer = None
+        self._remux_folder_debounce = None
         self._remux_thread = None
         self._remux_worker = None
         self._selected_function_id = None
@@ -309,6 +311,9 @@ class BluraySubtitleGuiBase(QWidget):
     def _cache_available_track_ids(self, key: str, streams: list[dict[str, object]]) -> dict[str, list[str]]:
         raise NotImplementedError
 
+    def _cancel_subtitle_folder_scan(self) -> None:
+        raise NotImplementedError
+
     def _captured_audio_encoding_settings(self) -> AudioEncodingSettings:
         raise NotImplementedError
 
@@ -379,6 +384,9 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _ensure_default_track_config_for_sp_mpls(self, bdmv_index: int, mpls_file: str, sp_key: str) -> None:
+        raise NotImplementedError
+
+    def _episode_output_names_by_detail(self) -> dict[tuple[int, str], str | None]:
         raise NotImplementedError
 
     def _extract_attachment_to_temp_and_open(self, mkv_path: str, attachment_id: str, filename: str):
@@ -527,6 +535,9 @@ class BluraySubtitleGuiBase(QWidget):
     def _on_language_changed(self):
         raise NotImplementedError
 
+    def _on_main_output_name_changed(self, first: QModelIndex, last: QModelIndex, roles: list[int]) -> None:
+        raise NotImplementedError
+
     def _on_play_sp_table_row_clicked(self):
         raise NotImplementedError
 
@@ -644,6 +655,9 @@ class BluraySubtitleGuiBase(QWidget):
     def _refresh_movie_table2(self):
         raise NotImplementedError
 
+    def _refresh_sp_outputs_after_selection_change(self) -> None:
+        raise NotImplementedError
+
     def _refresh_subtitle_suffix_options(self):
         raise NotImplementedError
 
@@ -750,6 +764,9 @@ class BluraySubtitleGuiBase(QWidget):
     def _set_segment_states_for_range(self, mpls_no_ext: str, start_idx: int, end_idx: int, checked: bool):
         raise NotImplementedError
 
+    def _set_sp_selection(self, selected: bool | None) -> None:
+        raise NotImplementedError
+
     def _set_table2_default_column_order(self):
         raise NotImplementedError
 
@@ -783,9 +800,6 @@ class BluraySubtitleGuiBase(QWidget):
     def _show_tracks_dialog(self, title: str, streams: list[dict[str, object]], selected_indexes: Optional[set[str]]=None, pid_lang: Optional[dict[int, str]]=None, source_mkv: Optional[str]=None, convert_map: Optional[dict[str, str]]=None, language_map: Optional[dict[str, str]]=None, lossless_audio_map: Optional[dict[str, str]]=None) -> Optional[set[str]]:
         raise NotImplementedError
 
-    def _snapshot_chapter_segment_sp_entries(self) -> list[dict[str, object]]:
-        raise NotImplementedError
-
     def _sp_covered_by_table2_episode_row(self, bdmv_index: int, sp_detail: str, sp_track_key: str, *, sp_mpls_path: str='') -> bool:
         raise NotImplementedError
 
@@ -793,9 +807,6 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _sp_m2ts_detail_for_entry(self, bdmv_index: int, mpls_file: str, m2ts_files: list[str]) -> str:
-        raise NotImplementedError
-
-    def _sp_output_display_path(self, bdmv_index: int, row_r: int, candidate_rel: str, *, detail_override: Optional[str]=None, table2_detail_out_map: Optional[dict[str, str]]=None) -> str:
         raise NotImplementedError
 
     def _split_m2ts_files(self, text: str) -> list[str]:
@@ -839,9 +850,6 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _table2_m2ts_detail_duration_from_chapter_bounds(self, mpls_selected: str, j1: int, j2: int) -> tuple[str, str, str]:
-        raise NotImplementedError
-
-    def _table2_output_name_if_same_m2ts_detail(self, bdmv_index: int, detail_sp: str) -> str:
         raise NotImplementedError
 
     def _table3_get_sp_entry_for_row(self, row: int) -> dict[str, int | str]:
@@ -916,7 +924,7 @@ class BluraySubtitleGuiBase(QWidget):
     def ensure_default_vpy_file(self):
         raise NotImplementedError
 
-    def ensure_encode_row_widgets(self, row_index: int):
+    def ensure_encode_row_widgets(self, row_index: int, table: QTableWidget | None=None):
         raise NotImplementedError
 
     def generate_subtitle(self, silent_mode: bool=False):
@@ -1012,13 +1020,10 @@ class BluraySubtitleGuiBase(QWidget):
     def on_subtitle_folder_path_change(self):
         raise NotImplementedError
 
-    def on_subtitle_menu(self, pos: QPoint):
+    def on_subtitle_menu(self, menu: QMenu, index: QModelIndex):
         raise NotImplementedError
 
     def on_subtitle_select(self):
-        raise NotImplementedError
-
-    def on_subtitle_table_sorted(self, logicalIndex: int, order: Qt.SortOrder):
         raise NotImplementedError
 
     def on_view_mpls_play_items(self, mpls_path: str) -> None:

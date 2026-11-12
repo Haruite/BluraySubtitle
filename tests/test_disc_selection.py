@@ -88,11 +88,8 @@ class DiscSelectionTests(unittest.TestCase):
                          ['2', '2', '3', '3'])
         table.horizontalHeader().sectionClicked.emit(0)
         self.assertEqual([table.item(row, 0).text() for row in range(3)],
-                         ['/disc-a', '/disc-b', '/disc-c'])
-        table.horizontalHeader().sectionClicked.emit(0)
-        self.assertEqual([table.item(row, 0).text() for row in range(3)],
-                         ['/disc-c', '/disc-b', '/disc-a'])
-        self.assertEqual(table.item(1, 0).checkState(), Qt.CheckState.Unchecked)
+                         ['/disc-b', '/disc-c', '/disc-a'])
+        self.assertEqual(table.item(0, 0).checkState(), Qt.CheckState.Unchecked)
         outputs.close()
         outputs.deleteLater()
         table.close()

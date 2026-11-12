@@ -6,7 +6,7 @@ import traceback
 from functools import partial
 from typing import Optional
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import QSignalBlocker, Qt, QTimer
 from PyQt6.QtWidgets import QComboBox, QTableWidgetItem, QToolButton, QTableWidget
 
 from src.bdmv.chapter import Chapter, episode_tail_trim_plan
@@ -17,6 +17,7 @@ from src.core.i18n import translate_text
 from src.domain import Subtitle
 from src.domain.subtitles import SUBTITLE_EXTENSIONS, list_subtitle_files
 from src.exports.utils import get_time_str, print_exc_terminal, get_index_to_m2ts_and_offset
+from src.runtime.gui_runtime_classes.custom_table_widget import StyledComboBox
 from src.runtime.gui_runtime_classes.file_path_table_widget_item import FilePathTableWidgetItem
 from src.runtime.services import BluraySubtitle
 from .gui_base import BluraySubtitleGuiBase
@@ -98,12 +99,12 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             pass
 
         if remux_mode:
-            self.table2.setColumnCount(len(ENCODE_REMUX_LABELS))
-            self._set_table_headers(self.table2, ENCODE_REMUX_LABELS)
-            for c in range(self.table2.columnCount()):
-                self.table2.setColumnHidden(c, False)
-            self.table3.setColumnCount(len(ENCODE_REMUX_SP_LABELS))
-            self._set_table_headers(self.table3, ENCODE_REMUX_SP_LABELS)
+            self._retire_sp_table_scan()
+            for table, labels in ((self.table2, ENCODE_REMUX_LABELS), (self.table3, ENCODE_REMUX_SP_LABELS)):
+                table.setColumnCount(len(labels))
+                self._set_table_headers(table, labels)
+                for column in range(table.columnCount()):
+                    table.setColumnHidden(column, False)
             self._update_language_combo_enabled_state()
             self.table2.setRowCount(0)
             self.table3.setRowCount(0)
@@ -131,10 +132,12 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             self._update_language_combo_enabled_state()
             try:
                 cfg = getattr(self, '_last_configuration_34', None)
-                if isinstance(cfg, dict) and cfg:
+                if self._bdmv_source_state_path is None:
+                    self.on_bdmv_folder_path_change()
+                elif isinstance(cfg, dict) and cfg:
                     self.on_configuration(cfg, update_sp_table=True)
-                elif self._is_movie_mode():
-                    self._refresh_movie_table2()
+                else:
+                    self._full_refresh_remux_encode_tables_for_mode()
             except Exception:
                 print_exc_terminal()
             try:
@@ -167,7 +170,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             else:
                 self.on_subtitle_folder_path_change()
             return
-        if function_id not in (3, 4, 5):
+        if function_id not in (3, 4, 5) or (function_id == 4 and self._encode_input_mode == 'remux'):
             return
         self._full_refresh_remux_encode_tables_for_mode()
 
@@ -925,8 +928,6 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     }
                 except Exception:
                     pass
-                old_sorting = self.table2.isSortingEnabled()
-                self.table2.setSortingEnabled(False)
                 chapter_cache: dict[str, Chapter] = {}
 
                 def _chapter_cached(mpls_no_ext: str) -> Chapter:
@@ -1074,7 +1075,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                         if output_col >= 0:
                             new_item = QTableWidgetItem(final_text)
                             new_item.setData(Qt.ItemDataRole.UserRole, auto_name)
-                            self.table2.setItem(row_i, output_col, new_item)
+                            self.table2.setItem(row_i, output_col, new_item, editable=True)
 
                         if sub_files_in_folder:
                             idx = first_sub_index
@@ -1096,7 +1097,8 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                         bdmv_item = QTableWidgetItem(str(con['bdmv_index']))
                         bdmv_item.setData(Qt.ItemDataRole.UserRole, str(con.get('selected_mpls') or ''))
                         self.table2.setItem(sub_index, bdmv_col, bdmv_item)
-                        chapter_combo = QComboBox()
+                        chapter_combo = StyledComboBox()
+                        chapter_combo.setProperty('chapterRange', True)
                         chapter = _chapter_cached(str(con['selected_mpls']))
                         rows = sum(map(len, chapter.mark_info.values()))
                         j1 = int(con.get('chapter_index') or 1)
@@ -1171,7 +1173,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                                 final_text = auto_name
                             new_item = QTableWidgetItem(final_text)
                             new_item.setData(Qt.ItemDataRole.UserRole, auto_name)
-                            self.table2.setItem(sub_index, output_col, new_item)
+                            self.table2.setItem(sub_index, output_col, new_item, editable=True)
                         self.ensure_encode_row_widgets(sub_index)
                         if play_col >= 0:
                             btn_play = QToolButton(self.table2)
@@ -1213,7 +1215,6 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                         self._refresh_table1_remux_cmds()
                     except Exception:
                         pass
-                self.table2.setSortingEnabled(old_sorting)
             else:
                 if self._is_movie_mode():
                     return
@@ -1236,12 +1237,12 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
 
                         chapter = Chapter(str(con['selected_mpls']) + '.mpls')
                         rows = sum(map(len, chapter.mark_info.values()))
-                        chapter_combo = QComboBox()
+                        chapter_combo = StyledComboBox()
                         chapter_combo.addItems([str(r + 1) for r in range(rows)])
                         chapter_combo.setCurrentIndex(con['chapter_index'] - 1)
                         chapter_combo.currentIndexChanged.connect(partial(self.on_chapter_combo, subtitle_index))
                         self.table2.setCellWidget(row, chapter_col, chapter_combo)
-                        self.table2.setItem(row, offset_col, QTableWidgetItem(con['offset']))
+                        self.table2.setItem(row, offset_col, QTableWidgetItem(con['offset']), editable=True)
 
                         duration = 0
                         j1 = int(con['chapter_index'])
@@ -1282,10 +1283,20 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             keep_state = True
         function_id = self.get_selected_function_id()
         last_function_id = int(getattr(self, '_selected_function_id', 0) or 0)
-        if (not force) and function_id and last_function_id == function_id:
+        function_changed = last_function_id != function_id
+        if not force and not function_changed:
             return
-        if last_function_id in (3, 4) and last_function_id != function_id:
-            self._retire_sp_table_scan()
+        if function_changed:
+            if last_function_id:
+                self._input_folder_values[last_function_id] = (
+                    self.bdmv_folder_path.text(), self.subtitle_folder_path.text(),
+                )
+            self._remux_folder_debounce.stop()
+            self._cancel_subtitle_folder_scan()
+            # The shared tables are rebuilt even when both pages use the same directory.
+            self._bdmv_source_state_path = None
+            if last_function_id in (3, 4):
+                self._retire_sp_table_scan()
         self._remember_output_folder_for_function(last_function_id)
         # Keep previous behavior: remove temporary default vpy when leaving encode mode.
         if last_function_id == 4 and function_id != 4:
@@ -1300,7 +1311,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 if item and item.text().lower().endswith('.iso') and os.path.isfile(item.text()):
                     self.table1.removeRow(row)
         self._selected_function_id = function_id
-        if last_function_id != function_id:
+        if function_changed:
             self._refresh_function_tabbar_theme()
         self._restore_output_folder_for_function(function_id)
 
@@ -1393,17 +1404,6 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     self._refresh_table1_remux_cmds()
             except Exception:
                 pass
-        if function_id != 4:
-            self._encode_input_mode = 'bdmv'
-            try:
-                if hasattr(self, 'encode_source_bdmv_radio') and self.encode_source_bdmv_radio:
-                    self.encode_source_bdmv_radio.setChecked(True)
-            except Exception:
-                pass
-        try:
-            self._apply_encode_input_mode_ui()
-        except Exception:
-            pass
         if function_id == 4:
             QTimer.singleShot(0, self.ensure_default_vpy_file)
 
@@ -1597,9 +1597,20 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 except Exception:
                     pass
 
-        if not keep_inputs:
-            self.bdmv_folder_path.clear()
-            self.subtitle_folder_path.clear()
+        if function_changed and not keep_inputs:
+            bdmv_path, subtitle_path = self._input_folder_values.get(function_id, ('', ''))
+            # Load sources after both fields and the new table layouts are in place.
+            with QSignalBlocker(self.bdmv_folder_path), QSignalBlocker(self.subtitle_folder_path):
+                self.bdmv_folder_path.setText(bdmv_path)
+                self.subtitle_folder_path.setText(subtitle_path)
+        try:
+            self._apply_encode_input_mode_ui()
+        except Exception:
+            pass
+        if function_changed:
+            if function_id != 4:
+                self.on_bdmv_folder_path_change()
+            self.subtitle_folder_path.textChanged.emit(self.subtitle_folder_path.text())
         try:
             self._reposition_subtitle_path_box()
         except Exception:

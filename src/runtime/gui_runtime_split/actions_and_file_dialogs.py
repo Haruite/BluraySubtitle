@@ -12,7 +12,7 @@ import traceback
 from functools import partial
 from typing import Optional
 
-from PyQt6.QtCore import Qt, QTimer, QThread, QCoreApplication, QPoint, QEventLoop, QObject, QSize
+from PyQt6.QtCore import Qt, QTimer, QThread, QCoreApplication, QModelIndex, QEventLoop, QObject, QSize
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPlainTextEdit, QTextBrowser, QWidget, QHBoxLayout, QPushButton, \
     QApplication, QProgressDialog, QProgressBar, QTableWidgetItem, QTableWidget, QToolButton, QComboBox, \
     QAbstractItemView, QMenu, QMessageBox, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, QFileDialog, QCheckBox, \
@@ -43,7 +43,8 @@ from src.exports.utils import (
 )
 from src.runtime.encode_source import probe_svt_av1_bit_depths
 from src.runtime.sp import SpEntry, media_track_key
-from src.runtime.gui_runtime_classes.custom_table_widget import SelectionTableWidget
+from src.runtime.gui_runtime_classes.custom_table_widget import SelectionTableWidget, StyledComboBox
+from src.runtime.gui_runtime_classes.spin_box import StyledDoubleSpinBox
 from src.runtime.gui_runtime_classes.encode_worker import EncodeWorker
 from src.runtime.encode import EncodeRequest, EncodeRow, EncodeSettings, validate_encode_request
 from src.runtime.gui_runtime_classes.file_path_table_widget_item import FilePathTableWidgetItem
@@ -273,6 +274,12 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         self._apply_window_opacity(dlg)
         dlg.exec()
 
+    def _cancel_subtitle_folder_scan(self) -> None:
+        self._subtitle_scan_debounce.stop()
+        cancel_event = getattr(self, '_subtitle_scan_cancel_event', None)
+        if cancel_event is not None:
+            cancel_event.set()
+
     def _start_subtitle_folder_scan(self):
         if bool(getattr(self, '_close_pending', False)):
             return
@@ -407,7 +414,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 self._subtitle_scan_cancel_event = None
 
         def on_result(payload: object):
-            if not isinstance(payload, dict) or payload.get('seq') != seq:
+            if cancel_event.is_set() or not isinstance(payload, dict) or payload.get('seq') != seq:
                 cleanup()
                 return
             owns_current_scan = (
@@ -430,15 +437,10 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     ).format(subtitle_count=len(rows), row_count=self.table2.rowCount()))
                     return
                 # Attach subtitles to the visible source order without rebuilding its rows.
-                sorting_enabled = self.table2.isSortingEnabled()
-                self.table2.setSortingEnabled(False)
-                try:
-                    subtitle_column = ENCODE_REMUX_LABELS.index('sub_path')
-                    for i in range(self.table2.rowCount()):
-                        path = rows[i][0] if i < len(rows) else ''
-                        self.table2.setItem(i, subtitle_column, FilePathTableWidgetItem(path))
-                finally:
-                    self.table2.setSortingEnabled(sorting_enabled)
+                subtitle_column = ENCODE_REMUX_LABELS.index('sub_path')
+                for i in range(self.table2.rowCount()):
+                    path = rows[i][0] if i < len(rows) else ''
+                    self.table2.setItem(i, subtitle_column, FilePathTableWidgetItem(path))
                 self._resize_table_columns_for_language(self.table2)
                 self._scroll_table_to_primary_column(self.table2)
                 return
@@ -540,12 +542,6 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 except Exception:
                     pass
                 self.table2.cellClicked.connect(self.on_subtitle_select)
-                self.table2.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-                try:
-                    self.table2.customContextMenuRequested.disconnect(self.on_subtitle_menu)
-                except Exception:
-                    pass
-                self.table2.customContextMenuRequested.connect(self.on_subtitle_menu)
                 self._resize_table_columns_for_language(self.table2)
                 self._scroll_table_to_primary_column(self.table2)
 
@@ -562,12 +558,13 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             cleanup()
 
         def on_failed(message: str):
-            owns_current_scan = (
-                getattr(self, '_subtitle_scan_thread', None) is thread
+            report_error = (
+                not cancel_event.is_set()
+                and getattr(self, '_subtitle_scan_thread', None) is thread
                 and getattr(self, '_subtitle_scan_worker', None) is worker
             )
             cleanup()
-            if owns_current_scan:
+            if report_error:
                 self._show_error_dialog(message)
 
         worker.result.connect(on_result)
@@ -615,7 +612,6 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         show_timer.start()
         mkvs = [f for f in os.listdir(folder) if f.lower().endswith('.mkv') and os.path.isfile(os.path.join(folder, f))]
         mkvs.sort(key=lambda x: x.lower())
-        self.table2.setSortingEnabled(False)
         self.table2.setRowCount(len(mkvs))
         for r, name in enumerate(mkvs):
             src = os.path.normpath(os.path.join(folder, name))
@@ -638,7 +634,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 self.table2.setItem(r, dur_col, QTableWidgetItem(''))
             out_item = QTableWidgetItem(name)
             out_item.setData(Qt.ItemDataRole.UserRole, src)
-            self.table2.setItem(r, out_col, out_item)
+            self.table2.setItem(r, out_col, out_item, editable=True)
             btn_play = QToolButton(self.table2)
             btn_play.setText(self.t('play'))
             btn_play.clicked.connect(partial(self.open_file_path, src))
@@ -669,7 +665,6 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         self._resize_table_columns_for_language(self.table2)
         self._scroll_table_to_primary_column(self.table2)
         self._update_language_combo_enabled_state()
-        self.table2.setSortingEnabled(True)
         try:
             show_timer.stop()
             progress_dialog.close()
@@ -719,7 +714,6 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             )
         ]
         media_files.sort(key=lambda filename: filename.lower())
-        self.table3.setSortingEnabled(False)
         self.table3.setRowCount(len(media_files))
         for r, name in enumerate(media_files):
             src = os.path.normpath(os.path.join(sp_folder, name))
@@ -736,7 +730,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 self.table3.setItem(r, dur_col, QTableWidgetItem(''))
             out_item = QTableWidgetItem(name)
             out_item.setData(Qt.ItemDataRole.UserRole, src)
-            self.table3.setItem(r, out_col, out_item)
+            self.table3.setItem(r, out_col, out_item, editable=True)
             btn_play = QToolButton(self.table3)
             btn_play.setText(self.t('play'))
             btn_play.clicked.connect(partial(self.open_file_path, src))
@@ -753,21 +747,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             btn_attachments.setText(self.t('edit'))
             btn_attachments.clicked.connect(partial(self.on_edit_attachments_from_mkv_row, self.table3, src))
             self.table3.setCellWidget(r, attachments_col, btn_attachments)
-            vpy_col = ENCODE_REMUX_SP_LABELS.index('vpy_path')
-            edit_col = ENCODE_REMUX_SP_LABELS.index('edit_vpy')
-            preview_col = ENCODE_REMUX_SP_LABELS.index('preview_script')
-            if not self.table3.cellWidget(r, vpy_col):
-                self.table3.setCellWidget(r, vpy_col, self.create_vpy_path_widget(parent=self.table3))
-            if not self.table3.cellWidget(r, edit_col):
-                btn = QToolButton(self.table3)
-                btn.setText(self.t('edit'))
-                btn.clicked.connect(self.on_edit_sp_vpy_clicked)
-                self.table3.setCellWidget(r, edit_col, btn)
-            if not self.table3.cellWidget(r, preview_col):
-                btn = QToolButton(self.table3)
-                btn.setText(self.t('preview'))
-                btn.clicked.connect(self.on_preview_sp_scripts_clicked)
-                self.table3.setCellWidget(r, preview_col, btn)
+            self.ensure_encode_row_widgets(r, self.table3)
             try:
                 self._ensure_default_track_config_for_mkv(src, sp=True)
             except Exception:
@@ -780,7 +760,6 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 QCoreApplication.processEvents()
         self._resize_table_columns_for_language(self.table3)
         self._scroll_table_to_primary_column(self.table3)
-        self.table3.setSortingEnabled(True)
         try:
             show_timer.stop()
             progress_dialog.close()
@@ -898,7 +877,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         return True
 
     def create_language_combo(self, initial: str = 'chi', parent: Optional[QWidget] = None) -> QComboBox:
-        combo = QComboBox(parent)
+        combo = StyledComboBox(parent)
         combo.setEditable(True)
         combo.addItems(['chi', 'zho', 'jpn', 'eng', 'kor', 'und'])
         auto_lang = 'eng' if getattr(self, '_language_code', CURRENT_UI_LANGUAGE) != 'zh' else 'chi'
@@ -914,6 +893,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 this.setWindowTitle(f"{self.t('Edit Subtitle')}: {path}")
                 layout = QVBoxLayout()
                 this.table_widget = SelectionTableWidget()
+                this.table_widget.setObjectName('subtitleEditorTable')
                 this.table_widget.horizontalHeader().setSortIndicatorShown(True)
                 this.table_widget.setSortingEnabled(True)
                 this.subtitle = Subtitle(path).content
@@ -925,7 +905,6 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     for i in range(len(this.subtitle.events)):
                         index_item = QTableWidgetItem(
                             ((len(str(len(this.subtitle.events)))) - len(str(i + 1))) * '0' + str(i + 1))
-                        index_item.setFlags(index_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                         index_item.setData(Qt.ItemDataRole.UserRole, i)
                         this.table_widget.setItem(i, 0, index_item)
                         for j in range(len(this.keys)):
@@ -936,7 +915,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                                 elif len(str(item)) == 7:
                                     item = f'{str(item)}.000'
                             item = str(item)
-                            this.table_widget.setItem(i, j + 1, QTableWidgetItem(item))
+                            this.table_widget.setItem(i, j + 1, QTableWidgetItem(item), editable=True)
                     this.table_widget.horizontalHeader().setSortIndicator(4, Qt.SortOrder.DescendingOrder)
                     this.setMinimumWidth(1000)
                     this.setMinimumHeight(800)
@@ -947,18 +926,15 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     m_len = len(str(this.subtitle.lines[-1][0]))
                     for i, line in enumerate(this.subtitle.lines):
                         index_item = QTableWidgetItem((m_len - len(str(line[0]))) * '0' + str(line[0]))
-                        index_item.setFlags(index_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                         index_item.setData(Qt.ItemDataRole.UserRole, i)
                         this.table_widget.setItem(i, 0, index_item)
-                        this.table_widget.setItem(i, 1, QTableWidgetItem(line[1]))
-                        this.table_widget.setItem(i, 2, QTableWidgetItem(line[2]))
-                        this.table_widget.setItem(i, 3, QTableWidgetItem(line[3]))
+                        for column in (1, 2, 3):
+                            this.table_widget.setItem(i, column, QTableWidgetItem(line[column]), editable=True)
                     this.table_widget.horizontalHeader().setSortIndicator(2, Qt.SortOrder.DescendingOrder)
                     this.setMinimumWidth(600)
                     this.setMinimumHeight(600)
 
-                this.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-                this.customContextMenuRequested.connect(this.on_subtitle_edit_menu)
+                this.table_widget.cellMenuCreated.connect(this.on_subtitle_edit_menu)
                 this.table_widget.resizeColumnsToContents()
                 layout.addWidget(this.table_widget)
                 this.save_button = QPushButton(self.t('Save'))
@@ -969,21 +945,18 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 this.table_widget.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked)
                 this.table_widget.itemChanged.connect(this.on_subtitle_changed)
 
-            def on_subtitle_edit_menu(this, pos: QPoint):
-                row_indexes = {i.row() for i in this.table_widget.selectionModel().selection().indexes()}
-                menu = QMenu()
-                item = menu.addAction(self.t('Delete'))
-                screen_pos = this.table_widget.mapToGlobal(pos)
-                action = menu.exec(screen_pos)
-                if action == item:
-                    row_indexes = list(row_indexes)
-                    row_indexes.sort()
-                    if row_indexes:
-                        this.altered = True
-                    for i, row_index in enumerate(row_indexes):
+            def on_subtitle_edit_menu(this, menu: QMenu, index: QModelIndex):
+                selected = this.table_widget.selectedIndexes()
+                rows = sorted({i.row() for i in selected} if index in selected else {index.row()})
+
+                def delete_rows():
+                    this.altered = True
+                    for i, row_index in enumerate(rows):
                         source_row = this.table_widget.item(row_index - i, 0).data(Qt.ItemDataRole.UserRole)
                         this.subtitle.delete_lines.add(int(source_row))
                         this.table_widget.removeRow(row_index - i)
+
+                menu.addAction(self.t('Delete'), delete_rows)
 
             def on_subtitle_changed(this, item: QTableWidgetItem):
                 if item.column() == 0:
@@ -1023,6 +996,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 this.altered = False
 
         subtitle_edit_dialog = SubtitleEditDialog()
+        self._apply_window_opacity(subtitle_edit_dialog)
         subtitle_edit_dialog.exec()
 
     def encode_bluray(self):
@@ -1833,28 +1807,28 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         tools_row.setLayout(tools_layout)
 
         tools_layout.addWidget(QLabel(self.t('vspipe source:'), tools_row), 0, 0)
-        self.vspipe_mode_combo = QComboBox(tools_row)
+        self.vspipe_mode_combo = StyledComboBox(tools_row)
         self.vspipe_mode_combo.addItem(self.t('Built-in'), 'bundle')
         self.vspipe_mode_combo.addItem(self.t('System'), 'system')
         tools_layout.addWidget(self.vspipe_mode_combo, 0, 1)
 
         self.encode_tool_label = QLabel(self.t('Encoder tool:'), tools_row)
         tools_layout.addWidget(self.encode_tool_label, 0, 3)
-        self.encode_tool_combo = QComboBox(tools_row)
+        self.encode_tool_combo = StyledComboBox(tools_row)
         self.encode_tool_combo.addItems(['x264', 'x265', 'SvtAv1'])
         self.encode_tool_combo.setCurrentText('x265')
         tools_layout.addWidget(self.encode_tool_combo, 0, 4)
 
         self.encode_source_label = QLabel(self.t('Encoder tool source:'), tools_row)
         tools_layout.addWidget(self.encode_source_label, 1, 0)
-        self.x265_mode_combo = QComboBox(tools_row)
+        self.x265_mode_combo = StyledComboBox(tools_row)
         self.x265_mode_combo.addItem(self.t('Built-in'), 'bundle')
         self.x265_mode_combo.addItem(self.t('System'), 'system')
         tools_layout.addWidget(self.x265_mode_combo, 1, 1)
 
         self.encode_bit_depth_label = QLabel(self.t('Output bit depth:'), tools_row)
         tools_layout.addWidget(self.encode_bit_depth_label, 1, 3)
-        self.encode_bit_depth_combo = QComboBox(tools_row)
+        self.encode_bit_depth_combo = StyledComboBox(tools_row)
         tools_layout.addWidget(self.encode_bit_depth_combo, 1, 4)
 
         self.diy_bd_encode_hint_label = QLabel(
@@ -1881,7 +1855,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
 
         self.x265_params_label = QLabel(self.t('x265 Params:'), tools_row)
         tools_layout.addWidget(self.x265_params_label, 2, 0)
-        self.x265_preset_combo = QComboBox(tools_row)
+        self.x265_preset_combo = StyledComboBox(tools_row)
         tools_layout.addWidget(self.x265_preset_combo, 2, 1)
 
         self.lossless_audio_compression_label = QLabel(
@@ -1889,7 +1863,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             tools_row,
         )
         tools_layout.addWidget(self.lossless_audio_compression_label, 2, 3)
-        self.encode_lossless_audio_combo = QComboBox(tools_row)
+        self.encode_lossless_audio_combo = StyledComboBox(tools_row)
         self.encode_lossless_audio_combo.addItem('FLAC', 'flac')
         self.encode_lossless_audio_combo.addItem('AAC', 'aac')
         self.encode_lossless_audio_combo.addItem('Opus', 'opus')
@@ -1964,7 +1938,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         ) -> QDoubleSpinBox:
             row, column = 1 + position // 3, (position % 3) * 2
             processing_layout.addWidget(QLabel(self.t(label_text), self.vpy_processing_row), row, column)
-            spin = QDoubleSpinBox(self.vpy_processing_row)
+            spin = StyledDoubleSpinBox(self.vpy_processing_row)
             spin.setFixedWidth(110)
             spin.setRange(0.0, maximum)
             spin.setDecimals(2)
@@ -2633,32 +2607,30 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             finally:
                 self.subtitle_folder_path.blockSignals(False)
         self._pending_subtitle_folder = folder
+        self._cancel_subtitle_folder_scan()
         self._update_language_combo_enabled_state()
         if self.get_selected_function_id() == 5 and bool(
                 getattr(self, 'diy_simple_radio', None) and self.diy_simple_radio.isChecked()):
             # Simple DIY subtitle settings are independent from episode configuration.
             self._save_simple_diy_subtitle_config()
             return
-        if hasattr(self, '_subtitle_scan_cancel_event') and self._subtitle_scan_cancel_event:
-            self._subtitle_scan_cancel_event.set()
-        if not folder:
-            self._subtitle_scan_debounce.stop()
-            return
-        self._subtitle_scan_debounce.stop()
-        self._subtitle_scan_debounce.start()
+        if folder:
+            self._subtitle_scan_debounce.start()
 
-    def on_subtitle_menu(self, pos: QPoint):
-        row_indexes = [i.row() for i in self.table2.selectionModel().selection().indexes()]
-        column_indexes = [i.column() for i in self.table2.selectionModel().selection().indexes()]
-        if any(column_index == 1 for column_index in column_indexes):
-            menu = QMenu()
-            item = menu.addAction(self.t('Edit Subtitle'))
-            screen_pos = self.table2.mapToGlobal(pos)
-            action = menu.exec(screen_pos)
-            if action == item:
-                for i, row_index in enumerate(row_indexes):
-                    if column_indexes[i] == 1:
-                        self.edit_subtitle(self.table2.item(row_index, 1).text())
+    def on_subtitle_menu(self, menu: QMenu, index: QModelIndex):
+        path_column = SUBTITLE_LABELS.index('path')
+        if self.get_selected_function_id() != 1 or index.column() != path_column:
+            return
+        selected = self.table2.selectedIndexes()
+        paths = [i.data(Qt.ItemDataRole.DisplayRole) for i in (selected if index in selected else [index])
+                 if i.column() == path_column and i.data(Qt.ItemDataRole.DisplayRole)]
+
+        def edit_subtitles():
+            for path in paths:
+                self.edit_subtitle(path)
+
+        if paths:
+            menu.addAction(self.t('Edit Subtitle'), edit_subtitles)
 
     def on_subtitle_select(self):
         sub_check_state = [self.table2.item(sub_index, 0).checkState().value for sub_index in
@@ -2680,47 +2652,6 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 self.table2.setItem(sub_index, ep_duration_col, None)
                 self.table2.setCellWidget(sub_index, chapter_col, None)
                 self.table2.setItem(sub_index, offset_col, None)
-
-    def on_subtitle_table_sorted(self, logicalIndex: int, order: Qt.SortOrder):
-        if self.get_selected_function_id() == 4 and getattr(self, '_encode_input_mode', 'bdmv') == 'remux':
-            return
-        # Handle path column sorting based on which function is selected
-        # For radio2 (mkv chapters), path is at index 0 (MKV_LABELS) - no configuration rebuild needed
-        # For radio3/4, path is at index 0 (REMUX_LABELS / ENCODE_LABELS)
-        # For others, path is at index 1 (SUBTITLE_LABELS)
-        if self.get_selected_function_id() == 2:
-            if logicalIndex != 0:
-                return
-            # For radio2, just update the duration column after sorting
-            for i in range(self.table2.rowCount()):
-                item = self.table2.item(i, 0)
-                if item and os.path.exists(item.text()):
-                    self.table2.setItem(i, 1, QTableWidgetItem(get_time_str(MKV(item.text()).get_duration())))
-            return
-        else:
-            sort_col = 0 if (self.get_selected_function_id() in (3, 4, 5)) else 1
-            if logicalIndex != sort_col:
-                return
-
-        if self.table2.rowCount() == 0:
-            return
-        try:
-            if self.get_selected_function_id() == 1 and self._is_movie_mode():
-                return
-
-            if self.get_selected_function_id() in (3, 4, 5) and self._is_movie_mode():
-                return
-
-            # Rebuild configuration after sorting
-            if self.get_selected_function_id() in (3, 4, 5):
-                sub_files = [self.table2.item(sub_index, 0).text() for sub_index in range(self.table2.rowCount())
-                             if self.table2.item(sub_index, 0) and self.table2.item(sub_index, 0).text()]
-            else:
-                sub_files = [self.table2.item(sub_index, 1).text() for sub_index in range(self.table2.rowCount())
-                             if self.table2.item(sub_index, 0) and self.table2.item(sub_index, 0).checkState() == Qt.CheckState.Checked]
-            self._apply_configuration_after_subtitle_change(sub_files)
-        except Exception:
-            print_exc_terminal()
 
     def open_file_path(self, path: str):
         path = self._normalize_path_input(path)

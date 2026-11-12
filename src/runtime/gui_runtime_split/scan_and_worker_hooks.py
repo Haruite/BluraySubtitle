@@ -14,9 +14,11 @@ import time
 from typing import Optional
 
 from PyQt6.QtCore import QTimer, QThread, Qt
-from PyQt6.QtWidgets import QApplication, QProgressDialog, QProgressBar, QTableWidgetItem, QToolButton
+from PyQt6.QtWidgets import QApplication, QProgressDialog, QProgressBar, QTableWidget, QTableWidgetItem, QToolButton
 
-from src.core import ENCODE_SP_LABELS, ENCODE_REMUX_LABELS, ENCODE_LABELS, DIY_SP_LABELS
+from src.core import ENCODE_SP_LABELS, DIY_SP_LABELS
+from src.runtime.gui_runtime_classes.custom_table_widget import READ_ONLY_HINT_ROLE
+from src.runtime.gui_runtime_classes.sp_table_items import SpSelectionItem
 from src.runtime.gui_runtime_classes.sp_table_scan_worker import SpTableScanWorker
 from src.runtime.sp import SpEntry
 from .gui_base import BluraySubtitleGuiBase
@@ -324,7 +326,10 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
             return
         if row < 0 or row >= self.table3.rowCount():
             return
-        select_override = None
+        sel_item = self.table3.item(row, sel_col)
+        if not isinstance(sel_item, SpSelectionItem):
+            return
+        selection_default = None
         sp_key = ''
         tracks_payload = {}
         available_tracks = {}
@@ -332,7 +337,7 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
         video_only = False
         allow_tracks_when_disabled = False
         if isinstance(payload, dict):
-            select_override = payload.get('select_override')
+            selection_default = payload.get('selection_default')
             sp_key = str(payload.get('sp_key') or '').strip()
             tracks_payload = payload.get('tracks') or {}
             available_tracks = payload.get('available_tracks') or {}
@@ -341,23 +346,23 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
             allow_tracks_when_disabled = bool(payload.get('allow_tracks_when_disabled') or False)
         try:
             self._updating_sp_table = True
-            sel_item = self.table3.item(row, sel_col)
-            if not sel_item:
-                sel_item = QTableWidgetItem('')
-                self.table3.setItem(row, sel_col, sel_item)
-            user_flag = sel_item.data(Qt.ItemDataRole.UserRole)
+            flags = sel_item.flags()
+            enabled = Qt.ItemFlag.ItemIsEnabled
+            sel_item.setFlags(flags & ~enabled if disabled else flags | enabled)
+            if selection_default is not None:
+                sel_item.set_default(*selection_default)
             if disabled:
-                sel_item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable)
-                sel_item.setCheckState(Qt.CheckState.Unchecked)
-                sel_item.setData(Qt.ItemDataRole.UserRole, 'auto')
-            else:
-                sel_item.setFlags(
-                    Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable)
-                if bool(select_override) and user_flag != 'user':
-                    sel_item.setCheckState(Qt.CheckState.Checked)
+                sel_item.apply_selection(None)
             out_item = self.table3.item(row, out_col)
             if out_item:
                 out_item.setData(Qt.ItemDataRole.UserRole + 2, str(special or ''))
+                selected = sel_item.checkState() == Qt.CheckState.Checked
+                out_item.setData(
+                    READ_ONLY_HINT_ROLE, 'Select this item first.' if not disabled and not selected else None,
+                )
+                if not selected:
+                    out_item.setFlags(out_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    out_item.setText('')
             type_item = self.table3.item(row, type_col)
             if not type_item:
                 type_item = QTableWidgetItem('')
@@ -444,25 +449,34 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
             except Exception:
                 pass
 
-    def ensure_encode_row_widgets(self, row_index: int):
+    def ensure_encode_row_widgets(self, row_index: int, table: QTableWidget | None = None):
         if self.get_selected_function_id() != 4:
             return
-        labels = ENCODE_REMUX_LABELS if getattr(self, '_encode_input_mode', 'bdmv') == 'remux' else ENCODE_LABELS
+        table = self.table2 if table is None else table
+        labels = table.property('columnKeys') or ()
+        if 'vpy_path' not in labels:
+            return
         vpy_col = labels.index('vpy_path')
-        edit_col = labels.index('edit_vpy')
-        preview_col = labels.index('preview_script')
+        if table.cellWidget(row_index, vpy_col) is None:
+            table.setCellWidget(row_index, vpy_col, self.create_vpy_path_widget(parent=table))
 
-        if not self.table2.cellWidget(row_index, vpy_col):
-            self.table2.setCellWidget(row_index, vpy_col, self.create_vpy_path_widget(parent=self.table2))
-
-        if not self.table2.cellWidget(row_index, edit_col):
-            btn = QToolButton(self.table2)
-            btn.setText(self.t('edit'))
-            btn.clicked.connect(self.on_edit_vpy_clicked)
-            self.table2.setCellWidget(row_index, edit_col, btn)
-
-        if not self.table2.cellWidget(row_index, preview_col):
-            btn = QToolButton(self.table2)
-            btn.setText(self.t('preview'))
-            btn.clicked.connect(self.on_preview_script_clicked)
-            self.table2.setCellWidget(row_index, preview_col, btn)
+        is_sp = table is self.table3
+        actions = (
+            (
+                'edit_vpy', 'edit', 'Edit the VPy script with the default associated application.',
+                self.on_edit_sp_vpy_clicked if is_sp else self.on_edit_vpy_clicked,
+            ),
+            (
+                'preview_script', 'preview', 'Preview the VPy script with VSEdit.',
+                self.on_preview_sp_scripts_clicked if is_sp else self.on_preview_script_clicked,
+            ),
+        )
+        for key, label, tooltip, handler in actions:
+            column = labels.index(key)
+            if table.cellWidget(row_index, column) is None:
+                button = QToolButton(table)
+                button.setText(self.t(label))
+                button.setProperty('toolTipSource', tooltip)
+                button.setToolTip(self.t(tooltip))
+                button.clicked.connect(handler)
+                table.setCellWidget(row_index, column, button)

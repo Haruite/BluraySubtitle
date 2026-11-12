@@ -750,6 +750,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
 
     def create_vpy_path_widget(self, initial_path: Optional[str] = None, parent: Optional[QWidget] = None) -> QWidget:
         widget = QWidget(parent or self.table2)
+        widget.setObjectName('vpyPathCell')
         layout = QHBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)

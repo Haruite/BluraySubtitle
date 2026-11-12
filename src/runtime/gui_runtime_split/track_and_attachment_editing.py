@@ -19,7 +19,7 @@ from src.core import find_mkvtoolnix, MKV_EXTRACT_PATH, MKV_PROP_EDIT_PATH, \
     MKV_INFO_PATH, MKV_MERGE_PATH, get_mkvtoolnix_ui_language, ENCODE_SP_LABELS
 from src.exports.utils import run_command, mkv_codec_id_is_dts_family, print_terminal_line
 from src.runtime.audio_conversion import is_lossless_audio_codec
-from src.runtime.gui_runtime_classes.custom_table_widget import SelectionTableWidget
+from src.runtime.gui_runtime_classes.custom_table_widget import SelectionTableWidget, StyledComboBox
 from src.runtime.services import BluraySubtitle
 from src.runtime.sp import SpEntry, media_track_key
 from .gui_base import BluraySubtitleGuiBase
@@ -1260,7 +1260,6 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
         dark = self._theme_mode == 'dark'
         disabled_background = QColor('#30343b' if dark else '#e5e7eb')
         disabled_text = QColor('#9aa0b3' if dark else '#6b7280')
-        language_background = QColor('#293b50' if dark else '#e0f0ff')
         is_mpls_pid_rows = any(bool((s or {}).get('_mpls_pid_row')) for s in (streams or []))
         is_mkvinfo = (
             not is_mpls_pid_rows
@@ -1333,7 +1332,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                     continue
                 if key == 'audio_convert':
                     if self._is_lossless_audio_stream_dict(s):
-                        cb = QComboBox(table)
+                        cb = StyledComboBox(table)
                         for opt in ('flac', 'aac', 'opus'):
                             cb.addItem(opt)
                         idx_text = str(s.get('index', ''))
@@ -1364,7 +1363,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                         table.setItem(r, c, QTableWidgetItem(''))
                     continue
                 if key == 'convert':
-                    cb = QComboBox(table)
+                    cb = StyledComboBox(table)
                     options = self._conversion_options_for_stream(s)
                     cb.addItems(options)
                     idx_text = str(s.get('index', ''))
@@ -1422,12 +1421,9 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
                     item.setBackground(disabled_background)
                     item.setForeground(disabled_text)
-                elif key == 'language':
-                    item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
-                    item.setBackground(language_background)
                 if row_tooltip:
                     item.setToolTip(row_tooltip)
-                table.setItem(r, c, item)
+                table.setItem(r, c, item, editable=append_compatible and key == 'language')
         alternate_mpls_color = QColor('#28323d' if dark else '#edf6ff')
         for row in range(table.rowCount()):
             if streams[row].get('_mpls_append_compatible') is False:

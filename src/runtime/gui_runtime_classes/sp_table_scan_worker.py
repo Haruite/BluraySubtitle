@@ -16,7 +16,7 @@ class SpTableScanWorker(QObject):
     Paths and selection policy are captured before the thread starts. Media
     probes are cached by normalized path so repeated clips across playlists are
     read once per scan. Each result contains only row metadata, classification,
-    and the calculated default track selection; the GUI thread remains the sole
+    and the calculated selection defaults; the GUI thread remains the sole
     owner of widgets and applies the payload through its current worker identity.
     """
 
@@ -138,32 +138,26 @@ class SpTableScanWorker(QObject):
                 mpls_path = str(r.get('mpls_path') or '').strip()
                 sp_key = str(r.get('sp_key') or '').strip()
                 force_disabled = bool(r.get('force_disabled') or False)
-                disabled = False
                 special = ''
-                select_override = None
                 tracks_payload: dict[str, list[str]] = {}
                 available_tracks: dict[str, list[str]] = {}
                 m2ts_type = ''
                 video_only = False
                 allow_tracks_when_disabled = False
 
-                if force_disabled:
-                    disabled = True
-                elif mpls_path:
-                    if not os.path.isfile(mpls_path) or not _streams(mpls_path):
-                        disabled = True
-                elif not m2ts_paths:
-                    disabled = True
-                else:
-                    first = m2ts_paths[0]
-                    if (not first) or (not os.path.exists(first)):
-                        disabled = True
-                    else:
-                        try:
-                            if not _streams(first):
-                                disabled = True
-                        except Exception:
-                            disabled = True
+                unavailable_reason = ''
+                if not force_disabled:
+                    if mpls_path:
+                        if not os.path.isfile(mpls_path):
+                            unavailable_reason = 'The playlist file is missing.'
+                        elif not _streams(mpls_path):
+                            unavailable_reason = 'The playlist has no readable tracks.'
+                    elif not m2ts_paths or not os.path.exists(m2ts_paths[0]):
+                        unavailable_reason = 'No source M2TS file was found.'
+                    elif not _streams(m2ts_paths[0]):
+                        unavailable_reason = 'The M2TS file has no readable tracks.'
+                disabled = force_disabled or bool(unavailable_reason)
+                selection_default = (False, unavailable_reason) if unavailable_reason else None
 
                 if not disabled:
                     try:
@@ -182,8 +176,16 @@ class SpTableScanWorker(QObject):
                             video_only = False
                         if not mpls_path:
                             m2ts_type = classified_type
-                            if m2ts_type in ('private_or_other', 'mixed_non_video'):
+                            if m2ts_type == 'igs_menu':
+                                selection_default = (False, 'IGS menu. Select this row to extract the menu images.')
+                            elif m2ts_type in ('private_or_other', 'mixed_non_video'):
                                 disabled = True
+                                reason = (
+                                    'The M2TS file contains only private or other tracks.'
+                                    if m2ts_type == 'private_or_other'
+                                    else 'The M2TS file has an unsupported mix of non-video tracks.'
+                                )
+                                selection_default = (False, reason)
                                 allow_tracks_when_disabled = True
                         if mpls_path and os.path.exists(mpls_path):
                             try:
@@ -234,43 +236,27 @@ class SpTableScanWorker(QObject):
                                 }
                             except Exception:
                                 tracks_payload = {}
-                        uniq_m2ts_paths = list(dict.fromkeys([p for p in m2ts_paths if p]))
-                        still_candidate = bool(uniq_m2ts_paths)
-                        for p in uniq_m2ts_paths:
-                            if not os.path.exists(p):
-                                still_candidate = False
-                                break
-                            # A lone large clip is normal video in this workflow. Multi-clip
-                            # playlists keep their historical exemption because menu stills
-                            # may be stored in larger individual files.
-                            if len(uniq_m2ts_paths) == 1 and os.path.getsize(p) > 10 * 1024 * 1024:
-                                still_candidate = False
-                                break
-                        if still_candidate:
-                            still_images: list[bool] = []
-                            for p in uniq_m2ts_paths:
-                                if _is_audio_only(p):
-                                    still_images = []
-                                    break
-                                still_images.append(_is_still_image(p))
-                                if not still_images[-1]:
-                                    break
-                            if not disabled:
-                                if len(uniq_m2ts_paths) == 1 and still_images == [True]:
-                                    special = 'single_frame'
-                                    select_override = True
-                                elif (
-                                        len(uniq_m2ts_paths) > 1
-                                        and len(still_images) == len(uniq_m2ts_paths)
-                                        and all(still_images)
-                                ):
-                                    special = 'multi_frame'
-                                    select_override = True
+                        uniq_m2ts_paths = list(dict.fromkeys(p for p in m2ts_paths if p))
+                        # The size cap applies only to a lone clip. Multi-clip menu stills
+                        # can be stored in larger files.
+                        if (
+                            selection_default is None
+                            and uniq_m2ts_paths
+                            and all(os.path.exists(p) for p in uniq_m2ts_paths)
+                            and (len(uniq_m2ts_paths) > 1 or os.path.getsize(uniq_m2ts_paths[0]) <= 10 * 1024 * 1024)
+                            and all(not _is_audio_only(p) and _is_still_image(p) for p in uniq_m2ts_paths)
+                        ):
+                            if len(uniq_m2ts_paths) == 1:
+                                special = 'single_frame'
+                                selection_default = (True, 'The scan detected a single still image.')
+                            else:
+                                special = 'multi_frame'
+                                selection_default = (True, 'The scan detected a sequence of still images.')
                     except Exception:
                         pass
 
                 self.result.emit(row, bool(disabled), str(special or ''), {
-                    'select_override': select_override,
+                    'selection_default': selection_default,
                     'sp_key': sp_key,
                     'tracks': tracks_payload,
                     'available_tracks': available_tracks,

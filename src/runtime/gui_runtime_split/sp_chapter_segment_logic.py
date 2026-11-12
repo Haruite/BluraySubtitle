@@ -17,6 +17,8 @@ from src.exports.utils import (
     print_exc_terminal,
 )
 from src.runtime.services import BluraySubtitle
+from src.runtime.gui_runtime_classes.custom_table_widget import StyledComboBox
+from src.runtime.gui_runtime_classes.sp_table_items import SpOutputNameItem, SpSelectionItem
 from src.runtime.sp import SpEntry, media_track_key
 from src.runtime.services_split.misc_workflows import (
     _movie_main_duration_by_bdmv_from_mpls_paths,
@@ -27,6 +29,14 @@ from .gui_base import BluraySubtitleGuiBase
 # Skip full M2TS duration probe for tiny STREAM orphans (menus / bumps); avoids hundreds of
 # synchronous parses on large discs during refresh_sp_table (UI thread).
 _SP_ORPHAN_M2TS_SKIP_DURATION_BYTES = 512 * 1024
+
+
+def _playlist_sp_default(clip_count: int, duration: float) -> tuple[bool, str]:
+    if clip_count >= 3:
+        return True, 'The playlist contains at least three distinct clips.'
+    if duration >= 30.0:
+        return True, 'The playlist meets the 30-second duration threshold.'
+    return False, 'The playlist has fewer than three distinct clips and is shorter than 30 seconds.'
 
 
 class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
@@ -43,8 +53,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
         except Exception:
             return
         mpls_file = os.path.basename(mpls_path)
-        unique_m2ts = len(set(m2ts_files))
-        default_selected = True if unique_m2ts >= 3 else bool(duration >= 30.0)
+        default_selected, reason = _playlist_sp_default(len(set(m2ts_files)), duration)
 
         sel_col = ENCODE_SP_LABELS.index('select')
         bdmv_col = ENCODE_SP_LABELS.index('bdmv_index')
@@ -75,12 +84,14 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
 
         try:
             self._updating_sp_table = True
-            sel_item = self.table3.item(target_row, sel_col) or QTableWidgetItem('')
-            sel_item.setFlags(
-                Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable)
-            if sel_item.data(Qt.ItemDataRole.UserRole) != 'user':
-                sel_item.setCheckState(Qt.CheckState.Checked if default_selected else Qt.CheckState.Unchecked)
-            self.table3.setItem(target_row, sel_col, sel_item)
+            sel_item = self.table3.item(target_row, sel_col)
+            if isinstance(sel_item, SpSelectionItem):
+                sel_item.setFlags(sel_item.flags() | Qt.ItemFlag.ItemIsEnabled)
+                sel_item.set_default(default_selected, reason)
+            else:
+                self.table3.setItem(target_row, sel_col, SpSelectionItem(
+                    default_selected, reason, disc_root=self._get_disc_root_for_bdmv_index(bdmv_index),
+                ))
             self.table3.setItem(target_row, bdmv_col, QTableWidgetItem(str(bdmv_index)))
             self.table3.setItem(target_row, mpls_col, QTableWidgetItem(mpls_file))
             self.table3.setItem(target_row, m2ts_col, QTableWidgetItem(','.join(m2ts_files)))
@@ -88,7 +99,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             self.table3.setItem(target_row, type_col, QTableWidgetItem(''))
             self.table3.setItem(target_row, dur_col, QTableWidgetItem(get_time_str(duration)))
             if not self.table3.item(target_row, out_col):
-                self.table3.setItem(target_row, out_col, QTableWidgetItem(''))
+                self.table3.setItem(target_row, out_col, SpOutputNameItem(''))
             self.table3.setItem(target_row, tracks_col, None)
             btn_tracks = QToolButton(self.table3)
             btn_tracks.setText(self.t('edit tracks'))
@@ -250,11 +261,13 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     tracks_col = ENCODE_SP_LABELS.index('tracks')
                     play_col = ENCODE_SP_LABELS.index('play')
 
-                    # Select checkbox
-                    sel_item = QTableWidgetItem()
-                    sel_item.setFlags(sel_item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
-                    sel_item.setCheckState(Qt.CheckState.Checked if duration >= 30.0 else Qt.CheckState.Unchecked)
-                    self.table3.setItem(row, sel_col, sel_item)
+                    default_selected = duration >= 30.0
+                    reason = ('This segment was excluded from the main output and is at least 30 seconds long.'
+                              if default_selected else
+                              'This segment was excluded from the main output and is shorter than 30 seconds.')
+                    self.table3.setItem(row, sel_col, SpSelectionItem(
+                        default_selected, reason, disc_root=self._get_disc_root_for_bdmv_index(bdmv_index),
+                    ))
 
                     self.table3.setItem(row, bdmv_col, QTableWidgetItem(str(bdmv_index)))
                     self.table3.setItem(row, mpls_col, QTableWidgetItem(os.path.basename(mpls_path)))
@@ -262,7 +275,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     self.table3.setItem(row, det_col, QTableWidgetItem(''))
                     self.table3.setItem(row, type_col, QTableWidgetItem(''))
                     self.table3.setItem(row, dur_col, QTableWidgetItem(get_time_str(duration)))
-                    out_item = QTableWidgetItem(out_name)
+                    out_item = SpOutputNameItem(out_name)
                     out_item.setData(Qt.ItemDataRole.UserRole + 3, suffix)
                     out_item.setData(Qt.ItemDataRole.UserRole + 4, 'chapter_segment_sp')
                     self.table3.setItem(row, out_col, out_item)
@@ -308,12 +321,6 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
         # Make table3 visible after adding entries
         if self.table3.rowCount() > 0:
             self.table3_section.setVisible(True)
-
-        # Refresh sorting after adding entries (do not auto-scroll).
-        if hasattr(self, 'table3') and self.table3:
-            was_sorting = self.table3.isSortingEnabled()
-            self.table3.setSortingEnabled(False)
-            self.table3.setSortingEnabled(was_sorting)
 
     def _table2_m2ts_detail_duration_from_chapter_bounds(
         self, mpls_selected: str, j1: int, j2: int,
@@ -554,7 +561,8 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
 
     def _build_end_chapter_combo(self, rows: int, has_beginning: bool, start_value: int,
                                  selected_value: int = 0) -> QComboBox:
-        combo = QComboBox()
+        combo = StyledComboBox()
+        combo.setProperty('chapterRange', True)
         for v in range(1, rows + 2):
             combo.addItem(self._chapter_label_text(v, rows, has_beginning, for_end=True), v)
         self._apply_end_combo_min_constraint(combo, max(1, int(start_value) + 1))
@@ -599,7 +607,8 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                 rows = 0
         ending_val = max(1, rows + 1)
 
-        start_combo = QComboBox()
+        start_combo = StyledComboBox()
+        start_combo.setProperty('chapterRange', True)
         if rows > 0:
             start_combo.addItem(self._chapter_label_text(1, rows, has_beginning, for_end=False), 1)
         else:
@@ -825,7 +834,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
 
     @staticmethod
     def _is_auto_chapter_segment_sp_item(out_item: Optional[QTableWidgetItem]) -> bool:
-        """SP rows derived from main-mpls chapter inclusion (checkbox / end_at_chapter tail). Not merged from refresh snapshot."""
+        """Identify SP rows regenerated from the main playlist's chapter selection."""
         if not out_item:
             return False
         if out_item.data(Qt.ItemDataRole.UserRole + 4) == 'chapter_segment_sp':
@@ -1077,59 +1086,6 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
         for i in range(s, e + 1):
             states[i - 1] = bool(checked)
         self._chapter_checkbox_states[mpls_path] = states
-
-    def _snapshot_chapter_segment_sp_entries(self) -> list[dict[str, object]]:
-        """Preserve ad-hoc SP rows across refresh; auto chapter-segment rows are re-applied via _sync_chapter_checkbox_sp_rows_all_volumes."""
-        if not hasattr(self, 'table3') or not self.table3:
-            return []
-        if self.table3.columnCount() != len(ENCODE_SP_LABELS):
-            return []
-        try:
-            sel_col = ENCODE_SP_LABELS.index('select')
-            bdmv_col = ENCODE_SP_LABELS.index('bdmv_index')
-            mpls_col = ENCODE_SP_LABELS.index('mpls_file')
-            m2ts_col = ENCODE_SP_LABELS.index('m2ts_file')
-            dur_col = ENCODE_SP_LABELS.index('duration')
-            out_col = ENCODE_SP_LABELS.index('output_name')
-        except Exception:
-            return []
-        out: list[dict[str, object]] = []
-        for r in range(self.table3.rowCount()):
-            out_item = self.table3.item(r, out_col)
-            if not out_item:
-                continue
-            if self._is_auto_chapter_segment_sp_item(out_item):
-                continue
-            suffix = str(out_item.data(Qt.ItemDataRole.UserRole + 3) or '').strip()
-            if not suffix:
-                continue
-            try:
-                bdmv_index = int(self.table3.item(r, bdmv_col).text().strip())
-            except Exception:
-                continue
-            mpls_item = self.table3.item(r, mpls_col)
-            m2ts_item = self.table3.item(r, m2ts_col)
-            mpls_file = mpls_item.text().strip() if mpls_item and mpls_item.text() else ''
-            m2ts_text = m2ts_item.text().strip() if m2ts_item and m2ts_item.text() else ''
-            m2ts_files = [x.strip() for x in m2ts_text.split(',') if x.strip()]
-            dur_item = self.table3.item(r, dur_col)
-            dur = parse_time_to_seconds(dur_item.text() if dur_item else '')
-            sel_item = self.table3.item(r, sel_col)
-            default_selected = bool(sel_item and sel_item.checkState() == Qt.CheckState.Checked)
-            is_disabled = bool((not sel_item) or (not (sel_item.flags() & Qt.ItemFlag.ItemIsEnabled)))
-            special = str(out_item.data(Qt.ItemDataRole.UserRole + 2) or '')
-            out.append({
-                'bdmv_index': bdmv_index,
-                'mpls_file': mpls_file,
-                'm2ts_files': m2ts_files,
-                'duration': dur,
-                'default_selected': default_selected,
-                'disabled': is_disabled,
-                'special': special,
-                'preserve_chapter_sp': True,
-                'name_suffix': suffix,
-            })
-        return out
 
     def _sync_chapter_checkbox_sp_for_mpls(self, mpls_path: str, bdmv_index: int):
         if self.get_selected_function_id() not in (3, 4, 5):
@@ -1396,17 +1352,16 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                             selected_main_by_bdmv[bdmv_index].append(p)
 
             entries: list[dict[str, object]] = []
+            movie_mode = self._is_movie_mode()
             main_duration_by_bdmv: dict[int, float] = {}
-            if self._is_movie_mode():
+            if movie_mode:
                 main_duration_by_bdmv = _movie_main_duration_by_bdmv_from_mpls_paths(
                     selected_main_by_bdmv)
             whole_main_by_detail: dict[int, dict[str, list[str]]] = {}
             episode_main_by_detail: dict[int, dict[str, list[str]]] = {}
             whole_main_track_info: dict[str, dict[str, object]] = {}
-            whole_main_match_keys: set[tuple[int, str, str]] = set()
-            exact_episode_match_keys: set[tuple[int, str, str]] = set()
             self._whole_main_match_track_info_by_main = whole_main_track_info
-            if function_id in (3, 4) and not self._is_movie_mode():
+            if function_id in (3, 4) and not movie_mode:
                 for bdmv_index, main_paths in selected_main_by_bdmv.items():
                     for main_path in main_paths:
                         try:
@@ -1535,9 +1490,14 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                             all_mpls_m2ts.add(bn)
                     if os.path.basename(mpls_file_path) in selected_main_basename_set:
                         continue
-                    m2ts_set = set(m2ts_files)
-                    default_selected = True
                     dur = ch.get_total_time()
+                    try:
+                        dur_for_select = float(ch.get_total_time_no_repeat())
+                    except Exception:
+                        dur_for_select = float(dur)
+                    default_selected, reason = _playlist_sp_default(len(set(m2ts_files)), dur_for_select)
+                    if not default_selected and dur >= 30.0:
+                        reason = 'The playlist is shorter than 30 seconds when repeated clips are counted once.'
                     try:
                         sp_detail_saved = self._sp_m2ts_detail_for_entry(
                             bdmv_index, os.path.basename(mpls_file_path), m2ts_files)
@@ -1550,18 +1510,13 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                         bdmv_index, {}
                     ).get(sp_detail_saved, []) if sp_detail_saved else []
                     exact_episode_has_new_tracks = False
-                    entry_key = (
-                        bdmv_index,
-                        os.path.basename(mpls_file_path),
-                        ','.join(m2ts_files),
-                    )
                     # These are independent rules. A complete match reuses the one main remux.
                     # It exposes non-colliding logical tracks from the alternate MPLS there.
                     # Only a non-whole match may use the post-split, single-episode append path.
                     # A range spanning several episodes matches neither rule.
                     if len(matching_whole_main_paths) == 1:
-                        whole_main_match_keys.add(entry_key)
                         default_selected = False
+                        reason = 'Matches a complete main playlist. Additional tracks are handled in the main remux.'
                         try:
                             _register_whole_main_match_tracks(
                                 matching_whole_main_paths[0], ch,
@@ -1570,11 +1525,6 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                             print_exc_terminal()
                     elif len(matching_episode_main_paths) == 1:
                         matching_main_path = matching_episode_main_paths[0]
-                        exact_episode_match_keys.add((
-                            bdmv_index,
-                            os.path.basename(mpls_file_path),
-                            ','.join(m2ts_files),
-                        ))
                         try:
                             exact_episode_has_new_tracks = (
                                 _episode_attachment_has_new_tracks(
@@ -1585,20 +1535,13 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                             print_exc_terminal()
                         # An exact SP row is useful only when it can append a new physical audio or subtitle track.
                         default_selected = exact_episode_has_new_tracks
-                    try:
-                        dur_for_select = float(ch.get_total_time_no_repeat())
-                    except Exception:
-                        dur_for_select = float(dur)
-                    if (
-                            not exact_episode_has_new_tracks
-                            and len(m2ts_set) < 3
-                            and dur_for_select < 30
-                    ):
-                        default_selected = False
+                        reason = ('Matches one episode and adds audio or subtitle tracks.' if default_selected
+                                  else 'Matches one episode with no additional audio or subtitle tracks found.')
                     main_dur = main_duration_by_bdmv.get(bdmv_index)
-                    if (default_selected and self._is_movie_mode() and main_dur is not None
+                    if (default_selected and movie_mode and main_dur is not None
                             and _movie_sp_duration_matches_main(float(dur), main_dur)):
                         default_selected = False
+                        reason = 'Its duration is close to the main movie.'
                     if default_selected and not exact_episode_has_new_tracks:
                         try:
                             sp_entry = {
@@ -1612,6 +1555,8 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                                 bdmv_index, sp_detail_saved, sp_key, sp_mpls_path=mpls_file_path,
                             ):
                                 default_selected = False
+                                reason = ('Its timeline is already covered by the main movie.' if movie_mode else
+                                          'Its timeline and selected tracks are already covered by a main output.')
                         except Exception:
                             pass
                     if not sp_detail_saved:
@@ -1625,11 +1570,9 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                         'mpls_file': os.path.basename(mpls_file_path),
                         'm2ts_files': m2ts_files,
                         'm2ts_file_detail': sp_detail_saved,
-                        'm2ts_type': '',
                         'duration': dur,
                         'default_selected': bool(default_selected),
-                        'disabled': False,
-                        'special': '',
+                        'default_reason': reason,
                     })
 
                 # Add remaining m2ts not referenced by any playlist mpls.
@@ -1646,21 +1589,30 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                             continue
                         m2ts_path = os.path.join(stream_folder, sf)
                         try:
-                            sz = os.path.getsize(m2ts_path)
-                        except Exception:
-                            sz = 0
-                        if sz < _SP_ORPHAN_M2TS_SKIP_DURATION_BYTES:
-                            dur = 0.0
+                            size = os.path.getsize(m2ts_path)
+                        except OSError:
+                            size = None
+                        dur = 0.0
+                        reason = 'No usable duration was found for this standalone M2TS.'
+                        if size is None:
+                            reason = 'The size of this standalone M2TS could not be read.'
+                        elif size < _SP_ORPHAN_M2TS_SKIP_DURATION_BYTES:
+                            reason = 'This standalone M2TS is too small for duration-based selection.'
                         else:
                             try:
                                 dur = BluraySubtitle._m2ts_duration_90k(m2ts_path) / 90000.0
                             except Exception:
-                                dur = 0.0
-                        orphan_selected = bool(dur >= 30.0)
+                                pass
+                        orphan_selected = dur >= 30.0
+                        if orphan_selected:
+                            reason = 'This standalone M2TS is at least 30 seconds long.'
+                        elif dur > 0.0:
+                            reason = 'This standalone M2TS is shorter than 30 seconds.'
                         main_dur = main_duration_by_bdmv.get(bdmv_index)
-                        if (orphan_selected and self._is_movie_mode() and main_dur is not None
+                        if (orphan_selected and movie_mode and main_dur is not None
                                 and _movie_sp_duration_matches_main(float(dur), main_dur)):
                             orphan_selected = False
+                            reason = 'Its duration is close to the main movie.'
                         orphan_detail = ''
                         if orphan_selected:
                             try:
@@ -1676,6 +1628,8 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                                     bdmv_index, orphan_detail, sp_key, sp_mpls_path='',
                                 ):
                                     orphan_selected = False
+                                    reason = ('Its timeline is already covered by the main movie.' if movie_mode else
+                                              'Its timeline and selected tracks are already covered by a main output.')
                             except Exception:
                                 pass
                         if not orphan_detail:
@@ -1688,13 +1642,9 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                             'mpls_file': '',
                             'm2ts_files': [sf],
                             'm2ts_file_detail': orphan_detail,
-                            'm2ts_type': '',
                             'duration': dur,
-                            # Zero-duration m2ts (typically IGS menu streams) should stay optional:
-                            # keep row enabled, but default to unchecked.
                             'default_selected': orphan_selected,
-                            'disabled': False,
-                            'special': '',
+                            'default_reason': reason,
                         })
 
             manual_main_keys = getattr(self, '_manual_main_track_selection_keys', None)
@@ -1754,40 +1704,17 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     ','.join([str(x) for x in (e.get('m2ts_files') or [])]),
                 )
 
-            def _sp_entry_key_tuple(e: dict[str, object]):
-                return (
-                    int(e.get('bdmv_index') or 0),
-                    str(e.get('mpls_file') or ''),
-                    ','.join([str(x) for x in (e.get('m2ts_files') or [])]),
-                )
-
             entries = sorted(entries, key=_sp_entry_sort_key)
-            preserved_sp = self._snapshot_chapter_segment_sp_entries()
-            if preserved_sp:
-                by_key: dict[tuple[int, str, str], dict[str, object]] = {}
-                for e in entries:
-                    by_key[_sp_entry_key_tuple(e)] = e
-                for pe in preserved_sp:
-                    k = _sp_entry_key_tuple(pe)
-                    # Do not resurrect stale rows after main MPLS deselection.
-                    # Preserve only rows that still exist in current computed entries.
-                    if k in by_key:
-                        by_key[k] = pe
-                entries = sorted(by_key.values(), key=_sp_entry_sort_key)
 
-
-            old_sorting = self.table3.isSortingEnabled()
             had_rows = self.table3.rowCount() > 0
             old_current_row = self.table3.currentRow()
             old_current_col = self.table3.currentColumn()
             old_h_scroll = self.table3.horizontalScrollBar().value() if self.table3.horizontalScrollBar() else 0
             old_v_scroll = self.table3.verticalScrollBar().value() if self.table3.verticalScrollBar() else 0
-            self.table3.setSortingEnabled(False)
             try:
                 self._updating_sp_table = True
-                old_name_map: dict[tuple[int, str, str], tuple[str, Optional[str], str]] = {}
-                row_cache: dict[tuple[int, str, str], dict[str, object]] = {}
-                row_cache_out: dict[tuple[int, str, str, str], dict[str, object]] = {}
+                # A disc's row number changes on reorder, but its source paths stay the same.
+                row_cache: dict[tuple[str, str], dict[str, object]] = {}
                 sel_col = ENCODE_SP_LABELS.index('select')
                 bdmv_col = ENCODE_SP_LABELS.index('bdmv_index')
                 mpls_col = ENCODE_SP_LABELS.index('mpls_file')
@@ -1797,132 +1724,60 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                 dur_col = ENCODE_SP_LABELS.index('duration')
                 out_col = ENCODE_SP_LABELS.index('output_name')
                 for r in range(self.table3.rowCount()):
-                    bdmv_item = self.table3.item(r, bdmv_col)
+                    sel_item = self.table3.item(r, sel_col)
+                    out_item = self.table3.item(r, out_col)
+                    if (not isinstance(sel_item, SpSelectionItem) or not sel_item.disc_root
+                            or self._is_auto_chapter_segment_sp_item(out_item)):
+                        continue
                     mpls_item = self.table3.item(r, mpls_col)
                     m2ts_item = self.table3.item(r, m2ts_col)
-                    out_item = self.table3.item(r, out_col)
-                    sel_item_old = self.table3.item(r, sel_col)
-                    if bdmv_item and out_item and out_item.text():
-                        key = (int(bdmv_item.text() or 0), mpls_item.text() if mpls_item else '',
-                               m2ts_item.text() if m2ts_item else '')
-                        old_name_map[key] = (
-                            out_item.text().strip(),
-                            out_item.data(Qt.ItemDataRole.UserRole) if out_item else None,
-                            str(out_item.data(Qt.ItemDataRole.UserRole + 2) or '').strip(),
-                        )
-                        cache_item = {
-                            'selected': bool(
-                                sel_item_old and sel_item_old.flags() & Qt.ItemFlag.ItemIsEnabled and sel_item_old.checkState() == Qt.CheckState.Checked),
-                            'user_mark': str(sel_item_old.data(Qt.ItemDataRole.UserRole) or '') if sel_item_old else '',
-                            'output_text': out_item.text().strip() if out_item else '',
-                            'special': str(out_item.data(Qt.ItemDataRole.UserRole + 2) or '') if out_item else '',
-                            'suffix': str(out_item.data(Qt.ItemDataRole.UserRole + 3) or '') if out_item else '',
-                            'm2ts_type': (
-                                self.table3.item(r, type_col).text().strip() if self.table3.item(r, type_col) else ''),
-                        }
-                        row_cache[key] = cache_item
-                        row_cache_out[(key[0], key[1], key[2], cache_item['output_text'])] = cache_item
+                    type_item = self.table3.item(r, type_col)
+                    source_name = (mpls_item.text() if mpls_item else '') or (m2ts_item.text() if m2ts_item else '')
+                    row_cache[(sel_item.disc_root, source_name)] = {
+                        'manual_selection': (
+                            sel_item.checkState() == Qt.CheckState.Checked
+                            if sel_item.data(Qt.ItemDataRole.UserRole) == 'user' else None
+                        ),
+                        'output_text': out_item.text().strip() if out_item else '',
+                        'edited_name': out_item.data(Qt.ItemDataRole.UserRole) if out_item else None,
+                        'special': out_item.data(Qt.ItemDataRole.UserRole + 2) if out_item else '',
+                        'suffix': out_item.data(Qt.ItemDataRole.UserRole + 3) if out_item else '',
+                        'm2ts_type': type_item.text().strip() if type_item else '',
+                    }
 
                 self.table3.setRowCount(len(entries))
                 for i, e in enumerate(entries):
                     bdmv_index = int(e.get('bdmv_index') or 0)
                     mpls_file = str(e.get('mpls_file') or '')
                     m2ts_files = [str(x) for x in (e.get('m2ts_files') or [])]
-                    m2ts_type = str(e.get('m2ts_type') or '')
+                    m2ts_text = ','.join(m2ts_files)
                     dur = float(e.get('duration') or 0.0)
-                    auto_out_name = ''
-                    is_disabled = bool(e.get('disabled'))
-                    default_selected = bool(e.get('default_selected'))
-                    special = str(e.get('special') or '')
-                    sel_item = QTableWidgetItem('')
-                    sel_item.setCheckState(Qt.CheckState.Checked if default_selected else Qt.CheckState.Unchecked)
-                    if is_disabled:
-                        sel_item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable)
-                        sel_item.setCheckState(Qt.CheckState.Unchecked)
-                    else:
-                        sel_item.setFlags(
-                            Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable)
-                    sel_item.setData(Qt.ItemDataRole.UserRole, 'auto')
+                    sel_item = SpSelectionItem(
+                        bool(e['default_selected']), str(e['default_reason']),
+                        disc_root=disc_root_by_bdmv[bdmv_index],
+                    )
+                    previous = row_cache.get((sel_item.disc_root, mpls_file or m2ts_text), {})
+                    manual_selection = previous.get('manual_selection')
+                    if isinstance(manual_selection, bool):
+                        sel_item.apply_selection(manual_selection)
                     self.table3.setItem(i, sel_col, sel_item)
                     self.table3.setItem(i, bdmv_col, QTableWidgetItem(str(bdmv_index)))
-                    entry_key = (bdmv_index, mpls_file, ','.join(m2ts_files))
-                    is_automatic_attachment = (
-                        entry_key in whole_main_match_keys
-                        or entry_key in exact_episode_match_keys
-                    )
                     self.table3.setItem(i, mpls_col, QTableWidgetItem(mpls_file))
-                    self.table3.setItem(i, m2ts_col, QTableWidgetItem(','.join(m2ts_files)))
+                    self.table3.setItem(i, m2ts_col, QTableWidgetItem(m2ts_text))
                     self.table3.setItem(
                         i, det_col, QTableWidgetItem(str(e.get('m2ts_file_detail') or '').strip()))
-                    self.table3.setItem(i, type_col, QTableWidgetItem(m2ts_type))
+                    self.table3.setItem(i, type_col, QTableWidgetItem(str(previous.get('m2ts_type') or '')))
                     self.table3.setItem(i, dur_col, QTableWidgetItem(get_time_str(dur)))
-                    key = (bdmv_index, mpls_file, ','.join(m2ts_files))
-                    prev = old_name_map.get(key)
-                    prev_text = prev[0] if prev else ''
-                    prev_auto = prev[1] if prev else None
-                    prev_special = prev[2] if prev else ''
-                    cache_hit = row_cache.get(key)
-                    if not cache_hit:
-                        cache_hit = row_cache_out.get((key[0], key[1], key[2], str(auto_out_name)))
-                    if isinstance(cache_hit, dict):
-                        try:
-                            restore_selected = bool(cache_hit.get('selected', False))
-                            user_mark = str(cache_hit.get('user_mark') or '')
-                            if restore_selected:
-                                if user_mark == 'user':
-                                    sel_item.setCheckState(Qt.CheckState.Checked)
-                                elif self._is_movie_mode():
-                                    sp_det = str(e.get('m2ts_file_detail') or '').strip()
-                                    if not sp_det:
-                                        try:
-                                            sp_det = self._sp_m2ts_detail_for_entry(
-                                                bdmv_index, mpls_file, m2ts_files)
-                                        except Exception:
-                                            sp_det = ''
-                                    if not self._sp_covered_by_table2_movie_row(bdmv_index, sp_det):
-                                        sel_item.setCheckState(Qt.CheckState.Checked)
-                                elif not is_automatic_attachment:
-                                    sel_item.setCheckState(Qt.CheckState.Checked)
-                            if user_mark:
-                                sel_item.setData(Qt.ItemDataRole.UserRole, str(cache_hit.get('user_mark') or ''))
-                            if str(cache_hit.get('m2ts_type') or '').strip():
-                                m2ts_type = str(cache_hit.get('m2ts_type') or '').strip()
-                                self.table3.setItem(i, type_col, QTableWidgetItem(m2ts_type))
-                            if str(cache_hit.get('suffix') or ''):
-                                out_item_suffix = str(cache_hit.get('suffix') or '')
-                            else:
-                                out_item_suffix = ''
-                        except Exception:
-                            out_item_suffix = ''
-                    else:
-                        out_item_suffix = ''
-                    effective_special = special or prev_special
-                    if e.get('preserve_chapter_sp'):
-                        out_item = QTableWidgetItem('')
-                        out_item.setData(Qt.ItemDataRole.UserRole, '')
-                        out_item.setData(Qt.ItemDataRole.UserRole + 2, effective_special)
-                        out_item.setData(Qt.ItemDataRole.UserRole + 3,
-                                         str(e.get('name_suffix') or out_item_suffix or ''))
-                    else:
-                        if prev_text and isinstance(prev_auto, str) and prev_text != prev_auto:
-                            final_text = prev_text
-                        else:
-                            final_text = auto_out_name
-                        if isinstance(cache_hit, dict) and str(cache_hit.get('output_text') or '').strip():
-                            cached_text = str(cache_hit.get('output_text') or '').strip()
-                            if final_text == auto_out_name:
-                                final_text = cached_text
-                        out_item = QTableWidgetItem(final_text)
-                        out_item.setData(Qt.ItemDataRole.UserRole, auto_out_name)
-                        out_item.setData(Qt.ItemDataRole.UserRole + 2, effective_special)
-                        out_item.setData(Qt.ItemDataRole.UserRole + 3, out_item_suffix)
+                    out_item = SpOutputNameItem(str(previous.get('output_text') or ''))
+                    out_item.setData(Qt.ItemDataRole.UserRole, previous.get('edited_name'))
+                    out_item.setData(Qt.ItemDataRole.UserRole + 2, previous.get('special'))
+                    out_item.setData(Qt.ItemDataRole.UserRole + 3, previous.get('suffix'))
                     self.table3.setItem(i, out_col, out_item)
                     tracks_col = ENCODE_SP_LABELS.index('tracks')
                     self.table3.setItem(i, tracks_col, None)
                     btn_tracks = QToolButton(self.table3)
                     btn_tracks.setText(self.t('edit tracks'))
                     btn_tracks.clicked.connect(partial(self.on_edit_tracks_from_sp_table, -1))
-                    btn_tracks.setEnabled(not is_disabled)
                     self.table3.setCellWidget(i, tracks_col, btn_tracks)
                     play_col = ENCODE_SP_LABELS.index('play') if 'play' in ENCODE_SP_LABELS else -1
                     if play_col >= 0:
@@ -1930,46 +1785,21 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                         btn_play = QToolButton(self.table3)
                         btn_play.setText(self.t('play'))
                         btn_play.clicked.connect(self._on_play_sp_table_row_clicked)
-                        btn_play.setEnabled(not is_disabled)
                         self.table3.setCellWidget(i, play_col, btn_play)
-                    if function_id == 4:
-                        vpy_col = ENCODE_SP_LABELS.index('vpy_path')
-                        edit_col = ENCODE_SP_LABELS.index('edit_vpy')
-                        preview_col = ENCODE_SP_LABELS.index('preview_script')
-                        self.table3.setItem(i, vpy_col, None)
-                        self.table3.setItem(i, edit_col, None)
-                        self.table3.setItem(i, preview_col, None)
-                        self.table3.setCellWidget(i, vpy_col, self.create_vpy_path_widget(parent=self.table3))
-                        btn = QToolButton(self.table3)
-                        btn.setText(self.t('edit'))
-                        btn.clicked.connect(self.on_edit_sp_vpy_clicked)
-                        self.table3.setCellWidget(i, edit_col, btn)
-                        btn2 = QToolButton(self.table3)
-                        btn2.setText(self.t('preview'))
-                        btn2.clicked.connect(self.on_preview_sp_scripts_clicked)
-                        self.table3.setCellWidget(i, preview_col, btn2)
-                    else:
-                        for key in ('vpy_path', 'edit_vpy', 'preview_script'):
-                            try:
-                                col = ENCODE_SP_LABELS.index(key)
-                            except Exception:
-                                continue
-                            self.table3.setItem(i, col, None)
-                            self.table3.setCellWidget(i, col, None)
-                self._recompute_sp_output_names()
-                try:
-                    self._apply_table3_uncheck_rows_covered_by_table2()
-                except Exception:
-                    print_exc_terminal()
+                    for key in ('vpy_path', 'edit_vpy', 'preview_script'):
+                        column = ENCODE_SP_LABELS.index(key)
+                        self.table3.setItem(i, column, None)
+                        self.table3.removeCellWidget(i, column)
+                    self.ensure_encode_row_widgets(i, self.table3)
                 try:
                     self._sync_chapter_checkbox_sp_rows_all_volumes(configuration)
                 except Exception:
                     print_exc_terminal()
-                self._recompute_sp_output_names()
                 try:
                     self._apply_table3_uncheck_rows_covered_by_table2()
                 except Exception:
                     print_exc_terminal()
+                self._recompute_sp_output_names()
                 if self._is_movie_mode():
                     try:
                         self._show_m2ts_file_detail_columns()
@@ -1993,7 +1823,6 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     pass
             finally:
                 self._updating_sp_table = False
-                self.table3.setSortingEnabled(old_sorting)
             if not had_rows:
                 self._scroll_table_to_primary_column(self.table3)
             try:

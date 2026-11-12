@@ -6,14 +6,14 @@ from html import escape
 from PyQt6.QtCore import QEvent, QPoint, QRect, Qt, pyqtSignal
 from PyQt6.QtGui import QCursor, QDrag, QPainter, QPalette, QPixmap
 from PyQt6.QtWidgets import (
-    QApplication, QAbstractItemView, QPlainTextEdit, QStyledItemDelegate, QTableWidgetItem, QToolTip, QWidget,
+    QApplication, QAbstractItemView, QPlainTextEdit, QTableWidgetItem, QToolTip, QWidget,
 )
 
 from src.core.i18n import translate_text
-from .custom_table_widget import CustomTableWidget
+from .custom_table_widget import CustomTableWidget, TableCellDelegate
 
 
-class _DiscNameDelegate(QStyledItemDelegate):
+class _DiscNameDelegate(TableCellDelegate):
     def initStyleOption(self, option, index):
         super().initStyleOption(option, index)
         option.text = os.path.basename(option.text) or option.text
@@ -24,6 +24,9 @@ class DiscCommandEdit(QPlainTextEdit):
         super().__init__(command, parent)
         self.setObjectName('discCommandEdit')
         self.setAccessibleName(label)
+        tooltip = 'Click to edit the mux command.'
+        self.setProperty('toolTipSource', tooltip)
+        self.setToolTip(translate_text(tooltip))
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._generated_command = command
 
@@ -41,8 +44,6 @@ class DiscTableWidget(CustomTableWidget):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent, self._disc_moved)
         self._checked_paths: dict[str, bool] = {}
-        self._sort_column = -1
-        self._sort_order = Qt.SortOrder.AscendingOrder
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
@@ -55,9 +56,7 @@ class DiscTableWidget(CustomTableWidget):
         self._disc_header_viewport = header.viewport()
         self._disc_header_viewport.setAcceptDrops(True)
         self._disc_header_viewport.installEventFilter(self)
-        self.horizontalHeader().setSectionsClickable(True)
-        self.horizontalHeader().setSortIndicator(0, Qt.SortOrder.AscendingOrder)
-        self.horizontalHeader().sectionClicked.connect(self._sort_discs)
+        self.horizontalHeader().setSectionsClickable(False)
         self.itemChanged.connect(self._disc_checked)
 
     def currentChanged(self, current, previous):
@@ -172,20 +171,6 @@ class DiscTableWidget(CustomTableWidget):
         painter.end()
         return pixmap
 
-    def _sort_discs(self, column: int) -> None:
-        header = self.horizontalHeader()
-        order = Qt.SortOrder.AscendingOrder
-        if self._sort_column == column and self._sort_order == Qt.SortOrder.AscendingOrder:
-            order = Qt.SortOrder.DescendingOrder
-        self._sort_column = column
-        self._sort_order = order
-        # Sort only on an explicit header click; later checkbox edits must not
-        # undo a manual row move or relocate partially populated rows.
-        self.sortItems(column, order)
-        header.setSortIndicator(column, order)
-        header.setSortIndicatorShown(True)
-        self.discsChanged.emit()
-
     def sync_selection(self) -> None:
         self._checked_paths = {}
         for row in range(self.rowCount()):
@@ -209,7 +194,6 @@ class DiscTableWidget(CustomTableWidget):
         self.discsChanged.emit()
 
     def _disc_moved(self) -> None:
-        self._sort_column = -1
         row = self.currentRow()
         item = self.item(row, 0)
         path = item.text() if item is not None else ''

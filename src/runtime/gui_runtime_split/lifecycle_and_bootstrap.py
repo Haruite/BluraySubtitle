@@ -15,7 +15,7 @@ import time
 from typing import Optional
 
 from PyQt6.QtCore import Qt, QTimer, QCoreApplication, QThread
-from PyQt6.QtWidgets import QApplication, QVBoxLayout, QWidget, QHBoxLayout, QLabel, QComboBox, QSlider, QGroupBox, \
+from PyQt6.QtWidgets import QApplication, QVBoxLayout, QWidget, QHBoxLayout, QLabel, QSlider, QGroupBox, \
     QLineEdit, QTabBar, QRadioButton, QButtonGroup, QPushButton, QCheckBox, QSizePolicy, QScrollArea, \
     QProgressDialog, QProgressBar, QFileDialog, QFrame
 
@@ -25,7 +25,7 @@ from src.core.i18n import translate_text
 import src.core.settings as core_settings
 from src.exports.utils import print_exc_terminal
 from src.runtime.gui_runtime_classes.custom_box import CustomBox
-from src.runtime.gui_runtime_classes.custom_table_widget import CustomTableWidget, SelectionTableWidget
+from src.runtime.gui_runtime_classes.custom_table_widget import CustomTableWidget, SelectionTableWidget, StyledComboBox
 from src.runtime.gui_runtime_classes.disc_table_widget import DiscTableWidget
 from src.runtime.gui_runtime_classes.execution_button import ExecutionButton
 from .gui_base import BluraySubtitleGuiBase
@@ -44,6 +44,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             self._app_config = default_app_config()
             self._app_config_load_failed = True
             self._app_config_errors.append(error)
+        self._input_folder_values: dict[int, tuple[str, str]] = {}
         self._output_folder_values = {
             3: self._app_config.paths.remux_output,
             4: self._app_config.paths.encode_output,
@@ -101,7 +102,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         language_layout.setSpacing(6)
         language_row.setLayout(language_layout)
         self.language_label = QLabel('Language', language_row)
-        self.language_combo = QComboBox(language_row)
+        self.language_combo = StyledComboBox(language_row)
         self.language_combo.addItem('English', 'en')
         self.language_combo.addItem(translate_text('Simplified Chinese', 'zh'), 'zh')
         self.language_combo.setCurrentIndex(0 if self._language_code == 'en' else 1)
@@ -110,7 +111,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         language_layout.addWidget(self.language_combo)
         language_layout.addSpacing(12)
         self.theme_label = QLabel('Mode', language_row)
-        self.theme_combo = QComboBox(language_row)
+        self.theme_combo = StyledComboBox(language_row)
         self.theme_combo.addItem('Light', 'light')
         self.theme_combo.addItem('Dark', 'dark')
         self.theme_combo.addItem('Colorful', 'colorful')
@@ -121,7 +122,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         language_layout.addWidget(self.theme_combo)
         language_layout.addSpacing(12)
         self.font_size_label = QLabel('UI Font', language_row)
-        self.font_size_combo = QComboBox(language_row)
+        self.font_size_combo = StyledComboBox(language_row)
         self.font_size_combo.addItem('6', 6)
         self.font_size_combo.addItem('7', 7)
         self.font_size_combo.addItem('8', 8)
@@ -233,7 +234,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.episode_length_container.setLayout(episode_length_layout)
         episode_length_layout.addWidget(QLabel("（", self.episode_length_container))
         episode_length_layout.addWidget(QLabel("Approx. episode length (minutes):", self.episode_length_container))
-        self.approx_episode_minutes_combo = QComboBox(self.episode_length_container)
+        self.approx_episode_minutes_combo = StyledComboBox(self.episode_length_container)
         self.approx_episode_minutes_combo.setEditable(True)
         self.approx_episode_minutes_combo.addItems(["3", "24", "50"])
         self.approx_episode_minutes_combo.setCurrentText("24")
@@ -324,8 +325,11 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.remux_folder_path.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.remux_folder_path.setMinimumWidth(200)
         self.remux_folder_path.setAcceptDrops(False)
-        self.remux_folder_path.textChanged.connect(
-            lambda _=None: QTimer.singleShot(150, self._populate_encode_from_remux_folder))
+        self._remux_folder_debounce = QTimer(self)
+        self._remux_folder_debounce.setSingleShot(True)
+        self._remux_folder_debounce.setInterval(150)
+        self._remux_folder_debounce.timeout.connect(self._populate_encode_from_remux_folder)
+        self.remux_folder_path.textChanged.connect(lambda _=None: self._remux_folder_debounce.start())
         remux_btn = QPushButton('Select')
         remux_btn.clicked.connect(self.select_remux_folder)
         remux_btn_open = QPushButton('Open')
@@ -362,10 +366,15 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.encode_source_row.setVisible(self.get_selected_function_id() == 4)
         self._encode_input_mode = 'bdmv'
 
-        def on_encode_source_changed():
+        def on_encode_source_changed(checked: bool):
+            if not checked:
+                return
             self._encode_input_mode = 'remux' if self.encode_source_remux_radio.isChecked() else 'bdmv'
+            self._remux_folder_debounce.stop()
+            self._cancel_subtitle_folder_scan()
             try:
                 self._apply_encode_input_mode_ui()
+                self.on_subtitle_folder_path_change()
             except Exception:
                 print_exc_terminal()
 
@@ -470,9 +479,9 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         subtitle_path_outer.setSpacing(4)
 
         subtitle_path_box = CustomBox('Subtitles', self)
-        subtitle_path_box.setProperty("noMargin", True)
+        subtitle_path_box.setProperty('subtitlePathBox', True)
         h_layout = QHBoxLayout()
-        h_layout.setContentsMargins(0, 0, 0, 0)
+        h_layout.setContentsMargins(3, 3, 3, 3)
         h_layout.setSpacing(4)
         subtitle_path_box.setLayout(h_layout)
         self.subtitle_folder_path = QLineEdit()
@@ -490,7 +499,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.simple_diy_sub_lang_label = QLabel(self.t('Language'), self.subtitle_path_row)
         self.simple_diy_sub_lang_label.setVisible(False)
         subtitle_path_outer.addWidget(self.simple_diy_sub_lang_label)
-        self.simple_diy_sub_lang_combo = QComboBox(self.subtitle_path_row)
+        self.simple_diy_sub_lang_combo = StyledComboBox(self.subtitle_path_row)
         self.simple_diy_sub_lang_combo.addItems(['und', 'chi', 'eng', 'jpn'])
         self.simple_diy_sub_lang_combo.setEditable(True)
         self.simple_diy_sub_lang_combo.setCurrentText('eng')
@@ -542,9 +551,9 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             row_layout.setContentsMargins(0, 0, 0, 0)
             row_layout.setSpacing(4)
             box = CustomBox('Subtitle', row)
-            box.setProperty("noMargin", True)
+            box.setProperty('subtitlePathBox', True)
             h = QHBoxLayout()
-            h.setContentsMargins(0, 0, 0, 0)
+            h.setContentsMargins(3, 3, 3, 3)
             h.setSpacing(4)
             box.setLayout(h)
             edit = QLineEdit()
@@ -561,7 +570,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             h.addWidget(btn_sel)
             h.addWidget(btn_open)
             lang_label = QLabel(self.t('Language'), row)
-            lang = QComboBox(row)
+            lang = StyledComboBox(row)
             lang.addItems(['und', 'chi', 'eng', 'jpn'])
             lang.setEditable(True)
             lang.setCurrentText(_default_diy_sub_lang())
@@ -639,9 +648,9 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.table2.setColumnCount(len(SUBTITLE_LABELS))
         self._set_table_headers(self.table2, SUBTITLE_LABELS)
         self._set_table2_subtitle_column_order()
-        self.table2.setSortingEnabled(True)
-        self.table2.horizontalHeader().setSortIndicatorShown(True)
-        self.table2.horizontalHeader().sortIndicatorChanged.connect(self.on_subtitle_table_sorted)
+        self.table2.horizontalHeader().setSectionsClickable(False)
+        self.table2.cellMenuCreated.connect(self.on_subtitle_menu)
+        self.table2.model().dataChanged.connect(self._on_main_output_name_changed)
         self.subtitle_folder_path.textChanged.connect(self.on_subtitle_folder_path_change)
         self._subtitle_scan_debounce = QTimer(self)
         self._subtitle_scan_debounce.setSingleShot(True)
@@ -659,8 +668,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self._set_compact_table(self.table3, row_height=22, header_height=22)
         self.table3.setColumnCount(len(ENCODE_SP_LABELS))
         self._set_table_headers(self.table3, ENCODE_SP_LABELS)
-        self.table3.setSortingEnabled(True)
-        self.table3.horizontalHeader().setSortIndicatorShown(True)
+        self.table3.horizontalHeader().setSectionsClickable(False)
         self.table3.horizontalHeader().setSectionsMovable(False)
         self._updating_sp_table = False
         self.table3.itemChanged.connect(self._on_table3_item_changed)
@@ -674,6 +682,16 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             'Select the bonus features to output, then review their names and tracks. Encode also offers VPy editing and preview.',
             360,
         )
+        self._sp_selection_row = QWidget(self.table3_section)
+        self._sp_selection_row.setObjectName('spSelectionRow')
+        sp_selection_layout = QHBoxLayout(self._sp_selection_row)
+        sp_selection_layout.setContentsMargins(0, 0, 0, 0)
+        for text, selected in (('Select all', True), ('Deselect all', False), ('Restore default selection', None)):
+            button = QPushButton(self.t(text), self._sp_selection_row)
+            button.clicked.connect(lambda _checked=False, selected=selected: self._set_sp_selection(selected))
+            sp_selection_layout.addWidget(button)
+        sp_selection_layout.addStretch()
+        self.table3_section.layout().insertWidget(1, self._sp_selection_row)
         self.table3_section.setVisible(False)
         subtitle_inner_layout.addWidget(self.table2_section)
         subtitle_inner_layout.addWidget(self.table3_section)
@@ -709,7 +727,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
 
         self.subtitle_suffix_label = QLabel("Add suffix", merge_options_row)
         merge_options_layout.addWidget(self.subtitle_suffix_label)
-        self.subtitle_suffix_combo = QComboBox(merge_options_row)
+        self.subtitle_suffix_combo = StyledComboBox(merge_options_row)
         self.subtitle_suffix_combo.setEditable(True)
         self.subtitle_suffix_combo.setMinimumWidth(160)
         merge_options_layout.addWidget(self.subtitle_suffix_combo)
