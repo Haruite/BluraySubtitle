@@ -64,6 +64,7 @@ Keep both language versions of these standards synchronized, and record confirme
 
 - Application-authored user-visible text, including GUI labels, dialogs, progress, and terminal messages, must support English and Simplified Chinese. Add or update entries in `src/core/i18n.py:I18N_ZH_TO_EN` in the same change: Chinese text is the key, and its English source string is the value.
 - Translate at the presentation boundary through `self.t(...)` or `translate_text(...)`. For dynamic text, translate a stable template before substituting values.
+- Use one ASCII space between adjacent Chinese text and English words, abbreviations, or technical names in user-visible strings.
 - Follow the [project documentation skill](../../.agents/skills/project-docs/SKILL.md). Decide whether to update documents based on their readers, purpose, and actual changes, keeping existing English and Chinese versions synchronized. README content must help users operate the software; link to implementation explanations elsewhere. Add no text for fixes within already documented behavior or changes that only improve implementation details.
 
 ## 8. File Format
