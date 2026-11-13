@@ -6,12 +6,13 @@ from typing import Callable
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtNetwork import QNetworkReply
-from PyQt6.QtWidgets import QHBoxLayout, QLabel, QMessageBox, QPushButton, QWidget
+from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
 from src.core.i18n import translate_text
 from src.core.version import current_commit, parse_commit_record
 from src.runtime.update_check import SERVER_PACKAGE_METADATA_URL, request_update_info, update_network_manager
 from src.runtime.windows_update import WindowsUpdatePackage, server_windows_package, windows_update_executable
+from .widget_animations import AnimatedMessageBox
 
 
 class StartupUpdateNotice(QWidget):
@@ -84,7 +85,7 @@ class StartupUpdateNotice(QWidget):
             self._install_update(self._package)
         except (OSError, RuntimeError, ValueError) as error:
             self._update_button.setEnabled(True)
-            QMessageBox.warning(
+            AnimatedMessageBox.warning(
                 self,
                 translate_text("Check for updates"),
                 translate_text("Could not start the update. {error}").format(error=error),

@@ -6,10 +6,11 @@ import traceback
 from urllib.parse import urlparse, unquote
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QInputDialog, QToolButton, QMessageBox
+from PyQt6.QtWidgets import QToolButton
 
 from src.core import ENCODE_SP_LABELS
 from src.exports.utils import run_command, get_mpv_safe_path
+from src.runtime.gui_runtime_classes.widget_animations import AnimatedInputDialog, AnimatedMessageBox
 from .gui_base import BluraySubtitleGuiBase
 
 
@@ -79,6 +80,8 @@ class PlaybackPathsMixin(BluraySubtitleGuiBase):
                 root = ''
             if not root:
                 continue
+            if root in (getattr(self, '_bdmv_inventory', None) or {}):
+                return root
             bdmv_dir = os.path.join(root, 'BDMV')
             playlist_dir = os.path.join(bdmv_dir, 'PLAYLIST')
             stream_dir = os.path.join(bdmv_dir, 'STREAM')
@@ -98,13 +101,11 @@ class PlaybackPathsMixin(BluraySubtitleGuiBase):
         if len(m2ts_files) == 1:
             return os.path.normpath(os.path.join(stream_dir, m2ts_files[0]))
 
-        item, ok = QInputDialog.getItem(
+        item, ok = AnimatedInputDialog.getItem(
             self,
             self.t("Select M2TS File"),
             self.t("Multiple M2TS files detected, choose one for preview:"),
             m2ts_files,
-            0,
-            False
         )
         if not ok or not item:
             return ''
@@ -118,7 +119,7 @@ class PlaybackPathsMixin(BluraySubtitleGuiBase):
 
     def _play_m2ts_path(self, m2ts_path: str):
         if not m2ts_path or not os.path.exists(m2ts_path):
-            QMessageBox.information(self, " ", self.t('M2TS file not found:\n{m2ts_path}').format(m2ts_path=m2ts_path))
+            AnimatedMessageBox.information(self, " ", self.t('M2TS file not found:\n{m2ts_path}').format(m2ts_path=m2ts_path))
             return
         if sys.platform == 'win32':
             mp4_exe_path = get_mpv_safe_path(".mp4")
@@ -142,7 +143,7 @@ class PlaybackPathsMixin(BluraySubtitleGuiBase):
                     if os.path.isfile(mpls_path):
                         self._play_mpls_path(mpls_path)
                         return
-                    QMessageBox.information(self, " ", self.t('MPLS file not found:\n{mpls_path}').format(mpls_path=mpls_path))
+                    AnimatedMessageBox.information(self, " ", self.t('MPLS file not found:\n{mpls_path}').format(mpls_path=mpls_path))
                     return
             m2ts_item = self.table2.item(row_index, m2ts_col)
             m2ts_files = self._split_m2ts_files(m2ts_item.text() if m2ts_item else '')
@@ -164,14 +165,14 @@ class PlaybackPathsMixin(BluraySubtitleGuiBase):
             if mpls_file:
                 playlist_dir = self._get_playlist_dir_for_bdmv_index(bdmv_index)
                 if not playlist_dir:
-                    QMessageBox.information(self, " ",
+                    AnimatedMessageBox.information(self, " ",
                                             self.t('Matching Blu-ray directory not found (bdmv_index={bdmv_index}), cannot locate MPLS file').format(bdmv_index=bdmv_index))
                     return
                 mpls_path = os.path.normpath(os.path.join(playlist_dir, mpls_file))
                 if os.path.exists(mpls_path):
                     self._play_mpls_path(mpls_path)
                     return
-                QMessageBox.information(self, " ", self.t('MPLS file not found:\n{mpls_path}').format(mpls_path=mpls_path))
+                AnimatedMessageBox.information(self, " ", self.t('MPLS file not found:\n{mpls_path}').format(mpls_path=mpls_path))
                 return
             m2ts_item = self.table3.item(row_index, m2ts_col)
             m2ts_files = self._split_m2ts_files(m2ts_item.text() if m2ts_item else '')

@@ -12,10 +12,11 @@ import traceback
 from functools import partial
 from typing import Optional
 
+from PyQt6 import sip
 from PyQt6.QtCore import Qt, QTimer, QThread, QCoreApplication, QModelIndex, QEventLoop, QObject, QSize
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPlainTextEdit, QTextBrowser, QWidget, QHBoxLayout, QPushButton, \
-    QApplication, QProgressDialog, QProgressBar, QTableWidgetItem, QTableWidget, QToolButton, QComboBox, \
-    QAbstractItemView, QMenu, QMessageBox, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, QCheckBox, \
+    QApplication, QTableWidgetItem, QTableWidget, QToolButton, QComboBox, \
+    QAbstractItemView, QMenu, QSizePolicy, QRadioButton, QButtonGroup, QCheckBox, \
     QDoubleSpinBox, QGridLayout, QSpacerItem, QStyle, QStyleOptionComboBox
 
 from src.bdmv import Chapter, chapter_play_item_file_ranges
@@ -45,6 +46,7 @@ from src.runtime.encode_source import probe_svt_av1_bit_depths
 from src.runtime.sp import SpEntry, media_track_key
 from src.runtime.gui_runtime_classes.custom_table_widget import SelectionTableWidget, StyledComboBox
 from src.runtime.gui_runtime_classes.file_dialog import choose_path
+from src.runtime.gui_runtime_classes.scan_progress_dialog import ScanProgressDialog
 from src.runtime.gui_runtime_classes.spin_box import StyledDoubleSpinBox
 from src.runtime.gui_runtime_classes.encode_worker import EncodeWorker
 from src.runtime.encode import EncodeRequest, EncodeRow, EncodeSettings, validate_encode_request
@@ -52,7 +54,7 @@ from src.runtime.gui_runtime_classes.file_path_table_widget_item import FilePath
 from src.runtime.gui_runtime_classes.chapter_worker import AddChaptersRequest, ChapterWorker
 from src.runtime.gui_runtime_classes.merge_worker import MergeSubtitleRequest, MergeWorker
 from src.runtime.gui_runtime_classes.subtitle_folder_scan_worker import SubtitleFolderScanWorker
-from src.runtime.gui_runtime_classes.widget_animations import AnimatedDialog
+from src.runtime.gui_runtime_classes.widget_animations import AnimatedDialog, AnimatedInputDialog, AnimatedMessageBox
 from src.runtime.services import BluraySubtitle
 from .gui_base import BluraySubtitleGuiBase
 
@@ -69,7 +71,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             return
         path = third_party_notices_markdown_path(self._language_code)
         if not path:
-            QMessageBox.information(
+            AnimatedMessageBox.information(
                 self,
                 self.t('Third-party notices'),
                 self.t('Third-party notices were not found in this bundle.'),
@@ -79,7 +81,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             with open(path, encoding='utf-8', errors='replace') as f:
                 body = f.read()
         except OSError as exc:
-            QMessageBox.warning(
+            AnimatedMessageBox.warning(
                 self,
                 self.t('Third-party notices'),
                 self.t('Could not read third-party notices:') + f' {exc}',
@@ -281,32 +283,19 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         cancel_event = getattr(self, '_subtitle_scan_cancel_event', None)
         if cancel_event is not None:
             cancel_event.set()
+        dialog = getattr(self, '_subtitle_scan_progress_dialog', None)
+        if dialog is not None:
+            self._subtitle_scan_progress_dialog = None
+            dialog.finish()
 
     def _start_subtitle_folder_scan(self):
-        if bool(getattr(self, '_close_pending', False)):
+        if bool(getattr(self, '_close_pending', False)) or self._bdmv_load_pending:
             return
         folder = (self._pending_subtitle_folder or '').strip()
         if not folder or not os.path.isdir(folder):
             return
 
-        # If a previous scan UI is still around, close it before starting a new scan.
-        if getattr(self, '_subtitle_scan_show_timer', None):
-            try:
-                self._subtitle_scan_show_timer.stop()
-            except Exception:
-                pass
-            self._subtitle_scan_show_timer = None
-        if getattr(self, '_subtitle_scan_progress_dialog', None):
-            try:
-                self._subtitle_scan_progress_dialog.close()
-                self._subtitle_scan_progress_dialog.deleteLater()
-            except Exception:
-                pass
-            self._subtitle_scan_progress_dialog = None
-
-        previous_cancel_event = getattr(self, '_subtitle_scan_cancel_event', None)
-        if isinstance(previous_cancel_event, threading.Event):
-            previous_cancel_event.set()
+        self._cancel_subtitle_folder_scan()
         previous_thread = getattr(self, '_subtitle_scan_thread', None)
         if isinstance(previous_thread, QThread):
             try:
@@ -336,36 +325,24 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
 
         selected_mpls = self.get_selected_mpls_no_ext()
 
-        progress_dialog = QProgressDialog(self.t(title), self.t('Cancel'), 0, 1000, self)
-        progress_dialog.setMinimumWidth(400)
-        bar = QProgressBar(progress_dialog)
+        progress_dialog = ScanProgressDialog(self, self.t(title), self.t('Cancel'), show_delay_ms=2000)
+        self._apply_window_opacity(progress_dialog)
+        bar = progress_dialog.bar
         bar.setRange(0, 1000)
-        bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        progress_dialog.setBar(bar)
 
         def update_bar_format(val):
             bar.setFormat(f"{val / 10.0:.1f}%")
 
         bar.valueChanged.connect(update_bar_format)
-        update_bar_format(0)
-        progress_dialog.setMinimumDuration(0)
-        progress_dialog.setAutoClose(False)
-        progress_dialog.setAutoReset(False)
-        progress_dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-        progress_dialog.canceled.connect(cancel_event.set)
+        bar.setValue(0)
         self._subtitle_scan_progress_dialog = progress_dialog
 
-        show_timer = QTimer(self)
-        show_timer.setSingleShot(True)
-        show_timer.setInterval(2000)
-        self._subtitle_scan_show_timer = show_timer
+        def request_cancel():
+            cancel_event.set()
+            progress_dialog.setLabelText(self.t('Canceling...'))
+            bar.setRange(0, 0)
 
-        def show_if_still_running():
-            if getattr(self, '_subtitle_scan_thread', None) is thread and thread.isRunning():
-                progress_dialog.show()
-
-        show_timer.timeout.connect(show_if_still_running)
-        show_timer.start()
+        progress_dialog.cancel_requested.connect(request_cancel)
 
         thread = QThread(self)
         worker = SubtitleFolderScanWorker(
@@ -383,10 +360,10 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         self._subtitle_scan_worker = worker
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
-        worker.progress.connect(progress_dialog.setValue)
+        worker.progress.connect(bar.setValue)
 
         def update_label(text: str):
-            if getattr(self, '_subtitle_scan_thread', None) is not thread:
+            if cancel_event.is_set() or getattr(self, '_subtitle_scan_thread', None) is not thread:
                 return
             progress_dialog.setLabelText(self.t(text))
 
@@ -399,17 +376,9 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 getattr(self, '_subtitle_scan_thread', None) is thread
                 and getattr(self, '_subtitle_scan_worker', None) is worker
             )
-            try:
-                show_timer.stop()
-            except Exception:
-                pass
-            try:
-                progress_dialog.close()
-                progress_dialog.deleteLater()
-            except Exception:
-                pass
+            if not sip.isdeleted(progress_dialog):
+                progress_dialog.finish()
             if owns_current_scan:
-                self._subtitle_scan_show_timer = None
                 self._subtitle_scan_progress_dialog = None
                 self._subtitle_scan_thread = None
                 self._subtitle_scan_worker = None
@@ -919,10 +888,10 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             self.output_folder_path.text().strip()
         ) if hasattr(self, 'output_folder_path') else ''
         if not output_base:
-            QMessageBox.information(self, ' ', self.t('Output folder is not selected'))
+            AnimatedMessageBox.information(self, ' ', self.t('Output folder is not selected'))
             return
         if not os.path.isdir(output_base):
-            QMessageBox.information(self, ' ', self.t('Output folder does not exist'))
+            AnimatedMessageBox.information(self, ' ', self.t('Output folder does not exist'))
             return
 
         try:
@@ -1257,7 +1226,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                     else None
                 )
                 if dolby_vision_error:
-                    QMessageBox.warning(self, ' ', dolby_vision_error)
+                    AnimatedMessageBox.warning(self, ' ', dolby_vision_error)
                     return
         except Exception as error:
             print_tb_string_terminal(traceback.format_exc())
@@ -1365,7 +1334,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         selected_mpls = self.get_selected_mpls_no_ext()
         if not selected_mpls:
             if not silent_mode:
-                QMessageBox.information(self, " ", self.t('Main MPLS is not selected'))
+                AnimatedMessageBox.information(self, " ", self.t('Main MPLS is not selected'))
             return False
 
         subtitle_suffix = self._get_subtitle_suffix()
@@ -1470,7 +1439,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
 
         if not subtitle_files:
             if not silent_mode:
-                QMessageBox.information(self, " ", self.t('Subtitle file is not selected'))
+                AnimatedMessageBox.information(self, " ", self.t('Subtitle file is not selected'))
             return False
 
         request = MergeSubtitleRequest(
@@ -1990,6 +1959,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             self.exe_button.setEnabled(False)
             self._update_exe_button_progress(text='Canceling...')
             return
+        if getattr(self, '_bdmv_load_pending', False):
+            return
 
         function_id = self.get_selected_function_id()
         if function_id in (3, 4):
@@ -2030,7 +2001,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         if function_id == 4:
             self.encode_bluray()
         if function_id == 5:
-            QMessageBox.information(self, " ", self.t("Blu-ray DIY is not implemented yet"))
+            AnimatedMessageBox.information(self, " ", self.t("Blu-ray DIY is not implemented yet"))
 
     def on_button_click(self, mpls_path: str, is_main_at_build: bool = True, bdmv_index: int = 0):
         is_main = self._is_mpls_currently_main(mpls_path)
@@ -2150,13 +2121,9 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 if item:
                     states.append(item.checkState() == Qt.CheckState.Checked)
             self._chapter_checkbox_states[mpls_path] = states
-            progress = QProgressDialog(self.t('Applying chapter selection...'), '', 0, 0, self)
-            progress.setCancelButton(None)
+            progress = ScanProgressDialog(self, self.t('Applying chapter selection...'), show_delay_ms=None)
+            self._apply_window_opacity(progress)
             progress.setWindowModality(Qt.WindowModality.ApplicationModal)
-            progress.setMinimumWidth(420)
-            progress.setMinimumDuration(0)
-            progress.setAutoClose(False)
-            progress.setAutoReset(False)
             progress.show()
             QCoreApplication.processEvents()
             try:
@@ -2176,8 +2143,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             except Exception:
                 self._show_error_dialog(traceback.format_exc())
             finally:
-                progress.close()
-                progress.deleteLater()
+                progress.finish()
 
     def on_view_mpls_play_items(self, mpls_path: str) -> None:
         chapter = Chapter(mpls_path)
@@ -2302,13 +2268,11 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                 if len(candidates) == 1:
                     return candidates[0]
                 display = [os.path.basename(p) for p in candidates]
-                item, ok = QInputDialog.getItem(
+                item, ok = AnimatedInputDialog.getItem(
                     self,
                     self.t("Select subtitle file"),
                     self.t("Multiple subtitle files detected, choose one for preview:"),
                     display,
-                    0,
-                    False
                 )
                 if not ok or not item:
                     return None
@@ -2410,7 +2374,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                                     os.path.exists(mpls_name + '.sup'))
             if not has_subtitle:
                 # Still allow playback even if subtitle generation failed.
-                QMessageBox.information(self, self.t('Prompt'), self.t('Subtitle file does not exist; playback will continue without subtitles'))
+                AnimatedMessageBox.information(self, self.t('Prompt'), self.t('Subtitle file does not exist; playback will continue without subtitles'))
         elif is_preview:
             # Check whether subtitle file exists.
             mpls_name = mpls_path[:-5]
@@ -2419,7 +2383,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                             os.path.exists(mpls_name + '.ssa') or
                             os.path.exists(mpls_name + '.sup'))
             if not has_subtitle:
-                QMessageBox.information(self, self.t('Prompt'), self.t('Subtitle file does not exist; playback will continue without subtitles'))
+                AnimatedMessageBox.information(self, self.t('Prompt'), self.t('Subtitle file does not exist; playback will continue without subtitles'))
         if sys.platform != 'linux':
             if sys.platform == 'win32':
                 mp4_exe_path = get_mpv_safe_path(".mp4")
@@ -2560,10 +2524,10 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
     def open_file_path(self, path: str):
         path = self._normalize_path_input(path)
         if not path:
-            QMessageBox.information(self, " ", self.t('File path is empty'))
+            AnimatedMessageBox.information(self, " ", self.t('File path is empty'))
             return
         if not os.path.exists(path):
-            QMessageBox.warning(self, self.t('Open File Failed'), self.t('File does not exist:\n{path}').format(path=path))
+            AnimatedMessageBox.warning(self, self.t('Open File Failed'), self.t('File does not exist:\n{path}').format(path=path))
             return
         try:
             if sys.platform == 'win32':
@@ -2573,12 +2537,12 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             else:
                 run_command(['xdg-open', path], wait=False)
         except Exception as e:
-            QMessageBox.warning(self, self.t('Open File Failed'), self.t('Cannot open file:\n{path}\n\n{error}').format(path=path, error=e))
+            AnimatedMessageBox.warning(self, self.t('Open File Failed'), self.t('Cannot open file:\n{path}\n\n{error}').format(path=path, error=e))
 
     def open_folder_path(self, path: str):
         path = self._normalize_path_input(path)
         if not path:
-            QMessageBox.information(self, " ", self.t('Folder path is empty'))
+            AnimatedMessageBox.information(self, " ", self.t('Folder path is empty'))
             return
 
         normalized = path
@@ -2586,7 +2550,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             normalized = os.path.normpath(os.path.dirname(normalized))
 
         if not os.path.isdir(normalized):
-            QMessageBox.warning(self, self.t('Open Folder Failed'), self.t('Folder does not exist:\n{normalized}').format(normalized=normalized))
+            AnimatedMessageBox.warning(self, self.t('Open Folder Failed'), self.t('Folder does not exist:\n{normalized}').format(normalized=normalized))
             return
 
         try:
@@ -2597,7 +2561,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             else:
                 run_command(['xdg-open', normalized], wait=False)
         except Exception as e:
-            QMessageBox.warning(self, self.t('Open Folder Failed'), self.t('Cannot open folder:\n{normalized}\n\n{error}').format(normalized=normalized, error=e))
+            AnimatedMessageBox.warning(self, self.t('Open Folder Failed'), self.t('Cannot open folder:\n{normalized}\n\n{error}').format(normalized=normalized, error=e))
 
     def select_bdmv_folder(self):
         folder = choose_path(self, self.t("Select folder"), self.bdmv_folder_path.text().strip())

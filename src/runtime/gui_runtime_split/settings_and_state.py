@@ -5,12 +5,13 @@ from __future__ import annotations
 from dataclasses import replace
 
 from PyQt6.QtCore import QByteArray, QTimer
-from PyQt6.QtWidgets import QComboBox, QMessageBox, QWidget
+from PyQt6.QtWidgets import QComboBox, QWidget
 
 from src.core.app_config import AppConfig, UiPreferences, WindowPreferences, save_app_config
 from src.runtime.audio_conversion import AudioEncodingSettings
 from src.runtime.gui_runtime_classes.settings_dialog import SettingsDialog
 from src.runtime.windows_update import WindowsUpdatePackage, start_windows_update
+from src.runtime.gui_runtime_classes.widget_animations import AnimatedMessageBox
 from .gui_base import BluraySubtitleGuiBase
 
 
@@ -196,7 +197,7 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
             if action == "load"
             else "Could not save application settings: {error}"
         )
-        QMessageBox.warning(
+        AnimatedMessageBox.warning(
             self,
             self.t("Settings"),
             self.t(template).format(error=self.t(str(error))),

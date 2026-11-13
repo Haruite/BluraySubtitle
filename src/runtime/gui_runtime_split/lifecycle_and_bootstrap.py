@@ -17,7 +17,7 @@ from typing import Optional
 from PyQt6.QtCore import Qt, QTimer, QCoreApplication, QThread
 from PyQt6.QtWidgets import QApplication, QVBoxLayout, QWidget, QHBoxLayout, QLabel, QGroupBox, \
     QLineEdit, QTabBar, QRadioButton, QButtonGroup, QPushButton, QCheckBox, QSizePolicy, QScrollArea, \
-    QProgressDialog, QProgressBar, QFrame, QMessageBox, QMenu, QStyle, QSystemTrayIcon
+    QFrame, QMenu, QStyle, QSystemTrayIcon
 
 from src.core import APP_TITLE, BDMV_LABELS, SUBTITLE_LABELS, ENCODE_SP_LABELS
 from src.core.app_config import FUNCTION_PAGE_IDS, app_config_path, default_app_config, load_app_config
@@ -33,7 +33,8 @@ from src.runtime.gui_runtime_classes.execution_button import ExecutionButton
 from src.runtime.gui_runtime_classes.file_dialog import choose_path
 from src.runtime.gui_runtime_classes.opacity_slider import OpacitySlider
 from src.runtime.gui_runtime_classes.startup_update_notice import StartupUpdateNotice
-from src.runtime.gui_runtime_classes.widget_animations import animate_window_close, cancel_window_close
+from src.runtime.gui_runtime_classes.scan_progress_dialog import ScanProgressDialog
+from src.runtime.gui_runtime_classes.widget_animations import AnimatedMessageBox, animate_window_close, cancel_window_close
 from src.runtime.gui_runtime_classes.window_background import WindowBackground
 from .gui_base import BluraySubtitleGuiBase
 
@@ -62,6 +63,17 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         }
         self._auto_output_folders = {3: '', 4: '', 5: ''}
         self._bdmv_source_state_path = ''
+        self._bdmv_load_pending = False
+        self._bdmv_load_replaced = False
+        self._bdmv_load_dialog = None
+        self._bdmv_load_cancel_event = None
+        self._bdmv_table_updates = None
+        self._bdmv_inventory = {}
+        self._disc_scan_worker = None
+        self._bdmv_load_timer = QTimer(self)
+        self._bdmv_load_timer.setSingleShot(True)
+        self._bdmv_load_timer.setInterval(180)
+        self._bdmv_load_timer.timeout.connect(self._start_bdmv_load)
         self._iso_playlist_temp = None
         self._iso_playlist_cache = {}
         self._window_geometry_restored = False
@@ -793,7 +805,8 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self._remux_cmd_refresh_timer.setSingleShot(True)
         self._remux_cmd_refresh_timer.setInterval(300)
         self._remux_cmd_refresh_timer.timeout.connect(
-            lambda: self._refresh_table1_remux_cmds() if self.get_selected_function_id() in (3, 4, 5) else None)
+            lambda: self._refresh_table1_remux_cmds()
+            if not self._bdmv_load_pending and self.get_selected_function_id() in (3, 4, 5) else None)
         self.output_folder_path.textChanged.connect(lambda _=None: self._remux_cmd_refresh_timer.start())
         button_output = QPushButton("Select")
         button_output.clicked.connect(self.select_output_folder)
@@ -886,8 +899,8 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
     def _check_log_file_error(self) -> None:
         error = self._application_log.take_file_error()
         if error is not None:
-            warning = QMessageBox(
-                QMessageBox.Icon.Warning, self.t('View Log'),
+            warning = AnimatedMessageBox(
+                AnimatedMessageBox.Icon.Warning, self.t('View Log'),
                 self.t('Could not save the log file. {error}').format(error=error), parent=self,
             )
             warning.setModal(False)
@@ -1020,6 +1033,11 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         )
         if not minimize_to_tray:
             self._close_pending = True
+            self._bdmv_load_timer.stop()
+            if self._disc_scan_worker is not None:
+                self._disc_scan_worker.cancel_event.set()
+            if self._bdmv_load_dialog is not None:
+                self._finish_bdmv_load()
             active_threads = [thread for thread in self.findChildren(QThread) if thread.isRunning()]
             if active_threads:
                 self.setEnabled(False)
@@ -1027,7 +1045,6 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
                         '_current_cancel_event',
                         '_sp_scan_cancel_event',
                         '_subtitle_scan_cancel_event',
-                        '_iso_scan_cancel_event',
                 ):
                     cancel_event = getattr(self, name, None)
                     if cancel_event is not None:
@@ -1087,19 +1104,15 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             return
         if text:
             state['text'] = str(text)
+        if self._bdmv_load_dialog is not None:
+            if text:
+                self._bdmv_load_dialog.setLabelText(text)
+            return
         dlg = state.get('dialog')
         if dlg is None and (time.time() - float(state.get('start') or 0.0)) >= float(state.get('delay') or 2.0):
-            dlg = QProgressDialog(str(state.get('text') or self.t('Loading...')), '', 0, 0, self)
-            dlg.setCancelButton(None)
+            dlg = ScanProgressDialog(self, str(state.get('text') or self.t('Loading...')), show_delay_ms=None)
             dlg.setWindowModality(Qt.WindowModality.ApplicationModal if modal else Qt.WindowModality.NonModal)
-            dlg.setMinimumWidth(420)
-            bar = QProgressBar(dlg)
-            bar.setRange(0, 0)
-            bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            dlg.setBar(bar)
-            dlg.setMinimumDuration(0)
-            dlg.setAutoClose(False)
-            dlg.setAutoReset(False)
+            self._apply_window_opacity(dlg)
             dlg.show()
             state['dialog'] = dlg
         elif dlg is not None and text:
@@ -1118,7 +1131,6 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         dlg = state.get('dialog')
         if dlg is not None:
             try:
-                dlg.close()
-                dlg.deleteLater()
+                dlg.finish()
             except Exception:
                 pass

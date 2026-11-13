@@ -24,7 +24,7 @@ from ..gui_runtime_split.track_and_attachment_editing import TrackAttachmentEdit
 from ..gui_runtime_split.vpy_edit_and_preview import VpyEditPreviewMixin
 from ..gui_runtime_split.gui_base import BluraySubtitleGuiBase
 from .desktop_appearance import desktop_appearance
-from .widget_animations import animate_window_open, window_is_fading_out, window_opacity
+from .widget_animations import DialogFade, animate_window_open, window_is_fading_out, window_opacity
 from .window_background import background_panel_colors
 from .x11_window import apply_x11_title_bar_theme
 
@@ -109,7 +109,8 @@ class BluraySubtitleGUI(
         if event_type == QEvent.Type.Show and isinstance(watched, QWidget):
             if watched.isWindow() and not event.spontaneous():
                 apply_x11_title_bar_theme(watched, (watched.property('logWindowTheme') or self._theme_mode) == 'dark')
-                animate_window_open(watched)
+                if watched is self or isinstance(watched, DialogFade):
+                    animate_window_open(watched)
             parent = watched.parentWidget()
             window_type = watched.windowType()
             follows_owner_opacity = window_type == Qt.WindowType.ToolTip or (

@@ -2,6 +2,7 @@
 
 import os
 import re
+from collections.abc import Generator
 from typing import Optional
 
 from PyQt6.QtCore import QModelIndex, QSignalBlocker, Qt
@@ -10,7 +11,7 @@ from PyQt6.QtWidgets import QComboBox, QTableWidgetItem, QTableWidget, QToolButt
 from src.core import REMUX_LABELS, DIY_REMUX_LABELS, ENCODE_LABELS, ENCODE_REMUX_LABELS, CURRENT_UI_LANGUAGE, ENCODE_SP_LABELS, \
     DIY_SP_LABELS, MPLS_INFO_LABELS
 from src.runtime.gui_runtime_classes.custom_table_widget import READ_ONLY_HINT_ROLE
-from src.runtime.gui_runtime_classes.sp_table_items import SpOutputNameItem, SpSelectionItem
+from src.runtime.gui_runtime_classes.sp_table_items import SP_STANDALONE_TRACKS_ROLE, SpOutputNameItem, SpSelectionItem
 from src.runtime.services import BluraySubtitle
 from src.exports.utils import parse_time_to_seconds
 from src.runtime.audio_conversion import is_immersive_audio_codec
@@ -164,6 +165,9 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
     def _m2ts_file_detail_from_mpls_path(self, mpls_path: str) -> str:
         """Full path to ``*.mpls``; detail string follows README ``in_out_time`` + first_pts formula."""
         mp = str(mpls_path or '').strip()
+        playlist = self._loaded_playlist(mp)
+        if playlist is not None:
+            return playlist.detail
         if not mp or not os.path.isfile(mp):
             return ''
         return BluraySubtitle.m2ts_file_detail_from_mpls_playlist(mp)
@@ -368,9 +372,18 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
     def _sp_m2ts_detail_for_entry(self, bdmv_index: int, mpls_file: str, m2ts_files: list[str]) -> str:
         """SP ``m2ts_file_detail``: MPLS rows use ``in_out_time`` via ``m2ts_file_detail_from_mpls_playlist``."""
         mpls_name = str(mpls_file or '').strip()
+        inventory = getattr(self, '_bdmv_inventory', None)
+        if inventory:
+            root = self._get_disc_root_for_bdmv_index(int(bdmv_index))
+            disc = inventory.get(root)
+            if disc is not None and not mpls_name and all(name in disc.standalone_streams for name in m2ts_files):
+                return ','.join(disc.standalone_streams[name][1] for name in m2ts_files)
         playlist_dir = self._get_playlist_dir_for_bdmv_index(int(bdmv_index))
         if mpls_name and playlist_dir:
             mpls_path = os.path.normpath(os.path.join(playlist_dir, mpls_name))
+            playlist = self._loaded_playlist(mpls_path)
+            if playlist is not None:
+                return filter_m2ts_file_detail_by_basenames(playlist.detail, m2ts_files) if m2ts_files else playlist.detail
             if os.path.isfile(mpls_path):
                 try:
                     detail = BluraySubtitle.m2ts_file_detail_from_mpls_playlist(mpls_path).strip()
@@ -603,11 +616,14 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
             bdmv_index = 0
         mpls_item = self.table3.item(row, mpls_col)
         mpls_file = mpls_item.text().strip() if mpls_item and mpls_item.text() else ''
+        dit = self.table3.item(row, det_col)
+        if self._bdmv_inventory and dit is not None and dit.text().strip():
+            # The disc worker already read this row's detail and clip order.
+            return
         playlist_dir = self._get_playlist_dir_for_bdmv_index(bdmv_index)
         sp_mpls = os.path.normpath(os.path.join(playlist_dir, mpls_file)) if playlist_dir and mpls_file else ''
 
         txt = self._m2ts_file_detail_for_sp_table_row(row, labels).strip()
-        dit = self.table3.item(row, det_col)
         if not dit:
             dit = QTableWidgetItem('')
             self.table3.setItem(row, det_col, dit)
@@ -627,6 +643,10 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
             self.table3.setItem(row, m2_col, QTableWidgetItem(','.join(extracted)))
 
     def _recompute_sp_output_names(self, only_bdmv_index: Optional[int] = None):
+        for _ in self._build_sp_output_names(only_bdmv_index):
+            pass
+
+    def _build_sp_output_names(self, only_bdmv_index: Optional[int] = None) -> Generator[None, None, None]:
         """Recompute names that depend on the current main rows and SP scan data.
 
         The scan completion boundary calls this after every row result has been
@@ -684,6 +704,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
             digits = max(2, len(str(max(len(selected_rows), 1))))
             seq = 0
             for r in rows:
+                yield
                 out_item = self.table3.item(r, out_col)
                 if not out_item:
                     out_item = SpOutputNameItem('')
@@ -833,7 +854,9 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                                 mpls_path = os.path.join(playlist_dir, mpls_file)
                                 streams = self._read_mpls_track_info(mpls_path)
                             elif str(src).lower().endswith('.m2ts'):
-                                streams = self._read_m2ts_track_info(src)
+                                streams = type_item.data(SP_STANDALONE_TRACKS_ROLE) if type_item else None
+                                if streams is None:
+                                    streams = self._read_m2ts_track_info(src)
                             else:
                                 streams = BluraySubtitle._read_media_streams(src)
                             for s in streams:
@@ -898,8 +921,10 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                                 if ext_cache_key in single_sub_ext_cache:
                                     ext = str(single_sub_ext_cache[ext_cache_key] or 'sup')
                                 else:
-                                    streams = self._read_m2ts_track_info(src) if str(src).lower().endswith(
-                                        '.m2ts') else BluraySubtitle._read_media_streams(src)
+                                    streams = type_item.data(SP_STANDALONE_TRACKS_ROLE) if type_item else None
+                                    if streams is None:
+                                        streams = self._read_m2ts_track_info(src) if str(src).lower().endswith(
+                                            '.m2ts') else BluraySubtitle._read_media_streams(src)
                                     for s in streams:
                                         if str(s.get('codec_type') or '') not in ('subtitle', 'subtitles'):
                                             continue

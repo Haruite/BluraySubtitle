@@ -54,7 +54,15 @@ class BluraySubtitleGuiBase(QWidget):
         self._app_config_load_failed = None
         self._app_config_path = None
         self._auto_output_folders = None
+        self._bdmv_inventory = None
+        self._bdmv_load_cancel_event = None
+        self._bdmv_load_dialog = None
+        self._bdmv_load_pending = None
+        self._bdmv_load_replaced = None
+        self._bdmv_load_timer = None
         self._bdmv_source_state_path = None
+        self._bdmv_table_updates = None
+        self._disc_scan_worker = None
         self._input_folder_values = None
         self._language_code = None
         self._language_updating = None
@@ -80,12 +88,8 @@ class BluraySubtitleGuiBase(QWidget):
         self._sp_scan_error = None
         self._sp_scan_in_progress = None
         self._sp_scan_pending_function_id = None
-        self._sp_scan_progress_bar = None
         self._sp_scan_progress_dialog = None
         self._sp_scan_progress_done = None
-        self._sp_scan_progress_rows_seen = None
-        self._sp_scan_progress_show_timer = None
-        self._sp_scan_progress_total = None
         self._retired_sp_scans = None
         self._sp_scan_thread = None
         self._sp_scan_worker = None
@@ -95,7 +99,6 @@ class BluraySubtitleGuiBase(QWidget):
         self._subtitle_scan_debounce = None
         self._subtitle_scan_progress_dialog = None
         self._subtitle_scan_seq = None
-        self._subtitle_scan_show_timer = None
         self._subtitle_scan_thread = None
         self._subtitle_scan_worker = None
         self._theme_mode = None
@@ -306,6 +309,9 @@ class BluraySubtitleGuiBase(QWidget):
     def _begin_delayed_busy(self, label_text: str, minimum_delay_sec: float=2.0) -> dict[str, object]:
         raise NotImplementedError
 
+    def _build_disc_table(self, discs: list[DiscInventory], previous_checks: dict[str, Qt.CheckState], function_id: int) -> Generator[None, None, None]:
+        raise NotImplementedError
+
     def _build_end_chapter_combo(self, rows: int, has_beginning: bool, start_value: int, selected_value: int=0) -> QComboBox:
         raise NotImplementedError
 
@@ -315,7 +321,16 @@ class BluraySubtitleGuiBase(QWidget):
     def _build_main_remux_cmd_template(self, mpls_path: str, bdmv_index: int, root: str, *, name_seq_index: int=0, name_seq_total: int=1) -> str:
         raise NotImplementedError
 
+    def _build_sp_output_names(self, only_bdmv_index: Optional[int]=None) -> Generator[None, None, None]:
+        raise NotImplementedError
+
+    def _build_sp_table(self, configuration: dict[int, dict[str, int | str]]) -> Generator[None, None, None]:
+        raise NotImplementedError
+
     def _cache_available_track_ids(self, key: str, streams: list[dict[str, object]]) -> dict[str, list[str]]:
+        raise NotImplementedError
+
+    def _cancel_bdmv_load(self) -> None:
         raise NotImplementedError
 
     def _cancel_subtitle_folder_scan(self) -> None:
@@ -331,6 +346,9 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _check_log_file_error(self) -> None:
+        raise NotImplementedError
+
+    def _clear_bdmv_tables(self, *, keep_secondary_table: bool=False) -> None:
         raise NotImplementedError
 
     def _closest_endpoint(self, start_idx: int, target_sec: float, rows: int, offsets: dict[int, float], m2ts: dict[int, str], checked: list[bool], approx_episode_sec: Optional[float]=None) -> int:
@@ -420,6 +438,9 @@ class BluraySubtitleGuiBase(QWidget):
     def _find_table3_insert_row_for_entry(self, bdmv_index: int, mpls_file: str, m2ts_file: str) -> int:
         raise NotImplementedError
 
+    def _finish_bdmv_load(self, error: str='') -> None:
+        raise NotImplementedError
+
     def _folder_path_for_bdmv_index_from_table1(self, bdmv_index: int) -> str:
         raise NotImplementedError
 
@@ -496,7 +517,7 @@ class BluraySubtitleGuiBase(QWidget):
     def _iter_table2_episode_m2ts_details(self, bdmv_index: int):
         raise NotImplementedError
 
-    def _load_merge_sources(self, source_folder: str) -> list[tuple[str, str]]:
+    def _loaded_playlist(self, path: str) -> PlaylistInventory | None:
         raise NotImplementedError
 
     def _localized_headers_for_keys(self, keys: list[str]) -> list[str]:
@@ -531,6 +552,15 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _normalize_path_input(self, text: str) -> str:
+        raise NotImplementedError
+
+    def _on_bdmv_progress_finished(self) -> None:
+        raise NotImplementedError
+
+    def _on_bdmv_scan_finished(self) -> None:
+        raise NotImplementedError
+
+    def _on_bdmv_scan_progress(self, text: str, values: object) -> None:
         raise NotImplementedError
 
     def _on_encode_lossless_audio_preset_changed(self) -> None:
@@ -634,8 +664,7 @@ class BluraySubtitleGuiBase(QWidget):
     def _read_mkvmerge_attachment_rows(self, mkv_path: str) -> list[dict[str, str]]:
         raise NotImplementedError
 
-    @staticmethod
-    def _read_mpls_track_info(mpls_path: str) -> list[dict[str, object]]:
+    def _read_mpls_track_info(self, mpls_path: str) -> list[dict[str, object]]:
         raise NotImplementedError
 
     def _rebuild_configuration_for_function_34(self):
@@ -759,6 +788,9 @@ class BluraySubtitleGuiBase(QWidget):
     def _retire_sp_table_scan(self):
         raise NotImplementedError
 
+    def _run_bdmv_table_updates(self, updates: Generator[None, None, None]) -> None:
+        raise NotImplementedError
+
     def _run_chapter_combo_update(self):
         raise NotImplementedError
 
@@ -842,6 +874,9 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _split_m2ts_files(self, text: str) -> list[str]:
+        raise NotImplementedError
+
+    def _start_bdmv_load(self) -> None:
         raise NotImplementedError
 
     def _start_program_update(self, package: WindowsUpdatePackage) -> None:

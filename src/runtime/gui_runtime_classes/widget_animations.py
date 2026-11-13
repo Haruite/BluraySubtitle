@@ -5,7 +5,7 @@ from collections.abc import Callable
 from PyQt6 import sip
 from PyQt6.QtCore import QAbstractAnimation, QEasingCurve, QEvent, Qt, QVariantAnimation
 from PyQt6.QtGui import QWindow
-from PyQt6.QtWidgets import QApplication, QDialog, QGraphicsOpacityEffect, QMessageBox, QWidget
+from PyQt6.QtWidgets import QApplication, QDialog, QGraphicsOpacityEffect, QInputDialog, QMessageBox, QWidget
 
 from .desktop_appearance import desktop_appearance
 from .x11_window import x11_compositing_active
@@ -243,9 +243,39 @@ class AnimatedDialog(DialogFade, QDialog):
 
 
 class AnimatedMessageBox(DialogFade, QMessageBox):
+    @classmethod
+    def information(cls, parent: QWidget, title: str, text: str) -> QMessageBox.StandardButton:
+        return cls._show_message(parent, cls.Icon.Information, title, text)
+
+    @classmethod
+    def warning(cls, parent: QWidget, title: str, text: str) -> QMessageBox.StandardButton:
+        return cls._show_message(parent, cls.Icon.Warning, title, text)
+
+    @classmethod
+    def _show_message(cls, parent: QWidget, icon: QMessageBox.Icon, title: str,
+                      text: str) -> QMessageBox.StandardButton:
+        dialog = cls(icon, title, text, cls.StandardButton.Ok, parent)
+        dialog.setDefaultButton(cls.StandardButton.Ok)
+        dialog.exec()
+        return dialog.standardButton(dialog.clickedButton())
+
     def closeEvent(self, event) -> None:
         # QMessageBox computes the result of a title-bar close in its close handler.
         if animate_window_close(self, self.close):
             event.ignore()
         else:
             super().closeEvent(event)
+
+
+class AnimatedInputDialog(DialogFade, QInputDialog):
+    @classmethod
+    def getItem(cls, parent: QWidget, title: str, label: str, items: list[str]) -> tuple[str, bool]:
+        dialog = cls(parent)
+        dialog.setWindowTitle(title)
+        dialog.setLabelText(label)
+        dialog.setComboBoxItems(items)
+        dialog.setComboBoxEditable(False)
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        if accepted:
+            return dialog.textValue(), True
+        return (items[0] if items else ''), False

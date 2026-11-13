@@ -11,7 +11,7 @@ from typing import Optional
 import pycountry
 from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import QMessageBox, QDialog, QVBoxLayout, QPlainTextEdit, QWidget, QHBoxLayout, QPushButton, \
+from PyQt6.QtWidgets import QDialog, QVBoxLayout, QPlainTextEdit, QWidget, QHBoxLayout, QPushButton, \
     QLabel, QTableWidget, QLineEdit, QTableWidgetItem, QToolButton, QHeaderView, QComboBox
 
 from src.bdmv import pid_to_lang_from_m2ts_path
@@ -21,7 +21,7 @@ from src.exports.utils import run_command, mkv_codec_id_is_dts_family, print_ter
 from src.runtime.audio_conversion import is_lossless_audio_codec
 from src.runtime.gui_runtime_classes.custom_table_widget import SelectionTableWidget, StyledComboBox
 from src.runtime.gui_runtime_classes.file_dialog import choose_path
-from src.runtime.gui_runtime_classes.widget_animations import AnimatedDialog
+from src.runtime.gui_runtime_classes.widget_animations import AnimatedDialog, AnimatedMessageBox
 from src.runtime.services import BluraySubtitle
 from src.runtime.sp import SpEntry, media_track_key
 from .gui_base import BluraySubtitleGuiBase
@@ -491,7 +491,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             self._show_error_dialog(str(error))
             return
         if not MKV_EXTRACT_PATH or not MKV_PROP_EDIT_PATH:
-            QMessageBox.information(self, ' ', self.t('mkvextract or mkvpropedit not found'))
+            AnimatedMessageBox.information(self, ' ', self.t('mkvextract or mkvpropedit not found'))
             return
         tmp_dir = tempfile.mkdtemp(prefix='BluraySubtitle_chapters_')
         chapter_path = os.path.join(tmp_dir, 'chapter.txt')
@@ -566,11 +566,11 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             self._show_error_dialog(str(error))
             return
         if not MKV_EXTRACT_PATH:
-            QMessageBox.information(self, ' ', self.t('mkvextract not found'))
+            AnimatedMessageBox.information(self, ' ', self.t('mkvextract not found'))
             return
         attachment_id = str(attachment_id or '').strip()
         if not attachment_id:
-            QMessageBox.information(self, ' ', self.t('Attachment ID not found'))
+            AnimatedMessageBox.information(self, ' ', self.t('Attachment ID not found'))
             return
         safe_name = os.path.basename(str(filename or '').strip()) or f'attachment_{attachment_id}.bin'
         safe_name = safe_name.replace('\\', '_').replace('/', '_')
@@ -600,7 +600,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             self._show_error_dialog(str(error))
             return
         if not MKV_EXTRACT_PATH:
-            QMessageBox.information(self, ' ', self.t('mkvextract not found'))
+            AnimatedMessageBox.information(self, ' ', self.t('mkvextract not found'))
             return
         codec_id = str(codec_id or '').strip()
         codec_key = 'A_DTS' if mkv_codec_id_is_dts_family(codec_id) else (
@@ -688,9 +688,11 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             out.append(row)
         return out
 
-    @staticmethod
-    def _read_mpls_track_info(mpls_path: str) -> list[dict[str, object]]:
+    def _read_mpls_track_info(self, mpls_path: str) -> list[dict[str, object]]:
         """Read main-playlist rows from its STN; the persisted selection key is the PID."""
+        playlist = self._loaded_playlist(mpls_path)
+        if playlist is not None:
+            return playlist.tracks
         return BluraySubtitle._mpls_track_streams(mpls_path)
 
 
@@ -1143,7 +1145,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 return
             src_file = self._normalize_path_input(file_edit.text())
             if not src_file or not os.path.isfile(src_file):
-                QMessageBox.information(self, " ", self.t('Select attachment file'))
+                AnimatedMessageBox.information(self, " ", self.t('Select attachment file'))
                 return
             row = state['rows'][r]
             sel = selector_for_row(row)
@@ -1199,7 +1201,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
         def apply_add():
             src_file = self._normalize_path_input(file_edit.text())
             if not src_file or not os.path.isfile(src_file):
-                QMessageBox.information(self, " ", self.t('Select attachment file'))
+                AnimatedMessageBox.information(self, " ", self.t('Select attachment file'))
                 return
             before_rows = list(state.get('rows') or [])
             before_set = {(str(x.get('id') or ''), str(x.get('filename') or '')) for x in before_rows}
@@ -1807,7 +1809,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
         try:
             src = self._remux_mkv_source_for_edit(table, row_index)
             if not src or not os.path.exists(src):
-                QMessageBox.information(self, " ", self.t('MKV file not found'))
+                AnimatedMessageBox.information(self, " ", self.t('MKV file not found'))
                 return
             self._show_attachments_dialog(src)
         except Exception:
@@ -1821,7 +1823,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
         try:
             src = self._remux_mkv_source_for_edit(table, row_index)
             if not src or not os.path.exists(src):
-                QMessageBox.information(self, " ", self.t('MKV file not found'))
+                AnimatedMessageBox.information(self, " ", self.t('MKV file not found'))
                 return
             self._edit_chapters_for_mkv(src)
         except Exception:
@@ -1841,7 +1843,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 key = media_track_key('mkvsp', src)
                 is_sp = True
             if not src or not os.path.exists(src):
-                QMessageBox.information(self, " ", self.t('MKV file not found'))
+                AnimatedMessageBox.information(self, " ", self.t('MKV file not found'))
                 return
             self._ensure_default_track_config_for_mkv(src, sp=is_sp)
             streams = self._read_mkvinfo_tracks(src)
@@ -2012,12 +2014,12 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             if mpls_file:
                 playlist_dir = self._get_playlist_dir_for_bdmv_index(bdmv_index)
                 if not playlist_dir:
-                    QMessageBox.information(self, " ",
+                    AnimatedMessageBox.information(self, " ",
                                             self.t('Matching Blu-ray directory not found (bdmv_index={bdmv_index}), cannot locate MPLS file').format(bdmv_index=bdmv_index))
                     return
                 mpls_path = os.path.normpath(os.path.join(playlist_dir, mpls_file))
                 if not os.path.exists(mpls_path):
-                    QMessageBox.information(self, " ", self.t('MPLS file not found:\n{mpls_path}').format(mpls_path=mpls_path))
+                    AnimatedMessageBox.information(self, " ", self.t('MPLS file not found:\n{mpls_path}').format(mpls_path=mpls_path))
                     return
                 streams = self._read_mpls_track_info(mpls_path)
                 n_raw = len(streams)
@@ -2031,11 +2033,11 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             else:
                 m2ts_files = self._split_m2ts_files(m2ts_text)
                 if not m2ts_files:
-                    QMessageBox.information(self, " ", self.t('M2TS file not found'))
+                    AnimatedMessageBox.information(self, " ", self.t('M2TS file not found'))
                     return
                 stream_dir = self._get_stream_dir_for_bdmv_index(bdmv_index)
                 if not stream_dir:
-                    QMessageBox.information(self, " ",
+                    AnimatedMessageBox.information(self, " ",
                                             self.t('Matching Blu-ray directory not found (bdmv_index={bdmv_index}), cannot locate M2TS file').format(bdmv_index=bdmv_index))
                     return
                 m2ts_path = os.path.normpath(os.path.join(stream_dir, m2ts_files[0]))
@@ -2043,7 +2045,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                     print_terminal_line(
                         f'[edit tracks] table3 SP (orphan m2ts): file missing m2ts_path={m2ts_path!s}'
                     )
-                    QMessageBox.information(self, " ", self.t('M2TS file not found:\n{m2ts_path}').format(m2ts_path=m2ts_path))
+                    AnimatedMessageBox.information(self, " ", self.t('M2TS file not found:\n{m2ts_path}').format(m2ts_path=m2ts_path))
                     return
                 streams = self._read_m2ts_track_info(m2ts_path)
                 n_raw = len(streams)

@@ -343,7 +343,7 @@ class BluraySubtitleServiceBase:
         raise NotImplementedError
 
     @staticmethod
-    def _read_media_streams(media_path: str) -> list[dict[str, object]]:
+    def _read_media_streams(media_path: str, *, cancel_event: threading.Event | None=None, timeout: float | None=None) -> list[dict[str, object]]:
         raise NotImplementedError
 
     def _remux_aligned_clip(self, m2ts_path: str, mpls_path: str, clip_slots: list[dict[str, object]], part_output: str, split_argument: str, clip_duration_sec: float, work_dir: str, part_tag: str, mkvmerge_executable: str, ui_language_argument: str) -> bool:
@@ -431,6 +431,10 @@ class BluraySubtitleServiceBase:
         raise NotImplementedError
 
     @staticmethod
+    def _standalone_m2ts_timing(m2ts_path: str, *, check_canceled: Callable[[], None] | None=None) -> tuple[float, str]:
+        raise NotImplementedError
+
+    @staticmethod
     def _stream_service_id(stream: dict) -> Optional[int]:
         raise NotImplementedError
 
@@ -511,7 +515,7 @@ class BluraySubtitleServiceBase:
     def generate_configuration_from_selected_mpls(self, selected_mpls: list[tuple[str, str]], subtitle_chapters: Optional[dict[int, tuple[str, int]]]=None, subtitle_index: Optional[int]=None, cancel_event: Optional[threading.Event]=None, subtitle_durations: Optional[dict[str, float]]=None) -> dict[int, dict[str, int | str]]:
         raise NotImplementedError
 
-    def get_default_main_mpls(self, bluray_folder: str, checked: bool, movie_mode: bool=False) -> list[str]:
+    def get_default_main_mpls(self, bluray_folder: str, checked: bool, movie_mode: bool=False, *, chapters: dict[str, Chapter] | None=None, check_canceled: Callable[[], None] | None=None) -> list[str]:
         raise NotImplementedError
 
     def get_main_mpls(self, bluray_folder: str, checked: bool) -> Optional[str]:
@@ -534,7 +538,7 @@ class BluraySubtitleServiceBase:
         raise NotImplementedError
 
     @staticmethod
-    def m2ts_file_detail_from_mpls_playlist(mpls_path: str) -> str:
+    def m2ts_file_detail_from_mpls_playlist(mpls_path: str, *, chapter: Chapter | None=None, check_canceled: Callable[[], None] | None=None) -> str:
         raise NotImplementedError
 
     @staticmethod

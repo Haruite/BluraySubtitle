@@ -99,6 +99,9 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             pass
 
         if remux_mode:
+            if self._bdmv_load_pending:
+                self.on_bdmv_folder_path_change()
+            self._bdmv_source_state_path = None
             self._retire_sp_table_scan()
             for table, labels in ((self.table2, ENCODE_REMUX_LABELS), (self.table3, ENCODE_REMUX_SP_LABELS)):
                 table.setColumnCount(len(labels))
@@ -162,6 +165,9 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
 
     def _apply_episode_mode_to_table2(self):
         if not hasattr(self, '_subtitle_scan_debounce'):
+            return
+        if self._bdmv_load_pending:
+            self.on_bdmv_folder_path_change()
             return
         function_id = self.get_selected_function_id()
         if function_id == 1:
@@ -850,6 +856,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 self.checkbox1.isChecked(),
                 None,
                 approx_episode_duration_seconds=self._get_approx_episode_duration_seconds(),
+                disc_folders=self._table1_bluray_folder_order(),
             )
             selected_mpls = self.get_selected_mpls_no_ext()
             if not selected_mpls:
@@ -861,7 +868,6 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 except Exception:
                     pass
                 return
-            bs.bluray_folders = self._table1_bluray_folder_order()
             configuration = bs.generate_configuration_from_selected_mpls(selected_mpls)
             # The first pass creates all table2 widgets. Their visible values are
             # authoritative, so read them back before the only table3 refresh.
@@ -872,6 +878,8 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
             current_configuration = self._generate_configuration_from_ui_inputs() if self.table2.rowCount() > 0 else {}
             self.on_configuration(current_configuration or configuration, update_sp_table=True)
         except Exception:
+            if self._bdmv_table_updates is not None:
+                raise
             print_exc_terminal()
 
     def _rebuild_configuration_for_function_34(self):
@@ -1270,6 +1278,8 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                 self._resize_table_columns_for_language(self.table2)
                 self.altered = True
         except Exception:
+            if self._bdmv_table_updates is not None:
+                raise
             self._show_error_dialog(traceback.format_exc())
             if hasattr(self, 'table3'):
                 self.table3.setRowCount(0)

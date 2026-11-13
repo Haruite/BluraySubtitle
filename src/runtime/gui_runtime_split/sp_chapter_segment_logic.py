@@ -2,6 +2,7 @@
 import os
 import re
 import traceback
+from collections.abc import Generator
 from functools import partial
 from typing import Optional
 
@@ -18,6 +19,7 @@ from src.exports.utils import (
 )
 from src.runtime.services import BluraySubtitle
 from src.runtime.gui_runtime_classes.custom_table_widget import StyledComboBox
+from src.runtime.gui_runtime_classes.disc_scan_worker import SP_ORPHAN_M2TS_SKIP_DURATION_BYTES
 from src.runtime.gui_runtime_classes.sp_table_items import SpOutputNameItem, SpSelectionItem
 from src.runtime.sp import SpEntry, media_track_key
 from src.runtime.services_split.misc_workflows import (
@@ -25,11 +27,6 @@ from src.runtime.services_split.misc_workflows import (
     _movie_sp_duration_matches_main,
 )
 from .gui_base import BluraySubtitleGuiBase
-
-# Skip full M2TS duration probe for tiny STREAM orphans (menus / bumps); avoids hundreds of
-# synchronous parses on large discs during refresh_sp_table (UI thread).
-_SP_ORPHAN_M2TS_SKIP_DURATION_BYTES = 512 * 1024
-
 
 def _playlist_sp_default(clip_count: int, duration: float) -> tuple[bool, str]:
     if clip_count >= 3:
@@ -993,18 +990,19 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
     def _on_sp_table_scan_finished(self):
         """Finalize all applied SP results and publish table3 as task-ready.
 
-        Output names depend on scan-produced row types and track selections, so
-        readiness is set only after the final name recomputation succeeds. The
-        blocking worker connection guarantees this slot finishes before the
-        QThread cleanup slot can resume a queued Remux or Encode task.
+        The queued completion follows the per-row results. An active disc load
+        finishes its output names in the table update batches after thread exit.
         """
-        if getattr(self, '_sp_scan_worker', None) is not self.sender():
+        sender = self.sender()
+        if sender is None or self._sp_scan_worker is not sender:
+            return
+        if self._sp_scan_cancel_event.is_set() or self._close_pending:
             return
         try:
-            self._recompute_sp_output_names()
+            if self._bdmv_load_dialog is None:
+                self._recompute_sp_output_names()
         except Exception as error:
             self._sp_scan_error = str(error)
-            self._show_error_dialog(self._sp_scan_error)
             return
         self._sp_scan_completed = True
         self._sp_scan_error = ''
@@ -1273,7 +1271,15 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             self.on_configuration(configuration)
 
     def refresh_sp_table(self, configuration: dict[int, dict[str, int | str]]):
-        """Synchronously rebuild table3, then start its single background scan.
+        updates = self._build_sp_table(configuration)
+        if self._bdmv_table_updates is not None:
+            self._run_bdmv_table_updates(updates)
+        else:
+            for _ in updates:
+                pass
+
+    def _build_sp_table(self, configuration: dict[int, dict[str, int | str]]) -> Generator[None, None, None]:
+        """Build table3, then start its single background scan.
 
         Main-playlist selection is read from table1, while episode association
         and output naming use the stable table2/configuration state. Existing
@@ -1365,9 +1371,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                 for bdmv_index, main_paths in selected_main_by_bdmv.items():
                     for main_path in main_paths:
                         try:
-                            detail = BluraySubtitle.m2ts_file_detail_from_mpls_playlist(
-                                main_path
-                            ).strip()
+                            detail = self._m2ts_file_detail_from_mpls_path(main_path).strip()
                         except Exception:
                             detail = ''
                         if detail:
@@ -1409,12 +1413,14 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     main_path: str, alternate_chapter: Chapter) -> None:
                 """Expose non-duplicate logical tracks from a full-timeline MPLS provider."""
                 main_norm = os.path.normcase(os.path.abspath(main_path))
-                main_streams = _provider_streams(main_path)
-                info = whole_main_track_info.setdefault(main_norm, {
-                    'main_path': os.path.normpath(main_path),
-                    'mpls_paths': [],
-                    'streams': list(main_streams),
-                })
+                info = whole_main_track_info.get(main_norm)
+                if info is None:
+                    info = {
+                        'main_path': os.path.normpath(main_path),
+                        'mpls_paths': [],
+                        'streams': _provider_streams(main_path),
+                    }
+                    whole_main_track_info[main_norm] = info
                 alternate_path = os.path.normpath(str(alternate_chapter.file_path))
                 if alternate_path not in info['mpls_paths']:
                     info['mpls_paths'].append(alternate_path)
@@ -1467,22 +1473,28 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                 selected_main_paths = [x for x in selected_main_paths if os.path.exists(x)]
                 selected_main_basename_set = {os.path.basename(x) for x in selected_main_paths}
 
-                try:
-                    playlist_files = os.listdir(playlist_dir)
-                except Exception:
-                    print_exc_terminal()
-                    playlist_files = []
+                inventory = self._bdmv_inventory.get(os.path.normpath(root))
+                if inventory is None:
+                    try:
+                        playlist_files = sorted(os.listdir(playlist_dir))
+                    except OSError:
+                        print_exc_terminal()
+                        playlist_files = []
+                    playlists = ((name, None) for name in playlist_files)
+                else:
+                    playlists = ((os.path.basename(playlist.path), playlist) for playlist in inventory.playlists.values())
 
-                # One pass: collect all m2ts referenced by any playlist, and build SP rows for
-                # non-main playlists (previously this scanned *.mpls twice with Chapter each).
+                # Build playlist rows and collect references in the same pass.
                 all_mpls_m2ts: set[str] = set()
-                for mpls_file in sorted(playlist_files):
+                for mpls_file, playlist in playlists:
+                    yield
                     if not mpls_file.endswith('.mpls'):
                         continue
                     mpls_file_path = os.path.join(playlist_dir, mpls_file)
                     try:
-                        ch = Chapter(mpls_file_path)
-                        m2ts_files = list(BluraySubtitle.m2ts_file_basenames_from_mpls_playlist(mpls_file_path))
+                        ch = playlist.chapter if playlist is not None else Chapter(mpls_file_path)
+                        m2ts_files = (list(playlist.stream_files) if playlist is not None else
+                                      list(dict.fromkeys(f'{clip}.m2ts' for clip, _, _ in ch.in_out_time)))
                     except Exception:
                         continue
                     for bn in m2ts_files:
@@ -1498,11 +1510,15 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     default_selected, reason = _playlist_sp_default(len(set(m2ts_files)), dur_for_select)
                     if not default_selected and dur >= 30.0:
                         reason = 'The playlist is shorter than 30 seconds when repeated clips are counted once.'
-                    try:
-                        sp_detail_saved = self._sp_m2ts_detail_for_entry(
-                            bdmv_index, os.path.basename(mpls_file_path), m2ts_files)
-                    except Exception:
-                        sp_detail_saved = ''
+                    if playlist is not None:
+                        sp_detail_saved = playlist.detail
+                    else:
+                        try:
+                            sp_detail_saved = self._sp_m2ts_detail_for_entry(
+                                bdmv_index, os.path.basename(mpls_file_path), m2ts_files,
+                            )
+                        except Exception:
+                            sp_detail_saved = ''
                     matching_whole_main_paths = whole_main_by_detail.get(
                         bdmv_index, {}
                     ).get(sp_detail_saved, []) if sp_detail_saved else []
@@ -1559,12 +1575,6 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                                           'Its timeline and selected tracks are already covered by a main output.')
                         except Exception:
                             pass
-                    if not sp_detail_saved:
-                        try:
-                            sp_detail_saved = self._sp_m2ts_detail_for_entry(
-                                bdmv_index, os.path.basename(mpls_file_path), m2ts_files)
-                        except Exception:
-                            sp_detail_saved = ''
                     entries.append({
                         'bdmv_index': bdmv_index,
                         'mpls_file': os.path.basename(mpls_file_path),
@@ -1577,17 +1587,22 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
 
                 # Add remaining m2ts not referenced by any playlist mpls.
                 stream_folder = os.path.join(os.path.dirname(playlist_dir), 'STREAM')
-                if os.path.isdir(stream_folder):
+                if inventory is not None:
+                    standalone = inventory.standalone_streams.items()
+                elif os.path.isdir(stream_folder):
                     try:
-                        stream_files = sorted(os.listdir(stream_folder))
-                    except Exception:
-                        stream_files = []
-                    for sf in stream_files:
-                        if not sf.endswith('.m2ts'):
-                            continue
-                        if sf in all_mpls_m2ts:
-                            continue
-                        m2ts_path = os.path.join(stream_folder, sf)
+                        standalone = (
+                            (name, None) for name in sorted(os.listdir(stream_folder))
+                            if name.endswith('.m2ts') and name not in all_mpls_m2ts
+                        )
+                    except OSError:
+                        standalone = ()
+                else:
+                    standalone = ()
+                for sf, timing in standalone:
+                    yield
+                    m2ts_path = os.path.join(stream_folder, sf)
+                    if timing is None:
                         try:
                             size = os.path.getsize(m2ts_path)
                         except OSError:
@@ -1596,56 +1611,52 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                         reason = 'No usable duration was found for this standalone M2TS.'
                         if size is None:
                             reason = 'The size of this standalone M2TS could not be read.'
-                        elif size < _SP_ORPHAN_M2TS_SKIP_DURATION_BYTES:
+                        elif size < SP_ORPHAN_M2TS_SKIP_DURATION_BYTES:
                             reason = 'This standalone M2TS is too small for duration-based selection.'
                         else:
                             try:
                                 dur = BluraySubtitle._m2ts_duration_90k(m2ts_path) / 90000.0
                             except Exception:
                                 pass
-                        orphan_selected = dur >= 30.0
-                        if orphan_selected:
-                            reason = 'This standalone M2TS is at least 30 seconds long.'
-                        elif dur > 0.0:
-                            reason = 'This standalone M2TS is shorter than 30 seconds.'
-                        main_dur = main_duration_by_bdmv.get(bdmv_index)
-                        if (orphan_selected and movie_mode and main_dur is not None
-                                and _movie_sp_duration_matches_main(float(dur), main_dur)):
-                            orphan_selected = False
-                            reason = 'Its duration is close to the main movie.'
-                        orphan_detail = ''
-                        if orphan_selected:
-                            try:
-                                orphan_detail = self._sp_m2ts_detail_for_entry(bdmv_index, '', [sf])
-                                sp_entry = {
-                                    'bdmv_index': bdmv_index,
-                                    'mpls_file': '',
-                                    'm2ts_file': sf,
-                                    'output_name': '',
-                                }
-                                sp_key = SpEntry.from_mapping(sp_entry).track_key
-                                if self._sp_covered_by_table2_episode_row(
-                                    bdmv_index, orphan_detail, sp_key, sp_mpls_path='',
-                                ):
-                                    orphan_selected = False
-                                    reason = ('Its timeline is already covered by the main movie.' if movie_mode else
-                                              'Its timeline and selected tracks are already covered by a main output.')
-                            except Exception:
-                                pass
-                        if not orphan_detail:
-                            try:
-                                orphan_detail = self._sp_m2ts_detail_for_entry(bdmv_index, '', [sf])
-                            except Exception:
-                                orphan_detail = ''
-                        entries.append({
-                            'bdmv_index': bdmv_index,
-                            'mpls_file': '',
-                            'm2ts_files': [sf],
-                            'm2ts_file_detail': orphan_detail,
-                            'duration': dur,
-                            'default_selected': orphan_selected,
-                            'default_reason': reason,
-                        })
+                        orphan_detail = self._sp_m2ts_detail_for_entry(bdmv_index, '', [sf])
+                    else:
+                        dur, orphan_detail, reason = timing
+                    orphan_selected = dur >= 30.0
+                    if orphan_selected:
+                        reason = 'This standalone M2TS is at least 30 seconds long.'
+                    elif dur > 0.0:
+                        reason = 'This standalone M2TS is shorter than 30 seconds.'
+                    main_dur = main_duration_by_bdmv.get(bdmv_index)
+                    if (orphan_selected and movie_mode and main_dur is not None
+                            and _movie_sp_duration_matches_main(float(dur), main_dur)):
+                        orphan_selected = False
+                        reason = 'Its duration is close to the main movie.'
+                    if orphan_selected:
+                        try:
+                            sp_entry = {
+                                'bdmv_index': bdmv_index,
+                                'mpls_file': '',
+                                'm2ts_file': sf,
+                                'output_name': '',
+                            }
+                            sp_key = SpEntry.from_mapping(sp_entry).track_key
+                            if self._sp_covered_by_table2_episode_row(
+                                bdmv_index, orphan_detail, sp_key, sp_mpls_path='',
+                            ):
+                                orphan_selected = False
+                                reason = ('Its timeline is already covered by the main movie.' if movie_mode else
+                                          'Its timeline and selected tracks are already covered by a main output.')
+                        except Exception:
+                            pass
+                    entries.append({
+                        'bdmv_index': bdmv_index,
+                        'mpls_file': '',
+                        'm2ts_files': [sf],
+                        'm2ts_file_detail': orphan_detail,
+                        'duration': dur,
+                        'default_selected': orphan_selected,
+                        'default_reason': reason,
+                    })
 
             manual_main_keys = getattr(self, '_manual_main_track_selection_keys', None)
             if not isinstance(manual_main_keys, set):
@@ -1791,6 +1802,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                         self.table3.setItem(i, column, None)
                         self.table3.removeCellWidget(i, column)
                     self.ensure_encode_row_widgets(i, self.table3)
+                    yield
                 try:
                     self._sync_chapter_checkbox_sp_rows_all_volumes(configuration)
                 except Exception:
@@ -1799,7 +1811,7 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     self._apply_table3_uncheck_rows_covered_by_table2()
                 except Exception:
                     print_exc_terminal()
-                self._recompute_sp_output_names()
+                yield from self._build_sp_output_names()
                 if self._is_movie_mode():
                     try:
                         self._show_m2ts_file_detail_columns()
@@ -1825,12 +1837,10 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                 self._updating_sp_table = False
             if not had_rows:
                 self._scroll_table_to_primary_column(self.table3)
-            try:
-                # This is the only scan start for this table rebuild. It must
-                # remain after the final row order and visible values are stable.
-                self._start_sp_table_scan()
-            except Exception:
-                pass
+            # Start the worker only after row indexes and track keys are stable.
+            self._start_sp_table_scan()
         except Exception:
+            if self._bdmv_table_updates is not None:
+                raise
             print_exc_terminal()
             self.table3.setRowCount(0)

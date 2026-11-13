@@ -7,6 +7,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from src.bdmv import M2TS, pid_to_lang_from_m2ts_path
 from src.core import FFMPEG_PATH
 from src.exports.utils import print_tb_string_terminal, run_command
+from src.runtime import TaskCancelled
 from src.runtime.services import BluraySubtitle
 
 
@@ -29,6 +30,17 @@ class SpTableScanWorker(QObject):
         super().__init__()
         self._rows = rows
         self._cancel_event = cancel_event
+
+    def _check_canceled(self) -> None:
+        if self._cancel_event.is_set():
+            raise TaskCancelled()
+
+    def _read_audio_profiles(self, path: str) -> dict[int, str]:
+        return {
+            pid: str(row.get('profile') or '')
+            for row in BluraySubtitle._read_media_streams(path, cancel_event=self._cancel_event, timeout=15)
+            if (pid := BluraySubtitle._stream_service_id(row)) is not None
+        }
 
     def run(self):
         """Scan rows in visible order and emit exactly one result for each row."""
@@ -104,6 +116,7 @@ class SpTableScanWorker(QObject):
                         13,
                         video_pid=int(video_track['pid']),
                         codec_name=str(video_track.get('codec_name') or ''),
+                        check_canceled=self._check_canceled,
                     )
                     if frame_count < 1 or frame_count > 12:
                         still_image_cache[key] = False
@@ -117,25 +130,28 @@ class SpTableScanWorker(QObject):
                         '-map', '0:v:0', '-an', '-sn', '-dn',
                         '-vf', 'trim=end_frame=12,mpdecimate=hi=0:lo=0:frac=1',
                         '-frames:v', '2', '-f', 'framemd5', '-',
-                    ], capture_output=True, text=True, encoding='utf-8', errors='ignore', timeout=15)
+                    ], capture_output=True, text=True, encoding='utf-8', errors='ignore', timeout=15,
+                        cancel_event=self._cancel_event)
                     decoded_images = [
                         line
-                        for line in str(result.stdout or '').splitlines()
+                        for line in (result.stdout or '').splitlines()
                         if line and not line.startswith('#') and ',' in line
                     ]
-                    is_still = bool(result.returncode == 0 and len(decoded_images) == 1)
+                    is_still = result.returncode == 0 and len(decoded_images) == 1
+                except TaskCancelled:
+                    raise
                 except Exception:
                     is_still = False
                 still_image_cache[key] = is_still
                 return is_still
 
             for r in self._rows:
-                if self._cancel_event.is_set():
-                    self.canceled.emit()
-                    return
+                self._check_canceled()
                 row = int(r.get('row') or 0)
                 m2ts_paths: list[str] = list(r.get('m2ts_paths') or [])
                 mpls_path = str(r.get('mpls_path') or '').strip()
+                if 'mpls_tracks' in r:
+                    streams_cache[mpls_path] = r['mpls_tracks']
                 sp_key = str(r.get('sp_key') or '').strip()
                 force_disabled = bool(r.get('force_disabled') or False)
                 special = ''
@@ -144,6 +160,7 @@ class SpTableScanWorker(QObject):
                 m2ts_type = ''
                 video_only = False
                 allow_tracks_when_disabled = False
+                standalone_tracks = None
 
                 unavailable_reason = ''
                 if not force_disabled:
@@ -236,6 +253,12 @@ class SpTableScanWorker(QObject):
                                 }
                             except Exception:
                                 tracks_payload = {}
+                            if not disabled and classified_type in ('audio_only', 'subtitle_only'):
+                                profiles = self._read_audio_profiles(m2ts_paths[0]) if classified_type == 'audio_only' else {}
+                                standalone_tracks = [
+                                    dict(stream, profile=profiles.get(BluraySubtitle._stream_service_id(stream), ''))
+                                    for stream in streams
+                                ]
                         uniq_m2ts_paths = list(dict.fromkeys(p for p in m2ts_paths if p))
                         # The size cap applies only to a lone clip. Multi-clip menu stills
                         # can be stored in larger files.
@@ -252,6 +275,8 @@ class SpTableScanWorker(QObject):
                             else:
                                 special = 'multi_frame'
                                 selection_default = (True, 'The scan detected a sequence of still images.')
+                    except TaskCancelled:
+                        raise
                     except Exception:
                         pass
 
@@ -264,12 +289,13 @@ class SpTableScanWorker(QObject):
                     'm2ts_type': m2ts_type,
                     'video_only': bool(video_only),
                     'allow_tracks_when_disabled': bool(allow_tracks_when_disabled),
+                    'standalone_tracks': standalone_tracks,
                 })
 
-            if self._cancel_event.is_set():
-                self.canceled.emit()
-            else:
-                self.finished.emit()
+            self._check_canceled()
+            self.finished.emit()
+        except TaskCancelled:
+            self.canceled.emit()
         except Exception:
             tb = traceback.format_exc()
             print_tb_string_terminal(tb)

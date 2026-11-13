@@ -540,7 +540,7 @@ class SettingsDialog(AnimatedDialog):
         try:
             start_update(selected)
         except (OSError, RuntimeError, ValueError) as error:
-            QMessageBox.warning(self, self.t("Check for updates"), self.t("Could not start the update. {error}").format(error=error))
+            AnimatedMessageBox.warning(self, self.t("Check for updates"), self.t("Could not start the update. {error}").format(error=error))
         else:
             self.reject()
 
@@ -1297,7 +1297,7 @@ class SettingsDialog(AnimatedDialog):
             ).format(error=str(error))
             self.external_tools_status_label.setText(message)
             if show_error:
-                QMessageBox.warning(self, self.t("Settings"), message)
+                AnimatedMessageBox.warning(self, self.t("Settings"), message)
             return
         self._settings_source_text = text
         self.external_tools_editor.setReadOnly(False)
@@ -1339,7 +1339,7 @@ class SettingsDialog(AnimatedDialog):
                     pass
                 raise
         except Exception as error:
-            QMessageBox.warning(
+            AnimatedMessageBox.warning(
                 self,
                 self.t("Settings"),
                 self.t("Could not save external tool settings: {error}").format(
@@ -1358,7 +1358,7 @@ class SettingsDialog(AnimatedDialog):
         validation_error = self._custom_preset_validation_error()
         if validation_error is not None:
             template, values = validation_error
-            QMessageBox.warning(
+            AnimatedMessageBox.warning(
                 self,
                 self.t("Settings"),
                 self.t(template).format(**values),
@@ -1375,7 +1375,7 @@ class SettingsDialog(AnimatedDialog):
             reader = QImageReader(path)
             reader.setAutoTransform(True)
             if reader.read().isNull():
-                QMessageBox.warning(
+                AnimatedMessageBox.warning(
                     self,
                     self.t("Settings"),
                     self.t("Could not read background image {path}. {error}").format(

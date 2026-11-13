@@ -8,7 +8,7 @@ import tempfile
 from typing import Optional
 
 from PyQt6.QtCore import QProcess, QProcessEnvironment
-from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLineEdit, QPushButton, QMessageBox
+from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLineEdit, QPushButton
 
 from src.core.settings import ENCODE_REMUX_LABELS, ENCODE_LABELS, PLUGIN_PATH, VSEDIT_PATH, VSPIPE_PATH, ENCODE_SP_LABELS, \
     ENCODE_REMUX_SP_LABELS
@@ -17,6 +17,7 @@ from src.runtime.gui_runtime_classes.file_dialog import choose_path
 from src.runtime.video_timeline import (
     VPY_HARDSUB_CALL, VPY_HARDSUB_PATTERN, VPY_LEGACY_HARDSUB_CALLS,
 )
+from src.runtime.gui_runtime_classes.widget_animations import AnimatedMessageBox
 from .gui_base import BluraySubtitleGuiBase
 
 
@@ -794,10 +795,10 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
 
     def open_vpy_in_editor(self, path: str):
         if not path:
-            QMessageBox.information(self, self.t('Prompt'), self.t('VPy path is empty'))
+            AnimatedMessageBox.information(self, self.t('Prompt'), self.t('VPy path is empty'))
             return
         if not os.path.exists(path):
-            QMessageBox.information(self, self.t('Prompt'), self.t('File does not exist: {path}').format(path=path))
+            AnimatedMessageBox.information(self, self.t('Prompt'), self.t('File does not exist: {path}').format(path=path))
             return
         if sys.platform == 'win32':
             os.startfile(path)
@@ -807,17 +808,17 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
     def open_vpy_in_vsedit(self, path: str) -> Optional[QProcess]:
         path = str(path or '').strip()
         if not path:
-            QMessageBox.information(self, self.t('Prompt'), self.t('VPy path is empty'))
+            AnimatedMessageBox.information(self, self.t('Prompt'), self.t('VPy path is empty'))
             return None
         if not os.path.exists(path):
-            QMessageBox.information(self, self.t('Prompt'), self.t('File does not exist: {path}').format(path=path))
+            AnimatedMessageBox.information(self, self.t('Prompt'), self.t('File does not exist: {path}').format(path=path))
             return None
 
         vsedit_exe = VSEDIT_PATH
         if not vsedit_exe or not os.path.exists(vsedit_exe):
             vsedit_exe = shutil.which('vsedit') or ''
         if not vsedit_exe:
-            QMessageBox.information(self, self.t('Prompt'), self.t('vsedit not found, check VSEDIT_PATH or system PATH'))
+            AnimatedMessageBox.information(self, self.t('Prompt'), self.t('vsedit not found, check VSEDIT_PATH or system PATH'))
             return None
 
         try:
@@ -847,7 +848,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
             proc.setArguments([os.path.normpath(path)])
             proc.start()
             if not proc.waitForStarted(2000):
-                QMessageBox.warning(self, self.t('Prompt'), self.t('Failed to launch vsedit'))
+                AnimatedMessageBox.warning(self, self.t('Prompt'), self.t('Failed to launch vsedit'))
                 try:
                     proc.kill()
                 except Exception:
@@ -856,7 +857,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                 return None
             return proc
         except Exception as e:
-            QMessageBox.warning(self, self.t('Prompt'), self.t('Failed to open vsedit: {error}').format(error=e))
+            AnimatedMessageBox.warning(self, self.t('Prompt'), self.t('Failed to open vsedit: {error}').format(error=e))
             return None
 
     def _vpy_raw_string(self, path: str) -> str:
@@ -1063,7 +1064,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
 
     def _preview_script_for_row(self, vpy_path: str, video_path: str, subtitle_path: str):
         if not video_path:
-            QMessageBox.information(self, self.t('Prompt'), self.t('Cannot determine video file path'))
+            AnimatedMessageBox.information(self, self.t('Prompt'), self.t('Cannot determine video file path'))
             return
 
         vpy_path = (vpy_path or '').strip()
@@ -1082,7 +1083,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                 temp_vpy = self._create_temp_preview_vpy_from_default(video_path=video_path,
                                                                       subtitle_path=subtitle_path or '')
                 if not temp_vpy:
-                    QMessageBox.warning(self, self.t('Prompt'), self.t('Failed to generate preview script'))
+                    AnimatedMessageBox.warning(self, self.t('Prompt'), self.t('Failed to generate preview script'))
                     return
                 proc = self.open_vpy_in_vsedit(temp_vpy)
                 if not proc:
@@ -1119,7 +1120,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                                                subtitle_path=subtitle_path or '')
                 self.open_vpy_in_vsedit(vpy_path)
         except Exception as e:
-            QMessageBox.warning(self, self.t('Prompt'), self.t('Preview script failed: {error}').format(error=e))
+            AnimatedMessageBox.warning(self, self.t('Prompt'), self.t('Preview script failed: {error}').format(error=e))
 
     def on_edit_vpy_clicked(self):
         if self.get_selected_function_id() != 4:

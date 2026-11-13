@@ -64,12 +64,16 @@ def _cached_m2ts_parser(m2ts_path: str) -> Optional[M2TS]:
         return parser
 
 
-def _m2ts_cached_pts_dur(m2ts_path: str) -> tuple[Optional[int], Optional[int]]:
+def _m2ts_cached_pts_dur(
+        m2ts_path: str, *, check_canceled: Callable[[], None] | None = None,
+) -> tuple[Optional[int], Optional[int]]:
     parser = _cached_m2ts_parser(m2ts_path)
     if parser is None:
         return None, None
     try:
-        return parser.get_first_pts(m2ts=True), int(parser.get_duration())
+        return parser.get_first_pts(m2ts=True, check_canceled=check_canceled), int(
+            parser.get_duration(check_canceled=check_canceled),
+        )
     except (OSError, TypeError, ValueError):
         return None, None
 
@@ -521,7 +525,9 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         return [x for x in copy_audio_track if x != ''], [x for x in copy_sub_track if x != '']
 
     @staticmethod
-    def _read_media_streams(media_path: str) -> list[dict[str, object]]:
+    def _read_media_streams(
+            media_path: str, *, cancel_event: threading.Event | None = None, timeout: float | None = None,
+    ) -> list[dict[str, object]]:
         if not media_path or not os.path.exists(media_path):
             return []
         exe = FFPROBE_PATH if FFPROBE_PATH else 'ffprobe'
@@ -530,7 +536,11 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 [exe, "-v", "error", "-show_streams", "-of", "json", media_path],
                 capture_output=True,
                 text=True,
+                cancel_event=cancel_event,
+                timeout=timeout,
             )
+        except TaskCancelled:
+            raise
         except Exception:
             return []
         if p.returncode != 0:
@@ -2639,12 +2649,20 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
     @staticmethod
     def m2ts_file_detail_whole_stream_file(m2ts_path: str) -> str:
         """``basename(start-end)`` for one .m2ts using container duration (no playlist in/out)."""
+        return MediaInfoTrackMappingMixin._standalone_m2ts_timing(m2ts_path)[1]
+
+    @staticmethod
+    def _standalone_m2ts_timing(
+            m2ts_path: str, *, check_canceled: Callable[[], None] | None = None,
+    ) -> tuple[float, str]:
         name = os.path.basename(str(m2ts_path or '')) or ''
         if not m2ts_path or not os.path.isfile(m2ts_path):
-            return f'{name}(00:00:00.000-00:00:00.000)'
+            return 0.0, f'{name}(00:00:00.000-00:00:00.000)'
         try:
-            _pts, dur90 = _m2ts_cached_pts_dur(m2ts_path)
+            _pts, dur90 = _m2ts_cached_pts_dur(m2ts_path, check_canceled=check_canceled)
             end = max(0.0, (dur90 / 90000.0)) if (dur90 is not None and dur90 > 0) else 0.0
+        except TaskCancelled:
+            raise
         except Exception:
             end = 0.0
         st = get_time_str(0.0)
@@ -2653,10 +2671,13 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             st = '00:00:00.000'
         if ed == '0':
             ed = '00:00:00.000'
-        return f'{name}({st}-{ed})'
+        return end, f'{name}({st}-{ed})'
 
     @staticmethod
-    def m2ts_file_detail_from_mpls_playlist(mpls_path: str) -> str:
+    def m2ts_file_detail_from_mpls_playlist(
+            mpls_path: str, *, chapter: Chapter | None = None,
+            check_canceled: Callable[[], None] | None = None,
+    ) -> str:
         """
         ``name.m2ts(start-end),...`` for each ``Chapter(mpls_path).in_out_time`` row.
         Per README: ``start = (in_time*2 - first_pts)/90000``,
@@ -2668,7 +2689,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         playlist_dir = os.path.dirname(os.path.normpath(mp))
         stream_dir = os.path.normpath(os.path.join(playlist_dir, '..', 'STREAM'))
         try:
-            rows = list(Chapter(mp).in_out_time or [])
+            rows = (chapter if chapter is not None else Chapter(mp)).in_out_time
         except Exception:
             return ''
         if not rows:
@@ -2676,6 +2697,8 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         eps = 1e-5
         parts: list[str] = []
         for fname, in_time, out_time in rows:
+            if check_canceled is not None:
+                check_canceled()
             m2ts_path = os.path.join(stream_dir, f'{fname}.m2ts')
             base_name = f'{fname}.m2ts'
             clip_sec = max(0.0, (out_time - in_time) / 45000.0)
@@ -2686,10 +2709,12 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             slice_end = clip_sec
             if os.path.isfile(m2ts_path):
                 try:
-                    pts, _dur90 = _m2ts_cached_pts_dur(m2ts_path)
+                    pts, _dur90 = _m2ts_cached_pts_dur(m2ts_path, check_canceled=check_canceled)
                     if pts is not None:
                         slice_start = max(0.0, (in_time * 2 - pts) / 90000.0)
                         slice_end = slice_start + clip_sec
+                except TaskCancelled:
+                    raise
                 except Exception:
                     pass
             if slice_end <= slice_start + eps:

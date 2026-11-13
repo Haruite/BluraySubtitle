@@ -115,8 +115,9 @@ class SubtitleFolderScanWorker(QObject):
                 self.label.emit('Generating Configuration')
                 self.progress.emit(850)
                 try:
-                    bs = BluraySubtitle(self.bdmv_path, successful_files, self.checked, None)
-                    bs.bluray_folders = list(self.disc_folders)
+                    bs = BluraySubtitle(
+                        self.bdmv_path, successful_files, self.checked, None, disc_folders=list(self.disc_folders),
+                    )
                     bs._subtitle_cache = subtitle_cache
                     configuration = bs.generate_configuration_from_selected_mpls(
                         self.selected_mpls,

@@ -10,15 +10,15 @@ BDMV Encode click that ``main`` queued while the scan was active.
 """
 import os
 import threading
-import time
 from typing import Optional
 
 from PyQt6.QtCore import QTimer, QThread, Qt
-from PyQt6.QtWidgets import QApplication, QProgressDialog, QProgressBar, QTableWidget, QTableWidgetItem, QToolButton
+from PyQt6.QtWidgets import QApplication, QTableWidget, QTableWidgetItem, QToolButton
 
-from src.core import ENCODE_SP_LABELS, DIY_SP_LABELS
+from src.core import ENCODE_SP_LABELS
 from src.runtime.gui_runtime_classes.custom_table_widget import READ_ONLY_HINT_ROLE
-from src.runtime.gui_runtime_classes.sp_table_items import SpSelectionItem
+from src.runtime.gui_runtime_classes.scan_progress_dialog import ScanProgressDialog
+from src.runtime.gui_runtime_classes.sp_table_items import SP_STANDALONE_TRACKS_ROLE, SpSelectionItem
 from src.runtime.gui_runtime_classes.sp_table_scan_worker import SpTableScanWorker
 from src.runtime.sp import SpEntry
 from .gui_base import BluraySubtitleGuiBase
@@ -28,43 +28,38 @@ from .theme_and_i18n import execution_button_stylesheet
 class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
     def _dismiss_sp_scan_progress_ui(self):
         """Close SP table scan progress UI and clear refs (safe when restarting or early-exiting a scan)."""
-        try:
-            t = getattr(self, '_sp_scan_progress_show_timer', None)
-            if isinstance(t, QTimer):
-                t.stop()
-        except Exception:
-            pass
-        try:
-            dlg = getattr(self, '_sp_scan_progress_dialog', None)
-            if isinstance(dlg, QProgressDialog):
-                dlg.close()
-                dlg.deleteLater()
-        except Exception:
-            pass
+        dialog = getattr(self, '_sp_scan_progress_dialog', None)
+        if dialog is not None and dialog is not getattr(self, '_bdmv_load_dialog', None):
+            dialog.finish()
         self._sp_scan_progress_dialog = None
-        self._sp_scan_progress_bar = None
-        self._sp_scan_progress_show_timer = None
-        self._sp_scan_progress_rows_seen = set()
-        self._sp_scan_progress_total = 0
         self._sp_scan_progress_done = 0
 
     def _on_sp_scan_thread_finished(self):
-        """Release scan ownership and resume one queued task after valid completion.
-
-        This slot is a thread-lifecycle boundary, not the result-readiness
-        boundary. ``_on_sp_table_scan_finished`` must already have set
-        ``_sp_scan_completed`` before this signal is allowed to arrive.
-        """
+        """Release the scan thread after all of its queued results are applied."""
         finished_thread = self.sender()
         if getattr(self, '_sp_scan_thread', None) is not finished_thread:
             return
         pending_function_id = getattr(self, '_sp_scan_pending_function_id', None)
         scan_completed = bool(getattr(self, '_sp_scan_completed', False))
+        load_dialog = getattr(self, '_bdmv_load_dialog', None)
+        disc_load = load_dialog is not None and getattr(self, '_sp_scan_progress_dialog', None) is load_dialog
+        scan_error = getattr(self, '_sp_scan_error', '')
+        if disc_load and self._sp_scan_cancel_event.is_set() and not self._close_pending:
+            self._bdmv_source_state_path = ''
+            self._clear_bdmv_tables()
+            scan_error = ''
         self._sp_scan_in_progress = False
         self._dismiss_sp_scan_progress_ui()
         self._sp_scan_cancel_event = None
         self._sp_scan_thread = None
         self._sp_scan_worker = None
+        if disc_load:
+            if scan_completed and not self._close_pending and not self._bdmv_load_cancel_event.is_set():
+                self._run_bdmv_table_updates(self._build_sp_output_names())
+            else:
+                self._finish_bdmv_load(scan_error)
+        elif scan_error and not self._close_pending:
+            self._show_error_dialog(scan_error)
         if pending_function_id in (3, 4):
             self._sp_scan_pending_function_id = None
             self._reset_exe_button()
@@ -227,6 +222,9 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
                 continue
             rows.append({'row': r, 'm2ts_paths': m2ts_paths, 'mpls_path': mpls_path, 'sp_key': sp_key,
                          'force_disabled': force_disabled})
+            playlist = self._loaded_playlist(mpls_path) if mpls_path else None
+            if playlist is not None:
+                rows[-1]['mpls_tracks'] = playlist.tracks
 
         if not rows:
             self._sp_scan_worker = None
@@ -235,40 +233,21 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
             self._sp_scan_error = ''
             return
 
-        start_ts = time.time()
-        progress_dialog = QProgressDialog(self.t('Loading...'), '', 0, 1000, self)
-        progress_dialog.setMinimumWidth(420)
-        bar = QProgressBar(progress_dialog)
-        bar.setRange(0, 1000)
-        bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        progress_dialog.setBar(bar)
-        progress_dialog.setCancelButton(None)
-        progress_dialog.setMinimumDuration(0)
-        progress_dialog.setAutoClose(False)
-        progress_dialog.setAutoReset(False)
-        progress_dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-        show_timer = QTimer(self)
-        show_timer.setSingleShot(True)
-        show_timer.setInterval(2000)
+        label = self.t('Scanning bonus feature tracks...')
+        progress_dialog = self._bdmv_load_dialog
+        if progress_dialog is None:
+            progress_dialog = ScanProgressDialog(self, label)
+            self._apply_window_opacity(progress_dialog)
+        else:
+            progress_dialog.setLabelText(label)
+            progress_dialog.set_cancel_enabled(True)
+        progress_dialog.bar.setRange(0, len(rows))
+        progress_dialog.bar.setValue(0)
 
-        def show_if_needed():
-            try:
-                if (time.time() - start_ts) >= 2.0:
-                    progress_dialog.show()
-            except Exception:
-                pass
-
-        show_timer.timeout.connect(show_if_needed)
-        show_timer.start()
-
-        cancel_event = threading.Event()
+        cancel_event = self._bdmv_load_cancel_event or threading.Event()
         self._sp_scan_cancel_event = cancel_event
         self._sp_scan_progress_dialog = progress_dialog
-        self._sp_scan_progress_bar = bar
-        self._sp_scan_progress_show_timer = show_timer
-        self._sp_scan_progress_total = max(1, len(rows))
         self._sp_scan_progress_done = 0
-        self._sp_scan_progress_rows_seen = set()
         thread = QThread(self)
         worker = SpTableScanWorker(rows, cancel_event)
         worker.moveToThread(thread)
@@ -277,24 +256,13 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
         self._sp_scan_in_progress = True
         self._sp_scan_completed = False
         self._sp_scan_error = ''
-        # Result signals and the logical completion signal target the GUI thread.
-        # Blocking completion keeps their order deterministic: every queued row
-        # result and the final output-name pass finish before QThread cleanup can
-        # inspect readiness or resume a queued task.
-        worker.finished.connect(
-            self._on_sp_table_scan_finished,
-            Qt.ConnectionType.BlockingQueuedConnection,
-        )
-        worker.finished.connect(worker.deleteLater)
-        worker.finished.connect(thread.quit)
-        worker.canceled.connect(worker.deleteLater)
-        worker.canceled.connect(thread.quit)
-        worker.failed.connect(
-            self._on_sp_table_scan_failed,
-            Qt.ConnectionType.BlockingQueuedConnection,
-        )
-        worker.failed.connect(worker.deleteLater)
-        worker.failed.connect(thread.quit)
+        # Let the GUI consume all results before quitting and deleting the sender.
+        worker.finished.connect(self._on_sp_table_scan_finished)
+        worker.finished.connect(thread.quit, Qt.ConnectionType.QueuedConnection)
+        worker.canceled.connect(thread.quit, Qt.ConnectionType.QueuedConnection)
+        worker.failed.connect(self._on_sp_table_scan_failed)
+        worker.failed.connect(thread.quit, Qt.ConnectionType.QueuedConnection)
+        thread.finished.connect(worker.deleteLater)
         thread.finished.connect(self._on_sp_scan_thread_finished)
         thread.finished.connect(thread.deleteLater)
         self._sp_scan_thread = thread
@@ -302,10 +270,10 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
         thread.start()
 
     def _on_sp_table_scan_failed(self, error: str):
-        if getattr(self, '_sp_scan_worker', None) is not self.sender():
+        sender = self.sender()
+        if sender is None or self._sp_scan_worker is not sender:
             return
         self._sp_scan_error = str(error or self.t('SP track scan failed; refresh the source before starting the task'))
-        self._show_error_dialog(self._sp_scan_error)
 
     def _on_sp_table_scan_result(self, row: int, disabled: bool, special: str, payload: object):
         """Apply one result from the current worker without probing media again.
@@ -314,7 +282,9 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
         table. The supplied track selection is already the result of the media
         probe and is stored directly under the row's stable SP key.
         """
-        if getattr(self, '_sp_scan_worker', None) is not self.sender():
+        sender = self.sender()
+        if (sender is None or self._sp_scan_worker is not sender or self._close_pending
+                or self._sp_scan_cancel_event.is_set()):
             return
         try:
             sel_col = ENCODE_SP_LABELS.index('select')
@@ -336,6 +306,7 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
         m2ts_type = ''
         video_only = False
         allow_tracks_when_disabled = False
+        standalone_tracks = None
         if isinstance(payload, dict):
             selection_default = payload.get('selection_default')
             sp_key = str(payload.get('sp_key') or '').strip()
@@ -344,6 +315,7 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
             m2ts_type = str(payload.get('m2ts_type') or '').strip()
             video_only = bool(payload.get('video_only') or False)
             allow_tracks_when_disabled = bool(payload.get('allow_tracks_when_disabled') or False)
+            standalone_tracks = payload.get('standalone_tracks')
         try:
             self._updating_sp_table = True
             flags = sel_item.flags()
@@ -369,12 +341,7 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
                 self.table3.setItem(row, type_col, type_item)
             type_item.setText(m2ts_type)
             type_item.setData(Qt.ItemDataRole.UserRole, video_only)
-            try:
-                labels_sp = DIY_SP_LABELS if self.get_selected_function_id() == 5 else ENCODE_SP_LABELS
-                if 'm2ts_file_detail' in labels_sp and 'm2ts_file' in labels_sp:
-                    self._sync_sp_table_row_m2ts_column_from_detail(row, labels_sp)
-            except Exception:
-                pass
+            type_item.setData(SP_STANDALONE_TRACKS_ROLE, standalone_tracks)
             btn_tracks = self.table3.cellWidget(row, tracks_col)
             if isinstance(btn_tracks, QToolButton):
                 btn_tracks.setEnabled((not disabled) or allow_tracks_when_disabled)
@@ -431,18 +398,9 @@ class ScanWorkerHooksMixin(BluraySubtitleGuiBase):
                 pass
         finally:
             self._updating_sp_table = False
-        try:
-            seen = getattr(self, '_sp_scan_progress_rows_seen', None)
-            if isinstance(seen, set):
-                seen.add(int(row))
-                done = len(seen)
-                self._sp_scan_progress_done = done
-                total = max(1, int(getattr(self, '_sp_scan_progress_total', 1) or 1))
-                bar = getattr(self, '_sp_scan_progress_bar', None)
-                if isinstance(bar, QProgressBar):
-                    bar.setValue(int(done / total * 1000))
-        except Exception:
-            pass
+        if self._sp_scan_progress_dialog is not None:
+            self._sp_scan_progress_done += 1
+            self._sp_scan_progress_dialog.bar.setValue(self._sp_scan_progress_done)
         if not bool(getattr(self, '_sp_scan_in_progress', False)):
             try:
                 self._recompute_sp_output_names()

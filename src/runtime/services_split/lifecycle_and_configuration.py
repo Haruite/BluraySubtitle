@@ -8,7 +8,7 @@ import sys
 import threading
 import xml.etree.ElementTree as et
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from typing import Optional
+from typing import Callable, Optional
 
 from PyQt6.QtCore import QCoreApplication, QThread
 
@@ -27,15 +27,16 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
                  progress_dialog: Optional[object] = None,
                  approx_episode_duration_seconds: float = DEFAULT_APPROX_EPISODE_DURATION_SECONDS,
                  movie_mode: bool = False,
-                 mux_dolby_vision: bool = True):
+                 mux_dolby_vision: bool = True, *, disc_folders: list[str] | None = None):
         self.sub_files = sub_files
         self.bdmv_path = bluray_path
-        bluray_folders = []
-        for root, dirs, files in os.walk(bluray_path):
-            dirs.sort()  # Sort dirs to ensure consistent order on all platforms
-            if 'BDMV' in dirs and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV')):
-                bluray_folders.append(root)
-        self.bluray_folders = bluray_folders
+        if disc_folders is None:
+            disc_folders = []
+            for root, dirs, _files in os.walk(bluray_path):
+                dirs.sort()  # Sort dirs to ensure consistent order on all platforms
+                if 'BDMV' in dirs and 'PLAYLIST' in os.listdir(os.path.join(root, 'BDMV')):
+                    disc_folders.append(root)
+        self.bluray_folders = list(disc_folders)
         self.checked = checked
         self.progress_dialog = progress_dialog
         self.configuration = {}
@@ -157,29 +158,41 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
         selected = self.get_default_main_mpls(bluray_folder, checked)
         return selected[0] if selected else None
 
-    def get_default_main_mpls(self, bluray_folder: str, checked: bool, movie_mode: bool = False) -> list[str]:
+    def get_default_main_mpls(
+            self, bluray_folder: str, checked: bool, movie_mode: bool = False, *,
+            chapters: dict[str, Chapter] | None = None, check_canceled: Callable[[], None] | None = None,
+    ) -> list[str]:
         """Choose a primary playlist and conservatively recognize alternate movie cuts."""
         mpls_folder = os.path.join(bluray_folder, 'BDMV', 'PLAYLIST')
         stream_folder = os.path.join(bluray_folder, 'BDMV', 'STREAM')
         candidates = []
-        for mpls_file_name in sorted(os.listdir(mpls_folder)):
-            if mpls_file_name[-5:].lower() != '.mpls':
-                continue
-            mpls_file_path = os.path.join(mpls_folder, mpls_file_name)
-            chapter = Chapter(mpls_file_path)
+        playlist_paths = chapters if chapters is not None else (
+            os.path.join(mpls_folder, name)
+            for name in sorted(os.listdir(mpls_folder)) if name.lower().endswith('.mpls')
+        )
+        stream_sizes: dict[str, int | None] = {}
+        for mpls_file_path in playlist_paths:
+            if check_canceled is not None:
+                check_canceled()
+            chapter = chapters[mpls_file_path] if chapters is not None else Chapter(mpls_file_path)
             if checked:
                 total_size = 1
             else:
                 total_size = 0
-                stream_files = set()
-                for in_out_time in chapter.in_out_time:
-                    if in_out_time[0] not in stream_files:
-                        m2ts_file = os.path.join(stream_folder, f'{in_out_time[0]}.m2ts')
-                        if os.path.exists(m2ts_file):
-                            total_size += os.path.getsize(m2ts_file)
-                        else:
-                            print(f'\033[31mError, m2ts file ｢{m2ts_file}｣ in ｢{mpls_file_path}｣ not found\033[0m')
-                    stream_files.add(in_out_time[0])
+                for clip in dict.fromkeys(row[0] for row in chapter.in_out_time):
+                    if check_canceled is not None:
+                        check_canceled()
+                    m2ts_file = os.path.join(stream_folder, f'{clip}.m2ts')
+                    if clip not in stream_sizes:
+                        try:
+                            stream_sizes[clip] = os.path.getsize(m2ts_file)
+                        except FileNotFoundError:
+                            stream_sizes[clip] = None
+                    size = stream_sizes[clip]
+                    if size is not None:
+                        total_size += size
+                    else:
+                        print(f'\033[31mError, m2ts file ｢{m2ts_file}｣ in ｢{mpls_file_path}｣ not found\033[0m')
             indicator = chapter.get_total_time_no_repeat() * (1 + sum(map(len, chapter.mark_info.values())) / 5
                                                               ) * os.path.getsize(mpls_file_path) * total_size
             if indicator <= 0:
@@ -208,6 +221,8 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
         selected = [primary]
         if movie_mode:
             for candidate in candidates[1:]:
+                if check_canceled is not None:
+                    check_canceled()
                 if candidate['indicator'] < primary['indicator'] * 0.5:
                     break
                 # Same-length localized branches and alternate STNs are not separate movie cuts.

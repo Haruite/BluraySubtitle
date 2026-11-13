@@ -6,12 +6,12 @@ import sys
 from PyQt6.QtCore import QEvent, QSize, QStandardPaths, QStorageInfo, Qt, QUrl
 from PyQt6.QtGui import QFileSystemModel, QIcon, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
-    QComboBox, QDialog, QFileDialog, QLabel, QLineEdit, QListView, QMessageBox, QSplitter, QToolButton, QWidget,
+    QComboBox, QDialog, QFileDialog, QLabel, QLineEdit, QListView, QSplitter, QToolButton, QWidget,
 )
 
 from src.core.i18n import translate_text
 
-from .widget_animations import DialogFade, set_window_opacity, supports_window_opacity, window_opacity
+from .widget_animations import AnimatedMessageBox, DialogFade, set_window_opacity, supports_window_opacity, window_opacity
 
 
 class _LinuxFileDialog(DialogFade, QFileDialog):
@@ -110,7 +110,7 @@ class _LinuxFileDialog(DialogFade, QFileDialog):
                 translate_text("Select a folder: {path}") if is_file
                 else translate_text("Path does not exist: {path}")
             )
-            QMessageBox.warning(
+            AnimatedMessageBox.warning(
                 self, self.windowTitle(), message.format(path=path),
             )
             self._focus_address()

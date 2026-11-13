@@ -10,7 +10,7 @@ import time
 import traceback
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 import soundfile
@@ -103,10 +103,14 @@ def mkv_codec_id_is_dts_family(codec_id: str) -> bool:
     return bool(cid.startswith('A_') and 'DTS' in cid)
 
 
-def get_folder_size(folder_path: str) -> str:
+def get_folder_size(folder_path: str, *, check_canceled: Callable[[], None] | None = None) -> str:
     byte = 0
-    for root, dirs, files in os.walk(folder_path):
+    for root, _dirs, files in os.walk(folder_path):
+        if check_canceled is not None:
+            check_canceled()
         for file in files:
+            if check_canceled is not None:
+                check_canceled()
             byte += os.path.getsize(os.path.join(root, file))
     units = {'B': 0, 'KiB': 1, 'MiB': 2, 'GiB': 3, 'TiB': 6, 'PiB': 9}
     for unit, digits in units.items():
@@ -444,8 +448,10 @@ def get_vspipe_context():
     return vspipe_exe, env
 
 
-def run_command(command, *, wait: bool = True, log_template: str = '', **kwargs):
+def run_command(command, *, wait: bool = True, log_template: str = '', cancel_event=None, **kwargs):
     """Run every external command through one process boundary."""
+    if not wait and cancel_event is not None:
+        raise ValueError('Cancellation requires waiting for the command.')
     kwargs.setdefault('shell', isinstance(command, str))
     if log_template:
         command_text = command if isinstance(command, str) else subprocess.list2cmdline(command)
@@ -466,10 +472,12 @@ def run_command(command, *, wait: bool = True, log_template: str = '', **kwargs)
                 environment['TERM'] = 'ansi'
                 environment.pop('AV_LOG_FORCE_256COLOR', None)
             kwargs['env'] = environment
-    cancel_event = _MKVMERGE_CANCEL_EVENT.get()
-    cancel_mux = wait and cancel_event is not None and _is_mkvmerge_mux_command(command)
+    if cancel_event is None and wait:
+        mux_cancel_event = _MKVMERGE_CANCEL_EVENT.get()
+        if mux_cancel_event is not None and _is_mkvmerge_mux_command(command):
+            cancel_event = mux_cancel_event
     if sys.platform == 'win32':
-        flags = kwargs.get('creationflags', subprocess.CREATE_NEW_PROCESS_GROUP if cancel_mux else 0)
+        flags = kwargs.get('creationflags', subprocess.CREATE_NEW_PROCESS_GROUP if cancel_event is not None else 0)
         if getattr(sys, 'frozen', False):
             flags |= subprocess.CREATE_NO_WINDOW
             if kwargs.get('stdin') is None and kwargs.get('input') is None:
@@ -477,7 +485,7 @@ def run_command(command, *, wait: bool = True, log_template: str = '', **kwargs)
                 kwargs['stdin'] = subprocess.DEVNULL
         if flags:
             kwargs['creationflags'] = flags
-    if not cancel_mux:
+    if cancel_event is None:
         return (subprocess.run if wait else subprocess.Popen)(command, **kwargs)
     if cancel_event.is_set():
         from src.runtime import TaskCancelled

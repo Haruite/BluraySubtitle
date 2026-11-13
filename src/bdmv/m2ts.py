@@ -2,7 +2,7 @@ import os
 import shutil
 import subprocess
 import sys
-from typing import Optional, BinaryIO
+from typing import Optional, BinaryIO, Callable
 
 from .core import InfoDict, unpack_bytes
 from .structures.stream_attributes import StreamAttributes
@@ -160,6 +160,7 @@ class M2TS:
         max_bytes: Optional[int] = None,
         start_pos: Optional[int] = None,
         layout: Optional[tuple[int, int, int]] = None,
+        check_canceled: Callable[[], None] | None = None,
     ):
         """Yield aligned 188-byte TS packets while reading the source in large blocks."""
         packet_phase, stride, sync_offset = layout or M2TS._choose_transport_layout(stream, m2ts)
@@ -170,6 +171,8 @@ class M2TS:
         chunk_size = 4 * 1024 * 1024
         chunk_size -= chunk_size % stride
         while remaining is None or remaining >= stride:
+            if check_canceled is not None:
+                check_canceled()
             read_size = chunk_size if remaining is None else min(chunk_size, remaining - remaining % stride)
             if read_size < stride:
                 break
@@ -192,6 +195,7 @@ class M2TS:
         max_bytes: Optional[int] = None,
         skip_pids: Optional[set[int]] = None,
         debug: bool = False,
+        check_canceled: Callable[[], None] | None = None,
     ) -> Optional[int]:
         skip = set(skip_pids or ()) | {0x0000, 0x1FFF}
         layout = M2TS._choose_transport_layout(stream, m2ts)
@@ -202,7 +206,7 @@ class M2TS:
 
         pending: dict[int, bytearray] = {}
         pending_max = 256 * 1024
-        for packet in M2TS._iter_transport_packets(stream, max_bytes=max_bytes, layout=layout):
+        for packet in M2TS._iter_transport_packets(stream, max_bytes=max_bytes, layout=layout, check_canceled=check_canceled):
             payload, pid, pusi = M2TS._ts_payload(packet)
             if payload is None or pid in skip:
                 continue
@@ -267,6 +271,7 @@ class M2TS:
         max_bytes: Optional[int] = None,
         skip_pids: Optional[set[int]] = None,
         debug: bool = False,
+        check_canceled: Callable[[], None] | None = None,
     ) -> Optional[int]:
         """First presentation timestamp (90 kHz units) from elementary streams, or None."""
         self._ensure_cache_valid()
@@ -274,7 +279,9 @@ class M2TS:
         if cache_key in self._first_pts_cache:
             return self._first_pts_cache[cache_key]
         with open(self.filename, 'rb') as f:
-            pts = M2TS._scan_first_pts(f, m2ts=m2ts, max_bytes=max_bytes, skip_pids=skip_pids, debug=debug)
+            pts = M2TS._scan_first_pts(
+                f, m2ts=m2ts, max_bytes=max_bytes, skip_pids=skip_pids, debug=debug, check_canceled=check_canceled,
+            )
         if pts is not None:
             self._first_pts_cache[cache_key] = pts
             return pts
@@ -283,7 +290,9 @@ class M2TS:
             return None
         for forced in (True, False):
             with open(self.filename, 'rb') as f:
-                pts = M2TS._scan_first_pts(f, m2ts=forced, max_bytes=max_bytes, skip_pids=skip_pids, debug=debug)
+                pts = M2TS._scan_first_pts(
+                    f, m2ts=forced, max_bytes=max_bytes, skip_pids=skip_pids, debug=debug, check_canceled=check_canceled,
+                )
             if pts is not None:
                 self._first_pts_cache[cache_key] = pts
                 return pts
@@ -298,13 +307,16 @@ class M2TS:
         max_bytes: Optional[int] = None,
         skip_pids: Optional[set[int]] = None,
         start_pos: Optional[int] = None,
+        check_canceled: Callable[[], None] | None = None,
     ) -> Optional[int]:
         skip = set(skip_pids or ()) | {0x0000, 0x1FFF}
         pending: dict[int, bytearray] = {}
         pending_max = 256 * 1024
         last_pts = None
 
-        for packet in M2TS._iter_transport_packets(stream, m2ts=m2ts, max_bytes=max_bytes, start_pos=start_pos):
+        for packet in M2TS._iter_transport_packets(
+                stream, m2ts=m2ts, max_bytes=max_bytes, start_pos=start_pos, check_canceled=check_canceled,
+        ):
             payload, pid, pusi = M2TS._ts_payload(packet)
             if payload is None or pid in skip:
                 continue
@@ -359,6 +371,7 @@ class M2TS:
         m2ts: Optional[bool] = None,
         max_bytes: Optional[int] = None,
         skip_pids: Optional[set[int]] = None,
+        check_canceled: Callable[[], None] | None = None,
     ) -> Optional[int]:
         self._ensure_cache_valid()
         cache_key = (m2ts, max_bytes, M2TS._normalize_skip_pids(skip_pids))
@@ -376,7 +389,7 @@ class M2TS:
                 start = max(file_size - win, 0)
                 with open(self.filename, 'rb') as f:
                     pts = M2TS._scan_last_pts(
-                        f, m2ts=layout, max_bytes=None, skip_pids=skip_pids, start_pos=start
+                        f, m2ts=layout, max_bytes=None, skip_pids=skip_pids, start_pos=start, check_canceled=check_canceled,
                     )
                 if pts is not None:
                     self._last_pts_cache[cache_key] = pts
@@ -385,17 +398,20 @@ class M2TS:
         # Rare fallback: full-file pass (keeps correctness if tail lacks PUSI/PES start).
         if m2ts is not None:
             with open(self.filename, 'rb') as f:
-                pts = M2TS._scan_last_pts(f, m2ts=m2ts, max_bytes=max_bytes, skip_pids=skip_pids)
+                pts = M2TS._scan_last_pts(f, m2ts=m2ts, max_bytes=max_bytes, skip_pids=skip_pids,
+                                         check_canceled=check_canceled)
             self._last_pts_cache[cache_key] = pts
             return pts
         for forced in (True, False):
             with open(self.filename, 'rb') as f:
-                pts = M2TS._scan_last_pts(f, m2ts=forced, max_bytes=max_bytes, skip_pids=skip_pids)
+                pts = M2TS._scan_last_pts(f, m2ts=forced, max_bytes=max_bytes, skip_pids=skip_pids,
+                                         check_canceled=check_canceled)
             if pts is not None:
                 self._last_pts_cache[cache_key] = pts
                 return pts
         # Single-frame streams may only expose one valid PTS; in that case last == first.
-        first_pts = self.get_first_pts(m2ts=m2ts, max_bytes=max_bytes, skip_pids=skip_pids, debug=False)
+        first_pts = self.get_first_pts(m2ts=m2ts, max_bytes=max_bytes, skip_pids=skip_pids,
+                                       check_canceled=check_canceled)
         self._last_pts_cache[cache_key] = first_pts
         return first_pts
 
@@ -407,7 +423,8 @@ class M2TS:
             return (unpack_bytes(packet, 6, 4) << 1) + (packet[10] >> 7)
         return None
 
-    def get_duration(self, *, prefer_pcr: bool = True, use_pts_fallback: bool = True, debug: bool = False) -> int:
+    def get_duration(self, *, prefer_pcr: bool = True, use_pts_fallback: bool = True, debug: bool = False,
+                     check_canceled: Callable[[], None] | None = None) -> int:
         self._ensure_cache_valid()
         cache_key = (bool(prefer_pcr), bool(use_pts_fallback))
         if cache_key in self._duration_cache:
@@ -420,13 +437,14 @@ class M2TS:
                     with open(self.filename, 'rb') as stream:
                         layout = self._choose_transport_layout_cached(stream, None)
                         first_pcr = next((value for packet in M2TS._iter_transport_packets(
-                            stream, max_bytes=256 * 1024, layout=layout
+                            stream, max_bytes=256 * 1024, layout=layout, check_canceled=check_canceled,
                         ) if (value := M2TS._pcr_from_packet(packet)) is not None), None)
                         last_pcr = None
                         file_size = os.path.getsize(self.filename)
                         for window_size in (256 * 1024, 1024 * 1024):
                             for packet in M2TS._iter_transport_packets(
-                                stream, max_bytes=window_size, start_pos=max(file_size - window_size, 0), layout=layout
+                                stream, max_bytes=window_size, start_pos=max(file_size - window_size, 0), layout=layout,
+                                check_canceled=check_canceled,
                             ):
                                 value = M2TS._pcr_from_packet(packet)
                                 if value is not None:
@@ -438,8 +456,8 @@ class M2TS:
                 except OSError:
                     duration = 0
             else:
-                first_pts = self.get_first_pts(max_bytes=16 * 1024 * 1024)
-                last_pts = self.get_last_pts()
+                first_pts = self.get_first_pts(max_bytes=16 * 1024 * 1024, check_canceled=check_canceled)
+                last_pts = self.get_last_pts(check_canceled=check_canceled)
                 if first_pts is not None and last_pts is not None:
                     duration = (last_pts - first_pts) % (1 << 33)
                     if duration == 0:
@@ -652,6 +670,7 @@ class M2TS:
         m2ts: Optional[bool] = None,
         video_pid: Optional[int] = None,
         codec_name: Optional[str] = None,
+        check_canceled: Callable[[], None] | None = None,
     ) -> int:
         """Count compressed video access units, stopping as soon as ``limit`` is reached.
 
@@ -748,7 +767,7 @@ class M2TS:
 
         try:
             with open(self.filename, 'rb') as stream:
-                for packet in M2TS._iter_transport_packets(stream, m2ts=m2ts):
+                for packet in M2TS._iter_transport_packets(stream, m2ts=m2ts, check_canceled=check_canceled):
                     payload, pid, payload_unit_start = M2TS._ts_payload(packet)
                     if payload is None or pid != video_pid:
                         continue

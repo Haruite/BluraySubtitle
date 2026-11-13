@@ -7,6 +7,8 @@ from PyQt6.QtWidgets import QTableWidgetItem
 
 from src.core.i18n import translate_text
 
+SP_STANDALONE_TRACKS_ROLE = Qt.ItemDataRole.UserRole + 6
+
 
 class SpSelectionItem(QTableWidgetItem):
     def __init__(self, selected: bool, reason: str, *, disc_root: str):
