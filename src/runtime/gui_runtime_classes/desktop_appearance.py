@@ -147,6 +147,7 @@ if sys.platform.startswith("linux"):
 
 def desktop_appearance() -> _DesktopAppearance | None:
     app = QApplication.instance()
-    if sys.platform.startswith("linux") and app is not None and app.platformName() in ("xcb", "wayland"):
+    platform = app.platformName() if app is not None else ""
+    if sys.platform.startswith("linux") and (platform == "xcb" or platform.startswith("wayland")):
         return app.findChild(_DesktopAppearance) or _DesktopAppearance(app)
     return None
