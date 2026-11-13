@@ -57,10 +57,12 @@ class BluraySubtitleGuiBase(QWidget):
         self._bdmv_inventory = None
         self._bdmv_load_cancel_event = None
         self._bdmv_load_dialog = None
+        self._bdmv_load_error = None
         self._bdmv_load_pending = None
         self._bdmv_load_replaced = None
         self._bdmv_load_timer = None
         self._bdmv_source_state_path = None
+        self._bdmv_table_update_queue = None
         self._bdmv_table_updates = None
         self._disc_scan_worker = None
         self._input_folder_values = None
@@ -309,7 +311,7 @@ class BluraySubtitleGuiBase(QWidget):
     def _begin_delayed_busy(self, label_text: str, minimum_delay_sec: float=2.0) -> dict[str, object]:
         raise NotImplementedError
 
-    def _build_disc_table(self, discs: list[DiscInventory], previous_checks: dict[str, Qt.CheckState], function_id: int) -> Generator[None, None, None]:
+    def _build_disc_row(self, row: int, disc: DiscPlaylists, function_id: int) -> Generator[None, None, None]:
         raise NotImplementedError
 
     def _build_end_chapter_combo(self, rows: int, has_beginning: bool, start_value: int, selected_value: int=0) -> QComboBox:
@@ -554,6 +556,9 @@ class BluraySubtitleGuiBase(QWidget):
     def _normalize_path_input(self, text: str) -> str:
         raise NotImplementedError
 
+    def _on_bdmv_playlists_ready(self, row: int, disc: DiscPlaylists) -> None:
+        raise NotImplementedError
+
     def _on_bdmv_progress_finished(self) -> None:
         raise NotImplementedError
 
@@ -561,6 +566,9 @@ class BluraySubtitleGuiBase(QWidget):
         raise NotImplementedError
 
     def _on_bdmv_scan_progress(self, text: str, values: object) -> None:
+        raise NotImplementedError
+
+    def _on_bdmv_sources_found(self, sources: tuple[str, ...]) -> None:
         raise NotImplementedError
 
     def _on_encode_lossless_audio_preset_changed(self) -> None:

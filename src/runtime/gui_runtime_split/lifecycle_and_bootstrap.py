@@ -12,6 +12,7 @@ if __name__ == "__main__" and __package__ is None:
 import os
 import sys
 import time
+from collections import deque
 from typing import Optional
 
 from PyQt6.QtCore import Qt, QTimer, QCoreApplication, QThread
@@ -67,7 +68,9 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self._bdmv_load_replaced = False
         self._bdmv_load_dialog = None
         self._bdmv_load_cancel_event = None
+        self._bdmv_load_error = ''
         self._bdmv_table_updates = None
+        self._bdmv_table_update_queue = deque()
         self._bdmv_inventory = {}
         self._disc_scan_worker = None
         self._bdmv_load_timer = QTimer(self)
@@ -1034,8 +1037,8 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         if not minimize_to_tray:
             self._close_pending = True
             self._bdmv_load_timer.stop()
-            if self._disc_scan_worker is not None:
-                self._disc_scan_worker.cancel_event.set()
+            if self._bdmv_load_cancel_event is not None:
+                self._bdmv_load_cancel_event.set()
             if self._bdmv_load_dialog is not None:
                 self._finish_bdmv_load()
             active_threads = [thread for thread in self.findChildren(QThread) if thread.isRunning()]

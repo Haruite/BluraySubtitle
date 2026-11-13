@@ -5,8 +5,10 @@ import shutil
 import tempfile
 import threading
 import traceback
+from collections.abc import Mapping
 from dataclasses import dataclass
 from time import monotonic
+from types import MappingProxyType
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
@@ -32,28 +34,37 @@ class PlaylistInventory:
 
 
 @dataclass(frozen=True)
-class DiscInventory:
+class DiscPlaylists:
     root: str
     source_path: str
     size: str
-    playlists: dict[str, PlaylistInventory]
+    chapters: Mapping[str, Chapter]
     main_playlists: frozenset[str]
+
+
+@dataclass(frozen=True)
+class DiscInventory:
+    playlists: dict[str, PlaylistInventory]
     standalone_streams: dict[str, tuple[float, str, str]]
 
 
 class DiscScanWorker(QThread):
     progress = pyqtSignal(str, object)
+    sources_found = pyqtSignal(object)
+    playlists_ready = pyqtSignal(int, object)
 
     def __init__(self, source_folder: str, function_id: int, movie_mode: bool,
-                 temporary_folder: str, cache: dict[tuple[str, int, int], str], parent=None):
+                 temporary_folder: str, cache: dict[tuple[str, int, int], str],
+                 previous_order: list[str], parent=None):
         super().__init__(parent)
         self.source_folder = source_folder
         self.function_id = function_id
         self.movie_mode = movie_mode
         self.temporary_folder = temporary_folder
         self.cache = dict(cache)
+        self._previous_positions = {path: index for index, path in enumerate(previous_order)}
         self.cancel_event = threading.Event()
-        self.discs: list[DiscInventory] = []
+        self.discs: dict[str, DiscInventory] = {}
         self.error = ''
         self.was_canceled = False
 
@@ -64,14 +75,13 @@ class DiscScanWorker(QThread):
     def run(self) -> None:
         created_directories = []
         try:
-            sources: list[tuple[str, str]] = []
-            iso_paths: list[str] = []
+            sources: list[tuple[str, bool]] = []
             include_iso = self.function_id == 1
             for root, dirs, files in os.walk(self.source_folder):
                 self.check_canceled()
                 dirs.sort()
                 if os.path.isdir(os.path.join(root, 'BDMV', 'PLAYLIST')):
-                    sources.append((root, root))
+                    sources.append((root, False))
                     # The Blu-ray structure is already found. Searching STREAM and BACKUP cannot find another disc.
                     if 'BDMV' in dirs:
                         dirs.remove('BDMV')
@@ -81,22 +91,29 @@ class DiscScanWorker(QThread):
                         self.check_canceled()
                         path = os.path.join(root, name)
                         if name.lower().endswith('.iso') and os.path.getsize(path) > 5 * 1024 ** 3:
-                            iso_paths.append(path)
-            for path in iso_paths:
-                self.check_canceled()
-                stat = os.stat(path)
-                key = (os.path.abspath(path), stat.st_size, stat.st_mtime_ns)
-                if key not in self.cache:
-                    self.progress.emit('Reading ISO playlists: {path}', {'path': path})
-                    destination = tempfile.mkdtemp(prefix='disc-', dir=self.temporary_folder)
-                    created_directories.append(destination)
-                    extract_iso_playlists(path, destination, self.cancel_event)
-                    self.cache[key] = destination
-                sources.append((self.cache[key], path))
+                            sources.append((path, True))
+            sources.sort(key=lambda source: (
+                self._previous_positions.get(os.path.normpath(source[0]), len(self._previous_positions)),
+                os.path.normpath(source[0]),
+            ))
+            self.sources_found.emit(tuple(path for path, _ in sources))
 
             service = BluraySubtitle(self.source_folder, disc_folders=[])
-            for index, (root, path) in enumerate(sources, start=1):
+            for index, (path, is_iso) in enumerate(sources, start=1):
                 self.check_canceled()
+                root = path
+                iso_size = None
+                if is_iso:
+                    stat = os.stat(path)
+                    iso_size = f'{stat.st_size / 1024 ** 3:.2f} GiB'
+                    key = (os.path.abspath(path), stat.st_size, stat.st_mtime_ns)
+                    if key not in self.cache:
+                        self.progress.emit('Reading ISO playlists: {path}', {'path': path})
+                        destination = tempfile.mkdtemp(prefix='disc-', dir=self.temporary_folder)
+                        created_directories.append(destination)
+                        extract_iso_playlists(path, destination, self.cancel_event)
+                        self.cache[key] = destination
+                    root = self.cache[key]
                 self.progress.emit('Reading disc {current}/{total}', {'current': index, 'total': len(sources)})
                 playlist_dir = os.path.join(root, 'BDMV', 'PLAYLIST')
                 stream_dir = os.path.join(root, 'BDMV', 'STREAM')
@@ -122,13 +139,13 @@ class DiscScanWorker(QThread):
                     root, use_playlist_only, movie_mode=self.movie_mode,
                     chapters=chapters, check_canceled=self.check_canceled,
                 )
+                size = iso_size if iso_size is not None else get_folder_size(root, check_canceled=self.check_canceled)
+                # Playlist rows only need chapter data. Let them paint while we read stream timing and tracks.
+                disc = DiscPlaylists(root, path, size, MappingProxyType(chapters), frozenset(main))
+                self.playlists_ready.emit(index - 1, disc)
                 playlists = self._read_playlists(chapters)
                 standalone = self._read_standalone_streams(stream_dir, playlists) if self.function_id in (3, 4) else {}
-                size = (get_folder_size(root, check_canceled=self.check_canceled) if root == path
-                        else f'{os.path.getsize(path) / 1024 ** 3:.2f} GiB')
-                self.discs.append(DiscInventory(
-                    root, path, size, playlists, frozenset(main), standalone,
-                ))
+                self.discs[os.path.normpath(root)] = DiscInventory(playlists, standalone)
             self.check_canceled()
         except TaskCancelled:
             self.was_canceled = True

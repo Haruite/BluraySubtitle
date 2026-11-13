@@ -519,7 +519,8 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             end_off = float(index_to_offset.get(j2, chapter.get_total_time()))
             if end_off < start_off:
                 end_off = start_off
-            movie_style = not sc.isEnabled()
+            # Loading disables the parent table without changing the chapter control's mode.
+            movie_style = sc.testAttribute(Qt.WidgetAttribute.WA_ForceDisabled)
             new_detail_str = ''
             if movie_style:
                 m2ts_files = list(dict.fromkeys(

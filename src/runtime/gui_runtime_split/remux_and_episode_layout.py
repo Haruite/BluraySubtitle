@@ -21,7 +21,7 @@ from src.domain import Subtitle
 from src.domain.subtitles import list_subtitle_files
 from src.exports.utils import get_time_str, get_index_to_m2ts_and_offset, print_exc_terminal, parse_time_to_seconds
 from src.runtime.gui_runtime_classes.custom_table_widget import SelectionTableWidget, StyledComboBox
-from src.runtime.gui_runtime_classes.disc_scan_worker import DiscInventory, DiscScanWorker, PlaylistInventory
+from src.runtime.gui_runtime_classes.disc_scan_worker import DiscPlaylists, DiscScanWorker, PlaylistInventory
 from src.runtime.gui_runtime_classes.disc_table_widget import DiscCommandEdit
 from src.runtime.gui_runtime_classes.file_path_table_widget_item import FilePathTableWidgetItem
 from src.runtime.gui_runtime_classes.remux_worker import RemuxWorker
@@ -1073,12 +1073,18 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 self._finish_bdmv_load(str(error))
                 return
         temporary_folder = self._iso_playlist_temp.name if self._iso_playlist_temp is not None else ''
+        state_path = os.path.normcase(os.path.abspath(path))
+        previous_order = self._table1_bluray_folder_order() if state_path == self._bdmv_source_state_path else []
+        for table in (self.table1, self.table2, self.table3):
+            table.setEnabled(False)
         worker = DiscScanWorker(
-            path, function_id, self._is_movie_mode(), temporary_folder, self._iso_playlist_cache, self,
+            path, function_id, self._is_movie_mode(), temporary_folder, self._iso_playlist_cache, previous_order, self,
         )
         self._disc_scan_worker = worker
         self._bdmv_load_cancel_event = worker.cancel_event
         worker.progress.connect(self._on_bdmv_scan_progress)
+        worker.sources_found.connect(self._on_bdmv_sources_found)
+        worker.playlists_ready.connect(self._on_bdmv_playlists_ready)
         worker.finished.connect(self._on_bdmv_scan_finished)
         worker.finished.connect(worker.deleteLater)
         worker.start()
@@ -1095,6 +1101,46 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         if worker is not None and worker is self.sender() and not worker.cancel_event.is_set():
             self._bdmv_load_dialog.setLabelText(self.t(text).format(**values))
 
+    def _on_bdmv_sources_found(self, sources: tuple[str, ...]) -> None:
+        worker = self._disc_scan_worker
+        if worker is None or worker is not self.sender() or worker.cancel_event.is_set():
+            return
+        state_path = os.path.normcase(os.path.abspath(worker.source_folder))
+        function_id = worker.function_id
+
+        def add_sources() -> Generator[None, None, None]:
+            source_changed = state_path != self._bdmv_source_state_path
+            self._bdmv_source_state_path = None
+            previous_checks = {
+                self.table1.item(row, 0).text(): self.table1.item(row, 0).checkState()
+                for row in range(self.table1.rowCount()) if self.table1.item(row, 0)
+            } if not source_changed else {}
+            if source_changed or not sources:
+                self._clear_bdmv_tables(keep_secondary_table=function_id in (1, 2))
+            table1_labels = DIY_BDMV_LABELS if function_id == 5 else BDMV_LABELS
+            self.table1.setColumnCount(len(table1_labels))
+            self._set_table_headers(self.table1, table1_labels)
+            self.table1.setRowCount(0)
+            self.table1.setRowCount(len(sources))
+            self.table1.horizontalScrollBar().setValue(0)
+            for row, source in enumerate(sources):
+                source_item = QTableWidgetItem(os.path.normpath(source))
+                source_item.setToolTip(source_item.text())
+                source_item.setFlags(source_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                source_item.setCheckState(previous_checks.get(source_item.text(), Qt.CheckState.Checked))
+                with QSignalBlocker(self.table1):
+                    self.table1.setItem(row, 0, source_item)
+                self.table1.setRowHeight(row, 220)
+                yield
+            self._resize_table_columns_for_language(self.table1)
+
+        self._run_bdmv_table_updates(add_sources())
+
+    def _on_bdmv_playlists_ready(self, row: int, disc: DiscPlaylists) -> None:
+        worker = self._disc_scan_worker
+        if worker is not None and worker is self.sender() and not worker.cancel_event.is_set():
+            self._run_bdmv_table_updates(self._build_disc_row(row, disc, worker.function_id))
+
     def _on_bdmv_scan_finished(self) -> None:
         worker = self.sender()
         if worker is None or worker is not self._disc_scan_worker:
@@ -1110,51 +1156,37 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         if self._close_pending or self._bdmv_load_replaced:
             self._finish_bdmv_load()
             return
-        if worker.was_canceled or worker.cancel_event.is_set() or worker.error:
+        error = self._bdmv_load_error or worker.error
+        function_id = worker.function_id
+        if worker.was_canceled or worker.cancel_event.is_set() or error:
             self._bdmv_source_state_path = ''
-            self._clear_bdmv_tables(keep_secondary_table=worker.function_id in (1, 2))
-            self._finish_bdmv_load(worker.error)
+            self._clear_bdmv_tables(keep_secondary_table=function_id in (1, 2))
+            self._finish_bdmv_load(error)
             return
 
-        state_path = os.path.normcase(os.path.abspath(current_path))
-        source_changed = state_path != self._bdmv_source_state_path
-        previous_order = [] if source_changed else self._table1_bluray_folder_order()
-        previous_checks = {
-            self.table1.item(row, 0).text(): self.table1.item(row, 0).checkState()
-            for row in range(self.table1.rowCount()) if self.table1.item(row, 0)
-        } if not source_changed else {}
-        self._bdmv_source_state_path = state_path
+        self._bdmv_load_dialog.setLabelText(self.t('Updating table rows...'))
+        self._bdmv_inventory = worker.discs
+        has_discs = bool(worker.discs)
         output = self.output_folder_path.text().strip()
-        if not output or output == self._auto_output_folders.get(worker.function_id):
+        if not output or output == self._auto_output_folders.get(function_id):
             auto_output = os.path.normpath(os.path.dirname(current_path))
-            self._auto_output_folders[worker.function_id] = auto_output
+            self._auto_output_folders[function_id] = auto_output
             self.output_folder_path.setText(auto_output)
             self._remux_cmd_refresh_timer.stop()
-        prior_positions = {path: index for index, path in enumerate(previous_order)}
-        discs = sorted(worker.discs, key=lambda disc: (
-            prior_positions.get(os.path.normpath(disc.source_path), len(prior_positions)),
-            os.path.normpath(disc.source_path),
-        ))
-        self._bdmv_load_dialog.setLabelText(self.t('Updating table rows...'))
-        self._bdmv_inventory = {os.path.normpath(disc.root): disc for disc in discs}
-        function_id = worker.function_id
-        for table in (self.table1, self.table2, self.table3):
-            table.setEnabled(False)
 
         def apply_inventory() -> Generator[None, None, None]:
-            if source_changed or not discs:
-                self._clear_bdmv_tables(keep_secondary_table=function_id in (1, 2))
-                yield
-            yield from self._build_disc_table(discs, previous_checks, function_id)
+            self._bdmv_source_state_path = os.path.normcase(os.path.abspath(current_path))
+            self._resize_table_columns_for_language(self.table1)
+            self._scroll_table_to_primary_column(self.table1)
             self.table1.sync_selection()
             self.altered = True
-            if discs and function_id in (3, 4, 5):
+            if has_discs and function_id in (3, 4, 5):
                 yield
                 self._refresh_track_selection_config_for_selected_main()
                 self._full_refresh_remux_encode_tables_for_mode()
                 if self._is_movie_mode():
                     self._refresh_table1_remux_cmds()
-            elif discs and function_id == 1:
+            elif has_discs and function_id == 1:
                 # Preserve manually loaded subtitle rows and bind them to the new main playlists.
                 if self._is_movie_mode():
                     rows = self._subtitle_durations_from_table()
@@ -1167,33 +1199,44 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
 
     def _run_bdmv_table_updates(self, updates: Generator[None, None, None]) -> None:
         """Populate widgets in short turns so the scan dialog can paint and cancel."""
+        if self._bdmv_table_updates is not None:
+            # New results can arrive while the previous disc's rows are still being added.
+            self._bdmv_table_update_queue.append(updates)
+            return
         self._bdmv_table_updates = updates
 
         def apply_batch():
             if self._bdmv_table_updates is not updates:
                 return
             if self._bdmv_load_cancel_event.is_set():
-                self._bdmv_source_state_path = ''
-                self._clear_bdmv_tables(keep_secondary_table=self.get_selected_function_id() in (1, 2))
-                self._finish_bdmv_load()
+                if self._disc_scan_worker is None:
+                    self._bdmv_source_state_path = ''
+                    self._clear_bdmv_tables(keep_secondary_table=self.get_selected_function_id() in (1, 2))
+                    self._finish_bdmv_load()
                 return
             deadline = monotonic() + 0.012
             try:
                 while self._bdmv_table_updates is updates and monotonic() < deadline:
                     next(updates)
             except StopIteration:
-                # The disc-table pass may already have queued the SP-table pass.
                 if self._bdmv_table_updates is updates:
                     self._bdmv_table_updates = None
-                    if getattr(self, '_sp_scan_thread', None) is None:
+                    if self._bdmv_table_update_queue:
+                        self._run_bdmv_table_updates(self._bdmv_table_update_queue.popleft())
+                    elif self._disc_scan_worker is None and getattr(self, '_sp_scan_thread', None) is None:
                         self._finish_bdmv_load()
                 return
             except Exception:
                 if self._bdmv_table_updates is not updates:
                     return
-                self._bdmv_source_state_path = ''
-                self._clear_bdmv_tables()
-                self._finish_bdmv_load(traceback.format_exc())
+                error = traceback.format_exc()
+                if self._disc_scan_worker is not None:
+                    self._bdmv_load_error = error
+                    self._bdmv_load_cancel_event.set()
+                else:
+                    self._bdmv_source_state_path = ''
+                    self._clear_bdmv_tables(keep_secondary_table=self.get_selected_function_id() in (1, 2))
+                    self._finish_bdmv_load(error)
                 return
             if self._bdmv_table_updates is updates:
                 QTimer.singleShot(1, apply_batch)
@@ -1203,6 +1246,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         QTimer.singleShot(0, apply_batch)
 
     def _finish_bdmv_load(self, error: str = '') -> None:
+        self._bdmv_table_update_queue.clear()
         updates, self._bdmv_table_updates = self._bdmv_table_updates, None
         if updates is not None and not updates.gi_running:
             updates.close()
@@ -1215,6 +1259,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
     def _on_bdmv_progress_finished(self) -> None:
         self._bdmv_load_dialog = None
         self._bdmv_load_cancel_event = None
+        self._bdmv_load_error = ''
         self._bdmv_inventory = {}
         for table in (self.table1, self.table2, self.table3):
             table.setEnabled(True)
@@ -1256,14 +1301,7 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         self._sp_scan_error = ''
         self.altered = True
 
-    def _build_disc_table(
-            self, discs: list[DiscInventory], previous_checks: dict[str, Qt.CheckState], function_id: int,
-    ) -> Generator[None, None, None]:
-        table1_labels = DIY_BDMV_LABELS if function_id == 5 else BDMV_LABELS
-        self.table1.setColumnCount(len(table1_labels))
-        self._set_table_headers(self.table1, table1_labels)
-        self.table1.setRowCount(0)
-        self.table1.setRowCount(len(discs))
+    def _build_disc_row(self, row: int, disc: DiscPlaylists, function_id: int) -> Generator[None, None, None]:
         info_headers = list(MPLS_INFO_TRACKS_LABELS if function_id in (3, 4, 5) else MPLS_INFO_LABELS)
         chapter_label = self.t('view chapters')
         timing_label = self.t('view timing')
@@ -1271,81 +1309,65 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
         play_label = self.t('play')
         track_label = self.t('edit tracks')
         show_tracks = function_id != 5 or self.diy_simple_radio.isChecked()
-        for i, disc in enumerate(discs):
-            source_path = disc.source_path
-            table_widget = SelectionTableWidget()
-            table_widget.setObjectName('playlistTable')
-            table_widget.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
-            self._set_compact_table(table_widget, row_height=20, header_height=20)
-            table_widget.setColumnCount(len(info_headers))
-            self._set_table_headers(table_widget, info_headers)
-            table_widget.setRowCount(len(disc.playlists))
-            self.table1.setCellWidget(i, 2, table_widget)
-            for mpls_n, playlist in enumerate(disc.playlists.values()):
-                mpls_path = playlist.path
-                mpls_file = os.path.basename(mpls_path)
-                table_widget.setItem(mpls_n, 0, QTableWidgetItem(mpls_file))
-                table_widget.item(mpls_n, 0).setData(Qt.ItemDataRole.UserRole, mpls_path)
-                table_widget.setItem(mpls_n, 1, QTableWidgetItem(get_time_str(playlist.chapter.get_total_time())))
-                btn1 = QToolButton()
-                btn1.setText(chapter_label)
-                btn1.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-                table_widget.setCellWidget(mpls_n, info_headers.index('chapters'), btn1)
-                timing_button = QToolButton()
-                timing_button.setText(timing_label)
-                timing_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-                timing_button.clicked.connect(partial(self.on_view_mpls_play_items, mpls_path))
-                table_widget.setCellWidget(mpls_n, info_headers.index('m2ts_timing'), timing_button)
-                btn2 = QToolButton()
-                btn2.setObjectName('mainPlaylistToggle')
-                btn2.setCheckable(True)
-                btn2.setToolTip(main_label)
-                btn2.setAccessibleName(main_label)
-                btn2.setChecked(mpls_path in disc.main_playlists)
-                btn2.clicked.connect(partial(self.on_button_main, mpls_path))
-                btn1.clicked.connect(
-                    lambda _checked=False, path=mpls_path, source=source_path, main=btn2:
-                    self.on_button_click(path, main.isChecked(),
-                                         self._bdmv_index_for_table1_folder_norm(source)))
-                table_widget.setCellWidget(mpls_n, info_headers.index('main'), btn2)
-                btn3 = QToolButton()
-                btn3.setText(play_label)
-                btn3.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-                btn3.setProperty('action', 'play')
-                btn3.setEnabled(disc.root == source_path)
-                if disc.root != source_path:
-                    btn3.setToolTip(self.t('ISO input does not support preview'))
-                btn3.clicked.connect(partial(self.on_button_play, mpls_path, btn3))
-                table_widget.setCellWidget(mpls_n, info_headers.index('play'), btn3)
-                if function_id in (3, 4, 5):
-                    btn4 = QToolButton()
-                    btn4.setText(track_label)
-                    if show_tracks:
-                        btn4.clicked.connect(partial(self.on_edit_tracks_from_mpls, mpls_path))
-                    else:
-                        btn4.setEnabled(False)
-                    table_widget.setCellWidget(mpls_n, info_headers.index('tracks'), btn4)
-                yield
-            source_item = QTableWidgetItem(os.path.normpath(source_path))
-            source_item.setToolTip(source_item.text())
-            source_item.setFlags(source_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            source_item.setCheckState(previous_checks.get(source_item.text(), Qt.CheckState.Checked))
-            with QSignalBlocker(self.table1):
-                self.table1.setItem(i, 0, source_item)
-                self.table1.setItem(i, 1, QTableWidgetItem(disc.size))
-            self._resize_table_columns_for_language(table_widget)
-            if function_id in (3, 4):
-                self.table1.setCellWidget(
-                    i, BDMV_LABELS.index('remux_cmd'), DiscCommandEdit('', self.t('remux cmd'), self.table1),
-                )
-            elif function_id != 5:
-                with QSignalBlocker(self.table1):
-                    self.table1.setItem(i, BDMV_LABELS.index('remux_cmd'), QTableWidgetItem(''))
-            self.table1.setRowHeight(i, 220)
+        source_path = disc.source_path
+        table_widget = SelectionTableWidget()
+        table_widget.setObjectName('playlistTable')
+        table_widget.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self._set_compact_table(table_widget, row_height=20, header_height=20)
+        table_widget.setColumnCount(len(info_headers))
+        self._set_table_headers(table_widget, info_headers)
+        table_widget.setRowCount(len(disc.chapters))
+        self.table1.setItem(row, 1, QTableWidgetItem(disc.size))
+        self.table1.setCellWidget(row, 2, table_widget)
+        for mpls_n, (mpls_path, chapter) in enumerate(disc.chapters.items()):
+            mpls_file = os.path.basename(mpls_path)
+            table_widget.setItem(mpls_n, 0, QTableWidgetItem(mpls_file))
+            table_widget.item(mpls_n, 0).setData(Qt.ItemDataRole.UserRole, mpls_path)
+            table_widget.setItem(mpls_n, 1, QTableWidgetItem(get_time_str(chapter.get_total_time())))
+            btn1 = QToolButton()
+            btn1.setText(chapter_label)
+            btn1.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            table_widget.setCellWidget(mpls_n, info_headers.index('chapters'), btn1)
+            timing_button = QToolButton()
+            timing_button.setText(timing_label)
+            timing_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            timing_button.clicked.connect(partial(self.on_view_mpls_play_items, mpls_path))
+            table_widget.setCellWidget(mpls_n, info_headers.index('m2ts_timing'), timing_button)
+            btn2 = QToolButton()
+            btn2.setObjectName('mainPlaylistToggle')
+            btn2.setCheckable(True)
+            btn2.setToolTip(main_label)
+            btn2.setAccessibleName(main_label)
+            btn2.setChecked(mpls_path in disc.main_playlists)
+            btn2.clicked.connect(partial(self.on_button_main, mpls_path))
+            btn1.clicked.connect(
+                lambda _checked=False, path=mpls_path, source=source_path, main=btn2:
+                self.on_button_click(path, main.isChecked(),
+                                     self._bdmv_index_for_table1_folder_norm(source)))
+            table_widget.setCellWidget(mpls_n, info_headers.index('main'), btn2)
+            btn3 = QToolButton()
+            btn3.setText(play_label)
+            btn3.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            btn3.setProperty('action', 'play')
+            btn3.setEnabled(disc.root == source_path)
+            if disc.root != source_path:
+                btn3.setToolTip(self.t('ISO input does not support preview'))
+            btn3.clicked.connect(partial(self.on_button_play, mpls_path, btn3))
+            table_widget.setCellWidget(mpls_n, info_headers.index('play'), btn3)
+            if function_id in (3, 4, 5):
+                btn4 = QToolButton()
+                btn4.setText(track_label)
+                if show_tracks:
+                    btn4.clicked.connect(partial(self.on_edit_tracks_from_mpls, mpls_path))
+                else:
+                    btn4.setEnabled(False)
+                table_widget.setCellWidget(mpls_n, info_headers.index('tracks'), btn4)
             yield
-        self._resize_table_columns_for_language(self.table1)
-        self._scroll_table_to_primary_column(self.table1)
-
+        self._resize_table_columns_for_language(table_widget)
+        if function_id in (3, 4):
+            self.table1.setCellWidget(
+                row, BDMV_LABELS.index('remux_cmd'), DiscCommandEdit('', self.t('remux cmd'), self.table1),
+            )
 
     def remux_episodes(self):
         """Capture the ready Remux GUI state into one request and start its worker.
