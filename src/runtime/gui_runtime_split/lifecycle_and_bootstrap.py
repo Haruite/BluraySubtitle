@@ -15,9 +15,9 @@ import time
 from typing import Optional
 
 from PyQt6.QtCore import Qt, QTimer, QCoreApplication, QThread
-from PyQt6.QtWidgets import QApplication, QVBoxLayout, QWidget, QHBoxLayout, QLabel, QSlider, QGroupBox, \
+from PyQt6.QtWidgets import QApplication, QVBoxLayout, QWidget, QHBoxLayout, QLabel, QGroupBox, \
     QLineEdit, QTabBar, QRadioButton, QButtonGroup, QPushButton, QCheckBox, QSizePolicy, QScrollArea, \
-    QProgressDialog, QProgressBar, QFileDialog, QFrame, QMessageBox, QMenu, QStyle, QSystemTrayIcon
+    QProgressDialog, QProgressBar, QFrame, QMessageBox, QMenu, QStyle, QSystemTrayIcon
 
 from src.core import APP_TITLE, BDMV_LABELS, SUBTITLE_LABELS, ENCODE_SP_LABELS
 from src.core.app_config import FUNCTION_PAGE_IDS, app_config_path, default_app_config, load_app_config
@@ -30,6 +30,8 @@ from src.runtime.gui_runtime_classes.custom_box import CustomBox
 from src.runtime.gui_runtime_classes.custom_table_widget import CustomTableWidget, SelectionTableWidget, StyledComboBox
 from src.runtime.gui_runtime_classes.disc_table_widget import DiscTableWidget
 from src.runtime.gui_runtime_classes.execution_button import ExecutionButton
+from src.runtime.gui_runtime_classes.file_dialog import choose_path
+from src.runtime.gui_runtime_classes.opacity_slider import OpacitySlider
 from src.runtime.gui_runtime_classes.startup_update_notice import StartupUpdateNotice
 from src.runtime.gui_runtime_classes.widget_animations import animate_window_close, cancel_window_close
 from src.runtime.gui_runtime_classes.window_background import WindowBackground
@@ -150,7 +152,8 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         language_layout.addWidget(self.font_size_combo)
         language_layout.addSpacing(12)
         self.opacity_label = QLabel(self.t('Opacity'), language_row)
-        self.opacity_slider = QSlider(Qt.Orientation.Horizontal, language_row)
+        self.opacity_slider = OpacitySlider(Qt.Orientation.Horizontal, language_row)
+        self.opacity_slider.setMinimumHeight(18)
         self.opacity_slider.setRange(60, 100)
         self.opacity_slider.setValue(self._app_config.ui.opacity)
         self.opacity_slider.setFixedWidth(140)
@@ -162,6 +165,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         opacity_supported = self._window_opacity_supported()
         self.opacity_label.setVisible(opacity_supported)
         self.opacity_slider.setVisible(opacity_supported)
+        self.opacity_label.setBuddy(self.opacity_slider)
         language_layout.addWidget(self.opacity_label)
         language_layout.addWidget(self.opacity_slider)
         self.third_party_notices_btn = QPushButton(self.t('Third-party notices'), language_row)
@@ -597,7 +601,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             btn_sel = QPushButton('Select')
             btn_open = QPushButton('Open')
             def _pick_folder(target_edit: QLineEdit):
-                picked = QFileDialog.getExistingDirectory(self, self.t('Select folder'))
+                picked = choose_path(self, self.t('Select folder'), target_edit.text().strip())
                 if picked:
                     target_edit.setText(os.path.normpath(picked))
             btn_sel.clicked.connect(lambda _=None, e=edit: _pick_folder(e))

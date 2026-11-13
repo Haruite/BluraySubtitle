@@ -21,6 +21,7 @@ from src.runtime.application_log import ApplicationLog
 
 from .widget_animations import AnimatedDialog
 from .window_background import WindowBackground, background_panel_colors
+from .x11_window import apply_x11_title_bar_theme
 
 if sys.platform == "win32":
     import ctypes
@@ -227,7 +228,9 @@ class ApplicationLogDialog(AnimatedDialog):
         if stylesheet != self.styleSheet():
             self.setStyleSheet(stylesheet)
         self._refresh_background_panels()
-        self.set_dark_title_bar(mode == "dark")
+        dark = mode == "dark"
+        self.set_dark_title_bar(dark)
+        apply_x11_title_bar_theme(self, dark)
 
     def set_background_image(self, path: str, opacity: int, blur: int = 0) -> None:
         self._window_background.set_image(path, opacity, blur)

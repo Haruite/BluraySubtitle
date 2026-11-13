@@ -8,11 +8,12 @@ import tempfile
 from typing import Optional
 
 from PyQt6.QtCore import QProcess, QProcessEnvironment
-from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLineEdit, QPushButton, QFileDialog, QMessageBox
+from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLineEdit, QPushButton, QMessageBox
 
 from src.core.settings import ENCODE_REMUX_LABELS, ENCODE_LABELS, PLUGIN_PATH, VSEDIT_PATH, VSPIPE_PATH, ENCODE_SP_LABELS, \
     ENCODE_REMUX_SP_LABELS
 from src.exports.utils import print_exc_terminal, run_command
+from src.runtime.gui_runtime_classes.file_dialog import choose_path
 from src.runtime.video_timeline import (
     VPY_HARDSUB_CALL, VPY_HARDSUB_PATTERN, VPY_LEGACY_HARDSUB_CALLS,
 )
@@ -763,12 +764,12 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
         button = QPushButton(self.t('Select'), widget)
 
         def select_file():
-            start_dir = os.path.dirname(line_edit.text()) if line_edit.text() else os.getcwd()
-            path, _ = QFileDialog.getOpenFileName(
+            path = choose_path(
                 self,
                 self.t("Select VPy File"),
-                start_dir,
-                "Python/VapourSynth (*.py *.vpy)"
+                line_edit.text() or os.getcwd(),
+                directory=False,
+                name_filter="Python/VapourSynth (*.py *.vpy)",
             )
             if path:
                 line_edit.setText(os.path.normpath(path))

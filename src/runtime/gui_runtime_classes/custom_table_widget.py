@@ -64,7 +64,35 @@ def _is_table_value_column(view: QWidget | None, index: QModelIndex) -> bool:
     return bool(columns and 0 <= column < len(columns) and columns[column] in ('output_name', 'language'))
 
 
+class _ComboBoxDelegate(QStyledItemDelegate):
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+        combo = self.parent()
+        current = combo.model().index(combo.currentIndex(), combo.modelColumn(), combo.rootModelIndex())
+        if index != current or not index.flags() & Qt.ItemFlag.ItemIsEnabled:
+            return
+        # Hover and keyboard navigation can highlight a different row than the committed value.
+        inset = option.rect.height() // 5
+        marker = option.rect.adjusted(2, inset, 0, -inset)
+        marker.setWidth(3)
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(option.palette.color(QPalette.ColorRole.Accent))
+        painter.drawRoundedRect(QRectF(marker), 1.5, 1.5)
+        painter.restore()
+
+
 class StyledComboBox(QComboBox):
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setItemDelegate(_ComboBoxDelegate(self))
+        self.setMaxVisibleItems(12)
+
+    def showPopup(self) -> None:
+        self.view().setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        super().showPopup()
+
     def paintEvent(self, event):
         option = QStyleOptionComboBox()
         self.initStyleOption(option)

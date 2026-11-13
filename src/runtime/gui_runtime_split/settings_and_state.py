@@ -179,11 +179,10 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
             self._apply_ui_font_size(ui.font_size)
         if previous is None or ui.theme != previous.theme:
             self._apply_theme(ui.theme)
-        else:
-            if ui.opacity != previous.opacity:
-                self._apply_window_opacity()
-            if ui.log_theme != previous.log_theme:
-                self._apply_log_dialog_theme()
+        elif ui.log_theme != previous.log_theme:
+            self._apply_log_dialog_theme()
+        if previous is None or ui.opacity != previous.opacity:
+            self._apply_window_opacity()
         if previous is None or ui.language != previous.language:
             self._apply_language(ui.language)
         self.set_background_image(ui.main_background_path, ui.main_background_opacity, ui.main_background_blur)

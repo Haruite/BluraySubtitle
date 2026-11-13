@@ -2,7 +2,7 @@
 
 import sys
 
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QStandardPaths, QTimer
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication, QMessageBox, QStyle
 
@@ -28,9 +28,15 @@ def run_src_entry(application_log: ApplicationLog | None = None) -> None:
     if sys.platform == "win32" and not getattr(sys, "frozen", False):
         # Keep source launches out of python.exe's taskbar group.
         _set_taskbar_app_id("Haruite.BluraySubtitle")
+    desktop_id = desktop_entry_id() if sys.platform.startswith("linux") else ""
+    if desktop_id:
+        desktop_entry = QStandardPaths.locate(
+            QStandardPaths.StandardLocation.ApplicationsLocation, f"{desktop_id}.desktop",
+        )
+        if desktop_entry:
+            # Qt registers an installed entry before the GUI reads appearance settings.
+            QApplication.setDesktopFileName(desktop_id)
     app = QApplication.instance() or QApplication(sys.argv)
-    if sys.platform.startswith("linux"):
-        app.setDesktopFileName(desktop_entry_id())
     instance = None
     try:
         instance = InstanceActivation(app)
@@ -45,6 +51,10 @@ def run_src_entry(application_log: ApplicationLog | None = None) -> None:
             translate_text("Could not start local instance detection. {error}").format(error=error),
             translate=False,
         )
+    if desktop_id and not desktop_entry:
+        # Let Qt's queued portal check skip registration before assigning the window ID.
+        app.processEvents()
+        app.setDesktopFileName(desktop_id)
     # Capture Git metadata before the GUI starts handling events.
     current_commit()
     enable_combo_animation()

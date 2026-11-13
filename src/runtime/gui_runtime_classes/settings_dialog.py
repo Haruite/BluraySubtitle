@@ -13,13 +13,13 @@ from pathlib import Path
 from typing import Callable
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFontDatabase, QImageReader
+from PyQt6.QtGui import QFontDatabase, QImageReader, QShowEvent
 from PyQt6.QtNetwork import QNetworkReply
 from PyQt6.QtWidgets import (
+    QApplication,
     QComboBox,
     QCheckBox,
     QDialogButtonBox,
-    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -30,6 +30,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QDoubleSpinBox,
+    QStyle,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -79,8 +80,11 @@ from src.runtime.windows_update import (
 )
 
 from .custom_table_widget import StyledComboBox
+from .file_dialog import choose_path
 from .spin_box import StyledDoubleSpinBox, StyledSpinBox
-from .widget_animations import AnimatedDialog, AnimatedMessageBox, window_opacity
+from .widget_animations import (
+    AnimatedDialog, AnimatedMessageBox, supports_window_opacity, window_is_fading_out, window_opacity,
+)
 
 
 EXTERNAL_TOOL_PATH_NAMES = (
@@ -134,11 +138,12 @@ class SettingsDialog(AnimatedDialog):
         self.finished.connect(self._cancel_update_check)
         self.setWindowTitle(self.t("Settings"))
         self.setMinimumWidth(680)
-        self.setMinimumHeight(520)
+        self._initial_size_set = False
 
         layout = QVBoxLayout(self)
         tabs = QTabWidget(self)
-        tabs.addTab(self._build_general_tab(), self.t("General"))
+        self._general_scroll = self._build_general_tab()
+        tabs.addTab(self._general_scroll, self.t("General"))
         tabs.addTab(self._build_fonts_tab(), self.t("Fonts"))
         tabs.addTab(self._build_paths_tab(), self.t("Paths"))
         tabs.addTab(self._build_advanced_tab(), self.t("Advanced"))
@@ -169,7 +174,44 @@ class SettingsDialog(AnimatedDialog):
         layout.addWidget(self.buttons)
         self._set_controls(config)
 
-    def _build_general_tab(self) -> QWidget:
+    def showEvent(self, event: QShowEvent) -> None:
+        first_show = not event.spontaneous() and not self._initial_size_set
+        if first_show:
+            self._initial_size_set = True
+            self._fit_general_tab_height()
+        super().showEvent(event)
+        if first_show and not QApplication.platformName().startswith("wayland"):
+            screen = self.screen()
+            if screen is None:
+                return
+            available = screen.availableGeometry()
+            frame = self.frameGeometry()
+            top = max(available.top(), min(frame.top(), available.bottom() - frame.height() + 1))
+            if top != frame.top():
+                self.move(frame.left(), top)
+
+    def _fit_general_tab_height(self) -> None:
+        screen = self.screen()
+        if screen is None:
+            return
+        scroll = self._general_scroll
+        viewport = scroll.maximumViewportSize()
+        general = scroll.widget()
+        content_height = general.heightForWidth(viewport.width())
+        if content_height < 0:
+            content_height = general.sizeHint().height()
+        controls_height = self.height() - viewport.height()
+        style = self.style()
+        # The window manager may supply the frame margins only after mapping.
+        frame_height = max(
+            self.frameGeometry().height() - self.height(),
+            style.pixelMetric(QStyle.PixelMetric.PM_TitleBarHeight, widget=self)
+            + 2 * style.pixelMetric(QStyle.PixelMetric.PM_DefaultFrameWidth, widget=self),
+        )
+        available_height = screen.availableGeometry().height() - frame_height
+        self.resize(self.width(), min(content_height + controls_height, available_height))
+
+    def _build_general_tab(self) -> QScrollArea:
         tab = QWidget(self)
         form = QFormLayout(tab)
 
@@ -206,7 +248,14 @@ class SettingsDialog(AnimatedDialog):
         self.opacity_spin = StyledSpinBox(tab)
         self.opacity_spin.setRange(60, 100)
         self.opacity_spin.setSuffix("%")
-        form.addRow(self.t("Window opacity"), self.opacity_spin)
+        opacity_label = QLabel(self.t("Window opacity"), tab)
+        opacity_label.setBuddy(self.opacity_spin)
+        form.addRow(opacity_label, self.opacity_spin)
+        if not supports_window_opacity():
+            self.opacity_spin.setEnabled(False)
+            help_text = self.t("Window opacity requires Windows or a composited X11 session.")
+            self.opacity_spin.setToolTip(help_text)
+            opacity_label.setToolTip(help_text)
 
         self.main_background_opacity_spin = StyledSpinBox(tab)
         self.main_background_opacity_spin.setRange(0, 100)
@@ -241,7 +290,11 @@ class SettingsDialog(AnimatedDialog):
         for index in range(self.theme_combo.count()):
             self.log_theme_combo.addItem(self.theme_combo.itemText(index), self.theme_combo.itemData(index))
         form.addRow(self.t("Log window theme"), self.log_theme_combo)
-        return tab
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(tab)
+        tab.setAutoFillBackground(False)
+        return scroll
 
     def _build_tools_tab(self) -> QWidget:
         tab = QWidget(self)
@@ -505,14 +558,12 @@ class SettingsDialog(AnimatedDialog):
                 patterns = " ".join(
                     f"*.{bytes(extension).decode('ascii')}" for extension in QImageReader.supportedImageFormats()
                 )
-                path, _ = QFileDialog.getOpenFileName(
-                    self, self.t("Select background image"), os.path.expanduser(start),
-                    f'{self.t("Image files")} ({patterns})',
+                path = choose_path(
+                    self, self.t("Select background image"), start,
+                    directory=False, name_filter=f'{self.t("Image files")} ({patterns})',
                 )
             else:
-                path = QFileDialog.getExistingDirectory(
-                    self, self.t("Select folder"), start if os.path.isdir(start) else "",
-                )
+                path = choose_path(self, self.t("Select folder"), start)
             if path:
                 edit.setText(os.path.normpath(path))
 
@@ -1300,7 +1351,7 @@ class SettingsDialog(AnimatedDialog):
         return True
 
     def accept(self) -> None:
-        if self._apply_settings():
+        if not window_is_fading_out(self) and self._apply_settings():
             super().accept()
 
     def _apply_settings(self) -> bool:

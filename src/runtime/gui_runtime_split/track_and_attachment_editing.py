@@ -12,7 +12,7 @@ import pycountry
 from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import QMessageBox, QDialog, QVBoxLayout, QPlainTextEdit, QWidget, QHBoxLayout, QPushButton, \
-    QLabel, QTableWidget, QLineEdit, QTableWidgetItem, QToolButton, QFileDialog, QHeaderView, QComboBox
+    QLabel, QTableWidget, QLineEdit, QTableWidgetItem, QToolButton, QHeaderView, QComboBox
 
 from src.bdmv import pid_to_lang_from_m2ts_path
 from src.core import find_mkvtoolnix, MKV_EXTRACT_PATH, MKV_PROP_EDIT_PATH, \
@@ -20,6 +20,7 @@ from src.core import find_mkvtoolnix, MKV_EXTRACT_PATH, MKV_PROP_EDIT_PATH, \
 from src.exports.utils import run_command, mkv_codec_id_is_dts_family, print_terminal_line
 from src.runtime.audio_conversion import is_lossless_audio_codec
 from src.runtime.gui_runtime_classes.custom_table_widget import SelectionTableWidget, StyledComboBox
+from src.runtime.gui_runtime_classes.file_dialog import choose_path
 from src.runtime.gui_runtime_classes.widget_animations import AnimatedDialog
 from src.runtime.services import BluraySubtitle
 from src.runtime.sp import SpEntry, media_track_key
@@ -1109,8 +1110,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
 
         def browse_file():
             start = file_edit.text().strip()
-            start_dir = os.path.dirname(start) if start else ''
-            path = QFileDialog.getOpenFileName(dlg, self.t('Select'), start_dir)[0]
+            path = choose_path(dlg, self.t('Select'), start, directory=False)
             if path:
                 file_edit.setText(os.path.normpath(path))
 

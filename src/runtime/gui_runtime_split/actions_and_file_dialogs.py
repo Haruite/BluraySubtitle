@@ -15,7 +15,7 @@ from typing import Optional
 from PyQt6.QtCore import Qt, QTimer, QThread, QCoreApplication, QModelIndex, QEventLoop, QObject, QSize
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPlainTextEdit, QTextBrowser, QWidget, QHBoxLayout, QPushButton, \
     QApplication, QProgressDialog, QProgressBar, QTableWidgetItem, QTableWidget, QToolButton, QComboBox, \
-    QAbstractItemView, QMenu, QMessageBox, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, QFileDialog, QCheckBox, \
+    QAbstractItemView, QMenu, QMessageBox, QSizePolicy, QRadioButton, QButtonGroup, QInputDialog, QCheckBox, \
     QDoubleSpinBox, QGridLayout, QSpacerItem, QStyle, QStyleOptionComboBox
 
 from src.bdmv import Chapter, chapter_play_item_file_ranges
@@ -44,6 +44,7 @@ from src.exports.utils import (
 from src.runtime.encode_source import probe_svt_av1_bit_depths
 from src.runtime.sp import SpEntry, media_track_key
 from src.runtime.gui_runtime_classes.custom_table_widget import SelectionTableWidget, StyledComboBox
+from src.runtime.gui_runtime_classes.file_dialog import choose_path
 from src.runtime.gui_runtime_classes.spin_box import StyledDoubleSpinBox
 from src.runtime.gui_runtime_classes.encode_worker import EncodeWorker
 from src.runtime.encode import EncodeRequest, EncodeRow, EncodeSettings, validate_encode_request
@@ -2599,22 +2600,24 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             QMessageBox.warning(self, self.t('Open Folder Failed'), self.t('Cannot open folder:\n{normalized}\n\n{error}').format(normalized=normalized, error=e))
 
     def select_bdmv_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, self.t("Select folder"))
+        folder = choose_path(self, self.t("Select folder"), self.bdmv_folder_path.text().strip())
         if folder:
             self.bdmv_folder_path.setText(os.path.normpath(folder))
 
     def select_output_folder(self):
         start = self.output_folder_path.text().strip() if hasattr(self, 'output_folder_path') else ''
-        folder = QFileDialog.getExistingDirectory(self, self.t("Select Output Folder"), start)
+        folder = choose_path(self, self.t("Select Output Folder"), start)
         if folder:
             self.output_folder_path.setText(os.path.normpath(folder))
 
     def select_remux_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, self.t("Select folder"))
-        if folder and hasattr(self, 'remux_folder_path'):
+        if not hasattr(self, 'remux_folder_path'):
+            return
+        folder = choose_path(self, self.t("Select folder"), self.remux_folder_path.text().strip())
+        if folder:
             self.remux_folder_path.setText(os.path.normpath(folder))
 
     def select_subtitle_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, self.t("Select folder"))
+        folder = choose_path(self, self.t("Select folder"), self.subtitle_folder_path.text().strip())
         if folder:
             self.subtitle_folder_path.setText(os.path.normpath(folder))

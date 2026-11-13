@@ -310,7 +310,14 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
             column = keys.index(primary)
             left = table.columnViewportPosition(column) + bar.value()
             spare = max(0, table.viewport().width() - table.columnWidth(column))
-            bar.setValue(max(0, left - (spare // 2 if primary == 'output_name' else 0)))
+            target = min(bar.maximum(), max(0, left - (spare // 2 if primary == 'output_name' else 0)))
+            # Start at a whole column so the leading header and cell text stay readable.
+            header = table.horizontalHeader()
+            bar.setValue(max((
+                header.sectionPosition(index)
+                for index in range(header.count())
+                if not header.isSectionHidden(index) and header.sectionPosition(index) <= target
+            ), default=0))
 
         QTimer.singleShot(0, scroll)
 

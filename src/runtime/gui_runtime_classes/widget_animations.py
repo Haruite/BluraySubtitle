@@ -6,6 +6,9 @@ from PyQt6 import sip
 from PyQt6.QtCore import QAbstractAnimation, QEasingCurve, QEvent, QPropertyAnimation, Qt
 from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox, QWidget
 
+from .desktop_appearance import desktop_appearance
+from .x11_window import x11_compositing_active
+
 
 def enable_combo_animation() -> None:
     if QApplication.isEffectEnabled(Qt.UIEffect.UI_General):
@@ -18,17 +21,16 @@ class _WindowFade(QPropertyAnimation):
         self._window = window
         self.opacity = window.windowOpacity()
         self.close_action: Callable[[], object] | None = None
-        self._was_enabled = window.isEnabled()
         self.finished.connect(self._finish)
         window.installEventFilter(self)
 
     def start_opening(self) -> None:
         self.cancel()
         self.opacity = self._window.windowOpacity()
-        self.setDuration(160)
-        self.setStartValue(self.opacity * 0.30)
+        self.setDuration(200)
+        self.setStartValue(self.opacity * 0.25)
         self.setEndValue(self.opacity)
-        self.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.setEasingCurve(QEasingCurve.Type.OutQuad)
         self.start()
 
     def start_closing(self, close: Callable[[], object]) -> None:
@@ -37,26 +39,21 @@ class _WindowFade(QPropertyAnimation):
             self.opacity = current
         self.stop()
         self.close_action = close
-        self._was_enabled = self._window.isEnabled()
-        self._window.setEnabled(False)
-        self.setDuration(120)
+        self.setDuration(160)
         self.setStartValue(current)
         self.setEndValue(0.0)
         self.setEasingCurve(QEasingCurve.Type.InQuad)
         self.start()
 
     def cancel(self) -> None:
-        close, self.close_action = self.close_action, None
+        self.close_action = None
         self.stop()
-        if close is not None:
-            self._window.setEnabled(self._was_enabled)
         self._window.setWindowOpacity(self.opacity)
 
     def _finish(self) -> None:
         close, self.close_action = self.close_action, None
         if close is not None:
             window = self._window
-            window.setEnabled(self._was_enabled)
             close()
             if not sip.isdeleted(window) and self.state() == QAbstractAnimation.State.Stopped:
                 window.setWindowOpacity(self.opacity)
@@ -72,15 +69,31 @@ def _window_fade(window: QWidget) -> _WindowFade | None:
     return window.findChild(_WindowFade, options=Qt.FindChildOption.FindDirectChildrenOnly)
 
 
+def supports_window_opacity() -> bool:
+    platform = QApplication.platformName()
+    return platform == "windows" or (platform == "xcb" and x11_compositing_active())
+
+
 def _supports_window_fade(window: QWidget) -> bool:
-    return (
-        QApplication.platformName() in ("windows", "xcb")
-        and QApplication.isEffectEnabled(Qt.UIEffect.UI_General)
-        and not QApplication.instance().isSavingSession()
-        and window.windowType() in (Qt.WindowType.Window, Qt.WindowType.Dialog)
-        and not window.isMinimized()
-        and not window.testAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen)
-    )
+    app = QApplication.instance()
+    if (
+        app.isSavingSession()
+        or window.windowType() not in (Qt.WindowType.Window, Qt.WindowType.Dialog)
+        or window.isMinimized()
+        or window.testAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen)
+        or not supports_window_opacity()
+    ):
+        return False
+    hints = app.styleHints()
+    accessibility = hints.accessibility() if hasattr(hints, "accessibility") else None
+    if accessibility is not None and hasattr(accessibility, "motionPreference"):
+        if accessibility.motionPreference() == Qt.MotionPreference.ReducedMotion:
+            return False
+    elif app.platformName() == "windows" and not app.isEffectEnabled(Qt.UIEffect.UI_General):
+        return False
+    # Qt's generic Unix UI-effects flag can be off on a composited desktop.
+    appearance = desktop_appearance()
+    return appearance is None or not appearance.reduced_motion()
 
 
 def animate_window_open(window: QWidget) -> None:
@@ -89,16 +102,19 @@ def animate_window_open(window: QWidget) -> None:
 
 
 def animate_window_close(window: QWidget, close: Callable[[], object]) -> bool:
-    if not _supports_window_fade(window) or not window.isVisible():
-        return False
     fade = _window_fade(window)
     if fade is not None and fade.close_action is not None:
         return True
     # A replayed close reaches this point at the end of the fade, at zero opacity.
-    if window.windowOpacity() <= 0.0:
+    if not window.isVisible() or window.windowOpacity() <= 0.0 or not _supports_window_fade(window):
         return False
     (fade or _WindowFade(window)).start_closing(close)
     return True
+
+
+def window_is_fading_out(window: QWidget) -> bool:
+    fade = _window_fade(window)
+    return fade is not None and fade.close_action is not None
 
 
 def cancel_window_close(window: QWidget) -> None:
@@ -124,18 +140,18 @@ def window_opacity(window: QWidget) -> float:
     return window.windowOpacity()
 
 
-class _DialogFade:
+class DialogFade:
     def done(self, result: int) -> None:
         complete = super().done
         if not animate_window_close(self, lambda: complete(result)):
             complete(result)
 
 
-class AnimatedDialog(_DialogFade, QDialog):
+class AnimatedDialog(DialogFade, QDialog):
     """Finish the dialog after the fade while preserving its result."""
 
 
-class AnimatedMessageBox(_DialogFade, QMessageBox):
+class AnimatedMessageBox(DialogFade, QMessageBox):
     def closeEvent(self, event) -> None:
         # QMessageBox computes the result of a title-bar close in its close handler.
         if animate_window_close(self, self.close):

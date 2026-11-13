@@ -1,7 +1,10 @@
 """Numeric inputs with chevrons drawn on the field background."""
 
+from typing import Any
+
+from PyQt6.QtGui import QPaintEvent
 from PyQt6.QtWidgets import (
-    QAbstractSpinBox, QDoubleSpinBox, QSpinBox, QStyle, QStyleOptionSpinBox, QStylePainter,
+    QAbstractSpinBox, QDoubleSpinBox, QSpinBox, QStyle, QStyleOptionSpinBox, QStylePainter, QWidget,
 )
 
 from .custom_table_widget import draw_vertical_chevron
@@ -38,10 +41,18 @@ def _paint_spin_box(spin_box: QAbstractSpinBox) -> None:
 
 
 class StyledSpinBox(QSpinBox):
-    def paintEvent(self, event):
+    def __init__(self, parent: QWidget | None = None, **kwargs: Any) -> None:
+        super().__init__(parent, **kwargs)
+        self.lineEdit().setTextMargins(4, 0, 4, 0)
+
+    def paintEvent(self, event: QPaintEvent) -> None:
         _paint_spin_box(self)
 
 
 class StyledDoubleSpinBox(QDoubleSpinBox):
-    def paintEvent(self, event):
+    def __init__(self, parent: QWidget | None = None, **kwargs: Any) -> None:
+        super().__init__(parent, **kwargs)
+        self.lineEdit().setTextMargins(4, 0, 4, 0)
+
+    def paintEvent(self, event: QPaintEvent) -> None:
         _paint_spin_box(self)

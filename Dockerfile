@@ -31,7 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential cmake ninja-build autoconf automake libtool \
     python3 python3-pip python3-venv python3-dev python3-sphinx \
     fonts-wqy-microhei flac gedit nautilus mkvtoolnix mkvtoolnix-gui pipewire-bin \
-    libegl1 libopengl0 libglib2.0-0 libxkbcommon0 libdbus-1-3 \
+    libegl1 libopengl0 libglib2.0-0 libglib2.0-bin libxkbcommon0 libdbus-1-3 libx11-6 \
     libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 \
     libxcb-xinerama0 libxcb-xinput0 libxcb-render-util0 \
     libunwind8 libunwind-dev xdg-utils libgl1-mesa-dri libglx-mesa0 mesa-vulkan-drivers \

@@ -2,39 +2,36 @@
 from PyQt6.QtCore import QLibraryInfo, QRectF, Qt, QTranslator
 from PyQt6.QtGui import QColor, QFont, QFontDatabase, QPainter, QPainterPath, QPalette, QPen
 from PyQt6.QtWidgets import QApplication, QLabel, QTabBar, QWidget, QPlainTextEdit, QTextEdit, QLineEdit, QGroupBox, \
-    QAbstractItemView, QComboBox, QTableWidget, QProxyStyle, QStyle
+    QComboBox, QProxyStyle, QStyle, QTableWidget
 
 from src.core import APP_TITLE
 import src.core.settings as core_settings
 from src.core.i18n import translate_text
 from src.runtime.gui_runtime_classes.custom_table_widget import editable_table_border_color
+from src.runtime.gui_runtime_classes.desktop_appearance import desktop_appearance
 from src.runtime.gui_runtime_classes.disc_table_widget import DiscCommandEdit
-from src.runtime.gui_runtime_classes.widget_animations import set_window_opacity
+from src.runtime.gui_runtime_classes.widget_animations import set_window_opacity, supports_window_opacity
+from src.runtime.gui_runtime_classes.x11_window import apply_x11_title_bar_theme
 from .gui_base import BluraySubtitleGuiBase
 
 
-_SCROLL_CONTROL_GEOMETRY = (
-    "QSlider{background:transparent;}"
-    "QSlider::groove:horizontal{height:3px;border-radius:2px;}"
-    "QSlider::sub-page:horizontal,QSlider::add-page:horizontal{border-radius:2px;}"
-    "QSlider::handle:horizontal{width:14px;margin:-7px 0;border:1px solid transparent;border-radius:7px;}"
+_SCROLL_BAR_GEOMETRY = (
     "QScrollBar{background:transparent;border:none;}"
-    "QScrollBar:horizontal{height:6px;margin:0 6px;}"
-    "QScrollBar:vertical{width:6px;margin:6px 0;}"
+    "QScrollBar:horizontal{height:7px;margin:0 1px;}"
+    "QScrollBar:vertical{width:7px;margin:1px 0;}"
     "QScrollBar::handle{border-radius:2px;}"
     "QScrollBar::handle:horizontal{min-width:24px;margin:1px 0;}"
     "QScrollBar::handle:vertical{min-height:24px;margin:0 1px;}"
-    "QScrollBar::handle:hover,QScrollBar::handle:pressed{margin:0;}"
-    "QScrollBar::add-line:horizontal{width:6px;subcontrol-position:right;subcontrol-origin:margin;}"
-    "QScrollBar::sub-line:horizontal{width:6px;subcontrol-position:left;subcontrol-origin:margin;}"
-    "QScrollBar::add-line:vertical{height:6px;subcontrol-position:bottom;subcontrol-origin:margin;}"
-    "QScrollBar::sub-line:vertical{height:6px;subcontrol-position:top;subcontrol-origin:margin;}"
+    "QScrollBar::add-line:horizontal,QScrollBar::sub-line:horizontal{width:0;}"
+    "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}"
     "QScrollBar::add-line,QScrollBar::sub-line,QScrollBar::add-page,QScrollBar::sub-page{background:transparent;}"
 )
 _COLORFUL_ACCENT = '#7c3aed'
 _COLORFUL_ACCENT_HOVER = '#6d28d9'
+_DARK_ACCENT = '#3a5fcd'
+_DARK_FOCUS = '#5b7fff'
 _COLORFUL_GRADIENT = 'qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #fff7d9,stop:0.55 #fffefa,stop:1 #f4f9ff)'
-_LOG_THEME_ACCENTS = {'light': '#356dcc', 'dark': '#3a5fcd', 'colorful': _COLORFUL_ACCENT}
+_LOG_THEME_ACCENTS = {'light': '#356dcc', 'dark': _DARK_ACCENT, 'colorful': _COLORFUL_ACCENT}
 _COLORFUL_FUNCTION_COLORS = {1: '#0ea5e9', 2: '#14b8a6', 3: '#f59e0b', 4: '#ef4444', 5: '#8b5cf6'}
 _COLORFUL_TABLE_COLORS = (
     (('table1', 'playlistTable', 'chapterTable', 'timingTable', 'subtitleEditorTable'),
@@ -53,13 +50,20 @@ def _blend_color(background: str, foreground: QColor, amount: float) -> str:
     return QColor(*channels).name()
 
 
+def _accent_text_color(color: QColor) -> QColor:
+    rgb = (value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4
+           for value in color.getRgbF()[:3])
+    luminance = sum(channel * weight for channel, weight in zip(rgb, (0.2126, 0.7152, 0.0722)))
+    return QColor('#141618' if luminance > 0.20 else '#ffffff')
+
+
 def execution_button_stylesheet(palette: QPalette, mode: str, progress: float | None = None) -> str:
     dark = mode == 'dark'
     accent = palette.color(QPalette.ColorRole.Accent)
     surface = '#22252b' if dark else '#ffffff'
     text = '#e6e6e6' if dark else '#20262e'
     edge = _blend_color(surface, accent, 0.55 if dark else 0.32)
-    focus = '#5b7fff' if dark else accent.name()
+    focus = _DARK_FOCUS if dark else accent.name()
     button = 'QPushButton#primaryAction'
     if progress is None:
         background = _blend_color(surface, accent, 0.28 if dark else 0.16)
@@ -164,7 +168,7 @@ def _shared_stylesheet(palette: QPalette, mode: str) -> str:
     tab_hover = f'rgba({accent.red()},{accent.green()},{accent.blue()},{23 if dark else 12})'
     tab_selected = f'rgba({accent.red()},{accent.green()},{accent.blue()},{70 if dark else 39})'
     selection = _blend_color(surface, accent, 0.26 if dark else 0.14)
-    focus = '#5b7fff' if dark else accent.name()
+    focus = _DARK_FOCUS if dark else accent.name()
     title_color = _COLORFUL_ACCENT if colorful else text
     pane = 'rgba(255,255,255,145)' if colorful else surface
     editor = 'rgba(255,255,255,178)' if colorful else surface
@@ -173,7 +177,8 @@ def _shared_stylesheet(palette: QPalette, mode: str) -> str:
     section_background = {'light': '#f1f6fc', 'dark': '#242830', 'colorful': 'rgba(246,250,255,205)'}[mode]
     tool_result_background = {'light': table_colors[1], 'dark': table_colors[0], 'colorful': '#f3efff'}[mode]
     checked, checked_hover, checked_edge = (
-        ('#ffedd5', '#fed7aa', '#fb923c') if colorful else (accent.name(), hover, focus)
+        ('#ffedd5', '#fed7aa', '#fb923c') if colorful else
+        (_DARK_ACCENT, '#4970df', focus) if dark else (accent.name(), hover, focus)
     )
     checked_disabled = _blend_color(surface, QColor(checked_edge), 0.35)
     section = 'QGroupBox[workspaceSection="true"]'
@@ -189,7 +194,21 @@ def _shared_stylesheet(palette: QPalette, mode: str) -> str:
     combo_fill, combo_hover = ('#30353c', '#353b44') if dark else ('#edf4fc', '#e5effa')
     control_edge = editable_table_border_color(dark)
     tab_edge = _blend_color(control_edge, QColor(focus), 0.32)
+    scroll_handle = {'light': '#8b929a', 'dark': '#6e727a', 'colorful': '#a78bfa'}[mode]
+    scroll_hover = {'light': '#656d77', 'dark': '#989ca4', 'colorful': _COLORFUL_ACCENT}[mode]
     styles = [
+        f'{_SCROLL_BAR_GEOMETRY}'
+        f'QScrollBar::handle{{background:{scroll_handle};}}'
+        f'QScrollBar::handle:hover,QScrollBar::handle:pressed{{background:{scroll_hover};}}'
+        'OpacitySlider{background:transparent;}'
+        'OpacitySlider::groove:horizontal{height:4px;background:transparent;}'
+        'OpacitySlider::handle:horizontal{width:16px;margin:-6px 0;background:transparent;}'
+        'StyledComboBox{combobox-popup:0;combobox-list-mousetracking:1;}'
+        'QDialogButtonBox{dialogbuttonbox-buttons-have-icons:0;}'
+        f'StyledComboBox QAbstractItemView{{background:{surface};color:{text};border:1px solid {control_edge};'
+        f'outline:0;selection-background-color:{selection};selection-color:{text};}}'
+        'StyledComboBox QAbstractItemView::item{padding:3px 8px 3px 11px;}'
+        f'StyledComboBox QAbstractItemView::item:selected{{background:{selection};color:{text};}}',
         f'QWidget#startupUpdateNotice{{background:{table_selection};border:1px solid {focus};border-radius:6px;}}'
         f'QWidget#startupUpdateNotice QLabel{{background:transparent;color:{text};font-weight:600;}}'
         f'SelectionTableWidget{{qproperty-editableCellBorderColor:{control_edge};}}'
@@ -197,6 +216,16 @@ def _shared_stylesheet(palette: QPalette, mode: str) -> str:
         'QComboBox:enabled:focus,QPushButton:enabled:focus,QToolButton:enabled:focus'
         f'{{border-bottom-color:{focus};}}'
         'StyledComboBox::drop-down{width:20px;border:0;background:transparent;}'
+        # Reserve the second button's width in the edit field on older Qt versions.
+        'StyledSpinBox,StyledDoubleSpinBox{border-radius:5px;padding:2px 25px 2px 0;}'
+        'StyledSpinBox[layoutDirection="RightToLeft"],StyledDoubleSpinBox[layoutDirection="RightToLeft"]'
+        '{padding-left:25px;padding-right:0;}'
+        'StyledSpinBox::up-button,StyledSpinBox::down-button,'
+        'StyledDoubleSpinBox::up-button,StyledDoubleSpinBox::down-button'
+        '{subcontrol-origin:padding;subcontrol-position:center right;position:absolute;'
+        'top:0;bottom:0;width:24px;border:0;background:transparent;}'
+        'StyledSpinBox::up-button,StyledDoubleSpinBox::up-button{right:24px;}'
+        'StyledSpinBox::down-button,StyledDoubleSpinBox::down-button{right:0;}'
         'QLineEdit:enabled:!read-only,QAbstractSpinBox:enabled:!read-only'
         f'{{border-color:{control_edge};}}'
         'QLineEdit:enabled:focus:!read-only,QAbstractSpinBox:enabled:focus:!read-only'
@@ -272,8 +301,8 @@ def _shared_stylesheet(palette: QPalette, mode: str) -> str:
             f'QComboBox,QPushButton,QToolButton{{border:1px solid {field_edge};border-radius:5px;}}'
             'QComboBox{padding:3px 6px;}'
             'QPushButton,QToolButton{padding:4px 9px;}'
-            f'QLineEdit,QAbstractSpinBox{{background:#fcfcfd;border:1px solid {field_edge};'
-            'border-radius:5px;padding:2px 4px;}'
+            f'QLineEdit,QAbstractSpinBox{{background:#fcfcfd;border:1px solid {field_edge};border-radius:5px;}}'
+            'QLineEdit{padding:2px 4px;}'
             'QComboBox:disabled,QPushButton:disabled,QToolButton:disabled,QLineEdit:disabled,QAbstractSpinBox:disabled'
             f'{{background:{field_fill};color:{muted_text};}}'
             f'QPushButton:enabled:hover,QToolButton:enabled:hover{{background:{selection};}}'
@@ -296,10 +325,7 @@ def _shared_stylesheet(palette: QPalette, mode: str) -> str:
         playlist_selection = table_selection
     styles.append(_table_stylesheet(('QTableWidget#playlistTable',), *playlist_colors, playlist_selection, text))
     if dark:
-        # Reserve room for the step arrows inside the field border.
         styles.append(
-            'QAbstractSpinBox{padding-right:18px;}'
-            'QAbstractSpinBox::up-button,QAbstractSpinBox::down-button{position:relative;right:1px;width:16px;}'
             f'{encode_box} QCheckBox,{encode_box} QRadioButton{{background:{section_background};}}'
         )
     return ''.join(styles)
@@ -313,7 +339,7 @@ def _log_window_stylesheet(mode: str) -> str:
     editor = _COLORFUL_GRADIENT if colorful else field
     text, muted, edge = ('#e6e6e6', '#9aa0b3', '#3a3a3a') if dark else ('#1f2330', '#666b75', '#dce0e6')
     accent = _LOG_THEME_ACCENTS[mode]
-    focus = '#5b7fff' if dark else accent
+    focus = _DARK_FOCUS if dark else accent
     hover = _blend_color(field, QColor(accent), 0.22 if dark else 0.12)
     scroll_handle = '#a78bfa' if colorful else ('#626262' if dark else '#a7aeb8')
     return (
@@ -330,7 +356,6 @@ def _log_window_stylesheet(mode: str) -> str:
         f'QPushButton:focus{{border-color:{focus};}}'
         f'QMenu{{background:{field};border:1px solid {edge};}}'
         f'QMenu::item:selected{{background:{accent};color:#ffffff;}}'
-        f'{_SCROLL_CONTROL_GEOMETRY}'
         f'QScrollBar::handle{{background:{scroll_handle};}}'
         f'QScrollBar::handle:hover{{background:{focus};}}'
     )
@@ -341,24 +366,13 @@ class _ThemeStyle(QProxyStyle):
         super().__init__(base_style)
         self._mode = mode
 
-    def drawControl(self, element, option, painter, widget=None):
-        super().drawControl(element, option, painter, widget)
-        if self._mode != 'dark' or not option.state & QStyle.StateFlag.State_Enabled:
-            return
-        # The popup selection follows hover. Mark the combo box's current value.
-        if element == QStyle.ControlElement.CE_MenuItem and isinstance(widget, QComboBox):
-            current_item = option.checked
-        elif element == QStyle.ControlElement.CE_ItemViewItem and isinstance(widget, QAbstractItemView):
-            combo = widget.window().parentWidget()
-            index = option.index
-            current_item = isinstance(combo, QComboBox) and index.isValid() and index.row() == combo.currentIndex()
-        else:
-            return
-        if current_item:
-            inset = option.rect.height() // 5
-            marker = option.rect.adjusted(1, inset, 0, -inset)
-            marker.setWidth(2)
-            painter.fillRect(marker, QColor('#5b7fff'))
+    def pixelMetric(self, metric, option=None, widget=None):
+        if metric in (
+            QStyle.PixelMetric.PM_IndicatorWidth, QStyle.PixelMetric.PM_IndicatorHeight,
+            QStyle.PixelMetric.PM_ExclusiveIndicatorWidth, QStyle.PixelMetric.PM_ExclusiveIndicatorHeight,
+        ):
+            return 16
+        return super().pixelMetric(metric, option, widget)
 
     def drawPrimitive(self, element, option, painter, widget=None):
         checkbox = element == QStyle.PrimitiveElement.PE_IndicatorCheckBox
@@ -367,10 +381,10 @@ class _ThemeStyle(QProxyStyle):
         log_mode = window.property('logWindowTheme') if window is not None else None
         window_background = getattr(window, '_window_background', None)
         over_image = window_background is not None and window_background.active
-        themed_checkbox = (
+        table_checkbox = (
             element == QStyle.PrimitiveElement.PE_IndicatorItemViewItemCheck and isinstance(widget, QTableWidget)
-        ) or (checkbox and (self._mode == 'colorful' or log_mode is not None or over_image))
-        if not (radio or themed_checkbox):
+        )
+        if not (radio or checkbox or table_checkbox):
             super().drawPrimitive(element, option, painter, widget)
             return
 
@@ -384,13 +398,11 @@ class _ThemeStyle(QProxyStyle):
         if log_mode is None:
             accent = palette.color(QPalette.ColorRole.Accent)
             base = palette.color(QPalette.ColorRole.Base)
-            checked_text = palette.color(QPalette.ColorRole.HighlightedText)
         else:
             accent = QColor(_LOG_THEME_ACCENTS[log_mode])
             base = QColor('#2a2a2a' if dark else '#ffffff')
-            checked_text = QColor('#ffffff')
-        if radio and dark:
-            accent = QColor('#5b7fff')
+        if dark and checkbox and log_mode is None:
+            accent = QColor('#525861')
         if hovered:
             accent = accent.darker(112)
         # The native indicator can inherit a transparent fill from the window stylesheet.
@@ -402,7 +414,7 @@ class _ThemeStyle(QProxyStyle):
         if enabled:
             border = accent if marked or hovered else QColor(outline)
             background = accent if marked else base
-            mark = checked_text
+            mark = _accent_text_color(accent)
         else:
             border = QColor('#555a64' if dark else '#b8bdc8')
             background = QColor('#34373e' if dark else '#e5e7ef')
@@ -442,12 +454,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
     _qt_translator: QTranslator | None = None
 
     def _window_opacity_supported(self) -> bool:
-        app = QApplication.instance()
-        if not app:
-            return False
-        platform_name = (app.platformName() or '').lower()
-        # Wayland backend does not support per-window opacity in Qt.
-        return 'wayland' not in platform_name
+        return supports_window_opacity()
 
     def _apply_window_opacity(self, window: QWidget | None = None):
         if not self._window_opacity_supported():
@@ -455,12 +462,9 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
         # QWidget stores opacity as a byte before the native window is created.
         opacity = round(self.opacity_slider.value() * 255 / 100) / 255
         targets = (self, self._log_dialog) if window is None else (window,)
-        try:
-            for target in targets:
-                if target is not None:
-                    set_window_opacity(target, opacity)
-        except Exception:
-            pass
+        for target in targets:
+            if target is not None:
+                set_window_opacity(target, opacity)
 
     def t(self, text: str) -> str:
         return translate_text(str(text), getattr(self, '_language_code', None) or core_settings.CURRENT_UI_LANGUAGE)
@@ -594,7 +598,8 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
         dark = self._theme_mode == 'dark'
         colorful = self._theme_mode == 'colorful'
         app.styleHints().setColorScheme(Qt.ColorScheme.Dark if dark else Qt.ColorScheme.Light)
-        app.setStyle(_ThemeStyle('Fusion' if dark else self._default_style_name, self._theme_mode))
+        base_style = 'Fusion' if dark or app.platformName() in ('xcb', 'wayland') else self._default_style_name
+        app.setStyle(_ThemeStyle(base_style, self._theme_mode))
         if dark:
             # Fusion consistently paints the custom dark palette across platforms.
             palette = QPalette(QColor('#2a2a2a'))
@@ -602,8 +607,8 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                 (QPalette.ColorRole.Window, '#1f1f1f'),
                 (QPalette.ColorRole.Base, '#202020'),
                 (QPalette.ColorRole.AlternateBase, '#242424'),
-                (QPalette.ColorRole.Highlight, '#3a5fcd'),
-                (QPalette.ColorRole.Accent, '#3a5fcd'),
+                (QPalette.ColorRole.Highlight, _DARK_ACCENT),
+                (QPalette.ColorRole.Accent, _DARK_FOCUS),
                 (QPalette.ColorRole.HighlightedText, '#ffffff'),
                 (QPalette.ColorRole.Link, '#8daaff'),
                 (QPalette.ColorRole.LinkVisited, '#c4b5fd'),
@@ -626,8 +631,14 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                 palette.setColor(QPalette.ColorRole.LinkVisited, QColor(_COLORFUL_ACCENT_HOVER))
             else:
                 palette.setColor(QPalette.ColorRole.Window, QColor('#f8f8f8'))
+                appearance = desktop_appearance()
+                if appearance is not None:
+                    accent = appearance.accent()
+                    if accent.isValid():
+                        for role in (QPalette.ColorRole.Accent, QPalette.ColorRole.Highlight):
+                            palette.setColor(role, accent)
+                        palette.setColor(QPalette.ColorRole.HighlightedText, _accent_text_color(accent))
             app.setPalette(palette)
-        self._apply_window_opacity()
         shared_style = _shared_stylesheet(app.palette(), self._theme_mode)
         if self.exe_button.styleSheet():
             self._update_exe_button_progress()
@@ -652,17 +663,10 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                 "QRadioButton:disabled{color:#8b92a8;}"
                 "QCheckBox{color:#1f2330;}"
                 "QCheckBox:disabled{color:#8b92a8;}"
-                f"{_SCROLL_CONTROL_GEOMETRY}"
-                "QSlider::groove:horizontal,QSlider::add-page:horizontal{background:rgba(214,217,230,180);}"
-                f"QSlider::sub-page:horizontal{{background:{_COLORFUL_ACCENT};}}"
-                f"QSlider::handle:horizontal{{background:#ffffff;border-color:{_COLORFUL_ACCENT};}}"
-                f"QSlider::handle:horizontal:hover{{border-color:{_COLORFUL_ACCENT_HOVER};}}"
                 "QPushButton,QToolButton{background:rgba(255,255,255,220);color:#1f2330;border:1px solid rgba(214,217,230,220);border-radius:8px;padding:4px 10px;}"
                 f"QPushButton:enabled:hover,QToolButton:enabled:hover{{border-color:{_COLORFUL_ACCENT};}}"
                 "QPushButton:pressed,QToolButton:pressed{background:#eee8f8;}"
                 "QPushButton:disabled,QToolButton:disabled{background:#f3f4f8;color:#8b92a8;border:1px solid #dde0ea;}"
-                "QScrollBar::handle{background:#a78bfa;}"
-                f"QScrollBar::handle:hover{{background:{_COLORFUL_ACCENT};}}"
                 "QMenu{background:#ffffff;color:#1f2330;border:1px solid #d6d9e6;}"
                 f"QMenu::item:selected{{background:{_COLORFUL_ACCENT};color:#ffffff;}}"
                 "QProgressBar{background:#ffffff;border:1px solid #d6d9e6;border-radius:6px;text-align:center;color:#1f2330;}"
@@ -676,7 +680,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                 "QComboBox{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;padding:2px 6px;}"
                 "QComboBox:disabled,QAbstractSpinBox:disabled{background:#242424;color:#9aa0b3;border-color:#343434;}"
                 "QPlainTextEdit:focus:!read-only,QTextEdit:focus:!read-only,"
-                "QComboBox:editable:focus{border-bottom-color:#5b7fff;}"
+                f"QComboBox:editable:focus{{border-bottom-color:{_DARK_FOCUS};}}"
                 "QComboBox QAbstractItemView{background:#2a2a2a;color:#e6e6e6;selection-background-color:#343d54;}"
                 "QRadioButton{color:#e6e6e6;}"
                 "QRadioButton:disabled{color:#9aa0b3;}"
@@ -685,17 +689,10 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                 "QPushButton:pressed,QToolButton:pressed{background:#3a3a3a;}"
                 "QGroupBox{border:1px solid #3a3a3a;margin-top:10px;}"
                 "QGroupBox::title{subcontrol-origin:margin;left:8px;padding:0 4px;}"
-                f"{_SCROLL_CONTROL_GEOMETRY}"
-                "QSlider::groove:horizontal,QSlider::add-page:horizontal{background:#454545;}"
-                "QSlider::sub-page:horizontal{background:#5b7fff;}"
-                "QSlider::handle:horizontal{background:#2a2a2a;border-color:#5b7fff;}"
-                "QSlider::handle:horizontal:hover{border-color:#8daaff;}"
-                "QScrollBar::handle{background:#626262;}"
-                "QScrollBar::handle:hover{background:#7a7a7a;}"
                 "QMenu{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;}"
-                "QMenu::item:selected{background:#3a5fcd;}"
+                f"QMenu::item:selected{{background:{_DARK_ACCENT};}}"
                 "QProgressBar{background:#2a2a2a;border:1px solid #3a3a3a;text-align:center;color:#e6e6e6;}"
-                "QProgressBar::chunk{background:#3a5fcd;}"
+                f"QProgressBar::chunk{{background:{_DARK_ACCENT};}}"
                 "QToolTip{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;}"
             )
         app.setStyleSheet(theme_style + shared_style)
@@ -703,6 +700,9 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
         # Install the global tab padding first so the layout measures the styled height.
         self._refresh_function_tabbar_theme()
         self._apply_log_dialog_theme()
+        for window in app.topLevelWidgets():
+            if window is not self._log_dialog and window.isVisible():
+                apply_x11_title_bar_theme(window, self._theme_mode == 'dark')
 
     def _apply_log_dialog_theme(self) -> None:
         if self._log_dialog is None:
