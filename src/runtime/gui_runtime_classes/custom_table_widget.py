@@ -65,6 +65,19 @@ def _is_table_value_column(view: QWidget | None, index: QModelIndex) -> bool:
 
 
 class _ComboBoxDelegate(QStyledItemDelegate):
+    def __init__(self, combo: QComboBox, *, compact_popup: bool):
+        super().__init__(combo)
+        self._compact_popup = compact_popup
+
+    def sizeHint(self, option, index):
+        size = super().sizeHint(option, index)
+        if self._compact_popup:
+            item_option = QStyleOptionViewItem(option)
+            self.initStyleOption(item_option, index)
+            # The Windows 11 style adds extra vertical margins to list items.
+            size.setHeight(min(size.height(), item_option.fontMetrics.height() + 10))
+        return size
+
     def paint(self, painter, option, index):
         super().paint(painter, option, index)
         combo = self.parent()
@@ -84,9 +97,9 @@ class _ComboBoxDelegate(QStyledItemDelegate):
 
 
 class StyledComboBox(QComboBox):
-    def __init__(self, parent: QWidget | None = None):
+    def __init__(self, parent: QWidget | None = None, *, compact_popup: bool = False):
         super().__init__(parent)
-        self.setItemDelegate(_ComboBoxDelegate(self))
+        self.setItemDelegate(_ComboBoxDelegate(self, compact_popup=compact_popup))
         self.setMaxVisibleItems(12)
 
     def showPopup(self) -> None:

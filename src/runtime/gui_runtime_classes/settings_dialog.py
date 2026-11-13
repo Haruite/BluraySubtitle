@@ -363,7 +363,7 @@ class SettingsDialog(AnimatedDialog):
             ("log", "Log output font", "Follow interface font"),
             ("editor", "Text editor font", "Default editor font"),
         ):
-            combo = StyledComboBox(tab)
+            combo = StyledComboBox(tab, compact_popup=True)
             combo.setProperty("fontDefaultLabel", default_label)
             combo.addItem(self.t(default_label), "")
             for family in families:
