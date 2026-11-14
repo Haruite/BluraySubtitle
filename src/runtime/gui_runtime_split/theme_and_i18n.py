@@ -31,6 +31,7 @@ _COLORFUL_ACCENT_HOVER = '#6d28d9'
 _DARK_ACCENT = '#3a5fcd'
 _DARK_FOCUS = '#5b7fff'
 _COLORFUL_GRADIENT = 'qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #fff7d9,stop:0.55 #fffefa,stop:1 #f4f9ff)'
+_COLORFUL_TAB_SURFACE = '#fffdf3'
 _LOG_THEME_ACCENTS = {'light': '#356dcc', 'dark': _DARK_ACCENT, 'colorful': _COLORFUL_ACCENT}
 _COLORFUL_FUNCTION_COLORS = {1: '#0ea5e9', 2: '#14b8a6', 3: '#f59e0b', 4: '#ef4444', 5: '#8b5cf6'}
 _COLORFUL_TABLE_COLORS = (
@@ -148,6 +149,27 @@ def _table_control_colors(selectors: tuple[str, ...], surface: str, edge: str, a
     return style
 
 
+def _combo_popup_colors(combos: tuple[str, ...], selection: str, accent: str) -> str:
+    views = tuple(f'{combo} QAbstractItemView' for combo in combos)
+    selected_items = ','.join(f'{view}::item:selected' for view in views)
+    return (
+        f'{",".join(combos)}{{qproperty-popupAccentColor:{accent};}}'
+        f'{",".join(views)}{{selection-background-color:{selection};}}'
+        f'{selected_items}{{background:{selection};}}'
+    )
+
+
+def _colorful_table_combo_popup_colors() -> str:
+    return ''.join(
+        _combo_popup_colors(
+            tuple(f'QTableWidget#{name} StyledComboBox' for name in names),
+            _blend_color(base, QColor(accent), 0.16),
+            accent,
+        )
+        for names, base, _, _, _, _, accent in _COLORFUL_TABLE_COLORS
+    )
+
+
 def _shared_stylesheet(palette: QPalette, mode: str) -> str:
     dark = mode == 'dark'
     colorful = mode == 'colorful'
@@ -166,7 +188,9 @@ def _shared_stylesheet(palette: QPalette, mode: str) -> str:
     hover = accent.lighter(112).name()
     tint = f'rgba({accent.red()},{accent.green()},{accent.blue()},{45 if dark else 22})'
     tab_hover = f'rgba({accent.red()},{accent.green()},{accent.blue()},{23 if dark else 12})'
-    tab_selected = f'rgba({accent.red()},{accent.green()},{accent.blue()},{70 if dark else 39})'
+    tab_selection_alpha = 70 if dark else 39
+    tab_selected = f'rgba({accent.red()},{accent.green()},{accent.blue()},{tab_selection_alpha})'
+    combo_selection = _blend_color(_COLORFUL_TAB_SURFACE if colorful else surface, accent, tab_selection_alpha / 255)
     selection = _blend_color(surface, accent, 0.26 if dark else 0.14)
     focus = _DARK_FOCUS if dark else accent.name()
     title_color = _COLORFUL_ACCENT if colorful else text
@@ -206,9 +230,9 @@ def _shared_stylesheet(palette: QPalette, mode: str) -> str:
         'StyledComboBox{combobox-popup:0;combobox-list-mousetracking:1;}'
         'QDialogButtonBox{dialogbuttonbox-buttons-have-icons:0;}'
         f'StyledComboBox QAbstractItemView{{background:{surface};color:{text};border:1px solid {control_edge};'
-        f'outline:0;selection-background-color:{selection};selection-color:{text};}}'
+        f'outline:0;selection-color:{text};}}'
         'StyledComboBox QAbstractItemView::item{padding:3px 8px 3px 11px;}'
-        f'StyledComboBox QAbstractItemView::item:selected{{background:{selection};color:{text};}}',
+        f'StyledComboBox QAbstractItemView::item:selected{{color:{text};}}',
         f'QWidget#startupUpdateNotice{{background:{table_selection};border:1px solid {focus};border-radius:6px;}}'
         f'QWidget#startupUpdateNotice QLabel{{background:transparent;color:{text};font-weight:600;}}'
         f'SelectionTableWidget{{qproperty-editableCellBorderColor:{control_edge};}}'
@@ -294,6 +318,7 @@ def _shared_stylesheet(palette: QPalette, mode: str) -> str:
         'QTableWidget QPushButton:disabled'
         f'{{background:transparent;border-color:transparent;color:{muted_text};}}',
         _table_control_colors(('QTableWidget',), table_colors[0], table_colors[3], control_accent, focus, dark),
+        _combo_popup_colors(('StyledComboBox',), combo_selection, focus),
         execution_button_stylesheet(palette, mode),
     ]
     if mode == 'light':
@@ -309,6 +334,7 @@ def _shared_stylesheet(palette: QPalette, mode: str) -> str:
             f'QPushButton:enabled:pressed,QToolButton:enabled:pressed{{background:{tint};}}'
         ))
     if colorful:
+        styles.append(_colorful_table_combo_popup_colors())
         for names, base, stripe, heading, border, scrollbar, scrollbar_hover in _COLORFUL_TABLE_COLORS:
             selectors = tuple(f'QTableWidget#{name}' for name in names)
             highlight = _blend_color(base, QColor(scrollbar_hover), 0.16)
@@ -698,7 +724,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
         app.setStyleSheet(theme_style + shared_style)
         self._refresh_background_panels()
         # Install the global tab padding first so the layout measures the styled height.
-        self._refresh_function_tabbar_theme()
+        self._refresh_function_page_colors()
         self._apply_log_dialog_theme()
         for window in app.topLevelWidgets():
             if window is not self._log_dialog and window.isVisible():
@@ -712,13 +738,24 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
         self._log_dialog.setProperty('logWindowTheme', fixed_mode)
         self._log_dialog.set_theme(fixed_mode or self._theme_mode, _log_window_stylesheet(fixed_mode) if fixed_mode else '')
 
-    def _refresh_function_tabbar_theme(self) -> None:
-        style = ''
+    def _refresh_function_page_colors(self) -> None:
+        tab_style = ''
+        popup_style = ''
         if self._theme_mode == 'colorful':
             color = _COLORFUL_FUNCTION_COLORS.get(self.get_selected_function_id(), _COLORFUL_ACCENT)
-            background = _blend_color('#fffdf3', QColor(color), 0.18)
-            style = f'QTabBar#functionTabbar::tab:selected{{background:{background};border-bottom-color:{color};}}'
-        self.function_tabbar.setStyleSheet(style)
+            background = _blend_color(_COLORFUL_TAB_SURFACE, QColor(color), 0.18)
+            tab_style = f'QTabBar#functionTabbar::tab:selected{{background:{background};border-bottom-color:{color};}}'
+            popup_style = _combo_popup_colors(('StyledComboBox',), background, color)
+        if self.function_tabbar.styleSheet() != tab_style:
+            self.function_tabbar.setStyleSheet(tab_style)
+        toolbar = self.language_combo.parentWidget()
+        if toolbar.styleSheet() != popup_style:
+            toolbar.setStyleSheet(popup_style)
+        content = self.content_scroll.widget()
+        # Local popup colors outrank the application rules, including the table selectors.
+        content_style = popup_style + _colorful_table_combo_popup_colors() if popup_style else ''
+        if content.styleSheet() != content_style:
+            content.setStyleSheet(content_style)
 
     def _on_theme_changed(self):
         mode = self.theme_combo.currentData() if hasattr(self, 'theme_combo') else 'light'

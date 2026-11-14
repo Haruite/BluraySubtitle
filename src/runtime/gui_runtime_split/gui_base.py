@@ -693,7 +693,7 @@ class BluraySubtitleGuiBase(QWidget):
     def _refresh_font_size_combo(self):
         raise NotImplementedError
 
-    def _refresh_function_tabbar_theme(self) -> None:
+    def _refresh_function_page_colors(self) -> None:
         raise NotImplementedError
 
     def _refresh_language_column_defaults(self):

@@ -1322,7 +1322,7 @@ class ConfigurationModesMixin(BluraySubtitleGuiBase):
                     self.table1.removeRow(row)
         self._selected_function_id = function_id
         if function_changed:
-            self._refresh_function_tabbar_theme()
+            self._refresh_function_page_colors()
         self._restore_output_folder_for_function(function_id)
 
         if hasattr(self, 'output_folder_row') and self.output_folder_row:

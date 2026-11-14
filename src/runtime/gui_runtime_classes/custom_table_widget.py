@@ -91,7 +91,8 @@ class _ComboBoxDelegate(QStyledItemDelegate):
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(option.palette.color(QPalette.ColorRole.Accent))
+        accent = combo.popupAccentColor
+        painter.setBrush(accent if accent.isValid() else option.palette.color(QPalette.ColorRole.Accent))
         painter.drawRoundedRect(QRectF(marker), 1.5, 1.5)
         painter.restore()
 
@@ -99,8 +100,17 @@ class _ComboBoxDelegate(QStyledItemDelegate):
 class StyledComboBox(QComboBox):
     def __init__(self, parent: QWidget | None = None, *, compact_popup: bool = False):
         super().__init__(parent)
+        self._popup_accent_color = QColor()
         self.setItemDelegate(_ComboBoxDelegate(self, compact_popup=compact_popup))
         self.setMaxVisibleItems(12)
+
+    @pyqtProperty(QColor)
+    def popupAccentColor(self) -> QColor:
+        return self._popup_accent_color
+
+    @popupAccentColor.setter
+    def popupAccentColor(self, color: QColor) -> None:
+        self._popup_accent_color = color
 
     def showPopup(self) -> None:
         self.view().setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
