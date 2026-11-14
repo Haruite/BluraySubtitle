@@ -14,6 +14,7 @@ import sys
 import time
 from collections import deque
 from typing import Optional
+from uuid import uuid4
 
 from PyQt6.QtCore import Qt, QTimer, QCoreApplication, QThread
 from PyQt6.QtWidgets import QApplication, QVBoxLayout, QWidget, QHBoxLayout, QLabel, QGroupBox, \
@@ -48,6 +49,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self._log_dialog = None
         self._window_background = WindowBackground()
         self._app_config_path = app_config_path()
+        self._default_vpy_path = self._app_config_path.parent / 'vpy' / f'vpy_{uuid4().hex[:12]}.vpy'
         self._app_config_load_failed = False
         self._app_config_errors: list[Exception] = []
         try:

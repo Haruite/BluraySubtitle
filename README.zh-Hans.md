@@ -196,7 +196,7 @@ python src/main.py
 
 ## VPy 编辑与预览
 
-- **编辑脚本**使用系统关联编辑器，**预览脚本**使用 `vsedit`；默认脚本为 `vpy.vpy`。
+- **编辑脚本**使用系统关联编辑器，**预览脚本**使用 `vsedit`。默认脚本生成在 `config.json` 旁的 `vpy/vpy_<标识>.vpy`。
 - 默认 VPy 可对比处理后画面与原画，操作见 [VSEdit 预览与截图](docs/wiki/Video-Encoding-and-VapourSynth.zh-Hans.md#在-vsedit-中对比处理后画面与原画)。
 - 隔行、胶转磁和混合 cadence 来源需按[预处理说明](docs/wiki/Video-Encoding-and-VapourSynth.zh-Hans.md#隔行胶转磁与混合-cadence-来源)准备。
 
@@ -294,7 +294,7 @@ sudo docker run -it --rm \
   bluray-subtitle-ubuntu
 ```
 
-命名卷 `bluray-subtitle-config` 保存 `config.json`、生成的 `vpy.vpy`，以及开启日志保存后生成的 `logs/` 文件夹。使用 `--rm` 时，复用同一个卷名即可在多次运行间保留这些文件。Docker 中程序在前台运行，输出也可以从容器日志查看。
+命名卷 `bluray-subtitle-config` 存放 `config.json`、生成脚本的 `vpy/` 目录，以及开启日志保存后生成的 `logs/` 目录。使用 `--rm` 时，复用同一个卷名即可在多次运行间保留配置和已保存的日志。Docker 中程序在前台运行，输出也可以从容器日志查看。
 
 容器以非 root 用户 `ubuntu`（UID/GID `1000`）运行桌面程序；挂载的媒体必须允许该用户访问。
 

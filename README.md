@@ -196,7 +196,7 @@ Blu-ray input rejects existing outputs. Remux input skips completed main/SP, ext
 
 ## VPy Editing and Preview
 
-- **Edit script** uses the system-associated editor; **Preview script** uses `vsedit`. The default script is `vpy.vpy`.
+- **Edit script** uses the system-associated editor. **Preview script** uses `vsedit`. The default script is generated as `vpy/vpy_<id>.vpy` next to `config.json`.
 - The default VPy supports comparing processed and source frames. See [VSEdit preview and snapshots](docs/wiki/Video-Encoding-and-VapourSynth.md#previewing-processed-and-source-frames-in-vsedit).
 - Prepare interlaced, telecined, and mixed-cadence sources using the [preprocessing instructions](docs/wiki/Video-Encoding-and-VapourSynth.md#interlaced-telecined-and-mixed-cadence-sources).
 
@@ -294,7 +294,7 @@ sudo docker run -it --rm \
   bluray-subtitle-ubuntu
 ```
 
-The named `bluray-subtitle-config` volume stores `config.json`, the generated `vpy.vpy`, and the `logs/` folder when file logging is enabled. Reuse the same volume name to keep these files across runs with `--rm`. Docker runs the app in the foreground so its output is also available in the container log.
+The named `bluray-subtitle-config` volume contains `config.json`, the generated-script directory `vpy/`, and the `logs/` directory when file logging is enabled. Reuse the same volume name to retain the configuration and saved logs across runs with `--rm`. Docker runs the app in the foreground so its output is also available in the container log.
 
 The container runs desktop applications as the non-root user `ubuntu` with UID/GID `1000`; mounted media must be accessible to that user.
 

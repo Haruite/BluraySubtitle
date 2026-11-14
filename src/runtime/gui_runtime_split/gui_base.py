@@ -64,6 +64,7 @@ class BluraySubtitleGuiBase(QWidget):
         self._bdmv_source_state_path = None
         self._bdmv_table_update_queue = None
         self._bdmv_table_updates = None
+        self._default_vpy_path = None
         self._disc_scan_worker = None
         self._input_folder_values = None
         self._language_code = None
