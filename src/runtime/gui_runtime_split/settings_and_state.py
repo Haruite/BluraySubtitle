@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import QComboBox, QWidget
 from src.core.app_config import AppConfig, UiPreferences, WindowPreferences, save_app_config
 from src.runtime.audio_conversion import AudioEncodingSettings
 from src.runtime.gui_runtime_classes.settings_dialog import SettingsDialog
-from src.runtime.windows_update import WindowsUpdatePackage, start_windows_update
+from src.runtime.program_update import UpdatePackage, start_program_update
 from src.runtime.gui_runtime_classes.widget_animations import AnimatedMessageBox
 from .gui_base import BluraySubtitleGuiBase
 
@@ -203,8 +203,8 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
             self.t(template).format(error=self.t(str(error))),
         )
 
-    def _start_program_update(self, package: WindowsUpdatePackage) -> None:
-        start_windows_update(package)
+    def _start_program_update(self, package: UpdatePackage) -> None:
+        start_program_update(package)
         QTimer.singleShot(0, self._exit_application)
 
     def _show_settings_dialog(self) -> None:

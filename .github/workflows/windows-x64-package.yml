@@ -1,0 +1,16 @@
+name: Publish BluraySubtitle Windows x64
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    uses: ./.github/workflows/build-windows-package.yml
+    with:
+      architecture: x64
+    secrets: inherit

@@ -3,6 +3,7 @@
 import re
 import sys
 from array import array
+from contextlib import suppress
 from bisect import bisect_left
 
 from PyQt6.QtCore import QEvent, QObject, QRect, QSize, Qt, QTimer
@@ -11,17 +12,18 @@ from PyQt6.QtGui import (
     QTextCursor,
 )
 from PyQt6.QtWidgets import (
-    QCheckBox, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QSizePolicy, QToolButton, QVBoxLayout,
+    QApplication, QCheckBox, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QSizePolicy, QToolButton, QVBoxLayout,
     QWidget,
 )
 
 from src.core.app_config import UiPreferences, application_support_directory
 from src.core.i18n import translate_text
 from src.runtime.application_log import ApplicationLog
+from src.runtime.desktop_integration import desktop_entry_id, log_taskbar_entry
 
 from .widget_animations import AnimatedDialog
 from .window_background import WindowBackground, background_panel_colors
-from .x11_window import apply_x11_title_bar_theme
+from .x11_window import apply_x11_title_bar_theme, set_x11_window_identity
 
 if sys.platform == "win32":
     import ctypes
@@ -89,8 +91,11 @@ class _MatchCountLabel(QLabel):
 
 class ApplicationLogDialog(AnimatedDialog):
     def __init__(self, application_log: ApplicationLog) -> None:
-        # An owned dialog stays above its owner in the window manager.
-        super().__init__()
+        # Linux window managers may minimize dialogs with the active application window.
+        if sys.platform.startswith("linux"):
+            super().__init__(None, Qt.WindowType.Window)
+        else:
+            super().__init__()
         self._window_background = WindowBackground()
         self._background_mode = "light"
         self._dark_title_bar: bool | None = None
@@ -99,8 +104,8 @@ class ApplicationLogDialog(AnimatedDialog):
         self._title_bar_timer.timeout.connect(self._apply_dark_title_bar)
         self.setWindowFlag(Qt.WindowType.WindowMinMaxButtonsHint)
         self.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)
-        icon_path = application_support_directory() / "resource" / "log-window.svg"
-        self.setWindowIcon(QIcon(str(icon_path)))
+        self._log_icon_path = application_support_directory() / "resource" / "log-window.svg"
+        self.setWindowIcon(QIcon(str(self._log_icon_path)))
         self.resize(820, 480)
         self._toolbar = QWidget(self)
         self._toolbar.setObjectName("logToolbar")
@@ -332,6 +337,12 @@ class ApplicationLogDialog(AnimatedDialog):
             scrollbar.setValue(scrollbar.maximum())
 
     def showEvent(self, event) -> None:
+        if QApplication.platformName() == "xcb" and not self.testAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen):
+            desktop_id = f"{desktop_entry_id()}-log"
+            desktop_file = ""
+            with suppress(OSError):
+                desktop_file = str(log_taskbar_entry(self.windowTitle(), self._log_icon_path, desktop_id))
+            set_x11_window_identity(self, desktop_id, desktop_file)
         super().showEvent(event)
         self._refresh()
         self._timer.start()

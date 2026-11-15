@@ -6,7 +6,7 @@ This document describes the current Blu-ray media-processing design in BluraySub
 
 ## Design goals
 
-The pipeline supports Windows, Linux, and Docker, preserves the authored MPLS timeline and captured GUI choices, and avoids repeated source scans. General request and failure requirements are defined in the [code standards](code-standards.md); this document explains the tool-specific decisions and verified limitations.
+The pipeline supports Windows and Linux, preserves the authored MPLS timeline and captured GUI choices, and avoids repeated source scans. General request and failure requirements are defined in the [code standards](code-standards.md); this document explains the tool-specific decisions and verified limitations.
 
 ## Source-verification baseline
 
@@ -97,7 +97,7 @@ Prechecks use fields exposed by MPLS and PAT/PMT. PCM bit depth/channel layout a
 
 ### Platform support
 
-eac3to is a Windows application. Depending on it would conflict with the project's native Linux and Docker support. Running it through Wine would add a large platform-specific dependency and would not provide the same supported execution contract.
+eac3to is a Windows application. Depending on it would conflict with the project's native Linux support. Running it through Wine would add a large platform-specific dependency and would not provide the same supported execution contract.
 
 ### Observed timing error on the Avatar UHD playlist
 

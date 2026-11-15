@@ -10,12 +10,24 @@
 
 ## 运行环境与工具构建
 
-[Windows setup](../../setup_windows_environment.ps1)、[Linux setup](../../setup_linux_environment.sh) 和 [Dockerfile](../../Dockerfile) 安装所需工具，平台路径由 [`settings.py`](../../src/core/settings.py) 定义。
+[Windows setup](../../setup_windows_environment.ps1) 和 [Linux setup](../../setup_linux_environment.sh) 安装所需工具，平台路径由 [`settings.py`](../../src/core/settings.py) 定义。
 
-- x264 使用官方 `master`，构建支持 8/10-bit 的 CLI；Windows 使用 MSYS2 UCRT64 和 PGO。
+- x264 使用官方 `master` 构建支持 8/10-bit 的 CLI。Windows x64 使用 MSYS2 UCRT64 与 PGO。Windows ARM64 使用 CLANGARM64 并启用 NEON。
 - x265 使用官方最新稳定标签，构建 8/10/12-bit multilib CLI，各核心均启用 HDR10+ JSON 和 Dolby Vision RPU 输入。
+- Windows 和 Linux 默认安装 R79。Windows 打包版将 R79 wheel 和 VSPipe 放在 `_internal/Lib/site-packages/vapoursynth`，VSScript 从该目录定位随包的解释器。外部 VSPipe 调用使用所选可执行文件的运行环境。
+- Windows ARM64 使用 CLANGARM64 构建 R79 及其插件。R79 使用 NEON，在 CPU 和 Windows 提供所需特性时启用 I8MM 和 FHM 滤镜内核。自动 getnative 使用原生 Python。两种架构均使用 MSVC 构建 VSEdit，并使用 PyQt6 安装的 Qt 运行库。
+- 两种 Windows 打包工作流均使用 `-Mode Build`。此模式包含 vs-placebo，为 L-SMASH Works 启用 Vulkan，并跳过对构建机 GPU 的检测。R79 的桌面安装仍会检测本机的 Vulkan 设备。L-SMASH Works 可使用软件解码。
+- Windows ARM64 使用 `-VapourSynthRuntime Classic` 时，Classic、插件和 VSEdit 使用 x64 仿真。自动 getnative 使用 Classic setup 记录的独立 x64 CPython。
 
 自定义构建可参考 setup 脚本。HDR 参数条件与注入回退见[自动 HDR 元数据处理](Video-Encoding-and-VapourSynth.zh-Hans.md#自动-hdr-元数据处理)。
+
+### Ubuntu 26.04 x64 打包
+
+在 Ubuntu 26.04 上运行 `bash setup_linux_environment.sh --build`，再运行 [`tools/build_ubuntu_package.sh`](../../tools/build_ubuntu_package.sh)。打包模式会准备 VapourSynth R79 和 PyInstaller 环境，并将 mpv、FFmpeg 和 FFprobe 链接到同一套 FFmpeg 运行库。分发前，用 [`tools/verify_ubuntu_package.py`](../../tools/verify_ubuntu_package.py) 检查生成的归档。打包时会把当前 Git 提交写入包中，并生成带 SHA-256 摘要的 `.tar.xz.txt` 记录。
+
+setup 默认缓存目录为 `${XDG_CACHE_HOME:-$HOME/.cache}/bluraysubtitle/linux-setup`，可用 `BLURAY_SETUP_CACHE_DIR` 指定其他位置。缓存包含下载的归档、APT 和 Python 软件包、编译器缓存，以及打包模式下安装的原生产物。
+
+[Ubuntu 工作流](../../.github/workflows/ubuntu-x64-package.yml) 将归档和 `.tar.xz.txt` 记录上传至 `/usr/share/nginx/html/tools/BluraySubtitle`。[Release 工作流](../../.github/workflows/release-packages.yml) 校验记录中的提交和归档摘要后附加对应的包。
 
 ## 源码导航
 

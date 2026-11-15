@@ -15,7 +15,7 @@ from typing import Sequence
 
 from src.core import settings as core_settings
 from src.core.i18n import translate_text
-from src.exports.utils import run_command
+from src.exports.utils import run_command, run_vspipe
 
 
 _X265_DYNAMIC_METADATA_OPTIONS = (
@@ -184,20 +184,27 @@ import sys
 import vapoursynth as vs
 
 source_path = os.environ['BLURAYSUB_VPY_PROBE_SCRIPT']
-sys.path.insert(0, os.path.dirname(source_path))
+source_dir = os.path.dirname(source_path)
+os.chdir(source_dir)
+sys.path.insert(0, source_dir)
 runpy.run_path(source_path, run_name='__vapoursynth__')
 output = vs.get_output(0)
 clip = getattr(output, 'clip', output)
 source_output = vs.get_outputs().get(1)
 source_clip = getattr(source_output, 'clip', source_output)
 indices = sorted({0, clip.num_frames // 2, clip.num_frames - 1})
-names = ('_ColorRange', '_Range', '_Primaries', '_Transfer', '_Matrix', '_ChromaLocation')
+names = ('_Primaries', '_Transfer', '_Matrix', '_ChromaLocation')
 samples = []
 for index in indices:
     frame = clip.get_frame(index)
     sample = {name: int(frame.props[name]) for name in names if name in frame.props}
-    if '_ColorRange' not in sample and '_Range' in sample:
-        sample['_ColorRange'] = sample.pop('_Range')
+    # R79's _Range uses the opposite values from Classic's _ColorRange.
+    if '_Range' in frame.props:
+        levels = int(frame.props['_Range'])
+        if levels in (0, 1):
+            sample['_ColorRange'] = 1 - levels
+    elif '_ColorRange' in frame.props:
+        sample['_ColorRange'] = int(frame.props['_ColorRange'])
     samples.append(sample)
 with open(os.environ['BLURAYSUB_VPY_PROBE_RESULT'], 'w', encoding='utf-8') as output:
     json.dump({
@@ -602,8 +609,8 @@ def probe_vapoursynth_output_metadata(
         probe_environment = dict(environment)
         probe_environment['BLURAYSUB_VPY_PROBE_SCRIPT'] = script_path
         probe_environment['BLURAYSUB_VPY_PROBE_RESULT'] = result_path
-        result = run_command(
-            [vspipe_executable, '--preserve-cwd', '--info', wrapper_path],
+        result = run_vspipe(
+            [vspipe_executable, '--info', wrapper_path],
             cwd=os.path.dirname(script_path),
             env=probe_environment,
             capture_output=True,
@@ -709,16 +716,19 @@ def probe_vapoursynth_frame_count(
         environment: dict[str, str],
 ) -> int:
     """Read clip length when optional color/HDR metadata probing was unavailable."""
-    result = run_command(
-        [vspipe_executable, '--preserve-cwd', '--info', vpy_path],
+    result = run_vspipe(
+        [vspipe_executable, '--info', vpy_path],
         cwd=os.path.dirname(os.path.abspath(vpy_path)), env=environment,
         capture_output=True, text=True, encoding='utf-8', errors='replace',
         timeout=600,
     )
     if result.returncode == 0:
+        output_index = '0'
         for line in result.stdout.splitlines():
             label, _, value = line.partition(':')
-            if label.strip() == 'Frames' and value.strip().isdigit():
+            if label.strip() == 'Output Index':
+                output_index = value.strip()
+            elif output_index == '0' and label.strip() == 'Frames' and value.strip().isdigit():
                 frame_count = int(value)
                 if frame_count > 0:
                     return frame_count

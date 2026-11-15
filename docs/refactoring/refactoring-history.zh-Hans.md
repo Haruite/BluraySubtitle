@@ -1322,3 +1322,42 @@ Windows setup 新增 `-Mode Build`，缓存编译产物，并用 Ninja 构建 x2
 - 桌面版默认脱离终端，支持收起到托盘和同目录启动时恢复窗口。日志窗口采集工具输出，可写入 `logs/`。原盘压制切换 Remux 来源时刷新正片和 SP 行。
 - 设置新增字体和背景选项，工具页集中提供更新检查和启动快捷方式。Windows 打包版支持校验、安装更新及失败回滚。图标位于 `resource/`，更新脚本位于 `tools/`。同步更新中英文界面指南。
 - 101 个单元测试及 Windows 启动、日志和更新回滚检查通过。Linux 桌面启动及使用正式发布包在线更新待验证。
+
+## Windows ARM64 源码运行环境
+
+2026-11-14
+
+Windows 11 ARM64 上，setup 使用原生安装程序和 CPython，并单独缓存 ARM64 构建产物。默认的 VapourSynth R79 及其插件使用 CLANGARM64 构建，VSEdit 使用 MSVC 和 ARM64 Qt。R79 使用 NEON，并在运行时探测 I8MM 和 FP16 FHM。选择 Classic 时使用独立的 x64 Python，以及 x64 版插件和 VSEdit。vs-placebo 不可用时，生成的 VPy 使用 SmoothGrad 在 CPU 上去色带。Windows 11 ARM64 上通过了 VSPipe 取帧和 VSEdit 预览检查。
+
+## VapourSynth R79 与 Classic 兼容
+
+2026-11-14
+
+- 压制和 FrameCheck 使用 Classic 与 R79 共用的 VSPipe 容器参数。元数据探测从原脚本目录解析相对路径，读取输出 0，并统一色彩范围的取值。
+- Windows x64 打包版保留 R79 wheel 的目录结构，并共用随附的 CPython。系统 VSPipe 使用系统 DLL 搜索顺序，可调用独立安装的 VapourSynth。
+- Windows x64、Linux 和容器使用 R79。系统 Python 版本较低时，Linux setup 配置应用专用的 Python 3.12 环境。Windows 为 R79 构建支持整数输入和 blur 的 descale DLL。
+- 两套运行时均用真实媒体验证了 10-bit x265 输出和 FrameCheck。Windows 运行时在 Wine 下通过了冒烟检查。
+
+## Windows ARM64 打包与发布
+
+2026-11-14
+
+- 两种 Windows 架构共用 Build 模式的工作流和 PyInstaller 打包配方。GitHub Actions 将压缩包及其 SHA-256 构建记录上传到项目的服务器目录，并将校验后的两种架构包附加到提交匹配的 Release。应用更新器按当前架构选择包，使用新的下载路径。
+- ARM64 包使用原生 MSVC 启动器，VSEdit 与 PyQt6 共用 Qt DLL。两种架构的 VapourSynth 插件共用 libass、FFTW、Shaderc 和 Vulkan DLL。Build 模式包含启用 Vulkan 的插件，并缓存本机编译的 ARM64 R79 wheel、SDK 和运行库。ARM64 SVT-AV1 启用了 LTO，vs-placebo 与 x64 静态链接相同的依赖。
+- 压缩包验证检查二进制架构和共享运行库，并运行 VSPipe 和 Matroska 工具。Windows 11 ARM64 上通过了组件冒烟检查。
+
+## Ubuntu 26.04 PyInstaller 打包
+
+2026-11-15
+
+- x64 包中的应用和嵌入式脚本工具共用一份 CPython 共享库、一份 NumPy 和一份 VapourSynth R79 wheel。VSEdit、MKVToolNix 和 PyQt6 共用 Ubuntu Qt 库。打包将 Python 标准库装入 ZIP，并在收集依赖之前筛选 Qt 插件。
+- 打包包含已安装的媒体工具、VapourSynth 滤镜和模型文件。剥离无用符号，压紧 ISO 语言数据库，并生成保留执行权限和符号链接的 tar.xz 归档。
+- 在 Ubuntu 26.04.1 上重新解压后，程序通过 XCB 启动，并通过 VSPipe 字幕渲染、x265 10-bit 输出、FLAC／AAC／Opus 编码、Matroska 封装和提取、mpv 播放以及 VSEdit 启动检查。归档为 171.7 MiB。
+
+## Ubuntu 包发布与 Linux setup 缓存
+
+2026-11-15
+
+- 移除项目 Docker 镜像及应用中的容器专用路径。Wiki 说明如何挂载 Ubuntu 程序包、媒体和配置目录，在容器中运行。
+- Ubuntu 26.04 x64 工作流构建并验证归档。Windows x64 与 Ubuntu 共用 SFTP 发布脚本和服务器目录。Release 工作流核对提交并校验 SHA-256 后附加归档。
+- Linux setup 复用上游下载、APT 软件包、Python wheel 和编译器缓存。打包时会在安装路径和 APT 依赖匹配的情况下恢复已安装的原生工具、库和滤镜，并继续运行工具的版本与功能检查。

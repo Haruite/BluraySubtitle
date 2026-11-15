@@ -17,8 +17,9 @@ import urllib.request
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools.windows_build_cache import files_under, publish, restore
 from tools.windows_native_tools import (
-    MKV_RECIPE, build_record, clean_tool_environment, fetch_verified, file_hash, fingerprint,
-    imported_symbols, install_build, record_build, runtime_dependencies, tool_version, verify_mkv_runtime,
+    MKV_RECIPE, PE_ARM64, build_record, clean_tool_environment, fetch_verified, file_hash, fingerprint,
+    imported_symbols, install_build, pe_imports, record_build, runtime_dependencies, tool_version,
+    verify_mkv_runtime, windows_machine,
 )
 from tools.windows_tool_paths import MKV_SETTINGS
 
@@ -42,8 +43,13 @@ def build_qtcore(work: Path, prefix: Path, compiler: Path, cache: Path, env: dic
     match = re.fullmatch(r"(\d+\.\d+)\.\d+", version)
     if not match:
         raise ValueError(f"Unexpected MSYS2 Qt version: {version}")
-    gcc_version = subprocess.check_output([compiler / "g++.exe", "-dumpfullversion"], env=env, text=True).strip()
-    qt_key = fingerprint(MKV_RECIPE, version, gcc_version, file_hash(prefix / "bin/Qt6Core.dll"))
+    arm64 = windows_machine() == PE_ARM64
+    c_compiler = compiler / ("clang.exe" if arm64 else "gcc.exe")
+    cxx_compiler = compiler / ("clang++.exe" if arm64 else "g++.exe")
+    compiler_version = subprocess.check_output(
+        [cxx_compiler, "--version" if arm64 else "-dumpfullversion"], env=env, text=True,
+    ).strip()
+    qt_key = fingerprint(MKV_RECIPE, version, compiler_version, file_hash(prefix / "bin/Qt6Core.dll"))
     archive = cache / "mkvtoolnix-qtcore.zip"
     payload = work / "qtcore"
     if restore(archive, qt_key, payload):
@@ -64,10 +70,14 @@ def build_qtcore(work: Path, prefix: Path, compiler: Path, cache: Path, env: dic
     checksum.write_text(digest + "\n", encoding="ascii", newline="\r\n")
     build = work / "qb"
     cmake = compiler / "cmake.exe"
+    arm_options = [
+        "-DQT_QMAKE_TARGET_MKSPEC=win32-clang-g++",
+        f"-DCMAKE_RC_COMPILER:FILEPATH={(compiler / 'llvm-windres.exe').as_posix()}",
+    ] if arm64 else []
     subprocess.run([
-        cmake, "-S", source, "-B", build, "-G", "Ninja",
-        f"-DCMAKE_C_COMPILER={compiler / 'gcc.exe'}", f"-DCMAKE_CXX_COMPILER={compiler / 'g++.exe'}",
-        f"-DCMAKE_MAKE_PROGRAM={compiler / 'ninja.exe'}",
+        cmake, "-S", source, "-B", build, "-G", "Ninja", "-Wno-deprecated",
+        f"-DCMAKE_C_COMPILER={c_compiler}", f"-DCMAKE_CXX_COMPILER={cxx_compiler}",
+        f"-DCMAKE_MAKE_PROGRAM={compiler / 'ninja.exe'}", *arm_options,
         f"-DCMAKE_PREFIX_PATH={prefix};{compiler.parent}", "-DCMAKE_BUILD_TYPE=Release", "-DBUILD_SHARED_LIBS=OFF",
         f"-DCMAKE_C_FLAGS={SECTION_FLAGS}", f"-DCMAKE_CXX_FLAGS={cxx_flags}",
         "-DQT_BUILD_TESTS=OFF", "-DQT_BUILD_EXAMPLES=OFF", "-DQT_BUILD_BENCHMARKS=OFF",
@@ -140,26 +150,31 @@ def build_cli(source: Path, msys: Path, prefix: Path, jobs: int, cxx_flags: str)
     posix_prefix = subprocess.check_output([cygpath, "-u", prefix], text=True).strip()
     posix_work = subprocess.check_output([cygpath, "-u", source.parent], text=True).strip()
     quote = shlex.quote
+    sysroot = "/" + prefix.name
+    arm64 = windows_machine() == PE_ARM64
+    host = "aarch64-w64-mingw32" if arm64 else "x86_64-w64-mingw32"
+    tools = ("CC=clang CXX=clang++ AR=llvm-ar RANLIB=llvm-ranlib WINDRES=llvm-windres STRIP=llvm-strip"
+             if arm64 else "CC=gcc CXX=g++ AR=ar RANLIB=ranlib WINDRES=windres STRIP=strip")
     build_icons(source)
     patch_rake(source)
     script = source.parent / "build-mkvtoolnix.sh"
     script.write_text("\n".join((
         "set -eu",
         f"deps={quote(posix_prefix)}",
-        'export PATH="$deps/bin:/ucrt64/bin:/usr/bin"',
+        f'export PATH="$deps/bin:{sysroot}/bin:/usr/bin"',
         f"mkdir -p {quote(posix_work + '/t')}",
         f"export TMPDIR={quote(posix_work + '/t')}",
         'export MINGW_PREFIX="$deps"',
-        'export PKG_CONFIG_LIBDIR="$deps/lib/pkgconfig:/ucrt64/lib/pkgconfig"',
+        f'export PKG_CONFIG_LIBDIR="$deps/lib/pkgconfig:{sysroot}/lib/pkgconfig"',
         'win_deps=$(cygpath -m "$deps")',
-        "export CC=gcc CXX=g++ AR=ar RANLIB=ranlib WINDRES=windres STRIP=strip",
+        "export " + tools,
         'export CPPFLAGS="-I$win_deps/include -I$win_deps/include/qt6 -I$win_deps/include/qt6/QtCore"',
         'export LDFLAGS="-L$win_deps/lib"',
         f"export CFLAGS={quote('-Os -DNDEBUG ' + SECTION_FLAGS)} CXXFLAGS={quote('-Os -DNDEBUG ' + cxx_flags)}",
         "export INKSCAPE=/usr/bin/true MAGICK=/usr/bin/true",
-        "/usr/bin/dash ./configure --build=x86_64-w64-mingw32 --host=x86_64-w64-mingw32 "
+        f"/usr/bin/dash ./configure --build={host} --host={host} "
         "--disable-gui --disable-debug --disable-optimization --enable-precompiled-headers "
-        '--with-qmake6="$deps/bin/qmake6.exe" --with-boost="$win_deps" --with-boost-filesystem=boost_filesystem-mt',
+        '--with-qmake6="$deps/bin/qmake6.exe" --with-boost="$win_deps" --with-boost-system=boost_filesystem-mt --with-boost-filesystem=boost_filesystem-mt',
         # The icons are already rendered from the source SVGs.
         r"sed -i -E 's/^(INKSCAPE|MAGICK|CONVERT)[[:space:]]*=.*/\1 =/' build-config",
         r"sed -i -E 's/^(QT_CFLAGS = .*)$/\1 -DQT_STATIC/' build-config",
@@ -177,6 +192,9 @@ def link_cli(source: Path, qtcore: Path, compiler: Path, env: dict) -> Path:
     linked.mkdir()
     core = qtcore / "libQt6Core.a"
     libraries = (qtcore / "libraries.txt").read_text(encoding="utf-8").splitlines()
+    arm64 = windows_machine() == PE_ARM64
+    nm = compiler / ("llvm-nm.exe" if arm64 else "nm.exe")
+    cxx = compiler / ("clang++.exe" if arm64 else "g++.exe")
     common_archives = [path for name in (
         "src/common/libmtxcommon.a", "lib/libmatroska/src/libmatroska.a", "lib/libebml/src/libebml.a",
         "lib/fmt/src/libfmt.a", "lib/pugixml/src/libpugixml.a",
@@ -187,7 +205,7 @@ def link_cli(source: Path, qtcore: Path, compiler: Path, env: dict) -> Path:
                            if path.name != "libmtxcommon.a")
 
     def symbols(option, inputs):
-        output = subprocess.check_output([compiler / "nm.exe", "-g", "-P", option, *inputs], cwd=source,
+        output = subprocess.check_output([nm, "-g", "-P", option, *inputs], cwd=source,
                                          env=env, encoding="utf-8", errors="replace")
         return {fields[0]: fields[1] for line in output.splitlines()
                 if len(fields := line.split()) >= 2 and len(fields[1]) == 1 and not fields[0].startswith(".")}
@@ -204,7 +222,7 @@ def link_cli(source: Path, qtcore: Path, compiler: Path, env: dict) -> Path:
     def link(name, args):
         response = linked / f"{name}.rsp"
         response.write_text("".join(f'"{arg}"\n' for arg in args), encoding="utf-8", newline="\n")
-        subprocess.run([compiler / "g++.exe", "-s", "@" + str(response)], cwd=source, env=env, check=True)
+        subprocess.run([cxx, "-s", "@" + str(response)], cwd=source, env=env, check=True)
 
     common_args = commands["mkvinfo.exe"]
     common_libs = common_args[common_args.index("-lmtxcommon"):]
@@ -246,14 +264,17 @@ def build_from_source(args, work: Path, payload: Path, key: str, prefix: Path) -
     filename = f"mkvtoolnix-{args.version}.tar.xz"
     downloads = args.cache.parent / "downloads/mkvtoolnix"
     source = unpack_source(fetch_verified(args.source, downloads / filename, args.sha256), work)
-    compiler = args.msys2_root / "ucrt64/bin"
+    compiler = prefix / "bin"
     env = clean_tool_environment()
-    env["PATH"] = os.pathsep.join(map(str, (compiler, prefix / "bin", args.msys2_root / "usr/bin", env["PATH"])))
-    probe = subprocess.run(
-        [compiler / "g++.exe", "-Os", "-fno-declone-ctor-dtor", "-x", "c++", "-c", "-o", work / "gcc-option.o", "-"],
-        input="int main() {}\n", capture_output=True, text=True, env=env,
-    )
-    cxx_flags = SECTION_FLAGS + (" -fno-declone-ctor-dtor" if probe.returncode == 0 else "")
+    env["PATH"] = os.pathsep.join(map(str, (compiler, args.msys2_root / "usr/bin", env["PATH"])))
+    cxx_flags = SECTION_FLAGS
+    if windows_machine() != PE_ARM64:
+        probe = subprocess.run(
+            [compiler / "g++.exe", "-Os", "-fno-declone-ctor-dtor", "-x", "c++", "-c", "-o", work / "gcc-option.o", "-"],
+            input="int main() {}\n", capture_output=True, text=True, env=env,
+        )
+        if probe.returncode == 0:
+            cxx_flags += " -fno-declone-ctor-dtor"
     qtcore, qt_version = build_qtcore(work, prefix, compiler, args.cache, env, args.jobs, cxx_flags)
     build_cli(source, args.msys2_root, prefix, args.jobs, cxx_flags)
     linked = link_cli(source, qtcore, compiler, env)
@@ -281,6 +302,7 @@ def stage_cli(source: Path, linked: Path, qtcore: Path, prefix: Path, compiler: 
 
 def verify(directory: Path, record: dict, entrypoints: dict[str, str]) -> None:
     for name, executable in entrypoints.items():
+        pe_imports(directory / executable)
         version = tool_version(directory / executable)
         if not re.match(rf"{re.escape(Path(name).stem)} v{re.escape(record['version'])}(?:\s|$)", version):
             raise RuntimeError(f"Unexpected version from {executable}: {version}")
@@ -306,14 +328,15 @@ def main() -> int:
         if record and record["entrypoints"] == entrypoints:
             try:
                 verify(args.directory, record, entrypoints)
-            except (OSError, RuntimeError, subprocess.SubprocessError):
+            except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
                 return 0
             print(record["version"])
         return 0
     if (not args.source or not args.cache or not args.work or not re.fullmatch(r"\d+(?:\.\d+){1,3}", args.version)
             or not re.fullmatch(r"[0-9a-f]{64}", args.sha256 or "")):
         parser.error("install requires --version, --source, --sha256, --cache and --work")
-    key = fingerprint(MKV_RECIPE, args.version, args.sha256)
+    arm64 = windows_machine() == PE_ARM64
+    key = fingerprint(MKV_RECIPE, args.version, args.sha256, "arm64") if arm64 else fingerprint(MKV_RECIPE, args.version, args.sha256)
     args.work.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="mkv-", dir=args.work) as temporary:
         work = Path(temporary)
@@ -323,7 +346,7 @@ def main() -> int:
         if record and record["fingerprint"] == key:
             try:
                 verify(payload, record, record["entrypoints"])
-            except (OSError, RuntimeError, subprocess.SubprocessError):
+            except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
                 record = None
         else:
             record = None
@@ -333,7 +356,7 @@ def main() -> int:
             if not args.msys2_root:
                 parser.error("building MKVToolNix requires --msys2-root")
             payload = work / "payload"
-            build_from_source(args, work, payload, key, args.msys2_root / "ucrt64")
+            build_from_source(args, work, payload, key, args.msys2_root / ("clangarm64" if arm64 else "ucrt64"))
             record = build_record(payload, "mkvtoolnix")
             if not record:
                 raise RuntimeError("Invalid MKVToolNix build record")

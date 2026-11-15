@@ -70,13 +70,16 @@ from src.runtime.encode_source import (
     probe_svt_av1_bit_depths,
     probe_x265_dynamic_metadata_options,
 )
-from src.runtime.update_check import SERVER_PACKAGE_METADATA_URL, request_update_info, update_network_manager
-from src.runtime.windows_update import (
+from src.runtime.update_check import request_update_info, update_network_manager
+from src.runtime.program_update import (
+    DIRECT_UPDATE_REQUIREMENT,
     GITHUB_LATEST_RELEASE_API,
-    WindowsUpdatePackage,
-    github_windows_package,
-    server_windows_package,
-    windows_update_executable,
+    SERVER_PACKAGE_LABEL,
+    SERVER_PACKAGE_METADATA_URL,
+    UpdatePackage,
+    github_update_package,
+    server_update_package,
+    update_executable,
 )
 
 from .custom_table_widget import StyledComboBox
@@ -116,7 +119,7 @@ class SettingsDialog(AnimatedDialog):
             encoder_mode: str = "system",
             *,
             apply_config: Callable[[AppConfig], bool] | None = None,
-            start_update: Callable[[WindowsUpdatePackage], None] | None = None,
+            start_update: Callable[[UpdatePackage], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self._config = config
@@ -230,6 +233,11 @@ class SettingsDialog(AnimatedDialog):
         self.episode_mode_combo.addItem(self.t("Series mode"), "series")
         self.episode_mode_combo.addItem(self.t("Movie mode"), "movie")
         form.addRow(self.t("Default episode mode"), self.episode_mode_combo)
+        self.keep_sp_checkbox = QCheckBox(self.t("Keep SP (bonus features) during Remux"), tab)
+        self.keep_sp_checkbox.setToolTip(self.t(
+            "Turn this off to load discs with the SP table unchecked in Blu-ray Remux and Blu-ray Encode."
+        ))
+        form.addRow(self.keep_sp_checkbox)
 
         self.language_combo = StyledComboBox(tab)
         self.language_combo.addItem("English", "en")
@@ -438,9 +446,9 @@ class SettingsDialog(AnimatedDialog):
     def _read_update_reply(
             self,
             reply: QNetworkReply,
-            render: Callable[[str], tuple[str, WindowsUpdatePackage | None]],
+            render: Callable[[str], tuple[str, UpdatePackage | None]],
             invalid_reply_message: str,
-    ) -> tuple[str, WindowsUpdatePackage | None]:
+    ) -> tuple[str, UpdatePackage | None]:
         try:
             if reply.error() != QNetworkReply.NetworkError.NoError:
                 message = self.t("Could not check for updates: {error}").format(
@@ -453,7 +461,7 @@ class SettingsDialog(AnimatedDialog):
         finally:
             reply.deleteLater()
 
-    def _release_update_result(self, response: str) -> tuple[str, WindowsUpdatePackage | None]:
+    def _release_update_result(self, response: str) -> tuple[str, UpdatePackage | None]:
         payload = json.loads(response)
         if not isinstance(payload, dict):
             raise ValueError("GitHub release response must be an object")
@@ -462,12 +470,12 @@ class SettingsDialog(AnimatedDialog):
             status = self.t("Latest Release version is {version}. Your version is up to date.")
             return escape(status.format(version=latest_version)), None
         status = escape(self.t("Version {version} is available.").format(version=latest_version))
-        package = github_windows_package(payload)
+        package = github_update_package(payload)
         if package is None:
-            status += "<br>" + escape(self.t("The update source did not provide a verified Windows package."))
+            status += "<br>" + escape(self.t("The update source did not provide a verified package for this platform."))
         return status, package
 
-    def _server_package_update_result(self, response: str) -> tuple[str, WindowsUpdatePackage | None]:
+    def _server_package_update_result(self, response: str) -> tuple[str, UpdatePackage | None]:
         server_commit = parse_commit_record(response)
         installed_commit = self._current_commit
         offer_package = True
@@ -484,15 +492,15 @@ class SettingsDialog(AnimatedDialog):
         else:
             status = self.t("The server package has a different commit with the same commit time.")
         lines = [escape(line) for line in (*self._commit_lines(server_commit), status)]
-        package = server_windows_package(response) if offer_package else None
+        package = server_update_package(response) if offer_package else None
         if offer_package and package is None:
-            lines.append(escape(self.t("The update source did not provide a verified Windows package.")))
+            lines.append(escape(self.t("The update source did not provide a verified package for this platform.")))
         return "<br>".join(lines), package
 
     def _show_update_results(
             self,
-            release_result: tuple[str, WindowsUpdatePackage | None],
-            package_result: tuple[str, WindowsUpdatePackage | None],
+            release_result: tuple[str, UpdatePackage | None],
+            package_result: tuple[str, UpdatePackage | None],
     ) -> None:
         release_text, github_package = release_result
         server_text, server_package = package_result
@@ -500,15 +508,15 @@ class SettingsDialog(AnimatedDialog):
         sections = (
             (self.t("Current build"), current_build),
             (self.t("GitHub Release"), release_text),
-            (self.t("Server Windows x64 package"), server_text),
+            (self.t(SERVER_PACKAGE_LABEL), server_text),
         )
         message = "".join(f"<p><b>{escape(title)}</b><br>{body}</p>" for title, body in sections)
         start_update = self._start_update
-        can_update = start_update is not None and windows_update_executable() is not None
+        can_update = start_update is not None and update_executable() is not None
         if github_package is not None or server_package is not None:
             reminder = (
                 self.t("The program will close and reopen automatically after the update.") if can_update
-                else self.t("Direct updates require the packaged Windows program and its bundled 7-Zip.")
+                else self.t(DIRECT_UPDATE_REQUIREMENT)
             )
             message += f"<p>{escape(reminder)}</p>"
         message_box = AnimatedMessageBox(self)
@@ -1220,8 +1228,13 @@ class SettingsDialog(AnimatedDialog):
         return tab
 
     def _refresh_external_tool_detection(self) -> None:
+        if self._settings_source_text is None:
+            self.external_tools_detection_view.clear()
+            return
         missing: list[tuple[str, str]] = []
         tool_path_names = list(EXTERNAL_TOOL_PATH_NAMES)
+        if core_settings.MPV_PATH:
+            tool_path_names.append("MPV_PATH")
         x265_options = probe_x265_dynamic_metadata_options(
             str(core_settings.X265_PATH or "")
         )
@@ -1444,6 +1457,7 @@ class SettingsDialog(AnimatedDialog):
             config.remux.allow_partial_missing_non_video_tracks
         )
         self.save_audio_gaps_checkbox.setChecked(config.remux.save_audio_gaps)
+        self.keep_sp_checkbox.setChecked(config.remux.keep_sp_by_default)
         self.default_encoder_combo.blockSignals(True)
         try:
             self._set_combo_data(
@@ -1551,6 +1565,7 @@ class SettingsDialog(AnimatedDialog):
                     self.allow_partial_missing_non_video_tracks_checkbox.isChecked()
                 ),
                 save_audio_gaps=self.save_audio_gaps_checkbox.isChecked(),
+                keep_sp_by_default=self.keep_sp_checkbox.isChecked(),
             ),
             encode=EncodePreferences(
                 encoder=str(self.default_encoder_combo.currentData()),

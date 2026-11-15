@@ -96,6 +96,12 @@ void WINAPI launch_entry(void)
         SetEnvironmentVariableW(L"QML2_IMPORT_PATH", NULL);
         if (FAILED(StringCchCatW(bundle_root, ARRAYSIZE(bundle_root), L"\\VSScript.dll")))
             fail(L"Locating the bundled VSScript", ERROR_FILENAME_EXCED_RANGE);
+        if (GetFileAttributesW(bundle_root) == INVALID_FILE_ATTRIBUTES) {
+            if (FAILED(StringCchCopyNW(bundle_root, ARRAYSIZE(bundle_root), launcher_path, root_length))
+                || FAILED(StringCchCatW(bundle_root, ARRAYSIZE(bundle_root), L"\\Lib\\site-packages\\vapoursynth\\vsscript.dll")))
+                fail(L"Locating the bundled VSScript", ERROR_FILENAME_EXCED_RANGE);
+            SetEnvironmentVariableW(L"VAPOURSYNTH_EXTRA_PLUGIN_PATH", NULL);
+        }
         if (!SetEnvironmentVariableW(L"VSSCRIPT_PATH", bundle_root))
             fail(L"Setting the bundled VSScript path", GetLastError());
     }

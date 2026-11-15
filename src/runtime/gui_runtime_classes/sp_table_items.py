@@ -11,13 +11,19 @@ SP_STANDALONE_TRACKS_ROLE = Qt.ItemDataRole.UserRole + 6
 
 
 class SpSelectionItem(QTableWidgetItem):
-    def __init__(self, selected: bool, reason: str, *, disc_root: str):
+    def __init__(
+            self, selected: bool, reason: str, *, disc_root: str, allow_default_selection: bool,
+    ):
         super().__init__()
         self.disc_root = os.path.normcase(os.path.normpath(disc_root)) if disc_root else ''
         self.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
+        self._allow_default_selection = allow_default_selection
         self.set_default(selected, reason)
 
     def set_default(self, selected: bool, reason: str) -> None:
+        if selected and not self._allow_default_selection:
+            selected = False
+            reason = 'Automatic SP selection is turned off in Settings.'
         self.default_selected = selected and bool(self.flags() & Qt.ItemFlag.ItemIsEnabled)
         self.default_reason = reason
         if self.data(Qt.ItemDataRole.UserRole) != 'user':

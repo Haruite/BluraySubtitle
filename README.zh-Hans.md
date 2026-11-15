@@ -6,14 +6,12 @@
 
 开发文档：[强制代码修改规范](docs/development/code-standards.zh-Hans.md) | [媒体处理方案与工具选型](docs/development/media-pipeline-and-tool-selection.zh-Hans.md) | [重构历史](docs/refactoring/refactoring-history.zh-Hans.md)
 
-Windows x64 版本使用目录包发布。请完整解压后运行 `BluraySubtitle_windows_x64.exe`，不要将它与 `_internal` 目录分离。配置保存在程序目录的 `config.json` 中，源码运行时位于仓库根目录；请确保该目录可写。
+x64 程序包支持 **Windows 10 1809 及以上版本**。ARM64 程序包面向 **Windows 10 ARM64 及以上版本**，具体最低 Windows 10 版本待验证。Windows 10 建议使用 **22H2**。
 
-Windows x64 下载
+- `main` 分支最新构建。[Windows x64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_windows_x64.7z) · [Windows ARM64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_windows_arm64.7z) · [Ubuntu 26.04 x64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_ubuntu26.04_x64.tar.xz)
+- 对应版本的安装包会附在 Release 中。[GitHub Releases](https://github.com/Haruite/BluraySubtitle/releases)
 
-- 每次推送到 `main` 后，GitHub Actions 自动打包并上传到服务器。[从 sbx.mysmy.top 下载](https://sbx.mysmy.top/tools/BluraySubtitle_windows_x64.7z)
-- 4.7 之后发布的版本会自动附加 Windows x64 `.7z` 包。[GitHub Releases](https://github.com/Haruite/BluraySubtitle/releases)
-
-BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 工具。它将以下五类功能整合在一个应用中：
+BluraySubtitle 是一个面向 Windows/Linux 的蓝光流程 GUI 工具。它将以下五类功能整合在一个应用中：
 
 1. **原盘 Remux**
 2. **原盘压制**
@@ -68,6 +66,7 @@ BluraySubtitle 是一个面向 Windows/Linux（含 Docker）的蓝光流程 GUI 
 
 ### SP 管理
 
+**设置 → 常规 → Remux 时保留 SP（特典）**默认勾选。关闭后，在原盘 Remux 和原盘压制中载入原盘时，SP 表的条目全部不勾选，仍可手动选择。
 完成主播放列表及分集选择后再检查 SP 表，取消不需要的内容。仅 Remux SP 时，取消所有主播放列表，只在 SP 表中保留所需行。编辑轨道会更新输出名称和格式；匹配的评论音轨可以加入正片。详见 [SP 选择、命名与附加规则](docs/wiki/Blu-ray-Disc-Structure.zh-Hans.md#本项目中的正片与-sp)。
 
 ## 依赖要求
@@ -196,7 +195,7 @@ python src/main.py
 
 ## VPy 编辑与预览
 
-- **编辑脚本**使用系统关联编辑器，**预览脚本**使用 `vsedit`。默认脚本生成在 `config.json` 旁的 `vpy/vpy_<标识>.vpy`。
+- **编辑脚本**使用系统关联编辑器，**预览脚本**使用 `vsedit`。默认脚本生成在 `config.json` 旁的 `vpy/vpy_<标识>.vpy`。预览默认脚本时，VSEdit 打开已填入当前行片源和字幕路径的临时副本。关闭 VSEdit 后，已保存的滤镜修改会同步回默认脚本。
 - 默认 VPy 可对比处理后画面与原画，操作见 [VSEdit 预览与截图](docs/wiki/Video-Encoding-and-VapourSynth.zh-Hans.md#在-vsedit-中对比处理后画面与原画)。
 - 隔行、胶转磁和混合 cadence 来源需按[预处理说明](docs/wiki/Video-Encoding-and-VapourSynth.zh-Hans.md#隔行胶转磁与混合-cadence-来源)准备。
 
@@ -213,7 +212,7 @@ python src/main.py
 
 ### setup_windows_environment.ps1（Windows 环境配置脚本）
 
-脚本为 **x64 Windows 10 及以上版本**和**带桌面体验的 x64 Windows Server 2019 及以上版本**配置运行与编译环境。
+脚本为 **x64 Windows 10 1909 及以上版本**、**带桌面体验的 x64 Windows Server 2019 及以上版本**和 **ARM64 Windows 11 及以上版本**配置源码运行环境。两种架构默认使用 VapourSynth R79。需要 Classic 时可传入 `-VapourSynthRuntime Classic`。在 ARM64 上，该选项使用独立的 x64 Python，并为 Classic 插件和 VSEdit 使用 x64 构建。
 
 首次运行时，先设置当前用户的 PowerShell 执行策略，再从仓库根目录启动脚本。
 
@@ -224,10 +223,14 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
 
 脚本会申请管理员权限、询问显示语言，并支持中断后重新运行。下载时会自动使用已配置的 **Windows 系统代理**。如果无法直连下载源，请先配置系统代理再启动脚本。
 
-环境配置完成后，打开新的 PowerShell 窗口，在仓库根目录执行以下命令即可打包 Windows x64 应用。
+完成环境配置后，如果要打包运行环境，在仓库根目录按架构选择一条打包命令运行。
 
 ```powershell
 pyinstaller BluraySubtitle_windows_x64.spec
+```
+
+```powershell
+pyinstaller BluraySubtitle_windows_arm64.spec
 ```
 
 ### setup_linux_environment.sh（Linux 运行环境脚本）
@@ -237,7 +240,9 @@ pyinstaller BluraySubtitle_windows_x64.spec
 - Ubuntu 22.04 及以上版本，包括基于这些 Ubuntu 版本的衍生发行版。
 - Debian 12 及以上版本，包括基于这些 Debian 版本的衍生发行版。
 
-脚本已在以下 15 个 x64 WSL 2 环境中运行通过。
+脚本安装 VapourSynth R79。如果系统 Python 版本较旧，脚本会安装独立的 Python 3.12，并在结束时给出启动命令。
+
+脚本的早期版本在以下 x64 WSL 2 环境中完成过验证。
 
 - Ubuntu 22.04、24.04、26.04、26.10
 - Debian 12、13
@@ -262,68 +267,7 @@ chmod +x setup_linux_environment.sh
 
 ---
 
-## Docker
-
-构建镜像：
-
-```bash
-docker build -t bluray-subtitle-ubuntu .
-```
-
-拉取预构建镜像：
-
-```bash
-docker pull haruite/bluraysubtitle:latest
-```
-
-PulseAudio 或 PipeWire-Pulse 运行示例（推荐用于大多数 Linux 桌面和远程桌面会话）：
-
-```bash
-xhost +local:docker
-sudo docker run -it --rm \
-  -e DISPLAY=$DISPLAY \
-  -e LIBGL_ALWAYS_SOFTWARE=1 \
-  -e BLURAY_SUBTITLE_MPV_AUDIO_OUTPUT=pulse \
-  -e PULSE_SERVER=unix:/tmp/pulse/native \
-  -v /tmp/.X11-unix:/tmp/.X11-unix \
-  -v /run/user/$(id -u)/pulse/native:/tmp/pulse/native \
-  -v bluray-subtitle-config:/config \
-  -v /path/to/media:/data \
-  --ipc=host \
-  --shm-size=2gb \
-  bluray-subtitle-ubuntu
-```
-
-命名卷 `bluray-subtitle-config` 存放 `config.json`、生成脚本的 `vpy/` 目录，以及开启日志保存后生成的 `logs/` 目录。使用 `--rm` 时，复用同一个卷名即可在多次运行间保留配置和已保存的日志。Docker 中程序在前台运行，输出也可以从容器日志查看。
-
-容器以非 root 用户 `ubuntu`（UID/GID `1000`）运行桌面程序；挂载的媒体必须允许该用户访问。
-
-Docker 音频方式只能选择以下一种：
-
-- **PulseAudio 或 PipeWire-Pulse（推荐）：**使用上方完整示例中的 `BLURAY_SUBTITLE_MPV_AUDIO_OUTPUT=pulse`、`PULSE_SERVER` 和 `/pulse/native` 三个选项。
-- **不使用 PipeWire-Pulse 的原生 PipeWire：**将上述三个 Pulse 选项替换为：
-
-  ```bash
-  -e BLURAY_SUBTITLE_MPV_AUDIO_OUTPUT=pipewire \
-  -v /run/user/$(id -u)/pipewire-0:/tmp/runtime-ubuntu/pipewire-0
-  ```
-
-- **仅使用 ALSA 的宿主机：**将三个 Pulse 选项替换为以下内容。宿主机必须存在 `controlC0`；当宿主音频组 GID 与镜像不同时，group 选项会授予非 root 容器用户设备访问权：
-
-  ```bash
-  --device /dev/snd \
-  --group-add "$(stat -c '%g' /dev/snd/controlC0)" \
-  -e BLURAY_SUBTITLE_MPV_AUDIO_OUTPUT=alsa
-  ```
-
-可在宿主机运行 `pactl info`、`wpctl status` 和 `aplay -l` 判断可用接口。桌面的 PipeWire 或 PulseAudio 已经管理声卡时，不要再把 `/dev/snd` 作为回退暴露给容器。
-
-Apple Silicon（amd64 容器）示例：
-
-```bash
-docker build --platform linux/amd64 -t bluray-subtitle-ubuntu .
-docker pull --platform linux/amd64 haruite/bluraysubtitle:latest
-```
+在容器中运行解压后的程序见 [Docker 运行 Ubuntu 打包版](docs/wiki/Run-Ubuntu-Package-in-Docker.zh-Hans.md)。
 
 ---
 
@@ -339,8 +283,7 @@ docker pull --platform linux/amd64 haruite/bluraysubtitle:latest
 - 预览无法启动：
   - 检查 `vsedit` 路径；
   - 检查 VPy 文件与插件可用性。
-- Docker/Linux 播放异常：
-  - 检查 DISPLAY 和 mpv 可用性。Docker 无声时，确认所选的 PulseAudio、PipeWire 或 ALSA 宿主端点存在，并使用 Docker 章节中对应的一组选项。
+- Linux 播放异常时，检查显示连接和选定的 mpv 路径。
 
 ---
 
@@ -350,9 +293,9 @@ docker pull --platform linux/amd64 haruite/bluraysubtitle:latest
 
 旧系统需要为 Python、Qt 和多媒体依赖增加兼容补丁及测试，维护成本较高，因此不扩展现有支持范围。
 
-### 为什么不提供 Linux 的 PyInstaller 打包文件？
+### 哪些 Linux 系统可以使用打包版？
 
-不同发行版的 glibc、图形环境和动态库存在差异，完整打包并验证多媒体工具及 VapourSynth 插件的维护成本较高。请使用 Linux 环境配置脚本配置环境后运行源码，或使用 Docker。
+PyInstaller 打包版面向 Ubuntu 26.04 x64，包含多媒体工具和 VapourSynth 运行时。其他受支持的发行版可先运行 `setup_linux_environment.sh`，再从源码启动。
 
 ### 压制会自动裁黑边吗？
 

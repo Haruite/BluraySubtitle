@@ -10,12 +10,24 @@ Use the [main MPLS and SP definitions](Blu-ray-Disc-Structure.md#main-content-an
 
 ## Runtime and tool builds
 
-[Windows setup](../../setup_windows_environment.ps1), [Linux setup](../../setup_linux_environment.sh), and the [Dockerfile](../../Dockerfile) install the required tools. [`settings.py`](../../src/core/settings.py) defines platform paths.
+[Windows setup](../../setup_windows_environment.ps1) and [Linux setup](../../setup_linux_environment.sh) install the required tools. [`settings.py`](../../src/core/settings.py) defines platform paths.
 
-- x264 uses official `master` to build an 8/10-bit CLI; Windows uses MSYS2 UCRT64 and PGO.
+- x264 uses official `master` to build an 8/10-bit CLI. Windows x64 uses MSYS2 UCRT64 and PGO. Windows ARM64 uses CLANGARM64 with NEON.
 - x265 uses the latest official stable tag to build an 8/10/12-bit multilib CLI, with HDR10+ JSON and Dolby Vision RPU input enabled in each core.
+- Windows and Linux install R79 by default. The Windows packages place the R79 wheel and VSPipe under `_internal/Lib/site-packages/vapoursynth`, where VSScript discovers the adjacent bundled interpreter. External VSPipe launches use the selected executable's runtime environment.
+- Windows ARM64 builds R79 and its plugins with CLANGARM64. R79 uses NEON and enables the I8MM and FHM filter kernels when the CPU and Windows expose the required features. Automatic getnative uses native Python. Both architectures build VSEdit with MSVC and use the Qt runtime installed by PyQt6.
+- Both Windows packaging workflows use `-Mode Build`. This mode includes vs-placebo and enables Vulkan support in L-SMASH Works without probing the build machine's GPU. Desktop setup still probes the local Vulkan device for R79. L-SMASH Works can decode in software.
+- With `-VapourSynthRuntime Classic` on ARM64, Classic, its plugins, and VSEdit use x64 emulation. Automatic getnative then uses the private x64 CPython recorded by Classic setup.
 
 Use the setup scripts as references for custom builds. See [automatic HDR metadata handling](Video-Encoding-and-VapourSynth.md#automatic-hdr-metadata-handling) for parameter requirements and injection fallback.
+
+### Ubuntu 26.04 x64 package
+
+Run `bash setup_linux_environment.sh --build` on Ubuntu 26.04, then run [`tools/build_ubuntu_package.sh`](../../tools/build_ubuntu_package.sh). Build mode prepares VapourSynth R79 and the PyInstaller environment and links mpv, FFmpeg, and FFprobe to the same FFmpeg libraries. Run [`tools/verify_ubuntu_package.py`](../../tools/verify_ubuntu_package.py) against the resulting archive before distributing it. The build records the checked-out commit inside the package and writes a matching `.tar.xz.txt` file with the SHA-256 digest.
+
+The setup cache defaults to `${XDG_CACHE_HOME:-$HOME/.cache}/bluraysubtitle/linux-setup`. Set `BLURAY_SETUP_CACHE_DIR` to use another directory. It holds downloaded archives, APT and Python packages, compiler cache entries, and the installed native build artifacts in build mode.
+
+The [Ubuntu workflow](../../.github/workflows/ubuntu-x64-package.yml) uploads the archive and `.tar.xz.txt` record to `/usr/share/nginx/html/tools/BluraySubtitle`. The [Release workflow](../../.github/workflows/release-packages.yml) checks the record’s commit and archive digest before attaching the package.
 
 ## Source-code map
 

@@ -14,7 +14,7 @@
 
 10-bit SDR 输出可减轻量化／色带问题，但不会把 SDR 变成 HDR。编码背景见[媒体格式](Media-Formats-and-Dolby-Vision.zh-Hans.md#视频格式)。
 
-安装脚本和 Docker 镜像构建未修改的上游 SVT-AV1。压制控件与设置窗口仅在所选自带／系统可执行文件的 `--help` 将 `12` 列为 `--input-depth` 可选值时提供 12-bit；无法确认支持时隐藏该选项，切换工具来源会刷新可选位深。aomenc、rav1e 等其他 AV1 编码器使用不同命令行，不能在此流程中替代 `SvtAv1EncApp`。
+安装脚本构建未修改的上游 SVT-AV1。压制控件与设置窗口仅在所选自带／系统可执行文件的 `--help` 将 `12` 列为 `--input-depth` 可选值时提供 12-bit；无法确认支持时隐藏该选项，切换工具来源会刷新可选位深。aomenc、rav1e 等其他 AV1 编码器使用不同命令行，不能在此流程中替代 `SvtAv1EncApp`。
 
 画质取决于源纹理／运动、编码器版本、码率控制、preset、滤镜和播放条件。应从同一来源截取代表性样本，在目标观看距离比较；把某次测试结果再转成另一编码会增加世代损失，使比较失真。
 
@@ -32,7 +32,7 @@
 VapourSynth .vpy 脚本
         │
         ▼
-vspipe --y4m
+vspipe --container y4m
         │
         ├── x264  → .h264
         ├── x265  → .hevc
@@ -45,6 +45,8 @@ vspipe --y4m
 暂存 Remux 会保留源音频。只有视频成功压制后，最终混流阶段才进行音频转换和清理，避免在视频结果尚未生成时提前执行有损或耗时的音频操作。
 
 `vspipe` 通过管道向编码器提供 Y4M 帧，所以普通压制不需要落盘一份完整的未压缩视频。编码器产生的基本流是中间文件，最终交付给用户的是 MKV。
+
+打包版中，把 **vspipe 来源**设为**系统**，即可为压制和 FrameCheck 选用另一套 VapourSynth。在**设置 → 外部工具**中将 `VSPIPE_PATH` 指向该环境的 VSPipe，保存后重启。所选环境需要自己的 Python 绑定、`mvsfunc.py` 等滤镜脚本及兼容插件。编码器和 VSEdit 可分别设置。
 
 ## 码率控制与 preset 的含义
 
@@ -132,7 +134,7 @@ BluraySubtitle 的 getnative 移植自 [Infiziert90/getnative](https://github.co
 
 `getnative.py` 在应用的 Python 环境内负责抽帧、样本工作进程、原生 VapourSynth 处理图与最终排名。每个工作进程先把 PNG 样本从 RGB 按 BT.709 转成灰度，再检测全部 16 种逆缩放候选：bilinear、8 组不同参数的 bicubic、2/3/4/5 taps 的 Lanczos，以及 Spline16、Spline36、Spline64。每个候选会把画面逆缩放到待测高度，再放大回源尺寸并测量重建误差。纵向搜索范围通常是源高度的 40%～98%。
 
-Windows 环境配置脚本编译 VapourSynth Classic，并将绑定安装到所选系统 Python。打包后的应用与 VSScript 共用一套随附的 CPython 运行时和 NumPy 包。切换系统 Python 次版本后，须重新运行环境配置脚本并重新打包应用。
+Windows x64 环境配置脚本将上游 R79 wheel 安装到所选 Python。打包后的应用与 VSScript 共用随附的 CPython 运行时和 NumPy 包。切换系统 Python 次版本后，须重新运行环境配置脚本并重新打包应用。
 
 为了缩短耗时，每个核先对居中的半尺寸画面进行步长 4 粗扫，再在粗扫最佳高度附近执行全帧 1p 细扫。前三种优先核必定进入细扫；此后的核如果同条件粗扫得分不足当前最佳粗扫得分的 45%，可以跳过细扫，但仍会报告粗扫结果。全部核报告完毕后，获胜核还会执行一次全帧步长 4 复核，再在其 ±20p 范围内执行全帧 1p 精扫。每个样本工作进程只使用一个 VapourSynth 帧线程，并把帧缓存上限设为 256 MiB，以控制并发时的内存增长。
 
@@ -157,7 +159,7 @@ Encode 的五项控制在启动时替换默认 VPy 的 `denoise_strength`、`deh
 | 降噪 | `0.0`–`3.0` / `0.6` | 保守的空间亮度 `nlm_ispc.NLMeans`（`d=0`、小搜索范围），由 Prewitt 遮罩和 `mvsfunc.LimitFilter` 保护。颗粒／纸张纹理变化时降低强度，加大前检查被移除的噪声。 |
 | 去光晕 | `0.0`–`1.0` / `0.0` | 针对宽锐化光晕；基于 [abcxyz](https://github.com/xyx98/my-vapoursynth-script) 的亮度降采样／升采样估计，经 `rgvs.Repair` 限制后按强度混合。 |
 | 去振铃 | `0.0`–`1.0` / `0.0` | 针对窄 DCT／缩放振铃；`MinBlur`／`HQDering` 风格遮罩排除边缘本身，只在周围混合修复后受限平滑。 |
-| 去色带 | `0.0`–`1.0` / `0.5` | YUV `placebo.Deband`，由柔化的多平面 Prewitt 遮罩恢复边缘／纹理；渐变或特效受损时降低或关闭。 |
+| 去色带 | `0.0`–`1.0` / `0.5` | YUV `placebo.Deband`，vs-placebo 不可用时使用 CPU 版 `muvsfunc.SmoothGrad`，由柔化的多平面 Prewitt 遮罩恢复边缘／纹理；渐变或特效受损时降低或关闭。 |
 | 抗锯齿 | `0.0`–`1.0` / `0.5` | 受限 EEDI2 亮度结果与去色带来源混合；无锯齿的高细节或刻意像素锐利素材可关闭。 |
 
 `0` 关闭单项；去色带／抗锯齿的 `0.5` 是半量混合，`1` 是完整受限结果。其他修复阶段只作用于亮度。去光晕／去振铃从 `0.15`–`0.25` 起步，明确瑕疵经逐帧检查后才用 `0.25`–`0.35`，整片尽量不超过 `0.4`；强度控制混合量，不控制遮罩宽度或光晕半径。
@@ -243,7 +245,7 @@ src8 = src8.std.SetFrameProps(_FieldBased=0)
 | `fmtc` | 位深转换和重采样 |
 | `descale` | 按检测到的原生分辨率执行可选逆向缩放 |
 | `nlm_ispc` | 降噪 |
-| `placebo` | 所有受支持平台上的去色带 |
+| `placebo`、`muvsfunc.SmoothGrad` | Vulkan 或 CPU 去色带 |
 | `mvsfunc.LimitFilter` | 参照原始 clip 限制滤镜改动 |
 | `eedi2` | 边缘导向抗锯齿 |
 | `rgvs.Repair` | 约束修复后的平面 |

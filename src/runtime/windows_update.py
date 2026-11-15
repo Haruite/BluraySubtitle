@@ -5,57 +5,30 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import shutil
 import sys
+import sysconfig
 import tempfile
 from contextlib import suppress
-from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import quote
+from typing import TYPE_CHECKING
 
 from src.core.app_config import app_config_path
 from src.core.i18n import translate_text
 from src.runtime.windows_shell import launch_system_powershell
 
+if TYPE_CHECKING:
+    from .program_update import UpdatePackage
 
-WINDOWS_PACKAGE_NAME = "BluraySubtitle_windows_x64"
-WINDOWS_PACKAGE_ARCHIVE = f"{WINDOWS_PACKAGE_NAME}.7z"
-GITHUB_LATEST_RELEASE_API = "https://api.github.com/repos/Haruite/BluraySubtitle/releases/latest"
-SERVER_WINDOWS_PACKAGE_URL = f"https://sbx.mysmy.top/tools/{WINDOWS_PACKAGE_ARCHIVE}"
+
+WINDOWS_ARCHITECTURE = "arm64" if sysconfig.get_platform() == "win-arm64" else "x64"
+WINDOWS_PACKAGE_NAME = f"BluraySubtitle_windows_{WINDOWS_ARCHITECTURE}"
+PACKAGE_ARCHIVE = f"{WINDOWS_PACKAGE_NAME}.7z"
+SERVER_PACKAGE_URL = f"https://sbx.mysmy.top/tools/BluraySubtitle/{PACKAGE_ARCHIVE}"
 _UPDATER_SCRIPT = Path("tools") / "windows_update.ps1"
 
 
-@dataclass(frozen=True)
-class WindowsUpdatePackage:
-    url: str
-    sha256: str
-
-
-def github_windows_package(payload: dict[str, object]) -> WindowsUpdatePackage | None:
-    tag = payload.get("tag_name")
-    assets = payload.get("assets")
-    if not isinstance(tag, str) or not isinstance(assets, list):
-        return None
-    for asset in assets:
-        if not isinstance(asset, dict) or asset.get("name") != WINDOWS_PACKAGE_ARCHIVE:
-            continue
-        digest = asset.get("digest")
-        if isinstance(digest, str) and re.fullmatch(r"sha256:[0-9a-fA-F]{64}", digest):
-            url = f"https://github.com/Haruite/BluraySubtitle/releases/download/{quote(tag, safe='')}/{WINDOWS_PACKAGE_ARCHIVE}"
-            return WindowsUpdatePackage(url, digest.removeprefix("sha256:").lower())
-    return None
-
-
-def server_windows_package(record: str) -> WindowsUpdatePackage | None:
-    fields = dict(line.split("=", 1) for line in record.splitlines() if "=" in line)
-    digest = fields.get("sha256", "").lower()
-    if re.fullmatch(r"[0-9a-f]{64}", digest):
-        return WindowsUpdatePackage(f"{SERVER_WINDOWS_PACKAGE_URL}?sha256={digest}", digest)
-    return None
-
-
-def windows_update_executable() -> Path | None:
+def update_executable() -> Path | None:
     if sys.platform != "win32" or not getattr(sys, "frozen", False) or not hasattr(sys, "_MEIPASS"):
         return None
     executable = Path(sys.executable).resolve()
@@ -71,8 +44,8 @@ def windows_update_executable() -> Path | None:
     return None
 
 
-def start_windows_update(package: WindowsUpdatePackage) -> None:
-    executable = windows_update_executable()
+def start_update(package: UpdatePackage) -> None:
+    executable = update_executable()
     if executable is None:
         raise RuntimeError(translate_text("Direct updates require the packaged Windows program and its bundled 7-Zip."))
     install = executable.parent
@@ -82,6 +55,7 @@ def start_windows_update(package: WindowsUpdatePackage) -> None:
     plan = {
         "pid": os.getpid(),
         "executable": executable.name,
+        "packageName": WINDOWS_PACKAGE_NAME,
         "workingDirectory": os.getcwd(),
         "configDirectory": relative_config,
         "url": package.url,

@@ -1,4 +1,4 @@
-name: Attach Windows Package to Release
+name: Attach Packages to Release
 
 on:
   release:
@@ -8,14 +8,21 @@ permissions:
   contents: write
 
 concurrency:
-  group: release-windows-package-${{ github.event.release.id }}
+  group: release-packages-${{ github.event.release.id }}
 
 jobs:
   attach:
+    strategy:
+      fail-fast: false
+      matrix:
+        archive:
+          - BluraySubtitle_windows_x64.7z
+          - BluraySubtitle_windows_arm64.7z
+          - BluraySubtitle_ubuntu26.04_x64.tar.xz
     runs-on: ubuntu-latest
     timeout-minutes: 210
     env:
-      PACKAGE_URL: https://sbx.mysmy.top/tools/BluraySubtitle_windows_x64.7z
+      PACKAGE_URL: https://sbx.mysmy.top/tools/BluraySubtitle/${{ matrix.archive }}
       RELEASE_ID: ${{ github.event.release.id }}
     steps:
       - name: Check Release
@@ -39,7 +46,7 @@ jobs:
           record=$(mktemp)
           trap 'rm -f -- "$record"' EXIT
 
-          echo "Waiting up to 180 minutes for a Windows package for $GITHUB_SHA."
+          echo "Waiting up to 180 minutes for the package ${PACKAGE_URL##*/} for $GITHUB_SHA."
           while true; do
             if curl --fail --silent --show-error --location \
                 --connect-timeout 10 --max-time 20 --max-filesize 65536 \
@@ -93,13 +100,13 @@ jobs:
             --max-filesize 2147483647 --header 'Cache-Control: no-cache' \
             --output "$archive" "${PACKAGE_URL}?sha256=$PACKAGE_SHA256"
           if ! printf '%s  %s\n' "$PACKAGE_SHA256" "$archive" | sha256sum --check --status; then
-            echo "::error::The downloaded Windows package does not match the SHA-256 in the record."
+            echo "::error::The downloaded package does not match the SHA-256 in the record."
             exit 1
           fi
 
           tag_commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/tags/$tag_path" --jq .sha)
           if [[ "$tag_commit" != "$GITHUB_SHA" ]]; then
-            echo "::error::The Release tag changed while the Windows package was being prepared."
+            echo "::error::The Release tag changed while the package was being prepared."
             exit 1
           fi
           gh release upload --repo "$GITHUB_REPOSITORY" -- "$GITHUB_REF_NAME" "$archive"

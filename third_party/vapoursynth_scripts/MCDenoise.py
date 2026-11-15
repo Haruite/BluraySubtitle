@@ -6,7 +6,7 @@ import vapoursynth as vs
 def TempLinearApproximateMC(clip, meclip = None, radius = 2, planes = None, denoise = None, subpel = 4, subpelinterp = None, dct = None, refine = True, blocksize = None, overlap = None, search = None, searchparam = None, pelsearch = None, chromamotion = True, truemotion = True, _lambda = None, lsad = None, pnew = None, plevel = None, globalmotion = True, thsad = None, thscd1 = None, thscd2 = None, badsad = None, badrange = None, trymany = None, gamma = None, ftype = None, sigma = None, sigma2 = None, pmin = None, pmax = None, sbsize = None, smode = None, sosize = None, swin = None, twin = None, sbeta = None, tbeta = None, zmean = None, f0beta = None, nstring = None, sstring = None, ssx = None, ssy = None, sst = None):
 	#-------------------------------------------------------------------------------------------------------------------------------------
 
-	core = vs.get_core()
+	core = vs.core
 
 	if not isinstance(radius, int) or radius < 1:
 		raise ValueError("MCDenoise.TempLinearApproximate: 'radius' must be an integer larger than 1.")

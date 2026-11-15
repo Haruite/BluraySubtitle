@@ -3,17 +3,17 @@ import copy
 import datetime
 import os
 import re
-import subprocess
 import sys
 import tempfile
 import threading
 import time
 import traceback
 from functools import partial
+from pathlib import Path
 from typing import Optional
 
 from PyQt6 import sip
-from PyQt6.QtCore import Qt, QTimer, QThread, QCoreApplication, QModelIndex, QEventLoop, QObject, QSize
+from PyQt6.QtCore import Qt, QTimer, QThread, QCoreApplication, QModelIndex, QEventLoop, QObject, QSize, QUrl
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPlainTextEdit, QTextBrowser, QWidget, QHBoxLayout, QPushButton, \
     QApplication, QTableWidgetItem, QTableWidget, QToolButton, QComboBox, \
     QAbstractItemView, QMenu, QSizePolicy, QRadioButton, QButtonGroup, QCheckBox, \
@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPlainTextEdit, QTextB
 
 from src.bdmv import Chapter, chapter_play_item_file_ranges
 from src.core import MKV_LABELS, REMUX_LABELS, DIY_REMUX_LABELS, ENCODE_LABELS, SUBTITLE_LABELS, ENCODE_REMUX_LABELS, \
-    ENCODE_REMUX_SP_LABELS, CURRENT_UI_LANGUAGE, find_mkvtoolnix, is_docker, MPLS_INFO_LABELS, \
+    ENCODE_REMUX_SP_LABELS, CURRENT_UI_LANGUAGE, find_mkvtoolnix, MPLS_INFO_LABELS, \
     MPLS_INFO_TRACKS_LABELS
 import src.core.settings as core_settings
 from src.core.i18n import translate_text
@@ -37,7 +37,6 @@ from src.exports.utils import (
     print_tb_string_terminal,
     get_time_str,
     parse_time_to_seconds,
-    get_mpv_safe_path,
     print_exc_terminal,
     third_party_notices_markdown_path,
     resolve_encoder_executable_path,
@@ -93,6 +92,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         dlg.setLayout(layout)
         editor = QTextBrowser(dlg)
         editor.setObjectName('thirdPartyNoticesBrowser')
+        editor.document().setBaseUrl(QUrl.fromLocalFile(os.path.dirname(path) + os.sep))
         editor.setMarkdown(body)
         editor.setOpenExternalLinks(True)
         editor.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
@@ -1722,9 +1722,6 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             self.vspipe_mode_combo.setEnabled(False)
             self.x265_mode_combo.setCurrentIndex(self.x265_mode_combo.findData('system'))
             self.x265_mode_combo.setEnabled(False)
-        elif is_docker():
-            self.vspipe_mode_combo.setCurrentIndex(self.vspipe_mode_combo.findData('system'))
-            self.x265_mode_combo.setCurrentIndex(self.x265_mode_combo.findData('system'))
 
         self.x265_params_label = QLabel(self.t('x265 Params:'), tools_row)
         tools_layout.addWidget(self.x265_params_label, 2, 0)
@@ -2284,75 +2281,6 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             except Exception:
                 return None
 
-        def mpv_play_mpls(mpls_path, mpv_path):
-            sub_file = _select_subtitle_file_for_mpls(mpls_path)
-            if sys.platform != 'linux':
-                command = [mpv_path]
-            elif is_docker():
-                command = [
-                    mpv_path,
-                    '--vo=x11',
-                    '--profile=sw-fast',
-                    '--hwdec=no',
-                    '--framedrop=vo',
-                    '--osc=yes',
-                ]
-                audio_output = os.environ.get(
-                    'BLURAY_SUBTITLE_MPV_AUDIO_OUTPUT',
-                    '',
-                ).strip().lower()
-                if audio_output in {'alsa', 'pipewire', 'pulse'}:
-                    command.append(f'--ao={audio_output}')
-                elif os.environ.get('PULSE_SERVER'):
-                    command.append('--ao=pulse')
-            else:
-                command = [mpv_path]
-                try:
-                    x11_extensions = run_command(
-                        ['xdpyinfo', '-queryExtensions'],
-                        capture_output=True,
-                        timeout=2,
-                    )
-                    x11_supports_dri3 = (
-                        x11_extensions.returncode == 0
-                        and b'DRI3  (opcode:' in x11_extensions.stdout
-                    )
-                except (OSError, subprocess.SubprocessError):
-                    try:
-                        x11_supports_dri3 = any(
-                            name.startswith('renderD')
-                            and os.access(os.path.join('/dev/dri', name), os.R_OK | os.W_OK)
-                            for name in os.listdir('/dev/dri')
-                        )
-                    except OSError:
-                        x11_supports_dri3 = False
-                if os.environ.get('DISPLAY') and not x11_supports_dri3:
-                    # Remote X servers without DRI3 cannot initialize mpv's default GPU contexts.
-                    command.extend([
-                        '--vo=gpu-next',
-                        '--gpu-api=opengl',
-                        '--gpu-context=x11egl',
-                        '--gpu-sw=yes',
-                        '--icc-profile-auto=no',
-                        '--msg-level=vo/gpu-next=error,vo/gpu-next/opengl=error,ffmpeg/video=error',
-                        '--profile=sw-fast',
-                        '--hwdec=no',
-                        '--framedrop=vo',
-                        '--osc=yes',
-                    ])
-            if sub_file:
-                command.append(f'--sub-file={sub_file}')
-            command.extend([
-                f'--bluray-device={mpls_path[:-25]}',
-                f'bd://mpls/{mpls_path[-10:-5]}',
-            ])
-            env = None
-            if '--gpu-sw=yes' in command:
-                env = os.environ.copy()
-                env.setdefault('LIBGL_ALWAYS_SOFTWARE', '1')
-            run_command(command, env=env)
-            return
-
         action = btn.property('action') or ''
         is_preview = (action == 'preview') or (btn.text() in ('preview', self.t('preview')))
         if is_preview and self.altered:
@@ -2384,37 +2312,19 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
                             os.path.exists(mpls_name + '.sup'))
             if not has_subtitle:
                 AnimatedMessageBox.information(self, self.t('Prompt'), self.t('Subtitle file does not exist; playback will continue without subtitles'))
-        if sys.platform != 'linux':
-            if sys.platform == 'win32':
-                mp4_exe_path = get_mpv_safe_path(".mp4")
-                if mp4_exe_path:
-                    if mp4_exe_path.endswith('mpv.exe'):
-                        mpv_play_mpls(mpls_path, mp4_exe_path)
-                        return
-            os.startfile(mpls_path)
-        else:
-            if is_docker():
-                try:
-                    mpv_play_mpls(mpls_path, 'mpv')
-                    return
-                except Exception:
-                    pass
-            try:
-                output = run_command(["xdg-mime", "query", "default", "x-content/video-bluray"], capture_output=True, check=True).stdout
-                desktop_file = output.decode('utf-8').strip()
-                if not desktop_file:
-                    output = run_command(["xdg-mime", "query", "default", "video/mp4"], capture_output=True, check=True).stdout
-                    desktop_file = output.decode('utf-8').strip()
-                # Enable Blu-ray support in Linux mpv build by running in source directory:
-                # echo "--enable-libbluray" > ffmpeg_options
-                # and
-                # echo "-Dlibbluray=enabled" > mpv_options
-                if 'mpv' in desktop_file:
-                    mpv_play_mpls(mpls_path, 'mpv')
-                    return
-            except:
-                pass
-            run_command(['xdg-open', mpls_path])
+        executable = self._mpv_playback_executable("x-content/video-bluray")
+        if not executable:
+            self.open_file_path(mpls_path)
+            return
+
+        playlist = Path(mpls_path)
+        arguments = [
+            f'--bluray-device={playlist.parent.parent.parent}',
+            f'bd://mpls/{playlist.stem}',
+        ]
+        if sub_file := _select_subtitle_file_for_mpls(mpls_path):
+            arguments.insert(0, f'--sub-file={sub_file}')
+        self._start_mpv_playback(executable, arguments, mpls_path)
 
     def _subtitle_durations_from_table(self) -> dict[str, float]:
         """Capture measured subtitle end times that move with their table rows."""

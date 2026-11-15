@@ -14,7 +14,7 @@ This page covers encoder settings and the VPy processing path. For container, co
 
 Ten-bit SDR output can reduce quantization/banding problems but does not turn SDR into HDR. Codec background belongs in [Media Formats](Media-Formats-and-Dolby-Vision.md#video-formats).
 
-The setup scripts and Docker image build unmodified upstream SVT-AV1. The Encode controls and settings dialog offer 12-bit only when the selected bundled/system executable lists `12` among its `--input-depth` values in `--help`. If this support cannot be confirmed, 12-bit is hidden; changing the tool source refreshes the choices. Other AV1 encoders such as aomenc and rav1e use different command lines and cannot replace `SvtAv1EncApp` in this workflow.
+The setup scripts build unmodified upstream SVT-AV1. The Encode controls and settings dialog offer 12-bit only when the selected bundled/system executable lists `12` among its `--input-depth` values in `--help`. If this support cannot be confirmed, 12-bit is hidden; changing the tool source refreshes the choices. Other AV1 encoders such as aomenc and rav1e use different command lines and cannot replace `SvtAv1EncApp` in this workflow.
 
 Quality depends on source texture/motion, encoder version, rate control, preset, filters, and playback conditions. Compare representative samples from the same source at the intended viewing distance; transcoding one test result into another codec adds generation loss and biases the comparison.
 
@@ -32,7 +32,7 @@ staging MKV with the authored playlist/chapter range
 VapourSynth .vpy script
         │
         ▼
-vspipe --y4m
+vspipe --container y4m
         │
         ├── x264  → .h264
         ├── x265  → .hevc
@@ -45,6 +45,8 @@ final MKV with selected audio, subtitles, chapters, attachments, and metadata
 The staging remux preserves source audio. Audio conversion and final audio cleanup happen only in the final mux after video encoding succeeds. This avoids performing a lossy or expensive audio operation before the video result exists.
 
 `vspipe` supplies Y4M frames to the encoder through a pipe, so a normal encode does not need a full uncompressed intermediate video file. The encoder's elementary-stream result is temporary; the user-facing result is the final MKV.
+
+In a packaged build, choose **System** under **vspipe source** to use another VapourSynth installation for Encode and FrameCheck. Set `VSPIPE_PATH` to its VSPipe executable in **Settings → External tools**, then restart. The selected installation needs its own Python bindings, filter scripts such as `mvsfunc.py`, and compatible plugins. The encoder and VSEdit have separate settings.
 
 ## Rate control and the meaning of presets
 
@@ -132,7 +134,7 @@ Every sample already launched is allowed to finish, and every kernel and sample 
 
 `getnative.py` coordinates extraction, sample workers, native VapourSynth graphs, and final ranking in the application's Python environment. Each worker converts its PNG sample from RGB to BT.709 grayscale and evaluates all 16 inverse-scaling candidates: bilinear; eight bicubic parameter sets; Lanczos with 2, 3, 4, and 5 taps; and Spline16, Spline36, and Spline64. Each candidate descales the frame to a trial height, scales it back to the source dimensions, and measures the reconstruction error. The vertical search range is normally 40% through 98% of the source height.
 
-Windows setup compiles VapourSynth Classic and installs its binding into the selected system Python. The packaged application and VSScript use one bundled CPython runtime and NumPy package. Re-run setup and rebuild the application after changing the system Python minor version.
+Windows x64 setup installs the upstream R79 wheel into the selected Python. The packaged application and VSScript share a bundled CPython runtime and NumPy package. Re-run setup and rebuild the application after changing the system Python minor version.
 
 For speed, every kernel first receives a centered half-size, step-4 coarse scan and then a full-frame 1p scan around the best coarse height. The first three priority kernels always reach the fine scan. After that, a kernel whose like-for-like coarse score is below 45% of the best coarse score may skip its fine scan, while still reporting the coarse result. After all kernels have reported, the winning kernel is checked again with a full-frame step-4 pass followed by a full-frame ±20p, 1p scan.
 Each sample worker uses one VapourSynth frame worker and a 256 MiB frame-cache ceiling to control concurrent memory growth.
@@ -158,7 +160,7 @@ The five Encode controls replace `denoise_strength`, `dehalo_strength`, `dering_
 | Denoise | `0.0`–`3.0` / `0.6` | Conservative spatial luma `nlm_ispc.NLMeans` (`d=0`, small search), protected by a Prewitt mask and `mvsfunc.LimitFilter`. Reduce strength if grain/paper texture changes; inspect the removed noise before increasing it. |
 | Dehalo | `0.0`–`1.0` / `0.0` | Enable for broad sharpening halos. A luma downscale/upscale estimate based on [abcxyz](https://github.com/xyx98/my-vapoursynth-script) is constrained by `rgvs.Repair` and blended by strength. |
 | Dering | `0.0`–`1.0` / `0.0` | Enable for narrow DCT/rescale ringing. A `MinBlur`/`HQDering`-style mask excludes the edge itself and blends repaired, limited smoothing around it. |
-| Deband | `0.0`–`1.0` / `0.5` | YUV `placebo.Deband`, with a softened multi-plane Prewitt mask restoring edges/texture; reduce or disable when gradients/effects are harmed. |
+| Deband | `0.0`–`1.0` / `0.5` | YUV `placebo.Deband` or CPU `muvsfunc.SmoothGrad` when vs-placebo is unavailable, with a softened multi-plane Prewitt mask restoring edges/texture; reduce or disable when gradients/effects are harmed. |
 | Anti-aliasing | `0.0`–`1.0` / `0.5` | Limited EEDI2 luma blended toward the debanded source; disable for detailed or intentionally pixel-sharp material without aliasing. |
 
 `0` disables a stage. Deband/anti-aliasing use a literal half blend at `0.5` and full limited output at `1`. Other restoration stages affect luma only. For dehalo/dering, start at `0.15`–`0.25`; use `0.25`–`0.35` only for clear defects after frame checks, and avoid more than `0.4` across a whole title. Their strength controls blending, not mask width or halo radius.
@@ -248,7 +250,7 @@ Text composited at the final master resolution normally differs strongly from th
 | `fmtc` | Bit-depth conversion and resampling |
 | `descale` | Optional inverse scaling from detected native resolution |
 | `nlm_ispc` | Denoising |
-| `placebo` | Debanding on every supported platform |
+| `placebo`, `muvsfunc.SmoothGrad` | Vulkan or CPU debanding |
 | `mvsfunc.LimitFilter` | Limit filtered changes against reference clips |
 | `eedi2` | Edge-directed antialiasing |
 | `rgvs.Repair` | Constrain repaired planes |

@@ -17,7 +17,7 @@ from pathlib import Path
 from threading import Event, Thread
 from typing import Callable
 
-from src.exports.utils import run_command
+from src.exports.utils import run_command, run_vspipe
 from src.runtime import TaskCancelled
 
 
@@ -143,7 +143,7 @@ def _run_full_frame_check_process(
     }
     if os.name == "nt":
         process_options["creationflags"] = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    vspipe_command = [str(vspipe_executable), "--y4m", str(vpy_path), "-"]
+    vspipe_command = [str(vspipe_executable), "--container", "y4m", str(vpy_path), "-"]
     # Y4M omits color metadata. Keep FFmpeg from converting one input through RGB;
     # PSNR must compare the coded sample values, including out-of-range values.
     sample_filter = (
@@ -181,7 +181,7 @@ def _run_full_frame_check_process(
             tempfile.TemporaryFile(mode="w+b") as ffmpeg_log_stream,
     ):
         try:
-            vspipe_process = run_command(
+            vspipe_process = run_vspipe(
                 vspipe_command,
                 wait=False,
                 stdout=subprocess.PIPE,

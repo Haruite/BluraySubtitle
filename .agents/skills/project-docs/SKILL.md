@@ -36,6 +36,7 @@ Identify the readers and each document's purpose before deciding whether and whe
 - README files must omit identification, probing, caching, cleanup, or build details that provide no value for using the software.
 - Product constraints in the code standards should cover only necessary exceptions and potentially ambiguous product semantics, without accumulating algorithm steps, interface details, or change records.
 - New refactoring history entries should record only actual changes with development reference value and necessary validation, excluding facts relevant only to a single run. Do not rewrite existing history during routine documentation cleanup.
+- Record only completed validation and observed results in refactoring history. Summarize routine checks briefly. Reserve detail for representative tests in the target environment, such as using the GUI with real media.
 
 ### Final checks
 
@@ -70,6 +71,7 @@ Check that content fits its intended readers and section, and is neither redunda
 - README 不记录对使用无价值的识别、探测、缓存、清理或构建细节。
 - 代码规范的产品约束只保留必要例外和容易产生歧义的产品语义，避免堆积算法步骤、界面细节或修改记录。
 - 新增重构历史只记录有开发参考价值的实际变化和必要验证，不记录只对一次运行有意义的事实。已有历史不因日常文档整理而改写。
+- 重构历史只记录已完成的验证和实际结果。常规测试简要带过，详细记录留给在目标环境中通过 GUI 运行真实样本等有代表性的验证。
 
 ### 完成检查
 

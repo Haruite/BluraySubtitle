@@ -6,7 +6,7 @@
 
 ## 设计目标
 
-处理流程支持 Windows、Linux 和 Docker，保留 MPLS 编排时间线与已捕获的 GUI 选择，并避免重复扫描来源。请求和失败处理的通用要求见[代码规范](code-standards.zh-Hans.md)，本页解释工具选型及已验证的限制。
+处理流程支持 Windows 和 Linux，保留 MPLS 编排时间线与已捕获的 GUI 选择，并避免重复扫描来源。请求和失败处理的通用要求见[代码规范](code-standards.zh-Hans.md)，本页解释工具选型及已验证的限制。
 
 ## 源码验证基线
 
@@ -97,7 +97,7 @@ BDMV Remux 复用回退已知的区间映射。开启 **Remux 时保存 .audio-g
 
 ### 平台支持
 
-eac3to 是 Windows 程序。依赖它会破坏项目对 Linux 和 Docker 的原生支持。通过 Wine 运行会增加大型平台专用依赖，也无法提供相同的受支持执行契约。
+eac3to 是 Windows 程序。依赖它会破坏项目对 Linux 的原生支持。通过 Wine 运行会增加大型平台专用依赖，也无法提供相同的受支持执行契约。
 
 ### Avatar UHD 播放列表上的实测时间错误
 

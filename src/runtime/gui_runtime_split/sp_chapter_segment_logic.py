@@ -87,7 +87,9 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                 sel_item.set_default(default_selected, reason)
             else:
                 self.table3.setItem(target_row, sel_col, SpSelectionItem(
-                    default_selected, reason, disc_root=self._get_disc_root_for_bdmv_index(bdmv_index),
+                    default_selected, reason,
+                    disc_root=self._get_disc_root_for_bdmv_index(bdmv_index),
+                    allow_default_selection=self._app_config.remux.keep_sp_by_default,
                 ))
             self.table3.setItem(target_row, bdmv_col, QTableWidgetItem(str(bdmv_index)))
             self.table3.setItem(target_row, mpls_col, QTableWidgetItem(mpls_file))
@@ -263,7 +265,9 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                               if default_selected else
                               'This segment was excluded from the main output and is shorter than 30 seconds.')
                     self.table3.setItem(row, sel_col, SpSelectionItem(
-                        default_selected, reason, disc_root=self._get_disc_root_for_bdmv_index(bdmv_index),
+                        default_selected, reason,
+                        disc_root=self._get_disc_root_for_bdmv_index(bdmv_index),
+                        allow_default_selection=self._app_config.remux.keep_sp_by_default,
                     ))
 
                     self.table3.setItem(row, bdmv_col, QTableWidgetItem(str(bdmv_index)))
@@ -1310,6 +1314,8 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
             if self.table3.columnCount() != len(ENCODE_SP_LABELS):
                 self.table3.setColumnCount(len(ENCODE_SP_LABELS))
                 self._set_table_headers(self.table3, ENCODE_SP_LABELS)
+            keep_sp_by_default = self._app_config.remux.keep_sp_by_default
+            preserve_manual_selection = keep_sp_by_default or self._bdmv_load_dialog is None
             # Build selected-main map from table1 directly so SP rows can still be built
             # for discs with zero selected main MPLS (in that case, all playlist items are SP).
             selected_main_by_bdmv: dict[int, list[str]] = {}
@@ -1767,10 +1773,11 @@ class SpChapterSegmentLogicMixin(BluraySubtitleGuiBase):
                     sel_item = SpSelectionItem(
                         bool(e['default_selected']), str(e['default_reason']),
                         disc_root=disc_root_by_bdmv[bdmv_index],
+                        allow_default_selection=keep_sp_by_default,
                     )
                     previous = row_cache.get((sel_item.disc_root, mpls_file or m2ts_text), {})
                     manual_selection = previous.get('manual_selection')
-                    if isinstance(manual_selection, bool):
+                    if preserve_manual_selection and isinstance(manual_selection, bool):
                         sel_item.apply_selection(manual_selection)
                     self.table3.setItem(i, sel_col, sel_item)
                     self.table3.setItem(i, bdmv_col, QTableWidgetItem(str(bdmv_index)))

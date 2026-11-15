@@ -67,7 +67,7 @@ _PREVIOUS_GETNATIVE_KERNEL_HELPER = (
     '\n'
 )
 
-_GETNATIVE_KERNEL_HELPER = (
+_INTEGER_GETNATIVE_KERNEL_HELPER = (
     _PREVIOUS_GETNATIVE_KERNEL_HELPER
     + 'def _resize_native(clip, width, height, kernel_name):\n'
     '    name = str(kernel_name or "").strip().lower()\n'
@@ -94,6 +94,21 @@ _GETNATIVE_KERNEL_HELPER = (
     '    mask = core.std.Expr([original, reconstructed], "x y - abs")\n'
     '    mask = core.std.Binarize(mask, threshold=2 * 256)\n'
     '    return mask.std.Maximum().std.Maximum().std.Inflate()\n'
+    '\n'
+)
+_GETNATIVE_KERNEL_HELPER = (
+    _INTEGER_GETNATIVE_KERNEL_HELPER
+    .replace('def _descale_native(', 'def _descale_native_clip(', 1)
+    + 'def _descale_native(clip, width, height, kernel_name):\n'
+    '    try:\n'
+    '        return _descale_native_clip(clip, width, height, kernel_name)\n'
+    '    except vs.Error as error:\n'
+    '        if "Only float32 input is supported" not in str(error):\n'
+    '            raise\n'
+    '    gray_float = core.query_video_format(GRAY_CF, vs.FLOAT, 32, 0, 0)\n'
+    '    floating = core.resize.Point(clip, format=gray_float.id)\n'
+    '    descaled = _descale_native_clip(floating, width, height, kernel_name)\n'
+    '    return core.resize.Point(descaled, format=clip.format.id)\n'
     '\n'
 )
 _LEGACY_GETNATIVE_DESCALE_BLOCK = (
@@ -328,7 +343,7 @@ _PREVIOUS_VPY_POST_FILTER_BLOCK_V2 = (
     'merged = core.std.ShufflePlanes([mergedY, dbed], [0,1,2], YUV_CF)\n'
 )
 
-_VPY_POST_FILTER_BLOCK = _PREVIOUS_VPY_POST_FILTER_BLOCK_V2.replace(
+_PREVIOUS_VPY_POST_FILTER_BLOCK_V3 = _PREVIOUS_VPY_POST_FILTER_BLOCK_V2.replace(
     '    dbed_candidate = mvf.LimitFilter(\n'
     '        dbed_candidate, _nr_pl, thr=0.55, elast=1.5, planes=[0, 1, 2]\n'
     '    )\n',
@@ -350,6 +365,20 @@ _VPY_POST_FILTER_BLOCK = _PREVIOUS_VPY_POST_FILTER_BLOCK_V2.replace(
 ).replace(
     '    antialiasedY = mvf.LimitFilter(dbedY, aaedY, thr=1.0, elast=1.5)\n',
     '    antialiasedY = mvf.LimitFilter(aaedY, dbedY, thr=1.0, elast=1.5)\n',
+)
+
+
+_VPY_POST_FILTER_BLOCK = _PREVIOUS_VPY_POST_FILTER_BLOCK_V3.replace(
+    '    dbed_candidate = core.placebo.Deband(\n'
+    '        _nr_pl, planes=7, iterations=2, threshold=4.5, radius=16.0, grain=0.0\n'
+    '    )\n',
+    '    if hasattr(core, "placebo"):\n'
+    '        dbed_candidate = core.placebo.Deband(\n'
+    '            _nr_pl, planes=7, iterations=2, threshold=4.5, radius=16.0, grain=0.0\n'
+    '        )\n'
+    '    else:\n'
+    '        from muvsfunc import SmoothGrad\n'
+    '        dbed_candidate = SmoothGrad(_nr_pl, radius=9, thr=0.55, elast=1.5)\n',
 )
 
 
@@ -488,6 +517,8 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                         _GETNATIVE_DESCALE_BLOCK,
                         1,
                     )
+                if _INTEGER_GETNATIVE_KERNEL_HELPER in upgraded:
+                    upgraded = upgraded.replace(_INTEGER_GETNATIVE_KERNEL_HELPER, _GETNATIVE_KERNEL_HELPER, 1)
                 if _LEGACY_GETNATIVE_DESCALE_BLOCK in existing and marker in existing:
                     upgraded = upgraded.replace(
                         marker,
@@ -601,6 +632,10 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                         _VPY_POST_FILTER_BLOCK,
                         1,
                     )
+                if can_upgrade_filter and _PREVIOUS_VPY_POST_FILTER_BLOCK_V3 in upgraded:
+                    upgraded = upgraded.replace(
+                        _PREVIOUS_VPY_POST_FILTER_BLOCK_V3, _VPY_POST_FILTER_BLOCK, 1,
+                    )
                 if source == path and upgraded == existing:
                     return
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -611,8 +646,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
             return
         plugin_line = (
             '' if sys.platform == 'win32' else
-            'DEFAULT_PLUGIN_PATH = "/app/plugins" if os.path.exists("/.dockerenv") else os.path.expanduser("~/plugins")\n'
-            'PLUGIN_PATH = os.environ.get("BLURAYSUB_PLUGIN_PATH") or DEFAULT_PLUGIN_PATH\n'
+            'PLUGIN_PATH = os.environ.get("BLURAYSUB_PLUGIN_PATH") or os.path.expanduser("~/plugins")\n'
             'if os.path.isdir(PLUGIN_PATH):\n'
             '    core.std.LoadAllPlugins(PLUGIN_PATH)\n'
         )
@@ -837,6 +871,11 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                 if use_bundle:
                     plugin_path = os.path.join(runtime_dir, 'vapoursynth64', 'plugins')
                 script_library = os.path.join(runtime_dir, 'VSScript.dll')
+                packaged_script = os.path.join(runtime_dir, 'Lib', 'site-packages', 'vapoursynth', 'vsscript.dll')
+                if use_bundle and os.path.isfile(packaged_script):
+                    script_library = packaged_script
+                    plugin_path = ''
+                    environment.remove('VAPOURSYNTH_EXTRA_PLUGIN_PATH')
                 if os.path.isfile(script_library):
                     environment.insert('VSSCRIPT_PATH', script_library)
                     environment.insert('PATH', runtime_dir + os.pathsep + environment.value('PATH'))

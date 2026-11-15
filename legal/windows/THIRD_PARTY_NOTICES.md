@@ -2,7 +2,7 @@
 
 **Product:** BluraySubtitle (Windows, PyInstaller one-folder build)
 
-Versioned fields are refreshed from the selected bundled artifacts when `BluraySubtitle_windows_x64.spec` runs.
+The Windows packaging specs refresh version fields from the artifacts selected for the package.
 
 ---
 
@@ -82,7 +82,7 @@ These are **two separate upstreams**: the `fdkaac` program links against or ship
 - **Version:** {{X265_VERSION}}
 - **License:** GPL-2.0
 - **Source for this build:** https://github.com/Multicorewareinc/x265/tree/{{X265_VERSION}}
-- **Build note:** built from the official source as a statically linked 8/10/12-bit multilib CLI with native HDR10+ JSON input support on the target platform, including Ubuntu 26.04 for Docker. The managed build adds the missing `<cstdint>` include to upstream `dynamicHDR10/json11/json11.cpp` for compatibility with current C++ compilers.
+- **Build note:** built from the official source as a statically linked 8/10/12-bit multilib CLI with native HDR10+ JSON input support on the target platform. The managed build adds the missing `<cstdint>` include to upstream `dynamicHDR10/json11/json11.cpp` for compatibility with current C++ compilers.
 
 ---
 
@@ -120,7 +120,7 @@ These are **two separate upstreams**: the `fdkaac` program links against or ship
 - **Version:** {{HDR10PLUS_TOOL_VERSION}}
 - **License:** MIT
 - **Source for this build:** https://github.com/quietvoid/hdr10plus_tool/tree/{{HDR10PLUS_TOOL_VERSION}}
-- **Build note:** Windows setup downloads the official MSVC release; Linux setup and Docker download the official musl release built upstream with its internal font feature. The tool is not compiled locally.
+- **Build note:** Windows setup downloads the official MSVC release; Linux setup downloads the official musl release built upstream with its internal font feature. The tool is not compiled locally.
 
 ---
 
@@ -150,27 +150,20 @@ These are **two separate upstreams**: the `fdkaac` program links against or ship
 
 ## Shared VapourSynth and Python runtime
 
-The application and VSScript share the CPython runtime and NumPy package in `_internal/`. VapourSynth Classic is built from source for that Python version. Its source dependency license texts are included in `legal/vapoursynth/`.
+The application and VSScript share the CPython runtime and NumPy package in `_internal/`. VapourSynth runtime and plugin license texts are included in `legal/vapoursynth/`.
 
-### VapourSynth-Classic (core runtime, `vspipe`, etc.)
+### {{VAPOURSYNTH_NAME}}
 
-- **Upstream:** https://github.com/AmusementClub/vapoursynth-classic
-- **Release / tag:** {{VAPOURSYNTH_CLASSIC_VERSION}}
-- **License:** **GNU Lesser General Public License v3** — SPDX: **`LGPL-3.0-or-later`**
-- **Full license text (this tag):** https://raw.githubusercontent.com/AmusementClub/vapoursynth-classic/{{VAPOURSYNTH_CLASSIC_VERSION}}/COPYING.LESSER
-- **Source archive:** https://github.com/AmusementClub/vapoursynth-classic/archive/refs/tags/{{VAPOURSYNTH_CLASSIC_VERSION}}.zip
-
-### VapourSynth source dependencies
-
-- **zimg:** revision `{{ZIMG_REVISION}}`, WTFPL v2; https://github.com/AmusementClub/zimg/tree/{{ZIMG_REVISION}}
-- **libp2p:** revision `{{LIBP2P_REVISION}}`, WTFPL v2; https://github.com/sekrit-twc/libp2p/tree/{{LIBP2P_REVISION}}
-- **mimalloc:** {{MIMALLOC_VERSION}}, MIT; https://github.com/microsoft/mimalloc/tree/v{{MIMALLOC_VERSION}}
-- **AviSynthPlus headers:** {{AVISYNTHPLUS_VERSION}}, see the license and exceptions in the included `AviSynthPlus-avisynth.h` and `AviSynthPlus-SDKLicense.rst`; https://github.com/AviSynth/AviSynthPlus/tree/v{{AVISYNTHPLUS_VERSION}}
+- **Upstream:** {{VAPOURSYNTH_UPSTREAM}}
+- **Release / tag:** {{VAPOURSYNTH_VERSION}}
+- **License:** `{{VAPOURSYNTH_LICENSE}}`
+- **License and source:** {{VAPOURSYNTH_UPSTREAM}}/tree/{{VAPOURSYNTH_VERSION}}
+- **Upstream dependencies:** The corresponding source release lists its zimg and libp2p dependencies.
 
 ### CPython — shared Windows runtime
 
 - **Files:** Python DLLs, extension modules, and standard-library archive from the Python used to build the application.
-- **Version:** {{PYTHON_VERSION}} (amd64)
+- **Version:** {{PYTHON_VERSION}} ({{WINDOWS_ARCHITECTURE}})
 - **Upstream:** https://www.python.org/ftp/python/{{PYTHON_VERSION}}/
 - **License:** **Python Software Foundation License** — SPDX: **`PSF-2.0`**
 - **Bundled license text:** `DLLs/LICENSE.txt`
@@ -198,7 +191,7 @@ The application and VSScript share the CPython runtime and NumPy package in `_in
 
 The installation manifest `legal/vapoursynth-components.json` records source revisions, release download URLs, registered plugin versions, and installed file hashes. Dependencies and their available license texts are included with each component.
 
-Source-built Windows plugins statically link compiler runtimes where supported. The current vs-placebo build includes libplacebo, libdovi, Little CMS, and SPIRV-Cross statically. It shares `libshaderc_shared.dll` with L-SMASH Works. That plugin includes its FFmpeg libraries statically and provides both VapourSynth and AviSynth entry points. ASSRender uses the bundled libass DLL. The Vulkan loader remains a separate DLL. DFTTest and MVTools share one FFTW DLL. The component notices record the dependencies and license texts of the versions included in the package.
+Source-built Windows plugins statically link compiler runtimes where supported. The current vs-placebo build includes libplacebo, libdovi, Little CMS, and SPIRV-Cross statically. It shares `libshaderc_shared.dll` with L-SMASH Works. That plugin links its FFmpeg libraries statically and provides a VapourSynth entry point. The Windows x64 build also provides an AviSynth entry point. ASSRender uses the bundled libass DLL. The Vulkan loader remains a separate DLL. DFTTest and MVTools share one FFTW DLL. The component notices record the dependencies and license texts of the versions included in the package.
 
 ---
 
@@ -215,7 +208,7 @@ Source-built Windows plugins statically link compiler runtimes where supported. 
 
 ## libsndfile
 
-- **File** `_soundfile_data/libsndfile_x64.dll`, loaded by SoundFile for PCM bit-depth detection.
+- **File** `_soundfile_data/libsndfile_{{WINDOWS_ARCHITECTURE}}.dll`, loaded by SoundFile for PCM bit-depth detection.
 - **Version** {{LIBSNDFILE_VERSION}}
 - **License** LGPL-2.1-or-later. The license text accompanies the DLL at `_soundfile_data/COPYING`. The size-optimized build produced by Windows setup includes the built-in audio formats.
 - **Source** [libsndfile release {{LIBSNDFILE_VERSION}}](https://github.com/libsndfile/libsndfile/tree/{{LIBSNDFILE_VERSION}})

@@ -10,6 +10,8 @@ import time
 import traceback
 from contextlib import contextmanager
 from contextvars import ContextVar
+from pathlib import Path
+from threading import RLock
 from typing import Callable, Optional
 
 import numpy as np
@@ -367,6 +369,7 @@ def third_party_notices_markdown_path(language: str) -> Optional[str]:
     filename = 'THIRD_PARTY_NOTICES.zh-Hans.md' if language == 'zh' else 'THIRD_PARTY_NOTICES.md'
     rel_candidates = (
         os.path.join('legal', filename),
+        os.path.join('legal', 'windows' if sys.platform == 'win32' else 'ubuntu', filename),
         filename,
     )
     seen: set[str] = set()
@@ -412,9 +415,54 @@ def resolve_encoder_executable_path(tool: str, mode: str) -> str:
             names = {'x264': 'x264.exe', 'x265': 'x265.exe', 'svtav1': 'SvtAv1EncApp.exe'}
         else:
             names = {'x264': 'x264', 'x265': 'x265', 'svtav1': 'SvtAv1EncApp'}
+            if sys.platform.startswith('linux') and getattr(sys, 'frozen', False):
+                root = os.path.join(root, "linux", "bin")
         return os.path.join(root, names[key])
     defaults = {'x264': X264_PATH, 'x265': X265_PATH, 'svtav1': SVT_AV1_PATH}
     return str(defaults[key])
+
+
+_WINDOWS_PROCESS_LAUNCH_LOCK = RLock()
+
+
+def get_system_vspipe_context(executable: str) -> tuple[str, dict[str, str]]:
+    """Use the caller's runtime environment without paths injected by the bundle."""
+    env = os.environ.copy()
+    runtime = getattr(sys, '_MEIPASS', None) if getattr(sys, 'frozen', False) else None
+    if runtime:
+        root = os.path.normcase(os.path.abspath(runtime))
+
+        def from_bundle(path: str) -> bool:
+            value = os.path.normcase(os.path.abspath(path.strip('"')))
+            return value == root or value.startswith(root + os.sep)
+
+        for name in ('PATH', 'PYTHONPATH', 'PYTHONHOME', 'VSSCRIPT_PATH',
+                     'VAPOURSYNTH_EXTRA_PLUGIN_PATH', 'VAPOURSYNTH_PLUGINS', 'BLURAYSUB_PLUGIN_PATH'):
+            if name in env:
+                paths = [path for path in env[name].split(os.pathsep) if not path or not from_bundle(path)]
+                if paths:
+                    env[name] = os.pathsep.join(paths)
+                else:
+                    env.pop(name)
+        if sys.platform.startswith('linux'):
+            if 'LD_LIBRARY_PATH_ORIG' in env:
+                env['LD_LIBRARY_PATH'] = env['LD_LIBRARY_PATH_ORIG']
+            else:
+                env.pop('LD_LIBRARY_PATH', None)
+    resolved = shutil.which(executable, path=env.get('PATH', os.defpath))
+    return os.path.abspath(resolved or executable), env
+
+
+def run_vspipe(command: list[str], **kwargs):
+    """Launch VSPipe using the system DLL search order for an external executable."""
+    runtime = getattr(sys, '_MEIPASS', None) if getattr(sys, 'frozen', False) else None
+    external = False
+    if sys.platform == 'win32' and runtime:
+        root = os.path.normcase(os.path.abspath(runtime)) + os.sep
+        external = not os.path.normcase(os.path.abspath(command[0])).startswith(root)
+    if external:
+        kwargs['system_dll_search'] = True
+    return run_command(command, **kwargs)
 
 
 def get_vspipe_context():
@@ -428,15 +476,21 @@ def get_vspipe_context():
     env.pop('PYTHONPATH', None)
 
     if sys.platform == 'win32':
-        vspipe_exe = os.path.join(vs_pkg_dir, "vspipe.exe")
-        # The bundled CPython library and native tools share the support root.
+        root = Path(vs_pkg_dir)
+        upstream_vspipe = root / "Lib/site-packages/vapoursynth/vspipe.exe"
         env['PATH'] = f"{vs_pkg_dir};{env.get('PATH', '')}"
-        # VSScript reads the shared Python home from python-runtime.ini.
-        env['PYTHONHOME'] = vs_pkg_dir
         env['PYTHONNOUSERSITE'] = '1'
-        # Plugin directory mirrors original release-x64 structure.
-        env['VAPOURSYNTH_PLUGINS'] = os.path.join(vs_pkg_dir, "vapoursynth64", "coreplugins")
+        for name in ('VAPOURSYNTH_EXTRA_PLUGIN_PATH', 'VAPOURSYNTH_PLUGINS', 'VSSCRIPT_PATH'):
+            env.pop(name, None)
+        if upstream_vspipe.is_file():
+            vspipe_exe = str(upstream_vspipe)
+        else:
+            vspipe_exe = str(root / "vspipe.exe")
+            env['PYTHONHOME'] = vs_pkg_dir
+            env['VAPOURSYNTH_PLUGINS'] = str(root / "vapoursynth64/coreplugins")
 
+    elif sys.platform.startswith("linux") and getattr(sys, "frozen", False):
+        vspipe_exe = os.path.join(bundle_dir, "linux", "bin", "vspipe")
     else:  # Linux
         vspipe_exe = os.path.join(vs_pkg_dir, "vspipe")
         env['LD_LIBRARY_PATH'] = f"{vs_pkg_dir}:{env.get('LD_LIBRARY_PATH', '')}"
@@ -448,7 +502,36 @@ def get_vspipe_context():
     return vspipe_exe, env
 
 
-def run_command(command, *, wait: bool = True, log_template: str = '', cancel_event=None, **kwargs):
+def _spawn_command(command, kwargs, system_dll_search):
+    if sys.platform != 'win32':
+        return subprocess.Popen(command, **kwargs)
+    # SetDllDirectory affects the process. Protect other tool launches and restore it
+    # as soon as CreateProcess has copied the search order, before waiting for output.
+    with _WINDOWS_PROCESS_LAUNCH_LOCK:
+        if not system_dll_search:
+            return subprocess.Popen(command, **kwargs)
+        set_dll_directory = ctypes.windll.kernel32.SetDllDirectoryW
+        set_dll_directory.argtypes = (ctypes.c_wchar_p,)
+        set_dll_directory.restype = ctypes.c_int
+        if not set_dll_directory(None):
+            raise ctypes.WinError()
+        process = None
+        try:
+            process = subprocess.Popen(command, **kwargs)
+            return process
+        finally:
+            if not set_dll_directory(sys._MEIPASS):
+                error = ctypes.WinError()
+                if process is not None:
+                    process.kill()
+                    process.wait()
+                raise error
+
+
+def run_command(
+        command, *, wait: bool = True, log_template: str = '', cancel_event=None,
+        system_dll_search: bool = False, **kwargs,
+):
     """Run every external command through one process boundary."""
     if not wait and cancel_event is not None:
         raise ValueError('Cancellation requires waiting for the command.')
@@ -485,12 +568,14 @@ def run_command(command, *, wait: bool = True, log_template: str = '', cancel_ev
                 kwargs['stdin'] = subprocess.DEVNULL
         if flags:
             kwargs['creationflags'] = flags
-    if cancel_event is None:
+    if cancel_event is None and not (sys.platform == 'win32' and getattr(sys, 'frozen', False)):
         return (subprocess.run if wait else subprocess.Popen)(command, **kwargs)
-    if cancel_event.is_set():
+    if cancel_event is not None and cancel_event.is_set():
         from src.runtime import TaskCancelled
         raise TaskCancelled()
-    if sys.platform != 'win32':
+    if not wait:
+        return _spawn_command(command, kwargs, system_dll_search)
+    if cancel_event is not None and sys.platform != 'win32':
         kwargs.setdefault('start_new_session', True)
     input_data = kwargs.pop('input', None)
     capture_output = kwargs.pop('capture_output', False)
@@ -505,7 +590,23 @@ def run_command(command, *, wait: bool = True, log_template: str = '', cancel_ev
             raise ValueError('stdout and stderr arguments may not be used with capture_output.')
         kwargs['stdout'] = subprocess.PIPE
         kwargs['stderr'] = subprocess.PIPE
-    process = subprocess.Popen(command, **kwargs)
+    process = _spawn_command(command, kwargs, system_dll_search)
+    if cancel_event is None:
+        with process:
+            try:
+                stdout, stderr = process.communicate(input_data, timeout=timeout)
+            except subprocess.TimeoutExpired as error:
+                process.kill()
+                error.stdout, error.stderr = process.communicate()
+                raise
+            except BaseException:
+                process.kill()
+                raise
+            result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+            if check:
+                result.check_returncode()
+            return result
+
     started_at = time.monotonic()
     stdout = None
     stderr = None

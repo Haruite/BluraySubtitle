@@ -20,9 +20,11 @@ Choose images for the main and log windows under **Settings → Paths**. Adjust 
 
 Enable **Settings → General → Save log to file** to keep output in `logs/` beside `config.json`. The line limit applies to the viewer and its buffer. In the log window, **Ctrl+F** focuses search. Finding a match pauses scrolling. Turn **Auto-scroll to end** back on to follow new output.
 
+On Linux desktops using X11 or XWayland, select the separate log icon on the taskbar to restore the log window.
+
 ## Updates and launch shortcuts
 
-The Windows x64 package can install updates from **Settings → Tools**. The program restarts after updating and keeps its configuration and saved logs. If your Linux desktop blocks a new desktop shortcut, mark the launcher as trusted. For Docker, create shortcuts on the host desktop.
+Use **Settings → Tools → Check for updates** in the Windows x64 or Ubuntu 26.04 x64 package. Select a verified package to install it and reopen the program. The update keeps external-tool settings, application preferences, and saved logs. If the new program fails to start, the updater restores the previous version. If your Linux desktop blocks a new desktop shortcut, mark the launcher as trusted.
 
 ## Disc selection and order
 

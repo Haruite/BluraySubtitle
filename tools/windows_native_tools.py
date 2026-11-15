@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sysconfig
 import tempfile
 import time
 import urllib.error
@@ -21,7 +22,10 @@ from tools.windows_tool_paths import MKV_SETTINGS
 MKV_RECIPE = "mingw-ucrt-static-qtcore-1"
 MKV_DYNAMIC_RECIPE = "mingw-ucrt-qtcore-no-icu-1"
 VSEDIT_RECIPE = "msvc-pyqt6-1"
+VSEDIT_ARM64_RECIPE = "msvc-arm64-pyqt6-1"
 INSTALLATION_SCHEMA = 1
+PE_AMD64 = 0x8664
+PE_ARM64 = 0xAA64
 VSEDIT_PROGRAMS = (
     "vsedit.exe", "vsedit-previewer.exe", "vsedit-encode.exe",
     "vsedit-job-server.exe", "vsedit-job-server-watcher.exe",
@@ -34,7 +38,7 @@ SYSTEM_ROOT = Path(os.environ.get("SystemRoot", r"C:\Windows"))
 
 
 class MsvcRequired(Exception):
-    """Resume the build after preparing the x64 MSVC toolchain."""
+    """Resume the build after preparing the MSVC toolchain."""
 
 
 def file_hash(path: Path, algorithm: str = "sha256") -> str:
@@ -89,23 +93,33 @@ def editor_runtime_matches(record: dict, version: str, qt: Path) -> bool:
                for name, path in editor_qt_files(record, qt).items())
 
 
-def msvc_environment() -> dict[str, str]:
+def msvc_environment(
+    *, arm64_host: bool = False, arm64_target: bool = False, installation: Path | None = None,
+) -> dict[str, str]:
     environment = os.environ.copy()
-    installer = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
-    vswhere = installer / "Microsoft Visual Studio/Installer/vswhere.exe"
-    if not vswhere.is_file():
-        raise MsvcRequired("Windows setup must prepare the x64 MSVC build tools")
-    install = subprocess.check_output([
-        vswhere, "-latest", "-products", "*", "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-        "-property", "installationPath", "-utf8",
-    ], encoding="utf-8").strip()
-    vcvars = Path(install) / "VC/Auxiliary/Build/vcvars64.bat"
+    architecture = "ARM64" if arm64_target else "x64"
+    message = f"Windows setup must prepare the {architecture} MSVC build tools"
+    if installation is None:
+        installer = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
+        vswhere = installer / "Microsoft Visual Studio/Installer/vswhere.exe"
+        if not vswhere.is_file():
+            raise MsvcRequired(message)
+        component = "ARM64" if arm64_target else "x86.x64"
+        path = subprocess.check_output([
+            vswhere, "-latest", "-products", "*", "-requires", f"Microsoft.VisualStudio.Component.VC.Tools.{component}",
+            "-property", "installationPath", "-utf8",
+        ], encoding="utf-8").strip()
+        if not path:
+            raise MsvcRequired(message)
+        installation = Path(path)
+    vcvars = installation / "VC/Auxiliary/Build/vcvarsall.bat"
     if not vcvars.is_file():
-        raise MsvcRequired("Windows setup must prepare the x64 MSVC build tools")
+        raise MsvcRequired(message)
     environment["BLURAYSUBTITLE_VCVARS"] = str(vcvars)
+    target = "arm64" if arm64_target else ("arm64_amd64" if arm64_host else "amd64")
     cmd = SYSTEM_ROOT / "System32/cmd.exe"
     output = subprocess.check_output(
-        f'"{cmd}" /d /u /s /c "call "%BLURAYSUBTITLE_VCVARS%" >nul && set"',
+        f'"{cmd}" /d /u /s /c "call "%BLURAYSUBTITLE_VCVARS%" {target} >nul && set"',
         env=environment, encoding="utf-16-le",
     )
     return dict(line.split("=", 1) for line in output.splitlines() if "=" in line and not line.startswith("="))
@@ -127,13 +141,27 @@ def tool_version(executable: Path) -> str:
     return (result.stdout + result.stderr).strip()
 
 
+def windows_machine() -> int:
+    return PE_ARM64 if sysconfig.get_platform() == "win-arm64" else PE_AMD64
+
+
+def has_pe_machine(path: Path) -> bool:
+    import pefile
+
+    try:
+        with pefile.PE(str(path), fast_load=True) as image:
+            return image.FILE_HEADER.Machine == windows_machine()
+    except (OSError, pefile.PEFormatError):
+        return False
+
+
 def pe_imports(path: Path) -> dict[str, set]:
     import pefile
 
     directories = ("IMAGE_DIRECTORY_ENTRY_IMPORT", "IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT")
     with pefile.PE(str(path), fast_load=True) as image:
-        if image.FILE_HEADER.Machine != 0x8664:
-            raise ValueError(f"Expected an x64 Windows binary: {path}")
+        if image.FILE_HEADER.Machine != windows_machine():
+            raise ValueError(f"Unexpected Windows binary architecture: {path}")
         image.parse_data_directories([pefile.DIRECTORY_ENTRY[name] for name in directories])
         imports = {}
         for directory in directories:
@@ -156,7 +184,7 @@ def exports_imported_symbols(path: Path, symbols: set) -> bool:
     import pefile
 
     with pefile.PE(str(path), fast_load=True, max_symbol_exports=65536) as image:
-        if image.FILE_HEADER.Machine != 0x8664:
+        if image.FILE_HEADER.Machine != windows_machine():
             return False
         image.parse_data_directories([pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_EXPORT"]])
         directory = getattr(image, "DIRECTORY_ENTRY_EXPORT", None)
@@ -177,7 +205,8 @@ def runtime_dependencies(programs, search_dirs: list[Path]) -> dict[str, Path]:
         for name in pe_imports(program):
             if name in private or name.startswith(("api-ms-win-", "ext-ms-win-")):
                 continue
-            dependency = next((directory / name for directory in search_dirs if (directory / name).is_file()), None)
+            dependency = next((path for directory in search_dirs if (path := directory / name).is_file()
+                               and has_pe_machine(path)), None)
             if dependency is not None:
                 private[name] = dependency
                 pending.append(dependency)
@@ -197,6 +226,8 @@ def build_record(directory: Path, tool: str, *, installed: bool = False, allow_l
     try:
         record = json.loads((directory / f"{tool}-build.json").read_text(encoding="utf-8"))
         recipe, programs = (MKV_RECIPE, MKV_SETTINGS) if tool == "mkvtoolnix" else (VSEDIT_RECIPE, VSEDIT_PROGRAMS)
+        if tool == "vsedit" and windows_machine() == PE_ARM64:
+            recipe = VSEDIT_ARM64_RECIPE
         if installed and record.get("installation_schema") != INSTALLATION_SCHEMA:
             return None
         legacy = tool == "mkvtoolnix" and record["recipe"] == MKV_DYNAMIC_RECIPE
@@ -226,6 +257,8 @@ def build_record(directory: Path, tool: str, *, installed: bool = False, allow_l
             path = (directory / relative).resolve()
             if (relative.as_posix() != name or relative.anchor or ".." in relative.parts
                     or not path.is_relative_to(directory.resolve()) or file_hash(path) != digest):
+                return None
+            if tool == "vsedit" and path.suffix.lower() in (".dll", ".exe") and not has_pe_machine(path):
                 return None
     except (KeyError, OSError, AttributeError, TypeError, ValueError):
         return None

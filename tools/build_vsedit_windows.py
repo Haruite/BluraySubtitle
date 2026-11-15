@@ -1,4 +1,4 @@
-"""Build VSEdit with the official MSVC SDK matching the installed PyQt6 Qt."""
+"""Build and stage VSEdit with a Qt SDK for the selected Windows architecture."""
 
 from __future__ import annotations
 
@@ -25,12 +25,14 @@ def unpack(archive: Path, destination: Path, seven_zip: str) -> None:
     subprocess.run([seven_zip, "x", archive, "-o" + str(destination), "-y", "-bso0", "-bsp0"], check=True)
 
 
-def prepare_qt_sdk(version: str, downloads: Path, sdk: Path, seven_zip: str) -> None:
+def prepare_qt_sdk(version: str, downloads: Path, sdk: Path, seven_zip: str, *, arm64: bool = False) -> None:
     if not re.fullmatch(r"6\.\d+\.\d+", version):
         raise ValueError(f"Unexpected PyQt6 Qt version: {version}")
-    kit = "msvc2022_64"
+    kit = "msvc2022_arm64" if arm64 else "msvc2022_64"
     tag = "".join(version.split("."))
-    repo = f"https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_{tag}/qt6_{tag}_{kit}"
+    host = "windows_arm64" if arm64 else "windows_x86"
+    sdk_index = f"qt6_{tag}" if arm64 else f"qt6_{tag}_{kit}"
+    repo = f"https://download.qt.io/online/qtsdkrepository/{host}/desktop/qt6_{tag}/{sdk_index}"
     downloads.mkdir(parents=True, exist_ok=True)
     index = downloads / "Updates.xml"
     if not index.is_file():
@@ -65,9 +67,16 @@ def prepare_qt_sdk(version: str, downloads: Path, sdk: Path, seven_zip: str) -> 
     (sdk / "bin/qt.conf").write_text("[Paths]\nPrefix=..\n", encoding="ascii", newline="\r\n")
 
 
-def patch_project(project: Path, index: int) -> None:
+def patch_project(project: Path, index: int, *, arm64: bool = False) -> None:
     source = project.read_text(encoding="utf-8")
     source = re.sub(r"^[ \t]*QMAKE_POST_LINK[ \t]*\+=.*DEPLOY_COMMAND.*\n", "", source, flags=re.M)
+    if arm64:
+        source = source.replace('"x86_64")', '"(x86_64|arm64|aarch64)")')
+        source = source.replace('message("x86_64 build")', 'message("ARM64 build")')
+        # The bundled libp2p has a portable path and an x86-only SIMD path.
+        source = re.sub(r"^.*common-src/libp2p/simd/.*\n", "", source, flags=re.M)
+        source = source.replace(" -DP2P_SIMD ", " ")
+        source = re.sub(r"^[ \t]*QMAKE_EXTRA_COMPILERS \+= p2p_sse41\s*$", "", source, flags=re.M)
     if "OBJECTS_DIR = $$OUT_PWD/build-objects" not in source:
         source += (
             "\nOBJECTS_DIR = $$OUT_PWD/build-objects\n"
@@ -78,15 +87,15 @@ def patch_project(project: Path, index: int) -> None:
     project.write_text(source, encoding="utf-8", newline="\r\n")
 
 
-def build_programs(source: Path, sdk: Path, jom: Path, include: Path, env: dict, jobs: int,
-                   qt_version: str) -> list[Path]:
+def build_programs(source: Path, sdk: Path, make: Path, include: Path, env: dict, jobs: int,
+                   qt_version: str, *, arm64: bool = False) -> list[Path]:
     qmake = sdk / "bin/qmake.exe"
     env = {name.upper(): value for name, value in env.items()}
     env["PATH"] = str(qmake.parent) + os.pathsep + env["PATH"]
     env["VS_INCLUDE_PATH"] = include.as_posix()
     version = subprocess.check_output([qmake, "-query", "QT_VERSION"], env=env, text=True).strip()
     if version != qt_version:
-        raise ValueError(f"Expected the Qt {qt_version} MSVC SDK, found Qt {version}")
+        raise ValueError(f"Expected Qt {qt_version}, found Qt {version}")
     # These shared sources are one directory shallower than the upstream include paths assume.
     for relative in ("jobs/job.h", "jobs/job.cpp", "frame_header_writers/frame_header_writer_y4m.cpp"):
         path = source / "common-src" / relative
@@ -99,27 +108,33 @@ def build_programs(source: Path, sdk: Path, jom: Path, include: Path, env: dict,
     for index, executable in enumerate(VSEDIT_PROGRAMS):
         name = Path(executable).stem
         project = source / "pro" / name / f"{name}.pro"
-        patch_project(project, index)
-        subprocess.run([qmake, project.name, "CONFIG+=release", "CONFIG-=debug_and_release"], cwd=project.parent,
-                       env=env, check=True)
+        patch_project(project, index, arm64=arm64)
+        output = source / "build/release-64bit-msvc"
+        subprocess.run([qmake, project.name, "CONFIG+=release", "CONFIG-=debug_and_release"],
+                       cwd=project.parent, env=env, check=True)
+        make_arguments = [make, f"-j{jobs}", "/NOLOGO"]
         # Several upstream objects can otherwise race their generated UI headers.
-        subprocess.run([jom, f"-j{jobs}", "/NOLOGO", "compiler_uic_make_all"], cwd=project.parent, env=env, check=True)
-        subprocess.run([jom, f"-j{jobs}", "/NOLOGO"], cwd=project.parent, env=env, check=True)
-        programs.append(source / "build/release-64bit-msvc" / executable)
+        if re.search(r"(?m)^compiler_uic_make_all:", (project.parent / "Makefile").read_text(errors="replace")):
+            subprocess.run([*make_arguments, "compiler_uic_make_all"], cwd=project.parent, env=env, check=True)
+        subprocess.run(make_arguments, cwd=project.parent, env=env, check=True)
+        programs.append(output / executable)
     return programs
 
 
-def stage_editor(source: Path, programs: list[Path], payload: Path, qt: Path, env: dict) -> None:
+def stage_editor(source: Path, programs: list[Path], payload: Path, qt: Path, env: dict,
+                 *, arm64: bool = False) -> None:
     redist = next((Path(value) for key, value in env.items() if key.upper() == "VCTOOLSREDISTDIR"), None)
+    plugin_root = qt / "plugins"
+    architecture = "arm64" if arm64 else "x64"
     directories = [qt / "bin"]
     if redist:
-        directories.extend(sorted((redist / "x64").glob("Microsoft.VC*.CRT")))
-    plugins = [qt / "plugins" / path for path in VSEDIT_PLUGINS]
+        directories.extend(sorted((redist / architecture).glob("Microsoft.VC*.CRT")))
+    plugins = [plugin_root / path for path in VSEDIT_PLUGINS]
     dependencies = runtime_dependencies(programs + plugins, directories)
     qt_names = {path.name.lower(): path.name for path in (qt / "bin").glob("*.dll")}
     imports = imported_symbols(programs + plugins + list(dependencies.values()))
     if any(name.startswith(("msvcp140", "vcruntime140", "concrt140")) and name not in dependencies for name in imports):
-        raise RuntimeError("VSEdit requires the app-local x64 MSVC runtime")
+        raise RuntimeError(f"VSEdit requires the app-local {architecture} MSVC runtime")
     for name, dependency in dependencies.items():
         if name.startswith("qt6") and not exports_imported_symbols(dependency, imports[name]):
             raise RuntimeError(f"The installed PyQt6 Qt runtime is missing symbols in {name}")
@@ -130,7 +145,7 @@ def stage_editor(source: Path, programs: list[Path], payload: Path, qt: Path, en
                             source / "resources/vsedit.svg"]:
         shutil.copyfile(path, payload / path.name)
     for path in plugins:
-        target = payload / path.relative_to(qt / "plugins")
+        target = payload / path.relative_to(plugin_root)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(path, target)
     (payload / "qt.conf").write_text("[Paths]\nPrefix=.\nPlugins=.\n", encoding="ascii", newline="\r\n")

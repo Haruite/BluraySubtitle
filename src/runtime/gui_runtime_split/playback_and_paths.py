@@ -1,15 +1,18 @@
 """Target module for playback/path helper methods of `BluraySubtitleGUI`."""
 import os
 import re
+import subprocess
 import sys
 import traceback
+from pathlib import Path
 from urllib.parse import urlparse, unquote
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QProcess, QProcessEnvironment, Qt
 from PyQt6.QtWidgets import QToolButton
 
-from src.core import ENCODE_SP_LABELS
-from src.exports.utils import run_command, get_mpv_safe_path
+from src.core import ENCODE_SP_LABELS, settings as core_settings
+from src.exports.utils import get_mpv_safe_path, print_terminal_line, run_command
+from src.runtime.mpv_menu import mpv_language_options
 from src.runtime.gui_runtime_classes.widget_animations import AnimatedInputDialog, AnimatedMessageBox
 from .gui_base import BluraySubtitleGuiBase
 
@@ -117,16 +120,95 @@ class PlaybackPathsMixin(BluraySubtitleGuiBase):
         btn.setProperty('action', 'play')
         self.on_button_play(mpls_path, btn)
 
+    def _mpv_playback_executable(self, mime_type: str) -> str:
+        if sys.platform == "win32":
+            executable = get_mpv_safe_path(".mp4") or ""
+            return executable if executable.lower().endswith("mpv.exe") else ""
+        if not sys.platform.startswith("linux"):
+            return ""
+        if core_settings.MPV_PATH:
+            return core_settings.MPV_PATH
+        try:
+            association = run_command(
+                ["xdg-mime", "query", "default", mime_type], capture_output=True, check=True, timeout=2,
+            ).stdout.strip()
+            if not association and mime_type == "x-content/video-bluray":
+                association = run_command(
+                    ["xdg-mime", "query", "default", "video/mp4"], capture_output=True, check=True, timeout=2,
+                ).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        return "mpv" if b"mpv" in association else ""
+
+    def _start_mpv_playback(self, executable: str, arguments: list[str], source_path: str) -> None:
+        options = []
+        menu_directory = None
+        environment = QProcessEnvironment.systemEnvironment()
+        if sys.platform.startswith("linux"):
+            if getattr(sys, "frozen", False):
+                if environment.contains("LD_LIBRARY_PATH_ORIG"):
+                    environment.insert("LD_LIBRARY_PATH", environment.value("LD_LIBRARY_PATH_ORIG"))
+                else:
+                    environment.remove("LD_LIBRARY_PATH")
+                for name in ("QT_PLUGIN_PATH", "QT_QPA_PLATFORM_PLUGIN_PATH", "QML_IMPORT_PATH", "QML2_IMPORT_PATH"):
+                    environment.remove(name)
+            if environment.value("DISPLAY"):
+                try:
+                    extensions = run_command(
+                        ["xdpyinfo", "-queryExtensions"], capture_output=True, timeout=2,
+                    )
+                    dri3 = extensions.returncode == 0 and b"DRI3  (opcode:" in extensions.stdout
+                except (OSError, subprocess.SubprocessError):
+                    dri3 = any(os.access(node, os.R_OK | os.W_OK) for node in Path("/dev/dri").glob("renderD*"))
+                if not dri3:
+                    # Remote X servers may require a software-rendered EGL context.
+                    options.extend((
+                        "--vo=gpu-next,x11", "--gpu-api=opengl", "--gpu-context=x11egl", "--gpu-sw=yes",
+                        "--icc-profile-auto=no", "--msg-level=vo/gpu-next=error,vo/gpu-next/opengl=error,ffmpeg/video=error",
+                        "--profile=sw-fast", "--hwdec=no", "--framedrop=vo", "--osc=yes",
+                    ))
+                    if not environment.contains("LIBGL_ALWAYS_SOFTWARE"):
+                        environment.insert("LIBGL_ALWAYS_SOFTWARE", "1")
+            if core_settings.MPV_PATH and core_settings.PLUGIN_PATH:
+                environment.insert("BLURAYSUB_PLUGIN_PATH", core_settings.PLUGIN_PATH)
+            menu_options, menu_directory = mpv_language_options(self._language_code)
+            options.extend(menu_options)
+
+        process = QProcess(self)
+        process.setProcessEnvironment(environment)
+        process.setProcessChannelMode(QProcess.ProcessChannelMode.ForwardedChannels)
+        process.setStandardInputFile(QProcess.nullDevice())
+        if menu_directory is not None:
+            process.destroyed.connect(lambda *_: menu_directory.cleanup())
+
+        def start_failed(error: QProcess.ProcessError) -> None:
+            if error != QProcess.ProcessError.FailedToStart:
+                return
+            details = process.errorString()
+            process.deleteLater()
+            message = self.t("Could not start playback for {path}. {error}").format(path=source_path, error=details)
+            print_terminal_line(message, translate=False)
+            if not getattr(self, "_close_pending", False):
+                AnimatedMessageBox.warning(self, self.t("Open File Failed"), message)
+
+        def finished(code: int, status: QProcess.ExitStatus) -> None:
+            if code or status != QProcess.ExitStatus.NormalExit:
+                message = self.t("Playback for {path} failed with exit code {code}.").format(path=source_path, code=code)
+                print_terminal_line(message, translate=False)
+            process.deleteLater()
+
+        process.errorOccurred.connect(start_failed)
+        process.finished.connect(finished)
+        process.start(executable, [*options, *arguments])
+
     def _play_m2ts_path(self, m2ts_path: str):
         if not m2ts_path or not os.path.exists(m2ts_path):
             AnimatedMessageBox.information(self, " ", self.t('M2TS file not found:\n{m2ts_path}').format(m2ts_path=m2ts_path))
             return
-        if sys.platform == 'win32':
-            mp4_exe_path = get_mpv_safe_path(".mp4")
-            if mp4_exe_path and str(mp4_exe_path).lower().endswith('mpv.exe'):
-                run_command(f'"{mp4_exe_path}" "{m2ts_path}"')
-                return
-        self.open_file_path(m2ts_path)
+        if executable := self._mpv_playback_executable("video/mp2t"):
+            self._start_mpv_playback(executable, [m2ts_path], m2ts_path)
+        else:
+            self.open_file_path(m2ts_path)
 
     def on_play_table2_disc_row(self, row_index: int, bdmv_col: int, m2ts_col: int):
         try:

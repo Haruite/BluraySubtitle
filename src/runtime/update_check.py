@@ -4,10 +4,6 @@ from PyQt6.QtCore import QObject, QUrl
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkProxyFactory, QNetworkReply, QNetworkRequest
 
 from src.core.version import APP_VERSION
-from src.runtime.windows_update import SERVER_WINDOWS_PACKAGE_URL
-
-
-SERVER_PACKAGE_METADATA_URL = f"{SERVER_WINDOWS_PACKAGE_URL}.txt"
 
 
 def update_network_manager(parent: QObject) -> QNetworkAccessManager:

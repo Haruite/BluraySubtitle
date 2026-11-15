@@ -2,7 +2,7 @@
 
 **产品：** BluraySubtitle（Windows，PyInstaller 单目录构建）
 
-运行 `BluraySubtitle_windows_x64.spec` 时，会根据所选的随附组件更新版本字段。
+Windows 打包脚本按所选的随附组件更新版本字段。
 
 ---
 
@@ -82,7 +82,7 @@
 - **版本：** {{X265_VERSION}}
 - **许可证：** GPL-2.0
 - **此构建的源码：** https://github.com/Multicorewareinc/x265/tree/{{X265_VERSION}}
-- **构建说明：** 使用官方源码，构建为静态链接的 8/10/12 位 multilib 命令行程序，并在目标平台上启用原生 HDR10+ JSON 输入支持，包括 Docker 使用的 Ubuntu 26.04。受管理的构建会向上游 `dynamicHDR10/json11/json11.cpp` 添加缺失的 `<cstdint>` 头文件，以兼容当前 C++ 编译器。
+- **构建说明：** 使用官方源码，构建为静态链接的 8/10/12 位 multilib 命令行程序，并在目标平台上启用原生 HDR10+ JSON 输入支持。受管理的构建会向上游 `dynamicHDR10/json11/json11.cpp` 添加缺失的 `<cstdint>` 头文件，以兼容当前 C++ 编译器。
 
 ---
 
@@ -120,7 +120,7 @@
 - **版本：** {{HDR10PLUS_TOOL_VERSION}}
 - **许可证：** MIT
 - **此构建的源码：** https://github.com/quietvoid/hdr10plus_tool/tree/{{HDR10PLUS_TOOL_VERSION}}
-- **构建说明：** Windows setup 下载官方 MSVC 发布版；Linux setup 和 Docker 下载官方 musl 发布版，该版本由上游启用内部字体功能构建。本项目不在本地编译此工具。
+- **构建说明：** Windows setup 下载官方 MSVC 发布版；Linux setup 下载官方 musl 发布版，该版本由上游启用内部字体功能构建。本项目不在本地编译此工具。
 
 ---
 
@@ -150,27 +150,20 @@
 
 ## VapourSynth 与 Python 共享运行时
 
-应用与 VSScript 共用 `_internal/` 内的 CPython 运行时和 NumPy 包。VapourSynth Classic 针对该 Python 版本从源码编译，源码依赖的许可证全文随附于 `legal/vapoursynth/`。
+应用与 VSScript 共用 `_internal/` 中的 CPython 运行时和 NumPy。VapourSynth 运行时与插件的许可文本位于 `legal/vapoursynth/`。
 
-### VapourSynth-Classic（核心运行时、`vspipe` 等）
+### {{VAPOURSYNTH_NAME}}
 
-- **上游：** https://github.com/AmusementClub/vapoursynth-classic
-- **发布版本／标签：** {{VAPOURSYNTH_CLASSIC_VERSION}}
-- **许可证：** **GNU Lesser General Public License v3**，SPDX 标识为 **`LGPL-3.0-or-later`**。
-- **许可证全文（此标签）：** https://raw.githubusercontent.com/AmusementClub/vapoursynth-classic/{{VAPOURSYNTH_CLASSIC_VERSION}}/COPYING.LESSER
-- **源码归档：** https://github.com/AmusementClub/vapoursynth-classic/archive/refs/tags/{{VAPOURSYNTH_CLASSIC_VERSION}}.zip
-
-### VapourSynth 源码依赖
-
-- **zimg：** 提交 `{{ZIMG_REVISION}}`，WTFPL v2；https://github.com/AmusementClub/zimg/tree/{{ZIMG_REVISION}}
-- **libp2p：** 提交 `{{LIBP2P_REVISION}}`，WTFPL v2；https://github.com/sekrit-twc/libp2p/tree/{{LIBP2P_REVISION}}
-- **mimalloc：** {{MIMALLOC_VERSION}}，MIT；https://github.com/microsoft/mimalloc/tree/v{{MIMALLOC_VERSION}}
-- **AviSynthPlus 头文件：** {{AVISYNTHPLUS_VERSION}}，许可证与例外条款见随附的 `AviSynthPlus-avisynth.h` 和 `AviSynthPlus-SDKLicense.rst`；https://github.com/AviSynth/AviSynthPlus/tree/v{{AVISYNTHPLUS_VERSION}}
+- **上游：** {{VAPOURSYNTH_UPSTREAM}}
+- **发布版本／标签：** {{VAPOURSYNTH_VERSION}}
+- **许可证：** `{{VAPOURSYNTH_LICENSE}}`
+- **许可和源码：** {{VAPOURSYNTH_UPSTREAM}}/tree/{{VAPOURSYNTH_VERSION}}
+- **上游依赖：** 对应的源码版本记录了 zimg 和 libp2p 依赖。
 
 ### CPython — Windows 共享运行时
 
 - **文件：** 来自应用构建所用 Python 的 DLL、扩展模块与标准库归档。
-- **版本：** {{PYTHON_VERSION}}（amd64）
+- **版本：** {{PYTHON_VERSION}}（{{WINDOWS_ARCHITECTURE}}）
 - **上游：** https://www.python.org/ftp/python/{{PYTHON_VERSION}}/
 - **许可证：** **Python Software Foundation License**，SPDX 标识为 **`PSF-2.0`**。
 - **随附许可证全文：** `DLLs/LICENSE.txt`
@@ -198,7 +191,7 @@
 
 安装清单 `legal/vapoursynth-components.json` 记录源码修订、发布包下载地址、插件注册版本和已安装文件哈希。各组件同时附有依赖及其已取得的许可文本。
 
-源码构建的 Windows 插件在支持的情况下静态链接编译器运行库。当前配方将 libplacebo、libdovi、Little CMS 和 SPIRV-Cross 静态链接到 vs-placebo。vs-placebo 与 L-SMASH Works 共用 `libshaderc_shared.dll`。L-SMASH Works 静态链接所用的 FFmpeg 库，提供 VapourSynth 和 AviSynth 入口。ASSRender 使用包内的 libass DLL。Vulkan 加载器保留为独立 DLL。DFTTest 和 MVTools 共用一份 FFTW DLL。随附的组件说明记录本包实际使用的依赖及许可文本。
+源码构建的 Windows 插件在支持的情况下静态链接编译器运行库。当前配方将 libplacebo、libdovi、Little CMS 和 SPIRV-Cross 静态链接到 vs-placebo。vs-placebo 与 L-SMASH Works 共用 `libshaderc_shared.dll`。L-SMASH Works 静态链接所用的 FFmpeg 库，并提供 VapourSynth 入口。Windows x64 构建还提供 AviSynth 入口。ASSRender 使用包内的 libass DLL。Vulkan 加载器保留为独立 DLL。DFTTest 和 MVTools 共用一份 FFTW DLL。随附的组件说明记录本包实际使用的依赖及许可文本。
 
 ---
 
@@ -215,7 +208,7 @@
 
 ## libsndfile
 
-- **文件** `_soundfile_data/libsndfile_x64.dll`，由 SoundFile 加载，用于检测 PCM 位深。
+- **文件** `_soundfile_data/libsndfile_{{WINDOWS_ARCHITECTURE}}.dll`，由 SoundFile 加载，用于检测 PCM 位深。
 - **版本** {{LIBSNDFILE_VERSION}}
 - **许可证** LGPL-2.1-or-later。随附许可文本位于 `_soundfile_data/COPYING`。Windows setup 编译的精简版保留内置音频格式。
 - **源码** [libsndfile {{LIBSNDFILE_VERSION}}](https://github.com/libsndfile/libsndfile/tree/{{LIBSNDFILE_VERSION}})

@@ -10,6 +10,8 @@ The snapshot was imported on 2026-10-28 from the `VapourSynthScripts` files dist
 
 The import adds a provenance comment, normalizes line endings to CRLF, and removes trailing whitespace. In particular, the MIR-modified `havsfunc.py` is identified by its header as `33-7f0a9a7-AC-4`, based on commit `7f0a9a7a37b60a05b9f408024d203e511e544a61`. The distribution's changelog identifies the `muvsfunc.py` revision as `634d58c0f6464b1454813153aba85c78e17ab3a0`.
 
+The checked-in copies of `MCDenoise.py`, `nnedi3_resample.py`, `vsTAAmbk.py`, and `vsmlrt.py` include compatibility edits for Classic and R79.
+
 ## Authors, sources, and licensing evidence
 
 | File | Attribution and upstream source | Licensing evidence |
@@ -30,4 +32,4 @@ An unspecified license is not an MIT, public-domain, or unrestricted-use declara
 
 ## Distribution locations
 
-Windows and Linux setup install the `.py` files into the selected VapourSynth Python search directory and this notice tree into its `licenses/vapoursynth_scripts/` directory. Docker installs the same files into its Python `dist-packages` directory. The Windows application bundle includes the scripts beside the shared Python runtime and this notice tree at `legal/vapoursynth_scripts/`.
+Windows and Linux setup install the `.py` files into the selected VapourSynth Python search directory and this notice tree into its `licenses/vapoursynth_scripts/` directory. The Windows and Ubuntu application bundles include the scripts beside the shared Python runtime and this notice tree at `legal/vapoursynth_scripts/`.

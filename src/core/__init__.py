@@ -31,11 +31,9 @@ from .settings import SUBTITLE_LABELS
 from .settings import VSEDIT_PATH
 from .settings import X265_PATH
 from .settings import get_mkvtoolnix_ui_language
-from .settings import is_docker
 from .settings import mkvtoolnix_ui_language_arg
 
 __all__ = [
-    "is_docker",
     "FLAC_PATH",
     "find_mkvtoolnix",
     "FDK_AAC_PATH",

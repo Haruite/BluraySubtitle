@@ -3,10 +3,10 @@
 import os
 from html import escape
 
-from PyQt6.QtCore import QEvent, QPoint, QRect, Qt, pyqtSignal
-from PyQt6.QtGui import QCursor, QDrag, QPainter, QPalette, QPixmap
+from PyQt6.QtCore import QEvent, QPersistentModelIndex, QPoint, QRect, Qt, pyqtSignal
+from PyQt6.QtGui import QCursor, QPainter, QPalette, QPixmap
 from PyQt6.QtWidgets import (
-    QApplication, QAbstractItemView, QPlainTextEdit, QTableWidgetItem, QToolTip, QWidget,
+    QApplication, QAbstractItemView, QLabel, QPlainTextEdit, QTableWidgetItem, QToolTip, QWidget,
 )
 
 from src.core.i18n import translate_text
@@ -51,10 +51,12 @@ class DiscTableWidget(CustomTableWidget):
         self.setItemDelegateForColumn(0, _DiscNameDelegate(self))
         self._header_press_position: QPoint | None = None
         self._header_press_row = -1
+        self._dragged_disc = QPersistentModelIndex()
+        self._row_drag_preview: QLabel | None = None
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
         header = self.verticalHeader()
         header.sectionPressed.connect(self._on_disc_header_pressed)
         self._disc_header_viewport = header.viewport()
-        self._disc_header_viewport.setAcceptDrops(True)
         self._disc_header_viewport.installEventFilter(self)
         self.horizontalHeader().setSectionsClickable(False)
         self.itemChanged.connect(self._disc_checked)
@@ -98,34 +100,93 @@ class DiscTableWidget(CustomTableWidget):
                 self._header_press_position = None
                 self._start_row_drag(self._header_press_row)
                 return True
-        elif event_type == QEvent.Type.DragEnter:
-            if event.source() is self:
-                event.acceptProposedAction()
-            else:
-                event.ignore()
-            return True
-        elif event_type == QEvent.Type.DragMove:
-            # The vertical header and table viewport share the same vertical origin.
-            self.dragMoveEvent(event)
-            return True
-        elif event_type == QEvent.Type.Drop:
-            self.dropEvent(event)
-            return True
-        elif event_type == QEvent.Type.DragLeave:
-            self.dragLeaveEvent(event)
-            return True
         return False
 
     def eventFilter(self, watched, event):
+        preview = getattr(self, '_row_drag_preview', None)
+        if preview is not None and self._filter_row_drag(preview, watched, event):
+            return True
         if watched is getattr(self, '_disc_header_viewport', None) and self._filter_disc_header_event(event):
             return True
         return super().eventFilter(watched, event)
 
-    def _make_row_drag(self, row: int) -> QDrag:
-        drag = super()._make_row_drag(row)
-        drag.setPixmap(self._disc_drag_preview(row))
-        drag.setHotSpot(QPoint(0, 0))
-        return drag
+    def _start_row_drag(self, row: int) -> None:
+        if not 0 <= row < self.rowCount() or not QApplication.mouseButtons() & Qt.MouseButton.LeftButton:
+            return
+
+        # This reorder stays in the table. Native XWayland drags can show a
+        # compositor rejection cursor even when Qt accepts the move.
+        pixmap = self._disc_drag_preview(row)
+        preview = QLabel(self.window())
+        preview.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        preview.setPixmap(pixmap)
+        preview.resize(pixmap.deviceIndependentSize().toSize())
+
+        self._dragged_disc = QPersistentModelIndex(self.model().index(row, 0))
+        self._row_drag_preview = preview
+        # Qt's implicit mouse grab continues sending the drag to the pressed widget.
+        QApplication.instance().installEventFilter(self)
+        QApplication.setOverrideCursor(Qt.CursorShape.ForbiddenCursor)
+        self._update_row_drag(preview, QCursor.pos())
+        preview.show()
+        preview.raise_()
+
+    def _row_drop_target(self, position: QPoint) -> int | None:
+        viewport = self.viewport()
+        header = self._disc_header_viewport
+        window = self.window()
+        hovered = window.childAt(window.mapFromGlobal(position))
+        if hovered is None or not (
+            hovered in (viewport, header) or viewport.isAncestorOf(hovered) or header.isAncestorOf(hovered)
+        ):
+            return None
+        source = self._dragged_disc.row()
+        target = self._insertion_row_at(viewport.mapFromGlobal(position).y())
+        return target if source >= 0 and target not in (source, source + 1) else None
+
+    def _update_row_drag(self, preview: QLabel, position: QPoint) -> None:
+        preview.move(preview.parentWidget().mapFromGlobal(position))
+        target = self._row_drop_target(position)
+        if target is None:
+            self._drop_indicator.hide()
+            QApplication.changeOverrideCursor(Qt.CursorShape.ForbiddenCursor)
+        else:
+            self._show_drop_indicator(target)
+            QApplication.changeOverrideCursor(Qt.CursorShape.ClosedHandCursor)
+
+    def _finish_row_drag(self, preview: QLabel) -> None:
+        self._row_drag_preview = None
+        self._dragged_disc = QPersistentModelIndex()
+        QApplication.instance().removeEventFilter(self)
+        QApplication.restoreOverrideCursor()
+        self._drop_indicator.hide()
+        preview.hide()
+        preview.deleteLater()
+
+    def _filter_row_drag(self, preview: QLabel, watched, event) -> bool:
+        event_type = event.type()
+        if event_type == QEvent.Type.MouseMove:
+            if event.buttons() & Qt.MouseButton.LeftButton:
+                self._update_row_drag(preview, event.globalPosition().toPoint())
+                return True
+            self._finish_row_drag(preview)
+        elif event_type == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
+            source = self._dragged_disc.row()
+            target = self._row_drop_target(event.globalPosition().toPoint())
+            self._finish_row_drag(preview)
+            if target is not None and self._move_row(source, target):
+                self._disc_moved()
+        elif event_type in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress) and event.key() == Qt.Key.Key_Escape:
+            if event_type == QEvent.Type.KeyPress:
+                self._finish_row_drag(preview)
+            event.accept()
+            return True
+        elif (
+            (event_type == QEvent.Type.Hide and watched is self)
+            or (event_type == QEvent.Type.WindowDeactivate and watched is self.window())
+        ):
+            self._finish_row_drag(preview)
+        return False
 
     def _disc_drag_preview(self, row: int) -> QPixmap:
         item = self.item(row, 0)

@@ -102,8 +102,6 @@ try:
 
 
 def build_runtime(args: argparse.Namespace) -> Path:
-    from setuptools._distutils.compilers.C.msvc import _get_vc_env
-
     source = args.source.resolve()
     python_library = Path(str(sysconfig.get_config_var("LDLIBRARY"))).name
     patch_python_runtime(source, python_library)
@@ -114,8 +112,8 @@ def build_runtime(args: argparse.Namespace) -> Path:
         "        mi_option_disable(mi_option_page_reset);\n        mi_option_disable(mi_option_segment_reset);",
         "        mi_option_set(mi_option_purge_delay, -1);",
     )
-    environment = os.environ.copy()
-    environment.update({key.upper(): value for key, value in _get_vc_env("x64").items()})
+    # Setup selects the x64 target for both native and ARM64-hosted MSVC.
+    environment = os.environ
     mimalloc_build = source / "mimalloc-build"
     ninja_option = [f"-DCMAKE_MAKE_PROGRAM={args.ninja}"] if args.ninja else []
     subprocess.run(
@@ -152,8 +150,9 @@ def build_runtime(args: argparse.Namespace) -> Path:
     subprocess.run(
         [args.msbuild, str(source / "msvc_project/VapourSynth.sln"), f"/t:{targets}",
          "/p:Configuration=Release", "/p:Platform=x64", f"/m:{args.jobs}",
+         "/p:PreferredToolArchitecture=" + environment.get("VSCMD_ARG_HOST_ARCH", "x64"),
          "/nologo", "/verbosity:minimal"],
-        check=True,
+        env=environment, check=True,
     )
     return source / "msvc_project/x64/Release"
 
@@ -194,6 +193,13 @@ def build_artifacts(args: argparse.Namespace, artifacts: Path) -> None:
     runtime.mkdir(parents=True, exist_ok=True)
     for name in ("VapourSynth.dll", "VSScript.dll"):
         shutil.copy2(binaries / name, runtime / name)
+    if os.environ.get("VSCMD_ARG_HOST_ARCH", "").lower() == "arm64":
+        redist = Path(os.environ["VCToolsRedistDir"]) / "x64"
+        crts = sorted(redist.glob("Microsoft.VC*.CRT"))
+        if not crts:
+            raise RuntimeError("The MSVC x64 runtime is required for Windows on ARM")
+        for dll in crts[-1].glob("*.dll"):
+            shutil.copy2(dll, runtime / dll.name)
     shutil.copy2(binaries / "VSPipe.exe", artifacts / "VSPipe.exe")
     shutil.copy2(args.source / "mimalloc-build/mimalloc.lib", artifacts / "mimalloc.lib")
     core_plugins = runtime / "vapoursynth64/coreplugins"
@@ -235,9 +241,6 @@ def install_runtime(args: argparse.Namespace, artifacts: Path) -> None:
     vspipe.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(artifacts / "VSPipe.exe", vspipe)
     (runtime / "portable.vs").touch()
-    (runtime / "python-runtime.ini").write_text(
-        "[Python]\nHome=" + sys.base_prefix + "\n", encoding="utf-8", newline="\r\n",
-    )
     subprocess.run(
         [sys.executable, "-m", "pip", "install", "--no-deps", "--force-reinstall", str(wheels[0])],
         check=True,
@@ -267,6 +270,14 @@ def install_runtime(args: argparse.Namespace, artifacts: Path) -> None:
     (runtime / "vapoursynth-build.json").write_text(
         json.dumps(manifest, indent=2), encoding="utf-8", newline="\r\n",
     )
+    python_home = Path(sys.base_prefix)
+    private_python = python_home.is_relative_to(runtime)
+    if private_python:
+        python_home = python_home.relative_to(runtime)
+    (runtime / "python-runtime.ini").write_text(
+        f"[Python]\nHome={python_home}\nIsolated={int(private_python)}\n",
+        encoding="utf-8", newline="\r\n",
+    )
     (runtime / "vapoursynth-classic-version.txt").write_text(args.version, encoding="utf-8")
 
 
@@ -283,10 +294,10 @@ def main() -> None:
     parser.add_argument("--ninja")
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
     args = parser.parse_args()
-    if sys.platform != "win32" or sys.maxsize <= 2**32:
+    if sys.platform != "win32" or sysconfig.get_platform() != "win-amd64":
         raise RuntimeError("The VapourSynth Windows build requires x64 CPython on Windows")
-    if args.source and (not args.msbuild or not args.cmake):
-        parser.error("--source requires --msbuild and --cmake")
+    if args.source and (not args.msbuild or not args.cmake or os.environ.get("VSCMD_ARG_TGT_ARCH", "").lower() != "x64"):
+        parser.error("--source requires --msbuild, --cmake and an initialized x64 MSVC environment")
     if not args.source and not args.artifacts:
         parser.error("--source or --artifacts is required")
     artifacts = args.artifacts or args.source.resolve() / "install-artifacts"

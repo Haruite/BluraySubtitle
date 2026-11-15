@@ -200,7 +200,7 @@ ASS 转 PGS 会保留字幕可选择性，但会按指定分辨率和帧率／�
 
 ## Linux 桌面 mpv 播放
 
-运行 [Linux 安装脚本](../../README.zh-Hans.md#setup_linux_environmentshlinux-运行环境脚本) 后重新打开 mpv。安装时选择的语言应用于 uosc 播放控件和右键菜单，桌面界面根据显示器 DPI 缩放。默认用户配置目录为 `~/.config/mpv/`。
+运行 [Linux 安装脚本](../../README.zh-Hans.md#setup_linux_environmentshlinux-运行环境脚本) 后重新打开 mpv。安装脚本同时安装英文和简体中文的右键菜单。从 BluraySubtitle 启动播放时，右键菜单和 uosc 播放控件跟随当前界面语言。直接打开 mpv 时默认使用安装时选择的语言。桌面界面根据显示器 DPI 缩放。默认用户配置目录为 `~/.config/mpv/`。
 
 ### 画质、字幕与着色器
 

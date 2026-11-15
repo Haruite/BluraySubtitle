@@ -149,12 +149,13 @@ def _table_control_colors(selectors: tuple[str, ...], surface: str, edge: str, a
     return style
 
 
-def _combo_popup_colors(combos: tuple[str, ...], selection: str, accent: str) -> str:
+def _combo_popup_colors(combos: tuple[str, ...], selection: str, accent: str, *, surface: str = '') -> str:
     views = tuple(f'{combo} QAbstractItemView' for combo in combos)
     selected_items = ','.join(f'{view}::item:selected' for view in views)
+    background = f'background:{surface};' if surface else ''
     return (
         f'{",".join(combos)}{{qproperty-popupAccentColor:{accent};}}'
-        f'{",".join(views)}{{selection-background-color:{selection};}}'
+        f'{",".join(views)}{{{background}selection-background-color:{selection};}}'
         f'{selected_items}{{background:{selection};}}'
     )
 
@@ -322,6 +323,11 @@ def _shared_stylesheet(palette: QPalette, mode: str) -> str:
         execution_button_stylesheet(palette, mode),
     ]
     if mode == 'light':
+        styles.append(_combo_popup_colors(
+            ('QTableWidget StyledComboBox',), table_colors[2], control_accent.darker(140).name(),
+            surface=table_colors[0],
+        ))
+        styles.append(f'StyledComboBox QAbstractItemView::item:disabled{{color:{muted_text};}}')
         styles.insert(0, (
             f'QComboBox,QPushButton,QToolButton{{border:1px solid {field_edge};border-radius:5px;}}'
             'QComboBox{padding:3px 6px;}'

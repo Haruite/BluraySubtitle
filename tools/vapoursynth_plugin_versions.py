@@ -62,6 +62,9 @@ def reported_version(plugin, target: str) -> str | None:
             if value is not None:
                 return value
     version = plugin.version
+    # EEDI3 and VIVTC (registered as VFM) use source tags independent of 1.0.
+    if plugin.name in ("EEDI3", "VFM") and (version.major, version.minor) == (1, 0):
+        return None
     # vs-ccd registers 0.1 independently of the release tag.
     if plugin.name == "chroma denoiser" and (version.major, version.minor) == (0, 1):
         return None
@@ -81,11 +84,11 @@ def _records(plugin_path: Path) -> tuple[Path, dict[str, tuple[str, str]]]:
     return version_file, records
 
 
-def fallback_version(plugin_path: Path) -> str | None:
+def fallback_version(plugin_path: Path, *, normalize: bool = True) -> str | None:
     _, records = _records(plugin_path)
     record = records.get(plugin_path.name)
     if record and record[1] == hashlib.sha256(plugin_path.read_bytes()).hexdigest():
-        return normalize_version(record[0])
+        return normalize_version(record[0]) if normalize else record[0]
     return None
 
 

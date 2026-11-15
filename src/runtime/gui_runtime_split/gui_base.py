@@ -12,7 +12,7 @@ from PyQt6.QtCore import QModelIndex, Qt, QProcess
 from PyQt6.QtWidgets import QWidget, QComboBox, QMenu, QTableWidgetItem, QTableWidget, QToolButton, QGroupBox, QLabel, QSystemTrayIcon
 
 from src.core.app_config import UiPreferences, WindowPreferences
-from src.runtime.windows_update import WindowsUpdatePackage
+from src.runtime.program_update import UpdatePackage
 
 
 class BluraySubtitleGuiBase(QWidget):
@@ -551,6 +551,9 @@ class BluraySubtitleGuiBase(QWidget):
     def _movie_main_duration_map_from_table1(self) -> dict[int, float]:
         raise NotImplementedError
 
+    def _mpv_playback_executable(self, mime_type: str) -> str:
+        raise NotImplementedError
+
     def _normalize_default_vpy_runtime_lines(self):
         raise NotImplementedError
 
@@ -888,7 +891,10 @@ class BluraySubtitleGuiBase(QWidget):
     def _start_bdmv_load(self) -> None:
         raise NotImplementedError
 
-    def _start_program_update(self, package: WindowsUpdatePackage) -> None:
+    def _start_mpv_playback(self, executable: str, arguments: list[str], source_path: str) -> None:
+        raise NotImplementedError
+
+    def _start_program_update(self, package: UpdatePackage) -> None:
         raise NotImplementedError
 
     def _start_sp_table_scan(self):

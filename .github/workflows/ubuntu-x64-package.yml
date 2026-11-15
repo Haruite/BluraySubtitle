@@ -1,0 +1,102 @@
+name: Publish BluraySubtitle Ubuntu 26.04 x64
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ubuntu-package-website
+  queue: max
+
+jobs:
+  publish:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 180
+    env:
+      BLURAY_LANG: en
+      CCACHE_MAXSIZE: 2G
+      PACKAGE_ARCHIVE: BluraySubtitle_ubuntu26.04_x64.tar.xz
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set Build and Cache Paths
+        run: |
+          {
+            printf 'BLURAY_SETUP_CACHE_DIR=%s/bluraysubtitle-linux\n' "$RUNNER_TEMP"
+            printf 'BLURAY_BUILD_TMP=%s/bluraysubtitle-build\n' "$RUNNER_TEMP"
+          } >> "$GITHUB_ENV"
+
+      - name: Restore Setup Downloads and Compiler Cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/downloads
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/apt
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/pip
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/ccache
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/cargo
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ubuntu2604-setup-v1-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: ubuntu2604-setup-v1-${{ runner.arch }}-
+
+      - name: Restore Installed Build Artifacts
+        id: builds
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.BLURAY_SETUP_CACHE_DIR }}/builds
+          key: ubuntu2604-tools-v1-${{ runner.arch }}-${{ hashFiles('setup_linux_environment.sh', 'src/core/settings.py', 'tools/linux_setup_cache.py', 'tools/vapoursynth_plugin_versions.py') }}-lookup
+          restore-keys: ubuntu2604-tools-v1-${{ runner.arch }}-${{ hashFiles('setup_linux_environment.sh', 'src/core/settings.py', 'tools/linux_setup_cache.py', 'tools/vapoursynth_plugin_versions.py') }}-
+
+      - name: Prepare Ubuntu Build Environment
+        id: setup
+        env:
+          BLURAYSUBTITLE_GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          bash setup_linux_environment.sh --build
+          builds="$BLURAY_SETUP_CACHE_DIR/builds"
+          checksum=$(find "$builds" -maxdepth 1 -name '*.tar.xz' -type f -print0 |
+            sort -z | xargs -0 -r sha256sum | cut -d' ' -f1 | sha256sum)
+          printf 'builds=%s\n' "${checksum%% *}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and Verify Ubuntu Package
+        run: |
+          set -euo pipefail
+          bash tools/build_ubuntu_package.sh
+          /usr/bin/python3 -B tools/verify_ubuntu_package.py "dist/$PACKAGE_ARCHIVE"
+
+      - name: Save Setup Downloads and Compiler Cache
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/downloads
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/apt
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/pip
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/ccache
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/cargo
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ubuntu2604-setup-v1-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Save Installed Build Artifacts
+        if: steps.builds.outputs.cache-matched-key != format('ubuntu2604-tools-v1-{0}-{1}-{2}', runner.arch, hashFiles('setup_linux_environment.sh', 'src/core/settings.py', 'tools/linux_setup_cache.py', 'tools/vapoursynth_plugin_versions.py'), steps.setup.outputs.builds)
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.BLURAY_SETUP_CACHE_DIR }}/builds
+          key: ubuntu2604-tools-v1-${{ runner.arch }}-${{ hashFiles('setup_linux_environment.sh', 'src/core/settings.py', 'tools/linux_setup_cache.py', 'tools/vapoursynth_plugin_versions.py') }}-${{ steps.setup.outputs.builds }}
+
+      - name: Upload Package and Build Information
+        if: github.ref == 'refs/heads/main'
+        env:
+          SFTP_HOST: ${{ secrets.SFTP_HOST }}
+          SFTP_KNOWN_HOSTS: ${{ secrets.SFTP_KNOWN_HOSTS }}
+          SFTP_PRIVATE_KEY: ${{ secrets.SFTP_PRIVATE_KEY }}
+        run: bash tools/publish_website_package.sh "dist/$PACKAGE_ARCHIVE"

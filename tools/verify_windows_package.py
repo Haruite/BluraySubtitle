@@ -11,12 +11,21 @@ import wave
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools.windows_native_tools import (
-    VSEDIT_PROGRAMS, VSEDIT_QT_LIBRARIES, clean_tool_environment, runtime_dependencies, verify_mkv_runtime,
+    PE_ARM64, VSEDIT_PROGRAMS, VSEDIT_QT_LIBRARIES, clean_tool_environment, has_pe_machine,
+    runtime_dependencies, verify_mkv_runtime, windows_machine,
 )
 from tools.windows_tool_paths import MKV_SETTINGS
 
 
 def verify(bundle: Path, work: Path) -> None:
+    suffix = "arm64" if windows_machine() == PE_ARM64 else "x64"
+    package_name = f"BluraySubtitle_windows_{suffix}"
+    if bundle.name != package_name or not (bundle / f"{package_name}.exe").is_file():
+        raise RuntimeError(f"Expected the {package_name} package and executable")
+    for path in bundle.rglob("*"):
+        if path.suffix.lower() in {".exe", ".dll", ".pyd"} and not has_pe_machine(path):
+            raise RuntimeError(f"Expected a {suffix} PE binary at {path.relative_to(bundle)}")
+
     internal = bundle / "_internal"
     mkv = internal / "mkvtoolnix"
     editor = internal / "vsedit"
@@ -33,9 +42,9 @@ def verify(bundle: Path, work: Path) -> None:
             del environment[name]
     environment["PYTHONNOUSERSITE"] = "1"
 
-    def run(program: Path, *arguments) -> str:
+    def run(program: Path, *arguments, env=environment) -> str:
         result = subprocess.run(
-            [program, *arguments], cwd=work, env=environment, stdin=subprocess.DEVNULL,
+            [program, *arguments], cwd=work, env=env, stdin=subprocess.DEVNULL,
             capture_output=True, encoding="utf-8", errors="replace", timeout=45,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
@@ -53,7 +62,36 @@ def verify(bundle: Path, work: Path) -> None:
     for executable in VSEDIT_PROGRAMS:
         if not (editor / executable).is_file() or not (editor / (Path(executable).stem + "-native.exe")).is_file():
             raise FileNotFoundError(f"Missing the bundled VSEdit entry point: {executable}")
-    run(internal / "vspipe.exe", "--version")
+    vspipe = internal / "Lib/site-packages/vapoursynth/vspipe.exe"
+    expected_core = "Core R79"
+    if not vspipe.is_file():
+        vspipe = internal / "vspipe.exe"
+        expected_core = "Core R57"
+    vs_environment = dict(environment, PATH=str(internal) + os.pathsep + environment["PATH"])
+    if expected_core not in run(vspipe, "--version", env=vs_environment).splitlines():
+        raise RuntimeError(f"The bundled VSPipe did not report {expected_core}")
+    subtitle = work / "字幕.srt"
+    subtitle.write_text("1\n00:00:00,000 --> 00:00:01,000\nBluraySubtitle\n", encoding="utf-8")
+    if expected_core == "Core R79":
+        for name in ("libass-9.dll", "libfftw3f-3.dll", "libshaderc_shared.dll", "vulkan-1.dll"):
+            if len(list(internal.rglob(name))) != 1:
+                raise RuntimeError(f"Expected one bundled copy of {name}")
+    script = work / "bundled.vpy"
+    script.write_text(
+        "import vapoursynth as vs\nimport mvsfunc\n"
+        "fmt = vs.core.query_video_format(vs.ColorFamily.YUV, vs.SampleType.INTEGER, 10, 1, 1)\n"
+        "clip = vs.core.std.BlankClip(length=2, width=64, height=48, format=fmt.id)\n"
+        "clip = vs.core.rgvs.RemoveGrain(clip, mode=1)\n"
+        + ("assert vs.core.placebo.Deband and vs.core.dfttest.DFTTest and vs.core.lsmas.LWLibavSource\n"
+           "clip = vs.core.assrender.TextSub(clip, '字幕.srt')\n" if expected_core == "Core R79" else "")
+        + "clip.set_output()\n",
+        encoding="utf-8",
+    )
+    output = work / "bundled.y4m"
+    run(vspipe, "--container", "y4m", script, output, env=vs_environment)
+    y4m = output.read_bytes()
+    if not y4m.startswith(b"YUV4MPEG2 ") or y4m.count(b"FRAME\n") != 2:
+        raise RuntimeError("The bundled VSPipe did not write two Y4M frames")
 
     audio = work / "audio.wav"
     with wave.open(os.fspath(audio), "wb") as output:
@@ -61,8 +99,6 @@ def verify(bundle: Path, work: Path) -> None:
         output.writeframes(b"\0" * 9600)
     flac = work / "audio.flac"
     run(internal / "flac.exe", "--silent", "-o", flac, audio)
-    subtitle = work / "字幕.srt"
-    subtitle.write_text("1\n00:00:00,000 --> 00:00:01,000\nBluraySubtitle\n", encoding="utf-8")
     mux = work / "audio and subtitles.mkv"
     run(internal / "mkvmerge.exe", "-o", mux, flac, subtitle)
     run(internal / "mkvinfo.exe", "--summary", mux)
@@ -88,7 +124,7 @@ def main() -> None:
         root = Path(temporary)
         subprocess.run([args.seven_zip, "x", archive, "-o" + str(root), "-y", "-bso0", "-bsp0"], check=True)
         verify(root / archive.stem, root)
-    print("Verified the Windows archive, standalone tool launchers and shared Qt runtime.")
+    print("Verified Windows binary architecture, standalone tools and shared runtimes.")
 
 
 if __name__ == "__main__":

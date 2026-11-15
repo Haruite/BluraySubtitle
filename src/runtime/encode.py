@@ -9,7 +9,9 @@ from dataclasses import dataclass
 from src.core import find_mkvtoolnix
 from src.core import settings as core_settings
 from src.core.i18n import translate_text
-from src.exports.utils import get_vspipe_context, resolve_encoder_executable_path
+from src.exports.utils import (
+    get_system_vspipe_context, get_vspipe_context, resolve_encoder_executable_path,
+)
 from src.runtime.audio_conversion import (
     AudioEncodingSettings,
     validate_audio_cleanup_tools,
@@ -416,8 +418,8 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
         if request.settings.vspipe_mode == 'bundle':
             vspipe_path, _environment = get_vspipe_context()
         else:
-            vspipe_path = core_settings.VSPIPE_PATH
-        if not (os.path.isfile(vspipe_path) or shutil.which(vspipe_path)):
+            vspipe_path, _environment = get_system_vspipe_context(core_settings.VSPIPE_PATH)
+        if not os.path.isfile(vspipe_path):
             raise FileNotFoundError(
                 translate_text('vspipe executable does not exist: {path}').format(path=vspipe_path)
             )

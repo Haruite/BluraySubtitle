@@ -8,6 +8,7 @@ Supports both:
 from contextlib import suppress
 import multiprocessing
 import os
+from pathlib import Path
 import subprocess
 import sys
 
@@ -26,6 +27,12 @@ if not __package__:
     _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _ROOT not in sys.path:
         sys.path.insert(0, _ROOT)
+
+
+if getattr(sys, "frozen", False):
+    site_packages = Path(sys._MEIPASS) / "Lib/site-packages"
+    if site_packages.is_dir():
+        sys.path.insert(0, str(site_packages))
 
 
 def _launch_detached(arguments: list[str]) -> int:

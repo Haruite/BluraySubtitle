@@ -69,20 +69,18 @@ Keep both language versions of these standards synchronized, and record confirme
 
 ## 8. File Format
 
-- Use UTF-8 for source and documentation. New or modified text files must use CRLF, except shell scripts and Dockerfiles (`Dockerfile` and `*.dockerfile`), which require LF to preserve shebang and shell-heredoc behavior.
+- Use UTF-8 for source and documentation. New or modified text files must use CRLF, except shell scripts, which require LF to preserve shebangs and heredocs.
 - Keep Markdown paragraphs on one line when practical; split prose only at complete sentence boundaries. Preserve structural line breaks in lists, tables, code blocks, diagrams, and similar constructs, with each list item on its own line.
 - Do not introduce trailing whitespace or malformed encoding.
 
-## 9. Tool Versions and Dockerfile Maintenance
+## 9. Tool Versions and Setup
 
-- The supported operating systems and architectures are exactly those accepted by `setup_windows_environment.ps1` and `setup_linux_environment.sh`: currently x64 Windows 10 or later, Windows Server 2019 or later with Desktop Experience, Ubuntu 22.04 or later, and Debian 12 or later. Check changes against that whole range, not just the development machine; do not add compatibility branches for other systems. Evaluate Linux features in the repository's Docker environment as well; do not present a feature as supported in Docker if it cannot run there.
+- See the [README](../../README.md#cross-platform-support) for supported source platforms and architectures. Check changes across that range.
 - Use the latest version published by the official upstream for dependencies and bundled tools. Pin a version or commit only for a confirmed compatibility or other technical constraint.
-- Setup scripts and the Dockerfile must install every executable, library, and plugin used by their respective runtime. Source builds must explicitly enable every optional feature the application uses.
-- `Dockerfile` adapts `setup_linux_environment.sh` to Ubuntu 26.04. In the Dockerfile, do not add compatibility handling for other operating systems, explanatory output, or comments.
-- Windows and Linux setup must install tools and VapourSynth plugins at their platform paths when declared in `src/core/settings.py`. Docker must install them directly at that file's corresponding Docker paths within each tool's build section; do not add a final relocation layer.
+- Setup scripts must install every executable, library, and plugin used by their respective runtime. Source builds must explicitly enable every optional feature the application uses.
+- Windows and Linux setup must install tools and VapourSynth plugins at their platform paths when declared in `src/core/settings.py`.
 - Windows VSEdit must have its own directory named `vsedit`; setup must normalize its installation path and write the resulting `VSEDIT_PATH` back to `src/core/settings.py`.
 - Windows MKVToolNix command-line tools must share a directory named `mkvtoolnix`. Setup normalizes the directory configured for `MKV_MERGE_PATH` and writes all four resulting paths back to `src/core/settings.py`.
-- Modify existing software in its corresponding Dockerfile build section even if later layers lose their cache. Do not put unrelated changes near the beginning; add new software near the end when dependencies permit, to preserve earlier cached layers.
 
 ## 10. Confirmed Product Constraints
 

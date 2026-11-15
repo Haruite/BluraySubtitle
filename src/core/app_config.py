@@ -96,6 +96,7 @@ class RemuxPreferences:
     convert_immersive_audio_to_flac: bool = False
     allow_partial_missing_non_video_tracks: bool = False
     save_audio_gaps: bool = False
+    keep_sp_by_default: bool = True
 
 
 @dataclass(frozen=True)
@@ -469,6 +470,7 @@ def app_config_from_mapping(raw: dict[str, Any]) -> AppConfig:
                 False,
             ),
             save_audio_gaps=_boolean_value(remux, "save_audio_gaps", False),
+            keep_sp_by_default=_boolean_value(remux, "keep_sp_by_default", RemuxPreferences.keep_sp_by_default),
         ),
         encode=EncodePreferences(
             encoder=encoder,

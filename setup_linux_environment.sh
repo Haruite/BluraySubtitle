@@ -18,10 +18,11 @@ SVT_AV1_SOURCE_REPOSITORY="https://gitlab.com/AOMediaCodec/SVT-AV1.git"
 FDK_AAC_SOURCE_REPOSITORY="https://github.com/mstorsjo/fdk-aac.git"
 FDKAAC_SOURCE_REPOSITORY="https://github.com/nu774/fdkaac.git"
 DESCALE_SOURCE_REPOSITORY="https://github.com/AmusementClub/descale.git"
-VAPOURSYNTH_SOURCE_REPOSITORY="https://github.com/AmusementClub/vapoursynth-classic.git"
 VSEDIT_SOURCE_REPOSITORY="https://github.com/YomikoR/VapourSynth-Editor.git"
 MESON_MIN_VERSION="1.4.0"
-SETTINGS_FILE="${BLURAY_SETTINGS_FILE:-$(dirname -- "$BLURAY_SETUP_SOURCE")/src/core/settings.py}"
+SETUP_ROOT="$(dirname -- "$BLURAY_SETUP_SOURCE")"
+SETTINGS_FILE="${BLURAY_SETTINGS_FILE:-$SETUP_ROOT/src/core/settings.py}"
+BLURAY_SETUP_CACHE_DIR="${BLURAY_SETUP_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/bluraysubtitle/linux-setup}"
 
 # ---------------------------------------------------------------------------
 # Language selection
@@ -372,6 +373,47 @@ tmux_run() {
   return "$ec"
 }
 
+cached_download() (
+  local identity="$1" output="$2" checksum cached partial
+  shift 2
+  checksum=$(printf '%s' "$identity" | sha256sum)
+  cached="$BLURAY_SETUP_CACHE_DIR/downloads/${checksum%% *}"
+  if [[ ! -s "$cached" ]]; then
+    partial=$(mktemp "$BLURAY_SETUP_CACHE_DIR/downloads/.partial.XXXXXXXX") || return
+    trap 'rm -f -- "$partial"' EXIT
+    "$@" "$partial" || return
+    [[ -s "$partial" ]] || return 1
+    mv -fT -- "$partial" "$cached" || return
+  fi
+  cp --reflink=auto -- "$cached" "$output"
+)
+
+fetch_url() {
+  wget -nv --timeout=30 --tries=5 -O "$2" "$1"
+}
+
+download_url() {
+  cached_download "$1" "$2" fetch_url "$1"
+}
+
+fetch_git_tree() (
+  local repository="$1" tag="$2" output="$3" directory
+  directory=$(bluray_mktemp_dir) || return
+  trap 'rm -rf -- "$directory"' EXIT
+  git clone --depth 1 --branch "$tag" --recurse-submodules=3rdparty --shallow-submodules \
+    "$repository" "$directory/source" || return
+  tar -czf "$output" -C "$directory" source
+)
+
+download_git_tree() (
+  local repository="$1" tag="$2" destination="$3" archive
+  archive=$(mktemp) || return
+  trap 'rm -f -- "$archive"' EXIT
+  cached_download "git:$repository/$tag" "$archive" fetch_git_tree "$repository" "$tag" || return
+  mkdir -p -- "$destination" || return
+  tar -xf "$archive" --strip-components=1 -C "$destination"
+)
+
 fetch_source_archive() (
   local archive_url="$1" source_dir="$2" mirror_url="${3:-}" archive
   archive="$(mktemp)" || return 1
@@ -379,7 +421,7 @@ fetch_source_archive() (
   mkdir -p -- "$source_dir" || return 1
 
   fetch_and_extract() {
-    wget -nv --timeout=30 --tries=5 -O "$archive" "$1" &&
+    download_url "$1" "$archive" &&
       tar -xf "$archive" --strip-components=1 -C "$source_dir"
   }
 
@@ -400,14 +442,23 @@ download_source_archive() {
   tmux_run "$(msg "Download ${name} source" "下载 ${name} 源码")" fetch_source_archive "$@"
 }
 
-download_github_release_asset() (
+download_github_release_asset() {
+  local repository="${1#https://github.com/}" tag="$2" asset="$3" output="${4:-$3}"
+  repository="${repository%.git}"
+  if [[ -z "$tag" ]]; then
+    tag="$(latest_stable_tag "https://github.com/$repository.git")" || return
+  fi
+  cached_download "github:$repository/$tag/$asset" "$output" fetch_github_release_asset "$repository" "$tag" "$asset"
+}
+
+fetch_github_release_asset() (
   local repository="${1#https://github.com/}" tag="$2" asset_name="$3" output="${4:-$3}"
   local releases_page="https://github.com/${repository%.git}/releases"
   local releases_url="https://api.github.com/repos/${repository%.git}/releases"
   local release_url="${releases_url}/latest" direct_url="${releases_page}/latest/download/${asset_name}"
   local partial content_type
   local -a curl_options=(-fsSL --retry-connrefused --connect-timeout 30 --speed-time 30 --speed-limit 1)
-  local -a api_options=("${curl_options[@]}" --retry 1 -H 'X-GitHub-Api-Version: 2022-11-28')
+  local -a api_options=("${curl_options[@]}" --retry 1 --proto-redir '=https' -H 'X-GitHub-Api-Version: 2022-11-28')
 
   if [[ -n "$tag" ]]; then
     release_url="${releases_url}/tags/${tag}"
@@ -416,9 +467,27 @@ download_github_release_asset() (
   partial="$(mktemp -- "${output}.XXXXXX")" || return $?
   trap 'rm -f -- "$partial"' EXIT
 
+  fetch_release_api() {
+    local url="$1" accept="$2" response
+    local -a options=("${api_options[@]}" -H "Accept: $accept" -o "$partial")
+    if [[ -n "$setup_github_api_token" ]]; then
+      if response="$(curl -q "${options[@]}" -H @- -w '%{http_code} %{content_type}' "$url" \
+        <<< "Authorization: Bearer $setup_github_api_token")"; then
+        printf '%s' "${response#* }"
+        return
+      fi
+      # The workflow token may lack access to another repository.
+      case "${response%% *}" in
+        401|403|404) ;;
+        *) return 1 ;;
+      esac
+    fi
+    curl -q "${options[@]}" -w '%{content_type}' "$url"
+  }
+
   fetch_api_asset() {
-    local release asset_id content_type
-    release="$(curl "${api_options[@]}" -H 'Accept: application/vnd.github+json' "$release_url")" || return $?
+    local asset_id content_type
+    fetch_release_api "$release_url" 'application/vnd.github+json' >/dev/null || return $?
     asset_id="$(python3 -c '
 import json
 import sys
@@ -427,10 +496,9 @@ for asset in json.load(sys.stdin)["assets"]:
     if asset["name"] == sys.argv[1]:
         print(asset["id"])
         break
-' "$asset_name" <<< "$release")" || return $?
+' "$asset_name" < "$partial")" || return $?
     [[ -n "$asset_id" ]] || return 1
-    content_type="$(curl "${api_options[@]}" -H 'Accept: application/octet-stream' \
-      -o "$partial" -w '%{content_type}' "${releases_url}/assets/${asset_id}")" || return $?
+    content_type="$(fetch_release_api "${releases_url}/assets/${asset_id}" application/octet-stream)" || return $?
     [[ "$content_type" != *json* && "$content_type" != text/html* ]]
   }
 
@@ -451,11 +519,13 @@ apt_update() {
 }
 
 apt_install() {
-  tmux_run "apt-get install ${*}" sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y "$@"
+  tmux_run "apt-get install $*" sudo env DEBIAN_FRONTEND=noninteractive apt-get \
+    -o "Dir::Cache::archives=$BLURAY_SETUP_CACHE_DIR/apt" \
+    -o APT::Keep-Downloaded-Packages=true install -y "$@"
 }
 
 apt_fix_broken() {
-  tmux_run "apt-get -f install" sudo env DEBIAN_FRONTEND=noninteractive apt-get -f install -y
+  apt_install -f
 }
 
 # ---------------------------------------------------------------------------
@@ -510,8 +580,17 @@ if [[ "${1:-}" != "--in-tmux" && -z "${TMUX:-}" && -t 1 ]]; then
   fi
 fi
 if [[ "${1:-}" == "--in-tmux" ]]; then
-  shift || true
+  shift
 fi
+package_build=false
+if [[ "${1:-}" == "--build" ]]; then
+  package_build=true
+fi
+
+# Keep the GitHub API token in this shell and out of external build commands.
+setup_github_api_token="${BLURAYSUBTITLE_GITHUB_TOKEN:-}"
+export -n setup_github_api_token
+unset BLURAYSUBTITLE_GITHUB_TOKEN
 
 ensure_sudo_once
 
@@ -687,7 +766,7 @@ install_mkvtoolnix() {
     local source_file
     source_file="$(mktemp)"
     if ! tmux_run "$(msg 'Download the MKVToolNix repository signing key' '下载 MKVToolNix 软件源签名密钥')" \
-      curl -fsSL --retry 4 --connect-timeout 20 --max-time 45 -o "$source_file" https://mkvtoolnix.download/gpg-pub-moritzbunkus.gpg \
+      download_url https://mkvtoolnix.download/gpg-pub-moritzbunkus.gpg "$source_file" \
       || ! bluray_sudo install -D -m 0644 "$source_file" "$keyring_path"; then
       rm -f -- "$source_file"
       die "$(msg 'Failed to install the MKVToolNix repository signing key' '安装 MKVToolNix 软件源签名密钥失败')"
@@ -793,7 +872,7 @@ install_mkvtoolnix() {
   (
     cd "$build_dir" || exit 1
     log "$(msg 'Downloading source tarball' '下载源码包')"
-    curl -fsSL -o "mkvtoolnix_${version}.orig.tar.xz" "https://mkvtoolnix.download/sources/mkvtoolnix-${version}.tar.xz" || exit 1
+    download_url "https://mkvtoolnix.download/sources/mkvtoolnix-${version}.tar.xz" "mkvtoolnix_${version}.orig.tar.xz" || exit 1
     log "$(msg 'Extracting source tarball' '解压源码包')"
     tar xJf "mkvtoolnix_${version}.orig.tar.xz" || exit 1
 
@@ -887,8 +966,7 @@ repair_packaged_libdovi_header() {
   log "$(msg "Repairing the truncated libdovi header with Debian's rebuilt 3.3.2 header" '使用 Debian 重新生成的 3.3.2 头文件修复被截断的 libdovi 头文件')"
   if ! (
     tmux_run "$(msg 'Download the rebuilt libdovi development header' '下载重新生成的 libdovi 开发头文件')" \
-      wget -q -O "$archive" \
-        "https://deb.debian.org/debian/pool/main/r/rust-dolby-vision/libdovi-dev_${repair_version}_${architecture}.deb" \
+      download_url "https://deb.debian.org/debian/pool/main/r/rust-dolby-vision/libdovi-dev_${repair_version}_${architecture}.deb" "$archive" \
       || exit 1
     printf '%s  %s\n' "$checksum" "$archive" | sha256sum -c - >/dev/null \
       || exit 1
@@ -1229,10 +1307,19 @@ test_mpv_vapoursynth() (
   fi
 )
 
+__mpv_tools_share_ffmpeg() {
+  local library_dir="$1" program codec shared_codec=""
+  for program in "$(command -v mpv)" "$FFMPEG_PATH" "$FFPROBE_PATH"; do
+    codec="$(LC_ALL=C ldd "$program" | awk '$1 ~ /^libavcodec[.]so[.]/ && $2 == "=>" { print $3 }')" || return 1
+    [[ "$codec" == "$library_dir"/libavcodec.so.* && "$codec" == "${shared_codec:-$codec}" ]] || return 1
+    shared_codec="$codec"
+  done
+}
+
 install_mpv() {
   log "$(msg 'Installing mpv with VapourSynth and stable FFmpeg / FFprobe' '安装支持 VapourSynth 的 mpv 与稳定版 FFmpeg / FFprobe')"
 
-  local required_mpv_version="0.41.0"
+  local required_mpv_version="0.41.0" shared_ffmpeg_dir=/usr/local/lib/bluraysubtitle-ffmpeg
   local ffmpeg_tag target_ffmpeg_version installed_ffmpeg_version installed_ffprobe_version ffmpeg_is_current="false"
   ffmpeg_tag="$(latest_stable_tag "$FFMPEG_SOURCE_REPOSITORY" '^n[0-9]+([.][0-9]+)+$' 'n*')"
   target_ffmpeg_version="${ffmpeg_tag#n}"
@@ -1250,6 +1337,7 @@ install_mpv() {
     current_mpv_version="$(mpv --version 2>/dev/null | head -n 1 | grep -oP 'mpv\s+v?\K[0-9]+(\.[0-9]+){1,2}' || true)"
     if [[ -n "${current_mpv_version:-}" ]] && dpkg --compare-versions "$current_mpv_version" ge "$required_mpv_version"; then
       if [[ "$ffmpeg_is_current" == "true" ]] \
+        && { ! "$package_build" || __mpv_tools_share_ffmpeg "$shared_ffmpeg_dir"; } \
         && mpv --no-config --list-properties | grep -E '^[[:space:]]+default-menu$' >/dev/null \
         && test_mpv_vapoursynth mpv; then
         if ! has_libdovi_development; then
@@ -1309,9 +1397,9 @@ install_mpv() {
       apt_update
       apt_install python3-pip || die "$(msg 'Failed to install python3-pip (root environment)' '安装 python3-pip 失败（root 环境）')"
     fi
-    if ! sudo env PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade -q --progress-bar off meson --break-system-packages >/dev/null 2>&1; then
+    if ! sudo env "PIP_CACHE_DIR=$PIP_CACHE_DIR" PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade -q --progress-bar off meson --break-system-packages >/dev/null 2>&1; then
       log "$(msg 'pip in root env does not support --break-system-packages, retrying with compatible flags' 'root 环境 pip 不支持 --break-system-packages，回退到兼容参数重试')"
-      sudo env PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade -q --progress-bar off meson >/dev/null 2>&1 || die "$(msg 'Failed to upgrade meson in root environment' 'root 环境升级 meson 失败')"
+      sudo env "PIP_CACHE_DIR=$PIP_CACHE_DIR" PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade -q --progress-bar off meson >/dev/null 2>&1 || die "$(msg 'Failed to upgrade meson in root environment' 'root 环境升级 meson 失败')"
     fi
     export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"
     if ! system_meson_version="$(PYTHONNOUSERSITE=1 meson --version)" \
@@ -1332,8 +1420,10 @@ install_mpv() {
     cd "$build_dir" || exit 1
 
     # Supply the source directories directly because mpv-build's update step clones them.
+    local mpv_build_revision
+    mpv_build_revision="$(git ls-remote --exit-code https://github.com/mpv-player/mpv-build.git refs/heads/master | cut -f1)" || exit 1
     download_source_archive mpv-build \
-      https://codeload.github.com/mpv-player/mpv-build/tar.gz/refs/heads/master . || exit 1
+      "https://codeload.github.com/mpv-player/mpv-build/tar.gz/$mpv_build_revision" . || exit 1
     download_source_archive "FFmpeg ${target_ffmpeg_version}" \
       "$(github_archive_url "$FFMPEG_SOURCE_REPOSITORY" "refs/tags/$ffmpeg_tag")" ffmpeg || exit 1
     download_source_archive "mpv ${mpv_tag}" \
@@ -1342,12 +1432,17 @@ install_mpv() {
       "https://codeload.github.com/libass/libass/tar.gz/refs/tags/${libass_tag}" libass || exit 1
     # The libplacebo tag archive omits the bundled build dependencies.
     tmux_run "$(msg "Download libplacebo ${libplacebo_tag}" "下载 libplacebo ${libplacebo_tag}")" \
-      git clone --depth 1 --branch "$libplacebo_tag" --recurse-submodules=3rdparty --shallow-submodules \
-      https://github.com/haasn/libplacebo.git libplacebo || exit 1
+      download_git_tree https://github.com/haasn/libplacebo.git "$libplacebo_tag" libplacebo || exit 1
 
     echo "--enable-libbluray" > ffmpeg_options || exit 1
     echo "--enable-libdav1d" >> ffmpeg_options || exit 1
     echo "--enable-libopus" >> ffmpeg_options || exit 1
+    if "$package_build"; then
+      # Keep the three executables on one private FFmpeg runtime.
+      printf '%s\n' --disable-static --enable-shared >> ffmpeg_options || exit 1
+      export LDFLAGS="${LDFLAGS:+$LDFLAGS }-Wl,-rpath,$shared_ffmpeg_dir"
+      export LD_LIBRARY_PATH="$PWD/build_libs/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    fi
     echo "-Dlibbluray=enabled" > mpv_options || exit 1
     echo "-Dlua=luajit" >> mpv_options || exit 1
     echo "-Dvapoursynth=enabled" >> mpv_options || exit 1
@@ -1368,7 +1463,7 @@ C
 
     export PKG_CONFIG_PATH="$pkg_config_path"
     export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"
-    pkg-config --atleast-version=56 vapoursynth-script \
+    pkg-config --atleast-version=56 vapoursynth \
       || die "$(msg 'mpv requires VapourSynth VSScript development files version 56 or later' 'mpv 需要 VapourSynth VSScript 56 或更高版本的开发文件')"
 
     # FFmpeg can write generated resources before make creates their directory.
@@ -1377,6 +1472,16 @@ C
     tmux_run "mpv-build build" env PYTHONNOUSERSITE=1 ./build -j"$(nproc)" || exit 1
     test_mpv_vapoursynth "$PWD/mpv/build/mpv" \
       || die "$(msg 'The rebuilt mpv failed the VapourSynth playback check' '重新编译的 mpv 未通过 VapourSynth 播放验证')"
+    if "$package_build"; then
+      bluray_sudo install -d -m 0755 "$shared_ffmpeg_dir" || exit 1
+      local library
+      for library in build_libs/lib/lib{av*,sw*}.so.*; do
+        # Install each SONAME once. The linker does not need the other aliases.
+        if [[ "${library##*.so.}" =~ ^[0-9]+$ ]]; then
+          bluray_sudo install -m 0644 "$library" "$shared_ffmpeg_dir/" || exit 1
+        fi
+      done
+    fi
     tmux_run "mpv-build install" sudo env PYTHONNOUSERSITE=1 "PATH=$PATH" "PKG_CONFIG_PATH=${PKG_CONFIG_PATH:-}" ./install || exit 1
     install_configured_executable build_libs/bin/ffmpeg "$FFMPEG_PATH" || exit 1
     install_configured_executable build_libs/bin/ffprobe "$FFPROBE_PATH" || exit 1
@@ -1390,28 +1495,33 @@ C
     || ! __ffmpeg_has_libopus "$FFMPEG_PATH"; then
     die "$(msg "Installed FFmpeg / FFprobe version or libopus support verification failed. Build files were kept in ${build_dir}" "安装后的 FFmpeg / FFprobe 版本或 libopus 支持校验失败。构建文件保留在 ${build_dir}")"
   fi
+  if "$package_build" && ! __mpv_tools_share_ffmpeg "$shared_ffmpeg_dir"; then
+    die "$(msg 'mpv, FFmpeg and FFprobe did not link to the shared FFmpeg runtime' 'mpv、FFmpeg 或 FFprobe 未链接到同一套 FFmpeg 运行库')"
+  fi
   rm -rf "$build_dir"
   log "$(msg "mpv with VapourSynth and FFmpeg / FFprobe with libopus installed (${installed_ffmpeg_version}/${installed_ffprobe_version})" "已安装支持 VapourSynth 的 mpv，以及带 libopus 支持的 FFmpeg / FFprobe（${installed_ffmpeg_version}/${installed_ffprobe_version}）")"
 }
 
 install_mpv_desktop() (
-  local build_dir installer status
+  local build_dir installer status bundle=--configure
   installer="$(dirname -- "$BLURAY_SETUP_SOURCE")/tools/mpv/install.py"
   status="$(python3 "$installer" --status "$BLURAY_LANG" "$PLUGIN_PATH")" \
     || die "$(msg 'Could not check the mpv desktop configuration' '无法检查 mpv 桌面配置')"
   if [[ "$status" == "ready" ]]; then
-    log "$(msg 'mpv desktop configuration is complete, skipping installation' 'mpv 桌面配置已就绪，跳过安装')"
+    log "$(msg 'Both mpv menu languages and desktop settings are ready' 'mpv 双语菜单及桌面配置已就绪')"
     return 0
   fi
+  if [[ "$status" == "install" ]]; then
+    build_dir="$(bluray_mktemp_dir)"
+    trap 'rm -rf -- "$build_dir"' EXIT
+    tmux_run "uosc download" download_github_release_asset tomasklaen/uosc "" uosc.zip "$build_dir/uosc.zip" \
+      || die "$(msg 'Could not download the uosc release' '无法下载 uosc 发布包')"
+    bundle="$build_dir/uosc"
+    unzip -q "$build_dir/uosc.zip" -d "$bundle"
+  fi
 
-  build_dir="$(bluray_mktemp_dir)"
-  trap 'rm -rf -- "$build_dir"' EXIT
-
-  log "$(msg 'Installing uosc, the mpv menu, shaders and playback presets' '安装 uosc、mpv 菜单、着色器和播放预设')"
-  tmux_run "uosc download" download_github_release_asset tomasklaen/uosc "" uosc.zip "$build_dir/uosc.zip" \
-    || die "$(msg 'Could not download the uosc release' '无法下载 uosc 发布包')"
-  unzip -q "$build_dir/uosc.zip" -d "$build_dir/uosc"
-  python3 "$installer" "$build_dir/uosc" "$BLURAY_LANG" "$PLUGIN_PATH" \
+  log "$(msg 'Configuring the English and Chinese mpv menus, shaders and playback presets' '正在配置 mpv 中英文菜单、着色器和播放预设')"
+  python3 "$installer" "$bundle" "$BLURAY_LANG" "$PLUGIN_PATH" \
     || die "$(msg 'Could not configure the mpv desktop' '无法配置 mpv 桌面界面')"
 )
 
@@ -2038,171 +2148,90 @@ install_flac() {
 }
 
 # ---------------------------------------------------------------------------
-# zimg
-# ---------------------------------------------------------------------------
-
-install_zimg_latest() {
-  local header=""
-  if [[ -f /usr/local/include/zimg.h ]]; then
-    header="/usr/local/include/zimg.h"
-  elif [[ -f /usr/include/zimg.h ]]; then
-    header="/usr/include/zimg.h"
-  fi
-
-  if [[ -n "${header:-}" ]] && grep -q "ZIMG_TRANSFER_ST428" "$header"; then
-    log "$(msg 'zimg already contains ZIMG_TRANSFER_ST428, skipping upgrade' '检测到 zimg 已包含 ZIMG_TRANSFER_ST428，跳过升级')"
-    return 0
-  fi
-
-  local deps=(build-essential autoconf automake libtool pkg-config git)
-  local missing_deps=()
-  local dep
-  for dep in "${deps[@]}"; do
-    if ! dpkg-query -W -f='${Status}' "$dep" 2>/dev/null | grep -q "install ok installed"; then
-      missing_deps+=("$dep")
-    fi
-  done
-  if (( ${#missing_deps[@]} > 0 )); then
-    apt_update
-    apt_install "${missing_deps[@]}" || die "$(msg 'Failed to install zimg build dependencies' 'zimg 编译依赖安装失败')"
-  fi
-
-  log "$(msg 'Current zimg version is too old (missing ZIMG_TRANSFER_ST428), building latest zimg from source...' '当前 zimg 版本过低（缺少 ZIMG_TRANSFER_ST428），开始编译安装最新版 zimg...')"
-
-  local build_dir zimg_tag
-  zimg_tag="$(latest_stable_tag https://github.com/sekrit-twc/zimg.git '^release-[0-9]+([.][0-9]+)+$' 'release-*')"
-  build_dir="$(mktemp -d)"
-  (
-    cd "$build_dir" || exit 1
-    download_source_archive "zimg ${zimg_tag#release-}" \
-      "https://codeload.github.com/sekrit-twc/zimg/tar.gz/refs/tags/${zimg_tag}" . || exit 1
-    tmux_run "zimg autogen" ./autogen.sh || exit 1
-    tmux_run "zimg configure" ./configure --prefix=/usr/local --disable-unit-test || exit 1
-    tmux_run "zimg make" make -j"$(nproc)" || exit 1
-    tmux_run "zimg install" sudo make install || exit 1
-  ) || die "$(msg 'zimg build/install failed' 'zimg 编译/安装失败')"
-  rm -rf "$build_dir"
-  sudo ldconfig
-  log "$(msg 'Latest zimg installation complete' '最新版 zimg 安装完成')"
-}
-
-# ---------------------------------------------------------------------------
 # VapourSynth
 # ---------------------------------------------------------------------------
 
-# The marker file records the built Classic tag (R57.A*) so later runs can skip rebuilds.
-VAPOURSYNTH_VERSION_FILE="/usr/local/share/vapoursynth-classic-version.txt"
+VAPOURSYNTH_TAG="R79"
+VAPOURSYNTH_PYTHON="/usr/bin/python3"
 
-test_vapoursynth_runtime() {
-  python3 -c 'import vapoursynth as vs; print(vs.core.version())' \
-    && "$VSPIPE_PATH" --version
+select_vapoursynth_python() {
+  if "$VAPOURSYNTH_PYTHON" -c 'import sys; sys.exit(sys.version_info < (3, 12))'; then
+    return
+  fi
+
+  local data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+  [[ "$data_home" == /* ]] || data_home="$HOME/.local/share"
+  local runtime="$data_home/bluraysubtitle/python"
+  VAPOURSYNTH_PYTHON="$runtime/bin/python"
+  if ! "$VAPOURSYNTH_PYTHON" -I -m pip --version >/dev/null 2>&1; then
+    log "$(msg 'Installing Python 3.12 for BluraySubtitle and VapourSynth R79' '正在为 BluraySubtitle 和 VapourSynth R79 安装 Python 3.12')"
+    local work
+    work="$(bluray_mktemp_dir)"
+    /usr/bin/python3 -m venv "$work/tools"
+    "$work/tools/bin/python" -m pip install --disable-pip-version-check --only-binary=:all: uv
+    UV_PYTHON_INSTALL_DIR="${runtime%/*}/interpreters" "$work/tools/bin/uv" venv \
+      --python 3.12 --managed-python --seed "$runtime"
+    rm -rf -- "$work"
+  fi
 }
 
 install_vapoursynth() {
-  log "$(msg 'Installing VapourSynth (build from source)' '安装 VapourSynth（从源码编译并安装）')"
-
-  local vapoursynth_tag vapoursynth_installed_version=""
-  vapoursynth_tag="$(latest_stable_tag "$VAPOURSYNTH_SOURCE_REPOSITORY" '^R[0-9]+[.]A[0-9]+$' 'R*')"
-
-  log "$(msg 'Checking and upgrading Cython for VapourSynth compilation' '检查并升级 Cython 以支持 VapourSynth 编译')"
-  if ! python3 -m pip --version >/dev/null 2>&1; then
-    apt_update
-    apt_install python3-pip || die "$(msg 'Failed to install python3-pip' '安装 python3-pip 失败')"
+  local package_dir sdk_dir=/usr/local/include/vapoursynth build_dir wrapper
+  local -a pip=("$VAPOURSYNTH_PYTHON" -m pip)
+  if [[ "$VAPOURSYNTH_PYTHON" == "/usr/bin/python3" ]]; then
+    pip=(sudo -H env "PIP_CACHE_DIR=$PIP_CACHE_DIR" "${pip[@]}")
   fi
-  if ! python3 -m pip install --user --upgrade cython --break-system-packages >/dev/null 2>&1; then
-    log "$(msg 'pip does not support --break-system-packages, retrying with compatible flags' '当前 pip 不支持 --break-system-packages，回退到兼容参数重试')"
-    python3 -m pip install --user --upgrade cython >/dev/null 2>&1 || die "$(msg 'Failed to upgrade Cython' 'Cython 升级失败')"
-  fi
-  export PATH="$HOME/.local/bin:$PATH"
-
-  if [[ -f "/usr/local/lib/libvapoursynth.so" ]] || sudo ldconfig -p 2>/dev/null | grep -qE '\blibvapoursynth\.so\b'; then
-    vapoursynth_installed_version="$(head -n 1 "$VAPOURSYNTH_VERSION_FILE" 2>/dev/null || true)"
-    if [[ "$vapoursynth_installed_version" == "$vapoursynth_tag" ]]; then
-      if command -v vspipe >/dev/null 2>&1; then
-        install_command_at_configured_path vspipe "$VSPIPE_PATH"
-      fi
-      if test_vapoursynth_runtime >/dev/null; then
-        log "$(msg "VapourSynth ${vapoursynth_tag} already installed, skipping" "检测到已安装最新 VapourSynth ${vapoursynth_tag}，跳过编译安装")"
-        return 0
-      fi
-      log "$(msg 'Installed VapourSynth failed its runtime checks; rebuilding.' '已安装的 VapourSynth 未通过运行验证，将重新编译。')"
-    else
-      log "$(msg "Installed VapourSynth (${vapoursynth_installed_version:-unrecorded version}) is not the latest ${vapoursynth_tag}, upgrading from source" "已安装的 VapourSynth 版本（${vapoursynth_installed_version:-未记录版本}）不是最新版 ${vapoursynth_tag}，将从源码升级")"
+  if ! "$VAPOURSYNTH_PYTHON" -I -c 'import vapoursynth as vs; assert vs.core.core_version.release_major == 79' >/dev/null 2>&1; then
+    log "$(msg "Installing upstream VapourSynth $VAPOURSYNTH_TAG" "安装上游 VapourSynth $VAPOURSYNTH_TAG")"
+    local -a pip_options=()
+    if "${pip[@]}" install --help | grep -F -- '--break-system-packages' >/dev/null; then
+      pip_options+=(--break-system-packages)
     fi
+    "${pip[@]}" install --disable-pip-version-check --upgrade --only-binary=:all: \
+      "${pip_options[@]}" "VapourSynth==${VAPOURSYNTH_TAG#R}"
   fi
 
-  # Verify Cython version >= 3.0
-  local cython_cmd="cython"
-  if ! command -v cython >/dev/null 2>&1; then
-    if command -v cython3 >/dev/null 2>&1; then
-      cython_cmd="cython3"
-    else
-      die "$(msg 'cython/cython3 not found' '未找到 cython/cython3')"
-    fi
+  package_dir="$("$VAPOURSYNTH_PYTHON" -I -c 'import vapoursynth as vs; from pathlib import Path; print(Path(vs.__file__).parent)')"
+  "$VAPOURSYNTH_PYTHON" -I -m vapoursynth config
+  bluray_sudo install -d "$sdk_dir" /usr/local/lib/pkgconfig
+  if ! cmp -s "$package_dir/include/VapourSynth4.h" "$sdk_dir/VapourSynth4.h" \
+      || [[ ! -s "$sdk_dir/VapourSynth.h" || ! -s "$sdk_dir/VSHelper.h" ]]; then
+    # The wheel ships API4 headers. The upstream R79 source also has the API3 headers used by legacy filters.
+    build_dir="$(bluray_mktemp_dir)"
+    download_source_archive "VapourSynth $VAPOURSYNTH_TAG" \
+      "https://codeload.github.com/vapoursynth/vapoursynth/tar.gz/refs/tags/$VAPOURSYNTH_TAG" "$build_dir/source"
+    bluray_sudo install -m 0644 "$build_dir/source/include/"*.h "$sdk_dir/"
+    rm -rf -- "$build_dir"
   fi
-  CYTHON_V=$("$cython_cmd" --version 2>&1 | grep -oP '\d+\.\d+\.\d+' | head -n 1)
-  if [[ "${CYTHON_V%%.*}" -lt 3 ]]; then
-      die "$(msg "Cython version too low ($CYTHON_V); VapourSynth requires >= 3.0.0" "Cython 版本过低 ($CYTHON_V)，编译 VapourSynth 需要 3.0.0 以上版本")"
+  bluray_sudo tee /usr/local/lib/pkgconfig/vapoursynth.pc >/dev/null <<EOF
+libdir=$package_dir
+includedir=$sdk_dir
+Name: VapourSynth
+Description: VapourSynth filter SDK
+Version: ${VAPOURSYNTH_TAG#R}
+Cflags: -I\${includedir}
+EOF
+  # The system linker must not trust libraries managed by an unprivileged account.
+  if [[ "$(stat -c '%u' "$package_dir")" == "0" && "$(stat -c '%u' "$(dirname "$package_dir")")" == "0" ]]; then
+    case "$package_dir" in
+      /usr/lib/* | /usr/local/lib/*) printf '%s\n' "$package_dir" | sudo tee /etc/ld.so.conf.d/bluraysubtitle-vapoursynth.conf >/dev/null ;;
+    esac
+    sudo ldconfig
   fi
+  VAPOURSYNTH_VSSCRIPT="$package_dir/libvsscript.so"
 
-  local deps=(build-essential autoconf automake libtool pkg-config python3-dev cython3 libzimg-dev
-    libmagick++-dev libtesseract-dev libass-dev libavcodec-dev libavformat-dev libavutil-dev
-    libswscale-dev python3-sphinx wget tar)
-  local missing_deps=()
-  for dep in "${deps[@]}"; do
-    if ! dpkg-query -W -f='${Status}' "$dep" 2>/dev/null | grep -q "install ok installed"; then
-      missing_deps+=("$dep")
-    fi
-  done
-  if (( ${#missing_deps[@]} > 0 )); then
-    apt_update
-    apt_install "${missing_deps[@]}" || die "$(msg 'Failed to install VapourSynth dependencies' 'VapourSynth 依赖安装失败')"
-  fi
-
-  install_zimg_latest
-
-  local build_dir
-  build_dir="$(mktemp -d)"
-
-  (
-    cd "$build_dir" || exit 1
-
-    # The originally provided URL returns 404; replaced with the GitHub archive link
-    # which produces the same directory name after extraction.
-    tmux_run "$(msg "Download VapourSynth ${vapoursynth_tag}" "下载 VapourSynth ${vapoursynth_tag}")" \
-      wget -O "${vapoursynth_tag}.tar.gz" "$(github_archive_url "$VAPOURSYNTH_SOURCE_REPOSITORY" "refs/tags/$vapoursynth_tag")" || exit 1
-
-    log "$(msg 'Extracting VapourSynth source tarball' '解压 VapourSynth 源码包')"
-    tmux_run "$(msg "Extract VapourSynth ${vapoursynth_tag}" "解压 VapourSynth ${vapoursynth_tag}")" tar zxvf "${vapoursynth_tag}.tar.gz" || exit 1
-    cd "vapoursynth-classic-${vapoursynth_tag}" || exit 1
-
-    # VapourSynth-classic R57 uses an API removed in FFmpeg 8; the replacement also supports older FFmpeg.
-    if [[ -f "src/filters/subtext/image.cpp" ]] && grep -Fq 'avcodec_close(' src/filters/subtext/image.cpp; then
-      log "$(msg 'Applying the FFmpeg 8.0+ API compatibility patch to VapourSynth...' '正在为 VapourSynth 应用 FFmpeg 8.0+ API 兼容性补丁...')"
-      sed -i 's/avcodec_close(\(.*\));/avcodec_free_context(\&\(\1\));/g' src/filters/subtext/image.cpp
-    fi
-
-    log "$(msg 'Configuring and building VapourSynth' '配置与编译 VapourSynth')"
-    tmux_run "VapourSynth autogen" ./autogen.sh || exit 1
-    tmux_run "VapourSynth configure" ./configure CXXFLAGS="-O3 -fpermissive" || die "$(msg 'VapourSynth configure failed' 'VapourSynth 配置失败')"
-    tmux_run "VapourSynth make" make -j"$(nproc)" || exit 1
-    tmux_run "VapourSynth install" sudo make install || exit 1
-    sudo ldconfig || exit 1
-
-    local py_ver
-    py_ver=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-
-    log "$(msg "Creating vapoursynth.so symlink (for Python ${py_ver})" "创建 vapoursynth.so 软链接 (针对 Python ${py_ver})")"
-    sudo mkdir -p /usr/lib/python3/dist-packages
-    sudo ln -sf "/usr/local/lib/python${py_ver}/site-packages/vapoursynth.so" "/usr/lib/python3/dist-packages/vapoursynth.so" || exit 1
-
-    install_command_at_configured_path vspipe "$VSPIPE_PATH" || exit 1
-    test_vapoursynth_runtime || die "$(msg 'VapourSynth runtime verification failed after installation' 'VapourSynth 安装后的运行验证失败')"
-    printf '%s\n' "$vapoursynth_tag" | bluray_sudo tee "$VAPOURSYNTH_VERSION_FILE" >/dev/null || exit 1
-  ) || die "$(msg 'VapourSynth build/install failed' 'VapourSynth 编译/安装失败')"
-
-  rm -rf "$build_dir"
-  log "$(msg 'VapourSynth installation complete' 'VapourSynth 安装完成')"
+  wrapper="$(mktemp)"
+  {
+    printf '%s\n' '#!/usr/bin/env bash' \
+      'if [[ -z "${VAPOURSYNTH_EXTRA_PLUGIN_PATH+x}" && -z "${BLURAYSUB_PLUGIN_PATH:-}" ]]; then'
+    printf '  export VAPOURSYNTH_EXTRA_PLUGIN_PATH=%q\n' "$PLUGIN_PATH"
+    printf 'fi\nexec %q "$@"\n' "$package_dir/vspipe"
+  } > "$wrapper"
+  VAPOURSYNTH_EXTRA_PLUGIN_PATH="" "$package_dir/vspipe" --version | grep -Fx "Core $VAPOURSYNTH_TAG" \
+    || die "$(msg 'VapourSynth R79 failed to load its configured Python' 'VapourSynth R79 未能加载配置的 Python')"
+  install_configured_executable "$wrapper" "$VSPIPE_PATH"
+  rm -f -- "$wrapper"
+  export VSSCRIPT_PATH="$VAPOURSYNTH_VSSCRIPT"
 }
 
 # ---------------------------------------------------------------------------
@@ -2210,7 +2239,7 @@ install_vapoursynth() {
 # ---------------------------------------------------------------------------
 
 vs_plugin_version() {
-  python3 "$(dirname -- "$BLURAY_SETUP_SOURCE")/tools/vapoursynth_plugin_versions.py" \
+  "$VAPOURSYNTH_PYTHON" "$(dirname -- "$BLURAY_SETUP_SOURCE")/tools/vapoursynth_plugin_versions.py" \
     "$PLUGIN_PATH" "$1" "$2" "$3"
 }
 
@@ -2241,7 +2270,7 @@ vs_plugin_needs_upgrade() {
 # ---------------------------------------------------------------------------
 
 descale_supports_blur() {
-  python3 - "$1" "$2" <<'PY'
+  "$VAPOURSYNTH_PYTHON" - "$1" "$2" <<'PY'
 import filecmp
 from pathlib import Path
 import sys
@@ -2262,7 +2291,7 @@ if not filecmp.cmp(plugin_path, plugin.plugin_path, shallow=False):
 for name in ("Debilinear", "Debicubic", "Delanczos", "Despline16", "Despline36", "Despline64", "Descale"):
     if "blur:float:opt;" not in getattr(plugin, name).signature:
         raise SystemExit(1)
-clip = core.std.BlankClip(width=64, height=48, format=vs.PresetFormat.GRAYS, length=1)
+clip = core.std.BlankClip(width=64, height=48, format=vs.GRAYS, length=1)
 plugin.Descale(clip, 48, 32, kernel="bilinear", blur=1.0).get_frame(0)
 PY
 }
@@ -2306,10 +2335,7 @@ install_descale() {
     sed -i '/vsapi->createVideoFilter/s/data->/d./g' src/vsplugin.cc || exit 1
     tmux_run "descale meson setup" meson setup build --buildtype=release || exit 1
     tmux_run "descale ninja" ninja -C build || exit 1
-    # Update the autoload copy as well so it cannot shadow the configured plugin.
-    sudo install -D -m 0755 build/libdescale.so /usr/local/lib/vapoursynth/libdescale.so || exit 1
     bluray_sudo install -D -m 0755 build/libdescale.so "$plugins_dir/libdescale.so" || exit 1
-    sudo ldconfig || exit 1
   ) || die "$(msg 'descale build/install failed' 'descale 编译/安装失败')"
 
   descale_supports_blur "$plugins_dir/libdescale.so" "$descale_version" \
@@ -2357,18 +2383,33 @@ ensure_modern_7zip_cli() {
 
 install_vapoursynth_scripts() {
   local py_ver
-  py_ver="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+  py_ver="$("$VAPOURSYNTH_PYTHON" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
   local dst_dir="/usr/local/lib/python${py_ver}/dist-packages"
 
   local installer="$(dirname -- "$BLURAY_SETUP_SOURCE")/tools/install_vapoursynth_scripts.py"
   log "$(msg 'Synchronizing repository-managed VapourSynth scripts and copyright notices' '同步仓库中的 VapourSynth 脚本和版权说明')"
-  sudo python3 "$installer" --destination "$dst_dir" || die "$(msg 'Failed to install repository-managed VapourSynth scripts' '安装仓库中的 VapourSynth 脚本失败')"
+  if [[ "$VAPOURSYNTH_PYTHON" != "/usr/bin/python3" ]]; then
+    dst_dir="$("$VAPOURSYNTH_PYTHON" -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
+    "$VAPOURSYNTH_PYTHON" "$installer" --destination "$dst_dir" \
+      || die "$(msg 'Failed to install repository-managed VapourSynth scripts' '安装仓库中的 VapourSynth 脚本失败')"
+    return
+  fi
+  bluray_sudo "$VAPOURSYNTH_PYTHON" "$installer" --destination "$dst_dir" || die "$(msg 'Failed to install repository-managed VapourSynth scripts' '安装仓库中的 VapourSynth 脚本失败')"
   log "$(msg "VapourSynth scripts and notices verified at ${dst_dir}" "已校验 ${dst_dir} 中的 VapourSynth 脚本和版权说明")"
 }
 
 # ---------------------------------------------------------------------------
 # VapourSynth Editor (vsedit)
 # ---------------------------------------------------------------------------
+
+write_vsedit_launcher() {
+  local wrapper
+  wrapper="$(mktemp)"
+  printf '#!/usr/bin/env bash\nexport VSSCRIPT_PATH=%q\nexport VAPOURSYNTH_EXTRA_PLUGIN_PATH=%q\nexec %q "$@"\n' \
+    "$VAPOURSYNTH_VSSCRIPT" "$PLUGIN_PATH" "$VSEDIT_BINARY_PATH" > "$wrapper"
+  install_configured_executable "$wrapper" "$VSEDIT_PATH"
+  rm -f -- "$wrapper"
+}
 
 install_vapoursynth_editor() {
   local vsedit_tag target_version installed_tag=""
@@ -2382,6 +2423,7 @@ install_vapoursynth_editor() {
     installed_tag="$(sed -nE 's/^VapourSynth Editor ([rR][0-9]+-mod-[0-9]+([.][0-9]+)*).*$/\1/p' <<<"$installed_output")"
     if [[ -n "$installed_tag" ]] && dpkg --compare-versions "${installed_tag#[rR]}" ge "$target_version"; then
       log "$(msg "vsedit is current (${installed_tag} >= ${vsedit_tag}), skipping build" "vsedit 已是当前版本（${installed_tag} >= ${vsedit_tag}），跳过编译")"
+      write_vsedit_launcher
       return 0
     fi
   fi
@@ -2415,7 +2457,7 @@ install_vapoursynth_editor() {
     cd vsedit_build || exit 1
 
     tmux_run "$(msg "Download vsedit ${vsedit_tag}" "下载 vsedit ${vsedit_tag}")" \
-      wget -O vsedit.tar.gz "$(github_archive_url "$VSEDIT_SOURCE_REPOSITORY" "refs/tags/$vsedit_tag")" || exit 1
+      download_url "$(github_archive_url "$VSEDIT_SOURCE_REPOSITORY" "refs/tags/$vsedit_tag")" vsedit.tar.gz || exit 1
 
     log "$(msg 'Extracting vsedit source tarball' '解压 vsedit 源码包')"
     tmux_run "$(msg 'Extract vsedit source' '解压 vsedit 源码包')" tar -zxvf vsedit.tar.gz --strip-components=1 || exit 1
@@ -2451,25 +2493,9 @@ install_vapoursynth_editor() {
     # Copy the real binary as vsedit-bin
     install_configured_executable "$bin_path" "$VSEDIT_BINARY_PATH" || exit 1
 
-    local py_ver
-    py_ver=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-
-    # Create a vsedit wrapper script that injects the required environment variables
-    # (fixes "Failed to get VSScript API" at startup)
-    log "$(msg 'Creating vsedit wrapper launch script' '创建 vsedit 包装器启动脚本')"
-    bluray_sudo mkdir -p "$(dirname -- "$VSEDIT_PATH")" || exit 1
-    bluray_sudo tee "$VSEDIT_PATH" > /dev/null <<EOF
-#!/bin/bash
-export VAPOURSYNTH_PYTHON_PATH=/usr/lib/python${py_ver}
-export LD_LIBRARY_PATH=/usr/local/lib:\$LD_LIBRARY_PATH
-export LD_PRELOAD=/usr/local/lib/libvapoursynth-script.so
-exec "${VSEDIT_BINARY_PATH}" "\$@"
-EOF
-    bluray_sudo chmod +x "$VSEDIT_PATH"
-
-    log "$(msg 'vsedit wrapper created. You can now run vsedit directly.' 'vsedit 包装器创建成功。你现在可以直接运行 vsedit 了。')"
   ) || die "$(msg 'vsedit build/install failed' 'vsedit 编译/安装失败')"
 
+  write_vsedit_launcher
   rm -rf "$build_dir"
   log "$(msg 'VapourSynth Editor (vsedit) installation complete' 'vapoursynth-editor (vsedit) 安装完成')"
 }
@@ -2505,8 +2531,7 @@ install_libplacebo_latest() {
     (
         cd "$build_dir" || exit 1
         tmux_run "$(msg 'Download libplacebo v6.338.0' '下载 libplacebo v6.338.0')" \
-            git clone --depth 1 --branch v6.338.0 --recurse-submodules=3rdparty --shallow-submodules \
-            https://code.videolan.org/videolan/libplacebo.git . || exit 1
+            download_git_tree https://code.videolan.org/videolan/libplacebo.git v6.338.0 . || exit 1
 
         rm -rf build
 
@@ -2741,11 +2766,11 @@ LSMASH_FFMPEG_PATCH
       log "$(msg 'L-SMASH-Works version is current, skipping' 'L-SMASH-Works 版本已满足要求，跳过')"
     fi
 
-    # Keep r9: r10 declares VapourSynth >= R74, but this project uses VapourSynth Classic (R57-based).
+    # Keep the EEDI3m release used by the existing filter scripts.
     if vs_plugin_needs_upgrade "eedi3m.so" "r9"; then
       log "$(msg 'Building VapourSynth-EEDI3 (r9)' '编译 VapourSynth-EEDI3 (r9)')"
       cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download EEDI3 r9' '下载 EEDI3 r9')" wget -O r9.tar.gz https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI3/tar.gz/refs/tags/r9 || exit 1
+      tmux_run "$(msg 'Download EEDI3 r9' '下载 EEDI3 r9')" download_url https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI3/tar.gz/refs/tags/r9 r9.tar.gz || exit 1
       tmux_run "$(msg 'Extract EEDI3 r9' '解压 EEDI3 r9')" tar zxvf r9.tar.gz || exit 1
       cd VapourSynth-EEDI3-r9/ || exit 1
       log "$(msg 'Fixing EEDI3 std::max_align_t compilation compatibility issue' '修复 EEDI3 的 std::max_align_t 编译兼容性问题')"
@@ -2770,7 +2795,7 @@ PY
     if vs_plugin_needs_upgrade "libaddgrain.so" "r10"; then
       log "$(msg 'Building VapourSynth-AddGrain (r10)' '编译 VapourSynth-AddGrain (r10)')"
       cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download AddGrain r10' '下载 AddGrain r10')" wget -O r10.tar.gz https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-AddGrain/tar.gz/refs/tags/r10 || exit 1
+      tmux_run "$(msg 'Download AddGrain r10' '下载 AddGrain r10')" download_url https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-AddGrain/tar.gz/refs/tags/r10 r10.tar.gz || exit 1
       tmux_run "$(msg 'Extract AddGrain r10' '解压 AddGrain r10')" tar zxvf r10.tar.gz || exit 1
       cd VapourSynth-AddGrain-r10/ || exit 1
       tmux_run "AddGrain meson setup" meson setup build || exit 1
@@ -2806,7 +2831,7 @@ PY
     if vs_plugin_needs_upgrade "libbilateral.so" "r3"; then
       log "$(msg 'Building VapourSynth-Bilateral (r3)' '编译 VapourSynth-Bilateral (r3)')"
       cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download Bilateral r3' '下载 Bilateral r3')" wget -O r3.tar.gz https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-Bilateral/tar.gz/refs/tags/r3 || exit 1
+      tmux_run "$(msg 'Download Bilateral r3' '下载 Bilateral r3')" download_url https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-Bilateral/tar.gz/refs/tags/r3 r3.tar.gz || exit 1
       tmux_run "$(msg 'Extract Bilateral r3' '解压 Bilateral r3')" tar zxvf r3.tar.gz || exit 1
       cd VapourSynth-Bilateral-r3/ || exit 1
       chmod +x configure || exit 1
@@ -2836,7 +2861,7 @@ PY
         || vs_plugin_needs_upgrade "libdfttest.so" "r7"; then
       log "$(msg 'Building VapourSynth-DFTTest (r7)' '编译 VapourSynth-DFTTest (r7)')"
       cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download DFTTest r7' '下载 DFTTest r7')" wget -O r7.tar.gz https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-DFTTest/tar.gz/refs/tags/r7 || exit 1
+      tmux_run "$(msg 'Download DFTTest r7' '下载 DFTTest r7')" download_url https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-DFTTest/tar.gz/refs/tags/r7 r7.tar.gz || exit 1
       tmux_run "$(msg 'Extract DFTTest r7' '解压 DFTTest r7')" tar zxvf r7.tar.gz || exit 1
       cd VapourSynth-DFTTest-r7/ || exit 1
       log "$(msg 'Installing DFTTest build dependency: libfftw3-dev...' '正在安装 DFTTest 编译依赖: libfftw3-dev...')"
@@ -2859,7 +2884,7 @@ PY
     if vs_plugin_needs_upgrade "libeedi2.so" "r7.1"; then
       log "$(msg 'Building VapourSynth-EEDI2 (r7.1)' '编译 VapourSynth-EEDI2 (r7.1)')"
       cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download EEDI2 r7.1' '下载 EEDI2 r7.1')" wget -O r7.1.tar.gz https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI2/tar.gz/refs/tags/r7.1 || exit 1
+      tmux_run "$(msg 'Download EEDI2 r7.1' '下载 EEDI2 r7.1')" download_url https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI2/tar.gz/refs/tags/r7.1 r7.1.tar.gz || exit 1
       tmux_run "$(msg 'Extract EEDI2 r7.1' '解压 EEDI2 r7.1')" tar zxvf r7.1.tar.gz || exit 1
       cd VapourSynth-EEDI2-r7.1/ || exit 1
       tmux_run "EEDI2 meson setup" meson setup build || exit 1
@@ -2874,7 +2899,7 @@ PY
     if vs_plugin_needs_upgrade "libfmtconv.so" "r30"; then
       log "$(msg 'Building fmtconv (r30)' '编译 fmtconv (r30)')"
       cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download fmtconv r30' '下载 fmtconv r30')" wget -O r30.tar.gz https://codeload.github.com/EleonoreMizo/fmtconv/tar.gz/refs/tags/r30 || exit 1
+      tmux_run "$(msg 'Download fmtconv r30' '下载 fmtconv r30')" download_url https://codeload.github.com/EleonoreMizo/fmtconv/tar.gz/refs/tags/r30 r30.tar.gz || exit 1
       tmux_run "$(msg 'Extract fmtconv r30' '解压 fmtconv r30')" tar zxvf r30.tar.gz || exit 1
       cd fmtconv-r30/build/unix || exit 1
       tmux_run "fmtconv autogen" ./autogen.sh || exit 1
@@ -2890,10 +2915,26 @@ PY
       log "$(msg 'libfmtconv.so version is current, skipping' 'libfmtconv.so 版本已满足要求，跳过')"
     fi
 
+    if vs_plugin_needs_upgrade "libeedi3.so" "R57.A15" || vs_plugin_needs_upgrade "libmiscfilters.so" "R57.A15"; then
+      download_source_archive "legacy VapourSynth filters" \
+        https://codeload.github.com/AmusementClub/vapoursynth-classic/tar.gz/refs/tags/R57.A15 "$build_dir/legacy-filters" || exit 1
+      cd "$build_dir/legacy-filters" || exit 1
+      cc -shared -fPIC -O3 -Iinclude src/filters/eedi3/eedi3.c -lm -o "$plugins_dir/libeedi3.so" || exit 1
+      c++ -shared -fPIC -O3 -DVS_TARGET_CPU_X86 -Iinclude -I. src/filters/misc/miscfilters.cpp -o "$plugins_dir/libmiscfilters.so" || exit 1
+      vs_plugin_version record "libeedi3.so" "R57.A15" || exit 1
+      vs_plugin_version record "libmiscfilters.so" "R57.A15" || exit 1
+    fi
+    if vs_plugin_needs_upgrade "libvivtc.so" "R2"; then
+      download_source_archive "VIVTC R2" \
+        https://codeload.github.com/vapoursynth/vivtc/tar.gz/refs/tags/R2 "$build_dir/vivtc" || exit 1
+      cc -shared -fPIC -O3 -I/usr/local/include/vapoursynth "$build_dir/vivtc/src/vivtc.c" -lm -o "$plugins_dir/libvivtc.so" || exit 1
+      vs_plugin_version record "libvivtc.so" "R2" || exit 1
+    fi
+
     if vs_plugin_needs_upgrade "libremovegrain.so" "R1"; then
       log "$(msg 'Building vs-removegrain (R1)' '编译 vs-removegrain (R1)')"
       cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download vs-removegrain R1' '下载 vs-removegrain R1')" wget -O R1.tar.gz https://codeload.github.com/vapoursynth/vs-removegrain/tar.gz/refs/tags/R1 || exit 1
+      tmux_run "$(msg 'Download vs-removegrain R1' '下载 vs-removegrain R1')" download_url https://codeload.github.com/vapoursynth/vs-removegrain/tar.gz/refs/tags/R1 R1.tar.gz || exit 1
       tmux_run "$(msg 'Extract vs-removegrain R1' '解压 vs-removegrain R1')" tar zxvf R1.tar.gz || exit 1
       cd vs-removegrain-R1/src || exit 1
       tmux_run "$(msg 'Build vs-removegrain R1' '编译 vs-removegrain R1')" g++ -shared -fPIC -O3 -Wall \
@@ -2910,7 +2951,7 @@ PY
     if vs_plugin_needs_upgrade "libsangnommod.so" "v0.1-fix"; then
       log "$(msg 'Building VapourSynth-SangNomMod (v0.1-fix)' '编译 VapourSynth-SangNomMod (v0.1-fix)')"
       cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download SangNomMod v0.1-fix' '下载 SangNomMod v0.1-fix')" wget -O v0.1-fix.tar.gz https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-SangNomMod/tar.gz/refs/tags/v0.1-fix || exit 1
+      tmux_run "$(msg 'Download SangNomMod v0.1-fix' '下载 SangNomMod v0.1-fix')" download_url https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-SangNomMod/tar.gz/refs/tags/v0.1-fix v0.1-fix.tar.gz || exit 1
       tmux_run "$(msg 'Extract SangNomMod v0.1-fix' '解压 SangNomMod v0.1-fix')" tar zxvf v0.1-fix.tar.gz || exit 1
       cd VapourSynth-SangNomMod-0.1-fix/ || exit 1
       tmux_run "SangNomMod configure" ./configure || exit 1
@@ -2930,7 +2971,7 @@ PY
       log "$(msg 'Building vs-placebo (2.0.4)' '编译 vs-placebo (2.0.4)')"
       cd "$build_dir" || exit 1
       install_libplacebo_latest
-      tmux_run "$(msg 'Download vs-placebo 2.0.4' '下载 vs-placebo 2.0.4')" wget -O 2.0.4.tar.gz https://codeload.github.com/Lypheo/vs-placebo/tar.gz/refs/tags/2.0.4 || exit 1
+      tmux_run "$(msg 'Download vs-placebo 2.0.4' '下载 vs-placebo 2.0.4')" download_url https://codeload.github.com/Lypheo/vs-placebo/tar.gz/refs/tags/2.0.4 2.0.4.tar.gz || exit 1
       tmux_run "$(msg 'Extract vs-placebo 2.0.4' '解压 vs-placebo 2.0.4')" tar zxvf 2.0.4.tar.gz || exit 1
       cd vs-placebo-2.0.4/ || exit 1
       export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:$HOME/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
@@ -2970,7 +3011,7 @@ PY
     if vs_plugin_needs_upgrade "libvsnlm_ispc.so" "v4"; then
       log "$(msg 'Building vs-nlm-ispc (v4)' '编译 vs-nlm-ispc (v4)')"
       cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download vs-nlm-ispc v4' '下载 vs-nlm-ispc v4')" wget -O v4.tar.gz https://codeload.github.com/AmusementClub/vs-nlm-ispc/tar.gz/refs/tags/v4 || exit 1
+      tmux_run "$(msg 'Download vs-nlm-ispc v4' '下载 vs-nlm-ispc v4')" download_url https://codeload.github.com/AmusementClub/vs-nlm-ispc/tar.gz/refs/tags/v4 v4.tar.gz || exit 1
       tmux_run "$(msg 'Extract vs-nlm-ispc v4' '解压 vs-nlm-ispc v4')" tar zxvf v4.tar.gz || exit 1
       cd vs-nlm-ispc-4/ || exit 1
       mkdir -p build || exit 1
@@ -2987,7 +3028,7 @@ PY
       log "$(msg 'libvsnlm_ispc.so version is current, skipping' 'libvsnlm_ispc.so 版本已满足要求，跳过')"
     fi
 
-    # Keep zsmooth 0.7 because newer binaries are incompatible with VapourSynth Classic (R57-based).
+    # The 0.7 binary also supports distributions with older glibc.
     if vs_plugin_needs_upgrade "libzsmooth.x86_64-gnu.so" "0.7"; then
       log "$(msg 'Installing zsmooth (binary package)' '安装 zsmooth（二进制包）')"
       cd "$build_dir" || exit 1
@@ -3005,7 +3046,7 @@ PY
     if vs_plugin_needs_upgrade "mvtools.so" "v26"; then
       log "$(msg 'Building vapoursynth-mvtools (v26)' '编译 vapoursynth-mvtools (v26)')"
       cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download mvtools v26' '下载 mvtools v26')" wget -O v26.tar.gz https://codeload.github.com/dubhatervapoursynth/vapoursynth-mvtools/tar.gz/refs/tags/v26 || exit 1
+      tmux_run "$(msg 'Download mvtools v26' '下载 mvtools v26')" download_url https://codeload.github.com/dubhatervapoursynth/vapoursynth-mvtools/tar.gz/refs/tags/v26 v26.tar.gz || exit 1
       tmux_run "$(msg 'Extract mvtools v26' '解压 mvtools v26')" tar zxvf v26.tar.gz || exit 1
       cd vapoursynth-mvtools-26/ || exit 1
       python3 - <<'PY' || exit 1
@@ -3037,7 +3078,7 @@ PY
 # ---------------------------------------------------------------------------
 
 test_desktop_vs_plugin() {
-  timeout 45s python3 -I - "$1" "$2" <<'PY'
+  timeout 45s "$VAPOURSYNTH_PYTHON" -I - "$1" "$2" <<'PY'
 import sys
 
 import vapoursynth as vs
@@ -3045,7 +3086,7 @@ import vapoursynth as vs
 def check_frame(name, path):
     core = vs.core
     core.std.LoadPlugin(path=path)
-    pixel_format = vs.PresetFormat.GRAY8 if name == "bm3d" else vs.PresetFormat.RGBS
+    pixel_format = vs.GRAY8 if name == "bm3d" else vs.RGBS
     clip = core.std.BlankClip(width=96, height=64, format=pixel_format, length=3, fpsnum=24)
     if name == "ccd":
         result = core.ccd.CCD(clip, threshold=4.0)
@@ -3079,7 +3120,7 @@ build_desktop_vs_plugin() (
   trap 'rm -rf -- "$build_dir"' EXIT
   cd "$build_dir"
   log "$(msg "Building VapourSynth ${name} ${tag}" "编译 VapourSynth ${name} ${tag}")"
-  tmux_run "${name} ${tag} download" wget -O source.tar.gz "$(github_archive_url "$repository" "refs/tags/$tag")"
+  tmux_run "${name} ${tag} download" download_url "$(github_archive_url "$repository" "refs/tags/$tag")" source.tar.gz
   tar -xzf source.tar.gz --strip-components=1
 
   if [[ "$name" == "bm3d" ]]; then
@@ -3130,11 +3171,11 @@ install_desktop_vs_rife() (
 
   mkdir -p "$model_dir"
   for model_file in flownet.bin flownet.param; do
-    tmux_run "RIFE model ${model_file} download" wget -O "$model_dir/$model_file" \
-      "https://raw.githubusercontent.com/${repository#https://github.com/}/${tag}/${model_dir}/${model_file}"
+    tmux_run "RIFE model ${model_file} download" download_url \
+      "https://raw.githubusercontent.com/${repository#https://github.com/}/${tag}/${model_dir}/${model_file}" "$model_dir/$model_file"
   done
-  if ! report="$(test_desktop_vs_plugin rife "$build_dir/$library" 2>&1)" \
-    || [[ "$report" == *'failed'* ]]; then
+  if ! "$package_build" && { ! report="$(test_desktop_vs_plugin rife "$build_dir/$library" 2>&1)" \
+    || [[ "$report" == *'failed'* ]]; }; then
     printf '%s\n' "$report" >&2
     log "$(msg 'Skipping RIFE: the Vulkan frame test failed' '跳过 RIFE：Vulkan 测试帧渲染失败')"
     return 0
@@ -3151,7 +3192,6 @@ install_desktop_vs_plugins() {
   ccd_tag="$(latest_stable_tag "$ccd_repository" '^v[0-9]+([.][0-9]+)+$' 'v*')"
   build_desktop_vs_plugin ccd "$ccd_repository" "$ccd_tag" libccd.so
 
-  # BM3D r11 and newer require VapourSynth API 4.2; Classic provides API 4.0.
   build_desktop_vs_plugin bm3d https://github.com/HomeOfVapourSynthEvolution/VapourSynth-BM3D.git r10.1 bm3d.so
   install_desktop_vs_rife
 }
@@ -3190,6 +3230,15 @@ install_desktop_shortcuts() {
   done
   if [[ "$found_any" != "true" ]]; then
     log "$(msg 'No mpv/mkvtoolnix desktop files found in /usr/local/share/applications or /usr/share/applications' '未在 /usr/local/share/applications 或 /usr/share/applications 中找到 mpv/mkvtoolnix 的 desktop 文件')"
+  fi
+
+  if [[ "$VAPOURSYNTH_PYTHON" != "/usr/bin/python3" ]]; then
+    local mpv_desktop="$desktop_dir/mpv.desktop"
+    if [[ -f "$mpv_desktop" ]]; then
+      # The R79 wheel is in the user's Python environment on older distributions.
+      local desktop_vsscript="${VAPOURSYNTH_VSSCRIPT//&/\\&}"
+      sed -i "s|^Exec=mpv |Exec=env \"VSSCRIPT_PATH=$desktop_vsscript\" mpv |" "$mpv_desktop"
+    fi
   fi
 
   if [[ -x "$VSEDIT_PATH" ]]; then
@@ -3296,13 +3345,19 @@ for path in ("third_party/glslang", "third_party/spirv-tools", "third_party/spir
 }
 
 # ---------------------------------------------------------------------------
-# BluraySubtitle Python deps (must match "python3" used to run src.main)
+# BluraySubtitle Python dependencies
 # ---------------------------------------------------------------------------
 
 __bluray_python_imports_ok() {
   local dependency failed=0
-  for dependency in numpy:numpy pycountry:pycountry PyQt6:PyQt6.QtWidgets soundfile:soundfile pillow:PIL.Image matplotlib:matplotlib; do
-    if ! python3 -c 'import importlib, sys; importlib.import_module(sys.argv[1])' "${dependency#*:}" >/dev/null; then
+  local dependencies=(numpy:numpy pycountry:pycountry PyQt6:PyQt6.QtWidgets soundfile:soundfile pillow:PIL.Image)
+  if "$package_build"; then
+    dependencies+=(PyInstaller:PyInstaller)
+  else
+    dependencies+=(matplotlib:matplotlib)
+  fi
+  for dependency in "${dependencies[@]}"; do
+    if ! "$VAPOURSYNTH_PYTHON" -c 'import importlib, sys; importlib.import_module(sys.argv[1])' "${dependency#*:}" >/dev/null; then
       printf '%s\n' "${dependency%%:*}"
       failed=1
     fi
@@ -3312,35 +3367,43 @@ __bluray_python_imports_ok() {
 
 # --break-system-packages exists from pip ~23; Ubuntu 22.04's python3-pip is often older.
 __pip_supports_break_system_packages() {
-  python3 -m pip install --help 2>/dev/null | grep -qE '(^|[[:space:]])--break-system-packages([[:space:]]|$)'
+  "$VAPOURSYNTH_PYTHON" -m pip install --help 2>/dev/null | grep -qE '(^|[[:space:]])--break-system-packages([[:space:]]|$)'
 }
 
 install_bluray_python_deps() {
-  log "$(msg 'Installing or upgrading Python dependencies (python3 -m pip: numpy pycountry PyQt6 soundfile pillow matplotlib)' '安装或升级 Python 依赖（python3 -m pip：numpy pycountry PyQt6 soundfile pillow matplotlib）')"
+  log "$(msg 'Installing or upgrading Python dependencies' '安装或升级 Python 依赖')"
 
-  if ! python3 -m pip --version >/dev/null 2>&1; then
+  if ! "$VAPOURSYNTH_PYTHON" -m pip --version >/dev/null 2>&1; then
     apt_update
     apt_install python3-pip || die "$(msg 'Failed to install python3-pip' '安装 python3-pip 失败')"
   fi
 
   local pip_extra=()
-  local python_packages=(numpy pycountry PyQt6 soundfile pillow matplotlib)
+  local python_packages=(numpy pycountry soundfile pillow)
+  if "$package_build"; then
+    python_packages+=(PyInstaller)
+  else
+    python_packages+=(PyQt6 matplotlib)
+  fi
   local pip_mode_msg_en pip_mode_msg_zh
-  if __pip_supports_break_system_packages; then
+  if [[ "$VAPOURSYNTH_PYTHON" != "/usr/bin/python3" ]]; then
+    pip_mode_msg_en="Install or upgrade dependencies in the application Python"
+    pip_mode_msg_zh="安装或升级应用 Python 的依赖"
+  elif __pip_supports_break_system_packages; then
     pip_extra=(--break-system-packages)
-    pip_mode_msg_en='Install or upgrade Python dependencies (python3 -m pip --break-system-packages)'
-    pip_mode_msg_zh='安装或升级 Python 依赖（python3 -m pip --break-system-packages）'
+    pip_mode_msg_en='Install or upgrade Python dependencies (Python pip --break-system-packages)'
+    pip_mode_msg_zh='安装或升级 Python 依赖（pip --break-system-packages）'
   else
     pip_extra=(--user)
-    pip_mode_msg_en='Install or upgrade Python dependencies (python3 -m pip --user; current pip does not support --break-system-packages)'
-    pip_mode_msg_zh='安装或升级 Python 依赖（python3 -m pip --user；当前 pip 不支持 --break-system-packages）'
+    pip_mode_msg_en='Install or upgrade Python dependencies (Python pip --user; current pip does not support --break-system-packages)'
+    pip_mode_msg_zh='安装或升级 Python 依赖（pip --user；当前 pip 不支持 --break-system-packages）'
   fi
 
   tmux_run "$(msg "$pip_mode_msg_en" "$pip_mode_msg_zh")" \
-    env PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade "${pip_extra[@]}" "${python_packages[@]}" \
+    env PIP_DISABLE_PIP_VERSION_CHECK=1 "$VAPOURSYNTH_PYTHON" -m pip install --upgrade "${pip_extra[@]}" "${python_packages[@]}" \
     || tmux_run "$(msg 'Install or upgrade Python dependencies (retry)' '安装或升级 Python 依赖（重试）')" \
-      env PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade "${pip_extra[@]}" "${python_packages[@]}" \
-    || die "$(msg 'Failed to install Python dependencies with python3 -m pip' '使用 python3 -m pip 安装依赖失败')"
+      env PIP_DISABLE_PIP_VERSION_CHECK=1 "$VAPOURSYNTH_PYTHON" -m pip install --upgrade "${pip_extra[@]}" "${python_packages[@]}" \
+    || die "$(msg 'Failed to install Python dependencies with Python pip' '使用 Python pip 安装依赖失败')"
 
   local failed_packages
   if ! failed_packages="$(__bluray_python_imports_ok)"; then
@@ -3348,7 +3411,7 @@ install_bluray_python_deps() {
     mapfile -t packages_to_reinstall <<< "$failed_packages"
     log "$(msg "Reinstalling Python dependencies that failed to import: ${packages_to_reinstall[*]}" "正在重新安装导入失败的 Python 依赖：${packages_to_reinstall[*]}")"
     tmux_run "$(msg 'Reinstall Python dependencies without cached wheels' '不使用缓存 wheel 重新安装 Python 依赖')" \
-      env PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade --force-reinstall --no-cache-dir "${pip_extra[@]}" "${packages_to_reinstall[@]}" \
+      env PIP_DISABLE_PIP_VERSION_CHECK=1 "$VAPOURSYNTH_PYTHON" -m pip install --upgrade --force-reinstall --no-cache-dir "${pip_extra[@]}" "${packages_to_reinstall[@]}" \
       || die "$(msg 'Failed to reinstall Python dependencies; see the pip error above' '重新安装 Python 依赖失败，请查看上方 pip 错误')"
     __bluray_python_imports_ok || die "$(msg 'Python dependencies still fail to import after reinstallation; see the traceback above' '重新安装后 Python 依赖仍无法导入，请查看上方 traceback')"
   fi
@@ -3362,16 +3425,30 @@ command -v sudo >/dev/null 2>&1 || die "$(msg 'sudo is missing' '缺少 sudo')"
 sudo -v
 
 require_supported_os
+mkdir -p -- "$BLURAY_SETUP_CACHE_DIR"/{downloads,apt,pip,ccache,builds}
+BLURAY_SETUP_CACHE_DIR="$(realpath "$BLURAY_SETUP_CACHE_DIR")"
+export BLURAY_SETUP_CACHE_DIR
+export PIP_CACHE_DIR="$BLURAY_SETUP_CACHE_DIR/pip"
+export CCACHE_DIR="$BLURAY_SETUP_CACHE_DIR/ccache"
+export CARGO_TARGET_DIR="$BLURAY_SETUP_CACHE_DIR/cargo"
+export CCACHE_BASEDIR="$(bluray_build_tmp_base)"
+export CCACHE_NOHASHDIR=true
 repair_broken_apt_state
 
 sys_deps=(
-  python3 python3-pip python3-venv cmake ninja-build git
-  curl wget unzip fonts-wqy-microhei flac gedit
+  python3 python3-pip python3-venv cmake ninja-build git ccache
+  curl wget unzip fonts-wqy-microhei flac
   libegl1 libopengl0 libglib2.0-0 libglib2.0-bin libxkbcommon0 libdbus-1-3 libx11-6
   libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0
   libxcb-xinerama0 libxcb-xinput0 libxcb-render-util0
   libunwind8 libunwind-dev xdg-utils libgl1-mesa-dri libglx-mesa0 mesa-vulkan-drivers
 )
+
+if "$package_build"; then
+  sys_deps+=(python3-pyqt6 qt6-base-dev-tools libass-dev xz-utils)
+else
+  sys_deps+=(gedit)
+fi
 
 missing_deps=()
 for dep in "${sys_deps[@]}"; do
@@ -3391,11 +3468,51 @@ else
   log "$(msg 'All system dependencies already installed, skipping' '系统依赖已全部安装，跳过')"
 fi
 
+export PATH="/usr/lib/ccache:$PATH"
 load_configured_tool_paths
 log "$(msg "Using tool paths from ${SETTINGS_FILE}" "使用 ${SETTINGS_FILE} 中配置的工具路径")"
 
+if "$package_build"; then
+  cache_workspace="$(bluray_mktemp_dir)"
+  trap 'rm -rf -- "$cache_workspace"' EXIT
+  cache_key="$(
+    {
+      source /etc/os-release
+      printf '%s\n' "$ID/$VERSION_ID/$(uname -m)/$(/usr/bin/python3 --version)"
+      dpkg-query -W libc6 libgcc-s1 libstdc++6 qt6-base-dev-tools python3-pyqt6
+      sha256sum "$BLURAY_SETUP_SOURCE" "$SETTINGS_FILE" \
+        "$SETUP_ROOT/tools/linux_setup_cache.py" "$SETUP_ROOT/tools/vapoursynth_plugin_versions.py" | cut -d' ' -f1
+    } | sha256sum | cut -d' ' -f1
+  )"
+  native_cache="$BLURAY_SETUP_CACHE_DIR/builds/$cache_key.tar.xz"
+  cache_helper=(/usr/bin/python3 -B "$SETUP_ROOT/tools/linux_setup_cache.py")
+  cache_args=(
+    "$native_cache" "$cache_workspace/baseline.json" "$PLUGIN_PATH"
+    "$SEVEN_ZIP_PATH" "$FLAC_PATH" "$FFMPEG_PATH" "$FFPROBE_PATH" "$X265_PATH" "$X264_PATH" "$SVT_AV1_PATH"
+    "$FDK_AAC_PATH" "$DOVI_TOOL_PATH" "$HDR10PLUS_TOOL_PATH" "$VSEDIT_PATH" "$VSEDIT_BINARY_PATH"
+    "$VSPIPE_PATH" "$TS_MUXER_PATH" "$MKV_INFO_PATH" "$MKV_MERGE_PATH" "$MKV_PROP_EDIT_PATH" "$MKV_EXTRACT_PATH"
+    "$X264_VERSION_FILE" "$X265_FEATURE_FILE"
+  )
+  "${cache_helper[@]}" snapshot "${cache_args[@]}"
+  if [[ -s "$native_cache" ]]; then
+    if packages=$("${cache_helper[@]}" packages "${cache_args[@]}"); then
+      saved_dependencies=()
+      while IFS= read -r dependency; do
+        [[ -z "$dependency" ]] || saved_dependencies+=("$dependency")
+      done <<< "$packages"
+      if (( ${#saved_dependencies[@]} == 0 )) || { apt_update && apt_install --no-remove "${saved_dependencies[@]}"; }; then
+        if "${cache_helper[@]}" restore "${cache_args[@]}"; then
+          sudo ldconfig
+          log "$(msg 'Restored the native build cache' '已恢复原生工具构建缓存')"
+        fi
+      fi
+    fi
+  fi
+fi
+
 install_mkvtoolnix
 sync_mkvtoolnix_paths
+select_vapoursynth_python
 install_vapoursynth
 install_mpv
 install_x264
@@ -3413,12 +3530,18 @@ install_vapoursynth_editor
 install_lsmash
 build_vs_plugins
 install_desktop_vs_plugins
-install_mpv_desktop
-install_desktop_shortcuts
+if ! "$package_build"; then
+  install_mpv_desktop
+  install_desktop_shortcuts
+fi
 
 install_bluray_python_deps
 verify_configured_tool_paths
+if "$package_build"; then
+  "${cache_helper[@]}" save "${cache_args[@]}"
+  sudo chown -R -- "$(id -u):$(id -g)" "$PIP_CACHE_DIR" "$BLURAY_SETUP_CACHE_DIR/apt"
+fi
 
 
 log "$(msg 'Done. Recommended way to run:' '完成。推荐的运行方式：')"
-echo "python3 -m src.main"
+printf '%q -m src.main\n' "$VAPOURSYNTH_PYTHON"

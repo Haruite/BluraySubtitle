@@ -1325,3 +1325,42 @@ Date: 2026-11-11
 - Desktop launches are detached by default, with tray support and window restoration on relaunch from the same directory. The log viewer captures tool output and can save it under `logs/`. Changing the Remux source on the Encode page refreshes the main and SP rows.
 - Settings adds font and background controls. Tools groups update checks and launch shortcuts. The Windows package installs verified updates with rollback. Icons are stored in `resource/` and the updater in `tools/`. Updated the bilingual interface guide.
 - 101 unit tests and Windows launch, logging, and update rollback checks passed. Linux desktop launches and online updates from a published bundle remain to be verified.
+
+## Windows ARM64 Source Environment
+
+2026-11-14
+
+Windows setup uses native installers and CPython on Windows 11 ARM64, with a separate ARM64 build cache. It builds the default VapourSynth R79 runtime and plugins with CLANGARM64 and builds VSEdit with MSVC and ARM64 Qt. R79 uses NEON and detects I8MM and FP16 FHM at runtime. Selecting Classic uses a private x64 Python with x64 plugins and VSEdit. Generated VPy scripts use SmoothGrad for CPU debanding when vs-placebo is unavailable. VSPipe frame output and VSEdit preview passed checks on Windows 11 ARM64.
+
+## VapourSynth R79 and Classic Compatibility
+
+2026-11-14
+
+- Encode and FrameCheck use the VSPipe container options shared by Classic and R79. Metadata probing resolves relative paths from the original script directory, reads output 0, and normalizes color range.
+- The Windows x64 package keeps the upstream R79 wheel layout with shared bundled CPython. System VSPipe starts with system DLL lookup and can use an independent VapourSynth installation.
+- Windows x64, Linux and the container use R79. Linux setup uses an application Python 3.12 environment where system Python is older, and the Windows installer builds a descale DLL for R79 with integer input and blur support.
+- Real-media checks for both runtimes covered 10-bit x265 output and FrameCheck. Windows runtime smoke checks passed under Wine.
+
+## Windows ARM64 Packages and Publishing
+
+2026-11-14
+
+- Both Windows architectures use the same Build-mode workflow and PyInstaller recipe. GitHub Actions uploads the archives and SHA-256 build records to the project's server directory and attaches both verified packages to the Release for the matching commit. The application updater selects its architecture's package and uses the new download path.
+- The ARM64 package uses native MSVC launchers and shares PyQt6's Qt DLLs with VSEdit. Both architectures share libass, FFTW, and the Shaderc and Vulkan DLLs with the VapourSynth plugins. Build mode includes the Vulkan-enabled plugins and caches the locally built ARM64 R79 wheel, SDK, and runtime. ARM64 SVT-AV1 enables LTO, and vs-placebo uses the same static dependencies as x64.
+- The archive verifier checks binary architecture and shared runtimes and exercises VSPipe and the Matroska tools. Component smoke checks passed on Windows 11 ARM64.
+
+## Ubuntu 26.04 PyInstaller Package
+
+2026-11-15
+
+- The x64 package uses one CPython shared library, one NumPy installation, and one VapourSynth R79 wheel for the application and the embedded scripting tools. VSEdit and MKVToolNix use the same Ubuntu Qt libraries as PyQt6. The package stores Python's standard library in a ZIP archive and selects Qt plugins before collecting their dependencies.
+- Packaging keeps the installed media tools, VapourSynth filters, and model files. It strips unused symbols, compacts the ISO language databases, and creates a tar.xz archive that preserves executable permissions and symlinks.
+- On Ubuntu 26.04.1, a fresh extraction launched through XCB and passed VSPipe subtitle rendering, x265 10-bit output, FLAC/AAC/Opus encoding, Matroska muxing and extraction, mpv playback, and VSEdit startup checks. The archive measured 171.7 MiB.
+
+## Ubuntu Package Publishing and Linux Setup Cache
+
+2026-11-15
+
+- Removed the project Docker image and container-specific application paths. The wiki explains how to run the Ubuntu executable in a container using mounted package, media, and configuration directories.
+- The Ubuntu 26.04 x64 workflow builds and verifies the package. Windows x64 and Ubuntu use the same SFTP publisher and server directory. The Release workflow selects the matching commit and verifies SHA-256 before attaching each archive.
+- Linux setup reuses upstream downloads, APT packages, Python wheels, and compiler outputs. Package builds also restore installed native tools, libraries, and filters when their installation paths and APT dependencies match. Setup still runs the tool version and feature checks.

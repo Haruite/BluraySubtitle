@@ -10,6 +10,8 @@
 
 引入时添加了来源注释，将换行统一为 CRLF，并移除了行尾空白。其中，MIR 修改的 `havsfunc.py` 在文件头标记为 `33-7f0a9a7-AC-4`，基于提交 `7f0a9a7a37b60a05b9f408024d203e511e544a61`；分发包的更新记录将 `muvsfunc.py` 对应修订标记为 `634d58c0f6464b1454813153aba85c78e17ab3a0`。
 
+仓库中的 `MCDenoise.py`、`nnedi3_resample.py`、`vsTAAmbk.py` 和 `vsmlrt.py` 包含 Classic 与 R79 兼容性调整。
+
 ## 作者、来源与许可依据
 
 | 文件 | 署名与上游来源 | 许可依据 |
@@ -30,4 +32,4 @@
 
 ## 分发位置
 
-Windows 和 Linux 安装脚本将 `.py` 文件安装到选定的 VapourSynth Python 搜索目录，并将本说明及许可文本安装到该目录下的 `licenses/vapoursynth_scripts/`。Docker 将相同文件安装到其 Python `dist-packages` 目录。Windows 程序包将脚本放在共用 Python 运行时旁，说明和许可文本位于 `legal/vapoursynth_scripts/`。
+Windows 和 Linux 安装脚本将 `.py` 文件安装到选定的 VapourSynth Python 搜索目录，并将本说明及许可文本安装到该目录下的 `licenses/vapoursynth_scripts/`。Windows 和 Ubuntu 程序包将脚本放在共用 Python 运行时旁，说明和许可文本位于 `legal/vapoursynth_scripts/`。

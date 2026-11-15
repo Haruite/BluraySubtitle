@@ -320,7 +320,7 @@ class CustomTableWidget(SelectionTableWidget):
             return row + 1
         return row
 
-    def dragMoveEvent(self, event: QDragMoveEvent):
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
         if event.source() is not self or self._drag_source_row < 0:
             event.ignore()
             return
@@ -329,6 +329,13 @@ class CustomTableWidget(SelectionTableWidget):
             self._drop_indicator.hide()
             event.ignore()
             return
+        self._show_drop_indicator(target)
+        event.acceptProposedAction()
+
+    def _show_drop_indicator(self, target: int) -> None:
+        if self._drop_indicator.isHidden():
+            color = self.palette().color(QPalette.ColorRole.Accent).name()
+            self._drop_indicator.setStyleSheet(f'background-color: {color};')
         if target == self.rowCount():
             last = target - 1
             y = self.rowViewportPosition(last) + self.rowHeight(last)
@@ -339,7 +346,6 @@ class CustomTableWidget(SelectionTableWidget):
         self._drop_indicator.setGeometry(0, top, viewport.width(), 3)
         self._drop_indicator.raise_()
         self._drop_indicator.show()
-        event.acceptProposedAction()
 
     def dragLeaveEvent(self, event: QDragLeaveEvent):
         self._drop_indicator.hide()
@@ -360,8 +366,6 @@ class CustomTableWidget(SelectionTableWidget):
         self._drag_source_row = row
         try:
             drag = self._make_row_drag(row)
-            color = self.palette().color(QPalette.ColorRole.Accent).name()
-            self._drop_indicator.setStyleSheet(f'background-color: {color};')
             # The drop handler moves model rows; default drag cleanup would
             # otherwise clear the items that now belong to the moved row.
             drag.exec(Qt.DropAction.MoveAction)

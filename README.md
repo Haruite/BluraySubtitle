@@ -6,14 +6,12 @@ Documentation: [project wiki](docs/wiki/Home.md) | [interface guide and examples
 
 Development: [mandatory code modification standards](docs/development/code-standards.md) | [media pipeline and tool selection](docs/development/media-pipeline-and-tool-selection.md) | [refactoring history](docs/refactoring/refactoring-history.md)
 
-The Windows x64 release is a one-folder package. Extract the complete archive, then run `BluraySubtitle_windows_x64.exe` without separating it from `_internal`. Configuration is stored in `config.json` in the program directory, or the repository root for source runs; ensure that directory is writable.
+The x64 package supports **Windows 10 version 1809 or later**. The ARM64 package targets **Windows 10 or later on ARM64**. The earliest Windows 10 release for the ARM64 package is pending verification. **Windows 10 22H2** is recommended.
 
-Windows x64 downloads
+- Latest builds from `main`. [Windows x64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_windows_x64.7z) · [Windows ARM64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_windows_arm64.7z) · [Ubuntu 26.04 x64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_ubuntu26.04_x64.tar.xz)
+- Versioned packages are attached to the matching release. [GitHub Releases](https://github.com/Haruite/BluraySubtitle/releases)
 
-- GitHub Actions automatically builds and uploads the server package after each push to `main`. [Download from sbx.mysmy.top](https://sbx.mysmy.top/tools/BluraySubtitle_windows_x64.7z)
-- The Windows x64 `.7z` package is attached automatically to releases after 4.7. [GitHub Releases](https://github.com/Haruite/BluraySubtitle/releases)
-
-BluraySubtitle is a GUI tool for Blu-ray workflows on **Windows / Linux** (including **Docker**). It brings the following five areas of functionality together in one application:
+BluraySubtitle is a GUI tool for Blu-ray workflows on **Windows / Linux**. It brings the following five areas of functionality together in one application:
 
 1. **Blu-ray Remux**
 2. **Blu-ray Encode**
@@ -68,6 +66,7 @@ For parameters, filters, preview, and metadata limitations, see [Video Encoding 
 
 ### SP management
 
+**Settings → General → Keep SP (bonus features) during Remux** is enabled by default. Turn it off to start with an unchecked SP table when loading a disc in Blu-ray Remux or Blu-ray Encode. You can still select SP rows manually.
 Review the SP table after selecting main playlists and episodes, and deselect unwanted content. To Remux only SPs, deselect all main playlists and keep the desired SP rows selected. Track edits update output names and formats; matching commentary tracks can join the main content. See [SP selection, naming, and attachment rules](docs/wiki/Blu-ray-Disc-Structure.md#main-content-and-sp-in-this-project).
 
 ## Requirements
@@ -196,7 +195,7 @@ Blu-ray input rejects existing outputs. Remux input skips completed main/SP, ext
 
 ## VPy Editing and Preview
 
-- **Edit script** uses the system-associated editor. **Preview script** uses `vsedit`. The default script is generated as `vpy/vpy_<id>.vpy` next to `config.json`.
+- **Edit script** uses the system-associated editor. **Preview script** uses `vsedit`. The default script is generated as `vpy/vpy_<id>.vpy` next to `config.json`. When previewing the default script, VSEdit opens a temporary copy with the row's video and subtitle paths filled in. Saved filter edits are applied to the default script when VSEdit closes.
 - The default VPy supports comparing processed and source frames. See [VSEdit preview and snapshots](docs/wiki/Video-Encoding-and-VapourSynth.md#previewing-processed-and-source-frames-in-vsedit).
 - Prepare interlaced, telecined, and mixed-cadence sources using the [preprocessing instructions](docs/wiki/Video-Encoding-and-VapourSynth.md#interlaced-telecined-and-mixed-cadence-sources).
 
@@ -213,7 +212,7 @@ Blu-ray input rejects existing outputs. Remux input skips completed main/SP, ext
 
 ### `setup_windows_environment.ps1` (Windows environment setup)
 
-The script configures the runtime and build environment on **x64 Windows 10 or later** and **x64 Windows Server 2019 or later with Desktop Experience**.
+The script configures source runs on **x64 Windows 10 version 1909 or later**, **x64 Windows Server 2019 or later with Desktop Experience**, and **ARM64 Windows 11 or later**. Setup defaults to VapourSynth R79 on both architectures. Use `-VapourSynthRuntime Classic` to select the Classic runtime. On ARM64, that option uses a private x64 Python and x64 builds of the Classic plugins and VSEdit.
 
 For the first run, set the current user’s PowerShell execution policy and start setup from the repository root.
 
@@ -224,10 +223,14 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
 
 The script requests administrator permission, asks for the display language, and can be rerun after interruption. Downloads use the configured **Windows system proxy** automatically. Configure it before starting setup if direct access to the download sources is unavailable.
 
-After setup completes, open a new PowerShell window and run the following command from the repository root to package the Windows x64 application.
+To package the configured runtime environment, run the command for your architecture from the repository root.
 
 ```powershell
 pyinstaller BluraySubtitle_windows_x64.spec
+```
+
+```powershell
+pyinstaller BluraySubtitle_windows_arm64.spec
 ```
 
 ### `setup_linux_environment.sh` (Linux runtime environment)
@@ -237,7 +240,9 @@ The script builds the runtime environment for **x64 Linux** distributions in eit
 - Ubuntu 22.04 or later, including distributions based on these Ubuntu releases.
 - Debian 12 or later, including distributions based on these Debian releases.
 
-The script has run successfully in the following 15 x64 WSL 2 environments.
+Setup installs VapourSynth R79. On distributions with an older system Python, it installs a dedicated Python 3.12 and prints the launch command to use.
+
+Earlier versions of the setup script were tested in the following x64 WSL 2 environments.
 
 - Ubuntu 22.04, 24.04, 26.04, and 26.10
 - Debian 12 and 13
@@ -262,68 +267,7 @@ When run over SSH, `setup_linux_environment.sh` uses **tmux** to display build l
 
 ---
 
-## Docker
-
-Build image:
-
-```bash
-docker build -t bluray-subtitle-ubuntu .
-```
-
-Pull prebuilt:
-
-```bash
-docker pull haruite/bluraysubtitle:latest
-```
-
-PulseAudio or PipeWire-Pulse run example (recommended for most Linux desktops and remote desktop sessions):
-
-```bash
-xhost +local:docker
-sudo docker run -it --rm \
-  -e DISPLAY=$DISPLAY \
-  -e LIBGL_ALWAYS_SOFTWARE=1 \
-  -e BLURAY_SUBTITLE_MPV_AUDIO_OUTPUT=pulse \
-  -e PULSE_SERVER=unix:/tmp/pulse/native \
-  -v /tmp/.X11-unix:/tmp/.X11-unix \
-  -v /run/user/$(id -u)/pulse/native:/tmp/pulse/native \
-  -v bluray-subtitle-config:/config \
-  -v /path/to/media:/data \
-  --ipc=host \
-  --shm-size=2gb \
-  bluray-subtitle-ubuntu
-```
-
-The named `bluray-subtitle-config` volume contains `config.json`, the generated-script directory `vpy/`, and the `logs/` directory when file logging is enabled. Reuse the same volume name to retain the configuration and saved logs across runs with `--rm`. Docker runs the app in the foreground so its output is also available in the container log.
-
-The container runs desktop applications as the non-root user `ubuntu` with UID/GID `1000`; mounted media must be accessible to that user.
-
-Choose exactly one of these Docker audio methods:
-
-- **PulseAudio or PipeWire-Pulse (recommended):** use the three `BLURAY_SUBTITLE_MPV_AUDIO_OUTPUT=pulse`, `PULSE_SERVER`, and `/pulse/native` options in the complete example above.
-- **Native PipeWire without PipeWire-Pulse:** replace those three Pulse options with:
-
-  ```bash
-  -e BLURAY_SUBTITLE_MPV_AUDIO_OUTPUT=pipewire \
-  -v /run/user/$(id -u)/pipewire-0:/tmp/runtime-ubuntu/pipewire-0
-  ```
-
-- **ALSA-only host:** replace the three Pulse options with the following. `controlC0` must exist, and the group option grants the non-root container user access when the host audio-group GID differs from the image:
-
-  ```bash
-  --device /dev/snd \
-  --group-add "$(stat -c '%g' /dev/snd/controlC0)" \
-  -e BLURAY_SUBTITLE_MPV_AUDIO_OUTPUT=alsa
-  ```
-
-Use `pactl info`, `wpctl status`, and `aplay -l` on the host to identify the available API. Do not expose `/dev/snd` as a fallback when the desktop PipeWire or PulseAudio server is already managing it.
-
-Apple Silicon (amd64 container):
-
-```bash
-docker build --platform linux/amd64 -t bluray-subtitle-ubuntu .
-docker pull --platform linux/amd64 haruite/bluraysubtitle:latest
-```
+See [Run the Ubuntu package in Docker](docs/wiki/Run-Ubuntu-Package-in-Docker.md) for running the extracted package in a container.
 
 ---
 
@@ -339,8 +283,8 @@ docker pull --platform linux/amd64 haruite/bluraysubtitle:latest
 - **Preview won’t start**
   - Check **`vsedit`** path.
   - Check VPy file and plugins.
-- **Docker / Linux playback issues**
-  - Check `DISPLAY` and **mpv** availability. For Docker sound, verify that the selected PulseAudio/PipeWire/ALSA host endpoint exists and use the matching option set from the Docker section.
+- **Linux playback issues**
+  - Check the display connection and the selected mpv executable.
 
 ---
 
@@ -350,9 +294,9 @@ docker pull --platform linux/amd64 haruite/bluraysubtitle:latest
 
 Older systems require extra compatibility patches and testing for Python, Qt, and multimedia dependencies. The maintenance cost is too high to extend the current support range.
 
-### Why aren't Linux PyInstaller packages provided?
+### Which Linux distributions can run the packaged build?
 
-Differences in glibc, graphics environments, and shared libraries across distributions make complete multimedia-tool and VapourSynth-plugin bundles costly to maintain and test. Run from source after using the Linux setup script, or use Docker.
+The PyInstaller build targets Ubuntu 26.04 x64 and includes the multimedia tools and VapourSynth runtime. Use `setup_linux_environment.sh` to run from source on the other supported distributions.
 
 ### Does encode auto-crop black borders?
 

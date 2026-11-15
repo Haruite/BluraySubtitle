@@ -8,9 +8,6 @@ $runtime = Join-Path $install '_internal'
 $archive = Join-Path $workspace 'package.7z'
 $unpacked = Join-Path $workspace 'unpacked'
 $previous = Join-Path $workspace 'previous'
-$package = Join-Path $unpacked 'BluraySubtitle_windows_x64'
-$nextExecutable = Join-Path $package 'BluraySubtitle_windows_x64.exe'
-$nextRuntime = Join-Path $package '_internal'
 $moves = [Collections.Generic.Stack[hashtable]]::new()
 
 function Assert-PlainTree([string]$Path) {
@@ -124,6 +121,12 @@ try {
         throw $plan.unsafePath
     }
     $executable = Join-Path $install $plan.executable
+    if ($plan.packageName -cnotin @('BluraySubtitle_windows_x64', 'BluraySubtitle_windows_arm64')) {
+        throw $plan.invalidPackage
+    }
+    $package = Join-Path $unpacked $plan.packageName
+    $nextExecutable = Join-Path $package "$($plan.packageName).exe"
+    $nextRuntime = Join-Path $package '_internal'
 
     $mutex = [Threading.Mutex]::new($false, [string]$plan.mutex)
     try {

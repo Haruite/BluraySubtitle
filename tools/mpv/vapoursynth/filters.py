@@ -88,16 +88,17 @@ def color_settings(clip, frame):
     matrix = props.get("_Matrix", props.get("_ColorSpace", 2))
     if matrix in (0, 2):
         matrix = 6 if clip.height <= 576 else 1
-    return matrix, props.get("_ColorRange", 1), props.get("_ChromaLocation", 0)
+    full = int(props["_Range"]) == 1 if "_Range" in props else props.get("_ColorRange", 1) == 0
+    return matrix, "full" if full else "limited", props.get("_ChromaLocation", 0)
 
 
 def to_rgb(clip):
-    rgb_format = vs.PresetFormat.RGBS
+    rgb_format = vs.core.query_video_format(vs.ColorFamily.RGB, vs.SampleType.FLOAT, 32, 0, 0).id
 
     @lru_cache(maxsize=16)
     def convert(matrix, levels, chroma):
         return clip.resize.Bicubic(
-            format=rgb_format, matrix_in=matrix, range_in=levels, chromaloc_in=chroma, range=0,
+            format=rgb_format, matrix_in=matrix, range_in_s=levels, chromaloc_in=chroma, range_s="full",
         )
 
     template = clip.std.BlankClip(format=rgb_format)
@@ -112,7 +113,7 @@ def from_rgb(clip, source):
     @lru_cache(maxsize=16)
     def convert(matrix, levels, chroma):
         return clip.resize.Bicubic(
-            format=output_format, matrix=matrix, range=levels, chromaloc=chroma,
+            format=output_format, matrix=matrix, range_s=levels, chromaloc=chroma,
         )
 
     template = clip.std.BlankClip(format=output_format)

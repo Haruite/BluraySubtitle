@@ -24,8 +24,6 @@ class Clip:
         self.clip_subsample_w = clip.format.subsampling_w
         self.clip_subsample_h = clip.format.subsampling_h
         self.clip_is_gray = True if clip.format.num_planes == 1 else False
-        # Register format for GRAY10
-        vs.GRAY10 = self.core.register_format(vs.GRAY, vs.INTEGER, 10, 0, 0).id
 
 
 class AAParent(Clip):
@@ -446,7 +444,7 @@ def mask_lthresh(clip, mthrs, lthreshes, mask_kernel, inexpand, **kwargs):
 
     bps = clip.format.bits_per_sample
     mask = (bps > 8 and core.std.Expr(mask, 'x %d *' % (((1 << clip.format.bits_per_sample) - 1) // 255),
-                                      eval('vs.GRAY' + str(bps)))) or mask
+                                      core.query_video_format(vs.GRAY, vs.INTEGER, bps, 0, 0).id)) or mask
     return lambda clip_a, clip_b, show=False: (show is False and core.std.MaskedMerge(clip_a, clip_b, mask)) or mask
 
 

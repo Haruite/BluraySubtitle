@@ -19,6 +19,7 @@ def _x11_connection() -> tuple[CDLL, int] | None:
         ("XOpenDisplay", (c_char_p,), c_void_p),
         ("XCloseDisplay", (c_void_p,), c_int),
         ("XDefaultScreen", (c_void_p,), c_int),
+        ("XSync", (c_void_p, c_int), c_int),
         ("XInternAtom", (c_void_p, c_char_p, c_int), c_ulong),
         ("XGetSelectionOwner", (c_void_p, c_ulong), c_ulong),
         ("XChangeProperty", (c_void_p, c_ulong, c_ulong, c_ulong, c_int, c_int, c_char_p, c_int), c_int),
@@ -42,6 +43,27 @@ def x11_compositing_active() -> bool:
     screen = x11.XDefaultScreen(display)
     selection = x11.XInternAtom(display, f"_NET_WM_CM_S{screen}".encode(), True)
     return bool(selection and x11.XGetSelectionOwner(display, selection))
+
+
+def set_x11_window_identity(window: QWidget, desktop_id: str, desktop_file: str = "") -> None:
+    if QApplication.platformName() != "xcb" or window.testAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen):
+        return
+    connection = _x11_connection()
+    if connection is None:
+        return
+
+    # Set the per-window identity before Qt maps it so the task manager uses the correct launcher and icon.
+    window_id = int(window.winId())
+    x11, display = connection
+    for name, type_name, value in (
+        (b"WM_CLASS", b"STRING", (desktop_id + "\0" + desktop_id + "\0").encode()),
+        (b"_GTK_APPLICATION_ID", b"UTF8_STRING", desktop_id.encode()),
+        (b"_KDE_NET_WM_DESKTOP_FILE", b"UTF8_STRING", (desktop_file or desktop_id).encode()),
+    ):
+        atom = x11.XInternAtom(display, name, False)
+        property_type = x11.XInternAtom(display, type_name, False)
+        x11.XChangeProperty(display, window_id, atom, property_type, 8, 0, value, len(value))
+    x11.XSync(display, False)
 
 
 def apply_x11_title_bar_theme(window: QWidget, dark: bool) -> None:

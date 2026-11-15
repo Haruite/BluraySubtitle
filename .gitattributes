@@ -1,6 +1,4 @@
 * text=auto eol=crlf
 
-# Keep POSIX shell entry points and Dockerfile heredocs on LF.
+# Keep POSIX shell entry points on LF.
 *.sh text eol=lf
-Dockerfile text eol=lf
-*.dockerfile text eol=lf

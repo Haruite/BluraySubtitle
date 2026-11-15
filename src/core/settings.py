@@ -6,27 +6,10 @@ import sys
 from pathlib import Path
 
 
-def is_docker() -> bool:
-    if os.path.exists("/.dockerenv"):
-        return True
-    for path in ("/proc/self/cgroup", "/proc/1/cgroup"):
-        try:
-            with open(path, encoding="utf-8", errors="ignore") as cgroup_file:
-                if any(
-                    container_name in line
-                    for line in cgroup_file
-                    for container_name in ("docker", "kubepods", "containerd")
-                ):
-                    return True
-        except OSError:
-            pass
-    return False
-
-
 _BUNDLE_ROOT = (
     os.path.abspath(str(sys._MEIPASS))
     if (
-        sys.platform == "win32"
+        (sys.platform == "win32" or sys.platform.startswith("linux"))
         and bool(getattr(sys, "frozen", False))
         and hasattr(sys, "_MEIPASS")
     )
@@ -37,7 +20,10 @@ _BUNDLE_ROOT = (
 def editable_settings_path() -> Path:
     """Return the source settings file edited by the settings dialog."""
     if _BUNDLE_ROOT:
-        return Path(sys.executable).resolve().parent / "src" / "core" / "settings.py"
+        directory = Path(sys.executable).resolve().parent
+        if sys.platform.startswith("linux") and (configured := os.environ.get("BLURAY_SUBTITLE_CONFIG_DIR")):
+            directory = Path(configured).expanduser().resolve()
+        return directory / "src" / "core" / "settings.py"
     return Path(__file__).resolve()
 
 
@@ -102,28 +88,29 @@ MKV_EXTRACT_PATH = _bundled_path(
     r"C:\Software\mkvtoolnix\mkvextract.exe",
 )
 
+MPV_PATH = ""
+
 if sys.platform != "win32":
-    SEVEN_ZIP_PATH = "/usr/local/bin/7zz"
-    FLAC_PATH = "/usr/bin/flac"
-    FFMPEG_PATH = "/usr/bin/ffmpeg"
-    FFPROBE_PATH = "/usr/bin/ffprobe"
+    SEVEN_ZIP_PATH = _bundled_path("linux/bin/7zz", "/usr/local/bin/7zz")
+    FLAC_PATH = _bundled_path("linux/bin/flac", "/usr/bin/flac")
+    FFMPEG_PATH = _bundled_path("linux/bin/ffmpeg", "/usr/bin/ffmpeg")
+    FFPROBE_PATH = _bundled_path("linux/bin/ffprobe", "/usr/bin/ffprobe")
     X265_PATH = "/usr/bin/x265"
     X264_PATH = "/usr/bin/x264"
     SVT_AV1_PATH = "/usr/bin/SvtAv1EncApp"
-    FDK_AAC_PATH = "/usr/local/bin/fdkaac"
-    DOVI_TOOL_PATH = "/usr/bin/dovi_tool"
-    HDR10PLUS_TOOL_PATH = "/usr/bin/hdr10plus_tool"
-    PLUGIN_PATH = os.path.expanduser("~/plugins")
-    VSEDIT_PATH = "/usr/local/bin/vsedit"
+    FDK_AAC_PATH = _bundled_path("linux/bin/fdkaac", "/usr/local/bin/fdkaac")
+    DOVI_TOOL_PATH = _bundled_path("linux/bin/dovi_tool", "/usr/bin/dovi_tool")
+    HDR10PLUS_TOOL_PATH = _bundled_path("linux/bin/hdr10plus_tool", "/usr/bin/hdr10plus_tool")
+    PLUGIN_PATH = _bundled_path("linux/plugins", os.path.expanduser("~/plugins"))
+    VSEDIT_PATH = _bundled_path("linux/bin/vsedit", "/usr/local/bin/vsedit")
     VSPIPE_PATH = "/usr/local/bin/vspipe"
-    LIBASS_PATH = ''
-    TS_MUXER_PATH = '/usr/bin/tsMuxeR'
-    if is_docker():
-        PLUGIN_PATH = "/app/plugins"
-    MKV_INFO_PATH = '/usr/bin/mkvinfo'
-    MKV_MERGE_PATH = '/usr/bin/mkvmerge'
-    MKV_PROP_EDIT_PATH = '/usr/bin/mkvpropedit'
-    MKV_EXTRACT_PATH = '/usr/bin/mkvextract'
+    LIBASS_PATH = _bundled_path("libass.so.9", "")
+    TS_MUXER_PATH = _bundled_path("linux/bin/tsMuxeR", "/usr/bin/tsMuxeR")
+    MKV_INFO_PATH = _bundled_path("linux/bin/mkvinfo", "/usr/bin/mkvinfo")
+    MKV_MERGE_PATH = _bundled_path("linux/bin/mkvmerge", "/usr/bin/mkvmerge")
+    MKV_PROP_EDIT_PATH = _bundled_path("linux/bin/mkvpropedit", "/usr/bin/mkvpropedit")
+    MKV_EXTRACT_PATH = _bundled_path("linux/bin/mkvextract", "/usr/bin/mkvextract")
+    MPV_PATH = _bundled_path("linux/bin/mpv", "")
 
 
 BDMV_LABELS = ["path", "size", "info", "remux_cmd"]

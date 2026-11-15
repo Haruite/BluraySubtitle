@@ -14,6 +14,9 @@ from tempfile import NamedTemporaryFile, TemporaryDirectory
 
 
 ASSETS = Path(__file__).resolve().parent
+sys.path.insert(0, str(ASSETS.parents[1]))
+from src.runtime.mpv_menu import menu_labels, mpv_config_directory, translate_mpv_menu
+
 UOSC_DIR = Path("scripts/uosc")
 UOSC_BINARY = "bin/ziggy-linux"
 UOSC_REQUIRED = (UOSC_BINARY, "intl/zh-hans.json")
@@ -68,13 +71,6 @@ PRESETS = {
     "ccd": ("CCD Chroma Denoise", ("libccd.so",)),
     "bm3d": ("BM3D CPU Luma Denoise", ("bm3d.so",)),
 }
-
-
-def config_directory() -> Path:
-    if mpv_home := os.environ.get("MPV_HOME"):
-        return Path(mpv_home).expanduser().absolute()
-    config_home = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
-    return config_home / "mpv"
 
 
 def write_if_changed(path: Path, content: bytes) -> None:
@@ -135,15 +131,9 @@ def lazy_menu(labels: dict[str, str]) -> list[str]:
 
 
 def localize_menu(original: str, language: str, presets: list[str]) -> str:
-    pairs = [
-        line.split("\t", 1)
-        for line in (ASSETS / "menu.zh.tsv").read_text(encoding="utf-8").splitlines()
-    ]
-    to_chinese = dict(pairs)
-    translations = to_chinese if language == "zh" else {zh: en for en, zh in pairs}
+    to_chinese = menu_labels()
     label = to_chinese[SAVE_LABEL] if language == "zh" else SAVE_LABEL
-    reload_en = "Reloading current file..."
-    reload_zh = to_chinese[reload_en]
+    original = translate_mpv_menu(original, language)
     lines = []
     save_position = None
     profile_position = None
@@ -164,13 +154,10 @@ def localize_menu(original: str, language: str, presets: list[str]) -> str:
                 continue
             title = label
             save_position = len(lines) + 1
-        else:
-            title = translations.get(title, title)
         if not indent and command == "$profiles":
             profile_position = len(lines) + 1
         if not indent and title == LAZY_MENU:
             has_lazy_menu = True
-        fields = fields.replace(reload_en, reload_zh) if language == "zh" else fields.replace(reload_zh, reload_en)
         lines.append(indent + title + separator + fields)
     if save_position is None:
         position = profile_position if profile_position is not None else len(lines)
@@ -352,42 +339,51 @@ def desktop_files(destination: Path, language: str, plugin_dir: Path, original_m
         destination / "bluray-vs" / name: (ASSETS / "vapoursynth" / name).read_bytes()
         for name in ("filters.py", *(f"{preset}.vpy" for preset in presets))
     }
+    menus = {
+        code: localize_menu(original_menu, code, presets).encode("utf-8")
+        for code in ("en", "zh")
+    }
     files.update({
         destination / "bluray-vs/plugins-dir": os.fsencode(plugin_dir),
         destination / "bluray-modules/atomic_write.lua": (ASSETS / "atomic_write.lua").read_bytes(),
         destination / "scripts/bluray_vs.lua": (ASSETS / "bluray_vs.lua").read_bytes(),
         destination / "scripts/bluray_defaults.lua": (ASSETS / "bluray_defaults.lua").read_bytes(),
-        destination / "menu.conf": localize_menu(original_menu, language, presets).encode("utf-8"),
+        destination / "menu.conf": menus[language],
+        **{destination / f"menu.{code}.conf": menu for code, menu in menus.items()},
         context_path: update_context_options(read_text(context_path)).encode("utf-8"),
         main_path: update_main_config(read_text(main_path), language).encode("utf-8"),
     })
     return files
 
 
-def desktop_is_current(language: str, plugin_dir: Path) -> bool:
-    destination = config_directory()
+def desktop_status(language: str, plugin_dir: Path) -> str:
+    destination = mpv_config_directory()
+    if not uosc_is_installed(destination):
+        return "install"
     if (
-        not uosc_is_installed(destination)
-        or not (destination / "bluray-defaults.conf").is_file()
+        not (destination / "bluray-defaults.conf").is_file()
         or not (destination / LAZY_PROFILES).is_file()
         or not all((destination / SHADER_PATH / relative).is_file() for relative, _ in SHADERS)
     ):
-        return False
+        return "configure"
     menu = read_text(destination / "menu.conf")
-    return bool(menu.strip()) and all(
+    if menu.strip() and all(
         path.is_file() and path.read_bytes() == content
         for path, content in desktop_files(destination, language, plugin_dir, menu).items()
-    )
+    ):
+        return "ready"
+    return "configure"
 
 
-def install(bundle: Path, language: str, plugin_dir: Path) -> None:
-    destination = config_directory()
+def install(bundle: Path | None, language: str, plugin_dir: Path) -> None:
+    destination = mpv_config_directory()
     menu = read_text(destination / "menu.conf")
     if not menu.strip() and not os.environ.get("MPV_HOME"):
         menu = read_text(Path.home() / ".mpv/menu.conf")
     files = desktop_files(destination, language, plugin_dir, menu if menu.strip() else default_menu())
     install_lazy_assets(destination)
-    install_uosc(bundle, destination)
+    if bundle is not None:
+        install_uosc(bundle, destination)
     try:
         with (destination / "bluray-defaults.conf").open("x", encoding="utf-8") as stream:
             stream.write("# Settings saved from the mpv context menu\n")
@@ -398,9 +394,16 @@ def install(bundle: Path, language: str, plugin_dir: Path) -> None:
 
 
 if __name__ == "__main__":
+    if sys.argv[1] == "--bundle-menus":
+        destination = Path(sys.argv[2])
+        menu = default_menu()
+        for code in ("en", "zh"):
+            write_if_changed(destination / f"menu.{code}.conf", translate_mpv_menu(menu, code).encode("utf-8"))
+        raise SystemExit
     language = "zh" if sys.argv[2] == "zh" else "en"
     plugin_dir = Path(sys.argv[3])
     if sys.argv[1] == "--status":
-        print("ready" if desktop_is_current(language, plugin_dir) else "install")
+        print(desktop_status(language, plugin_dir))
     else:
-        install(Path(sys.argv[1]), language, plugin_dir)
+        bundle = None if sys.argv[1] == "--configure" else Path(sys.argv[1])
+        install(bundle, language, plugin_dir)

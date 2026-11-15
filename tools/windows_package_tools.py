@@ -5,8 +5,8 @@ import shutil
 import subprocess
 
 from tools.windows_native_tools import (
-    MsvcRequired, build_record, editor_qt_files, editor_runtime_matches, exports_imported_symbols,
-    file_hash, imported_symbols, msvc_environment, pe_imports, pyqt_runtime,
+    PE_ARM64, MsvcRequired, build_record, editor_qt_files, editor_runtime_matches, exports_imported_symbols,
+    file_hash, imported_symbols, msvc_environment, pe_imports, pyqt_runtime, windows_machine,
 )
 from tools.windows_tool_paths import MKV_SETTINGS
 
@@ -35,12 +35,12 @@ def build_executable_icon(source: Path, output: Path) -> None:
 
 def build_launchers(work: Path) -> dict[bool, Path]:
     try:
-        env = msvc_environment()
+        env = msvc_environment(arm64_target=windows_machine() == PE_ARM64)
     except MsvcRequired as error:
         raise RuntimeError("Run Windows setup to prepare MSVC for the bundled launchers") from error
     compiler = shutil.which("cl.exe", path=env["PATH"])
     if compiler is None:
-        raise FileNotFoundError("MSVC cl.exe was not found in the x64 build environment")
+        raise FileNotFoundError("MSVC cl.exe was not found in the build environment")
     source = Path(__file__).with_name("windows_tool_launcher.c")
     work.mkdir(parents=True, exist_ok=True)
     launchers = {}
@@ -75,7 +75,7 @@ def installed_tools(settings) -> tuple[Path, dict, Path, dict]:
     return mkv, mkv_record, editor, editor_record
 
 
-def package_tools(tools, work: Path, binaries, datas) -> list[tuple[str, str, str]]:
+def package_tools(tools, work: Path, binaries, datas, *, vs_bundle: Path) -> list[tuple[str, str, str]]:
     import pefile
 
     mkv, mkv_record, editor, editor_record = tools
@@ -153,8 +153,10 @@ def package_tools(tools, work: Path, binaries, datas) -> list[tuple[str, str, st
 
     config = work / "vsedit.config"
     config.write_text(
-        "[common]\nprefer_vs_libs_from_list=false\nvapoursynth_library_paths=../\n"
-        "vapoursynth_plugins_paths=../vapoursynth64/coreplugins, ../vapoursynth64/plugins\n",
+        "[common]\nprefer_vs_libs_from_list=false\n"
+        f"vapoursynth_library_paths=../{vs_bundle.as_posix()}/\n"
+        + ("vapoursynth_plugins_paths=../vapoursynth64/coreplugins, ../vapoursynth64/plugins\n"
+           if vs_bundle == Path(".") else ""),
         encoding="utf-8", newline="\r\n",
     )
     qt_config = work / "qt.conf"

@@ -10,13 +10,16 @@ import shlex
 import shutil
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import threading
 import traceback
 import multiprocessing
 import uuid
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, ThreadPoolExecutor, wait
+from configparser import ConfigParser
 from contextvars import ContextVar
+from pathlib import Path
 from typing import Optional
 
 from ...core.settings import PLUGIN_PATH, VSPIPE_PATH
@@ -64,8 +67,10 @@ from src.runtime import TaskCancelled
 from ...core.i18n import translate_text
 from ...exports.utils import (
     run_command,
+    run_vspipe,
     print_exc_terminal,
     get_vspipe_context,
+    get_system_vspipe_context,
     force_remove_file,
     get_time_str,
     print_terminal_line,
@@ -577,7 +582,7 @@ def _run_vspipe_piped_encode(
     env: Optional[dict],
 ) -> int:
     """
-    vspipe --y4m | encoder (x264 / x265 / SvtAv1EncApp) without cmd.exe.
+    vspipe --container y4m | encoder (x264 / x265 / SvtAv1EncApp) without cmd.exe.
     In a real TTY, inherit the encoder stderr so x265 can use \\r line progress; otherwise pipe and
     forward stderr bytes unchanged (same as x264/SVT) so logs match the encoder's native output.
     """
@@ -603,11 +608,11 @@ def _run_vspipe_piped_encode(
     stderr_v = None if inherit_err else subprocess.PIPE
     stderr_e = None if use_encoder_stderr_inherit else subprocess.PIPE
 
-    vspipe_cmd = [str(vspipe_exe), "--y4m", str(vpy_path), "-"]
+    vspipe_cmd = [str(vspipe_exe), "--container", "y4m", str(vpy_path), "-"]
     enc_cmd = [str(x) for x in encoder_cmd]
     cancel_event = _ENCODE_CANCEL_EVENT.get()
 
-    p_v = run_command(
+    p_v = run_vspipe(
         vspipe_cmd,
         wait=False,
         stdout=subprocess.PIPE,
@@ -684,12 +689,12 @@ def _run_vspipe_svt_win_tempfile_encode(
         prefix="bluraysub_svt_", suffix=".y4m", dir=td if td else None
     )
     os.close(fd)
-    vspipe_cmd = [str(vspipe_exe), "--y4m", str(vpy_path), "-"]
+    vspipe_cmd = [str(vspipe_exe), "--container", "y4m", str(vpy_path), "-"]
     enc_cmd = [str(x) for x in encoder_cmd]
     cancel_event = _ENCODE_CANCEL_EVENT.get()
     try:
         with open(y4m_path, "wb") as y4m_f, tempfile.TemporaryFile() as stderr_file:
-            p_v = run_command(
+            p_v = run_vspipe(
                 vspipe_cmd,
                 wait=False,
                 stdout=y4m_f,
@@ -900,16 +905,38 @@ def _estimate_native_from_image_worker(
             debug_out_dir = None
 
         def _run_getnative_in_range(lo: int, hi: int) -> tuple[float, str, float, dict]:
-            out0 = auto_getnative(
-                image_path,
-                src_heights=tuple(range(lo, hi + 1)),
-                debug_dir=debug_out_dir,
-                fast_mode=True,
-                score_quit=0.0,
-                min_kernels=16,
-                max_kernels=16,
-                consensus_quit=False,
+            options = dict(
+                src_heights=tuple(range(lo, hi + 1)), debug_dir=debug_out_dir,
+                fast_mode=True, score_quit=0.0, min_kernels=16, max_kernels=16, consensus_quit=False,
             )
+            directory = Path(VSPIPE_PATH).resolve().parent
+            private_runtime = directory / "python-runtime.ini"
+            if sysconfig.get_platform() == "win-arm64" and private_runtime.is_file():
+                # A Classic installation on ARM64 supplies a private x64 interpreter.
+                configuration = ConfigParser(interpolation=None)
+                configuration.read(private_runtime, encoding="utf-8-sig")
+                home = configuration.get("Python", "Home", fallback="")
+                python = directory / home / "python.exe"
+                if not home or not python.is_file():
+                    raise FileNotFoundError(translate_text("VapourSynth's x64 Python runtime is missing. Run Windows setup."))
+                root = Path(__file__).resolve().parents[3]
+                command = (
+                    "import json, sys; sys.path.insert(0, sys.argv[1]); "
+                    "from src.vs_tools.getnative import getnative; "
+                    "print(json.dumps(getnative(sys.argv[2], **json.loads(sys.argv[3]))))"
+                )
+                environment = dict(os.environ)
+                for key in ("PYTHONHOME", "PYTHONPATH"):
+                    environment.pop(key, None)
+                result = run_command(
+                    [str(python), "-I", "-c", command, str(root), image_path, json.dumps(options)],
+                    env=environment, capture_output=True, encoding="utf-8", errors="replace",
+                )
+                if result.returncode:
+                    raise RuntimeError(result.stderr.strip() or result.stdout.strip() or str(result.returncode))
+                out0 = json.loads(result.stdout.splitlines()[-1])
+            else:
+                out0 = auto_getnative(image_path, **options)
             if isinstance(out0, dict):
                 props0 = dict(out0)
             elif hasattr(out0, "get_frame"):
@@ -1780,13 +1807,15 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             if vspipe_mode == 'bundle':
                 vspipe_exe, vspipe_env = get_vspipe_context()
             else:
-                vspipe_exe, vspipe_env = VSPIPE_PATH, None
+                vspipe_exe, vspipe_env = get_system_vspipe_context(VSPIPE_PATH)
             vspipe_env = dict(vspipe_env) if vspipe_env else dict(os.environ)
             vspipe_env['BLURAYSUB_VPY_SOURCE'] = os.path.normpath(vpy_video_source)
             # Metadata probing does not render final subtitles and needs no timecodes.
             vspipe_env.pop('BLURAYSUB_VPY_TIMECODES', None)
             vspipe_env.pop('BLURAYSUB_VPY_FRAMES', None)
-            if str(PLUGIN_PATH or '').strip():
+            if str(PLUGIN_PATH or '').strip() and (
+                    vspipe_mode != 'system' or not getattr(sys, 'frozen', False)
+            ):
                 vspipe_env['BLURAYSUB_PLUGIN_PATH'] = str(PLUGIN_PATH)
             enc_exe = resolve_encoder_executable_path(encoder, encoder_mode)
 
@@ -1899,7 +1928,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             )
             if use_svt_win_temp_y4m:
                 cmd_echo = (
-                    f'[temp y4m] "{vspipe_exe}" --y4m "{vpy_path}" -  -->  "{enc_cmd[0]}" -i <temp.y4m> ... -b "{encoded_path}"'
+                    f'[temp y4m] "{vspipe_exe}" --container y4m "{vpy_path}" -  -->  "{enc_cmd[0]}" -i <temp.y4m> ... -b "{encoded_path}"'
                 )
                 try:
                     _emit_encode_log_line(
@@ -1908,7 +1937,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 except Exception:
                     pass
             else:
-                cmd_echo = f'"{vspipe_exe}" --y4m "{vpy_path}" - | {_format_encoder_cmd_for_echo(enc_cmd)}'
+                cmd_echo = f'"{vspipe_exe}" --container y4m "{vpy_path}" - | {_format_encoder_cmd_for_echo(enc_cmd)}'
             print(f'{translate_text("Encode command:")}{cmd_echo}')
             failure_stage = 'Video encoding'
             self._progress(text=translate_text(

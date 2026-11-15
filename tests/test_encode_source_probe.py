@@ -13,6 +13,7 @@ from src.runtime.encode_source import (
     ActualEncodeSource,
     extract_hdr10plus_metadata,
     inject_hdr10plus_metadata,
+    probe_vapoursynth_frame_count,
     probe_vapoursynth_output_metadata,
     source_has_hdr10plus,
     verify_hdr10plus_metadata,
@@ -58,7 +59,7 @@ class EncodeSourceProbeTests(unittest.TestCase):
                 )
                 return SimpleNamespace(returncode=0, stdout='', stderr='')
 
-            with patch('src.runtime.encode_source.run_command', side_effect=run_probe):
+            with patch('src.runtime.encode_source.run_vspipe', side_effect=run_probe):
                 result, color_changed, timeline, _source_frames = probe_vapoursynth_output_metadata(
                     source,
                     str(vpy_path),
@@ -74,6 +75,21 @@ class EncodeSourceProbeTests(unittest.TestCase):
             self.assertEqual(result.stream['side_data_list'], [])
             self.assertTrue(color_changed)
             self.assertEqual(timeline, (3, 24_000, 1_001))
+
+    def test_frame_count_comes_from_output_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            vpy_path = str(Path(directory) / "test.vpy")
+            for output in (
+                "Width: 1920\nFrames: 23\n",
+                "Output Index: 1\nFrames: 100\n\nOutput Index: 0\nFrames: 23\n",
+            ):
+                with (
+                    self.subTest(output=output),
+                    patch("src.runtime.encode_source.run_vspipe", return_value=SimpleNamespace(
+                        returncode=0, stdout=output, stderr="",
+                    )),
+                ):
+                    self.assertEqual(probe_vapoursynth_frame_count(vpy_path, "vspipe", {}), 23)
 
     def test_hdr10plus_requires_matching_frames_without_relying_on_nominal_fps(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

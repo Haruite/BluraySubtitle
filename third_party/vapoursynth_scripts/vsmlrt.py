@@ -40,47 +40,47 @@ from vapoursynth import core
 
 
 def get_plugins_path() -> str:
-    path = b""
+    path = ""
 
     try:
         path = core.ov.Version()["path"]
     except AttributeError:
         pass
 
-    if path == b"":
+    if not path:
         try:
             path = core.ort.Version()["path"]
         except AttributeError:
             pass
 
-    if path == b"":
+    if not path:
         try:
             path = core.ncnn.Version()["path"]
         except AttributeError:
             pass
 
-    if path == b"":
+    if not path:
         try:
             path = core.trt.Version()["path"]
         except AttributeError:
             pass
 
-    if path == b"":
+    if not path:
         try:
             path = core.trt_rtx.Version()["path"]
         except AttributeError:
             pass
 
-    if path == b"":
+    if not path:
         try:
             path = core.migx.Version()["path"]
         except AttributeError:
             pass
 
-    if path == b"":
+    if not path:
         raise RuntimeError("vsmlrt: cannot load any filters")
 
-    return os.path.dirname(path).decode()
+    return os.path.dirname(os.fsdecode(path))
 
 
 plugins_path: str = get_plugins_path()
@@ -2015,7 +2015,7 @@ def trtexec(
         bf16 = False
 
     try:
-        device_name = core.trt.DeviceProperties(device_id)["name"].decode()
+        device_name = os.fsdecode(core.trt.DeviceProperties(device_id)["name"])
         device_name = device_name.replace(' ', '-')
     except AttributeError:
         device_name = f"device{device_id}"
@@ -2246,10 +2246,10 @@ def get_mxr_path(
     with open(network_path, "rb") as file:
         checksum = zlib.adler32(file.read())
 
-    migx_version = core.migx.Version()["migraphx_version_build"].decode()
+    migx_version = os.fsdecode(core.migx.Version()["migraphx_version_build"])
 
     try:
-        device_name = core.migx.DeviceProperties(device_id)["name"].decode()
+        device_name = os.fsdecode(core.migx.DeviceProperties(device_id)["name"])
         device_name = device_name.replace(' ', '-')
     except AttributeError:
         device_name = f"device{device_id}"
@@ -2416,7 +2416,7 @@ def tensorrt_rtx(
         raise ValueError('tensorrt_rtx: "fp16" must be True.')
 
     try:
-        device_name = core.trt_rtx.DeviceProperties(device_id)["name"].decode()
+        device_name = os.fsdecode(core.trt_rtx.DeviceProperties(device_id)["name"])
         device_name = device_name.replace(' ', '-')
     except AttributeError:
         device_name = f"device{device_id}"

@@ -10,20 +10,20 @@ from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
 from src.core.i18n import translate_text
 from src.core.version import current_commit, parse_commit_record
-from src.runtime.update_check import SERVER_PACKAGE_METADATA_URL, request_update_info, update_network_manager
-from src.runtime.windows_update import WindowsUpdatePackage, server_windows_package, windows_update_executable
+from src.runtime.program_update import SERVER_PACKAGE_METADATA_URL, UpdatePackage, server_update_package, update_executable
+from src.runtime.update_check import request_update_info, update_network_manager
 from .widget_animations import AnimatedMessageBox
 
 
 class StartupUpdateNotice(QWidget):
-    def __init__(self, install_update: Callable[[WindowsUpdatePackage], None], parent: QWidget) -> None:
+    def __init__(self, install_update: Callable[[UpdatePackage], None], parent: QWidget) -> None:
         super().__init__(parent)
         self.setObjectName("startupUpdateNotice")
         self._install_update = install_update
         self._network_manager = update_network_manager(self)
         self._check_enabled = False
         self._reply: QNetworkReply | None = None
-        self._package: WindowsUpdatePackage | None = None
+        self._package: UpdatePackage | None = None
         label = QLabel(translate_text("A newer server package is available."), self)
         label.setWordWrap(True)
         self._update_button = QPushButton(translate_text("Update now"), self)
@@ -73,7 +73,7 @@ class StartupUpdateNotice(QWidget):
         if installed is None or installed.commit_hash == server_commit.commit_hash:
             return
         if server_commit.committed_at > installed.committed_at:
-            self._package = server_windows_package(record) if windows_update_executable() is not None else None
+            self._package = server_update_package(record) if update_executable() is not None else None
             self._update_button.setVisible(self._package is not None)
             self.show()
 

@@ -30,7 +30,7 @@ def nnedi3_resample(input, target_width=None, target_height=None, src_left=None,
     sPlaneNum = sFormat.num_planes
 
     # Get property about output clip
-    dFormat = sFormat if csp is None else core.get_format(csp)
+    dFormat = sFormat if csp is None else core.get_video_format(csp)
 
     dColorFamily = dFormat.color_family
     dIsGRAY = dColorFamily == vs.GRAY
