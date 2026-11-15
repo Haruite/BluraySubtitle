@@ -112,7 +112,6 @@ $script:BuildRecipeHash = ""
 $script:WindowsToolRecipeId = "ABE005A17FD8A3E7BE61BC884AC8EB55BC17BFA19F3A1AB25D2574C8ACEF835E"
 $script:X265Arm64BuildProfile = "arm64-assembly"
 $script:WindowsToolPathRecipeId = "7ECAA3E44A008A78519D6A9AE10C2BE6F4F6E50DEE1BC404FBBCC9BF05B6EF8F"
-$script:VapourSynthComponentRecipeId = "8E3206EEECB37B7FE3EF3FC7D5723D0F937A6F8D8F51A04E94E87B79D9C192BD"
 $script:BuildToolchains = @{
     msvc = @("git", "visual-studio-build-tools", "cmake", "ninja", "nasm")
     msys2 = @("git", "msys2", "msys2-packages")
@@ -4160,11 +4159,15 @@ function Install-Libass {
     $build = Join-Path $script:TempRoot "$buildName-build"
     $runtimeLink = if ($nativeArm64) { "-lc++" } else { "-lstdc++" }
     $linkFlags = if ($nativeArm64) { "-static" } else { "-static -static-libgcc" }
+    $toolchainPrefix = if ($X64Compatibility) { "/ucrt64" } else { "/$script:MsysPrefix" }
     $buildScriptContent = @(
         'set -euo pipefail',
         'source=$1',
         'build=$2',
         'jobs=$3',
+        ('export PKG_CONFIG="$(cygpath -m ' + $toolchainPrefix + '/bin/pkgconf.exe)"'),
+        ('export PKG_CONFIG_LIBDIR="$(cygpath -mp ' + $toolchainPrefix + '/lib/pkgconfig:' + $toolchainPrefix + '/share/pkgconfig)"'),
+        'unset PKG_CONFIG_PATH',
         ('meson setup "$build" "$source" --buildtype=release -Ddefault_library=shared -Dprefer_static=true -Db_lto=true -Dfontconfig=disabled -Ddirectwrite=enabled -Dlibunibreak=enabled -Dasm=enabled -Dtest=disabled -Dcompare=disabled -Dprofile=disabled -Dfuzz=disabled -Dcheckasm=disabled "-Dc_link_args=' +
             $linkFlags + '" -Dc_winlibs=-lkernel32,-luser32,-lgdi32,-lwinspool,-lshell32,-lole32,-loleaut32,-luuid,-lcomdlg32,-ladvapi32,' + $runtimeLink),
         'meson compile -C "$build" -j "$jobs"'
@@ -4529,23 +4532,7 @@ function Install-VapourSynthUpstreamComponents {
         $arguments += "--build-with-vulkan"
     }
     if ($script:BuildCacheRoot) {
-        $keyInputs = @(
-            $script:BuildRecipeHash
-            $script:VapourSynthComponentRecipeId
-            (Get-FileHash -LiteralPath (Join-Path $script:SetupDirectory "tools\vapoursynth_plugin_versions.py")).Hash
-        )
-        if ($VapourSynthRuntime -eq "Classic") {
-            $keyInputs += (Get-FileHash -LiteralPath (Join-Path $script:ToolPaths.VapourSynthRoot "VapourSynth.dll")).Hash
-        }
-        else {
-            $keyInputs += (Get-FileHash -LiteralPath $installer).Hash
-        }
-        $keyInputs += @(
-            (Get-FileHash -LiteralPath (Join-Path $script:ToolPaths.VapourSynthRoot "VSScript.dll")).Hash
-            (Get-FileHash -LiteralPath $libass).Hash
-        )
-        $arguments += @("--build-cache", $script:BuildCacheRoot,
-            "--build-fingerprint", (Get-BuildFingerprint $keyInputs))
+        $arguments += @("--build-cache", $script:BuildCacheRoot)
         $msysRequired = 75
         & $runInstaller ($arguments + "--defer-msys2") @(0, $msysRequired)
         if ($LASTEXITCODE -eq $msysRequired) {
@@ -5064,14 +5051,6 @@ function Invoke-WindowsSetup {
                 "-m", "pip", "list", "--format=freeze", "--disable-pip-version-check"
             ))
         )
-        if ($script:BuildCacheRoot -and (Test-Path -LiteralPath $script:BuildCacheRoot -PathType Container)) {
-            $archives = @(Get-ChildItem -LiteralPath $script:BuildCacheRoot -Filter "*.zip" -File | Sort-Object Name)
-            if ($archives.Count) {
-                $script:Manifest.system.build_cache_key = Get-BuildFingerprint @(
-                    $archives | ForEach-Object { "$($_.Name)=$((Get-FileHash -LiteralPath $_.FullName).Hash)" }
-                )
-            }
-        }
     }
     Save-SetupManifest
 

@@ -1165,7 +1165,7 @@ I18N_ZH_TO_EN = {
     '发布文件不兼容，尝试源码：{name}：{detail}': 'Release binary is incompatible; trying source: {name}: {detail}',
     '正在从源码编译 VapourSynth 组件：{name} {version}': 'Building VapourSynth component from source: {name} {version}',
     '已验证独立安装的 VapourSynth 组件：{count} 个': 'Independent VapourSynth components verified: {count}',
-    '已从构建缓存恢复 VapourSynth 组件。': 'Restored VapourSynth components from the build cache.',
+    '已从构建缓存恢复 VapourSynth 组件：{name}': 'Restored VapourSynth component from the build cache: {name}',
     '已从构建缓存恢复 VSEdit。': 'Restored VSEdit from the build cache.',
     '已从构建缓存恢复 FFTW。': 'Restored FFTW from the build cache.',
     '另一项 VapourSynth 安装正在运行，正在等待。': 'Another VapourSynth installation is running; waiting.',

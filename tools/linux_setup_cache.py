@@ -1,4 +1,4 @@
-"""Reuse native files from a successful Linux package setup."""
+"""Reuse installed Linux package build artifacts by component."""
 
 from __future__ import annotations
 
@@ -15,11 +15,11 @@ import sys
 import tarfile
 from tempfile import TemporaryDirectory
 
+from vapoursynth_plugin_versions import _records, record_version
 
 SYSTEM_ROOTS = tuple(Path("/usr/local") / name for name in ("bin", "include", "lib", "lib64", "share")) + (
     Path("/usr/share/mkvtoolnix"),
 )
-SYSTEM_FILES = tuple(Path(path) for path in ("/usr/bin/mpv", "/usr/include/libdovi/rpu_parser.h"))
 MANIFEST = "build.json"
 
 
@@ -43,27 +43,32 @@ def digest(path: Path) -> str:
 
 
 class InstallPaths:
-    def __init__(self, plugins: Path, executables: list[Path]) -> None:
+    def __init__(self, plugins: Path, paths: list[Path], system: bool) -> None:
         self.plugins = plugins.resolve()
         self.home = Path.home().resolve()
         self.local_libs = tuple(
             (self.home / ".local" / directory).resolve()
             for directory in ("lib", "lib64", "lib/x86_64-linux-gnu")
-        )
+        ) if system else ()
         self.roots = (
-            *map(Path.resolve, SYSTEM_ROOTS), self.plugins, self.home / ".local/include/libdovi",
-        )
-        paths = (*SYSTEM_FILES, *executables, *(lib / "pkgconfig/dovi.pc" for lib in self.local_libs))
+            *map(Path.resolve, SYSTEM_ROOTS), (self.home / ".local/include/libdovi").resolve(),
+        ) if system else ()
+        paths = (*paths, *(lib / "pkgconfig/dovi.pc" for lib in self.local_libs))
         self.files = {path.parent.resolve() / path.name for path in paths}
 
     def contains(self, path: Path) -> bool:
+        if path in self.files:
+            return True
+        # Each filter owns only its declared outputs. Version records are merged separately.
+        if path.is_relative_to(self.plugins):
+            return False
         # Reinstall Python distributions from cached wheels for the active interpreter.
         if path.is_relative_to("/usr/local/lib"):
             relative = path.relative_to("/usr/local/lib").parts
             if relative and relative[0].startswith("python"):
                 return False
         return (
-            path in self.files or any(path.is_relative_to(root) for root in self.roots)
+            any(path.is_relative_to(root) for root in self.roots)
             or (path.parent in self.local_libs and path.name.startswith("libdovi."))
         )
 
@@ -93,27 +98,37 @@ class InstallPaths:
         return entries
 
 
-def manifest(archive: tarfile.TarFile) -> dict:
+def manifest(archive: tarfile.TarFile, key: str) -> dict:
     with archive.extractfile(MANIFEST) as record:
-        return json.load(record)
+        data = json.load(record)
+    if data["recipe"] != key:
+        raise ValueError("Build recipe has changed")
+    return data
 
 
-def save_cache(cache: Path, baseline: dict, scope: InstallPaths) -> None:
+def save_cache(cache: Path, key: str, baseline: dict, scope: InstallPaths, restored: bool) -> None:
     current = scope.entries()
-    previous = {"files": {}, "apt": {}}
-    if cache.is_file():
+    previous = {"files": {}, "apt": {}, "plugins": {}}
+    if restored:
         try:
             with tarfile.open(cache) as archive:
-                previous = manifest(archive)
+                previous = manifest(archive, key)
         except (OSError, EOFError, ValueError, KeyError, tarfile.TarError):
             # A failed read must not prevent saving the rebuilt output.
             pass
     original = baseline["files"]
-    paths = {
-        name: previous["files"].get(name, original.get(name, [None] * 5)[-1])
-        for name, stat_info in current.items()
-        if name in previous["files"] or original.get(name) != stat_info
-    }
+    paths = {}
+    for name, info in current.items():
+        before = original.get(name)
+        cached = previous["files"].get(name)
+        if before == info and not cached:
+            continue
+        checksum = info[-1] or digest(Path(name))
+        mode = stat.S_IMODE(info[0])
+        if cached and cached[1:] == [checksum, mode]:
+            paths[name] = cached
+        elif before != info and (not before or (before[-1], stat.S_IMODE(before[0])) != (checksum, mode)):
+            paths[name] = [before[-1] if before else None, checksum, mode]
     if not paths:
         return
 
@@ -121,7 +136,18 @@ def save_cache(cache: Path, baseline: dict, scope: InstallPaths) -> None:
         name: version for name, version in apt_packages().items()
         if name in previous["apt"] or baseline["apt"].get(name) != version
     }
-    record = json.dumps({"files": paths, "apt": apt}, sort_keys=True).encode()
+    plugins = {}
+    for path in scope.files:
+        if path.parent == scope.plugins and path.suffix == ".so" and str(path) in paths:
+            _, records = _records(path)
+            version = records.get(path.name)
+            if version and version[1] == paths[str(path)][1]:
+                plugins[str(path)] = version[0]
+    current_manifest = {"recipe": key, "files": paths, "apt": apt, "plugins": plugins}
+    if current_manifest == previous:
+        return
+
+    record = json.dumps(current_manifest, sort_keys=True).encode()
     cache.parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(dir=cache.parent) as directory:
         replacement = Path(directory) / "native.tar.xz"
@@ -141,9 +167,9 @@ def save_cache(cache: Path, baseline: dict, scope: InstallPaths) -> None:
         replacement.replace(cache)
 
 
-def restore_cache(cache: Path, scope: InstallPaths) -> None:
+def restore_cache(cache: Path, key: str, scope: InstallPaths) -> None:
     with tarfile.open(cache) as archive, TemporaryDirectory(dir=cache.parent) as directory:
-        record = manifest(archive)
+        record = manifest(archive, key)
         installed = apt_packages()
         if any(installed.get(name) != version for name, version in record["apt"].items()):
             raise ValueError("The build cache was created with different APT dependencies")
@@ -161,7 +187,9 @@ def restore_cache(cache: Path, scope: InstallPaths) -> None:
                 ):
                     raise ValueError(f"Unexpected path in build cache: {member.name}")
                 if path.is_symlink() or path.is_file():
-                    if record["files"][str(path)] != digest(path):
+                    before, checksum, _ = record["files"][str(path)]
+                    existing = digest(path)
+                    if existing != before or existing == checksum:
                         continue
                 elif path.exists():
                     continue
@@ -181,24 +209,42 @@ def restore_cache(cache: Path, scope: InstallPaths) -> None:
                     [*command, "-xf", str(subdivision), "-C", "/", "--no-overwrite-dir", "--no-same-owner"],
                     check=True,
                 )
+        # Restore just the matching digest-bound fallback records into the shared file.
+        for name, version in record["plugins"].items():
+            path = Path(name)
+            if path in scope.files and path.parent == scope.plugins and path.is_file():
+                if digest(path) == record["files"][name][1]:
+                    record_version(path, version, None)
+
+
+def missing_packages(cache: Path, key: str) -> None:
+    with tarfile.open(cache) as archive:
+        dependencies = manifest(archive, key)["apt"]
+    installed = apt_packages()
+    for name, version in dependencies.items():
+        if not re.fullmatch(r"[a-z0-9][a-z0-9+.-]*(?::[a-z0-9]+)?", name):
+            raise ValueError(f"Invalid package name in build cache: {name}")
+        if name not in installed:
+            print(name)
+        elif installed[name] != version:
+            raise ValueError(f"Build cache requires {name} {version}, found {installed[name]}")
 
 
 def main() -> None:
-    operation, cache, baseline, plugins, *executables = sys.argv[1:]
+    operation, cache, baseline, key, mode, plugins, restored, *paths = sys.argv[1:]
     cache, baseline = Path(cache), Path(baseline)
-    scope = InstallPaths(Path(plugins), list(map(Path, executables)))
-    if operation == "snapshot":
-        baseline.write_text(json.dumps({"files": scope.entries(), "apt": apt_packages()}), encoding="utf-8")
-    elif operation == "packages":
-        with tarfile.open(cache) as archive:
-            for name in manifest(archive)["apt"]:
-                if not re.fullmatch(r"[a-z0-9][a-z0-9+.-]*(?::[a-z0-9]+)?", name):
-                    raise ValueError(f"Invalid package name in build cache: {name}")
-                print(name)
-    elif operation == "restore":
-        restore_cache(cache, scope)
-    elif operation == "save":
-        save_cache(cache, json.loads(baseline.read_text(encoding="utf-8")), scope)
+    scope = InstallPaths(Path(plugins), list(map(Path, paths)), system=mode == "system")
+    try:
+        if operation == "snapshot":
+            baseline.write_text(json.dumps({"files": scope.entries(), "apt": apt_packages()}), encoding="utf-8")
+        elif operation == "packages":
+            missing_packages(cache, key)
+        elif operation == "restore":
+            restore_cache(cache, key, scope)
+        elif operation == "save":
+            save_cache(cache, key, json.loads(baseline.read_text(encoding="utf-8")), scope, restored == "true")
+    except (OSError, EOFError, ValueError, KeyError, tarfile.TarError, subprocess.CalledProcessError) as error:
+        sys.exit(str(error))
 
 
 if __name__ == "__main__":

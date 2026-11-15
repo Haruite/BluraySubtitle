@@ -67,9 +67,6 @@ jobs:
             "seven_zip=$($system.seven_zip_executable)"
             "download_key=windows-pip-v1-$env:RUNNER_ARCH-$($system.download_cache_key)"
           )
-          if ($system.build_cache_key) {
-            $outputs += "build_key=windows-tools-v3-$env:RUNNER_ARCH-$($system.build_cache_key)"
-          }
           [IO.File]::AppendAllLines($env:GITHUB_OUTPUT, [string[]]$outputs, [Text.UTF8Encoding]::new($false))
 
       - name: Save Python Package Downloads
@@ -79,12 +76,39 @@ jobs:
           path: ${{ runner.temp }}/bluraysubtitle-pip
           key: ${{ steps.setup.outputs.download_key }}
 
+      - name: Collect Windows Tool Cache Key
+        id: tool-cache
+        if: ${{ !cancelled() && (steps.setup.outcome == 'success' || steps.setup.outcome == 'failure') }}
+        shell: powershell
+        run: |
+          $directory = Join-Path $env:RUNNER_TEMP "bluraysubtitle-builds/artifacts"
+          if ($env:RUNNER_ARCH -eq "ARM64") {
+            $directory = Join-Path $directory "arm64"
+          }
+          if (-not (Test-Path -LiteralPath $directory -PathType Container)) { return }
+          $legacy = Join-Path $directory "vapoursynth-components.zip"
+          if (Test-Path -LiteralPath $legacy -PathType Leaf) {
+            Remove-Item -LiteralPath $legacy
+          }
+          $archives = @(Get-ChildItem -LiteralPath $directory -Filter "*.zip" -File | Sort-Object Name)
+          if (!$archives.Count) { return }
+          $entries = $archives | ForEach-Object { "$($_.Name)=$((Get-FileHash -LiteralPath $_.FullName).Hash)" }
+          $sha256 = [Security.Cryptography.SHA256]::Create()
+          try {
+            $bytes = [Text.Encoding]::UTF8.GetBytes(($entries -join "`n"))
+            $fingerprint = [BitConverter]::ToString($sha256.ComputeHash($bytes)).Replace("-", "").ToLowerInvariant()
+          }
+          finally {
+            $sha256.Dispose()
+          }
+          [IO.File]::AppendAllLines($env:GITHUB_OUTPUT, [string[]]@("key=windows-tools-v3-$env:RUNNER_ARCH-$fingerprint"), [Text.UTF8Encoding]::new($false))
+
       - name: Save Windows Tool Artifacts
-        if: steps.setup.outputs.build_key != '' && steps.builds.outputs.cache-matched-key != steps.setup.outputs.build_key
+        if: ${{ !cancelled() && steps.tool-cache.outputs.key != '' && steps.builds.outputs.cache-matched-key != steps.tool-cache.outputs.key }}
         uses: actions/cache/save@v6
         with:
           path: ${{ runner.temp }}/bluraysubtitle-builds/artifacts/${{ inputs.architecture == 'arm64' && 'arm64/' || '' }}*.zip
-          key: ${{ steps.setup.outputs.build_key }}
+          key: ${{ steps.tool-cache.outputs.key }}
 
       - name: Build and Verify Windows Package
         shell: powershell

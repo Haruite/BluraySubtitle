@@ -522,10 +522,12 @@ for asset in json.load(sys.stdin)["assets"]:
 # ---------------------------------------------------------------------------
 
 apt_update() {
+  require_native_build "APT dependencies"
   tmux_run "apt-get update" sudo apt-get update
 }
 
 apt_install() {
+  require_native_build "APT dependencies"
   tmux_run "apt-get install $*" sudo env DEBIAN_FRONTEND=noninteractive apt-get \
     -o "Dir::Cache::archives=$BLURAY_SETUP_CACHE_DIR/apt" \
     -o APT::Keep-Downloaded-Packages=true install -y "$@"
@@ -579,7 +581,7 @@ export BLURAY_LANG
 
 log "$(msg 'Recommended terminal: Xshell or PuTTY for remote execution' '推荐使用 Xshell 或 PuTTY 远程执行命令')"
 
-if [[ "${1:-}" != "--in-tmux" && -z "${TMUX:-}" && -t 1 ]]; then
+if [[ "${1:-}" != "--in-tmux" && "${3:-}" != "--restore-only" && -z "${TMUX:-}" && -t 1 ]]; then
   if is_remote_ssh; then
     ensure_tmux_installed
     args_escaped="$(printf '%q ' "$@")"
@@ -590,6 +592,7 @@ if [[ "${1:-}" == "--in-tmux" ]]; then
   shift
 fi
 package_build=false
+restore_only=false
 case "${1:-}" in
   --build) package_build=true ;;
   --mod)
@@ -600,6 +603,15 @@ case "${1:-}" in
     esac
     ;;
 esac
+if "$package_build" && [[ "${3:-}" == --restore-only ]]; then
+  restore_only=true
+fi
+
+require_native_build() {
+  if "$restore_only"; then
+    die "$(msg "The cached build environment needs setup for $1" "缓存的构建环境需要重新安装或构建 $1")"
+  fi
+}
 
 # Keep the GitHub API token in this shell and out of external build commands.
 setup_github_api_token="${BLURAYSUBTITLE_GITHUB_TOKEN:-}"
@@ -759,8 +771,25 @@ mkvtoolnix_installed_version() {
   LC_ALL=C /usr/bin/mkvmerge --version | sed -nE 's/^mkvmerge v([0-9]+(\.[0-9]+)+) .*/\1/p'
 }
 
+mkvtoolnix_latest_version() {
+  curl -fsSL --retry 4 --connect-timeout 20 --max-time 45 https://mkvtoolnix.download/latest-release.xml \
+    | python3 -c 'import sys, xml.etree.ElementTree as ET; print(ET.parse(sys.stdin).findtext("./latest-source/version") or "")'
+}
+
 install_mkvtoolnix() {
   log "$(msg 'Installing mkvtoolnix / mkvtoolnix-gui' '安装 mkvtoolnix / mkvtoolnix-gui')"
+
+  if "$restore_only"; then
+    local version="${MKVTOOLNIX_VERSION:-$(mkvtoolnix_latest_version)}" current_version
+    [[ "$version" =~ ^[0-9]+([.][0-9]+)+$ ]] || return 1
+    current_version="$(mkvtoolnix_installed_version || true)"
+    if [[ -n "$current_version" ]] && dpkg --compare-versions "$current_version" ge "$version"; then
+      return
+    fi
+    cached_linux_build mkvtoolnix build_mkvtoolnix system "$version ${QMAKE6:-qmake6} $qt_cache_abi" \
+      /usr/bin/{mkvinfo,mkvmerge,mkvpropedit,mkvextract,mkvtoolnix-gui} -- "$version"
+    return
+  fi
 
   local entry
   local -a repositories=()
@@ -818,8 +847,7 @@ install_mkvtoolnix() {
     version="$qt_compat_version"
     log "$(msg "Using MKVToolNix ${version} for compatibility with Qt ${qt_version}" "使用 MKVToolNix ${version} 以兼容 Qt ${qt_version}")"
   elif [[ -z "$version" ]]; then
-    version="$(curl -fsSL --retry 4 --connect-timeout 20 --max-time 45 https://mkvtoolnix.download/latest-release.xml \
-      | python3 -c 'import sys, xml.etree.ElementTree as ET; print(ET.parse(sys.stdin).findtext("./latest-source/version") or "")')" || version=""
+    version="$(mkvtoolnix_latest_version)" || version=""
   fi
   [[ "$version" =~ ^[0-9]+(\.[0-9]+)+$ ]] \
     || die "$(msg 'Failed to determine the MKVToolNix release version' '无法确定 MKVToolNix 发布版本')"
@@ -852,6 +880,16 @@ install_mkvtoolnix() {
     return 0
   done
 
+  cached_linux_build mkvtoolnix build_mkvtoolnix system "$version ${QMAKE6:-qmake6} $qt_cache_abi" \
+    /usr/bin/{mkvinfo,mkvmerge,mkvpropedit,mkvextract,mkvtoolnix-gui} -- "$version"
+}
+
+build_mkvtoolnix() {
+  local version="$1"
+  if [[ "$(mkvtoolnix_installed_version)" == "$version" ]]; then
+    return
+  fi
+  require_native_build MKVToolNix
   log "$(msg "Building MKVToolNix ${version} from source" "从源码编译 MKVToolNix ${version}")"
   local package_name
   local installed_deb_packages=()
@@ -1131,7 +1169,8 @@ install_dovi_tool() {
   fi
   log "$(msg "Installing dovi_tool ${DOVI_TOOL_VERSION} (prebuilt)" "安装 dovi_tool ${DOVI_TOOL_VERSION}（预编译包）")"
 
-  if [[ -x "$DOVI_TOOL_PATH" ]]; then
+  if [[ -x "$DOVI_TOOL_PATH" ]] && { ! "$package_build" ||
+      [[ "$("$DOVI_TOOL_PATH" --version 2>/dev/null || true)" == "dovi_tool ${DOVI_TOOL_VERSION#[vV]}" ]]; }; then
     log "$(msg "dovi_tool already installed (${DOVI_TOOL_PATH}), skipping" "检测到 dovi_tool 已安装（${DOVI_TOOL_PATH}），跳过")"
     return 0
   fi
@@ -1372,6 +1411,7 @@ install_mpv() {
     fi
   fi
 
+  require_native_build "mpv and FFmpeg"
   install_libdovi
 
   log "$(msg 'Installing mpv build dependencies' '安装 mpv 编译所需系统依赖')"
@@ -1562,6 +1602,7 @@ install_lsmash() {
       '检测到 L-SMASH 已安装（pkg-config 可识别 liblsmash），跳过编译安装')"
     return 0
   fi
+  require_native_build L-SMASH
 
   local deps=(build-essential git pkg-config)
   local missing_deps=()
@@ -1861,10 +1902,11 @@ install_x264() {
   if [[ -x "$X264_PATH" && -f "$version_file" ]]; then
     installed_commit="$(tr -d '\r\n' < "$version_file")"
   fi
-  if [[ "$installed_commit" == "$x264_commit" ]]; then
+  if [[ "$installed_commit" == "$x264_commit" ]] && "$X264_PATH" --version >/dev/null 2>&1; then
     log "$(msg 'The latest x264 master is already installed; skipping build.' '已安装最新 x264 master，跳过编译。')"
     return 0
   fi
+  require_native_build x264
 
   local deps=(build-essential git nasm)
   local missing_deps=()
@@ -1992,10 +2034,11 @@ TSMUXER_VERSION="${TSMUXER_VERSION:-}"
 install_tsmuxer() {
   local tsmuxer_tag tsmuxer_version
   tsmuxer_tag="${TSMUXER_VERSION:-$(latest_stable_tag https://github.com/justdan96/tsMuxer.git)}"
-  tsmuxer_version="${tsmuxer_tag#v}"
+  tsmuxer_version="${tsmuxer_tag#[vV]}"
   log "$(msg "Installing tsMuxer ${tsmuxer_version}" "安装 tsMuxer ${tsmuxer_version}")"
 
-  if [[ -x "$TS_MUXER_PATH" ]]; then
+  if [[ -x "$TS_MUXER_PATH" ]] && { ! "$package_build" ||
+      [[ "$("$TS_MUXER_PATH" --version 2>/dev/null || true)" == "tsMuxeR version ${tsmuxer_version}."* ]]; }; then
     log "$(msg 'tsMuxeR already installed, skipping' '检测到 tsMuxeR 已安装，跳过')"
     return 0
   fi
@@ -2041,16 +2084,20 @@ __installed_fdkaac_version() {
 }
 
 install_fdk_aac() {
-  local fdk_aac_tag fdkaac_tag target_version installed_version
+  local fdk_aac_tag fdkaac_tag target_version installed_version installed_library
   fdk_aac_tag="${FDK_AAC_VERSION:-$(latest_stable_tag "$FDK_AAC_SOURCE_REPOSITORY")}"
   fdkaac_tag="${FDKAAC_VERSION:-$(latest_stable_tag "$FDKAAC_SOURCE_REPOSITORY")}"
   target_version="${fdkaac_tag#v}"
   installed_version="$(__installed_fdkaac_version || true)"
+  installed_library="$(pkg-config --modversion fdk-aac 2>/dev/null || true)"
 
-  if [[ -n "$installed_version" ]] && dpkg --compare-versions "$installed_version" ge "$target_version"; then
+  if [[ -n "$installed_version" && -n "$installed_library" ]] &&
+      dpkg --compare-versions "$installed_version" ge "$target_version" &&
+      dpkg --compare-versions "$installed_library" ge "${fdk_aac_tag#v}"; then
     log "$(msg "fdkaac is current (${installed_version} >= ${target_version}), skipping build" "fdkaac 已是当前版本（${installed_version} >= ${target_version}），跳过编译")"
     return 0
   fi
+  require_native_build fdkaac
   log "$(msg "Installing FDK-AAC ${fdk_aac_tag#v} and fdkaac ${target_version}" "正在安装 FDK-AAC ${fdk_aac_tag#v} 和 fdkaac ${target_version}")"
 
   local deps=(
@@ -2130,15 +2177,18 @@ install_flac() {
         log "$(msg "flac already installed and current (${flac_version} >= ${latest_flac_version}), skipping" "检测到 flac 已安装且为当前版本（${flac_version} >= ${latest_flac_version}），跳过编译安装")"
         return 0
       fi
+      require_native_build FLAC
       log "$(msg "flac is outdated (${flac_version} < ${latest_flac_version}), removing it before rebuilding" "检测到 flac 版本过旧（${flac_version} < ${latest_flac_version}），卸载后重新编译")"
       sudo apt-get remove -y flac >/dev/null 2>&1 || true
       bluray_sudo rm -f "$flac_bin"
     else
+      require_native_build FLAC
       log "$(msg 'Cannot parse installed flac version, attempting to rebuild' '无法解析已安装的 flac 版本，尝试重新编译安装')"
       sudo apt-get remove -y flac >/dev/null 2>&1 || true
       bluray_sudo rm -f "$flac_bin"
     fi
   fi
+  require_native_build FLAC
 
   local deps=(libogg-dev libtool-bin gettext git xz-utils)
   local missing_deps=()
@@ -2341,6 +2391,7 @@ install_descale() {
     log "$(msg "descale ${descale_tag} with blur support is installed, skipping" "已安装支持 blur 的 descale ${descale_tag}，跳过")"
     return 0
   fi
+  require_native_build descale
 
   local deps=(git meson ninja-build pkg-config build-essential)
   local missing_deps=()
@@ -2397,7 +2448,9 @@ ensure_modern_7zip_cli() {
 
   local build_dir
   build_dir="$(bluray_mktemp_dir)"
-  apt_install xz-utils
+  if ! command -v xz >/dev/null 2>&1; then
+    apt_install xz-utils
+  fi
   log "$(msg "Installing 7-Zip ${version} at ${SEVEN_ZIP_PATH}" "正在将 7-Zip ${version} 安装到 ${SEVEN_ZIP_PATH}")"
   download_github_release_asset ip7z/7zip "$release" "7z${asset_version}-linux-x64.tar.xz" "$build_dir/7zip.tar.xz" \
     || die "$(msg 'Failed to download official 7-Zip CLI' '下载官方 7-Zip 命令行程序失败')"
@@ -2458,6 +2511,7 @@ install_vapoursynth_editor() {
       return 0
     fi
   fi
+  require_native_build VSEdit
 
   local qt_compat_dev=qt6-5compat-dev qt_websockets_dev=qt6-websockets-dev
   if ! apt-get -s install "$qt_compat_dev" >/dev/null 2>&1; then
@@ -2592,79 +2646,43 @@ install_libplacebo_latest() {
 # VapourSynth plugins
 # ---------------------------------------------------------------------------
 
-build_vs_plugins() {
-  log "$(msg "Building/installing VapourSynth plugins to ${PLUGIN_PATH}" "编译/安装 VapourSynth 插件到 ${PLUGIN_PATH}")"
-
-  local plugins_dir="$PLUGIN_PATH"
-  ensure_configured_directory "$plugins_dir"
-
-  ensure_meson_version
-  export PATH="$HOME/.local/bin:$PATH"
-
-  local deps=(
-    build-essential git wget tar unzip sed
-    meson ninja-build cmake patch libass-dev
-    autoconf automake libtool pkg-config
-    libxxhash-dev
-    python3 python3-pip
-  )
-  local missing_deps=()
-  for dep in "${deps[@]}"; do
-    if ! dpkg-query -W -f='${Status}' "$dep" 2>/dev/null | grep -q "install ok installed"; then
-      missing_deps+=("$dep")
-    fi
-  done
-  local library
-  for library in libavcodec libavformat libavutil libswscale; do
-    if ! pkg-config --exists "$library" 2>/dev/null; then
-      missing_deps+=("${library}-dev")
-    fi
-  done
-  if (( ${#missing_deps[@]} > 0 )); then
-    apt_update
-    apt_install "${missing_deps[@]}" || die "$(msg 'Failed to install VS plugin dependencies' 'VS 插件依赖安装失败')"
+install_vs_lsmash_works() (
+  local build_dir="$1" plugins_dir="$2"
+  cd "$build_dir" || exit 1
+  local lsmash_plugin="$plugins_dir/libvslsmashsource.so"
+  local need_compat="false" lsmash_commit="ae51313aeb32cb39d2dbf328702c8fa3f5cd212a"
+  local avcodec_ver avcodec_major
+  avcodec_ver="$(pkg-config --modversion libavcodec 2>/dev/null || true)"
+  avcodec_major="${avcodec_ver%%.*}"
+  [[ "$avcodec_major" =~ ^[0-9]+$ ]] \
+    || die "$(msg 'Failed to determine the libavcodec development version for L-SMASH-Works' '无法确定 L-SMASH-Works 所需的 libavcodec 开发库版本')"
+  if (( avcodec_major < 60 )); then
+    need_compat="true"
+    lsmash_commit="70e19fb19dfd940a9ec9c7e02125b5fe1e2d7f93"
+  fi
+  local lsmash_version="commit:${lsmash_commit:0:7}"
+  local lsmash_linker_report=""
+  local lsmash_dependencies_broken="false"
+  if [[ -f "$lsmash_plugin" ]] && command -v ldd >/dev/null 2>&1; then
+    lsmash_linker_report="$(LC_ALL=C ldd -r "$lsmash_plugin" 2>&1 || true)"
+  fi
+  if [[ "$lsmash_linker_report" == *"undefined symbol:"* || "$lsmash_linker_report" == *"not found"* ]]; then
+    log "$(msg 'Existing L-SMASH-Works plugin has unresolved symbols; rebuilding it' '现有 L-SMASH-Works 插件包含未解析符号，将重新编译')"
+    lsmash_dependencies_broken="true"
   fi
 
-  local build_dir
-  build_dir="$(mktemp -d)"
+  if [[ "$lsmash_dependencies_broken" == "true" ]] \
+      || vs_plugin_needs_upgrade "libvslsmashsource.so" "$lsmash_version"; then
+    require_native_build "L-SMASH-Works"
+    log "$(msg 'Building L-SMASH-Works (VapourSynth)' '编译 L-SMASH-Works (VapourSynth)')"
+    download_source_archive "L-SMASH-Works ${lsmash_commit:0:7}" \
+      "https://codeload.github.com/HomeOfAviSynthPlusEvolution/L-SMASH-Works/tar.gz/${lsmash_commit}" L-SMASH-Works || exit 1
+    cd L-SMASH-Works/VapourSynth || exit 1
 
-  (
-    cd "$build_dir" || exit 1
-
-    local lsmash_plugin="$plugins_dir/libvslsmashsource.so"
-    local need_compat="false" lsmash_commit="ae51313aeb32cb39d2dbf328702c8fa3f5cd212a"
-    local avcodec_ver avcodec_major
-    avcodec_ver="$(pkg-config --modversion libavcodec 2>/dev/null || true)"
-    avcodec_major="${avcodec_ver%%.*}"
-    [[ "$avcodec_major" =~ ^[0-9]+$ ]] \
-      || die "$(msg 'Failed to determine the libavcodec development version for L-SMASH-Works' '无法确定 L-SMASH-Works 所需的 libavcodec 开发库版本')"
-    if (( avcodec_major < 60 )); then
-      need_compat="true"
-      lsmash_commit="70e19fb19dfd940a9ec9c7e02125b5fe1e2d7f93"
-    fi
-    local lsmash_version="commit:${lsmash_commit:0:7}"
-    local lsmash_linker_report=""
-    local lsmash_dependencies_broken="false"
-    if [[ -f "$lsmash_plugin" ]] && command -v ldd >/dev/null 2>&1; then
-      lsmash_linker_report="$(LC_ALL=C ldd -r "$lsmash_plugin" 2>&1 || true)"
-    fi
-    if [[ "$lsmash_linker_report" == *"undefined symbol:"* || "$lsmash_linker_report" == *"not found"* ]]; then
-      log "$(msg 'Existing L-SMASH-Works plugin has unresolved symbols; rebuilding it' '现有 L-SMASH-Works 插件包含未解析符号，将重新编译')"
-      lsmash_dependencies_broken="true"
-    fi
-
-    if [[ "$lsmash_dependencies_broken" == "true" ]] \
-        || vs_plugin_needs_upgrade "libvslsmashsource.so" "$lsmash_version"; then
-      log "$(msg 'Building L-SMASH-Works (VapourSynth)' '编译 L-SMASH-Works (VapourSynth)')"
-      cd "$build_dir" || exit 1
-      download_source_archive "L-SMASH-Works ${lsmash_commit:0:7}" \
-        "https://codeload.github.com/HomeOfAviSynthPlusEvolution/L-SMASH-Works/tar.gz/${lsmash_commit}" L-SMASH-Works || exit 1
-      cd L-SMASH-Works/VapourSynth || exit 1
-
-      # Apply FFmpeg compatibility patches (index accessors, D3D12 shim, removed codec IDs).
-      local decode_file="../common/decode.c"
-      if [[ -f "$decode_file" ]]; then
-          python3 - "$need_compat" <<'PY' || exit 1
+    # Apply FFmpeg compatibility patches (index accessors, D3D12 shim, removed codec IDs).
+    local decode_file="../common/decode.c"
+    if [[ -f "$decode_file" ]]; then
+        python3 - "$need_compat" <<'PY' || exit 1
 import re
 import sys
 from pathlib import Path
@@ -2722,10 +2740,10 @@ if needs_old_ffmpeg_compat and lwindex_path.is_file():
         lwindex_data = lwindex_data.replace(anchor, compat_block + anchor, 1)
     lwindex_path.write_text(lwindex_data, encoding="utf-8")
 PY
-      fi
-      if [[ "$need_compat" != "true" ]]; then
-        # FFmpeg 9 removes AVCodec.pix_fmts and the legacy parser split callback.
-        patch -d .. -p1 --batch --forward --fuzz=0 <<'LSMASH_FFMPEG_PATCH' || exit 1
+    fi
+    if [[ "$need_compat" != "true" ]]; then
+      # FFmpeg 9 removes AVCodec.pix_fmts and the legacy parser split callback.
+      patch -d .. -p1 --batch --forward --fuzz=0 <<'LSMASH_FFMPEG_PATCH' || exit 1
 diff --git a/common/lwindex.c b/common/lwindex.c
 --- a/common/lwindex.c
 +++ b/common/lwindex.c
@@ -2778,338 +2796,395 @@ diff --git a/common/lwlibav_video.c b/common/lwlibav_video.c
 +        codecpar->format = (int)avcodec_find_best_pix_fmt_of_list(pix_fmts, pix_fmt, 1, NULL);
      else
 LSMASH_FFMPEG_PATCH
-      fi
-      rm -rf build
-      tmux_run "L-SMASH-Works meson setup" meson setup build || exit 1
-      tmux_run "L-SMASH-Works ninja" ninja -C build || exit 1
-      local out
-      out="$(find "$PWD" -maxdepth 3 -name "libvslsmashsource.so" -type f | head -n 1)"
-      [[ -n "${out:-}" ]] || exit 1
-      lsmash_linker_report="$(LC_ALL=C ldd -r "$out" 2>&1 || true)"
-      if [[ "$lsmash_linker_report" == *"undefined symbol:"* || "$lsmash_linker_report" == *"not found"* ]]; then
-        log "$(msg 'Rebuilt L-SMASH-Works plugin still has unresolved dependencies' '重编后的 L-SMASH-Works 插件仍包含未解析依赖')"
-        exit 1
-      fi
-      install -m 0755 "$out" "$lsmash_plugin" || exit 1
-      vs_plugin_version record "libvslsmashsource.so" "$lsmash_version" || exit 1
-      cd "$build_dir" || exit 1
-    else
-      log "$(msg 'L-SMASH-Works version is current, skipping' 'L-SMASH-Works 版本已满足要求，跳过')"
     fi
+    rm -rf build
+    tmux_run "L-SMASH-Works meson setup" meson setup build || exit 1
+    tmux_run "L-SMASH-Works ninja" ninja -C build || exit 1
+    local out
+    out="$(find "$PWD" -maxdepth 3 -name "libvslsmashsource.so" -type f | head -n 1)"
+    [[ -n "${out:-}" ]] || exit 1
+    lsmash_linker_report="$(LC_ALL=C ldd -r "$out" 2>&1 || true)"
+    if [[ "$lsmash_linker_report" == *"undefined symbol:"* || "$lsmash_linker_report" == *"not found"* ]]; then
+      log "$(msg 'Rebuilt L-SMASH-Works plugin still has unresolved dependencies' '重编后的 L-SMASH-Works 插件仍包含未解析依赖')"
+      exit 1
+    fi
+    install -m 0755 "$out" "$lsmash_plugin" || exit 1
+    vs_plugin_version record "libvslsmashsource.so" "$lsmash_version" || exit 1
+  else
+    log "$(msg 'L-SMASH-Works version is current, skipping' 'L-SMASH-Works 版本已满足要求，跳过')"
+  fi
+)
 
-    # Keep the EEDI3m release used by the existing filter scripts.
-    if vs_plugin_needs_upgrade "eedi3m.so" "r9"; then
-      log "$(msg 'Building VapourSynth-EEDI3 (r9)' '编译 VapourSynth-EEDI3 (r9)')"
-      cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download EEDI3 r9' '下载 EEDI3 r9')" download_url https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI3/tar.gz/refs/tags/r9 r9.tar.gz || exit 1
-      tmux_run "$(msg 'Extract EEDI3 r9' '解压 EEDI3 r9')" tar zxvf r9.tar.gz || exit 1
-      cd VapourSynth-EEDI3-r9/ || exit 1
-      log "$(msg 'Fixing EEDI3 std::max_align_t compilation compatibility issue' '修复 EEDI3 的 std::max_align_t 编译兼容性问题')"
-      find . -type f -name "EEDI3.cpp" -exec sed -i 's/std::max_align_t/max_align_t/g' {} +
-      python3 - <<'PY' || exit 1
+install_vs_eedi3m() (
+  local build_dir="$1" plugins_dir="$2"
+  cd "$build_dir" || exit 1
+  # Keep the EEDI3m release used by the existing filter scripts.
+  if vs_plugin_needs_upgrade "eedi3m.so" "r9"; then
+    require_native_build "EEDI3m"
+    log "$(msg 'Building VapourSynth-EEDI3 (r9)' '编译 VapourSynth-EEDI3 (r9)')"
+    tmux_run "$(msg 'Download EEDI3 r9' '下载 EEDI3 r9')" download_url https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI3/tar.gz/refs/tags/r9 r9.tar.gz || exit 1
+    tmux_run "$(msg 'Extract EEDI3 r9' '解压 EEDI3 r9')" tar zxvf r9.tar.gz || exit 1
+    cd VapourSynth-EEDI3-r9/ || exit 1
+    log "$(msg 'Fixing EEDI3 std::max_align_t compilation compatibility issue' '修复 EEDI3 的 std::max_align_t 编译兼容性问题')"
+    find . -type f -name "EEDI3.cpp" -exec sed -i 's/std::max_align_t/max_align_t/g' {} +
+    python3 - <<'PY' || exit 1
 import re
 content = open('meson.build', encoding='utf-8', errors='replace').read()
 pattern = r"incdir = include_directories\(.*?check: true,.*?\.stdout\(\)\.strip\(\),\s*\)"
 new_content = re.sub(pattern, "incdir = '/usr/local/include/vapoursynth'", content, flags=re.DOTALL)
 open('meson.build', 'w', encoding='utf-8').write(new_content)
 PY
-      rm -rf build
-      tmux_run "EEDI3 meson setup" meson setup build || exit 1
-      tmux_run "EEDI3 ninja" ninja -C build || exit 1
-      install -m 0755 build/eedi3m.so "$plugins_dir/eedi3m.so" || exit 1
-      vs_plugin_version record "eedi3m.so" "r9" || exit 1
-      cd "$build_dir" || exit 1
-    else
-      log "$(msg 'eedi3m.so version is current, skipping' 'eedi3m.so 版本已满足要求，跳过')"
-    fi
+    rm -rf build
+    tmux_run "EEDI3 meson setup" meson setup build || exit 1
+    tmux_run "EEDI3 ninja" ninja -C build || exit 1
+    install -m 0755 build/eedi3m.so "$plugins_dir/eedi3m.so" || exit 1
+    vs_plugin_version record "eedi3m.so" "r9" || exit 1
+  else
+    log "$(msg 'eedi3m.so version is current, skipping' 'eedi3m.so 版本已满足要求，跳过')"
+  fi
+)
 
-    local znedi3_licenses="$plugins_dir/licenses/znedi3"
-    if [[ ! -s "$plugins_dir/nnedi3_weights.bin" || ! -s "$znedi3_licenses/gpl2.txt" ]] ||
-        vs_plugin_needs_upgrade "znedi3.so" "3.3"; then
-      log "$(msg 'Building ZNEDI3 3.3' '编译 ZNEDI3 3.3')"
-      cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download ZNEDI3 3.3 source' '下载 ZNEDI3 3.3 源码')" download_url \
-        https://files.pythonhosted.org/packages/d6/c9/774a61d0e213f75a2eaf36dba9c88b84689b9d2550c1370b8112e77b4d07/vapoursynth_znedi3-3.3.tar.gz znedi3.tar.gz || exit 1
-      printf '%s  %s\n' '8d94d6d74296adcf0d03d63ee204445526fed1c771be2fa8e998bffc0c32d8e4' znedi3.tar.gz | sha256sum -c - || exit 1
-      mkdir -p znedi3 || exit 1
-      tar -xf znedi3.tar.gz --strip-components=1 -C znedi3 || exit 1
-      tmux_run "ZNEDI3 make" make -C znedi3 -j"$(nproc)" X86=1 X86_AVX512=1 || exit 1
-      install -m 0644 znedi3/nnedi3_weights.bin "$plugins_dir/nnedi3_weights.bin" || exit 1
-      install -D -m 0644 znedi3/graphengine/COPYING "$znedi3_licenses/graphengine/COPYING" || exit 1
-      install -D -m 0644 znedi3/vsxx/COPYING.LGPLv2.1 "$znedi3_licenses/vsxx/COPYING.LGPLv2.1" || exit 1
-      install -D -m 0644 znedi3/gpl2.txt "$znedi3_licenses/gpl2.txt" || exit 1
-      install -m 0755 znedi3/vsznedi3.so "$plugins_dir/znedi3.so" || exit 1
-      vs_plugin_version record "znedi3.so" "3.3" || exit 1
-    fi
+install_vs_znedi3() (
+  local build_dir="$1" plugins_dir="$2"
+  cd "$build_dir" || exit 1
+  local znedi3_licenses="$plugins_dir/licenses/znedi3"
+  if [[ ! -s "$plugins_dir/nnedi3_weights.bin" || ! -s "$znedi3_licenses/gpl2.txt" ]] ||
+      vs_plugin_needs_upgrade "znedi3.so" "3.3"; then
+    require_native_build "ZNEDI3"
+    log "$(msg 'Building ZNEDI3 3.3' '编译 ZNEDI3 3.3')"
+    tmux_run "$(msg 'Download ZNEDI3 3.3 source' '下载 ZNEDI3 3.3 源码')" download_url \
+      https://files.pythonhosted.org/packages/d6/c9/774a61d0e213f75a2eaf36dba9c88b84689b9d2550c1370b8112e77b4d07/vapoursynth_znedi3-3.3.tar.gz znedi3.tar.gz || exit 1
+    printf '%s  %s\n' '8d94d6d74296adcf0d03d63ee204445526fed1c771be2fa8e998bffc0c32d8e4' znedi3.tar.gz | sha256sum -c - || exit 1
+    mkdir -p znedi3 || exit 1
+    tar -xf znedi3.tar.gz --strip-components=1 -C znedi3 || exit 1
+    tmux_run "ZNEDI3 make" make -C znedi3 -j"$(nproc)" X86=1 X86_AVX512=1 || exit 1
+    install -m 0644 znedi3/nnedi3_weights.bin "$plugins_dir/nnedi3_weights.bin" || exit 1
+    install -D -m 0644 znedi3/graphengine/COPYING "$znedi3_licenses/graphengine/COPYING" || exit 1
+    install -D -m 0644 znedi3/vsxx/COPYING.LGPLv2.1 "$znedi3_licenses/vsxx/COPYING.LGPLv2.1" || exit 1
+    install -D -m 0644 znedi3/gpl2.txt "$znedi3_licenses/gpl2.txt" || exit 1
+    install -m 0755 znedi3/vsznedi3.so "$plugins_dir/znedi3.so" || exit 1
+    vs_plugin_version record "znedi3.so" "3.3" || exit 1
+  fi
+)
 
-    if vs_plugin_needs_upgrade "libaddgrain.so" "r10"; then
-      log "$(msg 'Building VapourSynth-AddGrain (r10)' '编译 VapourSynth-AddGrain (r10)')"
-      cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download AddGrain r10' '下载 AddGrain r10')" download_url https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-AddGrain/tar.gz/refs/tags/r10 r10.tar.gz || exit 1
-      tmux_run "$(msg 'Extract AddGrain r10' '解压 AddGrain r10')" tar zxvf r10.tar.gz || exit 1
-      cd VapourSynth-AddGrain-r10/ || exit 1
-      tmux_run "AddGrain meson setup" meson setup build || exit 1
-      tmux_run "AddGrain ninja" ninja -C build || exit 1
-      install -m 0755 build/libaddgrain.so "$plugins_dir/libaddgrain.so" || exit 1
-      vs_plugin_version record "libaddgrain.so" "r10" || exit 1
-      cd "$build_dir" || exit 1
-    else
-      log "$(msg 'libaddgrain.so version is current, skipping' 'libaddgrain.so 版本已满足要求，跳过')"
-    fi
+install_vs_addgrain() (
+  local build_dir="$1" plugins_dir="$2"
+  cd "$build_dir" || exit 1
+  if vs_plugin_needs_upgrade "libaddgrain.so" "r10"; then
+    require_native_build "AddGrain"
+    log "$(msg 'Building VapourSynth-AddGrain (r10)' '编译 VapourSynth-AddGrain (r10)')"
+    tmux_run "$(msg 'Download AddGrain r10' '下载 AddGrain r10')" download_url https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-AddGrain/tar.gz/refs/tags/r10 r10.tar.gz || exit 1
+    tmux_run "$(msg 'Extract AddGrain r10' '解压 AddGrain r10')" tar zxvf r10.tar.gz || exit 1
+    cd VapourSynth-AddGrain-r10/ || exit 1
+    tmux_run "AddGrain meson setup" meson setup build || exit 1
+    tmux_run "AddGrain ninja" ninja -C build || exit 1
+    install -m 0755 build/libaddgrain.so "$plugins_dir/libaddgrain.so" || exit 1
+    vs_plugin_version record "libaddgrain.so" "r10" || exit 1
+  else
+    log "$(msg 'libaddgrain.so version is current, skipping' 'libaddgrain.so 版本已满足要求，跳过')"
+  fi
+)
 
-    # The upstream Linux binary requires GLIBC_2.38, so build from source on the
-    # target system to remain loadable on Ubuntu 22.04 and Debian 12.
-    if vs_plugin_needs_upgrade "libassrender.so" "0.38.4"; then
-      log "$(msg 'Building assrender (0.38.4)' '编译 assrender (0.38.4)')"
-      cd "$build_dir" || exit 1
-      download_source_archive 'assrender 0.38.4' \
-        https://codeload.github.com/AmusementClub/assrender/tar.gz/refs/tags/0.38.4 assrender-0.38.4 || exit 1
-      cd assrender-0.38.4 || exit 1
-      rm -rf build
-      tmux_run "assrender cmake" cmake -S . -B build -DCMAKE_BUILD_TYPE=Release || exit 1
-      tmux_run "assrender build" cmake --build build --parallel "$(nproc)" || exit 1
-      local out
-      out="$(find "$PWD/build" -name "libassrender.so" -type f | head -n 1)"
-      [[ -n "${out:-}" ]] || exit 1
-      install -m 0755 "$out" "$plugins_dir/libassrender.so" || exit 1
-      vs_plugin_version record "libassrender.so" "0.38.4" || exit 1
-      cd "$build_dir" || exit 1
-    else
-      log "$(msg 'libassrender.so version is current, skipping' 'libassrender.so 版本已满足要求，跳过')"
-    fi
+install_vs_assrender() (
+  local build_dir="$1" plugins_dir="$2"
+  cd "$build_dir" || exit 1
+  # The upstream Linux binary requires GLIBC_2.38, so build from source on the
+  # target system to remain loadable on Ubuntu 22.04 and Debian 12.
+  if vs_plugin_needs_upgrade "libassrender.so" "0.38.4"; then
+    require_native_build "ASSRender"
+    log "$(msg 'Building assrender (0.38.4)' '编译 assrender (0.38.4)')"
+    download_source_archive 'assrender 0.38.4' \
+      https://codeload.github.com/AmusementClub/assrender/tar.gz/refs/tags/0.38.4 assrender-0.38.4 || exit 1
+    cd assrender-0.38.4 || exit 1
+    rm -rf build
+    tmux_run "assrender cmake" cmake -S . -B build -DCMAKE_BUILD_TYPE=Release || exit 1
+    tmux_run "assrender build" cmake --build build --parallel "$(nproc)" || exit 1
+    local out
+    out="$(find "$PWD/build" -name "libassrender.so" -type f | head -n 1)"
+    [[ -n "${out:-}" ]] || exit 1
+    install -m 0755 "$out" "$plugins_dir/libassrender.so" || exit 1
+    vs_plugin_version record "libassrender.so" "0.38.4" || exit 1
+  else
+    log "$(msg 'libassrender.so version is current, skipping' 'libassrender.so 版本已满足要求，跳过')"
+  fi
+)
 
-    if vs_plugin_needs_upgrade "libbilateral.so" "r3"; then
-      log "$(msg 'Building VapourSynth-Bilateral (r3)' '编译 VapourSynth-Bilateral (r3)')"
-      cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download Bilateral r3' '下载 Bilateral r3')" download_url https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-Bilateral/tar.gz/refs/tags/r3 r3.tar.gz || exit 1
-      tmux_run "$(msg 'Extract Bilateral r3' '解压 Bilateral r3')" tar zxvf r3.tar.gz || exit 1
-      cd VapourSynth-Bilateral-r3/ || exit 1
-      chmod +x configure || exit 1
-      tmux_run "Bilateral configure" ./configure || exit 1
-      tmux_run "Bilateral make" make -j"$(nproc)" || exit 1
-      local out
-      out="$(find "$PWD" -maxdepth 3 -name "libbilateral.so" -type f | head -n 1)"
-      [[ -n "${out:-}" ]] || exit 1
-      install -m 0755 "$out" "$plugins_dir/libbilateral.so" || exit 1
-      vs_plugin_version record "libbilateral.so" "r3" || exit 1
-      cd "$build_dir" || exit 1
-    else
-      log "$(msg 'libbilateral.so version is current, skipping' 'libbilateral.so 版本已满足要求，跳过')"
-    fi
+install_vs_bilateral() (
+  local build_dir="$1" plugins_dir="$2"
+  cd "$build_dir" || exit 1
+  if vs_plugin_needs_upgrade "libbilateral.so" "r3"; then
+    require_native_build "Bilateral"
+    log "$(msg 'Building VapourSynth-Bilateral (r3)' '编译 VapourSynth-Bilateral (r3)')"
+    tmux_run "$(msg 'Download Bilateral r3' '下载 Bilateral r3')" download_url https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-Bilateral/tar.gz/refs/tags/r3 r3.tar.gz || exit 1
+    tmux_run "$(msg 'Extract Bilateral r3' '解压 Bilateral r3')" tar zxvf r3.tar.gz || exit 1
+    cd VapourSynth-Bilateral-r3/ || exit 1
+    chmod +x configure || exit 1
+    tmux_run "Bilateral configure" ./configure || exit 1
+    tmux_run "Bilateral make" make -j"$(nproc)" || exit 1
+    local out
+    out="$(find "$PWD" -maxdepth 3 -name "libbilateral.so" -type f | head -n 1)"
+    [[ -n "${out:-}" ]] || exit 1
+    install -m 0755 "$out" "$plugins_dir/libbilateral.so" || exit 1
+    vs_plugin_version record "libbilateral.so" "r3" || exit 1
+  else
+    log "$(msg 'libbilateral.so version is current, skipping' 'libbilateral.so 版本已满足要求，跳过')"
+  fi
+)
 
-    local dfttest_plugin="$plugins_dir/libdfttest.so"
-    local dfttest_linker_report=""
-    local dfttest_dependencies_broken="false"
-    if [[ -f "$dfttest_plugin" ]] && command -v ldd >/dev/null 2>&1; then
-      dfttest_linker_report="$(LC_ALL=C ldd -r "$dfttest_plugin" 2>&1 || true)"
-      if [[ "$dfttest_linker_report" == *"undefined symbol:"* || "$dfttest_linker_report" == *"not found"* ]]; then
-        log "$(msg 'Existing DFTTest plugin has unresolved symbols; rebuilding it' '现有 DFTTest 插件包含未解析符号，将重新编译')"
-        dfttest_dependencies_broken="true"
-      fi
+install_vs_dfttest() (
+  local build_dir="$1" plugins_dir="$2"
+  cd "$build_dir" || exit 1
+  local dfttest_plugin="$plugins_dir/libdfttest.so"
+  local dfttest_linker_report=""
+  local dfttest_dependencies_broken="false"
+  if [[ -f "$dfttest_plugin" ]] && command -v ldd >/dev/null 2>&1; then
+    dfttest_linker_report="$(LC_ALL=C ldd -r "$dfttest_plugin" 2>&1 || true)"
+    if [[ "$dfttest_linker_report" == *"undefined symbol:"* || "$dfttest_linker_report" == *"not found"* ]]; then
+      log "$(msg 'Existing DFTTest plugin has unresolved symbols; rebuilding it' '现有 DFTTest 插件包含未解析符号，将重新编译')"
+      dfttest_dependencies_broken="true"
     fi
-    if [[ "$dfttest_dependencies_broken" == "true" ]] \
-        || vs_plugin_needs_upgrade "libdfttest.so" "r7"; then
-      log "$(msg 'Building VapourSynth-DFTTest (r7)' '编译 VapourSynth-DFTTest (r7)')"
-      cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download DFTTest r7' '下载 DFTTest r7')" download_url https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-DFTTest/tar.gz/refs/tags/r7 r7.tar.gz || exit 1
-      tmux_run "$(msg 'Extract DFTTest r7' '解压 DFTTest r7')" tar zxvf r7.tar.gz || exit 1
-      cd VapourSynth-DFTTest-r7/ || exit 1
-      log "$(msg 'Installing DFTTest build dependency: libfftw3-dev...' '正在安装 DFTTest 编译依赖: libfftw3-dev...')"
-      apt_install libfftw3-dev
-      # fftw >= 3.3.9 exports make_planner_thread_safe only from libfftw3f_threads, which fftw3f.pc does not link.
-      tmux_run "DFTTest meson setup" meson setup build -Dcpp_link_args=-lfftw3f_threads || exit 1
-      tmux_run "DFTTest ninja" ninja -C build || exit 1
-      dfttest_linker_report="$(LC_ALL=C ldd -r build/libdfttest.so 2>&1 || true)"
-      if [[ "$dfttest_linker_report" == *"undefined symbol:"* || "$dfttest_linker_report" == *"not found"* ]]; then
-        log "$(msg 'Rebuilt DFTTest plugin still has unresolved dependencies' '重编后的 DFTTest 插件仍包含未解析依赖')"
-        exit 1
-      fi
-      install -m 0755 build/libdfttest.so "$plugins_dir/libdfttest.so" || exit 1
-      vs_plugin_version record "libdfttest.so" "r7" || exit 1
-      cd "$build_dir" || exit 1
-    else
-      log "$(msg 'libdfttest.so version is current, skipping' 'libdfttest.so 版本已满足要求，跳过')"
+  fi
+  if [[ "$dfttest_dependencies_broken" == "true" ]] \
+      || vs_plugin_needs_upgrade "libdfttest.so" "r7"; then
+    require_native_build "DFTTest"
+    log "$(msg 'Building VapourSynth-DFTTest (r7)' '编译 VapourSynth-DFTTest (r7)')"
+    tmux_run "$(msg 'Download DFTTest r7' '下载 DFTTest r7')" download_url https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-DFTTest/tar.gz/refs/tags/r7 r7.tar.gz || exit 1
+    tmux_run "$(msg 'Extract DFTTest r7' '解压 DFTTest r7')" tar zxvf r7.tar.gz || exit 1
+    cd VapourSynth-DFTTest-r7/ || exit 1
+    log "$(msg 'Installing DFTTest build dependency: libfftw3-dev...' '正在安装 DFTTest 编译依赖: libfftw3-dev...')"
+    apt_install libfftw3-dev
+    # fftw >= 3.3.9 exports make_planner_thread_safe only from libfftw3f_threads, which fftw3f.pc does not link.
+    tmux_run "DFTTest meson setup" meson setup build -Dcpp_link_args=-lfftw3f_threads || exit 1
+    tmux_run "DFTTest ninja" ninja -C build || exit 1
+    dfttest_linker_report="$(LC_ALL=C ldd -r build/libdfttest.so 2>&1 || true)"
+    if [[ "$dfttest_linker_report" == *"undefined symbol:"* || "$dfttest_linker_report" == *"not found"* ]]; then
+      log "$(msg 'Rebuilt DFTTest plugin still has unresolved dependencies' '重编后的 DFTTest 插件仍包含未解析依赖')"
+      exit 1
     fi
+    install -m 0755 build/libdfttest.so "$plugins_dir/libdfttest.so" || exit 1
+    vs_plugin_version record "libdfttest.so" "r7" || exit 1
+  else
+    log "$(msg 'libdfttest.so version is current, skipping' 'libdfttest.so 版本已满足要求，跳过')"
+  fi
+)
 
-    if vs_plugin_needs_upgrade "libeedi2.so" "r7.1"; then
-      log "$(msg 'Building VapourSynth-EEDI2 (r7.1)' '编译 VapourSynth-EEDI2 (r7.1)')"
-      cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download EEDI2 r7.1' '下载 EEDI2 r7.1')" download_url https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI2/tar.gz/refs/tags/r7.1 r7.1.tar.gz || exit 1
-      tmux_run "$(msg 'Extract EEDI2 r7.1' '解压 EEDI2 r7.1')" tar zxvf r7.1.tar.gz || exit 1
-      cd VapourSynth-EEDI2-r7.1/ || exit 1
-      tmux_run "EEDI2 meson setup" meson setup build || exit 1
-      tmux_run "EEDI2 ninja" ninja -C build || exit 1
-      install -m 0755 build/libeedi2.so "$plugins_dir/libeedi2.so" || exit 1
-      vs_plugin_version record "libeedi2.so" "r7.1" || exit 1
-      cd "$build_dir" || exit 1
-    else
-      log "$(msg 'libeedi2.so version is current, skipping' 'libeedi2.so 版本已满足要求，跳过')"
-    fi
+install_vs_eedi2() (
+  local build_dir="$1" plugins_dir="$2"
+  cd "$build_dir" || exit 1
+  if vs_plugin_needs_upgrade "libeedi2.so" "r7.1"; then
+    require_native_build "EEDI2"
+    log "$(msg 'Building VapourSynth-EEDI2 (r7.1)' '编译 VapourSynth-EEDI2 (r7.1)')"
+    tmux_run "$(msg 'Download EEDI2 r7.1' '下载 EEDI2 r7.1')" download_url https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-EEDI2/tar.gz/refs/tags/r7.1 r7.1.tar.gz || exit 1
+    tmux_run "$(msg 'Extract EEDI2 r7.1' '解压 EEDI2 r7.1')" tar zxvf r7.1.tar.gz || exit 1
+    cd VapourSynth-EEDI2-r7.1/ || exit 1
+    tmux_run "EEDI2 meson setup" meson setup build || exit 1
+    tmux_run "EEDI2 ninja" ninja -C build || exit 1
+    install -m 0755 build/libeedi2.so "$plugins_dir/libeedi2.so" || exit 1
+    vs_plugin_version record "libeedi2.so" "r7.1" || exit 1
+  else
+    log "$(msg 'libeedi2.so version is current, skipping' 'libeedi2.so 版本已满足要求，跳过')"
+  fi
+)
 
-    if vs_plugin_needs_upgrade "libfmtconv.so" "r30"; then
-      log "$(msg 'Building fmtconv (r30)' '编译 fmtconv (r30)')"
-      cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download fmtconv r30' '下载 fmtconv r30')" download_url https://codeload.github.com/EleonoreMizo/fmtconv/tar.gz/refs/tags/r30 r30.tar.gz || exit 1
-      tmux_run "$(msg 'Extract fmtconv r30' '解压 fmtconv r30')" tar zxvf r30.tar.gz || exit 1
-      cd fmtconv-r30/build/unix || exit 1
-      tmux_run "fmtconv autogen" ./autogen.sh || exit 1
-      tmux_run "fmtconv configure" ./configure || exit 1
-      tmux_run "fmtconv make" make -j"$(nproc)" || exit 1
-      local out
-      out="$(find "$PWD/.libs" -maxdepth 1 -name "libfmtconv.so" -type f | head -n 1)"
-      [[ -n "${out:-}" ]] || exit 1
-      install -m 0755 "$out" "$plugins_dir/libfmtconv.so" || exit 1
-      vs_plugin_version record "libfmtconv.so" "r30" || exit 1
-      cd "$build_dir" || exit 1
-    else
-      log "$(msg 'libfmtconv.so version is current, skipping' 'libfmtconv.so 版本已满足要求，跳过')"
-    fi
+install_vs_fmtconv() (
+  local build_dir="$1" plugins_dir="$2"
+  cd "$build_dir" || exit 1
+  if vs_plugin_needs_upgrade "libfmtconv.so" "r30"; then
+    require_native_build "fmtconv"
+    log "$(msg 'Building fmtconv (r30)' '编译 fmtconv (r30)')"
+    tmux_run "$(msg 'Download fmtconv r30' '下载 fmtconv r30')" download_url https://codeload.github.com/EleonoreMizo/fmtconv/tar.gz/refs/tags/r30 r30.tar.gz || exit 1
+    tmux_run "$(msg 'Extract fmtconv r30' '解压 fmtconv r30')" tar zxvf r30.tar.gz || exit 1
+    cd fmtconv-r30/build/unix || exit 1
+    tmux_run "fmtconv autogen" ./autogen.sh || exit 1
+    tmux_run "fmtconv configure" ./configure || exit 1
+    tmux_run "fmtconv make" make -j"$(nproc)" || exit 1
+    local out
+    out="$(find "$PWD/.libs" -maxdepth 1 -name "libfmtconv.so" -type f | head -n 1)"
+    [[ -n "${out:-}" ]] || exit 1
+    install -m 0755 "$out" "$plugins_dir/libfmtconv.so" || exit 1
+    vs_plugin_version record "libfmtconv.so" "r30" || exit 1
+  else
+    log "$(msg 'libfmtconv.so version is current, skipping' 'libfmtconv.so 版本已满足要求，跳过')"
+  fi
+)
 
-    if vs_plugin_needs_upgrade "libeedi3.so" "R57.A15" || vs_plugin_needs_upgrade "libmiscfilters.so" "R57.A15"; then
-      download_source_archive "legacy VapourSynth filters" \
-        https://codeload.github.com/AmusementClub/vapoursynth-classic/tar.gz/refs/tags/R57.A15 "$build_dir/legacy-filters" || exit 1
-      cd "$build_dir/legacy-filters" || exit 1
-      cc -shared -fPIC -O3 -Iinclude src/filters/eedi3/eedi3.c -lm -o "$plugins_dir/libeedi3.so" || exit 1
-      c++ -shared -fPIC -O3 -DVS_TARGET_CPU_X86 -Iinclude -I. src/filters/misc/miscfilters.cpp -o "$plugins_dir/libmiscfilters.so" || exit 1
-      vs_plugin_version record "libeedi3.so" "R57.A15" || exit 1
-      vs_plugin_version record "libmiscfilters.so" "R57.A15" || exit 1
-    fi
-    if vs_plugin_needs_upgrade "libvivtc.so" "R2"; then
-      download_source_archive "VIVTC R2" \
-        https://codeload.github.com/vapoursynth/vivtc/tar.gz/refs/tags/R2 "$build_dir/vivtc" || exit 1
-      cc -shared -fPIC -O3 -I/usr/local/include/vapoursynth "$build_dir/vivtc/src/vivtc.c" -lm -o "$plugins_dir/libvivtc.so" || exit 1
-      vs_plugin_version record "libvivtc.so" "R2" || exit 1
-    fi
+install_vs_legacy_filters() (
+  local build_dir="$1" plugins_dir="$2"
+  cd "$build_dir" || exit 1
+  if vs_plugin_needs_upgrade "libeedi3.so" "R57.A15" || vs_plugin_needs_upgrade "libmiscfilters.so" "R57.A15"; then
+    require_native_build "VapourSynth Classic filters"
+    download_source_archive "legacy VapourSynth filters" \
+      https://codeload.github.com/AmusementClub/vapoursynth-classic/tar.gz/refs/tags/R57.A15 "$build_dir/legacy-filters" || exit 1
+    cd "$build_dir/legacy-filters" || exit 1
+    cc -shared -fPIC -O3 -Iinclude src/filters/eedi3/eedi3.c -lm -o "$plugins_dir/libeedi3.so" || exit 1
+    c++ -shared -fPIC -O3 -DVS_TARGET_CPU_X86 -Iinclude -I. src/filters/misc/miscfilters.cpp -o "$plugins_dir/libmiscfilters.so" || exit 1
+    vs_plugin_version record "libeedi3.so" "R57.A15" || exit 1
+    vs_plugin_version record "libmiscfilters.so" "R57.A15" || exit 1
+  fi
+)
 
-    if vs_plugin_needs_upgrade "libremovegrain.so" "R1"; then
-      log "$(msg 'Building vs-removegrain (R1)' '编译 vs-removegrain (R1)')"
-      cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download vs-removegrain R1' '下载 vs-removegrain R1')" download_url https://codeload.github.com/vapoursynth/vs-removegrain/tar.gz/refs/tags/R1 R1.tar.gz || exit 1
-      tmux_run "$(msg 'Extract vs-removegrain R1' '解压 vs-removegrain R1')" tar zxvf R1.tar.gz || exit 1
-      cd vs-removegrain-R1/src || exit 1
-      tmux_run "$(msg 'Build vs-removegrain R1' '编译 vs-removegrain R1')" g++ -shared -fPIC -O3 -Wall \
-        $(pkg-config --cflags vapoursynth) \
-        clense.cpp removegrainvs.cpp repairvs.cpp shared.cpp verticalcleaner.cpp \
-        -o libremovegrain.so || exit 1
-      install -m 0755 libremovegrain.so "$plugins_dir/libremovegrain.so" || exit 1
-      vs_plugin_version record "libremovegrain.so" "R1" || exit 1
-      cd "$build_dir" || exit 1
-    else
-      log "$(msg 'libremovegrain.so version is current, skipping' 'libremovegrain.so 版本已满足要求，跳过')"
-    fi
+install_vs_vivtc() (
+  local build_dir="$1" plugins_dir="$2"
+  cd "$build_dir" || exit 1
+  if vs_plugin_needs_upgrade "libvivtc.so" "R2"; then
+    require_native_build "VIVTC"
+    download_source_archive "VIVTC R2" \
+      https://codeload.github.com/vapoursynth/vivtc/tar.gz/refs/tags/R2 "$build_dir/vivtc" || exit 1
+    cc -shared -fPIC -O3 -I/usr/local/include/vapoursynth "$build_dir/vivtc/src/vivtc.c" -lm -o "$plugins_dir/libvivtc.so" || exit 1
+    vs_plugin_version record "libvivtc.so" "R2" || exit 1
+  fi
+)
 
-    if vs_plugin_needs_upgrade "libsangnommod.so" "v0.1-fix"; then
-      log "$(msg 'Building VapourSynth-SangNomMod (v0.1-fix)' '编译 VapourSynth-SangNomMod (v0.1-fix)')"
-      cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download SangNomMod v0.1-fix' '下载 SangNomMod v0.1-fix')" download_url https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-SangNomMod/tar.gz/refs/tags/v0.1-fix v0.1-fix.tar.gz || exit 1
-      tmux_run "$(msg 'Extract SangNomMod v0.1-fix' '解压 SangNomMod v0.1-fix')" tar zxvf v0.1-fix.tar.gz || exit 1
-      cd VapourSynth-SangNomMod-0.1-fix/ || exit 1
-      tmux_run "SangNomMod configure" ./configure || exit 1
-      tmux_run "SangNomMod make" make -j"$(nproc)" || exit 1
-      local out
-      out="$(find "$PWD" -maxdepth 3 -name "libsangnommod.so" -type f | head -n 1)"
-      [[ -n "${out:-}" ]] || exit 1
-      install -m 0755 "$out" "$plugins_dir/libsangnommod.so" || exit 1
-      vs_plugin_version record "libsangnommod.so" "v0.1-fix" || exit 1
-      cd "$build_dir" || exit 1
-    else
-      log "$(msg 'libsangnommod.so version is current, skipping' 'libsangnommod.so 版本已满足要求，跳过')"
-    fi
+install_vs_removegrain() (
+  local build_dir="$1" plugins_dir="$2"
+  cd "$build_dir" || exit 1
+  if vs_plugin_needs_upgrade "libremovegrain.so" "R1"; then
+    require_native_build "RemoveGrain"
+    log "$(msg 'Building vs-removegrain (R1)' '编译 vs-removegrain (R1)')"
+    tmux_run "$(msg 'Download vs-removegrain R1' '下载 vs-removegrain R1')" download_url https://codeload.github.com/vapoursynth/vs-removegrain/tar.gz/refs/tags/R1 R1.tar.gz || exit 1
+    tmux_run "$(msg 'Extract vs-removegrain R1' '解压 vs-removegrain R1')" tar zxvf R1.tar.gz || exit 1
+    cd vs-removegrain-R1/src || exit 1
+    tmux_run "$(msg 'Build vs-removegrain R1' '编译 vs-removegrain R1')" g++ -shared -fPIC -O3 -Wall \
+      $(pkg-config --cflags vapoursynth) \
+      clense.cpp removegrainvs.cpp repairvs.cpp shared.cpp verticalcleaner.cpp \
+      -o libremovegrain.so || exit 1
+    install -m 0755 libremovegrain.so "$plugins_dir/libremovegrain.so" || exit 1
+    vs_plugin_version record "libremovegrain.so" "R1" || exit 1
+  else
+    log "$(msg 'libremovegrain.so version is current, skipping' 'libremovegrain.so 版本已满足要求，跳过')"
+  fi
+)
 
-    # 2.0.4 supports the legacy install layout through -Dr73-compat=true.
-    if vs_plugin_needs_upgrade "libvs_placebo.so" "2.0.4"; then
-      log "$(msg 'Building vs-placebo (2.0.4)' '编译 vs-placebo (2.0.4)')"
-      cd "$build_dir" || exit 1
-      install_libplacebo_latest
-      tmux_run "$(msg 'Download vs-placebo 2.0.4' '下载 vs-placebo 2.0.4')" download_url https://codeload.github.com/Lypheo/vs-placebo/tar.gz/refs/tags/2.0.4 2.0.4.tar.gz || exit 1
-      tmux_run "$(msg 'Extract vs-placebo 2.0.4' '解压 vs-placebo 2.0.4')" tar zxvf 2.0.4.tar.gz || exit 1
-      cd vs-placebo-2.0.4/ || exit 1
-      export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:$HOME/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
-      export C_INCLUDE_PATH="$HOME/.local/include:${C_INCLUDE_PATH:-}"
-      export LIBRARY_PATH="$HOME/.local/lib/x86_64-linux-gnu:${LIBRARY_PATH:-}"
-      export LD_LIBRARY_PATH="$HOME/.local/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
-      rm -rf build
-      tmux_run "vs-placebo meson setup" meson setup build -Dr73-compat=true || exit 1
-      tmux_run "vs-placebo ninja" ninja -C build || exit 1
-      local out
-      out="$(find "$PWD/build" -maxdepth 2 -name "libvs_placebo.so" -type f | head -n 1)"
-      [[ -n "${out:-}" ]] || exit 1
-      install -m 0755 "$out" "$plugins_dir/libvs_placebo.so" || exit 1
-      vs_plugin_version record "libvs_placebo.so" "2.0.4" || exit 1
-      cd "$build_dir" || exit 1
-    else
-      log "$(msg 'libvs_placebo.so version is current, skipping' 'libvs_placebo.so 版本已满足要求，跳过')"
-    fi
+install_vs_sangnom() (
+  local build_dir="$1" plugins_dir="$2"
+  cd "$build_dir" || exit 1
+  if vs_plugin_needs_upgrade "libsangnommod.so" "v0.1-fix"; then
+    require_native_build "SangNomMod"
+    log "$(msg 'Building VapourSynth-SangNomMod (v0.1-fix)' '编译 VapourSynth-SangNomMod (v0.1-fix)')"
+    tmux_run "$(msg 'Download SangNomMod v0.1-fix' '下载 SangNomMod v0.1-fix')" download_url https://codeload.github.com/HomeOfVapourSynthEvolution/VapourSynth-SangNomMod/tar.gz/refs/tags/v0.1-fix v0.1-fix.tar.gz || exit 1
+    tmux_run "$(msg 'Extract SangNomMod v0.1-fix' '解压 SangNomMod v0.1-fix')" tar zxvf v0.1-fix.tar.gz || exit 1
+    cd VapourSynth-SangNomMod-0.1-fix/ || exit 1
+    tmux_run "SangNomMod configure" ./configure || exit 1
+    tmux_run "SangNomMod make" make -j"$(nproc)" || exit 1
+    local out
+    out="$(find "$PWD" -maxdepth 3 -name "libsangnommod.so" -type f | head -n 1)"
+    [[ -n "${out:-}" ]] || exit 1
+    install -m 0755 "$out" "$plugins_dir/libsangnommod.so" || exit 1
+    vs_plugin_version record "libsangnommod.so" "v0.1-fix" || exit 1
+  else
+    log "$(msg 'libsangnommod.so version is current, skipping' 'libsangnommod.so 版本已满足要求，跳过')"
+  fi
+)
 
-    # Upgrade ISPC when an older binary is present; command existence alone is insufficient.
-    local required_ispc_version="1.31.0"
-    local current_ispc_version=""
-    if command -v ispc >/dev/null 2>&1; then
-      current_ispc_version="$(ispc --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)"
-    fi
-    if [[ -z "$current_ispc_version" ]] || dpkg --compare-versions "$current_ispc_version" lt "$required_ispc_version"; then
-      log "$(msg 'Installing ispc (v1.31.0)' '安装 ispc (v1.31.0)')"
-      tmux_run "$(msg 'Download ispc v1.31.0' '下载 ispc v1.31.0')" \
-        download_github_release_asset ispc/ispc v1.31.0 ispc-v1.31.0-linux.tar.gz || exit 1
-      tmux_run "$(msg 'Extract ispc v1.31.0' '解压 ispc v1.31.0')" tar -xvf ispc-v1.31.0-linux.tar.gz || exit 1
-      sudo mv ispc-v1.31.0-linux/bin/ispc /usr/local/bin/ || exit 1
-      sudo chmod +x /usr/local/bin/ispc || exit 1
-    else
-      log "$(msg "ispc version satisfied (${current_ispc_version} >= ${required_ispc_version}), skipping" "ispc 版本满足要求（${current_ispc_version} >= ${required_ispc_version}），跳过安装")"
-    fi
+install_vs_placebo() (
+  local build_dir="$1" plugins_dir="$2"
+  cd "$build_dir" || exit 1
+  # 2.0.4 supports the legacy install layout through -Dr73-compat=true.
+  if vs_plugin_needs_upgrade "libvs_placebo.so" "2.0.4"; then
+    require_native_build "vs-placebo"
+    log "$(msg 'Building vs-placebo (2.0.4)' '编译 vs-placebo (2.0.4)')"
+    install_libplacebo_latest
+    tmux_run "$(msg 'Download vs-placebo 2.0.4' '下载 vs-placebo 2.0.4')" download_url https://codeload.github.com/Lypheo/vs-placebo/tar.gz/refs/tags/2.0.4 2.0.4.tar.gz || exit 1
+    tmux_run "$(msg 'Extract vs-placebo 2.0.4' '解压 vs-placebo 2.0.4')" tar zxvf 2.0.4.tar.gz || exit 1
+    cd vs-placebo-2.0.4/ || exit 1
+    export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig:$HOME/.local/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
+    export C_INCLUDE_PATH="$HOME/.local/include:${C_INCLUDE_PATH:-}"
+    export LIBRARY_PATH="$HOME/.local/lib/x86_64-linux-gnu:${LIBRARY_PATH:-}"
+    export LD_LIBRARY_PATH="$HOME/.local/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
+    rm -rf build
+    tmux_run "vs-placebo meson setup" meson setup build -Dr73-compat=true || exit 1
+    tmux_run "vs-placebo ninja" ninja -C build || exit 1
+    local out
+    out="$(find "$PWD/build" -maxdepth 2 -name "libvs_placebo.so" -type f | head -n 1)"
+    [[ -n "${out:-}" ]] || exit 1
+    install -m 0755 "$out" "$plugins_dir/libvs_placebo.so" || exit 1
+    vs_plugin_version record "libvs_placebo.so" "2.0.4" || exit 1
+  else
+    log "$(msg 'libvs_placebo.so version is current, skipping' 'libvs_placebo.so 版本已满足要求，跳过')"
+  fi
+)
 
-    local nlm_plugin="$plugins_dir/libvsnlm_ispc.so"
-    local nlm_cmake_args=()
-    if [[ "$(uname -m)" == "x86_64" ]]; then
-      # Build a baseline and an AVX2 kernel with ISPC runtime dispatch.
-      nlm_cmake_args=(-DCMAKE_BUILD_TYPE=Release '-DCMAKE_ISPC_INSTRUCTION_SETS=sse2-i32x4;avx2-i32x8')
-    fi
-    if { (( ${#nlm_cmake_args[@]} > 0 )) && ! portable_build_matches "$nlm_plugin"; } ||
-        vs_plugin_needs_upgrade "libvsnlm_ispc.so" "v4"; then
-      log "$(msg 'Building vs-nlm-ispc (v4)' '编译 vs-nlm-ispc (v4)')"
-      cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download vs-nlm-ispc v4' '下载 vs-nlm-ispc v4')" download_url https://codeload.github.com/AmusementClub/vs-nlm-ispc/tar.gz/refs/tags/v4 v4.tar.gz || exit 1
-      tmux_run "$(msg 'Extract vs-nlm-ispc v4' '解压 vs-nlm-ispc v4')" tar zxvf v4.tar.gz || exit 1
-      cd vs-nlm-ispc-4/ || exit 1
-      mkdir -p build || exit 1
-      cd build || exit 1
-      tmux_run "vs-nlm-ispc cmake" cmake "${nlm_cmake_args[@]}" .. || exit 1
-      tmux_run "vs-nlm-ispc make" make -j"$(nproc)" || exit 1
-      local out
-      out="$(find "$PWD" -maxdepth 2 -name "libvsnlm_ispc.so" -type f | head -n 1)"
-      [[ -n "${out:-}" ]] || exit 1
-      install -m 0755 "$out" "$nlm_plugin" || exit 1
-      vs_plugin_version record "libvsnlm_ispc.so" "v4" || exit 1
-      if (( ${#nlm_cmake_args[@]} > 0 )); then
-        sha256sum < "$nlm_plugin" > "$nlm_plugin.portable.sha256" || exit 1
-      fi
-      cd "$build_dir" || exit 1
-    else
-      log "$(msg 'libvsnlm_ispc.so version is current, skipping' 'libvsnlm_ispc.so 版本已满足要求，跳过')"
-    fi
+install_vs_ispc() (
+  local build_dir="$1"
+  cd "$build_dir" || exit 1
+  # Upgrade ISPC when an older binary is present; command existence alone is insufficient.
+  local required_ispc_version="1.31.0"
+  local current_ispc_version=""
+  if command -v ispc >/dev/null 2>&1; then
+    current_ispc_version="$(ispc --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)"
+  fi
+  if [[ -z "$current_ispc_version" ]] || dpkg --compare-versions "$current_ispc_version" lt "$required_ispc_version"; then
+    log "$(msg 'Installing ispc (v1.31.0)' '安装 ispc (v1.31.0)')"
+    tmux_run "$(msg 'Download ispc v1.31.0' '下载 ispc v1.31.0')" \
+      download_github_release_asset ispc/ispc v1.31.0 ispc-v1.31.0-linux.tar.gz || exit 1
+    tmux_run "$(msg 'Extract ispc v1.31.0' '解压 ispc v1.31.0')" tar -xvf ispc-v1.31.0-linux.tar.gz || exit 1
+    sudo mv ispc-v1.31.0-linux/bin/ispc /usr/local/bin/ || exit 1
+    sudo chmod +x /usr/local/bin/ispc || exit 1
+  else
+    log "$(msg "ispc version satisfied (${current_ispc_version} >= ${required_ispc_version}), skipping" "ispc 版本满足要求（${current_ispc_version} >= ${required_ispc_version}），跳过安装")"
+  fi
+)
 
-    # The 0.7 binary also supports distributions with older glibc.
-    if vs_plugin_needs_upgrade "libzsmooth.x86_64-gnu.so" "0.7"; then
-      log "$(msg 'Installing zsmooth (binary package)' '安装 zsmooth（二进制包）')"
-      cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download zsmooth 0.7' '下载 zsmooth 0.7')" \
-        download_github_release_asset adworacz/zsmooth 0.7 libzsmooth.x86_64-gnu.so.zip || exit 1
-      tmux_run "$(msg 'Extract zsmooth 0.7' '解压 zsmooth 0.7')" unzip -o libzsmooth.x86_64-gnu.so.zip || exit 1
-      install -m 0755 libzsmooth.x86_64-gnu.so "$plugins_dir/libzsmooth.x86_64-gnu.so" || exit 1
-      vs_plugin_version record "libzsmooth.x86_64-gnu.so" "0.7" || exit 1
-      cd "$build_dir" || exit 1
-    else
-      log "$(msg 'libzsmooth.x86_64-gnu.so version is current, skipping' 'libzsmooth.x86_64-gnu.so 版本已满足要求，跳过')"
+install_vs_nlm_ispc() (
+  local build_dir="$1" plugins_dir="$2"
+  cd "$build_dir" || exit 1
+  local nlm_plugin="$plugins_dir/libvsnlm_ispc.so"
+  local nlm_cmake_args=()
+  if [[ "$(uname -m)" == "x86_64" ]]; then
+    # Build a baseline and an AVX2 kernel with ISPC runtime dispatch.
+    nlm_cmake_args=(-DCMAKE_BUILD_TYPE=Release '-DCMAKE_ISPC_INSTRUCTION_SETS=sse2-i32x4;avx2-i32x8')
+  fi
+  if { (( ${#nlm_cmake_args[@]} > 0 )) && ! portable_build_matches "$nlm_plugin"; } ||
+      vs_plugin_needs_upgrade "libvsnlm_ispc.so" "v4"; then
+    require_native_build "vs-nlm-ispc"
+    log "$(msg 'Building vs-nlm-ispc (v4)' '编译 vs-nlm-ispc (v4)')"
+    tmux_run "$(msg 'Download vs-nlm-ispc v4' '下载 vs-nlm-ispc v4')" download_url https://codeload.github.com/AmusementClub/vs-nlm-ispc/tar.gz/refs/tags/v4 v4.tar.gz || exit 1
+    tmux_run "$(msg 'Extract vs-nlm-ispc v4' '解压 vs-nlm-ispc v4')" tar zxvf v4.tar.gz || exit 1
+    cd vs-nlm-ispc-4/ || exit 1
+    mkdir -p build || exit 1
+    cd build || exit 1
+    tmux_run "vs-nlm-ispc cmake" cmake "${nlm_cmake_args[@]}" .. || exit 1
+    tmux_run "vs-nlm-ispc make" make -j"$(nproc)" || exit 1
+    local out
+    out="$(find "$PWD" -maxdepth 2 -name "libvsnlm_ispc.so" -type f | head -n 1)"
+    [[ -n "${out:-}" ]] || exit 1
+    install -m 0755 "$out" "$nlm_plugin" || exit 1
+    vs_plugin_version record "libvsnlm_ispc.so" "v4" || exit 1
+    if (( ${#nlm_cmake_args[@]} > 0 )); then
+      sha256sum < "$nlm_plugin" > "$nlm_plugin.portable.sha256" || exit 1
     fi
+  else
+    log "$(msg 'libvsnlm_ispc.so version is current, skipping' 'libvsnlm_ispc.so 版本已满足要求，跳过')"
+  fi
+)
 
-    # Keep mvtools v26: v29_2 declares VapourSynth >= R74.
-    if vs_plugin_needs_upgrade "mvtools.so" "v26"; then
-      log "$(msg 'Building vapoursynth-mvtools (v26)' '编译 vapoursynth-mvtools (v26)')"
-      cd "$build_dir" || exit 1
-      tmux_run "$(msg 'Download mvtools v26' '下载 mvtools v26')" download_url https://codeload.github.com/dubhatervapoursynth/vapoursynth-mvtools/tar.gz/refs/tags/v26 v26.tar.gz || exit 1
-      tmux_run "$(msg 'Extract mvtools v26' '解压 mvtools v26')" tar zxvf v26.tar.gz || exit 1
-      cd vapoursynth-mvtools-26/ || exit 1
-      python3 - <<'PY' || exit 1
+install_vs_zsmooth() (
+  local build_dir="$1" plugins_dir="$2"
+  cd "$build_dir" || exit 1
+  # The 0.7 binary also supports distributions with older glibc.
+  if vs_plugin_needs_upgrade "libzsmooth.x86_64-gnu.so" "0.7"; then
+    log "$(msg 'Installing zsmooth (binary package)' '安装 zsmooth（二进制包）')"
+    tmux_run "$(msg 'Download zsmooth 0.7' '下载 zsmooth 0.7')" \
+      download_github_release_asset adworacz/zsmooth 0.7 libzsmooth.x86_64-gnu.so.zip || exit 1
+    tmux_run "$(msg 'Extract zsmooth 0.7' '解压 zsmooth 0.7')" unzip -o libzsmooth.x86_64-gnu.so.zip || exit 1
+    install -m 0755 libzsmooth.x86_64-gnu.so "$plugins_dir/libzsmooth.x86_64-gnu.so" || exit 1
+    vs_plugin_version record "libzsmooth.x86_64-gnu.so" "0.7" || exit 1
+  else
+    log "$(msg 'libzsmooth.x86_64-gnu.so version is current, skipping' 'libzsmooth.x86_64-gnu.so 版本已满足要求，跳过')"
+  fi
+)
+
+install_vs_mvtools() (
+  local build_dir="$1" plugins_dir="$2"
+  cd "$build_dir" || exit 1
+  # Keep mvtools v26: v29_2 declares VapourSynth >= R74.
+  if vs_plugin_needs_upgrade "mvtools.so" "v26"; then
+    require_native_build "MVTools"
+    log "$(msg 'Building vapoursynth-mvtools (v26)' '编译 vapoursynth-mvtools (v26)')"
+    tmux_run "$(msg 'Download mvtools v26' '下载 mvtools v26')" download_url https://codeload.github.com/dubhatervapoursynth/vapoursynth-mvtools/tar.gz/refs/tags/v26 v26.tar.gz || exit 1
+    tmux_run "$(msg 'Extract mvtools v26' '解压 mvtools v26')" tar zxvf v26.tar.gz || exit 1
+    cd vapoursynth-mvtools-26/ || exit 1
+    python3 - <<'PY' || exit 1
 import re
 with open('meson.build', 'r', encoding='utf-8', errors='replace') as f:
     content = f.read()
@@ -3118,18 +3193,91 @@ new_content = re.sub(pattern, "incdir = '/usr/local/include/vapoursynth'", conte
 with open('meson.build', 'w', encoding='utf-8') as f:
     f.write(new_content)
 PY
-      tmux_run "mvtools meson setup" meson setup build || exit 1
-      tmux_run "mvtools ninja" ninja -C build || exit 1
-      install -m 0755 build/mvtools.so "$plugins_dir/mvtools.so" || exit 1
-      vs_plugin_version record "mvtools.so" "v26" || exit 1
-      cd "$build_dir" || exit 1
-    else
-      log "$(msg 'mvtools.so version is current, skipping' 'mvtools.so 版本已满足要求，跳过')"
+    tmux_run "mvtools meson setup" meson setup build || exit 1
+    tmux_run "mvtools ninja" ninja -C build || exit 1
+    install -m 0755 build/mvtools.so "$plugins_dir/mvtools.so" || exit 1
+    vs_plugin_version record "mvtools.so" "v26" || exit 1
+  else
+    log "$(msg 'mvtools.so version is current, skipping' 'mvtools.so 版本已满足要求，跳过')"
+  fi
+)
+
+build_vs_plugins() {
+  log "$(msg "Building/installing VapourSynth plugins to ${PLUGIN_PATH}" "编译/安装 VapourSynth 插件到 ${PLUGIN_PATH}")"
+
+  local plugins_dir="$PLUGIN_PATH"
+  ensure_configured_directory "$plugins_dir"
+
+  ensure_meson_version
+  export PATH="$HOME/.local/bin:$PATH"
+
+  local deps=(
+    build-essential git wget tar unzip sed
+    meson ninja-build cmake patch libass-dev
+    autoconf automake libtool pkg-config
+    libxxhash-dev
+    python3 python3-pip
+  )
+  local missing_deps=()
+  for dep in "${deps[@]}"; do
+    if ! dpkg-query -W -f='${Status}' "$dep" 2>/dev/null | grep -q "install ok installed"; then
+      missing_deps+=("$dep")
     fi
+  done
+  local library
+  for library in libavcodec libavformat libavutil libswscale; do
+    if ! pkg-config --exists "$library" 2>/dev/null; then
+      missing_deps+=("${library}-dev")
+    fi
+  done
+  if (( ${#missing_deps[@]} > 0 )); then
+    apt_update
+    apt_install "${missing_deps[@]}" || die "$(msg 'Failed to install VS plugin dependencies' 'VS 插件依赖安装失败')"
+  fi
 
-    log "$(msg "VS plugins build complete, output directory: $plugins_dir" "VS 插件编译完成，输出目录：$plugins_dir")"
-  ) || die "$(msg 'VS plugin build failed' 'VS 插件编译失败')"
+  local build_dir
+  build_dir="$(mktemp -d)"
 
+  cached_linux_build lsmash-works install_vs_lsmash_works files "$vapoursynth_cache_abi $(pkg-config --modversion liblsmash libavcodec libavformat libavutil libswscale)" \
+    "$plugins_dir/libvslsmashsource.so" -- "$build_dir" "$plugins_dir"
+  cached_linux_build eedi3m install_vs_eedi3m files "$vapoursynth_cache_abi" \
+    "$plugins_dir/eedi3m.so" -- "$build_dir" "$plugins_dir"
+  cached_linux_build znedi3 install_vs_znedi3 files "$vapoursynth_cache_abi" \
+    "$plugins_dir/znedi3.so" "$plugins_dir/nnedi3_weights.bin" "$plugins_dir/licenses/znedi3/graphengine/COPYING" \
+    "$plugins_dir/licenses/znedi3/vsxx/COPYING.LGPLv2.1" "$plugins_dir/licenses/znedi3/gpl2.txt" \
+    -- "$build_dir" "$plugins_dir"
+  cached_linux_build addgrain install_vs_addgrain files "$vapoursynth_cache_abi" \
+    "$plugins_dir/libaddgrain.so" -- "$build_dir" "$plugins_dir"
+  cached_linux_build assrender install_vs_assrender files "$vapoursynth_cache_abi $(pkg-config --modversion libass)" \
+    "$plugins_dir/libassrender.so" -- "$build_dir" "$plugins_dir"
+  cached_linux_build bilateral install_vs_bilateral files "$vapoursynth_cache_abi" \
+    "$plugins_dir/libbilateral.so" -- "$build_dir" "$plugins_dir"
+  cached_linux_build dfttest install_vs_dfttest files "$vapoursynth_cache_abi" \
+    "$plugins_dir/libdfttest.so" -- "$build_dir" "$plugins_dir"
+  cached_linux_build eedi2 install_vs_eedi2 files "$vapoursynth_cache_abi" \
+    "$plugins_dir/libeedi2.so" -- "$build_dir" "$plugins_dir"
+  cached_linux_build fmtconv install_vs_fmtconv files "$vapoursynth_cache_abi" \
+    "$plugins_dir/libfmtconv.so" -- "$build_dir" "$plugins_dir"
+  cached_linux_build legacy-filters install_vs_legacy_filters files "$vapoursynth_cache_abi" \
+    "$plugins_dir/libeedi3.so" "$plugins_dir/libmiscfilters.so" -- "$build_dir" "$plugins_dir"
+  cached_linux_build vivtc install_vs_vivtc files "$vapoursynth_cache_abi" \
+    "$plugins_dir/libvivtc.so" -- "$build_dir" "$plugins_dir"
+  cached_linux_build removegrain install_vs_removegrain files "$vapoursynth_cache_abi" \
+    "$plugins_dir/libremovegrain.so" -- "$build_dir" "$plugins_dir"
+  cached_linux_build sangnom install_vs_sangnom files "$vapoursynth_cache_abi" \
+    "$plugins_dir/libsangnommod.so" -- "$build_dir" "$plugins_dir"
+  cached_linux_build vs-placebo install_vs_placebo system "$vapoursynth_cache_abi $(declare -f install_libplacebo_latest install_shaderc shaderc_is_usable)" \
+    "$plugins_dir/libvs_placebo.so" -- "$build_dir" "$plugins_dir"
+  install_vs_ispc "$build_dir"
+  hash -r
+  cached_linux_build vs-nlm-ispc install_vs_nlm_ispc files "$vapoursynth_cache_abi $(ispc --version)" \
+    "$plugins_dir/libvsnlm_ispc.so" "$plugins_dir/libvsnlm_ispc.so.portable.sha256" -- "$build_dir" "$plugins_dir"
+  cached_linux_build zsmooth install_vs_zsmooth files "$vapoursynth_cache_abi" \
+    "$plugins_dir/libzsmooth.x86_64-gnu.so" -- "$build_dir" "$plugins_dir"
+  cached_linux_build mvtools install_vs_mvtools files "$vapoursynth_cache_abi" \
+    "$plugins_dir/mvtools.so" -- "$build_dir" "$plugins_dir"
+
+  log "$(msg "VS plugins build complete, output directory: $plugins_dir" "VS 插件编译完成，输出目录：$plugins_dir")"
   rm -rf "$build_dir"
 }
 
@@ -3478,6 +3626,55 @@ install_bluray_python_deps() {
 }
 
 # ---------------------------------------------------------------------------
+# Installed build artifact cache
+# ---------------------------------------------------------------------------
+
+cached_linux_build() {
+  local component="$1" installer="$2" scope="$3" recipe_inputs="$4"
+  shift 4
+  local -a outputs=()
+  while (( $# )) && [[ "$1" != -- ]]; do
+    outputs+=("$1")
+    shift
+  done
+  if (( $# )); then shift; fi
+  if ! "$package_build"; then
+    "$installer" "$@"
+    return
+  fi
+
+  local key archive baseline packages restored=false
+  key="$(
+    {
+      # Installer arguments can include a newly allocated build directory.
+      printf '%s\0' "$linux_cache_abi" "$scope" "$recipe_inputs" "${outputs[@]}"
+      declare -f "$installer"
+    } | sha256sum
+  )"
+  archive="$BLURAY_SETUP_CACHE_DIR/builds/components/$component.tar.xz"
+  baseline="$cache_workspace/$component.json"
+  local -a helper=(/usr/bin/python3 -B "$SETUP_ROOT/tools/linux_setup_cache.py")
+  local -a args=("$archive" "$baseline" "${key%% *}" "$scope" "$PLUGIN_PATH")
+  local -a dependencies=()
+
+  if ! "$restore_only"; then
+    "${helper[@]}" snapshot "${args[@]}" false "${outputs[@]}"
+  fi
+  if [[ -s "$archive" ]] &&
+      { "$restore_only" || { packages=$("${helper[@]}" packages "${args[@]}" false) &&
+        { [[ -z "$packages" ]] || { mapfile -t dependencies <<< "$packages"; apt_update && apt_install --no-remove "${dependencies[@]}"; }; }; }; } &&
+      "${helper[@]}" restore "${args[@]}" false "${outputs[@]}"; then
+    if [[ "$scope" == system ]]; then sudo ldconfig; fi
+    restored=true
+    log "$(msg "Restored the build cache for $component" "已恢复 $component 的构建缓存")"
+  fi
+  "$installer" "$@"
+  if ! "$restore_only"; then
+    "${helper[@]}" save "${args[@]}" "$restored" "${outputs[@]}"
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # Main execution
 # ---------------------------------------------------------------------------
 
@@ -3485,7 +3682,7 @@ command -v sudo >/dev/null 2>&1 || die "$(msg 'sudo is missing' '缺少 sudo')"
 sudo -v
 
 require_supported_os
-mkdir -p -- "$BLURAY_SETUP_CACHE_DIR"/{downloads,apt,pip,ccache,builds}
+mkdir -p -- "$BLURAY_SETUP_CACHE_DIR"/{downloads,apt,pip,ccache,builds/components}
 BLURAY_SETUP_CACHE_DIR="$(realpath "$BLURAY_SETUP_CACHE_DIR")"
 export BLURAY_SETUP_CACHE_DIR
 export PIP_CACHE_DIR="$BLURAY_SETUP_CACHE_DIR/pip"
@@ -3493,7 +3690,12 @@ export CCACHE_DIR="$BLURAY_SETUP_CACHE_DIR/ccache"
 export CARGO_TARGET_DIR="$BLURAY_SETUP_CACHE_DIR/cargo"
 export CCACHE_BASEDIR="$(bluray_build_tmp_base)"
 export CCACHE_NOHASHDIR=true
-repair_broken_apt_state
+if "$restore_only"; then
+  /usr/bin/python3 -B "$SETUP_ROOT/tools/ubuntu_apt_cache.py" restore "$BLURAY_SETUP_CACHE_DIR"
+  export DPKG_ADMINDIR="$BLURAY_SETUP_CACHE_DIR/apt-runtime"
+else
+  repair_broken_apt_state
+fi
 
 sys_deps=(
   python3 python3-pip python3-venv cmake ninja-build git ccache
@@ -3532,62 +3734,54 @@ export PATH="/usr/lib/ccache:$PATH"
 load_configured_tool_paths
 log "$(msg "Using tool paths from ${SETTINGS_FILE}" "使用 ${SETTINGS_FILE} 中配置的工具路径")"
 
+linux_cache_abi="" qt_cache_abi="" vapoursynth_cache_abi=""
 if "$package_build"; then
   cache_workspace="$(bluray_mktemp_dir)"
   trap 'rm -rf -- "$cache_workspace"' EXIT
-  cache_key="$(
-    {
-      source /etc/os-release
-      printf '%s\n' "$ID/$VERSION_ID/$(uname -m)/$(/usr/bin/python3 --version)"
-      dpkg-query -W libc6 libgcc-s1 libstdc++6 qt6-base-dev-tools python3-pyqt6
-      sha256sum "$BLURAY_SETUP_SOURCE" "$SETTINGS_FILE" \
-        "$SETUP_ROOT/tools/linux_setup_cache.py" "$SETUP_ROOT/tools/vapoursynth_plugin_versions.py" | cut -d' ' -f1
-    } | sha256sum | cut -d' ' -f1
+  linux_cache_abi="$(
+    printf '%s\n' "$LINUX_DISTRO_ID/$APT_BASE_CODENAME/$(uname -m)" \
+      "${CC:-}" "${CXX:-}" "${CFLAGS:-}" "${CXXFLAGS:-}" "${CPPFLAGS:-}" "${LDFLAGS:-}"
+    dpkg-query -W libc6 libgcc-s1 libstdc++6
   )"
-  native_cache="$BLURAY_SETUP_CACHE_DIR/builds/$cache_key.tar.xz"
-  cache_helper=(/usr/bin/python3 -B "$SETUP_ROOT/tools/linux_setup_cache.py")
-  cache_args=(
-    "$native_cache" "$cache_workspace/baseline.json" "$PLUGIN_PATH"
-    "$SEVEN_ZIP_PATH" "$FLAC_PATH" "$FFMPEG_PATH" "$FFPROBE_PATH" "$X265_PATH" "$X264_PATH" "$SVT_AV1_PATH"
-    "$FDK_AAC_PATH" "$DOVI_TOOL_PATH" "$HDR10PLUS_TOOL_PATH" "$VSEDIT_PATH" "$VSEDIT_BINARY_PATH"
-    "$VSPIPE_PATH" "$TS_MUXER_PATH" "$MKV_INFO_PATH" "$MKV_MERGE_PATH" "$MKV_PROP_EDIT_PATH" "$MKV_EXTRACT_PATH"
-    "$X264_VERSION_FILE" "$X265_FEATURE_FILE" "$SVT_AV1_PATH.portable.sha256"
-  )
-  "${cache_helper[@]}" snapshot "${cache_args[@]}"
-  if [[ -s "$native_cache" ]]; then
-    if packages=$("${cache_helper[@]}" packages "${cache_args[@]}"); then
-      saved_dependencies=()
-      while IFS= read -r dependency; do
-        [[ -z "$dependency" ]] || saved_dependencies+=("$dependency")
-      done <<< "$packages"
-      if (( ${#saved_dependencies[@]} == 0 )) || { apt_update && apt_install --no-remove "${saved_dependencies[@]}"; }; then
-        if "${cache_helper[@]}" restore "${cache_args[@]}"; then
-          sudo ldconfig
-          log "$(msg 'Restored the native build cache' '已恢复原生工具构建缓存')"
-        fi
-      fi
-    fi
-  fi
+  qt_cache_abi="$(dpkg-query -W qt6-base-dev-tools python3-pyqt6)"
 fi
 
 install_mkvtoolnix
-sync_mkvtoolnix_paths
+cached_linux_build mkvtoolnix-paths sync_mkvtoolnix_paths files "" \
+  "$MKV_INFO_PATH" "$MKV_MERGE_PATH" "$MKV_PROP_EDIT_PATH" "$MKV_EXTRACT_PATH"
 select_vapoursynth_python
-install_vapoursynth
-install_mpv
-install_x264
-install_x265
-install_svt_av1
-install_tsmuxer
-install_dovi_tool
-install_hdr10plus_tool
-install_fdk_aac
-install_flac
-install_descale
-ensure_modern_7zip_cli
+cached_linux_build vapoursynth-sdk install_vapoursynth system \
+  "$VAPOURSYNTH_TAG $("$VAPOURSYNTH_PYTHON" --version)" "$VSPIPE_PATH"
+if "$package_build"; then
+  vapoursynth_cache_abi="$(sha256sum "$VAPOURSYNTH_VSSCRIPT" /usr/local/include/vapoursynth/*.h | sha256sum)"
+fi
+cached_linux_build mpv-ffmpeg install_mpv system "$(
+  printf '%s\n' "$FFMPEG_SOURCE_REPOSITORY" "$MESON_MIN_VERSION" "$DOVI_TOOL_VERSION" "$vapoursynth_cache_abi"
+  declare -f install_libdovi repair_packaged_libdovi_header install_shaderc shaderc_is_usable ensure_dav1d_for_mpv
+)" "$FFMPEG_PATH" "$FFPROBE_PATH" /usr/bin/mpv /usr/include/libdovi/rpu_parser.h
+cached_linux_build x264 install_x264 files \
+  "$X264_SOURCE_REPOSITORY $X264_SOURCE_MIRROR $(pkg-config --modversion libavutil libavformat 2>/dev/null || true)" \
+  "$X264_PATH" "$X264_VERSION_FILE"
+cached_linux_build x265 install_x265 files "$(
+  printf '%s\n' "$X265_SOURCE_REPOSITORY" "${X265_LINK:-auto}"
+  declare -f __build_x265_official_multilib __patch_x265_hdr10plus_json11
+)" "$X265_PATH" "$X265_FEATURE_FILE"
+cached_linux_build svt-av1 install_svt_av1 files "$SVT_AV1_SOURCE_REPOSITORY ${SVT_AV1_VERSION:-}" \
+  "$SVT_AV1_PATH" "$SVT_AV1_PATH.portable.sha256"
+cached_linux_build tsmuxer install_tsmuxer files "$TSMUXER_VERSION" "$TS_MUXER_PATH"
+cached_linux_build dovi-tool install_dovi_tool files "$DOVI_TOOL_VERSION" "$DOVI_TOOL_PATH"
+cached_linux_build hdr10plus-tool install_hdr10plus_tool files "" "$HDR10PLUS_TOOL_PATH"
+cached_linux_build fdkaac install_fdk_aac system \
+  "$FDK_AAC_SOURCE_REPOSITORY $FDKAAC_SOURCE_REPOSITORY ${FDK_AAC_VERSION:-} ${FDKAAC_VERSION:-}" "$FDK_AAC_PATH"
+cached_linux_build flac install_flac system "${FLAC_VERSION:-}" "$FLAC_PATH"
+ensure_configured_directory "$PLUGIN_PATH"
+cached_linux_build descale install_descale files "$DESCALE_SOURCE_REPOSITORY $vapoursynth_cache_abi" "$PLUGIN_PATH/libdescale.so"
+cached_linux_build 7zip ensure_modern_7zip_cli files "${SEVENZIP_VERSION:-}" "$SEVEN_ZIP_PATH"
 install_vapoursynth_scripts
-install_vapoursynth_editor
-install_lsmash
+cached_linux_build vsedit install_vapoursynth_editor system \
+  "$VSEDIT_SOURCE_REPOSITORY ${VSEDIT_TAG:-} $vapoursynth_cache_abi $qt_cache_abi $(declare -f write_vsedit_launcher)" \
+  "$VSEDIT_PATH" "$VSEDIT_BINARY_PATH"
+cached_linux_build lsmash install_lsmash system "${LSMASH_VERSION:-}"
 build_vs_plugins
 install_desktop_vs_plugins
 if ! "$package_build"; then
@@ -3598,10 +3792,11 @@ fi
 install_bluray_python_deps
 verify_configured_tool_paths
 if "$package_build"; then
-  "${cache_helper[@]}" save "${cache_args[@]}"
   sudo chown -R -- "$(id -u):$(id -g)" "$PIP_CACHE_DIR" "$BLURAY_SETUP_CACHE_DIR/apt"
 fi
-
+if "$restore_only"; then
+  log "$(msg 'Verified the restored build environment without APT installation.' '已验证恢复的构建环境，跳过 APT 安装。')"
+fi
 
 log "$(msg 'Done. Recommended way to run:' '完成。推荐的运行方式：')"
 printf '%q -m src.main\n' "$VAPOURSYNTH_PYTHON"

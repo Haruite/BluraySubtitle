@@ -51,29 +51,53 @@ jobs:
         id: builds
         uses: actions/cache/restore@v6
         with:
-          path: ${{ env.BLURAY_SETUP_CACHE_DIR }}/builds
-          key: ubuntu2604-tools-v1-${{ runner.arch }}-${{ hashFiles('setup_linux_environment.sh', 'src/core/settings.py', 'tools/linux_setup_cache.py', 'tools/vapoursynth_plugin_versions.py') }}-lookup
-          restore-keys: ubuntu2604-tools-v1-${{ runner.arch }}-${{ hashFiles('setup_linux_environment.sh', 'src/core/settings.py', 'tools/linux_setup_cache.py', 'tools/vapoursynth_plugin_versions.py') }}-
+          path: ${{ env.BLURAY_SETUP_CACHE_DIR }}/builds/components/*.tar.xz
+          key: ubuntu2604-tools-v2-${{ runner.arch }}-lookup
+          restore-keys: ubuntu2604-tools-v2-${{ runner.arch }}-
 
-      - name: Prepare Ubuntu Build Environment
-        id: setup
+      - name: Restore Ubuntu APT Package List
+        id: apt-runtime
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.BLURAY_SETUP_CACHE_DIR }}/apt-runtime
+          key: ubuntu2604-apt-runtime-v1-${{ runner.arch }}-lookup
+          restore-keys: ubuntu2604-apt-runtime-v1-${{ runner.arch }}-
+
+      - name: Build Ubuntu Package from Cached Tools
+        id: cached
+        if: steps.apt-runtime.outputs.cache-matched-key != ''
         env:
           BLURAYSUBTITLE_GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          bash setup_linux_environment.sh --mod Build
-          builds="$BLURAY_SETUP_CACHE_DIR/builds"
-          checksum=$(find "$builds" -maxdepth 1 -name '*.tar.xz' -type f -print0 |
-            sort -z | xargs -0 -r sha256sum | cut -d' ' -f1 | sha256sum)
-          printf 'builds=%s\n' "${checksum%% *}" >> "$GITHUB_OUTPUT"
+          output=$(mktemp -d "$RUNNER_TEMP/ubuntu-cached-package.XXXXXXXX")
+          trap 'rm -rf -- "$output"' EXIT
+          if bash setup_linux_environment.sh --mod Build --restore-only &&
+              bash tools/build_ubuntu_package.sh "$output" &&
+              /usr/bin/python3 -B tools/verify_ubuntu_package.py "$output/$PACKAGE_ARCHIVE"; then
+            mkdir -p dist
+            mv --update=none-fail -- "$output/$PACKAGE_ARCHIVE" "$output/$PACKAGE_ARCHIVE.txt" dist/
+            printf 'built=true\n' >> "$GITHUB_OUTPUT"
+          else
+            echo 'Cached Ubuntu build could not be verified. Running setup.'
+          fi
 
-      - name: Build and Verify Ubuntu Package
+      - name: Prepare Ubuntu Build Environment
+        id: setup
+        if: steps.cached.outputs.built != 'true'
+        env:
+          BLURAYSUBTITLE_GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          bash tools/build_ubuntu_package.sh
-          /usr/bin/python3 -B tools/verify_ubuntu_package.py "dist/$PACKAGE_ARCHIVE"
+          /usr/bin/python3 -B tools/ubuntu_apt_cache.py snapshot "$BLURAY_SETUP_CACHE_DIR"
+          bash setup_linux_environment.sh --mod Build
+          if /usr/bin/python3 -B tools/ubuntu_apt_cache.py save "$BLURAY_SETUP_CACHE_DIR"; then
+            checksum=$(sha256sum < "$BLURAY_SETUP_CACHE_DIR/apt-runtime/packages.json")
+            printf 'apt-key=ubuntu2604-apt-runtime-v1-%s-%s\n' "$RUNNER_ARCH" "${checksum%% *}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Save Setup Downloads and Compiler Cache
+        if: steps.setup.outcome == 'success'
         uses: actions/cache/save@v6
         with:
           path: |
@@ -86,12 +110,40 @@ jobs:
             ~/.cargo/git/db
           key: ubuntu2604-setup-v1-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
 
-      - name: Save Installed Build Artifacts
-        if: steps.builds.outputs.cache-matched-key != format('ubuntu2604-tools-v1-{0}-{1}-{2}', runner.arch, hashFiles('setup_linux_environment.sh', 'src/core/settings.py', 'tools/linux_setup_cache.py', 'tools/vapoursynth_plugin_versions.py'), steps.setup.outputs.builds)
+      - name: Save Ubuntu APT Package List
+        if: steps.setup.outputs.apt-key != '' && steps.apt-runtime.outputs.cache-matched-key != steps.setup.outputs.apt-key
         uses: actions/cache/save@v6
         with:
-          path: ${{ env.BLURAY_SETUP_CACHE_DIR }}/builds
-          key: ubuntu2604-tools-v1-${{ runner.arch }}-${{ hashFiles('setup_linux_environment.sh', 'src/core/settings.py', 'tools/linux_setup_cache.py', 'tools/vapoursynth_plugin_versions.py') }}-${{ steps.setup.outputs.builds }}
+          path: ${{ env.BLURAY_SETUP_CACHE_DIR }}/apt-runtime
+          key: ${{ steps.setup.outputs.apt-key }}
+
+      - name: Collect Ubuntu Tool Cache Key
+        id: tool-cache
+        if: ${{ !cancelled() && (steps.setup.outcome == 'success' || steps.setup.outcome == 'failure') }}
+        run: |
+          set -euo pipefail
+          builds="$BLURAY_SETUP_CACHE_DIR/builds/components"
+          [[ -d "$builds" ]] || exit 0
+          cd "$builds"
+          shopt -s nullglob
+          archives=(*.tar.xz)
+          (( ${#archives[@]} )) || exit 0
+          checksum=$(sha256sum -- "${archives[@]}" | sha256sum)
+          printf 'key=ubuntu2604-tools-v2-%s-%s\n' "$RUNNER_ARCH" "${checksum%% *}" >> "$GITHUB_OUTPUT"
+
+      - name: Save Installed Build Artifacts
+        if: ${{ !cancelled() && steps.tool-cache.outputs.key != '' && steps.builds.outputs.cache-matched-key != steps.tool-cache.outputs.key }}
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.BLURAY_SETUP_CACHE_DIR }}/builds/components/*.tar.xz
+          key: ${{ steps.tool-cache.outputs.key }}
+
+      - name: Build and Verify Ubuntu Package
+        if: steps.cached.outputs.built != 'true'
+        run: |
+          set -euo pipefail
+          bash tools/build_ubuntu_package.sh
+          /usr/bin/python3 -B tools/verify_ubuntu_package.py "dist/$PACKAGE_ARCHIVE"
 
       - name: Upload Package and Build Information
         if: github.ref == 'refs/heads/main'
