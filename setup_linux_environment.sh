@@ -206,6 +206,13 @@ install_configured_executable() {
   bluray_sudo install -D -m 0755 "$source" "$destination"
 }
 
+portable_build_matches() {
+  local artifact="$1" checksum
+  [[ -f "$artifact" && -f "$artifact.portable.sha256" ]] || return 1
+  checksum="$(sha256sum < "$artifact")" || return 1
+  [[ "$checksum" == "$(cat -- "$artifact.portable.sha256")" ]]
+}
+
 install_command_at_configured_path() {
   local command_name="$1"
   local destination="$2"
@@ -583,9 +590,16 @@ if [[ "${1:-}" == "--in-tmux" ]]; then
   shift
 fi
 package_build=false
-if [[ "${1:-}" == "--build" ]]; then
-  package_build=true
-fi
+case "${1:-}" in
+  --build) package_build=true ;;
+  --mod)
+    case "${2:-}" in
+      Build) package_build=true ;;
+      Desktop) ;;
+      *) die "$(msg 'Use --mod Build or --mod Desktop' '请使用 --mod Build 或 --mod Desktop')" ;;
+    esac
+    ;;
+esac
 
 # Keep the GitHub API token in this shell and out of external build commands.
 setup_github_api_token="${BLURAYSUBTITLE_GITHUB_TOKEN:-}"
@@ -940,8 +954,8 @@ libdovi_header_is_complete() {
 }
 
 repair_packaged_libdovi_header() {
-  # Use Debian's rebuilt header for the same upstream release affected by
-  # https://bugs.debian.org/1124682 without replacing the runtime library.
+  # Use Debian's 3.3.2-3+b1 header for https://bugs.debian.org/1124682.
+  # The snapshot retains the rebuild after it leaves the current Debian pool.
   local package_version
   package_version="$(dpkg-query -W -f='${Version}' libdovi-dev 2>/dev/null || true)"
   case "$package_version" in
@@ -949,15 +963,20 @@ repair_packaged_libdovi_header() {
     *) return 1 ;;
   esac
 
-  local architecture checksum
+  local architecture snapshot_hash checksum
   architecture="$(dpkg --print-architecture)"
   case "$architecture" in
-    amd64) checksum="517d9a81e904d0b337e04b4f9fef0c4a1939fddc49237612547fd8ae033f3ad1" ;;
-    arm64) checksum="27c6b2a66ab2de4ddd2f5b87ecb0826cb504f7218fc1cf73a649fdbc4b2c760b" ;;
+    amd64)
+      snapshot_hash="5a43c70cf9cf92b95609732337723c60332f9edf"
+      checksum="517d9a81e904d0b337e04b4f9fef0c4a1939fddc49237612547fd8ae033f3ad1"
+      ;;
+    arm64)
+      snapshot_hash="e253e994ecfcd842db848e31f9d439495a30b62d"
+      checksum="27c6b2a66ab2de4ddd2f5b87ecb0826cb504f7218fc1cf73a649fdbc4b2c760b"
+      ;;
     *) return 1 ;;
   esac
 
-  local repair_version="3.3.2-3+b1"
   local repair_dir archive extracted_header
   repair_dir="$(bluray_mktemp_dir)"
   archive="$repair_dir/libdovi-dev.deb"
@@ -966,7 +985,7 @@ repair_packaged_libdovi_header() {
   log "$(msg "Repairing the truncated libdovi header with Debian's rebuilt 3.3.2 header" '使用 Debian 重新生成的 3.3.2 头文件修复被截断的 libdovi 头文件')"
   if ! (
     tmux_run "$(msg 'Download the rebuilt libdovi development header' '下载重新生成的 libdovi 开发头文件')" \
-      download_url "https://deb.debian.org/debian/pool/main/r/rust-dolby-vision/libdovi-dev_${repair_version}_${architecture}.deb" "$archive" \
+      download_url "https://snapshot.debian.org/file/$snapshot_hash" "$archive" \
       || exit 1
     printf '%s  %s\n' "$checksum" "$archive" | sha256sum -c - >/dev/null \
       || exit 1
@@ -1919,7 +1938,8 @@ install_svt_av1() {
   target_version="${svt_tag#v}"
   installed_version="$(__installed_svt_av1_version | head -n 1 || true)"
 
-  if [[ -n "$installed_version" ]] && dpkg --compare-versions "$installed_version" ge "$target_version"; then
+  if [[ -n "$installed_version" ]] && dpkg --compare-versions "$installed_version" ge "$target_version" &&
+      { ! "$package_build" || portable_build_matches "$SVT_AV1_PATH"; }; then
     log "$(msg "SvtAv1EncApp is current (${installed_version} >= ${target_version}), skipping build" "SvtAv1EncApp 已是当前版本（${installed_version} >= ${target_version}），跳过编译")"
     return 0
   fi
@@ -1929,6 +1949,13 @@ install_svt_av1() {
   apt_update
   apt_install "${deps[@]}" || die "$(msg 'Failed to install SVT-AV1 dependencies' 'SVT-AV1 依赖安装失败')"
 
+  local build_options=(release static)
+  if "$package_build"; then
+    # Preserve runtime SIMD dispatch without targeting the package builder's CPU.
+    build_options+=(--disable-native)
+  else
+    build_options+=(--native)
+  fi
   local build_dir
   build_dir="$(mktemp -d)"
 
@@ -1936,8 +1963,9 @@ install_svt_av1() {
     cd "$build_dir" || exit 1
     download_source_archive "SVT-AV1 ${svt_tag}" \
       "${SVT_AV1_SOURCE_REPOSITORY%.git}/-/archive/${svt_tag}/SVT-AV1-${svt_tag}.tar.gz" SVT-AV1 || exit 1
+    cd SVT-AV1/Build/linux || exit 1
     tmux_run "$(msg 'SVT-AV1: build release static' 'SVT-AV1：release static 编译')" \
-      bash -c "set -e; cd '${build_dir}/SVT-AV1/Build/linux' && ./build.sh release static" || exit 1
+      bash ./build.sh "${build_options[@]}" || exit 1
     _svt_bin="${build_dir}/SVT-AV1/Bin/Release/SvtAv1EncApp"
     [[ -f "$_svt_bin" ]] || exit 1
     log "$(msg "Installing SvtAv1EncApp to ${SVT_AV1_PATH}" "正在安装 SvtAv1EncApp 到 ${SVT_AV1_PATH}")"
@@ -1948,6 +1976,9 @@ install_svt_av1() {
   installed_version="$(__installed_svt_av1_version | head -n 1 || true)"
   if [[ -z "$installed_version" ]] || ! dpkg --compare-versions "$installed_version" ge "$target_version"; then
     die "$(msg 'Installed SVT-AV1 version verification failed' '安装后的 SVT-AV1 版本校验失败')"
+  fi
+  if "$package_build"; then
+    sha256sum < "$SVT_AV1_PATH" | bluray_sudo tee "$SVT_AV1_PATH.portable.sha256" >/dev/null
   fi
   log "$(msg "SVT-AV1 installation complete (${installed_version})" "SVT-AV1 安装完成（${installed_version}）")"
 }
@@ -2792,6 +2823,25 @@ PY
       log "$(msg 'eedi3m.so version is current, skipping' 'eedi3m.so 版本已满足要求，跳过')"
     fi
 
+    local znedi3_licenses="$plugins_dir/licenses/znedi3"
+    if [[ ! -s "$plugins_dir/nnedi3_weights.bin" || ! -s "$znedi3_licenses/gpl2.txt" ]] ||
+        vs_plugin_needs_upgrade "znedi3.so" "3.3"; then
+      log "$(msg 'Building ZNEDI3 3.3' '编译 ZNEDI3 3.3')"
+      cd "$build_dir" || exit 1
+      tmux_run "$(msg 'Download ZNEDI3 3.3 source' '下载 ZNEDI3 3.3 源码')" download_url \
+        https://files.pythonhosted.org/packages/d6/c9/774a61d0e213f75a2eaf36dba9c88b84689b9d2550c1370b8112e77b4d07/vapoursynth_znedi3-3.3.tar.gz znedi3.tar.gz || exit 1
+      printf '%s  %s\n' '8d94d6d74296adcf0d03d63ee204445526fed1c771be2fa8e998bffc0c32d8e4' znedi3.tar.gz | sha256sum -c - || exit 1
+      mkdir -p znedi3 || exit 1
+      tar -xf znedi3.tar.gz --strip-components=1 -C znedi3 || exit 1
+      tmux_run "ZNEDI3 make" make -C znedi3 -j"$(nproc)" X86=1 X86_AVX512=1 || exit 1
+      install -m 0644 znedi3/nnedi3_weights.bin "$plugins_dir/nnedi3_weights.bin" || exit 1
+      install -D -m 0644 znedi3/graphengine/COPYING "$znedi3_licenses/graphengine/COPYING" || exit 1
+      install -D -m 0644 znedi3/vsxx/COPYING.LGPLv2.1 "$znedi3_licenses/vsxx/COPYING.LGPLv2.1" || exit 1
+      install -D -m 0644 znedi3/gpl2.txt "$znedi3_licenses/gpl2.txt" || exit 1
+      install -m 0755 znedi3/vsznedi3.so "$plugins_dir/znedi3.so" || exit 1
+      vs_plugin_version record "znedi3.so" "3.3" || exit 1
+    fi
+
     if vs_plugin_needs_upgrade "libaddgrain.so" "r10"; then
       log "$(msg 'Building VapourSynth-AddGrain (r10)' '编译 VapourSynth-AddGrain (r10)')"
       cd "$build_dir" || exit 1
@@ -3008,7 +3058,14 @@ PY
       log "$(msg "ispc version satisfied (${current_ispc_version} >= ${required_ispc_version}), skipping" "ispc 版本满足要求（${current_ispc_version} >= ${required_ispc_version}），跳过安装")"
     fi
 
-    if vs_plugin_needs_upgrade "libvsnlm_ispc.so" "v4"; then
+    local nlm_plugin="$plugins_dir/libvsnlm_ispc.so"
+    local nlm_cmake_args=()
+    if [[ "$(uname -m)" == "x86_64" ]]; then
+      # Build a baseline and an AVX2 kernel with ISPC runtime dispatch.
+      nlm_cmake_args=(-DCMAKE_BUILD_TYPE=Release '-DCMAKE_ISPC_INSTRUCTION_SETS=sse2-i32x4;avx2-i32x8')
+    fi
+    if { (( ${#nlm_cmake_args[@]} > 0 )) && ! portable_build_matches "$nlm_plugin"; } ||
+        vs_plugin_needs_upgrade "libvsnlm_ispc.so" "v4"; then
       log "$(msg 'Building vs-nlm-ispc (v4)' '编译 vs-nlm-ispc (v4)')"
       cd "$build_dir" || exit 1
       tmux_run "$(msg 'Download vs-nlm-ispc v4' '下载 vs-nlm-ispc v4')" download_url https://codeload.github.com/AmusementClub/vs-nlm-ispc/tar.gz/refs/tags/v4 v4.tar.gz || exit 1
@@ -3016,13 +3073,16 @@ PY
       cd vs-nlm-ispc-4/ || exit 1
       mkdir -p build || exit 1
       cd build || exit 1
-      tmux_run "vs-nlm-ispc cmake" cmake .. || exit 1
+      tmux_run "vs-nlm-ispc cmake" cmake "${nlm_cmake_args[@]}" .. || exit 1
       tmux_run "vs-nlm-ispc make" make -j"$(nproc)" || exit 1
       local out
       out="$(find "$PWD" -maxdepth 2 -name "libvsnlm_ispc.so" -type f | head -n 1)"
       [[ -n "${out:-}" ]] || exit 1
-      install -m 0755 "$out" "$plugins_dir/libvsnlm_ispc.so" || exit 1
+      install -m 0755 "$out" "$nlm_plugin" || exit 1
       vs_plugin_version record "libvsnlm_ispc.so" "v4" || exit 1
+      if (( ${#nlm_cmake_args[@]} > 0 )); then
+        sha256sum < "$nlm_plugin" > "$nlm_plugin.portable.sha256" || exit 1
+      fi
       cd "$build_dir" || exit 1
     else
       log "$(msg 'libvsnlm_ispc.so version is current, skipping' 'libvsnlm_ispc.so 版本已满足要求，跳过')"
@@ -3491,7 +3551,7 @@ if "$package_build"; then
     "$SEVEN_ZIP_PATH" "$FLAC_PATH" "$FFMPEG_PATH" "$FFPROBE_PATH" "$X265_PATH" "$X264_PATH" "$SVT_AV1_PATH"
     "$FDK_AAC_PATH" "$DOVI_TOOL_PATH" "$HDR10PLUS_TOOL_PATH" "$VSEDIT_PATH" "$VSEDIT_BINARY_PATH"
     "$VSPIPE_PATH" "$TS_MUXER_PATH" "$MKV_INFO_PATH" "$MKV_MERGE_PATH" "$MKV_PROP_EDIT_PATH" "$MKV_EXTRACT_PATH"
-    "$X264_VERSION_FILE" "$X265_FEATURE_FILE"
+    "$X264_VERSION_FILE" "$X265_FEATURE_FILE" "$SVT_AV1_PATH.portable.sha256"
   )
   "${cache_helper[@]}" snapshot "${cache_args[@]}"
   if [[ -s "$native_cache" ]]; then

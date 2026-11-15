@@ -275,6 +275,10 @@ Custom scripts often use a different chain. Common categories include:
 
 These names describe ecosystem options, not guaranteed BluraySubtitle dependencies. A custom script owns its plugin requirements and output correctness.
 
+The setup scripts build ZNEDI3, a CPU implementation of NNEDI3 for custom scripts. Use `core.znedi3.nnedi3` in VPy.
+
+The bundled `vsmlrt.py` provides the Python interface. To run a VPy that uses VSMLRT, build an inference backend for your platform and architecture, install it and its dependencies in the VapourSynth runtime used by BluraySubtitle, and obtain the required models. [VSMLRT upstream](https://github.com/AmusementClub/vs-mlrt)
+
 ## Further reading
 
 See [References](References.md) for the H.264, H.265, AV1, x265, SVT-AV1, and VapourSynth specifications and manuals.

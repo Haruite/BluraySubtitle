@@ -277,9 +277,10 @@ else:
 libass = Path(SETTINGS["LIBASS_PATH"])
 managed_plugins = set(upstream_components["dependencies"])
 managed_plugins.update(component["plugin"] for component in upstream_components["components"].values() if "plugin" in component)
+plugin_data = {name for component in upstream_components["components"].values() for name in component.get("data", ())}
 plugins_dir = Path(SETTINGS["PLUGIN_PATH"] or vapoursynth_dir / "vapoursynth64/plugins").resolve()
-for relative in sorted(managed_plugins):
-    source = required_path(vapoursynth_dir / relative, "managed VapourSynth plugin")
+for relative in sorted(managed_plugins | plugin_data):
+    source = required_path(vapoursynth_dir / relative, "managed VapourSynth component file")
     if r79 and relative in upstream_components["dependencies"]:
         if source.name.casefold() == libass.name.casefold():
             if file_hash(source) != file_hash(libass):
@@ -297,7 +298,7 @@ for relative in sorted(managed_plugins):
             Path("vapoursynth64/plugins") / source.relative_to(plugins_dir).parent
             if source.is_relative_to(plugins_dir) else source.relative_to(vapoursynth_dir).parent
         )
-    binaries.append((str(source), destination.as_posix()))
+    (datas if relative in plugin_data else binaries).append((str(source), destination.as_posix()))
 datas.append((str(upstream_manifest), "legal"))
 script_root = required_path(
     PROJECT_ROOT / "third_party" / "vapoursynth_scripts",

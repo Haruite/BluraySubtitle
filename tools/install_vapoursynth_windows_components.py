@@ -97,6 +97,8 @@ class Component:
     recipe: str = "meson"
     asset: str = ""
     fallback_ref: str = ""
+    source_archive: tuple[str, str] | None = None
+    data_files: tuple[str, ...] = ()
 
 
 # Source revisions follow Linux's established VS Classic compatibility limits.
@@ -108,6 +110,12 @@ COMPONENTS = (
     Component("dfttest", "HomeOfVapourSynthEvolution/VapourSynth-DFTTest", "r7", "dfttest.dll", "dfttest", asset=r"[.]7z$"),
     Component("eedi2", "HomeOfVapourSynthEvolution/VapourSynth-EEDI2", "r7.1", "eedi2.dll", "eedi2", asset=r"[.]7z$"),
     Component("eedi3m", "HomeOfVapourSynthEvolution/VapourSynth-EEDI3", "r9", "eedi3m.dll", "eedi3m", asset=r"win64.*[.](?:7z|zip)$"),
+    # The published source distribution includes the VSXX and GraphEngine submodules.
+    Component("znedi3", "vapoursynth/znedi3-pypi", "3.3", "znedi3.dll", "znedi3", "znedi3",
+              source_archive=("https://files.pythonhosted.org/packages/d6/c9/"
+                              "774a61d0e213f75a2eaf36dba9c88b84689b9d2550c1370b8112e77b4d07/vapoursynth_znedi3-3.3.tar.gz",
+                              "8d94d6d74296adcf0d03d63ee204445526fed1c771be2fa8e998bffc0c32d8e4"),
+              data_files=("nnedi3_weights.bin",)),
     Component("fmtconv", "EleonoreMizo/fmtconv", "r30", "fmtconv.dll", "fmtc", "autotools", r"[.]zip$"),
     # Accept the previous source fallback alongside the API3-compatible release.
     Component("lsmas", "HomeOfAviSynthPlusEvolution/L-SMASH-Works", "1282", "libvslsmashsource.dll", "lsmas", "lsmash",
@@ -146,6 +154,8 @@ elif sys.argv[2] == 'removegrain':
     assert hasattr(p, 'Repair'), 'RemoveGrain Repair is required'
 elif sys.argv[2] == 'sangnom':
     assert hasattr(p, 'SangNom'), 'SangNom is required by the Python filter scripts'
+elif sys.argv[2] == 'znedi3':
+    assert hasattr(p, 'nnedi3'), 'ZNEDI3 must expose the NNEDI3 filter'
 print(json.dumps({'version': str(p.version), 'name': p.name, 'native_version': reported_version(p, sys.argv[5])}))
 """
 
@@ -238,13 +248,16 @@ class Installer:
             license_root = self.runtime / "licenses/components" / component.key
             folder = self.runtime / "vapoursynth64/coreplugins" if component.key == "removegrain" and not self.r79 else self.plugins
             entry = folder / component.filename
+            data = {self.record_path(folder / name) for name in component.data_files}
             if (self.runtime / record["plugin"]).resolve() != entry.resolve() or record["repository"] != component.repository:
                 raise ValueError("Invalid cached VapourSynth component entry")
-            if record["plugin"] not in record["files"] or not set(record.get("dependencies", ())) <= state["dependencies"].keys():
+            if (set(record.get("data", ())) != data or not (data | {record["plugin"]}) <= record["files"].keys()
+                    or not set(record.get("dependencies", ())) <= state["dependencies"].keys()):
                 raise ValueError("Incomplete cached VapourSynth component")
+            plugin_files = {entry.resolve(), *((self.runtime / name).resolve() for name in data)}
             for name, digest in record["files"].items():
                 target = (self.runtime / name).resolve()
-                if target != entry.resolve() and not target.is_relative_to(license_root.resolve()):
+                if target not in plugin_files and not target.is_relative_to(license_root.resolve()):
                     raise ValueError("Invalid cached VapourSynth component file path")
                 files[name] = (target, digest)
         return {"files/" + hashlib.sha256(name.encode("utf-8")).hexdigest(): value for name, value in files.items()}
@@ -267,10 +280,13 @@ class Installer:
         state["components"].pop(EDITOR.key, None)
         # Let normal installation handle existing plugins that differ from the cache.
         for component in self.components:
+            if component.key == "removegrain":
+                continue
             record = state["components"][component.key]
-            target = self.runtime / record["plugin"]
-            if component.key != "removegrain" and target.exists() and sha256(target) != record["files"][record["plugin"]]:
-                return False
+            for name in (record["plugin"], *record.get("data", ())):
+                target = self.runtime / name
+                if target.exists() and sha256(target) != record["files"][name]:
+                    return False
         for name, (target, _) in files.items():
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(payload / name, target)
@@ -404,8 +420,12 @@ class Installer:
 
     def source(self, component, ref):
         parent = self.work / component.key / ("source-" + ref.replace("/", "_"))
-        archive_url = f"https://codeload.github.com/{component.repository}/zip/{urllib.parse.quote(ref, safe='/')}"
-        archive = self.download(archive_url, parent / "source.zip")
+        if component.source_archive:
+            url, digest = component.source_archive
+            archive = self.download(url, parent / "source.tar.gz", digest)
+        else:
+            url = f"https://codeload.github.com/{component.repository}/zip/{urllib.parse.quote(ref, safe='/')}"
+            archive = self.download(url, parent / "source.zip")
         directories = [path for path in self.unpack(archive, parent / "unpacked").iterdir() if path.is_dir()]
         if len(directories) != 1:
             raise RuntimeError(f"Unexpected source archive layout: {archive}")
@@ -598,7 +618,7 @@ class Installer:
         for index, root in enumerate([source] + ([extra] if extra else [])):
             for path in root.rglob("*"):
                 in_license_directory = any(part.lower() in ("licenses", "licences") for part in path.relative_to(root).parts)
-                if not path.is_file() or not (in_license_directory or re.match(r"^(COPYING|COPYRIGHT|LICEN[CS]E|UNLICENSE)([._-].*)?$", path.name, re.I)):
+                if not path.is_file() or not (in_license_directory or re.match(r"^(COPYING|COPYRIGHT|LICEN[CS]E|UNLICENSE|GPL[23])([._-].*)?$", path.name, re.I)):
                     continue
                 if any(part in ("build", ".git", "node_modules") for part in path.relative_to(root).parts):
                     continue
@@ -862,7 +882,8 @@ class Installer:
             return self.build_lsmash(source)
         if component.recipe == "assrender":
             return self.build_assrender(source)
-        self.prepare_sdk()
+        if component.recipe != "znedi3":
+            self.prepare_sdk()
         include = self.sdk / "include/vapoursynth"
         build_directory = "build-" + BUILD_PROFILE
         commands = [f"export LDFLAGS='{self.static_runtime} -Wl,--gc-sections -s'",
@@ -974,6 +995,9 @@ class Installer:
             self.run_msys(commands + ["cmake -S . -B " + build_directory + " -G Ninja -DCMAKE_BUILD_TYPE=Release "
                            + "-DCMAKE_PREFIX_PATH=" + shlex.quote(self.sdk.as_posix()),
                            "cmake --build " + build_directory + " --parallel " + jobs], source)
+        elif component.recipe == "znedi3":
+            targets = "" if self.arm64 else " X86=1 X86_AVX512=1"
+            self.run_msys(commands + ["make -j" + jobs + targets, f"mv vsznedi3.so {component.filename}"], source)
         elif component.recipe == "autotools":
             directory = source / "build/unix" if component.key == "fmtconv" else source
             commands = ["sh ./autogen.sh"] if (directory / "autogen.sh").is_file() else []
@@ -1084,11 +1108,16 @@ class Installer:
         folder = self.runtime / "vapoursynth64/coreplugins" if component.key == "removegrain" and not self.r79 else self.plugins
         target = folder / component.filename
         relative = self.record_path(target)
-        known_file = bool(previous and target.is_file() and previous["files"].get(relative) == sha256(target))
+        plugin_files = (target, *(folder / name for name in component.data_files))
+        data = [self.record_path(path) for path in plugin_files[1:]]
+        present = all(path.is_file() and path.stat().st_size > 0 for path in plugin_files)
+        known_files = bool(previous and present and all(
+            previous["files"].get(self.record_path(path)) == sha256(path) for path in plugin_files
+        ))
         fallback = bool(previous and previous["method"] == "source" and previous["ref"] == component.fallback_ref)
         expected = "commit:" + component.fallback_ref if fallback else target_ref
         installed, probe = None, None
-        if target.is_file():
+        if present:
             try:
                 probe = self.probe(target, component, expected)
             except RuntimeError as error:
@@ -1096,7 +1125,7 @@ class Installer:
             else:
                 installed = probe["native_version"] or fallback_version(target)
                 # Migrate the previous hash-bound component manifest once.
-                if installed is None and known_file:
+                if installed is None and known_files:
                     installed = expected if fallback else normalize_version(previous["ref"])
                 if installed is not None:
                     record_version(target, installed, probe["native_version"])
@@ -1105,10 +1134,10 @@ class Installer:
             build_profile += "-without-vulkan"
         if self.arm64 and component.key == "placebo":
             build_profile += "-static-placebo"
-        same_target = known_file and previous.get("target_ref", previous["ref"]) == target_ref
+        same_target = known_files and previous.get("target_ref", previous["ref"]) == target_ref
         rebuild = bool(same_target and previous["method"] == "source" and previous.get("build_profile") != build_profile)
         if installed is not None and version_satisfies(installed, expected) and not rebuild:
-            if not known_file:
+            if not known_files:
                 # Adopt a readable current/newer DLL without replacing it.
                 stage = self.work / component.key / "adopted"
                 stage.mkdir(parents=True, exist_ok=True)
@@ -1121,12 +1150,13 @@ class Installer:
                     self.state["dependencies"][name] = sha256(installed_dependency)
                     dependency_names.append(name)
                 source = self.source(component, target_ref)
-                files = {relative: sha256(target), **self.licenses(component, source)}
+                files = {self.record_path(path): sha256(path) for path in plugin_files}
+                files.update(self.licenses(component, source))
                 previous = {
                     "name": component.key, "repository": component.repository, "target_ref": target_ref,
                     "ref": installed, "method": "existing", "source_url": f"https://github.com/{component.repository}",
                     "license_source_ref": target_ref, "artifact_url": "", "plugin": relative,
-                    "files": files, "dependencies": dependency_names, "source_dependencies": self.source_dependencies,
+                    "files": files, "data": data, "dependencies": dependency_names, "source_dependencies": self.source_dependencies,
                 }
                 self.state["components"][component.key] = previous
             previous.update(target_ref=target_ref, installed_version=installed, registered_version=probe["version"])
@@ -1183,10 +1213,13 @@ class Installer:
         stage.mkdir(parents=True, exist_ok=True)
         staged_binary = stage / component.filename
         shutil.copyfile(binary, staged_binary)
+        for name in component.data_files:
+            shutil.copyfile(source / name, stage / name)
         dependencies = self.dependencies(binary, stage)
         probe = self.probe(staged_binary, component, target_ref)
         folder.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(staged_binary, target)
+        for path in reversed(plugin_files):
+            shutil.copyfile(stage / path.name, path)
         record_version(target, target_ref, probe["native_version"])
         dependency_names = []
         for dependency in dependencies:
@@ -1195,16 +1228,20 @@ class Installer:
             relative = installed.relative_to(self.runtime).as_posix()
             self.state["dependencies"][relative] = sha256(installed)
             dependency_names.append(relative)
-        files = {self.record_path(target): sha256(target)}
+        files = {self.record_path(path): sha256(path) for path in plugin_files}
         files.update(self.licenses(component, source, package))
+        source_url = (
+            component.source_archive[0] if component.source_archive
+            else f"https://github.com/{component.repository}/tree/{target_ref}"
+        )
         self.state["components"][component.key] = {
             "name": component.key, "repository": component.repository, "target_ref": target_ref, "ref": target_ref, "method": method,
-            "source_url": f"https://github.com/{component.repository}/tree/{target_ref}",
+            "source_url": source_url,
             "artifact_url": artifact["url"] if method == "release" else "",
             "plugin": self.record_path(target), "registered_version": probe["version"],
             "installed_version": probe["native_version"] or normalize_version(target_ref),
             "build_profile": build_profile if method == "source" else "",
-            "files": files, "dependencies": dependency_names,
+            "files": files, "data": data, "dependencies": dependency_names,
             "source_dependencies": self.source_dependencies + ([{"name": "FFTW", "version": "3.3.11", "source_url": "https://fftw.org/fftw-3.3.11.tar.gz"}]
                                    if component.key in ("dfttest", "mvtools") else []),
         }
@@ -1420,6 +1457,7 @@ class Installer:
                 "clip=c.std.BlankClip(width=64,height=48,length=1,format=vs.GRAY16); "
                 "assert c.descale.Debilinear(clip,48,32).get_frame(0).width==48; "
                 "assert c.rgvs.RemoveGrain(clip,mode=1).get_frame(0).width==64; "
+                "assert c.znedi3.nnedi3(clip, field=0, dh=True).get_frame(0).height==96; "
                 "assert c.lsmas.LWLibavSource and c.eedi2.EEDI2 and c.nlm_ispc.NLMeans and c.assrender.TextSub"
             )
             subprocess.run([sys.executable, "-I", "-c", code], check=True, timeout=120)

@@ -110,6 +110,7 @@ $script:NativeToolCacheRoot = Join-Path $commonApplicationData "BluraySubtitle\b
 $script:BuildRecipeHash = ""
 # Retain the recipe IDs so cached builds of the same versions can be reused.
 $script:WindowsToolRecipeId = "ABE005A17FD8A3E7BE61BC884AC8EB55BC17BFA19F3A1AB25D2574C8ACEF835E"
+$script:X265Arm64BuildProfile = "arm64-assembly"
 $script:WindowsToolPathRecipeId = "7ECAA3E44A008A78519D6A9AE10C2BE6F4F6E50DEE1BC404FBBCC9BF05B6EF8F"
 $script:VapourSynthComponentRecipeId = "8E3206EEECB37B7FE3EF3FC7D5723D0F937A6F8D8F51A04E94E87B79D9C192BD"
 $script:BuildToolchains = @{
@@ -1480,7 +1481,10 @@ function Get-ComponentBuildCache {
         "dovi-tool" { $files = @($script:ToolPaths.DoviTool) }
         "hdr10plus-tool" { $files = @($script:ToolPaths.Hdr10PlusTool) }
         "x264" { $files = @($script:ToolPaths.X264, $script:ToolPaths.X264Version) }
-        "x265" { $files = @($script:ToolPaths.X265, $script:ToolPaths.X265Version) }
+        "x265" {
+            $files = @($script:ToolPaths.X265, $script:ToolPaths.X265Version)
+            if ($script:IsArm64) { $inputs += $script:X265Arm64BuildProfile }
+        }
         "svt-av1" {
             $files = @($script:ToolPaths.SvtAv1)
             if ($script:IsArm64) { $inputs += "arm64-lto" }
@@ -3623,18 +3627,17 @@ function Get-InstalledX265Version {
 }
 
 function Get-NinjaCMakeArguments {
+    $ninjaPath = $script:ToolPaths.Ninja.Replace('\', '/')
+    $arguments = @("-G", "Ninja", "-DCMAKE_MAKE_PROGRAM=$ninjaPath", "-DCMAKE_BUILD_TYPE=Release")
     if ($script:IsArm64) {
-        $bin = Join-Path $script:ToolPaths.Msys2Root "clangarm64\bin"
-        return @(
-            "-G", "Ninja", "-DCMAKE_MAKE_PROGRAM=$($script:ToolPaths.Ninja)", "-DCMAKE_BUILD_TYPE=Release",
-            "-DCMAKE_C_COMPILER=$(Join-Path $bin 'clang.exe')", "-DCMAKE_CXX_COMPILER=$(Join-Path $bin 'clang++.exe')",
-            "-DCMAKE_ASM_COMPILER=$(Join-Path $bin 'clang.exe')", "-DCMAKE_RC_COMPILER=$(Join-Path $bin 'llvm-windres.exe')"
+        # CMake copies the RC compiler path into CMakeRCCompiler.cmake without escaping it.
+        $bin = (Join-Path $script:ToolPaths.Msys2Root "clangarm64\bin").Replace('\', '/')
+        return $arguments + @(
+            "-DCMAKE_C_COMPILER=$bin/clang.exe", "-DCMAKE_CXX_COMPILER=$bin/clang++.exe",
+            "-DCMAKE_ASM_COMPILER=$bin/clang.exe", "-DCMAKE_RC_COMPILER:FILEPATH=$bin/llvm-windres.exe"
         )
     }
-    return @(
-        "-G", "Ninja", "-DCMAKE_MAKE_PROGRAM=$($script:ToolPaths.Ninja)", "-DCMAKE_BUILD_TYPE=Release",
-        "-DCMAKE_C_COMPILER=cl.exe", "-DCMAKE_CXX_COMPILER=cl.exe"
-    )
+    return $arguments + @("-DCMAKE_C_COMPILER=cl.exe", "-DCMAKE_CXX_COMPILER=cl.exe")
 }
 
 function Invoke-VisualStudioBuild {
@@ -3732,6 +3735,8 @@ function Install-X265 {
     $build8 = Join-Path $buildRoot "8bit"
     $commonArguments = @(Get-NinjaCMakeArguments) + @(
         "-DCMAKE_POLICY_VERSION_MINIMUM=3.10",
+        "-DNATIVE_BUILD=OFF",
+        "-DENABLE_ASSEMBLY=ON",
         "-DSTATIC_LINK_CRT=ON",
         "-DENABLE_SHARED=OFF",
         "-DENABLE_LIBNUMA=OFF",
@@ -3741,7 +3746,7 @@ function Install-X265 {
         "-DENABLE_VPYSYNTH=OFF"
     )
     if ($script:IsArm64) {
-        $commonArguments += @("-DENABLE_ASSEMBLY=OFF", "-DCMAKE_EXE_LINKER_FLAGS=-static")
+        $commonArguments += @("-DAARCH64_RUNTIME_CPU_DETECT=ON", "-DCMAKE_EXE_LINKER_FLAGS=-static")
     }
     else {
         $nasmPath = $script:ToolPaths.Nasm.Replace('\', '/')
@@ -3822,9 +3827,13 @@ function Install-X265 {
             Add-StaticBuildArtifact "x265" $library8.FullName "x265-main$libraryExtension"
         }
     }
+    $buildFeatures = @($release.Version, "hdr10plus-all-depths")
+    if ($script:IsArm64) {
+        $buildFeatures += $script:X265Arm64BuildProfile
+    }
     [IO.File]::WriteAllText(
         $script:ToolPaths.X265Version,
-        "$($release.Version)`r`nhdr10plus-all-depths",
+        ($buildFeatures -join "`r`n"),
         (New-Object Text.UTF8Encoding($false))
     )
 }
@@ -3839,7 +3848,8 @@ function Test-X265 {
             $help.IndexOf("--dhdr10-info", [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
             $help.IndexOf("--dolby-vision-profile", [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
             $help.IndexOf("--dolby-vision-rpu", [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
-            $buildMarker.IndexOf("hdr10plus-all-depths", [StringComparison]::OrdinalIgnoreCase) -ge 0
+            $buildMarker.IndexOf("hdr10plus-all-depths", [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+            (-not $script:IsArm64 -or (($buildMarker -split '\r?\n') -contains $script:X265Arm64BuildProfile))
         )
     }
     catch {
@@ -3869,7 +3879,7 @@ function Build-SvtAv1Executable {
     $buildArguments = @(Get-NinjaCMakeArguments) + "-DSVT_AV1_LTO=ON"
     if ($script:IsArm64) {
         # The upstream ARM64 assembly and flags use the Clang/GNU interface.
-        $buildArguments += "-DCMAKE_EXE_LINKER_FLAGS=-static"
+        $buildArguments += @("-DNATIVE=OFF", "-DCMAKE_EXE_LINKER_FLAGS=-static")
     }
     else {
         $nasmPath = $script:ToolPaths.Nasm.Replace('\', '/')

@@ -180,6 +180,8 @@ The table lists the native filters in this build. Versions come from the install
 | --- | --- | --- | --- |
 {{VAPOURSYNTH_COMPONENTS}}
 
+ZNEDI3 includes the [plugin, GraphEngine, and VSXX licenses](vapoursynth/components/znedi3/).
+
 ---
 
 ## VapourSynth Editor

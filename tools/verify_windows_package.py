@@ -82,6 +82,7 @@ def verify(bundle: Path, work: Path) -> None:
         "fmt = vs.core.query_video_format(vs.ColorFamily.YUV, vs.SampleType.INTEGER, 10, 1, 1)\n"
         "clip = vs.core.std.BlankClip(length=2, width=64, height=48, format=fmt.id)\n"
         "clip = vs.core.rgvs.RemoveGrain(clip, mode=1)\n"
+        "assert clip.znedi3.nnedi3(field=0, dh=True).get_frame(0).height == 96\n"
         + ("assert vs.core.placebo.Deband and vs.core.dfttest.DFTTest and vs.core.lsmas.LWLibavSource\n"
            "clip = vs.core.assrender.TextSub(clip, '字幕.srt')\n" if expected_core == "Core R79" else "")
         + "clip.set_output()\n",

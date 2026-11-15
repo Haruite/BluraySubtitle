@@ -88,7 +88,7 @@ def verify(bundle: Path, work: Path) -> None:
     assert "VapourSynth Editor" in "".join(run("vsedit", "--version"))
     assert "7-Zip" in "".join(run("7zz", "i"))
     assert "tsMuxeR" in "".join(run("tsMuxeR", "--help"))
-    for tool in ("x264", "SvtAv1EncApp", "dovi_tool", "hdr10plus_tool"):
+    for tool in ("x264", "dovi_tool", "hdr10plus_tool"):
         assert any(run(tool, "--version"))
 
     source = work / "source.mkv"
@@ -129,6 +129,9 @@ assert mapped == {{str(support / "libpython3.14.so.1.0")}}, mapped
 vs.core.std.LoadAllPlugins(os.environ["BLURAYSUB_PLUGIN_PATH"])
 assert vs.core.descale.Descale and vs.core.bm3d
 clip = vs.core.lsmas.LWLibavSource({str(source)!r}, cache=0)
+clip = vs.core.fmtc.bitdepth(clip, bits=16)
+assert clip.znedi3.nnedi3(field=0, dh=True).get_frame(0).height == clip.height * 2
+clip = vs.core.nlm_ispc.NLMeans(clip, d=0, a=2, s=2, h=0.6, channels="Y", wmode=3)
 clip = vs.core.fmtc.bitdepth(clip, bits=10)
 vs.core.assrender.TextSub(clip, {str(text)!r}).set_output()
 """, encoding="utf-8")
@@ -149,7 +152,13 @@ vs.core.assrender.TextSub(clip, {str(text)!r}).set_output()
     assert data["streams"][0]["pix_fmt"] == "yuv420p10le"
     assert data["streams"][0]["nb_read_frames"] == "12"
     assert data["format"]["tags"]["title"] == "BluraySubtitle"
-    print("R79, NumPy, subtitle rendering, x265, FLAC/AAC/Opus and MKVToolNix passed.", flush=True)
+    av1 = work / "sample.ivf"
+    run("SvtAv1EncApp", "-i", frames, "-b", av1, "--input-depth", "10", "--preset", "12",
+        "--lp", "2", "--progress", "0", audit=True)
+    streams = json.loads(run("ffprobe", "-v", "error", "-count_frames", "-show_entries",
+                             "stream=codec_name,pix_fmt,nb_read_frames", "-of", "json", av1)[0])["streams"]
+    assert streams == [{"codec_name": "av1", "pix_fmt": "yuv420p10le", "nb_read_frames": "12"}]
+    print("R79, NumPy, NLM-ISPC, subtitle rendering, x265, SVT-AV1, FLAC/AAC/Opus and MKVToolNix passed.", flush=True)
 
     mpv_script = work / "mpv.vpy"
     mpv_script.write_text(runtime_assertions + "\nvideo_in.set_output()\n", encoding="utf-8")

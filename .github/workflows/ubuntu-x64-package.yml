@@ -61,7 +61,7 @@ jobs:
           BLURAYSUBTITLE_GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          bash setup_linux_environment.sh --build
+          bash setup_linux_environment.sh --mod Build
           builds="$BLURAY_SETUP_CACHE_DIR/builds"
           checksum=$(find "$builds" -maxdepth 1 -name '*.tar.xz' -type f -print0 |
             sort -z | xargs -0 -r sha256sum | cut -d' ' -f1 | sha256sum)

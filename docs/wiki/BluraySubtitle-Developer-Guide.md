@@ -23,7 +23,7 @@ Use the setup scripts as references for custom builds. See [automatic HDR metada
 
 ### Ubuntu 26.04 x64 package
 
-Run `bash setup_linux_environment.sh --build` on Ubuntu 26.04, then run [`tools/build_ubuntu_package.sh`](../../tools/build_ubuntu_package.sh). Build mode prepares VapourSynth R79 and the PyInstaller environment and links mpv, FFmpeg, and FFprobe to the same FFmpeg libraries. Run [`tools/verify_ubuntu_package.py`](../../tools/verify_ubuntu_package.py) against the resulting archive before distributing it. The build records the checked-out commit inside the package and writes a matching `.tar.xz.txt` file with the SHA-256 digest.
+Run `bash setup_linux_environment.sh --mod Build` on Ubuntu 26.04, then run [`tools/build_ubuntu_package.sh`](../../tools/build_ubuntu_package.sh). Build mode prepares VapourSynth R79 and the PyInstaller environment and links mpv, FFmpeg, and FFprobe to the same FFmpeg libraries. Run [`tools/verify_ubuntu_package.py`](../../tools/verify_ubuntu_package.py) against the resulting archive before distributing it. The build records the checked-out commit inside the package and writes a matching `.tar.xz.txt` file with the SHA-256 digest.
 
 The setup cache defaults to `${XDG_CACHE_HOME:-$HOME/.cache}/bluraysubtitle/linux-setup`. Set `BLURAY_SETUP_CACHE_DIR` to use another directory. It holds downloaded archives, APT and Python packages, compiler cache entries, and the installed native build artifacts in build mode.
 

@@ -270,6 +270,10 @@ src8 = src8.std.SetFrameProps(_FieldBased=0)
 
 这些名称是生态中的常见选项，不代表 BluraySubtitle 保证提供全部依赖。自订脚本应自行负责插件依赖和输出正确性。
 
+环境配置脚本会编译 CPU 版 NNEDI3 插件 ZNEDI3，自订 VPy 可调用 `core.znedi3.nnedi3`。
+
+随附的 `vsmlrt.py` 提供 Python 接口。运行使用 VSMLRT 的 VPy 时，需自行构建适用于当前平台和架构的推理后端，将它及其依赖安装到 BluraySubtitle 使用的 VapourSynth 运行时，并准备所需模型。 [VSMLRT 上游](https://github.com/AmusementClub/vs-mlrt)
+
 ## 延伸阅读
 
 H.264、H.265、AV1、x265、SVT-AV1 和 VapourSynth 的规范与手册链接见 [参考资料](References.zh-Hans.md)。

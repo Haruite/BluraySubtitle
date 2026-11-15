@@ -180,6 +180,8 @@
 | --- | --- | --- | --- |
 {{VAPOURSYNTH_COMPONENTS}}
 
+ZNEDI3 随附[插件本身及 GraphEngine、VSXX 的许可原文](vapoursynth/components/znedi3/)。
+
 ---
 
 ## VapourSynth Editor

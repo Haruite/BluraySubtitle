@@ -63,6 +63,7 @@ PLUGIN_PROJECTS = {
     "libvsnlm_ispc.so": ("vs-nlm-ispc", "AmusementClub/vs-nlm-ispc"),
     "libzsmooth.x86_64-gnu.so": ("zsmooth", "adworacz/zsmooth"),
     "mvtools.so": ("MVTools", "dubhatervapoursynth/vapoursynth-mvtools"),
+    "znedi3.so": ("ZNEDI3", "vapoursynth/znedi3-pypi"),
 }
 
 SYSTEM_LIBRARY = re.compile(
@@ -239,6 +240,8 @@ def stage(support: Path) -> None:
 
     for plugin in plugins:
         subprocess.run(["strip", "--strip-unneeded", "-o", native / "plugins" / plugin.name, plugin], check=True)
+    shutil.copy2(installed_plugins / "nnedi3_weights.bin", native / "plugins")
+    shutil.copytree(installed_plugins / "licenses/znedi3", support / "legal/vapoursynth/components/znedi3")
     if (installed_plugins / "models").is_dir():
         shutil.copytree(installed_plugins / "models", native / "plugins/models")
     for plugin, source in zip(QT_PLUGINS, qt_sources, strict=True):

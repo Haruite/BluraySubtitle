@@ -68,6 +68,9 @@ def reported_version(plugin, target: str) -> str | None:
     # vs-ccd registers 0.1 independently of the release tag.
     if plugin.name == "chroma denoiser" and (version.major, version.minor) == (0, 1):
         return None
+    # The ZNEDI3 module registers version 0.3 independently of its source release.
+    if plugin.name == "Neural network edge directed interpolation (3rd gen.)" and (version.major, version.minor) == (0, 3):
+        return None
     if version.major >= 0:
         return usable_version(f"{version.major}.{version.minor}", target)
     return None
