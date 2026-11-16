@@ -204,7 +204,7 @@ python src/main.py
 ## 仓库辅助脚本
 
 - [`src/scripts/batch_remux_movie.py`](src/scripts/batch_remux_movie.py)：修改脚本内路径或通过命令行传入路径，可批量 Remux 一个电影目录下的全部 BDMV。
-- [`src/scripts/getnative_file.py`](src/scripts/getnative_file.py)：修改 `video_file` 后直接运行，可输出单个视频的自动 getnative 结果与耗时秒数。
+- 运行 `python src/scripts/getnative_file.py "path/to/video.mkv"` 可输出单个视频的 getnative 结果与耗时秒数。
 
 ---
 

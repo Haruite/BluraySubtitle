@@ -204,7 +204,7 @@ Blu-ray input rejects existing outputs. Remux input skips completed main/SP, ext
 ## Repository helper scripts
 
 - [`src/scripts/batch_remux_movie.py`](src/scripts/batch_remux_movie.py): edit its paths or pass them on the command line to batch-remux every BDMV under one movie folder.
-- [`src/scripts/getnative_file.py`](src/scripts/getnative_file.py): edit `video_file` and run it directly to print one video's automatic getnative result and elapsed seconds.
+- Run `python src/scripts/getnative_file.py "path/to/video.mkv"` to print the getnative result and elapsed seconds for one video.
 
 ---
 
