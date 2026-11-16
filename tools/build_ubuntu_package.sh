@@ -29,7 +29,7 @@ cd -- "$root"
 /usr/bin/python3 -m PyInstaller --distpath "$stage/dist" --workpath "$stage/build" BluraySubtitle_ubuntu2604_x64.spec
 /usr/bin/python3 -B tools/stage_ubuntu_runtime.py "$stage/dist/BluraySubtitle/_internal"
 /usr/bin/python3 -B tools/mpv/install.py --bundle-menus "$stage/dist/BluraySubtitle/_internal/resource/mpv"
-tar --sort=name -C "$stage/dist" -I 'xz -T2 --block-size=256MiB --x86 --lzma2=preset=4,dict=64MiB' \
+tar --sort=name -C "$stage/dist" -I 'xz -T4 --block-size=128MiB --x86 --lzma2=preset=4,dict=64MiB' \
     -cf "$stage/package.tar.xz" BluraySubtitle
 digest=$(sha256sum "$stage/package.tar.xz")
 {
