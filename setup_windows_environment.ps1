@@ -1005,7 +1005,12 @@ function Write-SetupTempScript {
         throw "Generated build scripts must remain inside the setup temporary directory."
     }
     $prefix = if ($X64Toolchain) { "ucrt64" } else { $script:MsysPrefix }
-    $normalized = "export PATH=/$prefix/bin:/usr/bin`n"
+    $normalized = (@(
+        "export PATH=/$prefix/bin:/usr/bin",
+        ('export PKG_CONFIG="$(cygpath -m /{0}/bin/pkgconf.exe)"' -f $prefix),
+        ('export PKG_CONFIG_LIBDIR="$(cygpath -mp /{0}/lib/pkgconfig:/{0}/share/pkgconfig)"' -f $prefix),
+        'unset PKG_CONFIG_PATH'
+    ) -join "`n") + "`n"
     if ($prefix -eq "clangarm64") {
         $normalized += "export CC=clang CXX=clang++ AR=llvm-ar NM=llvm-nm RANLIB=llvm-ranlib RC=llvm-windres STRIP=llvm-strip`n"
     }
@@ -3059,16 +3064,13 @@ function Install-Ffmpeg {
     # Source tag archives do not carry the release tarball's VERSION file.
     [IO.File]::WriteAllText((Join-Path $sourceRoot "VERSION"), "$Version`n", $script:Utf8Encoding)
 
-    $buildScriptContent = @"
+    $buildScriptContent = @'
 set -eu
-unset PKG_CONFIG_PATH
-export PKG_CONFIG_LIBDIR=/$script:MsysPrefix/lib/pkgconfig
-"@ + "`n" + @'
 cd "$1"
 jobs=$2
 shift 2
 export TMPDIR=.
-/usr/bin/dash.exe src/configure "$@" || {
+/usr/bin/dash.exe src/configure --pkg-config="$PKG_CONFIG" "$@" || {
     if [ -f ffbuild/config.log ]; then tail -n 80 ffbuild/config.log; fi
     exit 1
 }
@@ -4159,15 +4161,11 @@ function Install-Libass {
     $build = Join-Path $script:TempRoot "$buildName-build"
     $runtimeLink = if ($nativeArm64) { "-lc++" } else { "-lstdc++" }
     $linkFlags = if ($nativeArm64) { "-static" } else { "-static -static-libgcc" }
-    $toolchainPrefix = if ($X64Compatibility) { "/ucrt64" } else { "/$script:MsysPrefix" }
     $buildScriptContent = @(
         'set -euo pipefail',
         'source=$1',
         'build=$2',
         'jobs=$3',
-        ('export PKG_CONFIG="$(cygpath -m ' + $toolchainPrefix + '/bin/pkgconf.exe)"'),
-        ('export PKG_CONFIG_LIBDIR="$(cygpath -mp ' + $toolchainPrefix + '/lib/pkgconfig:' + $toolchainPrefix + '/share/pkgconfig)"'),
-        'unset PKG_CONFIG_PATH',
         ('meson setup "$build" "$source" --buildtype=release -Ddefault_library=shared -Dprefer_static=true -Db_lto=true -Dfontconfig=disabled -Ddirectwrite=enabled -Dlibunibreak=enabled -Dasm=enabled -Dtest=disabled -Dcompare=disabled -Dprofile=disabled -Dfuzz=disabled -Dcheckasm=disabled "-Dc_link_args=' +
             $linkFlags + '" -Dc_winlibs=-lkernel32,-luser32,-lgdi32,-lwinspool,-lshell32,-lole32,-loleaut32,-luuid,-lcomdlg32,-ladvapi32,' + $runtimeLink),
         'meson compile -C "$build" -j "$jobs"'

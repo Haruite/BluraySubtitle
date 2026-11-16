@@ -32,7 +32,7 @@ from tools.windows_build_cache import files_under, publish as publish_build_cach
 from tools.windows_native_tools import (
     PE_ARM64, VSEDIT_ARM64_RECIPE, VSEDIT_PLUGINS, VSEDIT_PROGRAMS, VSEDIT_QT_LIBRARIES, VSEDIT_RECIPE,
     build_record, editor_runtime_matches, fetch_verified, file_hash, fingerprint, has_pe_machine, install_build,
-    msvc_environment, pyqt_runtime, record_build, windows_machine,
+    msvc_environment, msys_pkg_config_environment, pyqt_runtime, record_build, windows_machine,
 )
 from tools.windows_tool_paths import normalize_vsedit_path
 
@@ -867,7 +867,7 @@ class Installer:
             ffmpeg_options.extend(("--enable-vulkan", "--enable-libshaderc"))
         self.run_msys([
             "export PKG_CONFIG_PATH=" + shlex.quote(pc.as_posix()),
-            shlex.join([self.posix(ffmpeg / "configure"), *ffmpeg_options]),
+            shlex.join([self.posix(ffmpeg / "configure"), *ffmpeg_options]) + ' --pkg-config="$PKG_CONFIG"',
             f"make -j{self.args.jobs}",
             "make install",
         ], ffmpeg_build)
@@ -1610,7 +1610,9 @@ def main():
                     waiting = True
                 time.sleep(1)
         try:
-            Installer(args).install()
+            installer = Installer(args)
+            os.environ.update(msys_pkg_config_environment(installer.msys))
+            installer.install()
         except Msys2Required:
             return MSYS2_REQUIRED_EXIT_CODE
         finally:

@@ -50,6 +50,15 @@ def fingerprint(*inputs) -> str:
     return hashlib.sha256(json.dumps(inputs, sort_keys=True).encode("utf-8")).hexdigest()
 
 
+def msys_pkg_config_environment(prefix: Path) -> dict[str, str]:
+    prefix_path = prefix.resolve().as_posix()
+    return {
+        "PKG_CONFIG": f"{prefix_path}/bin/pkgconf.exe",
+        "PKG_CONFIG_LIBDIR": f"{prefix_path}/lib/pkgconfig;{prefix_path}/share/pkgconfig",
+        "PKG_CONFIG_PATH": "",
+    }
+
+
 def fetch_verified(url: str, destination: Path, digest: str, algorithm: str = "sha256") -> Path:
     if destination.is_file() and file_hash(destination, algorithm) == digest:
         return destination

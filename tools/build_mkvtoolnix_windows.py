@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools.windows_build_cache import files_under, publish, restore
 from tools.windows_native_tools import (
     MKV_RECIPE, PE_ARM64, build_record, clean_tool_environment, fetch_verified, file_hash, fingerprint,
-    imported_symbols, install_build, pe_imports, record_build, runtime_dependencies, tool_version,
+    imported_symbols, install_build, msys_pkg_config_environment, pe_imports, record_build, runtime_dependencies, tool_version,
     verify_mkv_runtime, windows_machine,
 )
 from tools.windows_tool_paths import MKV_SETTINGS
@@ -145,7 +145,7 @@ def patch_rake(source: Path) -> None:
     shutil.copyfile(next(source.glob("rake.d/vendor/drake-*/bin/drake")), source / "drake")
 
 
-def build_cli(source: Path, msys: Path, prefix: Path, jobs: int, cxx_flags: str) -> None:
+def build_cli(source: Path, msys: Path, prefix: Path, jobs: int, cxx_flags: str, env: dict) -> None:
     cygpath = msys / "usr/bin/cygpath.exe"
     posix_prefix = subprocess.check_output([cygpath, "-u", prefix], text=True).strip()
     posix_work = subprocess.check_output([cygpath, "-u", source.parent], text=True).strip()
@@ -165,7 +165,6 @@ def build_cli(source: Path, msys: Path, prefix: Path, jobs: int, cxx_flags: str)
         f"mkdir -p {quote(posix_work + '/t')}",
         f"export TMPDIR={quote(posix_work + '/t')}",
         'export MINGW_PREFIX="$deps"',
-        f'export PKG_CONFIG_LIBDIR="$deps/lib/pkgconfig:{sysroot}/lib/pkgconfig"',
         'win_deps=$(cygpath -m "$deps")',
         "export " + tools,
         'export CPPFLAGS="-I$win_deps/include -I$win_deps/include/qt6 -I$win_deps/include/qt6/QtCore"',
@@ -182,7 +181,7 @@ def build_cli(source: Path, msys: Path, prefix: Path, jobs: int, cxx_flags: str)
         f"ruby ./drake -j{jobs} " + " ".join("apps:" + Path(name).stem for name in MKV_SETTINGS),
         "",
     )), encoding="utf-8", newline="\n")
-    subprocess.run([msys / "usr/bin/dash.exe", posix_work + "/" + script.name], cwd=source, check=True)
+    subprocess.run([msys / "usr/bin/dash.exe", posix_work + "/" + script.name], cwd=source, env=env, check=True)
 
 
 def link_cli(source: Path, qtcore: Path, compiler: Path, env: dict) -> Path:
@@ -267,6 +266,7 @@ def build_from_source(args, work: Path, payload: Path, key: str, prefix: Path) -
     compiler = prefix / "bin"
     env = clean_tool_environment()
     env["PATH"] = os.pathsep.join(map(str, (compiler, args.msys2_root / "usr/bin", env["PATH"])))
+    env.update(msys_pkg_config_environment(prefix))
     cxx_flags = SECTION_FLAGS
     if windows_machine() != PE_ARM64:
         probe = subprocess.run(
@@ -276,7 +276,7 @@ def build_from_source(args, work: Path, payload: Path, key: str, prefix: Path) -
         if probe.returncode == 0:
             cxx_flags += " -fno-declone-ctor-dtor"
     qtcore, qt_version = build_qtcore(work, prefix, compiler, args.cache, env, args.jobs, cxx_flags)
-    build_cli(source, args.msys2_root, prefix, args.jobs, cxx_flags)
+    build_cli(source, args.msys2_root, prefix, args.jobs, cxx_flags, env)
     linked = link_cli(source, qtcore, compiler, env)
     stage_cli(source, linked, qtcore, prefix, compiler, payload, env)
     record_build(payload, "mkvtoolnix", MKV_RECIPE, args.version, key, MKV_SETTINGS,
