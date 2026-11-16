@@ -38,7 +38,7 @@ def status_records():
     return records
 
 
-def package_owners(paths: list[str]) -> set[str]:
+def package_paths(paths: list[str]) -> set[str]:
     candidates = set()
     for name in paths:
         if not name:
@@ -48,6 +48,10 @@ def package_owners(paths: list[str]) -> set[str]:
                 candidates.add(path)
                 if path.startswith(("/usr/lib/", "/usr/bin/")):
                     candidates.add(path[4:])
+    return candidates
+
+
+def package_owners(candidates: set[str]) -> set[str]:
     if not candidates:
         return set()
     result = subprocess.run(
@@ -73,16 +77,28 @@ def deb_record(path):
     return package_fields(paragraph), paragraph
 
 
-def save(downloads, cache, used_paths):
-    owners = package_owners(used_paths.read_text(encoding="utf-8").splitlines())
+def save(downloads, cache, used_paths, restored_packages=None):
+    candidates = package_paths(used_paths.read_text(encoding="utf-8").splitlines())
+    owners = package_owners(candidates)
     native = subprocess.check_output(["dpkg", "--print-architecture"], text=True).strip()
-    required = {
+    installed = {
         (name, architecture): fields["Version"]
         for (name, architecture), (fields, _) in status_records().items()
-        if name not in REPLACED_APT_PACKAGES and fields.get("Status", "").endswith(" ok installed")
+        if fields.get("Status", "").endswith(" ok installed")
+    }
+    required = {
+        (name, architecture): version for (name, architecture), version in installed.items()
+        if name not in REPLACED_APT_PACKAGES
         and (name in owners or f"{name}:{architecture}" in owners
              or (name in PACKAGING_PACKAGES and architecture in (native, "all")))
     }
+    if restored_packages is not None and restored_packages.is_file():
+        for name, architecture, version, files in json.loads(restored_packages.read_text(encoding="utf-8")):
+            package = name, architecture
+            if name not in REPLACED_APT_PACKAGES and package not in installed and (
+                candidates.intersection(files) or (name in PACKAGING_PACKAGES and architecture in (native, "all"))
+            ):
+                required[package] = version
     if not required:
         raise ValueError("No APT dependencies were recorded for packaging")
     names = {name for name, _ in required}
@@ -104,7 +120,9 @@ def save(downloads, cache, used_paths):
     staged.replace(cache / "packages.json")
 
 
-def restore(downloads, cache, state):
+def restore(downloads, cache, state, restored_packages=None):
+    if restored_packages is not None:
+        restored_packages.unlink(missing_ok=True)
     records = status_records()
     package_list = [
         record for record in json.loads((cache / "packages.json").read_text(encoding="utf-8"))
@@ -129,12 +147,20 @@ def restore(downloads, cache, state):
         control, paragraph = deb_record(archive)
         if (control["Package"], control["Architecture"], control["Version"]) != (name, architecture, version):
             raise ValueError(f"Cached APT archive has unexpected package metadata: {filename}")
-        archives.append(archive)
+        archives.append((archive, name, architecture, version))
         records[package] = (control, paragraph + "\nStatus: install ok installed")
 
     # Preserve the runner's real package state and add only the extracted packages to the query database.
-    for archive in archives:
-        subprocess.run(["sudo", "dpkg-deb", "--extract", archive, "/"], check=True)
+    # A later fallback build still uses these files even though the real dpkg database has no record of them.
+    restored = []
+    try:
+        for archive, name, architecture, version in archives:
+            extracted = subprocess.check_output(["sudo", "dpkg-deb", "--vextract", archive, "/"], text=True)
+            files = ["/" + path.removeprefix("./") for path in extracted.splitlines()]
+            restored.append([name, architecture, version, files])
+    finally:
+        if restored_packages is not None:
+            restored_packages.write_text(json.dumps(restored) + "\n", encoding="utf-8")
     if archives:
         subprocess.run(["sudo", "ldconfig"], check=True)
     (state / "status").write_text("\n\n".join(record for _, record in records.values()) + "\n", encoding="utf-8")
@@ -148,7 +174,11 @@ def main():
     args = parser.parse_args()
     try:
         operation = save if args.operation == "save" else restore
-        operation(args.cache / "apt", args.cache / "apt-runtime", args.paths_or_state)
+        restored_packages = os.environ.get("BLURAY_APT_RESTORED_PACKAGES")
+        operation(
+            args.cache / "apt", args.cache / "apt-runtime", args.paths_or_state,
+            Path(restored_packages) if restored_packages else None,
+        )
     except (KeyError, OSError, TypeError, ValueError, subprocess.CalledProcessError) as error:
         sys.exit(str(error))
 

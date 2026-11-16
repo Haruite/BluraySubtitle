@@ -31,6 +31,7 @@ jobs:
           {
             printf 'BLURAY_SETUP_CACHE_DIR=%s/bluraysubtitle-linux\n' "$RUNNER_TEMP"
             printf 'BLURAY_BUILD_TMP=%s/bluraysubtitle-build\n' "$RUNNER_TEMP"
+            printf 'BLURAY_APT_RESTORED_PACKAGES=%s/bluraysubtitle-restored-apt-packages.json\n' "$RUNNER_TEMP"
           } >> "$GITHUB_ENV"
 
       - name: Restore Setup Downloads and Compiler Cache
