@@ -10,6 +10,7 @@ import re
 import runpy
 import shutil
 import subprocess
+import sys
 import sysconfig
 import zipfile
 
@@ -17,6 +18,7 @@ import numpy
 import soundfile
 import vapoursynth
 from PyInstaller import __version__ as PYINSTALLER_VERSION
+from PyQt6 import QtCore
 from PyQt6.QtCore import PYQT_VERSION_STR, QT_VERSION_STR, QLibraryInfo
 
 from update_third_party_notices import generate_ubuntu_third_party_notices
@@ -87,7 +89,7 @@ STDLIB_EXCLUDES = {
 NUMPY_EXCLUDES = (".pyi", ".h", ".hpp", ".c", ".cpp", ".pxd", ".pyx", ".rst")
 
 
-def dependency_paths(files: list[Path]) -> dict[str, Path]:
+def dependency_paths(files: list[Path], used_paths: set[Path]) -> dict[str, Path]:
     libraries: dict[str, Path] = {}
     environment = {**os.environ, "LC_ALL": "C"}
     environment.pop("LD_LIBRARY_PATH", None)
@@ -105,6 +107,7 @@ def dependency_paths(files: list[Path]) -> dict[str, Path]:
             if not match:
                 continue
             name, target = match.groups()
+            used_paths.add(Path(target))
             if SYSTEM_LIBRARY.fullmatch(name):
                 continue
             library = Path(target).resolve(strict=True)
@@ -223,10 +226,12 @@ def stage(support: Path) -> None:
         if not path.name.startswith(("_test", "_tkinter", "_ctypes_test", "_xxtest"))
     ]
     libass = Path("/usr/lib/x86_64-linux-gnu/libass.so.9")
-    dependencies = dependency_paths([
+    binaries = [
         *tools.values(), *plugins, *qt_sources, libass, *extensions,
         vs_wheel / "vspipe", *vs_binaries,
-    ])
+    ]
+    used_paths = set(binaries)
+    dependencies = dependency_paths(binaries, used_paths)
 
     for name in ("bin", "libexec", "plugins"):
         (native / name).mkdir(parents=True)
@@ -291,6 +296,17 @@ def stage(support: Path) -> None:
         vs_version,
         plugin_notice_rows(installed_plugins, plugins),
     )
+    if apt_paths := os.environ.get("BLURAY_APT_CACHE_PATHS"):
+        used_paths.update((Path(sys.executable), stdlib / "os.py", Path(QtCore.__file__)))
+        for command in ("as", "cc", "git", "ld", "pkg-config", "qtpaths6", "strip", "tar", "xz"):
+            if executable := shutil.which(command):
+                used_paths.add(Path(executable))
+        for option in ("-print-file-name=libgcc.a", "-print-prog-name=cc1"):
+            location = Path(subprocess.check_output(["cc", option], text=True).strip())
+            if location.is_absolute():
+                used_paths.add(location)
+        with Path(apt_paths).open("a", encoding="utf-8") as stream:
+            stream.writelines(f"{path}\n" for path in sorted(used_paths))
     print(f"Staged {len(tools) + 1} tools and {len(plugins)} filters with {shared} shared native libraries")
 
 

@@ -547,16 +547,26 @@ class Installer:
     def prepare_fftw(self):
         # DFTTest's Windows ABI expects the thread-safe planner in the same DLL.
         prefix = self.work / "fftw/prefix"
-        if has_pe_machine(prefix / "bin/libfftw3f-3.dll"):
-            return prefix
         cache = self.args.build_cache / "fftw.zip" if self.args.build_cache else None
         key = fingerprint(FFTW_CACHE_RECIPE, "arm64") if self.arm64 else FFTW_CACHE_RECIPE
+
+        def valid_prefix(directory):
+            return has_pe_machine(directory / "bin/libfftw3f-3.dll") and all(
+                (directory / name).is_file() for name in (
+                    "lib/libfftw3f.dll.a", "include/fftw3.h", "share/licenses/fftw/COPYING",
+                )
+            )
+
+        if valid_prefix(prefix):
+            if self.complete_fftw_runtime(prefix) and cache:
+                publish_build_cache(cache, key, files_under(prefix))
+            return prefix
         if cache:
             restored = self.work / "fftw/restored"
-            if restore_build_cache(cache, key, restored) and all((restored / name).is_file() for name in (
-                "bin/libfftw3f-3.dll", "lib/libfftw3f.dll.a", "include/fftw3.h", "share/licenses/fftw/COPYING",
-            )):
+            if restore_build_cache(cache, key, restored) and valid_prefix(restored):
                 restored.rename(prefix)
+                if self.complete_fftw_runtime(prefix):
+                    publish_build_cache(cache, key, files_under(prefix))
                 self.log("Restored FFTW from the build cache.")
                 return prefix
         self.require_msys2()
@@ -568,7 +578,7 @@ class Installer:
                 "NEON_CFLAGS=-march=armv8-a+simd ./configure --host=aarch64-w64-mingw32 "
                 + "--prefix=" + shlex.quote(self.posix(prefix))
                 + " --enable-single --enable-neon --enable-threads --with-combined-threads"
-                + " --with-our-malloc --disable-fortran --enable-shared --disable-static",
+                + " --with-our-malloc --disable-fortran --enable-shared --disable-static --disable-dependency-tracking",
                 f"make -j{self.args.jobs}",
                 "make install",
             ], source)
@@ -600,9 +610,32 @@ class Installer:
         license_path = prefix / "share/licenses/fftw/COPYING"
         license_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source / "COPYING", license_path)
+        self.complete_fftw_runtime(prefix)
         if cache:
             publish_build_cache(cache, key, files_under(prefix))
         return prefix
+
+    def complete_fftw_runtime(self, prefix):
+        binaries = prefix / "bin"
+        thread_library = "libwinpthread-1.dll"
+        target = binaries / thread_library
+        if has_pe_machine(target) or thread_library not in {
+            name.casefold() for name in imported_dlls(binaries / "libfftw3f-3.dll")
+        }:
+            return False
+        source = self.msys / "bin" / thread_library
+        if not has_pe_machine(source):
+            self.require_msys2()
+            raise RuntimeError(f"FFTW requires the missing MSYS2 runtime {source}")
+        pacman = self.args.msys2_root / "usr/bin/pacman.exe"
+        owner = subprocess.check_output([str(pacman), "-Qqo", f"/{self.subsystem}/bin/{thread_library}"],
+                                        text=True, encoding="utf-8").strip()
+        for _, path in self.msys_package_licenses([owner]):
+            notice = prefix / "share/licenses/libwinpthread" / path.name
+            notice.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(path, notice)
+        shutil.copyfile(source, target)
+        return True
 
     def migrate_plugins(self):
         active = {component.key for component in self.components}
@@ -673,6 +706,16 @@ class Installer:
             files[name] = self.state["dependencies"][name]
         return all((self.runtime / name).is_file() and sha256(self.runtime / name) == digest for name, digest in files.items())
 
+    def msys_package_licenses(self, packages):
+        result = subprocess.run([str(self.args.msys2_root / "usr/bin/pacman.exe"), "-Ql", *packages],
+                                check=True, capture_output=True, text=True, encoding="utf-8")
+        for line in result.stdout.splitlines():
+            package_name, _, relative = line.partition(" ")
+            if "/share/licenses/" in relative:
+                path = self.args.msys2_root / relative.lstrip("/")
+                if path.is_file():
+                    yield package_name.removeprefix(self.package_prefix), path
+
     def licenses(self, component, source, extra=None):
         destination, collected = self.runtime / "licenses/components" / component.key, {}
         for index, root in enumerate([source] + ([extra] if extra else [])):
@@ -717,25 +760,19 @@ class Installer:
                         collected[target.relative_to(self.runtime).as_posix()] = sha256(target)
         if self.used_packages:
             packages = [self.package_prefix + name for name in sorted(self.used_packages)]
-            result = subprocess.run([str(self.args.msys2_root / "usr/bin/pacman.exe"), "-Ql", *packages],
-                                    check=True, capture_output=True, text=True, encoding="utf-8")
-            for line in result.stdout.splitlines():
-                package_name, _, relative = line.partition(" ")
-                if "/share/licenses/" not in relative:
-                    continue
-                path = self.args.msys2_root / relative.lstrip("/")
+            for package_name, path in self.msys_package_licenses(packages):
+                target = destination / "dependencies" / package_name / path.name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(path, target)
+                collected[target.relative_to(self.runtime).as_posix()] = sha256(target)
+        if component.key in ("dfttest", "mvtools"):
+            fftw_licenses = self.work / "fftw/prefix/share/licenses"
+            for path in fftw_licenses.glob("*/*"):
                 if path.is_file():
-                    target = destination / "dependencies" / package_name.removeprefix(self.package_prefix) / path.name
+                    target = destination / "dependencies" / path.relative_to(fftw_licenses)
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copyfile(path, target)
                     collected[target.relative_to(self.runtime).as_posix()] = sha256(target)
-        if component.key == "dfttest":
-            source_license = self.work / "fftw/prefix/share/licenses/fftw/COPYING"
-            if source_license.is_file():
-                target = destination / "dependencies/fftw/COPYING"
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(source_license, target)
-                collected[target.relative_to(self.runtime).as_posix()] = sha256(target)
         for name, path in self.source_licenses:
             target = destination / "dependencies" / name / path.name
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -1219,12 +1256,12 @@ class Installer:
             build_profile += "-without-vulkan"
         if self.arm64 and component.key == "placebo":
             build_profile += "-static-placebo"
-        archive, cache_key = None, None
+        cache_archive, cache_key = None, None
         if self.args.build_cache:
             runtime = "r79" if self.r79 else "classic"
-            archive = self.args.build_cache / f"vs-{runtime}-{component.key}.zip"
+            cache_archive = self.args.build_cache / f"vs-{runtime}-{component.key}.zip"
             cache_key = self.component_cache_key(component, target_ref, build_profile)
-            if self.restore_plugin(archive, cache_key, component, target_ref, plugin_files):
+            if self.restore_plugin(cache_archive, cache_key, component, target_ref, plugin_files):
                 self.log("Restored VapourSynth component from the build cache: {name}", name=component.key)
                 return False
 
@@ -1279,8 +1316,8 @@ class Installer:
             self.save()
             self.log("VapourSynth plugin meets the required version: {name} {installed} >= {target}",
                      name=component.key, installed=installed, target=expected)
-            if archive and previous.get("cache_recipe") == cache_key and self.valid(previous, target_ref):
-                self.publish_plugin(archive, cache_key, component, plugin_files)
+            if cache_archive and previous.get("cache_recipe") == cache_key and self.valid(previous, target_ref):
+                self.publish_plugin(cache_archive, cache_key, component, plugin_files)
             return True
         if rebuild:
             self.log("Rebuilding VapourSynth plugin with updated link options: {name}", name=component.key)
@@ -1301,16 +1338,16 @@ class Installer:
                     assets = []
             if assets:
                 artifact = assets[0]
-                archive = self.download_release_asset(artifact, self.work / component.key / artifact["name"])
-                package = self.unpack(archive, self.work / component.key / ("release-" + archive.stem))
+                release_archive = self.download_release_asset(artifact, self.work / component.key / artifact["name"])
+                package = self.unpack(release_archive, self.work / component.key / ("release-" + release_archive.stem))
                 names = {component.filename.lower()} | ({"lsmashsource.dll"} if component.key == "lsmas" else set())
                 if component.key == "zsmooth":
                     names.add("zsmooth.avx2.dll")
                 candidates = [path for path in package.rglob("*.dll") if path.name.lower() in names and has_pe_machine(path)]
                 if component.key == "sangnom":
                     candidates.sort(key=lambda path: ("clang" not in path.parts, "x64" not in path.parts))
-                for candidate in candidates:
-                    candidate_stage = self.work / component.key / "candidate"
+                for index, candidate in enumerate(candidates):
+                    candidate_stage = self.work / component.key / f"candidate-{index}"
                     candidate_stage.mkdir(parents=True, exist_ok=True)
                     candidate_binary = candidate_stage / component.filename
                     shutil.copyfile(candidate, candidate_binary)
@@ -1363,11 +1400,11 @@ class Installer:
             "source_dependencies": self.source_dependencies + ([{"name": "FFTW", "version": "3.3.11", "source_url": "https://fftw.org/fftw-3.3.11.tar.gz"}]
                                    if component.key in ("dfttest", "mvtools") else []),
         }
-        if archive:
+        if cache_archive:
             self.state["components"][component.key]["cache_recipe"] = cache_key
         self.save()
-        if archive:
-            self.publish_plugin(archive, cache_key, component, plugin_files)
+        if cache_archive:
+            self.publish_plugin(cache_archive, cache_key, component, plugin_files)
         return True
 
     def install_editor(self):

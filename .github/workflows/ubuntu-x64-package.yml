@@ -60,8 +60,8 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ${{ env.BLURAY_SETUP_CACHE_DIR }}/apt-runtime
-          key: ubuntu2604-apt-runtime-v1-${{ runner.arch }}-lookup
-          restore-keys: ubuntu2604-apt-runtime-v1-${{ runner.arch }}-
+          key: ubuntu2604-apt-runtime-v2-${{ runner.arch }}-lookup
+          restore-keys: ubuntu2604-apt-runtime-v2-${{ runner.arch }}-
 
       - name: Build Ubuntu Package from Cached Tools
         id: cached
@@ -89,12 +89,7 @@ jobs:
           BLURAYSUBTITLE_GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          /usr/bin/python3 -B tools/ubuntu_apt_cache.py snapshot "$BLURAY_SETUP_CACHE_DIR"
           bash setup_linux_environment.sh --mod Build
-          if /usr/bin/python3 -B tools/ubuntu_apt_cache.py save "$BLURAY_SETUP_CACHE_DIR"; then
-            checksum=$(sha256sum < "$BLURAY_SETUP_CACHE_DIR/apt-runtime/packages.json")
-            printf 'apt-key=ubuntu2604-apt-runtime-v1-%s-%s\n' "$RUNNER_ARCH" "${checksum%% *}" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Save Setup Downloads and Compiler Cache
         if: steps.setup.outcome == 'success'
@@ -109,13 +104,6 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
           key: ubuntu2604-setup-v1-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
-
-      - name: Save Ubuntu APT Package List
-        if: steps.setup.outputs.apt-key != '' && steps.apt-runtime.outputs.cache-matched-key != steps.setup.outputs.apt-key
-        uses: actions/cache/save@v6
-        with:
-          path: ${{ env.BLURAY_SETUP_CACHE_DIR }}/apt-runtime
-          key: ${{ steps.setup.outputs.apt-key }}
 
       - name: Collect Ubuntu Tool Cache Key
         id: tool-cache
@@ -139,11 +127,25 @@ jobs:
           key: ${{ steps.tool-cache.outputs.key }}
 
       - name: Build and Verify Ubuntu Package
+        id: package
         if: steps.cached.outputs.built != 'true'
+        env:
+          BLURAY_APT_CACHE_PATHS: ${{ runner.temp }}/bluraysubtitle-apt-paths.txt
         run: |
           set -euo pipefail
           bash tools/build_ubuntu_package.sh
           /usr/bin/python3 -B tools/verify_ubuntu_package.py "dist/$PACKAGE_ARCHIVE"
+          if /usr/bin/python3 -B tools/ubuntu_apt_cache.py save "$BLURAY_SETUP_CACHE_DIR" "$BLURAY_APT_CACHE_PATHS"; then
+            checksum=$(sha256sum < "$BLURAY_SETUP_CACHE_DIR/apt-runtime/packages.json")
+            printf 'apt-key=ubuntu2604-apt-runtime-v2-%s-%s\n' "$RUNNER_ARCH" "${checksum%% *}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Save Ubuntu APT Package List
+        if: steps.package.outputs.apt-key != '' && steps.apt-runtime.outputs.cache-matched-key != steps.package.outputs.apt-key
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.BLURAY_SETUP_CACHE_DIR }}/apt-runtime
+          key: ${{ steps.package.outputs.apt-key }}
 
       - name: Upload Package and Build Information
         if: github.ref == 'refs/heads/main'

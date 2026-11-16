@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import os
 
 from PyInstaller.config import CONF
 from PyInstaller.utils.hooks import collect_data_files
@@ -98,6 +99,9 @@ def keep_runtime_entry(entry):
 
 analysis.binaries = [entry for entry in analysis.binaries if keep_runtime_entry(entry)]
 analysis.datas = [entry for entry in analysis.datas if keep_runtime_entry(entry)]
+if apt_paths := os.environ.get("BLURAY_APT_CACHE_PATHS"):
+    sources = {Path(entry[1]).resolve() for entry in (*analysis.binaries, *analysis.datas, *analysis.pure) if entry[1]}
+    Path(apt_paths).write_text("".join(f"{path}\n" for path in sorted(sources)), encoding="utf-8")
 archive = PYZ(analysis.pure)
 executable = EXE(archive, analysis.scripts, [], exclude_binaries=True, name="BluraySubtitle", upx=False, console=True)
 bundle = COLLECT(executable, analysis.binaries, analysis.datas, name="BluraySubtitle", upx=False)

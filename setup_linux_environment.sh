@@ -222,6 +222,23 @@ install_command_at_configured_path() {
   install_configured_executable "$source" "$destination"
 }
 
+install_component() {
+  local title="$1"
+  shift
+  if [[ -z "${component_stage:-}" ]]; then
+    tmux_run "$title" bluray_sudo "$@"
+    return
+  fi
+  mkdir -p -- "$component_stage"
+  tmux_run "$title" env "DESTDIR=$component_stage" "$@" || return $?
+  apply_component_stage
+}
+
+apply_component_stage() {
+  /usr/bin/python3 -B "$SETUP_ROOT/tools/linux_setup_cache.py" install "$component_stage" "$component_manifest" || return $?
+  rm -rf -- "$component_stage"
+}
+
 ensure_configured_directory() {
   local directory="$1"
   if mkdir -p "$directory" 2>/dev/null; then
@@ -765,7 +782,9 @@ mkvtoolnix_apt_version() {
 
 mkvtoolnix_installed_version() {
   local tool
-  for tool in mkvinfo mkvmerge mkvpropedit mkvextract mkvtoolnix-gui; do
+  local -a tools=(mkvinfo mkvmerge mkvpropedit mkvextract)
+  if ! "$package_build"; then tools+=(mkvtoolnix-gui); fi
+  for tool in "${tools[@]}"; do
     [[ -x "/usr/bin/$tool" ]] || return 1
   done
   LC_ALL=C /usr/bin/mkvmerge --version | sed -nE 's/^mkvmerge v([0-9]+(\.[0-9]+)+) .*/\1/p'
@@ -960,7 +979,7 @@ build_mkvtoolnix() {
     fi
 
     log "$(msg 'Installing mkvtoolnix with rake install' '使用 rake install 安装 mkvtoolnix')"
-    tmux_run "rake install" bluray_sudo rake install || exit 1
+    install_component "rake install" rake install || exit 1
     bluray_restore_local_boost
     trap - EXIT
     apt_clean
@@ -1131,19 +1150,29 @@ install_libdovi() {
     download_source_archive "dovi_tool ${DOVI_TOOL_VERSION}" \
       "https://codeload.github.com/quietvoid/dovi_tool/tar.gz/refs/tags/${DOVI_TOOL_VERSION}" dovi_tool || exit 1
     cd dovi_tool/dolby_vision || exit 1
-    tmux_run "$(msg 'Build and install dolby_vision' '编译安装 dolby_vision')" cargo cinstall --release --prefix="$HOME/.local" || exit 1
+    local lib_dir destdir=""
+    local -a install_args=(--release --prefix="$HOME/.local")
+    if [[ -n "${component_stage:-}" ]]; then
+      destdir="$component_stage"
+      install_args+=(--destdir="$destdir")
+    fi
+    tmux_run "$(msg 'Build and install dolby_vision' '编译安装 dolby_vision')" cargo cinstall "${install_args[@]}" || exit 1
 
-    local lib_dir
     lib_dir="$(
-      find "$HOME/.local" -maxdepth 6 -name "libdovi.so*" -printf "%h\n" 2>/dev/null \
-        | head -n 1
+      find "$destdir$HOME/.local" -maxdepth 6 -name "libdovi.so*" -printf "%h\n" -quit 2>/dev/null
     )"
     if [[ -z "${lib_dir:-}" ]]; then
       exit 1
     fi
 
     log "$(msg 'Copying runtime library to /usr/local/lib and refreshing ldconfig' '安装运行库到 /usr/local/lib 并刷新 ldconfig')"
-    sudo cp -a "$lib_dir"/libdovi.so* /usr/local/lib/ || exit 1
+    if [[ -n "$destdir" ]]; then
+      install -d "$destdir/usr/local/lib" || exit 1
+      cp -a "$lib_dir"/libdovi.so* "$destdir/usr/local/lib/" || exit 1
+      apply_component_stage || exit 1
+    else
+      sudo cp -a "$lib_dir"/libdovi.so* /usr/local/lib/ || exit 1
+    fi
     sudo ldconfig || exit 1
   ) || die "$(msg 'libdovi build/install failed' 'libdovi 编译/安装失败')"
 
@@ -1369,7 +1398,10 @@ __mpv_tools_share_ffmpeg() {
   local library_dir="$1" program codec shared_codec=""
   for program in "$(command -v mpv)" "$FFMPEG_PATH" "$FFPROBE_PATH"; do
     codec="$(LC_ALL=C ldd "$program" | awk '$1 ~ /^libavcodec[.]so[.]/ && $2 == "=>" { print $3 }')" || return 1
-    [[ "$codec" == "$library_dir"/libavcodec.so.* && "$codec" == "${shared_codec:-$codec}" ]] || return 1
+    if [[ "$codec" != "$library_dir"/libavcodec.so.* || "$codec" != "${shared_codec:-$codec}" ]]; then
+      log "$(msg "$program uses libavcodec at ${codec:-unknown}, expected $library_dir" "$program 使用的 libavcodec 位于 ${codec:-未知}，预期目录为 $library_dir")" >&2
+      return 1
+    fi
     shared_codec="$codec"
   done
 }
@@ -1398,7 +1430,7 @@ install_mpv() {
         && { ! "$package_build" || __mpv_tools_share_ffmpeg "$shared_ffmpeg_dir"; } \
         && mpv --no-config --list-properties | grep -E '^[[:space:]]+default-menu$' >/dev/null \
         && test_mpv_vapoursynth mpv; then
-        if ! has_libdovi_development; then
+        if ! "$package_build" && ! has_libdovi_development; then
           log "$(msg 'mpv installed but libdovi development files are missing, installing libdovi' '检测到 mpv 已安装但缺少 libdovi 开发文件，尝试安装 libdovi')"
           install_libdovi
         fi
@@ -1532,16 +1564,17 @@ C
     test_mpv_vapoursynth "$PWD/mpv/build/mpv" \
       || die "$(msg 'The rebuilt mpv failed the VapourSynth playback check' '重新编译的 mpv 未通过 VapourSynth 播放验证')"
     if "$package_build"; then
-      bluray_sudo install -d -m 0755 "$shared_ffmpeg_dir" || exit 1
+      local shared_stage="$component_stage$shared_ffmpeg_dir"
+      install -d -m 0755 "$shared_stage" || exit 1
       local library
       for library in build_libs/lib/lib{av*,sw*}.so.*; do
         # Install each SONAME once. The linker does not need the other aliases.
         if [[ "${library##*.so.}" =~ ^[0-9]+$ ]]; then
-          bluray_sudo install -m 0644 "$library" "$shared_ffmpeg_dir/" || exit 1
+          install -m 0644 "$library" "$shared_stage/" || exit 1
         fi
       done
     fi
-    tmux_run "mpv-build install" sudo env PYTHONNOUSERSITE=1 "PATH=$PATH" "PKG_CONFIG_PATH=${PKG_CONFIG_PATH:-}" ./install || exit 1
+    install_component "mpv-build install" env PYTHONNOUSERSITE=1 "PATH=$PATH" "PKG_CONFIG_PATH=${PKG_CONFIG_PATH:-}" ./install || exit 1
     install_configured_executable build_libs/bin/ffmpeg "$FFMPEG_PATH" || exit 1
     install_configured_executable build_libs/bin/ffprobe "$FFPROBE_PATH" || exit 1
   ) || die "$(msg "mpv build/install failed. Build files were kept in ${build_dir}" "mpv 编译/安装失败。构建文件保留在 ${build_dir}")"
@@ -1631,7 +1664,7 @@ install_lsmash() {
     log "$(msg 'Configuring and building L-SMASH' '配置与编译 lsmash')"
     tmux_run "lsmash configure" ./configure --enable-shared || exit 1
     tmux_run "lsmash make" make -j"$(nproc)" || exit 1
-    tmux_run "lsmash install" sudo make install || exit 1
+    install_component "lsmash install" make install || exit 1
     sudo ldconfig || exit 1
   ) || die "$(msg 'L-SMASH build/install failed' 'lsmash 编译/安装失败')"
 
@@ -2126,7 +2159,7 @@ install_fdk_aac() {
     tmux_run "$(msg 'fdk-aac: autogen.sh' 'fdk-aac：autogen.sh')" ./autogen.sh || exit 1
     tmux_run "$(msg 'fdk-aac: configure' 'fdk-aac：configure')" ./configure || exit 1
     tmux_run "$(msg 'fdk-aac: make' 'fdk-aac：make')" make -j"$(nproc)" || exit 1
-    tmux_run "$(msg 'fdk-aac: make install' 'fdk-aac：make install')" sudo make install || exit 1
+    install_component "$(msg 'fdk-aac: make install' 'fdk-aac：make install')" make install || exit 1
     sudo ldconfig || true
     cd "$build_dir" || exit 1
     download_source_archive "fdkaac ${fdkaac_tag}" \
@@ -2135,7 +2168,7 @@ install_fdk_aac() {
     tmux_run "$(msg 'fdkaac: autoreconf -fi' 'fdkaac：autoreconf -fi')" autoreconf -fi || exit 1
     tmux_run "$(msg 'fdkaac: configure' 'fdkaac：configure')" ./configure || exit 1
     tmux_run "$(msg 'fdkaac: make' 'fdkaac：make')" make -j"$(nproc)" || exit 1
-    tmux_run "$(msg 'fdkaac: make install' 'fdkaac：make install')" sudo make install || exit 1
+    install_component "$(msg 'fdkaac: make install' 'fdkaac：make install')" make install || exit 1
     sudo ldconfig || true
     install_command_at_configured_path fdkaac "$FDK_AAC_PATH" || exit 1
   ) || die "$(msg 'FDK-AAC / fdkaac build or install failed' 'FDK-AAC / fdkaac 编译或安装失败')"
@@ -2214,7 +2247,7 @@ install_flac() {
     log "$(msg 'Configuring and building flac' '配置与编译 flac')"
     tmux_run "flac configure" ./configure --enable-static --enable-shared --enable-64-bit-words || exit 1
     tmux_run "flac make" make -j"$(nproc)" || exit 1
-    tmux_run "flac install" sudo make install || exit 1
+    install_component "flac install" make install || exit 1
     sudo ldconfig || exit 1
     install_configured_executable /usr/local/bin/flac "$FLAC_PATH" || exit 1
   ) || die "$(msg 'flac build/install failed' 'flac 编译/安装失败')"
@@ -2259,11 +2292,14 @@ select_vapoursynth_python() {
 install_vapoursynth() {
   local package_dir sdk_dir=/usr/local/include/vapoursynth build_dir wrapper
   local -a pip=("$VAPOURSYNTH_PYTHON" -m pip)
-  if [[ "$VAPOURSYNTH_PYTHON" == "/usr/bin/python3" ]]; then
-    pip=(sudo -H env "PIP_CACHE_DIR=$PIP_CACHE_DIR" "${pip[@]}")
-  fi
   if ! "$VAPOURSYNTH_PYTHON" -I -c 'import vapoursynth as vs; assert vs.core.core_version.release_major == 79' >/dev/null 2>&1; then
     log "$(msg "Installing upstream VapourSynth $VAPOURSYNTH_TAG" "安装上游 VapourSynth $VAPOURSYNTH_TAG")"
+    if [[ "$VAPOURSYNTH_PYTHON" == "/usr/bin/python3" ]]; then
+      local system_pip_cache="$PIP_CACHE_DIR/system"
+      sudo mkdir -p -- "$system_pip_cache"
+      sudo chown -R -- 0:0 "$system_pip_cache"
+      pip=(sudo -H env "PIP_CACHE_DIR=$system_pip_cache" "${pip[@]}")
+    fi
     local -a pip_options=()
     if "${pip[@]}" install --help | grep -F -- '--break-system-packages' >/dev/null; then
       pip_options+=(--break-system-packages)
@@ -2632,7 +2668,7 @@ install_libplacebo_latest() {
 
         # Build and install
         tmux_run "libplacebo ninja" env PYTHONPATH="$safe_pythonpath" ninja -C build || exit 1
-        tmux_run "libplacebo install" sudo env PYTHONPATH="$safe_pythonpath" ninja -C build install || exit 1
+        install_component "libplacebo install" env PYTHONPATH="$safe_pythonpath" ninja -C build install || exit 1
     ) || die "$(msg 'libplacebo build/install failed' 'libplacebo 编译/安装失败')"
     rm -rf "$build_dir"
     sudo ldconfig
@@ -3114,6 +3150,7 @@ install_vs_ispc() (
     current_ispc_version="$(ispc --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)"
   fi
   if [[ -z "$current_ispc_version" ]] || dpkg --compare-versions "$current_ispc_version" lt "$required_ispc_version"; then
+    require_native_build ISPC
     log "$(msg 'Installing ispc (v1.31.0)' '安装 ispc (v1.31.0)')"
     tmux_run "$(msg 'Download ispc v1.31.0' '下载 ispc v1.31.0')" \
       download_github_release_asset ispc/ispc v1.31.0 ispc-v1.31.0-linux.tar.gz || exit 1
@@ -3202,14 +3239,8 @@ PY
   fi
 )
 
-build_vs_plugins() {
-  log "$(msg "Building/installing VapourSynth plugins to ${PLUGIN_PATH}" "编译/安装 VapourSynth 插件到 ${PLUGIN_PATH}")"
-
-  local plugins_dir="$PLUGIN_PATH"
-  ensure_configured_directory "$plugins_dir"
-
+install_vs_build_dependencies() {
   ensure_meson_version
-  export PATH="$HOME/.local/bin:$PATH"
 
   local deps=(
     build-essential git wget tar unzip sed
@@ -3234,7 +3265,16 @@ build_vs_plugins() {
     apt_update
     apt_install "${missing_deps[@]}" || die "$(msg 'Failed to install VS plugin dependencies' 'VS 插件依赖安装失败')"
   fi
+}
 
+build_vs_plugins() {
+  log "$(msg "Building/installing VapourSynth plugins to ${PLUGIN_PATH}" "编译/安装 VapourSynth 插件到 ${PLUGIN_PATH}")"
+  local plugins_dir="$PLUGIN_PATH"
+  ensure_configured_directory "$plugins_dir"
+  if ! "$restore_only"; then
+    install_vs_build_dependencies
+  fi
+  export PATH="$HOME/.local/bin:$PATH"
   local build_dir
   build_dir="$(mktemp -d)"
 
@@ -3268,7 +3308,7 @@ build_vs_plugins() {
     "$plugins_dir/libsangnommod.so" -- "$build_dir" "$plugins_dir"
   cached_linux_build vs-placebo install_vs_placebo system "$vapoursynth_cache_abi $(declare -f install_libplacebo_latest install_shaderc shaderc_is_usable)" \
     "$plugins_dir/libvs_placebo.so" -- "$build_dir" "$plugins_dir"
-  install_vs_ispc "$build_dir"
+  cached_linux_build ispc install_vs_ispc files "" /usr/local/bin/ispc -- "$build_dir"
   hash -r
   cached_linux_build vs-nlm-ispc install_vs_nlm_ispc files "$vapoursynth_cache_abi $(ispc --version)" \
     "$plugins_dir/libvsnlm_ispc.so" "$plugins_dir/libvsnlm_ispc.so.portable.sha256" -- "$build_dir" "$plugins_dir"
@@ -3319,6 +3359,7 @@ build_desktop_vs_plugin() (
     return 0
   fi
 
+  require_native_build "$name"
   if [[ "$name" == "bm3d" ]] && ! pkg-config --exists fftw3f; then
     apt_update
     apt_install libfftw3-dev
@@ -3349,9 +3390,7 @@ build_desktop_vs_plugin() (
 
 install_desktop_vs_rife() (
   local repository="https://github.com/styler00dollar/VapourSynth-RIFE-ncnn-Vulkan"
-  local library="librife_linux_x86-64.so"
-  # The upstream release supports Jammy's glibc. Model 23 is RIFE 4.6.
-  local model_dir="models/rife-v4.6_ensembleFalse"
+  local library="$1" model_dir="$2"
   local tag version build_dir model_file report
 
   if ! /sbin/ldconfig -p 2>/dev/null | grep -F 'libvulkan.so.1' >/dev/null; then
@@ -3397,11 +3436,16 @@ install_desktop_vs_rife() (
 
 install_desktop_vs_plugins() {
   local ccd_repository="https://github.com/End-of-Eternity/vs-ccd.git" ccd_tag
+  local bm3d_repository="https://github.com/HomeOfVapourSynthEvolution/VapourSynth-BM3D.git"
+  local rife_library="librife_linux_x86-64.so" model_dir="models/rife-v4.6_ensembleFalse"
   ccd_tag="$(latest_stable_tag "$ccd_repository" '^v[0-9]+([.][0-9]+)+$' 'v*')"
-  build_desktop_vs_plugin ccd "$ccd_repository" "$ccd_tag" libccd.so
-
-  build_desktop_vs_plugin bm3d https://github.com/HomeOfVapourSynthEvolution/VapourSynth-BM3D.git r10.1 bm3d.so
-  install_desktop_vs_rife
+  cached_linux_build ccd build_desktop_vs_plugin files "$vapoursynth_cache_abi $ccd_repository $ccd_tag" \
+    "$PLUGIN_PATH/libccd.so" -- ccd "$ccd_repository" "$ccd_tag" libccd.so
+  cached_linux_build bm3d build_desktop_vs_plugin files "$vapoursynth_cache_abi $bm3d_repository r10.1" \
+    "$PLUGIN_PATH/bm3d.so" -- bm3d "$bm3d_repository" r10.1 bm3d.so
+  # The upstream release supports Jammy's glibc. Model 23 is RIFE 4.6.
+  cached_linux_build rife install_desktop_vs_rife files "$vapoursynth_cache_abi $model_dir" \
+    "$PLUGIN_PATH/$rife_library" "$PLUGIN_PATH/$model_dir/"{flownet.bin,flownet.param} -- "$rife_library" "$model_dir"
 }
 
 # ---------------------------------------------------------------------------
@@ -3544,7 +3588,7 @@ for path in ("third_party/glslang", "third_party/spirv-tools", "third_party/spir
           -DCMAKE_INSTALL_PREFIX=/usr/local .. || exit 1
 
       tmux_run "shaderc ninja" ninja || exit 1
-      tmux_run "shaderc install" sudo ninja install || exit 1
+      install_component "shaderc install" ninja install || exit 1
   ) || die "$(msg 'Shaderc build/install failed' 'Shaderc 编译/安装失败')"
   rm -rf "$build_dir"
   sudo ldconfig || die "$(msg 'Failed to refresh the Shaderc library cache' '刷新 Shaderc 动态库缓存失败')"
@@ -3643,7 +3687,8 @@ cached_linux_build() {
     return
   fi
 
-  local key archive baseline packages restored=false
+  local key archive restored=false
+  local component_manifest="$cache_workspace/$component.json" component_stage="$cache_workspace/$component-install"
   key="$(
     {
       # Installer arguments can include a newly allocated build directory.
@@ -3652,19 +3697,14 @@ cached_linux_build() {
     } | sha256sum
   )"
   archive="$BLURAY_SETUP_CACHE_DIR/builds/components/$component.tar.xz"
-  baseline="$cache_workspace/$component.json"
   local -a helper=(/usr/bin/python3 -B "$SETUP_ROOT/tools/linux_setup_cache.py")
-  local -a args=("$archive" "$baseline" "${key%% *}" "$scope" "$PLUGIN_PATH")
-  local -a dependencies=()
+  local -a args=("$archive" "$component_manifest" "${key%% *}" "$scope" "$PLUGIN_PATH")
 
   if ! "$restore_only"; then
-    "${helper[@]}" snapshot "${args[@]}" false "${outputs[@]}"
+    "${helper[@]}" snapshot "${args[@]}" false "${outputs[@]}" || return $?
   fi
-  if [[ -s "$archive" ]] &&
-      { "$restore_only" || { packages=$("${helper[@]}" packages "${args[@]}" false) &&
-        { [[ -z "$packages" ]] || { mapfile -t dependencies <<< "$packages"; apt_update && apt_install --no-remove "${dependencies[@]}"; }; }; }; } &&
-      "${helper[@]}" restore "${args[@]}" false "${outputs[@]}"; then
-    if [[ "$scope" == system ]]; then sudo ldconfig; fi
+  if [[ -s "$archive" ]] && "${helper[@]}" restore "${args[@]}" false "${outputs[@]}"; then
+    if [[ "$scope" == system ]]; then sudo ldconfig || return $?; fi
     restored=true
     log "$(msg "Restored the build cache for $component" "已恢复 $component 的构建缓存")"
   fi
@@ -3690,9 +3730,14 @@ export CCACHE_DIR="$BLURAY_SETUP_CACHE_DIR/ccache"
 export CARGO_TARGET_DIR="$BLURAY_SETUP_CACHE_DIR/cargo"
 export CCACHE_BASEDIR="$(bluray_build_tmp_base)"
 export CCACHE_NOHASHDIR=true
+if [[ -n "${BLURAY_BUILD_TMP:-}" ]]; then
+  export TMPDIR="$CCACHE_BASEDIR"
+fi
 if "$restore_only"; then
-  /usr/bin/python3 -B "$SETUP_ROOT/tools/ubuntu_apt_cache.py" restore "$BLURAY_SETUP_CACHE_DIR"
-  export DPKG_ADMINDIR="$BLURAY_SETUP_CACHE_DIR/apt-runtime"
+  apt_state="$(bluray_mktemp_dir)"
+  trap 'rm -rf -- "$apt_state"' EXIT
+  /usr/bin/python3 -B "$SETUP_ROOT/tools/ubuntu_apt_cache.py" restore "$BLURAY_SETUP_CACHE_DIR" "$apt_state"
+  export DPKG_ADMINDIR="$apt_state"
 else
   repair_broken_apt_state
 fi
@@ -3713,11 +3758,13 @@ else
 fi
 
 missing_deps=()
-for dep in "${sys_deps[@]}"; do
-  if ! dpkg-query -W -f='${Status}' "$dep" 2>/dev/null | grep -q "install ok installed"; then
-    missing_deps+=("$dep")
-  fi
-done
+if ! "$restore_only"; then
+  for dep in "${sys_deps[@]}"; do
+    if ! dpkg-query -W -f='${Status}' "$dep" 2>/dev/null | grep -q "install ok installed"; then
+      missing_deps+=("$dep")
+    fi
+  done
+fi
 
 if (( ${#missing_deps[@]} > 0 )); then
   log "$(msg "Installing system dependencies (missing: ${missing_deps[*]})" "安装系统依赖（缺少：${missing_deps[*]}）")"
@@ -3737,13 +3784,14 @@ log "$(msg "Using tool paths from ${SETTINGS_FILE}" "使用 ${SETTINGS_FILE} 中
 linux_cache_abi="" qt_cache_abi="" vapoursynth_cache_abi=""
 if "$package_build"; then
   cache_workspace="$(bluray_mktemp_dir)"
-  trap 'rm -rf -- "$cache_workspace"' EXIT
+  trap 'rm -rf -- "$cache_workspace" "${apt_state:-}"' EXIT
+  apt_arch="$(dpkg --print-architecture)"
   linux_cache_abi="$(
     printf '%s\n' "$LINUX_DISTRO_ID/$APT_BASE_CODENAME/$(uname -m)" \
       "${CC:-}" "${CXX:-}" "${CFLAGS:-}" "${CXXFLAGS:-}" "${CPPFLAGS:-}" "${LDFLAGS:-}"
-    dpkg-query -W libc6 libgcc-s1 libstdc++6
+    dpkg-query -W "libc6:$apt_arch" "libgcc-s1:$apt_arch" "libstdc++6:$apt_arch"
   )"
-  qt_cache_abi="$(dpkg-query -W qt6-base-dev-tools python3-pyqt6)"
+  qt_cache_abi="$(dpkg-query -W "qt6-base-dev-tools:$apt_arch" "python3-pyqt6:$apt_arch")"
 fi
 
 install_mkvtoolnix
@@ -3751,7 +3799,8 @@ cached_linux_build mkvtoolnix-paths sync_mkvtoolnix_paths files "" \
   "$MKV_INFO_PATH" "$MKV_MERGE_PATH" "$MKV_PROP_EDIT_PATH" "$MKV_EXTRACT_PATH"
 select_vapoursynth_python
 cached_linux_build vapoursynth-sdk install_vapoursynth system \
-  "$VAPOURSYNTH_TAG $("$VAPOURSYNTH_PYTHON" --version)" "$VSPIPE_PATH"
+  "$VAPOURSYNTH_TAG $("$VAPOURSYNTH_PYTHON" --version)" "$VSPIPE_PATH" /usr/local/lib/pkgconfig/vapoursynth.pc \
+  /usr/local/include/vapoursynth/{VSConstants4,VSFrameMemory,VSHelper,VSHelper4,VSScript,VSScript4,VapourSynth,VapourSynth4}.h
 if "$package_build"; then
   vapoursynth_cache_abi="$(sha256sum "$VAPOURSYNTH_VSSCRIPT" /usr/local/include/vapoursynth/*.h | sha256sum)"
 fi
@@ -3780,7 +3829,7 @@ cached_linux_build 7zip ensure_modern_7zip_cli files "${SEVENZIP_VERSION:-}" "$S
 install_vapoursynth_scripts
 cached_linux_build vsedit install_vapoursynth_editor system \
   "$VSEDIT_SOURCE_REPOSITORY ${VSEDIT_TAG:-} $vapoursynth_cache_abi $qt_cache_abi $(declare -f write_vsedit_launcher)" \
-  "$VSEDIT_PATH" "$VSEDIT_BINARY_PATH"
+  "$VSEDIT_PATH" "$VSEDIT_BINARY_PATH" /usr/local/share/icons/hicolor/{256x256/apps/vsedit.png,scalable/apps/vsedit.svg}
 cached_linux_build lsmash install_lsmash system "${LSMASH_VERSION:-}"
 build_vs_plugins
 install_desktop_vs_plugins
