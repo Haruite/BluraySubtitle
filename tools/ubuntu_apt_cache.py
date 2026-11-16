@@ -11,6 +11,9 @@ import subprocess
 import sys
 
 STATUS = Path("/var/lib/dpkg/status")
+# The mpv build provides FFmpeg and FFprobe at the distro package's paths.
+# Their shared library dependencies are recorded separately from the CLI package.
+REPLACED_APT_PACKAGES = {"ffmpeg"}
 # Packaging commands and the pkg-config probes used for the artifact keys.
 PACKAGING_PACKAGES = {
     "binutils", "gcc", "libc6-dev", "libass-dev", "libavcodec-dev", "libavformat-dev",
@@ -76,7 +79,7 @@ def save(downloads, cache, used_paths):
     required = {
         (name, architecture): fields["Version"]
         for (name, architecture), (fields, _) in status_records().items()
-        if fields.get("Status", "").endswith(" ok installed")
+        if name not in REPLACED_APT_PACKAGES and fields.get("Status", "").endswith(" ok installed")
         and (name in owners or f"{name}:{architecture}" in owners
              or (name in PACKAGING_PACKAGES and architecture in (native, "all")))
     }
@@ -103,7 +106,10 @@ def save(downloads, cache, used_paths):
 
 def restore(downloads, cache, state):
     records = status_records()
-    package_list = json.loads((cache / "packages.json").read_text(encoding="utf-8"))
+    package_list = [
+        record for record in json.loads((cache / "packages.json").read_text(encoding="utf-8"))
+        if record[0] not in REPLACED_APT_PACKAGES
+    ]
     if not package_list:
         raise ValueError("No cached APT dependencies for packaging")
     archives = []
