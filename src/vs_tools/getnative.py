@@ -474,10 +474,8 @@ def _curve_decreasing_ratio(vals: Sequence[float]) -> float:
 class _VapourSynthAnalysis:
     """Own the native graph and filter helpers for one image analysis."""
 
-    def __init__(self, input_png: str):
+    def __init__(self, input_png: str, plugin_path: str):
         import vapoursynth as vs
-
-        from src.core.settings import PLUGIN_PATH
 
         self.vs = vs
         self.core = vs.core
@@ -486,8 +484,8 @@ class _VapourSynthAnalysis:
             1, int(os.getenv("BLURAYSUB_GETNATIVE_VS_THREADS", "1"))
         )
         self.core.max_cache_size = min(int(self.core.max_cache_size), 256)
-        if PLUGIN_PATH and os.path.isdir(PLUGIN_PATH):
-            self.core.std.LoadAllPlugins(PLUGIN_PATH)
+        if plugin_path:
+            self.core.std.LoadAllPlugins(plugin_path)
 
         # Optional filter availability is detected while muvsfunc is imported.
         from muvsfunc import measurediff, rescale
@@ -979,6 +977,7 @@ def getnative(
     min_kernels: int = 4,
     max_kernels: int = 0,
     debug_full_scan: bool = False,
+    plugin_path: Optional[str] = None,
 ):
     if stats_func is not None:
         raise ValueError("stats_func override is not supported")
@@ -990,7 +989,11 @@ def getnative(
     input_png = str(clip)
     if not os.path.isfile(input_png):
         raise FileNotFoundError(input_png)
-    native = _VapourSynthAnalysis(input_png)
+    if plugin_path is None:
+        from src.core.tool_paths import tool_path
+
+        plugin_path = tool_path("PLUGIN_PATH")
+    native = _VapourSynthAnalysis(input_png, plugin_path)
     if src_heights is None:
         height_list = _default_src_heights(input_png)
     elif isinstance(src_heights, (int, float)):

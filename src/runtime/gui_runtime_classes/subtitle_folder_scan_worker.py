@@ -1,3 +1,4 @@
+from contextvars import copy_context
 import multiprocessing
 import os
 import sys
@@ -27,6 +28,7 @@ class SubtitleFolderScanWorker(QObject):
                  selected_mpls: list[tuple[str, str]], cancel_event: threading.Event,
                  movie_mode: bool = False, disc_folders: tuple[str, ...] = ()):
         super().__init__()
+        self._context = copy_context()
         self.seq = seq
         self.mode = mode
         self.subtitle_folder = subtitle_folder
@@ -38,6 +40,9 @@ class SubtitleFolderScanWorker(QObject):
         self.disc_folders = disc_folders
 
     def run(self):
+        self._context.run(self._run)
+
+    def _run(self):
         try:
             if self.cancel_event.is_set():
                 raise TaskCancelled()

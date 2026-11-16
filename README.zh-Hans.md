@@ -105,7 +105,7 @@ pip install PyQt6 numpy soundfile pycountry pillow matplotlib
 - `SvtAv1EncApp`
 - `fdkaac`
 
-> 在**设置 > 外部工具**中配置路径并检查工具可用性；压制可选择自带或系统工具。
+> 在**设置 → 外部工具**中修改和检查路径。路径保存在 `config.json` 中，相对路径以该文件所在目录为基准。
 
 ---
 
@@ -267,10 +267,6 @@ chmod +x setup_linux_environment.sh
 
 ---
 
-在容器中运行解压后的程序见 [Docker 运行 Ubuntu 打包版](docs/wiki/Run-Ubuntu-Package-in-Docker.zh-Hans.md)。
-
----
-
 ## 常见问题排查
 
 - 剧集映射不对：
@@ -295,7 +291,7 @@ chmod +x setup_linux_environment.sh
 
 ### 哪些 Linux 系统可以使用打包版？
 
-PyInstaller 打包版面向 Ubuntu 26.04 x64，包含多媒体工具和 VapourSynth 运行时。其他受支持的发行版可先运行 `setup_linux_environment.sh`，再从源码启动。
+PyInstaller 打包版面向 Ubuntu 26.04 x64，包含多媒体工具和 VapourSynth 运行时。其他不支持的系统上可以使用 Docker 运行解压后的程序，参见 [Docker 运行 Ubuntu 打包版](docs/wiki/Run-Ubuntu-Package-in-Docker.zh-Hans.md)。
 
 ### 压制会自动裁黑边吗？
 

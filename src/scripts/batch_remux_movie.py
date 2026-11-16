@@ -14,6 +14,10 @@ repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
+from src.core.app_config import AppConfig, app_config_path, load_app_config
+from src.core.tool_paths import resolve_tool_paths, using_tool_paths
+
+
 def _folder_size_gib(folder: str) -> float:
     total = 0
     for root, _dirs, files in os.walk(folder):
@@ -70,9 +74,7 @@ def _progress_cb(value: int | None = None, text: str | None = None) -> None:
 
 
 
-def remux_one_disc(bdmv_folder: str, movie_root: str, output_root: str) -> None:
-    from src.core import find_mkvtoolnix
-    from src.core.app_config import load_app_config
+def remux_one_disc(bdmv_folder: str, movie_root: str, output_root: str, app_config: AppConfig) -> None:
     from src.core.i18n import translate_text
     from src.runtime.audio_conversion import AudioEncodingSettings
     from src.runtime.remux import RemuxRequest
@@ -89,8 +91,6 @@ def remux_one_disc(bdmv_folder: str, movie_root: str, output_root: str) -> None:
         return
 
     try:
-        find_mkvtoolnix()
-        app_config = load_app_config()
         bs = BluraySubtitle(bdmv_folder, [], False, _progress_cb, movie_mode=True, mux_dolby_vision=True)
         main_mpls_path = bs.get_main_mpls(bdmv_folder, checked=False)
         if not main_mpls_path or not os.path.isfile(main_mpls_path):
@@ -149,7 +149,6 @@ def remux_one_disc(bdmv_folder: str, movie_root: str, output_root: str) -> None:
                     app_config.audio.duration_loss_fallback_threshold_seconds
                 ),
             ),
-            ensure_tools=True,
         )
         bs.episodes_remux(
             request,
@@ -205,9 +204,12 @@ def main() -> None:
         print(f'No BDMV/PLAYLIST found under {movie_root}')
         return
     print(f'Found {len(discs)} disc(s) under {movie_root}')
-    for disc in discs:
-        print(f'--- remux {disc} ---')
-        remux_one_disc(disc, movie_root, output_root)
+    config_path = app_config_path()
+    config = load_app_config(config_path)
+    with using_tool_paths(resolve_tool_paths(config.tools, config_path.parent)):
+        for disc in discs:
+            print(f'--- remux {disc} ---')
+            remux_one_disc(disc, movie_root, output_root, config)
 
 
 if __name__ == '__main__':

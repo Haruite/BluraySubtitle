@@ -61,7 +61,7 @@ docker run --rm --init --platform linux/amd64 --network none \
 )
 ```
 
-Select media under `/data` and set output paths under `/output`. The host configuration directory retains `config.json`, editable tool settings, scripts and saved logs. The example uses software rendering and an isolated network. To update the mounted package, extract the new version on the host and point `pkg` to that directory. [Docker bind mounts](https://docs.docker.com/engine/storage/bind-mounts/)
+Select media under `/data` and set output paths under `/output`. The host configuration directory retains scripts, saved logs, and `config.json` with the tool paths. The example uses software rendering and an isolated network. To update the mounted package, extract the new version on the host and point `pkg` to that directory. [Docker bind mounts](https://docs.docker.com/engine/storage/bind-mounts/)
 
 ## Use a separate display
 

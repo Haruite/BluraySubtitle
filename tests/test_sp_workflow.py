@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from src.core.tool_paths import default_tool_paths, using_tool_paths
 from src.runtime.remux import RemuxMainJob
 from src.runtime.sp import SpEntry, SpJob
 from src.runtime.services_split.media_info_and_track_mapping import MediaInfoTrackMappingMixin
@@ -312,10 +313,12 @@ class SpExecutionTests(unittest.TestCase):
                 },
                 {1: (('episode.m2ts', 0x1102),)},
             )
-            with patch.object(sp_module, '_svc_cls', return_value=fake_service_class), patch.object(
-                    sp_module, 'MKV_MERGE_PATH', 'mkvmerge'), patch.object(
-                    sp_module, 'mkvtoolnix_ui_language_arg', return_value=''), patch.object(
-                    sp_module, 'run_command', side_effect=run):
+            with (
+                    using_tool_paths({**default_tool_paths(), 'MKV_MERGE_PATH': 'mkvmerge'}),
+                    patch.object(sp_module, '_svc_cls', return_value=fake_service_class),
+                    patch.object(sp_module, 'mkvtoolnix_ui_language_arg', return_value=''),
+                    patch.object(sp_module, 'run_command', side_effect=run),
+            ):
                 for sp_path, selected_ids, signatures in zip(
                         sp_paths, (['1', '2'], ['1', '2'], ['1']), source_signatures):
                     self.assertTrue(service._mux_episode_linked_sp_mkvmerge(
@@ -615,8 +618,7 @@ class TrackAlignmentTests(unittest.TestCase):
             chapter = SimpleNamespace(in_out_time=[('00001', 0, 45000)])
             with patch.object(track_module, '_svc_cls', return_value=fake_service_class), patch.object(
                     track_module, 'Chapter', return_value=chapter), patch.object(
-                    track_module, 'find_mkvtoolnix'), patch.object(
-                    track_module, 'MKV_MERGE_PATH', 'mkvmerge'), patch.object(
+                    track_module, 'tool_path', return_value='mkvmerge'), patch.object(
                     track_module, 'mkvtoolnix_ui_language_arg', return_value=''):
                 result = MediaInfoTrackMappingMixin._try_remux_mpls_track_aligned(
                     owner,

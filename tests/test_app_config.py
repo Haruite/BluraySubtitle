@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from dataclasses import replace
@@ -17,6 +18,7 @@ from src.core.app_config import (
     load_app_config,
     save_app_config,
 )
+from src.core.tool_paths import TOOL_PATH_NAMES, require_tool_path, resolve_tool_paths, using_tool_paths
 
 
 class AppConfigTests(unittest.TestCase):
@@ -48,6 +50,73 @@ class AppConfigTests(unittest.TestCase):
                 load_app_config(target)
 
             self.assertEqual(target.read_bytes(), b"{broken")
+
+    def test_legacy_tool_paths_are_imported_once_and_resolve_relative_to_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            target = root / "config.json"
+            legacy = root / "settings.py"
+            target.write_text(json.dumps({"ui": {"language": "zh"}}), encoding="utf-8")
+            legacy.write_text(
+                "FFMPEG_PATH = 'my tools/ffmpeg'\n"
+                "PLUGIN_PATH = _bundled_path('plugins', os.path.expanduser('~/test-plugins'))\n"
+                "raise RuntimeError('Must only read paths')\n",
+                encoding="utf-8",
+            )
+            observed = []
+            config = load_app_config(target, settings_path=legacy, on_tools_initialized=observed.append)
+            self.assertEqual(observed, [config])
+            self.assertEqual(config.ui.language, "zh")
+            self.assertEqual(set(config.tools), set(TOOL_PATH_NAMES))
+            self.assertEqual(config.tools["FFMPEG_PATH"], "my tools/ffmpeg")
+            self.assertEqual(config.tools["PLUGIN_PATH"], str(Path.home() / "test-plugins"))
+
+            legacy.unlink()
+            self.assertEqual(load_app_config(target, settings_path=legacy), config)
+            path = root / "my tools" / "ffmpeg"
+            path.parent.mkdir()
+            path.touch(mode=0o755)
+            with using_tool_paths(resolve_tool_paths(config.tools, target.parent)):
+                self.assertEqual(require_tool_path("FFMPEG_PATH"), str(path))
+                path.unlink()
+                with self.assertRaisesRegex(FileNotFoundError, "my tools"):
+                    require_tool_path("FFMPEG_PATH")
+
+    def test_ui_save_keeps_tool_paths_edited_in_the_config_file(self) -> None:
+        previous = default_app_config()
+        edited = replace(previous, tools={**previous.tools, "X265_PATH": "bin/other-x265"})
+        saved = replace(previous, ui=replace(previous.ui, font_size=13))
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            target = Path(temporary_directory) / "config.json"
+            save_app_config(edited, target)
+            save_app_config(saved, target, preserve_tools=True)
+            loaded = load_app_config(target)
+        self.assertEqual(loaded.tools, edited.tools)
+        self.assertEqual(loaded.ui.font_size, 13)
+
+    def test_migrates_mkvtoolnix_paths_to_one_directory(self) -> None:
+        legacy = {
+            "MKV_MERGE_PATH": "media/mkvmerge",
+            "MKV_INFO_PATH": "old/mkvinfo",
+            "MKV_PROP_EDIT_PATH": "old/mkvpropedit",
+            "MKV_EXTRACT_PATH": "old/mkvextract",
+        }
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            target = Path(temporary_directory) / "config.json"
+            for explicit in ({}, {"MKVTOOLNIX_PATH": "custom"}):
+                with self.subTest(explicit=explicit):
+                    raw = {"tools": legacy | explicit, "ui": {"language": "zh"}}
+                    target.write_text(json.dumps(raw), encoding="utf-8")
+                    config = load_app_config(target)
+                    directory = explicit.get("MKVTOOLNIX_PATH", "media")
+                    self.assertEqual(config.tools["MKVTOOLNIX_PATH"], directory)
+                    self.assertEqual(config.ui.language, "zh")
+                    saved_tools = json.loads(target.read_text(encoding="utf-8"))["tools"]
+                    self.assertFalse(legacy.keys() & saved_tools.keys())
+                    resolved = resolve_tool_paths(config.tools, target.parent, discover=False)
+                    for name, old_path in legacy.items():
+                        filename = Path(old_path).name + (".exe" if os.name == "nt" else "")
+                        self.assertEqual(resolved[name], str(target.parent / directory / filename))
 
     def test_legacy_edited_parameters_migrate_to_a_user_preset(self) -> None:
         config = app_config_from_mapping({

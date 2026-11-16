@@ -17,12 +17,11 @@ from typing import Callable, Optional
 import pycountry
 
 from src.bdmv import M2TS, MPLS, Chapter, pid_to_lang_from_m2ts_path
-from src.core import FFPROBE_PATH, MKV_MERGE_PATH, \
-    find_mkvtoolnix, get_mkvtoolnix_ui_language, mkvtoolnix_ui_language_arg
-from src.core import settings as core_settings
+from src.core import get_mkvtoolnix_ui_language, mkvtoolnix_ui_language_arg
 from src.core.i18n import translate_text
+from src.core.tool_paths import require_tool_path, tool_path, tool_path_exists
 from src.core.media_language import normalize_track_language
-from src.exports.utils import force_remove_file, get_time_str, parse_time_to_seconds, print_exc_terminal, get_index_to_m2ts_and_offset, run_command
+from src.exports.utils import force_remove_file, get_time_str, parse_time_to_seconds, print_exc_terminal, get_index_to_m2ts_and_offset, quote_tool_executable, run_command
 from .service_base import BluraySubtitleServiceBase
 from src.runtime.dolby_vision import inspect_dolby_vision, mux_dolby_vision_layers
 from .. import TaskCancelled
@@ -33,7 +32,7 @@ _M2TS_PARSER_CACHE: dict[str, tuple[tuple[int, int], M2TS]] = {}
 _M2TS_PARSER_CACHE_LOCK = threading.RLock()
 _MPLS_PLAY_ROWS_CACHE: dict[str, tuple[tuple[int, int], list]] = {}
 _MKVMERGE_IDENTIFY_CACHE: dict[
-    str, tuple[tuple[int, int], dict[str, object]]
+    tuple[str, str], tuple[tuple[int, int], dict[str, object]]
 ] = {}
 _MKVMERGE_IDENTIFY_CACHE_LOCK = threading.RLock()
 
@@ -286,11 +285,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         mkv_path = os.path.normpath(str(mkv_path or ''))
         if not mkv_path or not os.path.isfile(mkv_path):
             return None
-        try:
-            find_mkvtoolnix()
-        except Exception:
-            pass
-        info_exe = str(getattr(core_settings, 'MKV_INFO_PATH', '') or '').strip()
+        info_exe = tool_path("MKV_INFO_PATH")
         if not info_exe or not os.path.isfile(info_exe):
             return None
         ui_lang = 'en' if sys.platform == 'win32' else 'en_US'
@@ -530,7 +525,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
     ) -> list[dict[str, object]]:
         if not media_path or not os.path.exists(media_path):
             return []
-        exe = FFPROBE_PATH if FFPROBE_PATH else 'ffprobe'
+        exe = tool_path("FFPROBE_PATH")
         try:
             p = run_command(
                 [exe, "-v", "error", "-show_streams", "-of", "json", media_path],
@@ -615,7 +610,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
     ) -> int:
         if not media_path or not os.path.exists(media_path):
             return -1
-        exe = FFPROBE_PATH if FFPROBE_PATH else 'ffprobe'
+        exe = tool_path("FFPROBE_PATH")
         if progress_callback is None and cancel_event is None and max_frames is None:
             cmd = [exe, "-v", "error", "-count_frames", "-select_streams", "v:0",
                    "-show_entries", "stream=nb_read_frames,nb_frames", "-of", "json", media_path]
@@ -874,16 +869,12 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             signature = (int(stat.st_size), int(stat.st_mtime_ns))
         except OSError:
             return {}
+        exe = tool_path("MKV_MERGE_PATH")
+        cache_key = (exe, normalized_path)
         with _MKVMERGE_IDENTIFY_CACHE_LOCK:
-            cached = _MKVMERGE_IDENTIFY_CACHE.get(normalized_path)
+            cached = _MKVMERGE_IDENTIFY_CACHE.get(cache_key)
             if cached and cached[0] == signature:
                 return cached[1]
-        if not MKV_MERGE_PATH:
-            try:
-                find_mkvtoolnix()
-            except Exception:
-                pass
-        exe = MKV_MERGE_PATH if MKV_MERGE_PATH else 'mkvmerge'
         try:
             p = run_command(
                 [exe, "--identify", "--identification-format", "json", media_path],
@@ -903,7 +894,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         if not isinstance(data, dict):
             return {}
         with _MKVMERGE_IDENTIFY_CACHE_LOCK:
-            _MKVMERGE_IDENTIFY_CACHE[normalized_path] = (signature, data)
+            _MKVMERGE_IDENTIFY_CACHE[cache_key] = (signature, data)
         return data
 
     @staticmethod
@@ -1618,10 +1609,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
 
         if not edits:
             return
-        find_mkvtoolnix()
-        executable = core_settings.MKV_PROP_EDIT_PATH or shutil.which('mkvpropedit')
-        if not executable or not os.path.isfile(executable):
-            raise FileNotFoundError(translate_text('mkvpropedit not found'))
+        executable = require_tool_path("MKV_PROP_EDIT_PATH")
         command = [executable]
         ui_language = get_mkvtoolnix_ui_language()
         if ui_language:
@@ -1896,12 +1884,8 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                     actual=actual_count,
                 ))
 
-        try:
-            find_mkvtoolnix()
-        except Exception:
-            pass
         mkvextract_executable = (
-            core_settings.MKV_EXTRACT_PATH or shutil.which('mkvextract') or 'mkvextract'
+            tool_path("MKV_EXTRACT_PATH")
         )
         try:
             result = run_command(
@@ -3043,20 +3027,17 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
 
     @staticmethod
     def _tsmuxer_exe() -> str:
-        p = str(core_settings.TS_MUXER_PATH or '').strip()
-        if p and os.path.isfile(p):
-            return p
-        return shutil.which('tsMuxeR') or shutil.which('tsmuxer') or ''
+        path = tool_path("TS_MUXER_PATH")
+        return path if tool_path_exists("TS_MUXER_PATH", path) else ''
 
     @staticmethod
     def _run_tsmuxer_probe(m2ts_path: str) -> str:
         exe = _svc_cls()._tsmuxer_exe()
         if not exe or not m2ts_path or not os.path.isfile(m2ts_path):
             return ''
-        cmd = f'"{exe}" "{m2ts_path}"'
         try:
             p = run_command(
-                cmd,
+                [exe, m2ts_path],
                 capture_output=True,
                 text=True,
                 encoding='utf-8',
@@ -3358,7 +3339,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             return False
         ordered_pids = [pid for pid in selected_pid_order if pid in all_pids]
 
-        command_parts: list[str] = [f'"{mkvmerge_executable}"']
+        command_parts: list[str] = [quote_tool_executable(mkvmerge_executable)]
         if ui_language_argument:
             command_parts.append(ui_language_argument)
         first_demux_input_index = 0
@@ -3555,7 +3536,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
                 except Exception:
                     pass
             track_order_argument = ','.join(f'0:{track_id}' for _, track_id in ordered_mappable_slots)
-            command_parts: list[str] = [f'"{mkvmerge_executable}"']
+            command_parts: list[str] = [quote_tool_executable(mkvmerge_executable)]
             if ui_language_argument:
                 command_parts.append(ui_language_argument)
             if initial_split_argument:
@@ -3796,7 +3777,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
             )
             return False
         if defer_split:
-            trim_command_parts = [f'"{mkvmerge_executable}"']
+            trim_command_parts = [quote_tool_executable(mkvmerge_executable)]
             if ui_language_argument:
                 trim_command_parts.append(ui_language_argument)
             trim_command_parts += [
@@ -4128,11 +4109,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         ``max_play_items`` deliberately truncates recognized looping SP menus so repeated menu clips are muxed
         once instead of preserving artificial multi-hour loops.
         """
-        try:
-            find_mkvtoolnix()
-        except Exception:
-            pass
-        mkvmerge_executable = MKV_MERGE_PATH or shutil.which('mkvmerge') or 'mkvmerge'
+        mkvmerge_executable = tool_path("MKV_MERGE_PATH")
         chapter = Chapter(mpls_path)
         playlist_folder = os.path.dirname(os.path.normpath(mpls_path))
         stream_folder = os.path.normpath(os.path.join(playlist_folder, '..', 'STREAM'))
@@ -4293,11 +4270,7 @@ class MediaInfoTrackMappingMixin(BluraySubtitleServiceBase):
         if not normalized_output or getattr(self, 'movie_mode', False):
             print('[remux-fallback-split] skip: empty output path or movie_mode')
             return False
-        try:
-            find_mkvtoolnix()
-        except Exception:
-            pass
-        mkvmerge_executable = MKV_MERGE_PATH or shutil.which('mkvmerge') or 'mkvmerge'
+        mkvmerge_executable = tool_path("MKV_MERGE_PATH")
         chapter = Chapter(mpls_path)
         episode_bounds = _svc_cls()._series_episode_segments_bounds(chapter, episode_configurations)
         expected_outputs = _svc_cls()._expected_mkvmerge_split_output_paths(normalized_output, len(episode_bounds))

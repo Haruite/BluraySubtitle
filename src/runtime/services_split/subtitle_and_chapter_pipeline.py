@@ -10,9 +10,9 @@ import threading
 from typing import Callable, Optional
 
 from src.bdmv import Chapter, M2TS
-from src.core import FFMPEG_PATH, MKV_MERGE_PATH, MKV_EXTRACT_PATH, \
-    find_mkvtoolnix, mkvtoolnix_ui_language_arg, MKV_PROP_EDIT_PATH
+from src.core import mkvtoolnix_ui_language_arg
 from src.core.i18n import translate_text
+from src.core.tool_paths import tool_path
 from src.domain import MKV, Subtitle
 from src.exports.utils import get_index_to_m2ts_and_offset, append_ogm_chapter_lines, \
     force_remove_file, print_terminal_line, print_exc_terminal, get_time_str, parse_time_to_seconds, run_command
@@ -799,7 +799,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
         except Exception:
             pass
 
-        mkvmerge_executable = MKV_MERGE_PATH or 'mkvmerge'
+        mkvmerge_executable = tool_path("MKV_MERGE_PATH")
         ui_language_argument = mkvtoolnix_ui_language_arg().strip()
         command_parts: list[str] = [mkvmerge_executable]
         if ui_language_argument:
@@ -840,7 +840,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
         try:
             file_descriptor, chapter_backup = tempfile.mkstemp(suffix='.xml', prefix='ep_sp_chapters_')
             os.close(file_descriptor)
-            mkvextract_executable = MKV_EXTRACT_PATH or 'mkvextract'
+            mkvextract_executable = tool_path("MKV_EXTRACT_PATH")
             extraction_ui_argument = mkvtoolnix_ui_language_arg().strip()
             extraction_command = [mkvextract_executable]
             if extraction_ui_argument:
@@ -927,7 +927,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
             )
         try:
             if chapters_saved and chapter_backup and os.path.isfile(chapter_backup):
-                propedit_command = [MKV_PROP_EDIT_PATH or 'mkvpropedit']
+                propedit_command = [tool_path("MKV_PROP_EDIT_PATH")]
                 propedit_ui_argument = mkvtoolnix_ui_language_arg().strip()
                 if propedit_ui_argument:
                     propedit_command.extend(propedit_ui_argument.split())
@@ -1299,7 +1299,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                     if output_path.lower().endswith('.png'):
                         os.makedirs(os.path.dirname(output_path), exist_ok=True)
                         result = run_command([
-                            FFMPEG_PATH or 'ffmpeg', '-y', '-i', image_sources[0],
+                            tool_path("FFMPEG_PATH"), '-y', '-i', image_sources[0],
                             '-frames:v', '1', '-update', '1', output_path,
                         ])
                         if result.returncode != 0 or not os.path.isfile(output_path):
@@ -1330,7 +1330,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                                 )
                                 image_output = os.path.join(output_path, image_name)
                                 result = run_command([
-                                    FFMPEG_PATH or 'ffmpeg', '-y', '-i', image_source,
+                                    tool_path("FFMPEG_PATH"), '-y', '-i', image_source,
                                     '-frames:v', '1', '-update', '1', image_output,
                                 ])
                                 if result.returncode != 0 or not os.path.isfile(image_output):
@@ -1361,7 +1361,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                                 prefix='_sp_audio_', dir=os.path.dirname(output_path)
                             )
                             audio_source = os.path.join(temporary_folder, 'source.mka')
-                            command = [MKV_MERGE_PATH or 'mkvmerge']
+                            command = [tool_path("MKV_MERGE_PATH")]
                             ui_language = mkvtoolnix_ui_language_arg().strip()
                             if ui_language:
                                 command.extend(ui_language.split())
@@ -1461,13 +1461,13 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                         elif extraction_ok:
                             os.makedirs(os.path.dirname(output_path), exist_ok=True)
                             extraction_ok = run_command([
-                                FFMPEG_PATH or 'ffmpeg', '-y', '-i', audio_source,
+                                tool_path("FFMPEG_PATH"), '-y', '-i', audio_source,
                                 '-map', f'0:{audio_track}', '-c', 'copy', output_path,
                             ]).returncode == 0
                     elif len(subtitle_tracks) == 1 and not audio_tracks:
                         os.makedirs(os.path.dirname(output_path), exist_ok=True)
                         extraction_ok = run_command([
-                            FFMPEG_PATH or 'ffmpeg', '-y', '-i', source_path,
+                            tool_path("FFMPEG_PATH"), '-y', '-i', source_path,
                             '-map', f'0:{subtitle_tracks[0]}', '-c', 'copy', output_path,
                         ]).returncode == 0
                     else:
@@ -1563,8 +1563,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                     identify_ok = m2ts_selectors is not None
                 primary_ok = False
                 if identify_ok:
-                    find_mkvtoolnix()
-                    command = [MKV_MERGE_PATH or 'mkvmerge']
+                    command = [tool_path("MKV_MERGE_PATH")]
                     ui_language = mkvtoolnix_ui_language_arg().strip()
                     if ui_language:
                         command.extend(ui_language.split())
@@ -1644,7 +1643,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                             temporary_folder,
                             f'aligned-segment{output_extension}',
                         )
-                        trim_command = [MKV_MERGE_PATH or 'mkvmerge']
+                        trim_command = [tool_path("MKV_MERGE_PATH")]
                         ui_language = mkvtoolnix_ui_language_arg().strip()
                         if ui_language:
                             trim_command.extend(ui_language.split())
@@ -1728,7 +1727,7 @@ class SubtitleChapterPipelineMixin(BluraySubtitleServiceBase):
                         name=progress_values['name']
                     ))
                 if use_mpls_chapters:
-                    propedit_command = [MKV_PROP_EDIT_PATH or 'mkvpropedit']
+                    propedit_command = [tool_path("MKV_PROP_EDIT_PATH")]
                     ui_language = mkvtoolnix_ui_language_arg().strip()
                     if ui_language:
                         propedit_command.extend(ui_language.split())

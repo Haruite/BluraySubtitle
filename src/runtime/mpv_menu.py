@@ -2,17 +2,10 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from src.core.app_config import application_support_directory
-
-
-def mpv_config_directory() -> Path:
-    if mpv_home := os.environ.get("MPV_HOME"):
-        return Path(mpv_home).expanduser().absolute()
-    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "mpv"
 
 
 def menu_labels() -> dict[str, str]:
@@ -34,10 +27,9 @@ def translate_mpv_menu(original: str, language: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def mpv_language_options(language: str) -> tuple[list[str], TemporaryDirectory[str] | None]:
+def mpv_language_options(language: str, config: Path) -> tuple[list[str], TemporaryDirectory[str] | None]:
     language = "zh" if language == "zh" else "en"
     filename = f"menu.{language}.conf"
-    config = mpv_config_directory()
     generated = None
     if (config / filename).is_file():
         menu = str(config / filename)

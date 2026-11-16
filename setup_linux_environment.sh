@@ -142,12 +142,21 @@ bluray_sudo() {
 }
 
 load_configured_tool_paths() {
-  [[ -f "$SETTINGS_FILE" ]] || die "$(msg "Settings file not found: ${SETTINGS_FILE}" "找不到设置文件：${SETTINGS_FILE}")"
-  command -v python3 >/dev/null 2>&1 || die "$(msg 'python3 is required to read settings.py' '读取 settings.py 需要 python3')"
+  command -v python3 >/dev/null 2>&1 || die "$(msg 'python3 is required to read tool paths' '读取工具路径需要 python3')"
 
-  local output name value count=0
-  # Use -c so shell IDEs can parse this command substitution reliably.
-  output="$(python3 -c '
+  local output name value confirmation initial_paths reader="$SETUP_ROOT/tools/setup_tool_paths.py"
+  if ! "$package_build"; then
+    initial_paths="$(python3 -B "$reader" prepare "$SETTINGS_FILE" "$BLURAY_LANG")" || exit 1
+    if [[ -n "$initial_paths" ]]; then
+      printf '%s\n' "$initial_paths"
+      printf '%s\n' "$(msg 'Edit config.json to change any paths. Press Enter when ready to continue.' '如需修改路径，请编辑 config.json。准备好后按回车继续。')"
+      IFS= read -r confirmation || die "$(msg 'Tool paths were not confirmed.' '工具路径尚未确认。')"
+    fi
+    output="$(python3 -B "$reader" linux "$SETTINGS_FILE" "$BLURAY_LANG")" || exit 1
+  else
+    [[ -f "$SETTINGS_FILE" ]] || die "$(msg "Settings file not found: ${SETTINGS_FILE}" "找不到设置文件：${SETTINGS_FILE}")"
+    # Use -c so shell IDEs can parse this command substitution reliably.
+    output="$(python3 -c '
 import os
 import runpy
 import sys
@@ -167,10 +176,7 @@ names = (
     "VSPIPE_PATH",
     "PLUGIN_PATH",
     "TS_MUXER_PATH",
-    "MKV_INFO_PATH",
-    "MKV_MERGE_PATH",
-    "MKV_PROP_EDIT_PATH",
-    "MKV_EXTRACT_PATH",
+    "MKVTOOLNIX_PATH",
 )
 settings = runpy.run_path(sys.argv[1])
 for name in names:
@@ -182,13 +188,12 @@ for name in names:
         raise SystemExit(f"{name} contains an unsupported control character")
     print(f"{name}\t{value}")
 ' "$SETTINGS_FILE")" || die "$(msg 'Failed to load configured Linux tool paths from settings.py' '无法从 settings.py 读取 Linux 工具路径')"
+  fi
 
   while IFS=$'\t' read -r name value; do
-    [[ -n "$name" && -n "$value" ]] || continue
+    [[ -n "$name" ]] || continue
     printf -v "$name" '%s' "$value"
-    count=$((count + 1))
   done <<< "$output"
-  [[ "$count" -eq 18 ]] || die "$(msg 'settings.py did not provide every required Linux tool path' 'settings.py 未提供全部必需的 Linux 工具路径')"
 
   X264_VERSION_FILE="$(dirname -- "$X264_PATH")/x264-version.txt"
   X265_FEATURE_FILE="$(dirname -- "$X265_PATH")/x265-build-features.txt"
@@ -254,10 +259,10 @@ ensure_configured_directory() {
 }
 
 sync_mkvtoolnix_paths() {
-  install_configured_executable /usr/bin/mkvinfo "$MKV_INFO_PATH"
-  install_configured_executable /usr/bin/mkvmerge "$MKV_MERGE_PATH"
-  install_configured_executable /usr/bin/mkvpropedit "$MKV_PROP_EDIT_PATH"
-  install_configured_executable /usr/bin/mkvextract "$MKV_EXTRACT_PATH"
+  local tool
+  for tool in mkvinfo mkvmerge mkvpropedit mkvextract; do
+    install_configured_executable "/usr/bin/$tool" "$MKVTOOLNIX_PATH/$tool"
+  done
 }
 
 verify_configured_tool_paths() {
@@ -267,7 +272,7 @@ verify_configured_tool_paths() {
     "$X265_PATH" "$X264_PATH" "$SVT_AV1_PATH" "$FDK_AAC_PATH" \
     "$DOVI_TOOL_PATH" "$HDR10PLUS_TOOL_PATH" \
     "$VSEDIT_PATH" "$VSPIPE_PATH" "$TS_MUXER_PATH" \
-    "$MKV_INFO_PATH" "$MKV_MERGE_PATH" "$MKV_PROP_EDIT_PATH" "$MKV_EXTRACT_PATH"; do
+    "$MKVTOOLNIX_PATH"/{mkvinfo,mkvmerge,mkvpropedit,mkvextract}; do
     [[ -x "$path" ]] || die "$(msg "Configured tool is missing or not executable: ${path}" "配置的工具不存在或不可执行：${path}")"
   done
   [[ -d "$PLUGIN_PATH" ]] || die "$(msg "Configured plugin directory is missing: ${PLUGIN_PATH}" "配置的插件目录不存在：${PLUGIN_PATH}")"
@@ -1414,6 +1419,10 @@ install_mpv() {
   log "$(msg 'Installing mpv with VapourSynth and stable FFmpeg / FFprobe' '安装支持 VapourSynth 的 mpv 与稳定版 FFmpeg / FFprobe')"
 
   local required_mpv_version="0.41.0" shared_ffmpeg_dir=/usr/local/lib/bluraysubtitle-ffmpeg
+  local mpv_executable=mpv
+  if ! "$package_build"; then
+    mpv_executable="${MPV_PATH:-mpv}"
+  fi
   local ffmpeg_tag target_ffmpeg_version installed_ffmpeg_version installed_ffprobe_version ffmpeg_is_current="false"
   ffmpeg_tag="$(latest_stable_tag "$FFMPEG_SOURCE_REPOSITORY" '^n[0-9]+([.][0-9]+)+$' 'n*')"
   target_ffmpeg_version="${ffmpeg_tag#n}"
@@ -1426,14 +1435,14 @@ install_mpv() {
     ffmpeg_is_current="true"
   fi
 
-  if command -v mpv >/dev/null 2>&1; then
+  if command -v "$mpv_executable" >/dev/null 2>&1; then
     local current_mpv_version
-    current_mpv_version="$(mpv --version 2>/dev/null | head -n 1 | grep -oP 'mpv\s+v?\K[0-9]+(\.[0-9]+){1,2}' || true)"
+    current_mpv_version="$("$mpv_executable" --version 2>/dev/null | head -n 1 | grep -oP 'mpv\s+v?\K[0-9]+(\.[0-9]+){1,2}' || true)"
     if [[ -n "${current_mpv_version:-}" ]] && dpkg --compare-versions "$current_mpv_version" ge "$required_mpv_version"; then
       if [[ "$ffmpeg_is_current" == "true" ]] \
         && { ! "$package_build" || __mpv_tools_share_ffmpeg "$shared_ffmpeg_dir"; } \
-        && mpv --no-config --list-properties | grep -E '^[[:space:]]+default-menu$' >/dev/null \
-        && test_mpv_vapoursynth mpv; then
+        && "$mpv_executable" --no-config --list-properties | grep -E '^[[:space:]]+default-menu$' >/dev/null \
+        && test_mpv_vapoursynth "$mpv_executable"; then
         if ! "$package_build" && ! has_libdovi_development; then
           log "$(msg 'mpv installed but libdovi development files are missing, installing libdovi' '检测到 mpv 已安装但缺少 libdovi 开发文件，尝试安装 libdovi')"
           install_libdovi
@@ -1581,6 +1590,9 @@ C
     install_component "mpv-build install" env PYTHONNOUSERSITE=1 "PATH=$PATH" "PKG_CONFIG_PATH=${PKG_CONFIG_PATH:-}" ./install || exit 1
     install_configured_executable build_libs/bin/ffmpeg "$FFMPEG_PATH" || exit 1
     install_configured_executable build_libs/bin/ffprobe "$FFPROBE_PATH" || exit 1
+    if ! "$package_build" && [[ -n "$MPV_PATH" ]]; then
+      install_configured_executable "$PWD/mpv/build/mpv" "$MPV_PATH" || exit 1
+    fi
   ) || die "$(msg "mpv build/install failed. Build files were kept in ${build_dir}" "mpv 编译/安装失败。构建文件保留在 ${build_dir}")"
 
   installed_ffmpeg_version="$(__installed_ffmpeg_version "$FFMPEG_PATH" | head -n 1 || true)"
@@ -1600,6 +1612,9 @@ C
 
 install_mpv_desktop() (
   local build_dir installer status bundle=--configure
+  if [[ -n "$MPV_CONFIG_PATH" ]]; then
+    export MPV_HOME="$MPV_CONFIG_PATH"
+  fi
   installer="$(dirname -- "$BLURAY_SETUP_SOURCE")/tools/mpv/install.py"
   status="$(python3 "$installer" --status "$BLURAY_LANG" "$PLUGIN_PATH")" \
     || die "$(msg 'Could not check the mpv desktop configuration' '无法检查 mpv 桌面配置')"
@@ -1617,7 +1632,7 @@ install_mpv_desktop() (
   fi
 
   log "$(msg 'Configuring the English and Chinese mpv menus, shaders and playback presets' '正在配置 mpv 中英文菜单、着色器和播放预设')"
-  python3 "$installer" "$bundle" "$BLURAY_LANG" "$PLUGIN_PATH" \
+  python3 "$installer" "$bundle" "$BLURAY_LANG" "$PLUGIN_PATH" "${MPV_PATH:-mpv}" \
     || die "$(msg 'Could not configure the mpv desktop' '无法配置 mpv 桌面界面')"
 )
 
@@ -3770,7 +3785,13 @@ fi
 missing_deps=()
 if ! "$restore_only"; then
   for dep in "${sys_deps[@]}"; do
-    if ! dpkg-query -W -f='${Status}' "$dep" 2>/dev/null | grep -q "install ok installed"; then
+    installed_names=("$dep")
+    if [[ "$dep" == libglib2.0-0 ]]; then
+      native_arch="$(dpkg --print-architecture)"
+      installed_names=("$dep:$native_arch" "libglib2.0-0t64:$native_arch")
+    fi
+    if ! { dpkg-query -W -f='${Status}\n' "${installed_names[@]}" 2>/dev/null || true; } |
+      grep -qx 'install ok installed'; then
       missing_deps+=("$dep")
     fi
   done
@@ -3789,7 +3810,11 @@ fi
 
 export PATH="/usr/lib/ccache:$PATH"
 load_configured_tool_paths
-log "$(msg "Using tool paths from ${SETTINGS_FILE}" "使用 ${SETTINGS_FILE} 中配置的工具路径")"
+if "$package_build"; then
+  log "$(msg "Using tool paths from ${SETTINGS_FILE}" "使用 ${SETTINGS_FILE} 中配置的工具路径")"
+else
+  log "$(msg 'Using tool paths from config.json' '使用 config.json 中配置的工具路径')"
+fi
 
 linux_cache_abi="" qt_cache_abi="" vapoursynth_cache_abi=""
 if "$package_build"; then
@@ -3806,7 +3831,7 @@ fi
 
 install_mkvtoolnix
 cached_linux_build mkvtoolnix-paths sync_mkvtoolnix_paths files "" \
-  "$MKV_INFO_PATH" "$MKV_MERGE_PATH" "$MKV_PROP_EDIT_PATH" "$MKV_EXTRACT_PATH"
+  "$MKVTOOLNIX_PATH"/{mkvinfo,mkvmerge,mkvpropedit,mkvextract}
 select_vapoursynth_python
 cached_linux_build vapoursynth-sdk install_vapoursynth system \
   "$VAPOURSYNTH_TAG $("$VAPOURSYNTH_PYTHON" --version)" "$VSPIPE_PATH" /usr/local/lib/pkgconfig/vapoursynth.pc \
@@ -3844,6 +3869,11 @@ cached_linux_build lsmash install_lsmash system "${LSMASH_VERSION:-}"
 build_vs_plugins
 install_desktop_vs_plugins
 if ! "$package_build"; then
+  if [[ -n "$LIBASS_PATH" && ! -f "$LIBASS_PATH" ]]; then
+    installed_libass="$(/sbin/ldconfig -p | awk '/^[[:space:]]*libass\.so\.9 / && !found {print $NF; found=1}')"
+    [[ -f "$installed_libass" ]] || die "$(msg 'Could not find the installed libass library' '找不到已安装的 libass 库')"
+    bluray_sudo install -D -m 0644 "$installed_libass" "$LIBASS_PATH"
+  fi
   install_mpv_desktop
   install_desktop_shortcuts
 fi

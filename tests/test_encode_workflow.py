@@ -10,6 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
+from src.core.tool_paths import default_tool_paths, using_tool_paths
 from src.runtime.encode import EncodeRequest, EncodeRow, EncodeSettings, validate_encode_request
 from src.runtime.encode_results import (
     EncodeBatchResult,
@@ -25,7 +26,7 @@ from src.runtime.services_split.remux_and_episode_workflows import RemuxEpisodeW
 
 def _settings() -> EncodeSettings:
     return EncodeSettings(
-        vspipe_mode='bundle', encoder_mode='bundle', encoder_parameters='--crf 18',
+        encoder_parameters='--crf 18',
         subtitle_mode='external', encoder='x265', bit_depth='10',
         use_getnative=False, default_lossless_audio_codec='flac', output_comparison_images=False,
     )
@@ -479,7 +480,9 @@ class EncodeWorkflowTests(unittest.TestCase):
             vpy_path.write_text('a = r""\nres = core.fmtc.bitdepth(src8, bits=10)\n', encoding='utf-8')
             service = _PipelineService()
 
-            def fail_encode(_vspipe, _vpy, encoder_command, _environment):
+            def fail_encode(vspipe, _vpy, encoder_command, _environment):
+                self.assertEqual(vspipe, str(root / 'my-vspipe'))
+                self.assertEqual(encoder_command[0], str(root / 'my-x265'))
                 Path(encoder_command[encoder_command.index('-o') + 1]).write_bytes(
                     b'partial-hevc'
                 )
@@ -510,14 +513,10 @@ class EncodeWorkflowTests(unittest.TestCase):
                         'src.runtime.services_split.encode_and_audio_tasks._write_vpy_video_source_a',
                         return_value=True,
                     ),
-                    patch(
-                        'src.runtime.services_split.encode_and_audio_tasks.get_vspipe_context',
-                        return_value=('vspipe', {}),
-                    ),
-                    patch(
-                        'src.runtime.services_split.encode_and_audio_tasks.resolve_encoder_executable_path',
-                        return_value='x265',
-                    ),
+                    using_tool_paths({
+                        **default_tool_paths(), 'VSPIPE_PATH': str(root / 'my-vspipe'),
+                        'X265_PATH': str(root / 'my-x265'), 'PLUGIN_PATH': str(root),
+                    }),
                     patch(
                         'src.runtime.services_split.encode_and_audio_tasks._run_vspipe_piped_encode',
                         side_effect=fail_encode,
@@ -527,8 +526,6 @@ class EncodeWorkflowTests(unittest.TestCase):
                     service.encode_task(
                         str(output_path),
                         str(vpy_path),
-                        'bundle',
-                        'bundle',
                         '--crf 18',
                         'external',
                         encoder='x265',

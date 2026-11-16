@@ -12,8 +12,8 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from threading import Event, Thread
 
-from src.core import settings as core_settings
 from src.core.i18n import translate_text
+from src.core.tool_paths import tool_path
 from src.exports.utils import run_command
 from src.runtime import TaskCancelled
 
@@ -87,7 +87,7 @@ def _extract_prefix_timeline(
 ) -> VideoTimeline:
     """Read packets through the prefix boundary without decoding video frames."""
     command = [
-        str(core_settings.FFPROBE_PATH or 'ffprobe'),
+        tool_path("FFPROBE_PATH"),
         '-v', 'error', '-select_streams', 'v:0',
         '-show_entries', 'packet=pts_time,dts_time',
         '-of', 'compact=p=0:nk=0', source_path,
@@ -202,7 +202,7 @@ def extract_video_timeline(
             source_path, timestamps_path, frame_count, cancel_event,
         )
     command = [
-        str(core_settings.MKV_EXTRACT_PATH or 'mkvextract'),
+        tool_path("MKV_EXTRACT_PATH"),
         source_path, 'timestamps_v2', f'{track_id}:{timestamps_path}',
     ]
     process_options = {}

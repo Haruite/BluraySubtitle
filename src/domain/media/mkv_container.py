@@ -1,16 +1,15 @@
 import os
 from struct import unpack
 
-from src.core import find_mkvtoolnix, get_mkvtoolnix_ui_language
-from src.core import settings as core_settings
+from src.core import get_mkvtoolnix_ui_language
 from src.core.i18n import translate_text
+from src.core.tool_paths import require_tool_path
 from src.exports.utils import run_command
 
 
 class MKV:
     def __init__(self, path: str):
         self.path = path
-        find_mkvtoolnix()
 
     def get_duration(self):
         # Matroska IDs used by mkvinfo:
@@ -157,9 +156,7 @@ class MKV:
         if edit_file:
             if not has_meaningful_chapters:
                 return
-            executable = core_settings.MKV_PROP_EDIT_PATH
-            if not executable or not os.path.isfile(executable):
-                raise FileNotFoundError(translate_text('mkvpropedit not found'))
+            executable = require_tool_path("MKV_PROP_EDIT_PATH")
             command = [
                 executable,
                 '--ui-language', ui_language,
@@ -169,9 +166,7 @@ class MKV:
             failed_message = translate_text('mkvpropedit failed for: {path}').format(path=self.path)
             failed_output = None
         else:
-            executable = core_settings.MKV_MERGE_PATH
-            if not executable or not os.path.isfile(executable):
-                raise FileNotFoundError(translate_text('mkvmerge not found'))
+            executable = require_tool_path("MKV_MERGE_PATH")
             new_path = output_path or os.path.join(
                 os.path.dirname(self.path), 'output', os.path.basename(self.path)
             )

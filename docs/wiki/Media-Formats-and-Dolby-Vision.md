@@ -200,7 +200,7 @@ Converting ASS to PGS keeps subtitles selectable but rasterizes their appearance
 
 ## Linux desktop playback with mpv
 
-Run the [Linux setup script](../../README.md#setup_linux_environmentsh-linux-runtime-environment) and reopen mpv. Setup installs English and Simplified Chinese right-click menus. Start playback from BluraySubtitle to use the current interface language for the menu and uosc controls. The language selected during setup is the default when you open mpv directly. The desktop interface uses the display's DPI. The standard user configuration directory is `~/.config/mpv/`.
+For source installations, run the [Linux setup script](../../README.md#setup_linux_environmentsh-linux-runtime-environment) and reopen mpv. Setup installs English and Simplified Chinese right-click menus. Start playback from BluraySubtitle to use the current interface language for the menu and uosc controls. The language selected during setup is the default when you open mpv directly. The desktop interface uses the display's DPI.
 
 ### Picture, subtitles, and shaders
 

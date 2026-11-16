@@ -12,20 +12,18 @@ import tempfile
 from dataclasses import dataclass
 from typing import Callable
 
-from src.core import find_mkvtoolnix, mkvtoolnix_ui_language_arg
-from src.core import settings as core_settings
+from src.core import mkvtoolnix_ui_language_arg
 from src.core.i18n import translate_text
+from src.core.tool_paths import require_tool_path, tool_path, tool_path_exists
 from src.exports.utils import run_command
 from src.runtime.video_crop import VideoCropPlan
 from src.runtime import TaskCancelled
 
 
 def dolby_vision_tool_path() -> str:
-    """Return the configured or discoverable dovi_tool executable."""
-    configured_path = str(core_settings.DOVI_TOOL_PATH or '').strip()
-    if configured_path and os.path.isfile(configured_path):
-        return configured_path
-    return shutil.which('dovi_tool') or shutil.which('dovi_tool.exe') or ''
+    """Return the configured Dolby Vision tool when available."""
+    path = tool_path("DOVI_TOOL_PATH")
+    return path if tool_path_exists("DOVI_TOOL_PATH", path) else ''
 
 
 def read_dolby_vision_rpu_info(rpu_path: str) -> tuple[int | None, str]:
@@ -68,7 +66,7 @@ def inspect_dolby_vision(
             if video_pid is not None:
                 producer = run_command(
                     [
-                        core_settings.FFMPEG_PATH, '-nostdin', '-v', 'error',
+                        tool_path("FFMPEG_PATH"), '-nostdin', '-v', 'error',
                         '-i', source_path, '-map', f'0:i:{video_pid}',
                         '-c:v', 'copy', '-f', 'hevc', '-',
                     ],
@@ -156,13 +154,8 @@ def prepare_dolby_vision_encode(
     source_path = os.path.abspath(os.path.normpath(mkv_path))
     if not os.path.isfile(source_path):
         raise FileNotFoundError(source_path)
-    dovi_tool = dolby_vision_tool_path()
-    if not dovi_tool:
-        raise FileNotFoundError(translate_text('dovi_tool executable does not exist'))
-    find_mkvtoolnix()
-    mkvextract = str(core_settings.MKV_EXTRACT_PATH or '').strip() or shutil.which('mkvextract') or ''
-    if not mkvextract:
-        raise FileNotFoundError(translate_text('mkvextract not found'))
+    dovi_tool = require_tool_path("DOVI_TOOL_PATH")
+    mkvextract = require_tool_path("MKV_EXTRACT_PATH")
 
     os.makedirs(temporary_parent, exist_ok=True)
     work_folder = tempfile.mkdtemp(prefix='_dovi_encode_', dir=temporary_parent)

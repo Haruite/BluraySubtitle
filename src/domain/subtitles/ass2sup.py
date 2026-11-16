@@ -1,7 +1,6 @@
 import argparse
 import atexit
 import ctypes
-import ctypes.util
 import hashlib
 import os
 import shutil
@@ -19,12 +18,12 @@ from PIL import Image
 
 try:
     from src.core.i18n import translate_text
-    from src.core.settings import LIBASS_PATH
+    from src.core.tool_paths import active_tool_paths, resolve_tool_paths, tool_path
 except ModuleNotFoundError:
     # Direct script execution starts below the repository root, so expose the same shared configuration explicitly.
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
     from src.core.i18n import translate_text
-    from src.core.settings import LIBASS_PATH
+    from src.core.tool_paths import active_tool_paths, resolve_tool_paths, tool_path
 
 # Declare the incomplete ctypes structure first so its fields can contain a pointer to the same type.
 class ASS_Image(ctypes.Structure):
@@ -293,46 +292,17 @@ def write_bdn_xml(
         f.write("\n".join(lines) + "\n")
 
 
-def load_libass():
-    candidates = []
-    if LIBASS_PATH:
-        candidates.append(LIBASS_PATH)
-
-    found = ctypes.util.find_library("ass")
-    if found:
-        candidates.append(found)
-
-    if os.name == "nt":
-        candidates.extend([
-            "libass.dll",
-            "ass.dll",
-        ])
-    elif sys.platform == "darwin":
-        candidates.extend([
-            "libass.dylib",
-            "/opt/homebrew/lib/libass.dylib",
-            "/usr/local/lib/libass.dylib",
-        ])
-    else:
-        candidates.extend([
-            "libass.so.9",
-            "libass.so",
-        ])
-
-    tried = []
-    lib = None
-    for name in candidates:
-        if not name:
-            continue
-        tried.append(name)
-        try:
-            lib = ctypes.CDLL(name)
-            break
-        except OSError:
-            continue
-
-    if lib is None:
-        raise RuntimeError(translate_text("Failed to load libass; tried: {paths}").format(paths=tried))
+def load_libass(path: str | None = None):
+    if path is None:
+        path = tool_path("LIBASS_PATH")
+    try:
+        if not path:
+            raise FileNotFoundError
+        lib = ctypes.CDLL(path)
+    except OSError as error:
+        raise RuntimeError(translate_text("Failed to load libass; tried: {paths}").format(
+            paths=path or translate_text("not configured"),
+        )) from error
     lib.ass_library_init.restype = ctypes.c_void_p
     lib.ass_library_done.argtypes = [ctypes.c_void_p]
     lib.ass_renderer_init.argtypes = [ctypes.c_void_p]
@@ -368,9 +338,12 @@ def worker_cleanup():
     G_LIB = None
 
 
-def init_worker(in_path: str, out_dir: str, width: int, height: int, fps_num: int, fps_den: int, font_dir: Optional[str]):
+def init_worker(
+        in_path: str, out_dir: str, width: int, height: int, fps_num: int, fps_den: int,
+        font_dir: Optional[str], libass_path: str,
+):
     global G_LIB, G_ASS_LIB, G_RENDERER, G_TRACK, G_WIDTH, G_HEIGHT, G_FPS_NUM, G_FPS_DEN, G_OUT_DIR, G_ASS_LOG_CB
-    G_LIB = load_libass()
+    G_LIB = load_libass(libass_path)
     G_ASS_LIB = G_LIB.ass_library_init()
     callback_type = ctypes.CFUNCTYPE(None, ctypes.c_int, ctypes.c_char_p, ctypes.c_void_p, ctypes.c_void_p)
     G_ASS_LOG_CB = callback_type(lambda _level, _format, _arguments, _data: None)
@@ -492,9 +465,10 @@ def main(argv: Optional[List[str]] = None, jobs: Optional[int] = None) -> int:
             break
         tasks.append((s, e))
 
+    worker_args = (in_path, out_dir, width, height, fps_num, fps_den, args.font_dir, tool_path("LIBASS_PATH"))
     try:
         if len(tasks) == 1:
-            init_worker(in_path, out_dir, width, height, fps_num, fps_den, args.font_dir)
+            init_worker(*worker_args)
             chunks = [render_range(tasks[0])]
             worker_cleanup()
         else:
@@ -503,7 +477,7 @@ def main(argv: Optional[List[str]] = None, jobs: Optional[int] = None) -> int:
                 max_workers=jobs,
                 mp_context=ctx,
                 initializer=init_worker,
-                initargs=(in_path, out_dir, width, height, fps_num, fps_den, args.font_dir),
+                initargs=worker_args,
             ) as ex:
                 chunks = list(ex.map(render_range, tasks, chunksize=1))
     except KeyboardInterrupt:
@@ -995,4 +969,8 @@ def _run_ass2sup_pipeline() -> int:
 
 
 if __name__ == "__main__":
+    from src.core.app_config import app_config_path, load_app_config
+
+    config_path = app_config_path()
+    active_tool_paths.set(resolve_tool_paths(load_app_config(config_path).tools, config_path.parent))
     raise SystemExit(_run_ass2sup_pipeline())

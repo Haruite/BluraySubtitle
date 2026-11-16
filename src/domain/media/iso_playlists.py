@@ -4,8 +4,9 @@ import os
 import subprocess
 import threading
 
-from src.core import settings
 from src.core.i18n import translate_text
+from src.core.tool_paths import require_tool_path
+from src.exports.utils import run_command
 from src.runtime import TaskCancelled
 
 
@@ -13,17 +14,18 @@ def extract_iso_playlists(iso_path: str, destination: str, cancel_event: threadi
     """Extract into a caller-owned temporary disc root without mounting the image."""
     if cancel_event.is_set():
         raise TaskCancelled()
+    executable = require_tool_path("SEVEN_ZIP_PATH")
     playlist_folder = os.path.join(destination, 'BDMV', 'PLAYLIST')
     os.makedirs(playlist_folder, exist_ok=False)
     # Flatten just this directory into a canonical BDMV layout. No stream data,
     # loop devices, drive letters, desktop services, or mount privileges are needed.
     command = [
-        settings.SEVEN_ZIP_PATH, 'e', '-y', '-bd', '-bso0', '-bsp0', '-ssc-',
+        executable, 'e', '-y', '-bd', '-bso0', '-bsp0', '-ssc-',
         f'-o{playlist_folder}', '--', os.path.abspath(iso_path), 'BDMV/PLAYLIST/*.mpls',
     ]
     try:
-        with subprocess.Popen(
-                command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        with run_command(
+                command, wait=False, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
         ) as process:
             try:

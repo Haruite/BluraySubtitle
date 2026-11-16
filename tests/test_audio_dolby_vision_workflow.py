@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from src.core.tool_paths import default_tool_paths, using_tool_paths
 from src.runtime.audio_conversion import (
     AudioMuxFailure,
     _ExtractedAudioRun,
@@ -146,13 +147,8 @@ class AudioConversionTests(unittest.TestCase):
 
             with (
                     patch('src.runtime.audio_conversion._identify_tracks', side_effect=[source_tracks, output_tracks]),
-                    patch('src.runtime.audio_conversion.find_mkvtoolnix'),
-                    patch('src.runtime.audio_conversion.core_settings.MKV_EXTRACT_PATH', 'mkvextract'),
-                    patch('src.runtime.audio_conversion.core_settings.MKV_MERGE_PATH', 'mkvmerge'),
-                    patch('src.runtime.audio_conversion.core_settings.FFMPEG_PATH', 'ffmpeg'),
-                    patch('src.runtime.audio_conversion.core_settings.FLAC_PATH', 'flac'),
+                    using_tool_paths({**default_tool_paths(), 'MKV_EXTRACT_PATH': 'mkvextract', 'MKV_MERGE_PATH': 'mkvmerge', 'FFMPEG_PATH': 'ffmpeg', 'FLAC_PATH': 'flac'}),
                     patch('src.runtime.audio_conversion.os.cpu_count', return_value=4),
-                    patch('src.runtime.audio_conversion.shutil.which', return_value='flac'),
                     patch('src.runtime.audio_conversion.run_command', side_effect=run_command),
                     patch(
                         'src.runtime.audio_conversion.probe_audio_streams',
@@ -203,8 +199,7 @@ class AudioConversionTests(unittest.TestCase):
 
             with (
                     patch('src.runtime.audio_conversion._identify_tracks', return_value=tracks),
-                    patch('src.runtime.audio_conversion.find_mkvtoolnix'),
-                    patch('src.runtime.audio_conversion.core_settings.MKV_MERGE_PATH', 'mkvmerge'),
+                    using_tool_paths({**default_tool_paths(), 'MKV_MERGE_PATH': 'mkvmerge'}),
                     patch('src.runtime.audio_conversion.run_command', side_effect=mux),
                     patch('src.runtime.audio_conversion.write_audio_gap_sidecar', side_effect=OSError('metadata failed')),
                     self.assertRaises(AudioMuxFailure) as caught,
@@ -257,11 +252,8 @@ class AudioConversionTests(unittest.TestCase):
                 return SimpleNamespace(returncode=2)
 
             with (
-                    patch('src.runtime.audio_conversion.core_settings.FLAC_PATH', 'flac'),
-                    patch('src.runtime.audio_conversion.core_settings.FFMPEG_PATH', 'ffmpeg'),
-                    patch('src.runtime.audio_conversion.core_settings.FFPROBE_PATH', 'ffprobe'),
+                    using_tool_paths({**default_tool_paths(), 'FLAC_PATH': 'flac', 'FFMPEG_PATH': 'ffmpeg', 'FFPROBE_PATH': 'ffprobe'}),
                     patch('src.runtime.audio_conversion.get_effective_bit_depth', return_value=24),
-                    patch('src.runtime.audio_conversion.shutil.which', return_value='flac'),
                     patch('src.runtime.audio_conversion.run_command', side_effect=run_command),
             ):
                 succeeded = convert_audio_stream(
@@ -301,12 +293,7 @@ class AudioConversionTests(unittest.TestCase):
                         'src.runtime.audio_conversion._identify_tracks',
                         side_effect=[source_tracks, source_tracks],
                     ),
-                    patch('src.runtime.audio_conversion.find_mkvtoolnix'),
-                    patch('src.runtime.audio_conversion.core_settings.MKV_EXTRACT_PATH', 'mkvextract'),
-                    patch('src.runtime.audio_conversion.core_settings.MKV_MERGE_PATH', 'mkvmerge'),
-                    patch('src.runtime.audio_conversion.core_settings.FFMPEG_PATH', 'ffmpeg'),
-                    patch('src.runtime.audio_conversion.core_settings.FLAC_PATH', ''),
-                    patch('src.runtime.audio_conversion.shutil.which', return_value=''),
+                    using_tool_paths({**default_tool_paths(), 'MKV_EXTRACT_PATH': 'mkvextract', 'MKV_MERGE_PATH': 'mkvmerge', 'FFMPEG_PATH': 'ffmpeg', 'FLAC_PATH': ''}),
                     patch('src.runtime.audio_conversion.run_command', side_effect=run_command),
             ):
                 mux_with_audio_conversion(
@@ -339,8 +326,7 @@ class AudioConversionTests(unittest.TestCase):
                         'src.runtime.audio_conversion._identify_tracks',
                         side_effect=[source_tracks, RuntimeError('verification failed')],
                     ),
-                    patch('src.runtime.audio_conversion.find_mkvtoolnix'),
-                    patch('src.runtime.audio_conversion.core_settings.MKV_MERGE_PATH', 'mkvmerge'),
+                    using_tool_paths({**default_tool_paths(), 'MKV_MERGE_PATH': 'mkvmerge'}),
                     patch('src.runtime.audio_conversion.run_command', side_effect=run_mux),
             ):
                 with self.assertRaisesRegex(

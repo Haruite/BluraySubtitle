@@ -14,7 +14,7 @@ This page covers encoder settings and the VPy processing path. For container, co
 
 Ten-bit SDR output can reduce quantization/banding problems but does not turn SDR into HDR. Codec background belongs in [Media Formats](Media-Formats-and-Dolby-Vision.md#video-formats).
 
-The setup scripts build unmodified upstream SVT-AV1. The Encode controls and settings dialog offer 12-bit only when the selected bundled/system executable lists `12` among its `--input-depth` values in `--help`. If this support cannot be confirmed, 12-bit is hidden; changing the tool source refreshes the choices. Other AV1 encoders such as aomenc and rav1e use different command lines and cannot replace `SvtAv1EncApp` in this workflow.
+The setup scripts build unmodified upstream SVT-AV1. The Encode controls and settings dialog offer 12-bit only when the configured executable lists `12` among its `--input-depth` values in `--help`. Saving a new SVT-AV1 path refreshes the available bit depths. Other AV1 encoders such as aomenc and rav1e use different command lines and cannot replace `SvtAv1EncApp` in this workflow.
 
 Quality depends on source texture/motion, encoder version, rate control, preset, filters, and playback conditions. Compare representative samples from the same source at the intended viewing distance; transcoding one test result into another codec adds generation loss and biases the comparison.
 
@@ -46,7 +46,7 @@ The staging remux preserves source audio. Audio conversion and final audio clean
 
 `vspipe` supplies Y4M frames to the encoder through a pipe, so a normal encode does not need a full uncompressed intermediate video file. The encoder's elementary-stream result is temporary; the user-facing result is the final MKV.
 
-In a packaged build, choose **System** under **vspipe source** to use another VapourSynth installation for Encode and FrameCheck. Set `VSPIPE_PATH` to its VSPipe executable in **Settings → External tools**, then restart. The selected installation needs its own Python bindings, filter scripts such as `mvsfunc.py`, and compatible plugins. The encoder and VSEdit have separate settings.
+Set `VSPIPE_PATH` in **Settings → External tools** to the VSPipe executable for Encode and FrameCheck. A separate VapourSynth installation needs its own Python bindings and filter scripts such as `mvsfunc.py`. On Linux, `PLUGIN_PATH` supplies the directory of compatible plugins to the selected VSPipe. Set the encoder and VSEdit paths in their corresponding rows.
 
 ## Rate control and the meaning of presets
 

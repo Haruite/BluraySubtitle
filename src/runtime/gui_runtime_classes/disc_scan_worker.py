@@ -1,5 +1,6 @@
 """Read the disc and playlist inventory outside the GUI thread."""
 
+from contextvars import copy_context
 import os
 import shutil
 import tempfile
@@ -57,6 +58,7 @@ class DiscScanWorker(QThread):
                  temporary_folder: str, cache: dict[tuple[str, int, int], str],
                  previous_order: list[str], parent=None):
         super().__init__(parent)
+        self._context = copy_context()
         self.source_folder = source_folder
         self.function_id = function_id
         self.movie_mode = movie_mode
@@ -73,6 +75,9 @@ class DiscScanWorker(QThread):
             raise TaskCancelled()
 
     def run(self) -> None:
+        self._context.run(self._run)
+
+    def _run(self) -> None:
         created_directories = []
         try:
             sources: list[tuple[str, bool]] = []

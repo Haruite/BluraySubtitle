@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from src.core.app_config import app_config_path
 from src.core.i18n import translate_text
+from src.core.tool_paths import require_tool_path
 from src.runtime.windows_shell import launch_system_powershell
 
 if TYPE_CHECKING:
@@ -36,8 +37,6 @@ def update_executable() -> Path | None:
     if (
         runtime == Path(sys._MEIPASS).resolve()
         and executable.is_file()
-        and (runtime / "7z.exe").is_file()
-        and (runtime / "7z.dll").is_file()
         and (runtime / _UPDATER_SCRIPT).is_file()
     ):
         return executable
@@ -47,7 +46,8 @@ def update_executable() -> Path | None:
 def start_update(package: UpdatePackage) -> None:
     executable = update_executable()
     if executable is None:
-        raise RuntimeError(translate_text("Direct updates require the packaged Windows program and its bundled 7-Zip."))
+        raise RuntimeError(translate_text("Direct updates require the packaged Windows program."))
+    seven_zip = require_tool_path("SEVEN_ZIP_PATH")
     install = executable.parent
     runtime = install / "_internal"
     config_directory = app_config_path().parent
@@ -58,6 +58,7 @@ def start_update(package: UpdatePackage) -> None:
         "packageName": WINDOWS_PACKAGE_NAME,
         "workingDirectory": os.getcwd(),
         "configDirectory": relative_config,
+        "sevenZip": seven_zip,
         "url": package.url,
         "sha256": package.sha256,
         "mutex": "Local\\BluraySubtitleUpdate-" + hashlib.sha256(os.path.normcase(str(install)).encode()).hexdigest(),
@@ -66,7 +67,7 @@ def start_update(package: UpdatePackage) -> None:
         "busy": translate_text("An update is already running for this installation."),
         "invalidPackage": translate_text("The Windows update package is incomplete or has an unexpected layout."),
         "invalidDigest": translate_text("The downloaded package failed SHA-256 verification."),
-        "extractFailed": translate_text("The bundled 7-Zip could not extract the update package."),
+        "extractFailed": translate_text("7-Zip could not extract the update package using {path}.").format(path=seven_zip),
         "restartFailed": translate_text("The updated program could not start."),
         "unsafePath": translate_text("The updater found an unexpected program or update path."),
         "cleanupFailed": translate_text("The update finished, but some previous files could not be removed."),

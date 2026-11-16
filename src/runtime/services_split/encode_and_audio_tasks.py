@@ -22,8 +22,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Optional
 
-from ...core.settings import PLUGIN_PATH, VSPIPE_PATH
-from ...core import FFMPEG_PATH, FFPROBE_PATH
+from ...core.tool_paths import ENCODER_PATH_NAMES, tool_path
 from .service_base import BluraySubtitleServiceBase
 from .media_info_and_track_mapping import MediaInfoTrackMappingMixin
 from src.runtime.audio_conversion import AudioEncodingSettings, mux_with_audio_conversion
@@ -69,12 +68,10 @@ from ...exports.utils import (
     run_command,
     run_vspipe,
     print_exc_terminal,
-    get_vspipe_context,
-    get_system_vspipe_context,
+    get_vspipe_environment,
     force_remove_file,
     get_time_str,
     print_terminal_line,
-    resolve_encoder_executable_path,
 )
 from ...vs_tools.getnative import format_getnative_progress, getnative as auto_getnative
 
@@ -158,7 +155,7 @@ def _probe_video_dimensions(video_path: str) -> tuple[int, int]:
     """Return the first video stream dimensions without decoding the full source."""
     result = run_command(
         [
-            str(FFPROBE_PATH or 'ffprobe'),
+            tool_path("FFPROBE_PATH"),
             '-v',
             'error',
             '-select_streams',
@@ -594,7 +591,7 @@ def _run_vspipe_piped_encode(
     except Exception:
         stderr_is_tty = False
     use_encoder_stderr_inherit = bool(inherit_err and stderr_is_tty)
-    popen_kw: dict = {"env": env_use, "bufsize": 0}
+    popen_kw: dict = {"bufsize": 0}
     if sys.platform == "win32":
         popen_kw["creationflags"] = int(
             getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
@@ -617,6 +614,7 @@ def _run_vspipe_piped_encode(
         wait=False,
         stdout=subprocess.PIPE,
         stderr=stderr_v,
+        env=env_use,
         **popen_kw,
     )
     try:
@@ -845,6 +843,9 @@ def _estimate_native_from_image_worker(
     image_path: str,
     debug_dir: Optional[str],
     progress_jsonl: Optional[str] = None,
+    *,
+    vspipe_path: Optional[str] = None,
+    plugin_path: Optional[str] = None,
 ) -> dict:
     debug_out_dir = None
     previous_progress_jsonl = os.environ.get("BLURAYSUB_GETNATIVE_PROGRESS_JSONL")
@@ -908,8 +909,9 @@ def _estimate_native_from_image_worker(
             options = dict(
                 src_heights=tuple(range(lo, hi + 1)), debug_dir=debug_out_dir,
                 fast_mode=True, score_quit=0.0, min_kernels=16, max_kernels=16, consensus_quit=False,
+                plugin_path=tool_path("PLUGIN_PATH") if plugin_path is None else plugin_path,
             )
-            directory = Path(VSPIPE_PATH).resolve().parent
+            directory = Path(tool_path("VSPIPE_PATH") if vspipe_path is None else vspipe_path).resolve().parent
             private_runtime = directory / "python-runtime.ini"
             if sysconfig.get_platform() == "win-arm64" and private_runtime.is_file():
                 # A Classic installation on ARM64 supplies a private x64 interpreter.
@@ -1130,7 +1132,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 pattern = os.path.join(temp_dir, f"frame_{ridx:02d}_%012d.png")
                 proc = run_command(
                     [
-                        FFMPEG_PATH,
+                        tool_path("FFMPEG_PATH"),
                         "-hide_banner",
                         "-loglevel",
                         "error",
@@ -1191,6 +1193,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
 
 
     def _infer_native_resolution(self, video_path: str) -> Optional[dict]:
+        getnative_paths = {"vspipe_path": tool_path("VSPIPE_PATH"), "plugin_path": tool_path("PLUGIN_PATH")}
         # Five only decides whether to schedule another complete round. Every sample
         # already launched in the current round finishes and every usable curve is kept.
         minimum_valid_to_stop = 5
@@ -1312,6 +1315,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                                 image,
                                 GETNATIVE_DEBUG_DIR,
                                 progress_files[image],
+                                **getnative_paths,
                             )
                             future_to_image[future] = image
                         pending = set(future_to_image)
@@ -1354,7 +1358,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                         f'({type(e).__name__} - {e})'
                     )
                     for image in (candidate for candidate in batch if candidate not in recorded_images):
-                        result = _estimate_native_from_image_worker(image, GETNATIVE_DEBUG_DIR) or {}
+                        result = _estimate_native_from_image_worker(image, GETNATIVE_DEBUG_DIR, **getnative_paths) or {}
                         record_sample_result(image, result)
                 _emit_encode_log_line(
                     f'{self.t("[BluraySubtitle] getnative round complete: ")}'
@@ -1393,8 +1397,6 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
             self,
             output_file: str,
             vpy_path: str,
-            vspipe_mode: str,
-            encoder_mode: str,
             encoder_parameters: str,
             subtitle_mode: str,
             *,
@@ -1804,20 +1806,13 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                 crop_plan if auto_crop_black_borders else None,
             )
 
-            if vspipe_mode == 'bundle':
-                vspipe_exe, vspipe_env = get_vspipe_context()
-            else:
-                vspipe_exe, vspipe_env = get_system_vspipe_context(VSPIPE_PATH)
-            vspipe_env = dict(vspipe_env) if vspipe_env else dict(os.environ)
+            vspipe_exe = tool_path("VSPIPE_PATH")
+            vspipe_env = get_vspipe_environment(vspipe_exe, tool_path("PLUGIN_PATH"))
             vspipe_env['BLURAYSUB_VPY_SOURCE'] = os.path.normpath(vpy_video_source)
             # Metadata probing does not render final subtitles and needs no timecodes.
             vspipe_env.pop('BLURAYSUB_VPY_TIMECODES', None)
             vspipe_env.pop('BLURAYSUB_VPY_FRAMES', None)
-            if str(PLUGIN_PATH or '').strip() and (
-                    vspipe_mode != 'system' or not getattr(sys, 'frozen', False)
-            ):
-                vspipe_env['BLURAYSUB_PLUGIN_PATH'] = str(PLUGIN_PATH)
-            enc_exe = resolve_encoder_executable_path(encoder, encoder_mode)
+            enc_exe = tool_path(ENCODER_PATH_NAMES[encoder])
 
             failure_stage = 'Actual encode source and metadata planning'
             self._progress(text=translate_text(
@@ -2145,8 +2140,8 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                         vspipe_executable=str(vspipe_exe),
                         vpy_path=vpy_path,
                         vspipe_environment=vspipe_env,
-                        ffmpeg_executable=str(FFMPEG_PATH or 'ffmpeg'),
-                        ffprobe_executable=str(FFPROBE_PATH or 'ffprobe'),
+                        ffmpeg_executable=tool_path("FFMPEG_PATH"),
+                        ffprobe_executable=tool_path("FFPROBE_PATH"),
                         encoded_path=output_file,
                         expected_reference_frames=expected_output_frames,
                         frame_timestamps_ns=output_timeline.timestamps_ns[:-1],

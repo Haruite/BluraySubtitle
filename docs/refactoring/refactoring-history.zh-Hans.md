@@ -1361,3 +1361,12 @@ Windows 11 ARM64 上，setup 使用原生安装程序和 CPython，并单独缓�
 - 移除项目 Docker 镜像及应用中的容器专用路径。Wiki 说明如何挂载 Ubuntu 程序包、媒体和配置目录，在容器中运行。
 - Ubuntu 26.04 x64 工作流构建并验证归档。Windows x64 与 Ubuntu 共用 SFTP 发布脚本和服务器目录。Release 工作流核对提交并校验 SHA-256 后附加归档。
 - Linux setup 复用上游下载、APT 软件包、Python wheel 和编译器缓存。打包时会在安装路径和 APT 依赖匹配的情况下恢复已安装的原生工具、库和滤镜，并继续运行工具的版本与功能检查。
+
+## 工具路径迁入 `config.json`
+
+2026-11-16
+
+- `config.json` 保存工具、动态库和插件路径。将打包版旧设置文件中可识别的路径赋值作为数据导入。MKVToolNix 共用一个目录，迁移时优先从旧的 `mkvmerge` 路径获取。设置表格显示解析后的路径，包括 libass 和 mpv，Worker 在启动时捕获这些路径。
+- Desktop setup 显示初始路径并等待用户确认，再重新读取文件以确定安装路径。Windows Desktop setup 将规范化后的 VSEdit 和 MKVToolNix 路径写回 `config.json`。Linux 下的包内和外部 VSPipe 均接收所配置的插件目录。
+- Linux 播放和 Desktop setup 使用配置的 mpv 目录。Ubuntu 打包版默认使用包内 `_internal/mpv/` 目录，更新时保留该目录。
+- 验证了 Linux setup 确认后重新读取配置，以及使用相对配置目录的 mpv 播放。在模拟打包目录结构的环境中，使用真实 Linux 工具、相对 MKVToolNix 路径和外部 VapourSynth 插件目录完成了 6 帧 HEVC 10-bit MKV 压制和 FrameCheck。

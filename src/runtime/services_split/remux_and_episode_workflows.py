@@ -11,11 +11,12 @@ from dataclasses import replace
 from typing import Optional
 
 from src.bdmv import Chapter
-from src.core import find_mkvtoolnix, mkvtoolnix_ui_language_arg
-from src.core import settings as core_settings
+from src.core import mkvtoolnix_ui_language_arg
 from src.core.i18n import translate_text
+from src.core.tool_paths import require_tool_path, tool_path
 from src.domain import MKV
 from src.exports.utils import (
+    quote_tool_executable,
     get_index_to_m2ts_and_offset,
     get_time_str,
     force_remove_file,
@@ -102,8 +103,6 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
 
     def _prepare_remux_main_jobs(self, request: RemuxRequest) -> tuple[str, list[RemuxMainJob]]:
         """Resolve every selected main playlist and all output paths before the first write."""
-        if request.ensure_tools:
-            find_mkvtoolnix()
         self.track_selection_config = copy.deepcopy(
             request.track_selection_config or {}
         )
@@ -400,10 +399,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                             translate_text('Output file already exists: {path}').format(path=output_path)
                         )
         if any(job.track_language_overrides for job in jobs):
-            find_mkvtoolnix()
-            mkvpropedit_path = core_settings.MKV_PROP_EDIT_PATH or shutil.which('mkvpropedit')
-            if not mkvpropedit_path or not os.path.isfile(mkvpropedit_path):
-                raise FileNotFoundError(translate_text('mkvpropedit not found'))
+            require_tool_path("MKV_PROP_EDIT_PATH")
         return dst_folder, jobs
 
     def _prepare_sp_jobs(
@@ -670,10 +666,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             ))
 
         if any(job.track_language_overrides for job in planned_jobs):
-            find_mkvtoolnix()
-            mkvpropedit_path = core_settings.MKV_PROP_EDIT_PATH or shutil.which('mkvpropedit')
-            if not mkvpropedit_path or not os.path.isfile(mkvpropedit_path):
-                raise FileNotFoundError(translate_text('mkvpropedit not found'))
+            require_tool_path("MKV_PROP_EDIT_PATH")
         return planned_jobs
 
     def _build_main_episode_mkvs(
@@ -1071,11 +1064,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             output_name = resolved_title
 
         bdmv_vol = '0' * (3 - len(str(bdmv_index))) + str(bdmv_index)
-        try:
-            find_mkvtoolnix()
-        except Exception:
-            pass
-        mkvmerge_exe = core_settings.MKV_MERGE_PATH or shutil.which('mkvmerge') or 'mkvmerge'
+        mkvmerge_exe = quote_tool_executable(tool_path("MKV_MERGE_PATH"))
         if getattr(self, 'movie_mode', False):
             try:
                 output_name_from_conf = str(confs[0].get('output_name') or '').strip()
@@ -1096,7 +1085,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
                 output_file = os.path.join(out_dir, out_base)
             default_cover_opts = (f'--attachment-name Cover.jpg --attach-file "{cover}"' if cover else '')
             default_cmd = (
-                f'"{mkvmerge_exe}" {mkvtoolnix_ui_language_arg()} '
+                f'{mkvmerge_exe} {mkvtoolnix_ui_language_arg()} '
                 f'--chapter-language eng -o "{output_file}" '
                 f'{default_cover_opts} "{mpls_path}"').strip()
             # A main playlist owns one command; placeholders cover all output ranges for that playlist.
@@ -1163,7 +1152,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             else:
                 split_arg = (f'--split chapters:{chapter_split}' if chapter_split else '')
             default_cmd = (
-                f'"{mkvmerge_exe}" {mkvtoolnix_ui_language_arg()} {split_arg} '
+                f'{mkvmerge_exe} {mkvtoolnix_ui_language_arg()} {split_arg} '
                 f'-o "{output_file}" {default_cover_opts} '
                 f'"{mpls_path}"').strip()
             # A main playlist owns one command; split placeholders describe every selected episode range.
@@ -1598,7 +1587,7 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             ):
                 return
             os.makedirs(comparison_folder, exist_ok=True)
-            ffmpeg_path = str(core_settings.FFMPEG_PATH or 'ffmpeg')
+            ffmpeg_path = tool_path("FFMPEG_PATH")
             for media_path, image_path in image_pairs:
                 if os.path.exists(image_path):
                     if os.path.isfile(image_path) and os.path.getsize(image_path) > 0:
@@ -1771,8 +1760,6 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             self.encode_task(
                 row.output_path,
                 row.vpy_path,
-                request.settings.vspipe_mode,
-                request.settings.encoder_mode,
                 request.settings.encoder_parameters,
                 request.settings.subtitle_mode,
                 source_file=source_path,
@@ -2225,7 +2212,6 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             track_selection_config=copy.deepcopy(request.track_selection_config or {}),
             track_language_config=copy.deepcopy(request.track_language_config or {}),
             main_alternate_mpls=copy.deepcopy(request.main_alternate_mpls or {}),
-            ensure_tools=False,
         )
 
         staging_parent_existed = os.path.isdir(request.staging_folder)

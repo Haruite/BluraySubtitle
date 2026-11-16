@@ -1364,3 +1364,12 @@ Windows setup uses native installers and CPython on Windows 11 ARM64, with a sep
 - Removed the project Docker image and container-specific application paths. The wiki explains how to run the Ubuntu executable in a container using mounted package, media, and configuration directories.
 - The Ubuntu 26.04 x64 workflow builds and verifies the package. Windows x64 and Ubuntu use the same SFTP publisher and server directory. The Release workflow selects the matching commit and verifies SHA-256 before attaching each archive.
 - Linux setup reuses upstream downloads, APT packages, Python wheels, and compiler outputs. Package builds also restore installed native tools, libraries, and filters when their installation paths and APT dependencies match. Setup still runs the tool version and feature checks.
+
+## Tool Paths in `config.json`
+
+2026-11-16
+
+- Store tool, library, and plugin paths in `config.json`. Import recognized assignments from a frozen installation's old settings file as data. MKVToolNix uses one directory, migrated from the old `mkvmerge` path when available. The settings table shows resolved paths, including libass and mpv, and each worker captures the paths at launch.
+- Desktop setup displays initial paths, waits for confirmation, and rereads the file before using the installation paths. Windows Desktop setup writes the normalized VSEdit and MKVToolNix paths back to `config.json`. Linux VSPipe receives the configured plugin directory with both packaged and external executables.
+- Linux playback and Desktop setup use the configured mpv directory. The Ubuntu package defaults to its own `_internal/mpv/` directory and preserves it during updates.
+- Verified the Linux setup confirmation and reread and mpv playback with a relative configuration directory. With a simulated frozen layout and real Linux tools, Encode and FrameCheck completed a six-frame HEVC 10-bit MKV using a relative MKVToolNix path and an external VapourSynth plugin directory.

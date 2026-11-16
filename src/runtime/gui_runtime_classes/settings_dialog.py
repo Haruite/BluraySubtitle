@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import sys
-import tempfile
+from collections.abc import Mapping
 from dataclasses import replace
 from html import escape
 from pathlib import Path
@@ -23,20 +22,20 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
-    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QDoubleSpinBox,
     QStyle,
     QTabWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-import src.core.settings as core_settings
 from src.core.app_config import (
     MAX_BACKGROUND_BLUR,
     MAX_LOG_LINE_LIMIT,
@@ -56,6 +55,10 @@ from src.core.encode_presets import (
     encode_presets_for_encoder,
 )
 from src.core.i18n import translate_text
+from src.core.tool_paths import (
+    ENCODER_PATH_NAMES, MKVTOOLNIX_TOOLS, TOOL_DIRECTORY_NAMES, TOOL_PATH_NAMES,
+    resolve_tool_paths, tool_path_exists,
+)
 from src.core.version import (
     APP_VERSION,
     CommitInfo,
@@ -64,12 +67,8 @@ from src.core.version import (
     parse_commit_record,
     release_version,
 )
-from src.exports.utils import resolve_encoder_executable_path
 from src.runtime.desktop_integration import create_launch_shortcut
-from src.runtime.encode_source import (
-    probe_svt_av1_bit_depths,
-    probe_x265_dynamic_metadata_options,
-)
+from src.runtime.encode_source import probe_svt_av1_bit_depths
 from src.runtime.update_check import request_update_info, update_network_manager
 from src.runtime.program_update import (
     DIRECT_UPDATE_REQUIREMENT,
@@ -82,30 +81,11 @@ from src.runtime.program_update import (
     update_executable,
 )
 
-from .custom_table_widget import StyledComboBox
+from .custom_table_widget import SelectionTableWidget, StyledComboBox
 from .file_dialog import choose_path
 from .spin_box import StyledDoubleSpinBox, StyledSpinBox
 from .widget_animations import (
     AnimatedDialog, AnimatedMessageBox, supports_window_opacity, window_is_fading_out, window_opacity,
-)
-
-
-EXTERNAL_TOOL_PATH_NAMES = (
-    "SEVEN_ZIP_PATH",
-    "FLAC_PATH",
-    "FFMPEG_PATH",
-    "FFPROBE_PATH",
-    "X265_PATH",
-    "X264_PATH",
-    "SVT_AV1_PATH",
-    "FDK_AAC_PATH",
-    "VSEDIT_PATH",
-    "VSPIPE_PATH",
-    "TS_MUXER_PATH",
-    "MKV_INFO_PATH",
-    "MKV_MERGE_PATH",
-    "MKV_PROP_EDIT_PATH",
-    "MKV_EXTRACT_PATH",
 )
 
 
@@ -115,26 +95,22 @@ class SettingsDialog(AnimatedDialog):
             config: AppConfig,
             translate: Callable[[str], str],
             parent: QWidget | None = None,
-            settings_source_path: Path | None = None,
-            encoder_mode: str = "system",
             *,
-            apply_config: Callable[[AppConfig], bool] | None = None,
+            config_path: Path,
+            resolved_tools: Mapping[str, str],
+            apply_config: Callable[[AppConfig, Mapping[str, str]], bool] | None = None,
             start_update: Callable[[UpdatePackage], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self._config = config
         self._apply_config = apply_config
         self._start_update = start_update
-        self._encoder_mode = encoder_mode
         self.t = translate
         self._custom_encode_presets = list(config.encode.custom_presets)
         self._preset_editor_updating = False
-        self._settings_source_path = (
-            Path(settings_source_path)
-            if settings_source_path is not None
-            else core_settings.ensure_editable_settings_file()
-        )
-        self._settings_source_text: str | None = None
+        self._config_path = config_path
+        self._configured_tools = config.tools
+        self._resolved_tools = resolved_tools
         self._current_commit = current_commit()
         self._update_network_manager = update_network_manager(self)
         self._update_replies: tuple[QNetworkReply, QNetworkReply] | None = None
@@ -917,7 +893,7 @@ class SettingsDialog(AnimatedDialog):
         previous_depth = str(self.default_bit_depth_combo.currentData() or "10")
         supports_12_bit = encoder == "x265"
         if encoder == "svtav1":
-            executable = resolve_encoder_executable_path(encoder, self._encoder_mode)
+            executable = self._resolved_tools[ENCODER_PATH_NAMES[encoder]]
             supports_12_bit = "12" in probe_svt_av1_bit_depths(executable)
         depths = ("8", "10", "12") if supports_12_bit else ("8", "10")
         self.default_bit_depth_combo.blockSignals(True)
@@ -1165,203 +1141,99 @@ class SettingsDialog(AnimatedDialog):
     def _build_external_tools_tab(self) -> QWidget:
         tab = QWidget(self)
         layout = QVBoxLayout(tab)
-        message = QLabel(
-            self.t(
-                "Edit src/core/settings.py below. Changes take effect after restarting "
-                "the application."
-            ),
-            tab,
-        )
-        message.setWordWrap(True)
-        layout.addWidget(message)
+        description = QLabel(self.t("Relative paths are based on the directory containing {path}.").format(
+            path=self._config_path,
+        ), tab)
+        description.setWordWrap(True)
+        description.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(description)
 
-        self.external_tools_path_label = QLabel(
-            self.t("Settings file: {path}").format(path=str(self._settings_source_path)),
-            tab,
-        )
-        self.external_tools_path_label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-        )
-        self.external_tools_path_label.setWordWrap(True)
-        layout.addWidget(self.external_tools_path_label)
+        names = [
+            name for name in TOOL_PATH_NAMES
+            if sys.platform.startswith("linux") or name not in {"PLUGIN_PATH", "MPV_CONFIG_PATH"}
+        ]
+        table = SelectionTableWidget(tab)
+        table.setRowCount(len(names))
+        table.setColumnCount(3)
+        self.external_tools_table = table
+        table.setHorizontalHeaderLabels([
+            self.t("Tool name"), self.t("Configured path"), self.t("Resolved path"),
+        ])
+        table.verticalHeader().hide()
+        table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self._tool_path_edits: dict[str, QLineEdit] = {}
+        for row, name in enumerate(names):
+            table.setItem(row, 0, QTableWidgetItem(name))
+            table.setItem(row, 2, QTableWidgetItem())
+            cell = QWidget(table)
+            cell.setObjectName("toolPathCell")
+            cell_layout = QHBoxLayout(cell)
+            cell_layout.setContentsMargins(3, 2, 3, 2)
+            cell_layout.setSpacing(3)
+            edit = QLineEdit(cell)
+            edit.setToolTip(self.t("Edit the path directly or use Browse."))
+            edit.editingFinished.connect(lambda name=name: self._tool_path_edited(name))
+            self._tool_path_edits[name] = edit
+            button = QPushButton(self.t("Browse"), cell)
+            button.setAutoDefault(False)
+            button.clicked.connect(lambda _checked=False, name=name: self._browse_tool_path(name))
+            cell_layout.addWidget(edit, 1)
+            cell_layout.addWidget(button)
+            table.setCellWidget(row, 1, cell)
+        layout.addWidget(table, 1)
 
-        self.external_tools_editor = QPlainTextEdit(tab)
-        self.external_tools_editor.setObjectName("externalToolsEditor")
-        self.external_tools_editor.setLineWrapMode(
-            QPlainTextEdit.LineWrapMode.NoWrap
-        )
-        self.external_tools_editor.setFont(
-            QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
-        )
-        layout.addWidget(self.external_tools_editor, 1)
-
-        self.external_tools_status_label = QLabel("", tab)
+        self.external_tools_status_label = QLabel(tab)
         self.external_tools_status_label.setWordWrap(True)
         layout.addWidget(self.external_tools_status_label)
-
-        self.external_tools_detection_view = QPlainTextEdit(tab)
-        self.external_tools_detection_view.setObjectName("externalToolsDetectionView")
-        self.external_tools_detection_view.setReadOnly(True)
-        self.external_tools_detection_view.setFixedHeight(48)
-        self.external_tools_detection_view.setLineWrapMode(
-            QPlainTextEdit.LineWrapMode.WidgetWidth
-        )
-        layout.addWidget(self.external_tools_detection_view)
-
-        button_row = QWidget(tab)
-        button_layout = QHBoxLayout(button_row)
-        button_layout.setContentsMargins(0, 0, 0, 0)
-        reload_button = QPushButton(self.t("Reload file"), tab)
-        reload_button.clicked.connect(
-            lambda _=None: self._load_external_tools_source(show_error=True)
-        )
-        check_paths_button = QPushButton(self.t("Check tool paths"), tab)
-        check_paths_button.clicked.connect(
-            lambda _=None: self._refresh_external_tool_detection()
-        )
-        button_layout.addWidget(reload_button)
-        button_layout.addWidget(check_paths_button)
-        button_layout.addStretch(1)
-        layout.addWidget(button_row)
-        self._load_external_tools_source(show_error=False)
-        self._refresh_external_tool_detection()
+        check = QPushButton(self.t("Check tool paths"), tab)
+        check.clicked.connect(lambda: self._refresh_external_tool_detection(force=True))
+        layout.addWidget(check, alignment=Qt.AlignmentFlag.AlignLeft)
         return tab
 
-    def _refresh_external_tool_detection(self) -> None:
-        if self._settings_source_text is None:
-            self.external_tools_detection_view.clear()
-            return
-        missing: list[tuple[str, str]] = []
-        tool_path_names = list(EXTERNAL_TOOL_PATH_NAMES)
-        if core_settings.MPV_PATH:
-            tool_path_names.append("MPV_PATH")
-        x265_options = probe_x265_dynamic_metadata_options(
-            str(core_settings.X265_PATH or "")
+    def _browse_tool_path(self, name: str) -> None:
+        path = choose_path(
+            self, self.t("Select tool path"), self._resolved_tools[name] or str(self._config_path.parent),
+            directory=name in TOOL_DIRECTORY_NAMES,
         )
-        for name, required_options in (
-                ("HDR10PLUS_TOOL_PATH", {"--dhdr10-info"}),
-                ("DOVI_TOOL_PATH", {
-                    "--dolby-vision-profile",
-                    "--dolby-vision-rpu",
-                }),
-        ):
-            if required_options.issubset(x265_options):
-                tool_path_names.append(name)
-        for name in tool_path_names:
-            raw_path = str(getattr(core_settings, name, "") or "").strip()
-            expanded_path = os.path.expandvars(os.path.expanduser(raw_path))
-            if not expanded_path or not (
-                    os.path.isfile(expanded_path) or shutil.which(expanded_path)
-            ):
-                missing.append((
-                    name,
-                    raw_path or self.t("not configured"),
-                ))
-        if not missing:
-            self.external_tools_detection_view.setFixedHeight(48)
-            self.external_tools_detection_view.setStyleSheet("color: #2e9d50;")
-            self.external_tools_detection_view.setPlainText(
-                self.t("All configured tool paths in settings.py were found.")
-            )
-            return
-        setup_script = (
-            "setup_windows_environment.ps1"
-            if sys.platform == "win32"
-            else "setup_linux_environment.sh"
-        )
-        missing_lines = "\n".join(
-            f"- {name}: {path}" for name, path in missing
-        )
-        encoder_path_names = {"X264_PATH", "X265_PATH", "SVT_AV1_PATH"}
-        show_bundled_encoder_hint = (
-            sys.platform == "win32"
-            and bool(getattr(sys, "frozen", False))
-            and any(name in encoder_path_names for name, _ in missing)
-        )
-        hints: list[str] = []
-        if show_bundled_encoder_hint:
-            hints.append(self.t(
-                "Only the bundled source can be selected for x264/x265/svtav1 encoders."
-            ))
-        if not show_bundled_encoder_hint or any(name not in encoder_path_names for name, _ in missing):
-            hints.append(self.t(
-                "Run {script} from the repository root, then restart the "
-                "application and check the paths again."
-            ).format(script=setup_script))
-        self.external_tools_detection_view.setFixedHeight(120)
-        self.external_tools_detection_view.setStyleSheet("color: #d9534f;")
-        self.external_tools_detection_view.setPlainText(
-            self.t("Missing tools configured in settings.py:")
-            + "\n"
-            + missing_lines
-            + "\n"
-            + "\n".join(hints)
-        )
+        if path:
+            self._tool_path_edits[name].setText(path)
+            self._tool_path_edited(name)
 
-    def _load_external_tools_source(self, show_error: bool) -> None:
+    def _refresh_external_tool_detection(self, *, force: bool = False) -> bool:
+        table = self.external_tools_table
+        configured = self._hidden_tool_paths | {name: edit.text() for name, edit in self._tool_path_edits.items()}
         try:
-            text = self._settings_source_path.read_text(encoding="utf-8")
-        except Exception as error:
-            self._settings_source_text = None
-            self.external_tools_editor.clear()
-            self.external_tools_editor.setReadOnly(True)
-            message = self.t(
-                "Could not load external tool settings: {error}"
-            ).format(error=str(error))
-            self.external_tools_status_label.setText(message)
-            if show_error:
-                AnimatedMessageBox.warning(self, self.t("Settings"), message)
-            return
-        self._settings_source_text = text
-        self.external_tools_editor.setReadOnly(False)
-        self.external_tools_editor.setPlainText(text)
-        self.external_tools_status_label.clear()
-
-    def _save_external_tools_source(self) -> bool:
-        if self._settings_source_text is None:
-            return True
-        text = self.external_tools_editor.toPlainText()
-        if text == self._settings_source_text:
-            return True
-        try:
-            compile(text, str(self._settings_source_path), "exec")
-            normalized = text.replace("\r\n", "\n").replace("\r", "\n")
-            normalized = normalized.replace("\n", "\r\n")
-            if normalized and not normalized.endswith("\r\n"):
-                normalized += "\r\n"
-            descriptor, temporary_name = tempfile.mkstemp(
-                prefix=f".{self._settings_source_path.name}.",
-                suffix=".tmp",
-                dir=self._settings_source_path.parent,
-            )
-            try:
-                with os.fdopen(
-                        descriptor,
-                        "w",
-                        encoding="utf-8",
-                        newline="",
-                ) as stream:
-                    stream.write(normalized)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                os.replace(temporary_name, self._settings_source_path)
-            except Exception:
-                try:
-                    os.remove(temporary_name)
-                except OSError:
-                    pass
-                raise
-        except Exception as error:
-            AnimatedMessageBox.warning(
-                self,
-                self.t("Settings"),
-                self.t("Could not save external tool settings: {error}").format(
-                    error=str(error)
-                ),
-            )
+            if force or configured != self._configured_tools:
+                self._resolved_tools = resolve_tool_paths(configured, self._config_path.parent)
+                self._configured_tools = configured
+        except ValueError as error:
+            self.external_tools_status_label.setText(str(error))
             return False
-        self._settings_source_text = text
+        missing = []
+        for row, name in enumerate(self._tool_path_edits):
+            path = self._resolved_tools[name]
+            item = table.item(row, 2)
+            item.setText(path)
+            item.setToolTip(path)
+            optional = name in {"MPV_CONFIG_PATH", "MPV_PATH", "PLUGIN_PATH", "LIBASS_PATH"}
+            checked_tools = MKVTOOLNIX_TOOLS if name == "MKVTOOLNIX_PATH" else (name,)
+            if (not optional or configured[name]) and not all(
+                    tool_path_exists(tool, self._resolved_tools[tool]) for tool in checked_tools
+            ):
+                missing.append(name)
+        self.external_tools_status_label.setText(
+            self.t("The following tools could not be found or used: {tools}").format(tools=", ".join(missing))
+            if missing else self.t("All configured tool paths were found.")
+        )
         return True
+
+    def _tool_path_edited(self, name: str) -> None:
+        if self._refresh_external_tool_detection() and name == "SVT_AV1_PATH":
+            self._refresh_advanced_encode_options(refresh_presets=False)
 
     def accept(self) -> None:
         if not window_is_fading_out(self) and self._apply_settings():
@@ -1398,10 +1270,11 @@ class SettingsDialog(AnimatedDialog):
                 edit.setFocus()
                 return False
             edit.setText(path)
-        selected = self.selected_config()
-        if not self._save_external_tools_source():
+        if not self._refresh_external_tool_detection():
+            AnimatedMessageBox.warning(self, self.t("Settings"), self.external_tools_status_label.text())
             return False
-        if self._apply_config is not None and not self._apply_config(selected):
+        selected = self.selected_config()
+        if self._apply_config is not None and not self._apply_config(selected, self._resolved_tools):
             return False
         self._config = selected
         self.setWindowTitle(self.t("Settings"))
@@ -1413,6 +1286,12 @@ class SettingsDialog(AnimatedDialog):
         combo.setCurrentIndex(index if index >= 0 else 0)
 
     def _set_controls(self, config: AppConfig) -> None:
+        self._hidden_tool_paths = {
+            name: value for name, value in config.tools.items() if name not in self._tool_path_edits
+        }
+        for name, edit in self._tool_path_edits.items():
+            edit.setText(config.tools[name])
+        self._refresh_external_tool_detection()
         self._custom_encode_presets = list(config.encode.custom_presets)
         self._set_combo_data(self.function_page_combo, config.startup.function_page)
         self._set_combo_data(self.episode_mode_combo, config.startup.episode_mode)
@@ -1543,6 +1422,7 @@ class SettingsDialog(AnimatedDialog):
                 remux_output=self.remux_output_edit.text().strip(),
                 encode_output=self.encode_output_edit.text().strip(),
             ),
+            tools=self._configured_tools.copy(),
             audio=AudioPreferences(
                 flac_compression_level=self.flac_compression_spin.value(),
                 ffmpeg_flac_compression_level=(

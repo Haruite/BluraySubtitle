@@ -61,7 +61,7 @@ docker run --rm --init --platform linux/amd64 --network none \
 )
 ```
 
-在 `/data` 下选择片源，将输出路径设为 `/output`。宿主的配置目录会保存 `config.json`、可编辑的工具设置、脚本及已保存的日志。示例使用软件渲染和隔离网络。更新时在宿主机解压新版，再让 `pkg` 指向新目录。 [Docker 绑定挂载](https://docs.docker.com/engine/storage/bind-mounts/)
+在 `/data` 下选择片源，将输出路径设为 `/output`。宿主的配置目录会保存含工具路径的 `config.json`、脚本及已保存的日志。示例使用软件渲染和隔离网络。更新时在宿主机解压新版，再让 `pkg` 指向新目录。 [Docker 绑定挂载](https://docs.docker.com/engine/storage/bind-mounts/)
 
 ## 使用独立显示窗口
 

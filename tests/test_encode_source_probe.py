@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from src.core.tool_paths import default_tool_paths, using_tool_paths
 from src.runtime.encode_source import (
     ActualEncodeSource,
     extract_hdr10plus_metadata,
@@ -140,11 +141,10 @@ class EncodeSourceProbeTests(unittest.TestCase):
             metadata_path = root / 'metadata.json'
             encoded_path = root / 'encoded.hevc'
             encoded_path.write_bytes(b'encoded')
+            tool = root / 'hdr_tool'
+            tool.touch(mode=0o755)
             with (
-                    patch(
-                        'src.runtime.encode_source.core_settings.HDR10PLUS_TOOL_PATH',
-                        'hdr10plus_tool',
-                    ),
+                    using_tool_paths({**default_tool_paths(), 'HDR10PLUS_TOOL_PATH': str(tool)}),
                     patch('src.runtime.encode_source.run_command', side_effect=run_extract),
             ):
                 self.assertEqual(

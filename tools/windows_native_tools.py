@@ -16,7 +16,7 @@ import urllib.error
 import urllib.request
 
 from tools.windows_build_cache import files_under
-from tools.windows_tool_paths import MKV_SETTINGS
+from tools.windows_tool_paths import MKV_PROGRAMS
 
 
 MKV_RECIPE = "mingw-ucrt-static-qtcore-1"
@@ -234,7 +234,7 @@ def build_record(directory: Path, tool: str, *, installed: bool = False, allow_l
     """Check the build recipe, executable mapping and the recorded file hashes."""
     try:
         record = json.loads((directory / f"{tool}-build.json").read_text(encoding="utf-8"))
-        recipe, programs = (MKV_RECIPE, MKV_SETTINGS) if tool == "mkvtoolnix" else (VSEDIT_RECIPE, VSEDIT_PROGRAMS)
+        recipe, programs = (MKV_RECIPE, MKV_PROGRAMS) if tool == "mkvtoolnix" else (VSEDIT_RECIPE, VSEDIT_PROGRAMS)
         if tool == "vsedit" and windows_machine() == PE_ARM64:
             recipe = VSEDIT_ARM64_RECIPE
         if installed and record.get("installation_schema") != INSTALLATION_SCHEMA:

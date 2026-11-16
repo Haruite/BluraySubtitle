@@ -1,3 +1,4 @@
+from contextvars import copy_context
 import threading
 import traceback
 from dataclasses import dataclass
@@ -30,10 +31,14 @@ class MergeWorker(QObject):
 
     def __init__(self, request: MergeSubtitleRequest, cancel_event: threading.Event):
         super().__init__()
+        self._context = copy_context()
         self.request = request
         self.cancel_event = cancel_event
 
     def run(self):
+        self._context.run(self._run)
+
+    def _run(self):
         try:
             def progress_cb(value: Optional[int] = None, text: Optional[str] = None):
                 if value is not None:

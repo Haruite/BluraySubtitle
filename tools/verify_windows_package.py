@@ -14,7 +14,7 @@ from tools.windows_native_tools import (
     PE_ARM64, VSEDIT_PROGRAMS, VSEDIT_QT_LIBRARIES, clean_tool_environment, has_pe_machine,
     runtime_dependencies, verify_mkv_runtime, windows_machine,
 )
-from tools.windows_tool_paths import MKV_SETTINGS
+from tools.windows_tool_paths import MKV_PROGRAMS
 
 
 def verify(bundle: Path, work: Path) -> None:
@@ -33,7 +33,7 @@ def verify(bundle: Path, work: Path) -> None:
     for name in VSEDIT_QT_LIBRARIES:
         if set(internal.rglob(name)) != {qt / name}:
             raise RuntimeError(f"Unexpected bundled locations for {name}")
-    programs = [mkv / (Path(name).stem + "-native.exe") for name in MKV_SETTINGS]
+    programs = [mkv / (Path(name).stem + "-native.exe") for name in MKV_PROGRAMS]
     verify_mkv_runtime(programs, runtime_dependencies(programs, [mkv, internal]))
 
     environment = clean_tool_environment()
@@ -52,7 +52,7 @@ def verify(bundle: Path, work: Path) -> None:
             raise RuntimeError(f"{program.name} returned {result.returncode}: {result.stdout}{result.stderr}")
         return result.stdout + result.stderr
 
-    for executable in MKV_SETTINGS:
+    for executable in MKV_PROGRAMS:
         for location in (internal, mkv):
             output = run(location / executable, "--version")
             if not output.startswith(Path(executable).stem + " v"):

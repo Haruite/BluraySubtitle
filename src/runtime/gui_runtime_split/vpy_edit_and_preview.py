@@ -2,7 +2,6 @@
 
 import os
 import re
-import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -11,9 +10,9 @@ from typing import Optional
 from PyQt6.QtCore import QProcess, QProcessEnvironment
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLineEdit, QPushButton
 
-from src.core.settings import ENCODE_REMUX_LABELS, ENCODE_LABELS, PLUGIN_PATH, VSEDIT_PATH, VSPIPE_PATH, ENCODE_SP_LABELS, \
-    ENCODE_REMUX_SP_LABELS
-from src.exports.utils import print_exc_terminal, run_command
+from src.core.settings import ENCODE_REMUX_LABELS, ENCODE_LABELS, ENCODE_SP_LABELS, ENCODE_REMUX_SP_LABELS
+from src.core.tool_paths import bundle_directory, is_bundled_tool, require_tool_path, tool_path
+from src.exports.utils import print_exc_terminal, run_command, system_tool_environment
 from src.runtime.gui_runtime_classes.file_dialog import choose_path
 from src.runtime.video_timeline import (
     VPY_HARDSUB_CALL, VPY_HARDSUB_PATTERN, VPY_LEGACY_HARDSUB_CALLS,
@@ -646,7 +645,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
             return
         plugin_line = (
             '' if sys.platform == 'win32' else
-            'PLUGIN_PATH = os.environ.get("BLURAYSUB_PLUGIN_PATH") or os.path.expanduser("~/plugins")\n'
+            'PLUGIN_PATH = os.environ.get("BLURAYSUB_PLUGIN_PATH", os.path.expanduser("~/plugins"))\n'
             'if os.path.isdir(PLUGIN_PATH):\n'
             '    core.std.LoadAllPlugins(PLUGIN_PATH)\n'
         )
@@ -847,40 +846,31 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
             AnimatedMessageBox.information(self, self.t('Prompt'), self.t('File does not exist: {path}').format(path=path))
             return None
 
-        vsedit_exe = VSEDIT_PATH
-        if not vsedit_exe or not os.path.exists(vsedit_exe):
-            vsedit_exe = shutil.which('vsedit') or ''
-        if not vsedit_exe:
-            AnimatedMessageBox.information(self, self.t('Prompt'), self.t('vsedit not found, check VSEDIT_PATH or system PATH'))
-            return None
-
         try:
+            vsedit_exe = require_tool_path("VSEDIT_PATH")
             proc = QProcess(self)
-            environment = QProcessEnvironment.systemEnvironment()
+            environment = QProcessEnvironment()
+            inherited = os.environ if is_bundled_tool(vsedit_exe) else system_tool_environment()
+            for name, value in inherited.items():
+                environment.insert(name, value)
             for variable in ('QT_PLUGIN_PATH', 'QT_QPA_PLATFORM_PLUGIN_PATH', 'QML2_IMPORT_PATH', 'QML_IMPORT_PATH'):
                 environment.remove(variable)
-            plugin_path = str(PLUGIN_PATH or '').strip()
+            plugin_path = tool_path("PLUGIN_PATH")
             if sys.platform == 'win32':
-                bundle_root = str(getattr(sys, '_MEIPASS', ''))
-                bundled_editor = os.path.join(bundle_root, 'vsedit', 'vsedit.exe')
-                use_bundle = (
-                    bool(getattr(sys, 'frozen', False)) and bool(bundle_root)
-                    and os.path.normcase(os.path.abspath(vsedit_exe)) == os.path.normcase(os.path.abspath(bundled_editor))
-                )
-                runtime_dir = bundle_root if use_bundle else os.path.dirname(os.path.abspath(VSPIPE_PATH))
-                if use_bundle:
-                    plugin_path = os.path.join(runtime_dir, 'vapoursynth64', 'plugins')
-                script_library = os.path.join(runtime_dir, 'VSScript.dll')
-                packaged_script = os.path.join(runtime_dir, 'Lib', 'site-packages', 'vapoursynth', 'vsscript.dll')
-                if use_bundle and os.path.isfile(packaged_script):
-                    script_library = packaged_script
-                    plugin_path = ''
-                    environment.remove('VAPOURSYNTH_EXTRA_PLUGIN_PATH')
-                if os.path.isfile(script_library):
-                    environment.insert('VSSCRIPT_PATH', script_library)
-                    environment.insert('PATH', runtime_dir + os.pathsep + environment.value('PATH'))
-            if plugin_path:
+                vspipe = tool_path("VSPIPE_PATH")
+                runtime = bundle_directory() if is_bundled_tool(vsedit_exe) else Path(vspipe).parent
+                if runtime:
+                    script_library = runtime / 'VSScript.dll'
+                    packaged_script = runtime / 'Lib/site-packages/vapoursynth/vsscript.dll'
+                    if packaged_script.is_file():
+                        script_library = packaged_script
+                    if script_library.is_file():
+                        environment.insert('VSSCRIPT_PATH', str(script_library))
+                        environment.insert('PATH', str(runtime) + os.pathsep + environment.value('PATH'))
+            if sys.platform.startswith('linux'):
                 environment.insert('BLURAYSUB_PLUGIN_PATH', plugin_path)
+            if plugin_path:
+                environment.insert('VAPOURSYNTH_EXTRA_PLUGIN_PATH', plugin_path)
             proc.setProcessEnvironment(environment)
             proc.setProgram(vsedit_exe)
             proc.setArguments([os.path.normpath(path)])

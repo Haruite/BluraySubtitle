@@ -8,7 +8,7 @@ from tools.windows_native_tools import (
     PE_ARM64, MsvcRequired, build_record, editor_qt_files, editor_runtime_matches, exports_imported_symbols,
     file_hash, imported_symbols, msvc_environment, pe_imports, pyqt_runtime, windows_machine,
 )
-from tools.windows_tool_paths import MKV_SETTINGS
+from tools.windows_tool_paths import MKV_PROGRAMS
 
 
 def build_executable_icon(source: Path, output: Path) -> None:
@@ -60,15 +60,13 @@ def build_launchers(work: Path) -> dict[bool, Path]:
 
 
 def installed_tools(settings) -> tuple[Path, dict, Path, dict]:
-    mkv_paths = {name: Path(settings[key]).resolve() for name, key in MKV_SETTINGS.items()}
-    mkv = mkv_paths["mkvmerge.exe"].parent
+    mkv = Path(settings["MKVTOOLNIX_PATH"]).resolve()
     editor_path = Path(settings["VSEDIT_PATH"]).resolve()
     editor = editor_path.parent
     mkv_record = build_record(mkv, "mkvtoolnix")
     editor_record = build_record(editor, "vsedit")
     if (mkv.name.casefold() != "mkvtoolnix" or not mkv_record
-            or any(path.parent != mkv for path in mkv_paths.values())
-            or mkv_record["entrypoints"] != {name: path.name for name, path in mkv_paths.items()}):
+            or mkv_record["entrypoints"] != {name: name for name in MKV_PROGRAMS}):
         raise RuntimeError("Run Windows setup to install the managed MKVToolNix build")
     if editor.name.casefold() != "vsedit" or not editor_record or editor_record["entrypoints"]["vsedit.exe"] != editor_path.name:
         raise RuntimeError("Run Windows setup to install the managed VSEdit build")

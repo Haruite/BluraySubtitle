@@ -3,15 +3,10 @@
 from __future__ import annotations
 
 import os
-import shutil
 from dataclasses import dataclass
 
-from src.core import find_mkvtoolnix
-from src.core import settings as core_settings
 from src.core.i18n import translate_text
-from src.exports.utils import (
-    get_system_vspipe_context, get_vspipe_context, resolve_encoder_executable_path,
-)
+from src.core.tool_paths import ENCODER_PATH_NAMES, require_tool_path, tool_path
 from src.runtime.audio_conversion import (
     AudioEncodingSettings,
     validate_audio_cleanup_tools,
@@ -26,8 +21,6 @@ from src.runtime.sp import SpEntry
 class EncodeSettings:
     """Encode controls captured at task launch."""
 
-    vspipe_mode: str
-    encoder_mode: str
     encoder_parameters: str
     subtitle_mode: str
     encoder: str
@@ -94,8 +87,6 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
             translate_text('Unsupported encode input mode: {mode}').format(mode=request.input_mode)
         )
     valid_settings = (
-        ('vspipe_mode', request.settings.vspipe_mode, ('bundle', 'system')),
-        ('encoder_mode', request.settings.encoder_mode, ('bundle', 'system')),
         ('subtitle_mode', request.settings.subtitle_mode, ('external', 'soft', 'hard')),
         ('encoder', request.settings.encoder, ('x264', 'x265', 'svtav1')),
         ('bit_depth', request.settings.bit_depth, ('8', '10', '12')),
@@ -415,22 +406,10 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
         if os.path.splitext(row.output_path)[1].lower() in ('.mkv', '.mka', '.mks')
     ]
     if pending_video_rows:
-        if request.settings.vspipe_mode == 'bundle':
-            vspipe_path, _environment = get_vspipe_context()
-        else:
-            vspipe_path, _environment = get_system_vspipe_context(core_settings.VSPIPE_PATH)
-        if not os.path.isfile(vspipe_path):
-            raise FileNotFoundError(
-                translate_text('vspipe executable does not exist: {path}').format(path=vspipe_path)
-            )
-        encoder_path = resolve_encoder_executable_path(
-            request.settings.encoder,
-            request.settings.encoder_mode,
-        )
-        if not (os.path.isfile(encoder_path) or shutil.which(encoder_path)):
-            raise FileNotFoundError(
-                translate_text('Encoder executable does not exist: {path}').format(path=encoder_path)
-            )
+        require_tool_path("VSPIPE_PATH")
+        if tool_path("PLUGIN_PATH"):
+            require_tool_path("PLUGIN_PATH")
+        encoder_path = require_tool_path(ENCODER_PATH_NAMES[request.settings.encoder])
         if (
                 request.settings.encoder == 'svtav1'
                 and request.settings.bit_depth == '12'
@@ -442,18 +421,9 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
                 ).format(path=encoder_path)
             )
     if pending_matroska_rows:
-        find_mkvtoolnix()
-        mkvmerge_path = core_settings.MKV_MERGE_PATH or shutil.which('mkvmerge')
-        if not mkvmerge_path or not (
-                os.path.isfile(mkvmerge_path) or shutil.which(mkvmerge_path)
-        ):
-            raise FileNotFoundError(translate_text('mkvmerge not found'))
+        require_tool_path("MKV_MERGE_PATH")
         if pending_video_rows:
-            mkvextract_path = core_settings.MKV_EXTRACT_PATH or shutil.which('mkvextract')
-            if not mkvextract_path or not (
-                    os.path.isfile(mkvextract_path) or shutil.which(mkvextract_path)
-            ):
-                raise FileNotFoundError(translate_text('mkvextract not found'))
+            require_tool_path("MKV_EXTRACT_PATH")
     if request.input_mode == 'bdmv' and any(
             row.audio_tracks or row.audio_codec_choices
             for row, _is_sp_row in pending_rows
@@ -473,11 +443,7 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
             (languages or {})
             for languages in (request.track_language_config or {}).values()
     ):
-        mkvpropedit_path = core_settings.MKV_PROP_EDIT_PATH or shutil.which('mkvpropedit')
-        if not mkvpropedit_path or not (
-                os.path.isfile(mkvpropedit_path) or shutil.which(mkvpropedit_path)
-        ):
-            raise FileNotFoundError(translate_text('mkvpropedit not found'))
+        require_tool_path("MKV_PROP_EDIT_PATH")
     if (
             request.settings.output_comparison_images
             or (
@@ -488,17 +454,8 @@ def validate_encode_request(request: EncodeRequest, check_tools: bool = False) -
                 )
             )
     ):
-        for tool_name, configured_path in (
-                ('ffmpeg', core_settings.FFMPEG_PATH),
-                ('ffprobe', core_settings.FFPROBE_PATH),
-        ):
-            executable = str(configured_path or tool_name).strip()
-            if not executable or not (
-                    os.path.isfile(executable) or shutil.which(executable)
-            ):
-                raise FileNotFoundError(
-                    translate_text('{tool} not found').format(tool=tool_name)
-                )
+        require_tool_path("FFMPEG_PATH")
+        require_tool_path("FFPROBE_PATH")
 
 
 __all__ = ['EncodeRequest', 'EncodeRow', 'EncodeSettings', 'validate_encode_request']

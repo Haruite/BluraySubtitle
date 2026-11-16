@@ -1,3 +1,4 @@
+from contextvars import copy_context
 import threading
 import traceback
 from dataclasses import dataclass
@@ -28,10 +29,14 @@ class ChapterWorker(QObject):
 
     def __init__(self, request: AddChaptersRequest, cancel_event: threading.Event):
         super().__init__()
+        self._context = copy_context()
         self.request = request
         self.cancel_event = cancel_event
 
     def run(self) -> None:
+        self._context.run(self._run)
+
+    def _run(self) -> None:
         try:
             def progress_cb(value: Optional[int] = None, text: Optional[str] = None) -> None:
                 if value is not None:

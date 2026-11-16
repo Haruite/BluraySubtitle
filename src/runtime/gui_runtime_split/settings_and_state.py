@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 
 from PyQt6.QtCore import QByteArray, QTimer
 from PyQt6.QtWidgets import QComboBox, QWidget
 
 from src.core.app_config import AppConfig, UiPreferences, WindowPreferences, save_app_config
+from src.core.tool_paths import active_tool_paths
 from src.runtime.audio_conversion import AudioEncodingSettings
 from src.runtime.gui_runtime_classes.settings_dialog import SettingsDialog
 from src.runtime.program_update import UpdatePackage, start_program_update
@@ -135,7 +137,7 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
             window=replace(self._app_config.window, log_geometry=geometry),
         )
         try:
-            save_app_config(updated, self._app_config_path)
+            save_app_config(updated, self._app_config_path, preserve_tools=True)
         except Exception as error:
             self._show_app_config_error("save", error)
         else:
@@ -208,19 +210,26 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
         QTimer.singleShot(0, self._exit_application)
 
     def _show_settings_dialog(self) -> None:
-        def apply_config(config: AppConfig) -> bool:
+        def apply_config(config: AppConfig, resolved_tools: Mapping[str, str]) -> bool:
             previous = self._app_config
             previous_ui = self._current_ui_preferences()
             selected = replace(config, window=self._current_window_preferences())
             try:
-                save_app_config(selected, self._app_config_path)
+                save_app_config(
+                    selected, self._app_config_path,
+                    preserve_tools=not self._app_config_load_failed and selected.tools == previous.tools,
+                )
             except Exception as error:
                 self._show_app_config_error("save", error)
                 return False
             self._app_config = selected
             self._app_config_load_failed = False
+            tools_changed = self._resolved_tool_paths != resolved_tools
+            self._resolved_tool_paths = resolved_tools
+            active_tool_paths.set(resolved_tools)
             if selected.encode != previous.encode:
                 self._reload_encode_preset_parameters()
+            if selected.encode != previous.encode or tools_changed:
                 self._refresh_encode_tool_dependent_ui(False)
             for function_id, old_path, new_path in (
                 (3, previous.paths.remux_output, selected.paths.remux_output),
@@ -231,6 +240,8 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
                     self._auto_output_folders[function_id] = ""
                     if self.get_selected_function_id() == function_id:
                         self._restore_output_folder_for_function(function_id)
+            if tools_changed and self.get_selected_function_id() == 3:
+                self._refresh_table1_remux_cmds()
             self._apply_saved_ui_preferences(previous_ui)
             self._apply_window_opacity(dialog)
             return True
@@ -239,7 +250,8 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
             replace(self._app_config, ui=self._current_ui_preferences()),
             self.t,
             self,
-            encoder_mode=str(self.x265_mode_combo.currentData()),
+            config_path=self._app_config_path,
+            resolved_tools=self._resolved_tool_paths,
             apply_config=apply_config,
             start_update=self._start_program_update,
         )
@@ -265,7 +277,7 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
             window=self._current_window_preferences(),
             ui=self._current_ui_preferences(),
         )
-        save_app_config(updated, self._app_config_path)
+        save_app_config(updated, self._app_config_path, preserve_tools=True)
         self._app_config = updated
 
 

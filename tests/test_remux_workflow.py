@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from src.core.tool_paths import default_tool_paths, using_tool_paths
 from src.runtime.remux import RemuxMainJob, RemuxRequest
 from src.runtime.services import BluraySubtitle  # Import the composed service before its split mixins.
 from src.runtime.services_split import remux_and_episode_workflows as remux_service_module
@@ -126,9 +127,12 @@ class RemuxWorkflowTests(unittest.TestCase):
                 '_mpls_bucket': 'PrimaryAudioStreamEntries', '_mpls_slot_index': 0,
                 '_mpls_append_compatible': True,
             }
-            with patch.object(BluraySubtitle, '_mpls_track_streams', return_value=[track_row]), patch.object(
-                    remux_service_module, 'find_mkvtoolnix'), patch.object(
-                    remux_service_module.core_settings, 'MKV_PROP_EDIT_PATH', str(first)):
+            executable = root / 'mkvpropedit'
+            executable.touch(mode=0o755)
+            with (
+                    using_tool_paths({**default_tool_paths(), 'MKV_PROP_EDIT_PATH': str(executable)}),
+                    patch.object(BluraySubtitle, '_mpls_track_streams', return_value=[track_row]),
+            ):
                 _destination, jobs = RemuxEpisodeWorkflowsMixin._prepare_remux_main_jobs(
                     self._planning_owner(root), request
                 )
@@ -390,6 +394,7 @@ class RemuxWorkflowTests(unittest.TestCase):
             m2ts_path.write_bytes(b'm2ts')
             output_path.write_bytes(b'mkv')
             executable.write_bytes(b'exe')
+            executable.chmod(0o755)
             source_streams = [
                 {'index': '0', 'codec_type': 'video', 'pid': 0x1011},
                 {'index': '1', 'codec_type': 'audio', 'pid': 0x1100},
@@ -423,11 +428,12 @@ class RemuxWorkflowTests(unittest.TestCase):
             )
             run = Mock(return_value=SimpleNamespace(returncode=0, stdout='', stderr=''))
 
-            with patch.object(track_mapping_module, '_svc_cls', return_value=fake_service_class), patch.object(
-                    track_mapping_module, 'find_mkvtoolnix'), patch.object(
-                    track_mapping_module, 'get_mkvtoolnix_ui_language', return_value='en'), patch.object(
-                    track_mapping_module.core_settings, 'MKV_PROP_EDIT_PATH', str(executable)), patch.object(
-                    track_mapping_module.subprocess, 'run', run):
+            with (
+                    using_tool_paths({**default_tool_paths(), 'MKV_PROP_EDIT_PATH': str(executable)}),
+                    patch.object(track_mapping_module, '_svc_cls', return_value=fake_service_class),
+                    patch.object(track_mapping_module, 'get_mkvtoolnix_ui_language', return_value='en'),
+                    patch.object(track_mapping_module.subprocess, 'run', run),
+            ):
                 MediaInfoTrackMappingMixin._fix_output_track_languages_with_mkvpropedit(
                     str(output_path),
                     str(m2ts_path),

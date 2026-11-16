@@ -11,8 +11,8 @@ import random
 import re
 from dataclasses import dataclass
 
-from src.core import settings as core_settings
 from src.core.i18n import translate_text
+from src.core.tool_paths import tool_path
 from src.exports.utils import run_command
 
 
@@ -85,7 +85,7 @@ def stratified_crop_timestamps(
 
 
 def _probe_video_geometry_and_duration(video_path: str) -> tuple[int, int, float]:
-    ffprobe_path = str(core_settings.FFPROBE_PATH or 'ffprobe').strip()
+    ffprobe_path = tool_path("FFPROBE_PATH")
     result = run_command(
         [
             ffprobe_path,
@@ -165,7 +165,7 @@ def detect_black_borders(video_path: str) -> VideoCropPlan:
         sample_count,
         f'{os.path.normcase(source_path)}|{duration:.6f}',
     )
-    ffmpeg_path = str(core_settings.FFMPEG_PATH or 'ffmpeg').strip()
+    ffmpeg_path = tool_path("FFMPEG_PATH")
     rectangles: list[tuple[int, int, int, int]] = []
     for timestamp in timestamps:
         result = run_command(

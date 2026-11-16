@@ -15,8 +15,8 @@ from PyQt6.QtWidgets import QDialog, QVBoxLayout, QPlainTextEdit, QWidget, QHBox
     QLabel, QTableWidget, QLineEdit, QTableWidgetItem, QToolButton, QHeaderView, QComboBox
 
 from src.bdmv import pid_to_lang_from_m2ts_path
-from src.core import find_mkvtoolnix, MKV_EXTRACT_PATH, MKV_PROP_EDIT_PATH, \
-    MKV_INFO_PATH, MKV_MERGE_PATH, get_mkvtoolnix_ui_language, ENCODE_SP_LABELS
+from src.core import get_mkvtoolnix_ui_language, ENCODE_SP_LABELS
+from src.core.tool_paths import tool_path
 from src.exports.utils import run_command, mkv_codec_id_is_dts_family, print_terminal_line
 from src.runtime.audio_conversion import is_lossless_audio_codec
 from src.runtime.gui_runtime_classes.custom_table_widget import SelectionTableWidget, StyledComboBox
@@ -485,19 +485,14 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
         self._track_lossless_audio_config = cfg_out
 
     def _edit_chapters_for_mkv(self, mkv_path: str):
-        try:
-            find_mkvtoolnix()
-        except Exception as error:
-            self._show_error_dialog(str(error))
-            return
-        if not MKV_EXTRACT_PATH or not MKV_PROP_EDIT_PATH:
+        if not tool_path("MKV_EXTRACT_PATH") or not tool_path("MKV_PROP_EDIT_PATH"):
             AnimatedMessageBox.information(self, ' ', self.t('mkvextract or mkvpropedit not found'))
             return
         tmp_dir = tempfile.mkdtemp(prefix='BluraySubtitle_chapters_')
         chapter_path = os.path.join(tmp_dir, 'chapter.txt')
         ui_language = get_mkvtoolnix_ui_language()
         result = run_command(
-            [MKV_EXTRACT_PATH, '--ui-language', ui_language, mkv_path, 'chapters', '--simple', chapter_path],
+            [tool_path("MKV_EXTRACT_PATH"), '--ui-language', ui_language, mkv_path, 'chapters', '--simple', chapter_path],
             capture_output=True, text=True, encoding='utf-8', errors='ignore',
         )
         if result.returncode not in (0, 1) or not os.path.isfile(chapter_path):
@@ -540,7 +535,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                     chapter_file.write(editor.toPlainText())
                 print(f'{self.t("[chapter-debug] ")}{self.t("manual chapter edit apply: ")}{chapter_path} -> {mkv_path}')
                 result = run_command(
-                    [MKV_PROP_EDIT_PATH, '--ui-language', ui_language, mkv_path, '--chapters', chapter_path],
+                    [tool_path("MKV_PROP_EDIT_PATH"), '--ui-language', ui_language, mkv_path, '--chapters', chapter_path],
                     capture_output=True, text=True, encoding='utf-8', errors='ignore',
                 )
                 succeeded = result.returncode in (0, 1)
@@ -560,12 +555,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
     def _extract_attachment_to_temp_and_open(self, mkv_path: str, attachment_id: str, filename: str):
-        try:
-            find_mkvtoolnix()
-        except Exception as error:
-            self._show_error_dialog(str(error))
-            return
-        if not MKV_EXTRACT_PATH:
+        if not tool_path("MKV_EXTRACT_PATH"):
             AnimatedMessageBox.information(self, ' ', self.t('mkvextract not found'))
             return
         attachment_id = str(attachment_id or '').strip()
@@ -578,7 +568,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
         output_path = os.path.join(temporary_directory, safe_name)
         try:
             result = run_command(
-                [MKV_EXTRACT_PATH, '--ui-language', get_mkvtoolnix_ui_language(), mkv_path,
+                [tool_path("MKV_EXTRACT_PATH"), '--ui-language', get_mkvtoolnix_ui_language(), mkv_path,
                  'attachments', f'{attachment_id}:{output_path}'],
                 capture_output=True, text=True, encoding='utf-8', errors='ignore',
             )
@@ -594,12 +584,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
         self.open_folder_path(temporary_directory)
 
     def _extract_track_to_temp_and_open(self, mkv_path: str, track_id: int, codec_id: str):
-        try:
-            find_mkvtoolnix()
-        except Exception as error:
-            self._show_error_dialog(str(error))
-            return
-        if not MKV_EXTRACT_PATH:
+        if not tool_path("MKV_EXTRACT_PATH"):
             AnimatedMessageBox.information(self, ' ', self.t('mkvextract not found'))
             return
         codec_id = str(codec_id or '').strip()
@@ -611,7 +596,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
         output_path = os.path.join(temporary_directory, f'track{track_id}{extension}')
         try:
             result = run_command(
-                [MKV_EXTRACT_PATH, '--ui-language', get_mkvtoolnix_ui_language(), mkv_path,
+                [tool_path("MKV_EXTRACT_PATH"), '--ui-language', get_mkvtoolnix_ui_language(), mkv_path,
                  'tracks', f'{track_id}:{output_path}'],
                 capture_output=True, text=True, encoding='utf-8', errors='ignore',
             )
@@ -699,16 +684,12 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
     def _read_mkvinfo_attachments(self, mkv_path: str) -> list[dict[str, str]]:
         if not mkv_path or not os.path.exists(mkv_path):
             return []
-        try:
-            find_mkvtoolnix()
-        except Exception:
-            pass
-        if not MKV_INFO_PATH:
+        if not tool_path("MKV_INFO_PATH"):
             return []
         try:
             ui_lang = 'en' if sys.platform == 'win32' else 'en_US'
             p = run_command(
-                [MKV_INFO_PATH, mkv_path, "--ui-language", ui_lang],
+                [tool_path("MKV_INFO_PATH"), mkv_path, "--ui-language", ui_lang],
                 capture_output=True,
                 text=True,
                 encoding='utf-8',
@@ -764,16 +745,12 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
     def _read_mkvinfo_tracks(self, mkv_path: str) -> list[dict[str, object]]:
         if not mkv_path or not os.path.exists(mkv_path):
             return []
-        try:
-            find_mkvtoolnix()
-        except Exception:
-            pass
-        if not MKV_INFO_PATH:
+        if not tool_path("MKV_INFO_PATH"):
             return []
         try:
             ui_lang = 'en' if sys.platform == 'win32' else 'en_US'
             p = run_command(
-                [MKV_INFO_PATH, mkv_path, "--ui-language", ui_lang],
+                [tool_path("MKV_INFO_PATH"), mkv_path, "--ui-language", ui_lang],
                 capture_output=True,
                 text=True,
                 encoding='utf-8',
@@ -911,15 +888,11 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
     def _read_mkvmerge_attachment_ids(self, mkv_path: str) -> dict[str, str]:
         if not mkv_path or not os.path.exists(mkv_path):
             return {}
-        try:
-            find_mkvtoolnix()
-        except Exception:
-            pass
-        if not MKV_MERGE_PATH:
+        if not tool_path("MKV_MERGE_PATH"):
             return {}
         try:
             p = run_command(
-                [MKV_MERGE_PATH, "--identify", "--ui-language", "en", mkv_path],
+                [tool_path("MKV_MERGE_PATH"), "--identify", "--ui-language", "en", mkv_path],
                 capture_output=True,
                 text=True,
                 encoding='utf-8',
@@ -938,15 +911,11 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
     def _read_mkvmerge_attachment_rows(self, mkv_path: str) -> list[dict[str, str]]:
         if not mkv_path or not os.path.exists(mkv_path):
             return []
-        try:
-            find_mkvtoolnix()
-        except Exception:
-            pass
-        if not MKV_MERGE_PATH:
+        if not tool_path("MKV_MERGE_PATH"):
             return []
         try:
             p = run_command(
-                [MKV_MERGE_PATH, "--identify", "--ui-language", "en", mkv_path],
+                [tool_path("MKV_MERGE_PATH"), "--identify", "--ui-language", "en", mkv_path],
                 capture_output=True,
                 text=True,
                 encoding='utf-8',
@@ -970,10 +939,6 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
         return rows
 
     def _show_attachments_dialog(self, mkv_path: str):
-        try:
-            find_mkvtoolnix()
-        except Exception:
-            pass
 
         dlg = AnimatedDialog(self)
         dlg.setWindowTitle(self.t('Edit Attachment'))
@@ -1117,10 +1082,10 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                 file_edit.setText(os.path.normpath(path))
 
         def run_propedit(args: list[str]) -> tuple[bool, str]:
-            if not MKV_PROP_EDIT_PATH:
+            if not tool_path("MKV_PROP_EDIT_PATH"):
                 return False, self.t('mkvpropedit not found')
             command = [
-                MKV_PROP_EDIT_PATH,
+                tool_path("MKV_PROP_EDIT_PATH"),
                 '--ui-language',
                 get_mkvtoolnix_ui_language(),
                 mkv_path,
@@ -1527,11 +1492,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
                                     track_num = r + 1
                         changed.append((track_num, new_lang))
                     if changed:
-                        try:
-                            find_mkvtoolnix()
-                        except Exception:
-                            pass
-                        exe = MKV_PROP_EDIT_PATH or shutil.which('mkvpropedit') or 'mkvpropedit'
+                        exe = tool_path("MKV_PROP_EDIT_PATH")
                         if exe:
                             args = [exe]
                             try:

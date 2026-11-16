@@ -1,3 +1,4 @@
+from contextvars import copy_context
 import threading
 import traceback
 from typing import Optional
@@ -21,10 +22,14 @@ class RemuxWorker(QObject):
 
     def __init__(self, request: RemuxRequest, cancel_event: threading.Event):
         super().__init__()
+        self._context = copy_context()
         self.request = request
         self.cancel_event = cancel_event
 
     def run(self):
+        self._context.run(self._run)
+
+    def _run(self):
         try:
             from src.runtime.services_split.media_info_and_track_mapping import mpls_playlist_caches_clear
 

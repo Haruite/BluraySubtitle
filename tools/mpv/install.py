@@ -15,7 +15,8 @@ from tempfile import NamedTemporaryFile, TemporaryDirectory
 
 ASSETS = Path(__file__).resolve().parent
 sys.path.insert(0, str(ASSETS.parents[1]))
-from src.runtime.mpv_menu import menu_labels, mpv_config_directory, translate_mpv_menu
+from src.core.tool_paths import default_mpv_config_directory
+from src.runtime.mpv_menu import menu_labels, translate_mpv_menu
 
 UOSC_DIR = Path("scripts/uosc")
 UOSC_BINARY = "bin/ziggy-linux"
@@ -92,7 +93,7 @@ def write_if_changed(path: Path, content: bytes) -> None:
             temporary.unlink(missing_ok=True)
 
 
-def default_menu() -> str:
+def default_menu(executable: str = "mpv") -> str:
     with NamedTemporaryFile(mode="w", suffix=".lua", encoding="utf-8") as script:
         script.write(
             'mp.add_timeout(0, function() '
@@ -100,7 +101,7 @@ def default_menu() -> str:
         )
         script.flush()
         result = subprocess.run(
-            ["mpv", "--no-config", "--idle=yes", "--force-window=no", "--load-scripts=no",
+            [executable, "--no-config", "--idle=yes", "--force-window=no", "--load-scripts=no",
              "--really-quiet", f"--script={script.name}"],
             check=True, stdout=subprocess.PIPE, encoding="utf-8", timeout=10,
         )
@@ -357,7 +358,7 @@ def desktop_files(destination: Path, language: str, plugin_dir: Path, original_m
 
 
 def desktop_status(language: str, plugin_dir: Path) -> str:
-    destination = mpv_config_directory()
+    destination = default_mpv_config_directory()
     if not uosc_is_installed(destination):
         return "install"
     if (
@@ -375,12 +376,12 @@ def desktop_status(language: str, plugin_dir: Path) -> str:
     return "configure"
 
 
-def install(bundle: Path | None, language: str, plugin_dir: Path) -> None:
-    destination = mpv_config_directory()
+def install(bundle: Path | None, language: str, plugin_dir: Path, executable: str) -> None:
+    destination = default_mpv_config_directory()
     menu = read_text(destination / "menu.conf")
     if not menu.strip() and not os.environ.get("MPV_HOME"):
         menu = read_text(Path.home() / ".mpv/menu.conf")
-    files = desktop_files(destination, language, plugin_dir, menu if menu.strip() else default_menu())
+    files = desktop_files(destination, language, plugin_dir, menu if menu.strip() else default_menu(executable))
     install_lazy_assets(destination)
     if bundle is not None:
         install_uosc(bundle, destination)
@@ -406,4 +407,4 @@ if __name__ == "__main__":
         print(desktop_status(language, plugin_dir))
     else:
         bundle = None if sys.argv[1] == "--configure" else Path(sys.argv[1])
-        install(bundle, language, plugin_dir)
+        install(bundle, language, plugin_dir, sys.argv[4] if len(sys.argv) > 4 else "mpv")

@@ -64,6 +64,10 @@ def extract_package(plan: dict, archive: Path, destination: Path) -> Path:
 
 
 def preserve_configuration(plan: dict, runtime: Path, next_runtime: Path) -> None:
+    mpv_config = runtime / "mpv"
+    if mpv_config.is_dir():
+        shutil.copytree(mpv_config, next_runtime / "mpv", symlinks=True, dirs_exist_ok=True)
+
     relative = plan["internal_configuration"]
     if relative is None:
         return

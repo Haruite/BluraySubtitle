@@ -301,7 +301,7 @@ def _shared_stylesheet(palette: QPalette, mode: str) -> str:
         f'QDialog QPushButton:hover,QDialog QPushButton:pressed{{background:{selection};border-color:{focus};}}'
         f'QDialog QPushButton:default,QDialog QPushButton:focus{{border-color:{focus};}}'
         f'QDialog QPushButton:disabled{{background:{alternate};color:{muted_text};border-color:{edge};}}',
-        'QTableWidget QWidget#vpyPathCell{background:transparent;}'
+        'QTableWidget QWidget#vpyPathCell,QTableWidget QWidget#toolPathCell{background:transparent;}'
         'QTableWidget QComboBox,QTableWidget QLineEdit,QTableWidget QPushButton'
         f'{{border:1px solid transparent;border-radius:4px;color:{text};}}'
         'QTableWidget QComboBox{padding:2px 6px;margin:1px 2px;}'
@@ -309,6 +309,8 @@ def _shared_stylesheet(palette: QPalette, mode: str) -> str:
         f'QTableWidget QComboBox:enabled:hover{{background:{combo_hover};}}'
         f'QTableWidget QLineEdit{{background:{field_fill};border-color:{field_edge};padding:1px 4px;}}'
         f'QTableWidget QLineEdit:enabled:focus{{border-bottom-color:{focus};}}'
+        f'QTableWidget #toolPathCell QLineEdit:enabled{{border-color:{control_edge};}}'
+        f'QTableWidget #toolPathCell QLineEdit:enabled:focus{{border-bottom-color:{focus};}}'
         'QTableWidget QPushButton{padding:2px 7px;}'
         'QTableWidget QToolButton[checkable="false"]{margin:1px 2px;}'
         'QTableWidget QComboBox:disabled,QTableWidget QLineEdit:disabled'

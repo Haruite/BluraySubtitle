@@ -78,9 +78,8 @@ Keep both language versions of these standards synchronized, and record confirme
 - See the [README](../../README.md#cross-platform-support) for supported source platforms and architectures. Check changes across that range.
 - Use the latest version published by the official upstream for dependencies and bundled tools. Pin a version or commit only for a confirmed compatibility or other technical constraint.
 - Setup scripts must install every executable, library, and plugin used by their respective runtime. Source builds must explicitly enable every optional feature the application uses.
-- Windows and Linux setup must install tools and VapourSynth plugins at their platform paths when declared in `src/core/settings.py`.
-- Windows VSEdit must have its own directory named `vsedit`; setup must normalize its installation path and write the resulting `VSEDIT_PATH` back to `src/core/settings.py`.
-- Windows MKVToolNix command-line tools must share a directory named `mkvtoolnix`. Setup normalizes the directory configured for `MKV_MERGE_PATH` and writes all four resulting paths back to `src/core/settings.py`.
+- Read tool paths from `config.json` in the application and in Desktop setup. Resolve relative paths against the configuration directory and use the same resolved paths for checks and execution. A configured tool path takes precedence over discovery. On Linux, pass the configured plugin directory to VSPipe, including when its executable is outside the package.
+- Resolve all four MKVToolNix executables under `MKVTOOLNIX_PATH`. Windows setup must install VSEdit into its own directory named `vsedit` and MKVToolNix into a directory named `mkvtoolnix`. Normalize these installation paths and write the resulting values back to the configuration used for setup.
 
 ## 10. Confirmed Product Constraints
 

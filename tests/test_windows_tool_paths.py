@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tools.windows_tool_paths import MKV_SETTINGS, load_tool_paths
+from tools.windows_tool_paths import load_tool_paths
 
 
 class WindowsToolPathTests(unittest.TestCase):
@@ -12,28 +12,28 @@ class WindowsToolPathTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             settings = root / "settings.py"
-            entries = {**MKV_SETTINGS, "vsedit.exe": "VSEDIT_PATH"}
-            paths = {name: root / ("editor" if name == "VSEDIT_PATH" else "custom") / exe
-                     for exe, name in entries.items()}
+            paths = {"MKVTOOLNIX_PATH": root / "custom", "VSEDIT_PATH": root / "editor/vsedit.exe"}
             settings.write_text(
                 "import sys\n"
                 "def _bundled_path(relative, local):\n"
                 "    return relative if getattr(sys, 'frozen', False) else local\n"
-                + "".join(f"{name} = _bundled_path({exe!r}, {str(paths[name])!r})\n"
-                          for exe, name in entries.items())
-                + "if sys.platform == 'linux':\n    MKV_MERGE_PATH = '/usr/bin/mkvmerge'\n",
+                f"MKVTOOLNIX_PATH = _bundled_path('mkvtoolnix', {str(paths['MKVTOOLNIX_PATH'])!r})\n"
+                f"VSEDIT_PATH = _bundled_path('vsedit/vsedit.exe', {str(paths['VSEDIT_PATH'])!r})\n"
+                "if sys.platform == 'linux':\n    MKVTOOLNIX_PATH = '/usr/bin'\n",
                 encoding="utf-8",
             )
             with patch("sys.platform", "win32"):
-                loaded = load_tool_paths(settings, list(entries.values()))
+                loaded = load_tool_paths(settings, list(paths))
                 normalized = settings.read_bytes()
-                self.assertEqual(load_tool_paths(settings, list(entries.values())), loaded)
+                self.assertEqual(load_tool_paths(settings, list(paths)), loaded)
                 self.assertEqual(settings.read_bytes(), normalized)
-                for name, original in paths.items():
-                    folder = "vsedit" if name == "VSEDIT_PATH" else "mkvtoolnix"
-                    self.assertEqual(Path(loaded[name]), original.parent / folder / original.name)
-                    self.assertTrue(Path(loaded[name]).parent.is_dir())
+                mkv_dir = paths["MKVTOOLNIX_PATH"] / "mkvtoolnix"
+                editor = paths["VSEDIT_PATH"].parent / "vsedit/vsedit.exe"
+                self.assertEqual(Path(loaded["MKVTOOLNIX_PATH"]), mkv_dir)
+                self.assertEqual(Path(loaded["VSEDIT_PATH"]), editor)
+                self.assertTrue(mkv_dir.is_dir())
+                self.assertTrue(editor.parent.is_dir())
                 with patch("sys.frozen", True, create=True):
-                    self.assertEqual(runpy.run_path(str(settings))["MKV_MERGE_PATH"], "mkvmerge.exe")
+                    self.assertEqual(runpy.run_path(str(settings))["MKVTOOLNIX_PATH"], "mkvtoolnix")
             with patch("sys.platform", "linux"):
-                self.assertEqual(runpy.run_path(str(settings))["MKV_MERGE_PATH"], "/usr/bin/mkvmerge")
+                self.assertEqual(runpy.run_path(str(settings))["MKVTOOLNIX_PATH"], "/usr/bin")

@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import QTableWidget, QToolButton, QPlainTextEdit, QTableWid
     QAbstractItemView
 
 from src.bdmv import Chapter
-from src.core import BDMV_LABELS, DIY_BDMV_LABELS, DIY_REMUX_LABELS, find_mkvtoolnix, \
+from src.core import BDMV_LABELS, DIY_BDMV_LABELS, DIY_REMUX_LABELS, \
     ENCODE_REMUX_LABELS, ENCODE_REMUX_SP_LABELS, SUBTITLE_LABELS, ENCODE_LABELS, \
     REMUX_LABELS, CURRENT_UI_LANGUAGE, ENCODE_SP_LABELS, MPLS_INFO_LABELS, MPLS_INFO_TRACKS_LABELS
 from src.domain import Subtitle
@@ -148,10 +148,6 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
             name_seq_index: int = 0,
             name_seq_total: int = 1,
     ) -> str:
-        try:
-            find_mkvtoolnix()
-        except Exception:
-            pass
         try:
             output_folder = self._remux_dst_folder_for_cmd_template(root)
         except Exception:
@@ -1390,7 +1386,6 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                 raise ValueError(self.t('Output folder is not selected'))
             if not os.path.isdir(output_folder):
                 raise FileNotFoundError(self.t('Output folder does not exist'))
-            find_mkvtoolnix()
 
             selected_mpls = self.get_selected_mpls_no_ext()
             normalized_selected_mpls: list[tuple[str, str]] = []
@@ -1487,7 +1482,6 @@ class RemuxEpisodeLayoutMixin(BluraySubtitleGuiBase):
                         getattr(self, '_whole_main_match_track_info_by_main', {}) or {}
                     ).items()
                 },
-                ensure_tools=False,
             )
         except Exception:
             self._show_error_dialog(

@@ -21,7 +21,7 @@ from tools.windows_native_tools import (
     imported_symbols, install_build, msys_pkg_config_environment, pe_imports, record_build, runtime_dependencies, tool_version,
     verify_mkv_runtime, windows_machine,
 )
-from tools.windows_tool_paths import MKV_SETTINGS
+from tools.windows_tool_paths import MKV_PROGRAMS
 
 
 MSYS2_REQUIRED = 75
@@ -109,7 +109,7 @@ def build_icons(source: Path) -> None:
     _application = QGuiApplication.instance() or QGuiApplication(["mkvtoolnix-icons", "-platform", "offscreen"])
     icons = source / "share/icons/windows"
     icons.mkdir(parents=True, exist_ok=True)
-    for executable in MKV_SETTINGS:
+    for executable in MKV_PROGRAMS:
         name = Path(executable).stem
         svg = source / "share/icons/mkvtoolnix" / (("mkvtoolnix" if name == "mkvmerge" else name) + ".svgz")
         renderer = QSvgRenderer(QByteArray(gzip.decompress(svg.read_bytes())))
@@ -178,7 +178,7 @@ def build_cli(source: Path, msys: Path, prefix: Path, jobs: int, cxx_flags: str,
         r"sed -i -E 's/^(INKSCAPE|MAGICK|CONVERT)[[:space:]]*=.*/\1 =/' build-config",
         r"sed -i -E 's/^(QT_CFLAGS = .*)$/\1 -DQT_STATIC/' build-config",
         "export RUBYSHELL=$(cygpath -m /usr/bin/dash.exe)",
-        f"ruby ./drake -j{jobs} " + " ".join("apps:" + Path(name).stem for name in MKV_SETTINGS),
+        f"ruby ./drake -j{jobs} " + " ".join("apps:" + Path(name).stem for name in MKV_PROGRAMS),
         "",
     )), encoding="utf-8", newline="\n")
     subprocess.run([msys / "usr/bin/dash.exe", posix_work + "/" + script.name], cwd=source, env=env, check=True)
@@ -186,7 +186,7 @@ def build_cli(source: Path, msys: Path, prefix: Path, jobs: int, cxx_flags: str,
 
 def link_cli(source: Path, qtcore: Path, compiler: Path, env: dict) -> Path:
     commands = {name: shlex.split((source / "src" / (name + ".link")).read_text(encoding="utf-8"))[1:]
-                for name in MKV_SETTINGS}
+                for name in MKV_PROGRAMS}
     linked = source.parent / "linked"
     linked.mkdir()
     core = qtcore / "libQt6Core.a"
@@ -279,12 +279,12 @@ def build_from_source(args, work: Path, payload: Path, key: str, prefix: Path) -
     build_cli(source, args.msys2_root, prefix, args.jobs, cxx_flags, env)
     linked = link_cli(source, qtcore, compiler, env)
     stage_cli(source, linked, qtcore, prefix, compiler, payload, env)
-    record_build(payload, "mkvtoolnix", MKV_RECIPE, args.version, key, MKV_SETTINGS,
+    record_build(payload, "mkvtoolnix", MKV_RECIPE, args.version, key, MKV_PROGRAMS,
                  source_url=args.source, source_sha256=args.sha256, qt_version=qt_version)
 
 
 def stage_cli(source: Path, linked: Path, qtcore: Path, prefix: Path, compiler: Path, payload: Path, env: dict) -> None:
-    programs = [linked / name for name in MKV_SETTINGS]
+    programs = [linked / name for name in MKV_PROGRAMS]
     dependencies = runtime_dependencies(programs, [linked, prefix / "bin", compiler])
     verify_mkv_runtime(programs, dependencies)
     payload.mkdir()
@@ -312,7 +312,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=("version", "install"))
     parser.add_argument("directory", type=Path)
-    parser.add_argument("executables", nargs=4, metavar="EXE")
     parser.add_argument("--version", default="")
     parser.add_argument("--source")
     parser.add_argument("--sha256")
@@ -322,7 +321,7 @@ def main() -> int:
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
     parser.add_argument("--defer-msys2", action="store_true")
     args = parser.parse_args()
-    entrypoints = dict(zip(MKV_SETTINGS, args.executables, strict=True))
+    entrypoints = {name: name for name in MKV_PROGRAMS}
     if args.operation == "version":
         record = build_record(args.directory, "mkvtoolnix", installed=True)
         if record and record["entrypoints"] == entrypoints:

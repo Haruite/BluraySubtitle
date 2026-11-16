@@ -8,10 +8,10 @@ import sys
 import tempfile
 from base64 import b64decode
 from binascii import Error as BinasciiError
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from hashlib import sha256
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from src.core.encode_presets import (
     ENCODE_PRESET_NAMES,
@@ -19,6 +19,7 @@ from src.core.encode_presets import (
     encode_preset_parameters,
     encode_presets_for_encoder,
 )
+from src.core.tool_paths import MKVTOOLNIX_TOOLS, default_tool_paths, initial_tool_paths, migrate_tool_paths
 
 
 APP_CONFIG_FILENAME = "config.json"
@@ -127,6 +128,7 @@ class AppConfig:
     ui: UiPreferences = UiPreferences()
     startup: StartupPreferences = StartupPreferences()
     paths: PathPreferences = PathPreferences()
+    tools: dict[str, str] = field(default_factory=default_tool_paths)
     audio: AudioPreferences = AudioPreferences()
     remux: RemuxPreferences = RemuxPreferences()
     encode: EncodePreferences = EncodePreferences()
@@ -313,6 +315,7 @@ def app_config_from_mapping(raw: dict[str, Any]) -> AppConfig:
     fonts = _object_section(ui, "fonts")
     startup = _object_section(raw, "startup")
     paths = _object_section(raw, "paths")
+    tools = migrate_tool_paths(_object_section(raw, "tools"))
     audio = _object_section(raw, "audio")
     remux = _object_section(raw, "remux")
     encode = _object_section(raw, "encode")
@@ -416,6 +419,7 @@ def app_config_from_mapping(raw: dict[str, Any]) -> AppConfig:
             remux_output=_string_value(paths, "remux_output", ""),
             encode_output=_string_value(paths, "encode_output", ""),
         ),
+        tools={name: _string_value(tools, name, value) for name, value in default_tool_paths().items()},
         audio=AudioPreferences(
             flac_compression_level=_integer_value(
                 audio,
@@ -552,19 +556,28 @@ def app_config_from_mapping(raw: dict[str, Any]) -> AppConfig:
     )
 
 
-def _read_app_config(path: Path) -> AppConfig:
+def _read_config_mapping(path: Path) -> dict[str, Any]:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as error:
         raise ValueError(f"Invalid JSON in {path}: {error}") from error
-    return app_config_from_mapping(raw)
+    if not isinstance(raw, dict):
+        raise ValueError("Configuration root must be a JSON object")
+    return raw
 
 
-def save_app_config(config: AppConfig, path: Path | None = None) -> None:
+def save_app_config(config: AppConfig, path: Path | None = None, *, preserve_tools: bool = False) -> None:
     target = Path(path) if path is not None else app_config_path()
     if not target.parent.is_dir():
         raise FileNotFoundError(f"Configuration directory does not exist: {target.parent}")
-    text = json.dumps(asdict(config), ensure_ascii=False, indent=2).replace(
+    values = asdict(config)
+    if preserve_tools and target.is_file():
+        current = _read_config_mapping(target)
+        if "tools" in current:
+            values["tools"] = current["tools"]
+        else:
+            values.pop("tools")
+    text = json.dumps(values, ensure_ascii=False, indent=2).replace(
         "\n", "\r\n"
     ) + "\r\n"
     descriptor, temporary_name = tempfile.mkstemp(
@@ -589,15 +602,30 @@ def save_app_config(config: AppConfig, path: Path | None = None) -> None:
 def load_app_config(
         path: Path | None = None,
         template_path: Path | None = None,
+        *,
+        settings_path: Path | None = None,
+        on_tools_initialized: Callable[[AppConfig], None] | None = None,
+        require_tools: bool = False,
 ) -> AppConfig:
     target = Path(path) if path is not None else app_config_path()
-    if target.is_file():
-        return _read_app_config(target)
-    template = Path(template_path) if template_path is not None else default_config_path()
-    if not template.is_file():
-        raise FileNotFoundError(f"Default configuration does not exist: {template}")
-    config = _read_app_config(template)
-    save_app_config(config, target)
+    existing = target.is_file()
+    if existing or require_tools:
+        raw = _read_config_mapping(target)
+    else:
+        template = Path(template_path) if template_path is not None else default_config_path()
+        if not template.is_file():
+            raise FileNotFoundError(f"Default configuration does not exist: {template}")
+        raw = _read_config_mapping(template)
+    initialize_tools = "tools" not in raw
+    if initialize_tools:
+        if require_tools:
+            raise ValueError(f"Configuration is missing the tools section: {target}")
+        raw["tools"] = initial_tool_paths(target.parent, settings_path)
+    config = app_config_from_mapping(raw)
+    if not existing or initialize_tools or MKVTOOLNIX_TOOLS.keys() & raw["tools"].keys():
+        save_app_config(config, target)
+    if initialize_tools and on_tools_initialized is not None:
+        on_tools_initialized(config)
     return config
 
 

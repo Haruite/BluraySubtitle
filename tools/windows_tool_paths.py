@@ -9,23 +9,19 @@ import sys
 import tempfile
 
 
-MKV_SETTINGS = {
-    "mkvmerge.exe": "MKV_MERGE_PATH",
-    "mkvinfo.exe": "MKV_INFO_PATH",
-    "mkvpropedit.exe": "MKV_PROP_EDIT_PATH",
-    "mkvextract.exe": "MKV_EXTRACT_PATH",
-}
-
-
-def normalize_tool_path(path: Path, folder: str) -> Path:
-    path = path.expanduser().resolve()
-    if path.parent.name.casefold() != folder:
-        path = path.parent / folder / path.name
-    return path
+MKV_PROGRAMS = ("mkvmerge.exe", "mkvinfo.exe", "mkvpropedit.exe", "mkvextract.exe")
 
 
 def normalize_vsedit_path(path: Path) -> Path:
-    return normalize_tool_path(path, "vsedit")
+    path = path.expanduser().resolve()
+    if path.parent.name.casefold() != "vsedit":
+        path = path.parent / "vsedit" / path.name
+    return path
+
+
+def normalize_mkvtoolnix_path(path: Path) -> Path:
+    path = path.expanduser().resolve()
+    return path if path.name.casefold() == "mkvtoolnix" else path / "mkvtoolnix"
 
 
 def write_tool_paths(settings_path: Path, changes: dict[str, str]) -> None:
@@ -79,14 +75,13 @@ def load_tool_paths(settings_path: Path, names: list[str]) -> dict[str, str]:
 
     normalized = {}
     if "VSEDIT_PATH" in paths:
-        normalized["VSEDIT_PATH"] = normalize_vsedit_path(Path(paths["VSEDIT_PATH"]))
-    if "MKV_MERGE_PATH" in paths:
-        directory = normalize_tool_path(Path(paths["MKV_MERGE_PATH"]), "mkvtoolnix").parent
-        for name in MKV_SETTINGS.values():
-            if name in paths:
-                normalized[name] = directory / Path(paths[name]).name
-    for directory in {path.parent for path in normalized.values()}:
-        directory.mkdir(parents=True, exist_ok=True)
+        editor = normalize_vsedit_path(Path(paths["VSEDIT_PATH"]))
+        editor.parent.mkdir(parents=True, exist_ok=True)
+        normalized["VSEDIT_PATH"] = editor
+    if "MKVTOOLNIX_PATH" in paths:
+        mkv = normalize_mkvtoolnix_path(Path(paths["MKVTOOLNIX_PATH"]))
+        mkv.mkdir(parents=True, exist_ok=True)
+        normalized["MKVTOOLNIX_PATH"] = mkv
     changes = {name: str(path) for name, path in normalized.items() if str(path) != paths[name]}
     if changes:
         write_tool_paths(settings_path, changes)

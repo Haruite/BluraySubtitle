@@ -105,7 +105,7 @@ pip install PyQt6 numpy soundfile pycountry pillow matplotlib
 - `SvtAv1EncApp`
 - `fdkaac`
 
-> Configure paths and check tool availability under **Settings > External tools**. Encode can use bundled or system tools.
+> Edit and check tool paths under **Settings → External tools**. The paths are saved in `config.json`. Relative paths start from the directory containing that file.
 
 ---
 
@@ -267,10 +267,6 @@ When run over SSH, `setup_linux_environment.sh` uses **tmux** to display build l
 
 ---
 
-See [Run the Ubuntu package in Docker](docs/wiki/Run-Ubuntu-Package-in-Docker.md) for running the extracted package in a container.
-
----
-
 ## Troubleshooting
 
 - **Wrong episode mapping**
@@ -296,7 +292,7 @@ Older systems require extra compatibility patches and testing for Python, Qt, an
 
 ### Which Linux distributions can run the packaged build?
 
-The PyInstaller build targets Ubuntu 26.04 x64 and includes the multimedia tools and VapourSynth runtime. Use `setup_linux_environment.sh` to run from source on the other supported distributions.
+The PyInstaller build targets Ubuntu 26.04 x64 and includes the multimedia tools and VapourSynth runtime. On other unsupported systems, you can use Docker to run the extracted program. See [Run the Ubuntu package in Docker](docs/wiki/Run-Ubuntu-Package-in-Docker.md).
 
 ### Does encode auto-crop black borders?
 

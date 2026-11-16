@@ -31,6 +31,8 @@ def verify(bundle: Path, work: Path) -> None:
             raise RuntimeError(f"{filename} does not list the bundled VapourSynth plugins")
     if not (legal / "vapoursynth/COPYING.LESSER").stat().st_size:
         raise RuntimeError("Empty bundled VapourSynth license")
+    if not (support / "mpv").is_dir():
+        raise RuntimeError("Missing bundled mpv configuration directory")
     menu_directory = support / "resource/mpv"
     menus = [(menu_directory / f"menu.{language}.conf").read_text(encoding="utf-8") for language in ("en", "zh")]
     if not all(menu.strip() for menu in menus) or menus[0] == menus[1]:

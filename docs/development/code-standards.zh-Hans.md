@@ -78,9 +78,8 @@
 - 源码运行支持的操作系统与架构见 [README](../../README.zh-Hans.md#跨平台支持)。修改须考虑整个支持范围。
 - 依赖与随附工具使用官方上游发布的最新版本；只有已确认的兼容性问题或其他技术约束才允许固定版本或提交。
 - 安装脚本须安装各自运行环境使用的全部可执行程序、库和插件；源码构建须显式启用程序使用的全部可选功能。
-- 对于 `src/core/settings.py` 中已声明的工具和 VapourSynth 插件路径，Windows 和 Linux setup 须安装到对应平台的配置路径。
-- Windows VSEdit 必须独占名为 `vsedit` 的目录；安装脚本须规范化其安装路径，并将最终的 `VSEDIT_PATH` 写回 `src/core/settings.py`。
-- Windows MKVToolNix 命令行工具必须共用名为 `mkvtoolnix` 的目录。安装脚本须规范化 `MKV_MERGE_PATH` 配置的目录，并将四个工具的最终路径写回 `src/core/settings.py`。
+- 程序和 Desktop setup 从 `config.json` 读取工具路径。相对路径以配置目录为基准，检查和执行共用解析后的路径。显式配置的工具路径优先于自动查找。Linux 上须将所配置的插件目录传给 VSPipe，包括可执行文件位于打包目录之外的情况。
+- 四个 MKVToolNix 可执行文件统一在 `MKVTOOLNIX_PATH` 下解析。Windows 安装脚本须将 VSEdit 装到独占的 `vsedit` 目录，将 MKVToolNix 装到名为 `mkvtoolnix` 的目录，并将规范化后的安装路径写回 setup 所使用的配置。
 
 ## 10. 已确认的产品约束
 

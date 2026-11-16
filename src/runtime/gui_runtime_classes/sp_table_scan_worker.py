@@ -1,11 +1,12 @@
+from contextvars import copy_context
 import os
 import threading
 import traceback
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
+from src.core.tool_paths import tool_path
 from src.bdmv import M2TS, pid_to_lang_from_m2ts_path
-from src.core import FFMPEG_PATH
 from src.exports.utils import print_tb_string_terminal, run_command
 from src.runtime import TaskCancelled
 from src.runtime.services import BluraySubtitle
@@ -28,6 +29,7 @@ class SpTableScanWorker(QObject):
 
     def __init__(self, rows: list[dict[str, object]], cancel_event: threading.Event):
         super().__init__()
+        self._context = copy_context()
         self._rows = rows
         self._cancel_event = cancel_event
 
@@ -43,6 +45,9 @@ class SpTableScanWorker(QObject):
         }
 
     def run(self):
+        self._context.run(self._run)
+
+    def _run(self):
         """Scan rows in visible order and emit exactly one result for each row."""
         try:
             # These caches belong to one table snapshot. They must not survive a
@@ -126,7 +131,7 @@ class SpTableScanWorker(QObject):
                     # the decoder. Zero-threshold mpdecimate emits a second checksum
                     # as soon as any decoded frame differs from the first one.
                     result = run_command([
-                        FFMPEG_PATH or 'ffmpeg', '-v', 'error', '-nostdin', '-i', key,
+                        tool_path("FFMPEG_PATH"), '-v', 'error', '-nostdin', '-i', key,
                         '-map', '0:v:0', '-an', '-sn', '-dn',
                         '-vf', 'trim=end_frame=12,mpdecimate=hi=0:lo=0:frac=1',
                         '-frames:v', '2', '-f', 'framemd5', '-',

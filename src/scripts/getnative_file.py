@@ -13,6 +13,8 @@ if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
 from src.core.i18n import translate_text
+from src.core.app_config import app_config_path, load_app_config
+from src.core.tool_paths import resolve_tool_paths, using_tool_paths
 
 
 def main() -> None:
@@ -33,7 +35,10 @@ def main() -> None:
             return translate_text(text, language)
 
     started = time.perf_counter()
-    result = _GetnativeService()._infer_native_resolution(source)
+    config_path = app_config_path()
+    tools = resolve_tool_paths(load_app_config(config_path).tools, config_path.parent)
+    with using_tool_paths(tools):
+        result = _GetnativeService()._infer_native_resolution(source)
     print(result, flush=True)
     print(round(time.perf_counter() - started, 3), flush=True)
 

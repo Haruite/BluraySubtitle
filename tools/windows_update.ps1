@@ -140,6 +140,9 @@ try {
     $restartPrevious = $true
     Assert-PlainTree $executable
     Assert-PlainTree $runtime
+    if (-not (Test-Path -LiteralPath $plan.sevenZip -PathType Leaf)) {
+        throw $plan.extractFailed
+    }
 
     $uri = [Uri]$plan.url
     if ($uri.Scheme -ne 'https' -or $uri.Host -notin @('github.com', 'sbx.mysmy.top')) {
@@ -152,7 +155,7 @@ try {
     }
 
     [void][IO.Directory]::CreateDirectory($unpacked)
-    $sevenZip = Join-Path $runtime '7z.exe'
+    $sevenZip = $plan.sevenZip
     & $sevenZip x -y -bso0 -bsp0 "-o$unpacked" -- $archive
     if ($LASTEXITCODE -ne 0) { throw $plan.extractFailed }
     if (-not (Test-Path -LiteralPath $nextExecutable -PathType Leaf) -or

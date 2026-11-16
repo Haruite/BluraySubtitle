@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
@@ -13,8 +12,8 @@ from decimal import Decimal, localcontext
 from fractions import Fraction
 from typing import Sequence
 
-from src.core import settings as core_settings
 from src.core.i18n import translate_text
+from src.core.tool_paths import require_tool_path, tool_path
 from src.exports.utils import run_command, run_vspipe
 
 
@@ -520,7 +519,7 @@ def probe_actual_encode_source(source_path: str) -> ActualEncodeSource:
             )
         )
 
-    executable = str(core_settings.FFPROBE_PATH or '').strip() or 'ffprobe'
+    executable = tool_path("FFPROBE_PATH")
     result = run_command(
         [
             executable,
@@ -755,13 +754,12 @@ def source_has_hdr10plus(source: ActualEncodeSource) -> bool:
 
 def probe_svt_av1_bit_depths(executable: str) -> frozenset[str]:
     """Return input/output depths advertised by this exact SVT-AV1 binary."""
-    executable_path = os.path.abspath(shutil.which(executable) or executable)
     try:
-        identity = os.stat(executable_path)
+        identity = os.stat(executable)
     except OSError:
         return frozenset()
     cache_key = (
-        os.path.normcase(executable_path),
+        os.path.normcase(executable),
         identity.st_size,
         identity.st_mtime_ns,
     )
@@ -770,7 +768,7 @@ def probe_svt_av1_bit_depths(executable: str) -> frozenset[str]:
         return cached
     try:
         result = run_command(
-            [executable_path, '--help'],
+            [executable, '--help'],
             capture_output=True,
             text=True,
             encoding='utf-8',
@@ -795,14 +793,12 @@ def probe_svt_av1_bit_depths(executable: str) -> frozenset[str]:
 
 def probe_x265_dynamic_metadata_options(executable: str) -> frozenset[str]:
     """Return dynamic-metadata options advertised by this exact x265 binary."""
-    executable_path = shutil.which(executable) or executable
-    executable_path = os.path.abspath(os.path.normpath(executable_path))
     try:
-        identity = os.stat(executable_path)
+        identity = os.stat(executable)
     except OSError:
         return frozenset()
     cache_key = (
-        os.path.normcase(executable_path),
+        os.path.normcase(executable),
         identity.st_size,
         identity.st_mtime_ns,
     )
@@ -811,7 +807,7 @@ def probe_x265_dynamic_metadata_options(executable: str) -> frozenset[str]:
         return cached
     try:
         result = run_command(
-            [executable_path, '--help'],
+            [executable, '--help'],
             capture_output=True,
             text=True,
             encoding='utf-8',
@@ -836,9 +832,7 @@ def extract_hdr10plus_metadata(
         vpy_timeline: tuple[int, int, int] | None,
 ) -> str:
     """Extract validated HDR10+ JSON and require matching VPy frames."""
-    executable = str(core_settings.HDR10PLUS_TOOL_PATH or '').strip()
-    if not executable:
-        executable = 'hdr10plus_tool'
+    executable = require_tool_path("HDR10PLUS_TOOL_PATH")
     metadata_path = os.path.abspath(os.path.normpath(output_path))
     result = run_command(
         [executable, 'extract', source.path, '-o', metadata_path],
@@ -906,9 +900,7 @@ def extract_hdr10plus_metadata(
 
 def verify_hdr10plus_metadata(encoded_path: str) -> None:
     """Require the encoded HEVC stream to contain HDR10+ metadata."""
-    executable = str(core_settings.HDR10PLUS_TOOL_PATH or '').strip()
-    if not executable:
-        executable = 'hdr10plus_tool'
+    executable = require_tool_path("HDR10PLUS_TOOL_PATH")
     result = run_command(
         [executable, '--verify', 'extract', encoded_path],
         capture_output=True,
@@ -983,9 +975,7 @@ def verify_final_video_metadata(
 
 def inject_hdr10plus_metadata(encoded_path: str, metadata_path: str) -> None:
     """Inject and verify HDR10+ metadata before atomically replacing the HEVC stream."""
-    executable = str(core_settings.HDR10PLUS_TOOL_PATH or '').strip()
-    if not executable:
-        executable = 'hdr10plus_tool'
+    executable = require_tool_path("HDR10PLUS_TOOL_PATH")
     encoded_path = os.path.abspath(os.path.normpath(encoded_path))
     metadata_path = os.path.abspath(os.path.normpath(metadata_path))
     temporary_output = encoded_path + '.hdr10plus.hevc'

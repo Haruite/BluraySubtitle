@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import QApplication, QVBoxLayout, QWidget, QHBoxLayout, QLa
 from src.core import APP_TITLE, BDMV_LABELS, SUBTITLE_LABELS, ENCODE_SP_LABELS
 from src.core.app_config import FUNCTION_PAGE_IDS, app_config_path, default_app_config, load_app_config
 from src.core.i18n import translate_text
+from src.core.tool_paths import active_tool_paths, resolve_tool_paths
 import src.core.settings as core_settings
 from src.exports.utils import print_exc_terminal
 from src.runtime.application_log import ApplicationLog
@@ -54,10 +55,13 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self._app_config_errors: list[Exception] = []
         try:
             self._app_config = load_app_config(self._app_config_path)
+            self._resolved_tool_paths = resolve_tool_paths(self._app_config.tools, self._app_config_path.parent)
         except Exception as error:
             self._app_config = default_app_config()
+            self._resolved_tool_paths = resolve_tool_paths(self._app_config.tools, self._app_config_path.parent)
             self._app_config_load_failed = True
             self._app_config_errors.append(error)
+        active_tool_paths.set(self._resolved_tool_paths)
         self._input_folder_values: dict[int, tuple[str, str]] = {}
         self._output_folder_values = {
             3: self._app_config.paths.remux_output,

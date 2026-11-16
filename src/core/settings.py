@@ -1,9 +1,7 @@
 """Shared configuration constants (stage-1 extracted from legacy file)."""
 
 import os
-import shutil
 import sys
-from pathlib import Path
 
 
 _BUNDLE_ROOT = (
@@ -17,32 +15,6 @@ _BUNDLE_ROOT = (
 )
 
 
-def editable_settings_path() -> Path:
-    """Return the source settings file edited by the settings dialog."""
-    if _BUNDLE_ROOT:
-        directory = Path(sys.executable).resolve().parent
-        if sys.platform.startswith("linux") and (configured := os.environ.get("BLURAY_SUBTITLE_CONFIG_DIR")):
-            directory = Path(configured).expanduser().resolve()
-        return directory / "src" / "core" / "settings.py"
-    return Path(__file__).resolve()
-
-
-def ensure_editable_settings_file() -> Path:
-    """Create the external settings source used by frozen builds when needed."""
-    target = editable_settings_path()
-    if not _BUNDLE_ROOT or target.is_file():
-        return target
-    bundled_source = Path(_BUNDLE_ROOT) / "src" / "core" / "settings.py"
-    if not bundled_source.is_file():
-        return target
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(bundled_source, target)
-    except OSError:
-        pass
-    return target
-
-
 def _bundled_path(relative_path: str, system_path: str) -> str:
     """Use a packaged tool in frozen builds and the configured system path otherwise."""
     return os.path.join(_BUNDLE_ROOT, relative_path) if _BUNDLE_ROOT else system_path
@@ -52,8 +24,6 @@ SEVEN_ZIP_PATH = _bundled_path("7z.exe", r"C:\Program Files\7-Zip\7z.exe")
 FLAC_PATH = _bundled_path("flac.exe", r"C:\Software\flac.exe")
 FFMPEG_PATH = _bundled_path("ffmpeg.exe", r"C:\Software\ffmpeg.exe")
 FFPROBE_PATH = _bundled_path("ffprobe.exe", r"C:\Software\ffprobe.exe")
-# These paths remain system defaults because the GUI can explicitly select
-# bundled or system VapourSynth and encoder executables.
 X265_PATH = r"C:\Software\x265.exe"
 X264_PATH = r"C:\Software\x264.exe"
 SVT_AV1_PATH = r'C:\Software\SvtAv1EncApp.exe'
@@ -71,24 +41,10 @@ VSPIPE_PATH = r"C:\Software\vapoursynth\vspipe.exe"
 PLUGIN_PATH = ""
 LIBASS_PATH = _bundled_path("libass-9.dll", r"C:\Software\libass-9.dll")
 TS_MUXER_PATH = _bundled_path("tsMuxeR.exe", r"C:\Software\tsMuxeR.exe")
-MKV_INFO_PATH = _bundled_path(
-    "mkvinfo.exe",
-    r"C:\Software\mkvtoolnix\mkvinfo.exe",
-)
-MKV_MERGE_PATH = _bundled_path(
-    "mkvmerge.exe",
-    r"C:\Software\mkvtoolnix\mkvmerge.exe",
-)
-MKV_PROP_EDIT_PATH = _bundled_path(
-    "mkvpropedit.exe",
-    r"C:\Software\mkvtoolnix\mkvpropedit.exe",
-)
-MKV_EXTRACT_PATH = _bundled_path(
-    "mkvextract.exe",
-    r"C:\Software\mkvtoolnix\mkvextract.exe",
-)
+MKVTOOLNIX_PATH = _bundled_path("mkvtoolnix", r"C:\Software\mkvtoolnix")
 
 MPV_PATH = ""
+MPV_CONFIG_PATH = ""
 
 if sys.platform != "win32":
     SEVEN_ZIP_PATH = _bundled_path("linux/bin/7zz", "/usr/local/bin/7zz")
@@ -106,11 +62,9 @@ if sys.platform != "win32":
     VSPIPE_PATH = "/usr/local/bin/vspipe"
     LIBASS_PATH = _bundled_path("libass.so.9", "")
     TS_MUXER_PATH = _bundled_path("linux/bin/tsMuxeR", "/usr/bin/tsMuxeR")
-    MKV_INFO_PATH = _bundled_path("linux/bin/mkvinfo", "/usr/bin/mkvinfo")
-    MKV_MERGE_PATH = _bundled_path("linux/bin/mkvmerge", "/usr/bin/mkvmerge")
-    MKV_PROP_EDIT_PATH = _bundled_path("linux/bin/mkvpropedit", "/usr/bin/mkvpropedit")
-    MKV_EXTRACT_PATH = _bundled_path("linux/bin/mkvextract", "/usr/bin/mkvextract")
+    MKVTOOLNIX_PATH = _bundled_path("linux/bin", "/usr/bin")
     MPV_PATH = _bundled_path("linux/bin/mpv", "")
+    MPV_CONFIG_PATH = _bundled_path("mpv", "")
 
 
 BDMV_LABELS = ["path", "size", "info", "remux_cmd"]
@@ -138,52 +92,3 @@ def get_mkvtoolnix_ui_language() -> str:
 
 def mkvtoolnix_ui_language_arg() -> str:
     return f"--ui-language {get_mkvtoolnix_ui_language()}"
-
-
-def _resolve_mkvtoolnix_path(default_path: str, binary_name: str) -> str:
-    if os.path.exists(default_path):
-        return default_path
-    resolved = shutil.which(binary_name)
-    return resolved or ""
-
-
-def find_mkvtoolnix() -> None:
-    """Resolve mkvtoolnix executable paths into global settings."""
-    global MKV_INFO_PATH
-    global MKV_MERGE_PATH
-    global MKV_PROP_EDIT_PATH
-    global MKV_EXTRACT_PATH
-
-    if not MKV_INFO_PATH:
-        default_mkv_info_path = r"C:\Software\mkvtoolnix\mkvinfo.exe" if sys.platform == "win32" else "/usr/bin/mkvinfo"
-        MKV_INFO_PATH = _resolve_mkvtoolnix_path(default_mkv_info_path, "mkvinfo")
-
-    if not MKV_MERGE_PATH:
-        default_mkv_merge_path = r"C:\Software\mkvtoolnix\mkvmerge.exe" if sys.platform == "win32" else "/usr/bin/mkvmerge"
-        MKV_MERGE_PATH = _resolve_mkvtoolnix_path(default_mkv_merge_path, "mkvmerge")
-
-    if not MKV_PROP_EDIT_PATH:
-        default_mkv_prop_edit_path = r"C:\Software\mkvtoolnix\mkvpropedit.exe" if sys.platform == "win32" else "/usr/bin/mkvpropedit"
-        MKV_PROP_EDIT_PATH = _resolve_mkvtoolnix_path(default_mkv_prop_edit_path, "mkvpropedit")
-
-    if not MKV_EXTRACT_PATH:
-        default_mkv_extract_path = r"C:\Software\mkvtoolnix\mkvextract.exe" if sys.platform == "win32" else "/usr/bin/mkvextract"
-        MKV_EXTRACT_PATH = _resolve_mkvtoolnix_path(default_mkv_extract_path, "mkvextract")
-
-
-def _load_editable_settings() -> None:
-    """Apply the external settings source before frozen imports capture constants."""
-    if not _BUNDLE_ROOT or globals().get("_EDITABLE_SETTINGS_LOADING", False):
-        return
-    source_path = ensure_editable_settings_file()
-    if not source_path.is_file():
-        return
-    source = source_path.read_text(encoding="utf-8")
-    globals()["_EDITABLE_SETTINGS_LOADING"] = True
-    try:
-        exec(compile(source, str(source_path), "exec"), globals())
-    finally:
-        globals().pop("_EDITABLE_SETTINGS_LOADING", None)
-
-
-_load_editable_settings()

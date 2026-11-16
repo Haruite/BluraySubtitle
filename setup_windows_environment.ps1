@@ -1760,20 +1760,33 @@ function Initialize-ConfiguredToolPaths {
         VapourSynthPlugins = "PLUGIN_PATH"
         Libass = "LIBASS_PATH"
         TsMuxer = "TS_MUXER_PATH"
-        MkvInfo = "MKV_INFO_PATH"
-        MkvMerge = "MKV_MERGE_PATH"
-        MkvPropEdit = "MKV_PROP_EDIT_PATH"
-        MkvExtract = "MKV_EXTRACT_PATH"
+        MkvToolNixRoot = "MKVTOOLNIX_PATH"
     }
-    $reader = Join-Path $script:SetupDirectory "tools\windows_tool_paths.py"
-    $arguments = @($reader, $settingsFile) + @($pathSettings.Values)
-    $configured = Invoke-SetupCommand -FilePath $script:ToolPaths.Python -Arguments $arguments | ConvertFrom-Json
+    if ($Mode -eq "Build") {
+        $reader = Join-Path $script:SetupDirectory "tools\windows_tool_paths.py"
+        $arguments = @($reader, $settingsFile) + @($pathSettings.Values)
+        $configured = Invoke-SetupCommand -FilePath $script:ToolPaths.Python -Arguments $arguments | ConvertFrom-Json
+        $pathSource = $settingsFile
+    }
+    else {
+        $reader = Join-Path $script:SetupDirectory "tools\setup_tool_paths.py"
+        $initialized = Invoke-SetupCommand -FilePath $script:ToolPaths.Python `
+            -Arguments @("-B", "-X", "utf8", $reader, "prepare", $settingsFile, $script:SelectedLanguage)
+        if ($initialized) {
+            Write-Host $initialized
+            [void](Read-Host (Get-SetupText `
+                "Edit config.json to change any paths. Press Enter when ready to continue." `
+                "如需修改路径，请编辑 config.json。准备好后按回车继续。"))
+        }
+        $configured = Invoke-SetupCommand -FilePath $script:ToolPaths.Python `
+            -Arguments @("-B", "-X", "utf8", $reader, "windows", $settingsFile, $script:SelectedLanguage) | ConvertFrom-Json
+        $pathSource = "config.json"
+    }
     foreach ($name in $pathSettings.Keys) {
         $script:ToolPaths[$name] = [string]$configured.PSObject.Properties[$pathSettings[$name]].Value
     }
     $script:ToolPaths["FfmpegNotices"] = Join-Path (Split-Path -Parent $script:ToolPaths.Ffmpeg) "ffmpeg-licenses.txt"
     $script:ToolPaths["FlacLibrary"] = Join-Path (Split-Path -Parent $script:ToolPaths.Flac) "libFLAC.dll"
-    $script:ToolPaths["MkvToolNixRoot"] = Split-Path -Parent $script:ToolPaths.MkvMerge
     $script:ToolPaths["X264Version"] = Join-Path (Split-Path -Parent $script:ToolPaths.X264) "x264-version.txt"
     $script:ToolPaths["X265Version"] = Join-Path (Split-Path -Parent $script:ToolPaths.X265) "x265-version.txt"
     $script:ToolPaths["LibassVersion"] = Join-Path (Split-Path -Parent $script:ToolPaths.Libass) "libass-version.txt"
@@ -1791,7 +1804,7 @@ function Initialize-ConfiguredToolPaths {
     Write-SetupInfo `
         "Loaded Windows tool paths from {0}." `
         "已从 {0} 读取 Windows 工具路径。" `
-        -FormatArgs @($settingsFile)
+        -FormatArgs @($pathSource)
 }
 
 function Install-ConfiguredFile {
@@ -3247,11 +3260,7 @@ function Get-MkvToolNixBuildArguments {
 
     return @(
         (Join-Path $script:SetupDirectory "tools\build_mkvtoolnix_windows.py"),
-        $Operation, $script:ToolPaths.MkvToolNixRoot,
-        [IO.Path]::GetFileName($script:ToolPaths.MkvMerge),
-        [IO.Path]::GetFileName($script:ToolPaths.MkvInfo),
-        [IO.Path]::GetFileName($script:ToolPaths.MkvPropEdit),
-        [IO.Path]::GetFileName($script:ToolPaths.MkvExtract)
+        $Operation, $script:ToolPaths.MkvToolNixRoot
     )
 }
 

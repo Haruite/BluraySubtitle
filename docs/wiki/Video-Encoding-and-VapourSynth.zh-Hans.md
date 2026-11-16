@@ -14,7 +14,7 @@
 
 10-bit SDR 输出可减轻量化／色带问题，但不会把 SDR 变成 HDR。编码背景见[媒体格式](Media-Formats-and-Dolby-Vision.zh-Hans.md#视频格式)。
 
-安装脚本构建未修改的上游 SVT-AV1。压制控件与设置窗口仅在所选自带／系统可执行文件的 `--help` 将 `12` 列为 `--input-depth` 可选值时提供 12-bit；无法确认支持时隐藏该选项，切换工具来源会刷新可选位深。aomenc、rav1e 等其他 AV1 编码器使用不同命令行，不能在此流程中替代 `SvtAv1EncApp`。
+安装脚本构建未修改的上游 SVT-AV1。压制控件与设置窗口仅在所配置的可执行文件的 `--help` 将 `12` 列为 `--input-depth` 可选值时提供 12-bit；保存新的 SVT-AV1 路径后会刷新可选位深。aomenc、rav1e 等其他 AV1 编码器使用不同命令行，不能在此流程中替代 `SvtAv1EncApp`。
 
 画质取决于源纹理／运动、编码器版本、码率控制、preset、滤镜和播放条件。应从同一来源截取代表性样本，在目标观看距离比较；把某次测试结果再转成另一编码会增加世代损失，使比较失真。
 
@@ -46,7 +46,7 @@ vspipe --container y4m
 
 `vspipe` 通过管道向编码器提供 Y4M 帧，所以普通压制不需要落盘一份完整的未压缩视频。编码器产生的基本流是中间文件，最终交付给用户的是 MKV。
 
-打包版中，把 **vspipe 来源**设为**系统**，即可为压制和 FrameCheck 选用另一套 VapourSynth。在**设置 → 外部工具**中将 `VSPIPE_PATH` 指向该环境的 VSPipe，保存后重启。所选环境需要自己的 Python 绑定、`mvsfunc.py` 等滤镜脚本及兼容插件。编码器和 VSEdit 可分别设置。
+在**设置 → 外部工具**中将 `VSPIPE_PATH` 设为压制和 FrameCheck 使用的 VSPipe。独立安装的 VapourSynth 需要对应的 Python 绑定和 `mvsfunc.py` 等滤镜脚本。Linux 会将 `PLUGIN_PATH` 指定的兼容插件目录传给所配置的 VSPipe。编码器和 VSEdit 的路径在各自对应的行设置。
 
 ## 码率控制与 preset 的含义
 

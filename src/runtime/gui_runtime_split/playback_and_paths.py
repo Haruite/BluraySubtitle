@@ -10,8 +10,9 @@ from urllib.parse import urlparse, unquote
 from PyQt6.QtCore import QProcess, QProcessEnvironment, Qt
 from PyQt6.QtWidgets import QToolButton
 
-from src.core import ENCODE_SP_LABELS, settings as core_settings
-from src.exports.utils import get_mpv_safe_path, print_terminal_line, run_command
+from src.core import ENCODE_SP_LABELS
+from src.core.tool_paths import tool_path
+from src.exports.utils import print_terminal_line, run_command
 from src.runtime.mpv_menu import mpv_language_options
 from src.runtime.gui_runtime_classes.widget_animations import AnimatedInputDialog, AnimatedMessageBox
 from .gui_base import BluraySubtitleGuiBase
@@ -121,13 +122,11 @@ class PlaybackPathsMixin(BluraySubtitleGuiBase):
         self.on_button_play(mpls_path, btn)
 
     def _mpv_playback_executable(self, mime_type: str) -> str:
-        if sys.platform == "win32":
-            executable = get_mpv_safe_path(".mp4") or ""
-            return executable if executable.lower().endswith("mpv.exe") else ""
-        if not sys.platform.startswith("linux"):
+        executable = tool_path("MPV_PATH")
+        if self._app_config.tools.get("MPV_PATH") or sys.platform == "win32":
+            return executable
+        if not executable or not sys.platform.startswith("linux"):
             return ""
-        if core_settings.MPV_PATH:
-            return core_settings.MPV_PATH
         try:
             association = run_command(
                 ["xdg-mime", "query", "default", mime_type], capture_output=True, check=True, timeout=2,
@@ -138,14 +137,15 @@ class PlaybackPathsMixin(BluraySubtitleGuiBase):
                 ).stdout.strip()
         except (OSError, subprocess.SubprocessError):
             return ""
-        return "mpv" if b"mpv" in association else ""
+        return executable if b"mpv" in association else ""
 
     def _start_mpv_playback(self, executable: str, arguments: list[str], source_path: str) -> None:
         options = []
         menu_directory = None
         environment = QProcessEnvironment.systemEnvironment()
         if sys.platform.startswith("linux"):
-            if getattr(sys, "frozen", False):
+            frozen = getattr(sys, "frozen", False)
+            if frozen:
                 if environment.contains("LD_LIBRARY_PATH_ORIG"):
                     environment.insert("LD_LIBRARY_PATH", environment.value("LD_LIBRARY_PATH_ORIG"))
                 else:
@@ -169,9 +169,17 @@ class PlaybackPathsMixin(BluraySubtitleGuiBase):
                     ))
                     if not environment.contains("LIBGL_ALWAYS_SOFTWARE"):
                         environment.insert("LIBGL_ALWAYS_SOFTWARE", "1")
-            if core_settings.MPV_PATH and core_settings.PLUGIN_PATH:
-                environment.insert("BLURAYSUB_PLUGIN_PATH", core_settings.PLUGIN_PATH)
-            menu_options, menu_directory = mpv_language_options(self._language_code)
+            plugin_path = tool_path("PLUGIN_PATH")
+            environment.insert("BLURAYSUB_PLUGIN_PATH", plugin_path)
+            if plugin_path:
+                environment.insert("VAPOURSYNTH_EXTRA_PLUGIN_PATH", plugin_path)
+            config = tool_path("MPV_CONFIG_PATH")
+            if frozen:
+                options.append(f"--config-dir={config}")
+                environment.insert("BLURAYSUB_MPV_CONFIG_PATH", config)
+            if frozen or self._app_config.tools.get("MPV_CONFIG_PATH"):
+                environment.insert("MPV_HOME", config)
+            menu_options, menu_directory = mpv_language_options(self._language_code, Path(config))
             options.extend(menu_options)
 
         process = QProcess(self)

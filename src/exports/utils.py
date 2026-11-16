@@ -19,10 +19,7 @@ import soundfile
 
 from ..core.i18n import translate_text, _terminal_err_stream
 
-if sys.platform == 'win32':
-    import winreg
-
-from ..core import FFMPEG_PATH
+from ..core.tool_paths import TOOL_EXECUTABLE_NAMES, bundle_directory, is_bundled_tool, tool_path
 
 _MKVMERGE_CANCEL_EVENT: ContextVar[object | None] = ContextVar(
     '_MKVMERGE_CANCEL_EVENT',
@@ -50,10 +47,18 @@ def _is_mkvmerge_mux_command(command) -> bool:
         arguments = list(command or [])
     if not arguments:
         return False
-    executable = os.path.basename(str(arguments[0]).strip('"')).lower()
-    return executable.startswith('mkvmerge') and any(
+    executable = os.fsdecode(arguments[0]).strip('"')
+    is_mkvmerge = (
+        os.path.basename(executable).lower().startswith('mkvmerge')
+        or os.path.normcase(executable) == os.path.normcase(tool_path("MKV_MERGE_PATH"))
+    )
+    return is_mkvmerge and any(
         str(argument) in ('-o', '--output') for argument in arguments[1:]
     )
+
+
+def quote_tool_executable(path: str) -> str:
+    return f'"{path}"' if sys.platform == 'win32' else shlex.quote(path)
 
 
 def _terminate_process_tree(process) -> None:
@@ -237,67 +242,6 @@ def force_remove_file(file_path):
             os.remove(file_path)
 
 
-def get_mpv_safe_path(extension=".mp4"):
-    def clean(path):
-        if not path: return None
-        path = os.path.expandvars(path).strip()
-        if '"' in path:
-            path = path.split('"')[1]
-        else:
-            path = path.split(' ')[0]
-        if not os.path.isabs(path):
-            path = shutil.which(path)
-        return path if path and os.path.exists(path) else None
-
-    try:
-        choice_path = rf"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{extension}\UserChoice"
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, choice_path) as key:
-            prog_id, _ = winreg.QueryValueEx(key, "ProgId")
-
-        if prog_id.startswith("AppX") or "WMP11" in prog_id or "Windows.Photos" in prog_id:
-            return None
-
-        base_name = prog_id.split('\\')[-1]  # Remove registry path prefix.
-        names_to_try = [base_name]
-        if not base_name.lower().endswith(".exe"):
-            names_to_try.append(base_name + ".exe")
-        if "mpv" in base_name.lower() and "mpv.exe" not in names_to_try:
-            names_to_try.append("mpv.exe")
-
-        for name in names_to_try:
-            try:
-                with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, rf"{name}\shell\open\command") as key:
-                    val, _ = winreg.QueryValueEx(key, "")
-                    res = clean(val)
-                    if res:
-                        return res
-            except:
-                pass
-
-            try:
-                with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, rf"Applications\{name}\shell\open\command") as key:
-                    val, _ = winreg.QueryValueEx(key, "")
-                    res = clean(val)
-                    if res:
-                        return res
-            except:
-                pass
-
-            try:
-                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{name}") as key:
-                    val, _ = winreg.QueryValueEx(key, "")
-                    res = clean(val)
-                    if res:
-                        return res
-            except:
-                pass
-
-    except Exception:
-        pass
-
-    return None
-
-
 def fix_audio_delay_to_lossless(input_file, delay_ms, output_file, track_index=0):
     """Apply audio delay correction while preserving lossless output when possible."""
     # Quote paths to safely handle whitespace.
@@ -315,19 +259,20 @@ def fix_audio_delay_to_lossless(input_file, delay_ms, output_file, track_index=0
     codec_str = f"-c:a {codec}"
     common_opts = "-hide_banner -loglevel error -y"
 
+    ffmpeg = quote_tool_executable(tool_path("FFMPEG_PATH"))
     if delay_ms > 0:
         # Positive delay: pad with silence.
-        cmd = f'"{FFMPEG_PATH}" {common_opts} -i {input_file_q} {map_str} -af "adelay={delay_ms}:all=1" {codec_str} {output_file_q}'
+        cmd = f'{ffmpeg} {common_opts} -i {input_file_q} {map_str} -af "adelay={delay_ms}:all=1" {codec_str} {output_file_q}'
 
     elif delay_ms < 0:
         # Negative delay: trim from the start.
         start_time = abs(delay_ms) / 1000.0
         # Keep -ss after -i for decode-level accuracy on HD audio codecs.
-        cmd = f'"{FFMPEG_PATH}" {common_opts} -i {input_file_q} -ss {start_time} {map_str} {codec_str} {output_file_q}'
+        cmd = f'{ffmpeg} {common_opts} -i {input_file_q} -ss {start_time} {map_str} {codec_str} {output_file_q}'
 
     else:
         # No delay.
-        cmd = f'"{FFMPEG_PATH}" {common_opts} -i {input_file_q} {map_str} {codec_str} {output_file_q}'
+        cmd = f'{ffmpeg} {common_opts} -i {input_file_q} {map_str} {codec_str} {output_file_q}'
 
     try:
         print(f"Run command: {cmd}")
@@ -359,11 +304,6 @@ def get_effective_bit_depth(file_path, fallback_depth=24):
     return 32
 
 
-def bundle_application_root() -> str:
-    """PyInstaller extracted root, or cwd when running from source."""
-    return getattr(sys, '_MEIPASS', os.path.abspath('.'))
-
-
 def third_party_notices_markdown_path(language: str) -> Optional[str]:
     """Resolve the selected UI language's notices in the bundle or source checkout."""
     filename = 'THIRD_PARTY_NOTICES.zh-Hans.md' if language == 'zh' else 'THIRD_PARTY_NOTICES.md'
@@ -393,39 +333,10 @@ def third_party_notices_markdown_path(language: str) -> Optional[str]:
     return None
 
 
-def resolve_encoder_executable_path(tool: str, mode: str) -> str:
-    """
-    Resolve x264 / x265 / SVT-AV1 encoder binary.
-
-    ``mode`` is ``bundle`` (next to the frozen exe / bundle root) or ``system``
-    (``X264_PATH`` / ``X265_PATH`` / ``SVT_AV1_PATH`` from settings).
-    """
-    from ..core.settings import X264_PATH, X265_PATH, SVT_AV1_PATH
-
-    t = (tool or '').strip().lower()
-    if t == 'svtav1':
-        key = 'svtav1'
-    elif t in ('x264', 'x265'):
-        key = t
-    else:
-        key = 'x265'
-    if mode == 'bundle':
-        root = bundle_application_root()
-        if sys.platform == 'win32':
-            names = {'x264': 'x264.exe', 'x265': 'x265.exe', 'svtav1': 'SvtAv1EncApp.exe'}
-        else:
-            names = {'x264': 'x264', 'x265': 'x265', 'svtav1': 'SvtAv1EncApp'}
-            if sys.platform.startswith('linux') and getattr(sys, 'frozen', False):
-                root = os.path.join(root, "linux", "bin")
-        return os.path.join(root, names[key])
-    defaults = {'x264': X264_PATH, 'x265': X265_PATH, 'svtav1': SVT_AV1_PATH}
-    return str(defaults[key])
-
-
 _WINDOWS_PROCESS_LAUNCH_LOCK = RLock()
 
 
-def get_system_vspipe_context(executable: str) -> tuple[str, dict[str, str]]:
+def system_tool_environment() -> dict[str, str]:
     """Use the caller's runtime environment without paths injected by the bundle."""
     env = os.environ.copy()
     runtime = getattr(sys, '_MEIPASS', None) if getattr(sys, 'frozen', False) else None
@@ -449,57 +360,37 @@ def get_system_vspipe_context(executable: str) -> tuple[str, dict[str, str]]:
                 env['LD_LIBRARY_PATH'] = env['LD_LIBRARY_PATH_ORIG']
             else:
                 env.pop('LD_LIBRARY_PATH', None)
-    resolved = shutil.which(executable, path=env.get('PATH', os.defpath))
-    return os.path.abspath(resolved or executable), env
+    return env
 
 
 def run_vspipe(command: list[str], **kwargs):
     """Launch VSPipe using the system DLL search order for an external executable."""
-    runtime = getattr(sys, '_MEIPASS', None) if getattr(sys, 'frozen', False) else None
-    external = False
-    if sys.platform == 'win32' and runtime:
-        root = os.path.normcase(os.path.abspath(runtime)) + os.sep
-        external = not os.path.normcase(os.path.abspath(command[0])).startswith(root)
-    if external:
+    if sys.platform == 'win32' and bundle_directory() and not is_bundled_tool(command[0]):
         kwargs['system_dll_search'] = True
     return run_command(command, **kwargs)
 
 
-def get_vspipe_context():
-    """Resolve bundled VSPipe and its shared Python runtime environment."""
-    bundle_dir = bundle_application_root()
-    vs_pkg_dir = bundle_dir if sys.platform == "win32" else os.path.join(bundle_dir, "vs_pkg")
-    env = os.environ.copy()
-
-    # Remove parent-process Python variables to avoid runtime conflicts.
-    env.pop('PYTHONHOME', None)
-    env.pop('PYTHONPATH', None)
-
-    if sys.platform == 'win32':
-        root = Path(vs_pkg_dir)
-        upstream_vspipe = root / "Lib/site-packages/vapoursynth/vspipe.exe"
-        env['PATH'] = f"{vs_pkg_dir};{env.get('PATH', '')}"
-        env['PYTHONNOUSERSITE'] = '1'
-        for name in ('VAPOURSYNTH_EXTRA_PLUGIN_PATH', 'VAPOURSYNTH_PLUGINS', 'VSSCRIPT_PATH'):
-            env.pop(name, None)
-        if upstream_vspipe.is_file():
-            vspipe_exe = str(upstream_vspipe)
-        else:
-            vspipe_exe = str(root / "vspipe.exe")
-            env['PYTHONHOME'] = vs_pkg_dir
-            env['VAPOURSYNTH_PLUGINS'] = str(root / "vapoursynth64/coreplugins")
-
-    elif sys.platform.startswith("linux") and getattr(sys, "frozen", False):
-        vspipe_exe = os.path.join(bundle_dir, "linux", "bin", "vspipe")
-    else:  # Linux
-        vspipe_exe = os.path.join(vs_pkg_dir, "vspipe")
-        env['LD_LIBRARY_PATH'] = f"{vs_pkg_dir}:{env.get('LD_LIBRARY_PATH', '')}"
-        env['PYTHONHOME'] = vs_pkg_dir
-        env['PATH'] = f"{vs_pkg_dir}:{env.get('PATH', '')}"
-        # Assume Linux plugin structure is consistent.
-        env['VAPOURSYNTH_PLUGINS'] = os.path.join(vs_pkg_dir, "plugins")
-
-    return vspipe_exe, env
+def get_vspipe_environment(executable: str, plugin_path: str) -> dict[str, str]:
+    """Build the VapourSynth environment for the resolved VSPipe executable."""
+    if (bundle := bundle_directory()) and is_bundled_tool(executable):
+        env = os.environ.copy()
+        env.pop('PYTHONHOME', None)
+        env.pop('PYTHONPATH', None)
+        if sys.platform == 'win32':
+            env['PATH'] = f"{bundle};{env.get('PATH', '')}"
+            env['PYTHONNOUSERSITE'] = '1'
+            for name in ('VAPOURSYNTH_EXTRA_PLUGIN_PATH', 'VAPOURSYNTH_PLUGINS', 'VSSCRIPT_PATH'):
+                env.pop(name, None)
+            if Path(executable).parent == bundle:
+                env['PYTHONHOME'] = str(bundle)
+                env['VAPOURSYNTH_PLUGINS'] = str(bundle / 'vapoursynth64/coreplugins')
+    else:
+        env = system_tool_environment()
+    if sys.platform.startswith('linux'):
+        env['BLURAYSUB_PLUGIN_PATH'] = plugin_path
+    if plugin_path:
+        env['VAPOURSYNTH_EXTRA_PLUGIN_PATH'] = plugin_path
+    return env
 
 
 def _spawn_command(command, kwargs, system_dll_search):
@@ -536,6 +427,22 @@ def run_command(
     if not wait and cancel_event is not None:
         raise ValueError('Cancellation requires waiting for the command.')
     kwargs.setdefault('shell', isinstance(command, str))
+    if bundle_directory():
+        if isinstance(command, str):
+            try:
+                arguments = shlex.split(command, posix=sys.platform != 'win32')
+            except ValueError:
+                arguments = []
+        else:
+            arguments = command
+        if arguments:
+            executable = os.path.normcase(os.fsdecode(arguments[0]).strip('"'))
+            if os.path.isabs(executable) and not is_bundled_tool(executable) and any(
+                    executable == os.path.normcase(tool_path(name)) for name in TOOL_EXECUTABLE_NAMES
+            ):
+                if kwargs.get('env') is None:
+                    kwargs['env'] = system_tool_environment()
+                system_dll_search = sys.platform == 'win32' or system_dll_search
     if log_template:
         command_text = command if isinstance(command, str) else subprocess.list2cmdline(command)
         print(translate_text(log_template).format(command=command_text), flush=True)
@@ -671,12 +578,9 @@ __all__ = [
     "get_index_to_m2ts_and_offset",
     "force_remove_folder",
     "force_remove_file",
-    "get_mpv_safe_path",
     "fix_audio_delay_to_lossless",
     "get_effective_bit_depth",
-    "bundle_application_root",
-    "resolve_encoder_executable_path",
-    "get_vspipe_context",
+    "get_vspipe_environment",
     "mkv_codec_id_is_dts_family",
     "mkvmerge_cancellation_scope",
     "run_command",

@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from src.core.tool_paths import default_tool_paths, using_tool_paths
 from src.runtime.video_crop import VideoCropPlan, detect_black_borders, write_vapoursynth_crop
 
 
@@ -32,8 +33,7 @@ class VideoCropTests(unittest.TestCase):
                     return SimpleNamespace(returncode=0, stdout='', stderr=next(samples))
 
                 with (
-                    patch('src.runtime.video_crop.core_settings.FFPROBE_PATH', 'ffprobe'),
-                    patch('src.runtime.video_crop.core_settings.FFMPEG_PATH', 'ffmpeg'),
+                    using_tool_paths({**default_tool_paths(), 'FFMPEG_PATH': 'ffmpeg', 'FFPROBE_PATH': 'ffprobe'}),
                     patch('src.runtime.video_crop.run_command', side_effect=run_command),
                 ):
                     plan = detect_black_borders(str(source))

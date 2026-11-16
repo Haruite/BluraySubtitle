@@ -8,6 +8,7 @@ from pathlib import Path
 import platform
 import re
 import subprocess
+import sys
 from typing import Mapping
 
 
@@ -106,7 +107,7 @@ def _common_versions(
             rf"^hdr10plus_tool\s+({VERSION})",
         ),
         "MKVTOOLNIX_VERSION": _command_version(
-            settings["MKV_MERGE_PATH"],
+            Path(str(settings["MKVTOOLNIX_PATH"])) / ("mkvmerge.exe" if sys.platform == "win32" else "mkvmerge"),
             ("--version",),
             rf"\bv({VERSION})",
         ),
@@ -126,7 +127,7 @@ def generate_third_party_notices(
 ) -> None:
     """Render all language templates using one set of bundled component versions."""
     software_root = Path(str(settings["X265_PATH"])).parent
-    mkv_root = Path(str(settings["MKV_MERGE_PATH"])).parent
+    mkv_root = Path(str(settings["MKVTOOLNIX_PATH"]))
     mkv_build = json.loads((mkv_root / "mkvtoolnix-build.json").read_text(encoding="utf-8"))
     mkv_qt = mkv_build["qt_version"]
     mkv_qt_series = ".".join(mkv_qt.split(".")[:2])

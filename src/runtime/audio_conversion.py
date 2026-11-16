@@ -12,9 +12,9 @@ import tempfile
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from src.core import find_mkvtoolnix, mkvtoolnix_ui_language_arg
-from src.core import settings as core_settings
+from src.core import mkvtoolnix_ui_language_arg
 from src.core.i18n import translate_text
+from src.core.tool_paths import require_tool_path, tool_path
 from src.core.media_language import normalize_track_language
 from src.exports.utils import (
     get_effective_bit_depth,
@@ -215,8 +215,7 @@ def write_audio_gap_sidecar(
 
 
 def _identify_tracks(media_path: str) -> list[dict[str, object]]:
-    find_mkvtoolnix()
-    mkvmerge = str(core_settings.MKV_MERGE_PATH or '').strip() or shutil.which('mkvmerge') or ''
+    mkvmerge = tool_path("MKV_MERGE_PATH")
     if not mkvmerge:
         raise FileNotFoundError(translate_text('mkvmerge not found'))
     result = run_command(
@@ -536,10 +535,7 @@ def encode_fdkaac_from_ffmpeg(
 
 def validate_audio_cleanup_tools() -> None:
     """Require the decoder used by automatic audio cleanup."""
-    find_mkvtoolnix()
-    ffmpeg = str(core_settings.FFMPEG_PATH or '').strip() or shutil.which('ffmpeg') or ''
-    if not ffmpeg or not (os.path.isfile(ffmpeg) or shutil.which(ffmpeg)):
-        raise FileNotFoundError(translate_text('ffmpeg executable does not exist'))
+    require_tool_path("FFMPEG_PATH")
 
 
 def _extract_selected_audio_tracks(
@@ -916,15 +912,6 @@ def _extract_selected_audio_tracks(
     return recovered_audio_by_track
 
 
-def _flac_encoder_path() -> str:
-    configured_flac = str(core_settings.FLAC_PATH or '').strip()
-    if configured_flac and (
-            os.path.isfile(configured_flac) or shutil.which(configured_flac)
-    ):
-        return configured_flac
-    return shutil.which('flac') or shutil.which('flac.exe') or ''
-
-
 def _encode_wave64_to_flac(
         ffmpeg: str,
         flac_encoder: str,
@@ -1056,12 +1043,7 @@ def _encode_wave64_to_codec(
         except OSError:
             return False
 
-    fdkaac = (
-        str(core_settings.FDK_AAC_PATH or '').strip()
-        or shutil.which('fdkaac')
-        or shutil.which('fdkaac.exe')
-        or ''
-    )
+    fdkaac = tool_path("FDK_AAC_PATH")
     if not fdkaac:
         return False
     rate_control = (
@@ -1373,8 +1355,8 @@ def convert_audio_stream(
         )
     if wave64_bit_depth not in (24, 32):
         raise ValueError(f'Unsupported Wave64 bit depth: {wave64_bit_depth}')
-    ffmpeg = str(core_settings.FFMPEG_PATH or '').strip() or shutil.which('ffmpeg') or ''
-    ffprobe = str(core_settings.FFPROBE_PATH or '').strip() or shutil.which('ffprobe') or ''
+    ffmpeg = tool_path("FFMPEG_PATH")
+    ffprobe = tool_path("FFPROBE_PATH")
     if not ffmpeg or not ffprobe:
         return False
     normalized_selector = str(stream_selector or 'a:0').strip()
@@ -1425,7 +1407,7 @@ def convert_audio_stream(
         )
         if not _encode_wave64_to_codec(
                 ffmpeg,
-                _flac_encoder_path(),
+                tool_path("FLAC_PATH"),
                 wave64_path,
                 normalized_output,
                 normalized_codec,
@@ -1677,22 +1659,9 @@ def validate_audio_conversion_tools(
         if target_codec == 'aac':
             requires_fdkaac = True
     if requires_duration_probe:
-        ffprobe = (
-            str(core_settings.FFPROBE_PATH or '').strip()
-            or shutil.which('ffprobe')
-            or ''
-        )
-        if not ffprobe or not (os.path.isfile(ffprobe) or shutil.which(ffprobe)):
-            raise FileNotFoundError(translate_text('ffprobe executable does not exist'))
+        require_tool_path("FFPROBE_PATH")
     if requires_fdkaac:
-        fdkaac = (
-            str(core_settings.FDK_AAC_PATH or '').strip()
-            or shutil.which('fdkaac')
-            or shutil.which('fdkaac.exe')
-            or ''
-        )
-        if not fdkaac or not (os.path.isfile(fdkaac) or shutil.which(fdkaac)):
-            raise FileNotFoundError(translate_text('fdkaac executable does not exist'))
+        require_tool_path("FDK_AAC_PATH")
 
 
 def mux_with_audio_conversion(
@@ -1800,13 +1769,12 @@ def mux_with_audio_conversion(
     replacement_by_track: dict[int, tuple[str, str, Optional[int]]] = {}
     keep_work_folder = False
     try:
-        find_mkvtoolnix()
-        ffmpeg = str(core_settings.FFMPEG_PATH or '').strip() or shutil.which('ffmpeg') or ''
-        ffprobe = str(core_settings.FFPROBE_PATH or '').strip() or shutil.which('ffprobe') or ''
-        mkvmerge = str(core_settings.MKV_MERGE_PATH or '').strip() or shutil.which('mkvmerge') or ''
+        ffmpeg = tool_path("FFMPEG_PATH")
+        ffprobe = tool_path("FFPROBE_PATH")
+        mkvmerge = tool_path("MKV_MERGE_PATH")
         if not mkvmerge:
             raise FileNotFoundError(translate_text('mkvmerge not found'))
-        flac_encoder = _flac_encoder_path()
+        flac_encoder = tool_path("FLAC_PATH")
 
         audio_tracks = [track for track in tracks if track.get('type') == 'audio']
         audio_index_by_track = {

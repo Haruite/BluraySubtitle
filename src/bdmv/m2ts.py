@@ -1,5 +1,4 @@
 import os
-import shutil
 import subprocess
 import sys
 from typing import Optional, BinaryIO, Callable
@@ -7,8 +6,8 @@ from typing import Optional, BinaryIO, Callable
 from .core import InfoDict, unpack_bytes
 from .structures.stream_attributes import StreamAttributes
 from .structures.stream_entry import StreamEntry
-from src.core import FFPROBE_PATH
 from src.core.i18n import sp_debug_log, translate_text
+from src.core.tool_paths import tool_path
 from src.exports.utils import run_command
 
 
@@ -617,7 +616,7 @@ class M2TS:
             frame_rate = None
 
         if frame_rate is None and use_ffprobe_fallback:
-            executable = FFPROBE_PATH if FFPROBE_PATH else (shutil.which('ffprobe') or 'ffprobe')
+            executable = tool_path("FFPROBE_PATH")
             command = [
                 executable, '-v', 'error', '-select_streams', 'v:0', '-show_entries',
                 'stream=avg_frame_rate,r_frame_rate', '-of', 'default=nokey=1:noprint_wrappers=1', self.filename,

@@ -38,10 +38,6 @@ TOOL_SETTINGS = {
     "dovi_tool": "DOVI_TOOL_PATH",
     "hdr10plus_tool": "HDR10PLUS_TOOL_PATH",
     "tsMuxeR": "TS_MUXER_PATH",
-    "mkvinfo": "MKV_INFO_PATH",
-    "mkvmerge": "MKV_MERGE_PATH",
-    "mkvpropedit": "MKV_PROP_EDIT_PATH",
-    "mkvextract": "MKV_EXTRACT_PATH",
 }
 PLUGIN_PROJECTS = {
     "bm3d.so": ("BM3D", "HomeOfVapourSynthEvolution/VapourSynth-BM3D"),
@@ -199,6 +195,8 @@ def stage(support: Path) -> None:
     settings = runpy.run_path(settings_file)
     native = support / "linux"
     tools = {tool: Path(settings[key]) for tool, key in TOOL_SETTINGS.items()}
+    mkv = Path(settings["MKVTOOLNIX_PATH"])
+    tools.update({name: mkv / name for name in ("mkvinfo", "mkvmerge", "mkvpropedit", "mkvextract")})
     tools["mpv"] = Path(shutil.which("mpv") or "/usr/local/bin/mpv")
     tools["vsedit"] = Path(f'{settings["VSEDIT_PATH"]}-bin')
     installed_plugins = Path(settings["PLUGIN_PATH"])
