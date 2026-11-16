@@ -1199,16 +1199,14 @@ install_libdovi() {
 DOVI_TOOL_VERSION="${DOVI_TOOL_VERSION:-}"
 
 install_dovi_tool() {
-  if [[ -z "$DOVI_TOOL_VERSION" ]]; then
-    DOVI_TOOL_VERSION="$(latest_stable_tag https://github.com/quietvoid/dovi_tool.git)"
-  fi
-  log "$(msg "Installing dovi_tool ${DOVI_TOOL_VERSION} (prebuilt)" "安装 dovi_tool ${DOVI_TOOL_VERSION}（预编译包）")"
-
-  if [[ -x "$DOVI_TOOL_PATH" ]] && { ! "$package_build" ||
-      [[ "$("$DOVI_TOOL_PATH" --version 2>/dev/null || true)" == "dovi_tool ${DOVI_TOOL_VERSION#[vV]}" ]]; }; then
+  local installed_version tag
+  if [[ -x "$DOVI_TOOL_PATH" ]] && installed_version="$("$DOVI_TOOL_PATH" --version 2>/dev/null)" &&
+      { [[ -z "$DOVI_TOOL_VERSION" ]] || [[ "$installed_version" == "dovi_tool ${DOVI_TOOL_VERSION#[vV]}" ]]; }; then
     log "$(msg "dovi_tool already installed (${DOVI_TOOL_PATH}), skipping" "检测到 dovi_tool 已安装（${DOVI_TOOL_PATH}），跳过")"
     return 0
   fi
+  tag="${DOVI_TOOL_VERSION:-$(latest_stable_tag https://github.com/quietvoid/dovi_tool.git)}"
+  log "$(msg "Installing dovi_tool ${tag} (prebuilt)" "安装 dovi_tool ${tag}（预编译包）")"
 
   local arch tarball
   case "$(uname -m)" in
@@ -1222,7 +1220,7 @@ install_dovi_tool() {
       die "$(msg "Unsupported CPU architecture for dovi_tool prebuilt: $(uname -m)" "当前 CPU 架构不支持预编译 dovi_tool：$(uname -m)")"
       ;;
   esac
-  tarball="dovi_tool-${DOVI_TOOL_VERSION}-${arch}-unknown-linux-musl.tar.gz"
+  tarball="dovi_tool-${tag}-${arch}-unknown-linux-musl.tar.gz"
 
   local deps=(git curl tar)
   local missing_deps=()
@@ -1243,7 +1241,7 @@ install_dovi_tool() {
   (
     cd "$build_dir" || exit 1
     tmux_run "$(msg "Download ${tarball}" "下载 ${tarball}")" \
-      download_github_release_asset quietvoid/dovi_tool "$DOVI_TOOL_VERSION" "$tarball" || exit 1
+      download_github_release_asset quietvoid/dovi_tool "$tag" "$tarball" || exit 1
     tmux_run "$(msg 'Extract dovi_tool tarball' '解压 dovi_tool 压缩包')" tar zxvf "$tarball" || exit 1
     install_configured_executable dovi_tool "$DOVI_TOOL_PATH" || exit 1
   ) || die "$(msg 'dovi_tool install failed' 'dovi_tool 安装失败')"
@@ -2071,16 +2069,18 @@ install_svt_av1() {
 TSMUXER_VERSION="${TSMUXER_VERSION:-}"
 
 install_tsmuxer() {
-  local tsmuxer_tag tsmuxer_version
+  local tsmuxer_tag tsmuxer_version installed_version
+  if [[ -x "$TS_MUXER_PATH" ]] && installed_version="$("$TS_MUXER_PATH" --version 2>/dev/null)"; then
+    installed_version="${installed_version#tsMuxeR version }"
+    installed_version="${installed_version%% *}"
+    if [[ -z "$TSMUXER_VERSION" || "${installed_version%.}" == "${TSMUXER_VERSION#[vV]}" ]]; then
+      log "$(msg 'tsMuxeR already installed, skipping' '检测到 tsMuxeR 已安装，跳过')"
+      return 0
+    fi
+  fi
   tsmuxer_tag="${TSMUXER_VERSION:-$(latest_stable_tag https://github.com/justdan96/tsMuxer.git)}"
   tsmuxer_version="${tsmuxer_tag#[vV]}"
   log "$(msg "Installing tsMuxer ${tsmuxer_version}" "安装 tsMuxer ${tsmuxer_version}")"
-
-  if [[ -x "$TS_MUXER_PATH" ]] && { ! "$package_build" ||
-      [[ "$("$TS_MUXER_PATH" --version 2>/dev/null || true)" == "tsMuxeR version ${tsmuxer_version}."* ]]; }; then
-    log "$(msg 'tsMuxeR already installed, skipping' '检测到 tsMuxeR 已安装，跳过')"
-    return 0
-  fi
 
   local deps=(git curl unzip)
   local missing_deps=()
@@ -3714,8 +3714,12 @@ cached_linux_build() {
     restored=true
     log "$(msg "Restored the build cache for $component" "已恢复 $component 的构建缓存")"
   fi
+  if "$restore_only" && ! "$restored"; then
+    # Prebuilt tools can fill a missing artifact cache without APT or a native build.
+    "${helper[@]}" snapshot "${args[@]}" false "${outputs[@]}" || return $?
+  fi
   "$installer" "$@"
-  if ! "$restore_only"; then
+  if ! "$restore_only" || ! "$restored"; then
     "${helper[@]}" save "${args[@]}" "$restored" "${outputs[@]}"
   fi
 }

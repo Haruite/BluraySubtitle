@@ -108,7 +108,7 @@ jobs:
 
       - name: Collect Ubuntu Tool Cache Key
         id: tool-cache
-        if: ${{ !cancelled() && (steps.setup.outcome == 'success' || steps.setup.outcome == 'failure') }}
+        if: ${{ !cancelled() && (steps.cached.outputs.built == 'true' || steps.setup.outcome == 'success' || steps.setup.outcome == 'failure') }}
         run: |
           set -euo pipefail
           builds="$BLURAY_SETUP_CACHE_DIR/builds/components"
