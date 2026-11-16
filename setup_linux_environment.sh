@@ -229,8 +229,14 @@ install_component() {
     tmux_run "$title" bluray_sudo "$@"
     return
   fi
-  mkdir -p -- "$component_stage"
-  tmux_run "$title" env "DESTDIR=$component_stage" "$@" || return $?
+  mkdir -p -- "$component_stage" || return $?
+  if [[ "$1" == make ]]; then
+    # Makefile assignments can override environment variables such as DESTDIR.
+    set -- "$@" "DESTDIR=$component_stage"
+  else
+    set -- env "DESTDIR=$component_stage" "$@"
+  fi
+  tmux_run "$title" "$@" || return $?
   apply_component_stage
 }
 
