@@ -11,7 +11,7 @@
 
 Windows x64 程序包支持 **Windows 10 1809 及以上版本 和 Windows 11**。Windows ARM64 程序包面向 **Windows 10 ARM64 及以上版本 和 Windows 11**，具体最低 Windows 10 版本待验证。Windows 10 建议使用 **22H2**。
 
-BluraySubtitle 是一个面向 Windows/Linux 的蓝光流程 GUI 工具。它将以下五类功能整合在一个应用中：
+BluraySubtitle 是一个跨平台的蓝光流程 GUI 工具。它将以下五类功能整合在一个应用中：
 
 1. **原盘 Remux**
 2. **原盘压制**
@@ -85,12 +85,13 @@ python -m pip install PyQt6 numpy soundfile pycountry
 
 如果有其他功能要求：
 - `Pillow` 用于自动 getnative 等图像处理。
+- 系统无法直接报告可用内存时，可以安装 `psutil`，让自动 getnative 按可用内存设置并发数。
 - 自定义 VPy 调用 `muvsfunc.getnative()` 绘图时需要 `matplotlib`。
 - 自行打包时需要 `PyInstaller`。
 
 ### 外部工具
 
-使用 BDMV 目录合并字幕只需上述界面依赖。读取 ISO 镜像中的播放列表时，还需 7-Zip（Windows 的 `7z.exe` 或 Linux 的 `7zz`）。
+使用 BDMV 目录合并字幕只需上述界面依赖。读取 ISO 镜像中的播放列表时，还需 7-Zip（`7zz` 或 `7z`）。
 
 | 功能 | 工具 |
 | --- | --- |
@@ -107,7 +108,7 @@ python -m pip install PyQt6 numpy soundfile pycountry
 - `x264`、`x265` 或 `SvtAv1EncApp`，按所选编码器安装。
 - VPy 预览使用 `vsedit`。
 
-> 在**设置 → 外部工具**中修改和检查路径。路径保存在 `config.json` 中。
+> 在**设置 → 外部工具**中修改和检查路径。路径留空时会自动查找已安装的工具。配置保存在 `config.json` 中。
 
 ---
 
@@ -204,9 +205,9 @@ python src/main.py
 
 ## 跨平台支持
 
-程序本身跨平台，只要满足 `Python 依赖` 节即可运行。  
-但是程序的一些功能（主要是压制）依赖大量外部工具且并不好获取，往往需要繁琐的编译和配置步骤。为此，项目配套了相应的环境配置脚本，运行脚本即可生成可运行程序全部功能的环境。没有对应的环境配置脚本不代表程序不支持该平台。  
-也可以下载打包程序运行，打包程序运行的系统要求与环境配置脚本的系统要求不一定相同。  
+只要系统和架构能够提供[所需的 Python 版本及依赖](#python-依赖)和所用功能的外部工具，即可从源码运行。\
+有些功能（主要是压制）依赖较多外部工具，编译和配置步骤也较多。以下环境配置脚本可为所列系统准备运行全部功能的环境。其他系统可以手动配置。\
+项目也提供 Windows 和 Ubuntu 打包版。
 
 ### setup_windows_environment.ps1（Windows 环境配置脚本）
 
@@ -233,7 +234,7 @@ pyinstaller BluraySubtitle_windows_arm64.spec
 
 ### setup_linux_environment.sh（Linux 运行环境脚本）
 
-在原生 **x64 或 ARM64 Linux** 上从源码运行时，需要以下 APT 系统之一。
+脚本可为以下基于 APT 的原生 **x64 或 ARM64 Linux** 系统配置源码运行环境。
 
 - Ubuntu 22.04 及以上版本，包括基于这些 Ubuntu 版本的衍生发行版。
 - Debian 12 及以上版本，包括基于这些 Debian 版本的衍生发行版。
@@ -282,10 +283,6 @@ chmod +x setup_linux_environment.sh
 ---
 
 ## FAQ
-
-### 为什么不支持更旧的操作系统？
-
-旧系统需要为 Python、Qt 和多媒体依赖增加兼容补丁及测试，维护成本较高，因此不扩展现有支持范围。
 
 ### 哪些 Linux 系统可以使用打包版？
 

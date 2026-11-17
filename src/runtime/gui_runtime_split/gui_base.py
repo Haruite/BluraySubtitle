@@ -969,9 +969,6 @@ class BluraySubtitleGuiBase(QWidget):
     def _update_vpy_paths_in_file(self, vpy_path: str, video_path: str, subtitle_path: str) -> bool:
         raise NotImplementedError
 
-    def _vpy_raw_string(self, path: str) -> str:
-        raise NotImplementedError
-
     def _window_geometry_text(self, window: QWidget | None=None) -> str:
         raise NotImplementedError
 

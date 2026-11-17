@@ -1,20 +1,24 @@
-"""Read appearance settings missing from the Qt palette on Linux desktops."""
+"""Read freedesktop appearance settings missing from the Qt palette."""
 
 from __future__ import annotations
 
 import os
 import re
 import subprocess
-import sys
 from pathlib import Path
 
 from PyQt6.QtCore import QFileSystemWatcher, QObject, QSettings, QStandardPaths, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import QApplication
 
-if sys.platform.startswith("linux"):
-    from PyQt6.QtDBus import QDBusConnection, QDBusMessage, QDBusVariant
+QDBusConnection = None
+if os.name == "posix":
+    try:
+        from PyQt6.QtDBus import QDBusConnection, QDBusMessage, QDBusVariant
+    except (ImportError, OSError):
+        pass
 
+if QDBusConnection is not None:
     _PORTAL_SERVICE = "org.freedesktop.portal.Desktop"
     _PORTAL_PATH = "/org/freedesktop/portal/desktop"
     _PORTAL_INTERFACE = "org.freedesktop.portal.Settings"
@@ -148,6 +152,6 @@ if sys.platform.startswith("linux"):
 def desktop_appearance() -> _DesktopAppearance | None:
     app = QApplication.instance()
     platform = app.platformName() if app is not None else ""
-    if sys.platform.startswith("linux") and (platform == "xcb" or platform.startswith("wayland")):
+    if QDBusConnection is not None and (platform == "xcb" or platform.startswith("wayland")):
         return app.findChild(_DesktopAppearance) or _DesktopAppearance(app)
     return None

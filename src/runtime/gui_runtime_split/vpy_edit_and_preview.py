@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLineEdit, QPushButton
 
 from src.core.settings import ENCODE_REMUX_LABELS, ENCODE_LABELS, ENCODE_SP_LABELS, ENCODE_REMUX_SP_LABELS
 from src.core.tool_paths import bundle_directory, is_bundled_tool, require_tool_path, tool_path
-from src.exports.utils import print_exc_terminal, run_command, system_tool_environment
+from src.exports.utils import print_exc_terminal, system_tool_environment
 from src.runtime.gui_runtime_classes.file_dialog import choose_path
 from src.runtime.video_timeline import (
     VPY_HARDSUB_CALL, VPY_HARDSUB_PATTERN, VPY_LEGACY_HARDSUB_CALLS,
@@ -644,8 +644,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
             print_exc_terminal()
             return
         plugin_line = (
-            '' if sys.platform == 'win32' else
-            'PLUGIN_PATH = os.environ.get("BLURAYSUB_PLUGIN_PATH", os.path.expanduser("~/plugins"))\n'
+            'PLUGIN_PATH = os.environ.get("BLURAYSUB_PLUGIN_PATH", "")\n'
             'if os.path.isdir(PLUGIN_PATH):\n'
             '    core.std.LoadAllPlugins(PLUGIN_PATH)\n'
         )
@@ -829,13 +828,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
         if not path:
             AnimatedMessageBox.information(self, self.t('Prompt'), self.t('VPy path is empty'))
             return
-        if not os.path.exists(path):
-            AnimatedMessageBox.information(self, self.t('Prompt'), self.t('File does not exist: {path}').format(path=path))
-            return
-        if sys.platform == 'win32':
-            os.startfile(path)
-        else:
-            run_command(['xdg-open', path], wait=False)
+        self.open_file_path(path)
 
     def open_vpy_in_vsedit(self, path: str) -> Optional[QProcess]:
         path = str(path or '').strip()
@@ -853,12 +846,13 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
             inherited = os.environ if is_bundled_tool(vsedit_exe) else system_tool_environment()
             for name, value in inherited.items():
                 environment.insert(name, value)
-            for variable in ('QT_PLUGIN_PATH', 'QT_QPA_PLATFORM_PLUGIN_PATH', 'QML2_IMPORT_PATH', 'QML_IMPORT_PATH'):
-                environment.remove(variable)
+            if bundle_directory():
+                for variable in ('QT_PLUGIN_PATH', 'QT_QPA_PLATFORM_PLUGIN_PATH', 'QML2_IMPORT_PATH', 'QML_IMPORT_PATH'):
+                    environment.remove(variable)
             plugin_path = tool_path("PLUGIN_PATH")
             if sys.platform == 'win32':
                 vspipe = tool_path("VSPIPE_PATH")
-                runtime = bundle_directory() if is_bundled_tool(vsedit_exe) else Path(vspipe).parent
+                runtime = bundle_directory() if is_bundled_tool(vsedit_exe) else (Path(vspipe).parent if vspipe else None)
                 if runtime:
                     script_library = runtime / 'VSScript.dll'
                     packaged_script = runtime / 'Lib/site-packages/vapoursynth/vsscript.dll'
@@ -867,8 +861,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                     if script_library.is_file():
                         environment.insert('VSSCRIPT_PATH', str(script_library))
                         environment.insert('PATH', str(runtime) + os.pathsep + environment.value('PATH'))
-            if sys.platform.startswith('linux'):
-                environment.insert('BLURAYSUB_PLUGIN_PATH', plugin_path)
+            environment.insert('BLURAYSUB_PLUGIN_PATH', plugin_path)
             if plugin_path:
                 environment.insert('VAPOURSYNTH_EXTRA_PLUGIN_PATH', plugin_path)
             proc.setProcessEnvironment(environment)
@@ -887,11 +880,6 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
         except Exception as e:
             AnimatedMessageBox.warning(self, self.t('Prompt'), self.t('Failed to open vsedit: {error}').format(error=e))
             return None
-
-    def _vpy_raw_string(self, path: str) -> str:
-        s = str(path or '')
-        s = s.replace('\\', '\\\\').replace('"', '\\"')
-        return f'r"{s}"'
 
     def _update_vpy_paths_in_file(self, vpy_path: str, video_path: str, subtitle_path: str) -> bool:
         """Update a=/sub_file=/TextSub toggle in target vpy file for preview context."""
@@ -925,7 +913,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                 indent = m_a.group(1)
                 expr = m_a.group(3)
                 suffix = m_a.group(4) or ''
-                new_raw = f'{indent}{expr}{self._vpy_raw_string(video_path)}{suffix}'
+                new_raw = f'{indent}{expr}{repr(video_path)}{suffix}'
                 if new_raw != raw:
                     lines[idx] = new_raw + '\n'
                     changed = True
@@ -938,7 +926,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                 suffix = m_s.group(4) or ''
                 want_commented = not bool(subtitle_path)
                 comment_prefix = '# ' if want_commented else ''
-                rhs = self._vpy_raw_string(subtitle_path or '')
+                rhs = repr(subtitle_path or '')
                 new_raw = f'{indent}{comment_prefix}{expr}{rhs}{suffix}'
                 if new_raw != raw:
                     lines[idx] = new_raw + '\n'
@@ -983,7 +971,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                 if not raw.lstrip().startswith('#'):
                     m_a = re.match(r'^(\s*a\s*=\s*)r?[\'"].*?[\'"](\s*(#.*)?)$', raw)
                     if m_a:
-                        out.append(f'{m_a.group(1)}{self._vpy_raw_string(video_path)}{m_a.group(2)}\n')
+                        out.append(f'{m_a.group(1)}{repr(video_path)}{m_a.group(2)}\n')
                         continue
 
                 m_s = re.match(r'^(\s*)(#\s*)?(sub_file\s*=\s*)r?[\'"].*?[\'"](\s*(#.*)?)$', raw)
@@ -992,7 +980,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
                     expr = m_s.group(3)
                     suffix = m_s.group(4) or ''
                     comment = '' if subtitle_path else '# '
-                    out.append(f'{indent}{comment}{expr}{self._vpy_raw_string(subtitle_path or "")}{suffix}\n')
+                    out.append(f'{indent}{comment}{expr}{repr(subtitle_path or "")}{suffix}\n')
                     continue
 
                 m_t = re.match(VPY_HARDSUB_PATTERN, raw)

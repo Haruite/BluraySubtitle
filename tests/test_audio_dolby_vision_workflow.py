@@ -118,6 +118,8 @@ class AudioConversionTests(unittest.TestCase):
             root = Path(temporary_directory)
             source = root / 'source.mkv'
             source.write_bytes(b'source')
+            ffprobe = root / 'ffprobe'
+            ffprobe.touch(mode=0o755)
             source_tracks = [
                 _track(0, 'video', 'V_MPEGH/ISO/HEVC'),
                 _track(1, 'audio', 'A_DTS', codec='DTS-HD Master Audio', language='eng'),
@@ -147,7 +149,10 @@ class AudioConversionTests(unittest.TestCase):
 
             with (
                     patch('src.runtime.audio_conversion._identify_tracks', side_effect=[source_tracks, output_tracks]),
-                    using_tool_paths({**default_tool_paths(), 'MKV_EXTRACT_PATH': 'mkvextract', 'MKV_MERGE_PATH': 'mkvmerge', 'FFMPEG_PATH': 'ffmpeg', 'FLAC_PATH': 'flac'}),
+                    using_tool_paths({
+                        **default_tool_paths(), 'MKV_EXTRACT_PATH': 'mkvextract', 'MKV_MERGE_PATH': 'mkvmerge',
+                        'FFMPEG_PATH': 'ffmpeg', 'FFPROBE_PATH': str(ffprobe), 'FLAC_PATH': 'flac',
+                    }),
                     patch('src.runtime.audio_conversion.os.cpu_count', return_value=4),
                     patch('src.runtime.audio_conversion.run_command', side_effect=run_command),
                     patch(

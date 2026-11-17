@@ -3,7 +3,6 @@ import copy
 import datetime
 import os
 import re
-import sys
 import tempfile
 import threading
 import time
@@ -14,6 +13,7 @@ from typing import Optional
 
 from PyQt6 import sip
 from PyQt6.QtCore import Qt, QTimer, QThread, QCoreApplication, QModelIndex, QEventLoop, QObject, QSize, QUrl
+from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPlainTextEdit, QTextBrowser, QWidget, QHBoxLayout, QPushButton, \
     QApplication, QTableWidgetItem, QTableWidget, QToolButton, QComboBox, \
     QAbstractItemView, QMenu, QSizePolicy, QRadioButton, QButtonGroup, QCheckBox, \
@@ -32,7 +32,6 @@ from src.core.encode_presets import (
 from src.domain import MKV, Ass, SRT, Subtitle
 from src.domain.subtitles import list_subtitle_files
 from src.exports.utils import (
-    run_command,
     print_terminal_line,
     print_tb_string_terminal,
     get_time_str,
@@ -2395,15 +2394,10 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         if not os.path.exists(path):
             AnimatedMessageBox.warning(self, self.t('Open File Failed'), self.t('File does not exist:\n{path}').format(path=path))
             return
-        try:
-            if sys.platform == 'win32':
-                os.startfile(path)
-            elif sys.platform == 'darwin':
-                run_command(['open', path], wait=False)
-            else:
-                run_command(['xdg-open', path], wait=False)
-        except Exception as e:
-            AnimatedMessageBox.warning(self, self.t('Open File Failed'), self.t('Cannot open file:\n{path}\n\n{error}').format(path=path, error=e))
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.abspath(path))):
+            AnimatedMessageBox.warning(
+                self, self.t('Open File Failed'), self.t('Cannot open file:\n{path}').format(path=path)
+            )
 
     def open_folder_path(self, path: str):
         path = self._normalize_path_input(path)
@@ -2419,15 +2413,10 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             AnimatedMessageBox.warning(self, self.t('Open Folder Failed'), self.t('Folder does not exist:\n{normalized}').format(normalized=normalized))
             return
 
-        try:
-            if sys.platform == 'win32':
-                os.startfile(normalized)
-            elif sys.platform == 'darwin':
-                run_command(['open', normalized], wait=False)
-            else:
-                run_command(['xdg-open', normalized], wait=False)
-        except Exception as e:
-            AnimatedMessageBox.warning(self, self.t('Open Folder Failed'), self.t('Cannot open folder:\n{normalized}\n\n{error}').format(normalized=normalized, error=e))
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.abspath(normalized))):
+            AnimatedMessageBox.warning(
+                self, self.t('Open Folder Failed'), self.t('Cannot open folder:\n{path}').format(path=normalized)
+            )
 
     def select_bdmv_folder(self):
         folder = choose_path(self, self.t("Select folder"), self.bdmv_folder_path.text().strip())

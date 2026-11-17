@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.core.app_config import app_config_path, load_app_config, save_app_config
 from src.core.i18n import translate_text
-from src.core.tool_paths import resolve_tool_paths
+from src.core.tool_paths import initial_tool_paths, resolve_tool_paths
 from tools.windows_tool_paths import normalize_mkvtoolnix_path, normalize_vsedit_path
 
 
@@ -28,15 +28,26 @@ def main() -> None:
         for name, value in config.tools.items():
             print(f"{name} = {value}")
 
+    optional = {"MPV_PATH", "MPV_CONFIG_PATH", "PLUGIN_PATH" if sys.platform == "win32" else "LIBASS_PATH"}
     try:
         if args.operation == "prepare":
-            load_app_config(path, settings_path=args.settings, on_tools_initialized=show_initialized_tools)
+            initialized = []
+            config = load_app_config(path, settings_path=args.settings, on_tools_initialized=initialized.append)
+            automatic = [name for name, value in config.tools.items() if not value and name not in optional]
+            if automatic and not initialized:
+                defaults = initial_tool_paths(path.parent, args.settings)
+                tools = config.tools | {name: defaults[name] for name in automatic}
+                if tools != config.tools:
+                    config = replace(config, tools=tools)
+                    save_app_config(config, path)
+                    show_initialized_tools(config)
+            elif initialized:
+                show_initialized_tools(config)
             return
 
         config = load_app_config(path, require_tools=True)
         resolved = resolve_tool_paths(config.tools, path.parent, discover=False)
         paths = {name: resolved[name] for name in config.tools}
-        optional = {"MPV_PATH", "MPV_CONFIG_PATH", "LIBASS_PATH" if args.operation == "linux" else "PLUGIN_PATH"}
         for name, value in paths.items():
             if (name not in optional and not value) or (args.operation == "windows" and '"' in value):
                 raise ValueError(translate_text("Invalid setup tool path for {tool} in {path}", args.language).format(

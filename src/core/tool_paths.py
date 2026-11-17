@@ -37,6 +37,23 @@ TOOL_EXECUTABLE_NAMES = tuple(
     name for name in (*TOOL_PATH_NAMES, *MKVTOOLNIX_TOOLS) if name not in TOOL_DIRECTORY_NAMES and name != "LIBASS_PATH"
 )
 
+_EXECUTABLE_CANDIDATES = {
+    "SEVEN_ZIP_PATH": ("7zz", "7z"),
+    "FLAC_PATH": ("flac",),
+    "FFMPEG_PATH": ("ffmpeg",),
+    "FFPROBE_PATH": ("ffprobe",),
+    "X264_PATH": ("x264",),
+    "X265_PATH": ("x265",),
+    "SVT_AV1_PATH": ("SvtAv1EncApp",),
+    "FDK_AAC_PATH": ("fdkaac",),
+    "DOVI_TOOL_PATH": ("dovi_tool",),
+    "HDR10PLUS_TOOL_PATH": ("hdr10plus_tool",),
+    "VSEDIT_PATH": ("vsedit",),
+    "VSPIPE_PATH": ("vspipe",),
+    "TS_MUXER_PATH": ("tsMuxeR", "tsmuxer"),
+}
+
+
 active_tool_paths: ContextVar[Mapping[str, str] | None] = ContextVar("active_tool_paths", default=None)
 
 
@@ -101,9 +118,11 @@ def _bundled_encode_paths(bundle: Path) -> dict[str, str]:
 
 
 def default_tool_paths() -> dict[str, str]:
+    bundle = bundle_directory()
+    if bundle is None or not (sys.platform == "win32" or sys.platform.startswith("linux")):
+        return dict.fromkeys(TOOL_PATH_NAMES, "")
     paths = {name: getattr(settings, name) for name in TOOL_PATH_NAMES}
-    if bundle := bundle_directory():
-        paths.update(_bundled_encode_paths(bundle))
+    paths.update(_bundled_encode_paths(bundle))
     return paths
 
 
@@ -185,6 +204,8 @@ def default_mpv_config_directory() -> Path:
         return Path(settings.MPV_CONFIG_PATH)
     if mpv_home := os.environ.get("MPV_HOME"):
         return Path(mpv_home).expanduser().absolute()
+    if sys.platform == "win32":
+        return Path(os.environ.get("APPDATA") or Path.home() / "AppData/Roaming") / "mpv"
     return (Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "mpv").absolute()
 
 
@@ -201,7 +222,10 @@ def _find_libass_path() -> str:
             ("symbol", ctypes.c_char_p), ("address", ctypes.c_void_p),
         ]
 
-    dladdr = getattr(ctypes.CDLL(None), "dladdr", None)
+    try:
+        dladdr = getattr(ctypes.CDLL(None), "dladdr", None)
+    except OSError:
+        return ""
     if dladdr is None:
         return ""
     dladdr.argtypes = (ctypes.c_void_p, ctypes.POINTER(DlInfo))
@@ -223,11 +247,7 @@ def _find_libass_path() -> str:
     return ""
 
 
-def _find_mpv_path() -> str:
-    if sys.platform != "win32":
-        path = shutil.which("mpv")
-        return os.path.abspath(path) if path else ""
-
+def _find_associated_windows_mpv() -> str:
     import winreg
 
     choice = r"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.mp4\UserChoice"
@@ -262,23 +282,58 @@ def _find_mpv_path() -> str:
     return ""
 
 
+def _discover_tool_paths(paths: dict[str, str]) -> None:
+    for name, programs in _EXECUTABLE_CANDIDATES.items():
+        if paths.get(name):
+            continue
+        for program in programs:
+            if executable := shutil.which(program):
+                paths[name] = os.path.abspath(executable)
+                break
+    if not paths.get("MKVTOOLNIX_PATH"):
+        for directory in os.get_exec_path():
+            directory = os.path.abspath(directory)
+            if all(tool_path_exists(name, entry) for name, entry in mkvtoolnix_executables(directory).items()):
+                paths["MKVTOOLNIX_PATH"] = directory
+                break
+
+    if sys.platform == "win32" or sys.platform.startswith("linux"):
+        # Installations prepared by setup may also put tools outside PATH.
+        for name in TOOL_PATH_NAMES:
+            if paths.get(name):
+                continue
+            candidate = getattr(settings, name)
+            if name == "MKVTOOLNIX_PATH":
+                found = all(
+                    tool_path_exists(tool, entry) for tool, entry in mkvtoolnix_executables(candidate).items()
+                )
+            else:
+                found = tool_path_exists(name, candidate)
+            if found:
+                paths[name] = candidate
+    if not paths.get("LIBASS_PATH"):
+        paths["LIBASS_PATH"] = _find_libass_path()
+    if not paths.get("MPV_PATH"):
+        if sys.platform == "win32":
+            paths["MPV_PATH"] = _find_associated_windows_mpv()
+        elif executable := shutil.which("mpv"):
+            paths["MPV_PATH"] = os.path.abspath(executable)
+    if not paths.get("MPV_CONFIG_PATH"):
+        paths["MPV_CONFIG_PATH"] = str(default_mpv_config_directory())
+
+
 def resolve_tool_paths(
         configured: Mapping[str, str], config_directory: Path, *, discover: bool = True,
 ) -> Mapping[str, str]:
-    paths = {}
+    paths = dict.fromkeys(TOOL_PATH_NAMES, "")
     for name, path in configured.items():
         if not isinstance(path, str) or any(character in path for character in '\0\r\n\t'):
             raise ValueError(translate_text("Invalid path for {tool}.").format(tool=name))
         # Keep symlink paths so launchers can use their selected installation directory.
         paths[name] = os.path.abspath(config_directory / os.path.expanduser(os.path.expandvars(path))) if path else ""
-    paths.update(mkvtoolnix_executables(paths.get("MKVTOOLNIX_PATH", "")))
     if discover:
-        if not paths.get("LIBASS_PATH"):
-            paths["LIBASS_PATH"] = _find_libass_path()
-        if not paths.get("MPV_PATH"):
-            paths["MPV_PATH"] = _find_mpv_path()
-        if sys.platform.startswith("linux") and not paths.get("MPV_CONFIG_PATH"):
-            paths["MPV_CONFIG_PATH"] = str(default_mpv_config_directory())
+        _discover_tool_paths(paths)
+    paths.update(mkvtoolnix_executables(paths["MKVTOOLNIX_PATH"]))
     return MappingProxyType(paths)
 
 

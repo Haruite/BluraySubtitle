@@ -1,4 +1,4 @@
-"""Shared configuration constants (stage-1 extracted from legacy file)."""
+"""Shared table definitions and tool paths for setup and packaging."""
 
 import os
 import sys

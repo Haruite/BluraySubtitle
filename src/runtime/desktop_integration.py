@@ -12,7 +12,7 @@ from contextlib import suppress
 from pathlib import Path
 
 from PyQt6.QtCore import QIODevice, QSaveFile, QStandardPaths
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QGuiApplication, QIcon
 
 from src.core.app_config import application_directory, application_location_id, application_support_directory
 from src.core.i18n import translate_text
@@ -63,6 +63,14 @@ def _launch_command() -> list[str]:
     return [executable, str(application_directory() / "src/main.py")]
 
 
+def supports_desktop_entries() -> bool:
+    if sys.platform.startswith("linux"):
+        return True
+    app = QGuiApplication.instance()
+    platform = app.platformName() if isinstance(app, QGuiApplication) else ""
+    return os.name == "posix" and (platform == "xcb" or platform.startswith("wayland"))
+
+
 def create_launch_shortcut(*, menu: bool) -> Path:
     directory = application_directory()
     command = _launch_command()
@@ -73,8 +81,8 @@ def create_launch_shortcut(*, menu: bool) -> Path:
         if not frozen and executable.with_name("pythonw.exe").is_file():
             command[0] = str(executable.with_name("pythonw.exe"))
         return _create_windows_shortcut(command, directory, icon, menu=menu)
-    if sys.platform.startswith("linux"):
-        return _create_linux_shortcut(command, directory, menu=menu)
+    if supports_desktop_entries():
+        return _create_desktop_entry_shortcut(command, directory, menu=menu)
     raise RuntimeError(translate_text("Desktop shortcuts are unavailable on this platform."))
 
 
@@ -129,13 +137,13 @@ def _desktop_argument(value: str) -> str:
     return f'"{escaped.replace("%", "%%")}"'
 
 
-def _create_linux_shortcut(command: list[str], directory: Path, *, menu: bool) -> Path:
+def _create_desktop_entry_shortcut(command: list[str], directory: Path, *, menu: bool) -> Path:
     location = QStandardPaths.StandardLocation.ApplicationsLocation if menu else QStandardPaths.StandardLocation.DesktopLocation
     folder = QStandardPaths.writableLocation(location)
     if not folder:
         raise OSError(translate_text("This desktop does not provide a shortcut directory."))
     path = Path(folder) / f"{desktop_entry_id()}.desktop"
-    _write_linux_entry(path, command, directory, "BluraySubtitle", application_icon_path(), desktop_entry_id())
+    _write_desktop_entry(path, command, directory, "BluraySubtitle", application_icon_path(), desktop_entry_id())
     if not menu:
         path.chmod(0o755)
         if gio := shutil.which("gio"):
@@ -154,16 +162,17 @@ def log_taskbar_entry(title: str, icon: Path, window_class: str) -> Path:
     if not location:
         raise OSError(translate_text("This desktop does not provide a shortcut directory."))
     path = Path(location) / "bluraysubtitle" / f"{window_class}.desktop"
-    _write_linux_entry(path, _launch_command(), application_directory(), title, icon, window_class, hidden=True)
+    _write_desktop_entry(path, _launch_command(), application_directory(), title, icon, window_class, hidden=True)
     return path
 
 
-def _write_linux_entry(
+def _write_desktop_entry(
     path: Path, command: list[str], directory: Path, title: str, icon: Path, window_class: str, *, hidden: bool = False,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     # GLib checks the executable before expanding percent escapes in Exec.
-    entry_command = ["/usr/bin/env", *command] if "%" in command[0] else command
+    env_command = shutil.which("env") if "%" in command[0] else None
+    entry_command = [env_command, *command] if env_command else command
     arguments = " ".join(_desktop_argument(argument) for argument in entry_command)
     data = (
         f"[Desktop Entry]\nType=Application\nName={_desktop_value(title)}\n"

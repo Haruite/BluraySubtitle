@@ -5,14 +5,14 @@ import subprocess
 import sys
 import traceback
 from pathlib import Path
-from urllib.parse import urlparse, unquote
 
-from PyQt6.QtCore import QProcess, QProcessEnvironment, Qt
+from PyQt6.QtCore import QProcess, QProcessEnvironment, Qt, QUrl
 from PyQt6.QtWidgets import QToolButton
 
 from src.core import ENCODE_SP_LABELS
 from src.core.tool_paths import tool_path
 from src.exports.utils import print_terminal_line, run_command
+from src.runtime.desktop_integration import supports_desktop_entries
 from src.runtime.mpv_menu import mpv_language_options
 from src.runtime.gui_runtime_classes.widget_animations import AnimatedInputDialog, AnimatedMessageBox
 from .gui_base import BluraySubtitleGuiBase
@@ -26,14 +26,7 @@ class PlaybackPathsMixin(BluraySubtitleGuiBase):
         if not s:
             return ''
         if s.startswith('file://'):
-            try:
-                parsed = urlparse(s)
-                path = unquote(parsed.path or '')
-                if sys.platform == 'win32' and re.match(r'^/[A-Za-z]:/', path):
-                    path = path[1:]
-                s = path or s
-            except Exception:
-                pass
+            s = QUrl(s).toLocalFile() or s
         return os.path.normpath(os.path.expanduser(s))
 
     def _split_m2ts_files(self, text: str) -> list[str]:
@@ -125,7 +118,7 @@ class PlaybackPathsMixin(BluraySubtitleGuiBase):
         executable = tool_path("MPV_PATH")
         if self._app_config.tools.get("MPV_PATH") or sys.platform == "win32":
             return executable
-        if not executable or not sys.platform.startswith("linux"):
+        if not executable or not supports_desktop_entries():
             return ""
         try:
             association = run_command(
@@ -143,9 +136,9 @@ class PlaybackPathsMixin(BluraySubtitleGuiBase):
         options = []
         menu_directory = None
         environment = QProcessEnvironment.systemEnvironment()
+        ubuntu_bundle = getattr(sys, "frozen", False) and sys.platform.startswith("linux")
         if sys.platform.startswith("linux"):
-            frozen = getattr(sys, "frozen", False)
-            if frozen:
+            if ubuntu_bundle:
                 if environment.contains("LD_LIBRARY_PATH_ORIG"):
                     environment.insert("LD_LIBRARY_PATH", environment.value("LD_LIBRARY_PATH_ORIG"))
                 else:
@@ -169,16 +162,18 @@ class PlaybackPathsMixin(BluraySubtitleGuiBase):
                     ))
                     if not environment.contains("LIBGL_ALWAYS_SOFTWARE"):
                         environment.insert("LIBGL_ALWAYS_SOFTWARE", "1")
-            plugin_path = tool_path("PLUGIN_PATH")
-            environment.insert("BLURAYSUB_PLUGIN_PATH", plugin_path)
-            if plugin_path:
-                environment.insert("VAPOURSYNTH_EXTRA_PLUGIN_PATH", plugin_path)
-            config = tool_path("MPV_CONFIG_PATH")
-            if frozen:
+        plugin_path = tool_path("PLUGIN_PATH")
+        environment.insert("BLURAYSUB_PLUGIN_PATH", plugin_path)
+        if plugin_path:
+            environment.insert("VAPOURSYNTH_EXTRA_PLUGIN_PATH", plugin_path)
+        config = tool_path("MPV_CONFIG_PATH")
+        if config:
+            if ubuntu_bundle:
                 options.append(f"--config-dir={config}")
                 environment.insert("BLURAYSUB_MPV_CONFIG_PATH", config)
-            if frozen or self._app_config.tools.get("MPV_CONFIG_PATH"):
+            if ubuntu_bundle or self._app_config.tools.get("MPV_CONFIG_PATH"):
                 environment.insert("MPV_HOME", config)
+        if config and (supports_desktop_entries() or self._app_config.tools.get("MPV_CONFIG_PATH")):
             menu_options, menu_directory = mpv_language_options(self._language_code, Path(config))
             options.extend(menu_options)
 

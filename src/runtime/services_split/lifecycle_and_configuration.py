@@ -4,7 +4,6 @@ import locale
 import multiprocessing
 import os
 import shutil
-import sys
 import threading
 import xml.etree.ElementTree as et
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -15,7 +14,7 @@ from PyQt6.QtCore import QCoreApplication, QThread
 from src.bdmv import Chapter, MPLS
 from src.exports.utils import get_time_str
 from .service_base import BluraySubtitleServiceBase
-from .. import TaskCancelled
+from .. import TaskCancelled, worker_process_context
 from ...core import DEFAULT_APPROX_EPISODE_DURATION_SECONDS, CURRENT_UI_LANGUAGE
 from ...core.i18n import translate_text
 from ...domain import Subtitle
@@ -115,21 +114,12 @@ class LifecycleConfigurationMixin(BluraySubtitleServiceBase):
                 print(f'Failed to load subtitle file ｢{p}｣: {str(e)}')
             return
 
-        # On Linux, exit in worker subprocess to avoid recursive window spawning.
-        if sys.platform != 'win32' and multiprocessing.current_process().name != 'MainProcess':
+        if multiprocessing.current_process().name != 'MainProcess':
             return
 
         max_workers = min(len(file_paths), os.cpu_count() or 1)
-
-        # Select multiprocessing context for Linux/Windows compatibility.
-        if sys.platform == 'win32':
-            mp_context = multiprocessing.get_context('spawn')
-        else:
-            # Linux defaults to fork; more stable for GUI, but requires __main__ guard.
-            mp_context = multiprocessing.get_context('fork')
-
         try:
-            with ProcessPoolExecutor(max_workers=max_workers, mp_context=mp_context) as ex:
+            with ProcessPoolExecutor(max_workers=max_workers, mp_context=worker_process_context()) as ex:
                 futures = [ex.submit(_parse_subtitle_worker, p) for p in file_paths]
                 for fut in as_completed(futures):
                     if cancel_event and cancel_event.is_set():

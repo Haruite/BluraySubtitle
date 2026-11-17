@@ -1393,3 +1393,12 @@ Windows setup uses native installers and CPython on Windows 11 ARM64, with a sep
 2026-11-16 to 2026-11-17
 
 Ubuntu and Windows builds validate each component cache against upstream versions, build options, and relevant dependencies. Compatible archives migrate after verification. Windows tracks the linked FDK-AAC library version separately when building `fdkaac`. The workflows save snapshots when their contents change and keep the two most recent snapshots per architecture and cache group after a successful restore and package verification. Ubuntu caches the APT manifest alongside its `.deb` files.
+
+## Source Runtime Portability
+
+2026-11-17
+
+- Source runs discover tools through PATH when the configured path is empty. Setup fills installation destinations, and MKVToolNix tools resolve together.
+- Use Qt for opening files and directories. Desktop shortcuts, appearance settings, and package updates use the integrations available on the host.
+- Source workers start with spawn. getnative uses available memory to set its worker limit and processes one sample at a time when the memory probe is unavailable.
+- Verified both dialog titles with the same Blu-ray playlist. Source GUI startup and tool discovery passed on Ubuntu and Windows.

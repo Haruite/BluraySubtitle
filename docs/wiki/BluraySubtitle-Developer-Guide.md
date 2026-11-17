@@ -10,7 +10,7 @@ Use the [main MPLS and SP definitions](Blu-ray-Disc-Structure.md#main-content-an
 
 ## Runtime and tool builds
 
-[Windows setup](../../setup_windows_environment.ps1) and [Linux setup](../../setup_linux_environment.sh) install the required tools. [`settings.py`](../../src/core/settings.py) defines paths for Build mode and supplies the initial `config.json` tool paths. Desktop setup and the GUI use the same `tools` fields. Relative paths start from the directory containing `config.json`.
+[Windows setup](../../setup_windows_environment.ps1) and [Linux setup](../../setup_linux_environment.sh) install the required tools. [`settings.py`](../../src/core/settings.py) defines the default installation paths used by setup. Source runs look for tools when the corresponding path is empty. Desktop setup and the GUI use the same `tools` fields. Relative paths start from the directory containing `config.json`.
 
 - x264 uses official `master` to build an 8/10-bit CLI. Windows x64 uses MSYS2 UCRT64 and PGO. Windows ARM64 uses CLANGARM64 with NEON.
 - x265 uses the latest official stable tag to build an 8/10/12-bit multilib CLI, with HDR10+ JSON and Dolby Vision RPU input enabled in each core.

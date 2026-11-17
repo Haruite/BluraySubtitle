@@ -19,19 +19,21 @@ from PyQt6.QtWidgets import (
 from src.core.app_config import UiPreferences, application_support_directory
 from src.core.i18n import translate_text
 from src.runtime.application_log import ApplicationLog
-from src.runtime.desktop_integration import desktop_entry_id, log_taskbar_entry
+from src.runtime.desktop_integration import desktop_entry_id, log_taskbar_entry, supports_desktop_entries
 
 from .widget_animations import AnimatedDialog
 from .window_background import WindowBackground, background_panel_colors
 from .x11_window import apply_x11_title_bar_theme, set_x11_window_identity
 
+_dwm_set_window_attribute = None
 if sys.platform == "win32":
     import ctypes
     from ctypes import wintypes
 
-    _dwm_set_window_attribute = ctypes.WinDLL("dwmapi").DwmSetWindowAttribute
-    _dwm_set_window_attribute.argtypes = (wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD)
-    _dwm_set_window_attribute.restype = ctypes.c_long
+    with suppress(AttributeError, OSError):
+        _dwm_set_window_attribute = ctypes.WinDLL("dwmapi").DwmSetWindowAttribute
+        _dwm_set_window_attribute.argtypes = (wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD)
+        _dwm_set_window_attribute.restype = ctypes.c_long
     _DWMWA_USE_IMMERSIVE_DARK_MODE = 20
     _DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1 = 19
 
@@ -91,8 +93,8 @@ class _MatchCountLabel(QLabel):
 
 class ApplicationLogDialog(AnimatedDialog):
     def __init__(self, application_log: ApplicationLog) -> None:
-        # Linux window managers may minimize dialogs with the active application window.
-        if sys.platform.startswith("linux"):
+        # Some window managers minimize dialogs with the active application window.
+        if supports_desktop_entries():
             super().__init__(None, Qt.WindowType.Window)
         else:
             super().__init__()
@@ -179,7 +181,7 @@ class ApplicationLogDialog(AnimatedDialog):
         self._timer.timeout.connect(self._refresh)
 
     def set_dark_title_bar(self, dark: bool) -> None:
-        if sys.platform != "win32" or QGuiApplication.platformName() != "windows":
+        if _dwm_set_window_attribute is None or QGuiApplication.platformName() != "windows":
             return
         self._dark_title_bar = dark
         self._title_bar_timer.start(0)

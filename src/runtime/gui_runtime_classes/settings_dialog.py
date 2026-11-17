@@ -57,7 +57,7 @@ from src.core.encode_presets import (
 from src.core.i18n import translate_text
 from src.core.tool_paths import (
     ENCODER_PATH_NAMES, MKVTOOLNIX_TOOLS, TOOL_DIRECTORY_NAMES, TOOL_PATH_NAMES,
-    resolve_tool_paths, tool_path_exists,
+    bundle_directory, resolve_tool_paths, tool_path_exists,
 )
 from src.core.version import (
     APP_VERSION,
@@ -67,7 +67,7 @@ from src.core.version import (
     parse_commit_record,
     release_version,
 )
-from src.runtime.desktop_integration import create_launch_shortcut
+from src.runtime.desktop_integration import create_launch_shortcut, supports_desktop_entries
 from src.runtime.encode_source import probe_svt_av1_bit_depths
 from src.runtime.update_check import request_update_info, update_network_manager
 from src.runtime.program_update import (
@@ -113,7 +113,7 @@ class SettingsDialog(AnimatedDialog):
         self._resolved_tools = resolved_tools
         self._current_commit = current_commit()
         self._update_network_manager = update_network_manager(self)
-        self._update_replies: tuple[QNetworkReply, QNetworkReply] | None = None
+        self._update_replies: tuple[QNetworkReply, ...] | None = None
         self.finished.connect(self._cancel_update_check)
         self.setWindowTitle(self.t("Settings"))
         self.setMinimumWidth(680)
@@ -300,26 +300,28 @@ class SettingsDialog(AnimatedDialog):
         )
         update_layout.addWidget(self.current_version_label)
         update_layout.addWidget(self.startup_update_checkbox)
+        self.startup_update_checkbox.setVisible(bool(SERVER_PACKAGE_METADATA_URL))
         update_layout.addWidget(self.check_updates_button, alignment=Qt.AlignmentFlag.AlignLeft)
         form.addRow(self.t("Application updates"), update_row)
 
-        shortcuts = QWidget(tab)
-        shortcut_layout = QHBoxLayout(shortcuts)
-        shortcut_layout.setContentsMargins(0, 0, 0, 0)
-        desktop_button = QPushButton(self.t("Add desktop shortcut"), shortcuts)
-        menu_button = QPushButton(self.t("Add to application menu"), shortcuts)
-        desktop_button.clicked.connect(lambda _=False: self._add_launch_shortcut(menu=False))
-        menu_button.clicked.connect(lambda _=False: self._add_launch_shortcut(menu=True))
-        shortcut_layout.addWidget(desktop_button)
-        shortcut_layout.addWidget(menu_button)
-        shortcut_layout.addStretch()
-        form.addRow(self.t("Launch shortcuts"), shortcuts)
-        self._shortcut_status = QLabel(tab)
-        self._shortcut_status.setTextFormat(Qt.TextFormat.PlainText)
-        self._shortcut_status.setWordWrap(True)
-        self._shortcut_status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self._shortcut_status.hide()
-        form.addRow(self._shortcut_status)
+        if sys.platform == "win32" or supports_desktop_entries():
+            shortcuts = QWidget(tab)
+            shortcut_layout = QHBoxLayout(shortcuts)
+            shortcut_layout.setContentsMargins(0, 0, 0, 0)
+            desktop_button = QPushButton(self.t("Add desktop shortcut"), shortcuts)
+            menu_button = QPushButton(self.t("Add to application menu"), shortcuts)
+            desktop_button.clicked.connect(lambda _=False: self._add_launch_shortcut(menu=False))
+            menu_button.clicked.connect(lambda _=False: self._add_launch_shortcut(menu=True))
+            shortcut_layout.addWidget(desktop_button)
+            shortcut_layout.addWidget(menu_button)
+            shortcut_layout.addStretch()
+            form.addRow(self.t("Launch shortcuts"), shortcuts)
+            self._shortcut_status = QLabel(tab)
+            self._shortcut_status.setTextFormat(Qt.TextFormat.PlainText)
+            self._shortcut_status.setWordWrap(True)
+            self._shortcut_status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            self._shortcut_status.hide()
+            form.addRow(self._shortcut_status)
         return tab
 
     def _add_launch_shortcut(self, *, menu: bool) -> None:
@@ -383,10 +385,10 @@ class SettingsDialog(AnimatedDialog):
             return
         self._set_update_check_busy(True)
         manager = self._update_network_manager
-        self._update_replies = (
-            request_update_info(manager, GITHUB_LATEST_RELEASE_API, b"application/vnd.github+json"),
-            request_update_info(manager, SERVER_PACKAGE_METADATA_URL, b"text/plain"),
-        )
+        replies = [request_update_info(manager, GITHUB_LATEST_RELEASE_API, b"application/vnd.github+json")]
+        if SERVER_PACKAGE_METADATA_URL:
+            replies.append(request_update_info(manager, SERVER_PACKAGE_METADATA_URL, b"text/plain"))
+        self._update_replies = tuple(replies)
         for reply in self._update_replies:
             reply.finished.connect(self._finish_update_check)
 
@@ -406,17 +408,19 @@ class SettingsDialog(AnimatedDialog):
             return
         self._update_replies = None
         self._set_update_check_busy(False)
-        release_reply, package_reply = replies
+        release_reply, *package_replies = replies
         release_result = self._read_update_reply(
             release_reply,
             self._release_update_result,
             "GitHub did not return a valid release version.",
         )
-        package_result = self._read_update_reply(
-            package_reply,
-            self._server_package_update_result,
-            "The server did not return valid package commit information.",
-        )
+        package_result = None
+        if package_replies:
+            package_result = self._read_update_reply(
+                package_replies[0],
+                self._server_package_update_result,
+                "The server did not return valid package commit information.",
+            )
         self._show_update_results(release_result, package_result)
 
     def _read_update_reply(
@@ -447,7 +451,7 @@ class SettingsDialog(AnimatedDialog):
             return escape(status.format(version=latest_version)), None
         status = escape(self.t("Version {version} is available.").format(version=latest_version))
         package = github_update_package(payload)
-        if package is None:
+        if package is None and SERVER_PACKAGE_METADATA_URL:
             status += "<br>" + escape(self.t("The update source did not provide a verified package for this platform."))
         return status, package
 
@@ -476,16 +480,18 @@ class SettingsDialog(AnimatedDialog):
     def _show_update_results(
             self,
             release_result: tuple[str, UpdatePackage | None],
-            package_result: tuple[str, UpdatePackage | None],
+            package_result: tuple[str, UpdatePackage | None] | None,
     ) -> None:
         release_text, github_package = release_result
-        server_text, server_package = package_result
         current_build = "<br>".join(escape(line) for line in self._current_build_summary().splitlines())
-        sections = (
+        sections = [
             (self.t("Current build"), current_build),
             (self.t("GitHub Release"), release_text),
-            (self.t(SERVER_PACKAGE_LABEL), server_text),
-        )
+        ]
+        server_package = None
+        if package_result is not None:
+            server_text, server_package = package_result
+            sections.append((self.t(SERVER_PACKAGE_LABEL), server_text))
         message = "".join(f"<p><b>{escape(title)}</b><br>{body}</p>" for title, body in sections)
         start_update = self._start_update
         can_update = start_update is not None and update_executable() is not None
@@ -1141,19 +1147,17 @@ class SettingsDialog(AnimatedDialog):
     def _build_external_tools_tab(self) -> QWidget:
         tab = QWidget(self)
         layout = QVBoxLayout(tab)
-        description = QLabel(self.t("Relative paths are based on the directory containing {path}.").format(
-            path=self._config_path,
-        ), tab)
+        description = QLabel(
+            self.t("Relative paths are based on the directory containing {path}.").format(path=self._config_path)
+            + "\n" + self.t("Leave a tool path empty for automatic discovery."),
+            tab,
+        )
         description.setWordWrap(True)
         description.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(description)
 
-        names = [
-            name for name in TOOL_PATH_NAMES
-            if sys.platform.startswith("linux") or name not in {"PLUGIN_PATH", "MPV_CONFIG_PATH"}
-        ]
         table = SelectionTableWidget(tab)
-        table.setRowCount(len(names))
+        table.setRowCount(len(TOOL_PATH_NAMES))
         table.setColumnCount(3)
         self.external_tools_table = table
         table.setHorizontalHeaderLabels([
@@ -1166,7 +1170,7 @@ class SettingsDialog(AnimatedDialog):
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self._tool_path_edits: dict[str, QLineEdit] = {}
-        for row, name in enumerate(names):
+        for row, name in enumerate(TOOL_PATH_NAMES):
             table.setItem(row, 0, QTableWidgetItem(name))
             table.setItem(row, 2, QTableWidgetItem())
             cell = QWidget(table)
@@ -1205,7 +1209,7 @@ class SettingsDialog(AnimatedDialog):
 
     def _refresh_external_tool_detection(self, *, force: bool = False) -> bool:
         table = self.external_tools_table
-        configured = self._hidden_tool_paths | {name: edit.text() for name, edit in self._tool_path_edits.items()}
+        configured = {name: edit.text() for name, edit in self._tool_path_edits.items()}
         try:
             if force or configured != self._configured_tools:
                 self._resolved_tools = resolve_tool_paths(configured, self._config_path.parent)
@@ -1214,14 +1218,16 @@ class SettingsDialog(AnimatedDialog):
             self.external_tools_status_label.setText(str(error))
             return False
         missing = []
+        optional = {"MPV_CONFIG_PATH", "MPV_PATH", "LIBASS_PATH"}
+        if sys.platform == "win32" or bundle_directory() is None:
+            optional.add("PLUGIN_PATH")
         for row, name in enumerate(self._tool_path_edits):
             path = self._resolved_tools[name]
             item = table.item(row, 2)
             item.setText(path)
             item.setToolTip(path)
-            optional = name in {"MPV_CONFIG_PATH", "MPV_PATH", "LIBASS_PATH"}
             checked_tools = MKVTOOLNIX_TOOLS if name == "MKVTOOLNIX_PATH" else (name,)
-            if (not optional or configured[name]) and not all(
+            if (name not in optional or configured[name]) and not all(
                     tool_path_exists(tool, self._resolved_tools[tool]) for tool in checked_tools
             ):
                 missing.append(name)
@@ -1286,9 +1292,6 @@ class SettingsDialog(AnimatedDialog):
         combo.setCurrentIndex(index if index >= 0 else 0)
 
     def _set_controls(self, config: AppConfig) -> None:
-        self._hidden_tool_paths = {
-            name: value for name, value in config.tools.items() if name not in self._tool_path_edits
-        }
         for name, edit in self._tool_path_edits.items():
             edit.setText(config.tools[name])
         self._refresh_external_tool_detection()

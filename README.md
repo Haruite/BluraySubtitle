@@ -11,7 +11,7 @@ Development: [mandatory code modification standards](docs/development/code-stand
 
 The Windows x64 package supports **Windows 10 version 1809 or later** and **Windows 11**. The Windows ARM64 package targets **Windows 10 and Windows 11 on ARM64**. The earliest Windows 10 ARM64 release is pending verification. **Windows 10 22H2** is recommended.
 
-BluraySubtitle is a GUI tool for Blu-ray workflows on **Windows / Linux**. It brings the following five areas of functionality together in one application:
+BluraySubtitle is a cross-platform GUI tool for Blu-ray workflows. It brings the following five areas of functionality together in one application:
 
 1. **Blu-ray Remux**
 2. **Blu-ray Encode**
@@ -86,12 +86,13 @@ python -m pip install PyQt6 numpy soundfile pycountry
 Additional packages depend on the features you use.
 
 - `Pillow` is used for automatic getnative and other image processing.
+- Optionally install `psutil` so automatic getnative can use the available memory when the system cannot report it directly.
 - `matplotlib` is needed for plots when a custom VPy uses `muvsfunc.getnative()`.
 - `PyInstaller` is needed to build distributable packages.
 
 ### External tools
 
-Merging subtitles with a BDMV folder requires only the GUI's Python packages above. To read playlists from ISO images, install 7-Zip (`7z.exe` on Windows or `7zz` on Linux).
+Merging subtitles with a BDMV folder requires only the GUI's Python packages above. To read playlists from ISO images, install 7-Zip (`7zz` or `7z`).
 
 | Feature | Tools |
 | --- | --- |
@@ -108,7 +109,7 @@ Merging subtitles with a BDMV folder requires only the GUI's Python packages abo
 - `x264`, `x265`, or `SvtAv1EncApp`, depending on which encoder you select.
 - `vsedit` for VPy previews.
 
-> Edit and check tool paths under **Settings → External tools**. The paths are saved in `config.json`.
+> Edit and check tool paths under **Settings → External tools**. Leave paths empty to look for installed tools automatically. The paths are saved in `config.json`.
 
 ---
 
@@ -205,9 +206,9 @@ Blu-ray input rejects existing outputs. Remux input skips completed main/SP, ext
 
 ## Cross-platform support
 
-The application can run on platforms that meet the [Python requirements](#python-packages).\
-Some features, especially encoding, rely on external tools that can take considerable work to compile and configure. The setup scripts prepare an environment for all features on supported systems. You can configure the tools manually on other platforms.\
-You can also download a packaged edition, whose system requirements may differ from those of the setup scripts.
+You can run the application from source on any system and architecture that provides the [required Python version and packages](#python-packages) and the external tools for the features you use.\
+Some features, especially encoding, rely on external tools that can take considerable work to compile and configure. The setup scripts prepare an environment for all features on the systems listed below. You can configure the tools manually on other systems.\
+Packaged editions are available for Windows and Ubuntu.
 
 ### `setup_windows_environment.ps1` (Windows environment setup)
 
@@ -284,10 +285,6 @@ When run over SSH, `setup_linux_environment.sh` uses **tmux** to display build l
 ---
 
 ## FAQ
-
-### Why aren't older operating systems supported?
-
-Older systems require extra compatibility patches and testing for Python, Qt, and multimedia dependencies. The maintenance cost is too high to extend the current support range.
 
 ### Which Linux distributions can run the packaged build?
 

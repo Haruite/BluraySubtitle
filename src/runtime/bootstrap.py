@@ -2,6 +2,7 @@
 
 import os
 import sys
+from contextlib import suppress
 from pathlib import Path
 
 from PyQt6.QtCore import QStandardPaths, QTimer
@@ -13,33 +14,32 @@ from src.core.i18n import translate_text
 from src.exports.utils import print_terminal_line
 
 from .application_log import ApplicationLog
-from .desktop_integration import application_icon_path, desktop_entry_id
+from .desktop_integration import application_icon_path, desktop_entry_id, supports_desktop_entries
 from .gui_runtime_classes.bluray_subtitle_gui_entry import BluraySubtitleGUI
 from .gui_runtime_classes.widget_animations import AnimatedMessageBox, enable_combo_animation
 from .gui_runtime_classes.x11_window import set_x11_window_identity
 from .instance_activation import InstanceActivation
 
-if sys.platform == "win32":
-    import ctypes
-
-    _set_taskbar_app_id = ctypes.WinDLL("shell32").SetCurrentProcessExplicitAppUserModelID
-    _set_taskbar_app_id.argtypes = (ctypes.c_wchar_p,)
-    _set_taskbar_app_id.restype = ctypes.c_long
-
-
 def run_src_entry(application_log: ApplicationLog | None = None) -> None:
-    if sys.platform == "win32" and not getattr(sys, "frozen", False):
+    frozen = getattr(sys, "frozen", False)
+    if sys.platform == "win32" and not frozen:
+        import ctypes
+
         # Keep source launches out of python.exe's taskbar group.
-        _set_taskbar_app_id("Haruite.BluraySubtitle")
-    desktop_id = desktop_entry_id() if sys.platform.startswith("linux") else ""
-    if desktop_id:
-        desktop_entry = QStandardPaths.locate(
-            QStandardPaths.StandardLocation.ApplicationsLocation, f"{desktop_id}.desktop",
-        )
-        if desktop_entry:
-            # Qt registers an installed entry before the GUI reads appearance settings.
-            QApplication.setDesktopFileName(desktop_id)
+        with suppress(AttributeError, OSError):
+            set_taskbar_app_id = ctypes.WinDLL("shell32").SetCurrentProcessExplicitAppUserModelID
+            set_taskbar_app_id.argtypes = (ctypes.c_wchar_p,)
+            set_taskbar_app_id.restype = ctypes.c_long
+            set_taskbar_app_id("Haruite.BluraySubtitle")
+    desktop_id = desktop_entry_id() if supports_desktop_entries() else ""
+    desktop_entry = desktop_id and QStandardPaths.locate(
+        QStandardPaths.StandardLocation.ApplicationsLocation, f"{desktop_id}.desktop",
+    )
+    if desktop_entry:
+        QApplication.setDesktopFileName(desktop_id)
     app = QApplication.instance() or QApplication(sys.argv)
+    if not desktop_id and supports_desktop_entries():
+        desktop_id = desktop_entry_id()
     instance = None
     try:
         instance = InstanceActivation(app)
@@ -55,7 +55,7 @@ def run_src_entry(application_log: ApplicationLog | None = None) -> None:
             translate=False,
         )
     ready_file = update_error = ""
-    if sys.platform.startswith("linux"):
+    if frozen and sys.platform.startswith("linux"):
         from .ubuntu_update import update_in_progress
 
         ready_file = os.environ.pop("BLURAY_SUBTITLE_UPDATE_READY", "")

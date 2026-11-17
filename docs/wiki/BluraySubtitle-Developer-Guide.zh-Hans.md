@@ -10,7 +10,7 @@
 
 ## 运行环境与工具构建
 
-[Windows setup](../../setup_windows_environment.ps1) 和 [Linux setup](../../setup_linux_environment.sh) 安装所需工具。[`settings.py`](../../src/core/settings.py) 提供 Build 模式的路径以及 `config.json` 的初始工具路径。Desktop setup 与 GUI 读取同一组 `tools` 字段，并以配置目录为基准解析相对路径。
+[Windows setup](../../setup_windows_environment.ps1) 和 [Linux setup](../../setup_linux_environment.sh) 安装所需工具。[`settings.py`](../../src/core/settings.py) 提供 setup 使用的默认安装路径。源码运行时，工具路径留空即自动查找。Desktop setup 与 GUI 读取同一组 `tools` 字段，并以配置目录为基准解析相对路径。
 
 - x264 使用官方 `master` 构建支持 8/10-bit 的 CLI。Windows x64 使用 MSYS2 UCRT64 与 PGO。Windows ARM64 使用 CLANGARM64 并启用 NEON。
 - x265 使用官方最新稳定标签，构建 8/10/12-bit multilib CLI，各核心均启用 HDR10+ JSON 和 Dolby Vision RPU 输入。

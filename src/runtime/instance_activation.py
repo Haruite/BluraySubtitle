@@ -2,6 +2,7 @@
 
 import os
 import sys
+from contextlib import suppress
 from hashlib import sha256
 from pathlib import Path
 from time import monotonic, sleep
@@ -12,12 +13,14 @@ from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 from src.core.app_config import application_location_id
 from src.core.i18n import translate_text
 
+_allow_foreground = None
 if sys.platform == "win32":
     import ctypes
 
-    _allow_foreground = ctypes.WinDLL("user32").AllowSetForegroundWindow
-    _allow_foreground.argtypes = (ctypes.c_uint32,)
-    _allow_foreground.restype = ctypes.c_int
+    with suppress(AttributeError, OSError):
+        _allow_foreground = ctypes.WinDLL("user32").AllowSetForegroundWindow
+        _allow_foreground.argtypes = (ctypes.c_uint32,)
+        _allow_foreground.restype = ctypes.c_int
 
 
 class InstanceActivation(QObject):
@@ -52,7 +55,7 @@ class InstanceActivation(QObject):
                 raise OSError(self._server.errorString())
             if self._lock.error() != QLockFile.LockError.LockFailedError:
                 raise OSError(self._lock.error().name)
-            if sys.platform == "win32":
+            if _allow_foreground is not None:
                 locked, pid, _, _ = self._lock.getLockInfo()
                 if locked and pid > 0:
                     _allow_foreground(pid)

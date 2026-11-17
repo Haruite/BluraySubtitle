@@ -36,6 +36,7 @@ class StartupUpdateNotice(QWidget):
         self.hide()
 
     def set_check_enabled(self, enabled: bool) -> None:
+        enabled = enabled and bool(SERVER_PACKAGE_METADATA_URL)
         if enabled == self._check_enabled:
             return
         self._check_enabled = enabled

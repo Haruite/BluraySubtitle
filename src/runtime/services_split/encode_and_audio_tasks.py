@@ -14,11 +14,11 @@ import sysconfig
 import tempfile
 import threading
 import traceback
-import multiprocessing
 import uuid
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, ThreadPoolExecutor, wait
 from configparser import ConfigParser
 from contextvars import ContextVar
+from importlib import import_module
 from pathlib import Path
 from typing import Optional
 
@@ -62,7 +62,7 @@ from src.runtime.video_crop import (
     detect_black_borders,
     write_vapoursynth_crop,
 )
-from src.runtime import TaskCancelled
+from src.runtime import TaskCancelled, worker_process_context
 from ...core.i18n import translate_text
 from ...exports.utils import (
     run_command,
@@ -793,12 +793,8 @@ _VPY_A_LINE_RE = re.compile(
 )
 
 
-def _to_vpy_raw_string(value: str) -> str:
-    return 'r"' + str(value or '').replace('"', '\\"') + '"'
-
-
 def _write_vpy_video_source_a(vpy_path: str, video_path: str) -> bool:
-    """Set ``a = r"..."`` in *vpy_path* (skip commented assignments)."""
+    """Set the video source path in *vpy_path* (skip commented assignments)."""
     vpy_path = os.path.normpath(os.path.abspath(str(vpy_path or '').strip()))
     video_path = os.path.normpath(str(video_path or '').strip())
     if not vpy_path or not os.path.isfile(vpy_path) or not video_path:
@@ -809,7 +805,7 @@ def _write_vpy_video_source_a(vpy_path: str, video_path: str) -> bool:
     except Exception:
         print_exc_terminal()
         return False
-    rhs = _to_vpy_raw_string(video_path)
+    rhs = repr(video_path)
     patched = False
     new_lines: list[str] = []
     for line in lines:
@@ -1020,9 +1016,11 @@ def _getnative_available_memory_bytes() -> int:
 
         status = MemoryStatus()
         status.length = ctypes.sizeof(status)
-        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
-            return int(status.available_physical)
-        return 0
+        try:
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                return int(status.available_physical)
+        except (AttributeError, OSError):
+            pass
     # MemAvailable includes reclaimable caches, unlike SC_AVPHYS_PAGES.
     if sys.platform.startswith("linux"):
         try:
@@ -1033,8 +1031,19 @@ def _getnative_available_memory_bytes() -> int:
         except (OSError, IndexError, TypeError, ValueError):
             pass
     try:
-        return int(os.sysconf("SC_AVPHYS_PAGES")) * int(os.sysconf("SC_PAGE_SIZE"))
-    except (AttributeError, OSError, TypeError, ValueError):
+        psutil = import_module("psutil")
+    except (ImportError, NotImplementedError):
+        pass
+    else:
+        try:
+            return max(0, int(psutil.virtual_memory().available))
+        except (OSError, NotImplementedError, psutil.Error):
+            pass
+    try:
+        pages = max(0, os.sysconf("SC_AVPHYS_PAGES"))
+        page_size = max(0, os.sysconf("SC_PAGE_SIZE"))
+        return pages * page_size
+    except (AttributeError, OSError, ValueError):
         return 0
 
 
@@ -1048,11 +1057,9 @@ def _getnative_parallel_sample_count(
         if available_memory_bytes is None
         else max(0, int(available_memory_bytes))
     )
-    memory_limit = GETNATIVE_MAX_PARALLEL_SAMPLES
-    if free_memory > 0:
-        memory_budget = max(0, free_memory - GETNATIVE_MEMORY_RESERVE_BYTES)
-        memory_limit = max(1, memory_budget // GETNATIVE_ESTIMATED_SAMPLE_MEMORY_BYTES)
-    return max(1, min(GETNATIVE_MAX_PARALLEL_SAMPLES, available, int(memory_limit)))
+    memory_budget = max(0, free_memory - GETNATIVE_MEMORY_RESERVE_BYTES)
+    memory_limit = memory_budget // GETNATIVE_ESTIMATED_SAMPLE_MEMORY_BYTES
+    return max(1, min(GETNATIVE_MAX_PARALLEL_SAMPLES, available, memory_limit))
 
 
 def _select_getnative_ranked_group(results: list[dict]) -> list[dict]:
@@ -1306,9 +1313,9 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                         )
 
                 try:
-                    mp_method = "fork" if sys.platform != "win32" else "spawn"
-                    mp_ctx = multiprocessing.get_context(mp_method)
-                    with ProcessPoolExecutor(max_workers=max_workers, mp_context=mp_ctx) as executor:
+                    with ProcessPoolExecutor(
+                            max_workers=max_workers, mp_context=worker_process_context(),
+                    ) as executor:
                         for image in batch:
                             future = executor.submit(
                                 _estimate_native_from_image_worker,
@@ -1748,7 +1755,7 @@ class EncodeAudioTasksMixin(BluraySubtitleServiceBase):
                         raw,
                     )
                     if subtitle_match:
-                        subtitle_value = _to_vpy_raw_string(subtitle_real_path or '')
+                        subtitle_value = repr(subtitle_real_path or '')
                         comment_prefix = '' if hardsub_enabled else '# '
                         new_line = (
                             f'{subtitle_match.group(1)}{comment_prefix}'

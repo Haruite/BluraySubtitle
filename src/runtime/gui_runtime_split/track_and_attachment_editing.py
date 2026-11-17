@@ -1817,7 +1817,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             convert_map = dict((conv_cfg_all.get(key) or {}))
             la_map = dict((getattr(self, '_track_lossless_audio_config', {}).get(key) or {}))
             selected_after = self._show_tracks_dialog(
-                f"{self.t('edit tracks')}: {os.path.basename(src)}",
+                f"{self.t('edit tracks')}: {os.path.abspath(src)}",
                 streams,
                 selected,
                 source_mkv=src,
@@ -1878,7 +1878,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             convert_map = dict((getattr(self, '_track_convert_config', {}).get(key) or {}))
             la_map = dict((getattr(self, '_track_lossless_audio_config', {}).get(key) or {}))
             selected_after = self._show_tracks_dialog(
-                f"{self.t('edit tracks')}: {os.path.basename(mpls_path)}",
+                f"{self.t('edit tracks')}: {os.path.abspath(mpls_path)}",
                 streams,
                 selected,
                 pid_lang,
@@ -2043,7 +2043,7 @@ class TrackAttachmentEditingMixin(BluraySubtitleGuiBase):
             convert_map = dict((getattr(self, '_track_convert_config', {}).get(key) or {}))
             la_map = dict((getattr(self, '_track_lossless_audio_config', {}).get(key) or {}))
             selected_after = self._show_tracks_dialog(
-                f"{self.t('edit tracks')}: {mpls_file or os.path.basename(m2ts_path)}",
+                f"{self.t('edit tracks')}: {os.path.abspath(mpls_path if mpls_file else m2ts_path)}",
                 streams,
                 selected,
                 pid_lang,

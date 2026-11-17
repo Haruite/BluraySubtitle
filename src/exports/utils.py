@@ -307,11 +307,12 @@ def get_effective_bit_depth(file_path, fallback_depth=24):
 def third_party_notices_markdown_path(language: str) -> Optional[str]:
     """Resolve the selected UI language's notices in the bundle or source checkout."""
     filename = 'THIRD_PARTY_NOTICES.zh-Hans.md' if language == 'zh' else 'THIRD_PARTY_NOTICES.md'
-    rel_candidates = (
-        os.path.join('legal', filename),
-        os.path.join('legal', 'windows' if sys.platform == 'win32' else 'ubuntu', filename),
-        filename,
-    )
+    rel_candidates = [os.path.join('legal', filename)]
+    if sys.platform == 'win32':
+        rel_candidates.append(os.path.join('legal', 'windows', filename))
+    elif sys.platform.startswith('linux'):
+        rel_candidates.append(os.path.join('legal', 'ubuntu', filename))
+    rel_candidates.append(filename)
     seen: set[str] = set()
     roots: list[str] = []
     mei = getattr(sys, '_MEIPASS', None)
@@ -386,8 +387,7 @@ def get_vspipe_environment(executable: str, plugin_path: str) -> dict[str, str]:
                 env['VAPOURSYNTH_PLUGINS'] = str(bundle / 'vapoursynth64/coreplugins')
     else:
         env = system_tool_environment()
-    if sys.platform.startswith('linux'):
-        env['BLURAYSUB_PLUGIN_PATH'] = plugin_path
+    env['BLURAYSUB_PLUGIN_PATH'] = plugin_path
     if plugin_path:
         env['VAPOURSYNTH_EXTRA_PLUGIN_PATH'] = plugin_path
     return env

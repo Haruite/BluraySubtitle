@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from src.core.app_config import (
     PathPreferences,
@@ -81,6 +82,31 @@ class AppConfigTests(unittest.TestCase):
                 path.unlink()
                 with self.assertRaisesRegex(FileNotFoundError, "my tools"):
                     require_tool_path("FFMPEG_PATH")
+
+    def test_source_discovers_tools_on_path_and_respects_explicit_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory).resolve()
+            first = root / "incomplete tools"
+            suite = root / "complete tools"
+            first.mkdir()
+            suite.mkdir()
+            suffix = ".exe" if os.name == "nt" else ""
+            (first / f"mkvmerge{suffix}").touch(mode=0o755)
+            for name in ("ffmpeg", "mkvmerge", "mkvinfo", "mkvpropedit", "mkvextract"):
+                (suite / f"{name}{suffix}").touch(mode=0o755)
+
+            config = load_app_config(root / "config.json")
+            self.assertEqual(config.tools["FFMPEG_PATH"], "")
+            with patch.dict(os.environ, {"PATH": os.pathsep.join(map(str, (first, suite)))}):
+                resolved = resolve_tool_paths(config.tools, root)
+                self.assertEqual(resolved["FFMPEG_PATH"], str(suite / f"ffmpeg{suffix}"))
+                self.assertEqual(resolved["MKVTOOLNIX_PATH"], str(suite))
+                self.assertEqual(resolved["MKV_MERGE_PATH"], str(suite / f"mkvmerge{suffix}"))
+
+                explicit = {"FFMPEG_PATH": "unavailable/ffmpeg", "MKVTOOLNIX_PATH": first.name}
+                resolved = resolve_tool_paths(explicit, root)
+                self.assertEqual(resolved["FFMPEG_PATH"], str(root / "unavailable/ffmpeg"))
+                self.assertEqual(resolved["MKV_MERGE_PATH"], str(first / f"mkvmerge{suffix}"))
 
     def test_ui_save_keeps_tool_paths_edited_in_the_config_file(self) -> None:
         previous = default_app_config()
