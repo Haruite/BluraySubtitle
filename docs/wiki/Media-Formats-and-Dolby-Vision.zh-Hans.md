@@ -200,15 +200,15 @@ ASS 转 PGS 会保留字幕可选择性，但会按指定分辨率和帧率／�
 
 ## Linux 桌面 mpv 播放
 
-Ubuntu 打包版自带 uosc 和中英文右键菜单。从源码运行时，先运行 [Linux 安装脚本](../../README.zh-Hans.md#setup_linux_environmentshlinux-运行环境脚本)，再重新打开 mpv。从 BluraySubtitle 启动播放时，右键菜单和 uosc 播放控件跟随当前界面语言。源码安装后直接打开 mpv 时，默认使用安装时选择的语言。默认菜单和控件根据当前显示器 DPI 缩放。
+Ubuntu 打包版自带 uosc、mpv-lazy 预设和着色器，以及中英文右键菜单。从源码运行时，先运行 [Linux 安装脚本](../../README.zh-Hans.md#setup_linux_environmentshlinux-运行环境脚本)，再重新打开 mpv。从 BluraySubtitle 启动播放时，右键菜单和 uosc 播放控件跟随当前界面语言。源码安装后直接打开 mpv 时，默认使用安装时选择的语言。默认菜单和控件根据当前显示器 DPI 缩放。
 
 ### 画质、字幕与着色器
 
-- 源码安装后，右键打开 **mpv-lazy**，即可应用画质或字幕预设，也可以通过对应的**还原应用前**菜单项恢复。画质预设开启显示同步插值，并将着色器列表设为 QCOM 缩放锐化。字幕预设调整字号、描边、颜色和轨道偏好，沿用播放器当前字体。
+- 右键打开 **mpv-lazy**，即可应用画质或字幕预设，也可以通过对应的**还原应用前**菜单项恢复。画质预设开启显示同步插值，并将着色器列表设为 QCOM 缩放锐化。字幕预设调整字号、描边、颜色和轨道偏好，沿用播放器当前字体。
 - 在 **mpv-lazy → 着色器** 中，可逐项开关 10 个着色器或清空列表。放大类着色器在满足缩放条件时生效。k7 modernAnime 等计算着色器需要渲染后端和驱动支持对应的 GPU 功能。叠加多个开销较大的着色器可能导致掉帧。[mpv-lazy 着色器说明](https://github.com/hooke007/mpv_PlayKit/wiki/4_GLSL)
 - 选择**保存为默认设置**，即可在下次启动时应用当前的画质、字幕和着色器设置。mpv 从 `bluray-defaults.conf` 读取这些设置。
 
-安装时从固定版本的 mpv-lazy 下载 Ani4Kv2、AniSD 和 QCOM 着色器并校验文件。Ani4Kv2 与 AniSD 的模型权重采用 CC BY-NC 4.0，仅限非商业用途。[着色器来源和许可](../../third_party/mpv_lazy_shaders/COPYRIGHT.zh-Hans.md)
+安装和打包时从固定版本的 mpv-lazy 下载 Ani4Kv2、AniSD 和 QCOM 着色器并校验文件。Ani4Kv2 与 AniSD 的模型权重采用 CC BY-NC 4.0，仅限非商业用途。[着色器来源和许可](../../third_party/mpv_lazy_shaders/COPYRIGHT.zh-Hans.md)
 
 ### 安装字幕字体
 

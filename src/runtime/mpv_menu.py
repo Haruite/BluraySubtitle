@@ -34,10 +34,14 @@ def mpv_language_options(language: str, config: Path) -> tuple[list[str], Tempor
     if (config / filename).is_file():
         menu = str(config / filename)
     else:
-        fallback = application_support_directory() / "resource/mpv" / filename
+        directory = application_support_directory() / "resource/mpv"
+        fallback = directory / filename
         menu = str(fallback) if fallback.is_file() else ""
         try:
-            legacy = (config / "menu.conf").read_text(encoding="utf-8-sig")
+            legacy_path = config / "menu.conf"
+            legacy = ""
+            if not (menu and legacy_path.is_symlink() and legacy_path.resolve() == directory / "menu.en.conf"):
+                legacy = legacy_path.read_text(encoding="utf-8-sig")
             if legacy.strip():
                 generated = TemporaryDirectory(prefix="bluraysubtitle-mpv-")
                 localized = Path(generated.name) / filename

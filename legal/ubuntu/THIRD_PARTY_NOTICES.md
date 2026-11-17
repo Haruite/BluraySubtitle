@@ -143,6 +143,10 @@ Versioned fields are refreshed from the selected bundled artifacts when `tools/b
 - Version {{UOSC_VERSION}} includes `resource/mpv/scripts/uosc/` and `resource/mpv/fonts/`. [Upstream source](https://github.com/tomasklaen/uosc)
 - Distributed under LGPL-2.1. [Bundled license](uosc/LICENSE.LGPL)
 
+## mpv-lazy shaders
+
+- The package includes the shader source files from mpv-lazy 2026FM. [Sources and licenses](mpv_lazy_shaders/COPYRIGHT.md)
+
 ---
 
 ## Shared VapourSynth and Python runtime

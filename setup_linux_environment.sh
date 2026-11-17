@@ -4351,6 +4351,8 @@ install_desktop_vs_plugins
 if "$package_build"; then
   stage_mpv_uosc_archive "$BLURAY_SETUP_CACHE_DIR/mpv-uosc-$APT_ARCH.tar.gz" \
     || die "$(msg 'Could not prepare uosc for the Ubuntu package' '无法为 Ubuntu 包准备 uosc')"
+  python3 -B "$SETUP_ROOT/tools/mpv/install.py" --cache-lazy-shaders \
+    || die "$(msg 'Could not prepare mpv-lazy shaders for the Ubuntu package' '无法为 Ubuntu 包准备 mpv-lazy 着色器')"
 else
   if [[ -n "$LIBASS_PATH" && ! -f "$LIBASS_PATH" ]]; then
     installed_libass="$(/sbin/ldconfig -p | awk '/^[[:space:]]*libass\.so\.9 / && !found {print $NF; found=1}')"

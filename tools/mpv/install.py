@@ -1,4 +1,4 @@
-"""Install the Linux mpv desktop configuration and an unpacked uosc release."""
+"""Prepare the Linux mpv configuration for desktop installations and packages."""
 
 from __future__ import annotations
 
@@ -33,6 +33,8 @@ SHADER_URL = (
 LAZY_MENU = "mpv-lazy (&Z)"
 LAZY_PROFILES = "mpv-lazy/profiles.conf"
 SHADER_PATH = "mpv-lazy/shaders"
+PLAYBACK_INCLUDES = (f"include=~~home/{LAZY_PROFILES}", "include=~~home/bluray-defaults.conf")
+SAVED_SETTINGS_TEMPLATE = b"# Settings saved from the mpv context menu\n"
 SHADERS = (
     ("Ani/Ani4Kv2_ArtCNN_C4F32_i2_dx.glsl", "Ani4Kv2 Upscaling"),
     ("Ani/AniSD_ArtCNN_C4F32_i4_dx.glsl", "AniSD Upscaling"),
@@ -213,7 +215,7 @@ def update_main_config(original: str, language: str) -> str:
         key.strip() == "include" and value.strip().strip('"') in profile_paths
         for key, _, value in (line.partition("=") for line in lines)
     )
-    profile_include = "" if has_profile_include else f"include=~~home/{LAZY_PROFILES}\n"
+    profile_include = "" if has_profile_include else PLAYBACK_INCLUDES[0] + "\n"
     block = (
         f"{BEGIN}\n"
         "[default]\n"
@@ -222,7 +224,7 @@ def update_main_config(original: str, language: str) -> str:
         f"script-opts-append=bluray_defaults-language={language}\n"
         f"script-opts-append=bluray_vs-language={language}\n"
         f"{profile_include}"
-        "include=~~home/bluray-defaults.conf\n"
+        f"{PLAYBACK_INCLUDES[1]}\n"
         f"{END}\n"
     )
     return original + "\n\n" + block if original.strip() else block
@@ -309,17 +311,26 @@ def install_uosc(bundle: Path, destination: Path) -> None:
 
 
 def stage_bundled_mpv(support: Path, bundle: Path, executable: str) -> str:
-    """Stage the menus and the Linux uosc release outside the editable mpv configuration."""
+    """Stage the playback defaults outside the editable mpv configuration."""
     assets = support / "resource/mpv"
     assets.mkdir(parents=True, exist_ok=True)
-    menu = default_menu(executable)
     install_uosc(bundle, assets)
     if not uosc_is_installed(assets):
         raise RuntimeError("The packaged uosc release is incomplete or has the wrong Ziggy architecture")
-    for language in ("en", "zh"):
-        write_if_changed(assets / f"menu.{language}.conf", translate_mpv_menu(menu, language).encode("utf-8"))
-    write_if_changed(assets / "script-opts/context_menu.conf", update_context_options("").encode("utf-8"))
-    write_if_changed(support / "legal/uosc/LICENSE.LGPL", (bundle / "LICENSE.LGPL").read_bytes())
+    install_lazy_assets(assets)
+    files = playback_files(assets, support / "linux/plugins", default_menu(executable))
+    files.update({
+        assets / "mpv.conf": ("\n".join(PLAYBACK_INCLUDES) + "\n").encode("utf-8"),
+        assets / "bluray-defaults.conf": SAVED_SETTINGS_TEMPLATE,
+        assets / "script-opts/context_menu.conf": update_context_options("").encode("utf-8"),
+        support / "legal/uosc/LICENSE.LGPL": (bundle / "LICENSE.LGPL").read_bytes(),
+    })
+    for path, content in files.items():
+        write_if_changed(path, content)
+    notices = support / "legal/mpv_lazy_shaders"
+    shutil.copytree(BUNDLED_SHADERS / "licenses", notices / "licenses", dirs_exist_ok=True)
+    for notice in BUNDLED_SHADERS.glob("COPYRIGHT*.md"):
+        shutil.copy2(notice, notices / notice.name)
     (support / "mpv").mkdir(exist_ok=True)
     return ".".join(map(str, uosc_version(assets / UOSC_DIR / "main.lua")))
 
@@ -331,6 +342,24 @@ def read_text(path: Path) -> str:
         return ""
 
 
+def download_lazy_shader(relative: str, digest: str) -> bytes:
+    cache_dir = os.environ.get("BLURAY_SETUP_CACHE_DIR")
+    cached = Path(cache_dir) / "downloads" / digest if cache_dir else None
+    if cached is not None and cached.is_file():
+        content = cached.read_bytes()
+        if sha256(content).hexdigest() == digest:
+            return content
+    content = subprocess.run(
+        ["wget", "-q", "--timeout=30", "--tries=3", "-O", "-", f"{SHADER_URL}/{relative}"],
+        check=True, stdout=subprocess.PIPE, timeout=120,
+    ).stdout
+    if sha256(content).hexdigest() != digest:
+        raise ValueError(f"mpv-lazy shader failed SHA-256 verification: {relative}")
+    if cached is not None:
+        write_if_changed(cached, content)
+    return content
+
+
 def install_lazy_assets(destination: Path) -> None:
     files = {}
     for relative, _ in SHADERS:
@@ -338,16 +367,7 @@ def install_lazy_assets(destination: Path) -> None:
         if target.is_file():
             continue
         digest = DOWNLOADED_SHADERS.get(relative)
-        if digest is None:
-            content = (BUNDLED_SHADERS / relative).read_bytes()
-        else:
-            content = subprocess.run(
-                ["wget", "-q", "--timeout=30", "--tries=3", "-O", "-", f"{SHADER_URL}/{relative}"],
-                check=True, stdout=subprocess.PIPE, timeout=120,
-            ).stdout
-            if sha256(content).hexdigest() != digest:
-                raise ValueError(f"mpv-lazy shader failed SHA-256 verification: {relative}")
-        files[target] = content
+        files[target] = download_lazy_shader(relative, digest) if digest else (BUNDLED_SHADERS / relative).read_bytes()
 
     profile_path = destination / LAZY_PROFILES
     if not profile_path.is_file():
@@ -356,10 +376,7 @@ def install_lazy_assets(destination: Path) -> None:
         write_if_changed(target, content)
 
 
-def desktop_files(destination: Path, language: str, plugin_dir: Path, original_menu: str) -> dict[Path, bytes]:
-    main_path = destination / "mpv.conf"
-    context_path = destination / "script-opts/context_menu.conf"
-    plugin_dir = plugin_dir.resolve()
+def playback_files(destination: Path, plugin_dir: Path, original_menu: str) -> dict[Path, bytes]:
     presets = [
         name for name, (_, required) in PRESETS.items()
         if all((plugin_dir / filename).is_file() for filename in required)
@@ -368,17 +385,24 @@ def desktop_files(destination: Path, language: str, plugin_dir: Path, original_m
         destination / "bluray-vs" / name: (ASSETS / "vapoursynth" / name).read_bytes()
         for name in ("rife_assets.py", "filters.py", *(f"{preset}.vpy" for preset in presets))
     }
-    menus = {
-        code: localize_menu(original_menu, code, presets).encode("utf-8")
-        for code in ("en", "zh")
-    }
     files.update({
-        destination / "bluray-vs/plugins-dir": os.fsencode(plugin_dir),
         destination / "bluray-modules/atomic_write.lua": (ASSETS / "atomic_write.lua").read_bytes(),
         destination / "scripts/bluray_vs.lua": (ASSETS / "bluray_vs.lua").read_bytes(),
         destination / "scripts/bluray_defaults.lua": (ASSETS / "bluray_defaults.lua").read_bytes(),
-        destination / "menu.conf": menus[language],
-        **{destination / f"menu.{code}.conf": menu for code, menu in menus.items()},
+    })
+    for code in ("en", "zh"):
+        files[destination / f"menu.{code}.conf"] = localize_menu(original_menu, code, presets).encode("utf-8")
+    return files
+
+
+def desktop_files(destination: Path, language: str, plugin_dir: Path, original_menu: str) -> dict[Path, bytes]:
+    main_path = destination / "mpv.conf"
+    context_path = destination / "script-opts/context_menu.conf"
+    plugin_dir = plugin_dir.resolve()
+    files = playback_files(destination, plugin_dir, original_menu)
+    files.update({
+        destination / "bluray-vs/plugins-dir": os.fsencode(plugin_dir),
+        destination / "menu.conf": files[destination / f"menu.{language}.conf"],
         context_path: update_context_options(read_text(context_path)).encode("utf-8"),
         main_path: update_main_config(read_text(main_path), language).encode("utf-8"),
     })
@@ -414,8 +438,8 @@ def install(bundle: Path | None, language: str, plugin_dir: Path, executable: st
     if bundle is not None:
         install_uosc(bundle, destination)
     try:
-        with (destination / "bluray-defaults.conf").open("x", encoding="utf-8") as stream:
-            stream.write("# Settings saved from the mpv context menu\n")
+        with (destination / "bluray-defaults.conf").open("xb") as stream:
+            stream.write(SAVED_SETTINGS_TEMPLATE)
     except FileExistsError:
         pass
     for path, content in files.items():
@@ -423,6 +447,10 @@ def install(bundle: Path | None, language: str, plugin_dir: Path, executable: st
 
 
 if __name__ == "__main__":
+    if sys.argv[1] == "--cache-lazy-shaders":
+        for relative, digest in DOWNLOADED_SHADERS.items():
+            download_lazy_shader(relative, digest)
+        raise SystemExit
     if sys.argv[1] == "--bundle":
         stage_bundled_mpv(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
         raise SystemExit

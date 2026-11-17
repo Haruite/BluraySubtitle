@@ -13,6 +13,7 @@ import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools.mpv.install import LAZY_MENU, SHADER_PATH, SHADERS
 from tools.mpv.vapoursynth.rife_assets import RIFE_FILES
 
 
@@ -69,9 +70,13 @@ def verify(bundle: Path, work: Path) -> None:
         raise RuntimeError("Incomplete bundled uosc")
     if not (legal / "uosc/LICENSE.LGPL").stat().st_size:
         raise RuntimeError("Empty bundled uosc license")
+    if not all((menu_directory / SHADER_PATH / name).stat().st_size for name, _ in SHADERS):
+        raise RuntimeError("Incomplete bundled mpv-lazy shaders")
     menus = [(menu_directory / f"menu.{language}.conf").read_text(encoding="utf-8") for language in ("en", "zh")]
     if not all(menu.strip() for menu in menus) or menus[0] == menus[1]:
         raise RuntimeError("The bundled mpv menus must contain both languages")
+    if any(LAZY_MENU not in menu.splitlines() for menu in menus):
+        raise RuntimeError("The bundled mpv menus must include mpv-lazy")
 
     native = support / "linux"
     commands = native / "bin"
@@ -204,14 +209,20 @@ vs.core.assrender.TextSub(clip, {str(text)!r}).set_output()
     assert streams == [{"codec_name": "av1", "pix_fmt": "yuv420p10le", "nb_read_frames": "12"}]
     print("R79, NumPy, NLM-ISPC, subtitle rendering, x265, SVT-AV1, FLAC/AAC/Opus and MKVToolNix passed.", flush=True)
 
-    uosc_probe = work / "uosc-probe.lua"
-    uosc_probe.write_text(
-        "mp.add_timeout(0.5, function()\n"
-        "    mp.commandv('quit', mp.get_property_native('osc') == false and 0 or 1)\n"
-        "end)\n", encoding="utf-8",
+    controls_probe = work / "mpv-controls.lua"
+    controls_probe.write_text(
+        """mp.add_timeout(0.5, function()
+    local original_size = mp.get_property_number('sub-font-size')
+    local applied = mp.commandv('apply-profile', 'mpv-lazy-subtitles')
+        and mp.get_property_number('sub-font-size') ~= original_size
+    local restored = mp.commandv('apply-profile', 'mpv-lazy-subtitles', 'restore')
+        and mp.get_property_number('sub-font-size') == original_size
+    mp.commandv('quit', applied and restored and mp.get_property_native('osc') == false and 0 or 1)
+end)
+""", encoding="utf-8",
     )
     run("mpv", "--idle=yes", "--force-window=no", "--vo=null", "--ao=null",
-        "--osc=yes", f"--script={uosc_probe}")
+        "--osc=yes", f"--script={controls_probe}")
     context_options = (support / "mpv/script-opts/context_menu.conf").read_text(encoding="utf-8").splitlines()
     if "scale_with_window=no" not in context_options:
         raise RuntimeError("The bundled mpv context menu must scale with the display")

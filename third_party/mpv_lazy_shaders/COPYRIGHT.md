@@ -11,9 +11,9 @@ The shader sources come from the [mpv-lazy 2026FM release](https://github.com/ho
 | EDI/nnedi3_nns64_win8x4.glsl and FSRCNNX/FSRCNNX_x2_16_0_4_1.glsl | LGPL-3.0-or-later as declared in the shader headers. [LGPL v3](licenses/LGPL-3.0.txt) incorporates [GPL v3](../vapoursynth_scripts/licenses/GPL-3.0.txt). |
 | ESRGAN/k7_modernAnime_FHD_x2.glsl and k7_modernAnime_DT_FHD_x2.glsl | hooke007, [MIT](licenses/k7-MIT.txt) |
 
-The desktop installer downloads the following files from the same release and checks their SHA-256 digests.
+The desktop installer and package build download the following files from the same release and check their SHA-256 digests.
 
 | Shader files | Attribution and license |
 | --- | --- |
 | Ani/Ani4Kv2_ArtCNN_C4F32_i2_dx.glsl and AniSD_ArtCNN_C4F32_i4_dx.glsl | Sirosky's model weights use [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/). The ArtCNN architecture by Joao Chrisostomo uses MIT, included in each shader header. |
-| QCOM/QCOM_SGEDS_ms_RT.glsl | The shader header links to the [original Qualcomm Innovation Center code's BSD 3-Clause license](https://github.com/SnapdragonGameStudios/snapdragon-gsr/blob/main/LICENSE). |
+| QCOM/QCOM_SGEDS_ms_RT.glsl | The shader header links to the original Qualcomm Innovation Center code's BSD 3-Clause license. [Bundled license](licenses/QCOM-BSD-3-Clause.txt) · [Upstream license](https://github.com/SnapdragonGameStudios/snapdragon-gsr/blob/main/LICENSE) |

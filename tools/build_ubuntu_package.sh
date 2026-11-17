@@ -20,8 +20,8 @@ fi
 
 stage=$(mktemp -d "$output/.ubuntu-package.XXXXXXXX")
 trap 'rm -rf -- "$stage"' EXIT
-cache_dir="${BLURAY_SETUP_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/bluraysubtitle/linux-setup}"
-uosc_archive="$cache_dir/mpv-uosc-$apt_arch.tar.gz"
+export BLURAY_SETUP_CACHE_DIR="${BLURAY_SETUP_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/bluraysubtitle/linux-setup}"
+uosc_archive="$BLURAY_SETUP_CACHE_DIR/mpv-uosc-$apt_arch.tar.gz"
 if [[ ! -s "$uosc_archive" ]]; then
     printf '%s\n' 'Run setup_linux_environment.sh --mode Build to prepare the packaged uosc release.' >&2
     exit 1

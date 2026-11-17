@@ -11,9 +11,9 @@
 | EDI/nnedi3_nns64_win8x4.glsl 和 FSRCNNX/FSRCNNX_x2_16_0_4_1.glsl | 着色器文件头声明采用 LGPL-3.0-or-later。[LGPL v3](licenses/LGPL-3.0.txt) 包含 [GPL v3](../vapoursynth_scripts/licenses/GPL-3.0.txt)。 |
 | ESRGAN/k7_modernAnime_FHD_x2.glsl 和 k7_modernAnime_DT_FHD_x2.glsl | hooke007，[MIT](licenses/k7-MIT.txt) |
 
-桌面安装脚本从同一发布版本下载以下文件，并校验 SHA-256。
+桌面安装脚本和打包流程从同一发布版本下载以下文件，并校验 SHA-256。
 
 | 着色器文件 | 署名和许可 |
 | --- | --- |
 | Ani/Ani4Kv2_ArtCNN_C4F32_i2_dx.glsl 和 AniSD_ArtCNN_C4F32_i4_dx.glsl | Sirosky 的模型权重采用 [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/)。Joao Chrisostomo 的 ArtCNN 架构采用 MIT，条款见各着色器文件头。 |
-| QCOM/QCOM_SGEDS_ms_RT.glsl | 着色器文件头链接至 [Qualcomm Innovation Center 原始代码的 BSD 3-Clause 许可](https://github.com/SnapdragonGameStudios/snapdragon-gsr/blob/main/LICENSE)。 |
+| QCOM/QCOM_SGEDS_ms_RT.glsl | 着色器文件头链接至 Qualcomm Innovation Center 原始代码的 BSD 3-Clause 许可。[随附许可原文](licenses/QCOM-BSD-3-Clause.txt) · [上游许可](https://github.com/SnapdragonGameStudios/snapdragon-gsr/blob/main/LICENSE) |

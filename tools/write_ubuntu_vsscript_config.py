@@ -1,5 +1,6 @@
 """Prepare the packaged player's defaults and VSScript R79 environment."""
 
+from fcntl import LOCK_EX, flock
 import json
 import os
 from pathlib import Path
@@ -13,36 +14,58 @@ def install_mpv_defaults(support: Path) -> None:
     if Path(os.environ["MPV_HOME"]).resolve() != config or not (assets / "scripts/uosc/main.lua").is_file():
         return
 
-    # Users can override scripts and fonts. Relative links keep package assets current after an update.
-    paths = [path.relative_to(assets) for path in (assets / "fonts").iterdir() if path.is_file()]
+    # Relative links keep package defaults current after an update while allowing user overrides.
+    patterns = ("fonts/*", "scripts/*.lua", "bluray-modules/*.lua", "bluray-vs/*", "mpv-lazy/**/*")
+    links = {
+        path.relative_to(assets): path for pattern in patterns for path in assets.glob(pattern) if path.is_file()
+    }
+    links[Path("menu.conf")] = assets / "menu.en.conf"
     if not (config / "scripts/uosc.lua").is_file():
-        paths.append(Path("scripts/uosc"))
-    for relative in paths:
+        links[Path("scripts/uosc")] = assets / "scripts/uosc"
+    for relative, source in links.items():
         target = config / relative
         if not target.parent.resolve().is_relative_to(config):
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
         try:
-            target.symlink_to(os.path.relpath(assets / relative, target.parent))
+            target.symlink_to(os.path.relpath(source, target.parent))
         except FileExistsError:
             pass
 
-    relative = Path("script-opts/context_menu.conf")
-    target = config / relative
-    if target.exists() or target.is_symlink() or not target.parent.resolve().is_relative_to(config):
+    # Preserve editable settings across updates, including concurrent first launches.
+    for relative in ("script-opts/context_menu.conf", "bluray-defaults.conf"):
+        target = config / relative
+        if target.exists() or target.is_symlink() or not target.parent.resolve().is_relative_to(config):
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as output:
+            temporary = Path(output.name)
+            try:
+                output.write((assets / relative).read_bytes())
+                output.close()
+                os.link(temporary, target)
+            except FileExistsError:
+                pass
+            finally:
+                temporary.unlink(missing_ok=True)
+
+    main = config / "mpv.conf"
+    if main.is_symlink():
         return
-    target.parent.mkdir(parents=True, exist_ok=True)
-    # Preserve editable menu options across updates, including concurrent first launches.
-    with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as output:
-        temporary = Path(output.name)
-        try:
-            output.write((assets / relative).read_bytes())
-            output.close()
-            os.link(temporary, target)
-        except FileExistsError:
-            pass
-        finally:
-            temporary.unlink(missing_ok=True)
+    with main.open("a+b") as stream:
+        flock(stream, LOCK_EX)
+        stream.seek(0)
+        original = stream.read()
+        includes = {
+            value.partition(b"#")[0].strip().strip(b"\"'").replace(b"~~/", b"~~home/", 1)
+            for key, _, value in (line.partition(b"=") for line in original.splitlines())
+            if key.strip() == b"include"
+        }
+        missing = [line for line in (assets / "mpv.conf").read_bytes().splitlines()
+                   if line.partition(b"=")[2] not in includes]
+        if missing:
+            section = b"\n\n[default]\n" if original else b""
+            stream.write(section + b"\n".join(missing) + b"\n")
 
 
 executable = Path(sys.executable).resolve()

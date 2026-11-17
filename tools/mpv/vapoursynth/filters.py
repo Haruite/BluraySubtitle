@@ -3,7 +3,7 @@
 from fractions import Fraction
 from functools import lru_cache
 from math import isfinite
-from os import fsdecode
+from os import environ, fsdecode
 from pathlib import Path
 from runpy import run_path
 
@@ -14,7 +14,8 @@ def load_plugin(filename, namespace):
     core = vs.core
     if not hasattr(core, namespace):
         config = Path(__file__).with_name("plugins-dir")
-        plugin_dir = Path(fsdecode(config.read_bytes())) if config.is_file() else Path.home() / "plugins"
+        configured = fsdecode(config.read_bytes()) if config.is_file() else environ.get("BLURAYSUB_PLUGIN_PATH")
+        plugin_dir = Path(configured) if configured else Path.home() / "plugins"
         core.std.LoadPlugin(str(plugin_dir / filename))
     return getattr(core, namespace)
 

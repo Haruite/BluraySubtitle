@@ -143,6 +143,10 @@
 - {{UOSC_VERSION}} 版包含 `resource/mpv/scripts/uosc/` 和 `resource/mpv/fonts/`。[上游源码](https://github.com/tomasklaen/uosc)
 - 按 LGPL-2.1 分发。[随附许可原文](uosc/LICENSE.LGPL)
 
+## mpv-lazy 着色器
+
+- 程序包包含 mpv-lazy 2026FM 的着色器源码。[来源和许可](mpv_lazy_shaders/COPYRIGHT.zh-Hans.md)
+
 ---
 
 ## VapourSynth 与 Python 共享运行时
