@@ -138,6 +138,13 @@
 
 ---
 
+## uosc
+
+- {{UOSC_VERSION}} 版包含 `resource/mpv/scripts/uosc/` 和 `resource/mpv/fonts/`。[上游源码](https://github.com/tomasklaen/uosc)
+- 按 LGPL-2.1 分发。[随附许可原文](uosc/LICENSE.LGPL)
+
+---
+
 ## VapourSynth 与 Python 共享运行时
 
 应用与 VSScript 共用 `_internal/` 中的 CPython 运行时和 NumPy 包。

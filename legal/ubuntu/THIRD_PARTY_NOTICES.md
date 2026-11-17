@@ -138,6 +138,13 @@ Versioned fields are refreshed from the selected bundled artifacts when `tools/b
 
 ---
 
+## uosc
+
+- Version {{UOSC_VERSION}} includes `resource/mpv/scripts/uosc/` and `resource/mpv/fonts/`. [Upstream source](https://github.com/tomasklaen/uosc)
+- Distributed under LGPL-2.1. [Bundled license](uosc/LICENSE.LGPL)
+
+---
+
 ## Shared VapourSynth and Python runtime
 
 The application and VSScript share the CPython runtime and NumPy package in `_internal/`.

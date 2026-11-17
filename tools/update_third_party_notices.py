@@ -190,6 +190,7 @@ def generate_ubuntu_third_party_notices(
     pyqt_version: str,
     vapoursynth_version: str,
     vapoursynth_components: str,
+    uosc_version: str,
 ) -> None:
     """Render Ubuntu notices using the tools and Python libraries selected for staging."""
     python_architecture = {
@@ -211,6 +212,7 @@ def generate_ubuntu_third_party_notices(
         "MPV_VERSION": _command_version(
             settings["MPV_PATH"], ("--version",), r"^mpv\s+(\S+)"
         ),
+        "UOSC_VERSION": uosc_version,
         "VSEDIT_VERSION": _command_version(
             settings["VSEDIT_PATH"], ("--version",), r"^VapourSynth Editor\s+(\S+)"
         ),

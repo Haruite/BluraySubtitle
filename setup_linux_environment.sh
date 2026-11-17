@@ -1698,9 +1698,57 @@ C
   log "$(msg "mpv with VapourSynth and FFmpeg / FFprobe with libopus installed (${installed_ffmpeg_version}/${installed_ffprobe_version})" "已安装支持 VapourSynth 的 mpv，以及带 libopus 支持的 FFmpeg / FFprobe（${installed_ffmpeg_version}/${installed_ffprobe_version}）")"
 }
 
+build_mpv_uosc_archive() (
+  local repository="$1" tag="$2" output="$3" build_dir bundle
+  build_dir="$(bluray_mktemp_dir)" || return
+  trap 'rm -rf -- "$build_dir"' EXIT
+  bundle="$build_dir/uosc"
+  tmux_run "uosc download" download_github_release_asset "$repository" "$tag" uosc.zip "$build_dir/uosc.zip" \
+    || die "$(msg 'Could not download the uosc release' '无法下载 uosc 发布包')"
+  unzip -q "$build_dir/uosc.zip" -d "$bundle" -x 'scripts/uosc/bin/ziggy-darwin' 'scripts/uosc/bin/ziggy-windows.exe' || return
+  download_url "https://raw.githubusercontent.com/tomasklaen/uosc/$tag/LICENSE.LGPL" "$bundle/LICENSE.LGPL" || return
+  if [[ "$APT_ARCH" == arm64 ]]; then
+    # Rebuild Ziggy from the same tag as the installed uosc release.
+    local go_release go_archive go_checksum
+    go_release="$(curl -fsSL --retry 4 --connect-timeout 20 --max-time 45 'https://go.dev/dl/?mode=json' | python3 -c '
+import json
+import sys
+
+release = next(release for release in json.load(sys.stdin) if release["stable"])
+archive = next(file for file in release["files"] if file["os"] == "linux"
+             and file["arch"] == "arm64" and file["kind"] == "archive")
+print(archive["filename"], archive["sha256"])
+')" || die "$(msg 'Could not resolve the Linux ARM64 Go archive' '无法获取 Go 的 Linux ARM64 发布包信息')"
+    read -r go_archive go_checksum <<< "$go_release"
+    tmux_run "$(msg 'Download Go for uosc' '下载 uosc 所需的 Go')" \
+      download_url "https://go.dev/dl/$go_archive" "$build_dir/$go_archive" || return
+    printf '%s  %s\n' "$go_checksum" "$build_dir/$go_archive" | sha256sum -c - || return
+    tar -xzf "$build_dir/$go_archive" -C "$build_dir" || return
+    download_source_archive "uosc ${tag}" "$(github_archive_url "$repository" "refs/tags/$tag")" "$build_dir/source" || return
+    (
+      cd "$build_dir/source" || exit
+      tmux_run "$(msg 'Build uosc Ziggy for ARM64' '编译 ARM64 版 uosc Ziggy')" \
+        env CGO_ENABLED=0 GOOS=linux GOARCH=arm64 GOTOOLCHAIN=local \
+        GOPATH="$build_dir/gopath" GOCACHE="$build_dir/go-cache" "$build_dir/go/bin/go" \
+        build -modcacherw -ldflags='-s -w' -o "$bundle/scripts/uosc/bin/ziggy-linux" ./src/ziggy/ziggy.go
+    ) || return
+  fi
+  chmod +x "$bundle/scripts/uosc/bin/ziggy-linux" || return
+  tar -czf "$output" -C "$bundle" .
+)
+
+stage_mpv_uosc_archive() (
+  local output="$1" repository=https://github.com/tomasklaen/uosc tag pending
+  tag="$(latest_stable_tag "$repository.git")" || return
+  pending="$(mktemp -- "$(dirname -- "$output")/.uosc.XXXXXXXX")" || return
+  trap 'rm -f -- "$pending"' EXIT
+  cached_download "uosc-assets:v1:$repository:$tag:$APT_ARCH" "$pending" \
+    build_mpv_uosc_archive "$repository" "$tag" || return
+  mv -fT -- "$pending" "$output"
+)
+
 install_mpv_desktop() (
-  local build_dir installer status bundle=--configure tag
-  local repository=https://github.com/tomasklaen/uosc
+  local build_dir installer status bundle=--configure
   if [[ -n "$MPV_CONFIG_PATH" ]]; then
     export MPV_HOME="$MPV_CONFIG_PATH"
   fi
@@ -1714,37 +1762,10 @@ install_mpv_desktop() (
   if [[ "$status" == "install" ]]; then
     build_dir="$(bluray_mktemp_dir)"
     trap 'rm -rf -- "$build_dir"' EXIT
-    tag="$(latest_stable_tag "$repository.git")"
-    tmux_run "uosc download" download_github_release_asset "$repository" "$tag" uosc.zip "$build_dir/uosc.zip" \
-      || die "$(msg 'Could not download the uosc release' '无法下载 uosc 发布包')"
+    stage_mpv_uosc_archive "$build_dir/uosc.tar.gz" || die "$(msg 'Could not prepare uosc' '无法准备 uosc')"
     bundle="$build_dir/uosc"
-    unzip -q "$build_dir/uosc.zip" -d "$bundle"
-    if [[ "$APT_ARCH" == arm64 ]]; then
-      # Rebuild Ziggy from the same tag as the installed uosc release.
-      local go_release go_archive go_checksum
-      go_release="$(curl -fsSL --retry 4 --connect-timeout 20 --max-time 45 'https://go.dev/dl/?mode=json' | python3 -c '
-import json
-import sys
-
-release = next(release for release in json.load(sys.stdin) if release["stable"])
-archive = next(file for file in release["files"] if file["os"] == "linux"
-               and file["arch"] == "arm64" and file["kind"] == "archive")
-print(archive["filename"], archive["sha256"])
-')" || die "$(msg 'Could not resolve the Linux ARM64 Go archive' '无法获取 Go 的 Linux ARM64 发布包信息')"
-      read -r go_archive go_checksum <<< "$go_release"
-      tmux_run "$(msg 'Download Go for uosc' '下载 uosc 所需的 Go')" \
-        download_url "https://go.dev/dl/$go_archive" "$build_dir/$go_archive"
-      printf '%s  %s\n' "$go_checksum" "$build_dir/$go_archive" | sha256sum -c -
-      tar -xzf "$build_dir/$go_archive" -C "$build_dir"
-      download_source_archive "uosc ${tag}" "$(github_archive_url "$repository" "refs/tags/$tag")" "$build_dir/source"
-      (
-        cd "$build_dir/source"
-        tmux_run "$(msg 'Build uosc Ziggy for ARM64' '编译 ARM64 版 uosc Ziggy')" \
-          env CGO_ENABLED=0 GOOS=linux GOARCH=arm64 GOTOOLCHAIN=local \
-          GOPATH="$build_dir/gopath" GOCACHE="$build_dir/go-cache" "$build_dir/go/bin/go" \
-          build -modcacherw -ldflags='-s -w' -o "$bundle/scripts/uosc/bin/ziggy-linux" ./src/ziggy/ziggy.go
-      )
-    fi
+    mkdir -- "$bundle"
+    tar -xzf "$build_dir/uosc.tar.gz" -C "$bundle"
   fi
 
   log "$(msg 'Configuring the English and Chinese mpv menus, shaders and playback presets' '正在配置 mpv 中英文菜单、着色器和播放预设')"
@@ -4327,7 +4348,10 @@ cached_linux_build vsedit install_vapoursynth_editor system \
 cached_linux_build lsmash install_lsmash system "${LSMASH_VERSION:-}"
 build_vs_plugins
 install_desktop_vs_plugins
-if ! "$package_build"; then
+if "$package_build"; then
+  stage_mpv_uosc_archive "$BLURAY_SETUP_CACHE_DIR/mpv-uosc-$APT_ARCH.tar.gz" \
+    || die "$(msg 'Could not prepare uosc for the Ubuntu package' '无法为 Ubuntu 包准备 uosc')"
+else
   if [[ -n "$LIBASS_PATH" && ! -f "$LIBASS_PATH" ]]; then
     installed_libass="$(/sbin/ldconfig -p | awk '/^[[:space:]]*libass\.so\.9 / && !found {print $NF; found=1}')"
     [[ -f "$installed_libass" ]] || die "$(msg 'Could not find the installed libass library' '找不到已安装的 libass 库')"

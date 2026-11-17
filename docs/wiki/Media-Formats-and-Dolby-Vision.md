@@ -200,11 +200,11 @@ Converting ASS to PGS keeps subtitles selectable but rasterizes their appearance
 
 ## Linux desktop playback with mpv
 
-For source installations, run the [Linux setup script](../../README.md#setup_linux_environmentsh-linux-runtime-environment) and reopen mpv. Setup installs English and Simplified Chinese right-click menus. Start playback from BluraySubtitle to use the current interface language for the menu and uosc controls. The language selected during setup is the default when you open mpv directly. The desktop interface uses the display's DPI.
+Ubuntu packages include uosc and the English and Simplified Chinese right-click menus. For source installations, run the [Linux setup script](../../README.md#setup_linux_environmentsh-linux-runtime-environment) and reopen mpv. Start playback from BluraySubtitle to use the current interface language for the menu and uosc controls. In a source installation, the language selected during setup is the default when you open mpv directly. The default menu and controls scale to the current display.
 
 ### Picture, subtitles, and shaders
 
-- Right-click and open **mpv-lazy** to apply the picture or subtitle preset. Each preset has a **Restore Previous** command. The picture preset enables display-synchronized interpolation and sets the shader list to QCOM Scaling and Sharpening. The subtitle preset sets the size, outline, color, and track preferences using the player's current font.
+- After source setup, right-click and open **mpv-lazy** to apply the picture or subtitle preset. Each preset has a **Restore Previous** command. The picture preset enables display-synchronized interpolation and sets the shader list to QCOM Scaling and Sharpening. The subtitle preset sets the size, outline, color, and track preferences using the player's current font.
 - Use **mpv-lazy → Shaders** to toggle any of the 10 shaders or clear the list. Upscaling shaders run when their scaling conditions are met. Compute shaders such as k7 modernAnime require a renderer and driver with the relevant GPU features. Applying several expensive shaders can cause dropped frames. [mpv-lazy shader guide](https://github.com/hooke007/mpv_PlayKit/wiki/4_GLSL)
 - Use **Save as Default Settings** to apply the current picture, subtitle, and shader settings at the next launch. mpv reads these choices from `bluray-defaults.conf`.
 

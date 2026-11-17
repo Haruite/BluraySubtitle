@@ -24,7 +24,7 @@ case "$tool" in
         export VSSCRIPT_PATH="$support/vapoursynth/libvsscript.so"
         export BLURAYSUB_PLUGIN_PATH="${BLURAYSUB_PLUGIN_PATH-$native/plugins}"
         export VAPOURSYNTH_EXTRA_PLUGIN_PATH="$BLURAYSUB_PLUGIN_PATH"
-        "$PYTHONHOME/bin/python3.14" "$native/write_ubuntu_vsscript_config.py"
+        "$PYTHONHOME/bin/python3.14" "$native/write_ubuntu_vsscript_config.py" "$tool"
         if [ "$tool" = vspipe ]; then
             executable="$support/vapoursynth/vspipe"
         elif [ "$tool" = vsedit ]; then

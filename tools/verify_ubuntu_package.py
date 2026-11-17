@@ -61,6 +61,14 @@ def verify(bundle: Path, work: Path) -> None:
     if not (support / "mpv").is_dir():
         raise RuntimeError("Missing bundled mpv configuration directory")
     menu_directory = support / "resource/mpv"
+    uosc_files = (
+        "scripts/uosc/main.lua", "scripts/uosc/bin/ziggy-linux",
+        "fonts/uosc_icons.otf", "fonts/uosc_textures.ttf",
+    )
+    if not all((menu_directory / name).stat().st_size for name in uosc_files):
+        raise RuntimeError("Incomplete bundled uosc")
+    if not (legal / "uosc/LICENSE.LGPL").stat().st_size:
+        raise RuntimeError("Empty bundled uosc license")
     menus = [(menu_directory / f"menu.{language}.conf").read_text(encoding="utf-8") for language in ("en", "zh")]
     if not all(menu.strip() for menu in menus) or menus[0] == menus[1]:
         raise RuntimeError("The bundled mpv menus must contain both languages")
@@ -195,6 +203,18 @@ vs.core.assrender.TextSub(clip, {str(text)!r}).set_output()
                              "stream=codec_name,pix_fmt,nb_read_frames", "-of", "json", av1)[0])["streams"]
     assert streams == [{"codec_name": "av1", "pix_fmt": "yuv420p10le", "nb_read_frames": "12"}]
     print("R79, NumPy, NLM-ISPC, subtitle rendering, x265, SVT-AV1, FLAC/AAC/Opus and MKVToolNix passed.", flush=True)
+
+    uosc_probe = work / "uosc-probe.lua"
+    uosc_probe.write_text(
+        "mp.add_timeout(0.5, function()\n"
+        "    mp.commandv('quit', mp.get_property_native('osc') == false and 0 or 1)\n"
+        "end)\n", encoding="utf-8",
+    )
+    run("mpv", "--idle=yes", "--force-window=no", "--vo=null", "--ao=null",
+        "--osc=yes", f"--script={uosc_probe}")
+    context_options = (support / "mpv/script-opts/context_menu.conf").read_text(encoding="utf-8").splitlines()
+    if "scale_with_window=no" not in context_options:
+        raise RuntimeError("The bundled mpv context menu must scale with the display")
 
     mpv_script = work / "mpv.vpy"
     mpv_script.write_text(runtime_assertions + "\nvideo_in.set_output()\n", encoding="utf-8")

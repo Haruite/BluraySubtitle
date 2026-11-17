@@ -28,6 +28,7 @@ from vapoursynth_plugin_versions import fallback_version
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from tools.mpv.install import stage_bundled_mpv
 from tools.mpv.vapoursynth.rife_assets import RIFE_LIBRARY
 
 MULTIARCH = sysconfig.get_config_var("MULTIARCH")
@@ -195,7 +196,7 @@ def plugin_notice_rows(directory: Path, files: list[Path]) -> str:
 
 
 
-def stage(support: Path) -> None:
+def stage(support: Path, uosc_bundle: Path) -> None:
     settings_file = os.environ.get("BLURAY_SETTINGS_FILE") or str(ROOT / "src/core/settings.py")
     settings = runpy.run_path(settings_file)
     native = support / "linux"
@@ -286,6 +287,7 @@ def stage(support: Path) -> None:
     for library in support.rglob("*.so*"):
         if (library.suffix == ".so" or ".so." in library.name) and not library.is_symlink() and library.is_file():
             subprocess.run(["strip", "--strip-unneeded", library], check=True)
+    uosc_version = stage_bundled_mpv(support, uosc_bundle, str(tools["mpv"]))
     generate_ubuntu_third_party_notices(
         {
             ROOT / "legal/ubuntu" / filename: support / "legal" / filename
@@ -298,6 +300,7 @@ def stage(support: Path) -> None:
         PYQT_VERSION_STR,
         vs_version,
         plugin_notice_rows(installed_plugins, plugins),
+        uosc_version,
     )
     if apt_paths := os.environ.get("BLURAY_APT_CACHE_PATHS"):
         used_paths.update((Path(sys.executable), stdlib / "os.py", Path(QtCore.__file__)))
@@ -316,4 +319,6 @@ def stage(support: Path) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("support", type=Path, help="Path to the PyInstaller bundle's _internal directory")
-    stage(parser.parse_args().support.resolve())
+    parser.add_argument("uosc_bundle", type=Path, help="Path to the unpacked native uosc release")
+    args = parser.parse_args()
+    stage(args.support.resolve(), args.uosc_bundle)

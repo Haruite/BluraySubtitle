@@ -253,15 +253,15 @@ def uosc_version(main: Path) -> tuple[int, ...]:
 def ziggy_is_usable(path: Path) -> bool:
     if not os.access(path, os.X_OK):
         return False
-    if machine() not in ("aarch64", "arm64"):
+    architecture = {"x86_64": b"\x3e\x00", "aarch64": b"\xb7\x00", "arm64": b"\xb7\x00"}.get(machine())
+    if architecture is None:
         return True
     try:
         with path.open("rb") as stream:
             header = stream.read(20)
     except OSError:
         return False
-    # Check ELF64 little-endian and EM_AARCH64 before reusing a Linux binary.
-    return header[:6] == b"\x7fELF\x02\x01" and header[18:20] == b"\xb7\x00"
+    return header[:6] == b"\x7fELF\x02\x01" and header[18:20] == architecture
 
 
 def uosc_is_installed(destination: Path) -> bool:
@@ -306,6 +306,22 @@ def install_uosc(bundle: Path, destination: Path) -> None:
         write_if_changed(destination / "fonts" / name, content)
     file_list = "".join(f"{path.as_posix()}\n" for path in source_files)
     write_if_changed(target / UOSC_FILE_LIST, file_list.encode("utf-8"))
+
+
+def stage_bundled_mpv(support: Path, bundle: Path, executable: str) -> str:
+    """Stage the menus and the Linux uosc release outside the editable mpv configuration."""
+    assets = support / "resource/mpv"
+    assets.mkdir(parents=True, exist_ok=True)
+    menu = default_menu(executable)
+    install_uosc(bundle, assets)
+    if not uosc_is_installed(assets):
+        raise RuntimeError("The packaged uosc release is incomplete or has the wrong Ziggy architecture")
+    for language in ("en", "zh"):
+        write_if_changed(assets / f"menu.{language}.conf", translate_mpv_menu(menu, language).encode("utf-8"))
+    write_if_changed(assets / "script-opts/context_menu.conf", update_context_options("").encode("utf-8"))
+    write_if_changed(support / "legal/uosc/LICENSE.LGPL", (bundle / "LICENSE.LGPL").read_bytes())
+    (support / "mpv").mkdir(exist_ok=True)
+    return ".".join(map(str, uosc_version(assets / UOSC_DIR / "main.lua")))
 
 
 def read_text(path: Path) -> str:
@@ -407,11 +423,8 @@ def install(bundle: Path | None, language: str, plugin_dir: Path, executable: st
 
 
 if __name__ == "__main__":
-    if sys.argv[1] == "--bundle-menus":
-        destination = Path(sys.argv[2])
-        menu = default_menu()
-        for code in ("en", "zh"):
-            write_if_changed(destination / f"menu.{code}.conf", translate_mpv_menu(menu, code).encode("utf-8"))
+    if sys.argv[1] == "--bundle":
+        stage_bundled_mpv(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4])
         raise SystemExit
     language = "zh" if sys.argv[2] == "zh" else "en"
     plugin_dir = Path(sys.argv[3])
