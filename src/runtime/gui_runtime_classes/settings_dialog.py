@@ -1219,7 +1219,7 @@ class SettingsDialog(AnimatedDialog):
             item = table.item(row, 2)
             item.setText(path)
             item.setToolTip(path)
-            optional = name in {"MPV_CONFIG_PATH", "MPV_PATH", "PLUGIN_PATH", "LIBASS_PATH"}
+            optional = name in {"MPV_CONFIG_PATH", "MPV_PATH", "LIBASS_PATH"}
             checked_tools = MKVTOOLNIX_TOOLS if name == "MKVTOOLNIX_PATH" else (name,)
             if (not optional or configured[name]) and not all(
                     tool_path_exists(tool, self._resolved_tools[tool]) for tool in checked_tools

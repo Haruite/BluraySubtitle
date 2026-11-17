@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import sysconfig
+from urllib.parse import urljoin
 import zipfile
 
 import numpy
@@ -26,6 +27,10 @@ from vapoursynth_plugin_versions import fallback_version
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from tools.mpv.vapoursynth.rife_assets import RIFE_LIBRARY
+
+MULTIARCH = sysconfig.get_config_var("MULTIARCH")
 TOOL_SETTINGS = {
     "7zz": "SEVEN_ZIP_PATH",
     "flac": "FLAC_PATH",
@@ -50,16 +55,16 @@ PLUGIN_PROJECTS = {
     "libdfttest.so": ("DFTTest", "HomeOfVapourSynthEvolution/VapourSynth-DFTTest"),
     "libeedi2.so": ("EEDI2", "HomeOfVapourSynthEvolution/VapourSynth-EEDI2"),
     "libeedi3.so": ("EEDI3", "AmusementClub/vapoursynth-classic"),
-    "libfmtconv.so": ("fmtconv", "EleonoreMizo/fmtconv"),
+    "libfmtconv.so": ("fmtconv", "https://gitlab.com/EleonoreMizo/fmtconv"),
     "libmiscfilters.so": ("MiscFilters", "AmusementClub/vapoursynth-classic"),
     "libremovegrain.so": ("RemoveGrain", "vapoursynth/vs-removegrain"),
-    "librife_linux_x86-64.so": ("RIFE", "styler00dollar/VapourSynth-RIFE-ncnn-Vulkan"),
+    RIFE_LIBRARY: ("RIFE", "styler00dollar/VapourSynth-RIFE-ncnn-Vulkan"),
     "libsangnommod.so": ("SangNomMod", "HomeOfVapourSynthEvolution/VapourSynth-SangNomMod"),
     "libvivtc.so": ("VIVTC", "vapoursynth/vivtc"),
     "libvs_placebo.so": ("vs-placebo", "Lypheo/vs-placebo"),
     "libvslsmashsource.so": ("LSMASHSource", "HomeOfAviSynthPlusEvolution/L-SMASH-Works"),
     "libvsnlm_ispc.so": ("vs-nlm-ispc", "AmusementClub/vs-nlm-ispc"),
-    "libzsmooth.x86_64-gnu.so": ("zsmooth", "adworacz/zsmooth"),
+    f"libzsmooth.{MULTIARCH.split('-', 1)[0]}-gnu.so": ("zsmooth", "adworacz/zsmooth"),
     "mvtools.so": ("MVTools", "dubhatervapoursynth/vapoursynth-mvtools"),
     "znedi3.so": ("ZNEDI3", "vapoursynth/znedi3-pypi"),
 }
@@ -184,7 +189,7 @@ def plugin_notice_rows(directory: Path, files: list[Path]) -> str:
         if release is None and plugin and plugin.version.major >= 0:
             release = f"{plugin.version.major}.{plugin.version.minor}"
         version = f"`{release}`" if release else "—"
-        source = f"https://github.com/{project}" if project else "—"
+        source = urljoin("https://github.com/", project) if project else "—"
         rows.append(f"| {name} | {version} | `linux/plugins/{file.name}` | {source} |")
     return "\n".join(rows)
 
@@ -223,7 +228,7 @@ def stage(support: Path) -> None:
         path for path in sorted((stdlib / "lib-dynload").glob("*.so"))
         if not path.name.startswith(("_test", "_tkinter", "_ctypes_test", "_xxtest"))
     ]
-    libass = Path("/usr/lib/x86_64-linux-gnu/libass.so.9")
+    libass = Path("/usr/lib") / MULTIARCH / "libass.so.9"
     binaries = [
         *tools.values(), *plugins, *qt_sources, libass, *extensions,
         vs_wheel / "vspipe", *vs_binaries,

@@ -19,6 +19,7 @@ jobs:
           - BluraySubtitle_windows_x64.7z
           - BluraySubtitle_windows_arm64.7z
           - BluraySubtitle_ubuntu26.04_x64.tar.xz
+          - BluraySubtitle_ubuntu26.04_arm64.tar.xz
     runs-on: ubuntu-latest
     timeout-minutes: 210
     env:

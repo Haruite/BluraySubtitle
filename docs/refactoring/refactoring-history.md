@@ -1373,3 +1373,23 @@ Windows setup uses native installers and CPython on Windows 11 ARM64, with a sep
 - Desktop setup displays initial paths, waits for confirmation, and rereads the file before using the installation paths. Windows Desktop setup writes the normalized VSEdit and MKVToolNix paths back to `config.json`. Linux VSPipe receives the configured plugin directory with both packaged and external executables.
 - Linux playback and Desktop setup use the configured mpv directory. The Ubuntu package defaults to its own `_internal/mpv/` directory and preserves it during updates.
 - Verified the Linux setup confirmation and reread and mpv playback with a relative configuration directory. With a simulated frozen layout and real Linux tools, Encode and FrameCheck completed a six-frame HEVC 10-bit MKV using a relative MKVToolNix path and an external VapourSynth plugin directory.
+
+## Ubuntu 26.04 ARM64 packaging and releases
+
+2026-11-16
+
+- Added a native ARM64 build and PyInstaller spec. Both Ubuntu architectures share packaging, server publishing, and Release workflows. The updater selects the archive for the running architecture.
+- Linux Build mode restores installed components and APT dependencies by architecture. Ubuntu package verification checks native binaries, Vulkan support in mpv and FFmpeg, and the bundled VapourSynth filters.
+
+## VapourSynth Plugin Release Selection
+
+2026-11-16
+
+- Windows and Linux use a shared upstream release list to select stable VapourSynth plugin versions. Setup checks the selected version before reusing installed plugins or build caches and records source tags when the plugin reports an older or incomplete version.
+- Release selection accounts for Classic and older Linux FFmpeg libraries. Ubuntu x64 packages build zsmooth for the baseline CPU, and Windows ARM64 builds zsmooth with the Zig version specified by its upstream source.
+
+## Ubuntu and Windows Build Caches
+
+2026-11-16 to 2026-11-17
+
+Ubuntu and Windows builds validate each component cache against upstream versions, build options, and relevant dependencies. Compatible archives migrate after verification. Windows tracks the linked FDK-AAC library version separately when building `fdkaac`. The workflows save snapshots when their contents change and keep the two most recent snapshots per architecture and cache group after a successful restore and package verification. Ubuntu caches the APT manifest alongside its `.deb` files.

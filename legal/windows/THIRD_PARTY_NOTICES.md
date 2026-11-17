@@ -72,7 +72,7 @@ These are **two separate upstreams**: the `fdkaac` program links against or ship
 - **Version:** `{{X264_VERSION}}`
 - **License:** GPL-2.0
 - **Official repository:** https://code.videolan.org/videolan/x264.git
-- **Build note:** built from the unmodified official source as an 8/10-bit-capable CLI; the Windows setup additionally uses PGO.
+- **Build note:** MSYS2 {{WINDOWS_MSYS2_ENVIRONMENT}} builds the unmodified official source as an 8/10-bit CLI with {{X264_OPTIMIZATIONS}}.
 
 ---
 
@@ -130,8 +130,8 @@ These are **two separate upstreams**: the `fdkaac` program links against or ship
 - **Version:** {{LIBASS_VERSION}}
 - **License:** ISC
 - **Source:** https://github.com/libass/libass/archive/refs/tags/{{LIBASS_VERSION}}.zip
-- **Build:** MSYS2 UCRT64 shared libass with its non-system dependencies linked statically. Fontconfig is disabled in favor of the Windows DirectWrite/GDI font provider; libunibreak and x86 assembly are enabled. The packaged DLL imports only Windows system DLLs.
-- **Statically linked components:** FreeType (FTL/GPL), FriBidi (LGPL-2.1-or-later), HarfBuzz (MIT), libunibreak (Zlib), GNU libiconv/gettext (LGPL), GLib (LGPL-2.1-or-later), PCRE2 (BSD), Graphite2 (MPL/LGPL/GPL), Brotli (MIT), bzip2, libpng, zlib, and the GCC/MinGW runtime libraries (GPL with the GCC Runtime Library Exception). Source and license metadata are available from https://packages.msys2.org/.
+- **Build:** MSYS2 {{WINDOWS_MSYS2_ENVIRONMENT}} builds the shared library and statically links its non-system dependencies. The build uses Windows DirectWrite/GDI for fonts (`-Dfontconfig=disabled`) and enables libunibreak and {{LIBASS_ASSEMBLY}} assembly. The packaged DLL imports only Windows system DLLs.
+- **Statically linked components:** FreeType (FTL/GPL), FriBidi (LGPL-2.1-or-later), HarfBuzz (MIT), libunibreak (Zlib), GNU libiconv/gettext (LGPL), GLib (LGPL-2.1-or-later), PCRE2 (BSD), Graphite2 (MPL/LGPL/GPL), Brotli (MIT), bzip2, libpng, zlib, and {{LIBASS_COMPILER_RUNTIME}}. Source and license metadata are available from https://packages.msys2.org/.
 
 ---
 

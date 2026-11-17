@@ -8,9 +8,11 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import subprocess
 import sys
+import sysconfig
 import tarfile
 from tempfile import TemporaryDirectory
 
@@ -20,6 +22,36 @@ SYSTEM_ROOTS = tuple(Path("/usr/local") / name for name in ("bin", "include", "l
     Path("/usr/share/mkvtoolnix"),
 )
 MANIFEST = "build.json"
+
+
+def legacy_declarations(source: Path, output: Path) -> None:
+    """Recover Bash's v2 fingerprint input without running the old setup."""
+    script = source.read_text(encoding="utf-8")
+    definitions = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\(\) [{(]\n", re.MULTILINE)
+    endings = re.compile(r"^[})][ \t]*$", re.MULTILINE)
+    starts = list(definitions.finditer(script))
+    declarations = {}
+    shell_env = {name: value for name, value in os.environ.items() if name != "BASH_ENV"}
+    for index, start in enumerate(starts):
+        name = start[1]
+        if not name.startswith(("install_", "build_", "__build_", "__patch_", "sync_", "write_", "ensure_modern_")):
+            continue
+        # A here-document may contain a literal closing brace. Bash checks
+        # that the candidate ends the definition and all here-documents.
+        limit = starts[index + 1].start() if index + 1 < len(starts) else len(script)
+        for end in endings.finditer(script, start.end(), limit):
+            candidate = script[start.start():end.end()] + "\n"
+            result = subprocess.run(["bash", "-n"], input=candidate, text=True, capture_output=True, env=shell_env)
+            if result.returncode == 0 and not result.stderr:
+                declarations[name] = candidate
+                break
+        else:
+            raise ValueError(f"Cannot read the legacy setup function {name}")
+    output.mkdir()
+    # Function declarations are inert. Only run declare -f in this shell.
+    for name, definition in declarations.items():
+        formatted = subprocess.check_output(["bash", "-c", definition + "declare -f " + name], env=shell_env)
+        (output / name).write_bytes(formatted)
 
 
 def digest(path: Path) -> str:
@@ -39,7 +71,7 @@ class InstallPaths:
         self.home = Path.home().resolve()
         self.local_libs = tuple(
             (self.home / ".local" / directory).resolve()
-            for directory in ("lib", "lib64", "lib/x86_64-linux-gnu")
+            for directory in ("lib", "lib64", f"lib/{sysconfig.get_config_var('MULTIARCH')}")
         ) if system else ()
         self.roots = (
             *map(Path.resolve, SYSTEM_ROOTS), (self.home / ".local/include/libdovi").resolve(),
@@ -96,22 +128,22 @@ def install_stage(stage: Path, baseline: Path) -> None:
     baseline.write_text(json.dumps(before), encoding="utf-8")
 
 
-def manifest(archive: tarfile.TarFile, key: str) -> dict:
+def manifest(archive: tarfile.TarFile, key: str, legacy_key: str = "") -> dict:
     member = archive.next()
     if member is None or member.name != MANIFEST or not member.isfile():
         raise ValueError("The archive has no installation manifest")
     with archive.extractfile(member) as record:
         data = json.load(record)
-    if data["recipe"] != key:
+    if data["recipe"] != key and (not legacy_key or data["recipe"] != legacy_key):
         raise ValueError("Build recipe has changed")
     return data
 
 
-def save_cache(cache: Path, key: str, baseline: dict, scope: InstallPaths, restored: bool) -> None:
-    previous = {"files": {}, "plugins": {}}
-    if restored:
+def save_cache(cache: Path, key: str, baseline: dict, scope: InstallPaths, restored_key: str) -> None:
+    previous = {"recipe": "", "files": {}, "plugins": {}}
+    if restored_key:
         with tarfile.open(cache, "r|xz") as archive:
-            previous = manifest(archive, key)
+            previous = manifest(archive, restored_key)
 
     candidates = {**{name: entry[0] for name, entry in previous["files"].items()}, **baseline}
     paths = {}
@@ -121,6 +153,8 @@ def save_cache(cache: Path, key: str, baseline: dict, scope: InstallPaths, resto
             continue
         mode = stat.S_IMODE(path.lstat().st_mode) & 0o777
         cached = previous["files"].get(name)
+        if not cached and before == checksum:
+            continue
         if cached and cached[1:] == [checksum, mode]:
             paths[name] = cached
         else:
@@ -135,7 +169,7 @@ def save_cache(cache: Path, key: str, baseline: dict, scope: InstallPaths, resto
             version = records.get(path.name)
             if version and version[1] == paths[str(path)][1]:
                 plugins[str(path)] = version[0]
-    if paths == previous["files"] and plugins == previous["plugins"]:
+    if key == previous["recipe"] and paths == previous["files"] and plugins == previous["plugins"]:
         return
 
     record = json.dumps({"recipe": key, "files": paths, "plugins": plugins}, sort_keys=True).encode()
@@ -169,9 +203,9 @@ class HashingReader:
         return block
 
 
-def restore_cache(cache: Path, key: str, scope: InstallPaths) -> None:
+def restore_cache(cache: Path, key: str, scope: InstallPaths, legacy_key: str = "") -> str:
     with tarfile.open(cache, "r|xz") as archive, TemporaryDirectory(dir=cache.parent) as directory:
-        record = manifest(archive, key)
+        record = manifest(archive, key, legacy_key)
         files = record["files"]
         seen = set()
         system, user = Path(directory) / "system.tar", Path(directory) / "user.tar"
@@ -218,6 +252,7 @@ def restore_cache(cache: Path, key: str, scope: InstallPaths) -> None:
             if path in scope.files and path.parent == scope.plugins and path.is_file():
                 if digest(path) == files[name][1]:
                     record_version(path, version, None)
+        return record["recipe"]
 
 
 def main() -> None:
@@ -226,15 +261,19 @@ def main() -> None:
         if operation == "install":
             install_stage(*map(Path, sys.argv[2:]))
             return
+        if operation == "legacy-declarations":
+            legacy_declarations(*map(Path, sys.argv[2:]))
+            return
         cache, baseline, key, mode, plugins, restored, *paths = sys.argv[2:]
         cache, baseline = Path(cache), Path(baseline)
         scope = InstallPaths(Path(plugins), list(map(Path, paths)), system=mode == "system")
         if operation == "snapshot":
             baseline.write_text(json.dumps({str(path): installed_digest(path) for path in scope.files}), encoding="utf-8")
         elif operation == "restore":
-            restore_cache(cache, key, scope)
+            print(restore_cache(cache, key, scope, restored))
         elif operation == "save":
-            save_cache(cache, key, json.loads(baseline.read_text(encoding="utf-8")), scope, restored == "true")
+            before = json.loads(baseline.read_text(encoding="utf-8")) if baseline.is_file() else {}
+            save_cache(cache, key, before, scope, restored)
         else:
             raise ValueError(f"Unknown cache operation: {operation}")
     except (OSError, EOFError, ValueError, KeyError, TypeError, tarfile.TarError, subprocess.CalledProcessError) as error:

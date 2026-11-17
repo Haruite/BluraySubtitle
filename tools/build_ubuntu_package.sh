@@ -2,10 +2,15 @@
 set -euo pipefail
 
 root=$(cd -- "$(dirname -- "$0")/.." && pwd -P)
+case "$(dpkg --print-architecture)" in
+    amd64) architecture=x64; bcj=--x86 ;;
+    arm64) architecture=arm64; bcj=--arm64 ;;
+    *) printf '%s\n' 'Ubuntu packaging requires amd64 or arm64.' >&2; exit 1 ;;
+esac
 output="${1:-$root/dist}"
 mkdir -p -- "$output"
 output=$(cd -- "$output" && pwd -P)
-archive="$output/BluraySubtitle_ubuntu26.04_x64.tar.xz"
+archive="$output/BluraySubtitle_ubuntu26.04_$architecture.tar.xz"
 record="$archive.txt"
 if [[ -e "$archive" || -e "$record" ]]; then
     printf 'Output archive already exists: %s\n' "$archive" >&2
@@ -26,11 +31,11 @@ export PYTHONPYCACHEPREFIX="$stage/pycache"
 export PYINSTALLER_CONFIG_DIR="$stage/pyinstaller"
 
 cd -- "$root"
-/usr/bin/python3 -m PyInstaller --distpath "$stage/dist" --workpath "$stage/build" BluraySubtitle_ubuntu2604_x64.spec
+/usr/bin/python3 -m PyInstaller --distpath "$stage/dist" --workpath "$stage/build" "BluraySubtitle_ubuntu2604_$architecture.spec"
 /usr/bin/python3 -B tools/stage_ubuntu_runtime.py "$stage/dist/BluraySubtitle/_internal"
 mkdir "$stage/dist/BluraySubtitle/_internal/mpv"
 /usr/bin/python3 -B tools/mpv/install.py --bundle-menus "$stage/dist/BluraySubtitle/_internal/resource/mpv"
-tar --sort=name -C "$stage/dist" -I 'xz -T4 --block-size=128MiB --x86 --lzma2=preset=4,dict=64MiB' \
+tar --sort=name -C "$stage/dist" -I "xz -T4 --block-size=128MiB $bcj --lzma2=preset=4,dict=64MiB" \
     -cf "$stage/package.tar.xz" BluraySubtitle
 digest=$(sha256sum "$stage/package.tar.xz")
 {

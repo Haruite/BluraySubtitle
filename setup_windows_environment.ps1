@@ -107,11 +107,10 @@ $script:LatestPythonRelease = $null
 $script:SelectedPythonRelease = $null
 $script:BuildCacheRoot = ""
 $script:NativeToolCacheRoot = Join-Path $commonApplicationData "BluraySubtitle\build-cache\artifacts"
-$script:BuildRecipeHash = ""
-# Retain the recipe IDs so cached builds of the same versions can be reused.
-$script:WindowsToolRecipeId = "ABE005A17FD8A3E7BE61BC884AC8EB55BC17BFA19F3A1AB25D2574C8ACEF835E"
+$script:LegacyBuildRecipeHashes = @()
+# Increment the affected component when changing inline build flags or patches.
+$script:WindowsComponentRevisions = @{}
 $script:X265Arm64BuildProfile = "arm64-assembly"
-$script:WindowsToolPathRecipeId = "7ECAA3E44A008A78519D6A9AE10C2BE6F4F6E50DEE1BC404FBBCC9BF05B6EF8F"
 $script:BuildToolchains = @{
     msvc = @("git", "visual-studio-build-tools", "cmake", "ninja", "nasm")
     msys2 = @("git", "msys2", "msys2-packages")
@@ -1328,7 +1327,7 @@ function Get-LatestPythonPackageVersion {
 function ConvertTo-ComparableVersion {
     param([Parameter(Mandatory = $true)][string]$VersionText)
 
-    $match = [regex]::Match($VersionText, '\d+(?:\.\d+){0,3}')
+    $match = [regex]::Match(($VersionText -replace '\.windows\.', '.'), '\d+(?:\.\d+){0,3}')
     if (-not $match.Success) {
         throw "Unable to parse version: $VersionText"
     }
@@ -1462,15 +1461,26 @@ function Get-BuildFingerprint {
     }
 }
 
-function Get-ComponentBuildCache {
+function Get-WindowsComponentRevision {
     param([string]$Name)
+    if ($script:WindowsComponentRevisions.ContainsKey($Name)) {
+        return [string]$script:WindowsComponentRevisions[$Name]
+    }
+    return "1"
+}
+
+function Get-ComponentBuildCache {
+    param([string]$Name, [string]$Version)
 
     if (-not $script:BuildCacheRoot) {
         return $null
     }
 
-    # The cache must be usable before querying releases or preparing a toolchain.
-    $inputs = @($script:BuildRecipeHash, $Name)
+    $revision = Get-WindowsComponentRevision $Name
+    $options = @()
+    $sourceInputs = @()
+    $legacyExtra = @()
+    $acceptLegacy = $revision -eq "1"
     switch ($Name) {
         "7zip" {
             $directory = Split-Path -Parent $script:ToolPaths.SevenZip
@@ -1478,52 +1488,79 @@ function Get-ComponentBuildCache {
         }
         "ffmpeg" {
             $files = @($script:ToolPaths.Ffmpeg, $script:ToolPaths.Ffprobe, $script:ToolPaths.FfmpegNotices)
-            $inputs += $script:FfmpegConfigureOptions
+            $options += $script:FfmpegConfigureOptions
         }
         "flac" { $files = @($script:ToolPaths.Flac, $script:ToolPaths.FlacLibrary) }
         "tsmuxer" { $files = @($script:ToolPaths.TsMuxer) }
         "dovi-tool" { $files = @($script:ToolPaths.DoviTool) }
         "hdr10plus-tool" { $files = @($script:ToolPaths.Hdr10PlusTool) }
-        "x264" { $files = @($script:ToolPaths.X264, $script:ToolPaths.X264Version) }
+        "x264" {
+            $files = @($script:ToolPaths.X264, $script:ToolPaths.X264Version)
+            $sourceInputs += (Get-X264Release).Commit
+        }
         "x265" {
             $files = @($script:ToolPaths.X265, $script:ToolPaths.X265Version)
-            if ($script:IsArm64) { $inputs += $script:X265Arm64BuildProfile }
+            if ($script:IsArm64) { $options += $script:X265Arm64BuildProfile }
         }
         "svt-av1" {
             $files = @($script:ToolPaths.SvtAv1)
-            if ($script:IsArm64) { $inputs += "arm64-lto" }
+            if ($script:IsArm64) { $options += "arm64-lto" }
         }
-        "fdkaac" { $files = @($script:ToolPaths.FdkAac) }
+        "fdkaac" {
+            $files = @($script:ToolPaths.FdkAac, $script:ToolPaths.FdkAacBuildRecord)
+            $sourceInputs += (Get-FdkAacLibraryBuildKey (Get-FdkAacLibraryRelease).Version)
+            $acceptLegacy = $false
+        }
         "libass" { $files = @($script:ToolPaths.Libass, $script:ToolPaths.LibassVersion) }
         "libsndfile" {
             $files = @($script:ToolPaths.PackagedLibsndfile, (Join-Path $script:LibsndfileDirectory "COPYING"))
-            $inputs += $script:LibsndfileVersion
+            $options += $script:LibsndfileVersion
         }
         "vapoursynth" {
             if (-not $script:IsArm64) { return $null }
             $files = @()
-            $inputs += @(
-                $script:SelectedPythonRelease.Version
+            $pythonVersion = $script:SelectedPythonRelease.Version
+            $options += ([version]$pythonVersion).ToString(2)
+            $legacyExtra = @(
+                $pythonVersion
                 (Get-FileHash -LiteralPath (Join-Path $script:SetupDirectory "tools\install_vapoursynth_r79_windows.py")).Hash
                 (Get-Command Install-VapourSynthR79).Definition
             )
         }
         "vapoursynth-classic" {
             $files = @(Join-Path $script:ToolPaths.VapourSynthRoot "vapoursynth-build.json")
-            $inputs += @(
-                (Get-FileHash -LiteralPath (Join-Path $script:SetupDirectory "tools\build_vapoursynth_windows.py")).Hash
-                (Invoke-SetupCommand -FilePath $script:ToolPaths.VapourSynthPython -Arguments @(
-                    "-c", "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))"
-                ))
+            $legacyExtra += (Get-FileHash -LiteralPath (Join-Path $script:SetupDirectory "tools\build_vapoursynth_windows.py")).Hash
+            $options += Invoke-SetupCommand -FilePath $script:ToolPaths.VapourSynthPython -Arguments @(
+                "-c", "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))"
             )
+            foreach ($dependency in (Get-VapourSynthSourceDependencies).Values) {
+                $sourceInputs += $dependency.Version
+            }
         }
         default { return $null }
     }
 
+    $legacyKeys = @()
+    if ($acceptLegacy) {
+        foreach ($oldRecipe in $script:LegacyBuildRecipeHashes) {
+            $legacyInputs = @($oldRecipe, $Name)
+            if ($Name -eq "vapoursynth-classic") {
+                $legacyInputs += $legacyExtra + $options
+            }
+            elseif ($Name -eq "vapoursynth") {
+                $legacyInputs += $legacyExtra
+            }
+            else {
+                $legacyInputs += $options
+            }
+            $legacyKeys += Get-BuildFingerprint $legacyInputs
+        }
+    }
     return [pscustomobject]@{
         Name = $Name
         Archive = Join-Path $script:BuildCacheRoot "$Name.zip"
-        Key = Get-BuildFingerprint $inputs
+        Key = Get-BuildFingerprint (@("windows-component-v2", $script:Architecture, $Name, $revision, $Version) + $options + $sourceInputs)
+        LegacyKeys = $legacyKeys
         Files = $files
         Artifacts = Join-Path $script:TempRoot "artifacts-$Name"
         Restored = Join-Path $script:TempRoot "restored-$Name"
@@ -1531,44 +1568,51 @@ function Get-ComponentBuildCache {
 }
 
 function Invoke-BuildArtifactCache {
-    param([string]$Operation, [string]$Archive, [string]$Key, [string]$Directory)
+    param([string]$Operation, [string]$Archive, [string]$Key, [string]$Directory, [string[]]$LegacyKeys = @())
 
     $helper = Join-Path $script:SetupDirectory "tools\windows_build_cache.py"
-    return Invoke-SetupCommand -FilePath $script:ToolPaths.Python -Arguments @(
-        $helper, $Operation, $Archive, $Key, $Directory
-    )
+    $arguments = @($helper, $Operation, $Archive, $Key, $Directory)
+    foreach ($previous in $LegacyKeys) {
+        $arguments += @("--legacy-key", $previous)
+    }
+    return Invoke-SetupCommand -FilePath $script:ToolPaths.Python -Arguments $arguments
 }
 
 function Restore-ComponentBuildCache {
     param($Cache)
 
-    if ((Invoke-BuildArtifactCache "restore" $Cache.Archive $Cache.Key $Cache.Restored) -ne "hit") {
-        return $false
+    $status = Invoke-BuildArtifactCache "restore" $Cache.Archive $Cache.Key $Cache.Restored $Cache.LegacyKeys
+    if ($status -notin @("hit", "legacy")) {
+        return ""
     }
     if ($Cache.Name -eq "vapoursynth") {
         Install-VapourSynthR79 -Artifacts $Cache.Restored
-        return $true
+        return $status
     }
     if ($Cache.Name -eq "vapoursynth-classic") {
         Install-VapourSynthClassic -Artifacts $Cache.Restored
-        return $true
+        return $status
     }
     foreach ($file in $Cache.Files) {
         $cachedFile = Join-Path $Cache.Restored ([IO.Path]::GetFileName($file))
         if (-not (Test-Path -LiteralPath $cachedFile -PathType Leaf)) {
-            return $false
+            return ""
         }
     }
     foreach ($file in $Cache.Files) {
         $cachedFile = Join-Path $Cache.Restored ([IO.Path]::GetFileName($file))
         Install-ConfiguredFile -Source $cachedFile -Destination $file
     }
-    return $true
+    return $status
 }
 
 function Save-ComponentBuildCache {
-    param($Cache)
+    param($Cache, [switch]$Migrating)
 
+    if ($Migrating -and $Cache.Name -in @("vapoursynth", "vapoursynth-classic")) {
+        Invoke-BuildArtifactCache "save" $Cache.Archive $Cache.Key $Cache.Restored | Out-Null
+        return
+    }
     [IO.Directory]::CreateDirectory($Cache.Artifacts) | Out-Null
     foreach ($file in $Cache.Files) {
         Copy-Item -LiteralPath $file -Destination $Cache.Artifacts -Force
@@ -1596,27 +1640,46 @@ function Invoke-SetupComponent {
     $displayName = Get-SetupText $Component.EnglishName $Component.ChineseName
     Write-SetupInfo "Checking $displayName" "正在检查 $displayName"
 
+    $configuredPath = ""
     if ($Mode -eq "Build" -and $Component.Name -in @("git", "cmake", "ninja", "nasm") -and
         -not (Test-Path -LiteralPath $script:ToolPaths[$Component.Name] -PathType Leaf)) {
         $command = Get-Command "$($Component.Name).exe" -CommandType Application -ErrorAction SilentlyContinue |
             Select-Object -First 1
         if ($command) {
+            $configuredPath = $script:ToolPaths[$Component.Name]
             $script:ToolPaths[$Component.Name] = $command.Source
         }
     }
 
-    $cache = Get-ComponentBuildCache $Component.Name
-    $restored = $false
-    $installedVersion = ""
-    if ($null -ne $cache) {
+    Write-SetupInfo `
+        "Checking the target version/status for $displayName." `
+        "正在查询 $displayName 的目标版本/状态。"
+    $availableVersion = [string](& $Component.GetAvailableVersion)
+    $cache = Get-ComponentBuildCache $Component.Name $availableVersion
+    if ($null -ne $cache -and -not $availableVersion) {
+        throw (Get-SetupText `
+            "Unable to determine the upstream version for $displayName." `
+            "无法确定 $displayName 的上游版本。")
+    }
+    Write-SetupInfo `
+        "$displayName target version/status: $availableVersion" `
+        "$displayName 目标版本/状态：$availableVersion"
+
+    $restored = ""
+    $installedVersion = [string](& $Component.GetInstalledVersion)
+    if ($null -ne $cache -and -not $installedVersion) {
         try {
             $restored = Restore-ComponentBuildCache $cache
             if ($restored) {
                 $installedVersion = [string](& $Component.GetInstalledVersion)
             }
         }
-        catch {
-            $restored = $true
+        catch [Management.Automation.RuntimeException], [IO.IOException] {
+            $detail = $_.Exception.Message
+            Write-SetupWarning `
+                "Unable to restore cached $displayName. Installing it again. $detail" `
+                "无法恢复缓存中的 $displayName，将重新安装。$detail"
+            $restored = ""
         }
         if ($restored -and -not $installedVersion) {
             Write-SetupWarning `
@@ -1625,9 +1688,6 @@ function Invoke-SetupComponent {
         }
     }
 
-    if (-not $restored) {
-        $installedVersion = [string](& $Component.GetInstalledVersion)
-    }
     if ($installedVersion) {
         Write-SetupInfo `
             "$displayName detected; installed version/status: $installedVersion" `
@@ -1651,19 +1711,6 @@ function Invoke-SetupComponent {
             "构建将复用 $displayName $installedVersion。"
         return
     }
-
-    Write-SetupInfo `
-        "Checking the target version/status for $displayName." `
-        "正在查询 $displayName 的目标版本/状态。"
-    $availableVersion = [string](& $Component.GetAvailableVersion)
-    if ($null -ne $cache -and -not $availableVersion) {
-        throw (Get-SetupText `
-            "Unable to determine the upstream version for $displayName." `
-            "无法确定 $displayName 的上游版本。")
-    }
-    Write-SetupInfo `
-        "$displayName target version/status: $availableVersion" `
-        "$displayName 目标版本/状态：$availableVersion"
 
     $needsInstall = $Component.AlwaysRun -or -not $installedVersion
     if (-not $needsInstall -and $availableVersion) {
@@ -1691,6 +1738,9 @@ function Invoke-SetupComponent {
 
     if ($needsInstall) {
         Initialize-SetupBuildToolchain $Component.BuildToolchain
+        if ($configuredPath) {
+            $script:ToolPaths[$Component.Name] = $configuredPath
+        }
         Write-SetupInfo `
             "Starting installation or configuration of $displayName $availableVersion." `
             "开始安装或配置 $displayName $availableVersion。"
@@ -1728,13 +1778,17 @@ function Invoke-SetupComponent {
     }
 
     if ($restored) {
+        if ($restored -eq "legacy" -and (Compare-SetupVersion $installedVersion $availableVersion) -eq 0) {
+            Save-ComponentBuildCache $cache -Migrating
+        }
         Update-ManifestComponent $Component.Name $installedVersion "cached" -Architecture $Component.Architecture
         Write-SetupInfo `
             "Restored and verified current $displayName $installedVersion from the build cache." `
             "已从构建缓存恢复并验证当前版本 $displayName $installedVersion。"
         return
     }
-    if ($null -ne $cache -and -not $Component.BuildToolchain -and $Component.Name -ne "vapoursynth") {
+    if ($null -ne $cache -and -not $Component.BuildToolchain -and $Component.Name -ne "vapoursynth" -and
+        (Compare-SetupVersion $installedVersion $availableVersion) -eq 0) {
         Save-ComponentBuildCache $cache
     }
     Update-ManifestComponent $Component.Name $installedVersion "satisfied" -Architecture $Component.Architecture
@@ -1789,6 +1843,7 @@ function Initialize-ConfiguredToolPaths {
     $script:ToolPaths["FlacLibrary"] = Join-Path (Split-Path -Parent $script:ToolPaths.Flac) "libFLAC.dll"
     $script:ToolPaths["X264Version"] = Join-Path (Split-Path -Parent $script:ToolPaths.X264) "x264-version.txt"
     $script:ToolPaths["X265Version"] = Join-Path (Split-Path -Parent $script:ToolPaths.X265) "x265-version.txt"
+    $script:ToolPaths["FdkAacBuildRecord"] = "$($script:ToolPaths.FdkAac).build.txt"
     $script:ToolPaths["LibassVersion"] = Join-Path (Split-Path -Parent $script:ToolPaths.Libass) "libass-version.txt"
     $script:ToolPaths["VapourSynthRoot"] = Split-Path -Parent $script:ToolPaths.VsPipe
     $script:ToolPaths["VapourSynthSitePackages"] = Join-Path $script:ToolPaths.VapourSynthRoot "Lib\site-packages"
@@ -3963,6 +4018,14 @@ function Get-FdkAacLibraryRelease {
         -ArchiveBaseName "fdk-aac"
 }
 
+function Get-FdkAacLibraryBuildKey {
+    param([string]$Version)
+
+    return Get-BuildFingerprint @(
+        "fdkaac-library-v2", $script:Architecture, (Get-WindowsComponentRevision "fdkaac-library"), $Version
+    )
+}
+
 function Get-FdkAacRelease {
     return Get-GitHubLatestTaggedSource `
         -Repository "nu774/fdkaac" `
@@ -4003,20 +4066,26 @@ function Install-FdkAac {
     $libraryRelease = Get-FdkAacLibraryRelease
     $prefix = Join-Path $script:TempRoot "fdkaac-prefix"
     $restoredPrefix = Join-Path $script:TempRoot "fdkaac-restored-prefix"
-    $libraryArchive = $null
-    $libraryKey = $null
-    if ($script:BuildCacheRoot) {
-        $libraryArchive = Join-Path $script:BuildCacheRoot "fdkaac-library.zip"
-        $libraryKey = Get-BuildFingerprint @($script:BuildRecipeHash, "fdkaac-library")
-        $pkgConfig = Join-Path $restoredPrefix "lib\pkgconfig\fdk-aac.pc"
-        if ((Invoke-BuildArtifactCache "restore" $libraryArchive $libraryKey $restoredPrefix) -eq "hit" -and
-            (Test-Path -LiteralPath (Join-Path $restoredPrefix "lib\libfdk-aac.a") -PathType Leaf) -and
-            (Test-Path -LiteralPath (Join-Path $restoredPrefix "lib\libfdk-xhe-aac.a") -PathType Leaf) -and
-            (Test-Path -LiteralPath $pkgConfig -PathType Leaf) -and
-            (Select-String -LiteralPath $pkgConfig -Pattern "^Version:\s+$([regex]::Escape($libraryRelease.Version))\s*$" -Quiet)) {
-            $prefix = $restoredPrefix
-            Write-SetupInfo "Restored FDK-AAC static libraries from the build cache." "已从构建缓存恢复 FDK-AAC 静态库。"
+    $libraryArchive = Join-Path $script:NativeToolCacheRoot "fdkaac-library.zip"
+    $libraryKey = Get-FdkAacLibraryBuildKey $libraryRelease.Version
+    $legacyKeys = @()
+    if ((Get-WindowsComponentRevision "fdkaac-library") -eq "1") {
+        foreach ($recipe in $script:LegacyBuildRecipeHashes) {
+            $legacyKeys += Get-BuildFingerprint @($recipe, "fdkaac-library")
         }
+    }
+    $pkgConfig = Join-Path $restoredPrefix "lib\pkgconfig\fdk-aac.pc"
+    $status = Invoke-BuildArtifactCache "restore" $libraryArchive $libraryKey $restoredPrefix $legacyKeys
+    if ($status -in @("hit", "legacy") -and
+        (Test-Path -LiteralPath (Join-Path $restoredPrefix "lib\libfdk-aac.a") -PathType Leaf) -and
+        (Test-Path -LiteralPath (Join-Path $restoredPrefix "lib\libfdk-xhe-aac.a") -PathType Leaf) -and
+        (Test-Path -LiteralPath $pkgConfig -PathType Leaf) -and
+        (Select-String -LiteralPath $pkgConfig -Pattern "^Version:\s+$([regex]::Escape($libraryRelease.Version))\s*$" -Quiet)) {
+        $prefix = $restoredPrefix
+        if ($status -eq "legacy") {
+            Invoke-BuildArtifactCache "save" $libraryArchive $libraryKey $prefix | Out-Null
+        }
+        Write-SetupInfo "Restored FDK-AAC static libraries from the build cache." "已从构建缓存恢复 FDK-AAC 静态库。"
     }
 
     if ($prefix -ne $restoredPrefix) {
@@ -4053,9 +4122,7 @@ function Install-FdkAac {
                 (ConvertTo-Msys2Path $prefix),
                 [string]$script:BuildJobs
             )
-        if ($libraryArchive) {
-            Invoke-BuildArtifactCache "save" $libraryArchive $libraryKey $prefix | Out-Null
-        }
+        Invoke-BuildArtifactCache "save" $libraryArchive $libraryKey $prefix | Out-Null
     }
 
     $cliRelease = Get-FdkAacRelease
@@ -4100,10 +4167,21 @@ function Install-FdkAac {
         -Arguments @("--strip-unneeded", $executable.FullName) | Out-Null
     [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($script:ToolPaths.FdkAac)) | Out-Null
     Copy-Item -LiteralPath $executable.FullName -Destination $script:ToolPaths.FdkAac -Force
+    [IO.File]::WriteAllLines($script:ToolPaths.FdkAacBuildRecord, [string[]]@(
+        $libraryRelease.Version, $libraryKey, (Get-FileHash -LiteralPath $script:ToolPaths.FdkAac).Hash
+    ), $script:Utf8Encoding)
 }
 
 function Test-FdkAac {
-    return [bool](Get-InstalledFdkAacVersion)
+    if (-not (Get-InstalledFdkAacVersion) -or
+        -not (Test-Path -LiteralPath $script:ToolPaths.FdkAacBuildRecord -PathType Leaf)) {
+        return $false
+    }
+    $expected = (Get-FdkAacLibraryRelease).Version
+    $record = [IO.File]::ReadAllLines($script:ToolPaths.FdkAacBuildRecord)
+    return ($record.Count -eq 3 -and $record[0] -eq $expected -and
+        $record[1] -eq (Get-FdkAacLibraryBuildKey $expected) -and
+        $record[2] -eq (Get-FileHash -LiteralPath $script:ToolPaths.FdkAac).Hash)
 }
 
 function Install-PackagedLibsndfile {
@@ -4451,7 +4529,7 @@ function Test-VapourSynthClassic {
     if (-not $installedVersion) {
         return $false
     }
-    if (-not $script:BuildCacheRoot -and $installedVersion -ne (Get-VapourSynthClassicRelease).Version) {
+    if ($installedVersion -ne (Get-VapourSynthClassicRelease).Version) {
         return $false
     }
     $dependencies = Get-VapourSynthSourceDependencies
@@ -4515,6 +4593,7 @@ function Install-VapourSynthUpstreamComponents {
         "--work-root", (Join-Path $script:TempRoot "vapoursynth-components"),
         "--msys2-root", $script:ToolPaths.Msys2Root,
         "--seven-zip", $script:ToolPaths.SevenZip,
+        "--git", $script:ToolPaths.Git,
         "--jobs", [string]$script:BuildJobs,
         "--language", $script:SelectedLanguage
     )
@@ -4620,8 +4699,7 @@ function Register-StageTwoComponents {
         -GetInstalledVersion { Get-InstalledGitVersion } `
         -GetAvailableVersion { (Get-GitRelease).Version } `
         -Install { param($Version) Install-Git $Version } `
-        -Verify { Test-Git } `
-        -ReuseInstalled:($Mode -eq "Build")
+        -Verify { Test-Git }
 
     if ($Mode -eq "Desktop") {
         Register-SetupComponent `
@@ -4661,8 +4739,7 @@ function Register-StageTwoComponents {
         -GetInstalledVersion { Get-InstalledCMakeVersion } `
         -GetAvailableVersion { (Get-CMakeRelease).Version } `
         -Install { param($Version) Install-CMake $Version } `
-        -Verify { Test-CMake } `
-        -ReuseInstalled:($Mode -eq "Build")
+        -Verify { Test-CMake }
 
     Register-SetupComponent `
         -Name "ninja" `
@@ -4671,8 +4748,7 @@ function Register-StageTwoComponents {
         -GetInstalledVersion { Get-InstalledNinjaVersion } `
         -GetAvailableVersion { (Get-NinjaRelease).Version } `
         -Install { param($Version) Install-Ninja $Version } `
-        -Verify { Test-Ninja } `
-        -ReuseInstalled:($Mode -eq "Build")
+        -Verify { Test-Ninja }
 
     if (-not $script:IsArm64) {
         Register-SetupComponent `
@@ -4682,8 +4758,7 @@ function Register-StageTwoComponents {
             -GetInstalledVersion { Get-InstalledNasmVersion } `
             -GetAvailableVersion { (Get-LatestNasmRelease).Version } `
             -Install { param($Version) Install-Nasm $Version } `
-            -Verify { Test-Nasm } `
-            -ReuseInstalled:($Mode -eq "Build")
+            -Verify { Test-Nasm }
     }
 
     Register-SetupComponent `
@@ -4956,23 +5031,21 @@ function Invoke-WindowsSetup {
         "系统代理路由：$proxyDescription"
 
     Initialize-SetupManifest
+    # Windows tool recipe hashes used by v3 snapshots with CRLF or LF checkout settings.
+    $script:LegacyBuildRecipeHashes = if ($script:IsArm64) {
+        @("894d5a109af54d060ba17b68b2392c9745ebce61a854e5190b154e5be7dbd607",
+            "ae41e36dcfbb16a4db7fa7cc2bd526530c1e7e99a3d6d5deb69a59614e2b1652")
+    }
+    else {
+        @("6113ac72e0b18f821e4e1dc2161e6a09c9c61dcfa7c536b937f5b7b58df46403",
+            "c8465146402b202e74e742727815da12ee9d26ed5f9ecae58d43d1da03ff776a")
+    }
     if ($Mode -eq "Build" -and $BuildCacheDirectory) {
         $script:BuildCacheRoot = Join-Path ([IO.Path]::GetFullPath($BuildCacheDirectory)) "artifacts"
         if ($script:IsArm64) {
             $script:BuildCacheRoot = Join-Path $script:BuildCacheRoot "arm64"
         }
         $script:NativeToolCacheRoot = $script:BuildCacheRoot
-        $script:BuildRecipeHash = Get-BuildFingerprint @(
-            $script:WindowsToolRecipeId
-            (Get-FileHash -LiteralPath (Join-Path $script:SetupDirectory "tools\windows_build_cache.py")).Hash
-            $script:WindowsToolPathRecipeId
-        )
-        if ($script:IsArm64) {
-            $script:BuildRecipeHash = Get-BuildFingerprint @(
-                $script:BuildRecipeHash
-                "windows-arm64-1"
-            )
-        }
     }
     Initialize-PythonRuntimeSelection
     $script:Manifest.system = [ordered]@{
@@ -4999,9 +5072,9 @@ function Invoke-WindowsSetup {
     Register-StageFiveComponents
     $buildTools = @($script:BuildToolchains.Values | ForEach-Object { $_ })
     foreach ($component in $script:RegisteredComponents.Values) {
-        # Packaging needs cl.exe even when the tool artifacts were restored.
+        # Release lookup needs Git. Packaging needs cl.exe.
         if ($script:BuildCacheRoot -and $component.Name -in $buildTools -and
-            $component.Name -ne "visual-studio-build-tools") {
+            $component.Name -notin @("git", "visual-studio-build-tools")) {
             continue
         }
         if ($component.Name -in @("vapoursynth", "vapoursynth-classic")) {
@@ -5012,7 +5085,7 @@ function Invoke-WindowsSetup {
             }
         }
         Invoke-SetupComponent $component
-        if ($component.Name -eq "visual-studio-build-tools") {
+        if ($component.Name -in $buildTools) {
             $script:PreparedBuildTools[$component.Name] = $true
         }
         if ($component.Name -eq "python") {
@@ -5052,12 +5125,6 @@ function Invoke-WindowsSetup {
     if ($Mode -eq "Build") {
         $script:Manifest.system.python_executable = $script:ToolPaths.Python
         $script:Manifest.system.seven_zip_executable = $script:ToolPaths.SevenZip
-        $script:Manifest.system.download_cache_key = Get-BuildFingerprint @(
-            (Get-PythonVersionFromExecutable $script:ToolPaths.Python)
-            (Invoke-SetupCommand -FilePath $script:ToolPaths.Python -Arguments @(
-                "-m", "pip", "list", "--format=freeze", "--disable-pip-version-check"
-            ))
-        )
     }
     Save-SetupManifest
 

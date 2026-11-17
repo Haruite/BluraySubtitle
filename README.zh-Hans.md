@@ -6,10 +6,10 @@
 
 开发文档：[强制代码修改规范](docs/development/code-standards.zh-Hans.md) | [媒体处理方案与工具选型](docs/development/media-pipeline-and-tool-selection.zh-Hans.md) | [重构历史](docs/refactoring/refactoring-history.zh-Hans.md)
 
-x64 程序包支持 **Windows 10 1809 及以上版本**。ARM64 程序包面向 **Windows 10 ARM64 及以上版本**，具体最低 Windows 10 版本待验证。Windows 10 建议使用 **22H2**。
+- `main` 分支最新构建，每次推送更新。[Windows x64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_windows_x64.7z) · [Windows ARM64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_windows_arm64.7z) · [Ubuntu 26.04 x64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_ubuntu26.04_x64.tar.xz) · [Ubuntu 26.04 ARM64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_ubuntu26.04_arm64.tar.xz)
+- 版本 4.7 以后，对应版本的安装包会附在 Release 中。[GitHub Releases](https://github.com/Haruite/BluraySubtitle/releases)
 
-- `main` 分支最新构建。[Windows x64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_windows_x64.7z) · [Windows ARM64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_windows_arm64.7z) · [Ubuntu 26.04 x64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_ubuntu26.04_x64.tar.xz)
-- 对应版本的安装包会附在 Release 中。[GitHub Releases](https://github.com/Haruite/BluraySubtitle/releases)
+Windows x64 程序包支持 **Windows 10 1809 及以上版本 和 Windows 11**。Windows ARM64 程序包面向 **Windows 10 ARM64 及以上版本 和 Windows 11**，具体最低 Windows 10 版本待验证。Windows 10 建议使用 **22H2**。
 
 BluraySubtitle 是一个面向 Windows/Linux 的蓝光流程 GUI 工具。它将以下五类功能整合在一个应用中：
 
@@ -23,12 +23,14 @@ BluraySubtitle 是一个面向 Windows/Linux 的蓝光流程 GUI 工具。它将
 
 ## 功能与控制
 
-### 界面与任务设置
+### 界面与设置
 
-- 支持英文／简体中文，以及浅色、深色、彩色主题和透明度调整。
-- 页面可纵向滚动，拖动表格底部调节条可调整高度；布局和表格操作见[界面指南](docs/wiki/Interface-Guide.zh-Hans.md#主窗口的内容分区)。
+- 语言支持英文／简体中文，有浅色、深色、彩色三种主题，支持透调节明度。
+- 页面可纵向滚动，拖动表格底部调节条可调整高度。
 - **设置**管理常规选项、字体、路径、启动默认值和外部工具。在**工具**页可检查更新或创建启动快捷方式。
-- 勾选要处理的原盘，拖动路径调整顺序。剧集模式按章节分集，电影模式保持连续输出，并可默认选中不同剪辑版本；每卷可选择多个主 MPLS。执行前请检查自动选片、分集范围和轨道。
+- 所有可以互动的控件、可以编辑的单元格外围有一圈加强线，可编辑单元格悬浮有气泡提示，不可编辑单元格双击提示只可复制。
+- 主窗口默认脱离终端运行，日志可在独立窗口查看。
+- 主窗口和日志窗口都可以设置背景图片和背景图片透明度、模糊度。
 
 ### Remux 控制
 
@@ -52,11 +54,11 @@ BluraySubtitle 是一个面向 Windows/Linux 的蓝光流程 GUI 工具。它将
 
 ### 压制控制
 
-- 可选择自带／系统 `vspipe` 和编码器：x264 支持 8/10-bit，x265 支持 8/10/12-bit。SVT-AV1 标准构建支持 8/10-bit；仅当所选编码器支持时才显示 12-bit 选项。
+- x264 支持 8/10-bit，x265 支持 8/10/12-bit。SVT-AV1 标准构建支持 8/10-bit；仅当所选编码器支持时才显示 12-bit 选项。
 - 保留来源 CFR／VFR 时间轴和音画同步。VPy 处理须保持帧对应关系，也支持[开头截取测试](#如何快速测试压制不跑完整片)。
 - 内置预设只读；可在**高级**中管理用户预设，也可直接修改压制参数。
 - 每个正片／SP 行可指定 VPy 和逐轨 FLAC/AAC/Opus 转换。字幕支持外挂、内挂和内嵌；Remux 来源还支持编辑章节／附件。
-- Remux 来源的字幕文件夹按当前正片行顺序填入字幕，压制前请检查对应关系。
+- 字幕文件夹按当前正片行顺序填入字幕，压制前请检查对应关系。
 - 默认 VPy 提供降噪、去光晕、去振铃、去色带和抗锯齿强度设置。
 - 自动 getnative 可能消耗较多时间和内存，并跳过高度超过 1080 像素的源；更高分辨率可用 [getnative 脚本](src/scripts/getnative_file.py)手动分析。
 - 自动裁剪需检查画面；对比图和坏帧报告分别保存在输出目录的 `Compare` 和 `FrameCheck` 中。完整坏帧检测耗时可能为视频时长的数倍。
@@ -66,46 +68,46 @@ BluraySubtitle 是一个面向 Windows/Linux 的蓝光流程 GUI 工具。它将
 
 ### SP 管理
 
-**设置 → 常规 → Remux 时保留 SP（特典）**默认勾选。关闭后，在原盘 Remux 和原盘压制中载入原盘时，SP 表的条目全部不勾选，仍可手动选择。
-完成主播放列表及分集选择后再检查 SP 表，取消不需要的内容。仅 Remux SP 时，取消所有主播放列表，只在 SP 表中保留所需行。编辑轨道会更新输出名称和格式；匹配的评论音轨可以加入正片。详见 [SP 选择、命名与附加规则](docs/wiki/Blu-ray-Disc-Structure.zh-Hans.md#本项目中的正片与-sp)。
+**设置 → 常规 → Remux 时保留 SP（特典）**默认勾选。关闭后，在原盘 Remux 和原盘压制中载入原盘时，SP 表的条目默认全部不勾选。
+完成主播放列表及分集选择后再检查 SP 表，调整勾选内容。仅 Remux SP 时，取消所有主播放列表，只在 SP 表中保留所需行。编辑轨道会更新输出名称和格式；匹配的评论音轨可以加入正片。详见 [SP 选择、命名与附加规则](docs/wiki/Blu-ray-Disc-Structure.zh-Hans.md#本项目中的正片与-sp)。
 
 ## 依赖要求
 
+从源码运行时，按使用的功能安装相应的工具。
+
 ### Python 依赖
 
-- `PyQt6`
-- `numpy`
-- `soundfile`
-- `pycountry`
-- `Pillow`
-- `matplotlib`
-
-示例：
+需要使用 Python 3.10 及以上版本，启动程序界面还需要安装以下 pip 包。
 
 ```bash
-pip install PyQt6 numpy soundfile pycountry pillow matplotlib
+python -m pip install PyQt6 numpy soundfile pycountry
 ```
+
+如果有其他功能要求：
+- `Pillow` 用于自动 getnative 等图像处理。
+- 自定义 VPy 调用 `muvsfunc.getnative()` 绘图时需要 `matplotlib`。
+- 自行打包时需要 `PyInstaller`。
 
 ### 外部工具
 
-- mkvtoolnix：`mkvmerge`、`mkvinfo`、`mkvextract`、`mkvpropedit`
-- `ffmpeg`、`ffprobe`
-- `flac`（>= 1.5.0）
-- 7-Zip，用于读取 ISO 镜像中的播放列表
+使用 BDMV 目录合并字幕只需上述界面依赖。读取 ISO 镜像中的播放列表时，还需 7-Zip（Windows 的 `7z.exe` 或 Linux 的 `7zz`）。
+
+| 功能 | 工具 |
+| --- | --- |
+| Remux、压制封装和添加 MKV 章节 | MKVToolNix（`mkvmerge`、`mkvinfo`、`mkvextract`、`mkvpropedit`） |
+| 媒体检测、解码和音频转换 | `ffmpeg`、`ffprobe` |
+| FLAC 或 AAC 音轨转换 | FLAC 用 `flac` 1.5.0 及以上版本，AAC 用 `fdkaac` |
+| Remux 回退抽流 | `tsMuxeR` |
+| 动态 HDR 元数据 | Dolby Vision 用 `dovi_tool`，HDR10+ 用 `hdr10plus_tool` |
+| ASS 字幕渲染 | `libass` 供 ASSRender 使用 |
 
 ### 压制模式额外依赖
 
-- VapourSynth Python 模块、运行时与相关插件（由环境配置脚本安装）
-- `vspipe`
-- `vsedit`
-- `x264`
-- `x265`
-- `hdr10plus_tool`（HDR10+）
-- `dovi_tool`（Dolby Vision）
-- `SvtAv1EncApp`
-- `fdkaac`
+- VapourSynth 运行时和 .vpy 脚本涉及的插件。
+- `x264`、`x265` 或 `SvtAv1EncApp`，按所选编码器安装。
+- VPy 预览使用 `vsedit`。
 
-> 在**设置 → 外部工具**中修改和检查路径。路径保存在 `config.json` 中，相对路径以该文件所在目录为基准。
+> 在**设置 → 外部工具**中修改和检查路径。路径保存在 `config.json` 中。
 
 ---
 
@@ -115,18 +117,9 @@ pip install PyQt6 numpy soundfile pycountry pillow matplotlib
 python src/main.py
 ```
 
-桌面版启动后在独立进程中运行，可以关闭启动它的终端。在终端里给启动命令加上 `--foreground`，即可同时在终端中查看输出。界面中实时查看及保存日志的方法见[运行日志](docs/wiki/Interface-Guide.zh-Hans.md#运行日志)。
+桌面版启动后在独立进程中运行，可以关闭启动它的终端。在终端里给启动命令加上 `--foreground`，即可同时在终端中查看输出。
 
 桌面支持系统托盘时，关闭主窗口默认会将它收起到托盘，任务会继续运行。单击托盘图标或从同一目录再次启动程序可恢复主窗口。要退出程序，点击主窗口或托盘图标右键菜单中的 **退出**。可在 **设置 → 常规 → 关闭主窗口时最小化到托盘** 关闭此行为。
-
-可在 **设置 → 路径** 为主窗口和日志窗口分别设置背景图片。[窗口背景](docs/wiki/Interface-Guide.zh-Hans.md#窗口背景)
-
-1. 在顶部选择语言与主题。
-2. 切换到目标功能标签页。
-3. 按当前模式加载源目录/文件。
-4. 检查主播放列表与表格映射。
-5. 需要时调整轨道、章节范围或参数。
-6. 点击底部执行按钮开始任务。
 
 ---
 
@@ -156,13 +149,14 @@ python src/main.py
 
 典型流程：
 
-1. 加载蓝光章节来源（playlist/chapter 信息）；
+1. 加载蓝光章节来源；
 2. 加载目标 MKV 目录；
 3. 校验 main MPLS；
 4. 执行章节写入。
 
 行为说明：
 
+- 蓝光来源可以是完整 BDMV 目录，也可以是只包含播放列表的文件夹，但任需保持原始目录结构。可以在 qBittorrent 下载原盘时只勾选 PLAYLIST 文件夹。
 - MKV 按表格顺序与主播放列表的章节匹配，请先检查排列顺序。
 - 勾选“直接编辑原文件”时写入源 MKV；否则保存在源目录的 `output` 子目录。
 - 章节无法完整匹配或输出已存在时停止写入。
@@ -204,11 +198,15 @@ python src/main.py
 ## 仓库辅助脚本
 
 - [`src/scripts/batch_remux_movie.py`](src/scripts/batch_remux_movie.py)：修改脚本内路径或通过命令行传入路径，可批量 Remux 一个电影目录下的全部 BDMV。
-- 运行 `python src/scripts/getnative_file.py "path/to/video.mkv"` 可输出单个视频的 getnative 结果与耗时秒数。
+- [`src/scripts/batch_getnative_file.py`](src/scripts/getnative_file.py)：运行时传入视频路径，可输出单个视频的 getnative 结果与耗时秒数。
 
 ---
 
 ## 跨平台支持
+
+程序本身跨平台，只要满足 `Python 依赖` 节即可运行。  
+但是程序的一些功能（主要是压制）依赖大量外部工具且并不好获取，往往需要繁琐的编译和配置步骤。为此，项目配套了相应的环境配置脚本，运行脚本即可生成可运行程序全部功能的环境。没有对应的环境配置脚本不代表程序不支持该平台。  
+也可以下载打包程序运行，打包程序运行的系统要求与环境配置脚本的系统要求不一定相同。  
 
 ### setup_windows_environment.ps1（Windows 环境配置脚本）
 
@@ -235,7 +233,7 @@ pyinstaller BluraySubtitle_windows_arm64.spec
 
 ### setup_linux_environment.sh（Linux 运行环境脚本）
 
-脚本为以下两类 **x64 Linux** 发行版构建运行环境。
+在原生 **x64 或 ARM64 Linux** 上从源码运行时，需要以下 APT 系统之一。
 
 - Ubuntu 22.04 及以上版本，包括基于这些 Ubuntu 版本的衍生发行版。
 - Debian 12 及以上版本，包括基于这些 Debian 版本的衍生发行版。
@@ -273,7 +271,7 @@ chmod +x setup_linux_environment.sh
   - 检查 main MPLS，播放MPLS，选择正确的MPLS；
   - 检查章节起止。
   - 检查字幕行顺序，可以点击文件名 header 栏排序。
-  - 检查字幕时长，如果时长超长，很有可能是字幕文件有问题。可以右键 edit 编辑字幕，编辑字幕时会优先展示结束时间最晚的那些字幕，对有问题的字幕，修改其结束时间后保存，或者一并选择右键删除即可。
+  - 检查字幕时长。对于时间超长的字幕，可以右键编辑字幕，编辑字幕时会优先展示结束时间最晚的那些行，如果有问题，修改其结束时间后保存，或者一并选择右键删除即可。
 - 存在特典盘：
   - 取消特典盘分卷的 main MPLS 选择即可。
 - 预览无法启动：
@@ -291,11 +289,7 @@ chmod +x setup_linux_environment.sh
 
 ### 哪些 Linux 系统可以使用打包版？
 
-PyInstaller 打包版面向 Ubuntu 26.04 x64，包含多媒体工具和 VapourSynth 运行时。其他不支持的系统上可以使用 Docker 运行解压后的程序，参见 [Docker 运行 Ubuntu 打包版](docs/wiki/Run-Ubuntu-Package-in-Docker.zh-Hans.md)。
-
-### 压制会自动裁黑边吗？
-
-可以，需要主动勾选并核对裁剪值及成品画面。暗场、片头片尾和特殊黑边可能使自动结果出错；需要精确控制时关闭该选项，在 VPy 中指定裁剪。原理见[自动裁剪黑边](docs/wiki/Video-Encoding-and-VapourSynth.zh-Hans.md#自动裁剪黑边)。
+PyInstaller 打包版面向 Ubuntu 26.04，提供 x64 和 ARM64 两个版本，理论上更高版本的系统也可以使用。选择与你的系统架构匹配的包。两种包均包含多媒体工具和 VapourSynth 运行时。其他不支持的系统上可以使用 Docker 运行解压后的程序，参见 [Docker 运行 Ubuntu 打包版](docs/wiki/Run-Ubuntu-Package-in-Docker.zh-Hans.md)。
 
 ### 如何快速测试压制，不跑完整片？
 
@@ -313,11 +307,11 @@ res = res.std.Trim(first=0, length=720)
 
 ### 压制有给章节加 OP 和 ED 标识吗？
 
-没有，如果需要，先 remux 原盘，然后在原盘压制界面选择源为 remux，这时候可以点击编辑章节自行编辑章节标题。
+没有。如果需要，先 remux 原盘，然后在原盘压制界面选择源为 remux，这时候可以点击编辑章节自行编辑章节标题。
 
 ### 为什么 getnative 获取的每集的原始分辨率不一样？
 
-正常现象，因为有些原盘不止一种原生分辨率，以及原盘制作流程的复杂性，导致源分辨率难以分辨。可以先跑一遍测试，如果每集输出的原始分辨率结果基本相同则可以用程序自动的 getnative，否则去掉勾选自动 getnative 选项并编辑 vpy 填入你认为的原始分辨率和缩放算法，或者根本不填。
+因为有些原盘不止一种原生分辨率，而原盘制作流程中有时候也会加入不同分辨率的素材，导致源分辨率难以分辨。可以先跑一遍测试，如果每集输出的原始分辨率结果基本相同则可以用程序自动的 getnative，否则去掉勾选自动 getnative 选项并编辑 vpy 填入你认为的原始分辨率和缩放算法，或者根本不填。
 
 ## 鸣谢（Credits）
 

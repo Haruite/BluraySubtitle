@@ -1370,3 +1370,23 @@ Windows 11 ARM64 上，setup 使用原生安装程序和 CPython，并单独缓�
 - Desktop setup 显示初始路径并等待用户确认，再重新读取文件以确定安装路径。Windows Desktop setup 将规范化后的 VSEdit 和 MKVToolNix 路径写回 `config.json`。Linux 下的包内和外部 VSPipe 均接收所配置的插件目录。
 - Linux 播放和 Desktop setup 使用配置的 mpv 目录。Ubuntu 打包版默认使用包内 `_internal/mpv/` 目录，更新时保留该目录。
 - 验证了 Linux setup 确认后重新读取配置，以及使用相对配置目录的 mpv 播放。在模拟打包目录结构的环境中，使用真实 Linux 工具、相对 MKVToolNix 路径和外部 VapourSynth 插件目录完成了 6 帧 HEVC 10-bit MKV 压制和 FrameCheck。
+
+## Ubuntu 26.04 ARM64 打包与发布
+
+2026-11-16
+
+- 新增 ARM64 原生构建和 PyInstaller 配方。两种 Ubuntu 架构共用打包、服务器发布和 Release 流程。应用更新器按当前架构选择归档。
+- Linux Build 模式按架构恢复已安装组件和 APT 依赖。Ubuntu 包验证原生二进制架构，并检查 mpv、FFmpeg 的 Vulkan 支持和随包提供的 VapourSynth 滤镜。
+
+## VapourSynth 插件版本选择
+
+2026-11-16
+
+- Windows 和 Linux 共用上游发布列表，选择 VapourSynth 插件的稳定版本。Setup 在复用已安装插件或构建缓存前核对目标版本，插件报告的版本较旧或不完整时记录源码标签。
+- 版本选择兼顾 Classic 和 Linux 的旧版 FFmpeg 开发库。Ubuntu x64 包按基线 CPU 构建 zsmooth，Windows ARM64 按上游源码指定的 Zig 版本构建 zsmooth。
+
+## Ubuntu 和 Windows 构建缓存
+
+2026-11-16 至 2026-11-17
+
+Ubuntu 和 Windows 根据上游版本、构建选项和相关依赖逐组件校验缓存，兼容的旧归档通过校验后迁移。Windows 在构建 `fdkaac` 时单独跟踪所链接的 FDK-AAC 库版本。工作流保存内容有变的快照，成功恢复并通过打包验证后，各架构每类缓存保留最近两份。Ubuntu 的 APT 清单随所需的 `.deb` 一起缓存。

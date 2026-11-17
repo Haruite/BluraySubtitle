@@ -11,7 +11,10 @@ from urllib.parse import quote
 if sys.platform.startswith("linux"):
     from . import ubuntu_update as platform_update
 
-    SERVER_PACKAGE_LABEL = "Server Ubuntu 26.04 x64 package"
+    SERVER_PACKAGE_LABEL = (
+        "Server Ubuntu 26.04 ARM64 package" if platform_update.UBUNTU_ARCHITECTURE == "arm64"
+        else "Server Ubuntu 26.04 x64 package"
+    )
 else:
     from . import windows_update as platform_update
 

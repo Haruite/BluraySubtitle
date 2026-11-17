@@ -1,4 +1,4 @@
-# BluraySubtitle 项目文档
+# BluraySubtitle Wiki 导航
 
 [English](Home.md) | 简体中文
 
@@ -14,10 +14,8 @@
 | 编码器设置、VPy 滤镜、预览、getnative 与 HDR 处理 | [视频压制与 VapourSynth](Video-Encoding-and-VapourSynth.zh-Hans.md) |
 | 源码导航、标识符及分集配置 | [开发者指南](BluraySubtitle-Developer-Guide.zh-Hans.md) |
 | 构建耗时与 CPU 使用率 | [构建性能](Build-Performance.zh-Hans.md) |
-| Remux 回退、音频处理及外部工具选型依据 | [媒体处理流程与工具选型](../development/media-pipeline-and-tool-selection.zh-Hans.md) |
-| 修改要求 | [代码修改规范](../development/code-standards.zh-Hans.md) |
 | 格式规范及上游手册 | [参考资料](References.zh-Hans.md) |
 
-新用户可先看界面示例，再按需查阅概念。开发者应先读代码规范，再看开发者指南及相关处理流程。
+新用户可先看界面示例，再按需查阅概念。
 
 Wiki 覆盖媒体识别、提取、重混流和压制，不实现完整的 HDMV／BD-J 导航、原盘解密或原盘制作。二进制结构说明以项目解析器和参考资料中列出的来源为依据。

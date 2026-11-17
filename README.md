@@ -6,10 +6,10 @@ Documentation: [project wiki](docs/wiki/Home.md) | [interface guide and examples
 
 Development: [mandatory code modification standards](docs/development/code-standards.md) | [media pipeline and tool selection](docs/development/media-pipeline-and-tool-selection.md) | [refactoring history](docs/refactoring/refactoring-history.md)
 
-The x64 package supports **Windows 10 version 1809 or later**. The ARM64 package targets **Windows 10 or later on ARM64**. The earliest Windows 10 release for the ARM64 package is pending verification. **Windows 10 22H2** is recommended.
+- Latest builds from `main`, updated on every push. [Windows x64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_windows_x64.7z) · [Windows ARM64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_windows_arm64.7z) · [Ubuntu 26.04 x64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_ubuntu26.04_x64.tar.xz) · [Ubuntu 26.04 ARM64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_ubuntu26.04_arm64.tar.xz)
+- For versions after 4.7, each release includes the matching packages. [GitHub Releases](https://github.com/Haruite/BluraySubtitle/releases)
 
-- Latest builds from `main`. [Windows x64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_windows_x64.7z) · [Windows ARM64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_windows_arm64.7z) · [Ubuntu 26.04 x64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_ubuntu26.04_x64.tar.xz)
-- Versioned packages are attached to the matching release. [GitHub Releases](https://github.com/Haruite/BluraySubtitle/releases)
+The Windows x64 package supports **Windows 10 version 1809 or later** and **Windows 11**. The Windows ARM64 package targets **Windows 10 and Windows 11 on ARM64**. The earliest Windows 10 ARM64 release is pending verification. **Windows 10 22H2** is recommended.
 
 BluraySubtitle is a GUI tool for Blu-ray workflows on **Windows / Linux**. It brings the following five areas of functionality together in one application:
 
@@ -23,12 +23,14 @@ BluraySubtitle is a GUI tool for Blu-ray workflows on **Windows / Linux**. It br
 
 ## Features and controls
 
-### Interface and task settings
+### Interface and settings
 
-- English/Simplified Chinese UI; Light, Dark, and Colorful themes with opacity control.
-- Scroll the page vertically and drag the handle below each table to resize it. See the [interface guide](docs/wiki/Interface-Guide.md#main-window-content-areas) for layout and table controls.
+- The interface supports English and Simplified Chinese, with Light, Dark, and Colorful themes and adjustable opacity.
+- Scroll the page vertically and drag the handle below each table to resize it.
 - **Settings** manages general options, fonts, paths, startup defaults, and external tools. Open **Tools** to check for updates or create launch shortcuts.
-- Check the discs to process and drag their paths to set the order. Series mode splits by chapters; movie mode keeps a continuous output and can select alternate cuts by default. Each disc can have multiple selected main MPLS files. Review automatic selections, episode ranges, and tracks before running.
+- Interactive controls and editable cells have a highlighted border. Hover over an editable cell for a tooltip. Double-click a read-only cell for a message that its contents can only be copied.
+- The main window runs independently of the terminal by default. View logs in the separate log window.
+- Set separate background images for the main and log windows, with individual opacity and blur controls.
 
 ### Remux controls
 
@@ -52,11 +54,11 @@ See [audio formats and conversion targets](docs/wiki/Media-Formats-and-Dolby-Vis
 
 ### Encode controls
 
-- Choose bundled/system `vspipe` and encoders: x264 supports 8/10-bit and x265 8/10/12-bit. Standard SVT-AV1 builds support 8/10-bit; the 12-bit choice appears only when the selected encoder supports it.
+- x264 supports 8/10-bit, and x265 supports 8/10/12-bit. Standard SVT-AV1 builds support 8/10-bit. The 12-bit choice appears only when the selected encoder supports it.
 - Source CFR/VFR timing and audio/video synchronization are preserved. VPy processing must preserve frame correspondence; [prefix tests](#how-do-i-run-a-short-encode-test) are also supported.
 - Built-in presets are read-only. Manage user presets under **Advanced** or edit encoder parameters directly.
 - Each main/SP row can specify a VPy and per-track FLAC/AAC/Opus conversion. Subtitle modes are external, softsub, and hardsub; Remux sources also support chapter/attachment editing.
-- For Remux sources, subtitles from the selected folder fill the existing main rows in their current order. Check the mapping before encoding.
+- Subtitles from the selected folder fill the main-feature rows in their current order. Check the mapping before encoding.
 - The generated VPy provides denoise, dehalo, dering, deband, and anti-aliasing strength controls.
 - Automatic getnative can use substantial time and memory and skips sources taller than 1080 pixels. Use the [getnative script](src/scripts/getnative_file.py) for higher-resolution analysis.
 - Review automatic cropping visually. Comparison images and frame-check reports are saved under `Compare` and `FrameCheck` in the output folder. Full frame checks may take several times the video's duration.
@@ -66,46 +68,47 @@ For parameters, filters, preview, and metadata limitations, see [Video Encoding 
 
 ### SP management
 
-**Settings → General → Keep SP (bonus features) during Remux** is enabled by default. Turn it off to start with an unchecked SP table when loading a disc in Blu-ray Remux or Blu-ray Encode. You can still select SP rows manually.
-Review the SP table after selecting main playlists and episodes, and deselect unwanted content. To Remux only SPs, deselect all main playlists and keep the desired SP rows selected. Track edits update output names and formats; matching commentary tracks can join the main content. See [SP selection, naming, and attachment rules](docs/wiki/Blu-ray-Disc-Structure.md#main-content-and-sp-in-this-project).
+**Settings → General → Keep SP (bonus features) during Remux** is enabled by default. Turn it off to load discs in Blu-ray Remux or Blu-ray Encode with all SP rows unchecked by default.
+Review the SP table after selecting main playlists and episode ranges, then adjust the checked rows. To Remux only SPs, deselect all main playlists and keep the desired SP rows selected. Track edits update output names and formats. Matching commentary tracks can join the main content. See [SP selection, naming, and attachment rules](docs/wiki/Blu-ray-Disc-Structure.md#main-content-and-sp-in-this-project).
 
 ## Requirements
 
+When running from source, install the tools needed for the features you use.
+
 ### Python packages
 
-- `PyQt6`
-- `numpy`
-- `soundfile`
-- `pycountry`
-- `Pillow`
-- `matplotlib`
-
-Example:
+The application requires Python 3.10 or later. Install these packages to launch the GUI.
 
 ```bash
-pip install PyQt6 numpy soundfile pycountry pillow matplotlib
+python -m pip install PyQt6 numpy soundfile pycountry
 ```
+
+Additional packages depend on the features you use.
+
+- `Pillow` is used for automatic getnative and other image processing.
+- `matplotlib` is needed for plots when a custom VPy uses `muvsfunc.getnative()`.
+- `PyInstaller` is needed to build distributable packages.
 
 ### External tools
 
-- mkvtoolnix: `mkvmerge`, `mkvinfo`, `mkvextract`, `mkvpropedit`
-- `ffmpeg`, `ffprobe`
-- `flac` (>= 1.5.0)
-- 7-Zip for reading playlists from ISO images
+Merging subtitles with a BDMV folder requires only the GUI's Python packages above. To read playlists from ISO images, install 7-Zip (`7z.exe` on Windows or `7zz` on Linux).
+
+| Feature | Tools |
+| --- | --- |
+| Remux, muxing encoded output, and adding MKV chapters | MKVToolNix (`mkvmerge`, `mkvinfo`, `mkvextract`, `mkvpropedit`) |
+| Media inspection, decoding, and audio conversion | `ffmpeg`, `ffprobe` |
+| FLAC or AAC audio conversion | `flac` 1.5.0 or later for FLAC, `fdkaac` for AAC |
+| Fallback demuxing during Remux | `tsMuxeR` |
+| Dynamic HDR metadata | `dovi_tool` for Dolby Vision, `hdr10plus_tool` for HDR10+ |
+| ASS subtitle rendering | `libass` for ASSRender |
 
 ### Encode mode extras
 
-- VapourSynth Python module, runtime, and required plugins (installed by the environment setup script)
-- `vspipe`
-- `vsedit`
-- `x264`
-- `x265`
-- `hdr10plus_tool` (HDR10+)
-- `dovi_tool` (Dolby Vision)
-- `SvtAv1EncApp`
-- `fdkaac`
+- The VapourSynth runtime and the plugins used by your `.vpy` scripts.
+- `x264`, `x265`, or `SvtAv1EncApp`, depending on which encoder you select.
+- `vsedit` for VPy previews.
 
-> Edit and check tool paths under **Settings → External tools**. The paths are saved in `config.json`. Relative paths start from the directory containing that file.
+> Edit and check tool paths under **Settings → External tools**. The paths are saved in `config.json`.
 
 ---
 
@@ -115,18 +118,9 @@ pip install PyQt6 numpy soundfile pycountry pillow matplotlib
 python src/main.py
 ```
 
-On desktop, BluraySubtitle runs in a separate process so you can close the launching terminal. Add `--foreground` when starting it from a terminal to see output there. For live output in the GUI and optional file saving, see the [application log](docs/wiki/Interface-Guide.md#application-log).
+On desktop, BluraySubtitle runs in a separate process so you can close the launching terminal. Add `--foreground` when starting it from a terminal to see output there too.
 
 On desktops with a system tray, closing the main window sends it to the tray by default and lets tasks continue. Click the tray icon or launch the same installation again to restore the window. Choose **Exit** in the main window or the tray icon’s context menu to quit. You can turn this off under **Settings → General → Minimize to the system tray when closing the main window**.
-
-Set optional background images for the main and log windows under **Settings → Paths**. [Window backgrounds](docs/wiki/Interface-Guide.md#window-backgrounds)
-
-1. Pick language and theme at the top.
-2. Open the target **function** tab.
-3. Load source folder/file for the current mode.
-4. Confirm **main MPLS** and table mapping.
-5. Adjust tracks, chapter range, or encode options if needed.
-6. Click the bottom **Run** button to start the task.
 
 ---
 
@@ -156,13 +150,14 @@ Notes:
 
 Typical flow:
 
-1. Load Blu-ray chapter source (playlist/chapter info).
+1. Load the Blu-ray chapter source.
 2. Load target MKV folder.
 3. Verify main MPLS.
 4. Run chapter write.
 
 Behavior:
 
+- The Blu-ray source can be a complete BDMV directory or a folder containing only the playlists. Keep the original directory structure. When downloading a disc in qBittorrent, you can select only the `PLAYLIST` folder.
 - MKVs are matched to main-playlist chapters in table order; check the order first.
 - **Edit Original File Directly** writes to the source MKV; otherwise, results go to the source directory's `output` subfolder.
 - Incomplete chapter matching or existing outputs stop the operation before writing.
@@ -204,11 +199,15 @@ Blu-ray input rejects existing outputs. Remux input skips completed main/SP, ext
 ## Repository helper scripts
 
 - [`src/scripts/batch_remux_movie.py`](src/scripts/batch_remux_movie.py): edit its paths or pass them on the command line to batch-remux every BDMV under one movie folder.
-- Run `python src/scripts/getnative_file.py "path/to/video.mkv"` to print the getnative result and elapsed seconds for one video.
+- Pass a video path to [`src/scripts/getnative_file.py`](src/scripts/getnative_file.py) to print its getnative result and elapsed time in seconds.
 
 ---
 
 ## Cross-platform support
+
+The application can run on platforms that meet the [Python requirements](#python-packages).\
+Some features, especially encoding, rely on external tools that can take considerable work to compile and configure. The setup scripts prepare an environment for all features on supported systems. You can configure the tools manually on other platforms.\
+You can also download a packaged edition, whose system requirements may differ from those of the setup scripts.
 
 ### `setup_windows_environment.ps1` (Windows environment setup)
 
@@ -235,7 +234,7 @@ pyinstaller BluraySubtitle_windows_arm64.spec
 
 ### `setup_linux_environment.sh` (Linux runtime environment)
 
-The script builds the runtime environment for **x64 Linux** distributions in either family.
+The setup script configures the source runtime on native **x64 or ARM64 Linux** systems in either of these APT-based families.
 
 - Ubuntu 22.04 or later, including distributions based on these Ubuntu releases.
 - Debian 12 or later, including distributions based on these Debian releases.
@@ -273,7 +272,7 @@ When run over SSH, `setup_linux_environment.sh` uses **tmux** to display build l
   - Check **main MPLS**; play the MPLS and pick the correct one.
   - Check chapter ends.
   - Check subtitle row order (sort by filename column).
-  - Check subtitle duration; abnormally long files are often broken subtitles—use right-click **edit** / delete as needed.
+  - Check subtitle durations. For unusually long subtitles, open the subtitle editor from the context menu. The editor shows the lines with the latest end times first. Correct the end times and save, or select the affected lines and delete them from the context menu.
 - **Bonus / extra disc**
   - Uncheck **main MPLS** for that bonus-disc volume.
 - **Preview won’t start**
@@ -292,11 +291,7 @@ Older systems require extra compatibility patches and testing for Python, Qt, an
 
 ### Which Linux distributions can run the packaged build?
 
-The PyInstaller build targets Ubuntu 26.04 x64 and includes the multimedia tools and VapourSynth runtime. On other unsupported systems, you can use Docker to run the extracted program. See [Run the Ubuntu package in Docker](docs/wiki/Run-Ubuntu-Package-in-Docker.md).
-
-### Does encode auto-crop black borders?
-
-Yes. Enable the option and verify the reported margins and encoded picture. Dark scenes, credits, and unusual borders can produce incorrect results; disable it and specify a VPy crop when exact control is needed. See [automatic cropping](docs/wiki/Video-Encoding-and-VapourSynth.md#automatic-black-border-cropping) for the method.
+The PyInstaller packages target Ubuntu 26.04 and may also work on newer releases. Choose the x64 or ARM64 package for your system. Both include the multimedia tools and the VapourSynth runtime. On other systems, use Docker to run the extracted program. See [Run the Ubuntu package in Docker](docs/wiki/Run-Ubuntu-Package-in-Docker.md).
 
 ### How do I run a short encode test?
 
@@ -314,11 +309,11 @@ Usually **duplicated bonus clips** across playlists. Check each MPLS and **View 
 
 ### Does encode tag chapters as OP/ED?
 
-No. Remux the disc first, then in encode mode choose **Remux** as the source and use **Edit chapters** to set chapter titles.
+Add OP and ED labels manually. Remux the disc first, then select **Remux** as the source in Blu-ray Encode and use **Edit chapters** to set the titles.
 
 ### Why does getnative report different native resolutions per episode?
 
-Normal: some discs mix resolutions and authoring is messy. Run a test pass; if results are similar, keep **auto getnative**. Otherwise disable it and edit the VPy with the resolution/scaling you trust—or leave those fields empty.
+Blu-ray authoring can combine footage at different native resolutions, which makes the source resolution harder to identify. Run a test pass first. If results are similar across episodes, use **auto getnative**. If they vary, turn it off and enter the native resolution and scaling algorithm you want in the VPy, or leave those settings unset.
 
 ## Credits
 

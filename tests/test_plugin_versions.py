@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from tools.vapoursynth_plugin_releases import SOURCES, latest_tag, znedi3_release
 from tools.vapoursynth_plugin_versions import fallback_version, record_version, reported_version, usable_version, version_satisfies
 
 
@@ -43,6 +44,8 @@ class PluginVersionTests(unittest.TestCase):
             ("r7", "r7.1", False),
             ("r12.A", "r12", True),
             ("r12", "r12.A", False),
+            ("29.0", "v29_2", False),
+            ("v29_2", "v29", True),
             ("2.0.4~rc1", "2.0.4", False),
             ("0.1-fix", "v0.1", True),
             ("0.1-10", "0.1-9", True),
@@ -68,6 +71,35 @@ class PluginVersionTests(unittest.TestCase):
             record_version(first, "r13", "13.0")
             self.assertIsNone(fallback_version(first))
             self.assertEqual(fallback_version(second), "0.1-fix")
+
+    def test_keeps_source_tag_when_plugin_reports_an_older_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            plugin = Path(directory) / "mvtools.so"
+            plugin.write_bytes(b"plugin")
+            record_version(plugin, "v29_2", "29.0")
+            self.assertEqual(fallback_version(plugin, normalize=False), "v29_2")
+
+    def test_prefers_latest_stable_tag_within_the_runtime_limit(self):
+        refs = "\n".join(f"sha\trefs/tags/{tag}" for tag in ("v9", "v26", "v29", "v29_2", "v30-rc1"))
+        with patch("tools.vapoursynth_plugin_releases.subprocess.check_output", return_value=refs):
+            self.assertEqual(latest_tag(SOURCES["mvtools"], "git", classic=False), "v29_2")
+            self.assertEqual(latest_tag(SOURCES["mvtools"], "git", classic=True), "v26")
+
+    def test_znedi3_uses_the_latest_stable_non_yanked_source(self):
+        source = {
+            "packagetype": "sdist", "filename": "source.tar.gz", "digests": {"sha256": "checksum"},
+            "url": "https://files.pythonhosted.org/source.tar.gz", "yanked": False,
+        }
+        metadata = {"releases": {
+            "3.3": [source],
+            "4.0": [dict(source, yanked=True)],
+            "4.1": [dict(source, packagetype="bdist_wheel")],
+            "4.2rc1": [source],
+        }}
+        with patch("tools.vapoursynth_plugin_releases.urllib.request.urlopen"), \
+             patch("tools.vapoursynth_plugin_releases.json.load", return_value=metadata):
+            release = znedi3_release()
+        self.assertEqual((release.ref, release.source_url, release.sha256), ("3.3", source["url"], "checksum"))
 
 
 if __name__ == "__main__":

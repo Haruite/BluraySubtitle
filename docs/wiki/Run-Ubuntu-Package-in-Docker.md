@@ -2,14 +2,22 @@
 
 English | [简体中文](Run-Ubuntu-Package-in-Docker.zh-Hans.md)
 
-Extract `BluraySubtitle_ubuntu26.04_x64.tar.xz` on a Linux desktop. Keep the executable and `_internal/` together in the extracted `BluraySubtitle/` directory. Use an amd64 Ubuntu 26.04 container as the runtime. The application and its multimedia tools run from the mounted package.
+On a Linux desktop, extract the Ubuntu 26.04 x64 or ARM64 package for the host architecture. Keep the executable and `_internal/` together in the extracted `BluraySubtitle/` directory. The application and its multimedia tools run from the mounted package.
 
 ## Prepare the runtime
 
-This image contains the system graphics libraries and fonts. An existing Ubuntu 26.04 image with these libraries can serve as the runtime.
+The build command selects `linux/amd64` on x64 hosts and `linux/arm64` on ARM64 hosts. The image contains the system graphics libraries and fonts. An existing Ubuntu 26.04 image with these libraries can serve as the runtime.
 
 ```bash
-docker build --platform linux/amd64 -t bluraysubtitle-runtime:26.04 - <<'DOCKER'
+(
+cpu_arch=$(uname -m)
+case "$cpu_arch" in
+  x86_64|amd64) docker_platform=linux/amd64 ;;
+  aarch64|arm64) docker_platform=linux/arm64 ;;
+  *) printf 'Unsupported CPU architecture %s\n' "$cpu_arch" >&2; exit 1 ;;
+esac
+
+docker build --platform "$docker_platform" -t bluraysubtitle-runtime:26.04 - <<'DOCKER'
 FROM ubuntu:26.04
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates fontconfig fonts-noto-cjk x11-utils \
@@ -17,6 +25,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     libvulkan1 mesa-vulkan-drivers libva2 libva-drm2 libva-wayland2 libva-x11-2 libvdpau1 \
     && rm -rf /var/lib/apt/lists/*
 DOCKER
+)
 ```
 
 ## Open the application
@@ -42,7 +51,7 @@ test -S "$socket"
 xauth nlist "$display" | sed 's/^..../ffff/' | xauth -f "$auth" nmerge -
 test -s "$auth"
 
-docker run --rm --init --platform linux/amd64 --network none \
+docker run --rm --init --network none \
   --user "$(id -u):$(id -g)" \
   --tmpfs "/run/bluraysubtitle:uid=$(id -u),gid=$(id -g),mode=0700" \
   -e DISPLAY="$display" -e XAUTHORITY=/tmp/bluray.Xauthority \

@@ -21,13 +21,11 @@
 
 自定义构建可参考 setup 脚本。HDR 参数条件与注入回退见[自动 HDR 元数据处理](Video-Encoding-and-VapourSynth.zh-Hans.md#自动-hdr-元数据处理)。
 
-### Ubuntu 26.04 x64 打包
+### Ubuntu 26.04 打包
 
-在 Ubuntu 26.04 上运行 `bash setup_linux_environment.sh --mod Build`，再运行 [`tools/build_ubuntu_package.sh`](../../tools/build_ubuntu_package.sh)。打包模式会准备 VapourSynth R79 和 PyInstaller 环境，并将 mpv、FFmpeg 和 FFprobe 链接到同一套 FFmpeg 运行库。分发前，用 [`tools/verify_ubuntu_package.py`](../../tools/verify_ubuntu_package.py) 检查生成的归档。打包时会把当前 Git 提交写入包中，并生成带 SHA-256 摘要的 `.tar.xz.txt` 记录。
+在对应架构的 Ubuntu 26.04 上运行 `bash setup_linux_environment.sh --mode Build`，再运行 `bash tools/build_ubuntu_package.sh`。打包脚本会按当前架构选择 PyInstaller 配方，收集原生工具和运行库，并生成归档与 SHA-256 构建记录。[x64 配方](../../BluraySubtitle_ubuntu2604_x64.spec) · [ARM64 配方](../../BluraySubtitle_ubuntu2604_arm64.spec)
 
-setup 默认缓存目录为 `${XDG_CACHE_HOME:-$HOME/.cache}/bluraysubtitle/linux-setup`，可用 `BLURAY_SETUP_CACHE_DIR` 指定其他位置。缓存包含下载的归档、APT 和 Python 软件包、编译器缓存，以及打包模式下安装的原生产物。
-
-[Ubuntu 工作流](../../.github/workflows/ubuntu-x64-package.yml) 将归档和 `.tar.xz.txt` 记录上传至 `/usr/share/nginx/html/tools/BluraySubtitle`。[Release 工作流](../../.github/workflows/release-packages.yml) 校验记录中的提交和归档摘要后附加对应的包。
+Build 模式让 mpv、FFmpeg 和 FFprobe 共用一套 FFmpeg 运行库，并为 mpv、FFmpeg 和 libplacebo 启用 Vulkan。用 `python3 tools/verify_ubuntu_package.py <归档路径>` 检查归档中的原生二进制、运行库、滤镜和 Vulkan 支持。
 
 ## 源码导航
 

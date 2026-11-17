@@ -1,0 +1,17 @@
+name: Publish BluraySubtitle Ubuntu 26.04 ARM64
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  publish:
+    uses: ./.github/workflows/build-ubuntu-package.yml
+    with:
+      architecture: arm64
+    secrets: inherit

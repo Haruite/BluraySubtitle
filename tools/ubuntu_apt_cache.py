@@ -17,8 +17,8 @@ REPLACED_APT_PACKAGES = {"ffmpeg"}
 # Packaging commands and the pkg-config probes used for the artifact keys.
 PACKAGING_PACKAGES = {
     "binutils", "gcc", "libc6-dev", "libass-dev", "libavcodec-dev", "libavformat-dev",
-    "libavutil-dev", "libswscale-dev", "python3-pip", "python3-pyqt6", "qt6-base-dev-tools",
-    "xz-utils",
+    "libavutil-dev", "libplacebo-dev", "libswresample-dev", "libswscale-dev", "libvulkan1", "python3-pip",
+    "python3-pyqt6", "qt6-base-dev-tools", "xz-utils",
 }
 
 
@@ -88,15 +88,15 @@ def save(downloads, cache, used_paths, restored_packages=None):
     }
     required = {
         (name, architecture): version for (name, architecture), version in installed.items()
-        if name not in REPLACED_APT_PACKAGES
-        and (name in owners or f"{name}:{architecture}" in owners
-             or (name in PACKAGING_PACKAGES and architecture in (native, "all")))
+        if architecture in (native, "all") and name not in REPLACED_APT_PACKAGES
+        and (name in owners or f"{name}:{architecture}" in owners or name in PACKAGING_PACKAGES)
     }
     if restored_packages is not None and restored_packages.is_file():
         for name, architecture, version, files in json.loads(restored_packages.read_text(encoding="utf-8")):
             package = name, architecture
-            if name not in REPLACED_APT_PACKAGES and package not in installed and (
-                candidates.intersection(files) or (name in PACKAGING_PACKAGES and architecture in (native, "all"))
+            if (
+                architecture in (native, "all") and name not in REPLACED_APT_PACKAGES
+                and package not in installed and (candidates.intersection(files) or name in PACKAGING_PACKAGES)
             ):
                 required[package] = version
     if not required:
@@ -130,8 +130,11 @@ def restore(downloads, cache, state, restored_packages=None):
     ]
     if not package_list:
         raise ValueError("No cached APT dependencies for packaging")
+    native = subprocess.check_output(["dpkg", "--print-architecture"], text=True).strip()
     archives = []
     for name, architecture, version, source in package_list:
+        if architecture not in (native, "all"):
+            raise ValueError(f"Cannot restore {name}:{architecture} on {native}")
         package = name, architecture
         fields, _ = records.get(package, ({}, ""))
         if fields.get("Status", "").endswith(" ok installed"):

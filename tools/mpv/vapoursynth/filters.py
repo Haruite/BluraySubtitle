@@ -5,6 +5,7 @@ from functools import lru_cache
 from math import isfinite
 from os import fsdecode
 from pathlib import Path
+from runpy import run_path
 
 import vapoursynth as vs
 
@@ -142,7 +143,8 @@ def mvtools(clip, nominal_fps, multiplier=""):
 
 
 def rife(clip, nominal_fps, multiplier=""):
-    plugin = load_plugin("librife_linux_x86-64.so", "rife")
+    library = run_path(str(Path(__file__).with_name("rife_assets.py")))["RIFE_LIBRARY"]
+    plugin = load_plugin(library, "rife")
     factor = interpolation_multiplier(multiplier)
     timed = with_nominal_fps(clip, nominal_fps)
     scene_detected = vs.core.misc.SCDetect(timed, threshold=0.1)

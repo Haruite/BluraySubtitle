@@ -72,7 +72,7 @@ Windows 打包脚本按所选的随附组件更新版本字段。
 - **版本：** `{{X264_VERSION}}`
 - **许可证：** GPL-2.0
 - **官方仓库：** https://code.videolan.org/videolan/x264.git
-- **构建说明：** 使用未经修改的官方源码，构建为支持 8/10 位的命令行程序；Windows setup 还使用 PGO。
+- **构建说明：** 使用 MSYS2 {{WINDOWS_MSYS2_ENVIRONMENT}} 将未经修改的官方源码编译为支持 8/10 位的命令行程序，启用 {{X264_OPTIMIZATIONS}}。
 
 ---
 
@@ -130,8 +130,8 @@ Windows 打包脚本按所选的随附组件更新版本字段。
 - **版本：** {{LIBASS_VERSION}}
 - **许可证：** ISC
 - **源码：** https://github.com/libass/libass/archive/refs/tags/{{LIBASS_VERSION}}.zip
-- **构建方式：** MSYS2 UCRT64 共享 libass，非系统依赖采用静态链接。禁用 Fontconfig，改用 Windows DirectWrite/GDI 字体提供程序；启用 libunibreak 和 x86 汇编。随附 DLL 仅导入 Windows 系统 DLL。
-- **静态链接组件：** FreeType（FTL/GPL）、FriBidi（LGPL-2.1-or-later）、HarfBuzz（MIT）、libunibreak（Zlib）、GNU libiconv/gettext（LGPL）、GLib（LGPL-2.1-or-later）、PCRE2（BSD）、Graphite2（MPL/LGPL/GPL）、Brotli（MIT）、bzip2、libpng、zlib，以及 GCC/MinGW 运行库（GPL，附带 GCC Runtime Library Exception）。源码及许可证元数据可从 https://packages.msys2.org/ 获取。
+- **构建方式：** 使用 MSYS2 {{WINDOWS_MSYS2_ENVIRONMENT}} 构建共享库，静态链接非系统依赖。字体由 Windows DirectWrite/GDI 提供（`-Dfontconfig=disabled`），启用 libunibreak 和 {{LIBASS_ASSEMBLY}} 汇编。随附 DLL 仅导入 Windows 系统 DLL。
+- **静态链接组件：** FreeType（FTL/GPL）、FriBidi（LGPL-2.1-or-later）、HarfBuzz（MIT）、libunibreak（Zlib）、GNU libiconv/gettext（LGPL）、GLib（LGPL-2.1-or-later）、PCRE2（BSD）、Graphite2（MPL/LGPL/GPL）、Brotli（MIT）、bzip2、libpng、zlib，以及 {{LIBASS_COMPILER_RUNTIME}}。源码及许可证元数据可从 https://packages.msys2.org/ 获取。
 
 ---
 

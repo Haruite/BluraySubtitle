@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import configparser
 import ctypes
 from dataclasses import asdict, dataclass, replace
@@ -17,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from textwrap import dedent
 import time
 import urllib.error
 import urllib.parse
@@ -27,7 +29,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from src.core.i18n import translate_text
 from tools import build_vsedit_windows as vsedit_build
+from tools.vapoursynth_plugin_releases import SOURCES, resolve_releases
 from tools.vapoursynth_plugin_versions import fallback_version, normalize_version, record_version, version_satisfies
+from tools.vulkan_device import vulkan_device_available
 from tools.windows_build_cache import files_under, publish as publish_build_cache, restore as restore_build_cache
 from tools.windows_native_tools import (
     PE_ARM64, VSEDIT_ARM64_RECIPE, VSEDIT_PLUGINS, VSEDIT_PROGRAMS, VSEDIT_QT_LIBRARIES, VSEDIT_RECIPE,
@@ -46,47 +50,18 @@ class Msys2Required(Exception):
     """Resume component installation after MSYS2 preparation."""
 
 
-def vulkan_device_available() -> bool:
-    """Check Vulkan from the same process architecture as the filters."""
-    class VkApplicationInfo(ctypes.Structure):
-        _fields_ = [
-            ("s_type", ctypes.c_uint32), ("next", ctypes.c_void_p),
-            ("application_name", ctypes.c_char_p), ("application_version", ctypes.c_uint32),
-            ("engine_name", ctypes.c_char_p), ("engine_version", ctypes.c_uint32),
-            ("api_version", ctypes.c_uint32),
-        ]
+class BuildInputs(ast.NodeTransformer):
+    """Keep build commands and patches while ignoring diagnostics."""
 
-    class VkInstanceCreateInfo(ctypes.Structure):
-        _fields_ = [
-            ("s_type", ctypes.c_uint32), ("next", ctypes.c_void_p),
-            ("flags", ctypes.c_uint32), ("application_info", ctypes.POINTER(VkApplicationInfo)),
-            ("layer_count", ctypes.c_uint32), ("layers", ctypes.c_void_p),
-            ("extension_count", ctypes.c_uint32), ("extensions", ctypes.c_void_p),
-        ]
-
-    try:
-        loader = ctypes.WinDLL("vulkan-1.dll", winmode=0x800)  # LOAD_LIBRARY_SEARCH_SYSTEM32
-        create = loader.vkCreateInstance
-        destroy = loader.vkDestroyInstance
-        enumerate_devices = loader.vkEnumeratePhysicalDevices
-    except (OSError, AttributeError):
-        return False
-    create.argtypes = [ctypes.POINTER(VkInstanceCreateInfo), ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
-    destroy.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-    destroy.restype = None
-    enumerate_devices.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32), ctypes.c_void_p]
-
-    # libplacebo requires Vulkan 1.2. A loader can be present with no usable driver.
-    application = VkApplicationInfo(s_type=0, api_version=(1 << 22) | (2 << 12))
-    configuration = VkInstanceCreateInfo(s_type=1, application_info=ctypes.pointer(application))
-    instance = ctypes.c_void_p()
-    if create(ctypes.byref(configuration), None, ctypes.byref(instance)) != 0:
-        return False
-    try:
-        count = ctypes.c_uint32()
-        return enumerate_devices(instance, ctypes.byref(count), None) == 0 and count.value > 0
-    finally:
-        destroy(instance, None)
+    def visit_Expr(self, node):
+        value = node.value
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            return None
+        if isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute):
+            receiver = value.func.value
+            if isinstance(receiver, ast.Name) and receiver.id == "self" and value.func.attr == "log":
+                return None
+        return self.generic_visit(node)
 
 
 @dataclass(frozen=True)
@@ -103,36 +78,36 @@ class Component:
     data_files: tuple[str, ...] = ()
 
 
-# Source revisions follow Linux's established VS Classic compatibility limits.
+LEGACY_SOURCE_KEYS = {"eedi3": "legacy-filters", "misc": "legacy-filters"}
+
+
+def upstream_component(key, filename, namespace, recipe="meson", asset="", **options):
+    repository = SOURCES[LEGACY_SOURCE_KEYS.get(key, key)].repository
+    return Component(key, repository, "", filename, namespace, recipe, asset, **options)
+
+
 COMPONENTS = (
-    Component("descale", "AmusementClub/descale", "", "descale.dll", "descale", asset=r"amd64[.]zip$"),
-    Component("addgrain", "HomeOfVapourSynthEvolution/VapourSynth-AddGrain", "r10", "addgrain.dll", "grain", asset=r"win64[.]7z$"),
-    Component("assrender", "AmusementClub/assrender", "0.38.4", "assrender.dll", "assrender", "assrender"),
-    Component("bilateral", "HomeOfVapourSynthEvolution/VapourSynth-Bilateral", "r3", "bilateral.dll", "bilateral", "configure"),
-    Component("dfttest", "HomeOfVapourSynthEvolution/VapourSynth-DFTTest", "r7", "dfttest.dll", "dfttest", asset=r"[.]7z$"),
-    Component("eedi2", "HomeOfVapourSynthEvolution/VapourSynth-EEDI2", "r7.1", "eedi2.dll", "eedi2", asset=r"[.]7z$"),
-    Component("eedi3m", "HomeOfVapourSynthEvolution/VapourSynth-EEDI3", "r9", "eedi3m.dll", "eedi3m", asset=r"win64.*[.](?:7z|zip)$"),
-    # The published source distribution includes the VSXX and GraphEngine submodules.
-    Component("znedi3", "vapoursynth/znedi3-pypi", "3.3", "znedi3.dll", "znedi3", "znedi3",
-              source_archive=("https://files.pythonhosted.org/packages/d6/c9/"
-                              "774a61d0e213f75a2eaf36dba9c88b84689b9d2550c1370b8112e77b4d07/vapoursynth_znedi3-3.3.tar.gz",
-                              "8d94d6d74296adcf0d03d63ee204445526fed1c771be2fa8e998bffc0c32d8e4"),
-              data_files=("nnedi3_weights.bin",)),
-    Component("fmtconv", "EleonoreMizo/fmtconv", "r30", "fmtconv.dll", "fmtc", "autotools", r"[.]zip$"),
-    # Accept the previous source fallback alongside the API3-compatible release.
-    Component("lsmas", "HomeOfAviSynthPlusEvolution/L-SMASH-Works", "1282", "libvslsmashsource.dll", "lsmas", "lsmash",
-              fallback_ref="ae51313"),
-    Component("sangnom", "HomeOfVapourSynthEvolution/VapourSynth-SangNomMod", "v0.1-fix", "vs_sangnommod.dll", "sangnom", "configure", r"[.]zip$"),
-    Component("placebo", "Lypheo/vs-placebo", "2.0.4", "libvs_placebo.dll", "placebo"),
-    Component("nlm_ispc", "AmusementClub/vs-nlm-ispc", "v4", "vsnlm_ispc.dll", "nlm_ispc", "cmake", r"windows-x64.*[.]7z$"),
-    Component("zsmooth", "adworacz/zsmooth", "0.7", "zsmooth.dll", "zsmooth", "zig", r"zsmooth[.]avx2[.]dll[.]zip$"),
-    Component("mvtools", "dubhatervapoursynth/vapoursynth-mvtools", "v26", "mvtools.dll", "mv", asset=r"win64[.]7z$"),
-    Component("removegrain", "vapoursynth/vs-removegrain", "R1", "RemoveGrainVS.dll", "rgvs", "removegrain", r"win64.*[.](?:zip|7z)$"),
+    upstream_component("descale", "descale.dll", "descale", asset=r"amd64[.]zip$"),
+    upstream_component("addgrain", "addgrain.dll", "grain", asset=r"win64[.]7z$"),
+    upstream_component("assrender", "assrender.dll", "assrender", "assrender"),
+    upstream_component("bilateral", "bilateral.dll", "bilateral", "configure"),
+    upstream_component("dfttest", "dfttest.dll", "dfttest", asset=r"[.]7z$"),
+    upstream_component("eedi2", "eedi2.dll", "eedi2", asset=r"[.]7z$"),
+    upstream_component("eedi3m", "eedi3m.dll", "eedi3m", asset=r"win64.*[.](?:7z|zip)$"),
+    upstream_component("znedi3", "znedi3.dll", "znedi3", "znedi3", data_files=("nnedi3_weights.bin",)),
+    upstream_component("fmtconv", "fmtconv.dll", "fmtc", "autotools"),
+    upstream_component("lsmas", "libvslsmashsource.dll", "lsmas", "lsmash", fallback_ref="ae51313"),
+    upstream_component("sangnom", "vs_sangnommod.dll", "sangnom", "configure", r"[.]zip$"),
+    upstream_component("placebo", "libvs_placebo.dll", "placebo"),
+    upstream_component("nlm_ispc", "vsnlm_ispc.dll", "nlm_ispc", "cmake", r"windows-x64.*[.]7z$"),
+    upstream_component("zsmooth", "zsmooth.dll", "zsmooth", "zig", r"zsmooth(?:[.]avx2[.]dll|-x86_64-windows)[.]zip$"),
+    upstream_component("mvtools", "mvtools.dll", "mv", asset=r"win64[.]7z$"),
+    upstream_component("removegrain", "RemoveGrainVS.dll", "rgvs", "removegrain", r"win64.*[.](?:zip|7z)$"),
 )
 R79_ADDITIONAL_COMPONENTS = (
-    Component("eedi3", "AmusementClub/vapoursynth-classic", "R57.A15", "EEDI3.dll", "eedi3", "legacy-core"),
-    Component("misc", "AmusementClub/vapoursynth-classic", "R57.A15", "MiscFilters.dll", "misc", "legacy-core"),
-    Component("vivtc", "vapoursynth/vivtc", "R2", "VIVTC.dll", "vivtc", "legacy-core"),
+    upstream_component("eedi3", "EEDI3.dll", "eedi3", "legacy-core"),
+    upstream_component("misc", "MiscFilters.dll", "misc", "legacy-core"),
+    upstream_component("vivtc", "VIVTC.dll", "vivtc", "legacy-core"),
 )
 EDITOR = Component("vsedit", "YomikoR/VapourSynth-Editor", "", "vsedit.exe", "")
 PROBE = r"""
@@ -205,7 +180,7 @@ class Installer:
         if self.r79:
             # The Windows descale release contains a Classic-only API3 bridge.
             self.components = tuple(
-                replace(component, ref="r12.A", asset="") if component.key == "descale" else component
+                replace(component, asset="") if component.key == "descale" else component
                 for component in COMPONENTS
             ) + R79_ADDITIONAL_COMPONENTS
         self.use_vulkan = (
@@ -226,7 +201,7 @@ class Installer:
             Path(os.environ["ProgramData"]) / "BluraySubtitle/build-cache/artifacts"
         )
 
-    def component_cache_key(self, component, ref, build_profile):
+    def component_cache_keys(self, component, ref, build_profile):
         builder, patch = self.source_recipe(component)
         recipe = [self.run_msys, builder]
         if patch:
@@ -249,7 +224,14 @@ class Installer:
         if component.key == "zsmooth" and not self.arm64:
             import numpy as np
             inputs.append(bool(np._core._multiarray_umath.__cpu_features__.get("AVX2")))
-        return fingerprint("vapoursynth-plugin-1", inputs, [getsource(method) for method in recipe])
+        sources = [getsource(method) for method in recipe]
+        build_inputs = [ast.dump(BuildInputs().visit(ast.parse(dedent(source)))) for source in sources]
+        key = fingerprint("vapoursynth-plugin-2", self.subsystem, inputs, build_inputs)
+        legacy_keys = [fingerprint("vapoursynth-plugin-1", inputs, sources)]
+        if component.key == "descale":
+            # The previous resolver stored an empty component ref alongside the resolved tag.
+            legacy_keys.append(fingerprint("vapoursynth-plugin-1", [{**inputs[0], "ref": ""}, *inputs[1:]], sources))
+        return key, tuple(legacy_keys)
 
     def component_cache_files(self, component, record, plugin_files):
         license_root = (self.runtime / "licenses/components" / component.key).resolve()
@@ -270,16 +252,17 @@ class Installer:
         key = fingerprint(name.casefold(), digest)
         return self.args.build_cache / f"vs-dll-{key}.zip", key
 
-    def restore_plugin(self, archive, key, component, ref, plugin_files):
+    def restore_plugin(self, archive, key, legacy_keys, component, ref, plugin_files):
         with tempfile.TemporaryDirectory(prefix="filter-", dir=self.work) as temporary:
             work = Path(temporary)
             payload = work / "cached"
             try:
-                if not restore_build_cache(archive, key, payload):
+                matched = restore_build_cache(archive, key, payload, legacy_keys=legacy_keys)
+                if not matched:
                     return False
                 cached = json.loads((payload / "component.json").read_text(encoding="utf-8"))
                 record, dependencies = cached["record"], cached["dependencies"]
-                if (record.get("target_ref", record["ref"]) != ref or record["cache_recipe"] != key
+                if (record.get("target_ref", record["ref"]) != ref or record["cache_recipe"] != matched
                         or set(dependencies) != set(record["dependencies"])):
                     return False
                 files = self.component_cache_files(component, record, plugin_files)
@@ -335,9 +318,12 @@ class Installer:
                 if not path.is_file() or file_hash(path) != digest:
                     shutil.copyfile(staged / name, path)
             record_version(plugin_files[0], expected, probe["native_version"])
+            record["cache_recipe"] = key
             self.state["components"][component.key] = record
             self.state["dependencies"].update(effective)
             self.cached_plugins[component.key] = (archive, key, dependencies)
+            if matched != key:
+                self.publish_plugin(archive, key, component, plugin_files)
             self.save()
             return True
 
@@ -731,7 +717,8 @@ class Installer:
                 collected[target.relative_to(self.runtime).as_posix()] = sha256(target)
         if not collected:
             destination.mkdir(parents=True, exist_ok=True)
-            notices = [f"Upstream: https://github.com/{component.repository}\n",
+            repository = urllib.parse.urljoin("https://github.com/", component.repository)
+            notices = [f"Upstream: {repository}\n",
                        "This source snapshot has no standalone license file. No license is inferred.\n"]
             readme = source / "README.md"
             if readme.is_file():
@@ -829,22 +816,25 @@ class Installer:
         })
         return source
 
-    def build_lsmash(self, source):
+    def build_lsmash(self, component, source):
         self.ensure_packages("dav1d", "libvpx", "libxml2", "libiconv", "zlib")
         if not self.arm64:
             self.ensure_packages("libmfx")
         if self.use_vulkan:
             self.ensure_packages("shaderc", "glslang", "spirv-tools", "vulkan-headers", "vulkan-loader")
-        # Use the same FFmpeg fork and submodule revisions as L-SMASH Works r1282.
-        ffmpeg = self.dependency_source("FFmpeg", "HomeOfAviSynthPlusEvolution/FFmpeg", "805074e")
+        tree_url = f"https://api.github.com/repos/{component.repository}/git/trees/{component.ref}"
+        with self.open_url(tree_url, timeout=60) as response:
+            revisions = {item["path"]: item["sha"] for item in json.load(response)["tree"] if item["type"] == "commit"}
+        ffmpeg = self.dependency_source("FFmpeg", "HomeOfAviSynthPlusEvolution/FFmpeg", revisions["FFmpeg"])
         nvcodec = None if self.arm64 else self.dependency_source(
             "nv-codec-headers", "FFmpeg/nv-codec-headers", "n13.0.19.0")
-        for name, repository, ref, destination in (
-            ("l-smash", "HomeOfAviSynthPlusEvolution/l-smash", "84740c5", "l-smash"),
-            ("obuparse", "HomeOfAviSynthPlusEvolution/obuparse", "ada116e", "obuparse"),
-            ("xxHash", "Cyan4973/xxHash", "v0.8.3", "xxHash"),
+        for name, repository in (
+            ("l-smash", "HomeOfAviSynthPlusEvolution/l-smash"),
+            ("obuparse", "HomeOfAviSynthPlusEvolution/obuparse"),
+            ("xxHash", "Cyan4973/xxHash"),
         ):
-            shutil.copytree(self.dependency_source(name, repository, ref), source / destination, dirs_exist_ok=True)
+            dependency = self.dependency_source(name, repository, revisions[name])
+            shutil.copytree(dependency, source / name, dirs_exist_ok=True)
         self.source_licenses.extend(("ffmpeg", ffmpeg / name) for name in ("LICENSE.md", "COPYING.GPLv3"))
         if nvcodec:
             # The NVCodec headers carry their copyright and license in their leading comments.
@@ -856,7 +846,7 @@ class Installer:
             nvcodec_license.write_text("\n\n".join(notices) + "\n", encoding="utf-8")
             self.source_licenses.append(("nv-codec-headers", nvcodec_license))
 
-        work = self.work / "lsmas"
+        work = self.work / "lsmas" / component.ref
         ffmpeg_build = work / "ffmpeg-build"
         ffmpeg_prefix = work / "ffmpeg-prefix"
         msys = self.msys
@@ -870,7 +860,7 @@ class Installer:
             package = package.replace(f"prefix=/{self.subsystem}", "prefix=" + msys.as_posix())
             (pc / (name + ".pc")).write_text(
                 package.replace(f"-l{library}", f"-l:lib{library}.a", 1), encoding="utf-8", newline="\n")
-        if self.arm64 and self.use_vulkan:
+        if self.use_vulkan:
             # The FFmpeg build links statically. Select Shaderc's import archive by filename.
             package = (msys / "lib/pkgconfig/shaderc.pc").read_text(encoding="utf-8")
             package = package.replace(f"prefix=/{self.subsystem}", "prefix=" + msys.as_posix())
@@ -915,12 +905,16 @@ class Installer:
         wrapper.write_text(text.replace("#ifndef _MSC_VER\n", "#if !defined(_MSC_VER) && !defined(LSMASH_WITH_AVISYNTH)\n", 1),
                            encoding="utf-8")
         cmake = source / "CMakeLists.txt"
+        link_libraries = ["ws2_32", "secur32", "crypt32", "ncrypt",
+                          f'"{msys.as_posix()}/lib/libiconv.a"', f'"{msys.as_posix()}/lib/libz.a"']
         text = cmake.read_text(encoding="utf-8").replace("if (${sse2})", "if (ENABLE_SSE2)")
+        cmake_vulkan = "Vulkan::shaderc_combined" in text
+        if self.use_vulkan and not cmake_vulkan:
+            link_libraries.append(f'"{msys.as_posix()}/lib/libshaderc_shared.dll.a"')
         cmake.write_text(text.replace(
             "        target_link_libraries(LSMASHSource PRIVATE ws2_32)\n",
             "        set_target_properties(LSMASHSource PROPERTIES LINKER_LANGUAGE CXX)\n"
-            "        target_link_libraries(LSMASHSource PRIVATE ws2_32 secur32 crypt32 ncrypt "
-            f'\"{msys.as_posix()}/lib/libiconv.a\" \"{msys.as_posix()}/lib/libz.a\")\n',
+            f"        target_link_libraries(LSMASHSource PRIVATE {' '.join(link_libraries)})\n",
         ), encoding="utf-8")
         build = work / "plugin-build"
         cmake_options = [
@@ -929,7 +923,6 @@ class Installer:
             "-DBUILD_AVS_PLUGIN=" + ("OFF" if self.arm64 else "ON"),
             "-DENABLE_SSE2=" + ("OFF" if self.arm64 else "ON"),
             "-DENABLE_MFX=" + ("OFF" if self.arm64 else "ON"),
-            "-DENABLE_VULKAN=" + ("ON" if self.use_vulkan else "OFF"),
             "-DCMAKE_C_FLAGS_MINSIZEREL=-Os -DNDEBUG -ffunction-sections -DLIBXML_STATIC"
             + ("" if self.arm64 else " -DLSMASH_WITH_AVISYNTH"),
             "-DCMAKE_CXX_FLAGS_MINSIZEREL=-Os -DNDEBUG -ffunction-sections",
@@ -944,8 +937,9 @@ class Installer:
             cmake_options.append("-DCMAKE_RC_COMPILER=windres")
         else:
             cmake_options.append(f"-DMFX_LIBRARY={msys.as_posix()}/lib/libmfx.a")
-        if self.use_vulkan:
-            cmake_options.append(f"-DVulkan_shaderc_combined_LIBRARY={msys.as_posix()}/lib/libshaderc_shared.dll.a")
+        if cmake_vulkan:
+            cmake_options.extend(["-DENABLE_VULKAN=" + ("ON" if self.use_vulkan else "OFF"),
+                                  f"-DVulkan_shaderc_combined_LIBRARY={msys.as_posix()}/lib/libshaderc_shared.dll.a"])
         self.run_msys([
             shlex.join(["cmake", "-S", ".", "-B", build.as_posix(), *cmake_options]),
             shlex.join(["cmake", "--build", build.as_posix(), "--target", "LSMASHSource", "--parallel", str(self.args.jobs)]),
@@ -987,13 +981,11 @@ class Installer:
 
     def prepare_mvtools_source(self, component, source, commands):
         include = self.sdk / "include/vapoursynth"
-        target = source / "vapoursynth/include"
-        target.mkdir(parents=True, exist_ok=True)
-        for header in include.glob("*.h"):
-            shutil.copyfile(header, target / header.name)
         prefix = self.prepare_fftw()
         path = source / "meson.build"
         text = path.read_text(encoding="utf-8")
+        text = re.sub(r"incdir = include_directories\(\s*(?:'vapoursynth/include'|run_command\(.*?\.stdout\(\)\.strip\(\),?)\s*\)",
+                      f"incdir = include_directories('{include.as_posix()}')", text, flags=re.S)
         # DFTTest already needs this DLL; do not embed a second FFTW copy.
         text = text.replace("dependency('fftw3f')", "declare_dependency(include_directories: include_directories('"
                       + (prefix / "include").as_posix() + "'), link_args: ['"
@@ -1172,35 +1164,33 @@ class Installer:
         self.run_msys(commands + ["make -j" + jobs], source)
 
     def build_zig(self, component, source, commands):
-        jobs = str(self.args.jobs)
-        # The 0.7 source uses Zig 0.12's Build API.
-        architecture = "aarch64" if self.arm64 else "x86_64"
-        url = f"https://ziglang.org/download/0.12.0/zig-windows-{architecture}-0.12.0.zip"
-        archive = self.download(url, self.work / "zig/zig.zip")
-        executable = next(self.unpack(archive, self.work / "zig/unpacked").rglob("zig.exe"))
         manifest = source / "build.zig.zon"
         text = manifest.read_text(encoding="utf-8")
-        dependency = re.search(r'\.url = "https://github.com/([^/]+/[^/]+)/archive/([0-9a-f]+)[.]tar[.]gz",\s*\.hash = "[0-9a-f]+",', text)
-        if dependency:
-            repository, revision = dependency.groups()
-            bindings = self.source(Component("vapoursynth-zig", repository, revision, "", ""), revision)
-            shutil.copytree(bindings, source / "dependencies/vapoursynth", dirs_exist_ok=True)
-            manifest.write_text(text.replace(dependency.group(), '.path = "dependencies/vapoursynth",'), encoding="utf-8")
-            self.source_dependencies.append({"name": "vapoursynth-zig", "version": revision,
-                                             "source_url": f"https://github.com/{repository}/tree/{revision}"})
-        if self.arm64:
-            # Zig 0.12's MinGW DLL loads with STATUS_INVALID_IMAGE_FORMAT on ARM64.
-            # Use Zig to emit COFF and let the native CLANGARM64 toolchain link it.
-            project = source / "build.zig"
-            text = project.read_text(encoding="utf-8")
-            text = text.replace("b.addSharedLibrary(.{", "b.addObject(.{", 1).replace(
-                "b.installArtifact(lib);",
-                'b.getInstallStep().dependOn(&b.addInstallFile(lib.getEmittedBin(), "zsmooth.obj").step);')
-            project.write_text(text, encoding="utf-8")
-        subprocess.run([executable, "build", "-j" + jobs, "-Doptimize=ReleaseFast",
+        minimum = re.search(r'\.minimum_zig_version\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"', text)
+        # The Classic-compatible source predates the minimum Zig version field.
+        version = minimum[1] if minimum else "0.12.0"
+        architecture = "aarch64" if self.arm64 else "x86_64"
+        zig_dir = self.work / "zig" / version
+        with self.open_url("https://ziglang.org/download/index.json", timeout=60) as response:
+            download = json.load(response)[version][architecture + "-windows"]
+        archive = self.download(download["tarball"], zig_dir / "zig.zip", download["shasum"])
+        executable = next(self.unpack(archive, zig_dir / "unpacked").rglob("zig.exe"))
+
+        dependencies = re.compile(
+            r'\.url = "(?:https://github\.com/([^/]+/[^/]+)/archive/([0-9a-f]+)\.tar\.gz|'
+            r'git\+https://github\.com/([^/]+/[^/]+?)\.git(?:\?[^"#]*)?#([0-9a-f]+))",\s*\.hash = "[^"]+",'
+        )
+
+        def vendor(match):
+            repository, revision = match.groups()[:2] if match[1] else match.groups()[2:]
+            name = repository.rsplit("/", 1)[1]
+            relative = Path("dependencies") / name
+            shutil.copytree(self.dependency_source(name, repository, revision), source / relative, dirs_exist_ok=True)
+            return f'.path = "{relative.as_posix()}",'
+
+        manifest.write_text(dependencies.sub(vendor, text), encoding="utf-8")
+        subprocess.run([executable, "build", "-j" + str(self.args.jobs), "-Doptimize=ReleaseFast",
                         f"-Dtarget={architecture}-windows-gnu", "-Dcpu=baseline"], cwd=source, check=True)
-        if self.arm64:
-            self.run_msys([f"{self.cc} -shared -static -o {component.filename} zig-out/zsmooth.obj"], source)
 
     def source_recipe(self, component):
         builder = getattr(self, "build_" + component.recipe.replace("-", "_"))
@@ -1215,7 +1205,9 @@ class Installer:
     def build(self, component, source):
         self.require_msys2()
         builder, patch = self.source_recipe(component)
-        if component.recipe in ("lsmash", "assrender"):
+        if component.recipe == "lsmash":
+            return builder(component, source)
+        if component.recipe == "assrender":
             return builder(source)
         if component.recipe != "znedi3":
             self.prepare_sdk()
@@ -1244,8 +1236,8 @@ class Installer:
         self.source_dependencies = []
         self.source_licenses = []
         previous = self.state["components"].get(component.key)
-        release = self.release(component.repository) if not component.ref else None
-        target_ref = component.ref or release["tag_name"]
+        target_ref = component.ref
+        repository_url = urllib.parse.urljoin("https://github.com/", component.repository)
         folder = self.runtime / "vapoursynth64/coreplugins" if component.key == "removegrain" and not self.r79 else self.plugins
         target = folder / component.filename
         relative = self.record_path(target)
@@ -1256,12 +1248,12 @@ class Installer:
             build_profile += "-without-vulkan"
         if self.arm64 and component.key == "placebo":
             build_profile += "-static-placebo"
-        cache_archive, cache_key = None, None
+        cache_archive, cache_key, legacy_keys = None, None, ()
         if self.args.build_cache:
             runtime = "r79" if self.r79 else "classic"
             cache_archive = self.args.build_cache / f"vs-{runtime}-{component.key}.zip"
-            cache_key = self.component_cache_key(component, target_ref, build_profile)
-            if self.restore_plugin(cache_archive, cache_key, component, target_ref, plugin_files):
+            cache_key, legacy_keys = self.component_cache_keys(component, target_ref, build_profile)
+            if self.restore_plugin(cache_archive, cache_key, legacy_keys, component, target_ref, plugin_files):
                 self.log("Restored VapourSynth component from the build cache: {name}", name=component.key)
                 return False
 
@@ -1269,8 +1261,9 @@ class Installer:
         known_files = bool(previous and present and all(
             previous["files"].get(self.record_path(path)) == sha256(path) for path in plugin_files
         ))
-        fallback = bool(previous and previous["method"] == "source" and previous["ref"] == component.fallback_ref)
-        expected = "commit:" + component.fallback_ref if fallback else target_ref
+        same_target = known_files and previous.get("target_ref", previous["ref"]) == target_ref
+        fallback = bool(known_files and previous["method"] == "source" and previous["ref"] == component.fallback_ref)
+        expected = "commit:" + component.fallback_ref if fallback and same_target else target_ref
         installed, probe = None, None
         if present:
             try:
@@ -1278,16 +1271,15 @@ class Installer:
             except RuntimeError as error:
                 self.log("Installed VapourSynth plugin cannot be loaded: {name}: {detail}", name=component.key, detail=str(error))
             else:
-                installed = probe["native_version"] or fallback_version(target)
+                installed = fallback_version(target)
                 # Migrate the previous hash-bound component manifest once.
-                if installed is None and known_files:
-                    installed = expected if fallback else normalize_version(previous["ref"])
-                if installed is not None:
+                if installed is None and known_files and previous["method"] != "existing":
+                    installed = "commit:" + component.fallback_ref if fallback else normalize_version(previous["ref"])
                     record_version(target, installed, probe["native_version"])
-        same_target = known_files and previous.get("target_ref", previous["ref"]) == target_ref
+                installed = installed or probe["native_version"]
         rebuild = bool(same_target and previous["method"] == "source" and (
             previous.get("build_profile") != build_profile
-            or (cache_key and previous.get("cache_recipe", cache_key) != cache_key)
+            or (cache_key and previous.get("cache_recipe", cache_key) not in (cache_key, *legacy_keys))
         ))
         if installed is not None and version_satisfies(installed, expected) and not rebuild:
             if not known_files:
@@ -1307,25 +1299,25 @@ class Installer:
                 files.update(self.licenses(component, source))
                 previous = {
                     "name": component.key, "repository": component.repository, "target_ref": target_ref,
-                    "ref": installed, "method": "existing", "source_url": f"https://github.com/{component.repository}",
+                    "ref": installed, "method": "existing", "source_url": repository_url,
                     "license_source_ref": target_ref, "artifact_url": "", "plugin": relative,
                     "files": files, "data": data, "dependencies": dependency_names, "source_dependencies": self.source_dependencies,
                 }
                 self.state["components"][component.key] = previous
             previous.update(target_ref=target_ref, installed_version=installed, registered_version=probe["version"])
+            if cache_archive and previous.get("cache_recipe") in (cache_key, *legacy_keys) and self.valid(previous, target_ref):
+                previous["cache_recipe"] = cache_key
+                self.publish_plugin(cache_archive, cache_key, component, plugin_files)
             self.save()
             self.log("VapourSynth plugin meets the required version: {name} {installed} >= {target}",
                      name=component.key, installed=installed, target=expected)
-            if cache_archive and previous.get("cache_recipe") == cache_key and self.valid(previous, target_ref):
-                self.publish_plugin(cache_archive, cache_key, component, plugin_files)
             return True
         if rebuild:
             self.log("Rebuilding VapourSynth plugin with updated link options: {name}", name=component.key)
         else:
             self.log("VapourSynth plugin needs installation or update: {name} {installed} -> {target}",
                      name=component.key, installed=installed or "?", target=expected)
-        if release is None and component.asset and not self.arm64:
-            release = self.release(component.repository, component.ref, missing_ok=True)
+        release = self.release(component.repository, target_ref, missing_ok=True) if component.asset and not self.arm64 else None
         self.log("Installing VapourSynth component: {name} {version}", name=component.key, version=target_ref)
         if component.key == "dfttest":
             self.prepare_fftw()
@@ -1338,8 +1330,8 @@ class Installer:
                     assets = []
             if assets:
                 artifact = assets[0]
-                release_archive = self.download_release_asset(artifact, self.work / component.key / artifact["name"])
-                package = self.unpack(release_archive, self.work / component.key / ("release-" + release_archive.stem))
+                release_archive = self.download_release_asset(artifact, self.work / component.key / target_ref / artifact["name"])
+                package = self.unpack(release_archive, release_archive.parent / ("release-" + release_archive.stem))
                 names = {component.filename.lower()} | ({"lsmashsource.dll"} if component.key == "lsmas" else set())
                 if component.key == "zsmooth":
                     names.add("zsmooth.avx2.dll")
@@ -1387,7 +1379,7 @@ class Installer:
         files.update(self.licenses(component, source, package))
         source_url = (
             component.source_archive[0] if component.source_archive
-            else f"https://github.com/{component.repository}/tree/{target_ref}"
+            else f"{repository_url}/tree/{target_ref}"
         )
         self.state["components"][component.key] = {
             "name": component.key, "repository": component.repository, "target_ref": target_ref, "ref": target_ref, "method": method,
@@ -1572,9 +1564,15 @@ class Installer:
         else:
             self.state.pop("skipped", None)
         needs_verification = False
-        for component in self.components:
-            if component.key in skipped:
-                continue
+        active = [component for component in self.components if component.key not in skipped]
+        releases = resolve_releases(
+            (LEGACY_SOURCE_KEYS.get(component.key, component.key) for component in active),
+            self.args.git, classic=not self.r79,
+        )
+        for component in active:
+            release = releases[LEGACY_SOURCE_KEYS.get(component.key, component.key)]
+            archive = (release.source_url, release.sha256) if release.sha256 or component.key == "fmtconv" else None
+            component = replace(component, ref=release.ref, source_archive=archive)
             if self.install_plugin(component):
                 needs_verification = True
         required = {name for record in self.state["components"].values() for name in record.get("dependencies", ())}
@@ -1620,6 +1618,7 @@ def main():
     parser.add_argument("--work-root", required=True, type=Path)
     parser.add_argument("--msys2-root", type=Path, default=Path(r"C:\msys64"))
     parser.add_argument("--seven-zip", default=r"C:\Program Files\7-Zip\7z.exe")
+    parser.add_argument("--git", default="git")
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
     parser.add_argument("--language", choices=("en", "zh"), default="en")
     parser.add_argument("--build-cache", type=Path)

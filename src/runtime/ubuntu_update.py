@@ -5,6 +5,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -20,7 +21,8 @@ if TYPE_CHECKING:
     from .program_update import UpdatePackage
 
 
-PACKAGE_ARCHIVE = "BluraySubtitle_ubuntu26.04_x64.tar.xz"
+UBUNTU_ARCHITECTURE = "arm64" if platform.machine().lower() in ("aarch64", "arm64") else "x64"
+PACKAGE_ARCHIVE = f"BluraySubtitle_ubuntu26.04_{UBUNTU_ARCHITECTURE}.tar.xz"
 SERVER_PACKAGE_URL = f"https://sbx.mysmy.top/tools/BluraySubtitle/{PACKAGE_ARCHIVE}"
 _INSTALLER = Path("tools/ubuntu_update.py")
 _PYTHON = Path("linux/python/bin/python3.14")

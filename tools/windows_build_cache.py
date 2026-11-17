@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 import re
 from tempfile import NamedTemporaryFile, TemporaryDirectory
-from zipfile import BadZipFile, ZipFile
+from zipfile import BadZipFile, ZipFile, ZipInfo
 
 
 MANIFEST = "build-cache.json"
@@ -35,36 +35,44 @@ def _copy_digest(source, destination) -> str:
     return digest.hexdigest()
 
 
-def restore(archive: Path, fingerprint: str, destination: Path) -> bool:
+def read_manifest(bundle: ZipFile) -> dict:
+    manifest = json.loads(bundle.read(MANIFEST))
+    files = manifest["files"]
+    names = bundle.namelist()
+    if (
+        not isinstance(manifest["fingerprint"], str) or not isinstance(files, dict) or not files
+        or sorted(names) != sorted([MANIFEST, *files]) or len({name.casefold() for name in names}) != len(names)
+        or any(not _valid_name(name) or not isinstance(digest, str) for name, digest in files.items())
+    ):
+        raise ValueError("Invalid Windows build cache manifest")
+    return manifest
+
+
+def restore(
+        archive: Path, fingerprint: str, destination: Path, *, legacy_keys: tuple[str, ...] = (),
+) -> str | None:
     if not archive.is_file():
-        return False
+        return None
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
         with TemporaryDirectory(prefix="build-cache-", dir=destination.parent) as temporary:
             payload = Path(temporary) / "payload"
             payload.mkdir()
             with ZipFile(archive) as bundle:
-                manifest = json.loads(bundle.read(MANIFEST))
-                if not isinstance(manifest, dict) or manifest.get("fingerprint") != fingerprint:
-                    return False
-                files = manifest.get("files")
-                if not isinstance(files, dict) or not files:
-                    return False
-                names = bundle.namelist()
-                if sorted(names) != sorted([MANIFEST, *files]) or len({name.casefold() for name in names}) != len(names):
-                    return False
-                for name, digest in files.items():
-                    if not _valid_name(name) or not isinstance(digest, str):
-                        return False
+                manifest = read_manifest(bundle)
+                actual = manifest["fingerprint"]
+                if actual != fingerprint and actual not in legacy_keys:
+                    return None
+                for name, digest in manifest["files"].items():
                     target = payload / name
                     target.parent.mkdir(parents=True, exist_ok=True)
                     with bundle.open(name) as source, target.open("xb") as output:
                         if _copy_digest(source, output) != digest:
-                            return False
+                            return None
             payload.rename(destination)
-    except (BadZipFile, KeyError, OSError, ValueError):
-        return False
-    return True
+    except (BadZipFile, KeyError, OSError, TypeError, ValueError):
+        return None
+    return actual
 
 
 def publish(archive: Path, fingerprint: str, files: dict[str, Path]) -> None:
@@ -80,7 +88,7 @@ def publish(archive: Path, fingerprint: str, files: dict[str, Path]) -> None:
             for name, path in sorted(files.items()):
                 with path.open("rb") as source, bundle.open(name, "w", force_zip64=True) as output:
                     hashes[name] = _copy_digest(source, output)
-            bundle.writestr(MANIFEST, json.dumps({"fingerprint": fingerprint, "files": hashes}))
+            bundle.writestr(ZipInfo(MANIFEST), json.dumps({"fingerprint": fingerprint, "files": hashes}, sort_keys=True))
         os.replace(temporary, archive)
     finally:
         temporary.unlink(missing_ok=True)
@@ -92,9 +100,14 @@ def main() -> None:
     parser.add_argument("archive", type=Path)
     parser.add_argument("fingerprint")
     parser.add_argument("directory", type=Path)
+    parser.add_argument("--legacy-key", action="append", default=[])
     args = parser.parse_args()
     if args.operation == "restore":
-        print("hit" if restore(args.archive, args.fingerprint, args.directory) else "miss")
+        matched = restore(args.archive, args.fingerprint, args.directory, legacy_keys=tuple(args.legacy_key))
+        if matched != args.fingerprint:
+            print("legacy" if matched else "miss")
+        else:
+            print("hit")
     else:
         publish(args.archive, args.fingerprint, files_under(args.directory))
 

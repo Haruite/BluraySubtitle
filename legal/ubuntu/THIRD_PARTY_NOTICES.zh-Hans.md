@@ -1,6 +1,6 @@
 # 第三方许可声明（随附二进制文件）
 
-**产品：** BluraySubtitle（Ubuntu 26.04 x64，PyInstaller 单目录构建）
+**产品：** BluraySubtitle（Ubuntu 26.04，PyInstaller 单目录构建）
 
 运行 `tools/build_ubuntu_package.sh` 时，会根据所选的随附组件更新版本字段。
 
@@ -153,7 +153,7 @@
 ### CPython
 
 - **文件：** `libpython3.14.so.1.0` 与 `linux/python/`
-- **版本：** {{PYTHON_VERSION}} (amd64)
+- **版本：** {{PYTHON_VERSION}}（{{PYTHON_ARCHITECTURE}}）
 - **许可证：** PSF-2.0
 - **源码：** https://www.python.org/ftp/python/{{PYTHON_VERSION}}/Python-{{PYTHON_VERSION}}.tgz
 - **许可原文：** https://docs.python.org/3/license.html

@@ -9,12 +9,14 @@ import src.core.settings as _core_settings
 
 I18N_ZH_TO_EN = {
     '服务器 Ubuntu 26.04 x64 安装包': 'Server Ubuntu 26.04 x64 package',
+    '服务器 Ubuntu 26.04 ARM64 安装包': 'Server Ubuntu 26.04 ARM64 package',
     '一键更新需要 Ubuntu 26.04 打包版。': 'Direct updates require the packaged Ubuntu 26.04 program.',
     'Ubuntu 更新包内容不完整或目录结构有误。': 'The Ubuntu update package is incomplete or has an unexpected layout.',
     '更新来源未提供通过校验的本平台安装包。': 'The update source did not provide a verified package for this platform.',
     '缺少 VapourSynth 所需的 x64 Python，请运行 Windows 环境配置脚本。': "VapourSynth's x64 Python runtime is missing. Run Windows setup.",
     '{architecture} 进程无法使用 Vulkan 设备，已跳过 {name}。': 'Skipping {name} because no {architecture} Vulkan device is available.',
     '{architecture} 进程无法使用 Vulkan 设备时，L-SMASH Works 保留 CPU 解码。': 'L-SMASH Works will use CPU decoding when no {architecture} Vulkan device is available.',
+    '跳过 RIFE：没有可用的 Vulkan GPU': 'Skipping RIFE: no Vulkan GPU is available',
     "无法开始播放 {path}。{error}": "Could not start playback for {path}. {error}",
     "{path} 播放失败，退出代码为 {code}。": "Playback for {path} failed with exit code {code}.",
     '已从 {0} 读取 Windows 工具路径。': 'Loaded Windows tool paths from {0}.',

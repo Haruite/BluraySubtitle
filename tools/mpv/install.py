@@ -5,6 +5,7 @@ from __future__ import annotations
 from hashlib import sha256
 import os
 from pathlib import Path
+from platform import machine
 import re
 import shutil
 from stat import S_IMODE
@@ -17,6 +18,7 @@ ASSETS = Path(__file__).resolve().parent
 sys.path.insert(0, str(ASSETS.parents[1]))
 from src.core.tool_paths import default_mpv_config_directory
 from src.runtime.mpv_menu import menu_labels, translate_mpv_menu
+from tools.mpv.vapoursynth.rife_assets import RIFE_FILES
 
 UOSC_DIR = Path("scripts/uosc")
 UOSC_BINARY = "bin/ziggy-linux"
@@ -64,11 +66,7 @@ MULTIPLIERS = (
 )
 PRESETS = {
     "mvtools": ("MVTools Interpolation", ("mvtools.so",)),
-    "rife": ("RIFE Vulkan Interpolation", (
-        "librife_linux_x86-64.so",
-        "models/rife-v4.6_ensembleFalse/flownet.bin",
-        "models/rife-v4.6_ensembleFalse/flownet.param",
-    )),
+    "rife": ("RIFE Vulkan Interpolation", RIFE_FILES),
     "ccd": ("CCD Chroma Denoise", ("libccd.so",)),
     "bm3d": ("BM3D CPU Luma Denoise", ("bm3d.so",)),
 }
@@ -252,9 +250,23 @@ def uosc_version(main: Path) -> tuple[int, ...]:
     return tuple(map(int, match[1].split("."))) if match else ()
 
 
+def ziggy_is_usable(path: Path) -> bool:
+    if not os.access(path, os.X_OK):
+        return False
+    if machine() not in ("aarch64", "arm64"):
+        return True
+    try:
+        with path.open("rb") as stream:
+            header = stream.read(20)
+    except OSError:
+        return False
+    # Check ELF64 little-endian and EM_AARCH64 before reusing a Linux binary.
+    return header[:6] == b"\x7fELF\x02\x01" and header[18:20] == b"\xb7\x00"
+
+
 def uosc_is_installed(destination: Path) -> bool:
     target = destination / UOSC_DIR
-    if not uosc_version(target / "main.lua") or not os.access(target / UOSC_BINARY, os.X_OK):
+    if not uosc_version(target / "main.lua") or not ziggy_is_usable(target / UOSC_BINARY):
         return False
     # Older installations did not record their file list.
     recorded = read_text(target / UOSC_FILE_LIST).splitlines() or ["lib/std.lua", "elements/Menu.lua"]
@@ -274,7 +286,7 @@ def install_uosc(bundle: Path, destination: Path) -> None:
     target = destination / UOSC_DIR
     if (
         uosc_version(target / "main.lua") < version
-        or not os.access(target / UOSC_BINARY, os.X_OK)
+        or not ziggy_is_usable(target / UOSC_BINARY)
         or not all((target / path).is_file() for path in source_files)
     ):
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -338,7 +350,7 @@ def desktop_files(destination: Path, language: str, plugin_dir: Path, original_m
     ]
     files = {
         destination / "bluray-vs" / name: (ASSETS / "vapoursynth" / name).read_bytes()
-        for name in ("filters.py", *(f"{preset}.vpy" for preset in presets))
+        for name in ("rife_assets.py", "filters.py", *(f"{preset}.vpy" for preset in presets))
     }
     menus = {
         code: localize_menu(original_menu, code, presets).encode("utf-8")

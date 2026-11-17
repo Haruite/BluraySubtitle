@@ -21,13 +21,11 @@ Use the [main MPLS and SP definitions](Blu-ray-Disc-Structure.md#main-content-an
 
 Use the setup scripts as references for custom builds. See [automatic HDR metadata handling](Video-Encoding-and-VapourSynth.md#automatic-hdr-metadata-handling) for parameter requirements and injection fallback.
 
-### Ubuntu 26.04 x64 package
+### Ubuntu 26.04 packages
 
-Run `bash setup_linux_environment.sh --mod Build` on Ubuntu 26.04, then run [`tools/build_ubuntu_package.sh`](../../tools/build_ubuntu_package.sh). Build mode prepares VapourSynth R79 and the PyInstaller environment and links mpv, FFmpeg, and FFprobe to the same FFmpeg libraries. Run [`tools/verify_ubuntu_package.py`](../../tools/verify_ubuntu_package.py) against the resulting archive before distributing it. The build records the checked-out commit inside the package and writes a matching `.tar.xz.txt` file with the SHA-256 digest.
+Run `bash setup_linux_environment.sh --mode Build` on a native Ubuntu 26.04 host, then run `bash tools/build_ubuntu_package.sh`. The packager selects the PyInstaller spec for the host architecture, stages the native tools and libraries, and writes the archive and its SHA-256 build record. [x64 spec](../../BluraySubtitle_ubuntu2604_x64.spec) · [ARM64 spec](../../BluraySubtitle_ubuntu2604_arm64.spec)
 
-The setup cache defaults to `${XDG_CACHE_HOME:-$HOME/.cache}/bluraysubtitle/linux-setup`. Set `BLURAY_SETUP_CACHE_DIR` to use another directory. It holds downloaded archives, APT and Python packages, compiler cache entries, and the installed native build artifacts in build mode.
-
-The [Ubuntu workflow](../../.github/workflows/ubuntu-x64-package.yml) uploads the archive and `.tar.xz.txt` record to `/usr/share/nginx/html/tools/BluraySubtitle`. The [Release workflow](../../.github/workflows/release-packages.yml) checks the record’s commit and archive digest before attaching the package.
+Build mode links mpv, FFmpeg, and FFprobe to the same FFmpeg libraries and enables Vulkan in mpv, FFmpeg, and libplacebo. Run `python3 tools/verify_ubuntu_package.py <archive>` to check the native binaries, libraries, filters, and Vulkan support in the archive.
 
 ## Source-code map
 

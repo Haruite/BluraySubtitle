@@ -6,18 +6,45 @@ import argparse
 import json
 from pathlib import Path
 import subprocess
+import sys
+import sysconfig
 import tarfile
 import tempfile
 import time
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools.mpv.vapoursynth.rife_assets import RIFE_FILES
+
+
+def verify_native_binaries(bundle: Path) -> None:
+    platform = sysconfig.get_platform()
+    machine = {"linux-x86_64": 62, "linux-aarch64": 183}[platform]
+    launcher = bundle / "BluraySubtitle"
+    if not launcher.is_file() or launcher.is_symlink():
+        raise RuntimeError("Missing packaged BluraySubtitle executable")
+    for file in bundle.rglob("*"):
+        if file.is_symlink() or not file.is_file():
+            continue
+        with file.open("rb") as stream:
+            header = stream.read(20)
+        if file != launcher and not header.startswith(b"\x7fELF"):
+            continue
+        if not header.startswith(b"\x7fELF\x02\x01") or int.from_bytes(header[18:20], "little") != machine:
+            raise RuntimeError(f"Expected a native {platform} binary: {file.relative_to(bundle)}")
+
 
 def verify(bundle: Path, work: Path) -> None:
+    verify_native_binaries(bundle)
     support = bundle / "_internal"
     settings_source = support / "src/core/settings.py"
     compile(settings_source.read_text(encoding="utf-8"), str(settings_source), "exec")
     legal = support / "legal"
-    plugins = {file.name for file in (support / "linux/plugins").glob("*.so")}
-    assert plugins
+    plugin_directory = support / "linux/plugins"
+    for name in (*RIFE_FILES, "libvs_placebo.so"):
+        file = plugin_directory / name
+        if not file.is_file() or not file.stat().st_size:
+            raise RuntimeError(f"Missing packaged VapourSynth component: {name}")
+    plugins = {file.name for file in plugin_directory.glob("*.so")}
     assert (support / "tools/ubuntu_update.py").is_file()
     commit = (support / "build-commit.txt").read_text(encoding="utf-8").splitlines()
     assert len(commit) == 2 and commit[0].startswith("commit=") and commit[1].startswith("commit_time=")
@@ -85,6 +112,12 @@ def verify(bundle: Path, work: Path) -> None:
         media_libraries[tool] = codec
     if len(set(media_libraries.values())) != 1:
         raise RuntimeError(f"The playback tools use different FFmpeg libraries: {media_libraries}")
+    apis = run("mpv", "--no-config", "--gpu-api=help")[0].splitlines()
+    if not any(line.split(maxsplit=1)[:1] == ["vulkan"] for line in apis):
+        raise RuntimeError("Packaged mpv does not support Vulkan")
+    hwaccels = run("ffmpeg", "-hide_banner", "-hwaccels")[0].splitlines()
+    if "vulkan" not in hwaccels:
+        raise RuntimeError("Packaged FFmpeg does not support Vulkan")
 
     assert "Core R79" in "".join(run("vspipe", "--version"))
     assert "VapourSynth Editor" in "".join(run("vsedit", "--version"))
@@ -130,6 +163,7 @@ assert mapped == {{str(support / "libpython3.14.so.1.0")}}, mapped
     vpy.write_text(runtime_assertions + f"""
 vs.core.std.LoadAllPlugins(os.environ["BLURAYSUB_PLUGIN_PATH"])
 assert vs.core.descale.Descale and vs.core.bm3d
+assert vs.core.placebo.Deband and vs.core.rife.RIFE
 clip = vs.core.lsmas.LWLibavSource({str(source)!r}, cache=0)
 clip = vs.core.fmtc.bitdepth(clip, bits=16)
 assert clip.znedi3.nnedi3(field=0, dh=True).get_frame(0).height == clip.height * 2

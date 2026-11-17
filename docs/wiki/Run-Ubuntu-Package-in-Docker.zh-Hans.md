@@ -2,14 +2,22 @@
 
 [English](Run-Ubuntu-Package-in-Docker.md) | 简体中文
 
-在 Linux 桌面解压 `BluraySubtitle_ubuntu26.04_x64.tar.xz`，将可执行文件与 `_internal/` 放在解压所得的同一个 `BluraySubtitle/` 目录中。容器使用 Ubuntu 26.04 amd64 运行环境，程序和多媒体工具直接从挂载的包中启动。
+在 Linux 桌面根据宿主机架构解压 Ubuntu 26.04 x64 或 ARM64 包。将可执行文件与 `_internal/` 放在解压所得的同一个 `BluraySubtitle/` 目录中。程序和多媒体工具直接从挂载的包中启动。
 
 ## 准备运行环境
 
-下面的镜像包含系统图形库和字体。已有这些依赖的 Ubuntu 26.04 镜像也可用作运行环境。
+构建命令在 x64 宿主机上选择 `linux/amd64`，在 ARM64 宿主机上选择 `linux/arm64`。镜像包含系统图形库和字体。已有这些依赖的 Ubuntu 26.04 镜像也可用作运行环境。
 
 ```bash
-docker build --platform linux/amd64 -t bluraysubtitle-runtime:26.04 - <<'DOCKER'
+(
+cpu_arch=$(uname -m)
+case "$cpu_arch" in
+  x86_64|amd64) docker_platform=linux/amd64 ;;
+  aarch64|arm64) docker_platform=linux/arm64 ;;
+  *) printf '不支持的 CPU 架构 %s\n' "$cpu_arch" >&2; exit 1 ;;
+esac
+
+docker build --platform "$docker_platform" -t bluraysubtitle-runtime:26.04 - <<'DOCKER'
 FROM ubuntu:26.04
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates fontconfig fonts-noto-cjk x11-utils \
@@ -17,6 +25,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     libvulkan1 mesa-vulkan-drivers libva2 libva-drm2 libva-wayland2 libva-x11-2 libvdpau1 \
     && rm -rf /var/lib/apt/lists/*
 DOCKER
+)
 ```
 
 ## 启动程序
@@ -42,7 +51,7 @@ test -S "$socket"
 xauth nlist "$display" | sed 's/^..../ffff/' | xauth -f "$auth" nmerge -
 test -s "$auth"
 
-docker run --rm --init --platform linux/amd64 --network none \
+docker run --rm --init --network none \
   --user "$(id -u):$(id -g)" \
   --tmpfs "/run/bluraysubtitle:uid=$(id -u),gid=$(id -g),mode=0700" \
   -e DISPLAY="$display" -e XAUTHORITY=/tmp/bluray.Xauthority \

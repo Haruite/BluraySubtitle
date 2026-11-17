@@ -11,7 +11,8 @@ import tempfile
 
 
 def normalize_version(value: str) -> str:
-    return re.sub(r"^[rRvV](?=[0-9])", "", value.strip())
+    value = re.sub(r"^[rRvV](?=[0-9])", "", value.strip())
+    return re.sub(r"(?<=[0-9])_(?=[0-9])", ".", value)
 
 
 def usable_version(value, target: str) -> str | None:
@@ -62,8 +63,8 @@ def reported_version(plugin, target: str) -> str | None:
             if value is not None:
                 return value
     version = plugin.version
-    # EEDI3 and VIVTC (registered as VFM) use source tags independent of 1.0.
-    if plugin.name in ("EEDI3", "VFM") and (version.major, version.minor) == (1, 0):
+    # These plugins register 1.0 independently of their source tags.
+    if plugin.name in ("EEDI3", "VFM", "LSMASHSource for VapourSynth") and (version.major, version.minor) == (1, 0):
         return None
     # vs-ccd registers 0.1 independently of the release tag.
     if plugin.name == "chroma denoiser" and (version.major, version.minor) == (0, 1):
@@ -97,7 +98,7 @@ def fallback_version(plugin_path: Path, *, normalize: bool = True) -> str | None
 
 def record_version(plugin_path: Path, target: str, native_version: str | None) -> None:
     version_file, records = _records(plugin_path)
-    if native_version is None:
+    if native_version is None or not version_satisfies(native_version, target):
         records[plugin_path.name] = (target, hashlib.sha256(plugin_path.read_bytes()).hexdigest())
     else:
         records.pop(plugin_path.name, None)
@@ -169,7 +170,7 @@ def main() -> None:
     core.std.LoadPlugin(path=str(plugin_path), forcens="setup_version_probe", forceid="bluraysubtitle.setup.version")
     native = reported_version(core.setup_version_probe, target)
     if mode == "read":
-        value = native or fallback_version(plugin_path)
+        value = fallback_version(plugin_path) or native
         if value is not None:
             print(value)
     elif mode == "record":

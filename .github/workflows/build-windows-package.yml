@@ -17,6 +17,10 @@ concurrency:
 jobs:
   publish:
     runs-on: ${{ inputs.architecture == 'arm64' && 'windows-11-vs2026-arm' || 'windows-2025-vs2026' }}
+    outputs:
+      architecture: ${{ runner.arch }}
+      restored-pip: ${{ steps.restored.outcome == 'success' && steps.restored.outputs.pip == steps.downloads.outputs.cache-matched-key && steps.restored.outputs.pip || '' }}
+      restored-tools: ${{ steps.restored.outcome == 'success' && steps.restored.outputs.tools == steps.builds.outputs.cache-matched-key && steps.restored.outputs.tools || '' }}
     env:
       PACKAGE_NAME: BluraySubtitle_windows_${{ inputs.architecture }}
     steps:
@@ -29,17 +33,31 @@ jobs:
         id: downloads
         uses: actions/cache/restore@v6
         with:
-          path: ${{ runner.temp }}/bluraysubtitle-pip
-          key: windows-pip-v1-${{ runner.arch }}-lookup
-          restore-keys: windows-pip-v1-${{ runner.arch }}-
+          path: &pip-path ${{ runner.temp }}/bluraysubtitle-pip
+          key: windows-pip-v2-${{ runner.arch }}-lookup
+          restore-keys: |
+            windows-pip-v2-${{ runner.arch }}-
+            windows-pip-v1-${{ runner.arch }}-
 
       - name: Restore Windows Tool Artifacts
         id: builds
         uses: actions/cache/restore@v6
         with:
-          path: ${{ runner.temp }}/bluraysubtitle-builds/artifacts/${{ inputs.architecture == 'arm64' && 'arm64/' || '' }}*.zip
-          key: windows-tools-v3-${{ runner.arch }}-lookup
-          restore-keys: windows-tools-v3-${{ runner.arch }}-
+          path: &tools-path ${{ runner.temp }}/bluraysubtitle-builds/artifacts/${{ inputs.architecture == 'arm64' && 'arm64/' || '' }}*.zip
+          key: windows-tools-v4-${{ runner.arch }}-lookup
+          restore-keys: |
+            windows-tools-v4-${{ runner.arch }}-
+            windows-tools-v3-${{ runner.arch }}-
+
+      - name: Verify Restored Windows Cache Contents
+        id: restored
+        if: >-
+          github.ref == 'refs/heads/main' &&
+          (startsWith(steps.downloads.outputs.cache-matched-key, 'windows-pip-v2-') ||
+           startsWith(steps.builds.outputs.cache-matched-key, 'windows-tools-v4-'))
+        continue-on-error: true
+        shell: powershell
+        run: python -B tools/windows_actions_cache.py snapshot $env:RUNNER_ARCH
 
       - name: Prepare Windows Build Environment
         id: setup
@@ -65,50 +83,8 @@ jobs:
           $outputs = @(
             "python=$($system.python_executable)"
             "seven_zip=$($system.seven_zip_executable)"
-            "download_key=windows-pip-v1-$env:RUNNER_ARCH-$($system.download_cache_key)"
           )
           [IO.File]::AppendAllLines($env:GITHUB_OUTPUT, [string[]]$outputs, [Text.UTF8Encoding]::new($false))
-
-      - name: Save Python Package Downloads
-        if: steps.downloads.outputs.cache-matched-key != steps.setup.outputs.download_key
-        uses: actions/cache/save@v6
-        with:
-          path: ${{ runner.temp }}/bluraysubtitle-pip
-          key: ${{ steps.setup.outputs.download_key }}
-
-      - name: Collect Windows Tool Cache Key
-        id: tool-cache
-        if: ${{ !cancelled() && (steps.setup.outcome == 'success' || steps.setup.outcome == 'failure') }}
-        shell: powershell
-        run: |
-          $directory = Join-Path $env:RUNNER_TEMP "bluraysubtitle-builds/artifacts"
-          if ($env:RUNNER_ARCH -eq "ARM64") {
-            $directory = Join-Path $directory "arm64"
-          }
-          if (-not (Test-Path -LiteralPath $directory -PathType Container)) { return }
-          $legacy = Join-Path $directory "vapoursynth-components.zip"
-          if (Test-Path -LiteralPath $legacy -PathType Leaf) {
-            Remove-Item -LiteralPath $legacy
-          }
-          $archives = @(Get-ChildItem -LiteralPath $directory -Filter "*.zip" -File | Sort-Object Name)
-          if (!$archives.Count) { return }
-          $entries = $archives | ForEach-Object { "$($_.Name)=$((Get-FileHash -LiteralPath $_.FullName).Hash)" }
-          $sha256 = [Security.Cryptography.SHA256]::Create()
-          try {
-            $bytes = [Text.Encoding]::UTF8.GetBytes(($entries -join "`n"))
-            $fingerprint = [BitConverter]::ToString($sha256.ComputeHash($bytes)).Replace("-", "").ToLowerInvariant()
-          }
-          finally {
-            $sha256.Dispose()
-          }
-          [IO.File]::AppendAllLines($env:GITHUB_OUTPUT, [string[]]@("key=windows-tools-v3-$env:RUNNER_ARCH-$fingerprint"), [Text.UTF8Encoding]::new($false))
-
-      - name: Save Windows Tool Artifacts
-        if: ${{ !cancelled() && steps.tool-cache.outputs.key != '' && steps.builds.outputs.cache-matched-key != steps.tool-cache.outputs.key }}
-        uses: actions/cache/save@v6
-        with:
-          path: ${{ runner.temp }}/bluraysubtitle-builds/artifacts/${{ inputs.architecture == 'arm64' && 'arm64/' || '' }}*.zip
-          key: ${{ steps.tool-cache.outputs.key }}
 
       - name: Build and Verify Windows Package
         shell: powershell
@@ -149,6 +125,30 @@ jobs:
           & $env:BUILD_PYTHON tools/verify_windows_package.py $archive --seven-zip $env:BUILD_SEVEN_ZIP
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Fingerprint Windows Cache Contents
+        id: snapshot
+        if: github.ref == 'refs/heads/main'
+        shell: powershell
+        env:
+          BUILD_PYTHON: ${{ steps.setup.outputs.python }}
+        run: |
+          & $env:BUILD_PYTHON -B tools/windows_actions_cache.py snapshot $env:RUNNER_ARCH
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Save Python Package Downloads
+        if: steps.snapshot.outputs.pip != '' && steps.snapshot.outputs.pip != steps.downloads.outputs.cache-matched-key
+        uses: actions/cache/save@v6
+        with:
+          path: *pip-path
+          key: ${{ steps.snapshot.outputs.pip }}
+
+      - name: Save Windows Tool Artifacts
+        if: steps.snapshot.outputs.tools != '' && steps.snapshot.outputs.tools != steps.builds.outputs.cache-matched-key
+        uses: actions/cache/save@v6
+        with:
+          path: *tools-path
+          key: ${{ steps.snapshot.outputs.tools }}
+
       - name: Upload Package and Build Information
         if: github.ref == 'refs/heads/main'
         shell: bash
@@ -160,3 +160,26 @@ jobs:
           set -euo pipefail
           export PATH="/usr/bin:$PATH"
           bash tools/publish_website_package.sh "dist/$PACKAGE_NAME.7z" "dist/$PACKAGE_NAME/_internal/build-commit.txt"
+
+  prune-cache:
+    needs: publish
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (startsWith(needs.publish.outputs.restored-pip, 'windows-pip-v2-') ||
+       startsWith(needs.publish.outputs.restored-tools, 'windows-tools-v4-'))
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Remove Superseded Windows Caches
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CACHE_ARCHITECTURE: ${{ needs.publish.outputs.architecture }}
+          RESTORED_PIP_CACHE: ${{ needs.publish.outputs.restored-pip }}
+          RESTORED_TOOLS_CACHE: ${{ needs.publish.outputs.restored-tools }}
+        run: /usr/bin/python3 -B tools/windows_actions_cache.py prune "$CACHE_ARCHITECTURE"

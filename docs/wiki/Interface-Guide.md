@@ -24,7 +24,7 @@ On Linux desktops using X11 or XWayland, select the separate log icon on the tas
 
 ## Updates and launch shortcuts
 
-Use **Settings → Tools → Check for updates** in the Windows x64 or Ubuntu 26.04 x64 package. Select a verified package to install it and reopen the program. The update keeps external-tool settings, application preferences, and saved logs. If the new program fails to start, the updater restores the previous version. If your Linux desktop blocks a new desktop shortcut, mark the launcher as trusted.
+In all packaged editions, you can choose a verified version under **Settings → Tools → Check for updates**. The application restarts automatically after installation and keeps external-tool settings, application preferences, and saved logs. If the new program fails to start, the updater restores the previous version. If your Linux desktop blocks a new desktop shortcut, mark the launcher as trusted.
 
 ## Disc selection and order
 

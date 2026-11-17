@@ -9,6 +9,7 @@ import platform
 import re
 import subprocess
 import sys
+import sysconfig
 from typing import Mapping
 
 
@@ -125,7 +126,8 @@ def generate_third_party_notices(
     libsndfile_version: str,
     package_architecture: str,
 ) -> None:
-    """Render all language templates using one set of bundled component versions."""
+    """Render both Windows notices for the components and build architecture."""
+    arm64 = package_architecture == "arm64"
     software_root = Path(str(settings["X265_PATH"])).parent
     mkv_root = Path(str(settings["MKVTOOLNIX_PATH"]))
     mkv_build = json.loads((mkv_root / "mkvtoolnix-build.json").read_text(encoding="utf-8"))
@@ -154,8 +156,14 @@ def generate_third_party_notices(
     versions = {
         **_common_versions(settings, pyinstaller_version, libsndfile_version, (), (0, 4294967295)),
         "FDK_AAC_VERSION": "2.0.3",
+        "X264_OPTIMIZATIONS": "NEON" if arm64 else "PGO + LTO",
         "X265_VERSION": _marker(software_root / "x265-version.txt"),
         "LIBASS_VERSION": _marker(software_root / "libass-version.txt"),
+        "LIBASS_ASSEMBLY": "AArch64" if arm64 else "x86-64",
+        "LIBASS_COMPILER_RUNTIME": (
+            "LLVM libc++ (`Apache-2.0 WITH LLVM-exception`)"
+            if arm64 else "GCC libstdc++ / libgcc (`GPL-3.0-or-later WITH GCC-exception-3.1`)"
+        ),
         "MKVTOOLNIX_QT_VERSION": mkv_qt,
         "MKVTOOLNIX_QT_SOURCE": f"https://download.qt.io/archive/qt/{mkv_qt_series}/{mkv_qt}/submodules/qtbase-everywhere-src-{mkv_qt}.tar.xz",
         "VAPOURSYNTH_UPSTREAM": vs_upstream,
@@ -163,6 +171,7 @@ def generate_third_party_notices(
         "VAPOURSYNTH_LICENSE": vs_license,
         "VAPOURSYNTH_NAME": "VapourSynth" if r79 else "VapourSynth Classic",
         "WINDOWS_ARCHITECTURE": package_architecture,
+        "WINDOWS_MSYS2_ENVIRONMENT": "CLANGARM64" if arm64 else "UCRT64",
         "VAPOURSYNTH_COMPONENTS": native_rows,
         "VSEDIT_VERSION": components["vsedit"]["ref"],
         "VSEDIT_QT_VERSION": components["vsedit"]["qt_version"],
@@ -183,8 +192,13 @@ def generate_ubuntu_third_party_notices(
     vapoursynth_components: str,
 ) -> None:
     """Render Ubuntu notices using the tools and Python libraries selected for staging."""
+    python_architecture = {
+        "x86_64-linux-gnu": "amd64",
+        "aarch64-linux-gnu": "arm64",
+    }[sysconfig.get_config_var("MULTIARCH")]
     versions = {
         **_common_versions(settings, pyinstaller_version, libsndfile_version, ("--help",), (0,)),
+        "PYTHON_ARCHITECTURE": python_architecture,
         "FDK_AAC_VERSION": _command_version(
             "/usr/bin/pkg-config", ("--modversion", "fdk-aac"), rf"^({VERSION})$"
         ),
