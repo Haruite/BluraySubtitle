@@ -9,7 +9,7 @@
 - `main` 分支最新构建，每次推送更新。[Windows x64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_windows_x64.7z) · [Windows ARM64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_windows_arm64.7z) · [Ubuntu 26.04 x64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_ubuntu26.04_x64.tar.xz) · [Ubuntu 26.04 ARM64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_ubuntu26.04_arm64.tar.xz)
 - 版本 4.7 以后，对应版本的安装包会附在 Release 中。[GitHub Releases](https://github.com/Haruite/BluraySubtitle/releases)
 
-Windows x64 程序包支持 **Windows 10 1809 及以上版本 和 Windows 11**。Windows ARM64 程序包面向 **Windows 10 ARM64 及以上版本 和 Windows 11**，具体最低 Windows 10 版本待验证。Windows 10 建议使用 **22H2**。
+Windows x64 程序包支持 **Windows 10 1809 及以上版本 和 Windows 11**。Windows ARM64 程序包面向 **Windows 10 和 Windows 11 ARM64 版本**，具体最低 Windows 10 版本待验证。Windows 10 建议使用 **22H2**。
 
 BluraySubtitle 是一个跨平台的蓝光流程 GUI 工具。它将以下五类功能整合在一个应用中：
 
