@@ -51,6 +51,9 @@ SVT_AV1_SOURCE_REPOSITORY="https://gitlab.com/AOMediaCodec/SVT-AV1.git"
 FDK_AAC_SOURCE_REPOSITORY="https://github.com/mstorsjo/fdk-aac.git"
 FDKAAC_SOURCE_REPOSITORY="https://github.com/nu774/fdkaac.git"
 VSEDIT_SOURCE_REPOSITORY="https://github.com/YomikoR/VapourSynth-Editor.git"
+LSMASH_SOURCE_REPOSITORY="https://github.com/l-smash/l-smash.git"
+# L-SMASH Works uses the liblsmash 2.x API.
+LSMASH_COMPATIBLE_TAG_PATTERN='^[vV]?2([.][0-9]+)+$'
 MESON_MIN_VERSION="1.4.0"
 ISPC_MIN_VERSION="1.31.0"
 X264_CONFIGURE_OPTIONS=(--enable-static --bit-depth=all --chroma-format=all --disable-opencl --enable-lto)
@@ -1754,11 +1757,9 @@ print(archive["filename"], archive["sha256"])
 # ---------------------------------------------------------------------------
 
 __lsmash_is_installed() {
-  local version
+  local required_version="$1" version
   version="$(pkg-config --modversion liblsmash 2>/dev/null)" || return $?
-  if "$package_build" && [[ -n "${LSMASH_VERSION:-}" ]]; then
-    dpkg --compare-versions "$version" ge "${LSMASH_VERSION#[vV]}"
-  fi
+  [[ "$version" == 2.* ]] && dpkg --compare-versions "$version" ge "$required_version"
 }
 
 install_lsmash() {
@@ -1766,9 +1767,15 @@ install_lsmash() {
 
   export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/$LINUX_MULTIARCH/pkgconfig:${PKG_CONFIG_PATH:-}"
 
-  if __lsmash_is_installed; then
-    log "$(msg 'L-SMASH already installed (liblsmash pkg-config metadata detected), skipping build' \
-      '检测到 L-SMASH 已安装（pkg-config 可识别 liblsmash），跳过编译安装')"
+  local lsmash_tag required_version
+  lsmash_tag="${LSMASH_VERSION:-$(latest_stable_tag "$LSMASH_SOURCE_REPOSITORY" "$LSMASH_COMPATIBLE_TAG_PATTERN")}" || return $?
+  [[ "$lsmash_tag" =~ $LSMASH_COMPATIBLE_TAG_PATTERN ]] \
+    || die "$(msg "L-SMASH Works requires a stable L-SMASH 2.x release (selected: $lsmash_tag)" \
+      "L-SMASH Works 需要 L-SMASH 2.x 稳定版（当前选择：$lsmash_tag）")"
+  required_version="${lsmash_tag#[vV]}"
+  if __lsmash_is_installed "$required_version"; then
+    log "$(msg 'Compatible L-SMASH release already installed, skipping build' \
+      '已安装兼容的 L-SMASH 版本，跳过编译安装')"
     return 0
   fi
   require_native_build L-SMASH
@@ -1791,10 +1798,8 @@ install_lsmash() {
   (
     cd "$build_dir" || exit 1
 
-    local lsmash_tag
-    lsmash_tag="${LSMASH_VERSION:-$(latest_stable_tag https://github.com/l-smash/l-smash.git)}"
     download_source_archive "L-SMASH ${lsmash_tag}" \
-      "https://codeload.github.com/l-smash/l-smash/tar.gz/refs/tags/${lsmash_tag}" l-smash || exit 1
+      "$(github_archive_url "$LSMASH_SOURCE_REPOSITORY" "refs/tags/$lsmash_tag")" l-smash || exit 1
     cd l-smash || exit 1
 
     log "$(msg 'Configuring and building L-SMASH' '配置与编译 lsmash')"
@@ -1805,7 +1810,9 @@ install_lsmash() {
   ) || die "$(msg 'L-SMASH build/install failed' 'lsmash 编译/安装失败')"
 
   rm -rf "$build_dir"
-  __lsmash_is_installed || die "$(msg 'L-SMASH installation is missing liblsmash pkg-config metadata' 'L-SMASH 安装后缺少 liblsmash 的 pkg-config 元数据')"
+  __lsmash_is_installed "$required_version" \
+    || die "$(msg "Installed liblsmash does not satisfy the required 2.x version ($required_version or newer)" \
+      "安装后的 liblsmash 版本不满足要求（2.x 且至少为 $required_version）")"
   log "$(msg 'L-SMASH installation complete' 'lsmash 安装完成')"
 }
 
@@ -4058,7 +4065,7 @@ collect_linux_build_inputs() {
       cache_build_tag "$VSEDIT_SOURCE_REPOSITORY" "${VSEDIT_TAG:-}" '^[rR][0-9]+-mod-[0-9]+([.][0-9]+)*$' || return $?
       ;;
     lsmash)
-      cache_build_tag https://github.com/l-smash/l-smash.git "${LSMASH_VERSION:-}" || return $?
+      cache_build_tag "$LSMASH_SOURCE_REPOSITORY" "${LSMASH_VERSION:-}" "$LSMASH_COMPATIBLE_TAG_PATTERN" || return $?
       LSMASH_VERSION="${linux_build_inputs[-1]}"
       ;;
     ispc)

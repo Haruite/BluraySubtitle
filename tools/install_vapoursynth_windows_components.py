@@ -127,6 +127,9 @@ if sys.argv[2] == 'descale':
     if vs.__version__.release_major == 79:
         clip = vs.core.std.BlankClip(width=64, height=48, format=vs.GRAYS, length=1)
         assert p.Descale(clip, 48, 32, kernel='bilinear', blur=1.0).get_frame(0).width == 48
+elif sys.argv[2] == 'fmtconv':
+    clip = vs.core.std.BlankClip(width=64, height=48, format=vs.YUV420P16, length=1)
+    assert p.bitdepth(clip, bits=10).get_frame(0).format.bits_per_sample == 10
 elif sys.argv[2] == 'removegrain':
     assert hasattr(p, 'Repair'), 'RemoveGrain Repair is required'
 elif sys.argv[2] == 'sangnom':
@@ -1099,30 +1102,35 @@ class Installer:
 
     def build_autotools(self, component, source, commands):
         jobs = str(self.args.jobs)
-        # fmtconv keeps its configure script outside the source root.
-        directory = source / "build/unix" if component.key == "fmtconv" else source
+        directory = source / "build/unix"
         commands = ["sh ./autogen.sh"] if (directory / "autogen.sh").is_file() else []
-        if self.arm64 and component.key == "fmtconv":
-            header = source / "src/conc/Interlocked.hpp"
-            text = header.read_text(encoding="utf-8").replace("<Windows.h>", "<windows.h>")
-            if "defined (__aarch64__)" not in text:
-                start = text.index("int64_t\tInterlocked::cas")
-                text = text[:start] + text[start:].replace(
-                    "#elif defined (_WIN32) ||",
-                    "#elif defined (_WIN32) && defined (__aarch64__)\n"
-                    "\treturn (::InterlockedCompareExchange64 (&dest, excg, comp));\n"
-                    "#elif defined (_WIN32) ||", 1)
-            header.write_text(text, encoding="utf-8")
-            # Libtool's Windows link recipe drops Clang's stack-probe runtime.
-            commands += [
-                "CXX=aarch64-w64-mingw32-clang++ ./configure --host=aarch64-w64-mingw32 --enable-static --disable-shared",
-                "make -j" + jobs,
-                f"{self.cxx} -shared -static -o {component.filename} -Wl,--whole-archive .libs/libfmtconv.a -Wl,--no-whole-archive",
-            ]
+        header = source / "src/conc/Interlocked.hpp"
+        text = header.read_text(encoding="utf-8").replace("<Windows.h>", "<windows.h>")
+        cas_start = text.find("int64_t\tInterlocked::cas")
+        cas_end = text.find("\n}", cas_start)
+        cas = text[cas_start:cas_end]
+        # The legacy Windows assembly truncates 64-bit pointers to ESI.
+        if "cmpxchg8b\t(%%esi)" in cas and "#elif defined (_WIN64)" not in cas:
+            cas = cas.replace(
+                "#elif defined (_WIN32) ||",
+                "#elif defined (_WIN64)\n"
+                "\treturn (::InterlockedCompareExchange64 (&dest, excg, comp));\n"
+                "#elif defined (_WIN32) ||", 1)
+            text = text[:cas_start] + cas + text[cas_end:]
+        header.write_text(text, encoding="utf-8")
+        if self.arm64:
+            configure = "CXX=aarch64-w64-mingw32-clang++ ./configure --host=aarch64-w64-mingw32"
+            link_flags = self.static_runtime
         else:
-            commands = ["export LDFLAGS='-static -static-libgcc -static-libstdc++ -Wl,--gc-sections -s'"] + commands
-            commands += ["./configure --host=x86_64-w64-mingw32 --disable-static --enable-shared", "make -j" + jobs]
-        self.run_msys(commands, directory)
+            configure = "./configure --host=x86_64-w64-mingw32"
+            link_flags = self.static_runtime + " -Wl,--gc-sections -s"
+        # Link the DLL with the compiler so -static applies to its runtime dependencies.
+        self.run_msys(commands + [
+            f"{configure} --enable-static --disable-shared",
+            "make -j" + jobs,
+            f"{self.cxx} -shared {link_flags} -o {component.filename} "
+            "-Wl,--whole-archive .libs/libfmtconv.a -Wl,--no-whole-archive",
+        ], directory)
 
     def build_configure(self, component, source, commands):
         jobs = str(self.args.jobs)
