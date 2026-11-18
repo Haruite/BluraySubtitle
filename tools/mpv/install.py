@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from hashlib import sha256
+import json
 import os
 from pathlib import Path
 from platform import machine
@@ -17,6 +18,7 @@ from tempfile import NamedTemporaryFile, TemporaryDirectory
 ASSETS = Path(__file__).resolve().parent
 sys.path.insert(0, str(ASSETS.parents[1]))
 from src.core.tool_paths import default_mpv_config_directory
+from src.runtime import mpv_environment
 from src.runtime.mpv_menu import menu_labels, translate_mpv_menu
 from tools.mpv.vapoursynth.rife_assets import RIFE_FILES
 
@@ -68,7 +70,7 @@ MULTIPLIERS = (
 )
 PRESETS = {
     "mvtools": ("MVTools Interpolation", ("mvtools.so",)),
-    "rife": ("RIFE Vulkan Interpolation", RIFE_FILES),
+    "rife": ("RIFE Vulkan Interpolation", (*RIFE_FILES, "libmiscfilters.so")),
     "ccd": ("CCD Chroma Denoise", ("libccd.so",)),
     "bm3d": ("BM3D CPU Luma Denoise", ("bm3d.so",)),
 }
@@ -91,6 +93,35 @@ def write_if_changed(path: Path, content: bytes) -> None:
             temporary.replace(path)
         finally:
             temporary.unlink(missing_ok=True)
+
+
+def install_desktop_launcher() -> None:
+    """Keep the native player available when setup installs or refreshes the public command."""
+    import fcntl
+
+    command = mpv_environment.MPV_COMMAND
+    native = mpv_environment.MPV_NATIVE
+    runtime_script = mpv_environment.MPV_RUNTIME
+    command.parent.mkdir(parents=True, exist_ok=True)
+    runtime_script.parent.mkdir(parents=True, exist_ok=True)
+    with (runtime_script.parent / ".mpv-install.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        managed = mpv_environment.is_desktop_launcher(command)
+        if not managed and os.path.lexists(native) and not runtime_script.exists():
+            raise FileExistsError(native)
+        write_if_changed(runtime_script, Path(mpv_environment.__file__).read_bytes())
+        if managed:
+            return
+        with TemporaryDirectory(dir=command.parent, prefix=".bluraysubtitle-mpv-") as directory:
+            staged = Path(directory)
+            if command.is_file() or command.is_symlink():
+                # A sibling keeps relative symlinks and ELF $ORIGIN paths working.
+                os.link(command, staged / "native", follow_symlinks=False)
+                (staged / "native").replace(native)
+            launcher = staged / "mpv"
+            launcher.write_bytes(mpv_environment.MPV_LAUNCHER)
+            launcher.chmod(0o755)
+            launcher.replace(command)
 
 
 def default_menu(executable: str = "mpv") -> str:
@@ -447,6 +478,18 @@ def install(bundle: Path | None, language: str, plugin_dir: Path, executable: st
 
 
 if __name__ == "__main__":
+    if sys.argv[1] == "--install-launcher":
+        install_desktop_launcher()
+        raise SystemExit
+    if sys.argv[1] == "--native-executable":
+        print(mpv_environment.native_mpv_executable(Path(sys.argv[2])))
+        raise SystemExit
+    if sys.argv[1] == "--configure-runtime":
+        library, plugins, player = sys.argv[2:]
+        runtime = {"VSSCRIPT_PATH": library, "PLUGIN_PATH": plugins, "MPV_PATH": player}
+        content = (json.dumps(runtime, ensure_ascii=False) + "\n").encode("utf-8")
+        write_if_changed(mpv_environment.desktop_runtime_file(), content)
+        raise SystemExit
     if sys.argv[1] == "--cache-lazy-shaders":
         for relative, digest in DOWNLOADED_SHADERS.items():
             download_lazy_shader(relative, digest)

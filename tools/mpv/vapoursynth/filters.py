@@ -14,7 +14,9 @@ def load_plugin(filename, namespace):
     core = vs.core
     if not hasattr(core, namespace):
         config = Path(__file__).with_name("plugins-dir")
-        configured = fsdecode(config.read_bytes()) if config.is_file() else environ.get("BLURAYSUB_PLUGIN_PATH")
+        configured = environ.get("BLURAYSUB_PLUGIN_PATH")
+        if configured is None and config.is_file():
+            configured = fsdecode(config.read_bytes())
         plugin_dir = Path(configured) if configured else Path.home() / "plugins"
         core.std.LoadPlugin(str(plugin_dir / filename))
     return getattr(core, namespace)
@@ -148,7 +150,7 @@ def rife(clip, nominal_fps, multiplier=""):
     plugin = load_plugin(library, "rife")
     factor = interpolation_multiplier(multiplier)
     timed = with_nominal_fps(clip, nominal_fps)
-    scene_detected = vs.core.misc.SCDetect(timed, threshold=0.1)
+    scene_detected = load_plugin("libmiscfilters.so", "misc").SCDetect(timed, threshold=0.1)
     output = plugin.RIFE(
         to_rgb(scene_detected), model=23, factor_num=factor.numerator,
         factor_den=factor.denominator, gpu_thread=2, sc=True,

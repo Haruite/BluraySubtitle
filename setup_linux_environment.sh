@@ -1456,7 +1456,8 @@ test_mpv_vapoursynth() (
   probe_dir="$(mktemp -d)" || return 1
   trap 'rm -rf -- "$probe_dir"' EXIT
   probe_file="$probe_dir/probe.vpy"
-  printf '%s\n' 'assert user_data in ("bluray-probe", b"bluray-probe")' \
+  printf '%s\n' 'import vapoursynth as vs' 'assert vs.core.core_version.release_major == 79' \
+    'assert user_data in ("bluray-probe", b"bluray-probe")' \
     'video_in.std.AddBorders(left=8, right=8).set_output()' > "$probe_file" || return 1
 
   # mpv can continue playback after a filter fails. Verify the filtered frame size.
@@ -1472,7 +1473,7 @@ test_mpv_vapoursynth() (
 
 __mpv_tools_share_ffmpeg() {
   local library_dir="$1" program codec shared_codec=""
-  for program in "$(command -v mpv)" "$FFMPEG_PATH" "$FFPROBE_PATH"; do
+  for program in "$2" "$FFMPEG_PATH" "$FFPROBE_PATH"; do
     codec="$(LC_ALL=C ldd "$program" | awk '$1 ~ /^libavcodec[.]so[.]/ && $2 == "=>" { print $3 }')" || return 1
     if [[ "$codec" != "$library_dir"/libavcodec.so.* || "$codec" != "${shared_codec:-$codec}" ]]; then
       log "$(msg "$program uses libavcodec at ${codec:-unknown}, expected $library_dir" "$program 使用的 libavcodec 位于 ${codec:-未知}，预期目录为 $library_dir")" >&2
@@ -1513,16 +1514,17 @@ install_mpv() {
     ffmpeg_is_current="true"
   fi
 
-  if command -v "$mpv_executable" >/dev/null 2>&1; then
-    local current_mpv_version
-    current_mpv_version="$("$mpv_executable" --version 2>/dev/null | head -n 1 | grep -oP 'mpv\s+v?\K[0-9]+(\.[0-9]+){1,2}' || true)"
+  local installed_mpv current_mpv_version
+  if installed_mpv="$(command -v "$mpv_executable")"; then
+    installed_mpv="$(/usr/bin/python3 -B "$SETUP_ROOT/tools/mpv/install.py" --native-executable "$installed_mpv")" || return 1
+    current_mpv_version="$("$installed_mpv" --version 2>/dev/null | head -n 1 | grep -oP 'mpv\s+v?\K[0-9]+(\.[0-9]+){1,2}' || true)"
     if [[ -n "${current_mpv_version:-}" ]] && dpkg --compare-versions "$current_mpv_version" ge "$required_mpv_version"; then
       if [[ "$ffmpeg_is_current" == "true" ]] \
         && { ! "$package_build" || {
-          __mpv_tools_share_ffmpeg "$shared_ffmpeg_dir" && __mpv_tools_have_vulkan "$mpv_executable"
+          __mpv_tools_share_ffmpeg "$shared_ffmpeg_dir" "$installed_mpv" && __mpv_tools_have_vulkan "$installed_mpv"
         }; } \
-        && "$mpv_executable" --no-config --list-properties | grep -E '^[[:space:]]+default-menu$' >/dev/null \
-        && test_mpv_vapoursynth "$mpv_executable"; then
+        && "$installed_mpv" --no-config --list-properties | grep -E '^[[:space:]]+default-menu$' >/dev/null \
+        && test_mpv_vapoursynth "$installed_mpv"; then
         if ! "$package_build" && ! has_libdovi_development; then
           log "$(msg 'mpv installed but libdovi development files are missing, installing libdovi' '检测到 mpv 已安装但缺少 libdovi 开发文件，尝试安装 libdovi')"
           install_libdovi
@@ -1688,7 +1690,7 @@ C
     || ! __ffmpeg_has_libopus "$FFMPEG_PATH"; then
     die "$(msg "Installed FFmpeg / FFprobe version or libopus support verification failed. Build files were kept in ${build_dir}" "安装后的 FFmpeg / FFprobe 版本或 libopus 支持校验失败。构建文件保留在 ${build_dir}")"
   fi
-  if "$package_build" && ! __mpv_tools_share_ffmpeg "$shared_ffmpeg_dir"; then
+  if "$package_build" && ! __mpv_tools_share_ffmpeg "$shared_ffmpeg_dir" "$(command -v mpv)"; then
     die "$(msg 'mpv, FFmpeg and FFprobe did not link to the shared FFmpeg runtime' 'mpv、FFmpeg 或 FFprobe 未链接到同一套 FFmpeg 运行库')"
   fi
   if "$package_build" && ! __mpv_tools_have_vulkan "$mpv_executable"; then
@@ -3066,15 +3068,7 @@ install_vs_eedi3m() (
     if [[ "$APT_ARCH" == arm64 ]]; then
       sed -i '/^#include <algorithm>$/a #include <cmath>' EEDI3/EEDI3.h || exit 1
     fi
-    python3 - <<'PY' || exit 1
-import re
-content = open('meson.build', encoding='utf-8', errors='replace').read()
-pattern = r"incdir = include_directories\(.*?check: true,.*?\.stdout\(\)\.strip\(\),\s*\)"
-new_content = re.sub(pattern, "incdir = '/usr/local/include/vapoursynth'", content, flags=re.DOTALL)
-open('meson.build', 'w', encoding='utf-8').write(new_content)
-PY
-    rm -rf build
-    tmux_run "EEDI3 meson setup" meson setup build || exit 1
+    tmux_run "EEDI3 meson setup" meson setup build --native-file "$vapoursynth_meson_file" || exit 1
     tmux_run "EEDI3 ninja" ninja -C build || exit 1
     install -m 0755 build/eedi3m.so "$plugins_dir/eedi3m.so" || exit 1
     vs_plugin_version record "eedi3m.so" "$tag" || exit 1
@@ -3463,16 +3457,7 @@ install_vs_mvtools() (
     log "$(msg "Building vapoursynth-mvtools ($tag)" "编译 vapoursynth-mvtools ($tag)")"
     download_source_archive "mvtools $tag" "${vs_plugin_sources[mvtools]}" mvtools || exit 1
     cd mvtools || exit 1
-    python3 - <<'PY' || exit 1
-import re
-with open('meson.build', 'r', encoding='utf-8', errors='replace') as f:
-    content = f.read()
-pattern = r"incdir = include_directories\(\s*(?:'vapoursynth/include'|run_command\(.*?\.stdout\(\)\.strip\(\),?)\s*\)"
-new_content = re.sub(pattern, "incdir = include_directories('/usr/local/include/vapoursynth')", content, flags=re.DOTALL)
-with open('meson.build', 'w', encoding='utf-8') as f:
-    f.write(new_content)
-PY
-    tmux_run "mvtools meson setup" meson setup build || exit 1
+    tmux_run "mvtools meson setup" meson setup build --native-file "$vapoursynth_meson_file" || exit 1
     tmux_run "mvtools ninja" ninja -C build || exit 1
     install -m 0755 build/mvtools.so "$plugins_dir/mvtools.so" || exit 1
     vs_plugin_version record "mvtools.so" "$tag" || exit 1
@@ -3636,15 +3621,7 @@ build_desktop_vs_plugin() (
   tmux_run "${name} ${tag} download" download_url "${vs_plugin_sources[$name]}" source.tar.gz
   tar -xzf source.tar.gz --strip-components=1
 
-  if [[ "$name" == "bm3d" ]]; then
-    # Use the configured VapourSynth SDK headers through pkg-config.
-    sed -i \
-      -e '/import vapoursynth as vs; print(vs.get_include())/d' \
-      -e "s/dependencies: dependency('fftw3f'),/dependencies: [dependency('fftw3f'), dependency('vapoursynth').partial_dependency(includes: true, compile_args: true)],/" \
-      meson.build
-  fi
-
-  tmux_run "${name} meson setup" meson setup build -Db_lto=false
+  tmux_run "${name} meson setup" meson setup build --native-file "$vapoursynth_meson_file" -Db_lto=false
   tmux_run "${name} ninja" ninja -C build
   test_desktop_vs_plugin "$name" "$build_dir/build/$library" \
     || die "$(msg "${name} failed to render a test frame" "${name} 未通过测试帧渲染验证")"
@@ -3821,13 +3798,9 @@ install_desktop_shortcuts() {
     log "$(msg 'No mpv/mkvtoolnix desktop files found in /usr/local/share/applications or /usr/share/applications' '未在 /usr/local/share/applications 或 /usr/share/applications 中找到 mpv/mkvtoolnix 的 desktop 文件')"
   fi
 
-  if [[ "$VAPOURSYNTH_PYTHON" != "/usr/bin/python3" ]]; then
-    local mpv_desktop="$desktop_dir/mpv.desktop"
-    if [[ -f "$mpv_desktop" ]]; then
-      # The R79 wheel is in the user's Python environment on older distributions.
-      local desktop_vsscript="${VAPOURSYNTH_VSSCRIPT//&/\\&}"
-      sed -i "s|^Exec=mpv |Exec=env \"VSSCRIPT_PATH=$desktop_vsscript\" mpv |" "$mpv_desktop"
-    fi
+  local mpv_desktop="$desktop_dir/mpv.desktop"
+  if [[ -f "$mpv_desktop" ]]; then
+    sed -Ei 's@^Exec=(/[^[:space:]]*/)?mpv([[:space:]]|$)@Exec=/usr/local/bin/mpv\2@; s@^TryExec=(/[^[:space:]]*/)?mpv$@TryExec=/usr/local/bin/mpv@' "$mpv_desktop"
   fi
 
   if [[ -x "$VSEDIT_PATH" ]]; then
@@ -4292,7 +4265,8 @@ else
 fi
 
 linux_cache_abi="" qt_cache_abi="" vapoursynth_cache_abi=""
-declare -A linux_recipe_revisions=() vs_plugin_tags=() vs_plugin_sources=() vs_plugin_digests=()
+declare -A linux_recipe_revisions=([eedi3m]=2 [mvtools]=2 [bm3d]=2)
+declare -A vs_plugin_tags=() vs_plugin_sources=() vs_plugin_digests=()
 if "$package_build"; then
   cache_workspace="$(bluray_mktemp_dir)"
   setup_temporary_dirs+=("$cache_workspace")
@@ -4315,6 +4289,9 @@ install_mkvtoolnix
 cached_linux_build mkvtoolnix-paths sync_mkvtoolnix_paths files "" \
   "$MKVTOOLNIX_PATH"/{mkvinfo,mkvmerge,mkvpropedit,mkvextract}
 select_vapoursynth_python
+# Meson otherwise uses its own interpreter for plugins that call vs.get_include().
+vapoursynth_meson_file="$SETUP_ROOT/vapoursynth-python.ini"
+printf "[binaries]\npython = '''%s'''\n" "$VAPOURSYNTH_PYTHON" > "$vapoursynth_meson_file"
 cached_linux_build vapoursynth-sdk install_vapoursynth system \
   "$VAPOURSYNTH_TAG $("$VAPOURSYNTH_PYTHON" --version)" "$VSPIPE_PATH" /usr/local/lib/pkgconfig/vapoursynth.pc \
   /usr/local/include/vapoursynth/{VSConstants4,VSFrameMemory,VSHelper,VSHelper4,VSScript,VSScript4,VapourSynth,VapourSynth4}.h
@@ -4323,6 +4300,13 @@ if "$package_build" || [[ "$APT_ARCH" == arm64 ]]; then
 fi
 cached_linux_build mpv-ffmpeg install_mpv system "$MESON_MIN_VERSION $DOVI_TOOL_VERSION $vapoursynth_cache_abi" \
   "$FFMPEG_PATH" "$FFPROBE_PATH" /usr/bin/mpv /usr/include/libdovi/rpu_parser.h
+# Build caches contain the native executable. Restore an existing Desktop launcher after updating it.
+if ! "$package_build" || [[ -f /usr/local/libexec/bluraysubtitle/mpv_runtime.py ]]; then
+  bluray_sudo /usr/bin/python3 -B "$SETUP_ROOT/tools/mpv/install.py" --install-launcher
+fi
+if ! "$package_build"; then
+  /usr/bin/python3 -B "$SETUP_ROOT/tools/mpv/install.py" --configure-runtime "$VAPOURSYNTH_VSSCRIPT" "$PLUGIN_PATH" "$MPV_PATH"
+fi
 cached_linux_build x264 install_x264 files \
   "$X264_SOURCE_REPOSITORY $X264_SOURCE_MIRROR $(pkg-config --modversion libavutil libavformat 2>/dev/null || true)" \
   "$X264_PATH" "$X264_VERSION_FILE"

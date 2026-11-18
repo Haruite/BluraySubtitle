@@ -28,6 +28,7 @@ from vapoursynth_plugin_versions import fallback_version
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from src.runtime.mpv_environment import native_mpv_executable
 from tools.mpv.install import stage_bundled_mpv
 from tools.mpv.vapoursynth.rife_assets import RIFE_LIBRARY
 
@@ -203,7 +204,7 @@ def stage(support: Path, uosc_bundle: Path) -> None:
     tools = {tool: Path(settings[key]) for tool, key in TOOL_SETTINGS.items()}
     mkv = Path(settings["MKVTOOLNIX_PATH"])
     tools.update({name: mkv / name for name in ("mkvinfo", "mkvmerge", "mkvpropedit", "mkvextract")})
-    tools["mpv"] = Path(shutil.which("mpv") or "/usr/local/bin/mpv")
+    tools["mpv"] = native_mpv_executable(Path(shutil.which("mpv") or "/usr/local/bin/mpv"))
     tools["vsedit"] = Path(f'{settings["VSEDIT_PATH"]}-bin')
     installed_plugins = Path(settings["PLUGIN_PATH"])
     plugins = sorted(installed_plugins.glob("*.so"))

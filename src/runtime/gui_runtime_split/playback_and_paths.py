@@ -10,9 +10,10 @@ from PyQt6.QtCore import QProcess, QProcessEnvironment, Qt, QUrl
 from PyQt6.QtWidgets import QToolButton
 
 from src.core import ENCODE_SP_LABELS
-from src.core.tool_paths import tool_path
+from src.core.tool_paths import is_bundled_tool, tool_path
 from src.exports.utils import print_terminal_line, run_command
 from src.runtime.desktop_integration import supports_desktop_entries
+from src.runtime.mpv_environment import read_desktop_runtime
 from src.runtime.mpv_menu import mpv_language_options
 from src.runtime.gui_runtime_classes.widget_animations import AnimatedInputDialog, AnimatedMessageBox
 from .gui_base import BluraySubtitleGuiBase
@@ -145,6 +146,8 @@ class PlaybackPathsMixin(BluraySubtitleGuiBase):
                     environment.remove("LD_LIBRARY_PATH")
                 for name in ("QT_PLUGIN_PATH", "QT_QPA_PLATFORM_PLUGIN_PATH", "QML_IMPORT_PATH", "QML2_IMPORT_PATH"):
                     environment.remove(name)
+            if not is_bundled_tool(executable) and (runtime := read_desktop_runtime()):
+                environment.insert("VSSCRIPT_PATH", runtime["VSSCRIPT_PATH"])
             if environment.value("DISPLAY"):
                 try:
                     extensions = run_command(
