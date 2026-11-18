@@ -3188,8 +3188,6 @@ install_vs_dfttest() (
     log "$(msg "Building VapourSynth-DFTTest ($tag)" "编译 VapourSynth-DFTTest ($tag)")"
     download_source_archive "dfttest $tag" "${vs_plugin_sources[dfttest]}" dfttest || exit 1
     cd dfttest || exit 1
-    log "$(msg 'Installing DFTTest build dependency: libfftw3-dev...' '正在安装 DFTTest 编译依赖: libfftw3-dev...')"
-    apt_install libfftw3-dev
     # fftw >= 3.3.9 exports make_planner_thread_safe only from libfftw3f_threads, which fftw3f.pc does not link.
     tmux_run "DFTTest meson setup" meson setup build "${DFTTEST_MESON_OPTIONS[@]}" || exit 1
     tmux_run "DFTTest ninja" ninja -C build || exit 1
@@ -3473,7 +3471,7 @@ install_vs_build_dependencies() {
     build-essential git wget tar unzip sed
     meson ninja-build cmake patch libass-dev
     autoconf automake libtool pkg-config
-    libxxhash-dev
+    libxxhash-dev libfftw3-dev
     python3 python3-pip
   )
   if [[ "$APT_ARCH" == amd64 ]]; then
@@ -3609,10 +3607,6 @@ build_desktop_vs_plugin() (
   fi
 
   require_native_build "$name"
-  if [[ "$name" == "bm3d" ]] && ! pkg-config --exists fftw3f; then
-    apt_update
-    apt_install libfftw3-dev
-  fi
 
   build_dir="$(bluray_mktemp_dir)"
   trap 'rm -rf -- "$build_dir"' EXIT
