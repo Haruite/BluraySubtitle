@@ -4,10 +4,10 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from tools.ubuntu_actions_cache import apt_fingerprint, outdated_cache_ids, snapshot_keys
+from tools.linux_actions_cache import apt_fingerprint, outdated_cache_ids, snapshot_keys
 
 
-class UbuntuActionsCacheTests(unittest.TestCase):
+class LinuxActionsCacheTests(unittest.TestCase):
     def test_snapshot_keys_follow_payload_and_architecture(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

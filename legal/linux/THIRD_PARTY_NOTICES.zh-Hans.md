@@ -1,8 +1,8 @@
 # 第三方许可声明（随附二进制文件）
 
-**产品：** BluraySubtitle（Ubuntu 26.04，PyInstaller 单目录构建）
+**产品：** BluraySubtitle（Linux，PyInstaller 单目录构建）
 
-运行 `tools/build_ubuntu_package.sh` 时，会根据所选的随附组件更新版本字段。
+运行 `tools/build_linux_package.sh` 时，会根据所选的随附组件更新版本字段。
 
 ---
 
@@ -163,11 +163,21 @@
 
 ### CPython
 
-- **文件：** `libpython3.14.so.1.0` 与 `linux/python/`
+- **文件：** `{{PYTHON_LIBRARY}}` 与 `linux/python/`
 - **版本：** {{PYTHON_VERSION}}（{{PYTHON_ARCHITECTURE}}）
 - **许可证：** PSF-2.0
 - **源码：** https://www.python.org/ftp/python/{{PYTHON_VERSION}}/Python-{{PYTHON_VERSION}}.tgz
-- **许可原文：** https://docs.python.org/3/license.html
+- **许可原文：** [CPython-LICENSE.txt](CPython-LICENSE.txt)
+
+### GNU C Library
+
+- **版本：** {{GLIBC_VERSION}}
+- **文件：** `linux/glibc/`，包括对应架构的动态加载器。
+- **随附版权和许可：** [glibc-copyright](glibc-copyright)
+
+### 图形客户端库
+
+包内包含 OpenGL、DRM、VA-API、VDPAU 和 Vulkan 客户端库，随附 [libglvnd](libglvnd0-copyright)、[libdrm](libdrm2-copyright)、[libva](libva2-copyright)、[libvdpau](libvdpau1-copyright) 和 [Vulkan 加载器](libvulkan1-copyright)的版权与许可文本。
 
 ### NumPy
 
@@ -208,16 +218,16 @@ ZNEDI3 随附[插件本身及 GraphEngine、VSXX 的许可原文](vapoursynth/co
 
 ### Qt
 
-- **文件：** 应用、VSEdit 和 MKVToolNix 使用的 Qt 共享库，以及 `PyQt6/Qt6/` 中的 Qt 插件。
-- **版本：** {{QT_VERSION}}
+- **文件：** 位于 `linux/qt/` 中的两套 Qt 共享库和平台插件。
+- **版本：** {{QT_VERSION}} / 6.6.3
 - **许可证：** Qt 的开源许可，其中提供该选项的库模块采用 LGPL-3.0。详情见各模块的上游声明。
 - **源码：** https://code.qt.io/cgit/qt/qtbase.git/tag/?h=v{{QT_VERSION}}
 - **许可条款：** https://doc.qt.io/qt-6/licensing.html
 
 ### PyQt6
 
-- **文件：** `PyQt6/` 中的 Python 绑定
-- **版本：** {{PYQT_VERSION}}
+- **文件：** `linux/qt/*/PyQt6/` 中的 Python 绑定
+- **版本：** {{PYQT_VERSION}} / 6.6.1
 - **许可证：** GPL-3.0
 - **源码：** https://www.riverbankcomputing.com/software/pyqt/download
 

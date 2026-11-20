@@ -1,7 +1,8 @@
-"""Hand the running Ubuntu package to its detached installer."""
+"""Hand the running Linux package to its detached installer."""
 
 from __future__ import annotations
 
+import errno
 import fcntl
 import json
 import os
@@ -21,11 +22,11 @@ if TYPE_CHECKING:
     from .program_update import UpdatePackage
 
 
-UBUNTU_ARCHITECTURE = "arm64" if platform.machine().lower() in ("aarch64", "arm64") else "x64"
-PACKAGE_ARCHIVE = f"BluraySubtitle_ubuntu26.04_{UBUNTU_ARCHITECTURE}.tar.xz"
+LINUX_ARCHITECTURE = "arm64" if platform.machine().lower() in ("aarch64", "arm64") else "x64"
+PACKAGE_ARCHIVE = f"BluraySubtitle_linux_{LINUX_ARCHITECTURE}.tar.xz"
 SERVER_PACKAGE_URL = f"https://sbx.mysmy.top/tools/BluraySubtitle/{PACKAGE_ARCHIVE}"
-_INSTALLER = Path("tools/ubuntu_update.py")
-_PYTHON = Path("linux/python/bin/python3.14")
+_INSTALLER = Path("tools/linux_update.py")
+_PYTHON = Path("linux/python/libexec/python3")
 
 
 def update_executable() -> Path | None:
@@ -61,12 +62,12 @@ def update_in_progress() -> bool:
 def start_update(package: UpdatePackage) -> None:
     executable = update_executable()
     if executable is None:
-        raise RuntimeError(translate_text("Direct updates require the packaged Ubuntu 26.04 program."))
+        raise RuntimeError(translate_text("Direct updates require the packaged Linux program."))
 
     install = executable.parent
     runtime = install / "_internal"
     configuration = app_config_path().parent
-    with ExitStack() as files:
+    with ExitStack() as files, ExitStack() as spawn_failure:
         lock_fd = os.open(install, os.O_RDONLY | os.O_DIRECTORY)
         files.callback(os.close, lock_fd)
         try:
@@ -86,13 +87,24 @@ def start_update(package: UpdatePackage) -> None:
                 "url": package.url,
                 "sha256": package.sha256,
                 "failure": translate_text("Could not update the program."),
-                "invalid_package": translate_text("The Ubuntu update package is incomplete or has an unexpected layout."),
+                "invalid_package": translate_text("The Linux update package is incomplete or has an unexpected layout."),
                 "invalid_digest": translate_text("The downloaded package failed SHA-256 verification."),
                 "restart_failed": translate_text("The updated program could not start."),
                 "backup": translate_text("Update files are in {path}.").format(path=workspace),
             }
             (workspace / "update.json").write_text(json.dumps(plan), encoding="utf-8")
-            parent_fd = os.pidfd_open(os.getpid())
+            parent_fd = None
+            if hasattr(os, "pidfd_open"):
+                try:
+                    parent_fd = os.pidfd_open(os.getpid())
+                except OSError as error:
+                    if error.errno not in (errno.ENOSYS, errno.EPERM, errno.EACCES):
+                        raise
+            if parent_fd is None:
+                # Only the GUI keeps a writer. EOF also works on kernels predating pidfd_open.
+                parent_fd, writer_fd = os.pipe()
+                writer = spawn_failure.enter_context(os.fdopen(writer_fd, "wb", buffering=0))
+                os.register_at_fork(after_in_child=writer.close)
             files.callback(os.close, parent_fd)
             # Keep the old bundled interpreter reachable while its directory is moved.
             runtime_fd = os.open(runtime, os.O_RDONLY | os.O_DIRECTORY)
@@ -101,16 +113,17 @@ def start_update(package: UpdatePackage) -> None:
             environment = dict(os.environ)
             for name in ("PYTHONPATH", "QT_PLUGIN_PATH", "QT_QPA_PLATFORM_PLUGIN_PATH", "QML_IMPORT_PATH", "QML2_IMPORT_PATH"):
                 environment.pop(name, None)
-            environment.update(
-                PYTHONHOME=str(live_runtime / "linux/python"),
-                LD_LIBRARY_PATH=str(live_runtime),
-            )
+            environment.pop("LD_LIBRARY_PATH", None)
+            environment.update(PYTHONHOME=str(live_runtime / "linux/python"))
+            libc = live_runtime / "linux/glibc"
             subprocess.Popen(
-                [live_runtime / _PYTHON, "-B", "-S", script, str(parent_fd)],
+                [libc / "ld.so", "--library-path", f"{libc}:{live_runtime}",
+                 live_runtime / _PYTHON, "-B", "-S", script, str(parent_fd)],
                 cwd=install, env=environment, pass_fds=(lock_fd, parent_fd, runtime_fd),
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )
+            spawn_failure.pop_all()
         except BaseException:
             shutil.rmtree(workspace, ignore_errors=True)
             raise

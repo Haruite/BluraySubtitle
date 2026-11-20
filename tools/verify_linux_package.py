@@ -1,4 +1,4 @@
-"""Exercise the tools in a relocated Ubuntu package with a clean environment."""
+"""Exercise the tools in a relocated Linux package with a clean environment."""
 
 from __future__ import annotations
 
@@ -13,8 +13,17 @@ import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools.linux_runtime_libs import kernel_requirement
 from tools.mpv.install import LAZY_MENU, SHADER_PATH, SHADERS
 from tools.mpv.vapoursynth.rife_assets import RIFE_FILES
+
+
+def verify_xz_compatibility(archive: Path) -> None:
+    listing = subprocess.check_output(["xz", "--robot", "-lvv", "--", archive], text=True)
+    summary = next(line.split("\t") for line in listing.splitlines() if line.startswith("summary\t"))
+    # The fourth summary column is the minimum decoder version in liblzma's numeric format.
+    if int(summary[3]) > 50_000_002:
+        raise RuntimeError("The package requires a newer decoder than XZ Utils 5.0.0")
 
 
 def verify_native_binaries(bundle: Path) -> None:
@@ -23,15 +32,60 @@ def verify_native_binaries(bundle: Path) -> None:
     launcher = bundle / "BluraySubtitle"
     if not launcher.is_file() or launcher.is_symlink():
         raise RuntimeError("Missing packaged BluraySubtitle executable")
+    if not launcher.read_bytes().startswith(b"#!/bin/sh\n"):
+        raise RuntimeError("Missing portable shell launcher")
+    bootloader = bundle / "_internal/BluraySubtitle"
+    if not bootloader.is_file():
+        raise RuntimeError("Missing PyInstaller bootloader")
+    latest = bundle / "_internal/linux/qt/latest"
     for file in bundle.rglob("*"):
         if file.is_symlink() or not file.is_file():
             continue
         with file.open("rb") as stream:
             header = stream.read(20)
-        if file != launcher and not header.startswith(b"\x7fELF"):
+        if file != bootloader and not header.startswith(b"\x7fELF"):
             continue
         if not header.startswith(b"\x7fELF\x02\x01") or int.from_bytes(header[18:20], "little") != machine:
             raise RuntimeError(f"Expected a native {platform} binary: {file.relative_to(bundle)}")
+        if not file.is_relative_to(latest) and kernel_requirement(file, note_required=False) > (3, 17, 0):
+            raise RuntimeError(f"ELF ABI exceeds Linux 3.17: {file.relative_to(bundle)}")
+
+
+def verify_gui_branches(bundle: Path, work: Path, env: dict[str, str]) -> None:
+    support = bundle / "_internal"
+    minimum = support / "linux/qt/latest/minimum-kernel"
+    original = minimum.read_bytes()
+    config = json.loads((support / "config.default.json").read_text(encoding="utf-8"))
+    config["ui"].update(check_updates_on_startup=False, close_to_tray=False)
+    (work / "config/config.json").write_text(json.dumps(config), encoding="utf-8")
+    try:
+        # Exercise both paths through the real launcher, using only this disposable extraction.
+        for branch, threshold in (("latest", b"0 0 0\n"), ("6.6", b"999 0 0\n")):
+            minimum.write_bytes(threshold)
+            ready = work / f"gui-ready-{branch}"
+            with (work / f"gui-{branch}.log").open("w+") as log, subprocess.Popen(
+                [bundle / "BluraySubtitle", "--foreground"], cwd=work,
+                env={**env, "BLURAY_SUBTITLE_UPDATE_READY": str(ready)}, stdout=log, stderr=subprocess.STDOUT,
+            ) as app:
+                try:
+                    deadline = time.monotonic() + 25
+                    while not ready.is_file() and app.poll() is None and time.monotonic() < deadline:
+                        time.sleep(0.1)
+                    if not ready.is_file() or app.poll() is not None:
+                        log.seek(0)
+                        raise RuntimeError(f"Qt {branch} GUI startup failed: {log.read()}")
+                    maps = Path(f"/proc/{app.pid}/maps").read_text()
+                    for library in ("linux/glibc/libc.so.6", f"linux/qt/{branch}/PyQt6/Qt6/lib/libQt6Core.so.6"):
+                        assert str(support / library) in maps, library
+                finally:
+                    if app.poll() is None:
+                        app.terminate()
+                        try:
+                            app.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            app.kill()
+    finally:
+        minimum.write_bytes(original)
 
 
 def verify(bundle: Path, work: Path) -> None:
@@ -46,7 +100,7 @@ def verify(bundle: Path, work: Path) -> None:
         if not file.is_file() or not file.stat().st_size:
             raise RuntimeError(f"Missing packaged VapourSynth component: {name}")
     plugins = {file.name for file in plugin_directory.glob("*.so")}
-    assert (support / "tools/ubuntu_update.py").is_file()
+    assert (support / "tools/linux_update.py").is_file()
     commit = (support / "build-commit.txt").read_text(encoding="utf-8").splitlines()
     assert len(commit) == 2 and commit[0].startswith("commit=") and commit[1].startswith("commit_time=")
     for filename in ("THIRD_PARTY_NOTICES.md", "THIRD_PARTY_NOTICES.zh-Hans.md"):
@@ -82,7 +136,8 @@ def verify(bundle: Path, work: Path) -> None:
     commands = native / "bin"
     for name in ("path", "home", "runtime", "xdg", "config"):
         (work / name).mkdir(mode=0o700)
-    (work / "path/dirname").symlink_to("/usr/bin/dirname")
+    for tool in ("dirname", "readlink"):
+        (work / "path" / tool).symlink_to(Path("/usr/bin") / tool)
     env = {
         "PATH": str(work / "path"),
         "HOME": str(work / "home"),
@@ -93,6 +148,21 @@ def verify(bundle: Path, work: Path) -> None:
         "XDG_CACHE_HOME": str(work / "cache"),
         "BLURAY_SUBTITLE_CONFIG_DIR": str(work / "config"),
     }
+
+    verify_gui_branches(bundle, work, env)
+    subprocess.run(
+        [native / "python/bin/python3", "-c",
+         "import vapoursynth as vs\n"
+         "clip = vs.core.std.BlankClip(width=64, height=32, format=vs.GRAY8, color=[71])\n"
+         "assert bytes(clip.zsmooth.RemoveGrain(mode=[1]).get_frame(0)[0])[0] == 71"],
+        cwd=work, env=env, check=True, timeout=30,
+    )
+    # The build host's installed locales must not mask a failure on musl or NixOS.
+    subprocess.run(
+        [commands / "mkvmerge", "--version"], cwd=work,
+        env={**env, "LC_ALL": "zz_ZZ.UTF-8", "LOCPATH": str(work / "absent-locales")},
+        check=True, capture_output=True, timeout=15,
+    )
 
     def run(tool, *args, audit=False):
         process = subprocess.run(
@@ -105,13 +175,27 @@ def verify(bundle: Path, work: Path) -> None:
             for line in process.stderr.splitlines():
                 if "calling init: " in line:
                     loaded = line.split("calling init: ", 1)[1].strip()
-                    if loaded.startswith(("/usr/local/", "/home/")):
+                    if loaded.startswith(("/usr/local/", "/home/")) and not Path(loaded).resolve().is_relative_to(support):
                         raise RuntimeError(f"{tool} loaded a host runtime library: {loaded}")
         return process.stdout, process.stderr
+
+    _, trace = run("mpv", "--no-config", "--ao=pipewire", "--audio-device=help", audit=True)
+    client = native / "pipewire"
+    modules = {Path(line.split("calling init: ", 1)[1].strip()) for line in trace.splitlines()
+               if "calling init: " in line and ("/spa-0.2/" in line or "/pipewire-0.3/libpipewire-module-" in line)}
+    required = {
+        client / "spa-0.2/support/libspa-support.so", client / "pipewire-0.3/libpipewire-module-protocol-native.so",
+    }
+    if not required.issubset(modules) or any(not path.is_relative_to(client) for path in modules):
+        raise RuntimeError(f"mpv did not enumerate audio devices with the packaged PipeWire client modules: {modules}")
 
     media_libraries = {}
     for tool in ("mpv", "ffmpeg", "ffprobe"):
         _, trace = run(tool, "--version" if tool == "mpv" else "-version", audit=True)
+        va_libraries = [Path(line.split("calling init: ", 1)[1].strip())
+                        for line in trace.splitlines() if "calling init: " in line and "/libva.so." in line]
+        if not va_libraries or not all(path.resolve().is_relative_to(support) for path in va_libraries):
+            raise RuntimeError(f"{tool} requires the packaged libva: {va_libraries}")
         codec_libraries = {
             Path(line.split("calling init: ", 1)[1].strip())
             for line in trace.splitlines()
@@ -147,6 +231,11 @@ def verify(bundle: Path, work: Path) -> None:
         "-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=48000", "-t", "0.5",
         "-c:v", "ffv1", "-c:a", "pcm_s16le", source, audit=True)
     run("ffmpeg", "-hide_banner", "-loglevel", "error", "-i", source, "-vn", audio)
+    avc = work / "lavf.h264"
+    run("x264", "--demuxer", "lavf", "--frames", "4", "--preset", "ultrafast", "--threads", "2", "-o", avc, source)
+    count, _ = run("ffprobe", "-v", "error", "-select_streams", "v:0", "-count_frames",
+                   "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", avc)
+    assert count.strip() == "4", count
     flac = work / "sample.flac"
     aac = work / "sample.m4a"
     opus = work / "sample.opus"
@@ -165,12 +254,13 @@ import vapoursynth as vs
 
 support = Path({str(support)!r})
 assert Path(sys.prefix) == support / "linux/python"
-assert "python314.zip" in fractions.__file__
+assert f"python{{sys.version_info.major}}{{sys.version_info.minor}}.zip" in fractions.__file__
 for module in (mvsfunc, np, vs):
     assert Path(module.__file__).resolve().is_relative_to(support), module.__file__
 mapped = {{line.split(maxsplit=5)[-1] for line in Path("/proc/self/maps").read_text().splitlines()
-          if "libpython3.14.so" in line}}
-assert mapped == {{str(support / "libpython3.14.so.1.0")}}, mapped
+          if "/libpython3." in line}}
+assert mapped == {{str(support / f"libpython{{sys.version_info.major}}.{{sys.version_info.minor}}.so.1.0")}}, mapped
+assert str(support / "linux/glibc/libc.so.6") in Path("/proc/self/maps").read_text()
 """
     vpy = work / "smoke.vpy"
     vpy.write_text(runtime_assertions + f"""
@@ -178,6 +268,13 @@ vs.core.std.LoadAllPlugins(os.environ["BLURAYSUB_PLUGIN_PATH"])
 assert vs.core.descale.Descale and vs.core.bm3d
 assert vs.core.placebo.Deband and vs.core.rife.RIFE
 clip = vs.core.lsmas.LWLibavSource({str(source)!r}, cache=0)
+if os.uname().machine == "aarch64":
+    frame = clip.sangnom.SangNomMod().zsmooth.RemoveGrain(mode=[1]).get_frame(3)
+    assert (frame.width, frame.height) == (clip.width, clip.height)
+super_clip = clip.mv.Super()
+backward = super_clip.mv.Analyse(isb=True)
+forward = super_clip.mv.Analyse(isb=False)
+assert clip.mv.Degrain1(super_clip, backward, forward).get_frame(3).width == clip.width
 clip = vs.core.fmtc.bitdepth(clip, bits=16)
 assert clip.znedi3.nnedi3(field=0, dh=True).get_frame(0).height == clip.height * 2
 clip = vs.core.nlm_ispc.NLMeans(clip, d=0, a=2, s=2, h=0.6, channels="Y", wmode=3)
@@ -236,21 +333,33 @@ end)
     assert "first video frame after restart shown" in mpv_log.read_text(encoding="utf-8")
 
     editor_log = work / "vsedit.log"
+    editor_settings = work / "config/.vsscript/vsedit.config"
     with editor_log.open("w", encoding="utf-8") as log:
         editor = subprocess.Popen(
             [commands / "vsedit", vpy], cwd=work, env={**env, "LD_DEBUG": "libs"},
             stdout=log, stderr=subprocess.STDOUT,
         )
         try:
-            time.sleep(1.5)
-            assert editor.poll() is None, editor.returncode
+            # VSEdit records the opened script in its recent files after loading it.
+            deadline = time.monotonic() + 25
+            while editor.poll() is None:
+                if editor_settings.is_file() and vpy.name.encode() in editor_settings.read_bytes():
+                    break
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(f"VSEdit did not open {vpy.name} before the timeout")
+                time.sleep(0.1)
+            else:
+                raise RuntimeError(f"VSEdit exited with status {editor.returncode} while opening {vpy.name}")
         finally:
             if editor.poll() is None:
                 editor.terminate()
             editor.wait(timeout=5)
     log_text = editor_log.read_text(encoding="utf-8", errors="replace")
-    for library in ("libQt6Core.so.6", "vapoursynth/libvsscript.so", "libpython3.14.so.1.0"):
-        assert f"calling init: {support}/{library}" in log_text, library
+    libpython, = support.glob("libpython3.*.so.1.0")
+    editor_qt = native / "qt/6.6/PyQt6/Qt6"
+    for library in (native / "glibc/libc.so.6", support / "vapoursynth/libvsscript.so", libpython,
+                    editor_qt / "lib/libQt6Core.so.6", editor_qt / "plugins/platforms/libqoffscreen.so"):
+        assert f"calling init: {library}" in log_text, library
     print("mpv and VSEdit loaded the packaged runtime.", flush=True)
 
 
@@ -258,6 +367,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("archive", type=Path)
     archive = parser.parse_args().archive
+    verify_xz_compatibility(archive)
     with tempfile.TemporaryDirectory(prefix="bluraysubtitle-package-") as directory:
         work = Path(directory)
         relocated = work / "Relocated \u8def\u5f84"

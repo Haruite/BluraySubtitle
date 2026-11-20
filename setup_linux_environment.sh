@@ -56,18 +56,17 @@ LSMASH_SOURCE_REPOSITORY="https://github.com/l-smash/l-smash.git"
 LSMASH_COMPATIBLE_TAG_PATTERN='^[vV]?2([.][0-9]+)+$'
 MESON_MIN_VERSION="1.4.0"
 ISPC_MIN_VERSION="1.31.0"
-X264_CONFIGURE_OPTIONS=(--enable-static --bit-depth=all --chroma-format=all --disable-opencl --enable-lto)
-MPV_FFMPEG_OPTIONS=(--enable-libbluray --enable-libdav1d --enable-libopus)
-MPV_FFMPEG_PACKAGE_OPTIONS=(--disable-static --enable-shared --enable-gnutls --enable-vulkan)
-MPV_OPTIONS=(-Dlibbluray=enabled -Dlua=luajit -Dvapoursynth=enabled)
+X264_CONFIGURE_OPTIONS=(--enable-static --bit-depth=all --chroma-format=all --enable-lto)
+MPV_FFMPEG_OPTIONS=(--enable-libbluray --enable-libdav1d --enable-libopus --enable-gnutls --enable-vulkan)
+MPV_FFMPEG_PACKAGE_OPTIONS=(--disable-static --enable-shared)
+MPV_OPTIONS=(-Dlibbluray=enabled -Dlua=luajit -Dvapoursynth=enabled -Dmanpage-build=enabled)
 MPV_VULKAN_OPTION=-Dvulkan=enabled
-RIFE_MESON_OPTIONS=(-Db_lto=false -Duse_system_ncnn=false)
-ZSMOOTH_ZIG_OPTIONS=(-Dtarget=x86_64-linux-gnu.2.17 -Dcpu=baseline -Doptimize=ReleaseFast)
+RIFE_MESON_OPTIONS=(-Db_lto=false -Dcpp_args=-march=armv8-a)
+RIFE_NCNN_OPTIONS=(-DNCNN_INSTALL_SDK=ON -DNCNN_RUNTIME_CPU=ON -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_INSTALL_LIBDIR=lib)
 TSMUXER_CMAKE_OPTIONS=(-DCMAKE_POLICY_VERSION_MINIMUM=3.10 -DCMAKE_BUILD_TYPE=Release
   -DTSMUXER_GUI=OFF -DTSMUXER_STATIC_BUILD=OFF -DWITHOUT_PKGCONFIG=OFF)
 TSMUXER_INCLUDE_PATCH='1i#include <algorithm>'
 DFTTEST_MESON_OPTIONS=(-Dcpp_link_args=-lfftw3f_threads)
-VS_PLACEBO_MESON_OPTIONS=(-Dr73-compat=true)
 SANGNOM_SSE2NEON_SOURCE=https://codeload.github.com/DLTcollab/sse2neon/tar.gz/refs/tags/v1.8.0
 SANGNOM_SSE2NEON_PATCH='s/^#include <emmintrin.h>$/#include <sse2neon.h>/'
 SETUP_ROOT="$(dirname -- "$BLURAY_SETUP_SOURCE")"
@@ -271,11 +270,11 @@ install_configured_executable() {
   bluray_sudo install -D -m 0755 "$source" "$destination"
 }
 
-portable_build_matches() {
-  local artifact="$1" checksum
-  [[ -f "$artifact" && -f "$artifact.portable.sha256" ]] || return 1
+installed_artifact_matches() {
+  local artifact="$1" record="$1.$2.sha256" checksum
+  [[ -f "$artifact" && -f "$record" ]] || return 1
   checksum="$(sha256sum < "$artifact")" || return 1
-  [[ "$checksum" == "$(cat -- "$artifact.portable.sha256")" ]]
+  [[ "$checksum" == "$(cat -- "$record")" ]]
 }
 
 install_command_at_configured_path() {
@@ -642,11 +641,8 @@ ensure_tmux_installed() {
 
 ensure_sudo_once() {
   command -v sudo >/dev/null 2>&1 || die "$(msg 'sudo is missing' '缺少 sudo')"
-  if [[ ! -t 0 ]]; then
-    return 0
-  fi
-
   sudo -v
+  if [[ ! -t 0 ]]; then return 0; fi
 
   (
     while true; do
@@ -692,20 +688,55 @@ start_setup_in_tmux() {
   exec tmux attach-session -t "=$session"
 }
 
+require_supported_os() {
+  case "$(uname -m)" in
+    x86_64|amd64) readonly APT_ARCH=amd64 LINUX_ARCH=x86_64 ;;
+    aarch64|arm64) readonly APT_ARCH=arm64 LINUX_ARCH=aarch64 ;;
+    *) die "$(msg 'Only x64 and ARM64 Linux are supported' '仅支持 x64 和 ARM64 Linux')" ;;
+  esac
+  readonly LINUX_MULTIARCH="$LINUX_ARCH-linux-gnu"
+  command -v apt-get >/dev/null && command -v dpkg >/dev/null \
+    || die "$(msg 'Linux setup requires APT and dpkg. Use the packaged build on other distributions.' 'Linux 安装脚本需要 APT 和 dpkg。其他发行版请使用打包版。')"
+  [[ "$(dpkg --print-architecture)" == "$APT_ARCH" ]] \
+    || die "$(msg "The APT userspace must match the native ${APT_ARCH} architecture" "APT 用户空间需要与本机 ${APT_ARCH} 架构一致")"
+
+  local ID="" ID_LIKE="" PRETTY_NAME="" VERSION_CODENAME="" UBUNTU_CODENAME="" DEBIAN_CODENAME=""
+  . /etc/os-release || die "$(msg 'Cannot read /etc/os-release' '无法读取 /etc/os-release')"
+  local base_codename="$VERSION_CODENAME"
+  if [[ "$ID" == ubuntu || " $ID_LIKE " == *" ubuntu "* || -n "$UBUNTU_CODENAME" ]]; then
+    local DISTRIB_CODENAME=""
+    if [[ -z "$UBUNTU_CODENAME" && -r /etc/upstream-release/lsb-release ]]; then
+      . /etc/upstream-release/lsb-release
+    fi
+    base_codename="${UBUNTU_CODENAME:-${DISTRIB_CODENAME:-$VERSION_CODENAME}}"
+  elif [[ "$ID" == debian || " $ID_LIKE " == *" debian "* || -r /etc/debian_version ]]; then
+    local debian_version=""
+    if [[ -r /etc/debian_version ]]; then IFS= read -r debian_version < /etc/debian_version || true; fi
+    base_codename="${DEBIAN_CODENAME:-${VERSION_CODENAME:-${debian_version%%/*}}}"
+    if [[ "$debian_version" == 13.* && "$ID" != kali ]]; then base_codename=trixie; fi
+  else
+    die "$(msg 'Setup supports Ubuntu, Debian and their APT derivatives. Use the packaged build on other distributions.' '安装脚本支持 Ubuntu、Debian 及其 APT 衍生版。其他发行版请使用打包版。')"
+  fi
+  # The upstream PyQt6 Linux wheels have different manylinux tags on the two architectures.
+  local minimum_libc=2.34 libc_version
+  if [[ "$APT_ARCH" == arm64 ]]; then minimum_libc=2.39; fi
+  libc_version="$(getconf GNU_LIBC_VERSION)" && dpkg --compare-versions "${libc_version##* }" ge "$minimum_libc" \
+    || die "$(msg "PyQt6 on $APT_ARCH needs glibc $minimum_libc or later. Use the packaged build on older systems." "$APT_ARCH 的 PyQt6 需要 glibc $minimum_libc 或更高版本。较旧系统请使用打包版。")"
+  readonly APT_BASE_CODENAME="${base_codename:-$ID}" LINUX_DISTRO_ID="$ID"
+  log "$(msg "Detected OS: ${PRETTY_NAME:-unknown} (APT base: $APT_BASE_CODENAME, $APT_ARCH)" "检测到系统：${PRETTY_NAME:-未知}（APT 底座：$APT_BASE_CODENAME，$APT_ARCH）")"
+}
+
 # ---------------------------------------------------------------------------
 # Language selection must happen before tmux re-exec so the choice is
 # inherited by the --in-tmux child via the BLURAY_LANG environment variable.
 # ---------------------------------------------------------------------------
 select_language
 export BLURAY_LANG
+require_supported_os
 
-if [[ "${1:-}" != "--in-tmux" && "${3:-}" != "--restore-only" && -z "${TMUX:-}" && -t 1 ]]; then
-  if is_remote_ssh; then
-    ensure_tmux_installed
-    start_setup_in_tmux "$@"
-  fi
-fi
+setup_in_tmux=false
 if [[ "${1:-}" == "--in-tmux" ]]; then
+  setup_in_tmux=true
   shift
 fi
 package_build=false
@@ -726,6 +757,7 @@ fi
 
 require_native_build() {
   if "$restore_only"; then
+    if [[ -n "${BLURAY_BUILD_REQUIRED_FILE:-}" ]]; then touch -- "$BLURAY_BUILD_REQUIRED_FILE"; fi
     die "$(msg "The cached build environment needs setup for $1" "缓存的构建环境需要重新安装或构建 $1")"
   fi
 }
@@ -735,77 +767,37 @@ setup_github_api_token="${BLURAYSUBTITLE_GITHUB_TOKEN:-}"
 export -n setup_github_api_token
 unset BLURAYSUBTITLE_GITHUB_TOKEN
 
-ensure_sudo_once
-
 # ---------------------------------------------------------------------------
-# OS / version checks
+# APT state
 # ---------------------------------------------------------------------------
 
-require_supported_os() {
-  case "$(uname -m)" in
-    x86_64|amd64) readonly APT_ARCH=amd64 LINUX_ARCH=x86_64 ;;
-    aarch64|arm64) readonly APT_ARCH=arm64 LINUX_ARCH=aarch64 ;;
-    *) die "$(msg 'Only x64 and ARM64 Linux are supported' '仅支持 x64 和 ARM64 Linux')" ;;
-  esac
-  readonly LINUX_MULTIARCH="$LINUX_ARCH-linux-gnu"
-  command -v apt-get >/dev/null 2>&1 || die "$(msg 'apt-get is required' '需要 apt-get')"
-  command -v dpkg >/dev/null 2>&1 || die "$(msg 'dpkg is required' '需要 dpkg')"
-  [[ "$(dpkg --print-architecture)" == "$APT_ARCH" ]] \
-    || die "$(msg "The APT userspace must match the native ${APT_ARCH} architecture" "APT 用户空间需要与本机 ${APT_ARCH} 架构一致")"
-
-  local ID="" ID_LIKE="" PRETTY_NAME="" VERSION_CODENAME="" UBUNTU_CODENAME="" DEBIAN_CODENAME=""
-  . /etc/os-release || die "$(msg 'Cannot read /etc/os-release' '无法读取 /etc/os-release')"
-
-  # Ubuntu derivatives may report their own release in VERSION_CODENAME.
-  local base_codename="$UBUNTU_CODENAME"
-  if [[ -z "$base_codename" ]]; then
-    case "$VERSION_CODENAME" in
-      jammy | kinetic | lunar | mantic | noble | oracular | plucky | questing | resolute | stonking)
-        base_codename="$VERSION_CODENAME"
-        ;;
-    esac
-    if [[ -z "$base_codename" && ( "$ID" == "ubuntu" || " $ID_LIKE " == *" ubuntu "* ) ]]; then
-      local DISTRIB_CODENAME=""
-      if [[ -r /etc/upstream-release/lsb-release ]]; then
-        . /etc/upstream-release/lsb-release \
-          || die "$(msg 'Cannot read Ubuntu base release metadata' '无法读取 Ubuntu 底座发行信息')"
-      fi
-      base_codename="${DISTRIB_CODENAME:-$VERSION_CODENAME}"
+# Accept installed packages or APT candidates, including backports and pins.
+check_setup_package_versions() {
+  local -a requirements=(libvulkan-dev=1.3.277 libavcodec-dev=7.0 libplacebo-dev=6.338.0
+                         libdav1d-dev=1.0.0 "meson=$MESON_MIN_VERSION" python3-docutils=0.20)
+  if ! "$package_build"; then requirements+=(qt6-base-dev=6.4.0); fi
+  local policy entry package minimum candidate installed
+  local -a missing=()
+  policy="$(LC_ALL=C apt-cache policy "${requirements[@]%%=*}")" || return 1
+  for entry in "${requirements[@]}"; do
+    package="${entry%=*}"
+    minimum="${entry#*=}"
+    installed="$(dpkg-query -W -f='${Status} ${Version}' "$package" 2>/dev/null || true)"
+    if [[ "$installed" == 'install ok installed '* ]]; then
+      installed="${installed##* }"
+      if dpkg --compare-versions "${installed#*:}" ge "$minimum"; then continue; fi
     fi
+    candidate="$(awk -v name="$package:" '/^[^ ]/ {selected = ($1 == name)} selected && $1 == "Candidate:" {print $2; exit}' <<< "$policy")"
+    if [[ -n "$candidate" && "$candidate" != '(none)' ]] && dpkg --compare-versions "${candidate#*:}" ge "$minimum"; then
+      setup_build_packages+=("$package")
+    else
+      missing+=("$package >= $minimum (${candidate:-none})")
+    fi
+  done
+  if (( ${#missing[@]} )); then
+    printf '  %s\n' "${missing[@]}" >&2
+    return 1
   fi
-
-  local minimum_libc="2.35"
-  if [[ -z "$base_codename" ]]; then
-    minimum_libc="2.36"
-    base_codename="${DEBIAN_CODENAME:-$VERSION_CODENAME}"
-    case "$base_codename" in
-      bookworm | daedalus | faye) base_codename="bookworm" ;;
-      trixie | excalibur | gigi) base_codename="trixie" ;;
-      forky | freia) base_codename="forky" ;;
-      kali-rolling | kali-last-snapshot) ;;
-      *)
-        local debian_version=""
-        if [[ -r /etc/debian_version ]]; then
-          IFS= read -r debian_version < /etc/debian_version || true
-        fi
-        case "$debian_version" in
-          12 | 12.* | bookworm/*) base_codename="bookworm" ;;
-          13 | 13.* | trixie/*) base_codename="trixie" ;;
-          *) base_codename="${DEBIAN_CODENAME:-${debian_version%%/*}}" ;;
-        esac
-        ;;
-    esac
-  fi
-
-  # Check the installed userspace against the Ubuntu 22.04 / Debian 12 baselines.
-  local libc_version
-  libc_version="$(dpkg-query -W -f='${Version}' "libc6:$APT_ARCH" 2>/dev/null || true)"
-  if [[ -z "$base_codename" || -z "$libc_version" ]] || ! dpkg --compare-versions "$libc_version" ge "$minimum_libc"; then
-    die "$(msg "An Ubuntu 22.04+ or Debian 12+ APT base is required (current: ${PRETTY_NAME:-unknown})" "需要 Ubuntu 22.04 或 Debian 12 及以上的 APT 底座（当前：${PRETTY_NAME:-unknown}）")"
-  fi
-  readonly APT_BASE_CODENAME="$base_codename"
-  readonly LINUX_DISTRO_ID="$ID"
-  log "$(msg "Detected OS: ${PRETTY_NAME:-unknown} (APT base: ${APT_BASE_CODENAME}, ${APT_ARCH})" "检测到系统：${PRETTY_NAME:-unknown}（APT 底座：${APT_BASE_CODENAME}，${APT_ARCH}）")"
 }
 
 repair_broken_apt_state() {
@@ -818,46 +810,10 @@ repair_broken_apt_state() {
 # meson version management
 # ---------------------------------------------------------------------------
 
-ensure_meson_version() {
-  local required_version="$MESON_MIN_VERSION"
-
-  export PATH="$HOME/.local/bin:$PATH"
-
-  if command -v meson >/dev/null 2>&1; then
-    local current_version
-    current_version="$(meson --version 2>/dev/null | head -n 1 || true)"
-    if [[ -n "${current_version:-}" ]] && dpkg --compare-versions "$current_version" ge "$required_version"; then
-      log "$(msg "meson version satisfied (${current_version} >= ${required_version}), skipping upgrade" "meson 版本满足要求（${current_version} >= ${required_version}），跳过升级")"
-      return 0
-    fi
-    log "$(msg "meson version (${current_version:-unknown}) is below ${required_version}, upgrading" "检测到 meson 版本 (${current_version:-unknown}) 小于 ${required_version}，将升级")"
-  else
-    log "$(msg "meson not found, installing/upgrading to >= ${required_version}" "未检测到 meson，将安装/升级到 >= ${required_version}")"
-  fi
-
-  if ! python3 -m pip --version >/dev/null 2>&1; then
-    apt_update
-    apt_install python3-pip || die "$(msg 'Failed to install python3-pip' '安装 python3-pip 失败')"
-  fi
-
-  local pip_cmd=("python3" "-m" "pip")
-  if command -v pip >/dev/null 2>&1; then
-    pip_cmd=("pip")
-  fi
-
-  if ! env PIP_DISABLE_PIP_VERSION_CHECK=1 "${pip_cmd[@]}" install --user --upgrade -q --progress-bar off meson --break-system-packages >/dev/null 2>&1; then
-    log "$(msg 'pip does not support --break-system-packages, retrying with compatible flags' '当前 pip 不支持 --break-system-packages，回退到兼容参数重试')"
-    env PIP_DISABLE_PIP_VERSION_CHECK=1 "${pip_cmd[@]}" install --user --upgrade -q --progress-bar off meson >/dev/null 2>&1 || die "$(msg 'Failed to upgrade meson' '升级 meson 失败')"
-  fi
-  export PATH="$HOME/.local/bin:$PATH"
-
-  local new_version
-  new_version="$(meson --version 2>/dev/null | head -n 1 || true)"
-  if [[ -z "${new_version:-}" ]] || ! dpkg --compare-versions "$new_version" ge "$required_version"; then
-    die "$(msg "meson version still unsatisfied after upgrade (current: ${new_version:-unknown}, required: >= ${required_version})" "meson 升级后版本仍不满足要求（当前：${new_version:-unknown}，要求：>= ${required_version}）")"
-  fi
-
-  log "$(msg "meson upgrade complete (current: ${new_version})" "meson 升级完成（当前：${new_version}）")"
+require_meson_version() {
+  local version
+  version="$(PYTHONNOUSERSITE=1 meson --version)" && dpkg --compare-versions "$version" ge "$MESON_MIN_VERSION" \
+    || die "$(msg "The build requires Meson $MESON_MIN_VERSION or later" "编译需要 Meson $MESON_MIN_VERSION 或更高版本")"
 }
 
 # ---------------------------------------------------------------------------
@@ -884,13 +840,21 @@ mkvtoolnix_apt_version() {
 }
 
 mkvtoolnix_installed_version() {
-  local tool
+  local tool directory=/usr/bin version output
   local -a tools=(mkvinfo mkvmerge mkvpropedit mkvextract)
-  if ! "$package_build"; then tools+=(mkvtoolnix-gui); fi
+  if "$package_build"; then directory="${1:-$MKVTOOLNIX_PATH}"; else tools+=(mkvtoolnix-gui); fi
   for tool in "${tools[@]}"; do
-    [[ -x "/usr/bin/$tool" ]] || return 1
+    [[ -x "$directory/$tool" ]] || return 1
   done
-  LC_ALL=C /usr/bin/mkvmerge --version | sed -nE 's/^mkvmerge v([0-9]+(\.[0-9]+)+) .*/\1/p'
+  version="$(LC_ALL=C LD_LIBRARY_PATH="${QT66_PREFIX:+$QT66_PREFIX/lib64}" "$directory/mkvmerge" --version | sed -nE 's/^mkvmerge v([0-9]+(\.[0-9]+)+) .*/\1/p')" || return 1
+  [[ -n "$version" ]] || return 1
+  if "$package_build"; then
+    for tool in mkvinfo mkvpropedit mkvextract; do
+      output="$(LC_ALL=C LD_LIBRARY_PATH="$QT66_PREFIX/lib64" "$directory/$tool" --version)" || return 1
+      [[ "$output " == "$tool v$version "* ]] || return 1
+    done
+  fi
+  printf '%s\n' "$version"
 }
 
 mkvtoolnix_latest_version() {
@@ -899,31 +863,24 @@ mkvtoolnix_latest_version() {
 }
 
 install_mkvtoolnix() {
-  log "$(msg 'Installing mkvtoolnix / mkvtoolnix-gui' '安装 mkvtoolnix / mkvtoolnix-gui')"
-
-  if "$restore_only"; then
+  if "$package_build"; then
     local version="${MKVTOOLNIX_VERSION:-$(mkvtoolnix_latest_version)}" current_version
     [[ "$version" =~ ^[0-9]+([.][0-9]+)+$ ]] || return 1
     current_version="$(mkvtoolnix_installed_version || true)"
-    if [[ -n "$current_version" ]] && dpkg --compare-versions "$current_version" ge "$version"; then
-      return
+    if [[ -n "$current_version" ]] && dpkg --compare-versions "$current_version" gt "$version"; then
+      version="$current_version"
     fi
-    cached_linux_build mkvtoolnix build_mkvtoolnix system "$version ${QMAKE6:-qmake6} $qt_cache_abi" \
-      /usr/bin/{mkvinfo,mkvmerge,mkvpropedit,mkvextract,mkvtoolnix-gui} -- "$version"
+    cached_linux_build mkvtoolnix build_mkvtoolnix files "$version $qt_cache_abi" \
+      "$MKVTOOLNIX_PATH"/{mkvinfo,mkvmerge,mkvpropedit,mkvextract} -- "$version"
     return
   fi
 
+  log "$(msg 'Installing mkvtoolnix / mkvtoolnix-gui' '安装 mkvtoolnix / mkvtoolnix-gui')"
   local entry
   local -a repositories=()
-  if [[ "$LINUX_DISTRO_ID" == "linuxmint" && "$APT_BASE_CODENAME" == "noble" && "$APT_ARCH" == amd64 ]]; then
-    # Linux Mint 22.x shares the Wilma repository across point releases.
-    repositories+=("https://mkvtoolnix.download/linuxmint wilma")
-  fi
   case "$APT_BASE_CODENAME" in
-    jammy | kinetic | lunar | mantic | noble | oracular | plucky | questing | resolute | stonking)
-      repositories+=("https://mkvtoolnix.download/ubuntu $APT_BASE_CODENAME")
-      ;;
-    bookworm | trixie) repositories+=("https://mkvtoolnix.download/debian $APT_BASE_CODENAME") ;;
+    noble|resolute|stonking) repositories+=("https://mkvtoolnix.download/ubuntu $APT_BASE_CODENAME") ;;
+    bookworm|trixie) repositories+=("https://mkvtoolnix.download/debian $APT_BASE_CODENAME") ;;
   esac
   if (( ${#repositories[@]} > 0 )); then
     local keyring_path="/etc/apt/keyrings/gpg-pub-moritzbunkus.gpg"
@@ -950,33 +907,12 @@ install_mkvtoolnix() {
     apt_update
   fi
 
-  # The candidate determines which Qt the setup can install, including on a fresh system.
-  local qt_version
-  if ! qt_version="$(LC_ALL=C apt-cache policy qt6-base-dev | awk '$1 == "Candidate:" && $2 != "(none)" { print $2 }')" \
-    || [[ -z "$qt_version" ]]; then
-    die "$(msg 'Failed to determine the Qt 6 version available from APT' '无法确定 APT 可安装的 Qt 6 版本')"
-  fi
-  qt_version="${qt_version#*:}"
-  qt_version="${qt_version%-*}"
-  dpkg --compare-versions "$qt_version" ge "6.2.0" \
-    || die "$(msg "MKVToolNix requires Qt 6.2.0 or later. APT offers Qt ${qt_version}" "MKVToolNix 需要 Qt 6.2.0 或更高版本。APT 提供 Qt ${qt_version}")"
-  log "$(msg "APT offers Qt ${qt_version} for MKVToolNix" "APT 可为 MKVToolNix 安装 Qt ${qt_version}")"
-
-  # MKVToolNix 99 introduced string literals that require Qt 6.4.
-  local qt_compat_version="" version="${MKVTOOLNIX_VERSION:-}" current_version
-  if dpkg --compare-versions "$qt_version" lt "6.4.0"; then
-    qt_compat_version="98.0"
-    version="$qt_compat_version"
-    log "$(msg "Using MKVToolNix ${version} for compatibility with Qt ${qt_version}" "使用 MKVToolNix ${version} 以兼容 Qt ${qt_version}")"
-  elif [[ -z "$version" ]]; then
-    version="$(mkvtoolnix_latest_version)" || version=""
-  fi
+  local version="${MKVTOOLNIX_VERSION:-$(mkvtoolnix_latest_version)}" current_version
   [[ "$version" =~ ^[0-9]+(\.[0-9]+)+$ ]] \
     || die "$(msg 'Failed to determine the MKVToolNix release version' '无法确定 MKVToolNix 发布版本')"
 
   current_version="$(mkvtoolnix_installed_version || true)"
-  if [[ -n "$current_version" ]] && dpkg --compare-versions "$current_version" ge "$version" \
-    && [[ -z "$qt_compat_version" || "$current_version" == "$version" ]]; then
+  if [[ -n "$current_version" ]] && dpkg --compare-versions "$current_version" ge "$version"; then
     log "$(msg "Installed MKVToolNix ${current_version} satisfies the requested version ${version}" "已安装的 MKVToolNix ${current_version} 满足所需版本 ${version}")"
     return 0
   fi
@@ -1009,7 +945,20 @@ install_mkvtoolnix() {
 build_mkvtoolnix() {
   local version="$1"
   if [[ "$(mkvtoolnix_installed_version)" == "$version" ]]; then
+    log "$(msg "MKVToolNix $version is already installed, skipping build" "MKVToolNix $version 已安装，跳过编译")"
     return
+  fi
+  if "$package_build"; then
+    # Older Build runs installed these four QtCore clients under the SDK recipe hash.
+    local previous previous_lib
+    for previous in "${MKVTOOLNIX_PATH%/*/*}"/qt66-"$(uname -m)"-*; do
+      previous_lib="$BLURAY_SETUP_CACHE_DIR/${previous##*/}/usr/lib64/libQt6Core.so.6"
+      [[ -x "$previous/bin/mkvmerge" ]] && cmp -s "$previous_lib" "$QT66_PREFIX/lib64/libQt6Core.so.6" || continue
+      [[ "$(mkvtoolnix_installed_version "$previous/bin")" == "$version" ]] || continue
+      log "$(msg "Reusing MKVToolNix $version from the previous Qt SDK" "复用旧 Qt SDK 构建的 MKVToolNix $version")"
+      install -m 0755 "$previous"/bin/{mkvinfo,mkvmerge,mkvpropedit,mkvextract} "$MKVTOOLNIX_PATH/" || return $?
+      return 0
+    done
   fi
   require_native_build MKVToolNix
   log "$(msg "Building MKVToolNix ${version} from source" "从源码编译 MKVToolNix ${version}")"
@@ -1022,24 +971,20 @@ build_mkvtoolnix() {
   done
 
   log "$(msg 'Installing build dependencies' '安装编译所需基础工具')"
+  local -a qt_deps=()
+  if ! "$package_build"; then qt_deps=(libqt6svg6-dev qt6-base-dev qt6-base-dev-tools qt6-multimedia-dev); fi
   # Boost.System headers are in libboost-dev; Boost >= 1.89 has no separate library.
   apt_install build-essential docbook-xsl libx11-xcb-dev libglu1-mesa-dev \
   libboost-date-time-dev libboost-dev libboost-filesystem-dev libboost-math-dev libboost-regex-dev \
   libbz2-dev libcmark-dev libdvdread-dev libflac-dev libfmt-dev libgmp-dev libgtest-dev liblzo2-dev libmagic-dev \
-  libogg-dev libpcre2-8-0 libpcre2-dev libqt6svg6-dev libvorbis-dev \
-  nlohmann-json3-dev pkg-config po4a qt6-base-dev qt6-base-dev-tools qt6-multimedia-dev \
+  libogg-dev libpcre2-8-0 libpcre2-dev libvorbis-dev \
+  nlohmann-json3-dev pkg-config po4a "${qt_deps[@]}" \
   rake ruby xsltproc zlib1g-dev unzip libtool autoconf
 
-  local qmake6_tool="${QMAKE6:-qmake6}" build_qt_version required_qt="6.2.0"
-  if dpkg --compare-versions "$version" ge "99.0"; then
-    required_qt="6.4.0"
-  fi
-  if ! build_qt_version="$(LD_LIBRARY_PATH="" "$qmake6_tool" -query QT_VERSION)" || [[ -z "$build_qt_version" ]]; then
-    die "$(msg 'Failed to determine the Qt version used to build MKVToolNix' '无法确定编译 MKVToolNix 使用的 Qt 版本')"
-  fi
-  dpkg --compare-versions "$build_qt_version" ge "$required_qt" \
-    || die "$(msg "Building MKVToolNix ${version} requires Qt ${required_qt} or later. qmake6 reports Qt ${build_qt_version}" "编译 MKVToolNix ${version} 需要 Qt ${required_qt} 或更高版本。qmake6 检测到 Qt ${build_qt_version}")"
-
+  local qmake6_tool="${QMAKE6:-qmake6}" qt_version
+  qt_version="$(LD_LIBRARY_PATH="${QT66_PREFIX:+$QT66_PREFIX/lib64}" "$qmake6_tool" -query QT_VERSION)" \
+    && dpkg --compare-versions "$qt_version" ge 6.4.0 \
+    || die "$(msg 'MKVToolNix needs qmake from Qt 6.4 or later' 'MKVToolNix 需要 Qt 6.4 或更高版本的 qmake')"
   local build_dir
   build_dir="$(bluray_mktemp_dir)"
 
@@ -1062,18 +1007,31 @@ build_mkvtoolnix() {
     export PKG_CONFIG_PATH="/usr/lib/$LINUX_MULTIARCH/pkgconfig:/usr/share/pkgconfig"
     export LDFLAGS="-L/usr/lib/$LINUX_MULTIARCH -Wl,-rpath-link,/usr/lib/$LINUX_MULTIARCH"
 
-    log "$(msg 'Configuring mkvtoolnix with GUI support' '配置启用 GUI 的 mkvtoolnix')"
+    local gui_option=--enable-gui
+    if "$package_build"; then
+      gui_option=--disable-gui
+      export PKG_CONFIG_PATH="$QT66_PREFIX/lib64/pkgconfig:$PKG_CONFIG_PATH"
+      export LD_LIBRARY_PATH="$QT66_PREFIX/lib64"
+      export LDFLAGS="-L$QT66_PREFIX/lib64 -Wl,-rpath-link,$QT66_PREFIX/lib64 $LDFLAGS"
+    fi
+    log "$(msg 'Configuring MKVToolNix' '正在配置 MKVToolNix')"
     ./configure \
       --prefix=/usr \
       --docdir='${datarootdir}/doc/mkvtoolnix-gui' \
       --with-qmake6="$qmake6_tool" \
-      --enable-gui \
+      "$gui_option" \
       --enable-optimization || exit 1
 
     log "$(msg 'Building mkvtoolnix with Rake' '使用 Rake 编译 mkvtoolnix')"
+    if "$package_build"; then
+      # The default target includes GUI unit tests when GoogleTest is present.
+      tmux_run "mkvtoolnix CLI build" ./drake -j"$(nproc)" apps:cli || exit 1
+      install -s -m 0755 src/{mkvinfo,mkvmerge,mkvpropedit,mkvextract} "$MKVTOOLNIX_PATH/" || exit 1
+      exit 0
+    fi
+
     tmux_run "mkvtoolnix build" ./drake -j"$(nproc)" || exit 1
     ./drake apps:strip || exit 1
-
     if (( ${#installed_deb_packages[@]} > 0 )); then
       log "$(msg "Removing installed mkvtoolnix deb packages: ${installed_deb_packages[*]}" "正在卸载已安装的 mkvtoolnix deb 软件包：${installed_deb_packages[*]}")"
       tmux_run "apt-get remove ${installed_deb_packages[*]}" \
@@ -1384,55 +1342,6 @@ install_hdr10plus_tool() {
 }
 
 # ---------------------------------------------------------------------------
-# dav1d (for FFmpeg --enable-libdav1d)
-# ---------------------------------------------------------------------------
-
-ensure_dav1d_for_mpv() {
-  log "$(msg 'Checking dav1d (FFmpeg requires >= 1.0.0)' '检查 dav1d（FFmpeg 需要 >= 1.0.0）')"
-
-  local pc_extra="/usr/local/lib/$LINUX_MULTIARCH/pkgconfig:/usr/local/lib/pkgconfig"
-  local mod=""
-  if PKG_CONFIG_PATH="${pc_extra}:${PKG_CONFIG_PATH:-}" pkg-config --exists dav1d 2>/dev/null; then
-    mod="$(PKG_CONFIG_PATH="${pc_extra}:${PKG_CONFIG_PATH:-}" pkg-config --modversion dav1d 2>/dev/null | head -n 1 || true)"
-  fi
-  if [[ -n "${mod:-}" ]] && dpkg --compare-versions "${mod}" ge "1.0.0" 2>/dev/null; then
-    log "$(msg "dav1d satisfied (${mod} >= 1.0.0), skipping source build" "dav1d 已满足（${mod} >= 1.0.0），跳过源码编译")"
-    return 0
-  fi
-
-  log "$(msg "dav1d missing or too old (${mod:-none} < 1.0.0), building from VideoLAN release sources" "dav1d 缺失或版本过低（${mod:-无} < 1.0.0），将从 VideoLAN 发布的源码编译安装")"
-
-  command -v meson >/dev/null 2>&1 || die "$(msg 'meson is required to build dav1d' '编译 dav1d 需要 meson')"
-  command -v ninja >/dev/null 2>&1 || die "$(msg 'ninja is required to build dav1d' '编译 dav1d 需要 ninja')"
-
-  local build_dir dav1d_version
-  dav1d_version="$(latest_stable_tag https://code.videolan.org/videolan/dav1d.git '^[0-9]+([.][0-9]+)+$')"
-  build_dir="$(mktemp -d)"
-
-  (
-    cd "$build_dir" || exit 1
-    download_source_archive "dav1d ${dav1d_version}" \
-      "https://download.videolan.org/pub/videolan/dav1d/${dav1d_version}/dav1d-${dav1d_version}.tar.xz" dav1d || exit 1
-    cd dav1d || exit 1
-    tmux_run "$(msg 'dav1d meson setup' 'dav1d meson 配置')" meson setup build --buildtype release -Ddefault_library=static || exit 1
-    tmux_run "$(msg 'dav1d ninja build' 'dav1d ninja 构建')" ninja -C build || exit 1
-    tmux_run "$(msg 'dav1d ninja install' 'dav1d 安装')" sudo ninja -C build install || exit 1
-    tmux_run "ldconfig" sudo ldconfig || exit 1
-  ) || die "$(msg 'dav1d build/install failed' 'dav1d 编译/安装失败')"
-
-  rm -rf "$build_dir"
-
-  mod=""
-  if PKG_CONFIG_PATH="${pc_extra}:${PKG_CONFIG_PATH:-}" pkg-config --exists dav1d 2>/dev/null; then
-    mod="$(PKG_CONFIG_PATH="${pc_extra}:${PKG_CONFIG_PATH:-}" pkg-config --modversion dav1d 2>/dev/null | head -n 1 || true)"
-  fi
-  if [[ -z "${mod:-}" ]] || ! dpkg --compare-versions "${mod}" ge "1.0.0" 2>/dev/null; then
-    die "$(msg "dav1d install verification failed (pkg-config modversion: ${mod:-none})" "dav1d 安装后校验失败（pkg-config 模块版本：${mod:-无}）")"
-  fi
-  log "$(msg "dav1d from source ready (${mod})" "dav1d 源码安装完成（${mod}）")"
-}
-
-# ---------------------------------------------------------------------------
 # mpv + FFmpeg / FFprobe
 # ---------------------------------------------------------------------------
 
@@ -1484,8 +1393,10 @@ __mpv_tools_share_ffmpeg() {
 }
 
 __mpv_tools_have_vulkan() {
-  local apis hwaccels
-  apis="$("$1" --no-config --gpu-api=help)" &&
+  local drivers apis hwaccels
+  drivers="$("$1" --no-config --vo=help)" &&
+    grep -Eq '^[[:space:]]*gpu-next([[:space:]]|$)' <<< "$drivers" &&
+    apis="$("$1" --no-config --gpu-api=help)" &&
     grep -Eq '^[[:space:]]*vulkan([[:space:]]|$)' <<< "$apis" &&
     hwaccels="$("$FFMPEG_PATH" -hide_banner -hwaccels)" &&
     grep -Fxq vulkan <<< "$hwaccels"
@@ -1494,14 +1405,11 @@ __mpv_tools_have_vulkan() {
 install_mpv() {
   log "$(msg 'Installing mpv with VapourSynth and stable FFmpeg / FFprobe' '安装支持 VapourSynth 的 mpv 与稳定版 FFmpeg / FFprobe')"
 
-  local required_mpv_version="0.41.0" shared_ffmpeg_dir=/usr/local/lib/bluraysubtitle-ffmpeg
+  local mpv_tag required_mpv_version shared_ffmpeg_dir=/usr/local/lib/bluraysubtitle-ffmpeg
+  mpv_tag="$(latest_stable_tag https://github.com/mpv-player/mpv.git '^v[0-9]+([.][0-9]+)+$' 'v*')" || return $?
+  required_mpv_version="${mpv_tag#v}"
   local mpv_executable=mpv
-  if "$package_build"; then
-    required_mpv_version="$(latest_stable_tag https://github.com/mpv-player/mpv.git '^v[0-9]+([.][0-9]+)+$' 'v*')"
-    required_mpv_version="${required_mpv_version#v}"
-  else
-    mpv_executable="${MPV_PATH:-mpv}"
-  fi
+  if ! "$package_build"; then mpv_executable="${MPV_PATH:-mpv}"; fi
   local ffmpeg_tag target_ffmpeg_version installed_ffmpeg_version installed_ffprobe_version ffmpeg_is_current="false"
   ffmpeg_tag="$(latest_stable_tag "$FFMPEG_SOURCE_REPOSITORY" '^n[0-9]+([.][0-9]+)+$' 'n*')"
   target_ffmpeg_version="${ffmpeg_tag#n}"
@@ -1520,9 +1428,8 @@ install_mpv() {
     current_mpv_version="$("$installed_mpv" --version 2>/dev/null | head -n 1 | grep -oP 'mpv\s+v?\K[0-9]+(\.[0-9]+){1,2}' || true)"
     if [[ -n "${current_mpv_version:-}" ]] && dpkg --compare-versions "$current_mpv_version" ge "$required_mpv_version"; then
       if [[ "$ffmpeg_is_current" == "true" ]] \
-        && { ! "$package_build" || {
-          __mpv_tools_share_ffmpeg "$shared_ffmpeg_dir" "$installed_mpv" && __mpv_tools_have_vulkan "$installed_mpv"
-        }; } \
+        && __mpv_tools_have_vulkan "$installed_mpv" \
+        && { ! "$package_build" || __mpv_tools_share_ffmpeg "$shared_ffmpeg_dir" "$installed_mpv"; } \
         && "$installed_mpv" --no-config --list-properties | grep -E '^[[:space:]]+default-menu$' >/dev/null \
         && test_mpv_vapoursynth "$installed_mpv"; then
         if ! "$package_build" && ! has_libdovi_development; then
@@ -1557,13 +1464,10 @@ install_mpv() {
     automake libtool wayland-protocols libmujs-dev libbluray-dev
     libunwind-dev libxrandr-dev libxpresent-dev libxss-dev libdvdnav-dev
     libdvdread-dev libzimg-dev libarchive-dev librubberband-dev libsdl2-dev
-    libdrm-dev libgbm-dev curl xz-utils
+    libdrm-dev libgbm-dev libgnutls28-dev libvulkan-dev spirv-headers python3-docutils curl xz-utils
   )
   if [[ "$APT_ARCH" == amd64 ]]; then
     mpv_deps+=(yasm nasm)
-  fi
-  if "$package_build"; then
-    mpv_deps+=(libgnutls28-dev libvulkan-dev spirv-headers)
   fi
 
   local missing_deps=()
@@ -1580,30 +1484,8 @@ install_mpv() {
   local pkg_config_path="/usr/local/lib/$LINUX_MULTIARCH/pkgconfig:/usr/local/lib/pkgconfig:$HOME/.local/lib/pkgconfig:$HOME/.local/lib/$LINUX_MULTIARCH/pkgconfig:${PKG_CONFIG_PATH:-}"
   PKG_CONFIG_PATH="$pkg_config_path" install_shaderc
 
-  # The build and sudo install must use Meson without user-site packages.
-  export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"
-  local system_meson_version
-  system_meson_version="$(PYTHONNOUSERSITE=1 meson --version 2>/dev/null || true)"
-  if ! dpkg --compare-versions "$system_meson_version" ge "$MESON_MIN_VERSION"; then
-    if ! sudo python3 -m pip --version >/dev/null 2>&1; then
-      apt_update
-      apt_install python3-pip || die "$(msg 'Failed to install python3-pip (root environment)' '安装 python3-pip 失败（root 环境）')"
-    fi
-    if ! sudo env "PIP_CACHE_DIR=$PIP_CACHE_DIR" PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade -q --progress-bar off meson --break-system-packages >/dev/null 2>&1; then
-      log "$(msg 'pip in root env does not support --break-system-packages, retrying with compatible flags' 'root 环境 pip 不支持 --break-system-packages，回退到兼容参数重试')"
-      sudo env "PIP_CACHE_DIR=$PIP_CACHE_DIR" PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --upgrade -q --progress-bar off meson >/dev/null 2>&1 || die "$(msg 'Failed to upgrade meson in root environment' 'root 环境升级 meson 失败')"
-    fi
-    export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"
-    if ! system_meson_version="$(PYTHONNOUSERSITE=1 meson --version)" \
-      || ! dpkg --compare-versions "$system_meson_version" ge "$MESON_MIN_VERSION"; then
-      die "$(msg "System Meson must be at least ${MESON_MIN_VERSION} to build and install mpv" "编译和安装 mpv 需要至少 ${MESON_MIN_VERSION} 版本的系统 Meson")"
-    fi
-  fi
-
-  PYTHONNOUSERSITE=1 ensure_dav1d_for_mpv
-
-  local build_dir mpv_tag libass_tag libplacebo_tag
-  mpv_tag="$(latest_stable_tag https://github.com/mpv-player/mpv.git '^v[0-9]+([.][0-9]+)+$' 'v*')"
+  require_meson_version
+  local build_dir libass_tag libplacebo_tag
   libass_tag="$(latest_stable_tag https://github.com/libass/libass.git '^[0-9]+([.][0-9]+)+$')"
   libplacebo_tag="$(latest_stable_tag https://github.com/haasn/libplacebo.git '^v[0-9]+([.][0-9]+)+$' 'v*')"
   build_dir="$(bluray_mktemp_dir)"
@@ -1634,23 +1516,8 @@ install_mpv() {
       export LD_LIBRARY_PATH="$PWD/build_libs/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     fi
     printf '%s\n' "${MPV_OPTIONS[@]}" > mpv_options || exit 1
-    # Older rst2man versions cannot accept the --output argument used by mpv.
-    local rst2man_path
-    rst2man_path="$(command -v rst2man || command -v rst2man.py || true)"
-    if [[ -n "$rst2man_path" ]] && ! PYTHONNOUSERSITE=1 "$rst2man_path" --help \
-        | grep -E -- '(^|[[:space:]])--output([=[:space:]]|$)' >/dev/null; then
-      echo "-Dmanpage-build=disabled" >> mpv_options || exit 1
-    fi
-    if "$package_build"; then
-      printf '%s\n' "$MPV_VULKAN_OPTION" > libplacebo_options || exit 1
-      printf '%s\n' "$MPV_VULKAN_OPTION" >> mpv_options || exit 1
-    # libplacebo's public FFmpeg helpers expose Vulkan declarations to mpv.
-    elif ! cc -std=c11 -I "$PWD/ffmpeg" -x c -fsyntax-only - 2>/dev/null <<'C'; then
-#include <libavutil/hwcontext_vulkan.h>
-C
-      log "$(msg 'System Vulkan headers cannot compile the FFmpeg Vulkan interface. Disabling Vulkan in the libplacebo build for mpv.' '系统 Vulkan 头文件无法编译 FFmpeg 的 Vulkan 接口，将禁用 mpv 内置 libplacebo 的 Vulkan 支持。')"
-      echo "-Dvulkan=disabled" > libplacebo_options || exit 1
-    fi
+    printf '%s\n' "$MPV_VULKAN_OPTION" > libplacebo_options || exit 1
+    printf '%s\n' "$MPV_VULKAN_OPTION" >> mpv_options || exit 1
 
     export PKG_CONFIG_PATH="$pkg_config_path"
     export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"
@@ -1693,7 +1560,7 @@ C
   if "$package_build" && ! __mpv_tools_share_ffmpeg "$shared_ffmpeg_dir" "$(command -v mpv)"; then
     die "$(msg 'mpv, FFmpeg and FFprobe did not link to the shared FFmpeg runtime' 'mpv、FFmpeg 或 FFprobe 未链接到同一套 FFmpeg 运行库')"
   fi
-  if "$package_build" && ! __mpv_tools_have_vulkan "$mpv_executable"; then
+  if ! __mpv_tools_have_vulkan "$mpv_executable"; then
     die "$(msg 'The installed mpv and FFmpeg must both support Vulkan' '安装后的 mpv 和 FFmpeg 必须均支持 Vulkan')"
   fi
   rm -rf "$build_dir"
@@ -1711,6 +1578,7 @@ build_mpv_uosc_archive() (
   download_url "https://raw.githubusercontent.com/tomasklaen/uosc/$tag/LICENSE.LGPL" "$bundle/LICENSE.LGPL" || return
   if [[ "$APT_ARCH" == arm64 ]]; then
     # Rebuild Ziggy from the same tag as the installed uosc release.
+    require_native_build "uosc Ziggy"
     local go_release go_archive go_checksum
     go_release="$(curl -fsSL --retry 4 --connect-timeout 20 --max-time 45 'https://go.dev/dl/?mode=json' | python3 -c '
 import json
@@ -2106,18 +1974,16 @@ install_x264() {
   read -r x264_repository x264_commit <<< "$x264_source"
   log "$(msg "Installing x264 master at ${x264_commit}" "安装 x264 master 提交 ${x264_commit}")"
 
-  local version_file="$X264_VERSION_FILE"
-  local installed_commit=""
-  if [[ -x "$X264_PATH" && -f "$version_file" ]]; then
-    installed_commit="$(tr -d '\r\n' < "$version_file")"
-  fi
-  if [[ "$installed_commit" == "$x264_commit" ]] && "$X264_PATH" --version >/dev/null 2>&1; then
+  local version_file="$X264_VERSION_FILE" installed_build="" expected_build
+  expected_build="$x264_commit ${X264_CONFIGURE_OPTIONS[*]}"
+  if [[ -x "$X264_PATH" && -f "$version_file" ]]; then IFS= read -r installed_build < "$version_file" || true; fi
+  if [[ "$installed_build" == "$expected_build" ]] && "$X264_PATH" --version | grep -F '(libavformat ' >/dev/null; then
     log "$(msg 'The latest x264 master is already installed; skipping build.' '已安装最新 x264 master，跳过编译。')"
     return 0
   fi
   require_native_build x264
 
-  local deps=(build-essential git)
+  local deps=(build-essential git pkg-config libavformat-dev libavcodec-dev libavutil-dev libswscale-dev)
   if [[ "$APT_ARCH" == amd64 ]]; then
     deps+=(nasm)
   fi
@@ -2147,20 +2013,17 @@ install_x264() {
     cd "$build_dir" || exit 1
     download_source_archive "x264 ${x264_commit:0:7}" "$archive_url" x264 "$mirror_url" || exit 1
     cd x264 || exit 1
-    local -a x264_configure_args=("${X264_CONFIGURE_OPTIONS[@]}")
-    local libavutil_major=""
-    libavutil_major="$(pkg-config --modversion libavutil 2>/dev/null | cut -d. -f1 || true)"
-    if [[ "$libavutil_major" =~ ^[0-9]+$ ]] \
-        && (( libavutil_major >= 60 )) \
-        && { ! grep -Fq AV_FRAME_FLAG_INTERLACED input/lavf.c \
-             || ! grep -Fq AV_FRAME_FLAG_TOP_FIELD_FIRST input/lavf.c; }; then
-      x264_configure_args+=(--disable-lavf)
+    # FFmpeg 7+ exposes interlacing through AVFrame.flags.
+    sed -i -e 's/h->frame->interlaced_frame/!!(h->frame->flags \& AV_FRAME_FLAG_INTERLACED)/g' \
+           -e 's/h->frame->top_field_first/!!(h->frame->flags \& AV_FRAME_FLAG_TOP_FIELD_FIRST)/g' input/lavf.c || exit 1
+    tmux_run "x264 configure" ./configure "${X264_CONFIGURE_OPTIONS[@]}" || exit 1
+    if ! grep -Fxq '#define HAVE_LAVF 1' config.h || ! grep -Eq '^#define HAVE_OPENCL (1|\(BIT_DEPTH==8\))$' config.h; then
+      die "$(msg 'x264 configuration requires libavformat input and 8-bit OpenCL support' 'x264 配置必须启用 libavformat 输入和 8-bit OpenCL 支持')"
     fi
-    tmux_run "x264 configure" ./configure "${x264_configure_args[@]}" || exit 1
     tmux_run "x264 make" make -j"$(nproc)" || exit 1
     install_configured_executable x264 "$X264_PATH" || exit 1
     bluray_sudo mkdir -p "$(dirname -- "$version_file")" || exit 1
-    printf '%s\n' "$x264_commit" | bluray_sudo tee "$version_file" >/dev/null || exit 1
+    printf '%s\n' "$expected_build" | bluray_sudo tee "$version_file" >/dev/null || exit 1
   ) || die "$(msg 'x264 build/install failed' 'x264 编译/安装失败')"
 
   rm -rf "$build_dir"
@@ -2187,7 +2050,7 @@ install_svt_av1() {
   installed_version="$(__installed_svt_av1_version | head -n 1 || true)"
 
   if [[ -n "$installed_version" ]] && dpkg --compare-versions "$installed_version" ge "$target_version" &&
-      { ! "$package_build" || portable_build_matches "$SVT_AV1_PATH"; }; then
+      { ! "$package_build" || installed_artifact_matches "$SVT_AV1_PATH" portable; }; then
     log "$(msg "SvtAv1EncApp is current (${installed_version} >= ${target_version}), skipping build" "SvtAv1EncApp 已是当前版本（${installed_version} >= ${target_version}），跳过编译")"
     return 0
   fi
@@ -2465,46 +2328,38 @@ install_flac() {
 # ---------------------------------------------------------------------------
 
 VAPOURSYNTH_TAG="R79"
-VAPOURSYNTH_PYTHON="/usr/bin/python3"
+VAPOURSYNTH_PYTHON=""
 
 select_vapoursynth_python() {
-  if "$VAPOURSYNTH_PYTHON" -c 'import sys; sys.exit(sys.version_info < (3, 12))'; then
-    return
-  fi
-
   local data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
   [[ "$data_home" == /* ]] || data_home="$HOME/.local/share"
-  local runtime="$data_home/bluraysubtitle/python"
-  VAPOURSYNTH_PYTHON="$runtime/bin/python"
-  if ! "$VAPOURSYNTH_PYTHON" -I -m pip --version >/dev/null 2>&1; then
-    log "$(msg 'Installing Python 3.12 for BluraySubtitle and VapourSynth R79' '正在为 BluraySubtitle 和 VapourSynth R79 安装 Python 3.12')"
-    local work
-    work="$(bluray_mktemp_dir)"
-    /usr/bin/python3 -m venv "$work/tools"
-    "$work/tools/bin/python" -m pip install --disable-pip-version-check --only-binary=:all: uv
-    UV_PYTHON_INSTALL_DIR="${runtime%/*}/interpreters" "$work/tools/bin/uv" venv \
-      --python 3.12 --managed-python --seed "$runtime"
-    rm -rf -- "$work"
+  local base="$data_home/bluraysubtitle" uv version runtime
+  mkdir -p -- "$base"
+  if ! "$base/uv/bin/python" -Im pip --version >/dev/null 2>&1; then
+    /usr/bin/python3 -m venv "$base/uv"
   fi
+  "$base/uv/bin/python" -m pip install --upgrade --only-binary=:all: uv
+  uv="$base/uv/bin/uv"
+  export UV_PYTHON_INSTALL_DIR="$base/interpreters" UV_PYTHON_BIN_DIR="$base/bin"
+  local -a python_cache=()
+  if "$package_build"; then
+    export UV_CACHE_DIR="$PIP_CACHE_DIR/uv"
+    python_cache=("$BLURAY_SETUP_CACHE_DIR/downloads/cpython")
+  fi
+  version="$(/usr/bin/python3 -B "$SETUP_ROOT/tools/install_linux_python.py" "$uv" "${python_cache[@]}")"
+  runtime="$base/python-$version-$APT_ARCH"
+  if [[ ! -x "$runtime/bin/python" ]]; then
+    "$uv" venv --managed-python --python "$version" --seed "$runtime"
+  elif ! "$runtime/bin/python" -Im pip --version >/dev/null 2>&1; then
+    "$uv" pip install --python "$runtime/bin/python" --only-binary=:all: pip
+  fi
+  VAPOURSYNTH_PYTHON="$runtime/bin/python"
 }
 
 install_vapoursynth() {
   local package_dir sdk_dir=/usr/local/include/vapoursynth build_dir wrapper
-  local -a pip=("$VAPOURSYNTH_PYTHON" -m pip)
   if ! "$VAPOURSYNTH_PYTHON" -I -c 'import vapoursynth as vs; assert vs.core.core_version.release_major == 79' >/dev/null 2>&1; then
-    log "$(msg "Installing upstream VapourSynth $VAPOURSYNTH_TAG" "安装上游 VapourSynth $VAPOURSYNTH_TAG")"
-    if [[ "$VAPOURSYNTH_PYTHON" == "/usr/bin/python3" ]]; then
-      local system_pip_cache="$PIP_CACHE_DIR/system"
-      sudo mkdir -p -- "$system_pip_cache"
-      sudo chown -R -- 0:0 "$system_pip_cache"
-      pip=(sudo -H env "PIP_CACHE_DIR=$system_pip_cache" "${pip[@]}")
-    fi
-    local -a pip_options=()
-    if "${pip[@]}" install --help | grep -F -- '--break-system-packages' >/dev/null; then
-      pip_options+=(--break-system-packages)
-    fi
-    "${pip[@]}" install --disable-pip-version-check --upgrade --only-binary=:all: \
-      "${pip_options[@]}" "VapourSynth==${VAPOURSYNTH_TAG#R}"
+    "$VAPOURSYNTH_PYTHON" -m pip install --disable-pip-version-check --only-binary=:all: "VapourSynth==${VAPOURSYNTH_TAG#R}"
   fi
 
   package_dir="$("$VAPOURSYNTH_PYTHON" -I -c 'import vapoursynth as vs; from pathlib import Path; print(Path(vs.__file__).parent)')"
@@ -2715,20 +2570,9 @@ ensure_modern_7zip_cli() {
 # ---------------------------------------------------------------------------
 
 install_vapoursynth_scripts() {
-  local py_ver
-  py_ver="$("$VAPOURSYNTH_PYTHON" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
-  local dst_dir="/usr/local/lib/python${py_ver}/dist-packages"
-
-  local installer="$(dirname -- "$BLURAY_SETUP_SOURCE")/tools/install_vapoursynth_scripts.py"
-  log "$(msg 'Synchronizing repository-managed VapourSynth scripts and copyright notices' '同步仓库中的 VapourSynth 脚本和版权说明')"
-  if [[ "$VAPOURSYNTH_PYTHON" != "/usr/bin/python3" ]]; then
-    dst_dir="$("$VAPOURSYNTH_PYTHON" -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
-    "$VAPOURSYNTH_PYTHON" "$installer" --destination "$dst_dir" \
-      || die "$(msg 'Failed to install repository-managed VapourSynth scripts' '安装仓库中的 VapourSynth 脚本失败')"
-    return
-  fi
-  bluray_sudo "$VAPOURSYNTH_PYTHON" "$installer" --destination "$dst_dir" || die "$(msg 'Failed to install repository-managed VapourSynth scripts' '安装仓库中的 VapourSynth 脚本失败')"
-  log "$(msg "VapourSynth scripts and notices verified at ${dst_dir}" "已校验 ${dst_dir} 中的 VapourSynth 脚本和版权说明")"
+  local scripts_dir
+  scripts_dir="$("$VAPOURSYNTH_PYTHON" -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
+  "$VAPOURSYNTH_PYTHON" "$SETUP_ROOT/tools/install_vapoursynth_scripts.py" --destination "$scripts_dir"
 }
 
 # ---------------------------------------------------------------------------
@@ -2736,6 +2580,7 @@ install_vapoursynth_scripts() {
 # ---------------------------------------------------------------------------
 
 write_vsedit_launcher() {
+  if "$package_build"; then return; fi
   local wrapper
   wrapper="$(mktemp)"
   printf '#!/usr/bin/env bash\nexport VSSCRIPT_PATH=%q\nexport VAPOURSYNTH_EXTRA_PLUGIN_PATH=%q\nexec %q "$@"\n' \
@@ -2748,11 +2593,9 @@ install_vapoursynth_editor() {
   local vsedit_tag target_version installed_tag=""
   vsedit_tag="${VSEDIT_TAG:-$(latest_stable_tag "$VSEDIT_SOURCE_REPOSITORY" '^[rR][0-9]+-mod-[0-9]+([.][0-9]+)*$')}"
   target_version="${vsedit_tag#[rR]}"
-  log "$(msg "Installing VapourSynth Editor ${vsedit_tag} (build from source)" "安装 VapourSynth Editor ${vsedit_tag}（从源码编译并安装）")"
-
   if [[ -x "$VSEDIT_BINARY_PATH" ]]; then
     local installed_output
-    installed_output="$("$VSEDIT_BINARY_PATH" --version 2>&1 || true)"
+    installed_output="$(LD_LIBRARY_PATH="${QT66_PREFIX:+$QT66_PREFIX/lib64}" "$VSEDIT_BINARY_PATH" --version 2>&1 || true)"
     installed_tag="$(sed -nE 's/^VapourSynth Editor ([rR][0-9]+-mod-[0-9]+([.][0-9]+)*).*$/\1/p' <<<"$installed_output")"
     if [[ -n "$installed_tag" ]] && dpkg --compare-versions "${installed_tag#[rR]}" ge "$target_version"; then
       log "$(msg "vsedit is current (${installed_tag} >= ${vsedit_tag}), skipping build" "vsedit 已是当前版本（${installed_tag} >= ${vsedit_tag}），跳过编译")"
@@ -2761,15 +2604,14 @@ install_vapoursynth_editor() {
     fi
   fi
   require_native_build VSEdit
+  log "$(msg "Installing VapourSynth Editor ${vsedit_tag} (build from source)" "安装 VapourSynth Editor ${vsedit_tag}（从源码编译并安装）")"
 
-  local qt_compat_dev=qt6-5compat-dev qt_websockets_dev=qt6-websockets-dev
-  if ! apt-get -s install "$qt_compat_dev" >/dev/null 2>&1; then
-    qt_compat_dev=libqt6core5compat6-dev
+  local -a deps=(build-essential libgl-dev wget tar)
+  if "$package_build"; then
+    deps+=(libglx-dev libopengl-dev)
+  else
+    deps+=(qt6-base-dev qt6-base-dev-tools qt6-5compat-dev qt6-websockets-dev qt6-declarative-dev)
   fi
-  if ! apt-get -s install "$qt_websockets_dev" >/dev/null 2>&1; then
-    qt_websockets_dev=libqt6websockets6-dev
-  fi
-  local deps=(qt6-base-dev qt6-base-dev-tools "$qt_compat_dev" "$qt_websockets_dev" qt6-declarative-dev libgl-dev wget tar)
 
   local missing_deps=()
   for dep in "${deps[@]}"; do
@@ -2797,11 +2639,11 @@ install_vapoursynth_editor() {
     tmux_run "$(msg 'Extract vsedit source' '解压 vsedit 源码包')" tar -zxvf vsedit.tar.gz --strip-components=1 || exit 1
     sudo ldconfig
 
-    if [[ -f "resources/vsedit.png" ]]; then
+    if ! "$package_build" && [[ -f "resources/vsedit.png" ]]; then
       sudo mkdir -p /usr/local/share/icons/hicolor/256x256/apps
       sudo cp -f "resources/vsedit.png" /usr/local/share/icons/hicolor/256x256/apps/vsedit.png || exit 1
     fi
-    if [[ -f "resources/vsedit.svg" ]]; then
+    if ! "$package_build" && [[ -f "resources/vsedit.svg" ]]; then
       sudo mkdir -p /usr/local/share/icons/hicolor/scalable/apps
       sudo cp -f "resources/vsedit.svg" /usr/local/share/icons/hicolor/scalable/apps/vsedit.svg || exit 1
     fi
@@ -2813,7 +2655,14 @@ install_vapoursynth_editor() {
     export LD_LIBRARY_PATH=/usr/local/lib:/usr/lib:/lib
 
     log "$(msg 'Configuring and building vsedit (qmake6)' '配置并编译 vsedit (qmake6)')"
-    qmake6 pro.pro CONFIG+=release 2>&1 | sed '/^Info: creating stash file /d' || exit 1
+    local project=pro.pro
+    if "$package_build"; then
+      cd vsedit || exit 1
+      project=vsedit.pro
+      export LD_LIBRARY_PATH="$QT66_PREFIX/lib64:$LD_LIBRARY_PATH"
+      export LIBRARY_PATH="$QT66_PREFIX/lib64:$LIBRARY_PATH"
+    fi
+    "${QMAKE6:-qmake6}" "$project" CONFIG+=release 2>&1 | sed '/^Info: creating stash file /d' || exit 1
     tmux_run "vsedit make" bash -lc "make -j\"$(nproc)\" || make -j1" || exit 1
 
     log "$(msg 'Installing the compiled vsedit executable' '安装编译生成的 vsedit 可执行文件')"
@@ -2827,71 +2676,17 @@ install_vapoursynth_editor() {
     fi
 
     # Copy the real binary as vsedit-bin
-    install_configured_executable "$bin_path" "$VSEDIT_BINARY_PATH" || exit 1
+    if "$package_build"; then
+      install -m 0755 "$bin_path" "$VSEDIT_BINARY_PATH" || exit 1
+    else
+      install_configured_executable "$bin_path" "$VSEDIT_BINARY_PATH" || exit 1
+    fi
 
   ) || die "$(msg "vsedit build/install failed. Build files were kept in ${build_dir}" "vsedit 编译/安装失败。构建文件保留在 ${build_dir}")"
 
   write_vsedit_launcher
   rm -rf "$build_dir"
   log "$(msg 'VapourSynth Editor (vsedit) installation complete' 'vapoursynth-editor (vsedit) 安装完成')"
-}
-
-# ---------------------------------------------------------------------------
-# libplacebo
-# ---------------------------------------------------------------------------
-
-install_libplacebo_latest() {
-    local required_version="6.338.0"
-    if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libplacebo; then
-        local current_version
-        current_version="$(pkg-config --modversion libplacebo 2>/dev/null | head -n 1 || true)"
-        if [[ -n "${current_version:-}" ]] && dpkg --compare-versions "$current_version" ge "$required_version" \
-            && { ! "$package_build" || [[ "$(pkg-config --variable=pl_has_vulkan libplacebo)" == 1 ]]; }; then
-            log "$(msg "libplacebo version satisfied (${current_version} >= ${required_version}), skipping build" "libplacebo 版本满足要求（${current_version} >= ${required_version}），跳过编译")"
-            return 0
-        fi
-        log "$(msg "libplacebo ${current_version:-unknown} does not satisfy the build requirements, rebuilding" "libplacebo ${current_version:-unknown} 不满足构建要求，将重新编译")"
-    elif sudo ldconfig -p 2>/dev/null | grep -qE '\blibplacebo\.so\b'; then
-        log "$(msg 'libplacebo found but version cannot be determined (no pkg-config info), reinstalling to ensure vs-placebo compatibility' '检测到 libplacebo 已存在但无法获取版本（缺少 pkg-config 版本信息），将重装以确保兼容 vs-placebo')"
-    fi
-
-    log "$(msg 'Building libplacebo in isolated mode...' '正在以物理隔离模式编译 libplacebo...')"
-
-    # Ensure environment variables are safe inside the function
-    local py_ver
-    py_ver=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-    local safe_pythonpath="${HOME}/.local/lib/python${py_ver}/site-packages:${PYTHONPATH:-}"
-    install_shaderc
-
-    local build_dir
-    build_dir="$(mktemp -d)"
-    (
-        cd "$build_dir" || exit 1
-        tmux_run "$(msg 'Download libplacebo v6.338.0' '下载 libplacebo v6.338.0')" \
-            download_git_tree https://code.videolan.org/videolan/libplacebo.git v6.338.0 . || exit 1
-
-        rm -rf build
-
-        # Run configuration with safely scoped variables
-        tmux_run "libplacebo meson setup" env PYTHONPATH="$safe_pythonpath" python3 -m mesonbuild.mesonmain setup build \
-            --buildtype release \
-            --prefix /usr/local \
-            -Dshaderc=enabled \
-            -Dvulkan=enabled \
-            -Dtests=false \
-            -Dbench=false \
-            -Ddemos=false || exit 1
-
-        # Build and install
-        tmux_run "libplacebo ninja" env PYTHONPATH="$safe_pythonpath" ninja -C build || exit 1
-        install_component "libplacebo install" env PYTHONPATH="$safe_pythonpath" ninja -C build install || exit 1
-    ) || die "$(msg 'libplacebo build/install failed' 'libplacebo 编译/安装失败')"
-    rm -rf "$build_dir"
-    sudo ldconfig
-
-    if ! command -v pkg-config >/dev/null 2>&1 || ! pkg-config --exists libplacebo; then
-      die "$(msg 'libplacebo installed but not recognized by pkg-config' 'libplacebo 安装后未被 pkg-config 识别')"
-    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -2919,69 +2714,7 @@ install_vs_lsmash_works() (
     download_source_archive "L-SMASH-Works $lsmash_version" "$source_url" L-SMASH-Works || exit 1
     cd L-SMASH-Works/VapourSynth || exit 1
 
-    # Apply FFmpeg compatibility patches (index accessors, D3D12 shim, removed codec IDs).
-    local decode_file="../common/decode.c"
-    if [[ -f "$decode_file" ]]; then
-        python3 - "$avcodec_major" "$LINUX_MULTIARCH" <<'PY' || exit 1
-import re
-import sys
-from pathlib import Path
-
-needs_old_ffmpeg_compat = int(sys.argv[1]) < 60
-
-decode_path = Path("../common/decode.c")
-data = decode_path.read_text(encoding="utf-8", errors="replace")
-data = re.sub(r"^.*AV_PIX_FMT_D3D12\\n.*$", "", data, flags=re.MULTILINE)
-data = re.sub(r"^#ifndef AV_PIX_FMT_D3D12\\n#define AV_PIX_FMT_D3D12 .*?\\n#endif\\n\\n?", "", data, flags=re.MULTILINE)
-
-header_paths = [
-    Path("/usr/include", sys.argv[2], "libavutil/pixfmt.h"),
-    Path("/usr/include/libavutil/pixfmt.h"),
-    Path("/usr/local/include/libavutil/pixfmt.h"),
-]
-header_has_enum = False
-for hp in header_paths:
-    if hp.is_file():
-        txt = hp.read_text(encoding="utf-8", errors="replace")
-        if "AV_PIX_FMT_D3D12" in txt:
-            header_has_enum = True
-            break
-
-if ("AV_PIX_FMT_D3D12" in data) and (not header_has_enum):
-    shim = "\n".join([
-        "#define AV_PIX_FMT_D3D12 AV_PIX_FMT_NONE",
-        "",
-    ])
-    data = shim + data
-decode_path.write_text(data, encoding="utf-8")
-
-libav_path = Path("../common/libavsmash.c")
-if libav_path.is_file():
-    libav_data = libav_path.read_text(encoding="utf-8", errors="replace")
-    v410_line = "        ELSE_IF_GET_CODEC_ID_FROM_CODEC_TYPE(AV_CODEC_ID_V410, QT_CODEC_TYPE_V410_VIDEO);\n"
-    if v410_line in libav_data:
-        libav_data = libav_data.replace(v410_line, "")
-    libav_path.write_text(libav_data, encoding="utf-8")
-
-lwindex_path = Path("../common/lwindex.c")
-if needs_old_ffmpeg_compat and lwindex_path.is_file():
-    lwindex_data = lwindex_path.read_text(encoding="utf-8", errors="replace")
-    compat_block = """/* FFmpeg 4.x exposes index entries directly on AVStream. */
-#if LIBAVFORMAT_VERSION_MAJOR < 59
-#define avformat_index_get_entries_count(stream) ((stream)->nb_index_entries)
-#define avformat_index_get_entry(stream, index) (&(stream)->index_entries[(index)])
-#endif
-
-"""
-    anchor = '#include "osdep.h"\n'
-    if "LIBAVFORMAT_VERSION_MAJOR < 59" not in lwindex_data:
-        if anchor not in lwindex_data:
-            raise RuntimeError("L-SMASH-Works lwindex.c compatibility anchor not found")
-        lwindex_data = lwindex_data.replace(anchor, compat_block + anchor, 1)
-    lwindex_path.write_text(lwindex_data, encoding="utf-8")
-PY
-    fi
-    if (( avcodec_major >= 63 )); then
+    if (( avcodec_major >= 63 )) && grep -Fq 'parser_ctx->parser->split' ../common/lwindex.c; then
       # FFmpeg 9 removes AVCodec.pix_fmts and the legacy parser split callback.
       patch -d .. -p1 --batch --forward --fuzz=0 <<'LSMASH_FFMPEG_PATCH' || exit 1
 diff --git a/common/lwindex.c b/common/lwindex.c
@@ -3124,8 +2857,6 @@ install_vs_addgrain() (
 install_vs_assrender() (
   local build_dir="$1" plugins_dir="$2" tag="${vs_plugin_tags[assrender]}"
   cd "$build_dir" || exit 1
-  # The upstream Linux binary requires GLIBC_2.38, so build from source on the
-  # target system to remain loadable on Ubuntu 22.04 and Debian 12.
   if vs_plugin_needs_upgrade "libassrender.so" "$tag"; then
     require_native_build "ASSRender"
     log "$(msg "Building assrender ($tag)" "编译 assrender ($tag)")"
@@ -3317,26 +3048,41 @@ install_vs_sangnom() (
   fi
 )
 
+vs_placebo_links_full_runtime() {
+  local plugin="$1" libplacebo="$2" loaded
+  # A plugin from an older installation can load a different libplacebo SONAME.
+  [[ -f "$plugin" ]] || return 1
+  loaded="$(LC_ALL=C ldd "$plugin" | awk '$1 ~ /^libplacebo[.]so[.]/ && $2 == "=>" { print $3 }')" || return 1
+  [[ -n "$loaded" && "$loaded" -ef "$libplacebo" ]] &&
+    LC_ALL=C readelf -d "$plugin" | grep -F '[libdovi.so.' >/dev/null
+}
+
 install_vs_placebo() (
   local build_dir="$1" plugins_dir="$2" tag="${vs_plugin_tags[placebo]}"
   cd "$build_dir" || exit 1
-  if vs_plugin_needs_upgrade "libvs_placebo.so" "$tag" \
-    || { "$package_build" && [[ "$(pkg-config --variable=pl_has_vulkan libplacebo)" != 1 ]]; }; then
+  export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/$LINUX_MULTIARCH/pkgconfig:/usr/local/share/pkgconfig:$HOME/.local/lib/$LINUX_MULTIARCH/pkgconfig:${PKG_CONFIG_PATH:-}"
+  if ! pkg-config --atleast-version=6.338.0 libplacebo || [[ "$(pkg-config --variable=pl_has_vulkan libplacebo)" != 1 ]]; then
+    die "$(msg 'vs-placebo requires libplacebo 6.338.0 or later with Vulkan enabled' 'vs-placebo 需要启用 Vulkan 的 libplacebo 6.338.0 或更高版本')"
+  fi
+  local libplacebo
+  libplacebo="$(pkg-config --variable=libdir libplacebo)/libplacebo.so"
+  if ! vs_placebo_links_full_runtime "$plugins_dir/libvs_placebo.so" "$libplacebo" || vs_plugin_needs_upgrade "libvs_placebo.so" "$tag"; then
     require_native_build "vs-placebo"
+    if ! has_libdovi_development; then install_libdovi || exit 1; fi
     log "$(msg "Building vs-placebo ($tag)" "编译 vs-placebo ($tag)")"
-    install_libplacebo_latest
     download_source_archive "placebo $tag" "${vs_plugin_sources[placebo]}" placebo || exit 1
     cd placebo || exit 1
-    export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib/$LINUX_MULTIARCH/pkgconfig:/usr/local/share/pkgconfig:$HOME/.local/lib/$LINUX_MULTIARCH/pkgconfig:${PKG_CONFIG_PATH:-}"
     export C_INCLUDE_PATH="$HOME/.local/include:${C_INCLUDE_PATH:-}"
     export LIBRARY_PATH="$HOME/.local/lib/$LINUX_MULTIARCH:${LIBRARY_PATH:-}"
     export LD_LIBRARY_PATH="$HOME/.local/lib/$LINUX_MULTIARCH:${LD_LIBRARY_PATH:-}"
     rm -rf build
-    tmux_run "vs-placebo meson setup" meson setup build "${VS_PLACEBO_MESON_OPTIONS[@]}" || exit 1
+    tmux_run "vs-placebo meson setup" meson setup build --native-file "$vapoursynth_meson_file" || exit 1
     tmux_run "vs-placebo ninja" ninja -C build || exit 1
     local out
     out="$(find "$PWD/build" -maxdepth 2 -name "libvs_placebo.so" -type f | head -n 1)"
     [[ -n "${out:-}" ]] || exit 1
+    vs_placebo_links_full_runtime "$out" "$libplacebo" \
+      || die "$(msg 'vs-placebo must link to the selected Vulkan-enabled libplacebo and libdovi' 'vs-placebo 必须链接所选的 Vulkan 版 libplacebo 和 libdovi')"
     install -m 0755 "$out" "$plugins_dir/libvs_placebo.so" || exit 1
     vs_plugin_version record "libvs_placebo.so" "$tag" || exit 1
   else
@@ -3379,7 +3125,7 @@ install_vs_nlm_ispc() (
   if [[ "$APT_ARCH" == arm64 ]]; then
     instruction_sets=neon-i32x4
   fi
-  if ! portable_build_matches "$nlm_plugin" || vs_plugin_needs_upgrade "libvsnlm_ispc.so" "$tag"; then
+  if ! installed_artifact_matches "$nlm_plugin" portable || vs_plugin_needs_upgrade "libvsnlm_ispc.so" "$tag"; then
     require_native_build "vs-nlm-ispc"
     log "$(msg "Building vs-nlm-ispc ($tag)" "编译 vs-nlm-ispc ($tag)")"
     download_source_archive "nlm_ispc $tag" "${vs_plugin_sources[nlm_ispc]}" nlm_ispc || exit 1
@@ -3401,50 +3147,19 @@ install_vs_nlm_ispc() (
 
 install_vs_zsmooth() (
   local build_dir="$1" plugins_dir="$2" tag="${vs_plugin_tags[zsmooth]}"
-  cd "$build_dir" || exit 1
-  local library="libzsmooth.$LINUX_ARCH-gnu.so" from_source=false
-  local target="$plugins_dir/$library" built_library
-  # Published x64 binaries target Haswell. Build portable release packages.
-  if [[ "$APT_ARCH" == amd64 ]] && { "$package_build" || ! grep -qw avx2 /proc/cpuinfo; }; then
-    from_source=true
-  fi
-  if { ! "$from_source" || portable_build_matches "$target"; } && ! vs_plugin_needs_upgrade "$library" "$tag"; then
+  local library="libzsmooth.$LINUX_ARCH-gnu.so" asset="zsmooth-$LINUX_ARCH-linux-gnu.zip"
+  local target="$plugins_dir/$library"
+  if { [[ "$APT_ARCH" != amd64 ]] || installed_artifact_matches "$target" upstream; } && ! vs_plugin_needs_upgrade "$library" "$tag"; then
     return 0
   fi
-  if "$from_source"; then
-    require_native_build zsmooth
-    download_source_archive "zsmooth $tag" "${vs_plugin_sources[zsmooth]}" zsmooth || exit 1
-    cd zsmooth || exit 1
-    local zig_version zig_download zig_url zig_digest
-    zig_version="$(sed -nE 's/^[[:space:]]*\.minimum_zig_version = "([0-9.]+)",$/\1/p' build.zig.zon)"
-    tmux_run "Zig download index" download_url https://ziglang.org/download/index.json zig-index.json || exit 1
-    zig_download="$(python3 -c '
-import json
-import sys
-with open("zig-index.json", encoding="utf-8") as stream:
-    artifact = json.load(stream)[sys.argv[1]]["x86_64-linux"]
-print(artifact["tarball"], artifact["shasum"])
-' "$zig_version")" || exit 1
-    read -r zig_url zig_digest <<< "$zig_download"
-    tmux_run "Zig $zig_version download" download_url "$zig_url" zig.tar.xz || exit 1
-    printf '%s  %s\n' "$zig_digest" zig.tar.xz | sha256sum -c - || exit 1
-    mkdir -p zig || exit 1
-    tar -xf zig.tar.xz --strip-components=1 -C zig || exit 1
-    tmux_run "zsmooth Zig build" ./zig/zig build -j"$(nproc)" "${ZSMOOTH_ZIG_OPTIONS[@]}" || exit 1
-    built_library="zig-out/lib/libzsmooth.so"
-  else
-    local asset="zsmooth-$LINUX_ARCH-linux-gnu.zip"
-    log "$(msg "Installing zsmooth $tag (binary package)" "安装 zsmooth $tag（二进制包）")"
-    tmux_run "$(msg "Download zsmooth $tag" "下载 zsmooth $tag")" \
-      download_github_release_asset adworacz/zsmooth "$tag" "$asset" || exit 1
-    tmux_run "$(msg "Extract zsmooth $tag" "解压 zsmooth $tag")" unzip -o "$asset" -d zsmooth-release || exit 1
-    built_library="zsmooth-release/libzsmooth.so"
-  fi
-  install -m 0755 "$built_library" "$target" || exit 1
+
+  cd "$build_dir" || exit 1
+  tmux_run "$(msg "Download zsmooth $tag" "下载 zsmooth $tag")" \
+    download_github_release_asset adworacz/zsmooth "$tag" "$asset" || exit 1
+  tmux_run "$(msg "Extract zsmooth $tag" "解压 zsmooth $tag")" unzip -o "$asset" -d zsmooth-release || exit 1
+  install -m 0755 zsmooth-release/libzsmooth.so "$target" || exit 1
   vs_plugin_version record "$library" "$tag" || exit 1
-  if "$from_source"; then
-    sha256sum < "$target" > "$target.portable.sha256" || exit 1
-  fi
+  if [[ "$APT_ARCH" == amd64 ]]; then sha256sum < zsmooth-release/libzsmooth.so > "$target.upstream.sha256"; fi
 )
 
 install_vs_mvtools() (
@@ -3465,8 +3180,6 @@ install_vs_mvtools() (
 )
 
 install_vs_build_dependencies() {
-  ensure_meson_version
-
   local deps=(
     build-essential git wget tar unzip sed
     meson ninja-build cmake patch libass-dev
@@ -3493,6 +3206,7 @@ install_vs_build_dependencies() {
     apt_update
     apt_install "${missing_deps[@]}" || die "$(msg 'Failed to install VS plugin dependencies' 'VS 插件依赖安装失败')"
   fi
+  require_meson_version
 }
 
 build_vs_plugins() {
@@ -3507,14 +3221,15 @@ build_vs_plugins() {
   build_dir="$(mktemp -d)"
 
   local lsmash_abi avcodec_major lsmash_tag="${vs_plugin_tags[lsmas]}" lsmash_source="${vs_plugin_sources[lsmas]}"
-  lsmash_abi="$(pkg-config --modversion libavcodec libavformat libavutil libswscale libswresample liblsmash)" || return $?
+  lsmash_abi="$(pkg-config --modversion libavcodec libavformat libavutil libswscale libswresample liblsmash)" || {
+    require_native_build "FFmpeg and L-SMASH development files"
+    return 1
+  }
   avcodec_major="${lsmash_abi%%.*}"
   [[ "$avcodec_major" =~ ^[0-9]+$ ]] \
     || die "$(msg 'Failed to determine the libavcodec development version for L-SMASH-Works' '无法确定 L-SMASH-Works 所需的 libavcodec 开发库版本')"
-  if (( avcodec_major < 60 )); then
-    # Retain the FFmpeg 4/5 compatibility revision for the older development libraries.
-    lsmash_tag="commit:70e19fb"
-    lsmash_source="https://codeload.github.com/HomeOfAviSynthPlusEvolution/L-SMASH-Works/tar.gz/70e19fb19dfd940a9ec9c7e02125b5fe1e2d7f93"
+  if (( avcodec_major < 61 )); then
+    die "$(msg "L-SMASH Works requires FFmpeg 7 or later (libavcodec >= 61, found $avcodec_major)" "L-SMASH Works 需要 FFmpeg 7 或更高版本（libavcodec 至少为 61，当前为 $avcodec_major）")"
   fi
   cached_linux_build lsmash-works install_vs_lsmash_works files "$vapoursynth_cache_abi $lsmash_source $lsmash_abi" \
     "$plugins_dir/libvslsmashsource.so" -- "$build_dir" "$plugins_dir" "$lsmash_tag" "$lsmash_source" "$avcodec_major"
@@ -3553,7 +3268,7 @@ build_vs_plugins() {
   local zsmooth_plugin="$plugins_dir/libzsmooth.$LINUX_ARCH-gnu.so"
   local -a zsmooth_outputs=("$zsmooth_plugin")
   if "$package_build" && [[ "$APT_ARCH" == amd64 ]]; then
-    zsmooth_outputs+=("$zsmooth_plugin.portable.sha256")
+    zsmooth_outputs+=("$zsmooth_plugin.upstream.sha256")
   fi
   cached_linux_build zsmooth install_vs_zsmooth files "$vapoursynth_cache_abi ${vs_plugin_tags[zsmooth]}" \
     "${zsmooth_outputs[@]}" -- "$build_dir" "$plugins_dir"
@@ -3625,6 +3340,8 @@ build_desktop_vs_plugin() (
 
 build_desktop_vs_rife_source() {
   local repository="$1" tag="$2" library="$3" model_dir="$4"
+  local sdk="$PWD/ncnn-sdk" cmake_build="$PWD/ncnn-options/subprojects/ncnn/__CMake_build"
+  local -x CMAKE_POLICY_VERSION_MINIMUM=3.10
   if ! pkg-config --exists vulkan; then
     apt_update || return $?
     apt_install libvulkan-dev || return $?
@@ -3636,33 +3353,43 @@ build_desktop_vs_rife_source() {
   tmux_run "RIFE ${tag} source checkout" git -C source sparse-checkout set RIFE subprojects "$model_dir" || return $?
   tmux_run "RIFE ncnn download" git -C source submodule update --init --depth 1 subprojects/ncnn || return $?
   tmux_run "RIFE glslang download" git -C source/subprojects/ncnn submodule update --init --depth 1 glslang || return $?
-  tmux_run "RIFE Meson setup" env CMAKE_POLICY_VERSION_MINIMUM=3.10 \
-    meson setup source/build source "${RIFE_MESON_OPTIONS[@]}" || return $?
+  # Meson's CMake import merges ncnn's per-source ISA flags, even for generic ARM code.
+  # Configure the pinned RIFE layer selection, then let CMake compile the actual ncnn targets.
+  tmux_run "RIFE ncnn configuration" meson setup ncnn-options source "${RIFE_MESON_OPTIONS[@]}" -Duse_system_ncnn=false || return $?
+  tmux_run "RIFE ncnn SDK setup" cmake -S source/subprojects/ncnn -B "$cmake_build" "${RIFE_NCNN_OPTIONS[@]}" \
+    "-DCMAKE_C_FLAGS=${CFLAGS:+$CFLAGS }-march=armv8-a" "-DCMAKE_CXX_FLAGS=${CXXFLAGS:+$CXXFLAGS }-march=armv8-a" \
+    "-DCMAKE_INSTALL_PREFIX=$sdk" || return $?
+  tmux_run "RIFE ncnn SDK build" cmake --build "$cmake_build" --parallel "$(nproc)" --target install || return $?
+  # Meson omits CMake's LINK_ONLY entries from static dependencies. Keep the SDK's
+  # link order and its pinned glslang/SPIRV targets when importing it into RIFE.
+  sed -i -E '/INTERFACE_LINK_LIBRARIES/s/\\?[$]<LINK_ONLY:([^<>]+)>/\1/g' "$sdk/lib/cmake/ncnn/ncnn.cmake" || return $?
+  tmux_run "RIFE Meson setup" meson setup source/build source "${RIFE_MESON_OPTIONS[@]}" \
+    -Duse_system_ncnn=true "-Dcmake_prefix_path=$sdk" || return $?
   tmux_run "RIFE ninja" ninja -C source/build librife.so || return $?
   mv -- source/build/librife.so "source/$library"
 }
 
 install_desktop_vs_rife() (
   local repository="https://github.com/styler00dollar/VapourSynth-RIFE-ncnn-Vulkan"
-  local library="$1" model_dir="$2"
+  local library="$1" model_dir="$2" artifact="$3"
   local tag version build_dir model_file report
   local archive="" pending="" restored=false
   local -a model_files=("$model_dir/flownet.bin" "$model_dir/flownet.param")
 
-  if "$package_build"; then
-    if [[ "$APT_ARCH" == amd64 ]] && ! /sbin/ldconfig -p 2>/dev/null | grep -F 'libvulkan.so.1' >/dev/null; then
-      die "$(msg 'RIFE requires the Vulkan loader for packaging' '打包 RIFE 需要 Vulkan 加载器')"
-    fi
-  elif ! timeout -k 1s 10s "$VAPOURSYNTH_PYTHON" -IB "$SETUP_ROOT/tools/vulkan_device.py" >/dev/null 2>&1; then
-    log "$(msg 'Skipping RIFE: no Vulkan GPU is available' '跳过 RIFE：没有可用的 Vulkan GPU')"
-    return 0
+  # Ship the same filter and model on headless hosts. A render test needs a GPU.
+  local probe=load
+  if ! "$package_build" && timeout -k 1s 10s "$VAPOURSYNTH_PYTHON" -IB "$SETUP_ROOT/tools/vulkan_device.py"; then
+    probe=render
   fi
 
   tag="${vs_plugin_tags[rife]}"
   version="${tag#r}"
   version="${version/_mod_v/+mod.}"
-  if ! vs_plugin_needs_upgrade "$library" "$version" \
+  if installed_artifact_matches "$PLUGIN_PATH/$library" "$artifact" \
+    && ! vs_plugin_needs_upgrade "$library" "$version" \
     && [[ -s "$PLUGIN_PATH/$model_dir/flownet.bin" && -s "$PLUGIN_PATH/$model_dir/flownet.param" ]]; then
+    test_desktop_vs_plugin rife "$PLUGIN_PATH/$library" "$probe" \
+      || die "$(msg "Installed RIFE failed its $probe check" "已安装的 RIFE 未通过 $probe 验证")"
     return 0
   fi
 
@@ -3683,56 +3410,32 @@ install_desktop_vs_rife() (
     restored=true
     log "$(msg "Reusing the ARM64 RIFE ${tag} build" "复用 RIFE ${tag} 的 ARM64 构建产物")"
   elif [[ "$APT_ARCH" == arm64 ]]; then
-    log "$(msg "Building ARM64 RIFE ${tag} with the 4.6 model" "编译 ARM64 RIFE ${tag} 并准备 4.6 模型")"
+    log "$(msg "Building RIFE ${tag} for $APT_ARCH with the 4.6 model" "为 $APT_ARCH 编译 RIFE ${tag} 并准备 4.6 模型")"
     require_native_build RIFE
-    if ! build_desktop_vs_rife_source "$repository" "$tag" "$library" "$model_dir"; then
-      if "$package_build"; then
-        die "$(msg 'The ARM64 RIFE source build failed' 'RIFE 的 ARM64 源码构建失败')"
-      fi
-      log "$(msg 'Skipping RIFE because its ARM64 source build failed' 'RIFE 的 ARM64 源码构建失败，跳过安装')"
-      return 0
-    fi
+    build_desktop_vs_rife_source "$repository" "$tag" "$library" "$model_dir" \
+      || die "$(msg 'The RIFE source build failed' 'RIFE 源码构建失败')"
     cd source
   else
     log "$(msg "Installing RIFE ${tag} with the 4.6 model" "安装 RIFE ${tag} 和 4.6 模型")"
     tmux_run "RIFE ${tag} download" download_github_release_asset "$repository" "$tag" "$library"
-  fi
-  if ! report="$(LC_ALL=C ldd -r "./$library" 2>&1)" || [[ "$report" == *'not found'* || "$report" == *'undefined symbol'* ]]; then
-    printf '%s\n' "$report" >&2
-    if "$package_build"; then
-      die "$(msg 'The RIFE plugin has unresolved dependencies' 'RIFE 插件包含未解析的依赖')"
-    fi
-    log "$(msg 'Skipping RIFE: the Linux binary is incompatible with this system' '跳过 RIFE：Linux 二进制包与本机系统不兼容')"
-    return 0
-  fi
-
-  if [[ "$APT_ARCH" == amd64 ]]; then
     mkdir -p "$model_dir"
     for model_file in "${model_files[@]}"; do
       tmux_run "RIFE model ${model_file##*/} download" download_url \
         "https://raw.githubusercontent.com/${repository#https://github.com/}/${tag}/${model_file}" "$model_file"
     done
   fi
-  # A Vulkan device check can fail even when the compiled plugin is loadable.
-  if [[ -n "$archive" ]] && ! "$restored" &&
-      [[ -s "${model_files[0]}" && -s "${model_files[1]}" ]] &&
-      test_desktop_vs_plugin rife "$PWD/$library" load; then
+  if ! report="$(LC_ALL=C ldd -r "./$library" 2>&1)" || [[ "$report" == *'not found'* || "$report" == *'undefined symbol'* ]]; then
+    printf '%s\n' "$report" >&2
+    die "$(msg 'The RIFE plugin has unresolved dependencies' 'RIFE 插件包含未解析的依赖')"
+  fi
+  [[ -s "${model_files[0]}" && -s "${model_files[1]}" ]] \
+    || die "$(msg 'Missing or empty RIFE 4.6 model files' 'RIFE 4.6 模型文件缺失或为空')"
+  test_desktop_vs_plugin rife "$PWD/$library" "$probe" \
+    || die "$(msg "RIFE failed its $probe check" "RIFE 未通过 $probe 验证")"
+  if [[ -n "$archive" ]] && ! "$restored"; then
     if ! { pending="$(mktemp "$BLURAY_SETUP_CACHE_DIR/builds/.rife.XXXXXXXX")" &&
         tar -czf "$pending" -- "$library" "${model_files[@]}" && mv -f -- "$pending" "$archive"; }; then
       log "$(msg 'Could not save the ARM64 RIFE build cache' '无法保存 RIFE 的 ARM64 构建缓存')"
-    fi
-  fi
-  if ! "$package_build"; then
-    local test_status=0
-    report="$(test_desktop_vs_plugin rife "$PWD/$library" 2>&1)" || test_status=$?
-    if (( test_status != 0 )) || [[ "$report" == *'failed'* ]]; then
-      printf '%s\n' "$report" >&2
-      if (( test_status == 124 )); then
-        log "$(msg 'Skipping RIFE: the Vulkan frame test timed out' '跳过 RIFE：Vulkan 测试帧渲染超时')"
-      else
-        log "$(msg 'Skipping RIFE: the Vulkan frame test failed' '跳过 RIFE：Vulkan 测试帧渲染失败')"
-      fi
-      return 0
     fi
   fi
 
@@ -3740,6 +3443,7 @@ install_desktop_vs_rife() (
   install -m 0644 "${model_files[@]}" "$PLUGIN_PATH/$model_dir/"
   install -m 0755 "$library" "$PLUGIN_PATH/$library"
   vs_plugin_version record "$library" "$version"
+  sha256sum < "$library" > "$PLUGIN_PATH/$library.$artifact.sha256"
 )
 
 install_desktop_vs_plugins() {
@@ -3750,10 +3454,13 @@ install_desktop_vs_plugins() {
     "$PLUGIN_PATH/libccd.so" -- ccd "${vs_plugin_tags[ccd]}" libccd.so
   cached_linux_build bm3d build_desktop_vs_plugin files "$vapoursynth_cache_abi ${vs_plugin_tags[bm3d]}" \
     "$PLUGIN_PATH/bm3d.so" -- bm3d "${vs_plugin_tags[bm3d]}" bm3d.so
-  # The upstream release supports Jammy's glibc. Model 23 is RIFE 4.6.
   rife_cache_abi="$vapoursynth_cache_abi ${vs_plugin_tags[rife]} $model_dir"
-  cached_linux_build rife install_desktop_vs_rife files "$rife_cache_abi" \
-    "$PLUGIN_PATH/$rife_library" "$PLUGIN_PATH/$model_dir/"{flownet.bin,flownet.param} -- "$rife_library" "$model_dir"
+  local artifact=upstream
+  if [[ "$APT_ARCH" == arm64 ]]; then artifact=armv8-a; fi
+  local -a rife_outputs=("$PLUGIN_PATH/$rife_library" "$PLUGIN_PATH/$model_dir/"{flownet.bin,flownet.param}
+    "$PLUGIN_PATH/$rife_library.$artifact.sha256")
+  # A fresh restore needs both model files even when an upgrade only replaces the plugin.
+  cached_linux_build rife install_desktop_vs_rife complete-files "$rife_cache_abi" "${rife_outputs[@]}" -- "$rife_library" "$model_dir" "$artifact"
 }
 
 # ---------------------------------------------------------------------------
@@ -3921,49 +3628,16 @@ __bluray_python_imports_ok() {
   return "$failed"
 }
 
-# --break-system-packages exists from pip ~23; Ubuntu 22.04's python3-pip is often older.
-__pip_supports_break_system_packages() {
-  "$VAPOURSYNTH_PYTHON" -m pip install --help 2>/dev/null | grep -qE '(^|[[:space:]])--break-system-packages([[:space:]]|$)'
-}
-
 install_bluray_python_deps() {
-  log "$(msg 'Installing or upgrading Python dependencies' '安装或升级 Python 依赖')"
-
-  if ! "$VAPOURSYNTH_PYTHON" -m pip --version >/dev/null 2>&1; then
-    apt_update
-    apt_install python3-pip || die "$(msg 'Failed to install python3-pip' '安装 python3-pip 失败')"
-  fi
-
-  local pip_extra=()
-  local python_packages=(numpy pycountry soundfile pillow)
+  log "$(msg 'Installing application Python dependencies' '正在安装应用 Python 依赖')"
+  local -a python_packages=(numpy pycountry soundfile pillow PyQt6)
+  local -a pip_extra=(--only-binary=PyQt6,PyQt6-Qt6,PyQt6-sip)
   if "$package_build"; then
-    python_packages+=(PyInstaller)
+    python_packages+=(PyInstaller PyQt6-Qt6 PyQt6-sip)
   else
-    python_packages+=(PyQt6 matplotlib)
+    python_packages+=(matplotlib)
   fi
-  local pip_mode_msg_en pip_mode_msg_zh
-  if [[ "$VAPOURSYNTH_PYTHON" != "/usr/bin/python3" ]]; then
-    pip_mode_msg_en="Install or upgrade dependencies in the application Python"
-    pip_mode_msg_zh="安装或升级应用 Python 的依赖"
-  elif __pip_supports_break_system_packages; then
-    pip_extra=(--break-system-packages)
-    pip_mode_msg_en='Install or upgrade Python dependencies (Python pip --break-system-packages)'
-    pip_mode_msg_zh='安装或升级 Python 依赖（pip --break-system-packages）'
-  else
-    pip_extra=(--user)
-    pip_mode_msg_en='Install or upgrade Python dependencies (Python pip --user; current pip does not support --break-system-packages)'
-    pip_mode_msg_zh='安装或升级 Python 依赖（pip --user；当前 pip 不支持 --break-system-packages）'
-  fi
-  if [[ "$APT_ARCH" == arm64 ]]; then
-    # Resolve wheels compatible with this glibc, including on Jammy and Bookworm.
-    pip_extra+=(--only-binary=PyQt6,PyQt6-Qt6)
-  fi
-
-  tmux_run "$(msg "$pip_mode_msg_en" "$pip_mode_msg_zh")" \
-    env PIP_DISABLE_PIP_VERSION_CHECK=1 "$VAPOURSYNTH_PYTHON" -m pip install --upgrade "${pip_extra[@]}" "${python_packages[@]}" \
-    || tmux_run "$(msg 'Install or upgrade Python dependencies (retry)' '安装或升级 Python 依赖（重试）')" \
-      env PIP_DISABLE_PIP_VERSION_CHECK=1 "$VAPOURSYNTH_PYTHON" -m pip install --upgrade "${pip_extra[@]}" "${python_packages[@]}" \
-    || die "$(msg 'Failed to install Python dependencies with Python pip' '使用 Python pip 安装依赖失败')"
+  "$VAPOURSYNTH_PYTHON" -m pip install --upgrade "${pip_extra[@]}" "${python_packages[@]}"
 
   local failed_packages
   if ! failed_packages="$(__bluray_python_imports_ok)"; then
@@ -3973,7 +3647,10 @@ install_bluray_python_deps() {
     tmux_run "$(msg 'Reinstall Python dependencies without cached wheels' '不使用缓存 wheel 重新安装 Python 依赖')" \
       env PIP_DISABLE_PIP_VERSION_CHECK=1 "$VAPOURSYNTH_PYTHON" -m pip install --upgrade --force-reinstall --no-cache-dir "${pip_extra[@]}" "${packages_to_reinstall[@]}" \
       || die "$(msg 'Failed to reinstall Python dependencies; see the pip error above' '重新安装 Python 依赖失败，请查看上方 pip 错误')"
-    __bluray_python_imports_ok || die "$(msg 'Python dependencies still fail to import after reinstallation; see the traceback above' '重新安装后 Python 依赖仍无法导入，请查看上方 traceback')"
+    if ! __bluray_python_imports_ok; then
+      require_native_build "Python runtime libraries"
+      die "$(msg 'Python dependencies still fail to import after reinstallation; see the traceback above' '重新安装后 Python 依赖仍无法导入，请查看上方 traceback')"
+    fi
   fi
 }
 
@@ -4068,16 +3745,11 @@ collect_linux_build_inputs() {
       fi
       ;;
     vs-placebo)
-      linux_build_inputs+=("${VS_PLACEBO_MESON_OPTIONS[@]}" "$(pkg-config --modversion libplacebo 2>/dev/null || true)")
-      ;;
-    zsmooth)
-      if [[ "$APT_ARCH" == amd64 ]]; then
-        linux_build_inputs+=("${ZSMOOTH_ZIG_OPTIONS[@]}")
-      fi
+      linux_build_inputs+=("$(pkg-config --modversion libplacebo)" "$(pkg-config --variable=pl_has_vulkan libplacebo)")
       ;;
     rife)
       if [[ "$APT_ARCH" == arm64 ]]; then
-        linux_build_inputs+=("${RIFE_MESON_OPTIONS[@]}")
+        linux_build_inputs+=("${RIFE_MESON_OPTIONS[@]}" "${RIFE_NCNN_OPTIONS[@]}")
       fi
       ;;
   esac
@@ -4101,10 +3773,7 @@ legacy_linux_build_key() {
     -f "$cache_workspace/legacy/$installer" ]] || return 1
   case "$component" in
     # These recipes build differently from the old x64 workflow.
-    mpv-ffmpeg|lsmash-works|vs-placebo|zsmooth|fmtconv) return 1 ;;
-    x264)
-      [[ "${X264_CONFIGURE_OPTIONS[*]}" == '--enable-static --bit-depth=all --chroma-format=all --disable-opencl --enable-lto' ]] || return 1
-      ;;
+    mpv-ffmpeg|lsmash-works|vs-placebo|zsmooth|fmtconv|x264|rife) return 1 ;;
     dfttest)
       [[ "${DFTTEST_MESON_OPTIONS[*]}" == '-Dcpp_link_args=-lfftw3f_threads' ]] || return 1
       inputs="$vapoursynth_cache_abi"
@@ -4117,7 +3786,6 @@ legacy_linux_build_key() {
     descale) inputs="https://github.com/AmusementClub/descale.git $vapoursynth_cache_abi" ;;
     ccd) inputs="$vapoursynth_cache_abi https://github.com/End-of-Eternity/vs-ccd.git ${vs_plugin_tags[ccd]}" ;;
     bm3d) inputs="$vapoursynth_cache_abi https://github.com/HomeOfVapourSynthEvolution/VapourSynth-BM3D.git r10.1" ;;
-    rife) inputs="$vapoursynth_cache_abi models/rife-v4.6_ensembleFalse" ;;
     assrender) inputs="$vapoursynth_cache_abi $(pkg-config --modversion libass)" ;;
     vs-nlm-ispc) inputs="$vapoursynth_cache_abi $(ispc --version)" ;;
     eedi3m|znedi3|addgrain|bilateral|eedi2|legacy-filters|vivtc|removegrain|sangnom|mvtools)
@@ -4177,19 +3845,40 @@ cached_linux_build() {
   "$installer" "$@"
   local status=$?
   (( status == 0 )) || return "$status"
-  if ! "$restore_only" || [[ "$restored_key" != "$key" ]]; then
-    "${helper[@]}" save "${args[@]}" "$restored_key" "${outputs[@]}"
-  fi
+  "${helper[@]}" save "${args[@]}" "$restored_key" "${outputs[@]}"
 }
 
 # ---------------------------------------------------------------------------
 # Main execution
 # ---------------------------------------------------------------------------
 
-command -v sudo >/dev/null 2>&1 || die "$(msg 'sudo is missing' '缺少 sudo')"
-sudo -v
-
-require_supported_os
+# Build cache replay uses its verified binaries and does not require APT indexes.
+setup_build_packages=()
+# Use one source snapshot. A fresh bash preserves errexit in the replay's installers
+# and keeps the temporary dpkg database out of any subsequent native build.
+if "$package_build" && ! "$restore_only" && ! "$setup_in_tmux" && [[ "${BLURAY_BUILD_CACHE_PROBED:-}" != true ]]; then
+  build_required="$SETUP_ROOT/build-required"
+  if BLURAY_BUILD_REQUIRED_FILE="$build_required" BLURAYSUBTITLE_GITHUB_TOKEN="$setup_github_api_token" \
+      BLURAY_SETUP_SOURCE="$BLURAY_SETUP_SOURCE" SETTINGS_FILE="$SETTINGS_FILE" \
+      setup_settings_source="$setup_settings_source" setup_config_dir="$setup_config_dir" \
+      bash -c 'setup_temporary_dirs=(); source "$BLURAY_SETUP_SOURCE" --mode Build --restore-only'; then
+    exit 0
+  elif [[ ! -f "$build_required" ]]; then
+    exit 1
+  fi
+  log "$(msg 'The cache needs additional build dependencies or a native component. Continuing setup.' '缓存需要补充构建依赖或编译组件，继续安装。')"
+fi
+if ! "$restore_only"; then
+  # New minimal images can have only dpkg's status file and no repository indexes yet.
+  if ! LC_ALL=C apt-cache policy | grep -E '^[[:space:]]*-?[0-9]+ .+ Packages$' >/dev/null; then apt_update; fi
+  check_setup_package_versions \
+    || die "$(msg 'Full setup needs the package versions listed above. Refresh the APT indexes or use the packaged build.' '完整安装需要上面列出的软件包版本。请刷新 APT 索引或使用打包版。')"
+  if ! "$setup_in_tmux" && [[ -z "${TMUX:-}" && -t 1 ]] && is_remote_ssh; then
+    ensure_tmux_installed
+    start_setup_in_tmux "$@"
+  fi
+fi
+ensure_sudo_once
 mkdir -p -- "$BLURAY_SETUP_CACHE_DIR"/{downloads,apt,pip,ccache,builds/components}
 BLURAY_SETUP_CACHE_DIR="$(realpath "$BLURAY_SETUP_CACHE_DIR")"
 export BLURAY_SETUP_CACHE_DIR
@@ -4201,12 +3890,21 @@ export CCACHE_NOHASHDIR=true
 if [[ -n "${BLURAY_BUILD_TMP:-}" ]]; then
   export TMPDIR="$CCACHE_BASEDIR"
 fi
-if "$restore_only"; then
+if "$restore_only" && [[ -f "$BLURAY_SETUP_CACHE_DIR/apt-runtime/packages.json" ]]; then
   apt_state="$(bluray_mktemp_dir)"
   setup_temporary_dirs+=("$apt_state")
-  /usr/bin/python3 -B "$SETUP_ROOT/tools/ubuntu_apt_cache.py" restore "$BLURAY_SETUP_CACHE_DIR" "$apt_state"
+  /usr/bin/python3 -B "$SETUP_ROOT/tools/linux_apt_cache.py" restore "$BLURAY_SETUP_CACHE_DIR" "$apt_state" \
+    || require_native_build "the APT runtime snapshot"
   export DPKG_ADMINDIR="$apt_state"
-else
+elif "$restore_only"; then
+  # A local warm build can use its real installed packages without a CI .deb manifest.
+  for tool in cc strip readelf patchelf pkg-config tar xz git curl unzip; do
+    command -v "$tool" >/dev/null || require_native_build "$tool"
+  done
+  if [[ ! -x "${XDG_DATA_HOME:-$HOME/.local/share}/bluraysubtitle/uv/bin/python" ]]; then
+    /usr/bin/python3 -c 'import ensurepip' 2>/dev/null || require_native_build "python3-venv"
+  fi
+elif ! "$package_build" || [[ -n "$(dpkg --audit)" ]] || ! apt-get check -s >/dev/null 2>&1; then
   repair_broken_apt_state
 fi
 
@@ -4216,24 +3914,22 @@ sys_deps=(
   libegl1 libopengl0 libglib2.0-0 libglib2.0-bin libxkbcommon0 libdbus-1-3 libx11-6
   libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0
   libxcb-xinerama0 libxcb-xinput0 libxcb-render-util0
-  libunwind8 libunwind-dev xdg-utils libgl1-mesa-dri libglx-mesa0 mesa-vulkan-drivers
+  libunwind8 libunwind-dev xdg-utils libgl1-mesa-dri libglx-mesa0 libvulkan1 mesa-vulkan-drivers
 )
 
 if "$package_build"; then
-  sys_deps+=(python3-pyqt6 qt6-base-dev-tools libass-dev libplacebo-dev libvulkan1 xz-utils)
+  sys_deps+=(libarchive-tools patchelf libegl-dev libgles-dev libass-dev libplacebo-dev xz-utils
+    pipewire-bin libpipewire-0.3-modules)
 else
   sys_deps+=(gedit)
 fi
 
-missing_deps=()
+missing_deps=("${setup_build_packages[@]}")
 if ! "$restore_only"; then
   for dep in "${sys_deps[@]}"; do
     installed_names=("$dep")
-    if [[ "$dep" == libglib2.0-0 ]]; then
-      installed_names=("$dep:$APT_ARCH" "libglib2.0-0t64:$APT_ARCH")
-    fi
-    if ! { dpkg-query -W -f='${Status}\n' "${installed_names[@]}" 2>/dev/null || true; } |
-      grep -qx 'install ok installed'; then
+    if [[ "$dep" == libglib2.0-0 ]]; then installed_names=("$dep:$APT_ARCH" "libglib2.0-0t64:$APT_ARCH"); fi
+    if ! { dpkg-query -W -f='${Status}\n' "${installed_names[@]}" 2>/dev/null || true; } | grep -qx 'install ok installed'; then
       missing_deps+=("$dep")
     fi
   done
@@ -4258,8 +3954,10 @@ else
   log "$(msg 'Using tool paths from config.json' '使用 config.json 中配置的工具路径')"
 fi
 
+select_vapoursynth_python
+install_bluray_python_deps
 linux_cache_abi="" qt_cache_abi="" vapoursynth_cache_abi=""
-declare -A linux_recipe_revisions=([eedi3m]=2 [mvtools]=2 [bm3d]=2)
+declare -A linux_recipe_revisions=([vsedit]=2 [mkvtoolnix]=2 [vapoursynth-sdk]=2 [lsmash-works]=2 [eedi3m]=2 [mvtools]=2 [bm3d]=2)
 declare -A vs_plugin_tags=() vs_plugin_sources=() vs_plugin_digests=()
 if "$package_build"; then
   cache_workspace="$(bluray_mktemp_dir)"
@@ -4269,7 +3967,22 @@ if "$package_build"; then
       "$BLURAY_LEGACY_CACHE_SETUP" "$cache_workspace/legacy" \
       || log "$(msg 'Could not read the previous cache recipes' '无法读取旧版缓存配方')"
   fi
-  qt_cache_abi="$(dpkg-query -W "qt6-base-dev-tools:$APT_ARCH" "python3-pyqt6:$APT_ARCH")"
+  QT66_PREFIX="$("$VAPOURSYNTH_PYTHON" -B "$SETUP_ROOT/tools/install_linux_qt66.py" "$BLURAY_SETUP_CACHE_DIR")" || {
+    status=$?
+    if (( status == 127 )); then
+      require_native_build libarchive-tools
+      die "$(msg 'Qt SDK extraction needs bsdtar (libarchive-tools).' '解包 Qt SDK 需要 bsdtar（libarchive-tools）。')"
+    fi
+    exit "$status"
+  }
+  QMAKE6="$QT66_PREFIX/lib64/qt6/bin/qmake"
+  # The packaged tools link these Qt libraries. qmake-only SDK repairs can reuse them.
+  qt_cache_abi="$(cd -- "$QT66_PREFIX/lib64" && sha256sum libQt6{Core,Gui,Network,Widgets}.so.6 | sha256sum)"
+  qt_cache_abi="qt6-$APT_ARCH-${qt_cache_abi:0:16}"
+  MKVTOOLNIX_PATH="$HOME/.local/share/bluraysubtitle/build/$qt_cache_abi/bin"
+  mkdir -p -- "$MKVTOOLNIX_PATH"
+  VSEDIT_BINARY_PATH="$MKVTOOLNIX_PATH/vsedit"
+  VSEDIT_PATH="$VSEDIT_BINARY_PATH"
 fi
 if "$package_build" || [[ "$APT_ARCH" == arm64 ]]; then
   linux_cache_abi="$(
@@ -4280,9 +3993,7 @@ if "$package_build" || [[ "$APT_ARCH" == arm64 ]]; then
 fi
 
 install_mkvtoolnix
-cached_linux_build mkvtoolnix-paths sync_mkvtoolnix_paths files "" \
-  "$MKVTOOLNIX_PATH"/{mkvinfo,mkvmerge,mkvpropedit,mkvextract}
-select_vapoursynth_python
+if ! "$package_build"; then sync_mkvtoolnix_paths; fi
 # Meson otherwise uses its own interpreter for plugins that call vs.get_include().
 vapoursynth_meson_file="$SETUP_ROOT/vapoursynth-python.ini"
 printf "[binaries]\npython = '''%s'''\n" "$VAPOURSYNTH_PYTHON" > "$vapoursynth_meson_file"
@@ -4320,17 +4031,17 @@ resolve_vs_plugin_releases descale lsmas eedi3m znedi3 addgrain assrender bilate
 cached_linux_build descale install_descale files "$vapoursynth_cache_abi ${vs_plugin_sources[descale]}" "$PLUGIN_PATH/libdescale.so"
 cached_linux_build 7zip ensure_modern_7zip_cli files "${SEVENZIP_VERSION:-}" "$SEVEN_ZIP_PATH"
 install_vapoursynth_scripts
-cached_linux_build vsedit install_vapoursynth_editor system \
+cached_linux_build vsedit install_vapoursynth_editor files \
   "$VSEDIT_SOURCE_REPOSITORY ${VSEDIT_TAG:-} $vapoursynth_cache_abi $qt_cache_abi" \
-  "$VSEDIT_PATH" "$VSEDIT_BINARY_PATH" /usr/local/share/icons/hicolor/{256x256/apps/vsedit.png,scalable/apps/vsedit.svg}
+  "$VSEDIT_BINARY_PATH"
 cached_linux_build lsmash install_lsmash system "${LSMASH_VERSION:-}"
 build_vs_plugins
 install_desktop_vs_plugins
 if "$package_build"; then
   stage_mpv_uosc_archive "$BLURAY_SETUP_CACHE_DIR/mpv-uosc-$APT_ARCH.tar.gz" \
-    || die "$(msg 'Could not prepare uosc for the Ubuntu package' '无法为 Ubuntu 包准备 uosc')"
+    || die "$(msg 'Could not prepare uosc for the Linux package' '无法为 Linux 包准备 uosc')"
   python3 -B "$SETUP_ROOT/tools/mpv/install.py" --cache-lazy-shaders \
-    || die "$(msg 'Could not prepare mpv-lazy shaders for the Ubuntu package' '无法为 Ubuntu 包准备 mpv-lazy 着色器')"
+    || die "$(msg 'Could not prepare mpv-lazy shaders for the Linux package' '无法为 Linux 包准备 mpv-lazy 着色器')"
 else
   if [[ -n "$LIBASS_PATH" && ! -f "$LIBASS_PATH" ]]; then
     installed_libass="$(/sbin/ldconfig -p | awk '/^[[:space:]]*libass\.so\.9 / && !found {print $NF; found=1}')"
@@ -4341,9 +4052,11 @@ else
   install_desktop_shortcuts
 fi
 
-install_bluray_python_deps
 verify_configured_tool_paths
 if "$package_build"; then
+  build_environment="$(mktemp "$BLURAY_SETUP_CACHE_DIR/build-environment.XXXXXXXX")"
+  printf '%s\n' "$VAPOURSYNTH_PYTHON" "$QT66_PREFIX" "$MKVTOOLNIX_PATH" > "$build_environment"
+  mv -f -- "$build_environment" "$BLURAY_SETUP_CACHE_DIR/build-environment-$APT_ARCH"
   sudo chown -R -- "$(id -u):$(id -g)" "$PIP_CACHE_DIR" "$BLURAY_SETUP_CACHE_DIR/apt"
 fi
 if "$restore_only"; then

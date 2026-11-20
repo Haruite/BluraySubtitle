@@ -1,4 +1,4 @@
-"""Install a verified Ubuntu archive after the running program exits."""
+"""Install a verified Linux archive after the running program exits."""
 
 from __future__ import annotations
 
@@ -57,7 +57,7 @@ def extract_package(plan: dict, archive: Path, destination: Path) -> Path:
         or not executable.is_file() or not os.access(executable, os.X_OK)
         or not (runtime / "build-commit.txt").is_file()
         or not (runtime / "config.default.json").is_file()
-        or not (runtime / "tools/ubuntu_update.py").is_file()
+        or not (runtime / "tools/linux_update.py").is_file()
     ):
         raise ValueError(plan["invalid_package"])
     return root
@@ -175,6 +175,10 @@ if __name__ == "__main__":
     workspace = Path(__file__).resolve().parent
     plan = json.loads((workspace / "update.json").read_text(encoding="utf-8"))
     parent = select.poll()
-    parent.register(int(sys.argv[1]), select.POLLIN)
-    parent.poll()
+    parent_fd = int(sys.argv[1])
+    parent.register(parent_fd, select.POLLIN | select.POLLHUP)
+    try:
+        parent.poll()
+    finally:
+        os.close(parent_fd)
     raise SystemExit(install_update(workspace, plan))

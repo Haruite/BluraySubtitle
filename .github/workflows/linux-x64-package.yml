@@ -1,4 +1,4 @@
-name: Publish BluraySubtitle Ubuntu 26.04 x64
+name: Publish BluraySubtitle Linux x64
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   publish:
-    uses: ./.github/workflows/build-ubuntu-package.yml
+    uses: ./.github/workflows/build-linux-package.yml
     with:
       architecture: x64
     secrets: inherit

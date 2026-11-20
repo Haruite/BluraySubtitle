@@ -631,7 +631,10 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
             return
         dark = self._theme_mode == 'dark'
         colorful = self._theme_mode == 'colorful'
-        app.styleHints().setColorScheme(Qt.ColorScheme.Dark if dark else Qt.ColorScheme.Light)
+        # On Qt 6.6 the Fusion style and the explicit palettes below supply the scheme.
+        set_scheme = getattr(app.styleHints(), 'setColorScheme', None)
+        if set_scheme is not None:
+            set_scheme(Qt.ColorScheme.Dark if dark else Qt.ColorScheme.Light)
         base_style = 'Fusion' if dark or app.platformName() in ('xcb', 'wayland') else self._default_style_name
         app.setStyle(_ThemeStyle(base_style, self._theme_mode))
         if dark:
@@ -652,7 +655,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                 palette.setColor(QPalette.ColorGroup.Disabled, role, QColor('#9aa0b3'))
             app.setPalette(palette)
         else:
-            app.setPalette(QPalette())
+            app.setPalette(QPalette() if set_scheme is not None else app.style().standardPalette())
             # Some platform themes keep supplying a dark palette after the light request.
             if app.palette().color(QPalette.ColorRole.Window).lightness() < 128:
                 app.setStyle(_ThemeStyle('Fusion', self._theme_mode))

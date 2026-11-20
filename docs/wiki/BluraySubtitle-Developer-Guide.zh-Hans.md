@@ -21,12 +21,6 @@
 
 自定义构建可参考 setup 脚本。HDR 参数条件与注入回退见[自动 HDR 元数据处理](Video-Encoding-and-VapourSynth.zh-Hans.md#自动-hdr-元数据处理)。
 
-### Ubuntu 26.04 打包
-
-在对应架构的 Ubuntu 26.04 上运行 `bash setup_linux_environment.sh --mode Build`，再运行 `bash tools/build_ubuntu_package.sh`。打包脚本会按当前架构选择 PyInstaller 配方，收集原生工具和运行库，并生成归档与 SHA-256 构建记录。[x64 配方](../../BluraySubtitle_ubuntu2604_x64.spec) · [ARM64 配方](../../BluraySubtitle_ubuntu2604_arm64.spec)
-
-Build 模式让 mpv、FFmpeg 和 FFprobe 共用一套 FFmpeg 运行库，并为 mpv、FFmpeg 和 libplacebo 启用 Vulkan。用 `python3 tools/verify_ubuntu_package.py <归档路径>` 检查归档中的原生二进制、运行库、滤镜和 Vulkan 支持。
-
 ## 源码导航
 
 ### 蓝光结构

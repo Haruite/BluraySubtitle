@@ -1,8 +1,8 @@
 # Third-party notices (bundled binaries)
 
-**Product:** BluraySubtitle (Ubuntu 26.04, PyInstaller one-folder build)
+**Product:** BluraySubtitle (Linux, PyInstaller one-folder build)
 
-Versioned fields are refreshed from the selected bundled artifacts when `tools/build_ubuntu_package.sh` runs.
+Versioned fields are refreshed from the selected bundled artifacts when `tools/build_linux_package.sh` runs.
 
 ---
 
@@ -163,11 +163,21 @@ The application and VSScript share the CPython runtime and NumPy package in `_in
 
 ### CPython
 
-- **Files:** `libpython3.14.so.1.0` and `linux/python/`
+- **Files:** `{{PYTHON_LIBRARY}}` and `linux/python/`
 - **Version:** {{PYTHON_VERSION}} ({{PYTHON_ARCHITECTURE}})
 - **License:** PSF-2.0
 - **Source:** https://www.python.org/ftp/python/{{PYTHON_VERSION}}/Python-{{PYTHON_VERSION}}.tgz
-- **License text:** https://docs.python.org/3/license.html
+- **License text:** [CPython-LICENSE.txt](CPython-LICENSE.txt)
+
+### GNU C Library
+
+- **Version:** {{GLIBC_VERSION}}
+- **Files:** `linux/glibc/`, including the dynamic loader for the target architecture.
+- **Bundled copyright and licenses:** [glibc-copyright](glibc-copyright)
+
+### Graphics client libraries
+
+The package includes the client libraries for OpenGL, DRM, VA-API, VDPAU and Vulkan. Their copyright and license texts are included for [libglvnd](libglvnd0-copyright), [libdrm](libdrm2-copyright), [libva](libva2-copyright), [libvdpau](libvdpau1-copyright) and the [Vulkan loader](libvulkan1-copyright).
 
 ### NumPy
 
@@ -208,16 +218,16 @@ ZNEDI3 includes the [plugin, GraphEngine, and VSXX licenses](vapoursynth/compone
 
 ### Qt
 
-- **Files:** Qt shared libraries and the Qt plugins in `PyQt6/Qt6/`, used by the application, VSEdit and MKVToolNix.
-- **Version:** {{QT_VERSION}}
+- **Files:** Qt libraries and platform plugins for both variants under `linux/qt/`.
+- **Version:** {{QT_VERSION}} / 6.6.3
 - **License:** Open-source Qt terms, including LGPL-3.0 for the library modules that offer that option. See each module’s upstream notices.
 - **Source:** https://code.qt.io/cgit/qt/qtbase.git/tag/?h=v{{QT_VERSION}}
 - **License terms:** https://doc.qt.io/qt-6/licensing.html
 
 ### PyQt6
 
-- **Files:** `PyQt6/` Python bindings
-- **Version:** {{PYQT_VERSION}}
+- **Files:** `linux/qt/*/PyQt6/` Python bindings
+- **Version:** {{PYQT_VERSION}} / 6.6.1
 - **License:** GPL-3.0
 - **Source:** https://www.riverbankcomputing.com/software/pyqt/download
 

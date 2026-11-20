@@ -6,10 +6,8 @@ Documentation: [project wiki](docs/wiki/Home.md) | [interface guide and examples
 
 Development: [mandatory code modification standards](docs/development/code-standards.md) | [media pipeline and tool selection](docs/development/media-pipeline-and-tool-selection.md) | [refactoring history](docs/refactoring/refactoring-history.md)
 
-- Latest builds from `main`, updated on every push. [Windows x64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_windows_x64.7z) · [Windows ARM64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_windows_arm64.7z) · [Ubuntu 26.04 x64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_ubuntu26.04_x64.tar.xz) · [Ubuntu 26.04 ARM64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_ubuntu26.04_arm64.tar.xz)
+- [Latest build directory](https://sbx.mysmy.top/tools/BluraySubtitle/) · [Choose a download](docs/wiki/Packages-and-System-Requirements.md#choose-a-download)
 - For versions after 4.7, each release includes the matching packages. [GitHub Releases](https://github.com/Haruite/BluraySubtitle/releases)
-
-The Windows x64 package supports **Windows 10 version 1809 or later** and **Windows 11**. The Windows ARM64 package targets **Windows 10 and Windows 11 on ARM64**. The earliest Windows 10 ARM64 release is pending verification. **Windows 10 22H2** is recommended.
 
 BluraySubtitle is a cross-platform GUI tool for Blu-ray workflows. It brings the following five areas of functionality together in one application:
 
@@ -206,13 +204,9 @@ Blu-ray input rejects existing outputs. Remux input skips completed main/SP, ext
 
 ## Cross-platform support
 
-You can run the application from source on any system and architecture that provides the [required Python version and packages](#python-packages) and the external tools for the features you use.\
-Some features, especially encoding, rely on external tools that can take considerable work to compile and configure. The setup scripts prepare an environment for all features on the systems listed below. You can configure the tools manually on other systems.\
-Packaged editions are available for Windows and Ubuntu.
+Source runs require the [Python dependencies](#python-packages) and external tools for the selected features. For package selection, setup requirements and Docker instructions, see the [wiki](docs/wiki/Packages-and-System-Requirements.md).
 
 ### `setup_windows_environment.ps1` (Windows environment setup)
-
-The script configures source runs on **x64 Windows 10 version 1909 or later**, **x64 Windows Server 2019 or later with Desktop Experience**, and **ARM64 Windows 11 or later**. Setup defaults to VapourSynth R79 on both architectures. Use `-VapourSynthRuntime Classic` to select the Classic runtime. On ARM64, that option uses a private x64 Python and x64 builds of the Classic plugins and VSEdit.
 
 For the first run, set the current user’s PowerShell execution policy and start setup from the repository root.
 
@@ -235,24 +229,7 @@ pyinstaller BluraySubtitle_windows_arm64.spec
 
 ### `setup_linux_environment.sh` (Linux runtime environment)
 
-The setup script configures the source runtime on native **x64 or ARM64 Linux** systems in either of these APT-based families.
-
-- Ubuntu 22.04 or later, including distributions based on these Ubuntu releases.
-- Debian 12 or later, including distributions based on these Debian releases.
-
-Setup installs VapourSynth R79. On distributions with an older system Python, it installs a dedicated Python 3.12 and prints the launch command to use.
-
-Earlier versions of the setup script were tested in the following x64 WSL 2 environments.
-
-- Ubuntu 22.04, 24.04, 26.04, and 26.10
-- Debian 12 and 13
-- Kali Linux 2022.4 and Kali Rolling
-- Linux Mint 22.3
-- LMDE 7
-- antiX 23.2 and 26.1
-- Devuan 6
-- KDE neon
-- Pop!_OS 24.04
+Setup uses uv to install the latest stable CPython 3 in a dedicated environment for the application and VapourSynth R79. Run the launch command printed by setup.
 
 Use a regular account with `sudo` access. Running the script directly as `root` is not guaranteed to succeed. Make the script executable before the first run and start it from the repository root.
 
@@ -285,10 +262,6 @@ When run over SSH, `setup_linux_environment.sh` uses **tmux** to display build l
 ---
 
 ## FAQ
-
-### Which Linux distributions can run the packaged build?
-
-The PyInstaller packages target Ubuntu 26.04 and may also work on newer releases. Choose the x64 or ARM64 package for your system. Both include the multimedia tools and the VapourSynth runtime. On other systems, use Docker to run the extracted program. See [Run the Ubuntu package in Docker](docs/wiki/Run-Ubuntu-Package-in-Docker.md).
 
 ### How do I run a short encode test?
 

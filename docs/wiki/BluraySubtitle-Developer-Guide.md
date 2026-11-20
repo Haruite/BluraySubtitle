@@ -21,12 +21,6 @@ Use the [main MPLS and SP definitions](Blu-ray-Disc-Structure.md#main-content-an
 
 Use the setup scripts as references for custom builds. See [automatic HDR metadata handling](Video-Encoding-and-VapourSynth.md#automatic-hdr-metadata-handling) for parameter requirements and injection fallback.
 
-### Ubuntu 26.04 packages
-
-Run `bash setup_linux_environment.sh --mode Build` on a native Ubuntu 26.04 host, then run `bash tools/build_ubuntu_package.sh`. The packager selects the PyInstaller spec for the host architecture, stages the native tools and libraries, and writes the archive and its SHA-256 build record. [x64 spec](../../BluraySubtitle_ubuntu2604_x64.spec) · [ARM64 spec](../../BluraySubtitle_ubuntu2604_arm64.spec)
-
-Build mode links mpv, FFmpeg, and FFprobe to the same FFmpeg libraries and enables Vulkan in mpv, FFmpeg, and libplacebo. Run `python3 tools/verify_ubuntu_package.py <archive>` to check the native binaries, libraries, filters, and Vulkan support in the archive.
-
 ## Source-code map
 
 ### Blu-ray structures

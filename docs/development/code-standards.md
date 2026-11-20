@@ -75,10 +75,10 @@ Keep both language versions of these standards synchronized, and record confirme
 
 ## 9. Tool Versions and Setup
 
-- Source runs support systems and architectures where the required Python version and packages, plus the tools used by the selected feature, are available. Apply the setup and package requirements in the [README](../../README.md#cross-platform-support) to their respective entry points.
+- Source runs support systems and architectures where the required Python version and packages, plus the tools used by the selected feature, are available. See the [wiki](../wiki/Packages-and-System-Requirements.md) for the system and processor requirements of the setup scripts and packaged editions.
 - Prefer portable APIs in shared application code. Enable desktop integrations where the desktop provides the required service.
 - Use the latest version published by the official upstream for dependencies and bundled tools. Pin a version or commit only for a confirmed compatibility or other technical constraint.
-- Setup scripts must install every executable, library, and plugin used by their respective runtime. Source builds must explicitly enable every optional feature the application uses.
+- Setup scripts must install every executable, library, and plugin used by their respective runtime. Source builds must explicitly enable every optional feature the application uses. Linux setup must check the build dependencies of Ubuntu, Debian and their derivatives and fail clearly if the requested capabilities cannot be installed. Keep hardware-dependent plugins installable on headless systems.
 - Read tool paths from `config.json` in the application and in Desktop setup. Resolve relative paths against the configuration directory and use the same resolved paths for checks and execution. A configured tool path takes precedence over discovery. Pass the configured VapourSynth plugin directory to the tools that run the scripts.
 - Resolve all four MKVToolNix executables under `MKVTOOLNIX_PATH`. Windows setup must install VSEdit into its own directory named `vsedit` and MKVToolNix into a directory named `mkvtoolnix`. Normalize these installation paths and write the resulting values back to the configuration used for setup.
 

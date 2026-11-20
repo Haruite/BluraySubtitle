@@ -32,4 +32,4 @@ An unspecified license is not an MIT, public-domain, or unrestricted-use declara
 
 ## Distribution locations
 
-Windows and Linux setup install the `.py` files into the selected VapourSynth Python search directory and this notice tree into its `licenses/vapoursynth_scripts/` directory. The Windows and Ubuntu application bundles include the scripts beside the shared Python runtime and this notice tree at `legal/vapoursynth_scripts/`.
+Windows and Linux setup install the `.py` files into the selected VapourSynth Python search directory and this notice tree into its `licenses/vapoursynth_scripts/` directory. The Windows and Linux application bundles include the scripts beside the shared Python runtime and this notice tree at `legal/vapoursynth_scripts/`.

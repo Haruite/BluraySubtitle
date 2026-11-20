@@ -1,4 +1,5 @@
 - [首页](Home.zh-Hans.md)
+- [程序包与系统要求](Packages-and-System-Requirements.zh-Hans.md)
 - [界面展示及说明](Interface-Guide.zh-Hans.md)
 - [媒体基础概念](Media-Fundamentals.zh-Hans.md)
 - [Blu-ray 原盘结构](Blu-ray-Disc-Structure.zh-Hans.md)

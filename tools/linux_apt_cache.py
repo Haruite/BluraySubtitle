@@ -1,4 +1,4 @@
-"""Replay the APT packages used to assemble the Ubuntu package."""
+"""Replay the APT packages used to assemble the Linux package."""
 
 from __future__ import annotations
 
@@ -18,7 +18,8 @@ REPLACED_APT_PACKAGES = {"ffmpeg"}
 PACKAGING_PACKAGES = {
     "binutils", "gcc", "libc6-dev", "libass-dev", "libavcodec-dev", "libavformat-dev",
     "libavutil-dev", "libplacebo-dev", "libswresample-dev", "libswscale-dev", "libvulkan1", "python3-pip",
-    "python3-pyqt6", "qt6-base-dev-tools", "xz-utils",
+    "libarchive-tools", "patchelf", "python3-venv", "python3-pip-whl", "xz-utils",
+    f"python{sys.version_info.major}.{sys.version_info.minor}-venv",
 }
 
 
@@ -44,7 +45,7 @@ def package_paths(paths: list[str]) -> set[str]:
         if not name:
             continue
         for path in (name, str(Path(name).resolve())):
-            if path.startswith(("/usr/bin/", "/usr/lib/", "/bin/", "/lib/")):
+            if path.startswith(("/usr/bin/", "/usr/lib/", "/bin/", "/lib/", "/usr/share/pipewire/")):
                 candidates.add(path)
                 if path.startswith(("/usr/lib/", "/usr/bin/")):
                     candidates.add(path[4:])

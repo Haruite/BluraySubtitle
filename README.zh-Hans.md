@@ -6,10 +6,8 @@
 
 开发文档：[强制代码修改规范](docs/development/code-standards.zh-Hans.md) | [媒体处理方案与工具选型](docs/development/media-pipeline-and-tool-selection.zh-Hans.md) | [重构历史](docs/refactoring/refactoring-history.zh-Hans.md)
 
-- `main` 分支最新构建，每次推送更新。[Windows x64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_windows_x64.7z) · [Windows ARM64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_windows_arm64.7z) · [Ubuntu 26.04 x64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_ubuntu26.04_x64.tar.xz) · [Ubuntu 26.04 ARM64](https://sbx.mysmy.top/tools/BluraySubtitle/BluraySubtitle_ubuntu26.04_arm64.tar.xz)
+- [最新构建下载目录](https://sbx.mysmy.top/tools/BluraySubtitle/) · [选择下载文件](docs/wiki/Packages-and-System-Requirements.zh-Hans.md#选择下载文件)
 - 版本 4.7 以后，对应版本的安装包会附在 Release 中。[GitHub Releases](https://github.com/Haruite/BluraySubtitle/releases)
-
-Windows x64 程序包支持 **Windows 10 1809 及以上版本 和 Windows 11**。Windows ARM64 程序包面向 **Windows 10 和 Windows 11 ARM64 版本**，具体最低 Windows 10 版本待验证。Windows 10 建议使用 **22H2**。
 
 BluraySubtitle 是一个跨平台的蓝光流程 GUI 工具。它将以下五类功能整合在一个应用中：
 
@@ -205,13 +203,9 @@ python src/main.py
 
 ## 跨平台支持
 
-只要系统和架构能够提供[所需的 Python 版本及依赖](#python-依赖)和所用功能的外部工具，即可从源码运行。\
-有些功能（主要是压制）依赖较多外部工具，编译和配置步骤也较多。以下环境配置脚本可为所列系统准备运行全部功能的环境。其他系统可以手动配置。\
-项目也提供 Windows 和 Ubuntu 打包版。
+可在具备[所需 Python 依赖](#python-依赖)和相应外部工具的系统上从源码运行。程序包选型、安装脚本的系统要求和 Docker 用法见 [Wiki](docs/wiki/Packages-and-System-Requirements.zh-Hans.md)。
 
 ### setup_windows_environment.ps1（Windows 环境配置脚本）
-
-脚本为 **x64 Windows 10 1909 及以上版本**、**带桌面体验的 x64 Windows Server 2019 及以上版本**和 **ARM64 Windows 11 及以上版本**配置源码运行环境。两种架构默认使用 VapourSynth R79。需要 Classic 时可传入 `-VapourSynthRuntime Classic`。在 ARM64 上，该选项使用独立的 x64 Python，并为 Classic 插件和 VSEdit 使用 x64 构建。
 
 首次运行时，先设置当前用户的 PowerShell 执行策略，再从仓库根目录启动脚本。
 
@@ -234,24 +228,7 @@ pyinstaller BluraySubtitle_windows_arm64.spec
 
 ### setup_linux_environment.sh（Linux 运行环境脚本）
 
-脚本可为以下基于 APT 的原生 **x64 或 ARM64 Linux** 系统配置源码运行环境。
-
-- Ubuntu 22.04 及以上版本，包括基于这些 Ubuntu 版本的衍生发行版。
-- Debian 12 及以上版本，包括基于这些 Debian 版本的衍生发行版。
-
-脚本安装 VapourSynth R79。如果系统 Python 版本较旧，脚本会安装独立的 Python 3.12，并在结束时给出启动命令。
-
-脚本的早期版本在以下 x64 WSL 2 环境中完成过验证。
-
-- Ubuntu 22.04、24.04、26.04、26.10
-- Debian 12、13
-- Kali Linux 2022.4、Kali Rolling
-- Linux Mint 22.3
-- LMDE 7
-- antiX 23.2、26.1
-- Devuan 6
-- KDE neon
-- Pop!_OS 24.04
+脚本使用 uv 安装最新稳定版 CPython 3，为程序和 VapourSynth R79 配置独立环境。完成后使用脚本输出的命令启动。
 
 使用具备 `sudo` 权限的普通账户。直接以 `root` 用户运行脚本不保证成功。首次运行前先授予脚本执行权限，再从仓库根目录启动。
 
@@ -283,10 +260,6 @@ chmod +x setup_linux_environment.sh
 ---
 
 ## FAQ
-
-### 哪些 Linux 系统可以使用打包版？
-
-PyInstaller 打包版面向 Ubuntu 26.04，提供 x64 和 ARM64 两个版本，理论上更高版本的系统也可以使用。选择与你的系统架构匹配的包。两种包均包含多媒体工具和 VapourSynth 运行时。其他不支持的系统上可以使用 Docker 运行解压后的程序，参见 [Docker 运行 Ubuntu 打包版](docs/wiki/Run-Ubuntu-Package-in-Docker.zh-Hans.md)。
 
 ### 如何快速测试压制，不跑完整片？
 

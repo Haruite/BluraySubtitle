@@ -16,12 +16,25 @@ import sysconfig
 import tarfile
 from tempfile import TemporaryDirectory
 
-from vapoursynth_plugin_versions import _records, record_version
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from src.runtime import mpv_environment
+from tools.vapoursynth_plugin_versions import _records, record_version
 
 SYSTEM_ROOTS = tuple(Path("/usr/local") / name for name in ("bin", "include", "lib", "lib64", "share")) + (
     Path("/usr/share/mkvtoolnix"),
 )
 MANIFEST = "build.json"
+# A previous local installation may predate its artifact archive. These are the
+# runtime and development outputs that other components need in that case.
+LOCAL_OUTPUTS = {
+    "lsmash": ("bin/boxdumper", "bin/muxer", "bin/remuxer", "bin/timelineeditor", "include/lsmash.h",
+               "lib/liblsmash.*", "lib/pkgconfig/liblsmash.pc"),
+    "fdkaac": ("bin/fdkaac", "include/fdk-aac/*.h", "include/fdk-xhe-aac/*.h",
+               "lib/libfdk-aac.*", "lib/libfdk-xhe-aac.*", "lib/pkgconfig/fdk*.pc"),
+    "flac": ("bin/flac", "bin/metaflac", "include/FLAC*/*.h", "lib/libFLAC*.*", "lib/pkgconfig/flac*.pc"),
+    "mpv-ffmpeg": ("bin/mpv", "include/mpv/*.h", "lib/bluraysubtitle-ffmpeg/*.so.*",
+                   "lib/libmpv.so*", "lib/*/libmpv.so*", "lib/pkgconfig/mpv.pc", "lib/*/pkgconfig/mpv.pc"),
+}
 
 
 def legacy_declarations(source: Path, output: Path) -> None:
@@ -145,16 +158,33 @@ def save_cache(cache: Path, key: str, baseline: dict, scope: InstallPaths, resto
         with tarfile.open(cache, "r|xz") as archive:
             previous = manifest(archive, restored_key)
 
-    candidates = {**{name: entry[0] for name, entry in previous["files"].items()}, **baseline}
+    # Keep declared outputs (including already-installed tools and unchanged model files)
+    # and the exact files written through this component's DESTDIR.
+    candidates = {str(path): None for path in scope.files}
+    if scope.roots and not restored_key and baseline.keys() <= candidates.keys():
+        for pattern in LOCAL_OUTPUTS.get(cache.name.removesuffix(".tar.xz"), ()):
+            for path in Path("/usr/local").glob(pattern):
+                candidates[str(path)] = None
+    candidates.update({name: entry[0] for name, entry in previous["files"].items()})
+    candidates.update(baseline)
     paths = {}
+    sources = {}
     for name, before in candidates.items():
         path = Path(name)
-        if not scope.contains(path) or (checksum := installed_digest(path)) is None:
+        source = path
+        if path == mpv_environment.MPV_COMMAND:
+            source = mpv_environment.native_mpv_executable(path)
+            if not source.is_file():
+                continue
+            with source.open("rb") as program:
+                if program.read(4) != b"\x7fELF":
+                    continue
+            source = source.resolve()
+        if not scope.contains(path) or (checksum := installed_digest(source)) is None:
             continue
-        mode = stat.S_IMODE(path.lstat().st_mode) & 0o777
+        sources[name] = source
+        mode = stat.S_IMODE(source.lstat().st_mode) & 0o777
         cached = previous["files"].get(name)
-        if not cached and before == checksum:
-            continue
         if cached and cached[1:] == [checksum, mode]:
             paths[name] = cached
         else:
@@ -184,7 +214,7 @@ def save_cache(cache: Path, key: str, baseline: dict, scope: InstallPaths, resto
                 info.size = len(record)
                 archive.addfile(info, io.BytesIO(record))
                 for name in sorted(paths):
-                    archive.add(name, arcname=name.lstrip("/"), recursive=False)
+                    archive.add(sources[name], arcname=name.lstrip("/"), recursive=False)
                     archive.inodes.clear()
             compressor.stdin.close()
             if compressor.wait():
@@ -223,14 +253,18 @@ def restore_cache(cache: Path, key: str, scope: InstallPaths, legacy_key: str = 
                     raise ValueError(f"Unexpected path in build cache: {member.name}")
                 seen.add(path)
                 before, checksum, mode = files[str(path)]
-                existing = installed_digest(path)
+                # A Desktop install keeps its native player beside a launcher.
+                destination = path
+                if path == mpv_environment.MPV_COMMAND and mpv_environment.is_desktop_launcher(path):
+                    destination = mpv_environment.MPV_NATIVE
+                existing = installed_digest(destination)
                 if existing is not None:
-                    if existing == checksum and stat.S_IMODE(path.lstat().st_mode) == mode:
+                    if existing == checksum and stat.S_IMODE(destination.lstat().st_mode) == mode:
                         continue
                     if existing not in (before, checksum):
-                        raise ValueError(f"Existing file differs from the build cache: {path}")
-                elif path.exists():
-                    raise ValueError(f"Existing path conflicts with the build cache: {path}")
+                        raise ValueError(f"Existing file differs from the build cache: {destination}")
+                elif destination.exists():
+                    raise ValueError(f"Existing path conflicts with the build cache: {destination}")
                 if member.issym():
                     target = (path.parent / member.linkname).resolve()
                     if not scope.contains(target) and not target.is_relative_to("/usr/lib"):
@@ -239,7 +273,7 @@ def restore_cache(cache: Path, key: str, scope: InstallPaths, legacy_key: str = 
                 target_tar = user_archive if is_user else system_archive
                 with archive.extractfile(member) if member.isfile() else nullcontext() as payload:
                     reader = HashingReader(payload) if payload else None
-                    target_tar.addfile(member.replace(mode=mode & 0o777), reader)
+                    target_tar.addfile(member.replace(name=str(destination).lstrip("/"), mode=mode & 0o777), reader)
                     actual = reader.sha256.hexdigest() if reader else "link:" + member.linkname
                     if actual != checksum:
                         raise ValueError(f"Invalid checksum for cached file: {path}")

@@ -17,13 +17,13 @@ platform_update = None
 SERVER_PACKAGE_LABEL = ""
 DIRECT_UPDATE_REQUIREMENT = "Direct updates require a supported packaged edition."
 if sys.platform.startswith("linux") and platform.machine().lower() in {"x86_64", "amd64", "aarch64", "arm64"}:
-    from . import ubuntu_update as platform_update
+    from . import linux_update as platform_update
 
     SERVER_PACKAGE_LABEL = (
-        "Server Ubuntu 26.04 ARM64 package" if platform_update.UBUNTU_ARCHITECTURE == "arm64"
-        else "Server Ubuntu 26.04 x64 package"
+        "Server Linux ARM64 package" if platform_update.LINUX_ARCHITECTURE == "arm64"
+        else "Server Linux x64 package"
     )
-    DIRECT_UPDATE_REQUIREMENT = "Direct updates require the packaged Ubuntu 26.04 program."
+    DIRECT_UPDATE_REQUIREMENT = "Direct updates require the packaged Linux program."
 elif sys.platform == "win32" and sysconfig.get_platform() in {"win-amd64", "win-arm64"}:
     from . import windows_update as platform_update
 

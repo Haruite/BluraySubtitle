@@ -6,7 +6,7 @@
 
 | 主题 | 主要文档 |
 | --- | --- |
-| 在容器中运行 Ubuntu 打包版 | [Docker 运行指南](Run-Ubuntu-Package-in-Docker.zh-Hans.md) |
+| 下载文件、运行与源码安装要求、Docker | [程序包与系统要求](Packages-and-System-Requirements.zh-Hans.md) |
 | 表格、轨道对话框及真实原盘选择示例 | [界面展示及说明](Interface-Guide.zh-Hans.md) |
 | 容器、轨道、抽流／重混流、编码与无损音频 | [媒体基础概念](Media-Fundamentals.zh-Hans.md) |
 | BDMV 结构、播放列表时间、主 MPLS 与 SP 规则 | [蓝光原盘结构](Blu-ray-Disc-Structure.zh-Hans.md) |

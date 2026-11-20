@@ -200,7 +200,7 @@ Converting ASS to PGS keeps subtitles selectable but rasterizes their appearance
 
 ## Linux desktop playback with mpv
 
-Ubuntu packages include uosc, mpv-lazy presets and shaders, and the English and Simplified Chinese right-click menus. For source installations, run the [Linux setup script](../../README.md#setup_linux_environmentsh-linux-runtime-environment) and reopen mpv. Start playback from BluraySubtitle to use the current interface language for the menu and uosc controls. In a source installation, the language selected during setup is the default when you open mpv directly. The default menu and controls scale to the current display.
+Linux packages include uosc, mpv-lazy presets and shaders, and the English and Simplified Chinese right-click menus. For source installations, run the [Linux setup script](../../README.md#setup_linux_environmentsh-linux-runtime-environment) and reopen mpv. Start playback from BluraySubtitle to use the current interface language for the menu and uosc controls. In a source installation, the language selected during setup is the default when you open mpv directly. The default menu and controls scale to the current display.
 
 ### Picture, subtitles, and shaders
 
@@ -227,7 +227,7 @@ mpv --sub-file="/path/to/episode.ass" "/path/to/episode.mkv"
 
 - In **VapourSynth Presets**, select MVTools or RIFE for frame interpolation, CCD for chroma denoising, or BM3D for CPU luma denoising. Select the active filter again to turn it off. Selecting a different filter replaces the active one.
 - **Interpolation Multiplier** applies to both MVTools and RIFE and defaults to 2×. Enter a decimal or a fraction such as `2.5` or `5/2` to use a custom multiplier. Values must be greater than 1× and at most 10×, with a reduced denominator no greater than 100. The choice is saved immediately and reused the next time mpv starts.
-- RIFE uses the source resolution and appears only if Vulkan can render a test frame. The compatibility build on Ubuntu 22.04 and Debian 12 uses OpenGL with the default mpv renderer, which can limit shader compatibility.
+- RIFE interpolates at the source resolution. Setup installs the plugin and model on headless systems too. Playback requires a Vulkan-capable GPU and driver.
 
 ## Dolby Vision fundamentals
 

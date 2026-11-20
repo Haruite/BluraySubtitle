@@ -9,7 +9,7 @@ class TaskCancelled(Exception):
 
 
 def worker_process_context():
-    # The Ubuntu bundle uses fork to start workers from its frozen interpreter.
+    # The Linux bundle uses fork to start workers from its frozen interpreter.
     if getattr(sys, "frozen", False) and sys.platform.startswith("linux"):
         return get_context("fork")
     return get_context("spawn")

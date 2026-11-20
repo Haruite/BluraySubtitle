@@ -68,9 +68,10 @@ def install_mpv_defaults(support: Path) -> None:
             stream.write(section + b"\n".join(missing) + b"\n")
 
 
-executable = Path(sys.executable).resolve()
 vsscript = Path(os.environ["VSSCRIPT_PATH"])
-library = vsscript.parent.parent / "libpython3.14.so.1.0"
+support = vsscript.parent.parent
+executable = support / "linux/python/bin/python3"
+library = support / f"libpython{sys.version_info.major}.{sys.version_info.minor}.so.1.0"
 target = Path(os.environ["XDG_CONFIG_HOME"]) / "vapoursynth/vapoursynth.toml"
 fields = [str(executable), str(library), str(int(executable.stat().st_mtime))]
 record = f"{json.dumps(str(vsscript), ensure_ascii=False)} = {json.dumps(fields, ensure_ascii=False)}\n"

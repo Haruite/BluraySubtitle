@@ -1402,3 +1402,17 @@ Ubuntu and Windows builds validate each component cache against upstream version
 - Use Qt for opening files and directories. Desktop shortcuts, appearance settings, and package updates use the integrations available on the host.
 - Source workers start with spawn. getnative uses available memory to set its worker limit and processes one sample at a time when the memory probe is unavailable.
 - Verified both dialog titles with the same Blu-ray playlist. Source GUI startup and tool discovery passed on Ubuntu and Windows.
+
+## Linux folder packages and updates
+
+2026-11-20
+
+The publishing workflows produce a Linux folder package for each architecture with Python, a private glibc and its matching ELF dynamic loader. The launcher starts the application and dynamically linked media tools through that loader with the bundled shared-library directories on its search path. This lets the same archive run on Alpine with musl and on NixOS with its own library layout, without installing runtime libraries through APT.
+
+The build checks the ELF ABI notes to ensure that private glibc and Qt 6.6 target Linux 3.17 or earlier. It records the highest kernel requirement among the current Qt libraries and their dependencies. Before PyQt loads, the launcher selects the current Qt on eligible kernels and the bundled Qt 6.6 on older ones. VSEdit always uses the Qt 6.6 runtime it was built against. On kernels without `pidfd_open`, the updater waits for EOF on a pipe to detect when the application exits. Both architectures were verified on Linux 3.17.
+
+## Linux source setup and build caches
+
+2026-11-20
+
+Setup checks the dependencies for full-feature tool builds. Build caches the uv CPython distribution, Qt 6.6 SDK and installed components, including the RIFE plugin and models. A verified cache can be used without installing APT packages.

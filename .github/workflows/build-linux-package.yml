@@ -1,4 +1,4 @@
-name: Build and Publish an Ubuntu Package
+name: Build and Publish a Linux Package
 
 on:
   workflow_call:
@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ inputs.architecture == 'arm64' && 'ubuntu-arm64-package-website' || 'ubuntu-package-website' }}
+  group: linux-${{ inputs.architecture }}-package-website
   queue: max
 
 jobs:
@@ -26,7 +26,7 @@ jobs:
     env:
       BLURAY_LANG: en
       CCACHE_MAXSIZE: 2G
-      PACKAGE_ARCHIVE: BluraySubtitle_ubuntu26.04_${{ inputs.architecture }}.tar.xz
+      PACKAGE_ARCHIVE: BluraySubtitle_linux_${{ inputs.architecture }}.tar.xz
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v6
@@ -89,7 +89,7 @@ jobs:
           revision=0094649202280d37968cd33a2c152a3051c32481
           if git cat-file -e "$revision:setup_linux_environment.sh" 2>/dev/null ||
              git fetch --no-tags --depth=1 --no-write-fetch-head origin "$revision"; then
-            legacy="$RUNNER_TEMP/ubuntu-legacy-setup.sh"
+            legacy="$RUNNER_TEMP/linux-legacy-setup.sh"
             git show "$revision:setup_linux_environment.sh" > "$legacy"
             printf 'BLURAY_LEGACY_CACHE_SETUP=%s\n' "$legacy" >> "$GITHUB_ENV"
           else
@@ -115,39 +115,40 @@ jobs:
           key: ubuntu2604-apt-runtime-v2-${{ runner.arch }}-lookup
           restore-keys: ubuntu2604-apt-runtime-v2-${{ runner.arch }}-
 
-      - name: Build Ubuntu Package from Cached Tools
+      - name: Build Linux Package from Cached Tools
         id: cached
         if: steps.builds.outputs.cache-matched-key != '' && (steps.apt-runtime.outputs.cache-matched-key != '' || steps.legacy-apt.outputs.cache-matched-key != '')
         env:
           BLURAYSUBTITLE_GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          output=$(mktemp -d "$RUNNER_TEMP/ubuntu-cached-package.XXXXXXXX")
+          output=$(mktemp -d "$RUNNER_TEMP/linux-cached-package.XXXXXXXX")
           trap 'rm -rf -- "$output"' EXIT
           if bash setup_linux_environment.sh --mode Build --restore-only &&
-              bash tools/build_ubuntu_package.sh "$output" &&
-              /usr/bin/python3 -B tools/verify_ubuntu_package.py "$output/$PACKAGE_ARCHIVE"; then
+              bash tools/build_linux_package.sh "$output" &&
+              /usr/bin/python3 -B tools/verify_linux_package.py "$output/$PACKAGE_ARCHIVE"; then
             mkdir -p dist
             mv --update=none-fail -- "$output/$PACKAGE_ARCHIVE" "$output/$PACKAGE_ARCHIVE.txt" dist/
             printf 'built=true\n' >> "$GITHUB_OUTPUT"
           else
-            echo 'Cached Ubuntu build could not be verified. Running setup.'
+            echo 'Cached Linux build could not be verified. Running setup.'
           fi
 
-      - name: Prepare Ubuntu Build Environment
+      - name: Prepare Linux Build Environment
         if: steps.cached.outputs.built != 'true'
         env:
           BLURAYSUBTITLE_GITHUB_TOKEN: ${{ github.token }}
+          BLURAY_BUILD_CACHE_PROBED: ${{ steps.cached.outcome == 'success' }}
         run: |
           set -euo pipefail
           bash setup_linux_environment.sh --mode Build
 
-      - name: Build and Verify Ubuntu Package
+      - name: Build and Verify Linux Package
         if: steps.cached.outputs.built != 'true'
         run: |
           set -euo pipefail
-          bash tools/build_ubuntu_package.sh
-          /usr/bin/python3 -B tools/verify_ubuntu_package.py "dist/$PACKAGE_ARCHIVE"
+          bash tools/build_linux_package.sh
+          /usr/bin/python3 -B tools/verify_linux_package.py "dist/$PACKAGE_ARCHIVE"
 
       - name: Fingerprint Verified Build Caches
         id: snapshot
@@ -155,11 +156,11 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
-          if ! /usr/bin/python3 -B tools/ubuntu_apt_cache.py save "$BLURAY_SETUP_CACHE_DIR" "$BLURAY_APT_CACHE_PATHS"; then
+          if ! /usr/bin/python3 -B tools/linux_apt_cache.py save "$BLURAY_SETUP_CACHE_DIR" "$BLURAY_APT_CACHE_PATHS"; then
             rm -f -- "$BLURAY_SETUP_CACHE_DIR/apt-runtime/packages.json"
             echo "::warning::Could not collect the APT package cache"
           fi
-          /usr/bin/python3 -B tools/ubuntu_actions_cache.py snapshot "$RUNNER_ARCH"
+          /usr/bin/python3 -B tools/linux_actions_cache.py snapshot "$RUNNER_ARCH"
 
       - name: Save Setup Downloads and Compiler Cache
         if: steps.snapshot.outputs.setup != '' && steps.snapshot.outputs.setup != steps.downloads.outputs.cache-matched-key
@@ -213,4 +214,4 @@ jobs:
           RESTORED_SETUP_CACHE: ${{ needs.publish.outputs.restored-setup }}
           RESTORED_TOOLS_CACHE: ${{ needs.publish.outputs.restored-tools }}
           RESTORED_APT_CACHE: ${{ needs.publish.outputs.restored-apt }}
-        run: /usr/bin/python3 -B tools/ubuntu_actions_cache.py prune "$CACHE_ARCHITECTURE"
+        run: /usr/bin/python3 -B tools/linux_actions_cache.py prune "$CACHE_ARCHITECTURE"

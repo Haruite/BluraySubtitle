@@ -56,7 +56,7 @@ def run_src_entry(application_log: ApplicationLog | None = None) -> None:
         )
     ready_file = update_error = ""
     if frozen and sys.platform.startswith("linux"):
-        from .ubuntu_update import update_in_progress
+        from .linux_update import update_in_progress
 
         ready_file = os.environ.pop("BLURAY_SUBTITLE_UPDATE_READY", "")
         update_error = os.environ.pop("BLURAY_SUBTITLE_UPDATE_ERROR", "")

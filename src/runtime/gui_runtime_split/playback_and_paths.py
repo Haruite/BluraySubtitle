@@ -137,9 +137,9 @@ class PlaybackPathsMixin(BluraySubtitleGuiBase):
         options = []
         menu_directory = None
         environment = QProcessEnvironment.systemEnvironment()
-        ubuntu_bundle = getattr(sys, "frozen", False) and sys.platform.startswith("linux")
+        linux_bundle = getattr(sys, "frozen", False) and sys.platform.startswith("linux")
         if sys.platform.startswith("linux"):
-            if ubuntu_bundle:
+            if linux_bundle:
                 if environment.contains("LD_LIBRARY_PATH_ORIG"):
                     environment.insert("LD_LIBRARY_PATH", environment.value("LD_LIBRARY_PATH_ORIG"))
                 else:
@@ -171,10 +171,10 @@ class PlaybackPathsMixin(BluraySubtitleGuiBase):
             environment.insert("VAPOURSYNTH_EXTRA_PLUGIN_PATH", plugin_path)
         config = tool_path("MPV_CONFIG_PATH")
         if config:
-            if ubuntu_bundle:
+            if linux_bundle:
                 options.append(f"--config-dir={config}")
                 environment.insert("BLURAYSUB_MPV_CONFIG_PATH", config)
-            if ubuntu_bundle or self._app_config.tools.get("MPV_CONFIG_PATH"):
+            if linux_bundle or self._app_config.tools.get("MPV_CONFIG_PATH"):
                 environment.insert("MPV_HOME", config)
         if config and (supports_desktop_entries() or self._app_config.tools.get("MPV_CONFIG_PATH")):
             menu_options, menu_directory = mpv_language_options(self._language_code, Path(config))

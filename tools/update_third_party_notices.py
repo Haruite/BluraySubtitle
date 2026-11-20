@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from importlib.metadata import version
 import json
+import os
 from pathlib import Path
 import platform
 import re
@@ -181,7 +182,7 @@ def generate_third_party_notices(
     _render_notices(template_outputs, versions)
 
 
-def generate_ubuntu_third_party_notices(
+def generate_linux_third_party_notices(
     template_outputs: Mapping[Path, Path],
     settings: Mapping[str, object],
     pyinstaller_version: str,
@@ -192,13 +193,15 @@ def generate_ubuntu_third_party_notices(
     vapoursynth_components: str,
     uosc_version: str,
 ) -> None:
-    """Render Ubuntu notices using the tools and Python libraries selected for staging."""
+    """Render Linux notices using the tools and Python libraries selected for staging."""
     python_architecture = {
         "x86_64-linux-gnu": "amd64",
         "aarch64-linux-gnu": "arm64",
     }[sysconfig.get_config_var("MULTIARCH")]
     versions = {
         **_common_versions(settings, pyinstaller_version, libsndfile_version, ("--help",), (0,)),
+        "PYTHON_LIBRARY": sysconfig.get_config_var("INSTSONAME"),
+        "GLIBC_VERSION": os.confstr("CS_GNU_LIBC_VERSION").split()[-1],
         "PYTHON_ARCHITECTURE": python_architecture,
         "FDK_AAC_VERSION": _command_version(
             "/usr/bin/pkg-config", ("--modversion", "fdk-aac"), rf"^({VERSION})$"

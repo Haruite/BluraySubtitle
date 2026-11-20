@@ -32,4 +32,4 @@
 
 ## 分发位置
 
-Windows 和 Linux 安装脚本将 `.py` 文件安装到选定的 VapourSynth Python 搜索目录，并将本说明及许可文本安装到该目录下的 `licenses/vapoursynth_scripts/`。Windows 和 Ubuntu 程序包将脚本放在共用 Python 运行时旁，说明和许可文本位于 `legal/vapoursynth_scripts/`。
+Windows 和 Linux 安装脚本将 `.py` 文件安装到选定的 VapourSynth Python 搜索目录，并将本说明及许可文本安装到该目录下的 `licenses/vapoursynth_scripts/`。Windows 和 Linux 程序包将脚本放在共用 Python 运行时旁，说明和许可文本位于 `legal/vapoursynth_scripts/`。

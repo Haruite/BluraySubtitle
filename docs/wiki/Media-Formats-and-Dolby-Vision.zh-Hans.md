@@ -200,7 +200,7 @@ ASS 转 PGS 会保留字幕可选择性，但会按指定分辨率和帧率／�
 
 ## Linux 桌面 mpv 播放
 
-Ubuntu 打包版自带 uosc、mpv-lazy 预设和着色器，以及中英文右键菜单。从源码运行时，先运行 [Linux 安装脚本](../../README.zh-Hans.md#setup_linux_environmentshlinux-运行环境脚本)，再重新打开 mpv。从 BluraySubtitle 启动播放时，右键菜单和 uosc 播放控件跟随当前界面语言。源码安装后直接打开 mpv 时，默认使用安装时选择的语言。默认菜单和控件根据当前显示器 DPI 缩放。
+Linux 打包版自带 uosc、mpv-lazy 预设和着色器，以及中英文右键菜单。从源码运行时，先运行 [Linux 安装脚本](../../README.zh-Hans.md#setup_linux_environmentshlinux-运行环境脚本)，再重新打开 mpv。从 BluraySubtitle 启动播放时，右键菜单和 uosc 播放控件跟随当前界面语言。源码安装后直接打开 mpv 时，默认使用安装时选择的语言。默认菜单和控件根据当前显示器 DPI 缩放。
 
 ### 画质、字幕与着色器
 
@@ -227,7 +227,7 @@ mpv --sub-file="/path/to/episode.ass" "/path/to/episode.mkv"
 
 - 在 **VapourSynth 滤镜**中，选择 MVTools 或 RIFE 补帧、CCD 抑制彩噪，或用 BM3D 进行 CPU 亮度降噪。再次选择已开启的滤镜即可关闭，选择另一项可直接切换。
 - **补帧倍率**由 MVTools 和 RIFE 共用，默认 2×。自定义时可输入 `2.5` 或 `5/2` 等小数或分数。倍率须大于 1× 且不超过 10×，约分后分母最多为 100。选定的倍率立即保存，下次启动 mpv 时自动读取。
-- RIFE 按片源原分辨率计算，Vulkan 通过测试帧验证后才会出现在菜单中。Ubuntu 22.04 和 Debian 12 上的兼容构建默认使用 OpenGL 渲染 mpv 画面，部分着色器可能受限。
+- RIFE 按片源原分辨率插帧。无桌面系统也会安装插件和模型，播放时需要可用的 Vulkan GPU 和驱动。
 
 ## Dolby Vision 基础
 

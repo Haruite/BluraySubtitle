@@ -311,7 +311,7 @@ def third_party_notices_markdown_path(language: str) -> Optional[str]:
     if sys.platform == 'win32':
         rel_candidates.append(os.path.join('legal', 'windows', filename))
     elif sys.platform.startswith('linux'):
-        rel_candidates.append(os.path.join('legal', 'ubuntu', filename))
+        rel_candidates.append(os.path.join('legal', 'linux', filename))
     rel_candidates.append(filename)
     seen: set[str] = set()
     roots: list[str] = []
@@ -357,6 +357,9 @@ def system_tool_environment() -> dict[str, str]:
                 else:
                     env.pop(name)
         if sys.platform.startswith('linux'):
+            for name in ('QT_PLUGIN_PATH', 'QT_QPA_PLATFORM_PLUGIN_PATH', 'GCONV_PATH'):
+                if name in env and from_bundle(env[name]):
+                    env.pop(name)
             if 'LD_LIBRARY_PATH_ORIG' in env:
                 env['LD_LIBRARY_PATH'] = env['LD_LIBRARY_PATH_ORIG']
             else:
