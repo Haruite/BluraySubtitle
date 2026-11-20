@@ -84,6 +84,7 @@ def verify(bundle: Path, work: Path) -> None:
         "clip = vs.core.rgvs.RemoveGrain(clip, mode=1)\n"
         "assert clip.znedi3.nnedi3(field=0, dh=True).get_frame(0).height == 96\n"
         + ("assert vs.core.placebo.Deband and vs.core.dfttest.DFTTest and vs.core.lsmas.LWLibavSource\n"
+           "clip = vs.core.nlm_ispc.NLMeans(clip, d=0, a=2, s=2, h=0.6, channels='Y', wmode=3)\n"
            "clip = vs.core.assrender.TextSub(clip, '字幕.srt')\n" if expected_core == "Core R79" else "")
         + "clip.set_output()\n",
         encoding="utf-8",

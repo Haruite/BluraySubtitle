@@ -237,7 +237,7 @@ def stage(support: Path, uosc_bundle: Path) -> None:
     if MULTIARCH == "x86_64-linux-gnu":
         artifacts = {"libzsmooth.x86_64-gnu.so": "upstream", RIFE_LIBRARY: "upstream"}
     else:
-        artifacts = {RIFE_LIBRARY: "armv8-a"}
+        artifacts = {RIFE_LIBRARY: "armv8-a", "libvsnlm_ispc.so": "cortex-a53"}
     for name, kind in artifacts.items():
         target = native / "plugins" / name
         record = installed_plugins / f"{name}.{kind}.sha256"

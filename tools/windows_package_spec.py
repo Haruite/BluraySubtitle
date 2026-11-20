@@ -31,7 +31,7 @@ if not (PROJECT_ROOT / ".git").exists():
     )
 
 sys.path.insert(0, str(PROJECT_ROOT))
-from tools.windows_native_tools import file_hash, has_pe_machine, pyqt_runtime, runtime_dependencies
+from tools.windows_native_tools import ARM64_NLM_CPU, file_hash, has_pe_machine, pyqt_runtime, runtime_dependencies
 from tools.windows_package_tools import build_executable_icon, installed_tools, package_tools
 
 SETTINGS_PATH = PROJECT_ROOT / "src" / "core" / "settings.py"
@@ -108,6 +108,11 @@ build_state = json.loads(required_path(
 if build_state["python_tag"] != sys.implementation.cache_tag:
     raise RuntimeError("Run Windows setup with the Python running PyInstaller")
 r79 = build_state.get("version") == "79"
+if arm64 and r79:
+    nlm = upstream_components["components"].get("nlm_ispc", {})
+    if (nlm.get("ispc_cpu") != ARM64_NLM_CPU or nlm["method"] != "source"
+            or nlm["files"].get(nlm["plugin"]) != file_hash(vapoursynth_dir / nlm["plugin"])):
+        raise RuntimeError(f"Run Windows setup to install the {ARM64_NLM_CPU} build of NLM")
 if r79 and Path(vapoursynth.__file__).resolve().parent != Path(build_state["package"]).resolve():
     raise RuntimeError("The packaging Python did not import the configured VapourSynth R79 wheel")
 vs_bundle = Path("Lib/site-packages/vapoursynth") if r79 else Path(".")

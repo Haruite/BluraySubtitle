@@ -4,14 +4,16 @@
 
 ## 选择下载文件
 
-根据运行程序的操作系统和处理器架构选择一个压缩包。[最新构建下载目录](https://sbx.mysmy.top/tools/BluraySubtitle/) · [正式版本](https://github.com/Haruite/BluraySubtitle/releases)
+根据运行程序的操作系统和处理器架构选择一个压缩包。
 
 | 文件 | 适用系统 | 处理器要求 |
 | --- | --- | --- |
-| `BluraySubtitle_windows_x64.7z` | Windows 10 x64（接口下限 1709）或 Windows 11 x64 | Intel 或 AMD x64。使用 AVX2 版 zsmooth 滤镜需要 AVX2。 |
-| `BluraySubtitle_windows_arm64.7z` | Windows 10 ARM64（整包接口下限 1903）或 Windows 11 ARM64 | 64 位 Arm 处理器，原生 VapourSynth R79 滤镜使用 NEON。 |
+| `BluraySubtitle_windows_x64.7z` | Windows 10 x64（接口下限 1709）或 Windows 11 x64 | 主程序及随包的 NumPy 需要 x86-64-v2，例如 Intel Core Nehalem。随包的 zsmooth 滤镜还需要 AVX2。 |
+| `BluraySubtitle_windows_arm64.7z` | Windows 10 ARM64（整包接口下限 1903）或 Windows 11 ARM64 | 支持 NEON 和 Armv8.1 LSE 原子指令（包括 `CASAL`）的 64 位 Arm 处理器。 |
 | `BluraySubtitle_linux_x64.tar.xz` | 64 位 x86 Linux（x86-64），已验证的内核下限为 3.17 | 完整支持 x86-64-v3，例如 Intel Core Haswell 或 AMD Zen。在 x86-64-v2 基础上需要 AVX、AVX2、BMI1/2、F16C、FMA、LZCNT、MOVBE、OSXSAVE 及操作系统启用的 AVX 寄存器状态。 |
 | `BluraySubtitle_linux_arm64.tar.xz` | 64 位 AArch64 Linux，已验证的内核下限为 3.17 | 支持浮点和 NEON 的 Armv8-A 处理器，实测基线为 Cortex-A53。 |
+
+两个 ARM64 包的 NLM 滤镜都使用 128 位 NEON，可在没有 SVE 的处理器上运行。
 
 下载目录中每个压缩包对应一份 `<压缩包名>.txt`，其中记录 SHA-256、Git 提交和提交时间，可用于核对下载文件和构建版本。
 

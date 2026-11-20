@@ -6,8 +6,10 @@ Documentation: [project wiki](docs/wiki/Home.md) | [interface guide and examples
 
 Development: [mandatory code modification standards](docs/development/code-standards.md) | [media pipeline and tool selection](docs/development/media-pipeline-and-tool-selection.md) | [refactoring history](docs/refactoring/refactoring-history.md)
 
-- [Latest build directory](https://sbx.mysmy.top/tools/BluraySubtitle/) · [Choose a download](docs/wiki/Packages-and-System-Requirements.md#choose-a-download)
+- [Latest build directory](https://sbx.mysmy.top/tools/BluraySubtitle/)
 - For versions after 4.7, each release includes the matching packages. [GitHub Releases](https://github.com/Haruite/BluraySubtitle/releases)
+
+[Choose a download](docs/wiki/Packages-and-System-Requirements.md#choose-a-download)
 
 BluraySubtitle is a cross-platform GUI tool for Blu-ray workflows. It brings the following five areas of functionality together in one application:
 

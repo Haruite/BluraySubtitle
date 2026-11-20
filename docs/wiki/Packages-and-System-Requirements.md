@@ -4,14 +4,16 @@ English | [简体中文](Packages-and-System-Requirements.zh-Hans.md)
 
 ## Choose a download
 
-Choose one archive for the operating system and processor that will run the application. [Latest build directory](https://sbx.mysmy.top/tools/BluraySubtitle/) · [Tagged releases](https://github.com/Haruite/BluraySubtitle/releases)
+Choose one archive for the operating system and processor that will run the application.
 
 | File | Operating system | Processor requirements |
 | --- | --- | --- |
-| `BluraySubtitle_windows_x64.7z` | Windows 10 x64 (required APIs available from 1709) or Windows 11 x64 | Intel or AMD x64. The AVX2 build of the zsmooth filter requires AVX2. |
-| `BluraySubtitle_windows_arm64.7z` | Windows 10 ARM64 (1903 or later for the bundled tools) or Windows 11 ARM64 | 64-bit Arm processor. Native VapourSynth R79 filters use NEON. |
+| `BluraySubtitle_windows_x64.7z` | Windows 10 x64 (required APIs available from 1709) or Windows 11 x64 | The application and its bundled NumPy require x86-64-v2 (for example, Intel Core Nehalem). The bundled zsmooth filter also requires AVX2. |
+| `BluraySubtitle_windows_arm64.7z` | Windows 10 ARM64 (1903 or later for the bundled tools) or Windows 11 ARM64 | 64-bit Arm with NEON and Armv8.1 LSE atomic instructions, including `CASAL`. |
 | `BluraySubtitle_linux_x64.tar.xz` | 64-bit x86 Linux (x86-64), tested down to kernel 3.17 | Full x86-64-v3 support, as on Intel Core Haswell or AMD Zen. Above x86-64-v2 this requires AVX, AVX2, BMI1/2, F16C, FMA, LZCNT, MOVBE and OSXSAVE with AVX state enabled by the OS. |
 | `BluraySubtitle_linux_arm64.tar.xz` | 64-bit AArch64 Linux, tested down to kernel 3.17 | Armv8-A with floating point and NEON. Cortex-A53 is the tested baseline. |
+
+The NLM filter uses 128-bit NEON on both ARM64 platforms, including on processors without SVE.
 
 Each archive in the download directory has a matching `<archive-name>.txt` containing the SHA-256, Git commit and commit time. Use it to verify the download and identify the build.
 

@@ -6,8 +6,10 @@
 
 开发文档：[强制代码修改规范](docs/development/code-standards.zh-Hans.md) | [媒体处理方案与工具选型](docs/development/media-pipeline-and-tool-selection.zh-Hans.md) | [重构历史](docs/refactoring/refactoring-history.zh-Hans.md)
 
-- [最新构建下载目录](https://sbx.mysmy.top/tools/BluraySubtitle/) · [选择下载文件](docs/wiki/Packages-and-System-Requirements.zh-Hans.md#选择下载文件)
+- [最新构建下载目录](https://sbx.mysmy.top/tools/BluraySubtitle/)
 - 版本 4.7 以后，对应版本的安装包会附在 Release 中。[GitHub Releases](https://github.com/Haruite/BluraySubtitle/releases)
+
+[选择下载文件](docs/wiki/Packages-and-System-Requirements.zh-Hans.md#选择下载文件)
 
 BluraySubtitle 是一个跨平台的蓝光流程 GUI 工具。它将以下五类功能整合在一个应用中：
 

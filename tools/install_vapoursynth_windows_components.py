@@ -34,7 +34,7 @@ from tools.vapoursynth_plugin_versions import fallback_version, normalize_versio
 from tools.vulkan_device import vulkan_device_available
 from tools.windows_build_cache import files_under, publish as publish_build_cache, restore as restore_build_cache
 from tools.windows_native_tools import (
-    PE_ARM64, VSEDIT_ARM64_RECIPE, VSEDIT_PLUGINS, VSEDIT_PROGRAMS, VSEDIT_QT_LIBRARIES, VSEDIT_RECIPE,
+    ARM64_NLM_CPU, PE_ARM64, VSEDIT_ARM64_RECIPE, VSEDIT_PLUGINS, VSEDIT_PROGRAMS, VSEDIT_QT_LIBRARIES, VSEDIT_RECIPE,
     build_record, editor_runtime_matches, fetch_verified, file_hash, fingerprint, has_pe_machine, install_build,
     msvc_environment, msys_pkg_config_environment, pyqt_runtime, record_build, windows_machine,
 )
@@ -130,6 +130,9 @@ if sys.argv[2] == 'descale':
 elif sys.argv[2] == 'fmtconv':
     clip = vs.core.std.BlankClip(width=64, height=48, format=vs.YUV420P16, length=1)
     assert p.bitdepth(clip, bits=10).get_frame(0).format.bits_per_sample == 10
+elif sys.argv[2] == 'nlm_ispc':
+    clip = vs.core.std.BlankClip(width=64, height=48, format=vs.YUV420P10, length=1)
+    assert p.NLMeans(clip, d=0, a=2, s=2, h=0.6, channels='Y', wmode=3).get_frame(0).width == 64
 elif sys.argv[2] == 'removegrain':
     assert hasattr(p, 'Repair'), 'RemoveGrain Repair is required'
 elif sys.argv[2] == 'sangnom':
@@ -210,6 +213,8 @@ class Installer:
         if patch:
             recipe.append(patch)
         inputs = [asdict(component), ref, build_profile, self.r79, self.static_runtime]
+        if self.arm64 and component.key == "nlm_ispc":
+            inputs.append(ARM64_NLM_CPU)
         if component.recipe not in ("lsmash", "assrender"):
             recipe.append(self.build_environment)
         if component.recipe not in ("lsmash", "assrender", "znedi3", "zig"):
@@ -1053,7 +1058,8 @@ class Installer:
             kernels = output / "nlm.obj"
             header = output / "nlm_ispc.h"
             subprocess.run([executable, "--arch=aarch64", "--target-os=windows", "--target=neon-i32x4",
-                            "-O2", source / "source/nlm.ispc", "-h", header, "-o", kernels], check=True)
+                            f"--cpu={ARM64_NLM_CPU}", "-O2", source / "source/nlm.ispc", "-h", header, "-o", kernels],
+                           env=dict(os.environ, ISPC_ARGS=""), check=True)
             template = (source / "source/config.h.in").read_text(encoding="utf-8")
             (output / "config.h").write_text(template.replace("@VCS_TAG@", component.ref), encoding="utf-8")
             binary = output / component.filename
@@ -1252,6 +1258,7 @@ class Installer:
         plugin_files = (target, *(folder / name for name in component.data_files))
         data = [self.record_path(path) for path in plugin_files[1:]]
         build_profile = BUILD_PROFILE + ("-arm64" if self.arm64 else "")
+        arm64_nlm = self.arm64 and component.key == "nlm_ispc"
         if component.key == "lsmas" and not self.use_vulkan:
             build_profile += "-without-vulkan"
         if self.arm64 and component.key == "placebo":
@@ -1273,7 +1280,8 @@ class Installer:
         fallback = bool(known_files and previous["method"] == "source" and previous["ref"] == component.fallback_ref)
         expected = "commit:" + component.fallback_ref if fallback and same_target else target_ref
         installed, probe = None, None
-        if present:
+        # Only a hash-bound build record identifies the NLM DLL's ISPC target.
+        if present and (not arm64_nlm or (known_files and previous.get("ispc_cpu") == ARM64_NLM_CPU)):
             try:
                 probe = self.probe(target, component, expected)
             except RuntimeError as error:
@@ -1400,6 +1408,8 @@ class Installer:
             "source_dependencies": self.source_dependencies + ([{"name": "FFTW", "version": "3.3.11", "source_url": "https://fftw.org/fftw-3.3.11.tar.gz"}]
                                    if component.key in ("dfttest", "mvtools") else []),
         }
+        if arm64_nlm:
+            self.state["components"][component.key]["ispc_cpu"] = ARM64_NLM_CPU
         if cache_archive:
             self.state["components"][component.key]["cache_recipe"] = cache_key
         self.save()

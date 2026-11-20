@@ -3128,29 +3128,31 @@ install_vs_ispc() (
 )
 
 install_vs_nlm_ispc() (
-  local build_dir="$1" plugins_dir="$2" tag="${vs_plugin_tags[nlm_ispc]}"
+  local build_dir="$1" plugins_dir="$2" profile="$3" tag="${vs_plugin_tags[nlm_ispc]}"
   cd "$build_dir" || exit 1
   local nlm_plugin="$plugins_dir/libvsnlm_ispc.so"
   # The x64 build dispatches between the baseline and AVX2 kernels.
-  local instruction_sets='sse2-i32x4;avx2-i32x8'
+  local -a ispc_options=('-DCMAKE_ISPC_INSTRUCTION_SETS=sse2-i32x4;avx2-i32x8')
   if [[ "$APT_ARCH" == arm64 ]]; then
-    instruction_sets=neon-i32x4
+    # ISPC appends ISPC_ARGS after its command line. Keep the recorded CPU target authoritative.
+    unset ISPC_ARGS
+    ispc_options=(-DCMAKE_ISPC_INSTRUCTION_SETS=neon-i32x4 "-DCMAKE_ISPC_FLAGS=--cpu=$profile")
   fi
-  if ! installed_artifact_matches "$nlm_plugin" portable || vs_plugin_needs_upgrade "libvsnlm_ispc.so" "$tag"; then
+  if ! installed_artifact_matches "$nlm_plugin" "$profile" || vs_plugin_needs_upgrade "libvsnlm_ispc.so" "$tag"; then
     require_native_build "vs-nlm-ispc"
     log "$(msg "Building vs-nlm-ispc ($tag)" "编译 vs-nlm-ispc ($tag)")"
     download_source_archive "nlm_ispc $tag" "${vs_plugin_sources[nlm_ispc]}" nlm_ispc || exit 1
     cd nlm_ispc || exit 1
     mkdir -p build || exit 1
     cd build || exit 1
-    tmux_run "vs-nlm-ispc cmake" cmake -DCMAKE_BUILD_TYPE=Release "-DCMAKE_ISPC_INSTRUCTION_SETS=$instruction_sets" .. || exit 1
+    tmux_run "vs-nlm-ispc cmake" cmake -DCMAKE_BUILD_TYPE=Release "${ispc_options[@]}" .. || exit 1
     tmux_run "vs-nlm-ispc make" make -j"$(nproc)" || exit 1
     local out
     out="$(find "$PWD" -maxdepth 2 -name "libvsnlm_ispc.so" -type f | head -n 1)"
     [[ -n "${out:-}" ]] || exit 1
     install -m 0755 "$out" "$nlm_plugin" || exit 1
     vs_plugin_version record "libvsnlm_ispc.so" "$tag" || exit 1
-    sha256sum < "$nlm_plugin" > "$nlm_plugin.portable.sha256" || exit 1
+    sha256sum < "$nlm_plugin" > "$nlm_plugin.$profile.sha256" || exit 1
   else
     log "$(msg 'libvsnlm_ispc.so version is current, skipping' 'libvsnlm_ispc.so 版本已满足要求，跳过')"
   fi
@@ -3274,8 +3276,10 @@ build_vs_plugins() {
     "$plugins_dir/libvs_placebo.so" -- "$build_dir" "$plugins_dir"
   cached_linux_build ispc install_vs_ispc files "" /usr/local/bin/ispc -- "$build_dir"
   hash -r
+  local nlm_profile=portable
+  if [[ "$APT_ARCH" == arm64 ]]; then nlm_profile=cortex-a53; fi
   cached_linux_build vs-nlm-ispc install_vs_nlm_ispc files "$vapoursynth_cache_abi ${vs_plugin_tags[nlm_ispc]} $(ispc --version)" \
-    "$plugins_dir/libvsnlm_ispc.so" "$plugins_dir/libvsnlm_ispc.so.portable.sha256" -- "$build_dir" "$plugins_dir"
+    "$plugins_dir/libvsnlm_ispc.so" "$plugins_dir/libvsnlm_ispc.so.$nlm_profile.sha256" -- "$build_dir" "$plugins_dir" "$nlm_profile"
   local zsmooth_plugin="$plugins_dir/libzsmooth.$LINUX_ARCH-gnu.so"
   local -a zsmooth_outputs=("$zsmooth_plugin")
   if "$package_build" && [[ "$APT_ARCH" == amd64 ]]; then

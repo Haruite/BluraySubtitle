@@ -26,6 +26,7 @@ VSEDIT_ARM64_RECIPE = "msvc-arm64-pyqt6-1"
 INSTALLATION_SCHEMA = 1
 PE_AMD64 = 0x8664
 PE_ARM64 = 0xAA64
+ARM64_NLM_CPU = "cortex-a53"
 VSEDIT_PROGRAMS = (
     "vsedit.exe", "vsedit-previewer.exe", "vsedit-encode.exe",
     "vsedit-job-server.exe", "vsedit-job-server-watcher.exe",
