@@ -76,14 +76,21 @@ def verify(bundle: Path, work: Path) -> None:
         for name in ("libass-9.dll", "libfftw3f-3.dll", "libshaderc_shared.dll", "vulkan-1.dll"):
             if len(list(internal.rglob(name))) != 1:
                 raise RuntimeError(f"Expected one bundled copy of {name}")
+        run(internal / "ffmpeg.exe", "-nostdin", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=64x48:rate=24",
+            "-frames:v", "2", "-c:v", "ffv1", "-pix_fmt", "yuv420p10le", work / "source.mkv")
+        clip_source = "clip = vs.core.lsmas.LWLibavSource('source.mkv', cache=0)"
+    else:
+        clip_source = (
+            "fmt = vs.core.query_video_format(vs.ColorFamily.YUV, vs.SampleType.INTEGER, 10, 1, 1)\n"
+            "clip = vs.core.std.BlankClip(length=2, width=64, height=48, format=fmt.id)"
+        )
     script = work / "bundled.vpy"
     script.write_text(
         "import vapoursynth as vs\nimport mvsfunc\n"
-        "fmt = vs.core.query_video_format(vs.ColorFamily.YUV, vs.SampleType.INTEGER, 10, 1, 1)\n"
-        "clip = vs.core.std.BlankClip(length=2, width=64, height=48, format=fmt.id)\n"
+        f"{clip_source}\n"
         "clip = vs.core.rgvs.RemoveGrain(clip, mode=1)\n"
         "assert clip.znedi3.nnedi3(field=0, dh=True).get_frame(0).height == 96\n"
-        + ("assert vs.core.placebo.Deband and vs.core.dfttest.DFTTest and vs.core.lsmas.LWLibavSource\n"
+        + ("assert vs.core.placebo.Deband and vs.core.dfttest.DFTTest\n"
            "clip = vs.core.nlm_ispc.NLMeans(clip, d=0, a=2, s=2, h=0.6, channels='Y', wmode=3)\n"
            "clip = vs.core.assrender.TextSub(clip, '字幕.srt')\n" if expected_core == "Core R79" else "")
         + "clip.set_output()\n",

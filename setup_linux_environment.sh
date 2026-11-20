@@ -3412,7 +3412,8 @@ install_desktop_vs_rife() (
   trap 'rm -rf -- "$build_dir"; rm -f -- "$pending"' EXIT
   cd "$build_dir"
   if [[ "$APT_ARCH" == arm64 ]] && ! "$package_build"; then
-    local key
+    # The standalone desktop cache uses the original exact-version key.
+    local key linux_cache_abi="${linux_cache_abis[1]}"
     local -a linux_build_inputs=()
     collect_linux_build_inputs rife
     key="$(linux_build_key rife files "$vapoursynth_cache_abi $tag" "$library" "${model_files[@]}")"
@@ -3829,7 +3830,8 @@ cached_linux_build() {
     return
   fi
 
-  local key archive restored_key="" previous_key=""
+  local key archive restored_key="" previous_key abi
+  local -a previous_keys=()
   local component_manifest="$cache_workspace/$component.json" component_stage="$cache_workspace/$component-install"
   local -A linux_build_tags=()
   local -a linux_build_inputs=()
@@ -3847,8 +3849,16 @@ cached_linux_build() {
     "${helper[@]}" snapshot "${args[@]}" "" "${outputs[@]}" || return $?
   fi
   if [[ -s "$archive" ]]; then
-    previous_key="$(legacy_linux_build_key "$component" "$installer" "$scope" "$recipe_inputs" "${outputs[@]}")" || previous_key=""
-    if restored_key="$("${helper[@]}" restore "${args[@]}" "${previous_key%% *}" "${outputs[@]}")"; then
+    for abi in "${linux_cache_abis[@]:1}"; do
+      if [[ "$abi" != "$linux_cache_abi" ]]; then
+        previous_key="$(linux_cache_abi="$abi" linux_build_key "$component" "$scope" "$recipe_inputs" "${outputs[@]}")" || return $?
+        previous_keys+=("${previous_key%% *}")
+      fi
+      if previous_key="$(linux_cache_abi="$abi" legacy_linux_build_key "$component" "$installer" "$scope" "$recipe_inputs" "${outputs[@]}")"; then
+        previous_keys+=("${previous_key%% *}")
+      fi
+    done
+    if restored_key="$("${helper[@]}" restore "${args[@]}" "${previous_keys[*]}" "${outputs[@]}")"; then
       if [[ "$scope" == system ]]; then sudo ldconfig || return $?; fi
       log "$(msg "Restored the build cache for $component" "已恢复 $component 的构建缓存")"
     fi
@@ -3926,14 +3936,14 @@ fi
 sys_deps=(
   python3 python3-pip python3-venv cmake ninja-build git ccache
   curl wget unzip fonts-wqy-microhei flac
-  libegl1 libopengl0 libglib2.0-0 libglib2.0-bin libxkbcommon0 libdbus-1-3 libx11-6
+  libegl1 libopengl0 libglib2.0-0 libglib2.0-bin libxkbcommon0 libxkbcommon-x11-0 libdbus-1-3 libx11-6
   libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0
   libxcb-xinerama0 libxcb-xinput0 libxcb-render-util0
   libunwind8 libunwind-dev xdg-utils libgl1-mesa-dri libglx-mesa0 libvulkan1 mesa-vulkan-drivers
 )
 
 if "$package_build"; then
-  sys_deps+=(libarchive-tools patchelf libegl-dev libgles-dev libass-dev libplacebo-dev xz-utils
+  sys_deps+=(libarchive-tools patchelf libdouble-conversion3 libegl-dev libgles-dev libass-dev libplacebo-dev xz-utils
     pipewire-bin libpipewire-0.3-modules)
 else
   sys_deps+=(gedit)
@@ -4000,11 +4010,15 @@ if "$package_build"; then
   VSEDIT_PATH="$VSEDIT_BINARY_PATH"
 fi
 if "$package_build" || [[ "$APT_ARCH" == arm64 ]]; then
-  linux_cache_abi="$(
-    printf '%s\n' "$LINUX_DISTRO_ID/$APT_BASE_CODENAME/$(uname -m)" \
-      "${CC:-}" "${CXX:-}" "${CFLAGS:-}" "${CXXFLAGS:-}" "${CPPFLAGS:-}" "${LDFLAGS:-}"
-    dpkg-query -W "libc6:$APT_ARCH" "libgcc-s1:$APT_ARCH" "libstdc++6:$APT_ARCH"
-  )"
+  mapfile -d '' -t linux_cache_abis < <(
+    /usr/bin/python3 -B "$SETUP_ROOT/tools/linux_apt_cache.py" native-abis "$BLURAY_SETUP_CACHE_DIR" "$APT_ARCH"
+  )
+  (( ${#linux_cache_abis[@]} >= 2 )) || die "$(msg 'Could not read native runtime versions' '无法读取原生运行库版本')"
+  for abi_index in "${!linux_cache_abis[@]}"; do
+    linux_cache_abis[abi_index]="$(printf '%s\n' "$LINUX_DISTRO_ID/$APT_BASE_CODENAME/$(uname -m)" \
+      "${CC:-}" "${CXX:-}" "${CFLAGS:-}" "${CXXFLAGS:-}" "${CPPFLAGS:-}" "${LDFLAGS:-}" "${linux_cache_abis[abi_index]}")"
+  done
+  linux_cache_abi="${linux_cache_abis[0]}"
 fi
 
 install_mkvtoolnix

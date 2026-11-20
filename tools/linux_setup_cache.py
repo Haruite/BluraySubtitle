@@ -141,14 +141,14 @@ def install_stage(stage: Path, baseline: Path) -> None:
     baseline.write_text(json.dumps(before), encoding="utf-8")
 
 
-def manifest(archive: tarfile.TarFile, key: str, legacy_key: str = "") -> dict:
+def manifest(archive: tarfile.TarFile, key: str, legacy_keys: str = "") -> dict:
     member = archive.next()
     if member is None or member.name != MANIFEST or not member.isfile():
         raise ValueError("The archive has no installation manifest")
     with archive.extractfile(member) as record:
         data = json.load(record)
-    if data["recipe"] != key and (not legacy_key or data["recipe"] != legacy_key):
-        raise ValueError("Build recipe has changed")
+    if data["recipe"] != key and data["recipe"] not in legacy_keys.split():
+        raise ValueError(f"Build recipe has changed for {Path(archive.name).name}")
     return data
 
 
@@ -233,9 +233,9 @@ class HashingReader:
         return block
 
 
-def restore_cache(cache: Path, key: str, scope: InstallPaths, legacy_key: str = "") -> str:
+def restore_cache(cache: Path, key: str, scope: InstallPaths, legacy_keys: str = "") -> str:
     with tarfile.open(cache, "r|xz") as archive, TemporaryDirectory(dir=cache.parent) as directory:
-        record = manifest(archive, key, legacy_key)
+        record = manifest(archive, key, legacy_keys)
         files = record["files"]
         seen = set()
         system, user = Path(directory) / "system.tar", Path(directory) / "user.tar"
