@@ -1013,6 +1013,10 @@ build_mkvtoolnix() {
       export PKG_CONFIG_PATH="$QT66_PREFIX/lib64/pkgconfig:$PKG_CONFIG_PATH"
       export LD_LIBRARY_PATH="$QT66_PREFIX/lib64"
       export LDFLAGS="-L$QT66_PREFIX/lib64 -Wl,-rpath-link,$QT66_PREFIX/lib64 $LDFLAGS"
+      # MKVToolNix discards the relative -I paths qmake emits with the Actions cache and build layout.
+      local qt_headers
+      qt_headers="$("$qmake6_tool" -query QT_INSTALL_HEADERS)" || exit 1
+      export CPLUS_INCLUDE_PATH="$qt_headers:$qt_headers/QtCore${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}"
     fi
     log "$(msg 'Configuring MKVToolNix' '正在配置 MKVToolNix')"
     ./configure \
@@ -1020,7 +1024,11 @@ build_mkvtoolnix() {
       --docdir='${datarootdir}/doc/mkvtoolnix-gui' \
       --with-qmake6="$qmake6_tool" \
       "$gui_option" \
-      --enable-optimization || exit 1
+      --enable-optimization || {
+        # Show the failing compiler probe before Autoconf's cache and variable dumps.
+        if [[ -f config.log ]]; then sed '/^## Cache variables/,$d' config.log | tail -n 100 >&2; fi
+        exit 1
+      }
 
     log "$(msg 'Building mkvtoolnix with Rake' '使用 Rake 编译 mkvtoolnix')"
     if "$package_build"; then
@@ -1346,11 +1354,11 @@ install_hdr10plus_tool() {
 # ---------------------------------------------------------------------------
 
 __installed_ffmpeg_version() {
-  local executable="$1"
+  local executable="$1" suffix='[^[:space:]]*'
   [[ -x "$executable" ]] || return 0
+  if "$package_build"; then suffix=''; fi
   "$executable" -version 2>/dev/null \
-    | head -n 1 \
-    | sed -nE 's/^ff(mpeg|probe) version n?([0-9]+([.][0-9]+){1,3}).*/\2/p'
+    | sed -nE "1s/^ff(mpeg|probe) version n?([0-9]+([.][0-9]+){1,3})${suffix}([[:space:]].*)?$/\2/p"
 }
 
 __ffmpeg_has_libopus() {
@@ -1411,13 +1419,16 @@ install_mpv() {
   local mpv_executable=mpv
   if ! "$package_build"; then mpv_executable="${MPV_PATH:-mpv}"; fi
   local ffmpeg_tag target_ffmpeg_version installed_ffmpeg_version installed_ffprobe_version ffmpeg_is_current="false"
-  ffmpeg_tag="$(latest_stable_tag "$FFMPEG_SOURCE_REPOSITORY" '^n[0-9]+([.][0-9]+)+$' 'n*')"
+  ffmpeg_tag="$(latest_stable_tag "$FFMPEG_SOURCE_REPOSITORY" '^n[0-9]+([.][0-9]+)+$' 'n*')" || return $?
   target_ffmpeg_version="${ffmpeg_tag#n}"
-  installed_ffmpeg_version="$(__installed_ffmpeg_version "$FFMPEG_PATH" | head -n 1 || true)"
-  installed_ffprobe_version="$(__installed_ffmpeg_version "$FFPROBE_PATH" | head -n 1 || true)"
+  # A restored package must match its source tag. Desktop can reuse a newer system FFmpeg.
+  local ffmpeg_version_relation=ge
+  if "$package_build"; then ffmpeg_version_relation=eq; fi
+  installed_ffmpeg_version="$(__installed_ffmpeg_version "$FFMPEG_PATH" || true)"
+  installed_ffprobe_version="$(__installed_ffmpeg_version "$FFPROBE_PATH" || true)"
   if [[ -n "$installed_ffmpeg_version" && -n "$installed_ffprobe_version" ]] \
-    && dpkg --compare-versions "$installed_ffmpeg_version" ge "$target_ffmpeg_version" \
-    && dpkg --compare-versions "$installed_ffprobe_version" ge "$target_ffmpeg_version" \
+    && dpkg --compare-versions "$installed_ffmpeg_version" "$ffmpeg_version_relation" "$target_ffmpeg_version" \
+    && dpkg --compare-versions "$installed_ffprobe_version" "$ffmpeg_version_relation" "$target_ffmpeg_version" \
     && __ffmpeg_has_libopus "$FFMPEG_PATH"; then
     ffmpeg_is_current="true"
   fi
@@ -1500,6 +1511,8 @@ install_mpv() {
       "https://codeload.github.com/mpv-player/mpv-build/tar.gz/$mpv_build_revision" . || exit 1
     download_source_archive "FFmpeg ${target_ffmpeg_version}" \
       "$(github_archive_url "$FFMPEG_SOURCE_REPOSITORY" "refs/tags/$ffmpeg_tag")" ffmpeg || exit 1
+    # Use the release tag even when the build directory is inside another Git checkout.
+    printf '%s\n' "$target_ffmpeg_version" > ffmpeg/FF_VERSION || exit 1
     download_source_archive "mpv ${mpv_tag}" \
       "https://codeload.github.com/mpv-player/mpv/tar.gz/refs/tags/${mpv_tag}" mpv || exit 1
     download_source_archive "libass ${libass_tag}" \
@@ -1549,11 +1562,9 @@ install_mpv() {
     fi
   ) || die "$(msg "mpv build/install failed. Build files were kept in ${build_dir}" "mpv 编译/安装失败。构建文件保留在 ${build_dir}")"
 
-  installed_ffmpeg_version="$(__installed_ffmpeg_version "$FFMPEG_PATH" | head -n 1 || true)"
-  installed_ffprobe_version="$(__installed_ffmpeg_version "$FFPROBE_PATH" | head -n 1 || true)"
-  if [[ -z "$installed_ffmpeg_version" || -z "$installed_ffprobe_version" ]] \
-    || ! dpkg --compare-versions "$installed_ffmpeg_version" ge "$target_ffmpeg_version" \
-    || ! dpkg --compare-versions "$installed_ffprobe_version" ge "$target_ffmpeg_version" \
+  installed_ffmpeg_version="$(__installed_ffmpeg_version "$FFMPEG_PATH" || true)"
+  installed_ffprobe_version="$(__installed_ffmpeg_version "$FFPROBE_PATH" || true)"
+  if [[ "$installed_ffmpeg_version" != "$target_ffmpeg_version" || "$installed_ffprobe_version" != "$target_ffmpeg_version" ]] \
     || ! __ffmpeg_has_libopus "$FFMPEG_PATH"; then
     die "$(msg "Installed FFmpeg / FFprobe version or libopus support verification failed. Build files were kept in ${build_dir}" "安装后的 FFmpeg / FFprobe 版本或 libopus 支持校验失败。构建文件保留在 ${build_dir}")"
   fi

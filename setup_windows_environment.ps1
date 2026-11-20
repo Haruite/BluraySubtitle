@@ -343,7 +343,7 @@ function Initialize-SetupArchitecture {
         )
         $script:NativeToolCacheRoot = Join-Path $script:NativeToolCacheRoot "arm64"
         $script:BuildToolchains.msvc = @("git", "visual-studio-build-tools", "cmake", "ninja")
-        $script:BuildToolchains.msys2 += @("cmake", "ninja")
+        $script:BuildToolchains["msys2-cmake"] = $script:BuildToolchains.msys2 + @("cmake", "ninja")
     }
 }
 
@@ -1651,6 +1651,27 @@ function Invoke-SetupComponent {
         }
     }
 
+    $installedVersion = ""
+    if ($Component.ReuseInstalled) {
+        try {
+            if ([bool](& $Component.Verify)) {
+                $installedVersion = [string](& $Component.GetInstalledVersion)
+            }
+        }
+        catch {
+            Write-SetupWarning `
+                "Unable to use the existing $displayName. $($_.Exception.Message)" `
+                "无法使用现有的 $displayName。$($_.Exception.Message)"
+        }
+        if ($installedVersion) {
+            Update-ManifestComponent $Component.Name $installedVersion "satisfied" -Architecture $Component.Architecture
+            Write-SetupInfo `
+                "Reusing $displayName $installedVersion for the build." `
+                "构建将复用 $displayName $installedVersion。"
+            return
+        }
+    }
+
     Write-SetupInfo `
         "Checking the target version/status for $displayName." `
         "正在查询 $displayName 的目标版本/状态。"
@@ -1666,7 +1687,9 @@ function Invoke-SetupComponent {
         "$displayName 目标版本/状态：$availableVersion"
 
     $restored = ""
-    $installedVersion = [string](& $Component.GetInstalledVersion)
+    if (-not $Component.ReuseInstalled) {
+        $installedVersion = [string](& $Component.GetInstalledVersion)
+    }
     if ($null -ne $cache -and -not $installedVersion) {
         try {
             $restored = Restore-ComponentBuildCache $cache
@@ -1697,19 +1720,6 @@ function Invoke-SetupComponent {
         Write-SetupInfo `
             "$displayName is not installed or not configured." `
             "$displayName 未安装或尚未配置。"
-    }
-
-    if ($Component.ReuseInstalled -and $installedVersion) {
-        if (-not [bool](& $Component.Verify)) {
-            throw (Get-SetupText `
-                "The existing $displayName did not pass build verification." `
-                "现有 $displayName 未通过构建验证。")
-        }
-        Update-ManifestComponent $Component.Name $installedVersion "satisfied" -Architecture $Component.Architecture
-        Write-SetupInfo `
-            "Reusing $displayName $installedVersion for the build." `
-            "构建将复用 $displayName $installedVersion。"
-        return
     }
 
     $needsInstall = $Component.AlwaysRun -or -not $installedVersion
@@ -3069,7 +3079,11 @@ function Get-FfmpegExecutableInfo {
     }
     $match = [regex]::Match($output, "^$Program version\s+([0-9]+(?:\.[0-9]+){1,3})", "IgnoreCase")
     if ($match.Success) {
-        return [pscustomobject]@{ Version = $match.Groups[1].Value; Output = $output }
+        return [pscustomobject]@{
+            Program = $Program
+            Version = $match.Groups[1].Value
+            Configuration = [regex]::Match($output, '(?m)^[ \t]*configuration: ([^\r\n]*)').Groups[1].Value.Trim()
+        }
     }
     return $null
 }
@@ -3102,11 +3116,14 @@ function Test-Ffmpeg {
         return $true
     }
 
-    # A fixed profile with autodetection disabled rejects both extra and missing features.
-    $configuration = "configuration: $($script:FfmpegConfigureOptions -join ' ')"
+    $configuration = $script:FfmpegConfigureOptions -join ' '
+    # Newer builds also record the build host's native pkgconf path before the profile.
+    $pkgconfOption = "^--pkg-config='[^']+/$script:MsysPrefix/bin/pkgconf\.exe' "
     foreach ($info in @($encoder, $probe)) {
-        if (($info.Output -split '\r?\n').Trim() -cnotcontains $configuration) {
-            Write-SetupInfo "FFmpeg or FFprobe differs from the package build profile." "FFmpeg 或 FFprobe 的构建参数与打包配置不符。"
+        if (($info.Configuration -creplace $pkgconfOption, '') -cne $configuration) {
+            Write-SetupInfo `
+                "$($info.Program) build profile mismatch. Expected: $configuration. Reported: $($info.Configuration)" `
+                "$($info.Program) 的构建参数与打包配置不符。预期：$configuration。实际：$($info.Configuration)"
             return $false
         }
     }
@@ -3129,8 +3146,8 @@ function Install-Ffmpeg {
     Invoke-SetupDownload -Uri $release.Uri -Destination $archive | Out-Null
     Expand-SetupZip -Archive $archive -Destination $buildRoot
     Rename-Item -LiteralPath (Join-Path $buildRoot "FFmpeg-$($release.Tag)") -NewName "src"
-    # Source tag archives do not carry the release tarball's VERSION file.
-    [IO.File]::WriteAllText((Join-Path $sourceRoot "VERSION"), "$Version`n", $script:Utf8Encoding)
+    # FFmpeg checks FF_VERSION before accepting a revision from an enclosing Git checkout.
+    [IO.File]::WriteAllText((Join-Path $sourceRoot "FF_VERSION"), "$Version`n", $script:Utf8Encoding)
 
     $buildScriptContent = @'
 set -eu
@@ -4699,7 +4716,8 @@ function Register-StageTwoComponents {
         -GetInstalledVersion { Get-InstalledGitVersion } `
         -GetAvailableVersion { (Get-GitRelease).Version } `
         -Install { param($Version) Install-Git $Version } `
-        -Verify { Test-Git }
+        -Verify { Test-Git } `
+        -ReuseInstalled:($Mode -eq "Build")
 
     if ($Mode -eq "Desktop") {
         Register-SetupComponent `
@@ -4739,7 +4757,8 @@ function Register-StageTwoComponents {
         -GetInstalledVersion { Get-InstalledCMakeVersion } `
         -GetAvailableVersion { (Get-CMakeRelease).Version } `
         -Install { param($Version) Install-CMake $Version } `
-        -Verify { Test-CMake }
+        -Verify { Test-CMake } `
+        -ReuseInstalled:($Mode -eq "Build")
 
     Register-SetupComponent `
         -Name "ninja" `
@@ -4748,7 +4767,8 @@ function Register-StageTwoComponents {
         -GetInstalledVersion { Get-InstalledNinjaVersion } `
         -GetAvailableVersion { (Get-NinjaRelease).Version } `
         -Install { param($Version) Install-Ninja $Version } `
-        -Verify { Test-Ninja }
+        -Verify { Test-Ninja } `
+        -ReuseInstalled:($Mode -eq "Build")
 
     if (-not $script:IsArm64) {
         Register-SetupComponent `
@@ -4758,7 +4778,8 @@ function Register-StageTwoComponents {
             -GetInstalledVersion { Get-InstalledNasmVersion } `
             -GetAvailableVersion { (Get-LatestNasmRelease).Version } `
             -Install { param($Version) Install-Nasm $Version } `
-            -Verify { Test-Nasm }
+            -Verify { Test-Nasm } `
+            -ReuseInstalled:($Mode -eq "Build")
     }
 
     Register-SetupComponent `
@@ -4843,7 +4864,7 @@ function Register-StageThreeComponents {
 
 }
 function Register-StageFourComponents {
-    $encoderToolchain = if ($script:IsArm64) { "msys2" } else { "msvc" }
+    $encoderToolchain = if ($script:IsArm64) { "msys2-cmake" } else { "msvc" }
     Register-SetupComponent `
         -Name "x264" `
         -EnglishName "x264 8/10-bit encoder" `
