@@ -133,13 +133,18 @@ def checkout_release(repository: str, destination: Path, ref: str) -> Path:
 def extract_revision(repository: str, revision: str, destination: Path, downloads: Path) -> None:
     url = f"https://codeload.github.com/{repository}/tar.gz/{revision}"
     name = f"{repository.rsplit('/', 1)[-1]}-{revision}"
-    directory = destination.parent / name
     source = downloads / (name + ".tar.gz")
     if not source.is_file():
         download_source(url, source)
-    with tarfile.open(source) as archive:
-        archive.extractall(destination.parent, filter="data")
-    shutil.copytree(directory, destination, dirs_exist_ok=True)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=destination.parent) as temporary:
+        with tarfile.open(source) as archive:
+            archive.extractall(temporary, filter="data")
+        extracted = Path(temporary) / name
+        if destination.is_dir():
+            shutil.copytree(extracted, destination, dirs_exist_ok=True)
+        else:
+            extracted.rename(destination)
 
 
 def download_source(url: str, destination: Path) -> None:
@@ -270,8 +275,8 @@ def compile_zsmooth(work: Path, jobs: int, payload: Path) -> None:
         repository, commit = match.groups()
         name = repository.rsplit("/", 1)[-1]
         relative = Path("dependencies") / f"{name}-{commit}"
-        if not (source / relative).is_dir():
-            extract_revision(repository, commit, source / relative, work / "downloads")
+        # A URL still in the manifest can have a partially extracted directory from an earlier attempt.
+        extract_revision(repository, commit, source / relative, work / "downloads")
         return f'.path = "{relative.as_posix()}",'
 
     manifest.write_text(dependencies.sub(vendor, manifest.read_text(encoding="utf-8")), encoding="utf-8", newline="\r\n")
