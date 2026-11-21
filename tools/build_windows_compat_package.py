@@ -307,7 +307,7 @@ def build_zsmooth(work: Path, jobs: int) -> None:
         shutil.copytree(payload, work / "zsmooth", dirs_exist_ok=True)
 
 
-def build_mkvtoolnix(work: Path, python: Path, msys2: Path, seven_zip: Path, jobs: int, *, defer_msys2: bool) -> None:
+def build_mkvtoolnix(work: Path, msys2: Path, seven_zip: Path, jobs: int, *, defer_msys2: bool) -> None:
     sdk = work / f"qt-sdk-mingw-{QT_SDK_VERSION}"
     source = work / "deps" / f"qtbase-{QT_SDK_VERSION}"
     upstream = "https://mkvtoolnix.download"
@@ -321,7 +321,8 @@ def build_mkvtoolnix(work: Path, python: Path, msys2: Path, seven_zip: Path, job
         digest, filename = response.read().decode("ascii").split()
     if filename != name:
         raise ValueError(f"Unexpected MKVToolNix source checksum: {filename}")
-    command = [python, PROJECT / "tools/build_mkvtoolnix_windows.py", "install", work / "mkvtoolnix",
+    # Icon generation uses Pillow and QtSvg from the host Python prepared by setup.
+    command = [sys.executable, PROJECT / "tools/build_mkvtoolnix_windows.py", "install", work / "mkvtoolnix",
                "--version", version, "--source", url, "--sha256", digest.lower(), "--cache", work / "cache",
                "--work", work / "mkv-build", "--msys2-root", msys2, "--jobs", str(jobs),
                "--qt-win7-source", source, "--qt-win7-sdk", sdk]
@@ -527,12 +528,12 @@ def main() -> int:
     args = parser.parse_args()
     work = args.work_dir.resolve()
     work.mkdir(parents=True, exist_ok=True)
-    python = prepare_python(work) if args.component not in ("zsmooth", "rust-tools") else None
+    python = prepare_python(work) if args.component not in ("mkvtoolnix", "zsmooth", "rust-tools") else None
     try:
         if args.component in (None, "vapoursynth"):
             build_vapoursynth(work, python, args.msys2_root, args.jobs, defer_msys2=args.defer_msys2)
         if args.component in (None, "mkvtoolnix"):
-            build_mkvtoolnix(work, python, args.msys2_root, args.seven_zip, args.jobs, defer_msys2=args.defer_msys2)
+            build_mkvtoolnix(work, args.msys2_root, args.seven_zip, args.jobs, defer_msys2=args.defer_msys2)
     except Msys2Required:
         return MSYS2_REQUIRED
     if args.component in (None, "python-qt"):
