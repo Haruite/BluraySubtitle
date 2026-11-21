@@ -194,22 +194,26 @@ jobs:
         if: inputs.compatibility
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ env.PACKAGE_NAME }}
           path: dist/${{ env.PACKAGE_NAME }}.7z
           if-no-files-found: error
-          compression-level: 0
+          archive: false
 
       - name: Upload Package and Build Information
-        if: github.ref == 'refs/heads/main' && !inputs.compatibility
+        if: github.ref == 'refs/heads/main'
         shell: bash
         env:
+          BUILD_SEVEN_ZIP: ${{ steps.setup.outputs.seven_zip }}
           SFTP_HOST: ${{ secrets.SFTP_HOST }}
           SFTP_KNOWN_HOSTS: ${{ secrets.SFTP_KNOWN_HOSTS }}
           SFTP_PRIVATE_KEY: ${{ secrets.SFTP_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           export PATH="/usr/bin:$PATH"
-          bash tools/publish_website_package.sh "dist/$PACKAGE_NAME.7z" "dist/$PACKAGE_NAME/_internal/build-commit.txt"
+          archive="dist/$PACKAGE_NAME.7z"
+          record=$(mktemp)
+          trap 'rm -f -- "$record"' EXIT
+          "$(cygpath -u "$BUILD_SEVEN_ZIP")" x -so "$archive" "$PACKAGE_NAME/_internal/build-commit.txt" > "$record"
+          bash tools/publish_website_package.sh "$archive" "$record"
 
   prune-cache:
     needs: publish

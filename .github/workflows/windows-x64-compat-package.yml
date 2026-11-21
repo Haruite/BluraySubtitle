@@ -15,3 +15,4 @@ jobs:
     with:
       architecture: x64
       compatibility: true
+    secrets: inherit

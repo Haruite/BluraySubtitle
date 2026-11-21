@@ -30,7 +30,7 @@ The ARM64 `ffmpeg.exe` and `ffprobe.exe` also import `capCreateCaptureWindowA` a
 
 On Windows 7 SP1, install [KB3063858](https://github.com/adang1345/PythonVista#readme) or an update that supplies its DLL search APIs, the [KB2670838 Platform Update](https://www.microsoft.com/en-us/download/details.aspx?id=36805), and the [KB2999226 Universal C Runtime](https://www.microsoft.com/en-us/download/details.aspx?id=49093). On Windows 8 and 8.1, install the Universal C Runtime update for the corresponding system. Restart Windows after applying the updates. [Microsoft Universal C Runtime downloads](https://support.microsoft.com/en-us/servicing/os/windows/2020/04/update-for-universal-c-runtime-in-windows)
 
-The **Build BluraySubtitle Windows x64 Compatibility Package** workflow publishes the archive as a GitHub Actions artifact. Download each new version from its workflow run. VapourSynth scripts using `core.placebo` require a separate compatible installation of the plugin. MKVToolNix in this package omits DVD IFO chapter import. See the [compatibility build](BluraySubtitle-Developer-Guide.md#windows-x64-compatibility-build) for the runtime sources and build entry point.
+Download `BluraySubtitle_windows_x64_compat.7z` and its matching verification record from the [latest build directory](https://sbx.mysmy.top/tools/BluraySubtitle/). VapourSynth scripts using `core.placebo` require a separate compatible installation of the plugin. MKVToolNix in this package omits DVD IFO chapter import. See the [compatibility build](BluraySubtitle-Developer-Guide.md#windows-x64-compatibility-build) for the runtime sources and build entry point.
 
 ## Linux runtime
 

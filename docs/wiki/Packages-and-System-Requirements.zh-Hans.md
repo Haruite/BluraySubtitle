@@ -30,7 +30,7 @@ ARM64 包中的 `ffmpeg.exe` 和 `ffprobe.exe` 启动时还要从原生 `avicap3
 
 Windows 7 SP1 须安装 [KB3063858](https://github.com/adang1345/PythonVista#readme) 或提供相同 DLL 搜索接口的替代更新，以及 [KB2670838 平台更新](https://www.microsoft.com/en-us/download/details.aspx?id=36805)和 [KB2999226 通用 C 运行库更新](https://www.microsoft.com/en-us/download/details.aspx?id=49093)。Windows 8 和 8.1 须安装各自对应的通用 C 运行库更新。安装更新后重启 Windows。[微软通用 C 运行库下载](https://support.microsoft.com/en-us/servicing/os/windows/2020/04/update-for-universal-c-runtime-in-windows)
 
-**Build BluraySubtitle Windows x64 Compatibility Package** 工作流将压缩包上传为 GitHub Actions 产物。新版本需从相应的工作流运行记录下载。调用 `core.placebo` 的 VapourSynth 脚本需要另行安装兼容的插件。随包的 MKVToolNix 省略 DVD IFO 章节导入。运行时源码与构建入口见[兼容版构建](BluraySubtitle-Developer-Guide.zh-Hans.md#windows-x64-兼容版构建)。
+从[最新构建下载目录](https://sbx.mysmy.top/tools/BluraySubtitle/)获取 `BluraySubtitle_windows_x64_compat.7z` 和对应的校验文件。调用 `core.placebo` 的 VapourSynth 脚本需要另行安装兼容的插件。随包的 MKVToolNix 省略 DVD IFO 章节导入。运行时源码与构建入口见[兼容版构建](BluraySubtitle-Developer-Guide.zh-Hans.md#windows-x64-兼容版构建)。
 
 ## Linux 运行环境
 
