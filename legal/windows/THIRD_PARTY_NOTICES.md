@@ -111,6 +111,9 @@ These are **two separate upstreams**: the `fdkaac` program links against or ship
 - **Version:** {{DOVI_TOOL_VERSION}}
 - **License:** MIT
 - **Source:** https://github.com/quietvoid/dovi_tool/archive/refs/tags/{{DOVI_TOOL_VERSION}}.zip
+<!-- windows:compat -->
+- The Rust standard library and CLI are built for `x86_64-win7-windows-msvc`.
+<!-- /windows -->
 
 ---
 
@@ -120,7 +123,12 @@ These are **two separate upstreams**: the `fdkaac` program links against or ship
 - **Version:** {{HDR10PLUS_TOOL_VERSION}}
 - **License:** MIT
 - **Source for this build:** https://github.com/quietvoid/hdr10plus_tool/tree/{{HDR10PLUS_TOOL_VERSION}}
+<!-- windows:standard -->
 - **Build note:** Windows setup downloads the official MSVC release; Linux setup downloads the official musl release built upstream with its internal font feature. The tool is not compiled locally.
+<!-- /windows -->
+<!-- windows:compat -->
+- The Rust standard library and CLI are built for `x86_64-win7-windows-msvc`.
+<!-- /windows -->
 
 ---
 
@@ -169,6 +177,10 @@ The application and VSScript share the CPython runtime and NumPy package in `_in
 - **Bundled license text:** `DLLs/LICENSE.txt`
 - **License overview:** https://docs.python.org/3/license.html
 - **Corresponding source (CPython):** https://www.python.org/ftp/python/{{PYTHON_VERSION}}/Python-{{PYTHON_VERSION}}.tgz
+<!-- windows:compat -->
+- [Compatibility patches and runtime](https://github.com/adang1345/PythonVista/releases/tag/v{{PYTHON_VERSION}})
+- [Legacy path library](https://github.com/adang1345/api-ms-win-core-path)
+<!-- /windows -->
 
 ### NumPy
 
@@ -191,7 +203,12 @@ The application and VSScript share the CPython runtime and NumPy package in `_in
 
 The installation manifest `legal/vapoursynth-components.json` records source revisions, release download URLs, registered plugin versions, and installed file hashes. Dependencies and their available license texts are included with each component.
 
+<!-- windows:standard -->
 Source-built Windows plugins statically link compiler runtimes where supported. The current vs-placebo build includes libplacebo, libdovi, Little CMS, and SPIRV-Cross statically. It shares `libshaderc_shared.dll` with L-SMASH Works. That plugin links its FFmpeg libraries statically and provides a VapourSynth entry point. The Windows x64 build also provides an AviSynth entry point. ASSRender uses the bundled libass DLL. The Vulkan loader remains a separate DLL. DFTTest and MVTools share one FFTW DLL. The component notices record the dependencies and license texts of the versions included in the package.
+<!-- /windows -->
+<!-- windows:compat -->
+The zsmooth DLL links single-precision FFTW statically and is built for the baseline x86-64 instruction set. The component notices include the source links and license texts for the bundled filters.
+<!-- /windows -->
 
 ---
 

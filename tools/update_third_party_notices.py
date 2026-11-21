@@ -126,6 +126,8 @@ def generate_third_party_notices(
     pyinstaller_version: str,
     libsndfile_version: str,
     package_architecture: str,
+    *,
+    compatibility: bool = False,
 ) -> None:
     """Render both Windows notices for the components and build architecture."""
     arm64 = package_architecture == "arm64"
@@ -179,7 +181,9 @@ def generate_third_party_notices(
         "VSEDIT_QT_SOURCE": components["vsedit"]["qt_source_url"],
     }
 
-    _render_notices(template_outputs, versions)
+    if compatibility:
+        versions["MKVTOOLNIX_QT_SOURCE"] += f" + https://github.com/crystalidea/qt6windows7/tree/v{mkv_qt}"
+    _render_notices(template_outputs, versions, windows_variant="compat" if compatibility else "standard")
 
 
 def generate_linux_third_party_notices(
@@ -230,9 +234,12 @@ def generate_linux_third_party_notices(
     _render_notices(template_outputs, versions)
 
 
-def _render_notices(template_outputs: Mapping[Path, Path], versions: Mapping[str, str]) -> None:
+def _render_notices(template_outputs: Mapping[Path, Path], versions: Mapping[str, str], *, windows_variant: str = "") -> None:
     for template_path, output_path in template_outputs.items():
         template = template_path.read_text(encoding="utf-8-sig")
+        if windows_variant:
+            template = re.sub(r"<!-- windows:(standard|compat) -->\n(.*?)<!-- /windows -->\n",
+                              lambda match: match[2] if match[1] == windows_variant else "", template, flags=re.S)
         declared = set(PLACEHOLDER.findall(template))
         missing_values = declared - versions.keys()
         missing_declarations = versions.keys() - declared

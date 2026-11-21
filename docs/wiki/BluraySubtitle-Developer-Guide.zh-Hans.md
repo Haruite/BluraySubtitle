@@ -16,10 +16,16 @@
 - x265 使用官方最新稳定标签，构建 8/10/12-bit multilib CLI，各核心均启用 HDR10+ JSON 和 Dolby Vision RPU 输入。
 - Windows 和 Linux 默认安装 R79。Windows 打包版将 R79 wheel 和 VSPipe 放在 `_internal/Lib/site-packages/vapoursynth`，VSScript 从该目录定位随包的解释器。外部 VSPipe 调用使用所选可执行文件的运行环境。
 - Windows ARM64 使用 CLANGARM64 构建 R79 及其插件。R79 使用 NEON，在 CPU 和 Windows 提供所需特性时启用 I8MM 和 FHM 滤镜内核。自动 getnative 使用原生 Python。两种架构均使用 MSVC 构建 VSEdit，并使用 PyQt6 安装的 Qt 运行库。
-- 两种 Windows 打包工作流均使用 `-Mode Build`。此模式包含 vs-placebo，为 L-SMASH Works 启用 Vulkan，并跳过对构建机 GPU 的检测。R79 的桌面安装仍会检测本机的 Vulkan 设备。L-SMASH Works 可使用软件解码。
+- Windows 打包使用 `-Mode Build` 准备媒体工具。此模式包含 vs-placebo，为 L-SMASH Works 启用 Vulkan，并跳过对构建机 GPU 的检测。R79 的桌面安装仍会检测本机的 Vulkan 设备。L-SMASH Works 可使用软件解码。
 - Windows ARM64 使用 `-VapourSynthRuntime Classic` 时，Classic、插件和 VSEdit 使用 x64 仿真。自动 getnative 使用 Classic setup 记录的独立 x64 CPython。
 
 自定义构建可参考 setup 脚本。HDR 参数条件与注入回退见[自动 HDR 元数据处理](Video-Encoding-and-VapourSynth.zh-Hans.md#自动-hdr-元数据处理)。
+
+### Windows x64 兼容版构建
+
+在较新版本的 x64 Windows 上以管理员身份打开 PowerShell，运行 `.\setup_windows_environment.ps1 -Mode Build -CompatibilityWorkDirectory build/windows-compat`。兼容版工作流以该选项调用共用的 Windows 工作流，并上传校验通过的 `BluraySubtitle_windows_x64_compat.7z`。[兼容版工作流](../../.github/workflows/windows-x64-compat-package.yml)
+
+构建将最新版 x64 [PythonVista](https://github.com/adang1345/PythonVista) NuGet 包安装到工作目录，并为 PyQt6 和 VSEdit 使用 [CrystalIDE 的 Qt 6.8.5 移植版](https://github.com/crystalidea/qt6windows7)。MKVToolNix 命令行程序链接独立编译的 MinGW QtCore，使用 Qt 6.8.3 移植补丁。VapourSynth R79 通过 `CreateFileW` 适配 MSVC 文件系统库。两个 HDR 命令行工具以 `x86_64-win7-windows-msvc` 为目标重新编译 Rust 标准库。zsmooth 以 Windows 7 和基础 x86-64 指令集为编译目标。
 
 ## 源码导航
 

@@ -21,8 +21,10 @@ from tools.windows_tool_paths import MKV_PROGRAMS
 
 MKV_RECIPE = "mingw-ucrt-static-qtcore-1"
 MKV_DYNAMIC_RECIPE = "mingw-ucrt-qtcore-no-icu-1"
+MKV_WIN7_RECIPE = "mingw-ucrt-qtcore-win7-no-dvdread-1"
 VSEDIT_RECIPE = "msvc-pyqt6-1"
 VSEDIT_ARM64_RECIPE = "msvc-arm64-pyqt6-1"
+VSEDIT_WIN7_RECIPE = "msvc-qt6-win7-1"
 INSTALLATION_SCHEMA = 1
 PE_AMD64 = 0x8664
 PE_ARM64 = 0xAA64
@@ -231,12 +233,15 @@ def verify_mkv_runtime(programs, dependencies: dict[str, Path]) -> None:
         raise RuntimeError("Expected MKVToolNix to use the ICU-free QtCore linked into libmtxcommon.dll")
 
 
-def build_record(directory: Path, tool: str, *, installed: bool = False, allow_legacy: bool = False) -> dict | None:
+def build_record(directory: Path, tool: str, *, installed: bool = False, allow_legacy: bool = False,
+                 compatibility: bool = False) -> dict | None:
     """Check the build recipe, executable mapping and the recorded file hashes."""
     try:
         record = json.loads((directory / f"{tool}-build.json").read_text(encoding="utf-8"))
         recipe, programs = (MKV_RECIPE, MKV_PROGRAMS) if tool == "mkvtoolnix" else (VSEDIT_RECIPE, VSEDIT_PROGRAMS)
-        if tool == "vsedit" and windows_machine() == PE_ARM64:
+        if compatibility:
+            recipe = MKV_WIN7_RECIPE if tool == "mkvtoolnix" else VSEDIT_WIN7_RECIPE
+        elif tool == "vsedit" and windows_machine() == PE_ARM64:
             recipe = VSEDIT_ARM64_RECIPE
         if installed and record.get("installation_schema") != INSTALLATION_SCHEMA:
             return None
@@ -301,7 +306,8 @@ def install_build(directory: Path, destination: Path, tool: str, record: dict, e
     with (destination / ".build.lock").open("a+b") as lock, ExitStack() as cleanup:
         lock.seek(0)
         msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
-        previous = build_record(destination, tool, allow_legacy=True)
+        previous = build_record(destination, tool, allow_legacy=True,
+                                compatibility=record["recipe"] in (MKV_WIN7_RECIPE, VSEDIT_WIN7_RECIPE))
         install_root = destination.resolve()
 
         def stage_file(target: Path):

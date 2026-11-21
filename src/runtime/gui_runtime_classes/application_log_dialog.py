@@ -26,7 +26,7 @@ from .window_background import WindowBackground, background_panel_colors
 from .x11_window import apply_x11_title_bar_theme, set_x11_window_identity
 
 _dwm_set_window_attribute = None
-if sys.platform == "win32":
+if sys.platform == "win32" and sys.getwindowsversion().platform_version[0] >= 10:
     import ctypes
     from ctypes import wintypes
 

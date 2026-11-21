@@ -59,12 +59,12 @@ def build_launchers(work: Path) -> dict[bool, Path]:
     return launchers
 
 
-def installed_tools(settings) -> tuple[Path, dict, Path, dict]:
+def installed_tools(settings, *, compatibility: bool = False) -> tuple[Path, dict, Path, dict]:
     mkv = Path(settings["MKVTOOLNIX_PATH"]).resolve()
     editor_path = Path(settings["VSEDIT_PATH"]).resolve()
     editor = editor_path.parent
-    mkv_record = build_record(mkv, "mkvtoolnix")
-    editor_record = build_record(editor, "vsedit")
+    mkv_record = build_record(mkv, "mkvtoolnix", compatibility=compatibility)
+    editor_record = build_record(editor, "vsedit", compatibility=compatibility)
     if (mkv.name.casefold() != "mkvtoolnix" or not mkv_record
             or mkv_record["entrypoints"] != {name: name for name in MKV_PROGRAMS}):
         raise RuntimeError("Run Windows setup to install the managed MKVToolNix build")

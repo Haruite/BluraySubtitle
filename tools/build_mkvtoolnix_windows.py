@@ -17,7 +17,7 @@ import urllib.request
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools.windows_build_cache import files_under, publish, restore
 from tools.windows_native_tools import (
-    MKV_RECIPE, PE_ARM64, build_record, clean_tool_environment, fetch_verified, file_hash, fingerprint,
+    MKV_RECIPE, MKV_WIN7_RECIPE, PE_ARM64, build_record, clean_tool_environment, fetch_verified, file_hash, fingerprint,
     imported_symbols, install_build, msys_pkg_config_environment, pe_imports, record_build, runtime_dependencies, tool_version,
     verify_mkv_runtime, windows_machine,
 )
@@ -27,6 +27,7 @@ from tools.windows_tool_paths import MKV_PROGRAMS
 MSYS2_REQUIRED = 75
 QT_FEATURES_OFF = ("gui", "widgets", "dbus", "sql", "xml", "testlib", "concurrent", "icu")
 SECTION_FLAGS = "-ffunction-sections -fdata-sections"
+WIN7_FLAGS = "-D_WIN32_WINNT=0x0601 -DWINVER=0x0601"
 
 
 def unpack_source(archive: Path, destination: Path) -> Path:
@@ -38,8 +39,8 @@ def unpack_source(archive: Path, destination: Path) -> Path:
 
 
 def build_qtcore(work: Path, prefix: Path, compiler: Path, cache: Path, env: dict, jobs: int,
-                 cxx_flags: str) -> tuple[Path, str]:
-    version = subprocess.check_output([prefix / "bin/qmake6.exe", "-query", "QT_VERSION"], env=env, text=True).strip()
+                 cxx_flags: str, *, qmake: Path, compat_source: Path | None = None) -> tuple[Path, str]:
+    version = subprocess.check_output([qmake, "-query", "QT_VERSION"], env=env, text=True).strip()
     match = re.fullmatch(r"(\d+\.\d+)\.\d+", version)
     if not match:
         raise ValueError(f"Unexpected MSYS2 Qt version: {version}")
@@ -49,25 +50,29 @@ def build_qtcore(work: Path, prefix: Path, compiler: Path, cache: Path, env: dic
     compiler_version = subprocess.check_output(
         [cxx_compiler, "--version" if arm64 else "-dumpfullversion"], env=env, text=True,
     ).strip()
-    qt_key = fingerprint(MKV_RECIPE, version, compiler_version, file_hash(prefix / "bin/Qt6Core.dll"))
+    recipe = "mingw-ucrt-qtcore-win7-1" if compat_source else MKV_RECIPE
+    qt_key = fingerprint(recipe, version, compiler_version, file_hash(qmake.parent / "Qt6Core.dll"))
     archive = cache / "mkvtoolnix-qtcore.zip"
     payload = work / "qtcore"
     if restore(archive, qt_key, payload):
         return payload, version
 
-    filename = f"qtbase-everywhere-src-{version}.tar.xz"
-    url = f"https://download.qt.io/archive/qt/{match[1]}/{version}/submodules/{filename}"
-    downloads = cache.parent / "downloads/mkvtoolnix"
-    checksum = downloads / (filename + ".sha256")
-    if not checksum.is_file():
-        with urllib.request.urlopen(url + ".sha256", timeout=60) as response:
-            digest = response.read().decode("ascii").split()[0].lower()
+    if compat_source:
+        source = compat_source
     else:
-        digest = checksum.read_text(encoding="ascii").split()[0].lower()
-    if not re.fullmatch("[0-9a-f]{64}", digest):
-        raise ValueError(f"Invalid Qt source checksum: {url}")
-    source = unpack_source(fetch_verified(url, downloads / filename, digest), work)
-    checksum.write_text(digest + "\n", encoding="ascii", newline="\r\n")
+        filename = f"qtbase-everywhere-src-{version}.tar.xz"
+        url = f"https://download.qt.io/archive/qt/{match[1]}/{version}/submodules/{filename}"
+        downloads = cache.parent / "downloads/mkvtoolnix"
+        checksum = downloads / (filename + ".sha256")
+        if not checksum.is_file():
+            with urllib.request.urlopen(url + ".sha256", timeout=60) as response:
+                digest = response.read().decode("ascii").split()[0].lower()
+        else:
+            digest = checksum.read_text(encoding="ascii").split()[0].lower()
+        if not re.fullmatch("[0-9a-f]{64}", digest):
+            raise ValueError(f"Invalid Qt source checksum: {url}")
+        source = unpack_source(fetch_verified(url, downloads / filename, digest), work)
+        checksum.write_text(digest + "\n", encoding="ascii", newline="\r\n")
     build = work / "qb"
     cmake = compiler / "cmake.exe"
     arm_options = [
@@ -79,7 +84,7 @@ def build_qtcore(work: Path, prefix: Path, compiler: Path, cache: Path, env: dic
         f"-DCMAKE_C_COMPILER={c_compiler}", f"-DCMAKE_CXX_COMPILER={cxx_compiler}",
         f"-DCMAKE_MAKE_PROGRAM={compiler / 'ninja.exe'}", *arm_options,
         f"-DCMAKE_PREFIX_PATH={prefix};{compiler.parent}", "-DCMAKE_BUILD_TYPE=Release", "-DBUILD_SHARED_LIBS=OFF",
-        f"-DCMAKE_C_FLAGS={SECTION_FLAGS}", f"-DCMAKE_CXX_FLAGS={cxx_flags}",
+        f"-DCMAKE_C_FLAGS={SECTION_FLAGS}{' ' + WIN7_FLAGS if compat_source else ''}", f"-DCMAKE_CXX_FLAGS={cxx_flags}",
         "-DQT_BUILD_TESTS=OFF", "-DQT_BUILD_EXAMPLES=OFF", "-DQT_BUILD_BENCHMARKS=OFF",
         "-DFEATURE_network=ON", "-DFEATURE_optimize_size=ON",
         *(f"-DFEATURE_{feature}=OFF" for feature in QT_FEATURES_OFF),
@@ -145,10 +150,15 @@ def patch_rake(source: Path) -> None:
     shutil.copyfile(next(source.glob("rake.d/vendor/drake-*/bin/drake")), source / "drake")
 
 
-def build_cli(source: Path, msys: Path, prefix: Path, jobs: int, cxx_flags: str, env: dict) -> None:
+def build_cli(source: Path, msys: Path, prefix: Path, jobs: int, cxx_flags: str, env: dict, *,
+              qmake: Path, compat: bool = False) -> None:
     cygpath = msys / "usr/bin/cygpath.exe"
     posix_prefix = subprocess.check_output([cygpath, "-u", prefix], text=True).strip()
     posix_work = subprocess.check_output([cygpath, "-u", source.parent], text=True).strip()
+    posix_qmake = subprocess.check_output([cygpath, "-u", qmake], text=True).strip()
+    qt_include = qmake.parent.parent / "include" if compat else prefix / "include/qt6"
+    # MSYS2's libdvdread dependency pulls in libdvdcss with a static CreateFile2 import.
+    dvdread = " --without-dvdread" if compat else ""
     quote = shlex.quote
     sysroot = "/" + prefix.name
     arm64 = windows_machine() == PE_ARM64
@@ -167,13 +177,14 @@ def build_cli(source: Path, msys: Path, prefix: Path, jobs: int, cxx_flags: str,
         'export MINGW_PREFIX="$deps"',
         'win_deps=$(cygpath -m "$deps")',
         "export " + tools,
-        'export CPPFLAGS="-I$win_deps/include -I$win_deps/include/qt6 -I$win_deps/include/qt6/QtCore"',
+        f'export CPPFLAGS="-I$win_deps/include -I{qt_include.as_posix()} -I{(qt_include / "QtCore").as_posix()}"',
         'export LDFLAGS="-L$win_deps/lib"',
         f"export CFLAGS={quote('-Os -DNDEBUG ' + SECTION_FLAGS)} CXXFLAGS={quote('-Os -DNDEBUG ' + cxx_flags)}",
         "export INKSCAPE=/usr/bin/true MAGICK=/usr/bin/true",
         f"/usr/bin/dash ./configure --build={host} --host={host} "
         "--disable-gui --disable-debug --disable-optimization --enable-precompiled-headers "
-        '--with-qmake6="$deps/bin/qmake6.exe" --with-boost="$win_deps" --with-boost-system=boost_filesystem-mt --with-boost-filesystem=boost_filesystem-mt',
+        f'--with-qmake6={quote(posix_qmake)}{dvdread} --with-boost="$win_deps" '
+        '--with-boost-system=boost_filesystem-mt --with-boost-filesystem=boost_filesystem-mt',
         # The icons are already rendered from the source SVGs.
         r"sed -i -E 's/^(INKSCAPE|MAGICK|CONVERT)[[:space:]]*=.*/\1 =/' build-config",
         r"sed -i -E 's/^(QT_CFLAGS = .*)$/\1 -DQT_STATIC/' build-config",
@@ -181,7 +192,12 @@ def build_cli(source: Path, msys: Path, prefix: Path, jobs: int, cxx_flags: str,
         f"ruby ./drake -j{jobs} " + " ".join("apps:" + Path(name).stem for name in MKV_PROGRAMS),
         "",
     )), encoding="utf-8", newline="\n")
-    subprocess.run([msys / "usr/bin/dash.exe", posix_work + "/" + script.name], cwd=source, env=env, check=True)
+    try:
+        subprocess.run([msys / "usr/bin/dash.exe", posix_work + "/" + script.name], cwd=source, env=env, check=True)
+    except subprocess.CalledProcessError:
+        if compat and (log := source / "config.log").is_file():
+            shutil.copyfile(log, source.parent.parent / "mkvtoolnix-config.log")
+        raise
 
 
 def link_cli(source: Path, qtcore: Path, compiler: Path, env: dict) -> Path:
@@ -216,7 +232,7 @@ def link_cli(source: Path, qtcore: Path, compiler: Path, env: dict) -> Path:
     definitions = linked / "libmtxcommon.def"
 
     def is_qt_import(arg):
-        return Path(arg).name == "libQt6Core.dll.a" or arg == "-lQt6Core"
+        return Path(arg).name in {"libQt6Core.a", "libQt6Core.dll.a"} or arg == "-lQt6Core"
 
     def link(name, args):
         response = linked / f"{name}.rsp"
@@ -275,11 +291,16 @@ def build_from_source(args, work: Path, payload: Path, key: str, prefix: Path) -
         )
         if probe.returncode == 0:
             cxx_flags += " -fno-declone-ctor-dtor"
-    qtcore, qt_version = build_qtcore(work, prefix, compiler, args.cache, env, args.jobs, cxx_flags)
-    build_cli(source, args.msys2_root, prefix, args.jobs, cxx_flags, env)
+    if args.qt_win7_source:
+        cxx_flags += " " + WIN7_FLAGS
+    qmake = args.qt_win7_sdk / "bin/qmake.exe" if args.qt_win7_sdk else prefix / "bin/qmake6.exe"
+    qtcore, qt_version = build_qtcore(work, prefix, compiler, args.cache, env, args.jobs, cxx_flags,
+                                     qmake=qmake, compat_source=args.qt_win7_source)
+    build_cli(source, args.msys2_root, prefix, args.jobs, cxx_flags, env, qmake=qmake, compat=bool(args.qt_win7_source))
     linked = link_cli(source, qtcore, compiler, env)
     stage_cli(source, linked, qtcore, prefix, compiler, payload, env)
-    record_build(payload, "mkvtoolnix", MKV_RECIPE, args.version, key, MKV_PROGRAMS,
+    recipe = MKV_WIN7_RECIPE if args.qt_win7_source else MKV_RECIPE
+    record_build(payload, "mkvtoolnix", recipe, args.version, key, MKV_PROGRAMS,
                  source_url=args.source, source_sha256=args.sha256, qt_version=qt_version)
 
 
@@ -320,6 +341,8 @@ def main() -> int:
     parser.add_argument("--msys2-root", type=Path)
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
     parser.add_argument("--defer-msys2", action="store_true")
+    parser.add_argument("--qt-win7-source", type=Path)
+    parser.add_argument("--qt-win7-sdk", type=Path)
     args = parser.parse_args()
     entrypoints = {name: name for name in MKV_PROGRAMS}
     if args.operation == "version":
@@ -335,13 +358,17 @@ def main() -> int:
             or not re.fullmatch(r"[0-9a-f]{64}", args.sha256 or "")):
         parser.error("install requires --version, --source, --sha256, --cache and --work")
     arm64 = windows_machine() == PE_ARM64
-    key = fingerprint(MKV_RECIPE, args.version, args.sha256, "arm64") if arm64 else fingerprint(MKV_RECIPE, args.version, args.sha256)
+    if bool(args.qt_win7_source) != bool(args.qt_win7_sdk) or (arm64 and args.qt_win7_source):
+        parser.error("the x64 Win7 build requires both patched Qt sources and the matching MinGW Qt SDK")
+    compatibility = bool(args.qt_win7_source)
+    recipe = MKV_WIN7_RECIPE if compatibility else MKV_RECIPE
+    key = fingerprint(recipe, args.version, args.sha256, "arm64") if arm64 else fingerprint(recipe, args.version, args.sha256)
     args.work.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="mkv-", dir=args.work) as temporary:
         work = Path(temporary)
         archive = args.cache / "mkvtoolnix.zip"
         payload = work / "cached"
-        record = build_record(payload, "mkvtoolnix") if restore(archive, key, payload) else None
+        record = build_record(payload, "mkvtoolnix", compatibility=compatibility) if restore(archive, key, payload) else None
         if record and record["fingerprint"] == key:
             try:
                 verify(payload, record, record["entrypoints"])
@@ -356,7 +383,7 @@ def main() -> int:
                 parser.error("building MKVToolNix requires --msys2-root")
             payload = work / "payload"
             build_from_source(args, work, payload, key, args.msys2_root / ("clangarm64" if arm64 else "ucrt64"))
-            record = build_record(payload, "mkvtoolnix")
+            record = build_record(payload, "mkvtoolnix", compatibility=compatibility)
             if not record:
                 raise RuntimeError("Invalid MKVToolNix build record")
             verify(payload, record, record["entrypoints"])

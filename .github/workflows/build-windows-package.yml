@@ -6,6 +6,9 @@ on:
       architecture:
         required: true
         type: string
+      compatibility:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -17,12 +20,16 @@ concurrency:
 jobs:
   publish:
     runs-on: ${{ inputs.architecture == 'arm64' && 'windows-11-vs2026-arm' || 'windows-2025-vs2026' }}
+    timeout-minutes: ${{ inputs.compatibility && 180 || 360 }}
     outputs:
       architecture: ${{ runner.arch }}
       restored-pip: ${{ steps.restored.outcome == 'success' && steps.restored.outputs.pip == steps.downloads.outputs.cache-matched-key && steps.restored.outputs.pip || '' }}
       restored-tools: ${{ steps.restored.outcome == 'success' && steps.restored.outputs.tools == steps.builds.outputs.cache-matched-key && steps.restored.outputs.tools || '' }}
+      restored-compat: ${{ steps.restored.outcome == 'success' && steps.restored.outputs.compat == steps.compat.outputs.cache-matched-key && steps.restored.outputs.compat || '' }}
     env:
-      PACKAGE_NAME: BluraySubtitle_windows_${{ inputs.architecture }}
+      PACKAGE_NAME: BluraySubtitle_windows_${{ inputs.architecture }}${{ inputs.compatibility && '_compat' || '' }}
+      PACKAGE_ARCHITECTURE: ${{ inputs.architecture }}
+      WINDOWS_COMPATIBILITY: ${{ inputs.compatibility && '1' || '' }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v6
@@ -49,15 +56,32 @@ jobs:
             windows-tools-v4-${{ runner.arch }}-
             windows-tools-v3-${{ runner.arch }}-
 
+      - name: Restore Windows Compatibility Build Inputs
+        id: compat
+        if: inputs.compatibility
+        uses: actions/cache/restore@v6
+        with:
+          path: &compat-path |
+            ${{ runner.temp }}/bluraysubtitle-compat/cache/*.zip
+            ${{ runner.temp }}/bluraysubtitle-compat/downloads
+            ${{ runner.temp }}/bluraysubtitle-compat/rust-cargo/registry/cache
+            ${{ runner.temp }}/bluraysubtitle-compat/rust-cargo/registry/index
+          key: windows-compat-v1-${{ runner.arch }}-lookup
+          restore-keys: windows-compat-v1-${{ runner.arch }}-
+
       - name: Verify Restored Windows Cache Contents
         id: restored
         if: >-
           github.ref == 'refs/heads/main' &&
           (startsWith(steps.downloads.outputs.cache-matched-key, 'windows-pip-v2-') ||
-           startsWith(steps.builds.outputs.cache-matched-key, 'windows-tools-v4-'))
+           startsWith(steps.builds.outputs.cache-matched-key, 'windows-tools-v4-') ||
+           startsWith(steps.compat.outputs.cache-matched-key, 'windows-compat-v1-'))
         continue-on-error: true
         shell: powershell
-        run: python -B tools/windows_actions_cache.py snapshot $env:RUNNER_ARCH
+        run: |
+          $arguments = @('-B', 'tools/windows_actions_cache.py', 'snapshot', $env:RUNNER_ARCH)
+          if ($env:WINDOWS_COMPATIBILITY) { $arguments += '--compatibility' }
+          python @arguments
 
       - name: Prepare Windows Build Environment
         id: setup
@@ -66,13 +90,20 @@ jobs:
           BLURAYSUBTITLE_GITHUB_TOKEN: ${{ github.token }}
           PIP_CACHE_DIR: ${{ runner.temp }}/bluraysubtitle-pip
         run: |
-          $expected = switch ($env:PACKAGE_NAME) {
-            'BluraySubtitle_windows_x64' { 'AMD64' }
-            'BluraySubtitle_windows_arm64' { 'ARM64' }
-            default { throw "Unknown Windows package: $env:PACKAGE_NAME" }
+          $expected = switch ($env:PACKAGE_ARCHITECTURE) {
+            'x64' { 'AMD64' }
+            'arm64' { 'ARM64' }
+            default { throw 'Unknown Windows package architecture.' }
           }
-          $cacheDirectory = Join-Path $env:RUNNER_TEMP "bluraysubtitle-builds"
-          .\setup_windows_environment.ps1 -Mode Build -Language en -BuildCacheDirectory $cacheDirectory
+          $setupArguments = @{
+            Mode = 'Build'
+            Language = 'en'
+            BuildCacheDirectory = Join-Path $env:RUNNER_TEMP 'bluraysubtitle-builds'
+          }
+          if ($env:WINDOWS_COMPATIBILITY) {
+            $setupArguments.CompatibilityWorkDirectory = Join-Path $env:RUNNER_TEMP 'bluraysubtitle-compat'
+          }
+          .\setup_windows_environment.ps1 @setupArguments
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           $manifestPath = Join-Path $env:ProgramData "BluraySubtitle\environment-manifest.json"
@@ -87,6 +118,7 @@ jobs:
           [IO.File]::AppendAllLines($env:GITHUB_OUTPUT, [string[]]$outputs, [Text.UTF8Encoding]::new($false))
 
       - name: Build and Verify Windows Package
+        if: ${{ !inputs.compatibility }}
         shell: powershell
         env:
           BUILD_PYTHON: ${{ steps.setup.outputs.python }}
@@ -132,7 +164,9 @@ jobs:
         env:
           BUILD_PYTHON: ${{ steps.setup.outputs.python }}
         run: |
-          & $env:BUILD_PYTHON -B tools/windows_actions_cache.py snapshot $env:RUNNER_ARCH
+          $arguments = @('-B', 'tools/windows_actions_cache.py', 'snapshot', $env:RUNNER_ARCH)
+          if ($env:WINDOWS_COMPATIBILITY) { $arguments += '--compatibility' }
+          & $env:BUILD_PYTHON @arguments
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Save Python Package Downloads
@@ -149,8 +183,24 @@ jobs:
           path: *tools-path
           key: ${{ steps.snapshot.outputs.tools }}
 
+      - name: Save Windows Compatibility Build Inputs
+        if: inputs.compatibility && steps.snapshot.outputs.compat != '' && steps.snapshot.outputs.compat != steps.compat.outputs.cache-matched-key
+        uses: actions/cache/save@v6
+        with:
+          path: *compat-path
+          key: ${{ steps.snapshot.outputs.compat }}
+
+      - name: Upload Compatibility Package
+        if: inputs.compatibility
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.PACKAGE_NAME }}
+          path: dist/${{ env.PACKAGE_NAME }}.7z
+          if-no-files-found: error
+          compression-level: 0
+
       - name: Upload Package and Build Information
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && !inputs.compatibility
         shell: bash
         env:
           SFTP_HOST: ${{ secrets.SFTP_HOST }}
@@ -166,7 +216,8 @@ jobs:
     if: >-
       github.ref == 'refs/heads/main' &&
       (startsWith(needs.publish.outputs.restored-pip, 'windows-pip-v2-') ||
-       startsWith(needs.publish.outputs.restored-tools, 'windows-tools-v4-'))
+       startsWith(needs.publish.outputs.restored-tools, 'windows-tools-v4-') ||
+       startsWith(needs.publish.outputs.restored-compat, 'windows-compat-v1-'))
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -182,4 +233,5 @@ jobs:
           CACHE_ARCHITECTURE: ${{ needs.publish.outputs.architecture }}
           RESTORED_PIP_CACHE: ${{ needs.publish.outputs.restored-pip }}
           RESTORED_TOOLS_CACHE: ${{ needs.publish.outputs.restored-tools }}
+          RESTORED_COMPAT_CACHE: ${{ needs.publish.outputs.restored-compat }}
         run: /usr/bin/python3 -B tools/windows_actions_cache.py prune "$CACHE_ARCHITECTURE"

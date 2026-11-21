@@ -9,6 +9,7 @@
 | 文件 | 适用系统 | 处理器要求 |
 | --- | --- | --- |
 | `BluraySubtitle_windows_x64.7z` | Windows 10 x64（接口下限 1709）或 Windows 11 x64 | 主程序及随包的 NumPy 需要 x86-64-v2，例如 Intel Core Nehalem。随包的 zsmooth 滤镜还需要 AVX2。 |
+| `BluraySubtitle_windows_x64_compat.7z` | Windows 7 SP1 x64 及以上。Windows 7 须安装下列更新。 | 随包的 NumPy 需要 x86-64-v2。兼容版 zsmooth 使用基础 x86-64 指令集。 |
 | `BluraySubtitle_windows_arm64.7z` | Windows 10 ARM64（整包接口下限 1903）或 Windows 11 ARM64 | 支持 NEON 和 Armv8.1 LSE 原子指令（包括 `CASAL`）的 64 位 Arm 处理器。 |
 | `BluraySubtitle_linux_x64.tar.xz` | 64 位 x86 Linux（x86-64），已验证的内核下限为 3.17 | 完整支持 x86-64-v3，例如 Intel Core Haswell 或 AMD Zen。在 x86-64-v2 基础上需要 AVX、AVX2、BMI1/2、F16C、FMA、LZCNT、MOVBE、OSXSAVE 及操作系统启用的 AVX 寄存器状态。 |
 | `BluraySubtitle_linux_arm64.tar.xz` | 64 位 AArch64 Linux，已验证的内核下限为 3.17 | 支持浮点和 NEON 的 Armv8-A 处理器，实测基线为 Cortex-A53。 |
@@ -17,13 +18,19 @@
 
 下载目录中每个压缩包对应一份 `<压缩包名>.txt`，其中记录 SHA-256、Git 提交和提交时间，可用于核对下载文件和构建版本。
 
-完整解压所选程序包。Windows 下运行 `BluraySubtitle_windows_x64.exe` 或 `BluraySubtitle_windows_arm64.exe`。Linux 下用 `tar -xJf <压缩包名>` 解压，进入 `BluraySubtitle/`，以普通用户身份运行 `./BluraySubtitle`。`_internal/` 须与启动程序放在一起。使用早期 Ubuntu 命名包的用户，首次切换时手动下载对应的 Linux 包。
+完整解压所选程序包。Windows 下运行与压缩包同名的 `.exe`。Linux 下用 `tar -xJf <压缩包名>` 解压，进入 `BluraySubtitle/`，以普通用户身份运行 `./BluraySubtitle`。`_internal/` 须与启动程序放在一起。使用早期 Ubuntu 命名包的用户，首次切换时手动下载对应的 Linux 包。
 
 ## Windows 运行环境
 
-构建 `13592ef` 使用 Qt 6.12.0 和 CPython 3.15.2。两个包的桌面插件 `qwindows.dll` 在加载时都要从 `UIAutomationCore.dll` 导入 `UiaRaiseNotificationEvent`。微软从 Windows 10 1709（内部版本 16299）起提供该入口。Qt 6.12 的官方支持表将 Windows 10 x64 的起点列为 1809，ARM64 条目只注明 Windows on ARM。[微软接口说明](https://learn.microsoft.com/zh-cn/windows/win32/api/uiautomationcoreapi/nf-uiautomationcoreapi-uiaraisenotificationevent) · [Qt 支持的平台](https://doc.qt.io/qt-6.12/windows.html)
+构建 `13592ef` 的标准 Windows 包使用 Qt 6.12.0 和 CPython 3.15.2。两种架构的桌面插件 `qwindows.dll` 在加载时都要从 `UIAutomationCore.dll` 导入 `UiaRaiseNotificationEvent`。微软从 Windows 10 1709（内部版本 16299）起提供该入口。Qt 6.12 的官方支持表将 Windows 10 x64 的起点列为 1809，ARM64 条目只注明 Windows on ARM。[微软接口说明](https://learn.microsoft.com/zh-cn/windows/win32/api/uiautomationcoreapi/nf-uiautomationcoreapi-uiaraisenotificationevent) · [Qt 支持的平台](https://doc.qt.io/qt-6.12/windows.html)
 
 ARM64 包中的 `ffmpeg.exe` 和 `ffprobe.exe` 启动时还要从原生 `avicap32.dll` 导入 `capCreateCaptureWindowA` 和 `capGetDriverDescriptionA`。Windows 10 ARM64 专业版 1709、1803、1809 的映像都只有 x86 副本。1903（内部版本 18362）的 `System32` 首次包含导出这两个入口的 ARM64 副本。即使只用 FFprobe 读取文件信息，也需要该 DLL。[微软视频采集接口说明](https://learn.microsoft.com/zh-cn/windows/win32/api/vfw/nf-vfw-capcreatecapturewindowa)
+
+### Windows x64 兼容包
+
+Windows 7 SP1 须安装 [KB3063858](https://github.com/adang1345/PythonVista#readme) 或提供相同 DLL 搜索接口的替代更新，以及 [KB2670838 平台更新](https://www.microsoft.com/en-us/download/details.aspx?id=36805)和 [KB2999226 通用 C 运行库更新](https://www.microsoft.com/en-us/download/details.aspx?id=49093)。Windows 8 和 8.1 须安装各自对应的通用 C 运行库更新。安装更新后重启 Windows。[微软通用 C 运行库下载](https://support.microsoft.com/en-us/servicing/os/windows/2020/04/update-for-universal-c-runtime-in-windows)
+
+**Build BluraySubtitle Windows x64 Compatibility Package** 工作流将压缩包上传为 GitHub Actions 产物。新版本需从相应的工作流运行记录下载。调用 `core.placebo` 的 VapourSynth 脚本需要另行安装兼容的插件。随包的 MKVToolNix 省略 DVD IFO 章节导入。运行时源码与构建入口见[兼容版构建](BluraySubtitle-Developer-Guide.zh-Hans.md#windows-x64-兼容版构建)。
 
 ## Linux 运行环境
 

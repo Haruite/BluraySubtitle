@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import json
 import os
 import shutil
 import subprocess
@@ -23,21 +22,22 @@ _WINDOWS_SHORTCUT = r"""
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 try {
-    $plan = $env:BLURAYSUBTITLE_SHORTCUT | ConvertFrom-Json
     $shell = New-Object -ComObject WScript.Shell
-    $folder = $shell.SpecialFolders.Item($plan.folder)
-    if ([string]::IsNullOrWhiteSpace($folder)) { throw $plan.missingFolder }
+    $folder = $shell.SpecialFolders.Item($env:BLURAYSUBTITLE_SHORTCUT_FOLDER)
+    if ([string]::IsNullOrEmpty($folder)) { throw $env:BLURAYSUBTITLE_SHORTCUT_MISSING_FOLDER }
     [void][IO.Directory]::CreateDirectory($folder)
     $path = Join-Path $folder 'BluraySubtitle.lnk'
     $link = $shell.CreateShortcut($path)
-    if ((Test-Path -LiteralPath $path) -and ($link.TargetPath -ne $plan.target -or $link.Arguments -ne $plan.arguments)) {
-        $path = Join-Path $folder "BluraySubtitle ($($plan.location)).lnk"
+    $target = $env:BLURAYSUBTITLE_SHORTCUT_TARGET
+    $arguments = [string]$env:BLURAYSUBTITLE_SHORTCUT_ARGUMENTS
+    if ((Test-Path -LiteralPath $path) -and ($link.TargetPath -ne $target -or $link.Arguments -ne $arguments)) {
+        $path = Join-Path $folder "BluraySubtitle ($env:BLURAYSUBTITLE_SHORTCUT_LOCATION).lnk"
         $link = $shell.CreateShortcut($path)
     }
-    $link.TargetPath = $plan.target
-    $link.Arguments = $plan.arguments
-    $link.WorkingDirectory = $plan.workingDirectory
-    $link.IconLocation = "$($plan.icon),0"
+    $link.TargetPath = $target
+    $link.Arguments = $arguments
+    $link.WorkingDirectory = $env:BLURAYSUBTITLE_SHORTCUT_DIRECTORY
+    $link.IconLocation = "$env:BLURAYSUBTITLE_SHORTCUT_ICON,0"
     $link.Description = 'BluraySubtitle'
     $link.Save()
     [Console]::WriteLine($path)
@@ -100,19 +100,20 @@ def _windows_source_icon() -> Path:
 
 
 def _create_windows_shortcut(command: list[str], directory: Path, icon: Path, *, menu: bool) -> Path:
-    plan = {
-        "target": command[0],
-        "arguments": subprocess.list2cmdline(command[1:]),
-        "workingDirectory": str(directory),
-        "icon": str(icon),
-        "location": application_location_id()[:8],
-        "folder": "Programs" if menu else "Desktop",
-        "missingFolder": translate_text("This desktop does not provide a shortcut directory."),
-    }
+    missing_folder = translate_text("This desktop does not provide a shortcut directory.")
     script = base64.b64encode(_WINDOWS_SHORTCUT.encode("utf-16-le")).decode("ascii")
     process = launch_system_powershell(
         ["-EncodedCommand", script],
-        environment={"BLURAYSUBTITLE_SHORTCUT": json.dumps(plan)},
+        # PowerShell 2 has no JSON cmdlets. Pass Unicode fields directly to the shortcut process.
+        environment={
+            "BLURAYSUBTITLE_SHORTCUT_TARGET": command[0],
+            "BLURAYSUBTITLE_SHORTCUT_ARGUMENTS": subprocess.list2cmdline(command[1:]),
+            "BLURAYSUBTITLE_SHORTCUT_DIRECTORY": str(directory),
+            "BLURAYSUBTITLE_SHORTCUT_ICON": str(icon),
+            "BLURAYSUBTITLE_SHORTCUT_LOCATION": application_location_id()[:8],
+            "BLURAYSUBTITLE_SHORTCUT_FOLDER": "Programs" if menu else "Desktop",
+            "BLURAYSUBTITLE_SHORTCUT_MISSING_FOLDER": missing_folder,
+        },
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
     try:
@@ -123,7 +124,7 @@ def _create_windows_shortcut(command: list[str], directory: Path, icon: Path, *,
         raise TimeoutError(translate_text("Creating the shortcut timed out.")) from error
     path = output.decode("utf-8-sig").strip()
     if process.returncode or not path:
-        raise OSError(errors.decode("utf-8", errors="replace").strip() or plan["missingFolder"])
+        raise OSError(errors.decode("utf-8", errors="replace").strip() or missing_folder)
     return Path(path)
 
 

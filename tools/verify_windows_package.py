@@ -17,14 +17,33 @@ from tools.windows_native_tools import (
 from tools.windows_tool_paths import MKV_PROGRAMS
 
 
+def verify_compatibility_imports(path: Path) -> None:
+    import pefile
+
+    unavailable = {
+        b"WaitOnAddress", b"WakeByAddressAll", b"WakeByAddressSingle", b"ProcessPrng",
+        b"CreateFile2", b"GetSystemTimePreciseAsFileTime", b"UiaRaiseNotificationEvent",
+    }
+    with pefile.PE(str(path), fast_load=True) as image:
+        image.parse_data_directories([pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_IMPORT"]])
+        missing = {entry.name for module in getattr(image, "DIRECTORY_ENTRY_IMPORT", ())
+                   for entry in module.imports if entry.name in unavailable}
+    if missing:
+        raise RuntimeError(f"{path.name} imports APIs unavailable on Windows 7: {', '.join(x.decode('ascii') for x in sorted(missing))}")
+
+
 def verify(bundle: Path, work: Path) -> None:
     suffix = "arm64" if windows_machine() == PE_ARM64 else "x64"
-    package_name = f"BluraySubtitle_windows_{suffix}"
+    compatibility = suffix == "x64" and bundle.name == "BluraySubtitle_windows_x64_compat"
+    package_name = f"BluraySubtitle_windows_{suffix}" + ("_compat" if compatibility else "")
     if bundle.name != package_name or not (bundle / f"{package_name}.exe").is_file():
         raise RuntimeError(f"Expected the {package_name} package and executable")
-    for path in bundle.rglob("*"):
-        if path.suffix.lower() in {".exe", ".dll", ".pyd"} and not has_pe_machine(path):
+    binaries = [path for path in bundle.rglob("*") if path.suffix.lower() in {".exe", ".dll", ".pyd"}]
+    for path in binaries:
+        if not has_pe_machine(path):
             raise RuntimeError(f"Expected a {suffix} PE binary at {path.relative_to(bundle)}")
+        if compatibility:
+            verify_compatibility_imports(path)
 
     internal = bundle / "_internal"
     mkv = internal / "mkvtoolnix"
@@ -42,13 +61,16 @@ def verify(bundle: Path, work: Path) -> None:
             del environment[name]
     environment["PYTHONNOUSERSITE"] = "1"
 
-    def run(program: Path, *arguments, env=environment) -> str:
-        result = subprocess.run(
-            [program, *arguments], cwd=work, env=env, stdin=subprocess.DEVNULL,
-            capture_output=True, encoding="utf-8", errors="replace", timeout=45,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-        if result.returncode:
+    def run(program: Path, *arguments, env=environment, accepted_codes=(0,)) -> str:
+        try:
+            result = subprocess.run(
+                [program, *arguments], cwd=work, env=env, stdin=subprocess.DEVNULL,
+                capture_output=True, encoding="utf-8", errors="replace", timeout=45,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError(f"{program.name} did not finish within 45 seconds") from error
+        if result.returncode not in accepted_codes:
             raise RuntimeError(f"{program.name} returned {result.returncode}: {result.stdout}{result.stderr}")
         return result.stdout + result.stderr
 
@@ -73,7 +95,10 @@ def verify(bundle: Path, work: Path) -> None:
     subtitle = work / "字幕.srt"
     subtitle.write_text("1\n00:00:00,000 --> 00:00:01,000\nBluraySubtitle\n", encoding="utf-8")
     if expected_core == "Core R79":
-        for name in ("libass-9.dll", "libfftw3f-3.dll", "libshaderc_shared.dll", "vulkan-1.dll"):
+        shared = ["libass-9.dll", "libfftw3f-3.dll", "libshaderc_shared.dll"]
+        if not compatibility:
+            shared.append("vulkan-1.dll")
+        for name in shared:
             if len(list(internal.rglob(name))) != 1:
                 raise RuntimeError(f"Expected one bundled copy of {name}")
         run(internal / "ffmpeg.exe", "-nostdin", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=64x48:rate=24",
@@ -90,9 +115,11 @@ def verify(bundle: Path, work: Path) -> None:
         f"{clip_source}\n"
         "clip = vs.core.rgvs.RemoveGrain(clip, mode=1)\n"
         "assert clip.znedi3.nnedi3(field=0, dh=True).get_frame(0).height == 96\n"
-        + ("assert vs.core.placebo.Deband and vs.core.dfttest.DFTTest\n"
+        + ("clip = vs.core.zsmooth.RemoveGrain(clip, mode=1)\n" if compatibility else "")
+        + ("assert vs.core.dfttest.DFTTest\n"
            "clip = vs.core.nlm_ispc.NLMeans(clip, d=0, a=2, s=2, h=0.6, channels='Y', wmode=3)\n"
            "clip = vs.core.assrender.TextSub(clip, '字幕.srt')\n" if expected_core == "Core R79" else "")
+        + ("assert vs.core.placebo.Deband\n" if expected_core == "Core R79" and not compatibility else "")
         + "clip.set_output()\n",
         encoding="utf-8",
     )
@@ -121,18 +148,45 @@ def verify(bundle: Path, work: Path) -> None:
     run(internal / "mkvextract.exe", mux, "tracks", f"1:{extracted}")
     if "BluraySubtitle" not in extracted.read_text(encoding="utf-8-sig"):
         raise RuntimeError("The bundled MKVToolNix did not extract the subtitle")
+    if compatibility:
+        from tools.verify_windows_compat_components import verify_filters, verify_media_tools, verify_win7_system_imports
+
+        for executable in VSEDIT_PROGRAMS[1:]:
+            if executable == "vsedit-encode.exe":
+                output = run(editor / executable, accepted_codes=(4294967294,))
+                if "Please provide the path to your script" not in output:
+                    raise RuntimeError(f"Unexpected startup response from {executable}: {output}")
+            elif "VapourSynth Editor" not in run(editor / executable, "--version"):
+                raise RuntimeError(f"Unexpected version from {executable}")
+        failures = []
+        for test, arguments in (
+            (verify_media_tools, (internal, work, run)),
+            (verify_filters, (internal, vspipe, work, run, vs_environment)),
+            (verify_win7_system_imports, (binaries,)),
+        ):
+            try:
+                test(*arguments)
+            except (OSError, RuntimeError) as error:
+                failures.append(str(error))
+        if failures:
+            raise RuntimeError("\n".join(failures))
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("archive", type=Path)
-    parser.add_argument("--seven-zip", type=Path, required=True)
+    parser.add_argument("package", type=Path, help="A 7z archive or an extracted package directory")
+    parser.add_argument("--seven-zip", type=Path)
     args = parser.parse_args()
-    archive = args.archive.resolve()
-    with tempfile.TemporaryDirectory(prefix="verify package ", dir=archive.parent) as temporary:
+    package = args.package.resolve()
+    if not package.is_dir() and not args.seven_zip:
+        parser.error("--seven-zip is required to verify an archive")
+    with tempfile.TemporaryDirectory(prefix="verify package ", dir=package.parent) as temporary:
         root = Path(temporary)
-        subprocess.run([args.seven_zip, "x", archive, "-o" + str(root), "-y", "-bso0", "-bsp0"], check=True)
-        verify(root / archive.stem, root)
+        if package.is_dir():
+            verify(package, root)
+        else:
+            subprocess.run([args.seven_zip, "x", package, "-o" + str(root), "-y", "-bso0", "-bsp0"], check=True)
+            verify(root / package.stem, root)
     print("Verified Windows binary architecture, standalone tools and shared runtimes.")
 
 

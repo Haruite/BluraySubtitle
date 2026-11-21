@@ -16,7 +16,7 @@ from tools.actions_cache import ARCHITECTURES, delete_cache, fingerprint, main_c
 from tools.windows_build_cache import read_manifest
 
 
-NAMESPACES = {"pip": (2, 1), "tools": (4, 3)}
+NAMESPACES = {"pip": (2, 1), "tools": (4, 3), "compat": (1, None)}
 
 
 def tool_fingerprint(directory: Path) -> str:
@@ -32,12 +32,25 @@ def tool_fingerprint(directory: Path) -> str:
     return hashlib.sha256(json.dumps(entries, sort_keys=True).encode("utf-8")).hexdigest() if entries else ""
 
 
-def snapshot_keys(pip: Path, tools: Path, architecture: str) -> dict[str, str]:
-    checksums = {}
-    for family, compute in (
+def compatibility_fingerprint(work: Path) -> str:
+    artifacts = tool_fingerprint(work / "cache")
+    downloads = fingerprint((
+        ("downloads", work / "downloads", "**/*"),
+        ("crates", work / "rust-cargo/registry/cache", "**/*"),
+        ("crate-index", work / "rust-cargo/registry/index", "**/*"),
+    ))
+    return hashlib.sha256(f"{artifacts}/{downloads}".encode("ascii")).hexdigest() if artifacts or downloads else ""
+
+
+def snapshot_keys(pip: Path, tools: Path, architecture: str, *, compatibility: Path | None = None) -> dict[str, str]:
+    families = [
         ("pip", lambda: fingerprint((("pip", pip, "**/*"),))),
         ("tools", lambda: tool_fingerprint(tools)),
-    ):
+    ]
+    if compatibility is not None:
+        families.append(("compat", lambda: compatibility_fingerprint(compatibility)))
+    checksums = {}
+    for family, compute in families:
         try:
             checksums[family] = compute()
         except (BadZipFile, KeyError, OSError, TypeError, ValueError) as error:
@@ -52,7 +65,7 @@ def outdated_cache_ids(entries: list[dict], architecture: str, restored: dict[st
     expired = []
     for family, (current, legacy) in NAMESPACES.items():
         pattern = rf"windows-{family}-v{current}-{architecture}-[0-9a-f]{{64}}"
-        legacy_pattern = rf"windows-{family}-v{legacy}-{architecture}-[0-9a-f]{{64}}"
+        legacy_pattern = rf"windows-{family}-v{legacy}-{architecture}-[0-9a-f]{{64}}" if legacy else None
         expired.extend(superseded_cache_ids(entries, pattern, legacy_pattern, restored.get(family, "")))
     return expired
 
@@ -61,6 +74,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=("snapshot", "prune"))
     parser.add_argument("architecture", choices=ARCHITECTURES)
+    parser.add_argument("--compatibility", action="store_true")
     args = parser.parse_args()
     if args.operation == "snapshot":
         temp = Path(os.environ["RUNNER_TEMP"])
@@ -68,12 +82,13 @@ def main() -> None:
         if args.architecture == "ARM64":
             tools /= "arm64"
         (tools / "vapoursynth-components.zip").unlink(missing_ok=True)
-        keys = snapshot_keys(temp / "bluraysubtitle-pip", tools, args.architecture)
+        compatibility = temp / "bluraysubtitle-compat" if args.compatibility else None
+        keys = snapshot_keys(temp / "bluraysubtitle-pip", tools, args.architecture, compatibility=compatibility)
         with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as stream:
             stream.writelines(f"{family}={key}\n" for family, key in keys.items())
         return
 
-    restored = {family: os.environ[f"RESTORED_{family.upper()}_CACHE"] for family in NAMESPACES}
+    restored = {family: os.environ.get(f"RESTORED_{family.upper()}_CACHE", "") for family in NAMESPACES}
     endpoint, entries = main_cache_entries()
     for cache_id in outdated_cache_ids(entries, args.architecture, restored):
         delete_cache(endpoint, cache_id)

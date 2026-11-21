@@ -2,7 +2,8 @@
     [ValidateSet("en", "zh")][string]$Language,
     [ValidateSet("Desktop", "Build")][string]$Mode = "Desktop",
     [string]$BuildCacheDirectory,
-    [ValidateSet("R79", "Classic")][string]$VapourSynthRuntime = "R79"
+    [ValidateSet("R79", "Classic")][string]$VapourSynthRuntime = "R79",
+    [string]$CompatibilityWorkDirectory
 )
 
 $ErrorActionPreference = "Stop"
@@ -3340,6 +3341,14 @@ function Get-InstalledMkvToolNixVersion {
     return Invoke-SetupCommand -FilePath $script:ToolPaths.Python -Arguments (Get-MkvToolNixBuildArguments "version")
 }
 
+function Initialize-MkvToolNixBuildToolchain {
+    Initialize-SetupBuildToolchain "msys2"
+    $packages = @("boost", "flac", "libdvdcss", "libdvdread", "libogg", "libvorbis", "libxslt",
+        "docbook-xml", "docbook-xsl", "qt6-base", "ruby", "gettext-tools") |
+        ForEach-Object { "$script:MingwPackagePrefix$_" }
+    Invoke-Msys2Pacman -Arguments (@("--noconfirm", "--needed", "-S", "dash") + $packages) | Out-Null
+}
+
 function Install-MkvToolNix {
     param([string]$Version)
 
@@ -3353,11 +3362,7 @@ function Install-MkvToolNix {
     Invoke-SetupBuildCommand -DisplayName "MKVToolNix build cache" -FilePath $script:ToolPaths.Python `
         -Arguments ($arguments + "--defer-msys2") -AcceptedExitCodes @(0, $msysRequired)
     if ($LASTEXITCODE -eq $msysRequired) {
-        Initialize-SetupBuildToolchain "msys2"
-        $packages = @("boost", "flac", "libdvdcss", "libdvdread", "libogg", "libvorbis", "libxslt",
-            "docbook-xml", "docbook-xsl", "qt6-base", "ruby", "gettext-tools") |
-            ForEach-Object { "$script:MingwPackagePrefix$_" }
-        Invoke-Msys2Pacman -Arguments (@("--noconfirm", "--needed", "-S", "dash") + $packages) | Out-Null
+        Initialize-MkvToolNixBuildToolchain
         Invoke-SetupBuildCommand -DisplayName "MKVToolNix (MinGW QtCore)" -FilePath $script:ToolPaths.Python -Arguments $arguments
     }
     else {
@@ -5027,8 +5032,35 @@ function Register-StageFiveComponents {
 
 }
 
+function Invoke-WindowsCompatibilityPackageBuild {
+    $arguments = @(
+        "-u", (Join-Path $script:SetupDirectory "tools/build_windows_compat_package.py"),
+        "--work-dir", $CompatibilityWorkDirectory, "--seven-zip", $script:ToolPaths.SevenZip,
+        "--msys2-root", $script:ToolPaths.Msys2Root, "--jobs", [string]$script:BuildJobs
+    )
+    $msysRequired = 75
+    $displayName = Get-SetupText "Windows x64 compatibility package" "Windows x64 兼容包"
+    try {
+        $env:BLURAYSUBTITLE_GITHUB_TOKEN = $script:GitHubApiToken
+        Invoke-SetupBuildCommand -DisplayName $displayName -FilePath $script:ToolPaths.Python `
+            -Arguments ($arguments + "--defer-msys2") -AcceptedExitCodes @(0, $msysRequired)
+        if ($LASTEXITCODE -eq $msysRequired) {
+            Remove-Item Env:BLURAYSUBTITLE_GITHUB_TOKEN -ErrorAction SilentlyContinue
+            Initialize-MkvToolNixBuildToolchain
+            $env:BLURAYSUBTITLE_GITHUB_TOKEN = $script:GitHubApiToken
+            Invoke-SetupBuildCommand -DisplayName $displayName -FilePath $script:ToolPaths.Python -Arguments $arguments
+        }
+    }
+    finally {
+        Remove-Item Env:BLURAYSUBTITLE_GITHUB_TOKEN -ErrorAction SilentlyContinue
+    }
+}
+
 function Invoke-WindowsSetup {
     $windows = Assert-SupportedWindows
+    if ($CompatibilityWorkDirectory -and ($Mode -ne "Build" -or $windows.Architecture -ne "AMD64")) {
+        throw (Get-SetupText "The compatibility package requires x64 Windows Build mode." "兼容包需要在 x64 Windows 上使用 Build 模式。")
+    }
     $script:Architecture = $windows.Architecture
     Initialize-SetupArchitecture $script:Architecture
     Initialize-SetupVisualStudio $windows
@@ -5148,6 +5180,9 @@ function Invoke-WindowsSetup {
         $script:Manifest.system.seven_zip_executable = $script:ToolPaths.SevenZip
     }
     Save-SetupManifest
+    if ($CompatibilityWorkDirectory) {
+        Invoke-WindowsCompatibilityPackageBuild
+    }
 
     if ($script:RestartRequired) {
         Write-SetupWarning `

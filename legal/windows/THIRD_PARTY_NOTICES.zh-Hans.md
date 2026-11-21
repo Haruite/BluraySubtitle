@@ -111,6 +111,9 @@ Windows 打包脚本按所选的随附组件更新版本字段。
 - **版本：** {{DOVI_TOOL_VERSION}}
 - **许可证：** MIT
 - **源码：** https://github.com/quietvoid/dovi_tool/archive/refs/tags/{{DOVI_TOOL_VERSION}}.zip
+<!-- windows:compat -->
+- 使用 `x86_64-win7-windows-msvc` 目标编译 Rust 标准库和命令行程序。
+<!-- /windows -->
 
 ---
 
@@ -120,7 +123,12 @@ Windows 打包脚本按所选的随附组件更新版本字段。
 - **版本：** {{HDR10PLUS_TOOL_VERSION}}
 - **许可证：** MIT
 - **此构建的源码：** https://github.com/quietvoid/hdr10plus_tool/tree/{{HDR10PLUS_TOOL_VERSION}}
+<!-- windows:standard -->
 - **构建说明：** Windows setup 下载官方 MSVC 发布版；Linux setup 下载官方 musl 发布版，该版本由上游启用内部字体功能构建。本项目不在本地编译此工具。
+<!-- /windows -->
+<!-- windows:compat -->
+- 使用 `x86_64-win7-windows-msvc` 目标编译 Rust 标准库和命令行程序。
+<!-- /windows -->
 
 ---
 
@@ -169,6 +177,10 @@ Windows 打包脚本按所选的随附组件更新版本字段。
 - **随附许可证全文：** `DLLs/LICENSE.txt`
 - **许可证概览：** https://docs.python.org/3/license.html
 - **对应源码（CPython）：** https://www.python.org/ftp/python/{{PYTHON_VERSION}}/Python-{{PYTHON_VERSION}}.tgz
+<!-- windows:compat -->
+- [兼容补丁和运行时](https://github.com/adang1345/PythonVista/releases/tag/v{{PYTHON_VERSION}})
+- [旧版系统路径库](https://github.com/adang1345/api-ms-win-core-path)
+<!-- /windows -->
 
 ### NumPy
 
@@ -191,7 +203,12 @@ Windows 打包脚本按所选的随附组件更新版本字段。
 
 安装清单 `legal/vapoursynth-components.json` 记录源码修订、发布包下载地址、插件注册版本和已安装文件哈希。各组件同时附有依赖及其已取得的许可文本。
 
+<!-- windows:standard -->
 源码构建的 Windows 插件在支持的情况下静态链接编译器运行库。当前配方将 libplacebo、libdovi、Little CMS 和 SPIRV-Cross 静态链接到 vs-placebo。vs-placebo 与 L-SMASH Works 共用 `libshaderc_shared.dll`。L-SMASH Works 静态链接所用的 FFmpeg 库，并提供 VapourSynth 入口。Windows x64 构建还提供 AviSynth 入口。ASSRender 使用包内的 libass DLL。Vulkan 加载器保留为独立 DLL。DFTTest 和 MVTools 共用一份 FFTW DLL。随附的组件说明记录本包实际使用的依赖及许可文本。
+<!-- /windows -->
+<!-- windows:compat -->
+zsmooth DLL 静态链接单精度 FFTW，并以基础 x86-64 指令集为编译目标。随附的组件说明列出了相关滤镜的源码链接及许可文本。
+<!-- /windows -->
 
 ---
 

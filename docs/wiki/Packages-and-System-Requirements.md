@@ -9,6 +9,7 @@ Choose one archive for the operating system and processor that will run the appl
 | File | Operating system | Processor requirements |
 | --- | --- | --- |
 | `BluraySubtitle_windows_x64.7z` | Windows 10 x64 (required APIs available from 1709) or Windows 11 x64 | The application and its bundled NumPy require x86-64-v2 (for example, Intel Core Nehalem). The bundled zsmooth filter also requires AVX2. |
+| `BluraySubtitle_windows_x64_compat.7z` | Windows 7 SP1 x64 and newer, with the updates below on Windows 7 | x86-64-v2, as required by the bundled NumPy. The compatibility build of zsmooth uses baseline x86-64 instructions. |
 | `BluraySubtitle_windows_arm64.7z` | Windows 10 ARM64 (1903 or later for the bundled tools) or Windows 11 ARM64 | 64-bit Arm with NEON and Armv8.1 LSE atomic instructions, including `CASAL`. |
 | `BluraySubtitle_linux_x64.tar.xz` | 64-bit x86 Linux (x86-64), tested down to kernel 3.17 | Full x86-64-v3 support, as on Intel Core Haswell or AMD Zen. Above x86-64-v2 this requires AVX, AVX2, BMI1/2, F16C, FMA, LZCNT, MOVBE and OSXSAVE with AVX state enabled by the OS. |
 | `BluraySubtitle_linux_arm64.tar.xz` | 64-bit AArch64 Linux, tested down to kernel 3.17 | Armv8-A with floating point and NEON. Cortex-A53 is the tested baseline. |
@@ -17,13 +18,19 @@ The NLM filter uses 128-bit NEON on both ARM64 platforms, including on processor
 
 Each archive in the download directory has a matching `<archive-name>.txt` containing the SHA-256, Git commit and commit time. Use it to verify the download and identify the build.
 
-Extract the entire archive. On Windows, run `BluraySubtitle_windows_x64.exe` or `BluraySubtitle_windows_arm64.exe`. On Linux, extract with `tar -xJf <archive-name>`, enter `BluraySubtitle/` and run `./BluraySubtitle` as your normal user. Keep `_internal/` beside the launcher. To switch from an earlier Ubuntu-named package, download the matching Linux archive manually once.
+Extract the entire archive. On Windows, run the `.exe` with the same name as the archive. On Linux, extract with `tar -xJf <archive-name>`, enter `BluraySubtitle/` and run `./BluraySubtitle` as your normal user. Keep `_internal/` beside the launcher. To switch from an earlier Ubuntu-named package, download the matching Linux archive manually once.
 
 ## Windows runtime
 
-Build `13592ef` uses Qt 6.12.0 and CPython 3.15.2. On both architectures, the desktop plugin `qwindows.dll` imports `UiaRaiseNotificationEvent` from `UIAutomationCore.dll` at load time. Microsoft added this entry point in Windows 10 version 1709 (build 16299). Qt 6.12 officially supports Windows 10 x64 from 1809 and lists Windows on ARM without specifying a Windows 10 release. [Microsoft API reference](https://learn.microsoft.com/en-us/windows/win32/api/uiautomationcoreapi/nf-uiautomationcoreapi-uiaraisenotificationevent) · [Qt supported platforms](https://doc.qt.io/qt-6.12/windows.html)
+The standard Windows packages from build `13592ef` use Qt 6.12.0 and CPython 3.15.2. On both architectures, the desktop plugin `qwindows.dll` imports `UiaRaiseNotificationEvent` from `UIAutomationCore.dll` at load time. Microsoft added this entry point in Windows 10 version 1709 (build 16299). Qt 6.12 officially supports Windows 10 x64 from 1809 and lists Windows on ARM without specifying a Windows 10 release. [Microsoft API reference](https://learn.microsoft.com/en-us/windows/win32/api/uiautomationcoreapi/nf-uiautomationcoreapi-uiaraisenotificationevent) · [Qt supported platforms](https://doc.qt.io/qt-6.12/windows.html)
 
 The ARM64 `ffmpeg.exe` and `ffprobe.exe` also import `capCreateCaptureWindowA` and `capGetDriverDescriptionA` from native `avicap32.dll` at startup. Windows 10 Pro ARM64 images for 1709, 1803 and 1809 contain only the x86 copy. Version 1903 (build 18362) is the first with an ARM64 copy in `System32` that exports both functions. FFprobe needs this DLL even to read information from a file. [Microsoft video capture API reference](https://learn.microsoft.com/en-us/windows/win32/api/vfw/nf-vfw-capcreatecapturewindowa)
+
+### Windows x64 compatibility package
+
+On Windows 7 SP1, install [KB3063858](https://github.com/adang1345/PythonVista#readme) or an update that supplies its DLL search APIs, the [KB2670838 Platform Update](https://www.microsoft.com/en-us/download/details.aspx?id=36805), and the [KB2999226 Universal C Runtime](https://www.microsoft.com/en-us/download/details.aspx?id=49093). On Windows 8 and 8.1, install the Universal C Runtime update for the corresponding system. Restart Windows after applying the updates. [Microsoft Universal C Runtime downloads](https://support.microsoft.com/en-us/servicing/os/windows/2020/04/update-for-universal-c-runtime-in-windows)
+
+The **Build BluraySubtitle Windows x64 Compatibility Package** workflow publishes the archive as a GitHub Actions artifact. Download each new version from its workflow run. VapourSynth scripts using `core.placebo` require a separate compatible installation of the plugin. MKVToolNix in this package omits DVD IFO chapter import. See the [compatibility build](BluraySubtitle-Developer-Guide.md#windows-x64-compatibility-build) for the runtime sources and build entry point.
 
 ## Linux runtime
 

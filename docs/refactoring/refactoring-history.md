@@ -1416,3 +1416,11 @@ The build checks the ELF ABI notes to ensure that private glibc and Qt 6.6 targe
 2026-11-20
 
 Setup checks the dependencies for full-feature tool builds. Build caches the uv CPython distribution, Qt 6.6 SDK and installed components, including the RIFE plugin and models. A verified cache can be used without installing APT packages.
+
+## Windows x64 compatibility package
+
+2026-11-21
+
+The dedicated Actions workflow builds a Windows 7 SP1 x64 package with PythonVista and CrystalIDE's Qt backport through the shared Windows package spec. It rebuilds MKVToolNix, VSEdit, VapourSynth R79, the Rust HDR tools and baseline x86-64 zsmooth. R79 resolves the MSVC filesystem library's `CreateFile2` import through a `CreateFileW` adapter. The package omits vs-placebo and MKVToolNix's DVD IFO chapter reader because their dependencies import newer Windows APIs.
+
+The standard x64 package passed the shared verification after rebuilding. The compatibility archive passed on the build host and on Windows 7 SP1 with the required updates. The guest verified VSEdit and both HDR CLIs, generated two VapourSynth frames with zsmooth, and muxed, inspected, edited and extracted a synthetic FLAC and SRT Matroska sample. The main window was created and responded to a Win32 message in the noninteractive guest session.

@@ -25,13 +25,14 @@ def unpack(archive: Path, destination: Path, seven_zip: str) -> None:
     subprocess.run([seven_zip, "x", archive, "-o" + str(destination), "-y", "-bso0", "-bsp0"], check=True)
 
 
-def prepare_qt_sdk(version: str, downloads: Path, sdk: Path, seven_zip: str, *, arm64: bool = False) -> None:
+def prepare_qt_sdk(version: str, downloads: Path, sdk: Path, seven_zip: str, *, arm64: bool = False,
+                   mingw: bool = False, modules: tuple[str, ...] = ("qtbase", "qtmultimedia", "qtwebsockets")) -> None:
     if not re.fullmatch(r"6\.\d+\.\d+", version):
         raise ValueError(f"Unexpected PyQt6 Qt version: {version}")
-    kit = "msvc2022_arm64" if arm64 else "msvc2022_64"
+    kit = "mingw" if mingw else ("msvc2022_arm64" if arm64 else "msvc2022_64")
     tag = "".join(version.split("."))
     host = "windows_arm64" if arm64 else "windows_x86"
-    sdk_index = f"qt6_{tag}" if arm64 else f"qt6_{tag}_{kit}"
+    sdk_index = f"qt6_{tag}" if arm64 or version == "6.8.3" else f"qt6_{tag}_{kit}"
     repo = f"https://download.qt.io/online/qtsdkrepository/{host}/desktop/qt6_{tag}/{sdk_index}"
     downloads.mkdir(parents=True, exist_ok=True)
     index = downloads / "Updates.xml"
@@ -41,8 +42,8 @@ def prepare_qt_sdk(version: str, downloads: Path, sdk: Path, seven_zip: str, *, 
     else:
         xml = index.read_bytes()
     packages = {package.findtext("Name"): package for package in ET.fromstring(xml).findall("PackageUpdate")}
-    for module in ("qtbase", "qtmultimedia", "qtwebsockets"):
-        group = "" if module == "qtbase" else f".addons.{module}"
+    for module in modules:
+        group = "" if module in {"qtbase", "qttranslations"} else f".addons.{module}"
         package = f"qt.qt6.{tag}{group}.win64_{kit}"
         entry = packages[package]
         revision = entry.findtext("Version")
@@ -64,7 +65,8 @@ def prepare_qt_sdk(version: str, downloads: Path, sdk: Path, seven_zip: str, *, 
         checksum.write_text(digest + "\n", encoding="ascii", newline="\r\n")
         unpack(artifact, sdk, seven_zip)
     index.write_bytes(xml)
-    (sdk / "bin/qt.conf").write_text("[Paths]\nPrefix=..\n", encoding="ascii", newline="\r\n")
+    if (sdk / "bin/qmake.exe").is_file():
+        (sdk / "bin/qt.conf").write_text("[Paths]\nPrefix=..\n", encoding="ascii", newline="\r\n")
 
 
 def patch_project(project: Path, index: int, *, arm64: bool = False) -> None:
@@ -88,7 +90,7 @@ def patch_project(project: Path, index: int, *, arm64: bool = False) -> None:
 
 
 def build_programs(source: Path, sdk: Path, make: Path, include: Path, env: dict, jobs: int,
-                   qt_version: str, *, arm64: bool = False) -> list[Path]:
+                   qt_version: str, *, arm64: bool = False, win7: bool = False) -> list[Path]:
     qmake = sdk / "bin/qmake.exe"
     env = {name.upper(): value for name, value in env.items()}
     env["PATH"] = str(qmake.parent) + os.pathsep + env["PATH"]
@@ -110,7 +112,8 @@ def build_programs(source: Path, sdk: Path, make: Path, include: Path, env: dict
         project = source / "pro" / name / f"{name}.pro"
         patch_project(project, index, arm64=arm64)
         output = source / "build/release-64bit-msvc"
-        subprocess.run([qmake, project.name, "CONFIG+=release", "CONFIG-=debug_and_release"],
+        platform_flags = ["DEFINES+=WINVER=0x0601 _WIN32_WINNT=0x0601"] if win7 else []
+        subprocess.run([qmake, project.name, "CONFIG+=release", "CONFIG-=debug_and_release", *platform_flags],
                        cwd=project.parent, env=env, check=True)
         make_arguments = [make, f"-j{jobs}", "/NOLOGO"]
         # Several upstream objects can otherwise race their generated UI headers.

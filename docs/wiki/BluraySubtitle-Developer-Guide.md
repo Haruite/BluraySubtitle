@@ -16,10 +16,16 @@ Use the [main MPLS and SP definitions](Blu-ray-Disc-Structure.md#main-content-an
 - x265 uses the latest official stable tag to build an 8/10/12-bit multilib CLI, with HDR10+ JSON and Dolby Vision RPU input enabled in each core.
 - Windows and Linux install R79 by default. The Windows packages place the R79 wheel and VSPipe under `_internal/Lib/site-packages/vapoursynth`, where VSScript discovers the adjacent bundled interpreter. External VSPipe launches use the selected executable's runtime environment.
 - Windows ARM64 builds R79 and its plugins with CLANGARM64. R79 uses NEON and enables the I8MM and FHM filter kernels when the CPU and Windows expose the required features. Automatic getnative uses native Python. Both architectures build VSEdit with MSVC and use the Qt runtime installed by PyQt6.
-- Both Windows packaging workflows use `-Mode Build`. This mode includes vs-placebo and enables Vulkan support in L-SMASH Works without probing the build machine's GPU. Desktop setup still probes the local Vulkan device for R79. L-SMASH Works can decode in software.
+- Windows packaging uses `-Mode Build` to prepare media tools. This mode includes vs-placebo and enables Vulkan support in L-SMASH Works without probing the build machine's GPU. Desktop setup still probes the local Vulkan device for R79. L-SMASH Works can decode in software.
 - With `-VapourSynthRuntime Classic` on ARM64, Classic, its plugins, and VSEdit use x64 emulation. Automatic getnative then uses the private x64 CPython recorded by Classic setup.
 
 Use the setup scripts as references for custom builds. See [automatic HDR metadata handling](Video-Encoding-and-VapourSynth.md#automatic-hdr-metadata-handling) for parameter requirements and injection fallback.
+
+### Windows x64 compatibility build
+
+In an elevated PowerShell session on a recent x64 Windows build host, run `.\setup_windows_environment.ps1 -Mode Build -CompatibilityWorkDirectory build/windows-compat`. The compatibility workflow calls the shared Windows workflow with this option and uploads the verified `BluraySubtitle_windows_x64_compat.7z`. [Compatibility workflow](../../.github/workflows/windows-x64-compat-package.yml)
+
+The build installs the latest x64 [PythonVista](https://github.com/adang1345/PythonVista) NuGet package into its working directory and uses [CrystalIDE's Qt 6.8.5 backport](https://github.com/crystalidea/qt6windows7) for PyQt6 and VSEdit. The MKVToolNix CLI links a separately built MinGW QtCore using the Qt 6.8.3 backport. VapourSynth R79 uses a `CreateFileW` adapter for the MSVC filesystem library. Both HDR CLIs rebuild the Rust standard library for `x86_64-win7-windows-msvc`. The zsmooth build targets Windows 7 with baseline x86-64 instructions.
 
 ## Source-code map
 

@@ -18,7 +18,8 @@ import soundfile
 import vapoursynth
 
 
-package_name = f"BluraySubtitle_windows_{PACKAGE_ARCHITECTURE}"
+compat_root = globals().get("COMPAT_ROOT")
+package_name = f"BluraySubtitle_windows_{PACKAGE_ARCHITECTURE}" + ("_compat" if compat_root else "")
 arm64 = PACKAGE_ARCHITECTURE == "arm64"
 python_platform = "win-arm64" if arm64 else "win-amd64"
 if sysconfig.get_platform() != python_platform:
@@ -36,7 +37,16 @@ from tools.windows_package_tools import build_executable_icon, installed_tools, 
 
 SETTINGS_PATH = PROJECT_ROOT / "src" / "core" / "settings.py"
 SETTINGS = runpy.run_path(str(SETTINGS_PATH))
-native_tools = installed_tools(SETTINGS)
+if compat_root:
+    SETTINGS.update(
+        MKVTOOLNIX_PATH=str(compat_root / "mkvtoolnix"),
+        VSEDIT_PATH=str(compat_root / "vsedit/vsedit.exe"),
+        VSPIPE_PATH=str(compat_root / "vapoursynth/vspipe.exe"),
+        PLUGIN_PATH=str(compat_root / "vapoursynth/vapoursynth64/plugins"),
+        DOVI_TOOL_PATH=str(compat_root / "rust-tools/dovi_tool.exe"),
+        HDR10PLUS_TOOL_PATH=str(compat_root / "rust-tools/hdr10plus_tool.exe"),
+    )
+native_tools = installed_tools(SETTINGS, compatibility=bool(compat_root))
 
 
 def required_path(path, description):
@@ -84,6 +94,7 @@ notices_updater["generate_third_party_notices"](
     PYINSTALLER_VERSION,
     soundfile.__libsndfile_version__,
     PACKAGE_ARCHITECTURE,
+    compatibility=bool(compat_root),
 )
 
 # Native tools, CPython, and NumPy share the bundle support directory.
@@ -199,12 +210,18 @@ datas = [
     (str(default_config), "."),
     (str(app_icon), "resource"),
     (str(log_icon), "resource"),
-    (str(update_script), "tools"),
     (str(SETTINGS_PATH), "src/core"),
     *((str(path), "legal") for path in third_party_notices_paths.values()),
     # Keep CPython's DLLs directory available as its platform-library landmark.
     (str(required_path(Path(sys.base_prefix) / "LICENSE.txt", "CPython license")), "DLLs"),
 ]
+if compat_root:
+    datas.extend((str(required_path(path, description)), destination) for path, description, destination in (
+        (compat_root / "compatibility-components.json", "compatibility package record", "."),
+        (Path(sys.base_prefix) / "api-ms-win-core-path-l1-1-0.dll", "PythonVista legacy path library", "."),
+    ))
+else:
+    datas.append((str(update_script), "tools"))
 vs_license_dir = required_path(vapoursynth_dir / "licenses", "VapourSynth source dependency licenses")
 datas.extend((str(path), "legal/vapoursynth") for path in sorted(vs_license_dir.iterdir()) if path.is_file())
 # Collect plugin licenses from the current install manifest so obsolete files are skipped.
@@ -445,7 +462,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=not compat_root,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
@@ -461,7 +478,7 @@ coll = COLLECT(
     a.binaries,
     a.datas,
     strip=False,
-    upx=True,
+    upx=not compat_root,
     upx_exclude=[],
     name=package_name,
 )

@@ -70,7 +70,7 @@ class AppConfigTests(unittest.TestCase):
             self.assertEqual(config.ui.language, "zh")
             self.assertEqual(set(config.tools), set(TOOL_PATH_NAMES))
             self.assertEqual(config.tools["FFMPEG_PATH"], "my tools/ffmpeg")
-            self.assertEqual(config.tools["PLUGIN_PATH"], str(Path.home() / "test-plugins"))
+            self.assertEqual(Path(config.tools["PLUGIN_PATH"]), Path.home() / "test-plugins")
 
             legacy.unlink()
             self.assertEqual(load_app_config(target, settings_path=legacy), config)
@@ -99,7 +99,7 @@ class AppConfigTests(unittest.TestCase):
             self.assertEqual(config.tools["FFMPEG_PATH"], "")
             with patch.dict(os.environ, {"PATH": os.pathsep.join(map(str, (first, suite)))}):
                 resolved = resolve_tool_paths(config.tools, root)
-                self.assertEqual(resolved["FFMPEG_PATH"], str(suite / f"ffmpeg{suffix}"))
+                self.assertEqual(Path(resolved["FFMPEG_PATH"]), suite / f"ffmpeg{suffix}")
                 self.assertEqual(resolved["MKVTOOLNIX_PATH"], str(suite))
                 self.assertEqual(resolved["MKV_MERGE_PATH"], str(suite / f"mkvmerge{suffix}"))
 

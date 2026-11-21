@@ -60,10 +60,33 @@ class WindowsActionsCacheTests(unittest.TestCase):
             entry(5, "windows-tools-v4-X64-"),
             entry(6, "windows-pip-v1-ARM64-"),
             entry(7, "windows-tools-v4-ARM64-", "refs/heads/other"),
+            entry(8, "windows-compat-v1-X64-"),
+            entry(9, "windows-compat-v1-X64-"),
+            entry(10, "windows-compat-v1-X64-"),
         ]
         self.assertEqual(outdated_cache_ids(entries, "ARM64", {"tools": entries[0]["key"]}), [])
         self.assertEqual(outdated_cache_ids(entries, "ARM64", {"tools": entries[2]["key"]}), [2, 1])
         self.assertEqual(outdated_cache_ids(entries, "ARM64", {"tools": entries[3]["key"]}), [2, 1])
+        self.assertEqual(outdated_cache_ids(entries, "X64", {"compat": entries[-1]["key"]}), [8])
+        self.assertEqual(outdated_cache_ids(entries, "X64", {"tools": entries[4]["key"]}), [])
+
+    def test_compatibility_downloads_and_builds_have_their_own_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            work = root / "compat"
+            args = (root / "pip", root / "tools", "X64")
+            source = work / "downloads/source.tar.gz"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"source")
+            first = snapshot_keys(*args, compatibility=work)
+            archive = work / "cache/tool.zip"
+            publish(archive, "compatibility recipe", {"tool.dll": source})
+            second = snapshot_keys(*args, compatibility=work)
+            self.assertNotEqual(second["compat"], first["compat"])
+            self.assertNotIn("compat", snapshot_keys(*args))
+
+            source.write_bytes(b"new source")
+            self.assertNotEqual(snapshot_keys(*args, compatibility=work)["compat"], second["compat"])
 
     def test_component_accepts_compatible_legacy_key(self):
         with tempfile.TemporaryDirectory() as directory:

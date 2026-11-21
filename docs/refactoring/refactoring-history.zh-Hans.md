@@ -1413,3 +1413,11 @@ Ubuntu 和 Windows 根据上游版本、构建选项和相关依赖逐组件校�
 2026-11-20
 
 setup 检查所选工具的完整构建依赖。Build 缓存 uv 的 CPython 发行包、Qt 6.6 SDK 和已安装组件，包括 RIFE 插件及模型。缓存验证通过时跳过 APT 安装。
+
+## Windows x64 兼容包
+
+2026-11-21
+
+独立 Actions 工作流复用 Windows 打包 spec，使用 PythonVista 和 CrystalIDE 的 Qt 移植版构建 Windows 7 SP1 x64 兼容包。该工作流重新编译 MKVToolNix、VSEdit、VapourSynth R79、两个 Rust HDR 工具和使用基础 x86-64 指令集的 zsmooth。R79 通过 `CreateFileW` 适配 MSVC 文件系统库对 `CreateFile2` 的调用。兼容包省略依赖新版 Windows 接口的 vs-placebo 和 MKVToolNix 的 DVD IFO 章节读取功能。
+
+标准 x64 包重新打包后通过了共用校验。兼容包在构建机及装有所需更新的 Windows 7 SP1 上通过校验。在虚拟机中验证了 VSEdit 和两个 HDR 命令行工具，使用 zsmooth 生成两帧 VapourSynth 视频，并用合成的 FLAC 和 SRT 样本完成 Matroska 封装、检查、编辑和提取。主窗口在虚拟机的非交互式会话中创建并响应了 Win32 消息。

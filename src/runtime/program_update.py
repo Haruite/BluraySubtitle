@@ -24,7 +24,9 @@ if sys.platform.startswith("linux") and platform.machine().lower() in {"x86_64",
         else "Server Linux x64 package"
     )
     DIRECT_UPDATE_REQUIREMENT = "Direct updates require the packaged Linux program."
-elif sys.platform == "win32" and sysconfig.get_platform() in {"win-amd64", "win-arm64"}:
+elif (sys.platform == "win32" and sysconfig.get_platform() in {"win-amd64", "win-arm64"}
+      and not (getattr(sys, "frozen", False)
+               and (Path(sys._MEIPASS) / "compatibility-components.json").is_file())):
     from . import windows_update as platform_update
 
     SERVER_PACKAGE_LABEL = (

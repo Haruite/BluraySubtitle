@@ -1,0 +1,15 @@
+name: Build BluraySubtitle Windows x64 Compatibility Package
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  build:
+    uses: ./.github/workflows/build-windows-package.yml
+    with:
+      architecture: x64
+      compatibility: true

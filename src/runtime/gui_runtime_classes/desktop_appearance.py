@@ -1,10 +1,11 @@
-"""Read freedesktop appearance settings missing from the Qt palette."""
+"""Read desktop appearance settings missing from the Qt palette."""
 
 from __future__ import annotations
 
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 from PyQt6.QtCore import QFileSystemWatcher, QObject, QSettings, QStandardPaths, pyqtSignal, pyqtSlot
@@ -12,6 +13,75 @@ from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import QApplication
 
 QDBusConnection = None
+_LEGACY_WINDOWS = sys.platform == "win32" and sys.getwindowsversion().platform_version[0] < 10
+if _LEGACY_WINDOWS:
+    import ctypes
+    from ctypes import wintypes
+
+    from PyQt6.QtCore import QAbstractNativeEventFilter, QTimer
+
+    _dwm = ctypes.WinDLL("dwmapi")
+    _dwm_composition_enabled = _dwm.DwmIsCompositionEnabled
+    _dwm_composition_enabled.argtypes = (ctypes.POINTER(wintypes.BOOL),)
+    _dwm_composition_enabled.restype = ctypes.c_long
+    _dwm_colorization = _dwm.DwmGetColorizationColor
+    _dwm_colorization.argtypes = (ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(wintypes.BOOL))
+    _dwm_colorization.restype = ctypes.c_long
+    _system_color = ctypes.WinDLL("user32").GetSysColor
+    _system_color.argtypes = (ctypes.c_int,)
+    _system_color.restype = wintypes.DWORD
+    _COLOR_HIGHLIGHT = 13
+    _COLOR_MESSAGES = {
+        0x0015,  # WM_SYSCOLORCHANGE
+        0x031A,  # WM_THEMECHANGED
+        0x031E,  # WM_DWMCOMPOSITIONCHANGED
+        0x0320,  # WM_DWMCOLORIZATIONCOLORCHANGED
+    }
+
+    class _WindowsColorEvents(QAbstractNativeEventFilter):
+        def __init__(self, refresh) -> None:
+            super().__init__()
+            self._refresh = refresh
+
+        def nativeEventFilter(self, event_type, message):
+            if event_type in (b"windows_generic_MSG", b"windows_dispatcher_MSG"):
+                if wintypes.MSG.from_address(int(message)).message in _COLOR_MESSAGES:
+                    QTimer.singleShot(0, self._refresh)
+            return False, 0
+
+    class _WindowsAppearance(QObject):
+        accent_changed = pyqtSignal()
+
+        def __init__(self, app: QApplication) -> None:
+            super().__init__(app)
+            self._accent = self._read_accent()
+            self._events = _WindowsColorEvents(self._refresh)
+            app.installNativeEventFilter(self._events)
+
+        @staticmethod
+        def _read_accent() -> QColor:
+            color = wintypes.DWORD()
+            opaque = wintypes.BOOL()
+            enabled = wintypes.BOOL()
+            if (_dwm_composition_enabled(ctypes.byref(enabled)) == 0 and enabled.value
+                    and _dwm_colorization(ctypes.byref(color), ctypes.byref(opaque)) == 0 and color.value):
+                # The frame's transparency is independent of the accent used by opaque controls.
+                return QColor.fromRgb(color.value)
+            colorref = _system_color(_COLOR_HIGHLIGHT)
+            return QColor(colorref & 0xFF, colorref >> 8 & 0xFF, colorref >> 16 & 0xFF)
+
+        def _refresh(self) -> None:
+            accent = self._read_accent()
+            if accent != self._accent:
+                self._accent = accent
+                self.accent_changed.emit()
+
+        def accent(self) -> QColor:
+            return self._accent
+
+        def reduced_motion(self) -> bool:
+            return False
+
 if os.name == "posix":
     try:
         from PyQt6.QtDBus import QDBusConnection, QDBusMessage, QDBusVariant
@@ -149,9 +219,11 @@ if QDBusConnection is not None:
                 self.accent_changed.emit()
 
 
-def desktop_appearance() -> _DesktopAppearance | None:
+def desktop_appearance() -> _DesktopAppearance | _WindowsAppearance | None:
     app = QApplication.instance()
     platform = app.platformName() if app is not None else ""
+    if _LEGACY_WINDOWS and platform == "windows":
+        return app.findChild(_WindowsAppearance) or _WindowsAppearance(app)
     if QDBusConnection is not None and (platform == "xcb" or platform.startswith("wayland")):
         return app.findChild(_DesktopAppearance) or _DesktopAppearance(app)
     return None
