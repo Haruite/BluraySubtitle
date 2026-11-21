@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: windows-package-website-${{ inputs.architecture }}
+  group: windows-package-website-${{ inputs.architecture }}${{ inputs.compatibility && '-compat' || '' }}
   queue: max
 
 jobs:
@@ -213,6 +213,9 @@ jobs:
 
   prune-cache:
     needs: publish
+    concurrency:
+      group: windows-package-cache-prune-${{ inputs.architecture }}
+      queue: max
     if: >-
       github.ref == 'refs/heads/main' &&
       (startsWith(needs.publish.outputs.restored-pip, 'windows-pip-v2-') ||
