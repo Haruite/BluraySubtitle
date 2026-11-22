@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Mapping
 
 
-APP_VERSION = "4.7"
+APP_VERSION = "5.0"
 APP_TITLE = f"BluraySubtitle v{APP_VERSION}"
 BUILD_COMMIT_FILENAME = "build-commit.txt"
 
