@@ -254,19 +254,18 @@ def build_qmake(ctx):
     qt = ctx.cache / "qt-sdk"
     qmake = qt / "6.6.3/macos/bin/qmake"
     if not qmake.is_file():
-        ctx.run(
-            "aqt",
-            "install-qt",
-            "mac",
-            "desktop",
-            "6.6.3",
-            "clang_64",
-            "--archives",
-            "qtbase",
-            "--outputdir",
-            qt,
-            cwd=ctx.cache,
-        )
+        sdk = qmake.parent.parent
+        new_sdk = not sdk.exists()
+        try:
+            ctx.run("aqt", "install-qt", "mac", "desktop", "6.6.3", "clang_64",
+                    "--archives", "qtbase", "--outputdir", qt, cwd=ctx.cache)
+        except (OSError, subprocess.SubprocessError):
+            # An interrupted extraction can leave qmake in an incomplete cached SDK.
+            if new_sdk and sdk.is_dir():
+                shutil.rmtree(sdk)
+            else:
+                qmake.unlink(missing_ok=True)
+            raise
     return qmake
 
 

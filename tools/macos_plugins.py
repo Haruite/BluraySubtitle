@@ -1,12 +1,15 @@
 """Build the same R79 filter set as the regular Windows distribution."""
 
+import json
+import os
 import re
 import shlex
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
-from tools.macos_build_support import ROOT, Build, copy, copy_licenses, digest, recipe_digest
+from tools.macos_build_support import ROOT, Build, copy, copy_licenses, digest, message, recipe_digest
 
 from tools.lsmash_ffmpeg_compat import adapt_sources
 from tools.vapoursynth_plugin_releases import (
@@ -102,9 +105,48 @@ def build_fmtconv(ctx, src, work, dest):
     )
 
 
+def zsmooth_arm64_sdk(active_sdk: Path) -> Path | None:
+    def targets(sdk):
+        stub = sdk / "usr/lib/libSystem.tbd"
+        # The top-level targets precede the install name and the reexported libraries.
+        return stub.read_text().partition("install-name:")[0] if stub.is_file() else ""
+
+    current = targets(active_sdk)
+    if "arm64-macos" in current or "arm64e-macos" not in current:
+        return active_sdk
+
+    directories = {active_sdk.parent, Path("/Library/Developer/CommandLineTools/SDKs")}
+    directories.update(Path("/Applications").glob(
+        "Xcode*.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs"))
+    sdks = {path.resolve() for directory in directories for path in directory.glob("MacOSX*.sdk")}
+    candidates = []
+    for sdk in sdks:
+        if "arm64-macos" in targets(sdk):
+            version = json.loads((sdk / "SDKSettings.json").read_bytes())["Version"]
+            candidates.append((tuple(map(int, version.split("."))), sdk))
+    return max(candidates)[1] if candidates else None
+
+
 def build_zsmooth(ctx, src, work, dest):
     # The Zig build API is versioned with the compiler used by this release.
     version = re.search(r'\.minimum_zig_version\s*=\s*"([\d.]+)"', (src / "build.zig.zon").read_text())[1]
+    environment = {}
+    if version == "0.15.2" and ctx.arch == "arm64":
+        # The Zig host build runner gets its SDK through xcrun and cannot resolve
+        # ordinary arm64 symbols from the arm64e-only stubs in the 26.4+ SDKs.
+        if ctx.zig_sdk is None:
+            raise RuntimeError(message("Zig 0.15.2 needs a macOS SDK with arm64-macos libSystem stubs, "
+                                       "such as the SDK in Xcode 26.3."))
+        if ctx.zig_sdk != Path(ctx.env["SDKROOT"]).resolve():
+            # Zig explicitly asks xcrun for "macosx", overriding SDKROOT. Pass the
+            # absolute SDK to that lookup, including for a non-default CLT SDK.
+            xcrun = work / "zig-tools/xcrun"
+            xcrun.parent.mkdir()
+            xcrun.write_text('#!/bin/sh\nif [ "$1" = --sdk ] && [ "$2" = macosx ]; then\n'
+                             '    shift 2\n    exec /usr/bin/xcrun --sdk "$SDKROOT" "$@"\n'
+                             'fi\nexec /usr/bin/xcrun "$@"\n')
+            xcrun.chmod(0o755)
+            environment = {"SDKROOT": str(ctx.zig_sdk), "PATH": os.pathsep.join((str(xcrun.parent), ctx.env["PATH"]))}
     zigroot = ctx.cache / f"zig-{version}"
     zig = zigroot / "ziglang/zig"
     if not zig.is_file():
@@ -155,6 +197,7 @@ def build_zsmooth(ctx, src, work, dest):
         "-j" + ctx.jobs,
         cwd=src,
         ZIG_GLOBAL_CACHE_DIR=str(ctx.cache / "zig-cache"),
+        **environment,
     )
     copy(next((src / "zig-out").rglob("libzsmooth.dylib")), dest)
 
@@ -228,5 +271,10 @@ def build_plugins(ctx, releases):
                 packages += ("pkg-config",)
             recipe = [recipe_digest(install, builder, *((Build.cmake,) if cmake else ())),
                       digest(ROOT / "tools/lsmash_ffmpeg_compat.py") if name == "lsmas" else ""]
+            if name == "zsmooth" and ctx.arch == "arm64":
+                active_sdk = Path(ctx.env["SDKROOT"]).resolve()
+                ctx.zig_sdk = zsmooth_arm64_sdk(active_sdk)
+                if ctx.zig_sdk is not None and ctx.zig_sdk != active_sdk:
+                    recipe.append([str(ctx.zig_sdk), digest(ctx.zig_sdk / "SDKSettings.json")])
             ctx.component("vs-" + name, [release.ref, release.source_url, release.sha256], install,
                           dependencies=deps, recipe=recipe, packages=packages, build_tools=build_tools)

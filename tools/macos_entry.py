@@ -13,7 +13,6 @@ def main():
     manifest = json.loads((runtime / "runtime.json").read_text())
     version = tuple(int(n) for n in platform.mac_ver()[0].split("."))
     branch = "latest" if (*version, 0, 0)[:3] >= tuple(manifest["latest_qt_minimum"]) else "6.6"
-    # Validation opens the installed GUI once per supported Qt branch.
     if os.environ.get("BLURAY_MACOS_QT") == "6.6":
         branch = "6.6"
     qt = runtime / "qt" / branch

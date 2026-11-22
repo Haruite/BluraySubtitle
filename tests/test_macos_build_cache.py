@@ -1,8 +1,10 @@
 """The macOS build plan and restored archives must describe the same installed products."""
 
+import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from tools.macos_build_support import Build
 
@@ -46,6 +48,25 @@ class MacBuildCacheTests(unittest.TestCase):
         self.ctx.arch = "arm64"
         self.assertNotEqual(self.plan()["other"], initial["other"])
         self.assertFalse(self.ctx.prefix.exists())
+
+    def test_failed_build_reports_only_completed_component_archives(self):
+        self.ctx.expected = self.plan()
+        self.ctx.built.clear()
+        self.ctx.planning = False
+        output = self.ctx.cache / "step-outputs"
+
+        def fail_after_writing(work, stage):
+            (stage / "partial").write_bytes(b"unfinished")
+            raise RuntimeError("build failed")
+
+        with patch.dict(os.environ, GITHUB_OUTPUT=str(output)):
+            self.ctx.component("sdk", "1", self.install, packages=("lib",))
+            with self.assertRaisesRegex(RuntimeError, "build failed"):
+                self.ctx.component("tool", "v1", fail_after_writing, dependencies=("sdk",))
+        key = self.ctx.expected["sdk"]
+        self.assertEqual(output.read_text().splitlines(), [f"sdk={key}"])
+        self.assertEqual({p.name for p in self.ctx.components.iterdir()},
+                         {f"sdk-{key}.tar.gz", f"sdk-{key}.tar.sha256"})
 
     def test_restore_only_and_normal_build_handle_a_damaged_archive(self):
         self.ctx.planning = False

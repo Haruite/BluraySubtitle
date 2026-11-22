@@ -28,10 +28,11 @@ I18N_ZH_TO_EN = {
     '正在恢复 {name} {revision}': 'Restoring {name} {revision}',
     '组件缓存 {path} 无效。': 'Invalid component cache {path}.',
     '缺少组件 {name} 的缓存。': 'Missing cached component {name}.',
+    'Zig 0.15.2 需要包含 arm64-macos libSystem 链接桩的 macOS SDK，例如 Xcode 26.3 附带的 SDK。':
+        'Zig 0.15.2 needs a macOS SDK with arm64-macos libSystem stubs, such as the SDK in Xcode 26.3.',
     '使用 {launcher} 启动源码版应用': 'Start the source application with {launcher}',
     '归档 {path} 已通过验证': 'Verified archive {path}',
     'R79、API 3/4 滤镜、10 位 HEVC、AVC、AV1、AAC、FLAC 和字幕封装验证通过。': 'R79, API 3/4 filters, 10-bit HEVC, AVC, AV1, AAC, FLAC and subtitle remux passed.',
-    '应用已使用随包的 Qt {branch} 启动。': 'The application started with bundled Qt {branch}.',
     '服务器 Linux x64 安装包': 'Server Linux x64 package',
     '服务器 Linux ARM64 安装包': 'Server Linux ARM64 package',
     '一键更新需要 Linux 打包版。': 'Direct updates require the packaged Linux program.',

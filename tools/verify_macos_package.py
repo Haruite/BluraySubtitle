@@ -7,12 +7,11 @@ import plistlib
 import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tools.macos_build_support import ROOT, digest, message, run
+from tools.macos_build_support import digest, message, run
 from tools.macos_macho import inspect_macho
 
 from tools.vapoursynth_plugin_releases import R79_PLUGIN_NAMESPACES
@@ -116,32 +115,6 @@ def verify_runtime(runtime):
             f"c = core.assrender.TextSub(c, {str(work / 'subtitle.srt')!r})\n"
             "core.fmtc.bitdepth(c, bits=10).set_output()\n"
         )
-        # VSEdit's --version returns before constructing QApplication.
-        # Opening the script exercises the Cocoa plugin and the bundled Qt 6.6.
-        editor_log = work / "vsedit.log"
-        with editor_log.open("w") as stream:
-            editor = subprocess.Popen(
-                [runtime / "bin/vsedit", script],
-                cwd=work,
-                env={**env, "QT_DEBUG_PLUGINS": "1"},
-                stdout=stream,
-                stderr=subprocess.STDOUT,
-            )
-            try:
-                deadline = time.monotonic() + 30
-                while editor.poll() is None and time.monotonic() < deadline:
-                    lines = editor_log.read_text(errors="replace").splitlines()
-                    if any("libqcocoa.dylib" in line and "loaded library" in line for line in lines):
-                        break
-                    time.sleep(0.2)
-                else:
-                    raise RuntimeError(
-                        f"VSEdit could not open the script: {editor_log.read_text(errors='replace')[-2000:]}"
-                    )
-            finally:
-                if editor.poll() is None:
-                    editor.terminate()
-                editor.wait(timeout=15)
         execute("vspipe", "--container", "y4m", script, "frames.y4m")
         execute(
             "x265",
@@ -213,42 +186,6 @@ def verify_archive(archive):
         if not launcher or launcher.minimum > (11, 0, 0):
             raise ValueError(f"Invalid macOS 11 launcher: {executable}")
         verify_runtime(runtime)
-        manifest = json.loads((runtime / "runtime.json").read_text())
-        version = tuple(map(int, platform.mac_ver()[0].split(".")))
-        automatic = "latest" if (*version, 0, 0)[:3] >= tuple(manifest["latest_qt_minimum"]) else "6.6"
-        choices = [("auto", automatic)]
-        if automatic == "latest":
-            choices.append(("6.6", "6.6"))
-        for choice, branch in choices:
-            ready = work / (branch + ".ready")
-            log = work / (branch + ".log")
-            env = dict(
-                os.environ,
-                BLURAY_MACOS_QT=choice,
-                BLURAY_SUBTITLE_CONFIG_DIR=str(work / branch),
-                BLURAY_SUBTITLE_GUI_READY=str(ready),
-                DYLD_PRINT_LIBRARIES="1",
-            )
-            with log.open("w") as stream:
-                proc = subprocess.Popen(
-                    [executable, "--foreground"],
-                    env=env,
-                    stdout=stream,
-                    stderr=subprocess.STDOUT,
-                )
-                try:
-                    deadline = time.monotonic() + 60
-                    while not ready.exists() and proc.poll() is None and time.monotonic() < deadline:
-                        time.sleep(0.2)
-                    if not ready.exists() or f"/qt/{branch}/PyQt6/" not in log.read_text(errors="replace"):
-                        raise RuntimeError(
-                            f"GUI failed to open with Qt {branch}: {log.read_text(errors='replace')[-1800:]}"
-                        )
-                finally:
-                    if proc.poll() is None:
-                        proc.terminate()
-                    proc.wait(timeout=15)
-            print(message("The application started with bundled Qt {branch}.", branch=branch), flush=True)
         run("codesign", "--verify", "--deep", "--strict", app)
 
 

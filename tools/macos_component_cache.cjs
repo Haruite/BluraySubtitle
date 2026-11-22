@@ -7,11 +7,12 @@ module.exports = async function componentCaches(mode, core) {
   const directory = path.join(root, "components");
   const plan = JSON.parse(fs.readFileSync(process.env.BLURAY_MACOS_CACHE_PLAN));
   const saved = mode === "save";
-  const selected = saved ? JSON.parse(fs.readFileSync(path.join(root, "verified-components.json"))) : plan.components;
+  const selected = saved ? JSON.parse(process.env.COMPLETED_COMPONENTS || "{}") : plan.components;
   const restoredFile = path.join(process.env.RUNNER_TEMP, "macos-restored-components.json");
   const restored = saved ? JSON.parse(fs.readFileSync(restoredFile)) : {};
   const verifiedHits = {};
   const entries = Object.entries(selected);
+  if (saved) core.info(`Completed native components: ${entries.length}/${Object.keys(plan.components).length}`);
   fs.mkdirSync(directory, {recursive: true});
 
   async function worker() {
@@ -30,6 +31,8 @@ module.exports = async function componentCaches(mode, core) {
           if (restored[name] === prefix + digest) {
             verifiedHits[name] = restored[name];
           } else {
+            const archive = fs.statSync(files[0]);
+            if (!archive.isFile() || !archive.size) throw new Error("Missing component archive");
             await cache.saveCache(files, prefix + digest);
           }
         } else {

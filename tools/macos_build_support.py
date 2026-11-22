@@ -316,3 +316,7 @@ class Build:
                 print(message("Restoring {name} {revision}", name=name, revision=revision), flush=True)
             shutil.copytree(stage, self.prefix, dirs_exist_ok=True, symlinks=True)
         self.built[name] = key
+        # A later component can fail after this archive was checksummed and installed.
+        if self.expected is not None and (output_file := os.environ.get("GITHUB_OUTPUT")):
+            with open(output_file, "a", encoding="utf-8") as stream:
+                print(f"{name}={key}", file=stream)

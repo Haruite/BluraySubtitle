@@ -21,7 +21,7 @@ jobs:
       architecture: ${{ runner.arch }}
       setup: ${{ steps.downloads.outputs.cache-matched-key }}
       conda: ${{ steps.conda.outputs.cache-matched-key }}
-      components: ${{ steps.verified-components.outputs.restored }}
+      components: ${{ steps.component-cache.outputs.restored }}
     env:
       BLURAY_LANG: en
       PACKAGE_ARCHIVE: BluraySubtitle_macos_${{ inputs.architecture }}.zip
@@ -30,6 +30,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Select the native Big Sur toolchain
+        id: toolchain
         env:
           EXPECTED_ARCH: ${{ inputs.architecture }}
         run: |
@@ -100,27 +101,30 @@ jobs:
         with:
           script: await require(process.env.GITHUB_WORKSPACE + '/tools/macos_component_cache.cjs')('restore', core)
       - name: Build and verify the relocated package
+        id: build
         env:
           GH_TOKEN: ${{ github.token }}
         run: ./setup_macos_environment.sh --mode Build --from-plan "$BLURAY_MACOS_CACHE_PLAN"
       - uses: actions/github-script@v9
-        name: Save verified native components
-        id: verified-components
-        if: github.ref == 'refs/heads/main'
+        name: Save completed native components
+        id: component-cache
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && (steps.build.outcome == 'success' || steps.build.outcome == 'failure') }}
+        env:
+          COMPLETED_COMPONENTS: ${{ toJSON(steps.build.outputs) }}
         with:
           script: await require(process.env.GITHUB_WORKSPACE + '/tools/macos_component_cache.cjs')('save', core)
-      - name: Fingerprint verified download caches
+      - name: Fingerprint available downloads and compiler cache
         id: snapshot
-        if: github.ref == 'refs/heads/main'
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.toolchain.outcome == 'success' }}
         continue-on-error: true
-        run: '"$BLURAY_SETUP_CACHE_DIR/build-tools/bin/python" -B tools/macos_actions_cache.py snapshot "$RUNNER_ARCH"'
+        run: python3 -B tools/macos_actions_cache.py snapshot "$RUNNER_ARCH"
       - uses: actions/cache/save@v6
-        if: steps.snapshot.outputs.setup != '' && steps.snapshot.outputs.setup != steps.downloads.outputs.cache-matched-key
+        if: ${{ !cancelled() && steps.snapshot.outputs.setup != '' && steps.snapshot.outputs.setup != steps.downloads.outputs.cache-matched-key }}
         with:
           path: *downloads
           key: ${{ steps.snapshot.outputs.setup }}
       - uses: actions/cache/save@v6
-        if: steps.snapshot.outputs.conda != '' && steps.snapshot.outputs.conda != steps.conda.outputs.cache-matched-key
+        if: ${{ !cancelled() && steps.snapshot.outputs.conda != '' && steps.snapshot.outputs.conda != steps.conda.outputs.cache-matched-key }}
         with:
           path: *conda-paths
           key: ${{ steps.snapshot.outputs.conda }}
