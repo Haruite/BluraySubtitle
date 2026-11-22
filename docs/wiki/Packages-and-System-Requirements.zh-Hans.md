@@ -61,7 +61,7 @@ Windows 7 SP1 须安装 [KB3063858](https://github.com/adang1345/PythonVista#rea
 
 **Windows**　`setup_windows_environment.ps1` 支持 x64 版 Windows 10 1909 及以上、带桌面体验的 x64 Windows Server 2019 及以上，以及 ARM64 版 Windows 11 及以上。请使用 64 位 PowerShell。默认安装 VapourSynth R79，可用 `-VapourSynthRuntime Classic` 选择 Classic。ARM64 的 Classic 使用独立的 x64 Python、插件和 VSEdit。
 
-**macOS** 安装 Apple 命令行工具后，在原生 Intel 或 Apple 芯片环境中运行 `./setup_macos_environment.sh`。源码启动器位于 `~/Library/Application Support/BluraySubtitle/Runtime/bin/BluraySubtitle`。多个系统共用源码目录时，可在安装前设置 `BLURAY_SUBTITLE_CONFIG_DIR`，让 Mac 启动器使用独立配置。
+**macOS** 先用 `xcode-select --install` 安装 Apple 命令行工具，再运行 `./setup_macos_environment.sh`。完整安装流程已在 macOS Tahoe 26.7.3 上验证，最低系统版本尚未确定。脚本使用的 uv 官方支持 macOS 13 Ventura 及以上版本，在 macOS 12 上运行 uv 需另装 `realpath`。源码启动器位于 `~/Library/Application Support/BluraySubtitle/Runtime/bin/BluraySubtitle`。多个系统共用源码目录时，可在安装前设置 `BLURAY_SUBTITLE_CONFIG_DIR`，让 Mac 启动器使用独立配置。[uv 的 macOS 支持说明](https://docs.astral.sh/uv/reference/policies/platforms/#macos-versions)
 
 **Linux**　`setup_linux_environment.sh` 支持原生 x64 或 ARM64 的 Ubuntu、Debian 及其 APT 衍生版。脚本检查已安装的软件包和已配置的软件源，包括 backports。非 LTS 版与滚动发行版按相同条件判断。
 
