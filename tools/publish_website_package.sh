@@ -24,7 +24,11 @@ trap '
     rm -rf -- "$publish_temp"
 ' EXIT
 
-digest=$(sha256sum -- "$archive")
+if command -v sha256sum >/dev/null; then
+    digest=$(sha256sum -- "$archive")
+else
+    digest=$(shasum -a 256 -- "$archive")
+fi
 digest=${digest%% *}
 if [[ -n "$commit_record" ]]; then
     record="$publish_temp/$record_name"
@@ -33,8 +37,8 @@ if [[ -n "$commit_record" ]]; then
         tr -d '\r' < "$commit_record"
     } > "$record"
 fi
-commit=$(sed -n 's/\r$//;s/^commit=//p' "$record")
-checksum=$(sed -n 's/\r$//;s/^sha256=//p' "$record")
+commit=$(tr -d '\r' < "$record" | sed -n 's/^commit=//p')
+checksum=$(tr -d '\r' < "$record" | sed -n 's/^sha256=//p')
 if [[ "$checksum" != "$digest" || "$commit" != "$GITHUB_SHA" ]]; then
     echo "::error::The archive or build record does not match the current commit."
     exit 1
@@ -46,10 +50,10 @@ printf '%s\n' "$SFTP_PRIVATE_KEY" | tr -d '\r' | ssh-add -
 unset SFTP_PRIVATE_KEY
 printf '%s\n' "$SFTP_KNOWN_HOSTS" > "$publish_temp/known_hosts"
 
-remote_dir=/usr/share/nginx/html/tools/BluraySubtitle
-destination="bluray-deploy@$SFTP_HOST"
+remote_dir=${SFTP_REMOTE_DIR:-/usr/share/nginx/html/tools/BluraySubtitle}
+destination="${SFTP_USER:-bluray-deploy}@$SFTP_HOST"
 sftp_options=(
-    -b - -P 22
+    -b - -P "${SFTP_PORT:-22}"
     -o StrictHostKeyChecking=yes
     -o "UserKnownHostsFile=\"$publish_temp/known_hosts\""
 )

@@ -15,6 +15,30 @@ import urllib.request
 from .vapoursynth_plugin_versions import version_satisfies
 
 
+R79_PLUGIN_NAMESPACES = {
+    "descale": "descale",
+    "addgrain": "grain",
+    "assrender": "assrender",
+    "bilateral": "bilateral",
+    "dfttest": "dfttest",
+    "eedi2": "eedi2",
+    "eedi3m": "eedi3m",
+    "znedi3": "znedi3",
+    "fmtconv": "fmtc",
+    "lsmas": "lsmas",
+    "sangnom": "sangnom",
+    "placebo": "placebo",
+    "nlm_ispc": "nlm_ispc",
+    "zsmooth": "zsmooth",
+    "mvtools": "mv",
+    "removegrain": "rgvs",
+    "eedi3": "eedi3",
+    "misc": "misc",
+    "vivtc": "vivtc",
+}
+LEGACY_SOURCE_KEYS = {"eedi3": "legacy-filters", "misc": "legacy-filters"}
+
+
 @dataclass(frozen=True)
 class PluginSource:
     repository: str

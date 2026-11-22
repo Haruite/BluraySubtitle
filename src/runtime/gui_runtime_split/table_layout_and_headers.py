@@ -282,7 +282,7 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
             header.setStretchLastSection(True)
         self._apply_hidden_m2ts_file_detail_columns()
 
-    def _set_compact_table(self, table: QTableWidget, row_height: int = 28, header_height: int = 28):
+    def _set_compact_table(self, table: QTableWidget, row_height: int = 28, header_height: int | None = None):
         # Cell widgets include theme padding that font metrics alone do not capture.
         for row in range(table.rowCount()):
             for column in range(table.columnCount()):
@@ -291,7 +291,9 @@ class TableLayoutHeadersMixin(BluraySubtitleGuiBase):
                     widget.ensurePolished()
                     row_height = max(row_height, widget.sizeHint().height() + 2)
         row_height = max(row_height, table.fontMetrics().height() + 10)
-        header_height = max(header_height, table.horizontalHeader().fontMetrics().height() + 10)
+        if header_height is not None:
+            table.setProperty('compactHeaderMinimum', header_height)
+        header_height = max(table.property('compactHeaderMinimum') or 0, table.horizontalHeader().fontMetrics().height() + 10)
         table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         table.verticalHeader().setMinimumSectionSize(row_height)
         table.verticalHeader().setDefaultSectionSize(row_height)

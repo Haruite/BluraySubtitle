@@ -1,0 +1,154 @@
+name: Build and Publish a macOS Package
+on:
+  workflow_call:
+    inputs:
+      architecture:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ inputs.architecture }}-package-website
+  queue: max
+
+jobs:
+  publish:
+    runs-on: ${{ inputs.architecture == 'arm64' && 'macos-26' || 'macos-26-intel' }}
+    timeout-minutes: 360
+    outputs:
+      architecture: ${{ runner.arch }}
+      setup: ${{ steps.downloads.outputs.cache-matched-key }}
+      conda: ${{ steps.conda.outputs.cache-matched-key }}
+      components: ${{ steps.verified-components.outputs.restored }}
+    env:
+      BLURAY_LANG: en
+      PACKAGE_ARCHIVE: BluraySubtitle_macos_${{ inputs.architecture }}.zip
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Select the native Big Sur toolchain
+        env:
+          EXPECTED_ARCH: ${{ inputs.architecture }}
+        run: |
+          set -euo pipefail
+          arch=$(uname -m)
+          case "$EXPECTED_ARCH/$arch" in x64/x86_64|arm64/arm64) ;; *) exit 1 ;; esac
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          from pathlib import Path
+          import platform, re
+          apps = [(tuple(map(int, m[1].split("."))), app)
+                  for app in Path("/Applications").glob("Xcode_26*.app")
+                  if (m := re.fullmatch(r"Xcode_(26(?:\.\d+)*)\.app",app.name))]
+          print(f"DEVELOPER_DIR={max(apps)[1]}/Contents/Developer")
+          print(f"BLURAY_SETUP_CACHE_DIR={Path.home()}/Library/Caches/BluraySubtitle/macos-{platform.machine()}")
+          PY
+          sw_vers
+          sysctl -n machdep.cpu.brand_string
+          echo "BLURAY_MACOS_CACHE_PLAN=$RUNNER_TEMP/macos-cache-plan.json" >> "$GITHUB_ENV"
+      - name: Restore source and tool downloads
+        id: downloads
+        uses: actions/cache/restore@v6
+        with:
+          path: &downloads |
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/downloads
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/qt-sdk
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/pip
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/cargo/registry/cache
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/cargo/git/db
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/uv-cache
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/zig-cache/p
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/interpreters
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/ccache
+          key: macos-setup-v2-${{ runner.arch }}-lookup
+          restore-keys: macos-setup-v2-${{ runner.arch }}-
+      - name: Restore Conda package downloads
+        id: conda
+        uses: actions/cache/restore@v6
+        with:
+          path: &conda-paths |
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/mamba/pkgs/**/*.conda
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/mamba/pkgs/**/*.tar.bz2
+          key: macos-conda-v2-${{ runner.arch }}-lookup
+          restore-keys: macos-conda-v2-${{ runner.arch }}-
+      - name: Reuse previous combined download cache on a cold runner
+        if: steps.downloads.outputs.cache-matched-key == '' && steps.conda.outputs.cache-matched-key == ''
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/downloads
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/mamba/pkgs/**/*.conda
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/mamba/pkgs/**/*.tar.bz2
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/qt-sdk
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/pip
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/cargo/registry/cache
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/cargo/git/db
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/uv-cache
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/zig-cache/p
+          key: macos-downloads-v1-${{ runner.arch }}-lookup
+          restore-keys: macos-downloads-v1-${{ runner.arch }}-
+      - name: Resolve current upstream versions and component cache keys
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./setup_macos_environment.sh --mode Build --plan "$BLURAY_MACOS_CACHE_PLAN"
+      - name: Prepare component cache client
+        run: npm install --ignore-scripts --no-audit --no-fund --prefix "$RUNNER_TEMP/bluray-cache-client" @actions/cache
+      - uses: actions/github-script@v9
+        name: Restore individual native components
+        with:
+          script: await require(process.env.GITHUB_WORKSPACE + '/tools/macos_component_cache.cjs')('restore', core)
+      - name: Build and verify the relocated package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./setup_macos_environment.sh --mode Build --from-plan "$BLURAY_MACOS_CACHE_PLAN"
+      - uses: actions/github-script@v9
+        name: Save verified native components
+        id: verified-components
+        if: github.ref == 'refs/heads/main'
+        with:
+          script: await require(process.env.GITHUB_WORKSPACE + '/tools/macos_component_cache.cjs')('save', core)
+      - name: Fingerprint verified download caches
+        id: snapshot
+        if: github.ref == 'refs/heads/main'
+        continue-on-error: true
+        run: '"$BLURAY_SETUP_CACHE_DIR/build-tools/bin/python" -B tools/macos_actions_cache.py snapshot "$RUNNER_ARCH"'
+      - uses: actions/cache/save@v6
+        if: steps.snapshot.outputs.setup != '' && steps.snapshot.outputs.setup != steps.downloads.outputs.cache-matched-key
+        with:
+          path: *downloads
+          key: ${{ steps.snapshot.outputs.setup }}
+      - uses: actions/cache/save@v6
+        if: steps.snapshot.outputs.conda != '' && steps.snapshot.outputs.conda != steps.conda.outputs.cache-matched-key
+        with:
+          path: *conda-paths
+          key: ${{ steps.snapshot.outputs.conda }}
+      - name: Upload package and build record
+        if: github.ref == 'refs/heads/main'
+        env:
+          SFTP_HOST: ${{ secrets.SFTP_HOST }}
+          SFTP_KNOWN_HOSTS: ${{ secrets.SFTP_KNOWN_HOSTS }}
+          SFTP_PRIVATE_KEY: ${{ secrets.SFTP_PRIVATE_KEY }}
+        run: bash tools/publish_website_package.sh "dist/$PACKAGE_ARCHIVE"
+
+  prune-cache:
+    needs: publish
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Remove superseded verified macOS caches
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CACHE_ARCHITECTURE: ${{ needs.publish.outputs.architecture }}
+          RESTORED_SETUP: ${{ needs.publish.outputs.setup }}
+          RESTORED_CONDA: ${{ needs.publish.outputs.conda }}
+          RESTORED_COMPONENTS: ${{ needs.publish.outputs.components }}
+        run: python3 -B tools/macos_actions_cache.py prune "$CACHE_ARCHITECTURE"

@@ -8,7 +8,7 @@ import subprocess
 import sys
 import time
 import traceback
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from pathlib import Path
 from threading import RLock
@@ -19,6 +19,7 @@ import soundfile
 
 from ..core.i18n import translate_text, _terminal_err_stream
 
+from ..runtime.application_log import LOG_COLOR_ENV
 from ..core.tool_paths import TOOL_EXECUTABLE_NAMES, bundle_directory, is_bundled_tool, tool_path
 
 _MKVMERGE_CANCEL_EVENT: ContextVar[object | None] = ContextVar(
@@ -61,44 +62,41 @@ def quote_tool_executable(path: str) -> str:
     return f'"{path}"' if sys.platform == 'win32' else shlex.quote(path)
 
 
-def _terminate_process_tree(process) -> None:
-    if process.poll() is not None:
+def terminate_process_trees(processes, *, grace: float = 0.5) -> None:
+    """Stop subprocesses launched in their own process groups, including their children."""
+    pending = [p for p in dict.fromkeys(processes) if p is not None and p.returncode is None]
+    if not pending:
         return
     if sys.platform == 'win32':
-        try:
-            subprocess.run(
-                ['taskkill', '/PID', str(process.pid), '/T', '/F'],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=subprocess.CREATE_NO_WINDOW,
-            )
-        except OSError:
-            pass
+        for process in pending:
+            if process.poll() is None:
+                with suppress(OSError):
+                    subprocess.run(
+                        ['taskkill', '/PID', str(process.pid), '/T', '/F'],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        creationflags=subprocess.CREATE_NO_WINDOW,
+                    )
     else:
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            return
-        except OSError:
-            pass
-    try:
-        process.wait(timeout=0.5)
-        return
-    except subprocess.TimeoutExpired:
-        pass
-    if sys.platform != 'win32':
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except OSError:
-            pass
-    try:
-        process.kill()
-    except OSError:
-        pass
-    try:
-        process.wait(timeout=0.5)
-    except subprocess.TimeoutExpired:
-        pass
+        groups = []
+        for process in pending:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+                groups.append(process.pid)
+            except OSError:
+                with suppress(OSError):
+                    process.terminate()
+        # A wrapper may exit before its encoder. Leave leaders waitable until we have
+        # signaled their groups a second time, so their PIDs cannot be recycled here.
+        time.sleep(grace)
+        for group in groups:
+            with suppress(OSError):
+                os.killpg(group, signal.SIGKILL)
+    for process in pending:
+        if process.poll() is None:
+            with suppress(OSError):
+                process.kill()
+        with suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=grace)
 
 
 def mkv_codec_id_is_dts_family(codec_id: str) -> bool:
@@ -315,9 +313,9 @@ def third_party_notices_markdown_path(language: str) -> Optional[str]:
     rel_candidates.append(filename)
     seen: set[str] = set()
     roots: list[str] = []
-    mei = getattr(sys, '_MEIPASS', None)
-    if mei:
-        roots.append(mei)
+    runtime = getattr(sys, '_bluray_macos_runtime', None) or getattr(sys, '_MEIPASS', None)
+    if runtime:
+        roots.append(str(runtime))
     here = os.path.dirname(os.path.abspath(__file__))
     repo_root = os.path.abspath(os.path.join(here, '..', '..'))
     roots.append(repo_root)
@@ -340,7 +338,7 @@ _WINDOWS_PROCESS_LAUNCH_LOCK = RLock()
 def system_tool_environment() -> dict[str, str]:
     """Use the caller's runtime environment without paths injected by the bundle."""
     env = os.environ.copy()
-    runtime = getattr(sys, '_MEIPASS', None) if getattr(sys, 'frozen', False) else None
+    runtime = bundle_directory()
     if runtime:
         root = os.path.normcase(os.path.abspath(runtime))
 
@@ -348,7 +346,9 @@ def system_tool_environment() -> dict[str, str]:
             value = os.path.normcase(os.path.abspath(path.strip('"')))
             return value == root or value.startswith(root + os.sep)
 
-        for name in ('PATH', 'PYTHONPATH', 'PYTHONHOME', 'VSSCRIPT_PATH',
+        for name in ('PATH', 'PYTHONPATH', 'PYTHONHOME', 'VSSCRIPT_PATH', 'QT_PLUGIN_PATH',
+                     'QT_QPA_PLATFORM_PLUGIN_PATH', 'QML_IMPORT_PATH', 'QML2_IMPORT_PATH', 'VK_DRIVER_FILES',
+                     'DYLD_LIBRARY_PATH', 'DYLD_FRAMEWORK_PATH', 'GCONV_PATH',
                      'VAPOURSYNTH_EXTRA_PLUGIN_PATH', 'VAPOURSYNTH_PLUGINS', 'BLURAYSUB_PLUGIN_PATH'):
             if name in env:
                 paths = [path for path in env[name].split(os.pathsep) if not path or not from_bundle(path)]
@@ -356,10 +356,7 @@ def system_tool_environment() -> dict[str, str]:
                     env[name] = os.pathsep.join(paths)
                 else:
                     env.pop(name)
-        if sys.platform.startswith('linux'):
-            for name in ('QT_PLUGIN_PATH', 'QT_QPA_PLATFORM_PLUGIN_PATH', 'GCONV_PATH'):
-                if name in env and from_bundle(env[name]):
-                    env.pop(name)
+        if getattr(sys, 'frozen', False) and os.name == 'posix' and sys.platform != 'darwin':
             if 'LD_LIBRARY_PATH_ORIG' in env:
                 env['LD_LIBRARY_PATH'] = env['LD_LIBRARY_PATH_ORIG']
             else:
@@ -450,8 +447,10 @@ def run_command(
         command_text = command if isinstance(command, str) else subprocess.list2cmdline(command)
         print(translate_text(log_template).format(command=command_text), flush=True)
     stderr = kwargs.get('stderr')
+    output = kwargs.get('stdout') if stderr == subprocess.STDOUT else stderr
+    stream = (sys.stdout if stderr == subprocess.STDOUT else sys.stderr) if output is None else output
     if (
-            getattr(sys.stderr if stderr is None else stderr, 'accepts_ansi_color', False)
+            getattr(stream, 'accepts_ansi_color', output is None and os.environ.get(LOG_COLOR_ENV) == '1')
             and not kwargs.get('capture_output')
             and isinstance(command, (list, tuple)) and command
             and os.path.basename(os.fsdecode(command[0])).lower() in ('ffmpeg', 'ffmpeg.exe', 'ffprobe', 'ffprobe.exe')
@@ -523,14 +522,14 @@ def run_command(
     try:
         while True:
             if cancel_event.is_set():
-                _terminate_process_tree(process)
+                terminate_process_trees((process,))
                 from src.runtime import TaskCancelled
                 raise TaskCancelled()
             poll_timeout = 0.1
             if timeout is not None:
                 remaining = float(timeout) - (time.monotonic() - started_at)
                 if remaining <= 0:
-                    _terminate_process_tree(process)
+                    terminate_process_trees((process,))
                     stdout, stderr = process.communicate()
                     raise subprocess.TimeoutExpired(command, timeout, output=stdout, stderr=stderr)
                 poll_timeout = min(poll_timeout, remaining)
@@ -547,7 +546,7 @@ def run_command(
             result.check_returncode()
         return result
     except BaseException:
-        _terminate_process_tree(process)
+        terminate_process_trees((process,))
         raise
 
 
@@ -587,6 +586,7 @@ __all__ = [
     "mkv_codec_id_is_dts_family",
     "mkvmerge_cancellation_scope",
     "run_command",
+    "terminate_process_trees",
     "print_terminal_line",
     "print_exc_terminal",
     "print_tb_string_terminal",

@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import QToolButton
 
 from src.core import ENCODE_SP_LABELS
 from src.core.tool_paths import is_bundled_tool, tool_path
-from src.exports.utils import print_terminal_line, run_command
+from src.exports.utils import print_terminal_line, run_command, system_tool_environment
 from src.runtime.desktop_integration import supports_desktop_entries
 from src.runtime.mpv_environment import read_desktop_runtime
 from src.runtime.mpv_menu import mpv_language_options
@@ -117,10 +117,10 @@ class PlaybackPathsMixin(BluraySubtitleGuiBase):
 
     def _mpv_playback_executable(self, mime_type: str) -> str:
         executable = tool_path("MPV_PATH")
-        if self._app_config.tools.get("MPV_PATH") or sys.platform == "win32":
+        if self._app_config.tools.get("MPV_PATH") or sys.platform in ("win32", "darwin"):
             return executable
         if not executable or not supports_desktop_entries():
-            return ""
+            return executable
         try:
             association = run_command(
                 ["xdg-mime", "query", "default", mime_type], capture_output=True, check=True, timeout=2,
@@ -130,22 +130,17 @@ class PlaybackPathsMixin(BluraySubtitleGuiBase):
                     ["xdg-mime", "query", "default", "video/mp4"], capture_output=True, check=True, timeout=2,
                 ).stdout.strip()
         except (OSError, subprocess.SubprocessError):
-            return ""
-        return executable if b"mpv" in association else ""
+            return executable
+        return executable if not association or b"mpv" in association.lower() else ""
 
     def _start_mpv_playback(self, executable: str, arguments: list[str], source_path: str) -> None:
         options = []
         menu_directory = None
-        environment = QProcessEnvironment.systemEnvironment()
+        environment = QProcessEnvironment()
+        for key, value in system_tool_environment().items():
+            environment.insert(key, value)
         linux_bundle = getattr(sys, "frozen", False) and sys.platform.startswith("linux")
         if sys.platform.startswith("linux"):
-            if linux_bundle:
-                if environment.contains("LD_LIBRARY_PATH_ORIG"):
-                    environment.insert("LD_LIBRARY_PATH", environment.value("LD_LIBRARY_PATH_ORIG"))
-                else:
-                    environment.remove("LD_LIBRARY_PATH")
-                for name in ("QT_PLUGIN_PATH", "QT_QPA_PLATFORM_PLUGIN_PATH", "QML_IMPORT_PATH", "QML2_IMPORT_PATH"):
-                    environment.remove(name)
             if not is_bundled_tool(executable) and (runtime := read_desktop_runtime()):
                 environment.insert("VSSCRIPT_PATH", runtime["VSSCRIPT_PATH"])
             if environment.value("DISPLAY"):
@@ -165,11 +160,13 @@ class PlaybackPathsMixin(BluraySubtitleGuiBase):
                     ))
                     if not environment.contains("LIBGL_ALWAYS_SOFTWARE"):
                         environment.insert("LIBGL_ALWAYS_SOFTWARE", "1")
-        plugin_path = tool_path("PLUGIN_PATH")
-        environment.insert("BLURAYSUB_PLUGIN_PATH", plugin_path)
+        iina = sys.platform == "darwin" and Path(executable).name in ("iina-cli", "iina")
+        plugin_path = "" if iina else tool_path("PLUGIN_PATH")
+        if not iina:
+            environment.insert("BLURAYSUB_PLUGIN_PATH", plugin_path)
         if plugin_path:
             environment.insert("VAPOURSYNTH_EXTRA_PLUGIN_PATH", plugin_path)
-        config = tool_path("MPV_CONFIG_PATH")
+        config = "" if iina else tool_path("MPV_CONFIG_PATH")
         if config:
             if linux_bundle:
                 options.append(f"--config-dir={config}")
@@ -205,7 +202,17 @@ class PlaybackPathsMixin(BluraySubtitleGuiBase):
 
         process.errorOccurred.connect(start_failed)
         process.finished.connect(finished)
-        process.start(executable, [*options, *arguments])
+        if iina:
+            # IINA sets libmpv properties. The standalone mpv CLI's sub-file
+            # alias is unavailable there. sub-files accepts a colon-delimited list.
+            prefix = "--sub-file="
+            subtitles = [arg[len(prefix):].replace(":", r"\:") for arg in arguments if arg.startswith(prefix)]
+            player_args = [arg for arg in arguments if not arg.startswith(prefix)]
+            if subtitles:
+                player_args.insert(0, "--sub-files=" + ":".join(subtitles))
+            process.start(executable, ["--no-stdin", "--", *player_args])
+        else:
+            process.start(executable, [*options, *arguments])
 
     def _play_m2ts_path(self, m2ts_path: str):
         if not m2ts_path or not os.path.exists(m2ts_path):

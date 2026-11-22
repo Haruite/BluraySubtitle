@@ -64,16 +64,23 @@ def _launch_command() -> list[str]:
 
 
 def supports_desktop_entries() -> bool:
-    if sys.platform.startswith("linux"):
-        return True
     app = QGuiApplication.instance()
-    platform = app.platformName() if isinstance(app, QGuiApplication) else ""
-    return os.name == "posix" and (platform == "xcb" or platform.startswith("wayland"))
+    if isinstance(app, QGuiApplication):
+        platform = app.platformName()
+        return platform == "xcb" or platform.startswith("wayland")
+    # Qt may need its desktop file ID before construction.
+    return os.name == "posix" and sys.platform != "darwin" and bool(
+        os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+    )
 
 
 def create_launch_shortcut(*, menu: bool) -> Path:
     directory = application_directory()
     command = _launch_command()
+    if sys.platform == "darwin":
+        from .macos_shortcuts import create_macos_shortcut
+
+        return create_macos_shortcut(command, menu=menu)
     if sys.platform == "win32":
         executable = Path(command[0])
         frozen = bool(getattr(sys, "frozen", False))

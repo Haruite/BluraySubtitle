@@ -654,6 +654,10 @@ class BluraySubtitleGuiBase(QWidget):
     def _populate_encode_from_remux_folder(self):
         raise NotImplementedError
 
+    @staticmethod
+    def _present_window(window: QWidget) -> None:
+        raise NotImplementedError
+
     def _preview_script_for_row(self, vpy_path: str, video_path: str, subtitle_path: str):
         raise NotImplementedError
 
@@ -827,7 +831,7 @@ class BluraySubtitleGuiBase(QWidget):
     def _set_combo_value(combo: QComboBox, value: str) -> None:
         raise NotImplementedError
 
-    def _set_compact_table(self, table: QTableWidget, row_height: int=28, header_height: int=28):
+    def _set_compact_table(self, table: QTableWidget, row_height: int=28, header_height: int | None=None):
         raise NotImplementedError
 
     def _set_segment_states_for_range(self, mpls_no_ext: str, start_idx: int, end_idx: int, checked: bool):

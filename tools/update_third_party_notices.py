@@ -1,4 +1,4 @@
-"""Generate third-party notices for the PyInstaller bundles."""
+"""Render the bundled third-party notices and collect Windows and Linux software versions."""
 
 from __future__ import annotations
 
@@ -183,7 +183,7 @@ def generate_third_party_notices(
 
     if compatibility:
         versions["MKVTOOLNIX_QT_SOURCE"] += f" + https://github.com/crystalidea/qt6windows7/tree/v{mkv_qt}"
-    _render_notices(template_outputs, versions, windows_variant="compat" if compatibility else "standard")
+    render_notices(template_outputs, versions, windows_variant="compat" if compatibility else "standard")
 
 
 def generate_linux_third_party_notices(
@@ -231,10 +231,10 @@ def generate_linux_third_party_notices(
         "PILLOW_VERSION": version("pillow"),
         "PYCOUNTRY_VERSION": version("pycountry"),
     }
-    _render_notices(template_outputs, versions)
+    render_notices(template_outputs, versions)
 
 
-def _render_notices(template_outputs: Mapping[Path, Path], versions: Mapping[str, str], *, windows_variant: str = "") -> None:
+def render_notices(template_outputs: Mapping[Path, Path], versions: Mapping[str, str], *, windows_variant: str = "") -> None:
     for template_path, output_path in template_outputs.items():
         template = template_path.read_text(encoding="utf-8-sig")
         if windows_variant:

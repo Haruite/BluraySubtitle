@@ -150,6 +150,12 @@ def application_support_directory() -> Path:
     return application_directory()
 
 
+def macos_application_bundle() -> Path | None:
+    """Finder bundle of the running packaged edition, including renamed installations."""
+    bundle = getattr(sys, "_bluray_macos_app", None)
+    return Path(bundle) if sys.platform == "darwin" and bundle else None
+
+
 def application_location_id() -> str:
     return sha256(os.fsencode(os.path.normcase(str(application_directory())))).hexdigest()[:24]
 

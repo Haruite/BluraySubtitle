@@ -15,6 +15,9 @@ from threading import Lock, Thread
 
 from src.core.app_config import UiPreferences
 
+LOG_COLOR_ENV = "BLURAY_SUBTITLE_LOG_COLOR"
+
+
 if sys.platform == "win32":
     import ctypes
     from ctypes import wintypes
@@ -118,6 +121,7 @@ class ApplicationLog:
         readers: list[Thread] = []
         original_streams = (sys.stdout, sys.stderr)
         output_streams = []
+        previous_color = os.environ.get(LOG_COLOR_ENV)
         try:
             for descriptor, stream in enumerate(original_streams, start=1):
                 if stream is not None:
@@ -146,8 +150,14 @@ class ApplicationLog:
                 output_streams.append(stream)
             sys.stdout = sys.__stdout__ = output_streams[0]
             sys.stderr = sys.__stderr__ = output_streams[1]
+            # Spawned workers inherit the pipe descriptors but recreate their Python streams.
+            os.environ[LOG_COLOR_ENV] = "1" if sys.stderr.accepts_ansi_color else "0"
             yield
         finally:
+            if previous_color is None:
+                os.environ.pop(LOG_COLOR_ENV, None)
+            else:
+                os.environ[LOG_COLOR_ENV] = previous_color
             for stream in output_streams:
                 with suppress(OSError):
                     stream.close()

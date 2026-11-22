@@ -1421,3 +1421,15 @@ setup 检查所选工具的完整构建依赖。Build 缓存 uv 的 CPython 发�
 独立 Actions 工作流复用 Windows 打包 spec，使用 PythonVista 和 CrystalIDE 的 Qt 移植版构建 Windows 7 SP1 x64 兼容包。该工作流重新编译 MKVToolNix、VSEdit、VapourSynth R79、两个 Rust HDR 工具和使用基础 x86-64 指令集的 zsmooth。R79 通过 `CreateFileW` 适配 MSVC 文件系统库对 `CreateFile2` 的调用。兼容包省略依赖新版 Windows 接口的 vs-placebo 和 MKVToolNix 的 DVD IFO 章节读取功能。
 
 标准 x64 包重新打包后通过了共用校验。兼容包在构建机及装有所需更新的 Windows 7 SP1 上通过校验。在虚拟机中验证了 VSEdit 和两个 HDR 命令行工具，使用 zsmooth 生成两帧 VapourSynth 视频，并用合成的 FLAC 和 SRT 样本完成 Matroska 封装、检查、编辑和提取。主窗口在虚拟机的非交互式会话中创建并响应了 Win32 消息。
+
+## macOS 原生打包
+
+2026-11-22
+
+新增适用于 macOS 11 及以上的 Intel 和 Apple 芯片原生包，均包含当前稳定版 Qt 和 Qt 6.6。GUI 与 VapourSynth R79 共用 Python，插件沿用标准 Windows R79 包的清单。Linux 和 macOS 共用一个脚本，按 L-SMASH Works 的源码内容适配 FFmpeg 9 API。各架构的 Mac runner 按组件缓存编译产物，验证 ZIP 后连同校验值和提交记录一起上传。Release 工作流自动附加全部七个程序包。
+
+macOS 版支持访达桌面快捷方式和从程序坞恢复窗口，可用 IINA 预览视频及蓝光播放列表并加载外挂字幕。更新器校验归档和应用签名后替换安装，新版界面启动失败时会恢复旧版。设置布局、更新入口和许可页格式与 Linux 对齐，许可文件按平台分别维护。
+
+在 macOS 和 Linux 上，浅色主题跟随桌面强调色，标题采用所选字号，日志窗口可以独立最小化。后台 FFmpeg 任务的输出颜色也会保留在日志中。在 POSIX 上取消编码时会终止整个编码进程组。
+
+在 Intel 虚拟机的 Big Sur 和 Tahoe 上验证了界面启动、滤镜、编码和封装，其中 Big Sur 使用 Ivy Bridge 处理器模型。Tahoe 还验证了 IINA 原盘预览和更新回退。Linux 侧在 GNOME、Xfce、MATE 和 LXQt 上检查了强调色和日志窗口。

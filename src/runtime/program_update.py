@@ -24,6 +24,12 @@ if sys.platform.startswith("linux") and platform.machine().lower() in {"x86_64",
         else "Server Linux x64 package"
     )
     DIRECT_UPDATE_REQUIREMENT = "Direct updates require the packaged Linux program."
+elif sys.platform == "darwin" and platform.machine() in ("arm64", "x86_64"):
+    from . import macos_update as platform_update
+
+    SERVER_PACKAGE_LABEL = ("Server macOS Apple silicon package" if platform_update.MACOS_ARCHITECTURE == "arm64"
+                            else "Server macOS Intel package")
+    DIRECT_UPDATE_REQUIREMENT = "Direct updates require the packaged macOS application."
 elif (sys.platform == "win32" and sysconfig.get_platform() in {"win-amd64", "win-arm64"}
       and not (getattr(sys, "frozen", False)
                and (Path(sys._MEIPASS) / "compatibility-components.json").is_file())):

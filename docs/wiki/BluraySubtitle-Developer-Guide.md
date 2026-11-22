@@ -10,16 +10,20 @@ Use the [main MPLS and SP definitions](Blu-ray-Disc-Structure.md#main-content-an
 
 ## Runtime and tool builds
 
-[Windows setup](../../setup_windows_environment.ps1) and [Linux setup](../../setup_linux_environment.sh) install the required tools. [`settings.py`](../../src/core/settings.py) defines the default installation paths used by setup. Source runs look for tools when the corresponding path is empty. Desktop setup and the GUI use the same `tools` fields. Relative paths start from the directory containing `config.json`.
+[Windows setup](../../setup_windows_environment.ps1), [Linux setup](../../setup_linux_environment.sh) and [macOS setup](../../setup_macos_environment.sh) install the required tools. [`settings.py`](../../src/core/settings.py) defines the default installation paths used by setup. Source runs look for tools when the corresponding path is empty. Desktop setup and the GUI use the same `tools` fields. Relative paths start from the directory containing `config.json`.
 
 - x264 uses official `master` to build an 8/10-bit CLI. Windows x64 uses MSYS2 UCRT64 and PGO. Windows ARM64 uses CLANGARM64 with NEON.
 - x265 uses the latest official stable tag to build an 8/10/12-bit multilib CLI, with HDR10+ JSON and Dolby Vision RPU input enabled in each core.
-- Windows and Linux install R79 by default. The Windows packages place the R79 wheel and VSPipe under `_internal/Lib/site-packages/vapoursynth`, where VSScript discovers the adjacent bundled interpreter. External VSPipe launches use the selected executable's runtime environment.
+- Windows, Linux and macOS install R79 by default. The Windows packages place the R79 wheel and VSPipe under `_internal/Lib/site-packages/vapoursynth`, where VSScript discovers the adjacent bundled interpreter. External VSPipe launches use the selected executable's runtime environment.
 - Windows ARM64 builds R79 and its plugins with CLANGARM64. R79 uses NEON and enables the I8MM and FHM filter kernels when the CPU and Windows expose the required features. Automatic getnative uses native Python. Both architectures build VSEdit with MSVC and use the Qt runtime installed by PyQt6.
 - Windows packaging uses `-Mode Build` to prepare media tools. This mode includes vs-placebo and enables Vulkan support in L-SMASH Works without probing the build machine's GPU. Desktop setup still probes the local Vulkan device for R79. L-SMASH Works can decode in software.
 - With `-VapourSynthRuntime Classic` on ARM64, Classic, its plugins, and VSEdit use x64 emulation. Automatic getnative then uses the private x64 CPython recorded by Classic setup.
 
 Use the setup scripts as references for custom builds. See [automatic HDR metadata handling](Video-Encoding-and-VapourSynth.md#automatic-hdr-metadata-handling) for parameter requirements and injection fallback.
+
+### macOS builds and publishing
+
+On an Intel or Apple silicon Mac, run `./setup_macos_environment.sh --mode Build` to write the ZIP for that architecture and its verification record to `dist/`. Each native Mac runner caches individual components, verifies the ZIP and uploads it. [macOS package workflow](../../.github/workflows/build-macos-package.yml) · [Release workflow](../../.github/workflows/release-packages.yml)
 
 ### Windows x64 compatibility build
 

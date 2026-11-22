@@ -43,6 +43,7 @@ analysis = Analysis(
         (str(build_commit), "."),
         (str(root / "tools/linux_update.py"), "tools"),
         (str(root / "resource"), "resource"),
+        (str(root / "src/runtime/gtk_appearance_probe.py"), "src/runtime"),
         (str(root / "LICENSE"), "legal"),
         (str(root / "src/core/settings.py"), "src/core"),
         *pycountry_data,

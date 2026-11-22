@@ -5,7 +5,6 @@ import hashlib
 import json
 import os
 import re
-import signal
 import shlex
 import shutil
 import subprocess
@@ -66,6 +65,7 @@ from src.runtime import TaskCancelled, worker_process_context
 from ...core.i18n import translate_text
 from ...exports.utils import (
     run_command,
+    terminate_process_trees,
     run_vspipe,
     print_exc_terminal,
     get_vspipe_environment,
@@ -527,36 +527,6 @@ def _pump_subprocess_stderr_raw(stream) -> None:
             pass
 
 
-def _terminate_encode_processes(processes: tuple[object, ...]) -> None:
-    active = []
-    for process in processes:
-        if process is None or process in active:
-            continue
-        try:
-            if process.poll() is None:
-                if sys.platform == 'win32':
-                    process.terminate()
-                else:
-                    os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-                active.append(process)
-        except Exception:
-            continue
-    for process in active:
-        try:
-            process.wait(timeout=2.0)
-        except subprocess.TimeoutExpired:
-            try:
-                if sys.platform == 'win32':
-                    process.kill()
-                else:
-                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-                process.wait(timeout=2.0)
-            except Exception:
-                pass
-        except Exception:
-            pass
-
-
 def _wait_encode_process(
         process,
         cancel_event: Optional[threading.Event],
@@ -564,7 +534,7 @@ def _wait_encode_process(
 ) -> int:
     while True:
         if cancel_event is not None and cancel_event.is_set():
-            _terminate_encode_processes(process_group)
+            terminate_process_trees(process_group, grace=2.0)
             raise TaskCancelled()
         try:
             return int(process.wait(timeout=0.2))
@@ -627,7 +597,7 @@ def _run_vspipe_piped_encode(
             **popen_kw,
         )
     except Exception:
-        _terminate_encode_processes((p_v,))
+        terminate_process_trees((p_v,), grace=2.0)
         raise
     if p_v.stdout is not None:
         p_v.stdout.close()
@@ -647,7 +617,7 @@ def _run_vspipe_piped_encode(
         rc_e = _wait_encode_process(p_e, cancel_event, process_group)
         rc_v = _wait_encode_process(p_v, cancel_event, process_group)
     except Exception:
-        _terminate_encode_processes(process_group)
+        terminate_process_trees(process_group, grace=2.0)
         raise
     finally:
         for thread in pump_threads:
@@ -706,7 +676,7 @@ def _run_vspipe_svt_win_tempfile_encode(
                     (p_v,),
                 )
             except Exception:
-                _terminate_encode_processes((p_v,))
+                terminate_process_trees((p_v,), grace=2.0)
                 raise
             stderr_file.seek(0)
             vspipe_stderr = stderr_file.read()
@@ -736,7 +706,7 @@ def _run_vspipe_svt_win_tempfile_encode(
                     (p_e,),
                 )
             except Exception:
-                _terminate_encode_processes((p_e,))
+                terminate_process_trees((p_e,), grace=2.0)
                 raise
             stderr_file.seek(0)
             encoder_stderr = stderr_file.read()

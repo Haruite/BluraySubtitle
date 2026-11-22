@@ -1424,3 +1424,15 @@ Setup checks the dependencies for full-feature tool builds. Build caches the uv 
 The dedicated Actions workflow builds a Windows 7 SP1 x64 package with PythonVista and CrystalIDE's Qt backport through the shared Windows package spec. It rebuilds MKVToolNix, VSEdit, VapourSynth R79, the Rust HDR tools and baseline x86-64 zsmooth. R79 resolves the MSVC filesystem library's `CreateFile2` import through a `CreateFileW` adapter. The package omits vs-placebo and MKVToolNix's DVD IFO chapter reader because their dependencies import newer Windows APIs.
 
 The standard x64 package passed the shared verification after rebuilding. The compatibility archive passed on the build host and on Windows 7 SP1 with the required updates. The guest verified VSEdit and both HDR CLIs, generated two VapourSynth frames with zsmooth, and muxed, inspected, edited and extracted a synthetic FLAC and SRT Matroska sample. The main window was created and responded to a Win32 message in the noninteractive guest session.
+
+## Native macOS packages
+
+2026-11-22
+
+Added native Intel and Apple silicon packages targeting macOS 11 and later. Both include the current Qt release and Qt 6.6. The GUI and VapourSynth R79 share a Python runtime and use the standard Windows R79 plugin list. Linux and macOS share a script that adapts L-SMASH Works source code to the FFmpeg 9 API. Each Mac runner caches compiled components individually, verifies its ZIP and uploads it with a checksum and commit record. The Release workflow attaches all seven platform packages.
+
+The macOS application supports Finder desktop shortcuts, reopening from the Dock, and video and Blu-ray playlist previews in IINA with external subtitles. The updater verifies the archive and application signature before replacing the bundle and restores the previous version if the new GUI fails to start. Settings, update controls and the notices page follow the Linux layout, with separate notices for each platform.
+
+On macOS and Linux, light mode picks up the desktop accent, titles follow the selected font size, and the log window can be minimized independently. Background FFmpeg jobs retain their output colors in the log. On POSIX, cancelling an encode terminates its process group.
+
+Intel tests on Big Sur and Tahoe covered GUI startup, filtering, encoding and remuxing. The Big Sur VM used an Ivy Bridge CPU model. Tahoe tests also covered IINA playback from a Blu-ray source and update rollback. Desktop accent colors and log windows were checked on GNOME, Xfce, MATE and LXQt.

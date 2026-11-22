@@ -13,6 +13,8 @@
 | `BluraySubtitle_windows_arm64.7z` | Windows 10 ARM64（整包接口下限 1903）或 Windows 11 ARM64 | 支持 NEON 和 Armv8.1 LSE 原子指令（包括 `CASAL`）的 64 位 Arm 处理器。 |
 | `BluraySubtitle_linux_x64.tar.xz` | 64 位 x86 Linux（x86-64），已验证的内核下限为 3.17 | 完整支持 x86-64-v3，例如 Intel Core Haswell 或 AMD Zen。在 x86-64-v2 基础上需要 AVX、AVX2、BMI1/2、F16C、FMA、LZCNT、MOVBE、OSXSAVE 及操作系统启用的 AVX 寄存器状态。 |
 | `BluraySubtitle_linux_arm64.tar.xz` | 64 位 AArch64 Linux，已验证的内核下限为 3.17 | 支持浮点和 NEON 的 Armv8-A 处理器，实测基线为 Cortex-A53。 |
+| `BluraySubtitle_macos_x64.zip` | macOS 11 Big Sur 及以上 | Big Sur 支持的 Intel Mac。以 2013 年末 Mac Pro 使用的 Ivy Bridge 为指令集基线。 |
+| `BluraySubtitle_macos_arm64.zip` | macOS 11 Big Sur 及以上 | Apple M1 或更新的 Apple 芯片。 |
 
 两个 ARM64 包的 NLM 滤镜都使用 128 位 NEON，可在没有 SVE 的处理器上运行。
 
@@ -31,6 +33,10 @@ ARM64 包中的 `ffmpeg.exe` 和 `ffprobe.exe` 启动时还要从原生 `avicap3
 Windows 7 SP1 须安装 [KB3063858](https://github.com/adang1345/PythonVista#readme) 或提供相同 DLL 搜索接口的替代更新，以及 [KB2670838 平台更新](https://www.microsoft.com/en-us/download/details.aspx?id=36805)和 [KB2999226 通用 C 运行库更新](https://www.microsoft.com/en-us/download/details.aspx?id=49093)。Windows 8 和 8.1 须安装各自对应的通用 C 运行库更新。安装更新后重启 Windows。[微软通用 C 运行库下载](https://support.microsoft.com/en-us/servicing/os/windows/2020/04/update-for-universal-c-runtime-in-windows)
 
 从[最新构建下载目录](https://sbx.mysmy.top/tools/BluraySubtitle/)获取 `BluraySubtitle_windows_x64_compat.7z` 和对应的校验文件。调用 `core.placebo` 的 VapourSynth 脚本需要另行安装兼容的插件。随包的 MKVToolNix 省略 DVD IFO 章节导入。运行时源码与构建入口见[兼容版构建](BluraySubtitle-Developer-Guide.zh-Hans.md#windows-x64-兼容版构建)。
+
+## macOS 运行环境
+
+每个架构的应用包都包含 Qt 6.6 和当前稳定版 Qt。启动器根据系统版本自动选择。从“应用程序”打开解压后的应用。如需一键更新，将应用放在当前账户可替换它的目录，例如 `~/Applications/`。配置保存在 `~/Library/Application Support/BluraySubtitle/`。视频和蓝光播放列表预览可使用外部 IINA，播放器的系统要求由 IINA 版本决定。[Apple 的 Big Sur 兼容机型](https://support.apple.com/103111) · [IINA 下载与系统要求](https://iina.io/download/)
 
 ## Linux 运行环境
 
@@ -54,6 +60,8 @@ Windows 7 SP1 须安装 [KB3063858](https://github.com/adang1345/PythonVista#rea
 ## 源码安装脚本
 
 **Windows**　`setup_windows_environment.ps1` 支持 x64 版 Windows 10 1909 及以上、带桌面体验的 x64 Windows Server 2019 及以上，以及 ARM64 版 Windows 11 及以上。请使用 64 位 PowerShell。默认安装 VapourSynth R79，可用 `-VapourSynthRuntime Classic` 选择 Classic。ARM64 的 Classic 使用独立的 x64 Python、插件和 VSEdit。
+
+**macOS** 安装 Apple 命令行工具后，在原生 Intel 或 Apple 芯片环境中运行 `./setup_macos_environment.sh`。源码启动器位于 `~/Library/Application Support/BluraySubtitle/Runtime/bin/BluraySubtitle`。多个系统共用源码目录时，可在安装前设置 `BLURAY_SUBTITLE_CONFIG_DIR`，让 Mac 启动器使用独立配置。
 
 **Linux**　`setup_linux_environment.sh` 支持原生 x64 或 ARM64 的 Ubuntu、Debian 及其 APT 衍生版。脚本检查已安装的软件包和已配置的软件源，包括 backports。非 LTS 版与滚动发行版按相同条件判断。
 

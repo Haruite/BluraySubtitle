@@ -63,6 +63,9 @@ def current_commit() -> CommitInfo | None:
         if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
             path = Path(sys._MEIPASS) / BUILD_COMMIT_FILENAME
             record = path.read_text(encoding="utf-8")
+        elif sys.platform == "darwin" and getattr(sys, "_bluray_macos_runtime", None) and (
+                path := Path(__file__).resolve().parents[2] / BUILD_COMMIT_FILENAME).is_file():
+            record = path.read_text(encoding="utf-8")
         else:
             project_root = Path(__file__).resolve().parents[2]
             if not (project_root / ".git").exists():

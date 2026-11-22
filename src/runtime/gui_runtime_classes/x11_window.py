@@ -3,6 +3,7 @@
 import atexit
 import os
 from ctypes import CDLL, c_char_p, c_int, c_ulong, c_void_p
+from ctypes.util import find_library
 from functools import cache
 
 from PyQt6.QtCore import QStandardPaths, Qt
@@ -12,7 +13,7 @@ from PyQt6.QtWidgets import QApplication, QWidget
 @cache
 def _x11_connection() -> tuple[CDLL, int] | None:
     try:
-        x11 = CDLL("libX11.so.6")
+        x11 = CDLL(find_library("X11") or "libX11.so.6")
     except OSError:
         return None
     for name, arguments, result in (

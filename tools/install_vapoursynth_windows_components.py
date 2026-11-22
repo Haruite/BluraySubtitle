@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from src.core.i18n import translate_text
 from tools import build_vsedit_windows as vsedit_build
-from tools.vapoursynth_plugin_releases import SOURCES, resolve_releases
+from tools.vapoursynth_plugin_releases import LEGACY_SOURCE_KEYS, R79_PLUGIN_NAMESPACES, SOURCES, resolve_releases
 from tools.vapoursynth_plugin_versions import fallback_version, normalize_version, record_version, version_satisfies
 from tools.vulkan_device import vulkan_device_available
 from tools.windows_build_cache import files_under, publish as publish_build_cache, restore as restore_build_cache
@@ -78,36 +78,33 @@ class Component:
     data_files: tuple[str, ...] = ()
 
 
-LEGACY_SOURCE_KEYS = {"eedi3": "legacy-filters", "misc": "legacy-filters"}
-
-
-def upstream_component(key, filename, namespace, recipe="meson", asset="", **options):
+def upstream_component(key, filename, recipe="meson", asset="", **options):
     repository = SOURCES[LEGACY_SOURCE_KEYS.get(key, key)].repository
-    return Component(key, repository, "", filename, namespace, recipe, asset, **options)
+    return Component(key, repository, "", filename, R79_PLUGIN_NAMESPACES[key], recipe, asset, **options)
 
 
 COMPONENTS = (
-    upstream_component("descale", "descale.dll", "descale", asset=r"amd64[.]zip$"),
-    upstream_component("addgrain", "addgrain.dll", "grain", asset=r"win64[.]7z$"),
-    upstream_component("assrender", "assrender.dll", "assrender", "assrender"),
-    upstream_component("bilateral", "bilateral.dll", "bilateral", "configure"),
-    upstream_component("dfttest", "dfttest.dll", "dfttest", asset=r"[.]7z$"),
-    upstream_component("eedi2", "eedi2.dll", "eedi2", asset=r"[.]7z$"),
-    upstream_component("eedi3m", "eedi3m.dll", "eedi3m", asset=r"win64.*[.](?:7z|zip)$"),
-    upstream_component("znedi3", "znedi3.dll", "znedi3", "znedi3", data_files=("nnedi3_weights.bin",)),
-    upstream_component("fmtconv", "fmtconv.dll", "fmtc", "autotools"),
-    upstream_component("lsmas", "libvslsmashsource.dll", "lsmas", "lsmash", fallback_ref="ae51313"),
-    upstream_component("sangnom", "vs_sangnommod.dll", "sangnom", "configure", r"[.]zip$"),
-    upstream_component("placebo", "libvs_placebo.dll", "placebo"),
-    upstream_component("nlm_ispc", "vsnlm_ispc.dll", "nlm_ispc", "cmake", r"windows-x64.*[.]7z$"),
-    upstream_component("zsmooth", "zsmooth.dll", "zsmooth", "zig", r"zsmooth(?:[.]avx2[.]dll|-x86_64-windows)[.]zip$"),
-    upstream_component("mvtools", "mvtools.dll", "mv", asset=r"win64[.]7z$"),
-    upstream_component("removegrain", "RemoveGrainVS.dll", "rgvs", "removegrain", r"win64.*[.](?:zip|7z)$"),
+    upstream_component("descale", "descale.dll", asset=r"amd64[.]zip$"),
+    upstream_component("addgrain", "addgrain.dll", asset=r"win64[.]7z$"),
+    upstream_component("assrender", "assrender.dll", "assrender"),
+    upstream_component("bilateral", "bilateral.dll", "configure"),
+    upstream_component("dfttest", "dfttest.dll", asset=r"[.]7z$"),
+    upstream_component("eedi2", "eedi2.dll", asset=r"[.]7z$"),
+    upstream_component("eedi3m", "eedi3m.dll", asset=r"win64.*[.](?:7z|zip)$"),
+    upstream_component("znedi3", "znedi3.dll", "znedi3", data_files=("nnedi3_weights.bin",)),
+    upstream_component("fmtconv", "fmtconv.dll", "autotools"),
+    upstream_component("lsmas", "libvslsmashsource.dll", "lsmash", fallback_ref="ae51313"),
+    upstream_component("sangnom", "vs_sangnommod.dll", "configure", r"[.]zip$"),
+    upstream_component("placebo", "libvs_placebo.dll"),
+    upstream_component("nlm_ispc", "vsnlm_ispc.dll", "cmake", r"windows-x64.*[.]7z$"),
+    upstream_component("zsmooth", "zsmooth.dll", "zig", r"zsmooth(?:[.]avx2[.]dll|-x86_64-windows)[.]zip$"),
+    upstream_component("mvtools", "mvtools.dll", asset=r"win64[.]7z$"),
+    upstream_component("removegrain", "RemoveGrainVS.dll", "removegrain", r"win64.*[.](?:zip|7z)$"),
 )
 R79_ADDITIONAL_COMPONENTS = (
-    upstream_component("eedi3", "EEDI3.dll", "eedi3", "legacy-core"),
-    upstream_component("misc", "MiscFilters.dll", "misc", "legacy-core"),
-    upstream_component("vivtc", "VIVTC.dll", "vivtc", "legacy-core"),
+    upstream_component("eedi3", "EEDI3.dll", "legacy-core"),
+    upstream_component("misc", "MiscFilters.dll", "legacy-core"),
+    upstream_component("vivtc", "VIVTC.dll", "legacy-core"),
 )
 EDITOR = Component("vsedit", "YomikoR/VapourSynth-Editor", "", "vsedit.exe", "")
 PROBE = r"""

@@ -25,7 +25,7 @@ BluraySubtitle is a cross-platform GUI tool for Blu-ray workflows. It brings the
 
 ### Interface and settings
 
-- The interface supports English and Simplified Chinese, with Light, Dark, and Colorful themes and adjustable opacity.
+- The interface supports English and Simplified Chinese. Light mode follows the desktop accent color. Dark and Colorful have their own palettes. Opacity is adjustable on supported desktops.
 - Scroll the page vertically and drag the handle below each table to resize it.
 - **Settings** manages general options, fonts, paths, startup defaults, and external tools. Open **Tools** to check for updates or create launch shortcuts.
 - Interactive controls and editable cells have a highlighted border. Hover over an editable cell for a tooltip. Double-click a read-only cell for a message that its contents can only be copied.
@@ -88,7 +88,7 @@ Additional packages depend on the features you use.
 - `Pillow` is used for automatic getnative and other image processing.
 - Optionally install `psutil` so automatic getnative can use the available memory when the system cannot report it directly.
 - `matplotlib` is needed for plots when a custom VPy uses `muvsfunc.getnative()`.
-- `PyInstaller` is needed to build distributable packages.
+- Windows and Linux packages use `PyInstaller`.
 
 ### External tools
 
@@ -228,6 +228,10 @@ pyinstaller BluraySubtitle_windows_x64.spec
 ```powershell
 pyinstaller BluraySubtitle_windows_arm64.spec
 ```
+
+### `setup_macos_environment.sh` (macOS environment setup)
+
+Install the Apple Command Line Tools, then run `./setup_macos_environment.sh` from the repository root to set up the source environment. To build a package for the current architecture, run `./setup_macos_environment.sh --mode Build`.
 
 ### `setup_linux_environment.sh` (Linux runtime environment)
 

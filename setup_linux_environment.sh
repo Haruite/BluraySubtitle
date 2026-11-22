@@ -2725,62 +2725,7 @@ install_vs_lsmash_works() (
     download_source_archive "L-SMASH-Works $lsmash_version" "$source_url" L-SMASH-Works || exit 1
     cd L-SMASH-Works/VapourSynth || exit 1
 
-    if (( avcodec_major >= 63 )) && grep -Fq 'parser_ctx->parser->split' ../common/lwindex.c; then
-      # FFmpeg 9 removes AVCodec.pix_fmts and the legacy parser split callback.
-      patch -d .. -p1 --batch --forward --fuzz=0 <<'LSMASH_FFMPEG_PATCH' || exit 1
-diff --git a/common/lwindex.c b/common/lwindex.c
---- a/common/lwindex.c
-+++ b/common/lwindex.c
-@@ -1106,2 +1106,3 @@
-             /* Set up bitstream filter if needed. */
-+#if LIBAVCODEC_VERSION_MAJOR < 63
-             if (codecpar->codec_id == AV_CODEC_ID_H264
-@@ -1116,3 +1117,5 @@
-                     return NULL;
--            } else if (codecpar->codec_id == AV_CODEC_ID_AAC && stream->nb_frames == 0)
-+            } else
-+#endif
-+            if (codecpar->codec_id == AV_CODEC_ID_AAC && stream->nb_frames == 0)
-                 /* To generate and export AudioSpecificConfig as an extradata from ADTS header. */
-@@ -1220,2 +1223,3 @@
-
-+#if LIBAVCODEC_VERSION_MAJOR < 63
- #define IF_START_CODE(ptr) if ((ptr)[0] == 0x00 && (ptr)[1] == 0x00 && (ptr)[2] == 0x01)
-@@ -1270,2 +1274,4 @@
-
-+#endif
-+
- static int append_extradata_if_new(lwindex_helper_t* helper, AVCodecContext* ctx, AVPacket* pkt)
-@@ -1290,2 +1296,3 @@
-         if (parser_ctx && parser_ctx->parser) {
-+#if LIBAVCODEC_VERSION_MAJOR < 63
-             if (parser_ctx->parser->split) {
-@@ -1307,3 +1314,5 @@
-                     return list->current_index;
--            } else if (helper->bsf && ctx->codec_id == AV_CODEC_ID_AAC) {
-+            } else
-+#endif
-+            if (helper->bsf && ctx->codec_id == AV_CODEC_ID_AAC) {
-                 /* Try to generate AudioSpecificConfig for each ADTS AAC frame by reopening the bitstream filter.
-diff --git a/common/lwlibav_video.c b/common/lwlibav_video.c
---- a/common/lwlibav_video.c
-+++ b/common/lwlibav_video.c
-@@ -1149,4 +1149,11 @@
-     assert(codecpar && codec);
--    if (codec->pix_fmts)
--        codecpar->format = (int)avcodec_find_best_pix_fmt_of_list(codec->pix_fmts, pix_fmt, 1, NULL);
-+    const void* pix_fmts = NULL;
-+#if LIBAVCODEC_VERSION_MAJOR >= 63
-+    if (avcodec_get_supported_config(NULL, codec, AV_CODEC_CONFIG_PIX_FORMAT, 0, &pix_fmts, NULL) < 0)
-+        pix_fmts = NULL;
-+#else
-+    pix_fmts = codec->pix_fmts;
-+#endif
-+    if (pix_fmts)
-+        codecpar->format = (int)avcodec_find_best_pix_fmt_of_list(pix_fmts, pix_fmt, 1, NULL);
-     else
-LSMASH_FFMPEG_PATCH
-    fi
+    /usr/bin/python3 -B "$SETUP_ROOT/tools/lsmash_ffmpeg_compat.py" .. "$avcodec_major" || exit 1
     rm -rf build
     tmux_run "L-SMASH-Works meson setup" meson setup build || exit 1
     tmux_run "L-SMASH-Works ninja" ninja -C build || exit 1
@@ -3195,7 +3140,7 @@ install_vs_mvtools() (
 install_vs_build_dependencies() {
   local deps=(
     build-essential git wget tar unzip sed
-    meson ninja-build cmake patch libass-dev
+    meson ninja-build cmake libass-dev
     autoconf automake libtool pkg-config
     libxxhash-dev libfftw3-dev
     python3 python3-pip
@@ -3244,7 +3189,7 @@ build_vs_plugins() {
   if (( avcodec_major < 61 )); then
     die "$(msg "L-SMASH Works requires FFmpeg 7 or later (libavcodec >= 61, found $avcodec_major)" "L-SMASH Works 需要 FFmpeg 7 或更高版本（libavcodec 至少为 61，当前为 $avcodec_major）")"
   fi
-  cached_linux_build lsmash-works install_vs_lsmash_works files "$vapoursynth_cache_abi $lsmash_source $lsmash_abi" \
+  cached_linux_build lsmash-works install_vs_lsmash_works files "$vapoursynth_cache_abi $lsmash_source $lsmash_abi $(sha256sum < "$SETUP_ROOT/tools/lsmash_ffmpeg_compat.py")" \
     "$plugins_dir/libvslsmashsource.so" -- "$build_dir" "$plugins_dir" "$lsmash_tag" "$lsmash_source" "$avcodec_major"
   cached_linux_build eedi3m install_vs_eedi3m files "$vapoursynth_cache_abi ${vs_plugin_tags[eedi3m]}" \
     "$plugins_dir/eedi3m.so" -- "$build_dir" "$plugins_dir"

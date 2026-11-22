@@ -1,0 +1,15 @@
+name: Publish BluraySubtitle macOS Intel
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    uses: ./.github/workflows/build-macos-package.yml
+    with:
+      architecture: x64
+    secrets: inherit

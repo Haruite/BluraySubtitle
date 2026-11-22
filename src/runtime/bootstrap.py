@@ -5,11 +5,12 @@ import sys
 from contextlib import suppress
 from pathlib import Path
 
-from PyQt6.QtCore import QStandardPaths, QTimer
+from PyQt6.QtCore import QStandardPaths, Qt, QTimer
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication, QMessageBox, QStyle
 
 from src.core.version import APP_TITLE, current_commit
+from src.core.app_config import macos_application_bundle
 from src.core.i18n import translate_text
 from src.exports.utils import print_terminal_line
 
@@ -19,6 +20,32 @@ from .gui_runtime_classes.bluray_subtitle_gui_entry import BluraySubtitleGUI
 from .gui_runtime_classes.widget_animations import AnimatedMessageBox, enable_combo_animation
 from .gui_runtime_classes.x11_window import set_x11_window_identity
 from .instance_activation import InstanceActivation
+
+def _macos_menu_bar(window: BluraySubtitleGUI):
+    from PyQt6.QtGui import QAction
+    from PyQt6.QtWidgets import QMenuBar
+
+    # A parentless Cocoa menu bar also remains available when the window is hidden.
+    bar = QMenuBar()
+    menu = bar.addMenu(window.t("Window"))
+    for title, role, callback in (
+        ("Third-party notices", QAction.MenuRole.AboutRole, window._open_third_party_notices_dialog),
+        ("Settings", QAction.MenuRole.PreferencesRole, window._show_settings_dialog),
+        ("Exit", QAction.MenuRole.QuitRole, window._exit_application),
+    ):
+        action = QAction(window.t(title), menu)
+        action.setMenuRole(role)
+        action.triggered.connect(callback)
+        menu.addAction(action)
+    show = menu.addAction(window.t("Show main window"), window._restore_from_tray)
+
+    def translate_menu():
+        menu.setTitle(window.t("Window"))
+        show.setText(window.t("Show main window"))
+
+    window.language_combo.currentIndexChanged.connect(translate_menu)
+    return bar
+
 
 def run_src_entry(application_log: ApplicationLog | None = None) -> None:
     frozen = getattr(sys, "frozen", False)
@@ -40,6 +67,18 @@ def run_src_entry(application_log: ApplicationLog | None = None) -> None:
     app = QApplication.instance() or QApplication(sys.argv)
     if not desktop_id and supports_desktop_entries():
         desktop_id = desktop_entry_id()
+    ready_file = update_error = ""
+    update_guard = None
+    if frozen and sys.platform.startswith("linux"):
+        from .linux_update import update_in_progress as update_guard
+    elif macos_application_bundle():
+        from .macos_update import update_in_progress as update_guard
+    if update_guard:
+        ready_file = os.environ.pop("BLURAY_SUBTITLE_UPDATE_READY", "")
+        update_error = os.environ.pop("BLURAY_SUBTITLE_UPDATE_ERROR", "")
+        if not (ready_file or update_error) and update_guard():
+            QMessageBox.warning(None, APP_TITLE, translate_text("An update is already running for this installation."))
+            return
     instance = None
     try:
         instance = InstanceActivation(app)
@@ -54,17 +93,6 @@ def run_src_entry(application_log: ApplicationLog | None = None) -> None:
             translate_text("Could not start local instance detection. {error}").format(error=error),
             translate=False,
         )
-    ready_file = update_error = ""
-    if frozen and sys.platform.startswith("linux"):
-        from .linux_update import update_in_progress
-
-        ready_file = os.environ.pop("BLURAY_SUBTITLE_UPDATE_READY", "")
-        update_error = os.environ.pop("BLURAY_SUBTITLE_UPDATE_ERROR", "")
-        if not (ready_file or update_error) and update_in_progress():
-            if instance is not None:
-                instance.release()
-            QMessageBox.warning(None, APP_TITLE, translate_text("An update is already running for this installation."))
-            return
     if desktop_id and not desktop_entry:
         # Let Qt's queued portal check skip registration before assigning the window ID.
         app.processEvents()
@@ -74,12 +102,25 @@ def run_src_entry(application_log: ApplicationLog | None = None) -> None:
     enable_combo_animation()
     app.setWindowIcon(QIcon(str(application_icon_path())))
     window = BluraySubtitleGUI(application_log)
+    if app.platformName() == "cocoa":
+        app.setApplicationDisplayName("BluraySubtitle")
+        window._macos_menu = _macos_menu_bar(window)
     if instance is not None:
         instance.activation_requested.connect(window._restore_from_tray)
         app.aboutToQuit.connect(instance.release)
     if desktop_id:
         set_x11_window_identity(window, desktop_id)
     window.show()
+    if sys.platform == "darwin":
+        gui_ready = os.environ.pop("BLURAY_SUBTITLE_GUI_READY", "")
+        ready_file = ready_file or gui_ready
+        # Cocoa delivers a forced activation for Dock and Finder reopens, including
+        # when the red close button has previously hidden the window in the menu bar.
+        def restore_hidden_window(state):
+            if state == Qt.ApplicationState.ApplicationActive and not window.isVisible() and not window._close_pending:
+                window._restore_from_tray()
+
+        app.applicationStateChanged.connect(restore_hidden_window)
     if ready_file:
         QTimer.singleShot(0, lambda: Path(ready_file).touch())
     if update_error:

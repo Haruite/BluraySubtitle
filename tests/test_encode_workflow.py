@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import os
+import select
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -11,6 +14,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from src.core.tool_paths import default_tool_paths, using_tool_paths
+from src.exports.utils import terminate_process_trees
 from src.runtime.encode import EncodeRequest, EncodeRow, EncodeSettings, validate_encode_request
 from src.runtime.encode_results import (
     EncodeBatchResult,
@@ -377,6 +381,28 @@ class EncodeWorkflowTests(unittest.TestCase):
             report_text = Path(result.rows[0].report_path).read_text(encoding='utf-8')
             self.assertIn('simulated encoder failure', report_text)
             self.assertIn(result.rows[0].artifact_paths[0], report_text)
+
+    @unittest.skipUnless(os.name == 'posix', 'Requires POSIX process groups')
+    def test_cancellation_closes_the_output_of_a_wrapped_encoder(self) -> None:
+        encoder = (
+            "import signal, time\n"
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "print('ready', flush=True)\n"
+            "time.sleep(5)"
+        )
+        launcher = (
+            "import subprocess, sys, time\n"
+            "subprocess.Popen([sys.executable, '-c', sys.argv[1]])\n"
+            "time.sleep(5)"
+        )
+        with subprocess.Popen([sys.executable, '-c', launcher, encoder],
+                              start_new_session=True, stdout=subprocess.PIPE) as process:
+            self.assertTrue(select.select([process.stdout], [], [], 3)[0])
+            self.assertEqual(process.stdout.readline(), b'ready\n')
+            terminate_process_trees((process,), grace=0.1)
+            # A surviving encoder keeps its inherited output open.
+            self.assertTrue(select.select([process.stdout], [], [], 1)[0])
+            self.assertEqual(process.stdout.read(1), b'')
 
     def test_cancellation_stops_later_rows_without_converting_it_to_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

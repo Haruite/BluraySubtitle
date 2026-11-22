@@ -25,7 +25,7 @@ BluraySubtitle 是一个跨平台的蓝光流程 GUI 工具。它将以下五类
 
 ### 界面与设置
 
-- 语言支持英文／简体中文，有浅色、深色、彩色三种主题，支持透调节明度。
+- 界面支持英文和简体中文。浅色模式跟随桌面强调色，深色和彩色模式使用各自的配色。支持窗口透明度的桌面还可以调节不透明度。
 - 页面可纵向滚动，拖动表格底部调节条可调整高度。
 - **设置**管理常规选项、字体、路径、启动默认值和外部工具。在**工具**页可检查更新或创建启动快捷方式。
 - 所有可以互动的控件、可以编辑的单元格外围有一圈加强线，可编辑单元格悬浮有气泡提示，不可编辑单元格双击提示只可复制。
@@ -87,7 +87,7 @@ python -m pip install PyQt6 numpy soundfile pycountry
 - `Pillow` 用于自动 getnative 等图像处理。
 - 系统无法直接报告可用内存时，可以安装 `psutil`，让自动 getnative 按可用内存设置并发数。
 - 自定义 VPy 调用 `muvsfunc.getnative()` 绘图时需要 `matplotlib`。
-- 自行打包时需要 `PyInstaller`。
+- Windows 和 Linux 打包使用 `PyInstaller`。
 
 ### 外部工具
 
@@ -227,6 +227,10 @@ pyinstaller BluraySubtitle_windows_x64.spec
 ```powershell
 pyinstaller BluraySubtitle_windows_arm64.spec
 ```
+
+### setup_macos_environment.sh（macOS 环境配置脚本）
+
+安装 Apple 命令行工具后，在仓库根目录运行 `./setup_macos_environment.sh` 配置源码运行环境。运行 `./setup_macos_environment.sh --mode Build` 可为当前架构打包。
 
 ### setup_linux_environment.sh（Linux 运行环境脚本）
 

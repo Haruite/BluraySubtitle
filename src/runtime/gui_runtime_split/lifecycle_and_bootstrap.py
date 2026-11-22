@@ -26,7 +26,7 @@ from src.core.app_config import FUNCTION_PAGE_IDS, app_config_path, default_app_
 from src.core.i18n import translate_text
 from src.core.tool_paths import active_tool_paths, resolve_tool_paths
 import src.core.settings as core_settings
-from src.exports.utils import print_exc_terminal
+from src.exports.utils import print_exc_terminal, third_party_notices_markdown_path
 from src.runtime.application_log import ApplicationLog
 from src.runtime.gui_runtime_classes.application_log_dialog import ApplicationLogDialog
 from src.runtime.gui_runtime_classes.custom_box import CustomBox
@@ -39,12 +39,14 @@ from src.runtime.gui_runtime_classes.startup_update_notice import StartupUpdateN
 from src.runtime.gui_runtime_classes.scan_progress_dialog import ScanProgressDialog
 from src.runtime.gui_runtime_classes.widget_animations import AnimatedMessageBox, animate_window_close, cancel_window_close
 from src.runtime.gui_runtime_classes.window_background import WindowBackground
+from src.runtime.gui_runtime_classes.window_caption import prepare_window_caption
 from .gui_base import BluraySubtitleGuiBase
 
 
 class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
     def __init__(self, application_log: ApplicationLog | None = None):
         super().__init__()
+        prepare_window_caption(self)
         self.setObjectName('mainWindow')
         self._application_log = application_log
         self._log_dialog = None
@@ -192,7 +194,8 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.third_party_notices_btn = QPushButton(self.t('Third-party notices'), language_row)
         self.third_party_notices_btn.clicked.connect(lambda _=None: self._open_third_party_notices_dialog())
         self.third_party_notices_btn.setVisible(
-            bool(getattr(sys, 'frozen', False)) and hasattr(sys, '_MEIPASS')
+            (sys.platform == 'darwin' and bool(third_party_notices_markdown_path(self._language_code)))
+            or (bool(getattr(sys, 'frozen', False)) and hasattr(sys, '_MEIPASS'))
         )
         language_layout.addWidget(self.third_party_notices_btn)
         language_layout.addStretch(1)
@@ -878,23 +881,25 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
             # Native moves do not suppress QDialog's automatic placement on show.
             self._restore_saved_window_geometry(self._log_dialog, self._app_config.window.log_geometry)
         self._apply_window_opacity(self._log_dialog)
-        if self._log_dialog.isMinimized():
-            self._log_dialog.setWindowState(
-                self._log_dialog.windowState() & ~Qt.WindowState.WindowMinimized
-            )
-        self._log_dialog.show()
-        self._log_dialog.raise_()
-        self._log_dialog.activateWindow()
+        self._present_window(self._log_dialog)
+
+    @staticmethod
+    def _present_window(window: QWidget) -> None:
+        if window.isMinimized():
+            window.setWindowState(window.windowState() & ~Qt.WindowState.WindowMinimized)
+        elif (QApplication.platformName().startswith('wayland') and window.isVisible()
+              and not window.isActiveWindow()):
+            # xdg-shell does not report minimization. Remap on an explicit request to reopen.
+            window.hide()
+        window.show()
+        window.raise_()
+        window.activateWindow()
 
     def _restore_from_tray(self) -> None:
         if self._close_pending:
             return
         cancel_window_close(self)
-        if self.isMinimized():
-            self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
-        self.show()
-        self.raise_()
-        self.activateWindow()
+        self._present_window(self)
 
     def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick):

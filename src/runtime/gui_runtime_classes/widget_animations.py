@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import QApplication, QDialog, QGraphicsOpacityEffect, QInpu
 
 from .desktop_appearance import desktop_appearance
 from .x11_window import x11_compositing_active
+from .window_caption import prepare_window_caption
 
 
 def enable_combo_animation() -> None:
@@ -138,7 +139,7 @@ def _window_fade(window: QWidget) -> _WindowFade | None:
 
 def supports_window_opacity() -> bool:
     platform = QApplication.platformName()
-    return platform == "windows" or (platform == "xcb" and x11_compositing_active())
+    return platform in ("windows", "cocoa") or (platform == "xcb" and x11_compositing_active())
 
 
 def _has_translucent_client(window: QWidget, handle: QWindow) -> bool:
@@ -225,6 +226,7 @@ def window_opacity(window: QWidget) -> float:
 class DialogFade:
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
+        prepare_window_caption(self)
         platform = QApplication.platformName()
         if platform.startswith("wayland") or (platform == "xcb" and x11_compositing_active()):
             # Request an alpha buffer before the native window is created, then fade the client area.

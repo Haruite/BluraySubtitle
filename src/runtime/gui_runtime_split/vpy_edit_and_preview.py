@@ -846,7 +846,7 @@ class VpyEditPreviewMixin(BluraySubtitleGuiBase):
             inherited = os.environ if is_bundled_tool(vsedit_exe) else system_tool_environment()
             for name, value in inherited.items():
                 environment.insert(name, value)
-            if bundle_directory():
+            if is_bundled_tool(vsedit_exe):
                 for variable in ('QT_PLUGIN_PATH', 'QT_QPA_PLATFORM_PLUGIN_PATH', 'QML2_IMPORT_PATH', 'QML_IMPORT_PATH'):
                     environment.remove(variable)
             plugin_path = tool_path("PLUGIN_PATH")

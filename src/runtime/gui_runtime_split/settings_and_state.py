@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import replace
 
-from PyQt6.QtCore import QByteArray, QTimer
+from PyQt6.QtCore import QByteArray, QThread, QTimer
 from PyQt6.QtWidgets import QComboBox, QWidget
 
 from src.core.app_config import AppConfig, UiPreferences, WindowPreferences, save_app_config
@@ -206,6 +206,8 @@ class SettingsStateMixin(BluraySubtitleGuiBase):
         )
 
     def _start_program_update(self, package: UpdatePackage) -> None:
+        if any(thread.isRunning() for thread in self.findChildren(QThread)):
+            raise RuntimeError(self.t("Finish or cancel the running task before updating."))
         start_program_update(package)
         QTimer.singleShot(0, self._exit_application)
 

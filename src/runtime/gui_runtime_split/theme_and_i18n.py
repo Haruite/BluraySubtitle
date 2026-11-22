@@ -2,16 +2,15 @@
 from PyQt6.QtCore import QLibraryInfo, QRectF, Qt, QTranslator
 from PyQt6.QtGui import QColor, QFont, QFontDatabase, QPainter, QPainterPath, QPalette, QPen
 from PyQt6.QtWidgets import QApplication, QLabel, QTabBar, QWidget, QPlainTextEdit, QTextEdit, QLineEdit, QGroupBox, \
-    QComboBox, QProxyStyle, QStyle, QTableWidget
+    QComboBox, QDialogButtonBox, QProxyStyle, QStyle, QTableWidget
 
 from src.core import APP_TITLE
 import src.core.settings as core_settings
 from src.core.i18n import translate_text
 from src.runtime.gui_runtime_classes.custom_table_widget import editable_table_border_color
-from src.runtime.gui_runtime_classes.desktop_appearance import desktop_appearance
+from src.runtime.gui_runtime_classes.desktop_appearance import apply_title_bar_theme, desktop_appearance
 from src.runtime.gui_runtime_classes.disc_table_widget import DiscCommandEdit
 from src.runtime.gui_runtime_classes.widget_animations import set_window_opacity, supports_window_opacity
-from src.runtime.gui_runtime_classes.x11_window import apply_x11_title_bar_theme
 from .gui_base import BluraySubtitleGuiBase
 
 
@@ -257,7 +256,7 @@ def _shared_stylesheet(palette: QPalette, mode: str) -> str:
         f'{{border-bottom-color:{focus};}}',
         _table_stylesheet(('QTableWidget',), *table_colors, table_selection, text),
         f'{section},{subtitle_box},QDialog QGroupBox{{border:1px solid {edge};border-radius:8px;}}'
-        f'{section},QDialog QGroupBox{{margin-top:9px;}}'
+        f'{section},QDialog QGroupBox{{margin-top:0.65em;}}'
         f'{subtitle_box}{{margin-top:0;}}'
         f'{section},{subtitle_box},{subtitle_box} > QLineEdit{{background:{section_background};}}'
         f'{section} > QLabel,QWidget#spSelectionRow{{background:transparent;}}'
@@ -399,6 +398,11 @@ class _ThemeStyle(QProxyStyle):
     def __init__(self, base_style: str, mode: str):
         super().__init__(base_style)
         self._mode = mode
+
+    def styleHint(self, hint, option=None, widget=None, returnData=None):
+        if hint == QStyle.StyleHint.SH_DialogButtonLayout and QApplication.platformName() == 'cocoa':
+            return QDialogButtonBox.ButtonLayout.KdeLayout.value
+        return super().styleHint(hint, option, widget, returnData)
 
     def pixelMetric(self, metric, option=None, widget=None):
         if metric in (
@@ -587,24 +591,25 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
         self.update()
 
     def _apply_widget_font(self, widget: QWidget) -> None:
+        # Scroll-area viewports may retain a platform font when Qt reparents their contents.
+        # Resolve the font from the owning table/editor or the configured interface font.
+        owner = widget
+        role = 'interface'
+        while owner is not None:
+            if isinstance(owner, QTableWidget):
+                role = 'table'
+                break
+            if isinstance(owner, (QPlainTextEdit, QTextEdit)):
+                role = {'applicationLogOutput': 'log', 'externalToolsEditor': 'external_tools'}.get(owner.objectName(), 'editor')
+                break
+            if owner.isWindow():
+                break
+            owner = owner.parentWidget()
+        font = self._content_fonts[role]
+        widget.setFont(font)
         if isinstance(widget, QTableWidget):
-            font = self._content_fonts['table']
-            widget.setFont(font)
             widget.horizontalHeader().setFont(font)
             widget.verticalHeader().setFont(font)
-            return
-        elif isinstance(widget, (QPlainTextEdit, QTextEdit)):
-            role = {
-                'applicationLogOutput': 'log',
-                'externalToolsEditor': 'external_tools',
-            }.get(widget.objectName(), 'editor')
-        else:
-            parent = widget.parentWidget()
-            if parent is not None and not widget.isWindow():
-                widget.setFont(parent.font())
-                return
-            role = 'interface'
-        widget.setFont(self._content_fonts[role])
 
     def _on_font_size_changed(self):
         combo = getattr(self, 'font_size_combo', None)
@@ -635,7 +640,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
         set_scheme = getattr(app.styleHints(), 'setColorScheme', None)
         if set_scheme is not None:
             set_scheme(Qt.ColorScheme.Dark if dark else Qt.ColorScheme.Light)
-        base_style = 'Fusion' if dark or app.platformName() in ('xcb', 'wayland') else self._default_style_name
+        base_style = 'Fusion' if dark or app.platformName() in ('cocoa', 'xcb', 'wayland') else self._default_style_name
         app.setStyle(_ThemeStyle(base_style, self._theme_mode))
         if dark:
             # Fusion consistently paints the custom dark palette across platforms.
@@ -694,7 +699,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                 f"QComboBox:editable:focus{{border-bottom-color:{_COLORFUL_ACCENT};}}"
                 "QComboBox:disabled{background:#f3f4f8;color:#8b92a8;border:1px solid #dde0ea;}"
                 f"QComboBox QAbstractItemView{{background:#ffffff;color:#1f2330;selection-background-color:{_COLORFUL_ACCENT};selection-color:#ffffff;}}"
-                "QGroupBox{background:rgba(255,255,255,190);border:1px solid rgba(214,217,230,220);border-radius:8px;margin-top:10px;}"
+                "QGroupBox{background:rgba(255,255,255,190);border:1px solid rgba(214,217,230,220);border-radius:8px;margin-top:0.65em;}"
                 f"QGroupBox::title{{subcontrol-origin:margin;left:8px;padding:0 6px;color:{_COLORFUL_ACCENT};}}"
                 "QRadioButton{color:#1f2330;}"
                 "QRadioButton:disabled{color:#8b92a8;}"
@@ -724,7 +729,7 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                 "QPushButton,QToolButton{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;padding:4px 8px;}"
                 "QPushButton:hover,QToolButton:hover{background:#333333;}"
                 "QPushButton:pressed,QToolButton:pressed{background:#3a3a3a;}"
-                "QGroupBox{border:1px solid #3a3a3a;margin-top:10px;}"
+                "QGroupBox{border:1px solid #3a3a3a;margin-top:0.65em;}"
                 "QGroupBox::title{subcontrol-origin:margin;left:8px;padding:0 4px;}"
                 "QMenu{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;}"
                 f"QMenu::item:selected{{background:{_DARK_ACCENT};}}"
@@ -733,13 +738,16 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
                 "QToolTip{background:#2a2a2a;color:#e6e6e6;border:1px solid #3a3a3a;}"
             )
         app.setStyleSheet(theme_style + shared_style)
+        self._selected_palette = app.palette()
         self._refresh_background_panels()
         # Install the global tab padding first so the layout measures the styled height.
         self._refresh_function_page_colors()
         self._apply_log_dialog_theme()
         for window in app.topLevelWidgets():
             if window is not self._log_dialog and window.isVisible():
-                apply_x11_title_bar_theme(window, self._theme_mode == 'dark')
+                apply_title_bar_theme(window, self._theme_mode == 'dark')
+        # Replacing a Qt style can restore the platform font on already visible widgets.
+        self._apply_ui_font_size(self._ui_font_point_size)
 
     def _apply_log_dialog_theme(self) -> None:
         if self._log_dialog is None:

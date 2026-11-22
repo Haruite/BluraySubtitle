@@ -67,6 +67,8 @@ def using_tool_paths(paths: Mapping[str, str]):
 
 
 def bundle_directory() -> Path | None:
+    if sys.platform == "darwin" and (runtime := getattr(sys, "_bluray_macos_runtime", None)):
+        return Path(runtime)
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         return Path(sys._MEIPASS).resolve()
     return None
@@ -224,6 +226,8 @@ def _find_libass_path() -> str:
 
     try:
         dladdr = getattr(ctypes.CDLL(None), "dladdr", None)
+        if dladdr is None and (libdl := ctypes.util.find_library("dl")):
+            dladdr = getattr(ctypes.CDLL(libdl), "dladdr", None)
     except OSError:
         return ""
     if dladdr is None:
@@ -282,7 +286,18 @@ def _find_associated_windows_mpv() -> str:
     return ""
 
 
+def macos_runtime_paths(runtime: Path) -> dict[str, Path]:
+    paths = {key: runtime / "bin" / names[0] for key, names in _EXECUTABLE_CANDIDATES.items()}
+    paths.update(PLUGIN_PATH=runtime / "plugins", MKVTOOLNIX_PATH=runtime / "bin",
+                 LIBASS_PATH=runtime / "lib/libass.dylib")
+    return paths
+
+
 def _discover_tool_paths(paths: dict[str, str]) -> None:
+    if sys.platform == "darwin" and (runtime := bundle_directory()):
+        for key, path in macos_runtime_paths(runtime).items():
+            if not paths[key]:
+                paths[key] = str(path)
     for name, programs in _EXECUTABLE_CANDIDATES.items():
         if paths.get(name):
             continue
@@ -316,6 +331,12 @@ def _discover_tool_paths(paths: dict[str, str]) -> None:
     if not paths.get("MPV_PATH"):
         if sys.platform == "win32":
             paths["MPV_PATH"] = _find_associated_windows_mpv()
+        elif sys.platform == "darwin":
+            candidates = (Path.home() / "Applications/IINA.app", Path("/Applications/IINA.app"))
+            paths["MPV_PATH"] = shutil.which("iina-cli") or next((
+                str(cli) for app in candidates
+                if os.access(cli := app / "Contents/MacOS/iina-cli", os.X_OK)
+            ), "") or shutil.which("iina") or shutil.which("mpv") or ""
         elif executable := shutil.which("mpv"):
             paths["MPV_PATH"] = os.path.abspath(executable)
     if not paths.get("MPV_CONFIG_PATH"):
@@ -331,6 +352,8 @@ def resolve_tool_paths(
             raise ValueError(translate_text("Invalid path for {tool}.").format(tool=name))
         # Keep symlink paths so launchers can use their selected installation directory.
         paths[name] = os.path.abspath(config_directory / os.path.expanduser(os.path.expandvars(path))) if path else ""
+        if sys.platform == "darwin" and name == "MPV_PATH" and paths[name].lower().endswith(".app"):
+            paths[name] = str(Path(paths[name]) / "Contents/MacOS/iina-cli")
     if discover:
         _discover_tool_paths(paths)
     paths.update(mkvtoolnix_executables(paths["MKVTOOLNIX_PATH"]))

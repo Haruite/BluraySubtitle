@@ -57,16 +57,9 @@ from src.runtime.services import BluraySubtitle
 from .gui_base import BluraySubtitleGuiBase
 
 
-def _is_pyinstaller_frozen_bundle() -> bool:
-    """True when running as a PyInstaller-built executable (onefile/onedir with ``_MEIPASS``)."""
-    return bool(getattr(sys, "frozen", False)) and hasattr(sys, "_MEIPASS")
-
-
 class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
     def _open_third_party_notices_dialog(self):
-        """Show bundled notices in the current UI language (PyInstaller build only)."""
-        if not _is_pyinstaller_frozen_bundle():
-            return
+        """Show the licenses supplied for this platform in the selected language."""
         path = third_party_notices_markdown_path(self._language_code)
         if not path:
             AnimatedMessageBox.information(
@@ -1711,7 +1704,8 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         options_layout = QGridLayout(self.encode_options_row)
         options_layout.setContentsMargins(0, 0, 0, 0)
         options_layout.setHorizontalSpacing(16)
-        options_layout.setVerticalSpacing(8)
+        # Cocoa's shorter checkbox labels leave six fewer points around the indicator.
+        options_layout.setVerticalSpacing(14 if QApplication.platformName() == 'cocoa' else 8)
         self.use_getnative_checkbox = QCheckBox(
             self.t('Use getnative for native resolution'),
             self.encode_options_row,

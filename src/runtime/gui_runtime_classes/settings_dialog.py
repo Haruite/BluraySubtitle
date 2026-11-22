@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from collections.abc import Mapping
 from dataclasses import replace
@@ -129,7 +130,6 @@ class SettingsDialog(AnimatedDialog):
         tabs.addTab(self._build_tools_tab(), self.t("Tools"))
         tabs.addTab(self._build_external_tools_tab(), self.t("External tools"))
         layout.addWidget(tabs)
-
         self.buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save
             | QDialogButtonBox.StandardButton.Apply
@@ -237,7 +237,7 @@ class SettingsDialog(AnimatedDialog):
         form.addRow(opacity_label, self.opacity_spin)
         if not supports_window_opacity():
             self.opacity_spin.setEnabled(False)
-            help_text = self.t("Window opacity requires Windows or a composited X11 session.")
+            help_text = self.t("Window opacity requires macOS, Windows or a composited X11 session.")
             self.opacity_spin.setToolTip(help_text)
             opacity_label.setToolTip(help_text)
 
@@ -304,12 +304,12 @@ class SettingsDialog(AnimatedDialog):
         update_layout.addWidget(self.check_updates_button, alignment=Qt.AlignmentFlag.AlignLeft)
         form.addRow(self.t("Application updates"), update_row)
 
-        if sys.platform == "win32" or supports_desktop_entries():
+        if sys.platform in ("win32", "darwin") or supports_desktop_entries():
             shortcuts = QWidget(tab)
             shortcut_layout = QHBoxLayout(shortcuts)
             shortcut_layout.setContentsMargins(0, 0, 0, 0)
             desktop_button = QPushButton(self.t("Add desktop shortcut"), shortcuts)
-            menu_button = QPushButton(self.t("Add to application menu"), shortcuts)
+            menu_button = QPushButton(self.t("Add to Applications" if sys.platform == "darwin" else "Add to application menu"), shortcuts)
             desktop_button.clicked.connect(lambda _=False: self._add_launch_shortcut(menu=False))
             menu_button.clicked.connect(lambda _=False: self._add_launch_shortcut(menu=True))
             shortcut_layout.addWidget(desktop_button)
@@ -327,10 +327,11 @@ class SettingsDialog(AnimatedDialog):
     def _add_launch_shortcut(self, *, menu: bool) -> None:
         try:
             path = create_launch_shortcut(menu=menu)
-        except (OSError, RuntimeError, ValueError) as error:
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
             message = self.t("Could not create the shortcut. {error}").format(error=error)
         else:
-            message = self.t("Shortcut created at {path}.").format(path=path)
+            template = "Available in Applications at {path}." if menu and sys.platform == "darwin" else "Shortcut created at {path}."
+            message = self.t(template).format(path=path)
         self._shortcut_status.setText(message)
         self._shortcut_status.show()
 

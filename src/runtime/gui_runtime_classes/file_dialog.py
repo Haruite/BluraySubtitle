@@ -1,7 +1,6 @@
 """File and folder selection for the desktop and container."""
 
 import os
-import sys
 
 from PyQt6.QtCore import QEvent, QSize, QStandardPaths, QStorageInfo, Qt, QUrl
 from PyQt6.QtGui import QFileSystemModel, QIcon, QKeySequence, QShortcut
@@ -10,11 +9,12 @@ from PyQt6.QtWidgets import (
 )
 
 from src.core.i18n import translate_text
+from src.runtime.desktop_integration import supports_desktop_entries
 
 from .widget_animations import AnimatedMessageBox, DialogFade, set_window_opacity, supports_window_opacity, window_opacity
 
 
-class _LinuxFileDialog(DialogFade, QFileDialog):
+class _FreedesktopFileDialog(DialogFade, QFileDialog):
     def __init__(self, parent: QWidget):
         super().__init__(parent)
         self.setOption(QFileDialog.Option.DontUseNativeDialog)
@@ -125,12 +125,12 @@ class _LinuxFileDialog(DialogFade, QFileDialog):
 
 def choose_path(parent: QWidget, title: str, start: str = "", *, directory: bool = True, name_filter: str = "") -> str:
     start = os.path.expanduser(start)
-    if not sys.platform.startswith("linux"):
+    if not supports_desktop_entries():
         if directory:
             return QFileDialog.getExistingDirectory(parent, title, start)
         return QFileDialog.getOpenFileName(parent, title, start, name_filter)[0]
 
-    dialog = _LinuxFileDialog(parent)
+    dialog = _FreedesktopFileDialog(parent)
     dialog.setWindowTitle(title)
     if directory:
         dialog.setFileMode(QFileDialog.FileMode.Directory)

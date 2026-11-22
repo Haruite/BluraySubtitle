@@ -4,7 +4,7 @@ All external imports should use this module instead of the legacy
 `bluray_subtitle_gui.py` directly. The legacy file is kept for debugging.
 """
 
-from PyQt6.QtCore import QEvent, Qt
+from PyQt6.QtCore import QEvent, Qt, QTimer
 from PyQt6.QtGui import QPaintEvent, QPalette
 from PyQt6.QtWidgets import QApplication, QAbstractSpinBox, QComboBox, QMenu, QWidget
 
@@ -23,10 +23,10 @@ from ..gui_runtime_split.theme_and_i18n import ThemeI18nMixin
 from ..gui_runtime_split.track_and_attachment_editing import TrackAttachmentEditingMixin
 from ..gui_runtime_split.vpy_edit_and_preview import VpyEditPreviewMixin
 from ..gui_runtime_split.gui_base import BluraySubtitleGuiBase
-from .desktop_appearance import desktop_appearance
+from .desktop_appearance import apply_title_bar_theme, desktop_appearance
 from .widget_animations import DialogFade, animate_window_open, window_is_fading_out, window_opacity
+from .window_caption import caption_resize_event, refresh_window_caption
 from .window_background import background_panel_colors
-from .x11_window import apply_x11_title_bar_theme
 
 
 _BACKGROUND_CONTENT_STYLE = (
@@ -57,6 +57,9 @@ class BluraySubtitleGUI(
 
     def __init__(self, application_log: ApplicationLog | None = None):
         super().__init__(application_log)
+        self._appearance_refresh = QTimer(self)
+        self._appearance_refresh.setSingleShot(True)
+        self._appearance_refresh.timeout.connect(self._check_platform_appearance)
         QApplication.instance().installEventFilter(self)
         appearance = desktop_appearance()
         if appearance is not None:
@@ -68,6 +71,20 @@ class BluraySubtitleGUI(
         accent = desktop_appearance().accent()
         if not accent.isValid() or accent.rgb() != QApplication.palette().color(QPalette.ColorRole.Accent).rgb():
             self._apply_theme('light')
+
+    def _check_platform_appearance(self) -> None:
+        # Platform themes can install their new palette after the desktop settings notification.
+        expected = getattr(self, '_selected_palette', None)
+        actual = QApplication.palette()
+        roles = (QPalette.ColorRole.Accent, QPalette.ColorRole.Highlight, QPalette.ColorRole.Window)
+        if expected is not None and any(actual.color(role) != expected.color(role) for role in roles):
+            self._apply_theme(self._theme_mode)
+            return
+        font = self._content_fonts['interface']
+        for current in (QApplication.font(), self.font()):
+            if current.pointSizeF() != font.pointSizeF() or current.families() != font.families():
+                self._apply_ui_font_size(self._ui_font_point_size)
+                break
 
     def set_background_image(self, path: str, opacity: int, blur: int = 0) -> None:
         self._window_background.set_image(path, opacity, blur)
@@ -91,6 +108,9 @@ class BluraySubtitleGUI(
 
     def eventFilter(self, watched, event):
         event_type = event.type()
+        if (event_type in (QEvent.Type.ApplicationPaletteChange, QEvent.Type.ApplicationFontChange, QEvent.Type.FontChange)
+                and (watched is self or watched is QApplication.instance())):
+            self._appearance_refresh.start(0)
         if (
             event_type in (
                 QEvent.Type.KeyPress, QEvent.Type.Shortcut,
@@ -100,6 +120,13 @@ class BluraySubtitleGUI(
             and isinstance(watched, QWidget) and window_is_fading_out(watched.window())
         ):
             return True
+        if (event_type in (QEvent.Type.MouseMove, QEvent.Type.MouseButtonPress)
+                and (event_type == QEvent.Type.MouseMove or event.button() == Qt.MouseButton.LeftButton)
+                and isinstance(watched, QWidget) and caption_resize_event(watched, event)):
+            return True
+        if (isinstance(watched, QWidget) and getattr(watched, '_app_caption_enabled', False)
+                and event_type in (QEvent.Type.Polish, QEvent.Type.Show, QEvent.Type.WindowTitleChange, QEvent.Type.FontChange)):
+            refresh_window_caption(watched)
         if event_type in (QEvent.Type.Polish, QEvent.Type.Show) and isinstance(watched, QWidget):
             self._apply_widget_font(watched)
         if event_type == QEvent.Type.Wheel and isinstance(watched, (QComboBox, QAbstractSpinBox)):
@@ -108,7 +135,7 @@ class BluraySubtitleGUI(
             return True
         if event_type == QEvent.Type.Show and isinstance(watched, QWidget):
             if watched.isWindow() and not event.spontaneous():
-                apply_x11_title_bar_theme(watched, (watched.property('logWindowTheme') or self._theme_mode) == 'dark')
+                apply_title_bar_theme(watched, (watched.property('logWindowTheme') or self._theme_mode) == 'dark')
                 if watched is self or isinstance(watched, DialogFade):
                     animate_window_open(watched)
             parent = watched.parentWidget()

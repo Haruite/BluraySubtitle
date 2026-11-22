@@ -23,7 +23,8 @@ from src.runtime.desktop_integration import desktop_entry_id, log_taskbar_entry,
 
 from .widget_animations import AnimatedDialog
 from .window_background import WindowBackground, background_panel_colors
-from .x11_window import apply_x11_title_bar_theme, set_x11_window_identity
+from .desktop_appearance import apply_title_bar_theme
+from .x11_window import set_x11_window_identity
 
 _dwm_set_window_attribute = None
 if sys.platform == "win32" and sys.getwindowsversion().platform_version[0] >= 10:
@@ -94,7 +95,7 @@ class _MatchCountLabel(QLabel):
 class ApplicationLogDialog(AnimatedDialog):
     def __init__(self, application_log: ApplicationLog) -> None:
         # Some window managers minimize dialogs with the active application window.
-        if supports_desktop_entries():
+        if sys.platform == "darwin" or supports_desktop_entries():
             super().__init__(None, Qt.WindowType.Window)
         else:
             super().__init__()
@@ -237,7 +238,7 @@ class ApplicationLogDialog(AnimatedDialog):
         self._refresh_background_panels()
         dark = mode == "dark"
         self.set_dark_title_bar(dark)
-        apply_x11_title_bar_theme(self, dark)
+        apply_title_bar_theme(self, dark)
 
     def set_background_image(self, path: str, opacity: int, blur: int = 0) -> None:
         self._window_background.set_image(path, opacity, blur)
@@ -421,7 +422,12 @@ class ApplicationLogDialog(AnimatedDialog):
             self._cursor.insertText(text, self._format)
 
     def _set_format(self, parameters: str) -> None:
-        if len(parameters) > 128 or re.fullmatch(r"[0-9;]*", parameters) is None:
+        # Modern terminals also accept 38:2::R:G:B and 38:5:N (likewise for backgrounds).
+        if len(parameters) > 128:
+            return
+        parameters = re.sub(r"(?:^|(?<=;))(38|48):2:(?:0?:)?(\d+):(\d+):(\d+)(?=;|$)", r"\1;2;\2;\3;\4", parameters)
+        parameters = re.sub(r"(?:^|(?<=;))(38|48):5:(\d+)(?=;|$)", r"\1;5;\2", parameters)
+        if re.fullmatch(r"[0-9;]*", parameters) is None:
             return
         codes = iter(int(part or "0") for part in parameters.split(";"))
         for code in codes:

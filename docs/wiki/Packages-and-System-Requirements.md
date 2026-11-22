@@ -13,6 +13,8 @@ Choose one archive for the operating system and processor that will run the appl
 | `BluraySubtitle_windows_arm64.7z` | Windows 10 ARM64 (1903 or later for the bundled tools) or Windows 11 ARM64 | 64-bit Arm with NEON and Armv8.1 LSE atomic instructions, including `CASAL`. |
 | `BluraySubtitle_linux_x64.tar.xz` | 64-bit x86 Linux (x86-64), tested down to kernel 3.17 | Full x86-64-v3 support, as on Intel Core Haswell or AMD Zen. Above x86-64-v2 this requires AVX, AVX2, BMI1/2, F16C, FMA, LZCNT, MOVBE and OSXSAVE with AVX state enabled by the OS. |
 | `BluraySubtitle_linux_arm64.tar.xz` | 64-bit AArch64 Linux, tested down to kernel 3.17 | Armv8-A with floating point and NEON. Cortex-A53 is the tested baseline. |
+| `BluraySubtitle_macos_x64.zip` | macOS 11 Big Sur or later | A Big Sur-compatible Intel Mac. The Ivy Bridge processor in the late-2013 Mac Pro is the instruction-set baseline. |
+| `BluraySubtitle_macos_arm64.zip` | macOS 11 Big Sur or later | Apple M1 or later Apple silicon. |
 
 The NLM filter uses 128-bit NEON on both ARM64 platforms, including on processors without SVE.
 
@@ -31,6 +33,10 @@ The ARM64 `ffmpeg.exe` and `ffprobe.exe` also import `capCreateCaptureWindowA` a
 On Windows 7 SP1, install [KB3063858](https://github.com/adang1345/PythonVista#readme) or an update that supplies its DLL search APIs, the [KB2670838 Platform Update](https://www.microsoft.com/en-us/download/details.aspx?id=36805), and the [KB2999226 Universal C Runtime](https://www.microsoft.com/en-us/download/details.aspx?id=49093). On Windows 8 and 8.1, install the Universal C Runtime update for the corresponding system. Restart Windows after applying the updates. [Microsoft Universal C Runtime downloads](https://support.microsoft.com/en-us/servicing/os/windows/2020/04/update-for-universal-c-runtime-in-windows)
 
 Download `BluraySubtitle_windows_x64_compat.7z` and its matching verification record from the [latest build directory](https://sbx.mysmy.top/tools/BluraySubtitle/). VapourSynth scripts using `core.placebo` require a separate compatible installation of the plugin. MKVToolNix in this package omits DVD IFO chapter import. See the [compatibility build](BluraySubtitle-Developer-Guide.md#windows-x64-compatibility-build) for the runtime sources and build entry point.
+
+## macOS runtime
+
+Each architecture's application includes Qt 6.6 and the current stable Qt. The launcher chooses according to the installed macOS version. Open the extracted application from Applications. For one-click updates, install it in an Applications folder where your account can replace it, such as `~/Applications/`. Configuration is stored under `~/Library/Application Support/BluraySubtitle/`. Video and Blu-ray playlist previews can use an external copy of IINA. IINA's own system requirements depend on its version. [Big Sur-compatible Mac models](https://support.apple.com/103111) · [IINA downloads and requirements](https://iina.io/download/)
 
 ## Linux runtime
 
@@ -54,6 +60,8 @@ The following x64 distributions have been tested. Run the corresponding package-
 ## Source setup scripts
 
 **Windows.** `setup_windows_environment.ps1` supports x64 Windows 10 version 1909 or later, x64 Windows Server 2019 or later with Desktop Experience, and ARM64 Windows 11 or later. Use 64-bit PowerShell. The default is VapourSynth R79. Select Classic with `-VapourSynthRuntime Classic`. On ARM64, Classic uses a separate x64 Python, x64 plugins and x64 VSEdit.
+
+**macOS.** Install the Apple Command Line Tools and run `./setup_macos_environment.sh` on native Intel or Apple silicon. The source launcher is installed at `~/Library/Application Support/BluraySubtitle/Runtime/bin/BluraySubtitle`. If you share the checkout with another operating system, set `BLURAY_SUBTITLE_CONFIG_DIR` before setup to give the Mac launcher its own configuration.
 
 **Linux.** `setup_linux_environment.sh` supports native x64 or ARM64 Ubuntu, Debian and their APT derivatives. It checks installed packages and the candidates in the configured repositories, including backports. Interim and rolling releases use the same checks.
 
