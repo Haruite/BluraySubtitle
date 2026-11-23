@@ -55,7 +55,6 @@ LSMASH_SOURCE_REPOSITORY="https://github.com/l-smash/l-smash.git"
 # L-SMASH Works uses the liblsmash 2.x API.
 LSMASH_COMPATIBLE_TAG_PATTERN='^[vV]?2([.][0-9]+)+$'
 MESON_MIN_VERSION="1.4.0"
-ISPC_MIN_VERSION="1.31.0"
 X264_CONFIGURE_OPTIONS=(--enable-static --bit-depth=all --chroma-format=all --enable-lto)
 MPV_FFMPEG_OPTIONS=(--enable-libbluray --enable-libdav1d --enable-libopus --enable-gnutls --enable-vulkan)
 MPV_FFMPEG_PACKAGE_OPTIONS=(--disable-static --enable-shared)
@@ -67,7 +66,6 @@ TSMUXER_CMAKE_OPTIONS=(-DCMAKE_POLICY_VERSION_MINIMUM=3.10 -DCMAKE_BUILD_TYPE=Re
   -DTSMUXER_GUI=OFF -DTSMUXER_STATIC_BUILD=OFF -DWITHOUT_PKGCONFIG=OFF)
 TSMUXER_INCLUDE_PATCH='1i#include <algorithm>'
 DFTTEST_MESON_OPTIONS=(-Dcpp_link_args=-lfftw3f_threads)
-SANGNOM_SSE2NEON_SOURCE=https://codeload.github.com/DLTcollab/sse2neon/tar.gz/refs/tags/v1.8.0
 SANGNOM_SSE2NEON_PATCH='s/^#include <emmintrin.h>$/#include <sse2neon.h>/'
 SETUP_ROOT="$(dirname -- "$BLURAY_SETUP_SOURCE")"
 BLURAY_SETUP_CACHE_DIR="${BLURAY_SETUP_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/bluraysubtitle/linux-setup}"
@@ -270,10 +268,16 @@ install_configured_executable() {
   bluray_sudo install -D -m 0755 "$source" "$destination"
 }
 
+artifact_stamp() {
+  local checksum
+  checksum="$(sha256sum < "$1")" || return 1
+  printf '%s%s\n' "${2:+$2 }" "$checksum"
+}
+
 installed_artifact_matches() {
   local artifact="$1" record="$1.$2.sha256" checksum
   [[ -f "$artifact" && -f "$record" ]] || return 1
-  checksum="$(sha256sum < "$artifact")" || return 1
+  checksum="$(artifact_stamp "$artifact" "${3:-}")" || return 1
   [[ "$checksum" == "$(cat -- "$record")" ]]
 }
 
@@ -858,8 +862,9 @@ mkvtoolnix_installed_version() {
 }
 
 mkvtoolnix_latest_version() {
-  curl -fsSL --retry 4 --connect-timeout 20 --max-time 45 https://mkvtoolnix.download/latest-release.xml \
-    | python3 -c 'import sys, xml.etree.ElementTree as ET; print(ET.parse(sys.stdin).findtext("./latest-source/version") or "")'
+  local tag
+  tag="$(latest_stable_tag https://codeberg.org/mbunkus/mkvtoolnix.git '^release-[0-9]+([.][0-9]+)+$' 'release-*')" || return $?
+  printf '%s\n' "${tag#release-}"
 }
 
 install_mkvtoolnix() {
@@ -2979,16 +2984,18 @@ install_vs_removegrain() (
 )
 
 install_vs_sangnom() (
-  local build_dir="$1" plugins_dir="$2" tag="${vs_plugin_tags[sangnom]}"
+  local build_dir="$1" plugins_dir="$2" sse2neon_version="$3" tag="${vs_plugin_tags[sangnom]}"
+  local plugin="$plugins_dir/libsangnommod.so"
   cd "$build_dir" || exit 1
-  if vs_plugin_needs_upgrade "libsangnommod.so" "$tag"; then
+  if { [[ "$APT_ARCH" == arm64 ]] && ! installed_artifact_matches "$plugin" sse2neon "$sse2neon_version"; } ||
+      vs_plugin_needs_upgrade "libsangnommod.so" "$tag"; then
     require_native_build "SangNomMod"
     log "$(msg "Building VapourSynth-SangNomMod ($tag)" "编译 VapourSynth-SangNomMod ($tag)")"
     download_source_archive "sangnom $tag" "${vs_plugin_sources[sangnom]}" sangnom || exit 1
     cd sangnom || exit 1
     local -a sangnom_args=()
     if [[ "$APT_ARCH" == arm64 ]]; then
-      download_source_archive sse2neon "$SANGNOM_SSE2NEON_SOURCE" "$build_dir/sse2neon" || exit 1
+      download_source_archive sse2neon "https://codeload.github.com/DLTcollab/sse2neon/tar.gz/refs/tags/v$sse2neon_version" "$build_dir/sse2neon" || exit 1
       sed -i "$SANGNOM_SSE2NEON_PATCH" src/sangnom.cpp || exit 1
       sangnom_args+=(--target=arch=armv8-a "--extra-cxxflags=-I$build_dir/sse2neon")
     fi
@@ -2997,8 +3004,11 @@ install_vs_sangnom() (
     local out
     out="$(find "$PWD" -maxdepth 3 -name "libsangnommod.so" -type f | head -n 1)"
     [[ -n "${out:-}" ]] || exit 1
-    install -m 0755 "$out" "$plugins_dir/libsangnommod.so" || exit 1
+    install -m 0755 "$out" "$plugin" || exit 1
     vs_plugin_version record "libsangnommod.so" "$tag" || exit 1
+    if [[ "$APT_ARCH" == arm64 ]]; then
+      artifact_stamp "$plugin" "$sse2neon_version" > "$plugin.sse2neon.sha256" || exit 1
+    fi
   else
     log "$(msg 'libsangnommod.so version is current, skipping' 'libsangnommod.so 版本已满足要求，跳过')"
   fi
@@ -3046,34 +3056,39 @@ install_vs_placebo() (
   fi
 )
 
+ispc_binary() {
+  if "$package_build" || [[ -x /usr/local/bin/ispc ]]; then
+    printf '%s\n' /usr/local/bin/ispc
+  else
+    command -v ispc
+  fi
+}
+
 install_vs_ispc() (
-  local build_dir="$1"
+  local build_dir="$1" required_ispc_version="$2"
   cd "$build_dir" || exit 1
-  # Upgrade ISPC when an older binary is present; command existence alone is insufficient.
-  local required_ispc_version="$ISPC_MIN_VERSION"
   local archive_dir="ispc-v${required_ispc_version}-linux"
   if [[ "$APT_ARCH" == arm64 ]]; then
     archive_dir+=".aarch64"
   fi
-  local current_ispc_version=""
-  if command -v ispc >/dev/null 2>&1; then
-    current_ispc_version="$(ispc --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)"
+  local executable current_ispc_version="" comparison=ge
+  if "$package_build"; then comparison=eq; fi
+  if executable="$(ispc_binary)" && [[ -x "$executable" ]]; then
+    current_ispc_version="$("$executable" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)"
   fi
-  if [[ -z "$current_ispc_version" ]] || dpkg --compare-versions "$current_ispc_version" lt "$required_ispc_version"; then
+  if [[ -z "$current_ispc_version" ]] || ! dpkg --compare-versions "$current_ispc_version" "$comparison" "$required_ispc_version"; then
     require_native_build ISPC
-    log "$(msg 'Installing ispc (v1.31.0)' '安装 ispc (v1.31.0)')"
-    tmux_run "$(msg 'Download ispc v1.31.0' '下载 ispc v1.31.0')" \
+    tmux_run "$(msg "Download ISPC $required_ispc_version" "下载 ISPC $required_ispc_version")" \
       download_github_release_asset ispc/ispc "v$required_ispc_version" "$archive_dir.tar.gz" || exit 1
-    tmux_run "$(msg 'Extract ispc v1.31.0' '解压 ispc v1.31.0')" tar -xvf "$archive_dir.tar.gz" || exit 1
-    sudo mv "$archive_dir/bin/ispc" /usr/local/bin/ || exit 1
-    sudo chmod +x /usr/local/bin/ispc || exit 1
+    tmux_run "$(msg "Extract ISPC $required_ispc_version" "解压 ISPC $required_ispc_version")" tar -xf "$archive_dir.tar.gz" || exit 1
+    sudo install -m 0755 "$archive_dir/bin/ispc" /usr/local/bin/ispc || exit 1
   else
     log "$(msg "ispc version satisfied (${current_ispc_version} >= ${required_ispc_version}), skipping" "ispc 版本满足要求（${current_ispc_version} >= ${required_ispc_version}），跳过安装")"
   fi
 )
 
 install_vs_nlm_ispc() (
-  local build_dir="$1" plugins_dir="$2" profile="$3" tag="${vs_plugin_tags[nlm_ispc]}"
+  local build_dir="$1" plugins_dir="$2" profile="$3" compiler="$4" compiler_id="$5" tag="${vs_plugin_tags[nlm_ispc]}"
   cd "$build_dir" || exit 1
   local nlm_plugin="$plugins_dir/libvsnlm_ispc.so"
   # The x64 build dispatches between the baseline and AVX2 kernels.
@@ -3083,21 +3098,21 @@ install_vs_nlm_ispc() (
     unset ISPC_ARGS
     ispc_options=(-DCMAKE_ISPC_INSTRUCTION_SETS=neon-i32x4 "-DCMAKE_ISPC_FLAGS=--cpu=$profile")
   fi
-  if ! installed_artifact_matches "$nlm_plugin" "$profile" || vs_plugin_needs_upgrade "libvsnlm_ispc.so" "$tag"; then
+  if ! installed_artifact_matches "$nlm_plugin" "$profile" "$compiler_id" || vs_plugin_needs_upgrade "libvsnlm_ispc.so" "$tag"; then
     require_native_build "vs-nlm-ispc"
     log "$(msg "Building vs-nlm-ispc ($tag)" "编译 vs-nlm-ispc ($tag)")"
     download_source_archive "nlm_ispc $tag" "${vs_plugin_sources[nlm_ispc]}" nlm_ispc || exit 1
     cd nlm_ispc || exit 1
     mkdir -p build || exit 1
     cd build || exit 1
-    tmux_run "vs-nlm-ispc cmake" cmake -DCMAKE_BUILD_TYPE=Release "${ispc_options[@]}" .. || exit 1
+    tmux_run "vs-nlm-ispc cmake" cmake -DCMAKE_BUILD_TYPE=Release "-DCMAKE_ISPC_COMPILER=$compiler" "${ispc_options[@]}" .. || exit 1
     tmux_run "vs-nlm-ispc make" make -j"$(nproc)" || exit 1
     local out
     out="$(find "$PWD" -maxdepth 2 -name "libvsnlm_ispc.so" -type f | head -n 1)"
     [[ -n "${out:-}" ]] || exit 1
     install -m 0755 "$out" "$nlm_plugin" || exit 1
     vs_plugin_version record "libvsnlm_ispc.so" "$tag" || exit 1
-    sha256sum < "$nlm_plugin" > "$nlm_plugin.$profile.sha256" || exit 1
+    artifact_stamp "$nlm_plugin" "$compiler_id" > "$nlm_plugin.$profile.sha256" || exit 1
   else
     log "$(msg 'libvsnlm_ispc.so version is current, skipping' 'libvsnlm_ispc.so 版本已满足要求，跳过')"
   fi
@@ -3215,16 +3230,30 @@ build_vs_plugins() {
     "$plugins_dir/libvivtc.so" -- "$build_dir" "$plugins_dir"
   cached_linux_build removegrain install_vs_removegrain files "$vapoursynth_cache_abi ${vs_plugin_tags[removegrain]}" \
     "$plugins_dir/libremovegrain.so" -- "$build_dir" "$plugins_dir"
-  cached_linux_build sangnom install_vs_sangnom files "$vapoursynth_cache_abi ${vs_plugin_tags[sangnom]}" \
-    "$plugins_dir/libsangnommod.so" -- "$build_dir" "$plugins_dir"
+  local sse2neon_version=""
+  local sangnom_inputs="$vapoursynth_cache_abi ${vs_plugin_tags[sangnom]}"
+  local -a sangnom_outputs=("$plugins_dir/libsangnommod.so")
+  if [[ "$APT_ARCH" == arm64 ]]; then
+    sse2neon_version="$(latest_stable_tag https://github.com/DLTcollab/sse2neon.git '^v[0-9]+([.][0-9]+)+$' 'v*')" || return $?
+    sse2neon_version="${sse2neon_version#v}"
+    sangnom_inputs+=" $sse2neon_version $SANGNOM_SSE2NEON_PATCH"
+    sangnom_outputs+=("$plugins_dir/libsangnommod.so.sse2neon.sha256")
+  fi
+  cached_linux_build sangnom install_vs_sangnom files "$sangnom_inputs" \
+    "${sangnom_outputs[@]}" -- "$build_dir" "$plugins_dir" "$sse2neon_version"
   cached_linux_build vs-placebo install_vs_placebo system "$vapoursynth_cache_abi ${vs_plugin_tags[placebo]}" \
     "$plugins_dir/libvs_placebo.so" -- "$build_dir" "$plugins_dir"
-  cached_linux_build ispc install_vs_ispc files "" /usr/local/bin/ispc -- "$build_dir"
+  local ispc_version compiler compiler_id
+  ispc_version="$(latest_stable_tag https://github.com/ispc/ispc.git '^v[0-9]+([.][0-9]+)+$' 'v*')" || return $?
+  ispc_version="${ispc_version#v}"
+  cached_linux_build ispc install_vs_ispc files "$ispc_version" /usr/local/bin/ispc -- "$build_dir" "$ispc_version"
   hash -r
+  compiler="$(ispc_binary)" || return $?
+  compiler_id="$("$compiler" --version)" || return $?
   local nlm_profile=portable
   if [[ "$APT_ARCH" == arm64 ]]; then nlm_profile=cortex-a53; fi
-  cached_linux_build vs-nlm-ispc install_vs_nlm_ispc files "$vapoursynth_cache_abi ${vs_plugin_tags[nlm_ispc]} $(ispc --version)" \
-    "$plugins_dir/libvsnlm_ispc.so" "$plugins_dir/libvsnlm_ispc.so.$nlm_profile.sha256" -- "$build_dir" "$plugins_dir" "$nlm_profile"
+  cached_linux_build vs-nlm-ispc install_vs_nlm_ispc files "$vapoursynth_cache_abi ${vs_plugin_tags[nlm_ispc]} $compiler_id" \
+    "$plugins_dir/libvsnlm_ispc.so" "$plugins_dir/libvsnlm_ispc.so.$nlm_profile.sha256" -- "$build_dir" "$plugins_dir" "$nlm_profile" "$compiler" "$compiler_id"
   local zsmooth_plugin="$plugins_dir/libzsmooth.$LINUX_ARCH-gnu.so"
   local -a zsmooth_outputs=("$zsmooth_plugin")
   if "$package_build" && [[ "$APT_ARCH" == amd64 ]]; then
@@ -3694,16 +3723,8 @@ collect_linux_build_inputs() {
       cache_build_tag "$LSMASH_SOURCE_REPOSITORY" "${LSMASH_VERSION:-}" "$LSMASH_COMPATIBLE_TAG_PATTERN" || return $?
       LSMASH_VERSION="${linux_build_inputs[-1]}"
       ;;
-    ispc)
-      linux_build_inputs+=("$ISPC_MIN_VERSION")
-      ;;
     dfttest)
       linux_build_inputs+=("${DFTTEST_MESON_OPTIONS[@]}")
-      ;;
-    sangnom)
-      if [[ "$APT_ARCH" == arm64 ]]; then
-        linux_build_inputs+=("$SANGNOM_SSE2NEON_SOURCE" "$SANGNOM_SSE2NEON_PATCH")
-      fi
       ;;
     vs-placebo)
       linux_build_inputs+=("$(pkg-config --modversion libplacebo)" "$(pkg-config --variable=pl_has_vulkan libplacebo)")
@@ -3927,7 +3948,8 @@ fi
 select_vapoursynth_python
 install_bluray_python_deps
 linux_cache_abi="" qt_cache_abi="" vapoursynth_cache_abi=""
-declare -A linux_recipe_revisions=([vsedit]=2 [mkvtoolnix]=2 [vapoursynth-sdk]=2 [lsmash-works]=2 [eedi3m]=2 [mvtools]=2 [bm3d]=2)
+declare -A linux_recipe_revisions=([vsedit]=2 [mkvtoolnix]=2 [vapoursynth-sdk]=2 [lsmash-works]=2 [eedi3m]=2 [mvtools]=2 [bm3d]=2 [ispc]=2 [vs-nlm-ispc]=2)
+if [[ "$APT_ARCH" == arm64 ]]; then linux_recipe_revisions[sangnom]=2; fi
 declare -A vs_plugin_tags=() vs_plugin_sources=() vs_plugin_digests=()
 if "$package_build"; then
   cache_workspace="$(bluray_mktemp_dir)"

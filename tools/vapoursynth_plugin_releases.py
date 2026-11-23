@@ -1,4 +1,4 @@
-"""Resolve the stable upstream releases used by both setup scripts."""
+"""Resolve stable releases for VapourSynth plugins and their build dependencies."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import json
+from pathlib import Path
 import re
 import subprocess
 import sys
@@ -80,6 +81,8 @@ SOURCES = {
     "ccd": PluginSource("End-of-Eternity/vs-ccd"),
     "bm3d": PluginSource("HomeOfVapourSynthEvolution/VapourSynth-BM3D"),
     "rife": PluginSource("styler00dollar/VapourSynth-RIFE-ncnn-Vulkan", r"r[0-9]+_mod_v[0-9]+"),
+    "sse2neon": PluginSource("DLTcollab/sse2neon", r"v[0-9]+(?:\.[0-9]+)+"),
+    "ispc": PluginSource("ispc/ispc", r"v[0-9]+(?:\.[0-9]+)+"),
 }
 
 
@@ -90,7 +93,7 @@ class PluginRelease:
     sha256: str = ""
 
 
-def latest_tag(source: PluginSource, git: str, *, classic: bool) -> str:
+def latest_tag(source: PluginSource, git: str = "git", *, classic: bool = False) -> str:
     output = subprocess.check_output(
         [git, "ls-remote", "--exit-code", "--refs", "--tags", source.url + ".git"],
         text=True, encoding="utf-8", timeout=60,
@@ -107,6 +110,14 @@ def latest_tag(source: PluginSource, git: str, *, classic: bool) -> str:
     if not latest:
         raise RuntimeError(f"No compatible stable release found for {source.url}")
     return latest
+
+
+def ispc_matches(executable: Path, version: str) -> bool:
+    try:
+        banner = subprocess.check_output([executable, "--version"], text=True, stderr=subprocess.STDOUT)
+    except (OSError, subprocess.CalledProcessError):
+        return False
+    return f"ISPC), {version} " in banner
 
 
 def znedi3_release() -> PluginRelease:

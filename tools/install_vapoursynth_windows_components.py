@@ -29,7 +29,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from src.core.i18n import translate_text
 from tools import build_vsedit_windows as vsedit_build
-from tools.vapoursynth_plugin_releases import LEGACY_SOURCE_KEYS, R79_PLUGIN_NAMESPACES, SOURCES, resolve_releases
+from tools.vapoursynth_plugin_releases import (
+    LEGACY_SOURCE_KEYS, R79_PLUGIN_NAMESPACES, SOURCES, ispc_matches, resolve_releases,
+)
 from tools.vapoursynth_plugin_versions import fallback_version, normalize_version, record_version, version_satisfies
 from tools.vulkan_device import vulkan_device_available
 from tools.windows_build_cache import files_under, publish as publish_build_cache, restore as restore_build_cache
@@ -210,8 +212,10 @@ class Installer:
         if patch:
             recipe.append(patch)
         inputs = [asdict(component), ref, build_profile, self.r79, self.static_runtime]
-        if self.arm64 and component.key == "nlm_ispc":
-            inputs.append(ARM64_NLM_CPU)
+        if component.key == "nlm_ispc":
+            recipe.append(self.ispc_compiler)
+            if self.arm64:
+                inputs.append(ARM64_NLM_CPU)
         if component.recipe not in ("lsmash", "assrender"):
             recipe.append(self.build_environment)
         if component.recipe not in ("lsmash", "assrender", "znedi3", "zig"):
@@ -1037,38 +1041,43 @@ class Installer:
         if 'registerFunc("SangNom",' not in text:
             text = text.replace(registration, registration + "\n" + registration.replace('"SangNomMod"', '"SangNom"'))
         if self.arm64:
-            dependency = self.dependency_source("sse2neon", "DLTcollab/sse2neon", "v1.8.0")
+            dependency = self.dependency_source("sse2neon", "DLTcollab/sse2neon", "v" + self.sse2neon_version)
             self.source_licenses.append(("sse2neon", dependency / "LICENSE"))
             text = text.replace("#include <emmintrin.h>", "#include <sse2neon.h>")
             commands.append("export CPATH=" + shlex.quote(dependency.as_posix()))
         path.write_text(text, encoding="utf-8")
 
+    def ispc_compiler(self):
+        native = self.msys / "bin/ispc.exe"
+        if ispc_matches(native, self.ispc_version):
+            return native
+        tag = "v" + self.ispc_version
+        release = self.release("ispc/ispc", tag)
+        filename = f"ispc-{tag}-windows.zip"
+        asset = next(item for item in release["assets"] if item["name"] == filename)
+        archive = self.download_release_asset(asset, self.work / "ispc" / filename)
+        return next(self.unpack(archive, archive.with_suffix("")).rglob("ispc.exe"))
+
     def prepare_nlm_ispc_source(self, component, source, commands):
+        if not self.arm64:
+            return
         build_directory = "build-" + BUILD_PROFILE
         include = self.sdk / "include/vapoursynth"
-        if self.arm64:
-            self.ensure_packages("ispc")
-            executable = self.msys / "bin/ispc.exe"
-            # Use ISPC to emit AArch64 COFF with the NEON target.
-            output = source / build_directory
-            output.mkdir(exist_ok=True)
-            kernels = output / "nlm.obj"
-            header = output / "nlm_ispc.h"
-            subprocess.run([executable, "--arch=aarch64", "--target-os=windows", "--target=neon-i32x4",
-                            f"--cpu={ARM64_NLM_CPU}", "-O2", source / "source/nlm.ispc", "-h", header, "-o", kernels],
-                           env=dict(os.environ, ISPC_ARGS=""), check=True)
-            template = (source / "source/config.h.in").read_text(encoding="utf-8")
-            (output / "config.h").write_text(template.replace("@VCS_TAG@", component.ref), encoding="utf-8")
-            binary = output / component.filename
-            self.run_msys([shlex.join([self.cxx, "-O3", "-std=c++17", "-shared", "-static",
-                                      "-I" + include.as_posix(), "-I" + output.as_posix(),
-                                      "source/vsnlm.cpp", kernels.as_posix(), "-o", binary.as_posix()])], source)
-            return binary
-        release = self.release("ispc/ispc", "v1.31.0")
-        asset = next(item for item in release["assets"] if re.search(r"windows[.]zip$", item["name"]))
-        archive = self.download_release_asset(asset, self.work / "ispc" / asset["name"])
-        executable = next(self.unpack(archive, self.work / "ispc/unpacked").rglob("ispc.exe"))
-        shutil.copyfile(executable, self.msys / "bin/ispc.exe")
+        # The upstream compiler can also emit ARM64 Windows objects on an x64 host.
+        output = source / build_directory
+        output.mkdir(exist_ok=True)
+        kernels = output / "nlm.obj"
+        header = output / "nlm_ispc.h"
+        subprocess.run([self.ispc_compiler(), "--arch=aarch64", "--target-os=windows", "--target=neon-i32x4",
+                        f"--cpu={ARM64_NLM_CPU}", "-O2", source / "source/nlm.ispc", "-h", header, "-o", kernels],
+                       env=dict(os.environ, ISPC_ARGS=""), check=True)
+        template = (source / "source/config.h.in").read_text(encoding="utf-8")
+        (output / "config.h").write_text(template.replace("@VCS_TAG@", component.ref), encoding="utf-8")
+        binary = output / component.filename
+        self.run_msys([shlex.join([self.cxx, "-O3", "-std=c++17", "-shared", "-static",
+                                   "-I" + include.as_posix(), "-I" + output.as_posix(),
+                                   "source/vsnlm.cpp", kernels.as_posix(), "-o", binary.as_posix()])], source)
+        return binary
 
     def descale_meson_options(self):
         include = self.sdk / "include/vapoursynth"
@@ -1094,8 +1103,11 @@ class Installer:
     def build_cmake(self, component, source, commands):
         jobs = str(self.args.jobs)
         build_directory = "build-" + BUILD_PROFILE
+        options = ["-DCMAKE_PREFIX_PATH=" + self.sdk.as_posix()]
+        if component.key == "nlm_ispc":
+            options.append("-DCMAKE_ISPC_COMPILER=" + self.ispc_compiler().as_posix())
         self.run_msys(commands + ["cmake -S . -B " + build_directory + " -G Ninja -DCMAKE_BUILD_TYPE=Release "
-                       + "-DCMAKE_PREFIX_PATH=" + shlex.quote(self.sdk.as_posix()),
+                       + shlex.join(options),
                        "cmake --build " + build_directory + " --parallel " + jobs], source)
 
     def build_znedi3(self, component, source, commands):
@@ -1256,6 +1268,10 @@ class Installer:
         data = [self.record_path(path) for path in plugin_files[1:]]
         build_profile = BUILD_PROFILE + ("-arm64" if self.arm64 else "")
         arm64_nlm = self.arm64 and component.key == "nlm_ispc"
+        if component.key == "nlm_ispc":
+            build_profile += "-ispc-" + self.ispc_version
+        if self.arm64 and component.key == "sangnom":
+            build_profile += "-sse2neon-" + self.sse2neon_version
         if component.key == "lsmas" and not self.use_vulkan:
             build_profile += "-without-vulkan"
         if self.arm64 and component.key == "placebo":
@@ -1277,8 +1293,12 @@ class Installer:
         fallback = bool(known_files and previous["method"] == "source" and previous["ref"] == component.fallback_ref)
         expected = "commit:" + component.fallback_ref if fallback and same_target else target_ref
         installed, probe = None, None
-        # Only a hash-bound build record identifies the NLM DLL's ISPC target.
-        if present and (not arm64_nlm or (known_files and previous.get("ispc_cpu") == ARM64_NLM_CPU)):
+        # ARM64 builds these DLLs from source. Their plugin version does not identify the compiler or headers.
+        tracked_arm_build = self.arm64 and component.key in ("nlm_ispc", "sangnom")
+        if present and (not tracked_arm_build or (
+            known_files and previous.get("build_profile") == build_profile
+            and (not arm64_nlm or previous.get("ispc_cpu") == ARM64_NLM_CPU)
+        )):
             try:
                 probe = self.probe(target, component, expected)
             except RuntimeError as error:
@@ -1580,10 +1600,14 @@ class Installer:
             self.state.pop("skipped", None)
         needs_verification = False
         active = [component for component in self.components if component.key not in skipped]
-        releases = resolve_releases(
-            (LEGACY_SOURCE_KEYS.get(component.key, component.key) for component in active),
-            self.args.git, classic=not self.r79,
-        )
+        sources = [LEGACY_SOURCE_KEYS.get(component.key, component.key) for component in active]
+        sources.append("ispc")
+        if self.arm64:
+            sources.append("sse2neon")
+        releases = resolve_releases(sources, self.args.git, classic=not self.r79)
+        self.ispc_version = releases["ispc"].ref.removeprefix("v")
+        if self.arm64:
+            self.sse2neon_version = releases["sse2neon"].ref.removeprefix("v")
         for component in active:
             release = releases[LEGACY_SOURCE_KEYS.get(component.key, component.key)]
             archive = (release.source_url, release.sha256) if release.sha256 or component.key == "fmtconv" else None

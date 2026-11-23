@@ -19,7 +19,7 @@ from tools.macos_media import build_media, hdr_providers, releases
 from tools.macos_plugins import build_plugins, plugin_releases
 from tools.macos_python_runtime import build_python, python_releases
 
-from tools.vapoursynth_plugin_releases import PluginRelease
+from tools.vapoursynth_plugin_releases import SOURCES, PluginRelease, latest_tag
 
 
 def desktop(ctx):
@@ -109,11 +109,15 @@ def main():
             recorded = plan["sources"] if plan else json.loads(versions_file.read_text())
             python = recorded["python"]
             media = recorded["media"]
+            if "ispc" not in recorded or (ctx.arch == "arm64" and "sse2neon" not in media):
+                raise ValueError("The saved sources predate build dependency tracking. Run setup again to resolve a new build plan.")
+            ctx.ispc_version = recorded["ispc"]
             ctx.hdr = recorded.get("hdr") or hdr_providers(ctx, media, offline=True)
             filters = {k: PluginRelease(**v) for k, v in recorded["plugins"].items()}
         else:
+            ctx.ispc_version = latest_tag(SOURCES["ispc"]).removeprefix("v")
             python = python_releases(ctx.arch)
-            media = releases()
+            media = releases(ctx.arch)
             ctx.hdr = hdr_providers(ctx, media)
             filters = plugin_releases()
         if not ctx.planning:
@@ -121,7 +125,8 @@ def main():
         build_python(ctx, python)
         build_media(ctx, media)
         build_plugins(ctx, filters)
-        sources = {"python": python, "media": media, "hdr": ctx.hdr, "plugins": {k: asdict(v) for k, v in filters.items()}}
+        sources = {"python": python, "media": media, "hdr": ctx.hdr, "ispc": ctx.ispc_version,
+                   "plugins": {k: asdict(v) for k, v in filters.items()}}
         build_assets(ctx, args.mode)
         if args.plan:
             args.plan.write_text(json.dumps({"sources": sources, "components": ctx.built}, sort_keys=True) + "\n")

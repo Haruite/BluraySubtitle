@@ -30,6 +30,17 @@ SECTION_FLAGS = "-ffunction-sections -fdata-sections"
 WIN7_FLAGS = "-D_WIN32_WINNT=0x0601 -DWINVER=0x0601"
 
 
+def latest_mkvtoolnix_version(git: str = "git") -> str:
+    refs = subprocess.check_output([
+        git, "ls-remote", "--exit-code", "--refs", "--tags", "--sort=-v:refname",
+        "https://codeberg.org/mbunkus/mkvtoolnix.git", "refs/tags/release-*",
+    ], encoding="utf-8", timeout=60)
+    match = re.search(r"\trefs/tags/release-([0-9]+(?:\.[0-9]+)+)$", refs, re.MULTILINE)
+    if not match:
+        raise ValueError("No stable MKVToolNix release tag found on Codeberg")
+    return match[1]
+
+
 def unpack_source(archive: Path, destination: Path) -> Path:
     with tarfile.open(archive) as source:
         # The command-line build does not need symbolic links on Windows.
@@ -331,8 +342,9 @@ def verify(directory: Path, record: dict, entrypoints: dict[str, str]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("version", "install"))
-    parser.add_argument("directory", type=Path)
+    parser.add_argument("operation", choices=("latest-version", "version", "install"))
+    parser.add_argument("directory", type=Path, nargs="?")
+    parser.add_argument("--git", default="git")
     parser.add_argument("--version", default="")
     parser.add_argument("--source")
     parser.add_argument("--sha256")
@@ -344,6 +356,11 @@ def main() -> int:
     parser.add_argument("--qt-win7-source", type=Path)
     parser.add_argument("--qt-win7-sdk", type=Path)
     args = parser.parse_args()
+    if args.operation == "latest-version":
+        print(latest_mkvtoolnix_version(args.git))
+        return 0
+    if args.directory is None:
+        parser.error(f"{args.operation} requires an installation directory")
     entrypoints = {name: name for name in MKV_PROGRAMS}
     if args.operation == "version":
         record = build_record(args.directory, "mkvtoolnix", installed=True)

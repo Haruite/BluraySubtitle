@@ -15,12 +15,11 @@ import sys
 import tarfile
 import tempfile
 import urllib.request
-from xml.etree import ElementTree
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools import build_vsedit_windows as vsedit
-from tools.build_mkvtoolnix_windows import MSYS2_REQUIRED
+from tools.build_mkvtoolnix_windows import MSYS2_REQUIRED, latest_mkvtoolnix_version
 from tools.windows_build_cache import files_under, publish, restore
 from tools.windows_native_tools import (
     VSEDIT_PLUGINS, VSEDIT_PROGRAMS, VSEDIT_QT_LIBRARIES, VSEDIT_WIN7_RECIPE, build_record, fetch_verified,
@@ -312,16 +311,12 @@ def build_zsmooth(work: Path, jobs: int) -> None:
         shutil.copytree(payload, work / "zsmooth", dirs_exist_ok=True)
 
 
-def build_mkvtoolnix(work: Path, msys2: Path, seven_zip: Path, jobs: int, *, defer_msys2: bool) -> None:
+def build_mkvtoolnix(work: Path, msys2: Path, seven_zip: Path, jobs: int, *, defer_msys2: bool, git: str = "git") -> None:
     sdk = work / f"qt-sdk-mingw-{QT_SDK_VERSION}"
     source = work / "deps" / f"qtbase-{QT_SDK_VERSION}"
-    upstream = "https://mkvtoolnix.download"
-    with urllib.request.urlopen(f"{upstream}/latest-release.xml", timeout=60) as response:
-        version = ElementTree.parse(response).findtext("latest-source/version")
-    if not re.fullmatch(r"\d+(?:\.\d+){1,3}", version or ""):
-        raise ValueError(f"Unexpected MKVToolNix release: {version}")
+    version = latest_mkvtoolnix_version(git)
     name = f"mkvtoolnix-{version}.tar.xz"
-    url = f"{upstream}/sources/{name}"
+    url = f"https://mkvtoolnix.download/sources/{name}"
     with urllib.request.urlopen(url + ".sha256", timeout=60) as response:
         digest, filename = response.read().decode("ascii").split()
     if filename != name:
@@ -526,6 +521,7 @@ def main() -> int:
     parser.add_argument("--work-dir", type=Path, default=PROJECT / "build/windows-compat")
     parser.add_argument("--seven-zip", type=Path, default=Path(os.environ["ProgramFiles"]) / "7-Zip/7z.exe")
     parser.add_argument("--msys2-root", type=Path, default=Path("C:/msys64"))
+    parser.add_argument("--git", default="git")
     parser.add_argument("--jobs", type=int, default=min(os.cpu_count() or 1, 8))
     parser.add_argument("--dist-dir", type=Path, default=PROJECT / "dist")
     parser.add_argument("--component", choices=("python-qt", "vapoursynth", "zsmooth", "mkvtoolnix", "vsedit", "rust-tools", "package"))
@@ -538,7 +534,7 @@ def main() -> int:
         if args.component in (None, "vapoursynth"):
             build_vapoursynth(work, python, args.msys2_root, args.jobs, defer_msys2=args.defer_msys2)
         if args.component in (None, "mkvtoolnix"):
-            build_mkvtoolnix(work, args.msys2_root, args.seven_zip, args.jobs, defer_msys2=args.defer_msys2)
+            build_mkvtoolnix(work, args.msys2_root, args.seven_zip, args.jobs, defer_msys2=args.defer_msys2, git=args.git)
     except Msys2Required:
         return MSYS2_REQUIRED
     if args.component in (None, "python-qt"):

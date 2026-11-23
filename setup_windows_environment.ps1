@@ -3298,19 +3298,11 @@ function Get-MkvToolNixRelease {
         return $script:ReleaseCache[$cacheKey]
     }
 
-    [xml]$releaseMetadata = Get-SetupTextFromUri `
-        -Uri ([Uri]"https://mkvtoolnix.download/latest-release.xml") `
-        -CacheName "mkvtoolnix-latest-release.xml"
-    $version = [string]$releaseMetadata.'mkvtoolnix-releases'.'latest-source'.version
-    if ($version -notmatch '^[0-9]+(?:\.[0-9]+){1,3}$') {
-        throw (Get-SetupText "Unable to parse the latest MKVToolNix version." "无法解析 MKVToolNix 最新版本。")
-    }
+    $version = Invoke-SetupCommand -FilePath $script:ToolPaths.Python -Arguments @(
+        "-B", (Join-Path $script:SetupDirectory "tools/build_mkvtoolnix_windows.py"), "latest-version", "--git", $script:ToolPaths.Git
+    )
     $name = "mkvtoolnix-$version.tar.xz"
-    $sourceUri = [Uri]([string]$releaseMetadata.'mkvtoolnix-releases'.'latest-source'.'source-code-url')
-    if ($sourceUri.Scheme -ne "https" -or $sourceUri.Host -ne "mkvtoolnix.download" -or
-        $sourceUri.AbsolutePath -ne "/sources/$name") {
-        throw (Get-SetupText "Unexpected MKVToolNix source archive URL." "MKVToolNix 源码压缩包地址与预期不符。")
-    }
+    $sourceUri = [Uri]"https://mkvtoolnix.download/sources/$name"
     $checksumText = Get-SetupTextFromUri `
         -Uri ([Uri]($sourceUri.AbsoluteUri + ".sha256")) `
         -CacheName "$name.sha256"
@@ -5036,7 +5028,7 @@ function Invoke-WindowsCompatibilityPackageBuild {
     $arguments = @(
         "-u", (Join-Path $script:SetupDirectory "tools/build_windows_compat_package.py"),
         "--work-dir", $CompatibilityWorkDirectory, "--seven-zip", $script:ToolPaths.SevenZip,
-        "--msys2-root", $script:ToolPaths.Msys2Root, "--jobs", [string]$script:BuildJobs
+        "--msys2-root", $script:ToolPaths.Msys2Root, "--jobs", [string]$script:BuildJobs, "--git", $script:ToolPaths.Git
     )
     $msysRequired = 75
     $displayName = Get-SetupText "Windows x64 compatibility package" "Windows x64 兼容包"

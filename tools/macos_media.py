@@ -9,10 +9,10 @@ import tempfile
 import zipfile
 import urllib.request
 from pathlib import Path
-from xml.etree import ElementTree
 
 from tools.macos_build_support import Build, copy, copy_licenses, digest, download, output, recipe_digest
 from tools.macos_macho import inspect_macho
+from tools.vapoursynth_plugin_releases import SOURCES, latest_tag
 
 
 def tags(repo, pattern):
@@ -22,6 +22,8 @@ def tags(repo, pattern):
         for line in lines.splitlines()
         if (m := re.fullmatch(pattern, line.partition("refs/tags/")[2]))
     ]
+    if not entries:
+        raise ValueError(f"No stable release tag found in {repo}")
     return max(entries, key=lambda x: tuple(map(int, re.findall(r"\d+", x[0]))))
 
 
@@ -36,7 +38,7 @@ def release_index(url, pattern):
     return max(versions, key=lambda s: tuple(map(int, s.split("."))))
 
 
-def releases():
+def releases(arch):
     from concurrent.futures import ThreadPoolExecutor
 
     jobs = {
@@ -76,11 +78,11 @@ def releases():
             version = release_index(server, r'href="(\d+(?:\.\d+)+)/"')
             server += version + "/"
         versions[name] = version, f"{server}{name}-{version}.tar.xz"
-    with urllib.request.urlopen("https://mkvtoolnix.download/latest-release.xml", timeout=45) as response:
-        version = ElementTree.parse(response).findtext("./latest-source/version")
-    if not version or not re.fullmatch(r"\d+(?:\.\d+)+", version):
-        raise ValueError("Invalid MKVToolNix source version")
+    version, _ = tags("https://codeberg.org/mbunkus/mkvtoolnix.git", r"release-([0-9]+(?:\.[0-9]+)+)")
     versions["mkvtoolnix"] = version, f"https://mkvtoolnix.download/sources/mkvtoolnix-{version}.tar.xz"
+    if arch == "arm64":
+        tag = latest_tag(SOURCES["sse2neon"])
+        versions["sse2neon"] = tag, f"https://codeload.github.com/DLTcollab/sse2neon/tar.gz/refs/tags/{tag}"
     # 1.4.2 raised the Metal backend's deployment target to macOS 12.
     versions["moltenvk"] = (
         "v1.4.1",
@@ -388,7 +390,12 @@ def build_vsedit(name, ctx, src, work, stage):
     copy(executable, stage / "libexec/vsedit")
 
 # The registry is also used to resolve the exact cache plan before Actions downloads artifacts.
+def install_sse2neon(name, ctx, src, work, stage):
+    copy(src / "sse2neon.h", stage / "include/sse2neon.h")
+
+
 MEDIA_RECIPES = {
+    "sse2neon": (install_sse2neon, ()),
     "libudfread": (build_bluray, ()),
     "libbluray": (build_bluray, ("libudfread",)),
     "ffmpeg": (build_ffmpeg, ("libbluray",)),
@@ -411,6 +418,8 @@ MEDIA_RECIPES = {
 
 def build_media(ctx, versions):
     for name, (builder, dependencies) in MEDIA_RECIPES.items():
+        if name == "sse2neon" and ctx.arch != "arm64":
+            continue
         release = versions[name]
         prebuilt = builder in (install_7zip, install_moltenvk, build_hdr_cli)
 
@@ -430,12 +439,12 @@ def build_media(ctx, versions):
             "libudfread": ("pkg-config", "autoconf", "automake", "libtool"),
             "ffmpeg": ("pkg-config", "nasm", "libopus", "dav1d-devel", "libass", "zlib"),
             "x265": ("nasm",), "svt-av1": ("nasm",), "vsedit": (), "7zip": (), "moltenvk": (),
-            "dovi": (), "hdr10plus": (),
+            "dovi": (), "hdr10plus": (), "sse2neon": (),
         }.get(name)
         helpers = (Build.cmake,) if cmake else ()
         provider = ctx.hdr.get(name)
         revision = [release, provider] if provider else release
-        downloaded = builder in (install_7zip, install_moltenvk) or (provider and "url" in provider)
+        downloaded = builder in (install_7zip, install_moltenvk, install_sse2neon) or (provider and "url" in provider)
         ctx.component(name, revision, install, dependencies=dependencies, recipe=recipe_digest(install, builder, *helpers),
                       scope="download" if downloaded else "native",
                       packages=packages, build_tools=build_tools)

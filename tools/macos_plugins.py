@@ -15,6 +15,7 @@ from tools.lsmash_ffmpeg_compat import adapt_sources
 from tools.vapoursynth_plugin_releases import (
     LEGACY_SOURCE_KEYS,
     R79_PLUGIN_NAMESPACES,
+    ispc_matches,
     resolve_releases,
 )
 
@@ -71,15 +72,10 @@ def build_bilateral(ctx, src, work, dest):
 
 
 def build_sangnom(ctx, src, work, dest):
-    flags = []
     if ctx.arch == "arm64":
-        neon = ctx.source(
-            "https://codeload.github.com/DLTcollab/sse2neon/tar.gz/refs/tags/v1.8.0", work / "sse2neon"
-        )
         file = src / "src/sangnom.cpp"
         file.write_text(file.read_text().replace("#include <emmintrin.h>", "#include <sse2neon.h>"))
-        flags.append("-I" + str(neon))
-    compiler(ctx, src, ["src/sangnom.cpp"], dest, *flags)
+    compiler(ctx, src, ["src/sangnom.cpp"], dest)
 
 
 def build_znedi3(ctx, src, work, dest):
@@ -206,6 +202,12 @@ def build_cmake_plugin(ctx, src, work, dest):
     build = work / "build"
     opts = []
     if dest.name == "libnlm_ispc.dylib":
+        compiler = ctx.deps / "bin/ispc"
+        if not ispc_matches(compiler, ctx.ispc_version):
+            tag = "v" + ctx.ispc_version
+            url = f"https://github.com/ispc/ispc/releases/download/{tag}/ispc-{tag}-macOS.{ctx.arch}.tar.gz"
+            compiler = ctx.source(url, work / "ispc") / "bin/ispc"
+        opts.append("-DCMAKE_ISPC_COMPILER=" + str(compiler))
         cpu = "sse2-i32x4;avx2-i32x8" if ctx.arch == "x86_64" else "neon-i32x4"
         opts.append("-DCMAKE_ISPC_INSTRUCTION_SETS=" + cpu)
     ctx.cmake(src, build, *opts)
@@ -259,6 +261,8 @@ def build_plugins(ctx, releases):
                 builder(ctx, src, work, folder / f"lib{name}.dylib")
 
             deps = ("vapoursynth", "lsmash", "ffmpeg") if name == "lsmas" else ("vapoursynth",)
+            if name == "sangnom" and ctx.arch == "arm64":
+                deps += ("sse2neon",)
             cmake = builder == build_cmake_plugin
             meson = builder in (build_meson, build_lsmas, build_eedi3m)
             build_tools = ("cmake", "ninja") if cmake else (("meson", "ninja") if meson else ())
@@ -271,6 +275,8 @@ def build_plugins(ctx, releases):
                 packages += ("pkg-config",)
             recipe = [recipe_digest(install, builder, *((Build.cmake,) if cmake else ())),
                       digest(ROOT / "tools/lsmash_ffmpeg_compat.py") if name == "lsmas" else ""]
+            if name == "nlm_ispc":
+                recipe.append(ctx.ispc_version)
             if name == "zsmooth" and ctx.arch == "arm64":
                 active_sdk = Path(ctx.env["SDKROOT"]).resolve()
                 ctx.zig_sdk = zsmooth_arm64_sdk(active_sdk)
