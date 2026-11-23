@@ -3091,6 +3091,8 @@ install_vs_nlm_ispc() (
   local build_dir="$1" plugins_dir="$2" profile="$3" compiler="$4" compiler_id="$5" tag="${vs_plugin_tags[nlm_ispc]}"
   cd "$build_dir" || exit 1
   local nlm_plugin="$plugins_dir/libvsnlm_ispc.so"
+  # Older builds recorded the release externally without embedding it in the plugin.
+  local build_id="$tag $compiler_id"
   # The x64 build dispatches between the baseline and AVX2 kernels.
   local -a ispc_options=('-DCMAKE_ISPC_INSTRUCTION_SETS=sse2-i32x4;avx2-i32x8')
   if [[ "$APT_ARCH" == arm64 ]]; then
@@ -3098,21 +3100,22 @@ install_vs_nlm_ispc() (
     unset ISPC_ARGS
     ispc_options=(-DCMAKE_ISPC_INSTRUCTION_SETS=neon-i32x4 "-DCMAKE_ISPC_FLAGS=--cpu=$profile")
   fi
-  if ! installed_artifact_matches "$nlm_plugin" "$profile" "$compiler_id" || vs_plugin_needs_upgrade "libvsnlm_ispc.so" "$tag"; then
+  if ! installed_artifact_matches "$nlm_plugin" "$profile" "$build_id" || vs_plugin_needs_upgrade "libvsnlm_ispc.so" "$tag"; then
     require_native_build "vs-nlm-ispc"
     log "$(msg "Building vs-nlm-ispc ($tag)" "编译 vs-nlm-ispc ($tag)")"
     download_source_archive "nlm_ispc $tag" "${vs_plugin_sources[nlm_ispc]}" nlm_ispc || exit 1
     cd nlm_ispc || exit 1
     mkdir -p build || exit 1
     cd build || exit 1
-    tmux_run "vs-nlm-ispc cmake" cmake -DCMAKE_BUILD_TYPE=Release "-DCMAKE_ISPC_COMPILER=$compiler" "${ispc_options[@]}" .. || exit 1
+    tmux_run "vs-nlm-ispc cmake" cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_DISABLE_FIND_PACKAGE_Git=ON \
+      "-DVCS_TAG=$tag" "-DCMAKE_ISPC_COMPILER=$compiler" "${ispc_options[@]}" .. || exit 1
     tmux_run "vs-nlm-ispc make" make -j"$(nproc)" || exit 1
     local out
     out="$(find "$PWD" -maxdepth 2 -name "libvsnlm_ispc.so" -type f | head -n 1)"
     [[ -n "${out:-}" ]] || exit 1
     install -m 0755 "$out" "$nlm_plugin" || exit 1
     vs_plugin_version record "libvsnlm_ispc.so" "$tag" || exit 1
-    artifact_stamp "$nlm_plugin" "$compiler_id" > "$nlm_plugin.$profile.sha256" || exit 1
+    artifact_stamp "$nlm_plugin" "$build_id" > "$nlm_plugin.$profile.sha256" || exit 1
   else
     log "$(msg 'libvsnlm_ispc.so version is current, skipping' 'libvsnlm_ispc.so 版本已满足要求，跳过')"
   fi
@@ -3948,7 +3951,7 @@ fi
 select_vapoursynth_python
 install_bluray_python_deps
 linux_cache_abi="" qt_cache_abi="" vapoursynth_cache_abi=""
-declare -A linux_recipe_revisions=([vsedit]=2 [mkvtoolnix]=2 [vapoursynth-sdk]=2 [lsmash-works]=2 [eedi3m]=2 [mvtools]=2 [bm3d]=2 [ispc]=2 [vs-nlm-ispc]=2)
+declare -A linux_recipe_revisions=([vsedit]=2 [mkvtoolnix]=2 [vapoursynth-sdk]=2 [lsmash-works]=2 [eedi3m]=2 [mvtools]=2 [bm3d]=2 [ispc]=2 [vs-nlm-ispc]=3)
 if [[ "$APT_ARCH" == arm64 ]]; then linux_recipe_revisions[sangnom]=2; fi
 declare -A vs_plugin_tags=() vs_plugin_sources=() vs_plugin_digests=()
 if "$package_build"; then

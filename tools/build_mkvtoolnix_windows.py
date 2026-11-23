@@ -195,7 +195,7 @@ def build_cli(source: Path, msys: Path, prefix: Path, jobs: int, cxx_flags: str,
         f"/usr/bin/dash ./configure --build={host} --host={host} "
         "--disable-gui --disable-debug --disable-optimization --enable-precompiled-headers "
         f'--with-qmake6={quote(posix_qmake)}{dvdread} --with-boost="$win_deps" '
-        '--with-boost-system=boost_filesystem-mt --with-boost-filesystem=boost_filesystem-mt',
+        '--with-boost-filesystem=boost_filesystem-mt',
         # The icons are already rendered from the source SVGs.
         r"sed -i -E 's/^(INKSCAPE|MAGICK|CONVERT)[[:space:]]*=.*/\1 =/' build-config",
         r"sed -i -E 's/^(QT_CFLAGS = .*)$/\1 -DQT_STATIC/' build-config",
@@ -275,9 +275,9 @@ def link_cli(source: Path, qtcore: Path, compiler: Path, env: dict) -> Path:
     link_common(exports)
     for name, args in commands.items():
         args[args.index("-o") + 1] = (linked / name).as_posix()
-        args[args.index("-lmtxcommon")] = import_library
+        # GNU ld must see references from all frontend archives before it scans the DLL import library.
         link(name, [*(arg for arg in args if not is_qt_import(arg) and arg not in bundled_libs),
-                    "-Wl,--gc-sections"])
+                    import_library, "-Wl,--gc-sections"])
     # Discard exports referenced only by object sections removed from the executables.
     imports = imported_symbols(linked / name for name in commands)["libmtxcommon.dll"]
     used = sorted(name.decode("ascii") for name in imports)

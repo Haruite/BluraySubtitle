@@ -1,5 +1,6 @@
 """Build the same R79 filter set as the regular Windows distribution."""
 
+from functools import partial
 import json
 import os
 import re
@@ -198,10 +199,12 @@ def build_zsmooth(ctx, src, work, dest):
     copy(next((src / "zig-out").rglob("libzsmooth.dylib")), dest)
 
 
-def build_cmake_plugin(ctx, src, work, dest):
+def build_cmake_plugin(ctx, src, work, dest, *, release_tag):
     build = work / "build"
     opts = []
     if dest.name == "libnlm_ispc.dylib":
+        # A release archive has no Git metadata for the upstream Version() function.
+        opts.extend(("-DCMAKE_DISABLE_FIND_PACKAGE_Git=ON", f"-DVCS_TAG={release_tag}"))
         compiler = ctx.deps / "bin/ispc"
         if not ispc_matches(compiler, ctx.ispc_version):
             tag = "v" + ctx.ispc_version
@@ -251,7 +254,9 @@ PLUGIN_BUILDERS = {
 def build_plugins(ctx, releases):
     for source, release in releases.items():
         for name in (("eedi3", "miscfilters") if source == "legacy-filters" else (source,)):
-            builder = PLUGIN_BUILDERS.get(name, build_meson)
+            build_filter = PLUGIN_BUILDERS.get(name, build_meson)
+            cmake = build_filter == build_cmake_plugin
+            builder = partial(build_filter, release_tag=release.ref) if cmake else build_filter
 
             def install(work, stage):
                 src = ctx.source(release.source_url, work / "source", release.sha256)
@@ -263,8 +268,7 @@ def build_plugins(ctx, releases):
             deps = ("vapoursynth", "lsmash", "ffmpeg") if name == "lsmas" else ("vapoursynth",)
             if name == "sangnom" and ctx.arch == "arm64":
                 deps += ("sse2neon",)
-            cmake = builder == build_cmake_plugin
-            meson = builder in (build_meson, build_lsmas, build_eedi3m)
+            meson = build_filter in (build_meson, build_lsmas, build_eedi3m)
             build_tools = ("cmake", "ninja") if cmake else (("meson", "ninja") if meson else ())
             # Include the native SDKs even when upstream finds them automatically.
             packages = {"assrender": ("libass",), "nlm_ispc": ("ispc",), "dfttest": ("fftw",),
@@ -273,7 +277,7 @@ def build_plugins(ctx, releases):
                         "fmtconv": ("autoconf", "automake", "libtool")}.get(name, ())
             if meson or cmake:
                 packages += ("pkg-config",)
-            recipe = [recipe_digest(install, builder, *((Build.cmake,) if cmake else ())),
+            recipe = [recipe_digest(install, build_filter, *((Build.cmake,) if cmake else ())),
                       digest(ROOT / "tools/lsmash_ffmpeg_compat.py") if name == "lsmas" else ""]
             if name == "nlm_ispc":
                 recipe.append(ctx.ispc_version)

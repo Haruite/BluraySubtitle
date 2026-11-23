@@ -245,7 +245,11 @@ def stage(support: Path, uosc_bundle: Path) -> None:
             raise RuntimeError(f"Run setup_linux_environment.sh --mode Build to install the {kind} build of {name}")
         with target.open("rb") as stream:
             checksum = hashlib.file_digest(stream, "sha256").hexdigest()
-        if record.read_text(encoding="ascii").strip() != f"{checksum}  -":
+        expected = f"{checksum}  -".encode("ascii")
+        stamp = record.read_bytes().strip()
+        # NLM setup can prefix the checksum with the build identity used for cache validation.
+        matches = stamp == expected or (name == "libvsnlm_ispc.so" and stamp.endswith(b" " + expected))
+        if not matches:
             raise RuntimeError(f"Installed {name} differs from its {kind} build. Run setup_linux_environment.sh --mode Build")
         if kind == "upstream":
             upstream_plugins.add(target)
