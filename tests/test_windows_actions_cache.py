@@ -7,7 +7,7 @@ from unittest.mock import patch
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from tools import install_vapoursynth_windows_components as plugins
-from tools.windows_actions_cache import outdated_cache_ids, snapshot_keys, tool_fingerprint
+from tools.windows_actions_cache import outdated_cache_ids, snapshot_keys, split_x64_artifacts, tool_fingerprint
 from tools.windows_build_cache import publish, restore
 
 
@@ -39,7 +39,7 @@ class WindowsActionsCacheTests(unittest.TestCase):
             body.write_bytes(b"new wheel")
             updated = snapshot_keys(pip.parent, archive.parent, "X64")
             self.assertNotEqual(updated["pip"], keys["pip"])
-            self.assertEqual(updated["tools"], keys["tools"])
+            self.assertEqual(updated["shared"], keys["shared"])
 
             with ZipFile(archive, "w") as cached:
                 for name, content in entries:
@@ -87,6 +87,26 @@ class WindowsActionsCacheTests(unittest.TestCase):
 
             source.write_bytes(b"new source")
             self.assertNotEqual(snapshot_keys(*args, compatibility=work)["compat"], second["compat"])
+
+    def test_x64_compatibility_only_reuses_shared_builds(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tools = root / "artifacts"
+            payload = root / "binary"
+            payload.write_bytes(b"build")
+            shared = {"ffmpeg", "vs-r79-lsmas", "vs-r79-nlm_ispc", "fftw"}
+            standard = {"mkvtoolnix", "mkvtoolnix-qtcore", "vsedit", "vs-r79-placebo", "vs-r79-zsmooth",
+                        "dovi-tool", "hdr10plus-tool", "vapoursynth-classic"}
+            for name in shared | standard:
+                publish(tools / (name + ".zip"), name, {name: payload})
+            split_x64_artifacts(tools)
+            self.assertEqual({file.stem for file in tools.glob("*.zip")}, shared)
+            self.assertEqual({file.stem for file in (tools / "standard").glob("*.zip")}, standard)
+            args = (root / "pip", tools, "X64")
+            regular = snapshot_keys(*args)
+            compat = snapshot_keys(*args, compatibility=root / "compat")
+            self.assertEqual(set(regular), {"shared", "standard"})
+            self.assertEqual(compat, {"shared": regular["shared"]})
 
     def test_component_accepts_compatible_legacy_key(self):
         with tempfile.TemporaryDirectory() as directory:

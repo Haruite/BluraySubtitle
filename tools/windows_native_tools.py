@@ -15,6 +15,7 @@ import time
 import urllib.error
 import urllib.request
 
+from tools.vapoursynth_plugin_releases import R79_PLUGIN_NAMESPACES
 from tools.windows_build_cache import files_under
 from tools.windows_tool_paths import MKV_PROGRAMS
 
@@ -25,6 +26,12 @@ MKV_WIN7_RECIPE = "mingw-ucrt-qtcore-win7-no-dvdread-1"
 VSEDIT_RECIPE = "msvc-pyqt6-1"
 VSEDIT_ARM64_RECIPE = "msvc-arm64-pyqt6-1"
 VSEDIT_WIN7_RECIPE = "msvc-qt6-win7-1"
+WIN7_QT_VERSION = "6.8.5"
+WIN7_QT_SDK_VERSION = "6.8.3"
+WIN7_OMITTED_PLUGINS = {
+    "placebo": "The upstream build imports WaitOnAddress and ProcessPrng, which Windows 7 lacks.",
+}
+WIN7_SHARED_PLUGINS = tuple(key for key in R79_PLUGIN_NAMESPACES if key != "zsmooth" and key not in WIN7_OMITTED_PLUGINS)
 INSTALLATION_SCHEMA = 1
 PE_AMD64 = 0x8664
 PE_ARM64 = 0xAA64
@@ -241,6 +248,8 @@ def build_record(directory: Path, tool: str, *, installed: bool = False, allow_l
         recipe, programs = (MKV_RECIPE, MKV_PROGRAMS) if tool == "mkvtoolnix" else (VSEDIT_RECIPE, VSEDIT_PROGRAMS)
         if compatibility:
             recipe = MKV_WIN7_RECIPE if tool == "mkvtoolnix" else VSEDIT_WIN7_RECIPE
+            if record.get("qt_version") != (WIN7_QT_SDK_VERSION if tool == "mkvtoolnix" else WIN7_QT_VERSION):
+                return None
         elif tool == "vsedit" and windows_machine() == PE_ARM64:
             recipe = VSEDIT_ARM64_RECIPE
         if installed and record.get("installation_schema") != INSTALLATION_SCHEMA:

@@ -23,6 +23,7 @@ from tools.build_mkvtoolnix_windows import MSYS2_REQUIRED, latest_mkvtoolnix_ver
 from tools.windows_build_cache import files_under, publish, restore
 from tools.windows_native_tools import (
     VSEDIT_PLUGINS, VSEDIT_PROGRAMS, VSEDIT_QT_LIBRARIES, VSEDIT_WIN7_RECIPE, build_record, fetch_verified,
+    WIN7_OMITTED_PLUGINS, WIN7_QT_SDK_VERSION, WIN7_QT_VERSION, WIN7_SHARED_PLUGINS,
     file_hash, fingerprint, msvc_environment, record_build,
 )
 
@@ -30,8 +31,6 @@ from tools.windows_native_tools import (
 PROJECT = Path(__file__).resolve().parents[1]
 PACKAGE = "BluraySubtitle_windows_x64_compat"
 GITHUB_TOKEN = os.environ.get("BLURAYSUBTITLE_GITHUB_TOKEN", "")
-QT_VERSION = "6.8.5"
-QT_SDK_VERSION = "6.8.3"
 QT_ASSET = "qt6_x64_to_run_on_windows7.7z"
 R79_SHA256 = "ba67823944227e3f52cd0faff9d2dd88ea7f23587bffcd9a331cf3140dea90c3"
 ZSMOOTH_VERSION = "0.20.0"
@@ -43,13 +42,10 @@ R79_DEPENDENCIES = {
     "zimg": "e2e43d09afa50d1fbad391a7a61e789b1f036854",
     "graphengine": "91c6af4c795c5396d8b974f24b4d2e2ecca04e2d",
 }
-OMITTED_PLUGINS = {
-    "placebo": "The upstream build imports WaitOnAddress and ProcessPrng, which Windows 7 lacks.",
-}
 
 
 class Msys2Required(Exception):
-    """Resume the compatibility build after setup prepares the standard toolchain."""
+    """Resume the compatibility build after setup prepares MSYS2."""
 
 
 @contextmanager
@@ -94,13 +90,12 @@ def prepare_python(work: Path) -> Path:
     if not python.is_file():
         with zipfile.ZipFile(archive) as package:
             package.extractall(installation)
-    if not (python.parent / "Lib/site-packages/pip").is_dir():
-        subprocess.run([python, "-I", "-m", "ensurepip", "--upgrade"], check=True)
-    pip(python, "install", "--only-binary=:all:", "pefile")
     return python
 
 
 def pip(python: Path, *arguments: str | Path) -> None:
+    if not (python.parent / "Lib/site-packages/pip").is_dir():
+        subprocess.run([python, "-I", "-m", "ensurepip", "--upgrade"], check=True)
     subprocess.run([python, "-I", "-m", "pip", "--disable-pip-version-check", *arguments], check=True)
 
 
@@ -160,33 +155,49 @@ def download_source(url: str, destination: Path) -> None:
 
 def prepare_qt(work: Path, python: Path, seven_zip: Path) -> None:
     # This PyQt6 series uses the Qt 6.8 ABI. Install its bindings without the stock Qt wheel.
-    pip(python, "install", "--only-binary=:all:", "PyQt6-sip", "PyInstaller", "Pillow",
+    pip(python, "install", "--only-binary=:all:", "pefile", "PyQt6-sip", "PyInstaller", "Pillow",
         "numpy", "SoundFile", "pycountry")
     pip(python, "install", "--only-binary=:all:", "--no-deps", "PyQt6==6.8.1")
-    release = github_release("crystalidea/qt6windows7", f"v{QT_VERSION}")
-    archive = github_asset(release, QT_ASSET, work / "downloads" / f"qt-{QT_VERSION}")
-    extracted = work / f"qt-{QT_VERSION}"
-    subprocess.run([seven_zip, "x", archive, "-o" + str(extracted), "-y", "-bso0", "-bsp0"], check=True)
-    (core,) = extracted.rglob("Qt6Core.dll")
-    runtime = python.parent / "Lib/site-packages/PyQt6/Qt6"
-    runtime.mkdir(parents=True, exist_ok=True)
-    binaries = runtime / "bin"
-    binaries.mkdir(exist_ok=True)
-    for path in core.parent.glob("*.dll"):
-        shutil.copy2(path, binaries / path.name)
-    for path in core.parent.iterdir():
-        if path.is_dir():
-            shutil.copytree(path, runtime / "plugins" / path.name, dirs_exist_ok=True)
+    release = github_release("crystalidea/qt6windows7", f"v{WIN7_QT_VERSION}")
+    archive = github_asset(release, QT_ASSET, work / "downloads" / f"qt-{WIN7_QT_VERSION}")
     # Qt's release archive omits translations, which are compatible across Qt 6.8 patch releases.
-    sdk = work / f"qt-sdk-msvc-{QT_SDK_VERSION}"
-    vsedit.prepare_qt_sdk(QT_SDK_VERSION, work / "downloads" / sdk.name, sdk, str(seven_zip),
-                         modules=("qttranslations",))
-    translations = runtime / "translations"
-    translations.mkdir(exist_ok=True)
-    for file in (sdk / "translations").glob("*.qm"):
-        if file.name in {"qt_en.qm", "qtbase_en.qm", "qt_zh_CN.qm", "qtbase_zh_CN.qm"}:
-            shutil.copy2(file, translations)
-    subprocess.run([python, "-I", "-c", "from PyQt6.QtCore import qVersion; print(qVersion())"], check=True)
+    sdk = work / f"qt-sdk-msvc-{WIN7_QT_SDK_VERSION}"
+    vsedit.prepare_qt_sdk(WIN7_QT_SDK_VERSION, work / "downloads" / sdk.name, sdk, str(seven_zip),
+                          modules=("qttranslations",))
+    runtime = python.parent / "Lib/site-packages/PyQt6/Qt6"
+    with tempfile.TemporaryDirectory(dir=runtime.parent) as temporary:
+        staging = Path(temporary)
+        extracted = staging / "backport"
+        subprocess.run([seven_zip, "x", archive, "-o" + str(extracted), "-y", "-bso0", "-bsp0"], check=True)
+        (core,) = extracted.rglob("Qt6Core.dll")
+        fresh = staging / "Qt6"
+        binaries = fresh / "bin"
+        binaries.mkdir(parents=True)
+        for path in core.parent.glob("*.dll"):
+            shutil.copy2(path, binaries)
+        for path in core.parent.iterdir():
+            if path.is_dir():
+                shutil.copytree(path, fresh / "plugins" / path.name)
+        translations = fresh / "translations"
+        translations.mkdir()
+        for name in ("qt_en.qm", "qtbase_en.qm", "qt_zh_CN.qm", "qtbase_zh_CN.qm"):
+            translation = sdk / "translations" / name
+            if translation.is_file():
+                shutil.copy2(translation, translations)
+        previous = staging / "previous"
+        if runtime.is_dir():
+            runtime.rename(previous)
+        try:
+            fresh.rename(runtime)
+            subprocess.run([python, "-I", "-c",
+                            "import sys; from PyQt6.QtCore import qVersion; print(qVersion()); "
+                            "sys.exit(qVersion() != sys.argv[1])", WIN7_QT_VERSION], check=True)
+        except BaseException:
+            if runtime.is_dir():
+                runtime.rename(fresh)
+            if previous.is_dir():
+                previous.rename(runtime)
+            raise
 
 
 def compile_vapoursynth(work: Path, python: Path, msys2: Path, jobs: int, payload: Path, python_tag: str) -> None:
@@ -226,6 +237,9 @@ def compile_vapoursynth(work: Path, python: Path, msys2: Path, jobs: int, payloa
     environment["PATH"] = os.pathsep.join((str(python.parent), str(python.parent / "Scripts"), str(msys2 / "ucrt64/bin"),
                                            environment["PATH"]))
     environment["CC"] = environment["CXX"] = "cl.exe"
+    # Meson parses the compiler banner; localized MSVC output can use the legacy Windows code page.
+    environment["VSLANG"] = "1033"
+    environment["PYTHONUTF8"] = "0"
     environment["CFLAGS"] = environment["CXXFLAGS"] = "/DWINVER=0x0601 /D_WIN32_WINNT=0x0601"
     # The MSYS2 pkg-config describes its own MinGW Python, which cannot link into MSVC modules.
     environment["PKG_CONFIG_LIBDIR"] = str(work / "empty-pkgconfig")
@@ -311,9 +325,10 @@ def build_zsmooth(work: Path, jobs: int) -> None:
         shutil.copytree(payload, work / "zsmooth", dirs_exist_ok=True)
 
 
-def build_mkvtoolnix(work: Path, msys2: Path, seven_zip: Path, jobs: int, *, defer_msys2: bool, git: str = "git") -> None:
-    sdk = work / f"qt-sdk-mingw-{QT_SDK_VERSION}"
-    source = work / "deps" / f"qtbase-{QT_SDK_VERSION}"
+def build_mkvtoolnix(work: Path, msys2: Path, seven_zip: Path, jobs: int, *, defer_msys2: bool, git: str = "git",
+                     python: Path) -> None:
+    sdk = work / f"qt-sdk-mingw-{WIN7_QT_SDK_VERSION}"
+    source = work / "deps" / f"qtbase-{WIN7_QT_SDK_VERSION}"
     version = latest_mkvtoolnix_version(git)
     name = f"mkvtoolnix-{version}.tar.xz"
     url = f"https://mkvtoolnix.download/sources/{name}"
@@ -321,8 +336,8 @@ def build_mkvtoolnix(work: Path, msys2: Path, seven_zip: Path, jobs: int, *, def
         digest, filename = response.read().decode("ascii").split()
     if filename != name:
         raise ValueError(f"Unexpected MKVToolNix source checksum: {filename}")
-    # Icon generation uses Pillow and QtSvg from the host Python prepared by setup.
-    command = [sys.executable, PROJECT / "tools/build_mkvtoolnix_windows.py", "install", work / "mkvtoolnix",
+    # Render the upstream icons using the same Qt backport as the packaged application.
+    command = [python, PROJECT / "tools/build_mkvtoolnix_windows.py", "install", work / "mkvtoolnix",
                "--version", version, "--source", url, "--sha256", digest.lower(), "--cache", work / "cache",
                "--work", work / "mkv-build", "--msys2-root", msys2, "--jobs", str(jobs),
                "--qt-win7-source", source, "--qt-win7-sdk", sdk]
@@ -334,9 +349,9 @@ def build_mkvtoolnix(work: Path, msys2: Path, seven_zip: Path, jobs: int, *, def
         raise Msys2Required
 
     if not (sdk / "bin/qmake.exe").is_file():
-        vsedit.prepare_qt_sdk(QT_SDK_VERSION, work / "downloads" / sdk.name, sdk, str(seven_zip),
+        vsedit.prepare_qt_sdk(WIN7_QT_SDK_VERSION, work / "downloads" / sdk.name, sdk, str(seven_zip),
                              mingw=True, modules=("qtbase",))
-    ref = f"v{QT_SDK_VERSION}"
+    ref = f"v{WIN7_QT_SDK_VERSION}"
     if not (source / "CMakeLists.txt").is_file():
         archive = fetch_verified(f"https://codeload.github.com/qt/qtbase/tar.gz/refs/tags/{ref}",
                                  work / "downloads" / (source.name + ".tar.gz"), QTBASE_SHA256)
@@ -356,7 +371,7 @@ def build_mkvtoolnix(work: Path, msys2: Path, seven_zip: Path, jobs: int, *, def
 
 
 def build_vsedit(work: Path, python: Path, seven_zip: Path, jobs: int) -> None:
-    sdk = work / f"qt-sdk-msvc-{QT_SDK_VERSION}"
+    sdk = work / f"qt-sdk-msvc-{WIN7_QT_SDK_VERSION}"
     qt = python.parent / "Lib/site-packages/PyQt6/Qt6"
     repository = "YomikoR/VapourSynth-Editor"
     ref = github_release(repository)["tag_name"]
@@ -364,11 +379,11 @@ def build_vsedit(work: Path, python: Path, seven_zip: Path, jobs: int) -> None:
     runtime = [qt / "bin" / name for name in VSEDIT_QT_LIBRARIES if name != websocket]
     runtime.extend(qt / "plugins" / name for name in VSEDIT_PLUGINS)
     qt_hashes = {path.name: file_hash(path) for path in runtime}
-    with component_payload(work, "vsedit", VSEDIT_WIN7_RECIPE, ref, QT_SDK_VERSION, QT_VERSION,
+    with component_payload(work, "vsedit", VSEDIT_WIN7_RECIPE, ref, WIN7_QT_SDK_VERSION, WIN7_QT_VERSION,
                            qt_hashes, R79_SHA256, vsedit.JOM_SHA256) as (payload, cached, key):
         if not cached:
             if not (sdk / "bin" / websocket).is_file():
-                vsedit.prepare_qt_sdk(QT_SDK_VERSION, work / "downloads" / sdk.name, sdk, str(seven_zip))
+                vsedit.prepare_qt_sdk(WIN7_QT_SDK_VERSION, work / "downloads" / sdk.name, sdk, str(seven_zip))
             # WebSockets uses the stable Qt 6.8 ABI of the patched QtBase and Multimedia libraries.
             shutil.copy2(sdk / "bin" / websocket, qt / "bin")
             source = checkout_release(repository, work / "deps/vsedit", ref)
@@ -378,17 +393,16 @@ def build_vsedit(work: Path, python: Path, seven_zip: Path, jobs: int) -> None:
             if not jom.is_file():
                 vsedit.unpack(jom_archive, jom.parent, str(seven_zip))
             environment = msvc_environment()
-            programs = vsedit.build_programs(source, sdk, jom, include, environment, jobs, QT_SDK_VERSION, win7=True)
+            programs = vsedit.build_programs(source, sdk, jom, include, environment, jobs, WIN7_QT_SDK_VERSION, win7=True)
             vsedit.stage_editor(source, programs, payload, qt, environment)
             for name in ("LGPL-3.0-only.txt", "GPL-3.0-only.txt"):
-                url = f"https://raw.githubusercontent.com/qt/qtbase/v{QT_SDK_VERSION}/LICENSES/{name}"
-                license_file = work / "downloads" / f"qt-{QT_SDK_VERSION}-licenses" / name
+                url = f"https://raw.githubusercontent.com/qt/qtbase/v{WIN7_QT_SDK_VERSION}/LICENSES/{name}"
+                license_file = work / "downloads" / f"qt-{WIN7_QT_SDK_VERSION}-licenses" / name
                 if not license_file.is_file():
                     download_source(url, license_file)
                 shutil.copy2(license_file, payload / "licenses/Qt" / name)
-            record_build(payload, "vsedit", VSEDIT_WIN7_RECIPE, ref, key, VSEDIT_PROGRAMS, qt_version=QT_VERSION)
+            record_build(payload, "vsedit", VSEDIT_WIN7_RECIPE, ref, key, VSEDIT_PROGRAMS, qt_version=WIN7_QT_VERSION)
         vsedit.verify_editor(payload, "vsedit.exe", ref)
-        shutil.copy2(payload / websocket, qt / "bin")
         shutil.copytree(payload, work / "vsedit", dirs_exist_ok=True)
 
 
@@ -445,12 +459,33 @@ def build_rust_tools(work: Path, jobs: int) -> None:
             shutil.copy2(payload / binary, output)
 
 
-def stage_vapoursynth(work: Path, python: Path) -> None:
+def install_shared_plugins(work: Path, python: Path, args) -> None:
+    runtime = work / "shared-plugins"
+    headers = source_zip("vapoursynth/vapoursynth", "R79", work, R79_SHA256) / "include"
+    shutil.copytree(headers, runtime / "sdk/include/vapoursynth", dirs_exist_ok=True)
+    (runtime / "vapoursynth-build.json").write_text(json.dumps({"version": "79"}), encoding="utf-8")
     settings = runpy.run_path(str(PROJECT / "src/core/settings.py"))
-    installed = Path(settings["VSPIPE_PATH"]).parent
+    libass = Path(settings["LIBASS_PATH"])
+    command = [
+        python, "-B", PROJECT / "tools/install_vapoursynth_windows_components.py",
+        "--compatibility-plugins", "--runtime-root", runtime, "--work-root", work / "plugin-build",
+        "--libass", libass, "--libass-version", libass.with_name("libass-version.txt").read_text().strip(),
+        "--msys2-root", args.msys2_root, "--seven-zip", args.seven_zip, "--git", args.git,
+        "--jobs", str(args.jobs), "--language", args.language, "--build-with-vulkan",
+        "--build-cache", args.shared_cache,
+    ]
+    if args.defer_msys2:
+        command.append("--defer-msys2")
+    result = subprocess.run(command, env=dict(os.environ, BLURAYSUBTITLE_GITHUB_TOKEN=GITHUB_TOKEN))
+    if result.returncode == MSYS2_REQUIRED:
+        raise Msys2Required
+    result.check_returncode()
+
+
+def stage_vapoursynth(work: Path, python: Path) -> None:
+    installed = work / "shared-plugins"
     state = json.loads((installed / "vapoursynth-components.json").read_text(encoding="utf-8"))
-    plugins = {key: component for key, component in state["components"].items()
-               if key not in (*OMITTED_PLUGINS, "zsmooth", "vsedit")}
+    plugins = {name: state["components"][name] for name in WIN7_SHARED_PLUGINS}
     runtime = work / "vapoursynth"
     runtime.mkdir(exist_ok=True)
     package = python.parent / "Lib/site-packages/vapoursynth"
@@ -480,9 +515,10 @@ def stage_vapoursynth(work: Path, python: Path) -> None:
     editor = build_record(work / "vsedit", "vsedit", compatibility=True)
     if not editor:
         raise RuntimeError("A source-built compatible VSEdit is required")
+    shutil.copy2(work / "vsedit/Qt6WebSockets.dll", python.parent / "Lib/site-packages/PyQt6/Qt6/bin")
     plugins["vsedit"] = {
         "ref": editor["version"], "entrypoint": "../vsedit/vsedit.exe", "recipe": editor["recipe"],
-        "qt_version": QT_VERSION, "qt_source_url": "https://github.com/crystalidea/qt6windows7", "files": {},
+        "qt_version": WIN7_QT_VERSION, "qt_source_url": "https://github.com/crystalidea/qt6windows7", "files": {},
     }
     (runtime / "vapoursynth-components.json").write_text(
         json.dumps({"schema": 1, "components": plugins, "dependencies": dependencies}, indent=2),
@@ -493,7 +529,7 @@ def stage_vapoursynth(work: Path, python: Path) -> None:
 def package(work: Path, python: Path, seven_zip: Path, dist: Path) -> Path:
     stage_vapoursynth(work, python)
     (work / "compatibility-components.json").write_text(
-        json.dumps({"minimum_windows": "6.1.7601", "omitted_components": OMITTED_PLUGINS | {
+        json.dumps({"minimum_windows": "6.1.7601", "omitted_components": WIN7_OMITTED_PLUGINS | {
             "mkvtoolnix-dvd-chapters": "libdvdread depends on libdvdcss, which imports CreateFile2.",
         }}, indent=2),
         encoding="utf-8", newline="\r\n",
@@ -522,23 +558,32 @@ def main() -> int:
     parser.add_argument("--seven-zip", type=Path, default=Path(os.environ["ProgramFiles"]) / "7-Zip/7z.exe")
     parser.add_argument("--msys2-root", type=Path, default=Path("C:/msys64"))
     parser.add_argument("--git", default="git")
+    parser.add_argument("--shared-cache", type=Path, default=Path(os.environ["ProgramData"]) / "BluraySubtitle/build-cache/artifacts")
+    parser.add_argument("--language", choices=("en", "zh"), default="en")
     parser.add_argument("--jobs", type=int, default=min(os.cpu_count() or 1, 8))
     parser.add_argument("--dist-dir", type=Path, default=PROJECT / "dist")
-    parser.add_argument("--component", choices=("python-qt", "vapoursynth", "zsmooth", "mkvtoolnix", "vsedit", "rust-tools", "package"))
+    parser.add_argument("--component", choices=("python-qt", "vapoursynth", "plugins", "zsmooth", "mkvtoolnix", "vsedit", "rust-tools", "package"))
     parser.add_argument("--defer-msys2", action="store_true", help="return 75 if an MSYS2 build is required")
     args = parser.parse_args()
     work = args.work_dir.resolve()
     work.mkdir(parents=True, exist_ok=True)
-    python = prepare_python(work) if args.component not in ("mkvtoolnix", "zsmooth", "rust-tools") else None
+    host_version = ".".join(map(str, sys.version_info[:3]))
+    python = work / f"pythonvista-{host_version}/tools/python.exe"
+    prepared = python == Path(sys.executable).resolve()
+    if not prepared and args.component not in ("zsmooth", "rust-tools"):
+        python = prepare_python(work)
+    if args.component in (None, "python-qt") or (args.component == "mkvtoolnix" and not prepared):
+        prepare_qt(work, python, args.seven_zip)
     try:
         if args.component in (None, "vapoursynth"):
             build_vapoursynth(work, python, args.msys2_root, args.jobs, defer_msys2=args.defer_msys2)
+        if args.component in (None, "plugins"):
+            install_shared_plugins(work, python, args)
         if args.component in (None, "mkvtoolnix"):
-            build_mkvtoolnix(work, args.msys2_root, args.seven_zip, args.jobs, defer_msys2=args.defer_msys2, git=args.git)
+            build_mkvtoolnix(work, args.msys2_root, args.seven_zip, args.jobs, defer_msys2=args.defer_msys2,
+                             git=args.git, python=python)
     except Msys2Required:
         return MSYS2_REQUIRED
-    if args.component in (None, "python-qt"):
-        prepare_qt(work, python, args.seven_zip)
     if args.component in (None, "zsmooth"):
         build_zsmooth(work, args.jobs)
     if args.component in (None, "vsedit"):

@@ -14,9 +14,21 @@ from zipfile import BadZipFile, ZipFile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools.actions_cache import ARCHITECTURES, delete_cache, fingerprint, main_cache_entries, superseded_cache_ids
 from tools.windows_build_cache import read_manifest
+from tools.windows_native_tools import WIN7_SHARED_PLUGINS
 
 
-NAMESPACES = {"pip": (2, 1), "tools": (4, 3), "compat": (1, None)}
+NAMESPACES = {"pip": (2, 1), "tools": (4, 3), "shared": (1, None), "standard": (1, None), "compat": (1, None)}
+
+
+def split_x64_artifacts(tools: Path) -> None:
+    standard = tools / "standard"
+    for archive in tools.glob("*.zip"):
+        name = archive.stem
+        if (name in {"mkvtoolnix", "mkvtoolnix-qtcore", "vsedit", "dovi-tool", "hdr10plus-tool"}
+                or name.startswith(("vs-classic-", "vapoursynth"))
+                or name.startswith("vs-r79-") and name.removeprefix("vs-r79-") not in WIN7_SHARED_PLUGINS):
+            standard.mkdir(exist_ok=True)
+            archive.replace(standard / archive.name)
 
 
 def tool_fingerprint(directory: Path) -> str:
@@ -43,11 +55,12 @@ def compatibility_fingerprint(work: Path) -> str:
 
 
 def snapshot_keys(pip: Path, tools: Path, architecture: str, *, compatibility: Path | None = None) -> dict[str, str]:
-    families = [
-        ("pip", lambda: fingerprint((("pip", pip, "**/*"),))),
-        ("tools", lambda: tool_fingerprint(tools)),
-    ]
-    if compatibility is not None:
+    families = [("shared" if architecture == "X64" else "tools", lambda: tool_fingerprint(tools))]
+    if compatibility is None:
+        families.append(("pip", lambda: fingerprint((("pip", pip, "**/*"),))))
+        if architecture == "X64":
+            families.append(("standard", lambda: tool_fingerprint(tools / "standard")))
+    else:
         families.append(("compat", lambda: compatibility_fingerprint(compatibility)))
     checksums = {}
     for family, compute in families:
@@ -72,18 +85,24 @@ def outdated_cache_ids(entries: list[dict], architecture: str, restored: dict[st
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("snapshot", "prune"))
+    parser.add_argument("operation", choices=("restored", "snapshot", "prune"))
     parser.add_argument("architecture", choices=ARCHITECTURES)
     parser.add_argument("--compatibility", action="store_true")
     args = parser.parse_args()
-    if args.operation == "snapshot":
+    if args.operation in ("restored", "snapshot"):
         temp = Path(os.environ["RUNNER_TEMP"])
         tools = temp / "bluraysubtitle-builds/artifacts"
         if args.architecture == "ARM64":
             tools /= "arm64"
         (tools / "vapoursynth-components.zip").unlink(missing_ok=True)
         compatibility = temp / "bluraysubtitle-compat" if args.compatibility else None
+        if args.architecture == "X64":
+            split_x64_artifacts(tools)
         keys = snapshot_keys(temp / "bluraysubtitle-pip", tools, args.architecture, compatibility=compatibility)
+        if args.operation == "restored" and args.architecture == "X64" and not args.compatibility:
+            # Build helpers read their per-component archives from the same directory on every platform.
+            for archive in (tools / "standard").glob("*.zip"):
+                archive.replace(tools / archive.name)
         with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as stream:
             stream.writelines(f"{family}={key}\n" for family, key in keys.items())
         return

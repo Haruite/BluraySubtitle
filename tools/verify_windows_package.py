@@ -12,12 +12,12 @@ import wave
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools.windows_native_tools import (
     PE_ARM64, VSEDIT_PROGRAMS, VSEDIT_QT_LIBRARIES, clean_tool_environment, has_pe_machine,
-    runtime_dependencies, verify_mkv_runtime, windows_machine,
+    WIN7_QT_VERSION, WIN7_QT_SDK_VERSION, runtime_dependencies, verify_mkv_runtime, windows_machine,
 )
 from tools.windows_tool_paths import MKV_PROGRAMS
 
 
-def verify_compatibility_imports(path: Path) -> None:
+def verify_compatibility_imports(path: Path, qt: Path) -> None:
     import pefile
 
     unavailable = {
@@ -25,6 +25,18 @@ def verify_compatibility_imports(path: Path) -> None:
         b"CreateFile2", b"GetSystemTimePreciseAsFileTime", b"UiaRaiseNotificationEvent",
     }
     with pefile.PE(str(path), fast_load=True) as image:
+        is_qt_library = path.suffix.lower() == ".dll" and path.name.lower().startswith("qt6")
+        is_qt_plugin = path.is_relative_to(qt / "plugins") and path.suffix.lower() == ".dll"
+        if is_qt_library and path.parent != qt / "bin":
+            raise RuntimeError(f"Unexpected Qt library location: {path}")
+        if is_qt_library or is_qt_plugin:
+            expected = WIN7_QT_SDK_VERSION if path.name.lower() == "qt6websockets.dll" else WIN7_QT_VERSION
+            image.parse_data_directories([pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_RESOURCE"]])
+            info = getattr(image, "VS_FIXEDFILEINFO", [])
+            version = (f"{info[0].FileVersionMS >> 16}.{info[0].FileVersionMS & 0xffff}.{info[0].FileVersionLS >> 16}"
+                       if info else "unknown")
+            if version != expected:
+                raise RuntimeError(f"{path.name} has Qt {version}; the Windows 7 package requires {expected}")
         image.parse_data_directories([pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_IMPORT"]])
         missing = {entry.name for module in getattr(image, "DIRECTORY_ENTRY_IMPORT", ())
                    for entry in module.imports if entry.name in unavailable}
@@ -38,19 +50,19 @@ def verify(bundle: Path, work: Path) -> None:
     package_name = f"BluraySubtitle_windows_{suffix}" + ("_compat" if compatibility else "")
     if bundle.name != package_name or not (bundle / f"{package_name}.exe").is_file():
         raise RuntimeError(f"Expected the {package_name} package and executable")
+    internal = bundle / "_internal"
+    qt = internal / "PyQt6/Qt6"
     binaries = [path for path in bundle.rglob("*") if path.suffix.lower() in {".exe", ".dll", ".pyd"}]
     for path in binaries:
         if not has_pe_machine(path):
             raise RuntimeError(f"Expected a {suffix} PE binary at {path.relative_to(bundle)}")
         if compatibility:
-            verify_compatibility_imports(path)
+            verify_compatibility_imports(path, qt)
 
-    internal = bundle / "_internal"
     mkv = internal / "mkvtoolnix"
     editor = internal / "vsedit"
-    qt = internal / "PyQt6/Qt6/bin"
     for name in VSEDIT_QT_LIBRARIES:
-        if set(internal.rglob(name)) != {qt / name}:
+        if set(internal.rglob(name)) != {qt / "bin" / name}:
             raise RuntimeError(f"Unexpected bundled locations for {name}")
     programs = [mkv / (Path(name).stem + "-native.exe") for name in MKV_PROGRAMS]
     verify_mkv_runtime(programs, runtime_dependencies(programs, [mkv, internal]))

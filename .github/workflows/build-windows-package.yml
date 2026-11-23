@@ -25,6 +25,8 @@ jobs:
       architecture: ${{ runner.arch }}
       restored-pip: ${{ steps.restored.outcome == 'success' && steps.restored.outputs.pip == steps.downloads.outputs.cache-matched-key && steps.restored.outputs.pip || '' }}
       restored-tools: ${{ steps.restored.outcome == 'success' && steps.restored.outputs.tools == steps.builds.outputs.cache-matched-key && steps.restored.outputs.tools || '' }}
+      restored-shared: ${{ steps.restored.outputs.shared == steps.builds.outputs.cache-matched-key && steps.restored.outputs.shared || '' }}
+      restored-standard: ${{ steps.restored.outputs.standard == steps.standard.outputs.cache-matched-key && steps.restored.outputs.standard || '' }}
       restored-compat: ${{ steps.restored.outcome == 'success' && steps.restored.outputs.compat == steps.compat.outputs.cache-matched-key && steps.restored.outputs.compat || '' }}
     env:
       PACKAGE_NAME: BluraySubtitle_windows_${{ inputs.architecture }}${{ inputs.compatibility && '_compat' || '' }}
@@ -38,6 +40,7 @@ jobs:
 
       - name: Restore Python Package Downloads
         id: downloads
+        if: ${{ !inputs.compatibility }}
         uses: actions/cache/restore@v6
         with:
           path: &pip-path ${{ runner.temp }}/bluraysubtitle-pip
@@ -46,8 +49,17 @@ jobs:
             windows-pip-v2-${{ runner.arch }}-
             windows-pip-v1-${{ runner.arch }}-
 
-      - name: Restore Windows Tool Artifacts
-        id: builds
+      - name: Restore Standard x64 Tool Artifacts
+        id: standard
+        if: inputs.architecture == 'x64' && !inputs.compatibility
+        uses: actions/cache/restore@v6
+        with:
+          path: &standard-path ${{ runner.temp }}/bluraysubtitle-builds/artifacts/standard/*.zip
+          key: windows-standard-v1-${{ runner.arch }}-lookup
+          restore-keys: windows-standard-v1-${{ runner.arch }}-
+
+      - name: Migrate Previous Standard x64 Tool Cache
+        if: inputs.architecture == 'x64' && !inputs.compatibility && steps.standard.outputs.cache-matched-key == ''
         uses: actions/cache/restore@v6
         with:
           path: &tools-path ${{ runner.temp }}/bluraysubtitle-builds/artifacts/${{ inputs.architecture == 'arm64' && 'arm64/' || '' }}*.zip
@@ -55,6 +67,16 @@ jobs:
           restore-keys: |
             windows-tools-v4-${{ runner.arch }}-
             windows-tools-v3-${{ runner.arch }}-
+
+      - name: Restore Windows Tool Artifacts
+        id: builds
+        uses: actions/cache/restore@v6
+        with:
+          path: *tools-path
+          key: ${{ inputs.architecture == 'x64' && 'windows-shared-v1' || 'windows-tools-v4' }}-${{ runner.arch }}-lookup
+          restore-keys: |
+            ${{ inputs.architecture == 'x64' && 'windows-shared-v1' || 'windows-tools-v4' }}-${{ runner.arch }}-
+            ${{ inputs.architecture == 'arm64' && format('windows-tools-v3-{0}-', runner.arch) || '' }}
 
       - name: Restore Windows Compatibility Build Inputs
         id: compat
@@ -71,15 +93,9 @@ jobs:
 
       - name: Verify Restored Windows Cache Contents
         id: restored
-        if: >-
-          github.ref == 'refs/heads/main' &&
-          (startsWith(steps.downloads.outputs.cache-matched-key, 'windows-pip-v2-') ||
-           startsWith(steps.builds.outputs.cache-matched-key, 'windows-tools-v4-') ||
-           startsWith(steps.compat.outputs.cache-matched-key, 'windows-compat-v1-'))
-        continue-on-error: true
         shell: powershell
         run: |
-          $arguments = @('-B', 'tools/windows_actions_cache.py', 'snapshot', $env:RUNNER_ARCH)
+          $arguments = @('-B', 'tools/windows_actions_cache.py', 'restored', $env:RUNNER_ARCH)
           if ($env:WINDOWS_COMPATIBILITY) { $arguments += '--compatibility' }
           python @arguments
 
@@ -88,7 +104,7 @@ jobs:
         shell: powershell
         env:
           BLURAYSUBTITLE_GITHUB_TOKEN: ${{ github.token }}
-          PIP_CACHE_DIR: ${{ runner.temp }}/bluraysubtitle-pip
+          PIP_CACHE_DIR: ${{ runner.temp }}/${{ inputs.compatibility && 'bluraysubtitle-compat/downloads/pip' || 'bluraysubtitle-pip' }}
         run: |
           $expected = switch ($env:PACKAGE_ARCHITECTURE) {
             'x64' { 'AMD64' }
@@ -106,7 +122,11 @@ jobs:
           .\setup_windows_environment.ps1 @setupArguments
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          $manifestPath = Join-Path $env:ProgramData "BluraySubtitle\environment-manifest.json"
+          $manifestPath = if ($env:WINDOWS_COMPATIBILITY) {
+            Join-Path $setupArguments.CompatibilityWorkDirectory "environment-manifest.json"
+          } else {
+            Join-Path $env:ProgramData "BluraySubtitle\environment-manifest.json"
+          }
           $system = (Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json).system
           if ($system.architecture -ne $expected) {
             throw "Expected Windows $expected, found $($system.architecture)."
@@ -177,11 +197,18 @@ jobs:
           key: ${{ steps.snapshot.outputs.pip }}
 
       - name: Save Windows Tool Artifacts
-        if: steps.snapshot.outputs.tools != '' && steps.snapshot.outputs.tools != steps.builds.outputs.cache-matched-key
+        if: (steps.snapshot.outputs.shared || steps.snapshot.outputs.tools) != '' && (steps.snapshot.outputs.shared || steps.snapshot.outputs.tools) != steps.builds.outputs.cache-matched-key
         uses: actions/cache/save@v6
         with:
           path: *tools-path
-          key: ${{ steps.snapshot.outputs.tools }}
+          key: ${{ steps.snapshot.outputs.shared || steps.snapshot.outputs.tools }}
+
+      - name: Save Standard x64 Tool Artifacts
+        if: steps.snapshot.outputs.standard != '' && steps.snapshot.outputs.standard != steps.standard.outputs.cache-matched-key
+        uses: actions/cache/save@v6
+        with:
+          path: *standard-path
+          key: ${{ steps.snapshot.outputs.standard }}
 
       - name: Save Windows Compatibility Build Inputs
         if: inputs.compatibility && steps.snapshot.outputs.compat != '' && steps.snapshot.outputs.compat != steps.compat.outputs.cache-matched-key
@@ -224,6 +251,8 @@ jobs:
       github.ref == 'refs/heads/main' &&
       (startsWith(needs.publish.outputs.restored-pip, 'windows-pip-v2-') ||
        startsWith(needs.publish.outputs.restored-tools, 'windows-tools-v4-') ||
+       startsWith(needs.publish.outputs.restored-shared, 'windows-shared-v1-') ||
+       startsWith(needs.publish.outputs.restored-standard, 'windows-standard-v1-') ||
        startsWith(needs.publish.outputs.restored-compat, 'windows-compat-v1-'))
     runs-on: ubuntu-latest
     permissions:
@@ -240,5 +269,7 @@ jobs:
           CACHE_ARCHITECTURE: ${{ needs.publish.outputs.architecture }}
           RESTORED_PIP_CACHE: ${{ needs.publish.outputs.restored-pip }}
           RESTORED_TOOLS_CACHE: ${{ needs.publish.outputs.restored-tools }}
+          RESTORED_SHARED_CACHE: ${{ needs.publish.outputs.restored-shared }}
+          RESTORED_STANDARD_CACHE: ${{ needs.publish.outputs.restored-standard }}
           RESTORED_COMPAT_CACHE: ${{ needs.publish.outputs.restored-compat }}
         run: /usr/bin/python3 -B tools/windows_actions_cache.py prune "$CACHE_ARCHITECTURE"

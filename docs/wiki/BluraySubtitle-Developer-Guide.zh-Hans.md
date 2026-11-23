@@ -16,7 +16,7 @@
 - x265 使用官方最新稳定标签，构建 8/10/12-bit multilib CLI，各核心均启用 HDR10+ JSON 和 Dolby Vision RPU 输入。
 - Windows、Linux 和 macOS 默认安装 R79。Windows 打包版将 R79 wheel 和 VSPipe 放在 `_internal/Lib/site-packages/vapoursynth`，VSScript 从该目录定位随包的解释器。外部 VSPipe 调用使用所选可执行文件的运行环境。
 - Windows ARM64 使用 CLANGARM64 构建 R79 及其插件。R79 使用 NEON，在 CPU 和 Windows 提供所需特性时启用 I8MM 和 FHM 滤镜内核。自动 getnative 使用原生 Python。两种架构均使用 MSVC 构建 VSEdit，并使用 PyQt6 安装的 Qt 运行库。
-- Windows 打包使用 `-Mode Build` 准备媒体工具。此模式包含 vs-placebo，为 L-SMASH Works 启用 Vulkan，并跳过对构建机 GPU 的检测。R79 的桌面安装仍会检测本机的 Vulkan 设备。L-SMASH Works 可使用软件解码。
+- Windows 打包使用 `-Mode Build` 准备媒体工具。标准包包含 vs-placebo。标准包和兼容包都为 L-SMASH Works 启用 Vulkan，并跳过对构建机 GPU 的检测。R79 的桌面安装仍会检测本机的 Vulkan 设备。L-SMASH Works 可使用软件解码。
 - Windows ARM64 使用 `-VapourSynthRuntime Classic` 时，Classic、插件和 VSEdit 使用 x64 仿真。自动 getnative 使用 Classic setup 记录的独立 x64 CPython。
 
 自定义构建可参考 setup 脚本。HDR 参数条件与注入回退见[自动 HDR 元数据处理](Video-Encoding-and-VapourSynth.zh-Hans.md#自动-hdr-元数据处理)。

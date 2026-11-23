@@ -37,7 +37,7 @@ from tools.vulkan_device import vulkan_device_available
 from tools.windows_build_cache import files_under, publish as publish_build_cache, restore as restore_build_cache
 from tools.windows_native_tools import (
     ARM64_NLM_CPU, PE_ARM64, VSEDIT_ARM64_RECIPE, VSEDIT_PLUGINS, VSEDIT_PROGRAMS, VSEDIT_QT_LIBRARIES, VSEDIT_RECIPE,
-    build_record, editor_runtime_matches, fetch_verified, file_hash, fingerprint, has_pe_machine, install_build,
+    WIN7_SHARED_PLUGINS, build_record, editor_runtime_matches, fetch_verified, file_hash, fingerprint, has_pe_machine, install_build,
     msvc_environment, msys_pkg_config_environment, pyqt_runtime, record_build, windows_machine,
 )
 from tools.windows_tool_paths import normalize_vsedit_path
@@ -188,6 +188,10 @@ class Installer:
                 replace(component, asset="") if component.key == "descale" else component
                 for component in COMPONENTS
             ) + R79_ADDITIONAL_COMPONENTS
+        if args.compatibility_plugins:
+            if self.arm64 or not self.r79:
+                raise ValueError("The Windows 7 shared plugins require an x64 VapourSynth R79 runtime")
+            self.components = tuple(component for component in self.components if component.key in WIN7_SHARED_PLUGINS)
         self.use_vulkan = (
             args.build_with_vulkan
             or (not self.arm64 and not args.windows_on_arm and not self.r79)
@@ -1568,7 +1572,8 @@ class Installer:
 
     def install(self):
         ctypes.windll.kernel32.SetErrorMode(0x8003)
-        self.migrate_plugins()
+        if not self.args.compatibility_plugins:
+            self.migrate_plugins()
         self.state.pop("cache_fingerprint", None)
         if self.args.build_cache:
             include = self.sdk / "include/vapoursynth"
@@ -1627,8 +1632,9 @@ class Installer:
                     record = self.state["components"][component.key]
                     plugin_files = [self.runtime / name for name in (record["plugin"], *record["data"])]
                     self.publish_plugin(archive, key, component, plugin_files)
-        self.install_editor()
-        if self.r79:
+        if not self.args.compatibility_plugins:
+            self.install_editor()
+        if self.r79 and not self.args.compatibility_plugins:
             # Verify once with the actual autoload paths and installed dependencies.
             code = (
                 "import vapoursynth as vs; c=vs.core; "
@@ -1663,6 +1669,8 @@ def main():
     parser.add_argument("--build-cache", type=Path)
     parser.add_argument("--defer-msys2", action="store_true")
     parser.add_argument("--build-with-vulkan", action="store_true")
+    parser.add_argument("--compatibility-plugins", action="store_true",
+                        help="install the R79 filters shared with the Windows 7 x64 package")
     parser.add_argument("--windows-on-arm", action="store_true")
     args = parser.parse_args()
     args.runtime_root.mkdir(parents=True, exist_ok=True)

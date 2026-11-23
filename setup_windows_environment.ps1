@@ -3335,9 +3335,11 @@ function Get-InstalledMkvToolNixVersion {
 
 function Initialize-MkvToolNixBuildToolchain {
     Initialize-SetupBuildToolchain "msys2"
-    $packages = @("boost", "flac", "libdvdcss", "libdvdread", "libogg", "libvorbis", "libxslt",
-        "docbook-xml", "docbook-xsl", "qt6-base", "ruby", "gettext-tools") |
-        ForEach-Object { "$script:MingwPackagePrefix$_" }
+    $packages = @("boost", "flac", "libogg", "libvorbis", "libxslt", "docbook-xml", "docbook-xsl", "ruby", "gettext-tools")
+    if (-not $CompatibilityWorkDirectory) {
+        $packages += @("qt6-base", "libdvdcss", "libdvdread")
+    }
+    $packages = $packages | ForEach-Object { "$script:MingwPackagePrefix$_" }
     Invoke-Msys2Pacman -Arguments (@("--noconfirm", "--needed", "-S", "dash") + $packages) | Out-Null
 }
 
@@ -5024,21 +5026,60 @@ function Register-StageFiveComponents {
 
 }
 
+function Initialize-WindowsCompatibilityPython {
+    $release = Get-GitHubLatestReleaseAsset -Repository "adang1345/PythonVista" -AssetPattern '^python\.3\.\d+\.\d+\.nupkg$'
+    if ($release.Name -ne "python.$($release.Version).nupkg" -or -not $release.Sha256) {
+        throw (Get-SetupText "Invalid PythonVista release or checksum." "PythonVista 发布文件或校验和无效。")
+    }
+    $installRoot = Join-Path $CompatibilityWorkDirectory "pythonvista-$($release.Version)"
+    $python = Join-Path $installRoot "tools\python.exe"
+    if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
+        $archive = Join-Path $CompatibilityWorkDirectory "downloads\$($release.Name)"
+        if (-not (Test-Path -LiteralPath $archive -PathType Leaf) -or
+            (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $release.Sha256) {
+            $download = Join-Path $script:TempRoot $release.Name
+            Invoke-SetupDownload -Uri $release.Uri -FallbackUri $release.DirectUri -Destination $download `
+                -Sha256 $release.Sha256 -ExpectedSize $release.Size | Out-Null
+            Install-ConfiguredFile -Source $download -Destination $archive
+        }
+        $staging = Join-Path $script:TempRoot "pythonvista"
+        Expand-SetupZip -Archive $archive -Destination $staging
+        # Publish python.exe last so that an interrupted copy can be retried.
+        $launcher = Join-Path $script:TempRoot "pythonvista-launcher.exe"
+        Move-Item -LiteralPath (Join-Path $staging "tools\python.exe") -Destination $launcher
+        [IO.Directory]::CreateDirectory($installRoot) | Out-Null
+        Get-ChildItem -LiteralPath $staging -Force | Copy-Item -Destination $installRoot -Recurse -Force
+        Install-ConfiguredFile -Source $launcher -Destination $python
+    }
+    $script:ToolPaths.Python = $python
+    $script:ToolPaths.PythonRoot = Split-Path -Parent $python
+    $script:ToolPaths.PythonScripts = Join-Path $script:ToolPaths.PythonRoot "Scripts"
+}
+
 function Invoke-WindowsCompatibilityPackageBuild {
+    param([Parameter(Mandatory = $true)][string]$Component)
+
     $arguments = @(
         "-u", (Join-Path $script:SetupDirectory "tools/build_windows_compat_package.py"),
+        "--component", $Component, "--shared-cache", $script:NativeToolCacheRoot,
         "--work-dir", $CompatibilityWorkDirectory, "--seven-zip", $script:ToolPaths.SevenZip,
-        "--msys2-root", $script:ToolPaths.Msys2Root, "--jobs", [string]$script:BuildJobs, "--git", $script:ToolPaths.Git
+        "--msys2-root", $script:ToolPaths.Msys2Root, "--jobs", [string]$script:BuildJobs, "--git", $script:ToolPaths.Git,
+        "--language", $script:SelectedLanguage
     )
     $msysRequired = 75
-    $displayName = Get-SetupText "Windows x64 compatibility package" "Windows x64 兼容包"
+    $displayName = Get-SetupText "Windows x64 compatibility package ($Component)" "Windows x64 兼容包（$Component）"
     try {
         $env:BLURAYSUBTITLE_GITHUB_TOKEN = $script:GitHubApiToken
+        if ($Component -notin @("vapoursynth", "mkvtoolnix", "plugins")) {
+            Invoke-SetupBuildCommand -DisplayName $displayName -FilePath $script:ToolPaths.Python -Arguments $arguments
+            return
+        }
         Invoke-SetupBuildCommand -DisplayName $displayName -FilePath $script:ToolPaths.Python `
             -Arguments ($arguments + "--defer-msys2") -AcceptedExitCodes @(0, $msysRequired)
         if ($LASTEXITCODE -eq $msysRequired) {
             Remove-Item Env:BLURAYSUBTITLE_GITHUB_TOKEN -ErrorAction SilentlyContinue
-            Initialize-MkvToolNixBuildToolchain
+            if ($Component -eq "mkvtoolnix") { Initialize-MkvToolNixBuildToolchain }
+            else { Initialize-SetupBuildToolchain "msys2" }
             $env:BLURAYSUBTITLE_GITHUB_TOKEN = $script:GitHubApiToken
             Invoke-SetupBuildCommand -DisplayName $displayName -FilePath $script:ToolPaths.Python -Arguments $arguments
         }
@@ -5075,6 +5116,10 @@ function Invoke-WindowsSetup {
         "System proxy route: $proxyDescription" `
         "系统代理路由：$proxyDescription"
 
+    if ($CompatibilityWorkDirectory) {
+        $CompatibilityWorkDirectory = [IO.Path]::GetFullPath($CompatibilityWorkDirectory)
+        $script:ManifestPath = Join-Path $CompatibilityWorkDirectory "environment-manifest.json"
+    }
     Initialize-SetupManifest
     # Windows tool recipe hashes used by v3 snapshots with CRLF or LF checkout settings.
     $script:LegacyBuildRecipeHashes = if ($script:IsArm64) {
@@ -5092,7 +5137,8 @@ function Invoke-WindowsSetup {
         }
         $script:NativeToolCacheRoot = $script:BuildCacheRoot
     }
-    Initialize-PythonRuntimeSelection
+    if ($CompatibilityWorkDirectory) { Initialize-WindowsCompatibilityPython }
+    else { Initialize-PythonRuntimeSelection }
     $script:Manifest.system = [ordered]@{
         family = $windows.Family
         caption = $windows.Caption
@@ -5114,7 +5160,13 @@ function Invoke-WindowsSetup {
     Register-StageTwoComponents
     Register-StageThreeComponents
     Register-StageFourComponents
-    Register-StageFiveComponents
+    if ($CompatibilityWorkDirectory) {
+        Initialize-ConfiguredToolPaths
+        foreach ($name in @("python", "python-dependencies", "mkvtoolnix", "dovi-tool", "hdr10plus-tool")) {
+            $script:RegisteredComponents.Remove($name)
+        }
+    }
+    else { Register-StageFiveComponents }
     $buildTools = @($script:BuildToolchains.Values | ForEach-Object { $_ })
     foreach ($component in $script:RegisteredComponents.Values) {
         # Release lookup needs Git. Packaging needs cl.exe.
@@ -5147,7 +5199,8 @@ function Invoke-WindowsSetup {
             $script:Manifest.components.Remove("vapoursynth-$classicPlugin")
         }
     }
-    # The packaged worker reads Wave64. Leave the installed SoundFile wheel intact.
+    if ($CompatibilityWorkDirectory) { Invoke-WindowsCompatibilityPackageBuild "python-qt" }
+    # Use the libsndfile version of the interpreter that will run the packaged worker.
     $script:LibsndfileVersion = Invoke-SetupCommand -FilePath $script:ToolPaths.Python -Arguments @(
         "-c", "import soundfile; print(soundfile.__libsndfile_version__)"
     )
@@ -5165,16 +5218,20 @@ function Invoke-WindowsSetup {
         -Verify { Test-SetupBinary $script:ToolPaths.PackagedLibsndfile } `
         -BuildToolchain "msys2"
     Invoke-SetupComponent $script:RegisteredComponents["libsndfile"]
-    Install-VapourSynthUpstreamComponents
-    Install-VapourSynthScripts
+    if ($CompatibilityWorkDirectory) {
+        foreach ($component in @("vapoursynth", "plugins", "mkvtoolnix", "zsmooth", "vsedit", "rust-tools", "package")) {
+            Invoke-WindowsCompatibilityPackageBuild $component
+        }
+    }
+    else {
+        Install-VapourSynthUpstreamComponents
+        Install-VapourSynthScripts
+    }
     if ($Mode -eq "Build") {
         $script:Manifest.system.python_executable = $script:ToolPaths.Python
         $script:Manifest.system.seven_zip_executable = $script:ToolPaths.SevenZip
     }
     Save-SetupManifest
-    if ($CompatibilityWorkDirectory) {
-        Invoke-WindowsCompatibilityPackageBuild
-    }
 
     if ($script:RestartRequired) {
         Write-SetupWarning `
