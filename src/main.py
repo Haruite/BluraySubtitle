@@ -19,9 +19,9 @@ if _wayland_quiet_rule not in _existing_rules:
         f"{_existing_rules};{_wayland_quiet_rule}" if _existing_rules else _wayland_quiet_rule
     )
 
-# Prefer the Linux bundle's X11 backend when an X server is available.
-if getattr(sys, "frozen", False) and sys.platform.startswith("linux") and os.environ.get("DISPLAY"):
-    os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
+# X11 and XWayland support compositor-controlled window opacity. Let Qt try Wayland if X11 is unavailable.
+if sys.platform.startswith("linux") and os.environ.get("DISPLAY"):
+    os.environ.setdefault("QT_QPA_PLATFORM", "xcb;wayland")
 
 if not __package__:
     _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

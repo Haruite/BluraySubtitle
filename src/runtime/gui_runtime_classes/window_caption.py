@@ -7,12 +7,16 @@ from src.core.i18n import translate_text
 
 
 def prepare_window_caption(window: QWidget) -> None:
+    platform = QApplication.platformName()
+    # X11 window managers and Wayland compositors supply the desktop's window controls.
+    if platform not in ("windows", "cocoa"):
+        return
     flags = window.windowFlags()
     if (window.windowType() not in (Qt.WindowType.Window, Qt.WindowType.Dialog)
             or not flags & Qt.WindowType.WindowTitleHint or flags & Qt.WindowType.FramelessWindowHint):
         return
     window._app_caption_enabled = True
-    if QApplication.platformName() != "cocoa":
+    if platform == "windows":
         window.setWindowFlag(Qt.WindowType.FramelessWindowHint)
         window.setMouseTracking(True)
 
