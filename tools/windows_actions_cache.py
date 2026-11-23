@@ -24,9 +24,20 @@ def split_x64_artifacts(tools: Path) -> None:
     standard = tools / "standard"
     for archive in tools.glob("*.zip"):
         name = archive.stem
-        if (name in {"mkvtoolnix", "mkvtoolnix-qtcore", "vsedit", "dovi-tool", "hdr10plus-tool"}
+        if name.startswith("vs-dll-"):
+            # Dependency ZIPs have hashed names. The Vulkan loader belongs with the standard-only vs-placebo plugin.
+            try:
+                with ZipFile(archive) as bundle:
+                    standard_only = any(member.casefold() == "vulkan-1.dll" for member in bundle.namelist())
+            except (BadZipFile, OSError):
+                continue  # Leave unreadable archives to the existing cache verification.
+        else:
+            standard_only = (
+                name in {"mkvtoolnix", "mkvtoolnix-qtcore", "vsedit", "dovi-tool", "hdr10plus-tool"}
                 or name.startswith(("vs-classic-", "vapoursynth"))
-                or name.startswith("vs-r79-") and name.removeprefix("vs-r79-") not in WIN7_SHARED_PLUGINS):
+                or (name.startswith("vs-r79-") and name.removeprefix("vs-r79-") not in WIN7_SHARED_PLUGINS)
+            )
+        if standard_only:
             standard.mkdir(exist_ok=True)
             archive.replace(standard / archive.name)
 
