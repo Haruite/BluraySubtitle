@@ -25,7 +25,7 @@ from ..gui_runtime_split.vpy_edit_and_preview import VpyEditPreviewMixin
 from ..gui_runtime_split.gui_base import BluraySubtitleGuiBase
 from .desktop_appearance import apply_title_bar_theme, desktop_appearance
 from .widget_animations import DialogFade, animate_window_open, window_is_fading_out, window_opacity
-from .window_caption import caption_resize_event, refresh_window_caption
+from .window_caption import refresh_window_caption
 from .window_background import background_panel_colors
 
 
@@ -119,10 +119,6 @@ class BluraySubtitleGUI(
             )
             and isinstance(watched, QWidget) and window_is_fading_out(watched.window())
         ):
-            return True
-        if (event_type in (QEvent.Type.MouseMove, QEvent.Type.MouseButtonPress)
-                and (event_type == QEvent.Type.MouseMove or event.button() == Qt.MouseButton.LeftButton)
-                and isinstance(watched, QWidget) and caption_resize_event(watched, event)):
             return True
         if (isinstance(watched, QWidget) and getattr(watched, '_app_caption_enabled', False)
                 and event_type in (QEvent.Type.Polish, QEvent.Type.Show, QEvent.Type.WindowTitleChange, QEvent.Type.FontChange)):

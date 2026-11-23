@@ -8,9 +8,6 @@ from typing import Optional
 import src.core.settings as _core_settings
 
 I18N_ZH_TO_EN = {
-    '最小化': 'Minimize',
-    '最大化': 'Maximize',
-    '还原窗口': 'Restore window',
     '窗口': 'Window',
     '许可证': 'License',
     '来源': 'Source',
