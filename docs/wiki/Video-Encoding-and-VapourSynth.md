@@ -70,12 +70,14 @@ BluraySubtitle adds a second, project-level preset layer:
 
 | Project preset | Intended use |
 | --- | --- |
-| Fast | Quick output or test encodes |
+| Very Fast | Quick previews and short test encodes |
+| Fast | Faster full-length encodes |
 | Balanced | Default starting point |
 | High Quality | More quality and analysis work |
+| Very High Quality | More analysis and a lower CRF than High Quality |
 | Extreme | Very slow, large-quality-budget starting point |
 
-The four built-in presets are read-only. Advanced settings can add, rename, edit, and delete user-defined presets for the encoder currently selected there; only those user-defined entries are stored in `config.json`. The Encode page shows the built-in and user-defined presets for its current encoder. Selecting a preset fills the parameter field, while directly editing that field keeps the selected preset name unchanged. The visible parameter string at task launch is authoritative.
+Each encoder has six read-only built-in presets. Advanced settings can add, rename, edit, and delete user-defined presets for the encoder currently selected there. Only user-defined presets are stored in `config.json`. The Encode page shows the built-in and user-defined presets for its current encoder. Selecting a preset fills the parameter field, while directly editing that field keeps the selected preset name unchanged. The visible parameter string at task launch is authoritative.
 
 ## Built-in parameter presets
 

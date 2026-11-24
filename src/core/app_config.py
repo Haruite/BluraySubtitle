@@ -8,7 +8,7 @@ import sys
 import tempfile
 from base64 import b64decode
 from binascii import Error as BinasciiError
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, Callable
@@ -231,9 +231,20 @@ def _boolean_value(section: dict[str, Any], name: str, default: bool) -> bool:
     return value
 
 
+def _available_encode_preset_name(base_name: str, used_names: set[str]) -> str:
+    name = base_name
+    suffix = 2
+    while name.casefold() in used_names:
+        name = f"{base_name} {suffix}"
+        suffix += 1
+    return name
+
+
 def _custom_encode_presets(
         section: dict[str, Any],
-) -> tuple[UserEncodePreset, ...]:
+        default_encoder: str,
+        default_preset: str,
+) -> tuple[str, tuple[UserEncodePreset, ...]]:
     value = section.get("custom_presets", [])
     if not isinstance(value, list):
         raise ValueError("Configuration value must be a list: custom_presets")
@@ -244,6 +255,8 @@ def _custom_encode_presets(
         "svtav1": set(),
     }
     built_in_names = {name.casefold() for name in ENCODE_PRESET_NAMES}
+    newly_reserved_names = {"very fast", "very high quality"}
+    previously_reserved_names = built_in_names - newly_reserved_names
     for index, item in enumerate(value, start=1):
         if not isinstance(item, dict):
             raise ValueError(
@@ -258,7 +271,7 @@ def _custom_encode_presets(
         if not name:
             raise ValueError("Custom encode preset name must not be empty")
         normalized_name = name.casefold()
-        if normalized_name in built_in_names:
+        if normalized_name in previously_reserved_names:
             raise ValueError(
                 f"Custom encode preset name conflicts with a built-in preset: {name}"
             )
@@ -272,7 +285,18 @@ def _custom_encode_presets(
             name=name,
             parameters=_string_value(item, "parameters", "").strip(),
         ))
-    return tuple(presets)
+
+    # Older configurations could use the new built-in names for custom presets.
+    for index, preset in enumerate(presets):
+        if preset.name.casefold() not in newly_reserved_names:
+            continue
+        used_names = names_by_encoder[preset.encoder]
+        name = _available_encode_preset_name(f"{preset.name} Custom", used_names | built_in_names)
+        used_names.add(name.casefold())
+        presets[index] = replace(preset, name=name)
+        if preset.encoder == default_encoder and preset.name == default_preset:
+            default_preset = name
+    return default_preset, tuple(presets)
 
 
 def _migrate_legacy_encode_parameters(
@@ -301,11 +325,7 @@ def _migrate_legacy_encode_parameters(
         for item in custom_presets
         if item.encoder == encoder
     } | {name.casefold() for name in ENCODE_PRESET_NAMES}
-    migrated_name = base_name
-    suffix = 2
-    while migrated_name.casefold() in used_names:
-        migrated_name = f"{base_name} {suffix}"
-        suffix += 1
+    migrated_name = _available_encode_preset_name(base_name, used_names)
     return migrated_name, custom_presets + (UserEncodePreset(
         encoder=encoder,
         name=migrated_name,
@@ -355,8 +375,8 @@ def app_config_from_mapping(raw: dict[str, Any]) -> AppConfig:
         raise ValueError(
             f"Unsupported default bit depth for {encoder}: {bit_depth}"
         )
-    custom_presets = _custom_encode_presets(encode)
     preset = _string_value(encode, "preset", "Balanced").strip()
+    preset, custom_presets = _custom_encode_presets(encode, encoder, preset)
     preset, custom_presets = _migrate_legacy_encode_parameters(
         encode,
         encoder,
