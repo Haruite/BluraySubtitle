@@ -1,4 +1,7 @@
 """Target module for theme/language methods of `BluraySubtitleGUI`."""
+
+import sys
+
 from PyQt6.QtCore import QLibraryInfo, QRectF, Qt, QTranslator
 from PyQt6.QtGui import QColor, QFont, QFontDatabase, QPainter, QPainterPath, QPalette, QPen
 from PyQt6.QtWidgets import QApplication, QLabel, QTabBar, QWidget, QPlainTextEdit, QTextEdit, QLineEdit, QGroupBox, \
@@ -400,7 +403,8 @@ class _ThemeStyle(QProxyStyle):
         self._mode = mode
 
     def styleHint(self, hint, option=None, widget=None, returnData=None):
-        if hint == QStyle.StyleHint.SH_DialogButtonLayout and QApplication.platformName() == 'cocoa':
+        if (hint == QStyle.StyleHint.SH_DialogButtonLayout
+                and (QApplication.platformName() == 'cocoa' or sys.platform.startswith('freebsd'))):
             return QDialogButtonBox.ButtonLayout.KdeLayout.value
         return super().styleHint(hint, option, widget, returnData)
 

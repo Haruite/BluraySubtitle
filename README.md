@@ -206,7 +206,9 @@ Blu-ray input rejects existing outputs. Remux input skips completed main/SP, ext
 
 ## Cross-platform support
 
-Source runs require the [Python dependencies](#python-packages) and external tools for the selected features. For package selection, setup requirements and Docker instructions, see the [wiki](docs/wiki/Packages-and-System-Requirements.md).
+Source runs require the [Python dependencies](#python-packages) and external tools for the selected features. The wiki covers [package selection, setup requirements and Docker](docs/wiki/Packages-and-System-Requirements.md) and [native Wayland startup](docs/wiki/Packages-and-System-Requirements.md#starting-under-wayland).
+
+You can also download a packaged build, which generally runs on more systems than the setup scripts support.
 
 ### `setup_windows_environment.ps1` (Windows environment setup)
 
@@ -247,6 +249,10 @@ chmod +x setup_linux_environment.sh
 See [Linux desktop mpv](docs/wiki/Media-Formats-and-Dolby-Vision.md#linux-desktop-playback-with-mpv) for playback presets and subtitle fonts.
 
 When run over SSH, `setup_linux_environment.sh` uses **tmux** to display build logs.
+
+### `setup_freebsd_environment.sh` (FreeBSD runtime environment)
+
+On FreeBSD amd64, run `sh setup_freebsd_environment.sh` from the repository root.
 
 ---
 

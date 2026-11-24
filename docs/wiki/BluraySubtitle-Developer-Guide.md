@@ -10,7 +10,7 @@ Use the [main MPLS and SP definitions](Blu-ray-Disc-Structure.md#main-content-an
 
 ## Runtime and tool builds
 
-[Windows setup](../../setup_windows_environment.ps1), [Linux setup](../../setup_linux_environment.sh) and [macOS setup](../../setup_macos_environment.sh) install the required tools. [`settings.py`](../../src/core/settings.py) defines the default installation paths used by setup. Source runs look for tools when the corresponding path is empty. Desktop setup and the GUI use the same `tools` fields. Relative paths start from the directory containing `config.json`.
+[Windows setup](../../setup_windows_environment.ps1), [Linux setup](../../setup_linux_environment.sh), [macOS setup](../../setup_macos_environment.sh) and [FreeBSD setup](../../setup_freebsd_environment.sh) install the required tools. [`settings.py`](../../src/core/settings.py) defines the default installation paths used by setup. Source runs look for tools when the corresponding path is empty. Desktop setup and the GUI use the same `tools` fields. Relative paths start from the directory containing `config.json`.
 
 - x264 uses official `master` to build an 8/10-bit CLI. Windows x64 uses MSYS2 UCRT64 and PGO. Windows ARM64 uses CLANGARM64 with NEON.
 - x265 uses the latest official stable tag to build an 8/10/12-bit multilib CLI, with HDR10+ JSON and Dolby Vision RPU input enabled in each core.
@@ -30,6 +30,10 @@ On an Intel or Apple silicon Mac, run `./setup_macos_environment.sh --mode Build
 In an elevated PowerShell session on a recent x64 Windows build host, run `.\setup_windows_environment.ps1 -Mode Build -CompatibilityWorkDirectory build/windows-compat`. The compatibility workflow calls the shared Windows workflow with this option and uploads the verified `BluraySubtitle_windows_x64_compat.7z`. [Compatibility workflow](../../.github/workflows/windows-x64-compat-package.yml)
 
 The build installs the latest x64 [PythonVista](https://github.com/adang1345/PythonVista) NuGet package into its working directory and uses [CrystalIDE's Qt 6.8.5 backport](https://github.com/crystalidea/qt6windows7) for PyQt6 and VSEdit. The MKVToolNix CLI links a separately built MinGW QtCore using the Qt 6.8.3 backport. VapourSynth R79 uses a `CreateFileW` adapter for the MSVC filesystem library. Both HDR CLIs rebuild the Rust standard library for `x86_64-win7-windows-msvc`. The zsmooth build targets Windows 7 with baseline x86-64 instructions.
+
+### FreeBSD builds and publishing
+
+Run `sh setup_freebsd_environment.sh --mode Build --release 14.5` in a native FreeBSD 14.5 amd64 environment. `--release` checks the build host's release, and `--output` selects the directory for the archive and its verification record. The publishing workflow passes 14.5 to a FreeBSD VM on a GitHub-hosted Linux runner. [FreeBSD package workflow](../../.github/workflows/build-freebsd-package.yml)
 
 ## Source-code map
 

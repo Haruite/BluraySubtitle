@@ -205,7 +205,9 @@ python src/main.py
 
 ## 跨平台支持
 
-可在具备[所需 Python 依赖](#python-依赖)和相应外部工具的系统上从源码运行。程序包选型、安装脚本的系统要求和 Docker 用法见 [Wiki](docs/wiki/Packages-and-System-Requirements.zh-Hans.md)。
+可在具备[所需 Python 依赖](#python-依赖)和相应外部工具的系统上从源码运行。[程序包选型、安装脚本要求和 Docker 用法](docs/wiki/Packages-and-System-Requirements.zh-Hans.md)及[原生 Wayland 启动方式](docs/wiki/Packages-and-System-Requirements.zh-Hans.md#wayland-启动方式)见 Wiki。
+
+也可以下载程序包，程序包的适用范围通常比环境配置脚本更广。
 
 ### setup_windows_environment.ps1（Windows 环境配置脚本）
 
@@ -246,6 +248,10 @@ chmod +x setup_linux_environment.sh
 播放预设和字幕字体见 [Linux 桌面 mpv](docs/wiki/Media-Formats-and-Dolby-Vision.zh-Hans.md#linux-桌面-mpv-播放)。
 
 通过 SSH 运行 `setup_linux_environment.sh` 时，脚本会使用 **tmux** 显示构建日志。
+
+### setup_freebsd_environment.sh（FreeBSD 运行环境脚本）
+
+在 FreeBSD amd64 上从仓库根目录运行 `sh setup_freebsd_environment.sh`。
 
 ---
 

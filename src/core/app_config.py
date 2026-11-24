@@ -141,12 +141,16 @@ def default_app_config() -> AppConfig:
 def application_directory() -> Path:
     if bool(getattr(sys, "frozen", False)):
         return Path(sys.executable).resolve().parent
+    if runtime := getattr(sys, "_bluray_freebsd_runtime", None):
+        return Path(runtime).parent
     return Path(__file__).resolve().parents[2]
 
 
 def application_support_directory() -> Path:
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         return Path(sys._MEIPASS).resolve()
+    if runtime := getattr(sys, "_bluray_freebsd_runtime", None):
+        return Path(runtime) / "app"
     return application_directory()
 
 
@@ -156,8 +160,8 @@ def macos_application_bundle() -> Path | None:
     return Path(bundle) if sys.platform == "darwin" and bundle else None
 
 
-def application_location_id() -> str:
-    return sha256(os.fsencode(os.path.normcase(str(application_directory())))).hexdigest()[:24]
+def application_location_id(directory: Path | None = None) -> str:
+    return sha256(os.fsencode(os.path.normcase(str(directory or application_directory())))).hexdigest()[:24]
 
 
 def app_config_path() -> Path:

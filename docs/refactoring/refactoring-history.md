@@ -1436,3 +1436,23 @@ The macOS application supports Finder desktop shortcuts, reopening from the Dock
 On macOS and Linux, light mode picks up the desktop accent, titles follow the selected font size, and the log window can be minimized independently. Background FFmpeg jobs retain their output colors in the log. On POSIX, cancelling an encode terminates its process group.
 
 Intel tests on Big Sur and Tahoe covered GUI startup, filtering, encoding and remuxing. The Big Sur VM used an Ivy Bridge CPU model. Tahoe tests also covered IINA playback from a Blu-ray source and update rollback. Desktop accent colors and log windows were checked on GNOME, Xfce, MATE and LXQt.
+
+## FreeBSD amd64 package
+
+2026-11-24 · Based on `f420de5`
+
+Added native desktop setup and a relocatable amd64 archive with a private runtime, one Qt installation, mpv with Blu-ray and VapourSynth support, and the R79 filter set. At startup the application resolves bundled tools and uses the existing Unix desktop integrations. The archive ships the build system's C++ runtime and the FreeBSD 14 libraries whose SONAMEs changed in 15. The release workflow builds on 14.5, stores the runtime and build inputs in one cache, and attaches the archive and checksum to releases.
+
+FreeBSD X11 title bars follow the application or log theme when the window manager supports system move and resize. The settings dialog follows the Linux button order, and bundled Qt translations localize file dialogs. The separate English and Simplified Chinese license notices use the Linux and macOS per-component format.
+
+On FreeBSD 14.5, GUI checks against Linux used 150% Qt scaling, and media checks scanned two Blu-ray discs and played SDR H.264 and UHD HEVC samples. The same archive ran on FreeBSD 15.1 with a Haswell CPU model, where tests covered GUI startup, the bundled media tools, and VapourSynth filters. MVTools failed to load on the tested x86-64-v2 model, so the archive requires x86-64-v3.
+
+## Native Wayland title bars and FreeBSD package verification
+
+2026-11-24
+
+Linux and FreeBSD share application-drawn title bars under native Wayland. Each title bar updates in place with the application theme or the log window's separate theme. The compositor handles move and resize. The launcher prefers XWayland when available.
+
+The FreeBSD cache retains libplacebo and RIFE checkouts, the Cargo index, and the Go build cache. A failed check of the current week's runtime cache triggers reconstruction from cached components. Package checks render frames with bundled CPU filters and exercise 7-Zip and tsMuxeR on generated media.
+
+KDE on Linux and a nested Qt Wayland compositor on FreeBSD 14.5 passed theme and window-control checks. FreeBSD Xfce and Linux KDE supplied the light-mode accent color. Tests of the same archive on 14.5 and 15.1 covered VSEdit preview, mpv with uosc, Dolby Vision and HDR10+ extraction, and software Vulkan rendering with libplacebo and RIFE.

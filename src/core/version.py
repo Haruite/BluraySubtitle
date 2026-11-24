@@ -15,6 +15,7 @@ from typing import Mapping
 APP_VERSION = "5.0"
 APP_TITLE = f"BluraySubtitle v{APP_VERSION}"
 BUILD_COMMIT_FILENAME = "build-commit.txt"
+FREEBSD_PACKAGE_ARCHIVE = "BluraySubtitle_freebsd_x64.tar.xz"
 
 _VERSION_TAG_PATTERN = re.compile(
     r"^[vV]?(\d+(?:\.\d+)*)(?:[-+][0-9A-Za-z.-]+)?$"
@@ -63,6 +64,8 @@ def current_commit() -> CommitInfo | None:
         if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
             path = Path(sys._MEIPASS) / BUILD_COMMIT_FILENAME
             record = path.read_text(encoding="utf-8")
+        elif runtime := getattr(sys, "_bluray_freebsd_runtime", None):
+            record = (Path(runtime) / BUILD_COMMIT_FILENAME).read_text(encoding="utf-8")
         elif sys.platform == "darwin" and getattr(sys, "_bluray_macos_runtime", None) and (
                 path := Path(__file__).resolve().parents[2] / BUILD_COMMIT_FILENAME).is_file():
             record = path.read_text(encoding="utf-8")

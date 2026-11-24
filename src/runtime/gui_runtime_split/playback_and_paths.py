@@ -117,7 +117,9 @@ class PlaybackPathsMixin(BluraySubtitleGuiBase):
 
     def _mpv_playback_executable(self, mime_type: str) -> str:
         executable = tool_path("MPV_PATH")
-        if self._app_config.tools.get("MPV_PATH") or sys.platform in ("win32", "darwin"):
+        if (self._app_config.tools.get("MPV_PATH") or sys.platform in ("win32", "darwin")
+                or (sys.platform.startswith("freebsd") and mime_type == "x-content/video-bluray"
+                    and is_bundled_tool(executable))):
             return executable
         if not executable or not supports_desktop_entries():
             return executable
@@ -139,27 +141,27 @@ class PlaybackPathsMixin(BluraySubtitleGuiBase):
         environment = QProcessEnvironment()
         for key, value in system_tool_environment().items():
             environment.insert(key, value)
-        linux_bundle = getattr(sys, "frozen", False) and sys.platform.startswith("linux")
-        if sys.platform.startswith("linux"):
-            if not is_bundled_tool(executable) and (runtime := read_desktop_runtime()):
-                environment.insert("VSSCRIPT_PATH", runtime["VSSCRIPT_PATH"])
-            if environment.value("DISPLAY"):
-                try:
-                    extensions = run_command(
-                        ["xdpyinfo", "-queryExtensions"], capture_output=True, timeout=2,
-                    )
-                    dri3 = extensions.returncode == 0 and b"DRI3  (opcode:" in extensions.stdout
-                except (OSError, subprocess.SubprocessError):
-                    dri3 = any(os.access(node, os.R_OK | os.W_OK) for node in Path("/dev/dri").glob("renderD*"))
-                if not dri3:
-                    # Remote X servers may require a software-rendered EGL context.
-                    options.extend((
-                        "--vo=gpu-next,x11", "--gpu-api=opengl", "--gpu-context=x11egl", "--gpu-sw=yes",
-                        "--icc-profile-auto=no", "--msg-level=vo/gpu-next=error,vo/gpu-next/opengl=error,ffmpeg/video=error",
-                        "--profile=sw-fast", "--hwdec=no", "--framedrop=vo", "--osc=yes",
-                    ))
-                    if not environment.contains("LIBGL_ALWAYS_SOFTWARE"):
-                        environment.insert("LIBGL_ALWAYS_SOFTWARE", "1")
+        portable_mpv = ((getattr(sys, "frozen", False) and sys.platform.startswith("linux"))
+                        or (sys.platform.startswith("freebsd") and is_bundled_tool(executable)))
+        if sys.platform.startswith("linux") and not is_bundled_tool(executable) and (runtime := read_desktop_runtime()):
+            environment.insert("VSSCRIPT_PATH", runtime["VSSCRIPT_PATH"])
+        if sys.platform.startswith(("linux", "freebsd")) and environment.value("DISPLAY"):
+            try:
+                extensions = run_command(
+                    ["xdpyinfo", "-queryExtensions"], capture_output=True, timeout=2,
+                )
+                dri3 = extensions.returncode == 0 and b"DRI3  (opcode:" in extensions.stdout
+            except (OSError, subprocess.SubprocessError):
+                dri3 = any(os.access(node, os.R_OK | os.W_OK) for node in Path("/dev/dri").glob("renderD*"))
+            if not dri3:
+                # Remote X servers may require a software-rendered EGL context.
+                options.extend((
+                    "--vo=gpu-next,x11", "--gpu-api=opengl", "--gpu-context=x11egl", "--gpu-sw=yes",
+                    "--icc-profile-auto=no", "--msg-level=vo/gpu-next=error,vo/gpu-next/opengl=error,ffmpeg/video=error",
+                    "--profile=sw-fast", "--hwdec=no", "--framedrop=vo", "--osc=yes",
+                ))
+                if not environment.contains("LIBGL_ALWAYS_SOFTWARE"):
+                    environment.insert("LIBGL_ALWAYS_SOFTWARE", "1")
         iina = sys.platform == "darwin" and Path(executable).name in ("iina-cli", "iina")
         plugin_path = "" if iina else tool_path("PLUGIN_PATH")
         if not iina:
@@ -168,10 +170,10 @@ class PlaybackPathsMixin(BluraySubtitleGuiBase):
             environment.insert("VAPOURSYNTH_EXTRA_PLUGIN_PATH", plugin_path)
         config = "" if iina else tool_path("MPV_CONFIG_PATH")
         if config:
-            if linux_bundle:
+            if portable_mpv:
                 options.append(f"--config-dir={config}")
                 environment.insert("BLURAYSUB_MPV_CONFIG_PATH", config)
-            if linux_bundle or self._app_config.tools.get("MPV_CONFIG_PATH"):
+            if portable_mpv or self._app_config.tools.get("MPV_CONFIG_PATH"):
                 environment.insert("MPV_HOME", config)
         if config and (supports_desktop_entries() or self._app_config.tools.get("MPV_CONFIG_PATH")):
             menu_options, menu_directory = mpv_language_options(self._language_code, Path(config))

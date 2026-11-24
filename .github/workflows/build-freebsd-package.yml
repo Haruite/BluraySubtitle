@@ -1,0 +1,160 @@
+name: Build and Publish a FreeBSD Package
+
+on:
+  workflow_call:
+    inputs:
+      release:
+        required: true
+        type: string
+      refresh-runtime:
+        type: boolean
+        default: false
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: freebsd-x64-package-website
+  queue: max
+
+jobs:
+  publish:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 180
+    env:
+      PACKAGE_ARCHIVE: BluraySubtitle_freebsd_x64.tar.xz
+      FREEBSD_RELEASE: ${{ inputs.release }}
+      FREEBSD_REFRESH_RUNTIME: ${{ inputs.refresh-runtime }}
+      BLURAY_LANG: en
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Record Commit and Cache Period
+        id: inputs
+        run: |
+          set -euo pipefail
+          [[ "$FREEBSD_RELEASE" =~ ^(14|15)\.[0-9]+$ ]]
+          mkdir -p build/freebsd-cache
+          git show --no-patch --no-notes --no-show-signature --format='commit=%H%ncommit_time=%cI' HEAD > build/freebsd-commit.txt
+          printf 'period=%s\n' "$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore FreeBSD Runtime and Build Cache
+        id: cache
+        uses: actions/cache/restore@v6
+        with:
+          path: &cache-paths |
+            build/freebsd-cache/runtime
+            build/freebsd-cache/components
+            build/freebsd-cache/downloads
+            build/freebsd-cache/packages
+            build/freebsd-cache/ccache
+            build/freebsd-cache/pip
+            build/freebsd-cache/cargo/registry/cache
+            build/freebsd-cache/cargo/registry/index
+            build/freebsd-cache/cargo/git/db
+            build/freebsd-cache/go-mod/cache/download
+            build/freebsd-cache/go-build
+            build/freebsd-cache/zig-cache
+          key: freebsd-x64-v1-${{ inputs.release }}-${{ steps.inputs.outputs.period }}-lookup
+          restore-keys: |
+            freebsd-x64-v1-${{ inputs.release }}-${{ steps.inputs.outputs.period }}-
+            freebsd-x64-v1-${{ inputs.release }}-
+
+      - name: Build and Verify FreeBSD Archive
+        uses: vmactions/freebsd-vm@v1
+        env:
+          FREEBSD_CACHE_PERIOD: ${{ steps.inputs.outputs.period }}
+        with:
+          release: ${{ inputs.release }}
+          arch: x86_64
+          cpu: 4
+          mem: 8192
+          sync: rsync
+          envs: FREEBSD_RELEASE FREEBSD_REFRESH_RUNTIME FREEBSD_CACHE_PERIOD BLURAY_LANG GITHUB_SHA
+          run: |
+            set -eu
+            export BLURAY_SETUP_CACHE_DIR="$PWD/build/freebsd-cache"
+            export BLURAY_FREEBSD_COMMIT_FILE="$PWD/build/freebsd-commit.txt"
+            if [ "$FREEBSD_REFRESH_RUNTIME" != true ] &&
+                [ "$(cat "$BLURAY_SETUP_CACHE_DIR/runtime/cache-period" 2>/dev/null || :)" = "$FREEBSD_CACHE_PERIOD" ]; then
+              if [ -x "$BLURAY_SETUP_CACHE_DIR/runtime/bin/python3" ] &&
+                  [ -s "$BLURAY_SETUP_CACHE_DIR/runtime/cache-generation" ] &&
+                  sh setup_freebsd_environment.sh --mode Build --release "$FREEBSD_RELEASE" --restore-only; then
+                exit 0
+              fi
+              # Keep the component caches so a broken runtime can be assembled again.
+              rm -rf -- "$BLURAY_SETUP_CACHE_DIR/runtime"
+            fi
+            sh setup_freebsd_environment.sh --mode Build --release "$FREEBSD_RELEASE"
+            printf '%s\n' "$FREEBSD_CACHE_PERIOD" > "$BLURAY_SETUP_CACHE_DIR/runtime/cache-period"
+            # A repaired snapshot needs a new key even when its build inputs match.
+            generation="$BLURAY_SETUP_CACHE_DIR/runtime/cache-generation"
+            if [ ! -f "$generation" ]; then
+              printf '%s-%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$generation"
+            fi
+            rm -rf -- "$BLURAY_SETUP_CACHE_DIR/native"
+            # rsync copyback leaves deleted guest files on the runner.
+            mv -- "$BLURAY_SETUP_CACHE_DIR/runtime" "$BLURAY_SETUP_CACHE_DIR/runtime-next"
+
+      - name: Identify Verified Cache
+        id: snapshot
+        run: |
+          set -euo pipefail
+          cd build/freebsd-cache
+          if [[ -d runtime-next ]]; then
+            rm -rf -- runtime
+            mv -- runtime-next runtime
+          fi
+          digest=$(cat runtime/{runtime.json,cache-generation} | sha256sum)
+          printf 'key=freebsd-x64-v1-%s-%s-%s\n' "$FREEBSD_RELEASE" '${{ steps.inputs.outputs.period }}' "${digest%% *}" >> "$GITHUB_OUTPUT"
+
+      - name: Save FreeBSD Runtime and Build Cache
+        id: save
+        if: github.ref == 'refs/heads/main' && steps.snapshot.outputs.key != steps.cache.outputs.cache-matched-key
+        uses: actions/cache/save@v6
+        with:
+          path: *cache-paths
+          key: ${{ steps.snapshot.outputs.key }}
+
+      - name: Prune Superseded FreeBSD Caches
+        if: github.ref == 'refs/heads/main' && steps.save.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SAVED_CACHE: ${{ steps.snapshot.outputs.key }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from tools.actions_cache import delete_cache, main_cache_entries
+
+          endpoint, entries = main_cache_entries()
+          key = os.environ['SAVED_CACHE']
+          prefix = f"freebsd-x64-v1-{os.environ['FREEBSD_RELEASE']}-"
+          saved = next((item for item in entries if item['key'] == key and item['size_in_bytes']), None)
+          if saved:
+              for item in entries:
+                  if item['key'].startswith(prefix) and item['created_at'] < saved['created_at']:
+                      delete_cache(endpoint, item['id'])
+          PY
+
+      - name: Upload Workflow Archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: BluraySubtitle_freebsd_x64
+          path: |
+            dist/${{ env.PACKAGE_ARCHIVE }}
+            dist/${{ env.PACKAGE_ARCHIVE }}.txt
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload Package and Build Information
+        if: github.ref == 'refs/heads/main'
+        env:
+          SFTP_HOST: ${{ secrets.SFTP_HOST }}
+          SFTP_KNOWN_HOSTS: ${{ secrets.SFTP_KNOWN_HOSTS }}
+          SFTP_PRIVATE_KEY: ${{ secrets.SFTP_PRIVATE_KEY }}
+        run: bash tools/publish_website_package.sh "dist/$PACKAGE_ARCHIVE"

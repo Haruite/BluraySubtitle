@@ -1,4 +1,4 @@
-"""Install a verified Linux archive after the running program exits."""
+"""Install a verified Linux or FreeBSD archive after the running program exits."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from urllib.request import Request, urlopen
 PACKAGE_DIRECTORY = "BluraySubtitle"
 PROGRAM = "BluraySubtitle"
 RUNTIME = "_internal"
+_FREEBSD = sys.platform.startswith("freebsd")
 
 
 def download_package(plan: dict, archive: Path) -> None:
@@ -52,11 +53,13 @@ def extract_package(plan: dict, archive: Path, destination: Path) -> Path:
     root = destination / PACKAGE_DIRECTORY
     executable = root / PROGRAM
     runtime = root / RUNTIME
+    application = runtime / "app" if _FREEBSD else runtime
     if (
         root.is_symlink() or runtime.is_symlink() or executable.is_symlink()
         or not executable.is_file() or not os.access(executable, os.X_OK)
         or not (runtime / "build-commit.txt").is_file()
-        or not (runtime / "config.default.json").is_file()
+        or not (application / "config.default.json").is_file()
+        or (_FREEBSD and (not (application / "entry.py").is_file() or not os.access(runtime / "bin/python3", os.X_OK)))
         or not (runtime / "tools/linux_update.py").is_file()
     ):
         raise ValueError(plan["invalid_package"])
@@ -75,7 +78,10 @@ def preserve_configuration(plan: dict, runtime: Path, next_runtime: Path) -> Non
     new_config = (next_runtime / relative).resolve()
     if not old_config.is_relative_to(runtime) or not new_config.is_relative_to(next_runtime):
         raise ValueError(plan["invalid_package"])
-    for name in ("config.json", "logs", "vpy", "src/core/settings.py"):
+    names = ("config.json", "logs", "vpy")
+    if not _FREEBSD:
+        names += ("src/core/settings.py",)
+    for name in names:
         old = old_config / name
         if not old.exists():
             continue

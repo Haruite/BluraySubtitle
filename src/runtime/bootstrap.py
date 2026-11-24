@@ -69,8 +69,8 @@ def run_src_entry(application_log: ApplicationLog | None = None) -> None:
         desktop_id = desktop_entry_id()
     ready_file = update_error = ""
     update_guard = None
-    if frozen and sys.platform.startswith("linux"):
-        from .linux_update import update_in_progress as update_guard
+    if (frozen and sys.platform.startswith("linux")) or getattr(sys, "_bluray_freebsd_runtime", None):
+        from .portable_update import update_in_progress as update_guard
     elif macos_application_bundle():
         from .macos_update import update_in_progress as update_guard
     if update_guard:

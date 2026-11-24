@@ -310,10 +310,12 @@ def third_party_notices_markdown_path(language: str) -> Optional[str]:
         rel_candidates.append(os.path.join('legal', 'windows', filename))
     elif sys.platform.startswith('linux'):
         rel_candidates.append(os.path.join('legal', 'linux', filename))
+    elif sys.platform.startswith('freebsd'):
+        rel_candidates.append(os.path.join('legal', 'freebsd', filename))
     rel_candidates.append(filename)
     seen: set[str] = set()
     roots: list[str] = []
-    runtime = getattr(sys, '_bluray_macos_runtime', None) or getattr(sys, '_MEIPASS', None)
+    runtime = bundle_directory()
     if runtime:
         roots.append(str(runtime))
     here = os.path.dirname(os.path.abspath(__file__))
@@ -359,6 +361,12 @@ def system_tool_environment() -> dict[str, str]:
         if getattr(sys, 'frozen', False) and os.name == 'posix' and sys.platform != 'darwin':
             if 'LD_LIBRARY_PATH_ORIG' in env:
                 env['LD_LIBRARY_PATH'] = env['LD_LIBRARY_PATH_ORIG']
+            else:
+                env.pop('LD_LIBRARY_PATH', None)
+        elif sys.platform.startswith('freebsd') and 'BLURAYSUB_FREEBSD_LIBRARY_PATH' in env:
+            original = env.pop('BLURAYSUB_FREEBSD_LIBRARY_PATH')
+            if original:
+                env['LD_LIBRARY_PATH'] = original
             else:
                 env.pop('LD_LIBRARY_PATH', None)
     return env

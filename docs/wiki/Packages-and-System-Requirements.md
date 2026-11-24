@@ -13,6 +13,7 @@ Choose one archive for the operating system and processor that will run the appl
 | `BluraySubtitle_windows_arm64.7z` | Windows 10 ARM64 (1903 or later for the bundled tools) or Windows 11 ARM64 | 64-bit Arm with NEON and Armv8.1 LSE atomic instructions, including `CASAL`. |
 | `BluraySubtitle_linux_x64.tar.xz` | 64-bit x86 Linux (x86-64), tested down to kernel 3.17 | Full x86-64-v3 support, as on Intel Core Haswell or AMD Zen. Above x86-64-v2 this requires AVX, AVX2, BMI1/2, F16C, FMA, LZCNT, MOVBE and OSXSAVE with AVX state enabled by the OS. |
 | `BluraySubtitle_linux_arm64.tar.xz` | 64-bit AArch64 Linux, tested down to kernel 3.17 | Armv8-A with floating point and NEON. Cortex-A53 is the tested baseline. |
+| `BluraySubtitle_freebsd_x64.tar.xz` | FreeBSD 14.5 amd64 or later in the 14.x and 15.x series | x86-64-v3 (including AVX2), for example Intel Core Haswell or AMD Zen. |
 | `BluraySubtitle_macos_x64.zip` | macOS 11 Big Sur or later | A Big Sur-compatible Intel Mac. The Ivy Bridge processor in the late-2013 Mac Pro is the instruction-set baseline. |
 | `BluraySubtitle_macos_arm64.zip` | macOS 11 Big Sur or later | Apple M1 or later Apple silicon. |
 
@@ -20,7 +21,7 @@ The NLM filter uses 128-bit NEON on both ARM64 platforms, including on processor
 
 Each archive in the download directory has a matching `<archive-name>.txt` containing the SHA-256, Git commit and commit time. Use it to verify the download and identify the build.
 
-Extract the entire archive. On Windows, run the `.exe` with the same name as the archive. On Linux, extract with `tar -xJf <archive-name>`, enter `BluraySubtitle/` and run `./BluraySubtitle` as your normal user. Keep `_internal/` beside the launcher. To switch from an earlier Ubuntu-named package, download the matching Linux archive manually once.
+Extract the entire archive. On Windows, run the `.exe` with the same name as the archive. On Linux and FreeBSD, extract with `tar -xJf <archive-name>`, enter `BluraySubtitle/` and run `./BluraySubtitle` as your normal user. Keep `_internal/` beside the launcher. To switch from an earlier Ubuntu-named package, download the matching Linux archive manually once.
 
 ## Windows runtime
 
@@ -40,7 +41,7 @@ Each architecture's application includes Qt 6.6 and the current stable Qt. The l
 
 ## Linux runtime
 
-The package includes Python, glibc, Qt, graphics client libraries and media tools. It also runs on Alpine with musl and on NixOS. The GUI supports X11, XWayland and WSLg. Hardware acceleration uses the host graphics driver. RIFE interpolation needs a working Vulkan device. For a headless startup check, run `QT_QPA_PLATFORM=offscreen ./BluraySubtitle --foreground`.
+The package includes Python, glibc, Qt, graphics client libraries and media tools. It also runs on Alpine with musl and on NixOS. The GUI supports X11, Wayland and WSLg. Hardware acceleration uses the host graphics driver. RIFE interpolation needs a working Vulkan device. For a headless startup check, run `QT_QPA_PLATFORM=offscreen ./BluraySubtitle --foreground`.
 
 On Linux 3.17.0, both architectures launched the main window and VSEdit with Qt 6.6, encoded 10-bit HEVC and muxed Chinese subtitles. ARM64 tests covered 64 KiB pages on Linux 3.17 and 4 KiB pages on Ubuntu 26.04. The main window selects the current bundled Qt when the kernel meets its requirements.
 
@@ -57,11 +58,23 @@ The following x64 distributions have been tested. Run the corresponding package-
 | Alpine 3.24 | Included in BusyBox | `apk add fontconfig font-noto-cjk` |
 | NixOS 26.05 | Included | Add `pkgs.noto-fonts-cjk-sans` to `fonts.packages` in the NixOS configuration. |
 
+## Starting under Wayland
+
+On Linux and FreeBSD, the regular launcher uses XWayland when it is available. To use native Wayland, run the following command from the extracted package directory.
+
+```sh
+QT_QPA_PLATFORM=wayland ./BluraySubtitle
+```
+
+For a source installation, replace `./BluraySubtitle` with the launch command printed by the setup script.
+
 ## Source setup scripts
 
 **Windows.** `setup_windows_environment.ps1` supports x64 Windows 10 version 1909 or later, x64 Windows Server 2019 or later with Desktop Experience, and ARM64 Windows 11 or later. Use 64-bit PowerShell. The default is VapourSynth R79. Select Classic with `-VapourSynthRuntime Classic`. On ARM64, Classic uses a separate x64 Python, x64 plugins and x64 VSEdit.
 
 **macOS.** Install the Apple Command Line Tools with `xcode-select --install`, then run `./setup_macos_environment.sh`. The full installation has been tested on macOS Tahoe 26.7.3. The minimum macOS version for the script is still unknown. The script uses uv, which officially supports macOS 13 Ventura and later. Running uv on macOS 12 requires a separate `realpath` executable. The source launcher is installed at `~/Library/Application Support/BluraySubtitle/Runtime/bin/BluraySubtitle`. If you share the checkout with another operating system, set `BLURAY_SUBTITLE_CONFIG_DIR` before setup to give the Mac launcher its own configuration. [uv macOS support](https://docs.astral.sh/uv/reference/policies/platforms/#macos-versions)
+
+**FreeBSD.** Run `sh setup_freebsd_environment.sh` as a normal amd64 user with `sudo` on a 14.x or 15.x release with an active Ports package repository. The script installs the native tools and adds a desktop entry. The source launcher is under `${XDG_DATA_HOME:-$HOME/.local/share}/bluraysubtitle/freebsd/`.
 
 **Linux.** `setup_linux_environment.sh` supports native x64 or ARM64 Ubuntu, Debian and their APT derivatives. It checks installed packages and the candidates in the configured repositories, including backports. Interim and rolling releases use the same checks.
 

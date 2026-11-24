@@ -308,18 +308,18 @@ def uosc_is_installed(destination: Path) -> bool:
     return all(path.is_file() for path in files)
 
 
-def install_uosc(bundle: Path, destination: Path) -> None:
+def install_uosc(bundle: Path, destination: Path, *, binary: str = UOSC_BINARY) -> None:
     source = bundle / UOSC_DIR
     version = uosc_version(source / "main.lua")
     contents = [(name, (bundle / "fonts" / name).read_bytes()) for name in UOSC_FONTS]
-    if not version or not all((source / path).is_file() for path in UOSC_REQUIRED):
-        raise ValueError("The uosc release is missing Linux desktop files")
+    if not version or not all((source / path).is_file() for path in (binary, "intl/zh-hans.json")):
+        raise ValueError("The uosc release is missing desktop files")
 
     source_files = sorted(path.relative_to(source) for path in source.rglob("*") if path.is_file())
     target = destination / UOSC_DIR
     if (
         uosc_version(target / "main.lua") < version
-        or not ziggy_is_usable(target / UOSC_BINARY)
+        or not ziggy_is_usable(target / binary)
         or not all((target / path).is_file() for path in source_files)
     ):
         target.parent.mkdir(parents=True, exist_ok=True)

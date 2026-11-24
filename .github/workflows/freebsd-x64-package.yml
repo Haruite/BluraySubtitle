@@ -1,0 +1,23 @@
+name: Publish BluraySubtitle FreeBSD x64
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      refresh-runtime:
+        description: Resolve current Ports and upstream versions before packaging
+        type: boolean
+        default: true
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  publish:
+    uses: ./.github/workflows/build-freebsd-package.yml
+    with:
+      release: '14.5'
+      refresh-runtime: ${{ inputs.refresh-runtime || false }}
+    secrets: inherit

@@ -10,7 +10,7 @@
 
 ## 运行环境与工具构建
 
-[Windows setup](../../setup_windows_environment.ps1)、[Linux setup](../../setup_linux_environment.sh) 和 [macOS setup](../../setup_macos_environment.sh) 安装所需工具。[`settings.py`](../../src/core/settings.py) 提供 setup 使用的默认安装路径。源码运行时，工具路径留空即自动查找。Desktop setup 与 GUI 读取同一组 `tools` 字段，并以配置目录为基准解析相对路径。
+[Windows setup](../../setup_windows_environment.ps1)、[Linux setup](../../setup_linux_environment.sh)、[macOS setup](../../setup_macos_environment.sh) 和 [FreeBSD setup](../../setup_freebsd_environment.sh) 安装所需工具。[`settings.py`](../../src/core/settings.py) 提供 setup 使用的默认安装路径。源码运行时，工具路径留空即自动查找。Desktop setup 与 GUI 读取同一组 `tools` 字段，并以配置目录为基准解析相对路径。
 
 - x264 使用官方 `master` 构建支持 8/10-bit 的 CLI。Windows x64 使用 MSYS2 UCRT64 与 PGO。Windows ARM64 使用 CLANGARM64 并启用 NEON。
 - x265 使用官方最新稳定标签，构建 8/10/12-bit multilib CLI，各核心均启用 HDR10+ JSON 和 Dolby Vision RPU 输入。
@@ -30,6 +30,10 @@
 在较新版本的 x64 Windows 上以管理员身份打开 PowerShell，运行 `.\setup_windows_environment.ps1 -Mode Build -CompatibilityWorkDirectory build/windows-compat`。兼容版工作流以该选项调用共用的 Windows 工作流，并上传校验通过的 `BluraySubtitle_windows_x64_compat.7z`。[兼容版工作流](../../.github/workflows/windows-x64-compat-package.yml)
 
 构建将最新版 x64 [PythonVista](https://github.com/adang1345/PythonVista) NuGet 包安装到工作目录，并为 PyQt6 和 VSEdit 使用 [CrystalIDE 的 Qt 6.8.5 移植版](https://github.com/crystalidea/qt6windows7)。MKVToolNix 命令行程序链接独立编译的 MinGW QtCore，使用 Qt 6.8.3 移植补丁。VapourSynth R79 通过 `CreateFileW` 适配 MSVC 文件系统库。两个 HDR 命令行工具以 `x86_64-win7-windows-msvc` 为目标重新编译 Rust 标准库。zsmooth 以 Windows 7 和基础 x86-64 指令集为编译目标。
+
+### FreeBSD 构建与发布
+
+在原生 FreeBSD 14.5 amd64 环境中运行 `sh setup_freebsd_environment.sh --mode Build --release 14.5`。`--release` 核对构建系统版本，`--output` 设置归档和校验文件的输出目录。发布工作流在 GitHub 托管的 Linux runner 中启动 FreeBSD 虚拟机，并传入 14.5。[FreeBSD 打包工作流](../../.github/workflows/build-freebsd-package.yml)
 
 ## 源码导航
 

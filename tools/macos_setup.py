@@ -27,7 +27,7 @@ def desktop(ctx):
     from src.core.tool_paths import (
         MKVTOOLNIX_TOOLS,
         TOOL_DIRECTORY_NAMES,
-        macos_runtime_paths,
+        portable_runtime_paths,
         resolve_tool_paths,
     )
 
@@ -68,7 +68,7 @@ def desktop(ctx):
     refresh_source_launchers(target)
     # Explicit user paths can point to independently maintained programs. Populate
     # missing destinations with links into the verified installation.
-    defaults = {k: path for k, path in macos_runtime_paths(target).items() if k not in TOOL_DIRECTORY_NAMES}
+    defaults = {k: path for k, path in portable_runtime_paths(target).items() if k not in TOOL_DIRECTORY_NAMES}
     for k, v in MKVTOOLNIX_TOOLS.items():
         defaults[k] = target / "bin" / v
     links = [(Path(configured[k]), src) for k, src in defaults.items() if configured.get(k)]

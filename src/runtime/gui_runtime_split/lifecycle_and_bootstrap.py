@@ -195,6 +195,7 @@ class LifecycleBootstrapMixin(BluraySubtitleGuiBase):
         self.third_party_notices_btn.clicked.connect(lambda _=None: self._open_third_party_notices_dialog())
         self.third_party_notices_btn.setVisible(
             (sys.platform == 'darwin' and bool(third_party_notices_markdown_path(self._language_code)))
+            or bool(getattr(sys, '_bluray_freebsd_runtime', None))
             or (bool(getattr(sys, 'frozen', False)) and hasattr(sys, '_MEIPASS'))
         )
         language_layout.addWidget(self.third_party_notices_btn)

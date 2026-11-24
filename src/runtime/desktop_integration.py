@@ -15,6 +15,7 @@ from PyQt6.QtGui import QGuiApplication, QIcon
 
 from src.core.app_config import application_directory, application_location_id, application_support_directory
 from src.core.i18n import translate_text
+from src.core.tool_paths import bundle_directory
 from src.runtime.windows_shell import launch_system_powershell
 
 
@@ -52,14 +53,16 @@ def application_icon_path() -> Path:
     return application_support_directory() / "resource" / "bluraysubtitle.svg"
 
 
-def desktop_entry_id() -> str:
-    return f"bluraysubtitle-{application_location_id()}"
+def desktop_entry_id(directory: Path | None = None) -> str:
+    return f"bluraysubtitle-{application_location_id(directory)}"
 
 
 def _launch_command() -> list[str]:
     executable = str(Path(sys.executable).absolute())
     if getattr(sys, "frozen", False):
         return [executable]
+    if sys.platform.startswith("freebsd") and bundle_directory():
+        return [str(application_directory() / "BluraySubtitle")]
     return [executable, str(application_directory() / "src/main.py")]
 
 
@@ -151,7 +154,7 @@ def _create_desktop_entry_shortcut(command: list[str], directory: Path, *, menu:
     if not folder:
         raise OSError(translate_text("This desktop does not provide a shortcut directory."))
     path = Path(folder) / f"{desktop_entry_id()}.desktop"
-    _write_desktop_entry(path, command, directory, "BluraySubtitle", application_icon_path(), desktop_entry_id())
+    write_desktop_entry(path, command, directory, "BluraySubtitle", application_icon_path(), desktop_entry_id())
     if not menu:
         path.chmod(0o755)
         if gio := shutil.which("gio"):
@@ -170,11 +173,11 @@ def log_taskbar_entry(title: str, icon: Path, window_class: str) -> Path:
     if not location:
         raise OSError(translate_text("This desktop does not provide a shortcut directory."))
     path = Path(location) / "bluraysubtitle" / f"{window_class}.desktop"
-    _write_desktop_entry(path, _launch_command(), application_directory(), title, icon, window_class, hidden=True)
+    write_desktop_entry(path, _launch_command(), application_directory(), title, icon, window_class, hidden=True)
     return path
 
 
-def _write_desktop_entry(
+def write_desktop_entry(
     path: Path, command: list[str], directory: Path, title: str, icon: Path, window_class: str, *, hidden: bool = False,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)

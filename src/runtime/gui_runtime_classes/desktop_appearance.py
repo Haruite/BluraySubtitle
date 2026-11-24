@@ -239,7 +239,9 @@ class _DesktopAppearance(QObject):
 
 
 def apply_title_bar_theme(window: QWidget, dark: bool) -> None:
-    if QApplication.platformName() == "cocoa":
+    if frame := getattr(window, "_client_window_frame", None):
+        frame.set_dark(dark)
+    elif QApplication.platformName() == "cocoa":
         if (window.windowType() in (Qt.WindowType.Window, Qt.WindowType.Dialog)
                 and window.windowHandle() is not None and not window.testAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen)):
             set_window_appearance(window, dark)

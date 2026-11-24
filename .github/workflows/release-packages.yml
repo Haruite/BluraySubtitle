@@ -21,6 +21,7 @@ jobs:
           - BluraySubtitle_windows_arm64.7z
           - BluraySubtitle_linux_x64.tar.xz
           - BluraySubtitle_linux_arm64.tar.xz
+          - BluraySubtitle_freebsd_x64.tar.xz
           - BluraySubtitle_macos_x64.zip
           - BluraySubtitle_macos_arm64.zip
         include:

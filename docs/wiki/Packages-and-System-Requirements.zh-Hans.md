@@ -13,6 +13,7 @@
 | `BluraySubtitle_windows_arm64.7z` | Windows 10 ARM64（整包接口下限 1903）或 Windows 11 ARM64 | 支持 NEON 和 Armv8.1 LSE 原子指令（包括 `CASAL`）的 64 位 Arm 处理器。 |
 | `BluraySubtitle_linux_x64.tar.xz` | 64 位 x86 Linux（x86-64），已验证的内核下限为 3.17 | 完整支持 x86-64-v3，例如 Intel Core Haswell 或 AMD Zen。在 x86-64-v2 基础上需要 AVX、AVX2、BMI1/2、F16C、FMA、LZCNT、MOVBE、OSXSAVE 及操作系统启用的 AVX 寄存器状态。 |
 | `BluraySubtitle_linux_arm64.tar.xz` | 64 位 AArch64 Linux，已验证的内核下限为 3.17 | 支持浮点和 NEON 的 Armv8-A 处理器，实测基线为 Cortex-A53。 |
+| `BluraySubtitle_freebsd_x64.tar.xz` | FreeBSD 14.5 amd64 起的 14.x 和 15.x | 需要 x86-64-v3（含 AVX2），例如 Intel Core Haswell 或 AMD Zen。 |
 | `BluraySubtitle_macos_x64.zip` | macOS 11 Big Sur 及以上 | Big Sur 支持的 Intel Mac。以 2013 年末 Mac Pro 使用的 Ivy Bridge 为指令集基线。 |
 | `BluraySubtitle_macos_arm64.zip` | macOS 11 Big Sur 及以上 | Apple M1 或更新的 Apple 芯片。 |
 
@@ -20,7 +21,7 @@
 
 下载目录中每个压缩包对应一份 `<压缩包名>.txt`，其中记录 SHA-256、Git 提交和提交时间，可用于核对下载文件和构建版本。
 
-完整解压所选程序包。Windows 下运行与压缩包同名的 `.exe`。Linux 下用 `tar -xJf <压缩包名>` 解压，进入 `BluraySubtitle/`，以普通用户身份运行 `./BluraySubtitle`。`_internal/` 须与启动程序放在一起。使用早期 Ubuntu 命名包的用户，首次切换时手动下载对应的 Linux 包。
+完整解压所选程序包。Windows 下运行与压缩包同名的 `.exe`。Linux 和 FreeBSD 下用 `tar -xJf <压缩包名>` 解压，进入 `BluraySubtitle/`，以普通用户身份运行 `./BluraySubtitle`。`_internal/` 须与启动程序放在一起。使用早期 Ubuntu 命名包的用户，首次切换时手动下载对应的 Linux 包。
 
 ## Windows 运行环境
 
@@ -40,7 +41,7 @@ Windows 7 SP1 须安装 [KB3063858](https://github.com/adang1345/PythonVista#rea
 
 ## Linux 运行环境
 
-程序包自带 Python、glibc、Qt、图形客户端库和媒体工具，也可在 Alpine（musl）和 NixOS 上运行。桌面界面支持 X11、XWayland 或 WSLg。硬件加速需要宿主提供匹配的驱动，RIFE 插帧需要可用的 Vulkan 设备。无显示服务时，可用 `QT_QPA_PLATFORM=offscreen ./BluraySubtitle --foreground` 检查启动。
+程序包自带 Python、glibc、Qt、图形客户端库和媒体工具，也可在 Alpine（musl）和 NixOS 上运行。桌面界面支持 X11、Wayland 和 WSLg。硬件加速需要宿主提供匹配的驱动，RIFE 插帧需要可用的 Vulkan 设备。无显示服务时，可用 `QT_QPA_PLATFORM=offscreen ./BluraySubtitle --foreground` 检查启动。
 
 在 Linux 3.17.0 上，x64 和 ARM64 均以 Qt 6.6 启动主窗口和 VSEdit，并完成了 10 位 HEVC 编码和中文字幕封装。ARM64 已验证 Linux 3.17 的 64 KiB 页和 Ubuntu 26.04 的 4 KiB 页。内核满足新版 Qt 的要求时，主窗口会自动选用包内新版 Qt。
 
@@ -57,11 +58,23 @@ Windows 7 SP1 须安装 [KB3063858](https://github.com/adang1345/PythonVista#rea
 | Alpine 3.24 | BusyBox 已包含 | `apk add fontconfig font-noto-cjk` |
 | NixOS 26.05 | 镜像已包含 | 在 NixOS 配置的 `fonts.packages` 中加入 `pkgs.noto-fonts-cjk-sans`。 |
 
+## Wayland 启动方式
+
+在 Linux 和 FreeBSD 上，常规启动时会优先使用可用的 XWayland。在解压目录执行以下命令可使用原生 Wayland。
+
+```sh
+QT_QPA_PLATFORM=wayland ./BluraySubtitle
+```
+
+从源码安装时，将命令中的 `./BluraySubtitle` 换成安装脚本输出的启动命令。
+
 ## 源码安装脚本
 
 **Windows**　`setup_windows_environment.ps1` 支持 x64 版 Windows 10 1909 及以上、带桌面体验的 x64 Windows Server 2019 及以上，以及 ARM64 版 Windows 11 及以上。请使用 64 位 PowerShell。默认安装 VapourSynth R79，可用 `-VapourSynthRuntime Classic` 选择 Classic。ARM64 的 Classic 使用独立的 x64 Python、插件和 VSEdit。
 
 **macOS** 先用 `xcode-select --install` 安装 Apple 命令行工具，再运行 `./setup_macos_environment.sh`。完整安装流程已在 macOS Tahoe 26.7.3 上验证，最低系统版本尚未确定。脚本使用的 uv 官方支持 macOS 13 Ventura 及以上版本，在 macOS 12 上运行 uv 需另装 `realpath`。源码启动器位于 `~/Library/Application Support/BluraySubtitle/Runtime/bin/BluraySubtitle`。多个系统共用源码目录时，可在安装前设置 `BLURAY_SUBTITLE_CONFIG_DIR`，让 Mac 启动器使用独立配置。[uv 的 macOS 支持说明](https://docs.astral.sh/uv/reference/policies/platforms/#macos-versions)
+
+**FreeBSD** 在具有可用 Ports 软件包源的 FreeBSD 14.x 或 15.x amd64 上，以有 `sudo` 权限的普通用户运行 `sh setup_freebsd_environment.sh`。脚本安装原生工具并添加应用菜单入口，源码启动器位于 `${XDG_DATA_HOME:-$HOME/.local/share}/bluraysubtitle/freebsd/`。
 
 **Linux**　`setup_linux_environment.sh` 支持原生 x64 或 ARM64 的 Ubuntu、Debian 及其 APT 衍生版。脚本检查已安装的软件包和已配置的软件源，包括 backports。非 LTS 版与滚动发行版按相同条件判断。
 

@@ -1433,3 +1433,23 @@ macOS 版支持访达桌面快捷方式和从程序坞恢复窗口，可用 IINA
 在 macOS 和 Linux 上，浅色主题跟随桌面强调色，标题采用所选字号，日志窗口可以独立最小化。后台 FFmpeg 任务的输出颜色也会保留在日志中。在 POSIX 上取消编码时会终止整个编码进程组。
 
 在 Intel 虚拟机的 Big Sur 和 Tahoe 上验证了界面启动、滤镜、编码和封装，其中 Big Sur 使用 Ivy Bridge 处理器模型。Tahoe 还验证了 IINA 原盘预览和更新回退。Linux 侧在 GNOME、Xfce、MATE 和 LXQt 上检查了强调色和日志窗口。
+
+## FreeBSD amd64 打包
+
+2026-11-24 · 基于 `f420de5`
+
+新增原生桌面安装和便携 amd64 包，内置私有运行环境、一套 Qt、支持蓝光和 VapourSynth 的 mpv，以及 R79 滤镜。启动时使用包内工具和 Unix 桌面集成。随包分发构建所用的 C++ 运行库及 SONAME 在 FreeBSD 15 中变化的 FreeBSD 14 库。发布工作流在 14.5 上构建，用同一缓存保存运行环境和构建输入，并将归档和校验记录附加到 Release。
+
+FreeBSD X11 的窗口管理器支持系统移动和缩放时，标题栏跟随应用或日志主题。设置对话框按钮顺序与 Linux 一致，文件选择框采用包内 Qt 翻译。独立的中英文许可提示沿用 Linux 和 macOS 的逐组件版式。
+
+在 FreeBSD 14.5 上以 150% Qt 缩放与 Linux 对照界面，扫描两张蓝光原盘，并播放 SDR H.264 和 UHD HEVC 样本。同一份归档在 FreeBSD 15.1 的 Haswell 处理器模型上验证了界面启动、媒体工具和 VapourSynth 滤镜。MVTools 在测试的 x86-64-v2 模型上加载失败，因此归档要求 x86-64-v3。
+
+## 原生 Wayland 标题栏与 FreeBSD 包验证
+
+2026-11-24
+
+Linux 和 FreeBSD 在原生 Wayland 下共用程序自绘标题栏。标题栏随应用或日志窗口的独立主题即时切换，窗口移动和缩放由合成器负责。启动器优先使用可用的 XWayland。
+
+FreeBSD 缓存包含 libplacebo 和 RIFE 的 Git 源码、Cargo 索引和 Go 编译缓存。当周的运行环境缓存校验失败时，从组件缓存重新组装。包验收用随包的 CPU 滤镜渲染画面，并用生成的样本验证 7-Zip 和 tsMuxeR。
+
+Linux KDE 和 FreeBSD 14.5 的嵌套 Qt Wayland 合成器通过了主题与窗口按钮检查。浅色模式采用 FreeBSD Xfce 和 Linux KDE 提供的强调色。用同一份归档在 14.5 和 15.1 上验证了 VSEdit 预览、mpv 加载 uosc、Dolby Vision 和 HDR10+ 提取，以及 libplacebo 和 RIFE 的软件 Vulkan 出帧。

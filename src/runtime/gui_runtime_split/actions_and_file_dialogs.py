@@ -1698,52 +1698,52 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
         tools_layout.setColumnStretch(4, 1)
         tools_layout.addItem(QSpacerItem(0, 0, QSizePolicy.Policy.Expanding), 0, 2)
         tools_layout.addItem(QSpacerItem(0, 0, QSizePolicy.Policy.Expanding), 0, 5)
-        layout.addWidget(tools_row)
-
-        self.encode_options_row = QWidget(self.encode_box)
-        options_layout = QGridLayout(self.encode_options_row)
-        options_layout.setContentsMargins(0, 0, 0, 0)
-        options_layout.setHorizontalSpacing(16)
-        # Cocoa's shorter checkbox labels leave six fewer points around the indicator.
-        options_layout.setVerticalSpacing(14 if QApplication.platformName() == 'cocoa' else 8)
+        primary_options = QVBoxLayout()
+        secondary_options = QVBoxLayout()
+        for options in (primary_options, secondary_options):
+            options.setAlignment(Qt.AlignmentFlag.AlignTop)
+            # Cocoa's shorter checkbox labels leave six fewer points around the indicator.
+            options.setSpacing(14 if QApplication.platformName() == 'cocoa' else 8)
+        tools_layout.addLayout(primary_options, 4, 0, 1, 3)
+        tools_layout.addLayout(secondary_options, 4, 3, 1, 3)
         self.use_getnative_checkbox = QCheckBox(
             self.t('Use getnative for native resolution'),
-            self.encode_options_row,
+            tools_row,
         )
         self.use_getnative_checkbox.setChecked(True)
-        options_layout.addWidget(self.use_getnative_checkbox, 0, 0)
+        primary_options.addWidget(self.use_getnative_checkbox)
         self.auto_crop_black_borders_checkbox = QCheckBox(
             self.t('Auto-crop black borders (verify result)'),
-            self.encode_options_row,
+            tools_row,
         )
         self.auto_crop_black_borders_checkbox.setChecked(False)
         self.auto_crop_black_borders_checkbox.setToolTip(self.t(
             'Automatic black-border detection can be wrong; verify the encoded picture.'
         ))
-        options_layout.addWidget(self.auto_crop_black_borders_checkbox, 0, 1)
+        secondary_options.addWidget(self.auto_crop_black_borders_checkbox)
         self.output_comparison_checkbox = QCheckBox(
             self.t('Output comparison images'),
-            self.encode_options_row,
+            tools_row,
         )
         self.output_comparison_checkbox.setChecked(True)
-        options_layout.addWidget(self.output_comparison_checkbox, 1, 0)
+        primary_options.addWidget(self.output_comparison_checkbox)
         self.frame_check_checkbox = QCheckBox(
             self.t('Check corrupted frames'),
-            self.encode_options_row,
+            tools_row,
         )
         self.frame_check_checkbox.setChecked(False)
         self.frame_check_checkbox.setToolTip(self.t(
             'After encoding, rerun the VPy and check the output frame by frame; '
             'this significantly increases processing time.'
         ))
-        options_layout.addWidget(self.frame_check_checkbox, 1, 1)
+        secondary_options.addWidget(self.frame_check_checkbox)
         self.use_bluray_compat_params_checkbox = QCheckBox(
             self.t('Use Blu-ray compatible params'),
-            self.encode_options_row,
+            tools_row,
         )
         self.use_bluray_compat_params_checkbox.setChecked(False)
-        options_layout.addWidget(self.use_bluray_compat_params_checkbox, 2, 0, 1, 2)
-        layout.addWidget(self.encode_options_row)
+        primary_options.addWidget(self.use_bluray_compat_params_checkbox)
+        layout.addWidget(tools_row)
 
         self.vpy_processing_row = QWidget(self.encode_box)
         processing_layout = QGridLayout(self.vpy_processing_row)
@@ -1768,6 +1768,7 @@ class ActionsAndDialogsMixin(BluraySubtitleGuiBase):
             spin.setSingleStep(0.1)
             spin.setValue(default)
             spin.setKeyboardTracking(False)
+            spin.setProperty('toolTipSource', tooltip)
             spin.setToolTip(self.t(tooltip))
             processing_layout.addWidget(spin, row, column + 1)
             return spin

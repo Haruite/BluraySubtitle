@@ -69,6 +69,8 @@ def using_tool_paths(paths: Mapping[str, str]):
 def bundle_directory() -> Path | None:
     if sys.platform == "darwin" and (runtime := getattr(sys, "_bluray_macos_runtime", None)):
         return Path(runtime)
+    if sys.platform.startswith("freebsd") and (runtime := getattr(sys, "_bluray_freebsd_runtime", None)):
+        return Path(runtime)
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         return Path(sys._MEIPASS).resolve()
     return None
@@ -286,17 +288,22 @@ def _find_associated_windows_mpv() -> str:
     return ""
 
 
-def macos_runtime_paths(runtime: Path) -> dict[str, Path]:
+def portable_runtime_paths(runtime: Path) -> dict[str, Path]:
     paths = {key: runtime / "bin" / names[0] for key, names in _EXECUTABLE_CANDIDATES.items()}
-    paths.update(PLUGIN_PATH=runtime / "plugins", MKVTOOLNIX_PATH=runtime / "bin",
-                 LIBASS_PATH=runtime / "lib/libass.dylib")
+    paths.update(PLUGIN_PATH=runtime / "plugins", MKVTOOLNIX_PATH=runtime / "bin")
+    if sys.platform.startswith("freebsd"):
+        paths.update(LIBASS_PATH=runtime / "lib/libass.so", MPV_PATH=runtime / "bin/mpv", MPV_CONFIG_PATH=runtime / "mpv")
+    else:
+        paths["LIBASS_PATH"] = runtime / "lib/libass.dylib"
     return paths
 
 
 def _discover_tool_paths(paths: dict[str, str]) -> None:
-    if sys.platform == "darwin" and (runtime := bundle_directory()):
-        for key, path in macos_runtime_paths(runtime).items():
+    if (sys.platform == "darwin" or sys.platform.startswith("freebsd")) and (runtime := bundle_directory()):
+        for key, path in portable_runtime_paths(runtime).items():
             if not paths[key]:
+                if key == "MPV_CONFIG_PATH" and os.environ.get("BLURAY_FREEBSD_SOURCE"):
+                    path = default_mpv_config_directory()
                 paths[key] = str(path)
     for name, programs in _EXECUTABLE_CANDIDATES.items():
         if paths.get(name):
