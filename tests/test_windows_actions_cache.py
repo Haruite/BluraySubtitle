@@ -7,7 +7,7 @@ from unittest.mock import patch
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from tools import install_vapoursynth_windows_components as plugins
-from tools.windows_actions_cache import outdated_cache_ids, snapshot_keys, split_x64_artifacts, tool_fingerprint
+from tools.windows_actions_cache import legacy_cache_prefixes, snapshot_checksums, split_x64_artifacts, tool_fingerprint
 from tools.windows_build_cache import publish, restore
 
 
@@ -25,7 +25,7 @@ class WindowsActionsCacheTests(unittest.TestCase):
             artifact.write_bytes(b"encoder")
             archive = root / "tools/encoder.zip"
             publish(archive, "recipe", {artifact.name: artifact})
-            keys = snapshot_keys(pip.parent, archive.parent, "X64")
+            keys = snapshot_checksums(pip.parent, archive.parent, "X64")
 
             with ZipFile(archive) as cached:
                 entries = [(name, cached.read(name)) for name in cached.namelist()]
@@ -33,11 +33,10 @@ class WindowsActionsCacheTests(unittest.TestCase):
                 for name, content in reversed(entries):
                     cached.writestr(name, content)
             metadata.write_bytes(b"refreshed headers")
-            self.assertEqual(snapshot_keys(pip.parent, archive.parent, "X64"), keys)
-            self.assertNotEqual(snapshot_keys(pip.parent, archive.parent, "ARM64"), keys)
+            self.assertEqual(snapshot_checksums(pip.parent, archive.parent, "X64"), keys)
 
             body.write_bytes(b"new wheel")
-            updated = snapshot_keys(pip.parent, archive.parent, "X64")
+            updated = snapshot_checksums(pip.parent, archive.parent, "X64")
             self.assertNotEqual(updated["pip"], keys["pip"])
             self.assertEqual(updated["shared"], keys["shared"])
 
@@ -47,28 +46,15 @@ class WindowsActionsCacheTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Invalid cached file"):
                 tool_fingerprint(archive.parent)
 
-    def test_pruning_requires_a_verified_snapshot_in_its_family(self):
-        def entry(cache_id, prefix, ref="refs/heads/main"):
-            return {"id": cache_id, "key": prefix + f"{cache_id:064x}", "ref": ref,
-                    "created_at": "2026-11-17T00:00:00Z", "size_in_bytes": 1}
-
-        entries = [
-            entry(1, "windows-tools-v3-ARM64-"),
-            entry(2, "windows-tools-v4-ARM64-"),
-            entry(3, "windows-tools-v4-ARM64-"),
-            entry(4, "windows-tools-v4-ARM64-"),
-            entry(5, "windows-tools-v4-X64-"),
-            entry(6, "windows-pip-v1-ARM64-"),
-            entry(7, "windows-tools-v4-ARM64-", "refs/heads/other"),
-            entry(8, "windows-compat-v1-X64-"),
-            entry(9, "windows-compat-v1-X64-"),
-            entry(10, "windows-compat-v1-X64-"),
-        ]
-        self.assertEqual(outdated_cache_ids(entries, "ARM64", {"tools": entries[0]["key"]}), [])
-        self.assertEqual(outdated_cache_ids(entries, "ARM64", {"tools": entries[2]["key"]}), [2, 1])
-        self.assertEqual(outdated_cache_ids(entries, "ARM64", {"tools": entries[3]["key"]}), [2, 1])
-        self.assertEqual(outdated_cache_ids(entries, "X64", {"compat": entries[-1]["key"]}), [8])
-        self.assertEqual(outdated_cache_ids(entries, "X64", {"tools": entries[4]["key"]}), [])
+    def test_shared_legacy_cache_remains_until_both_x64_variants_are_migrated(self):
+        shared = "windows-shared-v1-X64-"
+        standard = {"key": "windows-build-v1-x64-standard-test", "ref": "refs/heads/main", "size_in_bytes": 1}
+        compat = {"key": "windows-build-v1-x64-compat-test", "ref": "refs/heads/main", "size_in_bytes": 1}
+        self.assertNotIn(shared, legacy_cache_prefixes([standard, {**compat, "size_in_bytes": 0}], "X64", False))
+        self.assertIn(shared, legacy_cache_prefixes([standard, compat], "X64", False))
+        self.assertIn(shared, legacy_cache_prefixes([standard, compat], "X64", True))
+        self.assertNotIn(shared, legacy_cache_prefixes([standard, compat], "ARM64", False))
+        self.assertNotIn("windows-compat-v1-X64-", legacy_cache_prefixes([standard, compat], "X64", False))
 
     def test_compatibility_downloads_and_builds_have_their_own_snapshot(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -78,15 +64,15 @@ class WindowsActionsCacheTests(unittest.TestCase):
             source = work / "downloads/source.tar.gz"
             source.parent.mkdir(parents=True)
             source.write_bytes(b"source")
-            first = snapshot_keys(*args, compatibility=work)
+            first = snapshot_checksums(*args, compatibility=work)
             archive = work / "cache/tool.zip"
             publish(archive, "compatibility recipe", {"tool.dll": source})
-            second = snapshot_keys(*args, compatibility=work)
+            second = snapshot_checksums(*args, compatibility=work)
             self.assertNotEqual(second["compat"], first["compat"])
-            self.assertNotIn("compat", snapshot_keys(*args))
+            self.assertNotIn("compat", snapshot_checksums(*args))
 
             source.write_bytes(b"new source")
-            self.assertNotEqual(snapshot_keys(*args, compatibility=work)["compat"], second["compat"])
+            self.assertNotEqual(snapshot_checksums(*args, compatibility=work)["compat"], second["compat"])
 
     def test_x64_compatibility_only_reuses_shared_builds(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -103,8 +89,8 @@ class WindowsActionsCacheTests(unittest.TestCase):
             self.assertEqual({file.stem for file in tools.glob("*.zip")}, shared)
             self.assertEqual({file.stem for file in (tools / "standard").glob("*.zip")}, standard)
             args = (root / "pip", tools, "X64")
-            regular = snapshot_keys(*args)
-            compat = snapshot_keys(*args, compatibility=root / "compat")
+            regular = snapshot_checksums(*args)
+            compat = snapshot_checksums(*args, compatibility=root / "compat")
             self.assertEqual(set(regular), {"shared", "standard"})
             self.assertEqual(compat, {"shared": regular["shared"]})
 

@@ -1,11 +1,13 @@
 """The macOS build plan and restored archives must describe the same installed products."""
 
+import json
 import os
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 
+from tools.macos_actions_cache import main as snapshot
 from tools.macos_build_support import Build
 
 
@@ -49,22 +51,29 @@ class MacBuildCacheTests(unittest.TestCase):
         self.assertNotEqual(self.plan()["other"], initial["other"])
         self.assertFalse(self.ctx.prefix.exists())
 
-    def test_failed_build_reports_only_completed_component_archives(self):
+    def test_failed_build_can_save_completed_current_components(self):
         self.ctx.expected = self.plan()
         self.ctx.built.clear()
         self.ctx.planning = False
         output = self.ctx.cache / "step-outputs"
+        plan = self.ctx.cache / "build-plan.json"
+        plan.write_text(json.dumps({"components": self.ctx.expected}), encoding="utf-8")
 
         def fail_after_writing(work, stage):
             (stage / "partial").write_bytes(b"unfinished")
             raise RuntimeError("build failed")
 
-        with patch.dict(os.environ, GITHUB_OUTPUT=str(output)):
-            self.ctx.component("sdk", "1", self.install, packages=("lib",))
-            with self.assertRaisesRegex(RuntimeError, "build failed"):
-                self.ctx.component("tool", "v1", fail_after_writing, dependencies=("sdk",))
+        self.ctx.component("sdk", "1", self.install, packages=("lib",))
+        with self.assertRaisesRegex(RuntimeError, "build failed"):
+            self.ctx.component("tool", "v1", fail_after_writing, dependencies=("sdk",))
+        (self.ctx.components / "obsolete.tar.gz").write_bytes(b"old component")
+        (self.ctx.components / "obsolete.tar.sha256").write_bytes(b"old checksum")
+        with patch.dict(os.environ, BLURAY_SETUP_CACHE_DIR=str(self.ctx.cache), BLURAY_MACOS_CACHE_PLAN=str(plan),
+                        GITHUB_OUTPUT=str(output), PACKAGE_CACHE_PREFIX="macos-build-v1-x64-",
+                        GITHUB_RUN_ID="123", GITHUB_RUN_ATTEMPT="1"):
+            snapshot()
         key = self.ctx.expected["sdk"]
-        self.assertEqual(output.read_text().splitlines(), [f"sdk={key}"])
+        self.assertRegex(output.read_text(), r"^key=macos-build-v1-x64-[0-9a-f]{64}-123-1\n$")
         self.assertEqual({p.name for p in self.ctx.components.iterdir()},
                          {f"sdk-{key}.tar.gz", f"sdk-{key}.tar.sha256"})
 

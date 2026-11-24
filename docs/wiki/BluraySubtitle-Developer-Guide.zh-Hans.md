@@ -23,7 +23,7 @@
 
 ### macOS 构建与发布
 
-在 Intel Mac 或 Apple 芯片 Mac 上运行 `./setup_macos_environment.sh --mode Build`，即可在 `dist/` 生成当前架构的 ZIP 和校验文件。各架构的 Mac runner 按组件缓存构建产物，验证并上传 ZIP。[macOS 打包工作流](../../.github/workflows/build-macos-package.yml) · [Release 工作流](../../.github/workflows/release-packages.yml)
+在 Intel Mac 或 Apple 芯片 Mac 上运行 `./setup_macos_environment.sh --mode Build`，即可在 `dist/` 生成当前架构的 ZIP 和校验文件。工作流为每种架构合并缓存构建输入和原生组件，并验证及上传 ZIP。[macOS 打包工作流](../../.github/workflows/build-macos-package.yml) · [Release 工作流](../../.github/workflows/release-packages.yml)
 
 ### Windows x64 兼容版构建
 

@@ -8,6 +8,7 @@ on:
         type: string
 
 permissions:
+  actions: write
   contents: read
 
 concurrency:
@@ -18,14 +19,10 @@ jobs:
   publish:
     runs-on: ${{ inputs.architecture == 'arm64' && 'ubuntu-26.04-arm' || 'ubuntu-26.04' }}
     timeout-minutes: 180
-    outputs:
-      architecture: ${{ runner.arch }}
-      restored-setup: ${{ steps.downloads.outputs.cache-matched-key }}
-      restored-tools: ${{ steps.cached.outputs.built == 'true' && steps.builds.outputs.cache-matched-key || '' }}
-      restored-apt: ${{ steps.cached.outputs.built == 'true' && steps.apt-runtime.outputs.cache-matched-key || '' }}
     env:
       BLURAY_LANG: en
       CCACHE_MAXSIZE: 2G
+      PACKAGE_CACHE_PREFIX: ubuntu2604-build-v1-${{ inputs.architecture }}-
       PACKAGE_ARCHIVE: BluraySubtitle_linux_${{ inputs.architecture }}.tar.xz
     steps:
       - name: Checkout Repository
@@ -42,11 +39,29 @@ jobs:
             printf 'BLURAY_APT_CACHE_PATHS=%s/bluraysubtitle-apt-paths.txt\n' "$RUNNER_TEMP"
           } >> "$GITHUB_ENV"
 
-      - name: Restore Setup Downloads and Compiler Cache
-        id: downloads
+      - name: Restore Linux Build Cache
+        id: cache
         uses: actions/cache/restore@v6
         with:
-          path: &downloads-paths |
+          path: &cache-paths |
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/downloads
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/pip
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/ccache
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/cargo
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/builds/components/*.tar.xz
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/apt/*.deb
+            ${{ env.BLURAY_SETUP_CACHE_DIR }}/apt-runtime/packages.json
+          key: ${{ env.PACKAGE_CACHE_PREFIX }}lookup
+          restore-keys: ${{ env.PACKAGE_CACHE_PREFIX }}
+
+      - name: Restore Previous Setup Downloads and Compiler Cache
+        id: downloads
+        if: steps.cache.outputs.cache-matched-key == ''
+        uses: actions/cache/restore@v6
+        with:
+          path: |
             ${{ env.BLURAY_SETUP_CACHE_DIR }}/downloads
             ${{ env.BLURAY_SETUP_CACHE_DIR }}/pip
             ${{ env.BLURAY_SETUP_CACHE_DIR }}/ccache
@@ -58,7 +73,7 @@ jobs:
 
       - name: Restore Legacy Setup Cache
         id: legacy-downloads
-        if: steps.downloads.outputs.cache-matched-key == ''
+        if: steps.cache.outputs.cache-matched-key == '' && steps.downloads.outputs.cache-matched-key == ''
         uses: actions/cache/restore@v6
         with:
           path: |
@@ -74,9 +89,10 @@ jobs:
 
       - name: Restore Installed Build Artifacts
         id: builds
+        if: steps.cache.outputs.cache-matched-key == ''
         uses: actions/cache/restore@v6
         with:
-          path: &tools-paths ${{ env.BLURAY_SETUP_CACHE_DIR }}/builds/components/*.tar.xz
+          path: ${{ env.BLURAY_SETUP_CACHE_DIR }}/builds/components/*.tar.xz
           key: ubuntu2604-tools-v3-${{ runner.arch }}-lookup
           restore-keys: |
             ubuntu2604-tools-v3-${{ runner.arch }}-
@@ -98,9 +114,10 @@ jobs:
 
       - name: Restore Ubuntu APT Packages and Manifest
         id: apt-runtime
+        if: steps.cache.outputs.cache-matched-key == ''
         uses: actions/cache/restore@v6
         with:
-          path: &apt-paths |
+          path: |
             ${{ env.BLURAY_SETUP_CACHE_DIR }}/apt/*.deb
             ${{ env.BLURAY_SETUP_CACHE_DIR }}/apt-runtime/packages.json
           key: ubuntu2604-apt-runtime-v3-${{ runner.arch }}-lookup
@@ -117,7 +134,10 @@ jobs:
 
       - name: Build Linux Package from Cached Tools
         id: cached
-        if: steps.builds.outputs.cache-matched-key != '' && (steps.apt-runtime.outputs.cache-matched-key != '' || steps.legacy-apt.outputs.cache-matched-key != '')
+        if: >-
+          steps.cache.outputs.cache-matched-key != '' ||
+          (steps.builds.outputs.cache-matched-key != '' &&
+           (steps.apt-runtime.outputs.cache-matched-key != '' || steps.legacy-apt.outputs.cache-matched-key != ''))
         env:
           BLURAYSUBTITLE_GITHUB_TOKEN: ${{ github.token }}
         run: |
@@ -150,38 +170,35 @@ jobs:
           bash tools/build_linux_package.sh
           /usr/bin/python3 -B tools/verify_linux_package.py "dist/$PACKAGE_ARCHIVE"
 
-      - name: Fingerprint Verified Build Caches
+      - name: Fingerprint Linux Build Cache
         id: snapshot
-        if: github.ref == 'refs/heads/main'
+        if: >-
+          github.ref == 'refs/heads/main' &&
+          (steps.cache.outputs.cache-matched-key == '' || steps.cached.outputs.built != 'true')
         continue-on-error: true
         run: |
           set -euo pipefail
-          if ! /usr/bin/python3 -B tools/linux_apt_cache.py save "$BLURAY_SETUP_CACHE_DIR" "$BLURAY_APT_CACHE_PATHS"; then
-            rm -f -- "$BLURAY_SETUP_CACHE_DIR/apt-runtime/packages.json"
-            echo "::warning::Could not collect the APT package cache"
-          fi
-          /usr/bin/python3 -B tools/linux_actions_cache.py snapshot "$RUNNER_ARCH"
+          /usr/bin/python3 -B tools/linux_apt_cache.py save "$BLURAY_SETUP_CACHE_DIR" "$BLURAY_APT_CACHE_PATHS"
+          /usr/bin/python3 -B tools/linux_actions_cache.py
 
-      - name: Save Setup Downloads and Compiler Cache
-        if: steps.snapshot.outputs.setup != '' && steps.snapshot.outputs.setup != steps.downloads.outputs.cache-matched-key
+      - name: Save Linux Build Cache
+        if: steps.snapshot.outputs.key != '' && steps.snapshot.outputs.key != steps.cache.outputs.cache-matched-key
         uses: actions/cache/save@v6
         with:
-          path: *downloads-paths
-          key: ${{ steps.snapshot.outputs.setup }}
+          path: *cache-paths
+          key: ${{ steps.snapshot.outputs.key }}
 
-      - name: Save Installed Build Artifacts
-        if: steps.snapshot.outputs.tools != '' && steps.snapshot.outputs.tools != steps.builds.outputs.cache-matched-key
-        uses: actions/cache/save@v6
-        with:
-          path: *tools-paths
-          key: ${{ steps.snapshot.outputs.tools }}
-
-      - name: Save Ubuntu APT Packages and Manifest
-        if: steps.snapshot.outputs.apt != '' && steps.apt-runtime.outputs.cache-matched-key != steps.snapshot.outputs.apt
-        uses: actions/cache/save@v6
-        with:
-          path: *apt-paths
-          key: ${{ steps.snapshot.outputs.apt }}
+      - name: Prune Superseded Linux Caches
+        if: github.ref == 'refs/heads/main'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SAVED_CACHE: ${{ steps.snapshot.outputs.key || (steps.cached.outputs.built == 'true' && steps.cache.outputs.cache-matched-key) || '' }}
+        run: |
+          /usr/bin/python3 -B tools/actions_cache.py "$PACKAGE_CACHE_PREFIX" "$SAVED_CACHE" \
+            "ubuntu2604-setup-v1-$RUNNER_ARCH-" "ubuntu2604-setup-v2-$RUNNER_ARCH-" \
+            "ubuntu2604-tools-v2-$RUNNER_ARCH-" "ubuntu2604-tools-v3-$RUNNER_ARCH-" \
+            "ubuntu2604-apt-runtime-v2-$RUNNER_ARCH-" "ubuntu2604-apt-runtime-v3-$RUNNER_ARCH-"
 
       - name: Upload Package and Build Information
         if: github.ref == 'refs/heads/main'
@@ -190,28 +207,3 @@ jobs:
           SFTP_KNOWN_HOSTS: ${{ secrets.SFTP_KNOWN_HOSTS }}
           SFTP_PRIVATE_KEY: ${{ secrets.SFTP_PRIVATE_KEY }}
         run: bash tools/publish_website_package.sh "dist/$PACKAGE_ARCHIVE"
-
-  prune-cache:
-    needs: publish
-    if: >-
-      github.ref == 'refs/heads/main' &&
-      (startsWith(needs.publish.outputs.restored-setup, 'ubuntu2604-setup-v2-') ||
-       startsWith(needs.publish.outputs.restored-tools, 'ubuntu2604-tools-v3-') ||
-       startsWith(needs.publish.outputs.restored-apt, 'ubuntu2604-apt-runtime-v3-'))
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-      - name: Remove Superseded Ubuntu Caches
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CACHE_ARCHITECTURE: ${{ needs.publish.outputs.architecture }}
-          RESTORED_SETUP_CACHE: ${{ needs.publish.outputs.restored-setup }}
-          RESTORED_TOOLS_CACHE: ${{ needs.publish.outputs.restored-tools }}
-          RESTORED_APT_CACHE: ${{ needs.publish.outputs.restored-apt }}
-        run: /usr/bin/python3 -B tools/linux_actions_cache.py prune "$CACHE_ARCHITECTURE"

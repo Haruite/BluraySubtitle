@@ -23,7 +23,7 @@ Use the setup scripts as references for custom builds. See [automatic HDR metada
 
 ### macOS builds and publishing
 
-On an Intel or Apple silicon Mac, run `./setup_macos_environment.sh --mode Build` to write the ZIP for that architecture and its verification record to `dist/`. Each native Mac runner caches individual components, verifies the ZIP and uploads it. [macOS package workflow](../../.github/workflows/build-macos-package.yml) · [Release workflow](../../.github/workflows/release-packages.yml)
+On an Intel or Apple silicon Mac, run `./setup_macos_environment.sh --mode Build` to write the ZIP for that architecture and its verification record to `dist/`. The workflow caches build inputs and native components together for each architecture, verifies the ZIP and uploads it. [macOS package workflow](../../.github/workflows/build-macos-package.yml) · [Release workflow](../../.github/workflows/release-packages.yml)
 
 ### Windows x64 compatibility build
 

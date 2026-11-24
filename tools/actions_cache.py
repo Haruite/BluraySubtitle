@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
 from pathlib import Path
-import re
 import subprocess
+import sys
 
 
 ARCHITECTURES = ("X64", "ARM64")
@@ -49,26 +50,38 @@ def fingerprint(groups: tuple[tuple[str, Path, str], ...], required: dict[str, s
     return digest.hexdigest() if seen else ""
 
 
-def superseded_cache_ids(entries: list[dict], pattern: str, legacy_pattern: str | None, restored: str) -> list[int]:
-    current = sorted(
-        (entry for entry in entries if entry["ref"] == MAIN and re.fullmatch(pattern, entry["key"])),
-        key=lambda entry: (entry["created_at"], entry["id"]), reverse=True,
-    )
-    restored_index = next((
-        index for index, entry in enumerate(current)
-        if entry["key"] == restored and entry["size_in_bytes"] > 0
-    ), None)
-    if restored_index is None:
-        return []
+def write_snapshot_key(checksums: dict[str, str]) -> None:
+    if not checksums:
+        return
+    digest = hashlib.sha256(json.dumps(checksums, sort_keys=True).encode("utf-8")).hexdigest()
+    content_prefix = f"{os.environ['PACKAGE_CACHE_PREFIX']}{digest}-"
+    restored = os.environ.get("RESTORED_CACHE_KEY", "")
+    # Cache keys are immutable. Allocate a new generation when the payload changes.
+    key = (restored if restored.startswith(content_prefix)
+           else f"{content_prefix}{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}")
+    with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as stream:
+        print(f"key={key}", file=stream)
 
-    # Protect the restored archive and any newer upload pending verification.
-    # When the newest archive was restored, keep one older archive as a fallback.
-    older = current[restored_index + 1:]
-    legacy = sorted(
-        (entry for entry in entries if entry["ref"] == MAIN and legacy_pattern and re.fullmatch(legacy_pattern, entry["key"])),
-        key=lambda entry: (entry["created_at"], entry["id"]), reverse=True,
+
+def superseded_snapshot_ids(entries: list[dict], prefix: str, retained: str, legacy: tuple[str, ...] = ()) -> list[int]:
+    if not prefix or not retained.startswith(prefix) or retained == prefix:
+        return []
+    main = [entry for entry in entries if entry["ref"] == MAIN]
+    keeper = max(
+        (entry for entry in main if entry["key"] == retained and entry["size_in_bytes"] > 0),
+        key=lambda entry: (entry["created_at"], entry["id"]), default=None,
     )
-    return [entry["id"] for entry in (older + legacy)[int(restored_index == 0):]]
+    if keeper is None:
+        return []
+    # Keep newer snapshots if this run restored a superseded key.
+    cutoff = keeper["created_at"], keeper["id"]
+    return [
+        entry["id"] for entry in main
+        if entry["id"] != keeper["id"] and (
+            entry["key"].startswith(legacy)
+            or (entry["key"].startswith(prefix) and (entry["created_at"], entry["id"]) < cutoff)
+        )
+    ]
 
 
 def main_cache_entries() -> tuple[str, list[dict]]:
@@ -82,4 +95,24 @@ def main_cache_entries() -> tuple[str, list[dict]]:
 
 
 def delete_cache(endpoint: str, cache_id: int) -> None:
-    subprocess.run(["gh", "api", "--method", "DELETE", f"{endpoint}/{cache_id}"], check=True)
+    result = subprocess.run(
+        ["gh", "api", "--method", "DELETE", f"{endpoint}/{cache_id}"],
+        stderr=subprocess.PIPE, encoding="utf-8", errors="replace",
+    )
+    if result.returncode and result.stderr.rstrip().endswith("(HTTP 404)"):
+        return  # A parallel build may already have removed the shared legacy cache.
+    sys.stderr.write(result.stderr)
+    result.check_returncode()
+    print(f"Removed superseded cache {cache_id}", flush=True)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("prefix")
+    parser.add_argument("retained")
+    parser.add_argument("legacy", nargs="*")
+    args = parser.parse_args()
+    if args.retained:
+        endpoint, entries = main_cache_entries()
+        for cache_id in superseded_snapshot_ids(entries, args.prefix, args.retained, tuple(args.legacy)):
+            delete_cache(endpoint, cache_id)

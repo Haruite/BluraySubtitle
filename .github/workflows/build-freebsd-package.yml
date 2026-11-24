@@ -25,6 +25,7 @@ jobs:
     env:
       PACKAGE_ARCHIVE: BluraySubtitle_freebsd_x64.tar.xz
       FREEBSD_RELEASE: ${{ inputs.release }}
+      PACKAGE_CACHE_PREFIX: freebsd-x64-v1-${{ inputs.release }}-
       FREEBSD_REFRESH_RUNTIME: ${{ inputs.refresh-runtime }}
       BLURAY_LANG: en
     steps:
@@ -74,16 +75,20 @@ jobs:
           cpu: 4
           mem: 8192
           sync: rsync
+          disable-cache: true
           envs: FREEBSD_RELEASE FREEBSD_REFRESH_RUNTIME FREEBSD_CACHE_PERIOD BLURAY_LANG GITHUB_SHA
           run: |
             set -eu
-            # Let the VM action copy completed cache files back before failing the job.
+            export BLURAY_SETUP_CACHE_DIR="$PWD/build/freebsd-cache"
+            # Let the VM action copy completed work back without merging a partial runtime.
             trap '
               status=$?
+              if [ "$status" -ne 0 ]; then
+                rm -rf -- "$BLURAY_SETUP_CACHE_DIR/runtime" "$BLURAY_SETUP_CACHE_DIR/runtime-next"
+              fi
               printf "%s\n" "$status" > build/freebsd-build-status
               exit 0
             ' EXIT
-            export BLURAY_SETUP_CACHE_DIR="$PWD/build/freebsd-cache"
             export BLURAY_FREEBSD_COMMIT_FILE="$PWD/build/freebsd-commit.txt"
             if [ "$FREEBSD_REFRESH_RUNTIME" != true ] &&
                 [ "$(cat "$BLURAY_SETUP_CACHE_DIR/runtime/cache-period" 2>/dev/null || :)" = "$FREEBSD_CACHE_PERIOD" ]; then
@@ -94,6 +99,7 @@ jobs:
               fi
               # Keep the component caches so a broken runtime can be assembled again.
               rm -rf -- "$BLURAY_SETUP_CACHE_DIR/runtime"
+              : > build/freebsd-runtime-invalid
             fi
             sh setup_freebsd_environment.sh --mode Build --release "$FREEBSD_RELEASE"
             printf '%s\n' "$FREEBSD_CACHE_PERIOD" > "$BLURAY_SETUP_CACHE_DIR/runtime/cache-period"
@@ -109,6 +115,7 @@ jobs:
       - name: Prepare FreeBSD Cache
         id: snapshot
         env:
+          RESTORED_CACHE_KEY: ${{ steps.cache.outputs.cache-matched-key }}
           FREEBSD_CACHE_PERIOD: ${{ steps.inputs.outputs.period }}
         run: |
           set -euo pipefail
@@ -116,21 +123,23 @@ jobs:
           [[ "$build_status" =~ ^[0-9]+$ ]]
           prefix="freebsd-x64-v1-$FREEBSD_RELEASE-$FREEBSD_CACHE_PERIOD"
           cd build/freebsd-cache
-          if [[ "$build_status" == 0 ]]; then
-            if [[ -d runtime-next ]]; then
+          if [[ "$build_status" != 0 ]]; then
+            if [[ -f ../freebsd-runtime-invalid ]]; then
               rm -rf -- runtime
-              mv -- runtime-next runtime
             fi
+            key="$prefix-failed-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          elif [[ -d runtime-next ]]; then
+            rm -rf -- runtime
+            mv -- runtime-next runtime
             digest=$(cat runtime/{runtime.json,cache-generation} | sha256sum)
             key="$prefix-${digest%% *}"
           else
-            rm -rf -- runtime runtime-next
-            key="$prefix-failed-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+            key="$RESTORED_CACHE_KEY"
+            [[ -n "$key" ]]
           fi
           printf 'key=%s\nexit-code=%s\n' "$key" "$build_status" >> "$GITHUB_OUTPUT"
 
       - name: Save FreeBSD Runtime and Build Cache
-        id: save
         if: github.ref == 'refs/heads/main' && steps.snapshot.outputs.key != steps.cache.outputs.cache-matched-key
         uses: actions/cache/save@v6
         with:
@@ -138,30 +147,14 @@ jobs:
           key: ${{ steps.snapshot.outputs.key }}
 
       - name: Prune Superseded FreeBSD Caches
-        if: github.ref == 'refs/heads/main' && steps.save.outcome == 'success'
+        if: github.ref == 'refs/heads/main' && steps.snapshot.outputs.key != ''
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           SAVED_CACHE: ${{ steps.snapshot.outputs.key }}
         run: |
-          python3 - <<'PY'
-          import os
-          from tools.actions_cache import delete_cache, main_cache_entries
-
-          endpoint, entries = main_cache_entries()
-          key = os.environ['SAVED_CACHE']
-          prefix = f"freebsd-x64-v1-{os.environ['FREEBSD_RELEASE']}-"
-          saved = next((item for item in entries if item['key'] == key and item['size_in_bytes']), None)
-          # Keep the verified runtime while a failed build saves its progress.
-          if saved:
-              for item in entries:
-                  if (
-                      item['key'].startswith(prefix)
-                      and item['created_at'] < saved['created_at']
-                      and ("-failed-" not in key or "-failed-" in item['key'])
-                  ):
-                      delete_cache(endpoint, item['id'])
-          PY
+          python3 -B tools/actions_cache.py "$PACKAGE_CACHE_PREFIX" "$SAVED_CACHE" \
+            "freebsd-$FREEBSD_RELEASE-" "apt-pkgs-linux-x64-ubuntu26-"
 
       - name: Report FreeBSD Build Failure
         if: ${{ !cancelled() && steps.snapshot.outputs.exit-code != '' && steps.snapshot.outputs.exit-code != '0' }}
