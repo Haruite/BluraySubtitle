@@ -230,13 +230,17 @@ def build_uosc(ctx, source, stage, tag):
     binary = uosc / "bin/ziggy-freebsd"
     binary.parent.mkdir()
     environment = dict(ctx.env, CGO_ENABLED="0", GOAMD64="v2", GOTOOLCHAIN="local")
-    subprocess.run(["go", "build", "-trimpath", "-ldflags=-s -w", "-o", binary, "./src/ziggy"],
-                   cwd=source, env=environment, check=True)
+    # The release archive can sit inside the application's Git checkout.
+    subprocess.run(
+        ["go", "build", "-buildvcs=false", "-trimpath", "-ldflags=-s -w", "-o", binary, "./src/ziggy"],
+        cwd=source, env=environment, check=True,
+    )
     license_root = stage / "legal/uosc"
     copy_licenses(Path(output("go", "env", "GOROOT")), license_root / "go")
     modules = subprocess.check_output(
-        ["go", "list", "-deps", "-f", '{{with .Module}}{{if not .Main}}{{.Path}}{{"\t"}}{{.Dir}}{{end}}{{end}}',
-         "./src/ziggy"], cwd=source, env=environment, text=True,
+        ["go", "list", "-buildvcs=false", "-deps", "-f",
+         '{{with .Module}}{{if not .Main}}{{.Path}}{{"\t"}}{{.Dir}}{{end}}{{end}}', "./src/ziggy"],
+        cwd=source, env=environment, text=True,
     )
     for module in sorted(set(modules.splitlines()) - {""}):
         path, directory = module.split("\t")
