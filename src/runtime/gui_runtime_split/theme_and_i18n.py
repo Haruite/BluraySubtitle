@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import QApplication, QLabel, QTabBar, QWidget, QPlainTextEd
 
 from src.core import APP_TITLE
 import src.core.settings as core_settings
-from src.core.i18n import translate_text
+from src.core.i18n import I18N_EN_TO_ZH, I18N_ZH_TO_EN, translate_text
 from src.runtime.gui_runtime_classes.custom_table_widget import editable_table_border_color
 from src.runtime.gui_runtime_classes.desktop_appearance import apply_title_bar_theme, desktop_appearance
 from src.runtime.gui_runtime_classes.disc_table_widget import DiscCommandEdit
@@ -786,9 +786,13 @@ class ThemeI18nMixin(BluraySubtitleGuiBase):
         self._refresh_language_dependent_sizes()
 
     def _translate_widget_texts(self):
+        tooltip_catalog = I18N_ZH_TO_EN if self._language_code == 'en' else I18N_EN_TO_ZH
         for widget in self.findChildren(QWidget):
-            if tooltip := widget.property('toolTipSource'):
-                widget.setToolTip(self.t(tooltip))
+            source = widget.property('toolTipSource')
+            tooltip = widget.toolTip()
+            # Unmarked tooltips can contain file paths. Only translate a complete catalog entry.
+            if source or tooltip in tooltip_catalog:
+                widget.setToolTip(self.t(source or tooltip))
             if isinstance(widget, DiscCommandEdit):
                 widget.setAccessibleName(self.t('remux cmd'))
             if widget.objectName() == 'mainPlaylistToggle':

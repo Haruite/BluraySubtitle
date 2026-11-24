@@ -1995,28 +1995,31 @@ class RemuxEpisodeWorkflowsMixin(BluraySubtitleServiceBase):
             os.path.normcase(os.path.abspath(row.source_path))
             for row in main_rows
         }
-        # Copy-only image folders and extracted assets are still selected table3
-        # rows, so they consume the same visible SP sequence as encoded videos.
-        for sp_sequence_number, row in enumerate(selected_sp_rows, start=1):
+        # Number every independent output, including copy-only assets. Linked tracks are already in the episode.
+        sp_numbers = {}
+        for index, row in enumerate(selected_sp_rows):
+            if os.path.normcase(os.path.abspath(row.source_path)) not in staged_main_sources:
+                sp_numbers[index] = len(sp_numbers) + 1
+        for index, row in enumerate(selected_sp_rows):
             if cancel_event and cancel_event.is_set():
                 raise TaskCancelled()
             warning_start = len(self.encode_warnings)
+            sp_sequence_number = sp_numbers.get(index)
+            if sp_sequence_number is None:
+                record_completed_row(row, 'SP row', warning_start)
+                completed_rows += 1
+                completed_sp_rows += 1
+                continue
             progress_name = f'SP{sp_sequence_number:02d}'
             self._progress(
                 row_progress('sp'),
                 self.t('Preparing SP {current}/{total}: {name}').format(
                     current=sp_sequence_number,
-                    total=len(selected_sp_rows),
+                    total=len(sp_numbers),
                     name=progress_name,
                 ),
             )
             source_path = os.path.normpath(row.source_path)
-            if os.path.normcase(os.path.abspath(source_path)) in staged_main_sources:
-                # Episode-linked SP muxing has already modified this main source in the stage.
-                record_completed_row(row, 'SP row', warning_start)
-                completed_rows += 1
-                completed_sp_rows += 1
-                continue
             if os.path.exists(row.output_path):
                 self._progress(
                     text=self.t('Skipping existing output: {path}').format(

@@ -487,7 +487,7 @@ Still content and MPLS files with at least three distinct clips are exempt from 
 
 Other supported container layouts use `.mkv`. Uncovered M2TS discovery distinguishes video, audio-only, subtitle-only, audio-with-subtitle, IGS, private/other, mixed non-video, and unknown layouts before choosing or disabling output.
 
-MPLS basenames use `BD_Vol_{bdmv_vol}_SP{n}`, with consistent zero padding among selected MPLS rows on that disc. Uncovered M2TS uses `BD_Vol_{bdmv_vol}_{m2ts_name}`. A movie with only one table2 row omits the volume prefix, using `SP{n}` or `{m2ts_name}`. Track edits update names immediately; linked episode names also follow splitting changes. Execution uses the resulting visible name.
+Selected standalone MPLS rows use `BD_Vol_{bdmv_vol}_SP{n}` with consecutive, zero-padded numbers per disc. Rows that supply tracks to an episode use its output name and follow changes to episode splits. Uncovered M2TS uses `BD_Vol_{bdmv_vol}_{m2ts_name}`. A movie with only one table2 row omits the volume prefix, using `SP{n}` or `{m2ts_name}`. Track edits update names immediately. Execution uses the resulting visible name.
 
 MPLS container outputs replace existing chapters with playlist-generated chapters, removing the tail marker and omitting a lone zero-time chapter. Edited languages are applied and verified for `.mkv`, `.mka`, and `.mks`, including appended tracks. Raw streams and images cannot store those language settings, so such a configuration is rejected.
 

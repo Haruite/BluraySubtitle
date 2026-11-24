@@ -696,12 +696,18 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
         single_audio_ext_cache: dict[tuple[int, str, str], str] = {}
         single_sub_ext_cache: dict[tuple[int, str, str], str] = {}
         for bdmv_index, rows in rows_by_vol.items():
-            selected_rows = []
+            linked_episode_keys: dict[int, tuple[int, str]] = {}
+            standalone_count = 0
             for r in rows:
+                detail_item = self.table3.item(r, detail_col)
+                episode_key = (bdmv_index, detail_item.text().strip() if detail_item else '')
+                if episode_names.get(episode_key) is not None:
+                    linked_episode_keys[r] = episode_key
+                    continue
                 it = self.table3.item(r, sel_col)
                 if it and it.flags() & Qt.ItemFlag.ItemIsEnabled and it.checkState() == Qt.CheckState.Checked:
-                    selected_rows.append(r)
-            digits = max(2, len(str(max(len(selected_rows), 1))))
+                    standalone_count += 1
+            digits = max(2, len(str(standalone_count)))
             seq = 0
             for r in rows:
                 yield
@@ -714,9 +720,8 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                 can_select = bool(sel_it and sel_it.flags() & Qt.ItemFlag.ItemIsEnabled)
                 selected = can_select and sel_it.checkState() == Qt.CheckState.Checked
                 out_item.setData(READ_ONLY_HINT_ROLE, 'Select this item first.' if can_select and not selected else None)
-                detail_item = self.table3.item(r, detail_col)
-                episode_key = (bdmv_index, detail_item.text().strip() if detail_item else '')
-                episode_name = episode_names.get(episode_key)
+                episode_key = linked_episode_keys.get(r)
+                episode_name = episode_names[episode_key] if episode_key is not None else None
                 was_linked = out_item.data(_SP_EPISODE_OUTPUT_KEY_ROLE) is not None
                 out_item.setData(_SP_EPISODE_OUTPUT_KEY_ROLE, None)
                 flags = out_item.flags() & ~Qt.ItemFlag.ItemIsEditable
@@ -736,7 +741,7 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                     continue
                 m2ts_files = [x.strip() for x in m2ts_text.split(',') if x.strip()]
                 m2ts_files_unique = list(dict.fromkeys(m2ts_files))
-                seq += 1
+
                 def _set_sp_out(rel: str):
                     if episode_name is None:
                         edited_name = out_item.data(Qt.ItemDataRole.UserRole)
@@ -746,6 +751,8 @@ class OutputTracksMixin(BluraySubtitleGuiBase):
                         path = episode_name
                     out_item.setText(path)
 
+                if episode_name is None:
+                    seq += 1
                 sp_no = str(seq).zfill(digits)
                 base_name = (
                     f'SP{sp_no}' if single_output_movie else f'BD_Vol_{bdmv_vol}_SP{sp_no}'
