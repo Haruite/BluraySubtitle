@@ -77,6 +77,12 @@ jobs:
           envs: FREEBSD_RELEASE FREEBSD_REFRESH_RUNTIME FREEBSD_CACHE_PERIOD BLURAY_LANG GITHUB_SHA
           run: |
             set -eu
+            # Let the VM action copy completed cache files back before failing the job.
+            trap '
+              status=$?
+              printf "%s\n" "$status" > build/freebsd-build-status
+              exit 0
+            ' EXIT
             export BLURAY_SETUP_CACHE_DIR="$PWD/build/freebsd-cache"
             export BLURAY_FREEBSD_COMMIT_FILE="$PWD/build/freebsd-commit.txt"
             if [ "$FREEBSD_REFRESH_RUNTIME" != true ] &&
@@ -100,17 +106,28 @@ jobs:
             # rsync copyback leaves deleted guest files on the runner.
             mv -- "$BLURAY_SETUP_CACHE_DIR/runtime" "$BLURAY_SETUP_CACHE_DIR/runtime-next"
 
-      - name: Identify Verified Cache
+      - name: Prepare FreeBSD Cache
         id: snapshot
+        env:
+          FREEBSD_CACHE_PERIOD: ${{ steps.inputs.outputs.period }}
         run: |
           set -euo pipefail
+          read -r build_status < build/freebsd-build-status
+          [[ "$build_status" =~ ^[0-9]+$ ]]
+          prefix="freebsd-x64-v1-$FREEBSD_RELEASE-$FREEBSD_CACHE_PERIOD"
           cd build/freebsd-cache
-          if [[ -d runtime-next ]]; then
-            rm -rf -- runtime
-            mv -- runtime-next runtime
+          if [[ "$build_status" == 0 ]]; then
+            if [[ -d runtime-next ]]; then
+              rm -rf -- runtime
+              mv -- runtime-next runtime
+            fi
+            digest=$(cat runtime/{runtime.json,cache-generation} | sha256sum)
+            key="$prefix-${digest%% *}"
+          else
+            rm -rf -- runtime runtime-next
+            key="$prefix-failed-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           fi
-          digest=$(cat runtime/{runtime.json,cache-generation} | sha256sum)
-          printf 'key=freebsd-x64-v1-%s-%s-%s\n' "$FREEBSD_RELEASE" '${{ steps.inputs.outputs.period }}' "${digest%% *}" >> "$GITHUB_OUTPUT"
+          printf 'key=%s\nexit-code=%s\n' "$key" "$build_status" >> "$GITHUB_OUTPUT"
 
       - name: Save FreeBSD Runtime and Build Cache
         id: save
@@ -135,11 +152,24 @@ jobs:
           key = os.environ['SAVED_CACHE']
           prefix = f"freebsd-x64-v1-{os.environ['FREEBSD_RELEASE']}-"
           saved = next((item for item in entries if item['key'] == key and item['size_in_bytes']), None)
+          # Keep the verified runtime while a failed build saves its progress.
           if saved:
               for item in entries:
-                  if item['key'].startswith(prefix) and item['created_at'] < saved['created_at']:
+                  if (
+                      item['key'].startswith(prefix)
+                      and item['created_at'] < saved['created_at']
+                      and ("-failed-" not in key or "-failed-" in item['key'])
+                  ):
                       delete_cache(endpoint, item['id'])
           PY
+
+      - name: Report FreeBSD Build Failure
+        if: ${{ !cancelled() && steps.snapshot.outputs.exit-code != '' && steps.snapshot.outputs.exit-code != '0' }}
+        env:
+          BUILD_EXIT_CODE: ${{ steps.snapshot.outputs.exit-code }}
+        run: |
+          echo "::error::FreeBSD build failed with exit code $BUILD_EXIT_CODE."
+          exit "$BUILD_EXIT_CODE"
 
       - name: Upload Workflow Archive
         uses: actions/upload-artifact@v7

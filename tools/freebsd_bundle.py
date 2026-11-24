@@ -188,7 +188,6 @@ def copy_native(ctx, runtime, owners):
         (directory / "qt.conf").write_text(f"[Paths]\nPrefix={prefix}\nPlugins=qt\nTranslations=qt/translations\n",
                                           encoding="utf-8")
     shutil.copytree(ctx.prefix / "plugins", runtime / "plugins")
-    owners.add(LOCAL / "lib/libncnn.a")
     catalog = LOCAL / "share/locale/zh_CN/LC_MESSAGES/mkvtoolnix.mo"
     if catalog.is_file():
         copy(catalog, runtime / "share/locale/zh_CN/LC_MESSAGES" / catalog.name)

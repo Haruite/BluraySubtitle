@@ -105,7 +105,7 @@ class FreeBSDBuild(Build):
         if sparse:
             self.run("git", "sparse-checkout", "set", *sparse, cwd=destination)
         if submodules:
-            self.run("git", "submodule", "update", "--init", "--depth=1", *submodules, cwd=destination)
+            self.run("git", "submodule", "update", "--init", "--recursive", "--depth=1", *submodules, cwd=destination)
         # Preserve Git metadata because libplacebo uses it to identify its build version.
         cache.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=cache) as pending:
@@ -350,23 +350,18 @@ def build_zsmooth(ctx, source, stage):
 
 def build_rife(ctx, work, stage, release):
     source = work / "source"
+    # Use the ncnn and glslang submodules selected by the RIFE release.
     ctx.git_source(SOURCES["rife"].url + ".git", release.ref, source, revision=release.source_url.rsplit("/", 1)[1],
-                   sparse=("RIFE", RIFE_MODEL_DIR))
-    warp = source / "RIFE/warp.cpp"
-    warp.write_text(warp.read_text().replace("if (opt.use_shader_pack8)", """if ([]<typename Options>(const Options& options) {
-        if constexpr (requires { options.use_shader_pack8; })
-            return options.use_shader_pack8;
-        return false;
-    }(opt))"""))
-    meson = source / "meson.build"
-    dependency = "deps += dependency('ncnn', method: 'cmake')"
-    # Meson omits the CMake LINK_ONLY entries from the static Ports ncnn library.
-    meson.write_text(meson.read_text().replace(dependency, dependency + "\n  deps += [cxx.find_library('glslang'), cxx.find_library('SPIRV')]"))
+                   submodules=("subprojects/ncnn",), sparse=("RIFE", RIFE_MODEL_DIR, "subprojects"))
     build = work / "build"
-    ctx.meson(source, build, "-Duse_system_ncnn=true", PYTHONPATH=str(ctx.prefix / PYTHON_SITE))
+    ctx.meson(source, build, "-Duse_system_ncnn=false", PYTHONPATH=str(ctx.prefix / PYTHON_SITE))
     copy(build / "librife.so", stage / RIFE_LIBRARY)
     shutil.copytree(source / RIFE_MODEL_DIR, stage / RIFE_MODEL_DIR)
-    copy_licenses(source, stage.parent / "legal/vs-rife")
+    legal = stage.parent / "legal/vs-rife"
+    ncnn = source / "subprojects/ncnn"
+    copy_licenses(source, legal)
+    copy_licenses(ncnn, legal / "ncnn")
+    copy_licenses(ncnn / "glslang", legal / "glslang")
 
 
 def build_filters(ctx, releases):
@@ -434,7 +429,7 @@ def build_filters(ctx, releases):
                     "nlm_ispc": ("ispc",), "dfttest": ("fftw3-float",), "mvtools": ("fftw3-float",),
                     "eedi3m": ("fftw3-float",), "placebo": ("libplacebo", "shaderc", "vulkan-headers"),
                     "zsmooth": ("fftw3-float", "zig015"),
-                    "rife": ("ncnn", "vulkan-headers", "vulkan-loader", "glslang", "glslang-shared")}.get(name, ())
+                    "rife": ("vulkan-headers", "vulkan-loader")}.get(name, ())
         builders = {"rife": build_rife, "zsmooth": build_zsmooth, "lsmas": adapt_sources}
         builder = builders.get(name, make_filter)
         recipe = [recipe_digest(install, builder, FreeBSDBuild.cmake, FreeBSDBuild.meson), direct_filters.get(name)]

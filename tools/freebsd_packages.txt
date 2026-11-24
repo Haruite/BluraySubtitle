@@ -43,7 +43,6 @@ graphics/vulkan-headers
 graphics/vulkan-loader
 graphics/shaderc
 graphics/glslang
-misc/ncnn
 graphics/wayland
 graphics/wayland-protocols
 graphics/qt6-wayland
