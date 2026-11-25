@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from importlib.metadata import version
+from importlib.metadata import distribution, version
 import json
 import os
 from pathlib import Path
@@ -16,6 +16,15 @@ from typing import Mapping
 
 VERSION = r"[0-9]+(?:\.[0-9]+){1,3}"
 PLACEHOLDER = re.compile(r"\{\{([A-Z0-9_]+)\}\}")
+WINDOWS_PYTHON_PACKAGES = {
+    "PYQT": ("PyQt6", "GPL-3.0-only"),
+    "PYQT_SIP": ("PyQt6-sip", "BSD-2-Clause"),
+    "SOUNDFILE": ("soundfile", "BSD-3-Clause"),
+    "CFFI": ("cffi", "MIT"),
+    "TYPING_EXTENSIONS": ("typing-extensions", "PSF-2.0"),
+    "PILLOW": ("pillow", "HPND"),
+    "PYCOUNTRY": ("pycountry", "LGPL-2.1-only"),
+}
 
 
 def _command_version(
@@ -180,6 +189,10 @@ def generate_third_party_notices(
         "VSEDIT_QT_VERSION": components["vsedit"]["qt_version"],
         "VSEDIT_QT_SOURCE": components["vsedit"]["qt_source_url"],
     }
+    for prefix, (name, legacy_license) in WINDOWS_PYTHON_PACKAGES.items():
+        package = distribution(name)
+        versions[f"{prefix}_VERSION"] = package.version
+        versions[f"{prefix}_LICENSE"] = package.metadata.get("License-Expression") or legacy_license
 
     if compatibility:
         versions["MKVTOOLNIX_QT_SOURCE"] += f" + https://github.com/crystalidea/qt6windows7/tree/v{mkv_qt}"

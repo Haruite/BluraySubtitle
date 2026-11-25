@@ -223,6 +223,22 @@ zsmooth DLL 静态链接单精度 FFTW，并以基础 x86-64 指令集为编译�
 
 ---
 
+## 随包提供的 Python 库
+
+这些库的许可原文随包保存在 `_internal/` 下各自的 `.dist-info/` 目录。
+
+| Python 库 | 随包组件 | 版本 | 许可证 | 源码 |
+| --- | --- | --- | --- | --- |
+| PyQt6 | `PyQt6/` 中的 Python 绑定 | {{PYQT_VERSION}} | `{{PYQT_LICENSE}}` | [发行文件](https://pypi.org/project/PyQt6/{{PYQT_VERSION}}/#files) |
+| PyQt6-sip | SIP 运行时扩展 `PyQt6/sip*.pyd` | {{PYQT_SIP_VERSION}} | `{{PYQT_SIP_LICENSE}}` | [发行文件](https://pypi.org/project/PyQt6-sip/{{PYQT_SIP_VERSION}}/#files) |
+| SoundFile | 音频读写 Python 模块 | {{SOUNDFILE_VERSION}} | `{{SOUNDFILE_LICENSE}}` | [发行文件](https://pypi.org/project/soundfile/{{SOUNDFILE_VERSION}}/#files) |
+| CFFI | SoundFile 使用的 `_cffi_backend*.pyd` | {{CFFI_VERSION}} | `{{CFFI_LICENSE}}` | [发行文件](https://pypi.org/project/cffi/{{CFFI_VERSION}}/#files) |
+| typing_extensions | SoundFile 使用的 Python 类型标注辅助库 | {{TYPING_EXTENSIONS_VERSION}} | `{{TYPING_EXTENSIONS_LICENSE}}` | [发行文件](https://pypi.org/project/typing-extensions/{{TYPING_EXTENSIONS_VERSION}}/#files) |
+| Pillow | `PIL/` 图像处理库 | {{PILLOW_VERSION}} | `{{PILLOW_LICENSE}}` | [发行文件](https://pypi.org/project/pillow/{{PILLOW_VERSION}}/#files) |
+| pycountry | Python 模块和 `pycountry/databases/` 中的 ISO 数据集 | {{PYCOUNTRY_VERSION}} | `{{PYCOUNTRY_LICENSE}}` | [发行文件](https://pypi.org/project/pycountry/{{PYCOUNTRY_VERSION}}/#files) |
+
+---
+
 ## libsndfile
 
 - **文件** `_soundfile_data/libsndfile_{{WINDOWS_ARCHITECTURE}}.dll`，由 SoundFile 加载，用于检测 PCM 位深。

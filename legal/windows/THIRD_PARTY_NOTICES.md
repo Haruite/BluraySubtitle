@@ -223,6 +223,22 @@ The zsmooth DLL links single-precision FFTW statically and is built for the base
 
 ---
 
+## Bundled Python libraries
+
+The license files for these packages are included in their respective `.dist-info/` directories under `_internal/`.
+
+| Package | Bundled component | Version | License | Source |
+| --- | --- | --- | --- | --- |
+| PyQt6 | Python bindings in `PyQt6/` | {{PYQT_VERSION}} | `{{PYQT_LICENSE}}` | [Release files](https://pypi.org/project/PyQt6/{{PYQT_VERSION}}/#files) |
+| PyQt6-sip | SIP runtime extension `PyQt6/sip*.pyd` | {{PYQT_SIP_VERSION}} | `{{PYQT_SIP_LICENSE}}` | [Release files](https://pypi.org/project/PyQt6-sip/{{PYQT_SIP_VERSION}}/#files) |
+| SoundFile | Audio I/O Python module | {{SOUNDFILE_VERSION}} | `{{SOUNDFILE_LICENSE}}` | [Release files](https://pypi.org/project/soundfile/{{SOUNDFILE_VERSION}}/#files) |
+| CFFI | `_cffi_backend*.pyd` used by SoundFile | {{CFFI_VERSION}} | `{{CFFI_LICENSE}}` | [Release files](https://pypi.org/project/cffi/{{CFFI_VERSION}}/#files) |
+| typing_extensions | Python typing helpers used by SoundFile | {{TYPING_EXTENSIONS_VERSION}} | `{{TYPING_EXTENSIONS_LICENSE}}` | [Release files](https://pypi.org/project/typing-extensions/{{TYPING_EXTENSIONS_VERSION}}/#files) |
+| Pillow | `PIL/` image library | {{PILLOW_VERSION}} | `{{PILLOW_LICENSE}}` | [Release files](https://pypi.org/project/pillow/{{PILLOW_VERSION}}/#files) |
+| pycountry | Python module and ISO datasets in `pycountry/databases/` | {{PYCOUNTRY_VERSION}} | `{{PYCOUNTRY_LICENSE}}` | [Release files](https://pypi.org/project/pycountry/{{PYCOUNTRY_VERSION}}/#files) |
+
+---
+
 ## libsndfile
 
 - **File** `_soundfile_data/libsndfile_{{WINDOWS_ARCHITECTURE}}.dll`, loaded by SoundFile for PCM bit-depth detection.

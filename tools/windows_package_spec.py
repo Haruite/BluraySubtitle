@@ -239,6 +239,8 @@ if ffmpeg_licenses.is_file():
     datas.append((str(ffmpeg_licenses), "legal/ffmpeg"))
 
 datas += copy_metadata("numpy")
+for name, _ in notices_updater["WINDOWS_PYTHON_PACKAGES"].values():
+    datas += copy_metadata(name)
 version_module = runpy.run_path(str(PROJECT_ROOT / "src" / "core" / "version.py"))
 commit_file = WORK_PATH / version_module["BUILD_COMMIT_FILENAME"]
 commit_file.write_text(
